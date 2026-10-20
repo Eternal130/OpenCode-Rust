@@ -537,6 +537,29 @@ impl App {
                     self.store.request_redraw();
                     return;
                 }
+                // TUI-10: the diff viewer's inline images — a left
+                // release inside one opens the preview over its bytes
+                // (diff-viewer-image.tsx:51-64's `dialog.replace`).
+                if self.store.diff_viewer_open() {
+                    for (x, y, w, h, uri) in self.store.diff_image_hits() {
+                        if col >= x && row >= y && col < x + w && row < y + h {
+                            let live = self.store.diff_viewer();
+                            let mention = live
+                                .visible_files()
+                                .iter()
+                                .find(|file| file.image)
+                                .map(|file| file.file.clone());
+                            self.store.open_image_preview(
+                                vec![crate::store::ImagePreviewItem { uri, mention }],
+                                0,
+                            );
+                            self.store.request_redraw();
+                            return;
+                        }
+                    }
+                    self.store.request_redraw();
+                    return;
+                }
                 // The permission ask's own pointer surface (auditA
                 // #4): v2 renders the pills and the reject stage's
                 // `enter confirm` / `esc cancel` hints as the ONLY
@@ -1903,6 +1926,11 @@ impl App {
             crate::components::dialog::DialogKeyOutcome::PromptSubmitted(value) => {
                 self.submit_rename(&value);
             }
+            // TUI-25: the alert/confirm pill resolved to a dot command
+            // — run it through the palette dispatcher after the close.
+            crate::components::dialog::DialogKeyOutcome::CommandSubmitted(command) => {
+                let _ = self.dispatcher.dispatch(&self.store, &command, None);
+            }
             _ => {}
         }
     }
@@ -2967,6 +2995,10 @@ pub enum ServerListEvent {
     /// (`location.mcp.server.list` — the sidebar MCP section +
     /// `DialogStatus` source).
     Mcp(Vec<crate::store::McpServerRow>),
+    /// TUI-8: the `skill.list` rows (`location.skill.list` —
+    /// `DialogSkill`'s source; a failed fetch lands the dialog's
+    /// "Could not load skills" state).
+    Skills(Result<Vec<crate::store::ServerSkill>, String>),
 }
 
 /// One `worktree.list` call mapped into the dialog's row type.
@@ -3325,6 +3357,26 @@ pub fn spawn_server_lists(
             })
             .unwrap_or_default();
         let _ = tx.send(ServerListEvent::Mcp(mcps)).await;
+        // TUI-8: the skill inventory (`skill.list`, dialog-skill's
+        // `data.location.skill.list(location) ?? []` — a failed fetch
+        // surfaces the dialog's load-error state).
+        let skills = client
+            .skill()
+            .list(&oc_client::types::SkillListQuery { location: None })
+            .await
+            .map(|response| {
+                response
+                    .data
+                    .iter()
+                    .map(|skill| crate::store::ServerSkill {
+                        id: skill.id.clone(),
+                        name: skill.name.clone(),
+                        description: skill.description.clone(),
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .map_err(|error| error.to_string());
+        let _ = tx.send(ServerListEvent::Skills(skills)).await;
     });
     (rx, task)
 }
@@ -4861,17 +4913,43 @@ async fn fetch_diff(
             .into_iter()
             .map(|item| {
                 let image = crate::components::diff_viewer_mount::is_diff_image_file(&item.file);
+                let status = match item.status {
+                    oc_client::types::FileDiffInfoStatus::Added => FileStatus::Added,
+                    oc_client::types::FileDiffInfoStatus::Deleted => FileStatus::Deleted,
+                    oc_client::types::FileDiffInfoStatus::Modified => FileStatus::Modified,
+                };
+                // TUI-10: the working-tree bytes (`client.file.read`'s
+                // stand-in) — non-deleted images in non-committed
+                // modes; missing/unreadable files keep `None` (the
+                // fallback copy). The joined path must stay INSIDE
+                // the diffed directory (a `../` escape in a diff path
+                // never reads outside it).
+                let image_data = if image
+                    && status != FileStatus::Deleted
+                    && mode != crate::store::DiffSource::Committed
+                {
+                    let root = std::path::Path::new(directory).canonicalize().ok();
+                    let joined =
+                        std::path::Path::new(directory).join(&item.file).canonicalize().ok();
+                    match (root, joined) {
+                        (Some(root), Some(joined))
+                            if joined.starts_with(&root) && joined.is_file() =>
+                        {
+                            std::fs::read(joined).ok()
+                        }
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
                 DiffFile {
                     file: item.file,
                     additions: u64::try_from(item.additions.max(0)).unwrap_or(0),
                     deletions: u64::try_from(item.deletions.max(0)).unwrap_or(0),
-                    status: match item.status {
-                        oc_client::types::FileDiffInfoStatus::Added => FileStatus::Added,
-                        oc_client::types::FileDiffInfoStatus::Deleted => FileStatus::Deleted,
-                        oc_client::types::FileDiffInfoStatus::Modified => FileStatus::Modified,
-                    },
+                    status,
                     patch: item.patch,
                     image,
+                    image_data,
                 }
             })
             .collect()
@@ -5006,6 +5084,42 @@ impl crate::store::ConfigSink for HttpConfigSink {
             object.insert("session".to_owned(), serde_json::Value::Object(session));
         }) {
             eprintln!("opencode tui: session.grouping persist failed: {error}");
+        }
+    }
+
+    /// TUI-23/TUI-TD22: the GENERIC write-through — walk the dot path
+    /// (`a.b.c` → nested objects) and set the leaf (v2's
+    /// `config.update` parent walk, dialog-config.tsx:340-350). String
+    /// values parse to bool/number when the leaf reads as one (the
+    /// cycle hands canonical strings).
+    fn update_setting(&self, path: &str, value: &str) {
+        let segments: Vec<String> = path.split('.').map(str::to_owned).collect::<Vec<_>>();
+        if segments.is_empty() {
+            return;
+        }
+        let leaf = if value == "true" || value == "false" {
+            serde_json::json!(value == "true")
+        } else if let Ok(number) = value.parse::<f64>() {
+            serde_json::json!(number)
+        } else {
+            serde_json::json!(value)
+        };
+        if let Err(error) = self.service.update(move |draft| {
+            let object = draft.as_object_mut().expect("config drafts are objects");
+            let mut cursor: &mut serde_json::Map<String, serde_json::Value> = object;
+            for segment in &segments[..segments.len() - 1] {
+                let child = cursor
+                    .entry(segment.clone())
+                    .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+                if !child.is_object() {
+                    *child = serde_json::Value::Object(serde_json::Map::new());
+                }
+                cursor = child.as_object_mut().expect("the fresh object walk");
+            }
+            let last = segments.last().cloned().unwrap_or_default();
+            cursor.insert(last, leaf.clone());
+        }) {
+            eprintln!("opencode tui: {path} persist failed: {error}");
         }
     }
 }
@@ -5195,6 +5309,45 @@ pub async fn run_with_size(
         let service = oc_core::cli_config::CliConfig::open(&oc_util::global_roots::resolve());
         app.store.set_config_sink(std::rc::Rc::new(HttpConfigSink { service }));
         app.store.set_theme_mode_inputs(config.theme.mode.clone(), Mode::Dark);
+    }
+    // TUI-9: the prompt stash (`<state>/prompt-stash.jsonl` — the
+    // PromptStashProvider's onMount read).
+    app.store.stash_init(Some(oc_util::global_roots::resolve().state.join("prompt-stash.jsonl")));
+    // TUI-23: seed the settings snapshot from the loaded config (the
+    // display values for the rows the store does not model live) +
+    // TUI-TD22's `config.experimental` view (read-only consumption of
+    // oc-core's parsed document).
+    {
+        let info = oc_core::cli_config::CliConfig::open(&oc_util::global_roots::resolve()).get();
+        let mut snapshot = crate::store::SettingsSnapshot::new();
+        for setting in crate::components::dialog_config::settings_table() {
+            snapshot.insert(
+                setting.path.to_owned(),
+                crate::components::dialog_config::current_value(&app.store, &setting),
+            );
+        }
+        // Overwrite with the loaded document's values where present
+        // (the boot config beats the store defaults for non-live
+        // rows — the typed Info serializes back to the config's
+        // shape, snake_case leaves and all). The snapshot stores RAW
+        // values; the footer display maps at props time.
+        let raw = serde_json::to_value(&info).unwrap_or(serde_json::Value::Null);
+        for setting in crate::components::dialog_config::settings_table() {
+            let mut node = &raw;
+            for key in setting.path.split('.') {
+                node = node.get(key).unwrap_or(&serde_json::Value::Null);
+            }
+            let value = node;
+            if !value.is_null() {
+                let raw_value = match value {
+                    serde_json::Value::String(text) => text.clone(),
+                    other => other.to_string(),
+                };
+                snapshot.insert(setting.path.to_owned(), raw_value);
+            }
+        }
+        app.store.set_settings_snapshot(snapshot);
+        app.store.set_experimental_flags(info.experimental.clone().unwrap_or_default());
     }
 
     // The mouse-capture gate (v2 `useMouse: config.mouse`,
@@ -5774,6 +5927,12 @@ pub async fn run_with_size(
                 }
                 ServerListEvent::Mcp(rows) => {
                     app.store.set_mcp_servers(rows);
+                }
+                ServerListEvent::Skills(Ok(skills)) => {
+                    app.store.set_skills(crate::store::ListState::Loaded(skills));
+                }
+                ServerListEvent::Skills(Err(error)) => {
+                    app.store.set_skills(crate::store::ListState::Failed(error));
                 }
             }
         }

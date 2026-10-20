@@ -178,6 +178,23 @@ pub enum UiRequest {
     /// named page (registered through `ctx.ui.router.register`)
     /// becomes the visible screen.
     NavigateToPluginRoute { plugin_id: String, name: String, data: Option<Value> },
+    /// TUI-25: `ctx.ui.alert({title, message})` (api.tsx:344-349) —
+    /// the generic alert opens natively; the guest's promise settles
+    /// when the TUI resolves (confirm or any close → null) through
+    /// [`crate::PluginHost::resolve_ui_request`]. `request_id` is the
+    /// GUEST's jsonrpc request id (the deferred reply's key).
+    Alert { request_id: u64, plugin_id: String, title: String, message: String },
+    /// TUI-25: `ctx.ui.confirm({title, message, label?})`
+    /// (api.tsx:350-366) — resolves `true`/`false` (the active pill)
+    /// or null (an unresolved close).
+    Confirm {
+        request_id: u64,
+        plugin_id: String,
+        title: String,
+        message: String,
+        confirm_label: Option<String>,
+        cancel_label: Option<String>,
+    },
 }
 
 impl UiRequest {
@@ -189,7 +206,9 @@ impl UiRequest {
             | UiRequest::SidebarSection { plugin_id, .. }
             | UiRequest::FooterHint { plugin_id, .. }
             | UiRequest::DialogOpen { plugin_id, .. }
-            | UiRequest::NavigateToPluginRoute { plugin_id, .. } => plugin_id,
+            | UiRequest::NavigateToPluginRoute { plugin_id, .. }
+            | UiRequest::Alert { plugin_id, .. }
+            | UiRequest::Confirm { plugin_id, .. } => plugin_id,
             UiRequest::NavigateToSession { .. } => "",
         }
     }
