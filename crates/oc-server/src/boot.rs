@@ -266,9 +266,12 @@ pub async fn boot_and_serve(options: &BootOptions) -> io::Result<ServeHandle> {
     crate::app_archive::install_at_boot(&mut app_state.assets)?;
     // The plugin session port fills with the engine handle now that it
     // exists (ctx.session.* → the boot location's session machinery).
+    // PLUG-D10: the host handle rides along (plugin-source
+    // `session.command` guest dispatch).
     plugin_boot.session_slot.fill(Arc::new(crate::plugins::EngineSessionPort {
         engine: Arc::clone(&app_state.engine),
         location: LocationRef::new(config_location.clone(), None),
+        host: Some(Arc::clone(&plugin_boot.host)),
     }));
     app_state.plugins = Some(plugin_boot);
     let state = Arc::new(app_state);

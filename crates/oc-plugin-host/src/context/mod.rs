@@ -156,18 +156,26 @@ impl Bridge {
     }
 }
 
-/// The guest-facing session method allowlist (`ctx.session.*`).
+/// The guest-facing session method allowlist (`ctx.session.*`) — the
+/// v2 `SessionDomain` 15-method `Pick` (plugin/effect/session.ts) plus
+/// the `messages`/`list` reads the flagship probes.
 pub const SESSION_METHODS: &[&str] = &[
+    "create",
     "get",
     "interrupt",
     "context",
     "messages",
     "list",
     "prompt",
+    "generate",
+    "command",
+    "compact",
     "synthetic",
     "update",
     "remove",
+    "move",
     "wait",
+    "switchAgent",
     "switchModel",
 ];
 
@@ -245,6 +253,31 @@ mod tests {
     fn session_methods_cover_the_flagship_surface() {
         for method in ["prompt", "context", "get", "list", "messages", "switchModel", "wait"] {
             assert!(SESSION_METHODS.contains(&method), "missing {method}");
+        }
+    }
+
+    /// PLUG-D10: the v2 `SessionDomain` guest surface
+    /// (`plugin/effect/session.ts` — the 15-method `Pick`).
+    #[test]
+    fn session_methods_cover_the_v2_domain() {
+        for method in [
+            "create",
+            "get",
+            "remove",
+            "switchAgent",
+            "switchModel",
+            "prompt",
+            "generate",
+            "command",
+            "compact",
+            "synthetic",
+            "interrupt",
+            "update",
+            "move",
+            "wait",
+            "context",
+        ] {
+            assert!(SESSION_METHODS.contains(&method), "missing v2 session method {method}");
         }
     }
 }

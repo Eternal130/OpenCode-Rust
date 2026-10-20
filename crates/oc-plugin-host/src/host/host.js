@@ -620,16 +620,22 @@ function makeCtx(pluginId, options) {
     // -- session (hook registration + engine routing) ------------------------
     session: {
       hook: (name, handler) => registerHook(pluginId, "session", name, handler),
+      create: sessionMethod("create"),
       get: sessionMethod("get"),
       interrupt: sessionMethod("interrupt"),
       context: sessionMethod("context"),
       messages: sessionMethod("messages"),
       list: sessionMethod("list"),
       prompt: sessionMethod("prompt"),
+      generate: sessionMethod("generate"),
+      command: sessionMethod("command"),
+      compact: sessionMethod("compact"),
       synthetic: sessionMethod("synthetic"),
       update: sessionMethod("update"),
       remove: sessionMethod("remove"),
+      move: sessionMethod("move"),
       wait: sessionMethod("wait"),
+      switchAgent: sessionMethod("switchAgent"),
       switchModel: sessionMethod("switchModel"),
     },
 
