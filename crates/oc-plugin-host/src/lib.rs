@@ -754,6 +754,15 @@ impl PluginHost {
         facade.shared.drain_ui_requests()
     }
 
+    /// TUI-25: settle a deferred `ctx.ui.alert`/`ctx.ui.confirm`
+    /// request — the drained request's `request_id` resolves the
+    /// guest's promise with `result` (null for an unresolved close).
+    /// A no-op on the disabled host.
+    pub fn resolve_ui_request(&self, request_id: u64, result: serde_json::Value) {
+        let Some(facade) = &self.facade else { return };
+        facade.shared.resolve_ui_request(request_id, result);
+    }
+
     /// Push the TUI's live route to the guest (the v2 TUI-plugin
     /// surface — the flagship sidebar's render reads the visible
     /// session at every materialize; `None` is home).

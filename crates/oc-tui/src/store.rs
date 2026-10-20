@@ -219,6 +219,61 @@ pub enum DialogKind {
     /// Lane FINAL: `DialogExportResult` (ui/dialog-export-result.
     /// tsx): the written filepath after a file export.
     ExportResult { path: String },
+    /// TUI-8: `DialogSkill` (`/skills`, `prompt.skills` —
+    /// `component/dialog-skill.tsx`): the large skill select over the
+    /// `skill.list` state; submit inserts `@{skill}` into the focused
+    /// composer.
+    Skill,
+    /// TUI-9: `DialogStash` (`prompt.stash.list` —
+    /// `component/dialog-stash.tsx`): the stashed prompts most-recent
+    /// first, ctrl+d the two-press delete, submit pops + restores.
+    Stash,
+    /// TUI-10: `DialogImagePreview` (`prompt.images.view` `<leader>i`
+    /// — `component/dialog-image-preview.tsx`): xlarge centered, ←/→
+    /// cycle the image list; the payload renders through the blocks
+    /// / graphics-protocol pipeline.
+    ImagePreview,
+    /// TUI-24: `DialogErrorDetails` (`component/
+    /// dialog-error-details.tsx`): the generic error drill-down — esc
+    /// back, `c` copy details, `i` investigate, ↑/↓ scroll.
+    ErrorDetails {
+        title: String,
+        source: String,
+        error: String,
+        context: String,
+        diagnostic_ref: String,
+        /// The plugins dialog's role: escape returns to the plugin
+        /// list (v2 `onBack` re-seats the large mount).
+        back_to_plugins: bool,
+    },
+    /// TUI-25: `ui/dialog-alert.tsx` — the generic alert tone:
+    /// return/ok confirms; any close settles. `request_id` rides the
+    /// plugin host's `ctx.ui.alert` promise; `confirm_command` is the
+    /// native consumer's action.
+    Alert {
+        title: String,
+        message: String,
+        request_id: Option<u64>,
+        confirm_command: Option<String>,
+    },
+    /// TUI-25: `ui/dialog-confirm.tsx` — the generic confirm tone:
+    /// cancel/confirm pills with ←/→ focus, return runs the active
+    /// one, esc closes unresolved.
+    Confirm {
+        title: String,
+        message: String,
+        confirm_label: String,
+        cancel_label: String,
+        /// The focused pill (`active` — ←/→ toggle).
+        active_confirm: bool,
+        request_id: Option<u64>,
+        confirm_command: Option<String>,
+        cancel_command: Option<String>,
+    },
+    /// TUI-TD22: `DialogExperiments` (`component/dialog-experiments.
+    /// tsx`): the experiment select over the (v2.0.24-empty) table;
+    /// ←/→/enter toggle `config.experimental.<id>`.
+    Experiments,
 }
 
 /// One stack entry: the dialog kind, chrome size and content state.
@@ -236,6 +291,91 @@ pub struct DialogEntry {
     /// UNCONFIRMED — moves/filters preview through it, an unconfirmed
     /// close reverts to it, a submit clears it (`confirmed = true`).
     pub theme_initial: Option<String>,
+}
+
+/// TUI-9: one stashed prompt (`prompt/stash.tsx`'s `StashEntry` —
+/// the serialized shape is `{"prompt": {...}, "timestamp": ms}`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StashEntry {
+    /// The stashed draft (text + files + agents — the port's
+    /// `PromptDraft` is `PromptInfo`'s shape).
+    pub prompt: crate::components::composer::PromptDraft,
+    /// `Date.now()` at push time (ms since epoch).
+    pub timestamp: u64,
+}
+
+/// `MAX_STASH_ENTRIES` (prompt/stash.ts:19) — the push-side cap.
+pub const MAX_STASH_ENTRIES: usize = 50;
+
+/// TUI-10: one image of the preview dialog (`ImagePreviewItem` —
+/// `dialog-image-preview.tsx`'s readonly `{uri, mention?}`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImagePreviewItem {
+    /// The data URI (`data:image/png;base64,…`).
+    pub uri: String,
+    /// The caption (the attachment chip's label / the diff file).
+    pub mention: Option<String>,
+}
+
+/// TUI-10: the preview dialog's live state (the images + the index).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ImagePreviewState {
+    pub images: Vec<ImagePreviewItem>,
+    pub index: usize,
+}
+
+/// TUI-23: the settings snapshot — the boot config's display values
+/// for the `DialogConfig` rows the store does not model live (the
+/// live rows — theme, sidebar, grouping, … — read their own state).
+pub type SettingsSnapshot = std::collections::BTreeMap<String, String>;
+
+/// TUI-TD22: one experiment row (`dialog-experiments.tsx:8-13`).
+/// v2.0.24 ships an EMPTY table (`experiments: Experiment[] = []`);
+/// the port mirrors the shape so an upstream entry lands as a row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Experiment {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+}
+
+/// The lane-dialogs dialog-family state (TUI-8/9/10/23/24/25/TD22):
+/// the non-reactive halves — the stash (loaded once, mutated through
+/// the store methods), the preview images, the plugin fault table,
+/// the ctx.ui.alert/confirm resolution queue, the settings snapshot
+/// and the error-details scroll offset.
+#[derive(Debug, Default)]
+pub struct DialogsLaneState {
+    /// TUI-9: the prompt stash (oldest first, like the jsonl file).
+    pub stash: Vec<StashEntry>,
+    /// TUI-9: the armed two-press delete row (the stash INDEX).
+    pub stash_delete_armed: Option<usize>,
+    /// TUI-9: where the stash persists (`<state>/prompt-stash.jsonl`;
+    /// `None` = memory-only — tests and the missing-state boot).
+    pub stash_path: Option<std::path::PathBuf>,
+    /// TUI-10: the preview dialog's images + index.
+    pub image_preview: ImagePreviewState,
+    /// TUI-24: the plugins dialog's fault table (plugin id → the
+    /// load error string; fed from the plugin host's fault list).
+    pub plugin_faults: std::collections::HashMap<String, String>,
+    /// TUI-25: the ctx.ui.alert/confirm resolution queue — (guest
+    /// request id, the settle value); the plugin pump drains it back
+    /// into the host (`resolve_ui_request`).
+    pub ui_dialog_resolutions: Vec<(u64, serde_json::Value)>,
+    /// TUI-23: the boot config's settings display values.
+    pub settings: SettingsSnapshot,
+    /// TUI-24: the error-details body's scroll offset.
+    pub error_details_scroll: usize,
+    /// TUI-TD22: the experiments table (EMPTY in v2.0.24; tests
+    /// inject rows to prove the toggle).
+    pub experiments: Vec<Experiment>,
+    /// TUI-TD22: the `config.experimental` map's local view.
+    pub experimental_flags: std::collections::BTreeMap<String, bool>,
+    /// TUI-10: the diff viewer's inline-image hit rects from the last
+    /// render — `(x, y, width, height, uri)` absolute cells + the
+    /// image's data URI (a left release opens the preview,
+    /// diff-viewer-image.tsx:51-64).
+    pub diff_image_hits: Vec<(usize, usize, usize, usize, String)>,
 }
 
 /// One open session tab (`SessionTab`).
@@ -580,12 +720,24 @@ pub struct ServerLists {
     pub models: ListState<ServerModel>,
     pub providers: Vec<ServerProvider>,
     pub agents: ListState<ServerAgent>,
+    /// TUI-8: the skill inventory (`skill.list` — `DialogSkill`'s
+    /// rows; `skill.sync`'s refresh rides the same fetch worker).
+    pub skills: ListState<ServerSkill>,
     /// `useConnected()` — any integration has connections
     /// (`hasConnectedProvider` over `integration.list`,
     /// use-connected.tsx). Gates the models dialog's categories +
     /// grouped sort and the palette's suggested
     /// "Connect an integration" row.
     pub connected: bool,
+}
+
+/// One skill row (`Skill.Info` — `DialogSkill`'s option: the padded
+/// name title, the description beside it, the id as value).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ServerSkill {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
 }
 
 /// A model selection (`providerID` + `modelID` + optional variant).
@@ -1085,6 +1237,10 @@ pub struct Store {
     /// the overlay render alongside `dialog_frame_rect`, cleared with
     /// it.
     dialog_button_hits: std::cell::RefCell<Vec<DialogButtonHit>>,
+    /// The lane-dialogs dialog-family state (TUI-8/9/10/23/24/25/
+    /// TD22): stash, image preview, plugin faults, ctx.ui
+    /// resolutions, settings snapshot, error scroll, experiments.
+    lane_dialogs: std::cell::RefCell<DialogsLaneState>,
     /// The location label's hover state (`hovered()`).
     location_hovered: std::cell::Cell<bool>,
     /// Per-session scroll state (Wave A's scroll driver over
@@ -1777,6 +1933,14 @@ pub trait ConfigSink {
     /// `session.toggle.exploration_grouping` update,
     /// index.tsx:1050-1062).
     fn update_session_grouping(&self, grouped: bool);
+    /// TUI-23/TUI-TD22: the GENERIC write-through — one `DialogConfig`
+    /// row cycle (`config.update` setting `path` to `value`) or an
+    /// experiment toggle (`experimental.<id>`). The default no-op
+    /// keeps embedders compiling; the production sink writes the
+    /// cli.json document.
+    fn update_setting(&self, path: &str, value: &str) {
+        let _ = (path, value);
+    }
 }
 
 /// The default no-op sink.
@@ -2640,6 +2804,7 @@ impl Store {
             sidebar_scroll: std::cell::RefCell::new(SidebarScrollState::default()),
             permission_pointer_hits: std::cell::RefCell::new(None),
             dialog_button_hits: std::cell::RefCell::new(Vec::new()),
+            lane_dialogs: std::cell::RefCell::new(DialogsLaneState::default()),
             location_hovered: std::cell::Cell::new(false),
             scroll: std::cell::RefCell::new(HashMap::new()),
             transcript_metrics: std::cell::RefCell::new(HashMap::new()),
@@ -5494,7 +5659,19 @@ impl Store {
                 let next = self.toggle_exploration_grouping();
                 self.config_sink.borrow().update_session_grouping(next);
             }
-            _ => {}
+            // TUI-23: every other row of the full table delegates to
+            // the dialog-config cycle (value list / numeric step, the
+            // live consumer, the snapshot + the generic config sink
+            // write-through).
+            other => {
+                if let Some(setting) = crate::components::dialog_config::settings_table()
+                    .into_iter()
+                    .find(|setting| setting.path == other)
+                {
+                    let _ =
+                        crate::components::dialog_config::change_setting(self, &setting, direction);
+                }
+            }
         }
         self.request_redraw();
     }
@@ -6334,6 +6511,9 @@ impl Store {
         let removed = self.dialogs.update(|stack| std::mem::replace(stack, vec![entry]));
         for entry in &removed {
             self.revert_unconfirmed_theme_dialog(entry);
+            // TUI-25: a replaced-away ctx.ui alert/confirm settles
+            // unresolved (`settle` fires on close too).
+            self.resolve_closing_ui_dialog(&entry.kind, serde_json::Value::Null);
         }
         self.dialog_opened_strip_hover_reset();
         self.focus_dialog_current();
@@ -6417,6 +6597,9 @@ impl Store {
         let removed = self.dialogs.update(std::vec::Vec::pop);
         if let Some(entry) = removed {
             self.revert_unconfirmed_theme_dialog(&entry);
+            // TUI-25: an escaped ctx.ui alert/confirm settles
+            // unresolved (`onClose: () => done(undefined)`).
+            self.resolve_closing_ui_dialog(&entry.kind, serde_json::Value::Null);
         }
         self.set_dialog_frame_rect(None);
     }
@@ -6426,6 +6609,7 @@ impl Store {
         let removed = self.dialogs.update(std::mem::take);
         for entry in &removed {
             self.revert_unconfirmed_theme_dialog(entry);
+            self.resolve_closing_ui_dialog(&entry.kind, serde_json::Value::Null);
         }
         self.set_dialog_frame_rect(None);
     }
@@ -6444,6 +6628,537 @@ impl Store {
     #[must_use]
     pub fn top_dialog(&self) -> Option<DialogEntry> {
         self.dialogs.get().into_iter().last()
+    }
+
+    // -- TUI-8/9/10/23/24/25/TD22: the lane-dialogs surfaces ---------
+
+    /// TUI-8: replace the skill inventory (`skill.list`'s fetch
+    /// result; the boot worker + the dialog's sync).
+    pub fn set_skills(&self, skills: ListState<ServerSkill>) {
+        self.server_lists.update(|lists| lists.skills = skills);
+        self.request_redraw();
+    }
+
+    /// The skill inventory (`DialogSkill`'s rows).
+    #[must_use]
+    pub fn skills(&self) -> ListState<ServerSkill> {
+        self.server_lists.get().skills
+    }
+
+    /// TUI-8: open `DialogSkill` at v2's LARGE size
+    /// (`dialog.setSize("large")`, dialog-skill.tsx:19) — the rows
+    /// read the `skill.list` state (the boot fetch's cache; v2's
+    /// `sync` refetch only fires when the cache is absent, which the
+    /// boot chain already satisfied).
+    pub fn open_skills_dialog(&self) {
+        self.replace_dialog(DialogKind::Skill, DialogSize::Large);
+    }
+
+    /// TUI-9: load the stash from `<state>/prompt-stash.jsonl`
+    /// (`PromptStashProvider`'s onMount read — `parsePromptStash`'s
+    /// per-line `{prompt, timestamp}` decode, corrupt lines skipped,
+    /// the last MAX entries kept). Called at boot with the resolved
+    /// state root; a missing file leaves the stash empty.
+    pub fn stash_init(&self, path: Option<std::path::PathBuf>) {
+        let Some(path) = path else { return };
+        let mut entries = Vec::new();
+        if let Ok(body) = std::fs::read_to_string(&path) {
+            for line in body.lines().filter(|line| !line.is_empty()) {
+                let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+                let Some(text) = value.pointer("/prompt/text").and_then(serde_json::Value::as_str)
+                else {
+                    continue;
+                };
+                let Some(timestamp) = value.get("timestamp").and_then(serde_json::Value::as_u64)
+                else {
+                    continue;
+                };
+                let mut draft = crate::components::composer::PromptDraft {
+                    text: text.to_owned(),
+                    ..crate::components::composer::PromptDraft::default()
+                };
+                if let Some(files) = value.pointer("/prompt/files").and_then(|v| v.as_array()) {
+                    for file in files {
+                        let Some(name) = file.get("name").and_then(|v| v.as_str()) else {
+                            continue;
+                        };
+                        let start = usize::try_from(
+                            file.get("start").and_then(serde_json::Value::as_u64).unwrap_or(0),
+                        )
+                        .unwrap_or(0);
+                        let end = usize::try_from(
+                            file.get("end").and_then(serde_json::Value::as_u64).unwrap_or(0),
+                        )
+                        .unwrap_or(0);
+                        let mention =
+                            file.get("mention").and_then(|v| v.as_str()).map(str::to_owned);
+                        let payload =
+                            file.get("payload").and_then(|p| p.as_object()).and_then(|payload| {
+                                let mime = payload.get("mime")?.as_str()?.to_owned();
+                                let data = payload.get("data")?.as_str()?.to_owned();
+                                Some(crate::components::composer::AttachmentPayload { mime, data })
+                            });
+                        draft.files.push(crate::components::composer::FileMention {
+                            name: name.to_owned(),
+                            start,
+                            end,
+                            payload,
+                            mention,
+                        });
+                    }
+                }
+                if let Some(agents) = value.pointer("/prompt/agents").and_then(|v| v.as_array()) {
+                    for agent in agents {
+                        if let Some(name) = agent.get("name").and_then(|v| v.as_str()) {
+                            draft.agents.push(crate::components::composer::AgentMention {
+                                name: name.to_owned(),
+                            });
+                        }
+                    }
+                }
+                entries.push(StashEntry { prompt: draft, timestamp });
+            }
+            entries.truncate(MAX_STASH_ENTRIES);
+            // The onMount rewrite (v2 rewrites the parsed file so a
+            // foreign tail normalizes) — only when it parsed entries.
+            if !entries.is_empty() {
+                let _ = Self::stash_persist(&entries, &path);
+            }
+        }
+        let mut state = self.lane_dialogs.borrow_mut();
+        state.stash = entries;
+        state.stash_path = Some(path);
+    }
+
+    /// Serialize the stash (one `{prompt, timestamp}` per line).
+    fn stash_persist(entries: &[StashEntry], path: &std::path::Path) -> std::io::Result<()> {
+        use std::io::Write as _;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let body = entries
+            .iter()
+            .map(|entry| {
+                let files: Vec<serde_json::Value> = entry
+                    .prompt
+                    .files
+                    .iter()
+                    .map(|file| {
+                        let mut value = serde_json::json!({
+                            "name": file.name,
+                            "start": file.start,
+                            "end": file.end,
+                        });
+                        if let Some(mention) = &file.mention {
+                            value["mention"] = serde_json::json!(mention);
+                        }
+                        if let Some(payload) = &file.payload {
+                            value["payload"] = serde_json::json!({
+                                "mime": payload.mime, "data": payload.data,
+                            });
+                        }
+                        value
+                    })
+                    .collect();
+                let agents: Vec<serde_json::Value> = entry
+                    .prompt
+                    .agents
+                    .iter()
+                    .map(|agent| serde_json::json!({ "name": agent.name }))
+                    .collect();
+                serde_json::json!({
+                    "prompt": {
+                        "text": entry.prompt.text,
+                        "files": files,
+                        "agents": agents,
+                    },
+                    "timestamp": entry.timestamp,
+                })
+                .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut body = body;
+        body.push('\n');
+        // Atomic write like every other state file (temp + rename).
+        let temporary = path.with_extension(format!("tmp.{}", std::process::id()));
+        let mut handle = std::fs::File::create(&temporary)?;
+        handle.write_all(body.as_bytes())?;
+        drop(handle);
+        std::fs::rename(&temporary, path)
+    }
+
+    /// The stash (oldest first, like the file).
+    #[must_use]
+    pub fn stash_entries(&self) -> Vec<StashEntry> {
+        self.lane_dialogs.borrow().stash.clone()
+    }
+
+    /// The route's prompt key (the focused composer — session or the
+    /// home draft).
+    fn focused_prompt_key(&self) -> String {
+        match self.route() {
+            Route::Session { session_id } => session_id,
+            Route::Home => crate::app::HOME_PROMPT_KEY.to_owned(),
+        }
+    }
+
+    /// TUI-9: `prompt.stash` — stash the focused draft and reset the
+    /// composer (`stash.push({prompt: store.prompt}); resetComposer()`,
+    /// prompt/index.tsx:885-890). Returns false on the `enabled: !!
+    /// text` gate.
+    pub fn stash_push(&self) -> bool {
+        let key = self.focused_prompt_key();
+        let composer = self.composer(&key);
+        if composer.draft.text.is_empty() {
+            return false;
+        }
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| u64::try_from(since.as_millis()).unwrap_or(u64::MAX));
+        let mut state = self.lane_dialogs.borrow_mut();
+        state.stash.push(StashEntry { prompt: composer.draft.clone(), timestamp });
+        if state.stash.len() > MAX_STASH_ENTRIES {
+            let overflow = state.stash.len() - MAX_STASH_ENTRIES;
+            state.stash.drain(..overflow);
+        }
+        let entries = state.stash.clone();
+        let path = state.stash_path.clone();
+        drop(state);
+        if let Some(path) = path {
+            let _ = Self::stash_persist(&entries, &path);
+        }
+        let mut composer = self.composer(&key);
+        composer.reset();
+        self.set_composer(&key, &composer);
+        self.clear_dialogs();
+        self.request_redraw();
+        true
+    }
+
+    /// TUI-9: `prompt.stash.pop` — remove the newest entry and
+    /// restore it into the focused composer (`input.setText`,
+    /// `setStore("prompt", entry.prompt)`, index.tsx:895-907).
+    pub fn stash_pop(&self) -> Option<StashEntry> {
+        let entry = {
+            let mut state = self.lane_dialogs.borrow_mut();
+            let entry = state.stash.pop()?;
+            let entries = state.stash.clone();
+            let path = state.stash_path.clone();
+            drop(state);
+            if let Some(path) = path {
+                let _ = Self::stash_persist(&entries, &path);
+            }
+            entry
+        };
+        let key = self.focused_prompt_key();
+        let mut composer = self.composer(&key);
+        composer.set(entry.prompt.clone());
+        self.set_composer(&key, &composer);
+        self.clear_dialogs();
+        self.request_redraw();
+        Some(entry)
+    }
+
+    /// Remove stash slot `index` (the dialog's two-press delete + the
+    /// select's pop-and-restore reads it first). Persists the rest.
+    pub fn stash_remove(&self, index: usize) -> Option<StashEntry> {
+        let (entry, path) = {
+            let mut state = self.lane_dialogs.borrow_mut();
+            if index >= state.stash.len() {
+                return None;
+            }
+            let entry = state.stash.remove(index);
+            state.stash_delete_armed = None;
+            let remaining = state.stash.clone();
+            let path = state.stash_path.clone();
+            (Some((entry, remaining)), path)
+        };
+        let (entry, remaining) = entry?;
+        if let Some(path) = path {
+            let _ = Self::stash_persist(&remaining, &path);
+        }
+        self.request_redraw();
+        Some(entry)
+    }
+
+    /// The armed two-press delete (stash dialog's `toDelete`).
+    pub fn stash_delete_pressed(&self, index: usize) -> DeleteStep {
+        let mut state = self.lane_dialogs.borrow_mut();
+        if index >= state.stash.len() {
+            return DeleteStep::Invalid;
+        }
+        if state.stash_delete_armed == Some(index) {
+            state.stash_delete_armed = None;
+            return DeleteStep::Confirmed;
+        }
+        state.stash_delete_armed = Some(index);
+        DeleteStep::Armed
+    }
+
+    /// `onMove` clears the armed row (`setToDelete(undefined)`).
+    pub fn stash_delete_disarm(&self) {
+        self.lane_dialogs.borrow_mut().stash_delete_armed = None;
+    }
+
+    /// The armed row (the row's destructive title flip).
+    #[must_use]
+    pub fn stash_delete_armed(&self) -> Option<usize> {
+        self.lane_dialogs.borrow().stash_delete_armed
+    }
+
+    /// TUI-10: open the image preview over `images` at `initial`
+    /// (`dialog.replace(<DialogImagePreview …>)` — xlarge + centered).
+    pub fn open_image_preview(&self, images: Vec<ImagePreviewItem>, initial: usize) {
+        if images.is_empty() {
+            return;
+        }
+        let index = initial.min(images.len() - 1);
+        self.lane_dialogs.borrow_mut().image_preview = ImagePreviewState { images, index };
+        self.replace_dialog(DialogKind::ImagePreview, DialogSize::Xlarge);
+        self.request_redraw();
+    }
+
+    /// The preview dialog's state (the renderer's images + index).
+    #[must_use]
+    pub fn image_preview_dialog(&self) -> ImagePreviewState {
+        self.lane_dialogs.borrow().image_preview.clone()
+    }
+
+    /// `move(direction)` (dialog-image-preview.tsx:31-35): the modulo
+    /// cycle; a single image stays.
+    pub fn image_preview_move(&self, direction: i64) {
+        let mut state = self.lane_dialogs.borrow_mut();
+        let count = state.image_preview.images.len();
+        if count < 2 {
+            return;
+        }
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let next = (i64::try_from(state.image_preview.index).unwrap_or(0) + direction)
+            .rem_euclid(i64::try_from(count).unwrap_or(1))
+            .max(0) as usize;
+        state.image_preview.index = next;
+        drop(state);
+        self.request_redraw();
+    }
+
+    /// TUI-24: open the generic error details (`dialog-error-details.
+    /// tsx`'s props; `back_to_plugins` re-seats the plugins list on
+    /// escape like v2's `onBack`).
+    pub fn open_error_details(
+        &self,
+        title: &str,
+        source: &str,
+        error: &str,
+        context: &str,
+        diagnostic_ref: &str,
+        back_to_plugins: bool,
+    ) {
+        self.lane_dialogs.borrow_mut().error_details_scroll = 0;
+        self.replace_dialog(
+            DialogKind::ErrorDetails {
+                title: title.to_owned(),
+                source: source.to_owned(),
+                error: error.to_owned(),
+                context: context.to_owned(),
+                diagnostic_ref: diagnostic_ref.to_owned(),
+                back_to_plugins,
+            },
+            DialogSize::Medium,
+        );
+        self.request_redraw();
+    }
+
+    /// The error-details body's scroll offset (`↑/↓ scrollBy`).
+    #[must_use]
+    pub fn error_details_scroll(&self) -> usize {
+        self.lane_dialogs.borrow().error_details_scroll
+    }
+
+    /// Scroll the error body (`scrollBy(±1)` / `±20` the page keys;
+    /// clamped by the caller's viewport).
+    pub fn error_details_scroll_by(&self, delta: i64, max: usize) {
+        let mut state = self.lane_dialogs.borrow_mut();
+        let max = i64::try_from(max).unwrap_or(i64::MAX);
+        let next = (i64::try_from(state.error_details_scroll).unwrap_or(0) + delta).clamp(0, max);
+        state.error_details_scroll = usize::try_from(next).unwrap_or(0);
+        drop(state);
+        self.request_redraw();
+    }
+
+    /// TUI-25: open the generic alert (`ui/dialog-alert.tsx`).
+    /// `request_id` rides the plugin `ctx.ui.alert` promise;
+    /// `confirm_command` runs through the palette dispatcher on ok.
+    pub fn open_alert(
+        &self,
+        title: &str,
+        message: &str,
+        request_id: Option<u64>,
+        confirm_command: Option<String>,
+    ) {
+        self.replace_dialog(
+            DialogKind::Alert {
+                title: title.to_owned(),
+                message: message.to_owned(),
+                request_id,
+                confirm_command,
+            },
+            DialogSize::Medium,
+        );
+        self.request_redraw();
+    }
+
+    /// TUI-25: open the generic confirm (`ui/dialog-confirm.tsx`).
+    #[allow(clippy::too_many_arguments)] // the ref's props tuple
+    pub fn open_confirm(
+        &self,
+        title: &str,
+        message: &str,
+        confirm_label: &str,
+        cancel_label: &str,
+        request_id: Option<u64>,
+        confirm_command: Option<String>,
+        cancel_command: Option<String>,
+    ) {
+        self.replace_dialog(
+            DialogKind::Confirm {
+                title: title.to_owned(),
+                message: message.to_owned(),
+                confirm_label: confirm_label.to_owned(),
+                cancel_label: cancel_label.to_owned(),
+                active_confirm: true,
+                request_id,
+                confirm_command,
+                cancel_command,
+            },
+            DialogSize::Medium,
+        );
+        self.request_redraw();
+    }
+
+    /// Toggle the confirm dialog's focused pill (←/→).
+    pub fn confirm_toggle_active(&self) {
+        self.update_dialog(|top| {
+            if let DialogKind::Confirm { active_confirm, .. } = &mut top.kind {
+                *active_confirm = !*active_confirm;
+            }
+        });
+        self.request_redraw();
+    }
+
+    /// The confirm dialog's focused pill (`active`).
+    #[must_use]
+    pub fn confirm_active_is_confirm(&self) -> bool {
+        matches!(
+            self.top_dialog().map(|entry| entry.kind),
+            Some(DialogKind::Confirm { active_confirm: true, .. })
+        )
+    }
+
+    /// Enqueue a ctx.ui dialog resolution (the plugin pump drains it
+    /// into `PluginHost::resolve_ui_request`).
+    pub fn enqueue_ui_dialog_resolution(&self, request_id: u64, value: serde_json::Value) {
+        self.lane_dialogs.borrow_mut().ui_dialog_resolutions.push((request_id, value));
+    }
+
+    /// Drain the resolution queue (the plugin pump's per-frame step).
+    pub fn take_ui_dialog_resolutions(&self) -> Vec<(u64, serde_json::Value)> {
+        std::mem::take(&mut self.lane_dialogs.borrow_mut().ui_dialog_resolutions)
+    }
+
+    /// The settle-once semantics of a CLOSING alert/confirm (`settle`
+    /// in api.tsx:318-325 — close and confirm both settle, the first
+    /// wins; an unresolved close is `null` for confirm, `null` for
+    /// alert too since `onConfirm`/`onClose` are the same `done`).
+    fn resolve_closing_ui_dialog(&self, kind: &DialogKind, result: serde_json::Value) {
+        let request_id = match kind {
+            DialogKind::Alert { request_id, .. } | DialogKind::Confirm { request_id, .. } => {
+                *request_id
+            }
+            _ => None,
+        };
+        if let Some(id) = request_id {
+            self.enqueue_ui_dialog_resolution(id, result);
+        }
+    }
+
+    /// TUI-24: the plugin fault table (the plugins dialog's error
+    /// rows; fed from the host's `plugin_faults`).
+    pub fn set_plugin_faults(&self, faults: std::collections::HashMap<String, String>) {
+        self.lane_dialogs.borrow_mut().plugin_faults = faults;
+        self.request_redraw();
+    }
+
+    /// A plugin's fault string (the error-details' error body).
+    #[must_use]
+    pub fn plugin_fault(&self, plugin_id: &str) -> Option<String> {
+        self.lane_dialogs.borrow().plugin_faults.get(plugin_id).cloned()
+    }
+
+    /// TUI-23: seed the settings snapshot (the boot config's display
+    /// values for the rows the store does not model live).
+    pub fn set_settings_snapshot(&self, snapshot: SettingsSnapshot) {
+        self.lane_dialogs.borrow_mut().settings = snapshot;
+    }
+
+    /// One settings snapshot value (`""` when unknown).
+    #[must_use]
+    pub fn settings_snapshot_value(&self, path: &str) -> String {
+        self.lane_dialogs.borrow().settings.get(path).cloned().unwrap_or_default()
+    }
+
+    /// Record a cycled settings value into the snapshot.
+    pub fn settings_snapshot_set(&self, path: &str, value: &str) {
+        self.lane_dialogs.borrow_mut().settings.insert(path.to_owned(), value.to_owned());
+    }
+
+    /// TUI-TD22: the experiments table (EMPTY in v2.0.24 —
+    /// `experiments: Experiment[] = []`, dialog-experiments.tsx:16).
+    pub fn set_experiments(&self, experiments: Vec<Experiment>) {
+        self.lane_dialogs.borrow_mut().experiments = experiments;
+    }
+
+    /// The experiments table.
+    #[must_use]
+    pub fn experiments(&self) -> Vec<Experiment> {
+        self.lane_dialogs.borrow().experiments.clone()
+    }
+
+    /// Seed the `config.experimental` map's local view (read-only
+    /// consumption of oc-core's parsed cli.json).
+    pub fn set_experimental_flags(&self, flags: std::collections::BTreeMap<String, bool>) {
+        self.lane_dialogs.borrow_mut().experimental_flags = flags;
+    }
+
+    /// `enabled(experiment)` — `config.data.experimental?.[id] ===
+    /// true` (dialog-experiments.tsx:25).
+    #[must_use]
+    pub fn experiment_enabled(&self, id: &str) -> bool {
+        self.lane_dialogs.borrow().experimental_flags.get(id).copied() == Some(true)
+    }
+
+    /// The toggle (`change`: `experimental.<id> = !enabled`) — flips
+    /// the local view + writes through the config sink.
+    pub fn experiment_toggle(&self, id: &str) {
+        let next = !self.experiment_enabled(id);
+        self.lane_dialogs.borrow_mut().experimental_flags.insert(id.to_owned(), next);
+        self.config_sink
+            .borrow()
+            .update_setting(&format!("experimental.{id}"), if next { "true" } else { "false" });
+        self.request_redraw();
+    }
+
+    /// TUI-10: the diff viewer's image hit rects (the inline
+    /// previews' absolute cells + data URIs — a release opens the
+    /// preview).
+    pub fn set_diff_image_hits(&self, hits: Vec<(usize, usize, usize, usize, String)>) {
+        self.lane_dialogs.borrow_mut().diff_image_hits = hits;
+    }
+
+    /// The diff viewer's image hit rects from the last render.
+    #[must_use]
+    pub fn diff_image_hits(&self) -> Vec<(usize, usize, usize, usize, String)> {
+        self.lane_dialogs.borrow().diff_image_hits.clone()
     }
 
     pub fn set_theme(&self, theme: ThemeState) {
@@ -6814,6 +7529,13 @@ impl Store {
     /// writer; tests record).
     pub fn set_config_sink(&self, sink: Rc<dyn ConfigSink>) {
         *self.config_sink.borrow_mut() = sink;
+    }
+
+    /// The installed config sink (the settings cycle's write-through —
+    /// TUI-23's generic `update_setting` consumers).
+    #[must_use]
+    pub fn config_sink_handle(&self) -> Rc<dyn ConfigSink> {
+        self.config_sink.borrow().clone()
     }
 
     // -- the composer's subagent picker (#44) ------------------------------
