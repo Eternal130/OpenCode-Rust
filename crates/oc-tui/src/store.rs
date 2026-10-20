@@ -3978,7 +3978,7 @@ impl Store {
             match registry.iter_mut().find(|entry| entry.session_id == session_id) {
                 Some(entry) => entry.terminals = terminals,
                 None => {
-                    registry.push(TerminalListed { session_id: session_id.to_owned(), terminals })
+                    registry.push(TerminalListed { session_id: session_id.to_owned(), terminals });
                 }
             }
         });

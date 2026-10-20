@@ -6767,7 +6767,7 @@ pub async fn run_with_size(
                 LoopFetch::TerminalListed { session_id, result } => match result {
                     Ok(terminals) => app.store.set_terminals(&session_id, terminals),
                     Err(error) => {
-                        crate::keymap::log_skip(&format!("terminal list refresh: {error}"))
+                        crate::keymap::log_skip(&format!("terminal list refresh: {error}"));
                     }
                 },
                 LoopFetch::TerminalCreated { session_id, result } => match result {
