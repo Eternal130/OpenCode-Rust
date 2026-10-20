@@ -10,6 +10,7 @@ use serde_json::{json, Value};
 
 use super::common::{no_content, resolve_location, ApiError, SharedState};
 use super::session::{query_field, services};
+use oc_core::project::ProjectEvents as _;
 
 pub fn routes() -> axum::Router<SharedState> {
     axum::Router::new()
@@ -124,48 +125,39 @@ async fn project_update(
     Path(project_id): Path<String>,
     axum::Json(body): axum::Json<Value>,
 ) -> Result<Response, ApiError> {
-    let db = state.engine.db.clone();
-    let (id, name, icon_url_override, icon_color) = (
-        project_id.clone(),
-        body["name"].as_str().map(String::from),
-        body["icon"].get("override").and_then(Value::as_str).map(String::from),
-        body["icon"].get("color").and_then(Value::as_str).map(String::from),
-    );
-    let updated = db
-        .transaction(move |tx| {
-            tx.execute(
-                "UPDATE project SET \
-                   name = coalesce(?2, name), \
-                   icon_url_override = coalesce(?3, icon_url_override), \
-                   icon_color = coalesce(?4, icon_color), \
-                   time_updated = ?5 \
-                 WHERE id = ?1",
-                (id, name, icon_url_override, icon_color, oc_core::database::migrations::now_ms()),
-            )
-        })
-        .await
-        .map_err(|error| {
-            crate::errors::debug_cause("project:unknown_ref", &error);
-            ApiError::unknown_ref()
-        })?;
-    if updated == 0 {
-        return Err(ApiError::project_not_found(&project_id));
+    // `Project.UpdateInput` (schema/project.ts:51-58): absent = untouched,
+    // present = write (empty string clears to NULL — project.ts:219-226).
+    // `icon.url` is server-owned and never updatable (project.ts:221-223).
+    let canonical = body["canonical"].as_str().map(std::path::PathBuf::from);
+    if let Some(canonical) = &canonical {
+        if !canonical.is_absolute() {
+            return Err(ApiError::invalid_request("canonical must be an absolute path"));
+        }
     }
-    let row = (
-        project_id.clone(),
-        String::new(),
-        None,
-        body["name"].as_str().map(String::from),
-        None,
-        body["icon"].get("override").and_then(Value::as_str).map(String::from),
-        body["icon"].get("color").and_then(Value::as_str).map(String::from),
-        "[]".to_owned(),
-        None,
-        0,
-        0,
-        0,
-    );
-    Ok(axum::Json(project_json(&row)).into_response())
+    let commands = body["commands"].get("start").and_then(Value::as_str).map(|start| {
+        // `commands.start` present: non-empty → {start}, empty → clear.
+        (!start.is_empty()).then(|| serde_json::json!({ "start": start }))
+    });
+    let input = oc_core::project::UpdateInput {
+        project_id: project_id.clone(),
+        canonical,
+        name: body["name"].as_str().map(String::from),
+        icon_override: body["icon"].get("override").and_then(Value::as_str).map(String::from),
+        icon_color: body["icon"].get("color").and_then(Value::as_str).map(String::from),
+        commands,
+    };
+    // DB-D4 (project.ts:215-239): persist through the store (real row,
+    // v2 empty-string-clear semantics, time_updated bump) …
+    let info = state.engine.projects.update(&input).await.map_err(|error| {
+        crate::errors::debug_cause("project:unknown_ref", &error);
+        ApiError::project_not_found(&project_id)
+    })?;
+    // … announce `project.updated` with the full Info (fromRow) …
+    oc_core::project::BusProjectEvents::new((*state.engine.bus).clone())
+        .project_updated(&info)
+        .await;
+    // … and return the REAL row (never a fabricated echo).
+    Ok(axum::Json(info.to_json()).into_response())
 }
 
 // ---------------------------------------------------------------------------
@@ -535,9 +527,175 @@ async fn publish_worktree_updated(state: &SharedState, project_id: &str) {
         .await;
 }
 
-async fn worktree_refresh(axum::Json(_body): axum::Json<Value>) -> Result<Response, ApiError> {
-    // Refresh re-scans git worktrees into the table (vcs lane surface,
-    // TODO(phase-9)); the row set is already queryable.
+#[allow(clippy::too_many_lines)] // one v2 Effect chain (worktree.ts:273-327)
+async fn worktree_refresh(
+    State(state): State<SharedState>,
+    axum::Json(body): axum::Json<Value>,
+) -> Result<Response, ApiError> {
+    // v2 worktree.ts:273-327 — project row → strategy `load` (the
+    // canonical checkout must be a directory) → stored rows with on-disk
+    // checks → discovery over the unowned/canonical roots → ONE
+    // transaction (upsert discovered, prune vanished) →
+    // `worktree.updated` when anything changed.
+    let project_id = body["projectID"].as_str().unwrap_or_default().to_owned();
+    if project_id.is_empty() {
+        return Err(ApiError::invalid_request("projectID is required"));
+    }
+    let db = state.engine.db.clone();
+    let lookup = project_id.clone();
+    let project = db
+        .transaction(move |tx| {
+            Ok(tx
+                .conn()
+                .query_row("SELECT worktree FROM project WHERE id = ?1", (lookup,), |row| {
+                    row.get::<_, String>(0)
+                })
+                .ok())
+        })
+        .await
+        .map_err(|error| {
+            crate::errors::debug_cause("worktree:unknown_ref", &error);
+            ApiError::unknown_ref()
+        })?;
+    let Some(project_worktree) = project else {
+        return Err(ApiError::project_not_found(&project_id));
+    };
+    let project_worktree = std::path::PathBuf::from(project_worktree);
+    // `load(row.worktree)` — DirectoryUnavailableError when the canonical
+    // checkout is gone (worktree.ts:132-134).
+    if !project_worktree.is_dir() {
+        return Err(ApiError::worktree(
+            format!("Worktree directory unavailable: {}", project_worktree.display()),
+            None,
+        ));
+    }
+
+    // Stored rows + on-disk existence (ops.list + the `checked` pass).
+    let lookup = project_id.clone();
+    let stored: Vec<(String, Option<String>)> = db
+        .transaction(move |tx| {
+            let mut statement = tx.conn().prepare(
+                "SELECT directory, strategy FROM worktree WHERE project_id = ?1 \
+                 ORDER BY time_created DESC, directory ASC",
+            )?;
+            let rows = statement
+                .query_map((lookup,), |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })
+        .await
+        .map_err(|error| {
+            crate::errors::debug_cause("worktree:unknown_ref", &error);
+            ApiError::unknown_ref()
+        })?;
+    let checked: Vec<(std::path::PathBuf, Option<String>, bool)> = stored
+        .into_iter()
+        .map(|(directory, strategy)| {
+            let directory = std::path::PathBuf::from(directory);
+            let exists = directory.is_dir();
+            (directory, strategy, exists)
+        })
+        .collect();
+
+    // Discovery roots: the canonical checkout plus every unowned row's
+    // directory (managed children are enumerated by their backend).
+    let mut roots: Vec<std::path::PathBuf> = vec![project_worktree.clone()];
+    roots.extend(
+        checked
+            .iter()
+            .filter(|(_, strategy, exists)| *exists && strategy.is_none())
+            .map(|(directory, _, _)| directory.clone()),
+    );
+
+    // `git worktree list --porcelain` per root (the git strategy — the
+    // only registered backend). Strategy failures are swallowed like the
+    // ref's logWarning → []; each entry is canonicalized, skipping
+    // directories that vanished mid-scan. The first entry is the main
+    // checkout (type "root", unowned); the rest are linked worktrees
+    // (type "worktree" → strategy `git`).
+    let mut discovered: Vec<(std::path::PathBuf, Option<&'static str>)> = Vec::new();
+    for root in roots {
+        if !root.is_dir() {
+            continue;
+        }
+        let Some(output) = git_output(&root, &["worktree", "list", "--porcelain"]) else {
+            continue;
+        };
+        for (index, line) in output.lines().filter(|line| line.starts_with("worktree ")).enumerate()
+        {
+            let raw = line["worktree ".len()..].trim();
+            let path = if std::path::Path::new(raw).is_absolute() {
+                std::path::PathBuf::from(raw)
+            } else {
+                root.join(raw)
+            };
+            let Ok(real) = std::fs::canonicalize(&path) else {
+                continue;
+            };
+            if discovered.iter().any(|(directory, _)| *directory == real) {
+                continue;
+            }
+            let strategy = (index > 0).then_some("git");
+            discovered.push((real, strategy));
+        }
+    }
+
+    // Rows whose directory no longer exists are pruned.
+    let vanished: Vec<std::path::PathBuf> = checked
+        .iter()
+        .filter(|(_, _, exists)| !exists)
+        .map(|(directory, _, _)| directory.clone())
+        .collect();
+
+    // One transaction: upsert the discovered facts (never replacing
+    // another strategy's ownership — ops.create's setWhere) and delete
+    // the vanished rows (ops.remove), counting only landed writes.
+    let tx_project = project_id.clone();
+    let changes = db
+        .transaction(move |tx| {
+            let conn = tx.conn();
+            let now = oc_core::database::migrations::now_ms();
+            let mut updated: Vec<String> = Vec::new();
+            for (directory, strategy) in discovered {
+                let row = conn.query_row(
+                    "INSERT INTO worktree (project_id, directory, strategy, time_created) \
+                     VALUES (?1, ?2, ?3, ?4) \
+                     ON CONFLICT (project_id, directory) DO UPDATE SET strategy = excluded.strategy \
+                     WHERE ?3 IS NOT NULL AND worktree.strategy IS NULL \
+                     RETURNING directory",
+                    (&tx_project, directory.to_string_lossy(), strategy, now),
+                    |row| row.get::<_, String>(0),
+                );
+                if let Ok(directory) = row {
+                    updated.push(directory);
+                }
+            }
+            let mut removed: Vec<String> = Vec::new();
+            for directory in vanished {
+                let row = conn.query_row(
+                    "DELETE FROM worktree WHERE project_id = ?1 AND directory = ?2 \
+                     RETURNING directory",
+                    (&tx_project, directory.to_string_lossy()),
+                    |row| row.get::<_, String>(0),
+                );
+                if let Ok(directory) = row {
+                    removed.push(directory);
+                }
+            }
+            Ok((updated.len(), removed.len()))
+        })
+        .await
+        .map_err(|error| {
+            crate::errors::debug_cause("worktree:unknown_ref", &error);
+            ApiError::unknown_ref()
+        })?;
+
+    // `changed(projectID, update)` — announce only when a write landed.
+    if changes.0 > 0 || changes.1 > 0 {
+        publish_worktree_updated(&state, &project_id).await;
+    }
     Ok(no_content())
 }
 

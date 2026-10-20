@@ -126,8 +126,9 @@ const VERSION_KEYS: &[&str] = &["version"];
 const SLUG_KEYS: &[&str] = &["slug"];
 /// Fields whose string value may be a bare **project id**: a hex digest
 /// of the project directory (`Hash.fast("directory:<dir>")` — 40
-/// lowercase hex chars on the reference, which uses sha1; the Rust port's
-/// oc-core `hash_fast` uses sha256, 64 hex chars). Sandbox project
+/// lowercase hex chars: sha1 on the reference AND on the Rust port since
+/// DB-D1; the 64-hex alternative stays accepted so pre-D1 captures and
+/// port-side sha256 content digests keep normalizing). Sandbox project
 /// directories differ per run, so these ids are per-run values; they are
 /// rewritten to numbered `<PRJ_ID:n>` tokens through the shared id
 /// numbering (spec §5.4 "Bare project ids"). Only exact-key matches with
@@ -167,9 +168,9 @@ static VERSION_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^(?:v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?|v?local)$").unwrap());
 /// Machine-generated session slugs (`adjective-noun`, both lowercase words).
 static SLUG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[a-z]+-[a-z]+$").unwrap());
-/// Bare project ids: hex digests (40 = sha1/reference, 64 = sha256/Rust
-/// port's `hash_fast` — the key gates the rewrite, either length is a
-/// project id).
+/// Bare project ids: hex digests (40 = sha1/reference and port since
+/// DB-D1, 64 = legacy pre-D1 port ids / sha256 content digests — the key
+/// gates the rewrite, either length is a project id).
 static PROJECT_ID_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[0-9a-f]{40}$|^[0-9a-f]{64}$").unwrap());
 /// Bare sha256 hex digests (64 lowercase hex chars): content-addressed
