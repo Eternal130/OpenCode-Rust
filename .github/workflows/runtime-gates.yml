@@ -189,6 +189,29 @@ jobs:
           name: runtime-gates-target
           path: target
 
+      # upload-artifact@v4 does NOT preserve the executable bit: the
+      # downloaded target/ carries every workspace bin as a 0644 file
+      # and any spawn fails with EACCES (CI run 39468671027 legs 2+3:
+      # "spawn .../target/debug/oc-server: Permission denied (os error
+      # 13)"). Enumerate the bin names from the workspace manifests via
+      # cargo metadata (no guessing) and restore ONLY target/debug/<bin>
+      # — never a blanket chmod -R over the target dir.
+      - name: Restore the exec bit on artifact-shipped binaries
+        run: |
+          set -euo pipefail
+          BINS="$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[].targets[] | select(.kind | index("bin")) | .name')"
+          if [ -z "$BINS" ]; then
+            echo "::error::cargo metadata enumerated zero workspace bins — refusing to no-op the exec-bit restore"
+            exit 1
+          fi
+          for bin in $BINS; do
+            if [ -f "target/debug/$bin" ]; then
+              chmod +x "target/debug/$bin"
+              echo "exec bit restored: target/debug/$bin"
+            fi
+          done
+
       - name: Prepare scratch dir
         run: mkdir -p /tmp/opencode
 
@@ -306,6 +329,29 @@ jobs:
         with:
           name: runtime-gates-target
           path: target
+
+      # upload-artifact@v4 does NOT preserve the executable bit: the
+      # downloaded target/ carries every workspace bin as a 0644 file
+      # and any spawn fails with EACCES (CI run 39468671027 legs 2+3:
+      # "spawn .../target/debug/oc-server: Permission denied (os error
+      # 13)"). Enumerate the bin names from the workspace manifests via
+      # cargo metadata (no guessing) and restore ONLY target/debug/<bin>
+      # — never a blanket chmod -R over the target dir.
+      - name: Restore the exec bit on artifact-shipped binaries
+        run: |
+          set -euo pipefail
+          BINS="$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[].targets[] | select(.kind | index("bin")) | .name')"
+          if [ -z "$BINS" ]; then
+            echo "::error::cargo metadata enumerated zero workspace bins — refusing to no-op the exec-bit restore"
+            exit 1
+          fi
+          for bin in $BINS; do
+            if [ -f "target/debug/$bin" ]; then
+              chmod +x "target/debug/$bin"
+              echo "exec bit restored: target/debug/$bin"
+            fi
+          done
 
       - name: Download the v2 library db (fixture)
         if: needs.v2-db-fixture.outputs.db_staged == 'ok'
@@ -449,6 +495,29 @@ jobs:
           name: runtime-gates-target
           path: target
 
+      # upload-artifact@v4 does NOT preserve the executable bit: the
+      # downloaded target/ carries every workspace bin as a 0644 file
+      # and any spawn fails with EACCES (CI run 39468671027 legs 2+3:
+      # "spawn .../target/debug/oc-server: Permission denied (os error
+      # 13)"). Enumerate the bin names from the workspace manifests via
+      # cargo metadata (no guessing) and restore ONLY target/debug/<bin>
+      # — never a blanket chmod -R over the target dir.
+      - name: Restore the exec bit on artifact-shipped binaries
+        run: |
+          set -euo pipefail
+          BINS="$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[].targets[] | select(.kind | index("bin")) | .name')"
+          if [ -z "$BINS" ]; then
+            echo "::error::cargo metadata enumerated zero workspace bins — refusing to no-op the exec-bit restore"
+            exit 1
+          fi
+          for bin in $BINS; do
+            if [ -f "target/debug/$bin" ]; then
+              chmod +x "target/debug/$bin"
+              echo "exec bit restored: target/debug/$bin"
+            fi
+          done
+
       - name: Download the v2 library db (fixture)
         if: needs.v2-db-fixture.outputs.db_staged == 'ok'
         uses: actions/download-artifact@v4
@@ -564,6 +633,29 @@ jobs:
           name: runtime-gates-target
           path: target
 
+      # upload-artifact@v4 does NOT preserve the executable bit: the
+      # downloaded target/ carries every workspace bin as a 0644 file
+      # and any spawn fails with EACCES (CI run 39468671027 legs 2+3:
+      # "spawn .../target/debug/oc-server: Permission denied (os error
+      # 13)"). Enumerate the bin names from the workspace manifests via
+      # cargo metadata (no guessing) and restore ONLY target/debug/<bin>
+      # — never a blanket chmod -R over the target dir.
+      - name: Restore the exec bit on artifact-shipped binaries
+        run: |
+          set -euo pipefail
+          BINS="$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[].targets[] | select(.kind | index("bin")) | .name')"
+          if [ -z "$BINS" ]; then
+            echo "::error::cargo metadata enumerated zero workspace bins — refusing to no-op the exec-bit restore"
+            exit 1
+          fi
+          for bin in $BINS; do
+            if [ -f "target/debug/$bin" ]; then
+              chmod +x "target/debug/$bin"
+              echo "exec bit restored: target/debug/$bin"
+            fi
+          done
+
       - name: Prepare scratch dir
         run: mkdir -p /tmp/opencode
 
@@ -635,6 +727,29 @@ jobs:
           name: runtime-gates-target
           path: target
 
+      # upload-artifact@v4 does NOT preserve the executable bit: the
+      # downloaded target/ carries every workspace bin as a 0644 file
+      # and any spawn fails with EACCES (CI run 39468671027 legs 2+3:
+      # "spawn .../target/debug/oc-server: Permission denied (os error
+      # 13)"). Enumerate the bin names from the workspace manifests via
+      # cargo metadata (no guessing) and restore ONLY target/debug/<bin>
+      # — never a blanket chmod -R over the target dir.
+      - name: Restore the exec bit on artifact-shipped binaries
+        run: |
+          set -euo pipefail
+          BINS="$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[].targets[] | select(.kind | index("bin")) | .name')"
+          if [ -z "$BINS" ]; then
+            echo "::error::cargo metadata enumerated zero workspace bins — refusing to no-op the exec-bit restore"
+            exit 1
+          fi
+          for bin in $BINS; do
+            if [ -f "target/debug/$bin" ]; then
+              chmod +x "target/debug/$bin"
+              echo "exec bit restored: target/debug/$bin"
+            fi
+          done
+
       - name: Prepare scratch dir
         run: mkdir -p /tmp/opencode
 
@@ -704,6 +819,29 @@ jobs:
           name: runtime-gates-target
           path: target
 
+      # upload-artifact@v4 does NOT preserve the executable bit: the
+      # downloaded target/ carries every workspace bin as a 0644 file
+      # and any spawn fails with EACCES (CI run 39468671027 legs 2+3:
+      # "spawn .../target/debug/oc-server: Permission denied (os error
+      # 13)"). Enumerate the bin names from the workspace manifests via
+      # cargo metadata (no guessing) and restore ONLY target/debug/<bin>
+      # — never a blanket chmod -R over the target dir.
+      - name: Restore the exec bit on artifact-shipped binaries
+        run: |
+          set -euo pipefail
+          BINS="$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[].targets[] | select(.kind | index("bin")) | .name')"
+          if [ -z "$BINS" ]; then
+            echo "::error::cargo metadata enumerated zero workspace bins — refusing to no-op the exec-bit restore"
+            exit 1
+          fi
+          for bin in $BINS; do
+            if [ -f "target/debug/$bin" ]; then
+              chmod +x "target/debug/$bin"
+              echo "exec bit restored: target/debug/$bin"
+            fi
+          done
+
       - name: Prepare scratch dir
         run: mkdir -p /tmp/opencode
 
@@ -763,6 +901,29 @@ jobs:
         with:
           name: runtime-gates-target
           path: target
+
+      # upload-artifact@v4 does NOT preserve the executable bit: the
+      # downloaded target/ carries every workspace bin as a 0644 file
+      # and any spawn fails with EACCES (CI run 39468671027 legs 2+3:
+      # "spawn .../target/debug/oc-server: Permission denied (os error
+      # 13)"). Enumerate the bin names from the workspace manifests via
+      # cargo metadata (no guessing) and restore ONLY target/debug/<bin>
+      # — never a blanket chmod -R over the target dir.
+      - name: Restore the exec bit on artifact-shipped binaries
+        run: |
+          set -euo pipefail
+          BINS="$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[].targets[] | select(.kind | index("bin")) | .name')"
+          if [ -z "$BINS" ]; then
+            echo "::error::cargo metadata enumerated zero workspace bins — refusing to no-op the exec-bit restore"
+            exit 1
+          fi
+          for bin in $BINS; do
+            if [ -f "target/debug/$bin" ]; then
+              chmod +x "target/debug/$bin"
+              echo "exec bit restored: target/debug/$bin"
+            fi
+          done
 
       - uses: taiki-e/install-action@v2
         with:

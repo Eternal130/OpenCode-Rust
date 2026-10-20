@@ -781,7 +781,12 @@ impl PtyChild {
                         // session, so this is fatal.
                         return Err(std::io::Error::last_os_error());
                     }
-                    if libc::ioctl(ctty_fd, libc::TIOCSCTTY, 0) < 0 {
+                    // `TIOCSCTTY` is `c_ulong` on linux but `u32` on
+                    // darwin — the explicit cast keeps the request
+                    // argument `c_ulong` everywhere (a no-op on linux)
+                    // without touching async-signal-safety (integer
+                    // cast only: no allocation, no formatting).
+                    if libc::ioctl(ctty_fd, libc::TIOCSCTTY as libc::c_ulong, 0) < 0 {
                         return Err(std::io::Error::last_os_error());
                     }
                     Ok(())
@@ -935,7 +940,10 @@ impl PtyChild {
 fn set_winsize(master: &File, cols: u16, rows: u16) {
     unsafe {
         let winsize = libc::winsize { ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0 };
-        libc::ioctl(master.as_raw_fd(), libc::TIOCSWINSZ, &winsize);
+        // `TIOCSWINSZ` is `c_ulong` on linux but `u32` on darwin — the
+        // cast is a no-op on linux and widens to the `c_ulong` ioctl
+        // request type on darwin (same numeric value on both).
+        libc::ioctl(master.as_raw_fd(), libc::TIOCSWINSZ as libc::c_ulong, &winsize);
     }
 }
 
