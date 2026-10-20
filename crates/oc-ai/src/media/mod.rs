@@ -26,6 +26,7 @@ pub mod fal_queue;
 pub mod image;
 pub mod model;
 pub mod protocol;
+pub mod route;
 pub mod speech;
 pub mod transcription;
 pub mod utils;
