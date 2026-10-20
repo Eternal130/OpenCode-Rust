@@ -124,8 +124,8 @@ impl BusEvent {
 /// per-session restore input (v2 `durableSelection`,
 /// context/local.tsx:258-266).
 /// `time_updated` / `time_created` / `directory` / `project_id` carry
-/// the wire's `time.updated` / `time.created` /
-/// `location.directory` / `projectID` — TUI-5/6's DialogOpen and the
+/// the wire's `time.updated` / `time.created` / `location.directory` /
+/// `projectID` — TUI-5/6's `DialogOpen` and the
 /// session-list date groups / fallback titles / footers read them
 /// (`None` when an older snapshot path omits them).
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -151,7 +151,7 @@ pub struct SessionSnapshot {
     /// `location.directory` — the row footer's project-relative
     /// basename source (TUI-6).
     pub directory: Option<String>,
-    /// `projectID` — the DialogOpen footer's project label (TUI-5).
+    /// `projectID` — the `DialogOpen` footer's project label (TUI-5).
     pub project_id: Option<String>,
 }
 
@@ -384,7 +384,7 @@ impl ResyncSource for HttpResync {
                 time_created: Some(session.time.created),
                 directory: Some(session.location.directory),
                 project_id: Some(session.project_id),
-                ..Default::default()})
+            })
             .collect())
     }
 
@@ -1107,7 +1107,8 @@ mod tests {
             parent_id: None,
             time_idle: idle,
             viewed,
-            ..Default::default()};
+            ..Default::default()
+        };
         let sessions = vec![
             session("fresh", Some(100.0), Some(50.0)), // idle > viewed → unread
             session("caught-up", Some(30.0), Some(30.0)), // idle ≤ viewed → clean

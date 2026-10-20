@@ -3,7 +3,7 @@
 //!
 //! * [`interaction_frame`] — the attach protocol's input framing
 //!   (`[type u8][cols u16be][rows u16be][payload]`, input protocol 1
-//!   — handlers/persistent_pty.rs §3; the ref's `interactionFrame`,
+//!   — `handlers/persistent_pty.rs` §3; the ref's `interactionFrame`,
 //!   terminal-pane.tsx:395-403);
 //! * [`encode_stroke`] — one keyboard stroke as terminal input bytes
 //!   (the embedded terminal's `handleKeyPress` arm the ref delegates
@@ -21,8 +21,8 @@
 //! (`components/session.rs` — v2's `rightPane() === "terminal"`),
 //! sized by the layout's `terminalWidth` (default half the frame).
 
-use crate::render::{Cell, CellColor, Frame};
 use crate::keymap::KeyStroke;
+use crate::render::{Cell, CellColor, Frame};
 
 /// The input frame's HAS-INPUT flag value (kind 1 = input; kind 0 =
 /// a pure resize control, §3).
@@ -49,6 +49,8 @@ pub fn interaction_frame(kind: u8, cols: u16, rows: u16, data: &[u8]) -> Vec<u8>
 /// ctrl+letter as the 0x01-0x1a control range, alt as the ESC prefix.
 #[must_use]
 pub fn encode_stroke(stroke: &KeyStroke) -> Option<Vec<u8>> {
+    use std::io::Write as _;
+
     let key = stroke.key.as_str();
     // Ctrl+letter (and ctrl+@ .. ctrl+_) map onto the C0 range; the
     // terminal side reads them raw.
@@ -111,7 +113,6 @@ pub fn encode_stroke(stroke: &KeyStroke) -> Option<Vec<u8>> {
         // by the terminal input layer already).
         single if single.chars().count() == 1 => {
             let mut bytes = Vec::new();
-            use std::io::Write as _;
             write!(bytes, "{}", single.chars().next()?).ok()?;
             bytes
         }
@@ -159,6 +160,7 @@ impl TerminalPaneState {
     /// A fresh pane at the snapshot's size with the checkpoint
     /// fast-forwarded into the grid (`connect()`,
     /// terminal-pane.tsx:175-182).
+    #[must_use]
     pub fn from_snapshot(size: (u16, u16), checkpoint: &[u8]) -> Self {
         let mut parser = vt100::Parser::new(size.1.max(1), size.0.max(1), 0);
         parser.process(checkpoint);
@@ -322,9 +324,7 @@ impl TerminalPaneState {
 #[must_use]
 pub fn render_terminal_pane(state: &TerminalPaneState, width: u16, height: u16) -> Frame {
     let (width, height) = (usize::from(width), usize::from(height));
-    let blank = || {
-        Cell { ch: ' ', attrs: 0, fg: CellColor::Default, bg: CellColor::Default }
-    };
+    let blank = || Cell { ch: ' ', attrs: 0, fg: CellColor::Default, bg: CellColor::Default };
     let mut cells: Vec<Vec<Cell>> = vec![vec![blank(); width]; height];
     if let Some(failure) = state.failure() {
         let row = &mut cells[0];
@@ -344,14 +344,12 @@ pub fn render_terminal_pane(state: &TerminalPaneState, width: u16, height: u16) 
         return Frame { cells, width, height };
     }
     let screen = state.parser.screen();
-    let (grid_rows, grid_cols) = screen.size();
     // The embedded terminal paints at the box's left pad (1).
-    for row in 0..usize::from(grid_rows).min(height) {
-        for col in 0..usize::from(grid_cols).min(width.saturating_sub(1)) {
-            let Some(cell) = screen.cell(
-                u16::try_from(row).unwrap_or(0),
-                u16::try_from(col).unwrap_or(0),
-            ) else {
+    for (row, cells_row) in cells.iter_mut().enumerate().take(height) {
+        for (col, slot) in cells_row.iter_mut().enumerate().take(width.saturating_sub(1)) {
+            let Some(cell) =
+                screen.cell(u16::try_from(row).unwrap_or(0), u16::try_from(col).unwrap_or(0))
+            else {
                 continue;
             };
             let ch = cell.contents().chars().next().unwrap_or(' ');
@@ -367,7 +365,7 @@ pub fn render_terminal_pane(state: &TerminalPaneState, width: u16, height: u16) 
             if cell.inverse() {
                 attrs |= 4;
             }
-            cells[row][col + 1] = Cell { ch, attrs, fg, bg };
+            *slot = Cell { ch, attrs, fg, bg };
         }
     }
     Frame { cells, width, height }
@@ -397,10 +395,7 @@ mod tests {
     /// The frame layout (§3): kind, u16be cols/rows, payload.
     #[test]
     fn interaction_frames_are_byte_exact() {
-        assert_eq!(
-            interaction_frame(FRAME_CONTROL, 40, 24, &[]),
-            vec![0, 0, 40, 0, 24]
-        );
+        assert_eq!(interaction_frame(FRAME_CONTROL, 40, 24, &[]), vec![0, 0, 40, 0, 24]);
         assert_eq!(
             interaction_frame(FRAME_INPUT, 80, 30, b"hi"),
             vec![1, 0, 80, 0, 30, b'h', b'i']
@@ -421,7 +416,7 @@ mod tests {
         let mut alt_a = stroke("a");
         alt_a.alt = true;
         assert_eq!(encode_stroke(&alt_a).as_deref(), Some(b"\x1ba".as_slice()));
-        assert_eq!(encode_stroke(&stroke("f13")).is_none(), true);
+        assert!(encode_stroke(&stroke("f13")).is_none());
     }
 
     /// The stream machine: snapshot fast-forward, the ordered output
@@ -430,9 +425,9 @@ mod tests {
     #[test]
     fn stream_machine_gates_output_and_backlogs_input() {
         let mut pane = TerminalPaneState::from_snapshot((10, 3), b"hello");
-        assert_eq!(pane.accepts_input(), false);
+        assert!(!pane.accepts_input());
         // Input before replay_complete backlogs.
-        assert!(pane.push_input(b"x").is_empty());
+        assert_eq!(pane.push_input(b"x"), [] as [std::vec::Vec<u8>; 0]);
         // Output applies immediately (the grid matches the snapshot).
         pane.push_output(b" there");
         // Attach at a DIFFERENT size: the resize forces the grid.

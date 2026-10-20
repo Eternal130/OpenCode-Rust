@@ -609,7 +609,10 @@ pub fn handle_dialog_key(
                             }),
                         _ => None,
                     };
-                    store.open_menu_worktrees(project_id, &name.unwrap_or_else(|| "Project".to_owned()));
+                    store.open_menu_worktrees(
+                        project_id,
+                        &name.unwrap_or_else(|| "Project".to_owned()),
+                    );
                 }
             }
             return DialogKeyOutcome::Consumed;
@@ -1085,8 +1088,10 @@ pub fn execute_submission(
             return crate::components::dialog_open::execute_open_selection(store, &selection);
         }
         // TUI-5: a worktrees-view row navigates home at the directory
-        // (the port's home route keeps the process cwd).
+        // (the port's home route keeps the process cwd — the row's
+        // `dir:` value is intentionally not consumed here).
         Some(DialogKind::OpenWorktrees { .. }) => {
+            let _ = value;
             store.clear_dialogs();
             return crate::components::command_palette::Dispatch::Handled;
         }

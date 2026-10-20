@@ -890,23 +890,38 @@ fn image_preview() {
 // session-list dialog proofs on the real app loop.
 // ---------------------------------------------------------------------------
 
-/// A rich SessionInfo wire row (the harness's armed `session_rows`).
+/// A rich `SessionInfo` wire row (the harness's armed `session_rows`).
 /// An empty `title` OMITS the field (the wire's optional — the
 /// timestamped-fallback rows). `updated_ms` is epoch MILLISECONDS —
 /// the wire's `DateTimeUtcFromMillis` contract (schema/session.ts:47).
-fn rich_session(id: &str, title: &str, updated_ms: f64, directory: &str, project: &str, parent: Option<&str>) -> String {
-    let title_json = if title.is_empty() {
-        String::new()
-    } else {
-        format!(r#""title":"{title}","#)
-    };
+fn rich_session(
+    id: &str,
+    title: &str,
+    updated_ms: f64,
+    directory: &str,
+    project: &str,
+    parent: Option<&str>,
+) -> String {
+    let title_json =
+        if title.is_empty() { String::new() } else { format!(r#""title":"{title}","#) };
     let parent_json = parent.map(|p| format!(r#","parentID":"{p}""#)).unwrap_or_default();
     format!(
         r#"{{"id":"{id}",{title_json}"time":{{"created":0,"updated":{updated_ms}}},"location":{{"directory":"{directory}"}},"projectID":"{project}"{parent_json},"cost":0,"tokens":{{"cache":{{"read":0,"write":0}},"input":0,"output":0,"read":0,"write":0,"reasoning":0}}}}"#
     )
 }
 
+/// The café row's title (the ASCII form under `DBG_ASCII` — the
+/// bisect scaffold's byte-for-byte variant).
+fn cafe_title() -> &'static str {
+    if std::env::var("DBG_ASCII").is_ok() {
+        "Cafe notes"
+    } else {
+        "Café notes"
+    }
+}
+
 /// The test-side wall clock in epoch MILLISECONDS (`Date.now()`).
+#[allow(clippy::cast_precision_loss)] // wall-clock ms fits the f64 mantissa exactly
 fn now_ms() -> f64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -930,7 +945,14 @@ fn open_menu_sections() {
                 rich_session("ses_alpha", "Alpha", now - 120_000.0, "/tmp/proj-a", "prj_a", None),
                 // 30 s old: the footer's `timeAgo` reads "now" at
                 // render (dialog-open.tsx:499 — `minutes < 1`).
-                rich_session("ses_recent", "Recent Fix", now - 30_000.0, "/tmp/proj-a", "prj_a", None),
+                rich_session(
+                    "ses_recent",
+                    "Recent Fix",
+                    now - 30_000.0,
+                    "/tmp/proj-a",
+                    "prj_a",
+                    None,
+                ),
                 rich_session("ses_old", "Ancient Work", 100_000.0, "/tmp/proj-a", "prj_a", None),
             ]);
             fake.arm_projects(
@@ -1001,7 +1023,14 @@ fn session_list_rows() {
         |fake, _sandbox| {
             fake.arm_session_rows(vec![
                 rich_session("ses_alpha", "Alpha", now - 120_000.0, "/tmp/proj-a", "prj_a", None),
-                rich_session("ses_today", "Today Work", now - 300_000.0, "/tmp/proj-a", "prj_a", None),
+                rich_session(
+                    "ses_today",
+                    "Today Work",
+                    now - 300_000.0,
+                    "/tmp/proj-a",
+                    "prj_a",
+                    None,
+                ),
                 // Untitled + outside the project: the ISO fallback
                 // title + the directory basename footer.
                 rich_session("ses_fallback", "", 100_000.0, "/elsewhere/scratch", "prj_a", None),
@@ -1046,6 +1075,7 @@ fn session_list_rows() {
 /// fuzzy cross-letter sequences do NOT match, children never row,
 /// and case-insensitive substrings do.
 #[test]
+#[allow(clippy::too_many_lines)] // one E2E driver, the six filter probes
 fn session_filter_semantics() {
     let now = now_ms();
     run_daily_test(
@@ -1065,12 +1095,40 @@ fn session_filter_semantics() {
                     (120_000.0, 300_000.0)
                 };
                 let mut tui6_rows = vec![
-                    rich_session("ses_alpha", "Alpha", now - alpha_age, "/tmp/proj-a", "prj_a", None),
-                    rich_session("ses_today", today_title, now - today_age, "/tmp/proj-a", "prj_a", None),
+                    rich_session(
+                        "ses_alpha",
+                        "Alpha",
+                        now - alpha_age,
+                        "/tmp/proj-a",
+                        "prj_a",
+                        None,
+                    ),
+                    rich_session(
+                        "ses_today",
+                        today_title,
+                        now - today_age,
+                        "/tmp/proj-a",
+                        "prj_a",
+                        None,
+                    ),
                     if std::env::var("DBG_CAFE_ROW").is_ok() {
-                        rich_session("ses_fallback", "Café notes", now - 90_000.0, "/tmp/proj-a", "prj_a", None)
+                        rich_session(
+                            "ses_fallback",
+                            "Café notes",
+                            now - 90_000.0,
+                            "/tmp/proj-a",
+                            "prj_a",
+                            None,
+                        )
                     } else {
-                        rich_session("ses_fallback", "", 100_000.0, "/elsewhere/scratch", "prj_a", None)
+                        rich_session(
+                            "ses_fallback",
+                            "",
+                            100_000.0,
+                            "/elsewhere/scratch",
+                            "prj_a",
+                            None,
+                        )
                     },
                 ];
                 if std::env::var("DBG_CHILD_ROW").is_ok() {
@@ -1093,14 +1151,18 @@ fn session_filter_semantics() {
                 } else {
                     ("/tmp", "p")
                 };
-                let cafe_age = if std::env::var("DBG_OLD_CAFE").is_ok() {
-                    100_000.0
-                } else {
-                    now - 90_000.0
-                };
+                let cafe_age =
+                    if std::env::var("DBG_OLD_CAFE").is_ok() { 100_000.0 } else { now - 90_000.0 };
                 let mut rows = vec![
                     rich_session("ses_alpha", "Alpha", now - 600_000.0, dir, prj, None),
-                    rich_session("ses_login", "Login Redirect Flow", now - 60_000.0, dir, prj, None),
+                    rich_session(
+                        "ses_login",
+                        "Login Redirect Flow",
+                        now - 60_000.0,
+                        dir,
+                        prj,
+                        None,
+                    ),
                     rich_session("ses_cafe", "Café notes", cafe_age, dir, prj, None),
                 ];
                 rows.push(rich_session(
@@ -1140,9 +1202,7 @@ fn session_filter_semantics() {
             // F6 (empty query): the full list — both parents row…
             wait_grid(
                 h,
-                |g| {
-                    (0..g.rows).any(|row| g.row_text(row).contains(std::env::var("DBG_ASCII").is_ok().then(|| "Cafe notes").unwrap_or("Café notes")))
-                },
+                |g| (0..g.rows).any(|row| g.row_text(row).contains(cafe_title())),
                 Duration::from_secs(5),
             )?;
             eprintln!("DBG: cafe visible");
@@ -1162,7 +1222,7 @@ fn session_filter_semantics() {
                 Duration::from_secs(5),
             )?;
             eprintln!("DBG: login matched");
-            if (0..grid.rows).any(|row| grid.row_text(row).contains(std::env::var("DBG_ASCII").is_ok().then(|| "Cafe notes").unwrap_or("Café notes"))) {
+            if (0..grid.rows).any(|row| grid.row_text(row).contains(cafe_title())) {
                 return Err("a non-matching row stayed visible under the filter".to_owned());
             }
             // F4 (no fuzzy): "zln" (cross-letter) matches NOTHING.
@@ -1189,7 +1249,7 @@ fn session_filter_semantics() {
                 h,
                 |g| {
                     (0..g.rows).any(|row| g.row_text(row).contains("Login Redirect Flow"))
-                        && (0..g.rows).any(|row| g.row_text(row).contains(std::env::var("DBG_ASCII").is_ok().then(|| "Cafe notes").unwrap_or("Café notes")))
+                        && (0..g.rows).any(|row| g.row_text(row).contains(cafe_title()))
                 },
                 Duration::from_secs(5),
             )?;

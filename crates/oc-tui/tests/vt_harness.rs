@@ -584,7 +584,7 @@ pub struct FakeLlm {
     /// respond).
     pub vcs: Arc<AtomicBool>,
     /// Raw `session.list` rows (opt-in — the TUI-5/6/7 dialog proofs
-    /// need richer SessionInfo wire rows than the title-only fixture:
+    /// need richer `SessionInfo` wire rows than the title-only fixture:
     /// time.updated, parentID, directory, projectID). When set, the
     /// rows REPLACE the fixture pair in the list body.
     pub session_rows: Arc<Mutex<Option<Vec<String>>>>,
@@ -693,7 +693,7 @@ impl FakeLlm {
     }
 
     /// Serve raw `session.list` wire rows (TUI-5/6/7's richer
-    /// SessionInfo fixtures — timestamps, parents, directories,
+    /// `SessionInfo` fixtures — timestamps, parents, directories,
     /// projectIDs). When set they REPLACE the fixture pair.
     pub fn arm_session_rows(&self, rows: Vec<String>) {
         *self.session_rows.lock().expect("rows") = Some(rows);
@@ -785,7 +785,7 @@ fn handle(
     socket.set_read_timeout(Some(Duration::from_millis(200))).ok();
     let path = head.split_whitespace().nth(1).unwrap_or_default().to_owned();
     let method = head.split_whitespace().next().unwrap_or_default().to_uppercase();
-    if std::env::var("DBG_FAKE_LOG").is_ok() || std::env::var("DBG_FAKE_LOG2").is_ok() || true {
+    if std::env::var("DBG_FAKE_LOG").is_ok() || std::env::var("DBG_FAKE_LOG2").is_ok() {
         eprintln!("DBG fake: {method} {path}");
     }
     // -- TUI-4: the persistent-pty family ---------------------------------
@@ -1047,7 +1047,10 @@ fn pty_rest(method: &str, path: &str, terminals: &TerminalFixture) -> Option<Str
         terminals.created.fetch_add(1, Ordering::SeqCst);
         return Some(envelope(&format!(r#"{{"data":{}}}"#, pty_info_json("pty_new"))));
     }
-    if method == "GET" && bare.starts_with("/api/experimental/persistent-pty/") && bare.ends_with("/snapshot") {
+    if method == "GET"
+        && bare.starts_with("/api/experimental/persistent-pty/")
+        && bare.ends_with("/snapshot")
+    {
         // The checkpoint paints fixed text through the pane's VT
         // emulator (base64 of "CHECKPOINT-OUT ").
         let body = format!(
@@ -1065,7 +1068,12 @@ fn pty_rest(method: &str, path: &str, terminals: &TerminalFixture) -> Option<Str
 /// The test-side RFC 6455 attach: accept the upgrade, send the
 /// scripted attach/replay frames, then record every inbound binary
 /// interaction frame (the TUI's typed input + resize controls).
-fn ws_attach(mut socket: std::net::TcpStream, head: &str, terminals: &TerminalFixture, pty_id: &str) {
+fn ws_attach(
+    mut socket: std::net::TcpStream,
+    head: &str,
+    terminals: &TerminalFixture,
+    pty_id: &str,
+) {
     let _ = pty_id;
     let Some(key) = head.lines().find_map(|line| {
         let (name, value) = line.split_once(':')?;
@@ -1110,14 +1118,14 @@ fn ws_attach(mut socket: std::net::TcpStream, head: &str, terminals: &TerminalFi
     let mut pending: Vec<u8> = Vec::new();
     loop {
         match socket.read(&mut buffer) {
-            Ok(0) => return,
             Err(error)
                 if error.kind() == std::io::ErrorKind::WouldBlock
                     || error.kind() == std::io::ErrorKind::TimedOut =>
             {
                 std::thread::sleep(Duration::from_millis(10));
             }
-            Err(_) => return,
+            // EOF (the peer closed) and hard errors both end the pump.
+            Ok(0) | Err(_) => return,
             Ok(count) => {
                 pending.extend_from_slice(&buffer[..count]);
                 while let Some((opcode, payload, consumed)) = ws_frame(&pending) {
@@ -1215,32 +1223,34 @@ fn sha1(data: &[u8], suffix: &[u8]) -> [u8; 20] {
             let value = words[index - 3] ^ words[index - 8] ^ words[index - 14] ^ words[index - 16];
             words[index] = value.rotate_left(1);
         }
-        let [a0, b0, c0, d0, e0] = state;
-        let (mut a, mut b, mut c, mut d, mut e) = (a0, b0, c0, d0, e0);
+        // The standard's working variables (FIPS 180-4 §6.2.2):
+        // `wa`..`we` rotate through the round schedule.
+        let [ha, hb, hc, hd, he] = state;
+        let (mut wa, mut wb, mut wc, mut wd, mut we) = (ha, hb, hc, hd, he);
         for (index, word) in words.iter().enumerate() {
-            let (f, k) = match index {
-                0..=19 => ((b & c) | ((!b) & d), 0x5A82_7999),
-                20..=39 => (b ^ c ^ d, 0x6ED9_EBA1),
-                40..=59 => ((b & c) | (b & d) | (c & d), 0x8F1B_BCDC),
-                _ => (b ^ c ^ d, 0xCA62_C1D6),
+            let (round, k) = match index {
+                0..=19 => ((wb & wc) | ((!wb) & wd), 0x5A82_7999),
+                20..=39 => (wb ^ wc ^ wd, 0x6ED9_EBA1),
+                40..=59 => ((wb & wc) | (wb & wd) | (wc & wd), 0x8F1B_BCDC),
+                _ => (wb ^ wc ^ wd, 0xCA62_C1D6),
             };
-            let temp = a
+            let temp = wa
                 .rotate_left(5)
-                .wrapping_add(f)
-                .wrapping_add(e)
+                .wrapping_add(round)
+                .wrapping_add(we)
                 .wrapping_add(k)
                 .wrapping_add(*word);
-            e = d;
-            d = c;
-            c = b.rotate_left(30);
-            b = a;
-            a = temp;
+            we = wd;
+            wd = wc;
+            wc = wb.rotate_left(30);
+            wb = wa;
+            wa = temp;
         }
-        state[0] = state[0].wrapping_add(a);
-        state[1] = state[1].wrapping_add(b);
-        state[2] = state[2].wrapping_add(c);
-        state[3] = state[3].wrapping_add(d);
-        state[4] = state[4].wrapping_add(e);
+        state[0] = state[0].wrapping_add(wa);
+        state[1] = state[1].wrapping_add(wb);
+        state[2] = state[2].wrapping_add(wc);
+        state[3] = state[3].wrapping_add(wd);
+        state[4] = state[4].wrapping_add(we);
     }
     let mut digest = [0u8; 20];
     for (index, word) in state.iter().enumerate() {
@@ -1259,7 +1269,7 @@ fn b64(bytes: &[u8]) -> String {
         let group = (byte(0) << 16) | (byte(1) << 8) | byte(2);
         // One 6-bit group per output char; group i is real while it
         // overlaps the chunk's n bytes: ceil(n*8/6) chars + padding.
-        let valid = (chunk.len() * 8 + 5) / 6;
+        let valid = (chunk.len() * 8).div_ceil(6);
         for (index, shift) in [18u32, 12, 6, 0].iter().enumerate() {
             if index < valid {
                 let slot = usize::try_from((group >> shift) & 0x3f).unwrap_or(0);
@@ -1659,6 +1669,11 @@ mod ws_probe_tests {
     }
 
     fn hex(bytes: &[u8]) -> String {
-        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+        let mut out = String::with_capacity(bytes.len() * 2);
+        for byte in bytes {
+            use std::fmt::Write as _;
+            let _ = write!(out, "{byte:02x}");
+        }
+        out
     }
 }
