@@ -972,6 +972,7 @@ impl Engine {
                 &agents,
                 &tools,
                 Some(&commands),
+                &mcp,
             )
             .await;
             let _ = applied; // diagnostics only (boot-trace reads the registry)
