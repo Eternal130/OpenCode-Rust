@@ -36,7 +36,8 @@ use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::context::{
-    Bridge, HostState, SessionPort, ToolPort, CODEMODE_METHODS, GENERATE_METHODS, SESSION_METHODS,
+    Bridge, HostState, PermissionPort, SessionPort, ToolPort, CODEMODE_METHODS, GENERATE_METHODS,
+    SESSION_METHODS,
 };
 use crate::protocol::{self, Incoming};
 use crate::registrations::{PluginState, PluginStatus, Registrations};
@@ -114,6 +115,9 @@ pub struct SupervisorConfig {
     /// `ctx.storage.*` call with a clear error; the embedder binds the
     /// database-backed port.
     pub storage_port: Option<Arc<dyn StoragePort>>,
+    /// The permission backend (PLUG-D11): `None` declines every
+    /// `ctx.permission.*` call; the embedder binds the engine port.
+    pub permission_port: Option<Arc<dyn PermissionPort>>,
 }
 
 impl Default for SupervisorConfig {
@@ -135,6 +139,7 @@ impl Default for SupervisorConfig {
             tool_port: None,
             entry_options: BTreeMap::new(),
             storage_port: None,
+            permission_port: None,
         }
     }
 }
@@ -344,10 +349,12 @@ impl Shared {
                 self.answer_storage_async(id, method, params);
                 None
             }
-            "permission.reply" => {
-                // Registration-time acknowledgment only; the permission
-                // prompt flow is the permission lane's seam (wave 4).
-                Some(protocol::response(id, Value::Null))
+            // -- PLUG-D11: `ctx.permission.*` over the engine's
+            //    permission machinery (async off the reader — the
+            //    reply resolves a pending ask, which may run tools).
+            "permission.list" | "permission.get" | "permission.reply" => {
+                self.answer_permission_async(id, method, params);
+                None
             }
             // -- wave 4: Code Mode nested tool calls (`tools.<path>`
             //    inside an `execute` program) — same async-off-the-reader
@@ -491,6 +498,60 @@ impl Shared {
                     }
                 }
                 other => protocol::error_response(id, &format!("unknown storage method {other:?}")),
+            };
+            let _ = outbound.send(reply);
+        });
+    }
+
+    /// The async `ctx.permission.*` path (PLUG-D11): spawn the port
+    /// call onto the supervisor runtime; the reply is enqueued when it
+    /// settles (same deadlock-rule-1 shape as `session.*`).
+    fn answer_permission_async(self: &Arc<Self>, id: u64, method: &str, params: &Value) {
+        let Some(handle) = self.runtime_handle.clone() else {
+            let outbound = self.outbound.read().expect("outbound lock poisoned").clone();
+            let _ = outbound.send(protocol::error_response(id, "plugin host runtime unavailable"));
+            return;
+        };
+        let Some(port) = self.config.permission_port.clone() else {
+            let outbound = self.outbound.read().expect("outbound lock poisoned").clone();
+            let _ = outbound.send(protocol::error_response(
+                id,
+                &format!("permission.{method}: no permission engine attached to the plugin host"),
+            ));
+            return;
+        };
+        let args = params.get("args").cloned().unwrap_or(Value::Null);
+        let session_id =
+            args.get("sessionID").and_then(Value::as_str).unwrap_or_default().to_owned();
+        let request_id =
+            args.get("requestID").and_then(Value::as_str).unwrap_or_default().to_owned();
+        let decision = args.get("decision").and_then(Value::as_str).unwrap_or_default().to_owned();
+        let message = args.get("message").and_then(Value::as_str).map(str::to_owned);
+        let method = method.to_owned();
+        let outbound = self.outbound.read().expect("outbound lock poisoned").clone();
+        handle.spawn(async move {
+            let reply = match method.as_str() {
+                "permission.list" => match port.list(&session_id).await {
+                    Ok(value) => protocol::response(id, json!({ "value": value })),
+                    Err(message) => protocol::error_response(id, &message),
+                },
+                "permission.get" => match port.get(&session_id, &request_id).await {
+                    Ok(value) => protocol::response(id, json!({ "value": value })),
+                    Err(message) => protocol::error_response(id, &message),
+                },
+                "permission.reply" => {
+                    if request_id.is_empty() {
+                        protocol::error_response(id, "permission.reply requires a requestID")
+                    } else {
+                        match port.reply(&session_id, &request_id, &decision, message).await {
+                            Ok(()) => protocol::response(id, Value::Null),
+                            Err(message) => protocol::error_response(id, &message),
+                        }
+                    }
+                }
+                other => {
+                    protocol::error_response(id, &format!("unknown permission method {other:?}"))
+                }
             };
             let _ = outbound.send(reply);
         });
@@ -1428,6 +1489,17 @@ impl Shared {
     /// subset the guest's render consumes).
     pub fn notify_tui_theme(&self, view: serde_json::Value) {
         self.send_notification("tui.theme", view);
+    }
+
+    /// PLUG-D07 — push the LATEST activated location into the guest
+    /// (the `location.update` notification): every live `ctx`'s
+    /// `directory`/`location` view follows, the one-guest approximation
+    /// of v2's per-instance plugin hosts.
+    pub fn push_location(&self, directory: &str, project_id: &str) {
+        self.send_notification(
+            "location.update",
+            json!({ "directory": directory, "project": { "id": project_id } }),
+        );
     }
 
     /// Push the sidebar's layout budget (the `tui.layout` notification

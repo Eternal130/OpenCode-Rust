@@ -46,6 +46,16 @@ pub fn apply_plugin_agents(registry: &AgentRegistry, agents: &[Value]) -> usize 
     applied
 }
 
+/// One plugin-transformed agent as the engine sees it (the snapshot's
+/// `PluginAgent` mirrored: v2 `Agent.Info` JSON + the introducing
+/// plugin's id for per-location activation filtering).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PluginAgentDef {
+    pub plugin_id: String,
+    /// v2 `Agent.Info` JSON.
+    pub info: Value,
+}
+
 /// Apply the plugin table's default agent (`draft.default(id)`):
 /// `AgentRegistry::set_default`. `None` clears it.
 pub fn apply_plugin_agent_default(registry: &AgentRegistry, default: Option<&str>) {
@@ -57,6 +67,8 @@ pub fn apply_plugin_agent_default(registry: &AgentRegistry, default: Option<&str
 /// the definition crosses as plain data).
 #[derive(Debug, Clone, PartialEq)]
 pub struct PluginToolDef {
+    /// Owning plugin id (PLUG-D07 per-location activation filtering).
+    pub plugin_id: String,
     pub name: String,
     pub description: String,
     /// JSON-Schema input.
@@ -76,9 +88,10 @@ pub struct PluginToolDef {
 /// (a resolved snapshot read, never an IPC round-trip — the host's
 /// registration pass settles before boot flips ready).
 pub trait LocationPluginSource: Send + Sync {
-    /// v2 `Agent.Info` JSON documents (applied via
-    /// [`apply_plugin_agents`]).
-    fn agents(&self) -> Vec<Value> {
+    /// v2 `Agent.Info` JSON documents + provenance (applied via
+    /// [`apply_plugin_agents`]; the plugin id drives PLUG-D07's
+    /// per-location activation filtering).
+    fn agents(&self) -> Vec<PluginAgentDef> {
         Vec::new()
     }
 
@@ -97,6 +110,17 @@ pub trait LocationPluginSource: Send + Sync {
     /// so a headless server sees them too; the TUI wire seam of
     /// PLUG-D33 stays as an idempotent re-push over the same rows).
     fn mcps(&self) -> Vec<PluginMcpDef> {
+        Vec::new()
+    }
+
+    /// Plugin-registered skills (PLUG-D35): v2 `Skill.Info` JSON
+    /// documents from the host snapshot's `ctx.skill.transform`
+    /// materializations — applied via
+    /// [`apply_plugin_skills`] into the location's
+    /// [`crate::engine::skills::ConfigSkillTable`] (insert-or-replace;
+    /// the plugin entry wins an id collision, matching v2's
+    /// plugins-after-config activation order).
+    fn skills(&self) -> Vec<PluginSkillDef> {
         Vec::new()
     }
 
@@ -127,14 +151,91 @@ pub trait LocationPluginSource: Send + Sync {
     fn hook_dispatcher(&self) -> Option<Arc<dyn GuestHookDispatcher>> {
         None
     }
+
+    /// PLUG-D07 — the per-location activation set: v2 activates plugins
+    /// PER location (`plugin/supervisor.ts` is a location node; each
+    /// location's config layers resolve that location's plugin
+    /// operations). `ops` are THIS location's resolved operations; the
+    /// implementation reduces them (dedup/removes) and maps the
+    /// surviving targets onto the loaded plugins' ids. `None` (the
+    /// default) = process-global: every registration applies, the
+    /// pre-D07 behavior for embedders that don't implement it.
+    fn active_plugins(&self, ops: &[LocationPluginOp]) -> Option<Vec<String>> {
+        let _ = ops;
+        None
+    }
+
+    /// PLUG-D07 — one location's assembly completed with plugins
+    /// active (the embedder updates the guest's `ctx.location` view to
+    /// the latest activation — the one-guest approximation of v2's
+    /// per-instance hosts). Default: no-op.
+    fn location_activated(&self, directory: &str, project_id: &str) {
+        let _ = (directory, project_id);
+    }
+}
+
+/// One config plugin operation as the engine sees it (PLUG-D07 — the
+/// location-scoped mirror of the boot pass's ops; oc-plugin-host stays
+/// dep-light so the directive crosses as plain data).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LocationPluginOp {
+    /// Add a package (spec string or `{package}`).
+    Add { target: String },
+    /// Remove a previously added target (`-id` / `-*`).
+    Remove { target: String },
+}
+
+impl LocationPluginOp {
+    /// Extract the location's plugin operations from a loaded config
+    /// (every document's `plugins` array, priority order — the same
+    /// normalization the boot pass applies; discovery drop-ins are the
+    /// boot pass's, a location can only add/remove what the process
+    /// already knows how to load).
+    #[must_use]
+    pub fn from_loaded(loaded: &crate::config::Loaded) -> Vec<Self> {
+        let mut ops = Vec::new();
+        for entry in &loaded.entries {
+            let oc_schema::config::Entry::Document(document) = entry else { continue };
+            let Some(plugins) = &document.info.plugins else { continue };
+            for plugin in plugins {
+                match plugin {
+                    oc_schema::config::Plugin::Spec(spec) => {
+                        if let Some(target) = spec.strip_prefix('-') {
+                            if target.is_empty() {
+                                continue;
+                            }
+                            ops.push(Self::Remove { target: target.to_owned() });
+                        } else {
+                            ops.push(Self::Add { target: spec.clone() });
+                        }
+                    }
+                    oc_schema::config::Plugin::Entry { package, .. } => {
+                        ops.push(Self::Add { target: package.clone() });
+                    }
+                }
+            }
+        }
+        ops
+    }
 }
 
 /// One plugin-registered command as the engine sees it (the host
 /// snapshot's `PluginCommand` mirrored; oc-plugin-host stays dep-light).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginCommandDef {
+    /// Owning plugin id (PLUG-D07 per-location activation filtering).
+    pub plugin_id: String,
     pub name: String,
     pub description: String,
+}
+
+/// One plugin-registered skill as the engine sees it (the snapshot's
+/// `PluginSkill` mirrored: v2 `Skill.Info` JSON + provenance).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PluginSkillDef {
+    pub plugin_id: String,
+    /// v2 `Skill.Info` JSON.
+    pub info: Value,
 }
 
 /// One plugin-declared MCP server as the engine sees it (the host
@@ -145,6 +246,8 @@ pub struct PluginCommandDef {
 /// `Schema.decodeUnknownSync(ServerConfig)` at host.ts:387-397).
 #[derive(Debug, Clone, PartialEq)]
 pub struct PluginMcpDef {
+    /// Owning plugin id (PLUG-D07 per-location activation filtering).
+    pub plugin_id: String,
     pub name: String,
     /// v2 `Mcp.ServerConfig` JSON (`{type: "local"|"remote", ...}`).
     pub config: Value,
@@ -325,6 +428,34 @@ async fn register_guest_hook(
     true
 }
 
+/// Apply plugin-registered skills (PLUG-D35): each `Skill.Info` JSON
+/// document merges into the location's
+/// [`crate::engine::skills::ConfigSkillTable`] (insert-or-replace by
+/// id). Unparseable entries are skipped (contained, like the agents
+/// arm); the applied count is returned.
+#[must_use]
+pub fn apply_plugin_skills(
+    table: &crate::engine::skills::ConfigSkillTable,
+    skills: &[Value],
+) -> usize {
+    let mut applied = 0usize;
+    for info in skills {
+        match serde_json::from_value::<oc_schema::skill::Skill>(info.clone()) {
+            Ok(parsed) => {
+                table.merge_plugin_skill(parsed);
+                applied += 1;
+            }
+            Err(error) => {
+                eprintln!(
+                    "opencode plugin-apply: skipping malformed skill {:?}: {error}",
+                    info.get("id").and_then(serde_json::Value::as_str)
+                );
+            }
+        }
+    }
+    applied
+}
+
 /// Apply one plugin source into a freshly built location graph's
 /// registries (the `assemble` step): the plugin-declared MCP servers
 /// into the location's [`McpRegistry`] FIRST (PLUG-ENGINE-MERGE —
@@ -340,6 +471,7 @@ async fn register_guest_hook(
 /// in the tool pipeline, `session.*` in the model-request preparation
 /// — reaches guest handlers through the bridge forwarder). Returns
 /// the applied agent count.
+#[allow(clippy::too_many_arguments)] // the assembly's registry set + the location's ops
 pub async fn apply_location_plugins(
     source: &dyn LocationPluginSource,
     hooks: &Arc<HookRegistry>,
@@ -347,7 +479,16 @@ pub async fn apply_location_plugins(
     tools: &Arc<ToolRegistryState>,
     commands: Option<&Arc<crate::engine::commands::CommandTable>>,
     mcp: &crate::mcp::McpRegistry,
+    skills: &Arc<crate::engine::skills::ConfigSkillTable>,
+    ops: &[LocationPluginOp],
 ) -> usize {
+    // PLUG-D07: v2 activates plugins per location — registrations from
+    // plugins NOT active for THIS location's resolved operations stay
+    // out of its graph (hooks never dispatch, tools/MCPs/agents/skills/
+    // commands never register).
+    let active = source.active_plugins(ops);
+    let is_active =
+        |plugin_id: &str| active.as_ref().is_none_or(|ids| ids.iter().any(|id| id == plugin_id));
     // The MCP merge runs over THIS location's registry (per-location
     // overlays, like every other arm below). Idempotent by
     // construction: `add` is insert-or-replace and the reconcile diff
@@ -356,6 +497,9 @@ pub async fn apply_location_plugins(
     // An unparseable config declines THIS server only (contained,
     // logged) — never the whole pass.
     for definition in source.mcps() {
+        if !is_active(&definition.plugin_id) {
+            continue;
+        }
         match serde_json::from_value::<oc_schema::mcp::ServerConfig>(definition.config.clone()) {
             Ok(config) => mcp.add(&definition.name, config).await,
             Err(error) => eprintln!(
@@ -364,11 +508,35 @@ pub async fn apply_location_plugins(
             ),
         }
     }
-    let snapshot_agents = source.agents();
+    let snapshot_agents: Vec<Value> = source
+        .agents()
+        .into_iter()
+        .filter(|definition| is_active(&definition.plugin_id))
+        .map(|definition| definition.info)
+        .collect();
     let applied =
         if snapshot_agents.is_empty() { 0 } else { apply_plugin_agents(agents, &snapshot_agents) };
-    apply_plugin_agent_default(agents, source.default_agent().as_deref());
+    // The table-global default agent applies while any plugin is active
+    // for this location (provenance of the LAST draft.default setter is
+    // not tracked separately).
+    if active.as_ref().is_none_or(|ids| !ids.is_empty()) {
+        apply_plugin_agent_default(agents, source.default_agent().as_deref());
+    }
+    // PLUG-D35: plugin skills merge into the location's skill table
+    // (empty vec = a no-op read, never a lock round-trip).
+    let snapshot_skills: Vec<Value> = source
+        .skills()
+        .into_iter()
+        .filter(|definition| is_active(&definition.plugin_id))
+        .map(|definition| definition.info)
+        .collect();
+    if !snapshot_skills.is_empty() {
+        let _ = apply_plugin_skills(skills, &snapshot_skills);
+    }
     for definition in source.tools() {
+        if !is_active(&definition.plugin_id) {
+            continue;
+        }
         let mut registration = crate::location::ToolRegistration::new(
             &definition.name,
             definition.description.clone(),
@@ -383,11 +551,17 @@ pub async fn apply_location_plugins(
     }
     if let Some(commands) = commands {
         for definition in source.commands() {
+            if !is_active(&definition.plugin_id) {
+                continue;
+            }
             commands.register_plugin(&definition.name, &definition.description);
         }
     }
     if let Some(dispatcher) = source.hook_dispatcher() {
         for definition in source.hooks() {
+            if !is_active(&definition.plugin_id) {
+                continue;
+            }
             register_guest_hook(hooks, &definition, &dispatcher).await;
         }
     }
@@ -959,6 +1133,7 @@ mod tests {
 
     fn local_mcp(name: &str) -> PluginMcpDef {
         PluginMcpDef {
+            plugin_id: "plugindemo".to_owned(),
             name: name.to_owned(),
             config: serde_json::json!({
                 "type": "local",
@@ -976,15 +1151,31 @@ mod tests {
         let source = McpOnlySource(vec![
             local_mcp("plugindemo"),
             PluginMcpDef {
+                plugin_id: "plugindemo".to_owned(),
                 name: "remote-demo".to_owned(),
                 config: serde_json::json!({ "type": "remote", "url": "https://example.invalid" }),
             },
-            PluginMcpDef { name: "broken".to_owned(), config: serde_json::json!({"type": "?"}) },
+            PluginMcpDef {
+                plugin_id: "plugindemo".to_owned(),
+                name: "broken".to_owned(),
+                config: serde_json::json!({"type": "?"}),
+            },
         ]);
         let hooks = Arc::new(HookRegistry::new());
         let agents = Arc::new(AgentRegistry::new());
         let tools = Arc::new(ToolRegistryState::new());
-        apply_location_plugins(&source, &hooks, &agents, &tools, None, &registry).await;
+        let skills_table = Arc::new(crate::engine::skills::ConfigSkillTable::empty());
+        apply_location_plugins(
+            &source,
+            &hooks,
+            &agents,
+            &tools,
+            None,
+            &registry,
+            &skills_table,
+            &[],
+        )
+        .await;
         let names: Vec<String> = registry.servers().into_iter().map(|s| s.name).collect();
         assert!(
             names.contains(&"plugindemo".to_owned()) && names.contains(&"remote-demo".to_owned()),
@@ -1003,9 +1194,203 @@ mod tests {
         let hooks = Arc::new(HookRegistry::new());
         let agents = Arc::new(AgentRegistry::new());
         let tools = Arc::new(ToolRegistryState::new());
-        apply_location_plugins(&source, &hooks, &agents, &tools, None, &registry).await;
-        apply_location_plugins(&source, &hooks, &agents, &tools, None, &registry).await;
+        let skills_table = Arc::new(crate::engine::skills::ConfigSkillTable::empty());
+        apply_location_plugins(
+            &source,
+            &hooks,
+            &agents,
+            &tools,
+            None,
+            &registry,
+            &skills_table,
+            &[],
+        )
+        .await;
+        apply_location_plugins(
+            &source,
+            &hooks,
+            &agents,
+            &tools,
+            None,
+            &registry,
+            &skills_table,
+            &[],
+        )
+        .await;
         let names: Vec<String> = registry.servers().into_iter().map(|s| s.name).collect();
         assert_eq!(names, vec!["plugindemo".to_owned()], "insert-or-replace, no duplicates");
+    }
+}
+
+#[cfg(test)]
+mod per_location_tests {
+    //! PLUG-D07 — per-location activation filtering over a provenance-
+    //! carrying source (v2 activates plugins per location; the graph of
+    //! a location whose config did not activate a plugin never sees its
+    //! registrations).
+
+    use super::*;
+
+    struct MultiPluginSource;
+
+    impl LocationPluginSource for MultiPluginSource {
+        fn agents(&self) -> Vec<PluginAgentDef> {
+            vec![
+                PluginAgentDef { plugin_id: "alpha".into(), info: agent("alpha-agent") },
+                PluginAgentDef { plugin_id: "beta".into(), info: agent("beta-agent") },
+            ]
+        }
+
+        fn tools(&self) -> Vec<PluginToolDef> {
+            vec![
+                PluginToolDef {
+                    plugin_id: "alpha".into(),
+                    name: "alpha_tool".into(),
+                    description: String::new(),
+                    input: serde_json::json!({ "type": "object" }),
+                    codemode: true,
+                    namespace: None,
+                },
+                PluginToolDef {
+                    plugin_id: "beta".into(),
+                    name: "beta_tool".into(),
+                    description: String::new(),
+                    input: serde_json::json!({ "type": "object" }),
+                    codemode: true,
+                    namespace: None,
+                },
+            ]
+        }
+
+        fn skills(&self) -> Vec<PluginSkillDef> {
+            vec![PluginSkillDef {
+                plugin_id: "beta".into(),
+                info: serde_json::json!({
+                    "id": "beta-skill", "name": "Beta",
+                    "path": "/beta/SKILL.md", "content": "c",
+                }),
+            }]
+        }
+
+        /// alpha active only when its op survived the reduction.
+        fn active_plugins(&self, ops: &[LocationPluginOp]) -> Option<Vec<String>> {
+            let mut active: Vec<String> = Vec::new();
+            for op in ops {
+                match op {
+                    LocationPluginOp::Add { target } => active.push(target.clone()),
+                    LocationPluginOp::Remove { target } => {
+                        active.retain(|id| id != target);
+                    }
+                }
+            }
+            Some(active)
+        }
+    }
+
+    fn agent(id: &str) -> Value {
+        serde_json::json!({
+            "id": id, "name": id, "mode": "primary", "hidden": false,
+            "request": { "settings": {}, "headers": {}, "body": {} }, "permissions": [],
+        })
+    }
+
+    async fn table() -> (
+        Arc<HookRegistry>,
+        Arc<AgentRegistry>,
+        Arc<ToolRegistryState>,
+        Arc<crate::engine::skills::ConfigSkillTable>,
+        crate::mcp::McpRegistry,
+    ) {
+        let database = crate::database::Database::open_in_memory().await.expect("database");
+        let bus = crate::bus::Bus::new(database, crate::bus::BusOptions::deterministic());
+        let connector: crate::mcp::Connector = Arc::new(|input: crate::mcp::ConnectInput<'_>| {
+            let server = input.server.to_string();
+            Box::pin(async move {
+                Err(crate::mcp::ConnectFailure::Connect(crate::mcp::ConnectError {
+                    server,
+                    message: "test connector".to_owned(),
+                }))
+            })
+        });
+        let registry = crate::mcp::McpRegistry::with_connector(
+            bus,
+            connector,
+            Arc::new(crate::mcp::NoCredentials),
+        )
+        .with_directory("/tmp");
+        (
+            Arc::new(HookRegistry::new()),
+            Arc::new(AgentRegistry::new()),
+            Arc::new(ToolRegistryState::new()),
+            Arc::new(crate::engine::skills::ConfigSkillTable::empty()),
+            registry,
+        )
+    }
+
+    /// A location that activated only alpha gets alpha's registrations;
+    /// beta's stay out (agent rows, tools, skills).
+    #[tokio::test]
+    async fn inactive_plugin_registrations_stay_out() {
+        let (hooks, agents, tools, skills, mcp) = table().await;
+        apply_location_plugins(
+            &MultiPluginSource,
+            &hooks,
+            &agents,
+            &tools,
+            None,
+            &mcp,
+            &skills,
+            &[LocationPluginOp::Add { target: "alpha".to_owned() }],
+        )
+        .await;
+        assert!(agents.get(&AgentId::parse("alpha-agent")).is_some(), "alpha applied");
+        assert!(agents.get(&AgentId::parse("beta-agent")).is_none(), "beta filtered");
+        assert!(tools.get("alpha_tool").is_some(), "alpha tool row registered");
+        assert!(tools.get("beta_tool").is_none(), "beta tool filtered");
+        assert!(
+            crate::tool::skill::SkillTable::get(skills.as_ref(), "beta-skill").is_none(),
+            "beta skill filtered"
+        );
+    }
+
+    /// The remove op drops a previously added plugin (v2's ordered
+    /// reduction — explicit config removes drop discovered adds).
+    #[tokio::test]
+    async fn remove_op_drops_the_activation() {
+        let (hooks, agents, tools, skills, mcp) = table().await;
+        apply_location_plugins(
+            &MultiPluginSource,
+            &hooks,
+            &agents,
+            &tools,
+            None,
+            &mcp,
+            &skills,
+            &[
+                LocationPluginOp::Add { target: "alpha".to_owned() },
+                LocationPluginOp::Remove { target: "alpha".to_owned() },
+            ],
+        )
+        .await;
+        assert!(agents.get(&AgentId::parse("alpha-agent")).is_none(), "removed → filtered");
+    }
+
+    /// An empty activation set (a plugin-less location) applies nothing.
+    #[tokio::test]
+    async fn empty_set_applies_nothing() {
+        let (hooks, agents, tools, skills, mcp) = table().await;
+        apply_location_plugins(
+            &MultiPluginSource,
+            &hooks,
+            &agents,
+            &tools,
+            None,
+            &mcp,
+            &skills,
+            &[],
+        )
+        .await;
+        assert!(agents.get(&AgentId::parse("alpha-agent")).is_none());
+        assert!(tools.get("alpha_tool").is_none());
     }
 }
