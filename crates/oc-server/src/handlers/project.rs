@@ -10,6 +10,7 @@ use serde_json::{json, Value};
 
 use super::common::{no_content, resolve_location, ApiError, SharedState};
 use super::session::{query_field, services};
+use oc_core::project::ProjectEvents as _;
 
 pub fn routes() -> axum::Router<SharedState> {
     axum::Router::new()
@@ -124,48 +125,39 @@ async fn project_update(
     Path(project_id): Path<String>,
     axum::Json(body): axum::Json<Value>,
 ) -> Result<Response, ApiError> {
-    let db = state.engine.db.clone();
-    let (id, name, icon_url_override, icon_color) = (
-        project_id.clone(),
-        body["name"].as_str().map(String::from),
-        body["icon"].get("override").and_then(Value::as_str).map(String::from),
-        body["icon"].get("color").and_then(Value::as_str).map(String::from),
-    );
-    let updated = db
-        .transaction(move |tx| {
-            tx.execute(
-                "UPDATE project SET \
-                   name = coalesce(?2, name), \
-                   icon_url_override = coalesce(?3, icon_url_override), \
-                   icon_color = coalesce(?4, icon_color), \
-                   time_updated = ?5 \
-                 WHERE id = ?1",
-                (id, name, icon_url_override, icon_color, oc_core::database::migrations::now_ms()),
-            )
-        })
-        .await
-        .map_err(|error| {
-            crate::errors::debug_cause("project:unknown_ref", &error);
-            ApiError::unknown_ref()
-        })?;
-    if updated == 0 {
-        return Err(ApiError::project_not_found(&project_id));
+    // `Project.UpdateInput` (schema/project.ts:51-58): absent = untouched,
+    // present = write (empty string clears to NULL — project.ts:219-226).
+    // `icon.url` is server-owned and never updatable (project.ts:221-223).
+    let canonical = body["canonical"].as_str().map(std::path::PathBuf::from);
+    if let Some(canonical) = &canonical {
+        if !canonical.is_absolute() {
+            return Err(ApiError::invalid_request("canonical must be an absolute path"));
+        }
     }
-    let row = (
-        project_id.clone(),
-        String::new(),
-        None,
-        body["name"].as_str().map(String::from),
-        None,
-        body["icon"].get("override").and_then(Value::as_str).map(String::from),
-        body["icon"].get("color").and_then(Value::as_str).map(String::from),
-        "[]".to_owned(),
-        None,
-        0,
-        0,
-        0,
-    );
-    Ok(axum::Json(project_json(&row)).into_response())
+    let commands = body["commands"].get("start").and_then(Value::as_str).map(|start| {
+        // `commands.start` present: non-empty → {start}, empty → clear.
+        (!start.is_empty()).then(|| serde_json::json!({ "start": start }))
+    });
+    let input = oc_core::project::UpdateInput {
+        project_id: project_id.clone(),
+        canonical,
+        name: body["name"].as_str().map(String::from),
+        icon_override: body["icon"].get("override").and_then(Value::as_str).map(String::from),
+        icon_color: body["icon"].get("color").and_then(Value::as_str).map(String::from),
+        commands,
+    };
+    // DB-D4 (project.ts:215-239): persist through the store (real row,
+    // v2 empty-string-clear semantics, time_updated bump) …
+    let info = state.engine.projects.update(&input).await.map_err(|error| {
+        crate::errors::debug_cause("project:unknown_ref", &error);
+        ApiError::project_not_found(&project_id)
+    })?;
+    // … announce `project.updated` with the full Info (fromRow) …
+    oc_core::project::BusProjectEvents::new((*state.engine.bus).clone())
+        .project_updated(&info)
+        .await;
+    // … and return the REAL row (never a fabricated echo).
+    Ok(axum::Json(info.to_json()).into_response())
 }
 
 // ---------------------------------------------------------------------------

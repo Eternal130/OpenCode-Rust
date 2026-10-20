@@ -407,8 +407,9 @@ impl SqliteProjectStore {
         let mut assignments: Vec<String> = Vec::new();
         let mut params: Vec<Box<dyn rusqlite::ToSql + Send>> = Vec::new();
         // v2 drizzle `set`: an `undefined` field keeps the column (no set
-        // key); a present value writes it (empty string semantics clear
-        // to NULL — project.ts:219-226).
+        // key); a present value writes it, with the empty string CLEARING
+        // to NULL (`input.name || null` — project.ts:219-226).
+        let clear = |value: Option<String>| value.filter(|value| !value.is_empty());
         let mut push = |column: &str,
                         value: Option<String>,
                         params: &mut Vec<Box<dyn rusqlite::ToSql + Send>>| {
@@ -419,13 +420,13 @@ impl SqliteProjectStore {
             push("worktree", Some(canonical), &mut params);
         }
         if input.name.is_some() {
-            push("name", input.name.clone(), &mut params);
+            push("name", clear(input.name.clone()), &mut params);
         }
         if input.icon_override.is_some() {
-            push("icon_url_override", input.icon_override.clone(), &mut params);
+            push("icon_url_override", clear(input.icon_override.clone()), &mut params);
         }
         if input.icon_color.is_some() {
-            push("icon_color", input.icon_color.clone(), &mut params);
+            push("icon_color", clear(input.icon_color.clone()), &mut params);
         }
         if let Some(commands) = &input.commands {
             let encoded = commands
