@@ -1,0 +1,828 @@
+# runtime-gates — CI-RUNTIME lane (user ruling 2026-10-20: 使用 GitHub CI)
+#
+# Everything runtime-shaped that cannot live in the fast ci.yml loop:
+# the p10 battery (§12.2), the §12.3 runtime gates, the 9 needs-runtime
+# ledger entries, a non-linux-x64 build target (§12.4 SURF-PLATFORM CI
+# leg), the release smoke (§12.4), and an opt-in 30m soak.
+#
+# Job graph (one compilation, mirrors ci.yml's build-archive pattern):
+#
+#   build-archive ──> v2-db-fixture ──┬──> p10-battery        (§12.2 exit battery)
+#                                     └──> runtime-gates      (§12.3 set)
+#   build-archive ──> ai-needs-runtime  (AI-VERTEX-V2 / AI-V1 / AI-COPILOT-C6, cassette)
+#   build-archive ──> tui-needs-runtime (6 TUI rows: gap probes + adjacent PTY battery)
+#   build-archive ──> soak-30m           (opt-in, default OFF)
+#   build-archive ──> release-smoke      (opt-in, default OFF)
+#   platform-build                       (macos-latest, compiles from source)
+#   gates-summary                        (EXECUTED vs SKIPPED ledger; skip ≠ pass)
+#
+# SECRETS (documented per lane spec; the ledger repros are manual and read
+# no env of their own, so these CI-side names are the contract):
+#   OC_CI_VERTEX_PROJECT + OC_CI_VERTEX_CREDENTIALS -> AI-VERTEX-V2 live leg
+#   OC_CI_GEMINI_API_KEY                           -> AI-V1 live leg
+#   OC_CI_COPILOT_TOKEN                            -> AI-COPILOT-C6 live leg
+# None of the three entries has an automated live probe yet (ADR-0006
+# cassette-only). Secrets therefore NEVER produce a live pass here: absent
+# => loud `LIVE-SKIP (secrets missing)` warning; present => loud
+# `LIVE-REQUESTED but no live harness exists` warning. Both modes run the
+# cassette/unit battery only.
+#
+# KNOWN-REDS: while tools/parity/goldens/p10/known-red.json keeps
+# GATE-DB-STABLE / GATE-DB-NULLROWS / GATE-TUI-RENAME open, the p10
+# battery is expected RED. A red battery is the honest signal (open ledger
+# ids); there is deliberately NO skip logic in this workflow.
+#
+# GAPS this workflow reports but cannot close (no test exists — writing
+# them is product-lane work, not CI plumbing):
+#   - the 6 TUI needs-runtime rows (TUI-28/30/33/TD06/TD15/TD28): ledger
+#     `test` names match 0 tests (probed loudly in tui-needs-runtime);
+#   - the 3 AI ledger test names (never_api_anthropic,
+#     copilot_provideroption_user_agent, vertex_chat_responses_url): 0 matches;
+#   - subagent-completion-wakes-parent: COVERED —
+#     oc-core::runtime_recovery::background_completion_wakes_idle_parent;
+#   - 30m soak: approximated by a wall-clock-bounded cycle loop over the
+#     kill-9-recovery + reconnect-resync suites (no single-session 30m TUI
+#     harness exists).
+#
+# TODO(user): enable the nightly schedule ONLY when you accept the
+# runner-minutes cost (the battery boots both sides; macos builds are
+# 10x-minute rated). Until then this workflow is dispatch-only:
+#
+# schedule:
+#   - cron: "0 3 * * *"
+
+name: runtime-gates
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_p10_battery:
+        description: "p10 battery (§12.2 exit gate, verbatim command)"
+        type: boolean
+        default: true
+      run_runtime_gates:
+        description: "§12.3 runtime gates (omo-slim, kill-9, resync, v2 import)"
+        type: boolean
+        default: true
+      run_needs_runtime:
+        description: "needs-runtime battery (3 AI cassette + 6 TUI gap probes)"
+        type: boolean
+        default: true
+      run_platform_build:
+        description: "non-linux-x64 build target (macos-latest)"
+        type: boolean
+        default: true
+      run_soak_30m:
+        description: "30-minute soak (expensive; opt-in)"
+        type: boolean
+        default: false
+      run_release_smoke:
+        description: "release build + tools/release-smoke.sh (expensive; opt-in)"
+        type: boolean
+        default: false
+
+# Long jobs (battery boots both sides; soak runs 30m by design): never
+# cancel a run mid-flight on the same ref.
+concurrency:
+  group: runtime-gates-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  # The pinned v2.0.24 reference source (docs/parity-baseline.md:
+  # /opt/opencode-ref @ e7a34f09bf). Runners fetch this tarball the same
+  # way release.yml fetches APP_REF for the web UI.
+  PARITY_REF: e7a34f09bfd9134dfade5a8ddb843f7030bc9a69
+  # Job-level bun kill-switch (ci.yml convention: the CI nextest ignores
+  # profile.default.env, so enforce it here; bun is provisioned per-job by
+  # oven-sh/setup-bun instead of per-test downloads).
+  OPENCODE_DISABLE_BUN_DOWNLOAD: "1"
+
+jobs:
+  # ONE compilation for the whole workflow (ci.yml build-archive pattern):
+  # all test binaries built once, shipped as the target dir, consumed with
+  # zero recompile by every linux test job below.
+  build-archive:
+    name: build + archive (single compile)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Same shared entry as ci.yml: dep artifacts compile once and are
+          # reused across workflows/jobs.
+          shared-key: opencode-ci
+
+      - uses: mozilla-actions/sccache-action@v0.0.9
+
+      - uses: taiki-e/install-action@v2
+        with:
+          # Pin to the dev-gate version (0.9.148): older builds silently
+          # ignore profile.default.{env,timeout,overrides[].timeout}.
+          tool: cargo-nextest@0.9.148
+
+      - name: Prepare scratch dir
+        # /tmp/opencode (not $RUNNER_TEMP) on purpose: the tests stage
+        # sandboxes under this literal path and the runners are ephemeral.
+        run: mkdir -p /tmp/opencode
+
+      # Same-path target dir (NOT a nextest archive): tests bake
+      # env!("CARGO_BIN_EXE_*") absolute paths; see ci.yml's note.
+      - name: Build workspace test binaries (debug)
+        run: cargo nextest run --workspace --locked --no-run
+        env:
+          CARGO_PROFILE_DEV_DEBUG: "0"
+
+      - name: Prune non-relocatable artifacts
+        run: rm -rf target/debug/incremental target/release/incremental
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-gates-target
+          path: target/
+          retention-days: 1
+          include-hidden-files: false
+
+      - name: Summary
+        if: ${{ !cancelled() }}
+        run: |
+          {
+            echo "### build-archive"
+            echo "- EXECUTED: workspace nextest --no-run (single compile); artifact \`runtime-gates-target\` uploaded"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Generate a REAL v2-written library db on the runner: the interop lane
+  # boots the pinned v2.0.24 reference and writes sessions A/B/C + a
+  # prompt exchange through the real v2 engine. The resulting opencode.db
+  # feeds both p10-battery (PARITY_V2_DB_FIXTURE — db_import FAILS under
+  # OC_GATE_STRICT without it) and runtime-gates (OC_REAL_DB — the
+  # null-census import gate).
+  #
+  # KNOWN-RED-TOLERANT staging: p10_db_interop_v2_written_null_rows is a
+  # registered OPEN known-red (ledger GATE-DB-NULLROWS; known-red.json; its
+  # own wrapper tools/parity/tests/p10_db_interop.rs:128-133 keeps the
+  # failure a failure) and fails ~15s in — AFTER the reference has written
+  # the db. The staging step therefore runs with continue-on-error and the
+  # db is harvested from the write path the test actually uses. If no db
+  # appears (real breakage, not the known-red), the job emits ::error,
+  # sets db_staged=gap, and gates-summary reports SKIPPED-GAP — never a
+  # pass.
+  v2-db-fixture:
+    name: stage v2-written library db
+    needs: build-archive
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    outputs:
+      db_staged: ${{ steps.locate.outputs.db_staged }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: runtime-gates-target
+          path: target
+
+      - name: Prepare scratch dir
+        run: mkdir -p /tmp/opencode
+
+      - name: Fetch the pinned v2.0.24 reference source
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 5 --retry-delay 5 --retry-all-errors \
+            -o ref.tar.gz "https://github.com/anomalyco/opencode/archive/${PARITY_REF}.tar.gz"
+          mkdir -p /tmp/opencode/ref
+          tar -xzf ref.tar.gz -C /tmp/opencode/ref --strip-components=1
+          test -d /tmp/opencode/ref/packages/cli
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: parity-ref-bun-${{ env.PARITY_REF }}
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.10
+
+      # The parity harness spawns the reference with a hardcoded child PATH
+      # (/root/.bun/bin:/usr/local/bin:...). setup-bun may install outside
+      # those; make the resolved bun visible at /usr/local/bin.
+      - name: Expose bun on the harness child PATH
+        run: |
+          set -euo pipefail
+          BUN="$(command -v bun)"
+          test -n "$BUN"
+          if [ ! -x /usr/local/bin/bun ]; then sudo ln -s "$BUN" /usr/local/bin/bun; fi
+          /usr/local/bin/bun --version
+
+      - name: Install reference deps
+        run: bun install --frozen-lockfile
+        working-directory: /tmp/opencode/ref
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.148
+
+      # Non-strict on purpose: this is prerequisite STAGING (the strict,
+      # verbatim battery runs in p10-battery). OC_P10=1 opts the ignored
+      # test in; the reference side boots from /tmp/opencode/ref (REF_ROOT
+      # default), the Rust side reuses the archive's target dir.
+      # continue-on-error: the known-red GATE-DB-NULLROWS fires AFTER the
+      # reference wrote the db — the failure is expected and tolerated
+      # HERE ONLY (p10-battery still reports it red, as it should).
+      - name: Run the interop lane (v2 writes REAL rows; known-red tolerated)
+        continue-on-error: true
+        run: cargo nextest run -p parity --locked --run-ignored only -E 'test(p10_db_interop_v2_written_null_rows)'
+        env:
+          OC_P10: "1"
+          PARITY_REF_SOURCE: /tmp/opencode/ref
+          PARITY_BUN: /usr/local/bin/bun
+
+      # Write path verified from tools/parity/tests/p10_db_interop.rs:
+      #   :144  let root = PathBuf::from(format!("/tmp/opencode/p10-db-{}", std::process::id()));
+      #   :145  let home = root.join("home");
+      #   :167  let db = home.join(".local/share/opencode/opencode.db");
+      # => /tmp/opencode/p10-db-<pid>/home/.local/share/opencode/opencode.db
+      # (NOT the parity-sandbox root). Newest first; single run => one dir.
+      - name: Locate + upload the v2-written library db
+        id: locate
+        run: |
+          set -euo pipefail
+          DB="$(find /tmp/opencode/p10-db-*/home/.local/share/opencode/opencode.db -type f -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -n 1 | cut -d' ' -f2-)"
+          if [ -z "$DB" ] || [ ! -s "$DB" ]; then
+            echo "::error::no v2-written opencode.db under /tmp/opencode/p10-db-*/ — the interop lane failed before writing (real breakage, not the known-red). Fixture is GAP; downstream import gates will report it, never pass silently."
+            echo "db_staged=gap" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          cp "$DB" v2-library.db
+          ls -l v2-library.db
+          echo "db_staged=ok" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the v2-written library db
+        if: steps.locate.outputs.db_staged == 'ok'
+        uses: actions/upload-artifact@v4
+        with:
+          name: v2-db-fixture
+          path: v2-library.db
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Summary
+        if: ${{ !cancelled() }}
+        run: |
+          {
+            echo "### v2-db-fixture"
+            if [ "${{ steps.locate.outputs.db_staged }}" = "ok" ]; then
+              echo "- EXECUTED: interop lane ran (known-red GATE-DB-NULLROWS tolerated here; p10-battery reports it red) — v2.0.24 wrote real session rows; artifact \`v2-db-fixture\` uploaded"
+            else
+              echo "- SKIPPED-GAP: no v2-written db was produced — PARITY_V2_DB_FIXTURE/OC_REAL_DB stay unset downstream (db_import fails strict; census self-skips and is GAP-marked). Skip ≠ pass."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # §12.2 exit gate: the p10 battery, VERBATIM command. Expected RED while
+  # known-red.json keeps GATE-DB-STABLE / GATE-DB-NULLROWS /
+  # GATE-TUI-RENAME open — that is the honest signal, no skip logic.
+  p10-battery:
+    name: p10 battery (§12.2 exit gate)
+    needs: [build-archive, v2-db-fixture]
+    if: ${{ inputs.run_p10_battery != false }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: runtime-gates-target
+          path: target
+
+      - name: Download the v2 library db (fixture)
+        if: needs.v2-db-fixture.outputs.db_staged == 'ok'
+        uses: actions/download-artifact@v4
+        with:
+          name: v2-db-fixture
+
+      # PARITY_V2_DB_FIXTURE is wired here (not in the battery step's env)
+      # so the gap case can leave it unset: under OC_GATE_STRICT the
+      # db_import test then FAILS with its own "missing prerequisite"
+      # message — the honest strict signal, never a silent pass.
+      - name: Wire the v2 library db (or mark the GAP)
+        run: |
+          set -euo pipefail
+          if [ "${{ needs.v2-db-fixture.outputs.db_staged }}" = "ok" ] && [ -s v2-library.db ]; then
+            echo "PARITY_V2_DB_FIXTURE=$PWD/v2-library.db" >> "$GITHUB_ENV"
+          else
+            echo "::warning::GAP (v2 db fixture missing): PARITY_V2_DB_FIXTURE stays unset — p10_db_import_real_library_copy will FAIL under OC_GATE_STRICT (honest strict signal, not a pass)."
+          fi
+
+      - name: Prepare scratch dir
+        run: mkdir -p /tmp/opencode
+
+      - name: Ensure tmux (p10 TUI lanes)
+        run: |
+          set -euo pipefail
+          command -v tmux || { sudo apt-get update -y && sudo apt-get install -y tmux; }
+          tmux -V
+
+      - name: Fetch the pinned v2.0.24 reference source
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 5 --retry-delay 5 --retry-all-errors \
+            -o ref.tar.gz "https://github.com/anomalyco/opencode/archive/${PARITY_REF}.tar.gz"
+          mkdir -p /tmp/opencode/ref
+          tar -xzf ref.tar.gz -C /tmp/opencode/ref --strip-components=1
+          test -d /tmp/opencode/ref/packages/cli
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: parity-ref-bun-${{ env.PARITY_REF }}
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.10
+
+      - name: Expose bun on the harness child PATH
+        run: |
+          set -euo pipefail
+          BUN="$(command -v bun)"
+          test -n "$BUN"
+          if [ ! -x /usr/local/bin/bun ]; then sudo ln -s "$BUN" /usr/local/bin/bun; fi
+          /usr/local/bin/bun --version
+
+      - name: Install reference deps
+        run: bun install --frozen-lockfile
+        working-directory: /tmp/opencode/ref
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.148
+
+      # The exit-gate command, VERBATIM (env via the step block):
+      #   OC_P10=1 OC_GATE_STRICT=1 cargo nextest run -p parity --locked \
+      #     --run-ignored only -E 'test(p10_)'
+      # 11 tests (verified via `cargo nextest list --run-ignored only`):
+      # p10_cli_gate5, p10_cross_client, p10_cross_tui, p10_db_import,
+      # p10_db_interop x2, p10_error_paths, p10_http_contract_gate1,
+      # p10_openapi, p10_tools_gate3, p10_tui_frames_gate4.
+      - name: p10 battery (verbatim exit-gate command)
+        run: cargo nextest run -p parity --locked --run-ignored only -E 'test(p10_)'
+        env:
+          OC_P10: "1"
+          OC_GATE_STRICT: "1"
+          # PARITY_V2_DB_FIXTURE arrives via GITHUB_ENV (Wire step above):
+          # set when the fixture landed, deliberately unset on GAP.
+          PARITY_REF_SOURCE: /tmp/opencode/ref
+          PARITY_BUN: /usr/local/bin/bun
+
+      - name: Summary
+        if: ${{ !cancelled() }}
+        run: |
+          {
+            echo "### p10-battery"
+            echo "- EXECUTED: verbatim exit-gate command (OC_P10=1 OC_GATE_STRICT=1, 11 tests incl. gates 1/3/4/5 + cross lanes + db interop/import)"
+            echo "- known-reds live in tools/parity/goldens/p10/known-red.json (GATE-DB-STABLE, GATE-DB-NULLROWS, GATE-TUI-RENAME): red here = open ledger ids, NOT a workflow bug"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # §12.3 runtime set, as selections over EXISTING tests (17 non-PTY +
+  # 11 serialized-PTY, verified via nextest list):
+  #   real plugin (omo-slim)      -> pty_sidebar_real_omos_sections_render
+  #                                   (stages the REAL npm install via
+  #                                   OC_OMOS_ROOT/OC_OMOS_DEPS) + slot_click
+  #                                   (omo-slim-modeled fixture) +
+  #                                   vt_plugin_sidebar (scan-lane fixed path)
+  #   kill -9 / crash recovery    -> binary(runtime_recovery) (6 tests)
+  #   subagent wakes parent       -> background_completion_wakes_idle_parent
+  #   reconnect forms/permissions -> binary(reconnect_resync) (9 tests) +
+  #                                   pty_form + pty_permission (serialized)
+  #   real v2 library import      -> real_db_null_census w/ OC_REAL_DB (the
+  #                                   v2-written db from v2-db-fixture;
+  #                                   GAP-skips without it)
+  runtime-gates:
+    name: §12.3 runtime gates
+    needs: [build-archive, v2-db-fixture]
+    if: ${{ inputs.run_runtime_gates != false }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: runtime-gates-target
+          path: target
+
+      - name: Download the v2 library db (fixture)
+        if: needs.v2-db-fixture.outputs.db_staged == 'ok'
+        uses: actions/download-artifact@v4
+        with:
+          name: v2-db-fixture
+
+      # OC_REAL_DB wired via GITHUB_ENV so the GAP case leaves it unset:
+      # real_db_null_census then self-skips (prints its skip line) and the
+      # summary below marks the v2-import §12.3 row GAP — never a pass.
+      - name: Wire the v2 library db (or mark the GAP)
+        run: |
+          set -euo pipefail
+          if [ "${{ needs.v2-db-fixture.outputs.db_staged }}" = "ok" ] && [ -s v2-library.db ]; then
+            echo "OC_REAL_DB=$PWD/v2-library.db" >> "$GITHUB_ENV"
+          else
+            echo "::warning::GAP (v2 db fixture missing): OC_REAL_DB stays unset — real_db_null_census will self-skip; the §12.3 real-v2-import row is GAP-marked in this job's summary (skip ≠ pass)."
+          fi
+
+      - name: Prepare scratch dir
+        run: mkdir -p /tmp/opencode
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.10
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.148
+
+      # 17 tests (verified via nextest list): runtime_recovery x6
+      # (incl. background_completion_wakes_idle_parent), reconnect_resync
+      # x9, real_db_null_census x1 (needs OC_REAL_DB — GAP-skips without
+      # it), slot_click x1.
+      - name: §12.3 non-PTY set (recovery, resync, v2 import, plugin click pipe)
+        run: cargo nextest run --workspace --locked -E 'binary(runtime_recovery) or binary(reconnect_resync) or binary(real_db_null_census) or test(slot_click_runs_the_plugin_row_handler_and_navigates)'
+
+      # Stage the REAL oh-my-opencode-slim npm install. One staging dir
+      # feeds both seams: pty_sidebar reads OC_OMOS_ROOT/OC_OMOS_DEPS;
+      # vt_plugin_sidebar reads the scan-lane fixed path
+      # /tmp/opencode/scanab/omos-npm/stamp-full/... (no env seam exists —
+      # staging at that literal path is the only way it runs on CI).
+      - name: Stage the real oh-my-opencode-slim (omo-slim flagship)
+        run: |
+          set -euo pipefail
+          ROOT=/tmp/opencode/scanab/omos-npm/stamp-full
+          mkdir -p "$ROOT"
+          cd "$ROOT"
+          echo '{"name":"omos-stage","private":true}' > package.json
+          bun add oh-my-opencode-slim@latest
+          test -d node_modules/oh-my-opencode-slim/dist/server
+          test -f node_modules/oh-my-opencode-slim/package.json
+          echo "staged real omo-slim install at $ROOT"
+
+      # PTY-family binaries serialized in ONE invocation (ci.yml pattern:
+      # --profile pty, test-threads=1; spawn-contention class).
+      # 11 tests (verified via nextest list): pty_sidebar x4 (incl.
+      # pty_sidebar_real_omos_sections_render), pty_form x2,
+      # pty_permission x4, vt_plugin_sidebar x1.
+      - name: §12.3 PTY set (serialized; real omo-slim sidebar, forms, permissions)
+        run: cargo nextest run --workspace --locked --profile pty -E 'binary(pty_sidebar) or binary(pty_form) or binary(pty_permission) or binary(vt_plugin_sidebar)'
+        env:
+          OC_OMOS_ROOT: /tmp/opencode/scanab/omos-npm/stamp-full/node_modules/oh-my-opencode-slim
+          OC_OMOS_DEPS: /tmp/opencode/scanab/omos-npm/stamp-full/node_modules
+
+      - name: Summary
+        if: ${{ !cancelled() }}
+        run: |
+          {
+            echo "### runtime-gates (§12.3)"
+            echo "| §12.3 item | gate |"
+            echo "|---|---|"
+            echo "| 真实插件 omo-slim | pty_sidebar_real_omos_sections_render (REAL npm install) + slot_click + vt_plugin_sidebar |"
+            if [ -n "${OC_REAL_DB:-}" ]; then
+              echo "| 真实 v2 库导入 | real_db_null_census (OC_REAL_DB = v2-written db) |"
+            else
+              echo "| 真实 v2 库导入 | SKIPPED-GAP: no v2 db fixture — real_db_null_census self-skipped (skip ≠ pass) |"
+            fi
+            echo "| kill -9 恢复 | runtime_recovery (6 tests) |"
+            echo "| 表单/权限重连不丢 | reconnect_resync (9) + pty_form + pty_permission |"
+            echo "| subagent 唤醒父会话 | background_completion_wakes_idle_parent |"
+            echo "| 30 分钟长会话 | NOT here — see soak-30m (opt-in) |"
+            echo ""
+            echo "Counts: non-PTY set 17 tests; serialized PTY set 11 tests."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # The 3 AI needs-runtime rows. ADR-0006: cassette-only until a live
+  # fixture window is approved — so this job runs the closest EXISTING
+  # cassette/unit surfaces and NEVER claims a live pass. The ledger test
+  # names (vertex_messages.rs::never_api_anthropic,
+  # parity_ai_providers.rs::{copilot_provideroption_user_agent,
+  # vertex_chat_responses_url}) match 0 tests today — reported as gaps.
+  ai-needs-runtime:
+    name: "needs-runtime (AI: vertex/gemini/copilot, cassette-only)"
+    needs: build-archive
+    if: ${{ inputs.run_needs_runtime != false }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: runtime-gates-target
+          path: target
+
+      - name: Prepare scratch dir
+        run: mkdir -p /tmp/opencode
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.148
+
+      # 18 tests (verified via nextest list): the vertex URL/auth surface
+      # (AI-VERTEX-V2 / AI-V1 adjacent), the copilot wire surface
+      # (AI-COPILOT-C6 adjacent). All hermetic (cassette/mock/unit).
+      - name: Cassette/unit battery for the 3 AI rows
+        run: >-
+          cargo nextest run -p oc-ai --locked -E
+          'test(base_urls_embed_project_location_and_publishers) or test(vertex_route_embeds_the_model_in_the_path_and_bears_the_token) or test(adc_env_token_resolves_at_apply_time) or test(express_mode_uses_the_api_key_header) or test(hosts_route_by_location) or test(tuned_endpoints_address_the_project_root) or test(location_falls_back_to_us_central1) or test(patching_the_provider_rekeys_the_metadata_namespace) or binary(copilot_responses) or test(copilot_wire_request_carries_the_client_headers_and_bearer) or test(default_base_url_and_github_token_env_fallback) or test(interaction_type_vocabulary_matches_the_copilot_client)'
+
+      # --- live legs: skip must never look like a live pass ----------------
+      - name: AI-VERTEX-V2 live gate
+        if: ${{ secrets.OC_CI_VERTEX_PROJECT == '' || secrets.OC_CI_VERTEX_CREDENTIALS == '' }}
+        run: >
+          echo "::warning::LIVE-SKIP (secrets missing): AI-VERTEX-V2 — set OC_CI_VERTEX_PROJECT + OC_CI_VERTEX_CREDENTIALS. Cassette battery above is the only coverage; this is NOT a live pass."
+      - name: AI-VERTEX-V2 live credentials present
+        if: ${{ secrets.OC_CI_VERTEX_PROJECT != '' && secrets.OC_CI_VERTEX_CREDENTIALS != '' }}
+        run: >
+          echo "::warning::LIVE-REQUESTED: AI-VERTEX-V2 secrets present, but no live harness exists yet (ADR-0006 cassette-only; ledger test never_api_anthropic not authored). NOT a live pass."
+
+      - name: AI-V1 live gate
+        if: ${{ secrets.OC_CI_GEMINI_API_KEY == '' }}
+        run: >
+          echo "::warning::LIVE-SKIP (secrets missing): AI-V1 — set OC_CI_GEMINI_API_KEY. Cassette battery above is the only coverage; this is NOT a live pass."
+      - name: AI-V1 live credentials present
+        if: ${{ secrets.OC_CI_GEMINI_API_KEY != '' }}
+        run: >
+          echo "::warning::LIVE-REQUESTED: AI-V1 secrets present, but no live harness exists yet (ADR-0006 cassette-only; ledger test vertex_chat_responses_url not authored). NOT a live pass."
+
+      - name: AI-COPILOT-C6 live gate
+        if: ${{ secrets.OC_CI_COPILOT_TOKEN == '' }}
+        run: >
+          echo "::warning::LIVE-SKIP (secrets missing): AI-COPILOT-C6 — set OC_CI_COPILOT_TOKEN. Cassette battery above is the only coverage; this is NOT a live pass."
+      - name: AI-COPILOT-C6 live credentials present
+        if: ${{ secrets.OC_CI_COPILOT_TOKEN != '' }}
+        run: >
+          echo "::warning::LIVE-REQUESTED: AI-COPILOT-C6 secrets present, but no live harness exists yet (ADR-0006 cassette-only; ledger test copilot_provideroption_user_agent not authored). NOT a live pass."
+
+      - name: Summary
+        if: ${{ !cancelled() }}
+        run: |
+          {
+            echo "### ai-needs-runtime"
+            echo "- EXECUTED (cassette/unit, 18 tests): AI-VERTEX-V2 + AI-V1 via protocols::vertex::* (8 tests); AI-COPILOT-C6 via copilot_responses (7) + protocols::copilot::* (3)"
+            echo "- GAP: the 3 ledger \`test\` names match 0 tests — live legs un-wirable until authored (ADR-0006)"
+            echo "- LIVE status: see the ::warning lines above (LIVE-SKIP or LIVE-REQUESTED-but-no-harness — neither is a live pass)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # The 6 TUI needs-runtime rows. Their ledger `test` names all match 0
+  # tests (probed loudly below — evidence, not silence). The adjacent
+  # serialized PTY daily-driver battery keeps real TUI behavior in the
+  # loop WITHOUT pretending to cover the rows.
+  tui-needs-runtime:
+    name: "needs-runtime (TUI: 6 rows, gap probes + adjacent PTY battery)"
+    needs: build-archive
+    if: ${{ inputs.run_needs_runtime != false }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: runtime-gates-target
+          path: target
+
+      - name: Prepare scratch dir
+        run: mkdir -p /tmp/opencode
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.10
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.148
+
+      - name: Probe the 6 TUI ledger selectors (expected 0 matches — GAP)
+        run: |
+          set -euo pipefail
+          declare -A ROW=(
+            [recents_ctrl_prompt_index]="TUI-28"
+            [sessionlocatio_location]="TUI-30"
+            [session_verbosity_cycle_index]="TUI-33"
+            [scroll_anchor_restore]="TUI-TD06"
+            [prompt_autosubmit_ready]="TUI-TD15"
+            [pluginroutemis]="TUI-TD28"
+          )
+          for sel in "${!ROW[@]}"; do
+            n="$(cargo nextest list --workspace --locked -E "test($sel)" | grep -c . || true)"
+            n="${n:-0}"
+            if [ "$n" -eq 0 ]; then
+              echo "::warning::GAP (no test exists): ${ROW[$sel]} selector '$sel' matches 0 tests — needs-runtime row stays un-gated (skip ≠ pass)."
+            else
+              echo "::warning::UNEXPECTED: '${ROW[$sel]}' selector '$sel' now matches $n test(s) — wire it into this job's run step."
+            fi
+          done
+
+      # Adjacent coverage only (9 tests): the serialized daily-driver PTY
+      # battery. NOT a substitute for the 6 rows above.
+      - name: Adjacent serialized PTY daily-driver battery
+        run: cargo nextest run --workspace --locked --profile pty -E 'binary(pty_daily)'
+
+      - name: Summary
+        if: ${{ !cancelled() }}
+        run: |
+          {
+            echo "### tui-needs-runtime"
+            echo "- EXECUTED (adjacent only): pty_daily battery (9 tests, serialized)"
+            echo "- GAP (skip ≠ pass): TUI-28, TUI-30, TUI-33, TUI-TD06, TUI-TD15, TUI-TD28 — ledger \`test\` names match 0 tests; rows remain un-gated until the tests are authored"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Opt-in 30m soak. GAP, honestly: no single-session 30-minute TUI soak
+  # harness exists; this wires the closest existing long-horizon surface —
+  # a wall-clock-bounded cycle loop over kill-9 recovery + reconnect
+  # resync. A red cycle fails the soak (set -e); cycles are counted.
+  soak-30m:
+    name: 30m soak (recovery + resync cycle loop)
+    needs: build-archive
+    if: ${{ inputs.run_soak_30m == true }}
+    runs-on: ubuntu-latest
+    # BOTH mitigations chosen (verifier defect 3): the cap is raised to 75
+    # for headroom over the 30m loop, AND the loop guards cycle starts so
+    # a cycle never starts inside the final 10 minutes of the window
+    # (prints SOAK-CYCLE-SKIPPED-TIMEBOX instead). A red soak is therefore
+    # always a test failure, never a job-cap TIMEOUT breach.
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: runtime-gates-target
+          path: target
+
+      - name: Prepare scratch dir
+        run: mkdir -p /tmp/opencode
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.148
+
+      - name: Soak loop (30 minutes of recovery + resync cycles)
+        run: |
+          set -euo pipefail
+          END=$((SECONDS + 1800))
+          CYCLES=0
+          SKIPPED_BY_TIMEBOX=0
+          while :; do
+            REMAINING=$((END - SECONDS))
+            if [ "$REMAINING" -le 0 ]; then
+              break
+            fi
+            if [ "$REMAINING" -lt 600 ]; then
+              # Timebox guard: never start a cycle that cannot finish
+              # inside the job cap (conservative 10-minute budget).
+              SKIPPED_BY_TIMEBOX=$((SKIPPED_BY_TIMEBOX + 1))
+              echo "SOAK-CYCLE-SKIPPED-TIMEBOX (only ${REMAINING}s of the 30m window left; a cycle needs up to the 10-minute conservative budget)"
+              break
+            fi
+            CYCLES=$((CYCLES + 1))
+            echo "[soak] cycle $CYCLES starts at t=${SECONDS}s"
+            cargo nextest run --workspace --locked -E 'binary(runtime_recovery) or binary(reconnect_resync)'
+          done
+          echo "[soak] completed $CYCLES cycles in ${SECONDS}s (timebox-guard skips: $SKIPPED_BY_TIMEBOX)"
+          {
+            echo "### soak-30m"
+            echo "- EXECUTED: $CYCLES recovery+resync cycles over ${SECONDS}s (wall-clock bounded; timebox-guard skips: $SKIPPED_BY_TIMEBOX)"
+            echo "- GAP: no single-session 30m TUI long-soak harness exists — this is the closest existing surface, not the §12.3 literal"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Opt-in release smoke (§12.4): build the release binary, then run the
+  # committed script against it. The script self-sandboxes under
+  # /tmp/opencode and asserts it never binds 49374 (CI is exempt from the
+  # dev-gate but keeps the sandbox discipline).
+  release-smoke:
+    name: release smoke (build + tools/release-smoke.sh)
+    needs: build-archive
+    if: ${{ inputs.run_release_smoke == true }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: opencode-ci
+
+      - uses: mozilla-actions/sccache-action@v0.0.9
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: runtime-gates-target
+          path: target
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.148
+
+      - name: Prepare scratch dir
+        run: mkdir -p /tmp/opencode
+
+      - name: Build the release binary
+        run: cargo build --release -p oc-cli --locked
+
+      - name: Release smoke
+        run: tools/release-smoke.sh target/release/opencode-rust
+
+      - name: Summary
+        if: ${{ !cancelled() }}
+        run: |
+          {
+            echo "### release-smoke"
+            echo "- EXECUTED: cargo build --release -p oc-cli + tools/release-smoke.sh (version banners, sandboxed serve on --port 0, FakeLlm run_e2e battery — 11 tests)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # §12.4 SURF-PLATFORM CI leg: a non-linux-x64 BUILD target. `cargo
+  # build` (not `check`) on purpose: the exit criterion is a build target,
+  # and linking + codegen on aarch64-apple-darwin is what proves it —
+  # check would leave both unproven. No mac tests in this lane (§12.4
+  # asks for a build target only). Compiles from source: the linux
+  # archive is useless here, hence no `needs`.
+  platform-build:
+    name: build target (macos-latest, aarch64-apple-darwin)
+    if: ${{ inputs.run_platform_build != false }}
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: opencode-ci
+
+      - name: "Build the workspace (release-grade proof: link + codegen)"
+        run: cargo build --workspace --locked
+
+      - name: Summary
+        if: ${{ !cancelled() }}
+        run: |
+          {
+            echo "### platform-build"
+            echo "- EXECUTED: cargo build --workspace --locked on macos-latest (non-linux-x64 §12.4 CI leg)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Central EXECUTED vs SKIPPED ledger (loop §1: skip ≠ pass). Fails the
+  # workflow when a gate the user asked for (toggle ON / default ON) did
+  # not end green — including downstream-`skipped` after an upstream
+  # failure, which plain `needs` would hide.
+  gates-summary:
+    name: gates summary (EXECUTED vs SKIPPED)
+    needs: [build-archive, v2-db-fixture, p10-battery, runtime-gates, ai-needs-runtime, tui-needs-runtime, soak-30m, release-smoke, platform-build]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: EXECUTED vs SKIPPED table
+        run: |
+          set -euo pipefail
+          {
+            echo "## runtime-gates — EXECUTED vs SKIPPED (skip ≠ pass)"
+            echo "| gate | result | verdict |"
+            echo "|---|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          fail=0
+          # gate:result:requested  (requested=1 means this run asked for it)
+          rows="build-archive:${{ needs.build-archive.result }}:1"
+          # v2-db-fixture gap is a verdict OVERRIDE: a green fixture job
+          # that staged no db must read SKIPPED-GAP, not EXECUTED-green.
+          if [ "${{ needs.v2-db-fixture.outputs.db_staged }}" = "gap" ]; then
+            rows="$rows v2-db-fixture:skipped-gap:1"
+          else
+            rows="$rows v2-db-fixture:${{ needs.v2-db-fixture.result }}:1"
+          fi
+          rows="$rows p10-battery:${{ needs.p10-battery.result }}:${{ inputs.run_p10_battery != false && '1' || '0' }}"
+          rows="$rows runtime-gates:${{ needs.runtime-gates.result }}:${{ inputs.run_runtime_gates != false && '1' || '0' }}"
+          rows="$rows ai-needs-runtime:${{ needs.ai-needs-runtime.result }}:${{ inputs.run_needs_runtime != false && '1' || '0' }}"
+          rows="$rows tui-needs-runtime:${{ needs.tui-needs-runtime.result }}:${{ inputs.run_needs_runtime != false && '1' || '0' }}"
+          rows="$rows soak-30m:${{ needs.soak-30m.result }}:${{ inputs.run_soak_30m == true && '1' || '0' }}"
+          rows="$rows release-smoke:${{ needs.release-smoke.result }}:${{ inputs.run_release_smoke == true && '1' || '0' }}"
+          rows="$rows platform-build:${{ needs.platform-build.result }}:${{ inputs.run_platform_build != false && '1' || '0' }}"
+          for row in $rows; do
+            gate="${row%%:*}"; rest="${row#*:}"; res="${rest%%:*}"; req="${rest##*:}"
+            verdict="UNKNOWN"
+            case "$res:$req" in
+              skipped-gap:*) verdict="SKIPPED-GAP (no v2 db staged; annotated — never a pass)" ;;
+              success:*) verdict="EXECUTED-green" ;;
+              failure:*|cancelled:*) verdict="EXECUTED-red"; fail=1 ;;
+              skipped:1) verdict="SKIPPED-upstream-failure"; fail=1 ;;
+              skipped:0) verdict="SKIPPED-by-input-toggle" ;;
+            esac
+            echo "| $gate | $res | $verdict |" >> "$GITHUB_STEP_SUMMARY"
+          done
+          {
+            echo ""
+            echo "Standing gaps (never count as passes): TUI-28/30/33/TD06/TD15/TD28 (no tests), AI live legs (ADR-0006 cassette-only), literal 30m single-session soak (cycle-loop approximation), v2-db-fixture GAP when present (db_import fails strict; census GAP-skips)."
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$fail" -ne 0 ]; then
+            echo "::error::at least one requested gate did not run green — see the table above"
+            exit 1
+          fi
