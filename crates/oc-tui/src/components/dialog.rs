@@ -1,7 +1,8 @@
 //! The dialog framework (`ui/dialog.tsx`): the portal-style overlay
 //! (backdrop + centered chrome box) painted on top of route content,
-//! the modal key layer (escape closes, ctrl+c clears the input first,
-//! printable keys feed the focused filter), and the per-kind content
+//! the modal key layer (escape and ctrl+c both close — ctrl+c clears
+//! any filter/input text as part of the close, `ui/dialog.tsx:115-156`
+//! — printable keys feed the focused filter), and the per-kind content
 //! assembly (selects via [`crate::components::dialog_select`], the
 //! rename prompt).
 //!
@@ -188,7 +189,16 @@ pub fn handle_dialog_key(
         return DialogKeyOutcome::Closed;
     }
     if stroke.ctrl && stroke.key == "c" {
-        // ctrl+c clears a non-empty filter/input before closing.
+        // TUI-35: one ctrl+c CLOSES the modal — clearing any
+        // filter/input text first (`ui/dialog.tsx:115-156`: "the modal
+        // layer CLOSES the dialog (clearing any filter text first); it
+        // does not exit" — the text clear is part of the close, not a
+        // separate press). The clear-and-STAY shape swallowed the
+        // standard exit chord (ctrl+c, ctrl+c, per keybind.ts:131
+        // `app.exit` keeps ctrl+c/ctrl+d): with a dirty filter the
+        // first press only cleared, the second closed, and no press
+        // remained to exit — the app could never be torn down through
+        // a dirty dialog (the session_filter_semantics 90 s wedge).
         let has_text =
             if is_select { !entry.select.filter.is_empty() } else { !entry.value.is_empty() };
         if has_text {
@@ -200,7 +210,6 @@ pub fn handle_dialog_key(
                 }
             });
             store.preview_theme_filter();
-            return DialogKeyOutcome::Consumed;
         }
         store.close_dialog();
         return DialogKeyOutcome::Closed;
