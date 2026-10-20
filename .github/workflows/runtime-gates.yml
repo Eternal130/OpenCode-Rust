@@ -27,6 +27,11 @@
 # `LIVE-REQUESTED but no live harness exists` warning. Both modes run the
 # cassette/unit battery only.
 #
+# NOTE (422 fix, 2026-10-21): the `secrets` context is ILLEGAL in `if:`
+# conditions at any level — it is only read in the ai-needs-runtime job's
+# env VALUES (presence booleans HAS_*), never in an expression position
+# that GitHub's parser rejects.
+#
 # KNOWN-REDS: while tools/parity/goldens/p10/known-red.json keeps
 # GATE-DB-STABLE / GATE-DB-NULLROWS / GATE-TUI-RENAME open, the p10
 # battery is expected RED. A red battery is the honest signal (open ledger
@@ -510,6 +515,16 @@ jobs:
     if: ${{ inputs.run_needs_runtime != false }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # secrets are ILLEGAL inside if: conditions at any level (workflow
+    # parse fails with "Unrecognized named-value: 'secrets'" — the
+    # 2026-10-21 HTTP 422). The documented workaround: materialize secret
+    # PRESENCE as env booleans here (secrets ARE legal in env values) and
+    # gate the live-leg steps on env.<HAS_*> below. Only "true"/"false"
+    # strings are ever materialized — never the secret values themselves.
+    env:
+      HAS_VERTEX_CREDS: ${{ secrets.OC_CI_VERTEX_PROJECT != '' && secrets.OC_CI_VERTEX_CREDENTIALS != '' }}
+      HAS_GEMINI_KEY: ${{ secrets.OC_CI_GEMINI_API_KEY != '' }}
+      HAS_COPILOT_TOKEN: ${{ secrets.OC_CI_COPILOT_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -535,29 +550,29 @@ jobs:
 
       # --- live legs: skip must never look like a live pass ----------------
       - name: AI-VERTEX-V2 live gate
-        if: ${{ secrets.OC_CI_VERTEX_PROJECT == '' || secrets.OC_CI_VERTEX_CREDENTIALS == '' }}
+        if: ${{ env.HAS_VERTEX_CREDS != 'true' }}
         run: >
           echo "::warning::LIVE-SKIP (secrets missing): AI-VERTEX-V2 — set OC_CI_VERTEX_PROJECT + OC_CI_VERTEX_CREDENTIALS. Cassette battery above is the only coverage; this is NOT a live pass."
       - name: AI-VERTEX-V2 live credentials present
-        if: ${{ secrets.OC_CI_VERTEX_PROJECT != '' && secrets.OC_CI_VERTEX_CREDENTIALS != '' }}
+        if: ${{ env.HAS_VERTEX_CREDS == 'true' }}
         run: >
           echo "::warning::LIVE-REQUESTED: AI-VERTEX-V2 secrets present, but no live harness exists yet (ADR-0006 cassette-only; ledger test never_api_anthropic not authored). NOT a live pass."
 
       - name: AI-V1 live gate
-        if: ${{ secrets.OC_CI_GEMINI_API_KEY == '' }}
+        if: ${{ env.HAS_GEMINI_KEY != 'true' }}
         run: >
           echo "::warning::LIVE-SKIP (secrets missing): AI-V1 — set OC_CI_GEMINI_API_KEY. Cassette battery above is the only coverage; this is NOT a live pass."
       - name: AI-V1 live credentials present
-        if: ${{ secrets.OC_CI_GEMINI_API_KEY != '' }}
+        if: ${{ env.HAS_GEMINI_KEY == 'true' }}
         run: >
           echo "::warning::LIVE-REQUESTED: AI-V1 secrets present, but no live harness exists yet (ADR-0006 cassette-only; ledger test vertex_chat_responses_url not authored). NOT a live pass."
 
       - name: AI-COPILOT-C6 live gate
-        if: ${{ secrets.OC_CI_COPILOT_TOKEN == '' }}
+        if: ${{ env.HAS_COPILOT_TOKEN != 'true' }}
         run: >
           echo "::warning::LIVE-SKIP (secrets missing): AI-COPILOT-C6 — set OC_CI_COPILOT_TOKEN. Cassette battery above is the only coverage; this is NOT a live pass."
       - name: AI-COPILOT-C6 live credentials present
-        if: ${{ secrets.OC_CI_COPILOT_TOKEN != '' }}
+        if: ${{ env.HAS_COPILOT_TOKEN == 'true' }}
         run: >
           echo "::warning::LIVE-REQUESTED: AI-COPILOT-C6 secrets present, but no live harness exists yet (ADR-0006 cassette-only; ledger test copilot_provideroption_user_agent not authored). NOT a live pass."
 
