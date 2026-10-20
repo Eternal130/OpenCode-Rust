@@ -288,6 +288,10 @@ impl StreamProtocol for ElevenLabsSpeech {
             .collect();
         finish(state, context.request, &headers)
     }
+
+    fn step(&self, state: &mut Self::State, frame: &Frame) -> Result<Vec<SpeechEvent>, AiError> {
+        step(state, frame)
+    }
 }
 
 #[cfg(test)]
