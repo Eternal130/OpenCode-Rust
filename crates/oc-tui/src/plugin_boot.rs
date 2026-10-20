@@ -1125,6 +1125,7 @@ pub struct HttpSessionPort {
 }
 
 #[async_trait]
+#[allow(clippy::too_many_lines)] // the v2 SessionDomain dispatch mirrors the engine port
 impl SessionPort for HttpSessionPort {
     async fn call(&self, _bridge: &Bridge, method: &str, args: &Value) -> Result<Value, String> {
         let session_id = args.get("sessionID").and_then(Value::as_str).unwrap_or_default();
@@ -1223,13 +1224,127 @@ impl SessionPort for HttpSessionPort {
                     .map_err(|error| error.to_string())?;
                 Ok(Value::Null)
             }
+            // -- PLUG-D10: the remaining v2 SessionDomain methods over
+            //    the generated client (the TUI embedder's port mirrors
+            //    the engine port's surface).
+            "create" => {
+                let mut body = oc_client::types::SessionCreateBody::default();
+                if let Some(title) = args.get("title").and_then(Value::as_str) {
+                    body.title = Some(title.to_owned());
+                }
+                let session =
+                    self.client.session().create(&body).await.map_err(|error| error.to_string())?;
+                serde_json::to_value(&session).map_err(|error| error.to_string())
+            }
+            "switchAgent" => {
+                let body = oc_client::types::SessionSwitchAgentBody {
+                    agent: args.get("agent").and_then(Value::as_str).unwrap_or_default().to_owned(),
+                };
+                self.client
+                    .session()
+                    .switch_agent(session_id, &body)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                Ok(Value::Null)
+            }
+            "command" => {
+                let mut body = oc_client::types::SessionCommandBody {
+                    name: args.get("name").and_then(Value::as_str).unwrap_or_default().to_owned(),
+                    text: args.get("text").and_then(Value::as_str).unwrap_or_default().to_owned(),
+                    ..oc_client::types::SessionCommandBody::default()
+                };
+                if let Some(delivery) = args.get("delivery").and_then(Value::as_str) {
+                    body.delivery = Some(match delivery {
+                        "queue" => oc_client::types::SessionInboxDelivery::Queue,
+                        _ => oc_client::types::SessionInboxDelivery::Steer,
+                    });
+                }
+                self.client
+                    .session()
+                    .command(session_id, &body)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                Ok(Value::Null)
+            }
+            "compact" => {
+                let compaction = self
+                    .client
+                    .session()
+                    .compact(session_id, &oc_client::types::SessionCompactBody::default())
+                    .await
+                    .map_err(|error| error.to_string())?;
+                serde_json::to_value(&compaction).map_err(|error| error.to_string())
+            }
+            "context" => {
+                let context = self
+                    .client
+                    .session()
+                    .context(session_id)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                serde_json::to_value(&context).map_err(|error| error.to_string())
+            }
+            "generate" => {
+                let generated = self
+                    .client
+                    .session()
+                    .generate(
+                        session_id,
+                        &oc_client::types::SessionGenerateBody {
+                            prompt: args
+                                .get("prompt")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .to_owned(),
+                        },
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?;
+                serde_json::to_value(&generated).map_err(|error| error.to_string())
+            }
+            "move" => {
+                let directory =
+                    args.pointer("/location/directory").and_then(Value::as_str).unwrap_or_default();
+                self.client
+                    .session()
+                    .move_(
+                        session_id,
+                        &oc_client::types::SessionMoveBody {
+                            directory: directory.to_owned(),
+                            ..oc_client::types::SessionMoveBody::default()
+                        },
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?;
+                Ok(Value::Null)
+            }
+            "synthetic" => {
+                let mut body = oc_client::types::SessionSyntheticBody {
+                    text: args.get("text").and_then(Value::as_str).unwrap_or_default().to_owned(),
+                    ..oc_client::types::SessionSyntheticBody::default()
+                };
+                if let Some(description) = args.get("description").and_then(Value::as_str) {
+                    body.description = Some(description.to_owned());
+                }
+                let synthetic = self
+                    .client
+                    .session()
+                    .synthetic(session_id, &body)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                serde_json::to_value(&synthetic).map_err(|error| error.to_string())
+            }
+            "wait" => {
+                self.client.session().wait(session_id).await.map_err(|error| error.to_string())?;
+                Ok(Value::Null)
+            }
             other => Err(format!(
-                "session.{other}: not wired in the TUI HTTP port (seam: prompt/get/list/messages/interrupt)"
+                "session.{other}: not a v2 SessionDomain method (allowlist: {:?})",
+                oc_plugin_host::SESSION_METHODS
             )),
         }
     }
 }
-
 /// One theme token as a `#rrggbb` string (the v2 TUI-plugin theme
 /// view the guest's sidebar render consumes).
 fn hex_color(color: ratatui::style::Color) -> String {
