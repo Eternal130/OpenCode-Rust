@@ -348,6 +348,10 @@ impl StreamProtocol for CartesiaSpeech {
     ) -> Result<Vec<SpeechEvent>, AiError> {
         finish(state, context.request)
     }
+
+    fn step(&self, state: &mut Self::State, frame: &Frame) -> Result<Vec<SpeechEvent>, AiError> {
+        step(state, frame)
+    }
 }
 
 #[cfg(test)]
