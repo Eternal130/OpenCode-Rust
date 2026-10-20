@@ -156,18 +156,26 @@ impl Bridge {
     }
 }
 
-/// The guest-facing session method allowlist (`ctx.session.*`).
+/// The guest-facing session method allowlist (`ctx.session.*`) — the
+/// v2 `SessionDomain` 15-method `Pick` (plugin/effect/session.ts) plus
+/// the `messages`/`list` reads the flagship probes.
 pub const SESSION_METHODS: &[&str] = &[
+    "create",
     "get",
     "interrupt",
     "context",
     "messages",
     "list",
     "prompt",
+    "generate",
+    "command",
+    "compact",
     "synthetic",
     "update",
     "remove",
+    "move",
     "wait",
+    "switchAgent",
     "switchModel",
 ];
 
@@ -221,6 +229,32 @@ impl ToolPort for NoToolEngine {
     }
 }
 
+/// `ctx.permission.*` routing target (PLUG-D11 — the v2
+/// `PermissionDomain`: `list`/`get`/`reply`). The implementation owns
+/// the real permission machinery (the oc-core engine seam: pending
+/// asks per session, `Reply` resolution); calls arrive spawned off the
+/// IO reader exactly like [`SessionPort::call`].
+#[async_trait]
+pub trait PermissionPort: Send + Sync {
+    /// The pending requests for one session (v2
+    /// `permission.forSession`) as `Permission.Request` JSON.
+    async fn list(&self, session_id: &str) -> Result<Value, String>;
+
+    /// One pending request (v2 errors `Permission request not found`
+    /// when the id is unknown or belongs to another session).
+    async fn get(&self, session_id: &str, request_id: &str) -> Result<Value, String>;
+
+    /// Resolve one pending request (`decision`: `once` | `always` |
+    /// `reject`, v2 `Permission.Reply`).
+    async fn reply(
+        &self,
+        session_id: &str,
+        request_id: &str,
+        decision: &str,
+        message: Option<String>,
+    ) -> Result<(), String>;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -245,6 +279,31 @@ mod tests {
     fn session_methods_cover_the_flagship_surface() {
         for method in ["prompt", "context", "get", "list", "messages", "switchModel", "wait"] {
             assert!(SESSION_METHODS.contains(&method), "missing {method}");
+        }
+    }
+
+    /// PLUG-D10: the v2 `SessionDomain` guest surface
+    /// (`plugin/effect/session.ts` — the 15-method `Pick`).
+    #[test]
+    fn session_methods_cover_the_v2_domain() {
+        for method in [
+            "create",
+            "get",
+            "remove",
+            "switchAgent",
+            "switchModel",
+            "prompt",
+            "generate",
+            "command",
+            "compact",
+            "synthetic",
+            "interrupt",
+            "update",
+            "move",
+            "wait",
+            "context",
+        ] {
+            assert!(SESSION_METHODS.contains(&method), "missing v2 session method {method}");
         }
     }
 }

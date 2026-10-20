@@ -121,10 +121,12 @@ async fn generate_text(
 // ---------------------------------------------------------------------------
 
 async fn migration_status(State(state): State<SharedState>) -> Result<Response, ApiError> {
-    // v1 migration state: the legacy store was migrated when the engine's
-    // database booted (migrations run at open).
-    let _ = state.engine.db.migration_ids().await;
-    Ok(axum::Json(json!({ "status": "completed" })).into_response())
+    // DB-D12 (server/handlers/migration.ts): the real V1Migration.status()
+    // — required / running{progress} / error / completed, derived from the
+    // legacy `session` table presence, the `migration.v1-v2` KV state and
+    // the runner's in-process state (never a hardcoded "completed").
+    let status = oc_core::database::v1_migration::status(&state.engine.db).await;
+    Ok(axum::Json(status.to_json()).into_response())
 }
 
 // ---------------------------------------------------------------------------

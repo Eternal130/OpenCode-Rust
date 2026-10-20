@@ -86,6 +86,8 @@ pub struct PluginBoot {
     /// The session-port slot (filled with the engine handle after
     /// `Engine::boot`).
     pub session_slot: Arc<EngineSessionSlot>,
+    /// The permission-port slot (PLUG-D11; filled after `Engine::boot`).
+    pub permission_slot: Arc<EnginePermissionSlot>,
 }
 
 /// One `/api/rpc` call's failure (PLUG-D14): the v2 error channel —
@@ -125,6 +127,7 @@ impl PluginBoot {
             ready: false,
             router: Arc::new(TokenRouter::default()),
             session_slot: Arc::new(EngineSessionSlot::default()),
+            permission_slot: Arc::new(EnginePermissionSlot::default()),
         }
     }
 
@@ -214,7 +217,10 @@ impl PluginBoot {
             router: Arc::clone(&self.router),
             timeout: EXECUTE_TIMEOUT,
         });
-        let source = Arc::new(HostPluginSource { host: Arc::clone(&self.host) });
+        let source = Arc::new(HostPluginSource {
+            host: Arc::clone(&self.host),
+            resolution: self.resolution.clone(),
+        });
         EngineSeams {
             code_mode_runtime: Some(runtime as Arc<dyn CodeModeRuntime>),
             plugin_source: Some(source as Arc<dyn LocationPluginSource>),
@@ -289,6 +295,7 @@ pub fn boot(
     let detected = PluginHost::detect();
     let router = Arc::new(TokenRouter::default());
     let session_slot = Arc::new(EngineSessionSlot::default());
+    let permission_slot = Arc::new(EnginePermissionSlot::default());
     if !detected.enabled() && resolution.entries().is_empty() {
         eprintln!(
             "opencode plugin: no plugins configured and bun is unavailable; staying flat (no Code Mode runtime)"
@@ -299,6 +306,7 @@ pub fn boot(
             ready: false,
             router,
             session_slot,
+            permission_slot,
         });
     }
 
@@ -364,6 +372,9 @@ pub fn boot(
         host_state,
         session_port: Some(Arc::clone(&session_slot) as Arc<dyn SessionPort>),
         tool_port: Some(Arc::new(RouterToolPort { router: Arc::clone(&router) })),
+        permission_port: Some(
+            Arc::clone(&permission_slot) as Arc<dyn oc_plugin_host::PermissionPort>
+        ),
         storage_port,
         entry_options: resolution.entry_options(),
         // The registration pass spans bun cold start + every entry's
@@ -379,15 +390,31 @@ pub fn boot(
             host.start_error()
         );
     }
-    Arc::new(PluginBoot { host, resolution, ready, router, session_slot })
+    Arc::new(PluginBoot { host, resolution, ready, router, session_slot, permission_slot })
 }
 
 /// Extract the merged `plugins[]` ops from a loaded config (every
 /// document's array, priority order — later documents' entries land
 /// later so their removes override earlier adds; a rejected list is
 /// logged and ignored, never a boot failure).
+///
+/// PLUG-D01: every DIRECTORY entry's `plugin`/`plugins` children
+/// auto-discover FIRST (v2 `ConfigPluginSource.scan` —
+/// `[...discovered, ...configured]`), so an explicit document remove
+/// drops a discovered drop-in.
 #[must_use]
 pub fn config_plugin_ops(loaded: &Loaded) -> Vec<oc_plugin_host::PluginOp> {
+    let directories: Vec<std::path::PathBuf> = loaded
+        .entries
+        .iter()
+        .filter_map(|entry| match entry {
+            oc_schema::config::Entry::Directory(directory) => {
+                Some(std::path::PathBuf::from(&directory.path))
+            }
+            oc_schema::config::Entry::Document(_) => None,
+        })
+        .collect();
+    let mut ops = oc_plugin_host::discover_directory_ops(&directories);
     let mut raw: Vec<Value> = Vec::new();
     for entry in &loaded.entries {
         if let oc_schema::config::Entry::Document(document) = entry {
@@ -401,12 +428,12 @@ pub fn config_plugin_ops(loaded: &Loaded) -> Vec<oc_plugin_host::PluginOp> {
         }
     }
     match oc_plugin_host::parse_ops(&raw) {
-        Ok(ops) => ops,
+        Ok(document_ops) => ops.extend(document_ops),
         Err(error) => {
             eprintln!("opencode plugin: config plugins[] rejected: {error}");
-            Vec::new()
         }
     }
+    ops
 }
 
 // ---------------------------------------------------------------------------
@@ -526,11 +553,22 @@ impl ToolPort for RouterToolPort {
 /// snapshot, applied at every location's assembly.
 pub struct HostPluginSource {
     pub host: Arc<PluginHost>,
+    /// The boot-time resolution (target → entry mapping for PLUG-D07's
+    /// per-location activation sets).
+    pub resolution: Resolution,
 }
 
 impl LocationPluginSource for HostPluginSource {
-    fn agents(&self) -> Vec<Value> {
-        self.host.registrations().agents.iter().map(|agent| agent.info.clone()).collect()
+    fn agents(&self) -> Vec<oc_core::plugin_apply::PluginAgentDef> {
+        self.host
+            .registrations()
+            .agents
+            .iter()
+            .map(|agent| oc_core::plugin_apply::PluginAgentDef {
+                plugin_id: agent.plugin_id.clone(),
+                info: agent.info.clone(),
+            })
+            .collect()
     }
 
     fn default_agent(&self) -> Option<String> {
@@ -543,6 +581,7 @@ impl LocationPluginSource for HostPluginSource {
             .tools
             .iter()
             .map(|tool| PluginToolDef {
+                plugin_id: tool.plugin_id.clone(),
                 name: tool.name.clone(),
                 description: tool.description.clone(),
                 input: tool.input.clone(),
@@ -574,6 +613,7 @@ impl LocationPluginSource for HostPluginSource {
             .mcps
             .iter()
             .map(|mcp| oc_core::plugin_apply::PluginMcpDef {
+                plugin_id: mcp.plugin_id.clone(),
                 name: mcp.name.clone(),
                 config: mcp.config.clone(),
             })
@@ -586,10 +626,82 @@ impl LocationPluginSource for HostPluginSource {
             .commands
             .iter()
             .map(|command| oc_core::plugin_apply::PluginCommandDef {
+                plugin_id: command.plugin_id.clone(),
                 name: command.name.clone(),
                 description: command.description.clone(),
             })
             .collect()
+    }
+
+    /// PLUG-D35: plugin-registered skills (`ctx.skill.transform`) —
+    /// the engine seam merges them into every location's
+    /// `ConfigSkillTable`, so a bundled skill is listable and
+    /// `@skill`-usable exactly like v2's shared `Skill.Service` state.
+    fn skills(&self) -> Vec<oc_core::plugin_apply::PluginSkillDef> {
+        self.host
+            .registrations()
+            .skills
+            .iter()
+            .map(|skill| oc_core::plugin_apply::PluginSkillDef {
+                plugin_id: skill.plugin_id.clone(),
+                info: skill.info.clone(),
+            })
+            .collect()
+    }
+
+    /// PLUG-D07: reduce THIS location's operations (the boot pass's
+    /// dedup/remove semantics) and map the surviving targets onto the
+    /// loaded plugins' ids — a location's registrations come only from
+    /// plugins its own config layers activated. A target the boot pass
+    /// never loaded contributes nothing (loading new guests per
+    /// location is the per-instance-host divergence, noted in the
+    /// ledger).
+    fn active_plugins(
+        &self,
+        ops: &[oc_core::plugin_apply::LocationPluginOp],
+    ) -> Option<Vec<String>> {
+        let mut targets: Vec<String> = Vec::new();
+        for op in ops {
+            match op {
+                oc_core::plugin_apply::LocationPluginOp::Add { target } => {
+                    if targets.iter().any(|seen| seen == target) {
+                        continue;
+                    }
+                    targets.push(target.clone());
+                }
+                oc_core::plugin_apply::LocationPluginOp::Remove { target } => {
+                    if target == "*" {
+                        targets.clear();
+                    } else {
+                        targets.retain(|seen| !boot_remove_matches(seen, target));
+                    }
+                }
+            }
+        }
+        let snapshot = self.host.registrations();
+        let mut ids: Vec<String> = Vec::new();
+        for target in targets {
+            // Direct: the boot resolution carries this target.
+            if let Some(plugin) = self.resolution.plugins.iter().find(|p| p.target == target) {
+                if let Some(status) = snapshot.plugins.iter().find(|s| s.entry == plugin.entry) {
+                    if !status.plugin_id.is_empty() {
+                        ids.push(status.plugin_id.clone());
+                        continue;
+                    }
+                }
+            }
+            // Fallback: the loaded plugin's own id matches the target.
+            if let Some(status) = snapshot.plugins.iter().find(|s| s.plugin_id == target) {
+                ids.push(status.plugin_id.clone());
+            }
+        }
+        Some(ids)
+    }
+
+    /// PLUG-D07: push the latest activated location into the guest
+    /// (the host updates `ctx.location`/`ctx.directory`).
+    fn location_activated(&self, directory: &str, project_id: &str) {
+        self.host.push_location(directory, project_id);
     }
 
     /// PLUG-D21: the guest's hook subscriptions (registration order).
@@ -612,6 +724,23 @@ impl LocationPluginSource for HostPluginSource {
     fn hook_dispatcher(&self) -> Option<Arc<dyn GuestHookDispatcher>> {
         Some(Arc::new(HostHookDispatcher { host: Arc::clone(&self.host) }))
     }
+}
+
+/// v2 remove matching over boot targets (mirrors
+/// `oc_plugin_host::resolve`'s reduction): the directive matches the
+/// spec, its package name, or a local path stem.
+fn boot_remove_matches(target: &str, directive: &str) -> bool {
+    if target == directive {
+        return true;
+    }
+    let package = target.rsplit_once('@').map_or(target, |(name, _)| name);
+    if package == directive {
+        return true;
+    }
+    std::path::Path::new(target)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .is_some_and(|stem| stem == directive)
 }
 
 /// The [`GuestHookDispatcher`] over the host's bridge (PLUG-D21): one
@@ -731,22 +860,55 @@ impl StoragePort for DbStoragePort {
 /// Calls are answered asynchronously off the host's IO reader (deadlock
 /// rule 1), so a prompt may dispatch hooks back into the guest through
 /// the bridge while the reader keeps draining.
+///
+/// PLUG-D10: the full v2 `SessionDomain` answers here —
+/// create/get/remove/switchAgent/switchModel/prompt/generate/command/
+/// compact/synthetic/interrupt/update/move/wait/context (plus the
+/// `messages`/`list` reads), each over the SAME engine services the
+/// HTTP handlers use.
 pub struct EngineSessionPort {
     pub engine: Arc<Engine>,
     pub location: LocationRef,
+    /// The plugin host handle (plugin-source `session.command` guest
+    /// dispatch); `None` on plugin-less boots.
+    pub host: Option<Arc<oc_plugin_host::PluginHost>>,
 }
 
-#[async_trait]
-impl SessionPort for EngineSessionPort {
-    async fn call(&self, _bridge: &Bridge, method: &str, args: &Value) -> Result<Value, String> {
+impl EngineSessionPort {
+    /// The method body behind [`SessionPort::call`] (the port ignores
+    /// the bridge for these paths — production and tests share it).
+    ///
+    /// # Errors
+    /// v2-shaped error strings (not-found, no-model, command-not-found).
+    pub async fn invoke(&self, method: &str, args: &Value) -> Result<Value, String> {
+        self.call_inner(method, args).await
+    }
+
+    #[allow(clippy::too_many_lines)] // the v2 SessionDomain dispatch (one arm per method)
+    async fn call_inner(&self, method: &str, args: &Value) -> Result<Value, String> {
         let session_id = args.get("sessionID").and_then(Value::as_str).unwrap_or_default();
+        let services =
+            self.engine.location(self.location.clone()).await.map_err(|error| error.to_string())?;
         match method {
-            "prompt" => {
-                let text = args.get("text").and_then(Value::as_str).unwrap_or_default();
-                let id = oc_schema::id::SessionId(session_id.to_owned());
-                let message_id = format!("msg_plugin_{}", uuid::Uuid::new_v4());
-                self.engine.prompt(&self.location, &id, &message_id, text).await?;
-                Ok(Value::Null)
+            "create" => {
+                let row = self
+                    .engine
+                    .create_session(
+                        &self.location,
+                        oc_core::session::store::CreateInput {
+                            title: args.get("title").and_then(Value::as_str).map(str::to_owned),
+                            location: Some(oc_schema::location::Ref {
+                                directory: oc_schema::common::AbsolutePath(
+                                    self.location.as_path().display().to_string(),
+                                ),
+                                workspace_id: None,
+                            }),
+                            version: "2.0.24".to_owned(),
+                            ..oc_core::session::store::CreateInput::default()
+                        },
+                    )
+                    .await?;
+                Ok(session_info_json(&row))
             }
             "get" => {
                 let id = oc_schema::id::SessionId(session_id.to_owned());
@@ -764,13 +926,17 @@ impl SessionPort for EngineSessionPort {
                     .await?;
                 Ok(Value::Array(rows.iter().map(session_info_json).collect()))
             }
-            "messages" => {
+            "messages" | "context" => {
+                // v2 `session.context` returns the session's message
+                // read model (the same rows the HTTP context endpoint
+                // serves).
                 let rows = self
                     .engine
                     .messages(
                         &self.location,
                         oc_core::session::store::MessagesInput {
                             session_id: session_id.to_owned(),
+                            order: Some(oc_core::session::store::ListOrder::Asc),
                             ..oc_core::session::store::MessagesInput::default()
                         },
                     )
@@ -786,18 +952,304 @@ impl SessionPort for EngineSessionPort {
                         })
                     })
                     .collect();
-                Ok(json!({ "data": data }))
+                if method == "context" {
+                    Ok(Value::Array(data))
+                } else {
+                    Ok(json!({ "data": data }))
+                }
+            }
+            "prompt" => {
+                let text = args.get("text").and_then(Value::as_str).unwrap_or_default();
+                let id = oc_schema::id::SessionId(session_id.to_owned());
+                let message_id = format!("msg_plugin_{}", uuid::Uuid::new_v4());
+                self.engine.prompt(&self.location, &id, &message_id, text).await?;
+                Ok(Value::Null)
             }
             "interrupt" => {
                 let id = oc_schema::id::SessionId(session_id.to_owned());
                 let interrupted = self.engine.interrupt(&self.location, &id).await;
                 Ok(json!(interrupted))
             }
+            "remove" => {
+                let bus = (*services.graph.bus).clone();
+                services.store.remove(&bus, session_id).await.map_err(|error| error.to_string())?;
+                Ok(Value::Null)
+            }
+            "update" => {
+                // v2 SessionUpdateInput: title/metadata/permissions each
+                // publish their session event; the projection follows.
+                if let Some(title) = args.get("title").and_then(Value::as_str) {
+                    publish_event(
+                        &services,
+                        "session.renamed",
+                        json!({
+                            "sessionID": session_id, "title": title,
+                        }),
+                    )
+                    .await?;
+                }
+                if let Some(metadata) = args.get("metadata") {
+                    publish_event(
+                        &services,
+                        "session.metadata.updated",
+                        json!({
+                            "sessionID": session_id, "metadata": metadata,
+                        }),
+                    )
+                    .await?;
+                }
+                if let Some(permissions) = args.get("permissions") {
+                    publish_event(
+                        &services,
+                        "session.permissions",
+                        json!({
+                            "sessionID": session_id, "permissions": permissions,
+                        }),
+                    )
+                    .await?;
+                }
+                Ok(Value::Null)
+            }
+            "switchAgent" => {
+                let agent = args.get("agent").and_then(Value::as_str).unwrap_or_default();
+                if services.graph.agents.get(&oc_schema::id::AgentId(agent.to_owned())).is_none() {
+                    return Err(format!("Agent not found: {agent}"));
+                }
+                publish_event(
+                    &services,
+                    "session.agent.selected",
+                    json!({
+                        "sessionID": session_id, "agent": agent,
+                    }),
+                )
+                .await?;
+                Ok(Value::Null)
+            }
+            "switchModel" => {
+                publish_event(
+                    &services,
+                    "session.model.selected",
+                    json!({
+                        "sessionID": session_id,
+                        "model": args.get("model").cloned().unwrap_or(Value::Null),
+                    }),
+                )
+                .await?;
+                Ok(Value::Null)
+            }
+            "compact" => {
+                let id = oc_schema::id::SessionId(session_id.to_owned());
+                self.engine.compact(&self.location, &id).await?;
+                Ok(Value::Null)
+            }
+            "move" => {
+                let id = oc_schema::id::SessionId(session_id.to_owned());
+                let directory =
+                    args.pointer("/location/directory").and_then(Value::as_str).unwrap_or_default();
+                if directory.is_empty() {
+                    return Err("session.move requires location.directory".to_owned());
+                }
+                let destination = oc_schema::location::Ref {
+                    directory: oc_schema::common::AbsolutePath::parse(directory),
+                    workspace_id: args
+                        .pointer("/location/workspace")
+                        .and_then(Value::as_str)
+                        .and_then(|id| oc_schema::id::WorkspaceId::parse(id.to_owned()).ok()),
+                };
+                // The destination project resolves through the
+                // destination location's own assembly (the HTTP move
+                // handler's path).
+                let destination_services = self
+                    .engine
+                    .location(LocationRef::new(std::path::PathBuf::from(directory), None))
+                    .await
+                    .map_err(|error| error.to_string())?;
+                let project =
+                    oc_schema::id::ProjectId::parse(destination_services.project.id.clone());
+                let message_id = format!("msg_plugin_{}", uuid::Uuid::new_v4());
+                self.engine
+                    .move_session(&self.location, &id, &message_id, destination, project, None)
+                    .await?;
+                Ok(Value::Null)
+            }
+            "synthetic" => {
+                let text = args.get("text").and_then(Value::as_str).unwrap_or_default();
+                let message_id = format!("msg_plugin_{}", uuid::Uuid::new_v4());
+                let delivery = match args.get("delivery").and_then(Value::as_str) {
+                    Some("queue") => oc_schema::session_inbox::Delivery::Queue,
+                    _ => oc_schema::session_inbox::Delivery::Steer,
+                };
+                let info = services
+                    .inbox
+                    .admit(
+                        &message_id,
+                        session_id,
+                        oc_schema::session_inbox::Item::Synthetic {
+                            payload: oc_schema::session_inbox::SyntheticPayload {
+                                text: text.to_owned(),
+                                description: args
+                                    .get("description")
+                                    .and_then(Value::as_str)
+                                    .map(str::to_owned),
+                                metadata: args.get("metadata").and_then(Value::as_object).map(
+                                    |metadata| {
+                                        metadata
+                                            .iter()
+                                            .map(|(key, value)| (key.clone(), value.clone()))
+                                            .collect()
+                                    },
+                                ),
+                            },
+                            delivery,
+                        },
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?;
+                let _ = info;
+                Ok(Value::Null)
+            }
+            "wait" => {
+                services.execution.await_idle(session_id).await;
+                Ok(Value::Null)
+            }
+            "command" => {
+                let name = args.get("name").and_then(Value::as_str).unwrap_or_default();
+                let text = args.get("text").and_then(Value::as_str).unwrap_or_default();
+                self.invoke_session_command(&services, session_id, name, text).await
+            }
+            "generate" => self.invoke_generate(&services, session_id, args).await,
             other => Err(format!(
-                "session.{other}: not wired in the Rust server port yet (engine seam: prompt/get/list/messages/interrupt)"
+                "session.{other}: not a v2 SessionDomain method (allowlist: {:?})",
+                oc_plugin_host::SESSION_METHODS
             )),
         }
     }
+}
+
+#[async_trait]
+impl SessionPort for EngineSessionPort {
+    async fn call(&self, _bridge: &Bridge, method: &str, args: &Value) -> Result<Value, String> {
+        self.call_inner(method, args).await
+    }
+}
+
+impl EngineSessionPort {
+    /// v2 `session.command` (SessionCommandInput): a registered command
+    /// dispatches — plugin-source through the guest, config-source
+    /// through template expansion + prompt admission (the subagent
+    /// fork is the HTTP handler's; the plugin port answers the
+    /// non-subagent semantics).
+    async fn invoke_session_command(
+        &self,
+        services: &Arc<oc_core::engine::LocationServices>,
+        session_id: &str,
+        name: &str,
+        text: &str,
+    ) -> Result<Value, String> {
+        let Some(registration) = services.commands.get(name) else {
+            return Err(format!("Command not found: {name}"));
+        };
+        match registration.source {
+            oc_core::engine::commands::CommandSource::Plugin => {
+                let Some(host) = &self.host else {
+                    return Err(format!("command execution {name}: plugin subsystem disabled"));
+                };
+                host.execute_command_in_session_async(
+                    name,
+                    Some(text),
+                    session_id,
+                    Duration::from_secs(30),
+                )
+                .await
+                .map(|_| Value::Null)
+            }
+            oc_core::engine::commands::CommandSource::Config(command) => {
+                let expanded =
+                    oc_core::config::command_md::evaluate_template(&command.template, text);
+                let id = oc_schema::id::SessionId(session_id.to_owned());
+                let message_id = format!("msg_plugin_{}", uuid::Uuid::new_v4());
+                self.engine.prompt(&self.location, &id, &message_id, &expanded).await?;
+                Ok(Value::Null)
+            }
+        }
+    }
+
+    /// v2 `session.generate` (`SessionGenerateInput` → `{text}`): one
+    /// stateless generation over the session's resolved model — the
+    /// same resolver + LLM seam the `/api/experimental/generate`
+    /// handler rides.
+    async fn invoke_generate(
+        &self,
+        services: &Arc<oc_core::engine::LocationServices>,
+        session_id: &str,
+        args: &Value,
+    ) -> Result<Value, String> {
+        use futures::StreamExt as _;
+        let Some(prompt) = args.get("prompt").and_then(Value::as_str) else {
+            return Err("session.generate requires a prompt".to_owned());
+        };
+        let row = services
+            .store
+            .get(session_id)
+            .await
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| format!("session {session_id} not found"))?;
+        let resolved = services.resolver.resolve(&row).map_err(|error| error.to_string())?;
+        let mut request = oc_ai::schema::LLMRequest::new(resolved.model);
+        request.messages = vec![oc_ai::schema::messages::Message::user(prompt)];
+        let mut stream = services
+            .runner
+            .llm()
+            .stream(request)
+            .await
+            .map_err(|error| format!("Text generation is not available: {error}"))?;
+        let mut text = String::new();
+        while let Some(event) = stream.next().await {
+            match event.map_err(|error| format!("Text generation failed: {error}"))? {
+                oc_ai::schema::LLMEvent::TextDelta { text: delta, .. } => text.push_str(&delta),
+                oc_ai::schema::LLMEvent::ProviderError { message, .. } => {
+                    return Err(format!("Text generation failed: {message}"));
+                }
+                _ => {}
+            }
+        }
+        Ok(json!({ "text": text }))
+    }
+}
+
+/// Publish one session event through the location bus (the same
+/// envelope the HTTP session handlers use).
+async fn publish_event(
+    services: &Arc<oc_core::engine::LocationServices>,
+    type_: &str,
+    data: Value,
+) -> Result<(), String> {
+    let Some(definition) = oc_core::bus::registry::by_type_latest(type_) else { return Ok(()) };
+    let location = oc_schema::location::Ref {
+        directory: oc_schema::common::AbsolutePath::parse(
+            services.graph.location.directory.to_string_lossy().into_owned(),
+        ),
+        workspace_id: services
+            .graph
+            .location
+            .workspace_id
+            .as_ref()
+            .and_then(|id| oc_schema::id::WorkspaceId::parse(id.clone()).ok()),
+    };
+    services
+        .graph
+        .bus
+        .publish(
+            definition,
+            data,
+            oc_core::bus::PublishOptions {
+                location: Some(location),
+                ..oc_core::bus::PublishOptions::default()
+            },
+        )
+        .await
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 /// The v2 `Session.Info`-shaped JSON for one row (the plugin surface's
@@ -840,5 +1292,185 @@ impl SessionPort for EngineSessionSlot {
                 "session.{method}: the session engine is not attached to the plugin host yet"
             )),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use oc_schema::config::{Directory, Entry, Plugin};
+
+    /// PLUG-D01: the server boot's ops assembly discovers `plugin`/
+    /// `plugins` drop-ins from every config DIRECTORY entry first, then
+    /// appends the document `plugins[]` ops (explicit removes drop
+    /// discovered entries — v2 `ConfigPluginSource.scan` ordering).
+    #[test]
+    fn config_plugin_ops_discover_directories_before_documents() {
+        let root = std::env::temp_dir().join(format!(
+            "oc-server-plugin-ops-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |since| since.subsec_nanos())
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let layer = root.join("layer");
+        std::fs::create_dir_all(layer.join("plugins").join("dropin")).expect("dropin dir");
+        std::fs::write(layer.join("plugins").join("dropin").join("index.ts"), "// dropin")
+            .expect("dropin entry");
+        std::fs::create_dir_all(&layer).expect("layer");
+
+        let info = oc_schema::config::Info {
+            plugins: Some(vec![Plugin::Spec("-dropin".to_owned())]),
+            ..oc_schema::config::Info::default()
+        };
+        let loaded = Loaded {
+            sources: oc_core::config::discovery::Sources::default(),
+            entries: vec![
+                Entry::Directory(Directory { path: layer.display().to_string() }),
+                Entry::Document(Box::new(oc_schema::config::Document {
+                    info,
+                    path: Some(layer.join("opencode.json").display().to_string()),
+                })),
+            ],
+            diagnostics: Vec::new(),
+        };
+        let ops = config_plugin_ops(&loaded);
+        let targets: Vec<&str> = ops
+            .iter()
+            .map(|op| match op {
+                oc_plugin_host::PluginOp::Add { target, .. }
+                | oc_plugin_host::PluginOp::Remove { target } => target.as_str(),
+            })
+            .collect();
+        assert_eq!(
+            targets,
+            vec![layer.join("plugins").join("dropin").display().to_string().as_str(), "dropin"],
+            "discovered first, document remove last: {targets:?}"
+        );
+        let resolution = oc_plugin_host::resolve(&ops, None);
+        assert!(
+            resolution.plugins.is_empty(),
+            "the explicit remove drops the discovered drop-in (failures: {:?})",
+            resolution.failures
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The permission port (PLUG-D11: ctx.permission.* → the engine)
+// ---------------------------------------------------------------------------
+
+/// The engine-backed [`oc_plugin_host::PermissionPort`]: v2's
+/// `PermissionDomain` — `list`/`get`/`reply` over THIS location's
+/// permission machinery (the same `Permission` service the tool
+/// pipeline's asks park on).
+pub struct EnginePermissionPort {
+    pub engine: Arc<Engine>,
+    pub location: LocationRef,
+}
+
+impl EnginePermissionPort {
+    /// The pending requests for one session, serialized in the v2
+    /// `Permission.Request` wire shape.
+    fn pending(&self, session_id: &str) -> Vec<Value> {
+        self.engine
+            .permission_pending(&self.location, &oc_schema::id::SessionId(session_id.to_owned()))
+            .into_iter()
+            .map(|request| serde_json::to_value(&request).unwrap_or(Value::Null))
+            .collect()
+    }
+
+    /// One pending request (v2: unknown id or wrong session →
+    /// `Permission request not found`).
+    fn one(&self, session_id: &str, request_id: &str) -> Result<Value, String> {
+        self.pending(session_id)
+            .into_iter()
+            .find(|request| request.get("id").and_then(Value::as_str) == Some(request_id))
+            .ok_or_else(|| format!("Permission request not found: {request_id}"))
+    }
+}
+
+#[async_trait]
+impl oc_plugin_host::PermissionPort for EnginePermissionPort {
+    async fn list(&self, session_id: &str) -> Result<Value, String> {
+        Ok(Value::Array(self.pending(session_id)))
+    }
+
+    async fn get(&self, session_id: &str, request_id: &str) -> Result<Value, String> {
+        self.one(session_id, request_id)
+    }
+
+    async fn reply(
+        &self,
+        session_id: &str,
+        request_id: &str,
+        decision: &str,
+        message: Option<String>,
+    ) -> Result<(), String> {
+        // v2 validates the request exists AND belongs to the session
+        // before replying (host.ts permission.reply).
+        self.one(session_id, request_id)?;
+        let reply = match decision {
+            "once" => oc_schema::permission::Reply::Once,
+            "always" => oc_schema::permission::Reply::Always,
+            "reject" => oc_schema::permission::Reply::Reject,
+            other => return Err(format!("Invalid permission decision: {other}")),
+        };
+        self.engine
+            .permission_reply(
+                &self.location,
+                oc_core::permission::ReplyInput {
+                    request_id: oc_schema::id::PermissionId(request_id.to_owned()),
+                    reply,
+                    message,
+                },
+            )
+            .await
+    }
+}
+
+/// The pre-engine permission-port placeholder (the same slot pattern
+/// as [`EngineSessionSlot`]): empty until `boot_and_serve` fills it.
+#[derive(Default)]
+pub struct EnginePermissionSlot(std::sync::RwLock<Option<Arc<EnginePermissionPort>>>);
+
+impl EnginePermissionSlot {
+    /// Fill the slot (idempotent; the first engine wins).
+    pub fn fill(&self, port: Arc<EnginePermissionPort>) {
+        let mut slot = self.0.write().expect("permission slot poisoned");
+        if slot.is_none() {
+            *slot = Some(port);
+        }
+    }
+}
+
+#[async_trait]
+impl oc_plugin_host::PermissionPort for EnginePermissionSlot {
+    async fn list(&self, session_id: &str) -> Result<Value, String> {
+        self.port()?.list(session_id).await
+    }
+
+    async fn get(&self, session_id: &str, request_id: &str) -> Result<Value, String> {
+        self.port()?.get(session_id, request_id).await
+    }
+
+    async fn reply(
+        &self,
+        session_id: &str,
+        request_id: &str,
+        decision: &str,
+        message: Option<String>,
+    ) -> Result<(), String> {
+        self.port()?.reply(session_id, request_id, decision, message).await
+    }
+}
+
+impl EnginePermissionSlot {
+    fn port(&self) -> Result<Arc<EnginePermissionPort>, String> {
+        self.0.read().expect("permission slot poisoned").clone().ok_or_else(|| {
+            "permission: the engine is not attached to the plugin host yet".to_owned()
+        })
     }
 }

@@ -94,14 +94,18 @@ pub mod ui;
 
 pub use context::{
     install::{default_root as install_root, install, InstallOptions, Installed},
-    Bridge, HostState, NoSessionEngine, NoToolEngine, SessionPort, ToolPort, SESSION_METHODS,
+    Bridge, HostState, NoSessionEngine, NoToolEngine, PermissionPort, SessionPort, ToolPort,
+    SESSION_METHODS,
 };
 pub use registrations::{
     PluginAgent, PluginCommand, PluginDialog, PluginGroupRule, PluginHomeAction, PluginHook,
     PluginKeymapCommand, PluginMcp, PluginRoute, PluginRpc, PluginSkill, PluginSlotClaim,
     PluginState, PluginStatus, PluginTheme, PluginTool, RegistrationSnapshot,
 };
-pub use resolve::{parse_ops, resolve, PluginOp, PluginSourceKind, Resolution, ResolvedPlugin};
+pub use resolve::{
+    discover_directory_ops, parse_ops, resolve, PluginOp, PluginSourceKind, Resolution,
+    ResolvedPlugin, PLUGIN_SOURCE_DIRECTORIES,
+};
 pub use supervisor::{HostError, StoragePort, StorageScanQuery, SupervisorConfig};
 pub use tap::{BroadcastTap, TapEvent};
 pub use ui::{PluginDialogOption, PluginDialogSpec, PluginSectionSpec, UiRequest};
@@ -136,6 +140,9 @@ pub struct PluginHostConfig {
     /// `ctx.storage.*` routing target (PLUG-D18): the durable KV
     /// backend. `None` declines every call.
     pub storage_port: Option<Arc<dyn supervisor::StoragePort>>,
+    /// `ctx.permission.*` routing target (PLUG-D11): the engine's
+    /// permission machinery. `None` declines every call.
+    pub permission_port: Option<Arc<dyn PermissionPort>>,
     /// Config-sourced plugin options keyed by entry path (`ctx.options`,
     /// v2 plugin `{package, options}` entries).
     pub entry_options: BTreeMap<String, Value>,
@@ -155,6 +162,7 @@ impl Default for PluginHostConfig {
             session_port: None,
             tool_port: None,
             storage_port: None,
+            permission_port: None,
             entry_options: BTreeMap::new(),
         }
     }
@@ -771,6 +779,15 @@ impl PluginHost {
         facade.shared.notify_tui_route(session);
     }
 
+    /// PLUG-D07 — push the latest activated location into the guest
+    /// (`ctx.location`/`ctx.directory` follow; the engine calls this
+    /// through [`crate::LocationPluginSource::location_activated`]
+    /// whenever a location assembles with plugins active).
+    pub fn push_location(&self, directory: &str, project_id: &str) {
+        let Some(facade) = &self.facade else { return };
+        facade.shared.push_location(directory, project_id);
+    }
+
     /// Push the live theme view (the flat `TuiThemeCurrent` sidebar
     /// subset: `{accent, background, borderActive, text, textMuted}`
     /// as `#rrggbb` strings).
@@ -1000,6 +1017,7 @@ fn supervisor_config(
         session_port: config.session_port.take().or_else(|| Some(Arc::new(NoSessionEngine))),
         tool_port: config.tool_port.take().or_else(|| Some(Arc::new(NoToolEngine))),
         storage_port: config.storage_port.take(),
+        permission_port: config.permission_port.take(),
         entry_options: std::mem::take(&mut config.entry_options),
     }
 }

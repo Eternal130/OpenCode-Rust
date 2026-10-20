@@ -29,6 +29,7 @@ pub mod path;
 pub mod schema;
 #[cfg(test)]
 mod tests;
+pub mod v1_migration;
 
 pub use error::{DbError, Result};
 pub use migrations::{ApplyReport, Migration, MigrationOptions, MIGRATIONS};

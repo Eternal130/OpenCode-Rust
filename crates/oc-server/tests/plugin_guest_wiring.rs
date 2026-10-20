@@ -287,3 +287,82 @@ async fn rpc_dispatch() {
 
     handle.shutdown_and_join().await.expect("shutdown");
 }
+
+// ---------------------------------------------------------------------------
+// PLUG-D07: per-location activation
+// ---------------------------------------------------------------------------
+
+/// A location's config layers resolve ITS plugin set (v2's per-location
+/// activation): the boot project's graph carries the plugin's
+/// registrations, a plugin-less sibling location's graph carries none,
+/// and a SECOND plugin-ful location both filters correctly and updates
+/// the guest's `ctx.location` view (the one-guest approximation of
+/// v2's per-instance hosts).
+#[tokio::test]
+async fn per_location_activation() {
+    if !bun_available() {
+        eprintln!("bun unavailable; skipping");
+        return;
+    }
+    let box_ = sandbox("perloc");
+    let fixture = oc_plugin_host::fixture_dir().join("perloc.ts");
+    box_.write_project_config(&fixture);
+    box_.redirect_env();
+    let handle = boot_and_serve(&box_.boot_options()).await.expect("boot and serve");
+    let boot = handle.state.plugins.as_ref().expect("plugin boot attached");
+
+    // Location A (the boot project): the plugin is active — its hook
+    // lands in THIS location's production HookRegistry.
+    let location_a = oc_core::location::LocationRef::new(box_.project.clone(), None);
+    let services_a = handle.state.engine.location(location_a.clone()).await.expect("A services");
+    assert!(
+        services_a.graph.hooks.has_tool_execute_before(None),
+        "the boot location activates the plugin (its hook registered)"
+    );
+
+    // The guest's ctx at boot sees the boot directory.
+    let dir = boot
+        .host
+        .execute_command_in_session_async("perloc.dir", None, "", Duration::from_secs(10))
+        .await
+        .expect("perloc.dir dispatches");
+    assert_eq!(dir["directory"], json!(box_.project.display().to_string()), "boot ctx view");
+
+    // Location B (a sibling project with NO plugins in its config): the
+    // same process-global host, but B's graph carries NONE of the
+    // plugin's registrations (v2: B's activation set is empty).
+    let project_b = box_.home.join("other-project");
+    std::fs::create_dir_all(&project_b).expect("B");
+    let location_b = oc_core::location::LocationRef::new(project_b.clone(), None);
+    let services_b = handle.state.engine.location(location_b.clone()).await.expect("B services");
+    assert!(
+        !services_b.graph.hooks.has_tool_execute_before(None),
+        "a plugin-less location's registry has no guest hooks"
+    );
+
+    // Location C (a second project whose config activates the SAME
+    // plugin): its graph carries the registrations AND the guest's
+    // ctx.location view follows the latest activation.
+    let project_c = box_.home.join("third-project");
+    std::fs::create_dir_all(&project_c).expect("C");
+    let config_c = serde_json::json!({ "plugins": [fixture.display().to_string()] }).to_string();
+    std::fs::write(project_c.join("opencode.json"), config_c).expect("C config");
+    let location_c = oc_core::location::LocationRef::new(project_c.clone(), None);
+    let services_c = handle.state.engine.location(location_c.clone()).await.expect("C services");
+    assert!(
+        services_c.graph.hooks.has_tool_execute_before(None),
+        "the second plugin-ful location activates the plugin too"
+    );
+    let dir = boot
+        .host
+        .execute_command_in_session_async("perloc.dir", None, "", Duration::from_secs(10))
+        .await
+        .expect("perloc.dir dispatches (C)");
+    assert_eq!(
+        dir["directory"],
+        json!(project_c.display().to_string()),
+        "the guest ctx follows the latest activated location"
+    );
+
+    handle.shutdown_and_join().await.expect("shutdown");
+}
