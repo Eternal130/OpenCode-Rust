@@ -100,6 +100,17 @@ pub trait LocationPluginSource: Send + Sync {
         Vec::new()
     }
 
+    /// Plugin-registered skills (PLUG-D35): v2 `Skill.Info` JSON
+    /// documents from the host snapshot's `ctx.skill.transform`
+    /// materializations — applied via
+    /// [`apply_plugin_skills`] into the location's
+    /// [`crate::engine::skills::ConfigSkillTable`] (insert-or-replace;
+    /// the plugin entry wins an id collision, matching v2's
+    /// plugins-after-config activation order).
+    fn skills(&self) -> Vec<Value> {
+        Vec::new()
+    }
+
     /// Plugin-registered commands (`command.add` registrations: name +
     /// description; execution dispatches back into the guest through
     /// the host's `command.execute` — CD-34's unsurfaced surface).
@@ -325,6 +336,34 @@ async fn register_guest_hook(
     true
 }
 
+/// Apply plugin-registered skills (PLUG-D35): each `Skill.Info` JSON
+/// document merges into the location's
+/// [`crate::engine::skills::ConfigSkillTable`] (insert-or-replace by
+/// id). Unparseable entries are skipped (contained, like the agents
+/// arm); the applied count is returned.
+#[must_use]
+pub fn apply_plugin_skills(
+    table: &crate::engine::skills::ConfigSkillTable,
+    skills: &[Value],
+) -> usize {
+    let mut applied = 0usize;
+    for info in skills {
+        match serde_json::from_value::<oc_schema::skill::Skill>(info.clone()) {
+            Ok(parsed) => {
+                table.merge_plugin_skill(parsed);
+                applied += 1;
+            }
+            Err(error) => {
+                eprintln!(
+                    "opencode plugin-apply: skipping malformed skill {:?}: {error}",
+                    info.get("id").and_then(serde_json::Value::as_str)
+                );
+            }
+        }
+    }
+    applied
+}
+
 /// Apply one plugin source into a freshly built location graph's
 /// registries (the `assemble` step): the plugin-declared MCP servers
 /// into the location's [`McpRegistry`] FIRST (PLUG-ENGINE-MERGE —
@@ -347,6 +386,7 @@ pub async fn apply_location_plugins(
     tools: &Arc<ToolRegistryState>,
     commands: Option<&Arc<crate::engine::commands::CommandTable>>,
     mcp: &crate::mcp::McpRegistry,
+    skills: &Arc<crate::engine::skills::ConfigSkillTable>,
 ) -> usize {
     // The MCP merge runs over THIS location's registry (per-location
     // overlays, like every other arm below). Idempotent by
@@ -368,6 +408,12 @@ pub async fn apply_location_plugins(
     let applied =
         if snapshot_agents.is_empty() { 0 } else { apply_plugin_agents(agents, &snapshot_agents) };
     apply_plugin_agent_default(agents, source.default_agent().as_deref());
+    // PLUG-D35: plugin skills merge into the location's skill table
+    // (empty vec = a no-op read, never a lock round-trip).
+    let snapshot_skills = source.skills();
+    if !snapshot_skills.is_empty() {
+        let _ = apply_plugin_skills(skills, &snapshot_skills);
+    }
     for definition in source.tools() {
         let mut registration = crate::location::ToolRegistration::new(
             &definition.name,
@@ -984,7 +1030,9 @@ mod tests {
         let hooks = Arc::new(HookRegistry::new());
         let agents = Arc::new(AgentRegistry::new());
         let tools = Arc::new(ToolRegistryState::new());
-        apply_location_plugins(&source, &hooks, &agents, &tools, None, &registry).await;
+        let skills_table = Arc::new(crate::engine::skills::ConfigSkillTable::empty());
+        apply_location_plugins(&source, &hooks, &agents, &tools, None, &registry, &skills_table)
+            .await;
         let names: Vec<String> = registry.servers().into_iter().map(|s| s.name).collect();
         assert!(
             names.contains(&"plugindemo".to_owned()) && names.contains(&"remote-demo".to_owned()),
@@ -1003,8 +1051,11 @@ mod tests {
         let hooks = Arc::new(HookRegistry::new());
         let agents = Arc::new(AgentRegistry::new());
         let tools = Arc::new(ToolRegistryState::new());
-        apply_location_plugins(&source, &hooks, &agents, &tools, None, &registry).await;
-        apply_location_plugins(&source, &hooks, &agents, &tools, None, &registry).await;
+        let skills_table = Arc::new(crate::engine::skills::ConfigSkillTable::empty());
+        apply_location_plugins(&source, &hooks, &agents, &tools, None, &registry, &skills_table)
+            .await;
+        apply_location_plugins(&source, &hooks, &agents, &tools, None, &registry, &skills_table)
+            .await;
         let names: Vec<String> = registry.servers().into_iter().map(|s| s.name).collect();
         assert_eq!(names, vec!["plugindemo".to_owned()], "insert-or-replace, no duplicates");
     }

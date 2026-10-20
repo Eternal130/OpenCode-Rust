@@ -973,6 +973,7 @@ impl Engine {
                 &tools,
                 Some(&commands),
                 &mcp,
+                &skills,
             )
             .await;
             let _ = applied; // diagnostics only (boot-trace reads the registry)
@@ -1063,7 +1064,7 @@ impl Engine {
             },
             skills: {
                 let skills = Arc::clone(&skills);
-                Arc::new(move || skills.list().to_vec())
+                Arc::new(move || skills.list())
             },
         };
         let context = Arc::new(SessionContext::new(

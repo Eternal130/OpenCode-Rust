@@ -592,6 +592,14 @@ impl LocationPluginSource for HostPluginSource {
             .collect()
     }
 
+    /// PLUG-D35: plugin-registered skills (`ctx.skill.transform`) —
+    /// the engine seam merges them into every location's
+    /// `ConfigSkillTable`, so a bundled skill is listable and
+    /// `@skill`-usable exactly like v2's shared `Skill.Service` state.
+    fn skills(&self) -> Vec<Value> {
+        self.host.registrations().skills.iter().map(|skill| skill.info.clone()).collect()
+    }
+
     /// PLUG-D21: the guest's hook subscriptions (registration order).
     fn hooks(&self) -> Vec<PluginHookDef> {
         self.host
