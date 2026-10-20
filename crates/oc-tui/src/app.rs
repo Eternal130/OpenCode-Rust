@@ -8482,6 +8482,37 @@ fn ctrl_c_closes_the_dialog_then_exits_from_home() {
     assert!(app.exit_requested, "post-dismissal ctrl+c exits at home");
 }
 
+/// TUI-35 — the DIRTY-dialog arm of #32: one ctrl+c closes a dialog
+/// with filter text (the text clear is part of the close,
+/// `ui/dialog.tsx:115-156`), so the standard exit chord (ctrl+c,
+/// ctrl+c — `app.exit` keeps ctrl+c/ctrl+d, keybind.ts:131) can
+/// always tear the app down. The pre-fix clear-and-STAY shape spent
+/// the first press clearing, the second closing, and left no press
+/// to exit — the app could then never exit through a dirty dialog.
+#[test]
+fn ctrl_c_closes_a_dirty_dialog_in_one_press() {
+    let mut app = App::new((80, 24));
+    app.store.open_dialog(
+        crate::store::DialogKind::ServerList { command: "model.list", title: "Models" },
+        crate::store::DialogSize::Medium,
+    );
+    assert_eq!(app.store.focus(), crate::store::Focus::Dialog);
+    // Dirty the select's filter (printables feed it while focused).
+    for key in ["l", "o", "g"] {
+        app.press(key);
+    }
+    let filter_dirty =
+        app.store.dialogs().last().is_some_and(|entry| !entry.select.filter.is_empty());
+    assert!(filter_dirty, "the typed printables reached the filter");
+    // ONE ctrl+c: the dialog closes (filter discarded with it).
+    app.press("ctrl+c");
+    assert!(app.store.dialogs().is_empty(), "one ctrl+c closed the dirty dialog");
+    assert!(!app.exit_requested, "the close is still not an exit");
+    // The second press exits on the empty home composer.
+    app.press("ctrl+c");
+    assert!(app.exit_requested, "the chord's second ctrl+c exits");
+}
+
 /// #34 — a user-message block release opens the Message Actions
 /// select (`UserMessage`'s `onMouseUp` → `dialog.replace(DialogMessage)`,
 /// session/index.tsx:2243-2249); its options carry the four v2 actions.

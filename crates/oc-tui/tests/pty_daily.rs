@@ -1259,3 +1259,55 @@ fn session_filter_semantics() {
         },
     );
 }
+
+/// TUI-35 — the boot completes against a QUIET server (no SSE script
+/// armed, no prompt ever `POST`ed — the event stream never speaks) and
+/// the standard exit chord tears the app down THROUGH a dirty dialog
+/// filter. Pre-fix, the modal layer's ctrl+c arm cleared a non-empty
+/// filter but KEPT the dialog open, so the chord (clear → close →
+/// `<leader>q` = `session.queued_prompts`, never `app.exit`) could
+/// not exit: the harness wedged at its 90 s bound with the wordmark
+/// already painted and every chord key read — the
+/// `session_filter_semantics` CI red (run 39501153874). One ctrl+c
+/// must close the dialog (`ui/dialog.tsx:115-156` — the text clear is
+/// part of the close), leaving the chord's second press to exit on
+/// the empty prompt. The `run_tui` return IS the exit proof (the
+/// pre-fix tree times out here).
+#[test]
+fn tui35_exit_chord_through_dirty_dialog_on_quiet_server() {
+    run_daily_test(
+        "tui35-exit-chord",
+        80,
+        24,
+        |_, _| {},
+        |h| {
+            // Boot settles on the QUIET server: the connection's
+            // first cycle completes (subscribe + resync), the state
+            // reaches Connected, and the home wordmark paints.
+            if !h.wait_for(WORDMARK, Duration::from_secs(8)) {
+                return Err("the wordmark never rendered on the quiet server".to_owned());
+            }
+            // Open the sessions dialog and DIRTY its filter: type a
+            // query that keeps one row and drops the other, proving
+            // the filter text is live in the dialog.
+            h.write(b"\x18l");
+            if !h.wait_for(b"Alpha", Duration::from_secs(5)) {
+                return Err("the session dialog never listed Alpha".to_owned());
+            }
+            h.write(b"Alpha");
+            wait_grid(
+                h,
+                |g| {
+                    (0..g.rows).any(|row| g.row_text(row).contains("Alpha"))
+                        && (0..g.rows).all(|row| !g.row_text(row).contains("Long Session"))
+                },
+                Duration::from_secs(5),
+            )
+            .map_err(|error| format!("the filter never went dirty: {error}"))?;
+            // Leave the dialog OPEN + dirty — the harness's trailing
+            // exit chord must still terminate the app (see the test
+            // doc: this is the pre-fix wedge).
+            Ok(())
+        },
+    );
+}
