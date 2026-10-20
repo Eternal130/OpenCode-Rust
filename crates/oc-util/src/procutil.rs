@@ -13,6 +13,7 @@
 /// `/proc/<pid>/cmdline` contains one of `allowlist` substrings. The scan
 /// runs only while the leader has a `/proc` entry (zombies included — the
 /// caller is expected to still hold the unreaped `Child`).
+#[cfg(target_os = "linux")]
 pub fn signal_group_filtered(leader: u32, signal: i32, allowlist: &[&str]) -> usize {
     if std::fs::read_to_string(format!("/proc/{leader}/stat")).is_err() {
         return 0;
@@ -64,9 +65,26 @@ pub fn signal_group_filtered(leader: u32, signal: i32, allowlist: &[&str]) -> us
     delivered
 }
 
+#[cfg(target_os = "linux")]
 fn pidfd_open(pid: u32) -> Option<i32> {
     let pid = i32::try_from(pid).unwrap_or(-1);
     // SAFETY: plain syscall, integer args.
     let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
     i32::try_from(fd).ok().filter(|f| *f >= 0)
+}
+
+/// Non-Linux fallback for [`signal_group_filtered`]: does NOTHING and
+/// reports zero delivered signals.
+///
+/// The real implementation is a `/proc` scan that pins the group via the
+/// leader's live-or-zombie `/proc` entry and signals allowlisted members
+/// through `pidfd`s — all of that is Linux-only (`SYS_pidfd_open` /
+/// `SYS_pidfd_send_signal` do not exist in libc for other targets, and
+/// there is no `/proc` to scan). Per the incident-2026-10 rule this
+/// helper must never degrade into a blind group kill on a platform where
+/// its safety mechanism cannot run, so non-Linux callers get a
+/// deliberate no-op instead: no process is ever signalled.
+#[cfg(not(target_os = "linux"))]
+pub fn signal_group_filtered(_leader: u32, _signal: i32, _allowlist: &[&str]) -> usize {
+    0
 }
