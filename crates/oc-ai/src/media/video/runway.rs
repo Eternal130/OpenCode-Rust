@@ -294,6 +294,22 @@ impl QueuedProtocol for RunwayVideo {
         // their outputs, so cancel is active-only.
         Some(CancelSpec { method: "DELETE", active_only: true })
     }
+
+    fn encode_token(&self, token: &Token) -> Result<serde_json::Value, AiError> {
+        serde_json::to_value(token).map_err(|error| {
+            identity().frame_error("failed to encode the generation token", error.to_string())
+        })
+    }
+
+    fn decode_token(&self, raw: &serde_json::Value) -> Result<Token, AiError> {
+        serde_json::from_value(raw.clone()).map_err(|error| {
+            identity().frame_error("failed to decode the generation token", error.to_string())
+        })
+    }
+
+    fn cancel_path(&self, token: &Token) -> String {
+        format!("/v1/tasks/{}", token.task_id)
+    }
 }
 
 #[allow(dead_code)]

@@ -199,6 +199,10 @@ impl StreamProtocol for OpenAISpeech {
     ) -> Result<Vec<SpeechEvent>, AiError> {
         finish(state, context.body)
     }
+
+    fn step(&self, state: &mut Self::State, frame: &Frame) -> Result<Vec<SpeechEvent>, AiError> {
+        step(state, frame)
+    }
 }
 
 #[cfg(test)]

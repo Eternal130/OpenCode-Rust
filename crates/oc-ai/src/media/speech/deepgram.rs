@@ -7,7 +7,7 @@ use crate::media::body::{merge_records, Body, Query};
 use crate::media::model::{
     speech_field_present, Addressed, ResponseContext, SpeechEvent, SpeechRequest,
 };
-use crate::media::protocol::{Framing, Identity, MediaProtocolBase, StreamProtocol};
+use crate::media::protocol::{Frame, Framing, Identity, MediaProtocolBase, StreamProtocol};
 use crate::media::utils::speech_stream::PcmEncoding;
 use crate::media::utils::{query_from, speech_stream};
 use crate::schema::AiError;
@@ -254,6 +254,15 @@ impl StreamProtocol for DeepgramSpeech {
             .map(|(key, value)| (key.to_ascii_lowercase(), value.clone()))
             .collect();
         finish(state, &context.request.request, &headers)
+    }
+
+    fn step(&self, state: &mut Self::State, frame: &Frame) -> Result<Vec<SpeechEvent>, AiError> {
+        let bytes = match frame {
+            Frame::Bytes(bytes) => bytes.clone(),
+            Frame::Text(text) => text.as_bytes().to_vec(),
+            Frame::Document { document, .. } => document.as_bytes().to_vec(),
+        };
+        Ok(speech_stream::delta(state, bytes))
     }
 }
 
