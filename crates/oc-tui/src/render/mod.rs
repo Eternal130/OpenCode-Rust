@@ -5,6 +5,7 @@
 pub mod ansi;
 pub mod color_mode;
 pub mod frame;
+pub mod latex;
 pub mod paint;
 
 pub use ansi::serialize_canonical;
