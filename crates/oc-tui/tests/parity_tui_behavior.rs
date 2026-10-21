@@ -426,6 +426,61 @@ fn prompt_autosubmit_ready() {
     app.maybe_submit_startup_prompt();
 }
 
+/// TUI-TD28 — the plugin-route fallback screen
+/// (component/plugin-route-missing.tsx:3-21): when the host has no
+/// registered route `{id}/{name}` the page renders the warning line +
+/// the "go home" button, and the button's release navigates home
+/// (`onHome={() => route.navigate({type:"home"})}`).
+#[test]
+fn pluginroutemis() {
+    use crossterm::event::{MouseButton, KeyEventKind, MouseEvent, MouseEventKind};
+    use oc_tui::app::App;
+
+    let theme = oc_tui::theme::ThemeState::v2_dark();
+    let mut app = App::new((80, 24));
+
+    // An unregistered route opens (the guest's navigate) and the
+    // bounded render replies miss → the page flags missing.
+    app.store.open_plugin_route("omo", "stats", None);
+    app.store.mark_plugin_route_missing();
+    let page = app.store.plugin_route_page().expect("the page stays open");
+    assert!(page.missing, "the miss latches the fallback state");
+
+    // The fallback frame: the warning line + the go-home button.
+    let frame = oc_tui::components::plugin_page::render_plugin_route_missing(
+        "omo",
+        "stats",
+        &theme.styles(),
+        (80, 24),
+        &mut Vec::new(),
+    );
+    let text = frame.text_grid().join("\n");
+    assert!(text.contains("Unknown plugin route: omo/stats"), "the warning line");
+    assert!(text.contains("go home"), "the button");
+
+    // The button's hit rect: centered, the release navigates home and
+    // closes the page (v2's onHome).
+    let mut hits = Vec::new();
+    let _ = oc_tui::components::plugin_page::render_plugin_route_missing(
+        "omo",
+        "stats",
+        &theme.styles(),
+        (80, 24),
+        &mut hits,
+    );
+    assert_eq!(hits.len(), 1, "the go-home button recorded its hit rect");
+    let (hx, hy) = (hits[0].0, hits[0].1);
+    app.mouse_event(&MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: u16::try_from(hx + 1).unwrap(),
+        row: u16::try_from(hy).unwrap(),
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    });
+    assert!(matches!(app.store.route(), oc_tui::store::Route::Home));
+    assert!(app.store.plugin_route_page().is_none(), "the page closed");
+    let _ = (KeyEventKind::Press,);
+}
+
 /// TUI-10 (the diff half): a working-tree image file renders the
 /// inline `DiffViewerImage` — the "Working tree preview" label, the
 /// decoded `WxH` size row, the blocks pixels — and the mount records

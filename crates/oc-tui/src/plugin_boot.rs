@@ -541,8 +541,13 @@ impl TuiPluginRuntime {
         if store.plugin_route_page().is_none() {
             return;
         }
-        if let Ok(spec) = content {
-            store.set_plugin_route_content(&spec.title, spec.rows);
+        match content {
+            Ok(spec) => store.set_plugin_route_content(&spec.title, spec.rows),
+            // TUI-TD28: the bounded render replied miss — no
+            // registered route `{plugin}/{name}` (v2's
+            // `plugins.route(id, name)` undefined → the
+            // `PluginRouteMissing` fallback).
+            Err(_) => store.mark_plugin_route_missing(),
         }
     }
     /// The per-pump UI-request drain: every queued plugin UI request
