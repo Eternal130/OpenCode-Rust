@@ -45,6 +45,10 @@ tokio-tungstenite = { version = "0.24", default-features = false, features = [
     "handshake",
 ] }
 futures = "0.3"
+# SURF-LATEX-MERMAID: grapheme segmentation for the LaTeX/mermaid text
+# measurement (upstream uses Intl.Segmenter / string-width). Already a
+# lock entry via ratatui — no new packages.
+unicode-segmentation = "1"
 # Lane M1 (换血 pilot): the opentui trio moves from dev-dependencies
 # to REAL dependencies — session_tabs_solid renders the tab strip on
 # opentui-solid behind OC_TABS_OPENTUI=1 (default off; the hand-rolled
