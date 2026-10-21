@@ -10,6 +10,10 @@ verified / accepted(ADR) / duplicate，直到 docs/PARITY-LOOP.md §12 退出条
 BATCH_HANDOFF / PARITY_LOOP_DONE / PARITY_LOOP_BLOCKED），不要加引号或修饰。
 跨会话交接完全依赖 docs/parity-loop-state.md + docs/parity-ledger.jsonl + git worktrees，
 不要依赖会话记忆。
+本会话是无人值守的：**没有人在看，永远不要向用户提问、等待答复或征询确认**。
+任何"需要用户决策"的事项，直接输出 PARITY_LOOP_BLOCKED: <原因> 并停止——
+这包括但不限于：live window/凭据申请、范围裁定、模型/渠道选择疑问。
+"先问一下再继续"是违规；正确动作要么是按保守默认继续并记录，要么是 BLOCKED。
 
 ====================
 0a. 首轮恢复序列（只在会话首轮做，完成后进入 0b）
