@@ -128,7 +128,7 @@ def main() -> int:
             except OSError:
                 pass
     try:
-        os.killpg(os.getpgid(pid), signal.SIGKILL)
+        os.killpg(os.getpgid(pid), signal.SIGKILL)  # own pty.fork() child (own session) — allowed pattern
     except Exception:
         pass
     try:

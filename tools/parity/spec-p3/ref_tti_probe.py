@@ -62,7 +62,7 @@ def run_once(idx, total_window=90):
         if probed:
             break
     try:
-        os.killpg(os.getpgid(pid), signal.SIGKILL)
+        os.killpg(os.getpgid(pid), signal.SIGKILL)  # own pty.fork() child (own session) — allowed pattern
     except Exception:
         pass
     try:
@@ -80,8 +80,6 @@ if __name__ == "__main__":
     n = int(sys.argv[1]) if len(sys.argv) > 1 else 3
     results = []
     for i in range(n):
-        subprocess.run(["pkill","-9","-f","opencode/ref/packages"], capture_output=True)
-        subprocess.run(["pkill","-9","-f","ref/packages/server"], capture_output=True)
         time.sleep(1.0)
         r = run_once(i)
         results.append(r)
