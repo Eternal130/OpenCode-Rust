@@ -481,6 +481,79 @@ fn pluginroutemis() {
     let _ = (KeyEventKind::Press,);
 }
 
+/// TUI-30 — the SessionLocationMissing recovery screen
+/// (routes/session/location-missing.tsx): when the location worker's
+/// error directory matches the routed session's `location.directory`,
+/// the question replaces the prompt mount; `return` runs the single
+/// recovery action (→ DialogWorkspaces); clearing the error restores
+/// the composer.
+#[test]
+fn sessionlocatio_location() {
+    use oc_tui::app::App;
+    use oc_tui::data::{Ingest, SessionSnapshot};
+
+    let mut app = App::new((100, 30));
+    let theme = oc_tui::theme::ThemeState::v2_dark();
+    app.store.ingest_all([Ingest::Resync {
+        sessions: vec![SessionSnapshot {
+            id: "s1".to_owned(),
+            directory: Some("/gone/dir".to_owned()),
+            ..SessionSnapshot::default()
+        }],
+        unread: Vec::new(),
+        messages: Vec::new(),
+        cursors: Vec::new(),
+        permissions: Vec::new(),
+        forms: Vec::new(),
+    }]);
+    app.store.select_tab("s1");
+    assert!(
+        app.store.session_location_missing("s1").is_none(),
+        "no error recorded yet: the composer owns the mount"
+    );
+
+    // The location worker reports the failed directory.
+    app.store.set_location_error(Some("/gone/dir".to_owned()));
+    assert_eq!(
+        app.store.session_location_missing("s1").as_deref(),
+        Some("/gone/dir"),
+        "the routed session's directory matches the error"
+    );
+
+    // The question surface replaces the prompt mount.
+    let frame = oc_tui::components::session::render_session(
+        &app.store,
+        "s1",
+        &theme.styles(),
+        (100, 30),
+    );
+    let text = frame.text_grid().join("\n");
+    assert!(text.contains("Session location unavailable"), "the question title");
+    assert!(text.contains("/gone/dir"), "the failed directory");
+    assert!(text.contains("Choose another directory to continue this session."));
+    assert!(text.contains("Recovery actions"));
+    assert!(text.contains("Choose directory"), "the single recovery action");
+
+    // `return` selects the action: the Workspaces dialog opens (the
+    // session.move surface whose selection relocations the session).
+    app.press("return");
+    assert!(
+        matches!(app.store.top_dialog().map(|entry| entry.kind), Some(oc_tui::store::DialogKind::Worktrees)),
+        "the recovery action opens DialogWorkspaces"
+    );
+
+    // A resolved location clears the mount (the composer returns).
+    app.store.set_location_error(None);
+    let frame = oc_tui::components::session::render_session(
+        &app.store,
+        "s1",
+        &theme.styles(),
+        (100, 30),
+    );
+    let text = frame.text_grid().join("\n");
+    assert!(!text.contains("Session location unavailable"));
+}
+
 /// TUI-10 (the diff half): a working-tree image file renders the
 /// inline `DiffViewerImage` — the "Working tree preview" label, the
 /// decoded `WxH` size row, the blocks pixels — and the mount records

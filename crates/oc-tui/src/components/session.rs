@@ -354,6 +354,23 @@ pub fn render_session(
             crate::components::subagent_picker::PANEL_ROWS,
             None,
         )
+    } else if let Some(directory) = store.session_location_missing(session_id) {
+        // TUI-30 — the SessionLocationMissing question REPLACES the
+        // prompt mount (index.tsx:1484-1496's `<Switch>` arm sits
+        // above `<Prompt>`): the failed directory's recovery screen
+        // owns the composer's dock region.
+        (
+            crate::components::location_missing::render_location_missing(
+                &directory,
+                &theme.styles(),
+                column - inset,
+            ),
+            // The question IS the mount: `prompt_height` docks it at
+            // `height − rows` like the composer (the paste anchor).
+            crate::components::location_missing::LOCATION_MISSING_ROWS,
+            crate::components::location_missing::LOCATION_MISSING_ROWS,
+            None,
+        )
     } else {
         composer_mount_frame(store, session_id, &theme, column - inset, content_width, height)
     };
