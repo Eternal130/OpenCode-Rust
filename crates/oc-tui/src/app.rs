@@ -85,6 +85,13 @@ const FOOTER_PANEL_MOUNT_HEIGHT: usize = 17;
 #[allow(clippy::struct_excessive_bools)] // the pump's mode flags grew one per lane
 pub struct App {
     pub store: Store,
+    /// TUI-16 — the mouse text-selection state machine
+    /// (util/selection.ts's cell model).
+    pub screen_selection: crate::selection::ScreenSelection,
+    /// TUI-16 — the last drawn frame (the selection's text source).
+    pub last_frame: Option<crate::render::Frame>,
+    /// TUI-16 — `terminal.copy` (select/manual).
+    copy_behavior: crate::config::CopyBehavior,
     keymap: Keymap,
     clock: ManualClock,
     dispatcher: StoreDispatcher,
@@ -166,6 +173,9 @@ impl App {
         store.set_prompt_viewport_width(prompt_text_width(usize::from(size.0)));
         Self {
             store,
+            screen_selection: crate::selection::ScreenSelection::default(),
+            last_frame: None,
+            copy_behavior: crate::config::CopyBehavior::default(),
             keymap: Keymap::new(),
             clock: ManualClock::default(),
             dispatcher: StoreDispatcher,
@@ -227,6 +237,9 @@ impl App {
     /// theme name/mode applies, and the keybind overrides merge into
     /// the live keymap.
     pub fn apply_config(&mut self, config: &crate::config::TuiConfig, mode_hint: Mode) {
+        // TUI-16 — `terminal.copy` (app.tsx:546-547): the selection's
+        // copy-on-release gate.
+        self.copy_behavior = config.terminal_copy;
         // Attention (R-06): the resolved sounds/notifications config
         // reaches the engine on boot AND every reload.
         self.store.set_attention_config(config.attention.clone());
@@ -352,6 +365,25 @@ impl App {
         );
         self.store.set_composer(&key, &composer);
         self.keymap.clear_pending();
+    }
+
+    /// TUI-16 — copy the selection's text (`copy`, selection.ts:
+    /// 62-98 → `clipboard.write` + the `Copied to clipboard` info
+    /// toast, app.tsx:564-571).
+    fn copy_selection(&mut self, rect: crate::selection::SelectionRect) {
+        let Some(frame) = self.last_frame.clone() else { return };
+        let text = crate::selection::selected_text(&frame, rect);
+        if text.is_empty() {
+            return;
+        }
+        if self.store.clipboard_write(&text).is_ok() {
+            self.store.toast_show(crate::components::toast::ToastOptions {
+                title: None,
+                message: "Copied to clipboard".to_owned(),
+                variant: "info",
+                ..crate::components::toast::ToastOptions::info("")
+            });
+        }
     }
 
     /// One terminal mouse event (beta.8 bugs 3 + 4). v2's tab strip
@@ -484,6 +516,14 @@ impl App {
                     })
                     && !self.permission_live();
                 let changed_location = self.store.set_location_hovered(location_hover);
+                // TUI-12 — the live segment's hover lift (same route
+                // gate: the rect belongs to the session render).
+                let live_hover = matches!(self.store.route(), Route::Session { .. })
+                    && self.store.footer_live_hit().is_some_and(|hit| {
+                        row == hit.row && col >= hit.x && col < hit.x + hit.width
+                    })
+                    && !self.permission_live();
+                let changed_live = self.store.set_live_hovered(live_hover);
                 let (hover, close, add) = if strip_live && row == 0 {
                     self.strip_hover_at(col, width)
                 } else {
@@ -491,11 +531,29 @@ impl App {
                 };
                 let changed = self.store.set_tab_hover(hover.as_deref(), close);
                 let changed_add = self.store.set_tab_add_hovered(add);
-                if changed || changed_add || changed_location {
+                if changed || changed_add || changed_location || changed_live {
                     self.store.request_redraw();
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => {
+                // TUI-16 — the drag release resolves the screen
+                // selection: `terminal.copy = "select"` writes the
+                // text with the Copied toast (copyOnSelectRelease,
+                // util/selection.ts:44-60 + app.tsx:546-571); a
+                // resolved drag ALSO suppresses the click beneath it
+                // (the renderer's selection consumes the release).
+                if let Some(rect) = self.screen_selection.release() {
+                    if self.copy_behavior == crate::config::CopyBehavior::Select {
+                        self.copy_selection(rect);
+                        // Copy-on-select ends the selection with the
+                        // release (the renderer's drag ends; the
+                        // retained selection is MANUAL mode's wait
+                        // for an explicit copy).
+                        self.screen_selection.clear();
+                    }
+                    self.store.request_redraw();
+                    return;
+                }
                 // A modal dialog's option rows submit on release
                 // (`dialog-select.tsx:768-773`: mousedown moved the
                 // selection, mouseup fires `onSelect`); the backdrop
@@ -797,6 +855,16 @@ impl App {
                 // v2's label unmounts with the route, so a stale
                 // rect must never fire on Home.
                 if !self.permission_live() && matches!(self.store.route(), Route::Session { .. }) {
+                    // TUI-12 — the live segment's release dispatches
+                    // `session.child.first` (footer.tsx:71's
+                    // `onMouseUp` — the subagent picker's toggle).
+                    if let Some(hit) = self.store.footer_live_hit() {
+                        if row == hit.row && col >= hit.x && col < hit.x + hit.width {
+                            self.store.toggle_picker();
+                            self.store.request_redraw();
+                            return;
+                        }
+                    }
                     if let Some(hit) = self.store.footer_location_hit() {
                         if row == hit.row && col >= hit.x && col < hit.x + hit.width {
                             self.store.open_dialog(
@@ -981,6 +1049,10 @@ impl App {
                 }
             }
             MouseEventKind::Down(MouseButton::Left) => {
+                // TUI-16 — every left press arms a potential screen
+                // selection (the renderer's cell model; the release
+                // only resolves one when the pointer crossed cells).
+                self.screen_selection.press(col, row);
                 // TUI-3 — the rail's handle press arms the resize
                 // (`onMouseDown`, pane-resize.ts:82-97); the boundary
                 // double-click (<300 ms) resets the rail to the
@@ -1044,6 +1116,12 @@ impl App {
                 }
             }
             MouseEventKind::Drag(MouseButton::Left) => {
+                // TUI-16 — the drag extends the screen selection
+                // (unless a UI drag — the rail resize or the tab
+                // reorder — owns the pointer).
+                if self.rail_resizing.is_none() && self.strip_drag.is_none() {
+                    self.screen_selection.drag(col, row);
+                }
                 // TUI-3 — the rail's resize drag (`onMouseDrag`,
                 // pane-resize.ts:99-105): the preferred width follows
                 // `event.x + 1`, clamped; the release commits.
@@ -1380,6 +1458,35 @@ impl App {
         if self.error_mode.is_some() {
             self.exit_requested = true;
             return;
+        }
+        // TUI-16 — the selection's priority-101 intercept
+        // (`handleSelectionKey`, app.tsx:551-558 + selection.ts:
+        // 62-98): over a LIVE (retained manual-mode) selection,
+        // ctrl+c/ctrl+y copy, escape clears, any other stroke clears
+        // and passes through.
+        if self.screen_selection.is_active() {
+            match crate::selection::selection_key_action(
+                spec,
+                self.copy_behavior == crate::config::CopyBehavior::Select,
+            ) {
+                crate::selection::SelectionKeyAction::CopyAndConsume => {
+                    if let Some(rect) = self.screen_selection.rect() {
+                        self.copy_selection(rect);
+                    }
+                    self.screen_selection.clear();
+                    self.keymap.clear_pending();
+                    return;
+                }
+                crate::selection::SelectionKeyAction::ClearAndConsume => {
+                    self.screen_selection.clear();
+                    self.keymap.clear_pending();
+                    return;
+                }
+                crate::selection::SelectionKeyAction::ClearAndPass => {
+                    self.screen_selection.clear();
+                }
+                crate::selection::SelectionKeyAction::Pass => {}
+            }
         }
         self.maybe_remerge_keybinds();
         let lowered = spec.to_ascii_lowercase();
@@ -2185,7 +2292,9 @@ impl App {
         // 2. The managed textarea layer: with text present, keys the
         //    composer owns feed it before the base keymap sees them
         //    (printables never leak into leader continuations).
-        if !draft_empty {
+        if !draft_empty
+            || self.store.composer_mode(&key) == crate::components::composer::ComposerMode::Shell
+        {
             if let Some(key_event) = composer_key(stroke) {
                 let mut composer = self.store.composer(&key);
                 let outcome = composer.handle_key(&key_event);
@@ -2433,9 +2542,35 @@ impl App {
     /// (v2 `onSelect: command.run`) dispatches through the command
     /// seam — `/help` opens the help dialog, `/exit` exits, `/editor`
     /// opens $EDITOR — never a prompt submission.
+    /// TUI-15 — attach the pending editor context to a submit
+    /// (index.tsx:1151-1152): a PENDING selection (not yet sent)
+    /// joins the prompt as its `editor_context` text and flips the
+    /// label to sent.
+    fn attach_editor_context(
+        &self,
+        key: &str,
+        mut prompt: crate::components::composer::SubmittedPrompt,
+    ) -> crate::components::composer::SubmittedPrompt {
+        if let Route::Session { .. } = self.store.route() {
+            if let (true, Some(selection)) =
+                (self.store.editor_label_pending().unwrap_or(false), self.store.editor_context())
+            {
+                prompt.editor_context = Some(crate::editor_zed::format_editor_context(&selection));
+                self.store.editor_mark_sent();
+            }
+        }
+        let _ = key;
+        prompt
+    }
+
     fn handle_composer_outcome(&mut self, key: &str, outcome: KeyOutcome) {
         match outcome {
             KeyOutcome::Submitted(prompt) => {
+                // TUI-15 — the pending editor context rides the
+                // submit (index.tsx:1151-1152,1339-1344): the sink's
+                // synthetic POST precedes the prompt, then the label
+                // flips to sent (`markSelectionSent`, :1371).
+                let prompt = self.attach_editor_context(key, prompt);
                 // `argumentSlash` (prompt/index.tsx:1133-1146): the
                 // argument-taking slash heads (`/cd`, `/rename` —
                 // `slash: { arguments: true }`) intercept the submit
@@ -2461,6 +2596,12 @@ impl App {
                     return;
                 }
                 self.store.forward_submission(key, &prompt);
+            }
+            // TUI-14 — the shell-mode submit: the text routes through
+            // `session.shell` (POST /api/session/:id/shell), never the
+            // model prompt (prompt/index.tsx:1303-1307).
+            KeyOutcome::ShellCommand(command) => {
+                self.store.send_shell_command(key, &command);
             }
             KeyOutcome::Command(command) => {
                 let dispatch = self.dispatcher.dispatch(&self.store, command, None);
@@ -2779,7 +2920,7 @@ fn footer_panel_frame(
     let session_agent = store.selection_for(&active).agent;
 
     match route {
-        PromptRoute::Composer => None,
+        PromptRoute::Composer | PromptRoute::Subagent => None,
         PromptRoute::Model => Some(model_panel_frame(
             &store.server_lists(),
             session_selection
@@ -3250,6 +3391,38 @@ fn configured_model_from_entries(
     }
 }
 
+/// TUI-15 — the Zed selection poll (`scheduleZedPoll`, editor.ts:
+/// 284-288: a 1 s reconnect cadence while no editor socket exists).
+/// A dedicated THREAD (sqlite reads are blocking); it stops when the
+/// receiver drops (the run loop ends). Returns `None` when the gate
+/// is off (`ZED_TERM`/`TERM_PROGRAM`, editor.ts:121-123) or no db
+/// resolves (`resolveZedDbPath`).
+#[must_use]
+pub fn spawn_zed_poll() -> Option<std::sync::mpsc::Receiver<crate::editor_zed::ZedSelectionResult>>
+{
+    if !crate::editor_zed::zed_terminal_active(
+        std::env::var("ZED_TERM").ok().as_deref(),
+        std::env::var("TERM_PROGRAM").ok().as_deref(),
+    ) {
+        return None;
+    }
+    let db_path = crate::editor_zed::resolve_zed_db_path(
+        std::env::var("OPENCODE_ZED_DB").ok().as_deref(),
+        std::env::var("HOME").ok().as_deref(),
+        std::path::Path::is_file,
+    )?;
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || loop {
+        let result = crate::editor_zed::resolve_zed_selection(&db_path, &cwd);
+        if tx.send(result).is_err() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    });
+    Some(rx)
+}
+
 #[must_use]
 // The boot fetch chain (one block per list — the SURF-1 mcp.list hop
 // pushed it past the budget).
@@ -3633,6 +3806,7 @@ impl crate::components::composer::PromptSink for HttpPromptSink {
             _ => Some(oc_client::types::SessionInboxDelivery::Steer),
         };
         let inbox_id = prompt.inbox_id.clone();
+        let editor_context = prompt.editor_context.clone();
         tokio::spawn(async move {
             let target = if session_key == HOME_PROMPT_KEY {
                 // Home submission: create the session first.
@@ -3670,18 +3844,26 @@ impl crate::components::composer::PromptSink for HttpPromptSink {
             // still attempts, matching the reference's catch-less path
             // only when no model resolved).
             if let Some(model) = model {
-                let body = oc_client::types::SessionSwitchModelBody {
-                    model: oc_client::types::ModelRef {
-                        id: model.model_id.clone(),
-                        provider_id: model.provider_id.clone(),
-                        variant: model.variant.clone(),
-                    },
-                };
-                if let Err(error) = client.session().switch_model(&target, &body).await {
+                if let Err(error) = commit_model_selection(&client, &target, &model).await {
                     let _ = events.send(PromptSinkEvent::SendFailed {
                         session_key,
                         title: "Failed to switch model".to_owned(),
                         message: client_error_message(&error),
+                        draft: text,
+                    });
+                    return;
+                }
+            }
+            // TUI-15 — the pending editor context admits FIRST
+            // (`session.synthetic`, index.tsx:1339-1346): the context
+            // precedes the user prompt in the session's inbox; a
+            // failure surfaces as the send failure.
+            if let Some(editor_context) = editor_context {
+                if !send_editor_context(&client, &target, &editor_context).await {
+                    let _ = events.send(PromptSinkEvent::SendFailed {
+                        session_key,
+                        title: "Failed to send editor context".to_owned(),
+                        message: "the synthetic context POST failed".to_owned(),
                         draft: text,
                     });
                     return;
@@ -3706,11 +3888,58 @@ impl crate::components::composer::PromptSink for HttpPromptSink {
             }
         });
     }
+
+    /// TUI-14 — the shell-mode submit (`client.api.session.shell`,
+    /// prompt/index.tsx:1303-1307): POST /api/session/:id/shell with
+    /// the client-minted inbox id + the command; a 204 means accepted
+    /// (the SSE echo drives the transcript from there).
+    fn send_shell(&self, session_id: &str, command: &str) {
+        let client = self.client.clone();
+        let target = session_id.to_owned();
+        let command = command.to_owned();
+        let inbox_id = uuid::Uuid::new_v4().to_string();
+        tokio::spawn(async move {
+            let body = oc_client::types::SessionShellBody { command, id: Some(inbox_id) };
+            if let Err(error) = client.session().shell(&target, &body).await {
+                crate::keymap::log_skip(&format!("session shell {target}: {error}"));
+            }
+        });
+    }
 }
 
 /// `errorMessage` (util/error.ts): the client error's message text.
 fn client_error_message(error: &oc_client::ClientError) -> String {
     error.to_string()
+}
+
+/// TUI-15 — the editor context's synthetic POST (index.tsx:1339-1346):
+/// `session.synthetic {text, resume: false}` — `false` = the failure
+/// surfaces to the caller (the send failure path).
+async fn send_editor_context(client: &oc_client::Client, target: &str, text: &str) -> bool {
+    let body = oc_client::types::SessionSyntheticBody {
+        text: text.to_owned(),
+        resume: Some(false),
+        ..oc_client::types::SessionSyntheticBody::default()
+    };
+    client.session().synthetic(target, &body).await.is_ok()
+}
+
+/// `commitModel`'s POST (prompt/index.tsx:1283-1294):
+/// `session.switchModel` — the resolved selection commits before the
+/// prompt fires.
+async fn commit_model_selection(
+    client: &oc_client::Client,
+    target: &str,
+    model: &crate::store::ModelSelection,
+) -> Result<(), oc_client::ClientError> {
+    let body = oc_client::types::SessionSwitchModelBody {
+        model: oc_client::types::ModelRef {
+            id: model.model_id.clone(),
+            provider_id: model.provider_id.clone(),
+            variant: model.variant.clone(),
+        },
+    };
+    client.session().switch_model(target, &body).await.map(drop)
 }
 
 /// Apply one [`PromptSinkEvent::SendFailed`] to the store: the error
@@ -5940,6 +6169,10 @@ pub async fn run_with_size(
     // Server-backed picker lists (model/provider/agent).
     let (mut list_rx, lists_task) = spawn_server_lists(client.clone());
 
+    // TUI-15 — the Zed selection poll (None when the gate is off or
+    // no db resolves — the common non-Zed case stays untouched).
+    let mut zed_rx = spawn_zed_poll();
+
     // The Worktrees dialog's worker (R-05): boot resolves the project
     // + list; dialog actions flow through the sink.
     let (worktree_tx, mut worktree_rx) = spawn_worktree_worker(
@@ -6437,6 +6670,13 @@ pub async fn run_with_size(
             let mut out = std::io::stdout();
             let _ = out.write_all(b"\x07");
             let _ = out.flush();
+        }
+        // TUI-15 — fold the Zed poll's latest selection into the
+        // editor-context state (the label + the submit attach).
+        if let Some(zed_rx) = zed_rx.as_mut() {
+            while let Ok(result) = zed_rx.try_recv() {
+                app.store.apply_zed_selection(result);
+            }
         }
         // Drain the server-list fetches into the picker state.
         while let Ok(event) = list_rx.try_recv() {
@@ -7170,6 +7410,9 @@ pub async fn run_with_size(
                     }
                 }
             };
+            // TUI-16 — the frame is the mouse selection's text source
+            // (a clone per draw; the selection reads it on release).
+            app.last_frame = Some(frame.clone());
             // S0 parity: degrade RGB → xterm-256 indices at the
             // terminal-draw seam when the raster-level capability
             // probe says the terminal is 256-color (v2's raster does

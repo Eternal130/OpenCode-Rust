@@ -507,6 +507,19 @@ pub fn paint_solid_home_view(
             interrupt: String::new(),
             usage: String::new(),
             location_hovered: view.location_hovered,
+            // TUI-12 — the live segment is session-scoped (the home
+            // composer has no session family/shells to count).
+            live: String::new(),
+            live_shortcut: String::new(),
+            live_hovered: false,
+            // TUI-14 — the home composer's shell mode (the `!` prefix
+            // works there too; home.tsx:20-23 carries the shell
+            // placeholder pool).
+            shell: view.shell_mode,
+            // TUI-15 — the editor file label paints on home too
+            // (the selection attach precedes the session create).
+            editor_file: view.editor_file.clone(),
+            editor_file_pending: view.editor_file_pending,
         },
         metadata: view.metadata.clone(),
         terminal_width: width,
@@ -623,6 +636,9 @@ mod tests {
             location: String::new(),
             directory: String::new(),
             location_hovered: false,
+            shell_mode: false,
+            editor_file: String::new(),
+            editor_file_pending: false,
             version: scenario.version.clone(),
             metadata: crate::components::composer::render::MetadataLine::default(),
             plugin_hints: Vec::new(),

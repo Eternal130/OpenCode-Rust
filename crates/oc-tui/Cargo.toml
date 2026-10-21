@@ -27,6 +27,10 @@ taffy = { version = "0.9", default-features = false, features = ["std", "flexbox
 crossterm = "0.28"
 unicode-width = "0.2"
 uuid = { version = "1", features = ["v4"] }
+# TUI-15 (lane-tui): Zed's editor-context sqlite, READ-ONLY — the same
+# version + bundled feature oc-core already builds (feature unification
+# reuses the lock's libsqlite3-sys; no new packages).
+rusqlite = { version = "0.32", features = ["bundled"] }
 # TUI-4 (lane-tui2): the embedded TerminalPane's VT emulator. Already
 # a lock entry (the PTY test harness's parser) — the pane promotes it
 # to a real dependency; no new packages enter the lock.
@@ -65,6 +69,9 @@ opentui-keymap = { workspace = true }
 parity = { path = "../../tools/parity" }
 tokio = { workspace = true }
 oc-plugin-host = { workspace = true }
+# TUI-15: the pty proof's Zed sqlite fixture writer (same version +
+# features as the lib's real dependency — no new lock entries).
+rusqlite = { version = "0.32", features = ["bundled"] }
 # Cell-grid stream harness (tests/vt_harness.rs): parses the PTY's raw
 # ANSI byte stream into styled cell grids over time. Pinned to 0.15:
 # vt100 0.16 pulls unicode-width ^0.2.1, which cannot unify with
