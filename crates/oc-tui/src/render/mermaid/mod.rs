@@ -36,6 +36,7 @@
 pub mod core;
 pub mod diagnostics;
 pub mod flowchart;
+pub mod gitgraph;
 pub mod palette;
 pub mod sequence;
 pub mod state;
@@ -61,7 +62,10 @@ pub fn detect_mermaid_diagram(content: &str) -> Option<MermaidDiagramKind> {
     if state::is_mermaid_state_diagram(content) {
         return Some(MermaidDiagramKind::State);
     }
-    // gitgraph/gantt/timeline stay on the default code-block render.
+    if gitgraph::is_mermaid_git_graph_diagram(content) {
+        return Some(MermaidDiagramKind::GitGraph);
+    }
+    // gantt/timeline stay on the default code-block render.
     None
 }
 
@@ -156,8 +160,47 @@ fn prepare_diagram(
                 styled_rows_state(&grid, &|style| colors.color(style), palette.label_background);
             Ok(RenderedDiagram { kind, rows })
         }
+        MermaidDiagramKind::GitGraph => {
+            let diagram = gitgraph::parse_mermaid_git_graph_diagram(source)?;
+            let grid = gitgraph::draw_git_graph_diagram_grid(
+                &diagram,
+                &gitgraph::GitGraphRenderOptions::default(),
+            );
+            let colors = gitgraph::resolve_git_graph_style_colors(gitgraph::GitGraphColorInput {
+                primary: Some(palette.primary),
+                secondary: Some(palette.secondary),
+                muted: Some(palette.muted),
+                warning: Some(palette.warning),
+                text: Some(palette.text),
+            });
+            let rows = styled_rows_trim_bottom(&grid, &|style| colors.color(style));
+            Ok(RenderedDiagram { kind, rows })
+        }
         _ => Err(MermaidError::Unsupported),
     }
+}
+
+/// `renderGitGraphGridStyledText` — `toString({ trimBottom: true })`
+/// row split (git graphs trim only the bottom).
+fn styled_rows_trim_bottom<S: Copy + PartialEq>(
+    grid: &DiagramCanvas<S>,
+    colors: &dyn Fn(Option<S>) -> Option<Rgba>,
+) -> Vec<Vec<DiagramSpan>> {
+    let mut rows: Vec<Vec<DiagramSpan>> = Vec::new();
+    let mut current: Vec<DiagramSpan> = Vec::new();
+    grid.for_each_run(TextOptions { trim_top: false, trim_bottom: true }, &mut |run| match run {
+        Some(run) => current.push(DiagramSpan {
+            text: run.text,
+            fg: colors(run.style),
+            bg: None,
+            attributes: run.attributes.unwrap_or(0),
+        }),
+        None => rows.push(std::mem::take(&mut current)),
+    });
+    if !current.is_empty() || rows.is_empty() {
+        rows.push(current);
+    }
+    rows
 }
 
 /// The renderer's failure modes (upstream catches
