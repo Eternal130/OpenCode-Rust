@@ -24,7 +24,11 @@
 //!   context, exactly v2's per-request `executeTool` closure);
 //! * **`/api/plugin`** — [`PluginBoot::list_info`] renders the loaded
 //!   plugins (id, source, status incl. resolution failures and
-//!   crash-disabled entries) in v2's `Plugin.Info` shape.
+//!   crash-disabled entries) in v2's `Plugin.Info` shape;
+//! * **`ctx.event.subscribe`** — PLUG-D13: one bus listener forwards
+//!   every public (server+rpc) event into the host's broadcast tap, so
+//!   plugin event subscriptions see the same stream the SSE feed serves
+//!   (v2 host.ts:255-265 — headless boots included).
 //!
 //! Boot ordering (the boot module's ready-race rule): the host starts
 //! and its registration pass SETTLES before `Engine::boot`, the
@@ -884,6 +888,32 @@ impl EngineSessionPort {
         self.call_inner(method, args).await
     }
 
+    /// PLUG-D13: the serve-mode event source for `ctx.event.subscribe`.
+    ///
+    /// v2 (host.ts:255-265) wires `ctx.event.subscribe` onto the process
+    /// bus, filtered to `EventManifest.isServer(event) || isRpcEvent(event)`
+    /// — the same predicate the SSE feed applies (`sse::is_public_event`).
+    /// The Rust port's ONLY feed into the guest's dispatch pump is the
+    /// host's [`BroadcastTap`]; the TUI store publishes into it after its
+    /// reducer runs, but serve mode had no publisher at all — the tap was
+    /// live yet nothing fed it, so every plugin subscription starved.
+    ///
+    /// This attaches one bus listener (non-blocking `try_send` semantics;
+    /// a slow guest drops events with one log line, never stalling the
+    /// publish path) for the lifetime of the process: the guard is
+    /// deliberately kept alive past this port (the bus, the host, and the
+    /// server share the process lifetime; after a host death the tap's
+    /// channel is closed and publishes degrade to logged no-ops).
+    pub fn attach_event_tap(&self) {
+        let Some(host) = &self.host else { return };
+        let tap = host.tap();
+        if !tap.is_live() {
+            return;
+        }
+        let forwarder: oc_core::bus::Listener = forward_public_events(tap);
+        std::mem::forget(self.engine.bus.listen(forwarder));
+    }
+
     #[allow(clippy::too_many_lines)] // the v2 SessionDomain dispatch (one arm per method)
     async fn call_inner(&self, method: &str, args: &Value) -> Result<Value, String> {
         let session_id = args.get("sessionID").and_then(Value::as_str).unwrap_or_default();
@@ -1217,6 +1247,24 @@ impl EngineSessionPort {
     }
 }
 
+/// The bus listener body behind [`EngineSessionPort::attach_event_tap`]
+/// (PLUG-D13): one public event → one [`oc_plugin_host::TapEvent`] (the
+/// envelope id/type/data/created wire shape the dispatch pump forwards
+/// into the guest's subscriptions).
+fn forward_public_events(tap: oc_plugin_host::BroadcastTap) -> oc_core::bus::Listener {
+    Arc::new(move |event: &oc_core::bus::Event| {
+        if crate::sse::is_public_event(&event.type_) {
+            tap.publish(oc_plugin_host::TapEvent {
+                id: event.id.as_str().to_owned(),
+                typ: event.type_.clone(),
+                data: event.data.clone(),
+                created: Some(event.created),
+            });
+        }
+        Ok(())
+    })
+}
+
 /// Publish one session event through the location bus (the same
 /// envelope the HTTP session handlers use).
 async fn publish_event(
@@ -1273,10 +1321,14 @@ fn session_info_json(row: &oc_core::database::schema::SessionRow) -> Value {
 pub struct EngineSessionSlot(std::sync::RwLock<Option<Arc<EngineSessionPort>>>);
 
 impl EngineSessionSlot {
-    /// Fill the slot (idempotent; the first engine wins).
+    /// Fill the slot (idempotent; the first engine wins). The fill is
+    /// the first moment the engine exists — the PLUG-D13 event-source
+    /// tap attaches here (v2 wires `ctx.event.subscribe` onto the
+    /// process bus at host construction; the engine boots after).
     pub fn fill(&self, port: Arc<EngineSessionPort>) {
         let mut slot = self.0.write().expect("session slot poisoned");
         if slot.is_none() {
+            port.attach_event_tap();
             *slot = Some(port);
         }
     }
