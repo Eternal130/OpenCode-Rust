@@ -687,8 +687,8 @@ impl SessionModelRequest {
             RequestKind::Title => crate::hooks::SessionRequestKind::Title,
             RequestKind::Generate => crate::hooks::SessionRequestKind::Generate,
         };
-        let has_http_hooks = self.hooks.has_session_http_request(None)
-            || self.hooks.has_session_http_response(None);
+        let has_http_hooks =
+            self.hooks.has_session_http_request(None) || self.hooks.has_session_http_response(None);
         if has_http_hooks {
             let intercepts = http_interceptors(
                 Arc::clone(&self.hooks),
@@ -876,48 +876,50 @@ fn http_interceptors(
                 headers: shaped.request.headers.into_iter().collect(),
                 body: value_to_body(&shaped.request.body).into(),
             })
-        }) as futures::future::BoxFuture<'static, Result<oc_ai::route::transport::TransportRequest, String>>
+        })
+            as futures::future::BoxFuture<
+                'static,
+                Result<oc_ai::route::transport::TransportRequest, String>,
+            >
     });
     let response_hooks = Arc::clone(&hooks);
     let response_scope = scope;
-    let on_response = Arc::new(
-        move |response: oc_ai::route::transport::HttpResponseSnapshot| {
-            let hooks = Arc::clone(&response_hooks);
-            let scope = response_scope.clone();
-            Box::pin(async move {
-                let event = crate::hooks::SessionHttpResponseEvent {
-                    session_id: scope.session_id.clone(),
-                    agent: scope.agent.clone(),
-                    model: scope.model.clone(),
-                    kind: scope.kind,
-                    request: crate::hooks::HttpRequest {
-                        url: String::new(),
-                        method: String::new(),
-                        headers: BTreeMap::new(),
-                        body: Value::Null,
-                    },
-                    response: crate::hooks::HttpResponse {
-                        status: response.status,
-                        headers: response.headers,
-                        body: body_to_value(&response.body),
-                    },
-                };
-                let shaped = hooks
-                    .dispatch_session_http_response(event)
-                    .await
-                    .map_err(|error| error.to_string())?;
-                Ok(oc_ai::route::transport::HttpResponseSnapshot {
-                    status: shaped.response.status,
-                    headers: shaped.response.headers,
-                    body: value_to_body(&shaped.response.body),
-                })
+    let on_response = Arc::new(move |response: oc_ai::route::transport::HttpResponseSnapshot| {
+        let hooks = Arc::clone(&response_hooks);
+        let scope = response_scope.clone();
+        Box::pin(async move {
+            let event = crate::hooks::SessionHttpResponseEvent {
+                session_id: scope.session_id.clone(),
+                agent: scope.agent.clone(),
+                model: scope.model.clone(),
+                kind: scope.kind,
+                request: crate::hooks::HttpRequest {
+                    url: String::new(),
+                    method: String::new(),
+                    headers: BTreeMap::new(),
+                    body: Value::Null,
+                },
+                response: crate::hooks::HttpResponse {
+                    status: response.status,
+                    headers: response.headers,
+                    body: body_to_value(&response.body),
+                },
+            };
+            let shaped = hooks
+                .dispatch_session_http_response(event)
+                .await
+                .map_err(|error| error.to_string())?;
+            Ok(oc_ai::route::transport::HttpResponseSnapshot {
+                status: shaped.response.status,
+                headers: shaped.response.headers,
+                body: value_to_body(&shaped.response.body),
             })
-                as futures::future::BoxFuture<
-                    'static,
-                    Result<oc_ai::route::transport::HttpResponseSnapshot, String>,
-                >
-        },
-    );
+        })
+            as futures::future::BoxFuture<
+                'static,
+                Result<oc_ai::route::transport::HttpResponseSnapshot, String>,
+            >
+    });
     oc_ai::route::transport::HttpInterceptors { on_request, on_response }
 }
 
@@ -949,10 +951,7 @@ fn ws_seams(
                 })
                 .await
                 .map_err(|error| error.to_string())?;
-            Ok(oc_ai::schema::options::WsHandshake {
-                url: shaped.url,
-                headers: shaped.headers,
-            })
+            Ok(oc_ai::schema::options::WsHandshake { url: shaped.url, headers: shaped.headers })
         })
             as futures::future::BoxFuture<
                 'static,

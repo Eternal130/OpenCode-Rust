@@ -613,14 +613,18 @@ pub struct HttpResponseSnapshot {
 
 /// One half of the interceptor pair.
 pub type RequestIntercept = Arc<
-    dyn Fn(TransportRequest) -> futures::future::BoxFuture<'static, Result<TransportRequest, String>>
+    dyn Fn(
+            TransportRequest,
+        ) -> futures::future::BoxFuture<'static, Result<TransportRequest, String>>
         + Send
         + Sync,
 >;
 /// One half of the interceptor pair: the (possibly rewritten) snapshot
 /// replaces what the route's framing sees.
 pub type ResponseIntercept = Arc<
-    dyn Fn(HttpResponseSnapshot) -> futures::future::BoxFuture<'static, Result<HttpResponseSnapshot, String>>
+    dyn Fn(
+            HttpResponseSnapshot,
+        ) -> futures::future::BoxFuture<'static, Result<HttpResponseSnapshot, String>>
         + Send
         + Sync,
 >;
@@ -650,9 +654,7 @@ impl Transport for InterceptedTransport {
         &self,
         request: TransportRequest,
     ) -> Result<TransportResponse, TransportError> {
-        let request = (self.intercepts.on_request)(request)
-            .await
-            .map_err(hook_transport_error)?;
+        let request = (self.intercepts.on_request)(request).await.map_err(hook_transport_error)?;
         let response = self.inner.execute(request).await?;
         let body = read_body_limited(response.body, usize::MAX).await?;
         let snapshot = (self.intercepts.on_response)(HttpResponseSnapshot {
@@ -662,13 +664,14 @@ impl Transport for InterceptedTransport {
         })
         .await
         .map_err(hook_transport_error)?;
-        let body: ByteStream = match snapshot.body.len() {
-            0 => futures::stream::empty::<Result<Bytes, TransportError>>().boxed(),
-            _ => futures::stream::once(async move {
-                Ok::<_, TransportError>(Bytes::from(snapshot.body))
-            })
-            .boxed(),
-        };
+        let body: ByteStream =
+            match snapshot.body.len() {
+                0 => futures::stream::empty::<Result<Bytes, TransportError>>().boxed(),
+                _ => futures::stream::once(async move {
+                    Ok::<_, TransportError>(Bytes::from(snapshot.body))
+                })
+                .boxed(),
+            };
         Ok(TransportResponse { status: snapshot.status, headers: snapshot.headers, body })
     }
 }

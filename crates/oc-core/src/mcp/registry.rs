@@ -153,9 +153,7 @@ impl ServerEntry {
 
     /// The server name for log lines (v2 keys credentials on name + URL).
     fn integration_label(&self) -> String {
-        self.integration_id
-            .as_ref()
-            .map_or_else(|| String::new(), |id| id.as_str().to_owned())
+        self.integration_id.as_ref().map_or_else(String::new, |id| id.as_str().to_owned())
     }
 
     fn open_startup(&self) {
@@ -233,13 +231,14 @@ const ACTIVE_ROW_SQL: &str = "SELECT id, value FROM credential WHERE integration
 
 /// Parses one stored row into the OAuth view (None for non-OAuth or
 /// unparsable rows). Three shapes tolerated, newest first: the
-/// integration store's snake_case `Credential.OAuth`, the HTTP client's
+/// integration store's `snake_case` `Credential.OAuth`, the HTTP client's
 /// camelCase wire form (`methodID`), and hand-written/foreign rows
 /// naming any access-token key.
 fn parse_row(id: &str, value: Option<String>) -> Option<super::oauth::StoredCredential> {
     let raw = value?;
     let parsed: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    if let Ok(stored) = serde_json::from_value::<crate::integration::types::OAuthValue>(parsed.clone())
+    if let Ok(stored) =
+        serde_json::from_value::<crate::integration::types::OAuthValue>(parsed.clone())
     {
         return Some(super::oauth::stored_credential(id, &stored));
     }
@@ -252,7 +251,8 @@ fn parse_row(id: &str, value: Option<String>) -> Option<super::oauth::StoredCred
                 map.insert("method_id".to_owned(), method);
             }
         }
-        if let Ok(stored) = serde_json::from_value::<crate::integration::types::OAuthValue>(remapped)
+        if let Ok(stored) =
+            serde_json::from_value::<crate::integration::types::OAuthValue>(remapped)
         {
             return Some(super::oauth::stored_credential(id, &stored));
         }
@@ -349,7 +349,7 @@ impl CredentialStore for DatabaseCredentials {
                     let encoded = serde_json::to_string(
                         &crate::integration::types::CredentialValue::OAuth(rotated),
                     )
-                    .map_err(|error| DbError::Json(error))?;
+                    .map_err(DbError::Json)?;
                     tx.conn().execute(
                         "UPDATE credential SET value = ?2, time_updated = ?3 WHERE id = ?1",
                         rusqlite::params![
@@ -532,10 +532,7 @@ impl McpRegistry {
                     .lock()
                     .iter()
                     .filter(|(_, entry)| {
-                        entry
-                            .integration_id
-                            .as_ref()
-                            .is_some_and(|id| id.as_str() == integration)
+                        entry.integration_id.as_ref().is_some_and(|id| id.as_str() == integration)
                     })
                     .map(|(name, _)| name.clone())
                     .collect();
@@ -547,11 +544,7 @@ impl McpRegistry {
                     let Some(entry) = registry.inner.entries.lock().get(&name).cloned() else {
                         continue;
                     };
-                    if !entry
-                        .integration_id
-                        .as_ref()
-                        .is_some_and(|id| id.as_str() == integration)
-                    {
+                    if entry.integration_id.as_ref().is_none_or(|id| id.as_str() != integration) {
                         continue;
                     }
                     if matches!(*entry.status.lock(), Status::Disabled) {
@@ -704,7 +697,11 @@ impl McpRegistry {
     /// server's refresh grant with the rotation persisted. A missing or
     /// dead credential yields `None`: the anonymous connect then meets
     /// the 401 and settles `needs_auth` (v2's connect-without-login).
-    async fn connect_bearer(&self, entry: &Arc<ServerEntry>, integration_id: &IntegrationId) -> Option<String> {
+    async fn connect_bearer(
+        &self,
+        entry: &Arc<ServerEntry>,
+        integration_id: &IntegrationId,
+    ) -> Option<String> {
         let stored = self.inner.credentials.oauth_credential(integration_id).await?;
         let ServerConfig::Remote(remote) = &entry.config else {
             return Some(stored.access);

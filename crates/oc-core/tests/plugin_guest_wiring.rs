@@ -14,17 +14,15 @@ use std::sync::Arc;
 
 use oc_ai::test_support::{echo_route, MockTransport, RecordedInteraction};
 use oc_core::hooks::{
-    HttpRequest, HttpResponse, HookRegistry, SessionHttpRequestEvent, SessionHttpResponseEvent,
+    HookRegistry, HttpRequest, HttpResponse, SessionHttpRequestEvent, SessionHttpResponseEvent,
 };
-use oc_core::session::runner::model_request::{
-    RequestInput, RequestKind, SessionModelRequest,
-};
+use oc_core::session::runner::model_request::{RequestInput, RequestKind, SessionModelRequest};
 use oc_core::session::runner::ResolvedModel;
 use serde_json::{json, Value};
 
 /// A resolved model over the echo route (the catalog facts the
 /// preparation reads are all empty defaults).
-fn resolved_model(route: Arc<oc_ai::route::Route>) -> ResolvedModel {
+fn resolved_model(route: &Arc<oc_ai::route::Route>) -> ResolvedModel {
     ResolvedModel {
         model: route.model("hooked-model", None).expect("model"),
         reference: oc_schema::model::Ref {
@@ -90,7 +88,7 @@ async fn http_hook_dispatch() {
         request_body: None,
     }]));
     let route = Arc::new(echo_route(transport.clone() as oc_ai::route::transport::SharedTransport));
-    let model = resolved_model(route);
+    let model = resolved_model(&route);
 
     let session = oc_core::database::schema::SessionRow::new(
         "ses_http_hook",
@@ -174,7 +172,7 @@ async fn no_hooks_leaves_the_transport_unwrapped() {
         request_body: None,
     }]));
     let route = Arc::new(echo_route(transport.clone() as oc_ai::route::transport::SharedTransport));
-    let model = resolved_model(route);
+    let model = resolved_model(&route);
     let session = oc_core::database::schema::SessionRow::new(
         "ses_http_hook2",
         "global",

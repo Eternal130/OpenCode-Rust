@@ -23,7 +23,7 @@
 //!   the identical user flow (printed URL → browser → loopback
 //!   callback → stored credential) without the engine-side
 //!   integration registration this port's registry cannot reach;
-//! - CIMD (client_id_metadata_document_supported) is not pre-selected:
+//! - CIMD (`client_id_metadata_document_supported`) is not pre-selected:
 //!   the flow registers dynamically (DCR) or uses the configured
 //!   client, which covers the interop-tested servers.
 
@@ -97,18 +97,15 @@ pub struct StoredCredential {
     pub client: Option<StoredClient>,
 }
 
-fn metadata_string(metadata: &Option<BTreeMap<String, Value>>, key: &str) -> Option<String> {
-    metadata.as_ref()?.get(key).and_then(Value::as_str).map(str::to_owned)
+fn metadata_string(metadata: Option<&BTreeMap<String, Value>>, key: &str) -> Option<String> {
+    metadata?.get(key).and_then(Value::as_str).map(str::to_owned)
 }
 
-fn metadata_client(metadata: &Option<BTreeMap<String, Value>>) -> Option<StoredClient> {
-    let client = metadata.as_ref()?.get(META_CLIENT)?;
+fn metadata_client(metadata: Option<&BTreeMap<String, Value>>) -> Option<StoredClient> {
+    let client = metadata?.get(META_CLIENT)?;
     Some(StoredClient {
         client_id: client.get("client_id").and_then(Value::as_str)?.to_owned(),
-        client_secret: client
-            .get("client_secret")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
+        client_secret: client.get("client_secret").and_then(Value::as_str).map(str::to_owned),
     })
 }
 
@@ -161,7 +158,7 @@ pub fn to_credential_value(
 /// token shape (the SDK/provider view).
 #[must_use]
 pub fn tokens_from_value(value: &OAuthValue) -> StoredTokens {
-    let metadata = &value.metadata;
+    let metadata = value.metadata.as_ref();
     StoredTokens {
         access_token: value.access.clone(),
         refresh_token: (!value.refresh.is_empty()).then(|| value.refresh.clone()),
@@ -174,7 +171,7 @@ pub fn tokens_from_value(value: &OAuthValue) -> StoredTokens {
     }
 }
 
-/// The credential-table row view (id + the OAuthValue fields the
+/// The credential-table row view (`id` + the `OAuthValue` fields the
 /// connect-time provider consults).
 #[must_use]
 pub fn stored_credential(id: &str, value: &OAuthValue) -> StoredCredential {
@@ -184,10 +181,10 @@ pub fn stored_credential(id: &str, value: &OAuthValue) -> StoredCredential {
         access: value.access.clone(),
         refresh: value.refresh.clone(),
         expires: value.expires,
-        token_type: metadata_string(&value.metadata, META_TOKEN_TYPE)
+        token_type: metadata_string(value.metadata.as_ref(), META_TOKEN_TYPE)
             .unwrap_or_else(|| "Bearer".to_owned()),
-        scope: metadata_string(&value.metadata, META_SCOPE),
-        client: metadata_client(&value.metadata),
+        scope: metadata_string(value.metadata.as_ref(), META_SCOPE),
+        client: metadata_client(value.metadata.as_ref()),
     }
 }
 
@@ -263,7 +260,10 @@ pub fn authorization_server_metadata_url(authorization_server: &str) -> Option<S
         Some(port) => format!("{}:{port}", url.host_str()?),
         None => url.host_str()?.to_owned(),
     };
-    Some(format!("{scheme}://{authority}/.well-known/oauth-authorization-server", scheme = url.scheme()))
+    Some(format!(
+        "{scheme}://{authority}/.well-known/oauth-authorization-server",
+        scheme = url.scheme()
+    ))
 }
 
 async fn get_json(http: &reqwest::Client, url: &str) -> Result<Value, String> {
@@ -277,10 +277,7 @@ async fn get_json(http: &reqwest::Client, url: &str) -> Result<Value, String> {
     if !status.is_success() {
         return Err(format!("HTTP {status} trying to load {url}"));
     }
-    response
-        .json::<Value>()
-        .await
-        .map_err(|error| format!("invalid JSON from {url}: {error}"))
+    response.json::<Value>().await.map_err(|error| format!("invalid JSON from {url}: {error}"))
 }
 
 fn parse_metadata(body: &Value) -> Result<Discovery, String> {
@@ -297,13 +294,7 @@ fn parse_metadata(body: &Value) -> Result<Discovery, String> {
     let scope = body
         .get("scopes_supported")
         .and_then(Value::as_array)
-        .map(|scopes| {
-            scopes
-                .iter()
-                .filter_map(Value::as_str)
-                .collect::<Vec<_>>()
-                .join(" ")
-        })
+        .map(|scopes| scopes.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" "))
         .filter(|joined| !joined.is_empty());
     Ok(Discovery {
         authorization_endpoint: authorization,
@@ -408,17 +399,19 @@ pub async fn challenge(http: &reqwest::Client, config: &RemoteConfig) -> Challen
             .post(&config.url)
             .header("content-type", "application/json")
             .header("accept", "application/json, text/event-stream")
-            .body(serde_json::json!({
-                "jsonrpc": "2.0",
-                "id": 0,
-                "method": "initialize",
-                "params": {
-                    "protocolVersion": "2025-11-25",
-                    "capabilities": {},
-                    "clientInfo": { "name": CLIENT_NAME },
-                },
-            })
-            .to_string())
+            .body(
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": 0,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-11-25",
+                        "capabilities": {},
+                        "clientInfo": { "name": CLIENT_NAME },
+                    },
+                })
+                .to_string(),
+            )
             .send()
             .await
             .map_err(|error| error.to_string())?;
@@ -469,12 +462,14 @@ async fn register_client(
     redirect_url: &str,
     oauth: &OAuthConfig,
 ) -> Result<StoredClient, String> {
-    let endpoint = discovery
-        .registration_endpoint
-        .as_deref()
-        .ok_or("the authorization server publishes no registration_endpoint (configure oauth.client_id)")?;
+    let endpoint = discovery.registration_endpoint.as_deref().ok_or(
+        "the authorization server publishes no registration_endpoint (configure oauth.client_id)",
+    )?;
     let mut metadata = serde_json::Map::new();
-    metadata.insert("redirect_uris".to_owned(), Value::Array(vec![Value::String(redirect_url.to_owned())]));
+    metadata.insert(
+        "redirect_uris".to_owned(),
+        Value::Array(vec![Value::String(redirect_url.to_owned())]),
+    );
     metadata.insert("client_name".to_owned(), Value::String(CLIENT_NAME.to_owned()));
     metadata.insert("client_uri".to_owned(), Value::String(CLIENT_URI.to_owned()));
     metadata.insert(
@@ -486,7 +481,8 @@ async fn register_client(
                 .collect(),
         ),
     );
-    metadata.insert("response_types".to_owned(), Value::Array(vec![Value::String("code".to_owned())]));
+    metadata
+        .insert("response_types".to_owned(), Value::Array(vec![Value::String("code".to_owned())]));
     metadata.insert(
         "token_endpoint_auth_method".to_owned(),
         Value::String(
@@ -579,34 +575,41 @@ fn oauth_config(config: &RemoteConfig) -> Option<OAuthConfig> {
 /// # Errors
 /// v2-shaped flow failures (no authorization endpoint, registration
 /// rejected, non-http(s) authorization URL).
+// One linear port of v2's oauth.ts authorize() (discovery -> DCR -> PKCE ->
+// loopback callback -> exchange); splitting the flow would hide the
+// source-referenced 1:1 mapping, so the length is intentional.
+#[allow(clippy::too_many_lines)]
 pub async fn authorize(input: AuthorizeInput) -> Result<Authorization, String> {
     let oauth = oauth_config(&input.config)
         .ok_or_else(|| format!("MCP server \"{}\" has OAuth disabled", input.name))?;
     let challenge = challenge(&input.http, &input.config).await;
-    let discovery =
-        discovery_for(&input.http, &oauth, challenge.resource_metadata_url.as_deref(), &input.config.url)
-            .await
-            .map_err(|error| {
-                format!("MCP server \"{}\": OAuth discovery failed: {error}", input.name)
-            })?;
+    let discovery = discovery_for(
+        &input.http,
+        &oauth,
+        challenge.resource_metadata_url.as_deref(),
+        &input.config.url,
+    )
+    .await
+    .map_err(|error| format!("MCP server \"{}\": OAuth discovery failed: {error}", input.name))?;
 
     // callback_port, else the port pinned by redirect_uri, else ephemeral.
     let redirect = oauth.redirect_uri.as_deref().and_then(|raw| reqwest::Url::parse(raw).ok());
-    let redirect_path = redirect
-        .as_ref()
-        .map(|url| url.path().to_owned())
-        .unwrap_or_else(|| "/callback".to_owned());
-    let redirect_port = redirect.as_ref().and_then(|url| url.port()).map(u16::from);
+    let redirect_path =
+        redirect.as_ref().map_or_else(|| "/callback".to_owned(), |url| url.path().to_owned());
+    let redirect_port = redirect.as_ref().and_then(reqwest::Url::port);
     let bind_port = oauth.callback_port.or(redirect_port).unwrap_or(0);
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", bind_port))
-        .await
-        .map_err(|error| format!("cannot bind the OAuth callback listener on 127.0.0.1:{bind_port}: {error}"))?;
+    let listener =
+        tokio::net::TcpListener::bind(("127.0.0.1", bind_port)).await.map_err(|error| {
+            format!("cannot bind the OAuth callback listener on 127.0.0.1:{bind_port}: {error}")
+        })?;
     let port = listener
         .local_addr()
         .map_err(|error| format!("could not determine the MCP OAuth callback port: {error}"))?
         .port();
-    let redirect_url =
-        oauth.redirect_uri.clone().unwrap_or_else(|| format!("http://127.0.0.1:{port}{redirect_path}"));
+    let redirect_url = oauth
+        .redirect_uri
+        .clone()
+        .unwrap_or_else(|| format!("http://127.0.0.1:{port}{redirect_path}"));
 
     // Static client or DCR (a configured client_id always wins).
     let client = match (&oauth.client_id, &oauth.client_secret) {
@@ -623,14 +626,11 @@ pub async fn authorize(input: AuthorizeInput) -> Result<Authorization, String> {
 
     let state = base64url(&random_bytes(32));
     let verifier = base64url(&random_bytes(64));
-    let scope = oauth
-        .scope
-        .clone()
-        .or_else(|| challenge.scope.clone())
-        .or_else(|| discovery.scope.clone());
+    let scope =
+        oauth.scope.clone().or_else(|| challenge.scope.clone()).or_else(|| discovery.scope.clone());
 
-    let mut authorization_url = reqwest::Url::parse(&discovery.authorization_endpoint)
-        .map_err(|error| {
+    let mut authorization_url =
+        reqwest::Url::parse(&discovery.authorization_endpoint).map_err(|error| {
             format!(
                 "MCP server \"{}\" returned an invalid authorization URL ({}): {error}",
                 input.name, discovery.authorization_endpoint
@@ -695,12 +695,11 @@ pub async fn authorize(input: AuthorizeInput) -> Result<Authorization, String> {
                     write_http_response(&mut stream, 404, "Not found").await;
                     continue;
                 }
-                let query: BTreeMap<String, String> =
-                    url.query_pairs().map(|(key, value)| (key.into_owned(), value.into_owned())).collect();
-                if let Some(error) = query
-                    .get("error_description")
-                    .or_else(|| query.get("error"))
-                {
+                let query: BTreeMap<String, String> = url
+                    .query_pairs()
+                    .map(|(key, value)| (key.into_owned(), value.into_owned()))
+                    .collect();
+                if let Some(error) = query.get("error_description").or_else(|| query.get("error")) {
                     write_http_response(
                         &mut stream,
                         400,
@@ -720,17 +719,37 @@ pub async fn authorize(input: AuthorizeInput) -> Result<Authorization, String> {
                 // exchange, then answer the browser (the page waits for
                 // the outcome so it never reports success for a rejected
                 // code — oauth.ts:377-379).
-                let tokens = exchange_code(&http, &token_endpoint, &redirect_for_exchange, code, &verifier, client_for_exchange.as_ref()).await;
+                let tokens = exchange_code(
+                    &http,
+                    &token_endpoint,
+                    &redirect_for_exchange,
+                    code,
+                    &verifier,
+                    client_for_exchange.as_ref(),
+                )
+                .await;
                 match tokens {
                     Ok(tokens) => {
-                        write_http_response(&mut stream, 200, &format!(
-                            "Authorized {name}. You can close this window."
-                        ))
+                        write_http_response(
+                            &mut stream,
+                            200,
+                            &format!("Authorized {name}. You can close this window."),
+                        )
                         .await;
-                        return Ok(to_credential_value(&method_id, &server_url, &tokens, client_for_exchange.as_ref()));
+                        return Ok(to_credential_value(
+                            &method_id,
+                            &server_url,
+                            &tokens,
+                            client_for_exchange.as_ref(),
+                        ));
                     }
                     Err(error) => {
-                        write_http_response(&mut stream, 400, &format!("Token exchange failed: {error}")).await;
+                        write_http_response(
+                            &mut stream,
+                            400,
+                            &format!("Token exchange failed: {error}"),
+                        )
+                        .await;
                         return Err(error);
                     }
                 }
@@ -794,9 +813,10 @@ pub async fn refresh(
     // well-known probe starts from the advertised metadata URL (the SDK
     // discovers at refresh time the same way).
     let challenge = challenge(http, config).await;
-    let discovery = discovery_for(http, &oauth, challenge.resource_metadata_url.as_deref(), &config.url)
-        .await
-        .map_err(|error| format!("OAuth discovery failed: {error}"))?;
+    let discovery =
+        discovery_for(http, &oauth, challenge.resource_metadata_url.as_deref(), &config.url)
+            .await
+            .map_err(|error| format!("OAuth discovery failed: {error}"))?;
     let mut pairs = vec![
         ("grant_type", "refresh_token".to_owned()),
         ("refresh_token", credential.refresh.clone()),

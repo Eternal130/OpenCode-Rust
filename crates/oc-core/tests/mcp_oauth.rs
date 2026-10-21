@@ -10,6 +10,7 @@
 //! HTTP client), no real network.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -19,8 +20,8 @@ use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
 use oc_core::integration::types::CredentialValue;
 use oc_core::mcp::oauth::{self, AuthMode, PreparedToken};
-use oc_core::mcp::registry::{integration_suffix, McpRegistry};
 use oc_core::mcp::registry::CredentialStore as _;
+use oc_core::mcp::registry::{integration_suffix, McpRegistry};
 use oc_schema::mcp::{RemoteConfig, ServerConfig, Status};
 
 fn remote(url: &str) -> RemoteConfig {
@@ -44,11 +45,11 @@ fn remote(url: &str) -> RemoteConfig {
 struct StubState {
     /// Bearer tokens the MCP endpoint accepted.
     bearers: Vec<String>,
-    /// Authorization-code grants (verifier, client_id).
+    /// Authorization-code grants (verifier, `client_id`).
     code_grants: Vec<(String, String)>,
     /// Refresh grants (presented refresh token).
     refresh_grants: Vec<String>,
-    /// The code_challenge the authorization request carried.
+    /// The `code_challenge` the authorization request carried.
     code_challenge: Option<String>,
     /// Unauthenticated initialize probes answered with the challenge.
     challenged: usize,
@@ -147,7 +148,12 @@ async fn read_request(stream: &mut tokio::net::TcpStream) -> Request {
         }
     };
     let Some(header_end) = header_end else {
-        return Request { method: String::new(), target: "/".into(), headers: Vec::new(), body: String::new() };
+        return Request {
+            method: String::new(),
+            target: "/".into(),
+            headers: Vec::new(),
+            body: String::new(),
+        };
     };
     let head = String::from_utf8_lossy(&buffer[..header_end]).into_owned();
     let mut lines = head.lines();
@@ -181,25 +187,24 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|window| window == needle)
 }
 
-async fn respond(stream: &mut tokio::net::TcpStream, status: &str, headers: &[(&str, &str)], body: &str) {
+async fn respond(
+    stream: &mut tokio::net::TcpStream,
+    status: &str,
+    headers: &[(&str, &str)],
+    body: &str,
+) {
     let mut response = format!("HTTP/1.1 {status}\r\n");
     for (name, value) in headers {
-        response.push_str(&format!("{name}: {value}\r\n"));
+        let _ = write!(response, "{name}: {value}\r\n");
     }
-    response.push_str(&format!("Content-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()));
+    let _ = write!(response, "Content-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
     let _ = stream.write_all(response.as_bytes()).await;
     let _ = stream.shutdown().await;
 }
 
 async fn respond_json(stream: &mut tokio::net::TcpStream, status: &str, body: &Value) {
     let text = body.to_string();
-    respond(
-        stream,
-        status,
-        &[("Content-Type", "application/json")],
-        &text,
-    )
-    .await;
+    respond(stream, status, &[("Content-Type", "application/json")], &text).await;
 }
 
 /// Boots the stub authorization + MCP server on `127.0.0.1:0`.
@@ -246,12 +251,7 @@ async fn serve(
     match (request.method.as_str(), path) {
         ("POST", "/mcp") => serve_mcp(stream, request, base, state).await,
         ("GET", "/.well-known/oauth-protected-resource") => {
-            respond_json(
-                stream,
-                "200 OK",
-                &json!({ "authorization_servers": [base] }),
-            )
-            .await;
+            respond_json(stream, "200 OK", &json!({ "authorization_servers": [base] })).await;
         }
         ("GET", "/.well-known/oauth-authorization-server") => {
             respond_json(
@@ -294,6 +294,10 @@ async fn serve(
     }
 }
 
+// A scripted MCP+OAuth peer: one linear request loop (initialize → 401 →
+// re-auth → tools/list → expiry → refresh), kept whole so the wire
+// choreography reads top-to-bottom.
+#[allow(clippy::too_many_lines)]
 async fn serve_mcp(
     stream: &mut tokio::net::TcpStream,
     request: &Request,
@@ -404,7 +408,11 @@ async fn serve_mcp(
     }
 }
 
-async fn serve_token(stream: &mut tokio::net::TcpStream, request: &Request, state: &Arc<Mutex<StubState>>) {
+async fn serve_token(
+    stream: &mut tokio::net::TcpStream,
+    request: &Request,
+    state: &Arc<Mutex<StubState>>,
+) {
     let form = request.form();
     match form.get("grant_type").map(String::as_str) {
         Some("authorization_code") => {
@@ -459,12 +467,8 @@ async fn serve_token(stream: &mut tokio::net::TcpStream, request: &Request, stat
             .await;
         }
         _ => {
-            respond_json(
-                stream,
-                "400 Bad Request",
-                &json!({ "error": "unsupported_grant_type" }),
-            )
-            .await;
+            respond_json(stream, "400 Bad Request", &json!({ "error": "unsupported_grant_type" }))
+                .await;
         }
     }
 }
@@ -473,11 +477,16 @@ async fn serve_token(stream: &mut tokio::net::TcpStream, request: &Request, stat
 // The flow under test
 // ---------------------------------------------------------------------------
 
-async fn wait_until(registry: &McpRegistry, server: &str, predicate: impl Fn(&Status) -> bool, what: &str) {
+async fn wait_until(
+    registry: &McpRegistry,
+    server: &str,
+    predicate: impl Fn(&Status) -> bool,
+    what: &str,
+) {
     for _ in 0..400 {
         let found =
             registry.servers().into_iter().find(|info| info.name == server).map(|info| info.status);
-        if found.as_ref().is_some_and(|status| predicate(status)) {
+        if found.as_ref().is_some_and(&predicate) {
             return;
         }
         // async sleep: start_server runs on spawned tasks that a blocking
@@ -493,7 +502,11 @@ async fn open_test_db() -> oc_core::database::Database {
 
 /// The CLI-equivalent credential write: an active `credential` row for
 /// the derived integration id (what `POST /api/credential` persists).
-async fn store_credential(db: &oc_core::database::Database, integration: &str, value: &CredentialValue) {
+async fn store_credential(
+    db: &oc_core::database::Database,
+    integration: &str,
+    value: &CredentialValue,
+) {
     let encoded = serde_json::to_string(value).expect("credential serializes");
     let integration = integration.to_owned();
     db.transaction(move |tx| {
@@ -509,25 +522,27 @@ async fn store_credential(db: &oc_core::database::Database, integration: &str, v
                     oc_core::database::migrations::now_ms()
                 ],
             )
-            .map_err(|error| oc_core::database::DbError::Sqlite(error))?;
+            .map_err(oc_core::database::DbError::Sqlite)?;
         Ok(())
     })
     .await
     .expect("credential stored");
 }
 
-async fn read_credential_value(db: &oc_core::database::Database, integration: &str) -> CredentialValue {
+async fn read_credential_value(
+    db: &oc_core::database::Database,
+    integration: &str,
+) -> CredentialValue {
     let integration = integration.to_owned();
     let raw = db
         .transaction(move |tx| {
-            Ok(tx
-                .conn()
+            tx.conn()
                 .query_row(
                     "SELECT value FROM credential WHERE integration_id = ?1",
                     rusqlite::params![integration],
                     |row| row.get::<_, String>(0),
                 )
-                .map_err(|error| oc_core::database::DbError::Sqlite(error))?)
+                .map_err(oc_core::database::DbError::Sqlite)
         })
         .await
         .expect("credential read");
@@ -537,6 +552,10 @@ async fn read_credential_value(db: &oc_core::database::Database, integration: &s
 /// The full OAuth login + connect: 401 dead-end → authorize → callback
 /// → exchange → stored credential → reconnect with the bearer → expiry
 /// → refresh rotation.
+// End-to-end scripted flow (stub → challenge → DCR → PKCE → callback →
+// exchange → stored credential → refresh); splitting would hide the
+// sequence under test.
+#[allow(clippy::too_many_lines)]
 #[tokio::test]
 async fn oauth_connect() {
     let stub = stub().await;
@@ -549,7 +568,10 @@ async fn oauth_connect() {
     let bus = oc_core::bus::Bus::new(db.clone(), oc_core::bus::BusOptions::deterministic());
     let registry = McpRegistry::new(bus, db.clone())
         .with_config_source(Arc::new(move || {
-            BTreeMap::from([(name.to_string(), ServerConfig::Remote(Box::new(remote(&server_url))))])
+            BTreeMap::from([(
+                name.to_string(),
+                ServerConfig::Remote(Box::new(remote(&server_url))),
+            )])
         }))
         .with_directory("/tmp");
 
@@ -557,11 +579,15 @@ async fn oauth_connect() {
     // answers 401, the server settles needs_auth (the v2 connect
     // without a login).
     registry.reconcile().await;
-    wait_until(&registry, name, |status| matches!(status, Status::NeedsAuth { .. }), "needs_auth").await;
+    wait_until(&registry, name, |status| matches!(status, Status::NeedsAuth { .. }), "needs_auth")
+        .await;
     {
         let status = registry.servers().into_iter().find(|info| info.name == name).unwrap().status;
         let Status::NeedsAuth { error } = status else { panic!("needs_auth: {status:?}") };
-        assert!(error.contains("401") || error.contains("Unauthorized"), "the 401 names the failure: {error}");
+        assert!(
+            error.contains("401") || error.contains("Unauthorized"),
+            "the 401 names the failure: {error}"
+        );
     }
     assert!(stub.state.lock().challenged >= 1, "the resource server saw the unauthenticated probe");
 
@@ -598,7 +624,7 @@ async fn oauth_connect() {
 
     // The callback lands on the flow's listener; the exchange resolves
     // the credential.
-    let callback = tokio::spawn(async move { callback.await });
+    let callback = tokio::spawn(callback);
     let page = reqwest::Client::new().get(&redirect).send().await.expect("callback GET");
     assert_eq!(page.status(), 200, "the callback page answers success");
     let credential = callback.await.expect("callback task").expect("the exchange resolves");
@@ -613,7 +639,8 @@ async fn oauth_connect() {
         let (verifier, client_id) = &state.code_grants[0];
         assert!(!verifier.is_empty(), "the code_verifier was presented");
         assert_eq!(client_id, "stub-client", "the DCR-registered client exchanged the code");
-        let challenge = state.code_challenge.as_deref().expect("the authorize request carried the challenge");
+        let challenge =
+            state.code_challenge.as_deref().expect("the authorize request carried the challenge");
         assert_eq!(challenge.len(), 43, "S256 challenges are 43 base64url chars");
     }
 
@@ -656,8 +683,11 @@ async fn oauth_connect() {
         }
         other => panic!("the expired credential refreshes: {other:?}"),
     }
-    assert_eq!(stub.state.lock().refresh_grants.last().map(String::as_str), Some("stub-refresh-1"),
-        "the rotation presented the previous refresh token");
+    assert_eq!(
+        stub.state.lock().refresh_grants.last().map(String::as_str),
+        Some("stub-refresh-1"),
+        "the rotation presented the previous refresh token"
+    );
 
     // The reconnect path persists the rotation and connects with it.
     registry.connect(name).await.expect("reconnect after expiry");
