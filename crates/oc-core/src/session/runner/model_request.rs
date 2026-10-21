@@ -438,6 +438,10 @@ pub struct Prepared {
     /// Runs a tool call against the tools this request advertised
     /// (`Prepared.executeTool`), recovering declines to typed failures.
     pub execute_tool: ExecuteTool,
+    /// PLUG-M02: the `experimental.ws.*` seams for a durable-session
+    /// WebSocket transport (`Prepared`'s `options.webSocket` — the
+    /// channel executors ride them). `None` when no hooks registered.
+    pub web_socket_seams: Option<oc_ai::schema::options::WebSocketSeams>,
 }
 
 /// The request preparation service (`SessionModelRequest`).
@@ -670,6 +674,64 @@ impl SessionModelRequest {
             }
         }
 
+        // PLUG-M02 — the transport-layer hook dispatch (model-request.ts
+        // 320-375). `session.http.request`/`session.http.response` wrap
+        // EVERY HTTP request the route executes (the WebSocket fallback
+        // included): the registered pair rewrites the outbound request
+        // and observes/rewrites the answer at the transport seam. The
+        // wrap only installs when a hook is registered — the bare path
+        // streams unchanged (v2's `hasHttpHooks` gate).
+        let http_hook_kind = match kind {
+            RequestKind::Primary => crate::hooks::SessionRequestKind::Primary,
+            RequestKind::Compaction => crate::hooks::SessionRequestKind::Compaction,
+            RequestKind::Title => crate::hooks::SessionRequestKind::Title,
+            RequestKind::Generate => crate::hooks::SessionRequestKind::Generate,
+        };
+        let has_http_hooks = self.hooks.has_session_http_request(None)
+            || self.hooks.has_session_http_response(None);
+        if has_http_hooks {
+            let intercepts = http_interceptors(
+                Arc::clone(&self.hooks),
+                session_id_of(session),
+                input.agent.clone(),
+                model.reference.clone(),
+                http_hook_kind,
+            );
+            let wrapped = oc_ai::route::transport::intercepted(
+                Arc::clone(&request.model.route.transport),
+                intercepts,
+            );
+            let route = request.model.route.with(oc_ai::route::RoutePatch {
+                transport: Some(wrapped),
+                ..oc_ai::route::RoutePatch::default()
+            });
+            request.model = oc_ai::schema::options::LanguageModel {
+                route: Arc::new(route),
+                ..request.model.clone()
+            };
+        }
+
+        // PLUG-M02 — the WebSocket seams (model-request.ts:351-375): the
+        // durable session's stateful socket offers the three
+        // `experimental.ws.*` rewrite points when hooks registered them;
+        // the channel executors ride the seams (the `webSocket === true`
+        // gate mirrors v2's `input.webSocket === "session"`).
+        let web_socket_seams = if input.web_socket
+            && (self.hooks.has_session_ws_handshake(None)
+                || self.hooks.has_session_ws_send(None)
+                || self.hooks.has_session_ws_receive(None))
+        {
+            Some(ws_seams(
+                Arc::clone(&self.hooks),
+                session_id_of(session),
+                input.agent.clone(),
+                model.reference.clone(),
+                http_hook_kind,
+            ))
+        } else {
+            None
+        };
+
         // The retry hook caller.
         let retry_hooks = Arc::clone(&self.hooks);
         let retry_session_id = session_id_of(session);
@@ -737,7 +799,7 @@ impl SessionModelRequest {
             }) as futures::future::BoxFuture<'static, ExecuteToolOutcome>
         });
 
-        Ok(Prepared { request, retry, execute_tool })
+        Ok(Prepared { request, retry, execute_tool, web_socket_seams })
     }
 
     /// `primary` — the context hook path with the loaded tools.
@@ -758,6 +820,204 @@ impl SessionModelRequest {
 
 fn canonical(value: &Value) -> String {
     crate::session::runner::context::instruction_hash(value)
+}
+
+// ---------------------------------------------------------------------------
+// PLUG-M02: the transport-layer seam builders (model-request.ts:320-375)
+// ---------------------------------------------------------------------------
+
+/// The per-request scope every transport hook event carries (v2 spreads
+/// `scope` — session, agent, model, kind — into each trigger).
+#[derive(Clone)]
+struct TransportHookScope {
+    session_id: oc_schema::id::SessionId,
+    agent: AgentId,
+    model: oc_schema::model::Ref,
+    kind: crate::hooks::SessionRequestKind,
+}
+
+/// Builds the [`oc_ai::route::transport::HttpInterceptors`] pair
+/// dispatching `session.http.request` / `session.http.response` through
+/// `hooks`: mutations flow back by value (the dispatched event replaces
+/// the outbound request / the buffered response).
+fn http_interceptors(
+    hooks: Arc<HookRegistry>,
+    session_id: oc_schema::id::SessionId,
+    agent: AgentId,
+    model: oc_schema::model::Ref,
+    kind: crate::hooks::SessionRequestKind,
+) -> oc_ai::route::transport::HttpInterceptors {
+    let scope = TransportHookScope { session_id, agent, model, kind };
+    let request_hooks = Arc::clone(&hooks);
+    let request_scope = scope.clone();
+    let on_request = Arc::new(move |request: oc_ai::route::transport::TransportRequest| {
+        let hooks = Arc::clone(&request_hooks);
+        let scope = request_scope.clone();
+        Box::pin(async move {
+            let event = crate::hooks::SessionHttpRequestEvent {
+                session_id: scope.session_id.clone(),
+                agent: scope.agent.clone(),
+                model: scope.model.clone(),
+                kind: scope.kind,
+                request: crate::hooks::HttpRequest {
+                    url: request.url.clone(),
+                    method: request.method.clone(),
+                    headers: request.headers.iter().cloned().collect(),
+                    body: body_to_value(&request.body),
+                },
+            };
+            let shaped = hooks
+                .dispatch_session_http_request(event)
+                .await
+                .map_err(|error| error.to_string())?;
+            Ok(oc_ai::route::transport::TransportRequest {
+                url: shaped.request.url,
+                method: shaped.request.method,
+                headers: shaped.request.headers.into_iter().collect(),
+                body: value_to_body(&shaped.request.body).into(),
+            })
+        }) as futures::future::BoxFuture<'static, Result<oc_ai::route::transport::TransportRequest, String>>
+    });
+    let response_hooks = Arc::clone(&hooks);
+    let response_scope = scope;
+    let on_response = Arc::new(
+        move |response: oc_ai::route::transport::HttpResponseSnapshot| {
+            let hooks = Arc::clone(&response_hooks);
+            let scope = response_scope.clone();
+            Box::pin(async move {
+                let event = crate::hooks::SessionHttpResponseEvent {
+                    session_id: scope.session_id.clone(),
+                    agent: scope.agent.clone(),
+                    model: scope.model.clone(),
+                    kind: scope.kind,
+                    request: crate::hooks::HttpRequest {
+                        url: String::new(),
+                        method: String::new(),
+                        headers: BTreeMap::new(),
+                        body: Value::Null,
+                    },
+                    response: crate::hooks::HttpResponse {
+                        status: response.status,
+                        headers: response.headers,
+                        body: body_to_value(&response.body),
+                    },
+                };
+                let shaped = hooks
+                    .dispatch_session_http_response(event)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                Ok(oc_ai::route::transport::HttpResponseSnapshot {
+                    status: shaped.response.status,
+                    headers: shaped.response.headers,
+                    body: value_to_body(&shaped.response.body),
+                })
+            })
+                as futures::future::BoxFuture<
+                    'static,
+                    Result<oc_ai::route::transport::HttpResponseSnapshot, String>,
+                >
+        },
+    );
+    oc_ai::route::transport::HttpInterceptors { on_request, on_response }
+}
+
+/// Builds the [`oc_ai::schema::options::WebSocketSeams`] triple
+/// dispatching the `experimental.ws.*` hooks (model-request.ts:351-372):
+/// handshake before the socket opens, per-frame rewrites both ways.
+fn ws_seams(
+    hooks: Arc<HookRegistry>,
+    session_id: oc_schema::id::SessionId,
+    agent: AgentId,
+    model: oc_schema::model::Ref,
+    kind: crate::hooks::SessionRequestKind,
+) -> oc_ai::schema::options::WebSocketSeams {
+    let scope = TransportHookScope { session_id, agent, model, kind };
+    let handshake_hooks = Arc::clone(&hooks);
+    let handshake_scope = scope.clone();
+    let handshake = Arc::new(move |connect: oc_ai::schema::options::WsHandshake| {
+        let hooks = Arc::clone(&handshake_hooks);
+        let scope = handshake_scope.clone();
+        Box::pin(async move {
+            let shaped = hooks
+                .dispatch_session_ws_handshake(crate::hooks::SessionWsHandshakeEvent {
+                    session_id: scope.session_id.clone(),
+                    agent: scope.agent.clone(),
+                    model: scope.model.clone(),
+                    kind: scope.kind,
+                    url: connect.url,
+                    headers: connect.headers,
+                })
+                .await
+                .map_err(|error| error.to_string())?;
+            Ok(oc_ai::schema::options::WsHandshake {
+                url: shaped.url,
+                headers: shaped.headers,
+            })
+        })
+            as futures::future::BoxFuture<
+                'static,
+                Result<oc_ai::schema::options::WsHandshake, String>,
+            >
+    });
+    let frame = |hooks: Arc<HookRegistry>, scope: TransportHookScope, outbound: bool| {
+        Arc::new(move |frame: String| {
+            let hooks = Arc::clone(&hooks);
+            let scope = scope.clone();
+            Box::pin(async move {
+                let event_frame = frame.clone();
+                let shaped_frame = if outbound {
+                    hooks
+                        .dispatch_session_ws_send(crate::hooks::SessionWsSendEvent {
+                            session_id: scope.session_id.clone(),
+                            agent: scope.agent.clone(),
+                            model: scope.model.clone(),
+                            kind: scope.kind,
+                            frame: event_frame,
+                        })
+                        .await
+                        .map_err(|error| error.to_string())?
+                        .frame
+                } else {
+                    hooks
+                        .dispatch_session_ws_receive(crate::hooks::SessionWsReceiveEvent {
+                            session_id: scope.session_id.clone(),
+                            agent: scope.agent.clone(),
+                            model: scope.model.clone(),
+                            kind: scope.kind,
+                            frame: event_frame,
+                        })
+                        .await
+                        .map_err(|error| error.to_string())?
+                        .frame
+                };
+                Ok(shaped_frame)
+            }) as futures::future::BoxFuture<'static, Result<String, String>>
+        })
+    };
+    oc_ai::schema::options::WebSocketSeams {
+        handshake,
+        send: frame(Arc::clone(&hooks), scope.clone(), true),
+        receive: frame(hooks, scope, false),
+    }
+}
+
+/// Wire bytes → the hook event's `body` view: JSON when the bytes parse
+/// (the provider request/response bodies are JSON or SSE text), the raw
+/// text otherwise.
+fn body_to_value(body: &[u8]) -> Value {
+    if let Ok(parsed) = serde_json::from_slice::<Value>(body) {
+        return parsed;
+    }
+    Value::String(String::from_utf8_lossy(body).into_owned())
+}
+
+/// The hook's possibly-rewritten `body` view back to wire bytes: a JSON
+/// string re-encodes verbatim, any other value serializes as JSON.
+fn value_to_body(value: &Value) -> Vec<u8> {
+    match value {
+        Value::String(text) => text.clone().into_bytes(),
+        other => other.to_string().into_bytes(),
+    }
 }
 
 fn record_to_map(record: &serde_json::Map<String, Value>) -> serde_json::Map<String, Value> {

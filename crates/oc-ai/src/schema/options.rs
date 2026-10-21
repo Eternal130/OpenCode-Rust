@@ -531,6 +531,44 @@ impl<'de> Deserialize<'de> for CachePolicy {
     }
 }
 
+// ---------------------------------------------------------------------------
+// The WebSocket hook seams (PLUG-M02 — v2 `StreamOptions.webSocket`,
+// model-request.ts:351-375)
+// ---------------------------------------------------------------------------
+
+/// The connection a channel executor is about to open (the
+/// `experimental.ws.handshake` event's view).
+#[derive(Debug, Clone)]
+pub struct WsHandshake {
+    pub url: String,
+    pub headers: BTreeMap<String, String>,
+}
+
+/// One seam callback: async, fallible, returning the (possibly rewritten)
+/// value — v2's `Effect` trigger semantics (`url`/`headers`/`frame`).
+pub type WsHandshakeHook = Arc<
+    dyn Fn(WsHandshake) -> futures::future::BoxFuture<'static, Result<WsHandshake, String>>
+        + Send
+        + Sync,
+>;
+/// One outbound/inbound text frame rewrite (`experimental.ws.send` /
+/// `experimental.ws.receive`).
+pub type WsFrameHook = Arc<
+    dyn Fn(String) -> futures::future::BoxFuture<'static, Result<String, String>> + Send + Sync,
+>;
+
+/// The three per-connection WebSocket seams (model-request.ts:353-372):
+/// the handshake rewrite before the socket opens, the outbound frame
+/// rewrite per sent message, the inbound frame rewrite per received
+/// message. Built only when the session owns a stateful WebSocket AND
+/// hooks are registered — the channel executors ride them when the
+/// durable-session transport carries the request.
+pub struct WebSocketSeams {
+    pub handshake: WsHandshakeHook,
+    pub send: WsFrameHook,
+    pub receive: WsFrameHook,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
