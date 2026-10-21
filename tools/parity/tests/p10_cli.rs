@@ -299,6 +299,29 @@ impl Lane {
 /// A `serve --hostname localhost` child owned by this test (process group).
 struct ServeChild {
     child: std::process::Child,
+    stderr_path: PathBuf,
+    stdout_path: PathBuf,
+}
+
+/// Drain a child pipe into a file on a background thread (an unread 64KiB
+/// pipe buffer blocks the child — see `spawn_serve`).
+fn drain_to(pipe: impl std::io::Read + Send + 'static, path: PathBuf) {
+    std::thread::spawn(move || {
+        use std::io::Write;
+        let mut pipe = pipe;
+        let mut sink = std::fs::File::create(&path).ok();
+        let mut buf = [0u8; 8192];
+        loop {
+            match pipe.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if let Some(sink) = sink.as_mut() {
+                        let _ = sink.write_all(&buf[..n]);
+                    }
+                }
+            }
+        }
+    });
 }
 
 #[allow(unsafe_code)] // process_group(0) needs pre_exec FFI (parity::reference pattern)
@@ -321,11 +344,37 @@ fn spawn_serve(program: &Path, argv: &[String], env: &[(String, String)]) -> Res
     for (key, value) in env {
         command.env(key, value);
     }
-    let child = command.spawn().context("spawn serve child")?;
-    Ok(ServeChild { child })
+    let mut child = command.spawn().context("spawn serve child")?;
+    // DRAIN the pipes. The reference on a cold per-side cache recompiles the
+    // TS workspace and writes MEGABYTES to stderr; an unread 64KiB pipe
+    // buffer blocks the child before it ever binds its port (the historical
+    // reference-side "never answered /api/info" red — warm local caches hid
+    // it). Tee both streams to files so the evidence survives for the
+    // failure path too (parity::reference::build_command does the same).
+    let stderr_path = std::env::temp_dir().join(format!("p10-gate5-serve-{}.stderr", child.id()));
+    let stdout_path = std::env::temp_dir().join(format!("p10-gate5-serve-{}.stdout", child.id()));
+    if let Some(pipe) = child.stdout.take() {
+        drain_to(pipe, stdout_path.clone());
+    }
+    if let Some(pipe) = child.stderr.take() {
+        drain_to(pipe, stderr_path.clone());
+    }
+    Ok(ServeChild { child, stderr_path, stdout_path })
 }
 
 impl ServeChild {
+    /// Last ~2KB of the tee'd stderr (diagnostics for boot failures).
+    fn stderr_tail(&self) -> String {
+        let _ = &self.stdout_path;
+        match std::fs::read(&self.stderr_path) {
+            Ok(bytes) => {
+                let start = bytes.len().saturating_sub(2048);
+                String::from_utf8_lossy(&bytes[start..]).into_owned()
+            }
+            Err(_) => String::from("<no stderr captured>"),
+        }
+    }
+
     /// Terminate the child's process group (own children only; filtered
     /// signal like `parity::tui_diff`).
     fn stop(&mut self) {
@@ -556,7 +605,18 @@ async fn checks(
                 ],
             )
         };
-        let env = lane.env(*side, "servepw-gate5");
+        let mut env = lane.env(*side, "servepw-gate5");
+        if side.label == "reference" {
+            // bun run re-execs a nested bun resolved from PATH (the proven
+            // spawn_reference env keeps the bun dir on PATH); lane.env omits it.
+            let bun_dir =
+                lane.bun.parent().map(|dir| dir.display().to_string()).unwrap_or_default();
+            for (key, value) in &mut env {
+                if key == "PATH" {
+                    *value = format!("{bun_dir}:{value}");
+                }
+            }
+        }
         let mut serve =
             spawn_serve(&program, &argv, &env).with_context(|| format!("spawn {side} serve"))?;
         // localhost may bind 127.0.0.1 or ::1 depending on the runtime's
@@ -564,8 +624,11 @@ async fn checks(
         let bases =
             vec![format!("http://127.0.0.1:{serve_port}"), format!("http://[::1]:{serve_port}")];
         let info = wait_info_any(&bases, "servepw-gate5").await;
+        let stderr_tail = serve.stderr_tail();
         serve.stop();
-        info.context(format!("{side} serve --hostname localhost boot"))?;
+        info.context(format!(
+            "{side} serve --hostname localhost boot; stderr tail:\n{stderr_tail}"
+        ))?;
         eprintln!(
             "[gate5] serve --hostname localhost — boot + /api/info 200 + clean stop ({side})"
         );
