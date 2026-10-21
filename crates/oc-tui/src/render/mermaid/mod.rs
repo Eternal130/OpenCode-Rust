@@ -38,6 +38,7 @@ pub mod diagnostics;
 pub mod flowchart;
 pub mod palette;
 pub mod sequence;
+pub mod state;
 
 #[cfg(test)]
 mod tests;
@@ -57,8 +58,10 @@ pub fn detect_mermaid_diagram(content: &str) -> Option<MermaidDiagramKind> {
     if sequence::is_mermaid_sequence_diagram(content) {
         return Some(MermaidDiagramKind::Sequence);
     }
-    // State lands later in this lane; unsupported kinds stay on the
-    // default code-block render for now.
+    if state::is_mermaid_state_diagram(content) {
+        return Some(MermaidDiagramKind::State);
+    }
+    // gitgraph/gantt/timeline stay on the default code-block render.
     None
 }
 
@@ -136,6 +139,21 @@ fn prepare_diagram(
                 },
             )?;
             let rows = styled_rows(&grid, &sequence_colors(palette));
+            Ok(RenderedDiagram { kind, rows })
+        }
+        MermaidDiagramKind::State => {
+            let diagram = state::parse_mermaid_state_diagram(source)?;
+            let grid = state::draw_state_diagram_grid(
+                &diagram,
+                &state::StateDiagramRenderOptions {
+                    layout_max_width: Some(layout_max_width),
+                    ..Default::default()
+                },
+            )
+            .map_err(|_| MermaidError::Unsupported)?;
+            let colors = state_colors(palette);
+            let rows =
+                styled_rows_state(&grid, &|style| colors.color(style), palette.label_background);
             Ok(RenderedDiagram { kind, rows })
         }
         _ => Err(MermaidError::Unsupported),
@@ -216,4 +234,50 @@ fn sequence_colors(
         note_bg: Some(palette.note_background),
     });
     move |style| colors.color(style)
+}
+
+/// The markdown seam's state color resolution (upstream
+/// `resolveStateStyleColors` inputs) plus the `label` background.
+fn state_colors(palette: &OpenCodeDiagramPalette) -> state::style::StateStyleColors {
+    state::style::resolve_state_style_colors(state::style::StateColorInput {
+        state: Some(palette.box_text),
+        state_border: Some(palette.box_border),
+        composite: Some(palette.group),
+        composite_label: Some(palette.group_text),
+        transition: Some(palette.line),
+        label: Some(palette.text),
+        note_border: Some(palette.note_border),
+        note_text: Some(palette.note_text),
+        note_connector: Some(palette.note_connector),
+        start: Some(palette.marker),
+        end: Some(palette.marker),
+        choice: Some(palette.secondary),
+    })
+}
+
+/// `renderStateGridStyledText` — like `styled_rows`, but the state grid
+/// also paints the label-cell background (`{ label: labelBackground }`).
+fn styled_rows_state(
+    grid: &DiagramCanvas<state::types::StateCellStyle>,
+    colors: &dyn Fn(Option<state::types::StateCellStyle>) -> Option<Rgba>,
+    label_background: Rgba,
+) -> Vec<Vec<DiagramSpan>> {
+    let mut rows: Vec<Vec<DiagramSpan>> = Vec::new();
+    let mut current: Vec<DiagramSpan> = Vec::new();
+    grid.for_each_run(TextOptions { trim_top: true, trim_bottom: true }, &mut |run| match run {
+        Some(run) => current.push(DiagramSpan {
+            text: run.text,
+            fg: colors(run.style),
+            bg: match run.style {
+                Some(state::types::StateCellStyle::Label) => Some(label_background),
+                _ => None,
+            },
+            attributes: run.attributes.unwrap_or(0),
+        }),
+        None => rows.push(std::mem::take(&mut current)),
+    });
+    if !current.is_empty() || rows.is_empty() {
+        rows.push(current);
+    }
+    rows
 }
