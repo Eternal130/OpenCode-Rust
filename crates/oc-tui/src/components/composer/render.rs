@@ -75,6 +75,16 @@ pub struct FooterHints {
     /// `esc again to interrupt` once armed; EMPTY renders nothing
     /// (every golden stays byte-exact while no turn is running).
     pub interrupt: String,
+    /// TUI-12 — the live segment's counts (`1 subagent · 1 shell`,
+    /// footer.tsx:20-33,47): the family's running subagents + the
+    /// session's in-flight shells; EMPTY renders nothing.
+    pub live: String,
+    /// TUI-12 — the `session.child.first` shortcut run (`down `),
+    /// painted `text.base` ahead of the counts (footer.tsx:77-79).
+    pub live_shortcut: String,
+    /// TUI-12 — the live segment's hover lift (`liveHovered` → the
+    /// counts paint `text.base` instead of muted).
+    pub live_hovered: bool,
     /// #33 — the location label's hover lift
     /// (`useWorkingDirectoryActions.hovered`: `text.base` under the
     /// pointer, `text.muted` at rest, prompt/index.tsx:1927).
@@ -701,6 +711,9 @@ pub(crate) struct FooterPlan {
     pub command_key: String,
     /// The plugin segment's x + truncated text — `None` when absent.
     pub plugin: Option<(usize, String)>,
+    /// TUI-12 — the live segment's x + joined label
+    /// (`{shortcut}{counts}`) — `None` when no counts painted.
+    pub live: Option<(usize, String)>,
 }
 
 /// Resolve the footer row's plan at `width` (see [`FooterPlan`]).
@@ -729,10 +742,19 @@ pub(crate) fn footer_plan(view: &PromptView, width: usize) -> FooterPlan {
     };
     let plugin_text = view.footer.plugin_hints.join(" · ");
     let plugin_width = display_width(&plugin_text);
+    // TUI-12 — the live segment (`down 1 subagent · 1 shell`): the
+    // shortcut run + the counts, packed LEFT of the plugin segment
+    // in the right block's pack (footer.tsx:65-94's PromptFooter
+    // box: `[live][ · usage][agents/commands]`).
+    let live_shortcut_width = display_width(&view.footer.live_shortcut);
+    let live_counts_width = display_width(&view.footer.live);
+    let live_total = live_shortcut_width + live_counts_width;
     let right_block = if hints_shown {
-        block_width + if plugin_width > 0 { plugin_width + 2 } else { 0 }
+        block_width
+            + if plugin_width > 0 { plugin_width + 2 } else { 0 }
+            + if live_total > 0 { live_total + 2 } else { 0 }
     } else {
-        plugin_width
+        plugin_width + if live_total > 0 { live_total + 2 } else { 0 }
     };
     // Wave A: the interrupt hint (`PromptInterruptStatus`,
     // prompt/index.tsx:137-144) sits at the row's left — `esc` in
@@ -780,6 +802,15 @@ pub(crate) fn footer_plan(view: &PromptView, width: usize) -> FooterPlan {
             let x = width.saturating_sub(right_block);
             let budget = width.saturating_sub(x);
             (x, truncate_width(&plugin_text, budget))
+        }),
+        live: (live_total > 0).then(|| {
+            let x = width.saturating_sub(right_block).saturating_sub(if plugin_width > 0 {
+                plugin_width + 2
+            } else {
+                0
+            });
+            let label = format!("{}{}", view.footer.live_shortcut, view.footer.live);
+            (x, label)
         }),
     }
 }

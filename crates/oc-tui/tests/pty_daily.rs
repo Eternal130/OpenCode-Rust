@@ -1403,6 +1403,134 @@ fn tui7_filter_semantics_live_loop() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// TUI-12 — the composer footer's live N subagents / N shells segment
+// ---------------------------------------------------------------------------
+
+/// TUI-12's event script: a running CHILD session in `ses_alpha`'s
+/// family (`session.created` with `parentID` + `session.execution.
+/// started` and one in-flight shell owned by `ses_alpha`
+/// (`shell.created` carrying `metadata.sessionID` — the client data
+/// cache's live shell map, solid/data.ts:1245-1261).
+fn live_counts_script(session: &str) -> Vec<vt_harness::ScriptEvent> {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(1_000_000, |since| since.as_millis() as u64);
+    vec![
+        vt_harness::ScriptEvent {
+            delay_ms: 60,
+            body: format!(
+                r#"{{"id":"evt_child","created":{now_ms},"type":"session.created","data":{{"sessionID":"ses_child","parentID":"{session}","title":"Child work","directory":"/tmp"}}}}"#
+            ),
+        },
+        vt_harness::ScriptEvent {
+            delay_ms: 80,
+            body: format!(
+                r#"{{"id":"evt_exec","created":{now_ms},"type":"session.execution.started","data":{{"sessionID":"ses_child"}}}}"#
+            ),
+        },
+        vt_harness::ScriptEvent {
+            delay_ms: 100,
+            body: format!(
+                r#"{{"id":"evt_shell","created":{now_ms},"type":"shell.created","data":{{"info":{{"id":"sh_live","command":"ls","cwd":"/tmp","file":"","shell":"/bin/sh","status":"running","metadata":{{"sessionID":"{session}"}},"time":{{"started":0}}}}}}}}"#
+            ),
+        },
+    ]
+}
+
+/// TUI-12: the composer footer's live segment
+/// (`feature-plugins/prompt/footer.tsx:20-33,47,65-94`) — the family's
+/// RUNNING subagents (excluding self) + the session's in-flight shells
+/// paint as `1 subagent · 1 shell` (the `session.child.first`
+/// shortcut prefix in text.base), the segment LIFTS under the pointer
+/// (muted → text.base), and a left release toggles the subagent picker
+/// (`onMouseUp` → `session.child.first`).
+#[test]
+fn composer_live_counts() {
+    run_daily_test(
+        "tui12-live",
+        120,
+        30,
+        |fake, _| {
+            fake.arm_script(live_counts_script("ses_alpha"));
+        },
+        |h| {
+            boot_to_session(h, b"Alpha")?;
+            // Trigger the armed script (it plays after the first
+            // prompt POST): the family child + the live shell land.
+            h.write(b"hello\r");
+            // The live segment paints on the composer's footer row
+            // (the status row at the bottom of the content column).
+            let grid = wait_grid(
+                h,
+                |g| {
+                    (20..30).any(|y| {
+                        let text = g.content_rect(0, y, 120, 1);
+                        text.contains("1 subagent") && text.contains("1 shell")
+                    })
+                },
+                Duration::from_secs(10),
+            )
+            .map_err(|error| format!("the live segment never painted: {error}"))?;
+            let y = (20..30)
+                .find(|y| {
+                    let text = grid.content_rect(0, *y, 120, 1);
+                    text.contains("1 subagent") && text.contains("1 shell")
+                })
+                .ok_or("the live row vanished")?;
+            let row = grid.content_rect(0, y, 120, 1);
+            let seg_x = row
+                .find("1 subagent")
+                .map(|byte| row[..byte].chars().count())
+                .ok_or("the subagent count's x")?;
+            // The shortcut prefix paints with the counts (v2 renders
+            // `shortcut("session.child.first")` — `down` — before the
+            // segment, footer.tsx:77-79).
+            assert!(
+                row.contains("down 1 subagent"),
+                "the session.child.first shortcut prefixes the segment: {row}"
+            );
+            let prefix_x = row
+                .find("down 1 subagent")
+                .map(|byte| row[..byte].chars().count())
+                .expect("the prefix x");
+            // Hover: the counts lift muted → text.base (the style
+            // digest of a count cell changes while the char stays).
+            let before = grid.cell(seg_x, y);
+            h.sgr_motion(u16::try_from(seg_x).unwrap_or(60), u16::try_from(y).unwrap_or(29));
+            let lifted = wait_grid(
+                h,
+                |g| g.cell(seg_x, y).ch == before.ch && g.cell(seg_x, y).style != before.style,
+                Duration::from_secs(5),
+            )
+            .map_err(|error| format!("the live segment never lifted under the pointer: {error}"))?;
+            // Moving off the segment clears the lift (onMouseOut).
+            h.sgr_motion(60, 5);
+            wait_grid(h, |g| g.cell(seg_x, y).style == before.style, Duration::from_secs(5))
+                .map_err(|error| format!("the lift never cleared off-segment: {error}"))?;
+            // Release ON the segment dispatches session.child.first
+            // (the subagent picker's toggle — the Subagents tab strip
+            // mounts over the composer).
+            let x = u16::try_from(prefix_x + 2).unwrap_or(60);
+            let y16 = u16::try_from(y).unwrap_or(29);
+            h.sgr_motion(x, y16);
+            h.sgr_press(x, y16);
+            h.sgr_release(x, y16);
+            wait_grid(
+                h,
+                |g| {
+                    (0..g.rows).any(|row| g.row_text(row).contains("Subagents"))
+                        && (0..g.rows).any(|row| g.row_text(row).contains("Shell"))
+                },
+                Duration::from_secs(5),
+            )
+            .map_err(|error| format!("the live release never opened the picker: {error}"))?;
+            let _ = lifted;
+            Ok(())
+        },
+    );
+}
+
 /// TUI-35 — the boot completes against a QUIET server (no SSE script
 /// armed, no prompt ever `POST`ed — the event stream never speaks) and
 /// the standard exit chord tears the app down THROUGH a dirty dialog

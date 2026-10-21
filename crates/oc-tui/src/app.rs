@@ -484,6 +484,14 @@ impl App {
                     })
                     && !self.permission_live();
                 let changed_location = self.store.set_location_hovered(location_hover);
+                // TUI-12 — the live segment's hover lift (same route
+                // gate: the rect belongs to the session render).
+                let live_hover = matches!(self.store.route(), Route::Session { .. })
+                    && self.store.footer_live_hit().is_some_and(|hit| {
+                        row == hit.row && col >= hit.x && col < hit.x + hit.width
+                    })
+                    && !self.permission_live();
+                let changed_live = self.store.set_live_hovered(live_hover);
                 let (hover, close, add) = if strip_live && row == 0 {
                     self.strip_hover_at(col, width)
                 } else {
@@ -491,7 +499,7 @@ impl App {
                 };
                 let changed = self.store.set_tab_hover(hover.as_deref(), close);
                 let changed_add = self.store.set_tab_add_hovered(add);
-                if changed || changed_add || changed_location {
+                if changed || changed_add || changed_location || changed_live {
                     self.store.request_redraw();
                 }
             }
@@ -797,6 +805,16 @@ impl App {
                 // v2's label unmounts with the route, so a stale
                 // rect must never fire on Home.
                 if !self.permission_live() && matches!(self.store.route(), Route::Session { .. }) {
+                    // TUI-12 — the live segment's release dispatches
+                    // `session.child.first` (footer.tsx:71's
+                    // `onMouseUp` — the subagent picker's toggle).
+                    if let Some(hit) = self.store.footer_live_hit() {
+                        if row == hit.row && col >= hit.x && col < hit.x + hit.width {
+                            self.store.toggle_picker();
+                            self.store.request_redraw();
+                            return;
+                        }
+                    }
                     if let Some(hit) = self.store.footer_location_hit() {
                         if row == hit.row && col >= hit.x && col < hit.x + hit.width {
                             self.store.open_dialog(

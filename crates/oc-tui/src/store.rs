@@ -816,6 +816,20 @@ pub struct TerminalListed {
     pub terminals: Vec<TerminalRecord>,
 }
 
+// -- TUI-12: the live shell registry (the client data cache's map) --
+
+/// One in-flight shell (`shell.created`'s `info` row — the footer's
+/// live segment reads the id + the owning session only, footer.tsx:
+/// 27-33). The client cache's per-location map holds ONLY running
+/// shells: `shell.exited`/`shell.deleted` remove the row
+/// (client/src/solid/data.ts:100-102,1245-1261).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveShell {
+    pub id: String,
+    /// `metadata.sessionID` — the session that owns the shell.
+    pub session_id: Option<String>,
+}
+
 /// The terminal pane's IO seam (the run loop's WS attach task): typed
 /// input frames, resize controls, and lifecycle requests ride it.
 /// Tests record; production pumps the attach socket.
@@ -1126,6 +1140,11 @@ pub struct Store {
     /// TUI-4 — the per-session terminal registry
     /// (`terminals[sessionID]`, session-terminals.tsx:23).
     terminal_registry: Signal<Vec<TerminalListed>>,
+    /// TUI-12 — the live shell registry (the client data cache's
+    /// per-location `shell` map: only in-flight shells list). The
+    /// composer footer's live segment counts the session's rows
+    /// (footer.tsx:27-33).
+    shells: Signal<Vec<LiveShell>>,
     /// TUI-4 — the selected terminal (`(sessionID, ptyID)`; the
     /// right pane mounts it, session-frame.tsx:118-122).
     terminal_selection: Signal<Option<(String, String)>>,
@@ -1303,6 +1322,9 @@ pub struct Store {
     /// The footer location label's hit rect + directory from the last
     /// render (None when the label didn't paint — empty location).
     footer_location_hit: std::cell::RefCell<Option<FooterLocationHit>>,
+    /// TUI-12 — the footer live segment's hit rect from the last
+    /// render (`None` when the segment didn't paint).
+    footer_live_hit: std::cell::RefCell<Option<FooterLiveHit>>,
     /// The home footer's chip rects (lane KM — cleared when the
     /// footer hides or the route leaves home).
     home_footer_chip_hits: std::cell::RefCell<Option<FooterChipHits>>,
@@ -1337,6 +1359,8 @@ pub struct Store {
     lane_dialogs: std::cell::RefCell<DialogsLaneState>,
     /// The location label's hover state (`hovered()`).
     location_hovered: std::cell::Cell<bool>,
+    /// TUI-12 — the live segment's hover state (`liveHovered`).
+    live_hovered: std::cell::Cell<bool>,
     /// Per-session scroll state (Wave A's scroll driver over
     /// [`FollowState`]); the render pass records the metrics.
     scroll: std::cell::RefCell<HashMap<String, ScrollDriver>>,
@@ -2322,6 +2346,20 @@ pub struct FooterLocationHit {
     pub width: usize,
 }
 
+/// TUI-12 — the footer live segment's hit surface: the painted
+/// `N subagents · N shells` rect (footer.tsx:65-94 — hover lifts the
+/// counts muted → text.base, a release dispatches
+/// `session.child.first`, the subagent picker's toggle).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FooterLiveHit {
+    /// Absolute screen row of the status line.
+    pub row: usize,
+    /// The segment's first column (the shortcut prefix).
+    pub x: usize,
+    /// The segment's painted width (shortcut + counts).
+    pub width: usize,
+}
+
 /// One pointer target's absolute screen rect.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HitRect {
@@ -2662,6 +2700,7 @@ struct StoreSignals {
     session_history: Signal<Vec<crate::data::SessionSnapshot>>,
     terminal_available: Signal<bool>,
     terminal_registry: Signal<Vec<TerminalListed>>,
+    shells: Signal<Vec<LiveShell>>,
     terminal_selection: Signal<Option<(String, String)>>,
     terminal_focus_right: Signal<bool>,
     terminal_generation: Signal<u64>,
@@ -2814,6 +2853,7 @@ impl Store {
             session_history,
             terminal_available,
             terminal_registry,
+            shells,
             terminal_selection,
             terminal_focus_right,
             terminal_generation,
@@ -2882,6 +2922,7 @@ impl Store {
             session_history,
             terminal_available,
             terminal_registry,
+            shells,
             terminal_selection,
             terminal_focus_right,
             terminal_generation,
@@ -2952,6 +2993,7 @@ impl Store {
             dialog_frame_rect: std::cell::RefCell::new(None),
             dialog_option_rows: std::cell::RefCell::new(Vec::new()),
             footer_location_hit: std::cell::RefCell::new(None),
+            footer_live_hit: std::cell::RefCell::new(None),
             home_footer_chip_hits: std::cell::RefCell::new(None),
             sidebar_onboarding_hits: std::cell::RefCell::new(None),
             sidebar_mcp_hits: std::cell::RefCell::new(SidebarMcpHits::default()),
@@ -2963,6 +3005,7 @@ impl Store {
             dialog_button_hits: std::cell::RefCell::new(Vec::new()),
             lane_dialogs: std::cell::RefCell::new(DialogsLaneState::default()),
             location_hovered: std::cell::Cell::new(false),
+            live_hovered: std::cell::Cell::new(false),
             scroll: std::cell::RefCell::new(HashMap::new()),
             transcript_metrics: std::cell::RefCell::new(HashMap::new()),
             interrupts,
@@ -3027,6 +3070,7 @@ impl Store {
         let session_history = Signal::new(&runtime, Vec::new());
         let terminal_available = Signal::new(&runtime, false);
         let terminal_registry = Signal::new(&runtime, Vec::<TerminalListed>::new());
+        let shells = Signal::new(&runtime, Vec::<LiveShell>::new());
         let terminal_selection = Signal::new(&runtime, Option::<(String, String)>::None);
         let terminal_focus_right = Signal::new(&runtime, false);
         let terminal_generation = Signal::new(&runtime, 0u64);
@@ -3113,6 +3157,7 @@ impl Store {
                 session_history,
                 terminal_available,
                 terminal_registry,
+                shells,
                 terminal_selection,
                 terminal_focus_right,
                 terminal_generation,
@@ -4995,6 +5040,7 @@ impl Store {
     pub fn clear_route_pointer_registries(&self) {
         self.transcript_hit_rows.borrow_mut().clear();
         *self.footer_location_hit.borrow_mut() = None;
+        *self.footer_live_hit.borrow_mut() = None;
         *self.sidebar_onboarding_hits.borrow_mut() = None;
         // Lane KM: the home chips are route-scoped too (the footer
         // unmounts with the home route).
@@ -5068,6 +5114,71 @@ impl Store {
     #[must_use]
     pub fn footer_location_hit(&self) -> Option<FooterLocationHit> {
         self.footer_location_hit.borrow().clone()
+    }
+
+    /// TUI-12 — the footer live segment's hit rect from the last
+    /// render (hover lifts the counts; a release dispatches
+    /// `session.child.first`).
+    pub fn set_footer_live_hit(&self, hit: Option<FooterLiveHit>) {
+        *self.footer_live_hit.borrow_mut() = hit;
+    }
+
+    /// The live segment's hit rect, when one painted.
+    #[must_use]
+    pub fn footer_live_hit(&self) -> Option<FooterLiveHit> {
+        self.footer_live_hit.borrow().clone()
+    }
+
+    /// TUI-12 — the composer footer's live counts (footer.tsx:20-33):
+    /// the family's RUNNING sessions excluding self (the subagent
+    /// count — `session.family(id).filter(id !== id && status ===
+    /// "running")`) and the session's in-flight shells
+    /// (`shell.metadata.sessionID === sessionID`).
+    #[must_use]
+    pub fn footer_live_counts(&self, session_id: &str) -> (usize, usize) {
+        let index = self.session_index.borrow();
+        let ids = index.ids();
+        let mut children: std::collections::HashMap<&str, Vec<&str>> =
+            std::collections::HashMap::new();
+        for id in &ids {
+            if let Some(parent) = index.get(id).and_then(|info| info.parent_id.as_deref()) {
+                children.entry(parent).or_default().push(id);
+            }
+        }
+        // The family walk from the ROOT (sessionFamily: the root's
+        // descendant tree, self included).
+        let mut subagents = 0usize;
+        let mut stack = vec![index.root_of(session_id)];
+        while let Some(id) = stack.pop() {
+            if id != session_id && index.is_running(&id) {
+                subagents += 1;
+            }
+            if let Some(group) = children.get(id.as_str()) {
+                stack.extend(group.iter().map(|id| (*id).to_owned()));
+            }
+        }
+        let shells = self
+            .shells
+            .get()
+            .iter()
+            .filter(|shell| shell.session_id.as_deref() == Some(session_id))
+            .count();
+        (subagents, shells)
+    }
+
+    /// TUI-12 — the live segment's hover lift (`liveHovered`).
+    pub fn set_live_hovered(&self, hovered: bool) -> bool {
+        if self.live_hovered.get() == hovered {
+            return false;
+        }
+        self.live_hovered.set(hovered);
+        true
+    }
+
+    /// The live segment's hover state.
+    #[must_use]
+    pub fn live_hovered(&self) -> bool {
+        self.live_hovered.get()
     }
 
     /// The home footer chips' rects (lane KM, auditA #10) — recorded
@@ -9071,6 +9182,40 @@ impl Store {
                 if self.terminal_available.get() && known {
                     self.terminal_sink.borrow().refresh(&id);
                 }
+            }
+            // TUI-12 — the live shell registry (the client data
+            // cache's per-location `shell` map, solid/data.ts:
+            // 1245-1261): `shell.created` inserts the in-flight row,
+            // `shell.exited`/`shell.deleted` remove it — only running
+            // shells ever list.
+            "shell.created" => {
+                let Some(info) = event.data.get("info") else { return };
+                let shell = LiveShell {
+                    id: info
+                        .get("id")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                    session_id: info
+                        .pointer("/metadata/sessionID")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned),
+                };
+                if shell.id.is_empty() {
+                    return;
+                }
+                let mut shells = self.shells.get();
+                match shells.iter_mut().find(|row| row.id == shell.id) {
+                    Some(row) => *row = shell,
+                    None => shells.push(shell),
+                }
+                self.shells.set(shells);
+            }
+            "shell.exited" | "shell.deleted" => {
+                let Some(id) = event.string("id") else { return };
+                let mut shells = self.shells.get();
+                shells.retain(|row| row.id != id);
+                self.shells.set(shells);
             }
             "session.updated" | "session.renamed" => {
                 let Some(id) = event.string("sessionID") else { return };
