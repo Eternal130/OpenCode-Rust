@@ -22,13 +22,15 @@ async fn get(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
-    let config_loader = oc_core::config::Loader::new(
+    let mut config_loader = oc_core::config::Loader::new(
         location.as_path().to_path_buf(),
         oc_core::config::GlobalDirs {
             config: state.engine.home.join(".config").join("opencode"),
             home: state.engine.home.clone(),
         },
     );
+    // CLI-N4 — the project-config disable switch (v2 Config.configured).
+    crate::server_process_env::configure_loader(&mut config_loader);
     let snapshot = config_loader.load();
     // The merged entries view (no wrapper, deep-map §3).
     let data: Vec<Value> = snapshot

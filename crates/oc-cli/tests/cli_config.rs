@@ -401,3 +401,171 @@ fn cli_json_plugins() {
         serde_json::from_str(&std::fs::read_to_string(&cli_json).unwrap()).unwrap();
     assert_eq!(cli_back["plugins"], serde_json::json!([]), "the entry is gone");
 }
+
+// ===========================================================================
+// CLI-N4 — the v2 server-process env switches (server-process.ts:96-134):
+// OPENCODE_MODELS_URL / OPENCODE_MODELS_PATH /
+// OPENCODE_DISABLE_MODELS_FETCH / OPENCODE_CONFIG_PROJECT_DISABLE |
+// OPENCODE_DISABLE_PROJECT_CONFIG. (The filewatcher/fff/git-bash/simulate
+// switches have no consumer subsystem in the port — see the lane report.)
+// ===========================================================================
+
+/// Env-var guard: restores the listed variables on drop.
+struct EnvGuard(Vec<&'static str>);
+
+impl EnvGuard {
+    fn new(vars: Vec<&'static str>) -> Self {
+        Self(vars)
+    }
+}
+
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        for name in &self.0 {
+            std::env::remove_var(name);
+        }
+    }
+}
+
+#[test]
+fn env_switches() {
+    use oc_server::server_process_env::{apply_models_env, models_env};
+
+    // --- truthy semantics (v2 server-process.ts:191: "1" | "true",
+    // case-insensitive; everything else — "0", "yes", "" — is falsy).
+    let _guard = EnvGuard::new(vec![
+        "OPENCODE_MODELS_URL",
+        "OPENCODE_MODELS_PATH",
+        "OPENCODE_DISABLE_MODELS_FETCH",
+        "OPENCODE_CONFIG_PROJECT_DISABLE",
+        "OPENCODE_DISABLE_PROJECT_CONFIG",
+    ]);
+
+    // --- the models switches ------------------------------------------------
+    let sandbox = Sandbox::new("n4");
+    let models_file = sandbox.root.join("models.json");
+    std::fs::write(
+        &models_file,
+        r#"{
+          "fake-catalog-provider": {
+            "id": "fake-catalog-provider",
+            "name": "Fake Catalog Provider",
+            "env": ["FAKE_CATALOG_TOKEN"],
+            "npm": "",
+            "models": {
+              "fake-catalog-model": {
+                "id": "fake-catalog-model",
+                "name": "Fake Catalog Model",
+                "modalities": { "input": ["text"], "output": ["text"] }
+              }
+            }
+          }
+        }"#,
+    )
+    .expect("catalog fixture");
+
+    std::env::set_var("OPENCODE_MODELS_URL", "http://127.0.0.1:9/api.json");
+    std::env::set_var("OPENCODE_MODELS_PATH", &models_file);
+    let env = models_env();
+    assert_eq!(env.url.as_deref(), Some("http://127.0.0.1:9/api.json"));
+    assert_eq!(env.file.as_deref(), Some(models_file.as_path()));
+    assert!(env.fetch, "fetch defaults on (v2 models.fetch default true)");
+
+    let mut options =
+        oc_core::engine::EngineOptions::new(sandbox.root.join("data"), sandbox.home());
+    options.catalog_fetch = true; // the production boot default
+    apply_models_env(&mut options);
+    assert_eq!(options.catalog_url.as_deref(), Some("http://127.0.0.1:9/api.json"));
+    assert!(
+        options.catalog.provider("fake-catalog-provider").is_some(),
+        "the file catalog replaces the embedded snapshot"
+    );
+    assert!(
+        options.catalog.provider("anthropic").is_none(),
+        "the embedded snapshot is not merged in"
+    );
+    assert!(options.catalog_fetch, "fetch stays on without the disable switch");
+
+    // `OPENCODE_DISABLE_MODELS_FETCH` — v2 truthy only for "1"/"true".
+    for value in ["1", "true", "TRUE", "True"] {
+        std::env::set_var("OPENCODE_DISABLE_MODELS_FETCH", value);
+        assert!(!models_env().fetch, "truthy: {value:?}");
+        let mut options =
+            oc_core::engine::EngineOptions::new(sandbox.root.join("data"), sandbox.home());
+        options.catalog_fetch = true;
+        apply_models_env(&mut options);
+        assert!(!options.catalog_fetch, "the refresh loop is off ({value:?})");
+    }
+    for value in ["0", "false", "yes", ""] {
+        std::env::set_var("OPENCODE_DISABLE_MODELS_FETCH", value);
+        assert!(models_env().fetch, "not truthy: {value:?}");
+    }
+    std::env::remove_var("OPENCODE_DISABLE_MODELS_FETCH");
+
+    // An unusable catalog file degrades to the embedded snapshot (v2
+    // loadFromFile orElseSucceed undefined — the snapshot is the floor).
+    std::env::set_var("OPENCODE_MODELS_PATH", sandbox.root.join("missing.json"));
+    let mut options =
+        oc_core::engine::EngineOptions::new(sandbox.root.join("data"), sandbox.home());
+    apply_models_env(&mut options);
+    assert!(
+        options.catalog.provider("anthropic").is_some(),
+        "a missing file keeps the embedded catalog"
+    );
+    std::env::remove_var("OPENCODE_MODELS_PATH");
+}
+
+/// CLI-N4 (continued) — the project-config disable pair shapes every
+/// loader the server builds (`Config.configured({project})`).
+#[test]
+fn env_switches_project_config() {
+    use oc_server::server_process_env::{configure_loader, project_config_enabled};
+
+    let _guard =
+        EnvGuard::new(vec!["OPENCODE_CONFIG_PROJECT_DISABLE", "OPENCODE_DISABLE_PROJECT_CONFIG"]);
+    assert!(project_config_enabled(), "enabled by default");
+    let sandbox = Sandbox::new("n4p");
+    let project = sandbox.root.join("proj");
+    std::fs::create_dir_all(&project).expect("project dir");
+    std::fs::write(
+        project.join("opencode.json"),
+        r#"{
+          "providers": {
+            "project-seeded-provider": {
+              "settings": { "baseURL": "https://project.test/v1" },
+              "models": { "project-model": { "name": "Project Model" } }
+            }
+          }
+        }"#,
+    )
+    .expect("project config");
+    let globals = oc_core::config::GlobalDirs {
+        config: sandbox.home().join(".config/opencode"),
+        home: sandbox.home(),
+    };
+    let load_providers = || {
+        let mut loader = oc_core::config::Loader::new(project.clone(), globals.clone());
+        configure_loader(&mut loader);
+        let snapshot = loader.load();
+        oc_server::boot::providers_from_config(&snapshot)
+            .custom
+            .iter()
+            .any(|provider| provider.id == "project-seeded-provider")
+    };
+    assert!(load_providers(), "without the switch the project's config-seeded provider loads");
+    for (name, value) in [
+        ("OPENCODE_CONFIG_PROJECT_DISABLE", "1"),
+        ("OPENCODE_CONFIG_PROJECT_DISABLE", "true"),
+        ("OPENCODE_DISABLE_PROJECT_CONFIG", "1"),
+        ("OPENCODE_DISABLE_PROJECT_CONFIG", "true"),
+    ] {
+        std::env::set_var(name, value);
+        assert!(!project_config_enabled(), "{name}={value} disables");
+        assert!(!load_providers(), "{name}={value}: project config is not loaded");
+        std::env::remove_var(name);
+    }
+    // Not truthy values leave project config enabled.
+    std::env::set_var("OPENCODE_CONFIG_PROJECT_DISABLE", "0");
+    assert!(project_config_enabled());
+    assert!(load_providers());
+}
