@@ -378,6 +378,54 @@ fn session_verbosity_cycle_index() {
     assert_eq!(row.title, "Verbosity: Medium");
 }
 
+/// TUI-TD15 — the `--prompt` auto-submit waits for the model halves
+/// (home.tsx:69-80 / index.tsx:597-604): the startup prompt is ARMED
+/// at boot and only submits once `local.model.ready &&
+/// local.model.catalogReady` hold AND a current model resolves — a
+/// boot with the catalog still loading keeps the draft parked (never
+/// a failed first turn).
+#[test]
+fn prompt_autosubmit_ready() {
+    use oc_tui::app::App;
+    use oc_tui::store::ListState;
+
+    let mut app = App::new((80, 24));
+    app.store.set_models(ListState::Loading, Vec::new());
+
+    // Arm at boot (run_with_size's --prompt block).
+    app.arm_startup_prompt("fix the login bug".to_owned());
+    app.maybe_submit_startup_prompt();
+    let composer = app.store.composer(oc_tui::app::HOME_PROMPT_KEY);
+    assert_eq!(
+        composer.draft.text, "fix the login bug",
+        "the draft seeds immediately (r.set) — but does NOT submit"
+    );
+    app.maybe_submit_startup_prompt();
+    let composer = app.store.composer(oc_tui::app::HOME_PROMPT_KEY);
+    assert!(
+        !composer.draft.text.is_empty(),
+        "still parked while the catalog is loading"
+    );
+
+    // The catalog lands → the gate opens → the one-shot submit fires
+    // (the draft clears into the prompt sink).
+    app.store.set_models(
+        ListState::Loaded(vec![oc_tui::store::ServerModel {
+            provider_id: "opencode".to_owned(),
+            id: "grok".to_owned(),
+            name: "Grok".to_owned(),
+            ..oc_tui::store::ServerModel::default()
+        }]),
+        Vec::new(),
+    );
+    app.maybe_submit_startup_prompt();
+    let composer = app.store.composer(oc_tui::app::HOME_PROMPT_KEY);
+    assert!(composer.draft.text.is_empty(), "the startup prompt submitted once ready");
+
+    // One-shot: the second pass never re-submits (v2's `sent` latch).
+    app.maybe_submit_startup_prompt();
+}
+
 /// TUI-10 (the diff half): a working-tree image file renders the
 /// inline `DiffViewerImage` — the "Working tree preview" label, the
 /// decoded `WxH` size row, the blocks pixels — and the mount records
