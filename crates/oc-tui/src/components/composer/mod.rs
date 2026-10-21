@@ -829,6 +829,7 @@ impl Composer {
 
     /// The pump's key dispatch: printable chars feed the textarea;
     /// the rest resolve through the v2 table's composer slice.
+    #[allow(clippy::too_many_lines)] // one arm per key, the composer's dispatch table
     pub fn handle_key(&mut self, key: &ComposerKey) -> KeyOutcome {
         if self.autocomplete.visible.is_some() {
             match key {
@@ -953,11 +954,11 @@ impl Composer {
                 self.autocomplete.close();
                 KeyOutcome::Ignored
             }
-            ComposerKey::Tab => KeyOutcome::Ignored,
             // TUI-28 — the destructive confirm only lives in the
-            // autocomplete layer (handled above); bare ctrl+d is not
-            // a composer command (the base layer's app.exit owns it).
-            ComposerKey::CtrlD => KeyOutcome::Ignored,
+            // autocomplete layer (handled above); bare ctrl+d (like
+            // tab's fallthrough) is not a composer command — the base
+            // layer's app.exit owns it.
+            ComposerKey::Tab | ComposerKey::CtrlD => KeyOutcome::Ignored,
         }
     }
 
