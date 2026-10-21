@@ -1403,6 +1403,721 @@ fn tui7_filter_semantics_live_loop() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// TUI-12 — the composer footer's live N subagents / N shells segment
+// ---------------------------------------------------------------------------
+
+/// TUI-12's event script: a running CHILD session in `ses_alpha`'s
+/// family (`session.created` with `parentID` + `session.execution.
+/// started`) and one in-flight shell owned by `ses_alpha`
+/// (`shell.created` carrying `metadata.sessionID` — the client data
+/// cache's live shell map, solid/data.ts:1245-1261).
+fn live_counts_script(session: &str) -> Vec<vt_harness::ScriptEvent> {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(1_000_000, |since| since.as_millis() as u64);
+    vec![
+        vt_harness::ScriptEvent {
+            delay_ms: 60,
+            body: format!(
+                r#"{{"id":"evt_child","created":{now_ms},"type":"session.created","data":{{"sessionID":"ses_child","parentID":"{session}","title":"Child work","directory":"/tmp"}}}}"#
+            ),
+        },
+        vt_harness::ScriptEvent {
+            delay_ms: 80,
+            body: format!(
+                r#"{{"id":"evt_exec","created":{now_ms},"type":"session.execution.started","data":{{"sessionID":"ses_child"}}}}"#
+            ),
+        },
+        vt_harness::ScriptEvent {
+            delay_ms: 100,
+            body: format!(
+                r#"{{"id":"evt_shell","created":{now_ms},"type":"shell.created","data":{{"info":{{"id":"sh_live","command":"ls","cwd":"/tmp","file":"","shell":"/bin/sh","status":"running","metadata":{{"sessionID":"{session}"}},"time":{{"started":0}}}}}}}}"#
+            ),
+        },
+    ]
+}
+
+/// TUI-12: the composer footer's live segment
+/// (`feature-plugins/prompt/footer.tsx:20-33,47,65-94`) — the family's
+/// RUNNING subagents (excluding self) + the session's in-flight shells
+/// paint as `1 subagent · 1 shell` (the `session.child.first`
+/// shortcut prefix in text.base), the segment LIFTS under the pointer
+/// (muted → text.base), and a left release toggles the subagent picker
+/// (`onMouseUp` → `session.child.first`).
+#[test]
+fn composer_live_counts() {
+    run_daily_test(
+        "tui12-live",
+        120,
+        30,
+        |fake, _| {
+            fake.arm_script(live_counts_script("ses_alpha"));
+        },
+        |h| {
+            boot_to_session(h, b"Alpha")?;
+            // Trigger the armed script (it plays after the first
+            // prompt POST): the family child + the live shell land.
+            h.write(b"hello\r");
+            // The live segment paints on the composer's footer row
+            // (the status row at the bottom of the content column).
+            let grid = wait_grid(
+                h,
+                |g| {
+                    (20..30).any(|y| {
+                        let text = g.content_rect(0, y, 120, 1);
+                        text.contains("1 subagent") && text.contains("1 shell")
+                    })
+                },
+                Duration::from_secs(10),
+            )
+            .map_err(|error| format!("the live segment never painted: {error}"))?;
+            let y = (20..30)
+                .find(|y| {
+                    let text = grid.content_rect(0, *y, 120, 1);
+                    text.contains("1 subagent") && text.contains("1 shell")
+                })
+                .ok_or("the live row vanished")?;
+            let row = grid.content_rect(0, y, 120, 1);
+            let seg_x = row
+                .find("1 subagent")
+                .map(|byte| row[..byte].chars().count())
+                .ok_or("the subagent count's x")?;
+            // The shortcut prefix paints with the counts (v2 renders
+            // `shortcut("session.child.first")` — `down` — before the
+            // segment, footer.tsx:77-79).
+            assert!(
+                row.contains("down 1 subagent"),
+                "the session.child.first shortcut prefixes the segment: {row}"
+            );
+            let prefix_x = row
+                .find("down 1 subagent")
+                .map(|byte| row[..byte].chars().count())
+                .expect("the prefix x");
+            // Hover: the counts lift muted → text.base (the style
+            // digest of a count cell changes while the char stays).
+            let before = grid.cell(seg_x, y);
+            h.sgr_motion(u16::try_from(seg_x).unwrap_or(60), u16::try_from(y).unwrap_or(29));
+            let lifted = wait_grid(
+                h,
+                |g| g.cell(seg_x, y).ch == before.ch && g.cell(seg_x, y).style != before.style,
+                Duration::from_secs(5),
+            )
+            .map_err(|error| format!("the live segment never lifted under the pointer: {error}"))?;
+            // Moving off the segment clears the lift (onMouseOut).
+            h.sgr_motion(60, 5);
+            wait_grid(h, |g| g.cell(seg_x, y).style == before.style, Duration::from_secs(5))
+                .map_err(|error| format!("the lift never cleared off-segment: {error}"))?;
+            // Release ON the segment dispatches session.child.first
+            // (the subagent picker's toggle — the Subagents tab strip
+            // mounts over the composer).
+            let x = u16::try_from(prefix_x + 2).unwrap_or(60);
+            let y16 = u16::try_from(y).unwrap_or(29);
+            h.sgr_motion(x, y16);
+            h.sgr_press(x, y16);
+            h.sgr_release(x, y16);
+            wait_grid(
+                h,
+                |g| {
+                    (0..g.rows).any(|row| g.row_text(row).contains("Subagents"))
+                        && (0..g.rows).any(|row| g.row_text(row).contains("Shell"))
+                },
+                Duration::from_secs(5),
+            )
+            .map_err(|error| format!("the live release never opened the picker: {error}"))?;
+            let _ = lifted;
+            Ok(())
+        },
+    );
+}
+
+// ---------------------------------------------------------------------------
+// TUI-14 — the shell-mode `!` prefix
+// ---------------------------------------------------------------------------
+
+/// TUI-14: `!` typed at caret 0 on an empty normal-mode draft enters
+/// SHELL MODE (prompt/index.tsx:961-981's `bind: "!"` layer — the `!`
+/// itself never inserts), the footer flips to `esc exit shell mode`
+/// (footer.tsx:107-112), the metadata row labels `Shell`
+/// (prompt/index.tsx:1570), escape/backspace-at-0 exit back to normal,
+/// and Enter submits through `session.shell` (POST
+/// /api/session/:id/shell, prompt/index.tsx:1303-1307) — the mode
+/// resets to normal after the send.
+/// TUI-14/TUI-15's shared POST-registry slot type (the fake's
+/// recorder handed out through the arm closure).
+type SharedPosts = Arc<Mutex<Option<Arc<Mutex<Vec<String>>>>>>;
+
+#[test]
+fn shell_bang_mode() {
+    // The fake's shell-POST registry, shared out through the arm
+    // closure (the assertion reads it after the app loop returns).
+    let shell_slot: SharedPosts = Arc::new(Mutex::new(None));
+    let slot = Arc::clone(&shell_slot);
+    run_daily_test(
+        "tui14-bang",
+        120,
+        30,
+        |fake, _| {
+            *slot.lock().expect("slot") = Some(Arc::clone(&fake.shell_posts));
+        },
+        |h| {
+            boot_to_session(h, b"Alpha")?;
+            // The composer settles (the agents hint paints).
+            wait_text(h, "shift+tab agents", Duration::from_secs(10))?;
+            // `!` at caret 0 enters shell mode: the footer's esc hint
+            // replaces the shortcut hints (footer.tsx:107-112 — the
+            // whole PromptFooter content swaps for the shell Match).
+            h.write(b"!");
+            wait_grid(
+                h,
+                |g| {
+                    (20..30).any(|y| {
+                        let text = g.content_rect(0, y, 120, 1);
+                        text.contains("exit shell mode") && !text.contains("agents")
+                    })
+                },
+                Duration::from_secs(5),
+            )
+            .map_err(|error| format!("the shell footer never painted: {error}"))?;
+            // The metadata row labels the mode "Shell"
+            // (prompt/index.tsx:1570's agentLabel override — the row
+            // keeps the box's `┃` rail + pads, so probe the painted
+            // run).
+            wait_grid(
+                h,
+                |g| (20..30).any(|y| g.content_rect(2, y, 116, 1).trim() == "┃  Shell"),
+                Duration::from_secs(5),
+            )
+            .map_err(|error| format!("the Shell metadata label never painted: {error}"))?;
+            // The `!` itself never inserts — typing continues the
+            // command draft.
+            h.write(b"echo hello");
+            wait_grid(
+                h,
+                |g| (20..30).any(|y| g.content_rect(2, y, 116, 1).contains("echo hello")),
+                Duration::from_secs(5),
+            )?;
+            // Escape exits shell mode (the draft KEEPS its text —
+            // v2 only flips the mode, index.tsx:989-992).
+            h.write(b"\x1b");
+            wait_grid(
+                h,
+                |g| {
+                    (20..30).all(|y| !g.content_rect(0, y, 120, 1).contains("exit shell mode"))
+                        && (20..30).any(|y| g.content_rect(2, y, 116, 1).contains("echo hello"))
+                },
+                Duration::from_secs(5),
+            )
+            .map_err(|error| format!("escape never exited shell mode: {error}"))?;
+            // Clear the draft (ctrl+c), re-enter, and submit: the
+            // command leaves through session.shell.
+            h.write(b"\x03");
+            wait_grid(
+                h,
+                |g| (20..30).all(|y| !g.content_rect(2, y, 116, 1).contains("echo hello")),
+                Duration::from_secs(5),
+            )?;
+            h.write(b"!");
+            wait_grid(
+                h,
+                |g| (20..30).any(|y| g.content_rect(0, y, 120, 1).contains("exit shell mode")),
+                Duration::from_secs(5),
+            )?;
+            h.write(b"pwd");
+            h.write(b"\r");
+            // The mode resets (the esc hint leaves) and the footer's
+            // normal hints return.
+            wait_grid(
+                h,
+                |g| (20..30).any(|y| g.content_rect(0, y, 120, 1).contains("shift+tab agents")),
+                Duration::from_secs(5),
+            )
+            .map_err(|error| format!("the mode never reset after the shell send: {error}"))?;
+            // Backspace at caret 0 also exits: re-enter on the now
+            // empty draft, then backspace.
+            h.write(b"!");
+            wait_grid(
+                h,
+                |g| (20..30).any(|y| g.content_rect(0, y, 120, 1).contains("exit shell mode")),
+                Duration::from_secs(5),
+            )?;
+            h.write(b"\x7f");
+            wait_grid(
+                h,
+                |g| (20..30).all(|y| !g.content_rect(0, y, 120, 1).contains("exit shell mode")),
+                Duration::from_secs(5),
+            )
+            .map_err(|error| format!("backspace-at-0 never exited shell mode: {error}"))?;
+            Ok(())
+        },
+    );
+    // The shell submit reached the server: POST /api/session/ses_alpha/
+    // shell carrying the command text.
+    let posts = shell_slot
+        .lock()
+        .expect("slot")
+        .as_ref()
+        .map(|arc| arc.lock().expect("posts").clone())
+        .unwrap_or_default();
+    assert!(
+        posts.iter().any(|post| post.contains("pwd")),
+        "the shell command never POSTed; saw {posts:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// TUI-15 — the Zed editor context
+// ---------------------------------------------------------------------------
+
+/// TUI-15's Zed sqlite fixture (editor-zed.ts's table shapes): one
+/// workspace whose paths contain `workspace_dir` (the app's cwd), one
+/// ACTIVE editor on `notes.md` with multi-line contents, and a
+/// selection covering the second and third lines (the `#2-3` label).
+/// The db FILE lives under `db_dir` (the sandbox).
+fn zed_fixture_db(db_dir: &std::path::Path, workspace_dir: &std::path::Path) -> std::path::PathBuf {
+    let db_path = db_dir.join("zed").join("db.sqlite");
+    std::fs::create_dir_all(db_path.parent().expect("zed dir")).expect("zed dir");
+    let connection = rusqlite::Connection::open(&db_path).expect("open zed db");
+    let contents = "line one\nline two\nline three\n";
+    let start = contents.find("line two").expect("line two");
+    let end = contents.len().saturating_sub(1);
+    connection
+        .execute_batch(&format!(
+            "create table items (item_id integer primary key, kind text, pane_id integer, workspace_id integer, active integer);
+             create table panes (pane_id integer, workspace_id integer, active integer);
+             create table workspaces (workspace_id integer primary key, paths text, timestamp text);
+             create table editors (item_id integer, workspace_id integer, buffer_path text, contents text);
+             create table editor_selections (editor_id integer, workspace_id integer, start integer, end integer);
+             insert into workspaces values (1, '[\"{0}\"]', '2026-01-02T00:00:00Z');
+             insert into panes values (10, 1, 1);
+             insert into items values (100, 'Editor', 10, 1, 1);
+             insert into editors values (100, 1, '{0}/notes.md', '{1}');
+             insert into editor_selections values (100, 1, {2}, {3});",
+            workspace_dir.display(),
+            contents,
+            start,
+            end
+        ))
+        .expect("zed schema");
+    drop(connection);
+    db_path
+}
+
+/// TUI-15: inside Zed's terminal (`ZED_TERM=true` +
+/// `OPENCODE_ZED_DB`), the 1 s poll resolves the active editor's
+/// selection and the composer footer paints the `prompt.footer.file`
+/// label (`notes.md #2-3`, prompt/index.tsx:240-250,1945); submitting
+/// attaches the context FIRST through `session.synthetic`
+/// (index.tsx:1339-1346) — the `<system-reminder>` block carrying the
+/// selected text precedes the prompt POST.
+#[test]
+fn zed_context() {
+    std::env::set_var("ZED_TERM", "true");
+    let db_slot: Arc<Mutex<Option<std::path::PathBuf>>> = Arc::new(Mutex::new(None));
+    let synthetic_slot: SharedPosts = Arc::new(Mutex::new(None));
+    let arm_db = Arc::clone(&db_slot);
+    let arm_syn = Arc::clone(&synthetic_slot);
+    let driver_syn = Arc::clone(&synthetic_slot);
+    run_daily_test(
+        "tui15-zed",
+        120,
+        30,
+        |fake, sandbox| {
+            // The db file lives under the sandbox; the WORKSPACE it
+            // declares is the app's cwd (the scoring root).
+            let cwd = std::env::current_dir().unwrap_or_else(|_| sandbox.clone());
+            let db = zed_fixture_db(sandbox, &cwd);
+            *arm_db.lock().expect("db slot") = Some(db.clone());
+            std::env::set_var("OPENCODE_ZED_DB", &db);
+            *arm_syn.lock().expect("syn slot") = Some(Arc::clone(&fake.synthetic_posts));
+        },
+        move |h| {
+            let synthetic_slot = driver_syn;
+            boot_to_session(h, b"Alpha")?;
+            // The poll's first tick (≤ 1 s) lands the selection: the
+            // footer's file label paints left of the hint pack.
+            wait_grid(
+                h,
+                |g| {
+                    (20..30).any(|y| {
+                        let text = g.content_rect(0, y, 120, 1);
+                        text.contains("notes.md #2-3")
+                    })
+                },
+                Duration::from_secs(10),
+            )
+            .map_err(|error| format!("the editor file label never painted: {error}"))?;
+            // Submit: the pending context attaches through the
+            // synthetic POST before the prompt.
+            h.write(b"use the selection\r");
+            let deadline = std::time::Instant::now() + Duration::from_secs(8);
+            loop {
+                let posted = synthetic_slot
+                    .lock()
+                    .expect("syn slot")
+                    .as_ref()
+                    .map(|arc| arc.lock().expect("posts").clone())
+                    .unwrap_or_default();
+                if posted.iter().any(|body| {
+                    body.contains("/synthetic")
+                        && body.contains("system-reminder")
+                        && body.contains("line two")
+                }) {
+                    break;
+                }
+                if std::time::Instant::now() > deadline {
+                    return Err(format!("the editor context never POSTed; saw {posted:?}"));
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Ok(())
+        },
+    );
+    // Cleanup: the env gate is process-global (nextest isolates test
+    // processes, but the in-process unit tests share the env).
+    std::env::remove_var("OPENCODE_ZED_DB");
+    std::env::remove_var("ZED_TERM");
+    let db_path = db_slot.lock().expect("db slot").clone();
+    if let Some(db) = db_path {
+        let _ = std::fs::remove_file(&db);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// TUI-17 — the mini footer's subagent inspector
+// ---------------------------------------------------------------------------
+
+/// TUI-17's event script: two RUNNING children discovered by
+/// `parentID` (source 4) — the first with a folded text delta (the
+/// detail transcript's row).
+fn subagent_script(parent: &str) -> Vec<vt_harness::ScriptEvent> {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(1_000_000, |since| since.as_millis() as u64);
+    vec![
+        vt_harness::ScriptEvent {
+            delay_ms: 60,
+            body: format!(
+                r#"{{"id":"evt_kid_a","created":{now_ms},"type":"session.created","data":{{"sessionID":"ses_kid_a","parentID":"{parent}","title":"Check the parsers","directory":"/tmp"}}}}"#
+            ),
+        },
+        vt_harness::ScriptEvent {
+            delay_ms: 80,
+            body: format!(
+                r#"{{"id":"evt_kid_a_exec","created":{now_ms},"type":"session.execution.started","data":{{"sessionID":"ses_kid_a"}}}}"#
+            ),
+        },
+        vt_harness::ScriptEvent {
+            delay_ms: 100,
+            body: format!(
+                r#"{{"id":"evt_kid_a_t","created":{now_ms},"type":"session.text.delta","data":{{"sessionID":"ses_kid_a","messageID":"m_kid","partID":"p_kid","delta":"Working on it"}}}}"#
+            ),
+        },
+        vt_harness::ScriptEvent {
+            delay_ms: 120,
+            body: format!(
+                r#"{{"id":"evt_kid_b","created":{now_ms},"type":"session.created","data":{{"sessionID":"ses_kid_b","parentID":"{parent}","title":"Second look","directory":"/tmp"}}}}"#
+            ),
+        },
+        vt_harness::ScriptEvent {
+            delay_ms: 140,
+            body: format!(
+                r#"{{"id":"evt_kid_b_exec","created":{now_ms},"type":"session.execution.started","data":{{"sessionID":"ses_kid_b"}}}}"#
+            ),
+        },
+    ]
+}
+
+/// The mini runner: `opencode mini`'s runtime loop over a pty at a
+/// fixed size (the TUI runner's shape — the pty guard restores stdio).
+fn run_mini_test<T: Send + 'static>(
+    tag: &str,
+    cols: u16,
+    rows: u16,
+    arm: impl FnOnce(&FakeLlm, &std::path::PathBuf),
+    drive: impl FnOnce(&mut HarnessHandle) -> Result<T, String> + Send + 'static,
+) -> T {
+    let _lock = pty_lock();
+    let sandbox = sandbox_env(tag);
+    let fake = FakeLlm::spawn(standard_sessions());
+    arm(&fake, &sandbox);
+    let harness = LiveHarness::attach(cols, rows);
+    // Answer ratatui's inline-viewport cursor probe (`CSI 6n`): the
+    // pty has no terminal behind it, so the test replies at the
+    // bottom row (the footer viewport docks there).
+    {
+        let mut prober = harness.handle();
+        std::thread::spawn(move || {
+            let mut answered = 0usize;
+            loop {
+                std::thread::sleep(Duration::from_millis(20));
+                let raw = prober.raw_mirror();
+                let asked = raw.windows(4).filter(|window| window == b"\x1b[6n").count();
+                for _ in answered..asked {
+                    prober.write(b"\x1b[39;1R");
+                }
+                answered = asked;
+            }
+        });
+    }
+    let slot: Arc<Mutex<Option<Result<T, String>>>> = Arc::new(Mutex::new(None));
+    let result_slot = Arc::clone(&slot);
+    let mut driver = harness.handle();
+    std::thread::spawn(move || {
+        let outcome = drive(&mut driver);
+        // The mini exit chord: esc folds any open panel back to the
+        // composer first, then up to three ctrl+c presses — a leftover
+        // draft clears on the first, the second arms, the third closes
+        // (`handleExit`, footer.ts:1017-1041).
+        driver.write(b"\x1b");
+        std::thread::sleep(Duration::from_millis(150));
+        for _ in 0..3 {
+            driver.write(b"\x03");
+            std::thread::sleep(Duration::from_millis(150));
+        }
+        *result_slot.lock().expect("slot") = Some(outcome);
+    });
+    let client = oc_client::Client::new(&fake.url).expect("client");
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("rt");
+    let input = oc_tui::mini::runtime::MiniInput {
+        client,
+        target: oc_tui::mini::runtime::ResolvedSession {
+            session_id: "ses_alpha".to_owned(),
+            session_title: Some("Alpha".to_owned()),
+            directory: sandbox.display().to_string(),
+            model_label: None,
+            agent: None,
+            resume: false,
+        },
+        initial_input: None,
+        replay: false,
+        replay_limit: None,
+        demo: false,
+        version: "test".to_owned(),
+        home: sandbox.display().to_string(),
+        state_dir: sandbox.join(".local/state"),
+        settings: None,
+    };
+    let finished = runtime.block_on(async {
+        tokio::time::timeout(Duration::from_secs(90), oc_tui::mini::runtime::run(input)).await
+    });
+    fake.stop();
+    // The driver's outcome first (its failure text explains a runtime
+    // that never closed — e.g. a chord swallowed by an open panel).
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while slot.lock().expect("slot").is_none() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let driver_outcome = slot.lock().expect("slot").take();
+    match finished {
+        Ok(Ok(_)) => {}
+        Ok(Err(error)) => panic!("the mini runtime failed: {error}"),
+        Err(elapsed) => {
+            let raw = harness.handle().raw_mirror();
+            let tail = String::from_utf8_lossy(&raw[raw.len().saturating_sub(1200)..]);
+            let driver_error = match driver_outcome.as_ref() {
+                Some(Err(message)) => Some(message.clone()),
+                _ => None,
+            };
+            panic!(
+                "the mini runtime did not exit in time: {elapsed}; driver: {driver_error:?}; raw TAIL: {tail:?}"
+            );
+        }
+    }
+    match driver_outcome {
+        Some(Ok(value)) => value,
+        Some(Err(error)) => panic!("driver failed: {error}"),
+        None => panic!("the driver thread never reported"),
+    }
+}
+
+/// TUI-17: the mini footer tracks the parent's children (the live
+/// `parentID` discovery + the child's own event fold), the statusline
+/// carries `2 subagents`, `down` opens the 14-row inspector on the
+/// newest running child (glyph + title + transcript + hints), `tab`
+/// cycles (`1 of 2` / `tab next 1/2`), ctrl+c interrupts the INSPECTED
+/// child server-side, and esc returns to the composer.
+#[test]
+fn mini_subagent_footer() {
+    let interrupt_slot: SharedPosts = Arc::new(Mutex::new(None));
+    let arm_interrupt = Arc::clone(&interrupt_slot);
+    let driver_interrupt = Arc::clone(&interrupt_slot);
+    run_mini_test(
+        "tui17-mini",
+        80,
+        40,
+        |fake, _sandbox| {
+            fake.arm_script(subagent_script("ses_alpha"));
+            *arm_interrupt.lock().expect("slot") = Some(Arc::clone(&fake.interrupt_posts));
+        },
+        move |h| {
+            // Boot settles first (the splash), then the prompt: the
+            // keystrokes must land after raw mode owns the pty.
+            wait_text(h, "oc mini", Duration::from_secs(8))?;
+            h.write(b"hello");
+            wait_grid(
+                h,
+                |g| (0..g.rows).any(|row| g.row_text(row).contains("hello")),
+                Duration::from_secs(5),
+            )?;
+            // Submit: the armed script fires the two child
+            // discoveries + the child's folded text.
+            h.write(b"\r");
+            // The statusline's live count (footer.view.tsx:247). The
+            // echoed prompt row ("> hello") stays in scrollback — the
+            // count is the submit's landing proof.
+            wait_grid(
+                h,
+                |g| (0..g.rows).any(|row| g.row_text(row).contains("2 subagents")),
+                Duration::from_secs(10),
+            )
+            .map_err(|error| format!("the subagent count never painted: {error}"))?;
+            // `down` (session.child.first) opens the inspector on the
+            // newest RUNNING child (kid_b).
+            h.write(b"\x1b[B");
+            let grid = wait_grid(
+                h,
+                |g| {
+                    (0..g.rows).any(|row| g.row_text(row).contains("Second look"))
+                        && (0..g.rows).any(|row| g.row_text(row).contains("ctrl+c interrupt"))
+                },
+                Duration::from_secs(5),
+            )
+            .map_err(|error| format!("the inspector never painted: {error}"))?;
+            // The running glyph + the interrupt hint.
+            assert!(
+                (0..grid.rows).any(|row| grid.row_text(row).contains('◔')),
+                "the running glyph paints"
+            );
+            assert!(
+                (0..grid.rows).any(|row| grid.row_text(row).contains("ctrl+c interrupt")),
+                "the interrupt hint paints"
+            );
+            // tab cycles to the first child (kid_a) — the count +
+            // cycle hints appear, and its folded text lists.
+            h.write(b"\t");
+            // The cycle lands on the first child — the count control
+            // (`1 of 2`; the hint-row forms only when the header
+            // controls do not fit) + its folded transcript row.
+            wait_grid(
+                h,
+                |g| {
+                    (0..g.rows).any(|row| g.row_text(row).contains("Check the parsers"))
+                        && (0..g.rows).any(|row| g.row_text(row).contains("1 of 2"))
+                        && (0..g.rows).any(|row| g.row_text(row).contains("Working on it"))
+                },
+                Duration::from_secs(5),
+            )
+            .map_err(|error| format!("the cycle never landed on the first child: {error}"))?;
+            // ctrl+c interrupts the INSPECTED child (kid_a).
+            h.write(b"\x03");
+            let deadline = std::time::Instant::now() + Duration::from_secs(8);
+            loop {
+                let posts = driver_interrupt
+                    .lock()
+                    .expect("slot")
+                    .as_ref()
+                    .map(|arc| arc.lock().expect("posts").clone())
+                    .unwrap_or_default();
+                if posts.iter().any(|post| post.contains("/api/session/ses_kid_a/interrupt")) {
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "the child interrupt never POSTed; saw {posts:?}"
+                );
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            // esc returns to the composer (the statusline count back).
+            h.write(b"\x1b");
+            wait_grid(
+                h,
+                |g| {
+                    (0..g.rows).any(|row| g.row_text(row).contains("2 subagents"))
+                        && (0..g.rows).all(|row| !g.row_text(row).contains("Second look"))
+                },
+                Duration::from_secs(5),
+            )
+            .map_err(|error| format!("esc never closed the inspector: {error}"))?;
+            Ok(())
+        },
+    );
+}
+
+// ---------------------------------------------------------------------------
+// TUI-16 — mouse selection copy
+// ---------------------------------------------------------------------------
+
+/// TUI-16: a left DRAG over screen cells captures a selection and the
+/// release copies it (`terminal.copy = "select"`, the non-win32
+/// default — util/selection.ts:44-60 + app.tsx:546-571): the
+/// `Copied to clipboard` info toast paints and the clipboard write
+/// emits OSC 52. A BARE click (no crossing) never selects, and
+/// `terminal.copy = "manual"` keeps the copy off the release (the
+/// selection waits for ctrl+y — the intercept's copy).
+#[test]
+fn selection_copy() {
+    run_daily_test(
+        "tui16-select",
+        120,
+        30,
+        |_, _| {},
+        |h| {
+            boot_to_session(h, b"Alpha")?;
+            wait_text(h, "shift+tab agents", Duration::from_secs(10))?;
+            // Text on screen the drag can capture: the composer's
+            // own draft row (a non-UI surface — no strip/rail drag
+            // competes for the pointer).
+            h.write(b"parrot selected words");
+            wait_grid(
+                h,
+                |g| (20..30).any(|y| g.content_rect(0, y, 120, 1).contains("parrot selected")),
+                Duration::from_secs(5),
+            )?;
+            let y = (20..30)
+                .find(|&row| {
+                    let text = h.grid_now().row_text(row);
+                    text.contains('p') && text.contains('r') && text.contains('o')
+                })
+                .unwrap_or(26);
+            // A bare click never selects: press + release on one cell
+            // leaves no toast.
+            h.sgr_motion(10, u16::try_from(y).unwrap_or(26));
+            h.sgr_press(10, u16::try_from(y).unwrap_or(26));
+            h.sgr_release(10, u16::try_from(y).unwrap_or(26));
+            std::thread::sleep(Duration::from_millis(400));
+            if (0..h.grid_now().rows).any(|row| h.grid_now().row_text(row).contains("Copied")) {
+                return Err("a bare click must not copy".to_owned());
+            }
+            // The crossing drag: press before the text, drag past it,
+            // release — the copy lands.
+            h.sgr_motion(2, u16::try_from(y).unwrap_or(26));
+            h.sgr_press(2, u16::try_from(y).unwrap_or(26));
+            h.sgr_drag(40, u16::try_from(y).unwrap_or(26));
+            h.sgr_release(40, u16::try_from(y).unwrap_or(26));
+            wait_text(h, "Copied to clipboard", Duration::from_secs(5))
+                .map_err(|error| format!("the copy toast never painted: {error}"))?;
+            // The clipboard write emitted OSC 52 (the base64 payload
+            // follows the `52;c` marker).
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            loop {
+                let raw = h.raw_mirror();
+                let from =
+                    raw.windows(5).position(|window| window == b"\x1b]52;").map(|at| &raw[at..]);
+                if from.is_some_and(|tail| tail.contains(&b'c')) {
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "the clipboard write never emitted OSC 52"
+                );
+                std::thread::sleep(Duration::from_millis(60));
+            }
+            Ok(())
+        },
+    );
+}
+
 /// TUI-35 — the boot completes against a QUIET server (no SSE script
 /// armed, no prompt ever `POST`ed — the event stream never speaks) and
 /// the standard exit chord tears the app down THROUGH a dirty dialog

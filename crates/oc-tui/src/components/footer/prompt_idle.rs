@@ -103,6 +103,9 @@ pub struct PromptIdleState {
     pub agent: String,
     pub model_label: String,
     pub command_shortcut: String,
+    /// TUI-17 — the statusline's status detail (the `N subagents`
+    /// group, footer.view.tsx:247); EMPTY renders nothing.
+    pub status_detail: String,
 }
 
 impl Default for PromptIdleState {
@@ -111,6 +114,7 @@ impl Default for PromptIdleState {
             agent: "Build".into(),
             model_label: "gpt-5".into(),
             command_shortcut: "ctrl+p".into(),
+            status_detail: String::new(),
         }
     }
 }
@@ -144,7 +148,7 @@ pub fn render_prompt_idle(
                 agent: Some(&state.agent),
                 model: Some(&state.model_label),
                 menu: Some((state.command_shortcut.as_str(), "menu")),
-                status: None,
+                status: (!state.status_detail.is_empty()).then_some(state.status_detail.as_str()),
                 provider: None,
             },
             width,

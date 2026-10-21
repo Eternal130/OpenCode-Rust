@@ -129,6 +129,8 @@ struct ComposerColors {
     popup_selected_text: Rgb,
     /// `text.feedback.warning.base` — chips + the variant label.
     chip: Rgb,
+    /// `hue.accent[500]` — the editor file label's pending color.
+    accent: Rgb,
 }
 
 fn rgb_of(color: CellColor) -> Rgb {
@@ -153,6 +155,11 @@ impl ComposerColors {
             popup_selected_bg: rgb_of(p.popup_selected_bg),
             popup_selected_text: rgb_of(p.popup_selected_text),
             chip: rgb_of(p.chip_color),
+            accent: {
+                let rgba =
+                    theme.resolved.tokens.semantic(oc_theme::types::SemanticHue::Accent).s500;
+                (rgba.r, rgba.g, rgba.b)
+            },
         }
     }
 }
@@ -255,11 +262,24 @@ struct ComposerInputs {
     footer_block: StyledText,
     footer_command: StyledText,
     footer_plugin: StyledText,
+    /// TUI-12 — the live segment (`down 1 subagent · 1 shell`): the
+    /// shortcut run `text.base` + the counts muted (base when
+    /// hovered).
+    footer_live: StyledText,
+    /// TUI-14 — the shell-mode hint (`esc exit shell mode`): `esc ` in
+    /// `text.base`, the label muted (footer.tsx:107-112).
+    footer_shell: StyledText,
+    /// TUI-15 — the editor file label (`notes.md #1-2`): accent while
+    /// PENDING, muted once sent (index.tsx:1945-1952).
+    footer_editor_file: StyledText,
     // -- dynamic geometry (content-dependent, patched) --------------------
     interrupt_x: usize,
     block_x: usize,
     command_x: usize,
     plugin_x: usize,
+    live_x: usize,
+    shell_x: usize,
+    editor_file_x: usize,
     // -- mount-static geometry (the mount key) ----------------------------
     width: usize,
     /// The composer box's frame-relative top (the popup's rows above).
@@ -418,6 +438,40 @@ fn shape(view: &PromptView, width: usize, height: usize, theme: &ThemeState) -> 
         Some((_, segment)) if !segment.is_empty() => one(segment.clone(), colors.muted),
         _ => styled(Vec::new()),
     };
+    // TUI-12 — the live segment: the `session.child.first` shortcut
+    // run in `text.base`, the counts in muted (base when hovered —
+    // footer.tsx:70-84's `fg={liveHovered() ? text.base : muted}`).
+    let footer_live = match &plan.live {
+        Some((_, label)) if !label.is_empty() => {
+            let counts_fg = if view.footer.live_hovered { colors.text_base } else { colors.muted };
+            let shortcut_width = display_width(&view.footer.live_shortcut);
+            let mut chunks = Vec::new();
+            if shortcut_width > 0 {
+                chunks.push(chunk(view.footer.live_shortcut.clone(), colors.text_base, 0));
+            }
+            if !view.footer.live.is_empty() {
+                chunks.push(chunk(view.footer.live.clone(), counts_fg, 0));
+            }
+            styled(chunks)
+        }
+        _ => styled(Vec::new()),
+    };
+    // TUI-14 — the shell-mode hint: `esc ` base + label muted.
+    let footer_shell = match &plan.shell_hint {
+        Some((_, label)) => styled(vec![
+            chunk("esc ".to_owned(), colors.text_base, 0),
+            chunk(label.clone(), colors.muted, 0),
+        ]),
+        None => styled(Vec::new()),
+    };
+    // TUI-15 — the editor file label: accent (pending) / muted (sent).
+    let footer_editor_file = match &plan.editor_file {
+        Some((_, label)) if !label.is_empty() => {
+            let fg = if view.footer.editor_file_pending { colors.accent } else { colors.muted };
+            one(label.clone(), fg)
+        }
+        _ => styled(Vec::new()),
+    };
 
     // The popup above the box (rows y = top − popup_h + i).
     let popup_rows: Vec<PopupRowView> = match &view.autocomplete {
@@ -452,10 +506,16 @@ fn shape(view: &PromptView, width: usize, height: usize, theme: &ThemeState) -> 
         footer_block,
         footer_command,
         footer_plugin,
+        footer_live,
+        footer_shell,
+        footer_editor_file,
         interrupt_x: plan.interrupt_x.unwrap_or(0),
         block_x: plan.block_x.unwrap_or(0),
         command_x: plan.command_x.unwrap_or(0),
         plugin_x: plan.plugin.as_ref().map_or(0, |(x, _)| *x),
+        live_x: plan.live.as_ref().map_or(0, |(x, _)| *x),
+        shell_x: plan.shell_hint.as_ref().map_or(0, |(x, _)| *x),
+        editor_file_x: plan.editor_file.as_ref().map_or(0, |(x, _)| *x),
         width,
         top: view.top,
         popup_h,
@@ -741,6 +801,18 @@ fn composer_element(inputs: &Signal<ComposerInputs>, geo: &ComposerInputs) -> El
                 footer_text(
                     |i: &ComposerInputs| i.plugin_x,
                     |i: &ComposerInputs| i.footer_plugin.clone(),
+                ),
+                footer_text(
+                    |i: &ComposerInputs| i.live_x,
+                    |i: &ComposerInputs| i.footer_live.clone(),
+                ),
+                footer_text(
+                    |i: &ComposerInputs| i.shell_x,
+                    |i: &ComposerInputs| i.footer_shell.clone(),
+                ),
+                footer_text(
+                    |i: &ComposerInputs| i.editor_file_x,
+                    |i: &ComposerInputs| i.footer_editor_file.clone(),
                 ),
             ]))
             .into_element(),

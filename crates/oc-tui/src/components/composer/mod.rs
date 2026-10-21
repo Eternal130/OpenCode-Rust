@@ -99,6 +99,18 @@ pub struct AgentMention {
     pub name: String,
 }
 
+/// The composer's input mode (`store.mode`, prompt/index.tsx:91):
+/// `!` typed at caret 0 flips to [`ComposerMode::Shell`] — the
+/// footer swaps to `esc exit shell mode`, the metadata row labels
+/// `Shell`, and Enter routes the draft through `session.shell`
+/// instead of `session.prompt` (TUI-14).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ComposerMode {
+    #[default]
+    Normal,
+    Shell,
+}
+
 /// A prompt draft (`PromptInfo`): the text plus its attachment parts.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PromptDraft {
@@ -135,6 +147,11 @@ pub struct SubmittedPrompt {
     /// optimistic admit; the POST body carries it so the SSE echo
     /// re-admits under the same id, data.ts:769-787).
     pub inbox_id: Option<String>,
+    /// TUI-15 — the pending editor context's `<system-reminder>` text
+    /// (index.tsx:1339-1344): the sink admits it via
+    /// `session.synthetic` BEFORE the prompt POST, then the label
+    /// flips to sent.
+    pub editor_context: Option<String>,
 }
 
 /// `src/prompt/history.ts` semantics (the golden-relevant subset): a
@@ -240,6 +257,10 @@ pub struct Composer {
     pub placeholders: Vec<String>,
     pub placeholder_index: usize,
     pub autocomplete: AutocompleteState,
+    /// TUI-14 — the input mode (`store.mode`): `Shell` while the
+    /// `!` prefix holds (esc/backspace-at-0 exit; Enter sends through
+    /// `session.shell`).
+    pub mode: ComposerMode,
 }
 
 impl Default for Composer {
@@ -253,6 +274,7 @@ impl Default for Composer {
             placeholders: Vec::new(),
             placeholder_index: 0,
             autocomplete: AutocompleteState::default(),
+            mode: ComposerMode::Normal,
         }
     }
 }
@@ -319,6 +341,10 @@ pub enum KeyOutcome {
     /// app dispatches it through the command seam instead of
     /// submitting text to the model.
     Command(&'static str),
+    /// TUI-14 — a SHELL-MODE submit (Enter in `!` mode): the text
+    /// routes through `session.shell` (POST /api/session/:id/shell),
+    /// never the model prompt; the mode already reset to Normal.
+    ShellCommand(String),
     /// The `prompt.paste` command consumed the key (D-05): the paste
     /// handler's own `preventDefault`+`stopPropagation` parity — the
     /// stroke never reaches the draft or lower layers.
@@ -772,6 +798,8 @@ impl Composer {
     /// placeholder at all (the reference returns `undefined` when
     /// `list().length === 0` — the session route mounts `Prompt`
     /// without placeholders), so the empty-list form yields "".
+    /// TUI-14: shell mode swaps the prefix (`Run a command…`,
+    /// index.tsx:1595-1600).
     #[must_use]
     pub fn placeholder_text(&self) -> String {
         if self.placeholders.is_empty() {
@@ -782,7 +810,11 @@ impl Composer {
             .get(self.placeholder_index % self.placeholders.len())
             .cloned()
             .unwrap_or_default();
-        format!("Ask anything… \"{entry}\"")
+        let prefix = match self.mode {
+            ComposerMode::Normal => "Ask anything",
+            ComposerMode::Shell => "Run a command",
+        };
+        format!("{prefix}… \"{entry}\"")
     }
 
     /// The pump's key dispatch: printable chars feed the textarea;
@@ -810,8 +842,21 @@ impl Composer {
                 _ => {}
             }
         }
+        // TUI-14 — the shell-mode layers (prompt/index.tsx:985-1018).
+        if self.mode == ComposerMode::Shell {
+            if let Some(outcome) = self.shell_mode_layer(key) {
+                return outcome;
+            }
+        }
         match key {
             ComposerKey::Char(ch) => {
+                // TUI-14 — the `!` entry layer (index.tsx:961-981,
+                // `bind: "!"`): caret 0, normal mode, no popup — the
+                // stroke NEVER inserts; the mode flips and the
+                // placeholder slot re-rolls (`randomIndex`).
+                if self.bang_enters_shell(*ch) {
+                    return KeyOutcome::Edited;
+                }
                 self.insert_text(&ch.to_string());
                 self.autocomplete.on_input(&self.draft.text, self.edit.caret());
                 KeyOutcome::Edited
@@ -885,6 +930,60 @@ impl Composer {
                 KeyOutcome::Ignored
             }
             ComposerKey::Tab => KeyOutcome::Ignored,
+        }
+    }
+
+    /// TUI-14 — the `!` entry layer's gate (`bind: "!"`,
+    /// index.tsx:961-981): caret 0 on an empty-headed normal-mode
+    /// draft with no popup — the stroke flips to shell mode (never
+    /// inserting) and re-rolls the placeholder slot.
+    fn bang_enters_shell(&mut self, ch: char) -> bool {
+        if ch != '!'
+            || self.mode != ComposerMode::Normal
+            || self.autocomplete.visible.is_some()
+            || self.edit.caret() != 0
+        {
+            return false;
+        }
+        self.mode = ComposerMode::Shell;
+        self.placeholder_index = self.placeholder_index.wrapping_add(1);
+        true
+    }
+
+    /// TUI-14 — the shell-mode key layers (prompt/index.tsx:985-1018):
+    /// `escape` and empty-draft `ctrl+c` exit the mode (priority 1),
+    /// `backspace` at caret 0 exits (the third layer), and Enter
+    /// submits through `session.shell` — the mode resets to normal
+    /// after the send (`setStore("mode", "normal")`, index.tsx:1307).
+    /// An EMPTY shell submit is a no-op (`!trimmed && store.mode ===
+    /// "shell"` bails first, index.tsx:1120-1122). `None` = the key
+    /// falls through to the normal table.
+    fn shell_mode_layer(&mut self, key: &ComposerKey) -> Option<KeyOutcome> {
+        match key {
+            ComposerKey::Escape => {
+                self.mode = ComposerMode::Normal;
+                Some(KeyOutcome::Edited)
+            }
+            ComposerKey::CtrlC if self.draft.is_empty() => {
+                self.mode = ComposerMode::Normal;
+                Some(KeyOutcome::Edited)
+            }
+            ComposerKey::Backspace if self.edit.caret() == 0 => {
+                self.mode = ComposerMode::Normal;
+                Some(KeyOutcome::Edited)
+            }
+            ComposerKey::Enter => match self.take_submit() {
+                Some(prompt) => {
+                    self.history = self.history.clone().push(&prompt.text);
+                    self.mode = ComposerMode::Normal;
+                    Some(KeyOutcome::ShellCommand(prompt.text))
+                }
+                // An EMPTY shell submit is a consumed no-op (v2's
+                // `!trimmed && store.mode === "shell"` bail — never
+                // the empty-submit steer).
+                None => Some(KeyOutcome::Edited),
+            },
+            _ => None,
         }
     }
 
@@ -969,6 +1068,15 @@ pub trait PromptSink {
     ) {
         self.send(session_id, prompt);
     }
+
+    /// TUI-14 — the shell-mode submit (`session.shell`, POST
+    /// /api/session/:id/shell with `{id, command}`,
+    /// prompt/index.tsx:1303-1307): the text runs as a shell command,
+    /// never a model prompt. The default no-op keeps test sinks
+    /// quiet; production posts through the client.
+    fn send_shell(&self, session_id: &str, command: &str) {
+        let _ = (session_id, command);
+    }
 }
 
 /// The default sink: records submissions in order (tests + the replay
@@ -976,11 +1084,17 @@ pub trait PromptSink {
 #[derive(Debug, Default)]
 pub struct RecordingPromptSink {
     pub submissions: std::cell::RefCell<Vec<(String, SubmittedPrompt)>>,
+    /// TUI-14 — the shell-command submits in order.
+    pub shell_commands: std::cell::RefCell<Vec<(String, String)>>,
 }
 
 impl PromptSink for RecordingPromptSink {
     fn send(&self, session_id: &str, prompt: &SubmittedPrompt) {
         self.submissions.borrow_mut().push((session_id.to_owned(), prompt.clone()));
+    }
+
+    fn send_shell(&self, session_id: &str, command: &str) {
+        self.shell_commands.borrow_mut().push((session_id.to_owned(), command.to_owned()));
     }
 }
 

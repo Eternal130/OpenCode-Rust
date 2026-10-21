@@ -176,9 +176,23 @@ pub struct TuiConfig {
     /// The `cursor` section (`cursor.style`/`cursor.blinking` — v2's
     /// config/index.tsx:263-266; lane TAIL's DECSCUSR/OSC 12 emission).
     pub cursor: crate::terminal_proto::CursorConfig,
+    /// TUI-16 — `terminal.copy` (app.tsx:546-547): `"select"` copies
+    /// a finished drag to the clipboard (the default off Windows),
+    /// `"manual"` leaves copying to ctrl+y/ctrl+c.
+    pub terminal_copy: CopyBehavior,
     /// The file this was loaded from (`None` when no config file
     /// exists — all defaults).
     pub path: Option<PathBuf>,
+}
+
+/// `terminal.copy`'s values (dialog-config's manual/select pair).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CopyBehavior {
+    /// `"select"` — copy-on-release (the non-win32 default).
+    #[default]
+    Select,
+    /// `"manual"` — explicit copy only (the win32 default).
+    Manual,
 }
 
 // (Historical note, kept from the pre-merge layout.) Parse the `model`
@@ -206,6 +220,7 @@ impl Default for TuiConfig {
             session_sidebar: crate::components::sidebar::SidebarMode::default(),
             mouse: true,
             cursor: crate::terminal_proto::CursorConfig::default(),
+            terminal_copy: CopyBehavior::Select,
             path: None,
         }
     }
@@ -345,6 +360,13 @@ impl TuiConfig {
                 == Some("source"),
             session_grouping: info.session.as_ref().and_then(|session| session.grouping.as_deref())
                 != Some("none"),
+            terminal_copy: if info.terminal.as_ref().and_then(|terminal| terminal.copy.as_deref())
+                == Some("manual")
+            {
+                CopyBehavior::Manual
+            } else {
+                CopyBehavior::Select
+            },
             cursor,
             path,
         }
@@ -455,6 +477,16 @@ impl TuiConfig {
                 .and_then(|session| session.get("grouping"))
                 .and_then(Value::as_str)
                 != Some("none"),
+            terminal_copy: if value
+                .get("terminal")
+                .and_then(|terminal| terminal.get("copy"))
+                .and_then(Value::as_str)
+                == Some("manual")
+            {
+                CopyBehavior::Manual
+            } else {
+                CopyBehavior::Select
+            },
             cursor,
             path,
         }

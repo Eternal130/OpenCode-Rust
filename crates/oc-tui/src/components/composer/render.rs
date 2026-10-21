@@ -58,6 +58,7 @@ pub struct AutocompleteView<'a> {
 /// pinned composer golden, populated on the live routes), and the
 /// wave-3 plugin hint segments (rendered left of the shortcut hints,
 /// muted — empty by default so every golden stays byte-exact).
+#[allow(clippy::struct_excessive_bools)] // the row's independent paint gates
 #[derive(Debug, Clone, Default)]
 pub struct FooterHints {
     pub location: String,
@@ -75,6 +76,28 @@ pub struct FooterHints {
     /// `esc again to interrupt` once armed; EMPTY renders nothing
     /// (every golden stays byte-exact while no turn is running).
     pub interrupt: String,
+    /// TUI-12 — the live segment's counts (`1 subagent · 1 shell`,
+    /// footer.tsx:20-33,47): the family's running subagents + the
+    /// session's in-flight shells; EMPTY renders nothing.
+    pub live: String,
+    /// TUI-12 — the `session.child.first` shortcut run (`down `),
+    /// painted `text.base` ahead of the counts (footer.tsx:77-79).
+    pub live_shortcut: String,
+    /// TUI-12 — the live segment's hover lift (`liveHovered` → the
+    /// counts paint `text.base` instead of muted).
+    pub live_hovered: bool,
+    /// TUI-14 — SHELL MODE (`!` at caret 0): the whole hint pack
+    /// (usage/live/plugin/agents/commands) drops for the single
+    /// `esc exit shell mode` hint (footer.tsx:107-112 — the shell
+    /// Match replaces every other footer segment).
+    pub shell: bool,
+    /// TUI-15 — the editor-context file label (`prompt.footer.file`,
+    /// prompt/index.tsx:240-250: `{basename}#{lines}`), painted left
+    /// of the hint pack; EMPTY renders nothing.
+    pub editor_file: String,
+    /// TUI-15 — the label paints `hue.accent[500]` while PENDING
+    /// (a selection not yet attached), muted once sent.
+    pub editor_file_pending: bool,
     /// #33 — the location label's hover lift
     /// (`useWorkingDirectoryActions.hovered`: `text.base` under the
     /// pointer, `text.muted` at rest, prompt/index.tsx:1927).
@@ -701,6 +724,16 @@ pub(crate) struct FooterPlan {
     pub command_key: String,
     /// The plugin segment's x + truncated text — `None` when absent.
     pub plugin: Option<(usize, String)>,
+    /// TUI-12 — the live segment's x + joined label
+    /// (`{shortcut}{counts}`) — `None` when no counts painted.
+    pub live: Option<(usize, String)>,
+    /// TUI-14 — the shell-mode hint's x + label after `esc `
+    /// (`exit shell mode` at ≥ 44 cols, `shell` below,
+    /// footer.tsx:107-112) — `None` outside shell mode.
+    pub shell_hint: Option<(usize, String)>,
+    /// TUI-15 — the editor file label's x + truncated text — `None`
+    /// when absent.
+    pub editor_file: Option<(usize, String)>,
 }
 
 /// Resolve the footer row's plan at `width` (see [`FooterPlan`]).
@@ -714,13 +747,16 @@ pub(crate) fn footer_plan(view: &PromptView, width: usize) -> FooterPlan {
     // `(terminal-8) - min(28, (terminal-8)/2)` — else the commands
     // hint drops (usage alone), else nothing. Without usage the hints
     // gate at the raw terminal width ≥ 44 (footer.tsx:56).
-    let hints_shown = if usage_width > 0 {
-        let budget_width = view.terminal_width.saturating_sub(8);
-        let available = budget_width.saturating_sub(28.min(budget_width / 2));
-        display_width(&format!("{usage} · {command_hint}")) <= available
-    } else {
-        view.terminal_width >= 44
-    };
+    // TUI-14: shell mode replaces the WHOLE hint pack (footer.tsx:
+    // 107-112 — the shell Match is the only content).
+    let hints_shown = !view.footer.shell
+        && if usage_width > 0 {
+            let budget_width = view.terminal_width.saturating_sub(8);
+            let available = budget_width.saturating_sub(28.min(budget_width / 2));
+            display_width(&format!("{usage} · {command_hint}")) <= available
+        } else {
+            view.terminal_width >= 44
+        };
     let command_width = display_width(&command_hint);
     let block_width = if usage_width > 0 {
         usage_width + 2 + command_width
@@ -729,10 +765,34 @@ pub(crate) fn footer_plan(view: &PromptView, width: usize) -> FooterPlan {
     };
     let plugin_text = view.footer.plugin_hints.join(" · ");
     let plugin_width = display_width(&plugin_text);
-    let right_block = if hints_shown {
-        block_width + if plugin_width > 0 { plugin_width + 2 } else { 0 }
+    // TUI-12 — the live segment (`down 1 subagent · 1 shell`): the
+    // shortcut run + the counts, packed LEFT of the plugin segment
+    // in the right block's pack (footer.tsx:65-94's PromptFooter
+    // box: `[live][ · usage][agents/commands]`).
+    let live_shortcut_width = display_width(&view.footer.live_shortcut);
+    let live_counts_width = display_width(&view.footer.live);
+    let live_total = live_shortcut_width + live_counts_width;
+    // TUI-14 — the shell-mode hint (`esc exit shell mode` /
+    // `esc shell` below 44): right-aligned, the only hint content.
+    let shell_label = if view.terminal_width < 44 { "shell" } else { "exit shell mode" };
+    let shell_width = display_width(&format!("esc {shell_label}"));
+    // TUI-15 — the editor file label (`prompt.footer.file`): packed
+    // LEFT of the whole hint pack, middle-truncated to
+    // `max(12, min(48, width/3))` (index.tsx:249-253).
+    let editor_budget = (width / 3).clamp(12, 48);
+    let editor_file_text = if view.footer.editor_file.is_empty() {
+        String::new()
     } else {
-        plugin_width
+        truncate_middle(&view.footer.editor_file, editor_budget)
+    };
+    let editor_file_width = display_width(&editor_file_text);
+    let right_block = if view.footer.shell {
+        shell_width
+    } else {
+        (if hints_shown { block_width } else { 0 })
+            + if plugin_width > 0 { plugin_width + 2 } else { 0 }
+            + if live_total > 0 { live_total + 2 } else { 0 }
+            + if editor_file_width > 0 { editor_file_width + 2 } else { 0 }
     };
     // Wave A: the interrupt hint (`PromptInterruptStatus`,
     // prompt/index.tsx:137-144) sits at the row's left — `esc` in
@@ -781,7 +841,49 @@ pub(crate) fn footer_plan(view: &PromptView, width: usize) -> FooterPlan {
             let budget = width.saturating_sub(x);
             (x, truncate_width(&plugin_text, budget))
         }),
+        live: (live_total > 0 && !view.footer.shell).then(|| {
+            let x = width.saturating_sub(right_block).saturating_sub(if plugin_width > 0 {
+                plugin_width + 2
+            } else {
+                0
+            });
+            let label = format!("{}{}", view.footer.live_shortcut, view.footer.live);
+            (x, label)
+        }),
+        shell_hint: view
+            .footer
+            .shell
+            .then(|| (width.saturating_sub(shell_width), shell_label.to_owned())),
+        editor_file: (editor_file_width > 0 && !view.footer.shell).then(|| {
+            let x = width
+                .saturating_sub(right_block)
+                .saturating_sub(if plugin_width > 0 { plugin_width + 2 } else { 0 })
+                .saturating_sub(if live_total > 0 { live_total + 2 } else { 0 });
+            (x, editor_file_text)
+        }),
     }
+}
+
+/// `Locale.truncateMiddle` (util/locale.ts:82-88): clip the MIDDLE —
+/// the head and tail share the budget, `…` at the split (odd budgets
+/// favor the head: `ceil(budget/2) + floor(budget/2) - 1` visible).
+fn truncate_middle(value: &str, budget: usize) -> String {
+    if budget == 0 {
+        return String::new();
+    }
+    if display_width(value) <= budget {
+        return value.to_owned();
+    }
+    if budget == 1 {
+        return "…".to_owned();
+    }
+    let head_budget = budget.div_ceil(2);
+    let tail_budget = budget - head_budget;
+    let head = crate::wrap::take_width(value, head_budget.saturating_sub(1));
+    let total_chars = value.chars().count();
+    let tail_chars =
+        value.chars().skip(total_chars.saturating_sub(tail_budget)).collect::<String>();
+    format!("{head}…{tail_chars}")
 }
 
 /// The location label's column extent on the footer row
