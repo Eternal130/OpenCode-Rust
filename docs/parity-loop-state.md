@@ -2,27 +2,70 @@
 
 > Orchestrator scratch state for the parity loop (docs/PARITY-LOOP.md).
 > Updated at the end of every iteration. Not a task queue — the ledger is.
-> **REBUILT from ledger+git 2026-10-21 07:10** (iteration 11 complete).
+> **REBUILT from ledger+git 2026-10-21 08:30** (iteration 12 / wave 11 opened).
 > Ledger + git are authoritative; state.md is a cross-session breadcrumb only.
 
-- **updated**: 2026-10-21 07:10 — iteration 11 done. Three lanes closed, all merged and CI-attributed:
-  `lane-cirt4` → `da22466` (CI-RUNTIME-GATES-RED + SURF-PLATFORM), `lane-tui3` → `bba65d3` (TUI-35),
-  `lane/tui4` → `e4c3bd4` (TUI-7). Wave-10 adjudication closed 1 duplicate. **blocking S0/S1 = 30** (was 33).
-- **baseline**: main @ `e4c3bd4` (merge: lane/tui4) on top of `bba65d3` (merge: lane/tui3) on top of `da22466`
-  (merge: lane/cirt4)
-- **batch**: 3 (wave 10) — Batch 3 clusters: DB, PLUGIN-RESIDUAL, EVENT/TOOL/CORE, PLATFORM, POLICY/RETENTION
-- **iteration**: 11 (driver = tools/loop-driver.sh; session started 2026-10-21 05:33, ended ~07:10)
+## WAVE 11 (iteration 12) — RESULT
 
-## Ledger snapshot (`parity-ledger.py summary`, end of iteration 11)
+- **Recovery (0a) result**: `git worktree list` → only main; `.worktrees/` was empty at start;
+  all 15 `lane/*` branches are **0-ahead of main** → **no orphan lane, nothing to adopt**.
+  `git status --short` on main = clean. So: nothing to salvage, nothing to remove.
+- **Units this iteration**: (1) DB gate lane `lane-db2` (fix → verify → merge);
+  (2) adjudication batch #4 (oracle, zero code); (3) ledger promotions on the green CI runs that
+  landed during iteration 11; (4) one new ledger row from the CI artifact itself.
+- **Fix lane**: `lane-db2` · branch `lane/db2` · worktree `/opt/opencode-rust/.worktrees/lane-db2`
+  (from `main@9232f94`, chown 1000:1000) · ledger rows `GATE-DB-NULLROWS`, `GATE-DB-STABLE`
+  claimed `fixing`, owner=lane-db2 (ledger commit `40bb12a`).
+  Root cause found: **harness-side, not product** — the reference resolves its data root as
+  `XDG_DATA_HOME/opencode` (`/opt/opencode-ref/packages/util/src/global-roots.ts`) while the port
+  resolves `XDG_DATA_HOME/opencode-rust` (`crates/oc-util/src/global_roots.rs:29`, `APP_NAME`),
+  so the "shared" home silently held **two** databases and every port write landed in the
+  one-way-migration copy → the reference never saw the port's model switch / session B.
+  Fix: `p10_common::share_data_home` aliases the port's data root onto v2's with a symlink
+  (both channel-scheme resolutions land on the same physical file) + revival of dead fixture
+  directories (guarded to `/tmp/opencode/`) + removal of the two now-green known-red registrations.
+- **Result**: fixer `365feb8` → independent verifier (`own/glm-5.3-flash ses_ea4134d3effe5DvPu5UoZ2gEqX`)
+  **CLEAR TO MERGE, 0 blocking defects** (per-hunk no-weakening audit; the two recalibrated census
+  assertions are exact-equality no-drop pins against an independent SQL count, verified live) →
+  **merged `84ab758`** → ledger `GATE-DB-NULLROWS` + `GATE-DB-STABLE` = **verified** (merge commit recorded).
+  Post-merge gate: fmt rc=0 · clippy(parity,oc-server) rc=0 (fresh `Checking` lines) ·
+  `cargo check --workspace --locked` rc=0. Pushed `9232f94..2b5e82c`.
+  Honest defect recorded: `GATE-DB-STABLE/junit/` is empty (the structured artifact exists only under
+  GATE-DB-NULLROWS/junit/); both repro scripts run the identical nextest invocation and the verifier
+  re-ran both independently (2/2 green).
+- **CI dispatched for the merge head `2b5e82c`**: `ci` run **39525091316** (push) · `runtime-gates` run
+  **39525125599** (workflow_dispatch). Async, non-blocking — record their verdicts next session.
+- **Ledger ownership**: the ORCHESTRATOR is the only writer of `docs/parity-ledger.jsonl` this wave
+  (the lane did not touch it — verified in the lane diff).
+- **Adjudication batch #4 (oracle, read-only)**: 8 open S1 rows, surface-oriented candidates
+  (not dead-config-key rows — wave-11 method note: 1/10 closure on that class).
+  Candidates: SURF-BROWSER, SURF-LATEX-MERMAID, TUI-15, TUI-16, TUI-17, TUI-12, CLI-K2, CRED-D8.
+  Deliverable: per-row verdict (accepted+ADR / duplicate / keep-open + fix scope) against
+  `/opt/opencode-ref` v2.0.24 evidence only. No ADR without evidence; no "too hard" accepted.
 
-- rows=404 — **verified 95 · accepted 14 · duplicate 3 · fixed 4** · open 282 · needs-runtime 6
-- **blocking S0/S1 = 30** (open): CONFIG 7 (CLI-K1, CLI-K2, CLI-K8, CLI-N1..N4) · AI 4 (AI-P06, AI-V1,
-  AI-VERTEX-V2, CI-RUNTIME-AI-LIVE) · TUI 5 (TUI-12, TUI-14, TUI-15, TUI-16, TUI-17) · CRED 3 (D6, D8, V3) ·
-  PLUGIN 3 (PLUG-D13, PLUG-D30, PLUG-M02) · DB 2 (GATE-DB-STABLE, GATE-DB-NULLROWS) · WIRE 2 (HTTP-H0,
-  GATE-TUI-RENAME) · SURFACES 2 (SURF-BROWSER, SURF-LATEX-MERMAID) · RUNTIME 1 (RUNTIME-K01) ·
-  TOOLS-EXEC 1 (TOOL-D1)
-- **4 rows are `fixed` (awaiting a GREEN CI run id to promote to `verified`)**: SURF-PLATFORM,
-  CI-RUNTIME-GATES-RED, TUI-35, TUI-7. All four have merge commits on main.
+- **updated**: 2026-10-21 09:05 — iteration 12 (wave 11) done: DB lane merged (`84ab758`, 2 rows → verified),
+  adjudication batch #4 (2 accepted via ADR-0015/0016, 6 fix scopes recorded, 1 new row), 3 rows promoted to
+  verified on green CI, 1 new row (GATE-DB-FIXTURE-WAL) + a corrected ledger diagnosis. Pushed `2b5e82c`.
+  **blocking S0/S1 = 28** (was 30).
+- **baseline**: main @ `2b5e82c` (ledger) on top of `84ab758` (merge: lane/db2)
+- **batch**: 3 (wave 11) — Batch 3 clusters: DB, PLUGIN-RESIDUAL, EVENT/TOOL/CORE, PLATFORM, POLICY/RETENTION
+- **iteration**: 12 (driver = tools/loop-driver.sh; session started 2026-10-21 08:10, ended ~09:05)
+
+## Ledger snapshot (`parity-ledger.py summary`, end of iteration 12 / wave 11)
+
+- rows=406 — **verified 100 · accepted 16 · duplicate 3 · fixed 1** · needs-runtime 6 · open 280
+- **blocking S0/S1 (not yet verified/accepted) = 27** (was 30 at the start of this iteration):
+  CONFIG 6 (CLI-K1, CLI-K8, CLI-N1..N4) · TUI 5 (TUI-12, TUI-14, TUI-15, TUI-16, TUI-17) · AI 4 (AI-P06, AI-V1,
+  AI-VERTEX-V2, CI-RUNTIME-AI-LIVE) · CRED 3 (D6, D8, V3) · PLUGIN 3 (PLUG-D13, PLUG-D30, PLUG-M02) ·
+  WIRE 2 (HTTP-H0, GATE-TUI-RENAME) · DB 1 (GATE-DB-FIXTURE-WAL) · SURFACES 1 (SURF-LATEX-MERMAID) ·
+  RUNTIME 1 (RUNTIME-K01) · TOOLS-EXEC 1 (TOOL-D1)
+- **promoted to `verified` this iteration** (green CI): TUI-7, TUI-35 (CI 39519807488 = 6/6 jobs SUCCESS) and
+  SURF-PLATFORM (runtime-gates 39519736380, macos-latest leg green).
+- **1 row is still `fixed`** (needs a green run id): CI-RUNTIME-GATES-RED — its contract is "every runtime-gates §12 leg
+  green" and the p10 battery / §12.3 / gates-summary legs are still red.
+- **2 rows closed this iteration**: GATE-DB-NULLROWS + GATE-DB-STABLE → `verified` (merge `84ab758`, independent
+  verifier CLEAR TO MERGE).
+- **accepted this iteration**: SURF-BROWSER (ADR-0015), CLI-K2 (ADR-0016) — both with a written ADR, zero code.
 - `validate` = 0 errors; `validate --paths` = 0 errors.
 
 ## What happened in iteration 11
@@ -82,33 +125,56 @@
 | 39501153874 | f1af96a | ci | **failure** — only `nextest (pty, serialized)` (the TUI-35 90 s wedge). Now fixed (bba65d3). |
 | 39507224067 | b054456 | ci | **failure** — only `nextest (pty, serialized)` again (session_filter_semantics = TUI-7). Now fixed (e4c3bd4). fmt+clippy ✅ build+archive ✅ nextest ✅ frame-budget ✅ guards ✅ |
 | 39507225187 | b054456 | runtime-gates (dispatch) | **failure** — `build target (macos-latest, aarch64-apple-darwin)` **GREEN** (the E0425/E0308 class is dead) · build+archive ✅ · stage v2-written db ✅ · needs-runtime (AI) ✅ · **red**: needs-runtime (TUI) [= the TUI-7 PTY battery, now fixed], p10 battery [= the DB fixture gap], §12.3 gates [= GATE-DB-NULLROWS], gates summary [derived] |
-| 39519705990 | 1b13b1f | ci (push) | in progress at the end of iteration 11 — expect: guards ✅, nextest ✅, **PTY job ✅ (TUI-35 + TUI-7 both merged)** |
-| 39519736380 | 1b13b1f | runtime-gates (dispatch) | in progress at the end of iteration 11 — expect: macos leg ✅ (was green already), PTY battery ✅, **p10 battery + §12.3 + gates summary still RED (the DB fixture gap)** |
+| 39519705990 | 1b13b1f | ci (push) | **cancelled** (superseded by 39519807488) |
+| 39519736380 | 1b13b1f | runtime-gates (dispatch) | **failure** — macos leg ✅ · **stage v2-written library db ✅ (the fixture IS produced)** · needs-runtime (TUI) ✅ · needs-runtime (AI) ✅ · **red**: p10 battery (§12.2), §12.3 runtime gates, gates summary (derived) |
+| **39519807488** | **9232f94** | **ci (push)** | **SUCCESS — 6/6 jobs** (build+archive, fmt+clippy, guards, frame-budget, nextest, nextest-pty) → **TUI-7 + TUI-35 promoted to `verified`** |
 
 > The next session should check these two runs first: they decide whether SURF-PLATFORM / CI-RUNTIME-GATES-RED /
 > TUI-35 / TUI-7 can be promoted from `fixed` to `verified`.
 
 ### The DB gap is now the honest, dominant §12.2 blocker
 
-With the exec-bit defect fixed, the p10 battery and §12.3 gates finally RUN the binaries, and what they show is real:
-- `stage v2-written library db` (job green, but **no fixture**): the interop lane ran
-  (`p10_db_interop_v2_written_null_rows`, 2 tries @ ~17.4 s) and then the harvest
-  `find /tmp/opencode/p10-db-*/home/.local/share/opencode/opencode.db` found **nothing** → `db_staged=gap`:
-  the reference v2.0.24 never wrote the db, so the fixture is a GAP and every downstream import gate reports it
-  honestly (never a pass).
-- p10 battery → `p10_db_import_real_library_copy` FAILS (404 `LocationNotFoundError` on `/tmp/opencode/p10-db-*/project`).
-- §12.3 → `oc-server::real_db_null_census::real_migrated_db_serves_create_list_and_messages_without_500s` panics at
-  `crates/oc-server/tests/real_db_null_census.rs:97`.
+**CORRECTION (iteration 12): the earlier "the reference never wrote the db → db_staged=gap" story was WRONG.**
+Re-reading the CI log of run 39507225187: the `::error::no v2-written opencode.db …` line is the **step script
+echo**, not executed output — the job actually **uploaded the fixture** (`artifact v2-db-fixture`, and the upload
+step is gated on `db_staged == 'ok'`). `gh run download 39519736380 -n v2-db-fixture` then showed the truth:
+the fixture is a **4096-byte, 0-table SQLite shell**. Root cause (new row **GATE-DB-FIXTURE-WAL**, S1/DB):
+the reference runs in WAL mode (`/opt/opencode-ref/packages/core/src/database/sqlite.bun.ts:93`
+`PRAGMA journal_mode = WAL`); the CI harvest copies **only the main db file**, so when the reference is killed
+before a checkpoint (which is what a red interop lane does) the schema + data stay in the `-wal` sidecar and
+the main file is a single header page. The downstream reds follow from that shell fixture:
+- p10 battery → `p10_db_import_real_library_copy` FAILS: `import fixture …/v2-library.db: SQLiteError: no such table: migration`.
+- §12.3 → `oc-server::real_db_null_census::real_migrated_db_serves_create_list_and_messages_without_500s` panics
+  (the shell has no sessions, and the fixture's session `location` dirs are pid-scoped and dead).
 - gates summary → derived (`fail=1`).
+- **also still red in the same battery**: `p10_cross_tui::p10_ts_tui_against_rust_server` (= GATE-TUI-RENAME, a real
+  product gap) and `p10_cli::p10_cli_gate5` (= `serve --hostname localhost` — our side only accepts IP literals
+  (`crates/oc-cli/src/handlers/serve.rs:66-70` → `boot::parse_hostname`), and the **reference** side also failed to
+  answer `/api/info` on `127.0.0.1` within the 90×1 s poll → triage: IPv6 `::1` binding vs boot timeout).
 
 ## Active lanes
 
 | lane | cluster | worktree | branch | owner | entries | status |
 |---|---|---|---|---|---|---|
-| (none — lane-cirt4 `da22466`, lane-tui3 `bba65d3`, lane/tui4 `e4c3bd4` all merged) | | | | | | |
+| `lane-db2` | DB | `.worktrees/lane-db2` (merged) | `lane/db2` | lane-db2 | GATE-DB-NULLROWS, GATE-DB-STABLE | **merged `84ab758` → verified**; worktree removable, branch kept for history |
+| (oracle adjudication #4 — read-only, no lane) | TUI/SURFACES/CONFIG/CRED | — | — | — | SURF-BROWSER, CLI-K2, SURF-LATEX-MERMAID, TUI-15/16/17/12, CRED-D8 | done: 2 accepted (ADR-0015/0016), 6 kept open with fix scopes |
 
-- `.worktrees/lane-cirt4`, `.worktrees/lane-tui3`, `.worktrees/lane-tui4` — merged, trees clean → removable
-  (branches `lane/cirt4`, `lane/tui3`, `lane/tui4` kept for history).
+- `.worktrees/lane-db2` — merged → removable after the merge (branch `lane/db2` kept for history).
+
+## Adjudication batch #4 (oracle own/glm-5.3, session ses_ea410c4d9ffe7SZZdfYs2L33Hw) — result
+
+- **accepted + ADR-0015**: `SURF-BROWSER` — v2's browser tool family is a desktop companion (host chain
+  desktop → gui-extensions → plugin-browser, ADR-0004 out-of-scope); headless, v2 itself is deny-by-default and
+  unattachable (`packages/plugin-browser/src/connection.ts:23-27`), so there is no missing behaviour contract.
+- **accepted + ADR-0016**: `CLI-K2` — the ledger's "method set shrunk" claim was **stale** (ours is a superset:
+  7 v2 names + `local-file`/`github`); the real difference is that v2's package-manager methods install the **TS
+  artifact** and read the TS release feed (ADR-0012 channel-family ruling).
+- **kept open (6)** with executable fix scopes + corrected (stale) ref paths recorded in the ledger:
+  `SURF-LATEX-MERMAID` (real product surface, pure in-repo TS impl), `TUI-15` (Zed sqlite selection → context label),
+  `TUI-16` (drag selection → clipboard + `terminal.copy` consumer), `TUI-17` (mini subagent inspector),
+  `TUI-12` (composer footer live counts), `CRED-D8` (Poe client id + `api_key`/`api_key_expires_in`).
+- **new row `TUI-EDITOR-MCP`** (S2): the upstream `packages/tui/src/context/editor.ts` also carries a WS MCP editor
+  protocol half that TUI-15 does not cover — kept as its own row instead of widening TUI-15.
 
 ## Model policy for subagents (user ruling 2026-10-20 — keep for every future session)
 
@@ -150,28 +216,34 @@ gets an explicit runtime conclusion (ADR).
 
 ## Blockers
 
-- Live window for the 6 `needs-runtime` entries + CI-RUNTIME-AI-LIVE secrets (user).
-- 4 rows are `fixed` but not `verified` (SURF-PLATFORM, CI-RUNTIME-GATES-RED, TUI-35, TUI-7): they need GREEN CI run ids.
-- **DB fixture gap** (GATE-DB-NULLROWS + GATE-DB-STABLE): the reference v2.0.24 never writes the library db in the
-  interop lane, so the §12.2 p10 battery and the §12.3 v2-import gate cannot pass. This is now the dominant §12.2 blocker.
+- Live window for the 6 `needs-runtime` entries + CI-RUNTIME-AI-LIVE secrets (user) — **re-asked this iteration**.
+- **CI fixture shell** (new row `GATE-DB-FIXTURE-WAL`, S1/DB): the harvest copies only the main db file and drops the
+  SQLite `-wal`/`-shm` sidecars → when the reference is killed before a checkpoint the fixture is a 4096-byte,
+  0-table shell → the §12.2 p10 battery leg (`no such table: migration`) and the §12.3 real-v2-import leg stay red.
 - GATE-TUI-RENAME: genuinely red on product behaviour (the rename never reaches the server's session row) — S1, WIRE.
+- `p10_cli_gate5` (S1, CONFIG): `serve --hostname localhost` — our side only accepts IP literals
+  (`crates/oc-cli/src/handlers/serve.rs:66-70` → `boot::parse_hostname`), and in CI the **reference** side also failed
+  to answer `/api/info` on 127.0.0.1 within the 90×1 s poll (triage: IPv6 `::1` bind vs boot timeout — not yet settled).
+- CI-RUNTIME-GATES-RED is still `fixed` (not `verified`): its contract is "every runtime-gates §12 leg green" and the
+  p10 battery / §12.3 / gates-summary legs are still red.
 
 ## Next (in priority order)
 
-1. **DB lane (next unit, hot files: `crates/oc-core/src/session/store.rs`, `crates/oc-server/**`)**:
-   - make the v2.0.24 reference actually write `opencode.db` in the interop lane (so the fixture exists and
-     `db_staged=ok`), and close `GATE-DB-NULLROWS` (three-boot NULL-heavy flow) + `GATE-DB-STABLE`.
-   - this unblocks the p10 battery leg, the §12.3 v2-import leg and the gates-summary leg — i.e. most of §12.2.
-   - the workflow's fixture job is honest already (`db_staged=gap`, never a silent pass) — do NOT make it skip.
-2. **Re-dispatch CI** on the current head (`e4c3bd4` + the ledger/state commit): `ci` (push) +
-   `gh workflow run runtime-gates.yml`. Expect the PTY legs to go green (TUI-35 + TUI-7) and only the DB legs to stay
-   red. Record the run ids here; then promote SURF-PLATFORM / CI-RUNTIME-GATES-RED / TUI-35 / TUI-7 to `verified`
-   (`evidence --verified` + `merge --id <ID> --merge-commit <sha>`).
-3. **CONFIG lane** (7 open S1: CLI-K1, CLI-K2, CLI-K8, CLI-N1..N4 — `crates/oc-cli/**` + `crates/oc-server/**`;
-   CLI-K8 also touches `crates/oc-tui/src/storage.rs`).
-4. **AI vertex lane** — AI-V1 + AI-VERTEX-V2 (+ CRED-V3 ADC) in one lane; `crates/oc-ai/src/protocols/**` +
-   `crates/oc-core/src/provider_catalog/facade.rs`.
-5. **GATE-TUI-RENAME** (S1, WIRE) — confirmed product gap: the rename never reaches the server's session row.
-6. Remaining S1s: TUI-12/14/15/16/17, PLUG-D13/D30/M02, CRED-D6/D8/V3, HTTP-H0, RUNTIME-K01, TOOL-D1,
-   SURF-BROWSER, SURF-LATEX-MERMAID, AI-P06, CI-RUNTIME-AI-LIVE.
-7. Record CI run ids here as they land.
+1. **lane-db3 — fixture harvest robustness (S1, DB, row `GATE-DB-FIXTURE-WAL`)**: the harvest must produce a COMPLETE
+   db: either checkpoint the db before copying (`PRAGMA wal_checkpoint` via bun/python3 — the CI job has both) or copy
+   the `-wal`/`-shm` sidecars next to the main file **and** teach `p10_db_import.rs` + `real_db_null_census.rs` to place
+   them next to their sandbox copy. The harvest step must also VALIDATE the fixture (assert the `migration` table has
+   rows) and fail loudly instead of uploading a shell. Write scope: `.github/workflows/runtime-gates.yml`,
+   `tools/parity/tests/p10_db_import.rs`, `crates/oc-server/tests/real_db_null_census.rs`.
+   → this is the last blocker on the §12.2 p10 battery leg besides GATE-TUI-RENAME + CLI-K1.
+2. **CONFIG lane** (6 open S1 after CLI-K2's acceptance: CLI-K1, CLI-K8, CLI-N1..N4 — `crates/oc-cli/**` +
+   `crates/oc-server/**`; CLI-K8 also touches `crates/oc-tui/src/storage.rs`; CLI-K1 is now on the p10 battery's
+   critical path).
+3. **WIRE lane** — GATE-TUI-RENAME (S1) + HTTP-H0 (S1) + KNOWN-RED-MASK (S2, the known-red attribution over-broadness).
+4. **AI vertex lane** — AI-V1 + AI-VERTEX-V2 + CRED-V3 ADC (+ AI-P06, CI-RUNTIME-AI-LIVE) in one lane;
+   `crates/oc-ai/src/protocols/**` + `crates/oc-core/src/provider_catalog/facade.rs`.
+5. **CRED lane** — CRED-D6 (ChatGPT/Codex credential shaping) + CRED-D8 (Poe client id + api_key/api_key_expires_in —
+   fix scope recorded in the ledger by adjudication #4).
+6. **TUI lane** — TUI-12/14/15/16/17 (+ new TUI-EDITOR-MCP): fix scopes recorded per row by adjudication #4.
+7. Remaining S1s: PLUG-D13/D30/M02, RUNTIME-K01, TOOL-D1, SURF-LATEX-MERMAID (fix scope recorded).
+8. Record CI run ids here as they land; promote `fixed` → `verified` only on a green run id.
