@@ -2307,6 +2307,12 @@ pub enum TranscriptHitAction {
     /// :183, Exploration :152, Activity :219, Instructions :256; the
     /// plugin rules table's kinds ride `GroupContent` too).
     ToggleGroup(String),
+    /// TUI-TD14 — the `QueuedPromptDock` row's release → the queued
+    /// prompts manager (`openQueuedPrompts`, index.tsx:2312-2342).
+    OpenQueuedPrompts,
+    /// TUI-TD14 — the "Jump to latest ↓" slot's release → `toBottom`
+    /// (index.tsx:1428-1442).
+    JumpToLatest,
     /// Toggle one thought's disclosure (the minimal-mode
     /// `ReasoningHeader` box, message-parts.tsx:80-86: `toggleable`,
     /// the body behind `<Show when={expanded}>`). The port's
@@ -2352,7 +2358,9 @@ impl TranscriptHitAction {
             | Self::OpenToolDialog { .. }
             | Self::DismissRevert { .. }
             | Self::NavigateToSession { .. }
-            | Self::OpenLink { .. } => None,
+            | Self::OpenLink { .. }
+            | Self::OpenQueuedPrompts
+            | Self::JumpToLatest => None,
         }
     }
 }
