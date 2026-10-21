@@ -28,12 +28,18 @@
 # tools/parity/tests/live_ai_probes.rs and reuse the production oc-ai
 # call surface. Secret shapes:
 #   OC_CI_VERTEX_PROJECT      GCP project id (drives URL composition).
-#   OC_CI_VERTEX_CREDENTIALS  a FRESH OAuth2 access token with the
-#                             cloud-platform scope, e.g.
-#                             `gcloud auth print-access-token --scopes=https://www.googleapis.com/auth/cloud-platform`
-#                             (~1h lifetime — refresh before a live=true
-#                             dispatch). An API key is NOT accepted: the
-#                             messages and chat/responses lanes are
+#   OC_CI_VERTEX_CREDENTIALS  RECOMMENDED: a service-account key-file
+#                             JSON (the downloaded *.json — static, no
+#                             refresh before dispatch). The probes stage
+#                             it as a 0600 temp ADC file for the duration
+#                             of the token grant only and mint the access
+#                             token through the PRODUCTION CRED-V3 chain
+#                             (RS256 self-signed JWT grant at the key's
+#                             token_uri) — itself a live check of CRED-V3.
+#                             COMPAT: a raw OAuth2 access token
+#                             (ya29.…, ~1h lifetime) still passes through.
+#                             An API key is NOT accepted in either shape:
+#                             the messages and chat/responses lanes are
 #                             ADC-bearer only (and reject keys loudly).
 #                             Also drives AI-V1's chat/responses live legs.
 #   OC_CI_GEMINI_API_KEY      Gemini API key — drives AI-V1's Express-mode

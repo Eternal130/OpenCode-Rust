@@ -43,14 +43,28 @@
 //!
 //! Budgets: ≤60s per probe (`PROBE_BUDGET`), ≤25s per single request.
 //!
+//! `OC_CI_VERTEX_CREDENTIALS` accepts TWO shapes (resolved by
+//! [`resolve_vertex_credentials`]):
+//! - a **service-account key-file JSON** (recommended — static, no
+//!   refresh-before-dispatch): the probe routes it through the PRODUCTION
+//!   CRED-V3 chain (`oc-core` `IntegrationHost::vertex_binding` — RS256
+//!   self-signed JWT grant at the key's `token_uri`) to mint the access
+//!   token, which is itself a live check of CRED-V3;
+//! - a raw `OAuth2` access token (`ya29.…`): passed straight through.
+//!
 //! Secret discipline (ADR-0006 recording rule): credential VALUES are
-//! never printed, logged, or written to disk — evidence records only the
-//! endpoint, elapsed time, status, and a body-shape summary. Header dumps
-//! go through [`wire_shape`], which redacts `authorization` /
-//! `x-goog-api-key` / `x-api-key` values.
+//! never printed, logged, or written to evidence. The one disk touch is
+//! the SA-JSON leg: the CRED-V3 entry point consumes an ADC FILE
+//! (`GOOGLE_APPLICATION_CREDENTIALS`), so the JSON is staged to a 0600
+//! file under `/tmp/opencode/lane-live-<pid>-adc/` for the duration of
+//! the token grant only and unlinked immediately after (Drop guard, also
+//! on panic) — never logged, never in evidence. Header dumps go through
+//! [`wire_shape`], which redacts `authorization` / `x-goog-api-key` /
+//! `x-api-key` values.
 //!
 //! Evidence: `/tmp/opencode/parity-evidence/CI-RUNTIME-AI-LIVE/live-runs.jsonl`.
 
+use std::os::unix::fs::PermissionsExt as _;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -68,7 +82,9 @@ use oc_ai::protocols::vertex_messages::{
 use oc_ai::route::auth::Secret;
 use oc_ai::route::transport::read_body_limited;
 use oc_ai::route::transport::reqwest_transport::ReqwestTransport;
-use oc_ai::route::transport::{SharedTransport, TransportError, TransportRequest};
+use oc_ai::route::transport::{
+    FailingTransport, SharedTransport, TransportError, TransportRequest,
+};
 use oc_ai::route::Route;
 use oc_ai::schema::{GenerationOptions, LLMRequest, Message};
 
@@ -94,6 +110,122 @@ fn env_non_empty(name: &str) -> Option<String> {
 
 fn live_requested() -> bool {
     std::env::var("OC_CI_LIVE").ok().as_deref() == Some("1")
+}
+
+// ---------------------------------------------------------------------------
+// Credential resolution: OC_CI_VERTEX_CREDENTIALS auto-detects the shape
+// ---------------------------------------------------------------------------
+
+/// The staged ADC file + its `GOOGLE_APPLICATION_CREDENTIALS` env export,
+/// undone on drop (also during a panic unwind): the CRED-V3 entry point
+/// consumes an ADC FILE, so the SA JSON touches disk only as this 0600
+/// temp file, only for the duration of the token grant, and never in a
+/// log or evidence record.
+struct AdcStage {
+    path: std::path::PathBuf,
+}
+
+impl AdcStage {
+    fn stage(id: &str, content: &str) -> Self {
+        let dir =
+            std::path::PathBuf::from(format!("/tmp/opencode/lane-live-{}-adc", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap_or_else(|error| {
+            panic!(
+                "LIVE-FAIL (credentials): {id} — cannot stage the ADC dir {}: {error}",
+                dir.display()
+            )
+        });
+        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+        let path = dir.join("application_default_credentials.json");
+        std::fs::write(&path, content).unwrap_or_else(|error| {
+            panic!("LIVE-FAIL (credentials): {id} — cannot stage the ADC file: {error}")
+        });
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+        std::env::set_var("GOOGLE_APPLICATION_CREDENTIALS", &path);
+        Self { path }
+    }
+}
+
+impl Drop for AdcStage {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+        let _ = std::fs::remove_dir(self.path.parent().unwrap_or(std::path::Path::new("/")));
+        std::env::remove_var("GOOGLE_APPLICATION_CREDENTIALS");
+    }
+}
+
+/// A minimal `IntegrationHost` for the CRED-V3 credential chain
+/// (in-memory database, non-persisting bus — nothing durable, nothing
+/// network-bound except the grant the chain itself performs).
+async fn cred_v3_host() -> Arc<oc_core::integration::IntegrationHost> {
+    let database = Arc::new(
+        oc_core::database::Database::open_in_memory()
+            .await
+            .expect("in-memory database for the CRED-V3 host"),
+    );
+    let bus = Arc::new(oc_core::bus::Bus::new(
+        (*database).clone(),
+        oc_core::bus::BusOptions { persist: false, ..oc_core::bus::BusOptions::deterministic() },
+    ));
+    oc_core::integration::IntegrationHost::new(
+        database,
+        bus,
+        oc_core::provider_catalog::catalog::Catalog::embedded(),
+        "opencode-parity-live-probe",
+    )
+}
+
+/// Resolve `OC_CI_VERTEX_CREDENTIALS` into an access token + a source
+/// label (the label is logged; the token never is).
+///
+/// - JSON (a service-account key file — `client_email` / `private_key` /
+///   `token_uri`, or an `authorized_user` ADC file) → the PRODUCTION
+///   CRED-V3 chain mints the token (`IntegrationHost::vertex_binding`:
+///   RS256 self-signed JWT grant at the key's own `token_uri`, else the
+///   production token endpoint). Running the real chain is itself a live
+///   check of CRED-V3.
+/// - anything else → a raw `OAuth2` access token (`ya29.…`), passed
+///   through untouched.
+async fn resolve_vertex_credentials(id: &str, raw: &str) -> (String, &'static str) {
+    if !raw.trim_start().starts_with('{') {
+        return (raw.trim().to_string(), "raw access token (passed through)");
+    }
+    let shape = match serde_json::from_str::<serde_json::Value>(raw) {
+        Ok(value) => match value.get("type").and_then(serde_json::Value::as_str) {
+            Some("service_account") => "service_account",
+            Some("authorized_user") => "authorized_user",
+            other => panic!(
+                "LIVE-FAIL (credentials): {id} — OC_CI_VERTEX_CREDENTIALS is JSON but not an \
+                 ADC shape (type={other:?}). Accepted: a service-account key-file JSON \
+                 (recommended) or a raw access token. No credential material is logged."
+            ),
+        },
+        Err(error) => panic!(
+            "LIVE-FAIL (credentials): {id} — OC_CI_VERTEX_CREDENTIALS starts with '{{' but is \
+             not valid JSON ({error}). Accepted: a service-account key-file JSON (recommended) \
+             or a raw access token."
+        ),
+    };
+    // Stage as the ADC file the production chain reads; the guard unlinks
+    // it (and the env export) the moment the grant returns or panics.
+    let stage = AdcStage::stage(id, raw);
+    let host = cred_v3_host().await;
+    let grant = tokio::time::timeout(REQUEST_BUDGET, host.vertex_binding()).await;
+    drop(stage);
+    let binding = match grant {
+        Err(elapsed) => panic!(
+            "LIVE-FAIL (budget): {id} — the {shape} token grant exceeded the {}s request budget \
+             ({elapsed:?})",
+            REQUEST_BUDGET.as_secs()
+        ),
+        Ok(None) => panic!(
+            "LIVE-FAIL (credentials): {id} — the {shape} token grant returned no token (CRED-V3 \
+             chain: check the key validity / refresh token / the service account's permissions; \
+             no credential material is logged)"
+        ),
+        Ok(Some(binding)) => binding,
+    };
+    (binding.api_key, "service-account JSON via the CRED-V3 RS256 exchange (live check of CRED-V3)")
 }
 
 /// The run/skip/fail gate for one probe. Returns `true` = run live.
@@ -345,10 +477,12 @@ async fn within_probe_budget<T>(id: &str, future: impl std::future::Future<Outpu
 // ---------------------------------------------------------------------------
 
 /// AI-VERTEX-V2 live canary. Credentials: `OC_CI_VERTEX_PROJECT` +
-/// `OC_CI_VERTEX_CREDENTIALS` (a fresh `OAuth2` access token with the
-/// cloud-platform scope — see the `runtime-gates.yml` header contract).
-/// Optional overrides: `OC_CI_VERTEX_MODEL` (default `claude-sonnet-4-5`),
-/// `OC_CI_VERTEX_LOCATION` (default `us-central1`).
+/// `OC_CI_VERTEX_CREDENTIALS` (a service-account key-file JSON —
+/// recommended, exchanged to an access token through the PRODUCTION
+/// CRED-V3 chain — or a raw access token; see the `runtime-gates.yml`
+/// header contract). Optional overrides: `OC_CI_VERTEX_MODEL` (default
+/// `claude-sonnet-4-5`), `OC_CI_VERTEX_LOCATION` (default
+/// `us-central1`).
 #[tokio::test]
 #[ignore = "live canary: OC_CI_LIVE=1 + OC_CI_VERTEX_PROJECT/OC_CI_VERTEX_CREDENTIALS (contract: runtime-gates.yml header)"]
 async fn live_ai_vertex_messages_never_api_anthropic() {
@@ -364,13 +498,18 @@ async fn live_ai_vertex_messages_never_api_anthropic() {
         return;
     }
     let project = project.unwrap_or_else(|| panic!("gate guarantees the project"));
-    let token = credentials.unwrap_or_else(|| panic!("gate guarantees the credentials"));
+    let raw_credentials = credentials.unwrap_or_else(|| panic!("gate guarantees the credentials"));
     let location =
         env_non_empty("OC_CI_VERTEX_LOCATION").unwrap_or_else(|| "us-central1".to_string());
     let model =
         env_non_empty("OC_CI_VERTEX_MODEL").unwrap_or_else(|| "claude-sonnet-4-5".to_string());
 
     let outcome = within_probe_budget("AI-VERTEX-V2", async {
+        // Auto-detect the credential shape: SA key-file JSON goes through
+        // the production CRED-V3 exchange (itself a live check of
+        // CRED-V3); a raw access token passes straight through.
+        let (token, source) = resolve_vertex_credentials("AI-VERTEX-V2", &raw_credentials).await;
+        eprintln!("LIVE-CRED: AI-VERTEX-V2 — {source}");
         let transport = transport();
         let route = vertex_messages_route(
             Arc::clone(&transport),
@@ -378,7 +517,7 @@ async fn live_ai_vertex_messages_never_api_anthropic() {
                 base_url: None,
                 project: Some(project.clone()),
                 location: Some(location.clone()),
-                access_token: Some(Secret::Value(token.clone())),
+                access_token: Some(Secret::Value(token)),
                 api_key: None,
             },
         )
@@ -482,9 +621,10 @@ fn openapi_wire(
 /// lanes, they are OAuth/ADC bearer only, which is itself asserted). When
 /// `OC_CI_VERTEX_PROJECT` + `OC_CI_VERTEX_CREDENTIALS` are also present (the
 /// CI live=true battery always has them) the two `endpoints/openapi` lanes
-/// run LIVE under the real bearer; their exact URL/auth shape is asserted
-/// either way. Optional overrides: `OC_CI_GEMINI_MODEL` (default
-/// `gemini-2.5-flash`), `OC_CI_VERTEX_CHAT_MODEL` /
+/// run LIVE under the resolved bearer (SA key-file JSON → the production
+/// CRED-V3 exchange; raw token → passthrough); their exact URL/auth shape
+/// is asserted either way. Optional overrides: `OC_CI_GEMINI_MODEL`
+/// (default `gemini-2.5-flash`), `OC_CI_VERTEX_CHAT_MODEL` /
 /// `OC_CI_VERTEX_RESPONSES_MODEL`.
 /// The `endpoints/openapi` wire for one lane (chat or responses) under an
 /// explicit bearer — used both for the live legs (real token) and the
@@ -601,10 +741,18 @@ async fn live_ai_vertex_chat_responses_openapi_url_auth() {
         let mut outcomes: Vec<(&'static str, LiveOutcome)> = Vec::new();
 
         // (1) The OpenAPI lanes' URL + auth shape — the ledger row's
-        //     namesake. With a real bearer: a LIVE request each; without:
+        //     namesake. With credentials: a LIVE request each (an SA
+        //     key-file JSON resolves through the production CRED-V3
+        //     exchange, a raw token passes through); without:
         //     prepare-only assertions (placeholder bearer, no network).
-        let token = bearer.clone().unwrap_or_else(|| "ai-v1-probe-bearer-placeholder".to_string());
-        let live_openapi = bearer.is_some();
+        let (token, live_openapi) = match bearer.as_deref() {
+            Some(raw) => {
+                let (token, source) = resolve_vertex_credentials("AI-V1", raw).await;
+                eprintln!("LIVE-CRED: AI-V1 openapi legs — {source}");
+                (token, true)
+            }
+            None => ("ai-v1-probe-bearer-placeholder".to_string(), false),
+        };
         for (lane, model) in
             [("chat", chat_model.as_str()), ("responses", responses_model.as_str())]
         {
@@ -782,4 +930,172 @@ async fn live_ai_copilot_models_sync_and_endpoint_selection() {
         })
         .await;
     let _ = (remote_count, entry_count, endpoint_counts);
+}
+
+// ---------------------------------------------------------------------------
+// Hermetic local check: SA key-file JSON is identified and routed through
+// the CRED-V3 exchange (throwaway key + stub token endpoint bound to
+// 127.0.0.1:0 — ZERO outbound network). This is the always-run regression
+// for the credential auto-detection, NOT a live probe: it is not
+// `#[ignore]`d and deliberately not part of the `test(live_ai_)` CI
+// battery.
+// ---------------------------------------------------------------------------
+
+/// A throwaway 2048-bit RSA key (PKCS#8 PEM), generated for this fixture
+/// only — never registered anywhere, exists solely so ring can load and
+/// sign the CRED-V3 self-signed JWT. The stub endpoint never verifies the
+/// signature (verification is Google's server-side job), so any valid
+/// signing key exercises the client chain.
+const FIXTURE_SA_PRIVATE_KEY: &str = r"-----BEGIN PRIVATE KEY-----
+MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDI81dajy2U/JxD
+TrGPPEZkt0xCWU3CAAtR83NJM1lmjjALxb4L5gdgvRlmmwV43TJO5YkptM4nrnan
+Gkb9/A0AY6OviOg/mVqlBdn9Li62wnsIkhqEQnHukYZBai6h1ikArUU4TS5v+AlN
+Y6qvEOX9M5f/6EwQn6AuPRe6cV2Ywnvs69DFUCtxCnnke6NKvhmFwt+ynl188Z9g
+561wI2WFEUvCRtS37WIL5ICuLepm07aXFrK1NfPatHVuDLrQ9w2KG9+qlSwav1Zu
+spGyP+WfzzxLTKncfWg4a5K+vLZep7c8fZiUOM7RA5r6M8/E2SfBW3aKTm545QXD
+3AomA7VxAgMBAAECggEAOBccWe2/JmgAYhU0IKwNZg133sk4mB8VCdHvaw5HNQYZ
+SR/v9ThG9Oyzi11YAK2VXkpZp+eM56yd9/SwvjI9ms81IEkRsrbmg0uH1lCuv1q3
+puPJPQOi85lxJQ8zZv71QPgcayO4A47zYcOhH+6Sk8Nz+P1pRfaYam+pEOSV4I5h
+eHwS1CwXnme4HYO9Xt3oVIXDxMLc68L+v5TKkt9pSoxs4TKD5LsS8CxY9sAJ18lb
+9ImypqKkgCQHeijH2ZqiezOKDFnxKb7j6DgTbkryW+5VBqJ7SQ1NiLg8c6vNAjcJ
+T7VQ5gC3tlopNrNebJcxNg9RYLlyLyq45EIhE9n69QKBgQD6Lc5ocksoIWCHYUPu
+VnEQbfAJmUK0QXl3DxqNUr6z31DAaaa2ArYJVrsDQTz9dnkw+XN0prJd7hFR0KWg
+C0nbeV2tkQ/Zl7IYgs3dQ6xiz6u8vb1WW6uDis97C7qwMfR3YXDZ9G2semU8ND33
++ohh3n5odz0yLrXuW9SCmsb8xwKBgQDNoE43NuRTK5+ctaCnE8xo9nzO+4bvr3v8
+HfjtAwrDcu2oBqspCEYIAym51o6XqMiFj60T7cblnJTtFwZRqrsBwko4bTxOY0/G
+tyYMt7SuwdrMPi0oCwVFyQACpyauFFlpb8mpLiZwD/n/bmOZda6/kjhgYAZu3vzr
+rI9QCtLUBwKBgE7RNZEUSPdIpKeiDgu9cftyF0h+31P4uLK4sG3Lnsb+WOt1nY8E
+BaOljl91IyjbNU0nmacriVAsW4qCCFwGkmsxrkCrTeoIb5RnSUInOt0afgmFYWwe
+j0du6PTj+hnecx1VNn+EETVgjhpMfyVr6aGjvgFdZ4syyiBhD+9hocUrAoGBALEj
+6n2ychwcNpJ//XgxnCTIQ1jkYqhVWtAk2e8Ecd9SQN5BcG4WzI3We7m21nxcUPKO
+haHnczMXI0zkSvNLy3KGd/4ITK2S7ITZ/pNyJttt8RmGbsxSQiaOM84VRUMuEKC+
+RtHSChb8DHg6Ft96/CHYy2xrDN+yhdxZedSQnnM9AoGAfneALCs+dqBtBn+UHZBu
+Q/Sf1yBbEXyFleja7mPOj8STUf1cpmmSQ3KQ/jqt+kPTQsfWRWhef5DvS3gUFchF
+NWXlxGposHbrhQeC9/dnqL2MEeCyEXCyp4nQougjBMwIvOcnG0VccCVWOcLl41Yy
+Fc4YR4dFPoGcDI+4Ep9HUX0=
+-----END PRIVATE KEY-----
+";
+
+/// Serve exactly one token grant: capture the request, assert it is the
+/// CRED-V3 `jwt-bearer` POST, answer the canned access token. Returns
+/// `(stub_base_url, JoinHandle<request_summary>)` — the caller runs its
+/// client side while this accepts.
+async fn stub_token_endpoint() -> (String, tokio::task::JoinHandle<String>) {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    let listener = std::sync::Arc::new(
+        tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind 127.0.0.1:0"),
+    );
+    let port = listener.local_addr().expect("local addr").port();
+    let service = async move {
+        let (mut socket, _) = listener.accept().await.expect("one connection");
+        // Read headers + the content-length-delimited body (looped — one
+        // read may return a partial request).
+        let mut buffer = Vec::new();
+        let mut chunk = [0u8; 4096];
+        let body_start = loop {
+            let text = String::from_utf8_lossy(&buffer);
+            if let Some(index) = text.find("\r\n\r\n") {
+                let length = text[..index]
+                    .lines()
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .starts_with("content-length:")
+                            .then(|| line.split(':').nth(1))
+                            .flatten()
+                            .and_then(|value| value.trim().parse::<usize>().ok())
+                    })
+                    .unwrap_or(0);
+                if buffer.len() >= index + 4 + length {
+                    break index + 4;
+                }
+            }
+            let read = socket.read(&mut chunk).await.expect("read the grant request");
+            assert!(read > 0, "stub token endpoint: the client closed before sending the grant");
+            buffer.extend_from_slice(&chunk[..read]);
+        };
+        let request = String::from_utf8_lossy(&buffer);
+        let request_line = request.lines().next().unwrap_or_default().to_string();
+        let grant_body = &request[body_start..];
+        let grant_type = grant_body
+            .split('&')
+            .find_map(|pair| pair.strip_prefix("grant_type="))
+            .unwrap_or_default()
+            .replace("%3A", ":");
+        let assertion_segments = grant_body
+            .split('&')
+            .find_map(|pair| pair.strip_prefix("assertion="))
+            .map_or(0, |value| value.split('.').count());
+        let reply = serde_json::json!({ "access_token": "ya29.stub-minted-for-probe" }).to_string();
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{reply}",
+            reply.len()
+        );
+        socket.write_all(response.as_bytes()).await.expect("write the token reply");
+        format!(
+            "{request_line} | grant_type={grant_type} | assertion_segments={assertion_segments}"
+        )
+    };
+    (format!("http://127.0.0.1:{port}"), tokio::spawn(service))
+}
+
+/// The SA key-file JSON leg of [`resolve_vertex_credentials`]: the JSON is
+/// identified, staged as the ADC file, exchanged through the PRODUCTION
+/// CRED-V3 chain (the fixture's `token_uri` points at the local stub —
+/// zero outbound network), and the minted token flows into the production
+/// route's Authorization header. The raw-token passthrough is asserted
+/// inline (it must not construct anything — instant, no stub hit).
+#[tokio::test]
+async fn vertex_credentials_sa_json_routes_through_cred_v3() {
+    let (stub_base, stub) = stub_token_endpoint().await;
+    let sa_json = serde_json::json!({
+        "type": "service_account",
+        "project_id": "probe-project",
+        "client_email": "probe@probe-project.iam.gserviceaccount.com",
+        "private_key": FIXTURE_SA_PRIVATE_KEY,
+        "token_uri": format!("{stub_base}/token"),
+    })
+    .to_string();
+
+    // The service-account grant through the CRED-V3 client.
+    let (token, source) = resolve_vertex_credentials("AI-VERTEX-V2(local-fixture)", &sa_json).await;
+    assert_eq!(token, "ya29.stub-minted-for-probe", "the stub's canned token must flow through");
+    assert!(source.contains("CRED-V3"), "the source label must name the exchange: {source}");
+    let stub_summary = stub.await.expect("stub token endpoint service");
+    assert!(
+        stub_summary.contains("POST /token")
+            && stub_summary.contains("grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer"),
+        "the grant must be the CRED-V3 jwt-bearer POST against the key file's own token_uri: \
+         {stub_summary}"
+    );
+    assert!(
+        stub_summary.contains("assertion_segments=3"),
+        "the assertion must be a 3-segment JWT: {stub_summary}"
+    );
+
+    // The minted token rides the production messages route (prepare-only,
+    // failing transport — still zero network).
+    let route = vertex_messages_route(
+        Arc::new(FailingTransport { message: "cred_v3 routing test (nothing dials)" }),
+        VertexMessagesConfig {
+            base_url: None,
+            project: Some("probe-project".to_string()),
+            location: Some("us-central1".to_string()),
+            access_token: Some(Secret::Value(token)),
+            api_key: None,
+        },
+    )
+    .expect("the messages route binds with the minted token");
+    let wire = tiny_request(&route, "claude-sonnet-4-5");
+    assert_eq!(wire.header("authorization"), Some("Bearer ya29.stub-minted-for-probe"));
+    assert_eq!(
+        wire.url,
+        "https://us-central1-aiplatform.googleapis.com/v1/projects/probe-project/locations/us-central1/publishers/anthropic/models/claude-sonnet-4-5:streamRawPredict"
+    );
+
+    // The raw-token passthrough (no JSON, no host construction, no stub).
+    let (raw, raw_source) =
+        resolve_vertex_credentials("AI-VERTEX-V2(local-fixture)", "ya29.c.raw-passthrough-token")
+            .await;
+    assert_eq!(raw, "ya29.c.raw-passthrough-token");
+    assert!(raw_source.contains("raw"), "the source label must name the passthrough: {raw_source}");
 }
