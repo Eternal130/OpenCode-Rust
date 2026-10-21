@@ -50,6 +50,7 @@ use oc_ai::protocols::openai_compatible::{
 };
 use oc_ai::protocols::openai_responses::{openai_responses_route, OpenAIResponsesRouteSpec};
 use oc_ai::protocols::vertex::{vertex_route_for_model, VertexConfig};
+use oc_ai::protocols::vertex_messages::{vertex_messages_route, VertexMessagesConfig};
 use oc_ai::protocols::xai_responses::{xai_auth, xai_responses_route, XaiResponsesRouteSpec};
 use oc_ai::route::auth::{self, Secret};
 use oc_ai::route::client::{Route, RouteDefaults, RoutePatch};
@@ -170,6 +171,10 @@ pub enum ProtocolFamily {
     BedrockMantleResponses,
     /// Vertex native: Gemini generateContent on aiplatform.
     VertexGemini,
+    /// Vertex Claude Messages (AI-VERTEX-V2): the Anthropic Messages
+    /// protocol on the publishers/anthropic Vertex root with ADC auth —
+    /// previously misrouted to the generic messages arm (api.anthropic.com).
+    VertexMessages,
     /// xAI Responses (AI-M5): the Open Responses baseline with the Grok
     /// hosted tool vocabulary and explicit compaction-only context
     /// management.
@@ -187,12 +192,16 @@ pub enum ProtocolFamily {
 pub fn family_of(package: &str) -> Option<ProtocolFamily> {
     Some(match package {
         "@opencode/ai/providers/anthropic"
-        | "@opencode/ai/providers/google-vertex/messages"
         | "@opencode/ai/providers/alibaba/messages"
         | "@opencode/ai/providers/meta/messages"
         | "@opencode/ai/providers/minimax/messages"
         | "@opencode/ai/providers/moonshot/messages"
         | "@opencode/ai/providers/zai-coding-plan/messages" => ProtocolFamily::AnthropicMessages,
+
+        // Vertex Claude Messages (AI-VERTEX-V2): its own native lane —
+        // the publishers/anthropic Vertex URL + ADC bearer, NOT the
+        // generic messages arm (providers/google-vertex-messages.ts).
+        "@opencode/ai/providers/google-vertex/messages" => ProtocolFamily::VertexMessages,
 
         "@opencode/ai/providers/openai"
         | "@opencode/ai/providers/azure/responses"
@@ -452,6 +461,29 @@ fn build_route(
             );
             Ok(route
                 .with(RoutePatch { provider: Some(provider_id.to_string()), ..Default::default() }))
+        }
+        ProtocolFamily::VertexMessages => {
+            // AI-VERTEX-V2: the Claude-on-Vertex lane — ADC bearer (the
+            // resolved access token from the connection binding or the
+            // env stand-in; API keys are rejected upstream in the
+            // factory), the `global` location fallback, and the
+            // project-composed publishers/anthropic base URL.
+            let access_token =
+                api_key.or_else(|| env_first(env, "GOOGLE_OAUTH_ACCESS_TOKEN").map(Secret::Env));
+            vertex_messages_route(
+                transport,
+                VertexMessagesConfig {
+                    base_url,
+                    location: None,
+                    project: None,
+                    access_token,
+                    api_key: None,
+                },
+            )
+            .map_err(|error| ProviderError::Configuration {
+                provider: provider_id.to_string(),
+                message: error.to_string(),
+            })
         }
         ProtocolFamily::XaiResponses => {
             // AI-M5: the native xai-responses lane at api.x.ai/v1 with the
@@ -928,6 +960,60 @@ mod tests {
         let (transport_request, _) = route.prepare_transport(&prepared, &body).expect("wire");
         assert_eq!(transport_request.header("authorization"), Some("Bearer ya29.adc"));
         assert!(transport_request.url.contains(":streamGenerateContent?alt=sse"));
+    }
+
+    /// AI-VERTEX-V2: the catalog's Claude-on-Vertex models (per-model npm
+    /// `@ai-sdk/google-vertex/anthropic` → `google-vertex/messages`) bind
+    /// the native Vertex Messages lane — the project/location URL, the
+    /// `:streamRawPredict` path, ADC bearer, and never api.anthropic.com.
+    #[test]
+    fn provider_facade_vertex_messages_binding() {
+        let context = context();
+        let catalog = Catalog::embedded();
+        let vertex = catalog.provider("google-vertex").expect("vertex in catalog");
+        let claude = vertex
+            .models
+            .iter()
+            .find(|model| {
+                model.package.as_deref().unwrap_or(&vertex.info.package)
+                    == "@opencode/ai/providers/google-vertex/messages"
+            })
+            .expect("a claude-on-vertex (messages) model exists");
+        // The composed URL needs a project (requireProject); no other test
+        // in this binary touches the project env aliases.
+        std::env::set_var("GOOGLE_VERTEX_PROJECT", "facade-test-proj");
+        let model = language_model(
+            &context,
+            catalog,
+            "google-vertex",
+            claude.id.as_str(),
+            &ModelConnection { api_key: Some("ya29.adc".into()), ..Default::default() },
+        )
+        .expect("vertex messages binds");
+        std::env::remove_var("GOOGLE_VERTEX_PROJECT");
+        assert_eq!(model.route.id, "google-vertex-messages");
+        let route = Arc::clone(&model.route);
+        assert!(
+            route
+                .endpoint
+                .base_url
+                .as_deref()
+                .is_some_and(|base| base.contains("/v1/projects/facade-test-proj/locations/")
+                    && base.ends_with("/publishers/anthropic/models")),
+            "the publishers/anthropic base URL: {:?}",
+            route.endpoint.base_url
+        );
+        let mut request = oc_ai::schema::LLMRequest::new(model);
+        request.messages = vec![oc_ai::schema::Message::user("hi")];
+        let prepared = route.prepare_request(&request);
+        let body = route.build_body(&prepared).expect("body");
+        let (transport_request, _) = route.prepare_transport(&prepared, &body).expect("wire");
+        assert!(transport_request.url.ends_with(":streamRawPredict"), "{}", transport_request.url);
+        assert!(!transport_request.url.contains("api.anthropic.com"));
+        assert_eq!(transport_request.header("authorization"), Some("Bearer ya29.adc"));
+        assert_eq!(transport_request.header("x-goog-api-key"), None);
+        assert_eq!(body["anthropic_version"], "vertex-2023-10-16");
+        assert!(body.get("model").is_none());
     }
 
     /// BE-4 item 3: Copilot chat binds the openai-compatible protocol with

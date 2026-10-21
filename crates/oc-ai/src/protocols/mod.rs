@@ -80,6 +80,11 @@ pub mod google_interactions;
 // project/location routing, tuned endpoints, Express Mode keys, ADC bearer.
 pub mod vertex;
 
+// Google Vertex Claude Messages (AI-VERTEX-V2) — the Anthropic Messages
+// protocol on Vertex: publishers/anthropic URL, `:streamRawPredict` path,
+// anthropic_version body rewrite, ADC bearer (API keys rejected).
+pub mod vertex_messages;
+
 // xAI Responses (AI-M5) — the Open Responses baseline with the Grok
 // hosted tool vocabulary (x_search_call, image_generation_call) and an
 // explicit in-band-compaction rejection.
