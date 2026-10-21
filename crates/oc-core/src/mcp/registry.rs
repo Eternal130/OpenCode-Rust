@@ -31,7 +31,7 @@ use rusqlite::OptionalExtension;
 use tokio::sync::{Mutex as AsyncMutex, Notify};
 
 use crate::bus::{Bus, PublishOptions};
-use crate::database::Database;
+use crate::database::{Database, DbError};
 use crate::location::{
     ToolExecute, ToolRegistration, ToolRegistryState, ToolRunFailure, ToolRunResult,
 };
@@ -132,6 +132,8 @@ struct ServerEntry {
     tools: SyncMutex<Option<Vec<Tool>>>,
     prompts: SyncMutex<Option<Vec<Prompt>>>,
     integration_id: Option<IntegrationId>,
+    /// The OAuth method id (`register`'s derived suffix — index.ts:190).
+    integration_method_id: Option<IntegrationMethodId>,
 }
 
 impl ServerEntry {
@@ -145,7 +147,15 @@ impl ServerEntry {
             tools: SyncMutex::new(None),
             prompts: SyncMutex::new(None),
             integration_id: None,
+            integration_method_id: None,
         }
+    }
+
+    /// The server name for log lines (v2 keys credentials on name + URL).
+    fn integration_label(&self) -> String {
+        self.integration_id
+            .as_ref()
+            .map_or_else(|| String::new(), |id| id.as_str().to_owned())
     }
 
     fn open_startup(&self) {
@@ -178,21 +188,31 @@ pub type Connector = Arc<
         + Sync,
 >;
 
-/// Credential-store seam over database `credential` rows: looks up the
-/// active stored OAuth token for an integration. The full OAuth login flow
-/// (authorize + exchange + refresh rotation) is Phase 9 plugin-runtime
-/// scope; here a missing token plus a 401 settles the server as
-/// `needs_auth` and a stored token rides as the bearer.
+/// Credential-store seam over database `credential` rows: the full
+/// OAuth credential of an integration's active row (PLUG-D30 — the
+/// connect-time provider's `tokens()`/`clientInformation()` view) plus
+/// the rotation save (`saveTokens`). A missing credential plus a 401
+/// still settles the server as `needs_auth`; the authorize/refresh flow
+/// itself lives in [`super::oauth`].
 pub trait CredentialStore: Send + Sync {
-    /// The active stored bearer token for `integration_id`, when signed in.
-    fn active_token(
+    /// The active stored OAuth credential for `integration_id`.
+    fn oauth_credential(
         &self,
         integration_id: &IntegrationId,
-    ) -> futures::future::BoxFuture<'static, Option<String>>;
+    ) -> futures::future::BoxFuture<'static, Option<super::oauth::StoredCredential>>;
+    /// Persists a rotated token answer onto one credential row.
+    fn save_oauth_tokens(
+        &self,
+        integration_id: &IntegrationId,
+        credential_id: &str,
+        tokens: &super::oauth::StoredTokens,
+    ) -> futures::future::BoxFuture<'static, Result<(), String>>;
 }
 
-/// Database-backed credential lookup (`credential` rows hold JSON
-/// `Credential.Value` with an access-token field).
+/// Database-backed credential store (`credential` rows hold JSON
+/// `Credential.Value`; OAuth rows serialize the v2 `Credential.OAuth`
+/// fields, with the legacy `accessToken`/`access_token`/`token` shapes
+/// tolerated on read).
 #[derive(Clone)]
 pub struct DatabaseCredentials {
     db: Database,
@@ -205,36 +225,146 @@ impl DatabaseCredentials {
     }
 }
 
+/// The active row for an integration: `(id, value JSON)` — v2's
+/// `desc(active), desc(time_created), desc(id)` active pick
+/// (credential.ts:186-192).
+const ACTIVE_ROW_SQL: &str = "SELECT id, value FROM credential WHERE integration_id = ?1 \
+     ORDER BY active DESC, time_created DESC, id DESC LIMIT 1";
+
+/// Parses one stored row into the OAuth view (None for non-OAuth or
+/// unparsable rows). Three shapes tolerated, newest first: the
+/// integration store's snake_case `Credential.OAuth`, the HTTP client's
+/// camelCase wire form (`methodID`), and hand-written/foreign rows
+/// naming any access-token key.
+fn parse_row(id: &str, value: Option<String>) -> Option<super::oauth::StoredCredential> {
+    let raw = value?;
+    let parsed: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    if let Ok(stored) = serde_json::from_value::<crate::integration::types::OAuthValue>(parsed.clone())
+    {
+        return Some(super::oauth::stored_credential(id, &stored));
+    }
+    // The camelCase wire form: remap the field names, keep metadata
+    // (the registered client lives in `metadata.client`).
+    if parsed.get("methodID").is_some() {
+        let mut remapped = parsed.clone();
+        if let Some(map) = remapped.as_object_mut() {
+            if let Some(method) = map.remove("methodID") {
+                map.insert("method_id".to_owned(), method);
+            }
+        }
+        if let Ok(stored) = serde_json::from_value::<crate::integration::types::OAuthValue>(remapped)
+        {
+            return Some(super::oauth::stored_credential(id, &stored));
+        }
+    }
+    // Legacy shapes (hand-written or foreign rows): any access-token key.
+    let access = parsed
+        .get("access")
+        .or_else(|| parsed.get("accessToken"))
+        .or_else(|| parsed.get("access_token"))
+        .or_else(|| parsed.get("token"))
+        .and_then(serde_json::Value::as_str)?
+        .to_owned();
+    Some(super::oauth::StoredCredential {
+        id: id.to_owned(),
+        method_id: parsed
+            .get("method_id")
+            .or_else(|| parsed.get("methodID"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        access,
+        refresh: parsed
+            .get("refresh")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        expires: parsed.get("expires").and_then(serde_json::Value::as_i64).unwrap_or(0),
+        token_type: "Bearer".to_owned(),
+        scope: None,
+        client: None,
+    })
+}
+
 impl CredentialStore for DatabaseCredentials {
-    fn active_token(
+    fn oauth_credential(
         &self,
         integration_id: &IntegrationId,
-    ) -> futures::future::BoxFuture<'static, Option<String>> {
+    ) -> futures::future::BoxFuture<'static, Option<super::oauth::StoredCredential>> {
         let db = self.db.clone();
         let integration_id = integration_id.as_str().to_string();
         Box::pin(async move {
-            let value: Option<String> = db
+            let row = db
                 .transaction(move |tx| {
                     Ok(tx
                         .conn()
-                        .query_row(
-                            "SELECT value FROM credential WHERE integration_id = ?1 AND active = 1 \
-                             ORDER BY time_updated DESC LIMIT 1",
-                            rusqlite::params![integration_id],
-                            |row| row.get(0),
-                        )
+                        .query_row(ACTIVE_ROW_SQL, rusqlite::params![integration_id], |row| {
+                            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+                        })
                         .optional()?)
                 })
                 .await
                 .ok()
                 .flatten()?;
-            let parsed: serde_json::Value = serde_json::from_str(value.as_deref()?).ok()?;
-            parsed
-                .get("accessToken")
-                .or_else(|| parsed.get("access_token"))
-                .or_else(|| parsed.get("token"))
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_string)
+            parse_row(&row.0, row.1)
+        })
+    }
+
+    fn save_oauth_tokens(
+        &self,
+        integration_id: &IntegrationId,
+        credential_id: &str,
+        tokens: &super::oauth::StoredTokens,
+    ) -> futures::future::BoxFuture<'static, Result<(), String>> {
+        let db = self.db.clone();
+        let integration = integration_id.as_str().to_string();
+        let credential_id = credential_id.to_owned();
+        let tokens = tokens.clone();
+        Box::pin(async move {
+            // The closure returns `Result<Result<(), String>, DbError>`:
+            // flow failures travel as the Ok-inner (the transaction itself
+            // only fails on database errors).
+            let outcome = db
+                .transaction(move |tx| {
+                    let value: Option<String> = tx
+                        .conn()
+                        .query_row(
+                            "SELECT value FROM credential WHERE id = ?1 AND integration_id = ?2",
+                            rusqlite::params![credential_id, integration],
+                            |row| row.get(0),
+                        )
+                        .optional()?;
+                    let Some(raw) = value else {
+                        return Ok(Err(format!("credential {credential_id} not found")));
+                    };
+                    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw) else {
+                        return Ok(Err(format!("credential {credential_id} is not an OAuth row")));
+                    };
+                    let Ok(previous) =
+                        serde_json::from_value::<crate::integration::types::OAuthValue>(parsed)
+                    else {
+                        return Ok(Err(format!("credential {credential_id} is not an OAuth row")));
+                    };
+                    let rotated = super::oauth::value_with_tokens(&previous, &tokens);
+                    let encoded = serde_json::to_string(
+                        &crate::integration::types::CredentialValue::OAuth(rotated),
+                    )
+                    .map_err(|error| DbError::Json(error))?;
+                    tx.conn().execute(
+                        "UPDATE credential SET value = ?2, time_updated = ?3 WHERE id = ?1",
+                        rusqlite::params![
+                            credential_id,
+                            encoded,
+                            crate::database::migrations::now_ms()
+                        ],
+                    )?;
+                    Ok(Ok(()))
+                })
+                .await;
+            match outcome {
+                Ok(inner) => inner,
+                Err(error) => Err(error.to_string()),
+            }
         })
     }
 }
@@ -244,11 +374,20 @@ impl CredentialStore for DatabaseCredentials {
 pub struct NoCredentials;
 
 impl CredentialStore for NoCredentials {
-    fn active_token(
+    fn oauth_credential(
         &self,
         _integration_id: &IntegrationId,
-    ) -> futures::future::BoxFuture<'static, Option<String>> {
+    ) -> futures::future::BoxFuture<'static, Option<super::oauth::StoredCredential>> {
         Box::pin(async { None })
+    }
+
+    fn save_oauth_tokens(
+        &self,
+        _integration_id: &IntegrationId,
+        _credential_id: &str,
+        _tokens: &super::oauth::StoredTokens,
+    ) -> futures::future::BoxFuture<'static, Result<(), String>> {
+        Box::pin(async { Err("no credential store".to_owned()) })
     }
 }
 
@@ -294,6 +433,9 @@ struct Inner {
     endpoint_loads: dashmap::DashMap<String, Arc<AsyncMutex<()>>>,
     connector: Connector,
     credentials: Arc<dyn CredentialStore>,
+    /// The OAuth flow's HTTP client (PLUG-D30's `loggedFetch` — one
+    /// client, the config's headers applied per request).
+    http: reqwest::Client,
     /// Applied config snapshot for diffing (reconcile).
     applied: SyncMutex<Option<BTreeMap<String, ServerConfig>>>,
     /// Runtime overrides (`add` ⇒ `Some`, `remove` ⇒ `None`).
@@ -342,21 +484,84 @@ impl McpRegistry {
                 .map(|dir| dir.to_string_lossy().into_owned())
                 .unwrap_or_default()
         });
-        Self {
+        let registry = Self {
             inner: Arc::new(Inner {
-                bus,
+                bus: bus.clone(),
                 entries: SyncMutex::new(BTreeMap::new()),
                 locks: dashmap::DashMap::new(),
                 endpoint_loads: dashmap::DashMap::new(),
                 connector,
                 credentials,
+                http: reqwest::Client::new(),
                 applied: SyncMutex::new(None),
                 overrides: SyncMutex::new(BTreeMap::new()),
                 reconcile_lock: AsyncMutex::new(()),
                 config_source: SyncMutex::new(Arc::new(BTreeMap::new)),
                 directory: SyncMutex::new(directory),
             }),
+        };
+        Self::spawn_credential_reconnect(bus, registry.clone());
+        registry
+    }
+
+    /// PLUG-D30 — the credential-switch reconnect (index.ts:577-599):
+    /// bring a server online (or back to `needs_auth`) when its
+    /// integration's credential switches, so an OAuth login takes
+    /// effect without a restart. Only fires for integrations this
+    /// registry registered. Skipped without a live runtime (headless
+    /// construction in tests).
+    fn spawn_credential_reconnect(bus: Bus, registry: McpRegistry) {
+        if tokio::runtime::Handle::try_current().is_err() {
+            return;
         }
+        tokio::spawn(async move {
+            use futures::StreamExt as _;
+            let mut subscription = bus.subscribe();
+            while let Some(event) = subscription.next().await {
+                if event.type_ != crate::bus::registry::CREDENTIAL_SWITCHED {
+                    continue;
+                }
+                let Some(integration) =
+                    event.data.get("integrationID").and_then(serde_json::Value::as_str)
+                else {
+                    continue;
+                };
+                let owned: Vec<String> = registry
+                    .inner
+                    .entries
+                    .lock()
+                    .iter()
+                    .filter(|(_, entry)| {
+                        entry
+                            .integration_id
+                            .as_ref()
+                            .is_some_and(|id| id.as_str() == integration)
+                    })
+                    .map(|(name, _)| name.clone())
+                    .collect();
+                for name in owned {
+                    // add()/remove() may have replaced the entry while we
+                    // waited for the lock — re-check identity under it.
+                    let lock = Self::server_lock(&registry.inner, &name);
+                    let _guard = lock.lock().await;
+                    let Some(entry) = registry.inner.entries.lock().get(&name).cloned() else {
+                        continue;
+                    };
+                    if !entry
+                        .integration_id
+                        .as_ref()
+                        .is_some_and(|id| id.as_str() == integration)
+                    {
+                        continue;
+                    }
+                    if matches!(*entry.status.lock(), Status::Disabled) {
+                        continue;
+                    }
+                    registry.stop_server(&name, &entry).await;
+                    registry.start_server(&name, &entry).await;
+                }
+            }
+        });
     }
 
     /// Installs the config source (`state.get().servers`): the merged
@@ -415,8 +620,12 @@ impl McpRegistry {
         entry.set_status(Status::Pending);
         self.publish("mcp.status.changed", name).await;
 
+        // PLUG-D30 — `connectProvider` (index.ts:223-229 + oauth.ts
+        // 272-328): the integration's active credential feeds the bearer;
+        // a token inside the refresh margin rotates first (the SDK
+        // provider's `tokens()` contract).
         let bearer = match &entry.integration_id {
-            Some(id) => self.inner.credentials.active_token(id).await,
+            Some(id) => self.connect_bearer(entry, id).await,
             None => None,
         };
         let directory = self.inner.directory.lock().clone();
@@ -489,6 +698,45 @@ impl McpRegistry {
         Arc::clone(&*inserted)
     }
 
+    /// PLUG-D30: the connect-time bearer over the integration's active
+    /// credential — fresh tokens pass through, tokens inside the 5-minute
+    /// refresh margin (or past expiry) rotate through the authorization
+    /// server's refresh grant with the rotation persisted. A missing or
+    /// dead credential yields `None`: the anonymous connect then meets
+    /// the 401 and settles `needs_auth` (v2's connect-without-login).
+    async fn connect_bearer(&self, entry: &Arc<ServerEntry>, integration_id: &IntegrationId) -> Option<String> {
+        let stored = self.inner.credentials.oauth_credential(integration_id).await?;
+        let ServerConfig::Remote(remote) = &entry.config else {
+            return Some(stored.access);
+        };
+        match super::oauth::prepare_token(&self.inner.http, remote, &stored).await {
+            Ok(super::oauth::PreparedToken::Fresh { access }) => Some(access),
+            Ok(super::oauth::PreparedToken::Refreshed { access, tokens }) => {
+                if let Err(error) = self
+                    .inner
+                    .credentials
+                    .save_oauth_tokens(integration_id, &stored.id, &tokens)
+                    .await
+                {
+                    eprintln!(
+                        "opencode mcp: token rotation for \"{}\" could not be stored: {error}",
+                        entry.integration_label()
+                    );
+                }
+                Some(access)
+            }
+            Err(error) => {
+                // The stored sign-in is dead (refresh rejected): surface
+                // nothing so the connect meets the 401 honestly.
+                eprintln!(
+                    "opencode mcp: credential refresh for \"{}\" failed: {error}",
+                    entry.integration_label()
+                );
+                None
+            }
+        }
+    }
+
     /// `stopServer` (index.ts:483-494): drop the connection and publish the
     /// catalog changes so the tool registry clears the server's tools.
     async fn stop_server(&self, name: &str, entry: &Arc<ServerEntry>) {
@@ -505,19 +753,25 @@ impl McpRegistry {
 
     /// `register` (index.ts:176-215): remote servers with OAuth not
     /// disabled get an integration identity so credentials live in the
-    /// global store rather than committed config.
-    #[allow(clippy::unused_self)] // service-level seam (integration rows land in Phase 5)
+    /// global `credential` store rather than committed config. The
+    /// identity keys every credential row the OAuth flow writes
+    /// (PLUG-D30: `mcp auth` saves under exactly this id) and the
+    /// credential-switch reconnect below matches on it; the CLI-driven
+    /// authorize flow itself lives in [`super::oauth`].
+    #[allow(clippy::unused_self)] // service-level seam (the integration row's method registration is the CLI lane's)
     fn register_integration(&self, name: &str, entry: &mut ServerEntry) {
         let ServerConfig::Remote(remote) = &entry.config else { return };
         if remote.oauth == Some(oc_schema::mcp::OAuthValue::Disabled(false)) {
             return;
         }
         let suffix = integration_suffix(name, &remote.url);
+        // The integration id AND the method id share the derived suffix
+        // (v2 registers `method: { id: methodID, type: "oauth", label:
+        // name }` — index.ts:190-204); the credential rows the flow
+        // stores carry the method id for the refresh grant's public
+        // client fallback.
         entry.integration_id = Some(IntegrationId(suffix.clone()));
-        // The integration row itself (label/metadata/method registration)
-        // is written by the integration service in the Phase 5 server lane;
-        // the identity derivation and credential lookups live here.
-        let _ = IntegrationMethodId(suffix);
+        entry.integration_method_id = Some(IntegrationMethodId(suffix));
     }
 
     /// `disposeServer`.

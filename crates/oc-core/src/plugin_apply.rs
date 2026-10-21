@@ -415,9 +415,48 @@ async fn register_guest_hook(
             shell_before_to_json,
             shell_before_from_json
         ),
-        // http.request/http.response + the experimental ws.* points have
-        // no engine dispatch site yet (M-02/C7a lanes own the transport
-        // sites); permission/aisdk are not guest-bridge domains.
+        // PLUG-M02: the transport-layer domains — the engine dispatch
+        // sites live at the route transport seam (model-request.ts:
+        // 320-375; oc-ai's intercepted transport + the ws seams). The
+        // http pair wraps every request the route executes (the
+        // WebSocket fallback included); the ws trio rewrites the
+        // durable socket's handshake and frames.
+        "session.http.request" => point!(
+            register_session_http_request,
+            "session",
+            "http.request",
+            http_request_to_json,
+            http_request_from_json
+        ),
+        "session.http.response" => point!(
+            register_session_http_response,
+            "session",
+            "http.response",
+            http_response_to_json,
+            http_response_from_json
+        ),
+        "session.experimental.ws.handshake" => point!(
+            register_session_ws_handshake,
+            "session",
+            "experimental.ws.handshake",
+            ws_handshake_to_json,
+            ws_handshake_from_json
+        ),
+        "session.experimental.ws.send" => point!(
+            register_session_ws_send,
+            "session",
+            "experimental.ws.send",
+            ws_send_to_json,
+            ws_send_from_json
+        ),
+        "session.experimental.ws.receive" => point!(
+            register_session_ws_receive,
+            "session",
+            "experimental.ws.receive",
+            ws_receive_to_json,
+            ws_receive_from_json
+        ),
+        // permission/aisdk are not guest-bridge domains.
         other => {
             eprintln!(
                 "opencode plugin-apply: skipping guest hook {other} (no production dispatch site yet)"
@@ -664,6 +703,72 @@ mod wire {
         pub base_url: Option<String>,
         #[serde(default)]
         pub headers: BTreeMap<String, String>,
+    }
+
+    /// The plain HTTP parts (v2 carries a `Request`/`Response`; the
+    /// Rust contract is the parts plugins actually rewrite).
+    #[derive(Default, Serialize, Deserialize)]
+    pub struct HttpWire {
+        #[serde(default)]
+        pub url: String,
+        #[serde(default)]
+        pub method: String,
+        #[serde(default)]
+        pub headers: BTreeMap<String, String>,
+        #[serde(default)]
+        pub body: Value,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub struct HttpResponseWire {
+        pub status: u16,
+        #[serde(default)]
+        pub headers: BTreeMap<String, String>,
+        #[serde(default)]
+        pub body: Value,
+    }
+
+    /// The scope half every transport hook event carries.
+    #[derive(Serialize, Deserialize)]
+    pub struct TransportScopeWire {
+        #[serde(rename = "sessionID")]
+        pub session_id: SessionId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub agent: Option<AgentId>,
+        pub model: ModelRef,
+        pub kind: String,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub struct HttpRequestEvent {
+        #[serde(flatten)]
+        pub scope: TransportScopeWire,
+        pub request: HttpWire,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub struct HttpResponseEvent {
+        #[serde(flatten)]
+        pub scope: TransportScopeWire,
+        #[serde(default)]
+        pub request: HttpWire,
+        pub response: HttpResponseWire,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub struct WsHandshakeEvent {
+        #[serde(flatten)]
+        pub scope: TransportScopeWire,
+        pub url: String,
+        #[serde(default)]
+        pub headers: BTreeMap<String, String>,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub struct WsFrameEvent {
+        #[serde(flatten)]
+        pub scope: TransportScopeWire,
+        pub frame: String,
     }
 
     #[derive(Serialize, Deserialize)]
@@ -920,6 +1025,194 @@ mod wire {
             kind,
             base_url: wire.base_url,
             headers: wire.headers,
+        })
+    }
+
+    /// The scope half every transport event carries (session, agent,
+    /// model, kind — v2 spreads `scope` into each trigger).
+    struct TransportScope {
+        session_id: SessionId,
+        agent: AgentId,
+        model: ModelRef,
+        kind: crate::hooks::SessionRequestKind,
+    }
+
+    fn transport_scope(event: &TransportScopeWire) -> TransportScope {
+        let kind = match event.kind.as_str() {
+            "compaction" => crate::hooks::SessionRequestKind::Compaction,
+            "title" => crate::hooks::SessionRequestKind::Title,
+            "generate" => crate::hooks::SessionRequestKind::Generate,
+            _ => crate::hooks::SessionRequestKind::Primary,
+        };
+        TransportScope {
+            session_id: event.session_id.clone(),
+            agent: event.agent.clone().unwrap_or_else(|| AgentId::parse("build")),
+            model: event.model.clone(),
+            kind,
+        }
+    }
+
+    fn scope_wire(
+        session_id: SessionId,
+        agent: AgentId,
+        model: ModelRef,
+        kind: crate::hooks::SessionRequestKind,
+    ) -> TransportScopeWire {
+        TransportScopeWire {
+            session_id,
+            agent: Some(agent),
+            model,
+            kind: kind.as_str().to_owned(),
+        }
+    }
+
+    fn http_wire_to_parts(wire: &HttpWire) -> crate::hooks::HttpRequest {
+        crate::hooks::HttpRequest {
+            url: wire.url.clone(),
+            method: wire.method.clone(),
+            headers: wire.headers.clone(),
+            body: wire.body.clone(),
+        }
+    }
+
+    fn http_parts_to_wire(parts: &crate::hooks::HttpRequest) -> HttpWire {
+        HttpWire {
+            url: parts.url.clone(),
+            method: parts.method.clone(),
+            headers: parts.headers.clone(),
+            body: parts.body.clone(),
+        }
+    }
+
+    pub fn http_request_to_json(event: &crate::hooks::SessionHttpRequestEvent) -> Value {
+        encode(&HttpRequestEvent {
+            scope: scope_wire(
+                event.session_id.clone(),
+                event.agent.clone(),
+                event.model.clone(),
+                event.kind,
+            ),
+            request: http_parts_to_wire(&event.request),
+        })
+    }
+
+    pub fn http_request_from_json(json: Value) -> Option<crate::hooks::SessionHttpRequestEvent> {
+        let wire = serde_json::from_value::<HttpRequestEvent>(json).ok()?;
+        let scope = transport_scope(&wire.scope);
+        Some(crate::hooks::SessionHttpRequestEvent {
+            session_id: scope.session_id,
+            agent: scope.agent,
+            model: scope.model,
+            kind: scope.kind,
+            request: http_wire_to_parts(&wire.request),
+        })
+    }
+
+    pub fn http_response_to_json(event: &crate::hooks::SessionHttpResponseEvent) -> Value {
+        encode(&HttpResponseEvent {
+            scope: scope_wire(
+                event.session_id.clone(),
+                event.agent.clone(),
+                event.model.clone(),
+                event.kind,
+            ),
+            request: http_parts_to_wire(&event.request),
+            response: HttpResponseWire {
+                status: event.response.status,
+                headers: event.response.headers.clone(),
+                body: event.response.body.clone(),
+            },
+        })
+    }
+
+    pub fn http_response_from_json(json: Value) -> Option<crate::hooks::SessionHttpResponseEvent> {
+        let wire = serde_json::from_value::<HttpResponseEvent>(json).ok()?;
+        let scope = transport_scope(&wire.scope);
+        Some(crate::hooks::SessionHttpResponseEvent {
+            session_id: scope.session_id,
+            agent: scope.agent,
+            model: scope.model,
+            kind: scope.kind,
+            request: http_wire_to_parts(&wire.request),
+            response: crate::hooks::HttpResponse {
+                status: wire.response.status,
+                headers: wire.response.headers,
+                body: wire.response.body,
+            },
+        })
+    }
+
+    pub fn ws_handshake_to_json(event: &crate::hooks::SessionWsHandshakeEvent) -> Value {
+        encode(&WsHandshakeEvent {
+            scope: scope_wire(
+                event.session_id.clone(),
+                event.agent.clone(),
+                event.model.clone(),
+                event.kind,
+            ),
+            url: event.url.clone(),
+            headers: event.headers.clone(),
+        })
+    }
+
+    pub fn ws_handshake_from_json(json: Value) -> Option<crate::hooks::SessionWsHandshakeEvent> {
+        let wire = serde_json::from_value::<WsHandshakeEvent>(json).ok()?;
+        let scope = transport_scope(&wire.scope);
+        Some(crate::hooks::SessionWsHandshakeEvent {
+            session_id: scope.session_id,
+            agent: scope.agent,
+            model: scope.model,
+            kind: scope.kind,
+            url: wire.url,
+            headers: wire.headers,
+        })
+    }
+
+    pub fn ws_send_to_json(event: &crate::hooks::SessionWsSendEvent) -> Value {
+        encode(&WsFrameEvent {
+            scope: scope_wire(
+                event.session_id.clone(),
+                event.agent.clone(),
+                event.model.clone(),
+                event.kind,
+            ),
+            frame: event.frame.clone(),
+        })
+    }
+
+    pub fn ws_send_from_json(json: Value) -> Option<crate::hooks::SessionWsSendEvent> {
+        let wire = serde_json::from_value::<WsFrameEvent>(json).ok()?;
+        let scope = transport_scope(&wire.scope);
+        Some(crate::hooks::SessionWsSendEvent {
+            session_id: scope.session_id,
+            agent: scope.agent,
+            model: scope.model,
+            kind: scope.kind,
+            frame: wire.frame,
+        })
+    }
+
+    pub fn ws_receive_to_json(event: &crate::hooks::SessionWsReceiveEvent) -> Value {
+        encode(&WsFrameEvent {
+            scope: scope_wire(
+                event.session_id.clone(),
+                event.agent.clone(),
+                event.model.clone(),
+                event.kind,
+            ),
+            frame: event.frame.clone(),
+        })
+    }
+
+    pub fn ws_receive_from_json(json: Value) -> Option<crate::hooks::SessionWsReceiveEvent> {
+        let wire = serde_json::from_value::<WsFrameEvent>(json).ok()?;
+        let scope = transport_scope(&wire.scope);
+        Some(crate::hooks::SessionWsReceiveEvent {
+            session_id: scope.session_id,
+            agent: scope.agent,
+            model: scope.model,
+            kind: scope.kind,
+            frame: wire.frame,
         })
     }
 

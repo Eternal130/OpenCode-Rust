@@ -289,6 +289,123 @@ async fn rpc_dispatch() {
 }
 
 // ---------------------------------------------------------------------------
+// PLUG-D13: serve mode's ctx.event.subscribe event source
+// ---------------------------------------------------------------------------
+
+/// v2 host.ts:255-265: `ctx.event.subscribe` streams the process bus's
+/// server+rpc events. In serve mode the ONLY event source is the host's
+/// broadcast tap — nothing else feeds it — so a subscribed plugin must
+/// observe the `session.renamed` envelope a production HTTP handler
+/// publishes (the taprecorder fixture records every observed envelope
+/// id, one per line).
+#[tokio::test]
+async fn serve_event_source() {
+    if !bun_available() {
+        eprintln!("bun unavailable; skipping");
+        return;
+    }
+    let box_ = sandbox("eventsrc");
+    let fixture = oc_plugin_host::fixture_dir().join("taprecorder.ts");
+    assert!(fixture.is_file(), "taprecorder fixture missing");
+    box_.write_project_config(&fixture);
+    box_.redirect_env();
+    // The taprecorder writes observed ids here (the bun guest inherits
+    // the test process env).
+    let markers = box_.project.join("markers");
+    std::env::set_var("OC_PLUGIN_TEST_SANDBOX", markers.display().to_string());
+
+    let handle = boot_and_serve(&box_.boot_options()).await.expect("boot and serve");
+
+    // A session at the boot location (the production row the HTTP
+    // session handlers resolve).
+    let location = oc_core::location::LocationRef::new(box_.project.clone(), None);
+    let session = handle
+        .state
+        .engine
+        .create_session(
+            &location,
+            oc_core::session::store::CreateInput {
+                title: Some("eventsrc".into()),
+                location: Some(oc_schema::location::Ref {
+                    directory: oc_schema::common::AbsolutePath(box_.project.display().to_string()),
+                    workspace_id: None,
+                }),
+                version: "2.0.24".into(),
+                ..oc_core::session::store::CreateInput::default()
+            },
+        )
+        .await
+        .expect("session for the rename");
+
+    // Rename through the production HTTP handler — `session.renamed`
+    // onto the process bus (the same wire path every SSE consumer sees).
+    let response = support::request(
+        handle.addr,
+        "PATCH",
+        &format!("/api/session/{}", session.id),
+        &[("content-type", "application/json")],
+        br#"{"title":"renamed-by-test"}"#,
+    )
+    .await
+    .expect("session rename request");
+    assert_eq!(response.status, 204, "rename settled: {}", response.text());
+
+    // The subscribed guest observes the envelope id (id + arrival order,
+    // the same stream the TUI store feeds).
+    let observed = markers.join("observed-ids.txt");
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    let mut seen = Vec::new();
+    while seen.is_empty() {
+        if let Ok(text) = std::fs::read_to_string(&observed) {
+            seen = text
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(str::to_owned)
+                .collect();
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "ctx.event.subscribe never observed the session.renamed event (serve mode has no event source)"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(seen[0].starts_with("evt_"), "the recorded line is an envelope id: {}", seen[0]);
+
+    // A second rename through the SAME path delivers a second envelope —
+    // the stream stays live, not a one-shot replay.
+    let response = support::request(
+        handle.addr,
+        "PATCH",
+        &format!("/api/session/{}", session.id),
+        &[("content-type", "application/json")],
+        br#"{"title":"renamed-again"}"#,
+    )
+    .await
+    .expect("second rename request");
+    assert_eq!(response.status, 204, "second rename settled: {}", response.text());
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    while seen.len() < 2 {
+        if let Ok(text) = std::fs::read_to_string(&observed) {
+            seen = text
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(str::to_owned)
+                .collect();
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the event stream stopped after the first delivery (ids so far: {seen:?})"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_ne!(seen[0], seen[1], "each rename is its own envelope");
+
+    handle.shutdown_and_join().await.expect("shutdown");
+}
+
+// ---------------------------------------------------------------------------
 // PLUG-D07: per-location activation
 // ---------------------------------------------------------------------------
 
