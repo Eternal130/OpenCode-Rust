@@ -507,6 +507,11 @@ pub fn paint_solid_home_view(
             interrupt: String::new(),
             usage: String::new(),
             location_hovered: view.location_hovered,
+            // TUI-12 — the live segment is session-scoped (the home
+            // composer has no session family/shells to count).
+            live: String::new(),
+            live_shortcut: String::new(),
+            live_hovered: false,
         },
         metadata: view.metadata.clone(),
         terminal_width: width,
