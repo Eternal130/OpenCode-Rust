@@ -176,6 +176,12 @@ pub struct Transcript {
     /// The transcript's image placements at absolute (transcript)
     /// coordinates (R-07) — the graphics-protocol overlay set.
     pub images: Vec<crate::image::ImagePlacement>,
+    /// TUI-TD09 — the `BackgroundToolHint` presence
+    /// (index.tsx:130-171): a running shell/subagent tool past the
+    /// 3 s delay on the tail's open assistant turn — the hint row
+    /// paints under the last row ("Press ctrl+b to move running work
+    /// to the background").
+    pub background_hint: bool,
 }
 
 /// The follow/sticky state machine — MOVED to oc-tui-core's
@@ -378,7 +384,40 @@ pub fn render_transcript(
         );
         place(render, "revert:banner".to_owned(), &mut measured, &mut y);
     }
-    Transcript { rows: measured, content_height: y, inset, images }
+    // TUI-TD09 — `BackgroundToolHint`'s presence (index.tsx:130-171):
+    // the LAST assistant message is still open (`time.completed`
+    // absent) AND carries a RUNNING shell/subagent tool part whose
+    // start is past the 3 s delay (`createDelayedPresence`).
+    let background_hint = {
+        const DELAY_MS: u64 = 3_000;
+        let last_open = messages.iter().rev().find_map(|message| match message {
+            Message::Assistant { id: _, parts, time, .. } => Some((parts, time)),
+            _ => None,
+        });
+        last_open.is_some_and(|(parts, time)| {
+            let open_turn = time.completed.is_none();
+            open_turn
+                && parts.iter().any(|part| {
+                    let Part::Tool { id: _, name, state, time: tool_time } = part else {
+                        return false;
+                    };
+                    if state.status != crate::components::message::model::ToolStatus::Running {
+                        return false;
+                    }
+                    let canonical = match name.as_str() {
+                        "bash" => "shell",
+                        "task" => "subagent",
+                        other => other,
+                    };
+                    if !matches!(canonical, "shell" | "subagent") {
+                        return false;
+                    }
+                    let started = tool_time.created.or(time.created).unwrap_or(0);
+                    options.clock_ms.saturating_sub(started) >= DELAY_MS
+                })
+        })
+    };
+    Transcript { rows: measured, content_height: y, inset, images, background_hint }
 }
 
 /// TUI-TD05 — the tail-first mount budgets (session/index.tsx:132-135):
@@ -975,6 +1014,29 @@ impl Transcript {
                 }
             }
             fills.extend(row.fills.iter().filter_map(|fill| shift_fill(fill, offset)));
+        }
+        // TUI-TD09 — the `BackgroundToolHint` row
+        // (index.tsx:1748-1780): "Press ctrl+b to move running work
+        // to the background" in the muted tone, one row under the
+        // last content row — visible while the tail is in view (the
+        // sticky bottom or a free window covering the end).
+        if self.background_hint {
+            let hint = "Press ctrl+b to move running work to the background";
+            let y = self.content_height.saturating_sub(offset);
+            if y < viewport {
+                placed.push(Placed {
+                    x: self.inset + 1,
+                    y,
+                    width: crate::wrap::display_width(hint),
+                    lines: vec![PlacedLine::plain(
+                        hint,
+                        Style::new()
+                            .fg(theme.text_muted.fg.or(theme.text.fg).unwrap_or_default())
+                            .bg(theme.background),
+                    )],
+                    tag: Some("session-background-tool-hint".into()),
+                });
+            }
         }
         // The jump-to-latest indicator (right-aligned in the slot row
         // under the viewport, `inset` from the frame's right edge —

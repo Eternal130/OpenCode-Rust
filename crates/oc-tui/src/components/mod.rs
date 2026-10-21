@@ -14,6 +14,7 @@ pub mod composer;
 /// stays the fallback — see the module doc + the M3 section of
 /// `docs/migration-m1-tabstrip.md`).
 pub mod composer_solid;
+pub mod console;
 pub mod dialog;
 pub mod dialog_config;
 pub mod dialog_open;
@@ -33,6 +34,7 @@ pub mod home;
 /// the fallback — see the module doc + the M5 section of
 /// `docs/migration-m1-tabstrip.md`).
 pub mod home_solid;
+pub mod location_missing;
 pub mod marquee;
 pub mod message;
 pub mod overlays;

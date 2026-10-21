@@ -155,6 +155,12 @@ pub struct App {
     /// The plugin-registered theme documents — re-applied after every
     /// config reload's registry rebuild.
     plugin_themes: Vec<(String, String)>,
+    /// TUI-TD15 — the armed `--prompt` startup prompt (v2 app.tsx:626's
+    /// `startupPrompt`): seeded at boot, submitted once the model
+    /// halves are ready (home.tsx:69-80 / index.tsx:597-604's gate).
+    startup_prompt: Option<String>,
+    /// TUI-TD15 — v2's `sent` latch: the startup prompt submits once.
+    startup_prompt_sent: bool,
 }
 
 impl App {
@@ -199,7 +205,52 @@ impl App {
             applied_keybinds: Vec::new(),
             plugin_owned: Vec::new(),
             plugin_themes: Vec::new(),
+            startup_prompt: None,
+            startup_prompt_sent: false,
         }
+    }
+
+    /// TUI-TD15 — arm the `--prompt` startup prompt (v2 home.tsx:57-60:
+    /// `r.set({text: args.prompt, …})` seeds immediately; the SUBMIT
+    /// waits for the readiness gate). The composer seeds now; the
+    /// one-shot submit fires from the run loop's
+    /// [`Self::maybe_submit_startup_prompt`] once the gate opens.
+    pub fn arm_startup_prompt(&mut self, text: String) {
+        let key = self.prompt_key();
+        let mut composer = self.store.composer(&key);
+        composer.draft.text.clone_from(&text);
+        self.store.set_composer(&key, &composer);
+        self.startup_prompt = Some(text);
+        self.startup_prompt_sent = false;
+    }
+
+    /// TUI-TD15 — the startup prompt's readiness gate + one-shot
+    /// submit (`createEffect`'s `sent` latch, home.tsx:69-80 +
+    /// index.tsx:597-604): `!sent && local.model.ready &&
+    /// local.model.catalogReady && local.agent.current() &&
+    /// local.model.current()` → `r.submit()`. The port's gate:
+    /// the model catalog loaded AND a current model RESOLVES against
+    /// it ([`Store::startup_prompt_ready`] — `resolve_model` walks
+    /// pick → durable → config → recent → first-catalog-row, exactly
+    /// v2's resolution chain).
+    pub fn maybe_submit_startup_prompt(&mut self) {
+        if self.startup_prompt_sent {
+            return;
+        }
+        let Some(text) = self.startup_prompt.clone() else { return };
+        let key = self.prompt_key();
+        if !self.store.startup_prompt_ready(&key) {
+            return;
+        }
+        // v2's `r.current.text !== args.prompt` guard: the user may
+        // have edited the draft while the gate was closed — only the
+        // UNTOUCHED startup text auto-submits.
+        if self.store.composer(&key).draft.text != text {
+            self.startup_prompt_sent = true;
+            return;
+        }
+        self.startup_prompt_sent = true;
+        let _ = self.store.submit_prompt(&key);
     }
 
     /// Install the plugin-owned keymap entries (the registration
@@ -430,6 +481,29 @@ impl App {
         // re-evaluation (`refresh_strip_hover`).
         if matches!(mouse.kind, MouseEventKind::Moved | MouseEventKind::Up(MouseButton::Left)) {
             self.last_pointer = Some((col, row));
+        }
+        // TUI-TD28 + PLUG-TUI-SLOT: an open plugin route page OWNS the
+        // pointer (v2's plugin route replaces the visible screen —
+        // `tabsAvailable()` gates on `route.data.type !== "plugin"`,
+        // app.tsx:576-579, so no underlay surface is live). The
+        // MISSING page's one pointer target is the `go home` button
+        // (`onMouseUp` → `route.navigate({type:"home"})`,
+        // plugin-route-missing.tsx:15-20); every other stroke dies on
+        // the page.
+        if let Some(page) = self.store.plugin_route_page() {
+            if let (true, MouseEventKind::Up(MouseButton::Left)) = (page.missing, mouse.kind) {
+                let (hx, hy, hw, hh) = crate::components::plugin_page::plugin_route_home_rect(
+                    usize::from(self.size.0),
+                    usize::from(self.size.1),
+                );
+                if col >= hx && row >= hy && col < hx + hw && row < hy + hh {
+                    // `navigate` closes the plugin route page (the
+                    // router replaces the visible route).
+                    self.store.navigate(Route::Home);
+                    self.store.request_redraw();
+                }
+            }
+            return;
         }
         match mouse.kind {
             MouseEventKind::Moved => {
@@ -785,6 +859,29 @@ impl App {
                         return;
                     }
                 }
+                // TUI-TD27 — the home update banner's release
+                // (home.tsx:138-146): a REMOTE notice dismisses; a
+                // local INSTALLED notice exits (the restart); a local
+                // AVAILABLE notice opens the update dialog
+                // (`update.open("notification")`).
+                if matches!(self.store.route(), Route::Home) {
+                    if let Some((x, y, width)) = self.store.home_update_hit() {
+                        if row == y && col >= x && col < x + width {
+                            let notice = self.store.update_notice();
+                            let remote = notice.as_ref().is_some_and(|notice| notice.remote);
+                            match (remote, notice.map(|notice| notice.is_installed())) {
+                                (true, _) => self.store.update_dismiss(),
+                                (false, Some(true)) => self.request_exit(),
+                                (false, _) => {
+                                    let _ =
+                                        self.dispatcher.dispatch(&self.store, "update.check", None);
+                                }
+                            }
+                            self.store.request_redraw();
+                            return;
+                        }
+                    }
+                }
                 // The sidebar onboarding card's two pointer targets
                 // (footer.tsx:45-70): the `✕` release persists
                 // `dismissed = true` (the run loop writes the
@@ -914,6 +1011,26 @@ impl App {
                         match &hit.action {
                             crate::store::TranscriptHitAction::ToggleGroup(key) => {
                                 self.store.toggle_group_expanded(&hit.session_id, key);
+                            }
+                            // TUI-TD14 — the dock row's onMouseUp →
+                            // openQueuedPrompts (index.tsx:2312-2342).
+                            crate::store::TranscriptHitAction::OpenQueuedPrompts => {
+                                if !self.store.queued_prompts(&hit.session_id).is_empty() {
+                                    self.store.clear_dialogs();
+                                    self.store.replace_dialog(
+                                        crate::store::DialogKind::QueuedPrompts,
+                                        crate::store::DialogSize::Medium,
+                                    );
+                                }
+                            }
+                            // TUI-TD14 — the jump slot's onMouseUp →
+                            // toBottom (index.tsx:1428-1442).
+                            crate::store::TranscriptHitAction::JumpToLatest => {
+                                let _ = self.store.scroll_command(
+                                    &hit.session_id,
+                                    oc_tui_core::scroll::ScrollCommand::Last,
+                                );
+                                self.store.request_redraw();
                             }
                             crate::store::TranscriptHitAction::ToggleThought {
                                 message_id,
@@ -1459,6 +1576,25 @@ impl App {
             self.exit_requested = true;
             return;
         }
+        // TUI-29 — the console's `copy-selection` binding
+        // (`consoleOptions.keyBindings: [{name: "y", ctrl: true,
+        // action: "copy-selection"}]`, app.tsx:241-246 →
+        // `onCopySelection`, :242-244): while the console overlay is
+        // OPEN, ctrl+y copies the console's content + the info toast +
+        // clearSelection — before the screen-selection layer sees it.
+        if self.store.console_open() && spec == "ctrl+y" {
+            let text = self.store.console_lines().join("\n");
+            if !text.is_empty() && self.store.clipboard_write(&text).is_ok() {
+                self.store.toast_show(crate::components::toast::ToastOptions {
+                    title: None,
+                    message: "Copied to clipboard".to_owned(),
+                    variant: "info",
+                    ..crate::components::toast::ToastOptions::info("")
+                });
+            }
+            self.keymap.clear_pending();
+            return;
+        }
         // TUI-16 — the selection's priority-101 intercept
         // (`handleSelectionKey`, app.tsx:551-558 + selection.ts:
         // 62-98): over a LIVE (retained manual-mode) selection,
@@ -1538,11 +1674,29 @@ impl App {
             // arrows/enter/ctrl+a drive the list, tabs switch with
             // left/right; leader chords still resolve through base.
             self.stroke_in_picker(stroke);
+        } else if self.location_missing_live() {
+            // TUI-30 — the SessionLocationMissing question replaced
+            // the prompt mount (SessionQuestion's base-mode layer,
+            // permission.tsx:445-447): `return` runs the selected
+            // choice — the single `move` action opens
+            // `DialogWorkspaces`; every other stroke passes (v2's
+            // layer binds only return).
+            if stroke.key == "return" && !stroke.ctrl && !stroke.alt {
+                self.store.open_worktrees_dialog();
+            }
         } else {
             self.stroke_on_route(&stroke);
         }
         self.sync_modes();
         self.store.runtime.run_effects();
+    }
+
+    /// TUI-30 — the routed session's location failed to resolve (the
+    /// `SessionLocationMissing` mount replaced the composer,
+    /// index.tsx:1484-1496).
+    fn location_missing_live(&self) -> bool {
+        matches!(self.store.route(), crate::store::Route::Session { session_id }
+            if self.store.session_location_missing(&session_id).is_some())
     }
 
     /// The composer's subagent picker holds the session route (#44):
@@ -2299,6 +2453,27 @@ impl App {
                 let mut composer = self.store.composer(&key);
                 let outcome = composer.handle_key(&key_event);
                 if outcome != KeyOutcome::Ignored {
+                    // TUI-28 — the directory autocomplete's refresh +
+                    // the destructive requests: the recents live in
+                    // the store; the composer's popup re-attaches the
+                    // rows after every edit/delete (an EMPTY query —
+                    // a typed path shows nothing, index.tsx:1962).
+                    if let Some(query) = composer.autocomplete.directory_query() {
+                        let project = self.store.worktree_dialog().project_id;
+                        for id in std::mem::take(&mut composer.destructive_requests) {
+                            self.store.directory_recent_remove(&project, &id);
+                        }
+                        let options = if query.is_empty() {
+                            self.store.directory_recents_options(&project)
+                        } else {
+                            Vec::new()
+                        };
+                        composer.autocomplete.options = options;
+                        composer.autocomplete.filtered_len = composer.autocomplete.options.len();
+                        if composer.autocomplete.selected >= composer.autocomplete.filtered_len {
+                            composer.autocomplete.selected = 0;
+                        }
+                    }
                     self.store.set_composer(&key, &composer);
                     self.handle_composer_outcome(&key, outcome);
                     self.keymap.clear_pending();
@@ -2580,19 +2755,11 @@ impl App {
                 if let Some((command, args)) =
                     crate::components::composer::autocomplete::argument_slash(prompt.text.trim())
                 {
-                    if command == "session.rename" {
-                        // index.tsx:899-908: with input → `session.
-                        // update` (an empty/blank title → the title
-                        // GENERATE arm — the same POST with title "");
-                        // the pending shimmer + the `session.renamed`
-                        // echo land the new title.
-                        if let crate::store::Route::Session { session_id } = self.store.route() {
-                            let title = args.trim().to_owned();
-                            self.rename_requests.push((session_id, title));
-                        }
-                    } else {
-                        let _ = self.dispatcher.dispatch(&self.store, command, Some(args.trim()));
-                    }
+                    // TUI-TD12 — `/rename <title>`'s direct arm and
+                    // `/cd <dir>` both dispatch with the argument (the
+                    // dispatcher's argument table); the draft never
+                    // reaches the model.
+                    let _ = self.dispatcher.dispatch(&self.store, command, Some(args.trim()));
                     return;
                 }
                 self.store.forward_submission(key, &prompt);
@@ -2714,6 +2881,7 @@ impl App {
 
     /// The current frame (route + blockers + dialog overlay).
     #[must_use]
+    #[allow(clippy::too_many_lines)] // the app frame: every overlay seam in one paint pass
     pub fn frame(&self) -> Frame {
         // The render-crash test hook (lane TAIL's ErrorComponent PTY
         // proof): OC_TUI_TEST_RENDER_PANIC=N panics at frame N.
@@ -2741,12 +2909,37 @@ impl App {
         // app (the ref's plugin routes replace the visible screen —
         // `router.navigate({type:"plugin"})`, api.tsx:211-224; the
         // native page renders the materialized `{title, rows}`).
+        // TUI-TD28: a page whose route never registered (the host's
+        // bounded render replied miss) renders the fallback screen
+        // instead — the warning line + the go-home button
+        // (component/plugin-route-missing.tsx:3-21; the click handler
+        // derives the same button geometry from the size).
         if let Some(page) = self.store.plugin_route_page() {
-            let overlay = crate::components::plugin_page::render_plugin_page(
-                &page.title,
-                &page.rows,
+            let overlay = if page.missing {
+                crate::components::plugin_page::render_plugin_route_missing(
+                    &page.plugin_id,
+                    &page.name,
+                    &theme.styles(),
+                    self.size,
+                    &mut Vec::new(),
+                )
+            } else {
+                crate::components::plugin_page::render_plugin_page(
+                    &page.title,
+                    &page.rows,
+                    &theme.styles(),
+                    self.size,
+                )
+            };
+            paste_frame(&mut frame, &overlay, 0);
+        }
+        // TUI-29 — the renderer console (`renderer.console`'s strip at
+        // the top of the screen, over the app).
+        if self.store.console_open() {
+            let overlay = crate::components::console::render_console_overlay(
+                &self.store.console_lines(),
                 &theme.styles(),
-                self.size,
+                self.size.0,
             );
             paste_frame(&mut frame, &overlay, 0);
         }
@@ -3057,6 +3250,7 @@ fn composer_key(stroke: &KeyStroke) -> Option<ComposerKey> {
             "c" => return Some(ComposerKey::CtrlC),
             "v" => return Some(ComposerKey::CtrlV),
             "j" => return Some(ComposerKey::CtrlJ),
+            "d" => return Some(ComposerKey::CtrlD),
             _ => return None,
         }
     } else if stroke.alt {
@@ -3950,6 +4144,9 @@ pub fn apply_send_failure(store: &Store, event: PromptSinkEvent) {
     let PromptSinkEvent::SendFailed { session_key, title, message, draft } = event else {
         return;
     };
+    // TUI-29 — the renderer console captures the failure (the
+    // diagnostics class v2's console surfaces).
+    store.console_log(&format!("[tui] {title}: {message}"));
     store.toast_show(crate::components::toast::ToastOptions {
         title: Some(title),
         message,
@@ -6404,16 +6601,13 @@ pub async fn run_with_size(
 
     // `--prompt` (v2 app.tsx:626's `startupPrompt` + home.tsx:52-80 /
     // routes/session/index.tsx:377-381, 601-607): seed the BOOTED
-    // route's composer with the flag's text and submit it once — the
-    // first turn goes out on boot (home submissions create their
-    // session through the prompt sink; a `--session`/`--continue`
-    // boot submits into the routed session).
+    // route's composer with the flag's text — TUI-TD15: the SUBMIT is
+    // ARMED, not fired (v2's createEffect waits for
+    // `local.model.ready && local.model.catalogReady` + a current
+    // agent/model before the one-shot `submit()`); the loop drains
+    // the gate every pass.
     if let Some(prompt) = &boot.prompt {
-        let key = app.prompt_key();
-        let mut composer = app.store.composer(&key);
-        composer.draft.text.clone_from(prompt);
-        app.store.set_composer(&key, &composer);
-        let _ = app.store.submit_prompt(&key);
+        app.arm_startup_prompt(prompt.clone());
     }
     // `--auto` (v2 permission.tsx:14 `args.auto ? "autoaccept"`):
     // arm the permission auto-answer (every ask replies `once`,
@@ -6437,6 +6631,8 @@ pub async fn run_with_size(
     // The previous frame's image placements (R-07) — the emission
     // delta (vanished ids delete; changed rects retransmit).
     let mut last_frame_images: Vec<crate::image::ImagePlacement> = Vec::new();
+    // TUI-18 — the last emitted window title (the OSC 0 change gate).
+    let mut last_terminal_title: Option<String> = None;
 
     // Input thread: crossterm's blocking read (keys + resize) bridged
     // into the async loop. The thread FIRST probes the terminal
@@ -6616,6 +6812,9 @@ pub async fn run_with_size(
             }
             app.store.ingest_all([message]);
         }
+        // TUI-TD15 — the armed startup prompt's gate check (after the
+        // drain: the freshly-ingested model catalog opens the gate).
+        app.maybe_submit_startup_prompt();
         // `--auto`: the freshly-ingested ask (if any) auto-answers
         // while autoaccept is armed — before the render, so the ask
         // footer never flashes.
@@ -6652,7 +6851,9 @@ pub async fn run_with_size(
         // `session.renamed` echo lands the title in the store. The
         // POST arms rename-pending (title_shimmer's envelope,
         // context/data.tsx:35-42) — the echo releases it.
-        for (session_id, title) in std::mem::take(&mut app.rename_requests) {
+        let mut renames = std::mem::take(&mut app.rename_requests);
+        renames.extend(app.store.take_rename_requests());
+        for (session_id, title) in renames {
             if std::env::var("OC_TUI_DEBUG").ok().as_deref() == Some("1") {
                 eprintln!("[tui] session rename {session_id}: {title}");
             }
@@ -7468,6 +7669,17 @@ pub async fn run_with_size(
             });
             if draw.is_err() {
                 break Err("terminal draw failed".to_owned());
+            }
+            // TUI-18 — the window title (`renderer.setTerminalTitle`
+            // effect, app.tsx:596-622): OSC 0 rides the draw seam,
+            // emitted only on CHANGE (route flips, a titled echo, the
+            // toggle clearing to "").
+            let terminal_title = app.store.terminal_title();
+            if last_terminal_title.as_deref() != Some(terminal_title.as_str()) {
+                crate::terminal_proto::emit(&crate::terminal_proto::osc_title_sequence(
+                    &terminal_title,
+                ));
+                last_terminal_title = Some(terminal_title);
             }
             // R-07: the frame's image overlays — emit AFTER the cell
             // grid flushed (the placements sit over their placeholder

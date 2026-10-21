@@ -328,6 +328,915 @@ fn dialog_experiments() {
     assert_eq!(props.options[0].footer.as_deref(), Some("on"));
 }
 
+/// TUI-33 — `session.verbosity.cycle` (index.tsx:1064-1076): the
+/// palette row carries v2's DYNAMIC title `Verbosity: {titlecase}` and
+/// dispatch cycles the `low | medium | high` config through the sink
+/// (levels[(i+1) % 3]) with the dialog cleared.
+#[test]
+fn session_verbosity_cycle_index() {
+    let store = Store::new(Runtime::new());
+    let mut dispatcher = StoreDispatcher;
+
+    // The palette row (palette: true in v2's session table).
+    let props = oc_tui::components::command_palette::palette_props(&store);
+    let row = props
+        .options
+        .iter()
+        .find(|option| option.value == "session.verbosity.cycle")
+        .expect("the palette row exists");
+    assert_eq!(row.title, "Verbosity: Medium", "v2's dynamic titlecase title");
+    assert_eq!(row.category.as_deref(), Some("Session"));
+
+    // Dispatch cycles: medium → high → low (wrap) → medium, each
+    // writing `session.verbosity` through the config sink.
+    let sink = std::rc::Rc::new(RecordingSink::default());
+    store.set_config_sink(sink.clone());
+    store.replace_dialog(DialogKind::CommandPalette, DialogSize::Medium);
+    assert_eq!(
+        dispatcher.dispatch(&store, "session.verbosity.cycle", None),
+        oc_tui::components::command_palette::Dispatch::Handled
+    );
+    assert_eq!(store.session_verbosity(), "high");
+    assert_eq!(
+        sink.0.borrow().last().cloned(),
+        Some(("session.verbosity".to_owned(), "high".to_owned()))
+    );
+    assert!(store.top_dialog().is_none(), "dialog.clear() rides the run");
+
+    let _ = dispatcher.dispatch(&store, "session.verbosity.cycle", None);
+    assert_eq!(store.session_verbosity(), "low", "the wrap: high → low");
+    let _ = dispatcher.dispatch(&store, "session.verbosity.cycle", None);
+    assert_eq!(store.session_verbosity(), "medium");
+
+    // The palette title tracks the live level.
+    let props = oc_tui::components::command_palette::palette_props(&store);
+    let row =
+        props.options.iter().find(|option| option.value == "session.verbosity.cycle").unwrap();
+    assert_eq!(row.title, "Verbosity: Medium");
+}
+
+/// TUI-TD15 — the `--prompt` auto-submit waits for the model halves
+/// (home.tsx:69-80 / index.tsx:597-604): the startup prompt is ARMED
+/// at boot and only submits once `local.model.ready &&
+/// local.model.catalogReady` hold AND a current model resolves — a
+/// boot with the catalog still loading keeps the draft parked (never
+/// a failed first turn).
+#[test]
+fn prompt_autosubmit_ready() {
+    use oc_tui::app::App;
+    use oc_tui::store::ListState;
+
+    let mut app = App::new((80, 24));
+    app.store.set_models(ListState::Loading, Vec::new());
+
+    // Arm at boot (run_with_size's --prompt block).
+    app.arm_startup_prompt("fix the login bug".to_owned());
+    app.maybe_submit_startup_prompt();
+    let composer = app.store.composer(oc_tui::app::HOME_PROMPT_KEY);
+    assert_eq!(
+        composer.draft.text, "fix the login bug",
+        "the draft seeds immediately (r.set) — but does NOT submit"
+    );
+    app.maybe_submit_startup_prompt();
+    let composer = app.store.composer(oc_tui::app::HOME_PROMPT_KEY);
+    assert!(!composer.draft.text.is_empty(), "still parked while the catalog is loading");
+
+    // The catalog lands → the gate opens → the one-shot submit fires
+    // (the draft clears into the prompt sink).
+    app.store.set_models(
+        ListState::Loaded(vec![oc_tui::store::ServerModel {
+            provider_id: "opencode".to_owned(),
+            id: "grok".to_owned(),
+            name: "Grok".to_owned(),
+            ..oc_tui::store::ServerModel::default()
+        }]),
+        Vec::new(),
+    );
+    app.maybe_submit_startup_prompt();
+    let composer = app.store.composer(oc_tui::app::HOME_PROMPT_KEY);
+    assert!(composer.draft.text.is_empty(), "the startup prompt submitted once ready");
+
+    // One-shot: the second pass never re-submits (v2's `sent` latch).
+    app.maybe_submit_startup_prompt();
+}
+
+/// TUI-TD28 — the plugin-route fallback screen
+/// (component/plugin-route-missing.tsx:3-21): when the host has no
+/// registered route `{id}/{name}` the page renders the warning line +
+/// the "go home" button, and the button's release navigates home
+/// (`onHome={() => route.navigate({type:"home"})}`).
+#[test]
+fn pluginroutemis() {
+    use crossterm::event::{KeyEventKind, MouseButton, MouseEvent, MouseEventKind};
+    use oc_tui::app::App;
+
+    let theme = oc_tui::theme::ThemeState::v2_dark();
+    let mut app = App::new((80, 24));
+
+    // An unregistered route opens (the guest's navigate) and the
+    // bounded render replies miss → the page flags missing.
+    app.store.open_plugin_route("omo", "stats", None);
+    app.store.mark_plugin_route_missing();
+    let page = app.store.plugin_route_page().expect("the page stays open");
+    assert!(page.missing, "the miss latches the fallback state");
+
+    // The fallback frame: the warning line + the go-home button.
+    let frame = oc_tui::components::plugin_page::render_plugin_route_missing(
+        "omo",
+        "stats",
+        &theme.styles(),
+        (80, 24),
+        &mut Vec::new(),
+    );
+    let text = frame.text_grid().join("\n");
+    assert!(text.contains("Unknown plugin route: omo/stats"), "the warning line");
+    assert!(text.contains("go home"), "the button");
+
+    // The button's hit rect: centered, the release navigates home and
+    // closes the page (v2's onHome).
+    let mut hits = Vec::new();
+    let _ = oc_tui::components::plugin_page::render_plugin_route_missing(
+        "omo",
+        "stats",
+        &theme.styles(),
+        (80, 24),
+        &mut hits,
+    );
+    assert_eq!(hits.len(), 1, "the go-home button recorded its hit rect");
+    let (hx, hy) = (hits[0].0, hits[0].1);
+    app.mouse_event(&MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: u16::try_from(hx + 1).unwrap(),
+        row: u16::try_from(hy).unwrap(),
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    });
+    assert!(matches!(app.store.route(), oc_tui::store::Route::Home));
+    assert!(app.store.plugin_route_page().is_none(), "the page closed");
+    let _ = (KeyEventKind::Press,);
+}
+
+/// TUI-30 — the `SessionLocationMissing` recovery screen
+/// (routes/session/location-missing.tsx): when the location worker's
+/// error directory matches the routed session's `location.directory`,
+/// the question replaces the prompt mount; `return` runs the single
+/// recovery action (→ `DialogWorkspaces`); clearing the error restores
+/// the composer.
+#[test]
+fn sessionlocatio_location() {
+    use oc_tui::app::App;
+    use oc_tui::data::{Ingest, SessionSnapshot};
+
+    let mut app = App::new((100, 30));
+    let theme = oc_tui::theme::ThemeState::v2_dark();
+    app.store.ingest_all([Ingest::Resync {
+        sessions: vec![SessionSnapshot {
+            id: "s1".to_owned(),
+            directory: Some("/gone/dir".to_owned()),
+            ..SessionSnapshot::default()
+        }],
+        unread: Vec::new(),
+        messages: Vec::new(),
+        cursors: Vec::new(),
+        permissions: Vec::new(),
+        forms: Vec::new(),
+    }]);
+    app.store.select_tab("s1");
+    assert!(
+        app.store.session_location_missing("s1").is_none(),
+        "no error recorded yet: the composer owns the mount"
+    );
+
+    // The location worker reports the failed directory.
+    app.store.set_location_error(Some("/gone/dir".to_owned()));
+    assert_eq!(
+        app.store.session_location_missing("s1").as_deref(),
+        Some("/gone/dir"),
+        "the routed session's directory matches the error"
+    );
+
+    // The question surface replaces the prompt mount.
+    let frame =
+        oc_tui::components::session::render_session(&app.store, "s1", &theme.styles(), (100, 30));
+    let text = frame.text_grid().join("\n");
+    assert!(text.contains("Session location unavailable"), "the question title");
+    assert!(text.contains("/gone/dir"), "the failed directory");
+    assert!(text.contains("Choose another directory to continue this session."));
+    assert!(text.contains("Recovery actions"));
+    assert!(text.contains("Choose directory"), "the single recovery action");
+
+    // `return` selects the action: the Workspaces dialog opens (the
+    // session.move surface whose selection relocations the session).
+    app.press("return");
+    assert!(
+        matches!(
+            app.store.top_dialog().map(|entry| entry.kind),
+            Some(oc_tui::store::DialogKind::Worktrees)
+        ),
+        "the recovery action opens DialogWorkspaces"
+    );
+
+    // A resolved location clears the mount (the composer returns).
+    app.store.set_location_error(None);
+    let frame =
+        oc_tui::components::session::render_session(&app.store, "s1", &theme.styles(), (100, 30));
+    let text = frame.text_grid().join("\n");
+    assert!(!text.contains("Session location unavailable"));
+}
+
+/// TUI-TD06 — content-anchored scroll restore (index.tsx:518-595 +
+/// anchors.ts): leaving a session while scrolled away saves a CONTENT
+/// anchor (the message straddling the viewport top + its screenY);
+/// returning re-seats the viewport on the anchor's CURRENT position —
+/// content inserted above (background streaming) does not drift the
+/// view — and a vanished anchor falls back to the bottom.
+#[test]
+fn scroll_anchor_restore() {
+    use oc_tui::store::{MessagePosition, Route, TranscriptMetrics};
+    use oc_tui_core::scroll::FollowState;
+
+    let store = Store::new(Runtime::new());
+    store.open_tab("s1", None);
+    store.set_transcript_metrics(
+        "s1",
+        TranscriptMetrics { viewport: 10, content_height: 100, rows: 60 },
+    );
+    let positions = |m2: usize| {
+        vec![
+            MessagePosition { id: "m1".to_owned(), y: m2 - 20 },
+            MessagePosition { id: "m2".to_owned(), y: m2 },
+            MessagePosition { id: "m3".to_owned(), y: m2 + 20 },
+        ]
+    };
+    // m2 sits at content y 30; scroll to offset 32 (two rows under
+    // m2's top — away from the bottom): sticky starts at the maximum
+    // (100 − 10 = 90), 58 line-ups land at 32.
+    store.set_message_positions("s1", positions(30));
+    for _ in 0..58 {
+        store.scroll_command("s1", oc_tui_core::scroll::ScrollCommand::LineUp);
+    }
+    let offset = store.scroll_offset("s1");
+    assert_eq!(offset, 32, "the away-from-bottom fixture (offset {offset})");
+
+    // Leaving the session saves the anchor: m2 straddles the viewport
+    // top (y 30 ≤ offset+1), so the anchor is (m2, screenY = -2).
+    store.navigate(Route::Home);
+    let anchor = store.scroll_anchor("s1").expect("the anchor saved on leave");
+    assert_eq!(anchor.message_id, "m2");
+    assert_eq!(anchor.screen_y, -2);
+
+    // While away, 8 rows of content are inserted ABOVE (a background
+    // stream admits a message at the top): every row shifts down 8.
+    store.set_message_positions("s1", positions(38));
+    store.set_transcript_metrics(
+        "s1",
+        TranscriptMetrics { viewport: 10, content_height: 108, rows: 61 },
+    );
+
+    // Returning schedules the restore; the session render resolves it
+    // against the FRESH positions (the same seam the nav walk uses).
+    store.select_tab("s1");
+    store.resolve_scroll_restore("s1");
+    let follow = store.follow_state("s1");
+    let restored = match follow {
+        FollowState::Free { offset, maximum } => (offset, maximum),
+        other @ oc_tui_core::scroll::FollowState::Sticky => panic!("expected Free, got {other:?}"),
+    };
+    assert_eq!(restored, (40, 98), "m2's top re-seated at screenY -2 (30-32 → 38-40)");
+    assert_eq!(
+        store
+            .message_positions("s1")
+            .iter()
+            .find(|position| position.id == "m2")
+            .map(|position| i64::try_from(position.y).unwrap()
+                - i64::try_from(store.scroll_offset("s1")).unwrap()),
+        Some(-2),
+        "the anchored message sits at the same screen row"
+    );
+
+    // A vanished anchor (the message trimmed) falls back to the
+    // bottom (restore's `!boundary` arm, index.tsx:565-571).
+    store.scroll_command("s1", oc_tui_core::scroll::ScrollCommand::LineUp);
+    store.navigate(Route::Home);
+    assert!(store.scroll_anchor("s1").is_some());
+    store.set_message_positions("s1", vec![MessagePosition { id: "other".to_owned(), y: 5 }]);
+    store.select_tab("s1");
+    store.resolve_scroll_restore("s1");
+    assert_eq!(store.follow_state("s1"), FollowState::Sticky, "missing anchor → toBottom");
+    assert!(store.scroll_anchor("s1").is_none(), "the dead anchor cleared");
+}
+
+/// TUI-28 — the `/cd` directory-recents completion + the ctrl+d
+/// destructive delete (prompt/index.tsx:1958-1985 +
+/// prompt/directory-recents.ts): typing `/cd ` lists the project's
+/// recent directories (description `recent`, home-abbreviated
+/// display), and ctrl+d on a recent is a TWO-PRESS delete — the
+/// first press arms the confirm ("Press ctrl+d to confirm"), the
+/// second removes the entry and clamps the selection.
+#[test]
+fn recents_ctrl_prompt_index() {
+    use oc_tui::components::composer::autocomplete::{
+        directory_recent_value, directory_recents_options, AutocompleteState, DirectoryRecents,
+        Mode,
+    };
+
+    // `useDirectoryRecents` (directory-recents.ts): touch dedupes +
+    // stamps usedAt (most recent first), caps at 10; remove drops.
+    let mut recents = DirectoryRecents::default();
+    recents.touch("p1", "/w/one", 100);
+    recents.touch("p1", "/w/two", 300);
+    recents.touch("p1", "/w/one", 200); // re-touch reorders + dedupes
+    recents.touch("p2", "/w/other", 50); // per-project
+    let list = recents.list("p1");
+    assert_eq!(list.len(), 2, "the re-touch deduped (no duplicate)");
+    assert_eq!(list[0].directory, "/w/two", "usedAt-descending (300 > 200)");
+    assert_eq!(recents.list("p2").len(), 1, "projects stay separate");
+    recents.remove("p1", "/w/two");
+    assert!(!recents.list("p1").iter().any(|item| item.directory == "/w/two"));
+    recents.remove("p1", "/w/one");
+    // The 10-entry cap.
+    for index in 0..12 {
+        recents.touch("p1", &format!("/w/fill{index}"), 400 + index);
+    }
+    let list = recents.list("p1");
+    assert_eq!(list.len(), 10, "the 10-entry cap");
+    assert_eq!(list[0].directory, "/w/fill11", "most recent first");
+
+    // `directoryRecentValue` (directory-completion.ts:92-98): the
+    // home-relative display.
+    assert_eq!(directory_recent_value("/home/u", "/home/u"), "~");
+    assert_eq!(directory_recent_value("/home/u/work/api", "/home/u"), "~/work/api");
+    assert_eq!(directory_recent_value("/elsewhere", "/home/u"), "/elsewhere");
+
+    // The popup: `/cd ` (empty query) opens the directory mode over
+    // the recents.
+    let mut state = AutocompleteState::default();
+    state.on_input("/cd ", 4);
+    assert_eq!(state.visible, Some(Mode::Directory), "the argument slash opens the directory list");
+    let options = directory_recents_options(&recents.list("p1"), "/home/u");
+    assert!(!options.is_empty(), "the recents feed rows");
+    assert!(options.iter().all(|option| option.description.as_deref() == Some("recent")));
+    assert!(options.iter().all(|option| option.is_directory));
+    assert!(options.iter().all(|option| option
+        .destructive
+        .as_ref()
+        .is_some_and(|action| action.confirm == "Press ctrl+d to confirm")));
+    let state = state.with_options(options);
+
+    // ctrl+d is the two-press delete (autocomplete.tsx:629-638): the
+    // first press arms the confirm, the second RUNS the removal (the
+    // entry's absolute directory) and clamps the selection.
+    let mut state = state;
+    assert_eq!(state.confirming(), None);
+    assert_eq!(state.trigger_destructive(), None, "first press only arms");
+    assert_eq!(state.trigger_destructive(), Some("/w/fill11".to_owned()), "second press removes");
+    assert_eq!(state.confirming(), None, "the confirm cleared");
+    assert_eq!(state.selected, 0);
+
+    // A non-empty query hides the recents (index.tsx:1962: `if
+    // (query !== "") return []` — the live file list is the async
+    // half, not ported).
+    state.on_input("/cd /us", 7);
+    assert_eq!(state.visible, Some(Mode::Directory));
+    assert_eq!(state.options.len(), 0, "no recents under a query");
+}
+
+/// TUI-TD13 — `session.copy` / `/copy` (index.tsx:1180-1200): the
+/// whole transcript as markdown to the clipboard ("## User"/"##
+/// Assistant" sections joined by `---`) + the exact v2 toasts.
+#[test]
+fn session_copy() {
+    use oc_tui::components::command_palette::{
+        copy_session_transcript, session_transcript, Dispatch, StoreDispatcher,
+    };
+    use oc_tui::components::message::model::{Message, Part, PartTime};
+    use oc_tui::data::Ingest;
+
+    let store = Store::new(Runtime::new());
+    store.ingest_all([Ingest::MessagesSnapshot {
+        session_id: "s1".to_owned(),
+        messages: vec![
+            Message::User {
+                id: "u1".to_owned(),
+                text: "fix the login bug".to_owned(),
+                created: 1,
+                files: Vec::new(),
+            },
+            Message::Assistant {
+                id: "a1".to_owned(),
+                agent: "build".to_owned(),
+                model: "p/m".to_owned(),
+                parts: vec![
+                    Part::Reasoning { text: "hmm".to_owned(), time: PartTime::default() },
+                    Part::Text { text: "done".to_owned(), time: PartTime::default() },
+                ],
+                finish: Some("stop".to_owned()),
+                error: None,
+                time: PartTime::default(),
+                tokens: Some(0),
+                usage_total: Some(0),
+            },
+        ],
+    }]);
+    store.select_tab("s1");
+
+    // The formatter: the markdown sections + header (thinking rides —
+    // v2's /copy passes `true`).
+    let markdown = session_transcript(&store, "s1");
+    assert!(markdown.contains("## User\n\nfix the login bug"), "{markdown}");
+    assert!(markdown.contains("## Assistant"), "{markdown}");
+    assert!(markdown.contains("_Thinking:_\n\nhmm"), "the thinking arm");
+    assert!(markdown.contains("done"));
+    assert!(markdown.contains("**Session ID:** s1"));
+    assert!(markdown.contains("---"), "sections join");
+
+    // Dispatch copies + toasts (index.tsx:1186-1199's exact copy).
+    let mut dispatcher = StoreDispatcher;
+    assert_eq!(dispatcher.dispatch(&store, "session.copy", None), Dispatch::Handled);
+    let toasts = store.toasts();
+    let toast = toasts.current().expect("the toast");
+    assert_eq!(toast.message, "Session transcript copied to clipboard!");
+    assert_eq!(toast.variant, "success");
+    // Home route: no session — the miss toast (v2's catch arm).
+    let store2 = Store::new(Runtime::new());
+    let _ = dispatcher.dispatch(&store2, "session.copy", None);
+    assert_eq!(
+        copy_session_transcript(&store2, None).unwrap_err(),
+        "Failed to copy session transcript"
+    );
+
+    // The `/copy` slash row exists (slash: {name: "copy"}).
+    assert_eq!(
+        oc_tui::components::composer::SlashRegistry::command_for("/copy"),
+        Some("session.copy")
+    );
+}
+
+/// TUI-34 — the palette's missing command families
+/// (app.tsx:688-1216 + index.tsx command tables): messages.copy /
+/// `session.copy` / `prompt.queue` / `session.queued_prompts` /
+/// prompt.images.view / prompt.editor / prompt.skills /
+/// session.child.first all carry their v2 rows (title, group,
+/// bindings), with the dynamic `enabled` gates filtering dead rows.
+/// The message-navigation family stays OUT (v2 registers them
+/// `palette: undefined`, index.tsx:1100-1128).
+#[test]
+fn palette_messages_copy_session() {
+    use oc_tui::components::command_palette::palette_props;
+
+    let store = Store::new(Runtime::new());
+    let props = palette_props(&store);
+    let row = |value: &str| {
+        props
+            .options
+            .iter()
+            .find(|option| option.value == value)
+            .unwrap_or_else(|| panic!("the {value} row"))
+            .clone()
+    };
+
+    assert_eq!(row("messages.copy").title, "Copy last assistant message");
+    assert_eq!(row("messages.copy").category.as_deref(), Some("Session"));
+    assert_eq!(row("messages.copy").footer.as_deref(), Some("<leader>y"));
+    assert_eq!(row("session.copy").title, "Copy session transcript");
+    assert_eq!(row("prompt.queue").title, "Queue prompt");
+    assert_eq!(row("prompt.queue").category.as_deref(), Some("Prompt"));
+    assert_eq!(row("prompt.queue").footer.as_deref(), Some("<leader>return"));
+    assert_eq!(row("session.child.first").title, "Toggle subagent picker");
+    assert_eq!(row("session.child.first").footer.as_deref(), Some("down"));
+    assert_eq!(row("prompt.editor").title, "Open editor");
+    assert_eq!(row("prompt.skills").title, "Skills");
+    // The gated rows register with their v2 chrome (checked through
+    // the registry — the palette itself filters them while disabled).
+    let gated = |command: &str| {
+        oc_tui::components::command_palette::palette_command(command).expect("the registry row")
+    };
+    assert_eq!(gated("prompt.images.view").title, "View image attachments");
+    assert_eq!(gated("prompt.images.view").bindings, &["<leader>i"][..]);
+    assert_eq!(gated("session.queued_prompts").title, "View queued prompts");
+    assert_eq!(gated("session.queued_prompts").group, "Prompt");
+
+    // The dynamic enabled gates (a disabled command is FILTERED from
+    // the palette, never a dead row — command-palette.tsx's `enabled`
+    // pass): no queued prompts, no image attachments, no editor
+    // context → those rows vanish; the always-on family stays.
+    assert!(
+        !props.options.iter().any(|option| option.value == "session.queued_prompts"),
+        "queued_prompts gated on a non-empty queue"
+    );
+    assert!(
+        !props.options.iter().any(|option| option.value == "prompt.images.view"),
+        "images.view gated on image attachments"
+    );
+    assert!(
+        !props.options.iter().any(|option| option.value == "prompt.editor_context.clear"),
+        "editor_context.clear gated on a live editor context"
+    );
+
+    // The message-navigation family is NOT palette-visible in v2.0.24
+    // (`palette: undefined`, index.tsx:1100-1128).
+    for hidden in [
+        "session.message.next",
+        "session.message.previous",
+        "session.message.user.next",
+        "session.message.user.previous",
+        "session.messages_last_user",
+    ] {
+        assert!(
+            !props.options.iter().any(|option| option.value == hidden),
+            "{hidden} stays palette-invisible (v2 palette: undefined)"
+        );
+    }
+}
+
+/// TUI-TD12 — `/rename <title>` with an argument (index.tsx:899-911):
+/// a non-empty argument renames DIRECTLY (no dialog); no argument
+/// opens the rename dialog.
+#[test]
+fn rename_title() {
+    use oc_tui::components::command_palette::{Dispatch, StoreDispatcher};
+
+    let store = Store::new(Runtime::new());
+    store.open_tab("s1", None);
+    store.select_tab("s1");
+    let mut dispatcher = StoreDispatcher;
+
+    // No argument: the dialog (DialogSessionRename seeded with the
+    // current title).
+    assert_eq!(dispatcher.dispatch(&store, "session.rename", None), Dispatch::Handled);
+    assert!(matches!(
+        store.top_dialog().map(|entry| entry.kind),
+        Some(DialogKind::SessionRename { .. })
+    ));
+
+    // With an argument: the direct rename — no dialog, the title
+    // lands optimistically + the rename request fires (the POST's
+    // echo confirms).
+    let title_arg = "修复登录".to_owned();
+    assert_eq!(
+        dispatcher.dispatch(&store, "session.rename", Some(title_arg.as_str())),
+        Dispatch::Handled
+    );
+    assert!(store.top_dialog().is_none(), "the direct path never opens the dialog");
+    let tabs = store.tabs();
+    let tab = tabs.tabs.iter().find(|tab| tab.session_id == "s1").expect("the open tab");
+    assert_eq!(store.display_title(tab).as_deref(), Some("修复登录"));
+
+    // The empty-string argument is the GENERATE arm (v2: `title
+    // ? session.update : title.generate`) — the request fires with
+    // the empty title, never the dialog.
+    let requests = store.take_rename_requests();
+    assert_eq!(requests, vec![("s1".to_owned(), "修复登录".to_owned())]);
+    assert_eq!(dispatcher.dispatch(&store, "session.rename", Some("")), Dispatch::Handled);
+    assert!(store.top_dialog().is_none(), "the generate arm is not the dialog either");
+    assert_eq!(store.take_rename_requests(), vec![("s1".to_owned(), String::new())]);
+}
+
+/// TUI-18 — the terminal window title OSC 0 (app.tsx:596-622): home
+/// and untitled sessions title the window `OpenCode`, a titled
+/// session `OC | {title}` (40+ chars truncated to 37 + `…`), the
+/// disabled config clears to `""`, and the OSC 0 bytes ride the
+/// draw seam on change.
+#[test]
+fn osc_app() {
+    use oc_tui::components::command_palette::{Dispatch, StoreDispatcher};
+    use oc_tui::store::Route;
+
+    // The OSC 0 byte shape (BEL-terminated).
+    assert_eq!(
+        oc_tui::terminal_proto::osc_title_sequence("OpenCode"),
+        b"\x1b]0;OpenCode\x07".to_vec()
+    );
+    assert_eq!(oc_tui::terminal_proto::osc_title_sequence(""), b"\x1b]0;\x07".to_vec());
+
+    let store = Store::new(Runtime::new());
+    assert_eq!(store.terminal_title(), "OpenCode", "home");
+
+    // An untitled session keeps the plain wordmark.
+    store.open_tab("s1", None);
+    assert_eq!(store.terminal_title(), "OpenCode");
+
+    // A titled session: `OC | {title}`.
+    store.open_tab("s1", Some("Fix login".to_owned()));
+    assert_eq!(store.terminal_title(), "OC | Fix login");
+
+    // The 40-char truncation (37 + `…`).
+    let long = "x".repeat(50);
+    store.open_tab("s1", Some(long.clone()));
+    let title = store.terminal_title();
+    assert!(title.starts_with("OC | "));
+    assert_eq!(title.chars().count(), "OC | ".chars().count() + 38, "37 x's + …");
+    assert!(title.ends_with('…'));
+
+    // Home again: back to the wordmark.
+    store.navigate(Route::Home);
+    assert_eq!(store.terminal_title(), "OpenCode");
+
+    // The disabled config clears the window name (the toggle's
+    // `setTerminalTitle("")` arm) — via the settings snapshot.
+    store.settings_snapshot_set("terminal.title", "false");
+    assert_eq!(store.terminal_title(), "");
+    let mut dispatcher = StoreDispatcher;
+    assert_eq!(dispatcher.dispatch(&store, "terminal.title.toggle", None), Dispatch::Handled);
+    store.settings_snapshot_set("terminal.title", "true");
+    assert_eq!(store.terminal_title(), "OpenCode");
+}
+
+/// TUI-29 — the renderer console (app.tsx:242-244, 1110-1118):
+/// `app.console` toggles the console overlay (the captured log tail
+/// at the top of the screen) and clears the dialog; ctrl+y over the
+/// OPEN console copies its selection (the `copy-selection` binding +
+/// `onCopySelection`: clipboard + the info toast + clearSelection).
+#[test]
+fn app_console_ctrl_copy() {
+    use oc_tui::app::App;
+    use oc_tui::components::command_palette::{Dispatch, StoreDispatcher};
+
+    let mut app = App::new((80, 24));
+    assert!(!app.store.console_open(), "closed at boot");
+
+    // The palette command toggles + clears the dialog.
+    app.store.replace_dialog(DialogKind::CommandPalette, DialogSize::Medium);
+    let mut dispatcher = StoreDispatcher;
+    assert_eq!(dispatcher.dispatch(&app.store, "app.console", None), Dispatch::Handled);
+    assert!(app.store.console_open());
+    assert!(app.store.top_dialog().is_none(), "renderer.console.toggle() + dialog.clear()");
+
+    // The console captures diagnostics (the ring) and the overlay
+    // paints the tail at the top of the screen.
+    app.store.console_log("[tui] agent list failed: 502");
+    app.store.console_log("[tui] config reloaded");
+    let theme = oc_tui::theme::ThemeState::v2_dark();
+    let overlay = oc_tui::components::console::render_console_overlay(
+        &app.store.console_lines(),
+        &theme.styles(),
+        80,
+    );
+    let text = overlay.text_grid().join("\n");
+    assert!(text.contains("console"), "the strip's title");
+    assert!(text.contains("[tui] agent list failed: 502"));
+    assert!(text.contains("[tui] config reloaded"));
+
+    // ctrl+y over the open console: the content to the clipboard +
+    // the exact toast (app.tsx:564-571's onCopySelection shape).
+    app.press("ctrl+y");
+    let toasts = app.store.toasts();
+    let toast = toasts.current().expect("the copy toast");
+    assert_eq!(toast.message, "Copied to clipboard");
+    assert_eq!(toast.variant, "info");
+
+    // The toggle closes again; ctrl+y then falls through (no
+    // console copy with the overlay closed).
+    let _ = dispatcher.dispatch(&app.store, "app.console", None);
+    assert!(!app.store.console_open());
+}
+
+/// TUI-TD09 — `BackgroundToolHint` (index.tsx:130-171, 1748-1780):
+/// a RUNNING shell/subagent tool past the 3 s delay on the tail's
+/// OPEN assistant turn renders "Press ctrl+b to move running work to
+/// the background" at the transcript tail; a young tool, a non-
+/// shell/subagent tool, or a completed turn does not.
+#[test]
+fn backgroundtool() {
+    use oc_tui::components::message::list::{render_transcript, TranscriptOptions};
+    use oc_tui::components::message::model::{Message, Part, PartTime, ToolState, ToolStatus};
+    use oc_tui::theme::ThemeState;
+
+    let theme = ThemeState::v2_dark().styles();
+    let tool = |name: &str, status: ToolStatus, created: Option<u64>| Part::Tool {
+        id: "t1".to_owned(),
+        name: name.to_owned(),
+        time: PartTime { created, completed: None },
+        state: ToolState { status, ..ToolState::default() },
+    };
+    let assistant = |parts: Vec<Part>, completed: Option<u64>| Message::Assistant {
+        id: "a1".to_owned(),
+        agent: "build".to_owned(),
+        model: "p/m".to_owned(),
+        parts,
+        finish: None,
+        error: None,
+        time: PartTime { created: Some(4_000), completed },
+        tokens: None,
+        usage_total: None,
+    };
+    let options =
+        |clock: u64| TranscriptOptions { clock_ms: clock, ..TranscriptOptions::default() };
+
+    // A shell tool 4 s in on an open turn: the hint paints at the tail.
+    let transcript = render_transcript(
+        &[assistant(vec![tool("shell", ToolStatus::Running, Some(4_000))], None)],
+        &options(9_000),
+        &theme,
+        80,
+    );
+    assert!(transcript.background_hint, "4s elapsed on a running shell");
+    let frame = transcript.paint(oc_tui_core::scroll::FollowState::Sticky, &theme, (80, 24), None);
+    let text = frame.text_grid().join("\n");
+    assert!(
+        text.contains("Press ctrl+b to move running work to the background"),
+        "the hint row: {text}"
+    );
+
+    // 1 s in: below the delay — absent.
+    let transcript = render_transcript(
+        &[assistant(vec![tool("shell", ToolStatus::Running, Some(8_000))], None)],
+        &options(9_000),
+        &theme,
+        80,
+    );
+    assert!(!transcript.background_hint, "below the 3s delay");
+
+    // A read tool (not backgroundable): absent.
+    let transcript = render_transcript(
+        &[assistant(vec![tool("read", ToolStatus::Running, Some(1_000))], None)],
+        &options(9_000),
+        &theme,
+        80,
+    );
+    assert!(!transcript.background_hint, "read is not shell/subagent");
+
+    // The alias canonicalization: `bash` counts (tool-display.ts:2).
+    let transcript = render_transcript(
+        &[assistant(vec![tool("bash", ToolStatus::Running, Some(4_000))], None)],
+        &options(9_000),
+        &theme,
+        80,
+    );
+    assert!(transcript.background_hint, "bash canonicalizes to shell");
+
+    // A completed turn: absent.
+    let transcript = render_transcript(
+        &[assistant(vec![tool("shell", ToolStatus::Running, Some(1_000))], Some(8_000))],
+        &options(9_000),
+        &theme,
+        80,
+    );
+    assert!(!transcript.background_hint, "the turn completed");
+}
+
+/// TUI-TD14 — the two pointer-only indicators become REAL targets
+/// (index.tsx:2312-2342 + 1428-1442): a release on the
+/// `QueuedPromptDock` row opens the queued-prompts manager; a release
+/// on the "Jump to latest ↓" slot runs `toBottom` (sticky + the
+/// window pins reset).
+#[test]
+fn queuedpromptdo_jump_to_latest() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    use oc_tui::app::App;
+    use oc_tui::store::DialogKind;
+
+    let mut app = App::new((100, 30));
+    app.store.open_tab("s1", None);
+    // A queued prompt renders the dock row above the composer.
+    app.store.queue_prompt("s1", "next up", &[]);
+    assert!(!app.store.queued_prompts("s1").is_empty(), "the queue admitted the prompt");
+    let _ = app.frame();
+    let dock_hit = app
+        .store
+        .transcript_hit_rows()
+        .into_iter()
+        .find(|hit| matches!(hit.action, oc_tui::store::TranscriptHitAction::OpenQueuedPrompts))
+        .expect("the dock row recorded its hit rect");
+    app.mouse_event(&MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: u16::try_from(dock_hit.x + 2).unwrap(),
+        row: u16::try_from(dock_hit.y).unwrap(),
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    });
+    assert!(
+        matches!(app.store.top_dialog().map(|entry| entry.kind), Some(DialogKind::QueuedPrompts)),
+        "the dock release opened the queued-prompts manager"
+    );
+
+    // The jump slot: scrolled away from the bottom, the indicator's
+    // rect releases toBottom (sticky again).
+    let mut app2 = App::new((100, 30));
+    app2.store.open_tab("s2", None);
+    // A transcript taller than the viewport (a multi-line user turn).
+    let long_text = (0..40).map(|index| format!("line {index}")).collect::<Vec<_>>().join("\n");
+    app2.store.ingest_all([oc_tui::data::Ingest::MessagesSnapshot {
+        session_id: "s2".to_owned(),
+        messages: vec![oc_tui::components::message::model::Message::User {
+            id: "u1".to_owned(),
+            text: long_text,
+            created: 1,
+            files: Vec::new(),
+        }],
+    }]);
+    // One frame records the transcript metrics (the scroll driver's
+    // viewport/content inputs), THEN the first-message jump pins the
+    // free state against them.
+    let _ = app2.frame();
+    let _ = app2.store.scroll_command("s2", oc_tui_core::scroll::ScrollCommand::First);
+    assert!(
+        app2.store.follow_state("s2").jump_to_latest_visible(),
+        "scrolled away: the indicator shows"
+    );
+    let _ = app2.frame();
+    assert!(
+        app2.store.follow_state("s2").jump_to_latest_visible(),
+        "the render kept the free state over the tall transcript"
+    );
+    let jump_hit = app2
+        .store
+        .transcript_hit_rows()
+        .into_iter()
+        .find(|hit| matches!(hit.action, oc_tui::store::TranscriptHitAction::JumpToLatest))
+        .expect("the jump slot recorded its hit rect");
+    app2.mouse_event(&MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: u16::try_from(jump_hit.x + 2).unwrap(),
+        row: u16::try_from(jump_hit.y).unwrap(),
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    });
+    assert_eq!(
+        app2.store.follow_state("s2"),
+        oc_tui_core::scroll::FollowState::Sticky,
+        "the jump release re-stuck to the bottom"
+    );
+}
+
+/// TUI-TD27 — the update banner becomes interactive and the remote
+/// "installed" shape hides (home.tsx:137-146): a LOCAL available
+/// banner's release opens the update dialog, a LOCAL installed banner
+/// exits, a REMOTE banner dismisses — and `remote + installed` never
+/// renders at all.
+#[test]
+fn remote_installed() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    use oc_tui::app::App;
+    use oc_tui::components::update::{UpdateNotice, UpdateNoticeKind};
+    use oc_tui::store::DialogKind;
+
+    let mut app = App::new((100, 30));
+
+    // LOCAL available: the banner renders (the view carries it) and
+    // the release opens the update dialog.
+    app.store.update_notify(UpdateNotice {
+        kind: UpdateNoticeKind::Available,
+        version: "9.9.9".to_owned(),
+        remote: false,
+    });
+    let _ = app.frame();
+    let (x, y, _width) = app.store.home_update_hit().expect("the banner recorded its hit rect");
+    app.mouse_event(&MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: u16::try_from(x + 1).unwrap(),
+        row: u16::try_from(y).unwrap(),
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    });
+    assert!(
+        matches!(app.store.top_dialog().map(|entry| entry.kind), Some(DialogKind::Update)),
+        "an available banner's release opens the update dialog"
+    );
+
+    // LOCAL installed: the release exits (the restart).
+    let mut app2 = App::new((100, 30));
+    app2.store.update_notify(UpdateNotice {
+        kind: UpdateNoticeKind::Installed,
+        version: "9.9.9".to_owned(),
+        remote: false,
+    });
+    let _ = app2.frame();
+    let (x, y, _width) = app2.store.home_update_hit().expect("the local installed banner shows");
+    assert!(!app2.exit_requested);
+    app2.mouse_event(&MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: u16::try_from(x + 1).unwrap(),
+        row: u16::try_from(y).unwrap(),
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    });
+    assert!(app2.exit_requested, "the installed banner's release exits (restart)");
+
+    // REMOTE available: the release dismisses (the banner hides).
+    let mut app3 = App::new((100, 30));
+    app3.store.update_notify(UpdateNotice {
+        kind: UpdateNoticeKind::Available,
+        version: "9.9.9".to_owned(),
+        remote: true,
+    });
+    let _ = app3.frame();
+    let (x, y, _width) = app3.store.home_update_hit().expect("the remote available banner shows");
+    app3.mouse_event(&MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: u16::try_from(x + 1).unwrap(),
+        row: u16::try_from(y).unwrap(),
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    });
+    assert!(app3.store.update_notice().is_none(), "the remote banner's release dismissed it");
+
+    // REMOTE installed: the banner never renders (the `!remote ||
+    // available` gate, home.tsx:137) — no hit rect.
+    let app4 = App::new((100, 30));
+    app4.store.update_notify(UpdateNotice {
+        kind: UpdateNoticeKind::Installed,
+        version: "9.9.9".to_owned(),
+        remote: true,
+    });
+    let _ = app4.frame();
+    assert!(app4.store.home_update_hit().is_none(), "remote + installed stays hidden");
+}
+
 /// TUI-10 (the diff half): a working-tree image file renders the
 /// inline `DiffViewerImage` — the "Working tree preview" label, the
 /// decoded `WxH` size row, the blocks pixels — and the mount records
