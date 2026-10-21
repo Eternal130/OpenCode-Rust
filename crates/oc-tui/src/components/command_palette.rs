@@ -242,6 +242,14 @@ pub static PALETTE_COMMANDS: &[PaletteCommand] = &[
         group: "Prompt",
         bindings: &[],
     },
+    // TUI-15: the editor context's clear (index.tsx:459-466 — "Remove
+    // editor context", bound to `none` by default: palette-only).
+    PaletteCommand {
+        command: "prompt.editor_context.clear",
+        title: "Remove editor context",
+        group: "Prompt",
+        bindings: &[],
+    },
     PaletteCommand {
         command: "variant.cycle",
         title: "Variant cycle",
@@ -2013,6 +2021,13 @@ impl CommandDispatcher for StoreDispatcher {
             // xlarge DialogImagePreview over the focused composer's
             // data:image attachments (deduplicated,
             // deduplicatePromptImages).
+            // TUI-15 — `prompt.editor_context.clear`
+            // (index.tsx:459-466): pin the current selection's key as
+            // dismissed and drop it (`dismissEditorContext`).
+            "prompt.editor_context.clear" => {
+                store.editor_context_clear();
+                Dispatch::Handled
+            }
             "prompt.images.view" => {
                 let key = match store.route() {
                     Route::Session { session_id } => session_id,

@@ -2203,10 +2203,6 @@ impl App {
         // 2. The managed textarea layer: with text present, keys the
         //    composer owns feed it before the base keymap sees them
         //    (printables never leak into leader continuations).
-        //    TUI-14: SHELL MODE owns keys over an empty draft too
-        //    (v2's shell layers target the input regardless of text —
-        //    backspace-at-0 exits the mode, prompt/index.tsx:
-        //    1005-1018).
         if !draft_empty
             || self.store.composer_mode(&key) == crate::components::composer::ComposerMode::Shell
         {
@@ -2457,9 +2453,35 @@ impl App {
     /// (v2 `onSelect: command.run`) dispatches through the command
     /// seam — `/help` opens the help dialog, `/exit` exits, `/editor`
     /// opens $EDITOR — never a prompt submission.
+    /// TUI-15 — attach the pending editor context to a submit
+    /// (index.tsx:1151-1152): a PENDING selection (not yet sent)
+    /// joins the prompt as its `editor_context` text and flips the
+    /// label to sent.
+    fn attach_editor_context(
+        &self,
+        key: &str,
+        mut prompt: crate::components::composer::SubmittedPrompt,
+    ) -> crate::components::composer::SubmittedPrompt {
+        if let Route::Session { .. } = self.store.route() {
+            if let (true, Some(selection)) =
+                (self.store.editor_label_pending().unwrap_or(false), self.store.editor_context())
+            {
+                prompt.editor_context = Some(crate::editor_zed::format_editor_context(&selection));
+                self.store.editor_mark_sent();
+            }
+        }
+        let _ = key;
+        prompt
+    }
+
     fn handle_composer_outcome(&mut self, key: &str, outcome: KeyOutcome) {
         match outcome {
             KeyOutcome::Submitted(prompt) => {
+                // TUI-15 — the pending editor context rides the
+                // submit (index.tsx:1151-1152,1339-1344): the sink's
+                // synthetic POST precedes the prompt, then the label
+                // flips to sent (`markSelectionSent`, :1371).
+                let prompt = self.attach_editor_context(key, prompt);
                 // `argumentSlash` (prompt/index.tsx:1133-1146): the
                 // argument-taking slash heads (`/cd`, `/rename` —
                 // `slash: { arguments: true }`) intercept the submit
@@ -3280,6 +3302,38 @@ fn configured_model_from_entries(
     }
 }
 
+/// TUI-15 — the Zed selection poll (`scheduleZedPoll`, editor.ts:
+/// 284-288: a 1 s reconnect cadence while no editor socket exists).
+/// A dedicated THREAD (sqlite reads are blocking); it stops when the
+/// receiver drops (the run loop ends). Returns `None` when the gate
+/// is off (`ZED_TERM`/`TERM_PROGRAM`, editor.ts:121-123) or no db
+/// resolves (`resolveZedDbPath`).
+#[must_use]
+pub fn spawn_zed_poll() -> Option<std::sync::mpsc::Receiver<crate::editor_zed::ZedSelectionResult>>
+{
+    if !crate::editor_zed::zed_terminal_active(
+        std::env::var("ZED_TERM").ok().as_deref(),
+        std::env::var("TERM_PROGRAM").ok().as_deref(),
+    ) {
+        return None;
+    }
+    let db_path = crate::editor_zed::resolve_zed_db_path(
+        std::env::var("OPENCODE_ZED_DB").ok().as_deref(),
+        std::env::var("HOME").ok().as_deref(),
+        std::path::Path::is_file,
+    )?;
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || loop {
+        let result = crate::editor_zed::resolve_zed_selection(&db_path, &cwd);
+        if tx.send(result).is_err() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    });
+    Some(rx)
+}
+
 #[must_use]
 // The boot fetch chain (one block per list — the SURF-1 mcp.list hop
 // pushed it past the budget).
@@ -3663,6 +3717,7 @@ impl crate::components::composer::PromptSink for HttpPromptSink {
             _ => Some(oc_client::types::SessionInboxDelivery::Steer),
         };
         let inbox_id = prompt.inbox_id.clone();
+        let editor_context = prompt.editor_context.clone();
         tokio::spawn(async move {
             let target = if session_key == HOME_PROMPT_KEY {
                 // Home submission: create the session first.
@@ -3700,18 +3755,26 @@ impl crate::components::composer::PromptSink for HttpPromptSink {
             // still attempts, matching the reference's catch-less path
             // only when no model resolved).
             if let Some(model) = model {
-                let body = oc_client::types::SessionSwitchModelBody {
-                    model: oc_client::types::ModelRef {
-                        id: model.model_id.clone(),
-                        provider_id: model.provider_id.clone(),
-                        variant: model.variant.clone(),
-                    },
-                };
-                if let Err(error) = client.session().switch_model(&target, &body).await {
+                if let Err(error) = commit_model_selection(&client, &target, &model).await {
                     let _ = events.send(PromptSinkEvent::SendFailed {
                         session_key,
                         title: "Failed to switch model".to_owned(),
                         message: client_error_message(&error),
+                        draft: text,
+                    });
+                    return;
+                }
+            }
+            // TUI-15 — the pending editor context admits FIRST
+            // (`session.synthetic`, index.tsx:1339-1346): the context
+            // precedes the user prompt in the session's inbox; a
+            // failure surfaces as the send failure.
+            if let Some(editor_context) = editor_context {
+                if !send_editor_context(&client, &target, &editor_context).await {
+                    let _ = events.send(PromptSinkEvent::SendFailed {
+                        session_key,
+                        title: "Failed to send editor context".to_owned(),
+                        message: "the synthetic context POST failed".to_owned(),
                         draft: text,
                     });
                     return;
@@ -3758,6 +3821,36 @@ impl crate::components::composer::PromptSink for HttpPromptSink {
 /// `errorMessage` (util/error.ts): the client error's message text.
 fn client_error_message(error: &oc_client::ClientError) -> String {
     error.to_string()
+}
+
+/// TUI-15 — the editor context's synthetic POST (index.tsx:1339-1346):
+/// `session.synthetic {text, resume: false}` — `false` = the failure
+/// surfaces to the caller (the send failure path).
+async fn send_editor_context(client: &oc_client::Client, target: &str, text: &str) -> bool {
+    let body = oc_client::types::SessionSyntheticBody {
+        text: text.to_owned(),
+        resume: Some(false),
+        ..oc_client::types::SessionSyntheticBody::default()
+    };
+    client.session().synthetic(target, &body).await.is_ok()
+}
+
+/// `commitModel`'s POST (prompt/index.tsx:1283-1294):
+/// `session.switchModel` — the resolved selection commits before the
+/// prompt fires.
+async fn commit_model_selection(
+    client: &oc_client::Client,
+    target: &str,
+    model: &crate::store::ModelSelection,
+) -> Result<(), oc_client::ClientError> {
+    let body = oc_client::types::SessionSwitchModelBody {
+        model: oc_client::types::ModelRef {
+            id: model.model_id.clone(),
+            provider_id: model.provider_id.clone(),
+            variant: model.variant.clone(),
+        },
+    };
+    client.session().switch_model(target, &body).await.map(drop)
 }
 
 /// Apply one [`PromptSinkEvent::SendFailed`] to the store: the error
@@ -5987,6 +6080,10 @@ pub async fn run_with_size(
     // Server-backed picker lists (model/provider/agent).
     let (mut list_rx, lists_task) = spawn_server_lists(client.clone());
 
+    // TUI-15 — the Zed selection poll (None when the gate is off or
+    // no db resolves — the common non-Zed case stays untouched).
+    let mut zed_rx = spawn_zed_poll();
+
     // The Worktrees dialog's worker (R-05): boot resolves the project
     // + list; dialog actions flow through the sink.
     let (worktree_tx, mut worktree_rx) = spawn_worktree_worker(
@@ -6484,6 +6581,13 @@ pub async fn run_with_size(
             let mut out = std::io::stdout();
             let _ = out.write_all(b"\x07");
             let _ = out.flush();
+        }
+        // TUI-15 — fold the Zed poll's latest selection into the
+        // editor-context state (the label + the submit attach).
+        if let Some(zed_rx) = zed_rx.as_mut() {
+            while let Ok(result) = zed_rx.try_recv() {
+                app.store.apply_zed_selection(result);
+            }
         }
         // Drain the server-list fetches into the picker state.
         while let Ok(event) = list_rx.try_recv() {

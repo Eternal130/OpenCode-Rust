@@ -33,6 +33,7 @@ pub mod config;
 pub mod data;
 pub mod diff_viewer_golden_tests;
 pub mod editor;
+pub mod editor_zed;
 /// Lane M6 (retired): the exit farewell (sessionEpilogue) on the
 /// opentui-solid builder tree — the ONLY renderer since the
 /// retirement lane deleted the `OC_SUBAGENT_OPENTUI` flag pair (see

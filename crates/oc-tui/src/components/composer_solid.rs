@@ -129,6 +129,8 @@ struct ComposerColors {
     popup_selected_text: Rgb,
     /// `text.feedback.warning.base` — chips + the variant label.
     chip: Rgb,
+    /// `hue.accent[500]` — the editor file label's pending color.
+    accent: Rgb,
 }
 
 fn rgb_of(color: CellColor) -> Rgb {
@@ -153,6 +155,11 @@ impl ComposerColors {
             popup_selected_bg: rgb_of(p.popup_selected_bg),
             popup_selected_text: rgb_of(p.popup_selected_text),
             chip: rgb_of(p.chip_color),
+            accent: {
+                let rgba =
+                    theme.resolved.tokens.semantic(oc_theme::types::SemanticHue::Accent).s500;
+                (rgba.r, rgba.g, rgba.b)
+            },
         }
     }
 }
@@ -262,6 +269,9 @@ struct ComposerInputs {
     /// TUI-14 — the shell-mode hint (`esc exit shell mode`): `esc ` in
     /// `text.base`, the label muted (footer.tsx:107-112).
     footer_shell: StyledText,
+    /// TUI-15 — the editor file label (`notes.md #1-2`): accent while
+    /// PENDING, muted once sent (index.tsx:1945-1952).
+    footer_editor_file: StyledText,
     // -- dynamic geometry (content-dependent, patched) --------------------
     interrupt_x: usize,
     block_x: usize,
@@ -269,6 +279,7 @@ struct ComposerInputs {
     plugin_x: usize,
     live_x: usize,
     shell_x: usize,
+    editor_file_x: usize,
     // -- mount-static geometry (the mount key) ----------------------------
     width: usize,
     /// The composer box's frame-relative top (the popup's rows above).
@@ -453,6 +464,14 @@ fn shape(view: &PromptView, width: usize, height: usize, theme: &ThemeState) -> 
         ]),
         None => styled(Vec::new()),
     };
+    // TUI-15 — the editor file label: accent (pending) / muted (sent).
+    let footer_editor_file = match &plan.editor_file {
+        Some((_, label)) if !label.is_empty() => {
+            let fg = if view.footer.editor_file_pending { colors.accent } else { colors.muted };
+            one(label.clone(), fg)
+        }
+        _ => styled(Vec::new()),
+    };
 
     // The popup above the box (rows y = top − popup_h + i).
     let popup_rows: Vec<PopupRowView> = match &view.autocomplete {
@@ -489,12 +508,14 @@ fn shape(view: &PromptView, width: usize, height: usize, theme: &ThemeState) -> 
         footer_plugin,
         footer_live,
         footer_shell,
+        footer_editor_file,
         interrupt_x: plan.interrupt_x.unwrap_or(0),
         block_x: plan.block_x.unwrap_or(0),
         command_x: plan.command_x.unwrap_or(0),
         plugin_x: plan.plugin.as_ref().map_or(0, |(x, _)| *x),
         live_x: plan.live.as_ref().map_or(0, |(x, _)| *x),
         shell_x: plan.shell_hint.as_ref().map_or(0, |(x, _)| *x),
+        editor_file_x: plan.editor_file.as_ref().map_or(0, |(x, _)| *x),
         width,
         top: view.top,
         popup_h,
@@ -788,6 +809,10 @@ fn composer_element(inputs: &Signal<ComposerInputs>, geo: &ComposerInputs) -> El
                 footer_text(
                     |i: &ComposerInputs| i.shell_x,
                     |i: &ComposerInputs| i.footer_shell.clone(),
+                ),
+                footer_text(
+                    |i: &ComposerInputs| i.editor_file_x,
+                    |i: &ComposerInputs| i.footer_editor_file.clone(),
                 ),
             ]))
             .into_element(),

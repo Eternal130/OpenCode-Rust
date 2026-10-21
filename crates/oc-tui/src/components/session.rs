@@ -1262,6 +1262,14 @@ fn composer_footer_hints(
         },
         live_hovered: store.live_hovered(),
         shell,
+        // TUI-15 — the editor-context file label (`prompt.footer.
+        // file`): the Zed selection's `{basename}#{lines}`, accent
+        // while a submit has not yet attached it.
+        editor_file: store
+            .editor_context()
+            .map(|selection| crate::editor_zed::editor_file_label(&selection))
+            .unwrap_or_default(),
+        editor_file_pending: store.editor_label_pending().unwrap_or(false),
     }
 }
 

@@ -58,6 +58,7 @@ pub struct AutocompleteView<'a> {
 /// pinned composer golden, populated on the live routes), and the
 /// wave-3 plugin hint segments (rendered left of the shortcut hints,
 /// muted — empty by default so every golden stays byte-exact).
+#[allow(clippy::struct_excessive_bools)] // the row's independent paint gates
 #[derive(Debug, Clone, Default)]
 pub struct FooterHints {
     pub location: String,
@@ -90,6 +91,13 @@ pub struct FooterHints {
     /// `esc exit shell mode` hint (footer.tsx:107-112 — the shell
     /// Match replaces every other footer segment).
     pub shell: bool,
+    /// TUI-15 — the editor-context file label (`prompt.footer.file`,
+    /// prompt/index.tsx:240-250: `{basename}#{lines}`), painted left
+    /// of the hint pack; EMPTY renders nothing.
+    pub editor_file: String,
+    /// TUI-15 — the label paints `hue.accent[500]` while PENDING
+    /// (a selection not yet attached), muted once sent.
+    pub editor_file_pending: bool,
     /// #33 — the location label's hover lift
     /// (`useWorkingDirectoryActions.hovered`: `text.base` under the
     /// pointer, `text.muted` at rest, prompt/index.tsx:1927).
@@ -723,6 +731,9 @@ pub(crate) struct FooterPlan {
     /// (`exit shell mode` at ≥ 44 cols, `shell` below,
     /// footer.tsx:107-112) — `None` outside shell mode.
     pub shell_hint: Option<(usize, String)>,
+    /// TUI-15 — the editor file label's x + truncated text — `None`
+    /// when absent.
+    pub editor_file: Option<(usize, String)>,
 }
 
 /// Resolve the footer row's plan at `width` (see [`FooterPlan`]).
@@ -765,14 +776,23 @@ pub(crate) fn footer_plan(view: &PromptView, width: usize) -> FooterPlan {
     // `esc shell` below 44): right-aligned, the only hint content.
     let shell_label = if view.terminal_width < 44 { "shell" } else { "exit shell mode" };
     let shell_width = display_width(&format!("esc {shell_label}"));
+    // TUI-15 — the editor file label (`prompt.footer.file`): packed
+    // LEFT of the whole hint pack, middle-truncated to
+    // `max(12, min(48, width/3))` (index.tsx:249-253).
+    let editor_budget = (width / 3).clamp(12, 48);
+    let editor_file_text = if view.footer.editor_file.is_empty() {
+        String::new()
+    } else {
+        truncate_middle(&view.footer.editor_file, editor_budget)
+    };
+    let editor_file_width = display_width(&editor_file_text);
     let right_block = if view.footer.shell {
         shell_width
-    } else if hints_shown {
-        block_width
+    } else {
+        (if hints_shown { block_width } else { 0 })
             + if plugin_width > 0 { plugin_width + 2 } else { 0 }
             + if live_total > 0 { live_total + 2 } else { 0 }
-    } else {
-        plugin_width + if live_total > 0 { live_total + 2 } else { 0 }
+            + if editor_file_width > 0 { editor_file_width + 2 } else { 0 }
     };
     // Wave A: the interrupt hint (`PromptInterruptStatus`,
     // prompt/index.tsx:137-144) sits at the row's left — `esc` in
@@ -834,7 +854,36 @@ pub(crate) fn footer_plan(view: &PromptView, width: usize) -> FooterPlan {
             .footer
             .shell
             .then(|| (width.saturating_sub(shell_width), shell_label.to_owned())),
+        editor_file: (editor_file_width > 0 && !view.footer.shell).then(|| {
+            let x = width
+                .saturating_sub(right_block)
+                .saturating_sub(if plugin_width > 0 { plugin_width + 2 } else { 0 })
+                .saturating_sub(if live_total > 0 { live_total + 2 } else { 0 });
+            (x, editor_file_text)
+        }),
     }
+}
+
+/// `Locale.truncateMiddle` (util/locale.ts:82-88): clip the MIDDLE —
+/// the head and tail share the budget, `…` at the split (odd budgets
+/// favor the head: `ceil(budget/2) + floor(budget/2) - 1` visible).
+fn truncate_middle(value: &str, budget: usize) -> String {
+    if budget == 0 {
+        return String::new();
+    }
+    if display_width(value) <= budget {
+        return value.to_owned();
+    }
+    if budget == 1 {
+        return "…".to_owned();
+    }
+    let head_budget = budget.div_ceil(2);
+    let tail_budget = budget - head_budget;
+    let head = crate::wrap::take_width(value, head_budget.saturating_sub(1));
+    let total_chars = value.chars().count();
+    let tail_chars =
+        value.chars().skip(total_chars.saturating_sub(tail_budget)).collect::<String>();
+    format!("{head}…{tail_chars}")
 }
 
 /// The location label's column extent on the footer row

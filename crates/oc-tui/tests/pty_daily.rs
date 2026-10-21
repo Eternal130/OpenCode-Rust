@@ -1543,8 +1543,8 @@ fn composer_live_counts() {
 /// and Enter submits through `session.shell` (POST
 /// /api/session/:id/shell, prompt/index.tsx:1303-1307) — the mode
 /// resets to normal after the send.
-/// TUI-14's shell-POST slot type (the fake's registry handed out
-/// through the arm closure).
+/// TUI-14/TUI-15's shared POST-registry slot type (the fake's
+/// recorder handed out through the arm closure).
 type SharedPosts = Arc<Mutex<Option<Arc<Mutex<Vec<String>>>>>>;
 
 #[test]
@@ -1652,24 +1652,134 @@ fn shell_bang_mode() {
         },
     );
     // The shell submit reached the server: POST /api/session/ses_alpha/
-    // shell carrying the command text. The send is async — poll the
-    // fake's registry for the arrival.
-    let deadline = std::time::Instant::now() + Duration::from_secs(8);
-    loop {
-        let posts = shell_slot
-            .lock()
-            .expect("slot")
-            .as_ref()
-            .map(|arc| arc.lock().expect("posts").clone())
-            .unwrap_or_default();
-        if posts.iter().any(|post| post.contains("pwd")) {
-            break;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the shell command never POSTed; saw {posts:?}"
-        );
-        std::thread::sleep(Duration::from_millis(100));
+    // shell carrying the command text.
+    let posts = shell_slot
+        .lock()
+        .expect("slot")
+        .as_ref()
+        .map(|arc| arc.lock().expect("posts").clone())
+        .unwrap_or_default();
+    assert!(
+        posts.iter().any(|post| post.contains("pwd")),
+        "the shell command never POSTed; saw {posts:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// TUI-15 — the Zed editor context
+// ---------------------------------------------------------------------------
+
+/// TUI-15's Zed sqlite fixture (editor-zed.ts's table shapes): one
+/// workspace whose paths contain `workspace_dir` (the app's cwd), one
+/// ACTIVE editor on `notes.md` with multi-line contents, and a
+/// selection covering the second and third lines (the `#2-3` label).
+/// The db FILE lives under `db_dir` (the sandbox).
+fn zed_fixture_db(db_dir: &std::path::Path, workspace_dir: &std::path::Path) -> std::path::PathBuf {
+    let db_path = db_dir.join("zed").join("db.sqlite");
+    std::fs::create_dir_all(db_path.parent().expect("zed dir")).expect("zed dir");
+    let connection = rusqlite::Connection::open(&db_path).expect("open zed db");
+    let contents = "line one\nline two\nline three\n";
+    let start = contents.find("line two").expect("line two");
+    let end = contents.len().saturating_sub(1);
+    connection
+        .execute_batch(&format!(
+            "create table items (item_id integer primary key, kind text, pane_id integer, workspace_id integer, active integer);
+             create table panes (pane_id integer, workspace_id integer, active integer);
+             create table workspaces (workspace_id integer primary key, paths text, timestamp text);
+             create table editors (item_id integer, workspace_id integer, buffer_path text, contents text);
+             create table editor_selections (editor_id integer, workspace_id integer, start integer, end integer);
+             insert into workspaces values (1, '[\"{0}\"]', '2026-01-02T00:00:00Z');
+             insert into panes values (10, 1, 1);
+             insert into items values (100, 'Editor', 10, 1, 1);
+             insert into editors values (100, 1, '{0}/notes.md', '{1}');
+             insert into editor_selections values (100, 1, {2}, {3});",
+            workspace_dir.display(),
+            contents,
+            start,
+            end
+        ))
+        .expect("zed schema");
+    drop(connection);
+    db_path
+}
+
+/// TUI-15: inside Zed's terminal (`ZED_TERM=true` +
+/// `OPENCODE_ZED_DB`), the 1 s poll resolves the active editor's
+/// selection and the composer footer paints the `prompt.footer.file`
+/// label (`notes.md #2-3`, prompt/index.tsx:240-250,1945); submitting
+/// attaches the context FIRST through `session.synthetic`
+/// (index.tsx:1339-1346) — the `<system-reminder>` block carrying the
+/// selected text precedes the prompt POST.
+#[test]
+fn zed_context() {
+    std::env::set_var("ZED_TERM", "true");
+    let db_slot: Arc<Mutex<Option<std::path::PathBuf>>> = Arc::new(Mutex::new(None));
+    let synthetic_slot: SharedPosts = Arc::new(Mutex::new(None));
+    let arm_db = Arc::clone(&db_slot);
+    let arm_syn = Arc::clone(&synthetic_slot);
+    let driver_syn = Arc::clone(&synthetic_slot);
+    run_daily_test(
+        "tui15-zed",
+        120,
+        30,
+        |fake, sandbox| {
+            // The db file lives under the sandbox; the WORKSPACE it
+            // declares is the app's cwd (the scoring root).
+            let cwd = std::env::current_dir().unwrap_or_else(|_| sandbox.clone());
+            let db = zed_fixture_db(sandbox, &cwd);
+            *arm_db.lock().expect("db slot") = Some(db.clone());
+            std::env::set_var("OPENCODE_ZED_DB", &db);
+            *arm_syn.lock().expect("syn slot") = Some(Arc::clone(&fake.synthetic_posts));
+        },
+        move |h| {
+            let synthetic_slot = driver_syn;
+            boot_to_session(h, b"Alpha")?;
+            // The poll's first tick (≤ 1 s) lands the selection: the
+            // footer's file label paints left of the hint pack.
+            wait_grid(
+                h,
+                |g| {
+                    (20..30).any(|y| {
+                        let text = g.content_rect(0, y, 120, 1);
+                        text.contains("notes.md #2-3")
+                    })
+                },
+                Duration::from_secs(10),
+            )
+            .map_err(|error| format!("the editor file label never painted: {error}"))?;
+            // Submit: the pending context attaches through the
+            // synthetic POST before the prompt.
+            h.write(b"use the selection\r");
+            let deadline = std::time::Instant::now() + Duration::from_secs(8);
+            loop {
+                let posted = synthetic_slot
+                    .lock()
+                    .expect("syn slot")
+                    .as_ref()
+                    .map(|arc| arc.lock().expect("posts").clone())
+                    .unwrap_or_default();
+                if posted.iter().any(|body| {
+                    body.contains("/synthetic")
+                        && body.contains("system-reminder")
+                        && body.contains("line two")
+                }) {
+                    break;
+                }
+                if std::time::Instant::now() > deadline {
+                    return Err(format!("the editor context never POSTed; saw {posted:?}"));
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Ok(())
+        },
+    );
+    // Cleanup: the env gate is process-global (nextest isolates test
+    // processes, but the in-process unit tests share the env).
+    std::env::remove_var("OPENCODE_ZED_DB");
+    std::env::remove_var("ZED_TERM");
+    let db_path = db_slot.lock().expect("db slot").clone();
+    if let Some(db) = db_path {
+        let _ = std::fs::remove_file(&db);
     }
 }
 

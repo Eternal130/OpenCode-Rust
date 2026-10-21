@@ -116,6 +116,10 @@ pub struct HomeView<'a> {
     /// TUI-14 — the composer's shell mode (the `!` prefix on home;
     /// swaps the placeholder pool + the footer hint).
     pub shell_mode: bool,
+    /// TUI-15 — the editor-context file label (the Zed selection).
+    pub editor_file: String,
+    /// TUI-15 — the label's pending state (accent vs muted).
+    pub editor_file_pending: bool,
     /// The app version (`home.footer`'s right-aligned label).
     pub version: String,
     /// The composer metadata row (#5): the staged agent · model line
@@ -393,6 +397,11 @@ pub fn render_home(store: &Store, theme: &crate::theme::ThemeStyles, size: (u16,
         directory: String::new(),
         location_hovered: store.location_hovered(),
         shell_mode,
+        editor_file: store
+            .editor_context()
+            .map(|selection| crate::editor_zed::editor_file_label(&selection))
+            .unwrap_or_default(),
+        editor_file_pending: store.editor_label_pending().unwrap_or(false),
         version: env!("CARGO_PKG_VERSION").to_owned(),
         metadata,
         plugin_hints: store.plugin_footer_hints(),
