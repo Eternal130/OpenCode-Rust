@@ -31,6 +31,10 @@ once_cell = "1"
 rand = "0.8"
 sha2 = "0.10"
 sha1 = "0.10"
+# CRED-V3: RS256 self-signed JWT grants for service-account ADC files.
+# ring 0.17 is already in the workspace lock (rustls); depending on it
+# directly adds no new packages and brings the audited RSA signer.
+ring = "0.17"
 base64 = "0.22"
 regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }

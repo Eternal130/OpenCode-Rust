@@ -1078,6 +1078,50 @@ async fn poe_oauth_fields() {
 }
 
 // ---------------------------------------------------------------------------
+// CRED-V3: ADC service_account (RS256 self-signed JWT + token exchange)
+// ---------------------------------------------------------------------------
+
+/// A throwaway 2048-bit RSA keypair for the service-account JWT grant
+/// (test-only; generated with `openssl genpkey -algorithm RSA`).
+const V3_PRIVATE_KEY_PEM: &str = "-----BEGIN PRIVATE KEY-----
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDgGYCWFldxxlb4
+QZkjbqmfXlxiKkGzDn+Cmg4MZSzjaQrlK/s4Wx+2rx69enlo7KWCHXTisIIn90y9
+Tfa8rDi+08QnoQlKgXN5sUpAPfKwiMTumcXcWiFi3b5LnfdqQyhRB5IZB02B5Yd7
+TL3lQpNN4ZPItd7s78Fa0K+vAvOe1io4WWX9pWIxc8IAGUpHWgV0SpyUVFGByeV1
+WYmqt6usvQFW/zIz61R05YbhGZC5lgrPK8p1xXpcw1NULxel48w985hc7A2XJUdB
+EbC3XLNbSiWrbB2VFCetesS3aZlVsBSfVsaqmqpmVLUdY+yuVruoyi/n5puOLXFN
+abJUROzJAgMBAAECggEABoAW38OkI7O6IBdfBs0V9H57NYm+QCBiiHpJgAiLRclt
+PHqLHfZetCDeRmbAENAUePK7yjuOevRMcI1LY+um9boUzYV5TIT2wYfn/HcPjBlb
+hQRG3f5rS3/dHjply9pI2BjdHwa8M9Fhnaz7MSQ+O5sYe1DzN3I47JZzEiOGx4um
+4whSE1HFdu5zJ+UTU7mJ1bEtq5VNOGRJ225iJkWAG+2KH3g0tcQfrkBO/LYYBU4R
+SB3UNN3QbJ2Y26Cjr342aCyRYzg+vFBpavm8frY4x6e74NZB5Y79kSmd9Qgxqy8d
+GVEqs6yOUSgspqBJN+wdNGv4dUx8N3e9ZN7gDRL4NQKBgQD6iQt8K4bp92oFoFdb
+5s6LgPiGSbxhES3ktabD2IThmvUoMnq5O9b2wJjCVDCwaAL5S11qGBtZA9KPDD5g
+uSmRIANyBWNe8LDCdJpLnYGc5ZL8vN9VFDmXfCvwBggrcXe/yv6fM8qutfrWyVzs
+Kvc/kw321dnxYH7BNCaroTTqowKBgQDk/NgQ7CFTozlC2+Nu4Bd0IPh8Q/+okc2p
+QPH8z6/Xv2mTP/HuiUWX9tOJS3N7zdv6dlMdEuwT0qz3SgcpX3oCPGBAOfT1rbUP
+UVxl+7qRKDad4TMhrU8IS0YPuU42W7K0YmGUBrxSuMTRsk1RjdUH7kEnhxTx07s6
+/eNsg4XNowKBgQCr44LBuoth0qInIg9NullTVTUtzUE1x7eZBxhXniHtN4ekAJ46
+oFeoDBPCoEiXf4UqzQ5WUBvTQtAf3OKfMerW6wPyIsg+xxw/Dgkef/4BS3FBfcQs
+dyfcSxFKKJlKVRs3t2piiAIzRB/JZXYfgosITzhxdd+FwBK3M7SkZIINyQKBgDmC
+95FofQZQnHUaXQjf54QXM9GiEnf4BrtXwG9KilOZk56UFONgPsZoC8ET3jFeBr3l
+MgK/WeOwqhiB00Kk5DPjjhkTdV6u/iaWvKowiy8h9nW4terjaFIg9bvFQsuMRFnh
+y7gt6Oat2WEBc0HkaXjQcjTHTI9gKkoqsg/zCIwZAoGBAOXCdLW44m7NgdL/lE9U
+LYm0glYZa37tAgwys+W3ThU7fVSeZ5yTiYwzLbqHjkD2VtIJnunfOI229kpxE0G0
+/auWSmeplnmTJ4TTrkXk+ElVavGncTvppeUa1aPwzMihVitBfXRh1U7zWpBh+w9f
+0N9fdkKxNZuvNfP8Te4bmpVw
+-----END PRIVATE KEY-----";
+
+/// The matching PKCS#1 `RSAPublicKey` (test-side RS256 verification).
+const V3_PUBLIC_KEY_RSA_PEM: &str = "-----BEGIN RSA PUBLIC KEY-----
+MIIBCgKCAQEA4BmAlhZXccZW+EGZI26pn15cYipBsw5/gpoODGUs42kK5Sv7OFsf
+tq8evXp5aOylgh104rCCJ/dMvU32vKw4vtPEJ6EJSoFzebFKQD3ysIjE7pnF3Foh
+Yt2+S533akMoUQeSGQdNgeWHe0y95UKTTeGTyLXe7O/BWtCvrwLzntYqOFll/aVi
+MXPCABlKR1oFdEqclFRRgcnldVmJqrerrL0BVv8yM+tUdOWG4RmQuZYKzyvKdcV6
+XMNTVC8XpePMPfOYXOwNlyVHQRGwt1yzW0olq2wdlRQnrXrEt2mZVbAUn1bGqpqq
+ZlS1HWPsrla7qMov5+abji1xTWmyVETsyQIDAQAB
+-----END RSA PUBLIC KEY-----";
+
 /// A scripted token endpoint on 127.0.0.1:0: records each request
 /// (request-line + headers + form body), replays `(status, json)`
 /// pairs. Default reply: 200 `{"access_token":"stub-access"}`.
@@ -1173,6 +1217,109 @@ impl StubTokenEndpoint {
     }
 }
 
+/// CRED-V3 (ref google-vertex-shared.ts:56-75 — `GoogleAuth`'s full ADC
+/// chain includes the service-account key files): a `service_account` ADC
+/// file must mint an RS256 self-signed JWT (`iss` = `client_email`,
+/// `scope` = cloud-platform, `aud` = the token endpoint) and exchange it
+/// as a jwt-bearer grant for an access token — not defer to None.
+#[tokio::test]
+async fn vertex_adc_service_account() {
+    let _env = env_guard().await;
+    let dir = tempfile::tempdir_in("/tmp/opencode").expect("sandbox tempdir");
+    let stub = StubTokenEndpoint::start(vec![(
+        200,
+        r#"{"access_token":"ya29 sa-token","expires_in":3600}"#.to_owned(),
+    )])
+    .await;
+    let token_url = format!("{}/token", stub.base);
+    let adc_path = dir.path().join("sa.json");
+    std::fs::write(
+        &adc_path,
+        json!({
+            "type": "service_account",
+            "client_email": "sa@lane-cred-test.iam.gserviceaccount.com",
+            "private_key": V3_PRIVATE_KEY_PEM,
+            "token_uri": token_url,
+        })
+        .to_string(),
+    )
+    .expect("write adc");
+    // SAFETY: test-scoped ADC path (the explicit-file leg of adc_paths()).
+    #[allow(unsafe_code)]
+    unsafe {
+        std::env::set_var("GOOGLE_APPLICATION_CREDENTIALS", &adc_path);
+    }
+    let (host, _dir) = host().await;
+    let binding = host.vertex_binding_with_token_url(&token_url).await;
+    // SAFETY: test-scoped env scrub.
+    #[allow(unsafe_code)]
+    unsafe {
+        std::env::remove_var("GOOGLE_APPLICATION_CREDENTIALS");
+    }
+    let binding = binding.expect("service-account ADC resolves an access token");
+    assert_eq!(binding.api_key, "ya29 sa-token");
+
+    // The exchange was ONE jwt-bearer grant POST at the file's token_uri.
+    let seen = stub.requests(1).await;
+    let request = seen.first().expect("captured grant");
+    assert!(request.contains("POST /token "), "posts the token endpoint: {request}");
+    assert!(
+        request.contains("grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer"),
+        "the jwt-bearer grant type: {request}"
+    );
+    let assertion = request
+        .split('&')
+        .find_map(|part| part.strip_prefix("assertion="))
+        .expect("assertion form field")
+        .to_owned();
+    let mut segments = assertion.split('.');
+    let header = segments.next().expect("jwt header");
+    let claims = segments.next().expect("jwt claims");
+    let _signature = segments.next().expect("jwt signature");
+    let decode = |text: &str| -> Value {
+        use base64::Engine as _;
+        let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(text)
+            .expect("base64url jwt segment");
+        serde_json::from_slice(&bytes).expect("json jwt segment")
+    };
+    assert_eq!(decode(header)["alg"], "RS256");
+    let claims = decode(claims);
+    assert_eq!(claims["iss"], "sa@lane-cred-test.iam.gserviceaccount.com");
+    assert_eq!(claims["scope"], "https://www.googleapis.com/auth/cloud-platform");
+    assert_eq!(claims["aud"], token_url);
+    let exp = claims["exp"].as_i64().expect("exp");
+    let iat = claims["iat"].as_i64().expect("iat");
+    assert!(exp > iat && exp - iat <= 3600, "one-hour grant window: {iat}..{exp}");
+
+    // The assertion is REALLY signed by the key file's private key
+    // (RS256 over `header.claims`, verifiable with the matching public
+    // key — the self-signed JWT grant's whole point).
+    {
+        use base64::Engine as _;
+        use ring::signature::{UnparsedPublicKey, RSA_PKCS1_2048_8192_SHA256};
+        let public_der = {
+            let begin = V3_PUBLIC_KEY_RSA_PEM.find("-----BEGIN").expect("begin");
+            let rest = &V3_PUBLIC_KEY_RSA_PEM[begin..];
+            let header_end = rest.find('\n').expect("header");
+            let end = rest.find("-----END").expect("end");
+            let text: String =
+                rest[header_end + 1..end].chars().filter(|c| !c.is_whitespace()).collect();
+            base64::engine::general_purpose::STANDARD.decode(text).expect("public der")
+        };
+        let mut segments = assertion.split('.');
+        let header = segments.next().expect("header").to_owned();
+        let claims = segments.next().expect("claims").to_owned();
+        let signature = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(segments.next().expect("signature"))
+            .expect("signature bytes");
+        UnparsedPublicKey::new(&RSA_PKCS1_2048_8192_SHA256, &public_der)
+            .verify(format!("{header}.{claims}").as_bytes(), &signature)
+            .expect("the service-account JWT is RS256-signed by the key file");
+    }
+}
+
+// ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
 // CRED-B3 (runtime repro): keyless zen downgrades to the public key
 // ---------------------------------------------------------------------------
