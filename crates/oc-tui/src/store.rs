@@ -4496,11 +4496,28 @@ impl Store {
     }
 
     /// The model the UI DISPLAYS for `session_id` (the composer's
-    /// statusline hint, the pickers' `current`): the explicit pick,
+    /// statusline hint, the pickers's `current`): the explicit pick,
     /// else the resolved chain (`currentSelection` — local.tsx:225-236).
     #[must_use]
     pub fn effective_model(&self, session_id: &str) -> Option<ModelSelection> {
         self.selection_for(session_id).model.or_else(|| self.resolve_model(session_id))
+    }
+
+    /// TUI-TD15 — the `--prompt` auto-submit's readiness gate
+    /// (home.tsx:69-80 / index.tsx:597-604): v2 waits for
+    /// `local.model.ready && local.model.catalogReady` plus a current
+    /// agent AND model before `r.submit()`. The port's translation:
+    /// the model catalog is LOADED (the catalog/ready halves — the
+    /// initial `Loading`/`Failed` states keep the startup prompt
+    /// parked) and a current model RESOLVES against it (the agent
+    /// half is the default `build` agent until a pick lands — always
+    /// current in the port, v2's pristine state the same).
+    #[must_use]
+    pub fn startup_prompt_ready(&self, session_id: &str) -> bool {
+        if !matches!(self.server_lists().models, ListState::Loaded(_)) {
+            return false;
+        }
+        self.resolve_model(session_id).is_some()
     }
 
     // -- clipboard --------------------------------------------------------

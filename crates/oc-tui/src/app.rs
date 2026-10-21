@@ -155,6 +155,12 @@ pub struct App {
     /// The plugin-registered theme documents — re-applied after every
     /// config reload's registry rebuild.
     plugin_themes: Vec<(String, String)>,
+    /// TUI-TD15 — the armed `--prompt` startup prompt (v2 app.tsx:626's
+    /// `startupPrompt`): seeded at boot, submitted once the model
+    /// halves are ready (home.tsx:69-80 / index.tsx:597-604's gate).
+    startup_prompt: Option<String>,
+    /// TUI-TD15 — v2's `sent` latch: the startup prompt submits once.
+    startup_prompt_sent: bool,
 }
 
 impl App {
@@ -199,7 +205,52 @@ impl App {
             applied_keybinds: Vec::new(),
             plugin_owned: Vec::new(),
             plugin_themes: Vec::new(),
+            startup_prompt: None,
+            startup_prompt_sent: false,
         }
+    }
+
+    /// TUI-TD15 — arm the `--prompt` startup prompt (v2 home.tsx:57-60:
+    /// `r.set({text: args.prompt, …})` seeds immediately; the SUBMIT
+    /// waits for the readiness gate). The composer seeds now; the
+    /// one-shot submit fires from the run loop's
+    /// [`Self::maybe_submit_startup_prompt`] once the gate opens.
+    pub fn arm_startup_prompt(&mut self, text: String) {
+        let key = self.prompt_key();
+        let mut composer = self.store.composer(&key);
+        composer.draft.text = text.clone();
+        self.store.set_composer(&key, &composer);
+        self.startup_prompt = Some(text);
+        self.startup_prompt_sent = false;
+    }
+
+    /// TUI-TD15 — the startup prompt's readiness gate + one-shot
+    /// submit (`createEffect`'s `sent` latch, home.tsx:69-80 +
+    /// index.tsx:597-604): `!sent && local.model.ready &&
+    /// local.model.catalogReady && local.agent.current() &&
+    /// local.model.current()` → `r.submit()`. The port's gate:
+    /// the model catalog loaded AND a current model RESOLVES against
+    /// it ([`Store::startup_prompt_ready`] — `resolve_model` walks
+    /// pick → durable → config → recent → first-catalog-row, exactly
+    /// v2's resolution chain).
+    pub fn maybe_submit_startup_prompt(&mut self) {
+        if self.startup_prompt_sent {
+            return;
+        }
+        let Some(text) = self.startup_prompt.clone() else { return };
+        let key = self.prompt_key();
+        if !self.store.startup_prompt_ready(&key) {
+            return;
+        }
+        // v2's `r.current.text !== args.prompt` guard: the user may
+        // have edited the draft while the gate was closed — only the
+        // UNTOUCHED startup text auto-submits.
+        if self.store.composer(&key).draft.text != text {
+            self.startup_prompt_sent = true;
+            return;
+        }
+        self.startup_prompt_sent = true;
+        let _ = self.store.submit_prompt(&key);
     }
 
     /// Install the plugin-owned keymap entries (the registration
@@ -6404,16 +6455,13 @@ pub async fn run_with_size(
 
     // `--prompt` (v2 app.tsx:626's `startupPrompt` + home.tsx:52-80 /
     // routes/session/index.tsx:377-381, 601-607): seed the BOOTED
-    // route's composer with the flag's text and submit it once — the
-    // first turn goes out on boot (home submissions create their
-    // session through the prompt sink; a `--session`/`--continue`
-    // boot submits into the routed session).
+    // route's composer with the flag's text — TUI-TD15: the SUBMIT is
+    // ARMED, not fired (v2's createEffect waits for
+    // `local.model.ready && local.model.catalogReady` + a current
+    // agent/model before the one-shot `submit()`); the loop drains
+    // the gate every pass.
     if let Some(prompt) = &boot.prompt {
-        let key = app.prompt_key();
-        let mut composer = app.store.composer(&key);
-        composer.draft.text.clone_from(prompt);
-        app.store.set_composer(&key, &composer);
-        let _ = app.store.submit_prompt(&key);
+        app.arm_startup_prompt(prompt.clone());
     }
     // `--auto` (v2 permission.tsx:14 `args.auto ? "autoaccept"`):
     // arm the permission auto-answer (every ask replies `once`,
@@ -6616,6 +6664,9 @@ pub async fn run_with_size(
             }
             app.store.ingest_all([message]);
         }
+        // TUI-TD15 — the armed startup prompt's gate check (after the
+        // drain: the freshly-ingested model catalog opens the gate).
+        app.maybe_submit_startup_prompt();
         // `--auto`: the freshly-ingested ask (if any) auto-answers
         // while autoaccept is armed — before the render, so the ask
         // footer never flashes.
