@@ -998,9 +998,7 @@ fn app_console_ctrl_copy() {
 #[test]
 fn backgroundtool() {
     use oc_tui::components::message::list::{render_transcript, TranscriptOptions};
-    use oc_tui::components::message::model::{
-        Message, Part, PartTime, ToolState, ToolStatus,
-    };
+    use oc_tui::components::message::model::{Message, Part, PartTime, ToolState, ToolStatus};
     use oc_tui::theme::ThemeState;
 
     let theme = ThemeState::v2_dark().styles();
@@ -1021,7 +1019,8 @@ fn backgroundtool() {
         tokens: None,
         usage_total: None,
     };
-    let options = |clock: u64| TranscriptOptions { clock_ms: clock, ..TranscriptOptions::default() };
+    let options =
+        |clock: u64| TranscriptOptions { clock_ms: clock, ..TranscriptOptions::default() };
 
     // A shell tool 4 s in on an open turn: the hint paints at the tail.
     let transcript = render_transcript(
@@ -1031,12 +1030,7 @@ fn backgroundtool() {
         80,
     );
     assert!(transcript.background_hint, "4s elapsed on a running shell");
-    let frame = transcript.paint(
-        oc_tui_core::scroll::FollowState::Sticky,
-        &theme,
-        (80, 24),
-        None,
-    );
+    let frame = transcript.paint(oc_tui_core::scroll::FollowState::Sticky, &theme, (80, 24), None);
     let text = frame.text_grid().join("\n");
     assert!(
         text.contains("Press ctrl+b to move running work to the background"),
@@ -1078,6 +1072,88 @@ fn backgroundtool() {
         80,
     );
     assert!(!transcript.background_hint, "the turn completed");
+}
+
+/// TUI-TD14 — the two pointer-only indicators become REAL targets
+/// (index.tsx:2312-2342 + 1428-1442): a release on the
+/// `QueuedPromptDock` row opens the queued-prompts manager; a release
+/// on the "Jump to latest ↓" slot runs `toBottom` (sticky + the
+/// window pins reset).
+#[test]
+fn queuedpromptdo_jump_to_latest() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    use oc_tui::app::App;
+    use oc_tui::store::DialogKind;
+
+    let mut app = App::new((100, 30));
+    app.store.open_tab("s1", None);
+    // A queued prompt renders the dock row above the composer.
+    app.store.queue_prompt("s1", "next up", &[]);
+    assert!(!app.store.queued_prompts("s1").is_empty());
+    let _ = app.frame();
+    let dock_hit = app
+        .store
+        .transcript_hit_rows()
+        .into_iter()
+        .find(|hit| matches!(hit.action, oc_tui::store::TranscriptHitAction::OpenQueuedPrompts))
+        .expect("the dock row recorded its hit rect");
+    app.mouse_event(&MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: u16::try_from(dock_hit.x + 2).unwrap(),
+        row: u16::try_from(dock_hit.y).unwrap(),
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    });
+    assert!(
+        matches!(app.store.top_dialog().map(|entry| entry.kind), Some(DialogKind::QueuedPrompts)),
+        "the dock release opened the queued-prompts manager"
+    );
+
+    // The jump slot: scrolled away from the bottom, the indicator's
+    // rect releases toBottom (sticky again).
+    let mut app2 = App::new((100, 30));
+    app2.store.open_tab("s2", None);
+    // A transcript taller than the viewport (a multi-line user turn).
+    let long_text = (0..40).map(|index| format!("line {index}")).collect::<Vec<_>>().join("\n");
+    app2.store.ingest_all([oc_tui::data::Ingest::MessagesSnapshot {
+        session_id: "s2".to_owned(),
+        messages: vec![oc_tui::components::message::model::Message::User {
+            id: "u1".to_owned(),
+            text: long_text,
+            created: 1,
+            files: Vec::new(),
+        }],
+    }]);
+    // One frame records the transcript metrics (the scroll driver's
+    // viewport/content inputs), THEN the first-message jump pins the
+    // free state against them.
+    let _ = app2.frame();
+    let _ = app2.store.scroll_command("s2", oc_tui_core::scroll::ScrollCommand::First);
+    assert!(
+        app2.store.follow_state("s2").jump_to_latest_visible(),
+        "scrolled away: the indicator shows"
+    );
+    let _ = app2.frame();
+    assert!(
+        app2.store.follow_state("s2").jump_to_latest_visible(),
+        "the render kept the free state over the tall transcript"
+    );
+    let jump_hit = app2
+        .store
+        .transcript_hit_rows()
+        .into_iter()
+        .find(|hit| matches!(hit.action, oc_tui::store::TranscriptHitAction::JumpToLatest))
+        .expect("the jump slot recorded its hit rect");
+    app2.mouse_event(&MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: u16::try_from(jump_hit.x + 2).unwrap(),
+        row: u16::try_from(jump_hit.y).unwrap(),
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    });
+    assert_eq!(
+        app2.store.follow_state("s2"),
+        oc_tui_core::scroll::FollowState::Sticky,
+        "the jump release re-stuck to the bottom"
+    );
 }
 
 /// TUI-10 (the diff half): a working-tree image file renders the
