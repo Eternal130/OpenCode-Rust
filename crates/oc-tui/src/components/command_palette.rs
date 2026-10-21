@@ -2770,6 +2770,16 @@ impl CommandDispatcher for StoreDispatcher {
                 store.clear_dialogs();
                 Dispatch::Handled
             }
+            // TUI-18 — `terminal.title.toggle` (app.tsx:1141-1159,
+            // palette: undefined — the settings row carries the
+            // surface): flip `terminal.title`; the DISABLED arm clears
+            // the window name (the title computation returns "" and
+            // the draw seam emits the empty OSC 0).
+            "terminal.title.toggle" => {
+                store.setting_cycle("terminal.title", 1);
+                store.clear_dialogs();
+                Dispatch::Handled
+            }
             // The registered-but-surfaceless families (v2 parity: the
             // keymap consumes the stroke; no component answers):
             // which-key panel (the keymap addon's surface), scrap/

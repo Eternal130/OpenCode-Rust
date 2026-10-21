@@ -6557,6 +6557,8 @@ pub async fn run_with_size(
     // The previous frame's image placements (R-07) — the emission
     // delta (vanished ids delete; changed rects retransmit).
     let mut last_frame_images: Vec<crate::image::ImagePlacement> = Vec::new();
+    // TUI-18 — the last emitted window title (the OSC 0 change gate).
+    let mut last_terminal_title: Option<String> = None;
 
     // Input thread: crossterm's blocking read (keys + resize) bridged
     // into the async loop. The thread FIRST probes the terminal
@@ -7593,6 +7595,17 @@ pub async fn run_with_size(
             });
             if draw.is_err() {
                 break Err("terminal draw failed".to_owned());
+            }
+            // TUI-18 — the window title (`renderer.setTerminalTitle`
+            // effect, app.tsx:596-622): OSC 0 rides the draw seam,
+            // emitted only on CHANGE (route flips, a titled echo, the
+            // toggle clearing to "").
+            let terminal_title = app.store.terminal_title();
+            if last_terminal_title.as_deref() != Some(terminal_title.as_str()) {
+                crate::terminal_proto::emit(&crate::terminal_proto::osc_title_sequence(
+                    &terminal_title,
+                ));
+                last_terminal_title = Some(terminal_title);
             }
             // R-07: the frame's image overlays — emit AFTER the cell
             // grid flushed (the placements sit over their placeholder
