@@ -830,8 +830,10 @@ pub async fn schema_error_middleware(request: Request, next: Next) -> Response {
     };
 
     // 1. query (urlParams) before payload — probe: websearch?location=x.
-    if let (true, Some(query)) = (enforces_query(&operation_id), query.as_deref()) {
-        if let Err(message) = validate_query(&operation_id, query) {
+    //    An absent query string is the EMPTY param set: required params
+    //    still 400 (`Missing key`, probe r2: bare /api/vcs/diff).
+    if enforces_query(&operation_id) {
+        if let Err(message) = validate_query(&operation_id, query.as_deref().unwrap_or("")) {
             return crate::errors::schema_rejection(&message, "Query").into_response();
         }
     }
