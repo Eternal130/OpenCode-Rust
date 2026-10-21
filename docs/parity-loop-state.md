@@ -5,7 +5,7 @@
 > **REBUILT from ledger+git 2026-10-21 09:30** (iteration 13 / wave 12 opened).
 > Ledger + git are authoritative; state.md is a cross-session breadcrumb only.
 
-## WAVE 12 (iteration 13) — OPEN (dispatch intent pre-written before dispatch)
+## WAVE 12 (iteration 13) — RESULT (PAUSED by user before verify/merge; no new subagents dispatched)
 
 - **Recovery (0a) result**: `git worktree list` → only main; all 15 pre-existing `lane/*` branches are
   **0-ahead of main**; `git status --short` on main = clean; `.worktrees/` empty → **no orphan lane, nothing to
@@ -37,6 +37,45 @@
   `routes.gen.rs` (generated), `Cargo.toml`/`Cargo.lock` (integrator)) → **both lanes are legal to run in parallel**.
 - **Ledger ownership**: the ORCHESTRATOR is the only writer of `docs/parity-ledger.jsonl` this wave; lanes must not
   touch it.
+
+### Wave 12 result (iteration 13, paused by user request after the fix lanes returned)
+
+- **Unit 1 — lane-config6 (fixer own/glm-5.3, ses_ea3e51d2dffe7lxPi7dvsjT1om)**: 6/6 rows committed, tree clean,
+  one commit per row (CLI-K1 aefc381 · CLI-N1 b3ed8e7 · CLI-N2 0356d33 · CLI-N3 57a8e6c · CLI-N4 2d83ff9 ·
+  CLI-K8 9c23f25), evidence complete per ID (/tmp/opencode/parity-evidence/<ID>/: repro.sh + red.log + green.log +
+  green-test.log). Orchestrator §2F check PASSED: commits carry ledger IDs; production call sites spot-checked
+  (resolve_hostname boot.rs:451→serve.rs:73,81 · server_process_env.rs declared lib.rs:23 · heal_prompt_state_files
+  storage.rs:331 wired at :458 · OPENCODE_PRINT_LOGS standalone.rs:112 · report_error run/mod.rs:356 ·
+  entrypoints plugin.rs:183); consolidated `nextest --test cli_config` 8/8; fmt/clippy(oc-cli,oc-server,oc-tui) rc=0.
+  **CLI-N4 is PARTIAL**: ~5 switches wired, 4 blocked (no consumer subsystem: FILEWATCHER→CONFIG-C3, DISABLE_FFF,
+  GIT_BASH_PATH, SIMULATE) + oc-core engine seam gap → row KEPT `fixing` (--keep-status evidence recorded).
+  Ledger: CLI-K1/N1/N2/N3/K8 → **fixed** (awaiting independent verification).
+- **Unit 2 — lane-db3 (fixer own/glm-5.3, ses_ea3e51d2bffePeV6jK7P8Vco5a)**: GATE-DB-FIXTURE-WAL fixed in 1 commit
+  (630b187): harvest ships sidecars + checkpoints the STAGED copy + validates migration≥1 & session_v2≥1 twice
+  (fails loudly instead of uploading a shell); upload glob `v2-library.db*`; both consumers copy sidecars next to the
+  sandbox main; 2 hermetic pins; real-fixture end-to-end green (48 migrations, journal 0 re-runs). Ledger → **fixed**.
+  Residual (fixer-stated): the harvest step itself is only provable on a real runner → dispatch `runtime-gates`
+  after merge.
+- **Unit 3 — adjudication batch #5 (oracle own/glm-5.3, ses_ea3e51d29ffeAFW4BBjc2PBcSf, read-only)**:
+  **0 accepted / 0 duplicate / 10 keep-open** — honest: every row's v2 surface is implemented upstream and missing
+  in our port. Each of the 10 rows now carries a two-sided file:line fix scope in its ledger notes
+  (CRED-D6, CRED-V3, PLUG-D30, PLUG-D13, PLUG-M02, RUNTIME-K01, HTTP-H0, TOOL-D1, SURF-LATEX-MERMAID,
+  GATE-TUI-RENAME). Cheapest next S1s identified: **RUNTIME-K01** (one-flag fix) and **GATE-TUI-RENAME**
+  (rescoped to a HARNESS PROBE repair: v2's rename dialog prefills currentTitle with no select-all —
+  the artifact shows the REFERENCE TUI itself submitted the concatenation; product contract verified v2-faithful).
+- **CI verdicts recorded**: `ci` **39525333640** (137c817) = **SUCCESS 6/6** (main green at open).
+  `runtime-gates` **39525125599** (2b5e82c) = **failure** — macos ✅ · build+archive ✅ · stage v2-db ✅ ·
+  needs-runtime AI ✅ · needs-runtime TUI ❌ (the 6 S2 rows needing the live window) · p10 battery ❌
+  (GATE-TUI-RENAME + CLI-K1 + GATE-DB-FIXTURE-WAL — all three now have fixes on lanes awaiting verify/merge) ·
+  §12.3 ❌ (fixture WAL) · summary ❌ (derived). CI-RUNTIME-GATES-RED stays `fixed` (contract = all §12 legs green).
+- **New ledger rows (3)**: RUNTIME-FDLEAK (S1 — managed-service spawn leaks inherited fds; a killed gate command can
+  wedge the global dev-gate lock via the surviving `serve --service` daemon; hit twice by the fixer),
+  AI-CATALOG-ENVLESS (S2, probe-first: env-less provider marked unavailable, catalog.rs:159),
+  CLI-JSON-KEYORDER (S3, cosmetic key-order diff; ADR candidate at exit).
+- **Hygiene**: stale merged-lane target dirs removed (~307G freed; 352G free now); kept target-main + target-lane-db.
+- **PAUSED HERE (user instruction, 2026-10-21)**: independent verification (§2G, glm-5.3-flash read-only sessions)
+  and serial merges (§2H) for BOTH lanes are deferred. Both lanes are committed + clean → the next session's 0a
+  recovery adopts them directly ("lane with commits, clean tree → dispatch verifier → merge").
 
 ## WAVE 11 (iteration 12) — RESULT
 
@@ -76,17 +115,17 @@
   Deliverable: per-row verdict (accepted+ADR / duplicate / keep-open + fix scope) against
   `/opt/opencode-ref` v2.0.24 evidence only. No ADR without evidence; no "too hard" accepted.
 
-- **updated**: 2026-10-21 09:05 — iteration 12 (wave 11) done: DB lane merged (`84ab758`, 2 rows → verified),
-  adjudication batch #4 (2 accepted via ADR-0015/0016, 6 fix scopes recorded, 1 new row), 3 rows promoted to
-  verified on green CI, 1 new row (GATE-DB-FIXTURE-WAL) + a corrected ledger diagnosis. Pushed `2b5e82c`.
-  **blocking S0/S1 = 28** (was 30).
-- **baseline**: main @ `2b5e82c` (ledger) on top of `84ab758` (merge: lane/db2)
-- **batch**: 3 (wave 11) — Batch 3 clusters: DB, PLUGIN-RESIDUAL, EVENT/TOOL/CORE, PLATFORM, POLICY/RETENTION
-- **iteration**: 12 (driver = tools/loop-driver.sh; session started 2026-10-21 08:10, ended ~09:05)
+- **updated**: 2026-10-21 10:10 — iteration 13 (wave 12) PAUSED by user after the fix lanes returned:
+  lane-config6 (5 rows fixed + CLI-N4 partial) + lane-db3 (GATE-DB-FIXTURE-WAL fixed) committed & clean,
+  adjudication #5 done (10 keep-open scopes, 0 closures), 3 new rows. Verification + merge deferred to the
+  next session. **blocking S0/S1 = 22 open/fixing + 7 fixed-awaiting-verify (CI-RUNTIME-GATES-RED + 6 wave-12)**.
+- **baseline**: main @ ledger/state commit on top of `137c817`; lanes: lane/config6 (6 commits), lane/db3 (1 commit)
+- **batch**: 3 (wave 12) — DB, CONFIG + cross-cluster adjudication
+- **iteration**: 13 (driver = tools/loop-driver.sh; session paused mid-wave by user instruction)
 
-## Ledger snapshot (`parity-ledger.py summary`, end of iteration 12 / wave 11)
+## Ledger snapshot (`parity-ledger.py summary`, end of iteration 13 / wave 12 — PAUSED)
 
-- rows=406 — **verified 100 · accepted 16 · duplicate 3 · fixed 1** · needs-runtime 6 · open 280
+- rows=409 — **verified 100 · accepted 16 · duplicate 3 · fixed 7** (CI-RUNTIME-GATES-RED + wave-12: CLI-K1/N1/N2/N3/K8, GATE-DB-FIXTURE-WAL) · fixing 1 (CLI-N4 partial) · needs-runtime 6 · open 276
 - **blocking S0/S1 (not yet verified/accepted) = 27** (was 30 at the start of this iteration):
   CONFIG 6 (CLI-K1, CLI-K8, CLI-N1..N4) · TUI 5 (TUI-12, TUI-14, TUI-15, TUI-16, TUI-17) · AI 4 (AI-P06, AI-V1,
   AI-VERTEX-V2, CI-RUNTIME-AI-LIVE) · CRED 3 (D6, D8, V3) · PLUGIN 3 (PLUG-D13, PLUG-D30, PLUG-M02) ·
@@ -190,8 +229,8 @@ the main file is a single header page. The downstream reds follow from that shel
 | lane | cluster | worktree | branch | owner | entries | status |
 |---|---|---|---|---|---|---|
 | `lane-db2` | DB | `.worktrees/lane-db2` (merged) | `lane/db2` | lane-db2 | GATE-DB-NULLROWS, GATE-DB-STABLE | **merged `84ab758` → verified**; worktree removable, branch kept for history |
-| `lane-config6` | CONFIG | `.worktrees/lane-config6` | `lane/config6` | lane-config6 | CLI-K1, CLI-K8, CLI-N1, CLI-N2, CLI-N3, CLI-N4 | **fixing** (wave 12) |
-| `lane-db3` | DB | `.worktrees/lane-db3` | `lane/db3` | lane-db3 | GATE-DB-FIXTURE-WAL | **fixing** (wave 12) |
+| `lane-config6` | CONFIG | `.worktrees/lane-config6` | `lane/config6` | lane-config6 | CLI-K1, CLI-K8, CLI-N1, CLI-N2, CLI-N3, CLI-N4 | **6 rows `fixed`, CLI-N4 partial `fixing`; PAUSED before verify/merge** (wave 12) |
+| `lane-db3` | DB | `.worktrees/lane-db3` | `lane/db3` | lane-db3 | GATE-DB-FIXTURE-WAL | **`fixed` (630b187); PAUSED before verify/merge** (wave 12) |
 | (oracle adjudication #4 — read-only, no lane) | TUI/SURFACES/CONFIG/CRED | — | — | — | SURF-BROWSER, CLI-K2, SURF-LATEX-MERMAID, TUI-15/16/17/12, CRED-D8 | done: 2 accepted (ADR-0015/0016), 6 kept open with fix scopes |
 
 - `.worktrees/lane-db2` — merged → removable after the merge (branch `lane/db2` kept for history).
@@ -262,23 +301,23 @@ gets an explicit runtime conclusion (ADR).
 - CI-RUNTIME-GATES-RED is still `fixed` (not `verified`): its contract is "every runtime-gates §12 leg green" and the
   p10 battery / §12.3 / gates-summary legs are still red.
 
-## Next (in priority order)
+## Next (in priority order — resume from the PAUSED state)
 
-1. **lane-db3 — fixture harvest robustness (S1, DB, row `GATE-DB-FIXTURE-WAL`)**: the harvest must produce a COMPLETE
-   db: either checkpoint the db before copying (`PRAGMA wal_checkpoint` via bun/python3 — the CI job has both) or copy
-   the `-wal`/`-shm` sidecars next to the main file **and** teach `p10_db_import.rs` + `real_db_null_census.rs` to place
-   them next to their sandbox copy. The harvest step must also VALIDATE the fixture (assert the `migration` table has
-   rows) and fail loudly instead of uploading a shell. Write scope: `.github/workflows/runtime-gates.yml`,
-   `tools/parity/tests/p10_db_import.rs`, `crates/oc-server/tests/real_db_null_census.rs`.
-   → this is the last blocker on the §12.2 p10 battery leg besides GATE-TUI-RENAME + CLI-K1.
-2. **CONFIG lane** (6 open S1 after CLI-K2's acceptance: CLI-K1, CLI-K8, CLI-N1..N4 — `crates/oc-cli/**` +
-   `crates/oc-server/**`; CLI-K8 also touches `crates/oc-tui/src/storage.rs`; CLI-K1 is now on the p10 battery's
-   critical path).
-3. **WIRE lane** — GATE-TUI-RENAME (S1) + HTTP-H0 (S1) + KNOWN-RED-MASK (S2, the known-red attribution over-broadness).
-4. **AI vertex lane** — AI-V1 + AI-VERTEX-V2 + CRED-V3 ADC (+ AI-P06, CI-RUNTIME-AI-LIVE) in one lane;
-   `crates/oc-ai/src/protocols/**` + `crates/oc-core/src/provider_catalog/facade.rs`.
-5. **CRED lane** — CRED-D6 (ChatGPT/Codex credential shaping) + CRED-D8 (Poe client id + api_key/api_key_expires_in —
-   fix scope recorded in the ledger by adjudication #4).
-6. **TUI lane** — TUI-12/14/15/16/17 (+ new TUI-EDITOR-MCP): fix scopes recorded per row by adjudication #4.
-7. Remaining S1s: PLUG-D13/D30/M02, RUNTIME-K01, TOOL-D1, SURF-LATEX-MERMAID (fix scope recorded).
-8. Record CI run ids here as they land; promote `fixed` → `verified` only on a green run id.
+1. **Adopt the two paused lanes (0a recovery → §2G verifier, then §2H merge)**:
+   - verifier (own/glm-5.3-flash, NEW session, read-only) for `lane/config6` @ 9c23f25 — run each
+     /tmp/opencode/parity-evidence/<ID>/repro.sh, read the landed artifacts, grep the production call sites,
+     audit every changed hunk for weakening (esp. the CLI-N4 partial + CLI-K8 boot-time-only consumption);
+   - verifier for `lane/db3` @ 630b187 — repro.sh, the two hermetic pins, the workflow YAML;
+   - then SERIAL merges (one at a time), ledger `merge --id`, push, and dispatch `runtime-gates` to prove the
+     new harvest step end-to-end on a runner (the fixer's stated residual risk).
+2. **CLI-N4 disposition**: 4 switches have no consumer subsystem (FILEWATCHER→CONFIG-C3, DISABLE_FFF,
+   GIT_BASH_PATH, SIMULATE) + the oc-core engine seam gap (engine/mod.rs:763, overlay.rs:162) — split into
+   scoped rows or adjudicate accepted-with-ADR at the next batch.
+3. **Cheapest S1s next** (scopes in ledger notes from adjudication #5): RUNTIME-K01 (one-flag fix),
+   GATE-TUI-RENAME (harness probe repair: clear the dialog prefill or poll ends_with, then re-run the battery).
+4. Then the remaining S1 lanes: WIRE HTTP-H0 (continue lane/h0b pattern), CRED-D6/V3/D8, PLUG-D13/M02/D30,
+   TOOL-D1, SURF-LATEX-MERMAID, AI-V1/VERTEX-V2/P06, TUI-12/14/15/16/17, RUNTIME-FDLEAK (new).
+5. **Live window (user action, re-asked every iteration)**: 6 needs-runtime S2 TUI rows + CI-RUNTIME-AI-LIVE (S1)
+   need endpoint/credential sandbox + time slot; §12.1 accepts them only with an explicit runtime conclusion (ADR).
+6. Record CI run ids as they land; promote `fixed` → `verified` only on a green run id (or independent verifier PASS
+   per the 2026-10-20 CI-non-blocking ruling).
