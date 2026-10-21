@@ -482,6 +482,29 @@ impl App {
         if matches!(mouse.kind, MouseEventKind::Moved | MouseEventKind::Up(MouseButton::Left)) {
             self.last_pointer = Some((col, row));
         }
+        // TUI-TD28 + PLUG-TUI-SLOT: an open plugin route page OWNS the
+        // pointer (v2's plugin route replaces the visible screen —
+        // `tabsAvailable()` gates on `route.data.type !== "plugin"`,
+        // app.tsx:576-579, so no underlay surface is live). The
+        // MISSING page's one pointer target is the `go home` button
+        // (`onMouseUp` → `route.navigate({type:"home"})`,
+        // plugin-route-missing.tsx:15-20); every other stroke dies on
+        // the page.
+        if let Some(page) = self.store.plugin_route_page() {
+            if let (true, MouseEventKind::Up(MouseButton::Left)) = (page.missing, mouse.kind) {
+                let (hx, hy, hw, hh) = crate::components::plugin_page::plugin_route_home_rect(
+                    usize::from(self.size.0),
+                    usize::from(self.size.1),
+                );
+                if col >= hx && row >= hy && col < hx + hw && row < hy + hh {
+                    // `navigate` closes the plugin route page (the
+                    // router replaces the visible route).
+                    self.store.navigate(Route::Home);
+                    self.store.request_redraw();
+                }
+            }
+            return;
+        }
         match mouse.kind {
             MouseEventKind::Moved => {
                 // The strip's close-hold releases when the pointer
@@ -2792,13 +2815,28 @@ impl App {
         // app (the ref's plugin routes replace the visible screen —
         // `router.navigate({type:"plugin"})`, api.tsx:211-224; the
         // native page renders the materialized `{title, rows}`).
+        // TUI-TD28: a page whose route never registered (the host's
+        // bounded render replied miss) renders the fallback screen
+        // instead — the warning line + the go-home button
+        // (component/plugin-route-missing.tsx:3-21; the click handler
+        // derives the same button geometry from the size).
         if let Some(page) = self.store.plugin_route_page() {
-            let overlay = crate::components::plugin_page::render_plugin_page(
-                &page.title,
-                &page.rows,
-                &theme.styles(),
-                self.size,
-            );
+            let overlay = if page.missing {
+                crate::components::plugin_page::render_plugin_route_missing(
+                    &page.plugin_id,
+                    &page.name,
+                    &theme.styles(),
+                    self.size,
+                    &mut Vec::new(),
+                )
+            } else {
+                crate::components::plugin_page::render_plugin_page(
+                    &page.title,
+                    &page.rows,
+                    &theme.styles(),
+                    self.size,
+                )
+            };
             paste_frame(&mut frame, &overlay, 0);
         }
         let footer_theme = FooterTheme::from_resolved(&theme.resolved.tokens);
