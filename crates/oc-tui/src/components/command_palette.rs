@@ -103,12 +103,9 @@ impl PaletteCommand {
                     Route::Session { session_id } => session_id,
                     Route::Home => return false,
                 };
-                return store
-                    .composer(&key)
-                    .draft
-                    .files
-                    .iter()
-                    .any(|file| file.payload.as_ref().is_some_and(|payload| payload.mime.starts_with("image/")));
+                return store.composer(&key).draft.files.iter().any(|file| {
+                    file.payload.as_ref().is_some_and(|payload| payload.mime.starts_with("image/"))
+                });
             }
             "prompt.editor_context.clear" => return store.editor_context().is_some(),
             _ => {}
@@ -313,12 +310,7 @@ pub static PALETTE_COMMANDS: &[PaletteCommand] = &[
     },
     // TUI-34 — `prompt.skills` (prompt/index.tsx:607-640, slash
     // /skills).
-    PaletteCommand {
-        command: "prompt.skills",
-        title: "Skills",
-        group: "Prompt",
-        bindings: &[],
-    },
+    PaletteCommand { command: "prompt.skills", title: "Skills", group: "Prompt", bindings: &[] },
     // TUI-34 — `prompt.images.view` (prompt/index.tsx:493-498,
     // <leader>i): `enabled: imageAttachments().length > 0` — the
     // enabled gate below filters the dead row.
@@ -1909,19 +1901,16 @@ pub fn session_transcript(store: &Store, session_id: &str) -> String {
             Message::Assistant { parts, .. } => {
                 let content: Vec<String> = parts
                     .iter()
-                    .filter_map(|part| match part {
-                        Part::Text { text, .. } => Some(text.clone()),
-                        Part::Reasoning { text, .. } => {
-                            Some(format!("_Thinking:_\n\n{text}"))
-                        }
+                    .map(|part| match part {
+                        Part::Text { text, .. } => text.clone(),
+                        Part::Reasoning { text, .. } => format!("_Thinking:_\n\n{text}"),
                         // The tool parts carry no display content in
                         // the port's model (the row renderer owns the
                         // projection) — the name rides as the section.
-                        Part::Tool { name, .. } => Some(format!("**Tool: {name}**")),
+                        Part::Tool { name, .. } => format!("**Tool: {name}**"),
                     })
                     .collect();
-                (!content.is_empty())
-                    .then(|| format!("## Assistant\n\n{}", content.join("\n\n")))
+                (!content.is_empty()).then(|| format!("## Assistant\n\n{}", content.join("\n\n")))
             }
             _ => None,
         })
@@ -1931,10 +1920,9 @@ pub fn session_transcript(store: &Store, session_id: &str) -> String {
         .iter()
         .find(|session| session.id == session_id)
         .map_or((0, 0), |session| {
-            (
-                session.time_created.map_or(0.0, f64::round) as u64,
-                session.time_updated.map_or(0.0, f64::round) as u64,
-            )
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let seconds = |value: Option<f64>| value.map_or(0.0, f64::round) as u64;
+            (seconds(session.time_created), seconds(session.time_updated))
         });
     format!(
         "# {title}\n\n**Session ID:** {session_id}\n**Created:** {created}\n**Updated:** {updated}\n\n---\n\n{}\n",
@@ -1945,7 +1933,10 @@ pub fn session_transcript(store: &Store, session_id: &str) -> String {
 /// TUI-TD13 — `session.copy`'s clipboard write (index.tsx:1183-1199):
 /// the transcript to the clipboard; `Err` carries the v2 catch-arm
 /// toast text. `None` resolves the routed session (home = the miss).
-pub fn copy_session_transcript(store: &Store, session_id: Option<&str>) -> Result<(), &'static str> {
+pub fn copy_session_transcript(
+    store: &Store,
+    session_id: Option<&str>,
+) -> Result<(), &'static str> {
     let routed = match store.route() {
         Route::Session { session_id } => Some(session_id),
         Route::Home => None,
@@ -1954,9 +1945,7 @@ pub fn copy_session_transcript(store: &Store, session_id: Option<&str>) -> Resul
         return Err("Failed to copy session transcript");
     };
     let text = session_transcript(store, session_id);
-    store
-        .clipboard_write(&text)
-        .map_err(|_| "Failed to copy session transcript")
+    store.clipboard_write(&text).map_err(|_| "Failed to copy session transcript")
 }
 
 /// Run `session.copy` end to end (the exact v2 toasts,
@@ -2152,32 +2141,28 @@ impl CommandDispatcher for StoreDispatcher {
                 // tab patch + the `session.update` request; the empty
                 // string is the title-GENERATE arm); NO argument opens
                 // the rename dialog.
-                let trimmed = args.map(str::trim);
-                match trimmed {
-                    Some(title) => {
-                        store.clear_dialogs();
-                        store.request_session_rename(&session_id, title);
-                    }
-                    None => {
-                        store.replace_dialog(
-                            DialogKind::SessionRename { session_id: session_id.clone() },
-                            DialogSize::Medium,
-                        );
-                        // The prompt seeds with the session's current title
-                        // (`value={props.currentTitle}`,
-                        // dialog-session-rename.tsx:16) — the session row's
-                        // live title (registry-first, index.tsx:905's
-                        // `session()?.title`); an untitled session opens
-                        // empty.
-                        let current = store
-                            .tabs()
-                            .tabs
-                            .iter()
-                            .find(|tab| tab.session_id == session_id)
-                            .and_then(|tab| store.display_title(tab))
-                            .unwrap_or_default();
-                        store.update_dialog(|top| top.value = current);
-                    }
+                if let Some(title) = args.map(str::trim) {
+                    store.clear_dialogs();
+                    store.request_session_rename(&session_id, title);
+                } else {
+                    store.replace_dialog(
+                        DialogKind::SessionRename { session_id: session_id.clone() },
+                        DialogSize::Medium,
+                    );
+                    // The prompt seeds with the session's current title
+                    // (`value={props.currentTitle}`,
+                    // dialog-session-rename.tsx:16) — the session row's
+                    // live title (registry-first, index.tsx:905's
+                    // `session()?.title`); an untitled session opens
+                    // empty.
+                    let tabs = store.tabs();
+                    let current = tabs
+                        .tabs
+                        .iter()
+                        .find(|tab| tab.session_id == session_id)
+                        .and_then(|tab| store.display_title(tab))
+                        .unwrap_or_default();
+                    store.update_dialog(|top| top.value = current);
                 }
                 Dispatch::Handled
             }
@@ -2333,7 +2318,9 @@ impl CommandDispatcher for StoreDispatcher {
                             .files
                             .iter()
                             .filter_map(|file| {
-                                file.payload.as_ref().map(crate::components::composer::AttachmentPayload::to_data_uri)
+                                file.payload.as_ref().map(
+                                    crate::components::composer::AttachmentPayload::to_data_uri,
+                                )
                             })
                             .collect::<Vec<String>>();
                         let Route::Session { session_id } = store.route() else {

@@ -28,7 +28,13 @@ pub fn render_console_overlay(lines: &[String], styles: &ThemeStyles, width: u16
     let title = " console ";
     if let Some(top) = cells.first_mut() {
         for (x, cell) in top.iter_mut().enumerate() {
-            cell.ch = if x == 0 { '┌' } else if x + 1 == width { '┐' } else { '─' };
+            cell.ch = if x == 0 {
+                '┌'
+            } else if x + 1 == width {
+                '┐'
+            } else {
+                '─'
+            };
             cell.fg = muted;
         }
         for (index, ch) in title.chars().enumerate() {
@@ -42,7 +48,13 @@ pub fn render_console_overlay(lines: &[String], styles: &ThemeStyles, width: u16
     if let Some(bottom) = cells.last_mut() {
         if height >= 2 {
             for (x, cell) in bottom.iter_mut().enumerate() {
-                cell.ch = if x == 0 { '└' } else if x + 1 == width { '┘' } else { '─' };
+                cell.ch = if x == 0 {
+                    '└'
+                } else if x + 1 == width {
+                    '┘'
+                } else {
+                    '─'
+                };
                 cell.fg = muted;
             }
         }
