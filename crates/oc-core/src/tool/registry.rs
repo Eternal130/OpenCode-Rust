@@ -420,7 +420,25 @@ impl PipelineExecutor {
                 });
             }
         };
-        // tool.execute.after (result mutation).
+        // tool.execute.after (result mutation). The event carries the
+        // declared output when present (tool.ts:142-146:
+        // `...(output === undefined ? {} : { output })`).
+        let mut result_json = serde_json::Map::new();
+        if let Some(output) = &outcome.output {
+            result_json.insert("output".to_string(), output.clone());
+        }
+        result_json.insert(
+            "content".to_string(),
+            serde_json::to_value(&outcome.content).unwrap_or_default(),
+        );
+        result_json.insert(
+            "metadata".to_string(),
+            outcome
+                .metadata
+                .clone()
+                .map(|m| serde_json::to_value(&m).unwrap_or_default())
+                .unwrap_or(serde_json::Value::Null),
+        );
         let after = ToolExecuteAfterEvent {
             tool: self.name.clone(),
             session_id: context.session_id.clone(),
@@ -429,12 +447,7 @@ impl PipelineExecutor {
                 .unwrap_or_else(|error| oc_schema::id::MessageId(error.value)),
             call_id: context.call_id.clone(),
             input: input.clone(),
-            outcome: HookToolOutcome::Completed {
-                result: serde_json::json!({
-                    "content": serde_json::to_value(&outcome.content).unwrap_or_default(),
-                    "metadata": outcome.metadata.clone().map(|m| serde_json::to_value(&m).unwrap_or_default()).unwrap_or(serde_json::Value::Null),
-                }),
-            },
+            outcome: HookToolOutcome::Completed { result: result_json.into() },
         };
         let after = match self.hooks.dispatch_tool_execute_after(after).await {
             Ok(event) => event,
@@ -442,14 +455,21 @@ impl PipelineExecutor {
                 return Err(ToolRunFailure::Error { message: error.to_string(), metadata: None });
             }
         };
-        // The hook may rewrite content/metadata through the JSON shape.
+        // The hook may rewrite output/content/metadata through the JSON
+        // shape (the returned `output` is the post-hook value, tool.ts:153).
         let mut content = outcome.content;
         let mut metadata = outcome.metadata;
+        let mut output = outcome.output;
         if let HookToolOutcome::Completed { result } = &after.outcome {
             // v2's normalizeContent applies an emptied array too (an
             // empty content falls back to the stringified `output`,
             // tool/runtime.ts:259) — a plugin suppressing output must
             // suppress it here as well, not keep the original.
+            if let Some(hook_output) = result.get("output") {
+                output = Some(hook_output.clone());
+            } else {
+                output = None;
+            }
             if let Ok(parsed) = serde_json::from_value::<Vec<Content>>(result["content"].clone()) {
                 if !parsed.is_empty() {
                     content = parsed;
@@ -467,7 +487,7 @@ impl PipelineExecutor {
                 metadata = Some(parsed.clone().into_iter().collect());
             }
         }
-        Ok(ToolRunResult { content, metadata })
+        Ok(ToolRunResult { content, metadata, output })
     }
 
     /// Fires `tool.execute.after` for the error leg and returns the

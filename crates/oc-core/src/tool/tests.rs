@@ -1471,7 +1471,15 @@ async fn tool_pipeline_after_hook_can_suppress_content() {
         .register_tool_execute_after(
             crate::hooks::fn_hook(|event: &mut crate::hooks::ToolExecuteAfterEvent| {
                 if let crate::hooks::ToolOutcome::Completed { result } = &mut event.outcome {
+                    // TOOL-D1: v2 suppression must empty the content AND
+                    // drop the declared output — `normalizeContent([], output)`
+                    // re-derives text from a surviving output
+                    // (tool/runtime.ts:259-263), so only removing both
+                    // suppresses the model-facing output.
                     result["content"] = serde_json::json!([]);
+                    if let Some(object) = result.as_object_mut() {
+                        object.remove("output");
+                    }
                 }
                 Ok(())
             }),
