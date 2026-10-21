@@ -1334,16 +1334,23 @@ fn tui7_filter_semantics_live_loop() {
             );
             // Substring, case-folded: "LOGIN RED" keeps the match…
             h.write(b"LOGIN RED");
+            // On a loaded runner the filter lands in two repaint phases: the
+            // dialog rows drop the café entry first, the leaked underlying
+            // cells (the active tab's "Alpha") a frame later. Wait for BOTH
+            // non-matching rows to leave instead of asserting on the first
+            // intermediate snapshot (the production filter is atomic; the
+            // screen composition is not).
             let grid = wait_grid(
                 h,
-                |g| (0..g.rows).all(|row| !g.row_text(row).contains(cafe_title())),
+                |g| {
+                    (0..g.rows).all(|row| {
+                        !g.row_text(row).contains(cafe_title())
+                            && !g.row_text(row).contains("Alpha")
+                    })
+                },
                 Duration::from_secs(5),
             )
-            .map_err(|error| format!("the non-matching row never left: {error}"))?;
-            assert!(
-                !(0..grid.rows).any(|row| grid.row_text(row).contains("Alpha")),
-                "a second non-matching row stayed visible under the filter"
-            );
+            .map_err(|error| format!("the non-matching rows never left: {error}"))?;
             // …and the exclusion is the query-landed proof, so the
             // match's survival is now a real observation.
             assert!(
