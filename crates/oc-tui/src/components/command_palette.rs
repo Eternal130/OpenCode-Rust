@@ -77,17 +77,41 @@ impl PaletteCommand {
     }
 
     /// v2's dynamic `enabled` gate (a disabled command is filtered
-    /// from the palette, never a dead row). The one dynamic case in
-    /// the registry: `session.redo` is enabled only with a staged
-    /// revert (`enabled: !!session()?.revert?.messageID`,
-    /// index.tsx:1005).
+    /// from the palette, never a dead row). The dynamic cases in the
+    /// registry: `session.redo` only with a staged revert (index.
+    /// tsx:1005), `session.queued_prompts` only with queued prompts
+    /// (:1268), `prompt.images.view` only with image attachments
+    /// (prompt/index.tsx:495), `prompt.editor_context.clear` only
+    /// with a live editor context (prompt/index.tsx:462).
     #[must_use]
     pub fn enabled(&self, store: &Store) -> bool {
-        if self.command == "session.redo" {
-            return match store.route() {
-                Route::Session { session_id } => store.revert(&session_id).is_some(),
-                Route::Home => false,
-            };
+        match self.command {
+            "session.redo" => {
+                return match store.route() {
+                    Route::Session { session_id } => store.revert(&session_id).is_some(),
+                    Route::Home => false,
+                };
+            }
+            "session.queued_prompts" => {
+                return match store.route() {
+                    Route::Session { session_id } => !store.queued_prompts(&session_id).is_empty(),
+                    Route::Home => false,
+                };
+            }
+            "prompt.images.view" => {
+                let key = match store.route() {
+                    Route::Session { session_id } => session_id,
+                    Route::Home => return false,
+                };
+                return store
+                    .composer(&key)
+                    .draft
+                    .files
+                    .iter()
+                    .any(|file| file.payload.as_ref().is_some_and(|payload| payload.mime.starts_with("image/")));
+            }
+            "prompt.editor_context.clear" => return store.editor_context().is_some(),
+            _ => {}
         }
         true
     }
@@ -145,6 +169,13 @@ pub static PALETTE_COMMANDS: &[PaletteCommand] = &[
         title: "Copy session ID",
         group: "Session",
         bindings: &[],
+    },
+    // TUI-34 — `messages.copy` (index.tsx:1128-1167, <leader>y).
+    PaletteCommand {
+        command: "messages.copy",
+        title: "Copy last assistant message",
+        group: "Session",
+        bindings: &["<leader>y"],
     },
     // TUI-TD13 — `session.copy` (index.tsx:1180-1200, slash `/copy`).
     PaletteCommand {
@@ -233,6 +264,23 @@ pub static PALETTE_COMMANDS: &[PaletteCommand] = &[
     },
     PaletteCommand { command: "mcp.list", title: "MCP servers", group: "Agent", bindings: &[] },
     PaletteCommand { command: "plugins.list", title: "Plugins", group: "System", bindings: &[] },
+    // TUI-34 — `session.child.first` (index.tsx:1255-1263, bind
+    // `down`): the subagent picker's toggle.
+    PaletteCommand {
+        command: "session.child.first",
+        title: "Toggle subagent picker",
+        group: "Session",
+        bindings: &["down"],
+    },
+    // TUI-34 — `session.queued_prompts` (index.tsx:1265-1271, group
+    // "Prompt"): `enabled: queuedPrompts().length > 0` — the enabled
+    // gate below filters the dead row.
+    PaletteCommand {
+        command: "session.queued_prompts",
+        title: "View queued prompts",
+        group: "Prompt",
+        bindings: &[],
+    },
     PaletteCommand {
         command: "toast.activate",
         title: "Activate the current toast action",
@@ -246,6 +294,39 @@ pub static PALETTE_COMMANDS: &[PaletteCommand] = &[
         title: "Stash prompt",
         group: "Prompt",
         bindings: &[],
+    },
+    // TUI-34 — `prompt.queue` (prompt/index.tsx:421-436, <leader>
+    // return): the queue submit.
+    PaletteCommand {
+        command: "prompt.queue",
+        title: "Queue prompt",
+        group: "Prompt",
+        bindings: &["<leader>return"],
+    },
+    // TUI-34 — `prompt.editor` (prompt/index.tsx:567-605, <leader>e,
+    // slash /editor).
+    PaletteCommand {
+        command: "prompt.editor",
+        title: "Open editor",
+        group: "Session",
+        bindings: &["<leader>e"],
+    },
+    // TUI-34 — `prompt.skills` (prompt/index.tsx:607-640, slash
+    // /skills).
+    PaletteCommand {
+        command: "prompt.skills",
+        title: "Skills",
+        group: "Prompt",
+        bindings: &[],
+    },
+    // TUI-34 — `prompt.images.view` (prompt/index.tsx:493-498,
+    // <leader>i): `enabled: imageAttachments().length > 0` — the
+    // enabled gate below filters the dead row.
+    PaletteCommand {
+        command: "prompt.images.view",
+        title: "View image attachments",
+        group: "Prompt",
+        bindings: &["<leader>i"],
     },
     PaletteCommand {
         command: "prompt.stash.pop",
@@ -2222,6 +2303,53 @@ impl CommandDispatcher for StoreDispatcher {
             // exact v2 toasts.
             "session.copy" => {
                 copy_transcript_to_clipboard(store);
+                Dispatch::Handled
+            }
+            // TUI-34 — `prompt.queue` (prompt/index.tsx:421-436): the
+            // queue submit (`<leader>return`'s command through the
+            // palette; the same guards as the keybind path).
+            "prompt.queue" => {
+                let key = match store.route() {
+                    Route::Session { session_id } => session_id,
+                    Route::Home => crate::app::HOME_PROMPT_KEY.to_owned(),
+                };
+                let draft = store.prompt_draft(&key);
+                if !draft.is_empty() {
+                    let trimmed = draft.text.trim().to_owned();
+                    let slash = trimmed.starts_with('/');
+                    let exit_word = matches!(trimmed.as_str(), "exit" | "quit" | ":q");
+                    let running = match store.route() {
+                        Route::Session { session_id } => store.session_running(&session_id),
+                        Route::Home => false,
+                    };
+                    if exit_word || slash {
+                        store.toast_show(crate::components::toast::ToastOptions {
+                            message: "This prompt cannot be queued".to_owned(),
+                            variant: "warning",
+                            ..crate::components::toast::ToastOptions::info("")
+                        });
+                    } else if running {
+                        let files = draft
+                            .files
+                            .iter()
+                            .filter_map(|file| {
+                                file.payload.as_ref().map(crate::components::composer::AttachmentPayload::to_data_uri)
+                            })
+                            .collect::<Vec<String>>();
+                        let Route::Session { session_id } = store.route() else {
+                            return Dispatch::Handled;
+                        };
+                        store.queue_prompt(&session_id, &draft.text, &files);
+                        let mut composer = store.composer(&key);
+                        if let Some(prompt) = composer.take_submit() {
+                            composer.history = composer.history.clone().push(&prompt.text);
+                            store.set_composer(&key, &composer);
+                        }
+                    } else {
+                        // Idle (or home): an ordinary submit.
+                        let _ = store.submit_prompt(&key);
+                    }
+                }
                 Dispatch::Handled
             }
             // -- Lane FINAL: the stub family's real surfaces -----------
