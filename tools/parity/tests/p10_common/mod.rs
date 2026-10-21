@@ -40,6 +40,65 @@ pub fn artifacts() -> PathBuf {
     dir
 }
 
+/// Make one data home truly shared between the reference and the Rust
+/// port (GATE-DB-NULLROWS / GATE-DB-STABLE root cause fix).
+///
+/// The two implementations resolve DIFFERENT app directories under the
+/// same `XDG_DATA_HOME`: v2 pins `.../opencode`
+/// (`packages/util/src/global-roots.ts:11-18`), while the port isolates
+/// its roots under `.../opencode-rust`
+/// (`crates/oc-util/src/global_roots.rs:29`, `APP_NAME`) and adopts v2
+/// data only through the one-way copy in `crates/oc-core/src/
+/// v2_migration.rs` — a deliberate, registered product divergence
+/// (`PORT_REPORT` §3). A parity interop lane must abstract that divergence
+/// away without touching the product: aliasing the port's data root
+/// onto v2's with a symlink makes both channel-scheme resolutions land
+/// on the SAME physical file (`opencode.db`,
+/// `opencode-stable.db`, …) while every env surface the lanes exercise
+/// (`OPENCODE_DISABLE_CHANNEL_DB`, `OPENCODE_CHANNEL`, the baked
+/// reference define) keeps doing the work it always did.
+///
+/// Self-copy safety: the port's boot-time v2 migration skips every
+/// destination that already exists (`v2_migration.rs:299`), so with the
+/// alias the "copy" of each legacy db onto itself is a no-op.
+pub fn share_data_home(home: &Path) -> Result<()> {
+    let share = home.join(".local/share");
+    std::fs::create_dir_all(share.join("opencode"))
+        .with_context(|| format!("create {}", share.join("opencode").display()))?;
+    let rust_root = share.join("opencode-rust");
+    if !rust_root.exists() {
+        std::os::unix::fs::symlink("opencode", &rust_root)
+            .with_context(|| format!("symlink {} -> opencode", rust_root.display()))?;
+    }
+    Ok(())
+}
+
+/// Recreate fixture-referenced session/project directories that vanished
+/// with the staging sandbox (a pid-scoped `/tmp/opencode/...` path is
+/// dead by the time a downstream gate imports the harvested fixture on
+/// another machine — CI's `runtime-gates` chain). Only paths under
+/// [`FIXTURE_DIR_SANDBOX`] are created: a REAL library fixture (whose
+/// projects live in `$HOME`) must never be touched — those directories
+/// either exist (the lane picks them, as before) or the row is skipped
+/// (also as before). Returns how many directories were recreated.
+pub fn recreate_missing_fixture_dirs(dirs: impl IntoIterator<Item = String>) -> Result<usize> {
+    let mut created = 0;
+    for directory in dirs {
+        let path = Path::new(&directory);
+        if path.is_dir() || !path.starts_with(FIXTURE_DIR_SANDBOX) {
+            continue;
+        }
+        std::fs::create_dir_all(path)
+            .with_context(|| format!("recreate fixture directory {directory}"))?;
+        created += 1;
+    }
+    Ok(created)
+}
+
+/// The only root under which [`recreate_missing_fixture_dirs`] may create
+/// directories (the parity/census sandbox territory on every runner).
+pub const FIXTURE_DIR_SANDBOX: &str = "/tmp/opencode/";
+
 /// The golden directory for the battery.
 pub fn golden_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("goldens/p10")
