@@ -83,6 +83,7 @@ async fn runner_tool_events_lifecycle() {
             &crate::location::ToolRunResult {
                 content: vec![oc_schema::tool::Content::Text { text: "echo: ok".into() }],
                 metadata: None,
+                output: None,
             },
         )
         .await
@@ -222,6 +223,7 @@ async fn runner_tool_events_late_error_result_is_a_benign_straggler() {
             &crate::location::ToolRunResult {
                 content: vec![oc_schema::tool::Content::Text { text: "done".into() }],
                 metadata: None,
+                output: None,
             },
         )
         .await
@@ -388,6 +390,7 @@ async fn runner_publisher_needs_continuation_tracks_unsettled_tools() {
             &crate::location::ToolRunResult {
                 content: vec![oc_schema::tool::Content::Text { text: "ok".into() }],
                 metadata: None,
+                output: None,
             },
         )
         .await

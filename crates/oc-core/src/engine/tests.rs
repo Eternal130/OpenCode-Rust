@@ -358,6 +358,7 @@ impl ToolExecute for BlockingTool {
         Ok(ToolRunResult {
             content: vec![oc_schema::tool::Content::Text { text: "unreachable".into() }],
             metadata: None,
+            output: None,
         })
     }
 }
@@ -496,6 +497,7 @@ impl ToolExecute for BigOutputTool {
         Ok(ToolRunResult {
             content: vec![oc_schema::tool::Content::Text { text: text.join("\n") }],
             metadata: None,
+            output: None,
         })
     }
 }

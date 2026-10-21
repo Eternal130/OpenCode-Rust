@@ -142,6 +142,7 @@ impl ToolExecute for StubTool {
         Ok(ToolRunResult {
             content: vec![oc_schema::tool::Content::Text { text: self.0.to_string() }],
             metadata: None,
+            output: None,
         })
     }
 }

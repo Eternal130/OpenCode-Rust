@@ -159,7 +159,14 @@ pub async fn read_resource(
         .collect();
     let mut metadata = oc_schema::common::Record::default();
     metadata.insert("mcp.output".into(), serde_json::to_value(&resource).unwrap_or_default());
-    Ok(ToolRunResult { content, metadata: Some(metadata) })
+    // TOOL-D1: the declared output is the resource itself
+    // (mcp-resource.ts:62,79); the metadata stash stays for wire
+    // compatibility.
+    Ok(ToolRunResult {
+        content,
+        metadata: Some(metadata),
+        output: Some(serde_json::to_value(&resource).unwrap_or_default()),
+    })
 }
 
 fn permission_message(error: &crate::permission::PermissionError) -> String {
@@ -198,10 +205,14 @@ impl ToolExecute for ListMcpResourcesTool {
         let server = input.get("server").and_then(serde_json::Value::as_str);
         let output = list_resources(&self.registry, &self.permission, server, context).await?;
         let mut metadata = oc_schema::common::Record::default();
-        metadata.insert("mcp.output".into(), output);
+        metadata.insert("mcp.output".into(), output.clone());
+        // TOOL-D1: the declared output is the resource catalog
+        // (mcp-resource.ts:27,45-46); the metadata stash stays for wire
+        // compatibility.
         Ok(ToolRunResult {
             content: vec![Content::Text { text: "Listed MCP resources".to_string() }],
             metadata: Some(metadata),
+            output: Some(output),
         })
     }
 }

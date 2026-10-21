@@ -363,6 +363,13 @@ pub struct ToolRunResult {
     pub content: Vec<oc_schema::tool::Content>,
     /// Optional tool metadata (`Tool.NormalizedResult.metadata`).
     pub metadata: Option<oc_schema::common::Record>,
+    /// The declared machine output (`Tool.NormalizedResult.output`), when
+    /// the leaf has one (edit/write/…). TOOL-D1: v2 carries it through the
+    /// after-hook (tool.ts:142-146) and back to the runner — Code Mode
+    /// nested calls read it instead of the joined text (codemode/tool.ts:103).
+    /// The client wire stays content+metadata only (`ToolStateCompleted`
+    /// has no `output`, session-message.ts:138-144).
+    pub output: Option<serde_json::Value>,
 }
 
 /// A local tool execution failure (session-runner lane, step.ts §2).

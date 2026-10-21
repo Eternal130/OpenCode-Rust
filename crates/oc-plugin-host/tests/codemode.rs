@@ -128,12 +128,14 @@ impl ToolExecute for PluginToolExecutor {
             Ok(Value::String(text)) => Ok(ToolRunResult {
                 content: vec![oc_schema::tool::Content::Text { text }],
                 metadata: None,
+                output: None,
             }),
             Ok(other) => Ok(ToolRunResult {
                 content: vec![oc_schema::tool::Content::Text {
                     text: serde_json::to_string(&other).unwrap_or_else(|_| other.to_string()),
                 }],
                 metadata: None,
+                output: Some(other),
             }),
             Err(message) => Err(ToolRunFailure::Error { message, metadata: None }),
         }

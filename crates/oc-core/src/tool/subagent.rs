@@ -632,7 +632,18 @@ pub fn settle(output: SubagentOutput) -> ToolRunResult {
     let mut metadata = oc_schema::common::Record::default();
     metadata.insert("sessionID".into(), json!(output.session_id.as_str()));
     metadata.insert("status".into(), json!(output.status));
-    ToolRunResult { content, metadata: Some(metadata) }
+    // TOOL-D1: v2's declared output is the whole settled subagent value
+    // — `{sessionID, status, output}` (subagent.ts:253-266) — while the
+    // envelope above is only the model-facing content.
+    ToolRunResult {
+        content,
+        metadata: Some(metadata),
+        output: Some(json!({
+            "sessionID": output.session_id.as_str(),
+            "status": output.status,
+            "output": output.output,
+        })),
+    }
 }
 
 /// Installs the tool into a tool registry (the `editor.add` line).
