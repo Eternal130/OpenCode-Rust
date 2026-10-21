@@ -898,6 +898,282 @@ async fn env_method_filter() {
 }
 
 // ---------------------------------------------------------------------------
+// CRED-D8: Poe OAuth fields (client id + api_key token schema)
+// ---------------------------------------------------------------------------
+
+/// Percent-decodes a query value (v2's `URLSearchParams` encodes `:`
+/// and `/`, so `scope`/`redirect_uri` arrive encoded like upstream).
+fn percent_decode(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c == '%' {
+            let mut hex = String::new();
+            hex.push(chars.next().unwrap_or('0'));
+            hex.push(chars.next().unwrap_or('0'));
+            match u8::from_str_radix(&hex, 16) {
+                Ok(byte) if byte.is_ascii() => out.push(byte as char),
+                _ => out.push('%'),
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Drives one Poe authorize → loopback callback → token-exchange cycle
+/// against a fresh scripted stub, asserting the v2-pinned authorize-URL
+/// fields on every run (poe.ts:11-16,81-89) and returning the credential
+/// outcome plus the capturing stub.
+async fn poe_cycle(
+    script: Vec<(u16, String)>,
+    callback_extra: &str,
+) -> (Result<CredentialValue, String>, StubTokenEndpoint) {
+    let stub = StubTokenEndpoint::start(script).await;
+    let token_url = format!("{}/token", stub.base);
+    let authorization =
+        oc_core::integration::providers::poe_authorize_at(FormAnswer::new(), &token_url)
+            .await
+            .expect("poe authorize starts");
+    let (base, query) = authorization.url.split_once('?').expect("authorize query");
+    assert_eq!(base, "https://poe.com/oauth/authorize");
+    let params: BTreeMap<&str, &str> =
+        query.split('&').filter_map(|part| part.split_once('=')).collect();
+    assert_eq!(
+        params.get("client_id"),
+        Some(&"client_728290227fc048cc9262091a1ea197ea"),
+        "the v2-pinned Poe client id (poe.ts:11)"
+    );
+    assert_eq!(
+        params.get("scope").map(|scope| percent_decode(scope)),
+        Some("apikey:create".to_owned())
+    );
+    assert_eq!(params.get("response_type"), Some(&"code"));
+    assert_eq!(params.get("code_challenge_method"), Some(&"S256"));
+    assert!(params.get("state").is_some_and(|state| !state.is_empty()));
+    assert!(params.get("code_challenge").is_some_and(|c| !c.is_empty()));
+    let state = params.get("state").expect("state").to_owned();
+    let redirect = percent_decode(params.get("redirect_uri").expect("redirect_uri"));
+    assert!(
+        redirect.starts_with("http://127.0.0.1:") && redirect.ends_with("/callback"),
+        "loopback redirect: {redirect}"
+    );
+    let oc_core::integration::AuthMode::Auto(callback) = authorization.mode else {
+        panic!("poe authorize is an auto flow")
+    };
+    let target = format!("{redirect}?code=poe-code-9&state={state}{callback_extra}");
+    let getter = tokio::spawn(async move { reqwest::get(&target).await });
+    let outcome = callback.await;
+    let _ = getter.await;
+    (outcome, stub)
+}
+
+fn poe_oauth(credential: CredentialValue) -> OAuthValue {
+    match credential {
+        CredentialValue::OAuth(oauth) => oauth,
+        other @ CredentialValue::Key(_) => panic!("poe credential is oauth, got {other:?}"),
+    }
+}
+
+/// CRED-D8 (ref poe.ts:11-16,121-161): the pinned client id and
+/// apikey:create scope on the authorize URL; the token endpoint's
+/// `api_key`/`api_key_expires_in` schema (never `access_token`); the
+/// maxExpiry rule; the iss pin; error details never echo the
+/// code/verifier secrets.
+#[tokio::test]
+async fn poe_oauth_fields() {
+    // 1. The exchange (poe.ts:154-161): api_key + seconds → an oauth
+    //    credential keyed by the API key, expiring at now+expires_in.
+    let (outcome, stub) = poe_cycle(
+        vec![(200, r#"{"api_key":"poe-key-1","api_key_expires_in":3600}"#.to_owned())],
+        "",
+    )
+    .await;
+    let before = oc_core::database::migrations::now_ms();
+    let oauth = poe_oauth(outcome.expect("poe exchange succeeds"));
+    assert_eq!(oauth.access, "poe-key-1", "the api_key IS the credential (not access_token)");
+    assert_eq!(oauth.refresh, "");
+    assert_eq!(oauth.method_id, "browser");
+    assert!(
+        (oauth.expires - (before + 3_600_000)).abs() < 60_000,
+        "expires = now + api_key_expires_in*1000: {}",
+        oauth.expires
+    );
+    // The grant the stub received: the pinned client + the PKCE verifier.
+    let seen = stub.requests(1).await;
+    let request = seen.first().expect("captured exchange");
+    assert!(request.contains("POST /token "), "posts the token endpoint: {request}");
+    assert!(request.contains("grant_type=authorization_code"), "code grant: {request}");
+    assert!(
+        request.contains("client_id=client_728290227fc048cc9262091a1ea197ea"),
+        "the pinned client id on the exchange: {request}"
+    );
+    assert!(request.contains("code=poe-code-9"), "the callback code: {request}");
+    let verifier = request
+        .split('&')
+        .find_map(|part| part.strip_prefix("code_verifier="))
+        .expect("code_verifier in the exchange");
+    assert_ne!(verifier.trim(), "");
+
+    // 2. No api_key_expires_in → the fixed maxExpiry (poe.ts:157-158).
+    let (outcome, _stub) =
+        poe_cycle(vec![(200, r#"{"api_key":"poe-key-2"}"#.to_owned())], "").await;
+    assert_eq!(
+        poe_oauth(outcome.expect("no-expiry key resolves")).expires,
+        8_640_000_000_000_000,
+        "absent expiry pins maxExpiry"
+    );
+
+    // 3. An expiry beyond maxExpiry is rejected (poe.ts:159-160).
+    let (outcome, _stub) = poe_cycle(
+        vec![(200, r#"{"api_key":"poe-key-3","api_key_expires_in":8640000000001}"#.to_owned())],
+        "",
+    )
+    .await;
+    assert_eq!(outcome.expect_err("oversized expiry fails"), "Invalid Poe API key expiry");
+
+    // 4. The token schema: a whitespace api_key fails to decode
+    //    (poe.ts:14-16).
+    let (outcome, _stub) =
+        poe_cycle(vec![(200, r#"{"api_key":"has space"}"#.to_owned())], "").await;
+    assert_eq!(outcome.expect_err("whitespace api_key fails"), "Invalid Poe token response");
+
+    // 5. Error details never echo the code/verifier secrets
+    //    (poe.ts:145-152).
+    let (outcome, _stub) = poe_cycle(
+        vec![(
+            400,
+            r#"{"error":"invalid_grant","error_description":"grant poe-code-9 rejected"}"#
+                .to_owned(),
+        )],
+        "",
+    )
+    .await;
+    let error = outcome.expect_err("secret-echoing detail is dropped");
+    assert_eq!(error, "Poe token exchange failed (400)", "status-only error: {error}");
+    let (outcome, _stub) = poe_cycle(
+        vec![(
+            400,
+            r#"{"error":"invalid_grant","error_description":"authorization grant expired"}"#
+                .to_owned(),
+        )],
+        "",
+    )
+    .await;
+    assert_eq!(
+        outcome.expect_err("clean detail surfaces"),
+        "Poe token exchange failed: authorization grant expired"
+    );
+
+    // 6. The optional iss pin: present but wrong → rejected before any
+    //    exchange (poe.ts:119-120).
+    let (outcome, stub) = poe_cycle(
+        vec![(200, r#"{"api_key":"poe-key-4"}"#.to_owned())],
+        "&iss=https%3A%2F%2Fevil.example",
+    )
+    .await;
+    assert_eq!(outcome.expect_err("wrong iss fails"), "Invalid OAuth issuer");
+    assert!(stub.requests(0).await.is_empty(), "the iss pin rejects before the token exchange");
+}
+
+// ---------------------------------------------------------------------------
+/// A scripted token endpoint on 127.0.0.1:0: records each request
+/// (request-line + headers + form body), replays `(status, json)`
+/// pairs. Default reply: 200 `{"access_token":"stub-access"}`.
+struct StubTokenEndpoint {
+    base: String,
+    seen: Arc<std::sync::Mutex<Vec<String>>>,
+    handle: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for StubTokenEndpoint {
+    fn drop(&mut self) {
+        self.handle.abort();
+    }
+}
+
+impl StubTokenEndpoint {
+    async fn start(script: Vec<(u16, String)>) -> Self {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.expect("bind stub");
+        let port = listener.local_addr().expect("addr").port();
+        let seen: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
+        let seen_handle = Arc::clone(&seen);
+        let script = Arc::new(std::sync::Mutex::new(
+            script.into_iter().collect::<std::collections::VecDeque<_>>(),
+        ));
+        let script_handle = Arc::clone(&script);
+        let handle = tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else { return };
+                let seen = Arc::clone(&seen_handle);
+                let script = Arc::clone(&script_handle);
+                tokio::spawn(async move {
+                    let mut buffer = Vec::with_capacity(8192);
+                    let mut chunk = [0u8; 8192];
+                    loop {
+                        let read = stream.read(&mut chunk).await.unwrap_or(0);
+                        if read == 0 {
+                            return;
+                        }
+                        buffer.extend_from_slice(&chunk[..read]);
+                        let Some(head_end) = buffer.windows(4).position(|w| w == b"\r\n\r\n")
+                        else {
+                            continue;
+                        };
+                        let head = String::from_utf8_lossy(&buffer[..head_end]).into_owned();
+                        let length = head
+                            .lines()
+                            .find_map(|line| {
+                                let (name, value) = line.split_once(':')?;
+                                name.trim()
+                                    .eq_ignore_ascii_case("content-length")
+                                    .then(|| value.trim().parse::<usize>().ok())
+                                    .flatten()
+                            })
+                            .unwrap_or(0);
+                        if buffer.len() >= head_end + 4 + length {
+                            break;
+                        }
+                    }
+                    seen.lock()
+                        .expect("seen lock")
+                        .push(String::from_utf8_lossy(&buffer).into_owned());
+                    let (status, body) =
+                        script.lock().expect("script lock").pop_front().unwrap_or_else(|| {
+                            (200u16, r#"{"access_token":"stub-access"}"#.to_owned())
+                        });
+                    let reason = if (200..300).contains(&status) { "OK" } else { "Bad Request" };
+                    let response = format!(
+                        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = stream.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+        Self { base: format!("http://127.0.0.1:{port}"), seen, handle }
+    }
+
+    /// Waits until at least `count` requests were captured; returns them.
+    async fn requests(&self, count: usize) -> Vec<String> {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let snapshot = self.seen.lock().expect("seen lock").clone();
+            if snapshot.len() >= count {
+                return snapshot;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "token stub saw {} requests, expected {count}",
+                snapshot.len()
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // CRED-B3 (runtime repro): keyless zen downgrades to the public key
 // ---------------------------------------------------------------------------
 
