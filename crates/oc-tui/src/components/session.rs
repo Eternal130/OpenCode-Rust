@@ -354,6 +354,23 @@ pub fn render_session(
             crate::components::subagent_picker::PANEL_ROWS,
             None,
         )
+    } else if let Some(directory) = store.session_location_missing(session_id) {
+        // TUI-30 — the SessionLocationMissing question REPLACES the
+        // prompt mount (index.tsx:1484-1496's `<Switch>` arm sits
+        // above `<Prompt>`): the failed directory's recovery screen
+        // owns the composer's dock region.
+        (
+            crate::components::location_missing::render_location_missing(
+                &directory,
+                &theme.styles(),
+                column - inset,
+            ),
+            // The question IS the mount: `prompt_height` docks it at
+            // `height − rows` like the composer (the paste anchor).
+            crate::components::location_missing::LOCATION_MISSING_ROWS,
+            crate::components::location_missing::LOCATION_MISSING_ROWS,
+            None,
+        )
     } else {
         composer_mount_frame(store, session_id, &theme, column - inset, content_width, height)
     };
@@ -500,6 +517,10 @@ pub fn render_session(
     // exist (`ensureAllRows`' continuation — the full window mounted
     // above, so the walk sees every row).
     store.resolve_pending_navigation(session_id);
+    // TUI-TD06 — resolve a staged scroll-anchor restore the same way
+    // (`restoreScrollPosition`'s afterLayout): the fresh positions
+    // re-seat the viewport on the saved anchor's CURRENT y.
+    store.resolve_scroll_restore(session_id);
     let scroll_offset = store.scroll_offset(session_id);
     // The transcript's click surface (absolute rects from the last
     // render pass — the same content_top shift the rows paint under,
@@ -511,163 +532,196 @@ pub fn render_session(
     //   glyphs, `group-view.tsx:176-190`), not the whole row;
     // * user-message blocks open the Message Actions select
     //   (`UserMessage`'s `onMouseUp`, session/index.tsx:2210-2250).
-    store.set_transcript_hit_rows(
-        transcript
-            .rows
-            .iter()
-            .flat_map(|row| {
-                let Some(unclipped) = row.y.checked_sub(scroll_offset) else {
-                    return Vec::new();
-                };
-                let screen_y = content_top + unclipped;
-                if screen_y >= content_top + transcript_height {
-                    return Vec::new();
-                }
-                // The head-extent helper: the widest first-line run
-                // extent of the row's head placed items (the tight
-                // glyph rect the disclosure toggles arm).
-                let head_extent = || -> (usize, usize) {
-                    let heads = row.placed.iter().filter(|item| item.y == row.y);
-                    let x = heads.clone().map(|item| item.x).min().unwrap_or_default();
-                    let end = heads
-                        .map(|item| {
-                            item.x
-                                + item
-                                    .lines
-                                    .first()
-                                    .map(|line| {
-                                        line.runs
-                                            .iter()
-                                            .map(|run| crate::wrap::display_width(&run.text))
-                                            .sum::<usize>()
-                                    })
-                                    .unwrap_or_default()
-                        })
-                        .max()
-                        .unwrap_or_default();
-                    (x, end)
-                };
-                // The disclosure toggles: EVERY group kind arms
-                // (lane/if item 4 — v2's `useDisclosure` toggle rides
-                // `GroupContent`'s InlineToolRow for Reasoning AND
-                // Exploration, Activity's and Instructions' own rows:
-                // group-view.tsx:152/183/219/256) with a TIGHT rect:
-                // v2's toggle box is the InlineToolRow content
-                // (paddingLeft 3 + the 2-wide icon slot + the label's
-                // own glyphs, `group-view.tsx:176-190`), not the whole
-                // row. The thought rows arm as the minimal-mode
-                // ReasoningHeader toggle (message-parts.tsx:80-86) —
-                // the first line's glyphs.
-                let primary = if row.key.starts_with("group:") {
+    let hit_rows: Vec<crate::store::TranscriptHitRow> = transcript
+        .rows
+        .iter()
+        .flat_map(|row| {
+            let Some(unclipped) = row.y.checked_sub(scroll_offset) else {
+                return Vec::new();
+            };
+            let screen_y = content_top + unclipped;
+            if screen_y >= content_top + transcript_height {
+                return Vec::new();
+            }
+            // The head-extent helper: the widest first-line run
+            // extent of the row's head placed items (the tight
+            // glyph rect the disclosure toggles arm).
+            let head_extent = || -> (usize, usize) {
+                let heads = row.placed.iter().filter(|item| item.y == row.y);
+                let x = heads.clone().map(|item| item.x).min().unwrap_or_default();
+                let end = heads
+                    .map(|item| {
+                        item.x
+                            + item
+                                .lines
+                                .first()
+                                .map(|line| {
+                                    line.runs
+                                        .iter()
+                                        .map(|run| crate::wrap::display_width(&run.text))
+                                        .sum::<usize>()
+                                })
+                                .unwrap_or_default()
+                    })
+                    .max()
+                    .unwrap_or_default();
+                (x, end)
+            };
+            // The disclosure toggles: EVERY group kind arms
+            // (lane/if item 4 — v2's `useDisclosure` toggle rides
+            // `GroupContent`'s InlineToolRow for Reasoning AND
+            // Exploration, Activity's and Instructions' own rows:
+            // group-view.tsx:152/183/219/256) with a TIGHT rect:
+            // v2's toggle box is the InlineToolRow content
+            // (paddingLeft 3 + the 2-wide icon slot + the label's
+            // own glyphs, `group-view.tsx:176-190`), not the whole
+            // row. The thought rows arm as the minimal-mode
+            // ReasoningHeader toggle (message-parts.tsx:80-86) —
+            // the first line's glyphs.
+            let primary = if row.key.starts_with("group:") {
+                let (x, end) = head_extent();
+                (end > x).then(|| crate::store::TranscriptHitRow {
+                    session_id: session_id.to_owned(),
+                    action: crate::store::TranscriptHitAction::ToggleGroup(row.key.clone()),
+                    y: screen_y,
+                    height: row.height,
+                    x,
+                    width: end - x,
+                })
+            } else if let Some(rest) = row.key.strip_prefix("thought:") {
+                // `thought:{message_id}:{part_id}` — the part ids
+                // may contain colons themselves; split at the
+                // FIRST (the message id never does).
+                rest.split_once(':').and_then(|(message_id, part_id)| {
                     let (x, end) = head_extent();
                     (end > x).then(|| crate::store::TranscriptHitRow {
                         session_id: session_id.to_owned(),
-                        action: crate::store::TranscriptHitAction::ToggleGroup(row.key.clone()),
+                        action: crate::store::TranscriptHitAction::ToggleThought {
+                            message_id: message_id.to_owned(),
+                            part_id: part_id.to_owned(),
+                        },
                         y: screen_y,
-                        height: row.height,
+                        height: 1,
                         x,
                         width: end - x,
                     })
-                } else if let Some(rest) = row.key.strip_prefix("thought:") {
-                    // `thought:{message_id}:{part_id}` — the part ids
-                    // may contain colons themselves; split at the
-                    // FIRST (the message id never does).
-                    rest.split_once(':').and_then(|(message_id, part_id)| {
-                        let (x, end) = head_extent();
-                        (end > x).then(|| crate::store::TranscriptHitRow {
-                            session_id: session_id.to_owned(),
-                            action: crate::store::TranscriptHitAction::ToggleThought {
-                                message_id: message_id.to_owned(),
-                                part_id: part_id.to_owned(),
-                            },
-                            y: screen_y,
-                            height: 1,
-                            x,
-                            width: end - x,
-                        })
+                })
+            } else if let Some(rest) = row.key.strip_prefix("tool:") {
+                // SURF-1: a tool detail cell's click surface. The
+                // action keys on the tool (see `tool_cell_hit`'s
+                // lane-KM v2 arm table): `execute` + background
+                // shells open the detail dialog, the subagent row
+                // navigates to the child session, expandable
+                // tools/failures toggle the INLINE disclosure.
+                rest.split_once(':').and_then(|(message_id, part_id)| {
+                    tool_cell_hit(store, session_id, message_id, part_id, row, screen_y)
+                })
+            } else if let Some(rest) = row.key.strip_prefix("part:") {
+                // TOOL parts carry the tool click surface (SURF-1);
+                // TEXT/REASONING parts arm their markdown LINK runs
+                // (lane KM, auditA #9 — ui/link.tsx:27's onMouseUp
+                // → openUrl).
+                let part = rest.split_once(':').and_then(|(message_id, part_id)| {
+                    let messages = store.messages(session_id);
+                    let part = messages.iter().find(|message| message.id() == message_id).and_then(
+                        |message| {
+                            crate::components::message::resolve_part(message.parts(), part_id)
+                        },
+                    );
+                    part.map(|part| {
+                        matches!(part, crate::components::message::model::Part::Tool { .. })
                     })
-                } else if let Some(rest) = row.key.strip_prefix("tool:") {
-                    // SURF-1: a tool detail cell's click surface. The
-                    // action keys on the tool (see `tool_cell_hit`'s
-                    // lane-KM v2 arm table): `execute` + background
-                    // shells open the detail dialog, the subagent row
-                    // navigates to the child session, expandable
-                    // tools/failures toggle the INLINE disclosure.
-                    rest.split_once(':').and_then(|(message_id, part_id)| {
+                });
+                match part {
+                    Some(true) => rest.split_once(':').and_then(|(message_id, part_id)| {
                         tool_cell_hit(store, session_id, message_id, part_id, row, screen_y)
-                    })
-                } else if let Some(rest) = row.key.strip_prefix("part:") {
-                    // TOOL parts carry the tool click surface (SURF-1);
-                    // TEXT/REASONING parts arm their markdown LINK runs
-                    // (lane KM, auditA #9 — ui/link.tsx:27's onMouseUp
-                    // → openUrl).
-                    let part = rest.split_once(':').and_then(|(message_id, part_id)| {
-                        let messages = store.messages(session_id);
-                        let part = messages
-                            .iter()
-                            .find(|message| message.id() == message_id)
-                            .and_then(|message| {
-                                crate::components::message::resolve_part(message.parts(), part_id)
-                            });
-                        part.map(|part| {
-                            matches!(part, crate::components::message::model::Part::Tool { .. })
-                        })
-                    });
-                    match part {
-                        Some(true) => rest.split_once(':').and_then(|(message_id, part_id)| {
-                            tool_cell_hit(store, session_id, message_id, part_id, row, screen_y)
-                        }),
-                        _ => None,
-                    }
-                } else if row.key == "revert:banner" {
-                    // The banner's dismiss surface: the raised block's
-                    // full width (`RevertMessage`'s onMouseUp,
-                    // index.tsx:2093-2113).
-                    Some(crate::store::TranscriptHitRow {
-                        session_id: session_id.to_owned(),
-                        action: crate::store::TranscriptHitAction::DismissRevert {
-                            session_id: session_id.to_owned(),
-                        },
-                        y: screen_y,
-                        height: row.height,
-                        x: transcript.inset,
-                        width: column.saturating_sub(transcript.inset * 2),
-                    })
-                } else if let Some(message_id) = row.key.strip_prefix("message:") {
-                    // The user-message block (`UserMessage`'s inner
-                    // content box, session/index.tsx:2219-2250):
-                    // full-width rows of the raised box.
-                    let content_width = column - transcript.inset * 2;
-                    Some(crate::store::TranscriptHitRow {
-                        session_id: session_id.to_owned(),
-                        action: crate::store::TranscriptHitAction::MessageActions {
-                            message_id: message_id.to_owned(),
-                        },
-                        y: screen_y,
-                        height: row.height,
-                        x: transcript.inset + 1,
-                        width: content_width.saturating_sub(1),
-                    })
-                } else {
-                    None
-                };
-                let mut hits: Vec<crate::store::TranscriptHitRow> = primary.into_iter().collect();
-                // Lane KM: the text/reasoning rows' LINK runs (every
-                // `part:` row whose primary arm stayed empty — the
-                // tool surfaces never render markdown links).
-                if row.key.starts_with("part:") && hits.is_empty() {
-                    hits.extend(link_hit_rows(session_id, row, screen_y));
+                    }),
+                    _ => None,
                 }
-                hits
-            })
-            // TUI-3: the column's pointer surfaces shift with the
-            // vertical rail (the rects are frame-absolute).
-            .map(|mut hit| {
-                hit.x += shift;
-                hit
-            })
-            .collect(),
-    );
+            } else if row.key == "revert:banner" {
+                // The banner's dismiss surface: the raised block's
+                // full width (`RevertMessage`'s onMouseUp,
+                // index.tsx:2093-2113).
+                Some(crate::store::TranscriptHitRow {
+                    session_id: session_id.to_owned(),
+                    action: crate::store::TranscriptHitAction::DismissRevert {
+                        session_id: session_id.to_owned(),
+                    },
+                    y: screen_y,
+                    height: row.height,
+                    x: transcript.inset,
+                    width: column.saturating_sub(transcript.inset * 2),
+                })
+            } else if let Some(message_id) = row.key.strip_prefix("message:") {
+                // The user-message block (`UserMessage`'s inner
+                // content box, session/index.tsx:2219-2250):
+                // full-width rows of the raised box.
+                let content_width = column - transcript.inset * 2;
+                Some(crate::store::TranscriptHitRow {
+                    session_id: session_id.to_owned(),
+                    action: crate::store::TranscriptHitAction::MessageActions {
+                        message_id: message_id.to_owned(),
+                    },
+                    y: screen_y,
+                    height: row.height,
+                    x: transcript.inset + 1,
+                    width: content_width.saturating_sub(1),
+                })
+            } else {
+                None
+            };
+            let mut hits: Vec<crate::store::TranscriptHitRow> = primary.into_iter().collect();
+            // Lane KM: the text/reasoning rows' LINK runs (every
+            // `part:` row whose primary arm stayed empty — the
+            // tool surfaces never render markdown links).
+            if row.key.starts_with("part:") && hits.is_empty() {
+                hits.extend(link_hit_rows(session_id, row, screen_y));
+            }
+            hits
+        })
+        // TUI-3: the column's pointer surfaces shift with the
+        // vertical rail (the rects are frame-absolute).
+        .map(|mut hit| {
+            hit.x += shift;
+            hit
+        })
+        .collect();
+    // TUI-TD14 — the foreground pointer targets ride FIRST (v2's
+    // child-first pointer dispatch: the overlay rows sit above the
+    // message content, so their releases win over an underlying
+    // message block's rect):
+    // * the "Jump to latest ↓" slot (index.tsx:1428-1442: the slot
+    //   row's onMouseUp → toBottom) — the indicator's glyph rect in
+    //   the transcript's bottom slot row, right-aligned `inset` from
+    //   the column edge;
+    // * the queued-prompt dock row (index.tsx:2312-2342: the dock's
+    //   onMouseUp → openQueuedPrompts) — one row above the composer
+    //   mount, inset like the prompt.
+    let mut foreground: Vec<crate::store::TranscriptHitRow> = Vec::new();
+    if store.follow_state(session_id).jump_to_latest_visible() && transcript_height > 0 {
+        let indicator = "Jump to latest ↓";
+        let indicator_width = crate::wrap::display_width(indicator);
+        foreground.push(crate::store::TranscriptHitRow {
+            session_id: session_id.to_owned(),
+            action: crate::store::TranscriptHitAction::JumpToLatest,
+            y: content_top + transcript_height - 1,
+            height: 1,
+            x: shift + column.saturating_sub(transcript.inset + indicator_width),
+            width: indicator_width,
+        });
+    }
+    if !queued.is_empty() {
+        foreground.push(crate::store::TranscriptHitRow {
+            session_id: session_id.to_owned(),
+            action: crate::store::TranscriptHitAction::OpenQueuedPrompts,
+            y: height.saturating_sub(prompt_height + dock_height),
+            height: dock_height,
+            x: inset + shift,
+            width: column.saturating_sub(inset * 2),
+        });
+    }
+    foreground.extend(hit_rows);
+    store.set_transcript_hit_rows(foreground);
     // The transcript's image placements (R-07) shift under the title
     // row with the rest of the rows, clipped to the viewport like the
     // placed runs are; the store carries them for the post-draw

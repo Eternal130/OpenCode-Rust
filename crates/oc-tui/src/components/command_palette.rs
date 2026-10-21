@@ -77,17 +77,38 @@ impl PaletteCommand {
     }
 
     /// v2's dynamic `enabled` gate (a disabled command is filtered
-    /// from the palette, never a dead row). The one dynamic case in
-    /// the registry: `session.redo` is enabled only with a staged
-    /// revert (`enabled: !!session()?.revert?.messageID`,
-    /// index.tsx:1005).
+    /// from the palette, never a dead row). The dynamic cases in the
+    /// registry: `session.redo` only with a staged revert (index.
+    /// tsx:1005), `session.queued_prompts` only with queued prompts
+    /// (:1268), `prompt.images.view` only with image attachments
+    /// (prompt/index.tsx:495), `prompt.editor_context.clear` only
+    /// with a live editor context (prompt/index.tsx:462).
     #[must_use]
     pub fn enabled(&self, store: &Store) -> bool {
-        if self.command == "session.redo" {
-            return match store.route() {
-                Route::Session { session_id } => store.revert(&session_id).is_some(),
-                Route::Home => false,
-            };
+        match self.command {
+            "session.redo" => {
+                return match store.route() {
+                    Route::Session { session_id } => store.revert(&session_id).is_some(),
+                    Route::Home => false,
+                };
+            }
+            "session.queued_prompts" => {
+                return match store.route() {
+                    Route::Session { session_id } => !store.queued_prompts(&session_id).is_empty(),
+                    Route::Home => false,
+                };
+            }
+            "prompt.images.view" => {
+                let key = match store.route() {
+                    Route::Session { session_id } => session_id,
+                    Route::Home => return false,
+                };
+                return store.composer(&key).draft.files.iter().any(|file| {
+                    file.payload.as_ref().is_some_and(|payload| payload.mime.starts_with("image/"))
+                });
+            }
+            "prompt.editor_context.clear" => return store.editor_context().is_some(),
+            _ => {}
         }
         true
     }
@@ -146,6 +167,20 @@ pub static PALETTE_COMMANDS: &[PaletteCommand] = &[
         group: "Session",
         bindings: &[],
     },
+    // TUI-34 — `messages.copy` (index.tsx:1128-1167, <leader>y).
+    PaletteCommand {
+        command: "messages.copy",
+        title: "Copy last assistant message",
+        group: "Session",
+        bindings: &["<leader>y"],
+    },
+    // TUI-TD13 — `session.copy` (index.tsx:1180-1200, slash `/copy`).
+    PaletteCommand {
+        command: "session.copy",
+        title: "Copy session transcript",
+        group: "Session",
+        bindings: &[],
+    },
     PaletteCommand {
         command: "session.cd",
         title: "Change working directory",
@@ -188,6 +223,16 @@ pub static PALETTE_COMMANDS: &[PaletteCommand] = &[
         group: "Session",
         bindings: &["ctrl+x r"],
     },
+    // TUI-33 — `session.verbosity.cycle` (index.tsx:1064-1076): the
+    // palette row's title is DYNAMIC (`Verbosity: ${titlecase}` —
+    // `palette_props` special-cases it against the live level; the
+    // registry's static title is the fallback shape).
+    PaletteCommand {
+        command: "session.verbosity.cycle",
+        title: "Verbosity",
+        group: "Session",
+        bindings: &[],
+    },
     // Lane FINAL: `session.export` (index.tsx:1201-1244 — palette-
     // listed with slash `/export`, bound `<leader>x`).
     PaletteCommand {
@@ -216,6 +261,23 @@ pub static PALETTE_COMMANDS: &[PaletteCommand] = &[
     },
     PaletteCommand { command: "mcp.list", title: "MCP servers", group: "Agent", bindings: &[] },
     PaletteCommand { command: "plugins.list", title: "Plugins", group: "System", bindings: &[] },
+    // TUI-34 — `session.child.first` (index.tsx:1255-1263, bind
+    // `down`): the subagent picker's toggle.
+    PaletteCommand {
+        command: "session.child.first",
+        title: "Toggle subagent picker",
+        group: "Session",
+        bindings: &["down"],
+    },
+    // TUI-34 — `session.queued_prompts` (index.tsx:1265-1271, group
+    // "Prompt"): `enabled: queuedPrompts().length > 0` — the enabled
+    // gate below filters the dead row.
+    PaletteCommand {
+        command: "session.queued_prompts",
+        title: "View queued prompts",
+        group: "Prompt",
+        bindings: &[],
+    },
     PaletteCommand {
         command: "toast.activate",
         title: "Activate the current toast action",
@@ -229,6 +291,34 @@ pub static PALETTE_COMMANDS: &[PaletteCommand] = &[
         title: "Stash prompt",
         group: "Prompt",
         bindings: &[],
+    },
+    // TUI-34 — `prompt.queue` (prompt/index.tsx:421-436, <leader>
+    // return): the queue submit.
+    PaletteCommand {
+        command: "prompt.queue",
+        title: "Queue prompt",
+        group: "Prompt",
+        bindings: &["<leader>return"],
+    },
+    // TUI-34 — `prompt.editor` (prompt/index.tsx:567-605, <leader>e,
+    // slash /editor).
+    PaletteCommand {
+        command: "prompt.editor",
+        title: "Open editor",
+        group: "Session",
+        bindings: &["<leader>e"],
+    },
+    // TUI-34 — `prompt.skills` (prompt/index.tsx:607-640, slash
+    // /skills).
+    PaletteCommand { command: "prompt.skills", title: "Skills", group: "Prompt", bindings: &[] },
+    // TUI-34 — `prompt.images.view` (prompt/index.tsx:493-498,
+    // <leader>i): `enabled: imageAttachments().length > 0` — the
+    // enabled gate below filters the dead row.
+    PaletteCommand {
+        command: "prompt.images.view",
+        title: "View image attachments",
+        group: "Prompt",
+        bindings: &["<leader>i"],
     },
     PaletteCommand {
         command: "prompt.stash.pop",
@@ -350,6 +440,24 @@ pub fn palette_command(command: &str) -> Option<&'static PaletteCommand> {
     PALETTE_COMMANDS.iter().find(|entry| entry.command == command)
 }
 
+/// A row's run-time title (v2's dynamic `title` thunks over the live
+/// state). The one dynamic case in the registry:
+/// `session.verbosity.cycle` renders `Verbosity: ${Locale.titlecase(
+/// verbosity())}` (index.tsx:1064-1067).
+#[must_use]
+pub fn palette_title(entry: &PaletteCommand, store: &Store) -> String {
+    if entry.command == "session.verbosity.cycle" {
+        let level = store.session_verbosity();
+        let mut chars = level.chars();
+        let titlecased = match chars.next() {
+            Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+            None => String::new(),
+        };
+        return format!("Verbosity: {titlecased}");
+    }
+    entry.title.to_owned()
+}
+
 /// The palette options for a registry slice (`options()`): title,
 /// group category, `id` search text, both footers. The command-palette
 /// fixture (golden) registers two custom commands — tests pass their
@@ -370,11 +478,11 @@ pub fn palette_options(commands: &[PaletteCommand]) -> Vec<SelectOption> {
 
 /// [`palette_options`] over borrowed entries (the conditional slice).
 #[must_use]
-fn palette_options_slice(commands: &[&PaletteCommand]) -> Vec<SelectOption> {
+fn palette_options_slice(commands: &[&PaletteCommand], store: &Store) -> Vec<SelectOption> {
     commands
         .iter()
         .map(|entry| {
-            SelectOption::titled(entry.title, entry.command)
+            SelectOption::titled(palette_title(entry, store), entry.command)
                 .categorized(entry.group)
                 .with_search(entry.command)
                 .with_footer(entry.footer())
@@ -415,7 +523,7 @@ pub fn palette_props(store: &Store) -> SelectProps {
                 && entry.enabled(store)
         })
         .collect();
-    options.extend(palette_options_slice(&advertised));
+    options.extend(palette_options_slice(&advertised, store));
     // The plugin layer (registration-time snapshot): id search text,
     // the plugin id beside the group, no bindings display.
     for entry in store.plugin_commands() {
@@ -1769,6 +1877,100 @@ pub fn copy_message_to_clipboard(store: &Store) {
     }
 }
 
+/// TUI-TD13 — `formatSessionTranscript(info, messages, thinking =
+/// true)` (index.tsx:3503-3533, the `/copy` arm): the store's live
+/// transcript as markdown — `## User` / `## Assistant` sections
+/// (reasoning included, the thinking=true arm), joined by `---`
+/// under the session header.
+#[must_use]
+pub fn session_transcript(store: &Store, session_id: &str) -> String {
+    use crate::components::message::model::{Message, Part};
+    let title = store
+        .tabs()
+        .tabs
+        .iter()
+        .find(|tab| tab.session_id == session_id)
+        .and_then(|tab| store.display_title(tab))
+        .or_else(|| store.session_title(session_id))
+        .unwrap_or_else(|| format!("Session {session_id}"));
+    let body: Vec<String> = store
+        .messages(session_id)
+        .iter()
+        .filter_map(|message| match message {
+            Message::User { text, .. } => Some(format!("## User\n\n{text}")),
+            Message::Assistant { parts, .. } => {
+                let content: Vec<String> = parts
+                    .iter()
+                    .map(|part| match part {
+                        Part::Text { text, .. } => text.clone(),
+                        Part::Reasoning { text, .. } => format!("_Thinking:_\n\n{text}"),
+                        // The tool parts carry no display content in
+                        // the port's model (the row renderer owns the
+                        // projection) — the name rides as the section.
+                        Part::Tool { name, .. } => format!("**Tool: {name}**"),
+                    })
+                    .collect();
+                (!content.is_empty()).then(|| format!("## Assistant\n\n{}", content.join("\n\n")))
+            }
+            _ => None,
+        })
+        .collect();
+    let (created, updated) = store
+        .session_history()
+        .iter()
+        .find(|session| session.id == session_id)
+        .map_or((0, 0), |session| {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let seconds = |value: Option<f64>| value.map_or(0.0, f64::round) as u64;
+            (seconds(session.time_created), seconds(session.time_updated))
+        });
+    format!(
+        "# {title}\n\n**Session ID:** {session_id}\n**Created:** {created}\n**Updated:** {updated}\n\n---\n\n{}\n",
+        body.join("\n\n---\n\n")
+    )
+}
+
+/// TUI-TD13 — `session.copy`'s clipboard write (index.tsx:1183-1199):
+/// the transcript to the clipboard; `Err` carries the v2 catch-arm
+/// toast text. `None` resolves the routed session (home = the miss).
+pub fn copy_session_transcript(
+    store: &Store,
+    session_id: Option<&str>,
+) -> Result<(), &'static str> {
+    let routed = match store.route() {
+        Route::Session { session_id } => Some(session_id),
+        Route::Home => None,
+    };
+    let Some(session_id) = session_id.or(routed.as_deref()) else {
+        return Err("Failed to copy session transcript");
+    };
+    let text = session_transcript(store, session_id);
+    store.clipboard_write(&text).map_err(|_| "Failed to copy session transcript")
+}
+
+/// Run `session.copy` end to end (the exact v2 toasts,
+/// index.tsx:1192-1199).
+pub fn copy_transcript_to_clipboard(store: &Store) {
+    let miss = |message: &str| {
+        store.toast_show(crate::components::toast::ToastOptions {
+            message: message.to_owned(),
+            variant: "error",
+            ..crate::components::toast::ToastOptions::info("")
+        });
+    };
+    let hit = |message: &str| {
+        store.toast_show(crate::components::toast::ToastOptions {
+            message: message.to_owned(),
+            variant: "success",
+            ..crate::components::toast::ToastOptions::info("")
+        });
+    };
+    match copy_session_transcript(store, None) {
+        Ok(()) => hit("Session transcript copied to clipboard!"),
+        Err(message) => miss(message),
+    }
+}
+
 /// The theme registry listing (`dialog-theme-list.tsx`):
 /// `Object.keys(themes.all()).sort(localeCompare base)` — the store's
 /// registry (builtins + the `system` slot + discovered customs),
@@ -1934,24 +2136,34 @@ impl CommandDispatcher for StoreDispatcher {
                     Route::Session { session_id } => session_id,
                     Route::Home => return Dispatch::Handled,
                 };
-                store.replace_dialog(
-                    DialogKind::SessionRename { session_id: session_id.clone() },
-                    DialogSize::Medium,
-                );
-                // The prompt seeds with the session's current title
-                // (`value={props.currentTitle}`,
-                // dialog-session-rename.tsx:16) — the session row's
-                // live title (registry-first, index.tsx:905's
-                // `session()?.title`); an untitled session opens
-                // empty.
-                let current = store
-                    .tabs()
-                    .tabs
-                    .iter()
-                    .find(|tab| tab.session_id == session_id)
-                    .and_then(|tab| store.display_title(tab))
-                    .unwrap_or_default();
-                store.update_dialog(|top| top.value = current);
+                // TUI-TD12 — `/rename <title>` (index.tsx:899-911): a
+                // NON-empty argument renames DIRECTLY (the optimistic
+                // tab patch + the `session.update` request; the empty
+                // string is the title-GENERATE arm); NO argument opens
+                // the rename dialog.
+                if let Some(title) = args.map(str::trim) {
+                    store.clear_dialogs();
+                    store.request_session_rename(&session_id, title);
+                } else {
+                    store.replace_dialog(
+                        DialogKind::SessionRename { session_id: session_id.clone() },
+                        DialogSize::Medium,
+                    );
+                    // The prompt seeds with the session's current title
+                    // (`value={props.currentTitle}`,
+                    // dialog-session-rename.tsx:16) — the session row's
+                    // live title (registry-first, index.tsx:905's
+                    // `session()?.title`); an untitled session opens
+                    // empty.
+                    let tabs = store.tabs();
+                    let current = tabs
+                        .tabs
+                        .iter()
+                        .find(|tab| tab.session_id == session_id)
+                        .and_then(|tab| store.display_title(tab))
+                        .unwrap_or_default();
+                    store.update_dialog(|top| top.value = current);
+                }
                 Dispatch::Handled
             }
             "theme.switch" => {
@@ -2069,6 +2281,62 @@ impl CommandDispatcher for StoreDispatcher {
             }
             "messages.copy" => {
                 copy_message_to_clipboard(store);
+                Dispatch::Handled
+            }
+            // TUI-TD13 — `session.copy` / `/copy` (index.tsx:1180-
+            // 1200): the transcript markdown to the clipboard + the
+            // exact v2 toasts.
+            "session.copy" => {
+                copy_transcript_to_clipboard(store);
+                Dispatch::Handled
+            }
+            // TUI-34 — `prompt.queue` (prompt/index.tsx:421-436): the
+            // queue submit (`<leader>return`'s command through the
+            // palette; the same guards as the keybind path).
+            "prompt.queue" => {
+                let key = match store.route() {
+                    Route::Session { session_id } => session_id,
+                    Route::Home => crate::app::HOME_PROMPT_KEY.to_owned(),
+                };
+                let draft = store.prompt_draft(&key);
+                if !draft.is_empty() {
+                    let trimmed = draft.text.trim().to_owned();
+                    let slash = trimmed.starts_with('/');
+                    let exit_word = matches!(trimmed.as_str(), "exit" | "quit" | ":q");
+                    let running = match store.route() {
+                        Route::Session { session_id } => store.session_running(&session_id),
+                        Route::Home => false,
+                    };
+                    if exit_word || slash {
+                        store.toast_show(crate::components::toast::ToastOptions {
+                            message: "This prompt cannot be queued".to_owned(),
+                            variant: "warning",
+                            ..crate::components::toast::ToastOptions::info("")
+                        });
+                    } else if running {
+                        let files = draft
+                            .files
+                            .iter()
+                            .filter_map(|file| {
+                                file.payload.as_ref().map(
+                                    crate::components::composer::AttachmentPayload::to_data_uri,
+                                )
+                            })
+                            .collect::<Vec<String>>();
+                        let Route::Session { session_id } = store.route() else {
+                            return Dispatch::Handled;
+                        };
+                        store.queue_prompt(&session_id, &draft.text, &files);
+                        let mut composer = store.composer(&key);
+                        if let Some(prompt) = composer.take_submit() {
+                            composer.history = composer.history.clone().push(&prompt.text);
+                            store.set_composer(&key, &composer);
+                        }
+                    } else {
+                        // Idle (or home): an ordinary submit.
+                        let _ = store.submit_prompt(&key);
+                    }
+                }
                 Dispatch::Handled
             }
             // -- Lane FINAL: the stub family's real surfaces -----------
@@ -2480,6 +2748,32 @@ impl CommandDispatcher for StoreDispatcher {
                 store.picker_terminal_select();
                 Dispatch::Handled
             }
+            // TUI-33 — `session.verbosity.cycle` (index.tsx:1064-
+            // 1076): cycle `low | medium | high` through the config
+            // state (the dialog-config row's cycle — the live consumer
+            // + the config-sink write-through), then `dialog.clear()`.
+            "session.verbosity.cycle" => {
+                store.setting_cycle("session.verbosity", 1);
+                store.clear_dialogs();
+                Dispatch::Handled
+            }
+            // TUI-29 — `app.console` (app.tsx:1110-1118):
+            // `renderer.console.toggle()` + `dialog.clear()`.
+            "app.console" => {
+                store.console_toggle();
+                store.clear_dialogs();
+                Dispatch::Handled
+            }
+            // TUI-18 — `terminal.title.toggle` (app.tsx:1141-1159,
+            // palette: undefined — the settings row carries the
+            // surface): flip `terminal.title`; the DISABLED arm clears
+            // the window name (the title computation returns "" and
+            // the draw seam emits the empty OSC 0).
+            "terminal.title.toggle" => {
+                store.setting_cycle("terminal.title", 1);
+                store.clear_dialogs();
+                Dispatch::Handled
+            }
             // The registered-but-surfaceless families (v2 parity: the
             // keymap consumes the stroke; no component answers):
             // which-key panel (the keymap addon's surface), scrap/
@@ -2490,7 +2784,6 @@ impl CommandDispatcher for StoreDispatcher {
             | "app.scrap"
             | "service.restart"
             | "session.aside"
-            | "session.verbosity.cycle"
             | "plugins.install"
             | "dialog.integration.rename"
             | "dialog.integration.delete"

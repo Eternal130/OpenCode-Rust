@@ -453,6 +453,10 @@ fn footer_left_label(
     StyledText::new(chunks)
 }
 
+/// The painted frame, the caret's screen cell, and TUI-TD27's update
+/// banner rect `(x, row, width)`.
+pub type PaintedHome = (Frame, Option<(usize, usize)>, Option<(usize, usize, usize)>);
+
 /// Paint the home route through the opentui-solid path — the
 /// new-path twin of [`crate::components::home::render_home_view`]'s
 /// old painter: resolve the SHARED plan, render the chrome mount,
@@ -460,15 +464,11 @@ fn footer_left_label(
 /// the terminal-cursor cell from the same walk.
 #[must_use]
 #[allow(clippy::too_many_lines)] // the banner row is the lane-TAIL addition
-pub fn paint_solid_home_view(
-    view: &HomeView,
-    theme: &ThemeState,
-    size: (u16, u16),
-) -> (Frame, Option<(usize, usize)>) {
+pub fn paint_solid_home_view(view: &HomeView, theme: &ThemeState, size: (u16, u16)) -> PaintedHome {
     let (width, height) = (usize::from(size.0), usize::from(size.1));
     if width == 0 || height == 0 {
         // The old painter's degenerate shape.
-        return (Frame { cells: vec![Vec::new(); height], width, height }, None);
+        return (Frame { cells: vec![Vec::new(); height], width, height }, None, None);
     }
     let plan = plan_home(view, width, height);
     let colors = LogoColors::of(theme);
@@ -575,9 +575,11 @@ pub fn paint_solid_home_view(
         }
         (total > 0 && row < height).then_some((x0, row, total))
     });
-    let _ = banner_hit; // the pointer-hit seam lands with the chip family
-                        // NEW-S1a: the caret's screen cell — the paste origin plus the
-                        // frame-relative cell (the same walk the old painter runs).
+    // TUI-TD27 — the banner's rect rides out to the store (the
+    // release seam: remote dismisses, installed exits, available
+    // opens the update dialog, home.tsx:138-146).
+    // NEW-S1a: the caret's screen cell — the paste origin plus the
+    // frame-relative cell (the same walk the old painter runs).
     let caret_screen = view
         .caret
         .and_then(|offset| {
@@ -591,7 +593,7 @@ pub fn paint_solid_home_view(
         })
         .map(|(x, row)| (plan.paste.0 + x, plan.paste.1 + row))
         .filter(|(_, row_y)| *row_y < height);
-    (frame, caret_screen)
+    (frame, caret_screen, banner_hit)
 }
 
 #[cfg(test)]
@@ -666,7 +668,7 @@ mod tests {
         for version in ["1.0.0", "1.0.0-dev.1+m5", "1.0.0"] {
             let scenario = Scenario { version: version.into(), ..Scenario::new("churn") };
             let view = owned_view(&scenario, "Ask".into());
-            let (frame, _) = paint_solid_home_view(&view, &theme, (80, 24));
+            let (frame, _, _) = paint_solid_home_view(&view, &theme, (80, 24));
             if let Some((_, prior)) = seen.iter().find(|(v, _)| v == version) {
                 assert_eq!(&frame, prior, "same inputs paint the same home: {version:?}");
             }
@@ -688,7 +690,7 @@ mod tests {
         let view = owned_view(&scenario, "Ask anything… \"Fix broken tests\"".into());
         let mut first: Option<crate::render::Frame> = None;
         for size in [(80u16, 24u16), (60, 20), (120, 30), (80, 24)] {
-            let (frame, _) = paint_solid_home_view(&view, &theme, size);
+            let (frame, _, _) = paint_solid_home_view(&view, &theme, size);
             assert_eq!(frame.height, usize::from(size.1), "full-height home at {size:?}");
             if size == (80, 24) {
                 match &first {

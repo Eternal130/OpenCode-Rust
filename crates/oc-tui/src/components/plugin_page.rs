@@ -53,6 +53,56 @@ pub fn render_plugin_page(
     Frame { cells, width, height }
 }
 
+/// TUI-TD28 — the `go home` button's rect (`go home` + 2 padding
+/// columns, one row, centered two rows under the warning line). Both
+/// the renderer and the app's click handler derive it from the size —
+/// the same geometry, no recorded state.
+#[must_use]
+pub fn plugin_route_home_rect(width: usize, height: usize) -> (usize, usize, usize, usize) {
+    let button = "go home";
+    let w = button.chars().count() + 2;
+    let x = width.saturating_sub(w) / 2;
+    (x, height / 2 + 2, w, 1)
+}
+
+/// TUI-TD28 — the fallback screen for an UNREGISTERED plugin route
+/// (component/plugin-route-missing.tsx:3-21): the warning line
+/// `Unknown plugin route: {id}/{name}` in the theme's warning color
+/// and the `go home` action button, both centered; `hits` (when
+/// provided) receives the button's rect — its release navigates home
+/// (`onHome={() => route.navigate({type: "home"})}`). One
+/// `(x, y, width, height, "plugin.route.home")` entry.
+#[must_use]
+pub fn render_plugin_route_missing(
+    id: &str,
+    name: &str,
+    styles: &ThemeStyles,
+    size: (u16, u16),
+    hits: &mut Vec<(usize, usize, usize, usize, &'static str)>,
+) -> Frame {
+    let (width, height) = (usize::from(size.0), usize::from(size.1));
+    let mut cells: Vec<Vec<Cell>> = vec![vec![Cell::default(); width.max(1)]; height.max(1)];
+    let warning = CellColor::from(styles.warning);
+    let action = CellColor::from(styles.action_hovered);
+
+    // Both rows centered (the ref's centered column layout).
+    let line = format!("Unknown plugin route: {id}/{name}");
+    let center_row = height / 2;
+    let x = width.saturating_sub(line.chars().count()) / 2;
+    put_raw(&mut cells, center_row, x, &line, warning, width + 1);
+    let button = "go home";
+    let (bx, by, bw, bh) = plugin_route_home_rect(width, height);
+    put_raw(&mut cells, by, bx + 1, button, action, width + 1);
+    // The button's raised background (the ref's hovered action box).
+    if let Some(row) = cells.get_mut(by) {
+        for cell in row.iter_mut().skip(bx).take(bw) {
+            cell.attrs |= 1 << 7; // reverse video
+        }
+    }
+    hits.push((bx, by, bw, bh, "plugin.route.home"));
+    Frame { cells, width, height }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

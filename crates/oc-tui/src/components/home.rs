@@ -331,7 +331,7 @@ pub fn render_home_view(
     view: &HomeView,
     theme: &ThemeState,
     size: (u16, u16),
-) -> (Frame, Option<(usize, usize)>) {
+) -> crate::components::home_solid::PaintedHome {
     // Lane M5 (retired): the home route renders through its
     // opentui-solid tree — the only renderer since the retirement
     // lane deleted the hand-rolled painter (both consumed the ONE
@@ -433,8 +433,12 @@ pub fn render_home(store: &Store, theme: &crate::theme::ThemeStyles, size: (u16,
         // Lane TAIL (auditB #10): the update banner (home.tsx:125 —
         // between the logo and the prompt; the golden fixture carries
         // no notice).
+        // TUI-TD27 — the `!remote || type === "available"` gate
+        // (home.tsx:137): a REMOTE "installed" notice stays hidden
+        // (the client's own process did not update).
         update: store
             .update_notice()
+            .filter(|notice| !(notice.remote && notice.is_installed()))
             .map(|notice| (notice.prefix().to_owned(), notice.body(), notice.remote)),
     };
     let _ = theme;
@@ -468,7 +472,10 @@ pub fn render_home(store: &Store, theme: &crate::theme::ThemeStyles, size: (u16,
         size.0.saturating_sub(u16::try_from(rail_shift).unwrap_or(0)),
         if strip_shows { size.1 - 1 } else { size.1 },
     );
-    let (mut frame, caret_screen) = render_home_view(&view, &state, sub_size);
+    let (mut frame, caret_screen, banner_hit) = render_home_view(&view, &state, sub_size);
+    // TUI-TD27 — the banner's hit rect lands in the store (the
+    // pointer seam reads it on release).
+    store.set_home_update_hit(banner_hit);
     // Lane KM (auditA #10): the footer chips' hit rects (absolute
     // cells — the strip's one-row shift applies like the caret's).
     // The chips render ONLY on the footer row of a shown footer.
