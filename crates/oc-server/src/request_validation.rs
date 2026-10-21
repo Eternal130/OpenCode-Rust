@@ -55,40 +55,34 @@ use serde_json::Value;
 /// same budget the handlers' `Json` extractors apply after pass-through.
 const BODY_LIMIT: usize = 2 * 1024 * 1024;
 
-/// The HTTP-H0 rollout: validate-first operations whose JSON payloads
-/// are enforced in middleware (sorted; mirrors the generated table). This
-/// is the incremental rollout valve — it grows toward the full
-/// validate-first set; LOC-MW routes get their post-session seam in a
-/// follow-up lane.
+/// The HTTP-H0 rollout (COMPLETE 2026-10-21): EVERY validate-first JSON
+/// body operation, i.e. every op whose v2 endpoint carries NEITHER
+/// `sessionLocationMiddleware` NOR `formLocationMiddleware` (see
+/// [`LOCATION_FIRST_OPS`]) — 28 of the 46 JSON-body ops. Sorted; mirrors
+/// the generated table.
 ///
-/// Batch 1 (2026-10-19, lane-h0roll) added 8 ops — wrong-type +
-/// missing-key probes per route byte-pinned against a live v2.0.24 boot
-/// (`ref-validation-messages-4.json`) and dual-end verified via the
-/// `OC_P10` gate before this list grew.
+/// Batches 1-2 (2026-10-19/20, lane-h0roll + lane-h0b) grew the list to
+/// 25 ops one probe-pinned batch at a time. Batch 3 (2026-10-21, lane-h0)
+/// added the remaining three validate-first body ops —
+/// `experimental.mcp.add` (discriminator-union `config`, probe round 3),
+/// `experimental.session.import` (Session.Info tree, probe round 1), and
+/// `rpc.call` (annotated `Rpc.Input` root — whole-root mismatch prints
+/// the identifier, probe round 1) — completing the set; the completeness
+/// is pinned by `enforced_slice_is_complete`.
 ///
-/// Batch 2 (2026-10-20, lane-h0b) added 10 ops — every message
-/// probe-pinned against a live v2.0.24 boot BEFORE this list grew
-/// (`env-requiredness-probe.json`: wrong-type + missing-key per route,
-/// plus pass-through checks). Two of the ten are the 2026-10-19 rollback
-/// pair, re-enabled on probe evidence: v2 400s env-less persistentPty
-/// creates (`Missing key\n  at ["env"]` — spec-strict; its own tests
-/// always send `env: {}`, `packages/server/test/persistent-pty.test.ts`)
-/// while `pty.create`'s table row is all-optional and v2 tolerates
-/// env-less creates (200) — the rollback's `env`-requiredness fear only
-/// ever applied to the persistent variant. The other eight are the
-/// simple-schema families (credential/integration/plugin/session-view/
-/// worktree) whose Bool/Num labels were pinned in round 4. Still
-/// excluded: the oracle's deferred trio (`session.form.create`,
-/// `experimental.session.import`, `experimental.mcp.add`) and
-/// `session.form.reply` (carries v2 `formLocationMiddleware` — form
-/// resolution precedes payload decode, same class as LOC-MW; it was
-/// wrongly parked on the Bool/Num list).
+/// Excluded forever (not "deferred"): the 16 LOC-MW body ops and 2
+/// FORM-MW body ops whose v2 endpoints resolve the session/form (404)
+/// BEFORE payload decode; their post-location seam is a follow-up slice.
+/// `session.list`'s query stays in-handler pinned (P10-E2) and is ALSO
+/// enforced here (identical bytes) — see [`NUMBER_PARAMS`].
 const ENFORCED_OPS: &[&str] = &[
     "credential.create",
     "credential.update",
     "experimental.config.update",
     "experimental.generate.text",
     "experimental.integration.wellknown.add",
+    "experimental.mcp.add",
+    "experimental.session.import",
     "integration.command.connect",
     "integration.connect.key",
     "integration.oauth.complete",
@@ -98,6 +92,7 @@ const ENFORCED_OPS: &[&str] = &[
     "project.update",
     "pty.create",
     "pty.update",
+    "rpc.call",
     "server.experimental.persistentPty.create",
     "server.experimental.persistentPty.update",
     "session.create",
@@ -111,31 +106,31 @@ const ENFORCED_OPS: &[&str] = &[
     "worktree.remove",
 ];
 
-// Env-requiredness adjudication (RESOLVED 2026-10-20, lane-h0b; probe
-// evidence `env-requiredness-probe.json`, byte-level request/response):
-// the 2026-10-19 rollback pulled BOTH create ops because the generated
-// table marked `env` required and the runtime contract was unprobed.
-// The probe split the verdict — v2 is SPEC-STRICT for
-// server.experimental.persistentPty.create (env-less create → 400
-// `Missing key\n  at ["env"]`; v2's own tests always send `env: {}`),
-// and RUNTIME-LENIENT for pty.create (all-optional row; env-less create
-// → 200, spawns the default shell). Both ops are enforced again above:
-// the persistent variant's 400 matches v2 byte-for-byte (the CI payload
-// that caught the "false"-400 was itself divergent from v2 and now sends
-// `env: {}`), and the ephemeral variant never had a requiredness gap.
-
-/// Every operation whose v2 endpoint carries `sessionLocationMiddleware`
-/// (`protocol/src/groups/session.ts` — 18 — and
-/// `protocol/src/groups/permission.ts` — 3): the session resolves (404)
-/// BEFORE payload decode, so the validate-first middleware must NOT fire
-/// for them; their post-session seam is a follow-up slice. Regression pin
-/// for the exclusion (oracle condition 4).
-#[cfg(test)]
-const LOC_MW_OPS: &[&str] = &[
+/// Every operation whose v2 endpoint carries a location-resolving
+/// middleware (`sessionLocationMiddleware` — `protocol/src/groups/
+/// session.ts` (24: 21 session + 3 instructions) and `groups/permission.ts`
+/// (3) — or `formLocationMiddleware` — `groups/session.ts` (5)): the
+/// session/form resolves (404) BEFORE query/payload decode, so the
+/// validate-first middleware must NOT fire for them. Probe-pinned
+/// (rollout-probe*.json): bad query/body on these routes answers the
+/// location 404, never a schema 400. Their post-location seam is a
+/// follow-up slice. Operation ids are the OpenAPI identifiers (note the
+/// `experimental.` prefixes the endpoint names lack).
+pub const LOCATION_FIRST_OPS: &[&str] = &[
+    "experimental.session.instructions.entry.list",
+    "experimental.session.instructions.entry.put",
+    "experimental.session.instructions.entry.remove",
+    "experimental.session.skill",
+    "experimental.session.wait",
     "session.background",
     "session.command",
     "session.compact",
     "session.fork",
+    "session.form.cancel",
+    "session.form.create",
+    "session.form.get",
+    "session.form.list",
+    "session.form.reply",
     "session.generate",
     "session.inbox.update",
     "session.interrupt",
@@ -147,12 +142,36 @@ const LOC_MW_OPS: &[&str] = &[
     "session.revert.commit",
     "session.revert.stage",
     "session.shell",
-    "session.skill",
     "session.switchAgent",
     "session.switchModel",
     "session.synthetic",
     "session.update",
-    "session.wait",
+];
+
+/// Probe-pinned NumberFromString integer query params. v2 declares these
+/// as `Schema.NumberFromString.pipe(decodeTo(<int filter>))` — decode-time
+/// filters the OpenAPI spec CANNOT express (the spec renders them as plain
+/// strings), so the constraints live here, byte-pinned against the live
+/// v2.0.24 reference (`rollout-probe{,-2,-3}.json`):
+///
+/// ```text
+/// limit=abc     → Expected an integer\n  at ["limit"]
+/// limit=0       → Expected a value greater than 0            (PositiveInt)
+/// limit=0 (msg) → Expected a value greater than or equal to 1 (isGreaterThanOrEqualTo(1))
+/// limit=201     → Expected a value less than or equal to 200  (message.list only)
+/// context=-1    → Expected a value greater than or equal to 0 (NonNegativeInt)
+/// ```
+///
+/// `(operation_id, param, minimum inclusive, maximum inclusive, exclusive
+/// minimum)`. `session.list`'s row duplicates the in-handler P10-E2 pin
+/// (identical bytes; middleware fires first).
+pub const NUMBER_PARAMS: &[(&str, &str, Option<f64>, Option<f64>, Option<f64>)] = &[
+    ("fs.find", "limit", None, None, Some(0.0)),
+    ("server.experimental.persistentPty.read", "lines", None, None, Some(0.0)),
+    ("session.list", "limit", None, None, Some(0.0)),
+    ("session.message.list", "limit", Some(1.0), Some(200.0), None),
+    ("vcs.branch.list", "limit", None, None, Some(0.0)),
+    ("vcs.diff", "context", Some(0.0), None, None),
 ];
 
 // ---------------------------------------------------------------------------
@@ -302,6 +321,77 @@ fn check(node: u32, value: &Value, path: &mut Vec<Seg>) -> Result<(), Reject> {
             Ok(())
         }
         SchemaNode::Obj { fields } => check_object(fields, value, path),
+        SchemaNode::Union(members) => check_union(members, value, path),
+    }
+}
+
+/// `SchemaNode::Union`: discriminator-struct unions (probe round 3,
+/// `rollout-probe-3.json` — mcp.add `config`). A member whose `type`
+/// singleton literal matches the value's `type` member OWNS the check
+/// verbatim (`{"type":"local"}` → `Missing key\n  at ["config"]
+/// ["command"]`, `{"type":"remote"}` → `Missing key … ["url"]`); with no
+/// matching discriminator every member gets a chance and total failure
+/// renders the union label Effect prints
+/// (`Expected { readonly "type": "local", ... } | …`).
+fn check_union(members: &[u32], value: &Value, path: &mut Vec<Seg>) -> Result<(), Reject> {
+    if let Some(discriminator) = value.get("type").and_then(Value::as_str) {
+        if let Some(candidate) = discriminator_member(members, discriminator) {
+            return check(candidate, value, path);
+        }
+    }
+    if members.iter().any(|member| check(*member, value, path).is_ok()) {
+        return Ok(());
+    }
+    let labels: Vec<String> = members.iter().filter_map(|m| union_member_label(*m)).collect();
+    if labels.len() != members.len() {
+        // A member without a renderable label cannot happen (the
+        // generator only emits discriminator-struct unions) — accept
+        // rather than print a wrong message.
+        return Ok(());
+    }
+    Err(Reject::at(format!("Expected {}", labels.join(" | ")), path))
+}
+
+/// The member whose `type` field is a singleton literal equal to
+/// `discriminator` (returns the member's OBJECT node — the `$ref` label
+/// must not replace member-internal messages).
+fn discriminator_member(members: &[u32], discriminator: &str) -> Option<u32> {
+    members.iter().find_map(|member| {
+        let node = match &validation_gen::NODES[*member as usize] {
+            SchemaNode::Ref { node, .. } => *node,
+            SchemaNode::Obj { .. } => *member,
+            _ => return None,
+        };
+        let SchemaNode::Obj { fields } = &validation_gen::NODES[node as usize] else {
+            return None;
+        };
+        let type_field = fields.iter().find(|field| field.name == "type")?;
+        match &validation_gen::NODES[type_field.ty as usize] {
+            SchemaNode::Literal(values) if values.len() == 1 && values[0] == discriminator => {
+                Some(node)
+            }
+            _ => None,
+        }
+    })
+}
+
+/// Effect's rendering of one discriminator-struct union member:
+/// `{ readonly "type": "local", ... }` (probe-pinned byte-for-byte).
+fn union_member_label(member: u32) -> Option<String> {
+    let node = match &validation_gen::NODES[member as usize] {
+        SchemaNode::Ref { node, .. } => *node,
+        SchemaNode::Obj { .. } => member,
+        _ => return None,
+    };
+    let SchemaNode::Obj { fields } = &validation_gen::NODES[node as usize] else {
+        return None;
+    };
+    let type_field = fields.iter().find(|field| field.name == "type")?;
+    match &validation_gen::NODES[type_field.ty as usize] {
+        SchemaNode::Literal(values) if values.len() == 1 => {
+            Some(format!("{{ readonly \"type\": {:?}, ... }}", values[0]))
+        }
+        _ => None,
     }
 }
 
@@ -416,13 +506,265 @@ pub fn validate_payload(operation_id: &str, body: &Value) -> Result<(), String> 
 }
 
 // ---------------------------------------------------------------------------
+// Query interpreter (URL strings — v2 decodes urlParams BEFORE payloads)
+// ---------------------------------------------------------------------------
+
+/// The Effect kind label a query param's DECLARED node prints for a
+/// kind mismatch (`?limit=5&limit=abc` yields an array; probe round 3:
+/// `Expected string | undefined` for limit/search, `Expected "asc" |
+/// "desc" | undefined` for order).
+fn query_kind_label(node: u32) -> String {
+    match &validation_gen::NODES[node as usize] {
+        SchemaNode::Str | SchemaNode::Pattern { .. } => "string".to_owned(),
+        SchemaNode::Literal(values) => render_literals(values),
+        SchemaNode::Ref { label, .. } => (*label).to_owned(),
+        SchemaNode::Nullable(inner) => query_kind_label(*inner),
+        SchemaNode::Union(members) => {
+            members.first().map_or_else(|| "string".to_owned(), |m| query_kind_label(*m))
+        }
+        _ => "string".to_owned(),
+    }
+}
+
+/// `Expected <label>[ | undefined]` — optional params (every query param
+/// except vcs.diff `mode`, fs.find `query`, fs.write `path`, worktree.list
+/// `projectID`) append Effect's optional-union suffix on KIND mismatches;
+/// predicate failures never do (probe: `order=bogus` has no suffix while
+/// `location=scalar` → `Expected object | undefined`).
+fn query_kind_mismatch(label: &str, name: &str, required: bool) -> String {
+    let suffix = if required { "" } else { " | undefined" };
+    format!("Expected {label}{suffix}\n  at [{name:?}]")
+}
+
+fn render_literals(values: &[&str]) -> String {
+    values.iter().map(|v| format!("{v:?}")).collect::<Vec<_>>().join(" | ")
+}
+
+/// Whether a query param is a struct param (the deepObject `location`):
+/// declared as an object; URL spelling is `name[member]=value`.
+fn is_struct_param(node: u32) -> bool {
+    let node = match &validation_gen::NODES[node as usize] {
+        SchemaNode::Ref { node, .. } => *node,
+        other => return matches!(other, SchemaNode::Obj { .. } | SchemaNode::Record(_)),
+    };
+    matches!(&validation_gen::NODES[node as usize], SchemaNode::Obj { .. } | SchemaNode::Record(_))
+}
+
+/// Validates one operation's query string against the generated query
+/// row. String semantics (URL values are always strings; probes
+/// `rollout-probe{,-2,-3}.json`):
+///
+/// * required param absent → `Missing key\n  at ["mode"]` (kind Query);
+/// * struct param present ONLY as scalars (`location=x`) →
+///   `Expected object | undefined\n  at ["location"]`; deepObject members
+///   are strings (nothing fails) and duplicates last-win (probe r3);
+/// * duplicated scalar params (array value) → kind label + `| undefined`;
+/// * `Literal` miss → `Expected "asc" | "desc"`; `$ref`'d literal → the
+///   identifier (`Expected Vcs.Mode`); `Pattern` miss →
+///   `Expected a string starting with "msg_"`;
+/// * string-unions (session.list `parentID`) accept any member and report
+///   the FIRST member's message (`^ses`, probe r1);
+/// * [`NUMBER_PARAMS`] carry the NumberFromString integer filters
+///   (`Expected an integer` / bound messages).
+///
+/// Declaration order wins (probe r2: `?limit=abc&order=bogus` reports
+/// limit). Unknown keys are stripped (Effect behavior; probe r2).
+pub fn validate_query(operation_id: &str, query: &str) -> Result<(), String> {
+    let Some(node) = validation_gen::query_node(operation_id) else {
+        return Ok(());
+    };
+    let SchemaNode::Obj { fields } = &validation_gen::NODES[node as usize] else {
+        return Ok(());
+    };
+    let pairs = crate::handlers::schema_check::parse_query_pairs(query);
+    for field in fields.iter() {
+        let name = field.name;
+        let deep_prefix = format!("{name}[");
+        let has_deep = pairs.iter().any(|(key, _)| key.starts_with(&deep_prefix));
+        let plain: Vec<&str> =
+            pairs.iter().filter(|(key, _)| key == name).map(|(_, value)| value.as_str()).collect();
+
+        if is_struct_param(field.ty) {
+            if has_deep {
+                // Assembled object: members are strings (today only
+                // `directory`), unknown members stripped, duplicate
+                // members last-win (probe r3) — nothing can fail.
+                continue;
+            }
+            if plain.is_empty() {
+                if field.required {
+                    return Err(format!("Missing key\n  at [{name:?}]"));
+                }
+                continue;
+            }
+            // Scalar (or repeated scalar → array) where an object is
+            // declared (probe r1/r2: `location=scalar`).
+            return Err(query_kind_mismatch("object", name, field.required));
+        }
+
+        if plain.is_empty() {
+            if field.required {
+                return Err(format!("Missing key\n  at [{name:?}]"));
+            }
+            continue;
+        }
+        if plain.len() > 1 {
+            // Repeated scalar → Effect sees an array → kind mismatch.
+            return Err(query_kind_mismatch(&query_kind_label(field.ty), name, field.required));
+        }
+        let value = plain[0];
+
+        // NumberFromString filters first (the table row is a plain Str —
+        // the integer bounds are decode-time in v2 and spec-invisible).
+        if let Some((minimum, maximum, exclusive_minimum)) =
+            NUMBER_PARAMS.iter().find_map(|(op, param, min, max, excl)| {
+                (*op == operation_id && *param == name).then_some((*min, *max, *excl))
+            })
+        {
+            check_number_param(value, name, minimum, maximum, exclusive_minimum)?;
+        }
+
+        match &validation_gen::NODES[field.ty as usize] {
+            SchemaNode::Str
+            | SchemaNode::Any
+            | SchemaNode::Nullable(_)
+            | SchemaNode::Int { .. }
+            | SchemaNode::Num
+            | SchemaNode::Bool => {}
+            SchemaNode::Pattern { prefix } => {
+                if !value.starts_with(prefix) {
+                    return Err(format!(
+                        "Expected a string starting with {prefix:?}\n  at [{name:?}]"
+                    ));
+                }
+            }
+            SchemaNode::Literal(values) => {
+                if !values.contains(&value) {
+                    return Err(format!("Expected {}\n  at [{name:?}]", render_literals(values)));
+                }
+            }
+            SchemaNode::Ref { label, node } => {
+                // Probe: `mode=bogus` prints the $ref identifier
+                // (`Expected Vcs.Mode`), not the literal union.
+                match &validation_gen::NODES[*node as usize] {
+                    SchemaNode::Literal(values) if !values.contains(&value) => {
+                        return Err(format!("Expected {label}\n  at [{name:?}]"));
+                    }
+                    SchemaNode::Pattern { prefix } if !value.starts_with(prefix) => {
+                        return Err(format!(
+                            "Expected a string starting with {prefix:?}\n  at [{name:?}]"
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+            SchemaNode::Union(members) => {
+                // String-union (session.list parentID): accept on any
+                // member; report the FIRST member's message otherwise
+                // (probe r1: `Expected a string starting with "ses"`).
+                if !members.iter().any(|member| query_union_member_accepts(*member, value)) {
+                    if let Some(message) =
+                        members.first().map(|m| query_union_member_message(*m, value, name))
+                    {
+                        return Err(message);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Whether one string-union member accepts `value` verbatim.
+fn query_union_member_accepts(member: u32, value: &str) -> bool {
+    match &validation_gen::NODES[member as usize] {
+        SchemaNode::Str => true,
+        SchemaNode::Pattern { prefix } => value.starts_with(prefix),
+        SchemaNode::Literal(values) => values.contains(&value),
+        _ => false,
+    }
+}
+
+/// The message a string-union member produces for a non-matching value.
+fn query_union_member_message(member: u32, value: &str, name: &str) -> String {
+    match &validation_gen::NODES[member as usize] {
+        SchemaNode::Pattern { prefix } => {
+            format!("Expected a string starting with {prefix:?}\n  at [{name:?}]")
+        }
+        SchemaNode::Literal(values) => {
+            format!("Expected {}\n  at [{name:?}]", render_literals(values))
+        }
+        _ => format!("Expected string\n  at [{name:?}] ({value} rejected)"),
+    }
+}
+
+/// One probe-pinned NumberFromString param (`Expected an integer`,
+/// `Expected a value greater than [or equal to] N`,
+/// `Expected a value less than or equal to N`).
+fn check_number_param(
+    value: &str,
+    name: &str,
+    minimum: Option<f64>,
+    maximum: Option<f64>,
+    exclusive_minimum: Option<f64>,
+) -> Result<(), String> {
+    let number = crate::handlers::schema_check::js_number(value);
+    if !number.is_finite() || number.fract() != 0.0 {
+        return Err(format!("Expected an integer\n  at [{name:?}]"));
+    }
+    if let Some(bound) = exclusive_minimum {
+        if number <= bound {
+            return Err(format!(
+                "Expected a value greater than {}\n  at [{name:?}]",
+                fmt_bound(bound)
+            ));
+        }
+    }
+    if let Some(bound) = minimum {
+        if number < bound {
+            return Err(format!(
+                "Expected a value greater than or equal to {}\n  at [{name:?}]",
+                fmt_bound(bound)
+            ));
+        }
+    }
+    if let Some(bound) = maximum {
+        if number > bound {
+            return Err(format!(
+                "Expected a value less than or equal to {}\n  at [{name:?}]",
+                fmt_bound(bound)
+            ));
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Middleware (the v2 SchemaErrorMiddleware position)
 // ---------------------------------------------------------------------------
 
-/// Whether the middleware enforces this operation (validate-first slice).
+/// Whether the middleware enforces this operation's JSON payload
+/// (validate-first body slice — the complete set; see [`ENFORCED_OPS`]).
 #[must_use]
 pub fn enforces(operation_id: &str) -> bool {
     ENFORCED_OPS.binary_search(&operation_id).is_ok()
+}
+
+/// Whether the operation's v2 endpoint resolves the session/form BEFORE
+/// decoding (404 precedes any schema 400 — see [`LOCATION_FIRST_OPS`]).
+#[must_use]
+pub fn location_first(operation_id: &str) -> bool {
+    LOCATION_FIRST_OPS.binary_search(&operation_id).is_ok()
+}
+
+/// Whether the middleware enforces this operation's query string: it
+/// declares query params (generated `QueryValidation::Params` row) AND is
+/// not location-first. Query decode precedes payload decode in v2 (probe:
+/// `POST /api/websearch?location=scalar` + bad body → the Query error).
+#[must_use]
+pub fn enforces_query(operation_id: &str) -> bool {
+    validation_gen::query_node(operation_id).is_some() && !location_first(operation_id)
 }
 
 fn table_method(method: &axum::http::Method) -> Option<crate::routes_gen::Method> {
@@ -436,45 +778,140 @@ fn table_method(method: &axum::http::Method) -> Option<crate::routes_gen::Method
     }
 }
 
-/// The schema-error middleware: for enforced operations with a JSON body,
-/// buffer + parse + validate the payload before the handler; violations
-/// answer `400 InvalidRequestError {message, kind: "Payload"}` (the v2
-/// envelope). Everything else passes through byte-identically — including
-/// non-JSON bodies (P10-N1 stays with the extractor path) and
-/// resource-first routes (404 must precede any payload 400 there).
+/// v2's plain-text 415 (P10-N1, probe round 1: `Unsupported content-type:
+/// text/plain`, response content-type exactly `text/plain`).
+fn unsupported_media_type(content_type: &str) -> Response {
+    let mut response = (
+        axum::http::StatusCode::UNSUPPORTED_MEDIA_TYPE,
+        format!("Unsupported content-type: {content_type}"),
+    )
+        .into_response();
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, axum::http::HeaderValue::from_static("text/plain"));
+    response
+}
+
+/// The schema-error middleware — the v2 `SchemaErrorMiddleware` position:
+///
+/// 1. **Query first** (v2 decodes urlParams before payloads): enforced
+///    operations with a generated query row reject bad values as
+///    `400 InvalidRequestError {message, kind: "Query"}`.
+/// 2. **Content-type gate** (P10-N1, probe round 1/2): JSON-body routes
+///    answer `415 Unsupported content-type: <ct>` for any non-JSON
+///    content-type (absent is treated as JSON and validated); the binary
+///    route (experimental.fs.write) requires `application/octet-stream`
+///    and names `application/json` in the 415 when the header is absent.
+///    Location-first routes skip the gate — their 404 precedes it.
+/// 3. **Payload**: empty bodies decode as null (`Expected object`),
+///    unparseable JSON answers `Expected a valid JSON body`, schema
+///    violations the byte-pinned Effect message — all
+///    `400 InvalidRequestError {…, kind: "Payload"}`.
+///
+/// Everything else passes through byte-identically — including
+/// location-first routes (their 404 must precede any 400/415).
 pub async fn schema_error_middleware(request: Request, next: Next) -> Response {
     let method = request.method().clone();
     let path = request.uri().path().to_owned();
+    let query = request.uri().query().map(str::to_owned);
     let operation_id = table_method(&method)
         .and_then(|table_method| {
             crate::routes_gen::find(table_method, &path).map(|(route, _)| route.operation_id)
         })
-        .filter(|operation_id| enforces(operation_id));
-    let json_content_type = request
-        .headers()
-        .get(header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.starts_with("application/json"));
-    let Some(operation_id) = operation_id.filter(|_| json_content_type) else {
+        .filter(|operation_id| {
+            enforces(operation_id) || enforces_query(operation_id) ||
+                // Binary-body routes still take the content-type gate.
+                (validation_gen::find(operation_id)
+                    .is_some_and(|row| row.body == validation_gen::BodyValidation::Binary)
+                    && !location_first(operation_id))
+        });
+    let Some(operation_id) = operation_id else {
         return next.run(request).await;
     };
 
-    let (parts, body) = request.into_parts();
+    // 1. query (urlParams) before payload — probe: websearch?location=x.
+    if let (true, Some(query)) = (enforces_query(&operation_id), query.as_deref()) {
+        if let Err(message) = validate_query(&operation_id, query) {
+            return crate::errors::schema_rejection(&message, "Query").into_response();
+        }
+    }
+
+    let body_kind = validation_gen::find(&operation_id).map(|row| row.body);
+    if body_kind.is_none_or(|kind| kind == validation_gen::BodyValidation::None) {
+        return next.run(request).await;
+    }
+    // Location-first routes resolve the session (404) before any payload
+    // decode — no gate, no buffering.
+    if location_first(&operation_id) {
+        return next.run(request).await;
+    }
+
+    // 2. content-type gate (P10-N1).
+    let content_type = request
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    match body_kind {
+        Some(validation_gen::BodyValidation::Binary) => match content_type.as_deref() {
+            Some(ct) if ct.starts_with("application/octet-stream") => {
+                return next.run(request).await;
+            }
+            // Probe r2: absent content-type names the JSON default.
+            None => return unsupported_media_type("application/json"),
+            Some(ct) => return unsupported_media_type(ct),
+        },
+        Some(validation_gen::BodyValidation::Json(_)) => match content_type.as_deref() {
+            None => {}
+            Some(ct) if ct.starts_with("application/json") => {}
+            Some(ct) => return unsupported_media_type(ct),
+        },
+        _ => {}
+    }
+
+    // 3. payload (only JSON bodies buffer + validate).
+    let Some(validation_gen::BodyValidation::Json(_)) = body_kind else {
+        return next.run(request).await;
+    };
+    if !enforces(&operation_id) {
+        return next.run(request).await;
+    }
+    let (mut parts, body) = request.into_parts();
     let Ok(bytes) = axum::body::to_bytes(body, BODY_LIMIT).await else {
         // Over the same 2 MiB budget the `Json` extractor would have
         // applied; mirror its plain-text 413.
         return (axum::http::StatusCode::PAYLOAD_TOO_LARGE, "length limit exceeded")
             .into_response();
     };
-    let pass_through = |bytes: axum::body::Bytes| Request::from_parts(parts, Body::from(bytes));
-    match serde_json::from_slice::<Value>(&bytes) {
-        // Unparseable JSON: hand the buffered bytes to the handler and let
-        // the `Json` extractor answer (P10-N1 divergence, unchanged here).
-        Err(_) => next.run(pass_through(bytes)).await,
-        Ok(value) => match validate_payload(operation_id, &value) {
-            Ok(()) => next.run(pass_through(bytes)).await,
-            Err(message) => crate::errors::schema_rejection(&message, "Payload").into_response(),
-        },
+    let value = if bytes.is_empty() {
+        // Probe r1: empty body decodes as undefined/null → the root
+        // struct's own message (`Expected object`).
+        Value::Null
+    } else {
+        match serde_json::from_slice::<Value>(&bytes) {
+            Ok(value) => value,
+            // Probe r1: `Expected a valid JSON body` (kind Payload).
+            Err(_) => {
+                return crate::errors::schema_rejection("Expected a valid JSON body", "Payload")
+                    .into_response();
+            }
+        }
+    };
+    match validate_payload(&operation_id, &value) {
+        Ok(()) => {
+            // Absent content-type defaults to JSON (probe r1) — insert it
+            // so the handler's `Json` extractor accepts the re-inserted
+            // body the way v2 decoded it.
+            if content_type.is_none() {
+                parts.headers.insert(
+                    header::CONTENT_TYPE,
+                    axum::http::HeaderValue::from_static("application/json"),
+                );
+            }
+            let request = Request::from_parts(parts, Body::from(bytes));
+            next.run(request).await
+        }
+        Err(message) => crate::errors::schema_rejection(&message, "Payload").into_response(),
     }
 }
 
@@ -894,27 +1331,268 @@ mod tests {
                 "{op} enforced but has no generated JSON body"
             );
         }
-        // LOC-MW (session-resolution-first) routes must NOT be enforced by
-        // the middleware — their payload 400 comes after the 404. The full
-        // 21-op set (18 session + 3 permission, per groups/session.ts and
-        // groups/permission.ts), oracle condition 4.
-        assert_eq!(LOC_MW_OPS.len(), 21);
-        assert!(LOC_MW_OPS.windows(2).all(|w| w[0] < w[1]));
-        for op in LOC_MW_OPS {
-            assert!(!enforces(op), "{op} is LOC-MW: 404 must precede its payload 400");
-        }
-        // Deferred trio (oracle): stay out until their batch.
-        for op in ["session.form.create", "experimental.session.import", "experimental.mcp.add"] {
-            assert!(!enforces(op), "{op} is deferred by oracle review");
-        }
-        // session.form.reply carries v2 `formLocationMiddleware`
-        // (groups/session.ts:846: form resolution → 404 precedes payload
-        // decode) — same exclusion class as LOC-MW; found during the
-        // batch-2 survey (it was wrongly parked on the round-4 Bool/Num
-        // list). Stays out until the post-location seam.
-        assert!(
-            !enforces("session.form.reply"),
-            "session.form.reply is form-location-first: 404 must precede its payload 400"
+    }
+
+    /// The rollout is COMPLETE (2026-10-21): ENFORCED_OPS is exactly the
+    /// set of JSON-body operations minus the location-first routes
+    /// (24 sessionLocationMiddleware + 5 formLocationMiddleware ops, ids
+    /// from the OpenAPI identifiers). 28 of the 46 JSON-body ops; the
+    /// other 18 stay out forever (not deferred — their v2 endpoints
+    /// resolve the session/form first, so a validate-first 400 would
+    /// DIVERGE from v2's 404).
+    #[test]
+    fn enforced_slice_is_complete() {
+        assert!(LOCATION_FIRST_OPS.windows(2).all(|w| w[0] < w[1]));
+        assert_eq!(LOCATION_FIRST_OPS.len(), 29, "24 LOC-MW + 5 FORM-MW");
+        let json_body_ops: Vec<&str> = validation_gen::ROUTES
+            .iter()
+            .filter(|row| matches!(row.body, validation_gen::BodyValidation::Json(_)))
+            .map(|row| row.operation_id)
+            .collect();
+        assert_eq!(json_body_ops.len(), 46, "46 JSON-body operations");
+        let validate_first: std::collections::BTreeSet<&str> =
+            json_body_ops.into_iter().filter(|op| !location_first(op)).collect();
+        let enforced: std::collections::BTreeSet<&str> = ENFORCED_OPS.iter().copied().collect();
+        assert_eq!(
+            enforced, validate_first,
+            "ENFORCED_OPS must be the complete validate-first body set"
         );
+        // The 18 excluded body ops are precisely the location-first ones.
+        let excluded: std::collections::BTreeSet<&str> = validation_gen::ROUTES
+            .iter()
+            .filter(|row| {
+                matches!(row.body, validation_gen::BodyValidation::Json(_))
+                    && location_first(row.operation_id)
+            })
+            .map(|row| row.operation_id)
+            .collect();
+        assert_eq!(excluded.len(), 18, "16 LOC-MW + 2 FORM-MW body ops");
+        for op in &excluded {
+            assert!(!enforces(op), "{op} is location-first: the 404 must precede its payload 400");
+            assert!(!enforces_query(op), "{op} query decode also waits for the 404");
+        }
+        // Every location-first id exists in the generated table (no vacuous
+        // entries — the batch-2 list had `session.skill`/`session.wait`
+        // instead of the `experimental.`-prefixed identifiers).
+        let known: std::collections::BTreeSet<&str> =
+            validation_gen::ROUTES.iter().map(|row| row.operation_id).collect();
+        for op in LOCATION_FIRST_OPS {
+            assert!(known.contains(op), "{op} is not a generated operation id");
+        }
+        // The raw-handshake routes (pty.connect / persistentPty.connect)
+        // declare query rows but nothing can fail (plain strings).
+        assert!(enforces_query("pty.connect"));
+        assert!(enforces_query("persistentPty.connect"));
+    }
+
+    /// Query-enforcement coverage: every generated query row is enforced
+    /// except the two location-first query ops (probe: their 404 wins).
+    #[test]
+    fn query_enforcement_coverage() {
+        let query_ops: Vec<&str> = validation_gen::ROUTES
+            .iter()
+            .filter(|row| matches!(row.query, validation_gen::QueryValidation::Params(_)))
+            .map(|row| row.operation_id)
+            .collect();
+        assert_eq!(query_ops.len(), validation_gen::QUERY_PARAM_ROUTES);
+        assert_eq!(validation_gen::QUERY_PARAM_ROUTES, 71);
+        let enforced: usize = query_ops.iter().filter(|op| enforces_query(op)).copied().count();
+        assert_eq!(enforced, 69, "71 query rows - session.interrupt - session.form.cancel");
+        for op in ["session.interrupt", "session.form.cancel"] {
+            assert!(!enforces_query(op), "{op} is location-first");
+        }
+    }
+
+    /// Batch-3 body ops (probe round 1/3, `rollout-probe{,-3}.json`):
+    /// the discriminator-union `config`, the Session.Info import tree,
+    /// and the annotated Rpc.Input root.
+    #[test]
+    fn pinned_batch3_messages() {
+        // experimental.mcp.add — union label, discriminator delegation.
+        assert_eq!(err("experimental.mcp.add", json!({})), "Missing key\n  at [\"config\"]");
+        assert_eq!(err("experimental.mcp.add", json!([1])), "Expected object");
+        assert_eq!(
+            err("experimental.mcp.add", json!({"config": 5})),
+            "Expected { readonly \"type\": \"local\", ... } | { readonly \"type\": \"remote\", ... }\n  \
+               at [\"config\"]"
+        );
+        assert_eq!(
+            err("experimental.mcp.add", json!({"config": {"type": "bogus"}})),
+            "Expected { readonly \"type\": \"local\", ... } | { readonly \"type\": \"remote\", ... }\n  \
+               at [\"config\"]"
+        );
+        assert_eq!(
+            err("experimental.mcp.add", json!({"config": {"type": "local"}})),
+            "Missing key\n  at [\"config\"][\"command\"]"
+        );
+        assert_eq!(
+            err("experimental.mcp.add", json!({"config": {"type": "local", "command": "x"}})),
+            "Expected array\n  at [\"config\"][\"command\"]"
+        );
+        assert_eq!(
+            err("experimental.mcp.add", json!({"config": {"type": "remote"}})),
+            "Missing key\n  at [\"config\"][\"url\"]"
+        );
+        assert!(validate_payload(
+            "experimental.mcp.add",
+            &json!({"config": {"type": "local", "command": ["true"]}})
+        )
+        .is_ok());
+
+        // experimental.session.import — Session.Info tree.
+        assert_eq!(err("experimental.session.import", json!({})), "Missing key\n  at [\"info\"]");
+        assert_eq!(err("experimental.session.import", json!([1])), "Expected object");
+        assert_eq!(
+            err("experimental.session.import", json!({"info": 5})),
+            "Expected Session.Info\n  at [\"info\"]"
+        );
+        assert_eq!(
+            err("experimental.session.import", json!({"info": {}, "messages": []})),
+            "Missing key\n  at [\"info\"][\"id\"]"
+        );
+
+        // rpc.call — annotated root (probe: the identifier, not `object`).
+        assert_eq!(err("rpc.call", json!([1])), "Expected Rpc.Input");
+        assert!(validate_payload("rpc.call", &json!({})).is_ok());
+        assert!(validate_payload("rpc.call", &json!({"input": 5})).is_ok());
+    }
+
+    /// Query interpreter pins (probe rounds 1-3, byte-level).
+    #[test]
+    fn pinned_query_messages() {
+        let q = |op: &str, query: &str| validate_query(op, query).unwrap_err();
+        // deepObject location: scalar → `Expected object | undefined`;
+        // deep members + unknown members + duplicates never fail.
+        assert_eq!(
+            q("config.get", "location=scalar"),
+            "Expected object | undefined\n  at [\"location\"]"
+        );
+        assert!(validate_query("config.get", "location%5Bdirectory%5D=%2Ftmp").is_ok());
+        assert!(validate_query("config.get", "location%5Bbogus%5D=x").is_ok());
+        assert!(validate_query("config.get", "location=scalar&location%5Bdirectory%5D=x").is_ok());
+        assert!(validate_query("config.get", "").is_ok());
+
+        // session.list: NumberFromString, literal union, string-union.
+        assert_eq!(q("session.list", "limit=abc"), "Expected an integer\n  at [\"limit\"]");
+        assert_eq!(
+            q("session.list", "limit=0"),
+            "Expected a value greater than 0\n  at [\"limit\"]"
+        );
+        assert_eq!(
+            q("session.list", "limit="),
+            "Expected a value greater than 0\n  at [\"limit\"]"
+        );
+        assert_eq!(
+            q("session.list", "order=bogus"),
+            "Expected \"asc\" | \"desc\"\n  at [\"order\"]"
+        );
+        assert_eq!(
+            q("session.list", "parentID=bogus"),
+            "Expected a string starting with \"ses\"\n  at [\"parentID\"]"
+        );
+        assert!(validate_query("session.list", "parentID=null").is_ok());
+        assert!(validate_query("session.list", "parentID=ses_x").is_ok());
+        assert!(validate_query("session.list", "limit=%2B5").is_ok());
+        assert!(validate_query("session.list", "limit=0x10").is_ok());
+        assert!(validate_query("session.list", "bogus=1").is_ok());
+        // Declaration order: limit before order regardless of URL order.
+        assert_eq!(
+            q("session.list", "order=bogus&limit=abc"),
+            "Expected an integer\n  at [\"limit\"]"
+        );
+        // Duplicates → array → kind mismatch with the optional suffix.
+        assert_eq!(
+            q("session.list", "limit=5&limit=abc"),
+            "Expected string | undefined\n  at [\"limit\"]"
+        );
+        assert_eq!(
+            q("session.list", "order=asc&order=desc"),
+            "Expected \"asc\" | \"desc\" | undefined\n  at [\"order\"]"
+        );
+
+        // session.message.list: bounded limit + 10-literal type union.
+        assert_eq!(
+            q("session.message.list", "limit=0"),
+            "Expected a value greater than or equal to 1\n  at [\"limit\"]"
+        );
+        assert_eq!(
+            q("session.message.list", "limit=201"),
+            "Expected a value less than or equal to 200\n  at [\"limit\"]"
+        );
+        assert!(validate_query("session.message.list", "limit=200").is_ok());
+        assert_eq!(
+            q("session.message.list", "type=bogus"),
+            "Expected \"agent-switched\" | \"model-switched\" | \"location-switched\" | \"user\" | \
+             \"synthetic\" | \"system\" | \"skill\" | \"shell\" | \"assistant\" | \"compaction\"\n  \
+             at [\"type\"]"
+        );
+        assert!(validate_query("session.message.list", "type=user").is_ok());
+
+        // patterns (^msg_) and enums elsewhere.
+        assert_eq!(
+            q("session.diff", "from=notmsg"),
+            "Expected a string starting with \"msg_\"\n  at [\"from\"]"
+        );
+        assert_eq!(
+            q("session.diff", "from=msg_1&to=notmsg"),
+            "Expected a string starting with \"msg_\"\n  at [\"to\"]"
+        );
+        assert!(validate_query("session.diff", "from=msg_1").is_ok());
+        assert_eq!(
+            q("experimental.session.stats", "tools=bogus"),
+            "Expected \"none\" | \"summary\" | \"detail\"\n  at [\"tools\"]"
+        );
+        assert_eq!(
+            q("experimental.session.export", "sanitize=bogus"),
+            "Expected \"true\" | \"false\"\n  at [\"sanitize\"]"
+        );
+        assert_eq!(
+            q("session.log", "follow=bogus"),
+            "Expected \"true\" | \"false\"\n  at [\"follow\"]"
+        );
+
+        // required keys (kind Query — probe r2) and the $ref'd literal.
+        assert_eq!(q("vcs.diff", ""), "Missing key\n  at [\"mode\"]");
+        assert_eq!(q("vcs.diff", "mode=bogus"), "Expected Vcs.Mode\n  at [\"mode\"]");
+        assert!(validate_query("vcs.diff", "mode=working").is_ok());
+        assert_eq!(
+            q("vcs.diff", "mode=working&context=abc"),
+            "Expected an integer\n  at [\"context\"]"
+        );
+        assert_eq!(
+            q("vcs.diff", "mode=working&context=-1"),
+            "Expected a value greater than or equal to 0\n  at [\"context\"]"
+        );
+        assert_eq!(q("fs.find", ""), "Missing key\n  at [\"query\"]");
+        assert_eq!(
+            q("fs.find", "query=x&type=bogus"),
+            "Expected \"file\" | \"directory\"\n  at [\"type\"]"
+        );
+        assert_eq!(q("fs.find", "query=x&limit=abc"), "Expected an integer\n  at [\"limit\"]");
+        assert_eq!(q("worktree.list", ""), "Missing key\n  at [\"projectID\"]");
+        assert!(validate_query("worktree.list", "projectID=prj_x").is_ok());
+        assert_eq!(
+            q("fs.find", "query=x&limit=0"),
+            "Expected a value greater than 0\n  at [\"limit\"]"
+        );
+        assert_eq!(
+            q("server.experimental.persistentPty.read", "lines=abc"),
+            "Expected an integer\n  at [\"lines\"]"
+        );
+        assert_eq!(
+            q("server.experimental.persistentPty.read", "lines=0"),
+            "Expected a value greater than 0\n  at [\"lines\"]"
+        );
+        assert_eq!(q("vcs.branch.list", "limit=abc"), "Expected an integer\n  at [\"limit\"]");
+        // Raw flat-string routes: nothing can fail.
+        assert!(
+            validate_query("pty.connect", "location%5Bdirectory%5D=x&cursor=1&ticket=t").is_ok()
+        );
+        assert!(validate_query("persistentPty.connect", "cursor=1&role=r").is_ok());
+        // Location-first ops are never query-enforced by the middleware
+        // (probe: their 404 wins); the generated row exists but is not
+        // consulted — `enforces_query` is the gate.
+        assert!(!enforces_query("session.interrupt"));
+        assert!(!enforces_query("session.form.cancel"));
     }
 }
