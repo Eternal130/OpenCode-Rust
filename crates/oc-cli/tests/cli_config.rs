@@ -569,3 +569,126 @@ fn env_switches_project_config() {
     assert!(project_config_enabled());
     assert!(load_providers());
 }
+
+// ===========================================================================
+// CLI-K8 — the migrated history/frecency/stash files are consumed at
+// runtime. v2's TUI reads and REWRITES each file on mount
+// (prompt/history.tsx:93, frecency.tsx:42, stash.tsx:40): parse,
+// validate every line, keep the bounded tail, dedup frecency by path
+// (last wins) sorted by lastOpen DESC, then write the retained
+// entries back (self-heal). The TUI boot's storage open
+// (ChannelStorage::open_default_migrated) runs that pass, so the
+// v2→rust migration's output is really read and written — not a
+// migration-only artifact.
+// ===========================================================================
+
+#[test]
+fn migrated_history_consumed() {
+    use oc_tui::storage::{
+        parse_frecency, parse_prompt_history, parse_prompt_stash, ChannelStorage,
+        MAX_FRECENCY_ENTRIES, MAX_HISTORY_ENTRIES,
+    };
+
+    // --- unit: the v2 parser semantics ------------------------------------
+    let history_entry = |text: &str| serde_json::json!({ "text": text, "files": [], "agents": [], "skills": [], "pasted": [] });
+    let long_history = (0..(MAX_HISTORY_ENTRIES + 10)).fold(String::new(), |mut out, index| {
+        out.push_str(&history_entry(&format!("p{index}")).to_string());
+        out.push('\n');
+        out
+    });
+    let parsed = parse_prompt_history(&format!("not json\n{long_history}"));
+    assert_eq!(parsed.len(), MAX_HISTORY_ENTRIES, "the cap keeps the LAST 50");
+    assert_eq!(parsed.first().unwrap()["text"], "p10", "the oldest beyond the cap drops");
+    assert_eq!(parsed.last().unwrap()["text"], format!("p{}", MAX_HISTORY_ENTRIES + 9));
+    // PromptInfo validation: a missing `pasted` array invalidates the line.
+    assert_eq!(
+        parse_prompt_history(&format!("{}\n", serde_json::json!({"text": "x"}))),
+        Vec::<serde_json::Value>::new()
+    );
+
+    let parsed = parse_frecency(concat!(
+        r#"{"path":"/a","frequency":1,"lastOpen":100}"#,
+        "\n",
+        r#"{"path":"/a","frequency":5,"lastOpen":500}"#,
+        "\n",
+        r#"{"path":"/b","frequency":2,"lastOpen":900}"#,
+        "\n",
+        "garbage\n",
+        r#"{"frequency":7,"lastOpen":1}"#,
+        "\n",
+    ));
+    assert_eq!(parsed.len(), 2, "dedup by path + invalid lines dropped");
+    assert_eq!(parsed[0]["path"], "/b", "sorted by lastOpen DESCENDING");
+    assert_eq!(parsed[1]["frequency"], 5, "the LAST duplicate wins");
+    let many: String = (0..(MAX_FRECENCY_ENTRIES + 5))
+        .map(|index| format!(r#"{{"path":"/p{index}","frequency":1,"lastOpen":{index}}}"#))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(parse_frecency(&many).len(), MAX_FRECENCY_ENTRIES, "the frecency cap");
+
+    let parsed = parse_prompt_stash(concat!(
+        "{bad json\n",
+        r#"{"prompt":{"text":"x"},"timestamp":1}"#,
+        "\n",
+        r#"{"prompt":{"text":"draft","pasted":[]},"timestamp":1750000000}"#,
+        "\n",
+    ));
+    assert_eq!(parsed.len(), 1, "only valid prompt+timestamp lines");
+    assert_eq!(parsed[0]["prompt"]["text"], "draft");
+
+    // --- runtime: the TUI boot storage open consumes the migrated files ---
+    let _guard = EnvGuard::new(vec![
+        "OPENCODE_TUI_CHANNEL",
+        "OPENCODE_CHANNEL",
+        "OPENCODE_TEST_HOME",
+        "XDG_STATE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_CACHE_HOME",
+    ]);
+    let sandbox = Sandbox::new("k8");
+    let state = sandbox.home().join(".local/state/opencode-rust");
+    std::fs::create_dir_all(&state).expect("state root");
+    std::env::set_var("OPENCODE_TEST_HOME", sandbox.home());
+    std::env::set_var("XDG_STATE_HOME", sandbox.home().join(".local/state"));
+    std::env::set_var("XDG_CONFIG_HOME", sandbox.home().join(".config"));
+    std::env::set_var("XDG_DATA_HOME", sandbox.home().join(".local/share"));
+    std::env::set_var("XDG_CACHE_HOME", sandbox.home().join(".cache"));
+
+    std::fs::write(state.join("prompt-history.jsonl"), format!("not json\n{long_history}"))
+        .expect("staged history");
+    std::fs::write(
+        state.join("frecency.jsonl"),
+        concat!(
+            r#"{"path":"/a","frequency":1,"lastOpen":100}"#,
+            "\n",
+            r#"{"path":"/a","frequency":5,"lastOpen":500}"#,
+            "\n",
+            r#"{"path":"/b","frequency":2,"lastOpen":900}"#,
+            "\n",
+        ),
+    )
+    .expect("staged frecency");
+    std::fs::write(state.join("prompt-stash.jsonl"), "{bad json\n").expect("staged stash");
+
+    // The exact call the TUI boot makes (app.rs's storage open).
+    ChannelStorage::open_default_migrated().expect("storage opens");
+
+    let healed = std::fs::read_to_string(state.join("prompt-history.jsonl")).expect("history");
+    assert_eq!(healed.lines().count(), MAX_HISTORY_ENTRIES, "history self-healed to the cap");
+    assert!(!healed.contains("not json"), "the corrupt line is dropped");
+    assert!(healed.contains("p59"), "the newest entries survive");
+
+    let healed = std::fs::read_to_string(state.join("frecency.jsonl")).expect("frecency");
+    assert_eq!(healed.lines().count(), 2, "deduped by path");
+    assert!(healed.lines().next().unwrap().contains("/b"), "sorted by lastOpen");
+    assert!(!healed.contains(r#""frequency":1"#), "the stale duplicate is gone");
+
+    // A file with NO valid entries is left untouched (v2's
+    // `if (lines.length > 0) writeText` gate).
+    assert_eq!(
+        std::fs::read_to_string(state.join("prompt-stash.jsonl")).unwrap(),
+        "{bad json\n",
+        "no parseable entries — the file is not rewritten"
+    );
+}

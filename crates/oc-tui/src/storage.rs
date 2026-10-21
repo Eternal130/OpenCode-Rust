@@ -216,6 +216,147 @@ pub const MIGRATED_FROM_FIELD: &str = "migrated-from-local";
 /// the legacy channel (everything the TUI persists).
 pub const MIGRATED_KEYS: &[&str] = &[KEY_TABS, KEY_SESSION_LIST, KEY_GETTING_STARTED];
 
+// --- the prompt-state family (CLI-K8) --------------------------------------
+//
+// v2 keeps three JSONL documents on the STATE root (not the channel
+// directory) — `prompt/history.tsx:93`, `frecency.tsx:42`,
+// `stash.tsx:40`. Each provider, ON MOUNT, reads its file, validates
+// every line, keeps the bounded tail, and REWRITES the file (self-heal:
+// corrupt lines dropped, limits enforced, frecency deduped). The v2→
+// rust migration copies these files into the port's state root
+// (v2_migration.rs "the prompt history family, preserved for the TUI
+// lane's readers") — [`heal_prompt_state_files`] is that reader/writer:
+// the TUI boot's storage open runs it, so the migrated files are read
+// and written at runtime exactly like the v2 providers' mount pass.
+
+/// `prompt-history.jsonl` — the v2 filename (`history.tsx:93`).
+pub const FILE_PROMPT_HISTORY: &str = "prompt-history.jsonl";
+/// `frecency.jsonl` — the v2 filename (`frecency.tsx:42`).
+pub const FILE_FRECENCY: &str = "frecency.jsonl";
+/// `prompt-stash.jsonl` — the v2 filename (`stash.tsx:40`).
+pub const FILE_PROMPT_STASH: &str = "prompt-stash.jsonl";
+
+/// `MAX_HISTORY_ENTRIES` (history.tsx:59).
+pub const MAX_HISTORY_ENTRIES: usize = 50;
+/// `MAX_FRECENCY_ENTRIES` (frecency.tsx:14).
+pub const MAX_FRECENCY_ENTRIES: usize = 1000;
+/// `MAX_STASH_ENTRIES` (stash.tsx:17).
+pub const MAX_STASH_ENTRIES: usize = 50;
+
+/// `parsePromptInfo` (history.tsx:83-89): an entry needs a string
+/// `text` and an array `pasted`; everything else rides along
+/// unvalidated (kept verbatim for the rewrite).
+fn valid_prompt_info(value: &serde_json::Value) -> bool {
+    value.get("text").is_some_and(serde_json::Value::is_string)
+        && value.get("pasted").is_some_and(serde_json::Value::is_array)
+}
+
+/// `parsePromptHistory` (history.tsx:61-75): one validated entry per
+/// non-empty line, keeping the LAST [`MAX_HISTORY_ENTRIES`].
+#[must_use]
+pub fn parse_prompt_history(text: &str) -> Vec<serde_json::Value> {
+    text.split('\n')
+        .filter(|line| !line.is_empty())
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(valid_prompt_info)
+        .rev()
+        .take(MAX_HISTORY_ENTRIES)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect()
+}
+
+/// `parseFrecency` (frecency.tsx:16-33): one `{path, frequency,
+/// lastOpen}` entry per non-empty line, LAST line wins per `path`,
+/// sorted by `lastOpen` DESCENDING, capped at
+/// [`MAX_FRECENCY_ENTRIES`].
+#[must_use]
+pub fn parse_frecency(text: &str) -> Vec<serde_json::Value> {
+    let mut latest: std::collections::BTreeMap<String, serde_json::Value> =
+        std::collections::BTreeMap::new();
+    for line in text.split('\n').filter(|line| !line.is_empty()) {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+        let Some(path) = value.get("path").and_then(serde_json::Value::as_str) else { continue };
+        latest.insert(path.to_owned(), value);
+    }
+    let mut entries: Vec<serde_json::Value> = latest.into_values().collect();
+    entries.sort_by_key(|entry| {
+        std::cmp::Reverse(entry.get("lastOpen").and_then(serde_json::Value::as_i64).unwrap_or(0))
+    });
+    entries.truncate(MAX_FRECENCY_ENTRIES);
+    entries
+}
+
+/// `parsePromptStash` (stash.tsx:15-31): one `{prompt: PromptInfo,
+/// timestamp: number}` entry per non-empty line, keeping the LAST
+/// [`MAX_STASH_ENTRIES`].
+#[must_use]
+pub fn parse_prompt_stash(text: &str) -> Vec<serde_json::Value> {
+    text.split('\n')
+        .filter(|line| !line.is_empty())
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|value| {
+            value.get("prompt").is_some_and(valid_prompt_info)
+                && value.get("timestamp").is_some_and(serde_json::Value::is_number)
+        })
+        .rev()
+        .take(MAX_STASH_ENTRIES)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect()
+}
+
+fn encode_jsonl(entries: &[serde_json::Value]) -> String {
+    let mut text = String::new();
+    for entry in entries {
+        text.push_str(&entry.to_string());
+        text.push('\n');
+    }
+    text
+}
+
+/// The retained-entry rewrite of one prompt-state file.
+type PromptStateParser = fn(&str) -> Vec<serde_json::Value>;
+
+/// The v2 providers' on-mount pass, run for the three prompt-state
+/// files on the STATE root: READ the file, parse + validate each line
+/// (v2 semantics above), and when anything survived, REWRITE the file
+/// with the retained entries (self-heal — corrupt lines dropped, caps
+/// enforced, frecency deduped). Returns `(file, entries)` for each
+/// file that was rewritten. Sources with no parseable entries are left
+/// untouched (v2's `if (lines.length > 0) writeText(...)`).
+#[must_use]
+pub fn heal_prompt_state_files(state_root: &Path) -> Vec<(&'static str, usize)> {
+    let files: &[(&'static str, PromptStateParser)] = &[
+        (FILE_PROMPT_HISTORY, parse_prompt_history),
+        (FILE_FRECENCY, parse_frecency),
+        (FILE_PROMPT_STASH, parse_prompt_stash),
+    ];
+    let mut healed = Vec::new();
+    for (name, parse) in files {
+        let path = state_root.join(name);
+        let Ok(text) = std::fs::read_to_string(&path) else { continue };
+        let entries = parse(&text);
+        if entries.is_empty() {
+            continue;
+        }
+        let body = encode_jsonl(&entries);
+        let temporary =
+            path.with_extension(format!("{}.{}.tmp", std::process::id(), write_counter()));
+        if std::fs::write(&temporary, body)
+            .and_then(|()| std::fs::rename(&temporary, &path))
+            .is_ok()
+        {
+            healed.push((*name, entries.len()));
+        } else {
+            let _ = std::fs::remove_file(&temporary);
+        }
+    }
+    healed
+}
+
 /// The one-time `local`→expected-channel migration (D-06), mirroring
 /// v2's v1→v2 idiom: source read-only, completion observable at the
 /// destination, idempotent. For each key: when the expected channel's
@@ -297,6 +438,13 @@ impl ChannelStorage {
     /// `local`→`stable` factory-default change carries the old tabs /
     /// session-list prefs over. Idempotent — the migrated file's
     /// presence latches it.
+    ///
+    /// CLI-K8: this is also the v2 prompt-state mount pass — the TUI
+    /// boot's storage open READS the migrated `prompt-history.jsonl` /
+    /// `frecency.jsonl` / `prompt-stash.jsonl` (v2's
+    /// PromptHistory/Frecency/PromptStash providers do this on mount)
+    /// and REWRITES them self-healed, so the migrated files are really
+    /// consumed at runtime instead of being migration-only artifacts.
     pub fn open_default_migrated() -> Result<Self, String> {
         let root = oc_util::global_roots::resolve().state;
         let channel = channel();
@@ -306,6 +454,12 @@ impl ChannelStorage {
                 "opencode tui: migrated {migrated} state file(s) from the legacy \
                  '{LEGACY_CHANNEL}' channel to '{channel}' (source kept)"
             );
+        }
+        let healed = heal_prompt_state_files(&root);
+        if !healed.is_empty() {
+            let summary =
+                healed.iter().map(|(name, count)| format!("{name}:{count}")).collect::<Vec<_>>();
+            eprintln!("opencode tui: prompt state loaded (retained {})", summary.join(" "));
         }
         Self::open(&root, &channel)
     }
