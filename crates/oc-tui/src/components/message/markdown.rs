@@ -73,6 +73,18 @@ pub struct MarkdownStyles {
     /// Fenced-code fallback base (filetypes with an oc-syntax grammar
     /// but no opentui parser — the R-01 registration set).
     code_block: Style,
+    /// `theme.text.base` — the LaTeX block's text color (the v2 plugin
+    /// passes `context.theme.text.base`, not the markdown token).
+    latex_text: Style,
+    /// `theme.text.muted` — the LaTeX block's box-work color.
+    latex_subdued: Style,
+    /// The mermaid diagram palette inputs (`theme.text.feedback.*`,
+    /// `theme.accent`) — the categorical accent steps are not exposed
+    /// by `ThemeStyles`, so `theme.accent` stands in for both.
+    mermaid_info: Color,
+    mermaid_success: Color,
+    mermaid_warning: Color,
+    mermaid_accent: Color,
     /// The capture → style resolver (upstream `SyntaxStyle`).
     pub syntax: SyntaxStyle,
     /// The oc-syntax resolver (the R-01 fenced-code fallback line).
@@ -126,6 +138,12 @@ impl MarkdownStyles {
             quote_border: base.fg(md.block_quote),
             rule: base.fg(md.horizontal_rule),
             code_block: base.fg(md.code_block),
+            latex_text: theme.text,
+            latex_subdued: theme.text_muted,
+            mermaid_info: theme.info,
+            mermaid_success: theme.success,
+            mermaid_warning: theme.warning,
+            mermaid_accent: theme.accent,
             syntax: SyntaxStyle::from_styles(styles.clone()),
             syntax_defs: theme.syntax.clone(),
             syntax_hash: {
@@ -202,8 +220,30 @@ fn render_spec(
             // pre-swap renderer; everything else (the opentui
             // markdown/ts/js/zig family, unknown filetypes) renders
             // through the pipeline's code document.
+            //
+            // SURF-LATEX-MERMAID: v2's unconditional builtins register
+            // two more renderer families BEFORE any highlighter
+            // (`packages/tui/src/plugin/builtins.ts`): `latex`/`math`
+            // fences render through the unicode-math layout, `mermaid`
+            // fences through the ASCII diagram renderer. Both fall back
+            // to the default code render when the content does not
+            // parse (upstream returns the defaultRender()).
             let content = &options.content;
             let filetype = options.filetype.as_deref();
+            if matches!(filetype, Some("latex" | "math")) {
+                if let Some(rows) = render_latex_block(content, styles) {
+                    lines.extend(rows);
+                    push_margins(*margin_bottom, lines);
+                    return;
+                }
+            }
+            if matches!(filetype, Some("mermaid")) {
+                if let Some(rows) = render_mermaid_block(content, styles) {
+                    lines.extend(rows);
+                    push_margins(*margin_bottom, lines);
+                    return;
+                }
+            }
             let fallback = filetype.and_then(|ft| oc_syntax::highlight(content, ft));
             if let Some(block) = fallback {
                 for (index, line) in content.split('\n').enumerate() {
@@ -462,6 +502,158 @@ fn styled_cached(options: &CodeOptions, styles: &MarkdownStyles) -> StyledText {
         guard.insert(key, rendered.clone());
     }
     rendered
+}
+
+/// SURF-LATEX-MERMAID: the `latex`/`math` code-block renderer
+/// (`packages/latex/src/markdown.ts`, `createLatexCodeBlockRenderer`).
+///
+/// Strict-mode parse + display layout; on any Latex error the block
+/// falls back to the default code render (upstream returns
+/// `render.defaultRender()`). Colors: `text`/`subdued` =
+/// `theme.text.base`/`theme.text.muted`; box-drawing radicals,
+/// stretch delimiters and rules paint subdued, relation glyphs bold.
+fn render_latex_block(content: &str, styles: &MarkdownStyles) -> Option<Vec<MarkdownLine>> {
+    let options = crate::render::latex::RenderLatexOptions {
+        display_mode: Some(true),
+        parse: crate::render::latex::ParseDefaults { strict: true },
+        ..Default::default()
+    };
+    let layout = crate::render::latex::render_latex(content, &options).ok()?;
+
+    // marginTop: 1 (the v2 renderable's top margin).
+    let mut rows = vec![MarkdownLine(Vec::new())];
+    for (index, row) in layout.cells.iter().enumerate() {
+        let mut spans: Vec<StyledSpan> = Vec::new();
+        for (column, cell) in row.iter().enumerate() {
+            // Wide glyphs already occupy the following cell; no extra
+            // space is emitted for the continuation column.
+            if column > 0
+                && row.get(column - 1).is_some_and(|previous| {
+                    previous
+                        .as_ref()
+                        .is_some_and(|cell| crate::render::latex::glyph_width(&cell.char) > 1)
+                })
+            {
+                continue;
+            }
+            let char = cell.as_ref().map_or(" ", |cell| cell.char.as_str());
+            let subdued = is_subdued_math_glyph(char);
+            let bold = cell.as_ref().is_some_and(|cell| {
+                cell.style.as_ref().is_some_and(|style| style.bold) || is_bold_math_glyph(char)
+            });
+            let italic = cell
+                .as_ref()
+                .is_some_and(|cell| cell.style.as_ref().is_some_and(|style| style.italic));
+            let dim = cell
+                .as_ref()
+                .is_some_and(|cell| cell.style.as_ref().is_some_and(|style| style.dim));
+            let mut style = if subdued { styles.latex_subdued } else { styles.latex_text };
+            let mut modifier = Modifier::empty();
+            if bold {
+                modifier |= Modifier::BOLD;
+            }
+            if italic {
+                modifier |= Modifier::ITALIC;
+            }
+            if dim {
+                modifier |= Modifier::DIM;
+            }
+            style = style.add_modifier(modifier);
+            spans.push(StyledSpan { text: char.to_string(), style, link: None });
+        }
+        // Trailing empty cells are invisible width fill in the v2
+        // renderable (`width: 100%`); the canonical layout surface
+        // (MathLayout::toString) trims them — so do we.
+        while spans.last().is_some_and(|span| span.text == " ") {
+            spans.pop();
+        }
+        rows.push(MarkdownLine(spans));
+        // The "\n" chunk between rows is the row boundary itself; the
+        // trailing-row check only guards the last row.
+        let _ = index;
+        let _ = layout.height;
+    }
+    Some(rows)
+}
+
+/// `/^[()[\]{}|\u221a\u239b-\u23ad\u2500-\u257f]$/u` — the subdued
+/// box-work glyph class.
+fn is_subdued_math_glyph(char: &str) -> bool {
+    let mut chars = char.chars();
+    let Some(first) = chars.next() else { return false };
+    if chars.next().is_some() {
+        return false;
+    }
+    matches!(first, '(' | ')' | '[' | ']' | '{' | '}' | '|' | '√')
+        || ('\u{239b}'..='\u{23ad}').contains(&first)
+        || ('\u{2500}'..='\u{257f}').contains(&first)
+}
+
+/// `/^[=<>\u2260\u2261\u2264\u2265\u2248]$/u` — always-bold relations.
+fn is_bold_math_glyph(char: &str) -> bool {
+    let mut chars = char.chars();
+    let Some(first) = chars.next() else { return false };
+    if chars.next().is_some() {
+        return false;
+    }
+    matches!(first, '=' | '<' | '>')
+        || matches!(first, '\u{2260}' | '\u{2261}' | '\u{2264}' | '\u{2265}' | '\u{2248}')
+}
+
+/// SURF-LATEX-MERMAID: the `mermaid` code-block renderer
+/// (`packages/merman/src/markdown.ts`, `createMermaidCodeBlockRenderer`).
+///
+/// Detect → prepare → styled rows; unknown/unsupported diagrams and
+/// syntax errors return None (upstream returns `undefined`, keeping
+/// the default code render). The palette mirrors
+/// `resolveOpenCodeDiagramPalette` with the theme fields
+/// `ThemeStyles` exposes (the categorical accent steps approximate to
+/// `theme.accent` — the resolved categorical table is not exposed by
+/// `ThemeStyles`).
+fn render_mermaid_block(content: &str, styles: &MarkdownStyles) -> Option<Vec<MarkdownLine>> {
+    let to_rgba = |color: Color| match color {
+        Color::Rgb(r, g, b) => crate::render::mermaid::core::color::Rgba::from_ints(r, g, b, 255),
+        _ => crate::render::mermaid::core::color::Rgba::from_ints(0, 0, 0, 255),
+    };
+    let accent = to_rgba(styles.mermaid_accent);
+    let palette = crate::render::mermaid::palette::create_open_code_diagram_palette(
+        &crate::render::mermaid::palette::OpenCodeDiagramPaletteInput {
+            text: to_rgba(styles.latex_text.fg?),
+            subdued: to_rgba(styles.latex_subdued.fg?),
+            info: to_rgba(styles.mermaid_info),
+            success: to_rgba(styles.mermaid_success),
+            warning: to_rgba(styles.mermaid_warning),
+            background: to_rgba(styles.background.bg.unwrap_or(Color::Reset)),
+            accent_soft: accent,
+            accent_clear: accent,
+        },
+    );
+    let options = crate::render::mermaid::MermaidRenderOptions::default();
+    let diagram = crate::render::mermaid::render_mermaid_block(content, &palette, &options)?;
+
+    // marginTop: 1 (the v2 renderable's top margin).
+    let mut rows = vec![MarkdownLine(Vec::new())];
+    for line in diagram.rows {
+        let spans: Vec<StyledSpan> = line
+            .into_iter()
+            .map(|span| {
+                let mut style = Style::new();
+                if let Some(fg) = span.fg.map(|fg| Color::Rgb(fg.r, fg.g, fg.b)) {
+                    style = style.fg(fg);
+                }
+                if let Some(bg) = span.bg.map(|bg| Color::Rgb(bg.r, bg.g, bg.b)) {
+                    style = style.bg(bg);
+                }
+                let mut modifier = Modifier::empty();
+                if span.attributes & 0x04 != 0 {
+                    modifier |= Modifier::ITALIC;
+                }
+                StyledSpan { text: span.text, style: style.add_modifier(modifier), link: None }
+            })
+            .collect();
+        rows.push(MarkdownLine(spans));
+    }
+    Some(rows)
 }
 
 fn ratatui_color(rgba: opentui_core::Rgba) -> Option<Color> {
