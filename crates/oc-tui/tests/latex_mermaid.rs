@@ -68,6 +68,22 @@ fn renders_mermaid_sequence_code_block_as_ascii_diagram() {
 }
 
 #[test]
+fn renders_mermaid_state_code_block_as_ascii_diagram() {
+    let rows = rendered(
+        "```mermaid\nstateDiagram-v2\n  direction LR\n  [*] --> Idle\n  Idle --> Loading: submit\n  Loading --> Success: done\n  Success --> [*]\n```",
+        40,
+    );
+    let text = rows.join("\n");
+    assert!(text.contains("Idle"), "state label missing: {text}");
+    assert!(text.contains("submit"), "transition label missing: {text}");
+    assert!(text.contains('●'), "start marker missing: {text}");
+    assert!(text.contains('◎'), "end marker missing: {text}");
+    assert!(text.contains('▶'), "arrowhead missing: {text}");
+    // The raw source must NOT render.
+    assert!(!text.contains("stateDiagram-v2"), "raw source leaked: {text}");
+}
+
+#[test]
 fn unknown_mermaid_kind_falls_back_to_the_plain_code_block() {
     // gitGraph is detected by upstream but not ported in this lane —
     // the fence renders through the default code path.
