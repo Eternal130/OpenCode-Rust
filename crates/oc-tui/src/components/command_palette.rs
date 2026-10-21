@@ -2770,6 +2770,13 @@ impl CommandDispatcher for StoreDispatcher {
                 store.clear_dialogs();
                 Dispatch::Handled
             }
+            // TUI-29 — `app.console` (app.tsx:1110-1118):
+            // `renderer.console.toggle()` + `dialog.clear()`.
+            "app.console" => {
+                store.console_toggle();
+                store.clear_dialogs();
+                Dispatch::Handled
+            }
             // TUI-18 — `terminal.title.toggle` (app.tsx:1141-1159,
             // palette: undefined — the settings row carries the
             // surface): flip `terminal.title`; the DISABLED arm clears
