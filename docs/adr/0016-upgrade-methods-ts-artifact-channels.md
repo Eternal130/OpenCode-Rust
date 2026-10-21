@@ -1,0 +1,13 @@
+# ADR-0016: upgrade 方法族与更新通道绑定工件流 — 不驱动安装 TS 工件的包管理器，不消费 opencode.ai TS release feed
+- 状态：accepted
+- 日期：2026-10-21
+- 上游版本：2.0.24 (ref e7a34f09bf)
+- 背景：ledger CLI-K2（07:K-2 / 07:F-5）。v2.0.24 的 `opencode upgrade` 有七个方法（`packages/cli/src/services/updater.ts:14`）：curl 安装器、npm/pnpm/bun/yarn/vp 包管理器、brew。逐项核查后，非 curl 方法的"v2 语义"就是**用对应渠道安装 TS 工件**：`updater.ts:375-395` 的各方法命令（`npm install -g` 等）安装的 npm 包是 TS release；`updater.ts:258-266` 的 `latest` 来自 `https://opencode.ai/update/api/...`，该 API 服务 TS release 流；Homebrew `opencode` formula 亦是 TS release。本端口是独立 Rust 工件流（自有 GitHub releases），驱动这些命令或消费该 feed 等于把用户从本端口切换到上游 TS 产品，且违反 2.0.24 pin 纪律（不能拿新 TS 版本当"升级"目标）。方法名表面并未收缩：rust `crates/oc-cli/src/services/updater.rs:46-50` 接受全部 7 个 v2 方法名 + 2 个扩展（`local-file`/`github`）。
+- 决定：① npm/pnpm/bun/yarn/vp/brew 六个方法名继续接受，但只输出明确指引（告知用户自行驱动对应包管理器），不代执行 —— 与 ADR-0012 已固化的"npm/AUR/Homebrew 分发渠道族属发布管线而非行为 parity"同一判据；② `latest`/release channel 永远查端口自有 GitHub release feed（`update_feed` 服务），curl 方法以安装器语义落 `~/.opencode/bin/opencode-rust`，绝不请求 opencode.ai update API；③ `local-file`/`github` 两个扩展方法保留（工件正确的通道超集）；④ detect_method 不做 npm 家族全局包探测（本端口不以该形态分发，探测是死代码）。若本端口未来正式经 npm/brew 分发，须届时实现对应执行语义并复审本 ADR。
+- 后果：代价是 `--method npm` 等六方法不执行升级命令（用户得到指引而非自动升级）。收益：更新通道工件正确 —— "upgrade" 永远指本端口的 release，不会静默把用户换成 TS 产品。本 ADR **不**结案 CLI-F7（--method 解析/na 路径）、CLI-F14（channel 值来源：构建期注入 vs 运行时 env）、CLI-F10（版本不一致重启横幅）—— 那些是与 feed 选择正交的行为细节，仍由各自条目跟踪。
+- 证据（path:line / 测试）：
+  - ref `packages/cli/src/services/updater.ts:14`（7 方法）`+ :216-232`（npm 家族探测）`+ :258-266`（opencode.ai update API = TS release 元数据）`+ :375-395`（各方法安装命令 = 安装 TS 工件）
+  - rust `crates/oc-cli/src/services/updater.rs:46-50`（ALL_METHODS = v2 7 + local-file/github 超集）`+ :6-17`（channel 决策头注）`+ :76-91`（detect_method 收缩 + 理由）`+ :97-105`（拒绝猜测 opencode.ai）`+ :136-253`（upgrade 语义：github feed / local-file / curl 安装器；包管理器方法给指引）
+  - `docs/adr/0012-no-npm-sdk-package.md`（渠道族判据：npm/AUR/Homebrew 属发布管线）；`docs/adr/0014-ts-monorepo-nonproduct-artifacts.md` 第 7 条（GitHub Action 同族）
+- 覆盖 ledger ids：CLI-K2
+- 复审日期：release 前；若端口采用 npm/brew 分发渠道即时重评

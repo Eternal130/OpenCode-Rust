@@ -1,0 +1,17 @@
+# ADR-0015: plugin-browser（browser 工具族）不移植 — desktop 伴侣件，headless 下 v2 自身不可用
+- 状态：accepted
+- 日期：2026-10-21
+- 上游版本：2.0.24 (ref e7a34f09bf)
+- 背景：ledger SURF-BROWSER（10:P0-browser）。v2.0.24 的 `packages/plugin-browser`（`@opencode/plugin-browser`）被 `packages/core/src/plugin/internal.ts:89,253` 无条件注册，向工具 registry 添加 `browser.*` 命名空间（tabs/files/screenshot 等，`src/tools.ts`）。但该插件自述为 "OpenCode's desktop browser plugin"（`package.json:6`），其运行模型是：核心侧只维护附件表；真正的浏览器宿主在桌面端 —— `packages/desktop/package.json:39` 依赖 `@opencode/gui-extensions`，后者（`package.json:27`）依赖 `@opencode/plugin-browser` 并在 `src/browser/chromium.ts` 实现 chromium 宿主，经插件 RPC `Browser.Definition.attach` 附着。无附件时插件给**每个 agent** 压入 `{action:"browser", resource:"*", effect:"deny"}`（`src/connection.ts:23-27`），工具描述明言 "Desktop browser tools"（`src/tools.ts:42-50`）、隧道注释明言 "One instance belongs to one desktop attachment"（`src/tunnel.ts:8-9`）。desktop/gui-extensions 已由 ADR-0004 固定为 out-of-scope。
+- 决定：不移植 plugin-browser（既不注册 browser.* 工具命名空间，也不实现 attach RPC）。依据：① 功能半体（浏览器宿主）唯一实现在 desktop/gui-extensions，属 ADR-0004 排除范围；② 在本端口的产品面（CLI/server/TUI）内，v2.0.24 自身的可观察行为就是 deny-by-default + 不可附着 = 无用户可见能力，不存在我们缺失的行为契约；③ 判据同 ADR-0014（v2 自身不要求我们缺失的行为）。这是 scope + 依赖决策，不是工作量取舍。
+- 后果：代价是 `browser.*` 工具族与 `browser` permission action 在本端口永久缺位；插件 RPC 的 browser-attach 扩展点不提供 —— 理论上第三方插件进程可实现该协议附着无桌面浏览器，若出现真实消费者（如 headless browser host）个案重评。收益：不携带一段在无桌面环境下永远 deny 的死工具面。若未来 desktop 入范围（推翻 ADR-0004），本 ADR 随之重开。
+- 证据（path:line / 测试）：
+  - ref `packages/plugin-browser/package.json:6`（"desktop browser plugin"）
+  - ref `packages/core/src/plugin/internal.ts:89,253`（无条件注册）
+  - ref `packages/plugin-browser/src/connection.ts:23-27`（全 agent deny-by-default；attach 才 grant）`+ :84-115`（唯一附着路径 = 插件 RPC）
+  - ref `packages/plugin-browser/src/tools.ts:42-50,70-80`（"Desktop browser tools"/desktop 兼容性报错）；`src/tunnel.ts:8-9`（desktop attachment）
+  - ref `packages/desktop/package.json:39` + `packages/gui-extensions/package.json:27` + `packages/gui-extensions/src/browser/chromium.ts`（宿主链，ADR-0004 out-of-scope）
+  - rust `crates/oc-core/src/tool/`（无 browser 工具；`crates/` 全 grep 无 `browser` permission action 对应物）
+  - `docs/adr/0004-scope-desktop-web.md`、`docs/adr/0014-ts-monorepo-nonproduct-artifacts.md`（判据）
+- 覆盖 ledger ids：SURF-BROWSER
+- 复审日期：release 前；若用户要求桌面或 headless browser host 即时重评
