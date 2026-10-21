@@ -25,7 +25,8 @@ use serde_json::Value;
 use crate::attention::AttentionState;
 use crate::clipboard::ClipboardSink;
 use crate::components::composer::{
-    Composer, PromptDraft, PromptHistory, PromptSink, RecordingPromptSink, SubmittedPrompt,
+    autocomplete, Composer, PromptDraft, PromptHistory, PromptSink, RecordingPromptSink,
+    SubmittedPrompt,
 };
 use crate::components::dialog_select::SelectState;
 use crate::components::footer::{FooterMachine, PromptRoute};
@@ -1435,6 +1436,10 @@ pub struct Store {
     /// TUI-TD06 — the sessions whose next render resolves a saved
     /// anchor (v2's afterLayout restore, index.tsx:548-595).
     pending_scroll_restore: std::cell::RefCell<std::collections::HashSet<String>>,
+    /// TUI-28 — the directory recents (`useDirectoryRecents`' storage
+    /// doc `directory-recents`, prompt/directory-recents.ts): the
+    /// `/cd` completion's recent rows + their ctrl+d deletes.
+    directory_recents: std::cell::RefCell<autocomplete::DirectoryRecents>,
     /// NEW-S1a: the live caret's screen cell for the TERMINAL cursor
     /// (`surface.set_cursor` at the draw seam — v2's caret is the
     /// hardware cursor, never a cell-painted block). Set during the
@@ -3106,6 +3111,7 @@ impl Store {
             location_error: std::cell::RefCell::new(None),
             scroll_anchors: std::cell::RefCell::new(std::collections::HashMap::new()),
             pending_scroll_restore: std::cell::RefCell::new(std::collections::HashSet::new()),
+            directory_recents: std::cell::RefCell::new(autocomplete::DirectoryRecents::default()),
             caret_cell: Cell::new(None),
             connection_since: Cell::new(0),
             startup_state: RefCell::new(StartupLoadingState::default()),
@@ -5692,6 +5698,36 @@ impl Store {
     #[must_use]
     pub fn scroll_anchor(&self, session_id: &str) -> Option<ScrollAnchor> {
         self.scroll_anchors.borrow().get(session_id).cloned()
+    }
+
+    // -- TUI-28: the `/cd` directory recents --------------------------
+
+    /// `directoryRecents.touch(projectID, directory)` (a `/cd` change
+    /// + location switches stamp `Date.now()`).
+    pub fn directory_recent_touch(&self, project_id: &str, directory: &str) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_millis() as u64);
+        self.directory_recents
+            .borrow_mut()
+            .touch(project_id, directory, now);
+    }
+
+    /// `directoryRecents.remove(projectID, directory)` (the ctrl+d
+    /// destructive delete's `run`).
+    pub fn directory_recent_remove(&self, project_id: &str, directory: &str) {
+        self.directory_recents.borrow_mut().remove(project_id, directory);
+    }
+
+    /// The recents as the composer's directory-autocomplete options
+    /// (`directoryOptions`, index.tsx:1962-1985 — empty-query rows
+    /// only; the caller opens them when the `/cd ` query is empty).
+    #[must_use]
+    pub fn directory_recents_options(&self, project_id: &str) -> Vec<autocomplete::AutocompleteOption>
+    {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let recents = self.directory_recents.borrow().list(project_id);
+        autocomplete::directory_recents_options(&recents, &home)
     }
 
     /// Stage the restore for a session re-entered with a saved anchor

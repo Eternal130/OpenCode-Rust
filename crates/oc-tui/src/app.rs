@@ -2391,6 +2391,29 @@ impl App {
                 let mut composer = self.store.composer(&key);
                 let outcome = composer.handle_key(&key_event);
                 if outcome != KeyOutcome::Ignored {
+                    // TUI-28 — the directory autocomplete's refresh +
+                    // the destructive requests: the recents live in
+                    // the store; the composer's popup re-attaches the
+                    // rows after every edit/delete (an EMPTY query —
+                    // a typed path shows nothing, index.tsx:1962).
+                    if let Some(query) = composer.autocomplete.directory_query() {
+                        let project = self.store.worktree_dialog().project_id;
+                        for id in std::mem::take(&mut composer.destructive_requests) {
+                            self.store.directory_recent_remove(&project, &id);
+                        }
+                        let options = if query.is_empty() {
+                            self.store.directory_recents_options(&project)
+                        } else {
+                            Vec::new()
+                        };
+                        composer.autocomplete.options = options;
+                        composer.autocomplete.filtered_len = composer.autocomplete.options.len();
+                        if composer.autocomplete.selected
+                            >= composer.autocomplete.filtered_len
+                        {
+                            composer.autocomplete.selected = 0;
+                        }
+                    }
                     self.store.set_composer(&key, &composer);
                     self.handle_composer_outcome(&key, outcome);
                     self.keymap.clear_pending();
@@ -3164,6 +3187,7 @@ fn composer_key(stroke: &KeyStroke) -> Option<ComposerKey> {
             "c" => return Some(ComposerKey::CtrlC),
             "v" => return Some(ComposerKey::CtrlV),
             "j" => return Some(ComposerKey::CtrlJ),
+            "d" => return Some(ComposerKey::CtrlD),
             _ => return None,
         }
     } else if stroke.alt {

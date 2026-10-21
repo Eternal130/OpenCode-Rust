@@ -638,6 +638,81 @@ fn scroll_anchor_restore() {
     assert!(store.scroll_anchor("s1").is_none(), "the dead anchor cleared");
 }
 
+/// TUI-28 — the `/cd` directory-recents completion + the ctrl+d
+/// destructive delete (prompt/index.tsx:1958-1985 +
+/// prompt/directory-recents.ts): typing `/cd ` lists the project's
+/// recent directories (description `recent`, home-abbreviated
+/// display), and ctrl+d on a recent is a TWO-PRESS delete — the
+/// first press arms the confirm ("Press ctrl+d to confirm"), the
+/// second removes the entry and clamps the selection.
+#[test]
+fn recents_ctrl_prompt_index() {
+    use oc_tui::components::composer::autocomplete::{
+        directory_recent_value, directory_recents_options, AutocompleteState, DirectoryRecents,
+        Mode,
+    };
+
+    // `useDirectoryRecents` (directory-recents.ts): touch dedupes +
+    // stamps usedAt (most recent first), caps at 10; remove drops.
+    let mut recents = DirectoryRecents::default();
+    recents.touch("p1", "/w/one", 100);
+    recents.touch("p1", "/w/two", 300);
+    recents.touch("p1", "/w/one", 200); // re-touch reorders + dedupes
+    recents.touch("p2", "/w/other", 50); // per-project
+    let list = recents.list("p1");
+    assert_eq!(list.len(), 2, "the re-touch deduped (no duplicate)");
+    assert_eq!(list[0].directory, "/w/two", "usedAt-descending (300 > 200)");
+    assert_eq!(recents.list("p2").len(), 1, "projects stay separate");
+    recents.remove("p1", "/w/two");
+    assert!(!recents.list("p1").iter().any(|item| item.directory == "/w/two"));
+    recents.remove("p1", "/w/one");
+    // The 10-entry cap.
+    for index in 0..12 {
+        recents.touch("p1", &format!("/w/fill{index}"), 400 + index);
+    }
+    let list = recents.list("p1");
+    assert_eq!(list.len(), 10, "the 10-entry cap");
+    assert_eq!(list[0].directory, "/w/fill11", "most recent first");
+
+    // `directoryRecentValue` (directory-completion.ts:92-98): the
+    // home-relative display.
+    assert_eq!(directory_recent_value("/home/u", "/home/u"), "~");
+    assert_eq!(directory_recent_value("/home/u/work/api", "/home/u"), "~/work/api");
+    assert_eq!(directory_recent_value("/elsewhere", "/home/u"), "/elsewhere");
+
+    // The popup: `/cd ` (empty query) opens the directory mode over
+    // the recents.
+    let mut state = AutocompleteState::default();
+    state.on_input("/cd ", 4);
+    assert_eq!(state.visible, Some(Mode::Directory), "the argument slash opens the directory list");
+    let options = directory_recents_options(&recents.list("p1"), "/home/u");
+    assert!(!options.is_empty());
+    assert!(options.iter().all(|option| option.description.as_deref() == Some("recent")));
+    assert!(options.iter().all(|option| option.is_directory));
+    assert!(options
+        .iter()
+        .all(|option| option.destructive.as_ref().is_some_and(|action| action.confirm
+            == "Press ctrl+d to confirm")));
+    let state = state.with_options(options);
+
+    // ctrl+d is the two-press delete (autocomplete.tsx:629-638): the
+    // first press arms the confirm, the second RUNS the removal (the
+    // entry's absolute directory) and clamps the selection.
+    let mut state = state;
+    assert_eq!(state.confirming(), None);
+    assert_eq!(state.trigger_destructive(), None, "first press only arms");
+    assert_eq!(state.trigger_destructive(), Some("/w/fill11".to_owned()), "second press removes");
+    assert_eq!(state.confirming(), None, "the confirm cleared");
+    assert_eq!(state.selected, 0);
+
+    // A non-empty query hides the recents (index.tsx:1962: `if
+    // (query !== "") return []` — the live file list is the async
+    // half, not ported).
+    state.on_input("/cd /us", 7);
+    assert_eq!(state.visible, Some(Mode::Directory));
+    assert_eq!(state.options.len(), 0, "no recents under a query");
+}
+
 /// TUI-10 (the diff half): a working-tree image file renders the
 /// inline `DiffViewerImage` — the "Working tree preview" label, the
 /// decoded `WxH` size row, the blocks pixels — and the mount records

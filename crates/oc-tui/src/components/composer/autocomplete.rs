@@ -18,6 +18,11 @@ pub enum Mode {
     Command,
     /// `@` — files, agents, skills, references.
     Reference,
+    /// TUI-28 — the `/cd` argument trigger
+    /// (`argumentAutocomplete: "directory"`, index.tsx:1957): the
+    /// directory-recents list (empty query only — the live file
+    /// listing is the async half, not ported).
+    Directory,
 }
 
 /// One slash command (`commands()`): display `/name`, description =
@@ -34,11 +39,38 @@ impl SlashEntry {
     }
 }
 
-/// One rendered popup option.
+/// TUI-28 — a row's two-press destructive action
+/// (autocomplete.tsx:46: `{id, confirm, run}`): the recents rows' ctrl+d
+/// delete.
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Destructive {
+    /// The action's identity (the absolute directory) — the confirm
+    /// state's key.
+    pub id: String,
+    /// The confirming row's replacement label ("Press ctrl+d to
+    /// confirm").
+    pub confirm: &'static str,
+}
+
+/// One rendered popup option.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AutocompleteOption {
     pub display: String,
     pub description: Option<String>,
+    /// TUI-28 — the directory rows (`isDirectory`, autocomplete.tsx's
+    /// complete/expand flow).
+    pub is_directory: bool,
+    /// The ABSOLUTE directory behind a recent row (the delete's id).
+    pub absolute: Option<String>,
+    /// TUI-28 — the two-press delete (the recents rows).
+    pub destructive: Option<Destructive>,
+}
+
+impl AutocompleteOption {
+    /// A plain slash-command row (display + description).
+    pub fn command(display: impl Into<String>, description: Option<String>) -> Self {
+        Self { display: display.into(), description, ..Self::default() }
+    }
 }
 
 /// The registry the filter ranks (`keymapCommands()` — every command
@@ -245,6 +277,10 @@ pub struct AutocompleteState {
     /// The option count the selection wrap navigates (kept in sync by
     /// [`Self::with_options`]).
     pub filtered_len: usize,
+    /// TUI-28 — the armed destructive confirm (`confirming`,
+    /// autocomplete.tsx:629-638): the ctrl+d id whose SECOND press
+    /// runs the delete.
+    confirming: Option<String>,
     last_query: Option<String>,
 }
 
@@ -269,7 +305,9 @@ impl AutocompleteState {
     }
 
     /// `moveSelection` with the wrap policy (the reference layer's
-    /// prev/next commands).
+    /// prev/next commands). Moving off a row clears the armed
+    /// destructive confirm (`setConfirming(undefined)`,
+    /// autocomplete.tsx:613).
     pub fn move_selection(&mut self, delta: i8) {
         let count = self.filtered_len.max(self.options.len());
         if count == 0 {
@@ -277,6 +315,42 @@ impl AutocompleteState {
         }
         let index = self.selected.cast_signed() + isize::from(delta);
         self.selected = index.rem_euclid(count.cast_signed()).max(0).cast_unsigned();
+        self.confirming = None;
+    }
+
+    /// The armed destructive confirm (the confirming row renders the
+    /// action's `confirm` label instead of its display).
+    #[must_use]
+    pub fn confirming(&self) -> Option<&str> {
+        self.confirming.as_deref()
+    }
+
+    /// TUI-28 — the directory mode's live query (the caller attaches
+    /// the recents rows only while it is EMPTY — index.tsx:1962).
+    #[must_use]
+    pub fn directory_query(&self) -> Option<&str> {
+        if self.visible == Some(Mode::Directory) {
+            Some(self.last_query.as_deref().unwrap_or(""))
+        } else {
+            None
+        }
+    }
+
+    /// `triggerDestructive` (autocomplete.tsx:629-638): the FIRST
+    /// ctrl+d arms the confirm (returns `None` — nothing ran); the
+    /// SECOND runs the action — returns the removed entry's id, clamps
+    /// the selection over the shortened list, and clears the confirm.
+    /// `None` when the selected row carries no action.
+    pub fn trigger_destructive(&mut self) -> Option<String> {
+        let action = self.selected_option().and_then(|option| option.destructive.clone())?;
+        if self.confirming.as_deref() != Some(action.id.as_str()) {
+            self.confirming = Some(action.id.clone());
+            return None;
+        }
+        let count = self.filtered_len.max(self.options.len());
+        self.selected = self.selected.min(count.saturating_sub(2));
+        self.confirming = None;
+        Some(action.id)
     }
 
     #[must_use]
@@ -290,6 +364,23 @@ impl AutocompleteState {
     /// filtered options reattach on every edit (the live popup and
     /// `accept_autocomplete` read them without further plumbing).
     pub fn on_input(&mut self, text: &str, caret: usize) {
+        // TUI-28 — the `/cd` argument trigger
+        // (`slashArgumentAutocomplete`, directory-completion.ts:42-65):
+        // the head + a trailing space with the caret after it opens
+        // the DIRECTORY list (the recents ride an empty query).
+        if let Some((index, query)) = directory_trigger(text, caret) {
+            let query_changed = self.last_query.as_deref() != Some(query.as_str());
+            self.visible = Some(Mode::Directory);
+            self.trigger_index = index;
+            if query_changed {
+                self.selected = 0;
+                self.confirming = None;
+                self.last_query = Some(query);
+            }
+            self.options = Vec::new();
+            self.filtered_len = 0;
+            return;
+        }
         let chars: Vec<char> = text.chars().collect();
         let trigger = trigger_for(text, caret);
         match (self.visible, trigger) {
@@ -307,6 +398,7 @@ impl AutocompleteState {
                         // The filter effect resets the selection whenever
                         // the options change.
                         self.selected = 0;
+                        self.confirming = None;
                         self.last_query = Some(query);
                     }
                 }
@@ -315,6 +407,7 @@ impl AutocompleteState {
                 self.visible = Some(mode);
                 self.trigger_index = index;
                 self.selected = 0;
+                self.confirming = None;
                 self.last_query = Some(query_between(text, index, caret));
             }
             _ => self.close(),
@@ -387,6 +480,129 @@ pub fn query_between(text: &str, trigger: usize, caret: usize) -> String {
     chars[trigger + 1..end].iter().collect()
 }
 
+/// TUI-28 — `slashArgumentAutocomplete` (directory-completion.ts:
+/// 42-65): the draft's `/cd` head + at least one trailing char with
+/// the caret after it (v2: `head.end !== beforeCursor.length` — the
+/// cursor sits past the head's separator). Returns the trigger index
+/// (right after the head, where the popup anchors) + the query (the
+/// text between the head's separator and the caret).
+#[must_use]
+pub fn directory_trigger(text: &str, caret: usize) -> Option<(usize, String)> {
+    let chars: Vec<char> = text.chars().collect();
+    let end = caret.min(chars.len());
+    let name: String = chars.iter().take(end).collect();
+    let name = name.strip_prefix('/')?;
+    let (head_name, rest) = match name.find(char::is_whitespace) {
+        Some(at) => (&name[..at], &name[at..]),
+        None => return None, // no trailing separator: the command popup owns it
+    };
+    // `argumentAutocomplete: (command) => command.id === "session.cd"
+    // ? "directory" : undefined` (index.tsx:1957): ONLY `/cd` carries
+    // the directory list (`/rename`'s argument popup is undefined).
+    if head_name != "cd" {
+        return None;
+    }
+    let index = 1 + head_name.chars().count(); // right after `/cd`
+    Some((index, rest[1..].to_owned()))
+}
+
+/// TUI-28 — one recent-directory entry (`RecentDirectory`,
+/// directory-recents.ts:3-7).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecentDirectory {
+    pub directory: String,
+    /// `usedAt` (ms epoch) — the list's descending sort key.
+    pub used_at: u64,
+}
+
+/// TUI-28 — `useDirectoryRecents` (prompt/directory-recents.ts): the
+/// per-project recent-directories store (`useStorage().store(
+/// "directory-recents")` shape): `touch` upserts at the head with a
+/// fresh `usedAt` (dedup + the 10-entry cap), `remove` drops, `list`
+/// returns `usedAt`-descending.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DirectoryRecents {
+    projects: std::collections::HashMap<String, Vec<RecentDirectory>>,
+}
+
+impl DirectoryRecents {
+    /// `list(projectID)`: `usedAt`-descending.
+    #[must_use]
+    pub fn list(&self, project_id: &str) -> Vec<RecentDirectory> {
+        let mut entries = self.projects.get(project_id).cloned().unwrap_or_default();
+        entries.sort_by(|a, b| b.used_at.cmp(&a.used_at));
+        entries
+    }
+
+    /// `touch(projectID, directory)` with an explicit clock (the
+    /// production caller stamps `Date.now()`): head-insert with the
+    /// old entry dropped, capped at 10.
+    pub fn touch(&mut self, project_id: &str, directory: &str, used_at: u64) {
+        let entries = self.projects.entry(project_id.to_owned()).or_default();
+        entries.retain(|item| item.directory != directory);
+        entries.insert(
+            0,
+            RecentDirectory { directory: directory.to_owned(), used_at },
+        );
+        entries.truncate(10);
+    }
+
+    /// `remove(projectID, directory)`.
+    pub fn remove(&mut self, project_id: &str, directory: &str) {
+        if let Some(entries) = self.projects.get_mut(project_id) {
+            entries.retain(|item| item.directory != directory);
+        }
+    }
+}
+
+/// TUI-28 — `directoryRecentValue` (directory-completion.ts:92-98):
+/// the `~`-relative display (empty relative = `~`, a clean relative
+/// beneath home = `~/…`, anything else absolute).
+#[must_use]
+pub fn directory_recent_value(directory: &str, home: &str) -> String {
+    if home.is_empty() || !directory.starts_with(home) {
+        return directory.to_owned();
+    }
+    let relative = &directory[home.len()..];
+    if relative.is_empty() {
+        return "~".to_owned();
+    }
+    let relative = relative.strip_prefix('/').unwrap_or(relative);
+    if relative.starts_with("..") || relative.is_empty() {
+        return directory.to_owned();
+    }
+    format!("~/{relative}")
+}
+
+/// TUI-28 — the recents as popup options (`directoryOptions`,
+/// index.tsx:1962-1985): ONE row per recent — the `~`-relative
+/// display, the `recent` description, the directory flags, and the
+/// two-press destructive delete (`run: directoryRecents.remove`).
+/// Empty-query only (the caller checks; the live file-list half is
+/// the async source, not ported).
+#[must_use]
+pub fn directory_recents_options(
+    recents: &[RecentDirectory],
+    home: &str,
+) -> Vec<AutocompleteOption> {
+    recents
+        .iter()
+        .map(|item| {
+            let value = directory_recent_value(&item.directory, home);
+            AutocompleteOption {
+                display: value.clone(),
+                description: Some("recent".to_owned()),
+                is_directory: true,
+                absolute: Some(item.directory.clone()),
+                destructive: Some(Destructive {
+                    id: item.directory.clone(),
+                    confirm: "Press ctrl+d to confirm",
+                }),
+            }
+        })
+        .collect()
+}
+
 /// Filter the registry for a command-mode query — the dialog's
 /// fuzzysort port with the autocomplete's keys (display + description
 /// + aliases) and scoreFn:
@@ -407,6 +623,7 @@ pub fn filter_commands(registry: &SlashRegistry, query: &str) -> Vec<Autocomplet
             .map(|entry| AutocompleteOption {
                 display: entry.display.clone(),
                 description: Some(entry.description.clone()),
+                ..Default::default()
             })
             .collect();
     }
@@ -437,6 +654,7 @@ pub fn filter_commands(registry: &SlashRegistry, query: &str) -> Vec<Autocomplet
         .map(|ranked| AutocompleteOption {
             display: ranked.target.display.clone(),
             description: Some(ranked.target.description.clone()),
+            ..Default::default()
         })
         .collect()
 }
@@ -532,8 +750,8 @@ mod tests {
     #[test]
     fn selection_wraps_and_clamps() {
         let options = vec![
-            AutocompleteOption { display: "/a".into(), description: None },
-            AutocompleteOption { display: "/b".into(), description: None },
+            AutocompleteOption { display: "/a".into(), description: None, ..Default::default() },
+            AutocompleteOption { display: "/b".into(), description: None, ..Default::default() },
         ];
         let mut state = AutocompleteState::default().with_options(options);
         state.move_selection(1);
