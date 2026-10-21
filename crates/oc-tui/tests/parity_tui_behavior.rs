@@ -827,6 +827,82 @@ fn session_copy() {
     );
 }
 
+/// TUI-34 — the palette's missing command families
+/// (app.tsx:688-1216 + index.tsx command tables): messages.copy /
+/// session.copy / prompt.queue / session.queued_prompts /
+/// prompt.images.view / prompt.editor / prompt.skills /
+/// session.child.first all carry their v2 rows (title, group,
+/// bindings), with the dynamic `enabled` gates filtering dead rows.
+/// The message-navigation family stays OUT (v2 registers them
+/// `palette: undefined`, index.tsx:1100-1128).
+#[test]
+fn palette_messages_copy_session() {
+    use oc_tui::components::command_palette::palette_props;
+
+    let store = Store::new(Runtime::new());
+    let props = palette_props(&store);
+    let row = |value: &str| {
+        props
+            .options
+            .iter()
+            .find(|option| option.value == value)
+            .unwrap_or_else(|| panic!("the {value} row"))
+            .clone()
+    };
+
+    assert_eq!(row("messages.copy").title, "Copy last assistant message");
+    assert_eq!(row("messages.copy").category.as_deref(), Some("Session"));
+    assert_eq!(row("messages.copy").footer.as_deref(), Some("<leader>y"));
+    assert_eq!(row("session.copy").title, "Copy session transcript");
+    assert_eq!(row("prompt.queue").title, "Queue prompt");
+    assert_eq!(row("prompt.queue").category.as_deref(), Some("Prompt"));
+    assert_eq!(row("prompt.queue").footer.as_deref(), Some("<leader>return"));
+    assert_eq!(row("session.child.first").title, "Toggle subagent picker");
+    assert_eq!(row("session.child.first").footer.as_deref(), Some("down"));
+    assert_eq!(row("prompt.editor").title, "Open editor");
+    assert_eq!(row("prompt.skills").title, "Skills");
+    // The gated rows register with their v2 chrome (checked through
+    // the registry — the palette itself filters them while disabled).
+    let gated = |command: &str| oc_tui::components::command_palette::palette_command(command)
+        .expect("the registry row");
+    assert_eq!(gated("prompt.images.view").title, "View image attachments");
+    assert_eq!(gated("prompt.images.view").bindings, &["<leader>i"][..]);
+    assert_eq!(gated("session.queued_prompts").title, "View queued prompts");
+    assert_eq!(gated("session.queued_prompts").group, "Prompt");
+
+    // The dynamic enabled gates (a disabled command is FILTERED from
+    // the palette, never a dead row — command-palette.tsx's `enabled`
+    // pass): no queued prompts, no image attachments, no editor
+    // context → those rows vanish; the always-on family stays.
+    assert!(
+        !props.options.iter().any(|option| option.value == "session.queued_prompts"),
+        "queued_prompts gated on a non-empty queue"
+    );
+    assert!(
+        !props.options.iter().any(|option| option.value == "prompt.images.view"),
+        "images.view gated on image attachments"
+    );
+    assert!(
+        !props.options.iter().any(|option| option.value == "prompt.editor_context.clear"),
+        "editor_context.clear gated on a live editor context"
+    );
+
+    // The message-navigation family is NOT palette-visible in v2.0.24
+    // (`palette: undefined`, index.tsx:1100-1128).
+    for hidden in [
+        "session.message.next",
+        "session.message.previous",
+        "session.message.user.next",
+        "session.message.user.previous",
+        "session.messages_last_user",
+    ] {
+        assert!(
+            !props.options.iter().any(|option| option.value == hidden),
+            "{hidden} stays palette-invisible (v2 palette: undefined)"
+        );
+    }
+}
+
 /// TUI-10 (the diff half): a working-tree image file renders the
 /// inline `DiffViewerImage` — the "Working tree preview" label, the
 /// decoded `WxH` size row, the blocks pixels — and the mount records
