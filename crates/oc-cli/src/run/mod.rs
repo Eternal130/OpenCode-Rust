@@ -345,18 +345,18 @@ async fn resolve_session_target(
 
 /// `runNonInteractive` — returns the process exit code.
 pub async fn run(input: RunInput) -> i32 {
+    let format = input.format;
     match run_inner(input).await {
         Ok(code) => code,
         Err(message) => {
-            report_error("", &message);
+            // `reportRunError` (run.ts:68,243-255): early errors go
+            // through the SAME envelope as mid-run errors — with
+            // `--format json` that is the JSON error line on stdout,
+            // not human text.
+            noninteractive::report_error(format, "", &message);
             1
         }
     }
-}
-
-fn report_error(session_id: &str, message: &str) {
-    crate::run_ui::error(message);
-    let _ = session_id;
 }
 
 async fn run_inner(input: RunInput) -> Result<i32, String> {

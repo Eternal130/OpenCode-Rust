@@ -677,7 +677,12 @@ pub async fn run_prompt(input: PromptInput) -> i32 {
     0
 }
 
-fn report_error(format: Format, session_id: &str, message: &str) {
+/// `reportRunError` (run.ts:243-255): exit code 1 is the caller's job;
+/// with `--format json` the error goes through the JSON envelope on
+/// STDOUT (machine consumers never see human text), otherwise
+/// `UI.error` on stderr. Shared by the consume loop (mid-run errors)
+/// and the early errors of [`super::run`].
+pub(crate) fn report_error(format: Format, session_id: &str, message: &str) {
     if format == Format::Json {
         println!(
             "{}",
