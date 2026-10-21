@@ -7478,6 +7478,134 @@ mod tests {
     use super::*;
     use crate::store::DialogSize;
 
+    /// TUI-7 — the session-list filter's six semantics at App level
+    /// (the hermetic pin behind the PTY proof): trim + case-fold +
+    /// byte-exact substring (never fuzzy), no accent folding, the
+    /// whitespace-only query = the FULL set, and the parent exclusion
+    /// (children never row) — over the REAL dialog mount with a tab
+    /// open and a refresh resync landing mid-typing (the E2E shape).
+    /// Upstream: dialog-session-list.tsx:87-99 (the local filter),
+    /// :96 (empty query = the full set), :98+145+185 (`!parentID`),
+    /// :210 (`skipFilter` — never the shared fuzzy picker).
+    #[test]
+    fn session_list_filter_six_semantics() {
+        let mut app = App::new((120, 30));
+        let mk = |id: &str, title: &str, parent: Option<&str>, updated: f64| {
+            crate::data::SessionSnapshot {
+                id: id.to_owned(),
+                title: Some(title.to_owned()),
+                parent_id: parent.map(str::to_owned),
+                time_idle: None,
+                viewed: None,
+                model: None,
+                time_updated: Some(updated),
+                time_created: Some(0.0),
+                directory: Some("/tmp".to_owned()),
+                project_id: Some("p".to_owned()),
+            }
+        };
+        let rows = || {
+            vec![
+                mk("ses_alpha", "Alpha", None, 1_000.0),
+                mk("ses_login", "Login Redirect Flow", None, 3_000.0),
+                mk("ses_cafe", "Café notes", None, 2_000.0),
+                mk("ses_child", "Login Child Secret", Some("ses_login"), 4_000.0),
+            ]
+        };
+        app.store.ingest_all([crate::data::Ingest::Resync {
+            sessions: rows(),
+            unread: Vec::new(),
+            messages: Vec::new(),
+            cursors: Vec::new(),
+            permissions: Vec::new(),
+            forms: Vec::new(),
+        }]);
+        // Open the first row as a tab (the PTY drive's shape), then
+        // reopen the dialog over the session route.
+        app.press("ctrl+x");
+        app.press("l");
+        assert_eq!(app.store.focus(), crate::store::Focus::Dialog);
+        app.press("return");
+        app.press("ctrl+x");
+        app.press("l");
+        assert_eq!(app.store.focus(), crate::store::Focus::Dialog, "second dialog focused");
+        let visible =
+            |app: &App, needle: &str| app.frame_text().lines().any(|row| row.contains(needle));
+        let dialog_options = |app: &App| {
+            app.store.top_dialog().map(|entry| entry.select.filter.clone()).unwrap_or_default()
+        };
+
+        // (5) Parent exclusion, unfiltered: the child NEVER rows —
+        // the full list shows the three parents only.
+        let full = app.frame_text();
+        assert!(full.contains("Café notes"), "the full list rows the parents");
+        assert!(
+            !full.contains("Login Child Secret"),
+            "the child never rows, even unfiltered (options builder's !parentID)"
+        );
+
+        // (1)+(2) Substring, case-folded, byte-exact — "LOGIN RED"
+        // matches "Login Redirect Flow" and EXCLUDES the rest; a
+        // refresh resync landing mid-typing must not disturb it.
+        for key in ["L", "O", "G", "I", "N"] {
+            app.press(key);
+        }
+        app.store.ingest_all([crate::data::Ingest::Resync {
+            sessions: rows(),
+            unread: Vec::new(),
+            messages: Vec::new(),
+            cursors: Vec::new(),
+            permissions: Vec::new(),
+            forms: Vec::new(),
+        }]);
+        for key in [" ", "R", "E", "D"] {
+            app.press(key);
+        }
+        assert_eq!(dialog_options(&app), "LOGIN RED", "the typed query reached the filter");
+        assert!(visible(&app, "Login Redirect Flow"), "the case-folded substring match stays");
+        assert!(!visible(&app, "Café notes"), "a non-matching row is excluded");
+        assert!(!visible(&app, "Alpha"), "a non-matching row is excluded");
+        // (5) under a query: still no child row.
+        assert!(!visible(&app, "Login Child Secret"), "no child row under a query");
+
+        // (2) no fuzzy: the cross-letter sequence "zln" matches nothing.
+        for _ in 0..9 {
+            app.press("backspace");
+        }
+        app.press("z");
+        app.press("l");
+        app.press("n");
+        let none = app.frame_text();
+        assert!(none.contains("No sessions found"), "the no-match copy under a query");
+        assert!(
+            !none.contains("Login Redirect Flow")
+                || none.lines().filter(|row| row.contains("Login Redirect Flow")).count() == 1,
+            "under zln only the tab strip may keep the title"
+        );
+
+        // (3) no accent folding: byte-exact lowercase — "cafe" does
+        // not match "Café notes".
+        for _ in 0..3 {
+            app.press("backspace");
+        }
+        for key in ["c", "a", "f", "e"] {
+            app.press(key);
+        }
+        assert!(!visible(&app, "Café notes"), "no accent folding: cafe does not match Café");
+
+        // (4)+(6) trim + the whitespace-only query = the FULL set.
+        for _ in 0..4 {
+            app.press("backspace");
+        }
+        app.press(" ");
+        app.press(" ");
+        app.press(" ");
+        let full_again = app.frame_text();
+        assert!(full_again.contains("Café notes"), "whitespace-only rows the café parent again");
+        assert!(full_again.contains("Alpha"), "whitespace-only rows the full parent set");
+        assert!(!full_again.contains("Login Child Secret"), "still no child row");
+    }
+
     /// `apply_config` resolves the theme through the registry and
     /// merges keybind overrides into the live keymap; a config reload
     /// (mtime change → reload → apply) re-merges atomically.
