@@ -85,6 +85,13 @@ const FOOTER_PANEL_MOUNT_HEIGHT: usize = 17;
 #[allow(clippy::struct_excessive_bools)] // the pump's mode flags grew one per lane
 pub struct App {
     pub store: Store,
+    /// TUI-16 — the mouse text-selection state machine
+    /// (util/selection.ts's cell model).
+    pub screen_selection: crate::selection::ScreenSelection,
+    /// TUI-16 — the last drawn frame (the selection's text source).
+    pub last_frame: Option<crate::render::Frame>,
+    /// TUI-16 — `terminal.copy` (select/manual).
+    copy_behavior: crate::config::CopyBehavior,
     keymap: Keymap,
     clock: ManualClock,
     dispatcher: StoreDispatcher,
@@ -166,6 +173,9 @@ impl App {
         store.set_prompt_viewport_width(prompt_text_width(usize::from(size.0)));
         Self {
             store,
+            screen_selection: crate::selection::ScreenSelection::default(),
+            last_frame: None,
+            copy_behavior: crate::config::CopyBehavior::default(),
             keymap: Keymap::new(),
             clock: ManualClock::default(),
             dispatcher: StoreDispatcher,
@@ -227,6 +237,9 @@ impl App {
     /// theme name/mode applies, and the keybind overrides merge into
     /// the live keymap.
     pub fn apply_config(&mut self, config: &crate::config::TuiConfig, mode_hint: Mode) {
+        // TUI-16 — `terminal.copy` (app.tsx:546-547): the selection's
+        // copy-on-release gate.
+        self.copy_behavior = config.terminal_copy;
         // Attention (R-06): the resolved sounds/notifications config
         // reaches the engine on boot AND every reload.
         self.store.set_attention_config(config.attention.clone());
@@ -352,6 +365,25 @@ impl App {
         );
         self.store.set_composer(&key, &composer);
         self.keymap.clear_pending();
+    }
+
+    /// TUI-16 — copy the selection's text (`copy`, selection.ts:
+    /// 62-98 → `clipboard.write` + the `Copied to clipboard` info
+    /// toast, app.tsx:564-571).
+    fn copy_selection(&mut self, rect: crate::selection::SelectionRect) {
+        let Some(frame) = self.last_frame.clone() else { return };
+        let text = crate::selection::selected_text(&frame, rect);
+        if text.is_empty() {
+            return;
+        }
+        if self.store.clipboard_write(&text).is_ok() {
+            self.store.toast_show(crate::components::toast::ToastOptions {
+                title: None,
+                message: "Copied to clipboard".to_owned(),
+                variant: "info",
+                ..crate::components::toast::ToastOptions::info("")
+            });
+        }
     }
 
     /// One terminal mouse event (beta.8 bugs 3 + 4). v2's tab strip
@@ -504,6 +536,24 @@ impl App {
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => {
+                // TUI-16 — the drag release resolves the screen
+                // selection: `terminal.copy = "select"` writes the
+                // text with the Copied toast (copyOnSelectRelease,
+                // util/selection.ts:44-60 + app.tsx:546-571); a
+                // resolved drag ALSO suppresses the click beneath it
+                // (the renderer's selection consumes the release).
+                if let Some(rect) = self.screen_selection.release() {
+                    if self.copy_behavior == crate::config::CopyBehavior::Select {
+                        self.copy_selection(rect);
+                        // Copy-on-select ends the selection with the
+                        // release (the renderer's drag ends; the
+                        // retained selection is MANUAL mode's wait
+                        // for an explicit copy).
+                        self.screen_selection.clear();
+                    }
+                    self.store.request_redraw();
+                    return;
+                }
                 // A modal dialog's option rows submit on release
                 // (`dialog-select.tsx:768-773`: mousedown moved the
                 // selection, mouseup fires `onSelect`); the backdrop
@@ -999,6 +1049,10 @@ impl App {
                 }
             }
             MouseEventKind::Down(MouseButton::Left) => {
+                // TUI-16 — every left press arms a potential screen
+                // selection (the renderer's cell model; the release
+                // only resolves one when the pointer crossed cells).
+                self.screen_selection.press(col, row);
                 // TUI-3 — the rail's handle press arms the resize
                 // (`onMouseDown`, pane-resize.ts:82-97); the boundary
                 // double-click (<300 ms) resets the rail to the
@@ -1062,6 +1116,12 @@ impl App {
                 }
             }
             MouseEventKind::Drag(MouseButton::Left) => {
+                // TUI-16 — the drag extends the screen selection
+                // (unless a UI drag — the rail resize or the tab
+                // reorder — owns the pointer).
+                if self.rail_resizing.is_none() && self.strip_drag.is_none() {
+                    self.screen_selection.drag(col, row);
+                }
                 // TUI-3 — the rail's resize drag (`onMouseDrag`,
                 // pane-resize.ts:99-105): the preferred width follows
                 // `event.x + 1`, clamped; the release commits.
@@ -1398,6 +1458,35 @@ impl App {
         if self.error_mode.is_some() {
             self.exit_requested = true;
             return;
+        }
+        // TUI-16 — the selection's priority-101 intercept
+        // (`handleSelectionKey`, app.tsx:551-558 + selection.ts:
+        // 62-98): over a LIVE (retained manual-mode) selection,
+        // ctrl+c/ctrl+y copy, escape clears, any other stroke clears
+        // and passes through.
+        if self.screen_selection.is_active() {
+            match crate::selection::selection_key_action(
+                spec,
+                self.copy_behavior == crate::config::CopyBehavior::Select,
+            ) {
+                crate::selection::SelectionKeyAction::CopyAndConsume => {
+                    if let Some(rect) = self.screen_selection.rect() {
+                        self.copy_selection(rect);
+                    }
+                    self.screen_selection.clear();
+                    self.keymap.clear_pending();
+                    return;
+                }
+                crate::selection::SelectionKeyAction::ClearAndConsume => {
+                    self.screen_selection.clear();
+                    self.keymap.clear_pending();
+                    return;
+                }
+                crate::selection::SelectionKeyAction::ClearAndPass => {
+                    self.screen_selection.clear();
+                }
+                crate::selection::SelectionKeyAction::Pass => {}
+            }
         }
         self.maybe_remerge_keybinds();
         let lowered = spec.to_ascii_lowercase();
@@ -7321,6 +7410,9 @@ pub async fn run_with_size(
                     }
                 }
             };
+            // TUI-16 — the frame is the mouse selection's text source
+            // (a clone per draw; the selection reads it on release).
+            app.last_frame = Some(frame.clone());
             // S0 parity: degrade RGB → xterm-256 indices at the
             // terminal-draw seam when the raster-level capability
             // probe says the terminal is 256-color (v2's raster does

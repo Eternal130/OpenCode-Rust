@@ -2044,6 +2044,80 @@ fn mini_subagent_footer() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// TUI-16 — mouse selection copy
+// ---------------------------------------------------------------------------
+
+/// TUI-16: a left DRAG over screen cells captures a selection and the
+/// release copies it (`terminal.copy = "select"`, the non-win32
+/// default — util/selection.ts:44-60 + app.tsx:546-571): the
+/// `Copied to clipboard` info toast paints and the clipboard write
+/// emits OSC 52. A BARE click (no crossing) never selects, and
+/// `terminal.copy = "manual"` keeps the copy off the release (the
+/// selection waits for ctrl+y — the intercept's copy).
+#[test]
+fn selection_copy() {
+    run_daily_test(
+        "tui16-select",
+        120,
+        30,
+        |_, _| {},
+        |h| {
+            boot_to_session(h, b"Alpha")?;
+            wait_text(h, "shift+tab agents", Duration::from_secs(10))?;
+            // Text on screen the drag can capture: the composer's
+            // own draft row (a non-UI surface — no strip/rail drag
+            // competes for the pointer).
+            h.write(b"parrot selected words");
+            wait_grid(
+                h,
+                |g| (20..30).any(|y| g.content_rect(0, y, 120, 1).contains("parrot selected")),
+                Duration::from_secs(5),
+            )?;
+            let y = (20..30)
+                .find(|&row| {
+                    let text = h.grid_now().row_text(row);
+                    text.contains('p') && text.contains('r') && text.contains('o')
+                })
+                .unwrap_or(26);
+            // A bare click never selects: press + release on one cell
+            // leaves no toast.
+            h.sgr_motion(10, u16::try_from(y).unwrap_or(26));
+            h.sgr_press(10, u16::try_from(y).unwrap_or(26));
+            h.sgr_release(10, u16::try_from(y).unwrap_or(26));
+            std::thread::sleep(Duration::from_millis(400));
+            if (0..h.grid_now().rows).any(|row| h.grid_now().row_text(row).contains("Copied")) {
+                return Err("a bare click must not copy".to_owned());
+            }
+            // The crossing drag: press before the text, drag past it,
+            // release — the copy lands.
+            h.sgr_motion(2, u16::try_from(y).unwrap_or(26));
+            h.sgr_press(2, u16::try_from(y).unwrap_or(26));
+            h.sgr_drag(40, u16::try_from(y).unwrap_or(26));
+            h.sgr_release(40, u16::try_from(y).unwrap_or(26));
+            wait_text(h, "Copied to clipboard", Duration::from_secs(5))
+                .map_err(|error| format!("the copy toast never painted: {error}"))?;
+            // The clipboard write emitted OSC 52 (the base64 payload
+            // follows the `52;c` marker).
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            loop {
+                let raw = h.raw_mirror();
+                let from =
+                    raw.windows(5).position(|window| window == b"\x1b]52;").map(|at| &raw[at..]);
+                if from.is_some_and(|tail| tail.contains(&b'c')) {
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "the clipboard write never emitted OSC 52"
+                );
+                std::thread::sleep(Duration::from_millis(60));
+            }
+            Ok(())
+        },
+    );
+}
+
 /// TUI-35 — the boot completes against a QUIET server (no SSE script
 /// armed, no prompt ever `POST`ed — the event stream never speaks) and
 /// the standard exit chord tears the app down THROUGH a dirty dialog
