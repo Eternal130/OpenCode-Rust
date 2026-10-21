@@ -101,7 +101,7 @@ const migrations = db
   .query("SELECT id, time_completed FROM migration ORDER BY id")
   .all();
 const sessions = db
-  .query("SELECT id, parent_id, agent, model FROM session_v2 ORDER BY time_created, id")
+  .query("SELECT id, parent_id, agent, model, directory FROM session_v2 ORDER BY time_created, id")
   .all();
 const projects = db
   .query("SELECT id, worktree, vcs FROM project ORDER BY id")
@@ -246,6 +246,12 @@ async fn run(fixture: &Path, prompt_continue: bool) -> Result<()> {
     ] {
         std::fs::create_dir_all(&dir)?;
     }
+    // ONE database for both opens: alias the port's `opencode-rust` data
+    // root onto v2's `opencode` dir (p10_common::share_data_home) so the
+    // port's open is a true open of the IMPORTED copy — not of the
+    // one-way-migration copy its boot would otherwise stage — and the
+    // Phase C reference re-open reads what the port actually wrote.
+    p10_common::share_data_home(&sandbox.join("home"))?;
     let db = copy_fixture_into_sandbox(fixture, &sandbox)?;
     eprintln!("[gate2b] fixture copied to {}", db.display());
 
@@ -261,6 +267,30 @@ async fn run(fixture: &Path, prompt_continue: bool) -> Result<()> {
         baseline_sessions,
         baseline["migrations"].as_array().map_or(0, Vec::len)
     );
+
+    // A harvested fixture (CI's `runtime-gates` chain) references
+    // pid-scoped staging directories that are dead by the time this gate
+    // runs: the port resolves each session's location through
+    // `LocationNotFoundError` 404 otherwise (oc-server handlers/
+    // session.rs services → BootError::MissingDirectory). Recreating the
+    // dead directories — only ever under /tmp/opencode/ — restores the
+    // "real library on this machine" precondition without touching the
+    // fixture bytes. A real $HOME-backed fixture keeps its existing
+    // directories and skips this entirely.
+    let referenced: Vec<String> = baseline["sessions"]
+        .as_array()
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| row["directory"].as_str().map(str::to_owned))
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect()
+        })
+        .unwrap_or_default();
+    let recreated = p10_common::recreate_missing_fixture_dirs(referenced)?;
+    if recreated > 0 {
+        eprintln!("[gate2b] recreated {recreated} dead fixture session directories");
+    }
 
     // Phase B — the Rust port opens the imported copy and continues.
     let fake = p10_common::ScriptedFakeLlm::start(vec![p10_common::text_script(

@@ -125,13 +125,13 @@ async fn p10_db_interop_v2_written_null_rows() -> Result<()> {
     if parity::rust_server::skip_if_no_cargo() {
         return Ok(());
     }
-    // Known-red wrapper (B0-2, §8.5): this lane is a registered red — the
-    // failure stays a failure, only the message is categorized so
-    // known-red-summary.py can tell KNOWN-RED from NEW-RED.
-    if let Err(error) = run_v2_written_null_rows().await {
-        return Err(p10_common::known_red("GATE-DB-NULLROWS", "Batch 1B").categorize(error));
-    }
-    Ok(())
+    // GATE-DB-NULLROWS is FIXED (was a B0-2 known-red): the failure was
+    // harness-side — the port's data root (`opencode-rust`) diverged from
+    // v2's (`opencode`), so the "shared" home silently held TWO databases
+    // and every port write landed in the one-way-migration copy. The lane
+    // now runs green through `share_data_home` below; failures are plain
+    // failures (no known-red categorization to shrink).
+    run_v2_written_null_rows().await
 }
 
 // The debug-formatting allow keeps the extracted body byte-identical to the
@@ -153,6 +153,9 @@ async fn run_v2_written_null_rows() -> Result<()> {
     ] {
         std::fs::create_dir_all(&dir)?;
     }
+    // ONE database for both ends: alias the port's `opencode-rust` data
+    // root onto v2's `opencode` dir (see p10_common::share_data_home).
+    p10_common::share_data_home(&home)?;
     let fake = p10_common::ScriptedFakeLlm::start(vec![
         p10_common::text_script("Parity fake says hello."),
         p10_common::text_script("Parity fake says hello."),
@@ -529,12 +532,11 @@ async fn p10_db_interop_stable_channel_same_file() -> Result<()> {
     if parity::rust_server::skip_if_no_cargo() {
         return Ok(());
     }
-    // Known-red wrapper (B0-2, §8.5): registered red GATE-DB-STABLE — see
-    // docs/parity-baseline.md §2.1; categorized, never skipped.
-    if let Err(error) = run_stable_channel_same_file().await {
-        return Err(p10_common::known_red("GATE-DB-STABLE", "Batch 1B").categorize(error));
-    }
-    Ok(())
+    // GATE-DB-STABLE is FIXED (was a B0-2 known-red): same harness-side
+    // root cause as GATE-DB-NULLROWS (the `opencode-rust` data root
+    // divergence); `share_data_home` below makes the channel scheme on
+    // both sides resolve the SAME `opencode-stable.db`.
+    run_stable_channel_same_file().await
 }
 
 // Same: extracted verbatim from the #[tokio::test] wrapper (B0-2).
@@ -546,6 +548,10 @@ async fn run_stable_channel_same_file() -> Result<()> {
     let home = root.join("home");
     let data = home.join(".local/share/opencode");
     std::fs::create_dir_all(&data)?;
+    // ONE channel-suffixed database for both ends: the alias keeps the
+    // channel scheme fully exercised on each side while both resolve the
+    // same physical `opencode-stable.db` (see p10_common::share_data_home).
+    p10_common::share_data_home(&home)?;
     // The stable-channel env: the reference build's baked channel define
     // IS `stable` (spawn pins OPENCODE_CHANNEL="stable"), so it needs no
     // runtime switch; the Rust engine reads OPENCODE_CHANNEL.
