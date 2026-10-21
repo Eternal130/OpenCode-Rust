@@ -5,6 +5,27 @@
 > **REBUILT from ledger+git 2026-10-21 09:30** (iteration 13 / wave 12 opened).
 > Ledger + git are authoritative; state.md is a cross-session breadcrumb only.
 
+## WAVE 13 (iteration 14) — OPEN (process change: parity-loop ceremony dropped)
+
+- **User ruling 2026-10-21**: the parity-loop process (loop driver, verifier ceremony, serial-merge
+  ritual) has problems — do NOT use it. Direct lightweight flow from now on: fix → local tests →
+  orchestrator diff review → merge → push; CI promotes `fixed` → `verified` on green runs.
+  Machine-safety disciplines kept (dev-gate.sh, process safety, worktree isolation, canonical
+  Eternal130 identity + English commits).
+- **Wave-12 lanes adopted & merged**: `lane/config6` → merge `ccf16fd` (CLI-K1/K8/N1/N2/N3 merged;
+  CLI-N4 stays `fixing` — partial, disposition pending); `lane/db3` → merge `18d9c4d`
+  (GATE-DB-FIXTURE-WAL). Post-merge gate green: cli_config 8/8 · p10_db_import 2/2 (+1 env-gated
+  skip) · real_db_null_census 2/2. Ledger evidence records both merge commits; promote to
+  `verified` when CI goes green (db3 additionally needs a green runtime-gates run to prove the
+  harvest step — dispatch after push).
+- **Wave-1 S1 burn-down dispatched (parallel, disjoint scopes)**: `lane-k01` (RUNTIME-K01 +
+  GATE-TUI-RENAME) · `lane-cred` (CRED-D6/D8/V3) · `lane-plug` (PLUG-D13/D30/M02). All from
+  main@18d9c4d.
+- Remaining S1 queue after wave-1: AI-V1/VERTEX-V2/P06 (facade.rs — serialized after lane-cred) ·
+  TUI-12/14/15/16/17 (single oc-tui lane) · TOOL-D1 + RUNTIME-FDLEAK · SURF-LATEX-MERMAID
+  (serialized after the TUI lane) · HTTP-H0 (rollout of the generated validation) ·
+  CI-RUNTIME-AI-LIVE (needs live window — user action).
+
 ## WAVE 12 (iteration 13) — RESULT (PAUSED by user before verify/merge; no new subagents dispatched)
 
 - **Recovery (0a) result**: `git worktree list` → only main; all 15 pre-existing `lane/*` branches are
