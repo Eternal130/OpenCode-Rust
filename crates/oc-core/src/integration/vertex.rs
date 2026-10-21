@@ -273,6 +273,7 @@ impl IntegrationHost {
             // precedence (apiKey cannot combine with accessToken upstream).
             api_key: token,
             headers: BTreeMap::new(),
+            chatgpt: None,
         })
     }
 }
