@@ -32,6 +32,15 @@ async fn main() {
     }
 
     let cli = Cli::parse();
+    // `--print-logs` (runtime.ts:98): the global flag sets
+    // `OPENCODE_PRINT_LOGS=1` in the process environment BEFORE any
+    // handler runs. Consumers: the standalone server spawn inherits
+    // the child's stderr instead of discarding it (standalone.ts:29),
+    // and any subprocess logging gate reads the same variable — the
+    // parsed-but-ignored flag silently dropped server log output.
+    if cli.print_logs {
+        std::env::set_var("OPENCODE_PRINT_LOGS", "1");
+    }
     if cli.version_rust {
         let tag = services::updater::RELEASE_TAG;
         let release = if tag == "dev" { String::new() } else { format!(", release {tag}") };

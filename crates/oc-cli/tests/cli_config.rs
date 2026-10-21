@@ -147,3 +147,60 @@ fn serve_hostname() {
     assert_eq!(code, 0);
     assert!(stdout.contains("\"url\""));
 }
+
+// ===========================================================================
+// CLI-N1 — `--print-logs` actually turns on log output (v2
+// framework/runtime.ts:98 sets OPENCODE_PRINT_LOGS=1 before any handler
+// runs; services/standalone.ts:29 then INHERITS the private server's
+// stderr so its logs reach the terminal — without the flag the child's
+// stderr is discarded).
+// ===========================================================================
+
+/// `--standalone --print-logs`: the private server child's stderr is
+/// inherited (its log lines reach the parent's stderr); without the
+/// flag the child's stderr stays discarded. `OPENCODE_TRACE_BOOT=1`
+/// makes the child emit a deterministic `[boot-trace]` stderr line.
+#[test]
+fn print_logs() {
+    let sandbox = Sandbox::new("n1");
+    let binary = opencode_binary();
+
+    let run = |print_logs: bool| {
+        let mut args = vec!["models", "--standalone"];
+        if print_logs {
+            args.push("--print-logs");
+        }
+        let output = sandbox
+            .command(&binary, &args)
+            .env("OPENCODE_TRACE_BOOT", "1")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .expect("spawn models");
+        (
+            output.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&output.stdout).into_owned(),
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        )
+    };
+
+    // With the flag: the server's stderr (its logs) flows through.
+    let (code, stdout, stderr) = run(true);
+    assert_eq!(code, 0, "models --standalone --print-logs succeeds\nstderr:\n{stderr}");
+    assert_ne!(stdout.trim(), "", "the model list prints");
+    assert!(
+        stderr.contains("[boot-trace]"),
+        "--print-logs turns on the server log output\nstderr:\n{stderr}"
+    );
+
+    // Without the flag: same command, but the child's logs are
+    // discarded (stderr quiet) — the flag is what switches them on.
+    let (code, stdout, stderr) = run(false);
+    assert_eq!(code, 0, "models --standalone succeeds\nstderr:\n{stderr}");
+    assert_ne!(stdout.trim(), "", "the model list prints");
+    assert!(
+        !stderr.contains("[boot-trace]"),
+        "without --print-logs the child's stderr stays discarded\nstderr:\n{stderr}"
+    );
+}
