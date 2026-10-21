@@ -51,6 +51,21 @@ pub struct MermaidSyntaxError {
     pub message: String,
 }
 
+impl MermaidDiagramKind {
+    /// The upstream error `kind` string (`"state"`, `"gitGraph"`, ...).
+    #[must_use]
+    pub fn slug(&self) -> &'static str {
+        match self {
+            Self::Flowchart => "flowchart",
+            Self::Sequence => "sequence",
+            Self::State => "state",
+            Self::Timeline => "timeline",
+            Self::GitGraph => "gitGraph",
+            Self::Gantt => "gantt",
+        }
+    }
+}
+
 impl MermaidSyntaxError {
     pub fn new(
         kind: MermaidDiagramKind,
@@ -63,7 +78,8 @@ impl MermaidSyntaxError {
             line_number,
             source_line: source_line.to_string(),
             message: format!(
-                "{reason} in {kind:?} diagram at line {line_number}: \"{source_line}\""
+                "{reason} in {} diagram at line {line_number}: \"{source_line}\"",
+                kind.slug()
             ),
         }
     }
