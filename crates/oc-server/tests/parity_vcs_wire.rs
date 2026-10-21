@@ -284,8 +284,11 @@ async fn diff_file_list() {
     let server = boot(workspace.clone()).await;
     let query = location_query(&workspace);
 
-    // Working mode with no changes → empty array.
-    let (status, body) = raw_get(server.addr, &format!("/api/vcs/diff?{query}")).await;
+    // Working mode with no changes → empty array. `mode` is REQUIRED on
+    // the wire (v2.0.24 probe, rollout-probe.json: bare /api/vcs/diff →
+    // 400 `Missing key\n  at ["mode"]`, kind Query — the HTTP-H0 query
+    // rollout enforces it in middleware).
+    let (status, body) = raw_get(server.addr, &format!("/api/vcs/diff?{query}&mode=working")).await;
     assert_eq!(status, 200, "vcs.diff clean: {body}");
     assert_eq!(body["data"].as_array().expect("array").len(), 0);
 
@@ -293,7 +296,7 @@ async fn diff_file_list() {
     std::fs::write(workspace.join("README.md"), "seed\nchanged\n").expect("modify");
     std::fs::write(workspace.join("new.txt"), "brand new\n").expect("untracked");
 
-    let (status, body) = raw_get(server.addr, &format!("/api/vcs/diff?{query}")).await;
+    let (status, body) = raw_get(server.addr, &format!("/api/vcs/diff?{query}&mode=working")).await;
     assert_eq!(status, 200, "vcs.diff working: {body}");
     let files = body["data"].as_array().expect("FileDiff[] array").clone();
     let by_file = |name: &str| {

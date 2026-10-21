@@ -854,7 +854,7 @@ async fn all_routes_reject_wrong_payload() {
 /// Ops whose v2 endpoint resolves the session/form (404) before any
 /// query/payload decode (`sessionLocationMiddleware` ×24 +
 /// `formLocationMiddleware` ×5, `protocol/src/groups/{session,permission}.ts`;
-/// ids are the OpenAPI identifiers). Mirror of
+/// ids are the `OpenAPI` identifiers). Mirror of
 /// `request_validation::LOCATION_FIRST_OPS`; kept test-local so the
 /// matrix also runs red against the pre-rollout seam (the seam's own unit
 /// test pins the const to this same set via
@@ -891,8 +891,8 @@ const LOCATION_FIRST: &[&str] = &[
     "session.update",
 ];
 
-/// Probe-pinned NumberFromString integer query params (decode-time in v2,
-/// invisible in the OpenAPI): every entry rejects `abc` with
+/// Probe-pinned `NumberFromString` integer query params (decode-time in
+/// v2, invisible in the `OpenAPI`): every entry rejects `abc` with
 /// `Expected an integer`. Mirror of the seam's `NUMBER_PARAMS`.
 const NUMBER_QUERY_PARAMS: &[(&str, &str)] = &[
     ("fs.find", "limit"),
@@ -917,15 +917,16 @@ fn route_target(operation_id: &str) -> (&'static str, String) {
         rest = &rest[colon + 1..];
         let end = rest.find('/').unwrap_or(rest.len());
         let param = &rest[..end];
-        path.push_str(&match param {
-            "sessionID" => "ses_H0GEN".to_owned(),
-            "formID" => "frm_H0GEN".to_owned(),
-            other => format!("h0gen_{other}"),
-        });
+        let substitution: &str = match param {
+            "sessionID" => "ses_H0GEN",
+            "formID" => "frm_H0GEN",
+            _ => "h0gen_id",
+        };
+        path.push_str(substitution);
         rest = &rest[end..];
     }
     if let Some(star) = rest.rfind("/*") {
-        path.push_str(&rest[..star + 1]);
+        path.push_str(&rest[..=star]);
         path.push_str("h0gen_tail");
     } else {
         path.push_str(rest);
@@ -935,24 +936,28 @@ fn route_target(operation_id: &str) -> (&'static str, String) {
 
 /// A wrong-typed JSON value for the node kind, if one can fail.
 fn wrong_value_for(node: u32) -> Option<Value> {
-    use oc_server::validation_gen::{NODES, SchemaNode};
+    use oc_server::validation_gen::{SchemaNode, NODES};
     match &NODES[node as usize] {
-        SchemaNode::Str | SchemaNode::Pattern { .. } => Some(Value::from(5)),
+        // Wrong KIND per node: scalars take the other scalar's JSON
+        // type, containers/booleans take a number.
         SchemaNode::Int { .. } | SchemaNode::Num => Some(Value::from("notanumber")),
-        SchemaNode::Bool => Some(Value::from(5)),
         SchemaNode::Literal(_) => Some(Value::from("__h0_bogus__")),
         SchemaNode::Nullable(inner) => wrong_value_for(*inner),
         SchemaNode::Ref { node, .. } => wrong_value_for(*node),
-        SchemaNode::Arr(_) | SchemaNode::Obj { .. } | SchemaNode::Record(_) | SchemaNode::Union(_) => {
-            Some(Value::from(5))
-        }
         SchemaNode::Any => None,
+        SchemaNode::Bool
+        | SchemaNode::Str
+        | SchemaNode::Pattern { .. }
+        | SchemaNode::Arr(_)
+        | SchemaNode::Obj { .. }
+        | SchemaNode::Record(_)
+        | SchemaNode::Union(_) => Some(Value::from(5)),
     }
 }
 
 /// The `Obj` fields of a (possibly `$ref`-wrapped) root node.
 fn object_fields(node: u32) -> &'static [oc_server::validation_gen::FieldSpec] {
-    use oc_server::validation_gen::{NODES, SchemaNode};
+    use oc_server::validation_gen::{SchemaNode, NODES};
     let node = match &NODES[node as usize] {
         SchemaNode::Ref { node, .. } => *node,
         _ => node,
@@ -972,13 +977,12 @@ fn object_fields(node: u32) -> &'static [oc_server::validation_gen::FieldSpec] {
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn generated_body_validation_matrix() {
-    let server = boot().await;
     use oc_server::validation_gen::{BodyValidation, ROUTES as VALIDATION};
 
-    let json_ops: Vec<&oc_server::validation_gen::RouteValidation> = VALIDATION
-        .iter()
-        .filter(|row| matches!(row.body, BodyValidation::Json(_)))
-        .collect();
+    let server = boot().await;
+
+    let json_ops: Vec<&oc_server::validation_gen::RouteValidation> =
+        VALIDATION.iter().filter(|row| matches!(row.body, BodyValidation::Json(_))).collect();
     assert_eq!(json_ops.len(), 46, "46 JSON-body operations");
 
     let validate_first: Vec<_> =
@@ -1030,7 +1034,9 @@ async fn generated_body_validation_matrix() {
             assert_eq!(envelope["_tag"], "InvalidRequestError", "{method} {path} {{}}: {envelope}");
             assert_eq!(envelope["kind"], "Payload", "{method} {path} {{}}: {envelope}");
             assert!(
-                envelope["message"].as_str().is_some_and(|message| message.starts_with("Missing key")),
+                envelope["message"]
+                    .as_str()
+                    .is_some_and(|message| message.starts_with("Missing key")),
                 "{method} {path} {{}}: {envelope}"
             );
             probes_run += 1;
@@ -1051,7 +1057,10 @@ async fn generated_body_validation_matrix() {
             let text = response.text();
             assert_eq!(response.status, 400, "{method} {path} {body}: {text}");
             let envelope = response.json();
-            assert_eq!(envelope["_tag"], "InvalidRequestError", "{method} {path} {body}: {envelope}");
+            assert_eq!(
+                envelope["_tag"], "InvalidRequestError",
+                "{method} {path} {body}: {envelope}"
+            );
             assert_eq!(envelope["kind"], "Payload", "{method} {path} {body}: {envelope}");
             probes_run += 1;
             break; // first failable field only — the seam walks declaration order
@@ -1063,20 +1072,19 @@ async fn generated_body_validation_matrix() {
 /// Generative QUERY matrix: every query-declaring operation except the
 /// two location-first ones (69 of 71) is probed on its failable surface —
 /// the deepObject `location` (`location=scalar`), each literal/pattern/
-/// NumberFromString param (`name=__h0_bogus__`), and required params
+/// `NumberFromString` param (`name=__h0_bogus__`), and required params
 /// (absent → `Missing key`). Ops whose params are all accept-all strings
 /// (raw handshake routes) are counted and enumerated — nothing in their
 /// row can fail by construction.
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn generated_query_validation_matrix() {
-    let server = boot().await;
-    use oc_server::validation_gen::{NODES, QueryValidation, ROUTES as VALIDATION, SchemaNode};
+    use oc_server::validation_gen::{QueryValidation, SchemaNode, NODES, ROUTES as VALIDATION};
 
-    let query_ops: Vec<&oc_server::validation_gen::RouteValidation> = VALIDATION
-        .iter()
-        .filter(|row| matches!(row.query, QueryValidation::Params(_)))
-        .collect();
+    let server = boot().await;
+
+    let query_ops: Vec<&oc_server::validation_gen::RouteValidation> =
+        VALIDATION.iter().filter(|row| matches!(row.query, QueryValidation::Params(_))).collect();
     assert_eq!(query_ops.len(), oc_server::validation_gen::QUERY_PARAM_ROUTES);
     assert_eq!(query_ops.len(), 71, "71 ops declare query parameters");
 
@@ -1090,19 +1098,18 @@ async fn generated_query_validation_matrix() {
         let (method, path) = route_target(row.operation_id);
         let fields = match row.query {
             QueryValidation::Params(node) => match &NODES[node as usize] {
-                SchemaNode::Obj { fields } => fields,
+                SchemaNode::Obj { fields } => *fields,
                 other => panic!("{} query root not an Obj: {other:?}", row.operation_id),
             },
-            _ => unreachable!(),
+            QueryValidation::None => unreachable!("filtered to Params rows"),
         };
 
         let mut op_probed = false;
         // (a) deepObject `location` present as a scalar.
         if fields.iter().any(|field| field.name == "location") {
             let target = format!("{path}?location=scalar");
-            let response = support::request(server.addr, method, &target, &[], b"")
-                .await
-                .expect("raw");
+            let response =
+                support::request(server.addr, method, &target, &[], b"").await.expect("raw");
             let text = response.text();
             assert_eq!(response.status, 400, "{method} {target}: {text}");
             let envelope = response.json();
@@ -1115,21 +1122,21 @@ async fn generated_query_validation_matrix() {
             op_probed = true;
         }
         // (b) failable scalar params (literal/pattern/NumberFromString).
-        for field in fields.iter() {
+        for field in fields {
             let failable = matches!(
                 &NODES[field.ty as usize],
                 SchemaNode::Literal(_) | SchemaNode::Pattern { .. }
             ) || matches!(
                 &NODES[field.ty as usize],
-                SchemaNode::Ref { node, .. } if matches!(&NODES[*node as usize], SchemaNode::Literal(_))
+                SchemaNode::Ref { node, .. }
+                    if matches!(&NODES[*node as usize], SchemaNode::Literal(_))
             ) || NUMBER_QUERY_PARAMS.contains(&(row.operation_id, field.name));
             if !failable {
                 continue;
             }
             let target = format!("{path}?{}=__h0_bogus__", field.name);
-            let response = support::request(server.addr, method, &target, &[], b"")
-                .await
-                .expect("raw");
+            let response =
+                support::request(server.addr, method, &target, &[], b"").await.expect("raw");
             let text = response.text();
             assert_eq!(response.status, 400, "{method} {target}: {text}");
             let envelope = response.json();
@@ -1142,9 +1149,8 @@ async fn generated_query_validation_matrix() {
         // path whenever a required param exists — declaration order puts
         // optional `location` first, so the Missing key still wins).
         if fields.iter().any(|field| field.required) {
-            let response = support::request(server.addr, method, &path, &[], b"")
-                .await
-                .expect("raw");
+            let response =
+                support::request(server.addr, method, &path, &[], b"").await.expect("raw");
             let text = response.text();
             assert_eq!(response.status, 400, "{method} {path} (required query absent): {text}");
             let envelope = response.json();
@@ -1217,7 +1223,7 @@ async fn rollout_wire_probes() {
             r#"{"info": {}, "messages": []}"#,
             "Missing key\n  at [\"info\"][\"id\"]",
         ),
-        ("POST", "/api/rpc/rpc_H0WIRE/method_H0WIRE", r#"[1]"#, "Expected Rpc.Input"),
+        ("POST", "/api/rpc/rpc_H0WIRE/method_H0WIRE", r"[1]", "Expected Rpc.Input"),
     ];
     for (method, target, body, message) in probes {
         let response = support::request(
@@ -1261,11 +1267,7 @@ async fn rollout_wire_probes() {
             "/api/websearch/provider?location=scalar",
             "Expected object | undefined\n  at [\"location\"]",
         ),
-        (
-            "POST",
-            "/api/pty?location=scalar",
-            "Expected object | undefined\n  at [\"location\"]",
-        ),
+        ("POST", "/api/pty?location=scalar", "Expected object | undefined\n  at [\"location\"]"),
         // NumberFromString bounds
         ("GET", "/api/session?limit=abc", "Expected an integer\n  at [\"limit\"]"),
         ("GET", "/api/session?limit=0", "Expected a value greater than 0\n  at [\"limit\"]"),
@@ -1325,7 +1327,11 @@ async fn rollout_wire_probes() {
         ("GET", "/api/worktree", "Missing key\n  at [\"projectID\"]"),
         ("POST", "/api/experimental/fs/write", "Missing key\n  at [\"path\"]"),
         // NumberFromString elsewhere
-        ("GET", "/api/vcs/diff?mode=working&context=abc", "Expected an integer\n  at [\"context\"]"),
+        (
+            "GET",
+            "/api/vcs/diff?mode=working&context=abc",
+            "Expected an integer\n  at [\"context\"]",
+        ),
         (
             "GET",
             "/api/vcs/diff?mode=working&context=-1",
@@ -1344,26 +1350,16 @@ async fn rollout_wire_probes() {
             "Expected a value greater than 0\n  at [\"lines\"]",
         ),
         // duplicates → array → kind mismatch + optional suffix
-        (
-            "GET",
-            "/api/session?limit=5&limit=abc",
-            "Expected string | undefined\n  at [\"limit\"]",
-        ),
+        ("GET", "/api/session?limit=5&limit=abc", "Expected string | undefined\n  at [\"limit\"]"),
         (
             "GET",
             "/api/session?order=asc&order=desc",
             "Expected \"asc\" | \"desc\" | undefined\n  at [\"order\"]",
         ),
-        (
-            "GET",
-            "/api/session?search=a&search=b",
-            "Expected string | undefined\n  at [\"search\"]",
-        ),
+        ("GET", "/api/session?search=a&search=b", "Expected string | undefined\n  at [\"search\"]"),
     ];
     for (method, target, message) in query_probes {
-        let response = support::request(server.addr, method, target, &[], b"")
-            .await
-            .expect("raw");
+        let response = support::request(server.addr, method, target, &[], b"").await.expect("raw");
         let text = response.text();
         assert_eq!(response.status, 400, "{method} {target}: {text}");
         let envelope = response.json();
@@ -1383,8 +1379,8 @@ async fn rollout_wire_probes() {
         assert_ne!(response.status, 400, "{target} must not 400: {}", response.text());
     }
     // Duplicate deep members last-win (probe r3: no schema 400).
-    let response = server.raw("/api/config?location%5Bdirectory%5D=a&location%5Bdirectory%5D=b")
-        .await;
+    let response =
+        server.raw("/api/config?location%5Bdirectory%5D=a&location%5Bdirectory%5D=b").await;
     assert_ne!(response.status, 400, "duplicate deep members: {}", response.text());
 
     // -- P10-N1: content types ----------------------------------------
@@ -1502,7 +1498,12 @@ async fn rollout_wire_probes() {
 
     // -- location-first controls: the 404 always wins ------------------
     let controls: &[(&str, &str, Option<&[u8]>, &str)] = &[
-        ("POST", "/api/session/ses_H0MISSING/interrupt?resume=bogus", None, "session.interrupt query"),
+        (
+            "POST",
+            "/api/session/ses_H0MISSING/interrupt?resume=bogus",
+            None,
+            "session.interrupt query",
+        ),
         (
             "DELETE",
             "/api/session/ses_H0MISSING/form/frm_H0MISSING?message=bogus",
@@ -1523,11 +1524,8 @@ async fn rollout_wire_probes() {
         ),
     ];
     for (method, target, body, label) in controls {
-        let headers: &[(&str, &str)] = if body.is_some() {
-            &[("content-type", "application/json")]
-        } else {
-            &[]
-        };
+        let headers: &[(&str, &str)] =
+            if body.is_some() { &[("content-type", "application/json")] } else { &[] };
         let response =
             support::request(server.addr, method, target, headers, body.unwrap_or_default())
                 .await

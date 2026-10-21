@@ -1458,7 +1458,7 @@ pub fn body_node(operation_id: &str) -> Option<u32> {
 pub fn query_node(operation_id: &str) -> Option<u32> {
     match find(operation_id)?.query {
         QueryValidation::Params(node) => Some(node),
-        _ => None,
+        QueryValidation::None => None,
     }
 }
 
@@ -1700,7 +1700,7 @@ mod tests {
                 assert_eq!(*label, "Vcs.Mode");
                 match &NODES[*node as usize] {
                     SchemaNode::Literal(values) => {
-                        assert_eq!(values, &["working", "branch", "committed"])
+                        assert_eq!(values, &["working", "branch", "committed"]);
                     }
                     other => panic!("Vcs.Mode not a Literal: {other:?}"),
                 }
