@@ -432,11 +432,32 @@ async fn recovery_sweep(engine: Arc<Engine>, boot_started_ms: i64) {
     }
 }
 
-/// Parses an `IpAddr` for the CLI (`--hostname`).
-#[must_use]
-pub fn parse_hostname(raw: &str) -> Option<IpAddr> {
+/// Resolves a `--hostname` value for the CLI (`server-process.ts:65` —
+/// v2 passes the raw STRING to the HTTP server, and Node resolves it:
+/// `localhost` and domains are accepted, an unresolvable value fails
+/// the boot). IP literals parse without touching the resolver; a
+/// hostname resolves through `getaddrinfo` (first address, the OS
+/// order Node uses); anything else is an error — never a silent
+/// fallback to 127.0.0.1.
+pub fn resolve_hostname(raw: &str) -> io::Result<IpAddr> {
+    use std::net::ToSocketAddrs as _;
     use std::str::FromStr as _;
-    IpAddr::from_str(raw).ok()
+    if let Ok(address) = IpAddr::from_str(raw) {
+        return Ok(address);
+    }
+    let resolved = (raw, 0)
+        .to_socket_addrs()
+        .map_err(|error| {
+            io::Error::new(error.kind(), format!("invalid --hostname {raw:?}: {error}"))
+        })?
+        .map(|address| address.ip())
+        .collect::<Vec<IpAddr>>();
+    resolved.into_iter().next().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("invalid --hostname {raw:?}: no addresses"),
+        )
+    })
 }
 
 /// R-09 boot wiring (`server-process.ts:46-57`): consume the inherited

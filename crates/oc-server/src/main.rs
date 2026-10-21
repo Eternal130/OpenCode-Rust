@@ -2,7 +2,7 @@
 //! app shell + handler table and serves until SIGTERM/SIGINT.
 //!
 //! ```text
-//! oc-server serve [--port <PORT>] [--hostname <IP>] [--cors <ORIGIN>]...
+//! oc-server serve [--port <PORT>] [--hostname <HOST>] [--cors <ORIGIN>]...
 //!                 [--stdio]
 //! ```
 //!
@@ -23,7 +23,7 @@ use oc_server::lifecycle::ServeOptions;
 
 fn usage() -> ! {
     eprintln!(
-        "usage: oc-server serve [--port <PORT>] [--hostname <IP>] [--cors <ORIGIN>]... [--stdio]\n\
+        "usage: oc-server serve [--port <PORT>] [--hostname <HOST>] [--cors <ORIGIN>]... [--stdio]\n\
          env: OPENCODE_PASSWORD, OPENCODE_CONFIG, OPENCODE_TEST_HOME, XDG_*"
     );
     std::process::exit(2);
@@ -55,11 +55,10 @@ fn parse_args(args: &[String]) -> BootOptions {
             }
             "--hostname" => {
                 let raw = value();
-                hostname = boot::parse_hostname(&raw);
-                if hostname.is_none() {
-                    eprintln!("invalid --hostname {raw:?}");
+                hostname = Some(boot::resolve_hostname(&raw).unwrap_or_else(|error| {
+                    eprintln!("{error}");
                     usage();
-                }
+                }));
             }
             "--cors" => {
                 options.cors_origins.push(value());
