@@ -43,6 +43,76 @@ impl Drop for SandboxDrop {
     }
 }
 
+/// GATE-DB-FIXTURE-WAL: copy the staged fixture WITH its `-wal`/`-shm`
+/// sidecars next to the sandbox main file. The CI `runtime-gates` chain
+/// harvests the v2-written library db after the reference (WAL mode,
+/// `packages/core/src/database/sqlite.bun.ts:93`) was ended without a
+/// checkpoint — schema+data can still live in the `-wal` sidecar, and a
+/// main-file-only copy is a 4096-byte 0-table shell (CI 39519736380:
+/// `no such table: migration` right in `probe_real_data`). A checkpointed
+/// fixture (no sidecars) copies the main file alone, unchanged behavior.
+fn copy_db_with_sidecars(staged: &Path, target: &Path) -> std::io::Result<()> {
+    std::fs::copy(staged, target)?;
+    let target_name = target.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_owned();
+    let staged_name = staged.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_owned();
+    for suffix in ["-wal", "-shm"] {
+        let side = staged.with_file_name(format!("{staged_name}{suffix}"));
+        if side.is_file() {
+            std::fs::copy(&side, target.with_file_name(format!("{target_name}{suffix}")))?;
+        }
+    }
+    Ok(())
+}
+
+/// Hermetic pin for `copy_db_with_sidecars` (GATE-DB-FIXTURE-WAL): the
+/// sidecars must land next to the sandbox main file when the staged
+/// fixture carries them, and must not be invented when it does not.
+/// Pure file semantics — no database engine needed here; the WAL-replay
+/// half of the pin (a copied sidecar set really serves the rows) lives
+/// in `tools/parity/tests/p10_db_import.rs`
+/// (`p10_db_import_wal_sidecar_copy_completes_the_fixture`), where
+/// rusqlite is available.
+#[test]
+fn real_db_null_census_wal_sidecar_copy_lands_next_to_the_main_file() {
+    let root = PathBuf::from(format!(
+        "/tmp/opencode/oc-server-realdb-sidecar-pin-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let staged = root.join("staged");
+    std::fs::create_dir_all(&staged).expect("staged dir");
+    // A fixture harvested WITH live sidecars.
+    std::fs::write(staged.join("v2-library.db"), b"main-bytes").expect("main");
+    std::fs::write(staged.join("v2-library.db-wal"), b"wal-bytes").expect("wal");
+    std::fs::write(staged.join("v2-library.db-shm"), b"shm-bytes").expect("shm");
+    let sandbox = root.join("sandbox");
+    std::fs::create_dir_all(&sandbox).expect("sandbox dir");
+    copy_db_with_sidecars(&staged.join("v2-library.db"), &sandbox.join("opencode.db"))
+        .expect("copy with sidecars");
+    assert_eq!(std::fs::read(sandbox.join("opencode.db")).unwrap(), b"main-bytes");
+    assert_eq!(std::fs::read(sandbox.join("opencode.db-wal")).unwrap(), b"wal-bytes");
+    assert_eq!(std::fs::read(sandbox.join("opencode.db-shm")).unwrap(), b"shm-bytes");
+
+    // A checkpointed fixture (sidecars gone, e.g. the staged
+    // wal_checkpoint(TRUNCATE) in the CI harvest removed them): the main
+    // file alone must copy, and no phantom sidecars may appear.
+    let checkpointed = root.join("checkpointed");
+    std::fs::create_dir_all(&checkpointed).expect("checkpointed dir");
+    std::fs::write(checkpointed.join("v2-library.db"), b"main-bytes").expect("main alone");
+    let clean = root.join("sandbox-clean");
+    std::fs::create_dir_all(&clean).expect("clean dir");
+    copy_db_with_sidecars(&checkpointed.join("v2-library.db"), &clean.join("opencode.db"))
+        .expect("copy without sidecars");
+    assert_eq!(std::fs::read(clean.join("opencode.db")).unwrap(), b"main-bytes");
+    assert!(!clean.join("opencode.db-wal").exists());
+    assert!(!clean.join("opencode.db-shm").exists());
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
 fn redirect_env(home: &Path, log_file: &Path) {
     std::env::set_var("HOME", home);
     std::env::set_var("XDG_CONFIG_HOME", home.join(".config"));
@@ -183,8 +253,12 @@ async fn real_migrated_db_serves_create_list_and_messages_without_500s() {
     let _sandbox = SandboxDrop(root.clone());
 
     // The working copy: the staged master is never mutated by the test.
+    // GATE-DB-FIXTURE-WAL: WITH the staged -wal/-shm sidecars when the
+    // fixture carries them (a killed-WAL harvest keeps schema+data in
+    // the sidecar — a main-file-only copy is a 0-table shell).
     let started = Instant::now();
-    std::fs::copy(&staged, data.join("opencode.db")).expect("copy real DB into sandbox");
+    copy_db_with_sidecars(&staged, &data.join("opencode.db"))
+        .expect("copy real DB (with sidecars) into sandbox");
     eprintln!(
         "copied real DB ({} bytes) in {:?}",
         staged.metadata().unwrap().len(),
