@@ -812,11 +812,20 @@ fn handle(
     socket.set_read_timeout(Some(Duration::from_millis(200))).ok();
     let path = head.split_whitespace().nth(1).unwrap_or_default().to_owned();
     let method = head.split_whitespace().next().unwrap_or_default().to_uppercase();
+    // TUI-TD15's knock-on: the startup prompt's resolved model
+    // commits through `session.switchModel` BEFORE the prompt POST
+    // (`commitModel`, prompt/index.tsx:1283-1294) — the endpoint's
+    // contract is 204 No Content, and the catch-all 200+`{}` would
+    // fail the empty-expectation and swallow the prompt POST.
+    if method == "POST" && path.starts_with("/api/session/") && path.ends_with("/model") {
+        let response = b"HTTP/1.1 204 No Content\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
+        let _ = socket.write_all(response);
+        return;
+    }
     // TUI-14 — the shell-mode submit endpoint: record the request
     // BODY (the command), answer 204 No Content (the server contract
     // for `session.shell`).
-    if method == "POST" && path.starts_with("/api/session/") && path.ends_with("/shell") {
-        let content_length = head
+    if method == "POST" && path.starts_with("/api/session/") && path.ends_with("/shell") {        let content_length = head
             .split("\r\n")
             .find_map(|line| {
                 line.strip_prefix("content-length:")
@@ -1023,6 +1032,20 @@ fn handle(
         };
         format!(r#"{{"paths":{{"tmp":"/tmp"}},"pid":1,"urls":["http://127.0.0.1:4096"],"version":"2.0.0"{capabilities}}}"#)
             .to_owned()
+    } else if path.split('?').next().unwrap_or("") == "/api/model" {
+        // model.list (TUI-TD15's `--prompt` readiness gate reads it —
+        // the startup prompt only submits once the catalog loads and
+        // a model resolves; the catch-all `{}` would fail the parse
+        // and hold the gate forever). One parityfake model, matching
+        // the route_server fixture's catalog.
+        concat!(
+            r#"{"data":[{"providerID":"parityfake","modelID":"fake-model","id":"fake-model","#,
+            r#""name":"fake-model","status":"active","enabled":true,"cost":[],"variants":[],"#,
+            r#""capabilities":{"input":["text"],"output":["text"],"tools":false},"#,
+            r#""limit":{"context":1000,"output":100},"time":{"released":1.0}}],"#,
+            r#""location":{"directory":"/tmp"}}"#
+        )
+        .to_owned()
     } else if path.split('?').next().unwrap_or("") == "/api/project"
         && projects.lock().expect("projects").is_some()
     {
