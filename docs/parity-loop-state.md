@@ -82,7 +82,11 @@
 | 39501153874 | f1af96a | ci | **failure** — only `nextest (pty, serialized)` (the TUI-35 90 s wedge). Now fixed (bba65d3). |
 | 39507224067 | b054456 | ci | **failure** — only `nextest (pty, serialized)` again (session_filter_semantics = TUI-7). Now fixed (e4c3bd4). fmt+clippy ✅ build+archive ✅ nextest ✅ frame-budget ✅ guards ✅ |
 | 39507225187 | b054456 | runtime-gates (dispatch) | **failure** — `build target (macos-latest, aarch64-apple-darwin)` **GREEN** (the E0425/E0308 class is dead) · build+archive ✅ · stage v2-written db ✅ · needs-runtime (AI) ✅ · **red**: needs-runtime (TUI) [= the TUI-7 PTY battery, now fixed], p10 battery [= the DB fixture gap], §12.3 gates [= GATE-DB-NULLROWS], gates summary [derived] |
-| (pending) | e4c3bd4 | ci + runtime-gates | to be dispatched at the end of iteration 11 |
+| 39519705990 | 1b13b1f | ci (push) | in progress at the end of iteration 11 — expect: guards ✅, nextest ✅, **PTY job ✅ (TUI-35 + TUI-7 both merged)** |
+| 39519736380 | 1b13b1f | runtime-gates (dispatch) | in progress at the end of iteration 11 — expect: macos leg ✅ (was green already), PTY battery ✅, **p10 battery + §12.3 + gates summary still RED (the DB fixture gap)** |
+
+> The next session should check these two runs first: they decide whether SURF-PLATFORM / CI-RUNTIME-GATES-RED /
+> TUI-35 / TUI-7 can be promoted from `fixed` to `verified`.
 
 ### The DB gap is now the honest, dominant §12.2 blocker
 
