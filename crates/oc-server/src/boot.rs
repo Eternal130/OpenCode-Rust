@@ -40,6 +40,7 @@ use oc_util::determinism::{SystemClock, UuidV4IdGen};
 
 use crate::app::AppShell;
 use crate::lifecycle::{self, ServeHandle, ServeOptions};
+use crate::server_process_env;
 use crate::state::{AppState, AuthConfig};
 
 pub use oc_core::provider_catalog::{providers_from_config, ConfigProviders};
@@ -133,13 +134,17 @@ pub async fn boot_and_serve(options: &BootOptions) -> io::Result<ServeHandle> {
     // seeding providers from the `opencode-rust`-suffixed dir bound
     // ZERO config providers, so `providers.own` never reached the
     // model list and the boot default fell to the catalog fallback.
-    let loader = Loader::new(
+    let mut loader = Loader::new(
         config_location.clone(),
         GlobalDirs {
             config: options.home.join(".config").join("opencode"),
             home: options.home.clone(),
         },
     );
+    // CLI-N4 — `OPENCODE_CONFIG_PROJECT_DISABLE` /
+    // `OPENCODE_DISABLE_PROJECT_CONFIG` (`server-process.ts:112-116`):
+    // project config discovery is disabled for this server.
+    server_process_env::configure_loader(&mut loader);
     let snapshot = loader.load();
     let providers = providers_from_config(&snapshot);
     if trace_boot {
@@ -191,9 +196,13 @@ pub async fn boot_and_serve(options: &BootOptions) -> io::Result<ServeHandle> {
             _ => {}
         }
     }
-    if let Ok(url) = std::env::var("OPENCODE_MODELS_DEV_URL") {
-        engine_options.catalog_url = Some(url);
-    }
+    // CLI-N4 — the v2 server-process env switches (`server-process.ts:
+    // 96-134`): `OPENCODE_MODELS_URL` (refresh source), `OPENCODE_MODELS_
+    // PATH` (a file catalog that wins over the embedded snapshot), and
+    // `OPENCODE_DISABLE_MODELS_FETCH` (truthy keeps the refresh loop
+    // off). Applied after the infra gate so a truthy disable always
+    // wins, exactly like v2's `fetch: !truthy(...)`.
+    server_process_env::apply_models_env(&mut engine_options);
 
     // The production plugin host (wave-12): boot from the resolved
     // config's `plugins[]` BEFORE `Engine::boot` — the engine options
@@ -508,7 +517,7 @@ pub fn location_config(
     engine: &oc_core::engine::Engine,
     location: &oc_core::location::LocationRef,
 ) -> oc_core::config::Loaded {
-    Loader::new(
+    let mut loader = Loader::new(
         location.as_path().to_path_buf(),
         GlobalDirs {
             // The shared v2 global config dir — same source as the boot
@@ -516,8 +525,11 @@ pub fn location_config(
             config: engine.home.join(".config").join("opencode"),
             home: engine.home.clone(),
         },
-    )
-    .load()
+    );
+    // CLI-N4 — the project-config disable switch applies to every
+    // config load the server performs (v2 `Config.configured`).
+    server_process_env::configure_loader(&mut loader);
+    loader.load()
 }
 
 /// The config-defined custom providers visible at a location (for the

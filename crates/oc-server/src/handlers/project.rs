@@ -260,13 +260,15 @@ fn configured_worktree_directory(
     state: &SharedState,
     project_worktree: &std::path::Path,
 ) -> Option<std::path::PathBuf> {
-    let loader = oc_core::config::Loader::new(
+    let mut loader = oc_core::config::Loader::new(
         project_worktree.to_path_buf(),
         oc_core::config::GlobalDirs {
             config: state.engine.home.join(".config").join("opencode"),
             home: state.engine.home.clone(),
         },
     );
+    // CLI-N4 — the project-config disable switch (v2 Config.configured).
+    crate::server_process_env::configure_loader(&mut loader);
     let snapshot = loader.load();
     let directory = oc_core::config::latest(&snapshot.entries, |info| {
         info.worktree.as_ref().map(|wt| wt.directory.clone())
