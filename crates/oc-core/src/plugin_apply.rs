@@ -326,6 +326,11 @@ impl<E: Send + 'static> HookHandler<E> for GuestHookHandler<E> {
 
 /// Register one guest hook subscription into `hooks` (registration
 /// order preserved; the caller appends in snapshot order).
+// One registration arm per wire codec (five hook shapes, each with its
+// scope-flattened event mapping from plugin_apply's v2 table); splitting
+// per-hook helpers would duplicate the snapshot-order contract, so the
+// length is intentional.
+#[allow(clippy::too_many_lines)]
 async fn register_guest_hook(
     hooks: &Arc<HookRegistry>,
     definition: &PluginHookDef,
@@ -1058,12 +1063,7 @@ mod wire {
         model: ModelRef,
         kind: crate::hooks::SessionRequestKind,
     ) -> TransportScopeWire {
-        TransportScopeWire {
-            session_id,
-            agent: Some(agent),
-            model,
-            kind: kind.as_str().to_owned(),
-        }
+        TransportScopeWire { session_id, agent: Some(agent), model, kind: kind.as_str().to_owned() }
     }
 
     fn http_wire_to_parts(wire: &HttpWire) -> crate::hooks::HttpRequest {
