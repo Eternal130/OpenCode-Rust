@@ -713,52 +713,6 @@ fn recents_ctrl_prompt_index() {
     assert_eq!(state.options.len(), 0, "no recents under a query");
 }
 
-/// TUI-TD12 — `/rename <title>` with an argument (index.tsx:899-911):
-/// a non-empty argument renames DIRECTLY (no dialog); no argument
-/// opens the rename dialog.
-#[test]
-fn rename_title() {
-    use oc_tui::components::command_palette::{Dispatch, StoreDispatcher};
-
-    let store = Store::new(Runtime::new());
-    store.open_tab("s1", None);
-    store.select_tab("s1");
-    let mut dispatcher = StoreDispatcher;
-
-    // No argument: the dialog (DialogSessionRename seeded with the
-    // current title).
-    assert_eq!(dispatcher.dispatch(&store, "session.rename", None), Dispatch::Handled);
-    assert!(matches!(
-        store.top_dialog().map(|entry| entry.kind),
-        Some(DialogKind::SessionRename { .. })
-    ));
-
-    // With an argument: the direct rename — no dialog, the title
-    // lands optimistically + the rename request fires (the POST's
-    // echo confirms).
-    let title_arg = "修复登录".to_owned();
-    assert_eq!(
-        dispatcher.dispatch(&store, "session.rename", Some(title_arg.as_str())),
-        Dispatch::Handled
-    );
-    assert!(store.top_dialog().is_none(), "the direct path never opens the dialog");
-    let tabs = store.tabs();
-    let tab = tabs.tabs.iter().find(|tab| tab.session_id == "s1").expect("the open tab");
-    assert_eq!(store.display_title(tab).as_deref(), Some("修复登录"));
-
-    // The empty-string argument is the GENERATE arm (v2: `title
-    // ? session.update : title.generate`) — the request fires with
-    // the empty title, never the dialog.
-    let requests = store.take_rename_requests();
-    assert_eq!(requests, vec![("s1".to_owned(), "修复登录".to_owned())]);
-    assert_eq!(dispatcher.dispatch(&store, "session.rename", Some("")), Dispatch::Handled);
-    assert!(store.top_dialog().is_none(), "the generate arm is not the dialog either");
-    assert_eq!(
-        store.take_rename_requests(),
-        vec![("s1".to_owned(), String::new())]
-    );
-}
-
 /// TUI-TD13 — `session.copy` / `/copy` (index.tsx:1180-1200): the
 /// whole transcript as markdown to the clipboard ("## User"/"##
 /// Assistant" sections joined by `---`) + the exact v2 toasts.
@@ -901,6 +855,102 @@ fn palette_messages_copy_session() {
             "{hidden} stays palette-invisible (v2 palette: undefined)"
         );
     }
+}
+
+/// TUI-TD12 — `/rename <title>` with an argument (index.tsx:899-911):
+/// a non-empty argument renames DIRECTLY (no dialog); no argument
+/// opens the rename dialog.
+#[test]
+fn rename_title() {
+    use oc_tui::components::command_palette::{Dispatch, StoreDispatcher};
+
+    let store = Store::new(Runtime::new());
+    store.open_tab("s1", None);
+    store.select_tab("s1");
+    let mut dispatcher = StoreDispatcher;
+
+    // No argument: the dialog (DialogSessionRename seeded with the
+    // current title).
+    assert_eq!(dispatcher.dispatch(&store, "session.rename", None), Dispatch::Handled);
+    assert!(matches!(
+        store.top_dialog().map(|entry| entry.kind),
+        Some(DialogKind::SessionRename { .. })
+    ));
+
+    // With an argument: the direct rename — no dialog, the title
+    // lands optimistically + the rename request fires (the POST's
+    // echo confirms).
+    let title_arg = "修复登录".to_owned();
+    assert_eq!(
+        dispatcher.dispatch(&store, "session.rename", Some(title_arg.as_str())),
+        Dispatch::Handled
+    );
+    assert!(store.top_dialog().is_none(), "the direct path never opens the dialog");
+    let tabs = store.tabs();
+    let tab = tabs.tabs.iter().find(|tab| tab.session_id == "s1").expect("the open tab");
+    assert_eq!(store.display_title(tab).as_deref(), Some("修复登录"));
+
+    // The empty-string argument is the GENERATE arm (v2: `title
+    // ? session.update : title.generate`) — the request fires with
+    // the empty title, never the dialog.
+    let requests = store.take_rename_requests();
+    assert_eq!(requests, vec![("s1".to_owned(), "修复登录".to_owned())]);
+    assert_eq!(dispatcher.dispatch(&store, "session.rename", Some("")), Dispatch::Handled);
+    assert!(store.top_dialog().is_none(), "the generate arm is not the dialog either");
+    assert_eq!(
+        store.take_rename_requests(),
+        vec![("s1".to_owned(), String::new())]
+    );
+}
+
+/// TUI-18 — the terminal window title OSC 0 (app.tsx:596-622): home
+/// and untitled sessions title the window `OpenCode`, a titled
+/// session `OC | {title}` (40+ chars truncated to 37 + `…`), the
+/// disabled config clears to `""`, and the OSC 0 bytes ride the
+/// draw seam on change.
+#[test]
+fn osc_app() {
+    use oc_tui::components::command_palette::{Dispatch, StoreDispatcher};
+    use oc_tui::store::Route;
+
+    // The OSC 0 byte shape (BEL-terminated).
+    assert_eq!(
+        oc_tui::terminal_proto::osc_title_sequence("OpenCode"),
+        b"\x1b]0;OpenCode\x07".to_vec()
+    );
+    assert_eq!(oc_tui::terminal_proto::osc_title_sequence(""), b"\x1b]0;\x07".to_vec());
+
+    let store = Store::new(Runtime::new());
+    assert_eq!(store.terminal_title(), "OpenCode", "home");
+
+    // An untitled session keeps the plain wordmark.
+    store.open_tab("s1", None);
+    assert_eq!(store.terminal_title(), "OpenCode");
+
+    // A titled session: `OC | {title}`.
+    store.open_tab("s1", Some("Fix login".to_owned()));
+    assert_eq!(store.terminal_title(), "OC | Fix login");
+
+    // The 40-char truncation (37 + `…`).
+    let long = "x".repeat(50);
+    store.open_tab("s1", Some(long.clone()));
+    let title = store.terminal_title();
+    assert!(title.starts_with("OC | "));
+    assert_eq!(title.chars().count(), "OC | ".chars().count() + 38, "37 x's + …");
+    assert!(title.ends_with('…'));
+
+    // Home again: back to the wordmark.
+    store.navigate(Route::Home);
+    assert_eq!(store.terminal_title(), "OpenCode");
+
+    // The disabled config clears the window name (the toggle's
+    // `setTerminalTitle("")` arm) — via the settings snapshot.
+    store.settings_snapshot_set("terminal.title", "false");
+    assert_eq!(store.terminal_title(), "");
+    let mut dispatcher = StoreDispatcher;
+    assert_eq!(dispatcher.dispatch(&store, "terminal.title.toggle", None), Dispatch::Handled);
+    store.settings_snapshot_set("terminal.title", "true");
+    assert_eq!(store.terminal_title(), "OpenCode");
 }
 
 /// TUI-10 (the diff half): a working-tree image file renders the

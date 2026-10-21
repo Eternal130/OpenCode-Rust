@@ -3812,6 +3812,47 @@ impl Store {
         self.location_error.borrow().clone()
     }
 
+    /// TUI-18 — `terminalTitleEnabled()` (app.tsx:597: `config.
+    /// terminal?.title ?? true`): the settings snapshot's
+    /// `terminal.title` (unset = on, only an explicit `"false"`
+    /// disables).
+    #[must_use]
+    pub fn terminal_title_enabled(&self) -> bool {
+        self.settings_snapshot_value("terminal.title") != "false"
+    }
+
+    /// TUI-18 — the terminal window title (`setTerminalTitle`'s
+    /// effect, app.tsx:596-622): `""` while disabled (the toggle's
+    /// clearing arm), `OpenCode` on home and on untitled/fallback
+    /// sessions, else `OC | {title}` with the 40-char truncation
+    /// (37 chars + `…`).
+    #[must_use]
+    pub fn terminal_title(&self) -> String {
+        if !self.terminal_title_enabled() {
+            return String::new();
+        }
+        match &self.route.get() {
+            Route::Home => "OpenCode".to_owned(),
+            Route::Session { session_id } => {
+                let tabs = self.tabs();
+                let title = tabs
+                    .tabs
+                    .iter()
+                    .find(|tab| tab.session_id == *session_id)
+                    .and_then(|tab| self.display_title(tab))
+                    .or_else(|| self.session_title(session_id));
+                match title {
+                    None => "OpenCode".to_owned(),
+                    Some(title) if title.chars().count() > 40 => {
+                        let head: String = title.chars().take(37).collect();
+                        format!("OC | {head}…")
+                    }
+                    Some(title) => format!("OC | {title}"),
+                }
+            }
+        }
+    }
+
     /// TUI-30 — the SessionLocationMissing mount gate
     /// (index.tsx:1484-1496): `session() &&
     /// currentLocation.error?.location.directory ===
