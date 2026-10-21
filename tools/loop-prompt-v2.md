@@ -149,6 +149,9 @@ flake 护栏保留：CI retries、PTY 族串行 job、硬超时；known-red 挂 
 - 不让 fixer 自证；不把 skip/ignore/删断言当绿。
 - 不把 accepted 当垃圾桶；没有 ADR 的 accepted 打回。
 - 不混合上游版本；v2.0.24 的条目只用 2.0.24 证据。
+- 提交身份一律使用全局配置的 Eternal130 <Eternal130@outlook.com>：
+  禁止设置 repo-local user.name/user.email、禁止 GIT_AUTHOR_*/GIT_COMMITTER_*
+  环境覆盖、禁止按 lane 命名身份。提交信息与提交内容一律英文。
 - 不把整份 PARITY-LOOP.md 塞给 fixer；只给 cluster 小节 + ledger 条目。
 - 不在一个 iteration 里修多个 cluster；发现跨簇根因新增条目交回 orchestrator。
 - 不在无 ref 证据时 enforce 契约（probe-first，先证后执）。
