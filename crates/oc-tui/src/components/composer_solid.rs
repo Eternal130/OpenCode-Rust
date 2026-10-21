@@ -259,12 +259,16 @@ struct ComposerInputs {
     /// shortcut run `text.base` + the counts muted (base when
     /// hovered).
     footer_live: StyledText,
+    /// TUI-14 — the shell-mode hint (`esc exit shell mode`): `esc ` in
+    /// `text.base`, the label muted (footer.tsx:107-112).
+    footer_shell: StyledText,
     // -- dynamic geometry (content-dependent, patched) --------------------
     interrupt_x: usize,
     block_x: usize,
     command_x: usize,
     plugin_x: usize,
     live_x: usize,
+    shell_x: usize,
     // -- mount-static geometry (the mount key) ----------------------------
     width: usize,
     /// The composer box's frame-relative top (the popup's rows above).
@@ -441,6 +445,14 @@ fn shape(view: &PromptView, width: usize, height: usize, theme: &ThemeState) -> 
         }
         _ => styled(Vec::new()),
     };
+    // TUI-14 — the shell-mode hint: `esc ` base + label muted.
+    let footer_shell = match &plan.shell_hint {
+        Some((_, label)) => styled(vec![
+            chunk("esc ".to_owned(), colors.text_base, 0),
+            chunk(label.clone(), colors.muted, 0),
+        ]),
+        None => styled(Vec::new()),
+    };
 
     // The popup above the box (rows y = top − popup_h + i).
     let popup_rows: Vec<PopupRowView> = match &view.autocomplete {
@@ -476,11 +488,13 @@ fn shape(view: &PromptView, width: usize, height: usize, theme: &ThemeState) -> 
         footer_command,
         footer_plugin,
         footer_live,
+        footer_shell,
         interrupt_x: plan.interrupt_x.unwrap_or(0),
         block_x: plan.block_x.unwrap_or(0),
         command_x: plan.command_x.unwrap_or(0),
         plugin_x: plan.plugin.as_ref().map_or(0, |(x, _)| *x),
         live_x: plan.live.as_ref().map_or(0, |(x, _)| *x),
+        shell_x: plan.shell_hint.as_ref().map_or(0, |(x, _)| *x),
         width,
         top: view.top,
         popup_h,
@@ -770,6 +784,10 @@ fn composer_element(inputs: &Signal<ComposerInputs>, geo: &ComposerInputs) -> El
                 footer_text(
                     |i: &ComposerInputs| i.live_x,
                     |i: &ComposerInputs| i.footer_live.clone(),
+                ),
+                footer_text(
+                    |i: &ComposerInputs| i.shell_x,
+                    |i: &ComposerInputs| i.footer_shell.clone(),
                 ),
             ]))
             .into_element(),

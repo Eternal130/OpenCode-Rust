@@ -605,6 +605,9 @@ pub struct FakeLlm {
     /// Whether `/api/skill` answers (opt-in — TUI-8's `DialogSkill`
     /// proof): two skills.
     pub skills: Arc<AtomicBool>,
+    /// TUI-14 — every `POST /api/session/:id/shell` body (the
+    /// shell-mode submit's server-side evidence).
+    pub shell_posts: Arc<Mutex<Vec<String>>>,
     /// SSE script played once, after the first prompt POST.
     script: Arc<Mutex<Option<Vec<ScriptEvent>>>>,
 }
@@ -621,6 +624,7 @@ impl FakeLlm {
         let pair = Arc::new(AtomicBool::new(false));
         let integrations = Arc::new(AtomicBool::new(false));
         let skills = Arc::new(AtomicBool::new(false));
+        let shell_posts: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let session_rows: Arc<Mutex<Option<Vec<String>>>> = Arc::new(Mutex::new(None));
         let projects: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
         let terminals = Arc::new(TerminalFixture::new());
@@ -633,6 +637,7 @@ impl FakeLlm {
         let shared_pair = Arc::clone(&pair);
         let shared_integrations = Arc::clone(&integrations);
         let shared_skills = Arc::clone(&skills);
+        let shared_shell_posts = Arc::clone(&shell_posts);
         let shared_rows = Arc::clone(&session_rows);
         let shared_projects = Arc::clone(&projects);
         let shared_terminals = Arc::clone(&terminals);
@@ -649,6 +654,7 @@ impl FakeLlm {
                         let pair = Arc::clone(&shared_pair);
                         let integrations = Arc::clone(&shared_integrations);
                         let skills = Arc::clone(&shared_skills);
+                        let shell_posts = Arc::clone(&shared_shell_posts);
                         let rows = Arc::clone(&shared_rows);
                         let projects = Arc::clone(&shared_projects);
                         let terminals = Arc::clone(&shared_terminals);
@@ -663,6 +669,7 @@ impl FakeLlm {
                                 &pair,
                                 &integrations,
                                 &skills,
+                                &shell_posts,
                                 &rows,
                                 &projects,
                                 &terminals,
@@ -685,6 +692,7 @@ impl FakeLlm {
             pair,
             integrations,
             skills,
+            shell_posts,
             session_rows,
             projects,
             terminals,
@@ -762,6 +770,7 @@ fn handle(
     pair: &Arc<AtomicBool>,
     integrations: &Arc<AtomicBool>,
     skills: &Arc<AtomicBool>,
+    shell_posts: &Arc<Mutex<Vec<String>>>,
     session_rows: &Arc<Mutex<Option<Vec<String>>>>,
     projects: &Arc<Mutex<Option<String>>>,
     terminals: &Arc<TerminalFixture>,
@@ -785,6 +794,38 @@ fn handle(
     socket.set_read_timeout(Some(Duration::from_millis(200))).ok();
     let path = head.split_whitespace().nth(1).unwrap_or_default().to_owned();
     let method = head.split_whitespace().next().unwrap_or_default().to_uppercase();
+    // TUI-14 — the shell-mode submit endpoint: record the request
+    // BODY (the command), answer 204 No Content (the server contract
+    // for `session.shell`).
+    if method == "POST" && path.starts_with("/api/session/") && path.ends_with("/shell") {
+        let content_length = head
+            .split("\r\n")
+            .find_map(|line| {
+                line.strip_prefix("content-length:")
+                    .or_else(|| line.strip_prefix("Content-Length:"))
+            })
+            .and_then(|value| value.trim().parse::<usize>().ok())
+            .unwrap_or(0);
+        let mut body_bytes = Vec::new();
+        // The head read may have swallowed body bytes already (the
+        // first socket read can carry head + body together).
+        let split = head.find("\r\n\r\n").map_or(0, |at| at + 4);
+        body_bytes.extend_from_slice(&head.as_bytes()[split.min(head.len())..]);
+        while body_bytes.len() < content_length {
+            let mut chunk = [0u8; 1024];
+            match socket.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(count) => body_bytes.extend_from_slice(&chunk[..count]),
+            }
+        }
+        shell_posts
+            .lock()
+            .expect("shell posts")
+            .push(format!("{path} {}", String::from_utf8_lossy(&body_bytes)));
+        let response = b"HTTP/1.1 204 No Content\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
+        let _ = socket.write_all(response);
+        return;
+    }
     if std::env::var("DBG_FAKE_LOG").is_ok() || std::env::var("DBG_FAKE_LOG2").is_ok() {
         eprintln!("DBG fake: {method} {path}");
     }

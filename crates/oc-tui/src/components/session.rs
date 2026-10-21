@@ -1216,10 +1216,17 @@ fn plural_s(count: usize) -> &'static str {
     }
 }
 
-/// The session composer's footer hints (#4/#20/Wave A/TUI-12): the
-/// location label, the usage arm, the interrupt hint, and the live
-/// segment.
-fn composer_footer_hints(store: &Store, session_id: &str, live_label: &str) -> FooterHints {
+/// The session composer's footer hints (#4/#20/Wave A/TUI-12/TUI-14):
+/// the location label, the usage arm, the interrupt hint, the live
+/// segment — and the SHELL-MODE swap (every hint segment drops for
+/// the single `esc exit shell mode` hint, footer.tsx:107-112).
+fn composer_footer_hints(
+    store: &Store,
+    session_id: &str,
+    composer: &crate::components::composer::Composer,
+    live_label: &str,
+) -> FooterHints {
+    let shell = composer.mode == crate::components::composer::ComposerMode::Shell;
     FooterHints {
         // #4: the session's `{directory}:{branch}` label when idle
         // (v2 hides it while a turn runs — the interrupt status owns
@@ -1233,8 +1240,8 @@ fn composer_footer_hints(store: &Store, session_id: &str, live_label: &str) -> F
         command_shortcut: "ctrl+p".into(),
         // #4's usage arm: the context-usage segment (PromptFooter's
         // first Match) — present after a completed turn.
-        usage: composer_usage(store, session_id),
-        plugin_hints: store.plugin_footer_hints(),
+        usage: if shell { String::new() } else { composer_usage(store, session_id) },
+        plugin_hints: if shell { Vec::new() } else { store.plugin_footer_hints() },
         // Wave A: the interrupt hint while the session's turn runs
         // (v2 prompt/index.tsx:1887-1903 — the spinner + `esc
         // interrupt` / `esc again to interrupt` status).
@@ -1247,9 +1254,14 @@ fn composer_footer_hints(store: &Store, session_id: &str, live_label: &str) -> F
         // family's running subagents + the session's in-flight
         // shells, `N subagent(s) · N shell(s)` with the
         // `session.child.first` shortcut prefix.
-        live: live_label.to_owned(),
-        live_shortcut: if live_label.is_empty() { String::new() } else { "down ".to_owned() },
+        live: if shell { String::new() } else { live_label.to_owned() },
+        live_shortcut: if shell || live_label.is_empty() {
+            String::new()
+        } else {
+            "down ".to_owned()
+        },
         live_hovered: store.live_hovered(),
+        shell,
     }
 }
 
@@ -1320,7 +1332,7 @@ fn composer_mount_frame(
     } else {
         String::new()
     };
-    let footer = composer_footer_hints(store, session_id, &live_label);
+    let footer = composer_footer_hints(store, session_id, &composer, &live_label);
     let view = PromptView {
         draft: &composer.draft,
         placeholder: composer.placeholder_text(),
@@ -1409,6 +1421,14 @@ pub fn composer_metadata(
             .or_else(|| Some("build".to_owned()))
     });
     let agent = agent_id.map(|agent| statusline_agent_label(store, &agent)).unwrap_or_default();
+    // TUI-14 — shell mode's agentLabel override ("Shell",
+    // prompt/index.tsx:1570: `store.mode === "shell" ? "Shell" : …`).
+    let agent =
+        if store.composer_mode(session_id) == crate::components::composer::ComposerMode::Shell {
+            "Shell".to_owned()
+        } else {
+            agent
+        };
     let model_ref = store.effective_model(session_id);
     let lists = store.server_lists();
     let (model, provider) = match &model_ref {

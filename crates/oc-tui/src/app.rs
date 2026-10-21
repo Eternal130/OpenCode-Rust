@@ -2203,7 +2203,13 @@ impl App {
         // 2. The managed textarea layer: with text present, keys the
         //    composer owns feed it before the base keymap sees them
         //    (printables never leak into leader continuations).
-        if !draft_empty {
+        //    TUI-14: SHELL MODE owns keys over an empty draft too
+        //    (v2's shell layers target the input regardless of text —
+        //    backspace-at-0 exits the mode, prompt/index.tsx:
+        //    1005-1018).
+        if !draft_empty
+            || self.store.composer_mode(&key) == crate::components::composer::ComposerMode::Shell
+        {
             if let Some(key_event) = composer_key(stroke) {
                 let mut composer = self.store.composer(&key);
                 let outcome = composer.handle_key(&key_event);
@@ -2479,6 +2485,12 @@ impl App {
                     return;
                 }
                 self.store.forward_submission(key, &prompt);
+            }
+            // TUI-14 — the shell-mode submit: the text routes through
+            // `session.shell` (POST /api/session/:id/shell), never the
+            // model prompt (prompt/index.tsx:1303-1307).
+            KeyOutcome::ShellCommand(command) => {
+                self.store.send_shell_command(key, &command);
             }
             KeyOutcome::Command(command) => {
                 let dispatch = self.dispatcher.dispatch(&self.store, command, None);
@@ -3721,6 +3733,23 @@ impl crate::components::composer::PromptSink for HttpPromptSink {
                     message: client_error_message(&error),
                     draft: body.text,
                 });
+            }
+        });
+    }
+
+    /// TUI-14 — the shell-mode submit (`client.api.session.shell`,
+    /// prompt/index.tsx:1303-1307): POST /api/session/:id/shell with
+    /// the client-minted inbox id + the command; a 204 means accepted
+    /// (the SSE echo drives the transcript from there).
+    fn send_shell(&self, session_id: &str, command: &str) {
+        let client = self.client.clone();
+        let target = session_id.to_owned();
+        let command = command.to_owned();
+        let inbox_id = uuid::Uuid::new_v4().to_string();
+        tokio::spawn(async move {
+            let body = oc_client::types::SessionShellBody { command, id: Some(inbox_id) };
+            if let Err(error) = client.session().shell(&target, &body).await {
+                crate::keymap::log_skip(&format!("session shell {target}: {error}"));
             }
         });
     }
