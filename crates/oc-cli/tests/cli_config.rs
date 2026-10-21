@@ -271,3 +271,133 @@ fn run_early_error_json() {
         "the human error stays on stderr:\n{stderr}"
     );
 }
+
+// ===========================================================================
+// CLI-N3 — cli.json `plugins[]` is read, and `plugin add` writes the
+// right file per entrypoint (v2 plugin/add.ts: a server entrypoint
+// (`exports["./server"]`/`.` or main) → the global opencode.json
+// `plugins`; a TUI-only entrypoint (`exports["./tui"]` only) → cli.json
+// `plugins[]` via Config.update + the `TUI plugin …` message; neither →
+// error. plugin/list.ts reads cli.json `plugins[]` and lists TUI
+// plugins with id `-`.)
+// ===========================================================================
+
+/// One pre-staged package installation in the plugin host's cache
+/// layout (a pinned `plugin add <pkg>@<version>` reuses it — no
+/// network).
+fn stage_plugin_install(sandbox: &Sandbox, pkg: &str, version: &str, manifest: &str) {
+    let root = sandbox
+        .home()
+        .join(".cache/opencode-rust/npm")
+        .join(format!("{pkg}@{version}"))
+        .join("1700000000000")
+        .join("node_modules")
+        .join(pkg);
+    std::fs::create_dir_all(&root).expect("fixture dir");
+    std::fs::write(root.join("package.json"), manifest).expect("manifest");
+    std::fs::write(root.join("tui.js"), "export default {}").expect("tui entry");
+    std::fs::write(root.join("server.js"), "module.exports = {}").expect("server entry");
+}
+
+#[test]
+fn cli_json_plugins() {
+    let sandbox = Sandbox::new("n3");
+    let binary = opencode_binary();
+    let config_root = sandbox.home().join(".config/opencode-rust");
+    let cli_json = config_root.join("cli.json");
+    let global_json = config_root.join("opencode.json");
+
+    // A TUI-only package (`exports` WITHOUT a root/`./server` key —
+    // Node fails `pkg` with ERR_PACKAGE_PATH_NOT_EXPORTED, so v2 sees
+    // no server entry) and a server package (`exports["."]`).
+    stage_plugin_install(
+        &sandbox,
+        "fake-tui-plugin",
+        "1.0.0",
+        r#"{"name":"fake-tui-plugin","version":"1.0.0","main":"tui.js","exports":{"./tui":"./tui.js"}}"#,
+    );
+    stage_plugin_install(
+        &sandbox,
+        "fake-server-plugin",
+        "1.0.0",
+        r#"{"name":"fake-server-plugin","version":"1.0.0","main":"server.js","exports":{".":"./server.js"}}"#,
+    );
+
+    let run = |args: &[&str]| {
+        let output = sandbox
+            .command(&binary, args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .expect("spawn plugin");
+        (
+            output.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&output.stdout).into_owned(),
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        )
+    };
+
+    // add — TUI-only package routes to cli.json (not the global config).
+    let (code, stdout, stderr) = run(&["plugin", "add", "fake-tui-plugin@1.0.0"]);
+    assert_eq!(code, 0, "plugin add (tui) succeeds\nstdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(
+        stdout.contains(&format!(
+            "TUI plugin \"fake-tui-plugin@1.0.0\" installed and added to {}",
+            cli_json.display()
+        )),
+        "the v2 TUI message names cli.json:\n{stdout}"
+    );
+    let document: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&cli_json).expect("cli.json written"))
+            .expect("cli.json is JSON");
+    assert_eq!(
+        document["plugins"],
+        serde_json::json!(["fake-tui-plugin@1.0.0"]),
+        "plugins[] carries the entry"
+    );
+    assert!(
+        !global_json.exists()
+            || !std::fs::read_to_string(&global_json).unwrap().contains("fake-tui-plugin"),
+        "the TUI plugin never lands in the global config"
+    );
+
+    // add — a server package routes to the global opencode.json.
+    let (code, stdout, stderr) = run(&["plugin", "add", "fake-server-plugin@1.0.0"]);
+    assert_eq!(code, 0, "plugin add (server) succeeds\nstdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(
+        stdout.contains(&format!(
+            "Plugin \"fake-server-plugin@1.0.0\" installed and added to {}",
+            global_json.display()
+        )),
+        "the v2 message names the global config:\n{stdout}"
+    );
+    let global: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&global_json).expect("global config"))
+            .expect("global config is JSON");
+    assert_eq!(global["plugins"], serde_json::json!(["fake-server-plugin@1.0.0"]));
+    let cli_back: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&cli_json).unwrap()).unwrap();
+    assert_eq!(cli_back["plugins"], serde_json::json!(["fake-tui-plugin@1.0.0"]));
+
+    // list — the cli.json TUI plugin surfaces with id `-` (v2 list.ts).
+    let (code, stdout, stderr) = run(&["plugin", "list", "--standalone"]);
+    assert_eq!(code, 0, "plugin list succeeds\nstdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(
+        stdout.lines().any(|line| {
+            line.split_whitespace().collect::<Vec<_>>() == ["-", "1.0.0", "fake-tui-plugin@1.0.0"]
+        }),
+        "the cli.json TUI plugin row (id `-`) is listed:\n{stdout}"
+    );
+
+    // remove — clears the TUI entry from cli.json and names the file.
+    let (code, stdout, stderr) = run(&["plugin", "remove", "fake-tui-plugin@1.0.0"]);
+    assert_eq!(code, 0, "plugin remove succeeds\nstdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(
+        stdout.contains(&format!("removed from {}", cli_json.display())),
+        "remove names cli.json:\n{stdout}"
+    );
+    let cli_back: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&cli_json).unwrap()).unwrap();
+    assert_eq!(cli_back["plugins"], serde_json::json!([]), "the entry is gone");
+}
