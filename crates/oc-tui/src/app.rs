@@ -2695,19 +2695,11 @@ impl App {
                 if let Some((command, args)) =
                     crate::components::composer::autocomplete::argument_slash(prompt.text.trim())
                 {
-                    if command == "session.rename" {
-                        // index.tsx:899-908: with input → `session.
-                        // update` (an empty/blank title → the title
-                        // GENERATE arm — the same POST with title "");
-                        // the pending shimmer + the `session.renamed`
-                        // echo land the new title.
-                        if let crate::store::Route::Session { session_id } = self.store.route() {
-                            let title = args.trim().to_owned();
-                            self.rename_requests.push((session_id, title));
-                        }
-                    } else {
-                        let _ = self.dispatcher.dispatch(&self.store, command, Some(args.trim()));
-                    }
+                    // TUI-TD12 — `/rename <title>`'s direct arm and
+                    // `/cd <dir>` both dispatch with the argument (the
+                    // dispatcher's argument table); the draft never
+                    // reaches the model.
+                    let _ = self.dispatcher.dispatch(&self.store, command, Some(args.trim()));
                     return;
                 }
                 self.store.forward_submission(key, &prompt);
@@ -6783,7 +6775,9 @@ pub async fn run_with_size(
         // `session.renamed` echo lands the title in the store. The
         // POST arms rename-pending (title_shimmer's envelope,
         // context/data.tsx:35-42) — the echo releases it.
-        for (session_id, title) in std::mem::take(&mut app.rename_requests) {
+        let mut renames = std::mem::take(&mut app.rename_requests);
+        renames.extend(app.store.take_rename_requests());
+        for (session_id, title) in renames {
             if std::env::var("OC_TUI_DEBUG").ok().as_deref() == Some("1") {
                 eprintln!("[tui] session rename {session_id}: {title}");
             }
