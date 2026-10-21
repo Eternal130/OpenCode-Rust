@@ -1533,6 +1533,27 @@ impl App {
             self.exit_requested = true;
             return;
         }
+        // TUI-29 — the console's `copy-selection` binding
+        // (`consoleOptions.keyBindings: [{name: "y", ctrl: true,
+        // action: "copy-selection"}]`, app.tsx:241-246 →
+        // `onCopySelection`, :242-244): while the console overlay is
+        // OPEN, ctrl+y copies the console's content + the info toast +
+        // clearSelection — before the screen-selection layer sees it.
+        if self.store.console_open() && spec == "ctrl+y" {
+            let text = self.store.console_lines().join("\n");
+            if !text.is_empty()
+                && self.store.clipboard_write(&text).is_ok()
+            {
+                self.store.toast_show(crate::components::toast::ToastOptions {
+                    title: None,
+                    message: "Copied to clipboard".to_owned(),
+                    variant: "info",
+                    ..crate::components::toast::ToastOptions::info("")
+                });
+            }
+            self.keymap.clear_pending();
+            return;
+        }
         // TUI-16 — the selection's priority-101 intercept
         // (`handleSelectionKey`, app.tsx:551-558 + selection.ts:
         // 62-98): over a LIVE (retained manual-mode) selection,
@@ -2872,6 +2893,16 @@ impl App {
             };
             paste_frame(&mut frame, &overlay, 0);
         }
+        // TUI-29 — the renderer console (`renderer.console`'s strip at
+        // the top of the screen, over the app).
+        if self.store.console_open() {
+            let overlay = crate::components::console::render_console_overlay(
+                &self.store.console_lines(),
+                &theme.styles(),
+                self.size.0,
+            );
+            paste_frame(&mut frame, &overlay, 0);
+        }
         let footer_theme = FooterTheme::from_resolved(&theme.resolved.tokens);
         if let FooterView::Permission { request } = self.store.footer().view.clone() {
             let state = self
@@ -4073,6 +4104,9 @@ pub fn apply_send_failure(store: &Store, event: PromptSinkEvent) {
     let PromptSinkEvent::SendFailed { session_key, title, message, draft } = event else {
         return;
     };
+    // TUI-29 — the renderer console captures the failure (the
+    // diagnostics class v2's console surfaces).
+    store.console_log(&format!("[tui] {title}: {message}"));
     store.toast_show(crate::components::toast::ToastOptions {
         title: Some(title),
         message,

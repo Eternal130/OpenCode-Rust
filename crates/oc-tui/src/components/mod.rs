@@ -8,6 +8,7 @@
 //! diff viewer).
 
 pub mod command_palette;
+pub mod console;
 pub mod composer;
 /// Lane M3: the composer + footer on opentui-solid (the
 /// `OC_COMPOSER_OPENTUI` flag selects it; the hand-rolled renderer

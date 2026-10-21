@@ -1444,6 +1444,12 @@ pub struct Store {
     /// run loop drains them into POSTs; `""` is the title-GENERATE
     /// arm, index.tsx:902-911).
     rename_outbox: std::cell::RefCell<Vec<(String, String)>>,
+    /// TUI-29 — the renderer console's open flag
+    /// (`renderer.console.toggle()`, app.tsx:1110-1118).
+    console_open: Cell<bool>,
+    /// TUI-29 — the console's captured diagnostics ring (the tail
+    /// renders in the overlay).
+    console_ring: std::cell::RefCell<std::collections::VecDeque<String>>,
     /// NEW-S1a: the live caret's screen cell for the TERMINAL cursor
     /// (`surface.set_cursor` at the draw seam — v2's caret is the
     /// hardware cursor, never a cell-painted block). Set during the
@@ -3117,6 +3123,8 @@ impl Store {
             pending_scroll_restore: std::cell::RefCell::new(std::collections::HashSet::new()),
             directory_recents: std::cell::RefCell::new(autocomplete::DirectoryRecents::default()),
             rename_outbox: std::cell::RefCell::new(Vec::new()),
+            console_open: Cell::new(false),
+            console_ring: std::cell::RefCell::new(std::collections::VecDeque::new()),
             caret_cell: Cell::new(None),
             connection_since: Cell::new(0),
             startup_state: RefCell::new(StartupLoadingState::default()),
@@ -3489,6 +3497,37 @@ impl Store {
     /// Drain the staged rename requests (the run loop's POST pass).
     pub fn take_rename_requests(&self) -> Vec<(String, String)> {
         std::mem::take(&mut *self.rename_outbox.borrow_mut())
+    }
+
+    // -- TUI-29: the renderer console ---------------------------------
+
+    /// `renderer.console.toggle()` (app.tsx:1110-1118).
+    pub fn console_toggle(&self) {
+        self.console_open.set(!self.console_open.get());
+        self.request_redraw();
+    }
+
+    /// Whether the console overlay is open.
+    #[must_use]
+    pub fn console_open(&self) -> bool {
+        self.console_open.get()
+    }
+
+    /// Capture one diagnostic line into the console's ring (the
+    /// send-failure/config-error/vcs-skip class of messages v2's
+    /// renderer console surfaces).
+    pub fn console_log(&self, line: &str) {
+        let mut ring = self.console_ring.borrow_mut();
+        if ring.len() >= crate::components::console::CONSOLE_RING {
+            ring.pop_front();
+        }
+        ring.push_back(line.to_owned());
+    }
+
+    /// The captured console lines (oldest first).
+    #[must_use]
+    pub fn console_lines(&self) -> Vec<String> {
+        self.console_ring.borrow().iter().cloned().collect()
     }
 
     /// Where key input goes: the top dialog when one is open, else the

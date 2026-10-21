@@ -953,6 +953,55 @@ fn osc_app() {
     assert_eq!(store.terminal_title(), "OpenCode");
 }
 
+/// TUI-29 — the renderer console (app.tsx:242-244, 1110-1118):
+/// `app.console` toggles the console overlay (the captured log tail
+/// at the top of the screen) and clears the dialog; ctrl+y over the
+/// OPEN console copies its selection (the `copy-selection` binding +
+/// `onCopySelection`: clipboard + the info toast + clearSelection).
+#[test]
+fn app_console_ctrl_copy() {
+    use oc_tui::app::App;
+    use oc_tui::components::command_palette::{Dispatch, StoreDispatcher};
+
+    let mut app = App::new((80, 24));
+    assert!(!app.store.console_open(), "closed at boot");
+
+    // The palette command toggles + clears the dialog.
+    app.store.replace_dialog(DialogKind::CommandPalette, DialogSize::Medium);
+    let mut dispatcher = StoreDispatcher;
+    assert_eq!(dispatcher.dispatch(&app.store, "app.console", None), Dispatch::Handled);
+    assert!(app.store.console_open());
+    assert!(app.store.top_dialog().is_none(), "renderer.console.toggle() + dialog.clear()");
+
+    // The console captures diagnostics (the ring) and the overlay
+    // paints the tail at the top of the screen.
+    app.store.console_log("[tui] agent list failed: 502");
+    app.store.console_log("[tui] config reloaded");
+    let theme = oc_tui::theme::ThemeState::v2_dark();
+    let overlay = oc_tui::components::console::render_console_overlay(
+        &app.store.console_lines(),
+        &theme.styles(),
+        80,
+    );
+    let text = overlay.text_grid().join("\n");
+    assert!(text.contains("console"), "the strip's title");
+    assert!(text.contains("[tui] agent list failed: 502"));
+    assert!(text.contains("[tui] config reloaded"));
+
+    // ctrl+y over the open console: the content to the clipboard +
+    // the exact toast (app.tsx:564-571's onCopySelection shape).
+    app.press("ctrl+y");
+    let toasts = app.store.toasts();
+    let toast = toasts.current().expect("the copy toast");
+    assert_eq!(toast.message, "Copied to clipboard");
+    assert_eq!(toast.variant, "info");
+
+    // The toggle closes again; ctrl+y then falls through (no
+    // console copy with the overlay closed).
+    let _ = dispatcher.dispatch(&app.store, "app.console", None);
+    assert!(!app.store.console_open());
+}
+
 /// TUI-10 (the diff half): a working-tree image file renders the
 /// inline `DiffViewerImage` — the "Working tree preview" label, the
 /// decoded `WxH` size row, the blocks pixels — and the mount records
