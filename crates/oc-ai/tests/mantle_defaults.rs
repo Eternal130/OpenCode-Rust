@@ -4,7 +4,7 @@
 //! defaults (providers/amazon-bedrock-mantle.ts:43-50).
 //!
 //! Row status: written as the ledger-named regression test; the
-//! production behavior was verified to already hold at main@66aa5ff
+//! production behavior was verified to already hold at main@d96e272
 //! (BE-4's mantle arm routes through `openai_compatible_responses_route`,
 //! which bakes the same defaults) — reported back to the orchestrator
 //! rather than claimed as a red→green fix.
