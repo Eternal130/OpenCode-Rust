@@ -889,6 +889,21 @@ async fn connect_remote(
         .default_headers(headers)
         .build()
         .map_err(|error| connect_failure(input.server, &error))?;
+    // PLUG-D30: the needs-auth signal. rmcp's streamable worker swallows
+    // the initialize 401 into a `connection closed` quit (the status never
+    // reaches the caller), so the connect pre-flights the same initialize
+    // v2's SDK issues — its 401 surfaces directly as `NeedsAuthError`
+    // there. A 401/403 answer settles `needs_auth` with the server's own
+    // challenge text; every other outcome falls through to the real
+    // handshake (transient network failures included — the rmcp attempt
+    // owns those retries).
+    if let Some(message) = preflight_challenge(&client, &url).await {
+        return Err(NeedsAuthError {
+            server: input.server.to_string(),
+            message: format!("HTTP {message}"),
+        }
+        .into());
+    }
     // Every attempt opens a fresh transport; one retry at the pristine URL
     // when the codemode param drew a 400/404, plus transient retries while
     // the startup deadline has not passed.
@@ -938,6 +953,50 @@ async fn connect_remote(
 fn error_400_404(error: &ConnectError) -> bool {
     let message = &error.message;
     message.contains("400") || message.contains("404") || message.contains("Bad Request")
+}
+
+/// The connect-time initialize probe (PLUG-D30): `Some(status text)` when
+/// the resource server answered 401/403 — the challenge the registry
+/// settles `needs_auth` on. The probe carries the SAME headers the
+/// transport would (bearer included), so it classifies exactly the
+/// handshake the rmcp attempt is about to make.
+async fn preflight_challenge(client: &reqwest::Client, url: &reqwest::Url) -> Option<String> {
+    let attempt = async {
+        let response = client
+            .post(url.clone())
+            .header("content-type", "application/json")
+            .header("accept", "application/json, text/event-stream")
+            .body(
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": 0,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-11-25",
+                        "capabilities": {},
+                        "clientInfo": { "name": "opencode" },
+                    },
+                })
+                .to_string(),
+            )
+            .send()
+            .await
+            .ok()?;
+        let status = response.status();
+        if status.as_u16() != 401 && status.as_u16() != 403 {
+            return None;
+        }
+        let challenge = response
+            .headers()
+            .get(reqwest::header::WWW_AUTHENTICATE)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        Some(match challenge {
+            Some(challenge) => format!("{status} Unauthorized: {challenge}"),
+            None => format!("{status} Unauthorized"),
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(10), attempt).await.ok().flatten()
 }
 
 fn connect_failure(server: &str, error: &dyn std::error::Error) -> ConnectFailure {
