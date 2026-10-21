@@ -1612,11 +1612,29 @@ impl App {
             // arrows/enter/ctrl+a drive the list, tabs switch with
             // left/right; leader chords still resolve through base.
             self.stroke_in_picker(stroke);
+        } else if self.location_missing_live() {
+            // TUI-30 — the SessionLocationMissing question replaced
+            // the prompt mount (SessionQuestion's base-mode layer,
+            // permission.tsx:445-447): `return` runs the selected
+            // choice — the single `move` action opens
+            // `DialogWorkspaces`; every other stroke passes (v2's
+            // layer binds only return).
+            if stroke.key == "return" && !stroke.ctrl && !stroke.alt {
+                self.store.open_worktrees_dialog();
+            }
         } else {
             self.stroke_on_route(&stroke);
         }
         self.sync_modes();
         self.store.runtime.run_effects();
+    }
+
+    /// TUI-30 — the routed session's location failed to resolve (the
+    /// SessionLocationMissing mount replaced the composer,
+    /// index.tsx:1484-1496).
+    fn location_missing_live(&self) -> bool {
+        matches!(self.store.route(), crate::store::Route::Session { session_id }
+            if self.store.session_location_missing(&session_id).is_some())
     }
 
     /// The composer's subagent picker holds the session route (#44):

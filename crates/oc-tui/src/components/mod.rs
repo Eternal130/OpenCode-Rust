@@ -28,6 +28,7 @@ pub mod diff_viewer;
 pub mod diff_viewer_mount;
 pub mod footer;
 pub mod home;
+pub mod location_missing;
 /// Lane M5: the home route chrome on opentui-solid (the
 /// `OC_HOME_OPENTUI` flag selects it; the hand-rolled painter stays
 /// the fallback — see the module doc + the M5 section of
