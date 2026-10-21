@@ -2,8 +2,41 @@
 
 > Orchestrator scratch state for the parity loop (docs/PARITY-LOOP.md).
 > Updated at the end of every iteration. Not a task queue — the ledger is.
-> **REBUILT from ledger+git 2026-10-21 08:30** (iteration 12 / wave 11 opened).
+> **REBUILT from ledger+git 2026-10-21 09:30** (iteration 13 / wave 12 opened).
 > Ledger + git are authoritative; state.md is a cross-session breadcrumb only.
+
+## WAVE 12 (iteration 13) — OPEN (dispatch intent pre-written before dispatch)
+
+- **Recovery (0a) result**: `git worktree list` → only main; all 15 pre-existing `lane/*` branches are
+  **0-ahead of main**; `git status --short` on main = clean; `.worktrees/` empty → **no orphan lane, nothing to
+  adopt, nothing to remove**. Ledger rebuilt from `parity-ledger.py summary` (406 rows) — state.md is consistent
+  with git, no discrepancy found.
+- **CI verdicts observed at open**: `ci` **39525333640** (head 137c817) = **SUCCESS 6/6** (fmt+clippy, guards,
+  build+archive, frame-budget, nextest, nextest-pty) → main is green; `runtime-gates` **39525125599** (head
+  2b5e82c) still **in_progress** at open (macos leg ✅, stage v2-db ✅, needs-runtime AI ✅, needs-runtime TUI ❌,
+  §12.3 ❌, p10 battery still running). Read its final verdict at the next iteration open.
+- **Blocking S0/S1 = 27** (all S1, no S0 open). Wave 12 units:
+  1. **FIX lane `lane-config6`** · branch `lane/config6` · worktree `/opt/opencode-rust/.worktrees/lane-config6`
+     (from `main@137c817`, chown 1000:1000) — CONFIG cluster, **6 packaged rows**: `CLI-K1` (serve --hostname,
+     on the §12.2 p10-battery critical path), `CLI-K8`, `CLI-N1`, `CLI-N2`, `CLI-N3`, `CLI-N4`.
+     All six share the regression file `crates/oc-cli/tests/cli_config.rs` → they must land in ONE lane (1 writer
+     per cluster). Ledger rows set `fixing`, owner=lane-config6 (ledger commit below).
+  2. **FIX lane `lane-db3`** · branch `lane/db3` · worktree `/opt/opencode-rust/.worktrees/lane-db3`
+     (from `main@137c817`, chown 1000:1000) — DB cluster, **1 row**: `GATE-DB-FIXTURE-WAL` (the §12.2 p10-battery
+     + §12.3 real-v2-import blocker: the CI harvest copies only the main db file and drops the SQLite `-wal`/`-shm`
+     sidecars → 4096-byte 0-table shell fixture). Write scope: `.github/workflows/runtime-gates.yml`,
+     `tools/parity/tests/p10_db_import.rs`, `crates/oc-server/tests/real_db_null_census.rs`.
+     **No path overlap with lane-config6** (different crates/files) → the two lanes may run in parallel.
+  3. **ADJUDICATION batch #5** (oracle, read-only, zero code) — S1 rows from the clusters that are NOT being fixed
+     this wave, each verdict against `/opt/opencode-ref` v2.0.24 only: accepted+ADR / duplicate / keep-open+fix scope.
+- **Write-scope / hot-file check**: lane-config6 writes `crates/oc-cli/src/**`, `crates/oc-tui/src/storage.rs`,
+  `crates/oc-server/src/**`; lane-db3 writes `.github/workflows/runtime-gates.yml`, `tools/parity/tests/**`,
+  `crates/oc-server/tests/**`. No overlap. No hot file from §10.3 is touched by either lane
+  (`crates/oc-core/src/hooks.rs`, `session/store.rs`, `jobs.rs`, `oc-server/src/handlers/session.rs`,
+  `oc-server/src/plugins.rs`, `plugin-host/src/supervisor.rs`, `oc-tui/src/app.rs`, `oc-tui/src/store.rs`,
+  `routes.gen.rs` (generated), `Cargo.toml`/`Cargo.lock` (integrator)) → **both lanes are legal to run in parallel**.
+- **Ledger ownership**: the ORCHESTRATOR is the only writer of `docs/parity-ledger.jsonl` this wave; lanes must not
+  touch it.
 
 ## WAVE 11 (iteration 12) — RESULT
 
@@ -157,6 +190,8 @@ the main file is a single header page. The downstream reds follow from that shel
 | lane | cluster | worktree | branch | owner | entries | status |
 |---|---|---|---|---|---|---|
 | `lane-db2` | DB | `.worktrees/lane-db2` (merged) | `lane/db2` | lane-db2 | GATE-DB-NULLROWS, GATE-DB-STABLE | **merged `84ab758` → verified**; worktree removable, branch kept for history |
+| `lane-config6` | CONFIG | `.worktrees/lane-config6` | `lane/config6` | lane-config6 | CLI-K1, CLI-K8, CLI-N1, CLI-N2, CLI-N3, CLI-N4 | **fixing** (wave 12) |
+| `lane-db3` | DB | `.worktrees/lane-db3` | `lane/db3` | lane-db3 | GATE-DB-FIXTURE-WAL | **fixing** (wave 12) |
 | (oracle adjudication #4 — read-only, no lane) | TUI/SURFACES/CONFIG/CRED | — | — | — | SURF-BROWSER, CLI-K2, SURF-LATEX-MERMAID, TUI-15/16/17/12, CRED-D8 | done: 2 accepted (ADR-0015/0016), 6 kept open with fix scopes |
 
 - `.worktrees/lane-db2` — merged → removable after the merge (branch `lane/db2` kept for history).
