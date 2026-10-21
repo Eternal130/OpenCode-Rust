@@ -63,12 +63,31 @@ pub async fn run(options: Options) -> i32 {
     let service = matches!(options.mode, Mode::Service);
     let config = if service { service_config::read() } else { service_config::Info::default() };
 
-    let hostname: std::net::IpAddr = options
-        .hostname
-        .as_deref()
-        .and_then(boot::parse_hostname)
-        .or_else(|| config.hostname.as_deref().and_then(boot::parse_hostname))
-        .unwrap_or(std::net::IpAddr::from([127, 0, 0, 1]));
+    // `server-process.ts:65` — v2 threads the raw hostname STRING into
+    // the HTTP server (Node resolves `localhost`/domains, and a bad
+    // value fails the boot). Resolve to an address here; an unresolvable
+    // value is an ERROR, never a silent downgrade to 127.0.0.1. The
+    // service-config fallback (`opencode service set hostname`) resolves
+    // the same way.
+    let hostname: std::net::IpAddr = if let Some(raw) = options.hostname.as_deref() {
+        match boot::resolve_hostname(raw) {
+            Ok(address) => address,
+            Err(error) => {
+                eprintln!("Error: {error}");
+                return 1;
+            }
+        }
+    } else if let Some(raw) = config.hostname.as_deref() {
+        match boot::resolve_hostname(raw) {
+            Ok(address) => address,
+            Err(error) => {
+                eprintln!("Error: {error}");
+                return 1;
+            }
+        }
+    } else {
+        std::net::IpAddr::from([127, 0, 0, 1])
+    };
     let port = options
         .port
         .or(config.port)

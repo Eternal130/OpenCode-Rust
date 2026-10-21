@@ -112,13 +112,15 @@ async fn reference_list(
     let _services = services(&state, &location).await?;
     // References are config-sourced (`Config.reference`); load the same
     // snapshot the engine assembled from.
-    let loader = oc_core::config::Loader::new(
+    let mut loader = oc_core::config::Loader::new(
         location.as_path().to_path_buf(),
         oc_core::config::GlobalDirs {
             config: state.engine.home.join(".config").join("opencode"),
             home: state.engine.home.clone(),
         },
     );
+    // CLI-N4 — the project-config disable switch (v2 Config.configured).
+    crate::server_process_env::configure_loader(&mut loader);
     let snapshot = loader.load();
     let mut references: Vec<Value> = Vec::new();
     for entry in &snapshot.entries {

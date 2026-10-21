@@ -325,13 +325,15 @@ pub async fn reload_location(state: &Arc<AppState>, location: &LocationRef) {
 /// The config fingerprint of a location directory (content hash of the
 /// loaded entries; 0 when nothing loads).
 fn config_fingerprint(engine: &Engine, location: &LocationRef) -> u64 {
-    let loader = Loader::new(
+    let mut loader = Loader::new(
         location.directory.clone(),
         GlobalDirs {
             config: engine.home.join(".config").join("opencode"),
             home: engine.home.clone(),
         },
     );
+    // CLI-N4 — the project-config disable switch (v2 Config.configured).
+    crate::server_process_env::configure_loader(&mut loader);
     let snapshot = loader.load();
     let mut hash = 0u64;
     for entry in &snapshot.entries {

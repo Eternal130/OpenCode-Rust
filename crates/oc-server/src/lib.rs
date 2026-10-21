@@ -20,6 +20,7 @@ pub mod request_validation;
 #[path = "routes.gen.rs"]
 pub mod routes_gen;
 pub mod safekill;
+pub mod server_process_env;
 pub mod state;
 
 pub mod app;
