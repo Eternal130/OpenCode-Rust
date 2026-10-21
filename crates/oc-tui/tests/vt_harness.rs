@@ -825,7 +825,8 @@ fn handle(
     // TUI-14 — the shell-mode submit endpoint: record the request
     // BODY (the command), answer 204 No Content (the server contract
     // for `session.shell`).
-    if method == "POST" && path.starts_with("/api/session/") && path.ends_with("/shell") {        let content_length = head
+    if method == "POST" && path.starts_with("/api/session/") && path.ends_with("/shell") {
+        let content_length = head
             .split("\r\n")
             .find_map(|line| {
                 line.strip_prefix("content-length:")

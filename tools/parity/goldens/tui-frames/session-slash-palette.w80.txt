@@ -12,10 +12,10 @@
   ┃ /compact     Compact session                                               ┃
   ┃ /connect     Connect an integration                                        ┃
   ┃ /continue    Switch session                                                ┃
+  ┃ /copy        Copy session transcript                                       ┃
   ┃ /debug       View debug info                                               ┃
   ┃ /diff        Open diff viewer                                              ┃
   ┃ /editor      Open editor                                                   ┃
-  ┃ /effort      Switch model variant                                          ┃
   ┃                                                                             
   ┃  /                                                                          
   ┃                                                                             

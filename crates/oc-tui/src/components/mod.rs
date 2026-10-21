@@ -8,13 +8,13 @@
 //! diff viewer).
 
 pub mod command_palette;
-pub mod console;
 pub mod composer;
 /// Lane M3: the composer + footer on opentui-solid (the
 /// `OC_COMPOSER_OPENTUI` flag selects it; the hand-rolled renderer
 /// stays the fallback — see the module doc + the M3 section of
 /// `docs/migration-m1-tabstrip.md`).
 pub mod composer_solid;
+pub mod console;
 pub mod dialog;
 pub mod dialog_config;
 pub mod dialog_open;
@@ -29,12 +29,12 @@ pub mod diff_viewer;
 pub mod diff_viewer_mount;
 pub mod footer;
 pub mod home;
-pub mod location_missing;
 /// Lane M5: the home route chrome on opentui-solid (the
 /// `OC_HOME_OPENTUI` flag selects it; the hand-rolled painter stays
 /// the fallback — see the module doc + the M5 section of
 /// `docs/migration-m1-tabstrip.md`).
 pub mod home_solid;
+pub mod location_missing;
 pub mod marquee;
 pub mod message;
 pub mod overlays;

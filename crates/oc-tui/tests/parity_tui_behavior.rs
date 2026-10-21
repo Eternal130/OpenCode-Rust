@@ -370,11 +370,8 @@ fn session_verbosity_cycle_index() {
 
     // The palette title tracks the live level.
     let props = oc_tui::components::command_palette::palette_props(&store);
-    let row = props
-        .options
-        .iter()
-        .find(|option| option.value == "session.verbosity.cycle")
-        .unwrap();
+    let row =
+        props.options.iter().find(|option| option.value == "session.verbosity.cycle").unwrap();
     assert_eq!(row.title, "Verbosity: Medium");
 }
 
@@ -402,10 +399,7 @@ fn prompt_autosubmit_ready() {
     );
     app.maybe_submit_startup_prompt();
     let composer = app.store.composer(oc_tui::app::HOME_PROMPT_KEY);
-    assert!(
-        !composer.draft.text.is_empty(),
-        "still parked while the catalog is loading"
-    );
+    assert!(!composer.draft.text.is_empty(), "still parked while the catalog is loading");
 
     // The catalog lands → the gate opens → the one-shot submit fires
     // (the draft clears into the prompt sink).
@@ -433,7 +427,7 @@ fn prompt_autosubmit_ready() {
 /// (`onHome={() => route.navigate({type:"home"})}`).
 #[test]
 fn pluginroutemis() {
-    use crossterm::event::{MouseButton, KeyEventKind, MouseEvent, MouseEventKind};
+    use crossterm::event::{KeyEventKind, MouseButton, MouseEvent, MouseEventKind};
     use oc_tui::app::App;
 
     let theme = oc_tui::theme::ThemeState::v2_dark();
@@ -481,11 +475,11 @@ fn pluginroutemis() {
     let _ = (KeyEventKind::Press,);
 }
 
-/// TUI-30 — the SessionLocationMissing recovery screen
+/// TUI-30 — the `SessionLocationMissing` recovery screen
 /// (routes/session/location-missing.tsx): when the location worker's
 /// error directory matches the routed session's `location.directory`,
 /// the question replaces the prompt mount; `return` runs the single
-/// recovery action (→ DialogWorkspaces); clearing the error restores
+/// recovery action (→ `DialogWorkspaces`); clearing the error restores
 /// the composer.
 #[test]
 fn sessionlocatio_location() {
@@ -521,12 +515,8 @@ fn sessionlocatio_location() {
     );
 
     // The question surface replaces the prompt mount.
-    let frame = oc_tui::components::session::render_session(
-        &app.store,
-        "s1",
-        &theme.styles(),
-        (100, 30),
-    );
+    let frame =
+        oc_tui::components::session::render_session(&app.store, "s1", &theme.styles(), (100, 30));
     let text = frame.text_grid().join("\n");
     assert!(text.contains("Session location unavailable"), "the question title");
     assert!(text.contains("/gone/dir"), "the failed directory");
@@ -538,18 +528,17 @@ fn sessionlocatio_location() {
     // session.move surface whose selection relocations the session).
     app.press("return");
     assert!(
-        matches!(app.store.top_dialog().map(|entry| entry.kind), Some(oc_tui::store::DialogKind::Worktrees)),
+        matches!(
+            app.store.top_dialog().map(|entry| entry.kind),
+            Some(oc_tui::store::DialogKind::Worktrees)
+        ),
         "the recovery action opens DialogWorkspaces"
     );
 
     // A resolved location clears the mount (the composer returns).
     app.store.set_location_error(None);
-    let frame = oc_tui::components::session::render_session(
-        &app.store,
-        "s1",
-        &theme.styles(),
-        (100, 30),
-    );
+    let frame =
+        oc_tui::components::session::render_session(&app.store, "s1", &theme.styles(), (100, 30));
     let text = frame.text_grid().join("\n");
     assert!(!text.contains("Session location unavailable"));
 }
@@ -610,7 +599,7 @@ fn scroll_anchor_restore() {
     let follow = store.follow_state("s1");
     let restored = match follow {
         FollowState::Free { offset, maximum } => (offset, maximum),
-        other => panic!("expected Free, got {other:?}"),
+        other @ oc_tui_core::scroll::FollowState::Sticky => panic!("expected Free, got {other:?}"),
     };
     assert_eq!(restored, (40, 98), "m2's top re-seated at screenY -2 (30-32 → 38-40)");
     assert_eq!(
@@ -618,7 +607,8 @@ fn scroll_anchor_restore() {
             .message_positions("s1")
             .iter()
             .find(|position| position.id == "m2")
-            .map(|position| position.y as i64 - i64::try_from(store.scroll_offset("s1")).unwrap()),
+            .map(|position| i64::try_from(position.y).unwrap()
+                - i64::try_from(store.scroll_offset("s1")).unwrap()),
         Some(-2),
         "the anchored message sits at the same screen row"
     );
@@ -628,10 +618,7 @@ fn scroll_anchor_restore() {
     store.scroll_command("s1", oc_tui_core::scroll::ScrollCommand::LineUp);
     store.navigate(Route::Home);
     assert!(store.scroll_anchor("s1").is_some());
-    store.set_message_positions(
-        "s1",
-        vec![MessagePosition { id: "other".to_owned(), y: 5 }],
-    );
+    store.set_message_positions("s1", vec![MessagePosition { id: "other".to_owned(), y: 5 }]);
     store.select_tab("s1");
     store.resolve_scroll_restore("s1");
     assert_eq!(store.follow_state("s1"), FollowState::Sticky, "missing anchor → toBottom");
@@ -686,13 +673,13 @@ fn recents_ctrl_prompt_index() {
     state.on_input("/cd ", 4);
     assert_eq!(state.visible, Some(Mode::Directory), "the argument slash opens the directory list");
     let options = directory_recents_options(&recents.list("p1"), "/home/u");
-    assert!(!options.is_empty());
+    assert!(!options.is_empty(), "the recents feed rows");
     assert!(options.iter().all(|option| option.description.as_deref() == Some("recent")));
     assert!(options.iter().all(|option| option.is_directory));
-    assert!(options
-        .iter()
-        .all(|option| option.destructive.as_ref().is_some_and(|action| action.confirm
-            == "Press ctrl+d to confirm")));
+    assert!(options.iter().all(|option| option
+        .destructive
+        .as_ref()
+        .is_some_and(|action| action.confirm == "Press ctrl+d to confirm")));
     let state = state.with_options(options);
 
     // ctrl+d is the two-press delete (autocomplete.tsx:629-638): the
@@ -721,7 +708,7 @@ fn session_copy() {
     use oc_tui::components::command_palette::{
         copy_session_transcript, session_transcript, Dispatch, StoreDispatcher,
     };
-    use oc_tui::components::message::model::{Message, Part, PartTime, ToolState, ToolStatus};
+    use oc_tui::components::message::model::{Message, Part, PartTime};
     use oc_tui::data::Ingest;
 
     let store = Store::new(Runtime::new());
@@ -772,7 +759,10 @@ fn session_copy() {
     // Home route: no session — the miss toast (v2's catch arm).
     let store2 = Store::new(Runtime::new());
     let _ = dispatcher.dispatch(&store2, "session.copy", None);
-    assert_eq!(copy_session_transcript(&store2, None).unwrap_err(), "Failed to copy session transcript");
+    assert_eq!(
+        copy_session_transcript(&store2, None).unwrap_err(),
+        "Failed to copy session transcript"
+    );
 
     // The `/copy` slash row exists (slash: {name: "copy"}).
     assert_eq!(
@@ -783,7 +773,7 @@ fn session_copy() {
 
 /// TUI-34 — the palette's missing command families
 /// (app.tsx:688-1216 + index.tsx command tables): messages.copy /
-/// session.copy / prompt.queue / session.queued_prompts /
+/// `session.copy` / `prompt.queue` / `session.queued_prompts` /
 /// prompt.images.view / prompt.editor / prompt.skills /
 /// session.child.first all carry their v2 rows (title, group,
 /// bindings), with the dynamic `enabled` gates filtering dead rows.
@@ -817,8 +807,9 @@ fn palette_messages_copy_session() {
     assert_eq!(row("prompt.skills").title, "Skills");
     // The gated rows register with their v2 chrome (checked through
     // the registry — the palette itself filters them while disabled).
-    let gated = |command: &str| oc_tui::components::command_palette::palette_command(command)
-        .expect("the registry row");
+    let gated = |command: &str| {
+        oc_tui::components::command_palette::palette_command(command).expect("the registry row")
+    };
     assert_eq!(gated("prompt.images.view").title, "View image attachments");
     assert_eq!(gated("prompt.images.view").bindings, &["<leader>i"][..]);
     assert_eq!(gated("session.queued_prompts").title, "View queued prompts");
@@ -897,10 +888,7 @@ fn rename_title() {
     assert_eq!(requests, vec![("s1".to_owned(), "修复登录".to_owned())]);
     assert_eq!(dispatcher.dispatch(&store, "session.rename", Some("")), Dispatch::Handled);
     assert!(store.top_dialog().is_none(), "the generate arm is not the dialog either");
-    assert_eq!(
-        store.take_rename_requests(),
-        vec![("s1".to_owned(), String::new())]
-    );
+    assert_eq!(store.take_rename_requests(), vec![("s1".to_owned(), String::new())]);
 }
 
 /// TUI-18 — the terminal window title OSC 0 (app.tsx:596-622): home

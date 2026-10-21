@@ -53,11 +53,7 @@ fn truncate_middle(value: &str, budget: usize) -> String {
 /// warning header, the muted directory + the guidance line, the
 /// `Recovery actions` choices label with the `Choose directory` pill.
 #[must_use]
-pub fn render_location_missing(
-    directory: &str,
-    styles: &ThemeStyles,
-    width: usize,
-) -> Frame {
+pub fn render_location_missing(directory: &str, styles: &ThemeStyles, width: usize) -> Frame {
     let width = width.max(4);
     let mut cells: Vec<Vec<Cell>> = vec![vec![Cell::default(); width]; LOCATION_MISSING_ROWS];
     let text = styles.text.fg.map_or(CellColor::Default, CellColor::from);
@@ -81,7 +77,7 @@ pub fn render_location_missing(
 
     // The left rail (SessionQuestion's `border: ["left"]` in the
     // focused action color).
-    for row in cells.iter_mut() {
+    for row in &mut cells {
         if let Some(cell) = row.first_mut() {
             cell.ch = '▎';
             cell.fg = accent;

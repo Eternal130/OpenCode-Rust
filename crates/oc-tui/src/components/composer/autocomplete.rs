@@ -492,12 +492,12 @@ pub fn query_between(text: &str, trigger: usize, caret: usize) -> String {
 pub fn directory_trigger(text: &str, caret: usize) -> Option<(usize, String)> {
     let chars: Vec<char> = text.chars().collect();
     let end = caret.min(chars.len());
-    let name: String = chars.iter().take(end).collect();
-    let name = name.strip_prefix('/')?;
-    let (head_name, rest) = match name.find(char::is_whitespace) {
-        Some(at) => (&name[..at], &name[at..]),
-        None => return None, // no trailing separator: the command popup owns it
+    let head: String = chars.iter().take(end).collect();
+    let name = head.strip_prefix('/')?;
+    let Some(at) = name.find(char::is_whitespace) else {
+        return None; // no trailing separator: the command popup owns it
     };
+    let (head_name, rest) = (&name[..at], &name[at..]);
     // `argumentAutocomplete: (command) => command.id === "session.cd"
     // ? "directory" : undefined` (index.tsx:1957): ONLY `/cd` carries
     // the directory list (`/rename`'s argument popup is undefined).
@@ -532,7 +532,7 @@ impl DirectoryRecents {
     #[must_use]
     pub fn list(&self, project_id: &str) -> Vec<RecentDirectory> {
         let mut entries = self.projects.get(project_id).cloned().unwrap_or_default();
-        entries.sort_by(|a, b| b.used_at.cmp(&a.used_at));
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.used_at));
         entries
     }
 
@@ -542,10 +542,7 @@ impl DirectoryRecents {
     pub fn touch(&mut self, project_id: &str, directory: &str, used_at: u64) {
         let entries = self.projects.entry(project_id.to_owned()).or_default();
         entries.retain(|item| item.directory != directory);
-        entries.insert(
-            0,
-            RecentDirectory { directory: directory.to_owned(), used_at },
-        );
+        entries.insert(0, RecentDirectory { directory: directory.to_owned(), used_at });
         entries.truncate(10);
     }
 

@@ -3489,9 +3489,7 @@ impl Store {
         if !title.is_empty() {
             self.open_tab(session_id, Some(title.to_owned()));
         }
-        self.rename_outbox
-            .borrow_mut()
-            .push((session_id.to_owned(), title.to_owned()));
+        self.rename_outbox.borrow_mut().push((session_id.to_owned(), title.to_owned()));
     }
 
     /// Drain the staged rename requests (the run loop's POST pass).
@@ -3892,7 +3890,7 @@ impl Store {
         }
     }
 
-    /// TUI-30 — the SessionLocationMissing mount gate
+    /// TUI-30 — the `SessionLocationMissing` mount gate
     /// (index.tsx:1484-1496): `session() &&
     /// currentLocation.error?.location.directory ===
     /// session().location.directory`. The session's directory comes
@@ -5786,7 +5784,8 @@ impl Store {
             .or_else(|| positions.first())
             .map(|position| ScrollAnchor {
                 message_id: position.id.clone(),
-                screen_y: i64::try_from(position.y).unwrap_or(0) - i64::try_from(offset).unwrap_or(0),
+                screen_y: i64::try_from(position.y).unwrap_or(0)
+                    - i64::try_from(offset).unwrap_or(0),
             });
         let mut anchors = self.scroll_anchors.borrow_mut();
         match anchor {
@@ -5812,10 +5811,8 @@ impl Store {
     pub fn directory_recent_touch(&self, project_id: &str, directory: &str) {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |since| since.as_millis() as u64);
-        self.directory_recents
-            .borrow_mut()
-            .touch(project_id, directory, now);
+            .map_or(0, |since| u64::try_from(since.as_millis()).unwrap_or(u64::MAX));
+        self.directory_recents.borrow_mut().touch(project_id, directory, now);
     }
 
     /// `directoryRecents.remove(projectID, directory)` (the ctrl+d
@@ -5828,8 +5825,10 @@ impl Store {
     /// (`directoryOptions`, index.tsx:1962-1985 — empty-query rows
     /// only; the caller opens them when the `/cd ` query is empty).
     #[must_use]
-    pub fn directory_recents_options(&self, project_id: &str) -> Vec<autocomplete::AutocompleteOption>
-    {
+    pub fn directory_recents_options(
+        &self,
+        project_id: &str,
+    ) -> Vec<autocomplete::AutocompleteOption> {
         let home = std::env::var("HOME").unwrap_or_default();
         let recents = self.directory_recents.borrow().list(project_id);
         autocomplete::directory_recents_options(&recents, &home)
@@ -5866,11 +5865,11 @@ impl Store {
             self.scroll.borrow_mut().insert(session_id.to_owned(), ScrollDriver::new());
             return true;
         };
-        let target =
-            i64::try_from(position.y).unwrap_or(0) - anchor.screen_y;
+        let target = i64::try_from(position.y).unwrap_or(0) - anchor.screen_y;
         let metrics = self.transcript_metrics(session_id);
         let maximum = metrics.content_height.saturating_sub(metrics.viewport);
-        let offset = target.clamp(0, i64::try_from(maximum).unwrap_or(0)).max(0) as usize;
+        let offset = usize::try_from(target.clamp(0, i64::try_from(maximum).unwrap_or(0)).max(0))
+            .unwrap_or(0);
         self.scroll.borrow_mut().insert(
             session_id.to_owned(),
             ScrollDriver::from_follow(FollowState::Free { offset, maximum }),

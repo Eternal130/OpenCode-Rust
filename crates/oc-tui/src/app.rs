@@ -218,7 +218,7 @@ impl App {
     pub fn arm_startup_prompt(&mut self, text: String) {
         let key = self.prompt_key();
         let mut composer = self.store.composer(&key);
-        composer.draft.text = text.clone();
+        composer.draft.text.clone_from(&text);
         self.store.set_composer(&key, &composer);
         self.startup_prompt = Some(text);
         self.startup_prompt_sent = false;
@@ -1541,9 +1541,7 @@ impl App {
         // clearSelection — before the screen-selection layer sees it.
         if self.store.console_open() && spec == "ctrl+y" {
             let text = self.store.console_lines().join("\n");
-            if !text.is_empty()
-                && self.store.clipboard_write(&text).is_ok()
-            {
+            if !text.is_empty() && self.store.clipboard_write(&text).is_ok() {
                 self.store.toast_show(crate::components::toast::ToastOptions {
                     title: None,
                     message: "Copied to clipboard".to_owned(),
@@ -1651,7 +1649,7 @@ impl App {
     }
 
     /// TUI-30 — the routed session's location failed to resolve (the
-    /// SessionLocationMissing mount replaced the composer,
+    /// `SessionLocationMissing` mount replaced the composer,
     /// index.tsx:1484-1496).
     fn location_missing_live(&self) -> bool {
         matches!(self.store.route(), crate::store::Route::Session { session_id }
@@ -2429,9 +2427,7 @@ impl App {
                         };
                         composer.autocomplete.options = options;
                         composer.autocomplete.filtered_len = composer.autocomplete.options.len();
-                        if composer.autocomplete.selected
-                            >= composer.autocomplete.filtered_len
-                        {
+                        if composer.autocomplete.selected >= composer.autocomplete.filtered_len {
                             composer.autocomplete.selected = 0;
                         }
                     }
@@ -2842,6 +2838,7 @@ impl App {
 
     /// The current frame (route + blockers + dialog overlay).
     #[must_use]
+    #[allow(clippy::too_many_lines)] // the app frame: every overlay seam in one paint pass
     pub fn frame(&self) -> Frame {
         // The render-crash test hook (lane TAIL's ErrorComponent PTY
         // proof): OC_TUI_TEST_RENDER_PANIC=N panics at frame N.
