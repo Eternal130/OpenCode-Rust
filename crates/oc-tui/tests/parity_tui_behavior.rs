@@ -328,6 +328,56 @@ fn dialog_experiments() {
     assert_eq!(props.options[0].footer.as_deref(), Some("on"));
 }
 
+/// TUI-33 — `session.verbosity.cycle` (index.tsx:1064-1076): the
+/// palette row carries v2's DYNAMIC title `Verbosity: {titlecase}` and
+/// dispatch cycles the `low | medium | high` config through the sink
+/// (levels[(i+1) % 3]) with the dialog cleared.
+#[test]
+fn session_verbosity_cycle_index() {
+    let store = Store::new(Runtime::new());
+    let mut dispatcher = StoreDispatcher;
+
+    // The palette row (palette: true in v2's session table).
+    let props = oc_tui::components::command_palette::palette_props(&store);
+    let row = props
+        .options
+        .iter()
+        .find(|option| option.value == "session.verbosity.cycle")
+        .expect("the palette row exists");
+    assert_eq!(row.title, "Verbosity: Medium", "v2's dynamic titlecase title");
+    assert_eq!(row.category.as_deref(), Some("Session"));
+
+    // Dispatch cycles: medium → high → low (wrap) → medium, each
+    // writing `session.verbosity` through the config sink.
+    let sink = std::rc::Rc::new(RecordingSink::default());
+    store.set_config_sink(sink.clone());
+    store.replace_dialog(DialogKind::CommandPalette, DialogSize::Medium);
+    assert_eq!(
+        dispatcher.dispatch(&store, "session.verbosity.cycle", None),
+        oc_tui::components::command_palette::Dispatch::Handled
+    );
+    assert_eq!(store.session_verbosity(), "high");
+    assert_eq!(
+        sink.0.borrow().last().cloned(),
+        Some(("session.verbosity".to_owned(), "high".to_owned()))
+    );
+    assert!(store.top_dialog().is_none(), "dialog.clear() rides the run");
+
+    let _ = dispatcher.dispatch(&store, "session.verbosity.cycle", None);
+    assert_eq!(store.session_verbosity(), "low", "the wrap: high → low");
+    let _ = dispatcher.dispatch(&store, "session.verbosity.cycle", None);
+    assert_eq!(store.session_verbosity(), "medium");
+
+    // The palette title tracks the live level.
+    let props = oc_tui::components::command_palette::palette_props(&store);
+    let row = props
+        .options
+        .iter()
+        .find(|option| option.value == "session.verbosity.cycle")
+        .unwrap();
+    assert_eq!(row.title, "Verbosity: Medium");
+}
+
 /// TUI-10 (the diff half): a working-tree image file renders the
 /// inline `DiffViewerImage` — the "Working tree preview" label, the
 /// decoded `WxH` size row, the blocks pixels — and the mount records

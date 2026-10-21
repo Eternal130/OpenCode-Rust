@@ -188,6 +188,16 @@ pub static PALETTE_COMMANDS: &[PaletteCommand] = &[
         group: "Session",
         bindings: &["ctrl+x r"],
     },
+    // TUI-33 — `session.verbosity.cycle` (index.tsx:1064-1076): the
+    // palette row's title is DYNAMIC (`Verbosity: ${titlecase}` —
+    // `palette_props` special-cases it against the live level; the
+    // registry's static title is the fallback shape).
+    PaletteCommand {
+        command: "session.verbosity.cycle",
+        title: "Verbosity",
+        group: "Session",
+        bindings: &[],
+    },
     // Lane FINAL: `session.export` (index.tsx:1201-1244 — palette-
     // listed with slash `/export`, bound `<leader>x`).
     PaletteCommand {
@@ -350,6 +360,24 @@ pub fn palette_command(command: &str) -> Option<&'static PaletteCommand> {
     PALETTE_COMMANDS.iter().find(|entry| entry.command == command)
 }
 
+/// A row's run-time title (v2's dynamic `title` thunks over the live
+/// state). The one dynamic case in the registry:
+/// `session.verbosity.cycle` renders `Verbosity: ${Locale.titlecase(
+/// verbosity())}` (index.tsx:1064-1067).
+#[must_use]
+pub fn palette_title(entry: &PaletteCommand, store: &Store) -> String {
+    if entry.command == "session.verbosity.cycle" {
+        let level = store.session_verbosity();
+        let mut chars = level.chars();
+        let titlecased = match chars.next() {
+            Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+            None => String::new(),
+        };
+        return format!("Verbosity: {titlecased}");
+    }
+    entry.title.to_owned()
+}
+
 /// The palette options for a registry slice (`options()`): title,
 /// group category, `id` search text, both footers. The command-palette
 /// fixture (golden) registers two custom commands — tests pass their
@@ -370,11 +398,11 @@ pub fn palette_options(commands: &[PaletteCommand]) -> Vec<SelectOption> {
 
 /// [`palette_options`] over borrowed entries (the conditional slice).
 #[must_use]
-fn palette_options_slice(commands: &[&PaletteCommand]) -> Vec<SelectOption> {
+fn palette_options_slice(commands: &[&PaletteCommand], store: &Store) -> Vec<SelectOption> {
     commands
         .iter()
         .map(|entry| {
-            SelectOption::titled(entry.title, entry.command)
+            SelectOption::titled(palette_title(entry, store), entry.command)
                 .categorized(entry.group)
                 .with_search(entry.command)
                 .with_footer(entry.footer())
@@ -415,7 +443,7 @@ pub fn palette_props(store: &Store) -> SelectProps {
                 && entry.enabled(store)
         })
         .collect();
-    options.extend(palette_options_slice(&advertised));
+    options.extend(palette_options_slice(&advertised, store));
     // The plugin layer (registration-time snapshot): id search text,
     // the plugin id beside the group, no bindings display.
     for entry in store.plugin_commands() {
@@ -2480,6 +2508,15 @@ impl CommandDispatcher for StoreDispatcher {
                 store.picker_terminal_select();
                 Dispatch::Handled
             }
+            // TUI-33 — `session.verbosity.cycle` (index.tsx:1064-
+            // 1076): cycle `low | medium | high` through the config
+            // state (the dialog-config row's cycle — the live consumer
+            // + the config-sink write-through), then `dialog.clear()`.
+            "session.verbosity.cycle" => {
+                store.setting_cycle("session.verbosity", 1);
+                store.clear_dialogs();
+                Dispatch::Handled
+            }
             // The registered-but-surfaceless families (v2 parity: the
             // keymap consumes the stroke; no component answers):
             // which-key panel (the keymap addon's surface), scrap/
@@ -2490,7 +2527,6 @@ impl CommandDispatcher for StoreDispatcher {
             | "app.scrap"
             | "service.restart"
             | "session.aside"
-            | "session.verbosity.cycle"
             | "plugins.install"
             | "dialog.integration.rename"
             | "dialog.integration.delete"
