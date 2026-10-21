@@ -331,7 +331,7 @@ pub fn render_home_view(
     view: &HomeView,
     theme: &ThemeState,
     size: (u16, u16),
-) -> (Frame, Option<(usize, usize)>, Option<(usize, usize, usize)>) {
+) -> crate::components::home_solid::PaintedHome {
     // Lane M5 (retired): the home route renders through its
     // opentui-solid tree — the only renderer since the retirement
     // lane deleted the hand-rolled painter (both consumed the ONE

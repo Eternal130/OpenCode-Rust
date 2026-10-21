@@ -1089,7 +1089,7 @@ fn queuedpromptdo_jump_to_latest() {
     app.store.open_tab("s1", None);
     // A queued prompt renders the dock row above the composer.
     app.store.queue_prompt("s1", "next up", &[]);
-    assert!(!app.store.queued_prompts("s1").is_empty());
+    assert!(!app.store.queued_prompts("s1").is_empty(), "the queue admitted the prompt");
     let _ = app.frame();
     let dock_hit = app
         .store
