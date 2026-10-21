@@ -3,7 +3,7 @@
   "operations": 141,
   "paths": 117,
   "pinned": {
-    "path": "/opt/opencode-ref/packages/protocol/openapi.json",
+    "path": "packages/protocol/openapi.json",
     "sha256": "0612418392961ef22f0337ce0e1e520270917665fc85f29c4af1c94d1e1873ee"
   },
   "schemas": 256,

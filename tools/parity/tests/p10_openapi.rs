@@ -126,7 +126,10 @@ async fn p10_openapi_semantic_equivalence() -> Result<()> {
     // Evidence summary (golden-pinned).
     let summary = serde_json::json!({
         "pinned": {
-            "path": pinned_path.display().to_string(),
+            // Machine-independent relative path (the reference checkout root
+            // differs per environment — /opt/opencode-ref locally,
+            // /tmp/opencode/ref in CI; sha256 is the authoritative pin).
+            "path": "packages/protocol/openapi.json",
             "sha256": format!("{pinned_sha:x}"),
         },
         "served": {
