@@ -9,7 +9,7 @@
 #
 #   build-archive ──> v2-db-fixture ──┬──> p10-battery        (§12.2 exit battery)
 #                                     └──> runtime-gates      (§12.3 set)
-#   build-archive ──> ai-needs-runtime  (AI-VERTEX-V2 / AI-V1 / AI-COPILOT-C6, cassette)
+#   build-archive ──> ai-needs-runtime  (AI-VERTEX-V2 / AI-V1 / AI-COPILOT-C6, cassette + opt-in live canary)
 #   build-archive ──> tui-needs-runtime (6 TUI rows: gap probes + adjacent PTY battery)
 #   build-archive ──> soak-30m           (opt-in, default OFF)
 #   build-archive ──> release-smoke      (opt-in, default OFF)
@@ -21,16 +21,38 @@
 #   OC_CI_VERTEX_PROJECT + OC_CI_VERTEX_CREDENTIALS -> AI-VERTEX-V2 live leg
 #   OC_CI_GEMINI_API_KEY                           -> AI-V1 live leg
 #   OC_CI_COPILOT_TOKEN                            -> AI-COPILOT-C6 live leg
-# None of the three entries has an automated live probe yet (ADR-0006
-# cassette-only). Secrets therefore NEVER produce a live pass here: absent
-# => loud `LIVE-SKIP (secrets missing)` warning; present => loud
-# `LIVE-REQUESTED but no live harness exists` warning. Both modes run the
-# cassette/unit battery only.
+#
+# LIVE CONTRACT (user ruling 2026-10-21: live canary, OPT-IN via the
+# workflow_dispatch input `live`, default false — the default run keeps
+# ADR-0006 cassette-only). The probes live in
+# tools/parity/tests/live_ai_probes.rs and reuse the production oc-ai
+# call surface. Secret shapes:
+#   OC_CI_VERTEX_PROJECT      GCP project id (drives URL composition).
+#   OC_CI_VERTEX_CREDENTIALS  a FRESH OAuth2 access token with the
+#                             cloud-platform scope, e.g.
+#                             `gcloud auth print-access-token --scopes=https://www.googleapis.com/auth/cloud-platform`
+#                             (~1h lifetime — refresh before a live=true
+#                             dispatch). An API key is NOT accepted: the
+#                             messages and chat/responses lanes are
+#                             ADC-bearer only (and reject keys loudly).
+#                             Also drives AI-V1's chat/responses live legs.
+#   OC_CI_GEMINI_API_KEY      Gemini API key — drives AI-V1's Express-mode
+#                             (x-goog-api-key) live leg.
+#   OC_CI_COPILOT_TOKEN       GitHub Copilot token (ghu_…) with /models
+#                             visibility — the AI-COPILOT-C6 /models sync.
+# live=true requires ALL FOUR (an explicit live run without them is a
+# configuration error: this workflow fails loudly instead of going green).
+# live=false (default): cassette battery + LIVE-SKIP (secrets missing) /
+# LIVE-AVAILABLE (secrets present, not requested) warnings — neither is a
+# live pass. Probe budgets: ≤60s per probe; evidence (endpoint/time/status/
+# shape, never credential values) lands in the run log and
+# /tmp/opencode/parity-evidence/CI-RUNTIME-AI-LIVE/live-runs.jsonl.
 #
 # NOTE (422 fix, 2026-10-21): the `secrets` context is ILLEGAL in `if:`
 # conditions at any level — it is only read in the ai-needs-runtime job's
-# env VALUES (presence booleans HAS_*), never in an expression position
-# that GitHub's parser rejects.
+# env VALUES (presence booleans HAS_*) and in the live-battery step's env
+# VALUES (the actual secrets), never in an expression position that
+# GitHub's parser rejects.
 #
 # KNOWN-REDS: while tools/parity/goldens/p10/known-red.json keeps
 # GATE-DB-STABLE / GATE-DB-NULLROWS / GATE-TUI-RENAME open, the p10
@@ -73,6 +95,10 @@ on:
         description: "needs-runtime battery (3 AI cassette + 6 TUI gap probes)"
         type: boolean
         default: true
+      live:
+        description: "AI live canary (tools/parity/tests/live_ai_probes.rs; requires ALL FOUR OC_CI_* secrets — see the workflow header contract)"
+        type: boolean
+        default: false
       run_platform_build:
         description: "non-linux-x64 build target (macos-latest)"
         type: boolean
@@ -664,14 +690,14 @@ jobs:
             echo "Counts: non-PTY set 17 tests; serialized PTY set 11 tests."
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # The 3 AI needs-runtime rows. ADR-0006: cassette-only until a live
-  # fixture window is approved — so this job runs the closest EXISTING
-  # cassette/unit surfaces and NEVER claims a live pass. The ledger test
-  # names (vertex_messages.rs::never_api_anthropic,
-  # parity_ai_providers.rs::{copilot_provideroption_user_agent,
-  # vertex_chat_responses_url}) match 0 tests today — reported as gaps.
+  # The 3 AI needs-runtime rows: cassette battery ALWAYS, plus the OPT-IN
+  # live canary (user ruling 2026-10-21; ADR-0006 addendum). The cassette
+  # leg keeps the hermetic URL/auth/wire coverage; the live leg
+  # (tools/parity/tests/live_ai_probes.rs, OC_CI_LIVE=1) drives the
+  # production call surface against real endpoints and can go RED — that
+  # red propagates to this job and gates-summary (skip ≠ pass, red ≠ pass).
   ai-needs-runtime:
-    name: "needs-runtime (AI: vertex/gemini/copilot, cassette-only)"
+    name: "needs-runtime (AI: vertex/gemini/copilot, cassette + opt-in live)"
     needs: build-archive
     if: ${{ inputs.run_needs_runtime != false }}
     runs-on: ubuntu-latest
@@ -733,32 +759,73 @@ jobs:
           'test(base_urls_embed_project_location_and_publishers) or test(vertex_route_embeds_the_model_in_the_path_and_bears_the_token) or test(adc_env_token_resolves_at_apply_time) or test(express_mode_uses_the_api_key_header) or test(hosts_route_by_location) or test(tuned_endpoints_address_the_project_root) or test(location_falls_back_to_us_central1) or test(patching_the_provider_rekeys_the_metadata_namespace) or binary(copilot_responses) or test(copilot_wire_request_carries_the_client_headers_and_bearer) or test(default_base_url_and_github_token_env_fallback) or test(interaction_type_vocabulary_matches_the_copilot_client)'
 
       # --- live legs: skip must never look like a live pass ----------------
-      - name: AI-VERTEX-V2 live gate
-        if: ${{ env.HAS_VERTEX_CREDS != 'true' }}
-        run: >
-          echo "::warning::LIVE-SKIP (secrets missing): AI-VERTEX-V2 — set OC_CI_VERTEX_PROJECT + OC_CI_VERTEX_CREDENTIALS. Cassette battery above is the only coverage; this is NOT a live pass."
-      - name: AI-VERTEX-V2 live credentials present
-        if: ${{ env.HAS_VERTEX_CREDS == 'true' }}
-        run: >
-          echo "::warning::LIVE-REQUESTED: AI-VERTEX-V2 secrets present, but no live harness exists yet (ADR-0006 cassette-only; ledger test never_api_anthropic not authored). NOT a live pass."
+      # live=false (default): the old cassette-only semantics, minus the
+      # stale "no live harness exists" text (the harness now exists in
+      # tools/parity/tests/live_ai_probes.rs — it is just not requested).
+      # LIVE-SKIP when secrets are missing; LIVE-AVAILABLE when they are
+      # present but this dispatch did not ask for live.
+      - name: AI-VERTEX-V2 live gate (not requested)
+        if: ${{ inputs.live != true }}
+        run: |
+          if [ "${HAS_VERTEX_CREDS}" = "true" ]; then
+            echo "::warning::LIVE-AVAILABLE (not requested): AI-VERTEX-V2 secrets present — dispatch with live=true to run the live probe battery (tools/parity/tests/live_ai_probes.rs). This run is cassette-only; NOT a live pass."
+          else
+            echo "::warning::LIVE-SKIP (secrets missing): AI-VERTEX-V2 — set OC_CI_VERTEX_PROJECT + OC_CI_VERTEX_CREDENTIALS (contract: this workflow's header). Cassette battery above is the only coverage; this is NOT a live pass."
+          fi
 
-      - name: AI-V1 live gate
-        if: ${{ env.HAS_GEMINI_KEY != 'true' }}
-        run: >
-          echo "::warning::LIVE-SKIP (secrets missing): AI-V1 — set OC_CI_GEMINI_API_KEY. Cassette battery above is the only coverage; this is NOT a live pass."
-      - name: AI-V1 live credentials present
-        if: ${{ env.HAS_GEMINI_KEY == 'true' }}
-        run: >
-          echo "::warning::LIVE-REQUESTED: AI-V1 secrets present, but no live harness exists yet (ADR-0006 cassette-only; ledger test vertex_chat_responses_url not authored). NOT a live pass."
+      - name: AI-V1 live gate (not requested)
+        if: ${{ inputs.live != true }}
+        run: |
+          if [ "${HAS_GEMINI_KEY}" = "true" ]; then
+            echo "::warning::LIVE-AVAILABLE (not requested): AI-V1 secrets present — dispatch with live=true to run the live probe battery (tools/parity/tests/live_ai_probes.rs). This run is cassette-only; NOT a live pass."
+          else
+            echo "::warning::LIVE-SKIP (secrets missing): AI-V1 — set OC_CI_GEMINI_API_KEY (contract: this workflow's header). Cassette battery above is the only coverage; this is NOT a live pass."
+          fi
 
-      - name: AI-COPILOT-C6 live gate
-        if: ${{ env.HAS_COPILOT_TOKEN != 'true' }}
-        run: >
-          echo "::warning::LIVE-SKIP (secrets missing): AI-COPILOT-C6 — set OC_CI_COPILOT_TOKEN. Cassette battery above is the only coverage; this is NOT a live pass."
-      - name: AI-COPILOT-C6 live credentials present
-        if: ${{ env.HAS_COPILOT_TOKEN == 'true' }}
-        run: >
-          echo "::warning::LIVE-REQUESTED: AI-COPILOT-C6 secrets present, but no live harness exists yet (ADR-0006 cassette-only; ledger test copilot_provideroption_user_agent not authored). NOT a live pass."
+      - name: AI-COPILOT-C6 live gate (not requested)
+        if: ${{ inputs.live != true }}
+        run: |
+          if [ "${HAS_COPILOT_TOKEN}" = "true" ]; then
+            echo "::warning::LIVE-AVAILABLE (not requested): AI-COPILOT-C6 secrets present — dispatch with live=true to run the live probe battery (tools/parity/tests/live_ai_probes.rs). This run is cassette-only; NOT a live pass."
+          else
+            echo "::warning::LIVE-SKIP (secrets missing): AI-COPILOT-C6 — set OC_CI_COPILOT_TOKEN (contract: this workflow's header). Cassette battery above is the only coverage; this is NOT a live pass."
+          fi
+
+      # live=true: an explicit live run without the full secret set is a
+      # CONFIGURATION ERROR — fail loudly here (the probe battery itself
+      # would also refuse via OC_CI_LIVE=1 + missing secrets, but failing
+      # before running anything is the clearest signal). Only the env
+      # HAS_* booleans are read here; the `secrets` context stays illegal
+      # in `if:`/script expression positions (see the header NOTE).
+      - name: Live battery gate (live=true requires all OC_CI_* secrets)
+        if: ${{ inputs.live == true }}
+        run: |
+          set -euo pipefail
+          missing=""
+          [ "${HAS_VERTEX_CREDS}" = "true" ] || missing="${missing} OC_CI_VERTEX_PROJECT/OC_CI_VERTEX_CREDENTIALS"
+          [ "${HAS_GEMINI_KEY}" = "true" ] || missing="${missing} OC_CI_GEMINI_API_KEY"
+          [ "${HAS_COPILOT_TOKEN}" = "true" ] || missing="${missing} OC_CI_COPILOT_TOKEN"
+          if [ -n "$missing" ]; then
+            echo "::error::live=true was requested but these secrets are missing:${missing} — an explicit live run without credentials is a configuration error; refusing to go green. Set them (contract: this workflow's header) or dispatch with live=false."
+            exit 1
+          fi
+          echo "live canary: all OC_CI_* secrets present — running tools/parity/tests/live_ai_probes.rs"
+
+      # The live battery: each probe bails with a loud LIVE-SKIP if its own
+      # secrets vanish mid-flight, fails under OC_CI_LIVE=1 with secrets
+      # missing (config error), and classifies its failures
+      # URL/AUTH/SHAPE/UPSTREAM/budget. Budgets: ≤60s/probe, ≤25s/request;
+      # evidence (endpoint/time/status/shape, never credential values)
+      # prints to the log. Secrets appear ONLY in this step's env VALUES.
+      - name: Live probe battery (AI-VERTEX-V2 / AI-V1 / AI-COPILOT-C6)
+        if: ${{ inputs.live == true }}
+        run: cargo nextest run -p parity --locked --run-ignored only -E 'test(live_ai_)'
+        env:
+          OC_CI_LIVE: "1"
+          OC_CI_VERTEX_PROJECT: ${{ secrets.OC_CI_VERTEX_PROJECT }}
+          OC_CI_VERTEX_CREDENTIALS: ${{ secrets.OC_CI_VERTEX_CREDENTIALS }}
+          OC_CI_GEMINI_API_KEY: ${{ secrets.OC_CI_GEMINI_API_KEY }}
+          OC_CI_COPILOT_TOKEN: ${{ secrets.OC_CI_COPILOT_TOKEN }}
 
       - name: Summary
         if: ${{ !cancelled() }}
@@ -766,8 +833,12 @@ jobs:
           {
             echo "### ai-needs-runtime"
             echo "- EXECUTED (cassette/unit, 18 tests): AI-VERTEX-V2 + AI-V1 via protocols::vertex::* (8 tests); AI-COPILOT-C6 via copilot_responses (7) + protocols::copilot::* (3)"
-            echo "- GAP: the 3 ledger \`test\` names match 0 tests — live legs un-wirable until authored (ADR-0006)"
-            echo "- LIVE status: see the ::warning lines above (LIVE-SKIP or LIVE-REQUESTED-but-no-harness — neither is a live pass)"
+            if [ "${{ inputs.live }}" = "true" ]; then
+              echo "- LIVE: EXECUTED — live_ai_probes battery (OC_CI_LIVE=1; a red probe fails this job: skip ≠ pass, red ≠ pass)"
+            else
+              echo "- LIVE: not requested (live=false) — see the ::warning lines above (LIVE-SKIP or LIVE-AVAILABLE; neither is a live pass)"
+            fi
+            echo "- GAP: the 3 ledger \`test\` names (cassette namesakes) match 0 tests — the rows are gated by the live probes + cassette battery instead"
           } >> "$GITHUB_STEP_SUMMARY"
 
   # The 6 TUI needs-runtime rows. Their ledger `test` names all match 0
@@ -1088,7 +1159,7 @@ jobs:
           done
           {
             echo ""
-            echo "Standing gaps (never count as passes): TUI-28/30/33/TD06/TD15/TD28 (no tests), AI live legs (ADR-0006 cassette-only), literal 30m single-session soak (cycle-loop approximation), v2-db-fixture GAP when present (db_import fails strict; census GAP-skips)."
+            echo "Standing gaps (never count as passes): TUI-28/30/33/TD06/TD15/TD28 (no tests), AI live legs only when dispatched live=true WITHOUT the OC_CI_* secrets (config error, red), literal 30m single-session soak (cycle-loop approximation), v2-db-fixture GAP when present (db_import fails strict; census GAP-skips)."
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "$fail" -ne 0 ]; then
             echo "::error::at least one requested gate did not run green — see the table above"

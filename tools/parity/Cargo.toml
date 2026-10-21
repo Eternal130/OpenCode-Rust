@@ -34,6 +34,12 @@ oc-client = { workspace = true }
 # DB-D12: in-process v1 content-migration regression (p10_db_import::
 # v1_content_migration) against oc-core's database + v1_migration module.
 oc-core = { workspace = true }
+# CI-RUNTIME-AI-LIVE: the live canary probes (tests/live_ai_probes.rs)
+# reuse the PRODUCTION oc-ai call surface — route composition
+# (vertex_messages/vertex/copilot) + ReqwestTransport — instead of a
+# parallel HTTP stack. Dev-only, like oc-client/oc-core; oc-ai already
+# sits in the dev graph via oc-core, so this adds no new external crates.
+oc-ai = { workspace = true }
 # DB-D12: building the pre-split "opencode-next.db" fixture (exact reference
 # DDL — table `session`, not `session_v2`), mirroring the ref test's
 # `bun:sqlite` usage. Dev-only.
