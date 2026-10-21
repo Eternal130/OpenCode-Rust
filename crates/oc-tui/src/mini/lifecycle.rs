@@ -701,6 +701,13 @@ pub struct Lifecycle {
     /// TUI-17 — the inline viewport's current height (`applyHeight`:
     /// a taller pane rebuilds the dock at the new row count).
     viewport_rows: u16,
+    /// TUI-17/REGRESS — the dock-rebuild cursor probe failed once
+    /// (`crossterm::cursor::position` timed out: a headless pty that
+    /// answers the BOOT probe but not later ones — CI harnesses).
+    /// Once set, height changes stop rebuilding the inline dock
+    /// (taller panes render clipped into the boot dock, the
+    /// pre-inspector behavior) instead of killing the run loop.
+    dock_probe_failed: bool,
     splash_enabled: bool,
     mono: bool,
     /// CONFIG-T4 `mini.shell_output`: shell-family tools stream their
@@ -755,6 +762,7 @@ impl Lifecycle {
             last_footer_signature: String::new(),
             force_draw: true,
             viewport_rows: super::FOOTER_HEIGHT as u16,
+            dock_probe_failed: false,
             splash_enabled: input.splash,
             mono: input.mono,
             shell_output: input.shell_output,
@@ -869,16 +877,35 @@ impl Lifecycle {
         // TUI-17/applyHeight: a pane whose height CHANGED rebuilds the
         // inline dock at the new row count (the blocker bodies + the
         // subagent inspector grow it; v2's footer resizes its box).
+        // REGRESS (mini permission regression): the Inline
+        // reconstruction probes the cursor position (`ESC[6n`) — an
+        // environment that leaves the probe unanswered (a headless
+        // pty that only emulates the BOOT reply) makes the probe time
+        // out; treating that as fatal killed the run loop the moment
+        // a permission ask grew the dock. Degrade instead: keep the
+        // boot dock (the taller pane renders clipped into it — the
+        // pre-inspector behavior) and stop re-probing this session.
         let rows = u16::try_from(pane_height).unwrap_or(u16::MAX);
         if rows != self.viewport_rows {
-            self.terminal = Terminal::with_options(
-                CrosstermBackend::new(std::io::stdout()),
-                ratatui::TerminalOptions { viewport: ratatui::Viewport::Inline(rows) },
-            )
-            .map_err(|error| error.to_string())?;
+            let rebuilt = (!self.dock_probe_failed)
+                .then(|| {
+                    Terminal::with_options(
+                        CrosstermBackend::new(std::io::stdout()),
+                        ratatui::TerminalOptions { viewport: ratatui::Viewport::Inline(rows) },
+                    )
+                    .ok()
+                })
+                .flatten();
+            if let Some(terminal) = rebuilt {
+                self.terminal = terminal;
+                self.force_draw = true;
+                self.last_footer_signature = String::new();
+            } else {
+                // The probe failed (or had failed before): keep the
+                // boot dock — the taller pane renders clipped into it.
+                self.dock_probe_failed = true;
+            }
             self.viewport_rows = rows;
-            self.force_draw = true;
-            self.last_footer_signature = String::new();
         }
         let footer_frame = self.pane.render_frame(self.width, pane_height);
         // Skip identical repaints (the renderer's dirty check — a
