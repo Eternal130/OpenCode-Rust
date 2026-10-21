@@ -204,3 +204,70 @@ fn print_logs() {
         "without --print-logs the child's stderr stays discarded\nstderr:\n{stderr}"
     );
 }
+
+// ===========================================================================
+// CLI-N2 — early errors in `run` honour `--format json` (v2
+// reportRunError, run/run.ts:243-255: the SAME JSON envelope mid-run
+// errors use — {"type":"error","timestamp":ms,"sessionID":"",
+// "error":{"type":"unknown","message":...}} on stdout, exit 1).
+// ===========================================================================
+
+#[test]
+fn run_early_error_json() {
+    let sandbox = Sandbox::new("n2");
+    let binary = opencode_binary();
+
+    let run = |args: &[&str]| {
+        let output = sandbox
+            .command(&binary, args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .expect("spawn run");
+        (
+            output.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&output.stdout).into_owned(),
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        )
+    };
+
+    // Missing message (an early error, before any connection): the JSON
+    // envelope lands on stdout with the v2 field order and shapes.
+    // (--standalone keeps the run off the shared managed service — the
+    // early error fires before any request either way.)
+    let (code, stdout, stderr) = run(&["run", "--standalone", "--format", "json"]);
+    assert_ne!(code, 0, "the early error exits nonzero");
+    let line = stdout.lines().last().unwrap_or_default().to_owned();
+    let value: serde_json::Value = serde_json::from_str(line.trim()).unwrap_or_else(|error| {
+        panic!("stdout is one JSON line ({error}):\n{stdout}\nstderr:\n{stderr}")
+    });
+    assert_eq!(value["type"], "error", "the envelope type: {value}");
+    assert_eq!(value["sessionID"], "", "no session exists yet — v2 passes sessionID ?? ''");
+    assert_eq!(value["error"]["type"], "unknown");
+    assert_eq!(value["error"]["message"], "You must provide a message");
+    assert!(
+        value["timestamp"].as_u64().is_some_and(|ts| ts > 1_500_000_000),
+        "timestamp is Date.now() milliseconds: {value}"
+    );
+
+    // Another early error (--fork without --continue/--session) rides
+    // the same envelope.
+    let (code, stdout, _stderr) = run(&["run", "--standalone", "--format", "json", "--fork", "hi"]);
+    assert_ne!(code, 0);
+    let line = stdout.lines().last().unwrap_or_default();
+    let value: serde_json::Value =
+        serde_json::from_str(line.trim()).unwrap_or_else(|_| panic!("JSON line: {stdout}"));
+    assert_eq!(value["type"], "error");
+    assert_eq!(value["error"]["message"], "--fork requires --continue or --session");
+
+    // Control: the default format keeps the human stderr shape
+    // (`UI.error` — "Error: <message>" on stderr, stdout empty).
+    let (code, stdout, stderr) = run(&["run", "--standalone"]);
+    assert_ne!(code, 0);
+    assert_eq!(stdout, "", "human format prints nothing on stdout");
+    assert!(
+        stderr.contains("You must provide a message"),
+        "the human error stays on stderr:\n{stderr}"
+    );
+}
