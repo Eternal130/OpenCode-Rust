@@ -1783,6 +1783,267 @@ fn zed_context() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// TUI-17 — the mini footer's subagent inspector
+// ---------------------------------------------------------------------------
+
+/// TUI-17's event script: two RUNNING children discovered by
+/// `parentID` (source 4) — the first with a folded text delta (the
+/// detail transcript's row).
+fn subagent_script(parent: &str) -> Vec<vt_harness::ScriptEvent> {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(1_000_000, |since| since.as_millis() as u64);
+    vec![
+        vt_harness::ScriptEvent {
+            delay_ms: 60,
+            body: format!(
+                r#"{{"id":"evt_kid_a","created":{now_ms},"type":"session.created","data":{{"sessionID":"ses_kid_a","parentID":"{parent}","title":"Check the parsers","directory":"/tmp"}}}}"#
+            ),
+        },
+        vt_harness::ScriptEvent {
+            delay_ms: 80,
+            body: format!(
+                r#"{{"id":"evt_kid_a_exec","created":{now_ms},"type":"session.execution.started","data":{{"sessionID":"ses_kid_a"}}}}"#
+            ),
+        },
+        vt_harness::ScriptEvent {
+            delay_ms: 100,
+            body: format!(
+                r#"{{"id":"evt_kid_a_t","created":{now_ms},"type":"session.text.delta","data":{{"sessionID":"ses_kid_a","messageID":"m_kid","partID":"p_kid","delta":"Working on it"}}}}"#
+            ),
+        },
+        vt_harness::ScriptEvent {
+            delay_ms: 120,
+            body: format!(
+                r#"{{"id":"evt_kid_b","created":{now_ms},"type":"session.created","data":{{"sessionID":"ses_kid_b","parentID":"{parent}","title":"Second look","directory":"/tmp"}}}}"#
+            ),
+        },
+        vt_harness::ScriptEvent {
+            delay_ms: 140,
+            body: format!(
+                r#"{{"id":"evt_kid_b_exec","created":{now_ms},"type":"session.execution.started","data":{{"sessionID":"ses_kid_b"}}}}"#
+            ),
+        },
+    ]
+}
+
+/// The mini runner: `opencode mini`'s runtime loop over a pty at a
+/// fixed size (the TUI runner's shape — the pty guard restores stdio).
+fn run_mini_test<T: Send + 'static>(
+    tag: &str,
+    cols: u16,
+    rows: u16,
+    arm: impl FnOnce(&FakeLlm, &std::path::PathBuf),
+    drive: impl FnOnce(&mut HarnessHandle) -> Result<T, String> + Send + 'static,
+) -> T {
+    let _lock = pty_lock();
+    let sandbox = sandbox_env(tag);
+    let fake = FakeLlm::spawn(standard_sessions());
+    arm(&fake, &sandbox);
+    let harness = LiveHarness::attach(cols, rows);
+    // Answer ratatui's inline-viewport cursor probe (`CSI 6n`): the
+    // pty has no terminal behind it, so the test replies at the
+    // bottom row (the footer viewport docks there).
+    {
+        let mut prober = harness.handle();
+        std::thread::spawn(move || {
+            let mut answered = 0usize;
+            loop {
+                std::thread::sleep(Duration::from_millis(20));
+                let raw = prober.raw_mirror();
+                let asked = raw.windows(4).filter(|window| window == b"\x1b[6n").count();
+                for _ in answered..asked {
+                    prober.write(b"\x1b[39;1R");
+                }
+                answered = asked;
+            }
+        });
+    }
+    let slot: Arc<Mutex<Option<Result<T, String>>>> = Arc::new(Mutex::new(None));
+    let result_slot = Arc::clone(&slot);
+    let mut driver = harness.handle();
+    std::thread::spawn(move || {
+        let outcome = drive(&mut driver);
+        // The mini exit chord: esc folds any open panel back to the
+        // composer first, then up to three ctrl+c presses — a leftover
+        // draft clears on the first, the second arms, the third closes
+        // (`handleExit`, footer.ts:1017-1041).
+        driver.write(b"\x1b");
+        std::thread::sleep(Duration::from_millis(150));
+        for _ in 0..3 {
+            driver.write(b"\x03");
+            std::thread::sleep(Duration::from_millis(150));
+        }
+        *result_slot.lock().expect("slot") = Some(outcome);
+    });
+    let client = oc_client::Client::new(&fake.url).expect("client");
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("rt");
+    let input = oc_tui::mini::runtime::MiniInput {
+        client,
+        target: oc_tui::mini::runtime::ResolvedSession {
+            session_id: "ses_alpha".to_owned(),
+            session_title: Some("Alpha".to_owned()),
+            directory: sandbox.display().to_string(),
+            model_label: None,
+            agent: None,
+            resume: false,
+        },
+        initial_input: None,
+        replay: false,
+        replay_limit: None,
+        demo: false,
+        version: "test".to_owned(),
+        home: sandbox.display().to_string(),
+        state_dir: sandbox.join(".local/state"),
+        settings: None,
+    };
+    let finished = runtime.block_on(async {
+        tokio::time::timeout(Duration::from_secs(90), oc_tui::mini::runtime::run(input)).await
+    });
+    fake.stop();
+    // The driver's outcome first (its failure text explains a runtime
+    // that never closed — e.g. a chord swallowed by an open panel).
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while slot.lock().expect("slot").is_none() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let driver_outcome = slot.lock().expect("slot").take();
+    match finished {
+        Ok(Ok(_)) => {}
+        Ok(Err(error)) => panic!("the mini runtime failed: {error}"),
+        Err(elapsed) => {
+            let raw = harness.handle().raw_mirror();
+            let tail = String::from_utf8_lossy(&raw[raw.len().saturating_sub(1200)..]);
+            let driver_error = match driver_outcome.as_ref() {
+                Some(Err(message)) => Some(message.clone()),
+                _ => None,
+            };
+            panic!(
+                "the mini runtime did not exit in time: {elapsed}; driver: {driver_error:?}; raw TAIL: {tail:?}"
+            );
+        }
+    }
+    match driver_outcome {
+        Some(Ok(value)) => value,
+        Some(Err(error)) => panic!("driver failed: {error}"),
+        None => panic!("the driver thread never reported"),
+    }
+}
+
+/// TUI-17: the mini footer tracks the parent's children (the live
+/// `parentID` discovery + the child's own event fold), the statusline
+/// carries `2 subagents`, `down` opens the 14-row inspector on the
+/// newest running child (glyph + title + transcript + hints), `tab`
+/// cycles (`1 of 2` / `tab next 1/2`), ctrl+c interrupts the INSPECTED
+/// child server-side, and esc returns to the composer.
+#[test]
+fn mini_subagent_footer() {
+    let interrupt_slot: SharedPosts = Arc::new(Mutex::new(None));
+    let arm_interrupt = Arc::clone(&interrupt_slot);
+    let driver_interrupt = Arc::clone(&interrupt_slot);
+    run_mini_test(
+        "tui17-mini",
+        80,
+        40,
+        |fake, _sandbox| {
+            fake.arm_script(subagent_script("ses_alpha"));
+            *arm_interrupt.lock().expect("slot") = Some(Arc::clone(&fake.interrupt_posts));
+        },
+        move |h| {
+            // Boot settles first (the splash), then the prompt: the
+            // keystrokes must land after raw mode owns the pty.
+            wait_text(h, "oc mini", Duration::from_secs(8))?;
+            h.write(b"hello");
+            wait_grid(
+                h,
+                |g| (0..g.rows).any(|row| g.row_text(row).contains("hello")),
+                Duration::from_secs(5),
+            )?;
+            // Submit: the armed script fires the two child
+            // discoveries + the child's folded text.
+            h.write(b"\r");
+            // The statusline's live count (footer.view.tsx:247). The
+            // echoed prompt row ("> hello") stays in scrollback — the
+            // count is the submit's landing proof.
+            wait_grid(
+                h,
+                |g| (0..g.rows).any(|row| g.row_text(row).contains("2 subagents")),
+                Duration::from_secs(10),
+            )
+            .map_err(|error| format!("the subagent count never painted: {error}"))?;
+            // `down` (session.child.first) opens the inspector on the
+            // newest RUNNING child (kid_b).
+            h.write(b"\x1b[B");
+            let grid = wait_grid(
+                h,
+                |g| {
+                    (0..g.rows).any(|row| g.row_text(row).contains("Second look"))
+                        && (0..g.rows).any(|row| g.row_text(row).contains("ctrl+c interrupt"))
+                },
+                Duration::from_secs(5),
+            )
+            .map_err(|error| format!("the inspector never painted: {error}"))?;
+            // The running glyph + the interrupt hint.
+            assert!(
+                (0..grid.rows).any(|row| grid.row_text(row).contains('◔')),
+                "the running glyph paints"
+            );
+            assert!(
+                (0..grid.rows).any(|row| grid.row_text(row).contains("ctrl+c interrupt")),
+                "the interrupt hint paints"
+            );
+            // tab cycles to the first child (kid_a) — the count +
+            // cycle hints appear, and its folded text lists.
+            h.write(b"\t");
+            // The cycle lands on the first child — the count control
+            // (`1 of 2`; the hint-row forms only when the header
+            // controls do not fit) + its folded transcript row.
+            wait_grid(
+                h,
+                |g| {
+                    (0..g.rows).any(|row| g.row_text(row).contains("Check the parsers"))
+                        && (0..g.rows).any(|row| g.row_text(row).contains("1 of 2"))
+                        && (0..g.rows).any(|row| g.row_text(row).contains("Working on it"))
+                },
+                Duration::from_secs(5),
+            )
+            .map_err(|error| format!("the cycle never landed on the first child: {error}"))?;
+            // ctrl+c interrupts the INSPECTED child (kid_a).
+            h.write(b"\x03");
+            let deadline = std::time::Instant::now() + Duration::from_secs(8);
+            loop {
+                let posts = driver_interrupt
+                    .lock()
+                    .expect("slot")
+                    .as_ref()
+                    .map(|arc| arc.lock().expect("posts").clone())
+                    .unwrap_or_default();
+                if posts.iter().any(|post| post.contains("/api/session/ses_kid_a/interrupt")) {
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "the child interrupt never POSTed; saw {posts:?}"
+                );
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            // esc returns to the composer (the statusline count back).
+            h.write(b"\x1b");
+            wait_grid(
+                h,
+                |g| {
+                    (0..g.rows).any(|row| g.row_text(row).contains("2 subagents"))
+                        && (0..g.rows).all(|row| !g.row_text(row).contains("Second look"))
+                },
+                Duration::from_secs(5),
+            )
+            .map_err(|error| format!("esc never closed the inspector: {error}"))?;
+            Ok(())
+        },
+    );
+}
+
 /// TUI-35 — the boot completes against a QUIET server (no SSE script
 /// armed, no prompt ever `POST`ed — the event stream never speaks) and
 /// the standard exit chord tears the app down THROUGH a dirty dialog

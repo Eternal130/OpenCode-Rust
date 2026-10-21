@@ -452,6 +452,230 @@ pub async fn compact(client: &Client, session_id: &str) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
+// -- TUI-17: the subagent tracker (stream-v2.subagent.ts:16-19) ------
+//
+// Discovers child sessions of the parent from the live stream:
+//   * `session.created` whose `parentID` is the parent (source 4 —
+//     live events by parentID);
+//   * the parent's subagent tool calls whose input metadata carries
+//     a `sessionID` (source 1 — the projected tool output);
+// and tracks one footer tab + detail transcript per child, reduced
+// through the SAME per-session fold the parent uses. The session-list
+// and active-map hydration sources (2/3) belong to reconnect
+// hydration — the live port boots once and never reconnects.
+
+/// `FooterSubagentTab["status"]` (mini/types.ts:302-310).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SubagentStatus {
+    #[default]
+    Running,
+    Completed,
+    Cancelled,
+    Error,
+}
+
+/// One tracked child (`FooterSubagentTab` + its `FooterSubagentDetail`
+/// commits — the detail transcript, newest 80).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SubagentChild {
+    pub session_id: String,
+    /// `Locale.titlecase(agent)` — "Subagent" until a title lands.
+    pub label: String,
+    /// `session.renamed`/`session.updated` titles.
+    pub title: String,
+    /// The task tool's description input.
+    pub description: String,
+    pub status: SubagentStatus,
+    pub commits: Vec<Commit>,
+}
+
+/// `FALLBACK_LABEL` (stream-v2.subagent.ts).
+const SUBAGENT_FALLBACK_LABEL: &str = "Subagent";
+
+/// `FAMILY_LIST_LIMIT` (stream-v2.subagent.ts): the tracked-children
+/// bound.
+const FAMILY_LIST_LIMIT: usize = 50;
+
+/// The detail transcript's row cap (the child's `frames` bound —
+/// `CHILD_FRAME_LIMIT`, stream-v2.subagent.ts:15): the newest 80
+/// commits survive.
+pub const CHILD_COMMIT_LIMIT: usize = 80;
+
+/// What one tracker fold produced (the redraw signals).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SubagentFold {
+    /// A child's tab/detail changed (the footer repaints).
+    pub changed: bool,
+    /// A NEW child was discovered (the statusline count changed).
+    pub admitted: bool,
+}
+
+/// The per-child state bundle: the fold engine beside its tab.
+struct ChildSlot {
+    child: SubagentChild,
+    state: TransportState,
+}
+
+/// The subagent tracker (`createSubagentTracker`): folds EVERY event
+/// (parent AND foreign sessions) — parent events may carry child
+/// metadata, foreign events may be known children.
+pub struct SubagentTracker {
+    parent: String,
+    slots: Vec<ChildSlot>,
+}
+
+impl SubagentTracker {
+    /// A tracker bound to one parent session.
+    #[must_use]
+    pub fn new(parent: &str) -> Self {
+        Self { parent: parent.to_owned(), slots: Vec::new() }
+    }
+
+    /// The tracked children (discovery order — the footer's tab
+    /// order).
+    #[must_use]
+    pub fn children(&self) -> Vec<SubagentChild> {
+        self.slots.iter().map(|slot| slot.child.clone()).collect()
+    }
+
+    /// The running children count (the statusline's `N subagents`).
+    #[must_use]
+    pub fn running_count(&self) -> usize {
+        self.slots.iter().filter(|slot| slot.child.status == SubagentStatus::Running).count()
+    }
+
+    /// Fold one SSE event through the tracker.
+    pub fn fold(&mut self, event: &Value) -> SubagentFold {
+        let event_type = text_field(event, "type");
+        let data = data_field(event);
+        let session_id = text_field(&data, "sessionID");
+        let mut fold = SubagentFold::default();
+
+        // Source 4 — `session.created` with our parent: admit.
+        if event_type == "session.created" && text_field(&data, "parentID") == self.parent {
+            let id = session_id.clone();
+            if self.admit(&id, text_field(&data, "title"), String::new()) {
+                fold.admitted = true;
+                fold.changed = true;
+            }
+            return fold;
+        }
+        // Source 1 — the parent's subagent tool calls carrying the
+        // child's sessionID in the input metadata.
+        if session_id == self.parent
+            && matches!(
+                event_type.as_str(),
+                "session.tool.input.started" | "session.tool.called" | "session.tool.success"
+            )
+        {
+            let child_id = data
+                .pointer("/input/metadata/sessionID")
+                .or_else(|| data.pointer("/metadata/sessionID"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            if !child_id.is_empty() && child_id != self.parent {
+                let description = data
+                    .pointer("/input/description")
+                    .or_else(|| data.pointer("/input/prompt"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
+                if self.admit(&child_id, String::new(), description) {
+                    fold.admitted = true;
+                    fold.changed = true;
+                }
+            }
+        }
+
+        // Known child events: the child's own transport fold + the
+        // status transitions.
+        if session_id.is_empty() || session_id == self.parent {
+            return fold;
+        }
+        let Some(index) = self.slots.iter().position(|slot| slot.child.session_id == session_id)
+        else {
+            return fold;
+        };
+        match event_type.as_str() {
+            "session.execution.started" | "session.execution.resumed" => {
+                self.slots[index].child.status = SubagentStatus::Running;
+                fold.changed = true;
+            }
+            "session.execution.succeeded" => {
+                self.slots[index].child.status = SubagentStatus::Completed;
+                fold.changed = true;
+            }
+            "session.execution.failed" => {
+                self.slots[index].child.status = SubagentStatus::Error;
+                fold.changed = true;
+            }
+            "session.execution.interrupted" => {
+                self.slots[index].child.status = SubagentStatus::Cancelled;
+                fold.changed = true;
+            }
+            "session.updated" | "session.renamed" => {
+                let title = text_field(&data, "title");
+                if !title.is_empty() && self.slots[index].child.title != title {
+                    self.slots[index].child.title = title;
+                    fold.changed = true;
+                }
+            }
+            _ => {}
+        }
+        // The transcript fold (the same switch as the parent).
+        let slot = &mut self.slots[index];
+        match slot.state.fold(event) {
+            Fold::Commit(commit) => {
+                slot.child.commits.push(commit);
+                let excess = slot.child.commits.len().saturating_sub(CHILD_COMMIT_LIMIT);
+                if excess > 0 {
+                    slot.child.commits.drain(0..excess);
+                }
+                fold.changed = true;
+            }
+            Fold::Ignored | Fold::Idle => {}
+            Fold::Permission(_)
+            | Fold::PermissionReplied(_)
+            | Fold::Form(_)
+            | Fold::FormRemoved(_) => {}
+        }
+        fold
+    }
+
+    /// `admitChild`: insert-or-refresh one child; `false` when the
+    /// list is full or nothing changed.
+    fn admit(&mut self, session_id: &str, title: String, description: String) -> bool {
+        if let Some(slot) = self.slots.iter_mut().find(|slot| slot.child.session_id == session_id) {
+            let mut changed = false;
+            if !title.is_empty() && slot.child.title != title {
+                slot.child.title = title;
+                changed = true;
+            }
+            if !description.is_empty() && slot.child.description != description {
+                slot.child.description = description;
+                changed = true;
+            }
+            return changed;
+        }
+        if self.slots.len() >= FAMILY_LIST_LIMIT {
+            return false;
+        }
+        self.slots.push(ChildSlot {
+            child: SubagentChild {
+                session_id: session_id.to_owned(),
+                label: SUBAGENT_FALLBACK_LABEL.to_owned(),
+                title,
+                description,
+                status: SubagentStatus::Running,
+                commits: Vec::new(),
+            },
+            state: TransportState::new(session_id),
+        });
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

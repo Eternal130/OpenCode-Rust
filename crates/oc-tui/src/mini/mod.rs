@@ -37,6 +37,7 @@
 //! `mini/footer*.tsx`.
 
 pub mod demo;
+pub mod footer_subagent;
 pub mod lifecycle;
 pub mod model_pref;
 pub mod mono;

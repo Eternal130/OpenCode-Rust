@@ -255,6 +255,7 @@ pub async fn run(input: MiniInput) -> Result<i32, String> {
         settings,
         turn_agent: input.target.agent.clone(),
         turn_model: input.target.model_label.clone(),
+        subagents: super::transport::SubagentTracker::new(&session_id),
     };
 
     // The initial input submits first (`runPromptQueue`'s
@@ -309,6 +310,10 @@ struct Runtime {
     /// the per-turn tracking the footer owns).
     turn_agent: Option<String>,
     turn_model: Option<String>,
+    /// TUI-17 — the subagent tracker (`createSubagentTracker`,
+    /// stream-v2.subagent.ts): every event folds through it beside
+    /// the parent transport.
+    subagents: super::transport::SubagentTracker,
 }
 
 impl Runtime {
@@ -345,6 +350,14 @@ impl Runtime {
                     return;
                 }
                 let _ = transport::interrupt(&self.client, &self.session_id, true).await;
+            }
+            FooterEffect::InterruptChild(child) => {
+                // TUI-17 — per-child interrupt
+                // (`v2.session.interrupt(childID)`, resume false).
+                if self.demo {
+                    return;
+                }
+                let _ = transport::interrupt(&self.client, &child, false).await;
             }
             FooterEffect::PermissionReply(reply) => {
                 if self.demo {
@@ -402,6 +415,13 @@ impl Runtime {
     /// Drain arrived SSE events through the transport folds.
     fn pump_events(&mut self) {
         while let Ok(event) = self.events.try_recv() {
+            // TUI-17 — the tracker folds EVERY event (child sessions
+            // and the parent's subagent tool calls included); a
+            // changed tab/detail refreshes the pane's snapshot.
+            let subagent_fold = self.subagents.fold(&event);
+            if subagent_fold.changed {
+                self.lifecycle.pane.subagent_children = self.subagents.children();
+            }
             match self.transport.fold(&event) {
                 Fold::Ignored => {}
                 Fold::Permission(request) => self.lifecycle.pane.permission_asked(request),
@@ -641,6 +661,9 @@ fn map_key(key: &crossterm::event::KeyEvent) -> Option<FooterKey> {
         KeyCode::Backspace => Some(FooterKey::Backspace),
         KeyCode::Up => Some(FooterKey::Up),
         KeyCode::Down => Some(FooterKey::Down),
+        KeyCode::Tab => Some(FooterKey::Tab),
+        KeyCode::PageUp => Some(FooterKey::PageUp),
+        KeyCode::PageDown => Some(FooterKey::PageDown),
         KeyCode::Char(char) => Some(FooterKey::Printable(char)),
         _ => None,
     }
