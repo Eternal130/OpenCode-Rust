@@ -49,7 +49,10 @@ use oc_ai::protocols::openai_compatible::{
     openai_compatible_chat_configured, openai_compatible_responses_route,
 };
 use oc_ai::protocols::openai_responses::{openai_responses_route, OpenAIResponsesRouteSpec};
-use oc_ai::protocols::vertex::{vertex_route_for_model, VertexConfig};
+use oc_ai::protocols::vertex::{
+    vertex_chat_route, vertex_responses_route, vertex_route_for_model, VertexConfig,
+    VertexEndpointConfig,
+};
 use oc_ai::protocols::vertex_messages::{vertex_messages_route, VertexMessagesConfig};
 use oc_ai::protocols::xai_responses::{xai_auth, xai_responses_route, XaiResponsesRouteSpec};
 use oc_ai::route::auth::{self, Secret};
@@ -175,6 +178,14 @@ pub enum ProtocolFamily {
     /// protocol on the publishers/anthropic Vertex root with ADC auth —
     /// previously misrouted to the generic messages arm (api.anthropic.com).
     VertexMessages,
+    /// Vertex OpenAI Chat (AI-V1): the openai-chat protocol on the
+    /// aiplatform `endpoints/openapi` root with ADC auth — previously the
+    /// generic chat arm (which failed "needs a baseURL" without one).
+    VertexChat,
+    /// Vertex Open Responses (AI-V1): the open-responses protocol on the
+    /// aiplatform `endpoints/openapi` root with ADC auth — previously no
+    /// family arm at all (UnsupportedProtocol).
+    VertexResponses,
     /// xAI Responses (AI-M5): the Open Responses baseline with the Grok
     /// hosted tool vocabulary and explicit compaction-only context
     /// management.
@@ -218,7 +229,6 @@ pub fn family_of(package: &str) -> Option<ProtocolFamily> {
         "@opencode/ai/providers/xai" => ProtocolFamily::XaiResponses,
 
         "@opencode/ai/providers/azure/chat"
-        | "@opencode/ai/providers/google-vertex/chat"
         | "@opencode/ai/providers/alibaba/chat"
         | "@opencode/ai/providers/baseten"
         | "@opencode/ai/providers/cerebras"
@@ -259,6 +269,11 @@ pub fn family_of(package: &str) -> Option<ProtocolFamily> {
         "@opencode/ai/providers/google/interactions" => ProtocolFamily::GoogleInteractions,
         // Vertex native (BE-4): the Gemini protocol deployed on aiplatform.
         "@opencode/ai/providers/google-vertex" => ProtocolFamily::VertexGemini,
+        // Vertex OpenAPI lanes (AI-V1): chat and responses on the
+        // aiplatform `endpoints/openapi` root (providers/
+        // google-vertex-chat.ts + google-vertex-responses.ts).
+        "@opencode/ai/providers/google-vertex/chat" => ProtocolFamily::VertexChat,
+        "@opencode/ai/providers/google-vertex/responses" => ProtocolFamily::VertexResponses,
         "@opencode/ai/providers/openai-compatible" => ProtocolFamily::OpenAICompatible,
 
         // Bedrock (BE-4): Converse for the plain package, the Mantle
@@ -485,6 +500,48 @@ fn build_route(
                 message: error.to_string(),
             })
         }
+        ProtocolFamily::VertexChat => {
+            // AI-V1: the OpenAI-compat chat lane on the aiplatform
+            // `endpoints/openapi` root — the composed project/location URL
+            // (or the expanded catalog template), ADC bearer, API keys
+            // rejected.
+            let access_token =
+                api_key.or_else(|| env_first(env, "GOOGLE_OAUTH_ACCESS_TOKEN").map(Secret::Env));
+            vertex_chat_route(
+                transport,
+                VertexEndpointConfig {
+                    base_url: vertex_lane_base_url(connection, model, base_url),
+                    location: None,
+                    project: None,
+                    access_token,
+                    api_key: None,
+                },
+            )
+            .map_err(|error| ProviderError::Configuration {
+                provider: provider_id.to_string(),
+                message: error.to_string(),
+            })
+        }
+        ProtocolFamily::VertexResponses => {
+            // AI-V1: the open-responses lane on the same root with the
+            // store/include defaults, ADC bearer, API keys rejected.
+            let access_token =
+                api_key.or_else(|| env_first(env, "GOOGLE_OAUTH_ACCESS_TOKEN").map(Secret::Env));
+            vertex_responses_route(
+                transport,
+                VertexEndpointConfig {
+                    base_url: vertex_lane_base_url(connection, model, base_url),
+                    location: None,
+                    project: None,
+                    access_token,
+                    api_key: None,
+                },
+            )
+            .map_err(|error| ProviderError::Configuration {
+                provider: provider_id.to_string(),
+                message: error.to_string(),
+            })
+        }
         ProtocolFamily::XaiResponses => {
             // AI-M5: the native xai-responses lane at api.x.ai/v1 with the
             // optional XAI_API_KEY bearer chain (providers/xai.ts:36-49).
@@ -629,6 +686,27 @@ fn build_route(
 /// order is the provider's documented precedence).
 fn env_first(env: &[String], name: &str) -> Option<String> {
     env.iter().find(|candidate| candidate.as_str() == name).cloned()
+}
+
+/// The Vertex lanes' baseURL precedence (v2 folds the model's catalog
+/// `api` into the settings the provider package reads): explicit
+/// connection baseURL, then the model-level catalog template, then the
+/// provider-level catalog api (the `base_url` param already collapsed
+/// connection → provider-level).
+fn vertex_lane_base_url(
+    connection: &ModelConnection,
+    model: &ModelInfo,
+    base_url: Option<String>,
+) -> Option<String> {
+    connection.base_url.clone().or_else(|| {
+        model
+            .settings
+            .as_ref()
+            .and_then(|settings| settings.rest.get("baseURL"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or(base_url)
+    })
 }
 
 /// Chat factories with their own baked base URL (no catalog api needed).
@@ -1014,6 +1092,62 @@ mod tests {
         assert_eq!(transport_request.header("x-goog-api-key"), None);
         assert_eq!(body["anthropic_version"], "vertex-2023-10-16");
         assert!(body.get("model").is_none());
+    }
+
+    /// AI-V1: the catalog's Vertex maas models (npm
+    /// `@ai-sdk/openai-compatible` → `google-vertex/chat`) bind the
+    /// OpenAPI chat lane — the `${GOOGLE_VERTEX_*}` catalog baseURL
+    /// template expands against the resolved project/location instead of
+    /// failing "needs a baseURL".
+    #[test]
+    fn provider_facade_vertex_chat_responses_bindings() {
+        let context = context();
+        let catalog = Catalog::embedded();
+        let vertex = catalog.provider("google-vertex").expect("vertex in catalog");
+        let maas = vertex
+            .models
+            .iter()
+            .find(|model| {
+                model.package.as_deref().unwrap_or(&vertex.info.package)
+                    == "@opencode/ai/providers/google-vertex/chat"
+            })
+            .expect("an openapi-chat (maas) vertex model exists");
+        std::env::set_var("GOOGLE_VERTEX_PROJECT", "facade-test-proj");
+        std::env::set_var("GOOGLE_VERTEX_LOCATION", "us-central1");
+        let model = language_model(
+            &context,
+            catalog,
+            "google-vertex",
+            maas.id.as_str(),
+            &ModelConnection { api_key: Some("ya29.adc".into()), ..Default::default() },
+        )
+        .expect("vertex chat binds");
+        std::env::remove_var("GOOGLE_VERTEX_PROJECT");
+        std::env::remove_var("GOOGLE_VERTEX_LOCATION");
+        assert_eq!(model.route.id, "google-vertex-chat");
+        let route = Arc::clone(&model.route);
+        assert_eq!(
+            route.endpoint.base_url.as_deref(),
+            Some(
+                "https://us-central1-aiplatform.googleapis.com/v1/projects/facade-test-proj/locations/us-central1/endpoints/openapi"
+            ),
+            "the catalog template expanded"
+        );
+        let mut request = oc_ai::schema::LLMRequest::new(model);
+        request.messages = vec![oc_ai::schema::Message::user("hi")];
+        let prepared = route.prepare_request(&request);
+        let body = route.build_body(&prepared).expect("body");
+        let (transport_request, _) = route.prepare_transport(&prepared, &body).expect("wire");
+        assert!(transport_request.url.ends_with("/chat/completions"), "{}", transport_request.url);
+        assert_eq!(transport_request.header("authorization"), Some("Bearer ya29.adc"));
+
+        // The responses lane binds through the same seam when a model
+        // carries the responses package (config-pinned packages).
+        assert_eq!(
+            family_of("@opencode/ai/providers/google-vertex/responses"),
+            Some(ProtocolFamily::VertexResponses),
+            "the responses package has its own family arm"
+        );
     }
 
     /// BE-4 item 3: Copilot chat binds the openai-compatible protocol with
