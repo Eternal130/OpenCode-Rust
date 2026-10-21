@@ -2188,6 +2188,7 @@ dependencies = [
  "opentui-solid",
  "parity",
  "ratatui",
+ "rusqlite",
  "serde",
  "serde_json",
  "taffy",

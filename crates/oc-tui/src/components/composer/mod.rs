@@ -147,6 +147,11 @@ pub struct SubmittedPrompt {
     /// optimistic admit; the POST body carries it so the SSE echo
     /// re-admits under the same id, data.ts:769-787).
     pub inbox_id: Option<String>,
+    /// TUI-15 — the pending editor context's `<system-reminder>` text
+    /// (index.tsx:1339-1344): the sink admits it via
+    /// `session.synthetic` BEFORE the prompt POST, then the label
+    /// flips to sent.
+    pub editor_context: Option<String>,
 }
 
 /// `src/prompt/history.ts` semantics (the golden-relevant subset): a

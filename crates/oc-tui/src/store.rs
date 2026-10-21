@@ -1365,6 +1365,15 @@ pub struct Store {
     location_hovered: std::cell::Cell<bool>,
     /// TUI-12 — the live segment's hover state (`liveHovered`).
     live_hovered: std::cell::Cell<bool>,
+    /// TUI-15 — the Zed editor selection (context/editor.ts's store:
+    /// the poll's latest decode; `None` while none resolved).
+    editor_selection: std::cell::RefCell<Option<crate::editor_zed::ZedSelection>>,
+    /// `selectionSent` — the submit that attached the context.
+    editor_selection_sent: std::cell::Cell<bool>,
+    /// `dismissedEditorSelectionKey` (index.tsx:224-328): the clear
+    /// command's key — the SAME selection stays dismissed until Zed
+    /// reports a different one.
+    editor_dismissed_key: std::cell::RefCell<Option<String>>,
     /// Per-session scroll state (Wave A's scroll driver over
     /// [`FollowState`]); the render pass records the metrics.
     scroll: std::cell::RefCell<HashMap<String, ScrollDriver>>,
@@ -3010,6 +3019,9 @@ impl Store {
             lane_dialogs: std::cell::RefCell::new(DialogsLaneState::default()),
             location_hovered: std::cell::Cell::new(false),
             live_hovered: std::cell::Cell::new(false),
+            editor_selection: std::cell::RefCell::new(None),
+            editor_selection_sent: std::cell::Cell::new(false),
+            editor_dismissed_key: std::cell::RefCell::new(None),
             scroll: std::cell::RefCell::new(HashMap::new()),
             transcript_metrics: std::cell::RefCell::new(HashMap::new()),
             interrupts,
@@ -5213,6 +5225,96 @@ impl Store {
     #[must_use]
     pub fn live_hovered(&self) -> bool {
         self.live_hovered.get()
+    }
+
+    // -- TUI-15: the Zed editor context (context/editor.ts) ---------
+
+    /// `editorSelectionKey` (context/editor.ts:20-27's identity): the
+    /// file + every range's extent — the poll's dedup + the dismiss
+    /// key.
+    fn editor_selection_key(selection: &crate::editor_zed::ZedSelection) -> String {
+        let ranges = selection
+            .ranges
+            .iter()
+            .map(|range| {
+                format!(
+                    "{}:{}-{}:{}:{}",
+                    range.start_line,
+                    range.start_character,
+                    range.end_line,
+                    range.end_character,
+                    range.text.chars().count()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        format!("{}|{}", selection.file_path, ranges)
+    }
+
+    /// The poll's fold (editor.ts:198-206): `Empty` clears, a fresh
+    /// selection lands (a NEW key re-arms `sent`), `Unavailable` KEEPS
+    /// the last (transient failures never clear).
+    pub fn apply_zed_selection(&self, result: crate::editor_zed::ZedSelectionResult) {
+        use crate::editor_zed::ZedSelectionResult;
+        match result {
+            ZedSelectionResult::Selection(selection) => {
+                let changed = self.editor_selection.borrow().as_ref().is_none_or(|current| {
+                    Self::editor_selection_key(current) != Self::editor_selection_key(&selection)
+                });
+                if changed {
+                    *self.editor_selection.borrow_mut() = Some(selection);
+                    self.editor_selection_sent.set(false);
+                    self.request_redraw();
+                }
+            }
+            ZedSelectionResult::Empty => {
+                if self.editor_selection.borrow().is_some() {
+                    *self.editor_selection.borrow_mut() = None;
+                    self.editor_selection_sent.set(false);
+                    self.request_redraw();
+                }
+            }
+            ZedSelectionResult::Unavailable => {}
+        }
+    }
+
+    /// `editorContext()` (index.tsx:225-228): the selection unless the
+    /// clear command dismissed exactly this key.
+    #[must_use]
+    pub fn editor_context(&self) -> Option<crate::editor_zed::ZedSelection> {
+        let selection = self.editor_selection.borrow().clone()?;
+        let key = Self::editor_selection_key(&selection);
+        if self.editor_dismissed_key.borrow().as_deref() == Some(key.as_str()) {
+            return None;
+        }
+        Some(selection)
+    }
+
+    /// `labelState()` (editor.ts:343-346): no label with no selection;
+    /// `true` = pending (accent), `false` = sent (muted).
+    #[must_use]
+    pub fn editor_label_pending(&self) -> Option<bool> {
+        self.editor_context().map(|_| !self.editor_selection_sent.get())
+    }
+
+    /// `dismissEditorContext` (index.tsx:327-330): pin the current
+    /// key as dismissed and clear the selection.
+    pub fn editor_context_clear(&self) {
+        let key = self.editor_selection.borrow().as_ref().map(Self::editor_selection_key);
+        if let Some(key) = key {
+            *self.editor_dismissed_key.borrow_mut() = Some(key);
+        }
+        *self.editor_selection.borrow_mut() = None;
+        self.request_redraw();
+    }
+
+    /// `markSelectionSent` (editor.ts:339-342): the submit that
+    /// attached the context flips the label to `sent`.
+    pub fn editor_mark_sent(&self) {
+        if self.editor_selection.borrow().is_some() && !self.editor_selection_sent.get() {
+            self.editor_selection_sent.set(true);
+            self.request_redraw();
+        }
     }
 
     /// The home footer chips' rects (lane KM, auditA #10) — recorded
