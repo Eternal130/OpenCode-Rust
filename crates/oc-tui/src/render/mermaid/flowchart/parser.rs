@@ -1,3 +1,29 @@
+// Upstream-mirror lint posture: the merman port keeps the TypeScript
+// arithmetic shape (JS Number semantics on an i64 grid, the same cast
+// sites and long single-responsibility functions), so the pedantic
+// numeric/style lints that would rewrite that shape are quieted here.
+#![allow(
+    clippy::cast_possible_wrap,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::cast_lossless,
+    clippy::doc_markdown,
+    clippy::must_use_candidate,
+    clippy::too_many_lines,
+    clippy::too_many_arguments,
+    clippy::needless_range_loop,
+    clippy::items_after_statements,
+    clippy::explicit_iter_loop,
+    clippy::for_kv_map,
+    clippy::map_unwrap_or,
+    clippy::manual_strip,
+    clippy::range_plus_one,
+    clippy::option_option,
+    clippy::implicit_hasher,
+    clippy::match_same_arms
+)]
+
 //! `flowchart/parser.ts` — nodes, shapes, subgraphs, `&` groups, and
 //! the edge-operator scanner (the upstream `EDGE_OPERATOR_RE` —
 //! hand-rolled here because the JS pattern uses lookahead).
@@ -249,9 +275,10 @@ fn has_internal_statement_separator(line: &str) -> bool {
     let closes = [('(', ')'), ('[', ']'), ('{', '}')];
     let final_index = line.trim_end().chars().count().saturating_sub(1);
 
-    for (index, character) in line.chars().enumerate() {
+    for (char_index, (byte_index, character)) in line.char_indices().enumerate() {
+        let index = char_index;
         if let Some(active) = quote {
-            if character == active && index > 0 && !line[..index].ends_with('\\') {
+            if character == active && index > 0 && !line[..byte_index].ends_with('\\') {
                 quote = None;
             }
             continue;
@@ -549,7 +576,7 @@ fn parse_subgraph_direction(line: &str) -> Option<FlowchartDirection> {
 /// `IGNORED_PRESENTATION_RE = ^(?:classDef|class|style|linkStyle)\b`.
 fn is_ignored_presentation(line: &str) -> bool {
     for keyword in ["classDef", "class", "style", "linkStyle"] {
-        if line.as_bytes().len() >= keyword.len()
+        if line.len() >= keyword.len()
             && line.as_bytes()[..keyword.len()].eq_ignore_ascii_case(keyword.as_bytes())
         {
             let next = line.as_bytes().get(keyword.len()).copied();
@@ -680,7 +707,7 @@ pub fn parse_mermaid_flowchart_diagram(
                     .into_iter()
                     .map(|token| strip_node_token(&token).to_string())
                     .collect();
-                if stripped.iter().any(|token| token.is_empty()) {
+                if stripped.iter().any(String::is_empty) {
                     ok = false;
                     break;
                 }
@@ -693,10 +720,10 @@ pub fn parse_mermaid_flowchart_diagram(
                     .into_iter()
                     .map(|token| strip_node_token(&token).to_string())
                     .collect();
-                if !tail.iter().any(|token| token.is_empty()) {
-                    node_groups.push(tail);
-                } else {
+                if tail.iter().any(String::is_empty) {
                     ok = false;
+                } else {
+                    node_groups.push(tail);
                 }
             }
 
@@ -779,8 +806,7 @@ pub fn parse_mermaid_flowchart_diagram(
             }
         }
 
-        let node_group: Vec<String> =
-            split_node_group(line).into_iter().map(|token| token.to_string()).collect();
+        let node_group: Vec<String> = split_node_group(line);
         if node_group.iter().all(|token| is_supported_node_token(token)) {
             for token in &node_group {
                 let id = ensure_node!(strip_node_token(token));

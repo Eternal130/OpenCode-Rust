@@ -1,3 +1,29 @@
+// Upstream-mirror lint posture: the merman port keeps the TypeScript
+// arithmetic shape (JS Number semantics on an i64 grid, the same cast
+// sites and long single-responsibility functions), so the pedantic
+// numeric/style lints that would rewrite that shape are quieted here.
+#![allow(
+    clippy::cast_possible_wrap,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::cast_lossless,
+    clippy::doc_markdown,
+    clippy::must_use_candidate,
+    clippy::too_many_lines,
+    clippy::too_many_arguments,
+    clippy::needless_range_loop,
+    clippy::items_after_statements,
+    clippy::explicit_iter_loop,
+    clippy::for_kv_map,
+    clippy::map_unwrap_or,
+    clippy::manual_strip,
+    clippy::range_plus_one,
+    clippy::option_option,
+    clippy::implicit_hasher,
+    clippy::match_same_arms
+)]
+
 //! `flowchart/layout.ts` — rank assignment, crossing reduction,
 //! subgraph frames, and the top-level layout driver.
 
@@ -46,10 +72,6 @@ pub struct FlowchartLayout {
 #[must_use]
 pub fn is_horizontal_direction(direction: FlowchartDirection) -> bool {
     matches!(direction, FlowchartDirection::Lr | FlowchartDirection::Rl)
-}
-
-fn is_vertical_direction(direction: FlowchartDirection) -> bool {
-    !is_horizontal_direction(direction)
 }
 
 /// `visualLength`.
@@ -497,7 +519,7 @@ fn reduce_rank_crossings(
     let mut best = original.clone();
     let mut best_crossings = initial_crossings;
     for sweep in 0..CROSSING_SWEEPS {
-        current = sweep_layers(current, &links, sweep % 2 == 0);
+        current = sweep_layers(&current, &links, sweep % 2 == 0);
         let position: HashMap<&str, usize> = current
             .iter()
             .flat_map(|layer| layer.iter().enumerate().map(|(index, id)| (id.as_str(), index)))
@@ -505,7 +527,7 @@ fn reduce_rank_crossings(
         let crossings = layer_crossings(&current, &links, &position);
         if crossings < best_crossings {
             best_crossings = crossings;
-            best = current.clone();
+            best.clone_from(&current);
         }
     }
     if best == original {
@@ -521,11 +543,11 @@ fn reduce_rank_crossings(
 }
 
 fn sweep_layers(
-    layers: Vec<Vec<String>>,
+    layers: &[Vec<String>],
     links: &[(usize, String, String)],
     down: bool,
 ) -> Vec<Vec<String>> {
-    let mut next = layers.clone();
+    let mut next = layers.to_vec();
     let indices: Vec<usize> = (0..next.len()).collect();
     let order: Vec<usize> = if down {
         indices.into_iter().skip(1).collect()
@@ -745,10 +767,10 @@ fn layout_ranked_nodes(
     } else {
         Vec::new()
     };
-    let vertical_gaps = if !horizontal {
-        vertical_rank_gaps(diagram, &normalized_ranks, &rank_keys, requested_min_rank_gap)
-    } else {
+    let vertical_gaps = if horizontal {
         Vec::new()
+    } else {
+        vertical_rank_gaps(diagram, &normalized_ranks, &rank_keys, requested_min_rank_gap)
     };
     let mut bounds: HashMap<String, NodeBounds> = HashMap::new();
     let mut wrapped = false;
@@ -1073,10 +1095,10 @@ fn layout_local_subgraph_directions(
             .filter_map(|edge| {
                 let from = item_by_endpoint.get(&edge.from)?;
                 let to = item_by_endpoint.get(&edge.to)?;
-                if from != to {
-                    Some(FlowchartEdge { from: from.clone(), to: to.clone(), ..edge.clone() })
-                } else {
+                if from == to {
                     None
+                } else {
+                    Some(FlowchartEdge { from: from.clone(), to: to.clone(), ..edge.clone() })
                 }
             })
             .collect();
@@ -1101,17 +1123,16 @@ fn layout_local_subgraph_directions(
             &local_diagram,
             direction,
             &item_sizes,
-            (min_node_gap.max(SUBGRAPH_PADDING_X * 2 + 1)) as i64,
+            min_node_gap.max(SUBGRAPH_PADDING_X * 2 + 1),
             requested_min_rank_gap,
             target_width,
         );
         let local_bounds = local_layout.bounds;
         wrapped |= local_layout.wrapped;
-        let local_extent = match bounds_from_children(
+        let Some(local_extent) = bounds_from_children(
             &local_bounds.values().map(|bound| bound.bounds).collect::<Vec<_>>(),
-        ) {
-            Some(extent) => extent,
-            None => continue,
+        ) else {
+            continue;
         };
 
         let target_left =
@@ -1178,9 +1199,11 @@ fn layout_local_subgraph_directions(
                         break 'search;
                     }
                 }
-                if !found {
-                    panic!("Subgraph {} has no collision-free responsive position", subgraph.id);
-                }
+                assert!(
+                    found,
+                    "Subgraph {} has no collision-free responsive position",
+                    subgraph.id
+                );
             }
         }
 
@@ -1200,9 +1223,7 @@ fn layout_local_subgraph_directions(
 fn edge_direction_for(diagram: &FlowchartDiagram, edge: &FlowchartEdge) -> FlowchartDirection {
     for subgraph in diagram.subgraphs.iter().rev() {
         let Some(direction) = subgraph.direction else { continue };
-        if subgraph.node_ids.iter().any(|id| *id == edge.from)
-            && subgraph.node_ids.iter().any(|id| *id == edge.to)
-        {
+        if subgraph.node_ids.contains(&edge.from) && subgraph.node_ids.contains(&edge.to) {
             return direction;
         }
     }
@@ -1357,29 +1378,28 @@ fn separate_top_level_items(
     }
 
     let horizontal = is_horizontal_direction(diagram.direction);
-    let mut move_item =
-        |item: &Item,
-         dx: i64,
-         dy: i64,
-         node_bounds: &mut HashMap<String, NodeBounds>,
-         subgraph_bounds: &mut HashMap<String, SubgraphBounds>| {
-            for node_id in &item.node_ids {
-                if let Some(bound) = node_bounds.get_mut(node_id) {
-                    bound.bounds = translate_bounds(bound.bounds, dx, dy);
-                }
+    let move_item = |item: &Item,
+                     dx: i64,
+                     dy: i64,
+                     node_bounds: &mut HashMap<String, NodeBounds>,
+                     subgraph_bounds: &mut HashMap<String, SubgraphBounds>| {
+        for node_id in &item.node_ids {
+            if let Some(bound) = node_bounds.get_mut(node_id) {
+                bound.bounds = translate_bounds(bound.bounds, dx, dy);
             }
-            if !top_level_ids.contains(&item.id) {
-                return;
+        }
+        if !top_level_ids.contains(&item.id) {
+            return;
+        }
+        for subgraph in &diagram.subgraphs {
+            if top_level_subgraph_id(&subgraph.id) != item.id {
+                continue;
             }
-            for subgraph in &diagram.subgraphs {
-                if top_level_subgraph_id(&subgraph.id) != item.id {
-                    continue;
-                }
-                if let Some(bound) = subgraph_bounds.get_mut(&subgraph.id) {
-                    bound.bounds = translate_bounds(bound.bounds, dx, dy);
-                }
+            if let Some(bound) = subgraph_bounds.get_mut(&subgraph.id) {
+                bound.bounds = translate_bounds(bound.bounds, dx, dy);
             }
-        };
+        }
+    };
 
     if has_local_direction {
         let mut outgoing: HashMap<String, HashSet<String>> =
@@ -1553,10 +1573,10 @@ fn separate_top_level_items(
                     else {
                         return false;
                     };
-                    left_bounds.left <= right_bounds.left + right_bounds.width - 1
-                        && left_bounds.left + left_bounds.width - 1 >= right_bounds.left
-                        && left_bounds.top <= right_bounds.top + right_bounds.height - 1
-                        && left_bounds.top + left_bounds.height - 1 >= right_bounds.top
+                    left_bounds.left < right_bounds.left + right_bounds.width
+                        && left_bounds.left + left_bounds.width > right_bounds.left
+                        && left_bounds.top < right_bounds.top + right_bounds.height
+                        && left_bounds.top + left_bounds.height > right_bounds.top
                 })
             })
         };
@@ -1622,11 +1642,8 @@ fn layout_flowchart_with_direction(
     let requested_min_rank_gap = normalize_positive_int(options.min_rank_gap, default_rank_gap);
     let sizes: HashMap<String, NodeSize> =
         diagram.nodes.iter().map(|node| (node.id.clone(), node_size(node))).collect();
-    let target_width = if !horizontal && options.layout_max_width.is_some() {
-        Some(1.max(options.layout_max_width.unwrap()))
-    } else {
-        None
-    };
+    let target_width =
+        if horizontal { None } else { options.layout_max_width.map(|width| 1.max(width)) };
     let ranked = layout_ranked_nodes(
         &diagram,
         direction,

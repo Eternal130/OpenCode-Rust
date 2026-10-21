@@ -1,3 +1,29 @@
+// Upstream-mirror lint posture: the merman port keeps the TypeScript
+// arithmetic shape (JS Number semantics on an i64 grid, the same cast
+// sites and long single-responsibility functions), so the pedantic
+// numeric/style lints that would rewrite that shape are quieted here.
+#![allow(
+    clippy::cast_possible_wrap,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::cast_lossless,
+    clippy::doc_markdown,
+    clippy::must_use_candidate,
+    clippy::too_many_lines,
+    clippy::too_many_arguments,
+    clippy::needless_range_loop,
+    clippy::items_after_statements,
+    clippy::explicit_iter_loop,
+    clippy::for_kv_map,
+    clippy::map_unwrap_or,
+    clippy::manual_strip,
+    clippy::range_plus_one,
+    clippy::option_option,
+    clippy::implicit_hasher,
+    clippy::match_same_arms
+)]
+
 //! `sequence/parser.ts` — participants, messages, notes, activations,
 //! fragments, autonumber, box groups.
 
@@ -184,9 +210,7 @@ fn parse_participant(line: &str) -> Option<(String, Option<String>)> {
             } else {
                 None
             };
-            if alias.is_none() {
-                return None;
-            }
+            alias.as_ref()?;
             (id, alias)
         }
         None => (body, None),
@@ -239,7 +263,7 @@ fn parse_autonumber(line: &str) -> Option<(i64, i64)> {
     let body = rest.trim();
     let mut parts = body.split_whitespace();
     let start = parts.next()?.parse::<i64>().ok()?;
-    let increment = parts.next().map(|value| value.parse::<i64>().unwrap_or(1)).unwrap_or(1);
+    let increment = parts.next().map_or(1, |value| value.parse::<i64>().unwrap_or(1));
     if parts.next().is_some() {
         return None;
     }
@@ -334,7 +358,7 @@ fn box_label_text(value: Option<&str>) -> String {
     let (token, rest): (&str, String) =
         if label.to_lowercase().starts_with("rgba(") || label.to_lowercase().starts_with("rgb(") {
             match label.find(')') {
-                Some(close) => (&label[..close + 1], label[close + 1..].trim().to_string()),
+                Some(close) => (&label[..=close], label[close + 1..].trim().to_string()),
                 None => (label.as_str(), String::new()),
             }
         } else {

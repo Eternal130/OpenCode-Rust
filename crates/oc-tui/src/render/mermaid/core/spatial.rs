@@ -1,3 +1,29 @@
+// Upstream-mirror lint posture: the merman port keeps the TypeScript
+// arithmetic shape (JS Number semantics on an i64 grid, the same cast
+// sites and long single-responsibility functions), so the pedantic
+// numeric/style lints that would rewrite that shape are quieted here.
+#![allow(
+    clippy::cast_possible_wrap,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::cast_lossless,
+    clippy::doc_markdown,
+    clippy::must_use_candidate,
+    clippy::too_many_lines,
+    clippy::too_many_arguments,
+    clippy::needless_range_loop,
+    clippy::items_after_statements,
+    clippy::explicit_iter_loop,
+    clippy::for_kv_map,
+    clippy::map_unwrap_or,
+    clippy::manual_strip,
+    clippy::range_plus_one,
+    clippy::option_option,
+    clippy::implicit_hasher,
+    clippy::match_same_arms
+)]
+
 //! `core/spatial.ts` — the claim/conflict index (notes + labels + route
 //! collision policy).
 
@@ -146,10 +172,9 @@ fn same_claim(left: &SpatialClaim, right: &SpatialClaim) -> bool {
 }
 
 fn point_is_contact(point: Point, existing: &SpatialClaim, contacts: &[SpatialContact]) -> bool {
-    contacts.iter().any(|contact| {
-        contact.owner == existing.owner
-            && contact.points.iter().any(|candidate| *candidate == point)
-    })
+    contacts
+        .iter()
+        .any(|contact| contact.owner == existing.owner && contact.points.contains(&point))
 }
 
 fn roles_may_overlap(moving: &SpatialClaim, existing: &SpatialClaim) -> bool {
@@ -205,9 +230,7 @@ impl SpatialIndex {
             self.claims.iter().cloned().map(|claim| (claim.id.clone(), claim)).collect();
         for claim in &other.claims {
             if let Some(existing) = claims.get(&claim.id) {
-                if !same_claim(existing, claim) {
-                    panic!("Conflicting spatial claim id: {}", claim.id);
-                }
+                assert!(same_claim(existing, claim), "Conflicting spatial claim id: {}", claim.id);
             }
             claims.insert(claim.id.clone(), claim.clone());
         }

@@ -1,7 +1,34 @@
+// Upstream-mirror lint posture: the merman port keeps the TypeScript
+// arithmetic shape (JS Number semantics on an i64 grid, the same cast
+// sites and long single-responsibility functions), so the pedantic
+// numeric/style lints that would rewrite that shape are quieted here.
+#![allow(
+    clippy::cast_possible_wrap,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::cast_lossless,
+    clippy::doc_markdown,
+    clippy::must_use_candidate,
+    clippy::too_many_lines,
+    clippy::too_many_arguments,
+    clippy::needless_range_loop,
+    clippy::items_after_statements,
+    clippy::explicit_iter_loop,
+    clippy::for_kv_map,
+    clippy::map_unwrap_or,
+    clippy::manual_strip,
+    clippy::range_plus_one,
+    clippy::option_option,
+    clippy::implicit_hasher,
+    clippy::match_same_arms
+)]
+
 //! Ported upstream core cases: `flowchart/flowchart.test.ts`,
 //! `sequence/diagram.test.ts`, `core/*` (packages/merman v2.0.24).
 
 use crate::render::mermaid::core::canvas::TextOptions;
+use crate::render::mermaid::flowchart::types::FlowchartRenderOptions;
 use crate::render::mermaid::flowchart::{
     draw_flowchart_diagram_grid, parse_mermaid_flowchart_diagram,
 };
@@ -11,7 +38,7 @@ use crate::render::mermaid::sequence::{
 
 fn draw_flowchart(content: &str) -> String {
     let diagram = parse_mermaid_flowchart_diagram(content).expect("flowchart parses");
-    draw_flowchart_diagram_grid(&diagram, &Default::default())
+    draw_flowchart_diagram_grid(&diagram, &FlowchartRenderOptions::default())
         .expect("flowchart fits")
         .to_text(TextOptions { trim_top: true, trim_bottom: true })
 }
@@ -169,8 +196,12 @@ fn keeps_every_branch_connected_at_a_shared_source_junction() {
     let source_point = layout.routes[0].points[0];
     assert_eq!(layout.routes[1].points[0], source_point);
 
-    let grid = draw_flowchart_diagram_grid(&diagram, &Default::default()).expect("grid");
-    assert_eq!(grid.get_cell(source_point.x, source_point.y).map(|cell| cell.text()), Some("┴"));
+    let grid =
+        draw_flowchart_diagram_grid(&diagram, &FlowchartRenderOptions::default()).expect("grid");
+    assert_eq!(
+        grid.get_cell(source_point.x, source_point.y).map(super::core::canvas::Cell::text),
+        Some("┴")
+    );
 }
 
 #[test]
@@ -396,33 +427,4 @@ fn rejects_unsupported_bidirectional_messages_and_bad_lines() {
     assert!(parse_mermaid_sequence_diagram("sequenceDiagram\n  totally unknown line").is_err());
     assert!(parse_mermaid_sequence_diagram("sequenceDiagram\n  else lonely").is_err());
     assert!(parse_mermaid_sequence_diagram("sequenceDiagram\n  loop forever\n  A->>B: x").is_err());
-}
-
-/// `expectDiagram(...).toEqualDiagram` — dedent + trim.
-fn normalize(value: &str) -> String {
-    let mut lines: Vec<String> =
-        value.replace("\r\n", "\n").split('\n').map(str::to_string).collect();
-    while lines.first().is_some_and(|line| line.trim().is_empty()) {
-        lines.remove(0);
-    }
-    while lines.last().is_some_and(|line| line.trim().is_empty()) {
-        lines.pop();
-    }
-    let indentation = lines
-        .iter()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| line.len() - line.trim_start().len())
-        .min()
-        .unwrap_or(0);
-    lines
-        .iter()
-        .map(|line| {
-            if line.len() >= indentation {
-                line[indentation..].to_string()
-            } else {
-                String::new()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }

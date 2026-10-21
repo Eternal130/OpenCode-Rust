@@ -1,3 +1,29 @@
+// Upstream-mirror lint posture: the merman port keeps the TypeScript
+// arithmetic shape (JS Number semantics on an i64 grid, the same cast
+// sites and long single-responsibility functions), so the pedantic
+// numeric/style lints that would rewrite that shape are quieted here.
+#![allow(
+    clippy::cast_possible_wrap,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::cast_lossless,
+    clippy::doc_markdown,
+    clippy::must_use_candidate,
+    clippy::too_many_lines,
+    clippy::too_many_arguments,
+    clippy::needless_range_loop,
+    clippy::items_after_statements,
+    clippy::explicit_iter_loop,
+    clippy::for_kv_map,
+    clippy::map_unwrap_or,
+    clippy::manual_strip,
+    clippy::range_plus_one,
+    clippy::option_option,
+    clippy::implicit_hasher,
+    clippy::match_same_arms
+)]
+
 //! `core/canvas.ts` — the cell grid every diagram type draws onto.
 
 use crate::render::mermaid::core::text::{diagram_text_graphemes, diagram_text_width};
@@ -72,8 +98,11 @@ where
     height: usize,
     cells: Vec<Cell<S>>,
     row_ends: Vec<usize>,
-    merge_cell: Option<fn(&Cell<S>, &Cell<S>) -> Cell<S>>,
+    merge_cell: Option<MergeCellFn<S>>,
 }
+
+/// Cell merge hook used when two draws claim the same cell.
+type MergeCellFn<S> = fn(&Cell<S>, &Cell<S>) -> Cell<S>;
 
 impl<S> DiagramCanvas<S>
 where
@@ -83,7 +112,7 @@ where
     pub fn new(
         width: i64,
         height: i64,
-        merge_cell: Option<fn(&Cell<S>, &Cell<S>) -> Cell<S>>,
+        merge_cell: Option<MergeCellFn<S>>,
     ) -> Result<Self, CanvasSizeError> {
         if width < 0 || height < 0 {
             return Err(CanvasSizeError { width, height });
@@ -205,7 +234,7 @@ where
     /// `setText` — ASCII fast path plus grapheme walk with continuation
     /// cells for wide glyphs.
     pub fn set_text(&mut self, x: i64, y: i64, text: &str, style: Option<S>) {
-        self.set_text_with_metadata(x, y, text, style, |_, _| None)
+        self.set_text_with_metadata(x, y, text, style, |_, _| None);
     }
 
     pub fn set_text_with_metadata(
