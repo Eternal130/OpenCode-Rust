@@ -100,12 +100,27 @@ fn renders_mermaid_git_graph_code_block_as_ascii_diagram() {
 }
 
 #[test]
+fn renders_mermaid_gantt_code_block_as_ascii_timeline() {
+    let rows = rendered(
+        "```mermaid\ngantt\n  dateFormat s\n  axisFormat %Ss\n  section Build\n  compile :crit, 0, 5\n  test :done, 5, 8\n```",
+        40,
+    );
+    let text = rows.join("\n");
+    assert!(text.contains("Build"), "section label missing: {text}");
+    assert!(text.contains("compile"), "task label missing: {text}");
+    assert!(text.contains("test"), "task label missing: {text}");
+    assert!(text.contains('─'), "axis rail missing: {text}");
+    // The raw source must NOT render.
+    assert!(!text.contains("dateFormat"), "raw source leaked: {text}");
+}
+
+#[test]
 fn unknown_mermaid_kind_falls_back_to_the_plain_code_block() {
-    // gantt is detected by upstream but not ported in this lane —
+    // timeline is detected by upstream but not ported in this lane —
     // the fence renders through the default code path.
-    let rows = rendered("```mermaid\ngantt\n  title Roadmap\n```", 40);
+    let rows = rendered("```mermaid\ntimeline\n  title History\n```", 40);
     assert!(
-        rows.iter().any(|row| row.contains("Roadmap")),
+        rows.iter().any(|row| row.contains("History")),
         "fallback code block missing: {rows:?}"
     );
 }
