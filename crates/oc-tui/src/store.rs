@@ -1421,6 +1421,13 @@ pub struct Store {
     /// `prompt/index.tsx:1605-1619`); the app's location worker sets
     /// it once per boot (a `/cd` or session move would refresh it).
     footer_location: std::cell::RefCell<String>,
+    /// TUI-30 — `currentLocation.error?.location.directory`
+    /// (context/location.tsx): the directory that FAILED to resolve
+    /// (the location worker's error state). A routed session whose
+    /// `location.directory` matches mounts the
+    /// `SessionLocationMissing` recovery screen (routes/session/
+    /// index.tsx:1484-1496).
+    location_error: std::cell::RefCell<Option<String>>,
     /// NEW-S1a: the live caret's screen cell for the TERMINAL cursor
     /// (`surface.set_cursor` at the draw seam — v2's caret is the
     /// hardware cursor, never a cell-painted block). Set during the
@@ -3077,6 +3084,7 @@ impl Store {
                 RecordingSessionActionSink::default(),
             )),
             footer_location: std::cell::RefCell::new(String::new()),
+            location_error: std::cell::RefCell::new(None),
             caret_cell: Cell::new(None),
             connection_since: Cell::new(0),
             startup_state: RefCell::new(StartupLoadingState::default()),
@@ -3734,6 +3742,39 @@ impl Store {
     /// Set the footer location label (the boot location worker).
     pub fn set_footer_location(&self, label: String) {
         *self.footer_location.borrow_mut() = label;
+    }
+
+    /// TUI-30 — the location worker's error state
+    /// (`currentLocation.error?.location.directory`,
+    /// context/location.tsx): the directory that failed to resolve.
+    /// The boot location worker sets it when `location.get` fails and
+    /// clears it on a successful resolve.
+    pub fn set_location_error(&self, directory: Option<String>) {
+        *self.location_error.borrow_mut() = directory;
+        self.request_redraw();
+    }
+
+    /// TUI-30 — the failed directory, when one is recorded.
+    #[must_use]
+    pub fn location_error(&self) -> Option<String> {
+        self.location_error.borrow().clone()
+    }
+
+    /// TUI-30 — the SessionLocationMissing mount gate
+    /// (index.tsx:1484-1496): `session() &&
+    /// currentLocation.error?.location.directory ===
+    /// session().location.directory`. The session's directory comes
+    /// from the resync snapshot (`location.directory` on the wire);
+    /// `Some(directory)` mounts the recovery screen for it.
+    #[must_use]
+    pub fn session_location_missing(&self, session_id: &str) -> Option<String> {
+        let error = self.location_error.borrow().clone()?;
+        let directory = self
+            .session_history()
+            .iter()
+            .find(|session| session.id == session_id)
+            .and_then(|session| session.directory.clone())?;
+        (directory == error).then_some(error)
     }
 
     /// The live caret's screen cell (the terminal cursor's position).
