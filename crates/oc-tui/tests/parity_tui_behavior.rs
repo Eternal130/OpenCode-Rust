@@ -990,6 +990,96 @@ fn app_console_ctrl_copy() {
     assert!(!app.store.console_open());
 }
 
+/// TUI-TD09 — `BackgroundToolHint` (index.tsx:130-171, 1748-1780):
+/// a RUNNING shell/subagent tool past the 3 s delay on the tail's
+/// OPEN assistant turn renders "Press ctrl+b to move running work to
+/// the background" at the transcript tail; a young tool, a non-
+/// shell/subagent tool, or a completed turn does not.
+#[test]
+fn backgroundtool() {
+    use oc_tui::components::message::list::{render_transcript, TranscriptOptions};
+    use oc_tui::components::message::model::{
+        Message, Part, PartTime, ToolState, ToolStatus,
+    };
+    use oc_tui::theme::ThemeState;
+
+    let theme = ThemeState::v2_dark().styles();
+    let tool = |name: &str, status: ToolStatus, created: Option<u64>| Part::Tool {
+        id: "t1".to_owned(),
+        name: name.to_owned(),
+        time: PartTime { created, completed: None },
+        state: ToolState { status, ..ToolState::default() },
+    };
+    let assistant = |parts: Vec<Part>, completed: Option<u64>| Message::Assistant {
+        id: "a1".to_owned(),
+        agent: "build".to_owned(),
+        model: "p/m".to_owned(),
+        parts,
+        finish: None,
+        error: None,
+        time: PartTime { created: Some(4_000), completed },
+        tokens: None,
+        usage_total: None,
+    };
+    let options = |clock: u64| TranscriptOptions { clock_ms: clock, ..TranscriptOptions::default() };
+
+    // A shell tool 4 s in on an open turn: the hint paints at the tail.
+    let transcript = render_transcript(
+        &[assistant(vec![tool("shell", ToolStatus::Running, Some(4_000))], None)],
+        &options(9_000),
+        &theme,
+        80,
+    );
+    assert!(transcript.background_hint, "4s elapsed on a running shell");
+    let frame = transcript.paint(
+        oc_tui_core::scroll::FollowState::Sticky,
+        &theme,
+        (80, 24),
+        None,
+    );
+    let text = frame.text_grid().join("\n");
+    assert!(
+        text.contains("Press ctrl+b to move running work to the background"),
+        "the hint row: {text}"
+    );
+
+    // 1 s in: below the delay — absent.
+    let transcript = render_transcript(
+        &[assistant(vec![tool("shell", ToolStatus::Running, Some(8_000))], None)],
+        &options(9_000),
+        &theme,
+        80,
+    );
+    assert!(!transcript.background_hint, "below the 3s delay");
+
+    // A read tool (not backgroundable): absent.
+    let transcript = render_transcript(
+        &[assistant(vec![tool("read", ToolStatus::Running, Some(1_000))], None)],
+        &options(9_000),
+        &theme,
+        80,
+    );
+    assert!(!transcript.background_hint, "read is not shell/subagent");
+
+    // The alias canonicalization: `bash` counts (tool-display.ts:2).
+    let transcript = render_transcript(
+        &[assistant(vec![tool("bash", ToolStatus::Running, Some(4_000))], None)],
+        &options(9_000),
+        &theme,
+        80,
+    );
+    assert!(transcript.background_hint, "bash canonicalizes to shell");
+
+    // A completed turn: absent.
+    let transcript = render_transcript(
+        &[assistant(vec![tool("shell", ToolStatus::Running, Some(1_000))], Some(8_000))],
+        &options(9_000),
+        &theme,
+        80,
+    );
+    assert!(!transcript.background_hint, "the turn completed");
+}
+
 /// TUI-10 (the diff half): a working-tree image file renders the
 /// inline `DiffViewerImage` — the "Working tree preview" label, the
 /// decoded `WxH` size row, the blocks pixels — and the mount records
