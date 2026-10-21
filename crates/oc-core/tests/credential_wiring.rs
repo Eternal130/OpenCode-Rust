@@ -1320,6 +1320,147 @@ async fn vertex_adc_service_account() {
 }
 
 // ---------------------------------------------------------------------------
+// CRED-D6: ChatGPT/Codex credential-driven openai provider reshape
+// ---------------------------------------------------------------------------
+
+/// v2 openai.ts:256-315: an active openai oauth credential
+/// (chatgpt-browser/headless) reshapes the `openai` provider — baseURL
+/// → the codex backend, the originator/x-codex headers (+ the account
+/// id from the credential metadata), codex-eligible models only,
+/// cost=[] and the codex limits. chatgpt.ts:267-306: the
+/// chatgpt-token-sharing credential reshapes to the resource URL with
+/// the fallback model set and summary compaction.
+#[tokio::test]
+async fn chatgpt_provider_shaping() {
+    let _env = env_guard().await;
+    // SAFETY: test-scoped env scrub — the stored credential is the only
+    // openai auth in play.
+    #[allow(unsafe_code)]
+    unsafe {
+        std::env::remove_var("OPENAI_API_KEY");
+    }
+    let (host, _dir) = host().await;
+    let value = CredentialValue::OAuth(OAuthValue {
+        method_id: "chatgpt-browser".into(),
+        refresh: "r".into(),
+        access: "codex-access-token".into(),
+        expires: oc_core::database::migrations::now_ms() + 3_600_000,
+        metadata: Some(BTreeMap::from([("accountID".to_owned(), Value::String("acct_7".into()))])),
+    });
+    host.store()
+        .create(CreateInput {
+            id: None,
+            integration_id: "openai",
+            label: Some("codex"),
+            value: &value,
+            activate: None,
+        })
+        .await
+        .expect("create openai credential");
+    host.refresh_provider_bindings().await;
+
+    let catalog = Arc::new(Catalog::embedded().clone());
+    let transport: oc_ai::route::SharedTransport =
+        Arc::new(oc_ai::route::transport::reqwest_transport::ReqwestTransport::new());
+    let resolver = CatalogModelResolver::new(
+        FacadeContext::new(transport),
+        catalog,
+        BTreeMap::new(),
+        Vec::new(),
+        None,
+    )
+    .with_credentials(Arc::clone(host.credential_bindings()));
+
+    let session = session_row();
+    // A codex-allowed model (openai.ts:26) binds the codex backend with
+    // the reshape headers, cost=[], and the codex limits.
+    let bound = resolver
+        .resolve_selected(&session, &model_ref("openai", "gpt-5.5"))
+        .expect("gpt-5.5 resolves");
+    assert_eq!(
+        bound.model.route.endpoint.base_url.as_deref(),
+        Some("https://chatgpt.com/backend-api/codex"),
+        "the chatgpt credential points the openai provider at the codex backend"
+    );
+    for (header, expected) in [
+        ("authorization", "Bearer codex-access-token"),
+        ("originator", "opencode"),
+        ("x-codex-beta-features", "remote_compaction_v2"),
+        ("chatgpt-account-id", "acct_7"),
+    ] {
+        assert_eq!(
+            wire_header(&bound, header).unwrap_or_else(|e| panic!("{header}: {e}")).as_deref(),
+            Some(expected),
+            "codex reshape header `{header}`"
+        );
+    }
+    assert!(bound.cost.is_empty(), "the subscription covers usage: cost=[] (openai.ts:294)");
+    assert_eq!(bound.limit.context, 400_000, "codex context limit (openai.ts:296)");
+    assert_eq!(bound.limit.input, Some(272_000), "codex input limit (openai.ts:296)");
+
+    // An ineligible model (no gpt-5.5+ match, openai.ts:283-293) resolves
+    // disabled with its cost untouched.
+    let bound = resolver
+        .resolve_selected(&session, &model_ref("openai", "gpt-4o"))
+        .expect("ineligible models stay resolvable, disabled");
+    assert!(!bound.cost.is_empty(), "ineligible models keep their catalog cost");
+
+    chatgpt_token_sharing_leg(&resolver, &session, &host).await;
+}
+
+/// The `chatgpt-token-sharing` leg of `chatgpt_provider_shaping`
+/// (chatgpt.ts:267-306): the resource URL, the fallback model set only,
+/// summary compaction, cost=[].
+async fn chatgpt_token_sharing_leg(
+    resolver: &CatalogModelResolver,
+    session: &SessionRow,
+    host: &Arc<IntegrationHost>,
+) {
+    let shared = CredentialValue::OAuth(OAuthValue {
+        method_id: "chatgpt-token-sharing".into(),
+        refresh: "r2".into(),
+        access: "shared-token".into(),
+        expires: oc_core::database::migrations::now_ms() + 3_600_000,
+        metadata: Some(BTreeMap::from([(
+            "clientID".to_owned(),
+            Value::String("agent_client_9".into()),
+        )])),
+    });
+    host.store()
+        .create(CreateInput {
+            id: None,
+            integration_id: "openai",
+            label: Some("chatgpt"),
+            value: &shared,
+            activate: None,
+        })
+        .await
+        .expect("create token-sharing credential");
+    host.refresh_provider_bindings().await;
+    let bound = resolver
+        .resolve_selected(session, &model_ref("openai", "gpt-5.6-terra"))
+        .expect("a fallback model resolves");
+    assert_eq!(
+        bound.model.route.endpoint.base_url.as_deref(),
+        Some("https://api.openai.com/v1"),
+        "token sharing points the provider at the resource URL (chatgpt.ts:273)"
+    );
+    assert_eq!(
+        wire_header(&bound, "authorization").expect("wire").as_deref(),
+        Some("Bearer shared-token")
+    );
+    assert!(bound.cost.is_empty(), "token sharing zeroes cost (chatgpt.ts:303)");
+    assert_eq!(
+        bound.compaction,
+        Some(oc_schema::provider::Compaction::Summary),
+        "token sharing forces summary compaction (chatgpt.ts:294)"
+    );
+    let error = resolver
+        .resolve_selected(session, &model_ref("openai", "gpt-4o"))
+        .expect_err("non-fallback models are not part of the token-sharing provider");
+    assert!(error.to_string().contains("gpt-4o"), "the unavailable error names the model: {error}");
+}
+
 // ---------------------------------------------------------------------------
 // CRED-B3 (runtime repro): keyless zen downgrades to the public key
 // ---------------------------------------------------------------------------
