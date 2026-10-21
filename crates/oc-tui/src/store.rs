@@ -1870,6 +1870,11 @@ pub struct PluginRoutePage {
     pub title: String,
     /// The materialized rows.
     pub rows: Vec<String>,
+    /// TUI-TD28 — the host has no registered route `{plugin_id}/
+    /// {name}` (v2's `plugins.route(id, name)` undefined → the
+    /// `PluginRouteMissing` fallback screen renders instead of a
+    /// page).
+    pub missing: bool,
 }
 
 /// The diff viewer's source (`DIFF_SOURCES`, diff-viewer.tsx:73-78):
@@ -8253,7 +8258,22 @@ impl Store {
             data,
             title: name.to_owned(),
             rows: Vec::new(),
+            missing: false,
         }));
+    }
+
+    /// TUI-TD28 — latch the fallback state: the host's bounded
+    /// `route.render` replied miss (no registered route
+    /// `{plugin_id}/{name}`), so the page renders
+    /// `PluginRouteMissing` (`Unknown plugin route: …` + go home,
+    /// component/plugin-route-missing.tsx:3-21). No-op when no page
+    /// is open.
+    pub fn mark_plugin_route_missing(&self) {
+        self.plugin_route.update(|page| {
+            if let Some(page) = page.as_mut() {
+                page.missing = true;
+            }
+        });
     }
 
     /// Fill the open page's materialized content (`route.render`'s
