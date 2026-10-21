@@ -41,3 +41,48 @@ fn invalid_latex_falls_back_to_the_plain_code_block() {
         "fallback code block missing: {rows:?}"
     );
 }
+
+#[test]
+fn renders_mermaid_flowchart_code_block_as_ascii_diagram() {
+    let rows = rendered("```mermaid\nflowchart TD\n  Start --> Stop\n```", 40);
+    let text = rows.join("\n");
+    assert!(text.contains("Start"), "node label missing: {text}");
+    assert!(text.contains("Stop"), "node label missing: {text}");
+    assert!(text.contains('▼'), "vertical arrowhead missing: {text}");
+    assert!(text.contains('╭'), "rounded node frame missing: {text}");
+    // The raw source must NOT render.
+    assert!(!text.contains("flowchart TD"), "raw source leaked: {text}");
+}
+
+#[test]
+fn renders_mermaid_sequence_code_block_as_ascii_diagram() {
+    let rows = rendered(
+        "```mermaid\nsequenceDiagram\n  participant B as Browser\n  participant S as Server\n  B->>S: GET /\n  S-->>B: 401\n```",
+        40,
+    );
+    let text = rows.join("\n");
+    assert!(text.contains("Browser"), "participant missing: {text}");
+    assert!(text.contains("GET /"), "message label missing: {text}");
+    assert!(text.contains('►'), "arrow missing: {text}");
+    assert!(text.contains('│'), "lifeline missing: {text}");
+}
+
+#[test]
+fn unknown_mermaid_kind_falls_back_to_the_plain_code_block() {
+    // gitGraph is detected by upstream but not ported in this lane —
+    // the fence renders through the default code path.
+    let rows = rendered("```mermaid\ngitGraph\n  commit id: \"one\"\n```", 40);
+    assert!(
+        rows.iter().any(|row| row.contains("gitGraph")),
+        "fallback code block missing: {rows:?}"
+    );
+}
+
+#[test]
+fn broken_mermaid_syntax_falls_back_to_the_plain_code_block() {
+    let rows = rendered("```mermaid\nflowchart TD\n  A ==> totally unknown !!\n```", 40);
+    assert!(
+        rows.iter().any(|row| row.contains("totally unknown !!")),
+        "fallback code block missing: {rows:?}"
+    );
+}

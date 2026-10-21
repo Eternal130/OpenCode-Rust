@@ -505,9 +505,10 @@ impl Parser {
             raw_environment.strip_suffix('*').unwrap_or(&raw_environment).to_string();
         let Some(environment) = MatrixEnvironment::from_name(&unstarred) else {
             if self.strict {
-                return Err(
-                    Self::fail(format!("Unsupported environment {unstarred}"), self.position)
-                );
+                return Err(Self::fail(
+                    format!("Unsupported environment {unstarred}"),
+                    self.position,
+                ));
             }
             let content = self.read_until_end(&raw_environment)?;
             return Ok(MathNode::Text(content));
@@ -522,9 +523,10 @@ impl Parser {
             let has_alignment = columns.chars().any(|char| matches!(char, 'l' | 'c' | 'r'));
             let valid = columns.chars().all(|char| matches!(char, 'l' | 'c' | 'r' | '|'));
             if !valid || !has_alignment {
-                return Err(
-                    Self::fail("Unsupported array columns; expected l, c, r, and |", self.position)
-                );
+                return Err(Self::fail(
+                    "Unsupported array columns; expected l, c, r, and |",
+                    self.position,
+                ));
             }
         }
         let end = format!("\\end{{{raw_environment}}}");
@@ -681,10 +683,8 @@ impl Parser {
         }
         let token = self.source[self.position];
         self.position += 1;
-        Ok(lookup_delimiter(&token.to_string()).map_or_else(
-            || token.to_string(),
-            ToString::to_string,
-        ))
+        Ok(lookup_delimiter(&token.to_string())
+            .map_or_else(|| token.to_string(), ToString::to_string))
     }
 
     fn read_command(&mut self) -> String {

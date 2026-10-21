@@ -1,0 +1,196 @@
+//! ASCII diagram rendering for fenced `mermaid` blocks — the port of
+//! opencode v2 `packages/merman` (upstream v2.0.24).
+//!
+//! Upstream registers Merman unconditionally as the `mermaid`
+//! code-block renderer (`packages/tui/src/plugin/builtins.ts`); the
+//! supported subset in this lane is flowchart + sequence + state
+//! (gitgraph/gantt/timeline stay on the default code-block render —
+//! see the lane report).
+
+pub mod core;
+pub mod diagnostics;
+pub mod flowchart;
+pub mod palette;
+pub mod sequence;
+
+#[cfg(test)]
+mod tests;
+
+use crate::render::mermaid::core::canvas::{CanvasSizeError, DiagramCanvas, TextOptions};
+use crate::render::mermaid::core::color::Rgba;
+use crate::render::mermaid::diagnostics::MermaidDiagramKind;
+use crate::render::mermaid::flowchart::style::{DiagramSpan, FlowchartColorInput, FlowchartStyle};
+use crate::render::mermaid::palette::OpenCodeDiagramPalette;
+
+/// `detectMermaidDiagram` — the supported subset.
+#[must_use]
+pub fn detect_mermaid_diagram(content: &str) -> Option<MermaidDiagramKind> {
+    if flowchart::is_mermaid_flowchart_diagram(content) {
+        return Some(MermaidDiagramKind::Flowchart);
+    }
+    if sequence::is_mermaid_sequence_diagram(content) {
+        return Some(MermaidDiagramKind::Sequence);
+    }
+    // State lands later in this lane; unsupported kinds stay on the
+    // default code-block render for now.
+    None
+}
+
+/// `MermaidMarkdownRendererOptions` — the knobs the markdown seam
+/// passes (upstream defaults: compact=true, layoutMaxWidth=120).
+#[derive(Debug, Clone, Copy)]
+pub struct MermaidRenderOptions {
+    pub compact: bool,
+    pub layout_max_width: Option<i64>,
+    /// The available render width (min'd with the configured max,
+    /// like upstream's `Math.min(configured, ctx.width)`).
+    pub context_width: Option<i64>,
+}
+
+impl Default for MermaidRenderOptions {
+    fn default() -> Self {
+        Self { compact: true, layout_max_width: Some(120), context_width: None }
+    }
+}
+
+/// The rendered diagram: trimmed rows of styled spans (one row per
+/// terminal line).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RenderedDiagram {
+    pub kind: MermaidDiagramKind,
+    pub rows: Vec<Vec<DiagramSpan>>,
+}
+
+/// `createMermaidCodeBlockRenderer`'s happy path: detect → prepare →
+/// styled rows. `None` = unsupported/unknown diagram (the caller falls
+/// back to the default code render, upstream's `return undefined`).
+#[must_use]
+pub fn render_mermaid_block(
+    content: &str,
+    palette: &OpenCodeDiagramPalette,
+    options: &MermaidRenderOptions,
+) -> Option<RenderedDiagram> {
+    let kind = detect_mermaid_diagram(content)?;
+    let configured_max = options.layout_max_width.map(|width| 1.max(width)).unwrap_or(120);
+    let layout_max_width = match options.context_width {
+        Some(context_width) => configured_max.min(1.max(context_width)),
+        None => configured_max,
+    };
+    match prepare_diagram(kind, content, palette, options, layout_max_width) {
+        Ok(rendered) => Some(rendered),
+        Err(_) => None,
+    }
+}
+
+fn prepare_diagram(
+    kind: MermaidDiagramKind,
+    source: &str,
+    palette: &OpenCodeDiagramPalette,
+    options: &MermaidRenderOptions,
+    layout_max_width: i64,
+) -> Result<RenderedDiagram, MermaidError> {
+    match kind {
+        MermaidDiagramKind::Flowchart => {
+            let diagram = flowchart::parse_mermaid_flowchart_diagram(source)?;
+            let grid = flowchart::draw_flowchart_diagram_grid(
+                &diagram,
+                &flowchart::types::FlowchartRenderOptions {
+                    compact: Some(options.compact),
+                    layout_max_width: Some(layout_max_width),
+                    ..Default::default()
+                },
+            )?;
+            let rows = styled_rows(&grid, &flowchart_colors(palette));
+            Ok(RenderedDiagram { kind, rows })
+        }
+        MermaidDiagramKind::Sequence => {
+            let diagram = sequence::parse_mermaid_sequence_diagram(source)?;
+            let grid = sequence::draw_sequence_diagram_grid(
+                &diagram,
+                &sequence::types::SequenceRenderOptions {
+                    compact: options.compact,
+                    ..Default::default()
+                },
+            )?;
+            let rows = styled_rows(&grid, &sequence_colors(palette));
+            Ok(RenderedDiagram { kind, rows })
+        }
+        _ => return Err(MermaidError::Unsupported),
+    }
+}
+
+/// The renderer's failure modes (upstream catches
+/// MermaidSyntaxError + DiagramCanvasSizeError and returns undefined).
+enum MermaidError {
+    Unsupported,
+}
+
+impl From<MermaidSyntaxError> for MermaidError {
+    fn from(_: MermaidSyntaxError) -> Self {
+        Self::Unsupported
+    }
+}
+
+impl From<CanvasSizeError> for MermaidError {
+    fn from(_: CanvasSizeError) -> Self {
+        Self::Unsupported
+    }
+}
+
+use crate::render::mermaid::diagnostics::MermaidSyntaxError;
+
+/// `renderDiagramGridStyledTextByStyle` — run-split, trim, and color.
+fn styled_rows<S: Copy + PartialEq>(
+    grid: &DiagramCanvas<S>,
+    colors: &dyn Fn(Option<S>) -> Option<Rgba>,
+) -> Vec<Vec<DiagramSpan>> {
+    let mut rows: Vec<Vec<DiagramSpan>> = Vec::new();
+    let mut current: Vec<DiagramSpan> = Vec::new();
+    grid.for_each_run(TextOptions { trim_top: true, trim_bottom: true }, &mut |run| match run {
+        Some(run) => current.push(DiagramSpan {
+            text: run.text,
+            fg: colors(run.style),
+            bg: None,
+            attributes: run.attributes.unwrap_or(0),
+        }),
+        None => rows.push(std::mem::take(&mut current)),
+    });
+    if !current.is_empty() || rows.is_empty() {
+        rows.push(current);
+    }
+    rows
+}
+
+fn flowchart_colors(
+    palette: &OpenCodeDiagramPalette,
+) -> impl Fn(Option<FlowchartStyle>) -> Option<Rgba> {
+    let colors =
+        crate::render::mermaid::flowchart::style::FlowchartColors::resolve(FlowchartColorInput {
+            node: Some(palette.box_text),
+            node_border: Some(palette.box_border),
+            database: Some(palette.box_text),
+            database_border: Some(palette.box_border),
+            edge: Some(palette.line),
+            label: Some(palette.text),
+            group: Some(palette.group),
+            group_label: Some(palette.group_text),
+        });
+    move |style| colors.color(style)
+}
+
+fn sequence_colors(
+    palette: &OpenCodeDiagramPalette,
+) -> impl Fn(Option<sequence::types::SequenceStyle>) -> Option<Rgba> {
+    let colors = sequence::style::SequenceColors::resolve(sequence::style::SequenceColorInput {
+        participant: Some(palette.primary),
+        lifeline: Some(palette.muted),
+        group: Some(palette.secondary),
+        request: Some(palette.request),
+        response: Some(palette.response),
+        fragment: Some(palette.secondary),
+        fragment_label_bg: Some(palette.background),
+        note: Some(palette.note),
+        note_bg: Some(palette.note_background),
+    });
+    move |style| colors.color(style)
+}
