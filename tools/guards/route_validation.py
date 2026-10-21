@@ -21,7 +21,7 @@ HEURISTIC (pragmatic — this is the documented approximation)
     `:param` templates on both sides — they match 1:1).
   * Handler body: the `async fn <fn>` block in the mounting file, located
     by paren/brace matching (not regex-on-body).
-  * "Validation" = EITHER of:
+  * "Validation" = ANY of:
       a) the handler body contains a validator invocation: a
          `schema_check::<fn>(..)` call (the port's byte-pinned Effect-
          schema error surface) or any call whose callee contains
@@ -30,11 +30,28 @@ HEURISTIC (pragmatic — this is the documented approximation)
          generated-table middleware seam
          (`crates/oc-server/src/request_validation.rs`, wired as
          `schema_error_middleware` around the handler table in
-         `handlers/mod.rs::mount`). The list is parsed from the seam the
-         same way mounts are parsed from handlers — mechanical, no
-         per-route allowlist. v2 validates EVERY route through schema
-         middleware; the seam's list is the incremental rollout valve
-         (HTTP-H0), so the baseline shrinks as the slice grows.
+         `handlers/mod.rs::mount`) — the COMPLETE validate-first body
+         rollout (28 ops = 46 JSON bodies − 18 location-first); OR
+      c) the operation declares query parameters
+         (`query: QueryValidation::Params(..)` in the generated
+         `crates/oc-server/src/validation.gen.rs`) AND is not in the
+         seam's `LOCATION_FIRST_OPS` (29 ops whose v2 endpoint resolves
+         the session/form first — 404 precedes any schema 400; probe
+         evidence rollout-probe*.json) — the query rollout (69 of 71
+         query rows; `session.interrupt`/`session.form.cancel` are the
+         location-first pair).
+    The lists are parsed from the seam and the generated table the same
+    way mounts are parsed from handlers — mechanical, no per-route
+    allowlist.
+
+NON-COVERED ROUTES (the baseline, every entry in one of these classes):
+  * location-first (29): session/form resolution 404s before decode —
+    their validators land with the post-location seam (ledger HTTP-H0);
+  * readonly surface (the remainder): GET/DELETE ops declaring neither a
+    request body nor query parameters — there is no payload/query to
+    validate (path params are a separate slice: v2 answers
+    `kind: "Params"` 400s for pattern misses, e.g. `shl_missing` vs
+    `^sh_` — probe rollout-probe-2.json; port gap tracked in HTTP-H0).
 
 KNOWN LIMITATIONS
   * Deserialization via `Json<T>` extractors is treated as NOT validation
@@ -43,9 +60,6 @@ KNOWN LIMITATIONS
   * Closures or indirect mounts (`get(|| async ..)`) map to no named fn
     and count as unvalidated.
   * A validator invoked but ignored (`let _ =`) still counts as coverage.
-  * The seam covers validate-first routes only; endpoints carrying v2's
-    sessionLocationMiddleware (404-before-payload-400) deliberately stay
-    unvalidated until their post-resolution seam lands (ledger HTTP-H0).
 
 UPDATE BASELINE (`--update-baseline`) when a handler gains a validator
 (shrink) or the OpenAPI surface is regenerated and grew (grow — justify
@@ -64,6 +78,7 @@ ROUTES_GEN = guardlib.ROOT / "crates" / "oc-server" / "src" / "routes.gen.rs"
 HANDLERS_DIR = guardlib.ROOT / "crates" / "oc-server" / "src" / "handlers"
 SEAM = guardlib.ROOT / "crates" / "oc-server" / "src" / "request_validation.rs"
 SEAM_WIRING = HANDLERS_DIR / "mod.rs"
+VALIDATION_GEN = guardlib.ROOT / "crates" / "oc-server" / "src" / "validation.gen.rs"
 
 ROUTE_RE = re.compile(
     r"Route\s*\{\s*method:\s*Method::(\w+)\s*,\s*path:\s*\"([^\"]+)\"\s*,"
@@ -81,6 +96,9 @@ SEAM_OPS_RE = re.compile(
 )
 SEAM_OP_ITEM_RE = re.compile(r"\"([^\"]+)\"")
 SEAM_WIRING_RE = re.compile(r"request_validation::schema_error_middleware")
+LOCATION_FIRST_RE = re.compile(
+    r"pub const LOCATION_FIRST_OPS:\s*&\[\&str\]\s*=\s*&\[(.*?)\]", re.S
+)
 
 
 def middleware_enforced_ops() -> set[str]:
@@ -107,6 +125,42 @@ def middleware_enforced_ops() -> set[str]:
                 "(production call site missing)"
             )
     return ops
+
+
+def location_first_ops() -> set[str]:
+    """Ops whose v2 endpoint resolves the session/form before decode.
+
+    Their query/payload validation must stay OUT of the validate-first
+    seam (404 first) — they also subtract from the query coverage below.
+    """
+    if not SEAM.is_file():
+        return set()
+    text = guardlib.read_text(SEAM)
+    match = LOCATION_FIRST_RE.search(text)
+    if not match:
+        raise guardlib.GuardError(f"seam {SEAM} has no LOCATION_FIRST_OPS const")
+    return set(SEAM_OP_ITEM_RE.findall(match.group(1)))
+
+
+def query_declared_ops() -> set[str]:
+    """Ops with a generated query row (`QueryValidation::Params`).
+
+    Splits on `operation_id: "` so each chunk carries exactly one row's
+    body/query fields (no cross-row regex bleed).
+    """
+    if not VALIDATION_GEN.is_file():
+        raise guardlib.GuardError(f"generated validation table missing: {VALIDATION_GEN}")
+    text = guardlib.read_text(VALIDATION_GEN)
+    declared: set[str] = set()
+    for chunk in text.split('operation_id: "')[1:]:
+        operation_id = chunk.split('"', 1)[0]
+        if re.search(r"query:\s*QueryValidation::Params", chunk):
+            declared.add(operation_id)
+    if not declared:
+        raise guardlib.GuardError(
+            f"no QueryValidation::Params rows parsed from {VALIDATION_GEN} — parser broken?"
+        )
+    return declared
 
 
 def _fn_body(text: str, name: str) -> str | None:
@@ -186,16 +240,31 @@ def collect() -> tuple[list[dict], dict]:
     violations: list[dict] = []
     validated: list[str] = []
     seam_ops = middleware_enforced_ops()
+    location_first = location_first_ops()
+    query_declared = query_declared_ops()
+    query_covered = query_declared - location_first
     known_ops = {(method, route_path, op) for method, route_path, op in routes}
     unknown_seam = sorted(op for op in seam_ops if op not in {o for _, _, o in known_ops})
     if unknown_seam:
         raise guardlib.GuardError(
             f"seam ENFORCED_OPS names operations absent from routes.gen.rs: {unknown_seam}"
         )
+    unknown_loc_first = sorted(op for op in location_first if op not in {o for _, _, o in known_ops})
+    if unknown_loc_first:
+        raise guardlib.GuardError(
+            f"seam LOCATION_FIRST_OPS names operations absent from routes.gen.rs: "
+            f"{unknown_loc_first}"
+        )
+    unknown_query = sorted(op for op in query_declared if op not in {o for _, _, o in known_ops})
+    if unknown_query:
+        raise guardlib.GuardError(
+            f"validation.gen.rs query rows name operations absent from routes.gen.rs: "
+            f"{unknown_query}"
+        )
     route_keys = {(method, route_path) for method, route_path, _ in routes}
     route_paths = {route_path for _, route_path, _ in routes}
     for method, route_path, op in routes:
-        if op in seam_ops:
+        if op in seam_ops or op in query_covered:
             validated.append(op)
             continue
         candidates = [c for c in mounts.get(route_path, []) if c[0] == method]
@@ -238,6 +307,16 @@ def collect() -> tuple[list[dict], dict]:
                 "detail": f"{rel}:{fn}: {detail}",
             })
 
+    # Baseline reason breakdown (every non-covered op is in exactly one
+    # class; see the module docstring).
+    covered = set(validated)
+    uncovered = [op for _, _, op in routes if op not in covered]
+    reasons = {
+        "location_first": sorted(op for op in uncovered if op in location_first),
+        "readonly_no_payload_no_query": sorted(
+            op for op in uncovered if op not in location_first
+        ),
+    }
     meta = {
         "routes": len(routes),
         "mount_paths": len(mounts),
@@ -245,6 +324,10 @@ def collect() -> tuple[list[dict], dict]:
         "validated_ops": len(validated),
         "validated": sorted(validated),
         "seam_enforced_ops": len(seam_ops),
+        "location_first_ops": len(location_first),
+        "query_rows": len(query_declared),
+        "query_enforced": len(query_covered),
+        "uncovered_reasons": reasons,
     }
     return violations, meta
 

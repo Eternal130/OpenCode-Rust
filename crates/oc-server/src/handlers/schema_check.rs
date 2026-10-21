@@ -128,7 +128,7 @@ pub fn session_create_payload(body: &Value) -> Result<(), String> {
 /// `limit: NumberFromString → PositiveInt`, `order: "asc" | "desc"`).
 /// The raw query string (no leading `?`); values percent-decoded.
 pub fn session_list_query(query: &str) -> Result<(), String> {
-    for (key, value) in parse_query(query) {
+    for (key, value) in parse_query_pairs(query) {
         match key.as_str() {
             "limit" => check_limit(&value)?,
             "order" if value != "asc" && value != "desc" => {
@@ -156,8 +156,9 @@ fn check_limit(value: &str) -> Result<(), String> {
 
 /// JS `Number(string)` for the inputs that matter: trims whitespace,
 /// `""` → 0, decimal/exponent literals, `0x` hex, `Infinity`; anything
-/// else is `NaN`.
-fn js_number(raw: &str) -> f64 {
+/// else is `NaN`. `pub(crate)`: the HTTP-H0 middleware seam reuses this
+/// for its `NumberFromString` query params (single implementation).
+pub(crate) fn js_number(raw: &str) -> f64 {
     let text = raw.trim_matches(|c: char| c.is_ascii_whitespace());
     if text.is_empty() {
         return 0.0;
@@ -200,7 +201,9 @@ fn js_number(raw: &str) -> f64 {
 
 /// Minimal query-string split: `&`-separated `k=v` pairs with
 /// percent-decoding (query keys/values in play are plain ASCII).
-fn parse_query(query: &str) -> Vec<(String, String)> {
+/// `pub(crate)`: the HTTP-H0 middleware seam reuses this for its query
+/// interpreter (same percent-decoding, single implementation).
+pub(crate) fn parse_query_pairs(query: &str) -> Vec<(String, String)> {
     query
         .split('&')
         .filter(|pair| !pair.is_empty())

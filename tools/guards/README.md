@@ -75,12 +75,25 @@ Route without request validation. Routes come from the generated
 (`.route("<path>", <method>(<fn>))`) from `crates/oc-server/src/handlers/`
 (mounts inside a `#[cfg(test)]` region are test fixtures, not surface);
 the handler body (paren/brace-matched) must invoke a validator
-(`schema_check::<fn>(..)` or any `*validat*(..)` call). A second rule
-catches **mount drift**: handler mounts absent from the generated table
-(surface outside the OpenAPI contract). Today only `session.create`,
-`session.list`, `debug.location.evict` are validated — the other 138
-live in the baseline, exactly as §9.2 prescribes. Limitation: axum
-`Json<T>` extraction counts as no validation (deliberately strict).
+(`schema_check::<fn>(..)` or any `*validat*(..)` call). Validation is
+ALSO credited from the HTTP-H0 middleware seam
+(`crates/oc-server/src/request_validation.rs`, wired in
+`handlers/mod.rs::mount`): every op in `ENFORCED_OPS` (the COMPLETE
+28-op validate-first body rollout — 46 JSON bodies minus 18
+location-first) and every op with a generated query row
+(`QueryValidation::Params` in `validation.gen.rs`, 71 of them) that is
+NOT in the seam's `LOCATION_FIRST_OPS` (29 ops whose v2 endpoint
+resolves the session/form before decode — 404 precedes any schema 400,
+probe evidence `rollout-probe*.json`). A second rule catches **mount
+drift**: handler mounts absent from the generated table (surface outside
+the OpenAPI contract). After the HTTP-H0 rollout (2026-10-21) 84 of 141
+ops are covered; the 57-op baseline is exactly the two documented
+classes: 29 location-first (pending the post-location seam, ledger
+HTTP-H0) and 28 readonly ops with neither a request body nor query
+parameters (nothing to validate; path params are a separate slice — v2
+`kind: "Params"` 400s are a known port gap, probe
+`rollout-probe-2.json`). Limitation: axum `Json<T>` extraction counts as
+no validation (deliberately strict).
 
 ### event_schema
 Published event type with no schema/round-trip test. Event types are the

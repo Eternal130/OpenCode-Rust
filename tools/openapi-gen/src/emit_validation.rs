@@ -166,6 +166,16 @@ enum Ir {
         fields: Vec<IrField>,
     },
     Record(Box<Ir>),
+    /// Multi-member `anyOf` (no `null` member): emitted ONLY for the two
+    /// shapes the seam interpreter can render byte-exactly —
+    /// string-unions (all members `Str`/`Pattern`/`Literal`; query
+    /// filters like session.list's `parentID`, probe-pinned to the FIRST
+    /// member's message) and discriminator-struct unions (every member an
+    /// object whose `type` field is a singleton literal, e.g. mcp.add's
+    /// `config`, probe-pinned to `{ readonly "type": "local", ... } | …`
+    /// plus per-member verbatim errors). Every other union degrades to
+    /// `Any` (accept — never a false reject).
+    Union(Vec<Ir>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -181,6 +191,48 @@ struct Walker<'a> {
     ref_memo: HashMap<String, Ir>,
     in_progress: HashSet<String>,
     capped: usize,
+}
+
+/// A union member renderable by the seam as a string filter
+/// (`Str`/`Pattern`/`Literal`) — string-unions report the FIRST member's
+/// message (probe: session.list `parentID=bogus` → the `^ses` message).
+fn ir_is_stringish(ir: &Ir) -> bool {
+    matches!(ir, Ir::Str | Ir::Pattern { .. } | Ir::Literal(_))
+}
+
+/// A union member that is (a `$ref` to) an object whose `type` field is a
+/// singleton literal — Effect's discriminated-union error rendering
+/// (probe: mcp.add `config` → per-member verbatim errors when the
+/// discriminator matches, else the union label).
+fn ir_is_discriminated(ir: &Ir) -> bool {
+    let obj = match ir {
+        Ir::Ref { node, .. } => node.as_ref(),
+        Ir::Obj { .. } => ir,
+        _ => return false,
+    };
+    let Ir::Obj { fields } = obj else { return false };
+    fields.iter().any(|f| f.name == "type" && matches!(&f.ty, Ir::Literal(v) if v.len() == 1))
+}
+
+/// Probe-pinned discriminated-union MEMBER SETS: multi-member `anyOf`s
+/// the live v2.0.24 reference actually REJECTS on (`rollout-probe-3.json`
+/// — mcp.add `config`). A structurally identical union exists whose v2
+/// runtime is LENIENT (`Credential.Value` renders anyOf
+/// [Credential.OAuth, Credential.Key] yet accepts `{"k":1}` — probe
+/// `env-requiredness-probe.json`), so structural detection alone would
+/// false-reject; only these member sets may render as `Union`.
+const PINNED_UNION_MEMBERS: &[&[&str]] = &[&["Mcp.LocalConfigEncoded", "Mcp.RemoteConfigEncoded"]];
+
+/// The `$ref` labels of a union's members, in order (None if any member
+/// is unlabeled — inline structs cannot be matched against the pins).
+fn union_member_names(members: &[Ir]) -> Option<Vec<&str>> {
+    members
+        .iter()
+        .map(|m| match m {
+            Ir::Ref { label, .. } => Some(label.as_str()),
+            _ => None,
+        })
+        .collect()
 }
 
 impl Ordered {
@@ -199,7 +251,21 @@ impl Walker<'_> {
                     let inner = self.walk(non_null[0], depth);
                     Ir::Nullable(Box::new(inner))
                 }
-                _ => Ir::Any,
+                0 => Ir::Any,
+                1 => self.walk(non_null[0], depth),
+                2.. => {
+                    let members: Vec<Ir> = non_null.iter().map(|m| self.walk(m, depth)).collect();
+                    if members.iter().all(ir_is_stringish)
+                        || (members.iter().all(ir_is_discriminated)
+                            && union_member_names(&members).is_some_and(|names| {
+                                PINNED_UNION_MEMBERS.iter().any(|p| *p == names)
+                            }))
+                    {
+                        Ir::Union(members)
+                    } else {
+                        Ir::Any
+                    }
+                }
             };
         }
         if let Some(reference) = value.get("$ref").and_then(Ordered::as_str) {
@@ -325,6 +391,10 @@ impl Arena {
             Ir::Nullable(inner) => format!("SchemaNode::Nullable({})", self.intern(inner)),
             Ir::Arr(inner) => format!("SchemaNode::Arr({})", self.intern(inner)),
             Ir::Record(inner) => format!("SchemaNode::Record({})", self.intern(inner)),
+            Ir::Union(members) => {
+                let ids: Vec<String> = members.iter().map(|m| self.intern(m).to_string()).collect();
+                format!("SchemaNode::Union(&[{}])", ids.join(", "))
+            }
             Ir::Ref { label, node } => {
                 format!("SchemaNode::Ref {{ label: {label:?}, node: {} }}", self.intern(node))
             }
@@ -372,10 +442,64 @@ fn plain_prefix(pattern: &str) -> Option<&str> {
     (!literal.is_empty() && !literal.contains(REGEX_METACHARS)).then_some(literal)
 }
 
-/// One row per operation: the body kind (+ arena index for JSON bodies).
+/// One row per operation: the body kind (+ arena index for JSON bodies)
+/// and the query-params object node (+ arena index), if any.
 struct Row {
     operation_id: String,
-    body: String, // rendered BodyValidation
+    body: String,  // rendered BodyValidation
+    query: String, // rendered QueryValidation
+}
+
+/// Walks ONE query parameter's schema. Query semantics differ from body
+/// semantics in one way that matters for rendering: optional params are
+/// `anyOf [X, null]` in the spec, but a URL string is never JSON null —
+/// the wrapper is UNWRAPPED (not `Nullable`) so kind-mismatch suffixes
+/// come from the interpreter (`| undefined`, probe-pinned), and predicate
+/// failures never gain one.
+fn walk_query_param(walker: &mut Walker<'_>, schema: &Ordered) -> Ir {
+    if let Some(any_of) = schema.items_of("anyOf") {
+        let non_null: Vec<&Ordered> = any_of.iter().filter(|b| !b.is_null_schema()).collect();
+        if non_null.len() == 1 && any_of.len() == 2 {
+            return walker.walk(non_null[0], 0);
+        }
+    }
+    walker.walk(schema, 0)
+}
+
+/// The op's query parameters, spec declaration order (Effect reports
+/// first-field-wins), as an `Obj` IR — or `None` when it declares none.
+/// Path-item-level query parameters are merged first (none exist in the
+/// pinned spec; kept for symmetry with `model::parse_operations`).
+fn query_ir(root: &Ordered, walker: &mut Walker<'_>, op: &Operation) -> Option<Ir> {
+    let path_item = root.get("paths")?.get(&op.path)?;
+    let mut schemas: Vec<(String, bool, Ordered)> = Vec::new();
+    for source in [path_item.get("parameters"), path_item.get(&op.method)?.get("parameters")] {
+        let Some(list) = source else { continue };
+        for param in list.items() {
+            if param.get("in").and_then(Ordered::as_str) != Some("query") {
+                continue;
+            }
+            let Some(name) = param.get("name").and_then(Ordered::as_str) else { continue };
+            if schemas.iter().any(|(existing, _, _)| existing == name) {
+                continue;
+            }
+            let required = matches!(param.get("required"), Some(Ordered::Bool(true)));
+            let schema = param.get("schema").cloned().unwrap_or(Ordered::Null);
+            schemas.push((name.to_owned(), required, schema));
+        }
+    }
+    if schemas.is_empty() {
+        return None;
+    }
+    let fields = schemas
+        .into_iter()
+        .map(|(name, required, schema)| IrField {
+            name,
+            required,
+            ty: walk_query_param(walker, &schema),
+        })
+        .collect();
+    Some(Ir::Obj { fields })
 }
 
 /// Emits the artifact source. `operations` must be the shared parsed set
@@ -415,28 +539,44 @@ pub fn emit(spec_json: &str, operations: &[Operation], sha256: &str) -> String {
                 }
             }
         };
-        rows.push(Row { operation_id: op.operation_id.clone(), body });
+        let query = match query_ir(&root, &mut walker, op) {
+            Some(ir) => format!("QueryValidation::Params({})", arena.intern(&ir)),
+            None => "QueryValidation::None".to_owned(),
+        };
+        rows.push(Row { operation_id: op.operation_id.clone(), body, query });
     }
     rows.sort_by(|a, b| a.operation_id.cmp(&b.operation_id));
+    let query_routes = rows.iter().filter(|r| r.query != "QueryValidation::None").count();
 
     let mut out = String::new();
     out.push_str(crate::emit_routes::ROUTES_HEADER);
     out.push_str(&format!("// Source: tools/openapi-gen/openapi.json (sha256 {sha256})\n"));
     out.push_str(
         "//! Request-validation constraint table for the 141-op HttpApi surface\n\
-         //! (HTTP-H0): one row per operation mapping its request body to a\n\
-         //! JSON-shape constraint. DATA ONLY — the interpreter/seam lives in\n\
-         //! `request_validation.rs`, which enforces a rollout subset (the rest\n\
-         //! of the table is emitted for review/coverage but stays pass-through).\n\
+         //! (HTTP-H0): one row per operation mapping its request body AND its\n\
+         //! declared query parameters to JSON-shape constraints. DATA ONLY —\n\
+         //! the interpreter/seam lives in `request_validation.rs`, which\n\
+         //! enforces a rollout subset (the rest of the table is emitted for\n\
+         //! review/coverage but stays pass-through).\n\
          //! Arena: every schema node is one `NODES` entry; object fields are\n\
          //! inline slices; children are indices. Field order is the spec's\n\
          //! DECLARATION order (Effect reports first-field-wins). Unsupported\n\
          //! constructs degrade to `Any` (accept) — counted in CAPPED_NODES,\n\
-         //! never a silent false-reject.\n",
+         //! never a silent false-reject.\n\
+         //! Query rows: URL strings are never JSON null, so optional\n\
+         //! `anyOf [X, null]` wrappers are UNWRAPPED to X (kind-mismatch\n\
+         //! suffixes are interpreter-owned, probe-pinned to\n\
+         //! `Expected … | undefined`); NumberFromString integer filters\n\
+         //! (limit/context/lines) are decode-time in v2 and absent from the\n\
+         //! spec — the seam carries those probe-pinned bounds separately.\n",
     );
     out.push_str("#![allow(clippy::must_use_candidate, clippy::doc_markdown)]\n\n");
     out.push_str(&format!("pub const OPENAPI_SHA256: &str = \"{sha256}\";\n"));
     out.push_str(&format!("pub const OPERATION_COUNT: usize = {};\n", rows.len()));
+    out.push_str(&format!(
+        "/// Operations declaring at least one query parameter.\n\
+         pub const QUERY_PARAM_ROUTES: usize = {query_routes};\n\n"
+    ));
     out.push_str(&format!(
         "/// `$ref` back-edges / nests beyond the generator cap ({REF_DEPTH_CAP}) —\n\
          /// emitted as `Any` (accept), counted here so drift is reviewable.\n\
@@ -452,8 +592,8 @@ pub fn emit(spec_json: &str, operations: &[Operation], sha256: &str) -> String {
     out.push_str("pub static ROUTES: &[RouteValidation] = &[\n");
     for row in &rows {
         out.push_str(&format!(
-            "    RouteValidation {{ operation_id: {:?}, body: {} }},\n",
-            row.operation_id, row.body
+            "    RouteValidation {{ operation_id: {:?}, body: {}, query: {} }},\n",
+            row.operation_id, row.body, row.query
         ));
     }
     out.push_str("];\n\n");
@@ -505,6 +645,13 @@ pub enum SchemaNode {
     /// JSON object with arbitrary string keys of the value node (also the
     /// plain `{"type":"object"}` shape: value node `Any`).
     Record(u32),
+    /// Multi-member `anyOf` without a null member. Only emitted for the
+    /// two probe-pinned shapes: string-unions (query filters — the seam
+    /// accepts on any member and reports the FIRST member's message) and
+    /// discriminator-struct unions (mcp.add `config` — the seam delegates
+    /// to the member whose `type` literal matches, else renders the union
+    /// label `{ readonly "type": "local", ... } | …`).
+    Union(&'static [u32]),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -528,10 +675,22 @@ pub enum BodyValidation {
     Json(u32),
 }
 
+/// What a route's query string must satisfy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QueryValidation {
+    /// No query parameters declared (unknown keys are stripped upstream).
+    None,
+    /// Declared parameters as an `Obj` node (`NODES[index]`), spec
+    /// declaration order; URL values are strings — see the seam for the
+    /// string-semantics interpretation.
+    Params(u32),
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RouteValidation {
     pub operation_id: &'static str,
     pub body: BodyValidation,
+    pub query: QueryValidation,
 }
 
 "#;
@@ -549,6 +708,15 @@ pub fn body_node(operation_id: &str) -> Option<u32> {
     match find(operation_id)?.body {
         BodyValidation::Json(node) => Some(node),
         _ => None,
+    }
+}
+
+/// Resolves the query-params `Obj` node index for an operation, if it
+/// declares any query parameters.
+pub fn query_node(operation_id: &str) -> Option<u32> {
+    match find(operation_id)?.query {
+        QueryValidation::Params(node) => Some(node),
+        QueryValidation::None => None,
     }
 }
 
@@ -592,6 +760,11 @@ mod tests {
                 | SchemaNode::Nullable(node)
                 | SchemaNode::Arr(node)
                 | SchemaNode::Record(node) => visit(*node, seen),
+                SchemaNode::Union(members) => {
+                    for member in *members {
+                        visit(*member, seen);
+                    }
+                }
                 SchemaNode::Obj { fields } => {
                     for field in *fields {
                         assert!(
@@ -607,6 +780,9 @@ mod tests {
         }
         for row in ROUTES {
             if let BodyValidation::Json(node) = row.body {
+                visit(node, &mut std::collections::BTreeSet::new());
+            }
+            if let QueryValidation::Params(node) = row.query {
                 visit(node, &mut std::collections::BTreeSet::new());
             }
         }
@@ -682,9 +858,143 @@ mod tests {
             }
         }
 
+        // experimental.mcp.add: required config as a discriminator-struct
+        // union (probe-pinned members local/remote).
+        match &NODES[field_of("experimental.mcp.add", "config").ty as usize] {
+            SchemaNode::Union(members) => {
+                assert_eq!(members.len(), 2, "config union members: {members:?}");
+                for member in *members {
+                    match &NODES[*member as usize] {
+                        SchemaNode::Ref { node, .. } => {
+                            let type_field = fields(*node)
+                                .iter()
+                                .find(|f| f.name == "type")
+                                .unwrap_or_else(|| panic!("union member has no type field"));
+                            match &NODES[type_field.ty as usize] {
+                                SchemaNode::Literal(values) => assert_eq!(values.len(), 1),
+                                other => panic!("type field not a literal: {other:?}"),
+                            }
+                        }
+                        other => panic!("config union member not a Ref: {other:?}"),
+                    }
+                }
+            }
+            other => panic!("config not a Union: {other:?}"),
+        }
+
+        // rpc.call: root is the annotated Rpc.Input (probe: whole-root
+        // mismatch prints the identifier, not `Expected object`).
+        match &NODES[body_node("rpc.call").unwrap() as usize] {
+            SchemaNode::Ref { label, .. } => assert_eq!(*label, "Rpc.Input"),
+            other => panic!("rpc.call root not a Ref: {other:?}"),
+        }
+
         // Routes without JSON bodies stay pass-through.
         assert_eq!(find("session.list").map(|r| r.body), Some(BodyValidation::None));
         assert_eq!(find("fs.read").map(|r| r.body), Some(BodyValidation::None));
+    }
+
+    /// Query-table pins: declaration-order fields and the constraint
+    /// classes the seam interprets (probe evidence rollout-probe*.json).
+    #[test]
+    fn query_slice_pins() {
+        fn params(op: &str) -> &'static [FieldSpec] {
+            let node = query_node(op).unwrap_or_else(|| panic!("{op} has no query row"));
+            match &NODES[node as usize] {
+                SchemaNode::Obj { fields } => fields,
+                other => panic!("{op} query node not an Obj: {other:?}"),
+            }
+        }
+        fn param_of(op: &str, name: &str) -> &'static FieldSpec {
+            params(op)
+                .iter()
+                .find(|f| f.name == name)
+                .unwrap_or_else(|| panic!("{op} has no query param {name}"))
+        }
+
+        // Count: 71 ops declare query parameters (QUERY_PARAM_ROUTES).
+        assert_eq!(
+            ROUTES.iter().filter(|r| matches!(r.query, QueryValidation::Params(_))).count(),
+            QUERY_PARAM_ROUTES
+        );
+
+        // session.list: limit/order/search/parentID… in declaration order;
+        // limit is a plain string in the spec (the NumberFromString
+        // integer filter is seam-side, probe-pinned); order a literal
+        // union; parentID the string-union [^ses, "null"].
+        let names: Vec<&str> = params("session.list").iter().map(|f| f.name).collect();
+        assert_eq!(
+            names,
+            ["limit", "order", "search", "parentID", "directory", "project", "subpath", "cursor"]
+        );
+        assert_eq!(NODES[param_of("session.list", "limit").ty as usize], SchemaNode::Str);
+        match &NODES[param_of("session.list", "order").ty as usize] {
+            SchemaNode::Literal(values) => {
+                assert_eq!(values, &["asc", "desc"]);
+            }
+            other => panic!("order not a Literal: {other:?}"),
+        }
+        match &NODES[param_of("session.list", "parentID").ty as usize] {
+            SchemaNode::Union(members) => {
+                assert_eq!(members.len(), 2);
+                match &NODES[members[0] as usize] {
+                    SchemaNode::Pattern { prefix } => assert_eq!(*prefix, "ses"),
+                    other => panic!("parentID first member not ^ses: {other:?}"),
+                }
+                match &NODES[members[1] as usize] {
+                    SchemaNode::Literal(values) => assert_eq!(values, &["null"]),
+                    other => panic!("parentID second member not \"null\": {other:?}"),
+                }
+            }
+            other => panic!("parentID not a Union: {other:?}"),
+        }
+
+        // vcs.diff: REQUIRED mode as a $ref'd literal union (probe: whole
+        // mismatch prints the identifier `Expected Vcs.Mode`).
+        let mode = param_of("vcs.diff", "mode");
+        assert!(mode.required);
+        match &NODES[mode.ty as usize] {
+            SchemaNode::Ref { label, node } => {
+                assert_eq!(*label, "Vcs.Mode");
+                match &NODES[*node as usize] {
+                    SchemaNode::Literal(values) => {
+                        assert_eq!(values, &["working", "branch", "committed"]);
+                    }
+                    other => panic!("Vcs.Mode not a Literal: {other:?}"),
+                }
+            }
+            other => panic!("mode not a Ref: {other:?}"),
+        }
+
+        // fs.find: required `query` string; `type` file/directory union.
+        assert!(param_of("fs.find", "query").required);
+        match &NODES[param_of("fs.find", "type").ty as usize] {
+            SchemaNode::Literal(values) => assert_eq!(values, &["file", "directory"]),
+            other => panic!("fs.find type not a Literal: {other:?}"),
+        }
+
+        // session.diff: `from`/`to` are `^msg_` patterns.
+        for name in ["from", "to"] {
+            match &NODES[param_of("session.diff", name).ty as usize] {
+                SchemaNode::Pattern { prefix } => assert_eq!(*prefix, "msg_"),
+                other => panic!("session.diff {name} not a ^msg_ pattern: {other:?}"),
+            }
+        }
+
+        // worktree.list / experimental.fs.write: required plain strings.
+        assert!(param_of("worktree.list", "projectID").required);
+        assert!(param_of("experimental.fs.write", "path").required);
+        assert!(query_node("session.list").is_some());
+        assert_eq!(query_node("session.create"), None, "session.create declares no query");
+        // pty.connect's raw flat params (location[directory]/cursor/ticket)
+        // are plain strings — nothing can fail.
+        for name in ["location[directory]", "cursor", "ticket"] {
+            assert_eq!(
+                NODES[param_of("pty.connect", name).ty as usize],
+                SchemaNode::Str,
+                "pty.connect {name}"
+            );
+        }
     }
 }
 "#;
