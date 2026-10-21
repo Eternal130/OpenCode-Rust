@@ -1,3 +1,29 @@
+// Upstream-mirror lint posture: the merman port keeps the TypeScript
+// arithmetic shape (JS Number semantics on an i64 grid, the same cast
+// sites and long single-responsibility functions), so the pedantic
+// numeric/style lints that would rewrite that shape are quieted here.
+#![allow(
+    clippy::cast_possible_wrap,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::cast_lossless,
+    clippy::doc_markdown,
+    clippy::must_use_candidate,
+    clippy::too_many_lines,
+    clippy::too_many_arguments,
+    clippy::needless_range_loop,
+    clippy::items_after_statements,
+    clippy::explicit_iter_loop,
+    clippy::for_kv_map,
+    clippy::map_unwrap_or,
+    clippy::manual_strip,
+    clippy::range_plus_one,
+    clippy::option_option,
+    clippy::implicit_hasher,
+    clippy::match_same_arms
+)]
+
 //! `core/drawing.ts` — line glyphs, arrows, frames, diamonds, and
 //! orthogonal path rendering.
 
@@ -123,6 +149,7 @@ pub fn diagram_line_glyph(
     glyph(up, down, left, right, corner_style, single_chars())
 }
 
+#[derive(Clone, Copy)]
 struct GlyphTable {
     cross: &'static str,
     left_t: &'static str,
@@ -169,6 +196,9 @@ fn heavy_chars() -> GlyphTable {
     }
 }
 
+// The four booleans mirror the upstream `glyph(up, down, left, right, ...)`
+// signature used by `diagramLineGlyph`.
+#[allow(clippy::fn_params_excessive_bools)]
 fn glyph(
     up: bool,
     down: bool,
@@ -425,6 +455,7 @@ pub fn draw_orthogonal_path(
         // The FIRST segment paints its start point; later segments start
         // one cell in (the corner pass below owns the joint).
         let first = index == 0;
+        #[allow(clippy::bool_to_int_with_if)]
         let mut step = if first { 0 } else { 1 };
         crate::render::mermaid::core::geometry::walk_orthogonal_segment(
             from,
