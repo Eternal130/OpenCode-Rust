@@ -532,7 +532,7 @@ pub fn render_session(
     //   glyphs, `group-view.tsx:176-190`), not the whole row;
     // * user-message blocks open the Message Actions select
     //   (`UserMessage`'s `onMouseUp`, session/index.tsx:2210-2250).
-    let mut hit_rows: Vec<crate::store::TranscriptHitRow> = transcript
+    let hit_rows: Vec<crate::store::TranscriptHitRow> = transcript
         .rows
         .iter()
         .flat_map(|row| {
