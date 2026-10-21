@@ -664,6 +664,10 @@ async fn settle_tool_exit(
                         Ok(truncated) => ToolRunResult {
                             content: truncated.content,
                             metadata: truncated.metadata,
+                            // toolOutput.truncate spreads `...result`
+                            // (tool-output.ts:81) — the declared output
+                            // rides along untouched (TOOL-D1).
+                            output: result.output,
                         },
                         // A spill failure degrades to the raw result — the
                         // model still gets its output.

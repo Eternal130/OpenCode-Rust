@@ -883,7 +883,12 @@ pub struct CodeModeLeaf {
 impl CodeModeLeaf {
     fn nested_value(result: &ToolRunResult) -> Value {
         // v2 prefers the declared output, else the joined text, else
-        // null. Registrations carry no output schema — the text join.
+        // null (codemode/tool.ts:101-106). TOOL-D1: the widened
+        // `ToolRunResult.output` seam is what makes the first arm
+        // reachable for output-declaring registrations.
+        if let Some(output) = &result.output {
+            return output.clone();
+        }
         let text = result
             .content
             .iter()
