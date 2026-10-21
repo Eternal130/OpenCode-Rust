@@ -56,6 +56,12 @@ pub enum UpdateDialogState {
 }
 
 impl UpdateNotice {
+    /// TUI-TD27 — the banner's hide gate input (`type === "installed"`).
+    #[must_use]
+    pub const fn is_installed(&self) -> bool {
+        matches!(self.kind, UpdateNoticeKind::Installed)
+    }
+
     /// The banner's `/…` prefix (home.tsx:160-163).
     #[must_use]
     pub fn prefix(&self) -> &'static str {

@@ -1540,6 +1540,9 @@ pub struct Store {
     /// The dismissed `source:version` keys (`update-notifications` —
     /// loaded/saved by the run loop's storage handle).
     update_dismissed: RefCell<Vec<String>>,
+    /// TUI-TD27 — the home update banner's hit rect from the last
+    /// render pass (the banner's `onMouseUp`, home.tsx:138-146).
+    home_update_hit: RefCell<Option<(usize, usize, usize)>>,
     /// Per-tab pulse transition stamps (the strip's animated phases —
     /// `TabPulseTrack::sync` at status flips; the render derives every
     /// envelope level from these + the clock, stateless per frame).
@@ -3111,6 +3114,7 @@ impl Store {
             update_notice,
             update_dialog,
             update_dismissed: RefCell::new(Vec::new()),
+            home_update_hit: RefCell::new(None),
             mcp_toggle_sink: std::cell::RefCell::new(Rc::new(NoMcpToggleSink)),
             pair_refresh_sink: std::cell::RefCell::new(None),
             config_sink: std::cell::RefCell::new(Rc::new(NoConfigSink)),
@@ -4776,6 +4780,18 @@ impl Store {
             }
         }
         self.update_notice.set(Some(notice));
+    }
+
+    /// TUI-TD27 — record/clear the banner's hit rect (the home
+    /// render pass; `(x, row, width)`).
+    pub fn set_home_update_hit(&self, hit: Option<(usize, usize, usize)>) {
+        *self.home_update_hit.borrow_mut() = hit;
+    }
+
+    /// The banner's hit rect from the last render.
+    #[must_use]
+    pub fn home_update_hit(&self) -> Option<(usize, usize, usize)> {
+        *self.home_update_hit.borrow()
     }
 
     /// Dismiss the banner + record the dismissal (the loop persists
