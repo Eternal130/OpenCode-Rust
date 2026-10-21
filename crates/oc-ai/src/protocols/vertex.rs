@@ -3,20 +3,27 @@
 //! on Vertex — project/region routing, tuned `endpoints/` models, Express
 //! Mode API keys, ADC bearer auth, the `labels` provider option, and the
 //! `serviceTier` request-type header (stripped from the body like v2's
-//! `fromRequest`).
+//! `fromRequest`) — plus the OpenAI-compatibility deployments
+//! (`google-vertex-chat` / `google-vertex-responses`, AI-V1) on the
+//! aiplatform `endpoints/openapi` root with ADC auth and `${GOOGLE_VERTEX_*}`
+//! catalog baseURL template expansion.
 
 use std::sync::Arc;
 
 use serde_json::Value;
 
 use crate::protocols::gemini::GeminiProtocol;
+use crate::protocols::open_responses::{
+    BaseAdapter, OpenResponsesProtocol, PATH as RESPONSES_PATH,
+};
+use crate::protocols::openai_chat::{OpenAiChat, OpenAiChatExt, PATH as CHAT_PATH};
 use crate::route::auth::{self, Definition, Secret};
-use crate::route::client::{Route, RouteInput};
+use crate::route::client::{Route, RouteDefaults, RouteInput};
 use crate::route::endpoint::Endpoint;
 use crate::route::protocol::{Protocol, ProtocolState};
 use crate::route::{Framing, SharedTransport};
 use crate::schema::options::SanitizerCompatibility;
-use crate::schema::{AiError, LLMEvent, LLMRequest};
+use crate::schema::{AiError, AiErrorReason, LLMEvent, LLMRequest, ProviderId};
 
 const ADAPTER: &str = "google-vertex-gemini";
 const PROVIDER: &str = "google-vertex";
@@ -258,6 +265,161 @@ pub fn vertex_route_for_model(
         transport,
         defaults: Default::default(),
     })
+}
+
+// ===========================================================================
+// OpenAI-compatibility deployments (AI-V1: port of google-vertex-chat.ts +
+// google-vertex-responses.ts — the aiplatform `endpoints/openapi` root)
+// ===========================================================================
+
+/// `GoogleVertexShared.requireProject`: without a baseURL there is no URL
+/// to compose — the project becomes a configuration requirement (shared
+/// by the Messages and `OpenAPI` lanes).
+pub fn require_project_or_fail(project: Option<String>) -> Result<String, AiError> {
+    project.ok_or_else(|| {
+        AiError::new(AiErrorReason::ProviderConfiguration {
+            provider: ProviderId::new(PROVIDER),
+            message: "Google Vertex requires a project when baseURL is not configured".into(),
+        })
+    })
+}
+
+/// The endpoint host a catalog baseURL template's
+/// `${GOOGLE_VERTEX_ENDPOINT}` resolves to
+/// (plugin/provider/google-vertex.ts `vertexEndpoint`): `global` is the
+/// multi-region root, everything else `{location}-aiplatform`.
+fn template_endpoint_host(location: &str) -> String {
+    if location == "global" {
+        "aiplatform.googleapis.com".to_string()
+    } else {
+        format!("{location}-aiplatform.googleapis.com")
+    }
+}
+
+/// Expand the catalog's `${GOOGLE_VERTEX_*}` baseURL templates against the
+/// resolved project/location (port of `replaceVertexVars`): location and
+/// endpoint always resolve; an unresolved project keeps its placeholder.
+#[must_use]
+pub fn expand_vertex_vars(value: &str, project: Option<&str>, location: &str) -> String {
+    value
+        .replace("${GOOGLE_VERTEX_PROJECT}", project.unwrap_or("${GOOGLE_VERTEX_PROJECT}"))
+        .replace("${GOOGLE_VERTEX_LOCATION}", location)
+        .replace("${GOOGLE_VERTEX_ENDPOINT}", &template_endpoint_host(location))
+}
+
+/// The `OpenAPI` base URL for one binding (port of both packages'
+/// `configuredRoute` + the plugin template expansion): an explicit baseURL
+/// expands its `${GOOGLE_VERTEX_*}` placeholders (plugin fallback
+/// `us-central1`); otherwise the package-composed
+/// `https://aiplatform.googleapis.com/v1/projects/{project}/locations/{location}/endpoints/openapi`
+/// with the `global` fallback and the project requirement.
+fn openapi_base_url(
+    base_url: Option<String>,
+    project: Option<&str>,
+    location: Option<&str>,
+) -> Result<String, AiError> {
+    if let Some(base_url) = base_url {
+        // Template expansion runs after config/env resolution, exactly like
+        // the provider plugin (its location fallback is us-central1).
+        let location = resolve_location(location, "us-central1");
+        let project = resolve_project(project);
+        return Ok(expand_vertex_vars(&base_url, project.as_deref(), &location));
+    }
+    let location = resolve_location(location, "global");
+    let project = require_project_or_fail(resolve_project(project))?;
+    Ok(format!(
+        "https://aiplatform.googleapis.com/v1/projects/{project}/locations/{location}/endpoints/openapi"
+    ))
+}
+
+/// Vertex OpenAPI-lane configuration (port of both packages' `Config`).
+#[derive(Default)]
+pub struct VertexEndpointConfig {
+    pub base_url: Option<String>,
+    pub location: Option<String>,
+    pub project: Option<String>,
+    /// The OAuth access token (the ADC credential binding's resolved
+    /// token or an explicit config token).
+    pub access_token: Option<Secret>,
+    /// Rejected: the `OpenAPI` lanes authenticate through OAuth/ADC only.
+    pub api_key: Option<Secret>,
+}
+
+/// The ADC bearer chain shared by the `OpenAPI` lanes (port of
+/// `GoogleVertexShared.oauth`): explicit token, else the env stand-in.
+fn openapi_auth(config: &VertexEndpointConfig) -> Definition {
+    adc_access_token(config.access_token.clone())
+}
+
+/// Shared construction for the two `OpenAPI` lanes: reject API keys, compose
+/// the base URL, then hand the route identity/protocol to the caller.
+fn openapi_route(
+    config: &VertexEndpointConfig,
+    lane: &str,
+) -> Result<(String, Definition), AiError> {
+    if config.api_key.is_some() {
+        return Err(AiError::new(AiErrorReason::ProviderConfiguration {
+            provider: ProviderId::new(PROVIDER),
+            message: format!("Google Vertex {lane} does not support API keys"),
+        }));
+    }
+    let base_url = openapi_base_url(
+        config.base_url.clone(),
+        config.project.as_deref(),
+        config.location.as_deref(),
+    )?;
+    Ok((base_url, openapi_auth(config)))
+}
+
+/// The configured Vertex `OpenAI` Chat route (port of
+/// `google-vertex-chat.ts`): the `openai-chat` protocol on the
+/// `endpoints/openapi` root at `/chat/completions`, ADC bearer, API keys
+/// rejected.
+pub fn vertex_chat_route(
+    transport: SharedTransport,
+    config: VertexEndpointConfig,
+) -> Result<Route, AiError> {
+    let (base_url, auth) = openapi_route(&config, "Chat")?;
+    Ok(Route::new(RouteInput {
+        id: "google-vertex-chat".to_string(),
+        provider: Some(PROVIDER.to_string()),
+        provider_metadata_key: Some("vertex".to_string()),
+        protocol: Arc::new(OpenAiChat::new(OpenAiChatExt::base())),
+        endpoint: Endpoint::path(CHAT_PATH).with_base_url(base_url),
+        auth: Some(auth),
+        framing: Framing::sse_with_done(),
+        headers: None,
+        transport,
+        defaults: RouteDefaults::default(),
+    }))
+}
+
+/// The configured Vertex Open Responses route (port of
+/// `google-vertex-responses.ts`): the open-responses protocol on the
+/// `endpoints/openapi` root at `/responses` with the `store: false` +
+/// `include: ["reasoning.encrypted_content"]` defaults, ADC bearer, API
+/// keys rejected.
+pub fn vertex_responses_route(
+    transport: SharedTransport,
+    config: VertexEndpointConfig,
+) -> Result<Route, AiError> {
+    let (base_url, auth) = openapi_route(&config, "Responses")?;
+    let mut provider_options = crate::schema::ProviderOptions::new();
+    provider_options.insert("store".to_string(), serde_json::json!(false));
+    provider_options
+        .insert("include".to_string(), serde_json::json!(["reasoning.encrypted_content"]));
+    Ok(Route::new(RouteInput {
+        id: "google-vertex-responses".to_string(),
+        provider: Some(PROVIDER.to_string()),
+        provider_metadata_key: Some("vertex".to_string()),
+        protocol: Arc::new(OpenResponsesProtocol::new(Arc::new(BaseAdapter))),
+        endpoint: Endpoint::path(RESPONSES_PATH).with_base_url(base_url),
+        auth: Some(auth),
+        framing: Framing::sse(),
+        headers: None,
+        transport,
+        defaults: RouteDefaults { provider_options: Some(provider_options), ..Default::default() },
+    }))
 }
 
 #[cfg(test)]

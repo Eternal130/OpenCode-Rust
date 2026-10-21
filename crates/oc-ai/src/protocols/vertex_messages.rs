@@ -16,7 +16,9 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use super::anthropic_messages::{framing, required_beta_headers_of_body, AnthropicMessages};
-use super::vertex::{adc_access_token, host, resolve_location, resolve_project};
+use super::vertex::{
+    adc_access_token, host, require_project_or_fail, resolve_location, resolve_project,
+};
 use crate::route::auth::Secret;
 use crate::route::client::{Route, RouteInput};
 use crate::route::endpoint::Endpoint;
@@ -36,18 +38,6 @@ pub const PROVIDER: &str = "google-vertex";
 pub const BODY_ANTHROPIC_VERSION: &str = "vertex-2023-10-16";
 /// The `anthropic-version` request header (TS `HEADER_VERSION`).
 pub const HEADER_VERSION: &str = "2023-06-01";
-
-/// `GoogleVertexShared.requireProject`: without a baseURL there is no URL
-/// to compose — the project (option or the env aliases, already folded by
-/// [`resolve_project`]) becomes a configuration requirement.
-fn require_project(project: Option<String>) -> Result<String, AiError> {
-    project.ok_or_else(|| {
-        AiError::new(AiErrorReason::ProviderConfiguration {
-            provider: ProviderId::new(PROVIDER),
-            message: "Google Vertex requires a project when baseURL is not configured".into(),
-        })
-    })
-}
 
 /// The Messages protocol with the Vertex body rewrite (TS
 /// `Protocol.make({ id: AnthropicMessages.protocol.id, body: … })`): the
@@ -167,7 +157,7 @@ pub fn vertex_messages_route(
     let base_url = if let Some(base_url) = config.base_url {
         base_url
     } else {
-        let project = require_project(resolve_project(config.project.as_deref()))?;
+        let project = require_project_or_fail(resolve_project(config.project.as_deref()))?;
         format!(
             "https://{}/v1/projects/{project}/locations/{location}/publishers/anthropic/models",
             host(&location)
