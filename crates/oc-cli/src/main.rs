@@ -100,7 +100,7 @@ async fn dispatch(cli: Cli) -> i32 {
         Some(Commands::Debug { command }) => handlers::misc::debug(&command).await,
         Some(Commands::Auth { command }) => handlers::auth::run(&command, &server).await,
         Some(Commands::Mcp { command }) => handlers::mcp::run(&command).await,
-        Some(Commands::Plugin { command }) => handlers::plugin::run(&command).await,
+        Some(Commands::Plugin { command }) => handlers::plugin::run(&command, &server).await,
         Some(Commands::Models) => handlers::misc::models(&server).await,
         Some(Commands::Stats {
             days,
