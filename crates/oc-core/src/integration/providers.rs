@@ -692,10 +692,12 @@ async fn digitalocean_authorize(_answer: FormAnswer) -> Result<Authorization, St
 // Poe (plugin/provider/poe.ts) — code + PKCE loopback flow
 // ---------------------------------------------------------------------------
 
-const POE_CLIENT_ID: &str = "9rKyfhAcBR0rEmvPpKcVxpDzqEBzZPPK";
+const POE_CLIENT_ID: &str = "client_728290227fc048cc9262091a1ea197ea";
 const POE_ISSUER: &str = "https://poe.com";
 const POE_TOKEN: &str = "https://api.poe.com/token";
 const POE_SCOPE: &str = "apikey:create";
+/// Poe API keys never outlive this (poe.ts:13 `maxExpiry`, ms).
+const POE_MAX_EXPIRY: i64 = 8_640_000_000_000_000;
 
 fn install_poe(host: &IntegrationHost) {
     host.update_integration("poe", "Poe");
@@ -716,7 +718,16 @@ fn install_poe(host: &IntegrationHost) {
     );
 }
 
-async fn poe_authorize(_answer: FormAnswer) -> Result<Authorization, String> {
+async fn poe_authorize(answer: FormAnswer) -> Result<Authorization, String> {
+    poe_authorize_at(answer, POE_TOKEN).await
+}
+
+/// The Poe browser flow with an injectable token endpoint (test seam:
+/// tests replay the code exchange through a loopback stub).
+pub async fn poe_authorize_at(
+    _answer: FormAnswer,
+    token_url: &str,
+) -> Result<Authorization, String> {
     let PkcePair { verifier, challenge } = pkce_pair();
     let state = flows::random_state(32);
     let listener = flows::listen_loopback(LoopbackOptions {
@@ -741,45 +752,40 @@ async fn poe_authorize(_answer: FormAnswer) -> Result<Authorization, String> {
             ("state", state.as_str()),
         ])
     );
+    let token_url = token_url.to_owned();
     let callback: BoxFuture<'static, Result<CredentialValue, String>> = Box::pin(async move {
         let params = listener.wait().await?;
-        if let Some(error) = params.get("error").or_else(|| params.get("error_description")) {
-            return Err(error.clone());
-        }
+        // v2 checks state first, then the optional iss pin, then the
+        // error params, then the code (poe.ts:117-126).
         if params.get("state").map(String::as_str) != Some(state.as_str()) {
             return Err("Invalid OAuth state".into());
         }
-        let code = params.get("code").ok_or("missing code")?;
-        let http = reqwest::Client::new();
-        let response = http
-            .post(POE_TOKEN)
-            .form(&[
-                ("grant_type", "authorization_code"),
-                ("client_id", POE_CLIENT_ID),
-                ("code", code.as_str()),
-                ("redirect_uri", redirect.as_str()),
-                ("code_verifier", verifier.as_str()),
-            ])
-            .send()
-            .await
-            .map_err(|error| format!("request failed: {error}"))?;
-        let status = response.status();
-        let body: Value = response.json().await.unwrap_or(Value::Null);
-        if !status.is_success() {
-            return Err(format!(
-                "Failed to exchange Poe code: {}",
-                body["error_description"].as_str().or(body["error"].as_str()).unwrap_or("unknown")
-            ));
+        // Poe's client pins this issuer but does not require iss; its
+        // documented callbacks may omit it (poe.ts:119-120).
+        if let Some(iss) = params.get("iss").filter(|iss| !iss.is_empty()) {
+            if iss != POE_ISSUER {
+                return Err("Invalid OAuth issuer".into());
+            }
         }
-        let access = body["access_token"].as_str().ok_or("access_token missing")?.to_owned();
-        let expires_in = body["expires_in"].as_f64().unwrap_or(30.0 * 24.0 * 3600.0);
-        Ok(CredentialValue::OAuth(OAuthValue {
-            method_id: "browser".into(),
-            refresh: String::new(),
-            access,
-            expires: crate::database::migrations::now_ms() + (expires_in * 1000.0) as i64,
-            metadata: None,
-        }))
+        if params.contains_key("error") {
+            let detail = params
+                .get("error_description")
+                .or_else(|| params.get("error"))
+                .map(String::as_str)
+                .filter(|detail| !detail.is_empty())
+                .unwrap_or("Authorization denied");
+            // Never echo the state nonce back (poe.ts:122-123).
+            return Err(if detail.contains(state.as_str()) {
+                "Poe authorization failed".into()
+            } else {
+                detail.to_owned()
+            });
+        }
+        let code = params.get("code").map(String::as_str).unwrap_or_default().trim();
+        if code.is_empty() {
+            return Err("Missing authorization code".into());
+        }
+        poe_exchange(&token_url, code, &redirect, &verifier).await
     });
     Ok(Authorization {
         url,
@@ -788,6 +794,81 @@ async fn poe_authorize(_answer: FormAnswer) -> Result<Authorization, String> {
         expires_at: None,
         mode: AuthMode::Auto(callback),
     })
+}
+
+/// The code → API-key exchange (poe.ts:128-163): Poe's token endpoint
+/// returns an `api_key` (+ optional `api_key_expires_in` seconds), not an
+/// OAuth access token.
+async fn poe_exchange(
+    token_url: &str,
+    code: &str,
+    redirect: &str,
+    verifier: &str,
+) -> Result<CredentialValue, String> {
+    let http = reqwest::Client::new();
+    let response = http
+        .post(token_url)
+        .form(&[
+            ("grant_type", "authorization_code"),
+            ("client_id", POE_CLIENT_ID),
+            ("code", code),
+            ("redirect_uri", redirect),
+            ("code_verifier", verifier),
+        ])
+        .send()
+        .await
+        .map_err(|_| "Poe token exchange request failed".to_owned())?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        let error: Option<Value> = serde_json::from_str(&body).ok();
+        let detail = error
+            .as_ref()
+            .and_then(|error| error.get("error_description"))
+            .or_else(|| error.as_ref().and_then(|error| error.get("error")))
+            .and_then(Value::as_str)
+            .filter(|detail| !detail.is_empty());
+        return Err(match detail {
+            // Error details must never echo the code/verifier secrets
+            // (poe.ts:145-152).
+            Some(detail) if !detail.contains(code) && !detail.contains(verifier) => {
+                format!("Poe token exchange failed: {detail}")
+            }
+            _ => {
+                let status_code = status.as_u16();
+                format!("Poe token exchange failed ({status_code})")
+            }
+        });
+    }
+    let body: Value = response.json().await.map_err(|_| "Invalid Poe token response".to_owned())?;
+    // Token schema (poe.ts:14-17): non-empty trimmed api_key without
+    // whitespace; optional (nullable) non-negative integer expiry.
+    let api_key = body
+        .get("api_key")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|key| !key.is_empty() && !key.contains(char::is_whitespace))
+        .ok_or_else(|| "Invalid Poe token response".to_owned())?;
+    let expires = match body.get("api_key_expires_in") {
+        None | Some(Value::Null) => Some(POE_MAX_EXPIRY),
+        Some(value) => match value.as_i64() {
+            Some(seconds) if seconds >= 0 => {
+                crate::database::migrations::now_ms().checked_add(seconds.saturating_mul(1000))
+            }
+            _ => return Err("Invalid Poe token response".into()),
+        },
+    }
+    .ok_or("Invalid Poe API key expiry")?;
+    if expires > POE_MAX_EXPIRY {
+        return Err("Invalid Poe API key expiry".into());
+    }
+    Ok(CredentialValue::OAuth(OAuthValue {
+        method_id: "browser".into(),
+        refresh: String::new(),
+        access: api_key.to_owned(),
+        expires,
+        metadata: None,
+    }))
 }
 
 struct PkcePair {
