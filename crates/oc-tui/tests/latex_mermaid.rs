@@ -115,12 +115,29 @@ fn renders_mermaid_gantt_code_block_as_ascii_timeline() {
 }
 
 #[test]
+fn renders_mermaid_timeline_code_block_as_ascii_spine() {
+    let rows = rendered(
+        "```mermaid\ntimeline\n  title History\n  section Launch\n  2024 : Prototype : Public beta\n  section Scale\n  2025 : Ship 10k\n```",
+        40,
+    );
+    let text = rows.join("\n");
+    assert!(text.contains("History"), "title missing: {text}");
+    assert!(text.contains("Launch"), "section missing: {text}");
+    assert!(text.contains("2024"), "period missing: {text}");
+    assert!(text.contains("Public beta"), "event missing: {text}");
+    assert!(text.contains('●'), "spine node missing: {text}");
+    // The raw source must NOT render.
+    assert!(!text.contains("timeline"), "raw source leaked: {text}");
+}
+
+#[test]
 fn unknown_mermaid_kind_falls_back_to_the_plain_code_block() {
-    // timeline is detected by upstream but not ported in this lane —
-    // the fence renders through the default code path.
-    let rows = rendered("```mermaid\ntimeline\n  title History\n```", 40);
+    // `pie` is not a kind this renderer detects — the fence renders
+    // through the default code path (upstream `detectMermaidDiagram`
+    // returns undefined).
+    let rows = rendered("```mermaid\npie\n  title Distribution\n```", 40);
     assert!(
-        rows.iter().any(|row| row.contains("History")),
+        rows.iter().any(|row| row.contains("Distribution")),
         "fallback code block missing: {rows:?}"
     );
 }
