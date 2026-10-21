@@ -1409,7 +1409,7 @@ fn tui7_filter_semantics_live_loop() {
 
 /// TUI-12's event script: a running CHILD session in `ses_alpha`'s
 /// family (`session.created` with `parentID` + `session.execution.
-/// started` and one in-flight shell owned by `ses_alpha`
+/// started`) and one in-flight shell owned by `ses_alpha`
 /// (`shell.created` carrying `metadata.sessionID` — the client data
 /// cache's live shell map, solid/data.ts:1245-1261).
 fn live_counts_script(session: &str) -> Vec<vt_harness::ScriptEvent> {
@@ -1529,6 +1529,148 @@ fn composer_live_counts() {
             Ok(())
         },
     );
+}
+
+// ---------------------------------------------------------------------------
+// TUI-14 — the shell-mode `!` prefix
+// ---------------------------------------------------------------------------
+
+/// TUI-14: `!` typed at caret 0 on an empty normal-mode draft enters
+/// SHELL MODE (prompt/index.tsx:961-981's `bind: "!"` layer — the `!`
+/// itself never inserts), the footer flips to `esc exit shell mode`
+/// (footer.tsx:107-112), the metadata row labels `Shell`
+/// (prompt/index.tsx:1570), escape/backspace-at-0 exit back to normal,
+/// and Enter submits through `session.shell` (POST
+/// /api/session/:id/shell, prompt/index.tsx:1303-1307) — the mode
+/// resets to normal after the send.
+/// TUI-14's shell-POST slot type (the fake's registry handed out
+/// through the arm closure).
+type SharedPosts = Arc<Mutex<Option<Arc<Mutex<Vec<String>>>>>>;
+
+#[test]
+fn shell_bang_mode() {
+    // The fake's shell-POST registry, shared out through the arm
+    // closure (the assertion reads it after the app loop returns).
+    let shell_slot: SharedPosts = Arc::new(Mutex::new(None));
+    let slot = Arc::clone(&shell_slot);
+    run_daily_test(
+        "tui14-bang",
+        120,
+        30,
+        |fake, _| {
+            *slot.lock().expect("slot") = Some(Arc::clone(&fake.shell_posts));
+        },
+        |h| {
+            boot_to_session(h, b"Alpha")?;
+            // The composer settles (the agents hint paints).
+            wait_text(h, "shift+tab agents", Duration::from_secs(10))?;
+            // `!` at caret 0 enters shell mode: the footer's esc hint
+            // replaces the shortcut hints (footer.tsx:107-112 — the
+            // whole PromptFooter content swaps for the shell Match).
+            h.write(b"!");
+            wait_grid(
+                h,
+                |g| {
+                    (20..30).any(|y| {
+                        let text = g.content_rect(0, y, 120, 1);
+                        text.contains("exit shell mode") && !text.contains("agents")
+                    })
+                },
+                Duration::from_secs(5),
+            )
+            .map_err(|error| format!("the shell footer never painted: {error}"))?;
+            // The metadata row labels the mode "Shell"
+            // (prompt/index.tsx:1570's agentLabel override — the row
+            // keeps the box's `┃` rail + pads, so probe the painted
+            // run).
+            wait_grid(
+                h,
+                |g| (20..30).any(|y| g.content_rect(2, y, 116, 1).trim() == "┃  Shell"),
+                Duration::from_secs(5),
+            )
+            .map_err(|error| format!("the Shell metadata label never painted: {error}"))?;
+            // The `!` itself never inserts — typing continues the
+            // command draft.
+            h.write(b"echo hello");
+            wait_grid(
+                h,
+                |g| (20..30).any(|y| g.content_rect(2, y, 116, 1).contains("echo hello")),
+                Duration::from_secs(5),
+            )?;
+            // Escape exits shell mode (the draft KEEPS its text —
+            // v2 only flips the mode, index.tsx:989-992).
+            h.write(b"\x1b");
+            wait_grid(
+                h,
+                |g| {
+                    (20..30).all(|y| !g.content_rect(0, y, 120, 1).contains("exit shell mode"))
+                        && (20..30).any(|y| g.content_rect(2, y, 116, 1).contains("echo hello"))
+                },
+                Duration::from_secs(5),
+            )
+            .map_err(|error| format!("escape never exited shell mode: {error}"))?;
+            // Clear the draft (ctrl+c), re-enter, and submit: the
+            // command leaves through session.shell.
+            h.write(b"\x03");
+            wait_grid(
+                h,
+                |g| (20..30).all(|y| !g.content_rect(2, y, 116, 1).contains("echo hello")),
+                Duration::from_secs(5),
+            )?;
+            h.write(b"!");
+            wait_grid(
+                h,
+                |g| (20..30).any(|y| g.content_rect(0, y, 120, 1).contains("exit shell mode")),
+                Duration::from_secs(5),
+            )?;
+            h.write(b"pwd");
+            h.write(b"\r");
+            // The mode resets (the esc hint leaves) and the footer's
+            // normal hints return.
+            wait_grid(
+                h,
+                |g| (20..30).any(|y| g.content_rect(0, y, 120, 1).contains("shift+tab agents")),
+                Duration::from_secs(5),
+            )
+            .map_err(|error| format!("the mode never reset after the shell send: {error}"))?;
+            // Backspace at caret 0 also exits: re-enter on the now
+            // empty draft, then backspace.
+            h.write(b"!");
+            wait_grid(
+                h,
+                |g| (20..30).any(|y| g.content_rect(0, y, 120, 1).contains("exit shell mode")),
+                Duration::from_secs(5),
+            )?;
+            h.write(b"\x7f");
+            wait_grid(
+                h,
+                |g| (20..30).all(|y| !g.content_rect(0, y, 120, 1).contains("exit shell mode")),
+                Duration::from_secs(5),
+            )
+            .map_err(|error| format!("backspace-at-0 never exited shell mode: {error}"))?;
+            Ok(())
+        },
+    );
+    // The shell submit reached the server: POST /api/session/ses_alpha/
+    // shell carrying the command text. The send is async — poll the
+    // fake's registry for the arrival.
+    let deadline = std::time::Instant::now() + Duration::from_secs(8);
+    loop {
+        let posts = shell_slot
+            .lock()
+            .expect("slot")
+            .as_ref()
+            .map(|arc| arc.lock().expect("posts").clone())
+            .unwrap_or_default();
+        if posts.iter().any(|post| post.contains("pwd")) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the shell command never POSTed; saw {posts:?}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 /// TUI-35 — the boot completes against a QUIET server (no SSE script

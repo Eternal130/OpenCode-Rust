@@ -1009,6 +1009,10 @@ pub struct PromptState {
     /// The rotated placeholder pick (lane/chrome #6 — the per-boot
     /// `randomIndex` roll; the pool itself is the route's constant).
     pub placeholder_index: usize,
+    /// TUI-14 — the shell-mode flag keyed by composer session (v2's
+    /// per-session prompt store `mode`; the composer engine
+    /// round-trips it through [`Store::composer`]).
+    pub modes: std::collections::HashMap<String, bool>,
 }
 
 /// One plugin-registered palette command (the oc-plugin-host
@@ -3558,6 +3562,12 @@ impl Store {
             autocomplete,
             edit,
             placeholder_index: state.placeholder_index,
+            // TUI-14 — the persisted shell-mode flag.
+            mode: if state.modes.get(session_id).copied().unwrap_or(false) {
+                crate::components::composer::ComposerMode::Shell
+            } else {
+                crate::components::composer::ComposerMode::Normal
+            },
             ..Composer::default()
         };
         // The text mirror resyncs on the way in (the draft is the
@@ -3568,6 +3578,17 @@ impl Store {
             composer.edit.set_caret_keep_anchor(caret);
         }
         composer
+    }
+
+    /// TUI-14 — the composer's input mode (`store.mode`), without the
+    /// full engine assembly (the render paths' read).
+    #[must_use]
+    pub fn composer_mode(&self, session_id: &str) -> crate::components::composer::ComposerMode {
+        if self.prompt.get().modes.get(session_id).copied().unwrap_or(false) {
+            crate::components::composer::ComposerMode::Shell
+        } else {
+            crate::components::composer::ComposerMode::Normal
+        }
     }
 
     /// Update every composer engine's wrap width (the opentui editing
@@ -3594,6 +3615,12 @@ impl Store {
             state.edits.insert(session_id.to_owned(), composer.edit.clone());
             state.history = composer.history.clone();
             state.placeholder_index = composer.placeholder_index;
+            // TUI-14 — the shell-mode flag persists per session.
+            if composer.mode == crate::components::composer::ComposerMode::Shell {
+                state.modes.insert(session_id.to_owned(), true);
+            } else {
+                state.modes.remove(session_id);
+            }
         });
     }
 
@@ -3628,6 +3655,13 @@ impl Store {
     pub fn forward_submission(&self, session_id: &str, prompt: &SubmittedPrompt) {
         let model = self.resolve_model(session_id);
         self.prompt_sink.send_with_model(session_id, prompt, model.as_ref());
+    }
+
+    /// TUI-14 — the shell-mode submit (`session.shell`,
+    /// prompt/index.tsx:1303-1307): the text runs as a shell command
+    /// through the engine sink (never `session.prompt`).
+    pub fn send_shell_command(&self, session_id: &str, command: &str) {
+        self.prompt_sink.send_shell(session_id, command);
     }
 
     /// Swap the engine prompt sink (tests inject recorders; wave 3

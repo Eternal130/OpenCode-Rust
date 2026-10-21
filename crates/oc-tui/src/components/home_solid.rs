@@ -512,6 +512,10 @@ pub fn paint_solid_home_view(
             live: String::new(),
             live_shortcut: String::new(),
             live_hovered: false,
+            // TUI-14 — the home composer's shell mode (the `!` prefix
+            // works there too; home.tsx:20-23 carries the shell
+            // placeholder pool).
+            shell: view.shell_mode,
         },
         metadata: view.metadata.clone(),
         terminal_width: width,
@@ -628,6 +632,7 @@ mod tests {
             location: String::new(),
             directory: String::new(),
             location_hovered: false,
+            shell_mode: false,
             version: scenario.version.clone(),
             metadata: crate::components::composer::render::MetadataLine::default(),
             plugin_hints: Vec::new(),

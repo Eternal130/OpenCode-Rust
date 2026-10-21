@@ -27,6 +27,7 @@ fn view(draft: &PromptDraft) -> HomeView<'_> {
         location: "/tmp/opencode/packages/tui:main".into(),
         directory: "/tmp/opencode/packages/tui".into(),
         location_hovered: false,
+        shell_mode: false,
         version: "test".into(),
         metadata: crate::components::composer::render::MetadataLine::default(),
         plugin_hints: Vec::new(),

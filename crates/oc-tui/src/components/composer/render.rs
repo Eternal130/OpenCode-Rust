@@ -85,6 +85,11 @@ pub struct FooterHints {
     /// TUI-12 — the live segment's hover lift (`liveHovered` → the
     /// counts paint `text.base` instead of muted).
     pub live_hovered: bool,
+    /// TUI-14 — SHELL MODE (`!` at caret 0): the whole hint pack
+    /// (usage/live/plugin/agents/commands) drops for the single
+    /// `esc exit shell mode` hint (footer.tsx:107-112 — the shell
+    /// Match replaces every other footer segment).
+    pub shell: bool,
     /// #33 — the location label's hover lift
     /// (`useWorkingDirectoryActions.hovered`: `text.base` under the
     /// pointer, `text.muted` at rest, prompt/index.tsx:1927).
@@ -714,6 +719,10 @@ pub(crate) struct FooterPlan {
     /// TUI-12 — the live segment's x + joined label
     /// (`{shortcut}{counts}`) — `None` when no counts painted.
     pub live: Option<(usize, String)>,
+    /// TUI-14 — the shell-mode hint's x + label after `esc `
+    /// (`exit shell mode` at ≥ 44 cols, `shell` below,
+    /// footer.tsx:107-112) — `None` outside shell mode.
+    pub shell_hint: Option<(usize, String)>,
 }
 
 /// Resolve the footer row's plan at `width` (see [`FooterPlan`]).
@@ -727,13 +736,16 @@ pub(crate) fn footer_plan(view: &PromptView, width: usize) -> FooterPlan {
     // `(terminal-8) - min(28, (terminal-8)/2)` — else the commands
     // hint drops (usage alone), else nothing. Without usage the hints
     // gate at the raw terminal width ≥ 44 (footer.tsx:56).
-    let hints_shown = if usage_width > 0 {
-        let budget_width = view.terminal_width.saturating_sub(8);
-        let available = budget_width.saturating_sub(28.min(budget_width / 2));
-        display_width(&format!("{usage} · {command_hint}")) <= available
-    } else {
-        view.terminal_width >= 44
-    };
+    // TUI-14: shell mode replaces the WHOLE hint pack (footer.tsx:
+    // 107-112 — the shell Match is the only content).
+    let hints_shown = !view.footer.shell
+        && if usage_width > 0 {
+            let budget_width = view.terminal_width.saturating_sub(8);
+            let available = budget_width.saturating_sub(28.min(budget_width / 2));
+            display_width(&format!("{usage} · {command_hint}")) <= available
+        } else {
+            view.terminal_width >= 44
+        };
     let command_width = display_width(&command_hint);
     let block_width = if usage_width > 0 {
         usage_width + 2 + command_width
@@ -749,7 +761,13 @@ pub(crate) fn footer_plan(view: &PromptView, width: usize) -> FooterPlan {
     let live_shortcut_width = display_width(&view.footer.live_shortcut);
     let live_counts_width = display_width(&view.footer.live);
     let live_total = live_shortcut_width + live_counts_width;
-    let right_block = if hints_shown {
+    // TUI-14 — the shell-mode hint (`esc exit shell mode` /
+    // `esc shell` below 44): right-aligned, the only hint content.
+    let shell_label = if view.terminal_width < 44 { "shell" } else { "exit shell mode" };
+    let shell_width = display_width(&format!("esc {shell_label}"));
+    let right_block = if view.footer.shell {
+        shell_width
+    } else if hints_shown {
         block_width
             + if plugin_width > 0 { plugin_width + 2 } else { 0 }
             + if live_total > 0 { live_total + 2 } else { 0 }
@@ -803,7 +821,7 @@ pub(crate) fn footer_plan(view: &PromptView, width: usize) -> FooterPlan {
             let budget = width.saturating_sub(x);
             (x, truncate_width(&plugin_text, budget))
         }),
-        live: (live_total > 0).then(|| {
+        live: (live_total > 0 && !view.footer.shell).then(|| {
             let x = width.saturating_sub(right_block).saturating_sub(if plugin_width > 0 {
                 plugin_width + 2
             } else {
@@ -812,6 +830,10 @@ pub(crate) fn footer_plan(view: &PromptView, width: usize) -> FooterPlan {
             let label = format!("{}{}", view.footer.live_shortcut, view.footer.live);
             (x, label)
         }),
+        shell_hint: view
+            .footer
+            .shell
+            .then(|| (width.saturating_sub(shell_width), shell_label.to_owned())),
     }
 }
 

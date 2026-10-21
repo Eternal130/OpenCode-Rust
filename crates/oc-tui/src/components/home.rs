@@ -113,6 +113,9 @@ pub struct HomeView<'a> {
     pub directory: String,
     /// The location label's hover state (#33 — the render input).
     pub location_hovered: bool,
+    /// TUI-14 — the composer's shell mode (the `!` prefix on home;
+    /// swaps the placeholder pool + the footer hint).
+    pub shell_mode: bool,
     /// The app version (`home.footer`'s right-aligned label).
     pub version: String,
     /// The composer metadata row (#5): the staged agent · model line
@@ -352,11 +355,16 @@ pub(crate) fn paste(target: &mut Frame, region: &Frame, x: usize, y: usize) {
 pub fn render_home(store: &Store, theme: &crate::theme::ThemeStyles, size: (u16, u16)) -> Frame {
     let state = store.theme();
     let composer = store.composer(crate::app::HOME_PROMPT_KEY);
+    let shell_mode = composer.mode == crate::components::composer::ComposerMode::Shell;
     let placeholder = if composer.placeholders.is_empty() {
-        format!(
-            "Ask anything… \"{}\"",
-            PLACEHOLDERS[composer.placeholder_index % PLACEHOLDERS.len()]
-        )
+        // TUI-14 — shell mode swaps the pool AND the prefix
+        // (`Run a command…`, home.tsx:20-23 + index.tsx:1595-1600).
+        let (pool, prefix): (&[&str], &str) = if shell_mode {
+            (SHELL_PLACEHOLDERS, "Run a command")
+        } else {
+            (PLACEHOLDERS, "Ask anything")
+        };
+        format!("{prefix}… \"{}\"", pool[composer.placeholder_index % pool.len()])
     } else {
         composer.placeholder_text()
     };
@@ -384,6 +392,7 @@ pub fn render_home(store: &Store, theme: &crate::theme::ThemeStyles, size: (u16,
         location: store.footer_location(),
         directory: String::new(),
         location_hovered: store.location_hovered(),
+        shell_mode,
         version: env!("CARGO_PKG_VERSION").to_owned(),
         metadata,
         plugin_hints: store.plugin_footer_hints(),
