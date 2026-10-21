@@ -713,6 +713,52 @@ fn recents_ctrl_prompt_index() {
     assert_eq!(state.options.len(), 0, "no recents under a query");
 }
 
+/// TUI-TD12 — `/rename <title>` with an argument (index.tsx:899-911):
+/// a non-empty argument renames DIRECTLY (no dialog); no argument
+/// opens the rename dialog.
+#[test]
+fn rename_title() {
+    use oc_tui::components::command_palette::{Dispatch, StoreDispatcher};
+
+    let store = Store::new(Runtime::new());
+    store.open_tab("s1", None);
+    store.select_tab("s1");
+    let mut dispatcher = StoreDispatcher;
+
+    // No argument: the dialog (DialogSessionRename seeded with the
+    // current title).
+    assert_eq!(dispatcher.dispatch(&store, "session.rename", None), Dispatch::Handled);
+    assert!(matches!(
+        store.top_dialog().map(|entry| entry.kind),
+        Some(DialogKind::SessionRename { .. })
+    ));
+
+    // With an argument: the direct rename — no dialog, the title
+    // lands optimistically + the rename request fires (the POST's
+    // echo confirms).
+    let title_arg = "修复登录".to_owned();
+    assert_eq!(
+        dispatcher.dispatch(&store, "session.rename", Some(title_arg.as_str())),
+        Dispatch::Handled
+    );
+    assert!(store.top_dialog().is_none(), "the direct path never opens the dialog");
+    let tabs = store.tabs();
+    let tab = tabs.tabs.iter().find(|tab| tab.session_id == "s1").expect("the open tab");
+    assert_eq!(store.display_title(tab).as_deref(), Some("修复登录"));
+
+    // The empty-string argument is the GENERATE arm (v2: `title
+    // ? session.update : title.generate`) — the request fires with
+    // the empty title, never the dialog.
+    let requests = store.take_rename_requests();
+    assert_eq!(requests, vec![("s1".to_owned(), "修复登录".to_owned())]);
+    assert_eq!(dispatcher.dispatch(&store, "session.rename", Some("")), Dispatch::Handled);
+    assert!(store.top_dialog().is_none(), "the generate arm is not the dialog either");
+    assert_eq!(
+        store.take_rename_requests(),
+        vec![("s1".to_owned(), String::new())]
+    );
+}
+
 /// TUI-10 (the diff half): a working-tree image file renders the
 /// inline `DiffViewerImage` — the "Working tree preview" label, the
 /// decoded `WxH` size row, the blocks pixels — and the mount records

@@ -1440,6 +1440,10 @@ pub struct Store {
     /// doc `directory-recents`, prompt/directory-recents.ts): the
     /// `/cd` completion's recent rows + their ctrl+d deletes.
     directory_recents: std::cell::RefCell<autocomplete::DirectoryRecents>,
+    /// TUI-TD12 — the staged `session.update {title}` requests (the
+    /// run loop drains them into POSTs; `""` is the title-GENERATE
+    /// arm, index.tsx:902-911).
+    rename_outbox: std::cell::RefCell<Vec<(String, String)>>,
     /// NEW-S1a: the live caret's screen cell for the TERMINAL cursor
     /// (`surface.set_cursor` at the draw seam — v2's caret is the
     /// hardware cursor, never a cell-painted block). Set during the
@@ -3112,6 +3116,7 @@ impl Store {
             scroll_anchors: std::cell::RefCell::new(std::collections::HashMap::new()),
             pending_scroll_restore: std::cell::RefCell::new(std::collections::HashSet::new()),
             directory_recents: std::cell::RefCell::new(autocomplete::DirectoryRecents::default()),
+            rename_outbox: std::cell::RefCell::new(Vec::new()),
             caret_cell: Cell::new(None),
             connection_since: Cell::new(0),
             startup_state: RefCell::new(StartupLoadingState::default()),
@@ -3464,6 +3469,26 @@ impl Store {
     #[must_use]
     pub fn dialogs(&self) -> Vec<DialogEntry> {
         self.dialogs.get()
+    }
+
+    /// TUI-TD12 — `/rename <title>`'s direct path (index.tsx:899-911):
+    /// a NON-empty title optimistically patches the open tab and
+    /// stages the `session.update` request; the EMPTY string is the
+    /// title-GENERATE arm (the same POST with `title: ""`). The run
+    /// loop drains [`Self::take_rename_requests`] into the POSTs (the
+    /// `session.renamed` echo confirms).
+    pub fn request_session_rename(&self, session_id: &str, title: &str) {
+        if !title.is_empty() {
+            self.open_tab(session_id, Some(title.to_owned()));
+        }
+        self.rename_outbox
+            .borrow_mut()
+            .push((session_id.to_owned(), title.to_owned()));
+    }
+
+    /// Drain the staged rename requests (the run loop's POST pass).
+    pub fn take_rename_requests(&self) -> Vec<(String, String)> {
+        std::mem::take(&mut *self.rename_outbox.borrow_mut())
     }
 
     /// Where key input goes: the top dialog when one is open, else the
