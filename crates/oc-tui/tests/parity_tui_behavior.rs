@@ -759,6 +759,74 @@ fn rename_title() {
     );
 }
 
+/// TUI-TD13 — `session.copy` / `/copy` (index.tsx:1180-1200): the
+/// whole transcript as markdown to the clipboard ("## User"/"##
+/// Assistant" sections joined by `---`) + the exact v2 toasts.
+#[test]
+fn session_copy() {
+    use oc_tui::components::command_palette::{
+        copy_session_transcript, session_transcript, Dispatch, StoreDispatcher,
+    };
+    use oc_tui::components::message::model::{Message, Part, PartTime, ToolState, ToolStatus};
+    use oc_tui::data::Ingest;
+
+    let store = Store::new(Runtime::new());
+    store.ingest_all([Ingest::MessagesSnapshot {
+        session_id: "s1".to_owned(),
+        messages: vec![
+            Message::User {
+                id: "u1".to_owned(),
+                text: "fix the login bug".to_owned(),
+                created: 1,
+                files: Vec::new(),
+            },
+            Message::Assistant {
+                id: "a1".to_owned(),
+                agent: "build".to_owned(),
+                model: "p/m".to_owned(),
+                parts: vec![
+                    Part::Reasoning { text: "hmm".to_owned(), time: PartTime::default() },
+                    Part::Text { text: "done".to_owned(), time: PartTime::default() },
+                ],
+                finish: Some("stop".to_owned()),
+                error: None,
+                time: PartTime::default(),
+                tokens: Some(0),
+                usage_total: Some(0),
+            },
+        ],
+    }]);
+    store.select_tab("s1");
+
+    // The formatter: the markdown sections + header (thinking rides —
+    // v2's /copy passes `true`).
+    let markdown = session_transcript(&store, "s1");
+    assert!(markdown.contains("## User\n\nfix the login bug"), "{markdown}");
+    assert!(markdown.contains("## Assistant"), "{markdown}");
+    assert!(markdown.contains("_Thinking:_\n\nhmm"), "the thinking arm");
+    assert!(markdown.contains("done"));
+    assert!(markdown.contains("**Session ID:** s1"));
+    assert!(markdown.contains("---"), "sections join");
+
+    // Dispatch copies + toasts (index.tsx:1186-1199's exact copy).
+    let mut dispatcher = StoreDispatcher;
+    assert_eq!(dispatcher.dispatch(&store, "session.copy", None), Dispatch::Handled);
+    let toasts = store.toasts();
+    let toast = toasts.current().expect("the toast");
+    assert_eq!(toast.message, "Session transcript copied to clipboard!");
+    assert_eq!(toast.variant, "success");
+    // Home route: no session — the miss toast (v2's catch arm).
+    let store2 = Store::new(Runtime::new());
+    let _ = dispatcher.dispatch(&store2, "session.copy", None);
+    assert_eq!(copy_session_transcript(&store2, None).unwrap_err(), "Failed to copy session transcript");
+
+    // The `/copy` slash row exists (slash: {name: "copy"}).
+    assert_eq!(
+        oc_tui::components::composer::SlashRegistry::command_for("/copy"),
+        Some("session.copy")
+    );
+}
+
 /// TUI-10 (the diff half): a working-tree image file renders the
 /// inline `DiffViewerImage` — the "Working tree preview" label, the
 /// decoded `WxH` size row, the blocks pixels — and the mount records
