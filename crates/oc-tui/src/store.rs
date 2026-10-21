@@ -1428,6 +1428,13 @@ pub struct Store {
     /// `SessionLocationMissing` recovery screen (routes/session/
     /// index.tsx:1484-1496).
     location_error: std::cell::RefCell<Option<String>>,
+    /// TUI-TD06 — the per-session saved scroll anchors
+    /// (`sessionTabs.scrollAnchor`, index.tsx:518-547's
+    /// `saveScrollAnchor`).
+    scroll_anchors: std::cell::RefCell<std::collections::HashMap<String, ScrollAnchor>>,
+    /// TUI-TD06 — the sessions whose next render resolves a saved
+    /// anchor (v2's afterLayout restore, index.tsx:548-595).
+    pending_scroll_restore: std::cell::RefCell<std::collections::HashSet<String>>,
     /// NEW-S1a: the live caret's screen cell for the TERMINAL cursor
     /// (`surface.set_cursor` at the draw seam — v2's caret is the
     /// hardware cursor, never a cell-painted block). Set during the
@@ -2621,6 +2628,18 @@ pub struct MessagePosition {
     pub y: usize,
 }
 
+/// TUI-TD06 — one saved scroll anchor (`sessionTabs.scrollAnchor`:
+/// `{target, screenY}`, index.tsx:538-547): the message whose row
+/// straddled the viewport top when the session was left, plus its
+/// screen offset (≤ 1; negative when the row's head sat above the
+/// top edge). The restore re-seats the viewport so the SAME message
+/// lands at the SAME screen row, whatever was inserted above.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScrollAnchor {
+    pub message_id: String,
+    pub screen_y: i64,
+}
+
 /// TUI-TD02 — the queued two-phase navigation intent (v2's
 /// `ensureAllRows(continuation)` — mount everything, then walk).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3085,6 +3104,8 @@ impl Store {
             )),
             footer_location: std::cell::RefCell::new(String::new()),
             location_error: std::cell::RefCell::new(None),
+            scroll_anchors: std::cell::RefCell::new(std::collections::HashMap::new()),
+            pending_scroll_restore: std::cell::RefCell::new(std::collections::HashSet::new()),
             caret_cell: Cell::new(None),
             connection_since: Cell::new(0),
             startup_state: RefCell::new(StartupLoadingState::default()),
@@ -5627,6 +5648,95 @@ impl Store {
         scroll.entry(session_id.to_owned()).or_default().appended(maximum);
     }
 
+    // -- TUI-TD06: content-anchored scroll restore -------------------
+    // (index.tsx:518-595 + anchors.ts:37-50's containsAnchor) --------
+
+    /// `saveScrollAnchor` (index.tsx:518-547): while AWAY from the
+    /// bottom, record the CONTENT anchor straddling the viewport top
+    /// — the LAST mounted message with `screenY <= 1` (the inset a
+    /// group/assistant row gets; user rows 0), i.e. the greatest
+    /// content-y at-or-above the top edge, with its (possibly
+    /// negative) screen offset. Sticky clears the anchor (v2's
+    /// `!isAwayFromBottom() → setScrollAnchor(undefined)`).
+    pub fn save_scroll_anchor(&self, session_id: &str) {
+        if self.follow_state(session_id) == FollowState::Sticky {
+            self.scroll_anchors.borrow_mut().remove(session_id);
+            return;
+        }
+        let offset = self.scroll_offset(session_id);
+        let positions = self.message_positions(session_id);
+        // Positions arrive in content order; the anchor is the last
+        // one whose y ≤ offset + 1, falling back to the first (v2's
+        // `first ??= item`).
+        let anchor = positions
+            .iter()
+            .rev()
+            .find(|position| position.y <= offset + 1)
+            .or_else(|| positions.first())
+            .map(|position| ScrollAnchor {
+                message_id: position.id.clone(),
+                screen_y: i64::try_from(position.y).unwrap_or(0) - i64::try_from(offset).unwrap_or(0),
+            });
+        let mut anchors = self.scroll_anchors.borrow_mut();
+        match anchor {
+            Some(anchor) => {
+                anchors.insert(session_id.to_owned(), anchor);
+            }
+            None => {
+                anchors.remove(session_id);
+            }
+        }
+    }
+
+    /// The session's saved anchor (`sessionTabs.scrollAnchor`).
+    #[must_use]
+    pub fn scroll_anchor(&self, session_id: &str) -> Option<ScrollAnchor> {
+        self.scroll_anchors.borrow().get(session_id).cloned()
+    }
+
+    /// Stage the restore for a session re-entered with a saved anchor
+    /// (the navigate hook; the session render resolves it against the
+    /// FRESH positions, like v2's `afterLayout(restore)`).
+    fn schedule_scroll_restore(&self, session_id: &str) {
+        if self.scroll_anchors.borrow().contains_key(session_id) {
+            self.pending_scroll_restore.borrow_mut().insert(session_id.to_owned());
+        }
+    }
+
+    /// `restoreScrollPosition` (index.tsx:548-595), resolved at render
+    /// time: re-seat the viewport so the anchored message lands back
+    /// at its saved screenY — content inserted ABOVE shifts the
+    /// offset with the anchor, keeping the view on the same content.
+    /// A vanished anchor (trimmed/reverted message) is the
+    /// `!boundary` arm: `toBottom()` (sticky) + the anchor cleared.
+    pub fn resolve_scroll_restore(&self, session_id: &str) -> bool {
+        if !self.pending_scroll_restore.borrow_mut().remove(session_id) {
+            return false;
+        }
+        let Some(anchor) = self.scroll_anchor(session_id) else {
+            return false;
+        };
+        let positions = self.message_positions(session_id);
+        let Some(position) = positions.iter().find(|position| position.id == anchor.message_id)
+        else {
+            // The `!boundary` arm: bottom + clear.
+            self.scroll_anchors.borrow_mut().remove(session_id);
+            self.clear_mount_window(session_id);
+            self.scroll.borrow_mut().insert(session_id.to_owned(), ScrollDriver::new());
+            return true;
+        };
+        let target =
+            i64::try_from(position.y).unwrap_or(0) - anchor.screen_y;
+        let metrics = self.transcript_metrics(session_id);
+        let maximum = metrics.content_height.saturating_sub(metrics.viewport);
+        let offset = target.clamp(0, i64::try_from(maximum).unwrap_or(0)).max(0) as usize;
+        self.scroll.borrow_mut().insert(
+            session_id.to_owned(),
+            ScrollDriver::from_follow(FollowState::Free { offset, maximum }),
+        );
+        true
+    }
+
     // -- TUI-TD02: message navigation (message-navigation.ts) --------
 
     /// Record the transcript's per-message row geometry (the render
@@ -7377,11 +7487,26 @@ impl Store {
             Route::Session { session_id } => Some(session_id.clone()),
             Route::Home => None,
         };
-        self.route.set(route);
-        let viewed = match &self.route.get() {
+        // TUI-TD06 — leaving a session saves its scroll anchor (v2's
+        // unmount `saveScrollAnchor(unmounting: true)`); re-entering
+        // one with a saved anchor stages the restore (resolved at the
+        // session's next render, against fresh positions).
+        let entering = match &route {
             Route::Session { session_id } => Some(session_id.clone()),
             Route::Home => None,
         };
+        if let Some(left) = &previous {
+            if entering.as_deref() != Some(left.as_str()) {
+                self.save_scroll_anchor(left);
+            }
+        }
+        if let Some(entered) = &entering {
+            if previous.as_deref() != Some(entered.as_str()) {
+                self.schedule_scroll_restore(entered);
+            }
+        }
+        self.route.set(route);
+        let viewed = entering;
         let navigated = viewed != previous;
         self.enforce_session_retention(viewed.as_deref(), navigated);
     }

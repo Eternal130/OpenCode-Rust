@@ -554,6 +554,90 @@ fn sessionlocatio_location() {
     assert!(!text.contains("Session location unavailable"));
 }
 
+/// TUI-TD06 — content-anchored scroll restore (index.tsx:518-595 +
+/// anchors.ts): leaving a session while scrolled away saves a CONTENT
+/// anchor (the message straddling the viewport top + its screenY);
+/// returning re-seats the viewport on the anchor's CURRENT position —
+/// content inserted above (background streaming) does not drift the
+/// view — and a vanished anchor falls back to the bottom.
+#[test]
+fn scroll_anchor_restore() {
+    use oc_tui::store::{MessagePosition, Route, TranscriptMetrics};
+    use oc_tui_core::scroll::FollowState;
+
+    let store = Store::new(Runtime::new());
+    store.open_tab("s1", None);
+    store.set_transcript_metrics(
+        "s1",
+        TranscriptMetrics { viewport: 10, content_height: 100, rows: 60 },
+    );
+    let positions = |m2: usize| {
+        vec![
+            MessagePosition { id: "m1".to_owned(), y: m2 - 20 },
+            MessagePosition { id: "m2".to_owned(), y: m2 },
+            MessagePosition { id: "m3".to_owned(), y: m2 + 20 },
+        ]
+    };
+    // m2 sits at content y 30; scroll to offset 32 (two rows under
+    // m2's top — away from the bottom): sticky starts at the maximum
+    // (100 − 10 = 90), 58 line-ups land at 32.
+    store.set_message_positions("s1", positions(30));
+    for _ in 0..58 {
+        store.scroll_command("s1", oc_tui_core::scroll::ScrollCommand::LineUp);
+    }
+    let offset = store.scroll_offset("s1");
+    assert_eq!(offset, 32, "the away-from-bottom fixture (offset {offset})");
+
+    // Leaving the session saves the anchor: m2 straddles the viewport
+    // top (y 30 ≤ offset+1), so the anchor is (m2, screenY = -2).
+    store.navigate(Route::Home);
+    let anchor = store.scroll_anchor("s1").expect("the anchor saved on leave");
+    assert_eq!(anchor.message_id, "m2");
+    assert_eq!(anchor.screen_y, -2);
+
+    // While away, 8 rows of content are inserted ABOVE (a background
+    // stream admits a message at the top): every row shifts down 8.
+    store.set_message_positions("s1", positions(38));
+    store.set_transcript_metrics(
+        "s1",
+        TranscriptMetrics { viewport: 10, content_height: 108, rows: 61 },
+    );
+
+    // Returning schedules the restore; the session render resolves it
+    // against the FRESH positions (the same seam the nav walk uses).
+    store.select_tab("s1");
+    store.resolve_scroll_restore("s1");
+    let follow = store.follow_state("s1");
+    let restored = match follow {
+        FollowState::Free { offset, maximum } => (offset, maximum),
+        other => panic!("expected Free, got {other:?}"),
+    };
+    assert_eq!(restored, (40, 98), "m2's top re-seated at screenY -2 (30-32 → 38-40)");
+    assert_eq!(
+        store
+            .message_positions("s1")
+            .iter()
+            .find(|position| position.id == "m2")
+            .map(|position| position.y as i64 - i64::try_from(store.scroll_offset("s1")).unwrap()),
+        Some(-2),
+        "the anchored message sits at the same screen row"
+    );
+
+    // A vanished anchor (the message trimmed) falls back to the
+    // bottom (restore's `!boundary` arm, index.tsx:565-571).
+    store.scroll_command("s1", oc_tui_core::scroll::ScrollCommand::LineUp);
+    store.navigate(Route::Home);
+    assert!(store.scroll_anchor("s1").is_some());
+    store.set_message_positions(
+        "s1",
+        vec![MessagePosition { id: "other".to_owned(), y: 5 }],
+    );
+    store.select_tab("s1");
+    store.resolve_scroll_restore("s1");
+    assert_eq!(store.follow_state("s1"), FollowState::Sticky, "missing anchor → toBottom");
+    assert!(store.scroll_anchor("s1").is_none(), "the dead anchor cleared");
+}
+
 /// TUI-10 (the diff half): a working-tree image file renders the
 /// inline `DiffViewerImage` — the "Working tree preview" label, the
 /// decoded `WxH` size row, the blocks pixels — and the mount records
