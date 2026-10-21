@@ -1156,6 +1156,87 @@ fn queuedpromptdo_jump_to_latest() {
     );
 }
 
+/// TUI-TD27 — the update banner becomes interactive and the remote
+/// "installed" shape hides (home.tsx:137-146): a LOCAL available
+/// banner's release opens the update dialog, a LOCAL installed banner
+/// exits, a REMOTE banner dismisses — and `remote + installed` never
+/// renders at all.
+#[test]
+fn remote_installed() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    use oc_tui::app::App;
+    use oc_tui::components::update::{UpdateNotice, UpdateNoticeKind};
+    use oc_tui::store::DialogKind;
+
+    let mut app = App::new((100, 30));
+
+    // LOCAL available: the banner renders (the view carries it) and
+    // the release opens the update dialog.
+    app.store.update_notify(UpdateNotice {
+        kind: UpdateNoticeKind::Available,
+        version: "9.9.9".to_owned(),
+        remote: false,
+    });
+    let _ = app.frame();
+    let (x, y, _width) = app.store.home_update_hit().expect("the banner recorded its hit rect");
+    app.mouse_event(&MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: u16::try_from(x + 1).unwrap(),
+        row: u16::try_from(y).unwrap(),
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    });
+    assert!(
+        matches!(app.store.top_dialog().map(|entry| entry.kind), Some(DialogKind::Update)),
+        "an available banner's release opens the update dialog"
+    );
+
+    // LOCAL installed: the release exits (the restart).
+    let mut app2 = App::new((100, 30));
+    app2.store.update_notify(UpdateNotice {
+        kind: UpdateNoticeKind::Installed,
+        version: "9.9.9".to_owned(),
+        remote: false,
+    });
+    let _ = app2.frame();
+    let (x, y, _width) = app2.store.home_update_hit().expect("the local installed banner shows");
+    assert!(!app2.exit_requested);
+    app2.mouse_event(&MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: u16::try_from(x + 1).unwrap(),
+        row: u16::try_from(y).unwrap(),
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    });
+    assert!(app2.exit_requested, "the installed banner's release exits (restart)");
+
+    // REMOTE available: the release dismisses (the banner hides).
+    let mut app3 = App::new((100, 30));
+    app3.store.update_notify(UpdateNotice {
+        kind: UpdateNoticeKind::Available,
+        version: "9.9.9".to_owned(),
+        remote: true,
+    });
+    let _ = app3.frame();
+    let (x, y, _width) = app3.store.home_update_hit().expect("the remote available banner shows");
+    app3.mouse_event(&MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: u16::try_from(x + 1).unwrap(),
+        row: u16::try_from(y).unwrap(),
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    });
+    assert!(app3.store.update_notice().is_none(), "the remote banner's release dismissed it");
+
+    // REMOTE installed: the banner never renders (the `!remote ||
+    // available` gate, home.tsx:137) — no hit rect.
+    let app4 = App::new((100, 30));
+    app4.store.update_notify(UpdateNotice {
+        kind: UpdateNoticeKind::Installed,
+        version: "9.9.9".to_owned(),
+        remote: true,
+    });
+    let _ = app4.frame();
+    assert!(app4.store.home_update_hit().is_none(), "remote + installed stays hidden");
+}
+
 /// TUI-10 (the diff half): a working-tree image file renders the
 /// inline `DiffViewerImage` — the "Working tree preview" label, the
 /// decoded `WxH` size row, the blocks pixels — and the mount records

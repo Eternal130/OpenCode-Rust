@@ -859,6 +859,29 @@ impl App {
                         return;
                     }
                 }
+                // TUI-TD27 — the home update banner's release
+                // (home.tsx:138-146): a REMOTE notice dismisses; a
+                // local INSTALLED notice exits (the restart); a local
+                // AVAILABLE notice opens the update dialog
+                // (`update.open("notification")`).
+                if matches!(self.store.route(), Route::Home) {
+                    if let Some((x, y, width)) = self.store.home_update_hit() {
+                        if row == y && col >= x && col < x + width {
+                            let notice = self.store.update_notice();
+                            let remote = notice.as_ref().is_some_and(|notice| notice.remote);
+                            match (remote, notice.map(|notice| notice.is_installed())) {
+                                (true, _) => self.store.update_dismiss(),
+                                (false, Some(true)) => self.request_exit(),
+                                (false, _) => {
+                                    let _ =
+                                        self.dispatcher.dispatch(&self.store, "update.check", None);
+                                }
+                            }
+                            self.store.request_redraw();
+                            return;
+                        }
+                    }
+                }
                 // The sidebar onboarding card's two pointer targets
                 // (footer.tsx:45-70): the `✕` release persists
                 // `dismissed = true` (the run loop writes the
