@@ -692,15 +692,15 @@ mod tests {
             },
             PluginQuickAction {
                 plugin_id: "omos".into(),
-                label: "/killall".into(),
-                command: "omo.killall".into(),
+                label: "/tidy".into(),
+                command: "omo.tidy".into(),
             },
         ]);
         let theme = crate::theme::ThemeState::v2_dark();
         let frame = render_home(&store, &theme.styles(), (80, 30));
         let footer = &frame.text_grid()[28];
         assert!(
-            footer.trim_start().starts_with("/preset · /killall"),
+            footer.trim_start().starts_with("/preset · /tidy"),
             "quick actions on the footer row's left: {footer:?}"
         );
         assert!(footer.contains(env!("CARGO_PKG_VERSION")), "the version stays right-aligned");
