@@ -146,6 +146,13 @@ pub static PALETTE_COMMANDS: &[PaletteCommand] = &[
         group: "Session",
         bindings: &[],
     },
+    // TUI-TD13 — `session.copy` (index.tsx:1180-1200, slash `/copy`).
+    PaletteCommand {
+        command: "session.copy",
+        title: "Copy session transcript",
+        group: "Session",
+        bindings: &[],
+    },
     PaletteCommand {
         command: "session.cd",
         title: "Change working directory",
@@ -1797,6 +1804,103 @@ pub fn copy_message_to_clipboard(store: &Store) {
     }
 }
 
+/// TUI-TD13 — `formatSessionTranscript(info, messages, thinking =
+/// true)` (index.tsx:3503-3533, the `/copy` arm): the store's live
+/// transcript as markdown — `## User` / `## Assistant` sections
+/// (reasoning included, the thinking=true arm), joined by `---`
+/// under the session header.
+#[must_use]
+pub fn session_transcript(store: &Store, session_id: &str) -> String {
+    use crate::components::message::model::{Message, Part};
+    let title = store
+        .tabs()
+        .tabs
+        .iter()
+        .find(|tab| tab.session_id == session_id)
+        .and_then(|tab| store.display_title(tab))
+        .or_else(|| store.session_title(session_id))
+        .unwrap_or_else(|| format!("Session {session_id}"));
+    let body: Vec<String> = store
+        .messages(session_id)
+        .iter()
+        .filter_map(|message| match message {
+            Message::User { text, .. } => Some(format!("## User\n\n{text}")),
+            Message::Assistant { parts, .. } => {
+                let content: Vec<String> = parts
+                    .iter()
+                    .filter_map(|part| match part {
+                        Part::Text { text, .. } => Some(text.clone()),
+                        Part::Reasoning { text, .. } => {
+                            Some(format!("_Thinking:_\n\n{text}"))
+                        }
+                        // The tool parts carry no display content in
+                        // the port's model (the row renderer owns the
+                        // projection) — the name rides as the section.
+                        Part::Tool { name, .. } => Some(format!("**Tool: {name}**")),
+                    })
+                    .collect();
+                (!content.is_empty())
+                    .then(|| format!("## Assistant\n\n{}", content.join("\n\n")))
+            }
+            _ => None,
+        })
+        .collect();
+    let (created, updated) = store
+        .session_history()
+        .iter()
+        .find(|session| session.id == session_id)
+        .map_or((0, 0), |session| {
+            (
+                session.time_created.map_or(0.0, f64::round) as u64,
+                session.time_updated.map_or(0.0, f64::round) as u64,
+            )
+        });
+    format!(
+        "# {title}\n\n**Session ID:** {session_id}\n**Created:** {created}\n**Updated:** {updated}\n\n---\n\n{}\n",
+        body.join("\n\n---\n\n")
+    )
+}
+
+/// TUI-TD13 — `session.copy`'s clipboard write (index.tsx:1183-1199):
+/// the transcript to the clipboard; `Err` carries the v2 catch-arm
+/// toast text. `None` resolves the routed session (home = the miss).
+pub fn copy_session_transcript(store: &Store, session_id: Option<&str>) -> Result<(), &'static str> {
+    let routed = match store.route() {
+        Route::Session { session_id } => Some(session_id),
+        Route::Home => None,
+    };
+    let Some(session_id) = session_id.or(routed.as_deref()) else {
+        return Err("Failed to copy session transcript");
+    };
+    let text = session_transcript(store, session_id);
+    store
+        .clipboard_write(&text)
+        .map_err(|_| "Failed to copy session transcript")
+}
+
+/// Run `session.copy` end to end (the exact v2 toasts,
+/// index.tsx:1192-1199).
+pub fn copy_transcript_to_clipboard(store: &Store) {
+    let miss = |message: &str| {
+        store.toast_show(crate::components::toast::ToastOptions {
+            message: message.to_owned(),
+            variant: "error",
+            ..crate::components::toast::ToastOptions::info("")
+        });
+    };
+    let hit = |message: &str| {
+        store.toast_show(crate::components::toast::ToastOptions {
+            message: message.to_owned(),
+            variant: "success",
+            ..crate::components::toast::ToastOptions::info("")
+        });
+    };
+    match copy_session_transcript(store, None) {
+        Ok(()) => hit("Session transcript copied to clipboard!"),
+        Err(message) => miss(message),
+    }
+}
+
 /// The theme registry listing (`dialog-theme-list.tsx`):
 /// `Object.keys(themes.all()).sort(localeCompare base)` — the store's
 /// registry (builtins + the `system` slot + discovered customs),
@@ -2111,6 +2215,13 @@ impl CommandDispatcher for StoreDispatcher {
             }
             "messages.copy" => {
                 copy_message_to_clipboard(store);
+                Dispatch::Handled
+            }
+            // TUI-TD13 — `session.copy` / `/copy` (index.tsx:1180-
+            // 1200): the transcript markdown to the clipboard + the
+            // exact v2 toasts.
+            "session.copy" => {
+                copy_transcript_to_clipboard(store);
                 Dispatch::Handled
             }
             // -- Lane FINAL: the stub family's real surfaces -----------
