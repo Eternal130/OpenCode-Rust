@@ -41,6 +41,7 @@ pub mod gitgraph;
 pub mod palette;
 pub mod sequence;
 pub mod state;
+pub mod timeline;
 
 #[cfg(test)]
 mod tests;
@@ -69,7 +70,9 @@ pub fn detect_mermaid_diagram(content: &str) -> Option<MermaidDiagramKind> {
     if gantt::is_mermaid_gantt_diagram(content) {
         return Some(MermaidDiagramKind::Gantt);
     }
-    // timeline stays on the default code-block render.
+    if timeline::is_mermaid_timeline_diagram(content) {
+        return Some(MermaidDiagramKind::Timeline);
+    }
     None
 }
 
@@ -203,7 +206,22 @@ fn prepare_diagram(
             let rows = styled_rows_trim_bottom(&grid, &|style| colors.color(style));
             Ok(RenderedDiagram { kind, rows })
         }
-        MermaidDiagramKind::Timeline => Err(MermaidError::Unsupported),
+        MermaidDiagramKind::Timeline => {
+            let diagram = timeline::parse_mermaid_timeline_diagram(source)?;
+            let grid = timeline::draw_timeline_diagram_grid(
+                &diagram,
+                &timeline::TimelineRenderOptions::default(),
+            );
+            let colors = timeline::resolve_timeline_style_colors(timeline::TimelineColorInput {
+                title: Some(palette.text),
+                section: Some(palette.secondary),
+                period: Some(palette.warning),
+                spine: Some(palette.muted),
+                event: Some(palette.primary),
+            });
+            let rows = styled_rows_trim_bottom(&grid, &|style| colors.color(style));
+            Ok(RenderedDiagram { kind, rows })
+        }
     }
 }
 
