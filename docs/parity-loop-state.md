@@ -5,25 +5,28 @@
 > **REBUILT from ledger+git 2026-10-21 09:30** (iteration 13 / wave 12 opened).
 > Ledger + git are authoritative; state.md is a cross-session breadcrumb only.
 
-## WAVE 13 (iteration 14) — OPEN (process change: parity-loop ceremony dropped)
+## WAVE 13 (iteration 14) — RESULT (ceremony-dropped mode, in flight)
 
-- **User ruling 2026-10-21**: the parity-loop process (loop driver, verifier ceremony, serial-merge
-  ritual) has problems — do NOT use it. Direct lightweight flow from now on: fix → local tests →
-  orchestrator diff review → merge → push; CI promotes `fixed` → `verified` on green runs.
-  Machine-safety disciplines kept (dev-gate.sh, process safety, worktree isolation, canonical
-  Eternal130 identity + English commits).
-- **Wave-12 lanes adopted & merged**: `lane/config6` → merge `ccf16fd` (CLI-K1/K8/N1/N2/N3 merged;
-  CLI-N4 stays `fixing` — partial, disposition pending); `lane/db3` → merge `18d9c4d`
-  (GATE-DB-FIXTURE-WAL). Post-merge gate green: cli_config 8/8 · p10_db_import 2/2 (+1 env-gated
-  skip) · real_db_null_census 2/2. Ledger evidence records both merge commits; promote to
-  `verified` when CI goes green (db3 additionally needs a green runtime-gates run to prove the
-  harvest step — dispatch after push).
-- **Wave-1 S1 burn-down dispatched (parallel, disjoint scopes)**: `lane-k01` (RUNTIME-K01 +
-  GATE-TUI-RENAME) · `lane-cred` (CRED-D6/D8/V3) · `lane-plug` (PLUG-D13/D30/M02). All from
-  main@18d9c4d.
-- Remaining S1 queue after wave-1: AI-V1/VERTEX-V2/P06 (facade.rs — serialized after lane-cred) ·
-  TUI-12/14/15/16/17 (single oc-tui lane) · TOOL-D1 + RUNTIME-FDLEAK · SURF-LATEX-MERMAID
-  (serialized after the TUI lane) · HTTP-H0 (rollout of the generated validation) ·
+- **User ruling 2026-10-21**: parity-loop process dropped (no loop driver, no verifier ceremony,
+  no serial-merge ritual). Direct flow: fix lane → orchestrator diff review → local gates → merge
+  → push; **ci green run promotes `fixed` → `verified`**. Machine-safety disciplines kept.
+  **Post-merge `chown -R 1000:1000` on merge-written files is MANDATORY** (root orchestrator
+  merges write root-owned files that break the eternal130 gate — bit us once this wave).
+- **Merged this wave** (all local-green + diff-reviewed): config6 `ccf16fd` · db3 `18d9c4d` ·
+  k01 (RUNTIME-K01 + GATE-TUI-RENAME harness probe) `d60ff57` · cred (D6/D8/V3) `8ed6546` ·
+  plug (D13/D30/M02) `9319dc0` + lint-hardening `9d5cb66` · tui7 probe fix (two-phase repaint
+  wait) · ai (VERTEX-V2/V1/P06) `6250363` · misc (TOOL-D1 + RUNTIME-FDLEAK, spawn fix actually
+  in oc-server/src/lifecycle.rs) `948c11d` · h0 (HTTP-H0 full validation rollout) `d2aebda`.
+- **ci 39572597237 on b1d8754 = 6/6 SUCCESS** → **18 rows promoted to `verified`** (incl. the
+  wave-12 six). Ledger: verified 118 · open 263 · fixed 2 (GATE-DB-FIXTURE-WAL +
+  CI-RUNTIME-GATES-RED, both gated on green runtime-gates §12 legs) · fixing 1 (CLI-N4).
+- **runtime-gates instability (NOT attributed yet)**: run 39554282298 §12.3 GREEN, run
+  39572601969 §12.3 RED (`real_db_null_census` line 171 "at least one probed session directory
+  exists" — fixture staging env, test code unchanged between the two runs) + p10 battery red on
+  `p10_openapi_semantic_equivalence` (1.3s fast-fail, needs fixture-stage log forensics).
+  Previous-run db legs (stage + §12.3) proved GATE-DB-FIXTURE-WAL's harvest fix once.
+- **In flight**: lane-tui (TUI-12/14/15/16/17) · lane-h0 merged. Remaining S1 queue:
+  SURF-LATEX-MERMAID (after lane-tui, oc-tui serialized) · CLI-N4 disposition ·
   CI-RUNTIME-AI-LIVE (needs live window — user action).
 
 ## WAVE 12 (iteration 13) — RESULT (PAUSED by user before verify/merge; no new subagents dispatched)
