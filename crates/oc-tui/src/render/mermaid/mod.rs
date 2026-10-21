@@ -36,8 +36,12 @@
 pub mod core;
 pub mod diagnostics;
 pub mod flowchart;
+pub mod gantt;
+pub mod gitgraph;
 pub mod palette;
 pub mod sequence;
+pub mod state;
+pub mod timeline;
 
 #[cfg(test)]
 mod tests;
@@ -57,8 +61,18 @@ pub fn detect_mermaid_diagram(content: &str) -> Option<MermaidDiagramKind> {
     if sequence::is_mermaid_sequence_diagram(content) {
         return Some(MermaidDiagramKind::Sequence);
     }
-    // State lands later in this lane; unsupported kinds stay on the
-    // default code-block render for now.
+    if state::is_mermaid_state_diagram(content) {
+        return Some(MermaidDiagramKind::State);
+    }
+    if gitgraph::is_mermaid_git_graph_diagram(content) {
+        return Some(MermaidDiagramKind::GitGraph);
+    }
+    if gantt::is_mermaid_gantt_diagram(content) {
+        return Some(MermaidDiagramKind::Gantt);
+    }
+    if timeline::is_mermaid_timeline_diagram(content) {
+        return Some(MermaidDiagramKind::Timeline);
+    }
     None
 }
 
@@ -138,8 +152,100 @@ fn prepare_diagram(
             let rows = styled_rows(&grid, &sequence_colors(palette));
             Ok(RenderedDiagram { kind, rows })
         }
-        _ => Err(MermaidError::Unsupported),
+        MermaidDiagramKind::State => {
+            let diagram = state::parse_mermaid_state_diagram(source)?;
+            let grid = state::draw_state_diagram_grid(
+                &diagram,
+                &state::StateDiagramRenderOptions {
+                    layout_max_width: Some(layout_max_width),
+                    ..Default::default()
+                },
+            )
+            .map_err(|_| MermaidError::Unsupported)?;
+            let colors = state_colors(palette);
+            let rows =
+                styled_rows_state(&grid, &|style| colors.color(style), palette.label_background);
+            Ok(RenderedDiagram { kind, rows })
+        }
+        MermaidDiagramKind::GitGraph => {
+            let diagram = gitgraph::parse_mermaid_git_graph_diagram(source)?;
+            let grid = gitgraph::draw_git_graph_diagram_grid(
+                &diagram,
+                &gitgraph::GitGraphRenderOptions::default(),
+            );
+            let colors = gitgraph::resolve_git_graph_style_colors(gitgraph::GitGraphColorInput {
+                primary: Some(palette.primary),
+                secondary: Some(palette.secondary),
+                muted: Some(palette.muted),
+                warning: Some(palette.warning),
+                text: Some(palette.text),
+            });
+            let rows = styled_rows_trim_bottom(&grid, &|style| colors.color(style));
+            Ok(RenderedDiagram { kind, rows })
+        }
+        MermaidDiagramKind::Gantt => {
+            let diagram = gantt::parse_mermaid_gantt_diagram(source)?;
+            let grid = gantt::draw_gantt_diagram_grid(
+                &diagram,
+                &gantt::GanttRenderOptions {
+                    layout_max_width: Some(layout_max_width),
+                    ..Default::default()
+                },
+            );
+            let colors = gantt::resolve_gantt_style_colors(gantt::GanttColorInput {
+                title: Some(palette.text),
+                axis: Some(palette.muted),
+                background: Some(palette.background),
+                section: Some(palette.secondary),
+                task: Some(palette.primary),
+                active: Some(palette.primary),
+                critical: Some(palette.warning),
+                done: Some(palette.muted),
+                milestone: None,
+            });
+            let rows = styled_rows_trim_bottom(&grid, &|style| colors.color(style));
+            Ok(RenderedDiagram { kind, rows })
+        }
+        MermaidDiagramKind::Timeline => {
+            let diagram = timeline::parse_mermaid_timeline_diagram(source)?;
+            let grid = timeline::draw_timeline_diagram_grid(
+                &diagram,
+                &timeline::TimelineRenderOptions::default(),
+            );
+            let colors = timeline::resolve_timeline_style_colors(timeline::TimelineColorInput {
+                title: Some(palette.text),
+                section: Some(palette.secondary),
+                period: Some(palette.warning),
+                spine: Some(palette.muted),
+                event: Some(palette.primary),
+            });
+            let rows = styled_rows_trim_bottom(&grid, &|style| colors.color(style));
+            Ok(RenderedDiagram { kind, rows })
+        }
     }
+}
+
+/// `renderGitGraphGridStyledText` — `toString({ trimBottom: true })`
+/// row split (git graphs trim only the bottom).
+fn styled_rows_trim_bottom<S: Copy + PartialEq>(
+    grid: &DiagramCanvas<S>,
+    colors: &dyn Fn(Option<S>) -> Option<Rgba>,
+) -> Vec<Vec<DiagramSpan>> {
+    let mut rows: Vec<Vec<DiagramSpan>> = Vec::new();
+    let mut current: Vec<DiagramSpan> = Vec::new();
+    grid.for_each_run(TextOptions { trim_top: false, trim_bottom: true }, &mut |run| match run {
+        Some(run) => current.push(DiagramSpan {
+            text: run.text,
+            fg: colors(run.style),
+            bg: None,
+            attributes: run.attributes.unwrap_or(0),
+        }),
+        None => rows.push(std::mem::take(&mut current)),
+    });
+    if !current.is_empty() || rows.is_empty() {
+        rows.push(current);
+    }
+    rows
 }
 
 /// The renderer's failure modes (upstream catches
@@ -216,4 +322,50 @@ fn sequence_colors(
         note_bg: Some(palette.note_background),
     });
     move |style| colors.color(style)
+}
+
+/// The markdown seam's state color resolution (upstream
+/// `resolveStateStyleColors` inputs) plus the `label` background.
+fn state_colors(palette: &OpenCodeDiagramPalette) -> state::style::StateStyleColors {
+    state::style::resolve_state_style_colors(state::style::StateColorInput {
+        state: Some(palette.box_text),
+        state_border: Some(palette.box_border),
+        composite: Some(palette.group),
+        composite_label: Some(palette.group_text),
+        transition: Some(palette.line),
+        label: Some(palette.text),
+        note_border: Some(palette.note_border),
+        note_text: Some(palette.note_text),
+        note_connector: Some(palette.note_connector),
+        start: Some(palette.marker),
+        end: Some(palette.marker),
+        choice: Some(palette.secondary),
+    })
+}
+
+/// `renderStateGridStyledText` — like `styled_rows`, but the state grid
+/// also paints the label-cell background (`{ label: labelBackground }`).
+fn styled_rows_state(
+    grid: &DiagramCanvas<state::types::StateCellStyle>,
+    colors: &dyn Fn(Option<state::types::StateCellStyle>) -> Option<Rgba>,
+    label_background: Rgba,
+) -> Vec<Vec<DiagramSpan>> {
+    let mut rows: Vec<Vec<DiagramSpan>> = Vec::new();
+    let mut current: Vec<DiagramSpan> = Vec::new();
+    grid.for_each_run(TextOptions { trim_top: true, trim_bottom: true }, &mut |run| match run {
+        Some(run) => current.push(DiagramSpan {
+            text: run.text,
+            fg: colors(run.style),
+            bg: match run.style {
+                Some(state::types::StateCellStyle::Label) => Some(label_background),
+                _ => None,
+            },
+            attributes: run.attributes.unwrap_or(0),
+        }),
+        None => rows.push(std::mem::take(&mut current)),
+    });
+    if !current.is_empty() || rows.is_empty() {
+        rows.push(current);
+    }
+    rows
 }
