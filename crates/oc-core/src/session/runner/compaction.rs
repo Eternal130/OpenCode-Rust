@@ -510,27 +510,30 @@ impl SessionCompaction {
         let mut rejections = 0usize;
         let mut rejected: Option<i64> = None;
         let mut as_text = false;
-        let mut sends = 0usize;
 
         loop {
             let fits = !as_text && estimate_request_of(&prepared.request) <= target;
-            let request = if fits {
-                Some(prepared.request.clone())
+            // `request === prepared.request` (compaction.ts:417-424): the
+            // request identity the free as-text resend keys on. Rust clones
+            // instead of sharing, so the identity travels as a flag on the
+            // branches that hand out an unchanged clone of the original;
+            // every flattened build is a new request, never the original.
+            let (request, is_original) = if fits {
+                (Some(prepared.request.clone()), true)
             } else {
                 match flatten_and_drop_oldest(&prepared.request, context, target) {
-                    Some(flattened) => Some(flattened),
+                    Some(flattened) => (Some(flattened), false),
                     None => {
                         if rejections > 0 {
-                            None
+                            (None, false)
                         } else if as_text {
-                            flatten_and_drop_oldest(&prepared.request, context, i64::MAX)
+                            (flatten_and_drop_oldest(&prepared.request, context, i64::MAX), false)
                         } else {
-                            Some(prepared.request.clone())
+                            (Some(prepared.request.clone()), true)
                         }
                     }
                 }
             };
-            sends += 1;
             let Some(request) = request else {
                 return Err(DeliverError::Failure(SessionError {
                     error_type: "compaction.failed".into(),
@@ -546,9 +549,10 @@ impl SessionCompaction {
                 Err(DeliverError::Failure(failure)) => return Err(DeliverError::Failure(failure)),
                 Err(DeliverError::Provider(cause)) => {
                     let too_large = is_payload_too_large(&cause);
-                    if too_large && sends == 0 {
+                    if too_large && is_original {
                         // A "payload too large" rejection is about bytes;
-                        // resend the unchanged request as text, uncounted.
+                        // resend the unchanged request as text, uncounted
+                        // (the first 413 never buys a shrink rung).
                         as_text = true;
                         continue;
                     }
