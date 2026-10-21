@@ -1,4 +1,5 @@
-//! RUNTIME recovery regressions (ledger RUNTIME-S01, RUNTIME-L01):
+//! RUNTIME recovery regressions (ledger RUNTIME-S01, RUNTIME-L01,
+//! RUNTIME-K01):
 //!
 //! - **RUNTIME-S01** — a background subagent completion wakes the idle
 //!   parent session: the production path is completion → `SubagentJob`
@@ -11,6 +12,11 @@
 //!   released/resumed, pending background records replay their
 //!   notifications, and the durable `resume_attempts` budget
 //!   terminalizes crash-looping turns.
+//! - **RUNTIME-K01** — the compaction deliver loop's free as-text resend:
+//!   the first `payload-too-large` (413) rejection of the UNCHANGED
+//!   request resends the whole conversation flattened as text against the
+//!   original target (compaction.ts:404-433), never a rung on the
+//!   70/50/35 shrink ladder.
 //!
 //! Hermetic: sandbox roots under `/tmp/opencode`, no network, no real
 //! data dirs. Cross-process cases spawn ONLY this test binary's own
@@ -22,9 +28,18 @@ use std::time::{Duration, Instant};
 use oc_core::bus::{Bus, BusOptions};
 use oc_core::database::schema::{ProjectRow, SessionRow};
 use oc_core::database::Database;
+use oc_core::hooks::HookRegistry;
+use oc_core::location::{AgentRegistry, ToolRegistryState};
 use oc_core::session::execution::{DrainFn, DrainOutcome, RunError, SessionExecution};
 use oc_core::session::inbox::{Promotable, SessionInbox};
 use oc_core::session::projector::install_projectors;
+use oc_core::session::runner::compaction::{CompactStatus, Reason, SessionCompaction, Trigger};
+use oc_core::session::runner::context::Loaded;
+use oc_core::session::runner::model_request::{AppMetadata, SessionModelRequest};
+use oc_core::session::runner::{
+    CompactMechanism, CompactOutcome, LlmClient, LlmEventStream, ModelError, ModelResolver,
+    ResolvedModel,
+};
 use oc_core::session::store::{MessagesInput, SessionStore};
 use oc_core::session::subagent_job::SubagentJob;
 use oc_core::subagent::{ChildExecution, SubagentRecovery};
@@ -783,5 +798,301 @@ fn boot_sweep_recovers_orphans() {
             .as_array()
             .is_some_and(|ids| ids.iter().any(|id| id == "ses_crash_parent")),
         "the suspended parent actually drained after the restart"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// RUNTIME-K01 — compaction 413 free as-text resend
+// ---------------------------------------------------------------------------
+
+/// The scripted LLM for RUNTIME-K01: the first stream rejects whatever it
+/// receives with a classified `payload-too-large` 413; every later stream
+/// returns a template-filling summary. Records every request it saw.
+struct TooLargeLlm {
+    requests: std::sync::Mutex<Vec<oc_ai::schema::messages::LLMRequest>>,
+}
+
+#[async_trait::async_trait]
+impl LlmClient for TooLargeLlm {
+    async fn stream(
+        &self,
+        request: oc_ai::schema::messages::LLMRequest,
+    ) -> Result<LlmEventStream, oc_ai::schema::AiError> {
+        let first = self.requests.lock().expect("llm log").is_empty();
+        self.requests.lock().expect("llm log").push(request);
+        if first {
+            let mut error = oc_ai::schema::AiError::invalid_request("413 request entity too large");
+            if let oc_ai::schema::AiErrorReason::InvalidRequest { classification, .. } =
+                &mut error.reason
+            {
+                *classification =
+                    Some(oc_ai::schema::ProviderFailureClassification::PayloadTooLarge);
+            }
+            return Err(error);
+        }
+        Ok(Box::pin(futures::stream::iter(vec![
+            Ok(oc_ai::schema::events::LLMEvent::TextDelta {
+                id: "t1".into(),
+                text: "## Objective\n- the conversation keeps going".into(),
+                provider_metadata: None,
+            }),
+            Ok(oc_ai::schema::events::LLMEvent::Finish {
+                reason: oc_ai::schema::FinishReasonDetails::new(oc_ai::schema::FinishReason::Stop),
+                usage: None,
+                provider_metadata: None,
+            }),
+        ])))
+    }
+
+    fn can_compact(
+        &self,
+        _request: &oc_ai::schema::messages::LLMRequest,
+        _mechanism: CompactMechanism,
+    ) -> bool {
+        false
+    }
+
+    async fn compact(
+        &self,
+        _request: oc_ai::schema::messages::LLMRequest,
+        _mechanism: CompactMechanism,
+    ) -> Result<CompactOutcome, oc_ai::schema::AiError> {
+        Err(oc_ai::schema::AiError::unsupported_operation(
+            "compact",
+            "TooLargeLlm never natively compacts",
+        ))
+    }
+}
+
+/// The fixed resolver over the harness-style fake model (RUNTIME-K01's
+/// compaction runs manual, so the session's own model is used as-is).
+struct K01Resolver {
+    resolved: ResolvedModel,
+}
+
+impl ModelResolver for K01Resolver {
+    fn resolve(&self, _session: &SessionRow) -> Result<ResolvedModel, ModelError> {
+        Ok(self.resolved.clone())
+    }
+
+    fn resolve_selected(
+        &self,
+        _session: &SessionRow,
+        reference: &oc_schema::model::Ref,
+    ) -> Result<ResolvedModel, ModelError> {
+        Ok(ResolvedModel { reference: reference.clone(), ..self.resolved.clone() })
+    }
+}
+
+fn k01_message_id(id: &str) -> oc_schema::id::MessageId {
+    oc_schema::id::MessageId::parse(id)
+        .unwrap_or_else(|error| oc_schema::id::MessageId(error.value))
+}
+
+fn k01_agent(id: &str) -> oc_schema::agent::Info {
+    oc_schema::agent::Info {
+        id: oc_schema::id::AgentId::parse(id),
+        name: oc_schema::id::AgentName::parse(id),
+        model: None,
+        request: oc_schema::provider::Request::default(),
+        system: Some("You are the k01 compaction agent.".to_string()),
+        description: None,
+        mode: if id == "compaction" {
+            oc_schema::agent::Mode::Subagent
+        } else {
+            oc_schema::agent::Mode::Primary
+        },
+        hidden: false,
+        color: None,
+        steps: None,
+        permissions: vec![],
+    }
+}
+
+fn k01_user(id: &str, text: String) -> oc_schema::session_message::Info {
+    oc_schema::session_message::Info::User {
+        id: k01_message_id(id),
+        metadata: None,
+        time: oc_schema::session_message::Time { created: 1 },
+        text,
+        files: None,
+        agents: None,
+        skills: None,
+    }
+}
+
+fn k01_assistant(id: &str, text: String) -> oc_schema::session_message::Info {
+    oc_schema::session_message::Info::Assistant {
+        id: k01_message_id(id),
+        metadata: None,
+        time: oc_schema::session_message::AssistantTime {
+            created: 1,
+            streamed: Some(1),
+            completed: Some(2),
+        },
+        agent: oc_schema::id::AgentId::parse("build"),
+        model: oc_schema::model::Ref {
+            provider_id: oc_schema::id::ProviderId::parse("parityfake"),
+            id: oc_schema::id::ModelId::parse("fake-model"),
+            variant: None,
+        },
+        content: vec![oc_schema::session_message::AssistantContent::Text { text, state: None }],
+        snapshot: None,
+        finish: None,
+        raw_finish: None,
+        provider_state: None,
+        cost: None,
+        tokens: None,
+        error: None,
+        retry: None,
+    }
+}
+
+/// Every text part of every message, joined — the flattened-transcript
+/// probe surface.
+fn k01_request_text(request: &oc_ai::schema::messages::LLMRequest) -> String {
+    use oc_ai::schema::messages::ContentPart;
+    request
+        .messages
+        .iter()
+        .flat_map(|message| message.content.iter())
+        .filter_map(|part| match part {
+            ContentPart::Text { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// RUNTIME-K01: the first `payload-too-large` (413) rejection of the
+/// UNCHANGED compaction request earns one free resend of the whole
+/// conversation flattened as text, still against the ORIGINAL target —
+/// not a rung on the 70/50/35 shrink ladder. v2 keys the free resend on
+/// request identity (`request === prepared.request`, compaction.ts:421),
+/// so a flattened or shrunk clone never earns a second one.
+#[tokio::test]
+async fn compaction_too_large_resend() {
+    let dir = tempfile::Builder::new()
+        .prefix(&format!("lane-k01-{}-", std::process::id()))
+        .tempdir_in("/tmp/opencode")
+        .expect("sandbox under /tmp/opencode");
+    let db = Database::open_file(dir.path().join("opencode.db")).await.expect("open db");
+    let bus = Bus::new(db.clone(), BusOptions { persist: true, ..BusOptions::deterministic() });
+    install_projectors(&bus);
+
+    let session = SessionRow::new(
+        "ses_k01_too_large",
+        "global",
+        dir.path().to_str().expect("utf-8 sandbox"),
+        "k01 too large",
+        "test",
+    )
+    .expect("session row");
+
+    // One model on a route whose transport is never reached — the
+    // scripted client below intercepts every stream.
+    let route =
+        oc_ai::test_support::echo_route(Arc::new(oc_ai::route::transport::FailingTransport {
+            message: "k01 never reaches a transport",
+        }));
+    let model = route.model("fake-model", Some("parityfake".into())).expect("route model");
+    let resolved = ResolvedModel {
+        reference: oc_schema::model::Ref {
+            provider_id: oc_schema::id::ProviderId::parse("parityfake"),
+            id: oc_schema::id::ModelId::parse("fake-model"),
+            variant: None,
+        },
+        model,
+        capabilities: oc_schema::model::Capabilities::default(),
+        cost: Vec::new(),
+        limit: oc_schema::model::ModelLimit { context: 200_000, input: None, output: 32_000 },
+        compaction: None,
+        transport: None,
+    };
+
+    let agents = Arc::new(AgentRegistry::new());
+    agents.set(k01_agent("build"));
+    agents.set(k01_agent("compaction"));
+    let requests = Arc::new(SessionModelRequest::new(
+        Arc::new(HookRegistry::new()),
+        Arc::new(ToolRegistryState::new()),
+        AppMetadata::default(),
+    ));
+    let llm = Arc::new(TooLargeLlm { requests: std::sync::Mutex::new(Vec::new()) });
+    let compaction = SessionCompaction::new(
+        db,
+        bus,
+        llm.clone() as Arc<dyn LlmClient>,
+        requests,
+        agents,
+        Arc::new(K01Resolver { resolved: resolved.clone() }),
+        Arc::new(oc_util::determinism::SequentialRng::new()),
+    );
+
+    // Three exchanges of ~2500 tokens per message. The conversation split
+    // keeps the newest exchange verbatim, so the prepared request carries
+    // the first two — enough that the 0.7 shrink rung could NOT keep both
+    // while the original target trivially does.
+    let filler = "x".repeat(10_000);
+    let context = Loaded {
+        session,
+        agent_id: oc_schema::id::AgentId::parse("build"),
+        agent: k01_agent("build"),
+        model: resolved,
+        initial: String::new(),
+        messages: vec![
+            k01_user("msg_u1", format!("first question {filler}")),
+            k01_assistant("msg_a1", format!("first answer {filler}")),
+            k01_user("msg_u2", format!("second question {filler}")),
+            k01_assistant("msg_a2", format!("second answer {filler}")),
+            k01_user("msg_u3", format!("third question {filler}")),
+            k01_assistant("msg_a3", format!("third answer {filler}")),
+        ],
+        tools: Vec::new(),
+    };
+    // `Box::pin`: the compaction future over the in-line `Loaded` context
+    // trips `clippy::large_futures` otherwise.
+    let status =
+        Box::pin(compaction.compact(Trigger { reason: Reason::Manual, context, input_id: None }))
+            .await;
+
+    let seen = llm.requests.lock().expect("llm log").clone();
+    assert_eq!(seen.len(), 2, "exactly two sends: the rejected original + the free as-text resend");
+
+    // Send 1 is the unchanged prepared request: the older exchanges as
+    // themselves (not one flattened transcript message), plus the summary
+    // prompt appended by `send`.
+    let first = k01_request_text(&seen[0]);
+    assert!(
+        first.contains("first question") && first.contains("second answer"),
+        "the rejected send must carry the unflattened older exchanges"
+    );
+    assert!(
+        seen[0].messages.len() > 2,
+        "the rejected send must be the original request, not a flattened clone"
+    );
+
+    // Send 2 is the free as-text resend: lead + the WHOLE transcript as
+    // one text message + the summary prompt. The oldest exchange survives
+    // and no exchange is announced as omitted — a shrink rung (0.7 of the
+    // first estimate) cannot keep both exchanges and would drop it.
+    assert_eq!(
+        seen[1].messages.len(),
+        2,
+        "the free resend is the flattened transcript + the summary prompt"
+    );
+    let resend = k01_request_text(&seen[1]);
+    assert!(
+        resend.contains("first question") && resend.contains("second answer"),
+        "the free as-text resend must keep every exchange:\n{resend}"
+    );
+    assert!(
+        !resend.contains("omitted]"),
+        "the free as-text resend dropped exchanges (the shrink ladder ran instead):\n{resend}"
+    );
+
+    assert!(
+        matches!(status, CompactStatus::Completed),
+        "compaction must complete after the free resend: {status:?}"
     );
 }
