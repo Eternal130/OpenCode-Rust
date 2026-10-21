@@ -11,18 +11,18 @@
   **0-ahead of main**; `git status --short` on main = clean; `.worktrees/` empty → **no orphan lane, nothing to
   adopt, nothing to remove**. Ledger rebuilt from `parity-ledger.py summary` (406 rows) — state.md is consistent
   with git, no discrepancy found.
-- **CI verdicts observed at open**: `ci` **39525333640** (head 137c817) = **SUCCESS 6/6** (fmt+clippy, guards,
+- **CI verdicts observed at open**: `ci` **39525333640** (head 2bd2d3e) = **SUCCESS 6/6** (fmt+clippy, guards,
   build+archive, frame-budget, nextest, nextest-pty) → main is green; `runtime-gates` **39525125599** (head
-  2b5e82c) still **in_progress** at open (macos leg ✅, stage v2-db ✅, needs-runtime AI ✅, needs-runtime TUI ❌,
+  b72ac8b) still **in_progress** at open (macos leg ✅, stage v2-db ✅, needs-runtime AI ✅, needs-runtime TUI ❌,
   §12.3 ❌, p10 battery still running). Read its final verdict at the next iteration open.
 - **Blocking S0/S1 = 27** (all S1, no S0 open). Wave 12 units:
   1. **FIX lane `lane-config6`** · branch `lane/config6` · worktree `/opt/opencode-rust/.worktrees/lane-config6`
-     (from `main@137c817`, chown 1000:1000) — CONFIG cluster, **6 packaged rows**: `CLI-K1` (serve --hostname,
+     (from `main@2bd2d3e`, chown 1000:1000) — CONFIG cluster, **6 packaged rows**: `CLI-K1` (serve --hostname,
      on the §12.2 p10-battery critical path), `CLI-K8`, `CLI-N1`, `CLI-N2`, `CLI-N3`, `CLI-N4`.
      All six share the regression file `crates/oc-cli/tests/cli_config.rs` → they must land in ONE lane (1 writer
      per cluster). Ledger rows set `fixing`, owner=lane-config6 (ledger commit below).
   2. **FIX lane `lane-db3`** · branch `lane/db3` · worktree `/opt/opencode-rust/.worktrees/lane-db3`
-     (from `main@137c817`, chown 1000:1000) — DB cluster, **1 row**: `GATE-DB-FIXTURE-WAL` (the §12.2 p10-battery
+     (from `main@2bd2d3e`, chown 1000:1000) — DB cluster, **1 row**: `GATE-DB-FIXTURE-WAL` (the §12.2 p10-battery
      + §12.3 real-v2-import blocker: the CI harvest copies only the main db file and drops the SQLite `-wal`/`-shm`
      sidecars → 4096-byte 0-table shell fixture). Write scope: `.github/workflows/runtime-gates.yml`,
      `tools/parity/tests/p10_db_import.rs`, `crates/oc-server/tests/real_db_null_census.rs`.
@@ -41,8 +41,8 @@
 ### Wave 12 result (iteration 13, paused by user request after the fix lanes returned)
 
 - **Unit 1 — lane-config6 (fixer own/glm-5.3, ses_ea3e51d2dffe7lxPi7dvsjT1om)**: 6/6 rows committed, tree clean,
-  one commit per row (CLI-K1 aefc381 · CLI-N1 b3ed8e7 · CLI-N2 0356d33 · CLI-N3 57a8e6c · CLI-N4 2d83ff9 ·
-  CLI-K8 9c23f25), evidence complete per ID (/tmp/opencode/parity-evidence/<ID>/: repro.sh + red.log + green.log +
+  one commit per row (CLI-K1 0477aca · CLI-N1 e65bdd7 · CLI-N2 f3a0273 · CLI-N3 fa3d5d9 · CLI-N4 32f15ca ·
+  CLI-K8 a99a751), evidence complete per ID (/tmp/opencode/parity-evidence/<ID>/: repro.sh + red.log + green.log +
   green-test.log). Orchestrator §2F check PASSED: commits carry ledger IDs; production call sites spot-checked
   (resolve_hostname boot.rs:451→serve.rs:73,81 · server_process_env.rs declared lib.rs:23 · heal_prompt_state_files
   storage.rs:331 wired at :458 · OPENCODE_PRINT_LOGS standalone.rs:112 · report_error run/mod.rs:356 ·
@@ -51,7 +51,7 @@
   GIT_BASH_PATH, SIMULATE) + oc-core engine seam gap → row KEPT `fixing` (--keep-status evidence recorded).
   Ledger: CLI-K1/N1/N2/N3/K8 → **fixed** (awaiting independent verification).
 - **Unit 2 — lane-db3 (fixer own/glm-5.3, ses_ea3e51d2bffePeV6jK7P8Vco5a)**: GATE-DB-FIXTURE-WAL fixed in 1 commit
-  (630b187): harvest ships sidecars + checkpoints the STAGED copy + validates migration≥1 & session_v2≥1 twice
+  (6cecd1e): harvest ships sidecars + checkpoints the STAGED copy + validates migration≥1 & session_v2≥1 twice
   (fails loudly instead of uploading a shell); upload glob `v2-library.db*`; both consumers copy sidecars next to the
   sandbox main; 2 hermetic pins; real-fixture end-to-end green (48 migrations, journal 0 re-runs). Ledger → **fixed**.
   Residual (fixer-stated): the harvest step itself is only provable on a real runner → dispatch `runtime-gates`
@@ -63,8 +63,8 @@
   GATE-TUI-RENAME). Cheapest next S1s identified: **RUNTIME-K01** (one-flag fix) and **GATE-TUI-RENAME**
   (rescoped to a HARNESS PROBE repair: v2's rename dialog prefills currentTitle with no select-all —
   the artifact shows the REFERENCE TUI itself submitted the concatenation; product contract verified v2-faithful).
-- **CI verdicts recorded**: `ci` **39525333640** (137c817) = **SUCCESS 6/6** (main green at open).
-  `runtime-gates` **39525125599** (2b5e82c) = **failure** — macos ✅ · build+archive ✅ · stage v2-db ✅ ·
+- **CI verdicts recorded**: `ci` **39525333640** (2bd2d3e) = **SUCCESS 6/6** (main green at open).
+  `runtime-gates` **39525125599** (b72ac8b) = **failure** — macos ✅ · build+archive ✅ · stage v2-db ✅ ·
   needs-runtime AI ✅ · needs-runtime TUI ❌ (the 6 S2 rows needing the live window) · p10 battery ❌
   (GATE-TUI-RENAME + CLI-K1 + GATE-DB-FIXTURE-WAL — all three now have fixes on lanes awaiting verify/merge) ·
   §12.3 ❌ (fixture WAL) · summary ❌ (derived). CI-RUNTIME-GATES-RED stays `fixed` (contract = all §12 legs green).
@@ -86,8 +86,8 @@
   (2) adjudication batch #4 (oracle, zero code); (3) ledger promotions on the green CI runs that
   landed during iteration 11; (4) one new ledger row from the CI artifact itself.
 - **Fix lane**: `lane-db2` · branch `lane/db2` · worktree `/opt/opencode-rust/.worktrees/lane-db2`
-  (from `main@9232f94`, chown 1000:1000) · ledger rows `GATE-DB-NULLROWS`, `GATE-DB-STABLE`
-  claimed `fixing`, owner=lane-db2 (ledger commit `40bb12a`).
+  (from `main@7036d96`, chown 1000:1000) · ledger rows `GATE-DB-NULLROWS`, `GATE-DB-STABLE`
+  claimed `fixing`, owner=lane-db2 (ledger commit `5024009`).
   Root cause found: **harness-side, not product** — the reference resolves its data root as
   `XDG_DATA_HOME/opencode` (`/opt/opencode-ref/packages/util/src/global-roots.ts`) while the port
   resolves `XDG_DATA_HOME/opencode-rust` (`crates/oc-util/src/global_roots.rs:29`, `APP_NAME`),
@@ -96,16 +96,16 @@
   Fix: `p10_common::share_data_home` aliases the port's data root onto v2's with a symlink
   (both channel-scheme resolutions land on the same physical file) + revival of dead fixture
   directories (guarded to `/tmp/opencode/`) + removal of the two now-green known-red registrations.
-- **Result**: fixer `365feb8` → independent verifier (`own/glm-5.3-flash ses_ea4134d3effe5DvPu5UoZ2gEqX`)
+- **Result**: fixer `f9d83b3` → independent verifier (`own/glm-5.3-flash ses_ea4134d3effe5DvPu5UoZ2gEqX`)
   **CLEAR TO MERGE, 0 blocking defects** (per-hunk no-weakening audit; the two recalibrated census
   assertions are exact-equality no-drop pins against an independent SQL count, verified live) →
-  **merged `84ab758`** → ledger `GATE-DB-NULLROWS` + `GATE-DB-STABLE` = **verified** (merge commit recorded).
+  **merged `315ff89`** → ledger `GATE-DB-NULLROWS` + `GATE-DB-STABLE` = **verified** (merge commit recorded).
   Post-merge gate: fmt rc=0 · clippy(parity,oc-server) rc=0 (fresh `Checking` lines) ·
-  `cargo check --workspace --locked` rc=0. Pushed `9232f94..2b5e82c`.
+  `cargo check --workspace --locked` rc=0. Pushed `7036d96..b72ac8b`.
   Honest defect recorded: `GATE-DB-STABLE/junit/` is empty (the structured artifact exists only under
   GATE-DB-NULLROWS/junit/); both repro scripts run the identical nextest invocation and the verifier
   re-ran both independently (2/2 green).
-- **CI dispatched for the merge head `2b5e82c`**: `ci` run **39525091316** (push) · `runtime-gates` run
+- **CI dispatched for the merge head `b72ac8b`**: `ci` run **39525091316** (push) · `runtime-gates` run
   **39525125599** (workflow_dispatch). Async, non-blocking — record their verdicts next session.
 - **Ledger ownership**: the ORCHESTRATOR is the only writer of `docs/parity-ledger.jsonl` this wave
   (the lane did not touch it — verified in the lane diff).
@@ -119,7 +119,7 @@
   lane-config6 (5 rows fixed + CLI-N4 partial) + lane-db3 (GATE-DB-FIXTURE-WAL fixed) committed & clean,
   adjudication #5 done (10 keep-open scopes, 0 closures), 3 new rows. Verification + merge deferred to the
   next session. **blocking S0/S1 = 22 open/fixing + 7 fixed-awaiting-verify (CI-RUNTIME-GATES-RED + 6 wave-12)**.
-- **baseline**: main @ ledger/state commit on top of `137c817`; lanes: lane/config6 (6 commits), lane/db3 (1 commit)
+- **baseline**: main @ ledger/state commit on top of `2bd2d3e`; lanes: lane/config6 (6 commits), lane/db3 (1 commit)
 - **batch**: 3 (wave 12) — DB, CONFIG + cross-cluster adjudication
 - **iteration**: 13 (driver = tools/loop-driver.sh; session paused mid-wave by user instruction)
 
@@ -135,7 +135,7 @@
   SURF-PLATFORM (runtime-gates 39519736380, macos-latest leg green).
 - **1 row is still `fixed`** (needs a green run id): CI-RUNTIME-GATES-RED — its contract is "every runtime-gates §12 leg
   green" and the p10 battery / §12.3 / gates-summary legs are still red.
-- **2 rows closed this iteration**: GATE-DB-NULLROWS + GATE-DB-STABLE → `verified` (merge `84ab758`, independent
+- **2 rows closed this iteration**: GATE-DB-NULLROWS + GATE-DB-STABLE → `verified` (merge `315ff89`, independent
   verifier CLEAR TO MERGE).
 - **accepted this iteration**: SURF-BROWSER (ADR-0015), CLI-K2 (ADR-0016) — both with a written ADR, zero code.
 - `validate` = 0 errors; `validate --paths` = 0 errors.
@@ -152,13 +152,13 @@
    | p10 battery (§12.2) | **real tooling bug** | `actions/upload-artifact@v4` drops the exec bit; `tools/parity/src/rust_server.rs:147 build_binary()` only checked `is_file()` → handed back a 0644 `target/debug/oc-server`, skipped `cargo build` → `spawn ...: Permission denied (os error 13)`. |
    | §12.3 runtime gates | **same tooling bug** | `real_db_null_census` spawns oc-server the same way → EACCES, not the real DB gap. |
    | gates summary | **derived** | `fail=1` because legs 1-3 are red; the summary logic itself is correct (skip ≠ pass). |
-3. **lane-cirt4** (fixer own/glm-5.3) → **merged `da22466`** (4 commits: 682b580 procutil, 8361674 exec-bit,
-   e110926 safekill, 076625a tui_diff ioctl). `runtime-gates.yml`: exec-bit restore after each of the 7 target-artifact
+3. **lane-cirt4** (fixer own/glm-5.3) → **merged `accab46`** (4 commits: 1d9f8ba procutil, 60738b2 exec-bit,
+   3ea3142 safekill, b4c31f3 tui_diff ioctl). `runtime-gates.yml`: exec-bit restore after each of the 7 target-artifact
    downloads (bins enumerated via `cargo metadata` + jq, no blanket `chmod -R`, no job turned into a skip,
    OC_GATE_STRICT untouched, known-red.json untouched). New regression test `tools/parity/tests/server_binary_exec.rs`
    (6 hermetic tests). Post-merge gate: fmt rc=0 · clippy(oc-util,parity,oc-server) rc=0 (fresh `Checking`) ·
    `cargo check --workspace` rc=0. Verifier (own/glm-5.3-flash `ses_ea4a184d4ffegXCh9LC2bUWYRt`): **CLEAR TO MERGE, 0 defects**.
-4. **lane-tui3** (TUI-35) → **merged `bba65d3`** (commit ccc11b8). The recorded symptom was **WRONG**: the TUI does
+4. **lane-tui3** (TUI-35) → **merged `d07ae72`** (commit 3ab3eb2). The recorded symptom was **WRONG**: the TUI does
    NOT boot-hang on a quiet server (instrumentation: subscribe + `Ingest::Resync` reach the loop, the store sets
    Connected at `store.rs:8862-8871`, the wordmark paints). The real defect: `crates/oc-tui/src/components/dialog.rs:190-207`
    — with a dialog open and a dirty filter, ctrl+c only CLEARED the filter and returned `Consumed` (dialog stayed open),
@@ -167,7 +167,7 @@
    torn down → **90 s harness timeout** (CI run 39501153874: `oc-tui::pty_daily::session_filter_semantics`, 2/2 tries
    @ 90.019 s, panic at `crates/oc-tui/tests/vt_harness.rs:1596`). Fix: one ctrl+c clears the text AND closes the modal
    (`ui/dialog.tsx:115-156`). Verifier (`ses_ea46c9bf0ffeKBPq4YrGw2TUeM`): CLEAR TO MERGE, 0 defects; repro 90.03 s → 0.99 s.
-5. **lane/tui4** (TUI-7) → **merged `e4c3bd4`** (commit 3c5b464). The six session-list filter semantics were **already
+5. **lane/tui4** (TUI-7) → **merged `2404c83`** (commit 03dce7c). The six session-list filter semantics were **already
    implemented** in production (`dialog_select.rs:273-286` trim/case-fold/substring/whitespace-full-set +
    `dialog_open.rs:508` parent exclusion) — the ledger's "actual" column was **stale** and is now corrected. The entry's
    red came from three defects in its own regression test's probes: the F4 presence wait was satisfied instantly by the
@@ -194,12 +194,12 @@
 
 | run id | head | workflow | verdict |
 |---|---|---|---|
-| 39501153874 | f1af96a | ci | **failure** — only `nextest (pty, serialized)` (the TUI-35 90 s wedge). Now fixed (bba65d3). |
-| 39507224067 | b054456 | ci | **failure** — only `nextest (pty, serialized)` again (session_filter_semantics = TUI-7). Now fixed (e4c3bd4). fmt+clippy ✅ build+archive ✅ nextest ✅ frame-budget ✅ guards ✅ |
-| 39507225187 | b054456 | runtime-gates (dispatch) | **failure** — `build target (macos-latest, aarch64-apple-darwin)` **GREEN** (the E0425/E0308 class is dead) · build+archive ✅ · stage v2-written db ✅ · needs-runtime (AI) ✅ · **red**: needs-runtime (TUI) [= the TUI-7 PTY battery, now fixed], p10 battery [= the DB fixture gap], §12.3 gates [= GATE-DB-NULLROWS], gates summary [derived] |
-| 39519705990 | 1b13b1f | ci (push) | **cancelled** (superseded by 39519807488) |
-| 39519736380 | 1b13b1f | runtime-gates (dispatch) | **failure** — macos leg ✅ · **stage v2-written library db ✅ (the fixture IS produced)** · needs-runtime (TUI) ✅ · needs-runtime (AI) ✅ · **red**: p10 battery (§12.2), §12.3 runtime gates, gates summary (derived) |
-| **39519807488** | **9232f94** | **ci (push)** | **SUCCESS — 6/6 jobs** (build+archive, fmt+clippy, guards, frame-budget, nextest, nextest-pty) → **TUI-7 + TUI-35 promoted to `verified`** |
+| 39501153874 | a549907 | ci | **failure** — only `nextest (pty, serialized)` (the TUI-35 90 s wedge). Now fixed (d07ae72). |
+| 39507224067 | 7ea3ecc | ci | **failure** — only `nextest (pty, serialized)` again (session_filter_semantics = TUI-7). Now fixed (2404c83). fmt+clippy ✅ build+archive ✅ nextest ✅ frame-budget ✅ guards ✅ |
+| 39507225187 | 7ea3ecc | runtime-gates (dispatch) | **failure** — `build target (macos-latest, aarch64-apple-darwin)` **GREEN** (the E0425/E0308 class is dead) · build+archive ✅ · stage v2-written db ✅ · needs-runtime (AI) ✅ · **red**: needs-runtime (TUI) [= the TUI-7 PTY battery, now fixed], p10 battery [= the DB fixture gap], §12.3 gates [= GATE-DB-NULLROWS], gates summary [derived] |
+| 39519705990 | 5a58263 | ci (push) | **cancelled** (superseded by 39519807488) |
+| 39519736380 | 5a58263 | runtime-gates (dispatch) | **failure** — macos leg ✅ · **stage v2-written library db ✅ (the fixture IS produced)** · needs-runtime (TUI) ✅ · needs-runtime (AI) ✅ · **red**: p10 battery (§12.2), §12.3 runtime gates, gates summary (derived) |
+| **39519807488** | **7036d96** | **ci (push)** | **SUCCESS — 6/6 jobs** (build+archive, fmt+clippy, guards, frame-budget, nextest, nextest-pty) → **TUI-7 + TUI-35 promoted to `verified`** |
 
 > The next session should check these two runs first: they decide whether SURF-PLATFORM / CI-RUNTIME-GATES-RED /
 > TUI-35 / TUI-7 can be promoted from `fixed` to `verified`.
@@ -228,9 +228,9 @@ the main file is a single header page. The downstream reds follow from that shel
 
 | lane | cluster | worktree | branch | owner | entries | status |
 |---|---|---|---|---|---|---|
-| `lane-db2` | DB | `.worktrees/lane-db2` (merged) | `lane/db2` | lane-db2 | GATE-DB-NULLROWS, GATE-DB-STABLE | **merged `84ab758` → verified**; worktree removable, branch kept for history |
+| `lane-db2` | DB | `.worktrees/lane-db2` (merged) | `lane/db2` | lane-db2 | GATE-DB-NULLROWS, GATE-DB-STABLE | **merged `315ff89` → verified**; worktree removable, branch kept for history |
 | `lane-config6` | CONFIG | `.worktrees/lane-config6` | `lane/config6` | lane-config6 | CLI-K1, CLI-K8, CLI-N1, CLI-N2, CLI-N3, CLI-N4 | **6 rows `fixed`, CLI-N4 partial `fixing`; PAUSED before verify/merge** (wave 12) |
-| `lane-db3` | DB | `.worktrees/lane-db3` | `lane/db3` | lane-db3 | GATE-DB-FIXTURE-WAL | **`fixed` (630b187); PAUSED before verify/merge** (wave 12) |
+| `lane-db3` | DB | `.worktrees/lane-db3` | `lane/db3` | lane-db3 | GATE-DB-FIXTURE-WAL | **`fixed` (6cecd1e); PAUSED before verify/merge** (wave 12) |
 | (oracle adjudication #4 — read-only, no lane) | TUI/SURFACES/CONFIG/CRED | — | — | — | SURF-BROWSER, CLI-K2, SURF-LATEX-MERMAID, TUI-15/16/17/12, CRED-D8 | done: 2 accepted (ADR-0015/0016), 6 kept open with fix scopes |
 
 - `.worktrees/lane-db2` — merged → removable after the merge (branch `lane/db2` kept for history).
@@ -304,10 +304,10 @@ gets an explicit runtime conclusion (ADR).
 ## Next (in priority order — resume from the PAUSED state)
 
 1. **Adopt the two paused lanes (0a recovery → §2G verifier, then §2H merge)**:
-   - verifier (own/glm-5.3-flash, NEW session, read-only) for `lane/config6` @ 9c23f25 — run each
+   - verifier (own/glm-5.3-flash, NEW session, read-only) for `lane/config6` @ a99a751 — run each
      /tmp/opencode/parity-evidence/<ID>/repro.sh, read the landed artifacts, grep the production call sites,
      audit every changed hunk for weakening (esp. the CLI-N4 partial + CLI-K8 boot-time-only consumption);
-   - verifier for `lane/db3` @ 630b187 — repro.sh, the two hermetic pins, the workflow YAML;
+   - verifier for `lane/db3` @ 6cecd1e — repro.sh, the two hermetic pins, the workflow YAML;
    - then SERIAL merges (one at a time), ledger `merge --id`, push, and dispatch `runtime-gates` to prove the
      new harvest step end-to-end on a runner (the fixer's stated residual risk).
 2. **CLI-N4 disposition**: 4 switches have no consumer subsystem (FILEWATCHER→CONFIG-C3, DISABLE_FFF,

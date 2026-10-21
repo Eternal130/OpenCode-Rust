@@ -70,7 +70,7 @@
 **Lane:** SCAN-EF2 (serialized restart of the E+F round; the prior
 SCAN-EF attempt was killed for un-harnessed TUI boots).
 **Worktree:** `.worktrees/lane-scanef2` (branch `lane/scanef2`, base =
-main `327e94e`). **Date:** 2026-10-18. **Spec:** docs/scan-spec.md v9
+main `892ab82`). **Date:** 2026-10-18. **Spec:** docs/scan-spec.md v9
 LOCKED. Product code READ-ONLY except standing-instrument extensions
 (vt_harness `resize_pty`; spec-p3 probe env knobs — both documented in
 docs/scanef2.log).
@@ -114,7 +114,7 @@ S2 fidelity/edge/note · closed/positive = verified-fixed or parity.
 
 - **Marquee 80 ms (the lane headline): VERIFIED on main post-FIXW1A**
   — `vt_temporal_marquee_shifts_one_cell_per_tick` PASS, 27 shifts,
-  gaps median **76 ms** (min 75, max 88). SA-F3 fix (038b38b) holds.
+  gaps median **76 ms** (min 75, max 88). SA-F3 fix (5a54754) holds.
 - vt_temporal all 6 PASS standalone (paired same-process runs
   self-poison — known instrument note, re-confirmed).
 - **I8 canary PASS** (`spec_e1_canary`): 250 ms stall localized to the

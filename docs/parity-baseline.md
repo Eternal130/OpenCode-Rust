@@ -11,8 +11,8 @@
 | gate identity | `eternal130` via `tools/dev-gate.sh` (systemd scope: CPUQuota=400%, MemoryMax=10G, TasksMax=512) |
 | bun (lane) | `/home/eternal130/.bun/bin/bun` v1.3.10 (staged copy of root's; `/root` is 700 so root's copy is unreachable for the gate user) |
 | ref checkout (runnable) | `/tmp/opencode/ref` (eternal130-owned, node_modules installed, self-heals from source) |
-| strict mode | `OC_GATE_STRICT=1` fail-not-skip live since B0-8 merge `557675d` (`tools/parity/src/gate.rs`) |
-| baseline commits | main `29f5e0d` (results) — p10 additionally bisected at `277a375` (pre-B0-8) with identical outcome |
+| strict mode | `OC_GATE_STRICT=1` fail-not-skip live since B0-8 merge `b28000c` (`tools/parity/src/gate.rs`) |
+| baseline commits | main `d8f2bcd` (results) — p10 additionally bisected at `2550efe` (pre-B0-8) with identical outcome |
 
 ## 2. Results
 
@@ -24,7 +24,7 @@
 | p10 battery (strict) | `OC_P10=1 OC_GATE_STRICT=1 PARITY_BUN=… cargo nextest run -p parity --locked --run-ignored only --no-fail-fast -E "test(p10_)"` | **RED: 3/6 failed** (each failed both nextest retries → deterministic) → `GATE-DB-STABLE`, `GATE-DB-NULLROWS`, `GATE-TUI-RENAME` |
 | Gate 0 | `gate0_environment` (strict) | **PASS** — `gate_ran:true`, ref_commit `e7a34f09…`, reference_boot ok, rust_boot ok (B0-8 evidence: `docs/parity-b0-gate0.md`) |
 
-### 2.1 p10 failure detail (deterministic at `29f5e0d` AND `277a375`)
+### 2.1 p10 failure detail (deterministic at `d8f2bcd` AND `2550efe`)
 
 | test | failure | ledger |
 |---|---|---|
@@ -32,7 +32,7 @@
 | `p10_db_interop_v2_written_null_rows` | three-boot NULL-heavy interop flow fails (~15s) | `GATE-DB-NULLROWS` |
 | `p10_ts_tui_against_rust_server` | rename exact-title poll times out; last row title `The outside file says p10-secret.p10 renamed from tui` (auto-title merge suspected; `p10_cross_tui.rs:244`) | `GATE-TUI-RENAME` |
 
-**Bisect note**: the identical 3-failure set reproduces at `277a375` (pre-B0-8, same eternal130-bun environment) — **not a B0-8 regression**. The historical "6/6" (`tools/parity/goldens/p10/VERIFICATION.md`) predates the bootstrap and was recorded under an unknown execution context. First triage step for the owning clusters: separate harness/environment causes from product causes (C8 DB / WIRE session semantics). Do not mark these `accepted` without an ADR.
+**Bisect note**: the identical 3-failure set reproduces at `2550efe` (pre-B0-8, same eternal130-bun environment) — **not a B0-8 regression**. The historical "6/6" (`tools/parity/goldens/p10/VERIFICATION.md`) predates the bootstrap and was recorded under an unknown execution context. First triage step for the owning clusters: separate harness/environment causes from product causes (C8 DB / WIRE session semantics). Do not mark these `accepted` without an ADR.
 
 ## 3. Five minimal differential gates (§8.3) — build state
 
@@ -68,7 +68,7 @@ entries below). Classify a strict-run log with
 
 ## 5. Batch 0 progress against this baseline
 
-- B0-1 ledger import: **done** (`9fafd41`, 367 imported rows + 5 known-red = 372; `validate --paths` errors=0)
-- B0-8 Gate 0 environment: **done** (`557675d`)
+- B0-1 ledger import: **done** (`7d8f9b7`, 367 imported rows + 5 known-red = 372; `validate --paths` errors=0)
+- B0-8 Gate 0 environment: **done** (`b28000c`)
 - B0-2 this document + gate skeletons: in progress
 - B0-4 guards / B0-5 ADRs / B0-7 test debt / B0-9 live window: pending (B0-9 needs user decision)

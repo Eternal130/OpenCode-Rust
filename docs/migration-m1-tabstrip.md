@@ -681,9 +681,9 @@ home path paints either composer path's frame).
 
 ## The lane's precondition was a REVERT (read this before trusting any lane's "current state")
 
-The E2 subagent surfaces (3edeb5d — picker, farewell, tool card,
+The E2 subagent surfaces (808779d — picker, farewell, tool card,
 child view, pty suite) had been ACCIDENTALLY REVERTED by lane/
-chrome's merge (6a2bd91 deleted `subagent_picker.rs`,
+chrome's merge (2581c3f deleted `subagent_picker.rs`,
 `presentation.rs`, `pty_subagent.rs` and rewound the store/keymap/
 transcript seams); M0-M5 built on the wounded tree. The lane began
 by RESTORING E2's surfaces onto the current architecture (the

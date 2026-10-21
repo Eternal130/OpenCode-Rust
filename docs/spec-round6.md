@@ -31,7 +31,7 @@ semantically (spinner-80ms in the clause + no pre-existing cadence lost).
 ## §2 Canaries FIRST (mission 2; I8 per-axis tier) — 5 legs, ALL PASS
 
 Run BEFORE any first evidence was recorded (order in the lane log: E1/E5
-runners landed commit 547efa1, before the E12/E2 evidence commit). Defects
+runners landed commit c68720d, before the E12/E2 evidence commit). Defects
 injected into throwaway copies at runtime — no product defect committed.
 
 | Leg | Injection (throwaway copy) | Method under test | Must | Result |
@@ -202,5 +202,5 @@ E1 false-positive, E3 leak, E3 control, E5 a/b/c).
   ref-runtime measurements BLOCKED (dep tree; provisioning recorded) (§3).
 - E12: corpus committed + first parity pass (9/12 divergent, 6 findings) (§3).
 - P2 verdict: **CLOSED** (§5). P3 directives issued (§6).
-- Commits: bcea06a (integration) · 547efa1 (E1/E5 canaries + E3 runner) ·
-  4d4eb0c..6c25409 (E12 corpus+pass, E2 TTI, findings).
+- Commits: 20d7012 (integration) · c68720d (E1/E5 canaries + E3 runner) ·
+  4d4eb0c..3806981 (E12 corpus+pass, E2 TTI, findings).

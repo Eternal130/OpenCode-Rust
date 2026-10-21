@@ -1,7 +1,7 @@
 # SCAN-AB — Axes A (Visual/Rendering) + B (Interaction/Input/Environment)
 
 **Lane:** SCAN-AB (first execution of docs/scan-spec.md **v9 LOCKED**).
-**Worktree:** `.worktrees/lane-scanab` (branch `lane/scanab`, base `a73e183` = main).
+**Worktree:** `.worktrees/lane-scanab` (branch `lane/scanab`, base `669f049` = main).
 **Date:** 2026-10-17/18. **Product code READ-ONLY** — artifacts: this file,
 `docs/scanab.log`, scaffolds `crates/oc-tui/tests/spec_scanab_a1.rs` +
 `tools/parity/spec-scanab/a1_cell_diff.py`, captures under `/tmp/opencode/scanab/`.
@@ -232,10 +232,10 @@ permission-denied paths should yield an error result, not an uncaught
 throw). Evidence: `ref-live2/session/our-home/.local/state/opencode-rust/tui.log:2,4`.
 
 ### Instrument repair (META — SA-F15)
-`rescan-tui` was **compile-broken on main**: 7557ae8 removed
-`parity::tui_diff` while the rescan lane's driver (3b8700c) still imports it
+`rescan-tui` was **compile-broken on main**: 9f5082e removed
+`parity::tui_diff` while the rescan lane's driver (6e01daf) still imports it
 (and `termatrix` + the vt100 dep went with it). This lane restored both
-modules verbatim from `7557ae8^` and re-added `vt100 = "0.15"` (same pin as
+modules verbatim from `9f5082e^` and re-added `vt100 = "0.15"` (same pin as
 the vt harness) — the I5-bound instrument builds and runs again. Needs
 upstreaming (product code untouched).
 

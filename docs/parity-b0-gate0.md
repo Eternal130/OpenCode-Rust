@@ -88,7 +88,7 @@ non-verifiable run; see PARITY-LOOP.md §8.3 Gate 0)
   harness 自有 child 句柄 + `signal_group_filtered`。
 - `cargo fmt -p parity -- --check`：OK。`cargo clippy -p parity --lib --tests -- -D warnings`：
   本 lane 触碰目标全部干净；唯一报错来自未触碰的 legacy bin 目标 `src/bin/rescan-tui.rs`
-  （与 main@277a375 字节一致，属既有债务，非本 lane 引入）。
+  （与 main@2550efe 字节一致，属既有债务，非本 lane 引入）。
 - 日志：`green-reference-info.log`、`green-bun-discovery-noenv.log`、
   `green-gate0-dual-end.log`、`green-default-suite.log`
 

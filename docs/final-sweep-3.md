@@ -1,22 +1,22 @@
 # GATE5 — beta.13 release gate (5th independent scan) — verdict: **GO**
 
-**Supersedes** the GATE3 copy of this document (lane/gate3 4d43b15; GATE4 never
+**Supersedes** the GATE3 copy of this document (lane/gate3 6afcf18; GATE4 never
 produced a sweep — it STOPped at Phase A.3 on the m1 event-ordering flakes that
 the DETERM merge subsequently fixed). This run gate-checked main at
-**93461a6** = the lane/final merge (36234f2: provider.connect real
+**254d7c7** = the lane/final merge (a754d13: provider.connect real
 DialogIntegration flow, 7 stub dispatches + 6 dead session commands wired, zero
 stub text). Full transcript: `docs/gate5.log`; sweep artifacts:
 `/tmp/opencode/sweep3/` (per-script report snapshots under `reports/`).
 
 **Protocol event mid-gate**: FINAL merged AFTER this gate's Phase A had run on
-the pre-merge tip e2fe6fe (A.4 had just timed out at the 45-min ceiling under
+the pre-merge tip 5f6528d (A.4 had just timed out at the 45-min ceiling under
 FINAL's own concurrent sweep load). Per protocol the worktree was re-checked
 out to main tip **before Phase B**, and — because a gate may only certify the
-tip it scanned — **Phase A was rerun in full on 93461a6**. All Phase A numbers
-below are from the FINAL tip; the superseded e2fe6fe results (also green)
+tip it scanned — **Phase A was rerun in full on 254d7c7**. All Phase A numbers
+below are from the FINAL tip; the superseded 5f6528d results (also green)
 remain in `docs/gate5.log` for provenance.
 
-## Phase A — 6/6 green on 93461a6 (STOP protocol never fired)
+## Phase A — 6/6 green on 254d7c7 (STOP protocol never fired)
 
 | step | command | result |
 |---|---|---|
@@ -122,7 +122,7 @@ signature drift; SURF-1's location-footer/MCP cells are byte-stable vs the ref.
 ## Tag-readiness
 
 **GO for v2.0.24.beta.13.** The bar — Phase A completely green on the exact
-tag-candidate tip (93461a6), the m1 DETERM fix holding 10/10-in-a-row, and a
+tag-candidate tip (254d7c7), the m1 DETERM fix holding 10/10-in-a-row, and a
 full-live corpus sweep that is net-better than sweep-2 with every mismatch
 decomposing into registered or lane-documented classes and zero unexplained
 signatures — is met. One non-blocking flag recorded (oc-client SSE test
