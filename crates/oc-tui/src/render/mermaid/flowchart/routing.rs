@@ -1,3 +1,29 @@
+// Upstream-mirror lint posture: the merman port keeps the TypeScript
+// arithmetic shape (JS Number semantics on an i64 grid, the same cast
+// sites and long single-responsibility functions), so the pedantic
+// numeric/style lints that would rewrite that shape are quieted here.
+#![allow(
+    clippy::cast_possible_wrap,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::cast_lossless,
+    clippy::doc_markdown,
+    clippy::must_use_candidate,
+    clippy::too_many_lines,
+    clippy::too_many_arguments,
+    clippy::needless_range_loop,
+    clippy::items_after_statements,
+    clippy::explicit_iter_loop,
+    clippy::for_kv_map,
+    clippy::map_unwrap_or,
+    clippy::manual_strip,
+    clippy::range_plus_one,
+    clippy::option_option,
+    clippy::implicit_hasher,
+    clippy::match_same_arms
+)]
+
 //! `flowchart/routing.ts` — edge path selection: parallel routes,
 //! fan-in/fan-out buses, back edges, obstacle avoidance, and label
 //! collision repair.
@@ -389,18 +415,11 @@ fn vertical_forward_records(
 
 fn horizontal_subgraph_exit(diagram: &FlowchartDiagram, edge: &FlowchartEdge) -> Option<usize> {
     for subgraph in diagram.subgraphs.iter().rev() {
-        if !matches!(
-            subgraph.direction,
-            Some(FlowchartDirection::Lr) | Some(FlowchartDirection::Rl)
-        ) {
+        if !matches!(subgraph.direction, Some(FlowchartDirection::Lr | FlowchartDirection::Rl)) {
             continue;
         }
-        if subgraph.node_ids.iter().any(|id| *id == edge.from)
-            && !subgraph.node_ids.iter().any(|id| *id == edge.to)
-        {
-            return Some(
-                diagram.subgraphs.iter().position(|candidate| candidate.id == subgraph.id)?,
-            );
+        if subgraph.node_ids.contains(&edge.from) && !subgraph.node_ids.contains(&edge.to) {
+            return diagram.subgraphs.iter().position(|candidate| candidate.id == subgraph.id);
         }
     }
     None
@@ -408,18 +427,11 @@ fn horizontal_subgraph_exit(diagram: &FlowchartDiagram, edge: &FlowchartEdge) ->
 
 fn horizontal_subgraph_entry(diagram: &FlowchartDiagram, edge: &FlowchartEdge) -> Option<usize> {
     for subgraph in diagram.subgraphs.iter().rev() {
-        if !matches!(
-            subgraph.direction,
-            Some(FlowchartDirection::Lr) | Some(FlowchartDirection::Rl)
-        ) {
+        if !matches!(subgraph.direction, Some(FlowchartDirection::Lr | FlowchartDirection::Rl)) {
             continue;
         }
-        if subgraph.node_ids.iter().any(|id| *id == edge.to)
-            && !subgraph.node_ids.iter().any(|id| *id == edge.from)
-        {
-            return Some(
-                diagram.subgraphs.iter().position(|candidate| candidate.id == subgraph.id)?,
-            );
+        if subgraph.node_ids.contains(&edge.to) && !subgraph.node_ids.contains(&edge.from) {
+            return diagram.subgraphs.iter().position(|candidate| candidate.id == subgraph.id);
         }
     }
     None
@@ -609,7 +621,7 @@ pub fn route_flowchart_edges(
         let grouped = grouped_label_edge(edge);
         let effective_target_width =
             if target_width.is_some() && !diagram.subgraphs.is_empty() && grouped {
-                Some(1.max(target_width.unwrap() - 5))
+                target_width.map(|width| 1.max(width - 5))
             } else {
                 target_width
             };
@@ -656,16 +668,14 @@ fn route_parallel_edges(
             continue;
         };
         if from.id == to.id {
-            let mut lane_offset = 0i64;
-            for edge_index in edges {
+            for (lane_offset, edge_index) in edges.into_iter().enumerate() {
                 routes.push(EdgeRoute {
                     edge_index,
-                    points: self_edge_path(from, lane_offset),
+                    points: self_edge_path(from, lane_offset as i64),
                     label_axis: None,
                     label_point: None,
                 });
                 handled.insert(edge_index);
-                lane_offset += 1;
             }
             continue;
         }
@@ -725,12 +735,9 @@ fn route_horizontal_fan_out(
     let mut target_owners: HashMap<String, String> = HashMap::new();
     let mut groups: HashMap<String, Vec<EdgeRecord>> = HashMap::new();
     for record in records {
-        groups
-            .entry(diagram.edges[record.edge_index].from.clone())
-            .or_default()
-            .push(record.clone());
+        groups.entry(diagram.edges[record.edge_index].from.clone()).or_default().push(*record);
     }
-    for (source_id, source_records) in &groups {
+    for (source_id, source_records) in groups {
         if source_records.len() < 2 {
             continue;
         }
@@ -750,7 +757,7 @@ fn route_horizontal_fan_out(
         for record in source_records {
             let to = diagram.edges[record.edge_index].to.clone();
             let target_owner = target_owners.get(&to).cloned();
-            target_owners.entry(to.clone()).or_insert_with(|| source_id.to_string());
+            target_owners.entry(to.clone()).or_insert_with(|| source_id.clone());
             let target = bounds.get(&to);
             if target_owner.is_none()
                 || target_owner.as_deref() == Some(source_id.as_str())
@@ -799,9 +806,9 @@ fn route_horizontal_fan_in(
 ) {
     let mut groups: HashMap<String, Vec<EdgeRecord>> = HashMap::new();
     for record in records.iter().filter(|record| !handled.contains(&record.edge_index)) {
-        groups.entry(format!("{}", record.target_key())).or_default().push(record.clone());
+        groups.entry(format!("{}", record.target_key())).or_default().push(*record);
     }
-    for (_, target_records) in groups {
+    for target_records in groups.into_values() {
         if target_records.len() < 2 {
             continue;
         }
@@ -831,9 +838,9 @@ fn route_vertical_fan_out(
 ) {
     let mut groups: HashMap<String, Vec<EdgeRecord>> = HashMap::new();
     for record in records {
-        groups.entry(format!("{}", record.source_key())).or_default().push(record.clone());
+        groups.entry(format!("{}", record.source_key())).or_default().push(*record);
     }
-    for (_, source_records) in groups {
+    for source_records in groups.into_values() {
         if source_records.len() < 2 {
             continue;
         }
@@ -863,9 +870,9 @@ fn route_vertical_fan_in(
 ) {
     let mut groups: HashMap<String, Vec<EdgeRecord>> = HashMap::new();
     for record in records.iter().filter(|record| !handled.contains(&record.edge_index)) {
-        groups.entry(format!("{}", record.target_key())).or_default().push(record.clone());
+        groups.entry(format!("{}", record.target_key())).or_default().push(*record);
     }
-    for (_, unaligned) in groups {
+    for unaligned in groups.into_values() {
         let target_records = align_clustered_vertical_sources(&unaligned);
         if target_records.len() < 2 {
             continue;
@@ -949,21 +956,22 @@ fn route_horizontal_subgraph_exit_fan_in(
         let target_subgraph_bound =
             target_subgraph.and_then(|index| frames.get(&diagram.subgraphs[index].id));
         let target_below = target.bounds.center_y >= subgraph_bound.bounds.center_y;
-        let target_port = target_subgraph
-            .map(|index| {
-                port_for_travel(
-                    target,
-                    horizontal_subgraph_entry_travel(&diagram.subgraphs[index]),
-                    false,
-                )
-            })
-            .unwrap_or_else(|| {
+        let target_port = target_subgraph.map_or_else(
+            || {
                 bounds_side_point(
                     target.bounds,
                     if target_below { Side::Top } else { Side::Bottom },
                     false,
                 )
-            });
+            },
+            |index| {
+                port_for_travel(
+                    target,
+                    horizontal_subgraph_entry_travel(&diagram.subgraphs[index]),
+                    false,
+                )
+            },
+        );
         let join_y = if let Some(target_bound) = target_subgraph_bound {
             horizontal_subgraph_join_y(subgraph_bound, target_bound)
         } else {
@@ -1196,9 +1204,9 @@ fn path_intersects_bounds(
 fn label_intersects_bounds(label: Option<&EdgeLabelLayout>, bounds: RectBounds) -> bool {
     let Some(label) = label else { return false };
     label.point.x <= bounds.right()
-        && label.point.x + label.width - 1 >= bounds.left
+        && label.point.x + label.width > bounds.left
         && label.point.y <= bounds.bottom()
-        && label.point.y + label.height - 1 >= bounds.top
+        && label.point.y + label.height > bounds.top
 }
 
 fn label_intersects_subgraph_frame(
@@ -1550,7 +1558,7 @@ fn avoid_node_obstacles(
     bottom_bus_ys.sort_unstable();
     bottom_bus_ys.dedup();
 
-    let bus_limit = 1.max((ROUTING_CANDIDATE_BUDGET / 4).isqrt() as i64);
+    let bus_limit = 1.max((ROUTING_CANDIDATE_BUDGET / 4).isqrt());
     let take = |lanes: &[i64]| -> Vec<i64> {
         if lanes.len() > bus_limit as usize {
             lanes[..bus_limit as usize].to_vec()
@@ -1885,7 +1893,7 @@ fn avoid_label_overlap(
 
     let mut seen: HashSet<(i64, i64)> = HashSet::new();
     let mut remaining = ROUTING_CANDIDATE_BUDGET;
-    let mut available =
+    let available =
         |candidate: Point, remaining: &mut i64, seen: &mut HashSet<(i64, i64)>| -> bool {
             *remaining -= 1;
             let key = (candidate.x, candidate.y);
@@ -1969,11 +1977,11 @@ fn avoid_label_overlap(
         }
     }
 
-    if target_width.is_some()
-        && include_label_width
-        && current.point.x + current.width > target_width.unwrap()
-    {
-        let x = 0.max(target_width.unwrap() - current.width);
+    let overflow_width = target_width
+        .filter(|_| include_label_width)
+        .filter(|width| current.point.x + current.width > *width);
+    if let Some(target_width) = overflow_width {
+        let x = 0.max(target_width - current.width);
         for distance in 0..100i64 {
             let candidates: Vec<i64> = if distance == 0 {
                 vec![current.point.y]
@@ -2016,7 +2024,7 @@ pub fn avoid_flowchart_frame_borders(
         let edge = &diagram.edges[route.edge_index];
         let source = bounds.get(&edge.from);
         let target = bounds.get(&edge.to);
-        for (_, frame) in subgraph_bounds.iter() {
+        for frame in subgraph_bounds.values() {
             let inward = source.is_some_and(|source| inside(source, frame))
                 && target.is_some_and(|target| inside(target, frame));
             let right = frame.bounds.left + frame.bounds.width - 1;

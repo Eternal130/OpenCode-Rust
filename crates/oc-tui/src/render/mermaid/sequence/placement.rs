@@ -1,3 +1,29 @@
+// Upstream-mirror lint posture: the merman port keeps the TypeScript
+// arithmetic shape (JS Number semantics on an i64 grid, the same cast
+// sites and long single-responsibility functions), so the pedantic
+// numeric/style lints that would rewrite that shape are quieted here.
+#![allow(
+    clippy::cast_possible_wrap,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::cast_lossless,
+    clippy::doc_markdown,
+    clippy::must_use_candidate,
+    clippy::too_many_lines,
+    clippy::too_many_arguments,
+    clippy::needless_range_loop,
+    clippy::items_after_statements,
+    clippy::explicit_iter_loop,
+    clippy::for_kv_map,
+    clippy::map_unwrap_or,
+    clippy::manual_strip,
+    clippy::range_plus_one,
+    clippy::option_option,
+    clippy::implicit_hasher,
+    clippy::match_same_arms
+)]
+
 //! `sequence/placement.ts` — participant centers, group frames,
 //! fragment frames, and step placement.
 
@@ -564,7 +590,7 @@ fn get_fragment_frame_bounds_by_step(
             continue;
         }
         let SequenceStep::Fragment(fragment) = step else { unreachable!() };
-        let Some(mut bounds) = get_fragment_frame_bounds(
+        let Some(bounds) = get_fragment_frame_bounds(
             centers,
             &fragment_label_text(fragment.kind, &fragment.label),
             active_frames.len() as i64,
@@ -579,7 +605,6 @@ fn get_fragment_frame_bounds_by_step(
         {
             let (_, frame_bounds) = &mut active_frames[frame_position];
             expand_horizontal_bounds(frame_bounds, bounds.left_x, bounds.right_x);
-            bounds = *frame_bounds;
         }
         if fragment.kind != FragmentKind::End {
             continue;
