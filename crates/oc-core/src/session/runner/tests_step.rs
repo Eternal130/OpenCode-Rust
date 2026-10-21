@@ -255,7 +255,7 @@ async fn runner_step_tool_task_observes_a_ring_before_its_first_poll() {
         let polled = Arc::clone(&polled_by_executor);
         Box::pin(async move {
             polled.store(true, Ordering::SeqCst);
-            Ok(crate::location::ToolRunResult { content: vec![], metadata: None })
+            Ok(crate::location::ToolRunResult { content: vec![], metadata: None, output: None })
         })
     });
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();

@@ -1578,8 +1578,12 @@ impl ToolExecute for McpToolExecutor {
             serde_json::Value::String(text)
         };
         let mut metadata = oc_schema::common::Record::default();
-        metadata.insert(OUTPUT_METADATA_KEY.into(), output);
-        Ok(ToolRunResult { content, metadata: Some(metadata) })
+        metadata.insert(OUTPUT_METADATA_KEY.into(), output.clone());
+        // TOOL-D1: the widened `ToolRunResult.output` seam carries the
+        // structured output to the runner (v2 tool/mcp.ts:106-108 returns
+        // `{ output: output(), content }`); the metadata stash stays for
+        // wire compatibility with the Wave-B shape.
+        Ok(ToolRunResult { content, metadata: Some(metadata), output: Some(output) })
     }
 }
 

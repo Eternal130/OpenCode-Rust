@@ -1,3 +1,5 @@
+#![allow(unsafe_code)] // contained raw syscalls (close_range fd hygiene, reviewed per-site)
+
 //! Service lifecycle (`cli/services/service-registration.ts`,
 //! `client/service-probe.ts`, `client/promise/service.ts`,
 //! `client/service-contender.ts`, `client/pty-handoff.ts`,
@@ -637,6 +639,45 @@ struct Contender {
     stderr: Arc<std::sync::Mutex<Vec<u8>>>,
 }
 
+/// RUNTIME-FDLEAK hygiene for the daemon child: mark every fd the parent
+/// leaked into the fork close-on-exec. The daemon is detached and
+/// outlives its spawner; an inherited fd would keep the spawner's locks
+/// (e.g. `/tmp/opencode/dev-gate.lock`) held forever after the parent
+/// dies, deadlocking later gate scopes. Runs between fork and exec —
+/// async-signal-safe (raw syscalls, no allocation). `std` dups stdio
+/// onto 0/1/2 BEFORE `pre_exec`, so the configured null/piped ends survive;
+/// the original pipe/socket descriptors are already close-on-exec and
+/// exec itself closes them.
+#[cfg(target_os = "linux")]
+unsafe fn close_inherited_fds() -> std::io::Result<()> {
+    // close_range(3, MAX, CLOSE_RANGE_CLOEXEC): 0 on success, -1 on error.
+    if libc::syscall(
+        libc::SYS_close_range,
+        3 as libc::c_uint,
+        libc::c_uint::MAX,
+        libc::CLOSE_RANGE_CLOEXEC,
+    ) == -1
+    {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Non-Linux fallback: no `close_range(2)` — close everything up to the
+/// soft fd limit (`close(2)` and `getrlimit(2)` are async-signal-safe).
+#[cfg(all(unix, not(target_os = "linux")))]
+unsafe fn close_inherited_fds() -> std::io::Result<()> {
+    let mut limit = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+    if libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let soft = if limit.rlim_cur == libc::RLIM_INFINITY as u64 { 1024 } else { limit.rlim_cur };
+    for fd in 3..soft {
+        unsafe { libc::close(fd as libc::c_int) };
+    }
+    Ok(())
+}
+
 impl Contender {
     fn spawn(command: &[String], env: &[(String, String)]) -> io::Result<Self> {
         let (program, args) = command.split_first().ok_or_else(|| {
@@ -655,6 +696,9 @@ impl Contender {
         {
             use std::os::unix::process::CommandExt;
             cmd.process_group(0);
+            // RUNTIME-FDLEAK: the daemon inherits nothing it did not ask
+            // for — see `close_inherited_fds`.
+            unsafe { cmd.pre_exec(|| close_inherited_fds()) };
         }
         let mut child = cmd.spawn()?;
         let stderr = child.stderr.take();
