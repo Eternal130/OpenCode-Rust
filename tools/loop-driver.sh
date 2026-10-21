@@ -97,11 +97,41 @@ for i in $(seq 1 "$MAX_ITERS"); do
   log "iteration $i: fresh orchestrator session (log: $out)"
   run_scope "$OC_BIN" run $RUN_FLAGS "$PROMPT" >"$out" 2>&1
   rc=$?
-  # Strip NULs; search only the tail window — markers are emitted at the end.
-  tail_view="$(tail -c 200000 "$out" | tr -d '\000')"
+  # Marker extraction: parse the WHOLE JSON event stream for the final assistant
+  # text part (python3, no deps). Fixes two observed failure modes:
+  #   (a) marker emitted mid-turn, buried under >200KB of later tool events —
+  #       the old tail -c 200000 window missed it (session 2026-10-21 08:12);
+  #   (b) prompt echo false-positives — user-role text and the prompt preamble
+  #       ("你是 opencode-rust...") are excluded, only assistant text counts
+  #       (session 2026-10-20 23:00 genuinely had no marker: the agent asked a
+  #        question instead — that is a prompt-discipline failure, exit 3 is correct).
+  final_text="$(python3 - "$out" 2>/dev/null <<'PYEOF' || true
+import json, sys
+last = None
+try:
+    with open(sys.argv[1], errors="ignore") as f:
+        for line in f:
+            try: e = json.loads(line)
+            except Exception: continue
+            if not isinstance(e, dict): continue
+            p = e.get("part")
+            if not isinstance(p, dict) or p.get("type") != "text": continue
+            txt = p.get("text") or ""
+            if not txt: continue
+            info = e.get("info") if isinstance(e.get("info"), dict) else {}
+            role = info.get("role") or e.get("role") or ""
+            if role == "user": continue
+            if txt.startswith("你是 opencode-rust"): continue  # prompt echo guard
+            last = txt
+except Exception:
+    pass
+sys.stdout.write(last or "")
+PYEOF
+)"
+  marker_view="${final_text}${tail_view}"
 
   if [ "$rc" -ne 0 ]; then
-    if printf '%s' "$tail_view" | grep -qiE 'usage limit|quota|rate.?limit|429'; then
+    if printf '%s' "$marker_view" | grep -qiE 'usage limit|quota|rate.?limit|429'; then
       quota_retries=$((quota_retries + 1))
       if [ "$quota_retries" -gt "$QUOTA_RETRIES_MAX" ]; then
         log "quota retries exhausted ($QUOTA_RETRIES_MAX); giving up (next cron fire retries after window reset)"
@@ -117,19 +147,19 @@ for i in $(seq 1 "$MAX_ITERS"); do
     exit 3
   fi
 
-  if   printf '%s' "$tail_view" | grep -q 'PARITY_LOOP_DONE'; then
+  if   printf '%s' "$marker_view" | grep -q 'PARITY_LOOP_DONE'; then
     echo "DONE $(date '+%F %T')" > "$STOP_FILE"
     rm -f "$FAIL_FILE"
     log "DONE"; exit 0
-  elif printf '%s' "$tail_view" | grep -q 'PARITY_LOOP_BLOCKED'; then
+  elif printf '%s' "$marker_view" | grep -q 'PARITY_LOOP_BLOCKED'; then
     echo "BLOCKED $(date '+%F %T')" > "$STOP_FILE"
     rm -f "$FAIL_FILE"
     log "BLOCKED (see $out)"; exit 2
-  elif printf '%s' "$tail_view" | grep -q 'BATCH_HANDOFF'; then
+  elif printf '%s' "$marker_view" | grep -q 'BATCH_HANDOFF'; then
     rm -f "$FAIL_FILE"
     log "batch handoff; next session in 60s"
     sleep 60
-  elif printf '%s' "$tail_view" | grep -q 'PARITY_LOOP_CONTINUE'; then
+  elif printf '%s' "$marker_view" | grep -q 'PARITY_LOOP_CONTINUE'; then
     rm -f "$FAIL_FILE"
     log "continue; fresh session in 10s"
     sleep 10
