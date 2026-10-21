@@ -336,13 +336,17 @@ impl CatalogModelResolver {
         // resolves the same per attempt through the integration
         // connection, model-resolver.ts:364-371; copilot's transport
         // bindings were the BE-3b special case of this fold).
+        let mut chatgpt_shaping = None;
         if let Some(bindings) = &self.credentials {
             if let Some(binding) = bindings.get(&provider_id) {
                 connection.api_key = Some(binding.api_key.clone());
                 connection.base_url = binding.base_url.clone().or(connection.base_url);
-                for (key, value) in binding.headers {
-                    connection.headers.insert(key, value);
+                for (key, value) in &binding.headers {
+                    connection.headers.insert(key.clone(), value.clone());
                 }
+                // CRED-D6: the `openai` provider reshape this credential
+                // drives — applied to the resolved model info below.
+                chatgpt_shaping = binding.chatgpt;
             }
         }
         // Keyless zen (CRED-B3, opencode.ts:317-325): no `OPENCODE_API_KEY`,
@@ -370,7 +374,19 @@ impl CatalogModelResolver {
         // into the model info BEFORE binding (v2 withVariant,
         // model-resolver.ts:137-161) so `#high/#thinking` overlays reach
         // the route defaults exactly like the model's own overlays.
-        let info = with_variant(base_info, reference.variant.as_ref().map(|id| id.0.as_str()))?;
+        let mut info = with_variant(base_info, reference.variant.as_ref().map(|id| id.0.as_str()))?;
+        // CRED-D6: the credential-driven ChatGPT provider reshape — the
+        // codex/token-sharing logins re-list the `openai` provider (the
+        // fallback model set, cost=[], the codex limits, summary
+        // compaction), the transform v2's openai/chatgpt plugins apply
+        // over the active credential (openai.ts:256-315,
+        // chatgpt.ts:267-306).
+        if let Some(shaping) = chatgpt_shaping {
+            if !crate::integration::copilot::chatgpt_model_available(&info, shaping) {
+                return Err(ModelError::Unavailable(provider_id.clone(), reference.id.0.clone()));
+            }
+            crate::integration::copilot::apply_chatgpt_shaping(&mut info, shaping);
+        }
         let model = language_model_for_model(&self.context, snapshot, &info, &connection)
             .map_err(|error| map_provider(error, &provider_id, &reference.id.0))?;
         // Generic keyless downgrade (CRED-AUTHNONE-DOWNGRADE, ref

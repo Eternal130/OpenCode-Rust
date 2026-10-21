@@ -898,6 +898,570 @@ async fn env_method_filter() {
 }
 
 // ---------------------------------------------------------------------------
+// CRED-D8: Poe OAuth fields (client id + api_key token schema)
+// ---------------------------------------------------------------------------
+
+/// Percent-decodes a query value (v2's `URLSearchParams` encodes `:`
+/// and `/`, so `scope`/`redirect_uri` arrive encoded like upstream).
+fn percent_decode(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c == '%' {
+            let mut hex = String::new();
+            hex.push(chars.next().unwrap_or('0'));
+            hex.push(chars.next().unwrap_or('0'));
+            match u8::from_str_radix(&hex, 16) {
+                Ok(byte) if byte.is_ascii() => out.push(byte as char),
+                _ => out.push('%'),
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Drives one Poe authorize → loopback callback → token-exchange cycle
+/// against a fresh scripted stub, asserting the v2-pinned authorize-URL
+/// fields on every run (poe.ts:11-16,81-89) and returning the credential
+/// outcome plus the capturing stub.
+async fn poe_cycle(
+    script: Vec<(u16, String)>,
+    callback_extra: &str,
+) -> (Result<CredentialValue, String>, StubTokenEndpoint) {
+    let stub = StubTokenEndpoint::start(script).await;
+    let token_url = format!("{}/token", stub.base);
+    let authorization =
+        oc_core::integration::providers::poe_authorize_at(FormAnswer::new(), &token_url)
+            .await
+            .expect("poe authorize starts");
+    let (base, query) = authorization.url.split_once('?').expect("authorize query");
+    assert_eq!(base, "https://poe.com/oauth/authorize");
+    let params: BTreeMap<&str, &str> =
+        query.split('&').filter_map(|part| part.split_once('=')).collect();
+    assert_eq!(
+        params.get("client_id"),
+        Some(&"client_728290227fc048cc9262091a1ea197ea"),
+        "the v2-pinned Poe client id (poe.ts:11)"
+    );
+    assert_eq!(
+        params.get("scope").map(|scope| percent_decode(scope)),
+        Some("apikey:create".to_owned())
+    );
+    assert_eq!(params.get("response_type"), Some(&"code"));
+    assert_eq!(params.get("code_challenge_method"), Some(&"S256"));
+    assert!(params.get("state").is_some_and(|state| !state.is_empty()));
+    assert!(params.get("code_challenge").is_some_and(|c| !c.is_empty()));
+    let state = params.get("state").expect("state").to_owned();
+    let redirect = percent_decode(params.get("redirect_uri").expect("redirect_uri"));
+    assert!(
+        redirect.starts_with("http://127.0.0.1:") && redirect.ends_with("/callback"),
+        "loopback redirect: {redirect}"
+    );
+    let oc_core::integration::AuthMode::Auto(callback) = authorization.mode else {
+        panic!("poe authorize is an auto flow")
+    };
+    let target = format!("{redirect}?code=poe-code-9&state={state}{callback_extra}");
+    let getter = tokio::spawn(async move { reqwest::get(&target).await });
+    let outcome = callback.await;
+    let _ = getter.await;
+    (outcome, stub)
+}
+
+fn poe_oauth(credential: CredentialValue) -> OAuthValue {
+    match credential {
+        CredentialValue::OAuth(oauth) => oauth,
+        other @ CredentialValue::Key(_) => panic!("poe credential is oauth, got {other:?}"),
+    }
+}
+
+/// CRED-D8 (ref poe.ts:11-16,121-161): the pinned client id and
+/// apikey:create scope on the authorize URL; the token endpoint's
+/// `api_key`/`api_key_expires_in` schema (never `access_token`); the
+/// maxExpiry rule; the iss pin; error details never echo the
+/// code/verifier secrets.
+#[tokio::test]
+async fn poe_oauth_fields() {
+    // 1. The exchange (poe.ts:154-161): api_key + seconds → an oauth
+    //    credential keyed by the API key, expiring at now+expires_in.
+    let (outcome, stub) = poe_cycle(
+        vec![(200, r#"{"api_key":"poe-key-1","api_key_expires_in":3600}"#.to_owned())],
+        "",
+    )
+    .await;
+    let before = oc_core::database::migrations::now_ms();
+    let oauth = poe_oauth(outcome.expect("poe exchange succeeds"));
+    assert_eq!(oauth.access, "poe-key-1", "the api_key IS the credential (not access_token)");
+    assert_eq!(oauth.refresh, "");
+    assert_eq!(oauth.method_id, "browser");
+    assert!(
+        (oauth.expires - (before + 3_600_000)).abs() < 60_000,
+        "expires = now + api_key_expires_in*1000: {}",
+        oauth.expires
+    );
+    // The grant the stub received: the pinned client + the PKCE verifier.
+    let seen = stub.requests(1).await;
+    let request = seen.first().expect("captured exchange");
+    assert!(request.contains("POST /token "), "posts the token endpoint: {request}");
+    assert!(request.contains("grant_type=authorization_code"), "code grant: {request}");
+    assert!(
+        request.contains("client_id=client_728290227fc048cc9262091a1ea197ea"),
+        "the pinned client id on the exchange: {request}"
+    );
+    assert!(request.contains("code=poe-code-9"), "the callback code: {request}");
+    let verifier = request
+        .split('&')
+        .find_map(|part| part.strip_prefix("code_verifier="))
+        .expect("code_verifier in the exchange");
+    assert_ne!(verifier.trim(), "");
+
+    // 2. No api_key_expires_in → the fixed maxExpiry (poe.ts:157-158).
+    let (outcome, _stub) =
+        poe_cycle(vec![(200, r#"{"api_key":"poe-key-2"}"#.to_owned())], "").await;
+    assert_eq!(
+        poe_oauth(outcome.expect("no-expiry key resolves")).expires,
+        8_640_000_000_000_000,
+        "absent expiry pins maxExpiry"
+    );
+
+    // 3. An expiry beyond maxExpiry is rejected (poe.ts:159-160).
+    let (outcome, _stub) = poe_cycle(
+        vec![(200, r#"{"api_key":"poe-key-3","api_key_expires_in":8640000000001}"#.to_owned())],
+        "",
+    )
+    .await;
+    assert_eq!(outcome.expect_err("oversized expiry fails"), "Invalid Poe API key expiry");
+
+    // 4. The token schema: a whitespace api_key fails to decode
+    //    (poe.ts:14-16).
+    let (outcome, _stub) =
+        poe_cycle(vec![(200, r#"{"api_key":"has space"}"#.to_owned())], "").await;
+    assert_eq!(outcome.expect_err("whitespace api_key fails"), "Invalid Poe token response");
+
+    // 5. Error details never echo the code/verifier secrets
+    //    (poe.ts:145-152).
+    let (outcome, _stub) = poe_cycle(
+        vec![(
+            400,
+            r#"{"error":"invalid_grant","error_description":"grant poe-code-9 rejected"}"#
+                .to_owned(),
+        )],
+        "",
+    )
+    .await;
+    let error = outcome.expect_err("secret-echoing detail is dropped");
+    assert_eq!(error, "Poe token exchange failed (400)", "status-only error: {error}");
+    let (outcome, _stub) = poe_cycle(
+        vec![(
+            400,
+            r#"{"error":"invalid_grant","error_description":"authorization grant expired"}"#
+                .to_owned(),
+        )],
+        "",
+    )
+    .await;
+    assert_eq!(
+        outcome.expect_err("clean detail surfaces"),
+        "Poe token exchange failed: authorization grant expired"
+    );
+
+    // 6. The optional iss pin: present but wrong → rejected before any
+    //    exchange (poe.ts:119-120).
+    let (outcome, stub) = poe_cycle(
+        vec![(200, r#"{"api_key":"poe-key-4"}"#.to_owned())],
+        "&iss=https%3A%2F%2Fevil.example",
+    )
+    .await;
+    assert_eq!(outcome.expect_err("wrong iss fails"), "Invalid OAuth issuer");
+    assert!(stub.requests(0).await.is_empty(), "the iss pin rejects before the token exchange");
+}
+
+// ---------------------------------------------------------------------------
+// CRED-V3: ADC service_account (RS256 self-signed JWT + token exchange)
+// ---------------------------------------------------------------------------
+
+/// A throwaway 2048-bit RSA keypair for the service-account JWT grant
+/// (test-only; generated with `openssl genpkey -algorithm RSA`).
+const V3_PRIVATE_KEY_PEM: &str = "-----BEGIN PRIVATE KEY-----
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDgGYCWFldxxlb4
+QZkjbqmfXlxiKkGzDn+Cmg4MZSzjaQrlK/s4Wx+2rx69enlo7KWCHXTisIIn90y9
+Tfa8rDi+08QnoQlKgXN5sUpAPfKwiMTumcXcWiFi3b5LnfdqQyhRB5IZB02B5Yd7
+TL3lQpNN4ZPItd7s78Fa0K+vAvOe1io4WWX9pWIxc8IAGUpHWgV0SpyUVFGByeV1
+WYmqt6usvQFW/zIz61R05YbhGZC5lgrPK8p1xXpcw1NULxel48w985hc7A2XJUdB
+EbC3XLNbSiWrbB2VFCetesS3aZlVsBSfVsaqmqpmVLUdY+yuVruoyi/n5puOLXFN
+abJUROzJAgMBAAECggEABoAW38OkI7O6IBdfBs0V9H57NYm+QCBiiHpJgAiLRclt
+PHqLHfZetCDeRmbAENAUePK7yjuOevRMcI1LY+um9boUzYV5TIT2wYfn/HcPjBlb
+hQRG3f5rS3/dHjply9pI2BjdHwa8M9Fhnaz7MSQ+O5sYe1DzN3I47JZzEiOGx4um
+4whSE1HFdu5zJ+UTU7mJ1bEtq5VNOGRJ225iJkWAG+2KH3g0tcQfrkBO/LYYBU4R
+SB3UNN3QbJ2Y26Cjr342aCyRYzg+vFBpavm8frY4x6e74NZB5Y79kSmd9Qgxqy8d
+GVEqs6yOUSgspqBJN+wdNGv4dUx8N3e9ZN7gDRL4NQKBgQD6iQt8K4bp92oFoFdb
+5s6LgPiGSbxhES3ktabD2IThmvUoMnq5O9b2wJjCVDCwaAL5S11qGBtZA9KPDD5g
+uSmRIANyBWNe8LDCdJpLnYGc5ZL8vN9VFDmXfCvwBggrcXe/yv6fM8qutfrWyVzs
+Kvc/kw321dnxYH7BNCaroTTqowKBgQDk/NgQ7CFTozlC2+Nu4Bd0IPh8Q/+okc2p
+QPH8z6/Xv2mTP/HuiUWX9tOJS3N7zdv6dlMdEuwT0qz3SgcpX3oCPGBAOfT1rbUP
+UVxl+7qRKDad4TMhrU8IS0YPuU42W7K0YmGUBrxSuMTRsk1RjdUH7kEnhxTx07s6
+/eNsg4XNowKBgQCr44LBuoth0qInIg9NullTVTUtzUE1x7eZBxhXniHtN4ekAJ46
+oFeoDBPCoEiXf4UqzQ5WUBvTQtAf3OKfMerW6wPyIsg+xxw/Dgkef/4BS3FBfcQs
+dyfcSxFKKJlKVRs3t2piiAIzRB/JZXYfgosITzhxdd+FwBK3M7SkZIINyQKBgDmC
+95FofQZQnHUaXQjf54QXM9GiEnf4BrtXwG9KilOZk56UFONgPsZoC8ET3jFeBr3l
+MgK/WeOwqhiB00Kk5DPjjhkTdV6u/iaWvKowiy8h9nW4terjaFIg9bvFQsuMRFnh
+y7gt6Oat2WEBc0HkaXjQcjTHTI9gKkoqsg/zCIwZAoGBAOXCdLW44m7NgdL/lE9U
+LYm0glYZa37tAgwys+W3ThU7fVSeZ5yTiYwzLbqHjkD2VtIJnunfOI229kpxE0G0
+/auWSmeplnmTJ4TTrkXk+ElVavGncTvppeUa1aPwzMihVitBfXRh1U7zWpBh+w9f
+0N9fdkKxNZuvNfP8Te4bmpVw
+-----END PRIVATE KEY-----";
+
+/// The matching PKCS#1 `RSAPublicKey` (test-side RS256 verification).
+const V3_PUBLIC_KEY_RSA_PEM: &str = "-----BEGIN RSA PUBLIC KEY-----
+MIIBCgKCAQEA4BmAlhZXccZW+EGZI26pn15cYipBsw5/gpoODGUs42kK5Sv7OFsf
+tq8evXp5aOylgh104rCCJ/dMvU32vKw4vtPEJ6EJSoFzebFKQD3ysIjE7pnF3Foh
+Yt2+S533akMoUQeSGQdNgeWHe0y95UKTTeGTyLXe7O/BWtCvrwLzntYqOFll/aVi
+MXPCABlKR1oFdEqclFRRgcnldVmJqrerrL0BVv8yM+tUdOWG4RmQuZYKzyvKdcV6
+XMNTVC8XpePMPfOYXOwNlyVHQRGwt1yzW0olq2wdlRQnrXrEt2mZVbAUn1bGqpqq
+ZlS1HWPsrla7qMov5+abji1xTWmyVETsyQIDAQAB
+-----END RSA PUBLIC KEY-----";
+
+/// A scripted token endpoint on 127.0.0.1:0: records each request
+/// (request-line + headers + form body), replays `(status, json)`
+/// pairs. Default reply: 200 `{"access_token":"stub-access"}`.
+struct StubTokenEndpoint {
+    base: String,
+    seen: Arc<std::sync::Mutex<Vec<String>>>,
+    handle: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for StubTokenEndpoint {
+    fn drop(&mut self) {
+        self.handle.abort();
+    }
+}
+
+impl StubTokenEndpoint {
+    async fn start(script: Vec<(u16, String)>) -> Self {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.expect("bind stub");
+        let port = listener.local_addr().expect("addr").port();
+        let seen: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
+        let seen_handle = Arc::clone(&seen);
+        let script = Arc::new(std::sync::Mutex::new(
+            script.into_iter().collect::<std::collections::VecDeque<_>>(),
+        ));
+        let script_handle = Arc::clone(&script);
+        let handle = tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else { return };
+                let seen = Arc::clone(&seen_handle);
+                let script = Arc::clone(&script_handle);
+                tokio::spawn(async move {
+                    let mut buffer = Vec::with_capacity(8192);
+                    let mut chunk = [0u8; 8192];
+                    loop {
+                        let read = stream.read(&mut chunk).await.unwrap_or(0);
+                        if read == 0 {
+                            return;
+                        }
+                        buffer.extend_from_slice(&chunk[..read]);
+                        let Some(head_end) = buffer.windows(4).position(|w| w == b"\r\n\r\n")
+                        else {
+                            continue;
+                        };
+                        let head = String::from_utf8_lossy(&buffer[..head_end]).into_owned();
+                        let length = head
+                            .lines()
+                            .find_map(|line| {
+                                let (name, value) = line.split_once(':')?;
+                                name.trim()
+                                    .eq_ignore_ascii_case("content-length")
+                                    .then(|| value.trim().parse::<usize>().ok())
+                                    .flatten()
+                            })
+                            .unwrap_or(0);
+                        if buffer.len() >= head_end + 4 + length {
+                            break;
+                        }
+                    }
+                    seen.lock()
+                        .expect("seen lock")
+                        .push(String::from_utf8_lossy(&buffer).into_owned());
+                    let (status, body) =
+                        script.lock().expect("script lock").pop_front().unwrap_or_else(|| {
+                            (200u16, r#"{"access_token":"stub-access"}"#.to_owned())
+                        });
+                    let reason = if (200..300).contains(&status) { "OK" } else { "Bad Request" };
+                    let response = format!(
+                        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = stream.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+        Self { base: format!("http://127.0.0.1:{port}"), seen, handle }
+    }
+
+    /// Waits until at least `count` requests were captured; returns them.
+    async fn requests(&self, count: usize) -> Vec<String> {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let snapshot = self.seen.lock().expect("seen lock").clone();
+            if snapshot.len() >= count {
+                return snapshot;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "token stub saw {} requests, expected {count}",
+                snapshot.len()
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    }
+}
+
+/// CRED-V3 (ref google-vertex-shared.ts:56-75 — `GoogleAuth`'s full ADC
+/// chain includes the service-account key files): a `service_account` ADC
+/// file must mint an RS256 self-signed JWT (`iss` = `client_email`,
+/// `scope` = cloud-platform, `aud` = the token endpoint) and exchange it
+/// as a jwt-bearer grant for an access token — not defer to None.
+#[tokio::test]
+async fn vertex_adc_service_account() {
+    let _env = env_guard().await;
+    let dir = tempfile::tempdir_in("/tmp/opencode").expect("sandbox tempdir");
+    let stub = StubTokenEndpoint::start(vec![(
+        200,
+        r#"{"access_token":"ya29 sa-token","expires_in":3600}"#.to_owned(),
+    )])
+    .await;
+    let token_url = format!("{}/token", stub.base);
+    let adc_path = dir.path().join("sa.json");
+    std::fs::write(
+        &adc_path,
+        json!({
+            "type": "service_account",
+            "client_email": "sa@lane-cred-test.iam.gserviceaccount.com",
+            "private_key": V3_PRIVATE_KEY_PEM,
+            "token_uri": token_url,
+        })
+        .to_string(),
+    )
+    .expect("write adc");
+    // SAFETY: test-scoped ADC path (the explicit-file leg of adc_paths()).
+    #[allow(unsafe_code)]
+    unsafe {
+        std::env::set_var("GOOGLE_APPLICATION_CREDENTIALS", &adc_path);
+    }
+    let (host, _dir) = host().await;
+    let binding = host.vertex_binding_with_token_url(&token_url).await;
+    // SAFETY: test-scoped env scrub.
+    #[allow(unsafe_code)]
+    unsafe {
+        std::env::remove_var("GOOGLE_APPLICATION_CREDENTIALS");
+    }
+    let binding = binding.expect("service-account ADC resolves an access token");
+    assert_eq!(binding.api_key, "ya29 sa-token");
+
+    // The exchange was ONE jwt-bearer grant POST at the file's token_uri.
+    let seen = stub.requests(1).await;
+    let request = seen.first().expect("captured grant");
+    assert!(request.contains("POST /token "), "posts the token endpoint: {request}");
+    assert!(
+        request.contains("grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer"),
+        "the jwt-bearer grant type: {request}"
+    );
+    let assertion = request
+        .split('&')
+        .find_map(|part| part.strip_prefix("assertion="))
+        .expect("assertion form field")
+        .to_owned();
+    let mut segments = assertion.split('.');
+    let header = segments.next().expect("jwt header");
+    let claims = segments.next().expect("jwt claims");
+    let _signature = segments.next().expect("jwt signature");
+    let decode = |text: &str| -> Value {
+        use base64::Engine as _;
+        let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(text)
+            .expect("base64url jwt segment");
+        serde_json::from_slice(&bytes).expect("json jwt segment")
+    };
+    assert_eq!(decode(header)["alg"], "RS256");
+    let claims = decode(claims);
+    assert_eq!(claims["iss"], "sa@lane-cred-test.iam.gserviceaccount.com");
+    assert_eq!(claims["scope"], "https://www.googleapis.com/auth/cloud-platform");
+    assert_eq!(claims["aud"], token_url);
+    let exp = claims["exp"].as_i64().expect("exp");
+    let iat = claims["iat"].as_i64().expect("iat");
+    assert!(exp > iat && exp - iat <= 3600, "one-hour grant window: {iat}..{exp}");
+
+    // The assertion is REALLY signed by the key file's private key
+    // (RS256 over `header.claims`, verifiable with the matching public
+    // key — the self-signed JWT grant's whole point).
+    {
+        use base64::Engine as _;
+        use ring::signature::{UnparsedPublicKey, RSA_PKCS1_2048_8192_SHA256};
+        let public_der = {
+            let begin = V3_PUBLIC_KEY_RSA_PEM.find("-----BEGIN").expect("begin");
+            let rest = &V3_PUBLIC_KEY_RSA_PEM[begin..];
+            let header_end = rest.find('\n').expect("header");
+            let end = rest.find("-----END").expect("end");
+            let text: String =
+                rest[header_end + 1..end].chars().filter(|c| !c.is_whitespace()).collect();
+            base64::engine::general_purpose::STANDARD.decode(text).expect("public der")
+        };
+        let mut segments = assertion.split('.');
+        let header = segments.next().expect("header").to_owned();
+        let claims = segments.next().expect("claims").to_owned();
+        let signature = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(segments.next().expect("signature"))
+            .expect("signature bytes");
+        UnparsedPublicKey::new(&RSA_PKCS1_2048_8192_SHA256, &public_der)
+            .verify(format!("{header}.{claims}").as_bytes(), &signature)
+            .expect("the service-account JWT is RS256-signed by the key file");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CRED-D6: ChatGPT/Codex credential-driven openai provider reshape
+// ---------------------------------------------------------------------------
+
+/// v2 openai.ts:256-315: an active openai oauth credential
+/// (chatgpt-browser/headless) reshapes the `openai` provider — baseURL
+/// → the codex backend, the originator/x-codex headers (+ the account
+/// id from the credential metadata), codex-eligible models only,
+/// cost=[] and the codex limits. chatgpt.ts:267-306: the
+/// chatgpt-token-sharing credential reshapes to the resource URL with
+/// the fallback model set and summary compaction.
+#[tokio::test]
+async fn chatgpt_provider_shaping() {
+    let _env = env_guard().await;
+    // SAFETY: test-scoped env scrub — the stored credential is the only
+    // openai auth in play.
+    #[allow(unsafe_code)]
+    unsafe {
+        std::env::remove_var("OPENAI_API_KEY");
+    }
+    let (host, _dir) = host().await;
+    let value = CredentialValue::OAuth(OAuthValue {
+        method_id: "chatgpt-browser".into(),
+        refresh: "r".into(),
+        access: "codex-access-token".into(),
+        expires: oc_core::database::migrations::now_ms() + 3_600_000,
+        metadata: Some(BTreeMap::from([("accountID".to_owned(), Value::String("acct_7".into()))])),
+    });
+    host.store()
+        .create(CreateInput {
+            id: None,
+            integration_id: "openai",
+            label: Some("codex"),
+            value: &value,
+            activate: None,
+        })
+        .await
+        .expect("create openai credential");
+    host.refresh_provider_bindings().await;
+
+    let catalog = Arc::new(Catalog::embedded().clone());
+    let transport: oc_ai::route::SharedTransport =
+        Arc::new(oc_ai::route::transport::reqwest_transport::ReqwestTransport::new());
+    let resolver = CatalogModelResolver::new(
+        FacadeContext::new(transport),
+        catalog,
+        BTreeMap::new(),
+        Vec::new(),
+        None,
+    )
+    .with_credentials(Arc::clone(host.credential_bindings()));
+
+    let session = session_row();
+    // A codex-allowed model (openai.ts:26) binds the codex backend with
+    // the reshape headers, cost=[], and the codex limits.
+    let bound = resolver
+        .resolve_selected(&session, &model_ref("openai", "gpt-5.5"))
+        .expect("gpt-5.5 resolves");
+    assert_eq!(
+        bound.model.route.endpoint.base_url.as_deref(),
+        Some("https://chatgpt.com/backend-api/codex"),
+        "the chatgpt credential points the openai provider at the codex backend"
+    );
+    for (header, expected) in [
+        ("authorization", "Bearer codex-access-token"),
+        ("originator", "opencode"),
+        ("x-codex-beta-features", "remote_compaction_v2"),
+        ("chatgpt-account-id", "acct_7"),
+    ] {
+        assert_eq!(
+            wire_header(&bound, header).unwrap_or_else(|e| panic!("{header}: {e}")).as_deref(),
+            Some(expected),
+            "codex reshape header `{header}`"
+        );
+    }
+    assert!(bound.cost.is_empty(), "the subscription covers usage: cost=[] (openai.ts:294)");
+    assert_eq!(bound.limit.context, 400_000, "codex context limit (openai.ts:296)");
+    assert_eq!(bound.limit.input, Some(272_000), "codex input limit (openai.ts:296)");
+
+    // An ineligible model (no gpt-5.5+ match, openai.ts:283-293) resolves
+    // disabled with its cost untouched.
+    let bound = resolver
+        .resolve_selected(&session, &model_ref("openai", "gpt-4o"))
+        .expect("ineligible models stay resolvable, disabled");
+    assert!(!bound.cost.is_empty(), "ineligible models keep their catalog cost");
+
+    chatgpt_token_sharing_leg(&resolver, &session, &host).await;
+}
+
+/// The `chatgpt-token-sharing` leg of `chatgpt_provider_shaping`
+/// (chatgpt.ts:267-306): the resource URL, the fallback model set only,
+/// summary compaction, cost=[].
+async fn chatgpt_token_sharing_leg(
+    resolver: &CatalogModelResolver,
+    session: &SessionRow,
+    host: &Arc<IntegrationHost>,
+) {
+    let shared = CredentialValue::OAuth(OAuthValue {
+        method_id: "chatgpt-token-sharing".into(),
+        refresh: "r2".into(),
+        access: "shared-token".into(),
+        expires: oc_core::database::migrations::now_ms() + 3_600_000,
+        metadata: Some(BTreeMap::from([(
+            "clientID".to_owned(),
+            Value::String("agent_client_9".into()),
+        )])),
+    });
+    host.store()
+        .create(CreateInput {
+            id: None,
+            integration_id: "openai",
+            label: Some("chatgpt"),
+            value: &shared,
+            activate: None,
+        })
+        .await
+        .expect("create token-sharing credential");
+    host.refresh_provider_bindings().await;
+    let bound = resolver
+        .resolve_selected(session, &model_ref("openai", "gpt-5.6-terra"))
+        .expect("a fallback model resolves");
+    assert_eq!(
+        bound.model.route.endpoint.base_url.as_deref(),
+        Some("https://api.openai.com/v1"),
+        "token sharing points the provider at the resource URL (chatgpt.ts:273)"
+    );
+    assert_eq!(
+        wire_header(&bound, "authorization").expect("wire").as_deref(),
+        Some("Bearer shared-token")
+    );
+    assert!(bound.cost.is_empty(), "token sharing zeroes cost (chatgpt.ts:303)");
+    assert_eq!(
+        bound.compaction,
+        Some(oc_schema::provider::Compaction::Summary),
+        "token sharing forces summary compaction (chatgpt.ts:294)"
+    );
+    let error = resolver
+        .resolve_selected(session, &model_ref("openai", "gpt-4o"))
+        .expect_err("non-fallback models are not part of the token-sharing provider");
+    assert!(error.to_string().contains("gpt-4o"), "the unavailable error names the model: {error}");
+}
+
+// ---------------------------------------------------------------------------
 // CRED-B3 (runtime repro): keyless zen downgrades to the public key
 // ---------------------------------------------------------------------------
 
