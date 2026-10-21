@@ -25,7 +25,8 @@ use serde_json::Value;
 use crate::attention::AttentionState;
 use crate::clipboard::ClipboardSink;
 use crate::components::composer::{
-    Composer, PromptDraft, PromptHistory, PromptSink, RecordingPromptSink, SubmittedPrompt,
+    autocomplete, Composer, PromptDraft, PromptHistory, PromptSink, RecordingPromptSink,
+    SubmittedPrompt,
 };
 use crate::components::dialog_select::SelectState;
 use crate::components::footer::{FooterMachine, PromptRoute};
@@ -1421,6 +1422,34 @@ pub struct Store {
     /// `prompt/index.tsx:1605-1619`); the app's location worker sets
     /// it once per boot (a `/cd` or session move would refresh it).
     footer_location: std::cell::RefCell<String>,
+    /// TUI-30 — `currentLocation.error?.location.directory`
+    /// (context/location.tsx): the directory that FAILED to resolve
+    /// (the location worker's error state). A routed session whose
+    /// `location.directory` matches mounts the
+    /// `SessionLocationMissing` recovery screen (routes/session/
+    /// index.tsx:1484-1496).
+    location_error: std::cell::RefCell<Option<String>>,
+    /// TUI-TD06 — the per-session saved scroll anchors
+    /// (`sessionTabs.scrollAnchor`, index.tsx:518-547's
+    /// `saveScrollAnchor`).
+    scroll_anchors: std::cell::RefCell<std::collections::HashMap<String, ScrollAnchor>>,
+    /// TUI-TD06 — the sessions whose next render resolves a saved
+    /// anchor (v2's afterLayout restore, index.tsx:548-595).
+    pending_scroll_restore: std::cell::RefCell<std::collections::HashSet<String>>,
+    /// TUI-28 — the directory recents (`useDirectoryRecents`' storage
+    /// doc `directory-recents`, prompt/directory-recents.ts): the
+    /// `/cd` completion's recent rows + their ctrl+d deletes.
+    directory_recents: std::cell::RefCell<autocomplete::DirectoryRecents>,
+    /// TUI-TD12 — the staged `session.update {title}` requests (the
+    /// run loop drains them into POSTs; `""` is the title-GENERATE
+    /// arm, index.tsx:902-911).
+    rename_outbox: std::cell::RefCell<Vec<(String, String)>>,
+    /// TUI-29 — the renderer console's open flag
+    /// (`renderer.console.toggle()`, app.tsx:1110-1118).
+    console_open: Cell<bool>,
+    /// TUI-29 — the console's captured diagnostics ring (the tail
+    /// renders in the overlay).
+    console_ring: std::cell::RefCell<std::collections::VecDeque<String>>,
     /// NEW-S1a: the live caret's screen cell for the TERMINAL cursor
     /// (`surface.set_cursor` at the draw seam — v2's caret is the
     /// hardware cursor, never a cell-painted block). Set during the
@@ -1511,6 +1540,9 @@ pub struct Store {
     /// The dismissed `source:version` keys (`update-notifications` —
     /// loaded/saved by the run loop's storage handle).
     update_dismissed: RefCell<Vec<String>>,
+    /// TUI-TD27 — the home update banner's hit rect from the last
+    /// render pass (the banner's `onMouseUp`, home.tsx:138-146).
+    home_update_hit: RefCell<Option<(usize, usize, usize)>>,
     /// Per-tab pulse transition stamps (the strip's animated phases —
     /// `TabPulseTrack::sync` at status flips; the render derives every
     /// envelope level from these + the clock, stateless per frame).
@@ -1870,6 +1902,11 @@ pub struct PluginRoutePage {
     pub title: String,
     /// The materialized rows.
     pub rows: Vec<String>,
+    /// TUI-TD28 — the host has no registered route `{plugin_id}/
+    /// {name}` (v2's `plugins.route(id, name)` undefined → the
+    /// `PluginRouteMissing` fallback screen renders instead of a
+    /// page).
+    pub missing: bool,
 }
 
 /// The diff viewer's source (`DIFF_SOURCES`, diff-viewer.tsx:73-78):
@@ -2273,6 +2310,12 @@ pub enum TranscriptHitAction {
     /// :183, Exploration :152, Activity :219, Instructions :256; the
     /// plugin rules table's kinds ride `GroupContent` too).
     ToggleGroup(String),
+    /// TUI-TD14 — the `QueuedPromptDock` row's release → the queued
+    /// prompts manager (`openQueuedPrompts`, index.tsx:2312-2342).
+    OpenQueuedPrompts,
+    /// TUI-TD14 — the "Jump to latest ↓" slot's release → `toBottom`
+    /// (index.tsx:1428-1442).
+    JumpToLatest,
     /// Toggle one thought's disclosure (the minimal-mode
     /// `ReasoningHeader` box, message-parts.tsx:80-86: `toggleable`,
     /// the body behind `<Show when={expanded}>`). The port's
@@ -2318,7 +2361,9 @@ impl TranscriptHitAction {
             | Self::OpenToolDialog { .. }
             | Self::DismissRevert { .. }
             | Self::NavigateToSession { .. }
-            | Self::OpenLink { .. } => None,
+            | Self::OpenLink { .. }
+            | Self::OpenQueuedPrompts
+            | Self::JumpToLatest => None,
         }
     }
 }
@@ -2607,6 +2652,18 @@ pub struct MessagePosition {
     pub id: String,
     /// The row's content y (the nav walk's boundary coordinate).
     pub y: usize,
+}
+
+/// TUI-TD06 — one saved scroll anchor (`sessionTabs.scrollAnchor`:
+/// `{target, screenY}`, index.tsx:538-547): the message whose row
+/// straddled the viewport top when the session was left, plus its
+/// screen offset (≤ 1; negative when the row's head sat above the
+/// top edge). The restore re-seats the viewport so the SAME message
+/// lands at the SAME screen row, whatever was inserted above.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScrollAnchor {
+    pub message_id: String,
+    pub screen_y: i64,
 }
 
 /// TUI-TD02 — the queued two-phase navigation intent (v2's
@@ -3057,6 +3114,7 @@ impl Store {
             update_notice,
             update_dialog,
             update_dismissed: RefCell::new(Vec::new()),
+            home_update_hit: RefCell::new(None),
             mcp_toggle_sink: std::cell::RefCell::new(Rc::new(NoMcpToggleSink)),
             pair_refresh_sink: std::cell::RefCell::new(None),
             config_sink: std::cell::RefCell::new(Rc::new(NoConfigSink)),
@@ -3072,6 +3130,13 @@ impl Store {
                 RecordingSessionActionSink::default(),
             )),
             footer_location: std::cell::RefCell::new(String::new()),
+            location_error: std::cell::RefCell::new(None),
+            scroll_anchors: std::cell::RefCell::new(std::collections::HashMap::new()),
+            pending_scroll_restore: std::cell::RefCell::new(std::collections::HashSet::new()),
+            directory_recents: std::cell::RefCell::new(autocomplete::DirectoryRecents::default()),
+            rename_outbox: std::cell::RefCell::new(Vec::new()),
+            console_open: Cell::new(false),
+            console_ring: std::cell::RefCell::new(std::collections::VecDeque::new()),
             caret_cell: Cell::new(None),
             connection_since: Cell::new(0),
             startup_state: RefCell::new(StartupLoadingState::default()),
@@ -3426,6 +3491,55 @@ impl Store {
         self.dialogs.get()
     }
 
+    /// TUI-TD12 — `/rename <title>`'s direct path (index.tsx:899-911):
+    /// a NON-empty title optimistically patches the open tab and
+    /// stages the `session.update` request; the EMPTY string is the
+    /// title-GENERATE arm (the same POST with `title: ""`). The run
+    /// loop drains [`Self::take_rename_requests`] into the POSTs (the
+    /// `session.renamed` echo confirms).
+    pub fn request_session_rename(&self, session_id: &str, title: &str) {
+        if !title.is_empty() {
+            self.open_tab(session_id, Some(title.to_owned()));
+        }
+        self.rename_outbox.borrow_mut().push((session_id.to_owned(), title.to_owned()));
+    }
+
+    /// Drain the staged rename requests (the run loop's POST pass).
+    pub fn take_rename_requests(&self) -> Vec<(String, String)> {
+        std::mem::take(&mut *self.rename_outbox.borrow_mut())
+    }
+
+    // -- TUI-29: the renderer console ---------------------------------
+
+    /// `renderer.console.toggle()` (app.tsx:1110-1118).
+    pub fn console_toggle(&self) {
+        self.console_open.set(!self.console_open.get());
+        self.request_redraw();
+    }
+
+    /// Whether the console overlay is open.
+    #[must_use]
+    pub fn console_open(&self) -> bool {
+        self.console_open.get()
+    }
+
+    /// Capture one diagnostic line into the console's ring (the
+    /// send-failure/config-error/vcs-skip class of messages v2's
+    /// renderer console surfaces).
+    pub fn console_log(&self, line: &str) {
+        let mut ring = self.console_ring.borrow_mut();
+        if ring.len() >= crate::components::console::CONSOLE_RING {
+            ring.pop_front();
+        }
+        ring.push_back(line.to_owned());
+    }
+
+    /// The captured console lines (oldest first).
+    #[must_use]
+    pub fn console_lines(&self) -> Vec<String> {
+        self.console_ring.borrow().iter().cloned().collect()
+    }
+
     /// Where key input goes: the top dialog when one is open, else the
     /// route (the reference pushes keymap mode `modal` while the stack
     /// is non-empty).
@@ -3729,6 +3843,80 @@ impl Store {
     /// Set the footer location label (the boot location worker).
     pub fn set_footer_location(&self, label: String) {
         *self.footer_location.borrow_mut() = label;
+    }
+
+    /// TUI-30 — the location worker's error state
+    /// (`currentLocation.error?.location.directory`,
+    /// context/location.tsx): the directory that failed to resolve.
+    /// The boot location worker sets it when `location.get` fails and
+    /// clears it on a successful resolve.
+    pub fn set_location_error(&self, directory: Option<String>) {
+        *self.location_error.borrow_mut() = directory;
+        self.request_redraw();
+    }
+
+    /// TUI-30 — the failed directory, when one is recorded.
+    #[must_use]
+    pub fn location_error(&self) -> Option<String> {
+        self.location_error.borrow().clone()
+    }
+
+    /// TUI-18 — `terminalTitleEnabled()` (app.tsx:597: `config.
+    /// terminal?.title ?? true`): the settings snapshot's
+    /// `terminal.title` (unset = on, only an explicit `"false"`
+    /// disables).
+    #[must_use]
+    pub fn terminal_title_enabled(&self) -> bool {
+        self.settings_snapshot_value("terminal.title") != "false"
+    }
+
+    /// TUI-18 — the terminal window title (`setTerminalTitle`'s
+    /// effect, app.tsx:596-622): `""` while disabled (the toggle's
+    /// clearing arm), `OpenCode` on home and on untitled/fallback
+    /// sessions, else `OC | {title}` with the 40-char truncation
+    /// (37 chars + `…`).
+    #[must_use]
+    pub fn terminal_title(&self) -> String {
+        if !self.terminal_title_enabled() {
+            return String::new();
+        }
+        match &self.route.get() {
+            Route::Home => "OpenCode".to_owned(),
+            Route::Session { session_id } => {
+                let tabs = self.tabs();
+                let title = tabs
+                    .tabs
+                    .iter()
+                    .find(|tab| tab.session_id == *session_id)
+                    .and_then(|tab| self.display_title(tab))
+                    .or_else(|| self.session_title(session_id));
+                match title {
+                    None => "OpenCode".to_owned(),
+                    Some(title) if title.chars().count() > 40 => {
+                        let head: String = title.chars().take(37).collect();
+                        format!("OC | {head}…")
+                    }
+                    Some(title) => format!("OC | {title}"),
+                }
+            }
+        }
+    }
+
+    /// TUI-30 — the `SessionLocationMissing` mount gate
+    /// (index.tsx:1484-1496): `session() &&
+    /// currentLocation.error?.location.directory ===
+    /// session().location.directory`. The session's directory comes
+    /// from the resync snapshot (`location.directory` on the wire);
+    /// `Some(directory)` mounts the recovery screen for it.
+    #[must_use]
+    pub fn session_location_missing(&self, session_id: &str) -> Option<String> {
+        let error = self.location_error.borrow().clone()?;
+        let directory = self
+            .session_history()
+            .iter()
+            .find(|session| session.id == session_id)
+            .and_then(|session| session.directory.clone())?;
+        (directory == error).then_some(error)
     }
 
     /// The live caret's screen cell (the terminal cursor's position).
@@ -4496,11 +4684,28 @@ impl Store {
     }
 
     /// The model the UI DISPLAYS for `session_id` (the composer's
-    /// statusline hint, the pickers' `current`): the explicit pick,
+    /// statusline hint, the pickers's `current`): the explicit pick,
     /// else the resolved chain (`currentSelection` — local.tsx:225-236).
     #[must_use]
     pub fn effective_model(&self, session_id: &str) -> Option<ModelSelection> {
         self.selection_for(session_id).model.or_else(|| self.resolve_model(session_id))
+    }
+
+    /// TUI-TD15 — the `--prompt` auto-submit's readiness gate
+    /// (home.tsx:69-80 / index.tsx:597-604): v2 waits for
+    /// `local.model.ready && local.model.catalogReady` plus a current
+    /// agent AND model before `r.submit()`. The port's translation:
+    /// the model catalog is LOADED (the catalog/ready halves — the
+    /// initial `Loading`/`Failed` states keep the startup prompt
+    /// parked) and a current model RESOLVES against it (the agent
+    /// half is the default `build` agent until a pick lands — always
+    /// current in the port, v2's pristine state the same).
+    #[must_use]
+    pub fn startup_prompt_ready(&self, session_id: &str) -> bool {
+        if !matches!(self.server_lists().models, ListState::Loaded(_)) {
+            return false;
+        }
+        self.resolve_model(session_id).is_some()
     }
 
     // -- clipboard --------------------------------------------------------
@@ -4575,6 +4780,18 @@ impl Store {
             }
         }
         self.update_notice.set(Some(notice));
+    }
+
+    /// TUI-TD27 — record/clear the banner's hit rect (the home
+    /// render pass; `(x, row, width)`).
+    pub fn set_home_update_hit(&self, hit: Option<(usize, usize, usize)>) {
+        *self.home_update_hit.borrow_mut() = hit;
+    }
+
+    /// The banner's hit rect from the last render.
+    #[must_use]
+    pub fn home_update_hit(&self) -> Option<(usize, usize, usize)> {
+        *self.home_update_hit.borrow()
     }
 
     /// Dismiss the banner + record the dismissal (the loop persists
@@ -5562,6 +5779,126 @@ impl Store {
         let maximum = new_content_height.saturating_sub(viewport);
         let mut scroll = self.scroll.borrow_mut();
         scroll.entry(session_id.to_owned()).or_default().appended(maximum);
+    }
+
+    // -- TUI-TD06: content-anchored scroll restore -------------------
+    // (index.tsx:518-595 + anchors.ts:37-50's containsAnchor) --------
+
+    /// `saveScrollAnchor` (index.tsx:518-547): while AWAY from the
+    /// bottom, record the CONTENT anchor straddling the viewport top
+    /// — the LAST mounted message with `screenY <= 1` (the inset a
+    /// group/assistant row gets; user rows 0), i.e. the greatest
+    /// content-y at-or-above the top edge, with its (possibly
+    /// negative) screen offset. Sticky clears the anchor (v2's
+    /// `!isAwayFromBottom() → setScrollAnchor(undefined)`).
+    pub fn save_scroll_anchor(&self, session_id: &str) {
+        if self.follow_state(session_id) == FollowState::Sticky {
+            self.scroll_anchors.borrow_mut().remove(session_id);
+            return;
+        }
+        let offset = self.scroll_offset(session_id);
+        let positions = self.message_positions(session_id);
+        // Positions arrive in content order; the anchor is the last
+        // one whose y ≤ offset + 1, falling back to the first (v2's
+        // `first ??= item`).
+        let anchor = positions
+            .iter()
+            .rev()
+            .find(|position| position.y <= offset + 1)
+            .or_else(|| positions.first())
+            .map(|position| ScrollAnchor {
+                message_id: position.id.clone(),
+                screen_y: i64::try_from(position.y).unwrap_or(0)
+                    - i64::try_from(offset).unwrap_or(0),
+            });
+        let mut anchors = self.scroll_anchors.borrow_mut();
+        match anchor {
+            Some(anchor) => {
+                anchors.insert(session_id.to_owned(), anchor);
+            }
+            None => {
+                anchors.remove(session_id);
+            }
+        }
+    }
+
+    /// The session's saved anchor (`sessionTabs.scrollAnchor`).
+    #[must_use]
+    pub fn scroll_anchor(&self, session_id: &str) -> Option<ScrollAnchor> {
+        self.scroll_anchors.borrow().get(session_id).cloned()
+    }
+
+    // -- TUI-28: the `/cd` directory recents --------------------------
+
+    /// `directoryRecents.touch(projectID, directory)` (a `/cd` change
+    /// + location switches stamp `Date.now()`).
+    pub fn directory_recent_touch(&self, project_id: &str, directory: &str) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| u64::try_from(since.as_millis()).unwrap_or(u64::MAX));
+        self.directory_recents.borrow_mut().touch(project_id, directory, now);
+    }
+
+    /// `directoryRecents.remove(projectID, directory)` (the ctrl+d
+    /// destructive delete's `run`).
+    pub fn directory_recent_remove(&self, project_id: &str, directory: &str) {
+        self.directory_recents.borrow_mut().remove(project_id, directory);
+    }
+
+    /// The recents as the composer's directory-autocomplete options
+    /// (`directoryOptions`, index.tsx:1962-1985 — empty-query rows
+    /// only; the caller opens them when the `/cd ` query is empty).
+    #[must_use]
+    pub fn directory_recents_options(
+        &self,
+        project_id: &str,
+    ) -> Vec<autocomplete::AutocompleteOption> {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let recents = self.directory_recents.borrow().list(project_id);
+        autocomplete::directory_recents_options(&recents, &home)
+    }
+
+    /// Stage the restore for a session re-entered with a saved anchor
+    /// (the navigate hook; the session render resolves it against the
+    /// FRESH positions, like v2's `afterLayout(restore)`).
+    fn schedule_scroll_restore(&self, session_id: &str) {
+        if self.scroll_anchors.borrow().contains_key(session_id) {
+            self.pending_scroll_restore.borrow_mut().insert(session_id.to_owned());
+        }
+    }
+
+    /// `restoreScrollPosition` (index.tsx:548-595), resolved at render
+    /// time: re-seat the viewport so the anchored message lands back
+    /// at its saved screenY — content inserted ABOVE shifts the
+    /// offset with the anchor, keeping the view on the same content.
+    /// A vanished anchor (trimmed/reverted message) is the
+    /// `!boundary` arm: `toBottom()` (sticky) + the anchor cleared.
+    pub fn resolve_scroll_restore(&self, session_id: &str) -> bool {
+        if !self.pending_scroll_restore.borrow_mut().remove(session_id) {
+            return false;
+        }
+        let Some(anchor) = self.scroll_anchor(session_id) else {
+            return false;
+        };
+        let positions = self.message_positions(session_id);
+        let Some(position) = positions.iter().find(|position| position.id == anchor.message_id)
+        else {
+            // The `!boundary` arm: bottom + clear.
+            self.scroll_anchors.borrow_mut().remove(session_id);
+            self.clear_mount_window(session_id);
+            self.scroll.borrow_mut().insert(session_id.to_owned(), ScrollDriver::new());
+            return true;
+        };
+        let target = i64::try_from(position.y).unwrap_or(0) - anchor.screen_y;
+        let metrics = self.transcript_metrics(session_id);
+        let maximum = metrics.content_height.saturating_sub(metrics.viewport);
+        let offset = usize::try_from(target.clamp(0, i64::try_from(maximum).unwrap_or(0)).max(0))
+            .unwrap_or(0);
+        self.scroll.borrow_mut().insert(
+            session_id.to_owned(),
+            ScrollDriver::from_follow(FollowState::Free { offset, maximum }),
+        );
+        true
     }
 
     // -- TUI-TD02: message navigation (message-navigation.ts) --------
@@ -7314,11 +7651,26 @@ impl Store {
             Route::Session { session_id } => Some(session_id.clone()),
             Route::Home => None,
         };
-        self.route.set(route);
-        let viewed = match &self.route.get() {
+        // TUI-TD06 — leaving a session saves its scroll anchor (v2's
+        // unmount `saveScrollAnchor(unmounting: true)`); re-entering
+        // one with a saved anchor stages the restore (resolved at the
+        // session's next render, against fresh positions).
+        let entering = match &route {
             Route::Session { session_id } => Some(session_id.clone()),
             Route::Home => None,
         };
+        if let Some(left) = &previous {
+            if entering.as_deref() != Some(left.as_str()) {
+                self.save_scroll_anchor(left);
+            }
+        }
+        if let Some(entered) = &entering {
+            if previous.as_deref() != Some(entered.as_str()) {
+                self.schedule_scroll_restore(entered);
+            }
+        }
+        self.route.set(route);
+        let viewed = entering;
         let navigated = viewed != previous;
         self.enforce_session_retention(viewed.as_deref(), navigated);
     }
@@ -8236,7 +8588,22 @@ impl Store {
             data,
             title: name.to_owned(),
             rows: Vec::new(),
+            missing: false,
         }));
+    }
+
+    /// TUI-TD28 — latch the fallback state: the host's bounded
+    /// `route.render` replied miss (no registered route
+    /// `{plugin_id}/{name}`), so the page renders
+    /// `PluginRouteMissing` (`Unknown plugin route: …` + go home,
+    /// component/plugin-route-missing.tsx:3-21). No-op when no page
+    /// is open.
+    pub fn mark_plugin_route_missing(&self) {
+        self.plugin_route.update(|page| {
+            if let Some(page) = page.as_mut() {
+                page.missing = true;
+            }
+        });
     }
 
     /// Fill the open page's materialized content (`route.render`'s

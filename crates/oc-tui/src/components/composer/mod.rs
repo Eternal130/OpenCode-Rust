@@ -257,6 +257,11 @@ pub struct Composer {
     pub placeholders: Vec<String>,
     pub placeholder_index: usize,
     pub autocomplete: AutocompleteState,
+    /// TUI-28 — the destructive ctrl+d requests the second press
+    /// armed (the absolute directories to drop from the store's
+    /// recents; the app drains them — the removal itself touches the
+    /// per-project store, which the pure composer cannot reach).
+    pub destructive_requests: Vec<String>,
     /// TUI-14 — the input mode (`store.mode`): `Shell` while the
     /// `!` prefix holds (esc/backspace-at-0 exit; Enter sends through
     /// `session.shell`).
@@ -274,6 +279,7 @@ impl Default for Composer {
             placeholders: Vec::new(),
             placeholder_index: 0,
             autocomplete: AutocompleteState::default(),
+            destructive_requests: Vec::new(),
             mode: ComposerMode::Normal,
         }
     }
@@ -323,6 +329,10 @@ pub enum ComposerKey {
     CtrlU,
     CtrlC,
     CtrlV,
+    /// TUI-28 — the autocomplete layer's destructive confirm
+    /// (`prompt.autocomplete.destructive`, bind ctrl+d —
+    /// autocomplete.tsx:728-731).
+    CtrlD,
     Escape,
     Tab,
 }
@@ -819,11 +829,26 @@ impl Composer {
 
     /// The pump's key dispatch: printable chars feed the textarea;
     /// the rest resolve through the v2 table's composer slice.
+    #[allow(clippy::too_many_lines)] // one arm per key, the composer's dispatch table
     pub fn handle_key(&mut self, key: &ComposerKey) -> KeyOutcome {
         if self.autocomplete.visible.is_some() {
             match key {
                 ComposerKey::Escape => {
                     self.autocomplete.dismiss();
+                    return KeyOutcome::Edited;
+                }
+                // TUI-28 — `prompt.autocomplete.destructive`
+                // (autocomplete.tsx:728-731, bind ctrl+d): the
+                // two-press delete over the DIRECTORY rows. The
+                // removal itself is the caller's (the recents live in
+                // the store); the second press records the request
+                // here.
+                ComposerKey::CtrlD
+                    if matches!(self.autocomplete.visible, Some(autocomplete::Mode::Directory)) =>
+                {
+                    if let Some(id) = self.autocomplete.trigger_destructive() {
+                        self.destructive_requests.push(id);
+                    }
                     return KeyOutcome::Edited;
                 }
                 ComposerKey::Enter | ComposerKey::Tab => {
@@ -929,7 +954,11 @@ impl Composer {
                 self.autocomplete.close();
                 KeyOutcome::Ignored
             }
-            ComposerKey::Tab => KeyOutcome::Ignored,
+            // TUI-28 — the destructive confirm only lives in the
+            // autocomplete layer (handled above); bare ctrl+d (like
+            // tab's fallthrough) is not a composer command — the base
+            // layer's app.exit owns it.
+            ComposerKey::Tab | ComposerKey::CtrlD => KeyOutcome::Ignored,
         }
     }
 
@@ -1024,6 +1053,15 @@ impl Composer {
                 self.autocomplete.close();
                 let name = option.display.trim_start_matches('@');
                 self.insert_text(&format!("@{name} "));
+                KeyOutcome::Edited
+            }
+            // TUI-28 — the directory rows' `select()` (autocomplete.
+            // tsx:620-627): the recent rows carry NO `onSelect`, so
+            // Enter only dismisses (the dismissed value suppresses
+            // the reopen); the INSERT path is tab (`complete` →
+            // `expandDirectory` → `insertDirectory(value + "/")`).
+            Some(autocomplete::Mode::Directory) => {
+                self.autocomplete.dismiss();
                 KeyOutcome::Edited
             }
             None => KeyOutcome::Ignored,

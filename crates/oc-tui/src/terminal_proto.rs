@@ -118,6 +118,15 @@ pub fn osc12_sequence(color: (u8, u8, u8)) -> Vec<u8> {
     format!("\x1b]12;#{:02x}{:02x}{:02x}\x1b\\", color.0, color.1, color.2).into_bytes()
 }
 
+/// TUI-18 — the terminal window title (`renderer.setTerminalTitle`,
+/// app.tsx:596-622): OSC 0 with the BEL terminator (opentui's
+/// renderer emits `OSC 0 ; title BEL`). An EMPTY title clears the
+/// window name (v2's `terminal.title.toggle` disabling arm).
+#[must_use]
+pub fn osc_title_sequence(title: &str) -> Vec<u8> {
+    format!("\x1b]0;{title}\x07").into_bytes()
+}
+
 /// Write a byte sequence to stdout (best-effort; the caller flushes).
 pub fn emit(bytes: &[u8]) {
     let mut out = std::io::stdout();
