@@ -84,12 +84,28 @@ fn renders_mermaid_state_code_block_as_ascii_diagram() {
 }
 
 #[test]
+fn renders_mermaid_git_graph_code_block_as_ascii_diagram() {
+    let rows = rendered(
+        "```mermaid\ngitGraph\n  commit id: \"baseline\"\n  branch feature\n  commit id: \"work\"\n  checkout main\n  merge feature id: \"land\"\n```",
+        40,
+    );
+    let text = rows.join("\n");
+    assert!(text.contains("baseline"), "commit label missing: {text}");
+    assert!(text.contains("work  [feature]"), "branch head label missing: {text}");
+    assert!(text.contains("land  [main]"), "merge label missing: {text}");
+    assert!(text.contains('◎'), "merge glyph missing: {text}");
+    assert!(text.contains('●'), "commit glyph missing: {text}");
+    // The raw source must NOT render.
+    assert!(!text.contains("gitGraph"), "raw source leaked: {text}");
+}
+
+#[test]
 fn unknown_mermaid_kind_falls_back_to_the_plain_code_block() {
-    // gitGraph is detected by upstream but not ported in this lane —
+    // gantt is detected by upstream but not ported in this lane —
     // the fence renders through the default code path.
-    let rows = rendered("```mermaid\ngitGraph\n  commit id: \"one\"\n```", 40);
+    let rows = rendered("```mermaid\ngantt\n  title Roadmap\n```", 40);
     assert!(
-        rows.iter().any(|row| row.contains("gitGraph")),
+        rows.iter().any(|row| row.contains("Roadmap")),
         "fallback code block missing: {rows:?}"
     );
 }
