@@ -1582,10 +1582,17 @@ fn shell_bang_mode() {
             // The metadata row labels the mode "Shell"
             // (prompt/index.tsx:1570's agentLabel override — the row
             // keeps the box's `┃` rail + pads, so probe the painted
-            // run).
+            // run). The dogfood3 harness now serves a model catalog
+            // (TUI-TD15's gate), so the row carries the resolved
+            // model after the mode label — match the prefix.
             wait_grid(
                 h,
-                |g| (20..30).any(|y| g.content_rect(2, y, 116, 1).trim() == "┃  Shell"),
+                |g| {
+                    (20..30).any(|y| {
+                        let row = g.content_rect(2, y, 116, 1);
+                        row.trim().starts_with("┃  Shell")
+                    })
+                },
                 Duration::from_secs(5),
             )
             .map_err(|error| format!("the Shell metadata label never painted: {error}"))?;
