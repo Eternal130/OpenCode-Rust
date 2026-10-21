@@ -157,7 +157,7 @@ fn check_limit(value: &str) -> Result<(), String> {
 /// JS `Number(string)` for the inputs that matter: trims whitespace,
 /// `""` → 0, decimal/exponent literals, `0x` hex, `Infinity`; anything
 /// else is `NaN`. `pub(crate)`: the HTTP-H0 middleware seam reuses this
-/// for its NumberFromString query params (single implementation).
+/// for its `NumberFromString` query params (single implementation).
 pub(crate) fn js_number(raw: &str) -> f64 {
     let text = raw.trim_matches(|c: char| c.is_ascii_whitespace());
     if text.is_empty() {

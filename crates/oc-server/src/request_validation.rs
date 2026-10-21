@@ -114,7 +114,7 @@ const ENFORCED_OPS: &[&str] = &[
 /// validate-first middleware must NOT fire for them. Probe-pinned
 /// (rollout-probe*.json): bad query/body on these routes answers the
 /// location 404, never a schema 400. Their post-location seam is a
-/// follow-up slice. Operation ids are the OpenAPI identifiers (note the
+/// follow-up slice. Operation ids are the `OpenAPI` identifiers (note the
 /// `experimental.` prefixes the endpoint names lack).
 pub const LOCATION_FIRST_OPS: &[&str] = &[
     "experimental.session.instructions.entry.list",
@@ -148,9 +148,9 @@ pub const LOCATION_FIRST_OPS: &[&str] = &[
     "session.update",
 ];
 
-/// Probe-pinned NumberFromString integer query params. v2 declares these
+/// Probe-pinned `NumberFromString` integer query params. v2 declares these
 /// as `Schema.NumberFromString.pipe(decodeTo(<int filter>))` — decode-time
-/// filters the OpenAPI spec CANNOT express (the spec renders them as plain
+/// filters the `OpenAPI` spec CANNOT express (the spec renders them as plain
 /// strings), so the constraints live here, byte-pinned against the live
 /// v2.0.24 reference (`rollout-probe{,-2,-3}.json`):
 ///
@@ -165,7 +165,9 @@ pub const LOCATION_FIRST_OPS: &[&str] = &[
 /// `(operation_id, param, minimum inclusive, maximum inclusive, exclusive
 /// minimum)`. `session.list`'s row duplicates the in-handler P10-E2 pin
 /// (identical bytes; middleware fires first).
-pub const NUMBER_PARAMS: &[(&str, &str, Option<f64>, Option<f64>, Option<f64>)] = &[
+pub type NumberParam = (&'static str, &'static str, Option<f64>, Option<f64>, Option<f64>);
+
+pub const NUMBER_PARAMS: &[NumberParam] = &[
     ("fs.find", "limit", None, None, Some(0.0)),
     ("server.experimental.persistentPty.read", "lines", None, None, Some(0.0)),
     ("session.list", "limit", None, None, Some(0.0)),
@@ -515,13 +517,13 @@ pub fn validate_payload(operation_id: &str, body: &Value) -> Result<(), String> 
 /// "desc" | undefined` for order).
 fn query_kind_label(node: u32) -> String {
     match &validation_gen::NODES[node as usize] {
-        SchemaNode::Str | SchemaNode::Pattern { .. } => "string".to_owned(),
         SchemaNode::Literal(values) => render_literals(values),
         SchemaNode::Ref { label, .. } => (*label).to_owned(),
         SchemaNode::Nullable(inner) => query_kind_label(*inner),
         SchemaNode::Union(members) => {
             members.first().map_or_else(|| "string".to_owned(), |m| query_kind_label(*m))
         }
+        // Str, Pattern (raw kind label `string`) and everything else.
         _ => "string".to_owned(),
     }
 }
@@ -564,7 +566,7 @@ fn is_struct_param(node: u32) -> bool {
 ///   `Expected a string starting with "msg_"`;
 /// * string-unions (session.list `parentID`) accept any member and report
 ///   the FIRST member's message (`^ses`, probe r1);
-/// * [`NUMBER_PARAMS`] carry the NumberFromString integer filters
+/// * [`NUMBER_PARAMS`] carry the `NumberFromString` integer filters
 ///   (`Expected an integer` / bound messages).
 ///
 /// Declaration order wins (probe r2: `?limit=abc&order=bogus` reports
@@ -573,11 +575,12 @@ pub fn validate_query(operation_id: &str, query: &str) -> Result<(), String> {
     let Some(node) = validation_gen::query_node(operation_id) else {
         return Ok(());
     };
-    let SchemaNode::Obj { fields } = &validation_gen::NODES[node as usize] else {
-        return Ok(());
+    let fields = match &validation_gen::NODES[node as usize] {
+        SchemaNode::Obj { fields } => *fields,
+        _ => return Ok(()),
     };
     let pairs = crate::handlers::schema_check::parse_query_pairs(query);
-    for field in fields.iter() {
+    for field in fields {
         let name = field.name;
         let deep_prefix = format!("{name}[");
         let has_deep = pairs.iter().any(|(key, _)| key.starts_with(&deep_prefix));
@@ -625,12 +628,6 @@ pub fn validate_query(operation_id: &str, query: &str) -> Result<(), String> {
         }
 
         match &validation_gen::NODES[field.ty as usize] {
-            SchemaNode::Str
-            | SchemaNode::Any
-            | SchemaNode::Nullable(_)
-            | SchemaNode::Int { .. }
-            | SchemaNode::Num
-            | SchemaNode::Bool => {}
             SchemaNode::Pattern { prefix } => {
                 if !value.starts_with(prefix) {
                     return Err(format!(
@@ -662,12 +659,17 @@ pub fn validate_query(operation_id: &str, query: &str) -> Result<(), String> {
                 // String-union (session.list parentID): accept on any
                 // member; report the FIRST member's message otherwise
                 // (probe r1: `Expected a string starting with "ses"`).
-                if !members.iter().any(|member| query_union_member_accepts(*member, value)) {
-                    if let Some(message) =
-                        members.first().map(|m| query_union_member_message(*m, value, name))
-                    {
-                        return Err(message);
-                    }
+                let accepted =
+                    members.iter().any(|member| query_union_member_accepts(*member, value));
+                let rejection = (!accepted)
+                    .then(|| {
+                        members
+                            .first()
+                            .map(|member| query_union_member_message(*member, value, name))
+                    })
+                    .flatten();
+                if let Some(message) = rejection {
+                    return Err(message);
                 }
             }
             _ => {}
@@ -699,7 +701,7 @@ fn query_union_member_message(member: u32, value: &str, name: &str) -> String {
     }
 }
 
-/// One probe-pinned NumberFromString param (`Expected an integer`,
+/// One probe-pinned `NumberFromString` param (`Expected an integer`,
 /// `Expected a value greater than [or equal to] N`,
 /// `Expected a value less than or equal to N`).
 fn check_number_param(
@@ -832,19 +834,19 @@ pub async fn schema_error_middleware(request: Request, next: Next) -> Response {
     // 1. query (urlParams) before payload — probe: websearch?location=x.
     //    An absent query string is the EMPTY param set: required params
     //    still 400 (`Missing key`, probe r2: bare /api/vcs/diff).
-    if enforces_query(&operation_id) {
-        if let Err(message) = validate_query(&operation_id, query.as_deref().unwrap_or("")) {
+    if enforces_query(operation_id) {
+        if let Err(message) = validate_query(operation_id, query.as_deref().unwrap_or("")) {
             return crate::errors::schema_rejection(&message, "Query").into_response();
         }
     }
 
-    let body_kind = validation_gen::find(&operation_id).map(|row| row.body);
+    let body_kind = validation_gen::find(operation_id).map(|row| row.body);
     if body_kind.is_none_or(|kind| kind == validation_gen::BodyValidation::None) {
         return next.run(request).await;
     }
     // Location-first routes resolve the session (404) before any payload
     // decode — no gate, no buffering.
-    if location_first(&operation_id) {
+    if location_first(operation_id) {
         return next.run(request).await;
     }
 
@@ -875,7 +877,7 @@ pub async fn schema_error_middleware(request: Request, next: Next) -> Response {
     let Some(validation_gen::BodyValidation::Json(_)) = body_kind else {
         return next.run(request).await;
     };
-    if !enforces(&operation_id) {
+    if !enforces(operation_id) {
         return next.run(request).await;
     }
     let (mut parts, body) = request.into_parts();
@@ -899,7 +901,7 @@ pub async fn schema_error_middleware(request: Request, next: Next) -> Response {
             }
         }
     };
-    match validate_payload(&operation_id, &value) {
+    match validate_payload(operation_id, &value) {
         Ok(()) => {
             // Absent content-type defaults to JSON (probe r1) — insert it
             // so the handler's `Json` extractor accepts the re-inserted
@@ -1335,10 +1337,10 @@ mod tests {
         }
     }
 
-    /// The rollout is COMPLETE (2026-10-21): ENFORCED_OPS is exactly the
+    /// The rollout is COMPLETE (2026-10-21): [`ENFORCED_OPS`] is exactly the
     /// set of JSON-body operations minus the location-first routes
     /// (24 sessionLocationMiddleware + 5 formLocationMiddleware ops, ids
-    /// from the OpenAPI identifiers). 28 of the 46 JSON-body ops; the
+    /// from the `OpenAPI` identifiers). 28 of the 46 JSON-body ops; the
     /// other 18 stay out forever (not deferred — their v2 endpoints
     /// resolve the session/form first, so a validate-first 400 would
     /// DIVERGE from v2's 404).
@@ -1460,6 +1462,7 @@ mod tests {
     }
 
     /// Query interpreter pins (probe rounds 1-3, byte-level).
+    #[allow(clippy::too_many_lines)] // one pinned table, one test
     #[test]
     fn pinned_query_messages() {
         let q = |op: &str, query: &str| validate_query(op, query).unwrap_err();
