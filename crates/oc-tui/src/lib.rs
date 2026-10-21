@@ -63,6 +63,7 @@ pub mod reactive;
 pub mod render;
 pub mod replay;
 pub mod screen_golden_tests;
+pub mod selection;
 pub mod sound;
 pub mod spike;
 pub mod stderr_redirect;
