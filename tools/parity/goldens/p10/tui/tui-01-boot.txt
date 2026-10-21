@@ -1,3 +1,4 @@
+Warning: Server at http://127.0.0.1:37807 has version 2.0.24; this client is local. Continuing anyway.
 
 
 
@@ -37,4 +38,3 @@
 
 
 
- ✓ Server  ○ UI  Theme  Tools  Experiments

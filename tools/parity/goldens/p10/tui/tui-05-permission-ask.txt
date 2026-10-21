@@ -8,7 +8,7 @@
 
      Parity fake says hello.
 
-     Build · fake-model · 22ms · 0.0 tok/s
+     Build · Fake Model · 25ms · 0.0 tok/s
 
      Switched variant to default
 
@@ -16,7 +16,7 @@
   ┃  Now read the outside file please.
   ┃
 
-     ⠴ Read /tmp/opencode/p10-tui-2787369/outside/secret.txt
+     ⠴ Read /tmp/opencode/p10-tui-4108955/outside/secret.txt
 
 
 
@@ -27,14 +27,14 @@
 
   ┃                                                                                                                         OpenCode includes free models so
   ┃  △ Permission required                                                                                                  you can start immediately.
-  ┃    ← Access external directory /tmp/opencode/p10-tui-2787369/outside
+  ┃    ← Access external directory /tmp/opencode/p10-tui-4108955/outside
   ┃                                                                                                                         Connect from 75+ providers to
   ┃  Patterns                                                                                                               use other models, including
   ┃                                                                                                                         Claude, GPT, Gemini etc
-  ┃  - /tmp/opencode/p10-tui-2787369/outside/*
+  ┃  - /tmp/opencode/p10-tui-4108955/outside/*
   ┃                                                                                                                         Connect provider        /connect
   ┃
   ┃   Allow once   Always allow   Reject                               ctrl+f fullscreen  ⇆ select  enter confirm
   ┃                                                                                                                     /tmp/opencode/ref/packages/cli
 
- ✓ Server  ⦿ UI  Theme  Tools  Experiments
+ ✓ Server  ○ UI  Theme  Tools  Experiments
