@@ -278,7 +278,20 @@ jobs:
       #   :167  let db = home.join(".local/share/opencode/opencode.db");
       # => /tmp/opencode/p10-db-<pid>/home/.local/share/opencode/opencode.db
       # (NOT the parity-sandbox root). Newest first; single run => one dir.
-      - name: Locate + upload the v2-written library db
+      #
+      # GATE-DB-FIXTURE-WAL: the reference runs the library db in WAL mode
+      # (packages/core/src/database/sqlite.bun.ts:93 `PRAGMA journal_mode
+      # = WAL`). When the interop lane is red the harness ends the
+      # reference before SQLite ever checkpoints, so the schema+data stay
+      # committed in the `-wal` sidecar while the main file is a single
+      # 4096-byte header page — the bare `cp "$DB" v2-library.db` shipped
+      # exactly that shell in run 39519736380 (0 tables in
+      # sqlite_master; downstream: `no such table: migration`). Harvest
+      # the COMPLETE set instead: copy the sidecars next to the staged
+      # main file, checkpoint the STAGED copy (never the live original),
+      # and VALIDATE before uploading — a shell must fail loudly here
+      # rather than ride the artifact into the downstream gates.
+      - name: Locate + harvest the v2-written library db (WAL sidecars + checkpoint + validate)
         id: locate
         run: |
           set -euo pipefail
@@ -289,15 +302,63 @@ jobs:
             exit 0
           fi
           cp "$DB" v2-library.db
-          ls -l v2-library.db
+          for side in -wal -shm; do
+            if [ -f "$DB$side" ]; then
+              cp "$DB$side" "v2-library.db$side"
+            fi
+          done
+          ls -l v2-library.db*
+          # Fold the staged -wal into the staged main file so the artifact
+          # is self-contained even for consumers that copy the main file
+          # alone. python3 ships on ubuntu-latest; the staged copy's
+          # writer is dead, so nothing contends the lock.
+          python3 -c "import sqlite3; c = sqlite3.connect('v2-library.db'); c.execute('PRAGMA wal_checkpoint(TRUNCATE)'); c.close()" \
+            || { echo "::error::wal_checkpoint(TRUNCATE) failed on the staged copy — refusing to upload an uncheckpointed fixture"; exit 1; }
+          # VALIDATE before uploading (GATE-DB-FIXTURE-WAL): two probes —
+          # (a) the staged set with sidecars, (b) the main file ALONE in a
+          # clean dir (the exact shape run 39519736380 shipped broken).
+          # A 0-table / rowless shell fails loudly here; it never rides
+          # the artifact into the downstream import gates.
+          mkdir -p fixture-validate-alone
+          cp v2-library.db fixture-validate-alone/v2-library.db
+          python3 - <<'PY'
+          import sqlite3, sys
+
+          def probe(label, path):
+              conn = sqlite3.connect(path)
+              try:
+                  tables = [r[0] for r in conn.execute(
+                      "SELECT name FROM sqlite_master WHERE type = 'table'")]
+                  if "migration" not in tables:
+                      print(f"::error::{label}: migration table missing (tables: {tables}) — the harvested db is a WAL shell, not the library the reference wrote")
+                      sys.exit(1)
+                  migrations = conn.execute("SELECT count(*) FROM migration").fetchone()[0]
+                  if migrations < 1:
+                      print(f"::error::{label}: migration table exists but holds {migrations} rows")
+                      sys.exit(1)
+                  sessions = conn.execute("SELECT count(*) FROM session_v2").fetchone()[0]
+                  if sessions < 1:
+                      print(f"::error::{label}: session_v2 holds {sessions} rows — not a usable v2 library fixture")
+                      sys.exit(1)
+                  print(f"fixture OK ({label}): {migrations} migration rows, {sessions} session_v2 rows, {len(tables)} tables")
+              finally:
+                  conn.close()
+
+          probe("sidecar set", "v2-library.db")
+          probe("main file alone", "fixture-validate-alone/v2-library.db")
+          PY
           echo "db_staged=ok" >> "$GITHUB_OUTPUT"
 
       - name: Upload the v2-written library db
         if: steps.locate.outputs.db_staged == 'ok'
         uses: actions/upload-artifact@v4
         with:
+          # Main file + whatever sidecars survived the staged checkpoint
+          # (wal_checkpoint(TRUNCATE) + clean close usually removes them;
+          # if any remain they ride along so the sidecar route also
+          # works — the consumers copy them only when present).
           name: v2-db-fixture
-          path: v2-library.db
+          path: v2-library.db*
           retention-days: 1
           if-no-files-found: error
 
@@ -307,7 +368,7 @@ jobs:
           {
             echo "### v2-db-fixture"
             if [ "${{ steps.locate.outputs.db_staged }}" = "ok" ]; then
-              echo "- EXECUTED: interop lane ran (known-red GATE-DB-NULLROWS tolerated here; p10-battery reports it red) — v2.0.24 wrote real session rows; artifact \`v2-db-fixture\` uploaded"
+              echo "- EXECUTED: interop lane ran (known-red GATE-DB-NULLROWS tolerated here; p10-battery reports it red) — v2.0.24 wrote real session rows; harvested WITH -wal/-shm sidecars + staged wal_checkpoint(TRUNCATE), validated (migration + session_v2 rows, main-file-alone probe) BEFORE upload; artifact \`v2-db-fixture\` uploaded"
             else
               echo "- SKIPPED-GAP: no v2-written db was produced — PARITY_V2_DB_FIXTURE/OC_REAL_DB stay unset downstream (db_import fails strict; census self-skips and is GAP-marked). Skip ≠ pass."
             fi

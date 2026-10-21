@@ -480,6 +480,88 @@ async fn run(fixture: &Path, prompt_continue: bool) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
+// GATE-DB-FIXTURE-WAL — hermetic WAL-sidecar import pin
+// ---------------------------------------------------------------------------
+
+/// GATE-DB-FIXTURE-WAL: pin the harvest/import semantics without bun, the
+/// reference, or a staged fixture. A WAL-mode db whose committed schema+data
+/// still live only in the `-wal` sidecar (the reference —
+/// `packages/core/src/database/sqlite.bun.ts:93` — ended by the harness
+/// before SQLite ever checkpoints) must import COMPLETE through
+/// `copy_fixture_into_sandbox`: the sidecars travel with the main file and
+/// SQLite replays them on open. The main file ALONE is the 0-table shell CI
+/// run 39519736380 shipped (`no such table: migration`) — this test pins
+/// that exact rejection too, so a shell can never ride into a gate as a
+/// pass. File-level twin: `real_db_null_census.rs::
+/// real_db_null_census_wal_sidecar_copy_lands_next_to_the_main_file`.
+#[test]
+fn p10_db_import_wal_sidecar_copy_completes_the_fixture() {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let root =
+        PathBuf::from(format!("/tmp/opencode/lane-db3-fixturewal-{}-{nanos}", std::process::id()));
+    std::fs::create_dir_all(root.join("src")).expect("src dir");
+    let source = root.join("src/opencode.db");
+
+    // Build the "killed writer" state: WAL mode, committed rows, the
+    // connection held OPEN across both copies below — nothing checkpoints,
+    // so every committed frame stays in the `-wal` and the main file is a
+    // single header page (exactly the disk state the CI harvest sees).
+    let writer = rusqlite::Connection::open(&source).expect("open source");
+    assert_eq!(
+        writer
+            .query_row("PRAGMA journal_mode=WAL", [], |row| row.get::<_, String>(0))
+            .expect("set WAL mode"),
+        "wal"
+    );
+    writer
+        .execute_batch(
+            "CREATE TABLE migration (id TEXT PRIMARY KEY, time_completed INTEGER);
+             CREATE TABLE project (id TEXT PRIMARY KEY, worktree TEXT);
+             CREATE TABLE session_v2 (id TEXT PRIMARY KEY, directory TEXT);
+             INSERT INTO migration VALUES ('0001_seed', 1700000001), ('0002_seed', 1700000002), \
+             ('0003_seed', 1700000003);
+             INSERT INTO project VALUES ('p1', '/tmp/opencode/p10-db-1/project');
+             INSERT INTO session_v2 VALUES ('ses_1', '/tmp/opencode/p10-db-1/project');",
+        )
+        .expect("seed the wal");
+
+    // The COMPLETE harvest (what the hardened CI step stages): sidecars
+    // travel with the main file through the gate's own copy helper.
+    let imported =
+        copy_fixture_into_sandbox(&source, &root.join("import-with-sidecars")).expect("copy");
+    // The BROKEN harvest (what run 39519736380 staged): main file only.
+    let shell_db = root.join("import-main-only/home/.local/share/opencode/opencode.db");
+    std::fs::create_dir_all(shell_db.parent().expect("parent")).expect("shell dir");
+    std::fs::copy(&source, &shell_db).expect("main-file-only copy");
+    // Only now may the writer close (a clean close would checkpoint the
+    // source and delete its sidecars — the copies must precede it).
+    drop(writer);
+
+    let complete = rusqlite::Connection::open(&imported).expect("open the sidecar import");
+    let migrations = complete
+        .query_row("SELECT count(*) FROM migration", [], |row| row.get::<_, i64>(0))
+        .expect("migration rows through the copied sidecar set");
+    assert_eq!(migrations, 3, "the WAL sidecars must replay on open: migration rows");
+    let sessions = complete
+        .query_row("SELECT count(*) FROM session_v2", [], |row| row.get::<_, i64>(0))
+        .expect("session_v2 rows through the copied sidecar set");
+    assert_eq!(sessions, 1, "the WAL sidecars must replay on open: session_v2 rows");
+
+    // The shell is rejected LOUDLY with the exact CI symptom — a fixture
+    // whose main file carries no schema can never satisfy an import gate.
+    let shell = rusqlite::Connection::open(&shell_db).expect("open the shell copy");
+    let err = shell
+        .query_row("SELECT count(*) FROM migration", [], |row| row.get::<_, i64>(0))
+        .expect_err("a main-file-only WAL copy must have no tables");
+    assert!(err.to_string().contains("no such table: migration"), "unexpected shell error: {err}");
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+// ---------------------------------------------------------------------------
 // DB-D12 — v1 content migration (v1-migration.bun.ts port)
 // ---------------------------------------------------------------------------
 
