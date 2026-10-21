@@ -233,8 +233,24 @@ async fn run_against_rust_server(bun: &std::path::Path) -> Result<()> {
     sleep(1).await;
 
     // -- interaction 1: prompt + reply --------------------------------------
-    type_text("Say hello.");
-    sleep(1).await;
+    // Key delivery can race the first-run wizard's focus: when a modal
+    // owns the input the typed keys vanish and the 90s reply wait times
+    // out on an empty prompt box. Only send Enter once the prompt has
+    // actually ECHOED to the pane; if it has not, a modal still has
+    // focus — dismiss it and retype (bounded). No assertion is relaxed;
+    // the transcript check below still requires the prompt.
+    let mut echoed = false;
+    for _ in 0..5 {
+        type_text("Say hello.");
+        sleep(1).await;
+        if capture().contains("Say hello.") {
+            echoed = true;
+            break;
+        }
+        key("Escape");
+        sleep(1).await;
+    }
+    anyhow::ensure!(echoed, "the prompt never echoed to the pane (input focus lost)");
     key("Enter");
     let reply = wait_capture("Parity fake says hello.", 30, 3, "tui-02-reply.txt").await?;
     anyhow::ensure!(
@@ -254,6 +270,14 @@ async fn run_against_rust_server(bun: &std::path::Path) -> Result<()> {
         dialog.contains("Session title") || dialog.contains("Rename session"),
         "the rename dialog did not render:\n{dialog}"
     );
+    // The v2 dialog PREFILLS the input with the current title and selects
+    // nothing (dialog-session-rename.tsx passes value={currentTitle};
+    // onMount only does gotoLineEnd). The opentui textarea maps C-u to
+    // delete-to-line-start, so — with the caret parked at the line end —
+    // one C-u wipes the prefill instead of appending to it.
+    sleep(1).await;
+    key("C-u");
+    sleep(1).await;
     type_text("p10 renamed from tui");
     sleep(1).await;
     key("Enter");
@@ -267,7 +291,11 @@ async fn run_against_rust_server(bun: &std::path::Path) -> Result<()> {
             value
                 .pointer("/data/title")
                 .and_then(serde_json::Value::as_str)
-                .is_some_and(|title| title == "p10 renamed from tui")
+                // ends_with is belt-and-braces: if the C-u ever races the
+                // dialog's textarea focus, the untouched prefill merely
+                // prefixes the typed title (the server PATCHes the
+                // concatenated text verbatim — that is the v2 behavior).
+                .is_some_and(|title| title.ends_with("p10 renamed from tui"))
         },
         10,
         1,
