@@ -319,77 +319,148 @@ async fn auth(name: Option<&str>) -> i32 {
         eprintln!("Error: MCP server \"{name}\" is not an OAuth-capable remote server");
         return 1;
     };
-    let integrations = match client
-        .integration()
-        .list(&oc_client::types::IntegrationListQuery { location: Some(location_query()) })
-        .await
+    if matches!(server.status, oc_client::types::McpServerStatus::NeedsAuth(_)) {
+        println!("│ {name} has expired credentials. Re-authenticating...");
+    }
+    // PLUG-D30: the server config drives the flow (its URL is the OAuth
+    // resource identity). Resolved from the same config files `mcp add`
+    // writes — the project candidates first, then the global config.
+    let Some(config) = resolve_remote_config(name) else {
+        eprintln!("Error: MCP server \"{name}\" is not an OAuth-capable remote server");
+        return 1;
+    };
+    if config.oauth == Some(oc_schema::mcp::OAuthValue::Disabled(false)) {
+        eprintln!("Error: MCP server \"{name}\" is not an OAuth-capable remote server");
+        return 1;
+    }
+
+    // The v2 flow (McpOAuth.authorize): discovery → client registration →
+    // the authorization URL (PKCE + state) → the loopback callback → the
+    // token exchange. The loopback listener runs in THIS process; the
+    // browser on the same machine lands on it exactly like v2's
+    // server-side listener.
+    println!("◇ Starting authorization...");
+    let authorization = match oc_core::mcp::oauth::authorize(oc_core::mcp::oauth::AuthorizeInput {
+        name: name.to_owned(),
+        config: (*config).clone(),
+        method_id: integration_id.clone(),
+        http: reqwest::Client::new(),
+    })
+    .await
     {
-        Ok(response) => response,
+        Ok(authorization) => authorization,
+        Err(message) => {
+            eprintln!("{message}");
+            return 1;
+        }
+    };
+    println!("│ Authorization started");
+    println!("│ {}", authorization.instructions);
+    println!("│ {}", authorization.url);
+    let oc_core::mcp::oauth::AuthMode::Auto(callback) = authorization.mode else {
+        eprintln!("Error: MCP server \"{name}\" did not provide an authorization URL");
+        return 1;
+    };
+    println!("│ Waiting for authorization...");
+    let credential = match callback.await {
+        Ok(credential) => credential,
+        Err(message) => {
+            eprintln!("{message}");
+            return 1;
+        }
+    };
+
+    // Re-authentication replaces the previous sign-in (mcp/auth.ts): the
+    // new credential stores first, the old ones only then go away.
+    let previous: Vec<String> = match client.credential().list().await {
+        Ok(rows) => rows
+            .into_iter()
+            .filter(|row| &row.integration_id == integration_id)
+            .map(|row| row.id)
+            .collect(),
         Err(error) => {
             eprintln!("{}", error_message(&error.to_string()));
             return 1;
         }
     };
-    let Some(integration) = integrations.data.iter().find(|item| &item.id == integration_id) else {
-        eprintln!("Error: MCP server \"{name}\" is not an OAuth-capable remote server");
-        return 1;
-    };
-    let integration_value = serde_json::to_value(integration).expect("integration serializes");
-    let method = integration_value
-        .get("methods")
-        .and_then(Value::as_array)
-        .and_then(|methods| {
-            methods
-                .iter()
-                .find(|method| method.get("type").and_then(Value::as_str) == Some("oauth"))
+    let value = credential_wire_value(&credential);
+    if let Err(error) = client
+        .credential()
+        .create(&oc_client::types::CredentialCreateInput {
+            integration_id: integration_id.clone(),
+            label: Some(name.to_owned()),
+            value,
+            activate: Some(true),
+            id: None,
         })
-        .cloned();
-    let Some(method) = method else {
-        eprintln!("Error: MCP server \"{name}\" is not an OAuth-capable remote server");
-        return 1;
-    };
-    // Re-authentication replaces the previous sign-in (mcp/auth.ts).
-    let previous: Vec<String> = integration
-        .connections
-        .iter()
-        .filter(|connection| {
-            matches!(connection, oc_client::types::ConnectionInfo::CredentialInfo(_))
-        })
-        .filter_map(|connection| match connection {
-            oc_client::types::ConnectionInfo::CredentialInfo(credential) => {
-                Some(credential.id.clone())
-            }
-            oc_client::types::ConnectionInfo::EnvInfo(_) => None,
-        })
-        .collect();
-    let label = integration.connections.iter().find_map(|connection| match connection {
-        oc_client::types::ConnectionInfo::CredentialInfo(credential) => {
-            Some(credential.label.clone())
-        }
-        oc_client::types::ConnectionInfo::EnvInfo(_) => None,
-    });
-    match crate::handlers::auth::oauth_login(
-        &client,
-        integration_id,
-        &integration.name,
-        &method,
-        None,
-        label,
-    )
-    .await
+        .await
     {
-        Ok(()) => {
-            for credential_id in previous {
-                let _ = client.credential().remove(&credential_id).await;
-            }
-            println!("└  Done");
-            0
-        }
-        Err(message) => {
-            eprintln!("{message}");
-            1
-        }
+        eprintln!("{}", error_message(&error.to_string()));
+        return 1;
     }
+    for credential_id in previous {
+        let _ = client.credential().remove(&credential_id).await;
+    }
+    // The reconnect (index.ts:577-599 fires it on credential.switched;
+    // the explicit connect pins it even where the event races): the
+    // server reconnects with the stored credential — connected, or back
+    // to needs_auth for a rejected one.
+    let _ = client
+        .mcp()
+        .connect(
+            name,
+            &oc_client::types::ExperimentalMcpConnectQuery { location: Some(location_query()) },
+        )
+        .await;
+    println!("└  Done");
+    0
+}
+
+/// The credential's HTTP wire value (the client SDK's `Credential.OAuth`
+/// shape — camelCase fields, the metadata map carried as-is).
+fn credential_wire_value(
+    credential: &oc_core::integration::types::CredentialValue,
+) -> oc_client::types::CredentialValue {
+    let oc_core::integration::types::CredentialValue::OAuth(value) = credential else {
+        unreachable!("the MCP OAuth flow yields OAuth credentials");
+    };
+    oc_client::types::CredentialValue::OAuth(oc_client::types::CredentialOAuth {
+        method_id: value.method_id.clone(),
+        refresh: value.refresh.clone(),
+        access: value.access.clone(),
+        expires: value.expires,
+        metadata: value.metadata.clone(),
+        type_: oc_client::types::CredentialOAuthType::Oauth,
+    })
+}
+
+/// The remote MCP server config from the local config files (`mcp add`'s
+/// resolution: project candidates first, then the global config). Local
+/// servers and absent entries are `None` (not OAuth-capable); the first
+/// file defining the name wins (a local entry shadows the global one).
+fn resolve_remote_config(name: &str) -> Option<Box<oc_schema::mcp::RemoteConfig>> {
+    let directory = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let global = oc_util::global_roots::resolve().config;
+    for base in [&directory, &global] {
+        let path = resolve_config_path(base);
+        let Ok(config) = read_config_json(&path) else { continue };
+        let Some(server) = config
+            .get("mcp")
+            .and_then(|mcp| mcp.get("servers"))
+            .and_then(|servers| servers.get(name))
+        else {
+            continue;
+        };
+        let Ok(parsed) = serde_json::from_value::<oc_schema::mcp::ServerConfig>(server.clone())
+        else {
+            continue;
+        };
+        if let oc_schema::mcp::ServerConfig::Remote(remote) = parsed {
+            return Some(remote);
+        }
+        return None;
+    }
+    None
 }
 
 async fn logout(name: &str) -> i32 {
@@ -417,35 +488,26 @@ async fn logout(name: &str) -> i32 {
         println!("No stored credentials for {name}");
         return 0;
     };
-    let integrations = match client
-        .integration()
-        .list(&oc_client::types::IntegrationListQuery { location: Some(location_query()) })
-        .await
-    {
-        Ok(response) => response,
+    // v2 logout resolves the integration's credential connections; the
+    // port reads the credential rows of the registry-derived integration
+    // id (the engine-side integration row is the CLI lane's future).
+    let credentials: Vec<String> = match client.credential().list().await {
+        Ok(rows) => rows
+            .into_iter()
+            .filter(|row| &row.integration_id == integration_id)
+            .map(|row| row.id)
+            .collect(),
         Err(error) => {
             eprintln!("{}", error_message(&error.to_string()));
             return 1;
         }
     };
-    let Some(integration) = integrations.data.iter().find(|item| &item.id == integration_id) else {
-        println!("No stored credentials for {name}");
-        return 0;
-    };
-    let credentials: Vec<&oc_client::types::ConnectionCredentialInfo> = integration
-        .connections
-        .iter()
-        .filter_map(|connection| match connection {
-            oc_client::types::ConnectionInfo::CredentialInfo(credential) => Some(credential),
-            oc_client::types::ConnectionInfo::EnvInfo(_) => None,
-        })
-        .collect();
     if credentials.is_empty() {
         println!("No stored credentials for {name}");
         return 0;
     }
-    for credential in credentials {
-        if let Err(error) = client.credential().remove(&credential.id).await {
+    for credential_id in credentials {
+        if let Err(error) = client.credential().remove(&credential_id).await {
             eprintln!("{}", error_message(&error.to_string()));
             return 1;
         }

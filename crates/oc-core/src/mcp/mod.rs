@@ -5,12 +5,16 @@
 //!   session-expiry detection, `toCallToolResult`).
 //! - [`elicitation`]: JSON-Schema → form-field conversion, URL legacy
 //!   mode, the `"global"` sentinel session, completion settlement.
+//! - [`oauth`]: the remote-server OAuth login flow (PLUG-D30) —
+//!   discovery, DCR, PKCE, the loopback callback, token exchange,
+//!   refresh with rotation, and the credential-row conversions.
 //! - [`registry`]: the server registry (statuses, startup latch, per-server
 //!   and per-URL serialization, watch callbacks, reconcile, OAuth
 //!   integration identity, credential seam) and the tool-registry bridge.
 
 pub mod client;
 pub mod elicitation;
+pub mod oauth;
 pub mod registry;
 #[cfg(test)]
 mod tests;
