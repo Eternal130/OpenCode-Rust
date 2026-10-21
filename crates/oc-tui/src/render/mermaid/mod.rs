@@ -36,6 +36,7 @@
 pub mod core;
 pub mod diagnostics;
 pub mod flowchart;
+pub mod gantt;
 pub mod gitgraph;
 pub mod palette;
 pub mod sequence;
@@ -65,7 +66,10 @@ pub fn detect_mermaid_diagram(content: &str) -> Option<MermaidDiagramKind> {
     if gitgraph::is_mermaid_git_graph_diagram(content) {
         return Some(MermaidDiagramKind::GitGraph);
     }
-    // gantt/timeline stay on the default code-block render.
+    if gantt::is_mermaid_gantt_diagram(content) {
+        return Some(MermaidDiagramKind::Gantt);
+    }
+    // timeline stays on the default code-block render.
     None
 }
 
@@ -176,7 +180,30 @@ fn prepare_diagram(
             let rows = styled_rows_trim_bottom(&grid, &|style| colors.color(style));
             Ok(RenderedDiagram { kind, rows })
         }
-        _ => Err(MermaidError::Unsupported),
+        MermaidDiagramKind::Gantt => {
+            let diagram = gantt::parse_mermaid_gantt_diagram(source)?;
+            let grid = gantt::draw_gantt_diagram_grid(
+                &diagram,
+                &gantt::GanttRenderOptions {
+                    layout_max_width: Some(layout_max_width),
+                    ..Default::default()
+                },
+            );
+            let colors = gantt::resolve_gantt_style_colors(gantt::GanttColorInput {
+                title: Some(palette.text),
+                axis: Some(palette.muted),
+                background: Some(palette.background),
+                section: Some(palette.secondary),
+                task: Some(palette.primary),
+                active: Some(palette.primary),
+                critical: Some(palette.warning),
+                done: Some(palette.muted),
+                milestone: None,
+            });
+            let rows = styled_rows_trim_bottom(&grid, &|style| colors.color(style));
+            Ok(RenderedDiagram { kind, rows })
+        }
+        MermaidDiagramKind::Timeline => Err(MermaidError::Unsupported),
     }
 }
 
