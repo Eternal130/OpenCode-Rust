@@ -1962,24 +1962,38 @@ impl CommandDispatcher for StoreDispatcher {
                     Route::Session { session_id } => session_id,
                     Route::Home => return Dispatch::Handled,
                 };
-                store.replace_dialog(
-                    DialogKind::SessionRename { session_id: session_id.clone() },
-                    DialogSize::Medium,
-                );
-                // The prompt seeds with the session's current title
-                // (`value={props.currentTitle}`,
-                // dialog-session-rename.tsx:16) — the session row's
-                // live title (registry-first, index.tsx:905's
-                // `session()?.title`); an untitled session opens
-                // empty.
-                let current = store
-                    .tabs()
-                    .tabs
-                    .iter()
-                    .find(|tab| tab.session_id == session_id)
-                    .and_then(|tab| store.display_title(tab))
-                    .unwrap_or_default();
-                store.update_dialog(|top| top.value = current);
+                // TUI-TD12 — `/rename <title>` (index.tsx:899-911): a
+                // NON-empty argument renames DIRECTLY (the optimistic
+                // tab patch + the `session.update` request; the empty
+                // string is the title-GENERATE arm); NO argument opens
+                // the rename dialog.
+                let trimmed = args.map(str::trim);
+                match trimmed {
+                    Some(title) => {
+                        store.clear_dialogs();
+                        store.request_session_rename(&session_id, title);
+                    }
+                    None => {
+                        store.replace_dialog(
+                            DialogKind::SessionRename { session_id: session_id.clone() },
+                            DialogSize::Medium,
+                        );
+                        // The prompt seeds with the session's current title
+                        // (`value={props.currentTitle}`,
+                        // dialog-session-rename.tsx:16) — the session row's
+                        // live title (registry-first, index.tsx:905's
+                        // `session()?.title`); an untitled session opens
+                        // empty.
+                        let current = store
+                            .tabs()
+                            .tabs
+                            .iter()
+                            .find(|tab| tab.session_id == session_id)
+                            .and_then(|tab| store.display_title(tab))
+                            .unwrap_or_default();
+                        store.update_dialog(|top| top.value = current);
+                    }
+                }
                 Dispatch::Handled
             }
             "theme.switch" => {
