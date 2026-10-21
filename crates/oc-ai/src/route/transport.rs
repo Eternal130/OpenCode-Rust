@@ -20,6 +20,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::Stream;
+use futures::StreamExt as _;
 
 use crate::schema::{AiError, AiErrorReason, HttpContext, ReasonFields};
 
@@ -593,4 +594,98 @@ pub type SharedTransport = Arc<dyn Transport>;
 /// Wrap any transport into a shared handle.
 pub fn shared(transport: impl Transport + 'static) -> SharedTransport {
     Arc::new(transport)
+}
+
+// ---------------------------------------------------------------------------
+// The http-fetch interceptor seam (PLUG-M02 — v2 `StreamOptions.http`,
+// model-request.ts:320-348)
+// ---------------------------------------------------------------------------
+
+/// A buffered response snapshot handed to an [`HttpInterceptors`]
+/// `on_response` callback (v2 passes a `Response`; the Rust contract is
+/// the plain parts plugins rewrite — status, headers, full body).
+#[derive(Debug, Clone)]
+pub struct HttpResponseSnapshot {
+    pub status: u16,
+    pub headers: BTreeMap<String, String>,
+    pub body: Vec<u8>,
+}
+
+/// One half of the interceptor pair.
+pub type RequestIntercept = Arc<
+    dyn Fn(TransportRequest) -> futures::future::BoxFuture<'static, Result<TransportRequest, String>>
+        + Send
+        + Sync,
+>;
+/// One half of the interceptor pair: the (possibly rewritten) snapshot
+/// replaces what the route's framing sees.
+pub type ResponseIntercept = Arc<
+    dyn Fn(HttpResponseSnapshot) -> futures::future::BoxFuture<'static, Result<HttpResponseSnapshot, String>>
+        + Send
+        + Sync,
+>;
+
+/// The request/response hook pair wrapping one transport (v2's fetch
+/// wrapper `(req, handler) => …`): `on_request` rewrites the outbound
+/// request, `on_response` observes/rewrites the answer. Both run per
+/// executed request, so every transport the route uses — the WebSocket
+/// fallback included — passes through them (model-request.ts:349-350).
+pub struct HttpInterceptors {
+    pub on_request: RequestIntercept,
+    pub on_response: ResponseIntercept,
+}
+
+/// The wrapped transport: dispatches [`HttpInterceptors`] around the
+/// inner transport's execution. The response body is buffered for the
+/// `on_response` pass (hooks opt into this by registering — the
+/// unwrapped path streams unchanged, v2's `hasHttpHooks` gate).
+struct InterceptedTransport {
+    inner: SharedTransport,
+    intercepts: HttpInterceptors,
+}
+
+#[async_trait]
+impl Transport for InterceptedTransport {
+    async fn execute(
+        &self,
+        request: TransportRequest,
+    ) -> Result<TransportResponse, TransportError> {
+        let request = (self.intercepts.on_request)(request)
+            .await
+            .map_err(hook_transport_error)?;
+        let response = self.inner.execute(request).await?;
+        let body = read_body_limited(response.body, usize::MAX).await?;
+        let snapshot = (self.intercepts.on_response)(HttpResponseSnapshot {
+            status: response.status,
+            headers: response.headers,
+            body: body.into_bytes(),
+        })
+        .await
+        .map_err(hook_transport_error)?;
+        let body: ByteStream = match snapshot.body.len() {
+            0 => futures::stream::empty::<Result<Bytes, TransportError>>().boxed(),
+            _ => futures::stream::once(async move {
+                Ok::<_, TransportError>(Bytes::from(snapshot.body))
+            })
+            .boxed(),
+        };
+        Ok(TransportResponse { status: snapshot.status, headers: snapshot.headers, body })
+    }
+}
+
+/// A hook failure is a transport failure: v2 fails the request with the
+/// hook's defect, and the route's error taxonomy carries it.
+fn hook_transport_error(message: String) -> TransportError {
+    TransportError::connection(
+        format!("http interceptor failed: {message}"),
+        TransportOperation::Request,
+    )
+}
+
+/// Wraps `inner` with the [`HttpInterceptors`] pair — the transport-level
+/// seam `session.http.request` / `session.http.response` hooks ride (the
+/// caller installs the wrapped transport onto the request's route).
+#[must_use]
+pub fn intercepted(inner: SharedTransport, intercepts: HttpInterceptors) -> SharedTransport {
+    Arc::new(InterceptedTransport { inner, intercepts })
 }
