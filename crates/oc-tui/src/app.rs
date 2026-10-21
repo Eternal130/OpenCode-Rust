@@ -989,6 +989,26 @@ impl App {
                             crate::store::TranscriptHitAction::ToggleGroup(key) => {
                                 self.store.toggle_group_expanded(&hit.session_id, key);
                             }
+                            // TUI-TD14 — the dock row's onMouseUp →
+                            // openQueuedPrompts (index.tsx:2312-2342).
+                            crate::store::TranscriptHitAction::OpenQueuedPrompts => {
+                                if !self.store.queued_prompts(&hit.session_id).is_empty() {
+                                    self.store.clear_dialogs();
+                                    self.store.replace_dialog(
+                                        crate::store::DialogKind::QueuedPrompts,
+                                        crate::store::DialogSize::Medium,
+                                    );
+                                }
+                            }
+                            // TUI-TD14 — the jump slot's onMouseUp →
+                            // toBottom (index.tsx:1428-1442).
+                            crate::store::TranscriptHitAction::JumpToLatest => {
+                                let _ = self.store.scroll_command(
+                                    &hit.session_id,
+                                    oc_tui_core::scroll::ScrollCommand::Last,
+                                );
+                                self.store.request_redraw();
+                            }
                             crate::store::TranscriptHitAction::ToggleThought {
                                 message_id,
                                 part_id,
