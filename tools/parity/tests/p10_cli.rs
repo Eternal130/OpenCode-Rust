@@ -347,27 +347,34 @@ impl ServeChild {
     }
 }
 
-async fn wait_info(base: &str, password: &str) -> Result<()> {
+/// `--hostname localhost` resolves differently per platform/runtime: bun on
+/// some CI runners resolves localhost -> `::1` FIRST and binds only IPv6, so a
+/// 127.0.0.1-only poll never connects (the 90x1s budget expires — the
+/// historical gate5 reference-side red). The boot contract is "answers
+/// /api/info with auth", not "on IPv4" — poll every candidate stack.
+async fn wait_info_any(bases: &[String], password: &str) -> Result<()> {
     for _ in 0..90 {
-        let auth = parity::minih::basic_auth("opencode", password);
-        if let Ok(response) = parity::minih::request(
-            base,
-            Some(&auth),
-            "GET",
-            "/api/info",
-            None,
-            "application/json",
-            Duration::from_secs(2),
-        )
-        .await
-        {
-            if response.status == 200 {
-                return Ok(());
+        for base in bases {
+            let auth = parity::minih::basic_auth("opencode", password);
+            if let Ok(response) = parity::minih::request(
+                base,
+                Some(&auth),
+                "GET",
+                "/api/info",
+                None,
+                "application/json",
+                Duration::from_secs(2),
+            )
+            .await
+            {
+                if response.status == 200 {
+                    return Ok(());
+                }
             }
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
-    Err(anyhow::anyhow!("GET /api/info never answered 200 on {base}"))
+    Err(anyhow::anyhow!("GET /api/info never answered 200 on any of {bases:?}"))
 }
 
 fn free_port() -> Result<u16> {
@@ -516,7 +523,6 @@ async fn checks(
     // -- serve --hostname localhost (boot + info + clean shutdown) ---------
     for (side, _, _) in &sides {
         let serve_port = free_port()?;
-        let url = format!("http://127.0.0.1:{serve_port}");
         let (program, argv): (PathBuf, Vec<String>) = if side.label == "reference" {
             (
                 lane.bun.clone(),
@@ -553,7 +559,11 @@ async fn checks(
         let env = lane.env(*side, "servepw-gate5");
         let mut serve =
             spawn_serve(&program, &argv, &env).with_context(|| format!("spawn {side} serve"))?;
-        let info = wait_info(&url, "servepw-gate5").await;
+        // localhost may bind 127.0.0.1 or ::1 depending on the runtime's
+        // resolver — poll both stacks (see wait_info_any).
+        let bases =
+            vec![format!("http://127.0.0.1:{serve_port}"), format!("http://[::1]:{serve_port}")];
+        let info = wait_info_any(&bases, "servepw-gate5").await;
         serve.stop();
         info.context(format!("{side} serve --hostname localhost boot"))?;
         eprintln!(
