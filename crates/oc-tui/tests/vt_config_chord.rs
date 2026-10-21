@@ -58,8 +58,11 @@ fn first_chord_exits_with_a_config_file_present() {
     boot_and_chord(&harness, &fake.url, "A-no-config");
 
     // Plant the config FILE between the boots (leg B reads it at its
-    // own TuiConfig::load).
-    let dir = sandbox.join(".config").join("opencode");
+    // own TuiConfig::load). The port resolves its config root as
+    // `.config/opencode-rust` (global_roots::resolve_app("opencode-rust"),
+    // deliberately distinct from a real v2 install during dogfood) —
+    // seeding `.config/opencode` here made leg B vacuous.
+    let dir = sandbox.join(".config").join("opencode-rust");
     std::fs::create_dir_all(&dir).expect("config dir");
     std::fs::write(dir.join("cli.json"), "{}").expect("cli.json");
 

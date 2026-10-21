@@ -48,7 +48,7 @@ export OPENCODE_PASSWORD="$PORT_PASSWORD"
 
 "$BIN" serve --hostname 127.0.0.1 --port 0 >"$SANDBOX/serve.log" 2>"$SANDBOX/serve.err" &
 SERVE_PID=$!
-trap 'kill "$SERVE_PID" 2>/dev/null || true; rm -rf "$SANDBOX"' EXIT
+trap 'if command -v ours >/dev/null 2>&1; then ours "$SERVE_PID" && kill "$SERVE_PID" 2>/dev/null || true; else kill "$SERVE_PID" 2>/dev/null || true; fi; rm -rf "$SANDBOX"' EXIT
 
 URL=""
 for _ in $(seq 1 100); do
@@ -67,7 +67,22 @@ INFO=$(curl -fsS -u "opencode:$PORT_PASSWORD" "$URL/api/info") || fail "/api/inf
 echo "$INFO" | grep -q '"version":"2.0.24"' || fail "/api/info version mismatch: $INFO"
 pass "serve booted on random port $PORT; /api/info reports 2.0.24"
 
-kill "$SERVE_PID"
+# Stop OUR serve child safely: $! of a direct spawn is our own child, but a
+# dead child's PID can be recycled between the kill -0 checks above and the
+# TERM below — guard the signal with a cmdline basename check (safekill's
+# Expectation::Foreign semantics, shell form) so we never signal a stranger.
+ours() {
+    [ -r "/proc/$1/cmdline" ] || return 1
+    case "$(tr '\0' ' ' < "/proc/$1/cmdline")" in
+        *opencode-rust*|*oc-server*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+if ours "$SERVE_PID"; then
+    kill "$SERVE_PID"
+else
+    fail "serve pid $SERVE_PID no longer looks like our binary — refusing to signal"
+fi
 wait "$SERVE_PID" || fail "serve did not exit cleanly on SIGTERM"
 pass "serve exited cleanly on SIGTERM"
 unset OPENCODE_TEST_HOME OPENCODE_PASSWORD
