@@ -517,6 +517,10 @@ pub fn render_session(
     // exist (`ensureAllRows`' continuation — the full window mounted
     // above, so the walk sees every row).
     store.resolve_pending_navigation(session_id);
+    // TUI-TD06 — resolve a staged scroll-anchor restore the same way
+    // (`restoreScrollPosition`'s afterLayout): the fresh positions
+    // re-seat the viewport on the saved anchor's CURRENT y.
+    store.resolve_scroll_restore(session_id);
     let scroll_offset = store.scroll_offset(session_id);
     // The transcript's click surface (absolute rects from the last
     // render pass — the same content_top shift the rows paint under,
