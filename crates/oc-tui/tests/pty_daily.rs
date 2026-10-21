@@ -1216,17 +1216,34 @@ fn session_filter_semantics() {
             // parent; the child stays excluded under a query.
             h.write(b"LOGIN RED");
             eprintln!("DBG: typed LOGIN RED");
-            let grid = wait_grid(
+            let _ = wait_grid(
                 h,
                 |g| (0..g.rows).any(|row| g.row_text(row).contains("Login Redirect Flow")),
                 Duration::from_secs(5),
             )?;
             eprintln!("DBG: login matched");
+            // TUI-7 probe repair (synchronization only — the asserts
+            // below are untouched): the open tab's strip keeps this
+            // title painted UNDER the dialog, so the presence wait
+            // above is satisfied before the query's keystrokes land
+            // (~100 ms of pty→input-thread→loop latency). The
+            // EXCLUSION — the non-matching row leaving — is the
+            // observable that proves the query reached the filter.
+            wait_grid(
+                h,
+                |g| (0..g.rows).all(|row| !g.row_text(row).contains(cafe_title())),
+                Duration::from_secs(5),
+            )?;
+            let grid = h.grid_now();
             if (0..grid.rows).any(|row| grid.row_text(row).contains(cafe_title())) {
                 return Err("a non-matching row stayed visible under the filter".to_owned());
             }
             // F4 (no fuzzy): "zln" (cross-letter) matches NOTHING.
-            for _ in 0..8 {
+            // TUI-7 probe repair (arithmetic only): "LOGIN RED" is
+            // NINE characters — nine backspaces clear it fully, so
+            // the bare "zln" query (and F6's three-backspace clear
+            // below) type exactly what the probes' comments say.
+            for _ in 0..9 {
                 h.write(b"\x7f");
             }
             h.write(b"zln");
@@ -1237,7 +1254,12 @@ fn session_filter_semantics() {
                 Duration::from_secs(5),
             )?;
             eprintln!("DBG: no-match shown");
-            if (0..grid.rows).any(|row| grid.row_text(row).contains("Login Redirect Flow")) {
+            // TUI-7 probe repair (scoping only): row 0 is the tab
+            // strip, which legitimately keeps the OPEN TAB's title
+            // painted under the dialog (v2 overlays the strip, it
+            // never blanks it) — the no-fuzzy contract is about the
+            // DIALOG's rows (1..).
+            if (1..grid.rows).any(|row| grid.row_text(row).contains("Login Redirect Flow")) {
                 return Err("a fuzzy cross-letter query matched (zln)".to_owned());
             }
             // F6 (whitespace-only = trimmed to empty = the full list).
@@ -1253,6 +1275,120 @@ fn session_filter_semantics() {
                 },
                 Duration::from_secs(5),
             )?;
+            h.write(b"\x1b");
+            std::thread::sleep(Duration::from_millis(150));
+            Ok(())
+        },
+    );
+}
+
+/// TUI-7 — the LIVE-LOOP pin of the session-list filter's semantics,
+/// with probes synchronized on state CHANGES (not on needles the tab
+/// strip keeps painted): the open tab is titled "Login Redirect Flow"
+/// and the strip stays visible under the dialog, so every wait below
+/// keys on rows only the DIALOG can paint (Café notes / Alpha / the
+/// no-match copy). The matching row's survival is asserted after the
+/// EXCLUSION has been observed — the exclusion is the query-landed
+/// proof. Semantics (dialog-session-list.tsx):
+/// * :87-99 — trim + case-fold + byte-exact substring;
+/// * :96 — the empty query is the FULL set;
+/// * :98/:145/:185 — `!parentID`, children never row;
+/// * :210 — `skipFilter`, never the shared fuzzy picker.
+#[test]
+fn tui7_filter_semantics_live_loop() {
+    let now = now_ms();
+    run_daily_test(
+        "tui7-live-filter",
+        120,
+        30,
+        |fake, _sandbox| {
+            fake.arm_session_rows(vec![
+                rich_session("ses_alpha", "Alpha", now - 600_000.0, "/tmp", "p", None),
+                rich_session("ses_login", "Login Redirect Flow", now - 60_000.0, "/tmp", "p", None),
+                rich_session("ses_cafe", "Café notes", now - 90_000.0, "/tmp", "p", None),
+                rich_session(
+                    "ses_child",
+                    "Login Child Secret",
+                    now - 30_000.0,
+                    "/tmp",
+                    "p",
+                    Some("ses_login"),
+                ),
+            ]);
+        },
+        |h| {
+            boot_to_session(h, b"Alpha")?;
+            // The dialog over the session route: the FULL parent set
+            // lists (the café row only the dialog can paint).
+            h.write(b"\x18l");
+            let grid = wait_grid(
+                h,
+                |g| (0..g.rows).any(|row| g.row_text(row).contains(cafe_title())),
+                Duration::from_secs(8),
+            )
+            .map_err(|error| format!("the full list never showed: {error}"))?;
+            // Parent exclusion: the child NEVER rows, even unfiltered.
+            assert!(
+                !(0..grid.rows).any(|row| grid.row_text(row).contains("Login Child Secret")),
+                "the child session rowed in the session list"
+            );
+            // Substring, case-folded: "LOGIN RED" keeps the match…
+            h.write(b"LOGIN RED");
+            let grid = wait_grid(
+                h,
+                |g| (0..g.rows).all(|row| !g.row_text(row).contains(cafe_title())),
+                Duration::from_secs(5),
+            )
+            .map_err(|error| format!("the non-matching row never left: {error}"))?;
+            assert!(
+                !(0..grid.rows).any(|row| grid.row_text(row).contains("Alpha")),
+                "a second non-matching row stayed visible under the filter"
+            );
+            // …and the exclusion is the query-landed proof, so the
+            // match's survival is now a real observation.
+            assert!(
+                (0..grid.rows).any(|row| grid.row_text(row).contains("Login Redirect Flow")),
+                "the case-folded substring match vanished"
+            );
+            // No fuzzy: the cross-letter sequence matches NOTHING.
+            for _ in 0..9 {
+                h.write(b"\x7f");
+            }
+            h.write(b"zln");
+            wait_grid(
+                h,
+                |g| (0..g.rows).any(|row| g.row_text(row).contains("No sessions found")),
+                Duration::from_secs(5),
+            )?;
+            let grid = h.grid_now();
+            assert!(
+                !(0..grid.rows).any(|row| grid.row_text(row).contains("Alpha")),
+                "a fuzzy cross-letter query matched (zln)"
+            );
+            assert!(
+                !(0..grid.rows).any(|row| grid.row_text(row).contains("Login Child Secret")),
+                "the child rowed under a no-match query"
+            );
+            // Whitespace-only = trimmed to empty = the FULL set.
+            for _ in 0..3 {
+                h.write(b"\x7f");
+            }
+            h.write(b"   ");
+            let grid = wait_grid(
+                h,
+                |g| {
+                    (0..g.rows).any(|row| g.row_text(row).contains(cafe_title()))
+                        && (0..g.rows).any(|row| g.row_text(row).contains("Alpha"))
+                },
+                Duration::from_secs(5),
+            )
+            .map_err(|error| {
+                format!("the whitespace-only query never restored the list: {error}")
+            })?;
+            assert!(
+                !(0..grid.rows).any(|row| grid.row_text(row).contains("Login Child Secret")),
+                "the child rowed under the whitespace-only query"
+            );
             h.write(b"\x1b");
             std::thread::sleep(Duration::from_millis(150));
             Ok(())
