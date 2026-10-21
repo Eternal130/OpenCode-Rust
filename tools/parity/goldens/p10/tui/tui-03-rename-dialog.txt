@@ -1,17 +1,17 @@
-   New session                   +
+   The outside file says p10-sec +
 
-     Switched variant to default                                                                                        New session - 2026-10-10T10:49:03.
-                                                                                                                        627Z
+     Switched variant to default                                                                                        The outside file says p10-secret.
+
+  ┃                                                                                                                     Context
+  ┃  Say hello.                                                                                                         18 tokens
   ┃
-  ┃  Say hello.                                                                                                         Context
-  ┃                                                                                                                     18 tokens
 
      Parity fake says hello.
 
-     Build · fake-model · 22ms · 0.0 tok/s
+     Build · Fake Model · 25ms · 0.0 tok/s
                                                     Rename session                                       esc
 
-                                                    Session title
+                                                    The outside file says p10-secret.
 
                                                     enter submit
 
@@ -33,8 +33,8 @@
   ┃                                                                                                                         Claude, GPT, Gemini etc
   ┃
   ┃                                                                                                                         Connect provider        /connect
-  ┃  Build · fake-model parityfake
+  ┃  Build · Fake Model parityfake
   ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
   /tmp/opencode/ref/packages/cli                                                                 18  ctrl+p commands    /tmp/opencode/ref/packages/cli
 
- ✓ Server  ● UI  Theme  Tools  Experiments
+ ✓ Server  ⦿ UI  Theme  Tools  Experiments
