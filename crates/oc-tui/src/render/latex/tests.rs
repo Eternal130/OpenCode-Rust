@@ -536,11 +536,13 @@ fn compacts_scripts_only_when_every_script_is_supported() {
 
 #[test]
 fn respects_script_and_display_mode_options() {
-    let options = RenderLatexOptions { compact_scripts: Some(false), ..RenderLatexOptions::default() };
+    let options =
+        RenderLatexOptions { compact_scripts: Some(false), ..RenderLatexOptions::default() };
     assert_eq!(render_latex_to_string(r"x_i^2", &options).unwrap(), " 2\nx\n i");
     let options = RenderLatexOptions { display_mode: Some(false), ..RenderLatexOptions::default() };
     assert_eq!(render_latex_to_string(r"\sum_1^n", &options).unwrap(), "∑ⁿ₁");
-    let options = RenderLatexOptions { compact_scripts: Some(false), ..RenderLatexOptions::default() };
+    let options =
+        RenderLatexOptions { compact_scripts: Some(false), ..RenderLatexOptions::default() };
     assert_eq!(render_latex_to_string(r"\sum_1^n", &options).unwrap(), "n\n∑\n1");
 }
 

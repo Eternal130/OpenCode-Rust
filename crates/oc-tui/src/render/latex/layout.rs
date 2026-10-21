@@ -420,7 +420,12 @@ fn layout_over_under(
     result
 }
 
-fn layout_delimited(left: &str, body_node: &MathNode, right: &str, context: &LayoutContext) -> Box_ {
+fn layout_delimited(
+    left: &str,
+    body_node: &MathNode,
+    right: &str,
+    context: &LayoutContext,
+) -> Box_ {
     let body = layout_node(body_node, context);
     let left_box = delimiter_box(left, body.height, body.baseline, true, context.style.as_ref());
     let right_box = delimiter_box(right, body.height, body.baseline, false, context.style.as_ref());
@@ -786,7 +791,7 @@ fn normalize_binary_role(
     previous: Option<SymbolRole>,
     next: Option<SymbolRole>,
 ) -> Option<SymbolRole> {
-    use SymbolRole::{Binary, Closing, Ordinary, Opening, Operator, Punctuation, Relation};
+    use SymbolRole::{Binary, Closing, Opening, Operator, Ordinary, Punctuation, Relation};
     if role != Some(Binary) {
         return role;
     }

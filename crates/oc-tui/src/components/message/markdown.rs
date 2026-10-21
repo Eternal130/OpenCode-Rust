@@ -78,6 +78,13 @@ pub struct MarkdownStyles {
     latex_text: Style,
     /// `theme.text.muted` — the LaTeX block's box-work color.
     latex_subdued: Style,
+    /// The mermaid diagram palette inputs (`theme.text.feedback.*`,
+    /// `theme.accent`) — the categorical accent steps are not exposed
+    /// by `ThemeStyles`, so `theme.accent` stands in for both.
+    mermaid_info: Color,
+    mermaid_success: Color,
+    mermaid_warning: Color,
+    mermaid_accent: Color,
     /// The capture → style resolver (upstream `SyntaxStyle`).
     pub syntax: SyntaxStyle,
     /// The oc-syntax resolver (the R-01 fenced-code fallback line).
@@ -133,6 +140,10 @@ impl MarkdownStyles {
             code_block: base.fg(md.code_block),
             latex_text: theme.text,
             latex_subdued: theme.text_muted,
+            mermaid_info: theme.info,
+            mermaid_success: theme.success,
+            mermaid_warning: theme.warning,
+            mermaid_accent: theme.accent,
             syntax: SyntaxStyle::from_styles(styles.clone()),
             syntax_defs: theme.syntax.clone(),
             syntax_hash: {
@@ -221,6 +232,13 @@ fn render_spec(
             let filetype = options.filetype.as_deref();
             if matches!(filetype, Some("latex" | "math")) {
                 if let Some(rows) = render_latex_block(content, styles) {
+                    lines.extend(rows);
+                    push_margins(*margin_bottom, lines);
+                    return;
+                }
+            }
+            if matches!(filetype, Some("mermaid")) {
+                if let Some(rows) = render_mermaid_block(content, styles) {
                     lines.extend(rows);
                     push_margins(*margin_bottom, lines);
                     return;
@@ -580,6 +598,62 @@ fn is_bold_math_glyph(char: &str) -> bool {
     }
     matches!(first, '=' | '<' | '>')
         || matches!(first, '\u{2260}' | '\u{2261}' | '\u{2264}' | '\u{2265}' | '\u{2248}')
+}
+
+/// SURF-LATEX-MERMAID: the `mermaid` code-block renderer
+/// (`packages/merman/src/markdown.ts`, `createMermaidCodeBlockRenderer`).
+///
+/// Detect → prepare → styled rows; unknown/unsupported diagrams and
+/// syntax errors return None (upstream returns `undefined`, keeping
+/// the default code render). The palette mirrors
+/// `resolveOpenCodeDiagramPalette` with the theme fields
+/// `ThemeStyles` exposes (the categorical accent steps approximate to
+/// `theme.accent` — the resolved categorical table is not exposed by
+/// `ThemeStyles`).
+fn render_mermaid_block(content: &str, styles: &MarkdownStyles) -> Option<Vec<MarkdownLine>> {
+    let to_rgba = |color: Color| match color {
+        Color::Rgb(r, g, b) => crate::render::mermaid::core::color::Rgba::from_ints(r, g, b, 255),
+        _ => crate::render::mermaid::core::color::Rgba::from_ints(0, 0, 0, 255),
+    };
+    let accent = to_rgba(styles.mermaid_accent);
+    let palette = crate::render::mermaid::palette::create_open_code_diagram_palette(
+        &crate::render::mermaid::palette::OpenCodeDiagramPaletteInput {
+            text: to_rgba(styles.latex_text.fg?),
+            subdued: to_rgba(styles.latex_subdued.fg?),
+            info: to_rgba(styles.mermaid_info),
+            success: to_rgba(styles.mermaid_success),
+            warning: to_rgba(styles.mermaid_warning),
+            background: to_rgba(styles.background.bg.unwrap_or(Color::Reset)),
+            accent_soft: accent,
+            accent_clear: accent,
+        },
+    );
+    let options = crate::render::mermaid::MermaidRenderOptions::default();
+    let diagram = crate::render::mermaid::render_mermaid_block(content, &palette, &options)?;
+
+    // marginTop: 1 (the v2 renderable's top margin).
+    let mut rows = vec![MarkdownLine(Vec::new())];
+    for line in diagram.rows {
+        let spans: Vec<StyledSpan> = line
+            .into_iter()
+            .map(|span| {
+                let mut style = Style::new();
+                if let Some(fg) = span.fg.map(|fg| Color::Rgb(fg.r, fg.g, fg.b)) {
+                    style = style.fg(fg);
+                }
+                if let Some(bg) = span.bg.map(|bg| Color::Rgb(bg.r, bg.g, bg.b)) {
+                    style = style.bg(bg);
+                }
+                let mut modifier = Modifier::empty();
+                if span.attributes & 0x04 != 0 {
+                    modifier |= Modifier::ITALIC;
+                }
+                StyledSpan { text: span.text, style: style.add_modifier(modifier), link: None }
+            })
+            .collect();
+        rows.push(MarkdownLine(spans));
+    }
+    Some(rows)
 }
 
 fn ratatui_color(rgba: opentui_core::Rgba) -> Option<Color> {
