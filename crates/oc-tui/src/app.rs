@@ -2831,7 +2831,7 @@ fn footer_panel_frame(
     let session_agent = store.selection_for(&active).agent;
 
     match route {
-        PromptRoute::Composer => None,
+        PromptRoute::Composer | PromptRoute::Subagent => None,
         PromptRoute::Model => Some(model_panel_frame(
             &store.server_lists(),
             session_selection

@@ -48,6 +48,10 @@ pub enum PromptRoute {
     Model,
     Variant,
     Settings,
+    /// TUI-17 — the subagent inspector (`FooterPromptRoute`'s
+    /// `subagent` arm: one child's detail transcript over the
+    /// composer).
+    Subagent,
 }
 
 impl PromptRoute {
@@ -179,6 +183,7 @@ impl FooterMachine {
                 PromptRoute::Model => FooterMode::ModelSelect,
                 PromptRoute::Variant => FooterMode::Variant,
                 PromptRoute::Settings => FooterMode::Settings,
+                PromptRoute::Subagent => FooterMode::Subagent,
             },
             FooterView::Permission { .. } => FooterMode::Permission,
             FooterView::Form { .. } => FooterMode::Form,
@@ -197,6 +202,9 @@ pub enum FooterMode {
     AgentSelect,
     Variant,
     Settings,
+    /// TUI-17 — the mini subagent inspector (the session-route footer
+    /// never routes here; the mini pane renders it directly).
+    Subagent,
 }
 
 #[cfg(test)]

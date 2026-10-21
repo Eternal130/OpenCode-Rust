@@ -611,6 +611,9 @@ pub struct FakeLlm {
     /// TUI-15 — every `POST /api/session/:id/synthetic` body (the
     /// editor-context submit's server-side evidence).
     pub synthetic_posts: Arc<Mutex<Vec<String>>>,
+    /// TUI-17 — every `POST /api/session/:id/interrupt` path (the
+    /// per-child interrupt's server-side evidence).
+    pub interrupt_posts: Arc<Mutex<Vec<String>>>,
     /// SSE script played once, after the first prompt POST.
     script: Arc<Mutex<Option<Vec<ScriptEvent>>>>,
 }
@@ -629,6 +632,7 @@ impl FakeLlm {
         let skills = Arc::new(AtomicBool::new(false));
         let shell_posts: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let synthetic_posts: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let interrupt_posts: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let session_rows: Arc<Mutex<Option<Vec<String>>>> = Arc::new(Mutex::new(None));
         let projects: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
         let terminals = Arc::new(TerminalFixture::new());
@@ -643,6 +647,7 @@ impl FakeLlm {
         let shared_skills = Arc::clone(&skills);
         let shared_shell_posts = Arc::clone(&shell_posts);
         let shared_synthetic_posts = Arc::clone(&synthetic_posts);
+        let shared_interrupt_posts = Arc::clone(&interrupt_posts);
         let shared_rows = Arc::clone(&session_rows);
         let shared_projects = Arc::clone(&projects);
         let shared_terminals = Arc::clone(&terminals);
@@ -661,6 +666,7 @@ impl FakeLlm {
                         let skills = Arc::clone(&shared_skills);
                         let shell_posts = Arc::clone(&shared_shell_posts);
                         let synthetic_posts = Arc::clone(&shared_synthetic_posts);
+                        let interrupt_posts = Arc::clone(&shared_interrupt_posts);
                         let rows = Arc::clone(&shared_rows);
                         let projects = Arc::clone(&shared_projects);
                         let terminals = Arc::clone(&shared_terminals);
@@ -677,6 +683,7 @@ impl FakeLlm {
                                 &skills,
                                 &shell_posts,
                                 &synthetic_posts,
+                                &interrupt_posts,
                                 &rows,
                                 &projects,
                                 &terminals,
@@ -701,6 +708,7 @@ impl FakeLlm {
             skills,
             shell_posts,
             synthetic_posts,
+            interrupt_posts,
             session_rows,
             projects,
             terminals,
@@ -780,6 +788,7 @@ fn handle(
     skills: &Arc<AtomicBool>,
     shell_posts: &Arc<Mutex<Vec<String>>>,
     synthetic_posts: &Arc<Mutex<Vec<String>>>,
+    interrupt_posts: &Arc<Mutex<Vec<String>>>,
     session_rows: &Arc<Mutex<Option<Vec<String>>>>,
     projects: &Arc<Mutex<Option<String>>>,
     terminals: &Arc<TerminalFixture>,
@@ -868,6 +877,20 @@ fn handle(
             body.len()
         );
         let _ = socket.write_all(response.as_bytes());
+        return;
+    }
+    // TUI-17 — the per-child interrupt (`v2.session.interrupt`): record
+    // the path (the query `resume` rides along), answer 204 No Content.
+    if method == "POST"
+        && path.split('?').next().unwrap_or_default().starts_with("/api/session/")
+        && path.split('?').next().unwrap_or_default().ends_with("/interrupt")
+    {
+        interrupt_posts
+            .lock()
+            .expect("interrupt posts")
+            .push(path.split('?').next().unwrap_or_default().to_owned());
+        let response = b"HTTP/1.1 204 No Content\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
+        let _ = socket.write_all(response);
         return;
     }
     if std::env::var("DBG_FAKE_LOG").is_ok() || std::env::var("DBG_FAKE_LOG2").is_ok() {

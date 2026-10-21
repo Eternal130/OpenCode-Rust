@@ -58,6 +58,10 @@ pub enum FooterKey {
     Backspace,
     Up,
     Down,
+    /// TUI-17 — the inspector's cycle key (`tab next`).
+    Tab,
+    PageUp,
+    PageDown,
     CtrlC,
 }
 
@@ -72,6 +76,10 @@ pub enum FooterEffect {
     FormCancel(String),
     Close,
     Interrupt,
+    /// TUI-17 — interrupt the inspected CHILD session
+    /// (`v2.session.interrupt(childID)`, footer.subagent's
+    /// `composer.subagent.interrupt`).
+    InterruptChild(String),
     HistoryUp,
     HistoryDown,
 }
@@ -111,6 +119,13 @@ pub struct FooterPane {
     /// CONFIG-T4: the busy-cell clock anchor (`started()`,
     /// `footer.view.tsx:988`'s `age` input) — `None` while idle.
     busy_since: Option<Instant>,
+    /// TUI-17 — the tracked child sessions (the runtime's
+    /// `SubagentTracker` snapshot; `footer.view.tsx:139-149`).
+    pub subagent_children: Vec<super::transport::SubagentChild>,
+    /// The inspected child (`route.sessionID`).
+    subagent_selected: Option<String>,
+    /// The detail scroll (rows from the bottom, sticky-bottom).
+    subagent_scroll: usize,
 }
 
 impl FooterPane {
@@ -136,6 +151,9 @@ impl FooterPane {
             work_spinner: "block-soft-slide".to_owned(),
             mono: false,
             busy_since: None,
+            subagent_children: Vec::new(),
+            subagent_selected: None,
+            subagent_scroll: 0,
         }
     }
 
@@ -201,6 +219,9 @@ impl FooterPane {
             FooterKey::Up => "up".to_owned(),
             FooterKey::Down => "down".to_owned(),
             FooterKey::CtrlC => "ctrl+c".to_owned(),
+            FooterKey::Tab => "tab".to_owned(),
+            FooterKey::PageUp => "pageup".to_owned(),
+            FooterKey::PageDown => "pagedown".to_owned(),
         };
         let mut effects = Vec::new();
         // The mini surface drives the same session-route two-stage
@@ -293,6 +314,7 @@ impl FooterPane {
                 }
             }
             FooterKey::CtrlC => {}
+            FooterKey::Tab | FooterKey::PageUp | FooterKey::PageDown => {}
         }
         // Only keep the per-request state while the blocker is live.
         if let FooterView::Form { request: live } = &self.machine.view {
@@ -305,6 +327,14 @@ impl FooterPane {
     }
 
     fn press_prompt(&mut self, key: FooterKey) -> Vec<FooterEffect> {
+        // TUI-17 — the inspector owns keys while mounted
+        // (`useKeyboard`, footer.subagent.tsx:115-146): esc closes,
+        // tab cycles, up/k + down/j scroll, pgup/pgdn page, and
+        // ctrl+c interrupts the inspected child
+        // (`composer.subagent.interrupt`).
+        if self.machine.route == crate::components::footer::PromptRoute::Subagent {
+            return self.press_subagent(key);
+        }
         let mut effects = Vec::new();
         match key {
             FooterKey::Printable(char) => {
@@ -356,8 +386,27 @@ impl FooterPane {
                     effects.push(FooterEffect::Interrupt);
                 }
             }
+            FooterKey::Tab | FooterKey::PageUp | FooterKey::PageDown => {}
             FooterKey::Up => effects.push(FooterEffect::HistoryUp),
-            FooterKey::Down => effects.push(FooterEffect::HistoryDown),
+            FooterKey::Down => {
+                // TUI-17 — `session.child.first` over tracked
+                // children: the inspector opens on the newest running
+                // child (footer.view.tsx:312's subagent route via the
+                // statusline detail).
+                if self.subagent_children.is_empty() {
+                    effects.push(FooterEffect::HistoryDown);
+                } else {
+                    self.machine.route = crate::components::footer::PromptRoute::Subagent;
+                    self.subagent_selected = self
+                        .subagent_children
+                        .iter()
+                        .rev()
+                        .find(|child| child.status == super::transport::SubagentStatus::Running)
+                        .or_else(|| self.subagent_children.last())
+                        .map(|child| child.session_id.clone());
+                    self.subagent_scroll = 0;
+                }
+            }
         }
         effects
     }
@@ -375,15 +424,73 @@ impl FooterPane {
         None
     }
 
+    /// The inspector's key handling (footer.subagent.tsx:115-146).
+    fn press_subagent(&mut self, key: FooterKey) -> Vec<FooterEffect> {
+        let mut effects = Vec::new();
+        match key {
+            FooterKey::Escape | FooterKey::Enter => {
+                // esc back (onClose → the composer route).
+                self.machine.close_panel();
+                self.subagent_selected = None;
+                self.subagent_scroll = 0;
+            }
+            FooterKey::Printable('k') => {
+                self.subagent_scroll = self.subagent_scroll.saturating_add(1);
+            }
+            FooterKey::Printable('j') => {
+                self.subagent_scroll = self.subagent_scroll.saturating_sub(1);
+            }
+            FooterKey::Printable(' ') | FooterKey::Backspace => {}
+            FooterKey::Up => self.subagent_scroll = self.subagent_scroll.saturating_add(1),
+            FooterKey::Down => self.subagent_scroll = self.subagent_scroll.saturating_sub(1),
+            FooterKey::PageUp => self.subagent_scroll = self.subagent_scroll.saturating_add(10),
+            FooterKey::PageDown => self.subagent_scroll = self.subagent_scroll.saturating_sub(10),
+            FooterKey::Tab => {
+                // tab next: the ring over the tracked children (the
+                // selected index is 1-based — the next 0-based slot is
+                // `index % len`).
+                if self.subagent_children.len() > 1 {
+                    let index = self.selected_subagent_index().unwrap_or(0);
+                    let next = index % self.subagent_children.len();
+                    self.subagent_selected = Some(self.subagent_children[next].session_id.clone());
+                    self.subagent_scroll = 0;
+                }
+            }
+            FooterKey::CtrlC => {
+                // `{hint} interrupt` — per-child (v2.session.interrupt
+                // over the inspected session, resume false).
+                if let Some(selected) = self.subagent_selected.clone() {
+                    effects.push(FooterEffect::InterruptChild(selected));
+                }
+            }
+            FooterKey::Printable(_) => {}
+        }
+        effects
+    }
+
+    /// The selected child's 1-based position (0 = none).
+    #[must_use]
+    pub fn selected_subagent_index(&self) -> Option<usize> {
+        let id = self.subagent_selected.as_deref()?;
+        self.subagent_children.iter().position(|child| child.session_id == id).map(|at| at + 1)
+    }
+
     /// The footer pane height for the active view (`applyHeight`,
     /// `footer.ts:740-760`): blockers grow the dock over the composer
-    /// base (`PERMISSION_ROWS`/`FORM_ROWS`, `footer.ts:117-118`).
+    /// base (`PERMISSION_ROWS`/`FORM_ROWS`, `footer.ts:117-118`);
+    /// TUI-17 — the inspector adds its 14 rows.
     #[must_use]
     pub fn pane_height(&self) -> usize {
         match self.machine.view {
             FooterView::Permission { .. } => footer_base(FOOTER_HEIGHT) + PERMISSION_ROWS,
             FooterView::Form { .. } => footer_base(FOOTER_HEIGHT) + FORM_ROWS,
-            FooterView::Prompt => FOOTER_HEIGHT,
+            FooterView::Prompt => {
+                if self.machine.route == crate::components::footer::PromptRoute::Subagent {
+                    footer_base(FOOTER_HEIGHT) + super::footer_subagent::SUBAGENT_INSPECTOR_ROWS
+                } else {
+                    FOOTER_HEIGHT
+                }
+            }
         }
     }
 
@@ -409,8 +516,40 @@ impl FooterPane {
                 render_form_body(request, &state, width, height, &self.theme)
             }
             FooterView::Prompt => {
+                // TUI-17 — the subagent inspector body over the
+                // composer (`footer.view.tsx:156-196`'s inspecting
+                // mount).
+                if self.machine.route == crate::components::footer::PromptRoute::Subagent {
+                    let selected = self
+                        .subagent_selected
+                        .as_deref()
+                        .and_then(|id| {
+                            self.subagent_children.iter().find(|child| child.session_id == id)
+                        })
+                        .or_else(|| self.subagent_children.last());
+                    if let Some(child) = selected {
+                        let view = super::footer_subagent::SubagentView {
+                            child,
+                            index: self.selected_subagent_index().unwrap_or(0),
+                            total: self.subagent_children.len(),
+                            scroll: self.subagent_scroll,
+                            mono: self.mono,
+                        };
+                        return super::footer_subagent::render_subagent_body(
+                            &view,
+                            &self.theme,
+                            width,
+                            height,
+                        );
+                    }
+                }
                 // The composer base: rail + transparent textarea with
                 // the live draft, statusline below.
+                let running = self
+                    .subagent_children
+                    .iter()
+                    .filter(|child| child.status == super::transport::SubagentStatus::Running)
+                    .count();
                 let idle = PromptIdleState {
                     agent: self.agent.clone().unwrap_or_else(|| "Build".to_owned()),
                     model_label: self
@@ -418,6 +557,13 @@ impl FooterPane {
                         .clone()
                         .unwrap_or_else(|| "Default model".to_owned()),
                     command_shortcut: "ctrl+p".to_owned(),
+                    // TUI-17 — the statusline's `N subagent(s)`
+                    // detail (footer.view.tsx:247).
+                    status_detail: if running > 0 {
+                        format!("{running} subagent{}", if running == 1 { "" } else { "s" })
+                    } else {
+                        String::new()
+                    },
                 };
                 // CONFIG-T4 — the busy statusline (`footer.view.tsx:210`
                 // + `:978-988`): while a turn runs, the status text
@@ -552,6 +698,9 @@ pub struct Lifecycle {
     /// viewport, so the next footer draw must repaint fully).
     last_footer_signature: String,
     force_draw: bool,
+    /// TUI-17 — the inline viewport's current height (`applyHeight`:
+    /// a taller pane rebuilds the dock at the new row count).
+    viewport_rows: u16,
     splash_enabled: bool,
     mono: bool,
     /// CONFIG-T4 `mini.shell_output`: shell-family tools stream their
@@ -605,6 +754,7 @@ impl Lifecycle {
             closed: false,
             last_footer_signature: String::new(),
             force_draw: true,
+            viewport_rows: super::FOOTER_HEIGHT as u16,
             splash_enabled: input.splash,
             mono: input.mono,
             shell_output: input.shell_output,
@@ -715,7 +865,22 @@ impl Lifecycle {
     /// occupies the terminal's BOTTOM rows — paint the footer frame at
     /// the draw area's origin, not at (0, 0).
     pub fn draw_footer(&mut self) -> Result<(), String> {
-        let footer_frame = self.pane.render_frame(self.width, self.pane.pane_height());
+        let pane_height = self.pane.pane_height();
+        // TUI-17/applyHeight: a pane whose height CHANGED rebuilds the
+        // inline dock at the new row count (the blocker bodies + the
+        // subagent inspector grow it; v2's footer resizes its box).
+        let rows = u16::try_from(pane_height).unwrap_or(u16::MAX);
+        if rows != self.viewport_rows {
+            self.terminal = Terminal::with_options(
+                CrosstermBackend::new(std::io::stdout()),
+                ratatui::TerminalOptions { viewport: ratatui::Viewport::Inline(rows) },
+            )
+            .map_err(|error| error.to_string())?;
+            self.viewport_rows = rows;
+            self.force_draw = true;
+            self.last_footer_signature = String::new();
+        }
+        let footer_frame = self.pane.render_frame(self.width, pane_height);
         // Skip identical repaints (the renderer's dirty check — a
         // no-change draw only emits cursor noise), unless a
         // scrollback write invalidated the viewport.
