@@ -19,7 +19,7 @@
 
 
                                            ┃
-                                           ┃  Ask anything… "Fix a TODO in the codebase"
+                                           ┃  Ask anything… "What is the tech stack of this project?"
                                            ┃
                                            ┃  Build · Fake Model parityfake
                                            ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

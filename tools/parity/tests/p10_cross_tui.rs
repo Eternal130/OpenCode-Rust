@@ -171,10 +171,7 @@ fn tmux_with_conf(rig: &TmuxRig, args: &[&str]) -> std::process::Output {
 fn tmux_kill_server(rig: &TmuxRig) {
     let mut command = Command::new("tmux");
     close_inherited_fds(&mut command);
-    command
-        .arg("-S")
-        .arg(rig.socket.display().to_string())
-        .arg("kill-server");
+    command.arg("-S").arg(rig.socket.display().to_string()).arg("kill-server");
     if let Err(error) = run_bounded(&mut command, 8) {
         eprintln!("[p10-tui] kill-server did not finish in time: {error}");
     }
@@ -195,10 +192,8 @@ fn capture(rig: &TmuxRig) -> String {
 /// `Some(exit)` when the pane's process has exited (remain-on-exit keeps
 /// the pane readable afterwards), `None` while it runs.
 fn pane_exit(rig: &TmuxRig) -> Option<String> {
-    let out = tmux(
-        rig,
-        &["display-message", "-p", "-t", SESSION, "#{pane_dead} #{pane_dead_status}"],
-    );
+    let out =
+        tmux(rig, &["display-message", "-p", "-t", SESSION, "#{pane_dead} #{pane_dead_status}"]);
     let mut fields = out.split_whitespace();
     match (fields.next(), fields.next()) {
         (Some("1"), status) => Some(status.unwrap_or("?").to_owned()),
@@ -215,11 +210,10 @@ fn pane_exit(rig: &TmuxRig) -> Option<String> {
 /// before dying, for the failure message and the artifacts.
 fn death_diagnostics(rig: &TmuxRig) -> String {
     let pane = capture(rig);
-    let log = std::fs::read(&rig.pane_log)
-        .map_or_else(
-            |error| format!("<no pane log: {error}>"),
-            |bytes| String::from_utf8_lossy(&bytes[bytes.len().saturating_sub(4000)..]).into_owned(),
-        );
+    let log = std::fs::read(&rig.pane_log).map_or_else(
+        |error| format!("<no pane log: {error}>"),
+        |bytes| String::from_utf8_lossy(&bytes[bytes.len().saturating_sub(4000)..]).into_owned(),
+    );
     format!("pane tail:\n{pane}\npane log tail:\n{log}")
 }
 
@@ -272,7 +266,8 @@ async fn wait_boot(rig: &TmuxRig, tries: usize) -> Result<String> {
             // preserve everything this run will ever know about the death.
             sleep(1).await;
             let diagnostics = death_diagnostics(rig);
-            let _ = std::fs::write(p10_common::artifacts().join("tui-00-boot-death.txt"), &diagnostics);
+            let _ =
+                std::fs::write(p10_common::artifacts().join("tui-00-boot-death.txt"), &diagnostics);
             return Err(anyhow!(
                 "the reference TUI exited before rendering its first frame \
                  (pane exit status {exit}; attempt {}/{tries}). Its final output:\n{diagnostics}",
@@ -399,8 +394,7 @@ async fn run_against_rust_server(bun: &std::path::Path) -> Result<()> {
         conf: root.join("tmux-p10tui.conf"),
         pane_log: root.join("tui-pane.log"),
     };
-    std::fs::write(&rig.conf, "set -g remain-on-exit on\n")
-        .context("write the tmux conf")?;
+    std::fs::write(&rig.conf, "set -g remain-on-exit on\n").context("write the tmux conf")?;
     // The defines are JSON-QUOTED and single-quoted for the pane shell:
     // bun 1.4.x parses every `--define KEY=VALUE` VALUE as JSON, so the
     // double quotes must SURVIVE the pane's `sh -c` (a bare 2.0.24 makes
@@ -435,10 +429,8 @@ async fn run_against_rust_server(bun: &std::path::Path) -> Result<()> {
     let mut boot = None;
     for attempt in 1..=2 {
         tmux_kill_server(&rig);
-        let status = tmux_with_conf(
-            &rig,
-            &["new-session", "-d", "-s", SESSION, "-x", W, "-y", H, &launch],
-        );
+        let status =
+            tmux_with_conf(&rig, &["new-session", "-d", "-s", SESSION, "-x", W, "-y", H, &launch]);
         if !status.status.success() {
             // The session may half-exist; tear the server down before
             // failing (remain-on-exit would otherwise keep it — and its
@@ -448,7 +440,10 @@ async fn run_against_rust_server(bun: &std::path::Path) -> Result<()> {
         }
         // Tee every pane byte from the very first frame: the log survives
         // even a total tmux-server death (the file is ours, not tmux's).
-        let _ = tmux(&rig, &["pipe-pane", "-t", SESSION, &format!("cat >> {}", rig.pane_log.display())]);
+        let _ = tmux(
+            &rig,
+            &["pipe-pane", "-t", SESSION, &format!("cat >> {}", rig.pane_log.display())],
+        );
         match wait_boot(&rig, 15).await {
             Ok(pane) => {
                 if attempt > 1 {
@@ -467,7 +462,9 @@ async fn run_against_rust_server(bun: &std::path::Path) -> Result<()> {
                 // local runs leaked two such servers, each pinning the
                 // dev-gate lock fd).
                 tmux_kill_server(&rig);
-                return Err(error.context(format!("the reference TUI never booted (attempt {attempt})")));
+                return Err(
+                    error.context(format!("the reference TUI never booted (attempt {attempt})"))
+                );
             }
         }
     }
@@ -606,9 +603,10 @@ async fn run_against_rust_server(bun: &std::path::Path) -> Result<()> {
     )?;
     // Enter = "Allow once" (the default option) — the TUI POSTs the reply.
     key(&rig, "Enter");
-    let reply2 = wait_capture(&rig, "The outside file says p10-secret.", 30, 3, "tui-06-tool-reply.txt")
-        .await
-        .context("the parked tool never proceeded after the TUI's once reply")?;
+    let reply2 =
+        wait_capture(&rig, "The outside file says p10-secret.", 30, 3, "tui-06-tool-reply.txt")
+            .await
+            .context("the parked tool never proceeded after the TUI's once reply")?;
     anyhow::ensure!(
         !reply2.contains("Allow once"),
         "the permission footer did not resolve:\n{reply2}"
