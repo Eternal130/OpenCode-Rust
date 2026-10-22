@@ -130,6 +130,14 @@ env:
   # /opt/opencode-ref @ e7a34f09bf). Runners fetch this tarball the same
   # way release.yml fetches APP_REF for the web UI.
   PARITY_REF: e7a34f09bfd9134dfade5a8ddb843f7030bc9a69
+  # Single pin for every setup-bun + the install-cache key. v2.0.24's own
+  # packageManager pins bun@1.4.2. bun 1.3.10 began hanging on the current
+  # ubuntu-24.04 runner generation (bun install post-extract AND reference
+  # runtime POSTs, onset 2026-10-21 19:23Z, zero repo changes); the earlier
+  # 1.4.2 attempt crashed the opentui reference TUI but ran on a
+  # 1.3.10-populated install cache (the key had no version) — retest 1.4.2
+  # with a clean, version-keyed cache.
+  BUN_PIN: 1.4.2
   # Job-level bun kill-switch (ci.yml convention: the CI nextest ignores
   # profile.default.env, so enforce it here; bun is provisioned per-job by
   # oven-sh/setup-bun instead of per-test downloads).
@@ -265,11 +273,11 @@ jobs:
           # reference TUI). -v2 rotates the key once: the 2026-10-21 19:23Z
           # reference-hang onset had zero repo changes and smells of a
           # corrupt/partial cache entry under the old key.
-          key: parity-ref-bun-${{ env.PARITY_REF }}-bun1.3.10-v2
+          key: parity-ref-bun-${{ env.PARITY_REF }}-bun${{ env.BUN_PIN }}-v2
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.3.10
+          bun-version: ${{ env.BUN_PIN }}
 
       # The parity harness launches bun by ABSOLUTE path ($PARITY_BUN ->
       # Command::new(bun), tools/parity/src/reference.rs), and the v2
@@ -533,11 +541,11 @@ jobs:
           # reference TUI). -v2 rotates the key once: the 2026-10-21 19:23Z
           # reference-hang onset had zero repo changes and smells of a
           # corrupt/partial cache entry under the old key.
-          key: parity-ref-bun-${{ env.PARITY_REF }}-bun1.3.10-v2
+          key: parity-ref-bun-${{ env.PARITY_REF }}-bun${{ env.BUN_PIN }}-v2
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.3.10
+          bun-version: ${{ env.BUN_PIN }}
 
       - name: Expose bun to the harness (PARITY_BUN + PATH)
         run: |
@@ -656,7 +664,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.3.10
+          bun-version: ${{ env.BUN_PIN }}
 
       - uses: taiki-e/install-action@v2
         with:
@@ -915,7 +923,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.3.10
+          bun-version: ${{ env.BUN_PIN }}
 
       - uses: taiki-e/install-action@v2
         with:
