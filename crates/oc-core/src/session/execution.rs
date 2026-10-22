@@ -12,7 +12,8 @@
 //! `docs/runner-concurrency.md` §5 for the mapping contract:
 //!
 //! - interrupt = `Notify::notify_one` on a per-execution stop bell
-//!   (fire-and-forget; the drain future is dropped at its next await);
+//!   (fire-and-forget; the drain is signalled, not dropped — it is
+//!   re-polled under a bounded unwind, see §4);
 //! - settlement (the `settled` hook + successor start + waiter release)
 //!   runs uninterruptibly after the drain loop exits;
 //! - waiters observe the execution's whole exit (drain exit composed with

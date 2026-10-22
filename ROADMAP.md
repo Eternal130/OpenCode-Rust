@@ -16,7 +16,7 @@
 
 ---
 
-## 1. Current batches: beta.3 (released) + beta.4 (landed, pending release)
+## 1. Current batches: beta.13 (released 2026-10-17, GATE5 GO); scan→fix loop concluded at FIXW2 (user ruling 2026-10-18)
 
 | ID | Item | Status |
 |---|---|---|
@@ -44,7 +44,7 @@
 | R-01 | tree-sitter syntax highlighting (diff/code coloring) | core highlight pipeline | P1 | beta.4; **approach ruled (oracle)**: new leaf crate `oc-syntax`, native curated 18 languages compiled in (bash/pwsh already present; +rust/python/ts/js/go/c/cpp/c#/java/json/yaml/toml/html/css/diff); .scm queries vendored per-language from v2's exact sources (fixes v2's non-reproducible nvim-master pointers); uncovered languages fall back to plain text (= status quo); no runtime fetching (offline-independent); boundary API `highlight(block, filetype)`, wired in markdown.rs/diff_viewer.rs/tool-row; spike first (3 languages + size/perf measurement) then full rollout |
 | R-02 | `opencode mini` second frontend | cli/handlers/mini.ts | P1 | **done (beta.4)** |
 | R-03 | `acp` editor protocol (Zed/Neovim etc.) | cli/handlers/acp.ts | P1 | beta.4; **stack decided (librarian)**: official `agent-client-protocol =3.3.0` (Apache-2.0, same client Zed uses) + `stdio` feature + v1 builder API + `unstable_session_fork` (the v2 reference includes fork, so parity requires it); pin exact version, upgrades need regression (1.11.0 tightened receive strictness); capability declaration aligned exactly to `acp/service.ts:106-130`; bridge maps onto existing oc-client SSE/permission-answer foundations |
-| R-04 | **Web UI**: `serve` hosting `packages/app` (PWA) + frontend functional equivalence | packages/app + serve static hosting | P1 (large) | from beta.5, spanning batches |
+| R-04 | **Web UI**: `serve` hosting `packages/app` (PWA) + frontend functional equivalence | packages/app + serve static hosting | P1 (large) | **static hosting + release asset embedding done** (serveUI/auth/SSE + release web-assets job); the app frontend itself remains out of scope (PORT_REPORT §0) |
 | R-05 | worktree UI | TUI/worktree | P2 | **done (beta.6)** |
 | R-06 | Sound / OS notifications | TUI C2 class | P2 | **done (beta.6)**: v2 trigger matrix + OSC 9/99/777 + 5 assets vendored; playback mirrors to system player (recorded divergence: v2 uses in-process miniaudio) |
 | R-07 | Image support (paste/display kitty/sixel) | TUI/app | P2 | **done (beta.6)**: path paste → attachment chip → data-URI → engine (anthropic/openai image blocks already goldened); display via kitty APC chunking / sixel passthrough / placeholder fallback, `session.image_preview` default off |
@@ -72,6 +72,8 @@
 3. **Terminal matrix smoke**: tmux / kitty / Windows Terminal difference surfaces into the optional TUI_SMOKE battery.
 4. **Long soak**: hours-level serve+TUI soak (memory/handles/event ordering).
 5. **Dual-end differential testing spec** (promoted 2026-10-11 by user directive, **the sole adjudication standard for TUI parity**):
+
+   > **SUPERSEDED 2026-10-17** — differential testing retired by user ruling (see change log); the scan loop replaced it as the acceptance instrument, then itself concluded at FIXW2. Golden-frame tests remain as the regression suite.
 
    > **Same directory, same operations, both ends running in parallel, full step-by-step equality.**
 
@@ -110,12 +112,10 @@ The audit confirmed the gap is concentrated in opentui's interaction half (keyma
 
 ## 5. Batch cadence
 
-- **beta.3** (current): B3-01..04 → CI → release → field acceptance.
-- **beta.4**: R-01/02/03 + D-01/02/06 (high-perception daily items).
-- **beta.5**: R-04 Web UI (architecture recon+spike first: hosting, build chain, auth flow, realtime channel to the API; expected to span batches) + D-04.
-- **beta.6**: R-05/06/07 + D-05.
-- **beta.7+**: R-08/09, D-03 conclusion landing, R-11 per user scheduling.
-- After full acceptance, release the official **v2.0.24** (release = end state; ledger zeroed or carrying only named exemptions).
+- **beta.3–beta.13 shipped** (beta.13 = 2026-10-17 GATE5 GO; the full cadence is in the change log below).
+- The scan→fix loop terminated after FIXW2 (user ruling 2026-10-18); the locked scan spec (docs/scan-spec.md v9) and instruments remain in-tree as standing assets.
+- Post-M-engine-retire workspace gate: **3951/3951** (2026-10-22).
+- Next: official **v2.0.24** release after user acceptance (release = end state; ledger zeroed or carrying only named exemptions — currently R-10 upstream-blocked, R-11 unscheduled, F15 registered unfixed, SPEC-R6 E12 dispositions pending).
 
 ### R-04 Web UI architecture decision (ruled after 2026-10-11 recon)
 
@@ -261,3 +261,5 @@ Ruling (mirroring v2 semantics, adapted to our release pipeline):
 - 2026-10-18 (user ruling · LOOP STOPS AFTER FIXW2): the scan->fix loop terminates once the current findings register (SE-F1..F11) is fixed. FIXW2 is the final wave; after its merge+gates, no further scan/fix cycles, no beta.14 cut, until the user explicitly directs. The locked scan spec (docs/scan-spec.md v9) and all instruments remain in-tree as standing assets for whenever the user chooses to resume.
 
 - 2026-10-22 (M-engine-retire landed · opentui is the ONLY engine path): the engine-side retirement lane closing the M-engine one-release window (beta.13 shipped, the gate passed) — the template M-retire set for renderers, applied to the two state machines. Deleted: `keymap/engine.rs` (the hand-rolled dispatch engine, 968 LOC), the legacy `text_edit.rs` composer editing engine, `keymap/parity_tests.rs` (the old-vs-new parity suite — its reason for existence dies with the legacy engine; the resolution-parity guarantee is now structural, there is only one engine), the `OC_ENGINE_OPENTUI` plumbing (`opentui_engine_enabled()` + the test override + the flag latch in lib.rs), and the `=0` test variants (the pty engine-cycle pair and the engine keystroke-budget pair each collapse to their single opentui test). Rewires: the engine's shared data contracts (`Layer`/`EngineBinding`/`LayerMode`/`TargetMode`/`DispatchOutcome`/`ActiveKey`) moved into `keymap/opentui.rs`, the `Keymap` facade's `EngineSel::{Legacy,Opentui}` enum collapsed to a direct `OpentuiKeymap` field; `text_edit_opentui.rs` re-homed as THE `text_edit` module with `EditCore` collapsed from a Legacy/Opentui enum to a struct over `TextAreaOpentui` (public paths `oc_tui_core::text_edit::{EditCommand,EditOutcome,SnapshotKind,EditCore}` preserved — oc-tui's composer/store/app re-exports unchanged); the legacy cluster seam (`ClusterBounds`/`CharClusters`/composer `WrapClusters`) deleted with it; `keymap/table` (the shared v2 binding-table DATA layer) untouched. Delta: 14 files, +1,234/−4,268 (net −3,034); workspace nextest 3,987→3,951 (−36 = engine 10 + parity 15 + legacy text-edit 9 + two `=0` variants; oc-tui-core 79→45, oc-tui 1,200→1,198); the dual-path editor tests promoted to opentui-only behavioral pins (upstream deltas now pinned as THE semantics, count preserved). Gates: workspace 3,951/3,951 green, fmt + clippy `-D warnings` clean, pty profile 9/9 on the single path (engine-cycle type→ctrl+w→undo→leader-arm+esc-clear→prompt.clear), release budgets 11/11 (engine keystroke on the 2KB CJK draft within the 40ms gate), release `oc-cli` builds, `opencode-rust --version` self-reports v2.0.24, zero plugin-host orphans after the battery.
+
+- 2026-10-23 (docs sync · status refresh + archive prune): README/PORT_REPORT/ROADMAP/MIGRATION synced to the post-beta.13, post-M-engine-retire state — suite number corrected to 3951/3951 (verified by a full workspace nextest run this day), TUI goldens restated from the on-disk manifest (42 scenarios: 35 Tier-A / 1 Tier-B / 3 Tier-C1 / 3 width-edge), the §3 deferral list cleared (mini/ACP/worktree/sounds/C2/tree-sitter/images/Bedrock-Vertex all landed beta.4–7; remaining open: R-10 upstream-blocked, R-11 unscheduled), the stale §1/§5 batch headers replaced (beta.13 released, loop concluded at FIXW2), R-04 status updated (static hosting + release embedding done; frontend out of scope), and §4-5 marked SUPERSEDED by the 2026-10-17 differential-retirement ruling. Archive prune: 31 zero-reference process artifacts removed from docs/ (gate/be/dogfood/final run logs, final-sweep-2/3, auditC, ratify-1d/2, parity-ledger-reconciliation, accel-stability, misc) + 2 stray root files (`None`, `refprobe.pid`); every kept doc's citation chain verified intact by literal-reference fixpoint checks (zero_loss script inputs untouched). Gap fill: docs/runner-concurrency.md written (426 lines, ~180 file:line citations) — the concurrency contract 8 code comments in oc-core/src/session/runner/ had cited without the doc existing; one stale comment claim corrected in execution.rs (drain is signalled-and-re-polled under the bounded unwind, not dropped at its next await).
