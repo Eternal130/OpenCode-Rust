@@ -1,17 +1,22 @@
-//! The opentui-keymap ENGINE adapter (lane M-engine): the oc-tui-core
-//! keymap facade's dispatch layer over the REAL `@opentui/keymap`
-//! 0.5.14 port (`opentui-keymap`, the proven zero-diff port), selected
-//! by `OC_ENGINE_OPENTUI`. The hand-rolled [`super::engine`]
-//! interpretation stays the `=0` fallback for one release.
+//! The opentui-keymap ENGINE: the oc-tui-core keymap facade's
+//! dispatch layer over the REAL `@opentui/keymap` 0.5.14 port
+//! (`opentui-keymap`, the proven zero-diff port). Since the
+//! M-engine-retire lane this is the ONLY engine — the hand-rolled
+//! predecessor is gone.
 //!
-//! ## What dissolves here (the K-1..K-9 registered deltas)
+//! This module also owns the engine's DATA contracts ([`Layer`],
+//! [`EngineBinding`], [`DispatchOutcome`], [`ActiveKey`], …) — the
+//! shapes the facade builds and the adapter converts into the donor's
+//! registration grammar.
+//!
+//! ## The K-1..K-9 deltas dissolved by the port (historical register)
 //!
 //! * **K-1** non-leader multi-press sequences never armed — the donor's
 //!   `dispatchFromRootAtIndex` holds a pending capture for ANY binding
 //!   whose first part matched (no leader-only gate).
 //! * **K-2** sequence miss re-evaluated from root — the donor returns
-//!   `sequence-miss` UNCONSUMED without redispatch; the stroke falls to
-//!   the focused surface instead of re-resolving.
+//!   `sequence-miss` UNCONSUMED without redispatch; the stroke falls
+//!   to the focused surface instead of re-resolving.
 //! * **K-3** exact-match vs continuation priority — the donor's
 //!   `dispatchPendingSequence` holds continuations over exact matches
 //!   across layers (a high-layer continuation shadows a low-layer
@@ -30,7 +35,7 @@
 //! * **K-8** `getActiveKeys` at root — the donor lists the reachable
 //!   keys from the (empty) prefix at the root too.
 //! * **K-9** layer order / focus domains / rejection fall-through /
-//!   preventDefault — already consistent (pinned by the parity suite).
+//!   preventDefault — already consistent (pinned by the table suite).
 //!
 //! ## The v2 Provider wiring this mirrors (context/keymap.tsx:80-150)
 //!
@@ -48,8 +53,7 @@
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
-use super::engine;
-use super::table::{Clock, KeyStroke, LEADER_TIMEOUT_MS};
+use super::table::{Chord, Clock, KeyStroke, LEADER_TIMEOUT_MS};
 use opentui_keymap::addons::{
     register_backspace_pops_pending_sequence, register_base_layout_fallback,
     register_comma_bindings, register_escape_clears_pending_sequence, register_timed_leader,
@@ -58,9 +62,118 @@ use opentui_keymap::addons::{
 use opentui_keymap::opentui::OpenTuiHost;
 use opentui_keymap::types::{
     Binding, BindingCommand, BindingEvent, Command, CommandResult, HostPlatform, KeyStrokeInput,
-    Layer as DonorLayer, TargetMode as DonorTargetMode,
+    Layer as DonorLayer,
 };
 use opentui_keymap::{KeyAfterReason, KeymapEvent, Registration};
+
+// -- the engine's data contracts (the facade ↔ adapter vocabulary) -------
+
+/// A focus-scope target id (v2: a `Renderable` reference). The engine
+/// compares ids along the focus path; hosts map their surface tree to
+/// a chain of ids (`"composer"`, `"session"`, …) ending at the root.
+pub type TargetId = &'static str;
+
+/// How a layer's target activates (`targetMode`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TargetMode {
+    /// Active while the target is anywhere on the focus path (the
+    /// default — bindings bubble from the focused renderable up).
+    #[default]
+    Path,
+    /// Active only while the target IS the focused node.
+    Focus,
+}
+
+/// A mode qualifier. v2's layer `mode` field: named modes require the
+/// mode to be current; `global` layers are reachable in every mode.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LayerMode {
+    Global,
+    Named(String),
+}
+
+impl LayerMode {
+    #[must_use]
+    pub fn from_name(name: &str) -> Self {
+        if name == "global" {
+            Self::Global
+        } else {
+            Self::Named(name.to_owned())
+        }
+    }
+}
+
+/// One binding inside a layer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EngineBinding {
+    /// The binding's sequence (`key` after leader expansion).
+    pub chord: Chord,
+    /// The command id dispatched on an exact match (the `cmd`).
+    pub command: String,
+    /// `preventDefault` (config/keybind.ts:14-29): `true` — the engine
+    /// consumes the matched stroke; `false` — suppression is the
+    /// handler's job (v2's `prompt.paste`).
+    pub prevent_default: bool,
+    /// `fallthrough`: the binding runs but does NOT stop the walk.
+    pub fallthrough: bool,
+}
+
+/// A registered keymap layer (`registerLayer`) — the facade's
+/// installation shape; the adapter converts it into the donor's
+/// registration grammar.
+#[derive(Debug, Clone)]
+pub struct Layer {
+    pub name: String,
+    /// Focus-scope target; `None` = a global layer.
+    pub target: Option<TargetId>,
+    pub target_mode: TargetMode,
+    /// Higher sorts first (`getSortedLayers`).
+    pub priority: i32,
+    /// Registration sequence (later wins ties).
+    pub order: u64,
+    /// Mode gating (`mode: "global"` stays reachable).
+    pub mode: LayerMode,
+    /// The layer's enable flag (v2's `enabled: () => …` — the host
+    /// updates it between strokes; the conditional `app.exit` layer).
+    pub enabled: bool,
+    pub bindings: Vec<EngineBinding>,
+}
+
+/// One reachable next key from the pending sequence (`getActiveKeys`):
+/// the which-key panel's option datum.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActiveKey {
+    pub display: String,
+    /// The command an exact completion would run, when unambiguous.
+    pub command: Option<String>,
+    /// The key continues a longer sequence (a chord prefix).
+    pub continues: bool,
+}
+
+/// The result of dispatching one stroke.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DispatchOutcome {
+    /// The resolved command, when one matched and was accepted.
+    pub command: Option<(String, Option<String>)>,
+    /// The stroke was consumed by the keymap (`preventDefault`: the
+    /// terminal default and lower surfaces never see it).
+    pub consumed: bool,
+    /// The stroke extended/started a pending sequence (the leader
+    /// display surface).
+    pub pending: Option<String>,
+    /// A pending sequence was cleared (escape/timeout).
+    pub cancelled: bool,
+}
+
+impl DispatchOutcome {
+    /// No binding matched; the stroke passes through.
+    #[must_use]
+    pub fn unhandled() -> Self {
+        Self { command: None, consumed: false, pending: None, cancelled: false }
+    }
+}
+
+// -- the engine -----------------------------------------------------------
 
 /// The v2 mode data key (`MODE = { key: "opencode.mode", base:
 /// "base" }`, context/keymap.tsx:49) + the base mode name.
@@ -93,8 +206,8 @@ impl SharedNow {
 
 /// The command disable gate shared with every registered command
 /// closure: a disabled command REJECTS (`run() → false`), so its
-/// binding counts unhandled and dispatch continues — the legacy
-/// engine's `disabled_commands` semantics 1:1.
+/// binding counts unhandled and dispatch continues — v2's rejected
+/// binding semantics (index.js:2006-2029) 1:1.
 #[derive(Default, Clone)]
 struct DisableGate(Arc<Mutex<HashSet<String>>>);
 
@@ -104,9 +217,8 @@ impl DisableGate {
     }
 }
 
-/// The opentui-keymap-backed engine: the same internal surface the
-/// facade drives on [`engine::KeymapEngine`], so [`super::Keymap`]'s
-/// code path is identical modulo the enum hop.
+/// The opentui-keymap-backed engine: the dispatch layer beneath
+/// [`super::Keymap`].
 pub struct OpentuiKeymap {
     keymap: opentui_keymap::Keymap,
     now: Arc<SharedNow>,
@@ -213,9 +325,9 @@ fn is_alias_delim(ch: char) -> bool {
 }
 
 /// The command handler behind every table binding: the always-accept
-/// runner (the legacy compat path — every matched command "runs")
-/// behind the shared disable gate; a disabled command REJECTS
-/// (`run() → false`) and dispatch continues to the next binding.
+/// runner (every matched command "runs") behind the shared disable
+/// gate; a disabled command REJECTS (`run() → false`) and dispatch
+/// continues to the next binding.
 fn gate_handler(gate: DisableGate, name: String) -> opentui_keymap::types::CommandHandler {
     Box::new(
         move |_context: &opentui_keymap::types::CommandContext| {
@@ -241,14 +353,6 @@ fn stroke_input(stroke: &KeyStroke) -> KeyStrokeInput {
         super_key: Some(stroke.super_key),
         hyper: Some(false),
     }
-}
-
-/// The K-5 dissolution probe (parity suite): the stroke conversion as
-/// a test-visible shape.
-#[cfg(test)]
-#[must_use]
-pub(crate) fn stroke_input_for_test(stroke: &KeyStroke) -> KeyStrokeInput {
-    stroke_input(stroke)
 }
 
 /// The binding key spec for a chord, in the DONOR parser's sequence
@@ -289,7 +393,7 @@ fn chord_spec(chord: &super::table::Chord, leader: &KeyStroke) -> String {
 }
 
 impl OpentuiKeymap {
-    // -- the facade's engine surface (legacy-compatible) ----------------
+    // -- the facade's engine surface ---------------------------------------
 
     #[must_use]
     pub fn leader(&self) -> &KeyStroke {
@@ -338,13 +442,13 @@ impl OpentuiKeymap {
         self.gate.enabled(command)
     }
 
-    /// Install one layer (converted from the legacy [`engine::Layer`]
-    /// shape the facade builds). Mode mapping: the legacy
-    /// `LayerMode::Global` → donor `None` (global, every mode); a
-    /// named mode → `Some(name)` gated by the `opencode.mode` data key
-    /// — exactly the donor's `require("opencode.mode", value)`.
-    /// Returns the layer name (the legacy register shape).
-    pub fn register_layer(&mut self, layer: &engine::Layer) -> String {
+    /// Install one layer (converted from the facade's [`Layer`]
+    /// shape). Mode mapping: [`LayerMode::Global`] → donor `None`
+    /// (global, every mode); a named mode → `Some(name)` gated by the
+    /// `opencode.mode` data key — exactly the donor's
+    /// `require("opencode.mode", value)`. Returns the layer name (the
+    /// legacy register shape).
+    pub fn register_layer(&mut self, layer: &Layer) -> String {
         let name = layer.name.clone();
         let mut bindings = Vec::new();
         let mut commands = Vec::new();
@@ -366,15 +470,15 @@ impl OpentuiKeymap {
             }
         }
         let mode = match layer.mode {
-            engine::LayerMode::Global => None,
-            engine::LayerMode::Named(ref mode) => Some(mode.clone()),
+            LayerMode::Global => None,
+            LayerMode::Named(ref mode) => Some(mode.clone()),
         };
         let token = self.keymap.register_layer(DonorLayer {
             target: None,
             priority: layer.priority,
             bindings,
             commands,
-            target_mode: Some(DonorTargetMode::FocusWithin),
+            target_mode: Some(opentui_keymap::types::TargetMode::FocusWithin),
             mode,
             enabled: Some(layer.enabled.into()),
         });
@@ -412,15 +516,16 @@ impl OpentuiKeymap {
         self.keymap.set_data(MODE_KEY, serde_json::json!(current));
     }
 
-    /// The current mode in the legacy facade's shape (`&str` off the
+    /// The current mode in the facade's shape (`&str` off the
     /// adapter's own stack — the data key carries the same value).
     #[must_use]
     pub fn current_mode(&self) -> &str {
         self.modes.last().map_or(BASE_MODE, String::as_str)
     }
 
-    /// The pending display ("ctrl+x" style — the legacy join of the
-    /// typed strokes' display forms).
+    /// The pending display ("ctrl+x" style — the join of the
+    /// typed strokes' display forms; the leader shows upstream's
+    /// `<leader>` token).
     #[must_use]
     pub fn pending_display(&mut self) -> Option<String> {
         let parts = self.keymap.get_pending_sequence();
@@ -453,7 +558,7 @@ impl OpentuiKeymap {
     }
 
     /// Dispatch one stroke through the REAL engine.
-    fn dispatch_event(&mut self, stroke: &KeyStroke, clock: &dyn Clock) -> engine::DispatchOutcome {
+    fn dispatch_event(&mut self, stroke: &KeyStroke, clock: &dyn Clock) -> DispatchOutcome {
         self.now.set(clock.now_ms());
         let mut event = KeymapEvent::new(&stroke.key).with_modifiers(
             stroke.ctrl,
@@ -466,15 +571,14 @@ impl OpentuiKeymap {
         let pending =
             (outcome.reason == KeyAfterReason::SequencePending).then(|| self.pending_display());
         // The escape-clears/backspace-pop addons consume with no
-        // command — the legacy `cancelled` observable (Outcome::
-        // Cancelled).
+        // command — the `cancelled` observable (Outcome::Cancelled).
         let cancelled =
             outcome.reason == KeyAfterReason::InterceptConsumed && outcome.command.is_none();
         // A REJECTED binding's name must not surface as a command
         // (the donor's rejected outcome carries it for diagnostics;
-        // the legacy engine only reports accepted commands).
+        // only accepted commands are reported).
         let command = if outcome.handled { outcome.command } else { None };
-        engine::DispatchOutcome {
+        DispatchOutcome {
             command: command.map(|command| (command, None)),
             consumed: outcome.consumed,
             pending: pending.flatten(),
@@ -491,7 +595,7 @@ impl OpentuiKeymap {
         stroke: &KeyStroke,
         clock: &dyn Clock,
         _runner: &mut dyn FnMut(&str, Option<&str>) -> bool,
-    ) -> engine::DispatchOutcome {
+    ) -> DispatchOutcome {
         let restore = self.modes.last().cloned().unwrap_or_else(|| BASE_MODE.to_owned());
         self.keymap.set_data(MODE_KEY, serde_json::json!(BASE_ONLY_MODE));
         let outcome = self.dispatch_event(stroke, clock);
@@ -499,17 +603,17 @@ impl OpentuiKeymap {
         outcome
     }
 
-    pub fn dispatch(&mut self, stroke: &KeyStroke, clock: &dyn Clock) -> engine::DispatchOutcome {
+    pub fn dispatch(&mut self, stroke: &KeyStroke, clock: &dyn Clock) -> DispatchOutcome {
         self.dispatch_event(stroke, clock)
     }
 
     /// The which-key surface (K-8: non-empty at the root too).
     #[must_use]
-    pub fn active_keys(&mut self) -> Vec<engine::ActiveKey> {
+    pub fn active_keys(&mut self) -> Vec<ActiveKey> {
         self.keymap
             .active_keys()
             .into_iter()
-            .map(|key| engine::ActiveKey {
+            .map(|key| ActiveKey {
                 display: key.display,
                 command: key.command,
                 continues: key.continues,

@@ -1,9 +1,10 @@
 //! The keymap crate segment — v2's `@opentui/keymap` contract in two
 //! layers:
 //!
-//! * [`engine`]: the dispatch ENGINE port (layers, focus scopes,
-//!   modes, interceptors, pending sequences / which-key data,
-//!   preventDefault semantics, rejection fall-through).
+//! * [`opentui`]: the dispatch ENGINE — the REAL `@opentui/keymap`
+//!   0.5.14 port (layers, focus scopes, modes, interceptors, pending
+//!   sequences / which-key data, preventDefault semantics, rejection
+//!   fall-through) plus the engine's data contracts.
 //! * [`table`]: the DATA layer — the full v2 default binding table
 //!   (`config/keybind.ts` `Definitions`), user overrides, clocks.
 //!
@@ -11,7 +12,7 @@
 //! layers into the engine (base = a global layer like v2's app
 //! commands; `input`/`dialog`/`autocomplete`/`diff` = named modes)
 //! and exposes the port's historical lookup API on top of
-//! [`engine::KeymapEngine::dispatch`]. Behavior is pinned by the
+//! [`opentui::OpentuiKeymap::dispatch`]. Behavior is pinned by the
 //! replay suite: every table binding resolves exactly as before the
 //! Wave A migration.
 //!
@@ -22,16 +23,11 @@
 //! * `app.exit` default `ctrl+c,ctrl+d` — `<leader>q` belongs to
 //!   `session.queued_prompts` (line 131).
 
-pub mod engine;
 pub mod opentui;
 pub mod table;
 
-#[cfg(test)]
-mod parity_tests;
-
-pub use engine::{
-    ActiveKey, DispatchOutcome, EngineBinding, Intercept, Interceptor, Layer, LayerMode,
-    PendingPart, TargetId, TargetMode,
+pub use opentui::{
+    ActiveKey, DispatchOutcome, EngineBinding, Layer, LayerMode, TargetId, TargetMode,
 };
 pub use table::{
     default_table, log_skip, parse_keybind_overrides, take_config_errors, Chord, Clock, CommandDef,
@@ -41,180 +37,14 @@ pub use table::{
 
 use std::collections::HashMap;
 
-/// The dispatch engine beneath the facade (lane M-engine): the
-/// hand-rolled interpretation (`Legacy`) or the REAL `@opentui/keymap`
-/// 0.5.14 port (`Opentui`, [`opentui::OpentuiKeymap`]) — selected once
-/// at facade construction by [`crate::opentui_engine_enabled`]
-/// (`OC_ENGINE_OPENTUI`). Both variants expose the same internal
-/// surface; the facade's code path is identical modulo the hop.
-#[allow(clippy::large_enum_variant)] // one engine per process; the donor carries its registration sets
-enum EngineSel {
-    Legacy(engine::KeymapEngine),
-    /// Boxed: the donor engine carries its registration sets (the
-    /// size-difference lint) — one per process, never hot.
-    Opentui(Box<opentui::OpentuiKeymap>),
-}
-
-impl EngineSel {
-    /// The active variant per the subsystem flag.
-    #[must_use]
-    fn active() -> Self {
-        if crate::opentui_engine_enabled() {
-            Self::Opentui(Box::default())
-        } else {
-            Self::Legacy(engine::KeymapEngine::new())
-        }
-    }
-
-    /// Reset to a fresh engine of the SAME variant (a facade rebuild):
-    /// the legacy path constructs a new engine; the opentui path drops
-    /// the installed layers but keeps the addon set, the disable gate,
-    /// and the mode stack (the timed leader re-registers on
-    /// `set_leader`/`set_timeout`).
-    fn fresh(&mut self) {
-        match self {
-            Self::Legacy(_) => *self = Self::Legacy(engine::KeymapEngine::new()),
-            Self::Opentui(engine) => engine.clear_layers(),
-        }
-    }
-
-    fn leader(&self) -> &KeyStroke {
-        match self {
-            Self::Legacy(engine) => engine.leader(),
-            Self::Opentui(engine) => engine.leader(),
-        }
-    }
-
-    fn set_leader(&mut self, leader: KeyStroke) {
-        match self {
-            Self::Legacy(engine) => engine.set_leader(leader),
-            Self::Opentui(engine) => engine.set_leader(leader),
-        }
-    }
-
-    fn timeout_ms(&self) -> u64 {
-        match self {
-            Self::Legacy(engine) => engine.timeout_ms(),
-            Self::Opentui(engine) => engine.timeout_ms(),
-        }
-    }
-
-    fn set_timeout(&mut self, ms: u64) {
-        match self {
-            Self::Legacy(engine) => engine.set_timeout(ms),
-            Self::Opentui(engine) => engine.set_timeout(ms),
-        }
-    }
-
-    fn command_enabled(&self, command: &str) -> bool {
-        match self {
-            Self::Legacy(engine) => engine.command_enabled(command),
-            Self::Opentui(engine) => engine.command_enabled(command),
-        }
-    }
-
-    fn set_command_enabled(&mut self, command: &str, enabled: bool) {
-        match self {
-            Self::Legacy(engine) => engine.set_command_enabled(command, enabled),
-            Self::Opentui(engine) => engine.set_command_enabled(command, enabled),
-        }
-    }
-
-    fn register_layer(&mut self, layer: &Layer) -> String {
-        match self {
-            Self::Legacy(engine) => engine.register_layer(layer.clone()),
-            Self::Opentui(engine) => engine.register_layer(layer),
-        }
-    }
-
-    fn set_modes(&mut self, modes: &[&str]) {
-        match self {
-            Self::Legacy(engine) => engine.set_modes(modes),
-            Self::Opentui(engine) => engine.set_modes(modes),
-        }
-    }
-
-    fn push_mode(&mut self, mode: &str) {
-        match self {
-            Self::Legacy(engine) => engine.push_mode(mode),
-            Self::Opentui(engine) => engine.push_mode(mode),
-        }
-    }
-
-    fn pop_mode(&mut self) {
-        match self {
-            Self::Legacy(engine) => engine.pop_mode(),
-            Self::Opentui(engine) => engine.pop_mode(),
-        }
-    }
-
-    fn current_mode(&self) -> &str {
-        match self {
-            Self::Legacy(engine) => engine.current_mode(),
-            Self::Opentui(engine) => engine.current_mode(),
-        }
-    }
-
-    fn pending_display(&mut self) -> Option<String> {
-        match self {
-            Self::Legacy(engine) => engine.pending_display(),
-            Self::Opentui(engine) => engine.pending_display(),
-        }
-    }
-
-    fn expire(&mut self, clock: &dyn Clock) -> bool {
-        match self {
-            Self::Legacy(engine) => engine.expire(clock),
-            Self::Opentui(engine) => engine.expire(clock),
-        }
-    }
-
-    fn clear_pending(&mut self) {
-        match self {
-            Self::Legacy(engine) => engine.clear_pending(),
-            Self::Opentui(engine) => engine.clear_pending(),
-        }
-    }
-
-    fn is_leader(&self, stroke: &KeyStroke) -> bool {
-        match self {
-            Self::Legacy(engine) => engine.is_leader(stroke),
-            Self::Opentui(engine) => engine.is_leader(stroke),
-        }
-    }
-
-    fn dispatch_base_only(
-        &mut self,
-        stroke: &KeyStroke,
-        clock: &dyn Clock,
-        runner: &mut dyn FnMut(&str, Option<&str>) -> bool,
-    ) -> DispatchOutcome {
-        match self {
-            Self::Legacy(engine) => engine.dispatch_base_only(stroke.clone(), clock, runner),
-            Self::Opentui(engine) => engine.dispatch_base_only(stroke, clock, runner),
-        }
-    }
-
-    fn dispatch(&mut self, stroke: &KeyStroke, clock: &dyn Clock) -> DispatchOutcome {
-        match self {
-            Self::Legacy(engine) => engine.dispatch(stroke.clone(), clock),
-            Self::Opentui(engine) => engine.dispatch(stroke, clock),
-        }
-    }
-}
-
-/// Assert a leader-arm outcome, accepting either display form: the
-/// legacy engine shows the raw stroke ("ctrl+x"), the opentui engine
-/// the `<leader>` token (upstream getPendingSequence's display —
-/// v2's own form). The pinned semantic is the PENDING itself.
+/// Assert a leader-arm outcome: the pending display is upstream's
+/// `<leader>` token form (`getPendingSequence`'s display — v2's own
+/// form). The pinned semantic is the PENDING itself.
 #[cfg(test)]
 pub(crate) fn assert_pending_leader(outcome: &Outcome) {
     match outcome {
         Outcome::Pending { display } => {
-            assert!(
-                display == "ctrl+x" || display == "<leader>",
-                "leader display form ({display})"
-            );
+            assert!(display == "<leader>", "leader display form ({display})");
         }
         other => panic!("expected the leader to arm, got {other:?}"),
     }
@@ -235,8 +65,8 @@ pub enum Outcome {
 }
 
 /// The keymap facade: the v2 default table + leader sequencing + mode
-/// stack installed into the [`engine::KeymapEngine`], plus the
-/// user-override merge (`cli.json` → `keybinds`) and the enable/
+/// stack installed into the [`opentui::OpentuiKeymap`] engine, plus
+/// the user-override merge (`cli.json` → `keybinds`) and the enable/
 /// disable gate (the reference's `Keymap.createLayer({ enabled })`).
 ///
 /// Layer mapping: table layer `"base"` registers as a GLOBAL engine
@@ -248,7 +78,7 @@ pub enum Outcome {
 /// (resolved after the static table, exactly like the pre-Wave-A
 /// behavior: a plugin chord never shadows a built-in).
 pub struct Keymap {
-    engine: EngineSel,
+    engine: opentui::OpentuiKeymap,
     /// layer name → (chord, command) rules (the static table's live
     /// state — overrides mutate, rebuilds re-install).
     layers: HashMap<&'static str, Vec<(Chord, String)>>,
@@ -309,7 +139,7 @@ impl Keymap {
             });
         }
         let mut keymap = Self {
-            engine: EngineSel::active(),
+            engine: opentui::OpentuiKeymap::new(),
             layers,
             registry,
             effective,
@@ -325,12 +155,15 @@ impl Keymap {
     /// layer per table layer name (static rules first, the owned
     /// plugin rules appended behind them at a lower priority), then
     /// restore the mode stack. Called after any table mutation
-    /// (overrides, leader rebind, owned registration).
+    /// (overrides, leader rebind, owned registration). The engine
+    /// keeps its addon set, disable gate, and mode stack across the
+    /// layer drop (the timed leader re-registers on
+    /// `set_leader`/`set_timeout`).
     fn rebuild_engine(&mut self) {
         let leader = self.engine.leader().clone();
         let timeout = self.engine.timeout_ms();
         let disabled = self.engine_disabled_snapshot();
-        self.engine.fresh();
+        self.engine.clear_layers();
         self.engine.set_leader(leader);
         self.engine.set_timeout(timeout);
         for command in disabled {
@@ -348,7 +181,7 @@ impl Keymap {
             let mode = if name == "base" { "global" } else { name };
             let mut bindings = Vec::new();
             for (chord, command) in &self.layers[name] {
-                bindings.push(engine::EngineBinding {
+                bindings.push(EngineBinding {
                     chord: chord.clone(),
                     command: command.clone(),
                     prevent_default: self
@@ -358,13 +191,13 @@ impl Keymap {
                     fallthrough: false,
                 });
             }
-            self.engine.register_layer(&engine::Layer {
+            self.engine.register_layer(&Layer {
                 name: format!("table:{name}"),
                 target: None,
-                target_mode: engine::TargetMode::Path,
+                target_mode: TargetMode::Path,
                 priority: 0,
                 order: 0,
-                mode: engine::LayerMode::from_name(mode),
+                mode: LayerMode::from_name(mode),
                 enabled: true,
                 bindings,
             });
@@ -377,20 +210,20 @@ impl Keymap {
             let mode = if name == "base" { "global" } else { name.as_str() };
             let bindings = self.owned_layers[name]
                 .iter()
-                .map(|(chord, command)| engine::EngineBinding {
+                .map(|(chord, command)| EngineBinding {
                     chord: chord.clone(),
                     command: command.clone(),
                     prevent_default: true,
                     fallthrough: false,
                 })
                 .collect();
-            self.engine.register_layer(&engine::Layer {
+            self.engine.register_layer(&Layer {
                 name: format!("owned:{name}"),
                 target: None,
-                target_mode: engine::TargetMode::Path,
+                target_mode: TargetMode::Path,
                 priority: -1,
                 order: 0,
-                mode: engine::LayerMode::from_name(mode),
+                mode: LayerMode::from_name(mode),
                 enabled: true,
                 bindings,
             });
@@ -594,19 +427,7 @@ impl Keymap {
         self.engine.current_mode()
     }
 
-    /// The engine handle (the which-key data surface + focus-scope
-    /// configuration — Wave A's contract surface for later UI). The
-    /// opentui engine path exposes its own active-keys surface on the
-    /// facade; the legacy handle is `Some` on the legacy path only.
-    #[must_use]
-    pub fn legacy_engine(&self) -> Option<&engine::KeymapEngine> {
-        match &self.engine {
-            EngineSel::Legacy(engine) => Some(engine),
-            EngineSel::Opentui(_) => None,
-        }
-    }
-
-    /// Pending sequence display ("ctrl+x"), if any.
+    /// Pending sequence display ("<leader>" style), if any.
     #[must_use]
     pub fn pending_display(&mut self) -> Option<String> {
         self.engine.pending_display()
@@ -644,14 +465,11 @@ impl Keymap {
     }
 
     /// The which-key surface (`getActiveKeys`): the reachable next
-    /// keys from the pending sequence (K-8: the opentui engine lists
-    /// them at the root too — the legacy engine returns empty there).
+    /// keys from the pending sequence (listed at the root too —
+    /// K-8).
     #[must_use]
     pub fn active_keys(&mut self) -> Vec<ActiveKey> {
-        match &mut self.engine {
-            EngineSel::Legacy(engine) => engine.active_keys(),
-            EngineSel::Opentui(engine) => engine.active_keys(),
-        }
+        self.engine.active_keys()
     }
 
     /// Resolve one stroke. See the module docs for the escape and leader

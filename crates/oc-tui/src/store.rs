@@ -1005,7 +1005,7 @@ pub struct PromptState {
         std::collections::HashMap<String, crate::components::composer::AutocompleteState>,
     /// The editing state keyed by session (Wave A: the text-edit
     /// core's caret/selection/undo stacks survive the round-trip).
-    pub edits: std::collections::HashMap<String, oc_tui_core::text_edit_opentui::EditCore>,
+    pub edits: std::collections::HashMap<String, oc_tui_core::text_edit::EditCore>,
     pub history: PromptHistory,
     /// The rotated placeholder pick (lane/chrome #6 — the per-boot
     /// `randomIndex` roll; the pool itself is the route's constant).
