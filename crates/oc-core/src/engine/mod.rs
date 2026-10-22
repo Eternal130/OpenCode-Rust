@@ -92,6 +92,7 @@ pub mod commands;
 pub mod instructions;
 pub mod resolver;
 pub mod skills;
+pub mod skills_url;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
@@ -934,8 +935,30 @@ impl Engine {
             scoped_bus.clone(),
             worktree.clone(),
         ));
-        let skills =
-            Arc::new(skills::ConfigSkillTable::discover(&loaded, location.as_path(), &self.home));
+        // SKILL-URL (v2 SkillDiscovery): http(s) skill sources pull into
+        // the hashed cache BEFORE the sync discover — the downloaded
+        // roots arrive keyed by their config item, so discover scans
+        // each at its position in document order. Non-URL items stay
+        // directory sources inside discover; index failures log and
+        // yield nothing (no offline fallback). Owned locals around the
+        // await keep the assemble future's borrows argument-free.
+        let skill_items: Vec<String> = loaded
+            .entries
+            .iter()
+            .filter_map(|entry| match entry {
+                oc_schema::config::Entry::Document(document) => document.info.skills.clone(),
+                oc_schema::config::Entry::Directory(_) => None,
+            })
+            .flatten()
+            .collect();
+        let skill_cache_root = oc_util::global_roots::resolve().cache;
+        let url_sources = skills_url::pull_url_sources(&skill_items, &skill_cache_root).await;
+        let skills = Arc::new(skills::ConfigSkillTable::discover(
+            &loaded,
+            location.as_path(),
+            &self.home,
+            &url_sources,
+        ));
         // The command table (CD-12/CD-34): config `commands` maps +
         // `{command,commands}/**/*.md` discovery; plugin registrations
         // apply below through the location plugin seam.
