@@ -53,10 +53,8 @@ impl RemoteJwks {
         if !response.status().is_success() {
             return Err(format!("JWKS fetch failed: HTTP {}", response.status().as_u16()));
         }
-        let document: Value = response
-            .json()
-            .await
-            .map_err(|error| format!("JWKS document is not JSON: {error}"))?;
+        let document: Value =
+            response.json().await.map_err(|error| format!("JWKS document is not JSON: {error}"))?;
         document
             .get("keys")
             .and_then(Value::as_array)
@@ -109,9 +107,8 @@ fn rsa_public_key(jwk: &Value) -> Result<RsaPublicKeyComponents<Vec<u8>>, String
     let engine = base64::engine::general_purpose::URL_SAFE_NO_PAD;
     let modulus = jwk.get("n").and_then(Value::as_str).ok_or("JWK carries no modulus")?;
     let exponent = jwk.get("e").and_then(Value::as_str).ok_or("JWK carries no exponent")?;
-    let modulus = engine
-        .decode(modulus)
-        .map_err(|error| format!("JWK modulus is not base64url: {error}"))?;
+    let modulus =
+        engine.decode(modulus).map_err(|error| format!("JWK modulus is not base64url: {error}"))?;
     let exponent = engine
         .decode(exponent)
         .map_err(|error| format!("JWK exponent is not base64url: {error}"))?;
@@ -130,11 +127,8 @@ mod tests {
     /// unit tests isolate the crypto path from the JWKS fetch).
     fn fixture_key() -> ring::signature::RsaKeyPair {
         let pem = include_str!("testdata/id_token_signing_key.pem");
-        let body: String = pem
-            .lines()
-            .filter(|line| !line.starts_with("-----"))
-            .flat_map(str::chars)
-            .collect();
+        let body: String =
+            pem.lines().filter(|line| !line.starts_with("-----")).flat_map(str::chars).collect();
         let der = base64::engine::general_purpose::STANDARD.decode(body).expect("PEM decodes");
         ring::signature::RsaKeyPair::from_pkcs8(&der).expect("fixture key parses")
     }
@@ -167,11 +161,8 @@ mod tests {
         let e = engine.encode(components.e);
         let header = r#"{"alg":"RS256","kid":"sign-in"}"#;
         let payload = r#"{"sub":"user_123"}"#;
-        let signing_input = format!(
-            "{}.{}",
-            engine.encode(header.as_bytes()),
-            engine.encode(payload.as_bytes())
-        );
+        let signing_input =
+            format!("{}.{}", engine.encode(header.as_bytes()), engine.encode(payload.as_bytes()));
         let mut signature = vec![0u8; key_pair.public().modulus_len()];
         key_pair
             .sign(
