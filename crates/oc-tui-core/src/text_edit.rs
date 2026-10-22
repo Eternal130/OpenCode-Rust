@@ -1,681 +1,51 @@
-//! Text-edit primitives — v2's textarea semantics for the composer.
+//! The composer's editing engine — the REAL `@opentui/core` textarea
+//! line: `opentui-core`'s [`EditBuffer`] (edit-buffer.zig: cursor,
+//! clusters, word boundaries, undo/redo) + [`EditorView`]
+//! (editor-view.zig: the wrap/visual-line layer, Word wrap —
+//! `TextareaRenderable`'s default, EditBufferRenderable.ts:166).
+//! Since the M-engine-retire lane this is the ONLY editing engine —
+//! the hand-rolled predecessor is gone. This module also owns the
+//! command/outcome data contracts ([`EditCommand`],
+//! [`EditOutcome`], [`SnapshotKind`]) and the composer-facing
+//! [`EditCore`] seam.
 //!
-//! The command surface is EXACTLY the `input.*` table
-//! (`config/keybind.ts:206-243`); the operations mirror
-//! `editBufferCommandHandlers` (`@opentui/keymap` addons/opentui/
-//! index.js — `editBufferCommandHandlers`): every `input.*` command
-//! maps one-to-one onto an `EditBufferRenderable` method
-//! (`@opentui/core` renderables/EditBufferRenderable.d.ts:140-205):
+//! ## The contract
 //!
-//! ```text
-//! input.move.left    → moveCursorLeft()            (select: shift+…)
-//! input.line.home    → gotoLineHome({select})
-//! input.visual.line… → gotoVisualLineHome/End({select})
-//! input.buffer.…     → gotoBufferHome/End({select})
-//! input.delete.line  → deleteLine()
-//! input.word.forward → moveWordForward({select})
-//! input.delete.word.backward → deleteWordBackward()
-//! input.select.all   → selectAll()
-//! input.undo/redo    → undo()/redo()
-//! …
-//! ```
+//! * Char-offset `text`/`caret`/`anchor` mirrors — the composer's
+//!   model. The buffer's coordinate space is display-width offsets
+//!   (cluster widths summed, one unit per line break); the adapter
+//!   converts through the buffer's own cluster table, so wide/CJK
+//!   clusters move exactly like upstream's editor.
+//! * [`EditCommand`] — the full `input.*` surface
+//!   (`config/keybind.ts:206-243`), driven through the buffer/view
+//!   methods `EditBufferRenderable` itself uses
+//!   (renderables/textarea.ts ports: `moveCursorLeft`,
+//!   `gotoLineHome`, `deleteWordForward`, …), including the readline
+//!   `col==0`/`col==eol` line-home/end jumps to the neighboring line.
+//! * Keyboard selection = the anchor model
+//!   (`_keyboardSelectionActive` + the focus offset): select motions
+//!   keep the anchor and move the caret; plain motions collapse to
+//!   the selection's edge WITHOUT taking another step
+//!   (`collapseSelectionToEdge`, EditBufferRenderable.ts:727-734).
+//! * Undo/redo: the buffer's rope snapshots restore text + cursor
+//!   (upstream does NOT restore the selection — the anchor clears).
 //!
-//! A command that cannot act (no selection to delete, caret at the
-//! buffer edge with nothing to undo) returns `false` — v2's REJECTED
-//! command: the keymap binding counts as unhandled and the stroke
-//! falls through (`runBinding`, index.js:2006-2029).
+//! ## Upstream-faithful behaviors (each pinned by a test below)
 //!
-//! Offsets are CHAR offsets over the draft text (the composer's
-//! caret model). Cluster motion (grapheme clusters) is host-pluggable
-//! through [`ClusterBounds`] so the composer keeps its wrap-derived
-//! cluster behavior (`wrap::flatten`) without this crate depending
-//! on the renderer.
+//! * Visual-line motions follow the WRAP model (`EditorView` vlines at
+//!   the composer's inner width).
+//! * Word boundaries are the buffer's script-transition rules
+//!   (`getNextWordBoundary`, edit-buffer.zig:821-946).
+//! * `deleteForward` stores two undo snapshots upstream (ported
+//!   faithfully); the adapter's [`SnapshotKind`] reports per-op, and
+//!   same-state undo restores (text unchanged) report
+//!   [`SnapshotKind::None`] so the composer's mention-sidecar mirror
+//!   stays keyed to observable text changes.
 
 use std::ops::Range;
 
-/// The host's grapheme-cluster model: where cluster boundaries sit
-/// (char offsets, ascending, starting at 0, ending at char count).
-pub trait ClusterBounds {
-    fn cluster_starts(&self, text: &str) -> Vec<usize>;
-}
-
-/// The default model: every char is its own cluster (unit tests and
-/// ASCII hosts).
-#[derive(Debug, Clone, Copy, Default)]
-pub struct CharClusters;
-
-impl ClusterBounds for CharClusters {
-    fn cluster_starts(&self, text: &str) -> Vec<usize> {
-        (0..=text.chars().count()).collect()
-    }
-}
-
-/// One undo/redo snapshot (text + caret + anchor).
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Snapshot {
-    text: String,
-    caret: usize,
-    anchor: Option<usize>,
-}
-
-/// The undo stack bound (v2's native buffer keeps full history; the
-/// port bounds it — a draft is small, the bound only stops pathology).
-const HISTORY_LIMIT: usize = 512;
-
-/// The text-edit state machine: text + caret + selection anchor +
-/// undo/redo stacks.
-#[derive(Clone)]
-pub struct TextArea {
-    pub text: String,
-    /// Caret offset in chars.
-    pub caret: usize,
-    /// The selection anchor (`_keyboardSelectionActive` +
-    /// `lastLocalSelection`): `None` = no selection; Some(anchor)
-    /// with anchor ≠ caret = an active range.
-    pub anchor: Option<usize>,
-    undo: Vec<Snapshot>,
-    redo: Vec<Snapshot>,
-    clusters: std::rc::Rc<dyn ClusterBounds>,
-}
-
-impl Default for TextArea {
-    fn default() -> Self {
-        Self::with_clusters(std::rc::Rc::new(CharClusters))
-    }
-}
-
-impl TextArea {
-    #[must_use]
-    pub fn with_clusters(clusters: std::rc::Rc<dyn ClusterBounds>) -> Self {
-        Self {
-            text: String::new(),
-            caret: 0,
-            anchor: None,
-            undo: Vec::new(),
-            redo: Vec::new(),
-            clusters,
-        }
-    }
-
-    /// Replace the whole state (v2's `setText`: resets history).
-    pub fn set_text(&mut self, text: &str) {
-        self.text = text.to_string();
-        self.caret = self.char_len();
-        self.anchor = None;
-        self.undo.clear();
-        self.redo.clear();
-    }
-
-    fn char_len(&self) -> usize {
-        self.text.chars().count()
-    }
-
-    fn clamp(&self, offset: usize) -> usize {
-        offset.min(self.char_len())
-    }
-
-    /// The active selection range (normalized, `Some` only when
-    /// non-empty) — `getSelection()`.
-    #[must_use]
-    pub fn selection(&self) -> Option<Range<usize>> {
-        let anchor = self.anchor?;
-        if anchor == self.caret {
-            return None;
-        }
-        Some(anchor.min(self.caret)..anchor.max(self.caret))
-    }
-
-    #[must_use]
-    pub fn selected_text(&self) -> Option<String> {
-        self.selection().map(|range| {
-            let start = char_to_byte(&self.text, range.start);
-            let end = char_to_byte(&self.text, range.end);
-            self.text[start..end].to_owned()
-        })
-    }
-
-    /// Push an undo snapshot before a mutation (v2's native buffer
-    /// creates undo points per edit; the snapshot is the observable
-    /// equivalent for `undo()`/`redo()`).
-    fn snapshot(&mut self) {
-        self.redo.clear();
-        self.undo.push(Snapshot {
-            text: self.text.clone(),
-            caret: self.caret,
-            anchor: self.anchor,
-        });
-        if self.undo.len() > HISTORY_LIMIT {
-            self.undo.remove(0);
-        }
-    }
-
-    /// Delete a char range (clamped); the caret lands at the range
-    /// start.
-    fn delete_range(&mut self, range: Range<usize>) {
-        let start = self.clamp(range.start);
-        let end = self.clamp(range.end);
-        if start >= end {
-            return;
-        }
-        let start_b = char_to_byte(&self.text, start);
-        let end_b = char_to_byte(&self.text, end);
-        self.text.replace_range(start_b..end_b, "");
-        self.caret = start;
-    }
-
-    /// Delete the active selection and place the caret at its start
-    /// (`deleteSelectedText`) — every insert/delete op runs it first.
-    fn collapse_selection_edit(&mut self) {
-        if let Some(range) = self.selection() {
-            self.delete_range(range);
-        }
-        self.anchor = None;
-    }
-
-    /// `insertText`.
-    pub fn insert(&mut self, text: &str) -> bool {
-        if text.is_empty() {
-            return false;
-        }
-        self.snapshot();
-        self.collapse_selection_edit();
-        let byte = char_to_byte(&self.text, self.caret);
-        self.text.insert_str(byte, text);
-        self.caret += text.chars().count();
-        true
-    }
-
-    /// Movement core: `select` extends the selection (keeping the
-    /// anchor), plain movement collapses it
-    /// (`updateSelectionForMovement`). Returns whether anything
-    /// observable changed (v2's boolean returns — a move that cannot
-    /// move REJECTS the binding).
-    fn move_caret(&mut self, to: usize, select: bool) -> bool {
-        let target = self.clamp(to);
-        let before_caret = self.caret;
-        if !select {
-            self.anchor = None;
-        } else if self.anchor.is_none() {
-            self.anchor = Some(self.caret);
-        }
-        self.caret = target;
-        self.caret != before_caret || (select && self.selection().is_some())
-    }
-
-    /// Cluster length ending at `caret`.
-    fn prev_cluster_len(&self, caret: usize) -> usize {
-        let starts = self.clusters.cluster_starts(&self.text);
-        let mut prev = 0;
-        for start in starts {
-            if start >= caret {
-                break;
-            }
-            prev = start;
-        }
-        caret - prev
-    }
-
-    /// Cluster length starting at `caret`.
-    fn next_cluster_len(&self, caret: usize) -> usize {
-        let starts = self.clusters.cluster_starts(&self.text);
-        match starts.iter().find(|start| **start > caret) {
-            Some(next) => next - caret,
-            None => 1,
-        }
-    }
-
-    /// The current logical line's start offset (chars).
-    fn line_start(&self) -> usize {
-        let byte = char_to_byte(&self.text, self.caret);
-        self.text[..byte].rfind('\n').map_or(0, |pos| self.text[..pos].chars().count() + 1)
-    }
-
-    /// The current logical line's end offset (chars, before `\n`).
-    fn line_end(&self) -> usize {
-        let byte = char_to_byte(&self.text, self.caret);
-        let rest = &self.text[byte..];
-        let nl = rest.find('\n').unwrap_or(rest.len());
-        self.text[..byte + nl].chars().count()
-    }
-
-    // -- word boundaries -------------------------------------------------
-    //
-    // v2 computes these in the native (zig) EditBuffer
-    // (`getNextWordBoundary`/`getPrevWordBoundary`,
-    // edit-buffer.d.ts:81-82). The Rust port uses the standard
-    // run-based rule: a "word" is a maximal run of word chars
-    // (`[alnum_]`), a "run" is any maximal same-class stretch, and a
-    // boundary move crosses the current run plus following
-    // whitespace to the next run's start (readline/codemirror
-    // behavior — the observable results the unit tests pin).
-
-    fn is_word(ch: char) -> bool {
-        ch.is_alphanumeric() || ch == '_'
-    }
-
-    fn class(ch: char) -> u8 {
-        if ch == '\n' {
-            0
-        } else if ch.is_whitespace() {
-            1
-        } else if Self::is_word(ch) {
-            2
-        } else {
-            3
-        }
-    }
-
-    fn char_at(&self, offset: usize) -> Option<char> {
-        self.text.chars().nth(offset)
-    }
-
-    /// Offset of the next word start after `from`
-    /// (`getNextWordBoundary`).
-    #[must_use]
-    pub fn next_word_start(&self, from: usize) -> usize {
-        let len = self.char_len();
-        let mut at = from;
-        // Over the current run…
-        if let Some(ch) = self.char_at(at) {
-            let class = Self::class(ch);
-            while at < len && self.char_at(at).is_some_and(|ch| Self::class(ch) == class) {
-                at += 1;
-            }
-        }
-        // …then any whitespace (not crossing a line break start):
-        while at < len && self.char_at(at).is_some_and(|ch| ch != '\n' && ch.is_whitespace()) {
-            at += 1;
-        }
-        at
-    }
-
-    /// Offset of the word start at/before `from`
-    /// (`getPrevWordBoundary`).
-    #[must_use]
-    pub fn prev_word_start(&self, from: usize) -> usize {
-        let mut at = from.min(self.char_len());
-        // Back over whitespace…
-        while at > 0 && self.char_at(at - 1).is_some_and(|ch| ch != '\n' && ch.is_whitespace()) {
-            at -= 1;
-        }
-        // …then over the current run.
-        if at > 0 {
-            let class = self.char_at(at - 1).map_or(3, Self::class);
-            while at > 0 && self.char_at(at - 1).is_some_and(|ch| Self::class(ch) == class) {
-                at -= 1;
-            }
-        }
-        at
-    }
-
-    // -- the v2 command surface ------------------------------------------
-
-    /// Apply one `input.*` command; `false` = the command rejected
-    /// (nothing to do — the stroke falls through).
-    #[allow(clippy::too_many_lines)] // one arm per v2 `input.*` command
-    #[allow(clippy::match_same_arms)] // visual-line aliases share the logical arm (no soft wrap yet)
-    pub fn apply(&mut self, command: EditCommand) -> bool {
-        match command {
-            EditCommand::MoveLeft => {
-                self.move_caret(self.caret.saturating_sub(self.prev_cluster_len(self.caret)), false)
-            }
-            EditCommand::MoveRight => {
-                self.move_caret(self.caret + self.next_cluster_len(self.caret), false)
-            }
-            EditCommand::MoveUp => {
-                // Logical-row move (the visual-row move is caret
-                // internals — C2): to the previous line's end.
-                let start = self.line_start();
-                if start == 0 {
-                    return false;
-                }
-                self.move_caret(start - 1, false) && {
-                    self.caret = self.line_end();
-                    true
-                }
-            }
-            EditCommand::MoveDown => {
-                let byte = char_to_byte(&self.text, self.caret);
-                if self.text[byte..].find('\n').is_none() {
-                    return false;
-                }
-                self.move_caret(self.text[..=byte].chars().count(), false) && {
-                    self.caret = self.line_end();
-                    true
-                }
-            }
-            EditCommand::SelectLeft => {
-                self.move_caret(self.caret.saturating_sub(self.prev_cluster_len(self.caret)), true)
-            }
-            EditCommand::SelectRight => {
-                self.move_caret(self.caret + self.next_cluster_len(self.caret), true)
-            }
-            EditCommand::SelectUp => {
-                let start = self.line_start();
-                if start == 0 {
-                    return self.move_caret(0, true);
-                }
-                self.move_caret(start - 1, true) && {
-                    self.caret = self.line_end();
-                    true
-                }
-            }
-            EditCommand::SelectDown => {
-                let byte = char_to_byte(&self.text, self.caret);
-                if self.text[byte..].find('\n').is_none() {
-                    return self.move_caret(self.char_len(), true);
-                }
-                self.move_caret(self.text[..=byte].chars().count(), true) && {
-                    self.caret = self.line_end();
-                    true
-                }
-            }
-            EditCommand::LineHome => self.move_caret(self.line_start(), false),
-            EditCommand::LineEnd => self.move_caret(self.line_end(), false),
-            EditCommand::SelectLineHome => self.move_caret(self.line_start(), true),
-            EditCommand::SelectLineEnd => self.move_caret(self.line_end(), true),
-            // No soft wrap in the composer's model yet: visual-line
-            // motions alias the logical ones (the wrap renderer keeps
-            // its own row math — C2).
-            EditCommand::VisualLineHome => self.move_caret(self.line_start(), false),
-            EditCommand::VisualLineEnd => self.move_caret(self.line_end(), false),
-            EditCommand::SelectVisualLineHome => self.move_caret(self.line_start(), true),
-            EditCommand::SelectVisualLineEnd => self.move_caret(self.line_end(), true),
-            EditCommand::BufferHome => self.move_caret(0, false),
-            EditCommand::BufferEnd => self.move_caret(self.char_len(), false),
-            EditCommand::SelectBufferHome => self.move_caret(0, true),
-            EditCommand::SelectBufferEnd => self.move_caret(self.char_len(), true),
-            EditCommand::DeleteLine => {
-                let start = self.line_start();
-                let end = self.line_end();
-                if start == end {
-                    // v2's deleteLine on an empty line removes the
-                    // line itself (the trailing newline).
-                    let next = (end + 1).min(self.char_len());
-                    if next == end {
-                        return false;
-                    }
-                    self.snapshot();
-                    self.delete_range(start..next);
-                    return true;
-                }
-                self.snapshot();
-                self.delete_range(start..end);
-                true
-            }
-            EditCommand::DeleteToLineEnd => {
-                let (start, end) = (self.caret, self.line_end());
-                if start >= end {
-                    return false;
-                }
-                self.snapshot();
-                self.delete_range(start..end);
-                true
-            }
-            EditCommand::DeleteToLineStart => {
-                let (start, end) = (self.line_start(), self.caret);
-                if start >= end {
-                    return false;
-                }
-                self.snapshot();
-                self.delete_range(start..end);
-                true
-            }
-            EditCommand::Backspace => {
-                if self.selection().is_some() {
-                    self.snapshot();
-                    self.collapse_selection_edit();
-                    return true;
-                }
-                if self.caret == 0 {
-                    return false;
-                }
-                self.snapshot();
-                let start = self.caret - self.prev_cluster_len(self.caret);
-                self.delete_range(start..self.caret);
-                true
-            }
-            EditCommand::Delete => {
-                if self.selection().is_some() {
-                    self.snapshot();
-                    self.collapse_selection_edit();
-                    return true;
-                }
-                if self.caret >= self.char_len() {
-                    return false;
-                }
-                self.snapshot();
-                let end = self.caret + self.next_cluster_len(self.caret);
-                self.delete_range(self.caret..end);
-                true
-            }
-            EditCommand::Newline => self.insert("\n"),
-            EditCommand::Undo => self.undo(),
-            EditCommand::Redo => self.redo(),
-            EditCommand::WordForward => self.move_caret(self.next_word_start(self.caret), false),
-            EditCommand::WordBackward => self.move_caret(self.prev_word_start(self.caret), false),
-            EditCommand::SelectWordForward => {
-                self.move_caret(self.next_word_start(self.caret), true)
-            }
-            EditCommand::SelectWordBackward => {
-                self.move_caret(self.prev_word_start(self.caret), true)
-            }
-            EditCommand::DeleteWordForward => {
-                if self.selection().is_some() {
-                    self.snapshot();
-                    self.collapse_selection_edit();
-                    return true;
-                }
-                let end = self.next_word_start(self.caret);
-                if end == self.caret {
-                    return false;
-                }
-                self.snapshot();
-                self.delete_range(self.caret..end);
-                true
-            }
-            EditCommand::DeleteWordBackward => {
-                if self.selection().is_some() {
-                    self.snapshot();
-                    self.collapse_selection_edit();
-                    return true;
-                }
-                let start = self.prev_word_start(self.caret);
-                if start == self.caret {
-                    return false;
-                }
-                self.snapshot();
-                self.delete_range(start..self.caret);
-                true
-            }
-            EditCommand::SelectAll => {
-                if self.char_len() == 0 {
-                    return false;
-                }
-                self.anchor = Some(0);
-                self.caret = self.char_len();
-                true
-            }
-        }
-    }
-
-    /// Apply one command, reporting the exact text delta (the char
-    /// range replaced and the inserted length — a prefix/suffix diff)
-    /// plus the history event. Hosts with sidecar state keyed to text
-    /// offsets use this to adjust their bookkeeping.
-    pub fn apply_tracked(&mut self, command: EditCommand) -> EditOutcome {
-        let before_text = self.text.clone();
-        let before_caret = self.caret;
-        if !self.apply(command) {
-            return EditOutcome::Rejected;
-        }
-        let snapshot = match command {
-            EditCommand::Undo => SnapshotKind::Undone,
-            EditCommand::Redo => SnapshotKind::Redone,
-            EditCommand::MoveLeft
-            | EditCommand::MoveRight
-            | EditCommand::MoveUp
-            | EditCommand::MoveDown
-            | EditCommand::SelectLeft
-            | EditCommand::SelectRight
-            | EditCommand::SelectUp
-            | EditCommand::SelectDown
-            | EditCommand::LineHome
-            | EditCommand::LineEnd
-            | EditCommand::SelectLineHome
-            | EditCommand::SelectLineEnd
-            | EditCommand::VisualLineHome
-            | EditCommand::VisualLineEnd
-            | EditCommand::SelectVisualLineHome
-            | EditCommand::SelectVisualLineEnd
-            | EditCommand::BufferHome
-            | EditCommand::BufferEnd
-            | EditCommand::SelectBufferHome
-            | EditCommand::SelectBufferEnd
-            | EditCommand::SelectAll => SnapshotKind::None,
-            _ => SnapshotKind::Pushed,
-        };
-        let (replaced, inserted) = diff_range(&before_text, &self.text);
-        let _ = before_caret;
-        EditOutcome::Applied { replaced, inserted, snapshot }
-    }
-
-    /// Host-facing insert with the same delta/history plumbing as
-    /// [`Self::apply_tracked`] (v2's `insertText` — the composer's
-    /// paste/char paths).
-    pub fn insert_tracked(&mut self, text: &str) -> EditOutcome {
-        let before = self.text.clone();
-        if !self.insert(text) {
-            return EditOutcome::Rejected;
-        }
-        let (replaced, inserted) = diff_range(&before, &self.text);
-        EditOutcome::Applied { replaced, inserted, snapshot: SnapshotKind::Pushed }
-    }
-
-    /// Host-facing range delete (v2's `deleteRange` — the composer's
-    /// atomic mention-chip deletion).
-    pub fn delete_range_tracked(&mut self, range: Range<usize>) -> EditOutcome {
-        let before = self.text.clone();
-        let start = range.start.min(self.char_len());
-        let end = range.end.min(self.char_len());
-        if start >= end {
-            return EditOutcome::Rejected;
-        }
-        self.snapshot();
-        self.delete_range(start..end);
-        let (replaced, inserted) = diff_range(&before, &self.text);
-        EditOutcome::Applied { replaced, inserted, snapshot: SnapshotKind::Pushed }
-    }
-
-    /// `input.undo` — restores the last snapshot; `false` when the
-    /// stack is empty.
-    pub fn undo(&mut self) -> bool {
-        let snapshot = self.undo.pop();
-        self.restore(snapshot, true)
-    }
-
-    /// `input.redo`.
-    pub fn redo(&mut self) -> bool {
-        let snapshot = self.redo.pop();
-        self.restore(snapshot, false)
-    }
-
-    fn restore(&mut self, snapshot: Option<Snapshot>, onto_redo: bool) -> bool {
-        let Some(snapshot) = snapshot else { return false };
-        let current = Snapshot { text: self.text.clone(), caret: self.caret, anchor: self.anchor };
-        self.text = snapshot.text;
-        self.caret = snapshot.caret;
-        self.anchor = snapshot.anchor;
-        if onto_redo {
-            self.redo.push(current);
-        } else {
-            self.undo.push(current);
-        }
-        true
-    }
-}
-
-/// Byte offset of a char index.
-fn char_to_byte(text: &str, chars: usize) -> usize {
-    text.char_indices().nth(chars).map_or(text.len(), |(byte, _)| byte)
-}
-
-/// Prefix/suffix diff of two texts, in CHAR units: the replaced range
-/// of `before` and how many chars `after` put there.
-pub(crate) fn diff_range(before: &str, after: &str) -> (Range<usize>, usize) {
-    let before_chars: Vec<char> = before.chars().collect();
-    let after_chars: Vec<char> = after.chars().collect();
-    let mut prefix = 0usize;
-    while prefix < before_chars.len()
-        && prefix < after_chars.len()
-        && before_chars[prefix] == after_chars[prefix]
-    {
-        prefix += 1;
-    }
-    let mut suffix = 0usize;
-    while suffix < before_chars.len() - prefix
-        && suffix < after_chars.len() - prefix
-        && before_chars[before_chars.len() - 1 - suffix]
-            == after_chars[after_chars.len() - 1 - suffix]
-    {
-        suffix += 1;
-    }
-    (prefix..before_chars.len() - suffix, after_chars.len() - prefix - suffix)
-}
-
-impl std::fmt::Debug for TextArea {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("TextArea")
-            .field("text", &self.text)
-            .field("caret", &self.caret)
-            .field("anchor", &self.anchor)
-            .field("undo", &self.undo.len())
-            .field("redo", &self.redo.len())
-            .finish_non_exhaustive()
-    }
-}
-
-impl PartialEq for TextArea {
-    fn eq(&self, other: &Self) -> bool {
-        self.text == other.text
-            && self.caret == other.caret
-            && self.anchor == other.anchor
-            && self.undo == other.undo
-            && self.redo == other.redo
-    }
-}
-
-/// What an [`TextArea::apply_tracked`] did to the buffer.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EditOutcome {
-    /// The command rejected (nothing changed, no snapshot pushed).
-    Rejected,
-    /// The edit applied.
-    Applied {
-        /// The char range of the buffer the edit replaced.
-        replaced: Range<usize>,
-        /// How many chars replaced it.
-        inserted: usize,
-        /// The history effect (hosts with sidecar state — the
-        /// composer's file mentions — mirror their stacks onto
-        /// it).
-        snapshot: SnapshotKind,
-    },
-}
-
-/// The history effect of one applied command.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SnapshotKind {
-    /// No history movement (motions/selection).
-    None,
-    /// An undo snapshot was pushed (a mutating edit).
-    Pushed,
-    /// `undo()` restored a snapshot.
-    Undone,
-    /// `redo()` restored a snapshot.
-    Redone,
-}
+use opentui_core::editor::{EditBuffer, EditorView};
+use opentui_core::renderables::text::WrapMode;
 
 /// The `input.*` command set — one variant per binding in
 /// `config/keybind.ts:206-243` (the textarea slice of the table).
@@ -840,198 +210,1004 @@ impl EditCommand {
     }
 }
 
+/// What an [`EditCore::apply_tracked`] did to the buffer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EditOutcome {
+    /// The command rejected (nothing changed, no snapshot pushed).
+    Rejected,
+    /// The edit applied.
+    Applied {
+        /// The char range of the buffer the edit replaced.
+        replaced: Range<usize>,
+        /// How many chars replaced it.
+        inserted: usize,
+        /// The history effect (hosts with sidecar state — the
+        /// composer's file mentions — mirror their stacks onto
+        /// it).
+        snapshot: SnapshotKind,
+    },
+}
+
+/// The history effect of one applied command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SnapshotKind {
+    /// No history movement (motions/selection).
+    None,
+    /// An undo snapshot was pushed (a mutating edit).
+    Pushed,
+    /// `undo()` restored a snapshot.
+    Undone,
+    /// `redo()` restored a snapshot.
+    Redone,
+}
+
+/// Prefix/suffix diff of two texts, in CHAR units: the replaced range
+/// of `before` and how many chars `after` put there.
+fn diff_range(before: &str, after: &str) -> (Range<usize>, usize) {
+    let before_chars: Vec<char> = before.chars().collect();
+    let after_chars: Vec<char> = after.chars().collect();
+    let mut prefix = 0usize;
+    while prefix < before_chars.len()
+        && prefix < after_chars.len()
+        && before_chars[prefix] == after_chars[prefix]
+    {
+        prefix += 1;
+    }
+    let mut suffix = 0usize;
+    while suffix < before_chars.len() - prefix
+        && suffix < after_chars.len() - prefix
+        && before_chars[before_chars.len() - 1 - suffix]
+            == after_chars[after_chars.len() - 1 - suffix]
+    {
+        suffix += 1;
+    }
+    (prefix..before_chars.len() - suffix, after_chars.len() - prefix - suffix)
+}
+
+/// A tall-enough viewport height for the per-op view (motions never
+/// depend on the viewport height; only the wrap width matters).
+const VIEW_HEIGHT: u32 = 1000;
+
+/// The composer editing engine over the real opentui-core textarea
+/// line — the implementation behind [`EditCore`].
+#[derive(Clone)]
+pub struct TextAreaOpentui {
+    buffer: EditBuffer,
+    /// The selection anchor (char offset); `None` = no selection.
+    anchor: Option<usize>,
+    /// The wrap width for visual-line motions (the composer's inner
+    /// text width; the pump keeps it fresh on resize).
+    viewport_width: u32,
+}
+
+impl Default for TextAreaOpentui {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TextAreaOpentui {
+    #[must_use]
+    pub fn new() -> Self {
+        Self { buffer: EditBuffer::new(), anchor: None, viewport_width: 80 }
+    }
+
+    /// The wrap width for visual-line motions (composer inner width —
+    /// the same formula `mount_height` uses; the pump sets it on
+    /// resize/boot).
+    pub fn set_viewport_width(&mut self, width: u32) {
+        self.viewport_width = width.max(1);
+    }
+
+    #[must_use]
+    pub fn viewport_width(&self) -> u32 {
+        self.viewport_width
+    }
+
+    // -- observable mirrors ------------------------------------------------
+
+    /// The buffer text (LF-joined — the composer's draft form).
+    #[must_use]
+    pub fn text(&self) -> String {
+        self.buffer.get_text()
+    }
+
+    /// Replace the whole state (the legacy `set_text` observable:
+    /// caret at the END, no selection, history cleared — the
+    /// composer's draft-restore path pins the caret-at-end form).
+    pub fn set_text(&mut self, text: &str) {
+        self.buffer.set_text(text);
+        let end = self.buffer.text_end_offset();
+        self.buffer.set_cursor_by_offset(end);
+        self.anchor = None;
+    }
+
+    /// Caret offset in chars.
+    #[must_use]
+    pub fn caret(&self) -> usize {
+        self.offset_to_char(self.buffer.primary_cursor().offset)
+    }
+
+    /// Place the caret (clamped); the selection clears.
+    pub fn set_caret(&mut self, caret: usize) {
+        self.place_caret(caret);
+        self.anchor = None;
+    }
+
+    /// Place the caret without touching the anchor (the internal
+    /// post-edit form).
+    fn place_caret(&mut self, caret: usize) {
+        let clamped = caret.min(self.char_len());
+        self.buffer.set_cursor_by_offset(self.char_to_offset(clamped));
+    }
+
+    /// Place the caret keeping a selection anchor (the store's mirror
+    /// path preserves an active anchor across the round-trip).
+    pub fn set_caret_keep_anchor(&mut self, caret: usize) {
+        let clamped = caret.min(self.char_len());
+        self.buffer.set_cursor_by_offset(self.char_to_offset(clamped));
+        if self.anchor == Some(clamped) {
+            self.anchor = None;
+        }
+    }
+
+    /// The anchor offset (chars), when a selection is armed.
+    #[must_use]
+    pub fn anchor(&self) -> Option<usize> {
+        self.anchor
+    }
+
+    /// Arm the selection anchor directly (tests + the store mirror).
+    pub fn set_anchor(&mut self, anchor: Option<usize>) {
+        self.anchor = anchor;
+    }
+
+    fn char_len(&self) -> usize {
+        self.buffer.get_text().chars().count()
+    }
+
+    /// The active selection range (normalized, `Some` only when
+    /// non-empty) — `getSelection()`.
+    #[must_use]
+    pub fn selection(&self) -> Option<Range<usize>> {
+        let anchor = self.anchor?;
+        let caret = self.caret();
+        if anchor == caret {
+            return None;
+        }
+        Some(anchor.min(caret)..anchor.max(caret))
+    }
+
+    #[must_use]
+    pub fn selected_text(&self) -> Option<String> {
+        self.selection().map(|range| {
+            let text = self.buffer.get_text();
+            let start = char_index_to_byte(&text, range.start);
+            let end = char_index_to_byte(&text, range.end);
+            text[start..end].to_owned()
+        })
+    }
+
+    // -- coordinate conversion (char offsets ↔ display-width offsets) ------
+
+    /// char offset → the buffer's display-width offset (through the
+    /// row/cluster walk).
+    #[must_use]
+    fn char_to_offset(&self, chars: usize) -> u32 {
+        let mut remaining = chars;
+        let lines = self.buffer.lines_for_render();
+        for (row, line) in lines.iter().enumerate() {
+            let line_chars = line.text.chars().count();
+            if remaining <= line_chars {
+                // width of the first `remaining` chars on this row
+                let mut chars_seen = 0usize;
+                let mut width = 0u32;
+                for cluster in &line.clusters {
+                    let cluster_chars = line.text
+                        [cluster.byte_start as usize..cluster.byte_end() as usize]
+                        .chars()
+                        .count();
+                    if chars_seen >= remaining {
+                        break;
+                    }
+                    chars_seen += cluster_chars;
+                    width += cluster.width;
+                }
+                let _ = row;
+                let row = u32::try_from(row).unwrap_or_default();
+                return self.buffer.get_line_start_offset(row) + width;
+            }
+            remaining -= line_chars + 1; // + the line break
+        }
+        self.buffer.text_end_offset()
+    }
+
+    /// display-width offset → char offset.
+    #[must_use]
+    fn offset_to_char(&self, offset: u32) -> usize {
+        let Some((row, width_col)) = self.buffer.offset_to_coords(offset) else {
+            return 0;
+        };
+        let mut chars = 0usize;
+        let lines = self.buffer.lines_for_render();
+        for line in &lines[..(row as usize).min(lines.len())] {
+            chars += line.text.chars().count() + 1; // the row + its break
+        }
+        let Some(line) = lines.get(row as usize) else { return chars };
+        let mut width = 0u32;
+        for cluster in &line.clusters {
+            if width >= width_col {
+                break;
+            }
+            width += cluster.width;
+            chars +=
+                line.text[cluster.byte_start as usize..cluster.byte_end() as usize].chars().count();
+        }
+        chars
+    }
+
+    // -- the edit bridge ----------------------------------------------------
+
+    /// Run one op with the tracked outcome (the legacy
+    /// `apply_tracked` contract: the replaced char range, the inserted
+    /// length, the history event). Rejected = nothing observable
+    /// changed AND no history pop happened (the stroke falls through).
+    fn tracked(
+        &mut self,
+        kind: SnapshotKind,
+        history_pop: bool,
+        run: impl FnOnce(&mut Self),
+    ) -> EditOutcome {
+        let before = self.buffer.get_text();
+        let before_caret = self.caret();
+        let before_anchor = self.anchor;
+        run(self);
+        let after = self.buffer.get_text();
+        let observable =
+            before != after || self.caret() != before_caret || self.anchor != before_anchor;
+        if !observable && !history_pop {
+            return EditOutcome::Rejected;
+        }
+        let (replaced, inserted) = diff_range(&before, &after);
+        EditOutcome::Applied { replaced, inserted, snapshot: kind }
+    }
+
+    /// Build the wrap-aware view for visual motions (per-op; the
+    /// buffer clones back after).
+    fn view(&self) -> EditorView {
+        let mut view = EditorView::new(self.buffer.clone(), self.viewport_width, VIEW_HEIGHT);
+        view.set_wrap_mode(WrapMode::Word);
+        view
+    }
+
+    fn take_view(&mut self, mut view: EditorView) {
+        self.buffer = std::mem::take(&mut view.buffer);
+    }
+
+    // -- selection glue (EditBufferRenderable's keyboard path) --------------
+
+    /// `collapseSelectionToEdge` (727-734): a plain (non-select)
+    /// motion first collapses an active selection to its edge —
+    /// WITHOUT taking another step. Returns whether it collapsed.
+    fn collapse_selection_to_edge(&mut self, edge: &str) -> bool {
+        let Some(range) = self.selection() else { return false };
+        let edge = if edge == "start" { range.start } else { range.end };
+        self.set_caret(edge);
+        true
+    }
+
+    /// The select-motion wrapper: keep/arms the anchor, run the move,
+    /// then the focus lands on the new caret — the observable
+    /// anchor/focus model of `updateSelectionForMovement` plus the
+    /// local selection delivery.
+    fn select_motion(&mut self, run: impl FnOnce(&mut Self)) {
+        let caret = self.caret();
+        if self.anchor.is_none() {
+            self.anchor = Some(caret);
+        }
+        run(self);
+        if self.anchor == Some(self.caret()) {
+            self.anchor = None;
+        }
+    }
+
+    // -- mutations ----------------------------------------------------------
+
+    /// `insertText` at the caret (selection replaced first —
+    /// `deleteSelectedText`).
+    pub fn insert(&mut self, text: &str) -> bool {
+        if text.is_empty() {
+            return false;
+        }
+        self.delete_selection_if_any();
+        self.buffer.insert_text(text);
+        true
+    }
+
+    fn delete_selection_if_any(&mut self) {
+        if let Some(range) = self.selection() {
+            self.delete_char_range(range);
+            self.anchor = None;
+        }
+    }
+
+    /// Delete a char range directly (the mention-chip paths); the
+    /// caret lands at the range start in the NEW text (char-rebased —
+    /// width offsets shift across the delete).
+    fn delete_char_range(&mut self, range: Range<usize>) {
+        let start = self.char_to_offset(range.start);
+        let end = self.char_to_offset(range.end);
+        let (start_row, start_col) = self.buffer.offset_to_coords(start).unwrap_or((0, 0));
+        let (end_row, end_col) = self.buffer.offset_to_coords(end).unwrap_or((0, 0));
+        self.buffer.delete_range(start_row, start_col, end_row, end_col);
+        self.place_caret(range.start);
+    }
+
+    // -- the v2 command surface ---------------------------------------------
+
+    /// Apply one `input.*` command; the tracked outcome reports the
+    /// delta (Rejected when nothing observable happened).
+    #[allow(clippy::too_many_lines)] // one arm per v2 `input.*` command
+    #[allow(clippy::match_same_arms)] // faithful per-arm ports
+    pub fn apply_tracked(&mut self, command: EditCommand) -> EditOutcome {
+        let snapshot = |command: EditCommand| match command {
+            EditCommand::Undo => SnapshotKind::Undone,
+            EditCommand::Redo => SnapshotKind::Redone,
+            EditCommand::MoveLeft
+            | EditCommand::MoveRight
+            | EditCommand::MoveUp
+            | EditCommand::MoveDown
+            | EditCommand::SelectLeft
+            | EditCommand::SelectRight
+            | EditCommand::SelectUp
+            | EditCommand::SelectDown
+            | EditCommand::LineHome
+            | EditCommand::LineEnd
+            | EditCommand::SelectLineHome
+            | EditCommand::SelectLineEnd
+            | EditCommand::VisualLineHome
+            | EditCommand::VisualLineEnd
+            | EditCommand::SelectVisualLineHome
+            | EditCommand::SelectVisualLineEnd
+            | EditCommand::BufferHome
+            | EditCommand::BufferEnd
+            | EditCommand::SelectBufferHome
+            | EditCommand::SelectBufferEnd
+            | EditCommand::SelectAll => SnapshotKind::None,
+            _ => SnapshotKind::Pushed,
+        };
+        let kind = snapshot(command);
+        // Undo/redo applied = the stack had an entry to pop (upstream
+        // restores even a same-state snapshot — the composer's mention
+        // mirror is command-keyed, so both stay in step); selectAll
+        // runs on every non-empty buffer even when the observable is
+        // unchanged (upstream's handler returns true).
+        let history_pop = match command {
+            EditCommand::Undo => self.can_undo(),
+            EditCommand::Redo => self.can_redo(),
+            EditCommand::SelectAll => self.char_len() > 0,
+            _ => false,
+        };
+        self.tracked(kind, history_pop, |area| area.apply(command))
+    }
+
+    #[allow(clippy::too_many_lines)] // one arm per v2 `input.*` command (the EditBufferRenderable port)
+    #[allow(clippy::match_same_arms)] // faithful per-arm ports
+    fn apply(&mut self, command: EditCommand) {
+        match command {
+            EditCommand::MoveLeft => {
+                if !self.collapse_selection_to_edge("start") {
+                    self.buffer.move_left();
+                }
+            }
+            EditCommand::MoveRight => {
+                if !self.collapse_selection_to_edge("end") {
+                    self.buffer.move_right();
+                }
+            }
+            EditCommand::MoveUp => {
+                let mut view = self.view();
+                view.move_up_visual();
+                self.take_view(view);
+            }
+            EditCommand::MoveDown => {
+                let mut view = self.view();
+                view.move_down_visual();
+                self.take_view(view);
+            }
+            EditCommand::SelectLeft => self.select_motion(|area| area.buffer.move_left()),
+            EditCommand::SelectRight => self.select_motion(|area| area.buffer.move_right()),
+            EditCommand::SelectUp => self.select_motion(|area| {
+                let mut view = area.view();
+                view.move_up_visual();
+                area.take_view(view);
+            }),
+            EditCommand::SelectDown => self.select_motion(|area| {
+                let mut view = area.view();
+                view.move_down_visual();
+                area.take_view(view);
+            }),
+            EditCommand::LineHome => {
+                let cursor = self.buffer.primary_cursor();
+                if cursor.col == 0 && cursor.row > 0 {
+                    // The readline form: home at col 0 lands on the
+                    // previous line's end (gotoLineHome, 791-807).
+                    self.buffer.set_cursor(cursor.row - 1, 0);
+                    let eol = self.buffer.get_eol();
+                    self.buffer.set_cursor(eol.row, eol.col);
+                } else {
+                    self.buffer.set_cursor(cursor.row, 0);
+                }
+            }
+            EditCommand::LineEnd => {
+                let cursor = self.buffer.primary_cursor();
+                let eol = self.buffer.get_eol();
+                let line_count = self.buffer.line_count();
+                if cursor.col == eol.col && cursor.row + 1 < line_count {
+                    // end at EOL lands on the next line's start.
+                    self.buffer.set_cursor(cursor.row + 1, 0);
+                } else {
+                    self.buffer.set_cursor(eol.row, eol.col);
+                }
+            }
+            EditCommand::SelectLineHome => {
+                self.select_motion(|area| area.apply(EditCommand::LineHome));
+            }
+            EditCommand::SelectLineEnd => {
+                self.select_motion(|area| area.apply(EditCommand::LineEnd));
+            }
+            EditCommand::SelectVisualLineHome => self.select_motion(|area| {
+                let mut view = area.view();
+                let sol = view.get_visual_sol();
+                let (row, col) = (sol.logical_row, sol.logical_col);
+                area.take_view(view);
+                area.buffer.set_cursor(row, col);
+            }),
+            EditCommand::SelectVisualLineEnd => self.select_motion(|area| {
+                let mut view = area.view();
+                view.goto_visual_line_end();
+                area.take_view(view);
+            }),
+            EditCommand::VisualLineHome => {
+                let mut view = self.view();
+                let sol = view.get_visual_sol();
+                let (row, col) = (sol.logical_row, sol.logical_col);
+                self.take_view(view);
+                self.buffer.set_cursor(row, col);
+            }
+            EditCommand::VisualLineEnd => {
+                let mut view = self.view();
+                view.goto_visual_line_end();
+                self.take_view(view);
+            }
+            EditCommand::BufferHome => self.buffer.set_cursor(0, 0),
+            EditCommand::BufferEnd => {
+                let end = self.buffer.text_end_offset();
+                self.buffer.set_cursor_by_offset(end);
+            }
+            EditCommand::SelectBufferHome => {
+                self.select_motion(|area| area.buffer.set_cursor(0, 0));
+            }
+            EditCommand::SelectBufferEnd => {
+                self.select_motion(|area| {
+                    let end = area.buffer.text_end_offset();
+                    area.buffer.set_cursor_by_offset(end);
+                });
+            }
+            EditCommand::DeleteLine => {
+                self.buffer.delete_line();
+            }
+            EditCommand::DeleteToLineEnd => {
+                let cursor = self.buffer.primary_cursor();
+                let eol = self.buffer.get_eol();
+                if eol.col > cursor.col {
+                    self.buffer.delete_range(cursor.row, cursor.col, eol.row, eol.col);
+                }
+            }
+            EditCommand::DeleteToLineStart => {
+                let cursor = self.buffer.primary_cursor();
+                if cursor.col > 0 {
+                    self.buffer.delete_range(cursor.row, 0, cursor.row, cursor.col);
+                } else if cursor.row > 0 {
+                    self.buffer.backspace();
+                }
+            }
+            EditCommand::Backspace => {
+                self.delete_selection_if_any_else(|area| area.buffer.backspace());
+            }
+            EditCommand::Delete => {
+                self.delete_selection_if_any_else(|area| area.buffer.delete_forward());
+            }
+            EditCommand::Newline => {
+                self.buffer.new_line();
+            }
+            EditCommand::Undo => {
+                self.buffer.undo();
+                self.anchor = None;
+            }
+            EditCommand::Redo => {
+                self.buffer.redo();
+                self.anchor = None;
+            }
+            EditCommand::WordForward => {
+                if !self.collapse_selection_to_edge("end") {
+                    let next = self.buffer.get_next_word_boundary();
+                    self.buffer.set_cursor_by_offset(next.offset);
+                }
+            }
+            EditCommand::WordBackward => {
+                if !self.collapse_selection_to_edge("start") {
+                    let prev = self.buffer.get_prev_word_boundary();
+                    self.buffer.set_cursor_by_offset(prev.offset);
+                }
+            }
+            EditCommand::SelectWordForward => self.select_motion(|area| {
+                let next = area.buffer.get_next_word_boundary();
+                area.buffer.set_cursor_by_offset(next.offset);
+            }),
+            EditCommand::SelectWordBackward => self.select_motion(|area| {
+                let prev = area.buffer.get_prev_word_boundary();
+                area.buffer.set_cursor_by_offset(prev.offset);
+            }),
+            EditCommand::DeleteWordForward => {
+                self.delete_selection_if_any();
+                let cursor = self.buffer.cursor_position();
+                let next = self.buffer.get_next_word_boundary();
+                if next.offset > cursor.offset {
+                    self.buffer.delete_range(cursor.row, cursor.col, next.row, next.col);
+                    self.buffer.set_cursor_by_offset(cursor.offset);
+                }
+            }
+            EditCommand::DeleteWordBackward => {
+                self.delete_selection_if_any();
+                let cursor = self.buffer.cursor_position();
+                let prev = self.buffer.get_prev_word_boundary();
+                if prev.offset < cursor.offset {
+                    self.buffer.delete_range(prev.row, prev.col, cursor.row, cursor.col);
+                    self.buffer.set_cursor_by_offset(prev.offset);
+                }
+            }
+            EditCommand::SelectAll => {
+                if self.char_len() == 0 {
+                    return;
+                }
+                self.anchor = Some(0);
+                let end = self.buffer.text_end_offset();
+                self.buffer.set_cursor_by_offset(end);
+            }
+        }
+    }
+
+    fn delete_selection_if_any_else(&mut self, plain: impl FnOnce(&mut Self)) {
+        if self.selection().is_some() {
+            self.delete_selection_if_any();
+        } else {
+            plain(self);
+        }
+    }
+
+    /// Host-facing insert with the same delta/history plumbing as
+    /// [`Self::apply_tracked`] (the composer's paste/char paths).
+    pub fn insert_tracked(&mut self, text: &str) -> EditOutcome {
+        if text.is_empty() {
+            return EditOutcome::Rejected;
+        }
+        self.tracked(SnapshotKind::Pushed, false, |area| {
+            area.delete_selection_if_any();
+            area.buffer.insert_text(text);
+        })
+    }
+
+    /// Host-facing range delete (the composer's atomic mention-chip
+    /// deletion).
+    pub fn delete_range_tracked(&mut self, range: Range<usize>) -> EditOutcome {
+        let start = range.start.min(self.char_len());
+        let end = range.end.min(self.char_len());
+        if start >= end {
+            return EditOutcome::Rejected;
+        }
+        self.tracked(SnapshotKind::Pushed, false, |area| area.delete_char_range(start..end))
+    }
+
+    /// Offset of the next word start after `from` (char units — the
+    /// buffer's boundary rules; the probe moves the buffer cursor).
+    #[must_use]
+    pub fn next_word_start(&mut self, from: usize) -> usize {
+        self.buffer.set_cursor_by_offset(self.char_to_offset(from));
+        let next = self.buffer.get_next_word_boundary();
+        self.offset_to_char(next.offset)
+    }
+
+    /// Offset of the word start at/before `from` (char units).
+    #[must_use]
+    pub fn prev_word_start(&mut self, from: usize) -> usize {
+        self.buffer.set_cursor_by_offset(self.char_to_offset(from));
+        let prev = self.buffer.get_prev_word_boundary();
+        self.offset_to_char(prev.offset)
+    }
+
+    /// `input.undo` availability.
+    #[must_use]
+    pub fn can_undo(&self) -> bool {
+        self.buffer.can_undo()
+    }
+
+    #[must_use]
+    pub fn can_redo(&self) -> bool {
+        self.buffer.can_redo()
+    }
+
+    /// History depth (the parity display + the files-mirror check).
+    #[must_use]
+    pub fn undo_depth(&self) -> (usize, usize) {
+        // The buffer exposes availability only; depth parity uses the
+        // observable can_undo/can_redo pair.
+        (usize::from(self.can_undo()), usize::from(self.can_redo()))
+    }
+}
+
+fn char_index_to_byte(text: &str, chars: usize) -> usize {
+    text.char_indices().nth(chars).map_or(text.len(), |(byte, _)| byte)
+}
+
+impl std::fmt::Debug for TextAreaOpentui {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("TextAreaOpentui")
+            .field("text", &self.buffer.get_text())
+            .field("caret", &self.caret())
+            .field("anchor", &self.anchor)
+            .field("can_undo", &self.can_undo())
+            .field("can_redo", &self.can_redo())
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for TextAreaOpentui {
+    fn eq(&self, other: &Self) -> bool {
+        self.buffer.get_text() == other.buffer.get_text()
+            && self.caret() == other.caret()
+            && self.anchor == other.anchor
+            && self.can_undo() == other.can_undo()
+            && self.can_redo() == other.can_redo()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The composer seam
+// ---------------------------------------------------------------------------
+
+/// The composer's editing engine: the opentui-core-backed
+/// [`TextAreaOpentui`] (the only path since the M-engine-retire
+/// lane). A named wrapper so the composer/store keep their field
+/// vocabulary; every method delegates 1:1.
+#[derive(Clone, Debug, PartialEq)]
+pub struct EditCore(TextAreaOpentui);
+
+impl Default for EditCore {
+    fn default() -> Self {
+        Self::fresh()
+    }
+}
+
+impl EditCore {
+    /// A fresh engine.
+    #[must_use]
+    pub fn fresh() -> Self {
+        Self(TextAreaOpentui::new())
+    }
+
+    /// The wrap width for visual-line motions (the composer's inner
+    /// text width; the pump keeps it fresh on resize/boot).
+    pub fn set_viewport_width(&mut self, width: u32) {
+        self.0.set_viewport_width(width);
+    }
+
+    #[must_use]
+    pub fn text(&self) -> String {
+        self.0.text()
+    }
+
+    /// The store's defensive resync (an EXTERNAL draft change — submit
+    /// clears, prompt.set): the text rebases and the history resets
+    /// (v2's `setText` clears the rope history — undo never restores
+    /// across an external replace). A MATCHING text is a no-op — the
+    /// per-op bridge calls this on every keystroke, and the caret/
+    /// history must survive.
+    pub fn mirror_text(&mut self, text: &str) {
+        if self.0.text() != text {
+            self.0.set_text(text);
+        }
+    }
+
+    pub fn set_text(&mut self, text: &str) {
+        self.0.set_text(text);
+    }
+
+    #[must_use]
+    pub fn caret(&self) -> usize {
+        self.0.caret()
+    }
+
+    pub fn set_caret(&mut self, caret: usize) {
+        self.0.set_caret(caret);
+    }
+
+    /// Place the caret keeping an armed selection anchor (the store's
+    /// round-trip mirror preserves it).
+    pub fn set_caret_keep_anchor(&mut self, caret: usize) {
+        self.0.set_caret_keep_anchor(caret);
+    }
+
+    #[must_use]
+    pub fn selection(&self) -> Option<Range<usize>> {
+        self.0.selection()
+    }
+
+    #[must_use]
+    pub fn selected_text(&self) -> Option<String> {
+        self.0.selected_text()
+    }
+
+    pub fn insert_tracked(&mut self, text: &str) -> EditOutcome {
+        self.0.insert_tracked(text)
+    }
+
+    pub fn delete_range_tracked(&mut self, range: Range<usize>) -> EditOutcome {
+        self.0.delete_range_tracked(range)
+    }
+
+    pub fn apply_tracked(&mut self, command: EditCommand) -> EditOutcome {
+        self.0.apply_tracked(command)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn area(text: &str) -> TextArea {
-        let mut edit = TextArea::default();
+    fn area(text: &str) -> TextAreaOpentui {
+        let mut edit = TextAreaOpentui::new();
         edit.set_text(text);
         edit
     }
 
-    #[test]
-    fn selection_extends_and_collapses() {
-        let mut edit = area("hello world");
-        edit.caret = 5;
-        // shift+right twice extends the selection left-to-right.
-        assert!(edit.apply(EditCommand::SelectRight));
-        assert_eq!(edit.selection(), Some(5..6));
-        assert!(edit.apply(EditCommand::SelectRight));
-        assert_eq!(edit.selection(), Some(5..7));
-        assert_eq!(edit.selected_text().as_deref(), Some(" w"));
-        // A plain move collapses.
-        assert!(edit.apply(EditCommand::MoveLeft));
-        assert_eq!(edit.selection(), None);
-        // shift+left from the middle selects backwards.
-        edit.caret = 5;
-        assert!(edit.apply(EditCommand::SelectLeft));
-        assert_eq!(edit.selection(), Some(4..5));
+    /// The observable triple: text, caret, selection.
+    type Observed = (String, usize, Option<Range<usize>>);
+
+    fn observe(edit: &TextAreaOpentui) -> Observed {
+        (edit.text(), edit.caret(), edit.selection())
+    }
+
+    /// One op applied; the observable returned.
+    fn step(edit: &mut TextAreaOpentui, command: EditCommand) -> Observed {
+        let _ = edit.apply_tracked(command);
+        observe(edit)
+    }
+
+    /// One insert applied; the observable returned.
+    fn step_insert(edit: &mut TextAreaOpentui, text: &str) -> Observed {
+        let _ = edit.insert(text);
+        observe(edit)
+    }
+
+    /// (text, caret, selection) observable.
+    fn obs(text: &str, caret: usize, selection: Option<Range<usize>>) -> Observed {
+        (text.to_owned(), caret, selection)
     }
 
     #[test]
-    fn select_all_and_edit_deletes_the_selection_first() {
+    fn motions_and_selection() {
         let mut edit = area("hello world");
-        assert!(edit.apply(EditCommand::SelectAll));
-        assert_eq!(edit.selection(), Some(0..11));
-        assert!(edit.apply(EditCommand::Delete));
-        assert_eq!(edit.text, "");
-        // Undo restores the deleted text AND the selection.
-        assert!(edit.apply(EditCommand::Undo));
-        assert_eq!(edit.text, "hello world");
-        // Redo re-deletes.
-        assert!(edit.apply(EditCommand::Redo));
-        assert_eq!(edit.text, "");
+        edit.set_caret(5);
+        // Plain motions run only over NO selection here — the
+        // collapse-without-step rule is pinned in its own test below.
+        assert_eq!(step(&mut edit, EditCommand::SelectRight), obs("hello world", 6, Some(5..6)));
+        assert_eq!(step(&mut edit, EditCommand::SelectRight), obs("hello world", 7, Some(5..7)));
+        assert_eq!(step(&mut edit, EditCommand::SelectLeft), obs("hello world", 6, Some(5..6)));
+        assert_eq!(step(&mut edit, EditCommand::SelectAll), obs("hello world", 11, Some(0..11)));
+        assert_eq!(step(&mut edit, EditCommand::SelectLeft), obs("hello world", 10, Some(0..10)));
+        // The anchor meets the caret: the selection collapses.
+        assert_eq!(step(&mut edit, EditCommand::SelectBufferHome), obs("hello world", 0, None));
+        assert_eq!(step(&mut edit, EditCommand::MoveRight), obs("hello world", 1, None));
+        // Buffer bounds.
+        let mut edit = area("one\ntwo\nthree");
+        assert_eq!(step(&mut edit, EditCommand::BufferHome), obs("one\ntwo\nthree", 0, None));
+        assert_eq!(step(&mut edit, EditCommand::BufferEnd), obs("one\ntwo\nthree", 13, None));
+        assert_eq!(
+            step(&mut edit, EditCommand::SelectBufferHome),
+            obs("one\ntwo\nthree", 0, Some(0..13))
+        );
+        // Plain left over a selection collapses to the start edge
+        // WITHOUT another step.
+        assert_eq!(step(&mut edit, EditCommand::MoveLeft), obs("one\ntwo\nthree", 0, None));
     }
 
     #[test]
-    fn word_motions_follow_run_boundaries() {
-        let mut edit = area("foo bar  baz");
-        edit.apply(EditCommand::BufferHome);
-        // alt+f from 0 → 4 (start of "bar").
-        assert!(edit.apply(EditCommand::WordForward));
-        assert_eq!(edit.caret, 4);
-        assert!(edit.apply(EditCommand::WordForward));
-        assert_eq!(edit.caret, 9, "double space crossed to baz");
-        // alt+b back → 4.
-        assert!(edit.apply(EditCommand::WordBackward));
-        assert_eq!(edit.caret, 4);
-        // Punctuation is its own run: "fn foo()" — alt+f from 0 stops
-        // after "fn", at the space before "foo".
+    fn edit_ops() {
+        // Insert over a selection, backspace, delete, newline, undo/redo.
+        let mut edit = area("hello world");
+        let _ = edit.apply_tracked(EditCommand::SelectAll);
+        let observed = step_insert(&mut edit, "replaced");
+        assert_eq!(observed, ("replaced".to_owned(), 8, None));
+        let _ = step(&mut edit, EditCommand::Backspace);
+        assert_eq!(edit.text(), "replace");
+        let _ = step(&mut edit, EditCommand::Undo);
+        assert_eq!(edit.text(), "replaced", "undo restored the backspace");
+        let _ = step(&mut edit, EditCommand::Redo);
+        assert_eq!(edit.text(), "replace", "redo re-deleted");
+        // Delete at the buffer END: nothing to delete forward (the
+        // phantom-snapshot behavior is pinned in its own test below).
+        let _ = step(&mut edit, EditCommand::Delete);
+        assert_eq!(edit.text(), "replace");
+        // Backspace joining lines + cluster deletes.
+        let mut edit = area("ab\ncd");
+        edit.set_caret(3);
+        for command in [EditCommand::Backspace, EditCommand::Backspace, EditCommand::Backspace] {
+            let _ = step(&mut edit, command);
+        }
+        // join the lines, then delete "b", then "a" — "cd" remains.
+        assert_eq!(edit.text(), "cd");
+        let _ = step(&mut edit, EditCommand::Undo);
+        assert_eq!(edit.text(), "acd", "undo restored one backspace");
+    }
+
+    #[test]
+    fn undo_redo_round_trip_and_rejection() {
+        let mut edit = area("");
+        // Rejections at the buffer edges (motions only — the delete
+        // family's phantom-snapshot behavior is pinned in its own
+        // test below).
+        for command in [EditCommand::MoveLeft, EditCommand::MoveRight] {
+            assert!(matches!(edit.apply_tracked(command), EditOutcome::Rejected), "{command:?}");
+            assert_eq!(observe(&edit), (String::new(), 0, None));
+        }
+        let _ = step_insert(&mut edit, "a");
+        let _ = step_insert(&mut edit, "b");
+        assert_eq!(edit.text(), "ab");
+        let _ = step(&mut edit, EditCommand::Undo);
+        assert_eq!(edit.text(), "a");
+        let _ = step(&mut edit, EditCommand::Undo);
+        assert_eq!(edit.text(), "");
+        let _ = step(&mut edit, EditCommand::Redo);
+        assert_eq!(edit.text(), "a");
+        let _ = step(&mut edit, EditCommand::Redo);
+        assert_eq!(edit.text(), "ab");
+    }
+
+    #[test]
+    fn wide_clusters_move_by_grapheme() {
+        // CJK clusters are one motion unit (the buffer's cluster
+        // widths — wide clusters move exactly like upstream's editor).
+        let text = "a日本語b";
+        let mut edit = area(text);
+        edit.set_caret(0);
+        assert_eq!(step(&mut edit, EditCommand::MoveRight).1, 1, "one latin char");
+        assert_eq!(step(&mut edit, EditCommand::MoveRight).1, 2, "the whole CJK cluster");
+        assert_eq!(step(&mut edit, EditCommand::MoveRight).1, 3, "the second CJK cluster");
+        assert_eq!(step(&mut edit, EditCommand::MoveRight).1, 4, "the third CJK cluster");
+        assert_eq!(step(&mut edit, EditCommand::MoveLeft).1, 3, "and back");
+        // Caret conversions survive the round trip across wide rows.
+        for caret in 0..=text.chars().count() {
+            edit.set_caret(caret);
+            assert_eq!(edit.caret(), caret, "caret round trip at {caret}");
+        }
+    }
+
+    /// Word boundaries follow the buffer's script-transition rules
+    /// (`getNextWordBoundary`, edit-buffer.zig:821-946): the
+    /// parenthesis run is its own unit.
+    #[test]
+    fn word_boundaries_follow_upstream() {
         let mut edit = area("fn foo()");
-        edit.apply(EditCommand::BufferHome);
-        edit.apply(EditCommand::WordForward);
-        assert_eq!(edit.caret, 3);
-        edit.apply(EditCommand::WordForward);
-        assert_eq!(edit.caret, 6, "stops at the paren run (no whitespace between)");
-        edit.apply(EditCommand::WordForward);
-        assert_eq!(edit.caret, 8, "crosses the paren run to the end");
+        edit.set_caret(0);
+        let _ = edit.apply_tracked(EditCommand::WordForward);
+        assert_eq!(edit.caret(), 3, "the first hop agrees (the space)");
+        let _ = edit.apply_tracked(EditCommand::WordForward);
+        assert_eq!(edit.caret(), 7, "crosses through the paren run");
+        let _ = edit.apply_tracked(EditCommand::WordForward);
+        assert_eq!(edit.caret(), 8, "the buffer end");
+        // A bounded number of hops always reaches the end.
+        let mut edit = area("fn foo() bar  baz");
+        for _ in 0..12 {
+            let _ = edit.apply_tracked(EditCommand::WordForward);
+        }
+        assert_eq!(edit.caret(), edit.text().chars().count());
     }
 
+    /// Line home/end readline jumps: `gotoLineHome` at col 0 lands on
+    /// the PREVIOUS line's end; `gotoLineEnd` at EOL lands on the
+    /// NEXT line's start (EditBufferRenderable.ts:791-825).
     #[test]
-    fn delete_word_ops() {
-        // alt+d (delete word forward): deletes through the next word
-        // boundary — the word AND the whitespace before the next one.
-        let mut edit = area("foo bar baz");
-        edit.apply(EditCommand::BufferHome);
-        edit.apply(EditCommand::WordForward); // caret 4
-        assert!(edit.apply(EditCommand::DeleteWordForward));
-        assert_eq!(edit.text, "foo baz");
-        assert_eq!(edit.caret, 4);
-        // ctrl+w (delete word backward): the boundary rules mirror.
-        let mut edit = area("foo bar baz");
-        edit.apply(EditCommand::BufferHome);
-        edit.apply(EditCommand::WordForward);
-        edit.apply(EditCommand::WordForward); // caret 8
-        assert!(edit.apply(EditCommand::DeleteWordBackward));
-        assert_eq!(edit.text, "foo baz");
-        assert_eq!(edit.caret, 4);
-        // Both reject at the buffer edges (nothing to do).
-        let mut edit = area("one");
-        edit.caret = 3;
-        assert!(!edit.apply(EditCommand::DeleteWordForward));
-        edit.caret = 0;
-        assert!(!edit.apply(EditCommand::DeleteWordBackward));
-    }
-
-    #[test]
-    fn delete_to_line_boundaries_and_delete_line() {
-        // ctrl+k (to line end).
-        let mut edit = area("hello");
-        edit.caret = 2;
-        assert!(edit.apply(EditCommand::DeleteToLineEnd));
-        assert_eq!(edit.text, "he");
-        // ctrl+u (to line start).
-        let mut edit = area("hello");
-        edit.caret = 3;
-        assert!(edit.apply(EditCommand::DeleteToLineStart));
-        assert_eq!(edit.text, "lo");
-        // ctrl+shift+d deletes the WHOLE line (multi-line text).
+    fn line_home_end_readline_jumps() {
         let mut edit = area("one\ntwo\nthree");
-        edit.caret = 5; // inside "two"
-        assert!(edit.apply(EditCommand::DeleteLine));
-        assert_eq!(edit.text, "one\n\nthree");
-        // On an empty line it removes the line itself.
-        let mut edit = area("one\n\nthree");
-        edit.caret = 4;
-        assert!(edit.apply(EditCommand::DeleteLine));
-        assert_eq!(edit.text, "one\nthree");
+        // Caret at the start of "two" (row 1, col 0).
+        edit.set_caret(4);
+        let _ = edit.apply_tracked(EditCommand::LineHome);
+        assert_eq!(edit.caret(), 3, "previous line's end");
+        // LineEnd at the row's EOL → next line's start.
+        edit.set_caret(7); // the true EOL of "two"
+        let _ = edit.apply_tracked(EditCommand::LineEnd);
+        assert_eq!(edit.caret(), 8, "next line's start");
+        // Mid-row LineEnd still goes to the current EOL.
+        edit.set_caret(5);
+        let _ = edit.apply_tracked(EditCommand::LineEnd);
+        assert_eq!(edit.caret(), 7);
+    }
+
+    /// Visual motions follow the WRAP model: with a narrow viewport,
+    /// up/down cross WRAPPED rows (`EditorView` vlines).
+    #[test]
+    fn visual_motions_follow_wrap() {
+        let mut edit = area("aaa bbb ccc ddd");
+        edit.set_viewport_width(7); // wraps after "aaa " etc.
+        edit.set_caret(15); // the end
+        let _ = edit.apply_tracked(EditCommand::MoveUp);
+        assert!(edit.caret() < 15, "visual up leaves the last wrapped row");
+        let visual_stop = edit.caret();
+        // The donor's word-wrap vline ends at col 6 (the boundary
+        // affinity keeps the cursor on the last grapheme, not past
+        // the break's trailing space) — editor-view.zig's rule.
+        assert_eq!(visual_stop, 6, "visual up lands on the previous WRAPPED row");
     }
 
     #[test]
-    fn line_and_buffer_motions_with_selection() {
-        let mut edit = area("one\ntwo\nthree");
-        edit.caret = 5;
-        // ctrl+a / ctrl+e (line home/end).
-        assert!(edit.apply(EditCommand::LineHome));
-        assert_eq!(edit.caret, 4);
-        assert!(edit.apply(EditCommand::LineEnd));
-        assert_eq!(edit.caret, 7);
-        // shift+home / shift+end select to the buffer bounds (v2
-        // binds the buffer-select variants there — keybind.ts:226-227).
-        // The ANCHOR stays at the motion's origin (5's line end = 7):
-        // successive select-motions keep the original anchor.
-        assert!(edit.apply(EditCommand::SelectBufferHome));
-        assert_eq!(edit.selection(), Some(0..7));
-        assert!(edit.apply(EditCommand::SelectBufferEnd));
-        assert_eq!(edit.selection(), Some(7..13));
-        // alt+shift+a / alt+shift+e select to the line bounds.
-        let mut edit = area("one\ntwo\nthree");
-        edit.caret = 5;
-        assert!(edit.apply(EditCommand::SelectLineHome));
-        assert_eq!(edit.selection(), Some(4..5));
-        assert!(edit.apply(EditCommand::SelectLineEnd));
-        assert_eq!(edit.selection(), Some(5..7));
+    fn mention_chip_ranges_delete_atomically() {
+        // The composer's delete_range_tracked path (atomic chips).
+        let mut edit = area("keep [Image 1] tail");
+        let outcome = edit.delete_range_tracked(5..14);
+        assert!(matches!(outcome, EditOutcome::Applied { .. }));
+        assert_eq!(edit.text(), "keep  tail");
+        assert_eq!(edit.caret(), 5);
+    }
+
+    /// `deleteForward` stores an undo point even when it cannot
+    /// delete (the ported edit-buffer.zig double-snapshot:
+    /// `autoStoreUndo` runs before the guard — one extra undo press
+    /// walks a same-state restore).
+    #[test]
+    fn delete_forward_phantom_snapshot() {
+        let mut edit = area("ab");
+        edit.set_caret(2); // the end
+        let _ = edit.apply_tracked(EditCommand::Delete); // no-op delete…
+        assert!(edit.can_undo(), "the undo point was stored");
+        // The first undo restores the SAME state (a same-state walk);
+        // the text never changed.
+        let outcome = edit.apply_tracked(EditCommand::Undo);
+        assert!(matches!(outcome, EditOutcome::Applied { .. }));
+        assert_eq!(edit.text(), "ab");
+    }
+
+    /// Plain moves over a selection collapse to the edge WITHOUT
+    /// another step (`collapseSelectionToEdge`,
+    /// EditBufferRenderable.ts:727-734 — moveCursorLeft's first arm).
+    #[test]
+    fn plain_moves_collapse_without_stepping() {
+        let mut edit = area("hello world");
+        edit.set_caret(5);
+        let _ = edit.apply_tracked(EditCommand::SelectRight); // 5..6
+        let _ = edit.apply_tracked(EditCommand::MoveLeft);
+        assert_eq!(edit.caret(), 5, "collapsed to the selection start, no step");
+        // From a whole-buffer selection: left collapses to 0 and the
+        // NEXT left is the one that moves.
+        let _ = edit.apply_tracked(EditCommand::SelectAll);
+        let _ = edit.apply_tracked(EditCommand::MoveLeft);
+        assert_eq!((edit.caret(), edit.selection()), (0, None), "collapsed to the edge");
+        let _ = edit.apply_tracked(EditCommand::MoveLeft);
+        assert_eq!(edit.caret(), 0, "already at 0");
     }
 
     #[test]
-    fn undo_redo_round_trip_rejects_when_empty() {
-        let mut edit = area("");
-        assert!(!edit.apply(EditCommand::Undo));
-        assert!(!edit.apply(EditCommand::Redo));
-        assert!(edit.insert("a"));
-        assert!(edit.insert("b"));
-        assert_eq!(edit.text, "ab");
-        assert!(edit.apply(EditCommand::Undo));
-        assert_eq!(edit.text, "a");
-        assert!(edit.apply(EditCommand::Undo));
-        assert_eq!(edit.text, "");
-        assert!(!edit.apply(EditCommand::Undo));
-        assert!(edit.apply(EditCommand::Redo));
-        assert_eq!(edit.text, "a");
-        assert!(edit.apply(EditCommand::Redo));
-        assert_eq!(edit.text, "ab");
-        assert!(!edit.apply(EditCommand::Redo));
-    }
-
-    #[test]
-    fn rejected_commands_report_false() {
-        let mut edit = area("");
-        assert!(!edit.apply(EditCommand::MoveLeft));
-        assert!(!edit.apply(EditCommand::MoveRight));
-        assert!(!edit.apply(EditCommand::Backspace));
-        assert!(!edit.apply(EditCommand::Delete));
-        assert!(!edit.apply(EditCommand::DeleteToLineEnd));
-        assert!(!edit.apply(EditCommand::DeleteToLineStart));
-        let mut edit = area("one");
-        edit.caret = 0;
-        assert!(!edit.apply(EditCommand::MoveUp));
-        edit.caret = 3;
-        assert!(!edit.apply(EditCommand::MoveDown));
-        edit.caret = 0;
-        assert!(!edit.apply(EditCommand::LineHome), "already at the line start");
-    }
-
-    #[test]
-    fn newline_inserts_and_multiline_motions() {
-        let mut edit = area("");
-        assert!(edit.apply(EditCommand::Newline));
-        assert!(edit.apply(EditCommand::Newline));
-        assert_eq!(edit.text, "\n\n");
-        assert_eq!(edit.caret, 2);
-        // Up lands on the previous row's end (the composer's pinned
-        // row-move behavior — to the previous line's end).
-        assert!(edit.apply(EditCommand::MoveUp));
-        assert_eq!(edit.caret, 1);
+    fn selection_restores_and_collapses_like_upstream() {
+        let mut edit = area("hello world");
+        edit.set_caret(0);
+        let _ = edit.apply_tracked(EditCommand::SelectRight);
+        let _ = edit.apply_tracked(EditCommand::SelectRight);
+        assert_eq!(edit.selection(), Some(0..2));
+        assert_eq!(edit.selected_text().as_deref(), Some("he"));
+        // A plain move collapses to the EDGE without another step.
+        let _ = edit.apply_tracked(EditCommand::MoveRight);
+        assert_eq!(edit.caret(), 2, "collapse-to-end, no extra step");
+        assert_eq!(edit.selection(), None);
     }
 }
