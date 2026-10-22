@@ -62,6 +62,10 @@ pub struct ReferenceServer {
     url: String,
     password: String,
     sandbox: PathBuf,
+    /// The `server listening on <url>` line the child actually printed
+    /// (definitive for `--hostname localhost` spawns where the bound stack
+    /// depends on the runtime's resolver).
+    listening_url: Option<String>,
 }
 
 impl ReferenceServer {
@@ -75,6 +79,22 @@ impl ReferenceServer {
     #[must_use]
     pub fn password(&self) -> &str {
         &self.password
+    }
+
+    /// The port the harness reserved for this server (from the constructed
+    /// base URL; the source of truth for a bound server is
+    /// [`ReferenceServer::listening_url`]).
+    #[must_use]
+    pub fn port_hint(&self) -> u16 {
+        self.url.rsplit(':').next().and_then(|port| port.parse().ok()).unwrap_or(0)
+    }
+
+    /// The URL the server itself reported on stdout, when it printed one
+    /// (`server listening on <url>`). Prefer this over [`ReferenceServer::url`]
+    /// for `--hostname` spawns.
+    #[must_use]
+    pub fn listening_url(&self) -> Option<&str> {
+        self.listening_url.as_deref()
     }
 
     /// Sandbox directory backing this server (HOME, TMPDIR, logs).
@@ -347,6 +367,7 @@ fn build_command(
     home: &Path,
     tmp: &Path,
     extra_env: &[(&str, &str)],
+    extra_args: &[String],
 ) -> Command {
     let mut command = Command::new(bun);
     command
@@ -364,6 +385,7 @@ fn build_command(
         .arg("serve")
         .arg("--port")
         .arg(port.to_string())
+        .args(extra_args)
         // Hermetic environment: nothing from the parent leaks in (most
         // importantly no live-service credentials or state paths).
         .env_clear()
@@ -414,7 +436,12 @@ pub async fn spawn() -> Result<ReferenceServer> {
 /// e.g. `OPENCODE_SIMULATE=1` (see `tools/parity/src/scenario.rs` docs for
 /// what simulation mode does and does not provide).
 pub async fn spawn_with_env(extra_env: &[(&str, &str)]) -> Result<ReferenceServer> {
-    spawn_reference(ReferenceSpawn { extra_env: extra_env.to_vec(), seed_files: Vec::new() }).await
+    spawn_reference(ReferenceSpawn {
+        extra_env: extra_env.to_vec(),
+        seed_files: Vec::new(),
+        extra_args: Vec::new(),
+    })
+    .await
 }
 
 /// Options for [`spawn_reference`] (mirrors [`crate::rust_server::RustSpawn`]).
@@ -429,6 +456,9 @@ pub struct ReferenceSpawn<'a> {
     /// (relative path, contents) — e.g. a pre-seeded project
     /// `opencode.json` provider config.
     pub seed_files: Vec<(PathBuf, String)>,
+    /// Extra CLI args appended after `serve` (e.g. `--hostname localhost`
+    /// for the gate-5 hostname contract). Empty = the default bind.
+    pub extra_args: Vec<String>,
 }
 
 /// [`spawn`] with full options: pre-seeded sandbox files + extra child env.
@@ -460,9 +490,10 @@ pub async fn spawn_reference(options: ReferenceSpawn<'_>) -> Result<ReferenceSer
     let url = format!("http://127.0.0.1:{port}");
     let auth = minih::basic_auth("opencode", REF_PASSWORD);
 
-    let mut child = build_command(&bun, &root, port, &home, &tmp, &expanded_refs)
-        .spawn()
-        .with_context(|| format!("spawn {}", bun.display()))?;
+    let mut child =
+        build_command(&bun, &root, port, &home, &tmp, &expanded_refs, &options.extra_args)
+            .spawn()
+            .with_context(|| format!("spawn {}", bun.display()))?;
 
     let stdout = child.stdout.take().context("child stdout not piped")?;
     let stderr = child.stderr.take().context("child stderr not piped")?;
@@ -536,7 +567,8 @@ pub async fn spawn_reference(options: ReferenceSpawn<'_>) -> Result<ReferenceSer
         guard.printed_password.clone().unwrap_or_else(|| REF_PASSWORD.to_string())
     };
 
-    Ok(ReferenceServer { child, url, password, sandbox })
+    let listening_url = lines.lock().await.listening_url.clone();
+    Ok(ReferenceServer { child, url, password, sandbox, listening_url })
 }
 
 #[cfg(test)]
