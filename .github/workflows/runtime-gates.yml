@@ -259,7 +259,13 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: ~/.bun/install/cache
-          key: parity-ref-bun-${{ env.PARITY_REF }}
+          # Cache key MUST carry the bun version: a cache restored across a
+          # bun bump serves the old runtime's compiled artifacts (run
+          # 39673587335: bun 1.4.2 over a 1.3.10 cache crashed the opentui
+          # reference TUI). -v2 rotates the key once: the 2026-10-21 19:23Z
+          # reference-hang onset had zero repo changes and smells of a
+          # corrupt/partial cache entry under the old key.
+          key: parity-ref-bun-${{ env.PARITY_REF }}-bun1.3.10-v2
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -372,7 +378,17 @@ jobs:
                   if sessions < 1:
                       print(f"::error::{label}: session_v2 holds {sessions} rows — not a usable v2 library fixture")
                       sys.exit(1)
-                  print(f"fixture OK ({label}): {migrations} migration rows, {sessions} session_v2 rows, {len(tables)} tables")
+                  # The §12.3 census probe JOINs session_message — a fixture
+                  # whose interop run died before the message phase (the
+                  # reference model-POST hang class) ships sessions with no
+                  # messages and panics the census downstream with a
+                  # misleading "no probed session directory" error. Fail the
+                  # STAGING loudly instead.
+                  messages = conn.execute("SELECT count(*) FROM session_message").fetchone()[0]
+                  if messages < 1:
+                      print(f"::error::{label}: session_message holds {messages} rows — the interop lane died before writing messages (reference hang class); refusing to ship a message-less fixture")
+                      sys.exit(1)
+                  print(f"fixture OK ({label}): {migrations} migration rows, {sessions} session_v2 rows, {messages} session_message rows, {len(tables)} tables")
               finally:
                   conn.close()
 
@@ -511,7 +527,13 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: ~/.bun/install/cache
-          key: parity-ref-bun-${{ env.PARITY_REF }}
+          # Cache key MUST carry the bun version: a cache restored across a
+          # bun bump serves the old runtime's compiled artifacts (run
+          # 39673587335: bun 1.4.2 over a 1.3.10 cache crashed the opentui
+          # reference TUI). -v2 rotates the key once: the 2026-10-21 19:23Z
+          # reference-hang onset had zero repo changes and smells of a
+          # corrupt/partial cache entry under the old key.
+          key: parity-ref-bun-${{ env.PARITY_REF }}-bun1.3.10-v2
 
       - uses: oven-sh/setup-bun@v2
         with:
