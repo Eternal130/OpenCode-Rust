@@ -462,6 +462,10 @@ pub struct ReferenceSpawn<'a> {
 }
 
 /// [`spawn`] with full options: pre-seeded sandbox files + extra child env.
+// One linear bring-up (sandbox -> env -> spawn -> tee -> readiness poll ->
+// resolve password); the boot sequence reads top-to-bottom and splitting it
+// would scatter the invariant ordering, so the length is intentional.
+#[allow(clippy::too_many_lines)]
 pub async fn spawn_reference(options: ReferenceSpawn<'_>) -> Result<ReferenceServer> {
     let bun = bun_path().ok_or_else(|| anyhow!("bun not found (set PARITY_BUN)"))?;
     ensure_reference_checkout()?;
@@ -536,8 +540,22 @@ pub async fn spawn_reference(options: ReferenceSpawn<'_>) -> Result<ReferenceSer
                 sandbox.join("logs").display()
             ));
         }
+        // Probe base: the URL the server PRINTED once it reports one (the
+        // authoritative bind for `--hostname localhost` spawns — bun may
+        // resolve localhost to ::1 only, and a 127.0.0.1-only poll would
+        // never succeed), falling back to the constructed url until then.
+        let probe_url;
+        {
+            let guard = lines.lock().await;
+            probe_url = guard.listening_url.clone().unwrap_or_else(|| url.clone());
+            if let Some(listening) = guard.listening_url.as_ref() {
+                if !listening.contains(&format!(":{port}")) {
+                    return Err(anyhow!("reference server listening on unexpected url {listening} (wanted port {port})"));
+                }
+            }
+        }
         match minih::request(
-            &url,
+            &probe_url,
             Some(&auth),
             "GET",
             "/api/info",
@@ -549,14 +567,6 @@ pub async fn spawn_reference(options: ReferenceSpawn<'_>) -> Result<ReferenceSer
         {
             Ok(response) if response.status == 200 => break,
             _ => {}
-        }
-        {
-            let guard = lines.lock().await;
-            if let Some(listening) = guard.listening_url.as_ref() {
-                if !listening.contains(&format!(":{port}")) {
-                    return Err(anyhow!("reference server listening on unexpected url {listening} (wanted port {port})"));
-                }
-            }
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
