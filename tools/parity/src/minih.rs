@@ -49,6 +49,13 @@ pub(crate) fn parse_base(base: &str) -> Result<Endpoint> {
         }
         _ => (authority.to_string(), 80),
     };
+    // IPv6 literal: strip the brackets for ToSocketAddrs (getaddrinfo rejects
+    // "[::1]"); keep the bracketed display form for the Host header (RFC 7230).
+    let host = host
+        .strip_prefix('[')
+        .and_then(|inner| inner.strip_suffix(']'))
+        .map(|inner| inner.to_string())
+        .unwrap_or(host);
     Ok(Endpoint { host, port })
 }
 
@@ -86,10 +93,16 @@ fn build_request(
 ) -> Vec<u8> {
     use std::fmt::Write as _;
     let mut head = String::new();
+    // RFC 7230: an IPv6 literal in the Host header keeps its brackets.
+    let host_display = if endpoint.host.contains(':') {
+        format!("[{}]", endpoint.host)
+    } else {
+        endpoint.host.clone()
+    };
     let _ = write!(
         head,
-        "{method} {path} HTTP/1.1\r\nHost: {}:{}\r\nAccept: {accept}\r\nAccept-Encoding: identity\r\nConnection: {connection}\r\n",
-        endpoint.host, endpoint.port
+        "{method} {path} HTTP/1.1\r\nHost: {host_display}:{}\r\nAccept: {accept}\r\nAccept-Encoding: identity\r\nConnection: {connection}\r\n",
+        endpoint.port
     );
     if let Some(auth) = auth {
         let _ = write!(head, "Authorization: {auth}\r\n");
@@ -411,6 +424,38 @@ mod tests {
         assert_eq!(base64_encode(b"a"), "YQ==");
         assert_eq!(base64_encode(b"ab"), "YWI=");
         assert_eq!(base64_encode(b"abc"), "YWJj");
+    }
+
+    #[tokio::test]
+    async fn ipv6_literal_base_connects() {
+        // gate5's dual-stack poll hit exactly this: http://[::1]:port must
+        // parse (brackets stripped for ToSocketAddrs) and reach a real
+        // loopback listener.
+        let listener = tokio::net::TcpListener::bind("[::1]:0").await.expect("bind [::1]");
+        let port = listener.local_addr().expect("addr").port();
+        let server = tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+            let (mut sock, _) = listener.accept().await.expect("accept");
+            let mut buf = [0u8; 512];
+            let n = sock.read(&mut buf).await.expect("read");
+            let head = String::from_utf8_lossy(&buf[..n]).into_owned();
+            assert!(head.contains("Host: [::1]"), "Host header: {head}");
+            sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok").await.expect("write");
+        });
+        let response = crate::minih::request(
+            &format!("http://[::1]:{port}"),
+            None,
+            "GET",
+            "/api/info",
+            None,
+            "application/json",
+            Duration::from_secs(5),
+        )
+        .await
+        .expect("request over [::1]");
+        assert_eq!(response.status, 200);
+        assert_eq!(response.body, b"ok");
+        server.await.expect("server join");
     }
 
     #[test]
