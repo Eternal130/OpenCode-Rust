@@ -54,7 +54,7 @@ pub(crate) fn parse_base(base: &str) -> Result<Endpoint> {
     let host = host
         .strip_prefix('[')
         .and_then(|inner| inner.strip_suffix(']'))
-        .map(|inner| inner.to_string())
+        .map(str::to_owned)
         .unwrap_or(host);
     Ok(Endpoint { host, port })
 }
