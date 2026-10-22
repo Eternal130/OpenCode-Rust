@@ -1591,40 +1591,6 @@ fn valid_claims(nonce: &str, audience: &str, exp: i64) -> Value {
     json!({ "iss": "https://auth.openai.com", "aud": audience, "exp": exp, "nonce": nonce, "sub": "user_123" })
 }
 
-/// HMAC-SHA256 (RFC 2104): lets the HS256 case carry a cryptographically
-/// valid symmetric tag, so ONLY the RS256 allowlist can reject it.
-fn hmac_sha256(key: &[u8], message: &[u8]) -> [u8; 32] {
-    use sha2::{Digest, Sha256};
-    let mut ipad = vec![0x36u8; 64];
-    let mut opad = vec![0x5cu8; 64];
-    for (i, byte) in key.iter().enumerate() {
-        ipad[i] ^= byte;
-        opad[i] ^= byte;
-    }
-    let inner = {
-        let mut hash = Sha256::new();
-        hash.update(&ipad);
-        hash.update(message);
-        hash.finalize()
-    };
-    let mut outer = Sha256::new();
-    outer.update(&opad);
-    outer.update(inner);
-    outer.finalize().into()
-}
-
-/// A well-formed HS256 token whose tag is a real HMAC-SHA256 under a
-/// symmetric secret — only the RS256 allowlist can reject it.
-fn hs256_id_token(payload: &Value) -> String {
-    use base64::Engine;
-    let engine = base64::engine::general_purpose::URL_SAFE_NO_PAD;
-    let header = engine.encode(br#"{"alg":"HS256","kid":"sign-in"}"#);
-    let body = engine.encode(payload.to_string().as_bytes());
-    let signing_input = format!("{header}.{body}");
-    let tag = hmac_sha256(b"symmetric-secret", signing_input.as_bytes());
-    format!("{signing_input}.{}", engine.encode(tag))
-}
-
 /// A mock JWKS endpoint on 127.0.0.1:0 whose served document can be
 /// swapped mid-test (key rotation).
 struct JwksMock {
@@ -1762,18 +1728,20 @@ async fn chatgpt_id_token_rejects_unverified_signatures() {
         verify_id_token(&forged, "oaiapp_issued", "expected", &jwks).await.unwrap_err(),
         INVALID_ID_TOKEN
     );
-    // `alg: none` (unsigned) is rejected before any key lookup.
-    let none = sign_jwt(&json!({ "alg": "none", "kid": "sign-in" }), &claims, SIGNING_KEY_PEM);
-    let none = format!("{}.", none.rsplit_once('.').expect("segmented").0);
-    assert_eq!(
-        verify_id_token(&none, "oaiapp_issued", "expected", &jwks).await.unwrap_err(),
-        INVALID_ID_TOKEN
-    );
-    // `alg: HS256` with a cryptographically valid HMAC tag: only the
-    // RS256 allowlist rejects it (jose `algorithms: ["RS256"]`).
-    let hs256 = hs256_id_token(&claims);
+    // Alg confusion: the header LIES (`HS256`, then a `none` variant)
+    // while the signature is a VALID RS256 signature under the trusted
+    // `sign-in` key — kid selection, the JWKS fetch, and ring
+    // verification would all succeed, so ONLY the RS256 allowlist can
+    // reject these (jose `algorithms: ["RS256"]`; the alg check runs
+    // after JWKS fetch + kid selection, matching jose).
+    let hs256 = sign_jwt(&json!({ "alg": "HS256", "kid": "sign-in" }), &claims, SIGNING_KEY_PEM);
     assert_eq!(
         verify_id_token(&hs256, "oaiapp_issued", "expected", &jwks).await.unwrap_err(),
+        INVALID_ID_TOKEN
+    );
+    let none = sign_jwt(&json!({ "alg": "none", "kid": "sign-in" }), &claims, SIGNING_KEY_PEM);
+    assert_eq!(
+        verify_id_token(&none, "oaiapp_issued", "expected", &jwks).await.unwrap_err(),
         INVALID_ID_TOKEN
     );
     // A header without `kid` cannot select a JWK.

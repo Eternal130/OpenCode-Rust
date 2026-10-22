@@ -1288,7 +1288,9 @@ pub(crate) async fn verify_id_token(
     let Some(exp) = claims.get("exp").and_then(Value::as_f64) else {
         return Err(reject("exp claim is missing or not a number"));
     };
-    if ((exp * 1000.0) as i64) < now_ms() {
+    // jose 6.0.11 rejects when `exp <= epoch` (clockTolerance 0): a
+    // token whose expiry is exactly now is already expired.
+    if ((exp * 1000.0) as i64) <= now_ms() {
         return Err(reject("token is expired"));
     }
     let Some(subject) = claims.get("sub").and_then(Value::as_str) else {
