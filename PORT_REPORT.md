@@ -2,17 +2,18 @@
 
 > 生成：2026-10-11 ｜ 移植基线：opencode **v2.0.24**（commit e7a34f09bf，钉版只读 worktree /opt/opencode-ref）
 > 交付仓库：/opt/opencode-rust（单二进制 `opencode-rust`，自报版本精确为 2.0.24）
-> 终态：**全 10 阶段完成；M1/M2 里程碑达成；旗舰插件实测通过；全仓 2181/2181 测试、clippy -D warnings 0、fmt 0**
+> 终态（2026-10-11 冻结时点）：**全 10 阶段完成；M1/M2 里程碑达成；旗舰插件实测通过；全仓 2181/2181 测试、clippy -D warnings 0、fmt 0**——其后一切数字以 §0 增补为准（2026-10-22 终值 **3951/3951**）
 
 ## 0. 增补（2026-10-22）——冻结报告之后的进展
 
 本报告冻结于 2026-10-11，以下为至 2026-10-22 的状态修正（活文档见 ROADMAP.md）：
 
 - **§3 延后项已全部落地**（beta.4–beta.7，R-01..R-09）：`opencode mini`、`acp`、worktree UI、声音/OS 通知、tree-sitter 语法高亮（新 crate oc-syntax）、图像/kitty/sixel、半块字形、PTY 守护跨重启交接（persistent_pty 的 adopt）。仍开放仅：R-04 Web UI（静态资源伺服已完成，Web UI 本体维持范围外）、R-10 rmcp elicitation（上游阻塞）、R-11 平台矩阵（待排期）。
-- **opentui 迁移（M0→M-retire）完成**：oc-tui 的会话 tabs、对话框族、composer/footer、transcript、sidebar、home、子代理表面全部以 opentui-solid（github.com/Eternal130/opentui-rust，git dep 钉版 rev）为唯一渲染器，旧路径与 7 个 OC_*_OPENTUI 旗标已删除；OC_ENGINE_OPENTUI（keymap/EditBuffer 引擎）按 M-engine 计划保留旧配对一个 release。
+- **opentui 迁移（M0→M-retire）完成**：oc-tui 的会话 tabs、对话框族、composer/footer、transcript、sidebar、home、子代理表面全部以 opentui-solid（github.com/Eternal130/opentui-rust，git dep 钉版 rev）为唯一渲染器，旧路径与 7 个 OC_*_OPENTUI 旗标已删除；OC_ENGINE_OPENTUI（keymap/EditBuffer 引擎）曾按 M-engine 计划保留旧配对一个 release——**M-engine-retire 已于 2026-10-22 落地**：旧引擎对（keymap/engine.rs + text_edit.rs，净 -3,034 行）删除，opentui 移植库成为唯一引擎路径。
 - **beta.13 已发布**（2026-10-17 GATE5 GO：workspace 3330/3330、release 构建、budgets 12/12、26/26 live）。扫描-修复循环按用户裁决于 FIXW2 后终止；扫描细则（docs/scan-spec.md v9）与仪器留树备用。
 - **数字修正**：全仓测试 2181 → **3984/3984**（2026-10-22 全仓复跑，另 21 skipped、1 flaky 重试通过）；过程档案 48 → **79** 份（57 lane 报告 + 12 oracle 门 + 8 架构图 + 进度/spike）。
 - **2026-10-22 修复**：plugins_production 旗舰验收测试（PLUG-D07 引入的回归：location-less 请求曾解析到宿主进程 cwd 而非服务器启动目录，已按 v2 requestRef 语义对齐，commit 3a33f1b；该测试仅在有旗舰安装缓存的机器上真跑，CI 自跳过）。
+- **2026-10-22 收尾**：opentui 三件套升级至 bee57db（tier-1 消费面补完：clipboard/timing、diff/行号、embedded-terminal、audio 消费契约）；M-engine-retire 合并后全仓 **3951/3951**（3987→3951，−36 为旧引擎 parity 套件随源删除的预期降幅）；扫描-修复循环按用户裁定于 FIXW2 终止，scan-spec v9 与仪器留树备用。
 
 ## 1. 目标与结果总览
 

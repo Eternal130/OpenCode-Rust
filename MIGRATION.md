@@ -3,6 +3,7 @@
 > 状态：v1.1（已吸收 oracle 门 1 的 12 条整改意见，见 oracle-gate1.md）
 > 参照源码：`/opt/opencode-ref`（v2.0.24, commit `e7a34f09bf`，只读 worktree）
 > 行为对照基准：用 bun 从参照源码构建的 v2.0.24（**不是**已安装的 v2.0.25 二进制）
+> 注（2026-10-23）：本稿为 Phase 0 冻结方案（v1.1），仅作历史决策记录。后续演进超出本稿：新增 oc-syntax（R-01）与 oc-tui-core 两 crate；TUI 渲染/编辑引擎已整体迁移至 opentui-rust 三件套（见 PORT_REPORT §0 与 ROADMAP 变更日志）；§2.4 的"自动升级禁用、upgrade no-op"已被后来的真升级通道（默认 notify、sha256 边车校验、原子替换）取代。
 
 ## 1. 目标与范围
 
