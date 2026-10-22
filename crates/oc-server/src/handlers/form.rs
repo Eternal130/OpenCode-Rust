@@ -52,7 +52,7 @@ async fn list(
     uri: Uri,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let services = services(&state, &location).await?;
     let data: Vec<Value> = services.forms.list(None).iter().map(form_json).collect();
     Ok(json_location_data(&location.as_path().to_string_lossy(), Value::Array(data)))

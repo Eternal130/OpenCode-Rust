@@ -29,7 +29,7 @@ async fn list(
     uri: Uri,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let services = services(&state, &location).await?;
     let data: Vec<Value> = services.shell.list().iter().map(shell_json).collect();
     Ok(json_location_data(&location.as_path().to_string_lossy(), Value::Array(data)))
@@ -41,7 +41,7 @@ async fn create(
     headers: HeaderMap,
     axum::Json(body): axum::Json<Value>,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let services = services(&state, &location).await?;
     let input = oc_schema::shell::CreateInput {
         command: body["command"].as_str().unwrap_or_default().to_owned(),
@@ -62,7 +62,7 @@ async fn get(
     uri: Uri,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let services = services(&state, &location).await?;
     let info = services.shell.get(&oc_schema::id::ShellId(id.clone())).map_err(|error| {
         crate::errors::debug_cause("shell:shell_not_found", &error);
@@ -78,7 +78,7 @@ async fn output(
     uri: Uri,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let services = services(&state, &location).await?;
     let input = OutputInput {
         cursor: query_field(&uri, "cursor").and_then(|value| value.parse::<u64>().ok()),
@@ -108,7 +108,7 @@ async fn remove(
     uri: Uri,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let services = services(&state, &location).await?;
     services.shell.remove(&oc_schema::id::ShellId(id.clone())).await.map_err(|error| {
         crate::errors::debug_cause("shell:shell_not_found", &error);

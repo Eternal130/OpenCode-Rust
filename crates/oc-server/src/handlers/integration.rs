@@ -102,7 +102,7 @@ async fn integration_list(
     uri: axum::http::Uri,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let _services = services(&state, &location).await?;
     ensure_wellknown_registered(&state).await;
     let infos = state.engine.integration.list().await.map_err(unknown)?;
@@ -121,7 +121,7 @@ async fn integration_get(
     uri: axum::http::Uri,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let _services = services(&state, &location).await?;
     let info = state
         .engine
@@ -161,7 +161,7 @@ async fn integration_wellknown_add(
     headers: HeaderMap,
     axum::Json(body): axum::Json<Value>,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let _services = services(&state, &location).await?;
     let url = body["url"].as_str().unwrap_or_default().trim_end_matches('/').to_owned();
     let manifest_url = format!("{url}/.well-known/opencode");
@@ -307,7 +307,7 @@ async fn integration_connect_key(
     headers: HeaderMap,
     axum::Json(body): axum::Json<Value>,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let _services = services(&state, &location).await?;
     if state.engine.integration.get(&integration_id).await.map_err(unknown)?.is_none() {
         return Err(integration_missing(&integration_id));
@@ -349,7 +349,7 @@ async fn integration_oauth_connect(
     headers: HeaderMap,
     axum::Json(body): axum::Json<Value>,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let _services = services(&state, &location).await?;
     let method_id = body["methodID"].as_str().unwrap_or_default().to_owned();
     let answer = parse_answer(&body["answer"]);
@@ -381,7 +381,7 @@ async fn integration_oauth_status(
     uri: axum::http::Uri,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let _services = services(&state, &location).await?;
     if state.engine.integration.get(&integration_id).await.map_err(unknown)?.is_none() {
         return Err(integration_missing(&integration_id));
@@ -415,7 +415,7 @@ async fn integration_oauth_complete(
     headers: HeaderMap,
     axum::Json(body): axum::Json<Value>,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let _services = services(&state, &location).await?;
     if state.engine.integration.get(&integration_id).await.map_err(unknown)?.is_none() {
         return Err(integration_missing(&integration_id));
@@ -447,7 +447,7 @@ async fn integration_command_connect(
     headers: HeaderMap,
     axum::Json(body): axum::Json<Value>,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let _services = services(&state, &location).await?;
     if state.engine.integration.get(&integration_id).await.map_err(unknown)?.is_none() {
         return Err(integration_missing(&integration_id));
@@ -482,7 +482,7 @@ async fn integration_command_status(
     uri: axum::http::Uri,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let _services = services(&state, &location).await?;
     if state.engine.integration.get(&integration_id).await.map_err(unknown)?.is_none() {
         return Err(integration_missing(&integration_id));

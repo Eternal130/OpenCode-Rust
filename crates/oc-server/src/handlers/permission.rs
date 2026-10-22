@@ -45,7 +45,7 @@ async fn request_list(
     uri: Uri,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let services = services(&state, &location).await?;
     let data: Vec<Value> = services.permission.list().iter().map(request_json).collect();
     Ok(json_location_data(&location.as_path().to_string_lossy(), Value::Array(data)))
@@ -63,7 +63,7 @@ async fn saved_list(
     // The saved-grant family resolves the request location (v2 location
     // middleware: query → header → cwd) and goes through the location's
     // services — assembling the location when cold (SSE-visible boot).
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let _services = services(&state, &location).await?;
     let project_id = query_field(&uri, "projectID");
     let rows = state
@@ -137,7 +137,7 @@ async fn saved_remove(
     // default) and the delete runs through the location's permission
     // service — the cold boot of the server's own cwd location is pinned
     // by the permission_saved golden.
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let _services = services(&state, &location).await?;
     let db = state.engine.db.clone();
     let id = id.clone();

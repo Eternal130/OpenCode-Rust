@@ -248,14 +248,22 @@ pub fn bytes_response(bytes: Vec<u8>, content_type: &str) -> Response {
 // ---------------------------------------------------------------------------
 
 /// Resolves the request location through `middleware::request_location`
-/// (query `location[directory]` → `x-opencode-directory` → cwd) and
-/// validates the directory exists (404 `LocationNotFoundError`).
+/// (query `location[directory]` → `x-opencode-directory` → the server's
+/// launch directory — v2 `requestRef`'s server-process cwd; the
+/// embedding host's process cwd NEVER leaks into a location-less
+/// request) and validates the directory exists (404
+/// `LocationNotFoundError`).
 #[allow(clippy::must_use_candidate)]
-pub fn resolve_location(query: &str, headers: &HeaderMap) -> Result<LocationRef, ApiError> {
+pub fn resolve_location(
+    state: &SharedState,
+    query: &str,
+    headers: &HeaderMap,
+) -> Result<LocationRef, ApiError> {
     let reference = crate::middleware::request_location(
         &axum::http::Uri::try_from(format!("http://localhost/?{query}"))
             .unwrap_or_else(|_| axum::http::Uri::from_static("http://localhost/")),
         headers,
+        state.boot_location.as_deref(),
     );
     let directory = reference.directory.as_str().to_owned();
     let path = std::path::PathBuf::from(&directory);

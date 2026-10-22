@@ -216,7 +216,7 @@ async fn list(
     if let Err(message) = super::schema_check::session_list_query(uri.query().unwrap_or_default()) {
         return Err(ApiError::schema_rejection(message, "Query"));
     }
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let _ = &location;
     // The list read goes through the global store (v2 `Session.Service`)
     // — it must NOT assemble the resolved location (the boot cascade is
@@ -405,7 +405,7 @@ async fn create(
         }
         LocationRef::new(path, None)
     } else {
-        resolve_location(uri.query().unwrap_or_default(), &headers)?
+        resolve_location(&state, uri.query().unwrap_or_default(), &headers)?
     };
     let services = services(&state, &location).await?;
 
@@ -481,7 +481,7 @@ async fn active(
     uri: Uri,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let services = services(&state, &location).await?;
     let mut map = serde_json::Map::new();
     for session_id in services.execution.active() {
@@ -1706,7 +1706,7 @@ async fn import(
     headers: HeaderMap,
     axum::Json(body): axum::Json<Value>,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let location_services = services(&state, &location).await?;
     let info = body["info"].clone();
     let session_id = info["id"].as_str().unwrap_or_default().to_owned();

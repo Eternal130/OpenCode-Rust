@@ -24,7 +24,7 @@ async fn get(
     uri: Uri,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     // Info read (v2 `Location.Service` info path): project identity is
     // resolved WITHOUT assembling the service graph — no boot cascade, no
     // watcher-driven service init. The location is only *tracked* for
@@ -82,7 +82,7 @@ async fn debug_evict(
     uri: Uri,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     state.engine.invalidate(&location).await;
     Ok(no_content())
 }
