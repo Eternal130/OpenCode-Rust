@@ -69,7 +69,11 @@ fn spawn_ref_on(home: &Path) -> parity::reference::ReferenceSpawn<'static> {
         .into_iter()
         .map(|(k, v)| (k, Box::leak(v.into_boxed_str()) as &'static str))
         .collect();
-    parity::reference::ReferenceSpawn { extra_env: env, seed_files: Vec::new() }
+    parity::reference::ReferenceSpawn {
+        extra_env: env,
+        seed_files: Vec::new(),
+        extra_args: Vec::new(),
+    }
 }
 
 fn spawn_rust_on(home: &Path, config: &Path) -> parity::rust_server::RustSpawn<'static> {
@@ -577,6 +581,8 @@ async fn run_stable_channel_same_file() -> Result<()> {
     let reference = parity::reference::spawn_reference(parity::reference::ReferenceSpawn {
         extra_env: static_env.clone(),
         seed_files: Vec::new(),
+
+        extra_args: Vec::new(),
     })
     .await?;
     let (base, password) = (reference.url().to_owned(), reference.password().to_owned());
@@ -649,6 +655,8 @@ async fn run_stable_channel_same_file() -> Result<()> {
     let reference = parity::reference::spawn_reference(parity::reference::ReferenceSpawn {
         extra_env: static_env,
         seed_files: Vec::new(),
+
+        extra_args: Vec::new(),
     })
     .await?;
     let (base, password) = (reference.url().to_owned(), reference.password().to_owned());

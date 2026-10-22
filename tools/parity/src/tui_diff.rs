@@ -2435,6 +2435,8 @@ async fn probe_ref_processes(
     let server = crate::reference::spawn_reference(crate::reference::ReferenceSpawn {
         extra_env: vec![("OPENCODE_CONFIG", config_env)],
         seed_files: Vec::new(),
+
+        extra_args: Vec::new(),
     })
     .await?;
     let preload =
@@ -2732,6 +2734,8 @@ pub async fn run_script_once(
         match crate::reference::spawn_reference(crate::reference::ReferenceSpawn {
             extra_env: vec![("OPENCODE_CONFIG", config_env.as_str())],
             seed_files: Vec::new(),
+
+            extra_args: Vec::new(),
         })
         .await
         {

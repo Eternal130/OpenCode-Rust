@@ -413,6 +413,7 @@ async fn main() -> anyhow::Result<()> {
                         ("OPENCODE_DISABLE_MODELS_FETCH", "1"),
                     ],
                     seed_files: Vec::new(),
+                    extra_args: Vec::new(),
                 })
                 .await?,
             )

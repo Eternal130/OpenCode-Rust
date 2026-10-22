@@ -496,6 +496,8 @@ async fn run(bun: &Path, tui_root: &Path) -> Result<()> {
             Box::leak(config.display().to_string().into_boxed_str()) as &'static str,
         )],
         seed_files: Vec::new(),
+
+        extra_args: Vec::new(),
     })
     .await?;
     let port = parity::rust_server::spawn_rust(parity::rust_server::RustSpawn {
@@ -570,57 +572,51 @@ async fn checks(
     eprintln!("[gate5] --help — rc 0 + usage marker on both sides");
 
     // -- serve --hostname localhost (boot + info + clean shutdown) ---------
-    for (side, _, _) in &sides {
-        let serve_port = free_port()?;
-        let (program, argv): (PathBuf, Vec<String>) = if side.label == "reference" {
-            (
-                lane.bun.clone(),
-                vec![
-                    "run".to_owned(),
-                    "--cwd".to_owned(),
-                    lane.ref_cli.display().to_string(),
-                    "--define".to_owned(),
-                    "OPENCODE_VERSION=\"2.0.24\"".to_owned(),
-                    "--define".to_owned(),
-                    "OPENCODE_CHANNEL=\"stable\"".to_owned(),
-                    "--define".to_owned(),
-                    "OPENCODE_ARTIFACT=\"cli\"".to_owned(),
-                    "src/index.ts".to_owned(),
-                    "serve".to_owned(),
-                    "--hostname".to_owned(),
-                    "localhost".to_owned(),
-                    "--port".to_owned(),
-                    serve_port.to_string(),
-                ],
-            )
-        } else {
-            (
-                lane.rust_cli.clone(),
-                vec![
-                    "serve".to_owned(),
-                    "--hostname".to_owned(),
-                    "localhost".to_owned(),
-                    "--port".to_owned(),
-                    serve_port.to_string(),
-                ],
-            )
-        };
-        let mut env = lane.env(*side, "servepw-gate5");
-        if side.label == "reference" {
-            // bun run re-execs a nested bun resolved from PATH (the proven
-            // spawn_reference env keeps the bun dir on PATH); lane.env omits it.
-            let bun_dir =
-                lane.bun.parent().map(|dir| dir.display().to_string()).unwrap_or_default();
-            for (key, value) in &mut env {
-                if key == "PATH" {
-                    *value = format!("{bun_dir}:{value}");
-                }
-            }
+    // The reference side runs through the PROVEN spawn_reference path (env,
+    // PATH with the bun dir, tee'd logs, current_dir) with `--hostname
+    // localhost` appended, and the probe targets the URL the server itself
+    // PRINTS (`server listening on <url>`) — the bound stack under
+    // --hostname localhost depends on the runtime's resolver, so guessing
+    // 127.0.0.1/[::1] was the historical reference-side red. The port side
+    // keeps its own child spawn with a dual-stack poll.
+    {
+        let reference = parity::reference::spawn_reference(parity::reference::ReferenceSpawn {
+            extra_env: vec![(
+                "OPENCODE_CONFIG",
+                Box::leak(lane.config.display().to_string().into_boxed_str()) as &'static str,
+            )],
+            seed_files: Vec::new(),
+            extra_args: vec!["--hostname".to_owned(), "localhost".to_owned()],
+        })
+        .await
+        .context("spawn reference serve --hostname localhost")?;
+        let mut bases = vec![
+            format!("http://127.0.0.1:{}", reference.port_hint()),
+            format!("http://[::1]:{}", reference.port_hint()),
+        ];
+        if let Some(reported) = reference.listening_url() {
+            bases.insert(0, reported.to_owned());
         }
-        let mut serve =
-            spawn_serve(&program, &argv, &env).with_context(|| format!("spawn {side} serve"))?;
-        // localhost may bind 127.0.0.1 or ::1 depending on the runtime's
-        // resolver — poll both stacks (see wait_info_any).
+        let info = wait_info_any(&bases, reference.password()).await;
+        reference.stop().await?;
+        info.context("reference serve --hostname localhost boot")?;
+        eprintln!(
+            "[gate5] serve --hostname localhost — boot + /api/info 200 + clean stop (reference)"
+        );
+    }
+    {
+        let side = CliSide { label: "port" };
+        let serve_port = free_port()?;
+        let argv = vec![
+            "serve".to_owned(),
+            "--hostname".to_owned(),
+            "localhost".to_owned(),
+            "--port".to_owned(),
+            serve_port.to_string(),
+        ];
+        let env = lane.env(side, "servepw-gate5");
+        let mut serve = spawn_serve(&lane.rust_cli, &argv, &env)
+            .with_context(|| format!("spawn {side} serve"))?;
         let bases =
             vec![format!("http://127.0.0.1:{serve_port}"), format!("http://[::1]:{serve_port}")];
         let info = wait_info_any(&bases, "servepw-gate5").await;
