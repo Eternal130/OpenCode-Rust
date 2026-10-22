@@ -7,6 +7,7 @@ pub mod console;
 pub mod copilot;
 pub mod credential;
 pub mod flows;
+pub mod jwks;
 pub mod providers;
 pub mod providers_enterprise;
 #[cfg(test)]
