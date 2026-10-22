@@ -7,8 +7,10 @@
 //! from frontmatter, autoinvoke from `metadata["opencode/autoinvoke"]` /
 //! `disable-model-invocation`).
 //!
-//! URL sources are recognized but not fetched (the discovery download
-//! lane is deferred); they contribute no skills yet.
+//! URL sources (`http(s)://` entries) download through
+//! [`skills_url::pull_url_sources`] at the engine's async config-load
+//! seam BEFORE [`ConfigSkillTable::discover`] runs; the downloaded cache
+//! roots arrive as `extra_sources` and scan like any directory source.
 
 #![allow(
     clippy::must_use_candidate, // ownership snapshots are queries
@@ -68,6 +70,7 @@ use oc_schema::config::Entry as ConfigEntry;
 use oc_schema::id::{SkillId, SkillName};
 use oc_schema::skill::{Skill, SkillSource};
 
+use super::skills_url;
 use crate::config::{Json, Loaded};
 use crate::tool::skill::SkillTable;
 
@@ -265,12 +268,21 @@ impl ConfigSkillTable {
     /// Discovers skills from a loaded config snapshot for `location`
     /// (directory entries contribute `<dir>/skill` + `<dir>/skills`;
     /// document `skills` entries contribute paths relative to the
-    /// location; `~` expands against `home`). The built-in skills seed
-    /// FIRST (the v2 pre-plugin); config skills insert UNCONDITIONALLY —
-    /// on an id collision the config skill wins (v2 `editor.add`
-    /// overwrite), and later config sources overwrite earlier ones.
+    /// location; `~` expands against `home`). URL entries
+    /// (`http(s)://`, classified by [`skills_url::is_url_source`]) are
+    /// downloaded at the engine's async seam and arrive here as
+    /// `extra_sources` — appended after the config sources and scanned
+    /// the same way. The built-in skills seed FIRST (the v2 pre-plugin);
+    /// config skills insert UNCONDITIONALLY — on an id collision the
+    /// config skill wins (v2 `editor.add` overwrite), and later config
+    /// sources overwrite earlier ones.
     #[must_use]
-    pub fn discover(loaded: &Loaded, location: &Path, home: &Path) -> Self {
+    pub fn discover(
+        loaded: &Loaded,
+        location: &Path,
+        home: &Path,
+        extra_sources: &[PathBuf],
+    ) -> Self {
         let mut sources: Vec<PathBuf> = Vec::new();
         let mut seen = std::collections::BTreeSet::new();
         let add = |path: PathBuf,
@@ -290,8 +302,11 @@ impl ConfigSkillTable {
                 ConfigEntry::Document(document) => {
                     let Some(items) = document.info.skills.clone() else { continue };
                     for item in items {
-                        if item.contains("://") {
-                            // URL source: the download lane is deferred.
+                        if skills_url::is_url_source(&item) {
+                            // URL source: the engine seam pulls these
+                            // into the hashed cache (skills_url) before
+                            // discover runs; the downloaded roots arrive
+                            // as extra_sources.
                             continue;
                         }
                         let expanded = if let Some(rest) = item.strip_prefix("~/") {
@@ -305,6 +320,12 @@ impl ConfigSkillTable {
                     }
                 }
             }
+        }
+        // The engine seam's pulled URL-source roots (v2 refresh loads
+        // URL sources after the directory sources; later sources win id
+        // collisions).
+        for source in extra_sources {
+            add(source.clone(), &mut sources, &mut seen);
         }
         let mut by_id: BTreeMap<String, Skill> = BTreeMap::new();
         // Built-ins first (the v2 SkillPlugin pre-plugin position), then
