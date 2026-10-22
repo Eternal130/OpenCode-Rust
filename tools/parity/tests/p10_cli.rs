@@ -365,13 +365,23 @@ fn spawn_serve(program: &Path, argv: &[String], env: &[(String, String)]) -> Res
 impl ServeChild {
     /// Last ~2KB of the tee'd stderr (diagnostics for boot failures).
     fn stderr_tail(&self) -> String {
-        let _ = &self.stdout_path;
-        match std::fs::read(&self.stderr_path) {
+        Self::tail(&self.stderr_path)
+    }
+
+    /// Last ~2KB of the tee'd stdout (the `server listening on` line lives
+    /// here, not on stderr — without it a boot diagnosis cannot tell
+    /// "never bound" from "bound but unreachable").
+    fn stdout_tail(&self) -> String {
+        Self::tail(&self.stdout_path)
+    }
+
+    fn tail(path: &Path) -> String {
+        match std::fs::read(path) {
             Ok(bytes) => {
                 let start = bytes.len().saturating_sub(2048);
                 String::from_utf8_lossy(&bytes[start..]).into_owned()
             }
-            Err(_) => String::from("<no stderr captured>"),
+            Err(_) => String::from("<no output captured>"),
         }
     }
 
@@ -402,10 +412,11 @@ impl ServeChild {
 /// historical gate5 reference-side red). The boot contract is "answers
 /// /api/info with auth", not "on IPv4" — poll every candidate stack.
 async fn wait_info_any(bases: &[String], password: &str) -> Result<()> {
+    let mut last_kinds: Vec<String> = Vec::new();
     for _ in 0..90 {
         for base in bases {
             let auth = parity::minih::basic_auth("opencode", password);
-            if let Ok(response) = parity::minih::request(
+            match parity::minih::request(
                 base,
                 Some(&auth),
                 "GET",
@@ -416,9 +427,9 @@ async fn wait_info_any(bases: &[String], password: &str) -> Result<()> {
             )
             .await
             {
-                if response.status == 200 {
-                    return Ok(());
-                }
+                Ok(response) if response.status == 200 => return Ok(()),
+                Ok(response) => last_kinds.push(format!("{base}: status {}", response.status)),
+                Err(error) => last_kinds.push(format!("{base}: {error}")),
             }
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -621,9 +632,10 @@ async fn checks(
             vec![format!("http://127.0.0.1:{serve_port}"), format!("http://[::1]:{serve_port}")];
         let info = wait_info_any(&bases, "servepw-gate5").await;
         let stderr_tail = serve.stderr_tail();
+        let stdout_tail = serve.stdout_tail();
         serve.stop();
         info.context(format!(
-            "{side} serve --hostname localhost boot; stderr tail:\n{stderr_tail}"
+            "{side} serve --hostname localhost boot; stderr tail:\n{stderr_tail}\nstdout tail:\n{stdout_tail}"
         ))?;
         eprintln!(
             "[gate5] serve --hostname localhost — boot + /api/info 200 + clean stop ({side})"
