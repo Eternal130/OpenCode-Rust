@@ -110,6 +110,7 @@ pub fn providers_from_config(loaded: &Loaded) -> ConfigProviders {
                                 // request body).
                                 headers: model.headers.clone(),
                                 body: model.body.clone(),
+                                ..CustomModel::default()
                             })
                             .collect()
                     })
@@ -124,6 +125,7 @@ pub fn providers_from_config(loaded: &Loaded) -> ConfigProviders {
                     headers: provider.headers.clone(),
                     body: provider.body.clone(),
                     models,
+                    ..CustomProvider::default()
                 });
             }
         }
