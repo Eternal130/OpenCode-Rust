@@ -422,6 +422,8 @@ async fn run(fixture: &Path, prompt_continue: bool) -> Result<()> {
     let reference = parity::reference::spawn_reference(parity::reference::ReferenceSpawn {
         extra_env: env,
         seed_files: Vec::new(),
+
+        extra_args: Vec::new(),
     })
     .await?;
     eprintln!("[gate2b] C: reference re-opened the import at {}", reference.url());
