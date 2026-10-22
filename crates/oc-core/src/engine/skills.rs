@@ -7,8 +7,11 @@
 //! from frontmatter, autoinvoke from `metadata["opencode/autoinvoke"]` /
 //! `disable-model-invocation`).
 //!
-//! URL sources are recognized but not fetched (the discovery download
-//! lane is deferred); they contribute no skills yet.
+//! URL sources (`http(s)://` entries) download through
+//! [`skills_url::pull_url_sources`] at the engine's async config-load
+//! seam BEFORE [`ConfigSkillTable::discover`] runs; the downloaded cache
+//! roots arrive keyed by their config item and scan at the item's
+//! position in document order, interleaved with directory items.
 
 #![allow(
     clippy::must_use_candidate, // ownership snapshots are queries
@@ -68,6 +71,7 @@ use oc_schema::config::Entry as ConfigEntry;
 use oc_schema::id::{SkillId, SkillName};
 use oc_schema::skill::{Skill, SkillSource};
 
+use super::skills_url;
 use crate::config::{Json, Loaded};
 use crate::tool::skill::SkillTable;
 
@@ -265,12 +269,24 @@ impl ConfigSkillTable {
     /// Discovers skills from a loaded config snapshot for `location`
     /// (directory entries contribute `<dir>/skill` + `<dir>/skills`;
     /// document `skills` entries contribute paths relative to the
-    /// location; `~` expands against `home`). The built-in skills seed
-    /// FIRST (the v2 pre-plugin); config skills insert UNCONDITIONALLY —
-    /// on an id collision the config skill wins (v2 `editor.add`
-    /// overwrite), and later config sources overwrite earlier ones.
+    /// location; `~` expands against `home`). URL entries
+    /// (`http(s)://`, classified by [`skills_url::is_url_source`]) are
+    /// downloaded at the engine's async seam and arrive here as
+    /// `url_sources` keyed by their original config item — each item's
+    /// pulled roots join the source list AT THE ITEM'S DOCUMENT
+    /// POSITION, interleaved with directory items exactly as written
+    /// (v2 `sources()`, config/plugin/skill.ts:77-102). The built-in
+    /// skills seed FIRST (the v2 pre-plugin); config skills insert
+    /// UNCONDITIONALLY — on an id collision the config skill wins (v2
+    /// `editor.add` overwrite), and later config sources overwrite
+    /// earlier ones.
     #[must_use]
-    pub fn discover(loaded: &Loaded, location: &Path, home: &Path) -> Self {
+    pub fn discover(
+        loaded: &Loaded,
+        location: &Path,
+        home: &Path,
+        url_sources: &skills_url::PulledUrlSources,
+    ) -> Self {
         let mut sources: Vec<PathBuf> = Vec::new();
         let mut seen = std::collections::BTreeSet::new();
         let add = |path: PathBuf,
@@ -290,8 +306,18 @@ impl ConfigSkillTable {
                 ConfigEntry::Document(document) => {
                     let Some(items) = document.info.skills.clone() else { continue };
                     for item in items {
-                        if item.contains("://") {
-                            // URL source: the download lane is deferred.
+                        if skills_url::is_url_source(&item) {
+                            // URL source (v2 skill.ts:89-93): the engine
+                            // seam already pulled it into the hashed
+                            // cache; the pulled roots join AT THIS
+                            // POSITION — v2 processes document items in
+                            // document order with URL and directory
+                            // items interleaved as written, and later
+                            // sources win id collisions. An absent entry
+                            // (failed/empty pull) skips.
+                            for root in url_sources.get(&item).into_iter().flatten() {
+                                add(root.clone(), &mut sources, &mut seen);
+                            }
                             continue;
                         }
                         let expanded = if let Some(rest) = item.strip_prefix("~/") {
