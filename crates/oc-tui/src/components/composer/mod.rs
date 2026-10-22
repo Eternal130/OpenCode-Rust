@@ -28,13 +28,10 @@ pub use attachment::{
 };
 pub use autocomplete::{AutocompleteState, SlashEntry, SlashRegistry};
 pub use oc_tui_core::text_edit::EditCommand as ComposerEditCommand;
-pub use oc_tui_core::text_edit::{EditOutcome, SnapshotKind};
-pub use oc_tui_core::text_edit_opentui::EditCore;
+pub use oc_tui_core::text_edit::{EditCore, EditOutcome, SnapshotKind};
 pub use render::{prompt_text_width, AutocompleteView, FooterHints, PromptView};
 
-use std::rc::Rc;
-
-use oc_tui_core::text_edit::{ClusterBounds, EditCommand, TextArea};
+use oc_tui_core::text_edit::EditCommand;
 
 /// An inline attachment payload staged in the composer (the resolved
 /// half of a `PromptInput.FileAttachment`: the data URI decoded into
@@ -221,33 +218,20 @@ impl PromptHistory {
     }
 }
 
-/// The composer's grapheme-cluster model (the editing state's motion
-/// granularity): the same `wrap::flatten` seam the renderer uses, so
-/// caret moves land on rendered cluster boundaries exactly like the
-/// pre-Wave-A composer.
-#[derive(Debug, Clone, Copy, Default)]
-struct WrapClusters;
-
-impl ClusterBounds for WrapClusters {
-    fn cluster_starts(&self, text: &str) -> Vec<usize> {
-        cluster_starts(text)
-    }
-}
-
 /// The composer's full editing state for one session.
 ///
-/// Wave A: the editing core is oc-tui-core's [`TextArea`] (v2's
-/// `EditBufferRenderable` operation set — selection, word motions,
-/// delete ops, undo/redo); the composer keeps the file/agent mention
-/// bookkeeping and the prompt history beside it. `draft.text` is the
-/// store-facing text source; the area's text mirrors it across each
-/// edit (see [`Composer::run_edit`]).
+/// The editing core is oc-tui-core's [`EditCore`] (v2's
+/// `EditBufferRenderable` over opentui-core's EditBuffer/EditorView —
+/// selection, word motions, delete ops, undo/redo); the composer
+/// keeps the file/agent mention bookkeeping and the prompt history
+/// beside it. `draft.text` is the store-facing text source; the
+/// engine's text mirrors it across each edit (see
+/// [`Composer::run_edit`]).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Composer {
     pub draft: PromptDraft,
     /// The editing state (caret + selection anchor + undo/redo) — the
-    /// flag-selected engine (legacy `TextArea` or the opentui-core
-    /// textarea line behind [`EditCore`]).
+    /// opentui-core textarea line behind [`EditCore`].
     pub edit: EditCore,
     /// The mention snapshots parallel to the area's undo stack
     /// (an undo restores chips with their text).
@@ -286,16 +270,11 @@ impl Default for Composer {
 }
 
 impl Composer {
-    /// A fresh editing state with the composer's cluster model (the
-    /// legacy engine's wrap-derived clusters; the opentui engine has
-    /// its own grapheme model). Flag-selected once per process.
+    /// A fresh editing state (the opentui-core textarea engine, with
+    /// its own grapheme model).
     #[must_use]
     pub fn fresh_edit() -> EditCore {
-        if oc_tui_core::opentui_engine_enabled() {
-            EditCore::fresh()
-        } else {
-            EditCore::Legacy(TextArea::with_clusters(Rc::new(WrapClusters)))
-        }
+        EditCore::fresh()
     }
 }
 
@@ -1072,19 +1051,6 @@ impl Composer {
 /// Byte offset of a char index.
 pub(crate) fn char_to_byte(text: &str, chars: usize) -> usize {
     text.char_indices().nth(chars).map_or(text.len(), |(byte, _)| byte)
-}
-
-/// Cluster boundaries (char offsets where a grapheme cluster starts),
-/// derived from the same `wrap::flatten` seam the renderer uses.
-fn cluster_starts(text: &str) -> Vec<usize> {
-    let mut starts = Vec::with_capacity(text.chars().count() + 1);
-    let mut offset = 0usize;
-    for atom in crate::wrap::flatten(text, ratatui::style::Style::new()) {
-        starts.push(offset);
-        offset += atom.text.chars().count();
-    }
-    starts.push(offset);
-    starts
 }
 
 /// The engine prompt API stub: what `store::Store::submit_prompt`

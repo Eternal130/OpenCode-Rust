@@ -8,8 +8,8 @@
 //! `for_list`/dyn props — the JSX-equivalent surface), driven by the
 //! SAME oc-tui store data the shared solvers
 //! (`composer::render`) consume. The text EDITING stays on the store's
-//! `oc_tui_core::text_edit` engine (the editor-engine swap is a later
-//! subsystem lane): this lane renders the composer AROUND it — the
+//! `oc_tui_core::text_edit` engine (opentui-core's textarea line —
+//! the M-engine swap): this lane renders the composer AROUND it — the
 //! `┃` rail chrome, the prompt-bg box + insets, the placeholder
 //! presentation, the metadata row (`agent · model provider · variant`
 //! with the drop ladder), the `╹▀` transition, the footer row

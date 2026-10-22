@@ -1034,27 +1034,13 @@ fn pty_transcript_cycle_thought_expand_solid_path() {
 
 /// PTY (lane M-engine): the editing-engine + keymap cycle — type →
 /// word-delete → undo/redo → leader arm + escape-clear (the K-6
-/// semantic, identical on both engines) → prompt.clear. Parametrized
-/// over the ENGINE paths (the editing core + the keymap dispatch
-/// beneath the composer): the legacy hand-rolled pair and the
-/// opentui-core/opentui-keymap pair must drive the SAME observable
-/// cycle. (The K-delta behaviors that DIFFER by engine —
-/// backspace-pop on a pending sequence, non-leader sequence arming —
-/// are pinned by the oc-tui-core suites, never here.)
+/// semantic) → prompt.clear, on the opentui engine pair (the only
+/// path since the M-engine-retire lane — the legacy pair's variant
+/// died with it). The K-delta behaviors (backspace-pop on a pending
+/// sequence, non-leader sequence arming) are pinned by the
+/// oc-tui-core suites, never here.
 #[test]
-fn pty_engine_cycle_type_worddelete_undo_leader_escape_legacy_path() {
-    std::env::set_var("OC_ENGINE_OPENTUI", "0");
-    pty_engine_cycle_body();
-}
-
-/// The opentui engine path (`OC_ENGINE_OPENTUI=1`).
-#[test]
-fn pty_engine_cycle_type_worddelete_undo_leader_escape_opentui_path() {
-    std::env::set_var("OC_ENGINE_OPENTUI", "1");
-    pty_engine_cycle_body();
-}
-
-fn pty_engine_cycle_body() {
+fn pty_engine_cycle_type_worddelete_undo_leader_escape() {
     let _sandbox = sandbox_env("engine-cycle");
     let (url, _shared) = spawn_scripted_server(false);
     drive(&url, move |boot, mut writer| {

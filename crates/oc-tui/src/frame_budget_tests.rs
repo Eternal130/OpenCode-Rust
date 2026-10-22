@@ -727,22 +727,12 @@ fn picker_panel_budget_body() {
 /// engine — the full pump round-trip (`store.composer` →
 /// `Composer::handle_key` → `store.set_composer`) over a long draft
 /// (2 KB, CJK + latin mix), then a motion/undo churn phase
-/// (select-all, word-forward, backspace, undo — the heaviest ops).
-/// Both ENGINE paths get their own test process (the flag is read
-/// once at boot; nextest isolates the fns): the legacy hand-rolled
-/// pair and the opentui-core EditBuffer/EditorView pair. The op must
-/// stay a negligible fraction of the frame budget (the 40 ms gate);
-/// the numbers print for the lane's old-vs-new record.
+/// (select-all, word-forward, backspace, undo — the heaviest ops),
+/// on the opentui engine (the only path since the M-engine-retire
+/// lane). The op must stay a negligible fraction of the frame budget
+/// (the 40 ms gate); the numbers print for the lane's record.
 #[test]
-fn frame_budget_engine_keystroke_legacy_path() {
-    std::env::set_var("OC_ENGINE_OPENTUI", "0");
-    engine_keystroke_budget_body();
-}
-
-/// The opentui engine path (`OC_ENGINE_OPENTUI=1`).
-#[test]
-fn frame_budget_engine_keystroke_opentui_path() {
-    std::env::set_var("OC_ENGINE_OPENTUI", "1");
+fn frame_budget_engine_keystroke() {
     engine_keystroke_budget_body();
 }
 
@@ -783,9 +773,8 @@ fn engine_keystroke_budget_body() {
         worst_micros = worst_micros.max(start.elapsed().as_micros());
     }
     eprintln!(
-        "[engine-budget] keystroke round-trip on a 2KB draft ({}): worst {} µs, avg {} µs \
+        "[engine-budget] keystroke round-trip on a 2KB draft (opentui): worst {} µs, avg {} µs \
          ({} build)",
-        if oc_tui_core::opentui_engine_enabled() { "opentui" } else { "legacy" },
         worst_micros,
         (total_micros / keystrokes),
         if cfg!(debug_assertions) { "debug" } else { "release" },
