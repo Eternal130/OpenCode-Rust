@@ -6,12 +6,15 @@
 //! including scp-style `git@host:x` and `ftp://` strings, stays a
 //! directory source). The engine's config-load seam awaits
 //! [`pull_url_sources`] BEFORE the (sync) [`super::ConfigSkillTable::discover`]
-//! and feeds the downloaded roots back as extra scanned sources; the
+//! and feeds the downloaded roots back keyed by their config item, so
+//! discover scans each root at the item's position in document order
+//! (v2 `sources()` interleaves URL and directory items as written); the
 //! scan itself (`{*.md,**/SKILL.md}` + frontmatter) is unchanged.
 //!
 //! Observable protocol per pass, per URL source (v2 `discovery.ts`):
 //!
-//! - GET `{base}/index.json` EVERY pass — `{skills:[{name,version?,files}]}`
+//! - GET `{base}/index.json` EVERY pass (Accept: application/json) —
+//!   `{skills:[{name,version?,files}]}`
 //!   (2 retries, ~200 ms jittered exponential backoff, non-2xx = failure).
 //!   Index failure ⇒ the source yields NO skills (logged; there is no
 //!   offline fallback scan of the cache).
@@ -34,7 +37,7 @@
 //!   imports) — observably equivalent, request sets identical up to
 //!   order.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -67,12 +70,20 @@ pub fn is_url_source(item: &str) -> bool {
     }
 }
 
+/// The async pull's result: the pulled skill cache directories keyed by
+/// their ORIGINAL config `skills` item string. A URL source can yield
+/// several roots (one per index skill), so the value is a vector —
+/// [`super::ConfigSkillTable::discover`] re-inserts them at the item's
+/// document position.
+pub type PulledUrlSources = BTreeMap<String, Vec<PathBuf>>;
+
 /// Pulls every URL source among `entries` (raw config `skills` items,
 /// deduplicated by first occurrence, v2 `Skill.Source` `add`) into the
 /// hashed cache under `cache_root` and returns the downloaded skill
-/// directories in source order — the extra scanned sources for
-/// [`super::ConfigSkillTable::discover`].
-pub async fn pull_url_sources(entries: &[String], cache_root: &Path) -> Vec<PathBuf> {
+/// directories keyed by their original config item string — the pulled
+/// roots [`super::ConfigSkillTable::discover`] scans at each item's
+/// document position.
+pub async fn pull_url_sources(entries: &[String], cache_root: &Path) -> PulledUrlSources {
     let mut seen = BTreeSet::new();
     let mut sources: Vec<String> = Vec::new();
     for entry in entries {
@@ -83,17 +94,18 @@ pub async fn pull_url_sources(entries: &[String], cache_root: &Path) -> Vec<Path
             sources.push(entry.clone());
         }
     }
+    let mut pulled = PulledUrlSources::new();
     if sources.is_empty() {
-        return Vec::new();
+        return pulled;
     }
     // v2 refreshes sources serially (`for (const source of current)`);
     // the concurrency caps apply within one source.
     let client = reqwest::Client::new();
-    let mut directories: Vec<PathBuf> = Vec::new();
     for source in &sources {
-        directories.extend(pull(&client, source, cache_root).await);
+        let directories = pull(&client, source, cache_root).await;
+        pulled.insert(source.clone(), directories);
     }
-    directories
+    pulled
 }
 
 /// The index manifest (`Index` schema, discovery.ts:54-56).
@@ -120,7 +132,7 @@ async fn pull(client: &reqwest::Client, url: &str, cache_root: &Path) -> Vec<Pat
         Err(_) => return Vec::new(),
     };
     let index = source.join("index.json").expect("relative join on a valid base");
-    let data: Index = match fetch_with_retry(client, &index).await {
+    let data: Index = match fetch_with_retry(client, &index, INDEX_ACCEPT).await {
         Ok(body) => match serde_json::from_slice(&body) {
             Ok(index) => index,
             Err(error) => {
@@ -246,7 +258,7 @@ async fn download(client: &reqwest::Client, url: reqwest::Url, destination: Path
     if destination.exists() {
         return true;
     }
-    match fetch_with_retry(client, &url).await {
+    match fetch_with_retry(client, &url, None).await {
         Ok(body) => {
             if let Some(parent) = destination.parent() {
                 let _ = std::fs::create_dir_all(parent);
@@ -333,17 +345,30 @@ async fn stage_and_swap(
     }
 }
 
+/// The index GET's `Accept` header — v2 `HttpClientRequest.acceptJson`
+/// (discovery.ts:97) sends `application/json` on the index.json request.
+const INDEX_ACCEPT: Option<&str> = Some("application/json");
+
 /// The retried GET (discovery.ts:69-76): network errors and transient
 /// statuses (429, 5xx) consume the retry budget with ~200 ms jittered
 /// exponential backoff; other non-2xx statuses fail immediately
-/// (`filterStatusOk` without a retry).
+/// (`filterStatusOk` without a retry). `accept` carries an optional
+/// `Accept` header value (the index request's `acceptJson`).
 ///
 /// Jitter comes from the clock (not `rand::thread_rng`) so the future
 /// never carries a `!Send` RNG handle.
-async fn fetch_with_retry(client: &reqwest::Client, url: &reqwest::Url) -> Result<Vec<u8>, String> {
+async fn fetch_with_retry(
+    client: &reqwest::Client,
+    url: &reqwest::Url,
+    accept: Option<&str>,
+) -> Result<Vec<u8>, String> {
     let mut attempt = 0u32;
     loop {
-        let failure = match client.get(url.clone()).send().await {
+        let mut request = client.get(url.clone());
+        if let Some(value) = accept {
+            request = request.header(reqwest::header::ACCEPT, value);
+        }
+        let failure = match request.send().await {
             Ok(response) => {
                 let status = response.status().as_u16();
                 if (200..300).contains(&status) {
@@ -619,7 +644,11 @@ mod tests {
                 state.requests.clear();
             }
             let entries = vec![self.base.clone()];
-            let directories = super::pull_url_sources(&entries, self.cache.path()).await;
+            let directories = super::pull_url_sources(&entries, self.cache.path())
+                .await
+                .into_values()
+                .flatten()
+                .collect::<Vec<_>>();
             let requests = self.state.lock().requests.clone();
             (directories, requests)
         }
@@ -963,7 +992,7 @@ mod tests {
             &with_document,
             &location,
             &dir.path().join("home"),
-            &[],
+            &BTreeMap::new(),
         );
         let remote = crate::tool::skill::SkillTable::get(&table, "git@host:skills")
             .expect("scp-style entry stays a directory source");
@@ -974,7 +1003,7 @@ mod tests {
     }
 
     #[test]
-    fn discover_scans_downloaded_url_sources_as_extra_sources() {
+    fn discover_scans_downloaded_url_sources_at_their_document_position() {
         let dir = tempfile::Builder::new()
             .prefix("oc-core-skill-url-extra-")
             .tempdir_in("/tmp/opencode")
@@ -986,9 +1015,10 @@ mod tests {
             "---\nname: Local\n---\n# Local skill",
         )
         .expect("local skill");
+        let url_item = "https://example.test/catalog".to_owned();
         std::fs::write(
             dir.path().join("project").join("opencode.json"),
-            serde_json::json!({ "skills": ["./skills"] }).to_string(),
+            serde_json::json!({ "skills": ["./skills", url_item] }).to_string(),
         )
         .expect("project config");
         let downloaded = dir.path().join("cache").join("deploy");
@@ -1003,17 +1033,93 @@ mod tests {
             },
         )
         .load();
+        let url_sources = std::iter::once((url_item, vec![downloaded])).collect::<BTreeMap<_, _>>();
         let table = crate::engine::skills::ConfigSkillTable::discover(
             &loaded,
             &dir.path().join("project"),
             &dir.path().join("home"),
-            &[downloaded],
+            &url_sources,
         );
         let deploy = crate::tool::skill::SkillTable::get(&table, "deploy")
             .expect("the downloaded root scans like a directory source");
         assert!(deploy.content.contains("# Deploy skill"));
         let local_skill = crate::tool::skill::SkillTable::get(&table, "local").expect("local");
         assert!(local_skill.content.contains("# Local skill"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Collision ordering follows the v2 document order (skill.ts:77-102)
+    // -----------------------------------------------------------------------
+
+    /// The collision fixture: a directory skill `dup` under
+    /// `<project>/skills` and a pulled URL cache root `dup`, both with
+    /// distinct bodies; discover over one document whose `skills` items
+    /// are `items` in the given order.
+    fn discover_with_collision(items: &[String]) -> crate::engine::skills::ConfigSkillTable {
+        let dir = tempfile::Builder::new()
+            .prefix("oc-core-skill-url-order-")
+            .tempdir_in("/tmp/opencode")
+            .expect("sandbox");
+        let local = dir.path().join("project").join("skills").join("dup");
+        std::fs::create_dir_all(&local).expect("local skill dir");
+        std::fs::write(local.join("SKILL.md"), "---\nname: LocalDup\n---\n# Local dup")
+            .expect("local skill file");
+        let url_item = "https://example.test/catalog".to_owned();
+        let pulled = dir.path().join("cache").join("dup");
+        std::fs::create_dir_all(&pulled).expect("pulled skill dir");
+        std::fs::write(pulled.join("SKILL.md"), "---\nname: RemoteDup\n---\n# Remote dup")
+            .expect("pulled skill file");
+        let loaded = crate::config::Loader::new(
+            dir.path().join("project"),
+            crate::config::GlobalDirs {
+                config: dir.path().join("cfg"),
+                home: dir.path().join("home"),
+            },
+        )
+        .load();
+        let mut with_document = loaded.clone();
+        with_document.entries.push(oc_schema::config::Entry::Document(Box::new(
+            oc_schema::config::Document {
+                info: serde_json::from_value(serde_json::json!({ "skills": items })).expect("info"),
+                path: None,
+            },
+        )));
+        let url_sources = std::iter::once((url_item, vec![pulled])).collect::<BTreeMap<_, _>>();
+        crate::engine::skills::ConfigSkillTable::discover(
+            &with_document,
+            &dir.path().join("project"),
+            &dir.path().join("home"),
+            &url_sources,
+        )
+    }
+
+    /// v2 `sources()` (config/plugin/skill.ts:77-102) processes document
+    /// `skills` items IN DOCUMENT ORDER — URL and directory items
+    /// interleaved as written — and later sources win id collisions, so
+    /// a URL item written BEFORE a directory item with the same id
+    /// LOSES: `[urlB, dirA]` resolves to dirA's skill.
+    #[test]
+    fn url_item_before_directory_item_loses_the_id_collision() {
+        let table = discover_with_collision(&[
+            "https://example.test/catalog".to_owned(),
+            "./skills".to_owned(),
+        ]);
+        let dup = crate::tool::skill::SkillTable::get(&table, "dup").expect("dup resolves");
+        assert_eq!(dup.name.0, "LocalDup", "the later directory item wins the collision");
+        assert!(dup.content.contains("# Local dup"));
+    }
+
+    /// The mirror case: `[dirA, urlB]` — the URL item comes later in
+    /// the document, so the pulled URL skill wins the id collision.
+    #[test]
+    fn url_item_after_directory_item_wins_the_id_collision() {
+        let table = discover_with_collision(&[
+            "./skills".to_owned(),
+            "https://example.test/catalog".to_owned(),
+        ]);
+        let dup = crate::tool::skill::SkillTable::get(&table, "dup").expect("dup resolves");
+        assert_eq!(dup.name.0, "RemoteDup", "the later URL item wins the collision");
+        assert!(dup.content.contains("# Remote dup"));
     }
 
     // -----------------------------------------------------------------------

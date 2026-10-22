@@ -937,7 +937,8 @@ impl Engine {
         ));
         // SKILL-URL (v2 SkillDiscovery): http(s) skill sources pull into
         // the hashed cache BEFORE the sync discover — the downloaded
-        // roots join as extra scanned sources. Non-URL items stay
+        // roots arrive keyed by their config item, so discover scans
+        // each at its position in document order. Non-URL items stay
         // directory sources inside discover; index failures log and
         // yield nothing (no offline fallback). Owned locals around the
         // await keep the assemble future's borrows argument-free.
@@ -951,12 +952,12 @@ impl Engine {
             .flatten()
             .collect();
         let skill_cache_root = oc_util::global_roots::resolve().cache;
-        let url_directories = skills_url::pull_url_sources(&skill_items, &skill_cache_root).await;
+        let url_sources = skills_url::pull_url_sources(&skill_items, &skill_cache_root).await;
         let skills = Arc::new(skills::ConfigSkillTable::discover(
             &loaded,
             location.as_path(),
             &self.home,
-            &url_directories,
+            &url_sources,
         ));
         // The command table (CD-12/CD-34): config `commands` maps +
         // `{command,commands}/**/*.md` discovery; plugin registrations
