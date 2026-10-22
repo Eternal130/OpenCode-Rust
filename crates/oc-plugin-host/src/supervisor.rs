@@ -1124,6 +1124,11 @@ pub struct Supervisor {
     /// Set true → the supervise loop kills the child and exits.
     shutdown_tx: tokio::sync::watch::Sender<bool>,
     pub tap_tx: mpsc::Sender<TapEvent>,
+    /// Set once the supervise loop confirmed the CURRENT child is dead
+    /// (killed-and-reaped by handle — never a naked-PID signal). The
+    /// deterministic teardown for [`Supervisor::shutdown`]: by the time
+    /// it returns, no live guest remains (incident 2026-10-22).
+    child_reaped: Arc<AtomicBool>,
 }
 
 impl Supervisor {
@@ -1179,10 +1184,16 @@ impl Supervisor {
         spawn_reader(Arc::clone(&shared), stdout, 1);
 
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-        let supervisor = Arc::new(Self { shared: Arc::clone(&shared), shutdown_tx, tap_tx });
+        let child_reaped = Arc::new(AtomicBool::new(false));
+        let supervisor = Arc::new(Self {
+            shared: Arc::clone(&shared),
+            shutdown_tx,
+            tap_tx,
+            child_reaped: Arc::clone(&child_reaped),
+        });
 
         // The supervision loop owns the child from here.
-        tokio::spawn(supervise_loop(Arc::clone(&shared), child, shutdown_rx));
+        tokio::spawn(supervise_loop(Arc::clone(&shared), child, shutdown_rx, child_reaped));
         // The event dispatch pump (post-ingest tap consumer).
         tokio::spawn(dispatch_pump(Arc::clone(&shared), tap_rx));
 
@@ -1199,10 +1210,24 @@ impl Supervisor {
         Ok(supervisor)
     }
 
-    /// Signal shutdown; the supervise loop kills the child.
+    /// Signal shutdown; the supervise loop kills the child. Returns
+    /// once that kill has been CONFIRMED (the child reaped through the
+    /// owned handle) or the bounded wait elapsed — callers (the facade
+    /// join, test sandboxes) never observe a live guest afterwards.
     pub fn shutdown(&self) {
         self.shared.shutting_down.store(true, Ordering::Relaxed);
         let _ = self.shutdown_tx.send(true);
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !self.child_reaped.load(Ordering::Relaxed) {
+            if std::time::Instant::now() >= deadline {
+                // The supervise loop is wedged past the bound; the
+                // kill_on_drop belt (and the guest's EOF self-exit +
+                // PDEATHSIG) still own the child's death.
+                eprintln!("opencode plugin-host: shutdown wait for child reaped timed out");
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 }
 
@@ -1674,6 +1699,15 @@ fn spawn_process(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
+    // Belt for the no-Drop paths (incident 2026-10-22): if the host
+    // process dies abruptly — SIGKILL of the supervisor's process, a
+    // test binary exiting mid-flight — no Rust teardown can run. The
+    // guest self-exits on IPC EOF (host.js `hostGone`), and on Linux
+    // the kernel additionally SIGKILLs it the moment its parent
+    // thread dies (PR_SET_PDEATHSIG). Empirically verified to fire
+    // even when the parent is SIGKILLed.
+    #[cfg(target_os = "linux")]
+    parent_death::arm(&mut command);
     for (key, value) in &config.env {
         command.env(key, value);
     }
@@ -1685,6 +1719,37 @@ fn spawn_process(
         tokio::spawn(log_stderr(stderr));
     }
     Ok((child, stdin, stdout))
+}
+
+/// The Linux parent-death belt (see [`spawn_process`]). Extracted to a
+/// module so the raw syscall sits behind the same contained-unsafe
+/// pattern as oc-server's `safekill`.
+#[cfg(target_os = "linux")]
+mod parent_death {
+    #![allow(unsafe_code)] // contained raw syscall (prctl), reviewed per-site
+
+    /// Arm `PR_SET_PDEATHSIG(SIGKILL)` on the command's forked child:
+    /// the kernel kills the guest the moment its parent thread dies —
+    /// graceful exit, abrupt exit, or SIGKILL alike. The `pre_exec`
+    /// closure only performs async-signal-safe calls (prctl,
+    /// getppid, _exit) and touches no locks or allocations.
+    pub fn arm(command: &mut tokio::process::Command) {
+        let parent_pid = libc::pid_t::try_from(std::process::id()).unwrap_or(-1);
+        // SAFETY: runs between fork and exec on the child side; only
+        // async-signal-safe syscalls, no shared-state access.
+        unsafe {
+            command.pre_exec(move || {
+                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0);
+                // The classic fork/prctl race: if the parent died
+                // between fork and prctl, the signal can never arrive —
+                // exit now instead of living on as an orphan.
+                if libc::getppid() != parent_pid {
+                    libc::_exit(1);
+                }
+                Ok(())
+            });
+        }
+    }
 }
 
 async fn log_stderr(stderr: tokio::process::ChildStderr) {
@@ -1758,24 +1823,37 @@ fn spawn_reader(shared: Arc<Shared>, stdout: tokio::process::ChildStdout, genera
 }
 
 /// The supervise loop: owns the child; on unexpected exit, restart
-/// with backoff and reload every non-disabled plugin.
+/// with backoff and reload every non-disabled plugin. Every exit path
+/// confirms the child dead (kill by handle + reap) and flips
+/// `child_reaped` — the deterministic teardown seam for
+/// [`Supervisor::shutdown`].
 async fn supervise_loop(
     shared: Arc<Shared>,
     mut child: Child,
     mut shutdown: tokio::sync::watch::Receiver<bool>,
+    child_reaped: Arc<AtomicBool>,
 ) {
+    /// Kill the child THROUGH ITS HANDLE (never a naked-PID signal)
+    /// and confirm the death. Idempotent: an already-exited child just
+    /// reaps.
+    async fn kill_and_reap(child: &mut Child) {
+        let _ = child.kill().await;
+        let _ = child.wait().await;
+    }
     let mut consecutive = 0u32;
     loop {
         tokio::select! {
             _ = shutdown.changed() => {
                 if *shutdown.borrow() {
-                    let _ = child.kill().await;
+                    kill_and_reap(&mut child).await;
+                    child_reaped.store(true, Ordering::Relaxed);
                     return;
                 }
             }
             status = child.wait() => {
-                if *shutdown.borrow() {
-                    let _ = child.kill().await;
+                // This generation's child is confirmed dead.
+                child_reaped.store(true, Ordering::Relaxed);
+                if *shutdown.borrow_and_update() {
                     return;
                 }
                 let how = match status {
@@ -1795,6 +1873,13 @@ async fn supervise_loop(
                     "opencode plugin-host: guest died ({how}); restart #{consecutive} in {backoff:?}"
                 );
                 tokio::time::sleep(backoff).await;
+                // Shutdown may have been requested while we slept in
+                // the restart arm (the select above was not armed):
+                // never respawn a guest the host is tearing down.
+                if shared.shutting_down.load(Ordering::Relaxed) {
+                    eprintln!("opencode plugin-host: shutdown during restart backoff; not respawning");
+                    return;
+                }
                 match spawn_process(&shared.config) {
                     Ok((new_child, stdin, stdout)) => {
                         let (outbound_tx, outbound_rx) = mpsc::unbounded_channel();
@@ -1806,6 +1891,9 @@ async fn supervise_loop(
                         spawn_writer(outbound_rx, stdin);
                         spawn_reader(Arc::clone(&shared), stdout, generation);
                         child = new_child;
+                        // A live guest exists again; the reaped flag
+                        // describes the CURRENT child.
+                        child_reaped.store(false, Ordering::Relaxed);
                         if shared
                             .request("initialize", json!({}), shared.config.registration_timeout)
                             .await

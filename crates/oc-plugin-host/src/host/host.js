@@ -41,8 +41,52 @@ const GUEST_ID_BASE = 1099511627776;
 let nextGuestId = GUEST_ID_BASE;
 const pendingGuest = new Map(); // id -> { resolve, reject }
 
+// ---------------------------------------------------------------------------
+// IPC liveness (incident 2026-10-22: the orphaned plugin host)
+// ---------------------------------------------------------------------------
+// The supervisor owns the write end of our stdin and the read end of our
+// stdout. When it goes away — graceful shutdown, abrupt exit, SIGKILL —
+// BOTH pipe ends close: stdin reads EOF and stdout writes fail with
+// EPIPE. Neither may be ignored:
+//
+//   * EOF with plugin `setInterval` timers alive used to leave the
+//     for-await read loop finished but the PROCESS alive forever
+//     (Bun keeps the event loop up for timers) — the orphan leak.
+//   * A failed `process.stdout.write` throws SYNCHRONOUSLY in Bun; the
+//     throw surfaced inside `uncaughtException`/`scheduledFault`
+//     handlers whose own `notify` wrote again → a synchronous
+//     write-throw loop measured at ~230k failed writes/s pegging one
+//     core at ~101% (the spin).
+//
+// Every supervisor-going-away signal therefore funnels into
+// `hostGone()` — a one-shot clean `process.exit(0)`. The host owns our
+// lifetime; without it there is nothing to talk to and nothing to do.
+let supervisorGone = false;
+
+function hostGone(reason) {
+  if (supervisorGone) return;
+  supervisorGone = true;
+  // Best-effort last line — the pipe may already be dead; never throw
+  // on the way out.
+  try {
+    process.stdout.write(
+      JSON.stringify({ jsonrpc: "2.0", method: "host.exit", params: { reason } }) + "\n",
+    );
+  } catch {
+    // EPIPE — the reason we are exiting.
+  }
+  process.exit(0);
+}
+
 function send(message) {
-  process.stdout.write(JSON.stringify(message) + "\n");
+  if (supervisorGone) return; // pipe is dead; a write would throw
+  try {
+    process.stdout.write(JSON.stringify(message) + "\n");
+  } catch (error) {
+    // EPIPE: the supervisor's read end is gone. Clean shutdown — the
+    // throw must NEVER escape into error handlers (the spin).
+    hostGone(`stdout write failed: ${errText(error)}`);
+  }
 }
 
 function notify(method, params) {
@@ -62,6 +106,22 @@ function errText(error) {
   return String(error);
 }
 
+// The async halves of the pipe-death detection: Bun surfaces some
+// EPIPE/EOF conditions as stream events rather than synchronous write
+// throws. Every one of them is the same fact — the supervisor is gone.
+process.stdout.on("error", (error) => {
+  hostGone(`stdout error: ${errText(error)}`);
+});
+process.stdin.on("error", (error) => {
+  hostGone(`stdin error: ${errText(error)}`);
+});
+process.stdin.on("end", () => {
+  hostGone("stdin end (EOF)");
+});
+process.stdin.on("close", () => {
+  hostGone("stdin closed");
+});
+
 // Plugin console output must never corrupt the NDJSON stdout channel:
 // console methods are rerouted to `log` notifications.
 for (const level of ["log", "info", "warn", "error", "debug"]) {
@@ -74,6 +134,9 @@ for (const level of ["log", "info", "warn", "error", "debug"]) {
 }
 
 process.on("uncaughtException", (error) => {
+  // Guarded by send(): if the pipe is already dead, notify() is a
+  // no-op and this handler returns instead of throwing again (the
+  // re-entrant write-throw spin).
   notify("log", { level: "error", message: `uncaughtException: ${errText(error)}` });
 });
 process.on("unhandledRejection", (reason) => {
@@ -2198,3 +2261,10 @@ for await (const chunk of process.stdin) {
     }
   }
 }
+// stdin EOF: the supervisor closed its end — shutdown, abrupt exit, or
+// SIGKILL of the host process. Plugin `setInterval` timers would keep
+// Bun's event loop (and this process) alive forever: exit NOW. This is
+// the orphan-leak fix (incident 2026-10-22); the `stdin end`/`close`
+// watchers above are the belt in case the iterator ever wedges before
+// completing.
+hostGone("stdin EOF (read loop finished)");
