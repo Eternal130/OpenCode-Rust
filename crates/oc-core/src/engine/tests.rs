@@ -882,7 +882,14 @@ fn custom(provider: &str, model: &str) -> CustomProvider {
         api_key: Some("probe-key".into()),
         headers: None,
         body: None,
-        models: vec![CustomModel { id: model.to_owned(), name: None, headers: None, body: None }],
+        models: vec![CustomModel {
+            id: model.to_owned(),
+            name: None,
+            headers: None,
+            body: None,
+            ..CustomModel::default()
+        }],
+        ..CustomProvider::default()
     }
 }
 
