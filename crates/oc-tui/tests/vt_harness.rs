@@ -1762,12 +1762,26 @@ pub fn open_second_session(h: &mut HarnessHandle, needle: &[u8]) -> Result<(), S
     Ok(())
 }
 
-/// The standard exit chord: ctrl+c twice (v2's `app.exit` is
-/// ctrl+c/ctrl+d on an EMPTY prompt — the first press clears a dirty
-/// draft or closes a dialog, the second exits — `keybind.ts:131`
-/// keeps `<leader>q` for `session.queued_prompts`), then `<leader>q`
-/// as a harmless trailing chord.
+/// The standard exit chord (CI-hardened, TUI-15's wedge): clear the
+/// stackable UI states FIRST — each can otherwise eat one of the two
+/// ctrl+c presses and leave the app looping until its 90 s cap (the
+/// runner watchdog fires first):
+/// * `escape` ×2 — the topmost dialogs/toasts (the error panel's
+///   F11 gate, a stacked select, an open autocomplete);
+/// * `ctrl+u` — a DIRTY draft would keep `app.exit` disabled
+///   (keybind.ts:131 gates ctrl+c/ctrl+d on the empty prompt), and a
+///   send failure RESTORES the draft (`restoreEntry`), so the chord
+///   may arrive with text still in the box;
+/// * then ctrl+c ×2 (`app.exit` — the first press still absorbs any
+///   survivor state, the second exits) and `<leader>q` as a harmless
+///   trailing chord (`session.queued_prompts` on an empty queue).
 pub fn exit_chord(h: &mut HarnessHandle) {
+    h.write(b"\x1b");
+    std::thread::sleep(Duration::from_millis(150));
+    h.write(b"\x1b");
+    std::thread::sleep(Duration::from_millis(150));
+    h.write(b"\x15");
+    std::thread::sleep(Duration::from_millis(150));
     h.write(b"\x03");
     std::thread::sleep(Duration::from_millis(200));
     h.write(b"\x03");
