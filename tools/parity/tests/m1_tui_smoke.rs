@@ -91,11 +91,15 @@ async fn m1_official_tui_smoke_against_rust_server() -> anyhow::Result<()> {
     // The TUI ships inside the CLI package (no standalone entry): the CLI
     // with no subcommand runs it; --server pins our endpoint.
     let _ = Command::new("tmux").args(["kill-session", "-t", "m1"]).output();
+    // The defines are JSON-quoted + single-quoted for the pane shell —
+    // bun 1.4.x parses `--define` VALUEs as JSON and the double quotes
+    // must survive `sh -c` (bare 2.0.24 = instant bun exit; see
+    // p10_cross_tui's launch for the full story).
     let launch = format!(
         "cd {cwd} && TERM=xterm-256color HOME={home} OPENCODE_VERSION=2.0.24 \
          OPENCODE_PASSWORD={password} OPENCODE_CONFIG={config} \
-         /root/.bun/bin/bun run --cwd {cli} --define OPENCODE_VERSION=\"2.0.24\" \
-         --define OPENCODE_CHANNEL=\"stable\" --define OPENCODE_ARTIFACT=\"cli\" \
+         /root/.bun/bin/bun run --cwd {cli} --define OPENCODE_VERSION='\"2.0.24\"' \
+         --define OPENCODE_CHANNEL='\"stable\"' --define OPENCODE_ARTIFACT='\"cli\"' \
          src/index.ts --server {url}",
         cwd = tui_home.display(),
         home = tui_home.display(),
