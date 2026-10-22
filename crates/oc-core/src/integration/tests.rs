@@ -1547,7 +1547,8 @@ const ROGUE_KEY_PEM: &str = include_str!("testdata/id_token_rogue_key.pem");
 /// once with `openssl rsa -modulus` when the fixtures were generated.
 const SIGNING_KEY_N: &str = "vFp_fPHAjLAqQUpCQY8OgRVhBRwiZYhfEnF49DO9M9MgiZDYJ_K-WPjwroou9JGJy5rmxnMMu9CDtRxM4TBcWojiNnGOVQxa4FT2WkQlE-ztQ1t1A-1Rc4KEBszafUdvz6nn6TBzoTLxqezq0r8HOOmJ7E1z5HMxCe-uJq7KF8uUbWmfgVNALxzuuLJJrtwMcvhpzSKtuAZOyA8DfgxYDCWJ5onNu4Gfmy5QkWkeqSe9WSLzHFw54GdPZ6d4GyubAP9KUOBZYwywDAEtUcS1yaEb8I0Tq0MFfzJHT_q7jOkGOATkHGhTsEl6r0yrKyvKWoMgibabP5E45Lw_PFm4fQ";
 const ROGUE_KEY_N: &str = "vaTeQ_dAcpc52kCnFRw_US22BGb2MKPdpQV8i3b491ED99qsaZuuToO6vQPn0jSQ4LnB0CHoM0x8T8f7Hh4Lzus_MjPMqegKUbDQ2VAnnwzkkXhoXDGG9TLJ1rtlONVl4RYngt0pBfIeiJVT8rGxb1lmQvPRrpQsEol-T51MaxGZQ-B3iweZFOyvbHX-8eZHYHpWlznARswKKYVs106PpwmBGbBFhsXExCOFDD1EBJt2PSR-t2q_IAbgQEnQ1sW516-mQDazofl50nzJrRbC5LS1srVwEGtFLXA37268sLDWo_JHHZepfpnyRxFS8rsHW_XyWqcDw4hZeFzv6B1cgQ";
-const RSA_E_65537: &str = "EAA";
+/// `0x010001` → base64url `AQAB`.
+const RSA_E_65537: &str = "AQAB";
 
 /// A one-key JWKS document (the v2 test server's shape).
 fn jwks_document(kid: &str, n: &str) -> Value {
