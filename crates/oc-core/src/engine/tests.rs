@@ -644,6 +644,7 @@ fn engine_skills_table_discovers_config_skill_paths() {
         &with_document,
         dir.path(),
         &dir.path().join("home"),
+        &[],
     );
     let review =
         crate::tool::skill::SkillTable::get(&table, "review").expect("the SKILL.md directory id");
@@ -673,6 +674,7 @@ fn engine_builtin_skills_seed_the_table() {
         &loaded,
         dir.path(),
         &dir.path().join("home"),
+        &[],
     );
 
     let opencode =
@@ -730,6 +732,7 @@ fn engine_builtin_report_lists_configured_plugins_verbatim_and_sorted() {
         &loaded,
         dir.path(),
         &dir.path().join("home"),
+        &[],
     );
     let report = crate::tool::skill::SkillTable::get(&table, "report").expect("report");
     // Reference expectation (skill.test.ts): entries verbatim, duplicates
@@ -770,6 +773,7 @@ fn engine_builtin_skills_lose_id_collisions_to_config() {
         &with_document,
         dir.path(),
         &dir.path().join("home"),
+        &[],
     );
     // Config wins on collision (v2 editor.add overwrite precedence).
     let collision =
