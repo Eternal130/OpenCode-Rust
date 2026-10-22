@@ -1155,13 +1155,19 @@ pub(super) async fn chatgpt_exchange_at(
 }
 
 async fn chatgpt_authorize(_answer: FormAnswer) -> Result<Authorization, String> {
-    chatgpt_authorize_at(FormAnswer::new(), CHATGPT_TOKEN_URL).await
+    chatgpt_authorize_at(
+        FormAnswer::new(),
+        CHATGPT_TOKEN_URL,
+        &format!("{OPENAI_ISSUER}/.well-known/jwks.json"),
+    )
+    .await
 }
 
-/// The connector with an explicit token URL (test seam).
+/// The connector with explicit token + JWKS URLs (test seams).
 pub(super) async fn chatgpt_authorize_at(
     _answer: FormAnswer,
     token_url: &str,
+    jwks_url: &str,
 ) -> Result<Authorization, String> {
     let Pkce { verifier, challenge } = openai_pkce();
     let state = flows::random_state(32);
@@ -1176,6 +1182,7 @@ pub(super) async fn chatgpt_authorize_at(
     .map_err(|error| format!("failed to bind loopback listener: {error}"))?;
     let redirect = format!("http://127.0.0.1:{}/auth/callback", listener.port);
     let token_url = token_url.to_owned();
+    let jwks_url = jwks_url.to_owned();
     let scope =
         format!("openid profile email offline_access resource.invoke {CHATGPT_SHARING_SCOPE}");
     let url = format!(
@@ -1223,7 +1230,7 @@ pub(super) async fn chatgpt_authorize_at(
         if id_token.is_empty() {
             return Err("ChatGPT sign-in did not return an ID token.".into());
         }
-        verify_id_token_claims(&id_token, &client_id, &nonce)?;
+        verify_id_token(&id_token, &client_id, &nonce, &jwks_url).await?;
         let scopes: Vec<Value> = scope
             .split(' ')
             .filter(|part| !part.is_empty())
@@ -1249,11 +1256,15 @@ pub(super) async fn chatgpt_authorize_at(
     })
 }
 
-/// The claim checks from v2's `verifyIDToken` (chatgpt.ts:439-461):
-/// issuer, audience, expiry, nonce, subject. RS256 signature verification
-/// against the JWKS endpoint is NOT performed — no JWT library exists in
-/// this workspace (deferred; see docs/be3b.log).
-fn verify_id_token_claims(id_token: &str, client_id: &str, nonce: &str) -> Result<(), String> {
+/// v2's `verifyIDToken` (chatgpt.ts:439-459): RS256 signature
+/// verification against the JWKS endpoint, then issuer, audience,
+/// expiry, and sign-in-nonce/subject claim checks.
+pub(crate) async fn verify_id_token(
+    id_token: &str,
+    client_id: &str,
+    nonce: &str,
+    _jwks_url: &str,
+) -> Result<(), String> {
     let claims =
         flows::jwt_claims(id_token).ok_or("ChatGPT sign-in returned an invalid ID token.")?;
     let invalid = "ChatGPT sign-in returned an invalid ID token.";
