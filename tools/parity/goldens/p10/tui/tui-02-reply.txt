@@ -8,7 +8,8 @@
 
      Parity fake says hello.
 
-     Build · Fake Model · 25ms · 0.0 tok/s
+     Build · Fake Model · 22ms · 0.0 tok/s
+
 
 
 
@@ -37,4 +38,3 @@
   ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
   /tmp/opencode/ref/packages/cli                                                                 18  ctrl+p commands    /tmp/opencode/ref/packages/cli
 
- ✓ Server  ⦿ UI  Theme  Tools  Experiments
