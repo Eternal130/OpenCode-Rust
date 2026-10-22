@@ -5,6 +5,18 @@
 > **REBUILT from ledger+git 2026-10-21 09:30** (iteration 13 / wave 12 opened).
 > Ledger + git are authoritative; state.md is a cross-session breadcrumb only.
 
+## WAVE 14 (iteration 15) — CLOSED: §12 FULL GREEN
+
+- **runtime-gates 39728809002 = SUCCESS, p10 battery 11/11 — the first full-green §12 run.**
+  Final piece: cross_tui's reference TUI died under bun 1.4.2 because the harness's
+  `--define OPENCODE_VERSION="2.0.24"` lost its quotes through sh -c (1.4.x parses define
+  values as JSON; 1.3.10 had silently parsed the bare 2.0.24 as the number 2 — the old boot
+  needle was matching the 'client is local' WARNING). lane/xui fixed the quoting + rebuilt
+  the tmux rig (fail-fast dying-words diagnostics, fd hygiene).
+- Terminal ledger state: **verified 149 · fixed 0 · S1 open 0 · accepted 17 · duplicate 3**;
+  remaining opens are S2/S3 longtail + blocked env switches + user-scheduled SURF P1-P3.
+- GATE-DB-FIXTURE-WAL + CI-RUNTIME-GATES-RED + CLI-N4 verified on the run.
+
 ## WAVE 14 (iteration 15) — CI forensics chain (bun runner generation breakage)
 
 - **The breakage**: starting 2026-10-21 19:23Z, GitHub ubuntu-24.04 runners broke bun 1.3.10
