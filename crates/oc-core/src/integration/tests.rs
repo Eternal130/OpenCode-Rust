@@ -1421,8 +1421,11 @@ async fn chatgpt_connector_round_trip_against_mock() {
     // The signed id_token must echo the attempt nonce; aud = the client
     // the callback will carry (chatgpt.ts:165-171,439-461 claims subset).
     mock.serve("/.well-known/jwks.json", jwks_document("sign-in", SIGNING_KEY_N));
-    let id_token =
-        signed_id_token(&valid_claims(&nonce, "client_reg_1", 9_999_999_999), "sign-in", SIGNING_KEY_PEM);
+    let id_token = signed_id_token(
+        &valid_claims(&nonce, "client_reg_1", 9_999_999_999),
+        "sign-in",
+        SIGNING_KEY_PEM,
+    );
     *mock.slot.lock() = Some((
         200,
         json!({
@@ -1558,11 +1561,8 @@ fn jwks_document(kid: &str, n: &str) -> Value {
 /// The DER bytes inside a single-block PEM envelope (fixture loader).
 fn pem_der(pem: &str) -> Vec<u8> {
     use base64::Engine;
-    let body: String = pem
-        .lines()
-        .filter(|line| !line.starts_with("-----"))
-        .flat_map(str::chars)
-        .collect();
+    let body: String =
+        pem.lines().filter(|line| !line.starts_with("-----")).flat_map(str::chars).collect();
     base64::engine::general_purpose::STANDARD.decode(body).expect("fixture PEM decodes")
 }
 
@@ -1570,11 +1570,8 @@ fn pem_der(pem: &str) -> Vec<u8> {
 fn sign_jwt(header: &Value, payload: &Value, key_pem: &str) -> String {
     use base64::Engine;
     let b64 = |bytes: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
-    let signing_input = format!(
-        "{}.{}",
-        b64(header.to_string().as_bytes()),
-        b64(payload.to_string().as_bytes())
-    );
+    let signing_input =
+        format!("{}.{}", b64(header.to_string().as_bytes()), b64(payload.to_string().as_bytes()));
     let key_pair = ring::signature::RsaKeyPair::from_pkcs8(&pem_der(key_pem)).expect("fixture key");
     let rng = ring::rand::SystemRandom::new();
     let mut signature = vec![0u8; key_pair.public().modulus_len()];
@@ -1614,6 +1611,18 @@ fn hmac_sha256(key: &[u8], message: &[u8]) -> [u8; 32] {
     outer.update(&opad);
     outer.update(inner);
     outer.finalize().into()
+}
+
+/// A well-formed HS256 token whose tag is a real HMAC-SHA256 under a
+/// symmetric secret — only the RS256 allowlist can reject it.
+fn hs256_id_token(payload: &Value) -> String {
+    use base64::Engine;
+    let engine = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    let header = engine.encode(br#"{"alg":"HS256","kid":"sign-in"}"#);
+    let body = engine.encode(payload.to_string().as_bytes());
+    let signing_input = format!("{header}.{body}");
+    let tag = hmac_sha256(b"symmetric-secret", signing_input.as_bytes());
+    format!("{signing_input}.{}", engine.encode(tag))
 }
 
 /// A mock JWKS endpoint on 127.0.0.1:0 whose served document can be
@@ -1659,7 +1668,12 @@ impl JwksMock {
     }
 }
 
-async fn verify_id_token(token: &str, client_id: &str, nonce: &str, jwks: &JwksMock) -> Result<(), String> {
+async fn verify_id_token(
+    token: &str,
+    client_id: &str,
+    nonce: &str,
+    jwks: &JwksMock,
+) -> Result<(), String> {
     super::providers_enterprise::verify_id_token(token, client_id, nonce, &jwks.url).await
 }
 
@@ -1675,7 +1689,9 @@ async fn chatgpt_id_token_verifies_signed_token() {
         "sign-in",
         SIGNING_KEY_PEM,
     );
-    verify_id_token(&token, "oaiapp_issued", "expected", &jwks).await.expect("valid token verifies");
+    verify_id_token(&token, "oaiapp_issued", "expected", &jwks)
+        .await
+        .expect("valid token verifies");
 }
 
 #[tokio::test]
@@ -1755,17 +1771,7 @@ async fn chatgpt_id_token_rejects_unverified_signatures() {
     );
     // `alg: HS256` with a cryptographically valid HMAC tag: only the
     // RS256 allowlist rejects it (jose `algorithms: ["RS256"]`).
-    use base64::Engine;
-    let header = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .encode(br#"{"alg":"HS256","kid":"sign-in"}"#);
-    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .encode(claims.to_string().as_bytes());
-    let signing_input = format!("{header}.{payload}");
-    let tag = hmac_sha256(b"symmetric-secret", signing_input.as_bytes());
-    let hs256 = format!(
-        "{signing_input}.{}",
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(tag)
-    );
+    let hs256 = hs256_id_token(&claims);
     assert_eq!(
         verify_id_token(&hs256, "oaiapp_issued", "expected", &jwks).await.unwrap_err(),
         INVALID_ID_TOKEN
