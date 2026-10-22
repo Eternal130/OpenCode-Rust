@@ -8,7 +8,7 @@
 
      Parity fake says hello.
 
-     Build · Fake Model · 25ms · 0.0 tok/s
+     Build · Fake Model · 22ms · 0.0 tok/s
 
      Switched variant to default
 
@@ -20,7 +20,8 @@
 
      The outside file says p10-secret.
 
-     Build · Fake Model · 4.0s · 0.0 tok/s
+     Build · Fake Model · 4.1s · 0.0 tok/s
+
 
 
                                                                                                                           ⬖ Getting started                ✕
@@ -37,4 +38,3 @@
   ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
   /tmp/opencode/ref/packages/cli                                                                 18  ctrl+p commands    /tmp/opencode/ref/packages/cli
 
- ✓ Server  ○ UI  Theme  Tools  Experiments
