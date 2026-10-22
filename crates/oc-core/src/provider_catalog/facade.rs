@@ -200,7 +200,11 @@ pub struct CustomProvider {
     /// the base models resolve against.
     pub canonical: Option<String>,
     /// Console `package` (config/provider.ts:97; legacy `type` accepted)
-    /// (opencode.ts:254).
+    /// (opencode.ts:254). Decoded but UNCONSUMED until the native-
+    /// protocol-binding lane: this lane binds console providers through
+    /// the openai-compatible facade, so the package's only observable
+    /// effect today is clearing the merged Info's model-level package
+    /// (opencode.ts:272, applied in `custom_model_info`).
     pub package: Option<String>,
 }
 
