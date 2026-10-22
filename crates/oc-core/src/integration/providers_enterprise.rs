@@ -15,6 +15,7 @@
 )]
 
 use super::flows::{self, CallbackPage, LoopbackOptions};
+use super::jwks;
 use super::types::{CredentialValue, FormAnswer, FormField, Method, OAuthValue};
 use super::{AuthMode, Authorization, IntegrationHost, OAuthImplementation};
 use base64::Engine;
@@ -1155,13 +1156,19 @@ pub(super) async fn chatgpt_exchange_at(
 }
 
 async fn chatgpt_authorize(_answer: FormAnswer) -> Result<Authorization, String> {
-    chatgpt_authorize_at(FormAnswer::new(), CHATGPT_TOKEN_URL).await
+    chatgpt_authorize_at(
+        FormAnswer::new(),
+        CHATGPT_TOKEN_URL,
+        &format!("{OPENAI_ISSUER}/.well-known/jwks.json"),
+    )
+    .await
 }
 
-/// The connector with an explicit token URL (test seam).
+/// The connector with explicit token + JWKS URLs (test seams).
 pub(super) async fn chatgpt_authorize_at(
     _answer: FormAnswer,
     token_url: &str,
+    jwks_url: &str,
 ) -> Result<Authorization, String> {
     let Pkce { verifier, challenge } = openai_pkce();
     let state = flows::random_state(32);
@@ -1176,6 +1183,7 @@ pub(super) async fn chatgpt_authorize_at(
     .map_err(|error| format!("failed to bind loopback listener: {error}"))?;
     let redirect = format!("http://127.0.0.1:{}/auth/callback", listener.port);
     let token_url = token_url.to_owned();
+    let jwks_url = jwks_url.to_owned();
     let scope =
         format!("openid profile email offline_access resource.invoke {CHATGPT_SHARING_SCOPE}");
     let url = format!(
@@ -1223,7 +1231,7 @@ pub(super) async fn chatgpt_authorize_at(
         if id_token.is_empty() {
             return Err("ChatGPT sign-in did not return an ID token.".into());
         }
-        verify_id_token_claims(&id_token, &client_id, &nonce)?;
+        verify_id_token(&id_token, &client_id, &nonce, &jwks_url).await?;
         let scopes: Vec<Value> = scope
             .split(' ')
             .filter(|part| !part.is_empty())
@@ -1249,32 +1257,54 @@ pub(super) async fn chatgpt_authorize_at(
     })
 }
 
-/// The claim checks from v2's `verifyIDToken` (chatgpt.ts:439-461):
-/// issuer, audience, expiry, nonce, subject. RS256 signature verification
-/// against the JWKS endpoint is NOT performed — no JWT library exists in
-/// this workspace (deferred; see docs/be3b.log).
-fn verify_id_token_claims(id_token: &str, client_id: &str, nonce: &str) -> Result<(), String> {
-    let claims =
-        flows::jwt_claims(id_token).ok_or("ChatGPT sign-in returned an invalid ID token.")?;
-    let invalid = "ChatGPT sign-in returned an invalid ID token.";
+/// v2's `verifyIDToken` (chatgpt.ts:439-459): RS256 signature
+/// verification against the JWKS endpoint, then the claim checks —
+/// issuer, audience, expiry, required claims, subject, sign-in nonce.
+/// Every failure surfaces as v2's single generic message; the specific
+/// cause goes to the server-side log (v2 attaches it as `cause`).
+pub(crate) async fn verify_id_token(
+    id_token: &str,
+    client_id: &str,
+    nonce: &str,
+    jwks_url: &str,
+) -> Result<(), String> {
+    const INVALID: &str = "ChatGPT sign-in returned an invalid ID token.";
+    fn reject(cause: &str) -> String {
+        eprintln!("[chatgpt] ID token rejected: {cause}");
+        INVALID.to_owned()
+    }
+    if let Err(cause) = jwks::RemoteJwks::new(jwks_url).verify(id_token).await {
+        return Err(reject(&cause));
+    }
+    let Some(claims) = flows::jwt_claims(id_token) else {
+        return Err(reject("token payload is not a JSON object"));
+    };
     if claims.get("iss").and_then(Value::as_str) != Some(OPENAI_ISSUER) {
-        return Err(invalid.into());
+        return Err(reject("issuer does not match https://auth.openai.com"));
     }
     if claims.get("aud").and_then(Value::as_str) != Some(client_id) {
-        return Err(invalid.into());
+        return Err(reject("audience does not match the registered client"));
     }
     let Some(exp) = claims.get("exp").and_then(Value::as_f64) else {
-        return Err(invalid.into());
+        return Err(reject("exp claim is missing or not a number"));
     };
-    if (exp * 1000.0) as i64 <= now_ms() {
-        return Err(invalid.into());
+    // jose 6.0.11 rejects when `exp <= epoch` (clockTolerance 0): a
+    // token whose expiry is exactly now is already expired.
+    if ((exp * 1000.0) as i64) <= now_ms() {
+        return Err(reject("token is expired"));
     }
-    if claims.get("nonce").and_then(Value::as_str) != Some(nonce) {
-        return Err("ChatGPT sign-in ID token nonce does not match this sign-in attempt.".into());
-    }
-    let subject = claims.get("sub").and_then(Value::as_str).unwrap_or_default();
+    let Some(subject) = claims.get("sub").and_then(Value::as_str) else {
+        return Err(reject("required claim sub is missing"));
+    };
     if subject.trim().is_empty() {
-        return Err("ChatGPT sign-in ID token subject is missing.".into());
+        return Err(reject("ID token subject is missing"));
+    }
+    match claims.get("nonce").and_then(Value::as_str) {
+        None => return Err(reject("required claim nonce is missing")),
+        Some(claim) if claim != nonce => {
+            return Err(reject("ID token nonce does not match this sign-in attempt"));
+        }
+        Some(_) => {}
     }
     Ok(())
 }
