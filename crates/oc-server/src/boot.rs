@@ -546,6 +546,26 @@ pub fn location_custom_providers(
     providers_from_config(&location_config(engine, location)).custom
 }
 
+/// The console-issued custom providers (integration `opencode`) visible
+/// on the model listing surfaces (I1): the SAME shared snapshot the
+/// resolver's console branch reads — `bind` obtains it through
+/// `engine.integration.console_providers()` (engine/mod.rs:486,827), and
+/// the host's refresh already produced these entries via
+/// `console::to_custom_providers`, so there is no second source of
+/// truth. Sorted by id for a deterministic listing order (the shared
+/// snapshot iterates unordered).
+#[must_use]
+pub fn console_custom_providers(engine: &oc_core::engine::Engine) -> Vec<CustomProvider> {
+    let mut providers: Vec<CustomProvider> = engine
+        .integration
+        .console_providers()
+        .entries_iter()
+        .map(|(_, provider)| provider)
+        .collect();
+    providers.sort_by(|a, b| a.id.cmp(&b.id));
+    providers
+}
+
 /// The config `model` default selection visible at a location.
 #[must_use]
 pub fn location_default_model(

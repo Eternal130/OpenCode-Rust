@@ -61,6 +61,7 @@ use serde_json::Value;
 
 use oc_ai::route::auth;
 use oc_ai::route::client::RoutePatch;
+use oc_ai::schema::options::{merge_json_records, merge_string_records};
 
 use crate::database::schema::SessionRow;
 use crate::provider_catalog::facade::{
@@ -826,7 +827,11 @@ fn merge_compatibility(
 /// `config.modelID ?? key`), else the zero defaults with the console
 /// fields alone: cost REPLACES, limit and capabilities merge per field,
 /// base cost/limits/capabilities survive where the console is silent.
-fn custom_model_info(
+/// Public for the listing seam: the oc-server model handlers render
+/// console-issued providers through this merge so `/api/model` shows
+/// the merged values (I1) — the same single source of truth `bind`
+/// uses.
+pub fn custom_model_info(
     custom: &CustomProvider,
     model_key: &str,
     catalog: &Catalog,
@@ -915,6 +920,32 @@ fn custom_model_info(
             input: limit.input.or(info.limit.input),
             output: limit.output.unwrap_or(info.limit.output),
         };
+    }
+    // M3 — v2's model-overlay rules on the merged Info (opencode.ts:272,
+    // 276-281): the provider-level package takes over the base's
+    // model-level package (cleared on the Info; the binding reads the
+    // provider package), and the model's own overlays — settings.baseURL,
+    // headers, body — merge onto the base Info per key (mergeOverlay
+    // semantics: the base record under the model overlay).
+    if custom.package.is_some() {
+        info.package = None;
+    }
+    if let Some(headers) = &model.headers {
+        info.headers = merge_string_records(&[info.headers.as_ref(), Some(headers)]);
+    }
+    if let Some(body) = &model.body {
+        let record = |body: &BTreeMap<String, Value>| {
+            serde_json::Map::from_iter(body.iter().map(|(key, value)| (key.clone(), value.clone())))
+        };
+        let base = info.body.as_ref().map(|body| record(body));
+        let overlay = Some(record(body));
+        info.body = merge_json_records(&[base.as_ref(), overlay.as_ref()])
+            .map(|merged| BTreeMap::from_iter(merged));
+    }
+    if let Some(base_url) = model.base_url.as_deref().filter(|url| !url.is_empty()) {
+        let mut settings = info.settings.take().unwrap_or_default();
+        settings.rest.insert("baseURL".to_owned(), Value::String(base_url.to_owned()));
+        info.settings = Some(settings);
     }
     info
 }
@@ -1064,6 +1095,46 @@ mod console_merge_tests {
         custom.models[0].limit = None;
         let info = custom_model_info(&custom, "claude-opus-4-5", &catalog);
         assert_eq!(info.capabilities, base.capabilities, "base found by the console key");
+    }
+
+    /// M3 — v2's model-overlay rules on the merged Info (opencode.ts:272,
+    /// 276-281): the provider-level package clears the base's model-level
+    /// package, and the model's own headers/body/settings.baseURL ride
+    /// the merged Info (mergeOverlay semantics, base under model — the
+    /// catalog base carries no headers/body here, so the model's own
+    /// overlays land directly).
+    #[test]
+    fn custom_model_info_applies_model_overlays_and_clears_package() {
+        let catalog = catalog();
+        let mut custom = console_custom();
+        custom.canonical = Some("anthropic".into());
+        custom.package = Some("@opencode/ai/providers/openai-compatible".into());
+        custom.models[0].model_id = Some("claude-opus-4-5".into());
+        custom.models[0].capabilities = None;
+        custom.models[0].cost = None;
+        custom.models[0].limit = None;
+        custom.models[0].headers =
+            Some(BTreeMap::from([("x-model".to_owned(), "model".to_owned())]));
+        custom.models[0].body =
+            Some(BTreeMap::from([("temperature".to_owned(), serde_json::json!(0.3))]));
+        custom.models[0].base_url = Some("https://model.acme.test/v1".into());
+        let info = custom_model_info(&custom, "acme-large", &catalog);
+        // The base merged (its release date rides the result) — the
+        // provider-level package still clears the model package.
+        assert!(info.time.released.0 > 0.0, "the catalog base merged");
+        assert_eq!(info.package, None, "provider-level package clears the model package");
+        assert_eq!(
+            info.headers.as_ref().and_then(|headers| headers.get("x-model")).map(String::as_str),
+            Some("model")
+        );
+        assert_eq!(
+            info.body.as_ref().and_then(|body| body.get("temperature")),
+            Some(&serde_json::json!(0.3))
+        );
+        assert_eq!(
+            info.settings.as_ref().and_then(|settings| settings.rest.get("baseURL")),
+            Some(&serde_json::json!("https://model.acme.test/v1"))
+        );
     }
 
     fn console_resolver(
