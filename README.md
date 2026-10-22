@@ -51,7 +51,7 @@ Performance (measured on Linux, vs upstream v2 on Bun): `--version` 3 ms vs 744 
 | `tools/parity` | Parity harness: golden frames, scenarios, replays, acceptance batteries |
 | `tools/openapi-gen` | OpenAPI contract generator |
 
-Design docs: [MIGRATION.md](./MIGRATION.md) (plan & decision log), [PORT_REPORT.md](./PORT_REPORT.md) (delivery report & honest residual list).
+Design docs: [MIGRATION.md](./MIGRATION.md) (plan & decision log), [PORT_REPORT.md](./PORT_REPORT.md) (delivery report & honest residual list), [docs/GAPS-AND-PITFALLS.md](./docs/GAPS-AND-PITFALLS.md) (open gaps & operational incident register).
 
 ## Build
 
