@@ -877,6 +877,14 @@ port (its own lane), not with any theme-table change.
 > pair one release). The K-1..K-9 registered keymap deltas dissolved
 > here — the dispatch semantics now ARE upstream 0.5.14's (v2's
 > engine), no case special-cased.
+>
+> **Retired 2026-10-22 (M-engine-retire)**: after the one-release
+> window closed (beta.13), the legacy pair and the flag were deleted
+> — the opentui ports are the ONLY engine path. The `EngineSel`/`EditCore`
+> dual-dispatch arms collapsed to the direct opentui types; the
+> parity suites died with the engine they compared against (the
+> upstream-faithful deltas below are now THE semantics, pinned by the
+> promoted opentui-only tests).
 
 ## The subsystem pattern (what differs from the surface lanes)
 
@@ -964,6 +972,6 @@ port (its own lane), not with any theme-table change.
 * **Release size**: 66,231,424 → 66,727,072 B (**+495,648 B ≈
   +484 KiB, +0.75%**).
 * **Flag protocol**: default flipped ON after the proof;
-  `OC_ENGINE_OPENTUI=0` keeps the hand-rolled pair one release (the
-  retirement lane removes text_edit.rs + keymap/engine.rs and the
-  enum hops).
+  `OC_ENGINE_OPENTUI=0` kept the hand-rolled pair one release —
+  the M-engine-retire lane (2026-10-22) then removed the flag,
+  text_edit.rs + keymap/engine.rs, and the enum hops.
