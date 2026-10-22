@@ -186,6 +186,7 @@ async fn model_default(
                     name: None,
                     headers: None,
                     body: None,
+                    ..oc_core::provider_catalog::facade::CustomModel::default()
                 });
             Some(custom_model_json(&provider, &model))
         } else {

@@ -64,7 +64,8 @@ use oc_ai::route::client::RoutePatch;
 
 use crate::database::schema::SessionRow;
 use crate::provider_catalog::facade::{
-    custom_language_model, language_model_for_model, CustomProvider, FacadeContext, ModelConnection,
+    custom_language_model, language_model_for_model, CustomModel, CustomProvider, FacadeContext,
+    ModelConnection,
 };
 use crate::provider_catalog::native::package_name;
 use crate::provider_catalog::Catalog;
@@ -256,7 +257,7 @@ impl CatalogModelResolver {
                     .unwrap_or_else(|| reference.id.0.clone());
                 let model = custom_language_model(&self.context, custom, &canonical_model)
                     .map_err(|error| map_custom(error, &custom.id, &canonical_model))?;
-                let info = custom_model_info(custom);
+                let info = custom_model_info(custom, &canonical_model, &self.catalog());
                 let canonical = oc_schema::model::Ref {
                     provider_id: oc_schema::id::ProviderId::parse(custom.id.clone()),
                     id: oc_schema::id::ModelId::parse(canonical_model),
@@ -293,9 +294,23 @@ impl CatalogModelResolver {
                     .find(|model| model.id.eq_ignore_ascii_case(&reference.id.0))
                     .map(|model| model.id.clone())
                     .unwrap_or_else(|| reference.id.0.clone());
+                // Console baseURL precedence (opencode.ts:273-281): the
+                // model-level overlay (applied inside the facade) > the
+                // provider-level console baseURL > the catalog base. A
+                // provider-level console baseURL DELETES the inherited
+                // base-model baseURL (opencode.ts:273), so the catalog
+                // base only ever fills an empty provider endpoint.
+                if provider.base_url.is_empty() {
+                    if let Some(model) =
+                        provider.models.iter().find(|model| model.id == canonical_model)
+                    {
+                        provider.base_url =
+                            console_catalog_base_url(&provider, model, &self.catalog());
+                    }
+                }
                 let model = custom_language_model(&self.context, &provider, &canonical_model)
                     .map_err(|error| map_custom(error, &provider.id, &canonical_model))?;
-                let info = custom_model_info(&provider);
+                let info = custom_model_info(&provider, &canonical_model, &self.catalog());
                 let canonical = oc_schema::model::Ref {
                     provider_id: oc_schema::id::ProviderId::parse(provider.id.clone()),
                     id: oc_schema::id::ModelId::parse(canonical_model),
@@ -710,26 +725,502 @@ fn map_custom(
     map_provider(error, provider, model)
 }
 
-/// A minimal model info for custom providers (cost-less; limits unknown).
-fn custom_model_info(custom: &CustomProvider) -> oc_schema::model::Info {
-    oc_schema::model::Info {
-        id: oc_schema::id::ModelId::parse(String::new()),
-        model_id: oc_schema::id::ModelId::parse(String::new()),
-        provider_id: oc_schema::id::ProviderId::parse(custom.id.clone()),
-        canonical: None,
-        family: None,
-        name: String::new(),
-        compatibility: None,
-        package: None,
-        settings: None,
-        headers: None,
-        body: None,
-        capabilities: oc_schema::model::Capabilities::default(),
-        variants: Vec::new(),
-        time: oc_schema::model::ModelTime { released: oc_schema::common::Num(0.0) },
-        cost: Vec::new(),
-        status: oc_schema::model::Status::Active,
-        enabled: true,
-        limit: oc_schema::model::ModelLimit { context: 0, input: None, output: 0 },
+/// The console/config custom model's catalog base (opencode.ts:247,264):
+/// the `canonical` provider first, else the provider id; the base model
+/// by `config.modelID ?? modelKey`, then the console key.
+fn custom_base_model<'a>(
+    catalog: &'a Catalog,
+    custom: &CustomProvider,
+    model: &CustomModel,
+) -> Option<&'a oc_schema::model::Info> {
+    let snapshot = custom
+        .canonical
+        .as_deref()
+        .and_then(|canonical| catalog.provider(canonical))
+        .or_else(|| catalog.provider(&custom.id))?;
+    let lookup = model.model_id.as_deref().unwrap_or(&model.id);
+    snapshot
+        .models
+        .iter()
+        .find(|base| base.id.0 == lookup)
+        .or_else(|| snapshot.models.iter().find(|base| base.id.0 == model.id))
+}
+
+/// The catalog-base endpoint for a console provider — the last-resort
+/// tier of the console baseURL precedence (opencode.ts:273 + the
+/// facade's catalog `api` precedence, provider.ts:346-354): the base
+/// model's `settings.baseURL`, else the catalog provider's api. Only
+/// consulted when neither console baseURL tier applies.
+fn console_catalog_base_url(
+    custom: &CustomProvider,
+    model: &CustomModel,
+    catalog: &Catalog,
+) -> String {
+    let rest_base = |rest: &oc_schema::common::Record| {
+        rest.get("baseURL").and_then(Value::as_str).unwrap_or_default().to_owned()
+    };
+    if let Some(base) = custom_base_model(catalog, custom, model) {
+        let url =
+            base.settings.as_ref().map(|settings| rest_base(&settings.rest)).unwrap_or_default();
+        if !url.is_empty() {
+            return url;
+        }
+    }
+    custom
+        .canonical
+        .as_deref()
+        .and_then(|canonical| catalog.provider(canonical))
+        .or_else(|| catalog.provider(&custom.id))
+        .and_then(|snapshot| snapshot.info.settings.as_ref())
+        .map(|settings| rest_base(&settings.rest))
+        .unwrap_or_default()
+}
+
+/// `Model.mergeCapabilities` (model.ts:32-39): per-field `config ?? base`
+/// for {tools, input, output} over the base's capabilities (already the
+/// defaults `{tools:true, input:[text,image], output:[text]}` when no
+/// base exists).
+fn merge_capabilities(
+    config: &Option<crate::provider_catalog::facade::PartialCapabilities>,
+    base: &oc_schema::model::Capabilities,
+) -> oc_schema::model::Capabilities {
+    let Some(config) = config else { return base.clone() };
+    oc_schema::model::Capabilities {
+        tools: config.tools.unwrap_or(base.tools),
+        input: config.input.clone().unwrap_or_else(|| base.input.clone()),
+        output: config.output.clone().unwrap_or_else(|| base.output.clone()),
+    }
+}
+
+/// The `{...base, ...config}` compatibility spread (opencode.ts:270-271):
+/// per-field override, unset console fields keep the base.
+fn merge_compatibility(
+    config: &oc_schema::model::Compatibility,
+    base: Option<oc_schema::model::Compatibility>,
+) -> oc_schema::model::Compatibility {
+    let mut merged = base.unwrap_or_default();
+    if config.reasoning_field.is_some() {
+        merged.reasoning_field.clone_from(&config.reasoning_field);
+    }
+    if config.require_reasoning.is_some() {
+        merged.require_reasoning = config.require_reasoning;
+    }
+    if config.max_tokens_field.is_some() {
+        merged.max_tokens_field = config.max_tokens_field;
+    }
+    if config.require_finish_reason.is_some() {
+        merged.require_finish_reason = config.require_finish_reason;
+    }
+    if config.require_assistant_after_tool.is_some() {
+        merged.require_assistant_after_tool = config.require_assistant_after_tool;
+    }
+    if config.supports_prompt_cache_key.is_some() {
+        merged.supports_prompt_cache_key = config.supports_prompt_cache_key;
+    }
+    merged
+}
+
+/// The effective model info for a custom/console provider entry — the
+/// v2 console per-model merge (opencode.ts:263-306) onto the catalog
+/// base when one exists (`canonical` provider, base model by
+/// `config.modelID ?? key`), else the zero defaults with the console
+/// fields alone: cost REPLACES, limit and capabilities merge per field,
+/// base cost/limits/capabilities survive where the console is silent.
+fn custom_model_info(
+    custom: &CustomProvider,
+    model_key: &str,
+    catalog: &Catalog,
+) -> oc_schema::model::Info {
+    let Some(model) = custom.models.iter().find(|model| model.id == model_key) else {
+        // Unreachable via bind() (the model key comes from the same list);
+        // keep the zero shape for safety.
+        return oc_schema::model::Info {
+            id: oc_schema::id::ModelId::parse(String::new()),
+            model_id: oc_schema::id::ModelId::parse(String::new()),
+            provider_id: oc_schema::id::ProviderId::parse(custom.id.clone()),
+            canonical: None,
+            family: None,
+            name: String::new(),
+            compatibility: None,
+            package: None,
+            settings: None,
+            headers: None,
+            body: None,
+            capabilities: oc_schema::model::Capabilities::default(),
+            variants: Vec::new(),
+            time: oc_schema::model::ModelTime { released: oc_schema::common::Num(0.0) },
+            cost: Vec::new(),
+            status: oc_schema::model::Status::Active,
+            enabled: true,
+            limit: oc_schema::model::ModelLimit { context: 0, input: None, output: 0 },
+        };
+    };
+    // `Object.assign(model, structuredClone(base ?? model))`
+    // (opencode.ts:266): the base clone is the starting point; without
+    // one, the config-plugin zero shape (limits 0 — handlers/model.rs
+    // `custom_model_json` documents the same default).
+    let mut info = custom_base_model(catalog, custom, model).cloned().unwrap_or_else(|| {
+        oc_schema::model::Info {
+            id: oc_schema::id::ModelId::parse(model.id.clone()),
+            model_id: oc_schema::id::ModelId::parse(model.id.clone()),
+            provider_id: oc_schema::id::ProviderId::parse(custom.id.clone()),
+            canonical: None,
+            family: None,
+            name: model.name.clone().unwrap_or_else(|| model.id.clone()),
+            compatibility: None,
+            package: None,
+            settings: None,
+            headers: None,
+            body: None,
+            capabilities: oc_schema::model::Capabilities::default(),
+            variants: Vec::new(),
+            time: oc_schema::model::ModelTime { released: oc_schema::common::Num(0.0) },
+            cost: Vec::new(),
+            status: oc_schema::model::Status::Active,
+            enabled: true,
+            limit: oc_schema::model::ModelLimit { context: 0, input: None, output: 0 },
+        }
+    });
+    // The console entry's identity rides the result (opencode.ts:265,
+    // 267-269): the console key stays the id; modelID redirects the
+    // catalog identity.
+    info.id = oc_schema::id::ModelId::parse(model.id.clone());
+    info.provider_id = oc_schema::id::ProviderId::parse(custom.id.clone());
+    if let Some(model_id) = &model.model_id {
+        info.model_id = oc_schema::id::ModelId::parse(model_id.clone());
+    }
+    if let Some(family) = &model.family {
+        info.family = Some(family.clone());
+    }
+    if let Some(name) = &model.name {
+        info.name.clone_from(name);
+    }
+    if let Some(compatibility) = &model.compatibility {
+        info.compatibility = Some(merge_compatibility(compatibility, info.compatibility.clone()));
+    }
+    // Capabilities per-field over the base (opencode.ts:274-275).
+    info.capabilities = merge_capabilities(&model.capabilities, &info.capabilities);
+    // Cost REPLACES the base wholesale (opencode.ts:294-303).
+    if let Some(cost) = &model.cost {
+        info.cost.clone_from(cost);
+    }
+    // `model.enabled = !config.disabled` (opencode.ts:304) — projection
+    // filters disabled entries before they reach the snapshot (the
+    // filter stays as-is), so every projected entry is enabled.
+    info.enabled = true;
+    // Limit per-field override (opencode.ts:305).
+    if let Some(limit) = model.limit {
+        info.limit = oc_schema::model::ModelLimit {
+            context: limit.context.unwrap_or(info.limit.context),
+            input: limit.input.or(info.limit.input),
+            output: limit.output.unwrap_or(info.limit.output),
+        };
+    }
+    info
+}
+
+#[cfg(test)]
+mod console_merge_tests {
+    use super::*;
+    use crate::provider_catalog::facade::{
+        CustomModel, CustomProvider, PartialCapabilities, PartialModelLimit,
+    };
+    use oc_schema::common::UsdPerMillionTokens;
+    use oc_schema::model::{Cost, CostCache, ModelLimit};
+    use oc_schema::provider::Settings as ProviderSettings;
+
+    fn catalog() -> Arc<Catalog> {
+        Arc::new(Catalog::embedded().clone())
+    }
+
+    fn console_cost(input: f64, output: f64) -> Cost {
+        Cost {
+            tier: None,
+            input: UsdPerMillionTokens(input.into()),
+            output: UsdPerMillionTokens(output.into()),
+            cache: CostCache {
+                read: UsdPerMillionTokens::zero(),
+                write: UsdPerMillionTokens::zero(),
+            },
+        }
+    }
+
+    fn console_custom() -> CustomProvider {
+        CustomProvider {
+            id: "acme-ai".into(),
+            name: "Acme AI".into(),
+            base_url: "https://gw.acme.test/v1".into(),
+            api_key: None,
+            headers: None,
+            body: None,
+            canonical: None,
+            package: None,
+            models: vec![CustomModel {
+                id: "acme-large".into(),
+                name: Some("Acme Large".into()),
+                headers: None,
+                body: None,
+                model_id: None,
+                family: Some("acme".into()),
+                compatibility: None,
+                capabilities: Some(PartialCapabilities {
+                    tools: Some(false),
+                    input: None,
+                    output: Some(vec!["text".into(), "image".into()]),
+                }),
+                cost: Some(vec![console_cost(3.0, 15.0)]),
+                limit: Some(PartialModelLimit {
+                    context: Some(400_000),
+                    input: Some(100_000),
+                    output: Some(64_000),
+                }),
+                base_url: None,
+            }],
+        }
+    }
+
+    /// No catalog base ⇒ defaults with the console fields populated
+    /// (opencode.ts:263-306 over a missing base): default capabilities
+    /// `{tools:true,input:[text,image],output:[text]}` per-field merged,
+    /// zero limits per-field overridden, console cost carried.
+    #[test]
+    fn custom_model_info_without_base_populates_console_fields() {
+        let custom = console_custom();
+        let info = custom_model_info(&custom, "acme-large", &catalog());
+        assert_eq!(info.id.as_str(), "acme-large");
+        assert_eq!(info.model_id.as_str(), "acme-large");
+        assert_eq!(info.provider_id.as_str(), "acme-ai");
+        assert_eq!(info.name, "Acme Large");
+        assert_eq!(info.family.as_deref(), Some("acme"));
+        // Partial capability merge over the defaults: tools overridden,
+        // input falls back to the default (text+image), output overridden.
+        assert!(!info.capabilities.tools, "console tools=false wins");
+        assert_eq!(info.capabilities.input, vec!["text".to_string(), "image".to_string()]);
+        assert_eq!(info.capabilities.output, vec!["text".to_string(), "image".to_string()]);
+        assert_eq!(
+            info.limit,
+            ModelLimit { context: 400_000, input: Some(100_000), output: 64_000 }
+        );
+        assert_eq!(info.cost, vec![console_cost(3.0, 15.0)]);
+        assert!(info.enabled);
+    }
+
+    /// Catalog-base merge (opencode.ts:247,264-305): base limits, cost and
+    /// capabilities survive where the console is silent; console fields
+    /// win per key; console cost REPLACES the base cost wholesale.
+    #[test]
+    fn custom_model_info_catalog_base_merge() {
+        let catalog = catalog();
+        let base = catalog
+            .model("anthropic", "claude-opus-4-5")
+            .expect("catalog anthropic/claude-opus-4-5")
+            .clone();
+        let mut custom = console_custom();
+        custom.id = "acme-anthropic".into();
+        custom.canonical = Some("anthropic".into());
+        custom.models[0].id = "acme-opus".into();
+        custom.models[0].model_id = Some("claude-opus-4-5".into());
+        custom.models[0].name = None;
+        // Only tools + context overridden; input/output + input/output
+        // limits come from the base; cost REPLACES.
+        custom.models[0].capabilities =
+            Some(PartialCapabilities { tools: Some(false), input: None, output: None });
+        custom.models[0].limit =
+            Some(PartialModelLimit { context: Some(123), input: None, output: None });
+        let info = custom_model_info(&custom, "acme-opus", &catalog);
+        // Identity: the console key stays the id; modelID redirects.
+        assert_eq!(info.id.as_str(), "acme-opus");
+        assert_eq!(info.model_id.as_str(), "claude-opus-4-5");
+        assert_eq!(info.provider_id.as_str(), "acme-anthropic");
+        // Name: config name absent ⇒ the base name survives.
+        assert_eq!(info.name, base.name);
+        // Capabilities: per-field over the base.
+        assert!(!info.capabilities.tools);
+        assert_eq!(info.capabilities.input, base.capabilities.input);
+        assert_eq!(info.capabilities.output, base.capabilities.output);
+        // Limit: per-field override, base keeps the unset fields.
+        assert_eq!(info.limit.context, 123);
+        assert_eq!(info.limit.input, base.limit.input);
+        assert_eq!(info.limit.output, base.limit.output);
+        // Cost: console cost REPLACES the base cost wholesale.
+        assert_eq!(info.cost, vec![console_cost(3.0, 15.0)]);
+    }
+
+    /// The base lookup honors `config.modelID` first, then the console
+    /// key (opencode.ts:264).
+    #[test]
+    fn custom_model_info_base_lookup_by_model_id_then_key() {
+        let catalog = catalog();
+        let base = catalog
+            .model("anthropic", "claude-opus-4-5")
+            .expect("catalog anthropic/claude-opus-4-5")
+            .clone();
+        let mut custom = console_custom();
+        custom.canonical = Some("anthropic".into());
+        custom.models[0].id = "claude-opus-4-5".into();
+        custom.models[0].model_id = None;
+        custom.models[0].capabilities = None;
+        custom.models[0].cost = None;
+        custom.models[0].limit = None;
+        let info = custom_model_info(&custom, "claude-opus-4-5", &catalog);
+        assert_eq!(info.capabilities, base.capabilities, "base found by the console key");
+    }
+
+    fn console_resolver(
+        console: Arc<crate::integration::console::ConsoleProviders>,
+    ) -> CatalogModelResolver {
+        CatalogModelResolver::new(
+            FacadeContext::new(Arc::new(oc_ai::route::transport::FailingTransport {
+                message: "console merge test",
+            })),
+            catalog(),
+            BTreeMap::new(),
+            Vec::new(),
+            None,
+        )
+        .with_console(console)
+    }
+
+    /// The `cohere/north-mini-code-1-0` catalog model carries its own
+    /// model-level api → `settings.baseURL` — the inherited base-model
+    /// endpoint the precedence ladder must override or honor.
+    fn inherited_base_model_url(catalog: &Catalog) -> String {
+        catalog
+            .model("cohere", "north-mini-code-1-0")
+            .expect("catalog cohere/north-mini-code-1-0")
+            .settings
+            .as_ref()
+            .and_then(|settings| settings.rest.get("baseURL"))
+            .and_then(Value::as_str)
+            .expect("base model settings baseURL")
+            .to_owned()
+    }
+
+    fn cohere_custom() -> CustomProvider {
+        CustomProvider {
+            id: "acme-cohere".into(),
+            name: "Acme Cohere".into(),
+            base_url: String::new(),
+            api_key: None,
+            headers: None,
+            body: None,
+            canonical: Some("cohere".into()),
+            package: None,
+            models: vec![CustomModel {
+                id: "north-mini-code-1-0".into(),
+                name: None,
+                headers: None,
+                body: None,
+                model_id: None,
+                family: None,
+                compatibility: None,
+                capabilities: None,
+                cost: None,
+                limit: None,
+                base_url: None,
+            }],
+        }
+    }
+
+    fn bound_base_url(custom: CustomProvider) -> String {
+        let shared = crate::integration::console::ConsoleProviders::new();
+        shared.swap_for_test(vec![custom]);
+        let resolver = console_resolver(shared);
+        let (model, _info, _canonical) = resolver
+            .bind(&oc_schema::model::Ref {
+                provider_id: oc_schema::id::ProviderId::parse("acme-cohere".to_owned()),
+                id: oc_schema::id::ModelId::parse("north-mini-code-1-0".to_owned()),
+                variant: None,
+            })
+            .expect("console provider binds");
+        model.route.endpoint.base_url.as_deref().expect("bound endpoint").to_owned()
+    }
+
+    /// baseURL precedence (opencode.ts:273-281): console model >
+    /// console provider > base/catalog model — and a console PROVIDER
+    /// baseURL deletes the inherited base-model baseURL.
+    #[test]
+    fn console_bind_base_url_precedence() {
+        let catalog = catalog();
+        let inherited = inherited_base_model_url(&catalog);
+        assert!(!inherited.is_empty());
+
+        // 3) no console baseURL ⇒ the inherited base-model endpoint binds.
+        assert_eq!(bound_base_url(cohere_custom()), inherited);
+
+        // 2) a console provider baseURL deletes the inherited base-model
+        // baseURL (opencode.ts:273) and becomes the endpoint.
+        let mut provider_level = cohere_custom();
+        provider_level.base_url = "https://gw.cohere.test/v1".into();
+        assert_eq!(bound_base_url(provider_level), "https://gw.cohere.test/v1");
+
+        // 1) a console model baseURL outranks the provider's.
+        let mut model_level = cohere_custom();
+        model_level.base_url = "https://gw.cohere.test/v1".into();
+        model_level.models[0].base_url = Some("https://model.cohere.test/v1".into());
+        assert_eq!(bound_base_url(model_level), "https://model.cohere.test/v1");
+    }
+
+    /// The catalog provider-level api is the last-resort endpoint when
+    /// the base model carries no baseURL of its own.
+    #[test]
+    fn console_bind_falls_back_to_catalog_provider_base_url() {
+        let catalog = catalog();
+        let expected = catalog
+            .provider("fireworks-ai")
+            .expect("catalog fireworks-ai")
+            .info
+            .settings
+            .as_ref()
+            .and_then(|settings: &ProviderSettings| settings.rest.get("baseURL"))
+            .and_then(Value::as_str)
+            .expect("fireworks catalog api")
+            .to_owned();
+        let shared = crate::integration::console::ConsoleProviders::new();
+        let mut custom = cohere_custom();
+        custom.canonical = Some("fireworks-ai".into());
+        let model_id = catalog
+            .provider("fireworks-ai")
+            .expect("catalog fireworks-ai")
+            .models
+            .first()
+            .expect("fireworks model")
+            .id
+            .as_str()
+            .to_owned();
+        custom.models[0].id = model_id.clone();
+        shared.swap_for_test(vec![custom]);
+        let resolver = console_resolver(shared);
+        let (model, _info, _canonical) = resolver
+            .bind(&oc_schema::model::Ref {
+                provider_id: oc_schema::id::ProviderId::parse("acme-cohere".to_owned()),
+                id: oc_schema::id::ModelId::parse(model_id),
+                variant: None,
+            })
+            .expect("console provider binds at the catalog api");
+        assert_eq!(
+            model.route.endpoint.base_url.as_deref(),
+            Some(expected.as_str()),
+            "the catalog provider api is the last-resort endpoint"
+        );
+    }
+
+    /// No endpoint anywhere (no console baseURLs, no catalog base) ⇒ the
+    /// clean typed Configuration error, never a half-bound route.
+    #[test]
+    fn console_bind_without_any_base_url_fails_cleanly() {
+        let shared = crate::integration::console::ConsoleProviders::new();
+        let mut custom = cohere_custom();
+        custom.canonical = None; // no catalog base either
+        shared.swap_for_test(vec![custom]);
+        let resolver = console_resolver(shared);
+        let error = resolver
+            .bind(&oc_schema::model::Ref {
+                provider_id: oc_schema::id::ProviderId::parse("acme-cohere".to_owned()),
+                id: oc_schema::id::ModelId::parse("north-mini-code-1-0".to_owned()),
+                variant: None,
+            })
+            .expect_err("no endpoint anywhere");
+        assert!(error.to_string().contains("baseURL"), "{error}");
     }
 }

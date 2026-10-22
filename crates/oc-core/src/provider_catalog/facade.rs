@@ -32,6 +32,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use serde::Deserialize;
 use serde_json::Value;
 
 use oc_ai::protocols::anthropic_messages::{anthropic_messages_route, anthropic_route};
@@ -124,11 +125,33 @@ impl ModelConnection {
     }
 }
 
+/// Partial capabilities overlay (`Config.Model.Capabilities`,
+/// schema config/provider.ts:76-83): unset fields fall back to the
+/// base model's capabilities, then the defaults
+/// `{tools:true, input:["text","image"], output:["text"]}`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct PartialCapabilities {
+    pub tools: Option<bool>,
+    pub input: Option<Vec<String>>,
+    pub output: Option<Vec<String>>,
+}
+
+/// Partial limit overlay (`Config.Model.Limit`, schema
+/// config/provider.ts:63-67): unset fields keep the base model's.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+pub struct PartialModelLimit {
+    pub context: Option<i64>,
+    pub input: Option<i64>,
+    pub output: Option<i64>,
+}
+
 /// One config-defined model entry (`providers.<id>.models.<model>`),
 /// keeping the per-model overlays v2 merges onto the effective model
 /// (core/src/model.ts:204-209 — provider overlays first, model overlays
-/// win per key).
-#[derive(Debug, Clone)]
+/// win per key) plus the console merge material (opencode.ts:263-306):
+/// partial capabilities, replacement cost, per-field limit, and the
+/// model-level `settings.baseURL` overlay.
+#[derive(Debug, Clone, Default)]
 pub struct CustomModel {
     pub id: String,
     /// The config display name (`models.<id>.name`,
@@ -136,14 +159,36 @@ pub struct CustomModel {
     pub name: Option<String>,
     pub headers: Option<BTreeMap<String, String>>,
     pub body: Option<BTreeMap<String, Value>>,
+    /// `models.<id>.modelID` — the catalog base-model key
+    /// (opencode.ts:264 `config.modelID ?? modelID`).
+    pub model_id: Option<String>,
+    /// `models.<id>.family` (opencode.ts:267).
+    pub family: Option<String>,
+    /// `models.<id>.compatibility` — shallow-spread merged over the
+    /// base (opencode.ts:270-271).
+    pub compatibility: Option<oc_schema::model::Compatibility>,
+    /// `models.<id>.capabilities` — per-field merged over the base
+    /// (opencode.ts:274-275, model.ts:32-39).
+    pub capabilities: Option<PartialCapabilities>,
+    /// `models.<id>.cost` — REPLACES the base cost wholesale, already
+    /// normalized single-or-array → array with cache read/write
+    /// defaulting to 0.0 (opencode.ts:294-303).
+    pub cost: Option<Vec<oc_schema::model::Cost>>,
+    /// `models.<id>.limit` — per-field override (opencode.ts:305).
+    pub limit: Option<PartialModelLimit>,
+    /// The model-level `settings.baseURL` overlay (opencode.ts:276-279):
+    /// outranks the provider-level endpoint at bind.
+    pub base_url: Option<String>,
 }
 
 /// A user-defined custom provider (v2 `provider` config custom entries):
 /// always bound through the openai-compatible facade.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct CustomProvider {
     pub id: String,
     pub name: String,
+    /// The provider-level `settings.baseURL` endpoint; empty when a
+    /// model-level overlay or a catalog base supplies the endpoint.
     pub base_url: String,
     pub api_key: Option<String>,
     /// Provider-level overlays (`providers.<id>.headers|body`) — merged
@@ -151,6 +196,12 @@ pub struct CustomProvider {
     pub headers: Option<BTreeMap<String, String>>,
     pub body: Option<BTreeMap<String, Value>>,
     pub models: Vec<CustomModel>,
+    /// Console `canonical` (opencode.ts:247,252): the catalog provider
+    /// the base models resolve against.
+    pub canonical: Option<String>,
+    /// Console `package` (config/provider.ts:97; legacy `type` accepted)
+    /// (opencode.ts:254).
+    pub package: Option<String>,
 }
 
 /// The ported protocol families a catalog package can bind to.
@@ -755,7 +806,9 @@ fn apply_model_overlays(route: &Route, model: &ModelInfo) -> Route {
 /// `baseURL`/`apiKey`/npm-less models) through the openai-compatible
 /// facade. The provider- and model-level `headers`/`body` overlays ride
 /// the route defaults (transport headers + HTTP body overlay), the seam
-/// v2's own packages use for config overlays.
+/// v2's own packages use for config overlays. A model-level
+/// `settings.baseURL` overlay outranks the provider's endpoint
+/// (opencode.ts:276-279).
 pub fn custom_language_model(
     context: &FacadeContext,
     custom: &CustomProvider,
@@ -764,6 +817,19 @@ pub fn custom_language_model(
     let Some(model) = custom.models.iter().find(|model| model.id == model_id) else {
         return Err(ProviderError::UnknownModel(custom.id.clone(), model_id.to_string()));
     };
+    // The per-model baseURL overlay wins per key over the provider's
+    // (opencode.ts:276-279 mergeOverlay).
+    let base_url =
+        model.base_url.as_deref().filter(|url| !url.is_empty()).unwrap_or(custom.base_url.as_str());
+    if base_url.is_empty() {
+        return Err(ProviderError::Configuration {
+            provider: custom.id.clone(),
+            message: format!(
+                "custom provider `{provider}` needs a baseURL (set provider.{provider}.baseURL or the model's baseURL)",
+                provider = custom.id
+            ),
+        });
+    }
     // Effective overlays: provider-level under model-level, the model
     // winning per key (v2 core/src/model.ts:204-209 + provider.ts
     // mergeOverlay/mergeHeaders:172-205).
@@ -778,26 +844,23 @@ pub fn custom_language_model(
     let body = merge_json_records(&[provider_body.as_ref(), model_body.as_ref()]);
     let headers = merge_string_records(&[custom.headers.as_ref(), model.headers.as_ref()]);
     let http = HttpOptions { body, ..Default::default() };
-    let route = openai_compatible_chat_configured(
-        Arc::clone(&context.transport),
-        &custom.id,
-        &custom.base_url,
-    )
-    .with(RoutePatch {
-        auth: Some(match custom.api_key.clone() {
-            Some(key) => bearer_auth(Some(Secret::Value(key)), &[]),
-            // No configured key: anonymous — v2's openai-compatible
-            // providers send unauthenticated requests when no credential
-            // is configured (local/loopback providers rely on it).
-            None => auth::Definition::none(),
-        }),
-        defaults: RouteDefaults {
-            headers: headers.clone(),
-            http: (http != HttpOptions::default()).then_some(http),
-            ..Default::default()
-        },
-        ..Default::default()
-    });
+    let route =
+        openai_compatible_chat_configured(Arc::clone(&context.transport), &custom.id, base_url)
+            .with(RoutePatch {
+                auth: Some(match custom.api_key.clone() {
+                    Some(key) => bearer_auth(Some(Secret::Value(key)), &[]),
+                    // No configured key: anonymous — v2's openai-compatible
+                    // providers send unauthenticated requests when no credential
+                    // is configured (local/loopback providers rely on it).
+                    None => auth::Definition::none(),
+                }),
+                defaults: RouteDefaults {
+                    headers: headers.clone(),
+                    http: (http != HttpOptions::default()).then_some(http),
+                    ..Default::default()
+                },
+                ..Default::default()
+            });
     route.model(&model.id, None).map_err(|error| ProviderError::Configuration {
         provider: custom.id.clone(),
         message: error.to_string(),
@@ -1396,7 +1459,9 @@ mod tests {
                 name: None,
                 headers: None,
                 body: None,
+                ..CustomModel::default()
             }],
+            ..CustomProvider::default()
         };
         let model =
             custom_language_model(&context, &custom, "acme-large").expect("custom provider binds");
@@ -1432,7 +1497,9 @@ mod tests {
                 name: None,
                 headers: None,
                 body: Some(BTreeMap::from([("temperature".to_string(), serde_json::json!(0))])),
+                ..CustomModel::default()
             }],
+            ..CustomProvider::default()
         };
         let model =
             custom_language_model(&context, &custom, "acme-large").expect("custom provider binds");

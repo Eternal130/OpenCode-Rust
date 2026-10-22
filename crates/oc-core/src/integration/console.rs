@@ -48,8 +48,13 @@ pub struct ConsoleProvider {
     pub canonical: Option<String>,
     #[serde(default)]
     pub name: Option<String>,
+    /// The provider package (config/provider.ts:97). v2 emits `package`;
+    /// the legacy `type` key stays accepted for payloads already in the
+    /// wild — `package` wins when both are present.
+    #[serde(default, rename = "package")]
+    package_key: Option<String>,
     #[serde(default, rename = "type")]
-    pub package: Option<String>,
+    legacy_type_key: Option<String>,
     #[serde(default)]
     pub settings: Option<Value>,
     #[serde(default)]
@@ -60,6 +65,71 @@ pub struct ConsoleProvider {
     pub models: Option<BTreeMap<String, ConsoleModel>>,
 }
 
+impl ConsoleProvider {
+    /// The effective package: `package` primary, legacy `type` fallback.
+    #[must_use]
+    pub fn package(&self) -> Option<String> {
+        self.package_key.clone().or_else(|| self.legacy_type_key.clone())
+    }
+}
+
+/// `Config.Model.Cost.Cache` (config/provider.ts:48-51) — both fields
+/// optional; missing read/write normalize to 0.0.
+#[derive(Debug, Clone, Copy, Deserialize, Default)]
+pub struct ConsoleCostCache {
+    #[serde(default)]
+    pub read: Option<oc_schema::common::UsdPerMillionTokens>,
+    #[serde(default)]
+    pub write: Option<oc_schema::common::UsdPerMillionTokens>,
+}
+
+/// `Config.Model.Cost` (config/provider.ts:53-61) — tolerant decode.
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub struct ConsoleCost {
+    #[serde(default)]
+    pub tier: Option<oc_schema::model::CostTier>,
+    pub input: oc_schema::common::UsdPerMillionTokens,
+    pub output: oc_schema::common::UsdPerMillionTokens,
+    #[serde(default)]
+    pub cache: Option<ConsoleCostCache>,
+}
+
+impl ConsoleCost {
+    /// The normalized `Model.Cost` (opencode.ts:294-303): missing cache
+    /// read/write become 0.0 USD per million tokens.
+    #[must_use]
+    pub fn normalized(&self) -> oc_schema::model::Cost {
+        oc_schema::model::Cost {
+            tier: self.tier,
+            input: self.input,
+            output: self.output,
+            cache: oc_schema::model::CostCache {
+                read: self.cache.and_then(|cache| cache.read).unwrap_or_default(),
+                write: self.cache.and_then(|cache| cache.write).unwrap_or_default(),
+            },
+        }
+    }
+}
+
+/// `cost` accepts a single entry or an array (config/provider.ts:88).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum ConsoleCostInput {
+    Single(ConsoleCost),
+    Array(Vec<ConsoleCost>),
+}
+
+impl ConsoleCostInput {
+    /// The decoded entries in wire order.
+    #[must_use]
+    pub fn entries(&self) -> &[ConsoleCost] {
+        match self {
+            Self::Single(cost) => std::slice::from_ref(cost),
+            Self::Array(entries) => entries,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct ConsoleModel {
     #[serde(default, rename = "modelID")]
@@ -68,6 +138,24 @@ pub struct ConsoleModel {
     pub name: Option<String>,
     #[serde(default)]
     pub disabled: Option<bool>,
+    /// `models.<id>.family` (opencode.ts:267).
+    #[serde(default)]
+    pub family: Option<String>,
+    /// `models.<id>.compatibility` (opencode.ts:270-271) — the schema
+    /// `Model.Compatibility`, shallow-spread merged over the base.
+    #[serde(default)]
+    pub compatibility: Option<oc_schema::model::Compatibility>,
+    /// `models.<id>.capabilities` (config/provider.ts:76-83) — partial;
+    /// per-field merged over the base at resolution.
+    #[serde(default)]
+    pub capabilities: Option<crate::provider_catalog::facade::PartialCapabilities>,
+    /// `models.<id>.cost` (config/provider.ts:88) — single or array.
+    #[serde(default)]
+    pub cost: Option<ConsoleCostInput>,
+    /// `models.<id>.limit` (config/provider.ts:63-67) — per-field
+    /// override.
+    #[serde(default)]
+    pub limit: Option<crate::provider_catalog::facade::PartialModelLimit>,
     #[serde(default)]
     pub settings: Option<Value>,
     #[serde(default)]
@@ -205,10 +293,12 @@ fn without_credentials(settings: &Value) -> Value {
     }
 }
 
-/// Projects console providers onto custom-provider route material.
-/// Provider-level `settings.baseURL` becomes the endpoint (the
-/// openai-compatible binding needs one); per-model baseURL overlays and
-/// capability/cost/limit merges stay deferred (logged in be3b.log).
+/// Projects console providers onto custom-provider route material (the
+/// v2 console projection, opencode.ts:245-315): the capability/cost/
+/// limit merge fields and the per-model `settings.baseURL` overlay ride
+/// the models; the resolver (opencode.ts:263-306) merges them onto the
+/// catalog base at resolution. Credentials never ride provider settings
+/// (opencode.ts:547-552 withoutCredentials).
 #[must_use]
 pub fn to_custom_providers(config: &ConsoleConfig) -> Vec<CustomProvider> {
     config
@@ -216,7 +306,8 @@ pub fn to_custom_providers(config: &ConsoleConfig) -> Vec<CustomProvider> {
         .iter()
         .filter_map(|(id, provider)| {
             let settings = provider.settings.as_ref().map_or(Value::Null, without_credentials);
-            let base_url = settings.get("baseURL").and_then(Value::as_str)?.to_owned();
+            let base_url =
+                settings.get("baseURL").and_then(Value::as_str).unwrap_or_default().to_owned();
             let models: Vec<CustomModel> = provider
                 .models
                 .as_ref()
@@ -224,16 +315,48 @@ pub fn to_custom_providers(config: &ConsoleConfig) -> Vec<CustomProvider> {
                     models
                         .iter()
                         .filter(|(_, model)| model.disabled != Some(true))
-                        .map(|(model_id, model)| CustomModel {
-                            id: model_id.clone(),
-                            name: model.name.clone(),
-                            headers: model.headers.clone(),
-                            body: model.body.clone(),
+                        .map(|(model_id, model)| {
+                            let model_settings =
+                                model.settings.as_ref().map_or(Value::Null, without_credentials);
+                            CustomModel {
+                                id: model_id.clone(),
+                                name: model.name.clone(),
+                                headers: model.headers.clone(),
+                                body: model.body.clone(),
+                                model_id: model.model_id.clone(),
+                                family: model.family.clone(),
+                                compatibility: model.compatibility.clone(),
+                                capabilities: model.capabilities.clone(),
+                                // Cost REPLACES the base wholesale, normalized
+                                // single-or-array → array with cache read/write
+                                // defaulting to 0.0 (opencode.ts:294-303).
+                                cost: model.cost.as_ref().map(|cost| {
+                                    cost.entries().iter().map(ConsoleCost::normalized).collect()
+                                }),
+                                limit: model.limit,
+                                // The per-model baseURL overlay (opencode.ts:
+                                // 276-279) — outranks the provider's at bind.
+                                base_url: model_settings
+                                    .get("baseURL")
+                                    .and_then(Value::as_str)
+                                    .map(str::to_owned),
+                            }
                         })
                         .collect()
                 })
                 .unwrap_or_default();
             if models.is_empty() {
+                return None;
+            }
+            // Provider admission: a provider-level baseURL OR any model's
+            // baseURL satisfies the endpoint requirement (the openai-
+            // compatible binding needs one; the resolver falls back to the
+            // catalog base at bind).
+            if base_url.is_empty()
+                && !models
+                    .iter()
+                    .any(|model| model.base_url.as_deref().is_some_and(|url| !url.is_empty()))
+            {
                 return None;
             }
             Some(CustomProvider {
@@ -244,6 +367,8 @@ pub fn to_custom_providers(config: &ConsoleConfig) -> Vec<CustomProvider> {
                 headers: provider.headers.clone(),
                 body: provider.body.clone(),
                 models,
+                canonical: provider.canonical.clone(),
+                package: provider.package(),
             })
         })
         .collect()
