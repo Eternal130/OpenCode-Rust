@@ -21,7 +21,7 @@ async fn get(
     uri: Uri,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let mut config_loader = oc_core::config::Loader::new(
         location.as_path().to_path_buf(),
         oc_core::config::GlobalDirs {

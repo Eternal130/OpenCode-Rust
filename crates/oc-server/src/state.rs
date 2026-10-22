@@ -86,6 +86,18 @@ pub struct AppState {
     /// boots without it (tests); `/api/plugin` and the engine seams hang
     /// off it.
     pub plugins: Option<Arc<crate::plugins::PluginBoot>>,
+    /// The server's launch directory — v2's server-process `cwd`
+    /// (`server/src/location.ts:57-65 requestRef` falls back to
+    /// `process.cwd()` of the SERVER process, which v2 always spawns in
+    /// the project directory). The Rust production entries coincide
+    /// (`BootOptions.config_location` defaults to the process cwd); an
+    /// EMBEDDED boot (`boot_and_serve` with an explicit config
+    /// location) runs inside a host process whose cwd is unrelated to
+    /// the server, so [`crate::boot::boot_and_serve`] pins this field
+    /// and the location-less request fallback rides it instead of
+    /// `std::env::current_dir()`. `None` (bare `AppState::new`
+    /// constructions) keeps v2's literal per-request `process.cwd()`.
+    pub boot_location: Option<PathBuf>,
     /// Well-known integration sources restored into the host registry at
     /// first use (v2's `WellKnownPlugin` boot transform).
     pub wellknown_restore: std::sync::OnceLock<bool>,
@@ -125,6 +137,7 @@ impl AppState {
             announce: crate::announce::Announcer::new(),
             shutdown,
             plugins: None,
+            boot_location: None,
             wellknown_restore: std::sync::OnceLock::new(),
         }
     }

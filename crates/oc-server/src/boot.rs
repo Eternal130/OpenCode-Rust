@@ -259,6 +259,10 @@ pub async fn boot_and_serve(options: &BootOptions) -> io::Result<ServeHandle> {
         Arc::new(UuidV4IdGen),
         Arc::new(SystemClock),
     );
+    // The location-less request fallback is the SERVER's launch
+    // directory (v2 requestRef's server-process cwd) — the config
+    // location this boot resolved, never the embedding host's cwd.
+    app_state.boot_location = Some(config_location.clone());
     app_state.cors_origins.extend(options.cors_origins.iter().cloned());
     // R-09 — the persistent-PTY cross-restart handover
     // (`server-process.ts:46-57` → `daemon.ts:403-428`): claim the

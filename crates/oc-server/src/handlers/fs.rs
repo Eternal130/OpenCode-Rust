@@ -23,10 +23,11 @@ pub fn routes() -> axum::Router<SharedState> {
 }
 
 fn resolve_location_for_fs(
+    state: &SharedState,
     uri: &Uri,
     headers: &HeaderMap,
 ) -> Result<oc_core::location::LocationRef, ApiError> {
-    super::common::resolve_location(uri.query().unwrap_or_default(), headers)
+    super::common::resolve_location(state, uri.query().unwrap_or_default(), headers)
 }
 
 fn detect_mime(bytes: &[u8]) -> Option<&'static str> {
@@ -147,7 +148,7 @@ async fn read(
     uri: Uri,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location_for_fs(&uri, &headers)?;
+    let location = resolve_location_for_fs(&state, &uri, &headers)?;
     let _services = services(&state, &location).await?;
     // axum's `Path` already percent-decodes the wildcard; decoding again
     // would mangle names that legitimately contain `%` (`a%25b` → `a%b`).
@@ -218,7 +219,7 @@ async fn list(
     uri: Uri,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location_for_fs(&uri, &headers)?;
+    let location = resolve_location_for_fs(&state, &uri, &headers)?;
     let _services = services(&state, &location).await?;
     let relative = query_field(&uri, "path").unwrap_or_default();
     let absolute = location.as_path().join(&relative);
@@ -255,7 +256,7 @@ async fn find(
     uri: Uri,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location_for_fs(&uri, &headers)?;
+    let location = resolve_location_for_fs(&state, &uri, &headers)?;
     let _services = services(&state, &location).await?;
     let Some(query) = query_field(&uri, "query") else {
         return Err(ApiError::invalid_request("query is required"));
@@ -325,7 +326,7 @@ async fn write(
     headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location_for_fs(&uri, &headers)?;
+    let location = resolve_location_for_fs(&state, &uri, &headers)?;
     let _services = services(&state, &location).await?;
     let relative = query_field(&uri, "path").unwrap_or_default();
     let absolute = location.as_path().join(&relative);

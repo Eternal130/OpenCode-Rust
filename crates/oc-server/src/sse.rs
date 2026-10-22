@@ -535,7 +535,7 @@ pub async fn session_log_response(
 
     // Session existence (session.get → 404) at the request's location.
     let location: oc_core::location::LocationRef =
-        crate::middleware::request_location(uri, headers).into();
+        crate::middleware::request_location(uri, headers, state.boot_location.as_deref()).into();
     match state.engine.session(&location, &session).await {
         Ok(Some(_)) => {}
         Ok(None) => {

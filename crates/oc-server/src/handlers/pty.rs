@@ -58,7 +58,7 @@ async fn list(
     uri: Uri,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let shared = pty_state::shared(&state);
     let data: Vec<Value> = shared.pty.list().iter().map(info_json).collect();
     Ok(json_location_data(&location.as_path().to_string_lossy(), Value::Array(data)))
@@ -70,7 +70,7 @@ async fn create(
     headers: HeaderMap,
     axum::Json(body): axum::Json<Value>,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let shared = pty_state::shared(&state);
     let input = CreateInput {
         command: body["command"].as_str().map(String::from),
@@ -106,7 +106,7 @@ async fn get(
     uri: Uri,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let shared = pty_state::shared(&state);
     let info = shared.pty.get(&oc_core::pty::PtyId(pty_id.clone())).map_err(|error| {
         crate::errors::debug_cause("pty:pty_not_found", &error);
@@ -122,7 +122,7 @@ async fn update(
     headers: HeaderMap,
     axum::Json(body): axum::Json<Value>,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let shared = pty_state::shared(&state);
     let input = UpdateInput {
         title: body["title"].as_str().map(String::from),
@@ -166,7 +166,7 @@ async fn connect_token(
     if !origin_allowed(&state, &headers) {
         return Err(ApiError::forbidden("origin not allowed"));
     }
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let shared = pty_state::shared(&state);
     if shared.pty.get(&oc_core::pty::PtyId(pty_id.clone())).is_err() {
         return Err(ApiError::pty_not_found(&pty_id));
@@ -247,7 +247,7 @@ async fn connect(
     let query = uri.query().unwrap_or_default();
     let directory =
         parse_query_field(query, "location[directory]").map(|value| percent_decode(&value));
-    let location = match resolve_location(query, &headers) {
+    let location = match resolve_location(&state, query, &headers) {
         Ok(location) => location,
         Err(_) if directory.is_some() => {
             let path = std::path::PathBuf::from(directory.clone().unwrap_or_default());
