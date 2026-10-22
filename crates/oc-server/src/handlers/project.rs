@@ -191,7 +191,7 @@ async fn worktree_list(
     uri: Uri,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let services = services(&state, &location).await?;
     let Some(project_id) = query_field(&uri, "projectID") else {
         return Err(ApiError::invalid_request("projectID is required"));
@@ -847,7 +847,7 @@ async fn vcs_get(
     uri: Uri,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let services = services(&state, &location).await?;
     // The wire schema (`VcsInfo`: `branch.current` — the generated
     // client's `VcsBranch` and the ref's `Info` agree; a flat string
@@ -874,7 +874,7 @@ async fn vcs_base(
     // v2 vcs.base (handlers/vcs.ts + plugin/vcs/git.ts:286-317): reflog
     // "branch: Created from <origin>" first, default-branch fallback
     // second, DiffError → 503 ServiceUnavailableError{service:"vcs"}.
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let services = services(&state, &location).await?;
     let scope = services.project.canonical.as_path();
     let unavailable =
@@ -1085,7 +1085,7 @@ async fn vcs_branch_list(
     // v2 vcs.branch.list → `Vcs.BranchList` = bare string[]
     // (git.ts:228-241): case-insensitive for-each-ref over local+remote
     // namespaces, committerdate-then-refname ordering, /HEAD filtered.
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let services = services(&state, &location).await?;
     let search = query_field(&uri, "search");
     let limit = query_field(&uri, "limit")
@@ -1188,7 +1188,7 @@ async fn vcs_diff(
     uri: Uri,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let services = services(&state, &location).await?;
     let base_param = query_field(&uri, "base");
     let context = query_field(&uri, "context").and_then(|value| value.parse::<i64>().ok());
@@ -1566,7 +1566,7 @@ async fn vcs_status(
     uri: Uri,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let services = services(&state, &location).await?;
     let output =
         git_output(services.project.canonical.as_path(), &["status", "--porcelain=v1", "-z"])
@@ -1603,7 +1603,7 @@ async fn vcs_init(
     uri: Uri,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let services = services(&state, &location).await?;
     let provider = query_field(&uri, "provider");
     if let Some(provider) = provider {

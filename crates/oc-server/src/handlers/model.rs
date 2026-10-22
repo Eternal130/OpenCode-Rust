@@ -147,7 +147,7 @@ async fn model_list(
     uri: Uri,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let _services = services(&state, &location).await?;
     let data = location_model_entries(&state.engine, &location).await;
     Ok(json_location_data(&location.as_path().to_string_lossy(), Value::Array(data)))
@@ -158,7 +158,7 @@ async fn model_default(
     uri: Uri,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let _services = services(&state, &location).await?;
     // The configured `model` selection wins (v2 `Config.model`).
     let configured = crate::boot::location_default_model(&state.engine, &location);
@@ -228,7 +228,7 @@ async fn provider_list(
     uri: Uri,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let _services = services(&state, &location).await?;
     let catalog = state.engine.catalog_service.get();
     let data: Vec<Value> = catalog.providers().iter().map(provider_json).collect();
@@ -241,7 +241,7 @@ async fn provider_get(
     uri: Uri,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let _services = services(&state, &location).await?;
     let catalog = state.engine.catalog_service.get();
     let snapshot =

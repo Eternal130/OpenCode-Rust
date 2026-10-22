@@ -244,11 +244,23 @@ pub fn dispatch_gate_passes(
 // ---------------------------------------------------------------------------
 
 /// Derives the request location ref: `location[directory]` query →
-/// `x-opencode-directory` header (URI-decoded, malformed → raw) → cwd.
+/// `x-opencode-directory` header (URI-decoded, malformed → raw) → the
+/// server's launch directory.
+///
+/// The fallback mirrors v2's `requestRef` (`server/src/location.ts:
+/// 57-65`): `process.cwd()` OF THE SERVER PROCESS — v2 spawns the
+/// server in the project directory, so a location-less request means
+/// "the server's home location". The Rust production entries coincide
+/// with the process cwd, but an EMBEDDED server
+/// (`boot_and_serve` with an explicit `config_location`) lives in a
+/// host process whose cwd is unrelated to the server, so callers pass
+/// [`crate::state::AppState::boot_location`] as `fallback`; `None`
+/// keeps the raw process cwd (unit tests, non-server derivations).
 #[must_use]
 pub fn request_location(
     uri: &axum::http::Uri,
     headers: &axum::http::HeaderMap,
+    fallback: Option<&std::path::Path>,
 ) -> oc_schema::location::Ref {
     let directory = crate::auth::query_param(uri.query(), "location[directory]")
         .filter(|value| !value.is_empty())
@@ -259,8 +271,13 @@ pub fn request_location(
                 .map(crate::auth::percent_decode)
         })
         .unwrap_or_else(|| {
-            std::env::current_dir()
-                .map_or_else(|_| ".".to_owned(), |path| path.display().to_string())
+            fallback.map_or_else(
+                || {
+                    std::env::current_dir()
+                        .map_or_else(|_| ".".to_owned(), |path| path.display().to_string())
+                },
+                |path| path.display().to_string(),
+            )
         });
     oc_schema::location::Ref {
         directory: oc_schema::common::AbsolutePath(directory),
@@ -359,7 +376,7 @@ mod tests {
             .path_and_query("/api/session?location%5Bdirectory%5D=%2Ffrom%2Fquery")
             .build()
             .unwrap();
-        let location = request_location(&uri, &axum::http::HeaderMap::new());
+        let location = request_location(&uri, &axum::http::HeaderMap::new(), None);
         assert_eq!(location.directory.0, "/from/query");
 
         let uri = axum::http::Uri::from_static("/api/session");
@@ -368,7 +385,7 @@ mod tests {
             axum::http::HeaderName::from_static("x-opencode-directory"),
             HeaderValue::from_str("/from%20header").unwrap(),
         );
-        let location = request_location(&uri, &headers);
+        let location = request_location(&uri, &headers, None);
         assert_eq!(location.directory.0, "/from header");
 
         // Malformed escape falls back to the raw value.
@@ -377,11 +394,20 @@ mod tests {
             axum::http::HeaderName::from_static("x-opencode-directory"),
             HeaderValue::from_str("/100%").unwrap(),
         );
-        let location = request_location(&uri, &headers);
+        let location = request_location(&uri, &headers, None);
         assert_eq!(location.directory.0, "/100%");
 
+        // The server-launch fallback (v2's server-process cwd) wins
+        // over the host process's cwd when provided.
+        let location = request_location(
+            &uri,
+            &axum::http::HeaderMap::new(),
+            Some(std::path::Path::new("/boot/project")),
+        );
+        assert_eq!(location.directory.0, "/boot/project");
+
         // cwd fallback is absolute.
-        let location = request_location(&uri, &axum::http::HeaderMap::new());
+        let location = request_location(&uri, &axum::http::HeaderMap::new(), None);
         assert!(location.directory.0.starts_with('/'));
     }
 }

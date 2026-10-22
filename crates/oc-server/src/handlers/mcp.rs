@@ -29,7 +29,7 @@ async fn list(
     uri: Uri,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let services = services(&state, &location).await?;
     let data: Vec<Value> = services
         .mcp
@@ -53,7 +53,7 @@ async fn add(
     headers: HeaderMap,
     axum::Json(body): axum::Json<Value>,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let services = services(&state, &location).await?;
     let config: oc_schema::mcp::ServerConfig = serde_json::from_value(body["config"].clone())
         .map_err(|error| ApiError::invalid_request(format!("invalid mcp config: {error}")))?;
@@ -67,7 +67,7 @@ async fn remove(
     uri: Uri,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let services = services(&state, &location).await?;
     services.mcp.remove(&server).await.map_err(|error| {
         crate::errors::debug_cause("mcp:mcp_server_not_found", &error);
@@ -82,7 +82,7 @@ async fn connect(
     uri: Uri,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let services = services(&state, &location).await?;
     services.mcp.connect(&server).await.map_err(|error| {
         crate::errors::debug_cause("mcp:mcp_server_not_found", &error);
@@ -97,7 +97,7 @@ async fn disconnect(
     uri: Uri,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let services = services(&state, &location).await?;
     services.mcp.disconnect(&server).await.map_err(|error| {
         crate::errors::debug_cause("mcp:mcp_server_not_found", &error);
@@ -111,7 +111,7 @@ async fn resource_catalog(
     uri: Uri,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let services = services(&state, &location).await?;
     let catalog = services.mcp.resource_catalog().await;
     let resources: Vec<Value> = catalog

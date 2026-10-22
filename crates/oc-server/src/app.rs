@@ -280,7 +280,11 @@ async fn dispatch_ready(shell: &Arc<AppShell>, request: Request) -> Response {
     if let Some(table_method) = table_method {
         if let Some((route, params)) = crate::routes_gen::find(table_method, &path) {
             if let Some(handler) = shell.registry.get(route.operation_id) {
-                let location = middleware::request_location(&uri, request.headers());
+                let location = middleware::request_location(
+                    &uri,
+                    request.headers(),
+                    state.boot_location.as_deref(),
+                );
                 let mut request = request;
                 request.extensions_mut().insert(MatchedRoute {
                     operation_id: route.operation_id,

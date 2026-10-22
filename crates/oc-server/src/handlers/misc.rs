@@ -45,7 +45,7 @@ async fn generate_text(
     axum::Json(body): axum::Json<Value>,
 ) -> Result<Response, ApiError> {
     use futures::StreamExt as _;
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let services = services(&state, &location).await?;
     let Some(prompt) = body["prompt"].as_str() else {
         return Err(ApiError::invalid_request("expected string prompt"));
@@ -138,7 +138,7 @@ async fn plugin_list(
     uri: Uri,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let _services = services(&state, &location).await?;
     // The booted plugin subsystem's inventory (wave-12): every resolved
     // plugin with its live status (active / failed / crash-disabled)
@@ -157,7 +157,7 @@ async fn plugin_check(
     headers: HeaderMap,
     axum::Json(body): axum::Json<Value>,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let _services = services(&state, &location).await?;
     let _ = body["target"].as_str();
     Ok(json_location_data(&location.as_path().to_string_lossy(), Value::Array(Vec::new())))
@@ -169,7 +169,7 @@ async fn plugin_update(
     headers: HeaderMap,
     axum::Json(body): axum::Json<Value>,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let _services = services(&state, &location).await?;
     let _targets = body["targets"].as_array();
     Ok(no_content())
@@ -222,7 +222,7 @@ async fn websearch_query(
     headers: HeaderMap,
     axum::Json(body): axum::Json<Value>,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let services = services(&state, &location).await?;
     let payload: oc_schema::misc::WebSearchInput =
         serde_json::from_value(body).map_err(|error| {
@@ -273,7 +273,7 @@ async fn websearch_providers(
     uri: Uri,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let location = resolve_location(uri.query().unwrap_or_default(), &headers)?;
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let services = services(&state, &location).await?;
     // v2 `websearch.providers`: id/name pairs sorted by display name.
     let providers: Vec<Value> = services
