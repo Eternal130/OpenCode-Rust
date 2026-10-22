@@ -1346,10 +1346,12 @@ fn fake_jwt(claims: &str) -> String {
 }
 
 /// A slot-valued mock: the response is set AFTER authorize produced its
-/// nonce (the `id_token` must echo it).
+/// nonce (the `id_token` must echo it). Path-routed replies (the JWKS
+/// document) take precedence over the token-endpoint slot.
 struct SlotMock {
     base: String,
     slot: Arc<parking_lot::Mutex<Option<(u16, Value)>>>,
+    routes: Arc<parking_lot::Mutex<BTreeMap<String, Value>>>,
     log: Arc<parking_lot::Mutex<Vec<String>>>,
 }
 
@@ -1359,8 +1361,10 @@ impl SlotMock {
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.expect("bind");
         let port = listener.local_addr().expect("addr").port();
         let slot: Arc<parking_lot::Mutex<Option<(u16, Value)>>> = Arc::default();
+        let routes: Arc<parking_lot::Mutex<BTreeMap<String, Value>>> = Arc::default();
         let log: Arc<parking_lot::Mutex<Vec<String>>> = Arc::default();
-        let (slot_handle, log_handle) = (Arc::clone(&slot), Arc::clone(&log));
+        let (slot_handle, routes_handle, log_handle) =
+            (Arc::clone(&slot), Arc::clone(&routes), Arc::clone(&log));
         tokio::spawn(async move {
             while let Ok((mut stream, _)) = listener.accept().await {
                 let mut buffer = [0u8; 8192];
@@ -1369,7 +1373,13 @@ impl SlotMock {
                 let path = request.split_whitespace().nth(1).unwrap_or_default().to_owned();
                 let body_start = request.find("\r\n\r\n").map_or(read, |index| index + 4);
                 log_handle.lock().push(format!("{path} {}", &request[body_start..]));
-                let (status, body) = slot_handle.lock().clone().unwrap_or((404, Value::Null));
+                let (status, body) = routes_handle
+                    .lock()
+                    .get(&path)
+                    .cloned()
+                    .map(|body| (200, body))
+                    .or_else(|| slot_handle.lock().clone())
+                    .unwrap_or((404, Value::Null));
                 let body = body.to_string();
                 let response = format!(
                     "HTTP/1.1 {status} OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -1378,17 +1388,23 @@ impl SlotMock {
                 let _ = stream.write_all(response.as_bytes()).await;
             }
         });
-        Self { base: format!("http://127.0.0.1:{port}"), slot, log }
+        Self { base: format!("http://127.0.0.1:{port}"), slot, routes, log }
+    }
+
+    /// Serves `body` (200) for every request hitting `path`.
+    fn serve(&self, path: &str, body: Value) {
+        self.routes.lock().insert(path.to_owned(), body);
     }
 }
 
 #[tokio::test]
 async fn chatgpt_connector_round_trip_against_mock() {
     let mock = SlotMock::start().await;
-    // authorize binds the loopback; the token URL points at the mock.
+    // authorize binds the loopback; the token + JWKS URLs point at the mock.
     let authorization = super::providers_enterprise::chatgpt_authorize_at(
         BTreeMap::new(),
         &format!("{}/oauth/token", mock.base),
+        &format!("{}/.well-known/jwks.json", mock.base),
     )
     .await
     .expect("authorize");
@@ -1402,11 +1418,11 @@ async fn chatgpt_connector_round_trip_against_mock() {
     let nonce = parse_query_param(&authorization.url, "nonce").expect("nonce");
     let redirect = parse_query_param(&authorization.url, "redirect_uri").expect("redirect");
 
-    // The id_token must echo the attempt nonce; aud = the client the
-    // callback will carry (chatgpt.ts:165-171,439-461 claims subset).
-    let id_token = fake_jwt(&format!(
-        r#"{{"iss":"https://auth.openai.com","aud":"client_reg_1","exp":9999999999,"nonce":"{nonce}","sub":"user|1"}}"#
-    ));
+    // The signed id_token must echo the attempt nonce; aud = the client
+    // the callback will carry (chatgpt.ts:165-171,439-461 claims subset).
+    mock.serve("/.well-known/jwks.json", jwks_document("sign-in", SIGNING_KEY_N));
+    let id_token =
+        signed_id_token(&valid_claims(&nonce, "client_reg_1", 9_999_999_999), "sign-in", SIGNING_KEY_PEM);
     *mock.slot.lock() = Some((
         200,
         json!({
@@ -1450,12 +1466,15 @@ async fn chatgpt_connector_rejects_missing_token_sharing_scope() {
     let authorization = super::providers_enterprise::chatgpt_authorize_at(
         BTreeMap::new(),
         &format!("{}/oauth/token", mock.base),
+        &format!("{}/.well-known/jwks.json", mock.base),
     )
     .await
     .expect("authorize");
     let state = parse_query_param(&authorization.url, "state").expect("state");
     let nonce = parse_query_param(&authorization.url, "nonce").expect("nonce");
     let redirect = parse_query_param(&authorization.url, "redirect_uri").expect("redirect");
+    // Verification never runs (the sharing-scope check fails first), so an
+    // unsigned token fixture suffices here.
     let id_token = fake_jwt(&format!(
         r#"{{"iss":"https://auth.openai.com","aud":"client_reg_1","exp":9999999999,"nonce":"{nonce}","sub":"user|1"}}"#
     ));
@@ -1482,14 +1501,19 @@ async fn chatgpt_connector_rejects_nonce_mismatch() {
     let authorization = super::providers_enterprise::chatgpt_authorize_at(
         BTreeMap::new(),
         &format!("{}/oauth/token", mock.base),
+        &format!("{}/.well-known/jwks.json", mock.base),
     )
     .await
     .expect("authorize");
     let state = parse_query_param(&authorization.url, "state").expect("state");
     let redirect = parse_query_param(&authorization.url, "redirect_uri").expect("redirect");
-    // The id_token echoes the WRONG nonce (chatgpt.ts:449-450).
-    let id_token = fake_jwt(
-        r#"{"iss":"https://auth.openai.com","aud":"client_reg_1","exp":9999999999,"nonce":"attacker-nonce","sub":"user|1"}"#,
+    // The signed id_token echoes the WRONG nonce (chatgpt.ts:449-450) —
+    // every verification failure carries v2's single generic message.
+    mock.serve("/.well-known/jwks.json", jwks_document("sign-in", SIGNING_KEY_N));
+    let id_token = signed_id_token(
+        &valid_claims("attacker-nonce", "client_reg_1", 9_999_999_999),
+        "sign-in",
+        SIGNING_KEY_PEM,
     );
     *mock.slot.lock() = Some((
         200,
@@ -1505,7 +1529,273 @@ async fn chatgpt_connector_rejects_nonce_mismatch() {
         reqwest::get(format!("{redirect}?code=cg-code&state={state}&client_id=client_reg_1")).await;
     let AuthMode::Auto(callback_future) = authorization.mode else { panic!("auto") };
     let error = callback_future.await.expect_err("nonce mismatch");
-    assert!(error.contains("nonce"), "{error}");
+    assert_eq!(error, "ChatGPT sign-in returned an invalid ID token.");
+}
+
+// -- BE-3b: chatgpt ID-token JWKS verification (chatgpt.ts:439-459) --------------------------
+
+/// The single v2 failure surface (chatgpt.ts:457): every verification
+/// failure — signature, issuer, audience, expiry, nonce, subject —
+/// carries this message; the specific cause rides the server-side log.
+const INVALID_ID_TOKEN: &str = "ChatGPT sign-in returned an invalid ID token.";
+
+/// Committed RSA-2048 PKCS#8 fixtures: `signing` is the JWKS-served key;
+/// `rogue` signs forged tokens and the rotated-in key after a JWKS roll.
+const SIGNING_KEY_PEM: &str = include_str!("testdata/id_token_signing_key.pem");
+const ROGUE_KEY_PEM: &str = include_str!("testdata/id_token_rogue_key.pem");
+/// Each fixture's JWK `n` plus the shared `e` (65537), base64url — cut
+/// once with `openssl rsa -modulus` when the fixtures were generated.
+const SIGNING_KEY_N: &str = "vFp_fPHAjLAqQUpCQY8OgRVhBRwiZYhfEnF49DO9M9MgiZDYJ_K-WPjwroou9JGJy5rmxnMMu9CDtRxM4TBcWojiNnGOVQxa4FT2WkQlE-ztQ1t1A-1Rc4KEBszafUdvz6nn6TBzoTLxqezq0r8HOOmJ7E1z5HMxCe-uJq7KF8uUbWmfgVNALxzuuLJJrtwMcvhpzSKtuAZOyA8DfgxYDCWJ5onNu4Gfmy5QkWkeqSe9WSLzHFw54GdPZ6d4GyubAP9KUOBZYwywDAEtUcS1yaEb8I0Tq0MFfzJHT_q7jOkGOATkHGhTsEl6r0yrKyvKWoMgibabP5E45Lw_PFm4fQ";
+const ROGUE_KEY_N: &str = "vaTeQ_dAcpc52kCnFRw_US22BGb2MKPdpQV8i3b491ED99qsaZuuToO6vQPn0jSQ4LnB0CHoM0x8T8f7Hh4Lzus_MjPMqegKUbDQ2VAnnwzkkXhoXDGG9TLJ1rtlONVl4RYngt0pBfIeiJVT8rGxb1lmQvPRrpQsEol-T51MaxGZQ-B3iweZFOyvbHX-8eZHYHpWlznARswKKYVs106PpwmBGbBFhsXExCOFDD1EBJt2PSR-t2q_IAbgQEnQ1sW516-mQDazofl50nzJrRbC5LS1srVwEGtFLXA37268sLDWo_JHHZepfpnyRxFS8rsHW_XyWqcDw4hZeFzv6B1cgQ";
+const RSA_E_65537: &str = "EAA";
+
+/// A one-key JWKS document (the v2 test server's shape).
+fn jwks_document(kid: &str, n: &str) -> Value {
+    json!({ "keys": [ { "kty": "RSA", "use": "sig", "alg": "RS256", "kid": kid, "n": n, "e": RSA_E_65537 } ] })
+}
+
+/// The DER bytes inside a single-block PEM envelope (fixture loader).
+fn pem_der(pem: &str) -> Vec<u8> {
+    use base64::Engine;
+    let body: String = pem
+        .lines()
+        .filter(|line| !line.starts_with("-----"))
+        .flat_map(str::chars)
+        .collect();
+    base64::engine::general_purpose::STANDARD.decode(body).expect("fixture PEM decodes")
+}
+
+/// RS256-signs `header.payload` with a fixture key (the v2 `SignJWT`).
+fn sign_jwt(header: &Value, payload: &Value, key_pem: &str) -> String {
+    use base64::Engine;
+    let b64 = |bytes: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
+    let signing_input = format!(
+        "{}.{}",
+        b64(header.to_string().as_bytes()),
+        b64(payload.to_string().as_bytes())
+    );
+    let key_pair = ring::signature::RsaKeyPair::from_pkcs8(&pem_der(key_pem)).expect("fixture key");
+    let rng = ring::rand::SystemRandom::new();
+    let mut signature = vec![0u8; key_pair.public().modulus_len()];
+    key_pair
+        .sign(&ring::signature::RSA_PKCS1_SHA256, &rng, signing_input.as_bytes(), &mut signature)
+        .expect("fixture signs");
+    format!("{signing_input}.{}", b64(&signature))
+}
+
+/// A well-formed RS256 ID token under `kid` (the v2 `sign` helper).
+fn signed_id_token(payload: &Value, kid: &str, key_pem: &str) -> String {
+    sign_jwt(&json!({ "alg": "RS256", "kid": kid }), payload, key_pem)
+}
+
+/// The valid claim set (v2: issuer/audience/subject/nonce/expiry).
+fn valid_claims(nonce: &str, audience: &str, exp: i64) -> Value {
+    json!({ "iss": "https://auth.openai.com", "aud": audience, "exp": exp, "nonce": nonce, "sub": "user_123" })
+}
+
+/// HMAC-SHA256 (RFC 2104): lets the HS256 case carry a cryptographically
+/// valid symmetric tag, so ONLY the RS256 allowlist can reject it.
+fn hmac_sha256(key: &[u8], message: &[u8]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut ipad = vec![0x36u8; 64];
+    let mut opad = vec![0x5cu8; 64];
+    for (i, byte) in key.iter().enumerate() {
+        ipad[i] ^= byte;
+        opad[i] ^= byte;
+    }
+    let inner = {
+        let mut hash = Sha256::new();
+        hash.update(&ipad);
+        hash.update(message);
+        hash.finalize()
+    };
+    let mut outer = Sha256::new();
+    outer.update(&opad);
+    outer.update(inner);
+    outer.finalize().into()
+}
+
+/// A mock JWKS endpoint on 127.0.0.1:0 whose served document can be
+/// swapped mid-test (key rotation).
+struct JwksMock {
+    url: String,
+    body: Arc<parking_lot::Mutex<Value>>,
+    handle: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for JwksMock {
+    fn drop(&mut self) {
+        self.handle.abort();
+    }
+}
+
+impl JwksMock {
+    async fn start(body: Value) -> Self {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let body = Arc::new(parking_lot::Mutex::new(body));
+        let served = Arc::clone(&body);
+        let handle = tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let mut buffer = [0u8; 8192];
+                let read = stream.read(&mut buffer).await.unwrap_or(0);
+                let _request = String::from_utf8_lossy(&buffer[..read]).into_owned();
+                let text = served.lock().to_string();
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}",
+                    text.len()
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+        });
+        Self { url: format!("http://127.0.0.1:{port}/.well-known/jwks.json"), body, handle }
+    }
+
+    /// Swaps the served document; the next verification fetches it fresh.
+    fn rotate(&self, body: Value) {
+        *self.body.lock() = body;
+    }
+}
+
+async fn verify_id_token(token: &str, client_id: &str, nonce: &str, jwks: &JwksMock) -> Result<(), String> {
+    super::providers_enterprise::verify_id_token(token, client_id, nonce, &jwks.url).await
+}
+
+fn exp_in_60s() -> i64 {
+    crate::database::migrations::now_ms() / 1000 + 60
+}
+
+#[tokio::test]
+async fn chatgpt_id_token_verifies_signed_token() {
+    let jwks = JwksMock::start(jwks_document("sign-in", SIGNING_KEY_N)).await;
+    let token = signed_id_token(
+        &valid_claims("expected", "oaiapp_issued", exp_in_60s()),
+        "sign-in",
+        SIGNING_KEY_PEM,
+    );
+    verify_id_token(&token, "oaiapp_issued", "expected", &jwks).await.expect("valid token verifies");
+}
+
+#[tokio::test]
+async fn chatgpt_id_token_rejects_claim_failures() {
+    let jwks = JwksMock::start(jwks_document("sign-in", SIGNING_KEY_N)).await;
+    let exp = exp_in_60s();
+    let sign = |claims: &Value| signed_id_token(claims, "sign-in", SIGNING_KEY_PEM);
+    // Wrong issuer.
+    let mut claims = valid_claims("expected", "oaiapp_issued", exp);
+    claims["iss"] = json!("https://someone-else.example");
+    assert_eq!(
+        verify_id_token(&sign(&claims), "oaiapp_issued", "expected", &jwks).await.unwrap_err(),
+        INVALID_ID_TOKEN
+    );
+    // Wrong audience — both a mismatched claim and a mismatched client id.
+    let wrong_audience = sign(&valid_claims("expected", "someone-else", exp));
+    assert_eq!(
+        verify_id_token(&wrong_audience, "oaiapp_issued", "expected", &jwks).await.unwrap_err(),
+        INVALID_ID_TOKEN
+    );
+    let valid = sign(&valid_claims("expected", "oaiapp_issued", exp));
+    assert_eq!(
+        verify_id_token(&valid, "wrong-client", "expected", &jwks).await.unwrap_err(),
+        INVALID_ID_TOKEN
+    );
+    // Expired (v2 signs at `expires - 120`).
+    let expired = sign(&valid_claims("expected", "oaiapp_issued", exp - 120));
+    assert_eq!(
+        verify_id_token(&expired, "oaiapp_issued", "expected", &jwks).await.unwrap_err(),
+        INVALID_ID_TOKEN
+    );
+    // Missing exp.
+    let mut claims = valid_claims("expected", "oaiapp_issued", exp);
+    claims.as_object_mut().expect("object").remove("exp");
+    assert_eq!(
+        verify_id_token(&sign(&claims), "oaiapp_issued", "expected", &jwks).await.unwrap_err(),
+        INVALID_ID_TOKEN
+    );
+    // Missing subject.
+    let mut claims = valid_claims("expected", "oaiapp_issued", exp);
+    claims.as_object_mut().expect("object").remove("sub");
+    assert_eq!(
+        verify_id_token(&sign(&claims), "oaiapp_issued", "expected", &jwks).await.unwrap_err(),
+        INVALID_ID_TOKEN
+    );
+    // Blank subject.
+    let mut claims = valid_claims("expected", "oaiapp_issued", exp);
+    claims["sub"] = json!(" ");
+    assert_eq!(
+        verify_id_token(&sign(&claims), "oaiapp_issued", "expected", &jwks).await.unwrap_err(),
+        INVALID_ID_TOKEN
+    );
+    // Wrong nonce.
+    let wrong_nonce = sign(&valid_claims("attacker-nonce", "oaiapp_issued", exp));
+    assert_eq!(
+        verify_id_token(&wrong_nonce, "oaiapp_issued", "expected", &jwks).await.unwrap_err(),
+        INVALID_ID_TOKEN
+    );
+}
+
+#[tokio::test]
+async fn chatgpt_id_token_rejects_unverified_signatures() {
+    let jwks = JwksMock::start(jwks_document("sign-in", SIGNING_KEY_N)).await;
+    let claims = valid_claims("expected", "oaiapp_issued", exp_in_60s());
+    // Forged: a different key pair signs while the JWKS serves `sign-in`.
+    let forged = signed_id_token(&claims, "sign-in", ROGUE_KEY_PEM);
+    assert_eq!(
+        verify_id_token(&forged, "oaiapp_issued", "expected", &jwks).await.unwrap_err(),
+        INVALID_ID_TOKEN
+    );
+    // `alg: none` (unsigned) is rejected before any key lookup.
+    let none = sign_jwt(&json!({ "alg": "none", "kid": "sign-in" }), &claims, SIGNING_KEY_PEM);
+    let none = format!("{}.", none.rsplit_once('.').expect("segmented").0);
+    assert_eq!(
+        verify_id_token(&none, "oaiapp_issued", "expected", &jwks).await.unwrap_err(),
+        INVALID_ID_TOKEN
+    );
+    // `alg: HS256` with a cryptographically valid HMAC tag: only the
+    // RS256 allowlist rejects it (jose `algorithms: ["RS256"]`).
+    use base64::Engine;
+    let header = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(br#"{"alg":"HS256","kid":"sign-in"}"#);
+    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(claims.to_string().as_bytes());
+    let signing_input = format!("{header}.{payload}");
+    let tag = hmac_sha256(b"symmetric-secret", signing_input.as_bytes());
+    let hs256 = format!(
+        "{signing_input}.{}",
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(tag)
+    );
+    assert_eq!(
+        verify_id_token(&hs256, "oaiapp_issued", "expected", &jwks).await.unwrap_err(),
+        INVALID_ID_TOKEN
+    );
+    // A header without `kid` cannot select a JWK.
+    let no_kid = sign_jwt(&json!({ "alg": "RS256" }), &claims, SIGNING_KEY_PEM);
+    assert_eq!(
+        verify_id_token(&no_kid, "oaiapp_issued", "expected", &jwks).await.unwrap_err(),
+        INVALID_ID_TOKEN
+    );
+}
+
+#[tokio::test]
+async fn chatgpt_id_token_unknown_kid_then_rotation_succeeds() {
+    // v2 builds `createRemoteJWKSet` fresh per verification (no cache):
+    // an unknown `kid` fails, then the SAME token verifies once the
+    // endpoint rotates the key in (ruling 2026-10-23).
+    let jwks = JwksMock::start(jwks_document("sign-in", SIGNING_KEY_N)).await;
+    let token = signed_id_token(
+        &valid_claims("expected", "oaiapp_issued", exp_in_60s()),
+        "rotated-key",
+        ROGUE_KEY_PEM,
+    );
+    assert_eq!(
+        verify_id_token(&token, "oaiapp_issued", "expected", &jwks).await.unwrap_err(),
+        INVALID_ID_TOKEN
+    );
+    jwks.rotate(jwks_document("rotated-key", ROGUE_KEY_N));
+    verify_id_token(&token, "oaiapp_issued", "expected", &jwks)
+        .await
+        .expect("rotated JWKS verifies the same token");
 }
 
 // -- BE-3b: copilot transport binding -------------------------------------------
