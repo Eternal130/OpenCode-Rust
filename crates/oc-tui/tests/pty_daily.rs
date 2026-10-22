@@ -1731,9 +1731,15 @@ fn zed_context() {
         30,
         |fake, sandbox| {
             // The db file lives under the sandbox; the WORKSPACE it
-            // declares is the app's cwd (the scoring root).
+            // declares is the app's cwd (the scoring root). Assert the
+            // fixture exists BEFORE the app boots — a runner with an
+            // odd /tmp (noexec mounts are fine for sqlite, but a
+            // failed create would silently fall the poll through to
+            // the $HOME platform defaults and the label would never
+            // paint).
             let cwd = std::env::current_dir().unwrap_or_else(|_| sandbox.clone());
             let db = zed_fixture_db(sandbox, &cwd);
+            assert!(db.is_file(), "the zed fixture db never materialized at {}", db.display());
             *arm_db.lock().expect("db slot") = Some(db.clone());
             std::env::set_var("OPENCODE_ZED_DB", &db);
             *arm_syn.lock().expect("syn slot") = Some(Arc::clone(&fake.synthetic_posts));
@@ -1741,8 +1747,15 @@ fn zed_context() {
         move |h| {
             let synthetic_slot = driver_syn;
             boot_to_session(h, b"Alpha")?;
+            // The composer must be SETTLED before typing (the tui7
+            // lesson: the route transition from the session dialog is
+            // not synchronized with the composer mount — a keystroke
+            // racing it lands in the dialog's select, not the prompt).
+            wait_text(h, "shift+tab agents", Duration::from_secs(10))
+                .map_err(|error| format!("the composer never settled: {error}"))?;
             // The poll's first tick (≤ 1 s) lands the selection: the
-            // footer's file label paints left of the hint pack.
+            // footer's file label paints left of the hint pack (15 s —
+            // a loaded runner's 1 s poll + repaint needs headroom).
             wait_grid(
                 h,
                 |g| {
@@ -1751,12 +1764,31 @@ fn zed_context() {
                         text.contains("notes.md #2-3")
                     })
                 },
-                Duration::from_secs(10),
+                Duration::from_secs(15),
             )
             .map_err(|error| format!("the editor file label never painted: {error}"))?;
-            // Submit: the pending context attaches through the
-            // synthetic POST before the prompt.
-            h.write(b"use the selection\r");
+            // Type the prompt, wait for its ECHO in the composer box
+            // (the frame that painted it proves the input owns the
+            // keys), and only THEN submit — a bare \r racing the
+            // composer's focus leaves the text in the draft, the
+            // synthetic POST never fires, and the dirty draft gates
+            // the exit chord (the CI wedge).
+            h.write(b"use the selection");
+            wait_text(h, "use the selection", Duration::from_secs(10))
+                .map_err(|error| format!("the prompt never echoed into the composer: {error}"))?;
+            h.write(b"\r");
+            // Echo-gate the SUBMIT: the draft leaves the composer box
+            // (this fixture scripts no inbox echo, so the transcript
+            // paints no user row — the emptied input line is the
+            // submit's observable footprint).
+            wait_grid(
+                h,
+                |g| (22..30).all(|y| !g.content_rect(0, y, 120, 1).contains("use the selection")),
+                Duration::from_secs(10),
+            )
+            .map_err(|error| format!("the submit never left the composer: {error}"))?;
+            // The pending context attached through the synthetic POST
+            // before the prompt.
             let deadline = std::time::Instant::now() + Duration::from_secs(8);
             loop {
                 let posted = synthetic_slot
