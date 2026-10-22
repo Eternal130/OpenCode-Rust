@@ -2,17 +2,17 @@
   "data": [
     {
       "action": "external_directory",
-      "id": "per_cc6b85383e164f18924cd6dc1054f17b",
+      "id": "per_5d6aa2440d02455ab878a5df2d9c747e",
       "resources": [
-        "/tmp/opencode/p10-tui-4108955/outside/*"
+        "/tmp/opencode/p10-tui-1904110/outside/*"
       ],
       "save": [
-        "/tmp/opencode/p10-tui-4108955/outside/*"
+        "/tmp/opencode/p10-tui-1904110/outside/*"
       ],
-      "sessionID": "ses_ea2ead58dffewepHDDBDjtm38p",
+      "sessionID": "ses_e9de84e09ffeyw5yz8dr934CvY",
       "source": {
         "id": "call_p10_read_out",
-        "messageID": "msg_99d5b2a9dc9b4021a4566faa771420f5",
+        "messageID": "msg_a462a345aa7947c48e04751679a6344f",
         "type": "tool"
       }
     }
