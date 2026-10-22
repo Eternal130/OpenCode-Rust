@@ -5,6 +5,29 @@
 > **REBUILT from ledger+git 2026-10-21 09:30** (iteration 13 / wave 12 opened).
 > Ledger + git are authoritative; state.md is a cross-session breadcrumb only.
 
+## WAVE 14 (iteration 15) — CI forensics chain (bun runner generation breakage)
+
+- **The breakage**: starting 2026-10-21 19:23Z, GitHub ubuntu-24.04 runners broke bun 1.3.10
+  (install hangs post-extract AND reference runtime POST hangs) with ZERO repo changes. bun
+  1.4.2 (= v2.0.24's own packageManager pin) works for servers but crashed the opentui
+  reference TUI on the OLD shared install cache (key had no version).
+- **Fixes landed (each proven by a CI round)**: gate5 harness drains child pipes (cold-cache
+  TS recompile writes MBs of stderr; an unread 64KiB pipe blocked the child pre-bind) ·
+  ReferenceSpawn.extra_args + readiness probe targeting the server's own `listening on` URL ·
+  **minih IPv6 literal bug (THE gate5 root cause)**: brackets not stripped for
+  ToSocketAddrs — our serve binds ::1 for --hostname localhost (v2-faithful) and every
+  http://[::1]:port poll failed to connect; fixed + pinned against a real loopback listener ·
+  BUN_PIN=1.4.2 single env driving setup-bun + a version-keyed install cache · harvest
+  requires session_message>=1 (a message-less fixture panicked the §12.3 census with a
+  misleading error) · zed_context CI wedge = exit_chord teardown race (stacked toast + dirty
+  draft swallowed the chord) — systematically fixed in vt_harness (all PTY tests benefit).
+- **Battery state after run 39724870814**: gate5 ✅ db_interop ✅ http_contract ✅ openapi ✅
+  tui_frames ✅ tools ✅ cross_client ✅ db_import ✅ error_paths ✅ — **only cross_tui red**
+  (reference TUI crash under bun 1.4.2; lane-xui reproducing locally).
+- TUI S2 longtail: lane/tui-s2 merged (16 items) + lane/tui-s2 follow-up; ci 39714598221
+  6/6 → 14 rows verified. SURF complete (mermaid state/gitgraph/gantt/timeline). Ledger:
+  verified 146 · fixed 3 · S1 open 0.
+
 ## WAVE 13 (iteration 14) — RESULT (ceremony-dropped mode, in flight)
 
 - **User ruling 2026-10-21**: parity-loop process dropped (no loop driver, no verifier ceremony,
