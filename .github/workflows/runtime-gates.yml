@@ -77,16 +77,32 @@
 #     kill-9-recovery + reconnect-resync suites (no single-session 30m TUI
 #     harness exists).
 #
-# TODO(user): enable the nightly schedule ONLY when you accept the
-# runner-minutes cost (the battery boots both sides; macos builds are
-# 10x-minute rated). Until then this workflow is dispatch-only:
+# SCHEDULE (R-11 lane, 2026-10-24): weekly cron, Mondays 03:00 UTC,
+# ALONGSIDE workflow_dispatch — this closes GAPS-AND-PITFALLS §1.3's
+# "manual-only" blind spot (the OC_P10 exit battery + v2-db-fixture +
+# §12.3 runtime gates incl. the REAL omo-slim npm staging now run on
+# CI weekly without a human remembering to dispatch). Weekly, not the
+# old nightly draft: the battery boots both sides and macos builds are
+# 10x-minute rated; one run/week is the accepted cost.
 #
-# schedule:
-#   - cron: "0 3 * * *"
+# Scheduled runs carry NO inputs context, and the job conditions were
+# already written null-safely: default-ON jobs run (`inputs.X != false`
+# with null → true: p10-battery, runtime-gates, ai/tui needs-runtime,
+# platform-build), opt-in jobs stay OFF (`inputs.X == true` with null →
+# false: soak-30m, release-smoke, live) — exactly the documented
+# dispatch defaults.
+#
+# Overlap: scheduled runs land on refs/heads/main and share the
+# runtime-gates-${{ github.ref }} concurrency group with same-ref
+# dispatches; cancel-in-progress stays false, so they QUEUE and never
+# overlap mid-flight.
 
 name: runtime-gates
 
 on:
+  schedule:
+    # Weekly, Mondays 03:00 UTC (see the header SCHEDULE note).
+    - cron: "0 3 * * 1"
   workflow_dispatch:
     inputs:
       run_p10_battery:
