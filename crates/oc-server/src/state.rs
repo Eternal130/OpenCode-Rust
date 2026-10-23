@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use dashmap::DashMap;
 use oc_core::engine::Engine;
-use oc_core::persistent_pty::PersistentPty;
+use oc_core::persistent_pty::frontend::Frontend;
 use oc_core::pty::PtyService;
 use oc_util::determinism::{Clock, IdGen};
 
@@ -73,7 +73,7 @@ pub struct AppState {
     /// DI graph — here it rides the shared state).
     pub pty: PtyService,
     /// The persistent-PTY machine (bus-backed).
-    pub persistent_pty: PersistentPty,
+    pub persistent_pty: Frontend,
     /// The location announcer (boot/reload/config-change frames).
     pub announce: crate::announce::Announcer,
     /// The process-level shutdown latch (gate-6 F2): the serve loop's
@@ -117,7 +117,7 @@ impl AppState {
         let engine = Arc::new(engine);
         let bus = engine.bus.as_ref().clone();
         let pty = PtyService::new(bus.clone());
-        let persistent_pty = PersistentPty::new(bus);
+        let persistent_pty = Frontend::new(bus);
         Self {
             engine,
             auth,
