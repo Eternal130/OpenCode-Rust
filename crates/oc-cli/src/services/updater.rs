@@ -18,6 +18,12 @@
 //! * `local-file` is a Rust-port extension (install from a tarball or
 //!   binary on disk); package-manager methods (`npm`, `brew`, …) are
 //!   detected for diagnostics but not driven.
+//! * **Sibling refresh (p4 follow-up)**: the updater refreshes the
+//!   `oc-pty` sibling too — release archives co-package it
+//!   (`package/oc-pty`), and replacing only the main binary would
+//!   leave a protocol-version-skewed sibling erroring every
+//!   persistent-terminal op. Archives without the member (legacy
+//!   beta tarballs, raw binaries) skip the sibling silently.
 //!
 //! Replacement is atomic on unix: stage a sibling file, `chmod 755`,
 //! `rename` over the running binary (the old inode lives until exit).
@@ -257,7 +263,7 @@ fn upgrade_from_file(source: &Path, exe: &Path) -> i32 {
     }
     println!("Upgrading from {}", source.display());
     match stage_binary(source) {
-        Ok(binary) => replace_and_report(&binary, exe),
+        Ok(staged) => replace_and_report(&staged, exe),
         Err(error) => {
             eprintln!("Error: Upgrade failed: {error}");
             1
@@ -371,15 +377,7 @@ async fn download_verify_install(
         }
     };
     let payload = stage_binary(temp)?;
-    replace_binary(&payload, exe)?;
-    // stage_binary only stages a copy for archive inputs; never
-    // delete a user-supplied raw binary/file source.
-    if payload
-        .file_name()
-        .is_some_and(|name| name.as_encoded_bytes().starts_with(b"oc-upgrade-payload-"))
-    {
-        let _ = std::fs::remove_file(&payload);
-    }
+    install_staged(&payload, exe)?;
     Ok(verified)
 }
 
@@ -450,21 +448,16 @@ async fn download_bytes(url: &str, total: Duration) -> Result<Vec<u8>, String> {
     Ok(bytes.to_vec())
 }
 
-/// Extract the `opencode` binary from an artifact (raw ELF, gzip
-/// tarball, or zip) into a staging path.
-fn stage_binary(artifact: &Path) -> Result<PathBuf, String> {
-    use std::os::unix::fs::PermissionsExt as _;
+/// Extract the `opencode-rust`/`opencode` binary — plus the
+/// `oc-pty` sibling when the archive carries one — from an artifact
+/// (raw ELF, gzip tarball, or zip) into staging payloads.
+fn stage_binary(artifact: &Path) -> Result<StagedBinary, String> {
     let magic = read_magic(artifact)?;
     if magic.starts_with(b"\x7fELF") || is_shell_script(magic) {
-        return Ok(artifact.to_path_buf());
+        return Ok(StagedBinary { binary: artifact.to_path_buf(), pty: None });
     }
-    let staging = std::env::temp_dir().join(format!(
-        "oc-upgrade-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |duration| duration.as_nanos())
-    ));
+    let staging =
+        std::env::temp_dir().join(format!("oc-upgrade-{}-{}", std::process::id(), unique_nanos()));
     std::fs::create_dir_all(&staging).map_err(|error| format!("create staging: {error}"))?;
     let _cleanup = Staging(&staging);
     if magic.starts_with(&[0x1f, 0x8b]) {
@@ -498,20 +491,94 @@ fn stage_binary(artifact: &Path) -> Result<PathBuf, String> {
             artifact.display()
         )
     })?;
-    // The staging dir is deleted on return — move the payload somewhere
-    // stable (and executable) before handing it back.
+    // The oc-pty sibling (every release tarball since the phase-3
+    // gate ruling co-packages it): co-extract so the install can
+    // refresh BOTH members in lockstep. Archives without the member
+    // (legacy beta tarballs) silently skip — OC_PTY_DAEMON=0 covers
+    // those installs.
+    let pty =
+        find_member(&staging, PTY_MEMBER).map(|pty| stage_payload(&pty, "pty")).transpose()?;
+    let binary = stage_payload(&extracted, "binary")?;
+    Ok(StagedBinary { binary, pty })
+}
+
+/// A staged upgrade payload: the main binary plus, when the artifact
+/// carried one, the extracted `oc-pty` sibling.
+#[derive(Debug)]
+struct StagedBinary {
+    /// The `opencode-rust`/`opencode` payload to install over `exe`.
+    binary: PathBuf,
+    /// The `oc-pty` payload to install beside `exe`, when the
+    /// archive contained the member (`None` for raw-binary inputs
+    /// and legacy archives — any installed sibling stays untouched).
+    pty: Option<PathBuf>,
+}
+
+impl StagedBinary {
+    /// Remove the staged payload temps (`oc-upgrade-payload-*` only —
+    /// raw-binary inputs hand back the SOURCE path and are never
+    /// deleted).
+    fn cleanup(&self) {
+        for path in std::iter::once(&self.binary).chain(self.pty.as_ref()) {
+            if path
+                .file_name()
+                .is_some_and(|name| name.as_encoded_bytes().starts_with(b"oc-upgrade-payload-"))
+            {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
+}
+
+/// The persistent-terminal daemon's member/sibling name: release
+/// archives carry it as `package/oc-pty`, and the spawn resolution
+/// (`oc_core::persistent_pty::transport`) expects it NEXT TO the
+/// main executable.
+const PTY_MEMBER: &str = "oc-pty";
+
+/// Monotonic-enough suffix keeping staged payload names unique
+/// within a process.
+fn unique_nanos() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos())
+}
+
+/// Copy an extracted member to a PID-unique payload temp with mode
+/// 755 — the extraction staging dir is deleted on return, so
+/// anything that must outlive it moves somewhere stable first.
+fn stage_payload(extracted: &Path, tag: &str) -> Result<PathBuf, String> {
+    use std::os::unix::fs::PermissionsExt as _;
     let payload = std::env::temp_dir().join(format!(
-        "oc-upgrade-payload-{}-{}",
+        "oc-upgrade-payload-{tag}-{}-{}",
         std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |duration| duration.as_nanos())
+        unique_nanos()
     ));
-    std::fs::copy(&extracted, &payload)
+    std::fs::copy(extracted, &payload)
         .map_err(|error| format!("stage payload at {}: {error}", payload.display()))?;
     std::fs::set_permissions(&payload, std::fs::Permissions::from_mode(0o755))
         .map_err(|error| format!("chmod 755 {}: {error}", payload.display()))?;
     Ok(payload)
+}
+
+/// Install a staged payload pair: replace `exe` with the main
+/// binary, then — when the artifact carried one — refresh the
+/// `oc-pty` sibling next to it with the SAME atomic mechanics. The
+/// pair must move in lockstep (p4): a stale sibling after an upgrade
+/// means protocol-version skew and every persistent-terminal op
+/// errors until a manual resync.
+fn install_staged(staged: &StagedBinary, exe: &Path) -> Result<(), String> {
+    let result = replace_binary(&staged.binary, exe).and_then(|()| match &staged.pty {
+        Some(pty) => replace_binary(pty, &pty_sibling(exe)),
+        None => Ok(()),
+    });
+    staged.cleanup();
+    result
+}
+
+/// Where the `oc-pty` sibling lives for an install rooted at `exe`.
+fn pty_sibling(exe: &Path) -> PathBuf {
+    exe.parent().unwrap_or(Path::new(".")).join(PTY_MEMBER)
 }
 
 /// Payload binary names inside release artifacts: `opencode-rust`
@@ -542,6 +609,23 @@ fn find_binary(dir: &Path) -> Option<PathBuf> {
     None
 }
 
+/// Depth-limited search for a single named member (`oc-pty`) at the
+/// root or one level down — the same layout `find_binary` covers.
+fn find_member(dir: &Path, name: &str) -> Option<PathBuf> {
+    let direct = dir.join(name);
+    if direct.is_file() {
+        return Some(direct);
+    }
+    let entries = std::fs::read_dir(dir).ok()?;
+    for entry in entries.flatten() {
+        let candidate = entry.path().join(name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
 /// Install `binary` over `exe` (copy to a sibling temp, chmod 755,
 /// atomic rename — safe while the process is running on unix).
 fn replace_binary(binary: &Path, exe: &Path) -> Result<(), String> {
@@ -557,8 +641,8 @@ fn replace_binary(binary: &Path, exe: &Path) -> Result<(), String> {
     std::fs::rename(&staged, exe).map_err(|error| format!("replace {}: {error}", exe.display()))
 }
 
-fn replace_and_report(binary: &Path, exe: &Path) -> i32 {
-    match replace_binary(binary, exe) {
+fn replace_and_report(staged: &StagedBinary, exe: &Path) -> i32 {
+    match install_staged(staged, exe) {
         Ok(()) => {
             println!("Upgrade complete");
             println!(
@@ -786,7 +870,9 @@ mod tests {
         let dir = tempfile::tempdir().expect("dir");
         let binary = dir.path().join("opencode");
         std::fs::write(&binary, b"\x7fELF-fake").expect("write");
-        assert_eq!(stage_binary(&binary), Ok(binary.clone()));
+        let staged = stage_binary(&binary).expect("stage raw");
+        assert_eq!(staged.binary, binary);
+        assert!(staged.pty.is_none(), "raw binaries carry no sibling");
 
         // tar.gz with a wrapped package/opencode layout.
         let staging = tempfile::tempdir().expect("staging");
@@ -804,10 +890,11 @@ mod tests {
             .expect("tar exists on the gate hosts");
         assert!(status.success());
         let staged = stage_binary(&tarball).expect("stage");
-        assert!(staged.is_file());
-        let body = std::fs::read(&staged).expect("read");
+        assert!(staged.binary.is_file());
+        let body = std::fs::read(&staged.binary).expect("read");
         assert_eq!(body, b"\x7fELF-fake");
-        assert_ne!(staged, tarball, "the payload must be extracted out of the archive");
+        assert_ne!(staged.binary, tarball, "the payload must be extracted out of the archive");
+        assert!(staged.pty.is_none(), "this legacy-shaped archive carries no sibling");
     }
 
     /// A release-shaped tarball (`package/opencode-rust`, the lane B
@@ -834,7 +921,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("dir");
         let tarball = build_tarball(dir.path(), "opencode-rust", b"\x7fELF-rust-fake");
         let staged = stage_binary(&tarball).expect("stage");
-        assert_eq!(std::fs::read(&staged).expect("read"), b"\x7fELF-rust-fake");
+        assert_eq!(std::fs::read(&staged.binary).expect("read"), b"\x7fELF-rust-fake");
     }
 
     #[test]
@@ -854,7 +941,84 @@ mod tests {
             .expect("tar");
         assert!(status.success());
         let staged = stage_binary(&tarball).expect("stage");
-        assert_eq!(std::fs::read(&staged).expect("read"), b"\x7fELF-new");
+        assert_eq!(std::fs::read(&staged.binary).expect("read"), b"\x7fELF-new");
+    }
+
+    /// A release-shaped tarball carrying BOTH members:
+    /// `package/opencode-rust` plus, when `pty` is given, the
+    /// `package/oc-pty` sibling every current release archive ships
+    /// (phase-3 gate ruling).
+    fn build_release_tarball(dir: &Path, main: &[u8], pty: Option<&[u8]>) -> PathBuf {
+        let package = dir.join("package");
+        std::fs::create_dir_all(&package).expect("mkdir");
+        std::fs::write(package.join("opencode-rust"), main).expect("write main");
+        if let Some(pty) = pty {
+            std::fs::write(package.join("oc-pty"), pty).expect("write pty");
+        }
+        let tarball = dir.join("release.tar.gz");
+        let status = std::process::Command::new("tar")
+            .args(["-czf"])
+            .arg(&tarball)
+            .arg("-C")
+            .arg(dir)
+            .arg("package")
+            .status()
+            .expect("tar exists on the gate hosts");
+        assert!(status.success());
+        tarball
+    }
+
+    #[test]
+    fn install_staged_replaces_the_pty_sibling_in_lockstep() {
+        // p4: an upgrade must refresh BOTH members — a stale oc-pty
+        // after an upgrade means protocol-version skew and every
+        // persistent-terminal op errors until a manual resync.
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().expect("dir");
+        let tarball = build_release_tarball(dir.path(), b"\x7fELF-new-main", Some(b"pty-new"));
+        let staged = stage_binary(&tarball).expect("stage");
+        let pty = staged.pty.clone().expect("sibling staged from the archive");
+        assert_eq!(std::fs::read(&staged.binary).expect("read"), b"\x7fELF-new-main");
+        assert_eq!(std::fs::read(&pty).expect("read"), b"pty-new");
+
+        let install = tempfile::tempdir().expect("install");
+        let exe = install.path().join("opencode-rust");
+        std::fs::write(&exe, b"old-main").expect("write");
+        let sibling = install.path().join("oc-pty");
+        std::fs::write(&sibling, b"old-pty").expect("write");
+
+        install_staged(&staged, &exe).expect("install");
+        assert_eq!(std::fs::read(&exe).expect("read"), b"\x7fELF-new-main");
+        assert_eq!(
+            std::fs::read(&sibling).expect("read"),
+            b"pty-new",
+            "sibling refreshes in lockstep"
+        );
+        let mode = std::fs::metadata(&sibling).expect("stat").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o755, "the sibling installs executable");
+        // Staged payload temps are cleaned up after the install.
+        assert!(!staged.binary.exists() && !pty.exists(), "payload temps removed");
+    }
+
+    #[test]
+    fn install_staged_skips_the_sibling_when_the_archive_has_none() {
+        // Legacy beta archives carry no oc-pty member: refresh the
+        // main binary, leave any installed sibling untouched (silent
+        // skip — the OC_PTY_DAEMON=0 hatch covers those installs).
+        let dir = tempfile::tempdir().expect("dir");
+        let tarball = build_release_tarball(dir.path(), b"\x7fELF-new-main", None);
+        let staged = stage_binary(&tarball).expect("stage");
+        assert!(staged.pty.is_none(), "no archive member → no staged sibling");
+
+        let install = tempfile::tempdir().expect("install");
+        let exe = install.path().join("opencode-rust");
+        std::fs::write(&exe, b"old-main").expect("write");
+        let sibling = install.path().join("oc-pty");
+        std::fs::write(&sibling, b"old-pty").expect("write");
+
+        install_staged(&staged, &exe).expect("install");
+        assert_eq!(std::fs::read(&exe).expect("read"), b"\x7fELF-new-main");
+        assert_eq!(std::fs::read(&sibling).expect("read"), b"old-pty", "sibling untouched");
     }
 
     #[test]
@@ -1004,6 +1168,50 @@ mod tests {
             .map(|entry| entry.path().display().to_string())
             .collect();
         assert!(leftovers.is_empty(), "temps cleaned: {leftovers:?}");
+    }
+
+    #[tokio::test]
+    async fn verified_install_refreshes_the_pty_sibling_too() {
+        // End-to-end over the download → sha256-verify → replace path:
+        // the co-packaged `package/oc-pty` member lands beside the
+        // replaced main binary in the SAME install (p4).
+        let _roots = sandbox_roots();
+        let dir = tempfile::tempdir().expect("dir");
+        let tarball_path =
+            build_release_tarball(dir.path(), b"\x7fELF-new-binary", Some(b"pty-new"));
+        let tarball = std::fs::read(&tarball_path).expect("read");
+        let digest = oc_util::hash::sha256_hex(&tarball);
+        let base = serve_paths(
+            vec![
+                ("/t.tar.gz", tarball),
+                (
+                    "/t.tar.gz.sha256",
+                    format!("{digest}  opencode-9.9.9-linux-x64.tar.gz").into_bytes(),
+                ),
+            ],
+            2,
+        );
+        let install_dir = tempfile::tempdir().expect("install");
+        let exe = install_dir.path().join("opencode-rust");
+        std::fs::write(&exe, b"old").expect("write");
+        let sibling = install_dir.path().join("oc-pty");
+        std::fs::write(&sibling, b"old-pty").expect("write");
+
+        let outcome = install_from_url_pair(
+            &format!("{base}/t.tar.gz"),
+            &format!("{base}/t.tar.gz.sha256"),
+            &exe,
+            true,
+        )
+        .await
+        .expect("verified install");
+        assert_eq!(outcome, VerifyOutcome::Verified);
+        assert_eq!(std::fs::read(&exe).expect("read"), b"\x7fELF-new-binary");
+        assert_eq!(
+            std::fs::read(&sibling).expect("read"),
+            b"pty-new",
+            "sibling refreshed in the same install"
+        );
     }
 
     #[tokio::test]
