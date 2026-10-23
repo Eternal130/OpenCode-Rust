@@ -446,7 +446,13 @@ Notes:
   EXPERIMENTAL (`continue-on-error`): it runs on every tag, and the
   windows asset ships only once the leg actually goes green (the notes
   table shows the absence until then). Tests are not attempted
-  (build-only, per the R-11 ruling).
+  (build-only, per the R-11 ruling). First-run evidence (2026-10-24,
+  dispatch run 39998955269): aws-lc-sys BUILDS on windows-latest with
+  `AWS_LC_SYS_PREBUILT_NASM=1`; the leg fails in workspace crates on the
+  predicted unix-seam class — `std::os::unix`/`std::os::fd` imports,
+  `libc` refs, `Permissions::from_mode`/`.mode()`, `as_raw_fd`
+  (E0433/E0432/E0599 in oc-core/oc-pty). Fix path = a cfg-gating sweep;
+  no crypto/toolchain blockers.
 * **runtime-gates.yml keeps its own `platform-build` macOS job** (the
   §12.4 SURF-PLATFORM dev-loop leg: whole-workspace `cargo build` on
   `macos-latest`, dispatch-gated). The two are complementary, not
