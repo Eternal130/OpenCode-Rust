@@ -100,7 +100,17 @@ pub async fn pull_url_sources(entries: &[String], cache_root: &Path) -> PulledUr
     }
     // v2 refreshes sources serially (`for (const source of current)`);
     // the concurrency caps apply within one source.
-    let client = reqwest::Client::new();
+    //
+    // Total request timeout (30 s): without one, a black-holed network
+    // hangs each attempt to the ~130 s OS TCP timeout ×3 attempts per
+    // source, stalling Engine::assemble (first-prompt /
+    // restart-recovery boot, oc-server boot.rs). The shared client
+    // bounds BOTH the index fetch and every file GET; the retry
+    // semantics around it are unchanged.
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .expect("skill-pull HTTP client builds");
     for source in &sources {
         let directories = pull(&client, source, cache_root).await;
         pulled.insert(source.clone(), directories);

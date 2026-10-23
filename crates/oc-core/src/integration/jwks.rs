@@ -14,6 +14,7 @@
 use base64::Engine;
 use ring::signature::{RsaPublicKeyComponents, RSA_PKCS1_2048_8192_SHA256};
 use serde_json::Value;
+use std::time::Duration;
 
 /// The only accepted JWS algorithm (jose `algorithms: ["RS256"]`).
 const ALG_RS256: &str = "RS256";
@@ -26,7 +27,16 @@ pub(crate) struct RemoteJwks {
 
 impl RemoteJwks {
     pub(crate) fn new(url: impl Into<String>) -> Self {
-        Self { url: url.into(), http: reqwest::Client::new() }
+        // Intentional divergence from v2: jose's remote-JWKS fetch has
+        // no timeout either, but an unbounded JWKS GET can hang an
+        // ID-token verification indefinitely. A 30 s total request
+        // timeout (matching the skill-pull client, skills_url.rs) is
+        // defensive hardening — v2 behavior is otherwise preserved.
+        let http = reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .expect("JWKS HTTP client builds");
+        Self { url: url.into(), http }
     }
 
     /// Verifies the token's RS256 signature: header `alg` allowlist,
