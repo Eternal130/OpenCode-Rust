@@ -40,13 +40,13 @@ identical. Set it if a release arrives without a usable sibling binary
 (e.g. a manual single-binary copy); the flag is scheduled for
 retirement next release.
 
-**Registered gap (product-lane follow-up, not tooling)**:
-`opencode-rust upgrade` currently refreshes only the main binary —
-after an upgrade `~/.opencode/bin/oc-pty` stays at the PREVIOUS
-release until the upgrade command learns the sibling. A skewed pair is
-untested territory; re-run the installer (or copy the sibling out of
-the new tarball) to resync them. Teaching `upgrade` the sibling is
-registered lane-C work — no silent skip.
+**Registered gap CLOSED (p4 follow-up)**: `opencode-rust upgrade`
+refreshes BOTH members — when the release archive carries
+`package/oc-pty` (all current tarballs do) the sibling is co-extracted
+and installed beside the main binary with the same atomic
+stage/chmod/rename mechanics. Archives without the member (legacy
+beta tarballs, raw `--binary` upgrades) skip the sibling silently; a
+skewed install there can still fall back to `OC_PTY_DAEMON=0`.
 
 ## Identity: binary name, isolated data dirs, one-way v2 migration
 
@@ -396,8 +396,8 @@ published by the `publish` job.
 |---|---|---|---|---|
 | linux x86_64 (glibc) | `linux-x64` | `ubuntu-latest` | native | **shipped** since Phase 10; the suffix is FROZEN (update-channel asset expectation) |
 | linux aarch64 (glibc) | `linux-arm64` | `ubuntu-24.04-arm` | native | new (R-11) |
-| linux x86_64 (musl, static) | `linux-x64-musl` | `ubuntu-latest` | `musl-tools` + cmake | new (R-11); watch item below |
-| linux aarch64 (musl, static) | `linux-arm64-musl` | `ubuntu-24.04-arm` | `musl-tools` + cmake | new (R-11); same watch item |
+| linux x86_64 (musl, static) | `linux-x64-musl` | `ubuntu-latest` | `musl-tools` (musl-gcc) | new (R-11); watch item below |
+| linux aarch64 (musl, static) | `linux-arm64-musl` | `ubuntu-24.04-arm` | `musl-tools` (musl-gcc) | new (R-11); same watch item |
 | macOS aarch64 (Apple silicon) | `darwin-arm64` | `macos-latest` | native | new (R-11). macOS x86_64 (Intel) is NOT shipped — Intel Macs build from source |
 | windows x86_64 | `windows-x64` (zip) | `windows-latest` | MSVC | new (R-11), **EXPERIMENTAL build-only** — see KNOWN-ISSUE-R11-WINDOWS |
 
@@ -411,19 +411,30 @@ Notes:
 * **Runner strategy**: native runners wherever they exist (no cross
   toolchains); `ubuntu-24.04-arm` requires the public-repo free ARM
   runner tier (a private repo would need paid larger runners). musl
-  has no native runner — the standard `musl-tools` + cmake recipe
-  compiles for the HOST arch under musl (x86_64-musl on the x64 runner,
-  aarch64-musl on the arm runner), so those binaries still smoke-run
-  natively.
+  has no native runner — the standard `musl-tools` recipe (musl-gcc
+  for the host arch) compiles for the HOST arch under musl
+  (x86_64-musl on the x64 runner, aarch64-musl on the arm
+  runner), so those binaries still smoke-run natively.
 * **R10a (rmcp → aws-lc-rs)**: `aws-lc-sys` compiles C, so every
-  builder installs/verifies `cmake` (ubuntu: apt; macOS: brew fallback;
-  windows: preinstalled-image assert). The musl legs additionally wire
-  `CC_<target>`/`CARGO_TARGET_<target>_LINKER` to `musl-gcc`.
+  builder needs a **C compiler for the target**. Framing correction
+  (verified against the aws-lc-sys 0.46 builder): the non-FIPS crate
+  uses the **cc builder by default** — the cmake builder is only
+  selected for FIPS, `AWS_LC_SYS_NO_ASM`, or bindgen-requiring
+  setups — and the crate ships pregenerated bindings, so **neither
+  cmake nor bindgen is ever required** here. The workflow's cmake
+  install steps are kept as harmless over-insurance (the cmake
+  builder remains the fallback path if cc's dependency check fails).
+  The musl legs additionally wire
+  `CC_<target>`/`CARGO_TARGET_<target>_LINKER` to `musl-gcc` —
+  musl-tools (musl-gcc) is the true musl dependency. Windows
+  additionally sets `AWS_LC_SYS_PREBUILT_NASM=1` on the build step
+  (windows-latest has no NASM; the non-FIPS MSVC build hard-fails
+  its asm step without the prebuilt objects).
 * **KNOWN-ISSUE-R11-MUSL (watch item)**: `aws-lc-sys` under musl is
   the historically painful seam. The legs are wired strict (NO
   `continue-on-error`): a red musl leg fails the matrix, `publish`
   does not run, and the release is blocked — the honest signal. IF a
-  tagged run fails inside `aws-lc-sys`'s cmake build in a way that is
+  tagged run fails inside `aws-lc-sys`'s C build in a way that is
   upstream-infeasible from the logs alone, flip the leg to
   `experimental: true` (continue-on-error) and pin the failing
   `aws-lc-sys` version + error here; the other platforms then publish
