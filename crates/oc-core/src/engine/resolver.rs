@@ -942,7 +942,20 @@ pub fn custom_model_info(
         info.body = merge_json_records(&[base.as_ref(), overlay.as_ref()])
             .map(|merged| BTreeMap::from_iter(merged));
     }
-    if let Some(base_url) = model.base_url.as_deref().filter(|url| !url.is_empty()) {
+    // Console baseURL precedence on the Info seam (opencode.ts:273,
+    // the same ladder `bind` applies, opencode.ts:273-281): a console
+    // endpoint — the model-level overlay first, else the provider's —
+    // DELETES the inherited base-model `settings.baseURL` and carries
+    // the console value instead, so the merged Info never keeps the
+    // stale catalog endpoint while the binding routes to the console
+    // one. With no console endpoint the inherited one survives: it IS
+    // the last-resort binding tier.
+    let console_base_url = model
+        .base_url
+        .as_deref()
+        .filter(|url| !url.is_empty())
+        .or_else(|| (!custom.base_url.is_empty()).then_some(custom.base_url.as_str()));
+    if let Some(base_url) = console_base_url {
         let mut settings = info.settings.take().unwrap_or_default();
         settings.rest.insert("baseURL".to_owned(), Value::String(base_url.to_owned()));
         info.settings = Some(settings);
@@ -1230,6 +1243,62 @@ mod console_merge_tests {
         model_level.base_url = "https://gw.cohere.test/v1".into();
         model_level.models[0].base_url = Some("https://model.cohere.test/v1".into());
         assert_eq!(bound_base_url(model_level), "https://model.cohere.test/v1");
+    }
+
+    /// Review round 2 (stale inherited baseURL): when the console
+    /// PROVIDER-level baseURL is set and the base model carries its own
+    /// `settings.baseURL`, the merged Info must not keep the stale
+    /// inherited endpoint while `bind` routes to the console one —
+    /// opencode.ts:273 deletes the inherited base-model baseURL when a
+    /// console endpoint exists (model-level > provider-level, the same
+    /// precedence `bind` applies). With no console endpoint the
+    /// inherited one survives (it IS the binding's last-resort tier);
+    /// with neither console nor base endpoint the Info simply has none.
+    #[test]
+    fn custom_model_info_console_base_url_replaces_inherited() {
+        let catalog = catalog();
+        let inherited = inherited_base_model_url(&catalog);
+
+        // Provider-level console endpoint: the listed Info carries the
+        // console endpoint, not the stale inherited cohere one.
+        let mut provider_level = cohere_custom();
+        provider_level.base_url = "https://gw.cohere.test/v1".into();
+        let info = custom_model_info(&provider_level, "north-mini-code-1-0", &catalog);
+        assert_eq!(
+            info.settings.as_ref().and_then(|settings| settings.rest.get("baseURL")),
+            Some(&serde_json::json!("https://gw.cohere.test/v1")),
+            "the console provider endpoint replaces the inherited baseURL"
+        );
+
+        // Model-level outranks the provider's on the Info, exactly like
+        // the binding precedence.
+        let mut model_level = provider_level;
+        model_level.models[0].base_url = Some("https://model.cohere.test/v1".into());
+        let info = custom_model_info(&model_level, "north-mini-code-1-0", &catalog);
+        assert_eq!(
+            info.settings.as_ref().and_then(|settings| settings.rest.get("baseURL")),
+            Some(&serde_json::json!("https://model.cohere.test/v1")),
+            "the console model endpoint outranks the provider's"
+        );
+
+        // No console endpoint: the inherited base-model endpoint
+        // survives (the last-resort binding tier).
+        let info = custom_model_info(&cohere_custom(), "north-mini-code-1-0", &catalog);
+        assert_eq!(
+            info.settings.as_ref().and_then(|settings| settings.rest.get("baseURL")),
+            Some(&serde_json::json!(inherited)),
+            "no console baseURL keeps the inherited endpoint"
+        );
+
+        // Neither console nor base endpoint: absent, never synthesized.
+        let mut orphan = cohere_custom();
+        orphan.canonical = None;
+        let info = custom_model_info(&orphan, "north-mini-code-1-0", &catalog);
+        assert_eq!(
+            info.settings.as_ref().and_then(|settings| settings.rest.get("baseURL")),
+            None,
+            "no endpoint anywhere leaves the Info without a baseURL"
+        );
     }
 
     /// The catalog provider-level api is the last-resort endpoint when
