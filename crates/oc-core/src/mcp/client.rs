@@ -343,8 +343,7 @@ impl ClientHandler for Handler {
         &self,
         request: rmcp::model::ElicitRequestParams,
         context: RequestContext<RoleClient>,
-    ) -> impl Future<Output = Result<rmcp::model::ElicitResult, rmcp::ErrorData>> + Send + '_
-    {
+    ) -> impl Future<Output = Result<rmcp::model::ElicitResult, rmcp::ErrorData>> + Send + '_ {
         let server = Arc::clone(&self.server);
         let Some(elicitation) = self.elicitation.as_ref().map(Arc::clone) else {
             // The capability was not advertised; rmcp's default decline
@@ -354,10 +353,7 @@ impl ClientHandler for Handler {
             )))
             .left_future();
         };
-        async move {
-            Ok(elicitation.handle(&server, request, context.ct).await)
-        }
-        .right_future()
+        async move { Ok(elicitation.handle(&server, request, context.ct).await) }.right_future()
     }
 
     /// Legacy `notifications/elicitation/complete` rides rmcp's custom
@@ -370,7 +366,7 @@ impl ClientHandler for Handler {
     ) -> impl Future<Output = ()> + Send + '_ {
         if notification.method == "notifications/elicitation/complete" {
             if let Some(elicitation) = &self.elicitation {
-                elicitation.complete_notification(&self.server, notification.params);
+                elicitation.complete_notification(&self.server, notification.params.as_ref());
             }
         }
         std::future::ready(())
