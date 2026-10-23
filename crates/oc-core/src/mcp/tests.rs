@@ -85,11 +85,15 @@ struct Mock {
 
 impl Mock {
     fn request_roots(&self) {
+        // Roots are SEP-2577-deprecated in rmcp 3.x; the scripted server
+        // still pushes `roots/list` (pre-existing test behavior).
+        #[allow(deprecated)]
+        let request = rmcp::model::ListRootsRequest {
+            method: Default::default(),
+            extensions: Default::default(),
+        };
         let _ = self.push.send(JsonRpcMessage::request(
-            rmcp::model::ServerRequest::ListRootsRequest(rmcp::model::ListRootsRequest {
-                method: Default::default(),
-                extensions: Default::default(),
-            }),
+            rmcp::model::ServerRequest::ListRootsRequest(request),
             RequestId::Number(9001),
         ));
     }
@@ -171,7 +175,10 @@ fn respond(
     match request {
         ClientRequest::InitializeRequest(_) => response(
             serde_json::json!({
-                    "protocolVersion": rmcp::model::ProtocolVersion::default().to_string(),
+                    // The rmcp 0.5-era mock echoed `ProtocolVersion::default()`
+                    // (`2025-03-26`, the version this client pins); keep the
+                    // same negotiated version on the wire.
+                    "protocolVersion": rmcp::model::ProtocolVersion::V_2025_03_26.to_string(),
                     "capabilities": {
                         "tools": { "listChanged": true },
                         "resources": { "subscribe": true, "listChanged": true },
@@ -222,7 +229,7 @@ fn respond(
                         "HTTP status client error (404 Not Found)",
                         None,
                     ),
-                    id,
+                    Some(id),
                 ));
             }
             if let Some(error) = script.call_errors.get(name) {
@@ -232,7 +239,7 @@ fn respond(
                         error.clone(),
                         None,
                     ),
-                    id,
+                    Some(id),
                 ));
             }
             match script.calls.get(name) {

@@ -1317,27 +1317,29 @@ impl McpRegistry {
             contents: result
                 .contents
                 .iter()
-                .map(|part| match part {
+                .filter_map(|part| match part {
                     rmcp::model::ResourceContents::TextResourceContents {
                         uri,
                         mime_type,
                         text,
                         ..
-                    } => ResourceContentPart::Text {
+                    } => Some(ResourceContentPart::Text {
                         uri: uri.clone(),
                         text: text.clone(),
                         mime_type: mime_type.clone(),
-                    },
+                    }),
                     rmcp::model::ResourceContents::BlobResourceContents {
                         uri,
                         mime_type,
                         blob,
                         ..
-                    } => ResourceContentPart::Blob {
+                    } => Some(ResourceContentPart::Blob {
                         uri: uri.clone(),
                         blob: blob.clone(),
                         mime_type: mime_type.clone(),
-                    },
+                    }),
+                    // Future resource-contents kinds have no v2 mapping.
+                    _ => None,
                 })
                 .collect(),
         }))

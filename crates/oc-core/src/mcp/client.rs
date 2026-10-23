@@ -16,25 +16,35 @@
 //!   [`SESSION_EXPIRED_MESSAGE`] so the registry reconnects and replays the
 //!   request once.
 //!
-//! # Deviations from v2 (rmcp 0.5.0 SDK constraints)
+//! # Deviations from v2 (rmcp 3.7.0 SDK constraints)
 //!
-//! - rmcp's `ClientCapabilities` model has no `elicitation` field and its
-//!   `ClientHandler` trait has no `elicitation/create` request arm, so the
-//!   elicitation capability cannot be declared on the wire yet. The full
-//!   elicitation logic (JSON-Schema → form conversion, URL legacy mode,
-//!   completion notifications) lives in [`super::elicitation`] and lights
-//!   up as soon as the SDK grows the surface. `roots/list` **is** declared
-//!   and answered with the location directory.
-//! - rmcp has no `resource_link` content variant; embedded resources
-//!   flatten to their text/blob (or URI), which covers the servers v2
-//!   interop-tested.
+//! - rmcp 3.7 CAN dispatch `elicitation/create` (the `elicitation`
+//!   feature is enabled), but wiring the capability into the wire handler
+//!   is deliberately deferred (lane R10b); the full elicitation logic
+//!   (JSON-Schema → form conversion, URL legacy mode, completion
+//!   notifications) lives in [`super::elicitation`]. `roots/list`
+//!   **is** declared and answered with the location directory.
+//! - rmcp 3.7 models `resource_link` content blocks; v2's
+//!   `toCallToolResult` switch has no case for them, so they flatten to
+//!   nothing (embedded resources still flatten to text/blob or URI).
 //! - The negotiated `Mcp-Session-Id` lives inside rmcp's transport worker
 //!   and is not exposed, so expiry classification keys off the HTTP status
 //!   carried in the error chain (remote connections only — a stdio server
 //!   never carries one). rmcp performs the terminate DELETE itself when the
-//!   transport closes, bounded here by [`TERMINATE_TIMEOUT`].
-//! - Protocol negotiation: rmcp negotiates versions internally;
-//!   `config.protocol` is advisory (tracked for the SDK swap).
+//!   transport closes, bounded here by [`TERMINATE_TIMEOUT`]; the
+//!   transport's own transparent 404 session recovery (new in 3.7,
+//!   `reinit_on_expired_session`) is disabled so expiry still surfaces to
+//!   the registry exactly like v2.
+//! - Protocol negotiation: rmcp negotiates versions internally; the
+//!   client pins its advertised version to `2025-03-26` (what rmcp 0.5 —
+//!   this port's original SDK — sent) and `config.protocol` stays
+//!   advisory (tracked for the SDK swap).
+//! - Requests ride `send_cancellable_request` directly (not rmcp's
+//!   `call_tool`/`get_prompt`/`read_resource` convenience wrappers): the
+//!   wrappers neither accept per-request timeouts (catalog 30s / execution
+//!   12h here) nor preserve the single-round MRTR semantics v2 has, and
+//!   they engage the 3.7 response cache (SEP-2549) — all behavior this
+//!   port must keep unchanged.
 
 // rmcp request constructors use `Default::default()` for their const-string
 // method markers; the pedantic `default_constructed_unit_structs`-style lints
@@ -51,9 +61,10 @@ use futures::FutureExt;
 use oc_schema::mcp::ServerConfig;
 use parking_lot::Mutex;
 use rmcp::model::{
-    CallToolRequestParam, ClientCapabilities, ClientInfo, Implementation, ListPromptsRequest,
-    ListResourceTemplatesRequest, ListResourcesRequest, ListToolsRequest, Meta, RawContent,
-    ReadResourceRequestParam, ResourceContents, ServerResult,
+    CallToolRequestParams, ClientCapabilities, ContentBlock, GetPromptRequestParams,
+    Implementation, InitializeRequestParams, ListPromptsRequest, ListResourceTemplatesRequest,
+    ListResourcesRequest, ListToolsRequest, ProtocolVersion, ReadResourceRequestParams,
+    RequestMetaObject, ServerPeerInfo, ServerResult,
 };
 use rmcp::service::{
     NotificationContext, Peer, PeerRequestOptions, RequestContext, RoleClient, RunningService,
@@ -136,40 +147,47 @@ pub struct CallToolResult {
 
 /// `toCallToolResult` (client.ts:399-418): text stays text, image/audio
 /// become media, embedded resources flatten to their text/blob (or URI).
+/// `resource_link` parts are skipped — v2's switch has no case for them.
 #[must_use]
 pub fn to_call_tool_result(result: &rmcp::model::CallToolResult) -> CallToolResult {
     let mut content = Vec::new();
-    for part in result.content.iter().flatten() {
-        match &part.raw {
-            RawContent::Text(text) => {
+    for part in &result.content {
+        match part {
+            ContentBlock::Text(text) => {
                 content.push(CallToolContent::Text { text: text.text.clone() });
             }
-            RawContent::Image(image) => {
+            ContentBlock::Image(image) => {
                 content.push(CallToolContent::Media {
                     data: image.data.clone(),
                     mime_type: image.mime_type.clone(),
                 });
             }
-            RawContent::Audio(audio) => {
+            ContentBlock::Audio(audio) => {
                 content.push(CallToolContent::Media {
-                    data: audio.raw.data.clone(),
-                    mime_type: audio.raw.mime_type.clone(),
+                    data: audio.data.clone(),
+                    mime_type: audio.mime_type.clone(),
                 });
             }
-            RawContent::Resource(resource) => match &resource.resource {
-                ResourceContents::TextResourceContents { text, .. } => {
+            ContentBlock::Resource(resource) => match &resource.resource {
+                rmcp::model::ResourceContents::TextResourceContents { text, .. } => {
                     content.push(CallToolContent::Text { text: text.clone() });
                 }
-                ResourceContents::BlobResourceContents { uri, blob, mime_type, .. } => {
-                    match mime_type {
-                        Some(mime_type) => content.push(CallToolContent::Media {
-                            data: blob.clone(),
-                            mime_type: mime_type.clone(),
-                        }),
-                        None => content.push(CallToolContent::Text { text: uri.clone() }),
-                    }
-                }
+                rmcp::model::ResourceContents::BlobResourceContents {
+                    uri,
+                    blob,
+                    mime_type,
+                    ..
+                } => match mime_type {
+                    Some(mime_type) => content.push(CallToolContent::Media {
+                        data: blob.clone(),
+                        mime_type: mime_type.clone(),
+                    }),
+                    None => content.push(CallToolContent::Text { text: uri.clone() }),
+                },
+                _ => {}
             },
+            // `resource_link` (no v2 mapping) and future block kinds.
+            _ => {}
         }
     }
     CallToolResult {
@@ -291,17 +309,17 @@ struct Handler {
 }
 
 impl ClientHandler for Handler {
+    // Roots are SEP-2577-deprecated in rmcp 3.x; answering `roots/list`
+    // is the pre-existing behavior and stays.
+    #[allow(deprecated)]
     fn list_roots(
         &self,
         _context: RequestContext<RoleClient>,
     ) -> impl Future<Output = Result<rmcp::model::ListRootsResult, rmcp::ErrorData>> + Send + '_
     {
-        std::future::ready(Ok(rmcp::model::ListRootsResult {
-            roots: vec![rmcp::model::Root {
-                uri: path_to_file_url(&self.roots_directory),
-                name: None,
-            }],
-        }))
+        std::future::ready(Ok(rmcp::model::ListRootsResult::new(vec![
+            rmcp::model::Root::new(path_to_file_url(&self.roots_directory)),
+        ])))
     }
 
     fn on_tool_list_changed(
@@ -334,12 +352,12 @@ impl ClientHandler for Handler {
         std::future::ready(())
     }
 
-    fn get_info(&self) -> ClientInfo {
-        ClientInfo {
-            protocol_version: rmcp::model::ProtocolVersion::default(),
-            capabilities: self.capabilities.clone(),
-            client_info: self.implementation.clone(),
-        }
+    fn get_info(&self) -> rmcp::model::ClientConfig {
+        // rmcp 0.5's `ProtocolVersion::default()` (its LATEST) advertised
+        // `2025-03-26`; rmcp 3.7's default is `2026-07-28`, which would
+        // flip the negotiated protocol. Pin the 0.5 wire behavior.
+        InitializeRequestParams::new(self.capabilities.clone(), self.implementation.clone())
+            .with_protocol_version(ProtocolVersion::V_2025_03_26)
     }
 }
 
@@ -368,7 +386,7 @@ fn path_to_file_url(path: &str) -> String {
 pub struct Connection {
     server: Arc<str>,
     peer: Peer<RoleClient>,
-    peer_info: Option<Arc<rmcp::model::ServerInfo>>,
+    peer_info: Option<Arc<ServerPeerInfo>>,
     /// Sole owner of the rmcp service; taken by close / close-watch.
     service: Arc<tokio::sync::Mutex<Option<RunningService<RoleClient, Handler>>>>,
     changed: Arc<Mutex<Changed>>,
@@ -436,10 +454,7 @@ impl Connection {
     ) -> Result<ServerResult, RequestError> {
         let handle = self
             .peer
-            .send_cancellable_request(
-                request,
-                PeerRequestOptions { timeout: Some(timeout), meta: None },
-            )
+            .send_cancellable_request(request, PeerRequestOptions::with_timeout(timeout))
             .await
             .map_err(|error| self.classify(&error))?;
         handle.await_response().await.map_err(|error| self.classify(&error))
@@ -449,13 +464,13 @@ impl Connection {
         &self,
         request: rmcp::model::ClientRequest,
         timeout: Duration,
-        meta: Meta,
+        meta: RequestMetaObject,
     ) -> Result<ServerResult, RequestError> {
         let handle = self
             .peer
             .send_cancellable_request(
                 request,
-                PeerRequestOptions { timeout: Some(timeout), meta: Some(meta) },
+                PeerRequestOptions::with_timeout(timeout).with_meta(meta),
             )
             .await
             .map_err(|error| self.classify(&error))?;
@@ -484,11 +499,7 @@ impl Connection {
             Box::pin(async move {
                 let result = this
                     .call(
-                        rmcp::model::ClientRequest::ListToolsRequest(ListToolsRequest {
-                            method: Default::default(),
-                            params: None,
-                            extensions: Default::default(),
-                        }),
+                        rmcp::model::ClientRequest::ListToolsRequest(ListToolsRequest::default()),
                         timeout,
                     )
                     .await
@@ -515,11 +526,7 @@ impl Connection {
             Box::pin(async move {
                 let result = this
                     .call(
-                        rmcp::model::ClientRequest::ListPromptsRequest(ListPromptsRequest {
-                            method: Default::default(),
-                            params: None,
-                            extensions: Default::default(),
-                        }),
+                        rmcp::model::ClientRequest::ListPromptsRequest(ListPromptsRequest::default()),
                         timeout,
                     )
                     .await
@@ -546,11 +553,9 @@ impl Connection {
             Box::pin(async move {
                 let result = this
                     .call(
-                        rmcp::model::ClientRequest::ListResourcesRequest(ListResourcesRequest {
-                            method: Default::default(),
-                            params: None,
-                            extensions: Default::default(),
-                        }),
+                        rmcp::model::ClientRequest::ListResourcesRequest(
+                            ListResourcesRequest::default(),
+                        ),
                         timeout,
                     )
                     .await
@@ -581,11 +586,7 @@ impl Connection {
                 let result = this
                     .call(
                         rmcp::model::ClientRequest::ListResourceTemplatesRequest(
-                            ListResourceTemplatesRequest {
-                                method: Default::default(),
-                                params: None,
-                                extensions: Default::default(),
-                            },
+                            ListResourceTemplatesRequest::default(),
                         ),
                         timeout,
                     )
@@ -617,11 +618,9 @@ impl Connection {
         }
         let result = self
             .call(
-                rmcp::model::ClientRequest::ReadResourceRequest(rmcp::model::ReadResourceRequest {
-                    method: Default::default(),
-                    params: ReadResourceRequestParam { uri: uri.to_string() },
-                    extensions: Default::default(),
-                }),
+                rmcp::model::ClientRequest::ReadResourceRequest(
+                    rmcp::model::ReadResourceRequest::new(ReadResourceRequestParams::new(uri)),
+                ),
                 self.execution_timeout,
             )
             .await
@@ -646,13 +645,15 @@ impl Connection {
                 .map(|(key, value)| (key, serde_json::Value::String(value)))
                 .collect::<serde_json::Map<String, serde_json::Value>>()
         });
+        let mut params = GetPromptRequestParams::new(name);
+        if let Some(arguments) = arguments {
+            params = params.with_arguments(arguments);
+        }
         let result = self
             .call(
-                rmcp::model::ClientRequest::GetPromptRequest(rmcp::model::GetPromptRequest {
-                    method: Default::default(),
-                    params: rmcp::model::GetPromptRequestParam { name: name.into(), arguments },
-                    extensions: Default::default(),
-                }),
+                rmcp::model::ClientRequest::GetPromptRequest(rmcp::model::GetPromptRequest::new(
+                    params,
+                )),
                 self.execution_timeout,
             )
             .await
@@ -675,23 +676,22 @@ impl Connection {
         args: Option<&serde_json::Map<String, serde_json::Value>>,
         session_id: Option<&str>,
     ) -> Result<CallToolResult, RequestError> {
-        let mut meta = Meta::new();
+        let mut meta = RequestMetaObject::new();
         if let Some(session_id) = session_id {
-            meta.0.insert(
+            meta.insert(
                 "ai.opencode/sessionID".to_string(),
                 serde_json::Value::String(session_id.to_string()),
             );
         }
+        let mut params = CallToolRequestParams::new(name.to_string());
+        if let Some(args) = args {
+            params = params.with_arguments(args.clone());
+        }
         let result = self
             .call_with_meta(
-                rmcp::model::ClientRequest::CallToolRequest(rmcp::model::CallToolRequest {
-                    method: Default::default(),
-                    params: CallToolRequestParam {
-                        name: name.to_string().into(),
-                        arguments: args.cloned(),
-                    },
-                    extensions: Default::default(),
-                }),
+                rmcp::model::ClientRequest::CallToolRequest(rmcp::model::CallToolRequest::new(
+                    params,
+                )),
                 self.execution_timeout,
                 meta,
             )
@@ -885,7 +885,15 @@ async fn connect_remote(
             headers.insert(reqwest::header::AUTHORIZATION, value);
         }
     }
-    let client = reqwest::Client::builder()
+    // rmcp 3.7's built-in `StreamableHttpClient` impl targets reqwest 0.13
+    // while the workspace stays on 0.12; both wrap the same `http` crate,
+    // so one `HeaderMap` feeds the pre-flight (0.12) and the transport
+    // (0.13) identically.
+    let preflight_client = reqwest::Client::builder()
+        .default_headers(headers.clone())
+        .build()
+        .map_err(|error| connect_failure(input.server, &error))?;
+    let client = reqwest13::Client::builder()
         .default_headers(headers)
         .build()
         .map_err(|error| connect_failure(input.server, &error))?;
@@ -897,7 +905,7 @@ async fn connect_remote(
     // challenge text; every other outcome falls through to the real
     // handshake (transient network failures included — the rmcp attempt
     // owns those retries).
-    if let Some(message) = preflight_challenge(&client, &url).await {
+    if let Some(message) = preflight_challenge(&preflight_client, &url).await {
         return Err(NeedsAuthError {
             server: input.server.to_string(),
             message: format!("HTTP {message}"),
@@ -913,9 +921,13 @@ async fn connect_remote(
     let open = |url: reqwest::Url| {
         let client = client.clone();
         async move {
-            let transport = StreamableHttpClientTransport::<reqwest::Client>::with_client(
+            let transport = StreamableHttpClientTransport::<reqwest13::Client>::with_client(
                 client,
-                StreamableHttpClientTransportConfig::with_uri(url.to_string()),
+                // rmcp 0.5 had no transparent 404 session recovery — the
+                // registry's expiry handling owns reconnect+replay, so the
+                // 3.7 default (`true`) must stay off.
+                StreamableHttpClientTransportConfig::with_uri(url.to_string())
+                    .reinit_on_expired_session(false),
             );
             start(input, transport, true).await
         }
@@ -1034,9 +1046,11 @@ where
     let handler = Handler {
         // v2 declares roots alongside elicitation (and for legacy servers
         // that refuse to run without one); rmcp always answers roots/list,
-        // so declare unconditionally.
+        // so declare unconditionally. (Roots are SEP-2577-deprecated in
+        // rmcp 3.x; declaring stays the pre-existing behavior.)
+        #[allow(deprecated)]
         capabilities: ClientCapabilities::builder().enable_roots().build(),
-        implementation: Implementation { name: "opencode".into(), version: "unknown".into() },
+        implementation: rmcp::model::Implementation::new("opencode", "unknown"),
         roots_directory: input.directory.to_string(),
         changed: Arc::clone(&changed),
     };
@@ -1053,7 +1067,7 @@ where
             .into());
         }
     };
-    let peer_info = service.peer_info().map(|info| Arc::new(info.clone()));
+    let peer_info = service.peer_info();
     let peer = service.peer().clone();
     Ok(Connection {
         server: input.server.into(),
