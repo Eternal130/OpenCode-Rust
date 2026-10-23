@@ -59,7 +59,13 @@ jobs:
           path: ~/.bun/install/cache
           key: bun-app-${{ env.APP_REF }}
 
+      # Bun is PINNED to 1.4.2 (matching runtime-gates BUN_PIN): the pinned
+      # reference app's patch set is bun-version-sensitive — bun 1.4.4's
+      # patch engine fails the photon_rs.js hunk (incident 2026-10-24 run
+      # 39996966029). Unpinning this again requires a ref-side patch refresh.
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
 
       - name: Install + build the reference app
         run: |
