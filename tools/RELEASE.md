@@ -359,7 +359,8 @@ The repo ships two workflows:
   channel and `OPENCODE_APP_ARCHIVE` wired from the web-assets
   artifact), packages a tarball (zip on windows) + `sha256sum` sidecar
   per target, smoke-tests BOTH packaged binaries (`--version` from
-  inside the archive + the `oc-pty` member present), and uploads
+  inside the archive; `oc-pty` exec'd with a bad flag and REQUIRED to
+  fail with its usage exit 2 — it has no `--version`), and uploads
   per-target artifacts. A final tag-only **`publish` job** collects
   every artifact and cuts ONE GitHub release; a matrix leg that did
   not produce an artifact is called out as _(absent)_ in the notes
@@ -464,11 +465,16 @@ discipline exception**: CI is the executor; locally you only consume.
    (node:zlib **brotli q6** + base64 per file, self-describing JSON with
    provenance). Uploaded as the `app-archive` artifact; the bun install
    cache is `actions/cache`-keyed on the ref.
-2. **`linux-x64` job** (`needs: [web-assets]`): downloads the artifact,
-   exports `OPENCODE_APP_ARCHIVE=<path>` so `oc-server/build.rs` stages
-   it into `OUT_DIR` for compile-time embedding, builds as before, and
-   appends a size line (`web-ui-summary.md`) to the release notes +
-   step summary.
+2. **Platform matrix `build` job** (`needs: [web-assets]`, R-11 — the
+   old single `linux-x64` job is gone): each target leg downloads the
+   artifact, exports `OPENCODE_APP_ARCHIVE=<path>` so `oc-server/build.rs`
+   stages it into `OUT_DIR` for compile-time embedding, builds
+   `oc-cli` + `oc-pty`, packages + exec-smokes the archive (§ Platform
+   matrix), and uploads a per-target artifact.
+3. **`publish` job** (tag-only): collects every per-target artifact and
+   cuts ONE GitHub release; the release notes carry the Web-UI size
+   line (bytes/files/ref) composed from the downloaded
+   `app-archive.json` — there is no separate `web-ui-summary.md` step.
 
 **Fail-loud guard**: if `web-assets` did not succeed, the build job
 dies before `cargo build` — a broken app build must never ship a
