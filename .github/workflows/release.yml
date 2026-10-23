@@ -4,14 +4,20 @@ on:
   push:
     tags:
       - "v*"
-  # Dispatch iterates the web-assets job ALONE (the build/publish jobs
-  # below stay tag-only) — for pinning/ref-bump experimentation without
-  # cutting a tag. `skip_web` is the documented emergency escape hatch
-  # (see tools/RELEASE.md § web-ui).
+  # Dispatch iterates the web-assets job ALONE by default (the
+  # build/publish jobs below stay tag-only) — for pinning/ref-bump
+  # experimentation without cutting a tag. Set `build_matrix` to also
+  # exercise every build leg (matrix validation WITHOUT publish —
+  # publish remains tag-only). `skip_web` is the documented emergency
+  # escape hatch (see tools/RELEASE.md § web-ui).
   workflow_dispatch:
     inputs:
       skip_web:
         description: "Emergency only: skip web-assets (publishes an API-only binary)"
+        type: boolean
+        default: false
+      build_matrix:
+        description: "Also run every build leg (matrix validation; no publish)"
         type: boolean
         default: false
 
@@ -121,9 +127,10 @@ jobs:
   build:
     name: build (${{ matrix.target }})
     needs: web-assets
-    # Tag pushes only (dispatches iterate web-assets alone); never build
-    # on top of a failed or cancelled web-assets run.
-    if: ${{ github.event_name == 'push' && !failure() && !cancelled() }}
+    # Tag pushes only, plus explicit `build_matrix` dispatches (matrix
+    # validation without a tag); never build on top of a failed or
+    # cancelled web-assets run.
+    if: ${{ (github.event_name == 'push' || inputs.build_matrix == true) && !failure() && !cancelled() }}
     strategy:
       # One broken experimental leg must not cancel the shipped
       # platforms — publish decides from the surviving artifacts.
