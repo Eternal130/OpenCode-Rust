@@ -8,7 +8,7 @@
 
 ## 1. 当前缺口（截至 2026-10-24，v2.0.24 gap burn-down 收尾之后）
 
-> **2026-10-24 burn-down 收尾**：计划 docs/superpowers/plans/2026-10-23-v2-gap-burndown.md 的全部 lane 落地后，§1 所列功能缺口**除具名豁免外全部闭环**（台账：.superpowers/sdd/2026-10-23-v2-gap-burndown/progress.md）。发布就绪判定 = 台账清零或仅余具名豁免（R-04 前端范围外裁定、R1–R5 hook 注册豁免、(b)-类随机 coin、F15 残留具名豁免）。
+> **2026-10-24 burn-down 收尾**：计划 docs/superpowers/plans/2026-10-23-v2-gap-burndown.md 的全部 lane 落地后，§1 所列功能缺口**除具名豁免外全部闭环**（台账：.superpowers/sdd/2026-10-23-v2-gap-burndown/progress.md）。发布就绪判定 = 台账清零或仅余具名豁免：R-04 前端范围外裁定、R1–R5 hook 注册豁免、(b)-类随机 coin、F15 残留具名豁免（QR 编码器缺失〔`oc-cli/src/handlers/misc.rs:225` 同源〕、≥96 列横排、<54 列 URL 截断、Enter 关闭 affordance、h<36 滚动裁剪）、**console variants/模型级 package/native-protocol 接入延后**（原 lane 降范围，待 native-protocol-binding lane 重开）、**OPENCODE_FAST_BOOT/skipInitialLoading 无对等**（CONFIG-E3 登记 open，boot pill 可达后更显性）。
 
 ### 1.1 功能缺口
 
