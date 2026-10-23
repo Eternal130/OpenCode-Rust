@@ -130,10 +130,9 @@ impl Mock {
     fn cancel_request(&self, id: i64) {
         let _ = self.push.send(JsonRpcMessage::notification(
             rmcp::model::ServerNotification::CancelledNotification(
-                rmcp::model::CancelledNotification::new(rmcp::model::CancelledNotificationParam::new(
-                    Some(RequestId::Number(id)),
-                    None,
-                )),
+                rmcp::model::CancelledNotification::new(
+                    rmcp::model::CancelledNotificationParam::new(Some(RequestId::Number(id)), None),
+                ),
             ),
         ));
     }
@@ -190,10 +189,9 @@ fn mock_pair(script: Script) -> (MockTransport, Mock) {
                     // answered only after the client answered the
                     // elicitation, embedding the result like the TS mock.
                     let elicit_params = match &request.request {
-                        ClientRequest::CallToolRequest(call) => script
-                            .elicit_on_call
-                            .get(call.params.name.as_ref())
-                            .cloned(),
+                        ClientRequest::CallToolRequest(call) => {
+                            script.elicit_on_call.get(call.params.name.as_ref()).cloned()
+                        }
                         _ => None,
                     };
                     if let Some(params) = elicit_params {
@@ -216,8 +214,7 @@ fn mock_pair(script: Script) -> (MockTransport, Mock) {
                                     break response.result;
                                 }
                                 Some(JsonRpcMessage::Response(response)) => {
-                                    let _ =
-                                        answers_tx.send(JsonRpcMessage::Response(response));
+                                    let _ = answers_tx.send(JsonRpcMessage::Response(response));
                                 }
                                 Some(_) => {}
                                 None => return,
@@ -270,18 +267,18 @@ fn respond(
                 .push(serde_json::to_value(request).expect("initialize offer serializes"));
             response(
                 serde_json::json!({
-                    // The mock echoes the client's offered version back —
-                    // v2.0.24's TS client offers `2025-11-25` (its
-                    // SUPPORTED_PROTOCOL_VERSIONS[0], legacy handshake).
-                    "protocolVersion": rmcp::model::ProtocolVersion::V_2025_11_25.to_string(),
-                    "capabilities": {
-                        "tools": { "listChanged": true },
-                        "resources": { "subscribe": true, "listChanged": true },
-                        "prompts": { "listChanged": true },
-                    },
-                    "serverInfo": { "name": "mock", "version": "1" },
-                "instructions": script.instructions,
-            }),
+                        // The mock echoes the client's offered version back —
+                        // v2.0.24's TS client offers `2025-11-25` (its
+                        // SUPPORTED_PROTOCOL_VERSIONS[0], legacy handshake).
+                        "protocolVersion": rmcp::model::ProtocolVersion::V_2025_11_25.to_string(),
+                        "capabilities": {
+                            "tools": { "listChanged": true },
+                            "resources": { "subscribe": true, "listChanged": true },
+                            "prompts": { "listChanged": true },
+                        },
+                        "serverInfo": { "name": "mock", "version": "1" },
+                    "instructions": script.instructions,
+                }),
                 id,
             )
         }
@@ -395,7 +392,13 @@ fn scripted_connector(next: impl FnMut() -> Script + Send + Sync + 'static) -> C
         let elicitation = input.elicitation.clone();
         Box::pin(async move {
             client::connect_with_transport(
-                &ConnectInput { server: &server, config: &config, directory: &directory, bearer, elicitation },
+                &ConnectInput {
+                    server: &server,
+                    config: &config,
+                    directory: &directory,
+                    bearer,
+                    elicitation,
+                },
                 transport,
                 false,
             )
@@ -671,9 +674,24 @@ async fn mcp_client_elicitation_form_accept_answers_and_continues_tool_call() {
         elicit_on_call: BTreeMap::from([("work".to_string(), form_params())]),
         ..Script::new()
     };
+    let offers = Arc::clone(&script.offers);
     let (connection, mock) =
         connect_mock_with(script, Some(RegistryElicitation::adapter(Arc::new(forms.clone()))))
             .await;
+
+    // client.ts:188 — with a handler installed the client advertises the
+    // elicitation capability with both sub-capabilities present. rmcp's
+    // form sub-capability cannot carry v2's `applyDefaults: true` hint
+    // (it models only `schemaValidation`), so the form object is empty.
+    let capabilities =
+        offers.lock()[0].pointer("/params/capabilities").cloned().expect("capabilities offered");
+    assert_eq!(
+        capabilities,
+        serde_json::json!({
+            "roots": {},
+            "elicitation": { "form": {}, "url": {} },
+        })
+    );
 
     let call = tokio::spawn({
         let connection = connection.clone();
@@ -684,9 +702,18 @@ async fn mcp_client_elicitation_form_accept_answers_and_continues_tool_call() {
     // session with the ref payload shape (index.ts:245-277).
     let form = await_global_form(&forms).await;
     assert_eq!(form.title, "mock is requesting input");
-    assert_eq!(form.metadata.as_ref().and_then(|m| m.get("kind")).and_then(|v| v.as_str()), Some("mcp-elicitation"));
-    assert_eq!(form.metadata.as_ref().and_then(|m| m.get("server")).and_then(|v| v.as_str()), Some("mock"));
-    assert_eq!(form.metadata.as_ref().and_then(|m| m.get("message")).and_then(|v| v.as_str()), Some("Who?"));
+    assert_eq!(
+        form.metadata.as_ref().and_then(|m| m.get("kind")).and_then(|v| v.as_str()),
+        Some("mcp-elicitation")
+    );
+    assert_eq!(
+        form.metadata.as_ref().and_then(|m| m.get("server")).and_then(|v| v.as_str()),
+        Some("mock")
+    );
+    assert_eq!(
+        form.metadata.as_ref().and_then(|m| m.get("message")).and_then(|v| v.as_str()),
+        Some("Who?")
+    );
     assert!(form.metadata.as_ref().is_some_and(|m| !m.contains_key("elicitationID")));
 
     // Answer accept+content; the elicitation result flows back and the
@@ -724,10 +751,7 @@ async fn mcp_client_elicitation_empty_schema_accepts_without_creating_forms() {
             .await;
     let result = connection.call_tool("empty-elicitation", None, None).await.expect("call");
     assert_eq!(result.structured, Some(serde_json::json!({ "action": "accept", "content": {} })));
-    assert!(
-        forms.list(None).is_empty(),
-        "an empty schema accepts without creating a form"
-    );
+    assert!(forms.list(None).is_empty(), "an empty schema accepts without creating a form");
     connection.close().await;
 }
 
@@ -818,9 +842,11 @@ async fn mcp_client_elicitation_abort_race_answers_cancel() {
     // dangling a pending form. rmcp additionally drops the late response
     // for a request it already cancelled, so nothing rides the wire.
     let forms = real_forms();
-    let (connection, mut mock) =
-        connect_mock_with(Script::new(), Some(RegistryElicitation::adapter(Arc::new(forms.clone()))))
-            .await;
+    let (connection, mut mock) = connect_mock_with(
+        Script::new(),
+        Some(RegistryElicitation::adapter(Arc::new(forms.clone()))),
+    )
+    .await;
     mock.request_elicitation(7001, form_params());
     let form = await_global_form(&forms).await;
     assert!(matches!(forms.state(&form.id), Ok(oc_schema::form::State::Pending)));
@@ -877,10 +903,7 @@ async fn mcp_registry_passes_elicitation_handler_to_connector() {
         })
     });
     let registry = McpRegistry::with_connector(bus, connector, Arc::new(NoCredentials))
-        .with_config_source({
-            let source = Arc::new(move || servers.clone());
-            source
-        })
+        .with_config_source(Arc::new(move || servers.clone()))
         .with_directory("/tmp")
         .with_elicitation(RegistryElicitation::adapter(Arc::new(real_forms())));
     registry.reconcile().await;
@@ -1030,7 +1053,13 @@ async fn mcp_registry_reconciles_only_changed_servers() {
         let elicitation = input.elicitation.clone();
         Box::pin(async move {
             client::connect_with_transport(
-                &ConnectInput { server: &server, config: &config, directory: &directory, bearer, elicitation },
+                &ConnectInput {
+                    server: &server,
+                    config: &config,
+                    directory: &directory,
+                    bearer,
+                    elicitation,
+                },
                 transport,
                 false,
             )
@@ -1084,7 +1113,13 @@ async fn mcp_registry_recovers_and_replays_after_session_expiry() {
         let elicitation = input.elicitation.clone();
         Box::pin(async move {
             client::connect_with_transport(
-                &ConnectInput { server: &server, config: &config, directory: &directory, bearer, elicitation },
+                &ConnectInput {
+                    server: &server,
+                    config: &config,
+                    directory: &directory,
+                    bearer,
+                    elicitation,
+                },
                 transport,
                 true,
             )
@@ -1126,7 +1161,13 @@ async fn mcp_registry_watch_tools_changed_refreshes_catalog() {
         let elicitation = input.elicitation.clone();
         Box::pin(async move {
             client::connect_with_transport(
-                &ConnectInput { server: &server, config: &config, directory: &directory, bearer, elicitation },
+                &ConnectInput {
+                    server: &server,
+                    config: &config,
+                    directory: &directory,
+                    bearer,
+                    elicitation,
+                },
                 transport,
                 false,
             )

@@ -926,9 +926,7 @@ impl Engine {
         let mcp_source = Arc::new(move || mcp_config.clone());
         let mcp = McpRegistry::new((*self.bus).clone(), (*self.db).clone())
             .with_config_source(mcp_source)
-            .with_elicitation(crate::mcp::RegistryElicitation::adapter(Arc::new(
-                forms.clone(),
-            )));
+            .with_elicitation(crate::mcp::RegistryElicitation::adapter(Arc::new(forms.clone())));
 
         // AGENTS.md injection + skill table. The session-scoped services
         // (inbox, instructions, runner) publish through the
