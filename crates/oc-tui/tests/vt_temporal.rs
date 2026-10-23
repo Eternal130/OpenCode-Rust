@@ -40,6 +40,18 @@
 //!   chatter, no cell changes). The guard therefore pins
 //!   CELL-stability + bounded byte volume; a render-noise regression
 //!   (per-tick cell churn or full repaints ≈ 4 KB/frame) trips it.
+//! * STARTUP PILL (`vt_temporal_startup_loading_pill_thresholds`):
+//!   `#[ignore]`d — REGISTERED FINDING (frozen). The `StartupLoading`
+//!   pill (500 ms display threshold, copy flip + 3 s hold —
+//!   store.rs:9303-9335) is UNREACHABLE in the live boot:
+//!   `set_plugins_ready()` (app.rs:6779) fires BEFORE the render
+//!   loop starts (app.rs:6781), so the pill's state machine first
+//!   runs already-ready and never arms (the unit pin overlays.rs:
+//!   209-212: a ready-before-showing boot never shows the pill). The
+//!   ref mounts `StartupLoading` at app mount and renders WHILE
+//!   plugins boot (app.tsx:1351 gates the UI on `plugins.ready()`,
+//!   :1390 mounts the pill). Un-ignore when the boot wiring renders
+//!   frames during plugin boot.
 
 // Terminal coordinates are u16 by VT definition; harness instants are
 // bounded magnitudes — the truncation lints add nothing here.
@@ -683,4 +695,111 @@ fn theme_interactive() -> (u8, u8, u8) {
         ratatui::style::Color::Rgb(r, g, b) => (r, g, b),
         other => panic!("interactive token must be RGB, got {other:?}"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// StartupLoading: the boot-stretch temporal gate (Lane E2)
+// ---------------------------------------------------------------------------
+
+/// The `StartupLoading` pill's temporal contract over a STRETCHED boot
+/// (spec-round6.md:192-201; thresholds store.rs:9303-9335, render
+/// overlays.rs:131-142): with the server holding every response for
+/// the first 1.2 s (`arm_boot_stretch`), the pill must NOT show
+/// before the 500 ms display threshold, MUST render "Loading
+/// plugins…" once the stall crosses it, flip to "Finishing startup…"
+/// when boot completes, and unmount by shown+3 s (the hold pin),
+/// leaving the booted session screen clean.
+///
+/// REGISTERED FINDING (frozen, `#[ignore]`): the pill is UNREACHABLE
+/// in the live boot. `set_plugins_ready()` fires at app.rs:6779 —
+/// BEFORE the render loop starts (app.rs:6781; the only draw is
+/// :7625, inside it) — so the first `startup_loading_text` call sees
+/// `ready && shown_at.is_none()` and returns `None` forever (the
+/// unit pin overlays.rs:194-212: "a ready-before-showing boot never
+/// shows the pill"). The ref renders from app MOUNT while plugins
+/// boot — app.tsx:1351 gates the main UI on `plugins.ready()` and
+/// :1390 mounts `<StartupLoading ready={plugins.ready}>` — so any
+/// ≥500 ms boot shows the pill there. Our port renders nothing until
+/// plugins are ready (the whole plugin boot is pre-loop, and nothing
+/// in the default boot awaits the server before the first frame), so
+/// NO server stretch can surface the pill: it is dead code in the
+/// live path. Un-ignore when the boot wiring renders frames during
+/// plugin boot (or defers `set_plugins_ready` past the first frame);
+/// the assertions below then turn green unchanged.
+#[test]
+#[ignore = "StartupLoading pill unreachable in the live boot: set_plugins_ready fires before the render loop (see the test header)"]
+fn vt_temporal_startup_loading_pill_thresholds() {
+    let (samples, session_clean): (Vec<(u64, &'static str)>, bool) = run_temporal_test(
+        "boot-stretch",
+        80,
+        24,
+        |fake| fake.arm_boot_stretch(1_200),
+        |harness| {
+            // Observe the pill from boot start (attach ≈ t0) through
+            // the 1.2 s stretch and past the 3 s hold pin, sampling
+            // the whole screen every 30 ms (the pill holds ≥650 ms in
+            // the loading phase once wired — far above the sampling
+            // grid; poll phases, not transitions, so a missed blip
+            // cannot fake a clean run).
+            let boot_start = harness.now_ms();
+            let mut samples: Vec<(u64, &'static str)> = Vec::new();
+            while harness.now_ms() - boot_start < 4_600 {
+                let grid = harness.grid_now();
+                let screen = grid.content_rect(0, 0, grid.cols, grid.rows);
+                let phase = if screen.contains("Finishing startup") {
+                    "finishing"
+                } else if screen.contains("Loading plugins") {
+                    "loading"
+                } else {
+                    "none"
+                };
+                samples.push((harness.now_ms() - boot_start, phase));
+                std::thread::sleep(Duration::from_millis(30));
+            }
+            harness.settle_snapshot();
+            // (d) boot completes: the session opens and no pill
+            // residue survives on the booted screen.
+            boot_to_session(harness)?;
+            let grid = harness.grid_now();
+            let screen = grid.content_rect(0, 0, grid.cols, grid.rows);
+            let session_clean =
+                !screen.contains("Loading plugins") && !screen.contains("Finishing startup");
+            Ok((samples, session_clean))
+        },
+    );
+    eprintln!(
+        "[vt_temporal boot-stretch] {} samples, pill phases: {:?}",
+        samples.len(),
+        samples.iter().filter(|(_, p)| *p != "none").collect::<Vec<_>>()
+    );
+    // (a) pre-500 ms: the pill must NOT be on screen.
+    let early: Vec<_> = samples.iter().filter(|(t, p)| *t < 500 && *p != "none").collect();
+    assert!(early.is_empty(), "the pill showed before the 500 ms threshold: {early:?}");
+    // (b) ≥500 ms into the stretched stall: "Loading plugins…" renders.
+    let show_at = samples.iter().find(|(_, p)| *p == "loading").map_or(u64::MAX, |(t, _)| *t);
+    assert!(
+        show_at != u64::MAX,
+        "the StartupLoading pill never rendered during a 1.2 s stretched boot — the overlay is \
+         UNREACHABLE in the live boot path (registered finding): set_plugins_ready (app.rs:6779) \
+         fires BEFORE the render loop starts (app.rs:6781), so startup_loading_text first runs \
+         already-ready and never arms (unit pin overlays.rs:209-212); the ref mounts the pill at \
+         app mount and renders while plugins boot (app.tsx:1351/:1390). Pill samples: {:?}",
+        samples.iter().filter(|(_, p)| *p != "none").collect::<Vec<_>>()
+    );
+    assert!(show_at >= 500, "the pill appeared at {show_at} ms, under the 500 ms threshold");
+    // (c) escalation (exactly what the state machine pins): once
+    // boot completes the copy flips to "Finishing startup…" and the
+    // pill unmounts by shown+3 s.
+    assert!(
+        samples.iter().any(|(_, p)| *p == "finishing"),
+        "the pill never escalated to \"Finishing startup…\" after the stretch cleared"
+    );
+    let last_pill =
+        samples.iter().filter(|(_, p)| *p != "none").map(|(t, _)| *t).max().unwrap_or(0);
+    assert!(
+        last_pill <= show_at + 3_000 + 400,
+        "the pill held past shown+3 s ({last_pill} ms > {show_at} + 3400)"
+    );
+    // (d) boot completes: the session screen, pill unmounted.
+    assert!(session_clean, "pill residue survived onto the booted session screen");
 }
