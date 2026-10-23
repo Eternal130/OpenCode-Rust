@@ -135,6 +135,20 @@ corpus cells — the port cross-check CAUGHT one hand-computation error
 (`cafe` is not a substring of NFC `café`; corpus corrected). Live-ref
 confirmation defers with the blocker above.
 
+**E12 live-ref recheck (2026-10-23, lane/e12 — closes the dispositions):**
+the deferred live confirmation ran as a ONE-SHOT semantic check against a
+live v2.0.24 reference TUI (bun 1.4.2 @ e7a34f09bf, owned-PTY driver,
+per-boot-per-query, both stacks seeded via their own APIs — child + NFC
+café/naïve + NFD query + CJK + doubled-space titles). Result: **12/12
+parity, zero divergences** — F1 child leak does not exist on the rendered
+surface (bare-predicate artifact), F2 no accent folding, F3 no NFD
+normalization, F4 substring-not-fuzzy (our `.substring_filter()` pin is
+the correct semantics — decision closed), F5 no whitespace collapse, F6
+whitespace-only query = full parent list. No code changes required; the
+source-read pins stand. Evidence + method:
+`docs/e12-live-ref-recheck/` (EVIDENCE.md, per-query snapshots both
+sides, server-API probes, committed PTY driver).
+
 ## §4 Zero-loss table (the script, for re-runs)
 
 `python3 /tmp/opencode/spec-r6/zero_loss.py` →

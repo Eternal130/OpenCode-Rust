@@ -1,0 +1,40 @@
+
+
+
+
+
+
+
+
+
+
+
+                    Sessions for e12ref-3500561-proj                                             esc
+
+                    cafe
+
+                    No sessions found
+
+                    delete ctrl+d  rename ctrl+r                                   all projects ctrl+a
+
+
+                       ┃
+                       ┃  Ask anything… "Fix a TODO in the codebase"
+                       ┃
+                       ┃  Build · Flint 40B Free OpenCode
+                       ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                       /tmp/opencode/e12ref-3500561-proj:master  shift+tab agents  ctrl+p commands
+
+
+
+
+
+
+
+
+
+
+
+
+                                                                                                                2.0.24
+
