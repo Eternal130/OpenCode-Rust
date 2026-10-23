@@ -94,6 +94,8 @@ enum LaunchAction {
     Start(FakeConfig),
 }
 
+// Wire-behavior knobs accumulate per review fixture (bools by nature).
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Default)]
 struct FakeConfig {
     /// `own` without a ticket is answered `error{"daemon is owned"}`.
@@ -108,6 +110,13 @@ struct FakeConfig {
     /// Delay the chunked `replay_complete` marker (§3.2 deferred
     /// completion window).
     replay_complete_delay: Option<Duration>,
+    /// F2 fixture: the `own` reply writes `owned` AND a
+    /// `persistent-pty.removed` `bus_event` in ONE write — frames
+    /// coalesced with `owned` must survive the claim loop.
+    coalesce_event_with_owned: bool,
+    /// §7 fixture: `snapshot` answers with a checkpoint blob that is
+    /// not valid base64 (a protocol error, not silent empty bytes).
+    invalid_snapshot_checkpoint: bool,
 }
 
 /// The running fake daemon's shared state (observable by the test).
@@ -311,6 +320,28 @@ fn dispatch_frame(
             state.owns.fetch_add(1, Ordering::SeqCst);
             *state.last_own.lock() = Some((ticket, directory));
             *state.owner_stream.lock() = Some(Arc::clone(stream));
+            if state.config.coalesce_event_with_owned {
+                // F2 fixture: `owned` + a `bus_event` in ONE write — the
+                // client's claim read receives both frames in one chunk.
+                let mut bytes =
+                    wire::encode_frame(&serde_json::to_vec(&WireResponse::Owned).expect("owned"))
+                        .expect("owned frame");
+                bytes.extend(
+                    wire::encode_frame(
+                        &serde_json::to_vec(&wire::OwnerFrame::BusEvent {
+                            event: "persistent-pty.removed".to_owned(),
+                            data: serde_json::json!({
+                                "sessionID": session().as_str(),
+                                "ptyID": "pty_persistent_1",
+                            }),
+                        })
+                        .expect("bus event json"),
+                    )
+                    .expect("bus event frame"),
+                );
+                let _ = stream.lock().unwrap().write_all(&bytes);
+                return Reply::None;
+            }
             reply(&WireResponse::Owned)
         }
         WireRequest::PrepareHandoff => reply(&WireResponse::Handoff {
@@ -357,7 +388,27 @@ fn dispatch_frame(
         | WireRequest::Control { .. }
         | WireRequest::Input { .. } => reply(&WireResponse::Ok),
         WireRequest::Terminate { id } => {
+            let removed = state
+                .terminals
+                .lock()
+                .iter()
+                .find(|terminal| terminal.id == id)
+                .map(|terminal| (terminal.group_id.clone(), terminal.id))
+                .map(|(group_id, id)| {
+                    // §3.1: `removed` rides the owner connection like
+                    // `added` (the machine's exit publication).
+                    wire::OwnerFrame::BusEvent {
+                        event: "persistent-pty.removed".to_owned(),
+                        data: serde_json::json!({
+                            "sessionID": group_id,
+                            "ptyID": format!("pty_persistent_{id}"),
+                        }),
+                    }
+                });
             state.terminals.lock().retain(|terminal| terminal.id != id);
+            if let Some(event) = removed {
+                state.owner_frame(&event);
+            }
             reply(&WireResponse::Ok)
         }
         WireRequest::Read { .. } | WireRequest::ReadRows { .. } => {
@@ -398,7 +449,11 @@ fn dispatch_frame(
                 output_tail: 4,
             },
             text: "row-one".to_owned(),
-            checkpoint_base64: base64_std().encode(b"checkpoint-bytes"),
+            checkpoint_base64: if state.config.invalid_snapshot_checkpoint {
+                "!!not-base64!!".to_owned()
+            } else {
+                base64_std().encode(b"checkpoint-bytes")
+            },
             cursor_x: 1,
             cursor_y: 0,
         }),
@@ -749,11 +804,12 @@ async fn protocol_mismatch_message_is_surfaced() {
 
 /// §3.1: `bus_event` frames received on the owner connection are
 /// republished onto the real server bus — the TUI/EV-1 surface keeps
-/// seeing `persistent-pty.added` with the same name+payload.
+/// seeing `persistent-pty.added`/`persistent-pty.removed` with the
+/// same names+payloads.
 #[tokio::test]
 async fn owner_bus_events_are_republished_onto_the_bus() {
     let (frontend, bus, launcher) = daemon_frontend("bus-republish").await;
-    let mut subscription = bus.subscribe_types(&["persistent-pty.added"]);
+    let mut subscription = bus.subscribe_types(&["persistent-pty.added", "persistent-pty.removed"]);
     let info = frontend.create(&session(), create_input("ev")).await.expect("create");
     let event = tokio::time::timeout(Duration::from_secs(5), subscription.next())
         .await
@@ -762,7 +818,120 @@ async fn owner_bus_events_are_republished_onto_the_bus() {
     assert_eq!(event.type_, "persistent-pty.added");
     assert_eq!(event.data["sessionID"], session().as_str());
     assert_eq!(event.data["terminal"]["id"], info.id.0);
+    // Test gap (review): the `removed` publication republishes too.
+    frontend.remove(&info.id).await.expect("remove");
+    let event = tokio::time::timeout(Duration::from_secs(5), subscription.next())
+        .await
+        .expect("removed event within 5s")
+        .expect("bus event");
+    assert_eq!(event.type_, "persistent-pty.removed");
+    assert_eq!(event.data["sessionID"], session().as_str());
+    assert_eq!(event.data["ptyID"], info.id.0);
     assert_eq!(launcher.launches.lock().len(), 1);
+}
+
+/// F2: frames coalesced with `owned` in ONE daemon write must survive
+/// the claim loop — the `bus_event` riding the same read chunk as
+/// `owned` used to be dropped with the rest of the decoded batch (and
+/// the claim decoder's buffered state).
+#[tokio::test]
+async fn frames_coalesced_with_owned_are_not_dropped() {
+    let (frontend, bus, launcher) = daemon_frontend_with_script(
+        "coalesced-owned",
+        vec![LaunchAction::Start(FakeConfig {
+            coalesce_event_with_owned: true,
+            ..FakeConfig::default()
+        })],
+    )
+    .await;
+    let mut subscription = bus.subscribe_types(&["persistent-pty.removed"]);
+    let info = frontend.create(&session(), create_input("co")).await.expect("create");
+    let event = tokio::time::timeout(Duration::from_secs(5), subscription.next())
+        .await
+        .expect("coalesced bus event within 5s")
+        .expect("bus event");
+    assert_eq!(event.type_, "persistent-pty.removed");
+    assert_eq!(event.data["ptyID"], info.id.0, "the frame coalesced with owned was republished");
+    assert_eq!(launcher.last_state().expect("state").owns.load(Ordering::SeqCst), 1);
+}
+
+/// §7: a snapshot checkpoint that is not valid base64 is a protocol
+/// error, never silent empty bytes.
+#[tokio::test]
+async fn snapshot_with_invalid_checkpoint_is_a_protocol_error() {
+    let (frontend, _bus, _launcher) = daemon_frontend_with_script(
+        "bad-snapshot",
+        vec![LaunchAction::Start(FakeConfig {
+            invalid_snapshot_checkpoint: true,
+            ..FakeConfig::default()
+        })],
+    )
+    .await;
+    frontend.create(&session(), create_input("s")).await.expect("create");
+    let error = frontend
+        .snapshot(&PtyId("pty_persistent_1".to_owned()))
+        .await
+        .expect_err("a bad checkpoint blob errors");
+    assert_eq!(
+        error.message, "opencode-pty snapshot checkpoint is not valid base64",
+        "the §7 protocol error surfaces, got: {error}"
+    );
+}
+
+/// §7: a `resized` frame whose checkpoint blob is not valid base64 is
+/// a protocol violation on a one-way stream — the pump ENDS (`on_end`)
+/// instead of delivering silent empty checkpoint bytes.
+#[tokio::test]
+async fn resized_with_invalid_checkpoint_ends_the_stream() {
+    let (frontend, _bus, state) =
+        prestarted_frontend("bad-resize-checkpoint", FakeConfig::default()).await;
+    state.chunked_replay.store(false, Ordering::SeqCst);
+    let resized = serde_json::to_vec(&WireResponse::Resized {
+        cols: 100,
+        rows: 30,
+        generation: 2,
+        checkpoint_base64: "!!not-base64!!".to_owned(),
+    })
+    .expect("resized json");
+    // live_frames carry unframed PAYLOADS — the fake daemon frames them.
+    state.live_frames.lock().push(resized);
+
+    let (events_tx, events_rx) = std::sync::mpsc::channel::<StreamEvent>();
+    let (end_tx, end_rx) = std::sync::mpsc::channel::<()>();
+    let attachment = frontend
+        .attach(
+            &PtyId("pty_persistent_1".to_owned()),
+            AttachInput {
+                cursor: 0,
+                attachment_id: "attach-1",
+                role: Role::Observer,
+                takeover: false,
+                on_event: Box::new(move |event| {
+                    let _ = events_tx.send(event);
+                }),
+                on_end: Box::new(move || {
+                    let _ = end_tx.send(());
+                }),
+            },
+        )
+        .await
+        .expect("attach");
+    attachment.activate();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if end_rx.try_recv().is_ok() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the stream ends within 5s");
+    assert!(
+        events_rx.try_recv().is_err(),
+        "no Resized event with silent empty checkpoint bytes may be delivered"
+    );
+    attachment.detach();
 }
 
 async fn daemon_frontend(tag: &str) -> (Frontend, Bus, Arc<FakeLauncher>) {
