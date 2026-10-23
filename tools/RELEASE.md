@@ -8,9 +8,45 @@ how the optional runtime dependencies are handled.
 | Artifact | Path | Notes |
 |---|---|---|
 | Release binary | `cargo build --release -p oc-cli` → `target/release/opencode-rust` (~46 MiB, thin-LTO + symbol-strip via the workspace `[profile.release]`) | The single command: CLI + server + TUI. Reports `opencode-rust v2.0.24` (`--version`) and `opencode-rust v2.0.24 (rust port build <git-short>, <profile> profile)` (`--version-rust`, hidden; stamped by `crates/oc-cli/build.rs`). The `/api/info` version stays `2.0.24` (protocol parity). |
-| Installer | `install/install.sh` | Mirrors v2's installer UX shape (versioned download → `~/.opencode/bin/opencode-rust`, chmod 755, shell-config PATH hint, ASCII banner). See below for the parameterization. |
+| PTY daemon binary | `cargo build --release -p oc-pty` → `target/release/oc-pty` | The persistent-terminal daemon (Phase 9). CO-PACKAGED with the main binary in every release archive — the phase-3 gate ruling; see "oc-pty co-packaging" below. |
+| Installer | `install/install.sh` | Mirrors v2's installer UX shape (versioned download → `~/.opencode/bin/opencode-rust`, chmod 755, shell-config PATH hint, ASCII banner). Installs the `oc-pty` sibling when the payload carries it. See below for the parameterization. |
 | Release smoke | `tools/release-smoke.sh` | Gate for any release candidate; see below. |
-| Release tarball | NOT in-repo — produce at packaging time: `tar -czf opencode-<version>-<target>.tar.gz package/opencode-rust` (a `package/opencode-rust` or `opencode-rust` member; both the installer and `opencode-rust upgrade` accept either, plus zip and raw-binary artifacts) | Publish alongside `<tarball>.sha256` sidecars (`sha256sum` format) — the installer auto-uses them. |
+| Release tarball | NOT in-repo — produce at packaging time: `tar -czf opencode-<version>-<target>.tar.gz package/opencode-rust package/oc-pty` (windows: a zip with `opencode-rust.exe` + `oc-pty.exe`) | Two-member archives (the installer and `opencode-rust upgrade` accept the `package/opencode-rust` or `opencode-rust` member shape, plus zip and raw-binary artifacts) published per platform target alongside `<archive>.sha256` sidecars (`sha256sum` format) — the installer auto-uses them. See "Platform matrix (R-11)" for the target list. |
+
+## oc-pty co-packaging (phase-3 gate ruling)
+
+Persistent terminals are default-ON and route through the `oc-pty`
+daemon. The spawn resolution order is `OPENCODE_PTY_BIN` → the `oc-pty`
+sitting NEXT TO the main executable (exe-sibling) → `PATH`
+(`oc_core::persistent_pty::transport::resolve_binary_path`). A released
+install without the sibling would 503 every persistent-terminal op, so
+the gate ruling binds the two binaries together:
+
+* Every release archive carries BOTH `package/opencode-rust` AND
+  `package/oc-pty` (windows: both `.exe` members at the zip root).
+* The release workflow builds `-p oc-cli -p oc-pty` for every matrix
+  target, and the packaging smoke asserts BOTH members extract from the
+  archive and the main binary runs `--version` from inside it.
+* `install/install.sh` installs both into `~/.opencode/bin` when the
+  payload carries the sibling. A lone main binary (legacy beta tarballs,
+  raw `--binary` installs) still installs — with a note, never a
+  failure.
+
+**One-release escape hatch (user-facing)**: `OC_PTY_DAEMON=0` forces
+the in-process PTY backend for exactly ONE release window (design doc
+`docs/superpowers/specs/2026-10-23-pty-daemon-design.md` R3) — no
+`oc-pty` process is ever spawned and the HTTP/TUI surface is
+identical. Set it if a release arrives without a usable sibling binary
+(e.g. a manual single-binary copy); the flag is scheduled for
+retirement next release.
+
+**Registered gap (product-lane follow-up, not tooling)**:
+`opencode-rust upgrade` currently refreshes only the main binary —
+after an upgrade `~/.opencode/bin/oc-pty` stays at the PREVIOUS
+release until the upgrade command learns the sibling. A skewed pair is
+untested territory; re-run the installer (or copy the sibling out of
+the new tarball) to resync them. Teaching `upgrade` the sibling is
+registered lane-C work — no silent skip.
 
 ## Identity: binary name, isolated data dirs, one-way v2 migration
 
@@ -315,15 +351,21 @@ The repo ships two workflows:
   (the scratch root tests stage their PID-unique sandboxes under; the dev
   box pre-creates it, runners do not). Toolchain pinned via
   `rust-toolchain.toml` (1.99.0 = the version every gate ran on).
-- **`.github/workflows/release.yml`** — tag-triggered (`v*`): builds
-  `cargo build --release -p oc-cli --locked` (with
-  `OC_RELEASE_TAG=${{ github.ref_name }}` stamped for the update
-  channel) on `ubuntu-latest`, packages
-  `opencode-<version>-linux-x64.tar.gz` (a `package/opencode-rust` member — the
-  layout the installer and `opencode-rust upgrade` accept) plus the
-  `sha256sum`-format sidecar, smoke-tests the packaged binary
-  (`--version` from inside the tarball), then publishes the GitHub
-  Release. Tags containing `beta` publish as **prerelease**.
+- **`.github/workflows/release.yml`** — tag-triggered (`v*`):
+  `web-assets` builds the embedded UI archive (unchanged, R-04), then a
+  **platform matrix `build` job** (R-11) builds
+  `cargo build --release -p oc-cli -p oc-pty --locked --target <rust
+  target>` per target (with `OC_RELEASE_TAG` stamped for the update
+  channel and `OPENCODE_APP_ARCHIVE` wired from the web-assets
+  artifact), packages a tarball (zip on windows) + `sha256sum` sidecar
+  per target, smoke-tests BOTH packaged binaries (`--version` from
+  inside the archive; `oc-pty` exec'd with a bad flag and REQUIRED to
+  fail with its usage exit 2 — it has no `--version`), and uploads
+  per-target artifacts. A final tag-only **`publish` job** collects
+  every artifact and cuts ONE GitHub release; a matrix leg that did
+  not produce an artifact is called out as _(absent)_ in the notes
+  table — never silently dropped. Tags containing `beta` publish as
+  **prerelease**.
 
 ### Version scheme during acceptance
 
@@ -342,6 +384,66 @@ https://github.com/Eternal130/OpenCode-Rust/releases/download/<tag>/opencode-<ve
 
 Feed it to the installer via `--url` (or `$RELEASE_URL`); there is still
 no default URL by design (the 2.0.24 pin must never adopt TS releases).
+
+## Platform matrix (R-11)
+
+Every target below is a matrix leg of the release workflow's `build`
+job; each produces a `opencode-<version>-<target>` archive (+ `.sha256`
+sidecar) carrying BOTH binaries, uploaded as its own artifact and
+published by the `publish` job.
+
+| Target | Asset suffix | Runner | Toolchain | Status |
+|---|---|---|---|---|
+| linux x86_64 (glibc) | `linux-x64` | `ubuntu-latest` | native | **shipped** since Phase 10; the suffix is FROZEN (update-channel asset expectation) |
+| linux aarch64 (glibc) | `linux-arm64` | `ubuntu-24.04-arm` | native | new (R-11) |
+| linux x86_64 (musl, static) | `linux-x64-musl` | `ubuntu-latest` | `musl-tools` + cmake | new (R-11); watch item below |
+| linux aarch64 (musl, static) | `linux-arm64-musl` | `ubuntu-24.04-arm` | `musl-tools` + cmake | new (R-11); same watch item |
+| macOS aarch64 (Apple silicon) | `darwin-arm64` | `macos-latest` | native | new (R-11). macOS x86_64 (Intel) is NOT shipped — Intel Macs build from source |
+| windows x86_64 | `windows-x64` (zip) | `windows-latest` | MSVC | new (R-11), **EXPERIMENTAL build-only** — see KNOWN-ISSUE-R11-WINDOWS |
+
+Notes:
+
+* **Target naming** follows the installer's `{target}` convention
+  (`uname -s` lowercased + `uname -m` mapped: x86_64→x64,
+  aarch64→arm64), so `--url …/{target}` templates resolve on every
+  shipped unix platform — except the `-musl` suffixes, which `uname`
+  cannot produce: musl assets are direct-download only.
+* **Runner strategy**: native runners wherever they exist (no cross
+  toolchains); `ubuntu-24.04-arm` requires the public-repo free ARM
+  runner tier (a private repo would need paid larger runners). musl
+  has no native runner — the standard `musl-tools` + cmake recipe
+  compiles for the HOST arch under musl (x86_64-musl on the x64 runner,
+  aarch64-musl on the arm runner), so those binaries still smoke-run
+  natively.
+* **R10a (rmcp → aws-lc-rs)**: `aws-lc-sys` compiles C, so every
+  builder installs/verifies `cmake` (ubuntu: apt; macOS: brew fallback;
+  windows: preinstalled-image assert). The musl legs additionally wire
+  `CC_<target>`/`CARGO_TARGET_<target>_LINKER` to `musl-gcc`.
+* **KNOWN-ISSUE-R11-MUSL (watch item)**: `aws-lc-sys` under musl is
+  the historically painful seam. The legs are wired strict (NO
+  `continue-on-error`): a red musl leg fails the matrix, `publish`
+  does not run, and the release is blocked — the honest signal. IF a
+  tagged run fails inside `aws-lc-sys`'s cmake build in a way that is
+  upstream-infeasible from the logs alone, flip the leg to
+  `experimental: true` (continue-on-error) and pin the failing
+  `aws-lc-sys` version + error here; the other platforms then publish
+  with the musl rows visibly _(absent)_ in the notes.
+* **KNOWN-ISSUE-R11-WINDOWS**: first-ever Windows build. The workspace
+  has unix-only seams (oc-pty's Unix-socket wire, safekill's
+  pidfd/procfs, `std::os::unix` in oc-core) that may need cfg-gating
+  before `oc-cli`/`oc-pty` link on MSVC. The leg is registered
+  EXPERIMENTAL (`continue-on-error`): it runs on every tag, and the
+  windows asset ships only once the leg actually goes green (the notes
+  table shows the absence until then). Tests are not attempted
+  (build-only, per the R-11 ruling).
+* **runtime-gates.yml keeps its own `platform-build` macOS job** (the
+  §12.4 SURF-PLATFORM dev-loop leg: whole-workspace `cargo build` on
+  `macos-latest`, dispatch-gated). The two are complementary, not
+  duplicated: runtime-gates proves the workspace COMPILES on macOS
+  during development; release.yml's `darwin-arm64` leg produces the
+  macOS release artifact. Consolidating them would couple the dev-loop
+  proof to tag-only execution — deliberately not done (stated ruling).
+
 
 ## Web UI asset archive (R-04)
 
@@ -363,11 +465,16 @@ discipline exception**: CI is the executor; locally you only consume.
    (node:zlib **brotli q6** + base64 per file, self-describing JSON with
    provenance). Uploaded as the `app-archive` artifact; the bun install
    cache is `actions/cache`-keyed on the ref.
-2. **`linux-x64` job** (`needs: [web-assets]`): downloads the artifact,
-   exports `OPENCODE_APP_ARCHIVE=<path>` so `oc-server/build.rs` stages
-   it into `OUT_DIR` for compile-time embedding, builds as before, and
-   appends a size line (`web-ui-summary.md`) to the release notes +
-   step summary.
+2. **Platform matrix `build` job** (`needs: [web-assets]`, R-11 — the
+   old single `linux-x64` job is gone): each target leg downloads the
+   artifact, exports `OPENCODE_APP_ARCHIVE=<path>` so `oc-server/build.rs`
+   stages it into `OUT_DIR` for compile-time embedding, builds
+   `oc-cli` + `oc-pty`, packages + exec-smokes the archive (§ Platform
+   matrix), and uploads a per-target artifact.
+3. **`publish` job** (tag-only): collects every per-target artifact and
+   cuts ONE GitHub release; the release notes carry the Web-UI size
+   line (bytes/files/ref) composed from the downloaded
+   `app-archive.json` — there is no separate `web-ui-summary.md` step.
 
 **Fail-loud guard**: if `web-assets` did not succeed, the build job
 dies before `cargo build` — a broken app build must never ship a
