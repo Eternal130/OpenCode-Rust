@@ -50,13 +50,17 @@
 //!   glyph cells) is applied per cell over the base frame by the same
 //!   `blend_backdrop` the old path uses.
 //!
-//! **Divergence class (documented, matrix-bounded).** The old
-//! renderer paints long text runs past their box's padding edge (a
-//! title runs to the frame edge; the footer then overwrites). The
-//! tree clips at the box edge (the tsx's own `overflow: hidden`
-//! behavior). The parity matrix uses realistic lengths where the two
-//! agree; extreme-overflow frames are a documented divergence, not a
-//! parity regression.
+//! **Divergence class (documented, matrix-bounded — option rows
+//! CLOSED by lane F15).** The old renderer once painted long text
+//! runs past their box's padding edge (a title ran to the frame
+//! edge; the footer then overwrote). Lane F15 ported the ref's
+//! two-stage truncation into BOTH painters (stage-1 `Locale.
+//! truncate(title, 61)` + the footer-respecting stage-2 clip — see
+//! `dialog_select::truncated_title`/`title_clip_end`), so option
+//! rows now clip at the title box edge exactly like the tsx's
+//! `overflow: hidden`. The remaining documented divergence is the
+//! non-option chrome (headers/empty rows), which carries no
+//! overflow cases in the parity matrix.
 
 // Terminal dimensions/colors are bounded u8/u16/usize→f32 casts, the
 // same allowance the hand-rolled renderer carries.
@@ -76,8 +80,8 @@ use opentui_solid::reactive::Reactive;
 use opentui_solid::{box_, for_list, map, show, text, Element, Signal, SolidRenderer};
 
 use crate::components::dialog_select::{
-    content_rows, flat_indices, grouped, viewport_height, DialogStyles, SelectOption, SelectProps,
-    SelectState,
+    content_rows, flat_indices, grouped, title_clip_end, truncated_title, viewport_height,
+    DialogStyles, SelectOption, SelectProps, SelectState,
 };
 use crate::render::Frame;
 use crate::store::{DialogEntry, DialogKind, PluginDialogContent};
@@ -107,6 +111,9 @@ struct DialogColors {
     formfield_base_fg: Rgb,
     destructive_fg: Rgb,
     destructive_bg: Rgb,
+    /// `text.feedback.error.base` — the pair dialog's failed-load
+    /// header (dialog-pair.tsx:121).
+    error_fg: Rgb,
 }
 
 impl DialogColors {
@@ -132,6 +139,7 @@ impl DialogColors {
             formfield_base_fg: rgb(styles.formfield_base_fg),
             destructive_fg: rgb(styles.destructive_fg),
             destructive_bg: rgb(styles.destructive_bg),
+            error_fg: rgb(styles.error_fg),
         }
     }
 }
@@ -192,6 +200,11 @@ enum Family {
     /// of M` header, the image area (the cells paint in the bridge's
     /// post-pass), the `← previous / caption / next →` footer.
     ImagePreview,
+    /// F15 fix round: `component/dialog-pair.tsx` — a CUSTOM dialog
+    /// (never a `DialogSelect`): the bold `Pair` header + `esc`
+    /// chrome, then the resource states (loading / error / the
+    /// word-wrapped intro + link blocks + loopback hint).
+    Pair,
 }
 
 /// One rendered row of the scroll window — the same walk the old
@@ -278,16 +291,25 @@ struct DialogInputs {
     preview_footer: (String, String, String),
     /// The image area's row count (`max(3, height - 8)`).
     preview_rows: usize,
+    // -- F15: the pair dialog's content rows ---------------------------
+    /// The word-wrapped content walk (loading / error / loaded) —
+    /// [`crate::components::dialog_pair::rows`].
+    pair_rows: Vec<crate::components::dialog_pair::PairRow>,
 }
 
-/// TUI-10/24: the custom families' store-side sidecar — the image
-/// preview's live state + the error-details scroll offset. Built by
+/// TUI-10/24 + F15: the custom families' store-side sidecar — the
+/// image preview's live state, the error-details scroll offset, the
+/// pair dialog's resource state. Built by
 /// [`crate::components::dialog::render_overlay`] (which owns the
 /// store); the embedder API path carries the default.
 #[derive(Debug, Default, Clone)]
 pub struct DialogSidecar {
     pub preview: crate::store::ImagePreviewState,
     pub error_scroll: usize,
+    /// `DialogPair`'s resource (`store.pair_state()` — the fetch
+    /// seam itself is untouched; the sidecar only carries the
+    /// snapshot the content walk reads).
+    pub pair: crate::store::PairState,
 }
 
 /// The windowed rows — the old renderer's walk (`render_select`),
@@ -380,6 +402,9 @@ fn content_height(inputs: &DialogInputs) -> usize {
         // image area (max(3, height-8) rows), gap, the footer, root
         // paddingBottom.
         Family::ImagePreview => inputs.preview_rows + 5,
+        // F15 (dialog-pair.tsx:89-129): the `Pair` title row, the
+        // root's gap 1, the content rows, the root paddingBottom 1.
+        Family::Pair => inputs.pair_rows.len() + 3,
     }
 }
 
@@ -444,9 +469,14 @@ fn footer_text(inputs: &DialogInputs, index: usize) -> Option<String> {
 }
 
 /// The option row's title chunks: `[title][ " description"]` — one
-/// styled run per fg/attr change, contiguous columns, truncated by
-/// atom walk at the row's inner width minus the right-aligned
-/// footer's reservation (the old `put`'s break at the box edge).
+/// styled run per fg/attr change, contiguous columns. F15: the ref's
+/// two-stage truncation (dialog-select.tsx:885-907) — stage 1 caps
+/// the TITLE at `titleWidth ?? 61` (`Locale.truncate`,
+/// [`truncated_title`]); stage 2 clips the whole run at the title
+/// text box's edge: the row content edge less the footer's
+/// `flexShrink=0` reservation and its `gap=1` column
+/// ([`title_clip_end`]) — the footer keeps its columns and the gap
+/// never shows a title glyph.
 fn title_chunks(inputs: &DialogInputs, paint: &RowPaint, index: usize) -> StyledText {
     let Some(option) = inputs.options.get(index) else {
         return styled(Vec::new());
@@ -455,15 +485,12 @@ fn title_chunks(inputs: &DialogInputs, paint: &RowPaint, index: usize) -> Styled
         Some(description) if Some(description) != option.category.as_deref() => Some(description),
         _ => None,
     };
-    // The old `put` walks to the ROW edge (the box width, the
-    // paddingRight zone included) and the right-aligned footer then
-    // OVERWRITES its span — glyphs right of the footer SURVIVE. The
-    // tree reproduces this: chunks run to the row edge, the footer
-    // is absolutely positioned and later in DOM order (it
-    // overwrites), and every chunk carries the ROW background (the
-    // old `put` writes bg on every glyph cell, past the row box's
-    // own fill span too).
-    let clip = inputs.box_width.saturating_sub(4);
+    // Stage 2 — the clip column is absolute (the row content edge
+    // less the footer reservation); the chunk walk counts cells from
+    // the title's start at box column 4, so the budget is the clip
+    // less that offset.
+    let clip =
+        title_clip_end(inputs.box_width, footer_text(inputs, index).as_deref()).saturating_sub(4);
     let attrs = u32::from(paint.bold);
     let mut chunks: Vec<TextChunk> = Vec::new();
     let mut used = 0usize;
@@ -482,7 +509,7 @@ fn title_chunks(inputs: &DialogInputs, paint: &RowPaint, index: usize) -> Styled
             used += step;
         }
     };
-    push(&mut chunks, &option.title, paint.title_fg);
+    push(&mut chunks, &truncated_title(option), paint.title_fg);
     if let Some(description) = description {
         let fg = if paint.selected { paint.title_fg } else { inputs.colors.muted };
         push(&mut chunks, &format!(" {description}"), fg);
@@ -566,10 +593,11 @@ fn option_element(inputs: &Signal<DialogInputs>, index: usize) -> Element {
         );
 
     // The title + description run. Natural width + wrap none: the
-    // old `put` walks to the ROW edge (past the row box's padding
-    // into the paddingRight zone), so the text must not be
-    // box-clipped — flexShrink 0 lets its glyphs paint to the row
-    // edge exactly like the old renderer's atom walk.
+    // run's chunks are pre-clipped by the same two-stage walk as the
+    // old renderer (stage-1 cap + the footer-respecting stage-2
+    // edge in `title_chunks`), and `flexShrink 0` keeps the
+    // box-clipped glyphs painting exactly like the old renderer's
+    // atom walk.
     let title_text = text().flex_shrink(0.0).wrap_mode("none").dyn_prop(
         "content",
         dyn_styled(map(inputs.clone(), move |i: &DialogInputs| match paint_at(i) {
@@ -579,9 +607,10 @@ fn option_element(inputs: &Signal<DialogInputs>, index: usize) -> Element {
     );
 
     // The right-aligned footer: ABSOLUTE, right 3 — ends at the row
-    // box's content edge exactly, and paints AFTER the title in DOM
-    // order so it overwrites overflowing title glyphs (the old
-    // renderer's footer-over-title paint order).
+    // box's content edge exactly. Since lane F15 the title stops at
+    // the gap before the footer's reservation, so the two never
+    // collide; the footer stays later in DOM order (paint order
+    // parity with the old renderer's footer-last paint).
     let footer_text_el = text().position("absolute").right(3.0).dyn_prop(
         "content",
         dyn_styled(map(inputs.clone(), move |i: &DialogInputs| {
@@ -1580,6 +1609,84 @@ fn image_preview_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::Elemen
 }
 
 // ---------------------------------------------------------------------------
+// the pair tree (F15 fix round)
+// ---------------------------------------------------------------------------
+
+/// `DialogPair` (dialog-pair.tsx:89-129): the bold `Pair` header row
+/// with the `esc` chrome label, then the content rows (loading /
+/// error / the word-wrapped intro + link blocks + loopback hint) — a
+/// `For` over the pre-wrapped walk, one text element per row. The
+/// root mirrors the tsx: paddingLeft/right 2, paddingBottom 1, gap 1.
+fn pair_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilder {
+    let title_row = box_().flex_direction("row").justify_content("space-between").children(
+        Children::Static(vec![
+            text()
+                .dyn_prop(
+                    "content",
+                    dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                        styled(vec![chunk("Pair".to_owned(), i.colors.text, None, 1)])
+                    })),
+                )
+                .into_element(),
+            text()
+                .dyn_prop(
+                    "content",
+                    dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                        styled(vec![chunk("esc".to_owned(), i.colors.muted, None, 0)])
+                    })),
+                )
+                .into_element(),
+        ]),
+    );
+    // The content walk — one For item per row (the payload carries
+    // the row's text; the paint re-derives from the inputs by index).
+    let rows = ForItemSource {
+        source: map(inputs.clone(), |i: &DialogInputs| {
+            i.pair_rows
+                .iter()
+                .enumerate()
+                .map(|(n, row)| {
+                    let text = match row {
+                        crate::components::dialog_pair::PairRow::Gap => String::new(),
+                        crate::components::dialog_pair::PairRow::Text { text, .. } => text.clone(),
+                    };
+                    ForItem { key: format!("P{n}"), value: PropValue::Str(text) }
+                })
+                .collect::<Vec<ForItem>>()
+        }),
+    };
+    let row_inputs = inputs.clone();
+    let content_for = for_list(Rc::new(rows), move |_item: &ForItem, index: usize| {
+        let inputs = row_inputs.clone();
+        text()
+            .dyn_prop(
+                "content",
+                dyn_styled(map(inputs, move |i: &DialogInputs| match i.pair_rows.get(index) {
+                    Some(crate::components::dialog_pair::PairRow::Gap) => {
+                        styled(vec![chunk(" ".to_owned(), i.colors.muted, None, 0)])
+                    }
+                    Some(crate::components::dialog_pair::PairRow::Text { text, style }) => {
+                        let (fg, bold) = match style {
+                            crate::components::dialog_pair::PairStyle::Muted => (i.colors.muted, 0),
+                            crate::components::dialog_pair::PairStyle::Base => (i.colors.text, 0),
+                            crate::components::dialog_pair::PairStyle::ErrorBold => {
+                                (i.colors.error_fg, 1)
+                            }
+                        };
+                        styled(vec![chunk(text.clone(), fg, None, bold)])
+                    }
+                    None => styled(Vec::new()),
+                })),
+            )
+            .into_element()
+    });
+    let content = box_().children_dyn(Rc::new(content_for));
+    box_().padding_left(2.0).padding_right(2.0).padding_bottom(1.0).children(Children::Static(
+        vec![title_row.into_element(), content.margin_top(1.0).into_element()],
+    ))
+}
+
+// ---------------------------------------------------------------------------
 // the mount
 // ---------------------------------------------------------------------------
 
@@ -1609,6 +1716,7 @@ fn chrome_element(
         Family::Confirm => confirm_builder(&family_inputs),
         Family::ErrorDetails => error_details_builder(&family_inputs),
         Family::ImagePreview => image_preview_builder(&family_inputs),
+        Family::Pair => pair_builder(&family_inputs),
     };
     box_()
         .width(width as f32)
@@ -1726,8 +1834,9 @@ pub fn render_overlay_solid(
         let box_x = (width - box_width) / 2;
         // TUI-10: the image preview is CENTERED (`dialog.
         // setCentered(true)`, dialog-image-preview.tsx:24) — the
-        // content-height walk pins the box's height first.
-        let centered = matches!(entry.kind, DialogKind::ImagePreview);
+        // content-height walk pins the box's height first. F15: the
+        // pair dialog is centered too (dialog-pair.tsx:19).
+        let centered = matches!(entry.kind, DialogKind::ImagePreview | DialogKind::Pair);
         let box_y = if centered {
             let inputs_probe = build_inputs(
                 entry,
@@ -1736,7 +1845,7 @@ pub fn render_overlay_solid(
                 DialogColors::of(&DialogStyles::from_theme(theme)),
                 box_width,
                 height,
-                &DialogSidecar::default(),
+                sidecar,
             );
             height.saturating_sub(1 + content_height(&inputs_probe)) / 2
         } else {
@@ -1818,7 +1927,8 @@ fn dialog_chrome_button_hits(
         | Family::Alert
         | Family::Confirm
         | Family::ErrorDetails
-        | Family::ImagePreview => ("esc", 2),
+        | Family::ImagePreview
+        | Family::Pair => ("esc", 2),
         Family::Help => ("esc/enter", 2),
     };
     let label_width = label.chars().count();
@@ -1876,6 +1986,9 @@ fn build_inputs(
         DialogKind::ErrorDetails { .. } => Family::ErrorDetails,
         DialogKind::Alert { .. } => Family::Alert,
         DialogKind::Confirm { .. } => Family::Confirm,
+        // F15 fix round: the pair dialog's CUSTOM tree (ref
+        // dialog-pair.tsx is not a DialogSelect).
+        DialogKind::Pair => Family::Pair,
         _ => Family::Select,
     };
     match family {
@@ -1911,6 +2024,7 @@ fn build_inputs(
                 preview_title: String::new(),
                 preview_footer: (String::new(), String::new(), String::new()),
                 preview_rows: 0,
+                pair_rows: Vec::new(),
                 plugin_rows: Vec::new(),
             }
         }
@@ -1941,6 +2055,7 @@ fn build_inputs(
             preview_title: String::new(),
             preview_footer: (String::new(), String::new(), String::new()),
             preview_rows: 0,
+            pair_rows: Vec::new(),
         },
         // The connect prompts carry their title/placeholder/hints
         // through the props (OAuthCode's description block holds the
@@ -1973,6 +2088,7 @@ fn build_inputs(
             preview_title: String::new(),
             preview_footer: (String::new(), String::new(), String::new()),
             preview_rows: 0,
+            pair_rows: Vec::new(),
         },
         Family::Help => {
             let content_width = box_width.saturating_sub(4);
@@ -2017,6 +2133,7 @@ fn build_inputs(
                 preview_title: String::new(),
                 preview_footer: (String::new(), String::new(), String::new()),
                 preview_rows: 0,
+                pair_rows: Vec::new(),
             }
         }
         Family::PluginRows => {
@@ -2048,6 +2165,7 @@ fn build_inputs(
                 preview_title: String::new(),
                 preview_footer: (String::new(), String::new(), String::new()),
                 preview_rows: 0,
+                pair_rows: Vec::new(),
             }
         }
         // -- TUI-25: DialogAlert / DialogConfirm --------------------
@@ -2101,6 +2219,7 @@ fn build_inputs(
                 preview_title: String::new(),
                 preview_footer: (String::new(), String::new(), String::new()),
                 preview_rows: 0,
+                pair_rows: Vec::new(),
             }
         }
         // -- TUI-24: DialogErrorDetails ------------------------------
@@ -2141,6 +2260,7 @@ fn build_inputs(
                 preview_title: String::new(),
                 preview_footer: (String::new(), String::new(), String::new()),
                 preview_rows: 0,
+                pair_rows: Vec::new(),
             }
         }
         // -- TUI-10: DialogImagePreview ------------------------------
@@ -2185,6 +2305,46 @@ fn build_inputs(
                 preview_title: format!("Image {} of {}", state.index + 1, count),
                 preview_footer: (previous, caption, next),
                 preview_rows,
+                pair_rows: Vec::new(),
+            }
+        }
+        // -- F15: DialogPair — the custom (non-select) tree --------
+        Family::Pair => {
+            // The root box's inner width (paddingLeft/right 2,
+            // dialog-pair.tsx:90); the content walk wraps to it.
+            let content_width = box_width.saturating_sub(4).max(1);
+            let mut pair_rows = crate::components::dialog_pair::rows(&sidecar.pair, content_width);
+            // The height<36 scrollbox (:104-112): the content window
+            // clips to the budget (an invisible scrollbar).
+            pair_rows.truncate(crate::components::dialog_pair::scroll_budget(terminal_height));
+            DialogInputs {
+                family,
+                box_width,
+                colors,
+                title: String::new(),
+                placeholder: String::new(),
+                filter: String::new(),
+                options: Vec::new(),
+                flat: Vec::new(),
+                selected: 0,
+                current: None,
+                flatten: false,
+                destructive: false,
+                window: Vec::new(),
+                actions: Vec::new(),
+                prompt_value: String::new(),
+                hint_lines: Vec::new(),
+                plugin_title: String::new(),
+                plugin_rows: Vec::new(),
+                message: String::new(),
+                confirm_labels: (String::new(), String::new(), true),
+                error_source: String::new(),
+                error_window: Vec::new(),
+                diagnostic: String::new(),
+                preview_title: String::new(),
+                preview_footer: (String::new(), String::new(), String::new()),
+                preview_rows: 0,
+                pair_rows,
             }
         }
     }
