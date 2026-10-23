@@ -27,8 +27,52 @@ use tokio::sync::mpsc;
 
 use crate::args::DaemonConfig;
 
-/// Owner-connection writer handle: framed bytes queued for the socket.
-type ConnWriter = mpsc::UnboundedSender<Vec<u8>>;
+/// What the per-connection writer task should do with the socket's
+/// write half. Riding the close in the SAME channel as the bytes
+/// guarantees the ordering the protocol needs (§6: `owner_superseded`
+/// flushes BEFORE the close; §3: `exited` flushes before the
+/// end-of-stream close).
+enum WriterCommand {
+    /// One framed payload to write + flush.
+    Bytes(Vec<u8>),
+    /// Ordered end-of-stream: everything queued before this command is
+    /// written and flushed, then the write half closes so the peer's
+    /// reader observes EOF (in-process parity: WS Close(1000)).
+    Close,
+}
+
+/// Owner-connection writer handle: queued writer commands for the socket.
+type ConnWriter = mpsc::UnboundedSender<WriterCommand>;
+
+/// Per-connection end-of-stream signal (D1 review, Important 1): the
+/// subscription's `on_end` fires it from inside the machine (child
+/// exit or `terminate` — the latter with NO stream frame), and the
+/// connection task answers by queueing [`WriterCommand::Close`] AFTER
+/// the response of any request currently being dispatched, so the
+/// subscriber reads its final frames and then EOF instead of hanging.
+#[derive(Debug, Default)]
+struct ConnClose {
+    requested: std::sync::atomic::AtomicBool,
+    signal: tokio::sync::Notify,
+}
+
+impl ConnClose {
+    /// `on_end` path — called from the machine (wait thread or an op).
+    fn request(&self) {
+        self.requested.store(true, std::sync::atomic::Ordering::SeqCst);
+        self.signal.notify_one();
+    }
+    fn is_requested(&self) -> bool {
+        self.requested.load(std::sync::atomic::Ordering::SeqCst)
+    }
+    /// Completes once `request` has been called (the `Notify` permit
+    /// bridges the "set before we polled" race).
+    async fn wait(&self) {
+        if !self.is_requested() {
+            self.signal.notified().await;
+        }
+    }
+}
 
 /// A `prepare_handoff` ticket held for one `own` claim (§4.3: the
 /// daemon consumes the ticket in memory AND removes `state.json`).
@@ -59,8 +103,6 @@ struct DaemonState {
     /// terminals AND no owner since this instant (`None` whenever
     /// either condition is false — either pin restarts the window).
     zero_since: Option<Instant>,
-    /// A shutdown op is draining; the grace loop stands down.
-    exiting: bool,
 }
 
 type Shared = Arc<Mutex<DaemonState>>;
@@ -128,7 +170,6 @@ pub async fn run(config: DaemonConfig) -> i32 {
         handoff_ticket: None,
         orphan_grace: config.orphan_grace,
         zero_since: None,
-        exiting: false,
     }));
     serve(listener, state, owner_events_rx).await
 }
@@ -164,7 +205,7 @@ async fn serve(
                             .ok()
                             .and_then(|payload| wire::encode_frame(&payload).ok());
                         if let Some(bytes) = bytes {
-                            let _ = owner.writer.send(bytes);
+                            let _ = owner.writer.send(WriterCommand::Bytes(bytes));
                         }
                     }
                 }
@@ -193,12 +234,11 @@ async fn serve(
 
 /// The §5.1 orphan-grace predicate: the self-exit timer runs only
 /// while the daemon has CONTINUOUSLY had zero terminals (live or
-/// exited) AND no owner connection for the grace period.
+/// exited) AND no owner connection for the grace period. A `shutdown`
+/// op needs no flag here — it ends the serve loop directly (DRAIN),
+/// taking the grace ticker down with it.
 fn orphan_grace_expired(state: &Shared) -> bool {
     let mut shared = state.lock();
-    if shared.exiting {
-        return false;
-    }
     let has_owner = shared.owner.is_some();
     // Token-level ops (list, ping, …) do NOT pin the daemon — only
     // owner connections and terminals do (§5.1).
@@ -215,48 +255,82 @@ fn orphan_grace_expired(state: &Shared) -> bool {
 #[allow(clippy::too_many_lines)] // one straight-line loop: read, dispatch, teardown
 async fn handle_conn(stream: UnixStream, state: Shared, conn_id: u64, exit_tx: mpsc::Sender<i32>) {
     let (mut read_half, write_half) = stream.into_split();
-    let (writer_tx, writer_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    let (writer_tx, writer_rx) = mpsc::unbounded_channel::<WriterCommand>();
     let writer = tokio::spawn(conn_writer(write_half, writer_rx));
+    let close = Arc::new(ConnClose::default());
     let mut decoder = wire::FrameDecoder::new();
     let mut attachment: Option<Attachment> = None;
     let mut buffer = [0u8; 16 * 1024];
-    loop {
-        match read_half.read(&mut buffer).await {
-            Ok(0) | Err(_) => break,
-            Ok(read) => {
-                let frames = match decoder.feed(&buffer[..read]) {
-                    Ok(frames) => frames,
-                    Err(error) => {
-                        eprintln!("oc-pty: connection {conn_id}: {error}");
-                        break;
-                    }
-                };
-                for frame in frames {
-                    let dispatch =
-                        dispatch_frame(&frame, &state, conn_id, &writer_tx, &mut attachment).await;
-                    if let Some(response) = dispatch.response {
-                        send_response(&writer_tx, &response);
-                    }
-                    if dispatch.shutdown {
-                        // DRAIN path: the Ok frame must flush BEFORE the
-                        // process exits — close every sender clone (drop
-                        // our subscription + ownership hold), await the
-                        // writer, then signal the serve loop.
-                        attachment.take();
-                        {
-                            let mut shared = state.lock();
-                            if shared.owner.as_ref().is_some_and(|owner| owner.conn_id == conn_id) {
-                                shared.owner = None;
-                            }
+    let mut stream_ended = false;
+    'conn: loop {
+        tokio::select! {
+            read = read_half.read(&mut buffer) => match read {
+                Ok(0) | Err(_) => break 'conn,
+                Ok(read) => {
+                    let frames = match decoder.feed(&buffer[..read]) {
+                        Ok(frames) => frames,
+                        Err(error) => {
+                            eprintln!("oc-pty: connection {conn_id}: {error}");
+                            break 'conn;
                         }
-                        drop(writer_tx);
-                        let _ = writer.await;
-                        let _ = exit_tx.send(0).await;
-                        return;
+                    };
+                    for frame in frames {
+                        let dispatch = dispatch_frame(
+                            &frame,
+                            &state,
+                            conn_id,
+                            &writer_tx,
+                            &close,
+                            &mut attachment,
+                        )
+                        .await;
+                        if let Some(response) = dispatch.response {
+                            send_response(&writer_tx, &response);
+                        }
+                        if dispatch.shutdown {
+                            // DRAIN path: the Ok frame must flush BEFORE the
+                            // process exits — close every sender clone (drop
+                            // our subscription + ownership hold), await the
+                            // writer, then signal the serve loop. The drain
+                            // terminated every child, so an own subscription
+                            // on THIS connection has already fired on_end:
+                            // queue its ordered close ahead of the drop.
+                            if close.is_requested() {
+                                let _ = writer_tx.send(WriterCommand::Close);
+                            }
+                            attachment.take();
+                            {
+                                let mut shared = state.lock();
+                                if shared.owner.as_ref().is_some_and(|owner| owner.conn_id == conn_id) {
+                                    shared.owner = None;
+                                }
+                            }
+                            drop(writer_tx);
+                            let _ = writer.await;
+                            let _ = exit_tx.send(0).await;
+                            return;
+                        }
+                        // This frame's op may have ended our own stream
+                        // (self-terminate/shutdown from a subscribed
+                        // connection): the response above is already
+                        // queued, so the close orders after it.
+                        if close.is_requested() {
+                            stream_ended = true;
+                            break 'conn;
+                        }
                     }
                 }
-            }
+            },
+            // The machine ended our subscription while this connection
+            // was idle: close after whatever frames already queued.
+            () = close.wait() => {
+                stream_ended = true;
+                break 'conn;
+            },
         }
+    }
+    if stream_ended {
+        let _ = writer_tx.send(WriterCommand::Close);
     }
     // Teardown: an owner socket close returns the daemon to OWNERLESS
     // (§5.1); a subscribe connection detaches.
@@ -274,7 +348,7 @@ async fn handle_conn(stream: UnixStream, state: Shared, conn_id: u64, exit_tx: m
 /// Serializes + queues one response frame.
 fn send_response(writer: &ConnWriter, response: &wire::WireResponse) {
     if let Ok(bytes) = response.to_frame() {
-        let _ = writer.send(bytes);
+        let _ = writer.send(WriterCommand::Bytes(bytes));
     }
 }
 
@@ -290,6 +364,7 @@ async fn dispatch_frame(
     state: &Shared,
     conn_id: u64,
     writer: &ConnWriter,
+    close: &Arc<ConnClose>,
     attachment_slot: &mut Option<Attachment>,
 ) -> Dispatch {
     let envelope: wire::Envelope = match serde_json::from_slice(frame) {
@@ -317,21 +392,30 @@ async fn dispatch_frame(
             };
         }
     }
-    handle_request(envelope.request, state, conn_id, writer, attachment_slot).await
+    handle_request(envelope.request, state, conn_id, writer, close, attachment_slot).await
 }
 
-/// Writes framed bytes to the socket until the channel closes.
+/// Writes framed bytes to the socket until the channel closes or an
+/// ordered [`WriterCommand::Close`] arrives — the close marker ends the
+/// stream AFTER every frame queued before it has been written and
+/// flushed, so the peer's reader observes EOF exactly at the
+/// protocol-defined end (§6 supersession, §3 stream end).
 async fn conn_writer(
     mut write_half: tokio::net::unix::OwnedWriteHalf,
-    mut rx: mpsc::UnboundedReceiver<Vec<u8>>,
+    mut rx: mpsc::UnboundedReceiver<WriterCommand>,
 ) {
     use tokio::io::AsyncWriteExt as _;
-    while let Some(bytes) = rx.recv().await {
-        if write_half.write_all(&bytes).await.is_err() {
-            break;
-        }
-        if write_half.flush().await.is_err() {
-            break;
+    while let Some(command) = rx.recv().await {
+        match command {
+            WriterCommand::Bytes(bytes) => {
+                if write_half.write_all(&bytes).await.is_err() {
+                    break;
+                }
+                if write_half.flush().await.is_err() {
+                    break;
+                }
+            }
+            WriterCommand::Close => break,
         }
     }
     let _ = write_half.shutdown().await;
@@ -383,6 +467,7 @@ async fn handle_request(
     state: &Shared,
     conn_id: u64,
     writer: &ConnWriter,
+    close: &Arc<ConnClose>,
     attachment_slot: &mut Option<Attachment>,
 ) -> Dispatch {
     let machine = state.lock().machine.clone();
@@ -439,16 +524,21 @@ async fn handle_request(
                 };
             }
             // Transfer: the OLD owner receives `owner_superseded` and
-            // is then closed (§6, gate finding 10) — the frame rides
-            // the old connection's writer; dropping the handle closes
-            // its write half after the flush.
+            // is then closed (§6, gate finding 10) — both ride the old
+            // connection's writer channel, so the frame flushes BEFORE
+            // the ordered Close marker shuts its write half down; the
+            // conn task's own writer clone must NOT keep the socket
+            // alive past that (D1 review, Important 2).
             if owner_present && !already_owner {
                 if let Some(previous) = shared.owner.take() {
-                    if let Ok(payload) = serde_json::to_vec(&wire::OwnerFrame::OwnerSuperseded) {
-                        if let Ok(bytes) = wire::encode_frame(&payload) {
-                            let _ = previous.writer.send(bytes);
-                        }
+                    let superseded = serde_json::to_vec(&wire::OwnerFrame::OwnerSuperseded)
+                        .ok()
+                        .and_then(|payload| wire::encode_frame(&payload).ok())
+                        .map(WriterCommand::Bytes);
+                    if let Some(bytes) = superseded {
+                        let _ = previous.writer.send(bytes);
                     }
+                    let _ = previous.writer.send(WriterCommand::Close);
                 }
             }
             // Consume the ticket (§4.3) AND `state.json` (crash
@@ -481,6 +571,13 @@ async fn handle_request(
         // §4.3 owner-only: mint a single-use ticket; `Machine::handoff`
         // also writes the `state.json` crash insurance (§6).
         wire::WireRequest::PrepareHandoff => {
+            // TODO(D1 review): `machine.handoff()` does synchronous
+            // file I/O (the atomic `state.json` write) while the
+            // DaemonState mutex is held, stalling every other op on
+            // this lock for the duration of the write. Acceptable for
+            // one small temp-file-and-rename today; if handoff grows
+            // (fsync, many terminals), snapshot the inputs under the
+            // lock and run the I/O outside it.
             let mut shared = state.lock();
             if shared.owner.as_ref().is_none_or(|owner| owner.conn_id != conn_id) {
                 return Dispatch {
@@ -703,9 +800,17 @@ async fn handle_request(
             Dispatch { response: Some(wire::WireResponse::Ok), shutdown: false }
         }
 
-        wire::WireRequest::Subscribe { id, offset, attachment_id, role, takeover } => {
-            subscribe(&machine, id, offset, attachment_id, role, takeover, writer, attachment_slot)
-        }
+        wire::WireRequest::Subscribe { id, offset, attachment_id, role, takeover } => subscribe(
+            &machine,
+            id,
+            offset,
+            attachment_id,
+            role,
+            takeover,
+            writer,
+            close,
+            attachment_slot,
+        ),
 
         // §11.4 compat guard: mixed versions degrade to clear errors.
         wire::WireRequest::Unknown => Dispatch {
@@ -766,8 +871,20 @@ fn subscribe(
     role: wire::WireRole,
     takeover: bool,
     writer: &ConnWriter,
+    close: &Arc<ConnClose>,
     attachment_slot: &mut Option<Attachment>,
 ) -> Dispatch {
+    // One subscription per connection (D1 review): a second `subscribe`
+    // must NOT silently detach the live one — answer with an explicit
+    // error so the client can open a dedicated connection instead.
+    if attachment_slot.is_some() {
+        return Dispatch {
+            response: Some(wire::WireResponse::Error {
+                message: "connection already has an active subscription".to_owned(),
+            }),
+            shutdown: false,
+        };
+    }
     let terminal = wire::terminal_id(id);
     // Absolute output offset of the NEXT byte this connection will
     // see; starts at the replay end so live output continues exactly.
@@ -803,13 +920,21 @@ fn subscribe(
                 }
             };
             if let Ok(bytes) = frame {
-                let _ = event_writer.send(bytes);
+                let _ = event_writer.send(WriterCommand::Bytes(bytes));
             }
         })
     };
-    let on_end: Box<dyn FnOnce() + Send + Sync> = Box::new(|| {
-        // The stream ended (exited/remove); the connection itself is
-        // client-closed — nothing to push here.
+    let end_signal = Arc::clone(close);
+    let on_end: Box<dyn FnOnce() + Send + Sync> = Box::new(move || {
+        // The stream ended. `exit` paths queued an `exited` frame just
+        // before this; `terminate()` ends subscribers with NO stream
+        // frame — either way the subscriber's read loop must observe
+        // end-of-stream. Signal the connection task: it queues the
+        // ordered `WriterCommand::Close` AFTER any in-flight exchange
+        // response, so the client reads its final frames and then EOF
+        // (in-process parity: the WS closes with Close(1000) — D1
+        // review, Important 1: without this the subscriber hangs).
+        end_signal.request();
     });
     let input = AttachInput {
         cursor: usize::try_from(offset).unwrap_or(usize::MAX),
@@ -873,7 +998,7 @@ fn subscribe(
             if let Ok(bytes) = wire::encode_output_frame(start, end, chunk)
                 .and_then(|payload| wire::encode_frame(&payload))
             {
-                let _ = writer.send(bytes);
+                let _ = writer.send(WriterCommand::Bytes(bytes));
             }
         }
         send_response(writer, &wire::WireResponse::ReplayComplete { end_offset: base + sent });
