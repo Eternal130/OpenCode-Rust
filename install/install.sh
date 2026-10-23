@@ -8,7 +8,11 @@
 #   * the tarball URL is PARAMETERIZED (no opencode.ai latest-version
 #     probe: this stream must never adopt TS releases beyond 2.0.24);
 #   * the download is verified against a sha256 when one is supplied
-#     (--sha256, $SHA256, or a <url>.sha256 sidecar).
+#     (--sha256, $SHA256, or a <url>.sha256 sidecar);
+#   * release archives carry TWO binaries (phase-3 gate ruling,
+#     tools/RELEASE.md § oc-pty co-packaging): `opencode-rust` AND the
+#     `oc-pty` persistent-terminal daemon — both are installed when the
+#     payload carries the sibling.
 set -euo pipefail
 APP=opencode-rust
 
@@ -108,10 +112,11 @@ verify_sha256() {
 
 extract_binary() {
     # Accepts a raw binary, a .tar.gz, or a .zip; prints the payload path.
+    # Windows payloads (.exe) are accepted for the windows-x64 zip asset.
     local file="$1" magic
     magic=$(head -c 4 "$file" | od -An -tx1 | tr -d ' \n')
     case "$magic" in
-        7f454c46)
+        7f454c46|4d5a*)
             printf '%s' "$file"
             ;;
         1f8b*)
@@ -119,7 +124,7 @@ extract_binary() {
             dir=$(mktemp -d "${TMPDIR:-/tmp}/opencode_extract_XXXXXX")
             tar -xzf "$file" -C "$dir"
             local found
-            found=$(find "$dir" -maxdepth 2 -type f -name "$APP" | head -n 1)
+            found=$(find "$dir" -maxdepth 2 -type f \( -name "$APP" -o -name "$APP.exe" \) | head -n 1)
             [ -n "$found" ] || { echo -e "${RED}Error: no $APP binary inside $file${NC}" >&2; exit 1; }
             printf '%s' "$found"
             ;;
@@ -128,7 +133,7 @@ extract_binary() {
             dir=$(mktemp -d "${TMPDIR:-/tmp}/opencode_extract_XXXXXX")
             unzip -q -o "$file" -d "$dir"
             local found
-            found=$(find "$dir" -type f -name "$APP" | head -n 1)
+            found=$(find "$dir" -type f \( -name "$APP" -o -name "$APP.exe" \) | head -n 1)
             [ -n "$found" ] || { echo -e "${RED}Error: no $APP binary inside $file${NC}" >&2; exit 1; }
             printf '%s' "$found"
             ;;
@@ -139,11 +144,33 @@ extract_binary() {
     esac
 }
 
+# Phase-3 gate ruling (tools/RELEASE.md § oc-pty co-packaging): the
+# persistent-terminal daemon ships BESIDE the main binary in every
+# release archive (spawn resolution: OPENCODE_PTY_BIN → exe-sibling
+# `oc-pty` → PATH). Install the sibling when the payload carries it; a
+# lone main binary (legacy tarball, raw --binary install) installs with
+# a note, never a failure.
+install_pty_sibling() {
+    # The sibling is looked up in the payload's OWN dir: --binary installs look beside the user's file; tar.gz/zip installs look in the extraction dir where the archive's oc-pty landed.
+    local payload="$1" dir name
+    dir=$(dirname "$payload")
+    for name in oc-pty oc-pty.exe; do
+        if [ -f "$dir/$name" ]; then
+            cp "$dir/$name" "$INSTALL_DIR/$name"
+            chmod 755 "$INSTALL_DIR/$name"
+            echo -e "${MUTED}Persistent-terminal daemon: ${NC}$INSTALL_DIR/$name"
+            return 0
+        fi
+    done
+    echo -e "${ORANGE}Note: no oc-pty beside the payload — persistent terminals need OC_PTY_DAEMON=0 until one is installed (tools/RELEASE.md § oc-pty co-packaging).${NC}" >&2
+}
+
 install_from_path() {
     local payload
     payload=$(extract_binary "$1")
     cp "$payload" "$INSTALL_DIR/$APP"
     chmod 755 "$INSTALL_DIR/$APP"
+    install_pty_sibling "$payload"
 }
 
 if [ -n "$binary_path" ]; then
