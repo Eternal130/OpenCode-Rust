@@ -41,17 +41,15 @@
 //!   CELL-stability + bounded byte volume; a render-noise regression
 //!   (per-tick cell churn or full repaints ≈ 4 KB/frame) trips it.
 //! * STARTUP PILL (`vt_temporal_startup_loading_pill_thresholds`):
-//!   `#[ignore]`d — REGISTERED FINDING (frozen). The `StartupLoading`
-//!   pill (500 ms display threshold, copy flip + 3 s hold —
-//!   store.rs:9303-9335) is UNREACHABLE in the live boot:
-//!   `set_plugins_ready()` (app.rs:6779) fires BEFORE the render
-//!   loop starts (app.rs:6781), so the pill's state machine first
-//!   runs already-ready and never arms (the unit pin overlays.rs:
-//!   209-212: a ready-before-showing boot never shows the pill). The
-//!   ref mounts `StartupLoading` at app mount and renders WHILE
-//!   plugins boot (app.tsx:1351 gates the UI on `plugins.ready()`,
-//!   :1390 mounts the pill). Un-ignore when the boot wiring renders
-//!   frames during plugin boot.
+//!   FIXED (lane E2). The boot wiring now mirrors the ref — the render
+//!   loop starts with the `StartupLoading` pill armed while plugins
+//!   boot (the boot future is polled in-loop; `set_plugins_ready()`
+//!   fires only after the plugin generation attached AND the server
+//!   handshake landed), so a ≥500 ms boot shows the pill exactly per
+//!   the state machine (store.rs thresholds, ref app.tsx:1351/:1390).
+//!   The fast-boot companion (`…_fast_boot_shows_nothing`) pins that a
+//!   healthy boot clears both gates under the 500 ms threshold — no
+//!   pill, no residue.
 
 // Terminal coordinates are u16 by VT definition; harness instants are
 // bounded magnitudes — the truncation lints add nothing here.
@@ -710,24 +708,19 @@ fn theme_interactive() -> (u8, u8, u8) {
 /// when boot completes, and unmount by shown+3 s (the hold pin),
 /// leaving the booted session screen clean.
 ///
-/// REGISTERED FINDING (frozen, `#[ignore]`): the pill is UNREACHABLE
-/// in the live boot. `set_plugins_ready()` fires at app.rs:6779 —
-/// BEFORE the render loop starts (app.rs:6781; the only draw is
-/// :7625, inside it) — so the first `startup_loading_text` call sees
-/// `ready && shown_at.is_none()` and returns `None` forever (the
-/// unit pin overlays.rs:194-212: "a ready-before-showing boot never
-/// shows the pill"). The ref renders from app MOUNT while plugins
-/// boot — app.tsx:1351 gates the main UI on `plugins.ready()` and
-/// :1390 mounts `<StartupLoading ready={plugins.ready}>` — so any
-/// ≥500 ms boot shows the pill there. Our port renders nothing until
-/// plugins are ready (the whole plugin boot is pre-loop, and nothing
-/// in the default boot awaits the server before the first frame), so
-/// NO server stretch can surface the pill: it is dead code in the
-/// live path. Un-ignore when the boot wiring renders frames during
-/// plugin boot (or defers `set_plugins_ready` past the first frame);
-/// the assertions below then turn green unchanged.
+/// FIXED (lane E2 — the wiring this test demanded): the render loop
+/// now starts BEFORE plugin boot completes (app.rs polls the plugin
+/// boot future per pass; the first frame draws with the pill armed)
+/// and `set_plugins_ready()` fires only once plugin boot ACTUALLY
+/// completed AND the server handshake landed (`Ingest::Connected`
+/// through the ingest channel — the ref's plugin-inventory sync rides
+/// `server.connected`, plugin/context.tsx:570), mirroring the ref's
+/// mount → render-while-booting → ready timing (app.tsx:1351 gates
+/// the UI on `plugins.ready()`, :1390 mounts the pill). The stretched
+/// server therefore holds the handshake — and with it the pill's
+/// ready input — past the 500 ms threshold, exactly like a slow v2
+/// boot.
 #[test]
-#[ignore = "StartupLoading pill unreachable in the live boot: set_plugins_ready fires before the render loop (see the test header)"]
 fn vt_temporal_startup_loading_pill_thresholds() {
     let (samples, session_clean): (Vec<(u64, &'static str)>, bool) = run_temporal_test(
         "boot-stretch",
@@ -779,11 +772,10 @@ fn vt_temporal_startup_loading_pill_thresholds() {
     let show_at = samples.iter().find(|(_, p)| *p == "loading").map_or(u64::MAX, |(t, _)| *t);
     assert!(
         show_at != u64::MAX,
-        "the StartupLoading pill never rendered during a 1.2 s stretched boot — the overlay is \
-         UNREACHABLE in the live boot path (registered finding): set_plugins_ready (app.rs:6779) \
-         fires BEFORE the render loop starts (app.rs:6781), so startup_loading_text first runs \
-         already-ready and never arms (unit pin overlays.rs:209-212); the ref mounts the pill at \
-         app mount and renders while plugins boot (app.tsx:1351/:1390). Pill samples: {:?}",
+        "the StartupLoading pill never rendered during a 1.2 s stretched boot — the pill must \
+         arm at the first frame and show once the stall crosses the 500 ms display threshold \
+         (the loop renders while plugins boot and the handshake is held; see the test header). \
+         Pill samples: {:?}",
         samples.iter().filter(|(_, p)| *p != "none").collect::<Vec<_>>()
     );
     assert!(show_at >= 500, "the pill appeared at {show_at} ms, under the 500 ms threshold");
@@ -802,4 +794,45 @@ fn vt_temporal_startup_loading_pill_thresholds() {
     );
     // (d) boot completes: the session screen, pill unmounted.
     assert!(session_clean, "pill residue survived onto the booted session screen");
+}
+
+/// Fast-boot companion (lane E2 fix): a healthy, non-stretched boot
+/// clears both plugins-ready gates (plugin generation attached + the
+/// server handshake) well under the pill's 500 ms display threshold —
+/// the pill must NEVER show, and nothing may linger on the booted
+/// session screen (the state machine's ready-before-showing arm never
+/// fires; the unit pin overlays.rs:209-212 at the store level).
+#[test]
+fn vt_temporal_startup_loading_pill_fast_boot_shows_nothing() {
+    let (saw_pill, session_clean): (bool, bool) = run_temporal_test(
+        "boot-fast",
+        80,
+        24,
+        |_| {},
+        |harness| {
+            let boot_start = harness.now_ms();
+            let mut saw_pill = false;
+            while harness.now_ms() - boot_start < 1_500 {
+                let grid = harness.grid_now();
+                let screen = grid.content_rect(0, 0, grid.cols, grid.rows);
+                if screen.contains("Loading plugins") || screen.contains("Finishing startup") {
+                    saw_pill = true;
+                }
+                std::thread::sleep(Duration::from_millis(30));
+            }
+            boot_to_session(harness)?;
+            let grid = harness.grid_now();
+            let screen = grid.content_rect(0, 0, grid.cols, grid.rows);
+            Ok((
+                saw_pill,
+                !screen.contains("Loading plugins") && !screen.contains("Finishing startup"),
+            ))
+        },
+    );
+    assert!(
+        !saw_pill,
+        "a fast (non-stretched) boot showed the StartupLoading pill — both plugins-ready gates \
+         must clear under the 500 ms display threshold"
+    );
+    assert!(session_clean, "pill residue survived onto the fast-boot session screen");
 }

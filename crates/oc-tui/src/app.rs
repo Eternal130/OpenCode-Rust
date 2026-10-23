@@ -6721,15 +6721,20 @@ pub async fn run_with_size(
         let _ = out.flush();
     }
 
-    // The production plugin boot (wave-12): the host loads the config's
-    // `plugins[]` entries and every wave-3 seam attaches — the event
-    // tap (post-ingest broadcast), the palette sink
-    // (`execute_command_in_session` with the ACTIVE session), the
-    // dialog source (materialize-at-open), the registration projection
-    // (palette rows / group rules / home actions + the owned keymap
-    // chords). `None` = no plugins configured (or no bun — the
-    // graceful-disable logged once); the loop then skips the per-pump
-    // drain.
+    // The production plugin boot (wave-12) — lane E2: NOT awaited
+    // before the loop anymore. The ref renders from app mount with
+    // the `StartupLoading` pill armed while plugins boot (app.tsx:1351
+    // gates the main UI on `plugins.ready()`, :1390 mounts the pill),
+    // so the run loop starts FIRST (the first frame draws with the
+    // pill armed) and the boot future below is polled once per pass
+    // on the loop's existing tick — no extra thread, task, or wait
+    // loop. The seams attach the moment it resolves (top of the
+    // loop); `set_plugins_ready()` then fires only when plugin boot
+    // ACTUALLY completed AND the server handshake landed (see the
+    // SURF-2 flip after the ingest drain). `None` = no plugins
+    // configured (or no bun — the graceful-disable logged once); the
+    // loop then skips the per-pump drain and only waits for the
+    // handshake.
     let config_root = oc_util::global_roots::resolve().config;
     let boot_cwd = std::path::PathBuf::from(&directory);
     let plugins_configured = {
@@ -6738,47 +6743,79 @@ pub async fn run_with_size(
             .iter()
             .any(|op| matches!(op, oc_plugin_host::PluginOp::Add { .. }))
     };
-    let plugin_runtime = if plugins_configured {
-        let agents = crate::plugin_boot::fetch_agent_seed(&client).await;
+    let mut plugin_boot: Option<
+        std::pin::Pin<Box<dyn std::future::Future<Output = Option<crate::plugin_boot::TuiPluginRuntime>>>>,
+    > = plugins_configured.then(|| {
         let boot_client = client.clone();
         let boot_version = env!("CARGO_PKG_VERSION").to_owned();
         let boot_cwd = boot_cwd.clone();
-        tokio::task::spawn_blocking(move || {
-            crate::plugin_boot::TuiPluginRuntime::boot(
-                &boot_client,
-                agents,
-                &config_root,
-                &boot_cwd,
-                &boot_version,
-            )
-        })
-        .await
-        .ok()
-        .flatten()
-        .map(crate::plugin_boot::TuiPluginRuntime::new)
-    } else {
-        None
-    };
-    if let Some(runtime) = &plugin_runtime {
-        // Lane KM (auditA #10): the plugins-failed chip's source —
-        // the boot resolution's failures (footer.tsx:48-72).
-        app.store.set_plugins_failed(runtime.booted.resolution.failures.len());
-        let projection = runtime.attach(&app.store);
-        app.set_plugin_commands(projection.owned);
-        app.set_plugin_themes(projection.themes);
-        // PLUG-D33: the plugin-declared MCP servers flow into the
-        // REAL server-side registry (`experimental.mcp.add` →
-        // `McpRegistry::add`) — the ref's `ctx.mcp.transform` seam
-        // (host.ts:374-403) over the wire; the refreshed rows land
-        // in the pump below (sidebar + `/mcps` become plugin-aware).
-        runtime.start_mcp_sync(&client);
-    }
-    // SURF-2: plugins ready (no runtime configured = ready) — flips
-    // any live StartupLoading pill to "Finishing startup…" and starts
-    // its 3 s hold (startup-loading.tsx:13-31).
-    app.store.set_plugins_ready();
+        let config_root = config_root.clone();
+        let pinned: std::pin::Pin<
+            Box<dyn std::future::Future<Output = Option<crate::plugin_boot::TuiPluginRuntime>>>,
+        > = Box::pin(async move {
+            let agents = crate::plugin_boot::fetch_agent_seed(&boot_client).await;
+            tokio::task::spawn_blocking(move || {
+                crate::plugin_boot::TuiPluginRuntime::boot(
+                    &boot_client,
+                    agents,
+                    &config_root,
+                    &boot_cwd,
+                    &boot_version,
+                )
+            })
+            .await
+            .ok()
+            .flatten()
+            .map(crate::plugin_boot::TuiPluginRuntime::new)
+        });
+        pinned
+    });
+    // The resolved runtime (Some once the future above resolves) plus
+    // the two `StartupLoading` gates, flipped inside the loop.
+    let mut plugin_runtime: Option<crate::plugin_boot::TuiPluginRuntime> = None;
+    let mut plugins_boot_done = false;
+    let mut plugins_ready_fired = false;
 
     let result: Result<(), String> = loop {
+        // Lane E2 — poll the plugin boot: one non-blocking poll on the
+        // existing tick. `Pending` → keep rendering (the pill stays
+        // armed over the live UI, exactly like the ref's mount-time
+        // pill); resolved → adopt the runtime (itself possibly `None`:
+        // no plugins configured / the graceful bun disable) and attach
+        // every wave-3 seam — the event tap (post-ingest broadcast),
+        // the palette sink (`execute_command_in_session` with the
+        // ACTIVE session), the dialog source (materialize-at-open),
+        // the registration projection (palette rows / group rules /
+        // home actions + the owned keymap chords).
+        if !plugins_boot_done {
+            use futures::future::FutureExt as _;
+            let polled = match plugin_boot.as_mut() {
+                Some(boot) => boot.as_mut().now_or_never(),
+                None => Some(None),
+            };
+            if let Some(booted) = polled {
+                plugin_boot = None;
+                plugin_runtime = booted;
+                plugins_boot_done = true;
+                if let Some(runtime) = &plugin_runtime {
+                    // Lane KM (auditA #10): the plugins-failed chip's
+                    // source — the boot resolution's failures
+                    // (footer.tsx:48-72).
+                    app.store.set_plugins_failed(runtime.booted.resolution.failures.len());
+                    let projection = runtime.attach(&app.store);
+                    app.set_plugin_commands(projection.owned);
+                    app.set_plugin_themes(projection.themes);
+                    // PLUG-D33: the plugin-declared MCP servers flow
+                    // into the REAL server-side registry
+                    // (`experimental.mcp.add` → `McpRegistry::add`) —
+                    // the ref's `ctx.mcp.transform` seam
+                    // (host.ts:374-403) over the wire; the refreshed
+                    // rows land in the pump below (sidebar + `/mcps`
+                    // become plugin-aware).
+                    runtime.start_mcp_sync(&client);
+                }
+            }
+        }
         // The plugin pump (wave-12): refresh the palette sink's active
         // session (marker commands submit into it), then drain the
         // plugin UI-request queue into the store (toasts, sidebar
@@ -6811,6 +6848,26 @@ pub async fn run_with_size(
                 eprintln!("[tui] ingest: {message:?}");
             }
             app.store.ingest_all([message]);
+        }
+        // SURF-2 (lane E2): plugins ready — `set_plugins_ready()`
+        // flips any live StartupLoading pill to "Finishing startup…"
+        // and starts its 3 s hold (startup-loading.tsx:13-31). It now
+        // fires only when plugin boot ACTUALLY completed (the attach
+        // at the top of the loop) AND the server handshake landed —
+        // `Ingest::Connected` through this very channel, the same
+        // event that carries the ref's plugin-inventory sync
+        // (`server.connected` → syncServerPlugins,
+        // plugin/context.tsx:570). That mirrors the ref's timing —
+        // render from mount with the pill armed, flip ready once boot
+        // really finishes — so a fast boot clears both gates well
+        // under the pill's 500 ms display threshold (it never shows)
+        // while a slow plugin boot or slow server shows it, like v2.
+        if plugins_boot_done
+            && !plugins_ready_fired
+            && app.store.connection() == crate::data::ConnectionState::Connected
+        {
+            plugins_ready_fired = true;
+            app.store.set_plugins_ready();
         }
         // TUI-TD15 — the armed startup prompt's gate check (after the
         // drain: the freshly-ingested model catalog opens the gate).
