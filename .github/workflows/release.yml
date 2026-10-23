@@ -4,8 +4,8 @@ on:
   push:
     tags:
       - "v*"
-  # Dispatch iterates the web-assets job ALONE (the build/release job
-  # below stays tag-only) — for pinning/ref-bump experimentation without
+  # Dispatch iterates the web-assets job ALONE (the build/publish jobs
+  # below stay tag-only) — for pinning/ref-bump experimentation without
   # cutting a tag. `skip_web` is the documented emergency escape hatch
   # (see tools/RELEASE.md § web-ui).
   workflow_dispatch:
@@ -81,18 +81,132 @@ jobs:
           path: app-archive.json
           if-no-files-found: error
 
-  linux-x64:
-    name: build & release (linux-x64)
+  # R-11 platform matrix + the phase-3 gate ruling (oc-pty MUST ship
+  # beside the main binary). One matrix job per target, each building
+  # `-p oc-cli -p oc-pty`, packaging tarball (unix) / zip (windows) +
+  # sha256 sidecar, smoking BOTH members out of the packaged archive,
+  # and uploading a per-target artifact. The tag-only `publish` job at
+  # the bottom collects every artifact and cuts ONE GitHub release —
+  # assets never race, and a missing platform is VISIBLY absent from
+  # the notes (never silently dropped).
+  #
+  # Target naming: `linux-x64` is FROZEN (the update channel's asset
+  # expectation, RELEASE.md § Update channel); the rest follow the
+  # installer's `{target}` convention (`$(uname -s|lower)-$(uname -m
+  # mapped)`: linux-arm64, darwin-arm64, …). musl suffixes (-musl) are
+  # release-only names — the installer cannot distinguish libc from
+  # `uname`, so musl assets are direct-download only (documented).
+  #
+  # Runner strategy: NATIVE runners wherever they exist (no cross
+  # toolchains): ubuntu-latest (x64), ubuntu-24.04-arm (aarch64; free
+  # tier for public repos), macos-latest (aarch64-apple-darwin),
+  # windows-latest (MSVC). musl has no native runner — the standard
+  # musl-tools + cmake recipe below compiles for the HOST arch under
+  # musl (x86_64-musl on the x64 runner, aarch64-musl on the arm
+  # runner), so even the "cross" libc builds run natively.
+  #
+  # R10a (rmcp → aws-lc-rs): every builder installs/verifies cmake +
+  # a C toolchain (aws-lc-sys builds C). See tools/RELEASE.md §
+  # Platform matrix for the per-target status + watch items.
+  build:
+    name: build (${{ matrix.target }})
     needs: web-assets
     # Tag pushes only (dispatches iterate web-assets alone); never build
     # on top of a failed or cancelled web-assets run.
     if: ${{ github.event_name == 'push' && !failure() && !cancelled() }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
+    strategy:
+      # One broken experimental leg must not cancel the shipped
+      # platforms — publish decides from the surviving artifacts.
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x64
+            rust_target: x86_64-unknown-linux-gnu
+            runs-on: ubuntu-latest
+            timeout: 60
+          - target: linux-arm64
+            rust_target: aarch64-unknown-linux-gnu
+            runs-on: ubuntu-24.04-arm
+            timeout: 75
+          - target: linux-x64-musl
+            rust_target: x86_64-unknown-linux-musl
+            runs-on: ubuntu-latest
+            timeout: 75
+            musl: true
+          - target: linux-arm64-musl
+            rust_target: aarch64-unknown-linux-musl
+            runs-on: ubuntu-24.04-arm
+            timeout: 75
+            musl: true
+          - target: darwin-arm64
+            rust_target: aarch64-apple-darwin
+            runs-on: macos-latest
+            timeout: 90
+          # KNOWN-ISSUE-R11-WINDOWS (tools/RELEASE.md § Platform matrix):
+          # first-ever Windows build. The workspace has unix-only seams
+          # (oc-pty's Unix-socket wire, safekill pidfd/procfs) that may
+          # need cfg-gating; this leg is registered EXPERIMENTAL
+          # (continue-on-error) so the untested status is explicit — the
+          # windows asset ships only once the leg actually goes green.
+          - target: windows-x64
+            rust_target: x86_64-pc-windows-msvc
+            runs-on: windows-latest
+            timeout: 90
+            experimental: true
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: ${{ matrix.timeout }}
+    # Experimental legs fail loudly but never block the release: their
+    # artifact is simply (visibly) absent from the notes table.
+    continue-on-error: ${{ matrix.experimental == true }}
     steps:
       - uses: actions/checkout@v4
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Per-target entries: a musl dependency chain must never be
+          # restored over a glibc one (and arm/x64 dirs are distinct
+          # anyway — the runner arch is not in the default key).
+          shared-key: opencode-release-${{ matrix.rust_target }}
+
+      - name: Add the Rust target
+        run: rustup target add ${{ matrix.rust_target }}
+
+      # R10a: aws-lc-sys (via rmcp → aws-lc-rs) compiles C with cmake.
+      # musl legs additionally install musl-tools (musl-gcc for the
+      # host arch) — the standard musl recipe.
+      - name: Install build deps (cmake [+ musl-tools])
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          sudo apt-get update -q
+          DEPS="cmake"
+          if [ "${{ matrix.musl }}" = "true" ]; then
+            DEPS="$DEPS musl-tools musl-dev"
+          fi
+          sudo apt-get install -y --no-install-recommends $DEPS
+          cmake --version | head -n 1
+
+      - name: Wire the musl toolchain (CC/linker for the target)
+        if: runner.os == 'Linux' && matrix.musl == true
+        run: |
+          set -euo pipefail
+          T="${{ matrix.rust_target }}"
+          UPPER="$(echo "$T" | tr 'a-z-' 'A-Z_')"
+          echo "CC_${UPPER}=musl-gcc" >> "$GITHUB_ENV"
+          echo "AR_${UPPER}=ar" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_${UPPER}_LINKER=musl-gcc" >> "$GITHUB_ENV"
+          musl-gcc --version | head -n 1
+
+      - name: Ensure cmake (aws-lc-sys builder dependency)
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          command -v cmake >/dev/null 2>&1 || brew install cmake
+          cmake --version | head -n 1
+
+      - name: Ensure cmake (aws-lc-sys builder dependency)
+        if: runner.os == 'Windows'
+        run: cmake --version # preinstalled on windows runners; fail loudly if missing
 
       # The loud guard: web-assets must have SUCCEEDED, or an escape
       # hatch must be explicitly set (the skip_web dispatch input, or
@@ -101,6 +215,7 @@ jobs:
       # without either is a config mistake and fails the release.
       - name: Require the web archive (no silent UI-less binaries)
         if: ${{ needs.web-assets.result != 'success' && vars.WEB_ASSETS_SKIP != 'true' }}
+        shell: bash
         run: |
           echo "::error::web-assets result was '${{ needs.web-assets.result }}' — refusing to build a binary without the web UI (emergency hatch: tools/RELEASE.md § web-ui)"
           exit 1
@@ -112,90 +227,200 @@ jobs:
           name: app-archive
           path: app-archive
 
-      - name: Wire the embedded archive + size report
+      - name: Wire the embedded archive
         if: ${{ needs.web-assets.result == 'success' }}
+        shell: bash
         run: |
           set -euo pipefail
-          ARCHIVE="$PWD/app-archive/app-archive.json"
+          DIR="$(cd app-archive && pwd)"
+          ARCHIVE="$DIR/app-archive.json"
+          # Windows: build.rs is a NATIVE process — hand it a Windows
+          # path, not git-bash's /d/a/... form (cygpath exists only
+          # there; a no-op elsewhere).
+          if command -v cygpath >/dev/null 2>&1; then
+            ARCHIVE="$(cygpath -w "$ARCHIVE")"
+          fi
           test -s "$ARCHIVE"
           echo "OPENCODE_APP_ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
-          BYTES=$(wc -c < "$ARCHIVE")
-          FILES=$(jq '.files | length' "$ARCHIVE")
-          {
-            echo "### Web UI"
-            echo ""
-            echo "Embedded web app archive: \`${BYTES} bytes\` (${FILES} files, ref \`${APP_REF}\`) — the binary serves it at \`/\` (\`opencode-rust serve\`)."
-          } | tee web-ui-summary.md >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Build release binary
-        run: cargo build --release -p oc-cli --locked
+      # The phase-3 gate ruling: BOTH binaries build into every target.
+      # --target uniformly (native legs included) keeps the output path
+      # uniform (target/<rust_target>/release/) for the packaging step.
+      - name: Build release binaries (oc-cli + oc-pty)
+        shell: bash
+        run: cargo build --release -p oc-cli -p oc-pty --locked --target ${{ matrix.rust_target }}
         env:
           # Stamps the update channel's release identity (lane C):
           # the built binary knows which tag it came from and can
           # compare itself against the releases feed.
           OC_RELEASE_TAG: ${{ github.ref_name }}
-          # Set by the archive step above when web-assets succeeded:
-          # oc-server's build.rs stages the archive for compile-time
-          # embedding (unset = API-only binary, the skip_web hatch).
+          # OPENCODE_APP_ARCHIVE: set by the wire step above when
+          # web-assets succeeded; unset = API-only binary (the skip_web
+          # hatch) — oc-server's build.rs stages it for compile-time
+          # embedding only when present.
 
-      - name: Package tarball + sha256 sidecar
+      - name: Package tarball + sha256 sidecar (unix)
+        if: runner.os != 'Windows'
+        shell: bash
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
-          TARGET="linux-x64"
-          ARTIFACT="opencode-${VERSION}-${TARGET}"
+          ARTIFACT="opencode-${VERSION}-${{ matrix.target }}"
+          RUST_TARGET="${{ matrix.rust_target }}"
           mkdir -p package
-          cp target/release/opencode-rust package/opencode-rust
-          tar -czf "${ARTIFACT}.tar.gz" package/opencode-rust
-          sha256sum "${ARTIFACT}.tar.gz" > "${ARTIFACT}.tar.gz.sha256"
-          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
-          echo "ARTIFACT=${ARTIFACT}" >> "$GITHUB_ENV"
+          cp "target/${RUST_TARGET}/release/opencode-rust" package/opencode-rust
+          cp "target/${RUST_TARGET}/release/oc-pty" package/oc-pty
+          tar -czf "${ARTIFACT}.tar.gz" package/opencode-rust package/oc-pty
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "${ARTIFACT}.tar.gz" > "${ARTIFACT}.tar.gz.sha256"
+          else
+            # macOS: shasum emits the identical `<hash>  <file>` shape.
+            shasum -a 256 "${ARTIFACT}.tar.gz" > "${ARTIFACT}.tar.gz.sha256"
+          fi
+          ls -l "${ARTIFACT}".*
 
-      - name: Smoke the packaged binary
+      - name: Package zip + sha256 sidecar (windows)
+        if: runner.os == 'Windows'
         run: |
-          tar -xzf "${ARTIFACT}.tar.gz"
-          ./package/opencode-rust --version
+          $ErrorActionPreference = "Stop"
+          $VERSION = "${{ github.ref_name }}".TrimStart("v")
+          $ARTIFACT = "opencode-$VERSION-${{ matrix.target }}"
+          New-Item -ItemType Directory -Force -Path package | Out-Null
+          Copy-Item "target/${{ matrix.rust_target }}/release/opencode-rust.exe" "package/opencode-rust.exe"
+          Copy-Item "target/${{ matrix.rust_target }}/release/oc-pty.exe" "package/oc-pty.exe"
+          Compress-Archive -Path "package/*" -DestinationPath "$ARTIFACT.zip"
+          $hash = (Get-FileHash -Algorithm SHA256 "$ARTIFACT.zip").Hash.ToLower()
+          "$hash  $ARTIFACT.zip" | Out-File -Encoding ascii "$ARTIFACT.zip.sha256"
+          Get-Item "$ARTIFACT.zip", "$ARTIFACT.zip.sha256" | Format-List Name, Length
+
+      - name: Smoke the packaged binaries (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          SMOKE="$(mktemp -d)"
+          tar -xzf "opencode-${VERSION}-${{ matrix.target }}.tar.gz" -C "$SMOKE"
+          "$SMOKE/package/opencode-rust" --version
+          # The gate ruling: the sibling MUST be in the shipped archive.
+          test -x "$SMOKE/package/oc-pty"
+          file "$SMOKE/package/oc-pty" || true
+
+      - name: Smoke the packaged binaries (windows)
+        if: runner.os == 'Windows'
+        run: |
+          $ErrorActionPreference = "Stop"
+          $VERSION = "${{ github.ref_name }}".TrimStart("v")
+          Expand-Archive "opencode-$VERSION-${{ matrix.target }}.zip" -DestinationPath smoke -Force
+          & "$PWD/smoke/opencode-rust.exe" --version
+          if (-not (Test-Path "$PWD/smoke/oc-pty.exe")) {
+            throw "oc-pty.exe missing from the packaged zip (phase-3 gate ruling)"
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          # The archive + its sha256 sidecar, nothing else.
+          path: opencode-*
+          if-no-files-found: error
+          retention-days: 5
+
+  # Tag-only: collect EVERY platform artifact and cut ONE release.
+  # needs.build absorbs experimental legs (continue-on-error), so a red
+  # windows leg publishes the other platforms — with the windows row
+  # VISIBLY absent from the notes table below. A red NON-experimental
+  # leg (e.g. a genuinely broken musl build) fails `build` and this job
+  # does not run at all: no partial silent release.
+  publish:
+    name: publish (collect assets + GitHub release)
+    needs: [web-assets, build]
+    if: ${{ github.event_name == 'push' && !failure() && !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download every platform artifact
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: assets
+
+      - name: Download the app archive (for the web-UI summary line)
+        if: ${{ needs.web-assets.result == 'success' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: app-archive
+          path: app-archive
 
       - name: Compose release notes
         run: |
           set -euo pipefail
+          cd assets
           TAG="${GITHUB_REF_NAME}"
           REPO="${GITHUB_REPOSITORY}"
-          cat > release-notes.md <<EOF
-          ## opencode-rust ${TAG}
+          LINUX_X64="opencode-${TAG#v}-linux-x64.tar.gz"
 
-          Rust rewrite of [opencode](https://github.com/anomalyco/opencode) v2, ported from **v2.0.24**.
-          The binary self-reports \`2.0.24\` for parity; the beta marker lives in the tag/asset name only.
+          desc_for() {
+            case "$1" in
+              *linux-x64.tar.gz) echo "linux x86_64 (glibc) — \`package/opencode-rust\` + \`package/oc-pty\`" ;;
+              *linux-arm64.tar.gz) echo "linux aarch64 (glibc) — same two-member layout" ;;
+              *linux-x64-musl.tar.gz) echo "linux x86_64 (musl, static) — same two-member layout" ;;
+              *linux-arm64-musl.tar.gz) echo "linux aarch64 (musl, static) — same two-member layout" ;;
+              *darwin-arm64.tar.gz) echo "macOS aarch64 (Apple silicon) — same two-member layout" ;;
+              *windows-x64.zip) echo "windows x86_64 — \`opencode-rust.exe\` + \`oc-pty.exe\`" ;;
+              *) echo "sha256 sidecar (\`sha256sum\` format)" ;;
+            esac
+          }
 
-          ### Assets
+          {
+            echo "## opencode-rust ${TAG}"
+            echo ""
+            echo "Rust rewrite of [opencode](https://github.com/anomalyco/opencode) v2, ported from **v2.0.24**."
+            echo "The binary self-reports \`2.0.24\` for parity; the beta marker lives in the tag/asset name only."
+            echo ""
+            echo "### Assets"
+            echo ""
+            echo "| File | Target |"
+            echo "|---|---|"
+            for file in *.tar.gz *.zip *.sha256; do
+              [ -e "$file" ] || continue
+              echo "| \`${file}\` | $(desc_for "$file") |"
+            done
+            # Honest absence: a matrix leg that did not produce an
+            # artifact is CALLED OUT, never silently dropped.
+            for t in linux-x64 linux-arm64 linux-x64-musl linux-arm64-musl darwin-arm64 windows-x64; do
+              if ! ls *-"$t".tar.gz >/dev/null 2>&1 && ! ls *-"$t".zip >/dev/null 2>&1; then
+                echo "| _(absent)_ $t | NOT PUBLISHED — the build leg failed or is experimental (see \`tools/RELEASE.md\` § Platform matrix) |"
+              fi
+            done
+            echo ""
+            echo "### Install"
+            echo ""
+            echo "\`\`\`sh"
+            echo "curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install/install.sh | bash -s -- \\"
+            echo "  --version ${TAG} \\"
+            echo "  --url https://github.com/${REPO}/releases/download/${TAG}/${LINUX_X64}"
+            echo "\`\`\`"
+            echo ""
+            echo "Or download a platform archive directly (the full matrix lives in \`tools/RELEASE.md\` § Platform matrix). Every archive carries BOTH \`opencode-rust\` and the \`oc-pty\` persistent-terminal daemon (spawn resolution: \`OPENCODE_PTY_BIN\` → exe-sibling \`oc-pty\` → \`PATH\`); the installer puts both into \`~/.opencode/bin\`."
+            echo ""
+            echo "### Verify"
+            echo ""
+            echo "\`\`\`sh"
+            echo "opencode-rust --version        # opencode-rust v2.0.24 (parity pin)"
+            echo "opencode-rust --version-rust   # rust port build <git-short>, release profile"
+            echo "\`\`\`"
+          } > ../release-notes.md
 
-          | File | Target |
-          |---|---|
-          | \`${ARTIFACT}.tar.gz\` | linux x86_64 (tarball, \`package/opencode-rust\` member) |
-          | \`${ARTIFACT}.tar.gz.sha256\` | sha256 sidecar (\`sha256sum\` format) |
-
-          ### Install
-
-          \`\`\`sh
-          curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install/install.sh | bash -s -- \\
-            --version ${TAG} \\
-            --url https://github.com/${REPO}/releases/download/${TAG}/${ARTIFACT}.tar.gz
-          \`\`\`
-
-          Or download the tarball directly and extract \`package/opencode-rust\`.
-
-          ### Verify
-
-          \`\`\`sh
-          opencode-rust --version        # opencode-rust v2.0.24 (parity pin)
-          opencode-rust --version-rust   # rust port build <git-short>, release profile
-          \`\`\`
-          EOF
           # R-04: the web-UI embed line (present unless skip_web ran the
           # release UI-less).
-          if [ -f web-ui-summary.md ]; then
-            printf '\n' >> release-notes.md
-            cat web-ui-summary.md >> release-notes.md
+          if [ -s "../app-archive/app-archive.json" ]; then
+            BYTES=$(wc -c < "../app-archive/app-archive.json")
+            FILES=$(jq '.files | length' "../app-archive/app-archive.json")
+            {
+              printf '\n### Web UI\n\n'
+              printf 'Embedded web app archive: \`%s bytes\` (%s files, ref \`%s\`) — the binary serves it at \`/\` (\`opencode-rust serve\`).\n' "$BYTES" "$FILES" "${APP_REF}"
+            } >> ../release-notes.md
           fi
 
       - name: Publish GitHub release
@@ -203,6 +428,4 @@ jobs:
         with:
           prerelease: ${{ contains(github.ref_name, 'beta') }}
           body_path: release-notes.md
-          files: |
-            ${{ env.ARTIFACT }}.tar.gz
-            ${{ env.ARTIFACT }}.tar.gz.sha256
+          files: assets/*
