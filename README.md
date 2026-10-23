@@ -17,7 +17,7 @@ Ported from v2.0.24:
 - **TUI** — full port on the [opentui-rust](https://github.com/Eternal130/opentui-rust) crates (solid renderer) over ratatui + taffy; 42 golden scenarios verified in tiers — 35 Tier-A byte-equal in both text grid and ANSI styling, plus Tier-B (256-color degradation), Tier-C1, and width-edge classes
 - **Plugin system** — Bun-subprocess host; community plugins run unmodified (flagship [`oh-my-opencode-slim`](https://github.com/alvinunreal/oh-my-opencode-slim) v3.0.3 passes its own self-check through the real binary path: 12 agents / 12 tools / 8 skills registered, session round-trips verified)
 
-Not ported (out of scope by design): the desktop app, GUI extensions, and the web UI frontend (static hosting + release asset embedding are ported; the app itself is not). All deferrals from the frozen report §3 have since landed (mini, ACP, worktree UI, sounds/OS notifications, C2 tier, tree-sitter highlighting, images, Bedrock/Vertex — beta.4–beta.7); the only open tail items are tracked in [PORT_REPORT.md](./PORT_REPORT.md) §0 and [ROADMAP.md](./ROADMAP.md): R-10 rmcp elicitation (blocked upstream) and R-11 platform matrix (unscheduled).
+Not ported (out of scope by design): the desktop app, GUI extensions, and the web UI frontend (static hosting + release asset embedding are ported; the app itself is not). All deferrals from the frozen report §3 have since landed (mini, ACP, worktree UI, sounds/OS notifications, C2 tier, tree-sitter highlighting, images, Bedrock/Vertex — beta.4–beta.7), and the 2026-10-24 gap burn-down closed the rest of the §1 register (RS256/JWKS enterprise sign-in, skill URL sources, console merges, the PTY daemon process boundary, rmcp elicitation, the R-11 platform matrix). The only remaining items are named exemptions tracked in [docs/GAPS-AND-PITFALLS.md](./docs/GAPS-AND-PITFALLS.md) §1 and [ROADMAP.md](./ROADMAP.md) §5.
 
 ## Verified parity, not vibes
 
@@ -28,7 +28,7 @@ Every consistency claim is backed by a replay or golden artifact against the pin
 - **LLM protocols** — 274 cassettes replayed event-exactly (121 interactions incl. HTTP failures) + 132 golden request bodies; native implementations for Anthropic, OpenAI chat/responses, Gemini, Mistral, Cohere; long tail via openai-compatible
 - **TUI** — golden-frame harness (`tools/parity`): text + ANSI byte-equality on Tier A, 256-color degradation styles on Tier B, text grids on C1; CJK/emoji/ZWJ width pinned by measurement
 - **Plugins** — registration, commands, tools, config presets, CodeMode interpreter, crash containment (kill -9 fuzzing), V1/V2 formats
-- **Suite** — 3951/3951 tests, `clippy --workspace --all-targets -D warnings` clean, `rustfmt` clean
+- **Suite** — per-crate gates at the 2026-10-24 burn-down head: oc-core 1046/1046, oc-server 263/263, oc-tui ~1215, oc-pty 30/30, oc-client 57/57 (last consolidated workspace run: 3951/3951 on 2026-10-22; the post-burn-down consolidated gate is pending), `clippy --workspace --all-targets -D warnings` clean, `rustfmt` clean
 
 Performance (measured on Linux, vs upstream v2 on Bun): `--version` 3 ms vs 744 ms; server boot to listening 111 ms; idle RSS ~80 MB; release binary ~44 MB.
 
@@ -41,6 +41,7 @@ Performance (measured on Linux, vs upstream v2 on Bun): `--version` 3 ms vs 744 
 | `oc-theme` | Theme engine — 63 themes byte-equal with upstream |
 | `oc-ai` | LLM protocol SDK (Anthropic, OpenAI chat/responses, Gemini, Mistral, Cohere, Bedrock, Vertex, Copilot, Azure, xAI, openai-compatible) |
 | `oc-core` | Session engine, projector/replay ledger, DB (drizzle-compatible), 14 tools, MCP, bus, config/permissions |
+| `oc-pty` | Persistent-terminal daemon binary (`oc-pty`) — the Phase-9 PTY process boundary; spawned by oc-core, co-packaged in releases |
 | `oc-syntax` | tree-sitter syntax highlighting (vendored v2 grammars) |
 | `oc-plugin-host` | Bun-subprocess plugin host: registration, CodeMode, crash containment |
 | `oc-server` | HTTP server, SSE, boot/composition root |
@@ -113,7 +114,7 @@ Installed binaries can update themselves: `opencode-rust upgrade` checks the [re
 
 本项目是 [opencode v2](https://github.com/anomalyco/opencode)（钉版 **v2.0.24**，commit [`e7a34f0`](https://github.com/anomalyco/opencode/commit/e7a34f09bfd9134dfade5a8ddb843f7030bc9a69)）的**全量 Rust 重写**：CLI、HTTP 服务端、TUI、插件系统全部移植，桌面端与 Web UI 不在范围内。
 
-一致性靠验收体系背书，不靠感觉：OpenAPI 契约与上游语义 diff 为空；官方 v2.0.24 TUI 可直连本服务端；会话数据库与 v2 双向互通；TUI 以 golden 帧按文本+ANSI 逐字节分级验收；LLM 协议 274 盒带逐事件重放；社区插件（旗舰 oh-my-opencode-slim）不修改直接可用。全套 3951 测试、clippy/rustfmt 零告警。
+一致性靠验收体系背书，不靠感觉：OpenAPI 契约与上游语义 diff 为空；官方 v2.0.24 TUI 可直连本服务端；会话数据库与 v2 双向互通；TUI 以 golden 帧按文本+ANSI 逐字节分级验收；LLM 协议 274 盒带逐事件重放；社区插件（旗舰 oh-my-opencode-slim）不修改直接可用。2026-10-24 gap 收尾后各 crate 门：oc-core 1046、oc-server 263、oc-tui ~1215、oc-pty 30（全仓合并门待跑；上一轮全仓 3951/3951）；clippy/rustfmt 零告警。
 
 应用本体是纯 Rust 单二进制（约 44 MB，空闲内存约 80 MB）；Bun 仅在配置了插件或 MCP 服务器时作为子进程拉起（有旗舰插件满载时约 210 MB，无插件则完全不启动）。
 
