@@ -91,6 +91,10 @@ use tokio::sync::mpsc;
 use crate::bus::{Bus, PublishOptions};
 use crate::pty::PtyId;
 
+/// The daemon wire format shared by the `oc-pty` binary (which hosts
+/// this machine) and the in-server client transport (design §2.2, §4).
+pub mod wire;
+
 /// Attach role (`daemon.ts Role`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
@@ -357,6 +361,12 @@ pub enum StreamEvent {
     Resized { cols: u16, rows: u16, generation: u64, checkpoint: Vec<u8> },
     /// The terminal exited.
     Exited { exit_code: Option<i32> },
+    /// A controller took over and the generation bumped (design §12
+    /// Q3, the APPROVED machine delta): existing subscribers learn the
+    /// new controller attachment + generation so stale checkpoints can
+    /// be invalidated. `attachment_id` is `None` when the controller
+    /// was cleared without a replacement.
+    ControllerChanged { attachment_id: Option<String>, generation: u64 },
 }
 
 /// `PersistentPty.UnavailableError`.
@@ -406,7 +416,10 @@ const OUTPUT_LIMIT: usize = 1024 * 1024 * 8;
 
 /// The daemon-protocol generation this machine speaks
 /// (`daemon.ts:8` `ProtocolVersion`; bumped on wire-format changes).
-pub const PTY_PROTOCOL_VERSION: u64 = 1;
+/// Version 7 mirrors v2 (design §4.2): registrations written by earlier
+/// betas (protocol `1`) are discarded — terminals are best-effort
+/// across upgrades.
+pub const PTY_PROTOCOL_VERSION: u64 = 7;
 
 /// Handoff ticket TTL (the sidecar default when a daemon hands back
 /// null, `pty-handoff.ts:61` — 30s).
@@ -443,13 +456,26 @@ struct Inner {
     next_token: Mutex<u64>,
     #[allow(dead_code)] // instance-scoped id source reserved for the Phase 9 daemon handoff
     ids: Arc<dyn IdGen>,
-    bus: Bus,
+    /// The server bus — `None` when the machine is hosted out-of-process
+    /// (the `oc-pty` daemon injects [`Inner::event_sink`] instead,
+    /// design §3.1).
+    bus: Option<Bus>,
+    /// Host-injected publication sink (design §3.1): when present, the
+    /// machine's bus publications route here instead of the bus. The
+    /// daemon host serializes each publication to its owner connection
+    /// as a `bus_event` frame; the in-process host leaves it `None` and
+    /// publishes onto the real bus (byte-identical behavior — R3).
+    event_sink: Option<EventSink>,
     clock: Arc<dyn Clock>,
     /// The runtime directory this machine owns (`None` until
     /// [`PersistentPty::set_runtime_dir`] — tests/embedders may skip
     /// the handover surface entirely).
     runtime: Mutex<Option<RuntimeScope>>,
 }
+
+/// The host-injected publication sink (design §3.1): `(event type,
+/// payload)` — the payload is the verbatim bus `data` object.
+pub type EventSink = Arc<dyn Fn(&str, serde_json::Value) + Send + Sync>;
 
 /// The persistent PTY state machine (`PersistentPty.Service`).
 #[derive(Clone)]
@@ -472,7 +498,33 @@ impl PersistentPty {
                 next_number: Mutex::new(0),
                 next_token: Mutex::new(0),
                 ids,
-                bus,
+                bus: Some(bus),
+                event_sink: None,
+                clock: Arc::new(SystemClock),
+                runtime: Mutex::new(None),
+            }),
+            default_program: Arc::new(|| None),
+        }
+    }
+
+    /// Assembles the machine for an out-of-process host (design §3.1):
+    /// bus publications route through `event_sink` instead of a bus.
+    /// The `oc-pty` daemon serializes each `(type, payload)` to its
+    /// owner connection as a `bus_event` frame; the client layer
+    /// republishes them onto the server bus.
+    #[must_use]
+    pub fn hosted(event_sink: EventSink) -> Self {
+        let ids: Arc<dyn IdGen> =
+            Arc::new(AscendingIdGen::new(Arc::new(SystemClock), Arc::new(SystemRng)));
+        Self {
+            inner: Arc::new(Inner {
+                terminals: Mutex::new(HashMap::new()),
+                current: Mutex::new(HashMap::new()),
+                next_number: Mutex::new(0),
+                next_token: Mutex::new(0),
+                ids,
+                bus: None,
+                event_sink: Some(event_sink),
                 clock: Arc::new(SystemClock),
                 runtime: Mutex::new(None),
             }),
@@ -493,6 +545,7 @@ impl PersistentPty {
                 next_token: Mutex::new(0),
                 ids,
                 bus: self.inner.bus.clone(),
+                event_sink: self.inner.event_sink.clone(),
                 clock,
                 runtime: Mutex::new(None),
             }),
@@ -510,7 +563,7 @@ impl PersistentPty {
     pub fn set_runtime_dir(&self, root: &Path) -> Result<(), String> {
         let mut last: Option<String> = None;
         for _ in 0..2 {
-            match claim_runtime_dir(root) {
+            match claim_runtime_dir(root, None) {
                 Ok(scope) => {
                     *self.inner.runtime.lock() = Some(scope);
                     return Ok(());
@@ -529,6 +582,103 @@ impl PersistentPty {
             .lock()
             .as_ref()
             .map(|scope| scope.directory().to_string_lossy().into_owned())
+    }
+
+    /// Claims a NAMED runtime directory `<root>/<id>` — the daemon
+    /// host's claim (design §5.1: `oc-pty daemon --runtime-dir ROOT
+    /// --name ID`), as opposed to [`PersistentPty::set_runtime_dir`]'s
+    /// fresh-random identity. A lock held by a live predecessor is the
+    /// unreachable-daemon case: the caller exits non-zero and the
+    /// client retries in a fresh directory (§8.2).
+    pub fn bind_runtime_dir(&self, root: &Path, id: &str) -> Result<(), String> {
+        if id.is_empty() || id.contains('/') {
+            return Err(format!("invalid PTY runtime directory name: {id}"));
+        }
+        let scope = claim_runtime_dir(root, Some(id))?;
+        *self.inner.runtime.lock() = Some(scope);
+        Ok(())
+    }
+
+    /// The registration this machine last wrote (`service.json`).
+    #[must_use]
+    pub fn registration(&self) -> Option<Registration> {
+        self.inner.runtime.lock().as_ref().and_then(|scope| read_registration(&scope.directory()))
+    }
+
+    /// Rewrites the registration with the daemon's bound socket path
+    /// (`service.json` carries `socket` for discovery — `daemon.ts:38`).
+    pub fn set_registration_socket(&self, socket: &str) -> Result<(), String> {
+        let directory = self
+            .inner
+            .runtime
+            .lock()
+            .as_ref()
+            .map(RuntimeScope::directory)
+            .ok_or_else(|| "no PTY runtime directory claimed".to_owned())?;
+        let mut registration = read_registration(&directory)
+            .ok_or_else(|| "PTY registration unreadable".to_owned())?;
+        socket.clone_into(&mut registration.socket);
+        write_json_atomic(&directory.join(SERVICE_JSON), &registration)
+            .map_err(|error| format!("writing PTY registration: {error}"))
+    }
+
+    /// Re-anchors the runtime scope to `directory` (design §6 arm A,
+    /// gate finding 6): after a client-side inode-preserving migration
+    /// of `service.lock` + `service.json` into a new root, the live
+    /// daemon's write paths (`state.json`, registration rewrites) must
+    /// follow. The held lock rides its inode through the rename, so
+    /// only the paths change. `daemon.sock` is NOT migrated (the
+    /// daemon remembers its bound socket for exit cleanup). Returns
+    /// whether the directory actually changed.
+    #[must_use]
+    pub fn reanchor_runtime_dir(&self, directory: &Path) -> bool {
+        let Some((root, id)) = directory
+            .parent()
+            .zip(directory.file_name().map(|name| name.to_string_lossy().into_owned()))
+        else {
+            return false;
+        };
+        let mut runtime = self.inner.runtime.lock();
+        let Some(scope) = runtime.as_mut() else { return false };
+        if scope.directory() == directory {
+            return false;
+        }
+        scope.root = root.to_path_buf();
+        scope.id = id;
+        true
+    }
+
+    /// The `own` claim's selection reset (design §6 arm A, gate ruling
+    /// 2): a new owner starts a fresh selection epoch — `current[]` is
+    /// cleared (v2's replacement has an empty map, `index.ts:140`) and
+    /// every terminal's `controller` field is dropped (dead
+    /// `attachment_ids` would otherwise suppress resize generation bumps,
+    /// `persistent_pty.rs` resize). Generation counters are NOT reset —
+    /// they stay monotonic forever (§7 carries generation).
+    pub fn reset_selection_epoch(&self) {
+        self.inner.current.lock().clear();
+        let mut terminals = self.inner.terminals.lock();
+        for live in terminals.values_mut() {
+            live.controller = None;
+        }
+    }
+
+    /// Restores terminals from a handoff snapshot (design §2.2/§6 arm
+    /// B): replay windows intact, children gone (each terminal marked
+    /// `exited` — v2's daemon-death outcome). Returns the number of
+    /// restored terminals. Shared by the in-process adoption arm and
+    /// the daemon's `restore` op (owner-only, §4.3).
+    #[must_use]
+    pub fn restore(&self, state: &HandoffState) -> usize {
+        self.inner.restore(state)
+    }
+
+    /// Removes the handoff state file — the kill/refresh invalidation
+    /// and the consumption half of a successful `own` claim (design
+    /// §4.3: the daemon arm consumes the ticket in memory AND removes
+    /// `state.json`). Public for the daemon host.
+    pub fn invalidate_handoff_state(&self) {
+        self.inner.invalidate_handoff_state();
     }
 
     /// The process-boundary seam: releases the runtime lock — exactly
@@ -557,10 +707,19 @@ impl PersistentPty {
     }
 
     async fn publish(&self, type_: &str, data: serde_json::Value) {
-        let definition = crate::bus::registry::by_type(type_)
-            .cloned()
-            .unwrap_or_else(|| crate::bus::registry::EventDefinition::ephemeral(type_));
-        let _ = self.inner.bus.publish(&definition, data, PublishOptions::default()).await;
+        if let Some(sink) = &self.inner.event_sink {
+            // Host-injected route (design §3.1): the daemon serializes
+            // the publication to its owner connection; payloads stay
+            // byte-identical to the bus route.
+            sink(type_, data);
+            return;
+        }
+        if let Some(bus) = &self.inner.bus {
+            let definition = crate::bus::registry::by_type(type_)
+                .cloned()
+                .unwrap_or_else(|| crate::bus::registry::EventDefinition::ephemeral(type_));
+            let _ = bus.publish(&definition, data, PublishOptions::default()).await;
+        }
     }
 
     /// `list` (persistent-pty/index.ts:142-149).
@@ -777,21 +936,26 @@ impl PersistentPty {
         Ok(())
     }
 
-    /// `snapshot` (index.ts:253-263). The checkpoint bytes are a
-    /// documented-format stub (Phase 9 daemon serializes the emulator
-    /// state; here the scrollback text is stored raw).
+    /// `snapshot` (index.ts:253-263). The checkpoint bytes are the
+    /// versioned daemon wire format (design §7, R6): magic
+    /// `OCPTYCHK`, rows/cursor/size/generation + scrollback + CRC32 —
+    /// the in-process backend produces the identical bytes the daemon
+    /// serves (same machine code path).
     pub fn snapshot(&self, id: &PtyId) -> PubResult<Snapshot> {
         let terminals = self.inner.terminals.lock();
         let live = terminals
             .get(id)
             .ok_or_else(|| NotFoundError { pty_id: id.clone() }.into_unavailable())?;
         let text = live.rows.join("\n");
-        Ok(Snapshot {
-            info: live.info.clone(),
-            text: text.clone(),
-            checkpoint: text.into_bytes(),
-            cursor: live.cursor,
-        })
+        let checkpoint = wire::encode_checkpoint(&wire::CheckpointV1 {
+            cols: live.info.size.0,
+            rows: live.info.size.1,
+            cursor_x: u32::try_from(live.cursor.0).unwrap_or(u32::MAX),
+            cursor_y: u32::try_from(live.cursor.1).unwrap_or(u32::MAX),
+            generation: live.generation,
+            scrollback: text.clone(),
+        });
+        Ok(Snapshot { info: live.info.clone(), text, checkpoint, cursor: live.cursor })
     }
 
     /// `read(sessionID, lines?)` (index.ts:265-291): the current terminal
@@ -970,6 +1134,21 @@ impl PersistentPty {
             {
                 live.generation += 1;
                 live.controller = Some(input.attachment_id.to_string());
+                // §12 Q3 (the approved machine delta): existing
+                // subscribers learn the new controller attachment +
+                // generation; the attaching subscriber receives the
+                // generation in its `attached` frame instead.
+                let event = StreamEvent::ControllerChanged {
+                    attachment_id: Some(input.attachment_id.to_string()),
+                    generation: live.generation,
+                };
+                for subscriber in live.subscribers.values_mut() {
+                    if subscriber.active {
+                        (subscriber.on_event)(event.clone());
+                    } else {
+                        subscriber.pending.push(event.clone());
+                    }
+                }
             }
             let generation = live.generation;
             live.subscribers.insert(
@@ -1095,42 +1274,11 @@ impl Inner {
 
         // Restore the terminals: replay windows intact, children gone
         // (exited — v2's daemon-died outcome; `Live` without io
-        // handles rejects writes and serves replay reads).
-        let restored = {
-            let mut terminals = self.terminals.lock();
-            let mut next_number = self.next_number.lock();
-            for snapshot in &state.terminals {
-                let mut info = snapshot.info.clone();
-                if info.status == crate::pty::Status::Running {
-                    info.status = crate::pty::Status::Exited;
-                }
-                let buffer = base64_decode(&snapshot.buffer).unwrap_or_default();
-                info.output = (snapshot.buffer_cursor, snapshot.buffer_cursor + buffer.len());
-                if let Some(number) =
-                    info.id.0.rsplit('_').next().and_then(|n| n.parse::<u64>().ok())
-                {
-                    *next_number = (*next_number).max(number);
-                }
-                terminals.insert(
-                    info.id.clone(),
-                    Live {
-                        info,
-                        buffer,
-                        buffer_cursor: snapshot.buffer_cursor,
-                        writer: None,
-                        master: None,
-                        killer: None,
-                        rows: snapshot.rows.clone(),
-                        cursor: snapshot.cursor,
-                        generation: snapshot.generation,
-                        controller: None,
-                        subscribers: HashMap::new(),
-                        ended: HashMap::new(),
-                    },
-                );
-            }
-            state.terminals.len()
-        };
+        // handles rejects writes and serves replay reads). The loop is
+        // the extracted `Machine::restore` (design §2.2/§6 arm B):
+        // shared by this in-process adoption arm and the daemon's
+        // owner-only `restore` op.
+        let restored = self.restore(&state);
 
         // The claim consumes the snapshot (single-use ticket; a second
         // contender finds no state and starts fresh — the
@@ -1151,6 +1299,44 @@ impl Inner {
         // scope claimed at boot (if any) is released with its lock.
         *self.runtime.lock() = Some(RuntimeScope { root, id, lock });
         Ok(Adoption::Adopted { restored, directory: target.to_string_lossy().into_owned() })
+    }
+
+    /// The extracted snapshot-restore loop (design §2.2): replay
+    /// windows intact, children gone (every terminal marked `exited`),
+    /// id counter continued past the restored ids. Shared by the
+    /// in-process adoption ladder and the daemon's `restore` op.
+    fn restore(&self, state: &HandoffState) -> usize {
+        let mut terminals = self.terminals.lock();
+        let mut next_number = self.next_number.lock();
+        for snapshot in &state.terminals {
+            let mut info = snapshot.info.clone();
+            if info.status == crate::pty::Status::Running {
+                info.status = crate::pty::Status::Exited;
+            }
+            let buffer = base64_decode(&snapshot.buffer).unwrap_or_default();
+            info.output = (snapshot.buffer_cursor, snapshot.buffer_cursor + buffer.len());
+            if let Some(number) = info.id.0.rsplit('_').next().and_then(|n| n.parse::<u64>().ok()) {
+                *next_number = (*next_number).max(number);
+            }
+            terminals.insert(
+                info.id.clone(),
+                Live {
+                    info,
+                    buffer,
+                    buffer_cursor: snapshot.buffer_cursor,
+                    writer: None,
+                    master: None,
+                    killer: None,
+                    rows: snapshot.rows.clone(),
+                    cursor: snapshot.cursor,
+                    generation: snapshot.generation,
+                    controller: None,
+                    subscribers: HashMap::new(),
+                    ended: HashMap::new(),
+                },
+            );
+        }
+        state.terminals.len()
     }
 
     fn on_output(&self, id: &PtyId, chunk: &[u8]) {
@@ -1212,10 +1398,18 @@ impl Inner {
                 live.generation += 1;
             }
         }
-        // The resized event carries the post-resize checkpoint (the same
-        // screen-text stub `snapshot` records) and the generation
-        // (v2 daemon.ts:81-87, handlers/persistent-pty.ts:141-145).
-        let checkpoint = live.rows.join("\n").into_bytes();
+        // The resized event carries the post-resize checkpoint (the
+        // versioned §7 format — same bytes `snapshot` records) and the
+        // generation (v2 daemon.ts:81-87,
+        // handlers/persistent-pty.ts:141-145).
+        let checkpoint = wire::encode_checkpoint(&wire::CheckpointV1 {
+            cols,
+            rows,
+            cursor_x: u32::try_from(live.cursor.0).unwrap_or(u32::MAX),
+            cursor_y: u32::try_from(live.cursor.1).unwrap_or(u32::MAX),
+            generation: live.generation,
+            scrollback: live.rows.join("\n"),
+        });
         let event = StreamEvent::Resized { cols, rows, generation: live.generation, checkpoint };
         for subscriber in live.subscribers.values_mut() {
             if subscriber.active {
@@ -1340,8 +1534,10 @@ impl Subscriber {
 /// Claims a fresh `<root>/<id>`: exclusive non-blocking `flock` on
 /// `service.lock` (released automatically when the process dies) plus
 /// the `service.json` registration (`daemon.ts:165-166`, `33-39`).
-fn claim_runtime_dir(root: &Path) -> Result<RuntimeScope, String> {
-    let id = new_random_token();
+/// `id` is a fresh random token for the in-process claim and the
+/// daemon-provided name for [`PersistentPty::bind_runtime_dir`].
+fn claim_runtime_dir(root: &Path, id: Option<&str>) -> Result<RuntimeScope, String> {
+    let id = id.map_or_else(new_random_token, std::borrow::ToOwned::to_owned);
     let directory = root.join(&id);
     std::fs::create_dir_all(&directory)
         .and_then(|()| set_private(&directory))
@@ -1849,5 +2045,319 @@ mod tests {
             take_lock(&Path::new(&adopted_directory).join(SERVICE_LOCK)).is_err(),
             "the migrated lock file still carries B's lock"
         );
+    }
+
+    // -- D1: host-ability surface (design §3.1, §6, §7) -----------------------
+
+    /// The protocol version mirrors v2's daemon protocol (design §4.2).
+    #[test]
+    fn protocol_version_is_seven() {
+        assert_eq!(PTY_PROTOCOL_VERSION, 7);
+    }
+
+    /// Host-injected publications (§3.1): the sink receives the same
+    /// event names and payloads the bus route would carry, including
+    /// the exit-pump `removed` with ZERO subscribers.
+    #[tokio::test]
+    async fn hosted_event_sink_receives_bus_publications() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let sink_events = Arc::clone(&events);
+        let service = PersistentPty::hosted(Arc::new(move |type_, data| {
+            sink_events.lock().push((type_.to_owned(), data));
+        }))
+        .with_default_program(Arc::new(|| Some("/bin/sh".to_string())));
+        let session = SessionId::parse("ses_hosted").expect("session");
+
+        let info = service
+            .create(
+                &session,
+                CreateInput {
+                    command: Some("/bin/sh".to_string()),
+                    args: vec!["-c".to_string(), "printf ok; sleep 30".to_string()],
+                    cwd: Some("/tmp".to_string()),
+                    title: "hosted".to_string(),
+                    env: std::collections::BTreeMap::new(),
+                    size: Some((80, 10)),
+                },
+            )
+            .await
+            .expect("create");
+
+        // `added` fires on create; `removed` on explicit remove.
+        service.remove(&info.id).await.expect("remove");
+        let added = events.lock().iter().any(|(type_, _)| type_ == "persistent-pty.added");
+        assert!(added, "sink saw persistent-pty.added");
+        let removed = events
+            .lock()
+            .iter()
+            .any(|(type_, data)| type_ == "persistent-pty.removed" && data["ptyID"] == info.id.0);
+        assert!(removed, "sink saw persistent-pty.removed for the removed terminal");
+    }
+
+    /// The exit-pump `removed` fires with ZERO subscribers (§3.1 —
+    /// every child is reaped by the machine's wait threads).
+    #[tokio::test]
+    async fn hosted_event_sink_fires_exit_removed_without_subscribers() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let sink_events = Arc::clone(&events);
+        let service = PersistentPty::hosted(Arc::new(move |type_, data| {
+            sink_events.lock().push((type_.to_owned(), data));
+        }))
+        .with_default_program(Arc::new(|| Some("/bin/sh".to_string())));
+        let session = SessionId::parse("ses_exitpump").expect("session");
+        let info = service
+            .create(
+                &session,
+                CreateInput {
+                    command: Some("/bin/sh".to_string()),
+                    args: vec!["-c".to_string(), "true".to_string()],
+                    cwd: Some("/tmp".to_string()),
+                    title: String::new(),
+                    env: std::collections::BTreeMap::new(),
+                    size: Some((80, 5)),
+                },
+            )
+            .await
+            .expect("create");
+        // No attach: zero subscribers. The wait thread reaps the child;
+        // the exit pump publishes `removed`.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let fired = loop {
+            let hit = events.lock().iter().any(|(type_, data)| {
+                type_ == "persistent-pty.removed" && data["ptyID"] == info.id.0
+            });
+            if hit {
+                break true;
+            }
+            assert!(std::time::Instant::now() < deadline, "exit-pump removed never fired");
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        };
+        assert!(fired);
+    }
+
+    /// `reset_selection_epoch` (§6 arm A): the selection map empties
+    /// and controllers drop so resize generation bumps work again for
+    /// a fresh owner attachment (generation counters stay monotonic).
+    #[tokio::test]
+    async fn reset_selection_epoch_clears_current_and_controllers() {
+        let service = PersistentPty::new(bus_for_test().await)
+            .with_default_program(Arc::new(|| Some("/bin/sh".to_string())));
+        let session = SessionId::parse("ses_epoch").expect("session");
+        let info = service
+            .create(
+                &session,
+                CreateInput {
+                    command: Some("/bin/sh".to_string()),
+                    args: vec!["-c".to_string(), "sleep 30".to_string()],
+                    cwd: Some("/tmp".to_string()),
+                    title: String::new(),
+                    env: std::collections::BTreeMap::new(),
+                    size: Some((80, 5)),
+                },
+            )
+            .await
+            .expect("create");
+        let first = service
+            .attach(
+                &info.id,
+                AttachInput {
+                    cursor: 0,
+                    attachment_id: "old-server-attach",
+                    role: Role::Controller,
+                    takeover: false,
+                    on_event: Box::new(|_| {}),
+                    on_end: Box::new(|| {}),
+                },
+            )
+            .expect("attach");
+        assert_eq!(first.generation, 1, "first controller bumped the generation");
+
+        service.reset_selection_epoch();
+        // Selection cleared: read finds nothing.
+        assert!(service.read(&session, None).await.expect("read").is_none());
+        // Controller cleared: a DIFFERENT attachment becomes controller
+        // without takeover and the generation keeps counting upward.
+        let replacement = service
+            .attach(
+                &info.id,
+                AttachInput {
+                    cursor: 0,
+                    attachment_id: "new-server-attach",
+                    role: Role::Controller,
+                    takeover: false,
+                    on_event: Box::new(|_| {}),
+                    on_end: Box::new(|| {}),
+                },
+            )
+            .expect("attach after epoch reset");
+        assert_eq!(replacement.generation, 2, "generations stay monotonic across the reset");
+    }
+
+    /// `reanchor_runtime_dir` (§6 arm A, gate finding 6): after the
+    /// client migrates lock+registration, the machine's writes follow
+    /// the new directory.
+    #[tokio::test]
+    async fn reanchor_runtime_dir_moves_write_paths() {
+        let old_root = temp_root("reanchor-old");
+        let new_root = temp_root("reanchor-new");
+        let service = PersistentPty::new(bus_for_test().await);
+        service.set_runtime_dir(&old_root).expect("runtime");
+        let directory = service.runtime_dir().expect("dir");
+        let id = Path::new(&directory).file_name().expect("id").to_string_lossy().into_owned();
+        let target = new_root.join(&id);
+
+        // The client-side migration (lock + registration, inode-preserving).
+        migrate_runtime(Path::new(&directory), &target).expect("migrate");
+        assert!(service.reanchor_runtime_dir(&target), "reanchor reports the change");
+        assert_eq!(service.runtime_dir().expect("dir"), target.to_string_lossy());
+        let handoff = service.handoff().expect("handoff").expect("ticket");
+        assert_eq!(handoff.directory, target.to_string_lossy());
+        assert!(target.join("state.json").exists(), "handoff wrote into the re-anchored dir");
+        assert!(!Path::new(&directory).join("state.json").exists());
+        // Re-anchoring to the same directory is a no-op.
+        assert!(!service.reanchor_runtime_dir(&target));
+    }
+
+    /// `bind_runtime_dir` claims the NAMED directory (the daemon's
+    /// `--name`), writes a protocol-7 registration, and refuses a
+    /// directory whose lock a live predecessor holds (§5.1 exit≠0).
+    #[tokio::test]
+    async fn bind_runtime_dir_claims_named_directory() {
+        let root = temp_root("bind-named");
+        let daemon = PersistentPty::hosted(Arc::new(|_, _| {}));
+        daemon.bind_runtime_dir(&root, "daemon-name-1").expect("bind");
+        assert_eq!(
+            daemon.runtime_dir().expect("dir"),
+            root.join("daemon-name-1").to_string_lossy().into_owned()
+        );
+        let registration = daemon.registration().expect("registration");
+        assert_eq!(registration.protocol, 7);
+        assert_eq!(registration.socket, "");
+        daemon.set_registration_socket("/some/daemon.sock").expect("socket");
+        assert_eq!(daemon.registration().expect("registration").socket, "/some/daemon.sock");
+
+        // A second claim on the SAME directory fails while the lock is held.
+        let contender = PersistentPty::hosted(Arc::new(|_, _| {}));
+        let error = contender.bind_runtime_dir(&root, "daemon-name-1").expect_err("lock busy");
+        assert!(error.contains("locking"), "unexpected error: {error}");
+    }
+
+    /// `ControllerChanged` (§12 Q3): an existing subscriber hears about
+    /// a takeover; the attaching subscriber gets it via `attached`.
+    #[tokio::test]
+    async fn controller_takeover_emits_controller_changed() {
+        let service = PersistentPty::new(bus_for_test().await)
+            .with_default_program(Arc::new(|| Some("/bin/sh".to_string())));
+        let session = SessionId::parse("ses_takeover").expect("session");
+        let info = service
+            .create(
+                &session,
+                CreateInput {
+                    command: Some("/bin/sh".to_string()),
+                    args: vec!["-c".to_string(), "sleep 30".to_string()],
+                    cwd: Some("/tmp".to_string()),
+                    title: String::new(),
+                    env: std::collections::BTreeMap::new(),
+                    size: Some((80, 5)),
+                },
+            )
+            .await
+            .expect("create");
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let events = Arc::clone(&seen);
+        let attachment = service
+            .attach(
+                &info.id,
+                AttachInput {
+                    cursor: 0,
+                    attachment_id: "observer-1",
+                    role: Role::Observer,
+                    takeover: false,
+                    on_event: Box::new(move |event| events.lock().push(event)),
+                    on_end: Box::new(|| {}),
+                },
+            )
+            .expect("attach");
+        attachment.activate();
+
+        let taker = service
+            .attach(
+                &info.id,
+                AttachInput {
+                    cursor: 0,
+                    attachment_id: "controller-2",
+                    role: Role::Controller,
+                    takeover: true,
+                    on_event: Box::new(|_| {}),
+                    on_end: Box::new(|| {}),
+                },
+            )
+            .expect("takeover attach");
+        assert_eq!(taker.generation, 1);
+        let events = seen.lock();
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                StreamEvent::ControllerChanged { attachment_id, generation }
+                    if attachment_id.as_deref() == Some("controller-2") && *generation == 1
+            )),
+            "observer saw controller_changed; got {events:?}"
+        );
+    }
+
+    /// The snapshot/resized checkpoints are the §7 v1 format (decodable
+    /// by the shared wire codec, in-process and daemon backends
+    /// byte-identical).
+    #[tokio::test]
+    async fn snapshot_and_resize_carry_v1_checkpoints() {
+        let service = PersistentPty::new(bus_for_test().await)
+            .with_default_program(Arc::new(|| Some("/bin/sh".to_string())));
+        let session = SessionId::parse("ses_checkpoint").expect("session");
+        let info = service
+            .create(
+                &session,
+                CreateInput {
+                    command: Some("/bin/sh".to_string()),
+                    args: vec!["-c".to_string(), "printf 'ab'; sleep 30".to_string()],
+                    cwd: Some("/tmp".to_string()),
+                    title: String::new(),
+                    env: std::collections::BTreeMap::new(),
+                    size: Some((20, 4)),
+                },
+            )
+            .await
+            .expect("create");
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&events);
+        let attachment = service
+            .attach(
+                &info.id,
+                AttachInput {
+                    cursor: 0,
+                    attachment_id: "checkpoint-observer",
+                    role: Role::Observer,
+                    takeover: false,
+                    on_event: Box::new(move |event| sink.lock().push(event)),
+                    on_end: Box::new(|| {}),
+                },
+            )
+            .expect("attach");
+        attachment.activate();
+        service.resize(&info.id, 30, 6, None).await.expect("resize");
+
+        let snapshot = service.snapshot(&info.id).expect("snapshot");
+        let decoded = wire::decode_checkpoint(&snapshot.checkpoint).expect("v1 checkpoint");
+        assert_eq!((decoded.cols, decoded.rows), (30, 6));
+        assert_eq!(decoded.scrollback.split('\n').count(), 6);
+
+        let stream_checkpoint = events
+            .lock()
+            .iter()
+            .find_map(|event| match event {
+                StreamEvent::Resized { checkpoint, .. } => Some(checkpoint.clone()),
+                _ => None,
+            })
+            .expect("resized event");
+        assert_eq!(wire::decode_checkpoint(&stream_checkpoint).expect("decode"), decoded);
     }
 }
