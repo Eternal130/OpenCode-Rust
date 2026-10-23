@@ -93,7 +93,7 @@ Packaging and release: see [tools/RELEASE.md](./tools/RELEASE.md) and [install/i
 
 Pre-release builds are published from `v2.0.24.beta.N` tags until acceptance is complete, then the final `v2.0.24` release replaces them. The binary always self-reports `2.0.24` (the parity pin) — the beta marker exists only in the tag and asset names.
 
-Assets per release: `opencode-<version>-linux-x64.tar.gz` (+ `.sha256` sidecar), verified by the release workflow before publishing. Install the latest beta:
+Assets per release (the R-11 platform matrix, verified by the release workflow before publishing): `opencode-<version>-<target>` archives for `linux-x64`, `linux-arm64`, `linux-x64-musl`, `linux-arm64-musl` (static), and `darwin-arm64` (tarballs) plus `windows-x64` (zip, experimental build-only) — each with a `.sha256` sidecar. macOS Intel is not shipped (build from source). Every archive carries **two** binaries: `opencode-rust` and the `oc-pty` persistent-terminal daemon (persistent terminals are on by default; the binary spawns `oc-pty` via `OPENCODE_PTY_BIN` → exe-sibling → `PATH`). If your install somehow lacks the `oc-pty` sibling, `OC_PTY_DAEMON=0` forces the in-process backend for this one release window — see [tools/RELEASE.md](./tools/RELEASE.md) § oc-pty co-packaging. Install the latest beta:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Eternal130/OpenCode-Rust/main/install/install.sh | bash -s -- \
