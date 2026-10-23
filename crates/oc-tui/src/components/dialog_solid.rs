@@ -50,13 +50,17 @@
 //!   glyph cells) is applied per cell over the base frame by the same
 //!   `blend_backdrop` the old path uses.
 //!
-//! **Divergence class (documented, matrix-bounded).** The old
-//! renderer paints long text runs past their box's padding edge (a
-//! title runs to the frame edge; the footer then overwrites). The
-//! tree clips at the box edge (the tsx's own `overflow: hidden`
-//! behavior). The parity matrix uses realistic lengths where the two
-//! agree; extreme-overflow frames are a documented divergence, not a
-//! parity regression.
+//! **Divergence class (documented, matrix-bounded — option rows
+//! CLOSED by lane F15).** The old renderer once painted long text
+//! runs past their box's padding edge (a title ran to the frame
+//! edge; the footer then overwrote). Lane F15 ported the ref's
+//! two-stage truncation into BOTH painters (stage-1 `Locale.
+//! truncate(title, 61)` + the footer-respecting stage-2 clip — see
+//! `dialog_select::truncated_title`/`title_clip_end`), so option
+//! rows now clip at the title box edge exactly like the tsx's
+//! `overflow: hidden`. The remaining documented divergence is the
+//! non-option chrome (headers/empty rows), which carries no
+//! overflow cases in the parity matrix.
 
 // Terminal dimensions/colors are bounded u8/u16/usize→f32 casts, the
 // same allowance the hand-rolled renderer carries.
@@ -76,8 +80,8 @@ use opentui_solid::reactive::Reactive;
 use opentui_solid::{box_, for_list, map, show, text, Element, Signal, SolidRenderer};
 
 use crate::components::dialog_select::{
-    content_rows, flat_indices, grouped, viewport_height, DialogStyles, SelectOption, SelectProps,
-    SelectState,
+    content_rows, flat_indices, grouped, title_clip_end, truncated_title, viewport_height,
+    DialogStyles, SelectOption, SelectProps, SelectState,
 };
 use crate::render::Frame;
 use crate::store::{DialogEntry, DialogKind, PluginDialogContent};
@@ -444,9 +448,14 @@ fn footer_text(inputs: &DialogInputs, index: usize) -> Option<String> {
 }
 
 /// The option row's title chunks: `[title][ " description"]` — one
-/// styled run per fg/attr change, contiguous columns, truncated by
-/// atom walk at the row's inner width minus the right-aligned
-/// footer's reservation (the old `put`'s break at the box edge).
+/// styled run per fg/attr change, contiguous columns. F15: the ref's
+/// two-stage truncation (dialog-select.tsx:885-907) — stage 1 caps
+/// the TITLE at `titleWidth ?? 61` (`Locale.truncate`,
+/// [`truncated_title`]); stage 2 clips the whole run at the title
+/// text box's edge: the row content edge less the footer's
+/// `flexShrink=0` reservation and its `gap=1` column
+/// ([`title_clip_end`]) — the footer keeps its columns and the gap
+/// never shows a title glyph.
 fn title_chunks(inputs: &DialogInputs, paint: &RowPaint, index: usize) -> StyledText {
     let Some(option) = inputs.options.get(index) else {
         return styled(Vec::new());
@@ -455,15 +464,12 @@ fn title_chunks(inputs: &DialogInputs, paint: &RowPaint, index: usize) -> Styled
         Some(description) if Some(description) != option.category.as_deref() => Some(description),
         _ => None,
     };
-    // The old `put` walks to the ROW edge (the box width, the
-    // paddingRight zone included) and the right-aligned footer then
-    // OVERWRITES its span — glyphs right of the footer SURVIVE. The
-    // tree reproduces this: chunks run to the row edge, the footer
-    // is absolutely positioned and later in DOM order (it
-    // overwrites), and every chunk carries the ROW background (the
-    // old `put` writes bg on every glyph cell, past the row box's
-    // own fill span too).
-    let clip = inputs.box_width.saturating_sub(4);
+    // Stage 2 — the clip column is absolute (the row content edge
+    // less the footer reservation); the chunk walk counts cells from
+    // the title's start at box column 4, so the budget is the clip
+    // less that offset.
+    let clip =
+        title_clip_end(inputs.box_width, footer_text(inputs, index).as_deref()).saturating_sub(4);
     let attrs = u32::from(paint.bold);
     let mut chunks: Vec<TextChunk> = Vec::new();
     let mut used = 0usize;
@@ -482,7 +488,7 @@ fn title_chunks(inputs: &DialogInputs, paint: &RowPaint, index: usize) -> Styled
             used += step;
         }
     };
-    push(&mut chunks, &option.title, paint.title_fg);
+    push(&mut chunks, &truncated_title(option), paint.title_fg);
     if let Some(description) = description {
         let fg = if paint.selected { paint.title_fg } else { inputs.colors.muted };
         push(&mut chunks, &format!(" {description}"), fg);
@@ -566,10 +572,11 @@ fn option_element(inputs: &Signal<DialogInputs>, index: usize) -> Element {
         );
 
     // The title + description run. Natural width + wrap none: the
-    // old `put` walks to the ROW edge (past the row box's padding
-    // into the paddingRight zone), so the text must not be
-    // box-clipped — flexShrink 0 lets its glyphs paint to the row
-    // edge exactly like the old renderer's atom walk.
+    // run's chunks are pre-clipped by the same two-stage walk as the
+    // old renderer (stage-1 cap + the footer-respecting stage-2
+    // edge in `title_chunks`), and `flexShrink 0` keeps the
+    // box-clipped glyphs painting exactly like the old renderer's
+    // atom walk.
     let title_text = text().flex_shrink(0.0).wrap_mode("none").dyn_prop(
         "content",
         dyn_styled(map(inputs.clone(), move |i: &DialogInputs| match paint_at(i) {
@@ -579,9 +586,10 @@ fn option_element(inputs: &Signal<DialogInputs>, index: usize) -> Element {
     );
 
     // The right-aligned footer: ABSOLUTE, right 3 — ends at the row
-    // box's content edge exactly, and paints AFTER the title in DOM
-    // order so it overwrites overflowing title glyphs (the old
-    // renderer's footer-over-title paint order).
+    // box's content edge exactly. Since lane F15 the title stops at
+    // the gap before the footer's reservation, so the two never
+    // collide; the footer stays later in DOM order (paint order
+    // parity with the old renderer's footer-last paint).
     let footer_text_el = text().position("absolute").right(3.0).dyn_prop(
         "content",
         dyn_styled(map(inputs.clone(), move |i: &DialogInputs| {
