@@ -31,6 +31,12 @@ never mutated) ｜ **Ours:** `opencode-rust` debug build (oc-cli/oc-server, work
 * Corpus: `tools/parity/spec-canaries/e12_search_corpus.json` (12 queries).
   Raw snapshots: `ref/` and `our/` (`-dialog-baseline.txt` + `q00..q11.txt`
   + `-corpus.json`). Server-side probes: `server-api-probes.txt`.
+* `our/our-corpus-part2-raw.json` = raw capture of the our-side re-run
+  (dialog baseline + queries 9–12), kept for provenance of those four rows.
+* Per-query numbering note: `q00..q11` on both sides = corpus queries 1..12
+  in order (`qNN` ↔ corpus entry `NN+1`); an earlier our-side misfiling of
+  queries 9–12 as `q00..q03` was fixed by re-extracting from `our-corpus.json`
+  — no query/offset mismatch remains.
 
 ## Seeded sessions (title codepoints verified at create time)
 
