@@ -199,7 +199,8 @@ impl Launcher for BinaryLauncher {
             *self.cache.lock() = None;
             return Err(TransportError::new(
                 ErrorKind::Spawn,
-                "could not find the opencode-pty binary (OPENCODE_PTY_BIN, exe-sibling, PATH)",
+                "could not find the opencode-pty binary (OPENCODE_PTY_BIN, exe-sibling, PATH) \
+                 — or set OC_PTY_DAEMON=0 to use the in-process terminal backend for this release",
             ));
         };
         let mut command = std::process::Command::new(&binary);
@@ -1815,5 +1816,38 @@ mod tests {
             assert_eq!(libc::flock(holder.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB), 0);
         }
         assert!(lock_held(&lock), "a held lock probes held");
+    }
+
+    /// p4: the missing-binary spawn error must do more than list the
+    /// resolution chain — it names the `OC_PTY_DAEMON=0` escape hatch,
+    /// the documented workaround when no usable sibling exists (e.g.
+    /// a skewed pair after an upgrade on an old archive).
+    #[test]
+    fn missing_binary_error_names_the_escape_hatch() {
+        let saved_bin = std::env::var_os("OPENCODE_PTY_BIN");
+        let saved_path = std::env::var_os("PATH").expect("PATH is set in test harnesses");
+        std::env::remove_var("OPENCODE_PTY_BIN");
+        std::env::set_var("PATH", "");
+        // Precondition: nothing resolvable under the scrubbed env (no
+        // oc-pty ever sits next to a nextest test binary).
+        let exe_dir =
+            std::env::current_exe().ok().and_then(|exe| exe.parent().map(Path::to_path_buf));
+        assert_eq!(
+            resolve_binary_path(None, exe_dir.as_deref(), ""),
+            None,
+            "test precondition: no oc-pty resolvable here"
+        );
+        let Err(error) =
+            BinaryLauncher::new().launch(Path::new("/tmp/opencode"), "missing-bin-hint")
+        else {
+            panic!("nothing resolvable with a scrubbed env, yet launch succeeded");
+        };
+        assert!(error.message.contains("OPENCODE_PTY_BIN"), "{}", error.message);
+        assert!(error.message.contains("OC_PTY_DAEMON=0"), "{}", error.message);
+        match saved_bin {
+            Some(value) => std::env::set_var("OPENCODE_PTY_BIN", value),
+            None => std::env::remove_var("OPENCODE_PTY_BIN"),
+        }
+        std::env::set_var("PATH", saved_path);
     }
 }
