@@ -2208,3 +2208,227 @@ fn tui35_exit_chord_through_dirty_dialog_on_quiet_server() {
         },
     );
 }
+
+// ---------------------------------------------------------------------------
+// lane F15: the option-row height model — one row per option at EVERY
+// width, stage-1 `Locale.truncate(title, 61)` + the footer-respecting
+// stage-2 clip (dialog-select.tsx:885-907), never wrapping.
+// ---------------------------------------------------------------------------
+
+/// The F15 corpus title: 87 chars — a 23-char head, 50 `m`s, a tail
+/// marker that only exists past the 61-cell stage-1 cap.
+fn f15_long_title() -> String {
+    format!("Truncation Matrix Head {} TailMarkerZZQ", "m".repeat(50))
+}
+
+/// The F15 seeds: Alpha NEWEST (the current row), the long title one
+/// row below it (both inside the project — no footers).
+fn f15_arm(fake: &FakeLlm) {
+    let now = now_ms();
+    fake.arm_session_rows(vec![
+        rich_session("ses_alpha", "Alpha", now - 60_000.0, "/tmp/proj-a", "prj_a", None),
+        rich_session("ses_long", &f15_long_title(), now - 300_000.0, "/tmp/proj-a", "prj_a", None),
+    ]);
+    fake.arm_projects(
+        r#"[{"canonical":"/tmp/proj-a","id":"prj_a","name":"Proj A","sandboxes":[],"time":{"active":0,"created":0,"updated":0},"vcs":"git"}]"#.to_owned(),
+    );
+}
+
+/// F15 at 80 columns (the session dialog's box is 60 wide → the
+/// title budget is 52 cells): the long row renders its clipped form
+/// on ONE row (head + exactly 29 m's — the stage-1 `…` at cell 61
+/// sits past this box's clip), the past-61 tail never paints, and
+/// movement selects by OPTION — `ArrowDown` reaches the long row and
+/// Enter opens THAT session (the ref's `move`/`moveTo` walk,
+/// dialog-select.tsx:361-386).
+#[test]
+fn f15_long_title_clips_and_moves_by_option_at_80() {
+    run_daily_test(
+        "f15-clip-80",
+        80,
+        30,
+        |fake, _sandbox| f15_arm(fake),
+        |h| {
+            boot_to_session(h, b"Alpha")?;
+            h.write(b"\x18l"); // <leader>l — the session list
+            let grid = wait_grid(
+                h,
+                |g| (0..g.rows).any(|row| g.row_text(row).contains("Truncation Matrix Head")),
+                Duration::from_secs(8),
+            )
+            .map_err(|error| format!("the long-title row never rendered: {error}"))?;
+            let long_row = (0..grid.rows)
+                .find(|row| grid.row_text(*row).contains("Truncation Matrix Head"))
+                .expect("located");
+            let text = grid.row_text(long_row);
+            // The clip: budget 52 = the head (23) + exactly 29 m's,
+            // hard cut (stage-2 never adds an ellipsis).
+            assert!(
+                text.contains(&format!("Truncation Matrix Head {}", "m".repeat(29))),
+                "the 52-cell clip (head + 29 m's) at 80 cols: {text:?}"
+            );
+            assert!(!text.contains(&"m".repeat(30)), "the run hard-cuts at the 29th m");
+            assert!(!text.contains('…'), "stage-2 never adds an ellipsis");
+            // The past-61 tail never paints anywhere.
+            assert!(
+                (0..grid.rows).all(|row| !grid.row_text(row).contains("TailMarkerZZQ")),
+                "the past-61 tail never renders"
+            );
+            // ONE row per option: the row below the long row carries
+            // no continuation glyphs (no wrap ever).
+            assert!(
+                !grid.row_text(long_row + 1).contains("mmmm"),
+                "the long option occupies exactly one row"
+            );
+            // Movement by option: ArrowDown moves the selection to
+            // the LONG row (a title cell's style flips), Enter opens
+            // it — the tab strip carries the long session.
+            let title_x = grid.row_text(long_row).find("Truncation").unwrap_or(14);
+            let before = grid.cell(title_x, long_row);
+            h.write(b"\x1b[B"); // down — Alpha (current) → the long row
+            wait_grid(h, |g| g.cell(title_x, long_row) != before, Duration::from_secs(5))
+                .map_err(|error| format!("the selection never moved to the long row: {error}"))?;
+            h.write(b"\r"); // submit — the long session opens
+            wait_grid(
+                h,
+                |g| {
+                    // The dialog closed (its filter placeholder gone)
+                    // and the tab strip carries the long session's
+                    // tab beside Alpha (the strip's own title
+                    // truncation may keep the head — that is the tab
+                    // model, not the option row's).
+                    (0..g.rows).all(|row| !g.row_text(row).trim_start().starts_with("Search"))
+                        && g.row_text(0).contains("Alpha")
+                        && g.row_text(0).contains("Truncation")
+                },
+                Duration::from_secs(8),
+            )
+            .map_err(|error| format!("the long session never opened: {error}"))?;
+            Ok(())
+        },
+    );
+}
+
+/// F15 at 40 columns: the stage-2 clip — the stage-1 run hard-cuts at
+/// the row content edge (30 cells here; the `…` at cell 61 never
+/// fits), the row still wraps NEVER, and a CLICK on the clipped row
+/// selects its owning option (the option box IS the mouse surface,
+/// dialog-select.tsx:759-780).
+#[test]
+fn f15_long_title_clips_at_40_and_click_selects_the_option() {
+    run_daily_test(
+        "f15-clip-40",
+        40,
+        30,
+        |fake, _sandbox| f15_arm(fake),
+        |h| {
+            boot_to_session(h, b"Alpha")?;
+            h.write(b"\x18l");
+            let grid = wait_grid(
+                h,
+                |g| (0..g.rows).any(|row| g.row_text(row).contains("Truncation Matrix Head")),
+                Duration::from_secs(8),
+            )
+            .map_err(|error| format!("the long-title row never rendered at 40 cols: {error}"))?;
+            let long_row = (0..grid.rows)
+                .find(|row| grid.row_text(*row).contains("Truncation Matrix Head"))
+                .expect("located");
+            let text = grid.row_text(long_row);
+            // The clip: box 38 wide → the title budget is 30 cells —
+            // the head (23) + exactly 7 m's, hard cut, no ellipsis.
+            // (`row_text` right-trims, so the string ENDING at the
+            // seventh m also proves the eighth cell is blank.)
+            assert!(
+                text.contains("Truncation Matrix Head mmmmmmm"),
+                "the 30-cell clip (head + 7 m's) at 40 cols: {text:?}"
+            );
+            assert!(!text.contains("mmmmmmmm"), "the run hard-cuts at the seventh m (no eighth)");
+            assert!(!text.contains('…'), "stage-2 never adds an ellipsis");
+            // No wrap: the row below carries no continuation.
+            assert!(!grid.row_text(long_row + 1).contains("mmmm"), "one row per option at 40 cols");
+            // Click on the clipped row selects (and submits) the
+            // OWNING option — the long session opens as the tab.
+            let click_x = 11u16; // inside the dialog row (box_x 1 + 10)
+            let click_y = u16::try_from(long_row).unwrap_or(u16::MAX);
+            h.sgr_motion(click_x, click_y);
+            h.sgr_press(click_x, click_y);
+            h.sgr_release(click_x, click_y);
+            wait_grid(
+                h,
+                |g| {
+                    // The dialog closed and the long session's tab
+                    // opened (the strip's own title truncation may
+                    // keep the head — that is the tab model).
+                    (0..g.rows).all(|row| !g.row_text(row).trim_start().starts_with("Search"))
+                        && g.row_text(0).contains("Alpha")
+                        && g.row_text(0).contains("Truncation")
+                },
+                Duration::from_secs(8),
+            )
+            .map_err(|error| format!("the click never opened the long session: {error}"))?;
+            Ok(())
+        },
+    );
+}
+
+/// F15's stage-1 form in full: the OPEN menu (`ctrl+o`, `open.menu`)
+/// is the Large dialog (box 88 at 120 cols), so its budget clears
+/// the 61-cell cap — the long row renders `head + 37 m's + …`
+/// (locale.ts:50-53) on ONE row with its `label · time` footer,
+/// past-61 tail never painting (the ref's own `Locale.truncate`
+/// pin). Anchored at HOME (no tab open) — the 120-col sidebar also
+/// lists the session, so the row is identified by its FOOTER (the
+/// sidebar's rows carry none).
+#[test]
+fn f15_stage1_ellipsis_renders_in_the_open_menu_at_120() {
+    run_daily_test(
+        "f15-stage1-120",
+        120,
+        30,
+        |fake, _sandbox| f15_arm(fake),
+        |h| {
+            // Boot settle (no tab — the menu lists every session).
+            assert!(
+                h.wait_for(WORDMARK, Duration::from_secs(20)),
+                "the home wordmark never rendered"
+            );
+            h.write(b"\x0f"); // ctrl+o — the Open menu
+            let grid = wait_grid(
+                h,
+                |g| {
+                    (0..g.rows).any(|row| {
+                        let text = g.row_text(row);
+                        text.contains("Truncation Matrix Head") && text.contains("Proj A ·")
+                    })
+                },
+                Duration::from_secs(8),
+            )
+            .map_err(|error| format!("the Open menu never listed the long session: {error}"))?;
+            let long_row = (0..grid.rows)
+                .find(|row| {
+                    let text = grid.row_text(*row);
+                    text.contains("Truncation Matrix Head") && text.contains("Proj A ·")
+                })
+                .expect("located");
+            let text = grid.row_text(long_row);
+            // Stage 1 in full: the first 60 chars + `…` — 37 of the
+            // 50 m's survive the cap.
+            assert!(
+                text.contains(&format!("{}…", "m".repeat(37))),
+                "the stage-1 form (37 m's + …) renders: {text:?}\nfull grid:\n{}",
+                dump(&grid)
+            );
+            // The past-61 tail never paints anywhere.
+            assert!(
+                (0..grid.rows).all(|row| !grid.row_text(row).contains("TailMarkerZZQ")),
+                "the past-61 tail never renders"
+            );
+            // ONE row per option (no wrap).
+            assert!(
+                !grid.row_text(long_row + 1).contains("mmmm"),
+                "the long option occupies exactly one row"
+            );
+            Ok(())
+        },
+    );
+}

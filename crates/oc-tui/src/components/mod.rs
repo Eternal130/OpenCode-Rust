@@ -18,6 +18,9 @@ pub mod console;
 pub mod dialog;
 pub mod dialog_config;
 pub mod dialog_open;
+/// `DialogPair` (`/pair`): the custom pair dialog's content model
+/// (F15 fix round — the ref is NOT a `DialogSelect`).
+pub mod dialog_pair;
 pub mod dialog_select;
 /// Lane M2: the dialog family on opentui-solid — the DEFAULT
 /// renderer (flipped on after the rig proof; `OC_DIALOGS_OPENTUI=0`
