@@ -116,6 +116,14 @@ v2 插件是**进程内 JS/TS ESM 模块**（Bun 动态 import + npm 解析 + wa
 - 文件布局：`~/.local/share/opencode`（db/log/repos/snapshot）、`~/.local/state/opencode/service.json`、`~/.config/opencode`（config/plugins/themes/AGENTS.md）全部一致。
 - 事件日志：持久事件按 aggregate `seq` 写 `event`/`event_sequence`，projector 重建语义一致（崩溃恢复、stale tool call/compaction 结算）。
 
+### 3.1 pre-2.0.24 升级路径验证电池（lane DBMIG）
+
+GAPS §1.2 盲区：原验证只覆盖 v2.0.24 产生的库（48/48 日志）与空库（单事务引导）；中间版本旧库走增量路径无验证。电池位于 `crates/oc-core/src/database/tests/upgrade_battery.rs`，作为**普通测试**常驻 CI（无 OC_P10 门、无外部产物，全部 `:memory:` 库 + 空 tempdir 充当 `Global.data`）：
+
+- **步进完整性（穷举）**：对每个 k=1..=48——预写日志尾段 k+1..=48 使真实增量 runner（`apply_only`，与 `apply` 对含 session 表库的分流一致）恰好执行 1..k，再裁掉尾段使日志恰为 ids 1..k（合成中间版库的诚实缝），随后跑完整 `apply()` 到 head；断言 (i) 成功、(ii) 结果 schema 与空库引导快照**语义等价**（同表集、同列集含类型/NOT NULL/默认值/PK、同外键集、同显式索引集——物理列序刻意忽略，真实迁移库本就是 ALTER 尾序，见 `null_tolerance.rs`）。已知且被钉死的差异仅有两处客观残留：主系（无 marker）路径在 head 保留 v1 遗产表 `session`/`message`/`part`/`todo`/`session_share` 及其 7 个索引（`loose_psylocke` 无-marker 分支新建 `session_v2` 而非改名，v1 表无任何迁移删除——真实主系迁移库同样携带此残留）；以及 `account_state.id` 的 notnull 标志（快照 DDL `integer PRIMARY KEY` vs 迁移 `... NOT NULL`，参照源本身即如此）。任何**新**差异即测试失败。48 个 k 全部收敛，无失败。
+- **金丝雀存活（4 个边界，显式覆盖 session 表系谱）**：k=1（基座 schema：project 列回填 icon_url_override/time_active、message JSON 用量聚合进 session.cost/tokens、旧 permission 表换新）、k=21（Windows 路径归一化、workspace 定期清空=设计性丢失）、k=38（`loose_psylocke` 前夜：完整演化的主系 `session` 行原样可读、`session_v2` 新建为空——v1 内容搬运属 `v1_migration` 模块职责）、k=39（分裂后：session_v2 行经历 42/45/47 的列变更仍完好、project_directory→worktree 的 git_worktree→git 映射）。
+- **不证明什么**：中间库是合成的（真实迁移文件经真实 runner，日志手工裁剪），非真实历史二进制产物；真实语料门仍是 OC_P10；`loose_psylocke` 的 marker 分支（pre-split V2 系谱，`session` 改名为 `session_v2`）未被覆盖——主系前缀日志不含 marker id；`v1_migration`（v1→v2 内容迁移）不在本电池范围。
+
 ## 4. 验证策略（一致性如何被证明）
 
 1. **单元**：每 crate cargo-nextest；纯逻辑测试从 v2 测试目录移植（`test/util/`、`test/mini/*.shared` 等无渲染依赖用例直接翻译）。
