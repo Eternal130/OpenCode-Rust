@@ -6,14 +6,15 @@
 
 ## 0. 增补（2026-10-22）——冻结报告之后的进展
 
-本报告冻结于 2026-10-11，以下为至 2026-10-22 的状态修正（活文档见 ROADMAP.md）：
+本报告冻结于 2026-10-11，以下为至 2026-10-24 的状态修正（活文档见 ROADMAP.md）：
 
-- **§3 延后项已全部落地**（beta.4–beta.7，R-01..R-09）：`opencode mini`、`acp`、worktree UI、声音/OS 通知、tree-sitter 语法高亮（新 crate oc-syntax）、图像/kitty/sixel、半块字形、PTY 守护跨重启交接（persistent_pty 的 adopt）。仍开放仅：R-04 Web UI（静态资源伺服已完成，Web UI 本体维持范围外）、R-10 rmcp elicitation（上游阻塞）、R-11 平台矩阵（待排期）。
+- **§3 延后项已全部落地**（beta.4–beta.7，R-01..R-09）：`opencode mini`、`acp`、worktree UI、声音/OS 通知、tree-sitter 语法高亮（新 crate oc-syntax）、图像/kitty/sixel、半块字形、PTY 守护跨重启交接（persistent_pty 的 adopt）。~~仍开放仅：R-04 Web UI（静态资源伺服已完成，Web UI 本体维持范围外）、R-10 rmcp elicitation（上游阻塞）、R-11 平台矩阵（待排期）。~~ 2026-10-24 gap burn-down 后：R-10 已闭环（rmcp 3.7.0 + elicitation）、R-11 已完成（6 目标矩阵 + 每周 runtime-gates），仅余 R-04 Web UI 本体（范围外裁定）与具名豁免（见 docs/GAPS-AND-PITFALLS.md §1 与下条）。
 - **opentui 迁移（M0→M-retire）完成**：oc-tui 的会话 tabs、对话框族、composer/footer、transcript、sidebar、home、子代理表面全部以 opentui-solid（github.com/Eternal130/opentui-rust，git dep 钉版 rev）为唯一渲染器，旧路径与 7 个 OC_*_OPENTUI 旗标已删除；OC_ENGINE_OPENTUI（keymap/EditBuffer 引擎）曾按 M-engine 计划保留旧配对一个 release——**M-engine-retire 已于 2026-10-22 落地**：旧引擎对（keymap/engine.rs + text_edit.rs，净 -3,034 行）删除，opentui 移植库成为唯一引擎路径。
 - **beta.13 已发布**（2026-10-17 GATE5 GO：workspace 3330/3330、release 构建、budgets 12/12、26/26 live）。扫描-修复循环按用户裁决于 FIXW2 后终止；扫描细则（docs/scan-spec.md v9）与仪器留树备用。
 - **数字修正**：全仓测试 2181 → **3984/3984**（2026-10-22 全仓复跑，另 21 skipped、1 flaky 重试通过）；过程档案 48 → **79** 份（57 lane 报告 + 12 oracle 门 + 8 架构图 + 进度/spike）。
 - **2026-10-22 修复**：plugins_production 旗舰验收测试（PLUG-D07 引入的回归：location-less 请求曾解析到宿主进程 cwd 而非服务器启动目录，已按 v2 requestRef 语义对齐，commit 3a33f1b；该测试仅在有旗舰安装缓存的机器上真跑，CI 自跳过）。
 - **2026-10-22 收尾**：opentui 三件套升级至 bee57db（tier-1 消费面补完：clipboard/timing、diff/行号、embedded-terminal、audio 消费契约）；M-engine-retire 合并后全仓 **3951/3951**（3987→3951，−36 为旧引擎 parity 套件随源删除的预期降幅）；扫描-修复循环按用户裁定于 FIXW2 终止，scan-spec v9 与仪器留树备用。
+- **2026-10-24 gap burn-down 收尾**（计划 docs/superpowers/plans/2026-10-23-v2-gap-burndown.md，12 条 lane；台账 .superpowers/sdd/2026-10-23-v2-gap-burndown/progress.md）：企业 JWKS（6722828）、Skill URL 源（c1a7001）、console 合并（14d8b76）、E2/E12/SSE（4d16916/e917a21/31a6561）、F15 前提证伪（c2f59d7）、pre-2.0.24 升级电池（78976eb）、PTY 守护进程边界 oc-pty（d343a12/f98233f/f06245f，oc-pty 随 release 产物分发）、R-10 rmcp 3.7 + elicitation（60728e3/fd0f591）、R-11 6 目标矩阵 + 每周 runtime-gates cron（9cf480d）。lane 头部 crate 门：oc-core 1046/1046、oc-server 263/263、oc-tui ~1215、oc-pty 30/30（全仓合并门待跑）。具名豁免清单见 ROADMAP §5「Next」。
 
 ## 1. 目标与结果总览
 
@@ -45,13 +46,13 @@
 
 **延后项（post-M2，未实现即诚实缺失）**
 - `opencode mini`（第二前端；`opencode run` 已覆盖非交互）、`acp`（编辑器协议）、worktree UI、声音/OS 通知（C2 动画类）、tree-sitter 语法高亮、图像/kitty/sixel、半块字形、子像素 RGBA
-- rmcp 0.5 的 elicitation 能力缺口（逻辑已备，等上游）
-- PTY 守护进程的跨重启交接（状态机在，进程边界未做）
+- ~~rmcp 0.5 的 elicitation 能力缺口（逻辑已备，等上游）~~ 已闭环（2026-10-24）：重裁定为真缺口（v2.0.24 已接线），rmcp 0.5.0→3.7.0 + 客户端 elicitation 按 v2.0.24 `packages/core/src/mcp/index.ts:231+` 接线（60728e3/fd0f591）
+- ~~PTY 守护进程的跨重启交接（状态机在，进程边界未做）~~ 进程边界已落地（2026-10-24）：`oc-pty` 守护二进制 + oc-core 客户端 + 11 个进程级测试（旗舰=子进程在 server 被杀后存活）；oc-pty 随 release 产物分发（d343a12/f98233f/f06245f）
 - P10-N1（非 JSON body 的错误形状未钉）；usage 扇出事件序竞态（v2 projector 同样存在，行为对齐）
 
 **已知边界**
 - `serve --service` 已恢复 chdir 至 $HOME（per-location provider 覆盖已落地并实证"守护 A 服务 B"修复）
-- pre-2.0.24 旧库升级路径：48 个迁移全部转译但验收只覆盖 v2.0.24 产库与空库（**首次启动建议备份数据目录**）
+- ~~pre-2.0.24 旧库升级路径：48 个迁移全部转译但验收只覆盖 v2.0.24 产库与空库（**首次启动建议备份数据目录**）~~ 电池已落地（2026-10-24）：合成 stepwise k=1..48 + 4 canary 边界全绿、常驻 CI（78976eb，见 MIGRATION.md §3.1）；真实历史语料门仍是 OC_P10；首启备份建议保留
 - 旗舰的 TUI export（dist/tui2.js）为 desktop/opentui 绑定——在 v2 桌面宿主外本就不可加载；Rust 侧以原生 ctx.ui.* slot 缝提供等价能力（6/6 slot 实测）
 - openai-responses 的 WebSocket 通道延后（SSE 回退路径完整，v2 默认亦可用 SSE）
 - 请求 schema 校验仅覆盖电池中的 2 条路由（session.create/list），其余路由对畸形载荷的 400 形状与 v2 有分歧（P10-N1 同类）
