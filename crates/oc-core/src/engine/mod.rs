@@ -919,11 +919,16 @@ impl Engine {
         let session_env = Arc::new(crate::env::SessionEnv::new());
 
         // MCP registry (config-sourced) — server connections reconcile
-        // asynchronously at boot like v2.
+        // asynchronously at boot like v2. The location's forms service
+        // answers elicitations (index.ts:439-446 passes the layer's
+        // handler into every connect).
         let mcp_config = mcp_servers_from_config(&loaded);
         let mcp_source = Arc::new(move || mcp_config.clone());
         let mcp = McpRegistry::new((*self.bus).clone(), (*self.db).clone())
-            .with_config_source(mcp_source);
+            .with_config_source(mcp_source)
+            .with_elicitation(crate::mcp::RegistryElicitation::adapter(Arc::new(
+                forms.clone(),
+            )));
 
         // AGENTS.md injection + skill table. The session-scoped services
         // (inbox, instructions, runner) publish through the
