@@ -8,6 +8,7 @@ members = [
     "crates/oc-core",
     "crates/oc-syntax",
     "crates/oc-plugin-host",
+    "crates/oc-pty",
     "crates/oc-server",
     "crates/oc-client",
     "crates/oc-tui",
@@ -61,6 +62,7 @@ oc-ai = { path = "crates/oc-ai" }
 oc-core = { path = "crates/oc-core" }
 oc-syntax = { path = "crates/oc-syntax" }
 oc-plugin-host = { path = "crates/oc-plugin-host" }
+oc-pty = { path = "crates/oc-pty" }
 oc-server = { path = "crates/oc-server" }
 oc-client = { path = "crates/oc-client" }
 oc-tui = { path = "crates/oc-tui" }

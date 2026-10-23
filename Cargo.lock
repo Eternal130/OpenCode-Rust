@@ -2114,6 +2114,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "oc-pty"
+version = "2.0.24"
+dependencies = [
+ "base64 0.22.1",
+ "oc-core",
+ "oc-schema",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "oc-schema"
 version = "2.0.24"
 dependencies = [
