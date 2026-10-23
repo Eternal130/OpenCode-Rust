@@ -49,7 +49,19 @@ fi
 
 # Target checkout: /opt/opencode-rust by default; lanes may set
 # OPENCODE_DEV_GATE_DIR to run against an isolated git worktree.
-GATE_DIR="${OPENCODE_DEV_GATE_DIR:-/opt/opencode-rust}"
+# Footgun guard: with the env var unset, a lane-worktree invocation used
+# to silently build the MAIN checkout (false greens). When the caller's
+# $PWD is itself a workspace checkout (has a Cargo.toml) and is not the
+# main checkout, target it instead — with one stderr notice. Otherwise
+# keep the old default.
+if [[ -n "${OPENCODE_DEV_GATE_DIR:-}" ]]; then
+  GATE_DIR="${OPENCODE_DEV_GATE_DIR}"
+elif [[ "${PWD}" != "/opt/opencode-rust" && -f "${PWD}/Cargo.toml" ]]; then
+  GATE_DIR="${PWD}"
+  echo "dev-gate: OPENCODE_DEV_GATE_DIR unset; using caller dir ${GATE_DIR}" >&2
+else
+  GATE_DIR="/opt/opencode-rust"
+fi
 
 exec systemd-run --scope --quiet \
   --unit="opencode-gate-$(date +%s)-$$" \
