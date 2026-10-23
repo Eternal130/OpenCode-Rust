@@ -24,8 +24,7 @@
 
 use crate::components::dialog_select::{SelectAction, SelectOption, SelectProps, SelectState};
 use crate::store::{
-    DialogKind, DialogSize, DiffSource, ListState, ModelSelection, PairState, Route, ServerAgent,
-    Store,
+    DialogKind, DialogSize, DiffSource, ListState, ModelSelection, Route, ServerAgent, Store,
 };
 use oc_tui_core::scroll::ScrollCommand;
 
@@ -1271,48 +1270,14 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
             .unwrap_or_else(|| "default".to_owned());
             SelectProps::new("Select variant", options).flat(true).with_current(Some(current))
         }
-        // SURF-2 `DialogPair` (`/pair`, dialog-pair.tsx:99-127): the
-        // loading / error / loaded link list (the QR block deferred —
-        // see docs/surf2.log).
-        DialogKind::Pair => {
-            let options = match store.pair_state() {
-                PairState::Loading => vec![status_option("Loading server information…")],
-                PairState::Failed(error) => vec![
-                    SelectOption::titled("Could not load server information", "error"),
-                    SelectOption::titled(error, "detail").muted_placeholder(),
-                    SelectOption::titled("Close and reopen Pair to try again.", "retry")
-                        .muted_placeholder(),
-                ],
-                PairState::Loaded { links, localhost, minutes, loopback } => {
-                    let mut rows = vec![SelectOption::titled(
-                        format!(
-                            "Open a link to connect. Links work once and expire in {minutes} minutes."
-                        ),
-                        "intro",
-                    )
-                    .muted_placeholder()];
-                    if let Some(url) = &localhost {
-                        rows.push(SelectOption::titled("This device", "label").muted_placeholder());
-                        rows.push(SelectOption::titled(url.clone(), "localhost"));
-                    }
-                    rows.push(SelectOption::titled("Links", "label").muted_placeholder());
-                    for (index, url) in links.iter().enumerate() {
-                        rows.push(SelectOption::titled(url.clone(), format!("link:{index}")));
-                    }
-                    if loopback {
-                        rows.push(
-                            SelectOption::titled(
-                                "Run `opencode service set hostname 0.0.0.0` to access the service remotely.",
-                                "loopback",
-                            )
-                            .muted_placeholder(),
-                        );
-                    }
-                    rows
-                }
-            };
-            SelectProps::new("Pair", options).flat(true)
-        }
+        // F15 fix round: `DialogPair` (`/pair`, dialog-pair.tsx) is a
+        // CUSTOM dialog, NOT a DialogSelect — the word-wrapped intro
+        // (+ link blocks, loopback hint, loading/error states) renders
+        // through `dialog_pair::rows` + `dialog_solid::Family::Pair`.
+        // The props are unused by that tree (the key layer still asks
+        // for them unconditionally); the QR block stays REGISTERED
+        // (dialog_pair.rs header).
+        DialogKind::Pair => SelectProps::new("Pair", Vec::new()),
         // SURF-2 `DialogDebug` (`/debug`, dialog-debug.tsx:25-35): the
         // env/config entries + the share hint (enter copies).
         DialogKind::Debug => {
@@ -3174,6 +3139,7 @@ mod tests {
     /// surfaces (auditE's traceability row — TUI wiring over working
     /// core): /mcps /status /variants /pair /debug /timeline.
     #[test]
+    #[allow(clippy::too_many_lines)] // one command per block, the SURF-2 wiring proof
     fn six_tui_commands_mount_real_surfaces() {
         use crate::store::{McpServerRow, PairState, RecordingMcpToggleSink};
         let store = Store::new(Runtime::new());
@@ -3218,25 +3184,41 @@ mod tests {
         assert!(rows[2].contains("• alpha spawn failed"), "the failed error text: {rows:?}");
         store.clear_dialogs();
 
-        // /pair — the loading row, then the loaded links.
+        // /pair — the CUSTOM dialog's rows (F15: dialog-pair.tsx is
+        // not a DialogSelect — the word-wrapped content walk).
         assert_eq!(dispatcher.dispatch(&store, "server.pair", None), Dispatch::Handled);
         assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::Pair));
-        let props = select_props_for(&store.top_dialog().unwrap().kind, &store);
-        assert_eq!(props.options[0].title, "Loading server information…");
+        let pair_rows = |store: &crate::store::Store| {
+            crate::components::dialog_pair::rows(&store.pair_state(), 84)
+        };
+        assert!(pair_rows(&store).iter().any(|row| matches!(
+            row,
+            crate::components::dialog_pair::PairRow::Text { text, style: crate::components::dialog_pair::PairStyle::Muted }
+                if text == "Loading server information…"
+        )));
         store.set_pair_state(PairState::Loaded {
             links: vec!["http://127.0.0.1:4096/auth/connect/abc".to_owned()],
             localhost: Some("http://localhost:4096/auth/connect/abc".to_owned()),
             minutes: 5,
             loopback: true,
         });
-        let props = select_props_for(&store.top_dialog().unwrap().kind, &store);
-        let text = props.options.iter().map(|o| o.title.clone()).collect::<Vec<_>>().join("\n");
-        assert!(text.contains("expire in 5 minutes"), "{text}");
-        assert!(text.contains("This device"));
-        assert!(text.contains("opencode service set hostname 0.0.0.0"));
+        let joined = pair_rows(&store)
+            .iter()
+            .filter_map(|row| match row {
+                crate::components::dialog_pair::PairRow::Gap => None,
+                crate::components::dialog_pair::PairRow::Text { text, .. } => Some(text.as_str()),
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(joined.contains("expire in 5 minutes"), "{joined}");
+        assert!(joined.contains("This device"));
+        assert!(joined.contains("opencode service set hostname 0.0.0.0"));
         store.set_pair_state(PairState::Failed("connection refused".to_owned()));
-        let props = select_props_for(&store.top_dialog().unwrap().kind, &store);
-        assert_eq!(props.options[0].title, "Could not load server information");
+        assert!(pair_rows(&store).iter().any(|row| matches!(
+            row,
+            crate::components::dialog_pair::PairRow::Text { text, style: crate::components::dialog_pair::PairStyle::ErrorBold }
+                if text == "Could not load server information"
+        )));
         store.clear_dialogs();
 
         // /debug — the env entries (dialog-debug.tsx:25-35).
