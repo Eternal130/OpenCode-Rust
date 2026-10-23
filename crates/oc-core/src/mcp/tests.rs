@@ -1302,11 +1302,17 @@ impl RuleResolver for FixedRules {
 // elicitation
 // ---------------------------------------------------------------------------
 
-/// Scripted form service: canned answers or dismissals.
+/// Scripted form service: canned answers, dismissals, or asks that park
+/// until `reply` settles them.
 struct FakeForms {
     answer: parking_lot::Mutex<Option<Result<oc_schema::form::Answer, elicitation::FormCancelled>>>,
     asked: parking_lot::Mutex<Vec<oc_schema::form::Info>>,
     reply: parking_lot::Mutex<Vec<(oc_schema::id::FormId, oc_schema::form::Answer)>>,
+    /// Parking mode: senders for asks waiting on `reply`.
+    parked: parking_lot::Mutex<
+        Vec<(oc_schema::id::FormId, tokio::sync::oneshot::Sender<oc_schema::form::Answer>)>,
+    >,
+    park_until_reply: bool,
 }
 
 impl FakeForms {
@@ -1315,14 +1321,20 @@ impl FakeForms {
             answer: parking_lot::Mutex::new(Some(Ok(answer))),
             asked: parking_lot::Mutex::new(Vec::new()),
             reply: parking_lot::Mutex::new(Vec::new()),
+            parked: parking_lot::Mutex::new(Vec::new()),
+            park_until_reply: false,
         }
     }
 
-    fn cancelling() -> Self {
+    /// Asks park until `reply` settles them by form id — the shape the
+    /// legacy URL completion path relies on.
+    fn parking() -> Self {
         Self {
-            answer: parking_lot::Mutex::new(Some(Err(elicitation::FormCancelled))),
+            answer: parking_lot::Mutex::new(None),
             asked: parking_lot::Mutex::new(Vec::new()),
             reply: parking_lot::Mutex::new(Vec::new()),
+            parked: parking_lot::Mutex::new(Vec::new()),
+            park_until_reply: true,
         }
     }
 }
@@ -1335,13 +1347,24 @@ impl FormService for FakeForms {
         'static,
         Result<oc_schema::form::Answer, elicitation::FormCancelled>,
     > {
+        let id = form.id.clone();
         self.asked.lock().push(form);
+        if self.park_until_reply {
+            let (sender, receiver) = tokio::sync::oneshot::channel();
+            self.parked.lock().push((id, sender));
+            return Box::pin(async move { receiver.await.map_err(|_| elicitation::FormCancelled) });
+        }
         let answer = self.answer.lock().clone().unwrap_or(Err(elicitation::FormCancelled));
         Box::pin(async move { answer })
     }
 
     fn reply(&self, id: &oc_schema::id::FormId, answer: oc_schema::form::Answer) {
-        self.reply.lock().push((id.clone(), answer));
+        self.reply.lock().push((id.clone(), answer.clone()));
+        let mut parked = self.parked.lock();
+        if let Some(index) = parked.iter().position(|(parked_id, _)| parked_id == id) {
+            let (_, sender) = parked.remove(index);
+            let _ = sender.send(answer);
+        }
     }
 }
 
@@ -1400,41 +1423,93 @@ async fn mcp_elicitation_form_roundtrip_and_global_sentinel() {
     assert_eq!(asked[0].fields.len(), 2);
 }
 
-#[tokio::test]
-async fn mcp_elicitation_url_mode_and_completion_settlement() {
-    let forms = Arc::new(FakeForms::cancelling());
-    let handler = RegistryElicitation::new(Arc::clone(&forms) as Arc<dyn FormService>);
-    // Legacy URL elicitation with an id: the parked form settles when
-    // notifications/elicitation/complete arrives.
-    let handle = tokio::spawn(async move {
-        handler
-            .create(super::elicitation::ElicitationCreate {
-                server: "srv",
-                params: ElicitationParams::Url {
-                    message: "login".into(),
-                    url: "https://srv/auth".into(),
-                    elicitation_id: Some("el_1".into()),
-                },
-            })
-            .await
-    });
-    tokio::time::sleep(Duration::from_millis(10)).await;
-    assert_eq!(forms.asked.lock().len(), 1, "URL form created");
-    // complete() replies `elicitation: true` on the parked form.
-    // (The FakeForms ask resolves cancelled immediately, so this only
-    // verifies the reply routing — the settle path itself is exercised by
-    // the pending-map lookup below.)
-    handler_for_complete(&forms);
-    let result = handle.await.expect("join");
-    assert_eq!(result.action, super::elicitation::ElicitationAction::Cancel);
+/// Waits until the fake has parked a form ask (bounded, like
+/// [`await_global_form`]).
+async fn wait_until_asked(forms: &FakeForms) {
+    for _ in 0..400 {
+        if !forms.asked.lock().is_empty() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    panic!("no elicitation form was asked");
 }
 
-fn handler_for_complete(forms: &Arc<FakeForms>) {
-    // The complete() settlement requires the pending form to still be
-    // parked; with an instantly-cancelling fake the map is already empty,
-    // so complete() is a no-op there. Call it for coverage.
-    let handler = RegistryElicitation::new(forms.clone() as Arc<dyn FormService>);
+#[tokio::test]
+async fn mcp_elicitation_url_mode_and_completion_settlement() {
+    let forms = Arc::new(FakeForms::parking());
+    let handler = Arc::new(RegistryElicitation::new(Arc::clone(&forms) as Arc<dyn FormService>));
+    // Legacy URL elicitation with an id: the ask parks, and
+    // notifications/elicitation/complete settles it with
+    // `elicitation: true`, which maps to accept (index.ts:296-301).
+    let handle = tokio::spawn({
+        let handler = Arc::clone(&handler);
+        async move {
+            RegistryElicitation::create(
+                &handler,
+                super::elicitation::ElicitationCreate {
+                    server: "srv",
+                    params: ElicitationParams::Url {
+                        message: "login".into(),
+                        url: "https://srv/auth".into(),
+                        elicitation_id: Some("el_1".into()),
+                    },
+                },
+            )
+            .await
+        }
+    });
+    wait_until_asked(&forms).await;
+    assert!(handler.is_pending_url("srv", "el_1"), "entry parked while the form waits");
     handler.complete("srv", "el_1");
+    let result = handle.await.expect("join");
+    // The settled form resolves the ask with `elicitation: true` → accept.
+    assert_eq!(result.action, super::elicitation::ElicitationAction::Accept);
+    assert!(result.content.is_empty(), "url mode returns no content");
+    // Settlement reply shape: routed to the parked form id with the
+    // sentinel field set.
+    let replies = forms.reply.lock();
+    assert_eq!(replies.len(), 1, "exactly one settlement reply");
+    assert_eq!(replies[0].0, forms.asked.lock()[0].id, "reply routed to the parked form");
+    assert_eq!(
+        replies[0].1.get(elicitation::URL_ELICITATION_FIELD_KEY),
+        Some(&oc_schema::form::FormValue::Bool(true))
+    );
+    drop(replies);
+    assert!(!handler.is_pending_url("srv", "el_1"), "entry removed after settlement");
+}
+
+#[tokio::test]
+async fn mcp_elicitation_url_abort_removes_pending_entry() {
+    // Aborting a URL elicitation drops the create future mid-ask (the
+    // client's select takes the cancellation arm); the pending entry must
+    // be deleted on that exit too (Effect.ensuring, index.ts:260), not
+    // only after the ask settles.
+    let forms = Arc::new(FakeForms::parking());
+    let registry = Arc::new(RegistryElicitation::new(Arc::clone(&forms) as Arc<dyn FormService>));
+    let client = elicitation::ClientElicitation::new(Arc::clone(&registry));
+    let ct = tokio_util::sync::CancellationToken::new();
+    let request = rmcp::model::ElicitRequestParams::UrlElicitationParams {
+        meta: None,
+        message: "login".into(),
+        url: "https://srv/auth".into(),
+        elicitation_id: "el_abort".into(),
+    };
+    let handle = tokio::spawn({
+        let ct = ct.clone();
+        async move { client.handle("srv", request, ct).await }
+    });
+    wait_until_asked(&forms).await;
+    assert!(registry.is_pending_url("srv", "el_abort"), "entry parked while the form waits");
+    ct.cancel();
+    let result = handle.await.expect("join");
+    assert_eq!(
+        result.action,
+        rmcp::model::ElicitationAction::Cancel,
+        "aborted elicitation cancels"
+    );
+    assert!(result.content.is_none(), "url mode carries no content key");
+    assert!(!registry.is_pending_url("srv", "el_abort"), "abort removes the pending entry");
 }
 
 #[tokio::test]

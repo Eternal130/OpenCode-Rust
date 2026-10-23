@@ -167,6 +167,24 @@ fn pending_key(server: &str, elicitation_id: &str) -> String {
     format!("{server}\u{0}{elicitation_id}")
 }
 
+/// Deletes a parked URL entry on every exit from
+/// [`RegistryElicitation::create`] — the ask settling *or* the future
+/// being dropped mid-ask (the client's abort path cancels the select
+/// arm) — mirroring `Effect.ensuring` (index.ts:260): the ref deletes
+/// the pending entry on ALL exits, not only after the ask resolves.
+struct PendingUrlGuard<'a> {
+    handler: &'a RegistryElicitation,
+    key: Option<String>,
+}
+
+impl Drop for PendingUrlGuard<'_> {
+    fn drop(&mut self) {
+        if let Some(key) = self.key.take() {
+            self.handler.pending_urls.lock().remove(&key);
+        }
+    }
+}
+
 /// The registry-bound elicitation handler (index.ts:231-302).
 pub struct RegistryElicitation {
     forms: Arc<dyn FormService>,
@@ -193,10 +211,11 @@ impl RegistryElicitation {
         match &input.params {
             ElicitationParams::Url { message, url, elicitation_id } => {
                 let form_id = FormId::new();
-                if let Some(elicitation_id) = elicitation_id {
-                    self.pending_urls
-                        .lock()
-                        .insert(pending_key(input.server, elicitation_id), form_id.clone());
+                let pending_entry = elicitation_id
+                    .as_ref()
+                    .map(|elicitation_id| pending_key(input.server, elicitation_id));
+                if let Some(key) = &pending_entry {
+                    self.pending_urls.lock().insert(key.clone(), form_id.clone());
                 }
                 let mut metadata = record(json!({
                     "kind": "mcp-elicitation",
@@ -218,10 +237,11 @@ impl RegistryElicitation {
                         description: None,
                     }],
                 };
+                // Delete the parked entry on every exit: settling here or
+                // the future being dropped when aborted (Effect.ensuring,
+                // index.ts:260).
+                let _pending = PendingUrlGuard { handler: self, key: pending_entry };
                 let answer = self.forms.ask(info).await;
-                if let Some(elicitation_id) = elicitation_id {
-                    self.pending_urls.lock().remove(&pending_key(input.server, elicitation_id));
-                }
                 match answer {
                     Ok(_) => ElicitationResult {
                         action: ElicitationAction::Accept,
@@ -299,6 +319,13 @@ impl RegistryElicitation {
                 }
             }
         }
+    }
+
+    /// Test seam: whether a URL elicitation id is currently parked in
+    /// the pending map ("abort removes the pending entry").
+    #[cfg(test)]
+    pub(crate) fn is_pending_url(&self, server: &str, elicitation_id: &str) -> bool {
+        self.pending_urls.lock().contains_key(&pending_key(server, elicitation_id))
     }
 
     /// Legacy `notifications/elicitation/complete` — settle the parked URL
