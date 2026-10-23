@@ -11,12 +11,12 @@
 
                                   Sessions                                         esc
 
-                                  zln
+                                    FIX Login
 
-                                  No sessions found
+                                  Today
+                                  Fix login redirect loop
 
                                   pin/unpin ctrl+f  delete ctrl+d
-
 
                        ┃
                        ┃  Ask anything… "What is the tech stack of this project?"
@@ -37,4 +37,5 @@
 
 
                                                                                                                 2.0.24
+
 

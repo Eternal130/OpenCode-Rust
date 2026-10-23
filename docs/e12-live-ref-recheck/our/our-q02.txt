@@ -11,12 +11,12 @@
 
                                   Sessions                                         esc
 
-                                  wide spaces
+                                  MIGRATIONS
 
-                                  No sessions found
+                                  Today
+                                  refactor: database migrations
 
                                   pin/unpin ctrl+f  delete ctrl+d
-
 
                        ┃
                        ┃  Ask anything… "Fix broken tests"
@@ -37,4 +37,5 @@
 
 
                                                                                                                 2.0.24
+
 

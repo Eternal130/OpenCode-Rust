@@ -11,15 +11,15 @@
 
                                   Sessions                                         esc
 
-                                  loginredirect
+                                  login
 
-                                  No sessions found
+                                  Today
+                                  Fix login redirect loop
 
                                   pin/unpin ctrl+f  delete ctrl+d
 
-
                        ┃
-                       ┃  Ask anything… "Fix a TODO in the codebase"
+                       ┃  Ask anything… "What is the tech stack of this project?"
                        ┃
                        ┃  Build · Flint 40B Free OpenCode
                        ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
@@ -37,4 +37,5 @@
 
 
                                                                                                                 2.0.24
+
 

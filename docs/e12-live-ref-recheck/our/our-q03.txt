@@ -11,19 +11,19 @@
 
                                   Sessions                                         esc
 
-
+                                  café
 
                                   Today
-                                  naïve UTF-8 benches
-                                   Wide  spaces  title
-                                  Zalando API client
-                                  CAFE overhaul
-                       ┃          café menu parser
-                       ┃  Ask     CJK 支付宝接入
-                       ┃          refactor: database migrations
-                       ┃  Buil    Fix login redirect loop
-                       ╹▀▀▀▀▀▀                                                            ▀▀▀▀▀▀▀▀
-                                  pin/unpin ctrl+f  delete ctrl+d                         commands
+                                  café menu parser
+
+                                  pin/unpin ctrl+f  delete ctrl+d
+
+                       ┃
+                       ┃  Ask anything… "Fix broken tests"
+                       ┃
+                       ┃  Build · Flint 40B Free OpenCode
+                       ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                                                 shift+tab agents  ctrl+p commands
 
 
 
@@ -37,4 +37,5 @@
 
 
                                                                                                                 2.0.24
+
 
