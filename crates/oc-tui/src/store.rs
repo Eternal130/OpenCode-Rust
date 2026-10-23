@@ -9277,8 +9277,8 @@ impl Store {
         self.connection.set(state);
     }
 
-    /// When the connection state last changed (ms; 0 before any
-    /// transition) — the overlay's threshold anchor.
+    /// When the connection state last changed (ms; 0 until the first
+    /// observation or a transition) — the overlay's threshold anchor.
     #[must_use]
     pub fn connection_since(&self) -> u64 {
         self.connection_since.get()
@@ -9297,6 +9297,16 @@ impl Store {
         }
         let threshold =
             if matches!(state, ConnectionState::Reconnecting { .. }) { 1000 } else { 5000 };
+        // A never-transitioned state (first boot / hung handshake —
+        // the transition arm at `set_connection` is the only other
+        // writer) still holds the 0-init anchor: construction can't
+        // seed it (the clock signal starts at 0 and only becomes wall
+        // time in the run loop), so treat 0 as "first observation" and
+        // latch `now` here — the initial grace then runs 5 s from the
+        // first look instead of expiring at frame 0 (app.tsx:1300-1314).
+        if self.connection_since.get() == 0 {
+            self.connection_since.set(now_ms);
+        }
         now_ms.saturating_sub(self.connection_since.get()) >= threshold
     }
 
