@@ -18,7 +18,7 @@
 //!
 //! # Deviations from v2 (rmcp 3.7.0 SDK constraints)
 //!
-//! - **Elicititation capability shape** — v2 advertises
+//! - **Elicitation capability shape** — v2 advertises
 //!   `elicitation: { form: { applyDefaults: true }, url: {} }`
 //!   (client.ts:188). rmcp's `FormElicitationCapability` models only
 //!   `schemaValidation`, so this port advertises the same structure with
