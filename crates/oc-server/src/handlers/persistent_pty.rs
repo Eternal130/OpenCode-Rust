@@ -8,7 +8,11 @@
     clippy::similar_names,
     clippy::too_many_lines,
     clippy::cast_possible_truncation,
-    clippy::cast_sign_loss
+    clippy::cast_sign_loss,
+    // The frontend's op futures embed the PTY transport's exchange
+    // buffers (§5.2 one-in-flight-per-connection) — same pin as
+    // oc-core's transport module.
+    clippy::large_futures
 )]
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, State};
@@ -90,7 +94,7 @@ async fn list(
     let _ = session_services(&state, &session_id).await?;
     let shared = pty_state::shared(&state);
     let parsed = parse_session_id(&session_id);
-    let infos = shared.persistent.list(Some(&parsed)).map_err(unavailable)?;
+    let infos = shared.persistent.list(Some(&parsed)).await.map_err(unavailable)?;
     let data: Vec<Value> = infos.iter().map(info_json).collect();
     Ok(json_data(Value::Array(data)))
 }
@@ -164,7 +168,7 @@ async fn get(
     Path(pty_id): Path<String>,
 ) -> Result<Response, ApiError> {
     let shared = pty_state::shared(&state);
-    let info = shared.persistent.get(&PtyId(pty_id.clone())).map_err(unavailable)?;
+    let info = shared.persistent.get(&PtyId(pty_id.clone())).await.map_err(unavailable)?;
     Ok(json_data(info_json(&info)))
 }
 
@@ -180,7 +184,7 @@ async fn update(
         let rows = size["rows"].as_u64().unwrap_or(24) as u16;
         shared.persistent.resize(&id, cols, rows, None).await.map_err(unavailable)?;
     }
-    let info = shared.persistent.get(&id).map_err(unavailable)?;
+    let info = shared.persistent.get(&id).await.map_err(unavailable)?;
     Ok(json_data(info_json(&info)))
 }
 
@@ -201,7 +205,7 @@ async fn shutdown(State(state): State<SharedState>) -> Result<Response, ApiError
 
 async fn handoff(State(state): State<SharedState>) -> Result<Response, ApiError> {
     let shared = pty_state::shared(&state);
-    let ticket = shared.persistent.handoff().map_err(unavailable)?;
+    let ticket = shared.persistent.handoff().await.map_err(unavailable)?;
     let handoff = ticket.map(|ticket| {
         json!({
             "directory": ticket.directory,
@@ -219,7 +223,7 @@ async fn snapshot(
 ) -> Result<Response, ApiError> {
     use base64::Engine as _;
     let shared = pty_state::shared(&state);
-    let snapshot = shared.persistent.snapshot(&PtyId(pty_id.clone())).map_err(unavailable)?;
+    let snapshot = shared.persistent.snapshot(&PtyId(pty_id.clone())).await.map_err(unavailable)?;
     Ok(json_data(json!({
         "info": info_json(&snapshot.info),
         "text": snapshot.text,
@@ -244,7 +248,7 @@ async fn connect_token(
         return Err(ApiError::forbidden("origin not allowed"));
     }
     let shared = pty_state::shared(&state);
-    shared.persistent.get(&PtyId(pty_id.clone())).map_err(unavailable)?;
+    shared.persistent.get(&PtyId(pty_id.clone())).await.map_err(unavailable)?;
     let directory = std::env::current_dir().unwrap_or_default();
     let issued = crate::tickets::issue(
         &state,
@@ -266,7 +270,7 @@ async fn connect(
 ) -> Response {
     let shared = pty_state::shared(&state);
     let query = uri.query().unwrap_or_default();
-    if shared.persistent.get(&PtyId(pty_id.clone())).is_err() {
+    if shared.persistent.get(&PtyId(pty_id.clone())).await.is_err() {
         return (StatusCode::NOT_FOUND, "").into_response();
     }
     if let Some(ticket) = parse_query_field(query, "ticket") {
@@ -376,17 +380,21 @@ async fn attach_session(
         })
     };
 
-    let Ok(attachment) = shared.persistent.attach(
-        &pty_id,
-        oc_core::persistent_pty::AttachInput {
-            cursor,
-            attachment_id: &attachment_id,
-            role,
-            takeover,
-            on_event,
-            on_end,
-        },
-    ) else {
+    let Ok(attachment) = shared
+        .persistent
+        .attach(
+            &pty_id,
+            oc_core::persistent_pty::AttachInput {
+                cursor,
+                attachment_id: &attachment_id,
+                role,
+                takeover,
+                on_event,
+                on_end,
+            },
+        )
+        .await
+    else {
         // Unavailable → close 4404 "terminal unavailable" (§3).
         let _ = socket
             .send(Message::Close(Some(axum::extract::ws::CloseFrame {

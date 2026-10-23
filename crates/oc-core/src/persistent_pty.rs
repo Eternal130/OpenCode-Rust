@@ -93,6 +93,12 @@ use tokio::sync::mpsc;
 use crate::bus::{Bus, PublishOptions};
 use crate::pty::PtyId;
 
+/// The frontend (design §2.2): the handlers' op surface over the
+/// in-process machine (`OC_PTY_DAEMON=0`) or the daemon transport.
+pub mod frontend;
+/// The daemon CLIENT transport (design §2.2, §5.2, §8): discover /
+/// spawn-if-absent / owner connection / one-shots / subscribe.
+pub mod transport;
 /// The daemon wire format shared by the `oc-pty` binary (which hosts
 /// this machine) and the in-server client transport (design §2.2, §4).
 pub mod wire;
@@ -387,7 +393,9 @@ pub struct NotFoundError {
     pub pty_id: PtyId,
 }
 
-type PubResult<T> = Result<T, UnavailableError>;
+/// Every op's error shape (`PersistentPty.UnavailableError` /
+/// `NotFoundError` — the handlers map onto 503/404 by message prefix).
+pub type PubResult<T> = Result<T, UnavailableError>;
 
 struct Live {
     info: Info,
