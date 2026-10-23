@@ -26,9 +26,12 @@
 | ID | 分歧 | 处置状态 |
 |---|---|---|
 | F15 | TUI 窄宽度换行 | 登记未修——需 option-row 高度模型重构，非快赢项 |
-| E12-F1/F6 | 会话列表搜索：子会话泄漏 / 空白查询返回空 | bug 候选（SPEC-R6 E12，9/12 查询分歧） |
-| E12-F4 | fuzzy picker vs 专用 substring 过滤 | 设计决策点，待裁定 |
-| E12-F2/F3/F5 | 重音等价 / NFD / 空白折叠 | 语义待批准；全部待 live ref 复核（本轮 ref 运行库缺依赖被阻） |
+| E12-F1 | 会话列表搜索：子会话泄漏 | **已裁定非分歧（2026-10-23 live ref 复核）**：live v2.0.24 从不渲染子会话行（服务端 `parentID:null` + `options()` 再过滤）；首轮 F1 系裸谓词孤立测试的伪影。证据 docs/e12-live-ref-recheck/（12/12 查询 parity） |
+| E12-F6 | 空白查询返回空 | **已裁定：裁剪后空查询 = 全量列表**（live ref 与本port一致返回全部父会话行）；谓词层保留子会话但渲染层永不含子行。与我们 `filter_indices` 语义一致，无需改码 |
+| E12-F4 | fuzzy picker vs 专用 substring 过滤 | **已裁定：substring（live ref 无 fuzzy：`zln`/`loginredirect` 均无结果）**；本port `session.list` 已挂 `.substring_filter()`——语义正确，闭环 |
+| E12-F2 | 重音等价 | **已裁定：无重音折叠**（`cafe`↔`café` 永不互配；`café` NFC 查询只配 NFC 标题）——live ref 与本port byte-exact 一致，维持 pinned 语义 |
+| E12-F3 | NFD | **已裁定：双方均不归一化**（NFD 查询对 NFC 标题零匹配），维持 pinned 语义 |
+| E12-F5 | 空白折叠 | **已裁定：无空白折叠**（双空格标题不配单空格查询，双方一致），维持 pinned 语义 |
 | E2 | boot-stretch 门行为断言 | 待注入 harness（实测中位 ~569ms 已越过 500ms 显示阈值，门可达） |
 | R1–R5 | 插件 hook 永久注册分歧（aisdk 对象 / 返回后突变 / 交错序 / 非 JSON stash / retry 失败通道） | 永久登记——换取崩溃隔离，依据 FINDINGS.md §5 |
 | — | pre-2.0.24 旧库升级路径 | 48 个迁移已转译但验收只覆盖 v2.0.24 产库与空库；**首次启动前建议备份数据目录** |
