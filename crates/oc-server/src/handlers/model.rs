@@ -34,6 +34,23 @@ fn model_json(
     value
 }
 
+/// The openai-compatible effort variants every custom/console provider
+/// model carries (`Variant.resolve(model.package ?? provider.package)`,
+/// packages/core/src/config/plugin/provider.ts:151-159 — this lane binds
+/// both through the openai-compatible package).
+fn custom_effort_variants(provider_id: &str, model_id: &str) -> Value {
+    let variants = oc_core::provider_catalog::variant::resolve(
+        &oc_core::provider_catalog::support::VariantModel {
+            package: Some("@opencode/ai/providers/openai-compatible".to_owned()),
+            provider_id: provider_id.to_owned(),
+            model_id: model_id.to_owned(),
+            limit_output: 0,
+        },
+        &[oc_core::provider_catalog::support::Support::Effort { values: None }],
+    );
+    serde_json::to_value(&variants).unwrap_or_else(|_| json!([]))
+}
+
 /// A config-defined custom provider's model entry (the FULL catalog
 /// `Model.Info` shape — clients like `run`'s model.default fallback parse
 /// the payload into `ModelInfo`, whose `limit.context`/`limit.output`,
@@ -49,17 +66,6 @@ fn custom_model_json(
     provider: &oc_core::provider_catalog::facade::CustomProvider,
     model: &oc_core::provider_catalog::facade::CustomModel,
 ) -> Value {
-    let variants = oc_core::provider_catalog::variant::resolve(
-        &oc_core::provider_catalog::support::VariantModel {
-            // The overlay binds every baseURL custom provider onto the
-            // openai-compatible package (`provider_catalog/overlay.rs`).
-            package: Some("@opencode/ai/providers/openai-compatible".to_owned()),
-            provider_id: provider.id.clone(),
-            model_id: model.id.clone(),
-            limit_output: 0,
-        },
-        &[oc_core::provider_catalog::support::Support::Effort { values: None }],
-    );
     json!({
         "id": model.id,
         "modelID": model.id,
@@ -71,8 +77,42 @@ fn custom_model_json(
         "capabilities": { "input": ["text"], "output": ["text"], "tools": true },
         "limit": { "context": 0, "output": 0 },
         "cost": [],
-        "variants": serde_json::to_value(&variants).unwrap_or_else(|_| json!([])),
+        "variants": custom_effort_variants(&provider.id, &model.id),
     })
+}
+
+/// A console-issued provider's model entry (I1): the SAME field set as
+/// [`custom_model_json`] (clients parse one `Model.Info` shape), but the
+/// values come from the resolver's console merge —
+/// `custom_model_info` merges the console entry onto its catalog base
+/// (v2 opencode.ts:263-306), so name/limits/cost/capabilities carry the
+/// configured values exactly like v2, whose provider transform
+/// re-registers console providers into the provider registry
+/// (opencode.ts:308-314) and lists them merged. Returns the entry with
+/// its sort key — the base's `time.released` when a base exists (the
+/// merged model sorts among the dated catalog models), else 0 like
+/// config customs.
+fn console_model_json(
+    provider: &oc_core::provider_catalog::facade::CustomProvider,
+    model: &oc_core::provider_catalog::facade::CustomModel,
+    catalog: &oc_core::provider_catalog::Catalog,
+) -> (f64, Value) {
+    let info = oc_core::engine::resolver::custom_model_info(provider, &model.id, catalog);
+    let released = info.time.released.0;
+    let entry = json!({
+        "id": info.id.as_str(),
+        "modelID": info.model_id.as_str(),
+        "providerID": info.provider_id.as_str(),
+        "name": info.name,
+        "enabled": info.enabled,
+        "status": serde_json::to_value(info.status).unwrap_or_else(|_| json!("active")),
+        "time": { "released": released },
+        "capabilities": serde_json::to_value(info.capabilities).unwrap_or_else(|_| json!({})),
+        "limit": serde_json::to_value(info.limit).unwrap_or_else(|_| json!({})),
+        "cost": serde_json::to_value(info.cost).unwrap_or_else(|_| json!([])),
+        "variants": custom_effort_variants(&provider.id, &model.id),
+    });
+    (released, entry)
 }
 
 /// The location's ordered model entries — exactly what
@@ -113,9 +153,24 @@ async fn location_model_entries(
         .into_iter()
         .map(|(snapshot, model)| (model.time.released.0, model_json(snapshot, model)))
         .collect();
-    for provider in crate::boot::location_custom_providers(engine, location) {
+    let configured = crate::boot::location_custom_providers(engine, location);
+    for provider in &configured {
         for model in &provider.models {
-            data.push((0.0, custom_model_json(&provider, model)));
+            data.push((0.0, custom_model_json(provider, model)));
+        }
+    }
+    // Console-issued providers (integration `opencode`) ride the same
+    // listing seam (I1): rendered from the SAME shared snapshot `bind`
+    // reads, each model through the console merge so limits/cost/
+    // capabilities carry. A config custom with the same id wins — the
+    // resolver checks its custom list before the console, so listing and
+    // resolution stay in parity.
+    for provider in crate::boot::console_custom_providers(engine) {
+        if configured.iter().any(|custom| custom.id == provider.id) {
+            continue;
+        }
+        for model in &provider.models {
+            data.push(console_model_json(&provider, model, &catalog));
         }
     }
     data.sort_by(|a, b| b.0.total_cmp(&a.0));
@@ -163,19 +218,34 @@ async fn model_default(
     // The configured `model` selection wins (v2 `Config.model`).
     let configured = crate::boot::location_default_model(&state.engine, &location);
     if let Some(selection) = &configured {
-        let provider = crate::boot::location_custom_providers(&state.engine, &location)
+        let configured_custom = crate::boot::location_custom_providers(&state.engine, &location)
             .into_iter()
             .find(|provider| provider.id == selection.provider_id.as_str());
-        // A custom (config) provider renders its own entry; a catalog
-        // provider's default resolves through the catalog so the payload
-        // keeps the full (client-parseable) Model.Info shape. When the
-        // selection resolves to NOTHING (v2: `byProvider.get(providerID)
-        // ?.get(modelID)` — an exact-map miss, e.g. a `model: "Own/…"`
-        // selection against a `providers.own` key — or a disabled
-        // model), v2 serves `available.find(supportsText)` (model.ts:
-        // 260-266): the first text model of the SAME ordering the list
-        // serves, never a synthetic stub.
-        let resolved = if let Some(provider) = provider {
+        // Console-issued providers resolve their default through the
+        // same merged seam the listing serves (I1) — a config custom
+        // wins the id, exactly like the resolver's branch order.
+        let console_custom = if configured_custom.is_some() {
+            None
+        } else {
+            crate::boot::console_custom_providers(&state.engine)
+                .into_iter()
+                .find(|provider| provider.id == selection.provider_id.as_str())
+        };
+        // A custom (config/console) provider renders its own entry; a
+        // catalog provider's default resolves through the catalog so the
+        // payload keeps the full (client-parseable) Model.Info shape.
+        // When the selection resolves to NOTHING (v2:
+        // `byProvider.get(providerID)?.get(modelID)` — an exact-map
+        // miss, e.g. a `model: "Own/…"` selection against a
+        // `providers.own` key — or a disabled model), v2 serves
+        // `available.find(supportsText)` (model.ts:260-266): the first
+        // text model of the SAME ordering the list serves, never a
+        // synthetic stub. Every branch honors that: the catalog lookup
+        // and the console provider both yield None on a model-id miss —
+        // a console provider only lists models it actually carries, so
+        // a miss never renders `custom_model_info`'s empty-identity
+        // zero shape (`{"id":"","modelID":"",…}`).
+        let resolved = if let Some(provider) = configured_custom {
             let model = provider
                 .models
                 .iter()
@@ -186,8 +256,16 @@ async fn model_default(
                     name: None,
                     headers: None,
                     body: None,
+                    ..oc_core::provider_catalog::facade::CustomModel::default()
                 });
             Some(custom_model_json(&provider, &model))
+        } else if let Some(provider) = console_custom {
+            let catalog = state.engine.catalog_service.get();
+            provider
+                .models
+                .iter()
+                .find(|model| model.id == selection.model.as_str())
+                .map(|model| console_model_json(&provider, model, &catalog).1)
         } else {
             let catalog = state.engine.catalog_service.get();
             catalog
@@ -252,6 +330,208 @@ async fn provider_get(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// I1 (review): console-issued providers (integration `opencode`)
+    /// must be VISIBLE on the model listing — rendered through the same
+    /// seam as config customs, each model through the resolver's console
+    /// merge so name/limits/cost/capabilities carry the configured
+    /// values. v2 re-registers console providers into the provider
+    /// registry (opencode.ts:308-314 via ctx.provider.transform), so its
+    /// model list shows them WITH merged info; before the fix the
+    /// `ConsoleProviders` snapshot was consumed solely by
+    /// `CatalogModelResolver::bind` and never reached any listing.
+    #[tokio::test]
+    async fn console_provider_models_list_with_merged_info() {
+        let tmp = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+        let engine = oc_core::engine::Engine::boot(oc_core::engine::EngineOptions::new(
+            tmp.path().to_owned(),
+            tmp.path().to_owned(),
+        ))
+        .await;
+        let location = oc_core::location::LocationRef::new(tmp.path().to_owned(), None);
+        // A console org-config projection: one standalone provider with
+        // cost/limit/capabilities config, one merged onto a catalog base
+        // (canonical anthropic, base model claude-opus-4-5).
+        let config = serde_json::from_str::<oc_core::integration::console::ConsoleConfig>(
+            r#"{
+            "providers": {
+                "acme-console": {
+                    "name": "Acme Console",
+                    "settings": { "baseURL": "https://acme.test/v1" },
+                    "models": {
+                        "acme-large": {
+                            "name": "Acme Large",
+                            "capabilities": { "input": ["text"] },
+                            "cost": { "input": 3.5, "output": 15.25 },
+                            "limit": { "context": 200000, "output": 32768 }
+                        }
+                    }
+                },
+                "acme-anthropic": {
+                    "canonical": "anthropic",
+                    "settings": { "baseURL": "https://acme.test/v2" },
+                    "models": {
+                        "acme-opus": { "modelID": "claude-opus-4-5", "limit": { "output": 12345 } }
+                    }
+                }
+            }
+        }"#,
+        )
+        .expect("console config decodes");
+        // The same shared snapshot `bind` reads (engine/mod.rs:486,827):
+        // the host's projection (`to_custom_providers`) already produced
+        // these entries; the test swaps them in directly.
+        engine
+            .integration
+            .console_providers()
+            .swap_for_test(oc_core::integration::console::to_custom_providers(&config));
+        let entries = location_model_entries(&engine, &location).await;
+
+        // (1) The standalone console provider lists with its merged
+        // values: configured name, capability override + default
+        // fallbacks, per-field limit, replacement cost with zero cache.
+        let large = entries
+            .iter()
+            .find(|model| {
+                model.get("providerID").and_then(Value::as_str) == Some("acme-console")
+                    && model.get("id").and_then(Value::as_str) == Some("acme-large")
+            })
+            .expect("the console provider's model appears in the listing");
+        assert_eq!(large["name"], json!("Acme Large"));
+        assert_eq!(large["capabilities"]["input"], json!(["text"]), "configured input wins");
+        assert_eq!(large["capabilities"]["output"], json!(["text"]), "default output fallback");
+        assert_eq!(large["capabilities"]["tools"], json!(true), "default tools fallback");
+        assert_eq!(large["limit"]["context"], json!(200_000));
+        assert_eq!(large["limit"]["output"], json!(32_768));
+        assert_eq!(
+            large["cost"],
+            json!([{ "input": 3.5, "output": 15.25, "cache": { "read": 0, "write": 0 } }]),
+            "cost REPLACES with cache read/write defaulting to 0.0"
+        );
+        // Shape parity with the config-custom entries: the SAME field
+        // set, no more no less (clients parse one Model.Info shape).
+        let expected = [
+            "id",
+            "modelID",
+            "providerID",
+            "name",
+            "enabled",
+            "status",
+            "time",
+            "capabilities",
+            "limit",
+            "cost",
+            "variants",
+        ];
+        let object = large.as_object().expect("model entry is an object");
+        assert_eq!(object.len(), expected.len(), "same fields as config customs: {object:?}");
+        for key in expected {
+            assert!(object.contains_key(key), "missing field {key}");
+        }
+
+        // (2) The catalog-base merge carries into the listing: the base's
+        // context limit survives, the console output override wins, and
+        // the base's release date sorts it among the dated models —
+        // BEFORE the zero-released standalone entry.
+        let opus = entries
+            .iter()
+            .find(|model| {
+                model.get("providerID").and_then(Value::as_str) == Some("acme-anthropic")
+                    && model.get("id").and_then(Value::as_str) == Some("acme-opus")
+            })
+            .expect("the base-merged console model appears in the listing");
+        let catalog = engine.catalog_service.get();
+        let base = catalog
+            .provider("anthropic")
+            .expect("anthropic in catalog")
+            .models
+            .iter()
+            .find(|model| model.id.as_str() == "claude-opus-4-5")
+            .expect("claude-opus-4-5 in catalog");
+        assert_eq!(opus["limit"]["context"], json!(base.limit.context), "base context survives");
+        assert_eq!(opus["limit"]["output"], json!(12_345), "console output override wins");
+        assert_eq!(opus["time"]["released"], json!(base.time.released.0), "base release date");
+        assert_eq!(opus["modelID"], json!("claude-opus-4-5"), "modelID redirects to the base");
+        let opus_at = entries.iter().position(|model| std::ptr::eq(model, opus)).expect("pos");
+        let large_at = entries.iter().position(|model| std::ptr::eq(model, large)).expect("pos");
+        assert!(
+            opus_at < large_at,
+            "the dated base-merged entry sorts before the zero-released standalone"
+        );
+    }
+
+    /// Review round 2 (console model-miss): when the config `model`
+    /// default pins a console provider at a model id the provider does
+    /// NOT carry, `/api/model/default` serves v2's exact-map-miss
+    /// fallback — `available.find(supportsText)` (model.ts:260-266),
+    /// the FIRST text model of the same ordering the list serves —
+    /// never the empty-identity stub the miss used to synthesize
+    /// (`custom_model_info`'s zero shape: `{"id":"","modelID":"",…}`).
+    #[tokio::test]
+    async fn model_default_console_model_miss_falls_back() {
+        let tmp = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+        let engine = oc_core::engine::Engine::boot(oc_core::engine::EngineOptions::new(
+            tmp.path().to_owned(),
+            tmp.path().to_owned(),
+        ))
+        .await;
+        // The location config pins the default at the console provider
+        // with a BOGUS model id (an exact-map miss against the console
+        // provider's models).
+        std::fs::write(
+            tmp.path().join("opencode.json"),
+            r#"{ "model": "acme-console/no-such-model" }"#,
+        )
+        .expect("write config");
+        let config = serde_json::from_str::<oc_core::integration::console::ConsoleConfig>(
+            r#"{
+            "providers": {
+                "acme-console": {
+                    "name": "Acme Console",
+                    "settings": { "baseURL": "https://acme.test/v1" },
+                    "models": { "acme-large": { "name": "Acme Large" } }
+                }
+            }
+        }"#,
+        )
+        .expect("console config decodes");
+        engine
+            .integration
+            .console_providers()
+            .swap_for_test(oc_core::integration::console::to_custom_providers(&config));
+
+        let state = std::sync::Arc::new(crate::state::AppState::new(
+            engine,
+            crate::state::AuthConfig { password: None },
+            "test".to_owned(),
+            std::sync::Arc::new(oc_util::determinism::UuidV4IdGen),
+            std::sync::Arc::new(oc_util::determinism::SystemClock),
+        ));
+        let uri: Uri = format!(
+            "http://localhost/api/model/default?location[directory]={}",
+            tmp.path().display()
+        )
+        .parse()
+        .expect("request uri");
+        let response = model_default(State(state.clone()), uri, HeaderMap::new())
+            .await
+            .expect("model.default responds");
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.expect("body");
+        let payload: Value = serde_json::from_slice(&bytes).expect("envelope json");
+        let data = &payload["data"];
+        // A REAL registry entry, never the empty-identity stub.
+        let id = data.get("id").and_then(Value::as_str).unwrap_or_default();
+        assert!(!id.is_empty(), "the miss falls back, never an empty entry: {data}");
+        // Exactly v2's fallback: the first supportsText entry of the
+        // same ordering /api/model serves.
+        let location = oc_core::location::LocationRef::new(tmp.path().to_owned(), None);
+        let expected = location_model_entries(&state.engine, &location)
+            .await
+            .into_iter()
+            .find(supports_text)
+            .expect("an available text model exists");
+        assert_eq!(data, &expected, "the default is the first available text model");
+    }
 
     /// `Model.supportsText` (core model.ts:273-277): empty capabilities
     /// wildcard to text; otherwise some modality must lead with `text`.
