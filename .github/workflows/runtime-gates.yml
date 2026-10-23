@@ -85,11 +85,17 @@
 # old nightly draft: the battery boots both sides and macos builds are
 # 10x-minute rated; one run/week is the accepted cost.
 #
-# Scheduled runs carry NO inputs context, and the job conditions were
-# already written null-safely: default-ON jobs run (`inputs.X != false`
-# with null → true: p10-battery, runtime-gates, ai/tui needs-runtime,
-# platform-build), opt-in jobs stay OFF (`inputs.X == true` with null →
-# false: soak-30m, release-smoke, live) — exactly the documented
+# Scheduled runs carry NO inputs context, and GitHub COERCES the missing
+# inputs to falsy values (null → 0 / false) before the `if:` expressions
+# evaluate: `inputs.X != false` is therefore FALSE under `schedule`, and
+# a null-safe-looking default-ON condition silently SKIPS the job. Every
+# default-ON job condition (p10-battery, runtime-gates, ai/tui
+# needs-runtime, platform-build) and the matching gates-summary
+# requested-flags therefore carry an explicit
+# `|| github.event_name == 'schedule'` OR-arm so the weekly cron runs
+# them (dispatch defaults stay: toggle OFF to skip). The opt-in jobs
+# correctly stay OFF under schedule: `inputs.X == true` with the coerced
+# false → false (soak-30m, release-smoke, live) — exactly the documented
 # dispatch defaults.
 #
 # Overlap: scheduled runs land on refs/heads/main and share the
@@ -452,7 +458,9 @@ jobs:
   p10-battery:
     name: p10 battery (§12.2 exit gate)
     needs: [build-archive, v2-db-fixture]
-    if: ${{ inputs.run_p10_battery != false }}
+    # Schedule arm: cron coerces inputs to false (header note) — without
+    # it the weekly run silently skips this default-ON gate.
+    if: ${{ inputs.run_p10_battery != false || github.event_name == 'schedule' }}
     runs-on: ubuntu-latest
     timeout-minutes: 75
     steps:
@@ -623,7 +631,9 @@ jobs:
   runtime-gates:
     name: §12.3 runtime gates
     needs: [build-archive, v2-db-fixture]
-    if: ${{ inputs.run_runtime_gates != false }}
+    # Schedule arm: cron coerces inputs to false (header note) — without
+    # it the weekly run silently skips this default-ON gate.
+    if: ${{ inputs.run_runtime_gates != false || github.event_name == 'schedule' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -751,7 +761,9 @@ jobs:
   ai-needs-runtime:
     name: "needs-runtime (AI: vertex/gemini/copilot, cassette + opt-in live)"
     needs: build-archive
-    if: ${{ inputs.run_needs_runtime != false }}
+    # Schedule arm: cron coerces inputs to false (header note) — without
+    # it the weekly run silently skips this default-ON gate.
+    if: ${{ inputs.run_needs_runtime != false || github.event_name == 'schedule' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # secrets are ILLEGAL inside if: conditions at any level (workflow
@@ -900,7 +912,9 @@ jobs:
   tui-needs-runtime:
     name: "needs-runtime (TUI: 6 rows, gap probes + adjacent PTY battery)"
     needs: build-archive
-    if: ${{ inputs.run_needs_runtime != false }}
+    # Schedule arm: cron coerces inputs to false (header note) — without
+    # it the weekly run silently skips this default-ON gate.
+    if: ${{ inputs.run_needs_runtime != false || github.event_name == 'schedule' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -1138,7 +1152,9 @@ jobs:
   # archive is useless here, hence no `needs`.
   platform-build:
     name: build target (macos-latest, aarch64-apple-darwin)
-    if: ${{ inputs.run_platform_build != false }}
+    # Schedule arm: cron coerces inputs to false (header note) — without
+    # it the weekly run silently skips this default-ON gate.
+    if: ${{ inputs.run_platform_build != false || github.event_name == 'schedule' }}
     runs-on: macos-latest
     timeout-minutes: 60
     steps:
@@ -1190,13 +1206,17 @@ jobs:
           else
             rows="$rows v2-db-fixture:${{ needs.v2-db-fixture.result }}:1"
           fi
-          rows="$rows p10-battery:${{ needs.p10-battery.result }}:${{ inputs.run_p10_battery != false && '1' || '0' }}"
-          rows="$rows runtime-gates:${{ needs.runtime-gates.result }}:${{ inputs.run_runtime_gates != false && '1' || '0' }}"
-          rows="$rows ai-needs-runtime:${{ needs.ai-needs-runtime.result }}:${{ inputs.run_needs_runtime != false && '1' || '0' }}"
-          rows="$rows tui-needs-runtime:${{ needs.tui-needs-runtime.result }}:${{ inputs.run_needs_runtime != false && '1' || '0' }}"
+          # Schedule arm on the requested flags: cron coerces inputs to
+          # false (header note), so the default-ON toggles must count as
+          # requested under schedule or the rows read
+          # SKIPPED-by-input-toggle and fail=0 hides the no-op.
+          rows="$rows p10-battery:${{ needs.p10-battery.result }}:${{ (inputs.run_p10_battery != false || github.event_name == 'schedule') && '1' || '0' }}"
+          rows="$rows runtime-gates:${{ needs.runtime-gates.result }}:${{ (inputs.run_runtime_gates != false || github.event_name == 'schedule') && '1' || '0' }}"
+          rows="$rows ai-needs-runtime:${{ needs.ai-needs-runtime.result }}:${{ (inputs.run_needs_runtime != false || github.event_name == 'schedule') && '1' || '0' }}"
+          rows="$rows tui-needs-runtime:${{ needs.tui-needs-runtime.result }}:${{ (inputs.run_needs_runtime != false || github.event_name == 'schedule') && '1' || '0' }}"
           rows="$rows soak-30m:${{ needs.soak-30m.result }}:${{ inputs.run_soak_30m == true && '1' || '0' }}"
           rows="$rows release-smoke:${{ needs.release-smoke.result }}:${{ inputs.run_release_smoke == true && '1' || '0' }}"
-          rows="$rows platform-build:${{ needs.platform-build.result }}:${{ inputs.run_platform_build != false && '1' || '0' }}"
+          rows="$rows platform-build:${{ needs.platform-build.result }}:${{ (inputs.run_platform_build != false || github.event_name == 'schedule') && '1' || '0' }}"
           for row in $rows; do
             gate="${row%%:*}"; rest="${row#*:}"; res="${rest%%:*}"; req="${rest##*:}"
             verdict="UNKNOWN"

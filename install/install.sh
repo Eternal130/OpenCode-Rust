@@ -151,6 +151,7 @@ extract_binary() {
 # lone main binary (legacy tarball, raw --binary install) installs with
 # a note, never a failure.
 install_pty_sibling() {
+    # The sibling is looked up in the payload's OWN dir: --binary installs look beside the user's file; tar.gz/zip installs look in the extraction dir where the archive's oc-pty landed.
     local payload="$1" dir name
     dir=$(dirname "$payload")
     for name in oc-pty oc-pty.exe; do

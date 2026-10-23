@@ -15,8 +15,10 @@ on:
         type: boolean
         default: false
 
+# Least privilege: the workflow-level grant is read-only; ONLY the
+# publish job (it cuts the GitHub release) overrides to contents:write.
 permissions:
-  contents: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -84,8 +86,10 @@ jobs:
   # R-11 platform matrix + the phase-3 gate ruling (oc-pty MUST ship
   # beside the main binary). One matrix job per target, each building
   # `-p oc-cli -p oc-pty`, packaging tarball (unix) / zip (windows) +
-  # sha256 sidecar, smoking BOTH members out of the packaged archive,
-  # and uploading a per-target artifact. The tag-only `publish` job at
+  # sha256 sidecar, exec-smoking BOTH members out of the packaged
+  # archive (the main binary via `--version`; oc-pty via a bad-flag
+  # usage exit — it has no `--version`), and uploading a per-target
+  # artifact. The tag-only `publish` job at
   # the bottom collects every artifact and cuts ONE GitHub release —
   # assets never race, and a missing platform is VISIBLY absent from
   # the notes (never silently dropped).
@@ -281,9 +285,13 @@ jobs:
 
       - name: Package zip + sha256 sidecar (windows)
         if: runner.os == 'Windows'
+        # github.ref_name flows through env (never inside the
+        # double-quoted PowerShell string — the unix steps' pattern).
+        env:
+          REF: ${{ github.ref_name }}
         run: |
           $ErrorActionPreference = "Stop"
-          $VERSION = "${{ github.ref_name }}".TrimStart("v")
+          $VERSION = "$env:REF".TrimStart("v")
           $ARTIFACT = "opencode-$VERSION-${{ matrix.target }}"
           New-Item -ItemType Directory -Force -Path package | Out-Null
           Copy-Item "target/${{ matrix.rust_target }}/release/opencode-rust.exe" "package/opencode-rust.exe"
@@ -304,18 +312,52 @@ jobs:
           "$SMOKE/package/opencode-rust" --version
           # The gate ruling: the sibling MUST be in the shipped archive.
           test -x "$SMOKE/package/oc-pty"
+          # And it must EXEC: oc-pty has no --version (daemon-only CLI
+          # `daemon --runtime-dir <dir> --name <id>`), so the cheap exec
+          # proof is a bad flag REQUIRED to fail with the usage exit 2
+          # and an "oc-pty:" line on stderr — presence alone proves
+          # nothing (a broken/truncated binary could still be 0755).
+          set +e
+          OC_PTY_ERR="$("$SMOKE/package/oc-pty" --no-such-flag 2>&1 >/dev/null)"
+          OC_PTY_RC=$?
+          set -e
+          [ "$OC_PTY_RC" -eq 2 ] || { echo "::error::oc-pty exited ${OC_PTY_RC}, expected the usage exit 2 (stderr: ${OC_PTY_ERR})"; exit 1; }
+          case "$OC_PTY_ERR" in
+            *"oc-pty:"*) : ;;
+            *) echo "::error::oc-pty usage run printed no 'oc-pty:' line (stderr: ${OC_PTY_ERR})"; exit 1 ;;
+          esac
+          echo "oc-pty exec smoke: usage failure as expected (exit 2)"
           file "$SMOKE/package/oc-pty" || true
 
       - name: Smoke the packaged binaries (windows)
         if: runner.os == 'Windows'
+        # github.ref_name flows through env (never inside the
+        # double-quoted PowerShell string — the unix steps' pattern).
+        env:
+          REF: ${{ github.ref_name }}
         run: |
           $ErrorActionPreference = "Stop"
-          $VERSION = "${{ github.ref_name }}".TrimStart("v")
+          $VERSION = "$env:REF".TrimStart("v")
           Expand-Archive "opencode-$VERSION-${{ matrix.target }}.zip" -DestinationPath smoke -Force
           & "$PWD/smoke/opencode-rust.exe" --version
           if (-not (Test-Path "$PWD/smoke/oc-pty.exe")) {
             throw "oc-pty.exe missing from the packaged zip (phase-3 gate ruling)"
           }
+          # And it must EXEC: oc-pty has no --version (daemon-only CLI),
+          # so the cheap exec proof is a bad flag REQUIRED to fail with
+          # the usage exit 2 and an "oc-pty:" line on stderr. EAP is
+          # dropped to Continue around the deliberate nonzero exit.
+          $ErrorActionPreference = "Continue"
+          $err = (& "$PWD/smoke/oc-pty.exe" --no-such-flag 2>&1) | Out-String
+          $rc = $LASTEXITCODE
+          $ErrorActionPreference = "Stop"
+          if ($rc -ne 2) {
+            throw "oc-pty.exe exited $rc, expected the usage exit 2 (stderr: $err)"
+          }
+          if (-not $err.Contains("oc-pty:")) {
+            throw "oc-pty.exe usage run printed no 'oc-pty:' line (stderr: $err)"
+          }
+          Write-Output "oc-pty.exe exec smoke: usage failure as expected (exit 2)"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -337,6 +379,11 @@ jobs:
     if: ${{ github.event_name == 'push' && !failure() && !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      # The ONLY job that writes repo content: the GitHub release
+      # (softprops/action-gh-release). Everything else stays at the
+      # workflow-level contents:read.
+      contents: write
     steps:
       - name: Download every platform artifact
         uses: actions/download-artifact@v4
