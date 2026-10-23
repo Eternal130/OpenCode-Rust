@@ -1,6 +1,7 @@
 # Lane PTYD — the PTY daemon process boundary (Phase 9) — design
 
-Task 9 of the 2026-10-23 v2 gap burndown. Status: **design for gate review** (no code).
+Task 9 of the 2026-10-23 v2 gap burndown. Status: **revised after gate review** — the
+gate returned DESIGN-GO-AFTER-REVISION; every finding is incorporated (no code).
 
 Binding inputs: the controller rulings R1–R7 (reproduced in §2.1), the v2 reference
 (`daemon.ts`, `persistent-pty/index.ts`, `pty-handoff.ts`, `handlers/persistent-pty.ts`),
@@ -115,7 +116,8 @@ and our port (`oc-core/src/persistent_pty.rs` + `oc-server` wiring). Citations u
 | Replay buffers, roles, generations, `current[sessionID]` | the machine (hosted by daemon) | the machine (in server) | ours: `:378-452` |
 | `service.lock` (flock) + `service.json` | daemon process | server process | ours: `:421-436`, `:1340-1382`; ref: `daemon.ts:165-166` |
 | `state.json` handoff snapshot | runtime dir; written by daemon's `prepare_handoff`, consumed by client ladder | same (machine writes it) | ours: `:195-206`, `:891-929`; ref counterpart is the live daemon itself |
-| Handoff ticket | minted by daemon (`prepare_handoff`), validated on `own` | minted in `handoff()` | ref: `daemon.ts:356-380`, `:471-473` |
+| Handoff ticket | minted by daemon (`prepare_handoff`), validated + consumed single-use on `own` — consumption is OUR design (§4.3) | minted in `handoff()` | ref: `daemon.ts:356-380`, `:471-473` (carriage only) |
+| `persistent-pty.added`/`removed` publications | daemon→owner `bus_event` frames, republished onto the server bus by the oc-core client layer (§3.1) | machine publishes directly on the server bus | ours: `:695`, `:709`, `:864`; consumers ours: `oc-tui/src/store.rs:9692`, EV-1 `oc-server/tests/parity_event_payloads.rs:56` |
 
 ---
 
@@ -133,7 +135,7 @@ the inverse of `toInfo` (ref: `index.ts:390-408`): `id` = the numeric suffix of
 | Wire request (op) | Machine API (ours) | Wire response (ref type) | Spawn-if-absent |
 |---|---|---|---|
 | `{op:"ping"}` | (host identity: registration fields) | `pong{instance_id,pid,protocol}` (`daemon.ts:44-48`) | no |
-| `{op:"own", instance_id, ticket?}` | ownership claim: validate ticket (single-use), reset `current[]` (new selection epoch), mark owner connection | `owned` (`:52`) | no |
+| `{op:"own", instance_id, ticket?, directory}` | ownership claim: validate ticket if presented (single-use, OUR design — §4.3); reset `current[]` (new selection epoch) AND clear every terminal's `controller` field (generations stay monotonic — §6 arm A); re-anchor the runtime dir to `directory` (§6 arm A); mark this connection owner (supersession rules §6) | `owned` (`:52`) | no |
 | `{op:"prepare_handoff"}` | `Machine::handoff()` — mints ticket, writes `state.json` (ours: `:891-929`); ticket registered for one `own` | `handoff{ticket,expires_at}` (`:53`) | no (owner conn only, ref: `:356-360`) |
 | `{op:"shutdown"}` | `Machine::shutdown()` (ours: `:875-883`, incl. `state.json` invalidation `:1039-1045`) then daemon exits | `ok`, then socket closes; client waits for discover to fail ≤5s (ref: `:340-354`) | no (requestIfRunning, ref: `:341`) |
 | `{op:"list"}` | `Machine::list(None)` (ours: `:567-576`) | `terminals{terminals[]}` (`:50`) | no — absent daemon ⇒ `[]` (ref: `index.ts:143-145`) |
@@ -146,7 +148,8 @@ the inverse of `toInfo` (ref: `index.ts:390-408`): `id` = the numeric suffix of
 | `{op:"read_rows", id, rows?}` | resolve `session = get(id).session_id` then `Machine::read(session, rows)` (ours: `:797-854`; the machine owns `current[]` selection + 1..=65535 validation `:806-812`) | `rows{terminal,lines[],cursor_x,cursor_y}` (`:62-68`; daemon picks live height when `rows` absent — ref: `index.ts:275-276`) | no — absent ⇒ `undefined`→`null` result (ref: `index.ts:143-145` analogue) |
 | `{op:"read", session_id, rows?}` **(extension)** | `Machine::read(session_id, rows)` directly | same `rows` shape | no |
 | `{op:"terminate", id}` | `Machine::remove` (ours: `:857-869`) | `ok` | no |
-| `{op:"subscribe", id, offset, attachment_id, role, takeover}` | `Machine::attach` (ours: `:956-1014`) — long-lived connection; first frame `attached`, then stream frames below | `attached{terminal,role,generation,requested_offset,available_offset,end_offset,truncated,replay…}` (`:69-79`) | no (ref: `:387` `connect(false)`) |
+| `{op:"subscribe", id, offset, attachment_id, role, takeover}` | `Machine::attach` (ours: `:956-1014`) — long-lived connection; first frame `attached` (replay delivery per §3.2), then stream frames below | `attached{terminal,role,generation,requested_offset,available_offset,end_offset,truncated,replay…}` (`:69-79`) | no (ref: `:387` `connect(false)`) |
+| `{op:"restore", state}` **(extension)** | `Machine::restore(state)` — the extracted snapshot-restore loop (§6 arm B); **owner connection only** (§4.3) so a bare token holder cannot inject fake terminal history | `ok` | no |
 
 `read` (session-keyed) is a deliberate extension over v2's `read_rows` (id-keyed):
 v2 keeps the `current[sessionID]` selection map client-side
@@ -162,8 +165,70 @@ daemon-side preserves one selection implementation for both backends; `own` rese
 | output | binary `[0x00][start u64BE][end u64BE][data…]` (≥17 bytes; ref: `daemon.ts:589-597`) | `StreamEvent::Output` (ours: `:351-353`); start/end derived from the machine's absolute output tail (`info.output.1`, ours: `:1159`) |
 | resized | JSON `resized{cols,rows,generation,checkpoint_base64}` (ref: `:80-86`) | `StreamEvent::Resized` (ours: `:357`, emitted at `:1215-1226`) |
 | exited | JSON `exited{exit_code,final_offset}` (ref: `:87-91`) — ends the stream (ref: `:617-624`) | `StreamEvent::Exited` (ours: `:359`, `:1242-1269`); `final_offset` = output tail read at exit |
-| controller_changed | JSON `controller_changed{attachment_id,generation}` (ref: `:93-96`) | machine signal on controller takeover/generation bump (ours: `:968-973`, `:1210-1214`) — needs the small `StreamEvent` extension in §12/Q3 |
+| controller_changed | JSON `controller_changed{attachment_id,generation}` (ref: `:93-96`) | `StreamEvent::ControllerChanged{attachment_id, generation}` — the APPROVED machine delta (§12 Q3), emitted on controller takeover/generation bump (ours: `:968-973`; resize bump `:1210-1214`); the WS handler gains the forwarding arm (§12 Q3) |
 | title_changed / foreground_process_changed | JSON (ref: `:97-98`) | **reserved, no producer today** (our machine never sets title/foreground: ours: `:625-638`) |
+
+### 3.1 Daemon→owner event frames — the server-bus channel (gate finding 1, CRITICAL)
+
+With R1 the machine — including its `Bus` handle (ours: `PersistentPty::new(bus)`,
+`persistent_pty.rs:463-475`; publish seam `:558-563`) — moves into the daemon, but the
+events it publishes are consumed in the SERVER process: the TUI registry reducer
+(ours: `oc-tui/src/store.rs:9692`) and every SSE client; the payload shape is pinned
+by EV-1 (ours: `oc-server/tests/parity_event_payloads.rs:56`). v2's architecture: the
+daemon never touches a bus — publication lives in the CLIENT-side service layer
+(ref: `index.ts:178` publishes `Added` after create, `:298` publishes `Removed` after
+remove, `:311-324` `removeVisibleExit` fed by the subscribe `exited` event at `:335`).
+We keep that split, with the daemon as the event SOURCE:
+
+1. **Machine publications become host-injected.** The machine's three publication
+   sites — `added` after create (ours: `:709`), `removed` on explicit remove
+   (ours: `:864`), and the exit-pump `removed` when a child exit is detected
+   (ours: `:695` — fires with ZERO subscribers too; every child is reaped by the
+   machine's wait threads, ours: `:676-681`) — route through a host-provided sink
+   instead of a fixed bus handle. The InProcess host injects the real server bus:
+   byte-identical behavior, hermetic tests unchanged (R3).
+2. **The daemon host serializes each publication to the OWNER connection** as an
+   async event frame, interleaved with exchange responses (self-describing by
+   `type`):
+   `{"type":"bus_event","event":"persistent-pty.added"|"persistent-pty.removed","data":{…}}`
+   — `data` embeds the machine's payload verbatim (`{sessionID, terminal}` /
+   `{sessionID, ptyID}`; registry constants ours: `bus/registry.rs:326-328`).
+3. **The oc-core client layer (in the server process) republishes onto the server
+   bus.** The transport's owner-connection reader demuxes: response types resolve
+   pending exchanges; `bus_event` frames are published through the same registry
+   definitions — identical event names and payloads under both backends, so the TUI
+   reducer and EV-1 are unchanged (test I12).
+4. **Non-owner subscribers learn of exits from their subscription streams**: every
+   subscriber receives `exited{exit_code,final_offset}`, which ends the stream
+   (ref: `daemon.ts:617-624`); the bus-level `removed` travels only on the owner
+   channel. (v2's `removeVisibleExit` fires per-subscription client-side; ours
+   fires once, daemon-side, at exit detection — same observable bus event, and it
+   covers the no-subscriber case v2 misses. The terminal object itself stays as
+   exited read-only history until `remove` — ours: `:1242-1269`, test `:1667`.)
+
+### 3.2 Replay transport — inline iff ≤1 MiB, else chunked (gate ruling on Q4)
+
+`attached` carries the replay inline (base64 in the JSON frame, ref: `daemon.ts:78`)
+iff the replay is **≤ 1 MiB raw** (≈1.33 MiB base64 — comfortably inside the 8 MiB
+frame cap). Above that threshold the daemon switches to chunked delivery:
+
+- `attached` carries `replay_chunked: true`, `replay_length` (total replay bytes)
+  and the usual offsets, with no inline `replay` field.
+- The replay bytes then arrive as ordinary binary output frames
+  (`[0x00][start u64BE][end u64BE][data]`, §3 stream table) in offset order, each
+  within the frame cap; output that accumulates during the transfer simply follows
+  with higher offsets.
+- A JSON `replay_complete{end_offset}` frame marks the end; the CLIENT defers
+  replay-completion (and forwards the attachment to its WS consumer as a contiguous
+  byte stream) until the range is reassembled up to `end_offset`. Reassembly is
+  exact by absolute offset — framing already guarantees per-connection order.
+
+Why chunking is mandatory above the cap: our `OUTPUT_LIMIT` is 8 MiB (ours:
+`persistent_pty.rs:405`) and base64 inflates ×4/3 — a full buffer is ≈11.2 MiB
+against the 8 MiB `MaxFrameBytes` (ref: `daemon.ts:9`); inline-only cannot carry it.
+The threshold is PINNED at 1 MiB (not R-2's earlier "small replays" wording) so both
+arms are testable (I15). The wire deviation from v2 is intentional and ruled on
+(§12 Q4).
 
 ---
 
@@ -209,10 +274,18 @@ R2 ruling). Our `PTY_PROTOCOL_VERSION` (ours: `persistent_pty.rs:407-409`, curre
   token; failure → `error{message:"authentication failed"}` and the client maps that
   exact message to error kind `registration` (drop cached registration, re-discover)
   (ref: `daemon.ts:527-533`, `:579-583`).
-- **Ownership**: `own` additionally requires the unexpired single-use ticket minted by
-  `prepare_handoff` (ref: `daemon.ts:471-473`; ours' single-use consumption today is
-  `state.json` removal, `persistent_pty.rs:1135-1138` — in the daemon arm the ticket
-  is consumed in-daemon memory AND `state.json` removed).
+- **Privileges** (gate ruling on Q5, §12): `own`, `restore`, `prepare_handoff` are
+  **owner-connection-only** ops — a bare token holder cannot claim ownership, inject
+  fake terminal history (`restore`), or mint handoff tickets. **`shutdown` stays
+  TOKEN-level** on purpose: ref `daemon.ts:340-341` sends it as a plain one-shot
+  (`requestIfRunning({op:"shutdown"})`), and the discard path calls it from a
+  NON-owner one-shot connection (ref: `:423` `oneShot(found, {op:"shutdown"})`) —
+  owner-only shutdown would break every adoption discard (§6).
+- **Ownership**: `own` presents the unexpired single-use ticket minted by
+  `prepare_handoff`. The ref shows only ticket CARRIAGE in the `own` request
+  (ref: `daemon.ts:471-473`); single-use CONSUMPTION is OUR R4 design (ours today
+  consumes by `state.json` removal, `persistent_pty.rs:1135-1138`; the daemon arm
+  consumes the ticket in daemon memory AND removes `state.json`).
 - **Socket**: `<runtime-dir>/daemon.sock`, filesystem path (follows ref — the socket
   path is a file path in the registration, ref: `daemon.ts:38`, `:447`), `chmod 0600`
   at bind; the 0700 dir is the outer wall.
@@ -285,6 +358,20 @@ Key invariants: the lock is held for process lifetime — kernel-released on dea
 `instance_id` never changes for a live daemon (the identity that handoff tickets
 pin — ref: `daemon.ts:411-412`).
 
+**Orphan-grace predicate (pinned, gate finding 11)**: the self-exit timer runs only
+while the daemon has CONTINUOUSLY had zero terminals (live or exited) AND no owner
+connection for **60 s** — either condition becoming false restarts the window. The
+grace is overridable at spawn for tests (`oc-pty daemon --orphan-grace <secs>`);
+token-level ops such as `list` do NOT pin the daemon (only owner connections and
+terminals do). No v2 counterpart exists — v2 daemons never self-exit (R-3).
+
+**Child reaping (gate finding 12)**: every child is reaped by the machine's
+per-child wait threads (ours: `persistent_pty.rs:676-681` — a
+`std::thread::spawn` per child running `child.wait()`, the exit code funneled
+through the events channel). The daemon simply hosts these threads: no zombies, no
+SIGCHLD machinery, and exit detection (→ §3.1's exit-driven `removed`) works with
+zero subscribers attached.
+
 ### 5.2 Client (server-side frontend) connection lifecycle
 
 ```
@@ -303,7 +390,9 @@ pin — ref: `daemon.ts:411-412`).
                             (list ⇒ [], read ⇒ null — ref index.ts:143-145)
 
    steady state: owner conn (unref'd, ref daemon.ts:473) + per-request one-shots
-                 + one conn per subscribe
+                 + one conn per subscribe; the owner conn also carries the
+                 daemon→server bus_event frames (§3.1) that the client layer
+                 republishes onto the server bus
    failure ladder per request (ref daemon.ts:313-333):
      error{authentication failed} ⇒ drop registration ⇒ rediscover ⇒ retry once
      connect error               ⇒ drop registration ⇒ (create only) respawn+retry
@@ -332,38 +421,78 @@ ours: `persistent_pty.rs:1047-1154` for the `OC_PTY_DAEMON=0` path unchanged.
 ```
 adopt(inherited Handoff{directory, instanceID, ticket, expiresAt})
  │
- ├─1─ expires_at <= now ─────────────────────────▶ Discard(expired)
+ ├─1─ expires_at <= now ─────────────────────────────────▶ Discard(expired)
  │      (ref daemon.ts:406-407; ours :1049-1053)
  ├─2─ read service.json in directory ── fail ────▶ Discard(unreachable)
  │      (ref :203-205; ours :1054-1056)
- ├─3─ protocol ≠ 7 ──────────────────────────────▶ Discard(protocol)
+ ├─3─ protocol ≠ 7 ──────────────────────────────────────▶ Discard(protocol)
  │      (ref :209-216; ours :1057-1060)
  ├─4─ instance_id ≠ inherited.instanceID ────────▶ Discard(changed)
  │      (ref :411-412; ours :1061-1064)
  │
  ├─5─ ARM A — LIVE DAEMON (new, R4): ping ok (§4.4), then
- │    owner claim {op:"own", instance_id, ticket}:
- │      ├─ "owned" ──────────────────────────────▶ ADOPTED-ALIVE
- │      │   • terminals + CHILDREN LIVE (R5) — no state restore at all
- │      │   • daemon consumes the ticket (single-use) + deletes state.json
- │      │   • daemon resets current[] (fresh selection epoch — v2's
- │      │     replacement has an empty map, ref index.ts:140)
- │      │   • if the handoff directory moved vs. our root: daemon-side
- │      │     inode-preserving migrate BEFORE own (ref :413-414, :435-444)
- │      │   (ref claim+ticket: daemon.ts:446-481, 415)
- │      └─ ticket rejected/expired ──────────────▶ Discard(invalid_ticket)
+ │    ladder-order note (gate finding 11): ref pings + echo-checks BEFORE
+ │    comparing instance_id (discover at daemon.ts:217-226 vs the ladder's
+ │    :411-412); ours compares instance_id (step 4) before pinging —
+ │    equivalent, both discard on mismatch; we keep our order.
+ │    If the handoff dir moved vs. our root, the CLIENT migrates FIRST:
+ │    rename service.lock + service.json (+ state.json) into <root>/<id>,
+ │    inode-preserving (ref :413-415, :435-444 — the client migrates, not
+ │    the daemon), and the claim carries the new path:
+ │      own{instance_id, ticket, directory}
+ │        ├─ "owned" ───────────────────────────▶ ADOPTED-ALIVE
+ │        │   • terminals + CHILDREN LIVE (R5) — no state restore at all
+ │        │   • daemon consumes the ticket (single-use, OUR design — §4.3)
+ │        │     + deletes state.json
+ │        │   • daemon resets current[] (fresh selection epoch — v2's
+ │        │     replacement has an empty map, ref index.ts:140) AND clears
+ │        │     every terminal's controller field: a dead server's
+ │        │     attachment_ids would otherwise suppress resize generation
+ │        │     bumps (resize bumps only when the resizer holds the
+ │        │     controller attachment, ours: `:1210-1214`). Generation
+ │        │     counters are NOT reset — they stay monotonic forever: a
+ │        │     reused number could make a stale checkpoint/observer look
+ │        │     current (§7 carries generation); clearing controller
+ │        │     alone restores bump behavior via the attach path
+ │        │     (ours: `:968-973`).
+ │        │   • daemon RE-ANCHORS to `directory` (gate finding 6): after
+ │        │     the client-side rename, the live daemon's directory notion
+ │        │     is stale — its later service.json/state.json writes would
+ │        │     hit the old path. On claim the daemon rebinds its write
+ │        │     paths to the CURRENT directory. daemon.sock is NOT renamed
+ │        │     (ref moves only lock+service.json, :435-444); the daemon
+ │        │     remembers its bound socket path for exit cleanup.
+ │        │   (ref claim+ticket: daemon.ts:446-481, 415)
+ │        └─ ticket rejected/expired ──────────────▶ Discard(invalid_ticket)
+ │
+ │    own-while-OWNED — superseded-owner rules (gate finding 10):
+ │      • no ticket + live owner conn ──────────▶ error{"daemon is owned"}
+ │        → client kind `registration` / ladder Discard(owned) → fresh
+ │          dir (§9)
+ │      • valid ticket + live owner conn ──────▶ TRANSFER: the OLD owner
+ │        connection receives the owner frame {"type":"owner_superseded"}
+ │        and is then closed; the claimant becomes owner. This is the
+ │        handoff path — the old owner is the stopping server, it performs
+ │        no further owner ops. The explicit superseded frame is OUR
+ │        design: ref relies on the dying process's socket simply closing,
+ │        so a NON-dying owner could not detect demotion deterministically.
  │
  └─6─ ARM B — DEAD DAEMON (ping fails; lock free by kernel):
        ├─ state.json missing ────────────────────▶ Discard(no_state)
        │    (died without handoff = v2 daemon-died path,
        │     ref pty-handoff.ts:35-37; ours :1065-1073)
-       ├─ state ticket ≠ inherited.ticket ───────▶ Discard(invalid_ticket)
+       ├─ state ticket ≠ inherited.ticket ────────▶ Discard(invalid_ticket)
        │    (ours :1071-1073)
        ├─ lock still held (daemon alive but socket-dead =
-       │   unreachable-owner) ───────────────────▶ Discard(owned), then the
-       │    client abandons: fresh dir + respawn (ref :275-292; ours :503-522)
+       │   unreachable-owner) ────────────▶ Discard(owned), then the
+       │   client abandons: fresh dir + respawn (ref :275-292; ours :503-522)
        └─ valid snapshot ────────────────────────▶ ADOPTED-FROM-SNAPSHOT
-            • client spawns oc-pty in the inherited dir (lock is free)
+            • inode-preserving migration on the snapshot path FIRST if the
+              inherited dir is outside our root — the SAME migration our
+              machine performs today (ours: `:1079-1094`, test `:1825-1852`):
+              rename lock+registration+state into <root>/<id>; the moved
+              lock inode keeps its exclusion history (gate finding 7)
+            • client spawns oc-pty in <root>/<id> (lock is free)
             • op restore{state} → Machine::restore(state) — the extracted
               loop of ours :1096-1133: replay windows intact, children gone
               (terminals marked exited — v2 daemon-death outcome, ours :50-56)
@@ -372,7 +501,8 @@ adopt(inherited Handoff{directory, instanceID, ticket, expiresAt})
 
  ANY Discard: warn "Discarding PTY restart handoff; persistent terminals
  will start fresh", best-effort {op:"shutdown"} of a found-but-unclaimable
- daemon, abandon to a fresh identity — boot stays green
+ daemon (TOKEN-level op, §4.3 — the ref calls it from a NON-owner one-shot
+ connection, daemon.ts:423), abandon to a fresh identity — boot stays green
  (ref daemon.ts:417-427; ours adopt() :940-952; boot.rs:496-503).
 ```
 
@@ -477,7 +607,7 @@ Resolution happens once and is cached with reset-on-failure
 |---|---|---|
 | `connect` | socket unreachable / claim timeout | ECONNREFUSED, 5s claim timeout (ref `:195-199`) |
 | `response` | connected but no/bad reply | closed-before-response, post-dispatch timeout (ref `:542-546`) |
-| `registration` | auth/identity invalid → drop + rediscover | `authentication failed` (ref `:527-533`), own rejected |
+| `registration` | auth/identity invalid → drop + rediscover | `authentication failed` (ref `:527-533`), own rejected (`error{"daemon is owned"}`, §6 supersession rules) |
 | `protocol` | version/shape mismatch | protocol≠7 (ref `:209-216`), ping echo mismatch (ref `:217-224`), checkpoint decode (§7) |
 | `spawn` | binary missing / child failed | discovery exhausted (§8.1), spawn error (ref `:229`) |
 
@@ -513,6 +643,9 @@ Every discard logs and leaves a fresh identity — boot never fails
   PATH) (§8.1).
 - `service.boot` record write/read; stale-boot_id refusal path (ours:
   `safekill.rs:318-367` precedent).
+- Owner-connection frame demux: response types vs `bus_event` vs
+  `owner_superseded` (§3.1, §6); replay reassembly + client-deferred
+  `replay_complete` (§3.2).
 
 ### 10.2 Hermetic in-process (existing suite unchanged — R3)
 
@@ -529,17 +662,21 @@ Every discard logs and leaves a fresh identity — boot never fails
 
 | # | Scenario | Asserts |
 |---|---|---|
-| I1 | **kill-server → restart → adopt → child alive** (flagship, R5/Arm A): server A creates a terminal running a marker child (`sleep`-like with a pidfile), `prepare_handoff`, kill -9 server A; server B boots with the sidecar env | terminal listed `running`, SAME child pid alive (pidfile + `/proc` generation check §4.4), attach replays pre-kill output, new input reaches the child |
+| I1 | **kill-server → restart → adopt → child alive** (flagship, R5/Arm A): server A creates a terminal running a marker child (`sleep`-like with a pidfile), `prepare_handoff`, kill -9 server A; server B boots with the sidecar env | terminal listed `running`, SAME child pid alive (pidfile + `/proc` generation check §4.4), attach replays pre-kill output, new input reaches the child; a second attach with `takeover` delivers a `controller_changed` frame to the observing WS connection (§12 Q3 arm — ref: `handlers/persistent-pty.ts:146-147` forwards non-output/resized events) |
 | I2 | **daemon-death kills children** (R5): SIGKILL the daemon | children gone (masters closed), client ops → `connect` error → 503; next `create` respawns (fresh-dir policy if lock raced) |
-| I3 | **replay restore** (Arm B): daemon killed AFTER a handoff snapshot exists; replacement adopts via `state.json` | terminals restored `exited` with pre-death replay windows; writes no-op; ids continue (`pty_persistent_N+1`) — mirrors ours `:1594-1672` at process level |
+| I3 | **replay restore** (Arm B): daemon killed AFTER a handoff snapshot exists, handoff dir outside the new root; replacement adopts via `state.json` | terminals restored `exited` with pre-death replay windows; writes no-op; ids continue (`pty_persistent_N+1`) — mirrors ours `:1594-1672` at process level; dir migrated inode-preservingly BEFORE spawn (ours `:1079-1094`, test `:1825-1852`; §6 arm B) |
 | I4 | **checkpoint round-trip** (R6): create → write → resize → `snapshot` op → decode v1 checkpoint; `resized` stream event carries a decodable checkpoint | §7 fields (cols/rows/cursor/generation/scrollback) match machine state; crc rejects a corrupted byte |
 | I5 | **stale socket** (R7): fabricate `service.json` pointing at a dead socket + a `service.boot` naming a recycled pid | discover fails via connect-probe; generation guard refuses to treat the recycled pid as live; spawn-if-absent proceeds in a fresh dir; nothing signalled |
 | I6 | **token rejection** (R7): connect with wrong token | daemon replies `error{"authentication failed"}`; client classifies `registration`, drops cache, recovers on next discover with the true token |
 | I7 | **protocol mismatch**: hand-write `service.json` with `protocol:1` (or any ≠7) | `protocol` error with daemon=N client=7 message (ref: `:209-216`); discard-fresh |
 | I8 | **shutdown semantics**: `shutdown` op | `ok` then discover fails ≤5s; children dead; `state.json` invalidated (ours: `:1039-1045`) |
 | I9 | **migration**: handoff directory outside the new root | lock+registration move inode-preservingly; the moved lock still excludes a competing claim (ours `:1825-1852` semantics over the socket path) |
-| I10 | **two contenders**: both spawn daemons / both try `own` | exactly one `owned`; loser discard-fresh; single-use ticket consumed once (ref: `pty-handoff.ts:32-34`) |
+| I10 | **two contenders**: both spawn daemons / both try `own` | exactly one `owned`; loser discard-fresh; single-use ticket consumed once (ref: `pty-handoff.ts:32-34`); own-while-OWNED without ticket → `error{"daemon is owned"}` → kind `registration`; with a VALID ticket → transfer and the OLD owner receives `owner_superseded` before close (§6) |
 | I11 | **=0 escape hatch**: `OC_PTY_DAEMON=0` | frontend binds InProcess; no `oc-pty` process ever spawned; HTTP surface identical |
+| I12 | **EV-1 under the daemon backend** (§3.1): boot with the Daemon backend, tap the SSE feed, create a terminal via REST | bus frame `persistent-pty.added` with the byte-identical payload EV-1 pins (client-layer republish, `parity_event_payloads.rs:56` re-run against the Daemon frontend); TUI reducer path (ours: `oc-tui/src/store.rs:9692`) unchanged |
+| I13 | **unattached-exit `removed` propagation** (§3.1): create a short-lived child, attach NOTHING (zero subscribers), wait for exit | daemon exit-pump fires the owner `bus_event{persistent-pty.removed}` (ours: `:695`); the server bus carries it and the registry refreshes — v2 MISSES this (its `removeVisibleExit` needs a subscriber, ref: `index.ts:311-324`, `:335`) |
+| I14 | **kill -9 server WITHOUT prepare_handoff** (orphan case, §5.1): orphan daemon keeps live terminals; a fresh server boots with no handoff env | fresh server claims a FRESH random identity, never discovers the orphan, `list` ⇒ `[]` — v2-faithful loss (ref: `daemon.ts:419-427`); children stay alive (R5) until they exit + orphan-grace self-exit; guards against unauthorized-own "fixes": no root-scanning adoption, ownership transfers ONLY via ticket (§4.3) |
+| I15 | **replay chunking, both arms** (§3.2): (a) small replay ≤1 MiB; (b) drive the buffer to the full 8 MiB `OUTPUT_LIMIT` (ours: `:405`), then attach | (a) inline base64 `replay` in `attached`, no chunks; (b) `replay_chunked:true`, binary frames reassemble exactly by offset, client defers `replay_complete` until contiguous — inline would be ≈11.2 MiB base64 against the 8 MiB frame cap, impossible by construction |
 
 ---
 
@@ -565,12 +702,18 @@ Every discard logs and leaves a fresh identity — boot never fails
 4. **Compat guards.** The `read` extension op (§3) is additive; unknown-op replies
    follow the wire `error` shape so mixed client/daemon versions degrade to clear
    503s, never hangs. The `service.json` schema is unchanged from v2's
-   (ref: `daemon.ts:33-39`) — a v2-written registration on the same machine simply
-   fails the protocol check and starts fresh (§4.2).
+   (ref: `daemon.ts:33-39`). CORRECTED per gate finding 8: a genuine v2 daemon
+   carries protocol 7 too and would PASS the version check — isolation from real
+   v2 daemons does NOT come from the version check. It comes from root-path /
+   sidecar disjointness: every boot claims a fresh random `<root>/<id>` (a client
+   only ever looks in its OWN directory — it never scans the root for strangers),
+   adoption requires OUR `OPENCODE_PTY_HANDOFF` sidecar chain, and our
+   `service.boot` sidecar exists only in our directories. The protocol check
+   (§4.2) only rejects OUR OWN earlier betas (protocol `1`).
 
 ---
 
-## 12. Risks + open questions (for the design gate)
+## 12. Risks + gate rulings
 
 **Risks**
 
@@ -578,16 +721,18 @@ Every discard logs and leaves a fresh identity — boot never fails
   because the masters close (HUP to foreground process groups) — we do not (and must
   not) kill them ourselves (R7). If a child ignores HUP and detaches, it can outlive
   the daemon; same exposure as v2, accepted.
-- **R-2 Replay over the wire vs the frame cap**: v2's `attached` carries the whole
-  replay inline as base64 (ref: `daemon.ts:78`); our `OUTPUT_LIMIT` is 8 MiB
-  (ours: `persistent_pty.rs:405`) and base64 inflates ×4/3 against the same 8 MiB
-  `MaxFrameBytes` (ref: `daemon.ts:9`) — a full buffer would not fit. Proposed:
-  deliver replay as chunked binary output frames after `attached` (offsets make
-  reassembly exact), keep the inline field for small replays only. See Q4.
+- **R-2 Replay over the wire vs the frame cap — RESOLVED CHUNKED (§3.2)**: v2's
+  `attached` carries the whole replay inline as base64 (ref: `daemon.ts:78`); our
+  `OUTPUT_LIMIT` is 8 MiB (ours: `persistent_pty.rs:405`) and base64 inflates ×4/3
+  against the same 8 MiB `MaxFrameBytes` (ref: `daemon.ts:9`) — a full buffer
+  (≈11.2 MiB) would not fit. Gate ruling: inline iff ≤1 MiB raw, else chunked
+  binary frames after `attached` with offset reassembly and a client-deferred
+  `replay_complete`; both arms tested (I15).
 - **R-3 Orphan daemons linger by design**: a daemon with live terminals and no owner
-  persists (that IS persistence, R5); a daemon with neither self-exits after a grace
-  period (§5.1). No v2 citation exists for the grace period — it is our addition to
-  bound clutter; conservative default 60 s.
+  persists (that IS persistence, R5); a daemon with neither self-exits after the
+  grace period — predicate PINNED (§5.1, gate finding 11): CONTINUOUSLY zero
+  terminals AND no owner connection for 60 s, overridable at spawn for tests.
+  No v2 citation exists — it is our addition to bound clutter.
 - **R-4 `stdio: ignore` hurts debuggability** (ref: `daemon.ts:236`). Proposal: the
   daemon appends a small JSONL log inside its runtime dir (0600), best-effort.
 - **R-5 Same-user trust boundary**: token + 0700 dir keep other users out, but any
@@ -597,28 +742,34 @@ Every discard logs and leaves a fresh identity — boot never fails
   non-Linux unix degrades the way safekill does (refuses rather than misbehaves,
   ours: `safekill.rs:37-47`).
 
-**Open questions**
+**Gate rulings (every open question resolved at review)**
 
-1. **Protocol version = 7 (binding R2)** vs starting a local lineage at 1: adopting 7
-   signals "wire-compatible number-space with v2" while our JSON adds the `read`
-   extension op and checkpoint bytes. The mismatch path already handles any skew
-   (§4.2). Confirm 7 at the gate.
-2. **`current[]` daemon-side + `reset-on-own`** vs v2's client-side map
-   (ref: `index.ts:139-140`): daemon-side preserves R1's single implementation but
-   makes selection state shared across a daemon's lifetime; with exclusive ownership
-   this is unobservable. Confirm.
-3. **`controller_changed` needs a machine producer**: extend `StreamEvent` with
-   `ControllerChanged{attachment_id, generation}` (a delta to the machine, not a
-   second machine) so observers learn of takeovers (ref: `daemon.ts:93-96`, `:115`);
-   `title_changed`/`foreground_process_changed` stay reserved no-producers. Size:
-   small; needed for wire parity. Approve the delta.
-4. **Replay transport** (R-2): inline-base64-in-`attached` (v2-faithful, capped) vs
-   chunked binary frames after `attached` (robust at buffer limit). Recommend
-   chunked; needs a gate decision because it deviates from ref bytes-on-wire.
-5. **`restore` op privilege**: restrict `restore{state}` to owner connections only
-   (post-`own` or the spawning client) so a bare token holder cannot inject fake
-   terminal history. Confirm restriction list (`own`, `restore`, `prepare_handoff`,
-   `shutdown` = owner-only; everything else = token).
-6. **Grace period value** for ownerless-childless daemon self-exit (R-3, proposed
-   60 s) and whether `list` from a non-owner client should keep such a daemon alive
-   (proposed: no — only owner connections and live terminals pin it).
+1. **Protocol version = 7 — CONFIRMED** (binding R2; gate accepted). The `read`
+   extension op and checkpoint bytes are additive; the mismatch path (§4.2) handles
+   any skew. Isolation from real v2 daemons is by root-path/sidecar disjointness,
+   not this number (§11.4).
+2. **`current[]` daemon-side + reset-on-own — CONFIRMED, AMENDED** (gate finding 3):
+   daemon-side preserves R1's single implementation (v2 keeps the map client-side,
+   ref: `index.ts:139-140`); `own` additionally clears every terminal's
+   `controller` field — dead attachment_ids would suppress resize generation bumps
+   (ours: `:1210-1214`); generation counters are NOT reset (monotonic forever —
+   rationale in §6 arm A).
+3. **`controller_changed` — APPROVED + ADDITION** (gate finding 4): the machine
+   gains `StreamEvent::ControllerChanged{attachment_id, generation}` emitted on
+   takeover (ours: `:968-973`), AND the WS handler gains the forwarding arm
+   (ours: `handlers/persistent_pty.rs:329-353` matches only 3 variants today; ref
+   forwards every non-output/non-resized event as JSON,
+   `handlers/persistent-pty.ts:146-147`). Both backends get the arm (§3).
+   `title_changed`/`foreground_process_changed` stay reserved no-producers.
+4. **Replay transport — RULED CHUNKED** (gate finding 5): threshold PINNED at
+   1 MiB (§3.2); inline-only cannot carry a full 8 MiB buffer (≈11.2 MiB base64 vs
+   the 8 MiB frame cap). Both arms tested (I15).
+5. **Op privileges — FIXED RULING** (gate finding 2): owner-only = `own`,
+   `restore`, `prepare_handoff`; **`shutdown` stays TOKEN-level** (ref:
+   `daemon.ts:340-341` plain one-shot; the discard path `:423` calls it from a
+   non-owner connection — owner-only shutdown would break every discard). Privilege
+   table in §4.3.
+6. **Grace period — RULED** (gate finding 11): predicate pinned in §5.1 —
+   continuously zero terminals AND no owner connection for 60 s, overridable at
+   spawn for tests; `list` (or any token-level op) from a non-owner client does NOT
+   keep the daemon alive — only owner connections and terminals pin it.
