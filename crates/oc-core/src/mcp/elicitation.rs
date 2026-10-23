@@ -57,7 +57,8 @@ pub enum ElicitationParams {
 pub struct ElicitationCreate<'a> {
     pub server: &'a str,
     pub params: ElicitationParams,
-}/// `ElicitationResult`.
+}
+/// `ElicitationResult`.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ElicitationResult {
     /// `"accept"` | `"cancel"`.
@@ -545,7 +546,9 @@ impl ClientElicitation {
     fn to_params(request: rmcp::model::ElicitRequestParams) -> ElicitationParams {
         match request {
             rmcp::model::ElicitRequestParams::FormElicitationParams {
-                message, requested_schema, ..
+                message,
+                requested_schema,
+                ..
             } => ElicitationParams::Form {
                 message,
                 requested_schema: serde_json::to_value(&requested_schema)
@@ -556,11 +559,7 @@ impl ClientElicitation {
                 url,
                 elicitation_id,
                 ..
-            } => ElicitationParams::Url {
-                message,
-                url,
-                elicitation_id: Some(elicitation_id),
-            },
+            } => ElicitationParams::Url { message, url, elicitation_id: Some(elicitation_id) },
             // rmcp only models the two current modes.
             _ => ElicitationParams::Form {
                 message: String::new(),
@@ -585,8 +584,7 @@ impl ClientElicitation {
             let value = match value {
                 ElicitationValue::String(text) => serde_json::Value::String(text),
                 ElicitationValue::Number(number) => serde_json::Number::from_f64(number)
-                    .map(serde_json::Value::Number)
-                    .unwrap_or(serde_json::Value::Null),
+                    .map_or(serde_json::Value::Null, serde_json::Value::Number),
                 ElicitationValue::Bool(flag) => serde_json::Value::Bool(flag),
                 // index.ts:289 — object answers map through `Array.from`.
                 ElicitationValue::Strings(items) => serde_json::Value::Array(
@@ -595,8 +593,7 @@ impl ClientElicitation {
             };
             content.insert(key, value);
         }
-        rmcp::model::ElicitResult::new(action)
-            .with_content(serde_json::Value::Object(content))
+        rmcp::model::ElicitResult::new(action).with_content(serde_json::Value::Object(content))
     }
 
     /// Handles one `elicitation/create` request: ask through the form
@@ -608,10 +605,8 @@ impl ClientElicitation {
         request: rmcp::model::ElicitRequestParams,
         ct: tokio_util::sync::CancellationToken,
     ) -> rmcp::model::ElicitResult {
-        let url_mode = matches!(
-            request,
-            rmcp::model::ElicitRequestParams::UrlElicitationParams { .. }
-        );
+        let url_mode =
+            matches!(request, rmcp::model::ElicitRequestParams::UrlElicitationParams { .. });
         let params = Self::to_params(request);
         // Inherent method by path — the `Arc` trait impl would otherwise
         // shadow it during method resolution.
@@ -629,9 +624,8 @@ impl ClientElicitation {
 
     /// Legacy `notifications/elicitation/complete` (client.ts:211-213):
     /// the payload's `elicitationId` settles the parked URL form.
-    pub fn complete_notification(&self, server: &str, params: Option<serde_json::Value>) {
+    pub fn complete_notification(&self, server: &str, params: Option<&serde_json::Value>) {
         let Some(id) = params
-            .as_ref()
             .and_then(|params| params.get("elicitationId"))
             .and_then(serde_json::Value::as_str)
         else {
