@@ -191,6 +191,31 @@ mod tests {
         assert!(!store.reconnecting_overlay_visible(15_001));
     }
 
+    /// The first-boot grace (app.tsx:1300-1314): a NEVER-transitioned
+    /// `Connecting` state (first boot / hung handshake — the only
+    /// anchor writer is the `set_connection` transition arm) must not
+    /// surface the scrim from frame 0 off the 0-init anchor.
+    /// Construction can't seed it (the clock signal starts at 0 and
+    /// only becomes wall time in the run loop), so the read site
+    /// treats 0 as "first observation": the anchor latches at the
+    /// first look and the 5 s grace runs from there.
+    #[test]
+    fn reconnecting_initial_grace_from_first_observation() {
+        let store = Store::new(Runtime::new());
+        // No `set_connection` call: the state stays the constructed
+        // `Connecting` and `connection_since` stays 0.
+        assert_eq!(store.connection(), crate::data::ConnectionState::Connecting);
+        assert_eq!(store.connection_since(), 0);
+        assert!(
+            !store.reconnecting_overlay_visible(20_000),
+            "frame 0 stays clean — the wall-derived `now` against the 0 anchor must not read as \
+             20 s elapsed"
+        );
+        assert_eq!(store.connection_since(), 20_000, "the first observation latches the anchor");
+        assert!(!store.reconnecting_overlay_visible(24_999), "still inside the 5 s grace");
+        assert!(store.reconnecting_overlay_visible(25_000), "5 s after the first observation");
+    }
+
     /// `StartupLoading` (startup-loading.tsx:42-46): 500 ms wait, 3 s
     /// hold after ready with the copy flip.
     #[test]

@@ -616,6 +616,12 @@ pub struct FakeLlm {
     pub interrupt_posts: Arc<Mutex<Vec<String>>>,
     /// SSE script played once, after the first prompt POST.
     script: Arc<Mutex<Option<Vec<ScriptEvent>>>>,
+    /// Lane E2's boot stretch: every request handled before this
+    /// deadline sleeps until it passes before its first response
+    /// byte — a deterministic "slow server at boot" for the
+    /// `StartupLoading` temporal gate (the deadline stays armed but
+    /// is inert once passed — later requests pass straight through).
+    boot_stretch_until: Arc<Mutex<Option<std::time::Instant>>>,
 }
 
 impl FakeLlm {
@@ -637,8 +643,10 @@ impl FakeLlm {
         let projects: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
         let terminals = Arc::new(TerminalFixture::new());
         let script: Arc<Mutex<Option<Vec<ScriptEvent>>>> = Arc::new(Mutex::new(None));
+        let boot_stretch_until: Arc<Mutex<Option<std::time::Instant>>> = Arc::new(Mutex::new(None));
         let flag = Arc::clone(&shutdown);
         let shared_script = Arc::clone(&script);
+        let shared_boot_stretch = Arc::clone(&boot_stretch_until);
         let shared_posts = Arc::clone(&prompt_posts);
         let shared_vcs = Arc::clone(&vcs);
         let shared_mcp = Arc::clone(&mcp);
@@ -658,6 +666,7 @@ impl FakeLlm {
                     Ok((socket, _)) => {
                         let sessions = sessions.clone();
                         let script = Arc::clone(&shared_script);
+                        let boot_stretch = Arc::clone(&shared_boot_stretch);
                         let posts = Arc::clone(&shared_posts);
                         let vcs = Arc::clone(&shared_vcs);
                         let mcp = Arc::clone(&shared_mcp);
@@ -675,6 +684,7 @@ impl FakeLlm {
                                 socket,
                                 &sessions,
                                 &script,
+                                &boot_stretch,
                                 &posts,
                                 &vcs,
                                 &mcp,
@@ -713,6 +723,7 @@ impl FakeLlm {
             projects,
             terminals,
             script,
+            boot_stretch_until,
         }
     }
 
@@ -769,6 +780,16 @@ impl FakeLlm {
         *self.script.lock().expect("script") = Some(script);
     }
 
+    /// Stretch boot (Lane E2's `StartupLoading` gate): every request
+    /// handled before `ms` after this call holds its response until
+    /// the deadline passes — the boot's server round-trips all land
+    /// late, so a boot-window overlay crosses its display thresholds
+    /// deterministically instead of riding boot-jitter luck.
+    pub fn arm_boot_stretch(&self, ms: u64) {
+        *self.boot_stretch_until.lock().expect("boot stretch") =
+            Some(std::time::Instant::now() + Duration::from_millis(ms));
+    }
+
     pub fn stop(&self) {
         self.shutdown.store(true, Ordering::SeqCst);
     }
@@ -780,6 +801,7 @@ fn handle(
     mut socket: std::net::TcpStream,
     sessions: &[FakeSession],
     script: &Arc<Mutex<Option<Vec<ScriptEvent>>>>,
+    boot_stretch_until: &Arc<Mutex<Option<std::time::Instant>>>,
     prompt_posts: &Arc<AtomicUsize>,
     vcs: &Arc<AtomicBool>,
     mcp: &Arc<AtomicBool>,
@@ -810,6 +832,15 @@ fn handle(
         }
     }
     socket.set_read_timeout(Some(Duration::from_millis(200))).ok();
+    // Lane E2's boot stretch: hold this response until the armed
+    // deadline passes (the Option stays Some but is inert once the
+    // deadline is past — later requests pass straight through).
+    if let Some(deadline) = *boot_stretch_until.lock().expect("boot stretch") {
+        let now = std::time::Instant::now();
+        if now < deadline {
+            std::thread::sleep(deadline - now);
+        }
+    }
     let path = head.split_whitespace().nth(1).unwrap_or_default().to_owned();
     let method = head.split_whitespace().next().unwrap_or_default().to_uppercase();
     // TUI-TD15's knock-on: the startup prompt's resolved model
