@@ -27,3 +27,6 @@ parking_lot = "0.12"
 [dev-dependencies]
 serde = { workspace = true }
 tempfile = "3"
+futures = "0.3"
+libc = "0.2"
+parking_lot = "0.12"
