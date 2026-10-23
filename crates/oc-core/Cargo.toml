@@ -38,10 +38,16 @@ ring = "0.17"
 base64 = "0.22"
 regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+# rmcp 3.7's built-in StreamableHttpClient impl is compiled against reqwest
+# 0.13; the MCP transport needs that exact client type while the rest of the
+# workspace stays on 0.12 (both wrap the same `http` crate, so header types
+# interoperate). TLS rides 0.13's `rustls` (aws-lc-rs + platform verifier —
+# the only rustls provider line 0.13 ships).
+reqwest13 = { package = "reqwest", version = "0.13.5", default-features = false, features = ["rustls", "json", "stream"] }
 tree-sitter = "0.25"
 tree-sitter-bash = "0.25"
 tree-sitter-powershell = "0.26"
-rmcp = { version = "0.5", features = ["client", "transport-child-process", "transport-streamable-http-client", "auth"] }
+rmcp = { version = "3.7.0", features = ["client", "transport-child-process", "transport-streamable-http-client", "transport-streamable-http-client-reqwest", "auth", "elicitation"] }
 portable-pty = "0.8"
 urlencoding = "2"
 libc = "0.2"
