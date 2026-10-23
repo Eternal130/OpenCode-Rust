@@ -186,7 +186,7 @@ jobs:
         # warns "ignoring unknown configuration key: profile.default.env"
         # (.config/nextest.toml) — the profile env table does not apply
         # on runners, so enforce it here.
-        run: cargo nextest run --workspace --locked --no-fail-fast --retries 2 -E 'not (test(mini_pty) or test(pty_boot) or test(pty_tabs) or test(pty_interactions) or test(pty_fuzz) or test(vt_hover) or test(vt_temporal) or binary(pty_daily) or binary(pty_form) or binary(pty_permission))'
+        run: cargo nextest run --workspace --locked --no-fail-fast --retries 2 -E 'not (test(mini_pty) or test(pty_boot) or test(pty_tabs) or test(pty_interactions) or test(pty_fuzz) or test(vt_hover) or test(vt_temporal) or test(pty_d3) or binary(pty_daily) or binary(pty_form) or binary(pty_permission))'
         env:
           OPENCODE_DISABLE_BUN_DOWNLOAD: "1"
 
