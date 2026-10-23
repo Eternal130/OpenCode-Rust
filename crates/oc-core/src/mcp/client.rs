@@ -18,15 +18,13 @@
 //!
 //! # Deviations from v2 (rmcp 3.7.0 SDK constraints)
 //!
-//! - rmcp 3.7 CAN dispatch `elicitation/create` (the `elicitation`
-//!   feature is enabled), but wiring the capability into the wire handler
-//!   is deliberately deferred (lane R10b); the full elicitation logic
-//!   (JSON-Schema → form conversion, URL legacy mode, completion
-//!   notifications) lives in [`super::elicitation`]. `roots/list`
-//!   **is** declared and answered with the location directory.
-//! - rmcp 3.7 models `resource_link` content blocks; v2's
-//!   `toCallToolResult` switch has no case for them, so they flatten to
-//!   nothing (embedded resources still flatten to text/blob or URI).
+//! - **Elicitation capability shape** — v2 advertises
+//!   `elicitation: { form: { applyDefaults: true }, url: {} }`
+//!   (client.ts:188). rmcp's `FormElicitationCapability` models only
+//!   `schemaValidation`, so this port advertises the same structure with
+//!   both sub-capabilities present but the `applyDefaults` hint omitted:
+//!   `elicitation: { form: {}, url: {} }`. Behavioral parity holds (the
+//!   converted form fields do carry schema `default` values).
 //! - The negotiated `Mcp-Session-Id` lives inside rmcp's transport worker
 //!   and is not exposed, so expiry classification keys off the HTTP status
 //!   carried in the error chain (remote connections only — a stdio server
@@ -35,16 +33,24 @@
 //!   transport's own transparent 404 session recovery (new in 3.7,
 //!   `reinit_on_expired_session`) is disabled so expiry still surfaces to
 //!   the registry exactly like v2.
-//! - Protocol negotiation: rmcp negotiates versions internally; the
-//!   client pins its advertised version to `2025-03-26` (what rmcp 0.5 —
-//!   this port's original SDK — sent) and `config.protocol` stays
-//!   advisory (tracked for the SDK swap).
+//! - Protocol negotiation: v2.0.24's TS client offers `2025-11-25`
+//!   (its `SUPPORTED_PROTOCOL_VERSIONS[0]`, the legacy initialize
+//!   handshake); the pin matches that offered version, and rmcp's own
+//!   server-answer acceptance semantics decide the negotiated revision.
+//!   `config.protocol` stays advisory (tracked for the SDK swap).
 //! - Requests ride `send_cancellable_request` directly (not rmcp's
 //!   `call_tool`/`get_prompt`/`read_resource` convenience wrappers): the
 //!   wrappers neither accept per-request timeouts (catalog 30s / execution
 //!   12h here) nor preserve the single-round MRTR semantics v2 has, and
 //!   they engage the 3.7 response cache (SEP-2549) — all behavior this
 //!   port must keep unchanged.
+//! - Modern-era url elicitations (`tools/call` answering
+//!   [`rmcp::model::ServerResult::InputRequiredResult`], 2026-07-28's
+//!   retry-with-input round) are not surfaced: the raw-request path maps
+//!   such answers to the opaque `unexpected tools/call response` error.
+//!   Single-round parity keeps this as-is; the legacy
+//!   `elicitation/create` flow (the only one v2.0.24-era servers use with
+//!   this client) is fully wired.
 
 // rmcp request constructors use `Default::default()` for their const-string
 // method markers; the pedantic `default_constructed_unit_structs`-style lints
@@ -146,8 +152,9 @@ pub struct CallToolResult {
 }
 
 /// `toCallToolResult` (client.ts:399-418): text stays text, image/audio
-/// become media, embedded resources flatten to their text/blob (or URI).
-/// `resource_link` parts are skipped — v2's switch has no case for them.
+/// become media, `resource_link` flattens to its URI as text
+/// (client.ts:407), embedded resources flatten to their text/blob (or
+/// URI).
 #[must_use]
 pub fn to_call_tool_result(result: &rmcp::model::CallToolResult) -> CallToolResult {
     let mut content = Vec::new();
@@ -168,6 +175,9 @@ pub fn to_call_tool_result(result: &rmcp::model::CallToolResult) -> CallToolResu
                     mime_type: audio.mime_type.clone(),
                 });
             }
+            ContentBlock::ResourceLink(link) => {
+                content.push(CallToolContent::Text { text: link.uri.clone() });
+            }
             ContentBlock::Resource(resource) => match &resource.resource {
                 rmcp::model::ResourceContents::TextResourceContents { text, .. } => {
                     content.push(CallToolContent::Text { text: text.clone() });
@@ -186,7 +196,7 @@ pub fn to_call_tool_result(result: &rmcp::model::CallToolResult) -> CallToolResu
                 },
                 _ => {}
             },
-            // `resource_link` (no v2 mapping) and future block kinds.
+            // Future block kinds.
             _ => {}
         }
     }
@@ -300,12 +310,17 @@ pub struct Changed {
 }
 
 /// The rmcp client handler: answers `roots/list` with the location
-/// directory and forwards list-changed notifications.
+/// directory, forwards list-changed notifications, and dispatches
+/// `elicitation/create` (+ legacy
+/// `notifications/elicitation/complete`) to the elicitation handler
+/// (client.ts:206-214).
 struct Handler {
     capabilities: ClientCapabilities,
     implementation: Implementation,
     roots_directory: String,
     changed: Arc<Mutex<Changed>>,
+    server: Arc<str>,
+    elicitation: Option<Arc<super::elicitation::ClientElicitation>>,
 }
 
 impl ClientHandler for Handler {
@@ -320,6 +335,41 @@ impl ClientHandler for Handler {
         std::future::ready(Ok(rmcp::model::ListRootsResult::new(vec![rmcp::model::Root::new(
             path_to_file_url(&self.roots_directory),
         )])))
+    }
+
+    /// `elicitation/create` (client.ts:208-210): the form ask races the
+    /// request's abort signal; the elicitation module owns the mapping.
+    fn create_elicitation(
+        &self,
+        request: rmcp::model::ElicitRequestParams,
+        context: RequestContext<RoleClient>,
+    ) -> impl Future<Output = Result<rmcp::model::ElicitResult, rmcp::ErrorData>> + Send + '_ {
+        let server = Arc::clone(&self.server);
+        let Some(elicitation) = self.elicitation.as_ref().map(Arc::clone) else {
+            // The capability was not advertised; rmcp's default decline
+            // applies. Unreachable for well-behaved servers.
+            return std::future::ready(Ok(rmcp::model::ElicitResult::new(
+                rmcp::model::ElicitationAction::Decline,
+            )))
+            .left_future();
+        };
+        async move { Ok(elicitation.handle(&server, request, context.ct).await) }.right_future()
+    }
+
+    /// Legacy `notifications/elicitation/complete` rides rmcp's custom
+    /// notification path (the SDK models no typed variant; client.ts
+    /// registers it as a raw handler).
+    fn on_custom_notification(
+        &self,
+        notification: rmcp::model::CustomNotification,
+        _context: NotificationContext<RoleClient>,
+    ) -> impl Future<Output = ()> + Send + '_ {
+        if notification.method == "notifications/elicitation/complete" {
+            if let Some(elicitation) = &self.elicitation {
+                elicitation.complete_notification(&self.server, notification.params.as_ref());
+            }
+        }
+        std::future::ready(())
     }
 
     fn on_tool_list_changed(
@@ -353,11 +403,12 @@ impl ClientHandler for Handler {
     }
 
     fn get_info(&self) -> rmcp::model::ClientConfig {
-        // rmcp 0.5's `ProtocolVersion::default()` (its LATEST) advertised
-        // `2025-03-26`; rmcp 3.7's default is `2026-07-28`, which would
-        // flip the negotiated protocol. Pin the 0.5 wire behavior.
+        // v2.0.24's TS client offers `2025-11-25` — its
+        // SUPPORTED_PROTOCOL_VERSIONS[0] over the legacy initialize
+        // handshake. rmcp's own acceptance rules govern the negotiated
+        // revision; this pins only the offered version.
         InitializeRequestParams::new(self.capabilities.clone(), self.implementation.clone())
-            .with_protocol_version(ProtocolVersion::V_2025_03_26)
+            .with_protocol_version(ProtocolVersion::V_2025_11_25)
     }
 }
 
@@ -753,6 +804,10 @@ pub struct ConnectInput<'a> {
     pub directory: &'a str,
     /// Bearer token from the credential-store seam (remote only).
     pub bearer: Option<String>,
+    /// The elicitation handler (v2's optional `elicitation` connect
+    /// argument): present ⇒ the client advertises the elicitation
+    /// capability and answers `elicitation/create`.
+    pub elicitation: Option<Arc<super::elicitation::ClientElicitation>>,
 }
 
 /// Typed connect failures (`NeedsAuthError` / `ConnectError`).
@@ -1045,16 +1100,37 @@ where
     E: std::error::Error + Send + Sync + 'static,
 {
     let changed = Arc::new(Mutex::new(Changed::default()));
-    let handler = Handler {
-        // v2 declares roots alongside elicitation (and for legacy servers
-        // that refuse to run without one); rmcp always answers roots/list,
-        // so declare unconditionally. (Roots are SEP-2577-deprecated in
-        // rmcp 3.x; declaring stays the pre-existing behavior.)
+    // v2 declares roots alongside elicitation (and for legacy servers
+    // that refuse to run without one); rmcp always answers roots/list,
+    // so declare unconditionally. (Roots are SEP-2577-deprecated in
+    // rmcp 3.x; declaring stays the pre-existing behavior.)
+    //
+    // client.ts:188 — `elicitation: { form: {...}, url: {} }`, both
+    // sub-capabilities present whenever the handler is. rmcp's form
+    // sub-capability models only `schemaValidation`, so the
+    // `applyDefaults: true` hint v2 sends cannot ride it (see the
+    // module deviations).
+    let capabilities = if input.elicitation.is_some() {
         #[allow(deprecated)]
-        capabilities: ClientCapabilities::builder().enable_roots().build(),
+        ClientCapabilities::builder()
+            .enable_roots()
+            .enable_elicitation_with(
+                rmcp::model::ElicitationCapability::new()
+                    .with_form(rmcp::model::FormElicitationCapability::new())
+                    .with_url(rmcp::model::UrlElicitationCapability::new()),
+            )
+            .build()
+    } else {
+        #[allow(deprecated)]
+        ClientCapabilities::builder().enable_roots().build()
+    };
+    let handler = Handler {
+        capabilities,
         implementation: rmcp::model::Implementation::new("opencode", "unknown"),
         roots_directory: input.directory.to_string(),
         changed: Arc::clone(&changed),
+        server: Arc::from(input.server),
+        elicitation: input.elicitation.clone(),
     };
     let startup = startup_timeout(input.config);
     let outcome = tokio::time::timeout(startup, handler.serve(transport)).await;
