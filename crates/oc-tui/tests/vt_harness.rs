@@ -619,8 +619,8 @@ pub struct FakeLlm {
     /// Lane E2's boot stretch: every request handled before this
     /// deadline sleeps until it passes before its first response
     /// byte — a deterministic "slow server at boot" for the
-    /// `StartupLoading` temporal gate (the stretch self-clears once
-    /// the deadline passes).
+    /// `StartupLoading` temporal gate (the deadline stays armed but
+    /// is inert once passed — later requests pass straight through).
     boot_stretch_until: Arc<Mutex<Option<std::time::Instant>>>,
 }
 
@@ -833,7 +833,8 @@ fn handle(
     }
     socket.set_read_timeout(Some(Duration::from_millis(200))).ok();
     // Lane E2's boot stretch: hold this response until the armed
-    // deadline passes (no-op once past — the stretch self-clears).
+    // deadline passes (the Option stays Some but is inert once the
+    // deadline is past — later requests pass straight through).
     if let Some(deadline) = *boot_stretch_until.lock().expect("boot stretch") {
         let now = std::time::Instant::now();
         if now < deadline {

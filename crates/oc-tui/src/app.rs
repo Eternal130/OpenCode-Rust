@@ -6729,12 +6729,12 @@ pub async fn run_with_size(
     // pill armed) and the boot future below is polled once per pass
     // on the loop's existing tick — no extra thread, task, or wait
     // loop. The seams attach the moment it resolves (top of the
-    // loop); `set_plugins_ready()` then fires only when plugin boot
-    // ACTUALLY completed AND the server handshake landed (see the
-    // SURF-2 flip after the ingest drain). `None` = no plugins
-    // configured (or no bun — the graceful-disable logged once); the
-    // loop then skips the per-pump drain and only waits for the
-    // handshake.
+    // loop); `set_plugins_ready()` then fires when the future
+    // resolves on EITHER arm — success or failure, the ref's `.then`
+    // and `.catch` alike (see the SURF-2 flip after the ingest
+    // drain). `None` = no plugins configured (or no bun — the
+    // graceful-disable logged once); the loop then skips the
+    // per-pump drain entirely.
     let config_root = oc_util::global_roots::resolve().config;
     let boot_cwd = std::path::PathBuf::from(&directory);
     let plugins_configured = {
@@ -6853,21 +6853,21 @@ pub async fn run_with_size(
         }
         // SURF-2 (lane E2): plugins ready — `set_plugins_ready()`
         // flips any live StartupLoading pill to "Finishing startup…"
-        // and starts its 3 s hold (startup-loading.tsx:13-31). It now
-        // fires only when plugin boot ACTUALLY completed (the attach
-        // at the top of the loop) AND the server handshake landed —
-        // `Ingest::Connected` through this very channel, the same
-        // event that carries the ref's plugin-inventory sync
-        // (`server.connected` → syncServerPlugins,
-        // plugin/context.tsx:570). That mirrors the ref's timing —
-        // render from mount with the pill armed, flip ready once boot
-        // really finishes — so a fast boot clears both gates well
-        // under the pill's 500 ms display threshold (it never shows)
-        // while a slow plugin boot or slow server shows it, like v2.
-        if plugins_boot_done
-            && !plugins_ready_fired
-            && app.store.connection() == crate::data::ConnectionState::Connected
-        {
+        // and starts its 3 s hold (startup-loading.tsx:13-31). Like
+        // the ref's plugin-boot future — whose `.then` AND `.catch`
+        // BOTH settle `ready` (plugin/context.tsx:532-535) — it fires
+        // when the LOCAL reconcile settles: the boot future resolved
+        // at the top of the loop, on either arm (a runtime adopted,
+        // or the failure/no-plugins `None`). The server handshake
+        // does NOT gate it: `Ingest::Connected` only syncs the plugin
+        // inventory (the ref's `server.connected` →
+        // syncServerPlugins, plugin/context.tsx:570), so a
+        // never-connecting server still resolves the pill (it flips
+        // and unmounts per the 3 s hold) while the Reconnecting
+        // overlay persists above it. A fast boot still clears the
+        // gate well under the pill's 500 ms display threshold (it
+        // never shows); a slow boot shows it, like v2.
+        if plugins_boot_done && !plugins_ready_fired {
             plugins_ready_fired = true;
             app.store.set_plugins_ready();
         }
