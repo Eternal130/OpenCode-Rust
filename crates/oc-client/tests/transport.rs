@@ -360,29 +360,67 @@ async fn binary_request_and_response() {
     );
 }
 
+/// Blocks the (mock-server) thread until `ready()` holds, polling every 1ms
+/// under a hard `deadline`. Bounded readiness sync for real-socket tests —
+/// replaces naked fixed sleeps.
+fn wait_until(deadline: Duration, ready: impl Fn() -> bool) -> bool {
+    let start = std::time::Instant::now();
+    while !ready() {
+        if start.elapsed() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    true
+}
+
 #[tokio::test]
 async fn sse_decoding_multi_data_heartbeats_and_crlf() {
-    let mock = spawn_mock(|_, _, stream| {
-        stream.write_all(
-            b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n",
-        )?;
-        stream.write_all(b"data: {\"a\":\r\n")?;
-        std::thread::sleep(Duration::from_millis(30));
-        stream.write_all(b"data: 1}\r\n\r\n")?;
-        stream.write_all(b": heartbeat\n\n")?;
-        stream.write_all(b"id: 7\nevent: message.updated\ndata: 42\n\n")?;
-        std::thread::sleep(Duration::from_millis(30));
-        Ok(())
-    });
-    let c = client(&mock.url());
+    // Deterministic mid-event chunk split (closes GAPS §1.1 "oc-client sse
+    // test timing sensitivity"): the fixed 30ms sleeps only *hoped* TCP
+    // delivered the halves as separate chunks. `onActivity` fires exactly
+    // when the decoder consumes a chunk, so the second half is written only
+    // after the first was observed as chunk #1 — the event is then
+    // guaranteed to span two chunks, with no sleeps.
     let activity = Arc::new(AtomicUsize::new(0));
+    let mock = {
+        let activity = Arc::clone(&activity);
+        spawn_mock(move |_, _, stream| {
+            stream.set_nodelay(true).ok();
+            stream.write_all(
+                b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n",
+            )?;
+            // Half an event: a complete `data:` line, but no blank line yet.
+            stream.write_all(b"data: {\"a\":\r\n")?;
+            // Readiness sync (bounded): fail loudly rather than silently
+            // weaken the cross-chunk characterization if the decoder never
+            // consumes the partial within the deadline.
+            if !wait_until(Duration::from_secs(2), || activity.load(Ordering::SeqCst) >= 1) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "decoder did not consume the first half-event chunk within 2s",
+                ));
+            }
+            // The decoder buffered the partial WITHOUT emitting (frame 1 can
+            // only match below if both data lines were joined) — the rest
+            // must now arrive as a separate chunk.
+            stream.write_all(b"data: 1}\r\n\r\n")?;
+            stream.write_all(b": heartbeat\n\n")?;
+            stream.write_all(b"id: 7\nevent: message.updated\ndata: 42\n\n")
+        })
+    };
+    let c = client(&mock.url());
     let mut stream = c.event().subscribe().await.expect("sse").with_on_activity({
         let activity = Arc::clone(&activity);
         move || {
             activity.fetch_add(1, Ordering::SeqCst);
         }
     });
-    let first = stream.next_frame().await.expect("frame 1").expect("some");
+    let first = stream
+        .next_frame()
+        .await
+        .expect("frame 1 (or half-event readiness sync timed out)")
+        .expect("some");
     assert_eq!(first.data, "{\"a\":\n1}");
     let second = stream.next_frame().await.expect("frame 2").expect("some");
     assert_eq!(second.data, "42");
