@@ -258,6 +258,12 @@ jobs:
           # the built binary knows which tag it came from and can
           # compare itself against the releases feed.
           OC_RELEASE_TAG: ${{ github.ref_name }}
+          # windows-latest ships NO NASM, and non-FIPS aws-lc-sys on
+          # MSVC hard-fails its asm step without it — the prebuilt-
+          # NASM path downloads the pinned prebuilt objects instead.
+          # ("0" on unix legs: aws-lc-sys parses a leading 0 as
+          # disabled, and the flag only affects MSVC x86_64 anyway.)
+          AWS_LC_SYS_PREBUILT_NASM: ${{ runner.os == 'Windows' && '1' || '0' }}
           # OPENCODE_APP_ARCHIVE: set by the wire step above when
           # web-assets succeeded; unset = API-only binary (the skip_web
           # hatch) — oc-server's build.rs stages it for compile-time
