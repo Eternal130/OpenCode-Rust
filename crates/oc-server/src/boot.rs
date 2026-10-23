@@ -272,7 +272,7 @@ pub async fn boot_and_serve(options: &BootOptions) -> io::Result<ServeHandle> {
     // var is consumed FIRST (children must not inherit it), invalid
     // payloads warn and start fresh, and every adoption failure inside
     // keeps the boot green — terminals are best-effort.
-    adopt_inherited_pty(&mut app_state, &options.data_root.join("pty"));
+    Box::pin(adopt_inherited_pty(&mut app_state, &options.data_root.join("pty"))).await;
     // R-04: populate the web-UI asset store (runtime `OPENCODE_APP_ASSETS`
     // override over the build-time embedded archive; absent both → empty,
     // API-only). A broken override fails boot loudly.
@@ -480,7 +480,8 @@ pub fn resolve_hostname(raw: &str) -> io::Result<IpAddr> {
 /// will start fresh" and boot fresh — `lifecycle::decode_inherited_handoff`),
 /// claim the runtime root, and adopt (`daemon.ts:403-428`). Never fails
 /// the boot; the adoption outcome is logged.
-pub fn adopt_inherited_pty(state: &mut crate::state::AppState, pty_root: &std::path::Path) {
+#[allow(clippy::large_futures)] // frontend adopt futures embed transport exchange buffers
+pub async fn adopt_inherited_pty(state: &mut crate::state::AppState, pty_root: &std::path::Path) {
     let inherited = std::env::var("OPENCODE_PTY_HANDOFF").ok();
     std::env::remove_var("OPENCODE_PTY_HANDOFF");
     let decoded = crate::lifecycle::decode_inherited_handoff(inherited.as_deref());
@@ -493,7 +494,7 @@ pub fn adopt_inherited_pty(state: &mut crate::state::AppState, pty_root: &std::p
         eprintln!("Ignoring invalid PTY restart handoff; persistent terminals will start fresh");
         return;
     };
-    match state.persistent_pty.adopt(&handoff) {
+    match state.persistent_pty.adopt(&handoff).await {
         oc_core::persistent_pty::Adoption::Adopted { restored, directory } => {
             eprintln!(
                 "Adopted persistent terminals from restart handoff: {restored} restored at {directory}"
@@ -700,6 +701,7 @@ mod tests {
     /// (removed from the environment even when it decodes), a staged
     /// handoff from a "previous server" is adopted with its terminal
     /// state restored, and garbage payloads boot fresh.
+    #[allow(clippy::large_futures)] // the scenario drives the full frontend surface
     #[tokio::test]
     async fn boot_adopts_inherited_pty_handoff() {
         use oc_core::persistent_pty::PersistentPty;
@@ -763,15 +765,21 @@ mod tests {
             Arc::new(UuidV4IdGen),
             Arc::new(SystemClock),
         );
-        adopt_inherited_pty(&mut state, &pty_root);
+        // Hermetic determinism (R3): this test exercises the machine's
+        // in-process adoption ladder; pin the escape-hatch backend
+        // explicitly instead of racing the process-global flag latch.
+        state.persistent_pty = oc_core::persistent_pty::frontend::Frontend::in_process(
+            state.engine.bus.as_ref().clone(),
+        );
+        adopt_inherited_pty(&mut state, &pty_root).await;
         assert!(
             std::env::var("OPENCODE_PTY_HANDOFF").is_err(),
             "the env var is consumed at boot (children never inherit it)"
         );
-        let restored = state.persistent_pty.get(&info.id).expect("terminal restored");
+        let restored = state.persistent_pty.get(&info.id).await.expect("terminal restored");
         assert_eq!(restored.title, "boot-terminal");
         assert_eq!(restored.status, oc_core::pty::Status::Exited);
-        let listed = state.persistent_pty.list(None).expect("list");
+        let listed = state.persistent_pty.list(None).await.expect("list");
         assert_eq!(listed.len(), 1);
 
         // Garbage payloads warn and boot fresh (list stays empty).
@@ -786,8 +794,8 @@ mod tests {
             Arc::new(UuidV4IdGen),
             Arc::new(SystemClock),
         );
-        adopt_inherited_pty(&mut fresh, &tmp2.path().join("pty"));
-        assert_eq!(fresh.persistent_pty.list(None).expect("list").len(), 0);
+        adopt_inherited_pty(&mut fresh, &tmp2.path().join("pty")).await;
+        assert_eq!(fresh.persistent_pty.list(None).await.expect("list").len(), 0);
         assert!(
             fresh.persistent_pty.runtime_dir().is_some_and(|dir| dir.starts_with(
                 tmp2.path().join("pty").to_str().expect("utf8")

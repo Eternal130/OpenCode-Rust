@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use oc_core::persistent_pty::PersistentPty;
+use oc_core::persistent_pty::frontend::Frontend;
 use oc_core::pty::PtyService;
 
 use super::common::SharedState;
@@ -16,7 +16,7 @@ use super::common::SharedState;
 /// The PTY machines for a server (AppState-backed, bus-wired).
 pub struct PtyShared {
     pub pty: PtyService,
-    pub persistent: PersistentPty,
+    pub persistent: Frontend,
 }
 
 /// The server's PTY machines (a borrowed view over the state fields).

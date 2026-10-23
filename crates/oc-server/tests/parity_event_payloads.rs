@@ -27,6 +27,9 @@ struct TestServer {
 }
 
 async fn boot() -> TestServer {
+    // Hermetic (R3): persistent-terminal tests pin the in-process
+    // backend — the one-release OC_PTY_DAEMON=0 escape hatch.
+    std::env::set_var("OC_PTY_DAEMON", "0");
     let dir = tempfile::tempdir().expect("tempdir");
     let data = tempfile::tempdir().expect("data tempdir");
     let workspace = dir.path().to_path_buf();
