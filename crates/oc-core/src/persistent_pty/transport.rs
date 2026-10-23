@@ -550,76 +550,87 @@ impl Transport {
             .map_err(|_| TransportError::new(ErrorKind::Protocol, "encoding opencode-pty claim"))?;
         let _ = commands.send(OwnerCommand::Bytes(frame));
 
-        // Await `owned` (or the rejection) with the claim timeout.
+        // Await `owned` (or the rejection) with the claim timeout. The
+        // decoder AND every frame decoded in the same read survive the
+        // claim: they are handed to the owner reader below, so a
+        // `bus_event` coalesced with `owned` in one write is processed,
+        // never dropped (F2).
         let deadline = Instant::now() + REQUEST_TIMEOUT;
         let mut decoder = FrameDecoder::new();
         let mut chunk = [0u8; 16 * 1024];
+        let mut pending: std::collections::VecDeque<Vec<u8>> = std::collections::VecDeque::new();
         let mut claimed = false;
         while !claimed {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                let _ = commands.send(OwnerCommand::Close);
-                return Err(TransportError::new(
-                    ErrorKind::Connect,
-                    "PTY ownership claim timed out",
-                ));
-            }
-            let read = tokio::time::timeout(remaining, read_half.read(&mut chunk)).await;
-            let read = match read {
-                Err(_) => {
+            if pending.is_empty() {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
                     let _ = commands.send(OwnerCommand::Close);
                     return Err(TransportError::new(
                         ErrorKind::Connect,
                         "PTY ownership claim timed out",
                     ));
                 }
-                Ok(Err(_) | Ok(0)) => {
-                    let _ = commands.send(OwnerCommand::Close);
-                    return Err(TransportError::new(
-                        ErrorKind::Connect,
-                        "PTY daemon closed its ownership connection",
-                    ));
-                }
-                Ok(Ok(read)) => read,
-            };
-            let frames = decoder.feed(&chunk[..read]).map_err(|_| {
-                TransportError::new(ErrorKind::Protocol, "opencode-pty framing error")
-            })?;
-            if let Some(frame) = frames.into_iter().next() {
-                if frame.first() == Some(&0x00) {
-                    let _ = commands.send(OwnerCommand::Close);
-                    return Err(TransportError::new(
-                        ErrorKind::Protocol,
-                        "unexpected binary frame from opencode-pty",
-                    ));
-                }
-                match serde_json::from_slice::<WireResponse>(&frame) {
-                    Ok(WireResponse::Owned) => {
-                        claimed = true;
-                    }
-                    Ok(WireResponse::Error { message }) => {
-                        let _ = commands.send(OwnerCommand::Close);
-                        let kind = match message.as_str() {
-                            "authentication failed" | "daemon is owned" => ErrorKind::Registration,
-                            other if other.starts_with("PTY restart") => ErrorKind::Registration,
-                            _ => ErrorKind::Response,
-                        };
-                        return Err(TransportError { kind, message });
-                    }
-                    Ok(_) => {
-                        let _ = commands.send(OwnerCommand::Close);
-                        return Err(TransportError::new(
-                            ErrorKind::Protocol,
-                            "PTY daemon does not support server ownership",
-                        ));
-                    }
+                let read = tokio::time::timeout(remaining, read_half.read(&mut chunk)).await;
+                let read = match read {
                     Err(_) => {
                         let _ = commands.send(OwnerCommand::Close);
                         return Err(TransportError::new(
-                            ErrorKind::Protocol,
-                            "opencode-pty response undecodable",
+                            ErrorKind::Connect,
+                            "PTY ownership claim timed out",
                         ));
                     }
+                    Ok(Err(_) | Ok(0)) => {
+                        let _ = commands.send(OwnerCommand::Close);
+                        return Err(TransportError::new(
+                            ErrorKind::Connect,
+                            "PTY daemon closed its ownership connection",
+                        ));
+                    }
+                    Ok(Ok(read)) => read,
+                };
+                let frames = decoder.feed(&chunk[..read]).map_err(|_| {
+                    TransportError::new(ErrorKind::Protocol, "opencode-pty framing error")
+                })?;
+                pending.extend(frames);
+                if pending.is_empty() {
+                    // A partial frame — the decoder is buffering; read on.
+                    continue;
+                }
+            }
+            let Some(frame) = pending.pop_front() else { continue };
+            if frame.first() == Some(&0x00) {
+                let _ = commands.send(OwnerCommand::Close);
+                return Err(TransportError::new(
+                    ErrorKind::Protocol,
+                    "unexpected binary frame from opencode-pty",
+                ));
+            }
+            match serde_json::from_slice::<WireResponse>(&frame) {
+                Ok(WireResponse::Owned) => {
+                    claimed = true;
+                }
+                Ok(WireResponse::Error { message }) => {
+                    let _ = commands.send(OwnerCommand::Close);
+                    let kind = match message.as_str() {
+                        "authentication failed" | "daemon is owned" => ErrorKind::Registration,
+                        other if other.starts_with("PTY restart") => ErrorKind::Registration,
+                        _ => ErrorKind::Response,
+                    };
+                    return Err(TransportError { kind, message });
+                }
+                Ok(_) => {
+                    let _ = commands.send(OwnerCommand::Close);
+                    return Err(TransportError::new(
+                        ErrorKind::Protocol,
+                        "PTY daemon does not support server ownership",
+                    ));
+                }
+                Err(_) => {
+                    let _ = commands.send(OwnerCommand::Close);
+                    return Err(TransportError::new(
+                        ErrorKind::Protocol,
+                        "opencode-pty response undecodable",
+                    ));
                 }
             }
         }
@@ -634,7 +645,9 @@ impl Transport {
             exchange: Arc::new(ExchangeSlot(Mutex::new(None))),
             shared: Arc::clone(&self.shared),
         });
-        tokio::spawn(owner_reader(read_half, Arc::clone(&ctx)));
+        // The claim's decoder state + leftover frames (everything
+        // coalesced with `owned`) carry into the reader (F2).
+        tokio::spawn(owner_reader(read_half, Arc::clone(&ctx), decoder, pending));
         Ok(OwnerConn { epoch, commands, exchange: Arc::clone(&ctx.exchange) })
     }
 
@@ -1016,30 +1029,30 @@ impl Transport {
             Ok(Err(error)) => return Err(error),
             Ok(Ok(frame)) => frame,
         };
-        let attached = if attached.first() == Some(&0x00) {
+        if attached.first() == Some(&0x00) {
             return Err(TransportError::new(
                 ErrorKind::Protocol,
                 "unexpected binary frame from opencode-pty",
             ));
-        } else {
-            match serde_json::from_slice::<WireResponse>(&attached) {
-                Ok(WireResponse::Error { message }) => {
-                    return Err(TransportError::wire_error(&message))
-                }
-                Ok(WireResponse::Attached { .. }) => {
-                    serde_json::from_slice(&attached).map_err(|_| {
-                        TransportError::new(
-                            ErrorKind::Protocol,
-                            "opencode-pty response undecodable",
-                        )
-                    })?
-                }
-                _ => {
-                    return Err(TransportError::new(
-                        ErrorKind::Protocol,
-                        "unexpected opencode-pty response",
-                    ));
-                }
+        }
+        // Single parse: match the response once and bind the `Attached`
+        // value (no second serde round-trip).
+        let attached = match serde_json::from_slice::<WireResponse>(&attached) {
+            Ok(WireResponse::Error { message }) => {
+                return Err(TransportError::wire_error(&message))
+            }
+            Ok(response @ WireResponse::Attached { .. }) => response,
+            Ok(_) => {
+                return Err(TransportError::new(
+                    ErrorKind::Protocol,
+                    "unexpected opencode-pty response",
+                ))
+            }
+            Err(_) => {
+                return Err(TransportError::new(
+                    ErrorKind::Protocol,
+                    "opencode-pty response undecodable",
+                ))
             }
         };
         let WireResponse::Attached {
@@ -1263,6 +1276,14 @@ impl Transport {
                             "PTY restart daemon changed" => AdoptionError::changed(),
                             _ => AdoptionError::unreachable(),
                         };
+                        // F3 (intentional): claim failure AFTER migration
+                        // does NOT signal the found daemon. The runtime
+                        // files already moved to `target`, so the
+                        // discard's discover over the OLD directory finds
+                        // nothing and no `shutdown` is sent — per §4.3
+                        // another live owner may hold that daemon, and
+                        // killing it would break them. The old directory
+                        // is left to orphan-grace.
                         self.discard(reason, &directory).await
                     }
                 }
@@ -1312,6 +1333,12 @@ impl Transport {
             }
             // Ping-echo / protocol-level failures from the probe.
             Err(error) => {
+                // F4 (intentional): a `response`-kind ping failure means
+                // the daemon ANSWERED but is broken (bad echo/shape) —
+                // it must not route to arm B (that arm is for a dead
+                // daemon) but discards directly, converging with the
+                // held-lock "unreachable owner" outcome: never kill or
+                // restore into a live-but-broken daemon.
                 eprintln!(
                     "Discarding PTY restart handoff; persistent terminals will start fresh ({})",
                     error.message
@@ -1480,18 +1507,15 @@ async fn pump(
         on_event(event);
     }
     loop {
+        // Hot path — no per-frame logging (F1): read errors, detach and
+        // EOF all converge on `on_end` below.
         let frame = tokio::select! {
             frame = reader.next_frame() => match frame {
                 Ok(frame) => frame,
-                Err(e) => { eprintln!("[pump] read error: {e:?}"); break }
+                Err(_) => break,
             },
-            () = cancel.notified() => { eprintln!("[pump] cancelled"); break },
+            () = cancel.notified() => break,
         };
-        eprintln!(
-            "[pump] frame: {} bytes, first={:02x}",
-            frame.len(),
-            frame.first().copied().unwrap_or(0)
-        );
         if frame.first() == Some(&0x00) {
             if let Ok(parsed) = wire::parse_output_frame(&frame) {
                 on_event(StreamEvent::Output(parsed.data));
@@ -1501,12 +1525,18 @@ async fn pump(
         let Ok(event) = serde_json::from_slice::<WireResponse>(&frame) else { continue };
         match event {
             WireResponse::Resized { cols, rows, generation, checkpoint_base64 } => {
-                on_event(StreamEvent::Resized {
-                    cols,
-                    rows,
-                    generation,
-                    checkpoint: super::base64_decode(&checkpoint_base64).unwrap_or_default(),
-                });
+                // §7: a checkpoint blob that is not valid base64 is a
+                // protocol violation. The subscribe stream is one-way,
+                // so the error cannot ride a reply — the stream ENDS
+                // rather than deliver silent empty bytes (an empty
+                // checkpoint would corrupt the consumer's reattach
+                // state).
+                match super::base64_decode(&checkpoint_base64) {
+                    Some(checkpoint) => {
+                        on_event(StreamEvent::Resized { cols, rows, generation, checkpoint });
+                    }
+                    None => break,
+                }
             }
             WireResponse::Exited { exit_code, .. } => {
                 on_event(StreamEvent::Exited { exit_code });
@@ -1549,8 +1579,21 @@ async fn conn_writer(
 /// through the SAME registry definitions the machine uses — identical
 /// event names and payloads under both backends; `owner_superseded`
 /// demotes (§6).
-async fn owner_reader(mut read_half: tokio::net::unix::OwnedReadHalf, ctx: Arc<OwnerCtx>) {
-    let mut decoder = FrameDecoder::new();
+///
+/// The claim phase's decoder + leftover frames carry in (F2): a frame
+/// coalesced with `owned` in the claim's last read is processed here,
+/// so nothing after `owned` is ever dropped.
+async fn owner_reader(
+    mut read_half: tokio::net::unix::OwnedReadHalf,
+    ctx: Arc<OwnerCtx>,
+    mut decoder: FrameDecoder,
+    mut pending: std::collections::VecDeque<Vec<u8>>,
+) {
+    for frame in pending.drain(..) {
+        if !dispatch_owner_frame(&frame, &ctx).await {
+            return;
+        }
+    }
     let mut chunk = [0u8; 16 * 1024];
     loop {
         let read = match read_half.read(&mut chunk).await {
@@ -1559,32 +1602,7 @@ async fn owner_reader(mut read_half: tokio::net::unix::OwnedReadHalf, ctx: Arc<O
         };
         let Ok(frames) = decoder.feed(&chunk[..read]) else { break };
         for frame in frames {
-            if frame.first() == Some(&0x00) {
-                // Owner connections never receive binary frames.
-                ctx.shared.demote(ctx.epoch);
-                let _ = ctx.exchange.0.lock().take();
-                return;
-            }
-            if let Ok(owner_frame) = serde_json::from_slice::<OwnerFrame>(&frame) {
-                match owner_frame {
-                    OwnerFrame::BusEvent { event, data } => {
-                        republish(&ctx.shared.bus, &event, data).await;
-                    }
-                    OwnerFrame::OwnerSuperseded => {
-                        ctx.shared.demote(ctx.epoch);
-                        let _ = ctx.exchange.0.lock().take();
-                        return;
-                    }
-                }
-                continue;
-            }
-            if let Ok(response) = serde_json::from_slice::<WireResponse>(&frame) {
-                if let Some(tx) = ctx.exchange.0.lock().take() {
-                    let _ = tx.send(Ok(response));
-                }
-            } else {
-                ctx.shared.demote(ctx.epoch);
-                let _ = ctx.exchange.0.lock().take();
+            if !dispatch_owner_frame(&frame, &ctx).await {
                 return;
             }
         }
@@ -1592,6 +1610,39 @@ async fn owner_reader(mut read_half: tokio::net::unix::OwnedReadHalf, ctx: Arc<O
     // EOF: the daemon died or closed — drop to non-owner.
     ctx.shared.demote(ctx.epoch);
     let _ = ctx.exchange.0.lock().take();
+}
+
+/// Handles one decoded owner-connection frame. Returns `false` when
+/// the connection must stop (the demote + pending-slot drop are done).
+async fn dispatch_owner_frame(frame: &[u8], ctx: &OwnerCtx) -> bool {
+    if frame.first() == Some(&0x00) {
+        // Owner connections never receive binary frames.
+        ctx.shared.demote(ctx.epoch);
+        let _ = ctx.exchange.0.lock().take();
+        return false;
+    }
+    if let Ok(owner_frame) = serde_json::from_slice::<OwnerFrame>(frame) {
+        match owner_frame {
+            OwnerFrame::BusEvent { event, data } => {
+                republish(&ctx.shared.bus, &event, data).await;
+            }
+            OwnerFrame::OwnerSuperseded => {
+                ctx.shared.demote(ctx.epoch);
+                let _ = ctx.exchange.0.lock().take();
+                return false;
+            }
+        }
+        return true;
+    }
+    if let Ok(response) = serde_json::from_slice::<WireResponse>(frame) {
+        if let Some(tx) = ctx.exchange.0.lock().take() {
+            let _ = tx.send(Ok(response));
+        }
+        return true;
+    }
+    ctx.shared.demote(ctx.epoch);
+    let _ = ctx.exchange.0.lock().take();
+    false
 }
 
 impl Shared {
@@ -1666,12 +1717,16 @@ fn migrate_runtime_files(from: &Path, to: &Path) -> std::io::Result<()> {
 }
 
 /// Non-blocking flock probe (the §6 arm-B "unreachable owner" check):
-/// held ⇒ an unreachable daemon still owns the directory.
+/// held ⇒ an unreachable daemon still owns the directory. The probe is
+/// READ-ONLY — it must never `create(true)` (a probe has no
+/// side-effect file to leave behind); a missing lock file (or any open
+/// failure, `NotFound` explicitly) is "not held".
 fn lock_held(path: &Path) -> bool {
     use std::os::unix::io::AsRawFd as _;
-    let Ok(file) =
-        std::fs::OpenOptions::new().create(true).truncate(false).write(true).read(true).open(path)
-    else {
+    // flock(2) locks the open file description regardless of the open
+    // mode, so a read-only open is enough to probe.
+    let Ok(file) = std::fs::OpenOptions::new().read(true).open(path) else {
+        // NotFound (no lock file) ⇒ nobody holds it.
         return false;
     };
     #[allow(unsafe_code)] // contained flock(2) probe on the freshly-opened lock file
@@ -1734,5 +1789,31 @@ mod tests {
         );
         // 4. Exhausted (no override, no sibling, empty PATH).
         assert_eq!(resolve_binary_path(None, Some(&sandbox.path().join("no-exe")), ""), None);
+    }
+
+    /// F6: the §6 arm-B probe is read-only — a missing lock file is
+    /// "not held" AND the probe never creates it; a held flock probes
+    /// held.
+    #[test]
+    fn lock_probe_is_read_only_and_creates_nothing() {
+        use std::os::unix::io::AsRawFd as _;
+        let sandbox = tempfile::Builder::new()
+            .prefix("oc-pty-d2-lock-")
+            .tempdir_in("/tmp/opencode")
+            .expect("temp dir");
+        let lock = sandbox.path().join("service.lock");
+        // Missing lock file: not held, and no side-effect creation.
+        assert!(!lock_held(&lock), "a missing lock is not held");
+        assert!(!lock.exists(), "the probe must not create the lock file");
+        // Free lock file: not held.
+        std::fs::write(&lock, b"").expect("lock file");
+        assert!(!lock_held(&lock), "a free lock is not held");
+        // Held through another open file description: held.
+        let holder = std::fs::File::open(&lock).expect("open lock");
+        #[allow(unsafe_code)] // contained flock(2) on a lock file this test opened
+        unsafe {
+            assert_eq!(libc::flock(holder.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB), 0);
+        }
+        assert!(lock_held(&lock), "a held lock probes held");
     }
 }

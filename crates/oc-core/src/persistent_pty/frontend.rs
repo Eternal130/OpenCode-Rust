@@ -28,7 +28,7 @@ use std::sync::Arc;
 use oc_schema::id::SessionId;
 
 use super::transport::{
-    self, info_from_wire, BinaryLauncher, Transport, TransportError, WireStream,
+    self, info_from_wire, BinaryLauncher, ErrorKind, Transport, TransportError, WireStream,
 };
 use super::wire::{WireRequest, WireResponse, WireRole};
 use super::{
@@ -356,7 +356,14 @@ impl Frontend {
                         info: info_from_wire(&terminal)
                             .map_err(|message| UnavailableError { message })?,
                         text,
-                        checkpoint: super::base64_decode(&checkpoint_base64).unwrap_or_default(),
+                        // §7: a checkpoint that is not valid base64 is a
+                        // protocol error, not silent empty bytes.
+                        checkpoint: super::base64_decode(&checkpoint_base64).ok_or_else(|| {
+                            unavailable(TransportError::new(
+                                ErrorKind::Protocol,
+                                "opencode-pty snapshot checkpoint is not valid base64",
+                            ))
+                        })?,
                         cursor: (
                             usize::try_from(cursor_x).unwrap_or(0),
                             usize::try_from(cursor_y).unwrap_or(0),
