@@ -1,0 +1,29 @@
+[package]
+name = "oc-pty"
+description = "opencode persistent-PTY daemon: hosts the oc-core PersistentPty machine behind a Unix-socket wire (Phase 9, design docs/superpowers/specs/2026-10-23-pty-daemon-design.md)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+name = "oc_pty"
+path = "src/lib.rs"
+
+[[bin]]
+name = "oc-pty"
+path = "src/main.rs"
+
+[dependencies]
+oc-core = { workspace = true }
+oc-schema = { workspace = true }
+tokio = { workspace = true }
+serde_json = { workspace = true }
+base64 = "0.22"
+parking_lot = "0.12"
+
+[dev-dependencies]
+serde = { workspace = true }
+tempfile = "3"

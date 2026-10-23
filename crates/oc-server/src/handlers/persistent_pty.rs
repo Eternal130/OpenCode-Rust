@@ -350,6 +350,20 @@ async fn attach_session(
                     json!({ "type": "exited", "exitCode": exit_code }).to_string(),
                 ));
             }
+            StreamEvent::ControllerChanged { attachment_id, generation } => {
+                // v2 handlers/persistent-pty.ts:146-147 forwards every
+                // non-output/non-resized event as plain JSON; the
+                // in-memory event shape is camelCase (like `exitCode`
+                // above, mirroring JSON.stringify of the v2 event).
+                let _ = outbox.send(Message::Text(
+                    json!({
+                        "type": "controller_changed",
+                        "attachmentID": attachment_id,
+                        "generation": generation,
+                    })
+                    .to_string(),
+                ));
+            }
         })
     };
     let on_end: Box<dyn FnOnce() + Send + Sync> = {
