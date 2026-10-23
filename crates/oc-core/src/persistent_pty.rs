@@ -66,10 +66,12 @@
 //!   `controller` / `observer` (+ `takeover`), generations per attach;
 //! - `current[sessionID]` selection — controller activity selects a
 //!   terminal, observer reads and pane visibility do not;
-//! - `snapshot {info, text, checkpoint, cursor}` — the terminal-emulator
-//!   checkpoint byte format is a **documented-format stub** (the
-//!   out-of-process daemon owns the serializer; the in-process machine
-//!   records the scrollback text now and reserves the checkpoint bytes);
+//! - `snapshot {info, text, checkpoint, cursor}` — the checkpoint
+//!   bytes are the §7 v1 format (`wire::encode_checkpoint`): magic
+//!   `OCPTYCHK`, version 1, flags, cols/rows, cursor x/y, generation,
+//!   length-prefixed scrollback text and a CRC32-IEEE trailer — the
+//!   same bytes the out-of-process daemon serves (one machine, one
+//!   serializer);
 //! - durable-ish events `persistent-pty.added` / `persistent-pty.removed`
 //!   publish on the bus; exited visible terminals auto-remove.
 
@@ -167,9 +169,11 @@ pub struct Snapshot {
     pub info: Info,
     /// The visible screen rows joined by newlines.
     pub text: String,
-    /// Terminal-emulator checkpoint (documented-format stub: the v2
-    /// daemon serializes its emulator state here; the in-process machine
-    /// stores the scrollback encoding below until Phase 9).
+    /// Terminal-emulator checkpoint — the §7 v1 format (magic
+    /// `OCPTYCHK`, version 1, big-endian cols/rows/cursor/generation,
+    /// length-prefixed scrollback, CRC32-IEEE trailer); produced by
+    /// `wire::encode_checkpoint` — identical bytes in-process and
+    /// over the daemon socket.
     pub checkpoint: Vec<u8>,
     pub cursor: (usize, usize),
 }
@@ -589,9 +593,11 @@ impl PersistentPty {
     /// --name ID`), as opposed to [`PersistentPty::set_runtime_dir`]'s
     /// fresh-random identity. A lock held by a live predecessor is the
     /// unreachable-daemon case: the caller exits non-zero and the
-    /// client retries in a fresh directory (§8.2).
+    /// client retries in a fresh directory (§8.2). `.`/`..` are
+    /// rejected with the empty and `/`-containing names — they would
+    /// claim the ROOT itself (or its parent), never a child directory.
     pub fn bind_runtime_dir(&self, root: &Path, id: &str) -> Result<(), String> {
-        if id.is_empty() || id.contains('/') {
+        if id.is_empty() || id.contains('/') || matches!(id, "." | "..") {
             return Err(format!("invalid PTY runtime directory name: {id}"));
         }
         let scope = claim_runtime_dir(root, Some(id))?;
@@ -1740,7 +1746,10 @@ mod tests {
         service.resize(&info.id, 100, 20, None).await.expect("resize");
         let snapshot = service.snapshot(&info.id).expect("snapshot");
         assert_eq!(snapshot.info.size, (100, 20));
-        assert!(!snapshot.checkpoint.is_empty(), "checkpoint stub carries the scrollback bytes");
+        assert!(
+            !snapshot.checkpoint.is_empty(),
+            "checkpoint carries the §7 v1 scrollback encoding"
+        );
 
         // shutdown clears everything.
         service.shutdown().await.expect("shutdown");
@@ -2240,6 +2249,22 @@ mod tests {
         let contender = PersistentPty::hosted(Arc::new(|_, _| {}));
         let error = contender.bind_runtime_dir(&root, "daemon-name-1").expect_err("lock busy");
         assert!(error.contains("locking"), "unexpected error: {error}");
+    }
+
+    /// `bind_runtime_dir` rejects names that do not denote a CHILD of
+    /// the root (D1 review): empty, `/`-containing, and `.`/`..` — a
+    /// `--name ..` daemon would otherwise lock the root's PARENT.
+    #[tokio::test]
+    async fn bind_runtime_dir_rejects_non_child_names() {
+        let root = temp_root("bind-bad");
+        let daemon = PersistentPty::hosted(Arc::new(|_, _| {}));
+        for bad in ["", "..", ".", "a/b", "/etc"] {
+            let error = daemon.bind_runtime_dir(&root, bad).expect_err("rejected");
+            assert_eq!(error, format!("invalid PTY runtime directory name: {bad}"));
+        }
+        // The root itself is untouched by the rejected claims.
+        assert!(!root.join("service.lock").exists());
+        assert!(!root.parent().expect("parent").join("service.lock").exists());
     }
 
     /// `ControllerChanged` (§12 Q3): an existing subscriber hears about
