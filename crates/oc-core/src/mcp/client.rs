@@ -317,9 +317,9 @@ impl ClientHandler for Handler {
         _context: RequestContext<RoleClient>,
     ) -> impl Future<Output = Result<rmcp::model::ListRootsResult, rmcp::ErrorData>> + Send + '_
     {
-        std::future::ready(Ok(rmcp::model::ListRootsResult::new(vec![
-            rmcp::model::Root::new(path_to_file_url(&self.roots_directory)),
-        ])))
+        std::future::ready(Ok(rmcp::model::ListRootsResult::new(vec![rmcp::model::Root::new(
+            path_to_file_url(&self.roots_directory),
+        )])))
     }
 
     fn on_tool_list_changed(
@@ -526,7 +526,9 @@ impl Connection {
             Box::pin(async move {
                 let result = this
                     .call(
-                        rmcp::model::ClientRequest::ListPromptsRequest(ListPromptsRequest::default()),
+                        rmcp::model::ClientRequest::ListPromptsRequest(
+                            ListPromptsRequest::default(),
+                        ),
                         timeout,
                     )
                     .await
