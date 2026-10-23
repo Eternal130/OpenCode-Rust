@@ -51,6 +51,14 @@ retries = 2
 filter = 'test(pty_lane_if)'
 retries = 2
 
+# lane PTYD D3: real-binary process-level daemon tests (oc-pty
+# tests/process.rs) — same serialized real-process class as the PTY
+# suites; the 8 MiB replay scenarios (i15/slow) read child output
+# under load, the known first-attempt flake family.
+[[profile.default.overrides]]
+filter = 'test(pty_d3)'
+retries = 2
+
 # The invariant fuzzer drives the real binary through long key
 # sequences: same serialized PTY class, and the 3-seed smoke needs a
 # wider slow-timeout than the 60s default (it is one test fn).
