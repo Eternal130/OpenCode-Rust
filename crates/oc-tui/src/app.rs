@@ -6744,7 +6744,9 @@ pub async fn run_with_size(
             .any(|op| matches!(op, oc_plugin_host::PluginOp::Add { .. }))
     };
     let mut plugin_boot: Option<
-        std::pin::Pin<Box<dyn std::future::Future<Output = Option<crate::plugin_boot::TuiPluginRuntime>>>>,
+        std::pin::Pin<
+            Box<dyn std::future::Future<Output = Option<crate::plugin_boot::TuiPluginRuntime>>>,
+        >,
     > = plugins_configured.then(|| {
         let boot_client = client.clone();
         let boot_version = env!("CARGO_PKG_VERSION").to_owned();
