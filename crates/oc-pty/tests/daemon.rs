@@ -147,6 +147,27 @@ impl Client {
         }
     }
 
+    /// Reads until the daemon closes the connection (EOF on the write
+    /// half — the stream-end close, Important 1/2), returning every
+    /// frame observed before the close. Panics on timeout: a missing
+    /// close would hang the subscriber forever.
+    async fn read_to_close(&mut self) -> Vec<Vec<u8>> {
+        let mut frames = std::mem::take(&mut self.pending);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            assert!(Instant::now() < deadline, "daemon did not close the connection");
+            let mut chunk = [0u8; 16 * 1024];
+            let read = tokio::time::timeout(Duration::from_secs(5), self.stream.read(&mut chunk))
+                .await
+                .expect("read within 5s")
+                .expect("read ok");
+            if read == 0 {
+                return frames;
+            }
+            frames.extend(self.decoder.feed(&chunk[..read]).expect("framed"));
+        }
+    }
+
     /// One exchange: skip owner frames, return the response + skipped.
     async fn request(&mut self, request: WireRequest) -> WireResponse {
         let (_, response) = self.exchange_with_events(request).await;
@@ -312,6 +333,25 @@ async fn claim_of_a_locked_directory_exits_nonzero() {
 
     let mut client = Client::connect(&daemon.registration).await.expect("connect");
     shutdown(&mut client, daemon).await;
+}
+
+/// D1 review: `--name .`/`..` must be REFUSED (exit 1) — those names
+/// would lock/write inside the runtime ROOT (or its parent), not a
+/// child directory.
+#[tokio::test]
+async fn daemon_rejects_dot_and_dotdot_names() {
+    let root = temp_root("dotname");
+    for bad in ["..", "."] {
+        let task = tokio::spawn(oc_pty::daemon::run(config(&root, bad, 60)));
+        let code = tokio::time::timeout(Duration::from_secs(10), task)
+            .await
+            .expect("exits")
+            .expect("join");
+        assert_eq!(code, 1, "--name {bad} must be refused");
+    }
+    // The rejected claims took no lock in the root or its parent.
+    assert!(!root.join("service.lock").exists());
+    assert!(!root.parent().expect("root parent").join("service.lock").exists());
 }
 
 // ---------------------------------------------------------------------------
@@ -488,6 +528,55 @@ async fn own_ladder_supersession_and_single_use_tickets() {
     shutdown(&mut second, daemon).await;
     let _ = third.stream.shutdown().await;
     let _ = first.stream.shutdown().await;
+}
+
+/// D1 review, Important 2: a valid-ticket transfer CLOSES the old
+/// owner's connection — `owner_superseded` flushes, then the socket
+/// write half ends (EOF) — while the new owner's ops keep working.
+#[tokio::test]
+async fn supersession_closes_the_old_owner_connection() {
+    let root = temp_root("supclose");
+    let daemon = Daemon::start(&root, "d-supclose").await;
+    let registration = daemon.registration.clone();
+
+    // Owner A claims and mints the transfer ticket.
+    let mut a = Client::connect(&registration).await.expect("conn A");
+    assert!(matches!(
+        a.request(WireRequest::Own {
+            instance_id: registration.instance_id.clone(),
+            ticket: None,
+            directory: None,
+        })
+        .await,
+        WireResponse::Owned
+    ));
+    let ticket = match a.request(WireRequest::PrepareHandoff).await {
+        WireResponse::Handoff { ticket, .. } => ticket,
+        other => panic!("expected handoff, got {other:?}"),
+    };
+
+    // B claims with the valid ticket: A's connection receives
+    // `owner_superseded` and then EOF (not a lingering open socket).
+    let mut b = Client::connect(&registration).await.expect("conn B");
+    assert!(matches!(
+        b.request(WireRequest::Own {
+            instance_id: registration.instance_id.clone(),
+            ticket: Some(ticket),
+            directory: None,
+        })
+        .await,
+        WireResponse::Owned
+    ));
+    let trailing = a.read_to_close().await;
+    let superseded = trailing.iter().any(|frame| {
+        parse_json::<wire::OwnerFrame>(frame) == Some(wire::OwnerFrame::OwnerSuperseded)
+    });
+    assert!(superseded, "owner_superseded precedes the close: {trailing:?}");
+
+    // B is the acting owner: owner-only ops succeed on B.
+    assert!(matches!(b.request(WireRequest::PrepareHandoff).await, WireResponse::Handoff { .. }));
+
+    shutdown(&mut b, daemon).await;
 }
 
 #[tokio::test]
@@ -1009,6 +1098,138 @@ async fn replay_chunking_both_arms_and_stream_events() {
     let _ = observer.stream.shutdown().await;
     let _ = replayer.stream.shutdown().await;
     let _ = controller.stream.shutdown().await;
+}
+
+// ---------------------------------------------------------------------------
+// D1 review: stream/connection end semantics + one-subscription-per-conn
+// ---------------------------------------------------------------------------
+
+/// D1 review, Important 1: a terminated terminal ENDS its subscribe
+/// connections — the subscriber's read loop observes end-of-stream
+/// (EOF) instead of hanging. `terminate` ends subscribers with NO
+/// stream frame; a natural exit queues `exited` and then closes.
+#[tokio::test]
+async fn subscribe_connections_end_at_stream_end() {
+    let root = temp_root("strend");
+    let daemon = Daemon::start(&root, "d-strend").await;
+    let registration = daemon.registration.clone();
+    let mut driver = Client::connect(&registration).await.expect("driver conn");
+
+    // (a) terminate from ANOTHER connection: no stream frame, the
+    // subscriber still reads EOF (this is the case that used to hang).
+    let killed = terminal_number(&driver.request(create_request("sleep 30", "ses_end1")).await);
+    let mut subscriber = Client::connect(&registration).await.expect("subscriber conn");
+    subscriber
+        .send(&WireRequest::Subscribe {
+            id: killed,
+            offset: 0,
+            attachment_id: "end-observer-a".to_owned(),
+            role: wire::WireRole::Observer,
+            takeover: false,
+        })
+        .await;
+    match subscriber.next_stream_frame().await {
+        StreamFrame::Response(WireResponse::Attached { .. }) => {}
+        other => panic!("expected attached, got {other:?}"),
+    }
+    assert!(matches!(
+        driver.request(WireRequest::Terminate { id: killed }).await,
+        WireResponse::Ok
+    ));
+    let trailing = subscriber.read_to_close().await;
+    assert!(trailing.is_empty(), "terminate ends the stream with no trailing frame: {trailing:?}");
+
+    // (b) natural exit: `exited` flushes BEFORE the close — the
+    // subscriber reads the final frame, then EOF.
+    let short = terminal_number(&driver.request(create_request("sleep 2", "ses_end2")).await);
+    let mut watcher = Client::connect(&registration).await.expect("watcher conn");
+    watcher
+        .send(&WireRequest::Subscribe {
+            id: short,
+            offset: 0,
+            attachment_id: "end-observer-b".to_owned(),
+            role: wire::WireRole::Observer,
+            takeover: false,
+        })
+        .await;
+    match watcher.next_stream_frame().await {
+        StreamFrame::Response(WireResponse::Attached { .. }) => {}
+        other => panic!("expected attached, got {other:?}"),
+    }
+    let trailing = watcher.read_to_close().await;
+    let final_frame = trailing.last().expect("exited frame before the close");
+    match parse_json::<WireResponse>(final_frame) {
+        Some(WireResponse::Exited { exit_code, .. }) => assert_eq!(exit_code, Some(0)),
+        _ => panic!("expected exited as the final frame before EOF: {trailing:?}"),
+    }
+
+    shutdown(&mut driver, daemon).await;
+}
+
+/// D1 review: a SECOND `subscribe` on the same connection is an
+/// explicit error — the first subscription must keep streaming.
+#[tokio::test]
+async fn second_subscribe_on_a_connection_is_rejected() {
+    let root = temp_root("sub2");
+    let daemon = Daemon::start(&root, "d-sub2").await;
+    let registration = daemon.registration.clone();
+    let mut driver = Client::connect(&registration).await.expect("driver conn");
+    let id = terminal_number(&driver.request(create_request("cat", "ses_sub2")).await);
+
+    // First subscribe attaches…
+    let mut subscriber = Client::connect(&registration).await.expect("subscriber conn");
+    subscriber
+        .send(&WireRequest::Subscribe {
+            id,
+            offset: 0,
+            attachment_id: "sub-first".to_owned(),
+            role: wire::WireRole::Observer,
+            takeover: false,
+        })
+        .await;
+    match subscriber.next_stream_frame().await {
+        StreamFrame::Response(WireResponse::Attached { .. }) => {}
+        other => panic!("expected attached, got {other:?}"),
+    }
+
+    // …a second subscribe on the SAME connection errors instead of
+    // silently detaching the live subscription.
+    match subscriber
+        .request(WireRequest::Subscribe {
+            id,
+            offset: 0,
+            attachment_id: "sub-second".to_owned(),
+            role: wire::WireRole::Observer,
+            takeover: false,
+        })
+        .await
+    {
+        WireResponse::Error { message } => {
+            assert_eq!(message, "connection already has an active subscription");
+        }
+        other => panic!("expected subscription error, got {other:?}"),
+    }
+
+    // The FIRST subscription still streams: `cat` echoes the write.
+    let payload = base64_std(b"still-streaming\n");
+    assert!(matches!(
+        driver.request(WireRequest::Write { id, attachment_id: None, data_base64: payload }).await,
+        WireResponse::Ok
+    ));
+    match subscriber.next_stream_frame().await {
+        StreamFrame::Output(frame) => {
+            assert_eq!(
+                frame.start, 0,
+                "replay-relative offsets continue on the first subscription"
+            );
+            assert!(frame.end > frame.start);
+        }
+        other => panic!("expected output on the first subscription, got {other:?}"),
+    }
+
+    let _ = driver.request(WireRequest::Terminate { id }).await;
+    let _ = subscriber.stream.shutdown().await;
+    shutdown(&mut driver, daemon).await;
 }
 
 // ---------------------------------------------------------------------------
