@@ -2162,6 +2162,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "tokio-util",
  "tree-sitter",
  "tree-sitter-bash",
  "tree-sitter-powershell",

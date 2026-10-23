@@ -169,8 +169,15 @@ impl Forms {
     /// `Form.ask` — create + await the terminal state. Dropping the returned
     /// future before settlement cancels the form (`onInterrupt`).
     pub async fn ask(&self, input: CreateInput) -> Result<State, FormError> {
-        let form = self.create(input).await?;
-        let id = form.id.clone();
+        let id = FormId(format!("frm_{}", self.inner.ids.new_id("frm")));
+        self.ask_with_id(id, input).await
+    }
+
+    /// `Form.ask` over a caller-minted id — the MCP URL-elicitation path
+    /// registers the form id before parking (index.ts:239-244), so it
+    /// cannot let `ask` mint its own.
+    pub async fn ask_with_id(&self, id: FormId, input: CreateInput) -> Result<State, FormError> {
+        self.create_with_id(id.clone(), input).await?;
         let receiver = {
             let forms = self.inner.forms.lock();
             forms

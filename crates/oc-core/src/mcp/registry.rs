@@ -445,6 +445,9 @@ struct Inner {
     config_source: SyncMutex<Arc<dyn Fn() -> BTreeMap<String, ServerConfig> + Send + Sync>>,
     /// Location directory for stdio cwd + roots/list.
     directory: SyncMutex<String>,
+    /// The elicitation handler shared by every connection (index.ts:231 —
+    /// one handler per location, its pending-URL map keyed server+id).
+    elicitation: SyncMutex<Option<Arc<super::elicitation::ClientElicitation>>>,
 }
 
 /// The registry service (`Mcp.Service`). Clone shares all state.
@@ -498,10 +501,25 @@ impl McpRegistry {
                 reconcile_lock: AsyncMutex::new(()),
                 config_source: SyncMutex::new(Arc::new(BTreeMap::new)),
                 directory: SyncMutex::new(directory),
+                elicitation: SyncMutex::new(None),
             }),
         };
         Self::spawn_credential_reconnect(bus, registry.clone());
         registry
+    }
+
+    /// Installs the elicitation handler (v2's layer creates one
+    /// `ElicitationHandler` and passes it into every connect,
+    /// index.ts:439-446). Connections started before the install keep
+    /// their negotiated capabilities; assemble the registry fully before
+    /// `reconcile`.
+    #[must_use]
+    pub fn with_elicitation(
+        &self,
+        elicitation: Arc<super::elicitation::ClientElicitation>,
+    ) -> Self {
+        *self.inner.elicitation.lock() = Some(elicitation);
+        self.clone()
     }
 
     /// PLUG-D30 — the credential-switch reconnect (index.ts:577-599):
@@ -622,6 +640,7 @@ impl McpRegistry {
             None => None,
         };
         let directory = self.inner.directory.lock().clone();
+        let elicitation = self.inner.elicitation.lock().clone();
         let connect = {
             let connector = Arc::clone(&self.inner.connector);
             let server = name.to_string();
@@ -633,6 +652,7 @@ impl McpRegistry {
                     config: &config,
                     directory: &directory,
                     bearer,
+                    elicitation,
                 })
                 .await
             }
@@ -1457,12 +1477,14 @@ fn production_connector() -> Connector {
         let config = input.config.clone();
         let directory = input.directory.to_string();
         let bearer = input.bearer.clone();
+        let elicitation = input.elicitation.clone();
         Box::pin(async move {
             client::connect(ConnectInput {
                 server: &server,
                 config: &config,
                 directory: &directory,
                 bearer,
+                elicitation,
             })
             .await
         })

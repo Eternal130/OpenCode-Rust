@@ -45,6 +45,11 @@ struct Script {
     calls: BTreeMap<String, serde_json::Value>,
     call_errors: BTreeMap<String, String>,
     instructions: Option<String>,
+    /// The initialize requests the client offered (protocol-offer probe).
+    offers: Arc<parking_lot::Mutex<Vec<serde_json::Value>>>,
+    /// Tools that elicit before answering: tool → `elicitation/create`
+    /// params (the ref servers' `tools/call` → `elicitInput` flow).
+    elicit_on_call: BTreeMap<String, serde_json::Value>,
     /// Emit a 404 on the next call-tool (session-expiry probe), then behave.
     expire_once: Arc<std::sync::atomic::AtomicBool>,
 }
@@ -97,6 +102,40 @@ impl Mock {
             RequestId::Number(9001),
         ));
     }
+
+    /// Pushes `elicitation/create` as a server-initiated request.
+    fn request_elicitation(&self, id: i64, params: serde_json::Value) {
+        let request = rmcp::model::ElicitRequest::new(
+            serde_json::from_value(params).expect("elicitation params parse"),
+        );
+        let _ = self.push.send(JsonRpcMessage::request(
+            rmcp::model::ServerRequest::ElicitRequest(request),
+            RequestId::Number(id),
+        ));
+    }
+
+    /// Pushes legacy `notifications/elicitation/complete`.
+    fn notify_elicitation_complete(&self, elicitation_id: &str) {
+        let _ = self.push.send(JsonRpcMessage::notification(
+            rmcp::model::ServerNotification::CustomNotification(
+                rmcp::model::CustomNotification::new(
+                    "notifications/elicitation/complete",
+                    Some(serde_json::json!({ "elicitationId": elicitation_id })),
+                ),
+            ),
+        ));
+    }
+
+    /// Cancels a server-initiated request (`notifications/cancelled`).
+    fn cancel_request(&self, id: i64) {
+        let _ = self.push.send(JsonRpcMessage::notification(
+            rmcp::model::ServerNotification::CancelledNotification(
+                rmcp::model::CancelledNotification::new(
+                    rmcp::model::CancelledNotificationParam::new(Some(RequestId::Number(id)), None),
+                ),
+            ),
+        ));
+    }
 }
 
 /// Client-role transport: sends to the scripted server, receives merged
@@ -145,6 +184,54 @@ fn mock_pair(script: Script) -> (MockTransport, Mock) {
             match message {
                 JsonRpcMessage::Request(request) => {
                     let id = request.id;
+                    // The ref servers elicit inside `tools/call`
+                    // (`elicitInput`, mcp.test.ts:140-185): the call is
+                    // answered only after the client answered the
+                    // elicitation, embedding the result like the TS mock.
+                    let elicit_params = match &request.request {
+                        ClientRequest::CallToolRequest(call) => {
+                            script.elicit_on_call.get(call.params.name.as_ref()).cloned()
+                        }
+                        _ => None,
+                    };
+                    if let Some(params) = elicit_params {
+                        let elicit_id = RequestId::Number(7001);
+                        let elicit = rmcp::model::ElicitRequest::new(
+                            serde_json::from_value(params).expect("elicitation params parse"),
+                        );
+                        let _ = from_server_tx.send(JsonRpcMessage::request(
+                            rmcp::model::ServerRequest::ElicitRequest(elicit),
+                            elicit_id.clone(),
+                        ));
+                        // Hold the tools/call answer until the elicitation
+                        // resolves; other client messages keep flowing
+                        // through their usual paths.
+                        let answer = loop {
+                            match to_server_rx.recv().await {
+                                Some(JsonRpcMessage::Response(response))
+                                    if response.id == elicit_id =>
+                                {
+                                    break response.result;
+                                }
+                                Some(JsonRpcMessage::Response(response)) => {
+                                    let _ = answers_tx.send(JsonRpcMessage::Response(response));
+                                }
+                                Some(_) => {}
+                                None => return,
+                            }
+                        };
+                        let _ = from_server_tx.send(JsonRpcMessage::response(
+                            result_of(serde_json::json!({
+                                "content": [{
+                                    "type": "text",
+                                    "text": serde_json::to_string(&answer).unwrap_or_default(),
+                                }],
+                                "structuredContent": answer,
+                            })),
+                            id,
+                        ));
+                        continue;
+                    }
                     if let Some(response) = respond(&request.request, id, &script) {
                         let _ = from_server_tx.send(response);
                     }
@@ -173,22 +260,28 @@ fn respond(
         Some(JsonRpcMessage::response(result_of(value), id))
     }
     match request {
-        ClientRequest::InitializeRequest(_) => response(
-            serde_json::json!({
-                    // The rmcp 0.5-era mock echoed `ProtocolVersion::default()`
-                    // (`2025-03-26`, the version this client pins); keep the
-                    // same negotiated version on the wire.
-                    "protocolVersion": rmcp::model::ProtocolVersion::V_2025_03_26.to_string(),
-                    "capabilities": {
-                        "tools": { "listChanged": true },
-                        "resources": { "subscribe": true, "listChanged": true },
-                        "prompts": { "listChanged": true },
-                    },
-                    "serverInfo": { "name": "mock", "version": "1" },
-                "instructions": script.instructions,
-            }),
-            id,
-        ),
+        ClientRequest::InitializeRequest(request) => {
+            script
+                .offers
+                .lock()
+                .push(serde_json::to_value(request).expect("initialize offer serializes"));
+            response(
+                serde_json::json!({
+                        // The mock echoes the client's offered version back —
+                        // v2.0.24's TS client offers `2025-11-25` (its
+                        // SUPPORTED_PROTOCOL_VERSIONS[0], legacy handshake).
+                        "protocolVersion": rmcp::model::ProtocolVersion::V_2025_11_25.to_string(),
+                        "capabilities": {
+                            "tools": { "listChanged": true },
+                            "resources": { "subscribe": true, "listChanged": true },
+                            "prompts": { "listChanged": true },
+                        },
+                        "serverInfo": { "name": "mock", "version": "1" },
+                    "instructions": script.instructions,
+                }),
+                id,
+            )
+        }
         ClientRequest::ListToolsRequest(_) => {
             response(serde_json::json!({ "tools": *script.tools.lock() }), id)
         }
@@ -265,9 +358,22 @@ fn local_config() -> ServerConfig {
 
 /// Connects the real client over a mock transport.
 async fn connect_mock(script: Script) -> (client::Connection, Mock) {
+    connect_mock_with(script, None).await
+}
+
+/// Connects with an elicitation handler installed.
+async fn connect_mock_with(
+    script: Script,
+    elicitation: Option<Arc<elicitation::ClientElicitation>>,
+) -> (client::Connection, Mock) {
     let (transport, mock) = mock_pair(script);
-    let input =
-        ConnectInput { server: "mock", config: &local_config(), directory: "/tmp", bearer: None };
+    let input = ConnectInput {
+        server: "mock",
+        config: &local_config(),
+        directory: "/tmp",
+        bearer: None,
+        elicitation,
+    };
     let connection =
         client::connect_with_transport(&input, transport, false).await.expect("mock connect");
     (connection, mock)
@@ -283,9 +389,16 @@ fn scripted_connector(next: impl FnMut() -> Script + Send + Sync + 'static) -> C
         let config = input.config.clone();
         let directory = input.directory.to_string();
         let bearer = input.bearer.clone();
+        let elicitation = input.elicitation.clone();
         Box::pin(async move {
             client::connect_with_transport(
-                &ConnectInput { server: &server, config: &config, directory: &directory, bearer },
+                &ConnectInput {
+                    server: &server,
+                    config: &config,
+                    directory: &directory,
+                    bearer,
+                    elicitation,
+                },
                 transport,
                 false,
             )
@@ -421,6 +534,7 @@ async fn mcp_client_answers_roots_list_with_location_directory() {
         config: &local_config(),
         directory: "/repo space",
         bearer: None,
+        elicitation: None,
     };
     let connection =
         client::connect_with_transport(&input, transport, false).await.expect("connect");
@@ -449,8 +563,13 @@ async fn mcp_client_classifies_session_expiry_once() {
     let expire = Arc::new(std::sync::atomic::AtomicBool::new(true));
     let script = Script { calls, expire_once: expire, ..Script::new() };
     let (transport, _mock) = mock_pair(script);
-    let input =
-        ConnectInput { server: "mock", config: &local_config(), directory: "/tmp", bearer: None };
+    let input = ConnectInput {
+        server: "mock",
+        config: &local_config(),
+        directory: "/tmp",
+        bearer: None,
+        elicitation: None,
+    };
     // Remote classification requires remote=true.
     let connection =
         client::connect_with_transport(&input, transport, true).await.expect("connect");
@@ -466,6 +585,334 @@ async fn mcp_client_classifies_session_expiry_once() {
     // Subsequent non-transient failures pass through untouched.
     let second = connection.call_tool("ping", None, None).await.expect("recovered call");
     assert!(!second.is_error);
+}
+
+#[tokio::test]
+async fn mcp_client_offers_v2_protocol_version_2025_11_25() {
+    // v2.0.24's TS client offers `2025-11-25`
+    // (SUPPORTED_PROTOCOL_VERSIONS[0], the legacy initialize handshake);
+    // rmcp's server-answer acceptance semantics stay untouched.
+    let script = Script::new();
+    let offers = Arc::clone(&script.offers);
+    let (_connection, _mock) = connect_mock(script).await;
+    let offered = offers.lock();
+    assert!(!offered.is_empty(), "initialize offer recorded: {:?}", *offered);
+    assert_eq!(
+        offered[0].pointer("/params/protocolVersion").and_then(serde_json::Value::as_str),
+        Some("2025-11-25"),
+        "client offers the v2.0.24 protocol version: {:?}",
+        *offered
+    );
+}
+
+#[tokio::test]
+async fn mcp_client_call_tool_maps_resource_link_to_text_uri() {
+    // client.ts:407 — `resource_link` flattens to `{type:"text", text: uri}`.
+    let mut calls = BTreeMap::new();
+    calls.insert(
+        "link".to_string(),
+        serde_json::json!({
+            "content": [
+                { "type": "resource_link", "uri": "mock://docs/1", "name": "Docs" },
+                { "type": "text", "text": "after" },
+            ],
+            "isError": false,
+        }),
+    );
+    let script = Script { calls, ..Script::new() };
+    let (connection, _mock) = connect_mock(script).await;
+    let result = connection.call_tool("link", None, None).await.expect("call");
+    assert_eq!(result.content.len(), 2);
+    assert_eq!(
+        result.content[0],
+        client::CallToolContent::Text { text: "mock://docs/1".into() },
+        "resource_link surfaces as a text block carrying its URI"
+    );
+    assert_eq!(result.content[1], client::CallToolContent::Text { text: "after".into() });
+}
+
+// ---------------------------------------------------------------------------
+// elicitation over the wire
+// ---------------------------------------------------------------------------
+
+/// The real forms service over deterministic ids/clock (no bus — the
+/// form rows themselves are the observable surface).
+fn real_forms() -> crate::forms::Forms {
+    crate::forms::Forms::new(
+        Arc::new(oc_util::determinism::SequentialIdGen::new()),
+        Arc::new(oc_util::determinism::FixedClock::epoch()),
+    )
+}
+
+/// Waits for one pending form on the sentinel session.
+async fn await_global_form(forms: &crate::forms::Forms) -> oc_schema::form::Info {
+    for _ in 0..400 {
+        if let Some(form) = forms.list(Some(elicitation::GLOBAL_ELICITATION_SESSION_ID)).pop() {
+            return form;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    panic!("no global elicitation form appeared");
+}
+
+fn form_params() -> serde_json::Value {
+    serde_json::json!({
+        "mode": "form",
+        "message": "Who?",
+        "requestedSchema": {
+            "type": "object",
+            "properties": { "name": { "type": "string", "title": "Name" } },
+            "required": ["name"],
+        },
+    })
+}
+
+#[tokio::test]
+async fn mcp_client_elicitation_form_accept_answers_and_continues_tool_call() {
+    let forms = real_forms();
+    let script = Script {
+        elicit_on_call: BTreeMap::from([("work".to_string(), form_params())]),
+        ..Script::new()
+    };
+    let offers = Arc::clone(&script.offers);
+    let (connection, mock) =
+        connect_mock_with(script, Some(RegistryElicitation::adapter(Arc::new(forms.clone()))))
+            .await;
+
+    // client.ts:188 — with a handler installed the client advertises the
+    // elicitation capability with both sub-capabilities present. rmcp's
+    // form sub-capability cannot carry v2's `applyDefaults: true` hint
+    // (it models only `schemaValidation`), so the form object is empty.
+    let capabilities =
+        offers.lock()[0].pointer("/params/capabilities").cloned().expect("capabilities offered");
+    assert_eq!(
+        capabilities,
+        serde_json::json!({
+            "roots": {},
+            "elicitation": { "form": {}, "url": {} },
+        })
+    );
+
+    let call = tokio::spawn({
+        let connection = connection.clone();
+        async move { connection.call_tool("work", None, Some("ses_1")).await }
+    });
+
+    // The elicitation surfaces as a form owned by the "global" sentinel
+    // session with the ref payload shape (index.ts:245-277).
+    let form = await_global_form(&forms).await;
+    assert_eq!(form.title, "mock is requesting input");
+    assert_eq!(
+        form.metadata.as_ref().and_then(|m| m.get("kind")).and_then(|v| v.as_str()),
+        Some("mcp-elicitation")
+    );
+    assert_eq!(
+        form.metadata.as_ref().and_then(|m| m.get("server")).and_then(|v| v.as_str()),
+        Some("mock")
+    );
+    assert_eq!(
+        form.metadata.as_ref().and_then(|m| m.get("message")).and_then(|v| v.as_str()),
+        Some("Who?")
+    );
+    assert!(form.metadata.as_ref().is_some_and(|m| !m.contains_key("elicitationID")));
+
+    // Answer accept+content; the elicitation result flows back and the
+    // tool call continues (ref "empty-elicitation" result shape).
+    let mut answer = oc_schema::form::Answer::new();
+    answer.insert("name".to_string(), oc_schema::form::FormValue::String("Ada".into()));
+    forms.reply(&form.id, answer).await.expect("reply");
+    let result = call.await.expect("join").expect("call");
+    assert_eq!(
+        result.structured,
+        Some(serde_json::json!({ "action": "accept", "content": { "name": "Ada" } }))
+    );
+    connection.close().await;
+    drop(mock);
+}
+
+#[tokio::test]
+async fn mcp_client_elicitation_empty_schema_accepts_without_creating_forms() {
+    // Ref test "accepts empty MCP elicitations without creating forms":
+    // the structured result is exactly `{action:"accept", content:{}}`.
+    let forms = real_forms();
+    let script = Script {
+        elicit_on_call: BTreeMap::from([(
+            "empty-elicitation".to_string(),
+            serde_json::json!({
+                "mode": "form",
+                "message": "Confirm",
+                "requestedSchema": { "type": "object", "properties": {} },
+            }),
+        )]),
+        ..Script::new()
+    };
+    let (connection, _mock) =
+        connect_mock_with(script, Some(RegistryElicitation::adapter(Arc::new(forms.clone()))))
+            .await;
+    let result = connection.call_tool("empty-elicitation", None, None).await.expect("call");
+    assert_eq!(result.structured, Some(serde_json::json!({ "action": "accept", "content": {} })));
+    assert!(forms.list(None).is_empty(), "an empty schema accepts without creating a form");
+    connection.close().await;
+}
+
+#[tokio::test]
+async fn mcp_client_elicitation_dismissed_form_answers_cancel() {
+    // A dismissed form maps to `{action:"cancel"}` (index.ts:283 — every
+    // non-answer cancels; v2's handler never declines).
+    let forms = real_forms();
+    let script = Script {
+        elicit_on_call: BTreeMap::from([("work".to_string(), form_params())]),
+        ..Script::new()
+    };
+    let (connection, _mock) =
+        connect_mock_with(script, Some(RegistryElicitation::adapter(Arc::new(forms.clone()))))
+            .await;
+    let call = tokio::spawn({
+        let connection = connection.clone();
+        async move { connection.call_tool("work", None, None).await }
+    });
+    let form = await_global_form(&forms).await;
+    forms.cancel(&form.id, None).await.expect("cancel");
+    let result = call.await.expect("join").expect("call");
+    assert_eq!(result.structured, Some(serde_json::json!({ "action": "cancel" })));
+    connection.close().await;
+}
+
+#[tokio::test]
+async fn mcp_client_elicitation_url_mode_settles_via_completion_notification() {
+    // Ref test "acknowledges completed MCP URL elicitations without
+    // returning internal content": the parked form settles on the legacy
+    // `notifications/elicitation/complete` and the answer is exactly
+    // `{action:"accept"}` — no content key.
+    let forms = real_forms();
+    let script = Script {
+        elicit_on_call: BTreeMap::from([(
+            "url-elicitation".to_string(),
+            serde_json::json!({
+                "mode": "url",
+                "message": "Authorize access",
+                "url": "https://example.com/authorize",
+                "elicitationId": "elicitation-test",
+            }),
+        )]),
+        ..Script::new()
+    };
+    let (connection, mock) =
+        connect_mock_with(script, Some(RegistryElicitation::adapter(Arc::new(forms.clone()))))
+            .await;
+    let call = tokio::spawn({
+        let connection = connection.clone();
+        async move { connection.call_tool("url-elicitation", None, None).await }
+    });
+    let form = await_global_form(&forms).await;
+    // The URL-mode form is one external field keyed "elicitation" and
+    // carries the elicitationID it will be settled by.
+    assert_eq!(form.fields.len(), 1);
+    assert!(matches!(
+        form.fields[0],
+        oc_schema::form::Field::External { ref key, ref url, .. }
+            if key == elicitation::URL_ELICITATION_FIELD_KEY && url == "https://example.com/authorize"
+    ));
+    assert_eq!(
+        form.metadata.as_ref().and_then(|m| m.get("elicitationID")).and_then(|v| v.as_str()),
+        Some("elicitation-test")
+    );
+    mock.notify_elicitation_complete("elicitation-test");
+    let result = call.await.expect("join").expect("call");
+    assert_eq!(result.structured, Some(serde_json::json!({ "action": "accept" })));
+    // The parked form settled answered with the sentinel field, not
+    // internal content.
+    match forms.state(&form.id).expect("state") {
+        oc_schema::form::State::Answered { answer } => {
+            assert_eq!(
+                answer.get(elicitation::URL_ELICITATION_FIELD_KEY),
+                Some(&oc_schema::form::FormValue::Bool(true))
+            );
+        }
+        other => panic!("expected answered, got {other:?}"),
+    }
+    connection.close().await;
+}
+
+#[tokio::test]
+async fn mcp_client_elicitation_abort_race_answers_cancel() {
+    // Timeout/cancel semantics per ref: no dedicated elicit timeout — the
+    // ask races the request's abort signal (`waitForAbort(signal)`,
+    // client.ts:209) and an aborted elicitation settles cancelled, never
+    // dangling a pending form. rmcp additionally drops the late response
+    // for a request it already cancelled, so nothing rides the wire.
+    let forms = real_forms();
+    let (connection, mut mock) = connect_mock_with(
+        Script::new(),
+        Some(RegistryElicitation::adapter(Arc::new(forms.clone()))),
+    )
+    .await;
+    mock.request_elicitation(7001, form_params());
+    let form = await_global_form(&forms).await;
+    assert!(matches!(forms.state(&form.id), Ok(oc_schema::form::State::Pending)));
+    mock.cancel_request(7001);
+    // The aborted form settles cancelled (the ask lost the abort race).
+    for _ in 0..400 {
+        if matches!(forms.state(&form.id), Ok(oc_schema::form::State::Cancelled { .. })) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert!(
+        matches!(forms.state(&form.id), Ok(oc_schema::form::State::Cancelled { .. })),
+        "aborted elicitation cancels its form"
+    );
+    // rmcp drops the cancelled request's late response — nothing answers
+    // the elicitation on the wire.
+    if let Ok(answer) = tokio::time::timeout(Duration::from_millis(200), mock.answers.recv()).await
+    {
+        panic!("no elicitation answer should ride the wire after cancellation: {answer:?}");
+    }
+    connection.close().await;
+}
+
+#[tokio::test]
+async fn mcp_registry_passes_elicitation_handler_to_connector() {
+    let (_db, bus) = test_bus().await;
+    let mut servers = BTreeMap::new();
+    servers.insert("alpha".to_string(), local_config());
+    let saw_elicitation = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let marker = Arc::clone(&saw_elicitation);
+    let connector: Connector = Arc::new(move |input: ConnectInput<'_>| {
+        marker.store(input.elicitation.is_some(), std::sync::atomic::Ordering::SeqCst);
+        let script = Script::new().tool("echo", "Echo", None);
+        let (transport, _mock) = mock_pair(script);
+        let server = input.server.to_string();
+        let config = input.config.clone();
+        let directory = input.directory.to_string();
+        let bearer = input.bearer.clone();
+        let elicitation = input.elicitation.clone();
+        Box::pin(async move {
+            client::connect_with_transport(
+                &ConnectInput {
+                    server: &server,
+                    config: &config,
+                    directory: &directory,
+                    bearer,
+                    elicitation,
+                },
+                transport,
+                false,
+            )
+            .await
+        })
+    });
+    let registry = McpRegistry::with_connector(bus, connector, Arc::new(NoCredentials))
+        .with_config_source(Arc::new(move || servers.clone()))
+        .with_directory("/tmp")
+        .with_elicitation(RegistryElicitation::adapter(Arc::new(real_forms())));
+    registry.reconcile().await;
+    wait_for_status(&registry, "alpha", Status::Connected).await;
+    assert!(
+        saw_elicitation.load(std::sync::atomic::Ordering::SeqCst),
+        "the registry's elicitation handler rides every connect"
+    );
+    registry.shutdown().await;
 }
 
 // ---------------------------------------------------------------------------
@@ -603,9 +1050,16 @@ async fn mcp_registry_reconciles_only_changed_servers() {
         let config = input.config.clone();
         let directory = input.directory.to_string();
         let bearer = input.bearer.clone();
+        let elicitation = input.elicitation.clone();
         Box::pin(async move {
             client::connect_with_transport(
-                &ConnectInput { server: &server, config: &config, directory: &directory, bearer },
+                &ConnectInput {
+                    server: &server,
+                    config: &config,
+                    directory: &directory,
+                    bearer,
+                    elicitation,
+                },
                 transport,
                 false,
             )
@@ -656,9 +1110,16 @@ async fn mcp_registry_recovers_and_replays_after_session_expiry() {
         let config = input.config.clone();
         let directory = input.directory.to_string();
         let bearer = input.bearer.clone();
+        let elicitation = input.elicitation.clone();
         Box::pin(async move {
             client::connect_with_transport(
-                &ConnectInput { server: &server, config: &config, directory: &directory, bearer },
+                &ConnectInput {
+                    server: &server,
+                    config: &config,
+                    directory: &directory,
+                    bearer,
+                    elicitation,
+                },
                 transport,
                 true,
             )
@@ -697,9 +1158,16 @@ async fn mcp_registry_watch_tools_changed_refreshes_catalog() {
         let config = input.config.clone();
         let directory = input.directory.to_string();
         let bearer = input.bearer.clone();
+        let elicitation = input.elicitation.clone();
         Box::pin(async move {
             client::connect_with_transport(
-                &ConnectInput { server: &server, config: &config, directory: &directory, bearer },
+                &ConnectInput {
+                    server: &server,
+                    config: &config,
+                    directory: &directory,
+                    bearer,
+                    elicitation,
+                },
                 transport,
                 false,
             )
@@ -834,11 +1302,17 @@ impl RuleResolver for FixedRules {
 // elicitation
 // ---------------------------------------------------------------------------
 
-/// Scripted form service: canned answers or dismissals.
+/// Scripted form service: canned answers, dismissals, or asks that park
+/// until `reply` settles them.
 struct FakeForms {
     answer: parking_lot::Mutex<Option<Result<oc_schema::form::Answer, elicitation::FormCancelled>>>,
     asked: parking_lot::Mutex<Vec<oc_schema::form::Info>>,
     reply: parking_lot::Mutex<Vec<(oc_schema::id::FormId, oc_schema::form::Answer)>>,
+    /// Parking mode: senders for asks waiting on `reply`.
+    parked: parking_lot::Mutex<
+        Vec<(oc_schema::id::FormId, tokio::sync::oneshot::Sender<oc_schema::form::Answer>)>,
+    >,
+    park_until_reply: bool,
 }
 
 impl FakeForms {
@@ -847,14 +1321,20 @@ impl FakeForms {
             answer: parking_lot::Mutex::new(Some(Ok(answer))),
             asked: parking_lot::Mutex::new(Vec::new()),
             reply: parking_lot::Mutex::new(Vec::new()),
+            parked: parking_lot::Mutex::new(Vec::new()),
+            park_until_reply: false,
         }
     }
 
-    fn cancelling() -> Self {
+    /// Asks park until `reply` settles them by form id — the shape the
+    /// legacy URL completion path relies on.
+    fn parking() -> Self {
         Self {
-            answer: parking_lot::Mutex::new(Some(Err(elicitation::FormCancelled))),
+            answer: parking_lot::Mutex::new(None),
             asked: parking_lot::Mutex::new(Vec::new()),
             reply: parking_lot::Mutex::new(Vec::new()),
+            parked: parking_lot::Mutex::new(Vec::new()),
+            park_until_reply: true,
         }
     }
 }
@@ -867,13 +1347,24 @@ impl FormService for FakeForms {
         'static,
         Result<oc_schema::form::Answer, elicitation::FormCancelled>,
     > {
+        let id = form.id.clone();
         self.asked.lock().push(form);
+        if self.park_until_reply {
+            let (sender, receiver) = tokio::sync::oneshot::channel();
+            self.parked.lock().push((id, sender));
+            return Box::pin(async move { receiver.await.map_err(|_| elicitation::FormCancelled) });
+        }
         let answer = self.answer.lock().clone().unwrap_or(Err(elicitation::FormCancelled));
         Box::pin(async move { answer })
     }
 
     fn reply(&self, id: &oc_schema::id::FormId, answer: oc_schema::form::Answer) {
-        self.reply.lock().push((id.clone(), answer));
+        self.reply.lock().push((id.clone(), answer.clone()));
+        let mut parked = self.parked.lock();
+        if let Some(index) = parked.iter().position(|(parked_id, _)| parked_id == id) {
+            let (_, sender) = parked.remove(index);
+            let _ = sender.send(answer);
+        }
     }
 }
 
@@ -932,41 +1423,93 @@ async fn mcp_elicitation_form_roundtrip_and_global_sentinel() {
     assert_eq!(asked[0].fields.len(), 2);
 }
 
-#[tokio::test]
-async fn mcp_elicitation_url_mode_and_completion_settlement() {
-    let forms = Arc::new(FakeForms::cancelling());
-    let handler = RegistryElicitation::new(Arc::clone(&forms) as Arc<dyn FormService>);
-    // Legacy URL elicitation with an id: the parked form settles when
-    // notifications/elicitation/complete arrives.
-    let handle = tokio::spawn(async move {
-        handler
-            .create(super::elicitation::ElicitationCreate {
-                server: "srv",
-                params: ElicitationParams::Url {
-                    message: "login".into(),
-                    url: "https://srv/auth".into(),
-                    elicitation_id: Some("el_1".into()),
-                },
-            })
-            .await
-    });
-    tokio::time::sleep(Duration::from_millis(10)).await;
-    assert_eq!(forms.asked.lock().len(), 1, "URL form created");
-    // complete() replies `elicitation: true` on the parked form.
-    // (The FakeForms ask resolves cancelled immediately, so this only
-    // verifies the reply routing — the settle path itself is exercised by
-    // the pending-map lookup below.)
-    handler_for_complete(&forms);
-    let result = handle.await.expect("join");
-    assert_eq!(result.action, super::elicitation::ElicitationAction::Cancel);
+/// Waits until the fake has parked a form ask (bounded, like
+/// [`await_global_form`]).
+async fn wait_until_asked(forms: &FakeForms) {
+    for _ in 0..400 {
+        if !forms.asked.lock().is_empty() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    panic!("no elicitation form was asked");
 }
 
-fn handler_for_complete(forms: &Arc<FakeForms>) {
-    // The complete() settlement requires the pending form to still be
-    // parked; with an instantly-cancelling fake the map is already empty,
-    // so complete() is a no-op there. Call it for coverage.
-    let handler = RegistryElicitation::new(forms.clone() as Arc<dyn FormService>);
+#[tokio::test]
+async fn mcp_elicitation_url_mode_and_completion_settlement() {
+    let forms = Arc::new(FakeForms::parking());
+    let handler = Arc::new(RegistryElicitation::new(Arc::clone(&forms) as Arc<dyn FormService>));
+    // Legacy URL elicitation with an id: the ask parks, and
+    // notifications/elicitation/complete settles it with
+    // `elicitation: true`, which maps to accept (index.ts:296-301).
+    let handle = tokio::spawn({
+        let handler = Arc::clone(&handler);
+        async move {
+            RegistryElicitation::create(
+                &handler,
+                super::elicitation::ElicitationCreate {
+                    server: "srv",
+                    params: ElicitationParams::Url {
+                        message: "login".into(),
+                        url: "https://srv/auth".into(),
+                        elicitation_id: Some("el_1".into()),
+                    },
+                },
+            )
+            .await
+        }
+    });
+    wait_until_asked(&forms).await;
+    assert!(handler.is_pending_url("srv", "el_1"), "entry parked while the form waits");
     handler.complete("srv", "el_1");
+    let result = handle.await.expect("join");
+    // The settled form resolves the ask with `elicitation: true` → accept.
+    assert_eq!(result.action, super::elicitation::ElicitationAction::Accept);
+    assert!(result.content.is_empty(), "url mode returns no content");
+    // Settlement reply shape: routed to the parked form id with the
+    // sentinel field set.
+    let replies = forms.reply.lock();
+    assert_eq!(replies.len(), 1, "exactly one settlement reply");
+    assert_eq!(replies[0].0, forms.asked.lock()[0].id, "reply routed to the parked form");
+    assert_eq!(
+        replies[0].1.get(elicitation::URL_ELICITATION_FIELD_KEY),
+        Some(&oc_schema::form::FormValue::Bool(true))
+    );
+    drop(replies);
+    assert!(!handler.is_pending_url("srv", "el_1"), "entry removed after settlement");
+}
+
+#[tokio::test]
+async fn mcp_elicitation_url_abort_removes_pending_entry() {
+    // Aborting a URL elicitation drops the create future mid-ask (the
+    // client's select takes the cancellation arm); the pending entry must
+    // be deleted on that exit too (Effect.ensuring, index.ts:260), not
+    // only after the ask settles.
+    let forms = Arc::new(FakeForms::parking());
+    let registry = Arc::new(RegistryElicitation::new(Arc::clone(&forms) as Arc<dyn FormService>));
+    let client = elicitation::ClientElicitation::new(Arc::clone(&registry));
+    let ct = tokio_util::sync::CancellationToken::new();
+    let request = rmcp::model::ElicitRequestParams::UrlElicitationParams {
+        meta: None,
+        message: "login".into(),
+        url: "https://srv/auth".into(),
+        elicitation_id: "el_abort".into(),
+    };
+    let handle = tokio::spawn({
+        let ct = ct.clone();
+        async move { client.handle("srv", request, ct).await }
+    });
+    wait_until_asked(&forms).await;
+    assert!(registry.is_pending_url("srv", "el_abort"), "entry parked while the form waits");
+    ct.cancel();
+    let result = handle.await.expect("join");
+    assert_eq!(
+        result.action,
+        rmcp::model::ElicitationAction::Cancel,
+        "aborted elicitation cancels"
+    );
+    assert!(result.content.is_none(), "url mode carries no content key");
+    assert!(!registry.is_pending_url("srv", "el_abort"), "abort removes the pending entry");
 }
 
 #[tokio::test]
