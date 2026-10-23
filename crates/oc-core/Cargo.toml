@@ -13,6 +13,9 @@ oc-util = { workspace = true }
 oc-schema = { workspace = true }
 oc-ai = { workspace = true }
 tokio = { workspace = true }
+# rmcp's RequestContext cancellation token (elicitation abort race); the
+# version rmcp 3.7 itself uses (already in the lock).
+tokio-util = { version = "0.7", default-features = false }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
