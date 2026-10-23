@@ -23,6 +23,15 @@
 //!   <box paddingLeft=4 paddingRight=2>    footer actions (gap 2)
 //! </box>
 //! ```
+//!
+//! F15 — the option-row height model (dialog-select.tsx:232-238,
+//! :885-907): every option is ONE row at every width. The title text
+//! is `overflow="hidden"` + `wrapMode="none"` (never wrapped —
+//! opentui mode `none` is one vline per logical line), pre-truncated
+//! through `Locale.truncate(title, titleWidth ?? 61)` (stage 1) and
+//! clipped at the title box's edge — the row content edge less the
+//! footer's `flexShrink=0` reservation and its `gap=1` (stage 2, see
+//! [`truncated_title`] / [`title_clip_end`]).
 
 pub mod fuzzy;
 
@@ -44,6 +53,97 @@ pub struct SelectOption {
     pub search_footer: Option<String>,
     /// Right-aligned footer shown while not filtering.
     pub footer: Option<String>,
+    /// `DialogSelectOption.titleWidth` (dialog-select.tsx:78): the
+    /// stage-1 truncation cap; `None` = the ref's `?? 61` default.
+    pub title_width: Option<usize>,
+    /// `DialogSelectOption.truncateTitle` (dialog-select.tsx:79): the
+    /// stage-1 truncation mode (see [`TitleTruncate`]).
+    pub truncate_title: TitleTruncate,
+}
+
+/// `DialogSelectOption.truncateTitle` (dialog-select.tsx:78-79,:
+/// 893-898): how the title is stage-1 truncated BEFORE layout. The
+/// mode never changes the height model — the row stays one row at
+/// every width (`wrapMode="none"` + `overflow="hidden"`, :889-890).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TitleTruncate {
+    /// The default: `Locale.truncate(title, titleWidth ?? 61)` — the
+    /// first `len-1` chars + `…` (locale.ts:50-53).
+    #[default]
+    Right,
+    /// `truncateTitle: "left"`: `Locale.truncateLeft` — `…` + the
+    /// LAST `len-1` chars (locale.ts:83-86).
+    Left,
+    /// `truncateTitle: false`: the raw title (stage-2 clip only).
+    Off,
+}
+
+/// `Locale.truncate` (util/locale.ts:50-53): the clipped string with
+/// an ellipsis when it exceeds `max` — `slice(0, len - 1) + "…"`.
+/// Char-based like the port precedent (`dialog_open::truncate`, the
+/// same locale function).
+#[must_use]
+pub fn truncate_right(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_owned();
+    }
+    let cut: String = text.chars().take(max.saturating_sub(1)).collect();
+    format!("{cut}…")
+}
+
+/// `Locale.truncateLeft` (util/locale.ts:83-86): `…` + the string's
+/// LAST `len - 1` chars when it exceeds `max`.
+#[must_use]
+pub fn truncate_left(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_owned();
+    }
+    let keep = max.saturating_sub(1);
+    let tail: String = text.chars().skip(text.chars().count() - keep).collect();
+    format!("…{tail}")
+}
+
+/// The stage-1 title — the `Option` component's pre-layout
+/// truncation (dialog-select.tsx:893-898): the default right-cap at
+/// `titleWidth ?? 61`, the left variant, or the raw string. The
+/// DESCRIPTION is never stage-1 truncated (a separate span, :899-903).
+#[must_use]
+pub fn truncated_title(option: &SelectOption) -> std::borrow::Cow<'_, str> {
+    let max = option.title_width.unwrap_or(61);
+    match option.truncate_title {
+        TitleTruncate::Right => {
+            if option.title.chars().count() <= max {
+                std::borrow::Cow::Borrowed(&option.title)
+            } else {
+                std::borrow::Cow::Owned(truncate_right(&option.title, max))
+            }
+        }
+        TitleTruncate::Left => {
+            if option.title.chars().count() <= max {
+                std::borrow::Cow::Borrowed(&option.title)
+            } else {
+                std::borrow::Cow::Owned(truncate_left(&option.title, max))
+            }
+        }
+        TitleTruncate::Off => std::borrow::Cow::Borrowed(&option.title),
+    }
+}
+
+/// The title run's exclusive clip column — the STAGE-2 truncation
+/// (dialog-select.tsx:885-907): the title text is `flexGrow={1}`
+/// between the marker and the `flexShrink={0}` footer inside the row
+/// box (`paddingLeft 1|3, paddingRight 3, gap 1`, :781-793), so the
+/// run ends at the row content edge `width - 4`, less the footer's
+/// reservation and its leading `gap=1` column when a footer exists.
+/// The footer itself is never truncated by the title (the ref's own
+/// complete-footer test, dialog-select.test.tsx:291-308).
+#[must_use]
+pub fn title_clip_end(width: usize, footer: Option<&str>) -> usize {
+    let end = width.saturating_sub(4);
+    match footer {
+        Some(footer) => end.saturating_sub(crate::wrap::display_width(footer) + 1),
+        None => end,
+    }
 }
 
 impl SelectOption {
@@ -57,6 +157,8 @@ impl SelectOption {
             search_text: None,
             search_footer: None,
             footer: None,
+            title_width: None,
+            truncate_title: TitleTruncate::default(),
         }
     }
 
@@ -87,6 +189,30 @@ impl SelectOption {
     #[must_use]
     pub fn with_search_footer(mut self, footer: impl Into<String>) -> Self {
         self.search_footer = Some(footer.into());
+        self
+    }
+
+    /// `titleWidth` (dialog-select.tsx:78): the stage-1 truncation
+    /// cap (the ref's `?? 61` default while unset).
+    #[must_use]
+    pub fn with_title_width(mut self, width: usize) -> Self {
+        self.title_width = Some(width);
+        self
+    }
+
+    /// `truncateTitle: "left"` (dialog-select.tsx:79, :896-897):
+    /// `Locale.truncateLeft` — keep the TAIL.
+    #[must_use]
+    pub fn truncate_title_left(mut self) -> Self {
+        self.truncate_title = TitleTruncate::Left;
+        self
+    }
+
+    /// `truncateTitle: false` (dialog-select.tsx:79, :894-895): the
+    /// raw title — stage-2 clip only.
+    #[must_use]
+    pub fn without_title_truncation(mut self) -> Self {
+        self.truncate_title = TitleTruncate::Off;
         self
     }
 }
@@ -588,6 +714,9 @@ pub struct DialogStyles {
     pub destructive_fg: Color,
     /// `background.action.destructive.focused`.
     pub destructive_bg: Color,
+    /// `text.feedback.error.base` — the pair dialog's failed-load
+    /// header (dialog-pair.tsx:121).
+    pub error_fg: Color,
 }
 
 impl DialogStyles {
@@ -609,6 +738,7 @@ impl DialogStyles {
             formfield_base_fg: color(tokens.text.formfield.base),
             destructive_fg: color(tokens.text.action.destructive.focused),
             destructive_bg: color(tokens.background.action.destructive.focused),
+            error_fg: color(tokens.text.feedback.error.base),
         }
     }
 }
@@ -812,6 +942,15 @@ pub fn render_select(
 /// One option row: scroll pad 1; the row box spans `[1, width-2)`;
 /// paddingLeft 3 (1 + `●` marker + gap when current); paddingRight 3;
 /// the footer right-aligned ending at `width - 4`.
+///
+/// F15 — the ref's two-stage horizontal truncation (the row is ONE
+/// row at every width, `wrapMode="none"` + `overflow="hidden"`,
+/// dialog-select.tsx:889-890):
+/// * stage 1 — the title string itself is pre-truncated
+///   (`Locale.truncate(title, titleWidth ?? 61)`, :893-898);
+/// * stage 2 — the title + description run clips at the title text
+///   box's edge: the row content edge less the footer's reservation
+///   and its `gap=1` ([`title_clip_end`]) — the footer never yields.
 #[allow(clippy::too_many_arguments)]
 fn paint_option_row(
     cells: &mut [Cell],
@@ -839,28 +978,10 @@ fn paint_option_row(
         pad_cells(cells, 1, width.saturating_sub(2), default, styles.selected_bg);
     }
 
-    let at = if current {
-        // paddingLeft 1, marker, gap 1, title at 4.
-        let marker_fg = if selected { styles.selected_fg } else { styles.current_fg };
-        put(cells, 2, "●", marker_fg, row_bg, 0);
-        put(cells, 4, &option.title, title_fg_color, row_bg, title_attrs)
-    } else {
-        put(cells, 4, &option.title, title_fg_color, row_bg, title_attrs)
-    };
-    // Description (" " + text) — hidden when it merely repeats the
-    // category; the selected row paints it in the row color (bold).
-    let description = match option.description.as_deref() {
-        Some(description) if Some(description) != option.category.as_deref() => Some(description),
-        _ => None,
-    };
-    if let Some(description) = description {
-        let fg = if selected { title_fg_color } else { styles.muted };
-        put(cells, at, &format!(" {description}"), fg, row_bg, title_attrs);
-    }
-
-    // Right-aligned footer: while flattened (filtering on a flat
-    // select) the search footer (group · binding), else the plain
-    // footer.
+    // The footer (right-aligned, `flexShrink=0`) resolves FIRST —
+    // its reservation bounds the title run's stage-2 clip.
+    // While flattened (filtering on a flat select) the search footer
+    // (group · binding), else the plain footer.
     let footer = if flatten_mode {
         option
             .search_footer
@@ -870,6 +991,29 @@ fn paint_option_row(
     } else {
         option.footer.clone()
     };
+    let clip = title_clip_end(width, footer.as_deref());
+
+    let at = if current {
+        // paddingLeft 1, marker, gap 1, title at 4.
+        let marker_fg = if selected { styles.selected_fg } else { styles.current_fg };
+        put(cells, 2, "●", marker_fg, row_bg, 0);
+        put_bounded(cells, 4, clip, &truncated_title(option), title_fg_color, row_bg, title_attrs)
+    } else {
+        put_bounded(cells, 4, clip, &truncated_title(option), title_fg_color, row_bg, title_attrs)
+    };
+    // Description (" " + text) — hidden when it merely repeats the
+    // category; the selected row paints it in the row color (bold).
+    // It joins the SAME stage-2 clip (never stage-1 truncated — a
+    // separate span, dialog-select.tsx:899-903).
+    let description = match option.description.as_deref() {
+        Some(description) if Some(description) != option.category.as_deref() => Some(description),
+        _ => None,
+    };
+    if let Some(description) = description {
+        let fg = if selected { title_fg_color } else { styles.muted };
+        put_bounded(cells, at, clip, &format!(" {description}"), fg, row_bg, title_attrs);
+    }
+
     if let Some(footer) = footer {
         let fg = if selected { styles.selected_fg } else { styles.muted };
         let end = width.saturating_sub(4);
@@ -896,6 +1040,25 @@ fn put(cells: &mut [Cell], x: usize, text: &str, fg: Color, bg: Color, attrs: u1
         at += atom.width.max(1);
     }
     at
+}
+
+/// [`put`] with an explicit exclusive clip column `limit` — the
+/// stage-2 truncation edge (the title text box's right side,
+/// `overflow="hidden"`). Glyphs never paint at or past `limit`.
+fn put_bounded(
+    cells: &mut [Cell],
+    x: usize,
+    limit: usize,
+    text: &str,
+    fg: Color,
+    bg: Color,
+    attrs: u16,
+) -> usize {
+    let start = x.min(limit);
+    match cells.get_mut(start..limit) {
+        Some(slice) => put(slice, 0, text, fg, bg, attrs) + start,
+        None => start,
+    }
 }
 
 /// Paint a [`SelectView`] as a full-bleed frame (the standalone mount:
@@ -1173,5 +1336,258 @@ mod tests {
         let props = SelectProps::new("Commands", options).threshold(0.7);
         let indices = filter_indices(&props, "new");
         assert_eq!(indices.first().copied(), Some(1), "title match outranks id matches");
+    }
+
+    // -- F15: the option-row height/truncation model --------------------------
+    //
+    // The ref's option row is ONE row at every width: the title text
+    // carries `overflow="hidden"` + `wrapMode="none"` (dialog-select.
+    // tsx:889-890 — opentui mode none = one vline per logical line,
+    // never wrapped) and is pre-truncated through
+    // `Locale.truncate(title, titleWidth ?? 61)` (:893-898, locale.ts:
+    // 50-53). Narrow widths CLIP at the row content edge instead of
+    // wrapping; the footer keeps its columns (`flexShrink=0`,
+    // :905-907) behind a `gap=1` (:785).
+
+    /// 86 chars: a 23-char head, 50 `m`s, a 13-char tail marker.
+    fn long_title() -> String {
+        format!("Truncation Matrix Head {} TailMarkerZZQ", "m".repeat(50))
+    }
+
+    #[test]
+    fn long_titles_stage1_truncate_at_61_with_ellipsis() {
+        let options =
+            vec![SelectOption::titled(long_title(), "long"), SelectOption::titled("Beta", "beta")];
+        let props = SelectProps::new("Items", options);
+        let styles = styles();
+        let view = render_select(
+            &props,
+            &SelectState::default(),
+            &styles,
+            Color::Rgb(10, 10, 10),
+            80,
+            20,
+            None,
+        );
+        // Stage 1 fires at 61 regardless of width: the first 60 chars
+        // + `…` (locale.ts:50-53), painted from col 4.
+        let row = &view.rows[4];
+        let expected = format!("{}…", "Truncation Matrix Head ".to_owned() + &"m".repeat(37));
+        assert_eq!(expected.chars().count(), 61);
+        let painted: String = (4..65).map(|col| row[col].ch).collect();
+        assert_eq!(painted, expected, "the 60-chars + … stage-1 form");
+        // The raw tail never renders anywhere…
+        assert!(
+            !view.rows.iter().any(|cells| row_text(cells).contains("TailMarkerZZQ")),
+            "the past-61 tail never paints"
+        );
+        // …and the very next content row is the SECOND option — the
+        // long row consumed exactly one row (no wrap).
+        let second: String = (4..8).map(|col| view.rows[5][col].ch).collect();
+        assert_eq!(second, "Beta", "no wrap: option 2 renders on the next row");
+    }
+
+    #[test]
+    fn narrow_widths_clip_at_the_row_edge_never_wrap() {
+        // The stage-2 clip (no footer): the row content edge
+        // `width - 4`; the title starts at col 4, so the budget is
+        // `width - 8` cells of the stage-1 string — a hard cut, and
+        // stage 2 NEVER adds its own ellipsis.
+        for width in [80usize, 60, 40] {
+            let options = vec![
+                SelectOption::titled(long_title(), "long"),
+                SelectOption::titled("Beta", "beta"),
+            ];
+            let props = SelectProps::new("Items", options);
+            let styles = styles();
+            let view = render_select(
+                &props,
+                &SelectState::default(),
+                &styles,
+                Color::Rgb(10, 10, 10),
+                width,
+                20,
+                None,
+            );
+            let budget = width.saturating_sub(8);
+            let stage1: String =
+                format!("{}…", "Truncation Matrix Head ".to_owned() + &"m".repeat(37));
+            let visible: String = stage1.chars().take(budget).collect();
+            let pad = " ".repeat(budget - visible.chars().count());
+            let painted: String = (4..4 + budget).map(|col| view.rows[4][col].ch).collect();
+            assert_eq!(
+                painted,
+                format!("{visible}{pad}"),
+                "the stage-1 run clipped to {budget} cells at width {width}"
+            );
+            // The cell past the clip stays blank (the box's padding
+            // zone — no glyph ever paints there).
+            assert_eq!(view.rows[4][4 + budget].ch, ' ', "clip edge at width {width}");
+            // Still exactly one row per option at every width.
+            let second: String = (4..8).map(|col| view.rows[5][col].ch).collect();
+            assert_eq!(second, "Beta", "one row per option at width {width}");
+        }
+    }
+
+    #[test]
+    fn the_footer_reserves_its_columns_and_the_gap() {
+        let options = vec![SelectOption::titled(long_title(), "long").with_footer("ctrl+x n")];
+        let props = SelectProps::new("Items", options);
+        let styles = styles();
+        for width in [80usize, 40] {
+            let view = render_select(
+                &props,
+                &SelectState::default(),
+                &styles,
+                Color::Rgb(10, 10, 10),
+                width,
+                20,
+                None,
+            );
+            let row = &view.rows[4];
+            let footer_end = width - 4;
+            let footer_start = footer_end - 8; // display width of "ctrl+x n"
+                                               // The footer renders COMPLETE (flexShrink 0 — the title
+                                               // yields, never the footer; the ref's own test
+                                               // dialog-select.test.tsx:291-308).
+            let footer: String = (footer_start..footer_end).map(|col| row[col].ch).collect();
+            assert_eq!(footer, "ctrl+x n", "complete footer at width {width}");
+            // The gap column before the footer never shows a title
+            // glyph (gap=1, dialog-select.tsx:785).
+            assert_eq!(row[footer_start - 1].ch, ' ', "the gap column at width {width}");
+            // The title's clip stops at the gap: nothing under the
+            // footer even before the footer paints.
+            let clip = footer_start - 1;
+            let budget = clip.saturating_sub(4);
+            let stage1: String =
+                format!("{}…", "Truncation Matrix Head ".to_owned() + &"m".repeat(37));
+            let visible: String = stage1.chars().take(budget).collect();
+            let painted: String = (4..clip).map(|col| row[col].ch).collect();
+            let pad = " ".repeat(budget - visible.chars().count());
+            assert_eq!(
+                painted,
+                format!("{visible}{pad}"),
+                "title stops at the gap at width {width}"
+            );
+        }
+    }
+
+    #[test]
+    fn title_truncation_variants_follow_the_ref_modes() {
+        // `Locale.truncateLeft` (locale.ts:83-86): `…` + the LAST
+        // `len-1` chars; `truncateTitle: false` keeps the raw title.
+        let title = long_title();
+        let right = SelectOption::titled(title.as_str(), "a");
+        assert_eq!(
+            truncated_title(&right),
+            format!("{}…", "Truncation Matrix Head ".to_owned() + &"m".repeat(37))
+        );
+        let left = SelectOption::titled(title.as_str(), "b").truncate_title_left();
+        assert_eq!(truncated_title(&left), format!("…{} TailMarkerZZQ", "m".repeat(46)));
+        let capped = SelectOption::titled(title.as_str(), "c").with_title_width(20);
+        assert_eq!(truncated_title(&capped), "Truncation Matrix H…");
+        let raw = SelectOption::titled(title.as_str(), "d").without_title_truncation();
+        assert_eq!(truncated_title(&raw).as_ref(), title.as_str());
+        // Short titles pass through borrowed (no stage-1).
+        assert_eq!(truncated_title(&SelectOption::titled("Beta", "e")), "Beta");
+    }
+
+    #[test]
+    fn height_model_invariants_hold_with_long_titles() {
+        // The height model is UNCHANGED by long titles: one content
+        // row per option (`rows()`, dialog-select.tsx:237), the same
+        // viewport math, single-row hit ranges, and option-based
+        // movement/centering.
+        let long_options: Vec<SelectOption> = (0..12)
+            .map(|index| {
+                SelectOption::titled(format!("{index} {}", long_title()), format!("o{index}"))
+            })
+            .collect();
+        let short_options: Vec<SelectOption> = (0..12)
+            .map(|index| SelectOption::titled(format!("Item {index}"), format!("o{index}")))
+            .collect();
+        let long_props = SelectProps::new("Items", long_options);
+        let short_props = SelectProps::new("Items", short_options);
+        let long_groups = grouped(&long_props, "");
+        let short_groups = grouped(&short_props, "");
+        assert_eq!(content_rows(&long_groups), content_rows(&short_groups));
+        assert_eq!(viewport_height(content_rows(&long_groups), 20), 5);
+
+        // Hit ranges: exactly one dialog row per option, consecutive.
+        let mut state = SelectState::default();
+        state.reveal(&long_props, 20);
+        let rows = option_dialog_rows(&long_props, &state, 20);
+        assert_eq!(rows.len(), 12);
+        assert_eq!(rows[0], Some(4));
+        assert_eq!(rows[4], Some(8), "each long option still occupies one row");
+
+        // Movement by option + viewport centering: identical numbers
+        // to the short-title control.
+        let mut long_state = SelectState::default();
+        let mut short_state = SelectState::default();
+        for _ in 0..7 {
+            long_state.move_selection(&long_props, 1);
+            short_state.move_selection(&short_props, 1);
+        }
+        long_state.reveal(&long_props, 20);
+        short_state.reveal(&short_props, 20);
+        assert_eq!(
+            (long_state.selected, long_state.scroll),
+            (short_state.selected, short_state.scroll)
+        );
+        long_state.center_on_selection(&long_props, 20);
+        short_state.center_on_selection(&short_props, 20);
+        assert_eq!(long_state.scroll, short_state.scroll, "centering is option-based");
+    }
+
+    #[test]
+    fn the_description_clips_with_the_title_and_never_stage1_truncates() {
+        // The description is a separate span INSIDE the title's
+        // no-wrap text (dialog-select.tsx:899-903): it joins the same
+        // stage-2 clip but is never part of the 61 stage-1 truncation.
+        let options = vec![SelectOption::titled(long_title(), "long").described("tail notes here")];
+        let props = SelectProps::new("Items", options);
+        let styles = styles();
+        let stage1 = format!("{}…", "Truncation Matrix Head ".to_owned() + &"m".repeat(37));
+        // Width 84: budget 76 = the 61-cell stage-1 title + the first
+        // 15 of the description's 16 cells (" tail notes her").
+        let view = render_select(
+            &props,
+            &SelectState::default(),
+            &styles,
+            Color::Rgb(10, 10, 10),
+            84,
+            20,
+            None,
+        );
+        let painted: String = (4..80).map(|col| view.rows[4][col].ch).collect();
+        assert_eq!(painted, format!("{stage1} tail notes her"));
+        // Width 80: budget 72 — the description clips mid-run (hard
+        // cut, no added ellipsis, exactly 11 description cells in).
+        let view = render_select(
+            &props,
+            &SelectState::default(),
+            &styles,
+            Color::Rgb(10, 10, 10),
+            80,
+            20,
+            None,
+        );
+        let painted: String = (4..76).map(|col| view.rows[4][col].ch).collect();
+        assert_eq!(painted, format!("{stage1} tail notes"));
+        // Width 66: budget 58 — the description is gone entirely and
+        // the TITLE itself clips (the stage-1 `…` at cell 61 is past
+        // the clip, so it never renders either).
+        let view = render_select(
+            &props,
+            &SelectState::default(),
+            &styles,
+            Color::Rgb(10, 10, 10),
+            66,
+            20,
+            None,
+        );
+        let painted: String = (4..62).map(|col| view.rows[4][col].ch).collect();
+        assert_eq!(painted, stage1.chars().take(58).collect::<String>());
     }
 }
