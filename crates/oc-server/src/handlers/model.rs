@@ -240,7 +240,11 @@ async fn model_default(
         // `providers.own` key — or a disabled model), v2 serves
         // `available.find(supportsText)` (model.ts:260-266): the first
         // text model of the SAME ordering the list serves, never a
-        // synthetic stub.
+        // synthetic stub. Every branch honors that: the catalog lookup
+        // and the console provider both yield None on a model-id miss —
+        // a console provider only lists models it actually carries, so
+        // a miss never renders `custom_model_info`'s empty-identity
+        // zero shape (`{"id":"","modelID":"",…}`).
         let resolved = if let Some(provider) = configured_custom {
             let model = provider
                 .models
@@ -256,17 +260,12 @@ async fn model_default(
                 });
             Some(custom_model_json(&provider, &model))
         } else if let Some(provider) = console_custom {
-            let model = provider
+            let catalog = state.engine.catalog_service.get();
+            provider
                 .models
                 .iter()
                 .find(|model| model.id == selection.model.as_str())
-                .cloned()
-                .unwrap_or_else(|| oc_core::provider_catalog::facade::CustomModel {
-                    id: selection.model.to_string(),
-                    ..oc_core::provider_catalog::facade::CustomModel::default()
-                });
-            let catalog = state.engine.catalog_service.get();
-            Some(console_model_json(&provider, &model, &catalog).1)
+                .map(|model| console_model_json(&provider, model, &catalog).1)
         } else {
             let catalog = state.engine.catalog_service.get();
             catalog
@@ -459,6 +458,79 @@ mod tests {
             opus_at < large_at,
             "the dated base-merged entry sorts before the zero-released standalone"
         );
+    }
+
+    /// Review round 2 (console model-miss): when the config `model`
+    /// default pins a console provider at a model id the provider does
+    /// NOT carry, `/api/model/default` serves v2's exact-map-miss
+    /// fallback — `available.find(supportsText)` (model.ts:260-266),
+    /// the FIRST text model of the same ordering the list serves —
+    /// never the empty-identity stub the miss used to synthesize
+    /// (`custom_model_info`'s zero shape: `{"id":"","modelID":"",…}`).
+    #[tokio::test]
+    async fn model_default_console_model_miss_falls_back() {
+        let tmp = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+        let engine = oc_core::engine::Engine::boot(oc_core::engine::EngineOptions::new(
+            tmp.path().to_owned(),
+            tmp.path().to_owned(),
+        ))
+        .await;
+        // The location config pins the default at the console provider
+        // with a BOGUS model id (an exact-map miss against the console
+        // provider's models).
+        std::fs::write(
+            tmp.path().join("opencode.json"),
+            r#"{ "model": "acme-console/no-such-model" }"#,
+        )
+        .expect("write config");
+        let config = serde_json::from_str::<oc_core::integration::console::ConsoleConfig>(
+            r#"{
+            "providers": {
+                "acme-console": {
+                    "name": "Acme Console",
+                    "settings": { "baseURL": "https://acme.test/v1" },
+                    "models": { "acme-large": { "name": "Acme Large" } }
+                }
+            }
+        }"#,
+        )
+        .expect("console config decodes");
+        engine
+            .integration
+            .console_providers()
+            .swap_for_test(oc_core::integration::console::to_custom_providers(&config));
+
+        let state = std::sync::Arc::new(crate::state::AppState::new(
+            engine,
+            crate::state::AuthConfig { password: None },
+            "test".to_owned(),
+            std::sync::Arc::new(oc_util::determinism::UuidV4IdGen),
+            std::sync::Arc::new(oc_util::determinism::SystemClock),
+        ));
+        let uri: Uri = format!(
+            "http://localhost/api/model/default?location[directory]={}",
+            tmp.path().display()
+        )
+        .parse()
+        .expect("request uri");
+        let response = model_default(State(state.clone()), uri, HeaderMap::new())
+            .await
+            .expect("model.default responds");
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.expect("body");
+        let payload: Value = serde_json::from_slice(&bytes).expect("envelope json");
+        let data = &payload["data"];
+        // A REAL registry entry, never the empty-identity stub.
+        let id = data.get("id").and_then(Value::as_str).unwrap_or_default();
+        assert!(!id.is_empty(), "the miss falls back, never an empty entry: {data}");
+        // Exactly v2's fallback: the first supportsText entry of the
+        // same ordering /api/model serves.
+        let location = oc_core::location::LocationRef::new(tmp.path().to_owned(), None);
+        let expected = location_model_entries(&state.engine, &location)
+            .await
+            .into_iter()
+            .find(supports_text)
+            .expect("an available text model exists");
+        assert_eq!(data, &expected, "the default is the first available text model");
     }
 
     /// `Model.supportsText` (core model.ts:273-277): empty capabilities
