@@ -6,40 +6,42 @@
 
 ---
 
-## 1. 当前缺口（截至 2026-10-23，beta.13 + M-engine-retire 之后）
+## 1. 当前缺口（截至 2026-10-24，v2.0.24 gap burn-down 收尾之后）
+
+> **2026-10-24 burn-down 收尾**：计划 docs/superpowers/plans/2026-10-23-v2-gap-burndown.md 的全部 lane 落地后，§1 所列功能缺口**除具名豁免外全部闭环**（台账：.superpowers/sdd/2026-10-23-v2-gap-burndown/progress.md）。发布就绪判定 = 台账清零或仅余具名豁免（R-04 前端范围外裁定、R1–R5 hook 注册豁免、(b)-类随机 coin、F15 残留具名豁免）。
 
 ### 1.1 功能缺口
 
 | ID | 缺口 | 状态 | 说明 |
 |---|---|---|---|
-| R-10 | rmcp 0.5 elicitation 能力 | **blocked（上游）** | 逻辑已备，等 rmcp 上游补 elicitation |
-| R-11 | 平台矩阵（aarch64/musl/macOS/Windows） | 待用户排期 | 非功能性缺口，独立决策 |
+| R-10 | rmcp 0.5 elicitation 能力 | **已闭环（2026-10-24）** | 重裁定为真缺口（v2.0.24 已接线 elicitation，packages/core/src/mcp/index.ts:231+）：rmcp 0.5.0→3.7.0（60728e3）+ 客户端 elicitation 按 v2.0.24 接线（fd0f591） |
+| R-11 | 平台矩阵（aarch64/musl/macOS/Windows） | **已完成（2026-10-24）** | 6 目标发布矩阵（linux x64/arm64 gnu + musl×2、darwin-arm64、windows-x64 实验性）+ 每周 runtime-gates cron；9cf480d |
 | R-04 | Web UI 前端本体 | 范围外（裁定） | 静态托管 + 发布资产内嵌已完成；前端不移植 |
-| — | PTY 守护进程边界（Phase 9） | 延后 | 状态机/handoff/adopt 已备（beta.7）；socket/child keepalive 进程边界未做（`oc-core/src/persistent_pty.rs:7`） |
-| — | 企业集成 RS256/JWKS 签名校验 | 未实现 | 无 JWT 库；`oc-core/src/integration/providers_enterprise.rs:1255`，依据 docs/be3b.log |
-| — | Skill URL 源下载通道 | 延后 | `oc-core/src/engine/skills.rs:294` |
-| — | console capability/cost/limit 合并 | 延后 | `oc-core/src/integration/console.rs:211` |
-| — | oc-client sse 测试时序敏感 | 登记跟进 | 33 次未复现、已特征化并引用代码；硬化项排队中 |
+| — | PTY 守护进程边界（Phase 9） | **已实现（2026-10-24）** | 设计 docs/superpowers/specs/2026-10-23-pty-daemon-design.md（DESIGN-GO）；D1 oc-pty 守护二进制（d343a12）+ D2 客户端 transport/frontend（f98233f）+ D3 11 个进程级测试（f06245f，旗舰=子进程在 server 被杀后存活）；oc-pty 随 release 产物分发，OC_PTY_DAEMON=0 留一个 release 窗口 |
+| — | 企业集成 RS256/JWKS 签名校验 | **已实现（2026-10-24）** | ring 实现（无新加密依赖），v2 chatgpt.ts:439-459 平价，完整失败矩阵（伪造签名/错 iss/aud/过期/缺 claim/nonce 不匹配/未知 kid+冷却轮换/alg 混淆）；合并 6722828 |
+| — | Skill URL 源下载通道 | **已实现（2026-10-24）** | v2 discovery.ts 移植：index.json 协议、sha1 哈希缓存、版本门控原子刷新、document-order 碰撞语义；合并 c1a7001 |
+| — | console capability/cost/limit 合并 | **已实现（2026-10-24）** | v2 opencode.ts:245-315：cost 整体替换、limit/caps 逐字段覆盖、baseURL 优先级（含 provider 级删除继承），含 listing surfaces + default fallback；合并 14d8b76 |
+| — | oc-client sse 测试时序敏感 | **已闭环（2026-10-24）** | 确定性 readiness-sync 重写（onActivity 同步替代固定睡眠），20/20 + oc-client 57/57；合并 31a6561 |
 
 ### 1.2 行为分歧（待裁定 / 登记未修）
 
 | ID | 分歧 | 处置状态 |
 |---|---|---|
-| F15 | TUI 窄宽度换行 | 登记未修——需 option-row 高度模型重构，非快赢项 |
+| F15 | TUI 窄宽度换行 | **已解决，前提被证伪（2026-10-24）**：live ref 证实为**截断而非换行**（dialog-select.tsx:885-919 两段式截断已 1:1 移植）；DialogPair 重移植为自定义换行对话框（此前误建模为 select 模式）；c2f59d7。残留具名豁免：QR 编码器、≥96 列横向分屏（port 恒为 stacked）、<54 列 URL 硬裁剪、Enter 关闭 affordance、h<36 scroll-clip |
 | E12-F1 | 会话列表搜索：子会话泄漏 | **已裁定非分歧（2026-10-23 live ref 复核）**：live v2.0.24 从不渲染子会话行（服务端 `parentID:null` + `options()` 再过滤）；首轮 F1 系裸谓词孤立测试的伪影。证据 docs/e12-live-ref-recheck/（12/12 查询 parity） |
 | E12-F6 | 空白查询返回空 | **已裁定：裁剪后空查询 = 全量列表**（live ref 与本port一致返回全部父会话行）；谓词层保留子会话但渲染层永不含子行。与我们 `filter_indices` 语义一致，无需改码 |
 | E12-F4 | fuzzy picker vs 专用 substring 过滤 | **已裁定：substring（live ref 无 fuzzy：`zln`/`loginredirect` 均无结果）**；本port `session.list` 已挂 `.substring_filter()`——语义正确，闭环 |
 | E12-F2 | 重音等价 | **已裁定：无重音折叠**（`cafe`↔`café` 永不互配；`café` NFC 查询只配 NFC 标题）——live ref 与本port byte-exact 一致，维持 pinned 语义 |
 | E12-F3 | NFD | **已裁定：双方均不归一化**（NFD 查询对 NFC 标题零匹配），维持 pinned 语义 |
 | E12-F5 | 空白折叠 | **已裁定：无空白折叠**（双空格标题不配单空格查询，双方一致），维持 pinned 语义 |
-| E2 | boot-stretch 门行为断言 | 待注入 harness（实测中位 ~569ms 已越过 500ms 显示阈值，门可达） |
+| E2 | boot-stretch 门行为断言 | **已闭环（2026-10-24）**：temporal gate 落地 + REAL 接线修复（StartupLoading pill 此前不可达——ready 改为在本地 boot settle 解析、不受 server handshake 门控）；reconnect 覆盖层 5s grace 0 锚点修复；4d16916 |
 | R1–R5 | 插件 hook 永久注册分歧（aisdk 对象 / 返回后突变 / 交错序 / 非 JSON stash / retry 失败通道） | 永久登记——换取崩溃隔离，依据 FINDINGS.md §5 |
-| — | pre-2.0.24 旧库升级路径 | 48 个迁移已转译但验收只覆盖 v2.0.24 产库与空库；**首次启动前建议备份数据目录** |
+| — | pre-2.0.24 旧库升级路径 | **电池已落地（2026-10-24）**：合成 stepwise k=1..48 全绿 + 4 个 canary 边界（78976eb，常驻 CI；详见 MIGRATION.md §3.1）；真实历史语料门仍是 OC_P10；**首次启动前建议备份数据目录** |
 
 ### 1.3 验证盲区（已知未自动化）
 
-- 最严格的验证门是 **opt-in/manual，不在 CI**：OpenAPI 启动差分与 DB 互操作电池需 `OC_P10=1`，跨二进制/TUI 冒烟同理——声明的"empty diff"依赖手动执行，存在跳过风险。
-- 旗舰插件（oh-my-opencode-slim）验收测试仅在有安装缓存的机器真跑，CI 自跳过（PLUG-D07 之后的回归正是它抓到的）。
+- 最严格的验证门是 **opt-in/manual，不在 CI**：OpenAPI 启动差分与 DB 互操作电池需 `OC_P10=1`，跨二进制/TUI 冒烟同理——声明的"empty diff"依赖手动执行，存在跳过风险。**P10 盲区已自动化（2026-10-24）**：runtime-gates workflow 挂每周 cron（self-staging jobs；schedule arms 已修复 cron input 强转 no-op 问题）。注意：workflow 在已知红项（GATE-DB-STABLE/NULLROWS/TUI-RENAME）关闭前保持红——按设计保持诚实。
+- 旗舰插件（oh-my-opencode-slim）验收测试仅在有安装缓存的机器真跑，CI 自跳过（PLUG-D07 之后的回归正是它抓到的）。**已纳入每周 schedule（2026-10-24 起）**：omo staging 为 self-staging job，随 runtime-gates 周 cron 真跑。
 
 ---
 
