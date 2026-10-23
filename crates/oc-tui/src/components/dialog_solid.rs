@@ -111,6 +111,9 @@ struct DialogColors {
     formfield_base_fg: Rgb,
     destructive_fg: Rgb,
     destructive_bg: Rgb,
+    /// `text.feedback.error.base` — the pair dialog's failed-load
+    /// header (dialog-pair.tsx:121).
+    error_fg: Rgb,
 }
 
 impl DialogColors {
@@ -136,6 +139,7 @@ impl DialogColors {
             formfield_base_fg: rgb(styles.formfield_base_fg),
             destructive_fg: rgb(styles.destructive_fg),
             destructive_bg: rgb(styles.destructive_bg),
+            error_fg: rgb(styles.error_fg),
         }
     }
 }
@@ -196,6 +200,11 @@ enum Family {
     /// of M` header, the image area (the cells paint in the bridge's
     /// post-pass), the `← previous / caption / next →` footer.
     ImagePreview,
+    /// F15 fix round: `component/dialog-pair.tsx` — a CUSTOM dialog
+    /// (never a `DialogSelect`): the bold `Pair` header + `esc`
+    /// chrome, then the resource states (loading / error / the
+    /// word-wrapped intro + link blocks + loopback hint).
+    Pair,
 }
 
 /// One rendered row of the scroll window — the same walk the old
@@ -282,16 +291,25 @@ struct DialogInputs {
     preview_footer: (String, String, String),
     /// The image area's row count (`max(3, height - 8)`).
     preview_rows: usize,
+    // -- F15: the pair dialog's content rows ---------------------------
+    /// The word-wrapped content walk (loading / error / loaded) —
+    /// [`crate::components::dialog_pair::rows`].
+    pair_rows: Vec<crate::components::dialog_pair::PairRow>,
 }
 
-/// TUI-10/24: the custom families' store-side sidecar — the image
-/// preview's live state + the error-details scroll offset. Built by
+/// TUI-10/24 + F15: the custom families' store-side sidecar — the
+/// image preview's live state, the error-details scroll offset, the
+/// pair dialog's resource state. Built by
 /// [`crate::components::dialog::render_overlay`] (which owns the
 /// store); the embedder API path carries the default.
 #[derive(Debug, Default, Clone)]
 pub struct DialogSidecar {
     pub preview: crate::store::ImagePreviewState,
     pub error_scroll: usize,
+    /// `DialogPair`'s resource (`store.pair_state()` — the fetch
+    /// seam itself is untouched; the sidecar only carries the
+    /// snapshot the content walk reads).
+    pub pair: crate::store::PairState,
 }
 
 /// The windowed rows — the old renderer's walk (`render_select`),
@@ -384,6 +402,9 @@ fn content_height(inputs: &DialogInputs) -> usize {
         // image area (max(3, height-8) rows), gap, the footer, root
         // paddingBottom.
         Family::ImagePreview => inputs.preview_rows + 5,
+        // F15 (dialog-pair.tsx:89-129): the `Pair` title row, the
+        // root's gap 1, the content rows, the root paddingBottom 1.
+        Family::Pair => inputs.pair_rows.len() + 3,
     }
 }
 
@@ -1588,6 +1609,84 @@ fn image_preview_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::Elemen
 }
 
 // ---------------------------------------------------------------------------
+// the pair tree (F15 fix round)
+// ---------------------------------------------------------------------------
+
+/// `DialogPair` (dialog-pair.tsx:89-129): the bold `Pair` header row
+/// with the `esc` chrome label, then the content rows (loading /
+/// error / the word-wrapped intro + link blocks + loopback hint) — a
+/// `For` over the pre-wrapped walk, one text element per row. The
+/// root mirrors the tsx: paddingLeft/right 2, paddingBottom 1, gap 1.
+fn pair_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilder {
+    let title_row = box_().flex_direction("row").justify_content("space-between").children(
+        Children::Static(vec![
+            text()
+                .dyn_prop(
+                    "content",
+                    dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                        styled(vec![chunk("Pair".to_owned(), i.colors.text, None, 1)])
+                    })),
+                )
+                .into_element(),
+            text()
+                .dyn_prop(
+                    "content",
+                    dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                        styled(vec![chunk("esc".to_owned(), i.colors.muted, None, 0)])
+                    })),
+                )
+                .into_element(),
+        ]),
+    );
+    // The content walk — one For item per row (the payload carries
+    // the row's text; the paint re-derives from the inputs by index).
+    let rows = ForItemSource {
+        source: map(inputs.clone(), |i: &DialogInputs| {
+            i.pair_rows
+                .iter()
+                .enumerate()
+                .map(|(n, row)| {
+                    let text = match row {
+                        crate::components::dialog_pair::PairRow::Gap => String::new(),
+                        crate::components::dialog_pair::PairRow::Text { text, .. } => text.clone(),
+                    };
+                    ForItem { key: format!("P{n}"), value: PropValue::Str(text) }
+                })
+                .collect::<Vec<ForItem>>()
+        }),
+    };
+    let row_inputs = inputs.clone();
+    let content_for = for_list(Rc::new(rows), move |_item: &ForItem, index: usize| {
+        let inputs = row_inputs.clone();
+        text()
+            .dyn_prop(
+                "content",
+                dyn_styled(map(inputs, move |i: &DialogInputs| match i.pair_rows.get(index) {
+                    Some(crate::components::dialog_pair::PairRow::Gap) => {
+                        styled(vec![chunk(" ".to_owned(), i.colors.muted, None, 0)])
+                    }
+                    Some(crate::components::dialog_pair::PairRow::Text { text, style }) => {
+                        let (fg, bold) = match style {
+                            crate::components::dialog_pair::PairStyle::Muted => (i.colors.muted, 0),
+                            crate::components::dialog_pair::PairStyle::Base => (i.colors.text, 0),
+                            crate::components::dialog_pair::PairStyle::ErrorBold => {
+                                (i.colors.error_fg, 1)
+                            }
+                        };
+                        styled(vec![chunk(text.clone(), fg, None, bold)])
+                    }
+                    None => styled(Vec::new()),
+                })),
+            )
+            .into_element()
+    });
+    let content = box_().children_dyn(Rc::new(content_for));
+    box_().padding_left(2.0).padding_right(2.0).padding_bottom(1.0).children(Children::Static(
+        vec![title_row.into_element(), content.margin_top(1.0).into_element()],
+    ))
+}
+
+// ---------------------------------------------------------------------------
 // the mount
 // ---------------------------------------------------------------------------
 
@@ -1617,6 +1716,7 @@ fn chrome_element(
         Family::Confirm => confirm_builder(&family_inputs),
         Family::ErrorDetails => error_details_builder(&family_inputs),
         Family::ImagePreview => image_preview_builder(&family_inputs),
+        Family::Pair => pair_builder(&family_inputs),
     };
     box_()
         .width(width as f32)
@@ -1734,8 +1834,9 @@ pub fn render_overlay_solid(
         let box_x = (width - box_width) / 2;
         // TUI-10: the image preview is CENTERED (`dialog.
         // setCentered(true)`, dialog-image-preview.tsx:24) — the
-        // content-height walk pins the box's height first.
-        let centered = matches!(entry.kind, DialogKind::ImagePreview);
+        // content-height walk pins the box's height first. F15: the
+        // pair dialog is centered too (dialog-pair.tsx:19).
+        let centered = matches!(entry.kind, DialogKind::ImagePreview | DialogKind::Pair);
         let box_y = if centered {
             let inputs_probe = build_inputs(
                 entry,
@@ -1744,7 +1845,7 @@ pub fn render_overlay_solid(
                 DialogColors::of(&DialogStyles::from_theme(theme)),
                 box_width,
                 height,
-                &DialogSidecar::default(),
+                sidecar,
             );
             height.saturating_sub(1 + content_height(&inputs_probe)) / 2
         } else {
@@ -1826,7 +1927,8 @@ fn dialog_chrome_button_hits(
         | Family::Alert
         | Family::Confirm
         | Family::ErrorDetails
-        | Family::ImagePreview => ("esc", 2),
+        | Family::ImagePreview
+        | Family::Pair => ("esc", 2),
         Family::Help => ("esc/enter", 2),
     };
     let label_width = label.chars().count();
@@ -1884,6 +1986,9 @@ fn build_inputs(
         DialogKind::ErrorDetails { .. } => Family::ErrorDetails,
         DialogKind::Alert { .. } => Family::Alert,
         DialogKind::Confirm { .. } => Family::Confirm,
+        // F15 fix round: the pair dialog's CUSTOM tree (ref
+        // dialog-pair.tsx is not a DialogSelect).
+        DialogKind::Pair => Family::Pair,
         _ => Family::Select,
     };
     match family {
@@ -1919,6 +2024,7 @@ fn build_inputs(
                 preview_title: String::new(),
                 preview_footer: (String::new(), String::new(), String::new()),
                 preview_rows: 0,
+                pair_rows: Vec::new(),
                 plugin_rows: Vec::new(),
             }
         }
@@ -1949,6 +2055,7 @@ fn build_inputs(
             preview_title: String::new(),
             preview_footer: (String::new(), String::new(), String::new()),
             preview_rows: 0,
+            pair_rows: Vec::new(),
         },
         // The connect prompts carry their title/placeholder/hints
         // through the props (OAuthCode's description block holds the
@@ -1981,6 +2088,7 @@ fn build_inputs(
             preview_title: String::new(),
             preview_footer: (String::new(), String::new(), String::new()),
             preview_rows: 0,
+            pair_rows: Vec::new(),
         },
         Family::Help => {
             let content_width = box_width.saturating_sub(4);
@@ -2025,6 +2133,7 @@ fn build_inputs(
                 preview_title: String::new(),
                 preview_footer: (String::new(), String::new(), String::new()),
                 preview_rows: 0,
+                pair_rows: Vec::new(),
             }
         }
         Family::PluginRows => {
@@ -2056,6 +2165,7 @@ fn build_inputs(
                 preview_title: String::new(),
                 preview_footer: (String::new(), String::new(), String::new()),
                 preview_rows: 0,
+                pair_rows: Vec::new(),
             }
         }
         // -- TUI-25: DialogAlert / DialogConfirm --------------------
@@ -2109,6 +2219,7 @@ fn build_inputs(
                 preview_title: String::new(),
                 preview_footer: (String::new(), String::new(), String::new()),
                 preview_rows: 0,
+                pair_rows: Vec::new(),
             }
         }
         // -- TUI-24: DialogErrorDetails ------------------------------
@@ -2149,6 +2260,7 @@ fn build_inputs(
                 preview_title: String::new(),
                 preview_footer: (String::new(), String::new(), String::new()),
                 preview_rows: 0,
+                pair_rows: Vec::new(),
             }
         }
         // -- TUI-10: DialogImagePreview ------------------------------
@@ -2193,6 +2305,46 @@ fn build_inputs(
                 preview_title: format!("Image {} of {}", state.index + 1, count),
                 preview_footer: (previous, caption, next),
                 preview_rows,
+                pair_rows: Vec::new(),
+            }
+        }
+        // -- F15: DialogPair — the custom (non-select) tree --------
+        Family::Pair => {
+            // The root box's inner width (paddingLeft/right 2,
+            // dialog-pair.tsx:90); the content walk wraps to it.
+            let content_width = box_width.saturating_sub(4).max(1);
+            let mut pair_rows = crate::components::dialog_pair::rows(&sidecar.pair, content_width);
+            // The height<36 scrollbox (:104-112): the content window
+            // clips to the budget (an invisible scrollbar).
+            pair_rows.truncate(crate::components::dialog_pair::scroll_budget(terminal_height));
+            DialogInputs {
+                family,
+                box_width,
+                colors,
+                title: String::new(),
+                placeholder: String::new(),
+                filter: String::new(),
+                options: Vec::new(),
+                flat: Vec::new(),
+                selected: 0,
+                current: None,
+                flatten: false,
+                destructive: false,
+                window: Vec::new(),
+                actions: Vec::new(),
+                prompt_value: String::new(),
+                hint_lines: Vec::new(),
+                plugin_title: String::new(),
+                plugin_rows: Vec::new(),
+                message: String::new(),
+                confirm_labels: (String::new(), String::new(), true),
+                error_source: String::new(),
+                error_window: Vec::new(),
+                diagnostic: String::new(),
+                preview_title: String::new(),
+                preview_footer: (String::new(), String::new(), String::new()),
+                preview_rows: 0,
+                pair_rows,
             }
         }
     }

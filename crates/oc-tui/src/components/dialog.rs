@@ -90,7 +90,10 @@ pub fn handle_dialog_key(
         // key/code prompts are the prompt-style inputs (not selects).
         // The prompt-style inputs + TUI-10/24/25's custom-key
         // families (image preview, error details, alert, confirm)
-        // take per-kind actions, not the select pipeline.
+        // take per-kind actions, not the select pipeline. F15 fix
+        // round: the pair dialog joins them — a CUSTOM (static)
+        // dialog per ref dialog-pair.tsx; no filter, no option rows;
+        // only the close bindings act (the modal layer's escape).
         DialogKind::SessionRename { .. }
         | DialogKind::WorktreeName
         | DialogKind::IntegrationKey { .. }
@@ -98,7 +101,8 @@ pub fn handle_dialog_key(
         | DialogKind::ImagePreview
         | DialogKind::ErrorDetails { .. }
         | DialogKind::Alert { .. }
-        | DialogKind::Confirm { .. } => false,
+        | DialogKind::Confirm { .. }
+        | DialogKind::Pair => false,
         // A rows-only plugin dialog is static (like help: printables
         // pass through, only the close bindings act); the rest — the
         // palette, theme list, server lists, worktrees, the
@@ -125,7 +129,6 @@ pub fn handle_dialog_key(
         | DialogKind::McpError { .. }
         | DialogKind::Status
         | DialogKind::Variant
-        | DialogKind::Pair
         | DialogKind::Debug
         | DialogKind::Timeline { .. }
         | DialogKind::Integration
@@ -717,10 +720,12 @@ pub fn render_overlay(
         _ => None,
     };
     // TUI-10/24: the custom families' sidecar — the preview state +
-    // the error scroll (this path owns the store).
+    // the error scroll (this path owns the store). F15: the pair
+    // dialog's resource snapshot rides the same sidecar.
     let sidecar = crate::components::dialog_solid::DialogSidecar {
         preview: store.image_preview_dialog(),
         error_scroll: store.error_details_scroll(),
+        pair: store.pair_state(),
     };
     let (rect, option_rows, button_hits) = render_overlay_with_options(
         base,
@@ -783,7 +788,6 @@ pub fn render_overlay_with_options(
         | DialogKind::McpError { .. }
         | DialogKind::Status
         | DialogKind::Variant
-        | DialogKind::Pair
         | DialogKind::Debug
         | DialogKind::Timeline { .. }
         | DialogKind::Integration
@@ -816,7 +820,9 @@ pub fn render_overlay_with_options(
         | DialogKind::ImagePreview
         | DialogKind::ErrorDetails { .. }
         | DialogKind::Alert { .. }
-        | DialogKind::Confirm { .. } => false,
+        | DialogKind::Confirm { .. }
+        // F15: the pair dialog's custom tree records none either.
+        | DialogKind::Pair => false,
     } {
         crate::components::dialog_select::option_dialog_rows(
             props,

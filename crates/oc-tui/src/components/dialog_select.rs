@@ -714,6 +714,9 @@ pub struct DialogStyles {
     pub destructive_fg: Color,
     /// `background.action.destructive.focused`.
     pub destructive_bg: Color,
+    /// `text.feedback.error.base` — the pair dialog's failed-load
+    /// header (dialog-pair.tsx:121).
+    pub error_fg: Color,
 }
 
 impl DialogStyles {
@@ -735,6 +738,7 @@ impl DialogStyles {
             formfield_base_fg: color(tokens.text.formfield.base),
             destructive_fg: color(tokens.text.action.destructive.focused),
             destructive_bg: color(tokens.background.action.destructive.focused),
+            error_fg: color(tokens.text.feedback.error.base),
         }
     }
 }
