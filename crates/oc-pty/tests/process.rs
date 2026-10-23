@@ -73,6 +73,12 @@ const FILL_BYTES: usize = 9_437_184;
 // ---------------------------------------------------------------------------
 
 fn temp_root(tag: &str) -> PathBuf {
+    // `keep()` is deliberate post-mortem policy (D3 review M-4): the
+    // scenario artifacts — registrations, state.json, sidecars,
+    // pidfiles — stay on disk after the test for failure diagnosis
+    // instead of vanishing with a dropped TempDir. /tmp/opencode is
+    // scratch space the gate and CI runners replace per run, so
+    // retention costs nothing and leaks nothing across runs.
     let dir = tempfile::Builder::new()
         .prefix(&format!("oc-pty-d3-{tag}-"))
         .tempdir_in("/tmp/opencode")
@@ -346,6 +352,29 @@ impl RawClient {
             });
         }
     }
+
+    /// Reads every remaining frame until the daemon closes the
+    /// connection — the §6 supersession observation
+    /// (`owner_superseded` flushes, then the ordered EOF).
+    async fn read_to_close(&mut self) -> (Vec<Vec<u8>>, bool) {
+        let mut frames = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            while let Some(frame) = self.pending.pop_front() {
+                frames.push(frame);
+            }
+            let mut chunk = vec![0u8; 64 * 1024];
+            match tokio::time::timeout(Duration::from_secs(8), self.stream.read(&mut chunk)).await {
+                Ok(Ok(0) | Err(_)) => return (frames, true),
+                Ok(Ok(read)) => {
+                    self.pending.extend(self.decoder.feed(&chunk[..read]).expect("framed"));
+                }
+                Err(_) => {
+                    assert!(Instant::now() < deadline, "the daemon never closed the connection");
+                }
+            }
+        }
+    }
 }
 
 fn parse_json<T: DeserializeOwned>(frame: &[u8]) -> Option<T> {
@@ -552,6 +581,220 @@ async fn pty_d3_i1_kill_server_arm_a_adopt_child_alive() {
 }
 
 // ---------------------------------------------------------------------------
+// I1 (sidecar arm) — the oc-server stopping-server chain at process level
+// ---------------------------------------------------------------------------
+
+// The oc-server sidecar→env→decode chain shapes, mirrored from
+// production so the process suite pins the exact bytes that cross the
+// env boundary (`crates/oc-server/src/lifecycle.rs` `pty_handoff_*` +
+// `crates/oc-server/src/boot.rs` `adopt_inherited_pty`):
+
+/// `sidecar_path` (lifecycle.rs): `<registration>.pty-handoff`.
+fn sidecar_path_of(file: &Path) -> PathBuf {
+    let mut path = file.as_os_str().to_os_string();
+    path.push(".pty-handoff");
+    PathBuf::from(path)
+}
+
+/// The wire `Handoff` JSON (`schema/persistent-pty.ts`) exactly as the
+/// sidecar and the env var carry it (`is_handoff`, lifecycle.rs:1305).
+fn handoff_wire_json(handoff: &Handoff) -> serde_json::Value {
+    serde_json::json!({
+        "directory": handoff.directory,
+        "instanceID": handoff.instance_id,
+        "ticket": handoff.ticket,
+        "expiresAt": handoff.expires_at,
+    })
+}
+
+/// `PtyHandoffRecord` + `publish_sidecar` (lifecycle.rs:1194, 1312):
+/// `{source, handoff, expires_at}` with the stopping server's
+/// registration as the source and the handoff's own expiry.
+fn handoff_sidecar(source: &serde_json::Value, handoff: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "source": source,
+        "handoff": handoff,
+        "expires_at": handoff["expiresAt"],
+    })
+}
+
+/// `pty_handoff_environment` (lifecycle.rs:1336-1353): the sidecar is
+/// fresh and its source still matches the recorded registration → the
+/// replacement process env carries `OPENCODE_PTY_HANDOFF=<json>`;
+/// stale or foreign sidecars yield nothing.
+fn pty_handoff_environment_mirror(
+    sidecar: &serde_json::Value,
+    recorded: Option<&serde_json::Value>,
+    now_ms: u64,
+) -> Option<String> {
+    if sidecar["expires_at"].as_u64().unwrap_or(0) <= now_ms {
+        return None;
+    }
+    if let Some(recorded) = recorded {
+        let same = sidecar["source"]["id"] == recorded["id"]
+            && sidecar["source"]["pid"] == recorded["pid"]
+            && sidecar["source"]["url"] == recorded["url"];
+        if !same {
+            return None;
+        }
+    }
+    if !sidecar["handoff"].is_object() {
+        return None;
+    }
+    Some(sidecar["handoff"].to_string())
+}
+
+/// `decode_inherited_handoff` (lifecycle.rs:1380-1390) +
+/// `handoff_from_wire` (boot.rs:509-516), the boot-side consumption
+/// path: the env value must be a valid, unexpired wire handoff —
+/// garbage and stale payloads warn and boot fresh (`None`).
+fn decode_inherited_handoff_mirror(raw: Option<&str>, now_ms: u64) -> Option<Handoff> {
+    let value: serde_json::Value = serde_json::from_str(raw?).ok()?;
+    let valid = value["directory"].is_string()
+        && value["instanceID"].is_string()
+        && value["ticket"].is_string()
+        && value["expiresAt"].as_u64().unwrap_or(0) > now_ms;
+    if !valid {
+        return None;
+    }
+    Some(Handoff {
+        directory: value["directory"].as_str()?.to_owned(),
+        instance_id: value["instanceID"].as_str()?.to_owned(),
+        ticket: value["ticket"].as_str()?.to_owned(),
+        expires_at: value["expiresAt"].as_u64()?,
+    })
+}
+
+/// §10.3 I1, the oc-server side of the restart (`pty-handoff.ts` →
+/// `server-process.ts:46-57` → `daemon.ts:403-428`): the stopping
+/// server publishes the handoff SIDECAR, the replacement boots with
+/// `OPENCODE_PTY_HANDOFF` (sidecar → env), the boot-side decoder
+/// validates and maps it onto the core ticket, and adopting the
+/// DECODED ticket through a fresh real frontend produces exactly the
+/// direct-ticket flagship's arm-A outcome — same daemon, same live
+/// child, same replay window (D3 review I-1).
+#[tokio::test]
+async fn pty_d3_i1_sidecar_env_chain_adopt_matches_direct_ticket() {
+    let root = temp_root("i1env");
+    let bus = bus_for_test().await;
+    let launcher = Arc::new(RealLauncher::new(60));
+    let (a, transport_a) = daemon_frontend(&bus, Arc::clone(&launcher));
+    a.set_runtime_dir(&root).expect("set root");
+
+    // A marker child: pidfile + marker output + `cat` (echoes input).
+    let pidfile = root.join("i1env-child.pid");
+    let command = format!("echo $$ > {}; printf I1ENV-MARKER; cat", pidfile.display());
+    let info = a.create(&session(), create_input("i1env", &command, &root)).await.expect("create");
+    wait_for_output(&a, &info.id, "I1ENV-MARKER".len()).await;
+    let child_pid =
+        std::fs::read_to_string(&pidfile).expect("pidfile").trim().parse::<u32>().expect("pid");
+    let handoff = a.handoff().await.expect("handoff op").expect("handoff ticket");
+    let daemon_dir = PathBuf::from(&handoff.directory);
+
+    // --- server A stops: owner EOF (children survive — R5) ------------
+    kill_server(&transport_a, &root.join("dead-a"));
+    drop(a);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(proc_alive(child_pid), "R5: the child outlives the stopping server");
+
+    // --- the stopping server's records, the oc-server shapes ----------
+    let state_dir = root.join("server-state");
+    std::fs::create_dir_all(&state_dir).expect("state dir");
+    let registration_file = state_dir.join("service.json");
+    let source = serde_json::json!({
+        "id": "srv-i1env-a",
+        "version": "2.0.24",
+        "url": "http://127.0.0.1:4096",
+        "pid": std::process::id(),
+        "password": null,
+    });
+    std::fs::write(&registration_file, serde_json::to_string(&source).expect("json"))
+        .expect("write registration");
+    // What `read_registration` would hand `pty_handoff_environment`.
+    let recorded: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&registration_file).expect("read back"))
+            .expect("recorded registration");
+    let sidecar = handoff_sidecar(&source, &handoff_wire_json(&handoff));
+    std::fs::write(
+        sidecar_path_of(&registration_file),
+        serde_json::to_string(&sidecar).expect("json"),
+    )
+    .expect("write sidecar");
+
+    // --- sidecar → env (`pty_handoff_environment`) ---------------------
+    let now = unix_ms_now();
+    let env_value = pty_handoff_environment_mirror(&sidecar, Some(&recorded), now)
+        .expect("the fresh matching sidecar yields the handoff env");
+    assert_eq!(
+        pty_handoff_environment_mirror(
+            &sidecar,
+            Some(&serde_json::json!({"id": "srv-other", "pid": 1, "url": "http://x"})),
+            now
+        ),
+        None,
+        "a sidecar from a different server is never inherited"
+    );
+    let expired_handoff = Handoff { expires_at: now.saturating_sub(1), ..handoff.clone() };
+    let expired_sidecar = handoff_sidecar(&source, &handoff_wire_json(&expired_handoff));
+    assert_eq!(
+        pty_handoff_environment_mirror(&expired_sidecar, Some(&recorded), now),
+        None,
+        "an expired sidecar is never inherited"
+    );
+
+    // --- env → decode (`decode_inherited_handoff` + `handoff_from_wire`)
+    let decoded = decode_inherited_handoff_mirror(Some(&env_value), now)
+        .expect("the env value decodes onto the core ticket");
+    assert_eq!(decoded, handoff, "the chain round-trips the direct ticket exactly");
+    assert_eq!(
+        decode_inherited_handoff_mirror(Some("not-json"), now),
+        None,
+        "garbage env payloads boot fresh"
+    );
+    assert_eq!(
+        decode_inherited_handoff_mirror(
+            Some(&serde_json::to_string(&handoff_wire_json(&expired_handoff)).expect("json")),
+            now
+        ),
+        None,
+        "expired env payloads boot fresh"
+    );
+
+    // --- decoded ticket → fresh frontend adopt == direct-ticket arm A --
+    // The assertions mirror the flagship (`…arm_a_adopt_child_alive`)
+    // one-for-one: the CHAIN adopt and the DIRECT-ticket adopt must be
+    // indistinguishable.
+    let (b, _transport_b) = daemon_frontend(&bus, Arc::new(RealLauncher::new(60)));
+    match b.adopt(&decoded).await {
+        Adoption::Adopted { restored, directory } => {
+            assert_eq!(restored, 1);
+            assert_eq!(PathBuf::from(&directory), daemon_dir, "same-dir adoption (no migration)");
+        }
+        other => panic!("expected the chain-decoded arm-A adoption, got {other:?}"),
+    }
+    let listed = b.list(None).await.expect("list after chain adopt");
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].pid, child_pid, "SAME child pid through the sidecar chain");
+    assert_eq!(listed[0].status, Status::Running);
+    assert!(proc_alive(child_pid));
+
+    // Replay window + live echo through the chain-adopted child.
+    let log = EventLog::new();
+    let attachment = b.attach(&info.id, log.attach_input("i1env-b", 0)).await.expect("attach");
+    assert!(bytes_contain(&attachment.data, b"I1ENV-MARKER"), "replay carries pre-stop bytes");
+    attachment.activate();
+    b.write(&info.id, "chain-ping\n", None).await.expect("write");
+    wait_until(5, "echo through the chain-adopted child", || async {
+        log.output_contains(b"chain-ping")
+    })
+    .await;
+    attachment.detach();
+
+    b.remove(&info.id).await.expect("remove");
+    b.shutdown().await.expect("shutdown");
+}
+
+// ---------------------------------------------------------------------------
 // I2 — handoff ticket expiry discards + fresh identity
 // ---------------------------------------------------------------------------
 
@@ -571,6 +814,8 @@ async fn pty_d3_i2_expired_handoff_discards_and_recovers_fresh() {
         .create(&session(), create_input("i2", "sleep 30", Path::new("/tmp")))
         .await
         .expect("create");
+    let child_pid = a.list(None).await.expect("list")[0].pid;
+    assert!(proc_alive(child_pid), "the grandchild starts alive");
     let handoff = a.handoff().await.expect("handoff op").expect("ticket");
     let old_instance = registration_of(&a).instance_id;
 
@@ -584,6 +829,14 @@ async fn pty_d3_i2_expired_handoff_discards_and_recovers_fresh() {
     // The discard's best-effort TOKEN-level shutdown drained the found
     // daemon (§6 ANY-Discard) — its child (ours) is reaped.
     launcher.wait_all(Duration::from_secs(8));
+
+    // ... and the DRAIN reaped the terminal's `sleep` grandchild too
+    // (masters closed → HUP): it is dead within the deadline, not left
+    // behind orphaned (D3 review M-1).
+    wait_until(10, "the grandchild to die with the drained daemon", || async {
+        !proc_alive(child_pid)
+    })
+    .await;
 
     // Boot stays green on a FRESH identity: create spawns a new daemon
     // (the new daemon's own terminal counter restarts — ids are
@@ -628,6 +881,11 @@ async fn pty_d3_i3_sigkill_daemon_arm_b_snapshot_restore() {
     let handoff = a.handoff().await.expect("handoff op").expect("ticket");
     let dir_a = PathBuf::from(&handoff.directory);
     let lock_inode_a = file_inode(&dir_a.join("service.lock"));
+
+    // The child is verifiably alive the instant before the kill (D3
+    // review M-2): the arm-B EXITED restore below pins
+    // death-by-daemon, never a race with an already-exited child.
+    assert!(proc_alive(child_pid), "the terminal child is alive before the SIGKILL");
 
     // --- daemon death: SIGKILL our own child handle ------------------
     launcher.kill9_latest();
@@ -908,6 +1166,122 @@ async fn pty_d3_i9_competing_claims_exactly_one_wins() {
 }
 
 // ---------------------------------------------------------------------------
+// §6 supersession transfer — a live owner demoted by a valid-ticket claim
+// ---------------------------------------------------------------------------
+
+/// §6 transfer at process level (D3 review I-2): owner A is ACTIVE on
+/// the real daemon when a second client claims with a VALID ticket —
+/// A's owner connection receives `owner_superseded` and then EOF (the
+/// ordered close), B's owner ops succeed over its own connection, and
+/// the machine state (terminal + child + replay window) is intact
+/// across the transfer.
+#[tokio::test]
+async fn pty_d3_supersession_transfer_supersedes_then_closes_the_old_owner() {
+    let root = temp_root("supersede");
+    let bus = bus_for_test().await;
+    let launcher = Arc::new(RealLauncher::new(60));
+    let (a, transport_a) = daemon_frontend(&bus, Arc::clone(&launcher));
+    a.set_runtime_dir(&root).expect("set root");
+
+    // A marker child: the transfer must leave the machine state intact.
+    let pidfile = root.join("supersede-child.pid");
+    let command = format!("echo $$ > {}; printf SUPER-MARKER; cat", pidfile.display());
+    let info =
+        a.create(&session(), create_input("supersede", &command, &root)).await.expect("create");
+    wait_for_output(&a, &info.id, "SUPER-MARKER".len()).await;
+    let child_pid =
+        std::fs::read_to_string(&pidfile).expect("pidfile").trim().parse::<u32>().expect("pid");
+    let daemon_dir = PathBuf::from(&a.runtime_dir().expect("daemon dir"));
+    let registration = read_registration(&daemon_dir).expect("registration");
+
+    // The spawning server's owner connection ends exactly as process
+    // death would (the kernel closes the dying process's sockets) — the
+    // daemon keeps serving, ownerless, children alive (R5).
+    kill_server(&transport_a, &root.join("dead-a"));
+    drop(a);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // Owner A: with the owner slot EMPTY a bare `own` re-claims the
+    // live daemon (§5.2 — the refusal is only for a PRESENT owner) — A
+    // is the ACTIVE owner from here on.
+    let mut owner = RawClient::connect(&registration).await.expect("owner conn");
+    match owner
+        .request(WireRequest::Own {
+            instance_id: registration.instance_id.clone(),
+            ticket: None,
+            directory: None,
+        })
+        .await
+    {
+        WireResponse::Owned => {}
+        other => panic!("a bare own re-claims the ownerless daemon, got {other:?}"),
+    }
+    assert!(proc_alive(child_pid), "the child survived the ownership gap");
+
+    // A mints the single-use transfer ticket (owner-only, §4.3).
+    let (ticket, expires_at) = match owner.request(WireRequest::PrepareHandoff).await {
+        WireResponse::Handoff { ticket, expires_at } => (ticket, expires_at),
+        other => panic!("expected the transfer ticket, got {other:?}"),
+    };
+    let handoff = Handoff {
+        directory: daemon_dir.to_string_lossy().into_owned(),
+        instance_id: registration.instance_id.clone(),
+        ticket,
+        expires_at,
+    };
+
+    // B: a fresh frontend claims with the VALID ticket over its own
+    // real owner connection — the §6 transfer.
+    let (b, _transport_b) = daemon_frontend(&bus, Arc::new(RealLauncher::new(60)));
+    match b.adopt(&handoff).await {
+        Adoption::Adopted { restored, directory } => {
+            assert_eq!(restored, 1);
+            assert_eq!(
+                PathBuf::from(&directory),
+                daemon_dir,
+                "same-dir ticket claim (no migration)"
+            );
+        }
+        other => panic!("expected the valid-ticket transfer adoption, got {other:?}"),
+    }
+
+    // A's owner connection: `owner_superseded` flushes, THEN the
+    // ordered close (EOF) — observed on the real socket (§6, gate
+    // finding 10).
+    let (trailing, closed) = owner.read_to_close().await;
+    let superseded = trailing.iter().any(|frame| {
+        serde_json::from_slice::<wire::OwnerFrame>(frame).ok()
+            == Some(wire::OwnerFrame::OwnerSuperseded)
+    });
+    assert!(superseded, "owner_superseded precedes the close: {trailing:?}");
+    assert!(closed, "the daemon closed A's owner connection after the frame");
+
+    // B's owner ops succeed (the acting owner — §4.3 owner-only).
+    assert!(b.handoff().await.expect("owner op through B").is_some(), "B mints tickets");
+
+    // Machine state intact across the transfer: same terminal, SAME
+    // live child, same replay window, still echoing input.
+    let listed = b.list(None).await.expect("list after the transfer");
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].pid, child_pid, "SAME child pid across the transfer");
+    assert_eq!(listed[0].status, Status::Running);
+    assert!(proc_alive(child_pid));
+    let log = EventLog::new();
+    let attachment = b.attach(&info.id, log.attach_input("supersede-b", 0)).await.expect("attach");
+    assert!(bytes_contain(&attachment.data, b"SUPER-MARKER"), "replay intact across the transfer");
+    attachment.activate();
+    b.write(&info.id, "post-transfer\n", None).await.expect("write");
+    wait_until(5, "echo through the transferred child", || async {
+        log.output_contains(b"post-transfer")
+    })
+    .await;
+    attachment.detach();
+
+    b.remove(&info.id).await.expect("remove");
+    b.shutdown().await.expect("shutdown");
+}
+
+// ---------------------------------------------------------------------------
 // I14 — kill -9 the SERVER without prepare_handoff (orphan case)
 // ---------------------------------------------------------------------------
 
@@ -1074,11 +1448,24 @@ async fn pty_d3_i15_full_buffer_chunked_replay_with_absolute_offsets() {
         "the window starts at the wrapped ring's head"
     );
 
+    // A LIVE competing stream event (D3 review C1/M-3): consume the
+    // FIRST chunk — the 8 MiB transfer is provably in flight — then
+    // resize. The `resized` frame queues on the connection's ordered
+    // writer behind the remaining window, so the wildcard arm below
+    // (any stream frame before `replay_complete`) is a live §3.2
+    // ordering pin, not dead defensive code.
+    let base = end_offset - OUTPUT_LIMIT;
+    let first = raw.frame().await;
+    assert_eq!(first.first(), Some(&0x00), "the transfer leads with a replay chunk");
+    let chunk = wire::parse_output_frame(&first).expect("first output frame");
+    assert_eq!(chunk.start, base, "the first chunk starts at the window head");
+    assert!(chunk.data.iter().all(|byte| *byte == 0), "uncorrupted from the first chunk");
+    let mut assembled_end = chunk.end;
+    let mut total = chunk.data.len() as u64;
+    a.resize(&info.id, 140, 30, None).await.expect("resize during the chunked transfer");
+
     // Binary frames reassemble EXACTLY by absolute offset, then the
     // deferred replay_complete marker (client completion defers to it).
-    let base = end_offset - OUTPUT_LIMIT;
-    let mut assembled_end = base;
-    let mut total = 0u64;
     let complete = loop {
         let frame = raw.frame().await;
         if frame.first() == Some(&0x00) {
@@ -1103,6 +1490,17 @@ async fn pty_d3_i15_full_buffer_chunked_replay_with_absolute_offsets() {
     };
     assert_eq!(complete, tail);
     assert_eq!(total, OUTPUT_LIMIT, "the full window reassembled");
+
+    // The live competing event surfaces only AFTER the marker (§3.2
+    // deferred completion): the resize fired mid-transfer, its
+    // `resized` frame is the next frame past `replay_complete`.
+    let deferred = raw.frame().await;
+    match parse_json::<WireResponse>(&deferred) {
+        Some(WireResponse::Resized { cols, rows, .. }) => {
+            assert_eq!((cols, rows), (140, 30), "the resize follows replay_complete");
+        }
+        other => panic!("expected the deferred resized after the marker, got {other:?}"),
+    }
     drop(raw);
 
     // CLIENT arm: `attach` returns only AFTER contiguous reassembly
@@ -1179,20 +1577,29 @@ async fn pty_d3_slow_subscriber_replay_complete_defers_stream_events() {
     }
 
     // The resize fires while the transfer is stalled behind the full
-    // socket buffer (queued on the connection's ordered writer).
+    // socket buffer (queued on the connection's ordered writer) — the
+    // LIVE competing stream event the resume loop below pins.
     a.resize(&info.id, 150, 40, None).await.expect("resize during the stall");
     tokio::time::sleep(Duration::from_millis(700)).await;
 
     // The daemon must NOT be wedged: other connections keep serving.
     assert_eq!(a.list(None).await.expect("list during the stall").len(), 1);
 
-    // Resume reading: chunks stay contiguous, `replay_complete` comes
-    // before ANY stream frame, and the deferred `resized` follows it.
+    // Resume reading (C1 hard pin): chunks stay contiguous and
+    // `replay_complete` MUST be observed FIRST — the resize above is in
+    // flight on the ordered writer, so a `resized` (or any stream
+    // frame) surfacing before the marker is an §3.2 deferred-completion
+    // violation and fails the test outright; the deferred `resized`
+    // only lands after it.
     let mut assembled_end = None;
+    let mut saw_replay_complete = false;
     let mut saw_resized = false;
     let deadline = Instant::now() + Duration::from_secs(20);
-    while !saw_resized {
-        assert!(Instant::now() < deadline, "resized never followed replay_complete");
+    while !(saw_replay_complete && saw_resized) {
+        assert!(
+            Instant::now() < deadline,
+            "replay_complete and the deferred resized never both arrived"
+        );
         let frame = slow.frame().await;
         if frame.first() == Some(&0x00) {
             let chunk = wire::parse_output_frame(&frame).expect("output frame");
@@ -1204,9 +1611,15 @@ async fn pty_d3_slow_subscriber_replay_complete_defers_stream_events() {
         }
         match parse_json::<WireResponse>(&frame) {
             Some(WireResponse::ReplayComplete { end_offset }) => {
-                assert_eq!(Some(end_offset), assembled_end);
+                assert!(!saw_replay_complete, "duplicate replay_complete marker");
+                assert_eq!(Some(end_offset), assembled_end, "marker lands exactly at the tail");
+                saw_replay_complete = true;
             }
             Some(WireResponse::Resized { cols, rows, checkpoint_base64, .. }) => {
+                assert!(
+                    saw_replay_complete,
+                    "resized stream frame preceded replay_complete — §3.2 ordering violation"
+                );
                 assert_eq!((cols, rows), (150, 40), "the deferred resize lands after the marker");
                 assert_eq!(
                     wire::decode_checkpoint(&base64_decode_std(&checkpoint_base64))
@@ -1216,9 +1629,13 @@ async fn pty_d3_slow_subscriber_replay_complete_defers_stream_events() {
                 );
                 saw_resized = true;
             }
+            Some(WireResponse::Exited { .. }) => {
+                panic!("unexpected exited stream frame — the child sleeps past the test");
+            }
             other => panic!("unexpected frame: {other:?}"),
         }
     }
+    assert_eq!(assembled_end, Some(tail), "the reassembled window ends at the absolute tail");
 
     // Clean teardown after the stall: the daemon drains normally.
     drop(slow);
@@ -1239,6 +1656,10 @@ async fn pty_d3_slow_subscriber_replay_complete_defers_stream_events() {
 #[tokio::test]
 async fn pty_d3_i12_bus_events_and_i13_unattached_exit_across_the_boundary() {
     // §8.1: the production binary discovery — env override first.
+    // set_var is PROCESS-global but safe here (D3 review M-4): nextest
+    // gives every test its own process (and the pty profile serializes
+    // the real-process suites anyway), so the override cannot leak
+    // into a sibling scenario.
     std::env::set_var("OPENCODE_PTY_BIN", PTY_BIN);
     let root = temp_root("i12");
     let bus = bus_for_test().await;
