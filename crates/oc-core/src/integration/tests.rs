@@ -2128,6 +2128,202 @@ async fn console_provider_resolves_through_the_snapshot() {
         .expect("console provider binds");
 }
 
+// -- Task 3 (CONSOLE lane): decode + projection of the v2 merge fields
+// (opencode.ts:245-315, config/provider.ts:53-101) ------------------------------
+
+/// The v2 console emits the provider package under `package`
+/// (config/provider.ts:97); our decode used the wrong key (`type`).
+/// `package` is primary, `type` stays accepted for legacy payloads.
+#[test]
+fn console_decode_package_primary_with_type_fallback() {
+    let primary: super::console::ConsoleProvider =
+        serde_json::from_value(json!({ "package": "@opencode/ai/providers/anthropic" }))
+            .expect("decode package");
+    assert_eq!(primary.package().as_deref(), Some("@opencode/ai/providers/anthropic"));
+    let legacy: super::console::ConsoleProvider =
+        serde_json::from_value(json!({ "type": "@opencode/ai/providers/anthropic" }))
+            .expect("decode legacy type");
+    assert_eq!(
+        legacy.package().as_deref(),
+        Some("@opencode/ai/providers/anthropic"),
+        "type stays accepted for payloads already in the wild"
+    );
+    let both: super::console::ConsoleProvider = serde_json::from_value(json!({
+        "type": "@opencode/ai/providers/openai-compatible",
+        "package": "@opencode/ai/providers/anthropic"
+    }))
+    .expect("decode both");
+    assert_eq!(
+        both.package().as_deref(),
+        Some("@opencode/ai/providers/anthropic"),
+        "package wins over the legacy type key regardless of order"
+    );
+}
+
+/// The `Config.Model` merge fields decode (config/provider.ts:69-91):
+/// family, compatibility, partial capabilities, cost single-or-array
+/// with optional cache, partial limit, disabled.
+#[test]
+fn console_decode_model_merge_fields() {
+    let config: super::console::ConsoleConfig = serde_json::from_value(json!({
+        "providers": {
+            "gw": {
+                "canonical": "anthropic",
+                "package": "@opencode/ai/providers/anthropic",
+                "settings": { "baseURL": "https://gw.test/v1" },
+                "models": {
+                    "acme-opus": {
+                        "modelID": "claude-opus-4-5",
+                        "name": "Acme Opus",
+                        "family": "acme-opus",
+                        "disabled": false,
+                        "compatibility": { "reasoningField": "thinking" },
+                        "capabilities": { "tools": false },
+                        "cost": { "input": 3, "output": 15, "cache": { "read": 0.3 } },
+                        "limit": { "context": 400_000, "output": 64_000 },
+                        "settings": { "baseURL": "https://model.test/v1" }
+                    },
+                    "acme-array": {
+                        "cost": [
+                            {
+                                "tier": { "type": "context", "size": 200_000 },
+                                "input": 1,
+                                "output": 2,
+                                "cache": { "read": 0.1, "write": 0.2 }
+                            }
+                        ]
+                    },
+                    "acme-hidden": { "disabled": true }
+                }
+            }
+        }
+    }))
+    .expect("decode");
+    let provider = &config.providers["gw"];
+    assert_eq!(provider.canonical.as_deref(), Some("anthropic"));
+    assert_eq!(provider.package().as_deref(), Some("@opencode/ai/providers/anthropic"));
+    let opus = &provider.models.as_ref().unwrap()["acme-opus"];
+    assert_eq!(opus.model_id.as_deref(), Some("claude-opus-4-5"));
+    assert_eq!(opus.name.as_deref(), Some("Acme Opus"));
+    assert_eq!(opus.family.as_deref(), Some("acme-opus"));
+    assert_eq!(opus.disabled, Some(false));
+    assert_eq!(
+        opus.compatibility.as_ref().and_then(|c| c.reasoning_field.as_deref()),
+        Some("thinking")
+    );
+    assert_eq!(opus.capabilities.as_ref().unwrap().tools, Some(false));
+    assert!(opus.capabilities.as_ref().unwrap().input.is_none());
+    let single = opus.cost.as_ref().unwrap().entries();
+    assert_eq!(single.len(), 1, "single cost normalizes to a one-entry array");
+    assert_eq!(single[0].input, oc_schema::common::UsdPerMillionTokens(3.0.into()));
+    assert_eq!(
+        single[0].cache.as_ref().unwrap().read,
+        Some(oc_schema::common::UsdPerMillionTokens(0.3.into()))
+    );
+    assert!(single[0].cache.as_ref().unwrap().write.is_none());
+    let limit = opus.limit.unwrap();
+    assert_eq!(limit.context, Some(400_000));
+    assert_eq!(limit.input, None);
+    assert_eq!(limit.output, Some(64_000));
+    let array = &provider.models.as_ref().unwrap()["acme-array"];
+    let entries = array.cost.as_ref().unwrap().entries();
+    assert_eq!(entries.len(), 1, "an array cost stays an array");
+    assert_eq!(
+        entries[0].tier,
+        Some(oc_schema::model::CostTier {
+            tier_type: oc_schema::model::CostTierType::Context,
+            size: 200_000
+        })
+    );
+    assert_eq!(
+        entries[0].cache.as_ref().unwrap().write,
+        Some(oc_schema::common::UsdPerMillionTokens(0.2.into()))
+    );
+    assert_eq!(provider.models.as_ref().unwrap()["acme-hidden"].disabled, Some(true));
+}
+
+/// Projection carries the merge material (opencode.ts:263-306): cost
+/// normalized single-or-array → array with cache read/write defaulting
+/// to 0.0, partial limit/capabilities, family, and the per-model
+/// `settings.baseURL` overlay.
+#[test]
+fn console_projection_carries_merge_fields() {
+    let config: super::console::ConsoleConfig = serde_json::from_value(json!({
+        "providers": {
+            "acme-ai": {
+                "name": "Acme AI",
+                "settings": { "baseURL": "https://gw.acme.test/v1" },
+                "models": {
+                    "acme-large": {
+                        "name": "Acme Large",
+                        "family": "acme",
+                        "capabilities": { "tools": false },
+                        "cost": { "input": 3, "output": 15 },
+                        "limit": { "context": 400_000 },
+                        "settings": { "baseURL": "https://model.acme.test/v1" }
+                    }
+                }
+            }
+        }
+    }))
+    .expect("decode");
+    let providers = super::console::to_custom_providers(&config);
+    assert_eq!(providers.len(), 1);
+    let provider = &providers[0];
+    assert_eq!(provider.base_url, "https://gw.acme.test/v1");
+    let model = &provider.models[0];
+    assert_eq!(model.id, "acme-large");
+    assert_eq!(model.family.as_deref(), Some("acme"));
+    assert_eq!(model.capabilities.as_ref().unwrap().tools, Some(false));
+    assert_eq!(
+        model.limit.unwrap(),
+        crate::provider_catalog::facade::PartialModelLimit {
+            context: Some(400_000),
+            input: None,
+            output: None
+        }
+    );
+    // Cost REPLACES (single → array) with cache read/write defaulting to 0.0.
+    let cost = model.cost.as_ref().unwrap();
+    assert_eq!(cost.len(), 1);
+    assert_eq!(cost[0].input, oc_schema::common::UsdPerMillionTokens(3.0.into()));
+    assert_eq!(cost[0].output, oc_schema::common::UsdPerMillionTokens(15.0.into()));
+    assert_eq!(cost[0].cache.read, oc_schema::common::UsdPerMillionTokens::zero());
+    assert_eq!(cost[0].cache.write, oc_schema::common::UsdPerMillionTokens::zero());
+    // The per-model baseURL overlay rides the model (precedence applies at bind).
+    assert_eq!(model.base_url.as_deref(), Some("https://model.acme.test/v1"));
+}
+
+/// A model-level `settings.baseURL` satisfies provider admission
+/// (opencode.ts:273-281): the provider survives projection without a
+/// provider-level baseURL, and one without any endpoint still drops.
+#[test]
+fn console_projection_model_base_url_satisfies_admission() {
+    let config: super::console::ConsoleConfig = serde_json::from_value(json!({
+        "providers": {
+            "model-endpoint": {
+                "models": {
+                    "m1": { "settings": { "baseURL": "https://m1.test/v1" } },
+                    "m2": {}
+                }
+            },
+            "no-endpoint": { "models": { "m3": {} } }
+        }
+    }))
+    .expect("decode");
+    let providers = super::console::to_custom_providers(&config);
+    assert_eq!(
+        providers.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
+        vec!["model-endpoint"],
+        "only the provider with a model-level baseURL survives; none drops"
+    );
+    let provider = &providers[0];
+    assert_eq!(provider.base_url, "", "no provider-level baseURL");
+    assert_eq!(provider.models.len(), 2, "the endpoint-less sibling model is kept");
+    let m1 = provider.models.iter().find(|m| m.id == "m1").unwrap();
+    assert_eq!(m1.base_url.as_deref(), Some("https://m1.test/v1"));
+}
+
 // -- BE-3b: wellknown config resolution (item 3) ---------------------------------
 
 #[tokio::test]
