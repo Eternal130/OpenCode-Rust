@@ -29,6 +29,9 @@ means bumping the git rev in the workspace `Cargo.toml` and letting
   header text + RAW starts re-derived from the source header lines
   (jsdiff bumps a `,0` count's start by one — parse.js:458-463 — while
   the viewer's header-hiding golden heuristic reads the raw start).
+  Known edge (gate-3): when header/hunk counts misalign (e.g. an `@@`
+  embedded in context text), starts fall back to the jsdiff-bumped values,
+  shifting `,0` hunks by 1 vs the golden heuristic — rare, accepted.
 * `\ No newline at end of file` markers: jsdiff keeps them in
   `hunk.lines`; upstream Diff.ts renders none of them; the adapter
   drops them (upstream disposition). The legacy scanner had rendered
