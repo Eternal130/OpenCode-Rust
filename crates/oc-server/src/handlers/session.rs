@@ -798,101 +798,6 @@ async fn move_session(
 // POST /:id/fork
 // ---------------------------------------------------------------------------
 
-/// The fork boundary lookup (ref session.ts:321-339): the `before`
-/// message when the payload names one, else the newest message. Errors:
-/// named-but-missing → 404 `MessageNotFound`; no messages at all → 400
-/// `empty_session`.
-async fn fork_boundary(
-    state: &SharedState,
-    session_id: &str,
-    before: Option<&str>,
-) -> Result<String, ApiError> {
-    let lookup_session = session_id.to_owned();
-    let lookup_before = before.map(String::from);
-    let boundary_id: Option<String> = state
-        .engine
-        .db
-        .transaction(move |tx| {
-            let id: Option<String> = match &lookup_before {
-                Some(before) => tx
-                    .conn()
-                    .query_row(
-                        "SELECT id FROM session_message WHERE session_id = ?1 AND id = ?2 \
-                         ORDER BY seq DESC LIMIT 1",
-                        (lookup_session, before),
-                        |row| row.get(0),
-                    )
-                    .ok(),
-                None => tx
-                    .conn()
-                    .query_row(
-                        "SELECT id FROM session_message WHERE session_id = ?1 \
-                         ORDER BY seq DESC LIMIT 1",
-                        (lookup_session,),
-                        |row| row.get(0),
-                    )
-                    .ok(),
-            };
-            Ok(id)
-        })
-        .await
-        .map_err(|error| {
-            crate::errors::debug_cause("session:unknown_ref", &error);
-            ApiError::unknown_ref()
-        })?;
-    match (before, boundary_id) {
-        (Some(_), None) => Err(ApiError::message_not_found(session_id, before.unwrap_or_default())),
-        (None, None) => Err(ApiError::invalid_request_kind("Session is empty", "empty_session")),
-        (_, Some(id)) => Ok(id),
-    }
-}
-
-/// The inherited instruction snapshot for a fork (ref session.ts:341-349):
-/// the parent's newest instruction values + entry snapshot.
-async fn fork_instructions(
-    state: &SharedState,
-    session_id: &str,
-) -> Result<(Option<String>, Vec<Value>), ApiError> {
-    let parent_id = session_id.to_owned();
-    state
-        .engine
-        .db
-        .transaction(move |tx| {
-            let values: Option<String> = tx
-                .conn()
-                .query_row(
-                    "SELECT current_values FROM instruction_state WHERE session_id = ?1",
-                    (parent_id.clone(),),
-                    |row| row.get(0),
-                )
-                .ok();
-            let mut statement = tx.conn().prepare(
-                // ref instruction-entry.ts:36 — snapshot reads ascend by key
-                "SELECT key, value, removed FROM instruction_entry WHERE session_id = ?1 \
-                 ORDER BY key ASC",
-            )?;
-            let entries = statement
-                .query_map((parent_id,), |row| {
-                    let raw: Option<String> = row.get::<_, Option<String>>(1)?;
-                    let value = raw
-                        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-                        .unwrap_or(Value::Null);
-                    Ok(json!({
-                        "key": row.get::<_, String>(0)?,
-                        "value": value,
-                        "removed": row.get::<_, bool>(2)?,
-                    }))
-                })?
-                .collect::<std::result::Result<Vec<_>, _>>()?;
-            Ok((values, entries))
-        })
-        .await
-        .map_err(|error| {
-            crate::errors::debug_cause("session:unknown_ref", &error);
-            ApiError::unknown_ref()
-        })
-}
-
 async fn fork(
     State(state): State<SharedState>,
     Path(session_id): Path<String>,
@@ -909,23 +814,43 @@ async fn fork(
     // instruction state. No row is pre-created: a pre-created row makes
     // the projector's `INSERT OR IGNORE` fail ALREADY_PROJECTED and the
     // fork copies nothing (auditE core #3).
+    //
+    // G-10: the boundary + inherited-instruction reads are core
+    // orchestration (`oc_core::session::fork`) — this shell only maps
+    // errors, publishes the event and reads the projected row back.
     let before = body["before"].as_str().map(String::from);
-    let boundary_id = fork_boundary(&state, &session_id, before.as_deref()).await?;
-    let boundary_type = if before.is_some() { "before" } else { "through" };
-
+    let fork_id = state.ids.new_id("ses");
+    let outcome = oc_core::session::fork::fork(
+        &state.engine.db,
+        &fork_id,
+        &session_id,
+        before.as_deref(),
+    )
+    .await
+    .map_err(|error| match error {
+        oc_core::session::fork::ForkError::MessageNotFound { session_id, before } => {
+            ApiError::message_not_found(session_id, before)
+        }
+        oc_core::session::fork::ForkError::EmptySession => {
+            ApiError::invalid_request_kind("Session is empty", "empty_session")
+        }
+        oc_core::session::fork::ForkError::Db(error) => {
+            crate::errors::debug_cause("session:unknown_ref", &error);
+            ApiError::unknown_ref()
+        }
+    })?;
+    let mut data = json!({
+        "sessionID": outcome.fork_id,
+        "parentID": session_id,
+        "boundary": { "type": outcome.boundary_type, "messageID": outcome.boundary_id },
+    });
     // The fork adopts the parent's newest instruction values rather than
     // the values in effect at the boundary (ref session.ts:341-349).
-    let (instructions, instruction_entries) = fork_instructions(&state, &session_id).await?;
-    let mut data = json!({
-        "sessionID": state.ids.new_id("ses"),
-        "parentID": session_id,
-        "boundary": { "type": boundary_type, "messageID": boundary_id },
-    });
-    if let Some(instructions) = instructions {
+    if let Some(instructions) = outcome.instructions {
         data["instructions"] =
             serde_json::from_str::<Value>(&instructions).unwrap_or_else(|_| json!({}));
     }
-    data["instructionEntries"] = Value::Array(instruction_entries);
+    data["instructionEntries"] = Value::Array(outcome.instruction_entries);
 
     // CD-15 (scan-cd): publish through the location envelope like every
     // other session event (the raw global-bus publish dropped `location`
@@ -933,7 +858,6 @@ async fn fork(
     // location-keyed SSE consumers misroute envelope-less forks).
     publish_session_event(&services, "session.forked", data.clone()).await?;
     // The projected fork row (the projector created it inside the publish).
-    let fork_id = data["sessionID"].as_str().unwrap_or_default().to_owned();
     let fork_row = services
         .store
         .get(&fork_id)

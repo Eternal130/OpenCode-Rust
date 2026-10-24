@@ -20,6 +20,7 @@
 
 pub mod diff;
 pub mod execution;
+pub mod fork;
 pub mod inbox;
 pub mod message_updater;
 pub mod projector;
@@ -39,6 +40,7 @@ pub use execution::{
     CancelJobs, Continuation, DrainOutcome, InterruptOptions, RunError, SessionExecution,
     SessionRunCoordinator, Terminal,
 };
+pub use fork::{fork, ForkError, ForkOutcome};
 pub use inbox::{InboxError, Promotable, Scope, SessionInbox};
 pub use message_updater::SessionMessageUpdater;
 pub use projector::{install_projectors, SessionAlreadyProjected};
