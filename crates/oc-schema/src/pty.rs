@@ -47,6 +47,7 @@ pub struct Updated {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Exited {
     pub id: String,
+    #[serde(rename = "exitCode")]
     pub exit_code: NonNegativeInt,
 }
 

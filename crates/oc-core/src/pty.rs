@@ -628,8 +628,7 @@ impl PtyService {
         self.inner.teardown(id);
         self.publish(
             "pty.deleted",
-            serde_json::to_value(oc_schema::pty::Deleted { id: id.0.clone() })
-                .unwrap_or_default(),
+            serde_json::to_value(oc_schema::pty::Deleted { id: id.0.clone() }).unwrap_or_default(),
         )
         .await;
         Ok(())
@@ -850,5 +849,57 @@ mod tests {
         }
         let attach = service.attach(&info.id, None, Box::new(|_| {}), Box::new(|_| {}));
         assert!(matches!(attach, Err(AttachError::Exited(_))));
+    }
+
+    /// G-12: the bus payloads are the typed oc-schema wire shapes
+    /// (camelCase `exitCode`, omitted while running).
+    #[tokio::test]
+    async fn pty_events_publish_typed_payloads() {
+        use futures::StreamExt;
+
+        let bus = bus().await;
+        let mut created_rx = bus.subscribe_type("pty.created");
+        let mut exited_rx = bus.subscribe_type("pty.exited");
+        let mut deleted_rx = bus.subscribe_type("pty.deleted");
+        let service = PtyService::new(bus);
+        let info = service
+            .create(&CreateInput {
+                command: Some("/bin/sh".to_string()),
+                args: Some(vec!["-c".to_string(), "exit 3".to_string()]),
+                cwd: Some("/tmp".to_string()),
+                ..CreateInput::default()
+            })
+            .expect("create");
+
+        let created = tokio::time::timeout(Duration::from_secs(5), created_rx.next())
+            .await
+            .expect("timeout")
+            .expect("pty.created");
+        assert_eq!(created.type_, "pty.created");
+        assert_eq!(created.data["info"]["id"], info.id.0);
+        assert_eq!(created.data["info"]["status"], "running");
+        assert_eq!(created.data["info"]["cwd"], "/tmp");
+        assert!(created.data["info"].get("exitCode").is_none(), "running info must omit exitCode");
+
+        for _ in 0..400 {
+            if service.get(&info.id).expect("get").status == Status::Exited {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let exited = tokio::time::timeout(Duration::from_secs(5), exited_rx.next())
+            .await
+            .expect("timeout")
+            .expect("pty.exited");
+        assert_eq!(exited.type_, "pty.exited");
+        assert_eq!(exited.data, serde_json::json!({ "id": info.id.0, "exitCode": 3 }));
+
+        service.remove(&info.id).await.expect("remove");
+        let deleted = tokio::time::timeout(Duration::from_secs(5), deleted_rx.next())
+            .await
+            .expect("timeout")
+            .expect("pty.deleted");
+        assert_eq!(deleted.type_, "pty.deleted");
+        assert_eq!(deleted.data, serde_json::json!({ "id": info.id.0 }));
     }
 }
