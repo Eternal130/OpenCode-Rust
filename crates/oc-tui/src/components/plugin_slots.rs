@@ -24,8 +24,31 @@ use oc_plugin_host::registrations::PluginSlotClaim;
 /// The ref's placement kinds (structure.ts:7).
 pub const PLACEMENT_KINDS: [&str; 5] = ["prepend", "append", "before", "after", "replace"];
 
-/// The native slot paths the TUI mounts (see the module docs).
-pub const MOUNTED_SLOT_PATHS: [&str; 2] = ["app", "sidebar.content"];
+/// The native slot paths the TUI mounts (see the module docs):
+/// the app root, the sidebar's plugin column + its footer stack,
+/// and the home/prompt footer faces (row-based text surfaces — the
+/// rendered `{title, rows}` claims land as prepend/append rows in
+/// the composer footer hint list / the home screen's hint list, per
+/// the ref `SlotMap`, packages/plugin/src/tui/context.ts:191-204).
+pub const MOUNTED_SLOT_PATHS: [&str; 8] = [
+    "app",
+    "sidebar.content",
+    "sidebar.footer",
+    "home.footer",
+    "home.footer.status",
+    "prompt.footer",
+    "prompt.footer.status",
+    "prompt.footer.file",
+];
+
+// Deliberately UNMOUNTED paths (documented exemptions):
+//
+// * `session.panel` — the interactive PanelInput API (focus()/
+//   close(), context.ts:168-178) has no native surface; no shipping
+//   plugin claims it (documented exemption, G-04).
+// * `session.composer.top` — rows above the composer input need a
+//   new PromptView layout surface (not a trivial addition beside
+//   the footer faces); skipped in this pass.
 
 /// One resolved claim (the snapshot's [`PluginSlotClaim`] mirrored at
 /// the router's edge — `render` stays in the guest; the TUI

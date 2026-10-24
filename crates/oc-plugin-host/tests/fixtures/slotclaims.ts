@@ -48,6 +48,22 @@ export default {
         ]),
     });
 
+    // G-04: the footer faces — prompt.footer receives the
+    // PromptFooterInput props (mode echoes back for the assertion),
+    // home.footer/sidebar.footer render plain rows.
+    ctx.ui.slot({
+      append: "prompt.footer",
+      render: (input) => box([row(`prompt footer: ${input?.mode ?? "none"}`)]),
+    });
+    ctx.ui.slot({
+      append: "home.footer",
+      render: () => box([row("home footer row")]),
+    });
+    ctx.ui.slot({
+      append: "sidebar.footer",
+      render: () => box([{ tag: "#text", props: { text: "Side footer" } }, row("sidebar footer row")]),
+    });
+
     // The `app` claim (stats.tsx's pattern): its render installs a
     // keymap layer at mount — a DYNAMIC registration the host's
     // snapshot picks up after the first materialize.
