@@ -1483,6 +1483,55 @@ impl Shared {
         Ok(reloaded)
     }
 
+    /// G-05 dynamic generation lifecycle: load ONE new entry into the
+    /// live guest mid-run (a drop-in appearing under a watched plugin
+    /// source). The load is contained exactly like a boot-time load: a
+    /// failing entry flips its own status to `Failed` and every
+    /// existing generation is untouched (crash isolation precedent —
+    /// a failed add must never disturb running plugins). Digests are
+    /// primed so the next `reload_changed` pass does not double-load.
+    ///
+    /// Per-entry `ctx.options` from the config are NOT applied to
+    /// dynamically added entries (the boot-time `entry_options` map is
+    /// immutable after start); the guest receives `null` options.
+    pub async fn add_entry(self: &Arc<Self>, entry: &Path) {
+        load_entry(self, entry).await;
+        let key = entry.to_string_lossy().into_owned();
+        if let Ok(result) =
+            self.request("scan", json!({ "entry": key }), self.config.dispatch_timeout).await
+        {
+            if let Some(digests) = decode_digests(&result) {
+                self.digests.lock().expect("digests poisoned").insert(key, digests);
+            }
+        }
+    }
+
+    /// G-05: tear down one entry's generation — the mirror of
+    /// `reload_changed`'s unload leg: drop the entry's host
+    /// registrations (`clear_plugin` removes its commands, tools,
+    /// slot claims, routes, …), ask the guest to unload the plugin
+    /// id, and drop the status + digest bookkeeping. Returns `false`
+    /// when the entry was never loaded (idempotent remove).
+    pub async fn remove_entry(&self, entry: &Path) -> bool {
+        let key = entry.to_string_lossy().into_owned();
+        let plugin_id = {
+            let mut registrations = self.registrations.write().expect("registrations poisoned");
+            let Some(status) = registrations.plugins.remove(&key) else { return false };
+            let plugin_id = status.plugin_id.clone();
+            if !plugin_id.is_empty() {
+                registrations.clear_plugin(&plugin_id);
+            }
+            plugin_id
+        };
+        self.digests.lock().expect("digests poisoned").remove(&key);
+        if !plugin_id.is_empty() {
+            let _ = self
+                .request("unload", json!({ "pluginId": plugin_id }), self.config.registration_timeout)
+                .await;
+        }
+        true
+    }
+
     /// Look up the owning plugin of a command name.
     pub fn plugin_for_command(&self, name: &str) -> Option<String> {
         self.registrations
