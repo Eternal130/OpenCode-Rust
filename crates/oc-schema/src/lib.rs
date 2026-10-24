@@ -23,6 +23,7 @@ pub mod common;
 pub mod config;
 pub mod event;
 pub mod events;
+pub mod filesystem;
 pub mod form;
 pub mod id;
 pub mod identifier;
@@ -33,8 +34,11 @@ pub mod misc;
 pub mod misc_events;
 pub mod model;
 pub mod permission;
+pub mod persistent_pty;
 pub mod prompt;
 pub mod provider;
+pub mod pty;
+pub mod reference;
 pub mod service;
 pub mod session;
 pub mod session_event;
@@ -71,6 +75,6 @@ pub use session_message::{
 pub use session_support::{ProviderContext, Revert, SessionMetadata};
 
 // TODO(port): v1/ legacy schemas, models-dev refresh plumbing, rpc.ts,
-// pty.ts/persistent-pty.ts/pty-ticket.ts, filesystem(.v1).ts, snapshot store
-// types, reference.ts, legacy-event.ts, durable-event-manifest.ts,
+// pty-ticket.ts, filesystem(.v1).ts non-event schemas, snapshot store
+// types, legacy-event.ts, durable-event-manifest.ts,
 // event-manifest.ts index, Worktree.adopt projection helper.
