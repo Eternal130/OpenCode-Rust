@@ -1514,9 +1514,10 @@ async fn session_projector_fork_copies_settled_history() {
         .expect("fork");
 
     let fork = stack.store.get("ses_fork_child").await.unwrap().expect("fork row");
-    // CD-2: the child carries BOTH linkages — the parent→child chain
-    // (`parent_id`) and the fork source (`fork_session_id`).
-    assert_eq!(fork.parent_id.as_deref(), Some(parent));
+    // Ref projector.ts:151-152: `parent_id = null`, `fork_session_id =
+    // <parent>` — fork children are top-level sessions; only the fork
+    // source is linked.
+    assert_eq!(fork.parent_id, None);
     assert_eq!(fork.fork_session_id.as_deref(), Some(parent));
     assert_eq!(fork.title.as_deref(), Some("ses_fork_parent (fork #1)"));
     let copied =
@@ -1527,6 +1528,54 @@ async fn session_projector_fork_copies_settled_history() {
     assert!(copied[0].id.starts_with(&prefix), "{}", copied[0].id);
     let latest = stack.bus.latest_sequence("ses_fork_child").await.unwrap();
     assert_eq!(latest, 2, "reserveSequence covered the copied prefix");
+}
+
+/// G-16: an instruction-entry insert failure (duplicate key in the
+/// snapshot) propagates — the whole projection transaction rolls back
+/// (ref `orDie` semantics), so no fork row survives a failed publish.
+#[tokio::test]
+async fn session_projector_fork_instruction_failure_rolls_back() {
+    let stack = stack().await;
+    let parent = "ses_fork_rb_parent";
+    seed_session_with(&stack.db, parent, &[]).await;
+    stack
+        .db
+        .transaction(|tx| {
+            SessionMessageRow::insert(
+                tx,
+                &SessionMessageRow {
+                    id: "msg_settled_rb".to_string(),
+                    session_id: parent.to_string(),
+                    type_: "assistant".to_string(),
+                    seq: 0,
+                    time_created: 0,
+                    time_updated: 0,
+                    data: r#"{"agent":"build","model":{"id":"m","providerID":"p"},"content":[],"time":{"created":0,"completed":9}}"#.to_string(),
+                },
+            )
+        })
+        .await
+        .unwrap();
+
+    let result = stack
+        .bus
+        .publish(
+            def("session.forked"),
+            serde_json::json!({
+                "sessionID": "ses_fork_rb_child",
+                "parentID": parent,
+                "boundary": { "type": "through", "messageID": "msg_settled_rb" },
+                "instructionEntries": [
+                    { "key": "dup", "value": "first", "removed": false },
+                    { "key": "dup", "value": "second", "removed": false },
+                ],
+            }),
+            PublishOptions::default(),
+        )
+        .await;
+    assert!(result.is_err(), "duplicate instruction key fails the projection");
+    let fork = stack.store.get("ses_fork_rb_child").await.unwrap();
+    assert!(fork.is_none(), "the fork row rolled back with the transaction");
 }
 
 // ===========================================================================

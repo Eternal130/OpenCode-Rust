@@ -1541,3 +1541,68 @@ async fn engine_e2e_global_agents_md_backcompat_reads_the_suffixed_dir() {
         "back-compat: the suffixed-only install keeps its global instructions"
     );
 }
+
+// ===========================================================================
+// Builtin agent seeding (G-01/G-02 — ref plugin/agent.ts:99-148)
+// ===========================================================================
+
+/// The seeded registry: `explore` is a visible subagent, `summary` a
+/// hidden primary; both are retrievable and carry their verbatim
+/// prompts.
+#[test]
+fn engine_seeds_explore_and_summary_agents() {
+    let registry = Arc::new(crate::location::AgentRegistry::new());
+    super::seed_builtin_agents(&registry);
+
+    let explore = registry.get(&oc_schema::id::AgentId::parse("explore")).expect("explore seeded");
+    let summary = registry.get(&oc_schema::id::AgentId::parse("summary")).expect("summary seeded");
+    assert!(matches!(explore.mode, oc_schema::agent::Mode::Subagent));
+    assert!(!explore.hidden, "explore is a listable subagent");
+    assert_eq!(explore.system.as_deref(), Some(super::PROMPT_EXPLORE));
+    assert!(explore.description.is_some(), "explore carries the ref description");
+    assert!(matches!(summary.mode, oc_schema::agent::Mode::Primary));
+    assert!(summary.hidden, "summary stays out of public listings");
+    assert_eq!(summary.system.as_deref(), Some(super::PROMPT_SUMMARY));
+
+    // The listing (HTTP filters `hidden`): explore visible, summary not.
+    let visible: Vec<String> = registry
+        .list()
+        .into_iter()
+        .filter(|info| !info.hidden)
+        .map(|info| info.id.as_str().to_owned())
+        .collect();
+    assert!(visible.iter().any(|id| id == "explore"), "visible agents: {visible:?}");
+    assert!(!visible.iter().any(|id| id == "summary"), "summary hidden: {visible:?}");
+}
+
+/// The explore permission gate (ref plugin/agent.ts:111-123): search and
+/// read allowed, env files ask (with the `*.env.example` escape hatch),
+/// mutating tools denied, subagents denied, external directories ask.
+#[test]
+fn engine_explore_permissions_gate_mutating_tools() {
+    let registry = Arc::new(crate::location::AgentRegistry::new());
+    super::seed_builtin_agents(&registry);
+    let explore = registry.get(&oc_schema::id::AgentId::parse("explore")).expect("explore");
+    use oc_schema::permission::Effect;
+    let rulesets = [explore.permissions.clone()];
+    let assert_effect = |action: &str, resource: &str, expected: oc_schema::permission::Effect| {
+        assert_eq!(
+            crate::permission::evaluate(action, resource, &rulesets).effect,
+            expected,
+            "{action} {resource}"
+        );
+    };
+    assert_effect("read", "src/main.rs", Effect::Allow);
+    assert_effect("grep", "**/*.rs", Effect::Allow);
+    assert_effect("glob", "src/**/*.ts", Effect::Allow);
+    assert_effect("shell", "rg pattern", Effect::Allow);
+    assert_effect("read", ".env", Effect::Ask);
+    assert_effect("read", "prod.env", Effect::Ask);
+    assert_effect("read", "config.env.local", Effect::Ask);
+    assert_effect("read", "example.env.example", Effect::Allow);
+    assert_effect("write", "src/main.rs", Effect::Deny);
+    assert_effect("edit", "src/main.rs", Effect::Deny);
+    assert_effect("bash", "rm -rf /tmp/x", Effect::Deny);
+    assert_effect("subagent", "general", Effect::Deny);
+    assert_effect("external_directory", "/etc", Effect::Ask);
+}
