@@ -1468,6 +1468,10 @@ pub struct Store {
     connection_since: Cell<u64>,
     /// SURF-2: the `StartupLoading` pill's state machine.
     startup_state: RefCell<StartupLoadingState>,
+    /// G-06 — the V1→V2 migration overlay's progress
+    /// (`migration-overlay.tsx`): `Some` only while the poll reports
+    /// `running`; completed/error clear it (error raises the toast).
+    migration_progress: RefCell<Option<crate::components::migration_overlay::MigrationProgress>>,
     /// SURF-1 revert state (`session.revert.*` — the
     /// `RevertMessage` banner's source, index.tsx:1413-1418):
     /// per-session boundary + file list; `cleared`/`committed`
@@ -3154,6 +3158,7 @@ impl Store {
             caret_cell: Cell::new(None),
             connection_since: Cell::new(0),
             startup_state: RefCell::new(StartupLoadingState::default()),
+            migration_progress: RefCell::new(None),
         }
     }
 
@@ -9356,6 +9361,24 @@ impl Store {
     #[must_use]
     pub fn connection_since(&self) -> u64 {
         self.connection_since.get()
+    }
+
+    /// G-06 — the migration overlay's live progress (`None` hides the
+    /// widget; completed/error clear it).
+    #[must_use]
+    pub fn migration_progress(
+        &self,
+    ) -> Option<crate::components::migration_overlay::MigrationProgress> {
+        self.migration_progress.borrow().clone()
+    }
+
+    /// The run-loop pump's writer (running → `Some`, terminal states →
+    /// `None`; the error toast is raised by the pump itself).
+    pub fn set_migration_progress(
+        &self,
+        progress: Option<crate::components::migration_overlay::MigrationProgress>,
+    ) {
+        *self.migration_progress.borrow_mut() = progress;
     }
 
     /// Whether the Reconnecting overlay shows at `now`

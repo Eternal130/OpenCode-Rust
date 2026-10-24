@@ -393,6 +393,27 @@ pub async fn boot_and_serve(options: &BootOptions) -> io::Result<ServeHandle> {
     // released, or replayed (the 1-in-50 standalone race: a peer's sweep
     // double-drove a live session — doubled turn, disconnected stream).
     tokio::spawn(recovery_sweep(Arc::clone(&state.engine), boot_started_ms));
+    // G-06 — the v1→v2 content migration runner (v1-migration.bun.ts
+    // `layer`, forked at server boot): copies legacy v1
+    // session/message/part rows into the v2 schema + imports
+    // opencode-next.db. Never blocks readiness and never crashes the
+    // server — failures land in the runtime state and surface as
+    // `error` on GET /api/experimental/migration/v1. The KV gate
+    // (`migration.v1-v2`) makes a second boot a no-op, and a boot with
+    // no legacy `session` table exits before writing anything.
+    {
+        let db = (*state.engine.db).clone();
+        let run_options = oc_core::database::v1_migration::RunOptions {
+            data_root: Some(options.data_root.clone()),
+            in_memory: std::env::var("OPENCODE_DB").ok().as_deref() == Some(":memory:"),
+            next_database_path: None,
+        };
+        tokio::spawn(async move {
+            if let Err(error) = oc_core::database::v1_migration::run(&db, run_options).await {
+                eprintln!("[v1-migration] failed: {error}");
+            }
+        });
+    }
     let shell = AppShell::new(Arc::clone(&state));
     let router = shell.router();
     let on_listen = trace_boot.then(|| {
