@@ -7996,6 +7996,57 @@ mod tests {
     use super::*;
     use crate::store::DialogSize;
 
+    /// G-03 — `prompt.paste` (ctrl+v) through the pluggable clipboard
+    /// source (the read arm, prompt/index.tsx:470-491): an image/png
+    /// read stages the `clipboard` attachment chip (data-URI payload,
+    /// `[Image 1]` mention); a text read feeds the resolved text-paste
+    /// flow (path resolution included — plain text inserts verbatim);
+    /// no usable read inserts nothing (headless fall-through).
+    #[test]
+    fn prompt_paste_reads_the_clipboard_source() {
+        let mut app = App::new((80, 24));
+        app.store.set_clipboard_source(std::rc::Rc::new(crate::clipboard::FixedClipboardSource {
+            content: Some(crate::clipboard::ClipboardContent {
+                mime: "image/png".to_owned(),
+                data: "AAECAw==".to_owned(),
+            }),
+        }));
+        app.press("ctrl+v");
+        let composer = app.store.composer(&app.prompt_key());
+        assert_eq!(composer.draft.text, "[Image 1] ");
+        assert_eq!(composer.draft.files.len(), 1, "one chip staged");
+        let file = &composer.draft.files[0];
+        assert_eq!(file.name, "clipboard", "the ref's clipboard filename");
+        let payload = file.payload.as_ref().expect("data-URI payload");
+        assert_eq!(payload.mime, "image/png");
+        assert_eq!(payload.data, "AAECAw==");
+    }
+
+    /// The text/plain arm of the same read: the decoded text runs the
+    /// resolved paste flow (a plain string inserts verbatim), and an
+    /// EMPTY/absent clipboard inserts nothing (never breaks paste).
+    #[test]
+    fn prompt_paste_text_flows_through_the_resolved_paste_path() {
+        let mut app = App::new((80, 24));
+        app.store.set_clipboard_source(std::rc::Rc::new(crate::clipboard::FixedClipboardSource {
+            content: Some(crate::clipboard::ClipboardContent {
+                mime: "text/plain".to_owned(),
+                // base64("just some words")
+                data: "anVzdCBzb21lIHdvcmRz".to_owned(),
+            }),
+        }));
+        app.press("ctrl+v");
+        assert_eq!(app.store.composer(&app.prompt_key()).draft.text, "just some words");
+
+        // No host arm: the draft is untouched.
+        let mut headless = App::new((80, 24));
+        headless.store.set_clipboard_source(std::rc::Rc::new(
+            crate::clipboard::FixedClipboardSource::default(),
+        ));
+        headless.press("ctrl+v");
+        assert_eq!(headless.store.composer(&headless.prompt_key()).draft.text, "");
+    }
+
     /// TUI-7 — the session-list filter's six semantics at App level
     /// (the hermetic pin behind the PTY proof): trim + case-fold +
     /// byte-exact substring (never fuzzy), no accent folding, the
