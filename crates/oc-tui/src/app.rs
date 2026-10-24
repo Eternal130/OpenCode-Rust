@@ -2781,30 +2781,34 @@ impl App {
             }
             KeyOutcome::Edited | KeyOutcome::Ignored => {}
             // `prompt.paste` (ctrl+v / the palette command): v2's read
-            // arm (prompt/index.tsx:474-491) — image bytes stage as a
-            // `clipboard` attachment chip, text inserts verbatim. The
-            // HOST tools arm runs live (pbpaste/xclip/xsel/wl-paste —
-            // auditC P8's host-first layering); the OSC 52 terminal
-            // arm is implemented in `terminal_proto` but NOT wired:
-            // crossterm's input thread owns stdin, so a query window
-            // here would race it and eat keystrokes (v2's renderer
-            // owns its input pipeline, we do not — the deferral is
-            // documented in docs/tail.log).
+            // arm (prompt/index.tsx:470-491) reads the clipboard with
+            // `{preferredTypes: ["image/png", "text/plain"]}` through
+            // opentui-core's clipboard service (G-03/G-11); image
+            // bytes stage as a `clipboard` attachment chip, text
+            // inserts through the resolved paste flow (path resolution
+            // included). The HOST backend runs live (host paste tools
+            // first — auditC P8's host-first layering — then the OSC 52
+            // query window, which `terminal_proto` drives between
+            // frames); no usable read (headless/unsupported) inserts
+            // nothing — bracketed paste stays the other entry.
             KeyOutcome::Paste(_) => {
-                if let Some(bytes) = crate::terminal_proto::clipboard_read_host() {
+                if let Some(content) = self.store.clipboard_read() {
                     let key = self.prompt_key();
                     let mut composer = self.store.composer(&key);
-                    if crate::terminal_proto::sniff_image(&bytes) {
-                        let mime = crate::terminal_proto::image_mime(&bytes);
-                        let encoded = crate::clipboard::base64_encode::encode(&bytes);
+                    if content.mime.starts_with("image/") {
                         composer.paste_attachment(
                             Some("clipboard"),
-                            &format!("data:{mime};base64,{encoded}"),
+                            &format!("data:{};base64,{}", content.mime, content.data),
                         );
-                    } else if let Ok(text) = String::from_utf8(bytes) {
-                        if !text.is_empty() {
-                            composer.paste(&text);
-                        }
+                    } else if let Some(text) = crate::clipboard::base64_decode(&content.data)
+                        .and_then(|bytes| String::from_utf8(bytes).ok())
+                        .filter(|text| !text.is_empty())
+                    {
+                        composer.paste_resolved(
+                            &text,
+                            "unix",
+                            &crate::components::composer::attachment::FsLocalFiles,
+                        );
                     }
                     self.store.set_composer(&key, &composer);
                 }
@@ -7991,6 +7995,57 @@ fn to_ratatui_color(color: crate::render::CellColor) -> ratatui::style::Color {
 mod tests {
     use super::*;
     use crate::store::DialogSize;
+
+    /// G-03 — `prompt.paste` (ctrl+v) through the pluggable clipboard
+    /// source (the read arm, prompt/index.tsx:470-491): an image/png
+    /// read stages the `clipboard` attachment chip (data-URI payload,
+    /// `[Image 1]` mention); a text read feeds the resolved text-paste
+    /// flow (path resolution included — plain text inserts verbatim);
+    /// no usable read inserts nothing (headless fall-through).
+    #[test]
+    fn prompt_paste_reads_the_clipboard_source() {
+        let mut app = App::new((80, 24));
+        app.store.set_clipboard_source(std::rc::Rc::new(crate::clipboard::FixedClipboardSource {
+            content: Some(crate::clipboard::ClipboardContent {
+                mime: "image/png".to_owned(),
+                data: "AAECAw==".to_owned(),
+            }),
+        }));
+        app.press("ctrl+v");
+        let composer = app.store.composer(&app.prompt_key());
+        assert_eq!(composer.draft.text, "[Image 1] ");
+        assert_eq!(composer.draft.files.len(), 1, "one chip staged");
+        let file = &composer.draft.files[0];
+        assert_eq!(file.name, "clipboard", "the ref's clipboard filename");
+        let payload = file.payload.as_ref().expect("data-URI payload");
+        assert_eq!(payload.mime, "image/png");
+        assert_eq!(payload.data, "AAECAw==");
+    }
+
+    /// The text/plain arm of the same read: the decoded text runs the
+    /// resolved paste flow (a plain string inserts verbatim), and an
+    /// EMPTY/absent clipboard inserts nothing (never breaks paste).
+    #[test]
+    fn prompt_paste_text_flows_through_the_resolved_paste_path() {
+        let mut app = App::new((80, 24));
+        app.store.set_clipboard_source(std::rc::Rc::new(crate::clipboard::FixedClipboardSource {
+            content: Some(crate::clipboard::ClipboardContent {
+                mime: "text/plain".to_owned(),
+                // base64("just some words")
+                data: "anVzdCBzb21lIHdvcmRz".to_owned(),
+            }),
+        }));
+        app.press("ctrl+v");
+        assert_eq!(app.store.composer(&app.prompt_key()).draft.text, "just some words");
+
+        // No host arm: the draft is untouched.
+        let mut headless = App::new((80, 24));
+        headless.store.set_clipboard_source(std::rc::Rc::new(
+            crate::clipboard::FixedClipboardSource::default(),
+        ));
+        headless.press("ctrl+v");
+        assert_eq!(headless.store.composer(&headless.prompt_key()).draft.text, "");
+    }
 
     /// TUI-7 — the session-list filter's six semantics at App level
     /// (the hermetic pin behind the PTY proof): trim + case-fold +
