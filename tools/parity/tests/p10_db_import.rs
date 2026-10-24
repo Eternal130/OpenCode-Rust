@@ -311,6 +311,7 @@ async fn run(fixture: &Path, prompt_continue: bool) -> Result<()> {
     let port = parity::rust_server::spawn_rust(parity::rust_server::RustSpawn {
         extra_env: env,
         seed_files: Vec::new(),
+        project_cwd: None,
     })
     .await?;
     eprintln!("[gate2b] B: rust opened the import at {}", port.url());
