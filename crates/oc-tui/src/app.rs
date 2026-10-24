@@ -2359,6 +2359,55 @@ impl App {
                 return;
             }
         }
+        // 0c. G-07 — the devtools bar's leader chords, consumed ONLY
+        //     while `debug.devtools` is on (strictly opt-in: disabled,
+        //     every chord falls through untouched). Ref's bar owns the
+        //     same keys through its own keymap layer: `<leader>d`
+        //     toggles the bar, `<leader>[`/`<leader>]` switch the
+        //     panel, `<leader>j` dumps state to /tmp/opencode.
+        if self.store.devtools_enabled()
+            && !self.keymap.is_leader(stroke)
+            && self.keymap.pending_display().is_some()
+        {
+            let plain = !stroke.ctrl && !stroke.alt && !stroke.shift;
+            let handled = if plain && stroke.key == "d" {
+                self.store.toggle_devtools_bar();
+                true
+            } else if plain && stroke.key == "]" {
+                self.store.devtools_cycle_panel(1);
+                true
+            } else if plain && stroke.key == "[" {
+                self.store.devtools_cycle_panel(-1);
+                true
+            } else if plain && stroke.key == "j" {
+                match self.store.devtools_dump_state(self.size) {
+                    Some(path) => {
+                        let shown = path.display().to_string();
+                        self.store.toast_show(crate::components::toast::ToastOptions {
+                            title: Some("Devtools state dumped".to_owned()),
+                            message: shown,
+                            ..crate::components::toast::ToastOptions::info("")
+                        });
+                    }
+                    None => {
+                        self.store.toast_show(crate::components::toast::ToastOptions {
+                            title: Some("Devtools state dump failed".to_owned()),
+                            message: "could not write /tmp/opencode".to_owned(),
+                            variant: "error",
+                            ..crate::components::toast::ToastOptions::info("")
+                        });
+                    }
+                }
+                true
+            } else {
+                false
+            };
+            if handled {
+                self.keymap.clear_pending();
+                self.store.request_redraw();
+                return;
+            }
+        }
         let key = self.prompt_key();
         let draft_empty = self.store.prompt_draft(&key).is_empty();
         self.keymap.set_command_enabled("app.exit", draft_empty);
