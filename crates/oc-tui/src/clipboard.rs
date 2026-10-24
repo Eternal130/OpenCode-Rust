@@ -22,11 +22,10 @@
 use std::io::Write;
 
 use opentui_core::clipboard::{
-    create_clipboard, create_host_clipboard_with_backend, ClipboardOptions,
-    ClipboardReadOptions, ClipboardReadResult, ClipboardRepresentation, ClipboardService,
-    ClipboardWriteDestination, ClipboardWriteOptions, HostClipboardBackend,
-    HostClipboardClearResult, HostClipboardOptions, HostClipboardReadOptions,
-    HostClipboardWriteOptions, HostClipboardWriteResult, Osc52Support,
+    create_clipboard, create_host_clipboard_with_backend, ClipboardOptions, ClipboardReadOptions,
+    ClipboardReadResult, ClipboardRepresentation, ClipboardService, ClipboardWriteDestination,
+    ClipboardWriteOptions, HostClipboardBackend, HostClipboardClearResult, HostClipboardOptions,
+    HostClipboardReadOptions, HostClipboardWriteOptions, HostClipboardWriteResult, Osc52Support,
     TerminalClipboardAdapter, TerminalClipboardOperationResult,
 };
 
@@ -155,13 +154,13 @@ impl<W: Write> TerminalClipboardAdapter for Osc52TerminalAdapter<W> {
     ) -> TerminalClipboardOperationResult {
         let sequence = osc52_sequence(text);
         let attempted = match self.handle.0.lock() {
-            Ok(mut handle) => handle
-                .write_all(&sequence)
-                .and_then(|()| handle.flush())
-                .is_ok(),
+            Ok(mut handle) => handle.write_all(&sequence).and_then(|()| handle.flush()).is_ok(),
             Err(_) => false,
         };
-        TerminalClipboardOperationResult { attempted: Some(attempted), capability: Osc52Support::Supported }
+        TerminalClipboardOperationResult {
+            attempted: Some(attempted),
+            capability: Osc52Support::Supported,
+        }
     }
 
     fn clear(
@@ -229,7 +228,7 @@ impl HostClipboardBackend for UnsupportedHostBackend {
     fn dispose(&mut self) {}
 }
 
-impl<W: Write> Osc52Sink<W> {
+impl<W: Write + 'static> Osc52Sink<W> {
     #[must_use]
     pub fn new(handle: W) -> Self {
         let handle = std::sync::Arc::new(SharedHandle(std::sync::Mutex::new(handle)));
@@ -283,8 +282,7 @@ impl<W: Write> Osc52Sink<W> {
     /// the service's non-empty validation.
     fn write_osc52_direct(&self, text: &str) -> Result<(), ClipboardError> {
         let sequence = osc52_sequence(text);
-        let mut handle =
-            self.handle.0.lock().map_err(|_| ClipboardError::Io("locked".into()))?;
+        let mut handle = self.handle.0.lock().map_err(|_| ClipboardError::Io("locked".into()))?;
         handle.write_all(&sequence).map_err(|error| ClipboardError::Io(error.to_string()))?;
         handle.flush().map_err(|error| ClipboardError::Io(error.to_string()))?;
         Ok(())
@@ -362,7 +360,8 @@ impl CoreClipboardSource {
     pub fn with_backend(backend: Box<dyn HostClipboardBackend>) -> Self {
         let host = create_host_clipboard_with_backend(HostClipboardOptions::default(), backend)
             .expect("default host options normalize");
-        let service = create_clipboard(ClipboardOptions { host, terminal: Box::new(NoopTerminalAdapter) });
+        let service =
+            create_clipboard(ClipboardOptions { host, terminal: Box::new(NoopTerminalAdapter) });
         Self { service: std::sync::Mutex::new(service) }
     }
 }
@@ -381,7 +380,7 @@ impl ClipboardSource for CoreClipboardSource {
             preferred_types: vec!["image/png".to_owned(), "text/plain".to_owned()],
             ..ClipboardReadOptions::default()
         };
-        let service = self.service.lock().ok()?;
+        let mut service = self.service.lock().ok()?;
         match service.read(&options) {
             Ok(ClipboardReadResult::Read(representation)) => Some(ClipboardContent {
                 mime: representation.mime_type,
@@ -511,10 +510,14 @@ mod tests {
         }));
         assert_eq!(
             source.read(),
-            Some(ClipboardContent { mime: "image/png".to_owned(), data: base64_encode::encode(&png) })
+            Some(ClipboardContent {
+                mime: "image/png".to_owned(),
+                data: base64_encode::encode(&png)
+            })
         );
 
-        let empty = CoreClipboardSource::with_backend(Box::new(FakeBackend { representation: None }));
+        let empty =
+            CoreClipboardSource::with_backend(Box::new(FakeBackend { representation: None }));
         assert_eq!(empty.read(), None);
     }
 
@@ -523,7 +526,10 @@ mod tests {
     #[test]
     fn fixed_source_returns_the_injected_content() {
         let source = FixedClipboardSource {
-            content: Some(ClipboardContent { mime: "text/plain".to_owned(), data: "aGk=".to_owned() }),
+            content: Some(ClipboardContent {
+                mime: "text/plain".to_owned(),
+                data: "aGk=".to_owned(),
+            }),
         };
         assert_eq!(
             source.read(),
