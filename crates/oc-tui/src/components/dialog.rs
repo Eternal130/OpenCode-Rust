@@ -1015,6 +1015,9 @@ pub fn render_app(store: &Store, theme: &crate::theme::ThemeState, size: (u16, u
             }
         }
     };
+    // G-07 — the devtools bar paints the bottom row BEFORE overlays
+    // (dialogs render above it, ref's z-order); zero-op disabled.
+    crate::components::devtools::paint_devtools_bar(&mut frame, store, &styles, (size.0, size.1));
     render_overlay(&mut frame, store, theme, size);
     frame
 }

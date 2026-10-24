@@ -1567,6 +1567,9 @@ pub struct Store {
     config_sink: std::cell::RefCell<Rc<dyn ConfigSink>>,
     /// The configured theme-mode pin (dark/light/system).
     theme_mode_pref: RefCell<Option<String>>,
+    /// G-07 — the devtools registry + bar state (ref devtools/index.ts):
+    /// gated by the `debug.devtools` settings row, zero effect off.
+    devtools: Signal<crate::components::devtools::DevtoolsState>,
     /// The terminal probe's system mode.
     system_mode: Cell<oc_theme::types::Mode>,
 }
@@ -2789,6 +2792,7 @@ struct StoreSignals {
     route: Signal<Route>,
     dialogs: Signal<Vec<DialogEntry>>,
     theme: Signal<ThemeState>,
+    devtools: Signal<crate::components::devtools::DevtoolsState>,
     registry: Signal<ThemeRegistry>,
     keybinds: Signal<Vec<KeybindOverride>>,
     connection: Signal<ConnectionState>,
@@ -2945,6 +2949,7 @@ impl Store {
             route,
             dialogs,
             theme,
+            devtools,
             registry,
             keybinds,
             connection,
@@ -3018,6 +3023,7 @@ impl Store {
             route,
             dialogs,
             theme,
+            devtools,
             registry,
             keybinds,
             connection,
@@ -3177,6 +3183,7 @@ impl Store {
         let route = Signal::new(&runtime, Route::Home);
         let dialogs = Signal::new(&runtime, Vec::<DialogEntry>::new());
         let theme = Signal::new(&runtime, ThemeState::v2_dark());
+        let devtools = Signal::new(&runtime, crate::components::devtools::DevtoolsState::default());
         let registry = Signal::new(&runtime, ThemeRegistry::builtins());
         let keybinds = Signal::new(&runtime, Vec::<KeybindOverride>::new());
         let connection = Signal::new(&runtime, ConnectionState::Connecting);
@@ -3268,6 +3275,7 @@ impl Store {
                 route,
                 dialogs,
                 theme,
+                devtools,
                 registry,
                 keybinds,
                 connection,
@@ -8349,6 +8357,11 @@ impl Store {
     /// TUI-23: seed the settings snapshot (the boot config's display
     /// values for the rows the store does not model live).
     pub fn set_settings_snapshot(&self, snapshot: SettingsSnapshot) {
+        // G-07: the boot snapshot gates the devtools bar (the settings
+        // row `debug.devtools` — ref app.tsx:457's config read).
+        if let Some(value) = snapshot.get("debug.devtools") {
+            self.set_devtools_enabled(value == "true");
+        }
         self.lane_dialogs.borrow_mut().settings = snapshot;
     }
 
@@ -8361,6 +8374,98 @@ impl Store {
     /// Record a cycled settings value into the snapshot.
     pub fn settings_snapshot_set(&self, path: &str, value: &str) {
         self.lane_dialogs.borrow_mut().settings.insert(path.to_owned(), value.to_owned());
+    }
+
+    // -- G-07 devtools -------------------------------------------------------------
+
+    /// The devtools registry + bar state (ref devtools/index.ts).
+    #[must_use]
+    pub fn devtools_state(&self) -> crate::components::devtools::DevtoolsState {
+        self.devtools.get()
+    }
+
+    /// `debug.devtools` live application (the settings row's consumer
+    /// + the boot snapshot's gate — ref app.tsx:457).
+    pub fn set_devtools_enabled(&self, enabled: bool) {
+        self.devtools.update(|state| state.enabled = enabled);
+    }
+
+    /// Whether the feature is on (`config.debug.devtools`).
+    #[must_use]
+    pub fn devtools_enabled(&self) -> bool {
+        self.devtools.get().enabled
+    }
+
+    /// `<leader>d`: hide the bar while enabled / show it back.
+    pub fn toggle_devtools_bar(&self) {
+        self.devtools.update(|state| state.visible = !state.visible);
+    }
+
+    /// The bar's visibility (hidden bars render nothing).
+    #[must_use]
+    pub fn devtools_bar_visible(&self) -> bool {
+        self.devtools.get().visible
+    }
+
+    /// Show the bar (the Experiments palette row's side effect).
+    pub fn set_devtools_bar_visible(&self, visible: bool) {
+        self.devtools.update(|state| state.visible = visible);
+    }
+
+    /// `<leader>[` / `<leader>]`: cycle the active panel.
+    pub fn devtools_cycle_panel(&self, direction: i32) {
+        self.devtools.update(|state| state.cycle_panel(direction));
+    }
+
+    /// Ref's registry `set` — upsert one `{key, value}` entry.
+    pub fn devtools_set_entry(&self, group_id: &str, key: &str, value: &str) {
+        self.devtools.update(|state| state.set_entry(group_id, key, value));
+    }
+
+    /// The ui panel's dump action (ref dumps state to a tmp file):
+    /// write a JSON snapshot of the store essentials under
+    /// `/tmp/opencode/` with a unique name.
+    pub fn devtools_dump_state(&self, size: (u16, u16)) -> Option<std::path::PathBuf> {
+        let state = self.devtools_state();
+        let lists = self.server_lists();
+        let registry: Vec<_> = state
+            .registry
+            .iter()
+            .map(|group| {
+                serde_json::json!({
+                    "id": group.id,
+                    "title": group.title,
+                    "entries": group.entries.iter().map(|entry|
+                        serde_json::json!({"key": entry.key, "value": entry.value})).collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or_default();
+        let payload = serde_json::json!({
+            "pid": std::process::id(),
+            "nanos": nanos,
+            "size": {"width": size.0, "height": size.1},
+            "redraws": self.redraw_generation(),
+            "connection": format!("{:?}", self.connection()),
+            "route": format!("{:?}", self.route()),
+            "theme": self.theme_name(),
+            "models": lists.models.rows().map_or(0, <[ServerModel]>::len),
+            "providers": lists.providers.len(),
+            "panel": crate::components::devtools::PANEL_IDS
+                .get(state.panel)
+                .copied()
+                .unwrap_or("server"),
+            "registry": registry,
+        });
+        let dir = std::path::Path::new("/tmp/opencode");
+        std::fs::create_dir_all(dir).ok()?;
+        let path = dir.join(format!("devtools-state-{}-{nanos}.json", std::process::id()));
+        let file = std::fs::File::create(&path).ok()?;
+        serde_json::to_writer_pretty(file, &payload).ok()?;
+        Some(path)
     }
 
     /// TUI-TD22: the experiments table (EMPTY in v2.0.24 —
@@ -10225,7 +10330,11 @@ impl Store {
                 let created = event.created;
                 self.update_messages(&session, |messages| {
                     with_tool_part(messages, &assistant, &part_id, |part| {
-                        if let Part::Tool { time, state, .. } = part {
+                        if let Part::Tool { time, state, name, .. } = part {
+                            // G-07: the devtools `tools` panel's
+                            // last-call row (no registered-tool
+                            // inventory exists in the port — trimmed).
+                            self.devtools_set_entry("tools", "last", name);
                             *state = crate::components::message::model::ToolState {
                                 status: ToolStatus::Running,
                                 input: crate::data::stringify_map(input.as_ref()),
