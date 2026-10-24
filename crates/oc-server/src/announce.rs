@@ -204,7 +204,9 @@ async fn publish_empty(engine: &Engine, type_: &str, location: &LocationRef) {
         .bus
         .publish(
             &definition,
-            json!({}),
+            // The typed `Empty` payload ({}), shared by every empty
+            // service frame including `reference.updated`.
+            serde_json::to_value(oc_schema::misc_events::Empty).unwrap_or_default(),
             oc_core::bus::PublishOptions {
                 location: Some(envelope(location)),
                 ..oc_core::bus::PublishOptions::default()
@@ -546,7 +548,11 @@ pub async fn watch_location_head(state: &Arc<AppState>, location: &LocationRef) 
             .bus
             .publish(
                 definition,
-                json!({ "file": head_path.to_string_lossy(), "event": "change" }),
+                serde_json::to_value(oc_schema::filesystem::Changed {
+                    file: head_path.to_string_lossy().into_owned(),
+                    event: oc_schema::filesystem::Change::Change,
+                })
+                .unwrap_or_default(),
                 options,
             )
             .await;
