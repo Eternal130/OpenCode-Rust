@@ -1526,7 +1526,11 @@ impl Shared {
         self.digests.lock().expect("digests poisoned").remove(&key);
         if !plugin_id.is_empty() {
             let _ = self
-                .request("unload", json!({ "pluginId": plugin_id }), self.config.registration_timeout)
+                .request(
+                    "unload",
+                    json!({ "pluginId": plugin_id }),
+                    self.config.registration_timeout,
+                )
                 .await;
         }
         true
