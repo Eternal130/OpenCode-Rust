@@ -273,9 +273,15 @@ pub struct RustSpawn<'a> {
     /// Files to write inside the sandbox before spawning
     /// (relative path, contents) — used to pre-seed the project config.
     pub seed_files: Vec<(PathBuf, String)>,
+    /// Force the server cwd (and therefore the request location's
+    /// project directory) at this SANDBOX-RELATIVE path instead of the
+    /// default reference-mirroring cwd — the browser-E2E lane serves a
+    /// seeded workspace as the visible project.
+    pub project_cwd: Option<PathBuf>,
 }
 
 /// Spawn the Rust server and wait until `GET /api/info` answers 200.
+#[allow(clippy::too_many_lines)] // one grow per field addition beats a refactor mid-lane
 pub async fn spawn_rust(options: RustSpawn<'_>) -> Result<RustServer> {
     // Ref-dir self-healing (shared with the reference spawner): the Rust
     // server mirrors the reference cwd when the checkout exists, so keep it
@@ -311,9 +317,21 @@ pub async fn spawn_rust(options: RustSpawn<'_>) -> Result<RustServer> {
     }
 
     // Mirror the reference cwd (its own working directory is the location
-    // that pins the second boot group of permission_saved).
-    let cwd = PathBuf::from("/tmp/opencode/ref/packages/cli");
-    let cwd = if cwd.is_dir() { cwd } else { sandbox.join("project") };
+    // that pins the second boot group of permission_saved) — unless the
+    // caller pinned a sandbox-relative project cwd (browser E2E serves a
+    // seeded workspace as the visible project).
+    let cwd = options
+        .project_cwd
+        .map(|relative| sandbox.join(relative))
+        .filter(|path| path.is_dir())
+        .unwrap_or_else(|| {
+            let cwd = PathBuf::from("/tmp/opencode/ref/packages/cli");
+            if cwd.is_dir() {
+                cwd
+            } else {
+                sandbox.join("project")
+            }
+        });
 
     let url = format!("http://127.0.0.1:{port}");
     let mut command = Command::new(&binary);

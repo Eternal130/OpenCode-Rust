@@ -2475,6 +2475,7 @@ async fn probe_our_processes(
     let server = crate::rust_server::spawn_rust(crate::rust_server::RustSpawn {
         extra_env: vec![("OPENCODE_CONFIG", config_env), ("OPENCODE_CHANNEL", "stable")],
         seed_files: Vec::new(),
+        project_cwd: None,
     })
     .await?;
     let argv = vec!["--server".to_owned(), server.url().to_owned()];
@@ -2755,6 +2756,7 @@ pub async fn run_script_once(
         // sides (corpus3 #48).
         extra_env: vec![("OPENCODE_CONFIG", config_env.as_str()), ("OPENCODE_CHANNEL", "stable")],
         seed_files: Vec::new(),
+        project_cwd: None,
     })
     .await
     {
