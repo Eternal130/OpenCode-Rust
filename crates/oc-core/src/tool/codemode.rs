@@ -1401,3 +1401,387 @@ mod executor_tests {
         assert!(failure.message().contains("timed out after 50 ms"), "{}", failure.message());
     }
 }
+
+/// Execution-limits parity (v2 `ExecutionLimits`,
+/// codemode.ts:22-41 + interpreter/execute.ts + interpreter/limits.ts):
+/// validation text, output bounding notices, the tool-call admission
+/// cap, the depth guard, and the timeout limit's program-level
+/// diagnostic — all byte-exact against the TypeScript reference.
+#[cfg(test)]
+mod limits_tests {
+    use super::super::tests::{call, harness_for_codemode};
+    use super::*;
+    use serde_json::json;
+
+    /// `{"a":{"a":…}}` with exactly `depth` object levels (the scalar
+    /// sits at `depth`, the 33rd level trips the ref's `depth > 32`).
+    fn nested(depth: usize) -> Value {
+        let mut value = json!({ "a": 1 });
+        for _ in 1..depth {
+            value = json!({ "a": value });
+        }
+        value
+    }
+
+    // -- validation (validateLimit, codemode.ts:126-137) ---------------------
+
+    #[test]
+    fn limits_validation_matches_ref_text() {
+        // Absent = unlimited (no defaults — the ref's core callers
+        // pass no limits either).
+        let resolved = ExecutionLimits::default().resolve().expect("unlimited resolves");
+        assert_eq!(resolved.timeout_ms, None);
+        assert_eq!(resolved.max_tool_calls, None);
+        assert_eq!(resolved.max_output_bytes, None);
+
+        // Below-minimum rejections with the ref-identical RangeError text.
+        let bad = ExecutionLimits { timeout_ms: Some(0), ..ExecutionLimits::default() };
+        assert_eq!(
+            bad.resolve().unwrap_err(),
+            "timeoutMs must be a safe integer greater than or equal to 1."
+        );
+        let bad = ExecutionLimits { max_tool_calls: Some(0), ..ExecutionLimits::default() };
+        assert_eq!(
+            bad.resolve().unwrap_err(),
+            "maxToolCalls must be a safe integer greater than or equal to 0."
+        );
+        // Zero is VALID for maxToolCalls / maxOutputBytes (min 0) and
+        // invalid for timeoutMs (min 1).
+        ExecutionLimits {
+            max_tool_calls: Some(0),
+            max_output_bytes: Some(0),
+            ..ExecutionLimits::default()
+        }
+        .resolve()
+        .expect("zero tool/output budgets are valid");
+
+        // Above the safe-integer range (Number.isSafeInteger's bound):
+        // same message, ref rejects anything past 2^53-1.
+        let bad =
+            ExecutionLimits { max_output_bytes: Some(1 << 53), ..ExecutionLimits::default() };
+        assert_eq!(
+            bad.resolve().unwrap_err(),
+            "maxOutputBytes must be a safe integer greater than or equal to 0."
+        );
+        // 2^53-1 itself is a safe integer: valid.
+        ExecutionLimits { timeout_ms: Some((1 << 53) - 1), ..ExecutionLimits::default() }
+            .resolve()
+            .expect("2^53-1 is a safe integer");
+    }
+
+    // -- boundOutput (interpreter/execute.ts:129-193) ------------------------
+
+    #[test]
+    fn bound_output_result_notice_is_byte_exact() {
+        let mut outcome = RunOutcome {
+            value: Some(json!({ "padding": "x".repeat(100) })),
+            ..RunOutcome::default()
+        };
+        bound_output(&mut outcome, 20);
+        assert!(outcome.truncated, "over-budget value marks truncated");
+        // serialized = {"padding":"xxx…"} = 114 bytes; 20 retained.
+        assert_eq!(
+            outcome.value,
+            Some(Value::String(
+                "{\"padding\":\"xxxxxxxx [result truncated: 114 bytes exceeds the 20-byte output limit; return a smaller value]"
+                    .to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn bound_output_truncates_on_utf8_boundaries() {
+        // "é" is 2 UTF-8 bytes: serialized = " + 50×2 + " = 102 bytes;
+        // 7 retained cuts inside the 4th é — the partial sequence is
+        // dropped (ref utf8Truncate's replacement-char strip).
+        let mut outcome =
+            RunOutcome { value: Some(json!("é".repeat(50))), ..RunOutcome::default() };
+        bound_output(&mut outcome, 7);
+        assert_eq!(
+            outcome.value,
+            Some(Value::String(
+                "\"ééé [result truncated: 102 bytes exceeds the 7-byte output limit; return a smaller value]"
+                    .to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn bound_output_warnings_have_a_separate_equal_budget() {
+        let warning = || json!({ "kind": "TimeoutExceeded", "message": "m" });
+        let mut outcome = RunOutcome {
+            value: Some(Value::Null),
+            warnings: vec![warning(), warning(), warning()],
+            ..RunOutcome::default()
+        };
+        // Each warning serializes to 34 bytes (+1) = 35; budget 60
+        // keeps two (70 > 60 drops the third).
+        bound_output(&mut outcome, 60);
+        assert!(outcome.truncated);
+        assert_eq!(outcome.warnings.len(), 3);
+        assert_eq!(outcome.warnings[0], warning());
+        assert_eq!(outcome.warnings[1], warning());
+        assert_eq!(
+            outcome.warnings[2],
+            json!({ "kind": "Truncated", "message": "1 additional warnings omitted by the output limit." })
+        );
+    }
+
+    #[test]
+    fn bound_output_logs_share_the_remaining_budget() {
+        let mut outcome = RunOutcome {
+            value: Some(Value::Null), // "null" = 4 bytes
+            logs: vec!["aaaa".to_string(), "bbbb".to_string()],
+            ..RunOutcome::default()
+        };
+        // Log budget = 60 - 4 = 56? No: budget 10 - 4 = 6 → the first
+        // line (5 bytes incl. separator) fits, the second does not.
+        bound_output(&mut outcome, 10);
+        assert!(outcome.truncated);
+        assert_eq!(outcome.logs, vec!["aaaa".to_string(), "[logs truncated: showing 1 of 2 lines]"]);
+    }
+
+    #[test]
+    fn bound_output_is_a_noop_under_budget() {
+        let value = json!({ "ok": true, "n": 3 });
+        let mut outcome = RunOutcome { value: Some(value.clone()), ..RunOutcome::default() };
+        bound_output(&mut outcome, 4096);
+        assert!(!outcome.truncated);
+        assert_eq!(outcome.value, Some(value));
+        assert!(outcome.warnings.is_empty());
+        assert!(outcome.logs.is_empty());
+    }
+
+    #[test]
+    fn depth_guard_bounds_nesting_at_32() {
+        assert!(!value_depth_exceeded(&nested(32)), "32 levels cross fine");
+        assert!(value_depth_exceeded(&nested(33)), "the 33rd level trips the guard");
+        assert_eq!(MAX_VALUE_DEPTH, 32);
+        // Arrays count as levels too.
+        let mut deep = nested(32);
+        for _ in 0..2 {
+            deep = json!([deep]);
+        }
+        assert!(value_depth_exceeded(&deep), "arrays nest like objects");
+    }
+
+    // -- the executor leaf (register_code_mode_with_limits) ------------------
+
+    /// A runtime that ignores `code` and performs one probe.
+    enum Probe {
+        /// Return a value nested `n` levels deep.
+        ReturnNested(usize),
+        /// Call `greet` with an input nested `n` levels deep.
+        SendNested(usize),
+        /// Call `greet` `n` times.
+        Call(usize),
+        /// Never settle.
+        Hang,
+    }
+
+    struct ProbeRuntime(Probe);
+
+    #[async_trait]
+    impl CodeModeRuntime for ProbeRuntime {
+        async fn evaluate(&self, code: &str, _catalog: &[CatalogEntry], call: ToolCallFn) -> RunOutcome {
+            let mut outcome = RunOutcome::default();
+            match &self.0 {
+                Probe::ReturnNested(depth) => {
+                    outcome.value = Some(nested(*depth));
+                }
+                Probe::SendNested(depth) => match call("greet", nested(*depth)).await {
+                    Ok(value) => outcome.value = Some(value),
+                    Err(message) => outcome.error = Some(message),
+                },
+                Probe::Call(times) => {
+                    for _ in 0..*times {
+                        match call("greet", json!({ "name": "limits" })).await {
+                            Ok(value) => outcome.value = Some(value),
+                            Err(message) => {
+                                outcome.error = Some(message);
+                                break;
+                            }
+                        }
+                    }
+                }
+                Probe::Hang => {
+                    let _ = code;
+                    futures::future::pending::<()>().await;
+                }
+            }
+            outcome
+        }
+    }
+
+    async fn limited_harness(
+        runtime: Arc<dyn CodeModeRuntime>,
+        limits: ExecutionLimits,
+    ) -> (Arc<ToolRegistryState>, Arc<crate::hooks::HookRegistry>) {
+        let harness = harness_for_codemode().await;
+        let state = Arc::new(ToolRegistryState::new());
+        let hooks = Arc::new(crate::hooks::HookRegistry::new());
+        crate::tool::registry::register(
+            &state,
+            &hooks,
+            &harness.services,
+            crate::tool::BuiltinTool {
+                name: "greet",
+                description: "Greet".to_string(),
+                input: json!({ "type": "object", "properties": {} }),
+                permission: None,
+                codemode: true,
+                namespace: None,
+                execute: {
+                    struct Ok;
+                    impl crate::tool::ToolExecuteWithContext for Ok {
+                        fn execute<'a>(
+                            &'a self,
+                            _services: &'a crate::tool::ToolServices,
+                            _input: &'a serde_json::Value,
+                            _context: &'a crate::location::ToolCallContext,
+                        ) -> std::pin::Pin<
+                            Box<
+                                dyn std::future::Future<
+                                        Output = Result<crate::tool::ToolOutcome, crate::tool::ToolFailure>,
+                                    > + Send
+                                    + 'a,
+                            >,
+                        > {
+                            Box::pin(async move {
+                                Ok(crate::tool::ToolOutcome {
+                                    content: vec![oc_schema::tool::Content::Text {
+                                        text: "hi".to_string(),
+                                    }],
+                                    metadata: None,
+                                    output: None,
+                                })
+                            })
+                        }
+                    }
+                    Arc::new(Ok)
+                },
+            },
+        )
+        .expect("register greet");
+        register_code_mode_with_limits(
+            &state,
+            &hooks,
+            &harness.services,
+            runtime,
+            std::time::Duration::from_secs(5),
+            limits,
+        );
+        (state, hooks)
+    }
+
+    fn text_of(result: &crate::location::ToolRunResult) -> String {
+        match &result.content[0] {
+            oc_schema::tool::Content::Text { text } => text.clone(),
+            _ => String::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn tool_call_cap_rejects_beyond_the_limit() {
+        let (state, _hooks) = limited_harness(
+            Arc::new(ProbeRuntime(Probe::Call(3))),
+            ExecutionLimits { max_tool_calls: Some(2), ..ExecutionLimits::default() },
+        )
+        .await;
+        let result = call(&state, EXECUTE_NAME, json!({ "code": "three" }))
+            .await
+            .expect("a capped program is output, not a tool failure");
+        assert_eq!(text_of(&result), "Execution exceeded its tool-call limit of 2.");
+        let metadata = result.metadata.expect("metadata");
+        assert_eq!(metadata.get("error"), Some(&json!(true)));
+        // Exactly the limit was admitted.
+        let calls = metadata.get("toolCalls").and_then(|v| v.as_array()).expect("toolCalls");
+        assert_eq!(calls.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn depth_guard_rejects_deep_inputs_and_values() {
+        // Tool inputs crossing guest→host are rejected at the boundary.
+        let (state, _hooks) = limited_harness(
+            Arc::new(ProbeRuntime(Probe::SendNested(33))),
+            ExecutionLimits::default(),
+        )
+        .await;
+        let result = call(&state, EXECUTE_NAME, json!({ "code": "deep input" }))
+            .await
+            .expect("a rejected call surfaces as the program's error");
+        assert_eq!(text_of(&result), "Value exceeds the maximum depth of 32.");
+
+        // The returned value crossing guest→host is guarded too.
+        let (state, _hooks) = limited_harness(
+            Arc::new(ProbeRuntime(Probe::ReturnNested(33))),
+            ExecutionLimits::default(),
+        )
+        .await;
+        let result = call(&state, EXECUTE_NAME, json!({ "code": "deep value" }))
+            .await
+            .expect("a deep value surfaces as the program's error");
+        assert_eq!(text_of(&result), "Value exceeds the maximum depth of 32.");
+
+        // 32 levels cross fine.
+        let (state, _hooks) = limited_harness(
+            Arc::new(ProbeRuntime(Probe::ReturnNested(32))),
+            ExecutionLimits::default(),
+        )
+        .await;
+        let result = call(&state, EXECUTE_NAME, json!({ "code": "ok value" }))
+            .await
+            .expect("32 levels are within the guard");
+        assert_ne!(text_of(&result), "Value exceeds the maximum depth of 32.");
+    }
+
+    #[tokio::test]
+    async fn timeout_limit_yields_the_ref_diagnostic() {
+        let (state, _hooks) = limited_harness(
+            Arc::new(ProbeRuntime(Probe::Hang)),
+            ExecutionLimits { timeout_ms: Some(60), ..ExecutionLimits::default() },
+        )
+        .await;
+        let result = call(&state, EXECUTE_NAME, json!({ "code": "hang" }))
+            .await
+            .expect("the timeout is the program's error, not a tool failure");
+        assert_eq!(text_of(&result), "Execution timed out after 60ms.");
+        assert_eq!(result.metadata.expect("metadata").get("error"), Some(&json!(true)));
+    }
+
+    #[tokio::test]
+    async fn invalid_limits_fail_the_execute_call() {
+        let (state, _hooks) = limited_harness(
+            Arc::new(ProbeRuntime(Probe::Call(1))),
+            ExecutionLimits { timeout_ms: Some(0), ..ExecutionLimits::default() },
+        )
+        .await;
+        let failure = call(&state, EXECUTE_NAME, json!({ "code": "any" }))
+            .await
+            .expect_err("invalid limits reject the call");
+        assert_eq!(
+            failure.message(),
+            "timeoutMs must be a safe integer greater than or equal to 1."
+        );
+    }
+
+    #[tokio::test]
+    async fn output_limit_truncates_the_leaf_result() {
+        // The native-runtime path: the leaf bounds a value the runtime
+        // returned un-bounded (the guest path pre-bounds on its side
+        // and flags `truncated`).
+        let (state, _hooks) = limited_harness(
+            Arc::new(ProbeRuntime(Probe::ReturnNested(1))), // {"a":1} = 7 bytes
+            ExecutionLimits { max_output_bytes: Some(4), ..ExecutionLimits::default() },
+        )
+        .await;
+        let result = call(&state, EXECUTE_NAME, json!({ "code": "wide" }))
+            .await
+            .expect("a truncated program still succeeds");
+        assert_eq!(
+            text_of(&result),
+            "{\"a\" [result truncated: 7 bytes exceeds the 4-byte output limit; return a smaller value]"
+        );
+        assert_eq!(result.metadata.expect("metadata").get("truncated"), Some(&json!(true)));
+    }
+}
