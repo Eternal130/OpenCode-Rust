@@ -195,6 +195,31 @@ pub struct CodeModeRun {
     pub value: Option<Value>,
     pub error: Option<String>,
     pub tool_calls: Vec<CodeModeCallRecord>,
+    /// Set by the guest when an output budget truncated the value (v2
+    /// `Result.truncated`) — the leaf skips re-bounding a pre-bounded
+    /// value.
+    pub truncated: bool,
+}
+
+/// Execution budgets for one `codemode.evaluate` (v2 `ExecutionLimits`,
+/// codemode.ts:22-41 — ALL optional; absent = unlimited, no defaults).
+/// The wire form is camelCase with absent fields omitted, so the
+/// unlimited default serializes to `{}`. The engine-side twin (with
+/// `resolve()` validation) is oc-core's `tool::codemode::ExecutionLimits`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeModeLimits {
+    /// Wall-clock milliseconds before interruption (guest-enforced
+    /// between event-loop turns; supervisor kill at the deadline for a
+    /// wedged guest).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+    /// Maximum number of tool calls admitted by the runtime.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tool_calls: Option<u64>,
+    /// Maximum UTF-8 bytes retained from the result and logs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_bytes: Option<u64>,
 }
 
 /// The guest's own error message passes through VERBATIM (a plugin's
@@ -626,13 +651,72 @@ impl PluginHost {
             .request("codemode.evaluate", params, timeout)
             .await
             .map_err(|error| error.to_string())?;
+        Self::parse_run(&result)
+    }
+
+    /// [`PluginHost::codemode_evaluate_token_async`] under v2
+    /// `ExecutionLimits` ([`CodeModeLimits`], camelCase on the wire;
+    /// absent fields = unlimited): the guest validates and enforces
+    /// them (soft `timeoutMs` between event-loop turns, the tool-call
+    /// admission counter, the value output bound, the depth guard).
+    ///
+    /// The transport deadline is the limits-aligned bound — `timeoutMs`
+    /// plus a grace margin so the guest's soft timeout answers first,
+    /// capped by the hard `timeout`. A deadline miss means the guest is
+    /// wedged (a sync loop is not interruptible in-process), so the
+    /// supervisor KILLS the child and restarts it; that deliberate kill
+    /// is exempt from the crash-strike attribution.
+    pub async fn codemode_evaluate_limits_async(
+        &self,
+        code: &str,
+        catalog: &[CodeModeToolSpec],
+        token: u64,
+        timeout: Duration,
+        limits: &CodeModeLimits,
+    ) -> Result<CodeModeRun, String> {
+        /// Grace over `timeoutMs` before the transport gives up on the
+        /// guest: the guest's soft timeout (a timer on the event loop)
+        /// must get the chance to answer first.
+        const TIMEOUT_GRACE: Duration = Duration::from_millis(1_000);
+        let Some(facade) = &self.facade else { return Err("plugin subsystem disabled".into()) };
+        let deadline = match limits.timeout_ms {
+            Some(timeout_ms) => timeout.min(Duration::from_millis(timeout_ms) + TIMEOUT_GRACE),
+            None => timeout,
+        };
+        let params = json!({
+            "code": code,
+            "tools": catalog,
+            "token": token,
+            "limits": limits,
+        });
+        let outcome = facade.shared.request("codemode.evaluate", params, deadline).await;
+        let result = match outcome {
+            Ok(result) => result,
+            Err(HostError::Timeout(why)) => {
+                // The guest never answered: it is wedged (sync loop) or
+                // past its budget — either way the only interruption is
+                // process death. Kill + restart, strike-exempt.
+                facade.shared.request_codemode_kill();
+                return Err(HostError::Timeout(why).to_string());
+            }
+            // Guest-thrown errors pass VERBATIM (the guest's
+            // RangeError text IS the ref-identical validation message);
+            // transport failures keep their display forms.
+            Err(error) => return Err(guest_error_text(error)),
+        };
+        Self::parse_run(&result)
+    }
+
+    /// The `codemode.evaluate` result shape → [`CodeModeRun`]
+    /// (`value` absent = `undefined`; explicit `null` stays null).
+    fn parse_run(result: &Value) -> Result<CodeModeRun, String> {
         let error = result
             .get("error")
             .and_then(Value::as_str)
             .map(str::to_owned)
             .filter(|text| !text.is_empty());
-        // `value` absent = `undefined`; explicit `null` stays null.
         let value = result.get("value").cloned();
+        let truncated = result.get("truncated").and_then(Value::as_bool).unwrap_or(false);
         let tool_calls = result
             .get("calls")
             .and_then(Value::as_array)
@@ -649,7 +733,7 @@ impl PluginHost {
                     .collect()
             })
             .unwrap_or_default();
-        Ok(CodeModeRun { value, error, tool_calls })
+        Ok(CodeModeRun { value, error, tool_calls, truncated })
     }
 }
 

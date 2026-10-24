@@ -1319,12 +1319,61 @@ async function handleToolExecute({ name, input }) {
 // ---------------------------------------------------------------------------
 // Code Mode (wave 4): one `execute` program over a tool catalog. The
 // guest is the runtime (v2 uses its in-process confined interpreter —
-// the Rust port's boundary is this sandboxed subprocess plus the
-// host-side HARD timeout; imports/timers are reachable inside the
-// sandbox, a documented divergence).
+// the Rust port's boundary is this sandboxed subprocess). The v2
+// ExecutionLimits (timeoutMs between event-loop turns, the tool-call
+// admission counter, the output bound, the depth guard) are enforced
+// here; a wedged guest (sync loop — not interruptible in-process) is
+// killed by the supervisor at the limits-aligned deadline. Imports and
+// timers remain reachable inside the sandbox, a documented divergence.
 // ---------------------------------------------------------------------------
 
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+
+// v2 execution limits (codemode.ts:22-41 + 126-137): absent = unlimited
+// (no defaults — the ref's core callers pass none); present values must
+// be safe integers ≥ min, else the ref-identical RangeError text.
+function resolveExecutionLimits(raw) {
+  const validate = (name, value, minimum) => {
+    if (value !== undefined && (!Number.isSafeInteger(value) || value < minimum)) {
+      throw new RangeError(`${name} must be a safe integer greater than or equal to ${minimum}.`);
+    }
+    return value;
+  };
+  const limits = raw !== null && typeof raw === "object" ? raw : {};
+  return {
+    timeoutMs: validate("timeoutMs", limits.timeoutMs, 1),
+    maxToolCalls: validate("maxToolCalls", limits.maxToolCalls, 0),
+    maxOutputBytes: validate("maxOutputBytes", limits.maxOutputBytes, 0),
+  };
+}
+
+// MAX_VALUE_DEPTH (interpreter/limits.ts:13) — the ONE structural cap
+// that is not engine-inherent inside a real JS engine (the v2
+// interpreter's MAX_STRING_LENGTH / MAX_ARRAY_LENGTH / MAX_PENDING_PROMISES
+// bound its own allocator; bun's engine bounds those natively). The
+// boundary walk (data.ts:53) counts the root at depth 0 and throws
+// entering depth 33: 32 container levels cross, the 33rd does not.
+const MAX_VALUE_DEPTH = 32;
+
+function valueDepthExceeded(value, depth = 0) {
+  if (depth > MAX_VALUE_DEPTH) return true;
+  if (value === null || typeof value !== "object") return false;
+  if (Array.isArray(value)) return value.some((item) => valueDepthExceeded(item, depth + 1));
+  return Object.values(value).some((item) => valueDepthExceeded(item, depth + 1));
+}
+
+function utf8ByteLength(text) {
+  return new TextEncoder().encode(text).byteLength;
+}
+
+// utf8Truncate (interpreter/execute.ts:122-127): cut at a byte bound,
+// dropping a partial UTF-8 sequence.
+function utf8Truncate(value, maxBytes) {
+  const bytes = new TextEncoder().encode(value);
+  if (bytes.byteLength <= maxBytes) return value;
+  const text = new TextDecoder("utf-8").decode(bytes.slice(0, Math.max(0, maxBytes)));
+  return text.endsWith("\uFFFD") ? text.slice(0, -1) : text;
+}
 
 /** v2 `displayInput` (codemode/tool.ts:303-308). */
 function displayInput(input) {
@@ -1340,10 +1389,20 @@ function displayInput(input) {
  * becomes a function with the children attached — the observable
  * semantics of v2's callable-namespace merge.
  */
-function buildToolsTree(entries, calls, token) {
+function buildToolsTree(entries, calls, token, maxToolCalls) {
   const root = {};
   const makeCallable = (entry) => {
     const fn = async (input) => {
+      // ToolRuntime.make's admission counter (tool-runtime.ts:386-394):
+      // the (n+1)-th call rejects before it is recorded or crosses.
+      if (maxToolCalls !== undefined && calls.length >= maxToolCalls) {
+        throw new Error(`Execution exceeded its tool-call limit of ${maxToolCalls}.`);
+      }
+      // The boundary walk's depth guard (data.ts:53) on tool inputs
+      // crossing guest→host.
+      if (valueDepthExceeded(input)) {
+        throw new RangeError(`Value exceeds the maximum depth of ${MAX_VALUE_DEPTH}.`);
+      }
       const shown = displayInput(input);
       const record = { tool: entry.path, status: "running", ...(shown ? { input: shown } : {}) };
       calls.push(record);
@@ -1476,26 +1535,69 @@ function makeSearch(entries) {
   };
 }
 
-async function handleCodemodeEvaluate({ code, tools, token }) {
+async function handleCodemodeEvaluate({ code, tools, token, limits }) {
   if (typeof code !== "string" || code.length === 0) {
     return { ok: false, error: "Code Mode execution requires a `code` string" };
   }
+  // resolveExecutionLimits (codemode.ts:133-137): throws the ref's
+  // RangeError text for invalid budgets.
+  const resolved = resolveExecutionLimits(limits);
   const calls = [];
   const catalog = Array.isArray(tools) ? tools : [];
   const evaluationToken = typeof token === "number" && Number.isFinite(token) ? token : 0;
-  const toolsTree = buildToolsTree(catalog, calls, evaluationToken);
+  const toolsTree = buildToolsTree(catalog, calls, evaluationToken, resolved.maxToolCalls);
   const search = makeSearch(catalog);
+  let program = (async () => {
+    const runner = new AsyncFunction("tools", "search", `"use strict";\n${code}`);
+    return runner(toolsTree, search);
+  })();
+  // timeoutMs fires between event-loop turns (v2's interpreter fires
+  // between steps): async hangs resolve with the ref's TimeoutExceeded
+  // message; a sync loop cannot be interrupted in-process — the
+  // supervisor's deadline kill covers that (see request_codemode_kill).
+  if (resolved.timeoutMs !== undefined) {
+    let timer;
+    program = Promise.race([
+      program,
+      new Promise((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`Execution timed out after ${resolved.timeoutMs}ms.`)),
+          resolved.timeoutMs,
+        );
+      }),
+    ]).finally(() => clearTimeout(timer));
+  }
   let value;
   try {
-    const program = new AsyncFunction("tools", "search", `"use strict";\n${code}`);
-    value = await program(toolsTree, search);
+    value = await program;
   } catch (error) {
     return { ok: false, error: errText(error), calls };
+  }
+  // The boundary walk's depth guard (data.ts:53) on the result
+  // crossing guest→host.
+  if (value !== undefined && valueDepthExceeded(value)) {
+    return { ok: false, error: `Value exceeds the maximum depth of ${MAX_VALUE_DEPTH}.`, calls };
   }
   // `undefined` (no explicit return) is OMITTED so the host formats
   // "undefined"; explicit null stays null.
   const result = { ok: true, calls };
-  if (value !== undefined) result.value = value;
+  if (value !== undefined) {
+    // maxOutputBytes bounds the value HERE (the interpreter boundary;
+    // the leaf bounds warnings/logs and skips a pre-bounded value).
+    // Warnings/logs do not exist in the port (no console capture) —
+    // those budgets live in the oc-core leaf's bound_output.
+    if (resolved.maxOutputBytes !== undefined) {
+      const serialized = JSON.stringify(value);
+      if (serialized !== undefined) {
+        const bytes = utf8ByteLength(serialized);
+        if (bytes > resolved.maxOutputBytes) {
+          value = `${utf8Truncate(serialized, resolved.maxOutputBytes)} [result truncated: ${bytes} bytes exceeds the ${resolved.maxOutputBytes}-byte output limit; return a smaller value]`;
+          result.truncated = true;
+        }
+      }
+    }
+    result.value = value;
+  }
   return result;
 }
 

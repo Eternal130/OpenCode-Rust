@@ -460,6 +460,22 @@ impl CodeModeRuntime for HostCodeModeRuntime {
         catalog: &[oc_core::tool::codemode::CatalogEntry],
         call: ToolCallFn,
     ) -> RunOutcome {
+        self.evaluate_with_limits(code, catalog, &oc_core::tool::codemode::ExecutionLimits::default(), call)
+            .await
+    }
+
+    /// The limits-bearing path: the budgets cross the wire to the
+    /// guest (`codemode.evaluate` params.limits), which validates and
+    /// enforces them; the transport deadline aligns with `timeoutMs`
+    /// so the guest's soft timeout answers first and a wedged guest is
+    /// killed (strike-exempt) by the supervisor.
+    async fn evaluate_with_limits(
+        &self,
+        code: &str,
+        catalog: &[oc_core::tool::codemode::CatalogEntry],
+        limits: &oc_core::tool::codemode::ExecutionLimits,
+        call: ToolCallFn,
+    ) -> RunOutcome {
         let specs: Vec<CodeModeToolSpec> = catalog
             .iter()
             .map(|entry| CodeModeToolSpec {
@@ -469,8 +485,20 @@ impl CodeModeRuntime for HostCodeModeRuntime {
             })
             .collect();
         let token = self.router.insert(call);
-        let result =
-            self.host.codemode_evaluate_token_async(code, &specs, token, self.timeout).await;
+        let result = self
+            .host
+            .codemode_evaluate_limits_async(
+                code,
+                &specs,
+                token,
+                self.timeout,
+                &oc_plugin_host::CodeModeLimits {
+                    timeout_ms: limits.timeout_ms,
+                    max_tool_calls: limits.max_tool_calls,
+                    max_output_bytes: limits.max_output_bytes,
+                },
+            )
+            .await;
         self.router.remove(token);
         match result {
             Ok(run) => RunOutcome {
@@ -485,6 +513,8 @@ impl CodeModeRuntime for HostCodeModeRuntime {
                         input: record.input,
                     })
                     .collect(),
+                truncated: run.truncated,
+                ..RunOutcome::default()
             },
             // The hard timeout (or a dead guest) is the program's error.
             Err(message) => RunOutcome { error: Some(message), ..RunOutcome::default() },
