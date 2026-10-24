@@ -98,6 +98,10 @@ pub struct AppState {
     /// `std::env::current_dir()`. `None` (bare `AppState::new`
     /// constructions) keeps v2's literal per-request `process.cwd()`.
     pub boot_location: Option<PathBuf>,
+    /// G-05 hot reload: the live config watcher (keeps the reload loop's
+    /// `Weak` target alive for the process lifetime; `None` when the
+    /// boot did not start one).
+    pub watched_config: Option<Arc<oc_core::config::WatchedConfig>>,
     /// Well-known integration sources restored into the host registry at
     /// first use (v2's `WellKnownPlugin` boot transform).
     pub wellknown_restore: std::sync::OnceLock<bool>,
@@ -138,6 +142,7 @@ impl AppState {
             shutdown,
             plugins: None,
             boot_location: None,
+            watched_config: None,
             wellknown_restore: std::sync::OnceLock::new(),
         }
     }
