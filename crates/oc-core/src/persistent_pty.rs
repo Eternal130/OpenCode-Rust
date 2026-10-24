@@ -190,7 +190,10 @@ fn terminal_schema_info(info: &Info) -> oc_schema::persistent_pty::Info {
         session_id: info.session_id.clone(),
         foreground_process: info.foreground_process.clone(),
         size: oc_schema::persistent_pty::Size { cols: info.size.0, rows: info.size.1 },
-        output: oc_schema::persistent_pty::Output { head: info.output.0, tail: info.output.1 },
+        output: oc_schema::persistent_pty::Output {
+            head: info.output.0 as u64,
+            tail: info.output.1 as u64,
+        },
     }
 }
 
@@ -2423,5 +2426,56 @@ mod tests {
             })
             .expect("resized event");
         assert_eq!(wire::decode_checkpoint(&stream_checkpoint).expect("decode"), decoded);
+    }
+
+    /// G-12: the typed [`oc_schema::persistent_pty::Info`] serialization
+    /// must match the pre-typed `terminal_wire_json` output byte-for-byte
+    /// (same keys, casing, nullability) — no wire drift.
+    #[test]
+    fn persistent_pty_terminal_wire_no_drift() {
+        let session = SessionId::parse("ses_1").expect("session");
+        for exit_code in [None, Some(0), Some(127)] {
+            let info = Info {
+                id: PtyId("pty_persistent_9".to_string()),
+                title: "workbench".to_string(),
+                command: "/bin/sh".to_string(),
+                args: vec!["-c".to_string(), "sleep 1".to_string()],
+                cwd: "/tmp".to_string(),
+                status: if exit_code.is_some() {
+                    crate::pty::Status::Exited
+                } else {
+                    crate::pty::Status::Running
+                },
+                pid: 4242,
+                exit_code,
+                session_id: session.clone(),
+                foreground_process: Some("git status".to_string()),
+                size: (80, 24),
+                output: (12, 3456),
+            };
+            assert_eq!(
+                serde_json::to_value(terminal_schema_info(&info)).unwrap(),
+                terminal_wire_json(&info),
+                "typed schema wire must equal terminal_wire_json (exitCode={exit_code:?})"
+            );
+        }
+        // Nullable foregroundProcess round.
+        let info = Info {
+            id: PtyId("pty_persistent_9".to_string()),
+            title: "t".to_string(),
+            command: "/bin/cat".to_string(),
+            args: vec![],
+            cwd: "/tmp".to_string(),
+            status: crate::pty::Status::Running,
+            pid: 1,
+            exit_code: None,
+            session_id: session,
+            foreground_process: None,
+            size: (2, 3),
+            output: (0, 0),
+        };
+        let typed = serde_json::to_value(terminal_schema_info(&info)).unwrap();
+        assert_eq!(typed["foregroundProcess"], serde_json::Value::Null);
+        assert_eq!(typed, terminal_wire_json(&info));
     }
 }

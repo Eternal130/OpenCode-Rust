@@ -94,7 +94,7 @@ mod tests {
 
     #[test]
     fn persistent_pty_info_wire() {
-        let json = serde_json::to_value(&info(None)).unwrap();
+        let json = serde_json::to_value(info(None)).unwrap();
         assert_eq!(json["sessionID"], "ses_1");
         assert_eq!(json["foregroundProcess"], serde_json::Value::Null);
         assert_eq!(json["size"]["cols"], 80);
@@ -109,7 +109,7 @@ mod tests {
 
     #[test]
     fn persistent_pty_info_wire_with_exit_code() {
-        let json = serde_json::to_value(&info(Some(3))).unwrap();
+        let json = serde_json::to_value(info(Some(3))).unwrap();
         assert_eq!(json["exitCode"], 3);
         assert_eq!(json["status"], "running");
     }
