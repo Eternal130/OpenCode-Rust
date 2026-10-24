@@ -117,6 +117,8 @@ pub struct TuiPluginRuntime {
     /// The session the footer-face slot claims last materialized
     /// against (G-04: `prompt.footer*`/`sidebar.footer` props carry
     /// the route's session id — a route change re-materializes).
+    /// `Some(None)` = home, `None` = never materialized.
+    #[allow(clippy::option_option)]
     slot_session: Rc<RefCell<Option<Option<String>>>>,
     /// The MCP server names already pushed into the server's real
     /// registry (PLUG-D33: `registrations.mcps` → `experimental.
@@ -386,8 +388,8 @@ impl TuiPluginRuntime {
         };
         let composer_key =
             session.clone().unwrap_or_else(|| crate::app::HOME_PROMPT_KEY.to_owned());
-        let shell = store.composer(&composer_key).mode
-            == crate::components::composer::ComposerMode::Shell;
+        let shell =
+            store.composer(&composer_key).mode == crate::components::composer::ComposerMode::Shell;
         let slot_props = |path: &str| -> serde_json::Value {
             if path.starts_with("prompt.footer") {
                 serde_json::json!({
@@ -427,10 +429,14 @@ impl TuiPluginRuntime {
                         } else if path == "sidebar.footer" {
                             // The sidebar footer rides the SAME
                             // section stack (bottom of the column) +
-                            // the claim-backed click sink.
+                            // the claim-backed click sink (a plugin
+                            // claiming both content and footer keeps
+                            // its content claim's key — processed
+                            // first in path order).
                             self.sidebar_claim_keys
                                 .borrow_mut()
-                                .insert(claim.plugin.clone(), claim.key.clone());
+                                .entry(claim.plugin.clone())
+                                .or_insert_with(|| claim.key.clone());
                             store.set_plugin_slot_section(
                                 "sidebar.footer",
                                 &crate::components::sidebar::SidebarSection {

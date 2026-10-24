@@ -579,6 +579,25 @@ mod tests {
     use super::*;
     use crate::reactive::Runtime;
 
+    /// G-04: `home.footer(.status)` slot rows land in the home
+    /// screen's footer hint list (the row-based footer face).
+    #[test]
+    fn home_footer_slot_rows_reach_the_home_footer() {
+        let store = Store::new(Runtime::new());
+        store.set_plugin_slot_section(
+            "home.footer",
+            &crate::components::sidebar::SidebarSection {
+                plugin_id: "omos".into(),
+                title: String::new(),
+                rows: vec!["hf row".into()],
+                clickable: vec![],
+            },
+        );
+        let frame = render_home(&store, &crate::theme::ThemeState::v2_dark().styles(), (100, 30));
+        let grid = frame.text_grid().concat();
+        assert!(grid.contains("hf row"), "the home footer row paints");
+    }
+
     /// #6: the pool contents match v2's `routes/home.tsx:20-23`
     /// (normal + shell), and the per-boot rotation picks a uniform
     /// in-bounds entry (`randomIndex`, prompt/index.tsx:103-106).
