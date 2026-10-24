@@ -80,8 +80,10 @@ const RPC_TIMEOUT: Duration = Duration::from_secs(30);
 /// The booted plugin subsystem (attached to [`crate::state::AppState`]).
 pub struct PluginBoot {
     pub host: Arc<PluginHost>,
-    /// The boot-time resolution (entries + recorded failures).
-    pub resolution: Resolution,
+    /// The boot-time resolution (entries + recorded failures), kept as
+    /// a live cell: G-05 hot reload swaps it when the plugin source
+    /// set changes (added/removed generations).
+    pub resolution: Arc<parking_lot::Mutex<Resolution>>,
     /// Whether the host came up and its registration pass settled (the
     /// engine seams only attach when `true`).
     pub ready: bool,
@@ -127,7 +129,7 @@ impl PluginBoot {
     pub fn disabled() -> Self {
         Self {
             host: Arc::new(PluginHost::detect()),
-            resolution: Resolution::default(),
+            resolution: Arc::new(parking_lot::Mutex::new(Resolution::default())),
             ready: false,
             router: Arc::new(TokenRouter::default()),
             session_slot: Arc::new(EngineSessionSlot::default()),
@@ -164,9 +166,10 @@ impl PluginBoot {
     /// failures, in v2's `Plugin.Info` shape.
     #[must_use]
     pub fn list_info(&self) -> Vec<PluginInfo> {
+        let resolution = self.resolution.lock().clone();
         let mut out = Vec::new();
         let statuses = self.host.registrations().plugins;
-        for plugin in &self.resolution.plugins {
+        for plugin in &resolution.plugins {
             let status = statuses.iter().find(|status| status.entry == plugin.entry);
             let raw_id = status.map(|status| status.plugin_id.clone()).unwrap_or_default();
             let state = match status.map(|status| &status.state) {
@@ -193,7 +196,7 @@ impl PluginBoot {
                 state,
             });
         }
-        for (target, error) in &self.resolution.failures {
+        for (target, error) in &resolution.failures {
             out.push(PluginInfo {
                 id: Some(oc_schema::id::PluginId::parse(target.clone())),
                 source: PluginSource::Package {
@@ -223,7 +226,7 @@ impl PluginBoot {
         });
         let source = Arc::new(HostPluginSource {
             host: Arc::clone(&self.host),
-            resolution: self.resolution.clone(),
+            resolution: Arc::clone(&self.resolution),
         });
         EngineSeams {
             code_mode_runtime: Some(runtime as Arc<dyn CodeModeRuntime>),
@@ -306,7 +309,7 @@ pub fn boot(
         );
         return Arc::new(PluginBoot {
             host: Arc::new(detected),
-            resolution,
+            resolution: Arc::new(parking_lot::Mutex::new(resolution)),
             ready: false,
             router,
             session_slot,
@@ -394,7 +397,148 @@ pub fn boot(
             host.start_error()
         );
     }
-    Arc::new(PluginBoot { host, resolution, ready, router, session_slot, permission_slot })
+    Arc::new(PluginBoot {
+        host,
+        resolution: Arc::new(parking_lot::Mutex::new(resolution)),
+        ready,
+        router,
+        session_slot,
+        permission_slot,
+    })
+}
+
+/// G-05 hot reload — the post-`config.updated` refresh for the plugin
+/// subsystem, mirroring the ref supervisor's generation lifecycle
+/// (supervisor.ts:23-94, add/remove only — no hot-swap of existing
+/// generations beyond the digest reload):
+///
+/// * EXISTING sources: `PluginHost::reload_now` digest-scans every
+///   loadable entry and reloads the changed ones (a failed reload keeps
+///   the previous generation — crash isolation precedent; errors are
+///   logged, never propagated).
+/// * ADDED targets (a new drop-in under `.opencode/plugin`, a new
+///   `plugins[]` entry): re-resolve the current ops and load the new
+///   entry's generation into the live guest (`PluginHost::add_entry`).
+/// * REMOVED targets: tear the entry's generation down
+///   (`PluginHost::remove_entry` — registrations/slot claims drop, the
+///   guest unloads the plugin id).
+///
+/// Every failure is contained: a failing add/remove is logged, the
+/// previous generation keeps its place, and the live resolution cell
+/// only swaps when the diff applied cleanly.
+pub fn refresh_after_config_change(boot: &PluginBoot, loaded: &Loaded) {
+    if !boot.ready {
+        return;
+    }
+    let current = config_plugin_ops(loaded);
+    let previous_resolution = boot.resolution.lock().clone();
+    let previous: Vec<String> =
+        previous_resolution.plugins.iter().map(|plugin| plugin.target.clone()).collect();
+    let (added, removed) = plugin_source_diff(&previous, &current);
+
+    // Removed first (a remove+re-add round trip collapses to a reload).
+    let mut clean = true;
+    for target in &removed {
+        let entry = previous_resolution.plugins.iter().find(|plugin| &plugin.target == target);
+        let Some(plugin) = entry else {
+            clean = false;
+            eprintln!("opencode plugin: removed target {target} has no entry; skipping");
+            continue;
+        };
+        match boot.host.remove_entry(&plugin.entry) {
+            Ok(true) => {
+                eprintln!("opencode plugin: source change unloaded {target} generation");
+            }
+            Ok(false) => {} // never loaded — idempotent
+            Err(error) => {
+                clean = false;
+                eprintln!(
+                    "opencode plugin: unload {target} failed ({error}); previous generation kept"
+                );
+            }
+        }
+    }
+
+    // Added: resolve the current ops so the new targets map to entries.
+    let resolved = oc_plugin_host::resolve(&current, None);
+    for (target, error) in &resolved.failures {
+        eprintln!("opencode plugin: {target} failed to resolve: {error}");
+    }
+    for target in &added {
+        if let Some(plugin) = resolved.plugins.iter().find(|plugin| &plugin.target == target) {
+            match boot.host.add_entry(&plugin.entry) {
+                Ok(()) => {
+                    eprintln!("opencode plugin: source change loaded {target} generation");
+                }
+                Err(error) => {
+                    clean = false;
+                    eprintln!(
+                        "opencode plugin: load {target} failed ({error}); previous generations kept"
+                    );
+                }
+            }
+        } else {
+            clean = false;
+            eprintln!("opencode plugin: added target {target} did not resolve; skipping");
+        }
+    }
+
+    // Digest reload of the surviving sources (existing generations).
+    match boot.host.reload_now() {
+        Ok(count) if count > 0 => {
+            eprintln!("opencode plugin: hot-reloaded {count} changed plugin source(s)");
+        }
+        Ok(_) => {}
+        Err(error) => {
+            eprintln!("opencode plugin: source reload failed ({error}); previous generations kept");
+        }
+    }
+
+    // The live resolution cell drives per-location activation
+    // (`active_plugins`) and `/api/plugin` — swap only on a clean diff;
+    // a partial failure keeps the previous snapshot (conservative).
+    if clean {
+        *boot.resolution.lock() = resolved;
+    }
+}
+
+/// The supervisor resolve diff (supervisor.ts:23-94, add/remove only):
+/// replay the current ops over the previously-loaded targets; `*` and
+/// `name.*` remove selectors match like the boot reduction
+/// ([`boot_remove_matches`]). Returns (added, removed) targets — the
+/// generations needing a load/unload.
+fn plugin_source_diff(
+    previous: &[String],
+    current: &[oc_plugin_host::PluginOp],
+) -> (Vec<String>, Vec<String>) {
+    let mut active: Vec<String> = previous.to_vec();
+    for op in current {
+        match op {
+            oc_plugin_host::PluginOp::Add { target, .. } => {
+                if !active.contains(target) {
+                    active.push(target.clone());
+                }
+            }
+            oc_plugin_host::PluginOp::Remove { target } => {
+                if target == "*" {
+                    active.clear();
+                } else {
+                    active.retain(|seen| !boot_remove_matches(seen, target));
+                }
+            }
+        }
+    }
+    let added: Vec<String> = active
+        .iter()
+        .filter(|target| !previous.iter().any(|seen| seen == *target))
+        .cloned()
+        .collect();
+    let removed: Vec<String> = previous
+        .iter()
+        .filter(|target| !active.iter().any(|seen| seen.as_str() == target.as_str()))
+        .cloned()
+        .collect();
+    (added, removed)
 }
 
 /// Extract the merged `plugins[]` ops from a loaded config (every
@@ -592,9 +736,9 @@ impl ToolPort for RouterToolPort {
 /// snapshot, applied at every location's assembly.
 pub struct HostPluginSource {
     pub host: Arc<PluginHost>,
-    /// The boot-time resolution (target → entry mapping for PLUG-D07's
-    /// per-location activation sets).
-    pub resolution: Resolution,
+    /// The live resolution (target → entry mapping for PLUG-D07's
+    /// per-location activation sets; swapped on G-05 source changes).
+    pub resolution: Arc<parking_lot::Mutex<Resolution>>,
 }
 
 impl LocationPluginSource for HostPluginSource {
@@ -717,11 +861,12 @@ impl LocationPluginSource for HostPluginSource {
                 }
             }
         }
+        let resolution = self.resolution.lock().clone();
         let snapshot = self.host.registrations();
         let mut ids: Vec<String> = Vec::new();
         for target in targets {
             // Direct: the boot resolution carries this target.
-            if let Some(plugin) = self.resolution.plugins.iter().find(|p| p.target == target) {
+            if let Some(plugin) = resolution.plugins.iter().find(|p| p.target == target) {
                 if let Some(status) = snapshot.plugins.iter().find(|s| s.entry == plugin.entry) {
                     if !status.plugin_id.is_empty() {
                         ids.push(status.plugin_id.clone());
@@ -1389,6 +1534,54 @@ impl SessionPort for EngineSessionSlot {
 
 #[cfg(test)]
 mod tests {
+
+    use super::plugin_source_diff;
+    use oc_plugin_host::PluginOp;
+
+    fn ops(values: &[(&str, bool)]) -> Vec<PluginOp> {
+        values
+            .iter()
+            .map(|&(target, add)| {
+                if add {
+                    PluginOp::Add { target: target.to_owned(), options: serde_json::Value::Null }
+                } else {
+                    PluginOp::Remove { target: target.to_owned() }
+                }
+            })
+            .collect()
+    }
+
+    /// G-05: the supervisor resolve diff (add/remove with the port's
+    /// remove-selector semantics — exact/package/stem + `*`) over
+    /// previously-loaded targets. (The ref supervisor.ts:26-28 also
+    /// accepts `name.*` prefix selectors; the port's `resolve` does
+    /// not — the diff mirrors the port.)
+    #[test]
+    fn plugin_source_diff_adds_and_removes_with_selectors() {
+        let previous = vec!["@scope/one".to_owned(), "local/two".to_owned()];
+        // No change -> empty diff.
+        let (added, removed) =
+            plugin_source_diff(&previous, &ops(&[("@scope/one", true), ("local/two", true)]));
+        assert_eq!(added, Vec::<String>::new());
+        assert_eq!(removed, Vec::<String>::new());
+        // A new drop-in appears.
+        let (added, removed) = plugin_source_diff(
+            &previous,
+            &ops(&[("@scope/one", true), ("local/two", true), ("local/three", true)]),
+        );
+        assert_eq!(added, vec!["local/three".to_owned()]);
+        assert_eq!(removed, Vec::<String>::new());
+        // `name.*` selector removes the matching package generation
+        // (the port's remove reduction: exact / package / stem, plus
+        // `*` — resolve.rs `remove_matches`).
+        let (added, removed) =
+            plugin_source_diff(&previous, &ops(&[("local/two", true), ("one", false)]));
+        assert_eq!(added, Vec::<String>::new());
+        assert_eq!(removed, vec!["@scope/one".to_owned()]);
+        // `*` clears everything.
+        let (_, removed) = plugin_source_diff(&previous, &ops(&[("*", false)]));
+        assert_eq!(removed, vec!["@scope/one".to_owned(), "local/two".to_owned()]);
+    }
     use super::*;
     use oc_schema::config::{Directory, Entry, Plugin};
 
