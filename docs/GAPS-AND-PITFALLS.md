@@ -10,18 +10,34 @@
 
 > **2026-10-24 burn-down 收尾**：计划 docs/superpowers/plans/2026-10-23-v2-gap-burndown.md 的全部 lane 落地后，§1 所列功能缺口**除具名豁免外全部闭环**（台账：.superpowers/sdd/2026-10-23-v2-gap-burndown/progress.md）。发布就绪判定 = 台账清零或仅余具名豁免：R-04 前端范围外裁定、R1–R5 hook 注册豁免、(b)-类随机 coin、F15 残留具名豁免（QR 编码器缺失〔`oc-cli/src/handlers/misc.rs:225` 同源〕、≥96 列横排、<54 列 URL 截断、Enter 关闭 affordance、h<36 滚动裁剪）、**console variants/模型级 package/native-protocol 接入延后**（原 lane 降范围，待 native-protocol-binding lane 重开）、**OPENCODE_FAST_BOOT/skipInitialLoading 无对等**（CONFIG-E3 登记 open，boot pill 可达后更显性）。
 
+> **2026-10-24 独立对比审计（新登记 G 系列）**：6 通道全库代码级对比（本仓 vs /opt/opencode-ref v2.0.24；一律不采信 .md 文档与注释的完备性声明）+ fork 链路逐行审计。总体面（141 HTTP 路由、104 事件类型、序列化、48 条 DB 迁移、工具/权限/MCP、TUI 主干）确认逐项对齐且 `cargo check --workspace` 全绿；新登记 G-01～G-17 如下。fork 逐行对照证实 instruction-state 继承逻辑与 ref **等价**（session.ts:319-359 ↔ oc-server handlers/session.rs:789-932 + oc-core projector.rs:664-799），唯二缺陷见 G-15/G-16。G 系列尚未同步 ROADMAP 台账（待办）。
+
 ### 1.1 功能缺口
 
 | ID | 缺口 | 状态 | 说明 |
 |---|---|---|---|
 | R-10 | rmcp 0.5 elicitation 能力 | **已闭环（2026-10-24）** | 重裁定为真缺口（v2.0.24 已接线 elicitation，packages/core/src/mcp/index.ts:231+）：rmcp 0.5.0→3.7.0（60728e3）+ 客户端 elicitation 按 v2.0.24 接线（fd0f591） |
 | R-11 | 平台矩阵（aarch64/musl/macOS/Windows） | **已完成（2026-10-24）** | 6 目标发布矩阵（linux x64/arm64 gnu + musl×2、darwin-arm64、windows-x64 实验性）+ 每周 runtime-gates cron；9cf480d |
-| R-04 | Web UI 前端本体 | 范围外（裁定） | 静态托管 + 发布资产内嵌已完成；前端不移植 |
+| R-04 | Web UI 前端本体 | 范围外（裁定，2026-10-24 复核维持） | 静态托管 + 发布资产内嵌已完成；前端不移植（直接内嵌 ref 构建产物，oc-server/src/app_archive.rs:44）——当日曾短暂反转为移植目标，经一致性分析后同日撤回，缺口收窄为 G-14 E2E 一致性验证 |
 | — | PTY 守护进程边界（Phase 9） | **已实现（2026-10-24）** | 设计 docs/superpowers/specs/2026-10-23-pty-daemon-design.md（DESIGN-GO）；D1 oc-pty 守护二进制（d343a12）+ D2 客户端 transport/frontend（f98233f）+ D3 11 个进程级测试（f06245f，旗舰=子进程在 server 被杀后存活）；oc-pty 随 release 产物分发，OC_PTY_DAEMON=0 留一个 release 窗口 |
 | — | 企业集成 RS256/JWKS 签名校验 | **已实现（2026-10-24）** | ring 实现（无新加密依赖），v2 chatgpt.ts:439-459 平价，完整失败矩阵（伪造签名/错 iss/aud/过期/缺 claim/nonce 不匹配/未知 kid+冷却轮换/alg 混淆）；合并 6722828 |
 | — | Skill URL 源下载通道 | **已实现（2026-10-24）** | v2 discovery.ts 移植：index.json 协议、sha1 哈希缓存、版本门控原子刷新、document-order 碰撞语义；合并 c1a7001 |
 | — | console capability/cost/limit 合并 | **已实现（2026-10-24）** | v2 opencode.ts:245-315：cost 整体替换、limit/caps 逐字段覆盖、baseURL 优先级（含 provider 级删除继承），含 listing surfaces + default fallback；合并 14d8b76 |
 | — | oc-client sse 测试时序敏感 | **已闭环（2026-10-24）** | 确定性 readiness-sync 重写（onActivity 同步替代固定睡眠），20/20 + oc-client 57/57；合并 31a6561 |
+| G-01 | 内建 agent `explore` 未播种 | 开放 | ref core/src/plugin/agent.ts:96-127（PROMPT_EXPLORE + deny-all-then-allow read/grep/glob/webfetch/websearch/shell + `*.env` ask + subagent deny）；Rust 仅播 build/general/compaction/title（oc-core/src/engine/mod.rs:2286-2306），且该处注释声称含 explore——注释失真案例。用户/子代理当前无法选用 explore |
+| G-02 | 内建 agent `summary` 未播种 | 开放 | ref plugin/agent.ts:142-149（隐藏 primary + PROMPT_SUMMARY）；Rust 无对应（影响面小，属播种契约） |
+| G-03 | TUI 宿主剪贴板读取 | 开放 | OSC52 写已有（oc-tui/src/clipboard.rs）；host 读明确 out of scope（composer/attachment.rs:5-9）——图像粘贴仅路径粘贴，复制回体验降级 |
+| G-04 | TUI 插件 UI 槽位不全 | 开放 | 仅挂 app + sidebar.content（oc-tui/src/plugin_slots.rs:28）；ref 另有 prompt/home/footer 面（feature-plugins/{home,prompt,sidebar}） |
+| G-05 | 配置/插件热重载 | 开放 | ref plugin/watch.ts + config 监听可 fs-watch 重载；Rust 仅 plugin_boot 启动加载，改配置需重启 |
+| G-06 | v1→v2 交互式迁移引导 UI | 开放 | 数据迁移本体已备（oc-theme/src/v1_migrate.rs、oc-tui/storage.rs）；ref component/migration-overlay.tsx 未移植 |
+| G-07 | TUI devtools 栏 + storybook | 开放（低优先） | ref devtools/、component/devtools-bar.tsx、feature-plugins/system/storybook/ 无对应（开发态功能） |
+| G-08 | 语法高亮缺 4 门尾部语言 | 开放（低优先） | lua/vim/scala/make 未注册（oc-syntax/src/lib.rs:22-24，原判定有意） |
+| G-09 | LSP 运行时 | 登记（非回归） | 两侧一致：ref 亦仅配置 schema + TODO（core write.ts:44、edit.ts:107），无客户端运行时；未来补齐时需双侧对表，"完成"口径不得宣称 LSP 可用 |
+| G-10 | fork 编排迁回 oc-core | 开放 | ref fork 属 core 服务（session.ts:319-359）；Rust 读/校验半边全部手写在 oc-server handlers/session.rs:789-932（boundary SQL、instruction 快照、事件组装发布），core 仅有投影半边（projector.rs:664 挂 session.forked）。迁回 core 便于紧跟上游、供非 HTTP 消费方复用、获 core 层测试直接覆盖；现 TUI（app.rs:5109-5125）/CLI（run/mod.rs:257-278）均走 HTTP 无旁路，正确性不受影响 |
+| G-11 | oc-tui 自研框架件收敛至 opentui-rust | 开放 | opentui-core 已提供 renderables/{diff,textarea,scrollbox,box_,line_number}、embedded_terminal、audio、clipboard、paste、tree_sitter 等，oc-tui 引用数为 0，平行自研于 diff_viewer.rs/terminal_pane.rs/sound.rs(miniaudio)/clipboard.rs(OSC52)/oc-syntax——双份维护成本。迁移后本仓仅保留接线（markdown/code/scrollbar/text/editor 已用框架件，保持）。Cargo.toml 本地路径 [patch] 块已于 2026-10-24 移除，上游变更一律经 git rev 消费 |
+| G-12 | oc-schema 缺 7 类事件类型化模型 | 开放 | filesystem.changed、pty.created/updated/exited/deleted、persistent-pty.added/removed、reference.updated——服务端照发 raw JSON（oc-core/src/bus/registry.rs、oc-server/src/sse.rs），消费方无强类型；oc-schema/lib.rs:74-77 TODO 自证 |
+| G-13 | CLI 枚举校验偏松 | 开放 | upgrade --method、run --format、session list --format、auth list --format、debug paths <name> 均接受任意字符串（oc-cli/src/cli.rs:89-97,221-253,288-299,304-307,421-453）；ref 为 choice 校验拒错；另 mcp/plugin add/remove 的 rust-extra --force 待对表裁定 |
+| G-14 | Web UI 功能一致性 E2E 验证 | 开放 | 前端 = 内嵌 ref 构建（app_archive.rs:44），不移植；一致性等价于服务端契约一致性。已对表：141 路由（含错误 _tag）、SSE 帧字节级、WS+ticket、auth/CORS/location。残留 4 类风险：① handler 长尾仅签名级验证（高频端点才做了 body 级）；② G-12 七类事件无 schema golden 对表，UI 按 shape 解析会**静默坏**；③ 时序/边界（分页 cursor、Last-Event-ID 断线重连、竞态）只能真跑；④ 资产钉定漂移（ref 前端演进需重建嵌入）。闭环 = 六场景浏览器冒烟（auth、会话/prompt 流式、文件树/mentions、PTY 面板、权限弹窗、事件重连）挂 runtime-gates 周 cron + G-12 类型化入 golden；两项绿后方可宣称"功能一致已验证" |
 
 ### 1.2 行为分歧（待裁定 / 登记未修）
 
@@ -37,6 +53,9 @@
 | E2 | boot-stretch 门行为断言 | **已闭环（2026-10-24）**：temporal gate 落地 + REAL 接线修复（StartupLoading pill 此前不可达——ready 改为在本地 boot settle 解析、不受 server handshake 门控）；reconnect 覆盖层 5s grace 0 锚点修复；4d16916 |
 | R1–R5 | 插件 hook 永久注册分歧（aisdk 对象 / 返回后突变 / 交错序 / 非 JSON stash / retry 失败通道） | 永久登记——换取崩溃隔离，依据 FINDINGS.md §5 |
 | — | pre-2.0.24 旧库升级路径 | **电池已落地（2026-10-24）**：合成 stepwise k=1..48 全绿 + 4 个 canary 边界（78976eb，常驻 CI；详见 MIGRATION.md §3.1）；真实历史语料门仍是 OC_P10；**首次启动前建议备份数据目录** |
+| G-15 | fork 子行 `parent_id` 写实值 | 待修（2026-10-24 审计） | ref projector.ts:151 子行明确 `parent_id: null`（仅 fork_session_id 带父）；Rust projector.rs:715-721 写实际 parent，"CD-2" 注释声称 ref 携带 parentID——与 ref 源码矛盾（注释失真案例）；影响父链查询类消费方 |
+| G-16 | fork entry 插入吞错 | 待修（2026-10-24 审计） | ref InstructionEntry.initialize 失败 orDie → 投影事务整体回滚、fork 报 500；Rust projector.rs:1208 `let _ = InstructionEntryRow::insert(tx, &row)` 静默丢弃——可产生缺 entry 的"部分 fork"（ref 不可能出现的状态）。次要：entry 快照缺 `ORDER BY key ASC`（ref instruction-entry.ts:36，现无观察影响） |
+| G-17 | prompt `delivery` 校验偏松 | 待修（2026-10-24 审计） | POST /api/session/:id/prompt：Rust 将任意非 "queue" 字符串静默当 steer（oc-server/src/handlers/session.rs:601）；ref 经 schema 校验拒 400。全量 141 路由对表中唯一的 HTTP 语义差异 |
 
 ### 1.3 验证盲区（已知未自动化）
 
