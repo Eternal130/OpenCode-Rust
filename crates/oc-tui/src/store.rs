@@ -1204,6 +1204,10 @@ pub struct Store {
     selection_sink: Rc<dyn SelectionSink>,
     /// The clipboard sink (`messages.copy` writes OSC 52 through it).
     clipboard_sink: Rc<dyn ClipboardSink>,
+    /// The clipboard READ source (`prompt.paste`/ctrl+v — G-03; the
+    /// production arm layers the host paste tools over the OSC 52
+    /// query, tests inject fakes).
+    clipboard_source: Rc<dyn crate::clipboard::ClipboardSource>,
     /// The external `$EDITOR` request flag (the run loop drains it:
     /// suspend → run → resume → replace the focused draft).
     editor_requested: Cell<bool>,
@@ -3039,6 +3043,7 @@ impl Store {
             config_model: std::cell::RefCell::new(None),
             selection_sink: Rc::new(RecordingSelectionSink::default()),
             clipboard_sink: Rc::new(crate::clipboard::RecordingClipboardSink::default()),
+            clipboard_source: Rc::new(crate::clipboard::CoreClipboardSource::new()),
             editor_requested: Cell::new(false),
             rail_search_hovered: Cell::new(false),
             rail_handle_hot: Cell::new(false),
@@ -4718,6 +4723,18 @@ impl Store {
     /// Write text through the clipboard sink.
     pub fn clipboard_write(&self, text: &str) -> Result<(), crate::clipboard::ClipboardError> {
         self.clipboard_sink.write(text)
+    }
+
+    /// Swap the clipboard READ source (production: host tools over
+    /// the OSC 52 query; tests inject fakes).
+    pub fn set_clipboard_source(&mut self, source: Rc<dyn crate::clipboard::ClipboardSource>) {
+        self.clipboard_source = source;
+    }
+
+    /// Read the host clipboard (`prompt.paste` — `{preferredTypes:
+    /// ["image/png", "text/plain"]}` → `{data: base64, mime}`).
+    pub fn clipboard_read(&self) -> Option<crate::clipboard::ClipboardContent> {
+        self.clipboard_source.read()
     }
 
     // -- external editor ---------------------------------------------------
