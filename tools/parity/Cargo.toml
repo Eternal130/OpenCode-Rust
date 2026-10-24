@@ -28,6 +28,11 @@ vt100 = "0.15"
 
 [dev-dependencies]
 tempfile = "3"
+# G-14 browser smoke: CDP client driving headless Chrome against the
+# embedded Web UI's server contracts. Opt-in at runtime via
+# OC_BROWSER_E2E=1 (see tests/browser_e2e.rs).
+chromiumoxide = "0.9"
+futures = "0.3"
 # Phase-10 battery (2b: Rust client ↔ reference server). Dev-only: the
 # default suite never links it, keeping plain `cargo build -p parity` light.
 oc-client = { workspace = true }
