@@ -4,7 +4,7 @@
 use dialoguer::{Input, Password, Select};
 use serde_json::Value;
 
-use crate::cli::{AuthCommands, ServerParams};
+use crate::cli::{AuthCommands, OutputFormat, ServerParams};
 use crate::handlers::connect;
 use crate::util;
 use crate::util::error_message;
@@ -146,7 +146,7 @@ fn require_interactive(message: &str) -> Result<(), String> {
 
 pub async fn run(command: &AuthCommands, server: &ServerParams) -> i32 {
     match command {
-        AuthCommands::List { format } => list(server, format).await,
+        AuthCommands::List { format } => list(server, *format).await,
         AuthCommands::Login { target, method, answer } => {
             login(server, target.as_deref(), method.as_deref(), answer).await
         }
@@ -161,7 +161,7 @@ pub async fn run(command: &AuthCommands, server: &ServerParams) -> i32 {
     }
 }
 
-async fn list(server: &ServerParams, format: &str) -> i32 {
+async fn list(server: &ServerParams, format: OutputFormat) -> i32 {
     let resolved = match connect(server, None).await {
         Ok(resolved) => resolved,
         Err(code) => return code,
@@ -183,7 +183,7 @@ async fn list(server: &ServerParams, format: &str) -> i32 {
                 .is_some_and(|connections| !connections.is_empty())
         })
         .collect();
-    if format == "json" {
+    if format == OutputFormat::Json {
         let rows: Vec<Value> = integrations
             .iter()
             .map(|integration| {

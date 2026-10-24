@@ -359,13 +359,12 @@ pub async fn debug(command: &DebugCommands) -> i32 {
                 ("log", roots.data.join("log")),
                 ("repos", roots.data.join("repos")),
             ];
-            match name.as_deref() {
+            match name {
+                // clap already rejects unknown keys (G-13); the lookup
+                // only maps the validated key onto its root.
                 Some(name) => {
-                    if let Some((_, path)) = paths.iter().find(|(key, _)| *key == name) {
+                    if let Some((_, path)) = paths.iter().find(|(key, _)| *key == name.as_str()) {
                         println!("{}", path.display());
-                    } else {
-                        eprintln!("Error: Unknown path: {name}");
-                        return 1;
                     }
                 }
                 None => {
