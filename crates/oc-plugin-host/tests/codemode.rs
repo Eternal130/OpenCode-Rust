@@ -68,6 +68,8 @@ impl CodeModeRuntime for HostCodeModeRuntime {
                         input: record.input,
                     })
                     .collect(),
+                truncated: run.truncated,
+                ..RunOutcome::default()
             },
             // The hard timeout (or a dead guest) is the program's error.
             Err(message) => RunOutcome { error: Some(message), ..RunOutcome::default() },
