@@ -114,6 +114,12 @@ pub struct TuiPluginRuntime {
     /// click sink routes a section row release through the CLAIM's
     /// `onMouseUp`, not the legacy `sidebar_content` bridge).
     sidebar_claim_keys: Rc<RefCell<BTreeMap<String, String>>>,
+    /// The session the footer-face slot claims last materialized
+    /// against (G-04: `prompt.footer*`/`sidebar.footer` props carry
+    /// the route's session id — a route change re-materializes).
+    /// `Some(None)` = home, `None` = never materialized.
+    #[allow(clippy::option_option)]
+    slot_session: Rc<RefCell<Option<Option<String>>>>,
     /// The MCP server names already pushed into the server's real
     /// registry (PLUG-D33: `registrations.mcps` → `experimental.
     /// mcp.add` — the ref's `ctx.mcp.transform` → real-registry
@@ -229,6 +235,7 @@ impl TuiPluginRuntime {
             pushed_theme: Rc::new(RefCell::new(None)),
             pushed_layout: Rc::new(RefCell::new(false)),
             sidebar_claim_keys: Rc::new(RefCell::new(BTreeMap::new())),
+            slot_session: Rc::new(RefCell::new(None)),
             pushed_mcps: Rc::new(RefCell::new(BTreeSet::new())),
             mcp_rows_rx: Rc::new(RefCell::new(None)),
             owned_updates: Rc::new(RefCell::new(None)),
@@ -331,6 +338,13 @@ impl TuiPluginRuntime {
             )));
         }
         self.materialize_slot_claims(store);
+        {
+            let route_session = match store.route() {
+                crate::store::Route::Session { session_id } => Some(session_id),
+                crate::store::Route::Home => None,
+            };
+            *self.slot_session.borrow_mut() = Some(route_session);
+        }
         let snapshot = host.registrations();
         let projection = project_registrations(store, &snapshot);
         let owned = Self::owned_keymap_entries(&snapshot);
@@ -347,6 +361,14 @@ impl TuiPluginRuntime {
     /// run for their side effects — the ref's stats plugin installs
     /// its keymap layer from the app claim's render,
     /// stats.tsx:185-203).
+    ///
+    /// G-04 — the footer faces: `home.footer(.status)`,
+    /// `prompt.footer(.status/.file)` and `sidebar.footer` claims
+    /// render with the ref `SlotMap` props (context.ts:191-204) and
+    /// land as row-based sections on their store surfaces (the
+    /// home/prompt hint lists, the sidebar's section stack). A
+    /// render that fails logs + skips — the same degradation every
+    /// unmounted path had before these surfaces existed.
     fn materialize_slot_claims(&self, store: &Store) {
         let host = &self.booted.host;
         let snapshot = host.registrations();
@@ -358,13 +380,37 @@ impl TuiPluginRuntime {
             &crate::components::plugin_slots::mounted_paths(),
             &claims,
         );
+        // The footer faces' render props (the ref SlotMap inputs):
+        // the current route's session id, the composer's shell flag.
+        let session = match store.route() {
+            crate::store::Route::Session { session_id } => Some(session_id),
+            crate::store::Route::Home => None,
+        };
+        let composer_key =
+            session.clone().unwrap_or_else(|| crate::app::HOME_PROMPT_KEY.to_owned());
+        let shell =
+            store.composer(&composer_key).mode == crate::components::composer::ComposerMode::Shell;
+        let slot_props = |path: &str| -> serde_json::Value {
+            if path.starts_with("prompt.footer") {
+                serde_json::json!({
+                    "sessionID": session,
+                    "mode": if shell { "shell" } else { "normal" },
+                    "showDetails": false,
+                })
+            } else if path == "sidebar.footer" {
+                serde_json::json!({ "sessionID": session })
+            } else {
+                serde_json::json!({})
+            }
+        };
         for (path, bucket) in &resolution.slotted {
             for claim in bucket.prepend.iter().chain(&bucket.append) {
                 let plugin = claim.plugin.clone();
                 let key = claim.key.clone();
                 let host = Arc::clone(host);
+                let props = slot_props(path);
                 let content = offload_bounded(Duration::from_secs(5), move || {
-                    host.render_slot_claim(&plugin, &key, Duration::from_secs(4))
+                    host.render_slot_claim_with_props(&plugin, &key, &props, Duration::from_secs(4))
                 });
                 match content {
                     Ok(Ok(spec)) => {
@@ -373,6 +419,46 @@ impl TuiPluginRuntime {
                                 .borrow_mut()
                                 .insert(claim.plugin.clone(), claim.key.clone());
                             store.set_plugin_sidebar_section(
+                                &crate::components::sidebar::SidebarSection {
+                                    plugin_id: claim.plugin.clone(),
+                                    title: spec.title,
+                                    rows: spec.rows,
+                                    clickable: spec.clickable,
+                                },
+                            );
+                        } else if path == "sidebar.footer" {
+                            // The sidebar footer rides the SAME
+                            // section stack (bottom of the column) +
+                            // the claim-backed click sink (a plugin
+                            // claiming both content and footer keeps
+                            // its content claim's key — processed
+                            // first in path order).
+                            self.sidebar_claim_keys
+                                .borrow_mut()
+                                .entry(claim.plugin.clone())
+                                .or_insert_with(|| claim.key.clone());
+                            store.set_plugin_slot_section(
+                                "sidebar.footer",
+                                &crate::components::sidebar::SidebarSection {
+                                    plugin_id: claim.plugin.clone(),
+                                    title: spec.title,
+                                    rows: spec.rows,
+                                    clickable: spec.clickable,
+                                },
+                            );
+                        } else if path.starts_with("home.footer") {
+                            store.set_plugin_slot_section(
+                                "home.footer",
+                                &crate::components::sidebar::SidebarSection {
+                                    plugin_id: claim.plugin.clone(),
+                                    title: spec.title,
+                                    rows: spec.rows,
+                                    clickable: spec.clickable,
+                                },
+                            );
+                        } else if path.starts_with("prompt.footer") {
+                            store.set_plugin_slot_section(
+                                "prompt.footer",
                                 &crate::components::sidebar::SidebarSection {
                                     plugin_id: claim.plugin.clone(),
                                     title: spec.title,
@@ -601,6 +687,20 @@ impl TuiPluginRuntime {
             for request in requests {
                 let plugin_id = request.plugin_id().to_owned();
                 apply_plugin_ui(store, &plugin_id, &to_ui_event(&request));
+            }
+        }
+        // G-04: the footer-face claims' props carry the route's
+        // session id — a session change re-materializes them (the
+        // same bounded pass attach ran).
+        {
+            let route_session = match store.route() {
+                crate::store::Route::Session { session_id } => Some(session_id),
+                crate::store::Route::Home => None,
+            };
+            let changed = { *self.slot_session.borrow() != Some(route_session.clone()) };
+            if changed {
+                *self.slot_session.borrow_mut() = Some(route_session);
+                self.materialize_slot_claims(store);
             }
         }
         // TUI-24: the plugin fault table (the plugins dialog's

@@ -2180,12 +2180,14 @@ function flattenRenderTree(tree) {
 /** `slot.claim.render` — run one `ctx.ui.slot` claim's render NOW
  *  (api.tsx:298-312's claim table; bounded by the host's request
  *  timeout) and flatten to the native section shape. */
-async function handleClaimRender({ pluginId, key }) {
+async function handleClaimRender({ pluginId, key, props }) {
   const claim = slotClaims.get(pluginId)?.get(String(key ?? ""));
   if (!claim || typeof claim.render !== "function") {
     throw new Error(`${pluginId}: no slot claim ${key}`);
   }
-  const { section, handlers } = flattenRenderTree(claim.render({}));
+  const { section, handlers } = flattenRenderTree(
+    claim.render(props && typeof props === "object" ? props : {}),
+  );
   claim.clickHandlers = handlers;
   return section;
 }

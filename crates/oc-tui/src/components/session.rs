@@ -1200,7 +1200,14 @@ fn live_sidebar_view(store: &Store, session_id: &str, height: usize) -> SidebarV
         sections: SidebarSections {
             context,
             mcp: SidebarMcpWidget { servers: store.mcp_servers(), open: store.sidebar_mcp_open() },
-            plugins: store.plugin_sidebar_sections(),
+            plugins: {
+                // G-04: `sidebar.footer` sections ride the bottom of
+                // the section stack (below the `sidebar.content`
+                // sections), sharing the claim-backed click sink.
+                let mut sections = store.plugin_sidebar_sections();
+                sections.extend(store.plugin_slot_sections("sidebar.footer"));
+                sections
+            },
         },
         onboarding: height >= 22
             && !store.sidebar_onboarding_dismissed()
@@ -1295,7 +1302,16 @@ fn composer_footer_hints(
         // #4's usage arm: the context-usage segment (PromptFooter's
         // first Match) — present after a completed turn.
         usage: if shell { String::new() } else { composer_usage(store, session_id) },
-        plugin_hints: if shell { Vec::new() } else { store.plugin_footer_hints() },
+        // G-04: the `prompt.footer(.status/.file)` slot rows append
+        // after the legacy FooterHint segments (row-based footer
+        // faces — the ref's SlotMap prompt.footer* mounts).
+        plugin_hints: if shell {
+            Vec::new()
+        } else {
+            let mut hints = store.plugin_footer_hints();
+            hints.extend(store.plugin_slot_rows("prompt.footer"));
+            hints
+        },
         // Wave A: the interrupt hint while the session's turn runs
         // (v2 prompt/index.tsx:1887-1903 — the spinner + `esc
         // interrupt` / `esc again to interrupt` status).
@@ -2059,6 +2075,53 @@ mod tests {
     /// black scrim (session-frame.tsx:385-397) — the pane still
     /// renders its title at the right edge, the transcript underneath
     /// is covered.
+    /// G-04: `prompt.footer*` slot rows land in the composer footer
+    /// hint list (the row-based footer face).
+    #[test]
+    fn prompt_footer_slot_rows_reach_the_composer_footer() {
+        let store = Store::new(Runtime::new());
+        store.open_tab("s1", None);
+        store.set_plugin_slot_section(
+            "prompt.footer",
+            &crate::components::sidebar::SidebarSection {
+                plugin_id: "omos".into(),
+                title: String::new(),
+                rows: vec!["pf row".into()],
+                clickable: vec![],
+            },
+        );
+        let composer = store.composer("s1");
+        let hints = composer_footer_hints(&store, "s1", &composer, "");
+        assert!(hints.plugin_hints.contains(&"pf row".to_owned()), "{:?}", hints.plugin_hints);
+    }
+
+    /// G-04: `sidebar.footer` sections ride the bottom of the
+    /// sidebar's section stack (below the `sidebar.content` ones).
+    #[test]
+    fn sidebar_footer_slot_sections_stack_below_content() {
+        let store = Store::new(Runtime::new());
+        store.set_plugin_sidebar_section(&crate::components::sidebar::SidebarSection {
+            plugin_id: "omos".into(),
+            title: "Content".into(),
+            rows: vec![],
+            clickable: vec![],
+        });
+        store.set_plugin_slot_section(
+            "sidebar.footer",
+            &crate::components::sidebar::SidebarSection {
+                plugin_id: "stats".into(),
+                title: "Footer".into(),
+                rows: vec!["sf row".into()],
+                clickable: vec![],
+            },
+        );
+        let view = live_sidebar_view(&store, "s1", 30);
+        let plugins = view.sections.plugins;
+        assert_eq!(plugins.len(), 2);
+        assert_eq!(plugins[0].plugin_id, "omos", "content sections first");
+        assert_eq!(plugins[1].plugin_id, "stats", "the footer section stacks below");
+    }
+
     #[test]
     fn manual_toggle_at_narrow_width_overlays_the_pane() {
         let store = Store::new(Runtime::new());
