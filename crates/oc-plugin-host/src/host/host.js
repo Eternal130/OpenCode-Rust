@@ -1536,12 +1536,13 @@ function makeSearch(entries) {
 }
 
 async function handleCodemodeEvaluate({ code, tools, token, limits }) {
+  // resolveExecutionLimits (codemode.ts:133-137, called at make()):
+  // throws the ref's RangeError text for invalid budgets — before any
+  // program concern.
+  const resolved = resolveExecutionLimits(limits);
   if (typeof code !== "string" || code.length === 0) {
     return { ok: false, error: "Code Mode execution requires a `code` string" };
   }
-  // resolveExecutionLimits (codemode.ts:133-137): throws the ref's
-  // RangeError text for invalid budgets.
-  const resolved = resolveExecutionLimits(limits);
   const calls = [];
   const catalog = Array.isArray(tools) ? tools : [];
   const evaluationToken = typeof token === "number" && Number.isFinite(token) ? token : 0;
