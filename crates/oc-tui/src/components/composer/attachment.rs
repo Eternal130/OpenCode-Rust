@@ -3,10 +3,12 @@
 //! `prompt/attachment.ts`: pasted text that names local image (or
 //! PDF) file(s) becomes inline `data:` attachments instead of literal
 //! text, exactly v2's terminal-paste path. The *host clipboard* read
-//! arm of v2's `prompt.paste` (Bun `createHostClipboard`, preferred
-//! `image/png`) needs platform clipboard access that stays out of
-//! scope here (see `crate::clipboard`'s OSC 52 note) — bracketed
-//! paste of a file path is the supported paste entry.
+//! arm of v2's `prompt.paste` (preferred `image/png`) is IN SCOPE and
+//! wired since G-03: `crate::clipboard`'s [`crate::clipboard::
+//! ClipboardSource`] (opentui-core clipboard service, host tools over
+//! the OSC 52 query) feeds `paste_attachment`/`paste_resolved` from
+//! app.rs's `prompt.paste` arm — bracketed paste of a file path stays
+//! the other paste entry.
 //!
 //! v2 refs: `resolvePastedAttachments` (local-attachment.ts:29),
 //! `promptAttachmentLabel` (prompt/attachment.ts:76).

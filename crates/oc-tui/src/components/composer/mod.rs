@@ -637,11 +637,11 @@ impl Composer {
     /// event the stroke is consumed here (the terminal default and
     /// every lower layer skipped); without one (programmatic
     /// dispatch) nothing is prevented and the command still runs.
-    /// The port's clipboard READ seam is out of scope (clipboard.rs
-    /// writes only), so the enqueue arm of v2's `enqueuePaste`
-    /// inserts nothing by itself — bracketed-paste text lands through
-    /// [`Self::paste`] (the `onPaste` path, prompt/index.tsx:1786-
-    /// 1802).
+    /// The clipboard READ seam is [`crate::clipboard::ClipboardSource`]
+    /// (G-03: opentui-core's clipboard service behind it) — app.rs's
+    /// `prompt.paste` arm drives `paste_attachment`/`paste_resolved`;
+    /// bracketed-paste text still lands through [`Self::paste`] (the
+    /// `onPaste` path, prompt/index.tsx:1786-1802).
     pub fn prompt_paste(&mut self, from_event: bool) -> KeyOutcome {
         KeyOutcome::Paste(if from_event {
             PasteDisposition::Prevented
