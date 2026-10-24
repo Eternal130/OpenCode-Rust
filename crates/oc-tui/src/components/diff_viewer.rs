@@ -118,13 +118,113 @@ pub struct Hunk {
 }
 
 /// Parse a unified patch into hunks (row numbers pre-assigned).
+///
+/// G-11 (framework convergence): patch PARSING is delegated to
+/// opentui-core's jsdiff-9.0.0-faithful
+/// [`opentui_core::renderables::diff::parse_patch`] — the single
+/// source of truth for unified-diff parsing. This thin adapter maps
+/// its [`StructuredPatch`](opentui_core::renderables::diff::StructuredPatch)
+/// onto the viewer's pre-numbered row model:
+///
+/// * context lines drop the unified marker space (rendered text);
+/// * `\ No newline at end of file` markers are dropped — jsdiff keeps
+///   them in `hunk.lines` but upstream Diff.ts renders none of them;
+/// * a jsdiff `Err` (count mismatch, invalid body line, …) yields no
+///   hunks → the "No patch available for this file." fallback, the
+///   same disposition as upstream's error view. The legacy scanner
+///   tolerated malformed patches; upstream rejects them, and the
+///   vcs.diff endpoint only emits valid unified diffs.
 #[must_use]
 pub fn parse_patch(patch: &str) -> Vec<Hunk> {
-    let mut hunks: Vec<Hunk> = Vec::new();
-    let mut old_line = 0u64;
-    let mut new_line = 0u64;
-    for line in patch.lines() {
-        if let Some(rest) = line.trim_start().strip_prefix("@@") {
+    let Ok(patches) = opentui_core::renderables::diff::parse_patch(patch) else {
+        return Vec::new();
+    };
+    let total: usize = patches.iter().map(|structured| structured.hunks.len()).sum();
+    // Display header text + starts re-derived from the source: jsdiff's
+    // model keeps only the numbers, and it bumps a `,0` count's start by
+    // one (jsdiff's "chunk size 0" quirk, parse.js:458-463) — the
+    // viewer's header-hiding heuristic (`old_start != 1`) and golden
+    // bytes read the RAW start, so recover it from the header text when
+    // the scan lines up 1:1 with the parsed hunks (the ordinary case).
+    let headers = hunk_header_texts(patch);
+    let mut header_index = 0usize;
+    let aligned = headers.len() == total;
+    let mut out: Vec<Hunk> = Vec::new();
+    for structured in &patches {
+        for hunk in &structured.hunks {
+            let parsed = aligned.then(|| headers.get(header_index)).flatten().cloned();
+            header_index += 1;
+            let (header, old_start, new_start) = parsed.unwrap_or_else(|| {
+                let old = num(hunk.old_start);
+                let new = num(hunk.new_start);
+                (
+                    format!(
+                        "@@ -{},{} +{},{} @@",
+                        num(hunk.old_start),
+                        count(hunk.old_lines),
+                        num(hunk.new_start),
+                        count(hunk.new_lines),
+                    ),
+                    old,
+                    new,
+                )
+            });
+            let mut old_line = old_start;
+            let mut new_line = new_start;
+            let mut rows: Vec<PatchRow> = Vec::new();
+            for line in &hunk.lines {
+                if let Some(text) = line.strip_prefix('-') {
+                    rows.push(PatchRow::Deleted { old: old_line, text: text.to_owned() });
+                    old_line = old_line.saturating_add(1);
+                } else if let Some(text) = line.strip_prefix('+') {
+                    rows.push(PatchRow::Added { new: new_line, text: text.to_owned() });
+                    new_line = new_line.saturating_add(1);
+                } else if line.starts_with('\\') {
+                    // jsdiff keeps the no-newline marker; Diff.ts renders
+                    // none of it (upstream disposition — metadata, not a row).
+                } else {
+                    // Context lines carry the leading marker space in the
+                    // unified patch — the rendered text drops it. jsdiff
+                    // reads an empty non-last body line as ' ' context.
+                    let text = line.strip_prefix(' ').unwrap_or(line).to_owned();
+                    rows.push(PatchRow::Context { old: old_line, new: new_line, text });
+                    old_line = old_line.saturating_add(1);
+                    new_line = new_line.saturating_add(1);
+                }
+            }
+            out.push(Hunk { header, old_start, new_start, rows });
+        }
+    }
+    out
+}
+
+/// `f64` (JS number) → `u64`: NaN/negative → 0, saturating otherwise.
+#[allow(clippy::cast_sign_loss)] // NaN-guarded JS-number model values
+fn num(value: f64) -> u64 {
+    if value.is_nan() || value <= 0.0 {
+        0
+    } else {
+        value as u64
+    }
+}
+
+/// A hunk count for the fallback header rebuild (NaN → 0).
+fn count(value: f64) -> u64 {
+    if value.is_nan() {
+        0
+    } else {
+        num(value)
+    }
+}
+
+/// The legacy `@@ … @@` display strings plus their RAW starts, scanned
+/// from the source (`@@ -a[,b] +c[,d] @@`). Display text and the
+/// un-bumped starts only — the structural parsing is opentui-core's.
+fn hunk_header_texts(patch: &str) -> Vec<(String, u64, u64)> {
+    patch
+        .lines()
+        .filter_map(|line| {
+            let rest = line.trim_start().strip_prefix("@@")?;
             // ` -a[,b] +c[,d] @@ …`
             let raw = rest.split("@@").next().unwrap_or_default();
             let body = raw.trim();
@@ -133,37 +233,9 @@ pub fn parse_patch(patch: &str) -> Vec<Hunk> {
             let new = numbers.next().unwrap_or("+0").trim_start_matches('+');
             let old_start: u64 = old.split(',').next().unwrap_or("0").parse().unwrap_or(0);
             let new_start: u64 = new.split(',').next().unwrap_or("0").parse().unwrap_or(0);
-            old_line = old_start;
-            new_line = new_start;
-            hunks.push(Hunk {
-                header: format!("@@ {body} @@"),
-                old_start,
-                new_start,
-                rows: Vec::new(),
-            });
-            continue;
-        }
-        let Some(hunk) = hunks.last_mut() else { continue };
-        let row = if let Some(text) = line.strip_prefix('-') {
-            let row = PatchRow::Deleted { old: old_line, text: text.to_owned() };
-            old_line = old_line.saturating_add(1);
-            row
-        } else if let Some(text) = line.strip_prefix('+') {
-            let row = PatchRow::Added { new: new_line, text: text.to_owned() };
-            new_line = new_line.saturating_add(1);
-            row
-        } else {
-            // Context lines carry a leading space in the unified patch
-            // (the row marker) — the rendered text drops it.
-            let text = line.strip_prefix(' ').unwrap_or(line).to_owned();
-            let row = PatchRow::Context { old: old_line, new: new_line, text };
-            old_line = old_line.saturating_add(1);
-            new_line = new_line.saturating_add(1);
-            row
-        };
-        hunk.rows.push(row);
-    }
-    hunks
+            Some((format!("@@ {body} @@"), old_start, new_start))
+        })
+        .collect()
 }
 
 impl DiffFile {
@@ -1341,7 +1413,7 @@ mod tests {
     #[test]
     fn rust_file_text_column_highlights_and_txt_stays_plain() {
         let theme = theme();
-        let patch = "--- a/src/main.rs\n+++ b/src/main.rs\n@@ -1,2 +1,2 @@\n// keep\n-fn old() {}\n+fn new() {}\n";
+        let patch = "--- a/src/main.rs\n+++ b/src/main.rs\n@@ -1,2 +1,2 @@\n // keep\n-fn old() {}\n+fn new() {}\n";
         let files = vec![DiffFile {
             file: "src/main.rs".into(),
             additions: 1,
@@ -1413,5 +1485,76 @@ mod tests {
         assert!(grid[4].starts_with("   1    const first = true"), "row 4: {:?}", grid[4]);
         assert!(grid[5].starts_with("   2 -  const oldFirst = true"), "row 5: {:?}", grid[5]);
         assert!(grid[8].starts_with("   @@ -20,3 +20,3 @@"), "row 8: {:?}", grid[8]);
+    }
+
+    /// G-11 adapter contract: the viewer's model agrees with
+    /// opentui-core's `parse_patch` on a nontrivial fixture — multi-
+    /// hunk, context lines, mixed add/delete runs, a no-newline
+    /// marker, and a git rename (extended headers, a similarity-100
+    /// rename carries no hunks; a rename-with-edit carries them).
+    #[test]
+    fn diff_model_agrees_with_opentui_parse_patch() {
+        let fixture = concat!(
+            "--- a/src/lib.rs\n",
+            "+++ b/src/lib.rs\n",
+            "@@ -1,3 +1,4 @@\n",
+            " mod lib;\n",
+            "-fn old() {}\n",
+            "\\ No newline at end of file\n",
+            "+fn new() {}\n",
+            "+fn added() {}\n",
+            " // tail\n",
+            "@@ -20,3 +21,1 @@\n",
+            " ctx\n",
+            "-removed\n",
+            "-also-removed\n",
+        );
+        // The opentui side (jsdiff semantics): two hunks, the marker
+        // kept in lines, counts validated.
+        let structured = opentui_core::renderables::diff::parse_patch(fixture).expect("valid");
+        assert_eq!(structured.len(), 1);
+        assert_eq!(structured[0].hunks.len(), 2);
+        assert_eq!(structured[0].hunks[0].lines.len(), 6, "marker kept upstream");
+        // The oc-tui side: same hunks, pre-numbered rows, marker dropped.
+        let hunks = parse_patch(fixture);
+        assert_eq!(hunks.len(), 2);
+        assert_eq!(hunks[0].header, "@@ -1,3 +1,4 @@");
+        assert_eq!((hunks[0].old_start, hunks[0].new_start), (1, 1));
+        assert_eq!(
+            hunks[0].rows,
+            vec![
+                PatchRow::Context { old: 1, new: 1, text: "mod lib;".into() },
+                PatchRow::Deleted { old: 2, text: "fn old() {}".into() },
+                PatchRow::Added { new: 2, text: "fn new() {}".into() },
+                PatchRow::Added { new: 3, text: "fn added() {}".into() },
+                PatchRow::Context { old: 3, new: 4, text: "// tail".into() },
+            ],
+            "marker dropped, numbers follow upstream counting"
+        );
+        assert_eq!(hunks[1].header, "@@ -20,3 +21,1 @@");
+        assert_eq!((hunks[1].old_start, hunks[1].new_start), (20, 21));
+        assert_eq!(
+            hunks[1].rows,
+            vec![
+                PatchRow::Context { old: 20, new: 21, text: "ctx".into() },
+                PatchRow::Deleted { old: 21, text: "removed".into() },
+                PatchRow::Deleted { old: 22, text: "also-removed".into() },
+            ]
+        );
+        // A pure git rename (similarity 100%): no hunks on either side.
+        let rename = concat!(
+            "diff --git a/old_name.rs b/new_name.rs\n",
+            "similarity index 100%\n",
+            "rename from old_name.rs\n",
+            "rename to new_name.rs\n",
+        );
+        let renamed = opentui_core::renderables::diff::parse_patch(rename).unwrap();
+        assert!(renamed[0].hunks.is_empty(), "upstream: pure rename carries no hunks");
+        assert_eq!(parse_patch(rename), [] as [Hunk; 0]);
+        // A malformed patch (count mismatch) is REJECTED upstream → no
+        // hunks (the "No patch available" fallback).
+        let broken = "--- a\n+++ b\n@@ -1,2 +1,2 @@\n x";
+        assert!(opentui_core::renderables::diff::parse_patch(broken).is_err());
+        assert_eq!(parse_patch(broken), [] as [Hunk; 0]);
     }
 }
