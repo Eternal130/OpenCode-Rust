@@ -2800,15 +2800,24 @@ impl App {
                             Some("clipboard"),
                             &format!("data:{};base64,{}", content.mime, content.data),
                         );
-                    } else if let Some(text) = crate::clipboard::base64_decode(&content.data)
-                        .and_then(|bytes| String::from_utf8(bytes).ok())
-                        .filter(|text| !text.is_empty())
-                    {
-                        composer.paste_resolved(
-                            &text,
-                            "unix",
-                            &crate::components::composer::attachment::FsLocalFiles,
-                        );
+                    } else if content.mime == "text/plain" {
+                        // ref prompt/index.tsx:483 gates the text arm on
+                        // text/plain exactly; other mimes are ignored.
+                        if let Some(text) = crate::clipboard::base64_decode(&content.data)
+                            .and_then(|bytes| String::from_utf8(bytes).ok())
+                            .filter(|text| !text.is_empty())
+                        {
+                            composer.paste_resolved(
+                                &text,
+                                "unix",
+                                &crate::components::composer::attachment::FsLocalFiles,
+                            );
+                        }
+                    } else {
+                        // Non-image/non-text mimes: ignored, matching ref
+                        // (unreachable with the current host backend, which
+                        // only yields image/* or text/plain — see
+                        // clipboard.rs preferred_types).
                     }
                     self.store.set_composer(&key, &composer);
                 }
