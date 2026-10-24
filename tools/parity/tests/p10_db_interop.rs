@@ -85,7 +85,7 @@ fn spawn_rust_on(home: &Path, config: &Path) -> parity::rust_server::RustSpawn<'
         "OPENCODE_CONFIG",
         Box::leak(config.display().to_string().into_boxed_str()) as &'static str,
     ));
-    parity::rust_server::RustSpawn { extra_env: env, seed_files: Vec::new() }
+    parity::rust_server::RustSpawn { extra_env: env, seed_files: Vec::new(), project_cwd: None }
 }
 
 /// Authed JSON call with owned path/body (call-site sugar for the phases).
@@ -609,6 +609,7 @@ async fn run_stable_channel_same_file() -> Result<()> {
     let port = parity::rust_server::spawn_rust(parity::rust_server::RustSpawn {
         extra_env: rust_env,
         seed_files: Vec::new(),
+        project_cwd: None,
     })
     .await?;
     let (base, password) = (port.url().to_owned(), port.password().to_owned());

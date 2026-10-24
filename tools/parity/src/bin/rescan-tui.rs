@@ -429,6 +429,7 @@ async fn main() -> anyhow::Result<()> {
                 ("XDG_STATE_HOME", our_home.join(".local/state").display().to_string().as_str()),
             ],
             seed_files: Vec::new(),
+            project_cwd: None,
         })
         .await?;
 

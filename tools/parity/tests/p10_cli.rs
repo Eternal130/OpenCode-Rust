@@ -517,6 +517,7 @@ async fn run(bun: &Path, tui_root: &Path) -> Result<()> {
             Box::leak(config.display().to_string().into_boxed_str()) as &'static str,
         )],
         seed_files: Vec::new(),
+        project_cwd: None,
     })
     .await?;
     let result = checks(&lane, &reference, &port).await;
