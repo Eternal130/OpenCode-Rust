@@ -15,17 +15,20 @@
 //! * tree-sitter types never leak: the public surface is spans, styles
 //!   and one opaque block handle.
 //!
-//! ## Catalog status (R-01b)
+//! ## Catalog status (R-01b + G-08)
 //!
 //! The full catalog: the spike's 3 languages (rust, python, typescript)
-//! plus 16 more filetypes (go, c, cpp, csharp, java, json, yaml, toml,
-//! html, css, diff, javascript, kotlin, ruby, php, swift — 19 registry
-//! entries, queries vendored at the exact crate-version tags, see
-//! `queries/*.scm` headers and [`queries`] for the v2 routing notes).
-//! kotlin and toml grammars ship as vendored path crates under
-//! `third_party/`. v2's tail languages (lua, vim, scala, …) stay
-//! unregistered, as does `make` (not in the oracle list); the registry
-//! design carries the alias convention (`udiff`/`patch` for diff).
+//! plus 17 more filetypes (go, c, cpp, java, json, yaml, toml, html,
+//! css, diff, javascript, ruby, php — R-01b — and lua, vim, scala,
+//! make — G-08, v2's tail languages now registered at their exact ref
+//! pins: lua v0.5.0, vim v0.8.1, scala v0.24.0, make v1.1.1; 20
+//! registry entries, queries vendored at the exact crate-version tags,
+//! see `queries/*.scm` headers and [`queries`] for the v2 routing
+//! notes). toml and vim grammars ship as vendored path crates under
+//! `third_party/`. csharp/kotlin/swift were dropped for release-binary
+//! size (ROADMAP R-01b); the registry design carries the alias
+//! convention (`udiff`/`patch` for diff, `makefile`/`gnumake` for
+//! make, `vi` for vim).
 //! Binary-size and perf measurements accompany the R-01b report.
 
 mod engine;
