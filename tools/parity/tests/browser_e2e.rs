@@ -1361,3 +1361,492 @@ fn log_batch_js(password: &str, id: &str, after: &str) -> String {
         }})()"
     )
 }
+
+// ---------------------------------------------------------------------------
+// Scenario 4: PTY panel
+// ---------------------------------------------------------------------------
+
+/// S4 — the PTY panel contract, every leg from page context:
+///
+/// - `POST /api/pty` creates an interactive `sh`; the live feed carries
+///   `pty.created` with the typed `info` payload (`id`, `status:
+///   "running"`, numeric `pid`, no `exitCode` yet — `oc-schema/pty`);
+/// - `POST /api/pty/:id/connect-token` (the SPA's ticket mint; requires
+///   the `x-opencode-ticket: 1` header + same-host origin) returns
+///   `{data: {ticket, expires_in}}`;
+/// - the ticket-exempt WS `GET /api/pty/:id/connect?ticket=…`
+///   (middleware.rs:198-208) attaches: stdin = text frames, stdout =
+///   text frames, one binary `0x00 || {"cursor":N}` metaframe after the
+///   replay (handlers/pty.rs §3);
+/// - `PUT /api/pty/:id` publishes `pty.updated`; `exit` publishes
+///   `pty.exited` with `exitCode` and closes the WS 1000.
+#[tokio::test]
+async fn browser_e2e_s4_pty_panel() -> Result<()> {
+    let Some((root, assets, _mode)) = preflight("s4") else {
+        return Ok(());
+    };
+    let _scenario_slot = scenario_slot().await?;
+    let fake = ScriptedFakeLlm::start(vec![p10_common::text_script("unused")])
+        .await
+        .context("fake llm")?;
+    let server = spawn_server(&assets, &fake).await?;
+    let url = server.url().to_owned();
+    let password = server.password().to_owned();
+
+    let run = tokio::time::timeout(SCENARIO_BUDGET, s4_body(&url, &password)).await;
+    let result = run.map_err(|_| anyhow!("scenario timed out after {SCENARIO_BUDGET:?}"));
+    let outcome = result?;
+    server.stop().await?;
+    drop(root);
+    outcome
+}
+
+async fn s4_body(url: &str, password: &str) -> Result<()> {
+    let artifacts = artifacts_dir("s4");
+    let mut session = open_page(url, &artifacts).await?;
+    let result = s4_page_checks(&mut session, password).await;
+    if result.is_err() {
+        session.dump_artifacts(&artifacts, "s4").await;
+        eprintln!("console: {:?}", session.console_lines());
+    }
+    result
+}
+
+async fn s4_page_checks(session: &mut BrowserSession, password: &str) -> Result<()> {
+    session
+        .poll_js(
+            "document.readyState",
+            |value| value == "complete" || value == "interactive",
+            Duration::from_secs(30),
+            "document readyState",
+        )
+        .await?;
+
+    // Live-feed collector (the SPA's own subscription shape).
+    let setup = event_collector_js(password, "__ev4");
+    session
+        .poll_js(&setup, |value| value == "kicked", Duration::from_secs(10), "s4 feed kick")
+        .await?;
+    session
+        .poll_js(
+            "window.__ev4.some((e) => e.type === 'server.connected')",
+            |value| value == &Value::Bool(true),
+            Duration::from_secs(30),
+            "s4 feed connected",
+        )
+        .await?;
+
+    // Create the pty from the page.
+    let create = format!(
+        r"(async () => {{
+          const headers = {{ Authorization: 'Basic ' + btoa('opencode:{password}'), 'Content-Type': 'application/json' }};
+          const response = await fetch('/api/pty', {{ method: 'POST', headers, body: JSON.stringify({{ command: 'sh', title: 'browser-e2e-s4' }}) }});
+          return {{ status: response.status, body: await response.json() }};
+        }})()"
+    );
+    let created = session
+        .poll_js(
+            &create,
+            |value| value.get("status").is_some(),
+            Duration::from_secs(30),
+            "pty create",
+        )
+        .await?;
+    eprintln!("[s4] create: {created}");
+    anyhow::ensure!(created["status"] == 200, "pty create not 200: {created}");
+    let pty_id = created["body"]["data"]["id"]
+        .as_str()
+        .with_context(|| format!("pty create missing data.id: {created}"))?
+        .to_owned();
+    anyhow::ensure!(
+        created["body"]["data"]["status"] == "running"
+            && created["body"]["data"]["pid"].is_number(),
+        "pty create row not typed as running w/ pid: {created}"
+    );
+
+    // pty.created on the live feed, typed info payload.
+    let created_event = session
+        .poll_js(
+            "window.__ev4.filter((e) => e.type === 'pty.created').map((e) => JSON.stringify(e)).join('\\n')",
+            |events| events.as_str().is_some_and(|text| text.contains(&pty_id)),
+            Duration::from_secs(30),
+            "pty.created event",
+        )
+        .await?;
+    eprintln!("[s4] pty.created seen for {pty_id}");
+    anyhow::ensure!(
+        created_event.as_str().unwrap_or_default().contains("\"status\":\"running\"")
+            || created_event.as_str().unwrap_or_default().contains("\"status\": \"running\""),
+        "pty.created payload not the typed running info: {created_event}"
+    );
+
+    // Ticket mint (the SPA path): x-opencode-ticket + same-host origin.
+    let token = format!(
+        r"(async () => {{
+          const response = await fetch('/api/pty/{pty_id}/connect-token', {{
+            method: 'POST',
+            headers: {{ Authorization: 'Basic ' + btoa('opencode:{password}'), 'x-opencode-ticket': '1' }},
+          }});
+          return {{ status: response.status, body: await response.json() }};
+        }})()"
+    );
+    let ticket = session
+        .poll_js(
+            &token,
+            |value| value.get("status").is_some(),
+            Duration::from_secs(30),
+            "connect-token",
+        )
+        .await?;
+    eprintln!("[s4] connect-token: {ticket}");
+    anyhow::ensure!(ticket["status"] == 200, "connect-token not 200: {ticket}");
+    let ticket_value = ticket["body"]["data"]["ticket"]
+        .as_str()
+        .with_context(|| format!("connect-token missing data.ticket: {ticket}"))?
+        .to_owned();
+
+    // WS attach through the ticket-exempt URL; drive stdin; collect
+    // stdout + the binary metaframe; exit and observe the close code.
+    let ws_kick = format!(
+        r"(async () => {{
+          const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+          const url = proto + '//' + location.host + '/api/pty/{pty_id}/connect?ticket=' + encodeURIComponent('{ticket_value}');
+          window.__ws4 = {{ open: false, texts: [], binaryMeta: null, closeCode: null, closeReason: null, sent: false, error: null, url }};
+          const ws = new WebSocket(url);
+          ws.binaryType = 'arraybuffer';
+          ws.onopen = () => {{
+            window.__ws4.open = true;
+            ws.send('printf s4-hello-from-e2e\n');
+            window.__ws4.sent = true;
+          }};
+          ws.onmessage = (m) => {{
+            if (typeof m.data === 'string') {{
+              window.__ws4.texts.push(m.data);
+              if (m.data.includes('s4-hello-from-e2e')) {{
+                ws.send('exit\n');
+              }}
+            }} else {{
+              const bytes = new Uint8Array(m.data);
+              const meta = bytes.length > 0 && bytes[0] === 0
+                ? JSON.parse(new TextDecoder().decode(bytes.slice(1)))
+                : null;
+              window.__ws4.binaryMeta = meta;
+            }}
+          }};
+          ws.onclose = (m) => {{ window.__ws4.closeCode = m.code; window.__ws4.closeReason = m.reason; }};
+          ws.onerror = (e) => {{ window.__ws4.error = 'ws error type=' + e.type; }};
+          return 'kicked';
+        }})()"
+    );
+    session
+        .poll_js(&ws_kick, |value| value == "kicked", Duration::from_secs(10), "ws kick")
+        .await?;
+    let ws = session
+        .poll_js(
+            "window.__ws4",
+            |value| {
+                value.get("closeCode").is_some_and(|code| !code.is_null())
+                    || value.get("error").is_some_and(|error| !error.is_null())
+            },
+            Duration::from_secs(30),
+            "pty ws session (marker echo + exit close)",
+        )
+        .await?;
+    eprintln!("[s4] ws: {ws}");
+    anyhow::ensure!(ws["open"] == true, "pty ws never opened: {ws}");
+    anyhow::ensure!(
+        ws["texts"].as_array().is_some_and(|texts| texts
+            .iter()
+            .any(|t| t.as_str().is_some_and(|t| t.contains("s4-hello-from-e2e")))),
+        "pty ws never echoed the marker: {ws}"
+    );
+    anyhow::ensure!(
+        ws["binaryMeta"].get("cursor").is_some(),
+        "pty ws missing the binary metaframe cursor: {ws}"
+    );
+    anyhow::ensure!(ws["closeCode"] == 1000, "pty ws close code not 1000: {ws}");
+
+    // pty.exited (typed: id + exitCode 0) and pty.updated via PUT title.
+    let exited = session
+        .poll_js(
+            "window.__ev4.filter((e) => e.type === 'pty.exited').map((e) => JSON.stringify(e.data)).join('\\n')",
+            |events| events.as_str().is_some_and(|text| text.contains(&pty_id)),
+            Duration::from_secs(30),
+            "pty.exited event",
+        )
+        .await?;
+    eprintln!("[s4] pty.exited: {exited}");
+    anyhow::ensure!(
+        exited.as_str().unwrap_or_default().contains("\"exitCode\":0"),
+        "pty.exited missing exitCode 0: {exited}"
+    );
+
+    // PUT on the exited row still publishes pty.updated (typed info).
+    let put = format!(
+        r"(async () => {{
+          const headers = {{ Authorization: 'Basic ' + btoa('opencode:{password}'), 'Content-Type': 'application/json' }};
+          const response = await fetch('/api/pty/{pty_id}', {{ method: 'PUT', headers, body: JSON.stringify({{ title: 'browser-e2e-s4-renamed' }}) }});
+          return {{ status: response.status, body: await response.json() }};
+        }})()"
+    );
+    let updated = session
+        .poll_js(&put, |value| value.get("status").is_some(), Duration::from_secs(30), "pty update")
+        .await?;
+    anyhow::ensure!(updated["status"] == 200, "pty update not 200: {updated}");
+    session
+        .poll_js(
+            "window.__ev4.filter((e) => e.type === 'pty.updated').map((e) => JSON.stringify(e.data)).join('\\n')",
+            |events| {
+                events
+                    .as_str()
+                    .is_some_and(|text| text.contains(&pty_id) && text.contains("browser-e2e-s4-renamed"))
+            },
+            Duration::from_secs(30),
+            "pty.updated event",
+        )
+        .await?;
+    eprintln!("[s4] pty.updated seen (renamed)");
+    Ok(())
+}
+
+/// Kick off an in-page `EventSource` collector into `window[var]`.
+fn event_collector_js(password: &str, var: &str) -> String {
+    format!(
+        r"(async () => {{
+          window.{var} = [];
+          const token = encodeURIComponent(btoa('opencode:{password}'));
+          const es = new EventSource('/api/event?auth_token=' + token);
+          es.onmessage = (m) => {{
+            try {{ window.{var}.push(JSON.parse(m.data)); }} catch {{}}
+          }};
+          return 'kicked';
+        }})()"
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 5: permission popup
+// ---------------------------------------------------------------------------
+
+/// A fake-LLM script whose turn requests the `shell` builtin (the
+/// default permission ruleset leaves unmatched actions at `Effect::Ask`,
+/// oc-core/src/permission.rs:67 — no config needed).
+fn shell_tool_script(call_id: &str, command: &str) -> String {
+    let arguments = serde_json::json!({ "command": command }).to_string();
+    let call = serde_json::json!({
+        "choices":[{"delta":{"role":"assistant","tool_calls":[{
+            "index":0,"id":call_id,"type":"function",
+            "function":{"name":"shell","arguments":arguments}
+        }]}}]
+    })
+    .to_string();
+    let finish = serde_json::json!({
+        "choices":[{"delta":{},"finish_reason":"tool_calls"}],
+        "usage":{"prompt_tokens":9,"completion_tokens":3,"total_tokens":12}
+    })
+    .to_string();
+    format!("data: {call}\n\ndata: {finish}\n\ndata: [DONE]\n\n")
+}
+
+const S5_AFTER: &str = "S5 finished after the permission grant.";
+
+/// S5 — the permission popup contract, page legs end-to-end:
+/// a `shell` tool call (default Ask) publishes `permission.asked` with
+/// the pending `per_…` id (`sessionID`, `action`, `resources` typed per
+/// oc-schema/permission); the SPA's accept path — `POST
+/// /api/session/:sid/permission/:requestID/reply {"decision":"once"}`
+/// (204) — unblocks the execution; `permission.replied` arrives, the
+/// turn succeeds, the shell output lands in the transcript, and the
+/// durable session log carries the tool step.
+#[tokio::test]
+async fn browser_e2e_s5_permission_popup() -> Result<()> {
+    let Some((root, assets, _mode)) = preflight("s5") else {
+        return Ok(());
+    };
+    let _scenario_slot = scenario_slot().await?;
+    let fake = ScriptedFakeLlm::start(vec![
+        shell_tool_script("call_s5_e2e", "echo s5-permission-marker"),
+        p10_common::text_script(S5_AFTER),
+    ])
+    .await
+    .context("fake llm")?;
+    let server = spawn_server(&assets, &fake).await?;
+    let url = server.url().to_owned();
+    let password = server.password().to_owned();
+
+    let run = tokio::time::timeout(SCENARIO_BUDGET, s5_body(&url, &password)).await;
+    let result = run.map_err(|_| anyhow!("scenario timed out after {SCENARIO_BUDGET:?}"));
+    let outcome = result?;
+    server.stop().await?;
+    drop(root);
+    outcome
+}
+
+async fn s5_body(url: &str, password: &str) -> Result<()> {
+    let artifacts = artifacts_dir("s5");
+    // The default build agent allows `*/*`; the SESSION ruleset (set at
+    // create time, engine/mod.rs SessionRuleResolver) overrides it, so
+    // the seeded ruleset pins `shell` back to ask.
+    let create_body = serde_json::json!({
+        "title": "browser-e2e-s5",
+        "permissions": [{ "action": "shell", "resource": "*", "effect": "ask" }],
+    })
+    .to_string();
+    let (status, created) =
+        p10_common::api(url, password, "POST", "/api/session", Some(&create_body)).await?;
+    anyhow::ensure!(status == 200, "session create status {status}: {created}");
+    let id = created["data"]["id"]
+        .as_str()
+        .with_context(|| format!("session create missing data.id: {created}"))?
+        .to_owned();
+
+    let mut browser = open_page(url, &artifacts).await?;
+    let result = match s5_page_checks(&mut browser, password, &id).await {
+        Ok(()) => s5_aftermath(url, password, &id).await,
+        Err(error) => Err(error),
+    };
+    if result.is_err() {
+        browser.dump_artifacts(&artifacts, "s5").await;
+        eprintln!("console: {:?}", browser.console_lines());
+    }
+    result
+}
+
+/// Post-grant aftermath: the shell tool actually ran (its output is in
+/// the transcript) and the turn completed with the follow-up text.
+async fn s5_aftermath(url: &str, password: &str, id: &str) -> Result<()> {
+    let mut transcript = Value::Null;
+    for _ in 0..120 {
+        tokio::time::sleep(POLL_STEP).await;
+        let (status, body) =
+            p10_common::api(url, password, "GET", &format!("/api/session/{id}/message"), None)
+                .await?;
+        anyhow::ensure!(status == 200, "message list status {status}: {body}");
+        transcript = body.clone();
+        let text = serde_json::to_string(&body).unwrap_or_default();
+        if text.contains("s5-permission-marker") && text.contains(S5_AFTER) {
+            eprintln!("[s5] transcript carries the shell marker + final text");
+            return Ok(());
+        }
+    }
+    Err(anyhow!(
+        "transcript never carried the shell marker + final text: {}",
+        transcript.to_string().chars().take(800).collect::<String>()
+    ))
+}
+
+async fn s5_page_checks(session: &mut BrowserSession, password: &str, id: &str) -> Result<()> {
+    session
+        .poll_js(
+            "document.readyState",
+            |value| value == "complete" || value == "interactive",
+            Duration::from_secs(30),
+            "document readyState",
+        )
+        .await?;
+
+    let setup = event_collector_js(password, "__ev5");
+    session
+        .poll_js(&setup, |value| value == "kicked", Duration::from_secs(10), "s5 feed kick")
+        .await?;
+    session
+        .poll_js(
+            "window.__ev5.some((e) => e.type === 'server.connected')",
+            |value| value == &Value::Bool(true),
+            Duration::from_secs(30),
+            "s5 feed connected",
+        )
+        .await?;
+
+    // Submit the prompt from the page (the shell-tool turn).
+    let prompt = format!(
+        r"(async () => {{
+          const headers = {{ Authorization: 'Basic ' + btoa('opencode:{password}'), 'Content-Type': 'application/json' }};
+          const response = await fetch('/api/session/{id}/prompt', {{ method: 'POST', headers, body: JSON.stringify({{ text: 'please run the echo' }}) }});
+          return {{ status: response.status }};
+        }})()"
+    );
+    let submit = session
+        .poll_js(
+            &prompt,
+            |value| value.get("status").is_some(),
+            Duration::from_secs(30),
+            "s5 prompt submit",
+        )
+        .await?;
+    anyhow::ensure!(submit["status"] == 200, "prompt submit not 200: {submit}");
+
+    // permission.asked arrives with the pending per_ id, typed payload.
+    let asked = session
+        .poll_js(
+            "window.__ev5.filter((e) => e.type === 'permission.asked').map((e) => JSON.stringify(e)).join('\\n')",
+            |events| {
+                events
+                    .as_str()
+                    .is_some_and(|text| text.contains(id) && text.contains("\"per_"))
+            },
+            Duration::from_secs(60),
+            "permission.asked event",
+        )
+        .await?;
+    eprintln!("[s5] permission.asked: {asked}");
+    anyhow::ensure!(
+        asked.as_str().unwrap_or_default().contains("\"action\":\"shell\"")
+            || asked.as_str().unwrap_or_default().contains("\"action\": \"shell\""),
+        "permission.asked action not shell: {asked}"
+    );
+    // Extract the pending id from the event (page side — the same shape
+    // the popup's accept button uses).
+    let request_id = session
+        .eval(&format!(
+            "window.__ev5.find((e) => e.type === 'permission.asked' && (e.data || e).sessionID === '{id}').data.id"
+        ))
+        .await
+        .with_context(|| format!("extract permission request id: {asked}"))?;
+    let request_id = request_id
+        .as_str()
+        .with_context(|| format!("permission request id not a string: {request_id}"))?
+        .to_owned();
+    eprintln!("[s5] pending request: {request_id}");
+
+    // The accept path: reply once (204).
+    let reply = format!(
+        r"(async () => {{
+          const headers = {{ Authorization: 'Basic ' + btoa('opencode:{password}'), 'Content-Type': 'application/json' }};
+          const response = await fetch('/api/session/{id}/permission/{request_id}/reply', {{
+            method: 'POST', headers, body: JSON.stringify({{ decision: 'once' }}),
+          }});
+          return {{ status: response.status, body: await response.text() }};
+        }})()"
+    );
+    let accepted = session
+        .poll_js(
+            &reply,
+            |value| value.get("status").is_some(),
+            Duration::from_secs(30),
+            "permission reply",
+        )
+        .await?;
+    eprintln!("[s5] reply: {accepted}");
+    anyhow::ensure!(accepted["status"] == 204, "permission reply not 204: {accepted}");
+
+    // permission.replied + execution proceeds to success.
+    session
+        .poll_js(
+            "window.__ev5.some((e) => e.type === 'permission.replied')",
+            |value| value == &Value::Bool(true),
+            Duration::from_secs(30),
+            "permission.replied event",
+        )
+        .await?;
+    session
+        .poll_js(
+            "window.__ev5.some((e) => e.type === 'session.execution.succeeded')",
+            |value| value == &Value::Bool(true),
+            Duration::from_secs(60),
+            "execution succeeded after grant",
+        )
+        .await?;
+    eprintln!("[s5] replied + execution succeeded");
+    Ok(())
+}
