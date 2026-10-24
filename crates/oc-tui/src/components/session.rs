@@ -1200,7 +1200,14 @@ fn live_sidebar_view(store: &Store, session_id: &str, height: usize) -> SidebarV
         sections: SidebarSections {
             context,
             mcp: SidebarMcpWidget { servers: store.mcp_servers(), open: store.sidebar_mcp_open() },
-            plugins: store.plugin_sidebar_sections(),
+            plugins: {
+                // G-04: `sidebar.footer` sections ride the bottom of
+                // the section stack (below the `sidebar.content`
+                // sections), sharing the claim-backed click sink.
+                let mut sections = store.plugin_sidebar_sections();
+                sections.extend(store.plugin_slot_sections("sidebar.footer"));
+                sections
+            },
         },
         onboarding: height >= 22
             && !store.sidebar_onboarding_dismissed()
@@ -1295,7 +1302,16 @@ fn composer_footer_hints(
         // #4's usage arm: the context-usage segment (PromptFooter's
         // first Match) — present after a completed turn.
         usage: if shell { String::new() } else { composer_usage(store, session_id) },
-        plugin_hints: if shell { Vec::new() } else { store.plugin_footer_hints() },
+        // G-04: the `prompt.footer(.status/.file)` slot rows append
+        // after the legacy FooterHint segments (row-based footer
+        // faces — the ref's SlotMap prompt.footer* mounts).
+        plugin_hints: if shell {
+            Vec::new()
+        } else {
+            let mut hints = store.plugin_footer_hints();
+            hints.extend(store.plugin_slot_rows("prompt.footer"));
+            hints
+        },
         // Wave A: the interrupt hint while the session's turn runs
         // (v2 prompt/index.tsx:1887-1903 — the spinner + `esc
         // interrupt` / `esc again to interrupt` status).

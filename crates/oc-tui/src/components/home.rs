@@ -404,7 +404,14 @@ pub fn render_home(store: &Store, theme: &crate::theme::ThemeStyles, size: (u16,
         editor_file_pending: store.editor_label_pending().unwrap_or(false),
         version: env!("CARGO_PKG_VERSION").to_owned(),
         metadata,
-        plugin_hints: store.plugin_footer_hints(),
+        plugin_hints: {
+            // G-04: the `home.footer(.status)` slot rows append after
+            // the legacy FooterHint segments (the home screen's
+            // row-based footer face).
+            let mut hints = store.plugin_footer_hints();
+            hints.extend(store.plugin_slot_rows("home.footer"));
+            hints
+        },
         plugin_actions: store
             .plugin_home_actions()
             .into_iter()
