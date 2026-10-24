@@ -5,6 +5,7 @@
 mod bun;
 mod null_tolerance;
 mod upgrade_battery;
+mod v1_migration_battery;
 
 use std::path::Path;
 use std::time::{Duration, Instant};
