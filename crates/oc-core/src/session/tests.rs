@@ -1530,6 +1530,54 @@ async fn session_projector_fork_copies_settled_history() {
     assert_eq!(latest, 2, "reserveSequence covered the copied prefix");
 }
 
+/// G-16: an instruction-entry insert failure (duplicate key in the
+/// snapshot) propagates — the whole projection transaction rolls back
+/// (ref `orDie` semantics), so no fork row survives a failed publish.
+#[tokio::test]
+async fn session_projector_fork_instruction_failure_rolls_back() {
+    let stack = stack().await;
+    let parent = "ses_fork_rb_parent";
+    seed_session_with(&stack.db, parent, &[]).await;
+    stack
+        .db
+        .transaction(|tx| {
+            SessionMessageRow::insert(
+                tx,
+                &SessionMessageRow {
+                    id: "msg_settled_rb".to_string(),
+                    session_id: parent.to_string(),
+                    type_: "assistant".to_string(),
+                    seq: 0,
+                    time_created: 0,
+                    time_updated: 0,
+                    data: r#"{"agent":"build","model":{"id":"m","providerID":"p"},"content":[],"time":{"created":0,"completed":9}}"#.to_string(),
+                },
+            )
+        })
+        .await
+        .unwrap();
+
+    let result = stack
+        .bus
+        .publish(
+            def("session.forked"),
+            serde_json::json!({
+                "sessionID": "ses_fork_rb_child",
+                "parentID": parent,
+                "boundary": { "type": "through", "messageID": "msg_settled_rb" },
+                "instructionEntries": [
+                    { "key": "dup", "value": "first", "removed": false },
+                    { "key": "dup", "value": "second", "removed": false },
+                ],
+            }),
+            PublishOptions::default(),
+        )
+        .await;
+    assert!(result.is_err(), "duplicate instruction key fails the projection");
+    let fork = stack.store.get("ses_fork_rb_child").await.unwrap();
+    assert!(fork.is_none(), "the fork row rolled back with the transaction");
+}
+
 // ===========================================================================
 // Session.create (session.ts:262-318)
 // ===========================================================================

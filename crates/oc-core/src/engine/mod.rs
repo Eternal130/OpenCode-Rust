@@ -2325,9 +2325,7 @@ fn seed_builtin_agents(agents: &Arc<crate::location::AgentRegistry>) {
     explore.permissions.push(rule("read", "*.env.*", oc_schema::permission::Effect::Ask));
     explore.permissions.push(rule("read", "*.env.example", oc_schema::permission::Effect::Allow));
     explore.permissions.push(rule("subagent", "*", oc_schema::permission::Effect::Deny));
-    explore
-        .permissions
-        .push(rule("external_directory", "*", oc_schema::permission::Effect::Ask));
+    explore.permissions.push(rule("external_directory", "*", oc_schema::permission::Effect::Ask));
     agents.set(explore);
 
     agents.set(agent_info("compaction", "Compaction", oc_schema::agent::Mode::Primary, true));
