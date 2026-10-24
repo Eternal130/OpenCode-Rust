@@ -89,8 +89,57 @@ impl Default for BootOptions {
     }
 }
 
-// The config-derived provider bindings (`ConfigProviders` +
-// `providers_from_config`) are re-exported from
+/// G-05 — the `ConfigUpdated` bridge: on an actual config change
+/// (post-debounce, post-deep-equal), publish the ephemeral empty
+/// `config.updated` bus event (config.ts:276 → schema/config.ts:134)
+/// and refresh the server-side consumers that snapshot config at boot.
+///
+/// Consumer refresh today: every live location graph is invalidated
+/// (the engine's existing seam — the next use re-assembles the MCP
+/// server set, agent/skill/command discovery from the reloaded
+/// config), and the plugin subsystem's conservative source refresh
+/// runs (`plugins::refresh_after_config_change`). Consumers with no
+/// refresh seam keep their boot snapshot; see the FOLLOWUP comments
+/// there (plugin host state seed) and in `state.rs`.
+struct ConfigReloadBridge {
+    engine: std::sync::Mutex<Option<Arc<Engine>>>,
+    /// The watcher + booted plugin subsystem (filled once both exist;
+    /// the plugin source refresh reads the reloaded snapshot).
+    hooks: std::sync::Mutex<Option<(Arc<oc_core::config::WatchedConfig>, Arc<crate::plugins::PluginBoot>)>>,
+    runtime: tokio::runtime::Handle,
+    location: LocationRef,
+}
+
+impl oc_core::config::watch::ConfigUpdated for ConfigReloadBridge {
+    fn on_config_updated(&self) {
+        // Called from the hub's debounce thread; the publish + the
+        // invalidations are async, so hop onto the runtime. The engine
+        // slot is filled after `Engine::boot`; updates before that
+        // (the readiness rescan) are silently dropped — the boot
+        // snapshot already reflects them.
+        let Some(engine) = self.engine.lock().ok().and_then(|slot| slot.clone()) else {
+            return;
+        };
+        let hooks = self.hooks.lock().ok().and_then(|slot| slot.clone());
+        let location = self.location.clone();
+        self.runtime.spawn(async move {
+            crate::announce::publish_empty(&engine, "config.updated", &location).await;
+            for live in engine.live_locations() {
+                engine.invalidate(&live).await;
+            }
+            if let Some((watched, plugins)) = hooks {
+                // Blocking digest-scan reload — off the async workers.
+                let loaded = watched.loaded();
+                let _ = tokio::task::spawn_blocking(move || {
+                    crate::plugins::refresh_after_config_change(&plugins, &loaded)
+                })
+                .await;
+            }
+        });
+    }
+}
+
+// The config-derived provider bindings (`ConfigProviders` +// `providers_from_config`) are re-exported from
 // `oc_core::provider_catalog::overlay`, where the per-location provider
 // overlay shares the mapping: every `providers.<id>` entry carrying a
 // `settings.baseURL` becomes an openai-compatible `CustomProvider`
@@ -146,6 +195,33 @@ pub async fn boot_and_serve(options: &BootOptions) -> io::Result<ServeHandle> {
     // project config discovery is disabled for this server.
     server_process_env::configure_loader(&mut loader);
     let snapshot = loader.load();
+    // G-05 config hot reload: start the live watcher over the same
+    // sources (debounced 100ms, deep-equal short-circuit, serialized
+    // reloads — `WatchedConfig::start`). The bridge publishes the
+    // ephemeral empty `config.updated` bus event (config.ts:276) once
+    // the engine exists, and invalidates every live location graph so
+    // the next use re-assembles from the reloaded config (MCP server
+    // set, agent/skill/command discovery all derive at assembly).
+    let mut watch_loader = Loader::new(
+        config_location.clone(),
+        GlobalDirs {
+            config: options.home.join(".config").join("opencode"),
+            home: options.home.clone(),
+        },
+    );
+    server_process_env::configure_loader(&mut watch_loader);
+    let config_reload = Arc::new(ConfigReloadBridge {
+        engine: std::sync::Mutex::new(None),
+        hooks: std::sync::Mutex::new(None),
+        runtime: tokio::runtime::Handle::current(),
+        location: LocationRef::new(config_location.clone(), None),
+    });
+    let watched_config = oc_core::config::WatchedConfig::start(
+        watch_loader,
+        oc_core::config::watch::NotifyBackend::new(),
+        config_reload.clone(),
+        None,
+    );
     let providers = providers_from_config(&snapshot);
     if trace_boot {
         let sources = &snapshot.sources;
@@ -293,6 +369,15 @@ pub async fn boot_and_serve(options: &BootOptions) -> io::Result<ServeHandle> {
         location: LocationRef::new(config_location.clone(), None),
     }));
     app_state.plugins = Some(plugin_boot);
+    // G-05: the reload bridge gets the engine handle (config.updated
+    // publishing + location invalidation need it), and the watcher's
+    // Arc rides on AppState so the reload loop's Weak target stays
+    // alive for the process lifetime.
+    *config_reload.engine.lock().unwrap() = Some(Arc::clone(&app_state.engine));
+    if let (Some(boot), watched) = (&app_state.plugins, &watched_config) {
+        *config_reload.hooks.lock().unwrap() = Some((Arc::clone(watched), Arc::clone(boot)));
+    }
+    app_state.watched_config = Some(watched_config);
     let state = Arc::new(app_state);
     // RUNTIME-L01 — restart continuity (`installRestartContinuity`,
     // server process.ts:237-240 → `SessionRestart.resumeSuspendedSessions`
@@ -915,6 +1000,113 @@ mod tests {
                 row.time_suspended
             );
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+
+        handle.shutdown_and_join().await.expect("shutdown");
+    }
+
+    /// G-05 config hot reload: a config file edit under the boot's
+    /// watch roots flows WatchedConfig reload → `config.updated` bus
+    /// event (ephemeral, empty payload) → SSE frame, and the live
+    /// location graph is invalidated so the next use re-assembles from
+    /// the reloaded config.
+    #[allow(clippy::too_many_lines)]
+    #[tokio::test]
+    async fn boot_config_hot_reload_publishes_config_updated_and_invalidates_locations() {
+        let root = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+        let project = root.path().join("proj");
+        std::fs::create_dir_all(&project).expect("project dir");
+        std::fs::write(project.join("opencode.json"), r#"{"shell": "one"}"#)
+            .expect("project config");
+        let home = root.path().join("home");
+        std::fs::create_dir_all(&home).expect("home");
+        let _env = Env::redirect_into(&home);
+        let prior_fetch = std::env::var("OPENCODE_CATALOG_FETCH").ok();
+        std::env::set_var("OPENCODE_CATALOG_FETCH", "0");
+        struct FetchEnv(Option<String>);
+        impl Drop for FetchEnv {
+            fn drop(&mut self) {
+                match self.0.clone() {
+                    Some(value) => std::env::set_var("OPENCODE_CATALOG_FETCH", value),
+                    None => std::env::remove_var("OPENCODE_CATALOG_FETCH"),
+                }
+            }
+        }
+        let _fetch_env = FetchEnv(prior_fetch);
+
+        let options = BootOptions {
+            serve: ServeOptions { hostname: IpAddr::from([127, 0, 0, 1]), port: Some(0) },
+            password: None,
+            cors_origins: Vec::new(),
+            version: "test".to_owned(),
+            data_root: root.path().join("data"),
+            home,
+            config_location: Some(project.clone()),
+        };
+        let handle = boot_and_serve(&options).await.expect("boot and serve");
+        assert!(handle.state.watched_config.is_some(), "the boot started the watcher");
+
+        // Subscribe to the bus BEFORE the edit, and force a location
+        // assembly so the invalidation below is observable.
+        let mut subscription = handle
+            .state
+            .engine
+            .bus
+            .subscribe_types(&[oc_core::bus::registry::CONFIG_UPDATED]);
+        let location = LocationRef::new(project.clone(), None);
+        let _ = handle.state.engine.location(location.clone()).await.expect("assemble");
+        assert!(handle.state.engine.locations.get(&location).is_some());
+
+        // SSE feed: subscribe before the edit.
+        let mut sse = tokio::net::TcpStream::connect(handle.addr).await.expect("sse connect");
+        use tokio::io::AsyncWriteExt as _;
+        sse.write_all(
+            format!(
+                "GET /api/event HTTP/1.1\r\nHost: {}\r\nAccept: text/event-stream\r\n\r\n",
+                handle.addr
+            )
+            .as_bytes(),
+        )
+        .await
+        .expect("sse request");
+
+        // The edit: content change under the watched project root.
+        std::fs::write(project.join("opencode.json"), r#"{"shell": "two"}"#).expect("edit");
+
+        // The bus event arrives (ephemeral, empty payload).
+        use futures::StreamExt as _;
+        let event = tokio::time::timeout(std::time::Duration::from_secs(10), subscription.next())
+            .await
+            .expect("config.updated within deadline")
+            .expect("subscription alive");
+        assert_eq!(event.type_, "config.updated");
+        assert_eq!(event.data, serde_json::json!({}), "empty payload");
+        assert!(event.durable.is_none(), "ephemeral");
+
+        // The live location graph was invalidated (same spawned task,
+        // after the publish — poll for the teardown).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while handle.state.engine.locations.get(&location).is_some() {
+            assert!(std::time::Instant::now() < deadline, "location never invalidated");
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        // The SSE feed received the same frame.
+        use tokio::io::AsyncReadExt as _;
+        let mut buffer = Vec::new();
+        let mut chunk = [0u8; 4096];
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            assert!(std::time::Instant::now() < deadline, "no SSE config.updated frame");
+            let found = String::from_utf8_lossy(&buffer).contains("config.updated");
+            if found {
+                break;
+            }
+            let read = tokio::time::timeout(std::time::Duration::from_secs(5), sse.read(&mut chunk))
+                .await
+                .expect("sse read deadline")
+                .expect("sse alive");
+            buffer.extend_from_slice(&chunk[..read]);
         }
 
         handle.shutdown_and_join().await.expect("shutdown");
