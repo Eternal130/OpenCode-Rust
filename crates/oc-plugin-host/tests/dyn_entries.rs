@@ -3,7 +3,7 @@
 //! (commands/routes/slot claims appear), removal tears it down
 //! (registrations disappear), and a BROKEN add is contained (existing
 //! generations unaffected). Bun-gated, sandboxed, never touches repo
-//! fixtures (the hot_reload convention).
+//! fixtures (the `hot_reload` convention).
 
 mod common;
 
@@ -16,16 +16,14 @@ fn dynamic_add_boots_generation_and_remove_tears_it_down() {
     let sandbox = common::sandbox("dyn");
     let hello = common::copy_fixture(&sandbox, "helloworld.ts");
     let claims = common::copy_fixture(&sandbox, "slotclaims.ts");
-    let host = common::host_with(&[hello.clone()], &sandbox);
+    let host = common::host_with(std::slice::from_ref(&hello), &sandbox);
     if !host.enabled() {
         eprintln!("bun unavailable; skipping");
         return;
     }
     assert!(host.wait_ready(Duration::from_secs(15)));
 
-    let has = |name: &str| {
-        host.registrations().commands.iter().any(|command| command.name == name)
-    };
+    let has = |name: &str| host.registrations().commands.iter().any(|command| command.name == name);
     let claims_live = || {
         let snapshot = host.registrations();
         snapshot.slot_claims.iter().any(|claim| claim.plugin_id == "slotclaims")
@@ -47,14 +45,13 @@ fn dynamic_add_boots_generation_and_remove_tears_it_down() {
     host.add_entry(&bad).expect("add call itself degrades to Ok (contained)");
     assert!(common::wait_for(Duration::from_secs(10), claims_live), "claims survive the bad add");
     assert!(has("hw.hello"), "the boot generation survives the bad add");
-    let statuses = host.registrations().plugins;
-    assert!(
-        statuses.iter().any(|status| status.entry == bad && matches!(
-            status.state,
-            oc_plugin_host::registrations::PluginState::Failed(_)
-        )),
-        "the broken entry is marked failed, not silently dropped"
-    );
+    let state_failed = |path: &std::path::Path| {
+        host.registrations().plugins.iter().any(|status| {
+            status.entry == path
+                && matches!(status.state, oc_plugin_host::registrations::PluginState::Failed(_))
+        })
+    };
+    assert!(state_failed(&bad), "the broken entry is marked failed, not silently dropped");
 
     // REMOVE: the slotclaims generation tears down and its claims
     // disappear; the boot generation is untouched.

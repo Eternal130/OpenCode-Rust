@@ -465,8 +465,8 @@ pub fn refresh_after_config_change(boot: &PluginBoot, loaded: &Loaded) {
         eprintln!("opencode plugin: {target} failed to resolve: {error}");
     }
     for target in &added {
-        match resolved.plugins.iter().find(|plugin| &plugin.target == target) {
-            Some(plugin) => match boot.host.add_entry(&plugin.entry) {
+        if let Some(plugin) = resolved.plugins.iter().find(|plugin| &plugin.target == target) {
+            match boot.host.add_entry(&plugin.entry) {
                 Ok(()) => {
                     eprintln!("opencode plugin: source change loaded {target} generation");
                 }
@@ -476,11 +476,10 @@ pub fn refresh_after_config_change(boot: &PluginBoot, loaded: &Loaded) {
                         "opencode plugin: load {target} failed ({error}); previous generations kept"
                     );
                 }
-            },
-            None => {
-                clean = false;
-                eprintln!("opencode plugin: added target {target} did not resolve; skipping");
             }
+        } else {
+            clean = false;
+            eprintln!("opencode plugin: added target {target} did not resolve; skipping");
         }
     }
 
