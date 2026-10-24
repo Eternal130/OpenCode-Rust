@@ -127,3 +127,34 @@ async fn prompt_delivery_rejects_unknown_and_non_string_values() {
         assert_eq!(body["message"], "Expected \"steer\" or \"queue\" for delivery");
     }
 }
+
+/// Oracle gate-1: the synthetic endpoint shares the prompt delivery
+/// schema (`parse_delivery`), so a bogus value must 400 the same way —
+/// `InvalidRequestError` with kind `ParseError`.
+#[tokio::test]
+async fn synthetic_delivery_rejects_unknown_and_non_string_values() {
+    let server = boot().await;
+    let client = &server.client;
+    let session_id = create_session(client).await;
+
+    for delivery in [serde_json::json!("bogus"), serde_json::json!(7)] {
+        let response = support::request(
+            server.addr,
+            "POST",
+            &format!("/api/session/{session_id}/synthetic"),
+            &[("content-type", "application/json")],
+            serde_json::to_string(&serde_json::json!({
+                "text": "synthetic", "resume": false, "delivery": delivery
+            }))
+            .expect("serialize")
+            .as_bytes(),
+        )
+        .await
+        .expect("raw synthetic");
+        assert_eq!(response.status, 400, "delivery {delivery} must 400");
+        let body = response.json();
+        assert_eq!(body["_tag"], "InvalidRequestError", "body: {body}");
+        assert_eq!(body["kind"], "ParseError", "body: {body}");
+        assert_eq!(body["message"], "Expected \"steer\" or \"queue\" for delivery");
+    }
+}

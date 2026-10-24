@@ -31,13 +31,15 @@ use rusqlite::OptionalExtension;
 
 use crate::bus::{Bus, BusOptions, PublishOptions, ReplayOptions, SerializedEvent};
 use crate::database::schema::{
-    InstructionStateRow, ProjectRow, SessionInboxRow, SessionMessageRow, SessionRow,
+    InstructionEntryRow, InstructionStateRow, ProjectRow, SessionInboxRow, SessionMessageRow,
+    SessionRow,
 };
 use crate::database::Database;
 use crate::session::execution::{
     CancelJobs, CoordinatorOptions, DrainFn, DrainOutcome, InterruptOptions, RunError,
     SessionExecution, SessionRunCoordinator, Terminal,
 };
+use crate::session::fork::{fork as fork_command, ForkError};
 use crate::session::inbox::{InboxError, Promotable, Scope, SessionInbox};
 use crate::session::projector::{fork_title, install_projectors};
 use crate::session::store::{
@@ -1528,6 +1530,146 @@ async fn session_projector_fork_copies_settled_history() {
     assert!(copied[0].id.starts_with(&prefix), "{}", copied[0].id);
     let latest = stack.bus.latest_sequence("ses_fork_child").await.unwrap();
     assert_eq!(latest, 2, "reserveSequence covered the copied prefix");
+}
+
+/// G-10: `session::fork` boundary resolution (ref session.ts:321-339) —
+/// named `before` ⇒ that message; absent ⇒ newest; named-but-missing ⇒
+/// `MessageNotFound`; no messages at all ⇒ `EmptySession`.
+#[tokio::test]
+async fn session_fork_boundary_resolution() {
+    let stack = stack().await;
+    let parent = "ses_fork_cmd_parent";
+    seed_session_with(&stack.db, parent, &[]).await;
+    stack
+        .db
+        .transaction(|tx| {
+            SessionMessageRow::insert(
+                tx,
+                &SessionMessageRow {
+                    id: "msg_u".to_string(),
+                    session_id: parent.to_string(),
+                    type_: "user".to_string(),
+                    seq: 0,
+                    time_created: 0,
+                    time_updated: 0,
+                    data: r#"{"text":"hi"}"#.to_string(),
+                },
+            )?;
+            SessionMessageRow::insert(
+                tx,
+                &SessionMessageRow {
+                    id: "msg_a".to_string(),
+                    session_id: parent.to_string(),
+                    type_: "assistant".to_string(),
+                    seq: 1,
+                    time_created: 0,
+                    time_updated: 0,
+                    data: r#"{"content":[]}"#.to_string(),
+                },
+            )
+        })
+        .await
+        .unwrap();
+
+    // Absent `before` ⇒ newest message, `through`.
+    let outcome = fork_command(&stack.db, "ses_fork_child", parent, None).await.unwrap();
+    assert_eq!(outcome.boundary_id, "msg_a");
+    assert_eq!(outcome.boundary_type, "through");
+    assert_eq!(outcome.parent_id, parent);
+    assert_eq!(outcome.fork_id, "ses_fork_child");
+
+    // Named `before` ⇒ that message, `before`.
+    let outcome = fork_command(&stack.db, "ses_fork_child2", parent, Some("msg_u")).await.unwrap();
+    assert_eq!(outcome.boundary_id, "msg_u");
+    assert_eq!(outcome.boundary_type, "before");
+    assert_eq!(outcome.before.as_deref(), Some("msg_u"));
+
+    // Named-but-missing ⇒ MessageNotFound.
+    match fork_command(&stack.db, "ses_fork_child3", parent, Some("msg_missing")).await {
+        Err(ForkError::MessageNotFound { session_id, before }) => {
+            assert_eq!(session_id, parent);
+            assert_eq!(before, "msg_missing");
+        }
+        other => panic!("expected MessageNotFound, got {other:?}"),
+    }
+
+    // Empty session (no messages, no `before`) ⇒ EmptySession.
+    seed_session_with(&stack.db, "ses_fork_empty", &[]).await;
+    assert!(matches!(
+        fork_command(&stack.db, "ses_fork_child4", "ses_fork_empty", None).await,
+        Err(ForkError::EmptySession)
+    ));
+}
+
+/// G-10: `session::fork` inherits the parent's *newest* instruction state
+/// (ref session.ts:341-349) and the entry snapshot ascends by key
+/// (instruction-entry.ts:36).
+#[tokio::test]
+async fn session_fork_snapshot_reads_newest_instructions_ascending() {
+    let stack = stack().await;
+    let parent = "ses_fork_snap_parent";
+    seed_session_with(&stack.db, parent, &[]).await;
+    stack
+        .db
+        .transaction(|tx| {
+            SessionMessageRow::insert(
+                tx,
+                &SessionMessageRow {
+                    id: "msg_only".to_string(),
+                    session_id: parent.to_string(),
+                    type_: "user".to_string(),
+                    seq: 0,
+                    time_created: 0,
+                    time_updated: 0,
+                    data: r#"{"text":"hi"}"#.to_string(),
+                },
+            )?;
+            InstructionStateRow::insert(
+                tx,
+                &InstructionStateRow {
+                    session_id: parent.to_string(),
+                    epoch_start: 0,
+                    through_seq: 0,
+                    initial_values: r#"{"z":"initial"}"#.to_string(),
+                    current_values: r#"{"z":"current"}"#.to_string(),
+                },
+            )?;
+            // Inserted out of key order: the read must still ascend.
+            InstructionEntryRow::insert(
+                tx,
+                &InstructionEntryRow {
+                    session_id: parent.to_string(),
+                    key: "z.key".to_string(),
+                    value: Some(r#""current""#.to_string()),
+                    removed: false,
+                    time_created: 0,
+                    time_updated: 0,
+                },
+            )?;
+            InstructionEntryRow::insert(
+                tx,
+                &InstructionEntryRow {
+                    session_id: parent.to_string(),
+                    key: "a.key".to_string(),
+                    value: None,
+                    removed: true,
+                    time_created: 0,
+                    time_updated: 0,
+                },
+            )
+        })
+        .await
+        .unwrap();
+
+    let outcome = fork_command(&stack.db, "ses_fork_snap_child", parent, None).await.unwrap();
+    assert_eq!(outcome.instructions.as_deref(), Some(r#"{"z":"current"}"#));
+    assert_eq!(outcome.instruction_entries.len(), 2);
+    assert_eq!(outcome.instruction_entries[0]["key"], "a.key");
+    assert_eq!(outcome.instruction_entries[0]["value"], serde_json::Value::Null);
+    assert_eq!(outcome.instruction_entries[0]["removed"], true);
+    assert_eq!(outcome.instruction_entries[1]["key"], "z.key");
+    assert_eq!(outcome.instruction_entries[1]["value"], serde_json::json!("current"));
+    assert_eq!(outcome.instruction_entries[1]["removed"], false);
 }
 
 /// G-16: an instruction-entry insert failure (duplicate key in the

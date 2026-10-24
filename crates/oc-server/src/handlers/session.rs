@@ -820,25 +820,21 @@ async fn fork(
     // errors, publishes the event and reads the projected row back.
     let before = body["before"].as_str().map(String::from);
     let fork_id = state.ids.new_id("ses");
-    let outcome = oc_core::session::fork::fork(
-        &state.engine.db,
-        &fork_id,
-        &session_id,
-        before.as_deref(),
-    )
-    .await
-    .map_err(|error| match error {
-        oc_core::session::fork::ForkError::MessageNotFound { session_id, before } => {
-            ApiError::message_not_found(session_id, before)
-        }
-        oc_core::session::fork::ForkError::EmptySession => {
-            ApiError::invalid_request_kind("Session is empty", "empty_session")
-        }
-        oc_core::session::fork::ForkError::Db(error) => {
-            crate::errors::debug_cause("session:unknown_ref", &error);
-            ApiError::unknown_ref()
-        }
-    })?;
+    let outcome =
+        oc_core::session::fork::fork(&state.engine.db, &fork_id, &session_id, before.as_deref())
+            .await
+            .map_err(|error| match error {
+                oc_core::session::fork::ForkError::MessageNotFound { session_id, before } => {
+                    ApiError::message_not_found(&session_id, &before)
+                }
+                oc_core::session::fork::ForkError::EmptySession => {
+                    ApiError::invalid_request_kind("Session is empty", "empty_session")
+                }
+                oc_core::session::fork::ForkError::Db(error) => {
+                    crate::errors::debug_cause("session:unknown_ref", &error);
+                    ApiError::unknown_ref()
+                }
+            })?;
     let mut data = json!({
         "sessionID": outcome.fork_id,
         "parentID": session_id,
