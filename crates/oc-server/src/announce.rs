@@ -197,8 +197,10 @@ fn envelope(location: &LocationRef) -> location::Ref {
     }
 }
 
-/// Publishes one empty-payload ephemeral frame.
-async fn publish_empty(engine: &Engine, type_: &str, location: &LocationRef) {
+/// Publishes one empty-payload ephemeral frame. `pub(crate)`: the G-05
+/// config hot-reload bridge publishes `config.updated` through the same
+/// shape (ephemeral, empty payload, location envelope).
+pub(crate) async fn publish_empty(engine: &Engine, type_: &str, location: &LocationRef) {
     let definition = oc_core::bus::registry::EventDefinition::ephemeral(type_);
     let _ = engine
         .bus

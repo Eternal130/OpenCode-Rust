@@ -397,6 +397,71 @@ pub fn boot(
     Arc::new(PluginBoot { host, resolution, ready, router, session_slot, permission_slot })
 }
 
+/// G-05 hot reload — the conservative post-`config.updated` refresh for
+/// the plugin subsystem:
+///
+/// * EXISTING sources: `PluginHost::reload_now` digest-scans every
+///   loadable entry and reloads the changed ones (a failed reload keeps
+///   the previous generation — crash isolation precedent; errors are
+///   logged, never propagated).
+/// * ADDED/REMOVED targets (a new drop-in under `.opencode/plugin`, a
+///   removed source, an edited `plugins[]`): the resolve-diff is LOGGED
+///   only — `oc_plugin_host` boots with a fixed entry set and exposes no
+///   dynamic load/unload seam yet, so mirroring the ref supervisor's
+///   add/remove of plugin GENERATIONS (supervisor.ts:23-94) needs that
+///   host API first. FOLLOWUP(plugin-generation-lifecycle).
+pub fn refresh_after_config_change(boot: &PluginBoot, loaded: &Loaded) {
+    if !boot.ready {
+        return;
+    }
+    let current = config_plugin_ops(loaded);
+    let previous: Vec<String> =
+        boot.resolution.plugins.iter().map(|plugin| plugin.target.clone()).collect();
+    let mut added: Vec<&str> = Vec::new();
+    let mut removed: Vec<&str> = Vec::new();
+    for op in &current {
+        let target = match op {
+            oc_plugin_host::PluginOp::Add { target, .. } => target,
+            oc_plugin_host::PluginOp::Remove { target } => target,
+        };
+        let known = previous.iter().any(|seen| seen == target);
+        match op {
+            oc_plugin_host::PluginOp::Add { target, .. } if !known => added.push(target),
+            _ => {}
+        }
+    }
+    for seen in &previous {
+        let still_active = current.iter().any(|op| match op {
+            oc_plugin_host::PluginOp::Add { target, .. } => target == seen,
+            oc_plugin_host::PluginOp::Remove { .. } => false,
+        });
+        if !still_active {
+            removed.push(seen);
+        }
+    }
+    if !added.is_empty() {
+        eprintln!(
+            "opencode plugin: source change added {:?}; dynamic load is a followup (no host seam yet) — restart to activate",
+            added
+        );
+    }
+    if !removed.is_empty() {
+        eprintln!(
+            "opencode plugin: source change removed {:?}; dynamic unload is a followup (no host seam yet) — restart to deactivate",
+            removed
+        );
+    }
+    match boot.host.reload_now() {
+        Ok(count) if count > 0 => {
+            eprintln!("opencode plugin: hot-reloaded {count} changed plugin source(s)");
+        }
+        Ok(_) => {}
+        Err(error) => {
+            eprintln!("opencode plugin: source reload failed ({error}); previous generations kept");
+        }
+    }
+}
+
 /// Extract the merged `plugins[]` ops from a loaded config (every
 /// document's array, priority order — later documents' entries land
 /// later so their removes override earlier adds; a rejected list is
