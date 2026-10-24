@@ -40,6 +40,7 @@ pub mod home_solid;
 pub mod location_missing;
 pub mod marquee;
 pub mod message;
+pub mod migration_overlay;
 pub mod overlays;
 /// Lane M6 (retired): the composer's subagent picker panel on
 /// opentui-solid — the ONLY renderer since the retirement lane

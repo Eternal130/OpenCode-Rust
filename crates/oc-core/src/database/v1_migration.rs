@@ -181,6 +181,14 @@ enum RuntimeState {
 static RUNTIME: std::sync::Mutex<RuntimeState> = std::sync::Mutex::new(RuntimeState::Idle);
 static RUN_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+/// Tests share one process (and therefore one [`RUNTIME`]); each test
+/// resets the module-level runtime state so a prior test's error does
+/// not leak into `status()` for an unrelated database.
+#[cfg(test)]
+pub(crate) fn reset_runtime_for_test() {
+    *RUNTIME.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = RuntimeState::Idle;
+}
+
 const MIGRATION_STATE_KEY: &str = "migration.v1-v2";
 const EVENT_DELETE_BATCH_SIZE: i64 = 1_000;
 
