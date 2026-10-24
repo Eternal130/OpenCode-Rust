@@ -146,15 +146,13 @@ fn build(
         cancelled = std::time::Instant::now() > deadline;
         cancelled
     };
-    // Chunked-input parse: hand tree-sitter the whole block up front, and
-    // an empty slice once it asks past the end.
-    let mut chunks = |offset: usize, _: tree_sitter::Point| -> &str {
-        if offset == 0 {
-            source
-        } else {
-            ""
-        }
-    };
+    // Chunked-input parse: hand tree-sitter the block from whatever
+    // offset it asks (a mid-parse re-request past an external scanner
+    // or recovery point is `source[offset..]`, NOT a hard EOF — scala
+    // re-requests mid-source and an `""` there silently truncates the
+    // parse); past the end it gets an empty slice.
+    let mut chunks =
+        |offset: usize, _: tree_sitter::Point| -> &str { source.get(offset..).unwrap_or_default() };
     let tree = parser.parse_with_options(
         &mut chunks,
         None,

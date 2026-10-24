@@ -30,6 +30,14 @@ tree-sitter-css = "0.25.0"
 tree-sitter-diff = "0.1.0"
 tree-sitter-ruby = "0.23.1"
 tree-sitter-php = "0.25.1"
+# G-08 tail languages (ref pins: lua v0.5.0, scala v0.24.0, make
+# v1.1.1, vim v0.8.1). lua/scala/make crates.io releases sit exactly at
+# the ref tags with tree-sitter-language 0.1 bindings; vim's crates.io
+# release is stale, so the pin is vendored under third_party/.
+tree-sitter-lua = "=0.5.0"
+tree-sitter-scala = "=0.24.0"
+tree-sitter-make = "=1.1.1"
+tree-sitter-vim = { path = "../../third_party/tree-sitter-vim" }
 
 [dev-dependencies]
 serde_json = { workspace = true }

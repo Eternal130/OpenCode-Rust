@@ -15,17 +15,20 @@
 //! * tree-sitter types never leak: the public surface is spans, styles
 //!   and one opaque block handle.
 //!
-//! ## Catalog status (R-01b)
+//! ## Catalog status (R-01b + G-08)
 //!
 //! The full catalog: the spike's 3 languages (rust, python, typescript)
-//! plus 16 more filetypes (go, c, cpp, csharp, java, json, yaml, toml,
-//! html, css, diff, javascript, kotlin, ruby, php, swift — 19 registry
-//! entries, queries vendored at the exact crate-version tags, see
-//! `queries/*.scm` headers and [`queries`] for the v2 routing notes).
-//! kotlin and toml grammars ship as vendored path crates under
-//! `third_party/`. v2's tail languages (lua, vim, scala, …) stay
-//! unregistered, as does `make` (not in the oracle list); the registry
-//! design carries the alias convention (`udiff`/`patch` for diff).
+//! plus 17 more filetypes (go, c, cpp, java, json, yaml, toml, html,
+//! css, diff, javascript, ruby, php — R-01b — and lua, vim, scala,
+//! make — G-08, v2's tail languages now registered at their exact ref
+//! pins: lua v0.5.0, vim v0.8.1, scala v0.24.0, make v1.1.1; 20
+//! registry entries, queries vendored at the exact crate-version tags,
+//! see `queries/*.scm` headers and [`queries`] for the v2 routing
+//! notes). toml and vim grammars ship as vendored path crates under
+//! `third_party/`. csharp/kotlin/swift were dropped for release-binary
+//! size (ROADMAP R-01b); the registry design carries the alias
+//! convention (`udiff`/`patch` for diff, `makefile`/`gnumake` for
+//! make, `vi` for vim).
 //! Binary-size and perf measurements accompany the R-01b report.
 
 mod engine;
@@ -271,6 +274,52 @@ mod tests {
             highlight("<?php\n// note\nfunction greet($name) {\n  return \"hi\";\n}\n", "php")
                 .expect("php parses");
         assert_captures(&block, &["comment", "keyword", "function", "string"]);
+    }
+
+    // -- G-08 tail languages: per-language capture coverage -------------
+
+    #[test]
+    fn lua_snippet_captures_the_core_scopes() {
+        // The pinned tag's query types parameters as @parameter (the
+        // port's raw capture names surface 1:1).
+        let block = highlight(
+            "-- note\nlocal function greet(name)\n  local msg = \"hi\"\n  return msg\nend\n",
+            "lua",
+        )
+        .expect("lua parses");
+        assert_captures(&block, &["comment", "keyword", "function", "string", "parameter"]);
+    }
+
+    #[test]
+    fn vim_snippet_captures_the_core_scopes() {
+        let block =
+            highlight("\" note\nfunction! s:Greet(name)\n  echo \"hi\"\nendfunction\n", "vim")
+                .expect("vim parses");
+        assert_captures(&block, &["comment", "function", "string"]);
+        // The `vi` alias routes to the same grammar.
+        let alias = highlight("let x = 1\n", "vi").expect("vi alias");
+        assert_captures(&alias, &["keyword"]);
+    }
+
+    #[test]
+    fn scala_snippet_captures_the_core_scopes() {
+        let block = highlight(
+            "// note\nobject Greeter {\n  def greet(name: String): String = {\n    val msg = \"hi\"\n    msg\n  }\n}\n",
+            "scala",
+        )
+        .expect("scala parses");
+        assert_captures(&block, &["comment", "keyword", "type", "string", "function"]);
+    }
+
+    #[test]
+    fn make_snippet_captures_the_core_scopes() {
+        // The pinned query types automatic variables ($@/$^…) as
+        // @constant.builtin and the include directive as @include.
+        let source = "# note\ninclude config.mk\napp: main.c\n\t$(CC) -o $@ main.c\n";
+        let block = highlight(source, "make").expect("make parses");
+        assert_captures(&block, &["comment", "include", "constant.builtin"]);
+        let alias = highlight(source, "makefile").expect("makefile alias");
+        assert_captures(&alias, &["comment", "include", "constant.builtin"]);
     }
 
     // -- measurement (spike report: parse-once + span materialization) --

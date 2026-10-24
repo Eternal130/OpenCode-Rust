@@ -12,7 +12,7 @@ mod ssh_askpass;
 mod util;
 
 use clap::Parser;
-use cli::{Cli, Commands, ServerParams};
+use cli::{Cli, Commands, OutputFormat, ServerParams, UpgradeMethod};
 
 /// The `mini` section of `cli.json` (`resolved.mini` in v2's
 /// `handlers/mini.ts:37-38`) — the `--replay`/`--replay-limit` flag
@@ -88,7 +88,7 @@ async fn dispatch(cli: Cli) -> i32 {
             .await
         }
         Some(Commands::Upgrade { target, method }) => {
-            handlers::misc::upgrade(target.as_deref(), method.as_deref()).await
+            handlers::misc::upgrade(target.as_deref(), method.map(UpgradeMethod::as_str)).await
         }
         Some(Commands::Uninstall { keep_config, keep_data, dry_run, force }) => {
             handlers::misc::uninstall(dry_run, keep_config, keep_data, force).await
@@ -184,7 +184,7 @@ async fn dispatch(cli: Cli) -> i32 {
             title,
             thinking,
         }) => {
-            let format = if format == "json" {
+            let format = if format == OutputFormat::Json {
                 run::noninteractive::Format::Json
             } else {
                 run::noninteractive::Format::Default
