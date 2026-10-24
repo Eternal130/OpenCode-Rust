@@ -34,10 +34,21 @@
 //! * Nested results pass the joined text of the tool's content parts
 //!   (v2 prefers the declared output schema value; our registrations
 //!   carry none — the common single-text-part result is identical).
-//! * The confined-interpreter guarantees (no imports/timers, loop
-//!   budgets, last-expression completion values) are the guest
-//!   sandbox's hard timeout + the catalog allowlist instead; see the
-//!   oc-plugin-host `codemode.evaluate` handler notes.
+//! * Confined-interpreter guarantees map onto the guest sandbox: the
+//!   catalog allowlist stands in for the interpreter's globals, and
+//!   the v2 `ExecutionLimits` (codemode.ts:22-41) are at parity as an
+//!   OPT-IN at this seam — [`register_code_mode_with_limits`] /
+//!   [`ExecutionLimits`] (absent = unlimited, exactly v2's core
+//!   callsites, which pass no limits). `timeoutMs` is layered: the
+//!   guest enforces it between event-loop turns (async hangs), the
+//!   supervisor kills a wedged (sync-loop) guest at the transport
+//!   deadline; `maxToolCalls` is the admission counter on both sides;
+//!   `maxOutputBytes` bounds the value at the guest boundary and
+//!   warnings/logs at the leaf ([`bound_output`]); `MAX_VALUE_DEPTH`
+//!   guards every value crossing guest↔host. The ref's other
+//!   structural caps (MAX_STRING_LENGTH/MAX_ARRAY_LENGTH/
+//!   MAX_PENDING_PROMISES, interpreter/limits.ts) are engine-inherent
+//!   inside a real JS engine and are not re-implemented.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -814,8 +825,214 @@ pub fn instructions_from_value(value: &Value) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// The runtime seam + the executor leaf
+// Execution limits (codemode.ts:22-41 + interpreter/execute.ts:119-193)
 // ---------------------------------------------------------------------------
+
+/// Resource budgets enforced independently during each Code Mode
+/// program execution (`ExecutionLimits`, codemode.ts:22-41) — ALL
+/// optional, **no defaults: absent = unlimited** (v2's core callsites
+/// pass no limits; the mechanism is opt-in at the runtime seam).
+///
+/// The wire form is camelCase with absent fields omitted, so the
+/// unlimited default serializes to `{}`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecutionLimits {
+    /// Wall-clock milliseconds before interruption. Result delivery
+    /// waits for tool cleanup. No default: absent means no timeout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+    /// Maximum number of tool calls admitted by the runtime. No
+    /// default: absent means unlimited.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tool_calls: Option<u64>,
+    /// Maximum UTF-8 bytes retained from the result and logs. Warnings
+    /// have a separate equal budget; truncation notices and host
+    /// formatting are additional.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_bytes: Option<u64>,
+}
+
+/// `Number.isSafeInteger`'s bound — the ref rejects anything past it.
+const MAX_SAFE_INTEGER: u64 = (1u64 << 53) - 1;
+
+/// `validateLimit` (codemode.ts:126-131): a present limit must be a
+/// safe integer ≥ `minimum`, else the ref-identical `RangeError` text.
+fn validate_limit(name: &str, value: Option<u64>, minimum: u64) -> Result<Option<u64>, String> {
+    if let Some(value) = value {
+        if value > MAX_SAFE_INTEGER || value < minimum {
+            return Err(format!(
+                "{name} must be a safe integer greater than or equal to {minimum}."
+            ));
+        }
+    }
+    Ok(value)
+}
+
+impl ExecutionLimits {
+    /// `resolveExecutionLimits` (codemode.ts:133-137) with the ref's
+    /// minimums: `timeoutMs ≥ 1`, `maxToolCalls ≥ 0`,
+    /// `maxOutputBytes ≥ 0`.
+    pub fn resolve(&self) -> Result<Self, String> {
+        Ok(Self {
+            timeout_ms: validate_limit("timeoutMs", self.timeout_ms, 1)?,
+            max_tool_calls: validate_limit("maxToolCalls", self.max_tool_calls, 0)?,
+            max_output_bytes: validate_limit("maxOutputBytes", self.max_output_bytes, 0)?,
+        })
+    }
+}
+
+/// Deepest nesting a value may have when it crosses to or from the
+/// host (`MAX_VALUE_DEPTH`, interpreter/limits.ts:13; the boundary
+/// walk in data.ts:53 counts the root at depth 0 and throws entering
+/// depth 33 — i.e. 32 container levels are legal, the 33rd is not).
+///
+/// The ref's other always-on structural caps are NOT ported: in a
+/// real JS engine `MAX_STRING_LENGTH` (1 << 24), `MAX_ARRAY_LENGTH`
+/// (10_000_000) and `MAX_PENDING_PROMISES` (10_000) are inherent —
+/// they bound what one builtin call can build inside the v2
+/// interpreter's own allocator, a machine the bun guest does not have
+/// (and does not need: strings/arrays/promise counts are bounded by
+/// the engine + memory, not by interpreter bookkeeping).
+pub const MAX_VALUE_DEPTH: usize = 32;
+
+/// The boundary walk's throw (data.ts:53): `rangeError("Value exceeds
+/// the maximum depth of 32.")`.
+fn depth_exceeded(value: &Value, depth: usize) -> bool {
+    if depth > MAX_VALUE_DEPTH {
+        return true;
+    }
+    match value {
+        Value::Object(map) => map.values().any(|item| depth_exceeded(item, depth + 1)),
+        Value::Array(items) => items.iter().any(|item| depth_exceeded(item, depth + 1)),
+        _ => false,
+    }
+}
+
+/// Whether `value` nests deeper than [`MAX_VALUE_DEPTH`] — the guard
+/// for every value crossing guest↔host (tool inputs, the result).
+#[must_use]
+pub fn value_depth_exceeded(value: &Value) -> bool {
+    depth_exceeded(value, 0)
+}
+
+/// The depth guard as a `Result` with the ref's exact message.
+#[must_use]
+pub fn check_value_depth(value: &Value) -> Result<(), String> {
+    if value_depth_exceeded(value) {
+        Err(format!("Value exceeds the maximum depth of {MAX_VALUE_DEPTH}."))
+    } else {
+        Ok(())
+    }
+}
+
+fn utf8_byte_length(value: &str) -> usize {
+    value.len()
+}
+
+/// `utf8Truncate` (interpreter/execute.ts:122-127): cut at a byte
+/// bound and drop a partial UTF-8 sequence (the ref decodes the prefix
+/// and strips a trailing replacement character).
+fn utf8_truncate(value: &str, max_bytes: usize) -> String {
+    if value.len() <= max_bytes {
+        return value.to_string();
+    }
+    let mut end = max_bytes.min(value.len());
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value[..end].to_string()
+}
+
+/// `boundOutput` (interpreter/execute.ts:129-193): bound the result
+/// value, warnings, and logs to `max_output_bytes` UTF-8 bytes.
+/// Warnings have a separate equal budget so result data cannot starve
+/// diagnostics; logs share what the value left (`max - valueBytes`).
+/// Truncation notices (` [result truncated: …]`, `… additional
+/// warnings omitted by the output limit.`, `[logs truncated: …]`) are
+/// additional, byte-exact against v2. The value arm is skipped when
+/// the runtime already reported truncation (the guest pre-bounds its
+/// wire value) — the full budget is then spent, as in the ref.
+pub fn bound_output(outcome: &mut RunOutcome, max_output_bytes: u64) {
+    let max_output_bytes = usize::try_from(max_output_bytes).unwrap_or(usize::MAX);
+    let mut truncated = false;
+
+    let mut value_bytes = 0usize;
+    if outcome.truncated {
+        // The runtime already bounded the value: it consumed the full
+        // value budget (the ref sets valueBytes = maxOutputBytes).
+        if outcome.value.is_some() {
+            value_bytes = max_output_bytes;
+        }
+    } else if let Some(value) = outcome.value.take() {
+        let serialized = serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string());
+        let bytes = utf8_byte_length(&serialized);
+        if bytes > max_output_bytes {
+            truncated = true;
+            outcome.value = Some(Value::String(format!(
+                "{} [result truncated: {bytes} bytes exceeds the {max_output_bytes}-byte output limit; return a smaller value]",
+                utf8_truncate(&serialized, max_output_bytes)
+            )));
+            value_bytes = max_output_bytes;
+        } else {
+            outcome.value = Some(value);
+            value_bytes = bytes;
+        }
+    }
+
+    // Warnings: separate equal budget; stop at the first that does not
+    // fit (the ref breaks, so an over-budget warning ends the list).
+    let total_warnings = outcome.warnings.len();
+    let mut kept_warnings = Vec::new();
+    let mut warning_bytes = 0usize;
+    for warning in outcome.warnings.drain(..) {
+        let bytes = serde_json::to_string(&warning)
+            .map(|text| utf8_byte_length(&text) + 1)
+            .unwrap_or(usize::MAX);
+        if warning_bytes.saturating_add(bytes) > max_output_bytes {
+            break;
+        }
+        warning_bytes += bytes;
+        kept_warnings.push(warning);
+    }
+    if kept_warnings.len() < total_warnings {
+        truncated = true;
+        kept_warnings.push(json!({
+            "kind": "Truncated",
+            "message": format!(
+                "{} additional warnings omitted by the output limit.",
+                total_warnings - kept_warnings.len()
+            ),
+        }));
+    }
+    outcome.warnings = kept_warnings;
+
+    // Logs: the remaining budget, one byte for each separator.
+    let log_budget = max_output_bytes.saturating_sub(value_bytes);
+    let total_logs = outcome.logs.len();
+    let mut kept_logs = Vec::new();
+    let mut log_bytes = 0usize;
+    for line in outcome.logs.drain(..) {
+        let line_bytes = utf8_byte_length(&line) + 1;
+        if log_bytes.saturating_add(line_bytes) > log_budget {
+            break;
+        }
+        log_bytes += line_bytes;
+        kept_logs.push(line);
+    }
+    if kept_logs.len() < total_logs {
+        truncated = true;
+        kept_logs.push(format!(
+            "[logs truncated: showing {} of {total_logs} lines]",
+            kept_logs.len()
+        ));
+    }
+    outcome.logs = kept_logs;
+
+    if truncated {
+        outcome.truncated = true;
+    }
+}
 
 /// One tool call observed during an execution (`ExecuteCall`,
 /// codemode/tool.ts:24-30) — the progress rows and final metadata.
@@ -830,12 +1047,22 @@ pub struct CallRecord {
 }
 
 /// One finished program: the completion value (`None` = `undefined`),
-/// the error (a rejected execution), and the observed calls.
+/// the error (a rejected execution), and the observed calls. The
+/// `warnings`/`logs`/`truncated` fields mirror the v2 `Result` shape
+/// (codemode.ts:94-113) for [`bound_output`]; the guest runtime fills
+/// `truncated` when it pre-bounds its wire value.
 #[derive(Debug, Clone, Default)]
 pub struct RunOutcome {
     pub value: Option<Value>,
     pub error: Option<String>,
     pub tool_calls: Vec<CallRecord>,
+    /// Diagnostics that accompany a successful result (v2 `warnings`).
+    pub warnings: Vec<Value>,
+    /// Captured output lines (v2 `logs`; the guest has no console
+    /// capture, so native runtimes are the producers).
+    pub logs: Vec<String>,
+    /// Set when any output budget truncated the result.
+    pub truncated: bool,
 }
 
 /// Resolves one nested `tools.<path>(input)` call to its JSON result
@@ -847,11 +1074,26 @@ pub type ToolCallFn = Arc<
 /// The Code Mode interpreter seam. v2: the in-process confined
 /// interpreter; the Rust port: the plugin host's guest runtime
 /// (`codemode.evaluate` over the NDJSON bridge). The implementation
-/// owns confinement as it can; [`register_code_mode`]'s timeout is the
-/// hard bound on the whole execution.
+/// owns confinement as it can; [`register_code_mode_with_limits`]'s
+/// timeout is the hard bound on the whole execution.
 #[async_trait]
 pub trait CodeModeRuntime: Send + Sync {
     async fn evaluate(&self, code: &str, catalog: &[CatalogEntry], call: ToolCallFn) -> RunOutcome;
+
+    /// [`Self::evaluate`] under resolved [`ExecutionLimits`] (v2's
+    /// opt-in budgets): runtimes that can enforce them (the guest
+    /// bridge) override; the default runs unlimited — exactly v2's
+    /// core callsites, which pass no limits.
+    async fn evaluate_with_limits(
+        &self,
+        code: &str,
+        catalog: &[CatalogEntry],
+        limits: &ExecutionLimits,
+        call: ToolCallFn,
+    ) -> RunOutcome {
+        let _ = limits;
+        self.evaluate(code, catalog, call).await
+    }
 }
 
 /// `formatResult` (codemode/tool.ts:310-322): strings verbatim, other
@@ -871,13 +1113,23 @@ pub fn format_result(outcome: &RunOutcome) -> String {
 }
 
 /// The `execute` leaf: builds the catalog from the registry at call
-/// time, runs the program through the runtime with a HARD timeout, and
-/// maps nested calls onto the registered pipeline executors (hooks fire
-/// per nested call, exactly v2's `executeTool` wrapping).
+/// time, runs the program through the runtime with a HARD timeout,
+/// and maps nested calls onto the registered pipeline executors (hooks
+/// fire per nested call, exactly v2's `executeTool` wrapping).
+///
+/// When `limits` are set ([`register_code_mode_with_limits`]) the leaf
+/// enforces what lives at the interpreter boundary in v2
+/// (interpreter/execute.ts): the `maxToolCalls` admission counter on
+/// every nested call, the [`MAX_VALUE_DEPTH`] guard on values crossing
+/// guest↔host, the `timeoutMs` program diagnostic, and
+/// [`bound_output`] over the finished result. The runtime (guest
+/// bridge) enforces the same budgets on its side of the wire.
 pub struct CodeModeLeaf {
     pub runtime: Arc<dyn CodeModeRuntime>,
     pub registry: Arc<ToolRegistryState>,
     pub timeout: std::time::Duration,
+    /// Opt-in execution budgets (default: unlimited — v2 parity).
+    pub limits: ExecutionLimits,
 }
 
 impl CodeModeLeaf {
@@ -925,13 +1177,38 @@ impl super::ToolExecuteWithContext for CodeModeLeaf {
                     "Code Mode execution requires a `code` string",
                 ));
             };
+            // resolveExecutionLimits: invalid budgets reject the call
+            // with the ref's RangeError text (v2 throws at make()).
+            let limits = match self.limits.resolve() {
+                Ok(limits) => limits,
+                Err(message) => return Err(super::ToolFailure::message(message)),
+            };
             let registry = Arc::clone(&self.registry);
             let call_context = context.clone();
+            // ToolRuntime.make's admission counter (tool-runtime.ts:
+            // 386-394): exactly `maxToolCalls` calls cross into the
+            // pipeline; the (n+1)-th rejects inside the program.
+            let admitted = Arc::new(std::sync::atomic::AtomicU64::new(0));
+            let max_tool_calls = limits.max_tool_calls;
             let call: ToolCallFn = Arc::new(move |name: &str, input: Value| {
                 let registry = Arc::clone(&registry);
                 let context = call_context.clone();
                 let name = name.to_string();
+                let admitted = Arc::clone(&admitted);
                 Box::pin(async move {
+                    if let Some(max) = max_tool_calls {
+                        let nth = admitted.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                        if nth > max {
+                            return Err(format!(
+                                "Execution exceeded its tool-call limit of {max}."
+                            ));
+                        }
+                    }
+                    // The boundary walk's depth guard (data.ts:53) on
+                    // tool inputs crossing guest→host.
+                    if let Err(message) = check_value_depth(&input) {
+                        return Err(message);
+                    }
                     // The guest calls by QUALIFIED path (`namespace.name` —
                     // buildToolsTree marks every callable with entry.path);
                     // executors register under the bare name. Direct hit
@@ -955,18 +1232,59 @@ impl super::ToolExecuteWithContext for CodeModeLeaf {
                 })
             });
             let entries = code_mode_entries(&self.registry);
-            let outcome =
-                tokio::time::timeout(self.timeout, self.runtime.evaluate(code, &entries, call))
-                    .await;
-            let outcome = match outcome {
-                Ok(outcome) => outcome,
-                Err(_elapsed) => {
-                    return Err(super::ToolFailure::message(format!(
-                        "Code Mode execution timed out after {} ms",
-                        self.timeout.as_millis()
-                    )));
+            // The limits' timeout wins when it is the tighter bound and
+            // produces the ref's program-level TimeoutExceeded
+            // diagnostic (interpreter/execute.ts:68); the hard timeout
+            // stays the outer belt with its transport-level failure.
+            let evaluate = self.runtime.evaluate_with_limits(code, &entries, &limits, call);
+            let (outcome, hard) = if let Some(timeout_ms) =
+                limits.timeout_ms.filter(|ms| std::time::Duration::from_millis(*ms) < self.timeout)
+            {
+                let outcome = tokio::time::timeout(
+                    std::time::Duration::from_millis(timeout_ms),
+                    evaluate,
+                )
+                .await;
+                match outcome {
+                    Ok(outcome) => (outcome, false),
+                    Err(_elapsed) => (
+                        RunOutcome {
+                            error: Some(format!("Execution timed out after {timeout_ms}ms.")),
+                            ..RunOutcome::default()
+                        },
+                        false,
+                    ),
+                }
+            } else {
+                let outcome = tokio::time::timeout(self.timeout, evaluate).await;
+                match outcome {
+                    Ok(outcome) => (outcome, false),
+                    Err(_elapsed) => (RunOutcome::default(), true),
                 }
             };
+            if hard {
+                return Err(super::ToolFailure::message(format!(
+                    "Code Mode execution timed out after {} ms",
+                    self.timeout.as_millis()
+                )));
+            }
+            let mut outcome = outcome;
+            // The depth guard on the result crossing guest→host
+            // (toBoundary, data.ts:53): a too-deep value is the
+            // program's failure, not a transport error.
+            if let Some(value) = &outcome.value {
+                if let Err(message) = check_value_depth(value) {
+                    outcome = RunOutcome {
+                        tool_calls: outcome.tool_calls,
+                        error: Some(message),
+                        ..RunOutcome::default()
+                    };
+                }
+            }
+            // boundOutput: budgets apply to the finished result.
+            if let Some(max_output_bytes) = limits.max_output_bytes {
+                bound_output(&mut outcome, max_output_bytes);
+            }
             let output = format_result(&outcome);
             let mut metadata = serde_json::Map::new();
             metadata.insert(
@@ -991,6 +1309,9 @@ impl super::ToolExecuteWithContext for CodeModeLeaf {
             if outcome.error.is_some() {
                 metadata.insert("error".to_string(), Value::Bool(true));
             }
+            if outcome.truncated {
+                metadata.insert("truncated".to_string(), Value::Bool(true));
+            }
             Ok(super::ToolOutcome {
                 content: vec![Content::Text { text: output }],
                 metadata: Some(metadata.into_iter().collect()),
@@ -1004,6 +1325,8 @@ impl super::ToolExecuteWithContext for CodeModeLeaf {
 /// it IS the CodeMode tool, so the reserved-name check for plugin tools
 /// does not apply) plus its pipeline executor (hooks + decode wrap the
 /// [`CodeModeLeaf`], tool.ts:237-240's `execute-tool wrapping`).
+/// Unlimited variant: v2 core parity (the reference's core callers
+/// pass no limits; absent means unlimited).
 pub fn register_code_mode(
     state: &Arc<ToolRegistryState>,
     hooks: &Arc<crate::hooks::HookRegistry>,
@@ -1011,11 +1334,27 @@ pub fn register_code_mode(
     runtime: Arc<dyn CodeModeRuntime>,
     timeout: std::time::Duration,
 ) {
+    register_code_mode_with_limits(state, hooks, services, runtime, timeout, ExecutionLimits::default())
+}
+
+/// [`register_code_mode`] with opt-in [`ExecutionLimits`] (v2
+/// `CodeMode.make({ limits })`, codemode.ts:44-53): the leaf enforces
+/// the admission counter, the depth guard, the timeout diagnostic, and
+/// the output budgets, and passes the limits to the runtime (the guest
+/// bridge enforces the same budgets across the wire).
+pub fn register_code_mode_with_limits(
+    state: &Arc<ToolRegistryState>,
+    hooks: &Arc<crate::hooks::HookRegistry>,
+    services: &Arc<super::ToolServices>,
+    runtime: Arc<dyn CodeModeRuntime>,
+    timeout: std::time::Duration,
+    limits: ExecutionLimits,
+) {
     state.register(execute_registration());
     let executor = registry::pipeline_executor(
         EXECUTE_NAME,
         execute_input_schema(),
-        Arc::new(CodeModeLeaf { runtime, registry: Arc::clone(state), timeout }),
+        Arc::new(CodeModeLeaf { runtime, registry: Arc::clone(state), timeout, limits }),
         services,
         hooks,
     );
@@ -1440,7 +1779,10 @@ mod limits_tests {
             bad.resolve().unwrap_err(),
             "timeoutMs must be a safe integer greater than or equal to 1."
         );
-        let bad = ExecutionLimits { max_tool_calls: Some(0), ..ExecutionLimits::default() };
+        // The u64 type rules out negatives/non-integers; the remaining
+        // rejection for the min-0 fields is the safe-integer ceiling.
+        let bad =
+            ExecutionLimits { max_tool_calls: Some(1 << 53), ..ExecutionLimits::default() };
         assert_eq!(
             bad.resolve().unwrap_err(),
             "maxToolCalls must be a safe integer greater than or equal to 0."
@@ -1514,9 +1856,9 @@ mod limits_tests {
             warnings: vec![warning(), warning(), warning()],
             ..RunOutcome::default()
         };
-        // Each warning serializes to 34 bytes (+1) = 35; budget 60
-        // keeps two (70 > 60 drops the third).
-        bound_output(&mut outcome, 60);
+        // Each warning serializes to 39 bytes (+1) = 40; budget 90
+        // keeps two (120 > 90 drops the third).
+        bound_output(&mut outcome, 90);
         assert!(outcome.truncated);
         assert_eq!(outcome.warnings.len(), 3);
         assert_eq!(outcome.warnings[0], warning());
@@ -1538,7 +1880,10 @@ mod limits_tests {
         // line (5 bytes incl. separator) fits, the second does not.
         bound_output(&mut outcome, 10);
         assert!(outcome.truncated);
-        assert_eq!(outcome.logs, vec!["aaaa".to_string(), "[logs truncated: showing 1 of 2 lines]"]);
+        assert_eq!(
+            outcome.logs,
+            vec!["aaaa".to_string(), "[logs truncated: showing 1 of 2 lines]".to_string()]
+        );
     }
 
     #[test]
@@ -1595,9 +1940,23 @@ mod limits_tests {
                 },
                 Probe::Call(times) => {
                     for _ in 0..*times {
+                        outcome.tool_calls.push(CallRecord {
+                            tool: "greet".to_string(),
+                            status: "running".to_string(),
+                            input: Some(json!({ "name": "limits" })),
+                        });
                         match call("greet", json!({ "name": "limits" })).await {
-                            Ok(value) => outcome.value = Some(value),
+                            Ok(value) => {
+                                outcome.tool_calls.last_mut().expect("row").status = "completed".into();
+                                outcome.value = Some(value);
+                            }
                             Err(message) => {
+                                if message.starts_with("Execution exceeded its tool-call limit") {
+                                    // The guest throws before recording a rejected call.
+                                    outcome.tool_calls.pop();
+                                } else {
+                                    outcome.tool_calls.last_mut().expect("row").status = "error".into();
+                                }
                                 outcome.error = Some(message);
                                 break;
                             }
@@ -1632,8 +1991,8 @@ mod limits_tests {
                 codemode: true,
                 namespace: None,
                 execute: {
-                    struct Ok;
-                    impl crate::tool::ToolExecuteWithContext for Ok {
+                    struct OkLeaf;
+                    impl crate::tool::ToolExecuteWithContext for OkLeaf {
                         fn execute<'a>(
                             &'a self,
                             _services: &'a crate::tool::ToolServices,
@@ -1658,7 +2017,7 @@ mod limits_tests {
                             })
                         }
                     }
-                    Arc::new(Ok)
+                    Arc::new(OkLeaf)
                 },
             },
         )
