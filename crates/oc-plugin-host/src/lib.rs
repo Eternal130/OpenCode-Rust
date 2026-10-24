@@ -558,6 +558,29 @@ impl PluginHost {
         runtime.block_on(facade.shared.reload_changed()).map_err(|error| error.to_string())
     }
 
+    /// G-05: load one new plugin entry into the live guest (dynamic
+    /// add — a watched plugin source gained a file). The load is
+    /// contained: a failing entry is logged and marked failed, and
+    /// existing generations are untouched. Errors degrade to `Err` —
+    /// the host keeps running.
+    pub fn add_entry(&self, entry: &std::path::Path) -> Result<(), String> {
+        let Some(facade) = &self.facade else { return Err("plugin subsystem disabled".into()) };
+        let Some(runtime) = &facade.runtime else { return Err("plugin host unavailable".into()) };
+        runtime.block_on(facade.shared.add_entry(entry));
+        Ok(())
+    }
+
+    /// G-05: tear down one entry's generation (dynamic remove — a
+    /// watched plugin source lost a file): registrations, slot claims
+    /// and digest bookkeeping drop, and the guest unloads the plugin
+    /// id. Returns whether the entry was loaded (idempotent).
+    /// Errors degrade to `Err` — the host keeps running.
+    pub fn remove_entry(&self, entry: &std::path::Path) -> Result<bool, String> {
+        let Some(facade) = &self.facade else { return Err("plugin subsystem disabled".into()) };
+        let Some(runtime) = &facade.runtime else { return Err("plugin host unavailable".into()) };
+        Ok(runtime.block_on(facade.shared.remove_entry(entry)))
+    }
+
     /// Execute one plugin-registered tool by name (the `tool.transform`
     /// executor dispatch — wave 4's wave-2 TODO). Blocks at most
     /// `timeout`.
