@@ -2781,30 +2781,34 @@ impl App {
             }
             KeyOutcome::Edited | KeyOutcome::Ignored => {}
             // `prompt.paste` (ctrl+v / the palette command): v2's read
-            // arm (prompt/index.tsx:474-491) — image bytes stage as a
-            // `clipboard` attachment chip, text inserts verbatim. The
-            // HOST tools arm runs live (pbpaste/xclip/xsel/wl-paste —
-            // auditC P8's host-first layering); the OSC 52 terminal
-            // arm is implemented in `terminal_proto` but NOT wired:
-            // crossterm's input thread owns stdin, so a query window
-            // here would race it and eat keystrokes (v2's renderer
-            // owns its input pipeline, we do not — the deferral is
-            // documented in docs/tail.log).
+            // arm (prompt/index.tsx:470-491) reads the clipboard with
+            // `{preferredTypes: ["image/png", "text/plain"]}` through
+            // opentui-core's clipboard service (G-03/G-11); image
+            // bytes stage as a `clipboard` attachment chip, text
+            // inserts through the resolved paste flow (path resolution
+            // included). The HOST backend runs live (host paste tools
+            // first — auditC P8's host-first layering — then the OSC 52
+            // query window, which `terminal_proto` drives between
+            // frames); no usable read (headless/unsupported) inserts
+            // nothing — bracketed paste stays the other entry.
             KeyOutcome::Paste(_) => {
-                if let Some(bytes) = crate::terminal_proto::clipboard_read_host() {
+                if let Some(content) = self.store.clipboard_read() {
                     let key = self.prompt_key();
                     let mut composer = self.store.composer(&key);
-                    if crate::terminal_proto::sniff_image(&bytes) {
-                        let mime = crate::terminal_proto::image_mime(&bytes);
-                        let encoded = crate::clipboard::base64_encode::encode(&bytes);
+                    if content.mime.starts_with("image/") {
                         composer.paste_attachment(
                             Some("clipboard"),
-                            &format!("data:{mime};base64,{encoded}"),
+                            &format!("data:{};base64,{}", content.mime, content.data),
                         );
-                    } else if let Ok(text) = String::from_utf8(bytes) {
-                        if !text.is_empty() {
-                            composer.paste(&text);
-                        }
+                    } else if let Some(text) = crate::clipboard::base64_decode(&content.data)
+                        .and_then(|bytes| String::from_utf8(bytes).ok())
+                        .filter(|text| !text.is_empty())
+                    {
+                        composer.paste_resolved(
+                            &text,
+                            "unix",
+                            &crate::components::composer::attachment::FsLocalFiles,
+                        );
                     }
                     self.store.set_composer(&key, &composer);
                 }
