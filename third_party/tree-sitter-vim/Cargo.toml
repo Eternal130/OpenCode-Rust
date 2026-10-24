@@ -1,0 +1,21 @@
+# Vendored grammar crate (G-08) — see README.md for provenance.
+# The ref pins the v0.8.1 wasm (parsers-config.ts:353-363); the crates.io
+# `tree-sitter-vim` release (0.4.0, Aug 2024) is a stale old-binding
+# artifact of this same lineage, so the v2 pin is vendored as a path
+# crate with standard tree-sitter-language 0.1 bindings.
+[package]
+name = "tree-sitter-vim"
+description = "vim grammar for tree-sitter (vendored at tag v0.8.1)"
+version = "0.8.1"
+edition = "2021"
+license = "MIT"
+links = "tree_sitter_vim"
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+tree-sitter-language = "0.1"
+
+[build-dependencies]
+cc = "1.1"

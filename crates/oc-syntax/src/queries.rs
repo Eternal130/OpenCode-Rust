@@ -4,21 +4,22 @@
 //! shape and the v2 alias convention — `diff`/`udiff`/`patch`), minus the
 //! runtime wasm fetching: everything is compiled in and resolved offline.
 //!
-//! ## The full catalog (R-01b)
+//! ## The full catalog (R-01b + G-08)
 //!
-//! 19 filetypes over the v2 catalog's core set (the oracle-curated list —
-//! v2's tail languages beyond it stay unregistered). Routing follows
-//! v2's notes: python/php/html highlights from the parser repo (the nvim
-//! queries are marked broken at parsers-config.ts:12-16, 129-131,
-//! 149-151) — everything else is vendored from the parser repo's own
-//! query **at the exact crate tag** (guaranteed grammar/query ABI
-//! coherence; nvim master is a moving target). toml ships as a vendored
-//! path crate under `third_party/` (its lineage has no
-//! tree-sitter-language release on crates.io); its query sits at the
-//! same tag as the C source. swift/c-sharp/kotlin were implemented and
-//! then DROPPED for release-binary size (ROADMAP R-01b: 72.7 MiB vs the
-//! 67.6 ceiling; the three heaviest grammars — re-add behind cargo
-//! features if ever needed).
+//! 20 filetypes over the v2 catalog's core set (the oracle-curated list)
+//! plus v2's four tail languages the G-08 lane registered (lua, vim,
+//! scala, make). Routing follows v2's notes: python/php/html highlights
+//! from the parser repo (the nvim queries are marked broken at
+//! parsers-config.ts:12-16, 129-131, 149-151) — everything else is
+//! vendored from the parser repo's own query **at the exact crate tag**
+//! (guaranteed grammar/query ABI coherence; nvim master is a moving
+//! target). toml and vim ship as vendored path crates under
+//! `third_party/` (their lineages carry no tree-sitter-language
+//! release on crates.io at the pinned tags); their queries sit at the
+//! same tags as the C sources. swift/c-sharp/kotlin were implemented
+//! and then DROPPED for release-binary size (ROADMAP R-01b: 72.7 MiB
+//! vs the 67.6 ceiling; the three heaviest grammars — re-add behind
+//! cargo features if ever needed).
 
 use std::sync::{Arc, OnceLock};
 
@@ -87,6 +88,27 @@ mod scm {
     /// `tree-sitter-php` v0.25.1 `queries/highlights.scm` (v2 routes php
     /// highlights from the parser repo — parsers-config.ts:129-131).
     pub const PHP_HIGHLIGHTS: &str = include_str!("../queries/php-highlights.scm");
+    /// `tree-sitter-lua` (tree-sitter-grammars) v0.5.0
+    /// `queries/highlights.scm` — the exact wasm tag v2 pins
+    /// (parsers-config.ts:234-241).
+    pub const LUA_HIGHLIGHTS: &str = include_str!("../queries/lua-highlights.scm");
+    /// `tree-sitter-lua` v0.5.0 `queries/locals.scm` (the same tag's).
+    pub const LUA_LOCALS: &str = include_str!("../queries/lua-locals.scm");
+    /// `tree-sitter-vim` (tree-sitter-grammars) v0.8.1
+    /// `queries/vim/highlights.scm` — the grammar repo's own query at
+    /// the exact v2 pin (parsers-config.ts:352-363 routes nvim master;
+    /// this port vendors at-tag for ABI coherence, like every other
+    /// entry).
+    pub const VIM_HIGHLIGHTS: &str = include_str!("../queries/vim-highlights.scm");
+    /// `tree-sitter-scala` v0.24.0 `queries/highlights.scm` — the
+    /// grammar repo's own query at the exact v2 pin
+    /// (parsers-config.ts:136-143; scala's rust bindings ship from the
+    /// same repo).
+    pub const SCALA_HIGHLIGHTS: &str = include_str!("../queries/scala-highlights.scm");
+    /// `tree-sitter-make` (tree-sitter-grammars) v1.1.1
+    /// `queries/highlights.scm` — the grammar repo's own query at the
+    /// exact v2 pin (parsers-config.ts:342-351).
+    pub const MAKE_HIGHLIGHTS: &str = include_str!("../queries/make-highlights.scm");
 }
 
 /// One registry entry: a filetype, its v2-style aliases, the native grammar
@@ -107,13 +129,14 @@ pub struct GrammarEntry {
     pub locals_query: Option<&'static str>,
 }
 
-/// The static registry — the R-01 spike's 3 languages plus the R-01b
-/// catalog extension (15 more grammars + the javascript filetype over the
-/// already-vendored query). The abort threshold for this table was
+/// The static registry — the R-01 spike's 3 languages, the R-01b
+/// catalog extension (13 more grammars — javascript rides the
+/// already-vendored typescript query), and the G-08 tail (lua, vim,
+/// scala, make). The abort threshold for this table was
 /// +20 MiB on the release binary (see the spike report); the R-01b
 /// measurement accompanies the rollout report.
 #[rustfmt::skip] // one flat table: filetype, aliases, grammar, queries — scannable
-#[allow(clippy::too_many_lines)] // a 19-entry data table, not logic
+#[allow(clippy::too_many_lines)] // a 20-entry data table, not logic
 pub fn registry() -> &'static [GrammarEntry] {
     &[
         GrammarEntry {
@@ -228,6 +251,35 @@ pub fn registry() -> &'static [GrammarEntry] {
             highlight_query: scm::PHP_HIGHLIGHTS,
             locals_query: None,
         },
+        // -- G-08: v2's tail languages (lua, vim, scala, make) --------
+        GrammarEntry {
+            filetype: "lua",
+            aliases: &[],
+            language: tree_sitter_lua::LANGUAGE,
+            highlight_query: scm::LUA_HIGHLIGHTS,
+            locals_query: Some(scm::LUA_LOCALS),
+        },
+        GrammarEntry {
+            filetype: "vim",
+            aliases: &["vi"],
+            language: tree_sitter_vim::LANGUAGE,
+            highlight_query: scm::VIM_HIGHLIGHTS,
+            locals_query: None,
+        },
+        GrammarEntry {
+            filetype: "scala",
+            aliases: &[],
+            language: tree_sitter_scala::LANGUAGE,
+            highlight_query: scm::SCALA_HIGHLIGHTS,
+            locals_query: None,
+        },
+        GrammarEntry {
+            filetype: "make",
+            aliases: &["makefile", "gnumake"],
+            language: tree_sitter_make::LANGUAGE,
+            highlight_query: scm::MAKE_HIGHLIGHTS,
+            locals_query: None,
+        },
     ]
 }
 
@@ -316,7 +368,7 @@ mod tests {
     /// R-01b: auto-covers every catalog addition.
     #[test]
     fn every_registry_query_constructs() {
-        assert_eq!(registry().len(), 16, "3 spike + 13 R-01b filetypes (swift/c-sharp/kotlin dropped for binary size; see ROADMAP R-01b)");
+        assert_eq!(registry().len(), 20, "3 spike + 13 R-01b + 4 G-08 filetypes (swift/c-sharp/kotlin dropped for binary size; see ROADMAP R-01b)");
         for entry in registry() {
             let language = tree_sitter::Language::new(entry.language);
             let highlight = Query::new(&language, entry.highlight_query)
@@ -347,8 +399,8 @@ mod tests {
         assert!(lookup("   ").is_none());
         // The v2 catalog convention: every canonical filetype and alias
         // resolves (to its OWN entry — no cross-entry shadowing), and the
-        // v2 alias pairs hold: diff/udiff/patch. makefile→make is NOT in
-        // the oracle list (make stays unregistered).
+        // v2 alias pairs hold: diff/udiff/patch, make/makefile (G-08
+        // registered the tail languages at their ref pins).
         for entry in registry() {
             assert_eq!(
                 lookup(entry.filetype).map(|found| found.filetype),
@@ -370,7 +422,11 @@ mod tests {
         assert_eq!(lookup("yml").map(|entry| entry.filetype), Some("yaml"));
         assert_eq!(lookup("js").map(|entry| entry.filetype), Some("javascript"));
         assert_eq!(lookup("rb").map(|entry| entry.filetype), Some("ruby"));
-        assert!(lookup("make").is_none(), "make is not in the oracle list");
-        assert!(lookup("makefile").is_none());
+        // G-08 tail: the ref catalog entries resolve (parsers-config.ts
+        // make aliases makefile; vi/gnumake are the port's extras).
+        assert_eq!(lookup("makefile").map(|entry| entry.filetype), Some("make"));
+        assert_eq!(lookup("gnumake").map(|entry| entry.filetype), Some("make"));
+        assert_eq!(lookup("vi").map(|entry| entry.filetype), Some("vim"));
+        assert!(lookup("sbt").is_none(), "sbt is NOT scala (the G-08 ruling)");
     }
 }
