@@ -491,6 +491,8 @@ pub fn change_setting(store: &crate::store::Store, setting: &SettingDef, directi
         "session.verbosity" => store.set_session_verbosity(&next),
         "session.image_preview" => store.set_image_preview(next == "true"),
         "session.tps" => store.set_session_tps(next == "true"),
+        // G-07: the devtools bar's live gate (ref app.tsx:457).
+        "debug.devtools" => store.set_devtools_enabled(next == "true"),
         "tabs.mode" => store.set_tabs_enabled(next == "on"),
         "tabs.layout" => store.set_tabs_layout(if next == "vertical" {
             crate::components::session_tabs_rail::TabsLayout::Vertical
