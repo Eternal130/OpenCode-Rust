@@ -6370,6 +6370,12 @@ pub async fn run_with_size(
     // Server-backed picker lists (model/provider/agent).
     let (mut list_rx, lists_task) = spawn_server_lists(client.clone());
 
+    // G-06 — the V1→V2 migration watcher (migration-overlay.tsx): 1 s
+    // initial sleep, then a 1 s status poll; running drives the
+    // top-right overlay, completed clears it, error raises the toast.
+    let (mut migration_rx, _migration_task) =
+        crate::components::migration_overlay::spawn_migration_watcher(client.clone());
+
     // TUI-15 — the Zed selection poll (None when the gate is off or
     // no db resolves — the common non-Zed case stays untouched).
     let mut zed_rx = spawn_zed_poll();
@@ -6977,6 +6983,31 @@ pub async fn run_with_size(
                 }
                 ServerListEvent::Skills(Err(error)) => {
                     app.store.set_skills(crate::store::ListState::Failed(error));
+                }
+            }
+        }
+        // G-06 — drain the migration watcher into the store.
+        while let Ok(event) = migration_rx.try_recv() {
+            use crate::components::migration_overlay::MigrationEvent;
+            match event {
+                MigrationEvent::Running(progress) => {
+                    app.store.set_migration_progress(Some(progress));
+                }
+                MigrationEvent::Completed => {
+                    app.store.set_migration_progress(None);
+                }
+                MigrationEvent::Failed(error) => {
+                    app.store.set_migration_progress(None);
+                    // migration-overlay.tsx:28-37 — the ~10 s error toast.
+                    app.store.toast_show(crate::components::toast::ToastOptions {
+                        title: Some("Data migration failed".to_owned()),
+                        message: error,
+                        variant: "error",
+                        duration_ms: 10_000,
+                        action_label: None,
+                        action_command: None,
+                        modal: false,
+                    });
                 }
             }
         }

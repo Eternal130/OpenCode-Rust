@@ -138,6 +138,11 @@ pub fn overlay_app_state(frame: &mut Frame, store: &Store, styles: &ThemeStyles)
     if store.reconnecting_overlay_visible(now) {
         overlay_reconnecting(frame, styles, now.saturating_sub(store.connection_since()));
     }
+    // G-06 — the migration widget shares the 10_000 z-layer and paints
+    // after (above) everything while the poll reports `running`.
+    if let Some(progress) = store.migration_progress() {
+        super::migration_overlay::overlay_migration(frame, styles, &progress, now);
+    }
 }
 
 #[cfg(test)]

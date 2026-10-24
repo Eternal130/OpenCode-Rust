@@ -853,6 +853,19 @@ fn handle(
         let _ = socket.write_all(response);
         return;
     }
+    // G-06 — the V1→V2 migration status poll (migration-overlay.tsx):
+    // the harness never has legacy sessions, so the watcher gets a
+    // `completed` and exits without painting (a catch-all `{}` here
+    // would fail the status parse and raise the error toast).
+    if method == "GET" && path == "/api/experimental/migration/v1" {
+        let body = r#"{"status":"completed"}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\ncontent-length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        let _ = socket.write_all(response.as_bytes());
+        return;
+    }
     // TUI-14 — the shell-mode submit endpoint: record the request
     // BODY (the command), answer 204 No Content (the server contract
     // for `session.shell`).
