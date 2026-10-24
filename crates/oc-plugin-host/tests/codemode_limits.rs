@@ -15,8 +15,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-use oc_core::tool::codemode::ExecutionLimits;
-use oc_plugin_host::{Bridge, CodeModeToolSpec, PluginHost, PluginHostConfig, PluginState, ToolPort};
+use oc_plugin_host::{
+    Bridge, CodeModeLimits, CodeModeToolSpec, PluginHost, PluginHostConfig, PluginState, ToolPort,
+};
 
 fn spec(path: &str) -> CodeModeToolSpec {
     CodeModeToolSpec { path: path.to_owned(), description: String::new(), signature: String::new() }
@@ -68,7 +69,7 @@ fn guest_enforces_execution_limits() {
         &catalog,
         0,
         Duration::from_secs(5),
-        &ExecutionLimits { timeout_ms: Some(0), ..ExecutionLimits::default() },
+        &CodeModeLimits { timeout_ms: Some(0), ..CodeModeLimits::default() },
     ));
     assert_eq!(
         invalid.unwrap_err(),
@@ -81,7 +82,7 @@ fn guest_enforces_execution_limits() {
         &catalog,
         0,
         Duration::from_secs(5),
-        &ExecutionLimits { max_tool_calls: Some(1), ..ExecutionLimits::default() },
+        &CodeModeLimits { max_tool_calls: Some(1), ..CodeModeLimits::default() },
     ));
     let run = capped.expect("a capped program is a result, not a transport error");
     assert_eq!(run.error.as_deref(), Some("Execution exceeded its tool-call limit of 1."));
@@ -94,7 +95,7 @@ fn guest_enforces_execution_limits() {
         &catalog,
         0,
         Duration::from_secs(5),
-        &ExecutionLimits { max_tool_calls: Some(0), ..ExecutionLimits::default() },
+        &CodeModeLimits { max_tool_calls: Some(0), ..CodeModeLimits::default() },
     ));
     let run = zero.expect("capped at zero is still a result");
     assert_eq!(run.error.as_deref(), Some("Execution exceeded its tool-call limit of 0."));
@@ -107,7 +108,7 @@ fn guest_enforces_execution_limits() {
         &catalog,
         0,
         Duration::from_secs(5),
-        &ExecutionLimits { max_output_bytes: Some(10), ..ExecutionLimits::default() },
+        &CodeModeLimits { max_output_bytes: Some(10), ..CodeModeLimits::default() },
     ));
     let run = wide.expect("a truncated program still succeeds");
     assert_eq!(
@@ -124,7 +125,7 @@ fn guest_enforces_execution_limits() {
         &catalog,
         0,
         Duration::from_secs(5),
-        &ExecutionLimits { max_output_bytes: Some(64), ..ExecutionLimits::default() },
+        &CodeModeLimits { max_output_bytes: Some(64), ..CodeModeLimits::default() },
     ));
     let run = narrow.expect("under budget succeeds");
     assert_eq!(run.value, Some(json!("short")));
@@ -136,7 +137,7 @@ fn guest_enforces_execution_limits() {
         &catalog,
         0,
         Duration::from_secs(5),
-        &ExecutionLimits::default(),
+        &CodeModeLimits::default(),
     ));
     let run = deep.expect("a deep value is the program's error");
     assert_eq!(run.error.as_deref(), Some("Value exceeds the maximum depth of 32."));
@@ -147,7 +148,7 @@ fn guest_enforces_execution_limits() {
         &catalog,
         0,
         Duration::from_secs(5),
-        &ExecutionLimits::default(),
+        &CodeModeLimits::default(),
     ));
     let run = deep_input.expect("a deep input is the program's error");
     assert_eq!(run.error.as_deref(), Some("Value exceeds the maximum depth of 32."));
@@ -159,7 +160,7 @@ fn guest_enforces_execution_limits() {
         &catalog,
         0,
         Duration::from_secs(5),
-        &ExecutionLimits { timeout_ms: Some(250), ..ExecutionLimits::default() },
+        &CodeModeLimits { timeout_ms: Some(250), ..CodeModeLimits::default() },
     ));
     let run = hung.expect("the soft timeout is a result");
     assert_eq!(run.error.as_deref(), Some("Execution timed out after 250ms."));
@@ -220,7 +221,7 @@ fn codemode_timeout_kill_restarts_guest_without_strikes() {
             &[],
             0,
             Duration::from_secs(5),
-            &ExecutionLimits { timeout_ms: Some(150), ..ExecutionLimits::default() },
+            &CodeModeLimits { timeout_ms: Some(150), ..CodeModeLimits::default() },
         ));
         assert!(wedged.is_err(), "cycle {cycle}: the wedged program times out");
 
@@ -239,8 +240,11 @@ fn codemode_timeout_kill_restarts_guest_without_strikes() {
 
     // After three deliberate kills the plugin is still Active — three
     // ATTRIBUTED crashes would have disabled it (max_plugin_crashes=3).
+    // The reload pass may still be running: wait for Active.
     assert!(
-        matches!(plugin_state(&host), Some(PluginState::Active)),
+        common::wait_for(Duration::from_secs(20), || {
+            matches!(plugin_state(&host), Some(PluginState::Active))
+        }),
         "no strikes accumulated across codemode kills: {:?}",
         plugin_state(&host)
     );

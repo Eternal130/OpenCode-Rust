@@ -183,6 +183,15 @@ pub struct Shared {
     /// Set during shutdown: the reader's EOF sweep must not blame
     /// plugins for a deliberate kill.
     shutting_down: AtomicBool,
+    /// A codemode-timeout kill of the guest is pending: set before the
+    /// supervise loop signals the kill; the reader's EOF sweep consumes
+    /// it (skipping crash attribution) or the supervise loop cancels it
+    /// if the child died on its own first.
+    codemode_kill_pending: AtomicBool,
+    /// Bumped to ask the supervise loop to kill the CURRENT child (a
+    /// codemode evaluate deadline expired and the guest may be wedged —
+    /// a sync loop is not interruptible in-process).
+    kill_tx: tokio::sync::watch::Sender<u64>,
     /// The native registration store (written by the reader task on
     /// guest requests, read by the facade).
     pub registrations: RwLock<Registrations>,
@@ -245,7 +254,24 @@ impl Shared {
             sidebar_slots: Mutex::new(HashSet::new()),
             plugin_faults: Mutex::new(Vec::new()),
             runtime_handle: None,
+            codemode_kill_pending: AtomicBool::new(false),
+            kill_tx: tokio::sync::watch::channel(0).0,
         }
+    }
+
+    /// Ask the supervise loop to kill the CURRENT child (a codemode
+    /// evaluate ran past its limits-aligned deadline — the guest is
+    /// wedged or unbounded, and a sync loop is not interruptible
+    /// in-process). Idempotent: while a kill is already in flight the
+    /// same dying child covers every wedged evaluation. The deliberate
+    /// kill is exempt from crash attribution
+    /// ([`Shared::codemode_kill_pending`]).
+    pub(crate) fn request_codemode_kill(&self) {
+        if self.codemode_kill_pending.swap(true, Ordering::Relaxed) {
+            return; // a kill is already in flight
+        }
+        eprintln!("opencode plugin-host: codemode evaluate deadline expired; killing the wedged guest (restart follows)");
+        let _ = self.kill_tx.send_modify(|generation| *generation += 1);
     }
 
     /// One bridge call: send, then await with a hard timeout. See the
@@ -1137,6 +1163,7 @@ impl Supervisor {
     pub async fn start(config: SupervisorConfig) -> Result<Arc<Self>, String> {
         let (tap_tx, tap_rx) = mpsc::channel::<TapEvent>(1024);
         let (outbound_tx, outbound_rx) = mpsc::unbounded_channel::<String>();
+        let (kill_tx, kill_rx) = tokio::sync::watch::channel(0u64);
         let shared = Arc::new(Shared {
             config: config.clone(),
             outbound: RwLock::new(outbound_tx),
@@ -1144,6 +1171,8 @@ impl Supervisor {
             next_id: AtomicU64::new(0),
             generation: AtomicU64::new(1),
             shutting_down: AtomicBool::new(false),
+            codemode_kill_pending: AtomicBool::new(false),
+            kill_tx,
             registrations: RwLock::new(Registrations::default()),
             crash_counts: Mutex::new(HashMap::new()),
             busy_plugins: Mutex::new(HashSet::new()),
@@ -1192,8 +1221,10 @@ impl Supervisor {
             child_reaped: Arc::clone(&child_reaped),
         });
 
-        // The supervision loop owns the child from here.
-        tokio::spawn(supervise_loop(Arc::clone(&shared), child, shutdown_rx, child_reaped));
+        // The supervision loop owns the child from here (the kill-signal
+        // receiver rides along — a codemode deadline asks it to kill the
+        // wedged child; the wait arm below handles the restart).
+        tokio::spawn(supervise_loop(Arc::clone(&shared), child, shutdown_rx, kill_rx, child_reaped));
         // The event dispatch pump (post-ingest tap consumer).
         tokio::spawn(dispatch_pump(Arc::clone(&shared), tap_rx));
 
@@ -1817,7 +1848,13 @@ fn spawn_reader(shared: Arc<Shared>, stdout: tokio::process::ChildStdout, genera
         if !shared.shutting_down.load(Ordering::Relaxed)
             && generation == shared.generation.load(Ordering::Relaxed)
         {
-            shared.attribute_crash();
+            // A deliberate codemode-timeout kill is NOT a plugin crash:
+            // consume the exemption instead of attributing strikes.
+            if shared.codemode_kill_pending.swap(false, Ordering::Relaxed) {
+                eprintln!("opencode plugin-host: deliberate codemode-timeout kill; crash attribution skipped");
+            } else {
+                shared.attribute_crash();
+            }
         }
     });
 }
@@ -1831,6 +1868,7 @@ async fn supervise_loop(
     shared: Arc<Shared>,
     mut child: Child,
     mut shutdown: tokio::sync::watch::Receiver<bool>,
+    mut kill_rx: tokio::sync::watch::Receiver<u64>,
     child_reaped: Arc<AtomicBool>,
 ) {
     /// Kill the child THROUGH ITS HANDLE (never a naked-PID signal)
@@ -1848,6 +1886,20 @@ async fn supervise_loop(
                     kill_and_reap(&mut child).await;
                     child_reaped.store(true, Ordering::Relaxed);
                     return;
+                }
+            }
+            // A codemode deadline expired: kill the CURRENT child. The
+            // deliberate kill is strike-exempt; if the child already
+            // died on its own, cancel the exemption (the reader's EOF
+            // sweep attributed that death correctly).
+            _ = kill_rx.changed() => {
+                let _ = kill_rx.borrow_and_update();
+                if matches!(child.try_wait(), Ok(None)) {
+                    kill_and_reap(&mut child).await;
+                    // The child.wait() arm below observes the death and
+                    // runs the normal restart path.
+                } else {
+                    shared.codemode_kill_pending.store(false, Ordering::Relaxed);
                 }
             }
             status = child.wait() => {
