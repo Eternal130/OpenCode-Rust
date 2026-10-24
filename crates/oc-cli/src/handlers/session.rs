@@ -1,12 +1,12 @@
 //! `opencode session *` (handlers/session/*).
 
-use crate::cli::{ServerParams, SessionCommands};
+use crate::cli::{ServerParams, SessionCommands, SessionListFormat};
 use crate::handlers::connect;
 use crate::util::error_message;
 
 pub async fn run(command: &SessionCommands, server: &ServerParams) -> i32 {
     match command {
-        SessionCommands::List { max_count, format } => list(server, *max_count, format).await,
+        SessionCommands::List { max_count, format } => list(server, *max_count, *format).await,
         SessionCommands::Delete { session_id } => delete(server, session_id).await,
         SessionCommands::Export { session, sanitize } => {
             export(server, session.as_deref(), *sanitize).await
@@ -17,7 +17,7 @@ pub async fn run(command: &SessionCommands, server: &ServerParams) -> i32 {
     }
 }
 
-async fn list(server: &ServerParams, max_count: Option<u32>, format: &str) -> i32 {
+async fn list(server: &ServerParams, max_count: Option<u32>, format: SessionListFormat) -> i32 {
     let resolved = match connect(server, None).await {
         Ok(resolved) => resolved,
         Err(code) => return code,
@@ -55,10 +55,10 @@ async fn list(server: &ServerParams, max_count: Option<u32>, format: &str) -> i3
             return 1;
         }
     };
-    if format == "table" && page.data.is_empty() {
+    if format == SessionListFormat::Table && page.data.is_empty() {
         return 0;
     }
-    if format == "json" {
+    if format == SessionListFormat::Json {
         let rows: Vec<serde_json::Value> = page
             .data
             .iter()

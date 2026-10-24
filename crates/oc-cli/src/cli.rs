@@ -5,7 +5,7 @@
 //! are declared once as globals so every subcommand surface that v2 gives
 //! them accepts them.
 
-use clap::{ArgAction, Parser, Subcommand};
+use clap::{ArgAction, Parser, Subcommand, ValueEnum};
 
 /// Shared connection params (v2 `ServerParams`) — filled from the global
 /// `--standalone` / `--server` flags.
@@ -84,6 +84,127 @@ impl PermissionParamsGlobal {
     }
 }
 
+/// `upgrade --method` — v2's seven installation methods (updater.ts:14)
+/// plus the port's two documented rust-extra extensions
+/// (`local-file`, `github` — see `services::updater::EXTRA_METHODS`;
+/// restricting to the seven would strand the extension paths).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum UpgradeMethod {
+    Curl,
+    Npm,
+    Pnpm,
+    Bun,
+    Yarn,
+    Vp,
+    Brew,
+    /// rust-extra: install from a tarball/zip/binary on disk.
+    LocalFile,
+    /// rust-extra: download this port's own release tarball.
+    Github,
+}
+
+impl UpgradeMethod {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Curl => "curl",
+            Self::Npm => "npm",
+            Self::Pnpm => "pnpm",
+            Self::Bun => "bun",
+            Self::Yarn => "yarn",
+            Self::Vp => "vp",
+            Self::Brew => "brew",
+            Self::LocalFile => "local-file",
+            Self::Github => "github",
+        }
+    }
+}
+
+/// `--format` for `run` and `auth list` (commands.ts:151/:404):
+/// `default` or `json`, default `default`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
+pub enum OutputFormat {
+    #[default]
+    Default,
+    Json,
+}
+
+impl OutputFormat {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Json => "json",
+        }
+    }
+}
+
+impl std::fmt::Display for OutputFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// `session list --format` (commands.ts:431): `table` or `json`,
+/// default `table`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
+pub enum SessionListFormat {
+    #[default]
+    Table,
+    Json,
+}
+
+impl SessionListFormat {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Table => "table",
+            Self::Json => "json",
+        }
+    }
+}
+
+impl std::fmt::Display for SessionListFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// `debug paths <name>` (commands.ts:125-136): the ten v2 path keys.
+/// The ref handler index-crashes on an unknown key; the port validates
+/// at parse time (graceful clap invalid-value error).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum PathName {
+    Db,
+    Home,
+    Data,
+    Config,
+    Cache,
+    State,
+    Tmp,
+    Bin,
+    Log,
+    Repos,
+}
+
+impl PathName {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Db => "db",
+            Self::Home => "home",
+            Self::Data => "data",
+            Self::Config => "config",
+            Self::Cache => "cache",
+            Self::State => "state",
+            Self::Tmp => "tmp",
+            Self::Bin => "bin",
+            Self::Log => "log",
+            Self::Repos => "repos",
+        }
+    }
+}
+
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     /// Upgrade `OpenCode` to the latest or a specific version
@@ -93,7 +214,7 @@ pub enum Commands {
         target: Option<String>,
         /// Installation method to use
         #[arg(short = 'm', long)]
-        method: Option<String>,
+        method: Option<UpgradeMethod>,
     },
     /// Uninstall `OpenCode` and remove all related files
     Uninstall {
@@ -239,8 +360,8 @@ pub enum Commands {
         #[arg(long)]
         agent: Option<String>,
         /// Output format
-        #[arg(long, default_value = "default")]
-        format: String,
+        #[arg(long, default_value_t = OutputFormat::Default)]
+        format: OutputFormat,
         /// File to attach to the message
         #[arg(short = 'f', long, value_name = "FILE", action = ArgAction::Append)]
         file: Vec<String>,
@@ -294,7 +415,7 @@ pub enum DebugCommands {
     /// Show global paths (data, config, cache, state)
     Paths {
         /// Print only one path: db, home, data, config, cache, state, tmp, bin, log, repos
-        name: Option<String>,
+        name: Option<PathName>,
     },
 }
 
@@ -303,8 +424,8 @@ pub enum AuthCommands {
     /// list integrations and credentials
     List {
         /// Output format
-        #[arg(long, default_value = "default")]
-        format: String,
+        #[arg(long, default_value_t = OutputFormat::Default)]
+        format: OutputFormat,
     },
     /// connect an integration
     Login {
@@ -426,8 +547,8 @@ pub enum SessionCommands {
         #[arg(short = 'n', long, value_name = "N")]
         max_count: Option<u32>,
         /// Output format
-        #[arg(long, default_value = "table")]
-        format: String,
+        #[arg(long, default_value_t = SessionListFormat::Table)]
+        format: SessionListFormat,
     },
     /// Delete a session and its child sessions
     Delete {
@@ -507,5 +628,118 @@ mod tests {
         assert!(bare.prompt.is_none());
         assert!(!bare.permission.auto);
         assert!(!bare.permission.effective_auto());
+    }
+
+    /// G-13: the five former plain-string fields are clap `ValueEnum`s —
+    /// invalid values die at PARSE time with clap's invalid-value error
+    /// listing the valid choices (the ref choice sets, commands.ts:68/
+    /// :151/:404/:431/:125-136).
+    #[test]
+    fn enum_fields_reject_invalid_values_at_parse_time() {
+        let cases: [(&str, Vec<&str>, &[&str]); 5] = [
+            (
+                "upgrade --method git",
+                vec!["opencode", "upgrade", "-m", "git"],
+                &["curl", "npm", "pnpm", "bun", "yarn", "vp", "brew", "local-file", "github"],
+            ),
+            ("run --format xml", vec!["opencode", "run", "--format", "xml"], &["default", "json"]),
+            (
+                "auth list --format xml",
+                vec!["opencode", "auth", "list", "--format", "xml"],
+                &["default", "json"],
+            ),
+            (
+                "session list --format xml",
+                vec!["opencode", "session", "list", "--format", "xml"],
+                &["table", "json"],
+            ),
+            (
+                "debug paths bogus",
+                vec!["opencode", "debug", "paths", "bogus"],
+                &["db", "home", "data", "config", "cache", "state", "tmp", "bin", "log", "repos"],
+            ),
+        ];
+        for (label, argv, choices) in cases {
+            let error = Cli::try_parse_from(argv).unwrap_err();
+            let rendered = error.to_string();
+            assert!(rendered.contains("invalid value"), "{label}: {rendered}");
+            for choice in choices {
+                assert!(rendered.contains(choice), "{label} must list {choice}: {rendered}");
+            }
+        }
+    }
+
+    /// G-13: valid values keep parsing exactly as the plain strings did.
+    #[test]
+    fn enum_fields_accept_the_ref_choice_sets() {
+        let upgrade = Cli::try_parse_from(["opencode", "upgrade", "-m", "curl"]).expect("parse");
+        let Some(Commands::Upgrade { method, .. }) = upgrade.command else {
+            panic!("upgrade subcommand");
+        };
+        assert_eq!(method, Some(super::UpgradeMethod::Curl));
+
+        let run =
+            Cli::try_parse_from(["opencode", "run", "--format", "json", "hi"]).expect("parse");
+        let Some(Commands::Run { format, .. }) = run.command else {
+            panic!("run subcommand");
+        };
+        assert_eq!(format, super::OutputFormat::Json);
+
+        let auth =
+            Cli::try_parse_from(["opencode", "auth", "list", "--format", "json"]).expect("parse");
+        let Some(Commands::Auth { command: AuthCommands::List { format } }) = auth.command else {
+            panic!("auth list subcommand");
+        };
+        assert_eq!(format, super::OutputFormat::Json);
+
+        let session = Cli::try_parse_from(["opencode", "session", "list", "--format", "json"])
+            .expect("parse");
+        let Some(Commands::Session { command: SessionCommands::List { format, .. } }) =
+            session.command
+        else {
+            panic!("session list subcommand");
+        };
+        assert_eq!(format, super::SessionListFormat::Json);
+
+        let paths = Cli::try_parse_from(["opencode", "debug", "paths", "repos"]).expect("parse");
+        let Some(Commands::Debug { command: DebugCommands::Paths { name } }) = paths.command else {
+            panic!("debug paths subcommand");
+        };
+        assert_eq!(name, Some(super::PathName::Repos));
+    }
+
+    /// G-13: the defaults round out the contract (run/auth `default`,
+    /// session `table`, every method/`paths` key accepted once).
+    #[test]
+    fn enum_fields_default_like_the_ref() {
+        let run = Cli::try_parse_from(["opencode", "run", "hi"]).expect("parse");
+        let Some(Commands::Run { format, .. }) = run.command else { panic!("run") };
+        assert_eq!(format, super::OutputFormat::Default);
+
+        let auth = Cli::try_parse_from(["opencode", "auth", "list"]).expect("parse");
+        let Some(Commands::Auth { command: AuthCommands::List { format } }) = auth.command else {
+            panic!("auth list");
+        };
+        assert_eq!(format, super::OutputFormat::Default);
+
+        let session = Cli::try_parse_from(["opencode", "session", "list"]).expect("parse");
+        let Some(Commands::Session { command: SessionCommands::List { format, .. } }) =
+            session.command
+        else {
+            panic!("session list");
+        };
+        assert_eq!(format, super::SessionListFormat::Table);
+
+        let bare = Cli::try_parse_from(["opencode", "debug", "paths"]).expect("parse");
+        let Some(Commands::Debug { command: DebugCommands::Paths { name } }) = bare.command else {
+            panic!("debug paths");
+        };
+        assert_eq!(name, None);
+
+        for method in ["curl", "npm", "pnpm", "bun", "yarn", "vp", "brew"] {
+            let parsed = Cli::try_parse_from(["opencode", "upgrade", "-m", method])
+                .unwrap_or_else(|error| panic!("{method}: {error}"));
+            assert!(matches!(parsed.command, Some(Commands::Upgrade { .. })), "{method} parses");
+        }
     }
 }
