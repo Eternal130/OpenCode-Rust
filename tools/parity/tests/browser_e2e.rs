@@ -75,6 +75,56 @@ const SCENARIO_BUDGET: Duration = Duration::from_secs(120);
 /// Budget for a single in-page poll step.
 const POLL_STEP: Duration = Duration::from_millis(250);
 
+/// Cross-test concurrency cap: every scenario holds the scenario lock
+/// from spawn to teardown. Nextest runs each test in its own PROCESS,
+/// so an in-process semaphore serializes nothing — the cap is a
+/// blocking `flock` on a shared lock file under the target dir.
+/// Parallel scenarios each launch a Chrome + an `oc-server`; a second
+/// concurrent Chrome died on `pthread_create: Resource temporarily
+/// unavailable` inside the dev-gate scope's task limit, so scenarios
+/// run one at a time (each is ~2-4s; the battery stays well inside its
+/// budget).
+struct ScenarioSlot {
+    _file: std::fs::File,
+}
+
+impl Drop for ScenarioSlot {
+    fn drop(&mut self) {
+        // Closing the fd releases the flock.
+    }
+}
+
+async fn scenario_slot() -> Result<ScenarioSlot> {
+    let path = artifacts_root().join(".scenario-lock");
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    #[allow(unsafe_code)]
+    tokio::task::spawn_blocking(move || -> Result<ScenarioSlot> {
+        use std::os::unix::io::AsRawFd;
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)
+            .with_context(|| format!("open scenario lock {}", path.display()))?;
+        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+        anyhow::ensure!(rc == 0, "flock {}: {rc}", path.display());
+        Ok(ScenarioSlot { _file: file })
+    })
+    .await
+    .context("scenario lock task")?
+}
+
+/// The shared artifact root (target dir + `browser-e2e`).
+fn artifacts_root() -> PathBuf {
+    let target =
+        std::env::var("CARGO_TARGET_DIR").map_or_else(|_| workspace_target(), PathBuf::from);
+    let dir = target.join("browser-e2e");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
 // ---------------------------------------------------------------------------
 // Opt-in gates
 // ---------------------------------------------------------------------------
@@ -325,9 +375,13 @@ async fn spawn_server(
         ],
         seed_files: vec![
             ("cfg/opencode.json".into(), config),
-            ("project/src/main.rs".into(), "fn main() { println!(\"hi\"); }\n".into()),
+            ("project/src/main.rs".into(), "fn main() { println!(\"hi browser e2e\"); }\n".into()),
             ("project/README.md".into(), "# browser-e2e workspace\n".into()),
+            ("project/src/util.rs".into(), "pub fn answer() -> u32 { 42 }\n".into()),
         ],
+        // Serve the seeded workspace as the visible project (the default
+        // mirrors the reference cwd instead — S3 needs the seeds).
+        project_cwd: Some("project".into()),
     })
     .await
 }
@@ -372,6 +426,7 @@ async fn browser_e2e_s1_auth() -> Result<()> {
     let Some((root, assets, mode)) = preflight("s1") else {
         return Ok(());
     };
+    let _scenario_slot = scenario_slot().await?;
     let fake = ScriptedFakeLlm::start(vec![p10_common::text_script("unused")])
         .await
         .context("fake llm")?;
@@ -528,6 +583,7 @@ async fn browser_e2e_s2_prompt_streaming() -> Result<()> {
     let Some((root, assets, _mode)) = preflight("s2") else {
         return Ok(());
     };
+    let _scenario_slot = scenario_slot().await?;
     let fake = ScriptedFakeLlm::start(vec![p10_common::text_script(S2_REPLY)])
         .await
         .context("fake llm")?;
@@ -700,4 +756,608 @@ async fn session_final_text_check(url: &str, password: &str, id: &str) -> Result
     Err(anyhow!(
         "assistant text never matched the fake LLM script; last: {collected:?}; rows: {last_rows}"
     ))
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 3: file tree / mentions
+// ---------------------------------------------------------------------------
+
+/// S3 — the file-tree/mention contracts the SPA composer consumes,
+/// against the seeded workspace (the server cwd is pinned at
+/// `project/` via `RustSpawn::project_cwd`, so the request location's
+/// directory IS the seeded workspace — not the reference checkout the
+/// default cwd-mirroring would pick):
+///
+/// - `GET /api/fs/list` — the file-tree root (the SPA file picker);
+/// - `GET /api/fs/read/src/main.rs` — file content open;
+/// - `GET /api/fs/find?query=main` — the @-mention / context-popover
+///   autocomplete lookup the ref SPA drives through `fsFind`
+///   (`packages/app/e2e/utils/mock-api.ts:206`,
+///   `command-palette.spec.ts` routes `**/api/fs/find?*`).
+///
+/// Paths are location-relative (`RelativePath`,
+/// `handlers/fs.ts:16-19`) — exactly what the browser sends.
+#[tokio::test]
+async fn browser_e2e_s3_file_tree_mentions() -> Result<()> {
+    let Some((root, assets, _mode)) = preflight("s3") else {
+        return Ok(());
+    };
+    let _scenario_slot = scenario_slot().await?;
+    let fake = ScriptedFakeLlm::start(vec![p10_common::text_script("unused")])
+        .await
+        .context("fake llm")?;
+    let server = spawn_server(&assets, &fake).await?;
+    let url = server.url().to_owned();
+    let password = server.password().to_owned();
+
+    let run = tokio::time::timeout(SCENARIO_BUDGET, s3_body(&url, &password)).await;
+    let result = run.map_err(|_| anyhow!("scenario timed out after {SCENARIO_BUDGET:?}"));
+    let outcome = result?;
+    server.stop().await?;
+    drop(root);
+    outcome
+}
+
+async fn s3_body(url: &str, password: &str) -> Result<()> {
+    let artifacts = artifacts_dir("s3");
+    let mut session = open_page(url, &artifacts).await?;
+    let result = s3_page_checks(&mut session, password).await;
+    if result.is_err() {
+        session.dump_artifacts(&artifacts, "s3").await;
+        eprintln!("console: {:?}", session.console_lines());
+    }
+    result
+}
+
+async fn s3_page_checks(session: &mut BrowserSession, password: &str) -> Result<()> {
+    session
+        .poll_js(
+            "document.readyState",
+            |value| value == "complete" || value == "interactive",
+            Duration::from_secs(30),
+            "document readyState",
+        )
+        .await?;
+
+    let js = format!(
+        r"(async () => {{
+          const headers = {{ Authorization: 'Basic ' + btoa('opencode:{password}') }};
+          const out = {{}};
+          const list = await fetch('/api/fs/list', {{ headers }});
+          out.listStatus = list.status;
+          out.listBody = await list.json();
+          const read = await fetch('/api/fs/read/src/main.rs', {{ headers }});
+          out.readStatus = read.status;
+          out.readBody = await read.text();
+          const find = await fetch('/api/fs/find?query=main', {{ headers }});
+          out.findStatus = find.status;
+          out.findBody = await find.json();
+          const readme = await fetch('/api/fs/find?query=README', {{ headers }});
+          out.readmeStatus = readme.status;
+          out.readmeBody = await readme.json();
+          return out;
+        }})()"
+    );
+    let probe = session
+        .poll_js(
+            &js,
+            |value| {
+                value.get("listStatus").is_some()
+                    && value.get("readStatus").is_some()
+                    && value.get("findStatus").is_some()
+                    && value.get("readmeStatus").is_some()
+            },
+            Duration::from_secs(30),
+            "fs probe",
+        )
+        .await?;
+    eprintln!(
+        "[s3] statuses: list={} read={} find={} readme={}",
+        probe["listStatus"], probe["readStatus"], probe["findStatus"], probe["readmeStatus"]
+    );
+
+    // File tree root lists the seeded workspace entries.
+    anyhow::ensure!(probe["listStatus"] == 200, "fs/list not 200: {}", probe["listBody"]);
+    let list_rows = probe["listBody"]["data"].as_array().cloned().unwrap_or_default();
+    let listed: Vec<String> = list_rows
+        .iter()
+        .filter_map(|row| row["name"].as_str().or_else(|| row["path"].as_str()).map(str::to_owned))
+        .collect();
+    eprintln!("[s3] fs/list entries: {listed:?}");
+    anyhow::ensure!(
+        listed.iter().any(|entry| entry.contains("src")),
+        "fs/list missing the seeded src/ directory: {listed:?}"
+    );
+    anyhow::ensure!(
+        listed.iter().any(|entry| entry.contains("README")),
+        "fs/list missing the seeded README.md: {listed:?}"
+    );
+
+    // File content read matches the seed.
+    anyhow::ensure!(probe["readStatus"] == 200, "fs/read not 200: {}", probe["readBody"]);
+    let read_body = probe["readBody"].as_str().unwrap_or_default();
+    anyhow::ensure!(
+        read_body.contains("fn main") && read_body.contains("hi browser e2e"),
+        "fs/read/src/main.rs content mismatch: {read_body:?}"
+    );
+
+    // The @-mention autocomplete lookup (fsFind) finds the seeded files.
+    for (key, needle) in [("findBody", "main.rs"), ("readmeBody", "README.md")] {
+        anyhow::ensure!(
+            probe[key.split("Status").next().unwrap_or(key)]["data"].as_array().is_some_and(
+                |rows| {
+                    rows.iter().any(|row| {
+                        row["path"]
+                            .as_str()
+                            .or_else(|| row["name"].as_str())
+                            .is_some_and(|path| path.contains(needle))
+                    })
+                }
+            ),
+            "fs/find did not surface {needle}: {}",
+            probe[key.split("Status").next().unwrap_or(key)]["data"]
+        );
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 6: event reconnect (Last-Event-ID)
+// ---------------------------------------------------------------------------
+
+/// S6 — reconnect semantics against the ground truth in
+/// `oc-server/src/sse.rs` + `oc-core/src/bus.rs` (mirroring the ref
+/// `event-feed.ts`/`handlers/event.ts`):
+///
+/// - **`/api/event` is live-only**: frames are `data:`-only (no SSE
+///   `id:` field, `sse.rs::frame`), so a browser `EventSource` never
+///   gains a `Last-Event-ID` and a reconnect does NOT replay the
+///   missed window — it re-delivers only the fresh `server.connected`
+///   preamble plus live events published after the reopen. Clients
+///   resync via snapshots (what the SPA does on
+///   "event stream disconnected").
+/// - **The cursor-resume surface is
+///   `GET /api/experimental/session/:id/log?after=<seq>`** (ref
+///   `session.log`, handlers/session.ts:611): `after` replays the
+///   durable per-session log strictly past the cursor — no gap, no
+///   duplicate — ending at a `log.synced` marker carrying the
+///   watermark (`bus.rs::log`, `follow:false` completes there).
+///
+/// Both halves are asserted from page context (fetch stream reader +
+/// `EventSource`), including a mid-stream close/reopen on the log.
+#[tokio::test]
+async fn browser_e2e_s6_event_reconnect() -> Result<()> {
+    let Some((root, assets, _mode)) = preflight("s6") else {
+        return Ok(());
+    };
+    let _scenario_slot = scenario_slot().await?;
+    let marker1 = "First turn marker for the reconnect scenario.";
+    let marker2 = "Second turn marker for the reconnect scenario.";
+    let fake = ScriptedFakeLlm::start(vec![
+        p10_common::text_script(marker1),
+        p10_common::text_script(marker2),
+    ])
+    .await
+    .context("fake llm")?;
+    let server = spawn_server(&assets, &fake).await?;
+    let url = server.url().to_owned();
+    let password = server.password().to_owned();
+
+    let run =
+        tokio::time::timeout(SCENARIO_BUDGET, s6_body(&url, &password, marker1, marker2)).await;
+    let result = run.map_err(|_| anyhow!("scenario timed out after {SCENARIO_BUDGET:?}"));
+    let outcome = result?;
+    server.stop().await?;
+    drop(root);
+    outcome
+}
+
+async fn s6_body(url: &str, password: &str, marker1: &str, marker2: &str) -> Result<()> {
+    let artifacts = artifacts_dir("s6");
+
+    // A session with one durable turn: the log cursor has content.
+    let (status, created) = p10_common::api(
+        url,
+        password,
+        "POST",
+        "/api/session",
+        Some(r#"{"title":"browser-e2e-s6"}"#),
+    )
+    .await?;
+    anyhow::ensure!(status == 200, "session create status {status}: {created}");
+    let id = created["data"]["id"]
+        .as_str()
+        .with_context(|| format!("session create missing data.id: {created}"))?
+        .to_owned();
+    submit_prompt(url, password, &id, marker1).await?;
+    wait_assistant_text(url, password, &id, marker1).await?;
+
+    let mut browser = open_page(url, &artifacts).await?;
+    let result = s6_page_checks(&mut browser, url, password, &id, marker2).await;
+    if result.is_err() {
+        browser.dump_artifacts(&artifacts, "s6").await;
+        eprintln!("console: {:?}", browser.console_lines());
+    }
+    result
+}
+
+/// POST `/api/session/:id/prompt` from the harness side (the page-side
+/// submission shape is already covered by S2).
+async fn submit_prompt(url: &str, password: &str, id: &str, text: &str) -> Result<()> {
+    let body = serde_json::json!({ "text": text }).to_string();
+    let (status, value) =
+        p10_common::api(url, password, "POST", &format!("/api/session/{id}/prompt"), Some(&body))
+            .await?;
+    anyhow::ensure!(status == 200, "prompt submit status {status}: {value}");
+    Ok(())
+}
+
+/// Poll the message list until the assistant text contains `needle`.
+async fn wait_assistant_text(url: &str, password: &str, id: &str, needle: &str) -> Result<()> {
+    for _ in 0..120 {
+        tokio::time::sleep(POLL_STEP).await;
+        let (status, body) =
+            p10_common::api(url, password, "GET", &format!("/api/session/{id}/message"), None)
+                .await?;
+        anyhow::ensure!(status == 200, "message list status {status}: {body}");
+        let done = body["data"].as_array().is_some_and(|rows| {
+            rows.iter().any(|row| {
+                row["type"].as_str() == Some("assistant")
+                    && row["content"].as_array().is_some_and(|parts| {
+                        parts.iter().any(|part| {
+                            part["text"].as_str().is_some_and(|text| text.contains(needle))
+                        })
+                    })
+            })
+        });
+        if done {
+            return Ok(());
+        }
+    }
+    Err(anyhow!("assistant text never contained {needle:?}"))
+}
+
+async fn s6_page_checks(
+    session: &mut BrowserSession,
+    url: &str,
+    password: &str,
+    id: &str,
+    marker2: &str,
+) -> Result<()> {
+    session
+        .poll_js(
+            "document.readyState",
+            |value| value == "complete" || value == "interactive",
+            Duration::from_secs(30),
+            "document readyState",
+        )
+        .await?;
+
+    // --- Part A: /api/event framing + live-only reconnect -------------
+    // Raw framing first (fetch stream reader — EventSource hides the
+    // bytes): frames must be `data:`-only, no `id:` field, so a browser
+    // EventSource can never engage Last-Event-ID on this endpoint.
+    // The reader runs as a page-side background task polled from Rust:
+    // a single long `evaluate` sits on one CDP request until its
+    // timeout if the stream stalls.
+    let framing_kick = format!(
+        r"(async () => {{
+          window.__frame6 = null;
+          (async () => {{
+            const deadline = Date.now() + 15000;
+            try {{
+              const token = encodeURIComponent(btoa('opencode:{password}'));
+              const response = await fetch('/api/event?auth_token=' + token, {{ cache: 'no-store' }});
+              const reader = response.body.getReader();
+              const decoder = new TextDecoder();
+              let text = '';
+              while (!text.includes('server.connected') && Date.now() < deadline) {{
+                const {{ done, value }} = await reader.read();
+                if (done) break;
+                text += decoder.decode(value, {{ stream: true }});
+              }}
+              await reader.cancel();
+              const frames = text.split('\n\n').filter((f) => f.length > 0);
+              window.__frame6 = {{
+                startsWithData: frames.every((f) => f.startsWith('data: ')),
+                hasIdField: text.split('\n').some((line) => line.startsWith('id:')),
+                sawConnected: text.includes('server.connected'),
+                head: text.slice(0, 120),
+              }};
+            }} catch (e) {{
+              window.__frame6 = {{ error: String(e) }};
+            }}
+          }})();
+          return 'kicked';
+        }})()"
+    );
+    session
+        .poll_js(&framing_kick, |value| value == "kicked", Duration::from_secs(10), "framing kick")
+        .await?;
+    let framing = session
+        .poll_js(
+            "window.__frame6",
+            |value| !value.is_null(),
+            Duration::from_secs(30),
+            "raw /api/event framing",
+        )
+        .await?;
+    eprintln!("[s6] /api/event framing: {framing}");
+    anyhow::ensure!(framing["sawConnected"] == true, "no server.connected frame: {framing}");
+    anyhow::ensure!(
+        framing["startsWithData"] == true,
+        "/api/event frames are not data-only: {framing}"
+    );
+    anyhow::ensure!(
+        framing["hasIdField"] == false,
+        "/api/event frames carry an id: field (Last-Event-ID would engage — contract drift): {framing}"
+    );
+
+    // Reconnect: open es1, close it, publish while closed, reopen es2.
+    // Ground truth: missed events are NOT replayed; the reopened feed
+    // delivers a fresh server.connected + live events published after
+    // the reopen only.
+    let setup = format!(
+        r"(async () => {{
+          window.__ev6 = [];
+          const open = () => {{
+            const token = encodeURIComponent(btoa('opencode:{password}'));
+            const es = new EventSource('/api/event?auth_token=' + token);
+            es.onmessage = (m) => {{
+              try {{ window.__ev6.push(JSON.parse(m.data)); }} catch {{}}
+            }};
+            return es;
+          }};
+          window.__es6 = open();
+          const t0 = Date.now();
+          return await new Promise((resolve) => {{
+            const check = () => {{
+              if (window.__ev6.some((e) => e.type === 'server.connected') || Date.now() - t0 > 15000) {{
+                resolve(true);
+              }} else {{
+                setTimeout(check, 50);
+              }}
+            }};
+            check();
+          }});
+        }})()"
+    );
+    session
+        .poll_js(&setup, |value| value == &Value::Bool(true), Duration::from_secs(30), "es6 setup")
+        .await?;
+
+    // Close the feed, then publish session A's events while closed.
+    session.eval("window.__es6.close(); window.__ev6 = []; 'closed'").await.context("close es6")?;
+    let (status, missed) = p10_common::api(
+        url,
+        password,
+        "POST",
+        "/api/session",
+        Some(r#"{"title":"s6-missed-while-closed"}"#),
+    )
+    .await?;
+    anyhow::ensure!(status == 200, "missed-window session create status {status}: {missed}");
+    let missed_id = missed["data"]["id"].as_str().unwrap_or_default().to_owned();
+    // Deterministic "events committed" wait: the session row is visible.
+    let mut committed = false;
+    for _ in 0..40 {
+        tokio::time::sleep(POLL_STEP).await;
+        let (status, body) =
+            p10_common::api(url, password, "GET", &format!("/api/session/{missed_id}"), None)
+                .await?;
+        if status == 200 {
+            committed = true;
+            break;
+        }
+        let _ = body;
+    }
+    anyhow::ensure!(committed, "missed-window session never became visible");
+
+    // Reopen (new EventSource) and publish session B after the reopen.
+    let reopen = format!(
+        r"(async () => {{
+          const token = encodeURIComponent(btoa('opencode:{password}'));
+          const es = new EventSource('/api/event?auth_token=' + token);
+          es.onmessage = (m) => {{
+            try {{ window.__ev6.push(JSON.parse(m.data)); }} catch {{}}
+          }};
+          window.__es6 = es;
+          const t0 = Date.now();
+          return await new Promise((resolve) => {{
+            const check = () => {{
+              if (window.__ev6.some((e) => e.type === 'server.connected') || Date.now() - t0 > 15000) {{
+                resolve(window.__ev6.length);
+              }} else {{
+                setTimeout(check, 50);
+              }}
+            }};
+            check();
+          }});
+        }})()"
+    );
+    let first = session
+        .poll_js(&reopen, |value| !value.is_null(), Duration::from_secs(30), "es6 reopen")
+        .await?;
+    anyhow::ensure!(first.as_u64().unwrap_or(0) > 0, "reopened feed delivered nothing: {first}");
+    let (status, live) = p10_common::api(
+        url,
+        password,
+        "POST",
+        "/api/session",
+        Some(r#"{"title":"s6-live-after-reopen"}"#),
+    )
+    .await?;
+    anyhow::ensure!(status == 200, "post-reopen session create status {status}: {live}");
+    let live_id = live["data"]["id"].as_str().unwrap_or_default().to_owned();
+
+    // Poll: the reopened feed sees session B's events...
+    let seen = session
+        .poll_js(
+            "window.__ev6.map((e) => JSON.stringify(e)).join('\\n')",
+            |events| events.as_str().is_some_and(|text| text.contains(&live_id)),
+            Duration::from_secs(30),
+            "post-reopen live events",
+        )
+        .await?;
+    // ...but NOT session A's (live-only feed, no replay).
+    anyhow::ensure!(
+        !seen.as_str().unwrap_or_default().contains(&missed_id),
+        "events published while the feed was closed were replayed on reconnect (contract drift): {}",
+        seen.as_str().unwrap_or_default()
+    );
+    eprintln!("[s6] reconnect: live events delivered, missed window correctly not replayed");
+
+    // --- Part B: session-log cursor resume (after=<seq>) ---------------
+    // Batch 1: full log (follow=false) through the page fetch stream.
+    session
+        .poll_js(
+            &log_batch_js(password, id, "null"),
+            |value| value == "kicked",
+            Duration::from_secs(10),
+            "log batch 1 kick",
+        )
+        .await?;
+    let batch1 = session
+        .poll_js(
+            "window.__log6",
+            |value| value.get("syncedSeq").is_some() || value.get("error").is_some(),
+            Duration::from_secs(60),
+            "log batch 1",
+        )
+        .await?;
+    eprintln!("[s6] log batch 1: {batch1}");
+    let seq1 = batch1["maxSeq"].as_i64().unwrap_or(-1);
+    anyhow::ensure!(seq1 >= 0, "log batch 1 saw no durable seq: {batch1}");
+
+    // Publish more events for the SAME session (turn 2), wait durable.
+    submit_prompt(url, password, id, marker2).await?;
+    wait_assistant_text(url, password, id, marker2).await?;
+
+    // Batch 2: reopen past the cursor — no gap, no duplicate.
+    session
+        .poll_js(
+            &log_batch_js(password, id, &seq1.to_string()),
+            |value| value == "kicked",
+            Duration::from_secs(10),
+            "log batch 2 kick",
+        )
+        .await?;
+    let batch2 = session
+        .poll_js(
+            "window.__log6",
+            |value| value.get("syncedSeq").is_some() || value.get("error").is_some(),
+            Duration::from_secs(60),
+            "log batch 2 (after cursor)",
+        )
+        .await?;
+    eprintln!("[s6] log batch 2: {batch2}");
+    let seq2 = batch2["syncedSeq"].as_i64().unwrap_or(-1);
+    anyhow::ensure!(seq2 > seq1, "watermark did not advance past the cursor: {seq1} -> {seq2}");
+
+    // Batch 2 must cover the gap (turn-2 durable events present; the
+    // per-delta frames are live-only — `session.text.delta` is not in
+    // the durable log, only the lifecycle pair)...
+    anyhow::ensure!(
+        batch2["types"].as_array().is_some_and(|types| {
+            types.iter().any(|t| t == "session.text.ended")
+                && types.iter().any(|t| t == "session.execution.succeeded")
+        }),
+        "log batch 2 missed the turn-2 events: {}",
+        batch2["types"]
+    );
+    anyhow::ensure!(
+        batch2["count"].as_u64().unwrap_or(0) > 1,
+        "log batch 2 carried no replay body: {batch2}"
+    );
+    // ...strictly past the cursor (no seq <= cursor, no duplicate ids)...
+    anyhow::ensure!(
+        batch2["minSeq"].as_i64().unwrap_or(i64::MAX) > seq1,
+        "log batch 2 replayed at-or-before the cursor: {}",
+        batch2["minSeq"]
+    );
+    let ids1: std::collections::HashSet<String> = batch1["ids"]
+        .as_array()
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|value| value.as_str().map(str::to_owned))
+                .collect::<Vec<String>>()
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+    let duplicates: Vec<String> = batch2["ids"]
+        .as_array()
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|value| value.as_str().map(str::to_owned))
+                .collect::<Vec<String>>()
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|id| ids1.contains(id))
+        .collect();
+    anyhow::ensure!(
+        duplicates.is_empty(),
+        "log batch 2 re-delivered event ids past the cursor: {duplicates:?}"
+    );
+    eprintln!("[s6] cursor resume: gap covered, no duplicates past cursor {seq1}");
+    Ok(())
+}
+
+/// In-page JS reading one `follow:false` log batch through the fetch
+/// stream reader: collects `data:` frames up to the `log.synced`
+/// marker, stashing the result on `window.__log6`. Runs as a page-side
+/// background task (a single long `evaluate` would hold one CDP
+/// request open for the whole stream); the caller polls
+/// `window.__log6` until it is set.
+fn log_batch_js(password: &str, id: &str, after: &str) -> String {
+    // `after` is spliced as a JS literal: "null" (no cursor) or a number.
+    let after_literal = if after == "null" { "null".to_owned() } else { after.to_owned() };
+    format!(
+        r"(async () => {{
+          window.__log6 = null;
+          (async () => {{
+            try {{
+              const headers = {{ Authorization: 'Basic ' + btoa('opencode:{password}') }};
+              const base = '/api/experimental/session/{id}/log?follow=false';
+              const after = {after_literal};
+              const afterQ = after === null ? '' : '&after=' + after;
+              const response = await fetch(base + afterQ, {{ headers, cache: 'no-store' }});
+              if (response.status !== 200) {{
+                window.__log6 = {{ error: response.status, body: await response.text() }};
+                return;
+              }}
+              const reader = response.body.getReader();
+              const decoder = new TextDecoder();
+              let text = '';
+              for (;;) {{
+                const {{ done, value }} = await reader.read();
+                if (done) break;
+                text += decoder.decode(value, {{ stream: true }});
+              }}
+              const events = text
+                .split('\n\n')
+                .filter((frame) => frame.startsWith('data: '))
+                .map((frame) => {{
+                  try {{ return JSON.parse(frame.slice(6)); }} catch {{ return null; }}
+                }})
+                .filter((event) => event !== null);
+              const synced = events.find((event) => event.type === 'log.synced');
+              const durable = events.filter((event) => event.durable && event.durable.seq !== undefined);
+              const seqs = durable.map((event) => event.durable.seq);
+              window.__log6 = {{
+                count: events.length,
+                types: events.map((event) => event.type),
+                ids: durable.map((event) => event.id),
+                minSeq: seqs.length ? Math.min(...seqs) : null,
+                maxSeq: seqs.length ? Math.max(...seqs) : null,
+                syncedSeq: synced && synced.seq !== undefined ? synced.seq : null,
+              }};
+            }} catch (e) {{
+              window.__log6 = {{ error: String(e) }};
+            }}
+          }})();
+          return 'kicked';
+        }})()"
+    )
 }
