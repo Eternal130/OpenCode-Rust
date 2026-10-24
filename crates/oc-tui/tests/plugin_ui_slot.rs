@@ -100,6 +100,56 @@ fn router_resolves_fixture_claims() {
     assert!(resolution.suppressed.is_empty(), "no suppression: {:?}", resolution.suppressed);
 }
 
+/// G-04 — the footer-face paths are mounted: claims targeting
+/// `home.footer(.status)`, `prompt.footer(.status/.file)` and
+/// `sidebar.footer` resolve into their own buckets (no more
+/// "unmounted" suppression/degradation diagnostics).
+#[test]
+fn footer_face_claims_resolve_onto_mounted_paths() {
+    let claims = project_claims(
+        &[
+            "home.footer",
+            "home.footer.status",
+            "prompt.footer",
+            "prompt.footer.status",
+            "prompt.footer.file",
+            "sidebar.footer",
+        ]
+        .iter()
+        .map(|target| oc_plugin_host::registrations::PluginSlotClaim {
+            plugin_id: "slotclaims".into(),
+            key: "slot#0".into(),
+            kind: "append".into(),
+            target: (*target).to_owned(),
+        })
+        .collect::<Vec<_>>(),
+    );
+    let resolution = resolve_slots(&oc_tui::components::plugin_slots::mounted_paths(), &claims);
+    for path in [
+        "home.footer",
+        "home.footer.status",
+        "prompt.footer",
+        "prompt.footer.status",
+        "prompt.footer.file",
+        "sidebar.footer",
+    ] {
+        assert!(resolution.slotted.contains_key(path), "{path} slotted");
+    }
+    assert!(resolution.suppressed.is_empty(), "no suppression: {:?}", resolution.suppressed);
+    assert!(resolution.degraded.is_empty(), "no degradation: {:?}", resolution.degraded);
+    // `session.panel` stays unmounted (interactive API — documented
+    // exemption): its claims keep the pre-G-04 degradation.
+    let panel = project_claims(&[oc_plugin_host::registrations::PluginSlotClaim {
+        plugin_id: "slotclaims".into(),
+        key: "slot#9".into(),
+        kind: "append".into(),
+        target: "session.panel".into(),
+    }]);
+    let panel = resolve_slots(&oc_tui::components::plugin_slots::mounted_paths(), &panel);
+    assert!(panel.slotted.is_empty());
+    assert_eq!(panel.suppressed.len(), 1, "session.panel stays unmounted");
+}
+
 #[test]
 #[allow(clippy::too_many_lines)] // one phase per seam
 fn slot_renders_and_clicks() {
@@ -115,6 +165,18 @@ fn slot_renders_and_clicks() {
     assert_eq!(section.title, "Claims");
     assert_eq!(section.rows, ["target: board".to_owned(), "plain row".to_owned()]);
     assert_eq!(section.clickable, vec![true, false]);
+
+    // -- G-04: the footer faces materialized onto their surfaces ------
+    assert_eq!(
+        store.plugin_slot_rows("prompt.footer"),
+        ["prompt footer: normal".to_owned()],
+        "prompt.footer rendered with the PromptFooterInput props"
+    );
+    assert_eq!(store.plugin_slot_rows("home.footer"), ["home footer row".to_owned()]);
+    let sidebar_footer = store.plugin_slot_sections("sidebar.footer");
+    assert_eq!(sidebar_footer.len(), 1);
+    assert_eq!(sidebar_footer[0].title, "Side footer");
+    assert_eq!(sidebar_footer[0].rows, ["sidebar footer row".to_owned()]);
 
     // The LIVE route renders it in the docked sidebar pane (the
     // plugin_slots.rs proof shape: docked at 160 cols, the section

@@ -1241,7 +1241,8 @@ pub struct Store {
     plugin_sections: Signal<Vec<crate::components::sidebar::SidebarSection>>,
     /// Plugin footer-face slot sections (G-04): surface path
     /// (`home.footer`/`prompt.footer`/`sidebar.footer`) → sections.
-    plugin_slot_sections: Signal<std::collections::BTreeMap<String, Vec<crate::components::sidebar::SidebarSection>>>,
+    plugin_slot_sections:
+        Signal<std::collections::BTreeMap<String, Vec<crate::components::sidebar::SidebarSection>>>,
     /// The open plugin route page (PLUG-TUI-SLOT's router surface);
     /// `None` = no plugin page open.
     plugin_route: Signal<Option<PluginRoutePage>>,
@@ -2797,7 +2798,8 @@ struct StoreSignals {
     plugin_commands: Signal<Vec<PluginCommandEntry>>,
     plugin_dialogs: Signal<HashMap<String, PluginDialogContent>>,
     plugin_sections: Signal<Vec<crate::components::sidebar::SidebarSection>>,
-    plugin_slot_sections: Signal<std::collections::BTreeMap<String, Vec<crate::components::sidebar::SidebarSection>>>,
+    plugin_slot_sections:
+        Signal<std::collections::BTreeMap<String, Vec<crate::components::sidebar::SidebarSection>>>,
     plugin_route: Signal<Option<PluginRoutePage>>,
     /// `session.sidebar` — the config mode (auto/hide) after the
     /// boot merge (cli.json, then the last toggle's persisted value).
@@ -3274,7 +3276,7 @@ impl Store {
                 plugin_commands,
                 plugin_dialogs,
                 plugin_sections,
-            plugin_slot_sections,
+                plugin_slot_sections,
                 plugin_route,
                 sidebar_mode,
                 sidebar_open,
@@ -8627,17 +8629,25 @@ impl Store {
 
     /// One footer-face surface's plugin sections (render order).
     #[must_use]
-    pub fn plugin_slot_sections(&self, surface: &str) -> Vec<crate::components::sidebar::SidebarSection> {
+    pub fn plugin_slot_sections(
+        &self,
+        surface: &str,
+    ) -> Vec<crate::components::sidebar::SidebarSection> {
         self.plugin_slot_sections.get().get(surface).cloned().unwrap_or_default()
     }
 
-    /// One footer-face surface's plugin rows (titles skipped — the
-    /// footer faces are row surfaces, like the ref's hint segments).
+    /// One footer-face surface's plugin rows (the title counts as a
+    /// row too — the footer faces are pure row surfaces; the guest
+    /// flattener puts a single-line render's text in `title`).
     #[must_use]
     pub fn plugin_slot_rows(&self, surface: &str) -> Vec<String> {
         self.plugin_slot_sections(surface)
             .iter()
-            .flat_map(|section| section.rows.iter().cloned())
+            .flat_map(|section| {
+                let title =
+                    std::iter::once(section.title.clone()).filter(|title| !title.is_empty());
+                title.chain(section.rows.iter().cloned())
+            })
             .collect()
     }
 
