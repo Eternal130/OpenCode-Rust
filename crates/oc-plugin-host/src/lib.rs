@@ -935,12 +935,27 @@ impl PluginHost {
         key: &str,
         timeout: Duration,
     ) -> Result<PluginSectionSpec, String> {
+        self.render_slot_claim_with_props(plugin_id, key, &json!({}), timeout)
+    }
+
+    /// [`Self::render_slot_claim`] with the slot's render props (the
+    /// ref `SlotMap` inputs — e.g. `prompt.footer`'s
+    /// `PromptFooterInput{sessionID?, mode, showDetails}`,
+    /// context.ts:159-163): the guest runs the claim's render with
+    /// `props` instead of `{}`.
+    pub fn render_slot_claim_with_props(
+        &self,
+        plugin_id: &str,
+        key: &str,
+        props: &Value,
+        timeout: Duration,
+    ) -> Result<PluginSectionSpec, String> {
         let Some(facade) = &self.facade else { return Err("plugin subsystem disabled".into()) };
         let Some(runtime) = &facade.runtime else { return Err("plugin host unavailable".into()) };
         let result = runtime
             .block_on(facade.shared.request(
                 "slot.claim.render",
-                json!({ "pluginId": plugin_id, "key": key }),
+                json!({ "pluginId": plugin_id, "key": key, "props": props }),
                 timeout,
             ))
             .map_err(|error| error.to_string())?;
