@@ -18,6 +18,13 @@
 //! (`pbpaste`/`xclip`/`xsel`/`wl-paste`, v2's host-first layering) over
 //! the OSC 52 query window ([`crate::terminal_proto`]); tests inject
 //! [`FixedClipboardSource`] fakes.
+//!
+//! G-11 paste-decode note: `opentui_core::paste` (`decode_paste_bytes` /
+//! `strip_ansi`) is deliberately NOT adopted here — oc-tui receives
+//! already-decoded `crossterm::event::Event::Paste` strings (no raw
+//! paste bytes to decode), and `strip_ansi_sequences` would newly strip
+//! escape bytes from pasted text (behavior change for e.g. pasted
+//! terminal transcripts). Not behavior-neutral ⇒ skipped.
 
 use std::io::Write;
 

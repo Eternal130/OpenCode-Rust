@@ -141,7 +141,8 @@ impl oc_core::config::watch::ConfigUpdated for ConfigReloadBridge {
     }
 }
 
-// The config-derived provider bindings (`ConfigProviders` +// `providers_from_config`) are re-exported from
+// The config-derived provider bindings (`ConfigProviders` +
+// `providers_from_config`) are re-exported from
 // `oc_core::provider_catalog::overlay`, where the per-location provider
 // overlay shares the mapping: every `providers.<id>` entry carrying a
 // `settings.baseURL` becomes an openai-compatible `CustomProvider`

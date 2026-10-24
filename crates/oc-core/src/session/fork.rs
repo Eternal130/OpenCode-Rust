@@ -20,6 +20,17 @@ use serde_json::Value;
 
 use crate::database::Database;
 
+/// Maps a single-row lookup: `QueryReturnedNoRows` is a legitimate absent
+/// outcome; every other storage error propagates (gate-2 followup — ref
+/// orDie's storage errors instead of conflating them with absence).
+fn optional_row<T>(result: rusqlite::Result<T>) -> rusqlite::Result<Option<T>> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
 /// Fork command failures (mapped to HTTP errors by the server shell).
 #[derive(Debug)]
 pub enum ForkError {
@@ -70,39 +81,35 @@ pub async fn fork(
     let lookup_before = before.map(String::from);
     let (boundary_id, instructions, instruction_entries) = db
         .transaction(move |tx| {
-            // Boundary (ref session.ts:321-339).
+            // Boundary (ref session.ts:321-339). `QueryReturnedNoRows` is a
+            // legitimate "absent" outcome (named-before missing / empty
+            // session, classified below); any other storage error must
+            // surface as `ForkError::Db` instead of masquerading as absent
+            // (gate-2 followup: ref orDie's storage errors).
             let boundary_id: Option<String> = match &lookup_before {
-                Some(before) => tx
-                    .conn()
-                    .query_row(
-                        "SELECT id FROM session_message WHERE session_id = ?1 AND id = ?2 \
-                         ORDER BY seq DESC LIMIT 1",
-                        rusqlite::params![session, before],
-                        |row| row.get(0),
-                    )
-                    .ok(),
-                None => tx
-                    .conn()
-                    .query_row(
-                        "SELECT id FROM session_message WHERE session_id = ?1 \
-                         ORDER BY seq DESC LIMIT 1",
-                        rusqlite::params![session],
-                        |row| row.get(0),
-                    )
-                    .ok(),
+                Some(before) => optional_row(tx.conn().query_row(
+                    "SELECT id FROM session_message WHERE session_id = ?1 AND id = ?2 \
+                             ORDER BY seq DESC LIMIT 1",
+                    rusqlite::params![session, before],
+                    |row| row.get(0),
+                ))?,
+                None => optional_row(tx.conn().query_row(
+                    "SELECT id FROM session_message WHERE session_id = ?1 \
+                             ORDER BY seq DESC LIMIT 1",
+                    rusqlite::params![session],
+                    |row| row.get(0),
+                ))?,
             };
             let Some(boundary_id) = boundary_id else {
                 return Ok((None, None, Vec::new()));
             };
-            // Inherited instruction snapshot (ref session.ts:341-349).
-            let values: Option<String> = tx
-                .conn()
-                .query_row(
-                    "SELECT current_values FROM instruction_state WHERE session_id = ?1",
-                    rusqlite::params![session],
-                    |row| row.get(0),
-                )
-                .ok();
+            // Inherited instruction snapshot (ref session.ts:341-349). Absent
+            // row is legitimate (`None`); other storage errors propagate.
+            let values: Option<String> = optional_row(tx.conn().query_row(
+                "SELECT current_values FROM instruction_state WHERE session_id = ?1",
+                rusqlite::params![session],
+                |row| row.get(0),
+            ))?;
             let mut statement = tx.conn().prepare(
                 // ref instruction-entry.ts:36 — snapshot reads ascend by key
                 "SELECT key, value, removed FROM instruction_entry WHERE session_id = ?1 \
