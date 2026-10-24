@@ -370,6 +370,24 @@ impl PtyService {
         let _ = self.inner.bus.publish(&definition, data, PublishOptions::default()).await;
     }
 
+    /// Wire conversion into the typed `Pty.Info` schema (camelCase
+    /// `exitCode`, absent while running).
+    fn schema_info(info: &Info) -> oc_schema::pty::Info {
+        oc_schema::pty::Info {
+            id: info.id.0.clone(),
+            title: info.title.clone(),
+            command: info.command.clone(),
+            args: info.args.clone(),
+            cwd: info.cwd.clone(),
+            status: match info.status {
+                Status::Running => oc_schema::pty::Status::Running,
+                Status::Exited => oc_schema::pty::Status::Exited,
+            },
+            pid: u64::from(info.pid),
+            exit_code: info.exit_code.map(|code| u64::try_from(code).unwrap_or(0)),
+        }
+    }
+
     /// `Pty.list`.
     #[must_use]
     pub fn list(&self) -> Vec<Info> {
@@ -505,7 +523,11 @@ impl PtyService {
                         service
                             .publish(
                                 "pty.exited",
-                                serde_json::json!({ "id": id_for_exit.0, "exitCode": code.unwrap_or(0) }),
+                                serde_json::to_value(oc_schema::pty::Exited {
+                                    id: id_for_exit.0.clone(),
+                                    exit_code: u64::try_from(code.unwrap_or(0)).unwrap_or(0),
+                                })
+                                .unwrap_or_default(),
                             )
                             .await;
                         service.enforce_exited_limit().await;
@@ -521,7 +543,10 @@ impl PtyService {
             bus_service
                 .publish(
                     "pty.created",
-                    serde_json::json!({ "info": serde_json::to_value(&created).unwrap_or_default() }),
+                    serde_json::to_value(oc_schema::pty::Created {
+                        info: PtyService::schema_info(&created),
+                    })
+                    .unwrap_or_default(),
                 )
                 .await;
         });
@@ -541,7 +566,12 @@ impl PtyService {
         };
         for id in evict {
             self.inner.teardown(&id);
-            self.publish("pty.deleted", serde_json::json!({ "id": id.0 })).await;
+            self.publish(
+                "pty.deleted",
+                serde_json::to_value(oc_schema::pty::Deleted { id: id.0.clone() })
+                    .unwrap_or_default(),
+            )
+            .await;
         }
     }
 
@@ -583,7 +613,8 @@ impl PtyService {
         };
         self.publish(
             "pty.updated",
-            serde_json::json!({ "info": serde_json::to_value(&info).unwrap_or_default() }),
+            serde_json::to_value(oc_schema::pty::Updated { info: Self::schema_info(&info) })
+                .unwrap_or_default(),
         )
         .await;
         Ok(info)
@@ -595,7 +626,12 @@ impl PtyService {
             return Err(NotFoundError { pty_id: id.clone() });
         }
         self.inner.teardown(id);
-        self.publish("pty.deleted", serde_json::json!({ "id": id.0 })).await;
+        self.publish(
+            "pty.deleted",
+            serde_json::to_value(oc_schema::pty::Deleted { id: id.0.clone() })
+                .unwrap_or_default(),
+        )
+        .await;
         Ok(())
     }
 

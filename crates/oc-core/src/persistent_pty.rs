@@ -169,6 +169,31 @@ pub fn terminal_wire_json(info: &Info) -> serde_json::Value {
     terminal
 }
 
+/// Wire conversion into the typed `PersistentPty.Info` schema — must
+/// serialize identically to [`terminal_wire_json`] (proved by the
+/// `persistent_pty_terminal_wire_no_drift` test).
+fn terminal_schema_info(info: &Info) -> oc_schema::persistent_pty::Info {
+    oc_schema::persistent_pty::Info {
+        base: oc_schema::pty::Info {
+            id: info.id.0.clone(),
+            title: info.title.clone(),
+            command: info.command.clone(),
+            args: info.args.clone(),
+            cwd: info.cwd.clone(),
+            status: match info.status {
+                crate::pty::Status::Running => oc_schema::pty::Status::Running,
+                crate::pty::Status::Exited => oc_schema::pty::Status::Exited,
+            },
+            pid: u64::from(info.pid),
+            exit_code: info.exit_code.map(|code| u64::try_from(code).unwrap_or(0)),
+        },
+        session_id: info.session_id.clone(),
+        foreground_process: info.foreground_process.clone(),
+        size: oc_schema::persistent_pty::Size { cols: info.size.0, rows: info.size.1 },
+        output: oc_schema::persistent_pty::Output { head: info.output.0, tail: info.output.1 },
+    }
+}
+
 /// `PersistentPty.Snapshot`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Snapshot {
@@ -866,10 +891,11 @@ impl PersistentPty {
                         service
                             .publish(
                                 "persistent-pty.removed",
-                                serde_json::json!({
-                                    "sessionID": session_for_exit.as_str(),
-                                    "ptyID": id_for_exit.0,
-                                }),
+                                serde_json::to_value(oc_schema::persistent_pty::Removed {
+                                    session_id: session_for_exit.clone(),
+                                    pty_id: id_for_exit.0.clone(),
+                                })
+                                .unwrap_or_default(),
                             )
                             .await;
                         break;
@@ -880,10 +906,11 @@ impl PersistentPty {
 
         self.publish(
             "persistent-pty.added",
-            serde_json::json!({
-                "sessionID": session_id.as_str(),
-                "terminal": terminal_wire_json(&info),
-            }),
+            serde_json::to_value(oc_schema::persistent_pty::Added {
+                session_id: session_id.clone(),
+                terminal: terminal_schema_info(&info),
+            })
+            .unwrap_or_default(),
         )
         .await;
         Ok(info)
@@ -1040,7 +1067,11 @@ impl PersistentPty {
         }
         self.publish(
             "persistent-pty.removed",
-            serde_json::json!({ "sessionID": info.session_id.as_str(), "ptyID": id.0 }),
+            serde_json::to_value(oc_schema::persistent_pty::Removed {
+                session_id: info.session_id.clone(),
+                pty_id: id.0.clone(),
+            })
+            .unwrap_or_default(),
         )
         .await;
         Ok(())
