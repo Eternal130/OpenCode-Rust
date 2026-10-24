@@ -593,6 +593,28 @@ async fn switch_model(
 // POST /:id/prompt — admit + await (§3)
 // ---------------------------------------------------------------------------
 
+/// Parses the `delivery` field (prompt/synthetic bodies): absent ⇒
+/// `steer`, `"steer"` ⇒ Steer, `"queue"` ⇒ Queue — anything else is a
+/// 400 (ref session-inbox.ts:11 allows only `steer | queue`; a bad
+/// value is a decode error, never silently coerced).
+fn parse_delivery(body: &Value) -> Result<Delivery, ApiError> {
+    match body.get("delivery") {
+        None => Ok(Delivery::Steer),
+        Some(Value::String(value)) => match value.as_str() {
+            "steer" => Ok(Delivery::Steer),
+            "queue" => Ok(Delivery::Queue),
+            _ => Err(crate::errors::schema_rejection(
+                "Expected \"steer\" or \"queue\" for delivery",
+                "ParseError",
+            )),
+        },
+        Some(_) => Err(crate::errors::schema_rejection(
+            "Expected \"steer\" or \"queue\" for delivery",
+            "ParseError",
+        )),
+    }
+}
+
 async fn prompt(
     State(state): State<SharedState>,
     Path(session_id): Path<String>,
@@ -600,10 +622,7 @@ async fn prompt(
 ) -> Result<Response, ApiError> {
     let (services, _) = session_services(&state, &session_id).await?;
     let message_id = body["id"].as_str().map_or_else(|| state.ids.new_id("msg"), String::from);
-    let delivery = match body["delivery"].as_str() {
-        Some("queue") => Delivery::Queue,
-        _ => Delivery::Steer,
-    };
+    let delivery = parse_delivery(&body)?;
     // `files` arrives in the PromptInput shape (URIs); materialize to
     // the resolved FileAttachment form before the inbox stores it
     // (core/session/prompt.ts `materializeAttachment`). A bad
@@ -649,10 +668,7 @@ async fn synthetic(
 ) -> Result<Response, ApiError> {
     let (services, row) = session_services(&state, &session_id).await?;
     let message_id = body["id"].as_str().map_or_else(|| state.ids.new_id("msg"), String::from);
-    let delivery = match body["delivery"].as_str() {
-        Some("queue") => Delivery::Queue,
-        _ => Delivery::Steer,
-    };
+    let delivery = parse_delivery(&body)?;
     let payload = oc_schema::session_inbox::SyntheticPayload {
         text: body["text"].as_str().unwrap_or_default().to_owned(),
         description: body["description"].as_str().map(String::from),
@@ -851,7 +867,9 @@ async fn fork_instructions(
                 )
                 .ok();
             let mut statement = tx.conn().prepare(
-                "SELECT key, value, removed FROM instruction_entry WHERE session_id = ?1",
+                // ref instruction-entry.ts:36 — snapshot reads ascend by key
+                "SELECT key, value, removed FROM instruction_entry WHERE session_id = ?1 \
+                 ORDER BY key ASC",
             )?;
             let entries = statement
                 .query_map((parent_id,), |row| {
