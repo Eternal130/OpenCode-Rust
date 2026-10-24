@@ -105,7 +105,9 @@ struct ConfigReloadBridge {
     engine: std::sync::Mutex<Option<Arc<Engine>>>,
     /// The watcher + booted plugin subsystem (filled once both exist;
     /// the plugin source refresh reads the reloaded snapshot).
-    hooks: std::sync::Mutex<Option<(Arc<oc_core::config::WatchedConfig>, Arc<crate::plugins::PluginBoot>)>>,
+    hooks: std::sync::Mutex<
+        Option<(Arc<oc_core::config::WatchedConfig>, Arc<crate::plugins::PluginBoot>)>,
+    >,
     runtime: tokio::runtime::Handle,
     location: LocationRef,
 }
@@ -131,7 +133,7 @@ impl oc_core::config::watch::ConfigUpdated for ConfigReloadBridge {
                 // Blocking digest-scan reload — off the async workers.
                 let loaded = watched.loaded();
                 let _ = tokio::task::spawn_blocking(move || {
-                    crate::plugins::refresh_after_config_change(&plugins, &loaded)
+                    crate::plugins::refresh_after_config_change(&plugins, &loaded);
                 })
                 .await;
             }
@@ -1006,11 +1008,11 @@ mod tests {
     }
 
     /// G-05 config hot reload: a config file edit under the boot's
-    /// watch roots flows WatchedConfig reload → `config.updated` bus
+    /// watch roots flows `WatchedConfig` reload → `config.updated` bus
     /// event (ephemeral, empty payload) → SSE frame, and the live
     /// location graph is invalidated so the next use re-assembles from
     /// the reloaded config.
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines, clippy::items_after_statements)] // env guard after its seed read
     #[tokio::test]
     async fn boot_config_hot_reload_publishes_config_updated_and_invalidates_locations() {
         let root = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
@@ -1020,7 +1022,6 @@ mod tests {
             .expect("project config");
         let home = root.path().join("home");
         std::fs::create_dir_all(&home).expect("home");
-        let _env = Env::redirect_into(&home);
         let prior_fetch = std::env::var("OPENCODE_CATALOG_FETCH").ok();
         std::env::set_var("OPENCODE_CATALOG_FETCH", "0");
         struct FetchEnv(Option<String>);
@@ -1032,6 +1033,7 @@ mod tests {
                 }
             }
         }
+        let _env = Env::redirect_into(&home);
         let _fetch_env = FetchEnv(prior_fetch);
 
         let options = BootOptions {
@@ -1048,11 +1050,8 @@ mod tests {
 
         // Subscribe to the bus BEFORE the edit, and force a location
         // assembly so the invalidation below is observable.
-        let mut subscription = handle
-            .state
-            .engine
-            .bus
-            .subscribe_types(&[oc_core::bus::registry::CONFIG_UPDATED]);
+        let mut subscription =
+            handle.state.engine.bus.subscribe_types(&[oc_core::bus::registry::CONFIG_UPDATED]);
         let location = LocationRef::new(project.clone(), None);
         let _ = handle.state.engine.location(location.clone()).await.expect("assemble");
         assert!(handle.state.engine.locations.get(&location).is_some());
@@ -1102,10 +1101,11 @@ mod tests {
             if found {
                 break;
             }
-            let read = tokio::time::timeout(std::time::Duration::from_secs(5), sse.read(&mut chunk))
-                .await
-                .expect("sse read deadline")
-                .expect("sse alive");
+            let read =
+                tokio::time::timeout(std::time::Duration::from_secs(5), sse.read(&mut chunk))
+                    .await
+                    .expect("sse read deadline")
+                    .expect("sse alive");
             buffer.extend_from_slice(&chunk[..read]);
         }
 

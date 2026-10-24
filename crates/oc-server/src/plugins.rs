@@ -417,38 +417,15 @@ pub fn refresh_after_config_change(boot: &PluginBoot, loaded: &Loaded) {
     let current = config_plugin_ops(loaded);
     let previous: Vec<String> =
         boot.resolution.plugins.iter().map(|plugin| plugin.target.clone()).collect();
-    let mut added: Vec<&str> = Vec::new();
-    let mut removed: Vec<&str> = Vec::new();
-    for op in &current {
-        let target = match op {
-            oc_plugin_host::PluginOp::Add { target, .. } => target,
-            oc_plugin_host::PluginOp::Remove { target } => target,
-        };
-        let known = previous.iter().any(|seen| seen == target);
-        match op {
-            oc_plugin_host::PluginOp::Add { target, .. } if !known => added.push(target),
-            _ => {}
-        }
-    }
-    for seen in &previous {
-        let still_active = current.iter().any(|op| match op {
-            oc_plugin_host::PluginOp::Add { target, .. } => target == seen,
-            oc_plugin_host::PluginOp::Remove { .. } => false,
-        });
-        if !still_active {
-            removed.push(seen);
-        }
-    }
+    let (added, removed) = plugin_source_diff(&previous, &current);
     if !added.is_empty() {
         eprintln!(
-            "opencode plugin: source change added {:?}; dynamic load is a followup (no host seam yet) — restart to activate",
-            added
+            "opencode plugin: source change added {added:?}; dynamic load is a followup (no host seam yet) — restart to activate"
         );
     }
     if !removed.is_empty() {
         eprintln!(
-            "opencode plugin: source change removed {:?}; dynamic unload is a followup (no host seam yet) — restart to deactivate",
-            removed
+            "opencode plugin: source change removed {removed:?}; dynamic unload is a followup (no host seam yet) — restart to deactivate"
         );
     }
     match boot.host.reload_now() {
@@ -460,6 +437,45 @@ pub fn refresh_after_config_change(boot: &PluginBoot, loaded: &Loaded) {
             eprintln!("opencode plugin: source reload failed ({error}); previous generations kept");
         }
     }
+}
+
+/// The supervisor resolve diff (supervisor.ts:23-94, add/remove only):
+/// replay the current ops over the previously-loaded targets; `*` and
+/// `name.*` remove selectors match like the boot reduction
+/// ([`boot_remove_matches`]). Returns (added, removed) targets — the
+/// generations needing a load/unload.
+fn plugin_source_diff(
+    previous: &[String],
+    current: &[oc_plugin_host::PluginOp],
+) -> (Vec<String>, Vec<String>) {
+    let mut active: Vec<String> = previous.to_vec();
+    for op in current {
+        match op {
+            oc_plugin_host::PluginOp::Add { target, .. } => {
+                if !active.contains(target) {
+                    active.push(target.clone());
+                }
+            }
+            oc_plugin_host::PluginOp::Remove { target } => {
+                if target == "*" {
+                    active.clear();
+                } else {
+                    active.retain(|seen| !boot_remove_matches(seen, target));
+                }
+            }
+        }
+    }
+    let added: Vec<String> = active
+        .iter()
+        .filter(|target| !previous.iter().any(|seen| seen == *target))
+        .cloned()
+        .collect();
+    let removed: Vec<String> = previous
+        .iter()
+        .filter(|target| !active.iter().any(|seen| seen.as_str() == target.as_str()))
+        .cloned()
+        .collect();
+    (added, removed)
 }
 
 /// Extract the merged `plugins[]` ops from a loaded config (every
@@ -1454,6 +1470,54 @@ impl SessionPort for EngineSessionSlot {
 
 #[cfg(test)]
 mod tests {
+
+    use super::plugin_source_diff;
+    use oc_plugin_host::PluginOp;
+
+    fn ops(values: &[(&str, bool)]) -> Vec<PluginOp> {
+        values
+            .iter()
+            .map(|&(target, add)| {
+                if add {
+                    PluginOp::Add { target: target.to_owned(), options: serde_json::Value::Null }
+                } else {
+                    PluginOp::Remove { target: target.to_owned() }
+                }
+            })
+            .collect()
+    }
+
+    /// G-05: the supervisor resolve diff (add/remove with the port's
+    /// remove-selector semantics — exact/package/stem + `*`) over
+    /// previously-loaded targets. (The ref supervisor.ts:26-28 also
+    /// accepts `name.*` prefix selectors; the port's `resolve` does
+    /// not — the diff mirrors the port.)
+    #[test]
+    fn plugin_source_diff_adds_and_removes_with_selectors() {
+        let previous = vec!["@scope/one".to_owned(), "local/two".to_owned()];
+        // No change -> empty diff.
+        let (added, removed) =
+            plugin_source_diff(&previous, &ops(&[("@scope/one", true), ("local/two", true)]));
+        assert_eq!(added, Vec::<String>::new());
+        assert_eq!(removed, Vec::<String>::new());
+        // A new drop-in appears.
+        let (added, removed) = plugin_source_diff(
+            &previous,
+            &ops(&[("@scope/one", true), ("local/two", true), ("local/three", true)]),
+        );
+        assert_eq!(added, vec!["local/three".to_owned()]);
+        assert_eq!(removed, Vec::<String>::new());
+        // `name.*` selector removes the matching package generation
+        // (the port's remove reduction: exact / package / stem, plus
+        // `*` — resolve.rs `remove_matches`).
+        let (added, removed) =
+            plugin_source_diff(&previous, &ops(&[("local/two", true), ("one", false)]));
+        assert_eq!(added, Vec::<String>::new());
+        assert_eq!(removed, vec!["@scope/one".to_owned()]);
+        // `*` clears everything.
+        let (_, removed) = plugin_source_diff(&previous, &ops(&[("*", false)]));
+        assert_eq!(removed, vec!["@scope/one".to_owned(), "local/two".to_owned()]);
+    }
     use super::*;
     use oc_schema::config::{Directory, Entry, Plugin};
 
