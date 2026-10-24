@@ -700,19 +700,19 @@ fn project_fork(tx: &mut Tx<'_>, event: &DurableEvent) -> Result<()> {
     let copied_seq = copied;
 
     let fork_boundary = encode_json(&event.data["boundary"]);
-    // CD-2 (scan-cd): the child row carries BOTH linkages — `parent_id`
-    // (the parent→child chain D5 consumers navigate) and
-    // `fork_session_id` (the fork source, `fork.sessionID`) — so the
-    // same parent id binds into both columns. The previous VALUES
-    // hardcoded NULL for `parent_id`, leaving every fork child detached
-    // from its parent chain (ref children carry parentID + fork{...}).
+    // Ref-verified (projector.ts:149-153): the fork child row carries
+    // `parent_id = NULL` and `fork_session_id = <parent id>` — a fork
+    // child is a top-level session for parent-chain consumers (subagent
+    // permission inheritance, parent listing); only the fork source is
+    // recorded. (The prior "CD-2" claim that ref carries both linkages
+    // was false.)
     let inserted = tx.execute(
         "INSERT OR IGNORE INTO session_v2 \
          (id, project_id, workspace_id, parent_id, fork_session_id, fork_boundary, slug, directory, \
           path, title, version, metadata, permission, agent, model, cost, tokens_input, \
           tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write, time_created, \
           time_updated) \
-         VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 0, 0, 0, 0, \
+         VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 0, 0, 0, 0, \
           0, 0, ?15, ?15)",
         rusqlite::params![
             fork_session,
@@ -739,7 +739,7 @@ fn project_fork(tx: &mut Tx<'_>, event: &DurableEvent) -> Result<()> {
     if !event.data["instructionEntries"].is_null() {
         let entries: oc_schema::session_support::InstructionEntrySnapshot =
             serde_json::from_value(event.data["instructionEntries"].clone())?;
-        instruction_entry_initialize(tx, &fork_session, &entries, event.created);
+        instruction_entry_initialize(tx, &fork_session, &entries, event.created)?;
     }
 
     if let Some(copied_seq) = copied_seq {
@@ -1188,23 +1188,31 @@ fn instruction_reset(tx: &mut Tx<'_>, session_id: &str) -> Result<()> {
     Ok(())
 }
 
-/// `InstructionEntry.initialize` (10-row batches).
+/// `InstructionEntry.initialize` (10-row batches, instruction-entry.ts:41-67).
+///
+/// Insert errors propagate (ref `orDie`): the whole projection
+/// transaction rolls back — bus.rs documents that a projector `Err`
+/// aborts the publish.
 fn instruction_entry_initialize(
     tx: &mut Tx<'_>,
     session_id: &str,
     entries: &oc_schema::session_support::InstructionEntrySnapshot,
     created: u64,
-) {
+) -> Result<()> {
+    const INSERT_BATCH_SIZE: usize = 10;
     let created = i64::try_from(created).unwrap_or(0);
-    for entry in entries {
-        let row = InstructionEntryRow {
-            session_id: session_id.to_string(),
-            key: entry.key.clone(),
-            value: serde_json::to_string(&entry.value).ok(),
-            removed: entry.removed,
-            time_created: created,
-            time_updated: created,
-        };
-        let _ = InstructionEntryRow::insert(tx, &row);
+    for batch in entries.chunks(INSERT_BATCH_SIZE) {
+        for entry in batch {
+            let row = InstructionEntryRow {
+                session_id: session_id.to_string(),
+                key: entry.key.clone(),
+                value: serde_json::to_string(&entry.value).ok(),
+                removed: entry.removed,
+                time_created: created,
+                time_updated: created,
+            };
+            InstructionEntryRow::insert(tx, &row)?;
+        }
     }
+    Ok(())
 }

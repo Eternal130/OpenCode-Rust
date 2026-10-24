@@ -420,13 +420,12 @@ async fn be1_fork_copies_history_and_fork_styles_the_title() {
         "CD-15: the fork envelope carries location: {forked_frame}"
     );
     // v2 wire shape for forks (info.ts:21-27): the `fork` object rides
-    // the `forkSessionId` column, and CD-2 (scan-cd) adds the
-    // parent→child chain: the fork child ALSO carries `parentID` (the
-    // register's ref-binary row — children carry BOTH parentID and
-    // fork{sessionID,boundary}).
+    // the `forkSessionId` column; the fork child's `parentID` stays null
+    // (ref projector.ts:151 — fork children are top-level sessions,
+    // only the fork source is linked).
     let fork_info = fork.fork.as_ref().expect("fork linkage");
     assert_eq!(fork_info.session_id, parent, "fork points at the parent");
-    assert_eq!(fork.parent_id.as_deref(), Some(parent.as_str()), "CD-2: parent chain persisted");
+    assert_eq!(fork.parent_id, None, "fork child is a top-level session (parent_id NULL)");
     match &fork_info.boundary {
         SessionForkBoundary::Through(variant) => {
             assert_eq!(variant.message_id, "msg_assistant_root", "through = newest message");

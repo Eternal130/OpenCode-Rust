@@ -2273,8 +2273,15 @@ impl crate::subagent::ModelSource for CatalogModelSource {
 
 const PROMPT_TITLE: &str = "You are a title generator. You output ONLY a thread title. Nothing else.\n\n<task>\nGenerate a brief title that would help the user find this conversation later.\n\nFollow all rules in <rules>\nUse the <examples> so you know what a good title looks like.\nYour output must be:\n- A single line\n- <=50 characters\n- No explanations\n</task>\n\n<rules>\n- you MUST use the same language as the user message you are summarizing\n- Title must be grammatically correct and read naturally - no word salad\n- Never include tool names in the title (e.g. \"read tool\", \"bash tool\", \"edit tool\")\n- Focus on the main topic or question the user needs to retrieve\n- Vary your phrasing - avoid repetitive patterns like always starting with \"Analyzing\"\n- When a file is mentioned, focus on WHAT the user wants to do WITH the file, not just that they shared it\n- Keep exact: technical terms, numbers, filenames, HTTP codes\n- Remove: the, this, my, a, an\n- Never assume tech stack\n- Never use tools\n- NEVER respond to questions, just generate a title for the conversation\n- The title should NEVER include \"summarizing\" or \"generating\" when generating a title\n- DO NOT SAY YOU CANNOT GENERATE A TITLE OR COMPLAIN ABOUT THE INPUT\n- Always output something meaningful, even if the input is minimal.\n- If the user message is short or conversational (e.g. \"hello\", \"lol\", \"what's up\", \"hey\"):\n  -> create a title that reflects the user's tone or intent (such as Greeting, Quick check-in, Light chat, Intro message, etc.)\n</rules>\n\n<examples>\n\"debug 500 errors in production\" -> Debugging production 500 errors\n\"refactor user service\" -> Refactoring user service\n\"why is app.js failing\" -> app.js failure investigation\n\"implement rate limiting\" -> Rate limiting implementation\n\"how do I connect postgres to my API\" -> Postgres API connection\n\"best practices for React hooks\" -> React hooks best practices\n\"@src/credential.ts can you add refresh token support\" -> Credential refresh token support\n\"@utils/parser.ts this is broken\" -> Parser bug fix\n\"look at @config.json\" -> Config review\n\"@App.tsx add dark mode toggle\" -> Dark mode toggle in App\n</examples>";
 
-/// Seeds the v2 builtin agents (`opencode.agent` plugin): build (default),
-/// general + explore (subagents), compaction, title (hidden).
+/// `PROMPT_EXPLORE` (ref plugin/agent.ts:8-18, copied verbatim).
+const PROMPT_EXPLORE: &str = "You are a file search specialist. You excel at thoroughly navigating and exploring codebases.\n\nGuidelines:\n- Your role is EXCLUSIVELY to search and analyze\n- Parallelize independent tool calls for searches and reads whenever possible\n- Adapt your search approach based on the thoroughness level specified by the caller\n- Return file paths as absolute paths in your final response\n- You MUST NOT create, modify, delete, move, or copy files, including temporary files and reports\n- Shell commands MUST be read-only. NEVER run commands that writes files or change system state\n\nComplete the user's search request efficiently and report your findings clearly.";
+
+/// `PROMPT_SUMMARY` (ref plugin/agent.ts:65-75, copied verbatim).
+const PROMPT_SUMMARY: &str = "Summarize what was done in this conversation. Write like a pull request description.\n\nRules:\n- 2-3 sentences max\n- Describe the changes made, not the process\n- Do not mention running tests, builds, or other validation steps\n- Do not explain what the user asked for\n- Write in first person (I added..., I fixed...)\n- Never ask questions or add new questions\n- If the conversation ends with an unanswered question to the user, preserve that exact question\n- If the conversation ends with an imperative statement or request to the user (e.g. \"Now please run the command and paste the console output\"), always include that exact request in the summary";
+
+/// Seeds the v2 builtin agents (`opencode.agent` plugin): build
+/// (default), general + explore (subagents), compaction, title, summary
+/// (hidden primaries).
 fn seed_builtin_agents(agents: &Arc<crate::location::AgentRegistry>) {
     // The default agent starts from `Agent.Info.default` (v2's schema
     // defaults: allow everything, ask for external_directory outside the
@@ -2296,11 +2303,44 @@ fn seed_builtin_agents(agents: &Arc<crate::location::AgentRegistry>) {
     general.permissions.push(rule("subagent", "*", oc_schema::permission::Effect::Deny));
     agents.set(general);
 
+    // ref plugin/agent.ts:99-126 — read-only explore gate: deny-all,
+    // then allow the search/read tools, ask for env files (the
+    // `*.env.example` escape hatch), deny subagents; external
+    // directories ask (fresh native registry — no config allows to
+    // preserve).
+    let mut explore = agent_info("explore", "Explore", oc_schema::agent::Mode::Subagent, false);
+    explore.description = Some(
+        "Fast agent specialized for exploring codebases. Use this when you need to quickly find files by patterns (eg. \"src/components/**/*.tsx\"), search code for keywords (eg. \"API endpoints\"), or answer questions about the codebase (eg. \"how do API endpoints work?\"). When calling this agent, specify the desired thoroughness level: \"quick\" for basic searches, \"medium\" for moderate exploration, or \"very thorough\" for comprehensive analysis across multiple locations and naming conventions."
+            .into(),
+    );
+    explore.system = Some(PROMPT_EXPLORE.to_string());
+    explore.permissions.push(rule("*", "*", oc_schema::permission::Effect::Deny));
+    explore.permissions.push(rule("shell", "*", oc_schema::permission::Effect::Allow));
+    explore.permissions.push(rule("grep", "*", oc_schema::permission::Effect::Allow));
+    explore.permissions.push(rule("glob", "*", oc_schema::permission::Effect::Allow));
+    explore.permissions.push(rule("webfetch", "*", oc_schema::permission::Effect::Allow));
+    explore.permissions.push(rule("websearch", "*", oc_schema::permission::Effect::Allow));
+    explore.permissions.push(rule("read", "*", oc_schema::permission::Effect::Allow));
+    explore.permissions.push(rule("read", "*.env", oc_schema::permission::Effect::Ask));
+    explore.permissions.push(rule("read", "*.env.*", oc_schema::permission::Effect::Ask));
+    explore.permissions.push(rule("read", "*.env.example", oc_schema::permission::Effect::Allow));
+    explore.permissions.push(rule("subagent", "*", oc_schema::permission::Effect::Deny));
+    explore
+        .permissions
+        .push(rule("external_directory", "*", oc_schema::permission::Effect::Ask));
+    agents.set(explore);
+
     agents.set(agent_info("compaction", "Compaction", oc_schema::agent::Mode::Primary, true));
     let mut title = agent_info("title", "Title", oc_schema::agent::Mode::Primary, true);
     title.system = Some(PROMPT_TITLE.to_string());
     title.permissions.push(rule("*", "*", oc_schema::permission::Effect::Deny));
     agents.set(title);
+
+    // ref plugin/agent.ts:142-148 — the hidden summary agent (deny-all).
+    let mut summary = agent_info("summary", "Summary", oc_schema::agent::Mode::Primary, true);
+    summary.system = Some(PROMPT_SUMMARY.to_string());
+    summary.permissions.push(rule("*", "*", oc_schema::permission::Effect::Deny));
+    agents.set(summary);
 }
 
 /// The native agent table as v2 `Agent.Info` JSON (builtins + config
