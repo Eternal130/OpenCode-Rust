@@ -346,13 +346,34 @@ impl BrowserSession {
     }
 }
 
-/// The artifact directory for one scenario.
+/// The artifact directory for one scenario. Stale scenario dirs from dead
+/// processes (mtime older than a day) are opportunistically pruned so
+/// repeated local runs don't accumulate chrome-profile-sized leftovers
+/// (gate-3 followup).
 fn artifacts_dir(scenario: &str) -> PathBuf {
     let target =
         std::env::var("CARGO_TARGET_DIR").map_or_else(|_| workspace_target(), PathBuf::from);
-    let dir = target.join("browser-e2e").join(format!("{scenario}-{}", std::process::id()));
+    let root = target.join("browser-e2e");
+    prune_stale_artifacts(&root);
+    let dir = root.join(format!("{scenario}-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     dir
+}
+
+/// Removes `<scenario>-<pid>` dirs whose mtime is older than 24h. A pid in
+/// the name is not proof of liveness (recycled pids), so age is the gate —
+/// conservative on purpose: an in-flight longer-than-a-day run keeps its
+/// artifacts.
+fn prune_stale_artifacts(root: &std::path::Path) {
+    const MAX_AGE: std::time::Duration = std::time::Duration::from_secs(86_400);
+    let Ok(entries) = std::fs::read_dir(root) else { return };
+    let cutoff = std::time::SystemTime::now().checked_sub(MAX_AGE).unwrap_or(std::time::UNIX_EPOCH);
+    for entry in entries.flatten() {
+        let Ok(meta) = entry.metadata() else { continue };
+        if meta.is_dir() && meta.modified().is_ok_and(|t| t < cutoff) {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
 }
 
 fn workspace_target() -> PathBuf {
@@ -436,10 +457,6 @@ async fn browser_e2e_s1_auth() -> Result<()> {
 
     let run = tokio::time::timeout(SCENARIO_BUDGET, s1_body(&url, &password, mode)).await;
     let result = run.map_err(|_| anyhow!("scenario timed out after {SCENARIO_BUDGET:?}"));
-    if result.is_err() {
-        // dump artifacts while the (possibly still live) session exists
-        // is not possible here; the body dumps on its own failures.
-    }
     let outcome = result?;
     server.stop().await?;
     drop(root);
