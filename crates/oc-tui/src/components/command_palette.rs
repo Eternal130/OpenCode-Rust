@@ -374,6 +374,27 @@ pub static PALETTE_COMMANDS: &[PaletteCommand] = &[
         group: "System",
         bindings: &[],
     },
+    // G-07 — the devtools bar's palette rows (ref devtools-bar.tsx):
+    // the bar itself is `debug.devtools`-gated; the rows toggle/show
+    // live (the settings row persists the gate).
+    PaletteCommand {
+        command: "devtools.toggle",
+        title: "Toggle devtools bar",
+        group: "System",
+        bindings: &["ctrl+x d"],
+    },
+    PaletteCommand {
+        command: "devtools.panel",
+        title: "Switch devtools panel",
+        group: "System",
+        bindings: &["ctrl+x ]"],
+    },
+    PaletteCommand {
+        command: "devtools.dump",
+        title: "Dump devtools state",
+        group: "System",
+        bindings: &["ctrl+x j"],
+    },
     PaletteCommand {
         command: "opencode.status",
         title: "View status",
@@ -2241,7 +2262,39 @@ impl CommandDispatcher for StoreDispatcher {
             // available").
             "opencode.experiments" => {
                 store.clear_dialogs();
+                // G-07: ref's DevToolsBar item opens the experiments
+                // dialog — with the bar enabled the row also reveals
+                // it (the bar's own entry point, devtools-bar.tsx:429).
+                if store.devtools_enabled() {
+                    store.set_devtools_bar_visible(true);
+                }
                 store.replace_dialog(DialogKind::Experiments, DialogSize::Medium);
+                Dispatch::Handled
+            }
+            // G-07 — the devtools bar's palette rows.
+            "devtools.toggle" => {
+                if store.devtools_enabled() {
+                    store.toggle_devtools_bar();
+                } else {
+                    store.set_devtools_enabled(true);
+                    store.set_devtools_bar_visible(true);
+                }
+                store.request_redraw();
+                Dispatch::Handled
+            }
+            "devtools.panel" => {
+                store.devtools_cycle_panel(1);
+                store.request_redraw();
+                Dispatch::Handled
+            }
+            "devtools.dump" => {
+                if let Some(path) = store.devtools_dump_state((0, 0)) {
+                    store.toast_show(crate::components::toast::ToastOptions {
+                        title: Some("Devtools state dumped".to_owned()),
+                        message: path.display().to_string(),
+                        ..crate::components::toast::ToastOptions::info("")
+                    });
+                }
                 Dispatch::Handled
             }
             "messages.copy" => {
