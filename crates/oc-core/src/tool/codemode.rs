@@ -917,7 +917,6 @@ pub fn value_depth_exceeded(value: &Value) -> bool {
 }
 
 /// The depth guard as a `Result` with the ref's exact message.
-#[must_use]
 pub fn check_value_depth(value: &Value) -> Result<(), String> {
     if value_depth_exceeded(value) {
         Err(format!("Value exceeds the maximum depth of {MAX_VALUE_DEPTH}."))
@@ -1022,10 +1021,8 @@ pub fn bound_output(outcome: &mut RunOutcome, max_output_bytes: u64) {
     }
     if kept_logs.len() < total_logs {
         truncated = true;
-        kept_logs.push(format!(
-            "[logs truncated: showing {} of {total_logs} lines]",
-            kept_logs.len()
-        ));
+        kept_logs
+            .push(format!("[logs truncated: showing {} of {total_logs} lines]", kept_logs.len()));
     }
     outcome.logs = kept_logs;
 
@@ -1206,9 +1203,7 @@ impl super::ToolExecuteWithContext for CodeModeLeaf {
                     }
                     // The boundary walk's depth guard (data.ts:53) on
                     // tool inputs crossing guest→host.
-                    if let Err(message) = check_value_depth(&input) {
-                        return Err(message);
-                    }
+                    check_value_depth(&input)?;
                     // The guest calls by QUALIFIED path (`namespace.name` —
                     // buildToolsTree marks every callable with entry.path);
                     // executors register under the bare name. Direct hit
@@ -1240,11 +1235,9 @@ impl super::ToolExecuteWithContext for CodeModeLeaf {
             let (outcome, hard) = if let Some(timeout_ms) =
                 limits.timeout_ms.filter(|ms| std::time::Duration::from_millis(*ms) < self.timeout)
             {
-                let outcome = tokio::time::timeout(
-                    std::time::Duration::from_millis(timeout_ms),
-                    evaluate,
-                )
-                .await;
+                let outcome =
+                    tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), evaluate)
+                        .await;
                 match outcome {
                     Ok(outcome) => (outcome, false),
                     Err(_elapsed) => (
@@ -1334,7 +1327,14 @@ pub fn register_code_mode(
     runtime: Arc<dyn CodeModeRuntime>,
     timeout: std::time::Duration,
 ) {
-    register_code_mode_with_limits(state, hooks, services, runtime, timeout, ExecutionLimits::default())
+    register_code_mode_with_limits(
+        state,
+        hooks,
+        services,
+        runtime,
+        timeout,
+        ExecutionLimits::default(),
+    )
 }
 
 /// [`register_code_mode`] with opt-in [`ExecutionLimits`] (v2
@@ -1781,8 +1781,7 @@ mod limits_tests {
         );
         // The u64 type rules out negatives/non-integers; the remaining
         // rejection for the min-0 fields is the safe-integer ceiling.
-        let bad =
-            ExecutionLimits { max_tool_calls: Some(1 << 53), ..ExecutionLimits::default() };
+        let bad = ExecutionLimits { max_tool_calls: Some(1 << 53), ..ExecutionLimits::default() };
         assert_eq!(
             bad.resolve().unwrap_err(),
             "maxToolCalls must be a safe integer greater than or equal to 0."
@@ -1799,8 +1798,7 @@ mod limits_tests {
 
         // Above the safe-integer range (Number.isSafeInteger's bound):
         // same message, ref rejects anything past 2^53-1.
-        let bad =
-            ExecutionLimits { max_output_bytes: Some(1 << 53), ..ExecutionLimits::default() };
+        let bad = ExecutionLimits { max_output_bytes: Some(1 << 53), ..ExecutionLimits::default() };
         assert_eq!(
             bad.resolve().unwrap_err(),
             "maxOutputBytes must be a safe integer greater than or equal to 0."
@@ -1928,7 +1926,12 @@ mod limits_tests {
 
     #[async_trait]
     impl CodeModeRuntime for ProbeRuntime {
-        async fn evaluate(&self, code: &str, _catalog: &[CatalogEntry], call: ToolCallFn) -> RunOutcome {
+        async fn evaluate(
+            &self,
+            code: &str,
+            _catalog: &[CatalogEntry],
+            call: ToolCallFn,
+        ) -> RunOutcome {
             let mut outcome = RunOutcome::default();
             match &self.0 {
                 Probe::ReturnNested(depth) => {
@@ -1947,7 +1950,8 @@ mod limits_tests {
                         });
                         match call("greet", json!({ "name": "limits" })).await {
                             Ok(value) => {
-                                outcome.tool_calls.last_mut().expect("row").status = "completed".into();
+                                outcome.tool_calls.last_mut().expect("row").status =
+                                    "completed".into();
                                 outcome.value = Some(value);
                             }
                             Err(message) => {
@@ -1955,7 +1959,8 @@ mod limits_tests {
                                     // The guest throws before recording a rejected call.
                                     outcome.tool_calls.pop();
                                 } else {
-                                    outcome.tool_calls.last_mut().expect("row").status = "error".into();
+                                    outcome.tool_calls.last_mut().expect("row").status =
+                                        "error".into();
                                 }
                                 outcome.error = Some(message);
                                 break;
@@ -2001,7 +2006,10 @@ mod limits_tests {
                         ) -> std::pin::Pin<
                             Box<
                                 dyn std::future::Future<
-                                        Output = Result<crate::tool::ToolOutcome, crate::tool::ToolFailure>,
+                                        Output = Result<
+                                            crate::tool::ToolOutcome,
+                                            crate::tool::ToolFailure,
+                                        >,
                                     > + Send
                                     + 'a,
                             >,

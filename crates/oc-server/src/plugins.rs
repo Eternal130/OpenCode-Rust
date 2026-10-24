@@ -460,8 +460,13 @@ impl CodeModeRuntime for HostCodeModeRuntime {
         catalog: &[oc_core::tool::codemode::CatalogEntry],
         call: ToolCallFn,
     ) -> RunOutcome {
-        self.evaluate_with_limits(code, catalog, &oc_core::tool::codemode::ExecutionLimits::default(), call)
-            .await
+        self.evaluate_with_limits(
+            code,
+            catalog,
+            &oc_core::tool::codemode::ExecutionLimits::default(),
+            call,
+        )
+        .await
     }
 
     /// The limits-bearing path: the budgets cross the wire to the

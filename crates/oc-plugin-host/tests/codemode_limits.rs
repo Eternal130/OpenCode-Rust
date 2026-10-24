@@ -1,6 +1,6 @@
 //! Code Mode execution limits e2e (the v2 `ExecutionLimits` parity):
 //! the limits object crosses the wire into the guest runtime, which
-//! enforces validation (ref-identical RangeError text), the tool-call
+//! enforces validation (ref-identical `RangeError` text), the tool-call
 //! admission cap, the output bound (byte-exact notice), the value
 //! depth guard, and the soft `timeoutMs`; a wedged guest (sync loop)
 //! trips the transport deadline, the supervisor KILLS + restarts it,
@@ -99,7 +99,7 @@ fn guest_enforces_execution_limits() {
     ));
     let run = zero.expect("capped at zero is still a result");
     assert_eq!(run.error.as_deref(), Some("Execution exceeded its tool-call limit of 0."));
-    assert!(run.tool_calls.is_empty());
+    assert_eq!(run.tool_calls.len(), 0);
 
     // -- maxOutputBytes: the returned value is bounded with the exact
     //    notice (serialized `"x"*200` + quotes = 202 bytes; 10 kept).
@@ -164,7 +164,8 @@ fn guest_enforces_execution_limits() {
     ));
     let run = hung.expect("the soft timeout is a result");
     assert_eq!(run.error.as_deref(), Some("Execution timed out after 250ms."));
-    let after = block_on(host.codemode_evaluate_async("return 6 * 7;", &catalog, Duration::from_secs(5)));
+    let after =
+        block_on(host.codemode_evaluate_async("return 6 * 7;", &catalog, Duration::from_secs(5)));
     assert_eq!(after.expect("guest responsive after the soft timeout").value, Some(json!(42)));
 
     host.shutdown();

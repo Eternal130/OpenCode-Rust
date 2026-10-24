@@ -271,7 +271,7 @@ impl Shared {
             return; // a kill is already in flight
         }
         eprintln!("opencode plugin-host: codemode evaluate deadline expired; killing the wedged guest (restart follows)");
-        let _ = self.kill_tx.send_modify(|generation| *generation += 1);
+        self.kill_tx.send_modify(|generation| *generation += 1);
     }
 
     /// One bridge call: send, then await with a hard timeout. See the
@@ -1224,7 +1224,13 @@ impl Supervisor {
         // The supervision loop owns the child from here (the kill-signal
         // receiver rides along — a codemode deadline asks it to kill the
         // wedged child; the wait arm below handles the restart).
-        tokio::spawn(supervise_loop(Arc::clone(&shared), child, shutdown_rx, kill_rx, child_reaped));
+        tokio::spawn(supervise_loop(
+            Arc::clone(&shared),
+            child,
+            shutdown_rx,
+            kill_rx,
+            child_reaped,
+        ));
         // The event dispatch pump (post-ingest tap consumer).
         tokio::spawn(dispatch_pump(Arc::clone(&shared), tap_rx));
 

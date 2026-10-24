@@ -63,7 +63,10 @@
 //! mid-dispatch (guest `plugin.busy` markers), gets a strike; three
 //! strikes disable that plugin while the rest reload. Eight
 //! consecutive unattributable restarts give up entirely (subsystem
-//! disabled, logged).
+//! disabled, logged). One deliberate kill is EXEMPT: a Code Mode
+//! evaluation that outruns its limits-aligned deadline wedges the
+//! guest (a sync loop is not interruptible in-process), so the
+//! supervisor kills and restarts it WITHOUT strike attribution.
 //!
 //! ## 3. Hot reload
 //!
@@ -651,7 +654,7 @@ impl PluginHost {
             .request("codemode.evaluate", params, timeout)
             .await
             .map_err(|error| error.to_string())?;
-        Self::parse_run(&result)
+        Ok(Self::parse_run(&result))
     }
 
     /// [`PluginHost::codemode_evaluate_token_async`] under v2
@@ -704,12 +707,12 @@ impl PluginHost {
             // transport failures keep their display forms.
             Err(error) => return Err(guest_error_text(error)),
         };
-        Self::parse_run(&result)
+        Ok(Self::parse_run(&result))
     }
 
     /// The `codemode.evaluate` result shape → [`CodeModeRun`]
     /// (`value` absent = `undefined`; explicit `null` stays null).
-    fn parse_run(result: &Value) -> Result<CodeModeRun, String> {
+    fn parse_run(result: &Value) -> CodeModeRun {
         let error = result
             .get("error")
             .and_then(Value::as_str)
@@ -733,7 +736,7 @@ impl PluginHost {
                     .collect()
             })
             .unwrap_or_default();
-        Ok(CodeModeRun { value, error, tool_calls, truncated })
+        CodeModeRun { value, error, tool_calls, truncated }
     }
 }
 
