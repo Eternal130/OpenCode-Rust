@@ -13,6 +13,7 @@
 #   build-archive ──> tui-needs-runtime (6 TUI rows: gap probes + adjacent PTY battery)
 #   build-archive ──> soak-30m           (opt-in, default OFF)
 #   build-archive ──> release-smoke      (opt-in, default OFF)
+#   build-archive ──> browser-e2e        (G-14 six-scenario browser smoke, default ON)
 #   platform-build                       (macos-latest, compiles from source)
 #   gates-summary                        (EXECUTED vs SKIPPED ledger; skip ≠ pass)
 #
@@ -139,6 +140,10 @@ on:
         description: "release build + tools/release-smoke.sh (expensive; opt-in)"
         type: boolean
         default: false
+      run_browser_e2e:
+        description: "G-14 browser smoke (6 scenarios, headless Chrome; real SPA dist when stageable, else minimal-contract)"
+        type: boolean
+        default: true
 
 # Long jobs (battery boots both sides; soak runs 30m by design): never
 # cancel a run mid-flight on the same ref.
@@ -1177,13 +1182,163 @@ jobs:
             echo "- EXECUTED: cargo build --workspace --locked on macos-latest (non-linux-x64 §12.4 CI leg)"
           } >> "$GITHUB_STEP_SUMMARY"
 
+  # G-14 browser smoke (register: six scenarios — auth, session/prompt
+  # streaming, file tree/mentions, PTY panel, permission popup, event
+  # reconnect). The Web UI is NOT ported (R-04): the battery drives the
+  # reference SPA bundle against the port's server contracts through a
+  # real headless Chrome (chromiumoxide CDP), so "UI consistency" ==
+  # server-contract consistency observed from a browser. Locally:
+  #   CARGO_INCREMENTAL=0 OC_BROWSER_E2E=1 cargo nextest run -p parity \
+  #     -E 'test(browser_e2e)'
+  # (dev-gate scope; the scenarios serialize through a cross-process
+  # flock — two concurrent Chromes exceed the local gate's task limit,
+  # the runner has no such pressure but the cap is harmless).
+  #
+  # SPA staging mirrors release.yml's web-assets job (same PARITY_REF
+  # tarball + pinned bun + VITE_OPENCODE_SERVER_MODE=origin build). The
+  # harness resolves the dist at /tmp/opencode/ref/packages/app/dist; if
+  # staging fails the battery STILL RUNS in minimal-contract mode (the
+  # generated fallback page) and the summary row reads SKIPPED-GAP for
+  # the real-bundle leg — never a silent partial pass. No browser on the
+  # runner is a hard, clearly-annotated skip for the same reason.
+  browser-e2e:
+    name: "G-14 browser smoke (6 scenarios, headless Chrome)"
+    needs: build-archive
+    # Schedule arm: cron coerces inputs to false (header note) — without
+    # it the weekly run silently skips this default-ON gate.
+    if: ${{ inputs.run_browser_e2e != false || github.event_name == 'schedule' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      spa_staged: ${{ steps.stage.outputs.spa_staged }}
+      browser: ${{ steps.chrome.outputs.browser }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: runtime-gates-target
+          path: target
+
+      # upload-artifact@v4 does NOT preserve the executable bit (see the
+      # v2-db-fixture note); restore it on the bins the battery spawns.
+      - name: Restore the exec bit on artifact-shipped binaries
+        run: |
+          set -euo pipefail
+          BINS="$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[].targets[] | select(.kind | index("bin")) | .name')"
+          for bin in $BINS; do
+            if [ -f "target/debug/$bin" ]; then
+              chmod +x "target/debug/$bin"
+            fi
+          done
+
+      - name: Prepare scratch dir
+        run: mkdir -p /tmp/opencode
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.148
+
+      # ubuntu-latest ships Google Chrome preinstalled (G-14 recon); the
+      # probe keeps the job portable and makes a missing browser a
+      # clearly-annotated skip instead of a cryptic harness failure.
+      - name: Probe for a Chrome/Chromium binary
+        id: chrome
+        run: |
+          set -euo pipefail
+          BROWSER="${OC_BROWSER_BIN:-$(command -v google-chrome || command -v chromium || true)}"
+          if [ -z "$BROWSER" ]; then
+            echo "::error::no Chrome/Chromium on the runner (OC_BROWSER_BIN unset, google-chrome/chromium absent) — the G-14 browser smoke cannot run. Skipping with annotation; never a pass."
+            echo "browser=absent" >> "$GITHUB_OUTPUT"
+          else
+            echo "browser=$BROWSER" >> "$GITHUB_OUTPUT"
+            echo "OC_BROWSER_BIN=$BROWSER" >> "$GITHUB_ENV"
+            "$BROWSER" --version
+          fi
+
+      - name: Summary (browser probe)
+        if: ${{ !cancelled() }}
+        run: |
+          {
+            echo "### browser-e2e (probe)"
+            echo "- browser: \`${{ steps.chrome.outputs.browser }}\`"
+            echo "- spa: \`${{ steps.stage.outputs.spa_staged }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Real-SPA staging (release.yml web-assets shape, same pinned ref).
+      # continue-on-error + the spa_staged output: a failed stage means
+      # minimal-contract mode below, reported as SKIPPED-GAP — the
+      # contract-level legs still gate.
+      - name: Stage the reference SPA dist (real-bundle leg)
+        id: fetchref
+        if: ${{ steps.chrome.outputs.browser != 'absent' }}
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 5 --retry-delay 5 --retry-all-errors \
+            -o ref.tar.gz "https://github.com/anomalyco/opencode/archive/${PARITY_REF}.tar.gz"
+          mkdir -p /tmp/opencode/ref
+          tar -xzf ref.tar.gz -C /tmp/opencode/ref --strip-components=1
+          test -d /tmp/opencode/ref/packages/app
+
+      - uses: actions/cache@v4
+        if: ${{ steps.chrome.outputs.browser != 'absent' && steps.fetchref.outcome == 'success' }}
+        with:
+          path: ~/.bun/install/cache
+          key: browser-e2e-bun-${{ env.PARITY_REF }}-bun${{ env.BUN_PIN }}-v1
+
+      - uses: oven-sh/setup-bun@v2
+        if: ${{ steps.chrome.outputs.browser != 'absent' && steps.fetchref.outcome == 'success' }}
+        with:
+          bun-version: ${{ env.BUN_PIN }}
+
+      - name: Install + build the reference app
+        if: ${{ steps.chrome.outputs.browser != 'absent' && steps.fetchref.outcome == 'success' }}
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          cd /tmp/opencode/ref
+          bun install
+          cd packages/app
+          VITE_OPENCODE_SERVER_MODE=origin bun run build
+          test -f dist/index.html
+
+      - name: Record spa_staged
+        id: stage
+        if: ${{ !cancelled() }}
+        run: |
+          if [ -f /tmp/opencode/ref/packages/app/dist/index.html ]; then
+            echo "spa_staged=real-spa-dist" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::real SPA dist not staged — the battery will run in minimal-contract mode (contract legs only; the real-bundle boot leg reads SKIPPED-GAP in the summary)."
+            echo "spa_staged=gap" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run the six-scenario browser battery
+        if: ${{ steps.chrome.outputs.browser != 'absent' }}
+        run: cargo nextest run -p parity --locked -E 'test(browser_e2e)'
+        env:
+          OC_BROWSER_E2E: "1"
+          # OC_BROWSER_BIN arrived via GITHUB_ENV from the probe step.
+          CARGO_INCREMENTAL: "0"
+
+      - name: Summary
+        if: ${{ !cancelled() }}
+        run: |
+          {
+            echo "### browser-e2e (G-14)"
+            echo "- EXECUTED: six-scenario battery (S1 auth, S2 prompt streaming, S3 file tree/mentions, S4 PTY panel, S5 permission popup, S6 event reconnect)"
+            echo "- assets: \`${{ steps.stage.outputs.spa_staged }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   # Central EXECUTED vs SKIPPED ledger (loop §1: skip ≠ pass). Fails the
   # workflow when a gate the user asked for (toggle ON / default ON) did
   # not end green — including downstream-`skipped` after an upstream
   # failure, which plain `needs` would hide.
   gates-summary:
     name: gates summary (EXECUTED vs SKIPPED)
-    needs: [build-archive, v2-db-fixture, p10-battery, runtime-gates, ai-needs-runtime, tui-needs-runtime, soak-30m, release-smoke, platform-build]
+    needs: [build-archive, v2-db-fixture, p10-battery, runtime-gates, ai-needs-runtime, tui-needs-runtime, soak-30m, release-smoke, platform-build, browser-e2e]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -1217,11 +1372,22 @@ jobs:
           rows="$rows soak-30m:${{ needs.soak-30m.result }}:${{ inputs.run_soak_30m == true && '1' || '0' }}"
           rows="$rows release-smoke:${{ needs.release-smoke.result }}:${{ inputs.run_release_smoke == true && '1' || '0' }}"
           rows="$rows platform-build:${{ needs.platform-build.result }}:${{ (inputs.run_platform_build != false || github.event_name == 'schedule') && '1' || '0' }}"
+          # browser-e2e verdict OVERRIDES: no browser = annotated skip;
+          # no staged dist = minimal-contract run (real-bundle leg is
+          # SKIPPED-GAP, the contract legs still gated).
+          if [ "${{ needs.browser-e2e.outputs.browser }}" = "absent" ]; then
+            rows="$rows browser-e2e:skipped-gap:1"
+          elif [ "${{ needs.browser-e2e.outputs.spa_staged }}" = "gap" ]; then
+            rows="$rows browser-e2e:${{ needs.browser-e2e.result }}-minimal-contract:${{ (inputs.run_browser_e2e != false || github.event_name == 'schedule') && '1' || '0' }}"
+          else
+            rows="$rows browser-e2e:${{ needs.browser-e2e.result }}:${{ (inputs.run_browser_e2e != false || github.event_name == 'schedule') && '1' || '0' }}"
+          fi
           for row in $rows; do
             gate="${row%%:*}"; rest="${row#*:}"; res="${rest%%:*}"; req="${rest##*:}"
             verdict="UNKNOWN"
             case "$res:$req" in
-              skipped-gap:*) verdict="SKIPPED-GAP (no v2 db staged; annotated — never a pass)" ;;
+              skipped-gap:*) verdict="SKIPPED-GAP (prerequisite not staged; annotated — never a pass)" ;;
+              success-minimal-contract:*) verdict="EXECUTED-green (contract legs; real-bundle leg SKIPPED-GAP)" ;;
               success:*) verdict="EXECUTED-green" ;;
               failure:*|cancelled:*) verdict="EXECUTED-red"; fail=1 ;;
               skipped:1) verdict="SKIPPED-upstream-failure"; fail=1 ;;
