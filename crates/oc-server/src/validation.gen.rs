@@ -100,11 +100,31 @@ pub enum QueryValidation {
     Params(u32),
 }
 
+/// One path parameter's `^literal` startsWith filter (spec `pattern`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ParamSpec {
+    /// Wire name (exact spelling, e.g. `sessionID`).
+    pub name: &'static str,
+    /// The `^literal` prefix without the anchor (e.g. `ses`).
+    pub prefix: &'static str,
+}
+
+/// What a route's path parameters must satisfy (v2 decodes them FIRST —
+/// Params → Query → Payload; kind `Params`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ParamsValidation {
+    /// No pattern-constrained path parameters (plain strings — no-op).
+    None,
+    /// `(name, prefix)` startsWith constraints, spec declaration order.
+    Patterns(&'static [ParamSpec]),
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RouteValidation {
     pub operation_id: &'static str,
     pub body: BodyValidation,
     pub query: QueryValidation,
+    pub params: ParamsValidation,
 }
 
 pub static NODES: &[SchemaNode] = &[
@@ -734,706 +754,862 @@ pub static ROUTES: &[RouteValidation] = &[
         operation_id: "agent.get",
         body: BodyValidation::None,
         query: QueryValidation::Params(3),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "agent.list",
         body: BodyValidation::None,
         query: QueryValidation::Params(3),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "command.list",
         body: BodyValidation::None,
         query: QueryValidation::Params(3),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "config.get",
         body: BodyValidation::None,
         query: QueryValidation::Params(3),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "config.shells",
         body: BodyValidation::None,
         query: QueryValidation::None,
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "credential.activate",
         body: BodyValidation::None,
         query: QueryValidation::None,
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "credential.create",
         body: BodyValidation::Json(8),
         query: QueryValidation::None,
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "credential.list",
         body: BodyValidation::None,
         query: QueryValidation::None,
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "credential.remove",
         body: BodyValidation::None,
         query: QueryValidation::None,
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "credential.update",
         body: BodyValidation::Json(9),
         query: QueryValidation::None,
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "debug.location.evict",
         body: BodyValidation::None,
         query: QueryValidation::Params(3),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "debug.location.list",
         body: BodyValidation::None,
         query: QueryValidation::None,
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "event.subscribe",
         body: BodyValidation::None,
         query: QueryValidation::None,
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "experimental.config.update",
         body: BodyValidation::Json(11),
         query: QueryValidation::None,
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "experimental.fs.write",
         body: BodyValidation::Binary,
         query: QueryValidation::Params(12),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "experimental.generate.text",
         body: BodyValidation::Json(16),
         query: QueryValidation::None,
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "experimental.integration.wellknown.add",
         body: BodyValidation::Json(17),
         query: QueryValidation::Params(3),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "experimental.mcp.add",
         body: BodyValidation::Json(31),
         query: QueryValidation::Params(3),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "experimental.mcp.connect",
         body: BodyValidation::None,
         query: QueryValidation::Params(3),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "experimental.mcp.disconnect",
         body: BodyValidation::None,
         query: QueryValidation::Params(3),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "experimental.mcp.remove",
         body: BodyValidation::None,
         query: QueryValidation::Params(3),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "experimental.migration.v1.status",
         body: BodyValidation::None,
         query: QueryValidation::None,
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "experimental.session.export",
         body: BodyValidation::None,
         query: QueryValidation::Params(73),
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
         operation_id: "experimental.session.import",
         body: BodyValidation::Json(69),
         query: QueryValidation::None,
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "experimental.session.instructions.entry.list",
         body: BodyValidation::None,
         query: QueryValidation::None,
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
         operation_id: "experimental.session.instructions.entry.put",
         body: BodyValidation::Json(74),
         query: QueryValidation::None,
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
         operation_id: "experimental.session.instructions.entry.remove",
         body: BodyValidation::None,
         query: QueryValidation::None,
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
         operation_id: "experimental.session.skill",
         body: BodyValidation::Json(77),
         query: QueryValidation::None,
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
         operation_id: "experimental.session.stats",
         body: BodyValidation::None,
         query: QueryValidation::Params(71),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "experimental.session.wait",
         body: BodyValidation::None,
         query: QueryValidation::None,
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
         operation_id: "form.list",
         body: BodyValidation::None,
         query: QueryValidation::Params(3),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "fs.find",
         body: BodyValidation::None,
         query: QueryValidation::Params(83),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "fs.list",
         body: BodyValidation::None,
         query: QueryValidation::Params(84),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "fs.read",
         body: BodyValidation::None,
         query: QueryValidation::Params(3),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "integration.command.cancel",
         body: BodyValidation::None,
         query: QueryValidation::Params(3),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "integration.command.connect",
         body: BodyValidation::Json(85),
         query: QueryValidation::Params(3),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "integration.command.status",
         body: BodyValidation::None,
         query: QueryValidation::Params(3),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "integration.connect.key",
         body: BodyValidation::Json(90),
         query: QueryValidation::Params(3),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "integration.get",
         body: BodyValidation::None,
         query: QueryValidation::Params(3),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "integration.list",
         body: BodyValidation::None,
         query: QueryValidation::Params(3),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "integration.oauth.cancel",
         body: BodyValidation::None,
         query: QueryValidation::Params(3),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "integration.oauth.complete",
         body: BodyValidation::Json(92),
         query: QueryValidation::Params(3),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "integration.oauth.connect",
         body: BodyValidation::Json(91),
         query: QueryValidation::Params(3),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "integration.oauth.status",
         body: BodyValidation::None,
         query: QueryValidation::Params(3),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "location.get",
         body: BodyValidation::None,
         query: QueryValidation::Params(3),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "location.reload",
         body: BodyValidation::None,
         query: QueryValidation::None,
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "mcp.list",
         body: BodyValidation::None,
         query: QueryValidation::Params(3),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "mcp.resource.catalog",
         body: BodyValidation::None,
         query: QueryValidation::Params(3),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "model.default",
         body: BodyValidation::None,
         query: QueryValidation::Params(3),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "model.list",
         body: BodyValidation::None,
         query: QueryValidation::Params(3),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "permission.request.list",
         body: BodyValidation::None,
         query: QueryValidation::Params(3),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "permission.saved.list",
         body: BodyValidation::None,
         query: QueryValidation::Params(93),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "permission.saved.remove",
         body: BodyValidation::None,
         query: QueryValidation::None,
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "persistentPty.connect",
         body: BodyValidation::None,
         query: QueryValidation::Params(35),
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "ptyID", prefix: "pty" }]),
     },
     RouteValidation {
         operation_id: "plugin.check",
         body: BodyValidation::Json(94),
         query: QueryValidation::Params(3),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "plugin.list",
         body: BodyValidation::None,
         query: QueryValidation::Params(3),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "plugin.update",
         body: BodyValidation::Json(95),
         query: QueryValidation::Params(3),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "project.list",
         body: BodyValidation::None,
         query: QueryValidation::None,
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "project.update",
         body: BodyValidation::Json(100),
         query: QueryValidation::None,
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "provider.get",
         body: BodyValidation::None,
         query: QueryValidation::Params(3),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "provider.list",
         body: BodyValidation::None,
         query: QueryValidation::Params(3),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "pty.connect",
         body: BodyValidation::None,
         query: QueryValidation::Params(104),
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "ptyID", prefix: "pty" }]),
     },
     RouteValidation {
         operation_id: "pty.connect.token",
         body: BodyValidation::None,
         query: QueryValidation::Params(3),
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "ptyID", prefix: "pty" }]),
     },
     RouteValidation {
         operation_id: "pty.create",
         body: BodyValidation::Json(101),
         query: QueryValidation::Params(3),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "pty.get",
         body: BodyValidation::None,
         query: QueryValidation::Params(3),
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "ptyID", prefix: "pty" }]),
     },
     RouteValidation {
         operation_id: "pty.list",
         body: BodyValidation::None,
         query: QueryValidation::Params(3),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "pty.remove",
         body: BodyValidation::None,
         query: QueryValidation::Params(3),
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "ptyID", prefix: "pty" }]),
     },
     RouteValidation {
         operation_id: "pty.update",
         body: BodyValidation::Json(103),
         query: QueryValidation::Params(3),
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "ptyID", prefix: "pty" }]),
     },
     RouteValidation {
         operation_id: "reference.list",
         body: BodyValidation::None,
         query: QueryValidation::Params(3),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "rpc.call",
         body: BodyValidation::Json(106),
         query: QueryValidation::Params(3),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "server.connect",
         body: BodyValidation::None,
         query: QueryValidation::None,
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "server.experimental.persistentPty.connectToken",
         body: BodyValidation::None,
         query: QueryValidation::None,
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "ptyID", prefix: "pty" }]),
     },
     RouteValidation {
         operation_id: "server.experimental.persistentPty.create",
         body: BodyValidation::Json(79),
         query: QueryValidation::None,
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
         operation_id: "server.experimental.persistentPty.get",
         body: BodyValidation::None,
         query: QueryValidation::None,
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "ptyID", prefix: "pty" }]),
     },
     RouteValidation {
         operation_id: "server.experimental.persistentPty.handoff",
         body: BodyValidation::None,
         query: QueryValidation::None,
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "server.experimental.persistentPty.list",
         body: BodyValidation::None,
         query: QueryValidation::None,
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
         operation_id: "server.experimental.persistentPty.read",
         body: BodyValidation::None,
         query: QueryValidation::Params(81),
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
         operation_id: "server.experimental.persistentPty.remove",
         body: BodyValidation::None,
         query: QueryValidation::None,
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "ptyID", prefix: "pty" }]),
     },
     RouteValidation {
         operation_id: "server.experimental.persistentPty.shutdown",
         body: BodyValidation::None,
         query: QueryValidation::None,
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "server.experimental.persistentPty.snapshot",
         body: BodyValidation::None,
         query: QueryValidation::None,
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "ptyID", prefix: "pty" }]),
     },
     RouteValidation {
         operation_id: "server.experimental.persistentPty.update",
         body: BodyValidation::Json(34),
         query: QueryValidation::None,
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "ptyID", prefix: "pty" }]),
     },
     RouteValidation {
         operation_id: "server.info",
         body: BodyValidation::None,
         query: QueryValidation::None,
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "server.pair",
         body: BodyValidation::None,
         query: QueryValidation::None,
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "session.active",
         body: BodyValidation::None,
         query: QueryValidation::None,
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "session.background",
         body: BodyValidation::None,
         query: QueryValidation::None,
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
         operation_id: "session.command",
         body: BodyValidation::Json(131),
         query: QueryValidation::None,
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
         operation_id: "session.compact",
         body: BodyValidation::Json(133),
         query: QueryValidation::None,
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
         operation_id: "session.context",
         body: BodyValidation::None,
         query: QueryValidation::None,
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
         operation_id: "session.create",
         body: BodyValidation::Json(114),
         query: QueryValidation::None,
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "session.diff",
         body: BodyValidation::None,
         query: QueryValidation::Params(134),
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
         operation_id: "session.environment",
         body: BodyValidation::Json(135),
         query: QueryValidation::None,
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
         operation_id: "session.fork",
         body: BodyValidation::Json(136),
         query: QueryValidation::None,
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
         operation_id: "session.form.cancel",
         body: BodyValidation::None,
         query: QueryValidation::Params(145),
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "formID", prefix: "frm_" }]),
     },
     RouteValidation {
         operation_id: "session.form.create",
         body: BodyValidation::Json(144),
         query: QueryValidation::None,
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "session.form.get",
         body: BodyValidation::None,
         query: QueryValidation::None,
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "formID", prefix: "frm_" }]),
     },
     RouteValidation {
         operation_id: "session.form.list",
         body: BodyValidation::None,
         query: QueryValidation::None,
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "session.form.reply",
         body: BodyValidation::Json(147),
         query: QueryValidation::None,
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "formID", prefix: "frm_" }]),
     },
     RouteValidation {
         operation_id: "session.generate",
         body: BodyValidation::Json(148),
         query: QueryValidation::None,
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
         operation_id: "session.get",
         body: BodyValidation::None,
         query: QueryValidation::None,
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
         operation_id: "session.inbox.cancel",
         body: BodyValidation::None,
         query: QueryValidation::None,
+        params: ParamsValidation::Patterns(&[
+            ParamSpec { name: "sessionID", prefix: "ses" },
+            ParamSpec { name: "inboxID", prefix: "msg_" },
+        ]),
     },
     RouteValidation {
         operation_id: "session.inbox.list",
         body: BodyValidation::None,
         query: QueryValidation::None,
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
         operation_id: "session.inbox.update",
         body: BodyValidation::Json(149),
         query: QueryValidation::None,
+        params: ParamsValidation::Patterns(&[
+            ParamSpec { name: "sessionID", prefix: "ses" },
+            ParamSpec { name: "inboxID", prefix: "msg_" },
+        ]),
     },
     RouteValidation {
         operation_id: "session.interrupt",
         body: BodyValidation::None,
         query: QueryValidation::Params(150),
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
         operation_id: "session.list",
         body: BodyValidation::None,
         query: QueryValidation::Params(110),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "session.log",
         body: BodyValidation::None,
         query: QueryValidation::Params(75),
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
         operation_id: "session.message.get",
         body: BodyValidation::None,
         query: QueryValidation::None,
+        params: ParamsValidation::Patterns(&[
+            ParamSpec { name: "sessionID", prefix: "ses" },
+            ParamSpec { name: "messageID", prefix: "msg_" },
+        ]),
     },
     RouteValidation {
         operation_id: "session.message.list",
         body: BodyValidation::None,
         query: QueryValidation::Params(152),
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
         operation_id: "session.move",
         body: BodyValidation::Json(154),
         query: QueryValidation::None,
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
         operation_id: "session.permission.create",
         body: BodyValidation::Json(160),
         query: QueryValidation::None,
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
         operation_id: "session.permission.get",
         body: BodyValidation::None,
         query: QueryValidation::None,
+        params: ParamsValidation::Patterns(&[
+            ParamSpec { name: "sessionID", prefix: "ses" },
+            ParamSpec { name: "requestID", prefix: "per" },
+        ]),
     },
     RouteValidation {
         operation_id: "session.permission.list",
         body: BodyValidation::None,
         query: QueryValidation::None,
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
         operation_id: "session.permission.reply",
         body: BodyValidation::Json(163),
         query: QueryValidation::None,
+        params: ParamsValidation::Patterns(&[
+            ParamSpec { name: "sessionID", prefix: "ses" },
+            ParamSpec { name: "requestID", prefix: "per" },
+        ]),
     },
     RouteValidation {
         operation_id: "session.prompt",
         body: BodyValidation::Json(164),
         query: QueryValidation::None,
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
         operation_id: "session.remove",
         body: BodyValidation::None,
         query: QueryValidation::None,
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
         operation_id: "session.revert.clear",
         body: BodyValidation::None,
         query: QueryValidation::None,
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
         operation_id: "session.revert.commit",
         body: BodyValidation::None,
         query: QueryValidation::None,
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
         operation_id: "session.revert.stage",
         body: BodyValidation::Json(165),
         query: QueryValidation::None,
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
         operation_id: "session.shell",
         body: BodyValidation::Json(166),
         query: QueryValidation::None,
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
         operation_id: "session.switchAgent",
         body: BodyValidation::Json(116),
         query: QueryValidation::None,
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
         operation_id: "session.switchModel",
         body: BodyValidation::Json(153),
         query: QueryValidation::None,
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
         operation_id: "session.synthetic",
         body: BodyValidation::Json(167),
         query: QueryValidation::None,
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
         operation_id: "session.update",
         body: BodyValidation::Json(115),
         query: QueryValidation::None,
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
         operation_id: "session.view",
         body: BodyValidation::Json(168),
         query: QueryValidation::None,
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
         operation_id: "shell.create",
         body: BodyValidation::Json(169),
         query: QueryValidation::Params(3),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "shell.get",
         body: BodyValidation::None,
         query: QueryValidation::Params(3),
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "id", prefix: "sh_" }]),
     },
     RouteValidation {
         operation_id: "shell.list",
         body: BodyValidation::None,
         query: QueryValidation::Params(3),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "shell.output",
         body: BodyValidation::None,
         query: QueryValidation::Params(170),
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "id", prefix: "sh_" }]),
     },
     RouteValidation {
         operation_id: "shell.remove",
         body: BodyValidation::None,
         query: QueryValidation::Params(3),
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "id", prefix: "sh_" }]),
     },
     RouteValidation {
         operation_id: "skill.list",
         body: BodyValidation::None,
         query: QueryValidation::Params(3),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "vcs.base",
         body: BodyValidation::None,
         query: QueryValidation::Params(3),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "vcs.branch.list",
         body: BodyValidation::None,
         query: QueryValidation::Params(171),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "vcs.diff",
         body: BodyValidation::None,
         query: QueryValidation::Params(174),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "vcs.get",
         body: BodyValidation::None,
         query: QueryValidation::Params(3),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "vcs.init",
         body: BodyValidation::None,
         query: QueryValidation::Params(175),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "vcs.status",
         body: BodyValidation::None,
         query: QueryValidation::Params(3),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "websearch.providers",
         body: BodyValidation::None,
         query: QueryValidation::Params(3),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "websearch.query",
         body: BodyValidation::Json(176),
         query: QueryValidation::Params(3),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "worktree.create",
         body: BodyValidation::Json(181),
         query: QueryValidation::None,
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "worktree.list",
         body: BodyValidation::None,
         query: QueryValidation::Params(179),
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "worktree.refresh",
         body: BodyValidation::Json(179),
         query: QueryValidation::None,
+        params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "worktree.remove",
         body: BodyValidation::Json(178),
         query: QueryValidation::None,
+        params: ParamsValidation::None,
     },
 ];
 
@@ -1459,6 +1635,15 @@ pub fn query_node(operation_id: &str) -> Option<u32> {
     match find(operation_id)?.query {
         QueryValidation::Params(node) => Some(node),
         QueryValidation::None => None,
+    }
+}
+
+/// Resolves the pattern-constrained path parameters for an operation
+/// (empty slice when none declare a `^literal` pattern).
+pub fn path_params(operation_id: &str) -> &'static [ParamSpec] {
+    match find(operation_id).map(|row| row.params) {
+        Some(ParamsValidation::Patterns(specs)) => specs,
+        _ => &[],
     }
 }
 
@@ -1737,5 +1922,23 @@ mod tests {
                 "pty.connect {name}"
             );
         }
+    }
+
+    /// Path-param pattern pins (RA-01 slice 2): the `^literal` id
+    /// filters the seam's Params validation interprets.
+    #[test]
+    fn path_param_pins() {
+        fn specs(op: &str) -> Vec<(&'static str, &'static str)> {
+            path_params(op).iter().map(|s| (s.name, s.prefix)).collect()
+        }
+        assert_eq!(specs("session.get"), [("sessionID", "ses")]);
+        assert_eq!(specs("session.message.get"), [("sessionID", "ses"), ("messageID", "msg_")]);
+        assert_eq!(specs("session.form.get"), [("formID", "frm_")]);
+        assert_eq!(specs("session.permission.get"), [("sessionID", "ses"), ("requestID", "per")]);
+        assert_eq!(specs("pty.get"), [("ptyID", "pty")]);
+        assert_eq!(specs("shell.get"), [("id", "sh_")]);
+        // session.form.* carries NO sessionID pattern (formLocation group).
+        assert_eq!(specs("session.list"), Vec::<(&str, &str)>::new());
+        assert_eq!(specs("session.create"), Vec::<(&str, &str)>::new());
     }
 }

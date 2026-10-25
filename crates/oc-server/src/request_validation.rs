@@ -769,6 +769,78 @@ pub fn enforces_query(operation_id: &str) -> bool {
     validation_gen::query_node(operation_id).is_some() && !location_first(operation_id)
 }
 
+/// Whether the middleware enforces this operation's path params: it
+/// declares at least one `^literal` pattern param AND is not
+/// location-first. v2 decodes path params FIRST (Params → Query →
+/// Payload — the location middleware reads the RAW `route.params`, so
+/// its 404 precedes any Params 400 on location-first routes).
+#[must_use]
+pub fn enforces_params(operation_id: &str) -> bool {
+    !validation_gen::path_params(operation_id).is_empty() && !location_first(operation_id)
+}
+
+/// Validates one operation's path params against the generated pattern
+/// rows. A value that misses the `^literal` startsWith filter rejects
+/// with the pinned TreeFormatter message (kind `Params`); missing params
+/// cannot happen (the router matched the path shape).
+pub fn validate_params(operation_id: &str, params: &[(&str, &str)]) -> Result<(), String> {
+    for spec in validation_gen::path_params(operation_id) {
+        let Some((_, value)) = params.iter().find(|(name, _)| *name == spec.name) else {
+            continue;
+        };
+        if !value.starts_with(spec.prefix) {
+            return Err(format!(
+                "Expected a string starting with {:?}\n  at [{:?}]",
+                spec.prefix, spec.name
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The post-location validation seam (RA-01 slice 1) for
+/// [`LOCATION_FIRST_OPS`] handlers: v2 resolves the session/form (404)
+/// in location middleware BEFORE decoding, so these routes validate
+/// Params → Query → Payload only AFTER the in-handler 404 resolution
+/// succeeded. Returns the parsed payload (empty body decodes as null —
+/// probe r1) so handlers can drop their `Json` extractor (whose axum
+/// rejection would otherwise preempt the 404 with a plain-text 400).
+pub fn validate_at_handler(
+    operation_id: &str,
+    method: &axum::http::Method,
+    uri: &axum::http::Uri,
+    body: &[u8],
+) -> Result<Value, crate::errors::ApiError> {
+    // 1. path params (v2 decode order: Params → Query → Payload).
+    if let Some(table_method) = table_method(method) {
+        if let Some((_, params)) = crate::routes_gen::find(table_method, uri.path()) {
+            if let Err(message) = validate_params(operation_id, &params) {
+                return Err(crate::errors::schema_rejection(&message, "Params"));
+            }
+        }
+    }
+    // 2. query (urlParams).
+    if validation_gen::query_node(operation_id).is_some() {
+        if let Err(message) = validate_query(operation_id, uri.query().unwrap_or("")) {
+            return Err(crate::errors::schema_rejection(&message, "Query"));
+        }
+    }
+    // 3. payload (only JSON bodies buffer + validate).
+    if validation_gen::body_node(operation_id).is_some() {
+        let value = if body.is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_slice(body).map_err(|_| {
+                crate::errors::schema_rejection("Expected a valid JSON body", "Payload")
+            })?
+        };
+        validate_payload(operation_id, &value)
+            .map_err(|message| crate::errors::schema_rejection(&message, "Payload"))?;
+        return Ok(value);
+    }
+    Ok(Value::Null)
+}
+
 fn table_method(method: &axum::http::Method) -> Option<crate::routes_gen::Method> {
     match *method {
         axum::http::Method::GET => Some(crate::routes_gen::Method::Get),
@@ -821,8 +893,8 @@ pub async fn schema_error_middleware(request: Request, next: Next) -> Response {
             crate::routes_gen::find(table_method, &path).map(|(route, _)| route.operation_id)
         })
         .filter(|operation_id| {
-            enforces(operation_id) || enforces_query(operation_id) ||
-                // Binary-body routes still take the content-type gate.
+            enforces(operation_id) || enforces_query(operation_id) || enforces_params(operation_id)
+                || // Binary-body routes still take the content-type gate.
                 (validation_gen::find(operation_id)
                     .is_some_and(|row| row.body == validation_gen::BodyValidation::Binary)
                     && !location_first(operation_id))
@@ -830,6 +902,18 @@ pub async fn schema_error_middleware(request: Request, next: Next) -> Response {
     let Some(operation_id) = operation_id else {
         return next.run(request).await;
     };
+
+    // 0. path params decode FIRST in v2 (Params → Query → Payload; the
+    //    generated `^literal` id filters, kind `Params`).
+    if enforces_params(operation_id) {
+        if let Some(table_method) = table_method(&method) {
+            if let Some((_, params)) = crate::routes_gen::find(table_method, &path) {
+                if let Err(message) = validate_params(operation_id, &params) {
+                    return crate::errors::schema_rejection(&message, "Params").into_response();
+                }
+            }
+        }
+    }
 
     // 1. query (urlParams) before payload — probe: websearch?location=x.
     //    An absent query string is the EMPTY param set: required params
