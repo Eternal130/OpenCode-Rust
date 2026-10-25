@@ -29,10 +29,11 @@
 //! `sessionLocationMiddleware` resolve the session (404) BEFORE payload
 //! decode — `session.update`, `switchAgent`, `switchModel`, `prompt`,
 //! `shell`, … For those routes this middleware MUST NOT fire; their
-//! post-session validation is a follow-up slice (see ledger HTTP-H0).
-//! [`ENFORCED_OPS`] lists only validate-first routes (no location
-//! middleware in `protocol/src/groups/*`), where v2 rejects wrong payloads
-//! regardless of resource existence.
+//! post-session validation runs IN-HANDLER via
+//! [`validate_at_handler`] (RA-01 slice 1: 404 first, then Params →
+//! Query → Payload). [`ENFORCED_OPS`] lists only validate-first routes
+//! (no location middleware in `protocol/src/groups/*`), where v2
+//! rejects wrong payloads regardless of resource existence.
 //!
 //! Label provenance (round-4 probes,
 //! `ref-validation-messages-4.json`): `boolean` renders `Expected boolean`
@@ -50,6 +51,84 @@ use axum::response::{IntoResponse, Response};
 
 use crate::validation_gen::{self, SchemaNode};
 use serde_json::Value;
+
+/// JS `Number(string)` for the inputs that matter: trims whitespace,
+/// `""` → 0, decimal/exponent literals, `0x` hex, `Infinity`; anything
+/// else is `NaN`. Migrated from the retired Phase-10 `schema_check`
+/// module (RA-01) — the seam's single implementation.
+fn js_number(raw: &str) -> f64 {
+    let text = raw.trim_matches(|c: char| c.is_ascii_whitespace());
+    if text.is_empty() {
+        return 0.0;
+    }
+    let (sign, text) = match text.strip_prefix('-') {
+        Some(rest) => (-1.0, rest),
+        None => (1.0, text.strip_prefix('+').unwrap_or(text)),
+    };
+    let text = text.strip_prefix('+').unwrap_or(text);
+    if text == "Infinity" {
+        return sign * f64::INFINITY;
+    }
+    let lower = text.to_ascii_lowercase();
+    if let Some(hex) = lower.strip_prefix("0x") {
+        return sign
+            * u64::from_str_radix(
+                &hex.chars().filter(char::is_ascii_hexdigit).collect::<String>(),
+                16,
+            )
+            .map_or(f64::NAN, |value| {
+                #[allow(clippy::cast_precision_loss)] // JS numbers ARE f64
+                let value = value as f64;
+                value
+            });
+    }
+    if lower.ends_with("infinity") || lower.starts_with("0b") || lower.starts_with("0o") {
+        return f64::NAN;
+    }
+    let cleaned: String = text
+        .chars()
+        .filter(|c| c.is_ascii_digit() || matches!(c, '.' | 'e' | 'E' | '+' | '-'))
+        .collect();
+    if cleaned.is_empty() || cleaned != text {
+        // The filter only keeps shape-valid characters; a change means
+        // stray characters → NaN (mirrors Number()'s rejection).
+        return f64::NAN;
+    }
+    text.parse::<f64>().unwrap_or(f64::NAN) * sign
+}
+
+/// Minimal query-string split: `&`-separated `k=v` pairs with
+/// percent-decoding (query keys/values in play are plain ASCII).
+/// Migrated from the retired Phase-10 `schema_check` module (RA-01).
+fn parse_query_pairs(query: &str) -> Vec<(String, String)> {
+    query
+        .split('&')
+        .filter(|pair| !pair.is_empty())
+        .map(|pair| match pair.split_once('=') {
+            Some((key, value)) => (decode_component(key), decode_component(value)),
+            None => (decode_component(pair), String::new()),
+        })
+        .collect()
+}
+
+fn decode_component(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            let hex = std::str::from_utf8(&bytes[index + 1..index + 3]).unwrap_or("");
+            if let Ok(byte) = u8::from_str_radix(hex, 16) {
+                out.push(byte);
+                index += 3;
+                continue;
+            }
+        }
+        out.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
 
 /// Body buffering limit: axum's default `DefaultBodyLimit` (2 MiB) — the
 /// same budget the handlers' `Json` extractors apply after pass-through.
@@ -72,9 +151,10 @@ const BODY_LIMIT: usize = 2 * 1024 * 1024;
 ///
 /// Excluded forever (not "deferred"): the 16 LOC-MW body ops and 2
 /// FORM-MW body ops whose v2 endpoints resolve the session/form (404)
-/// BEFORE payload decode; their post-location seam is a follow-up slice.
-/// `session.list`'s query stays in-handler pinned (P10-E2) and is ALSO
-/// enforced here (identical bytes) — see [`NUMBER_PARAMS`].
+/// BEFORE payload decode; their post-location seam is in-handler
+/// (`validate_at_handler`, RA-01 slice 1). `session.list`'s query stays
+/// middleware-enforced (identical bytes to the retired in-handler P10-E2
+/// pin) — see [`NUMBER_PARAMS`].
 const ENFORCED_OPS: &[&str] = &[
     "credential.create",
     "credential.update",
@@ -112,9 +192,10 @@ const ENFORCED_OPS: &[&str] = &[
 /// (3) — or `formLocationMiddleware` — `groups/session.ts` (5)): the
 /// session/form resolves (404) BEFORE query/payload decode, so the
 /// validate-first middleware must NOT fire for them. Probe-pinned
-/// (rollout-probe*.json): bad query/body on these routes answers the
-/// location 404, never a schema 400. Their post-location seam is a
-/// follow-up slice. Operation ids are the `OpenAPI` identifiers (note the
+/// (probe: bad query/body on these routes answers the location 404,
+/// never a schema 400). Their post-location seam is the in-handler
+/// [`validate_at_handler`] (RA-01 slice 1). Operation ids are the
+/// `OpenAPI` identifiers (note the
 /// `experimental.` prefixes the endpoint names lack).
 pub const LOCATION_FIRST_OPS: &[&str] = &[
     "experimental.session.instructions.entry.list",
@@ -579,7 +660,7 @@ pub fn validate_query(operation_id: &str, query: &str) -> Result<(), String> {
         SchemaNode::Obj { fields } => *fields,
         _ => return Ok(()),
     };
-    let pairs = crate::handlers::schema_check::parse_query_pairs(query);
+    let pairs = parse_query_pairs(query);
     for field in fields {
         let name = field.name;
         let deep_prefix = format!("{name}[");
@@ -711,7 +792,7 @@ fn check_number_param(
     maximum: Option<f64>,
     exclusive_minimum: Option<f64>,
 ) -> Result<(), String> {
-    let number = crate::handlers::schema_check::js_number(value);
+    let number = js_number(value);
     if !number.is_finite() || number.fract() != 0.0 {
         return Err(format!("Expected an integer\n  at [{name:?}]"));
     }
@@ -813,7 +894,9 @@ pub fn validate_at_handler(
 ) -> Result<Value, crate::errors::ApiError> {
     // 1. path params (v2 decode order: Params → Query → Payload).
     if let Some(table_method) = table_method(method) {
-        if let Some((_, params)) = crate::routes_gen::find(table_method, uri.path()) {
+        if let Some((_, raw)) = crate::routes_gen::find(table_method, uri.path()) {
+            let params: Vec<(&str, &str)> =
+                raw.iter().map(|(name, value)| (*name, value.as_str())).collect();
             if let Err(message) = validate_params(operation_id, &params) {
                 return Err(crate::errors::schema_rejection(&message, "Params"));
             }
@@ -907,7 +990,9 @@ pub async fn schema_error_middleware(request: Request, next: Next) -> Response {
     //    generated `^literal` id filters, kind `Params`).
     if enforces_params(operation_id) {
         if let Some(table_method) = table_method(&method) {
-            if let Some((_, params)) = crate::routes_gen::find(table_method, &path) {
+            if let Some((_, raw)) = crate::routes_gen::find(table_method, &path) {
+                let params: Vec<(&str, &str)> =
+                    raw.iter().map(|(name, value)| (*name, value.as_str())).collect();
                 if let Err(message) = validate_params(operation_id, &params) {
                     return crate::errors::schema_rejection(&message, "Params").into_response();
                 }
@@ -1683,5 +1768,102 @@ mod tests {
         // consulted — `enforces_query` is the gate.
         assert!(!enforces_query("session.interrupt"));
         assert!(!enforces_query("session.form.cancel"));
+    }
+
+    /// Migrated from the retired `handlers/schema_check` module (RA-01):
+    /// JS `Number()` semantics the `NumberFromString` filters rely on.
+    #[test]
+    fn js_number_semantics() {
+        assert_eq!(js_number(""), 0.0);
+        assert_eq!(js_number(" 5 "), 5.0);
+        assert!(js_number("notanumber").is_nan());
+        assert_eq!(js_number("0x10"), 16.0);
+        assert_eq!(js_number("1e2"), 100.0);
+        assert_eq!(js_number("-2"), -2.0);
+        assert_eq!(js_number("Infinity"), f64::INFINITY);
+    }
+
+    /// Path-param (kind Params) pins: the generated `^literal` id
+    /// filters, TreeFormatter message shape, and the location-first
+    /// carve-out (their 404 precedes any Params 400).
+    #[test]
+    fn pinned_params_messages() {
+        assert_eq!(
+            validate_params("session.get", &[("sessionID", "not_ses")]).unwrap_err(),
+            "Expected a string starting with \"ses\"\n  at [\"sessionID\"]"
+        );
+        assert!(validate_params("session.get", &[("sessionID", "ses_1")]).is_ok());
+        assert_eq!(
+            validate_params("session.message.get", &[("sessionID", "ses_1"), ("messageID", "x")])
+                .unwrap_err(),
+            "Expected a string starting with \"msg_\"\n  at [\"messageID\"]"
+        );
+        assert_eq!(
+            validate_params("shell.get", &[("id", "cmd_1")]).unwrap_err(),
+            "Expected a string starting with \"sh_\"\n  at [\"id\"]"
+        );
+        // Middleware-side gate: validate-first ops enforce, location-first
+        // ops never do here (the 404 wins; their handlers validate
+        // post-location instead).
+        assert!(enforces_params("session.get"));
+        assert!(enforces_params("shell.get"));
+        assert!(enforces_params("pty.get"));
+        assert!(enforces_params("session.environment"));
+        assert!(!enforces_params("session.prompt"));
+        assert!(!enforces_params("session.form.get"));
+        assert!(!enforces_params("session.list"));
+    }
+
+    /// The post-location seam (RA-01 slice 1): Params → Query → Payload
+    /// AFTER the handler resolved the session/form (the caller's 404).
+    #[test]
+    fn validate_at_handler_ordering_and_messages() {
+        let uri: axum::http::Uri = "/api/session/ses_1/prompt".parse().unwrap();
+        // Malformed JSON → the pinned plain message, kind Payload.
+        let error = validate_at_handler("session.prompt", &axum::http::Method::POST, &uri, b"{")
+            .unwrap_err();
+        assert_eq!(error.status.as_u16(), 400);
+        assert_eq!(error.body["message"], "Expected a valid JSON body");
+        assert_eq!(error.body["kind"], "Payload");
+        // Schema violation → the TreeFormatter message.
+        let error = validate_at_handler(
+            "session.prompt",
+            &axum::http::Method::POST,
+            &uri,
+            br#"{"text": 5}"#,
+        )
+        .unwrap_err();
+        assert_eq!(error.body["message"], "Expected string\n  at [\"text\"]");
+        assert_eq!(error.body["kind"], "Payload");
+        // Empty body decodes as null → the root message (probe r1).
+        let error = validate_at_handler("session.prompt", &axum::http::Method::POST, &uri, b"")
+            .unwrap_err();
+        assert_eq!(error.body["message"], "Expected object");
+        // Path params validate before the payload.
+        let bad_id: axum::http::Uri = "/api/session/ses_1/inbox/notmsg".parse().unwrap();
+        let error =
+            validate_at_handler("session.inbox.update", &axum::http::Method::PATCH, &bad_id, b"{")
+                .unwrap_err();
+        assert_eq!(
+            error.body["message"],
+            "Expected a string starting with \"msg_\"\n  at [\"inboxID\"]"
+        );
+        assert_eq!(error.body["kind"], "Params");
+        // Query ops validate their query post-location (interrupt).
+        let query: axum::http::Uri = "/api/session/ses_1/interrupt?resume=bogus".parse().unwrap();
+        let error =
+            validate_at_handler("session.interrupt", &axum::http::Method::POST, &query, &[])
+                .unwrap_err();
+        assert_eq!(error.body["message"], "Expected \"true\" | \"false\"\n  at [\"resume\"]");
+        assert_eq!(error.body["kind"], "Query");
+        // Valid bodies parse back to the payload Value.
+        let body = validate_at_handler(
+            "session.prompt",
+            &axum::http::Method::POST,
+            &uri,
+            br#"{"text": "hi"}"#,
+        )
+        .unwrap();
+        assert_eq!(body["text"], "hi");
     }
 }
