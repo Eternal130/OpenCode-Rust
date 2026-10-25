@@ -322,5 +322,4 @@ mod tests {
         assert!(joined.contains("Links"));
         assert!(joined.contains("auth/connect") || joined.contains("localhost"));
     }
-
 }

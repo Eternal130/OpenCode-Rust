@@ -1240,7 +1240,10 @@ mod tests {
         }
         state.reveal(&props, 20);
         assert_eq!(state.selected, 9);
-        assert_eq!(state.scroll, 6, "edge-follow: selected row visible at the bottom (4-row window)");
+        assert_eq!(
+            state.scroll, 6,
+            "edge-follow: selected row visible at the bottom (4-row window)"
+        );
         state.move_selection(&props, -1);
         state.reveal(&props, 20);
         assert_eq!(state.scroll, 6, "scroll does not jump upward while following");
