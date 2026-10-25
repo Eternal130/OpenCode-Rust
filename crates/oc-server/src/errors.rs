@@ -145,13 +145,25 @@ pub fn invalid_cursor(message: impl Into<String>) -> ApiError {
     tagged("InvalidCursorError", StatusCode::BAD_REQUEST, json!({ "message": message.into() }))
 }
 
-/// `RpcError` 400.
+/// `RpcError` 400 with an optional `data` payload (errors.ts:21-29 —
+/// `data` is `Schema.optional(Schema.Unknown)`; absent stays absent on
+/// the wire).
 #[must_use]
 pub fn rpc_error(type_: impl Into<String>, message: impl Into<String>) -> ApiError {
+    rpc_error_data(type_, message, None)
+}
+
+/// `RpcError` 400 with a `data` value.
+#[must_use]
+pub fn rpc_error_data(
+    type_: impl Into<String>,
+    message: impl Into<String>,
+    data: Option<Value>,
+) -> ApiError {
     tagged(
         "RpcError",
         StatusCode::BAD_REQUEST,
-        json!({ "type": type_.into(), "message": message.into() }),
+        envelope_data(json!({ "type": type_.into(), "message": message.into() }), data),
     )
 }
 
@@ -414,14 +426,34 @@ pub fn form_already_settled(id: impl Into<String>, message: impl Into<String>) -
     )
 }
 
-/// `RpcInternalError` 500 (`rpc.internal` / `rpc.invalid_output`).
+/// `RpcInternalError` 500 (`rpc.internal` / `rpc.invalid_output`) with
+/// an optional `data` payload (errors.ts:31-38).
 #[must_use]
 pub fn rpc_internal(type_: impl Into<String>, message: impl Into<String>) -> ApiError {
+    rpc_internal_data(type_, message, None)
+}
+
+/// `RpcInternalError` 500 with a `data` value.
+#[must_use]
+pub fn rpc_internal_data(
+    type_: impl Into<String>,
+    message: impl Into<String>,
+    data: Option<Value>,
+) -> ApiError {
     tagged(
         "RpcInternalError",
         StatusCode::INTERNAL_SERVER_ERROR,
-        json!({ "type": type_.into(), "message": message.into() }),
+        envelope_data(json!({ "type": type_.into(), "message": message.into() }), data),
     )
+}
+
+/// Merges an optional `data` member into the base fields (absent stays
+/// absent — v2 `Schema.optional` drops undefined on the wire).
+fn envelope_data(mut fields: Value, data: Option<Value>) -> Value {
+    if let (Some(target), Some(data)) = (fields.as_object_mut(), data) {
+        target.insert("data".to_owned(), data);
+    }
+    fields
 }
 
 /// `CommandExecutionError` 500.
@@ -482,6 +514,56 @@ pub fn service_unavailable_named(
         "ServiceUnavailableError",
         StatusCode::SERVICE_UNAVAILABLE,
         json!({ "message": message.into(), "service": service.into() }),
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Spec-pinned wire-only envelopes (formerly inline in handlers/common.rs)
+// ---------------------------------------------------------------------------
+
+/// `WorktreeError` 400 (protocol/groups/worktree.ts:9-24): the literal
+/// `name: "WorktreeError"` and a nested `data: { message, forceRequired? }`
+/// — the only envelope whose payload nests under `data`. `forceRequired`
+/// surfaces only when a dirty tree demands `force` (undefined is dropped
+/// on the wire).
+#[must_use]
+pub fn worktree_error(message: impl Into<String>, force_required: Option<bool>) -> ApiError {
+    let mut data = json!({ "message": message.into() });
+    if force_required == Some(true) {
+        if let Value::Object(map) = &mut data {
+            map.insert("forceRequired".to_owned(), json!(true));
+        }
+    }
+    ApiError::new(
+        StatusCode::BAD_REQUEST,
+        json!({ "_tag": "WorktreeError", "name": "WorktreeError", "data": data }),
+    )
+}
+
+/// `VcsInitNotSupportedError` 501 (protocol/groups/vcs.ts:15-19).
+#[must_use]
+pub fn vcs_init_not_supported(provider_id: impl Into<String>) -> ApiError {
+    ApiError::new(
+        StatusCode::NOT_IMPLEMENTED,
+        json!({
+            "_tag": "VcsInitNotSupportedError",
+            "providerID": provider_id.into(),
+            "message": "VCS init not supported",
+        }),
+    )
+}
+
+/// `InstructionEntryValueTooLargeError` 413 (schema/instruction-entry.ts).
+#[must_use]
+pub fn instruction_entry_too_large(actual: i64, max: i64) -> ApiError {
+    ApiError::new(
+        StatusCode::PAYLOAD_TOO_LARGE,
+        json!({
+            "_tag": "InstructionEntryValueTooLargeError",
+            "message": "Instruction entry value too large",
+            "actualBytes": actual,
+            "maxBytes": max,
+        }),
     )
 }
 
@@ -949,6 +1031,70 @@ mod tests {
         assert_eq!(
             body(&command_execution_error("git", "exit 1")),
             json!({"_tag": "CommandExecutionError", "command": "git", "message": "exit 1"})
+        );
+    }
+
+    /// errors.ts:21-38: `data` is optional on both Rpc envelopes —
+    /// absent stays absent, present is a top-level member.
+    #[test]
+    fn server_errors_rpc_data_optional() {
+        assert_eq!(rpc_error("rpc.custom", "m").body.get("data"), None);
+        assert_eq!(rpc_internal("rpc.internal", "m").body.get("data"), None);
+        assert_eq!(
+            rpc_error_data("rpc.custom", "m", Some(json!({"code": 7}))).body,
+            json!({"_tag": "RpcError", "type": "rpc.custom", "message": "m", "data": {"code": 7}})
+        );
+        assert_eq!(
+            rpc_internal_data("rpc.internal", "m", Some(json!(null))).body["data"],
+            json!(null)
+        );
+    }
+
+    /// The three envelopes consolidated from handlers/common.rs inline
+    /// literals — wire bytes pinned against the ref protocol files.
+    #[test]
+    fn server_errors_worktree_vcs_init_instruction_envelopes() {
+        assert_eq!(
+            worktree_error("Worktree source not found: /x", None).body,
+            json!({
+                "_tag": "WorktreeError",
+                "name": "WorktreeError",
+                "data": {"message": "Worktree source not found: /x"}
+            })
+        );
+        assert_eq!(worktree_error("dirty", None).status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            worktree_error("dirty", Some(true)).body["data"]["forceRequired"],
+            json!(true)
+        );
+        // `Some(false)` and `None` both drop the key (undefined dropped).
+        assert_eq!(
+            worktree_error("dirty", Some(false)).body["data"].get("forceRequired"),
+            None
+        );
+
+        assert_eq!(
+            vcs_init_not_supported("fallback").body,
+            json!({
+                "_tag": "VcsInitNotSupportedError",
+                "providerID": "fallback",
+                "message": "VCS init not supported"
+            })
+        );
+        assert_eq!(vcs_init_not_supported("fallback").status, StatusCode::NOT_IMPLEMENTED);
+
+        assert_eq!(
+            instruction_entry_too_large(5000, 1024).body,
+            json!({
+                "_tag": "InstructionEntryValueTooLargeError",
+                "message": "Instruction entry value too large",
+                "actualBytes": 5000,
+                "maxBytes": 1024
+            })
+        );
+        assert_eq!(
+            instruction_entry_too_large(5000, 1024).status,
+            StatusCode::PAYLOAD_TOO_LARGE
         );
     }
 

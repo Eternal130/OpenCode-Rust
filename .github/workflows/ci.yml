@@ -27,6 +27,13 @@ jobs:
       - name: Run guards
         run: tools/guards/run.sh
 
+      # RA-08: the generated route/validation tables must match the pinned
+      # spec — fails when openapi.json is updated without regeneration
+      # (or regenerated with a stale spec). Needs cargo (dev-gate is a
+      # local-only harness; CI calls cargo directly).
+      - name: OpenAPI generation drift check
+        run: cargo run -p openapi-gen --locked -- --check
+
   lint:
     name: fmt + clippy
     runs-on: ubuntu-latest
