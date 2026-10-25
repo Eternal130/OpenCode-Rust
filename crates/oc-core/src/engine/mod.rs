@@ -450,6 +450,16 @@ impl Engine {
             });
         }
         let tool_output = Arc::new(ToolOutput::new(&options.data_root, options.clock.clone()));
+        // RA-04 (tool-output.ts:129-144 / shell.ts:104-109): the two
+        // hourly retention sweeps — spilled tool output and shell capture
+        // files — run for the process lifetime once the engine owns the
+        // data root (v2 scopes them to the server layer; the engine boot
+        // is the Rust equivalent lifecycle point).
+        tokio::spawn(crate::tool_output::spawn_cleanup_task(Arc::clone(&tool_output)));
+        crate::shell::spawn_cleanup_task(
+            options.data_root.clone(),
+            Arc::clone(&options.clock),
+        );
         let projects = Arc::new(crate::project::SqliteProjectStore::new((*db).clone()));
         let llm: Arc<dyn LlmClient> =
             options.llm.clone().unwrap_or_else(|| Arc::new(RouteLlmClient));
