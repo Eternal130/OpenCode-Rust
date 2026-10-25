@@ -122,15 +122,21 @@ async fn prompt_delivery_rejects_unknown_and_non_string_values() {
         .await;
         assert_eq!(response.status, 400, "delivery {delivery} must 400");
         let body = response.json();
+        // Ref parity (v2.0.24): `delivery` is enum-constrained by the prompt
+        // request schema (Session.Inbox.Delivery | null), so decode fails at
+        // the schema layer after session resolution → kind=Payload with the
+        // TreeFormatter message (probe-pinned). The handler-level
+        // parse_delivery (kind=ParseError) is defense-in-depth, unreachable
+        // on the wire for these inputs — matching ref.
         assert_eq!(body["_tag"], "InvalidRequestError", "body: {body}");
-        assert_eq!(body["kind"], "ParseError", "body: {body}");
-        assert_eq!(body["message"], "Expected \"steer\" or \"queue\" for delivery");
+        assert_eq!(body["kind"], "Payload", "body: {body}");
+        assert!(body["message"].as_str().unwrap().contains("Session.Inbox.Delivery"), "body: {body}");
     }
 }
 
 /// Oracle gate-1: the synthetic endpoint shares the prompt delivery
 /// schema (`parse_delivery`), so a bogus value must 400 the same way —
-/// `InvalidRequestError` with kind `ParseError`.
+/// `InvalidRequestError` with kind `Payload` (schema-layer decode failure).
 #[tokio::test]
 async fn synthetic_delivery_rejects_unknown_and_non_string_values() {
     let server = boot().await;
@@ -154,7 +160,7 @@ async fn synthetic_delivery_rejects_unknown_and_non_string_values() {
         assert_eq!(response.status, 400, "delivery {delivery} must 400");
         let body = response.json();
         assert_eq!(body["_tag"], "InvalidRequestError", "body: {body}");
-        assert_eq!(body["kind"], "ParseError", "body: {body}");
-        assert_eq!(body["message"], "Expected \"steer\" or \"queue\" for delivery");
+        assert_eq!(body["kind"], "Payload", "body: {body}");
+        assert!(body["message"].as_str().unwrap().contains("Session.Inbox.Delivery"), "body: {body}");
     }
 }
