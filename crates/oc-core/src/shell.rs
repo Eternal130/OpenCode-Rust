@@ -50,16 +50,18 @@ pub fn cleanup_data_root(data_root: &std::path::Path, now_ms: u64) {
         for entry in captures.flatten() {
             let name = entry.file_name();
             let Some(name) = name.to_str() else { continue };
-            if !(name.starts_with("sh_") && name.ends_with(".out")) {
+            let is_capture = name.starts_with("sh_")
+                && std::path::Path::new(name).extension() == Some(std::ffi::OsStr::new("out"));
+            if !is_capture {
                 continue;
             }
             let Ok(meta) = entry.metadata() else { continue };
             let Ok(modified) = meta.modified() else { continue };
-            let modified_ms = modified
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_millis())
-                .unwrap_or(0);
-            if (modified_ms as u64) < cutoff {
+            let modified_ms = u64::try_from(
+                modified.duration_since(std::time::UNIX_EPOCH).map_or(0_u128, |d| d.as_millis()),
+            )
+            .unwrap_or(0);
+            if modified_ms < cutoff {
                 // Retention removals are best-effort (v2 ignores errors).
                 let _ = std::fs::remove_file(entry.path());
             }
