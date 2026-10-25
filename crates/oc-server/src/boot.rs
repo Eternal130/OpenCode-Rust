@@ -148,6 +148,40 @@ impl oc_core::config::watch::ConfigUpdated for ConfigReloadBridge {
 // `settings.baseURL` becomes an openai-compatible `CustomProvider`
 // handle, plus the `model` default selection.
 
+/// The event types the event logger mirrors into the server log
+/// (`event-logger.ts` `EVENT_TYPES`).
+pub const EVENT_LOGGER_TYPES: &[&str] =
+    &["agent.updated", "provider.updated", "model.updated", "command.updated", "config.updated"];
+
+/// The one log line an event-logger event produces — `logInfo("event",
+/// { event })` in v2; the Rust sink renders `[event] {"event":…}` so the
+/// payload shape stays inspectable and stable. Non-member types map to
+/// `None` (v2 logs nothing for them).
+#[must_use]
+pub fn event_logger_line(event: &oc_core::bus::Event) -> Option<String> {
+    if EVENT_LOGGER_TYPES.contains(&event.type_.as_str()) {
+        let payload = serde_json::to_string(event).unwrap_or_else(|_| "{}".to_string());
+        Some(format!("[event] {{\"event\":{payload}}}"))
+    } else {
+        None
+    }
+}
+
+/// Installs the event-logger bus listener (event-logger.ts `layer`):
+/// member `.updated` events append to the server log sink
+/// ([`crate::errors::append_server_log`]). The returned guard detaches
+/// the listener on drop — the boot path leaks it for the process
+/// lifetime.
+#[must_use]
+pub fn attach_event_logger(bus: &oc_core::bus::Bus) -> oc_core::bus::ListenGuard {
+    bus.listen(std::sync::Arc::new(|event: &oc_core::bus::Event| {
+        if let Some(line) = event_logger_line(event) {
+            crate::errors::append_server_log(&line);
+        }
+        Ok(())
+    }))
+}
+
 /// Boots the engine + app shell + handler table and serves: the single
 /// production entry (`main.rs` calls this).
 // One linear composition (config → plugins → engine → assets → shell →
@@ -324,6 +358,13 @@ pub async fn boot_and_serve(options: &BootOptions) -> io::Result<ServeHandle> {
     // eager boot-location assembly here would diverge m1_scenarios).
     // Per-location assembly is synchronous within the first request.
     let engine = Engine::boot(engine_options).await;
+    // RA-04 (packages/core/src/event-logger.ts): the event logger —
+    // agent/provider/model/command/config `.updated` events are logged
+    // into the shared server log sink (v2 `logInfo("event", { event })`
+    // → Global.Path.log). The listen guard is intentionally detached:
+    // the listener lives for the process lifetime (v2's finalizer runs
+    // only at layer shutdown).
+    std::mem::forget(attach_event_logger(&engine.bus));
     if trace_boot {
         eprintln!(
             "[boot-trace] t={}ms engine booted (catalog defaults bound; locations lazy)",
@@ -1209,5 +1250,94 @@ mod tests {
         assert_eq!(default.model.as_str(), "glm-5.3");
 
         handle.shutdown_and_join().await.expect("shutdown");
+    }
+
+    // -----------------------------------------------------------------
+    // RA-04 event logger (packages/core/src/event-logger.ts)
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn event_logger_line_covers_the_five_member_types_only() {
+        for type_ in EVENT_LOGGER_TYPES {
+            let event = oc_core::bus::Event {
+                id: oc_schema::id::EventId::new(),
+                created: 0,
+                metadata: None,
+                type_: (*type_).to_string(),
+                durable: None,
+                location: None,
+                data: serde_json::json!({"change": "x"}),
+            };
+            let line = event_logger_line(&event).unwrap_or_else(|| panic!("no line for {type_}"));
+            assert!(line.starts_with("[event] {\"event\":"), "{line}");
+            assert!(line.contains(type_), "{line}");
+        }
+        for type_ in ["session.updated", "message.part.updated", "event.pinged"] {
+            let event = oc_core::bus::Event {
+                id: oc_schema::id::EventId::new(),
+                created: 0,
+                metadata: None,
+                type_: type_.to_string(),
+                durable: None,
+                location: None,
+                data: serde_json::json!({}),
+            };
+            assert!(event_logger_line(&event).is_none(), "non-member {type_} filtered");
+        }
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // env seam must stay held across the publish awaits
+    async fn event_logger_listener_writes_published_events_to_the_log_sink() {
+        // OPENCODE_LOG_FILE is the existing log-sink test seam (see
+        // errors.rs tests) — serialize against their env lock pattern.
+        static LOG_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = LOG_ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+        let log = dir.path().join("server.log");
+        let saved = std::env::var_os("OPENCODE_LOG_FILE");
+        std::env::set_var("OPENCODE_LOG_FILE", &log);
+
+        let db_dir = tempfile::tempdir_in("/tmp/opencode").expect("db sandbox");
+        let db = oc_core::database::Database::open_file(db_dir.path().join("opencode.db"))
+            .await
+            .expect("database");
+        let bus = oc_core::bus::Bus::new(
+            db,
+            oc_core::bus::BusOptions {
+                clock: std::sync::Arc::new(oc_util::determinism::SystemClock),
+                ids: std::sync::Arc::new(oc_util::determinism::UuidV4IdGen),
+                persist: false,
+                ..oc_core::bus::BusOptions::default()
+            },
+        );
+        let _listener = attach_event_logger(&bus);
+        bus.publish(
+            oc_core::bus::registry::config_updated(),
+            serde_json::json!({"changed": {"key": "model"}}),
+            oc_core::bus::PublishOptions::default(),
+        )
+        .await
+        .expect("publish config.updated");
+        bus.publish(
+            &oc_core::bus::registry::EventDefinition::ephemeral("message.created"),
+            serde_json::json!({}),
+            oc_core::bus::PublishOptions::default(),
+        )
+        .await
+        .expect("publish non-member");
+
+        if let Some(saved) = saved {
+            std::env::set_var("OPENCODE_LOG_FILE", saved);
+        } else {
+            std::env::remove_var("OPENCODE_LOG_FILE");
+        }
+
+        let contents = std::fs::read_to_string(&log).expect("sink file written");
+        assert!(
+            contents.contains("[event] {\"event\":") && contents.contains("config.updated"),
+            "member event logged: {contents}"
+        );
+        assert!(!contents.contains("message.created"), "non-member filtered: {contents}");
     }
 }

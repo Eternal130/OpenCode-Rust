@@ -493,4 +493,29 @@ mod tests {
         let file = std::fs::File::options().write(true).open(path).expect("open for times");
         file.set_times(std::fs::FileTimes::new().set_modified(at)).expect("set mtime");
     }
+
+    /// RA-04: the spawned sweep performs its first pass immediately
+    /// (tokio's first interval tick) — boot does not wait an hour before
+    /// the disk starts shrinking.
+    #[tokio::test]
+    async fn tool_output_spawn_cleanup_task_sweeps_on_the_first_tick() {
+        let dir = tempfile::tempdir_in("/tmp/opencode").expect("tempdir");
+        let now = std::time::SystemTime::now();
+        let service =
+            Arc::new(ToolOutput::new(dir.path(), Arc::new(oc_util::determinism::SystemClock)));
+        let directory = dir.path().join(DIRECTORY);
+        std::fs::create_dir_all(&directory).expect("dirs");
+        let old = directory.join(file_name(1));
+        std::fs::write(&old, "old").expect("write");
+        set_mtime(&old, now - Duration::from_secs(8 * 24 * 60 * 60));
+        let handle = spawn_cleanup_task(Arc::clone(&service));
+        for _ in 0..50 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            if !old.exists() {
+                break;
+            }
+        }
+        handle.abort();
+        assert!(!old.exists(), "spawned sweep removed the stale spill");
+    }
 }

@@ -38,6 +38,54 @@ pub const RETENTION_MS: u64 = 7 * 24 * 60 * 60 * 1_000;
 /// `Shell.DIRECTORY`.
 pub const DIRECTORY: &str = "shell";
 
+/// `Shell.cleanup` (shell.ts:83-117): the hourly retention sweep over the
+/// two-level capture layout `<data>/shell/<projectID>/sh_<id>.out` — drops
+/// capture files whose modification time predates the 7-day cutoff.
+/// Missing directories/files are expected between sweeps and ignored.
+pub fn cleanup_data_root(data_root: &std::path::Path, now_ms: u64) {
+    let cutoff = now_ms.saturating_sub(RETENTION_MS);
+    let Ok(projects) = std::fs::read_dir(data_root.join(DIRECTORY)) else { return };
+    for project in projects.flatten() {
+        let Ok(captures) = std::fs::read_dir(project.path()) else { continue };
+        for entry in captures.flatten() {
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else { continue };
+            let is_capture = name.starts_with("sh_")
+                && std::path::Path::new(name).extension() == Some(std::ffi::OsStr::new("out"));
+            if !is_capture {
+                continue;
+            }
+            let Ok(meta) = entry.metadata() else { continue };
+            let Ok(modified) = meta.modified() else { continue };
+            let modified_ms = u64::try_from(
+                modified.duration_since(std::time::UNIX_EPOCH).map_or(0_u128, |d| d.as_millis()),
+            )
+            .unwrap_or(0);
+            if modified_ms < cutoff {
+                // Retention removals are best-effort (v2 ignores errors).
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+}
+
+/// Spawns the hourly shell-capture retention sweep (shell.ts:104-109 — a
+/// scoped fiber in v2; a detached tokio task here, cancelled by dropping
+/// the join handle). The first tick runs immediately, so boot performs one
+/// sweep before settling into the hourly cadence.
+pub fn spawn_cleanup_task(
+    data_root: PathBuf,
+    clock: Arc<dyn Clock>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(3_600));
+        loop {
+            interval.tick().await;
+            cleanup_data_root(&data_root, u64::try_from(clock.unix_ms()).unwrap_or(0));
+        }
+    })
+}
+
 /// `ShellCreateBefore` — the mutable invocation handed to hooks.
 #[derive(Debug, Clone)]
 pub struct Invocation {
