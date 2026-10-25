@@ -55,18 +55,14 @@ unicode-segmentation = "1"
 # renderer stays the default for one release). First surface whose
 # release graph links opentui: release size delta measured in the lane
 # report (M0's dev-only baseline was 64,659,904 B).
-opentui-core = { workspace = true }
+# SOUND-CONV: `device-audio` turns on opentui-core's real miniaudio
+# playback device (rev 18e2904) — sound/audio.rs plays through it
+# (Linux); the local vendored miniaudio-sys twin was deleted.
+opentui-core = { workspace = true, features = ["device-audio"] }
 opentui-solid = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
-
-# Lane P2-sound: in-process playback parity. The vendored miniaudio sys
-# crate (path-only, cc-built, runtime-dlopen ALSA/Pulse — same engine v2's
-# native audio layer uses) is a Linux-only dependency: on other targets the
-# sound channel keeps the system-player spawn mirror.
-[target.'cfg(target_os = "linux")'.dependencies]
-miniaudio-sys = { path = "../../third_party/miniaudio-sys" }
 
 [dev-dependencies]
 opentui-keymap = { workspace = true }
