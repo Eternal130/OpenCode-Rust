@@ -127,6 +127,9 @@ fn pty_four_commands_open_real_surfaces() {
         find_row(&driver, "http://localhost:4096/auth/connect/pair-code-123").is_none(),
         "the full-width link CANNOT render in the split's 29-cell column"
     );
+    // The QR block (ref dialog-pair.tsx:75-84): the first link as a
+    // compact unicode QR — a half-block row is on screen.
+    assert!(wait_row(&driver, "▀▀▀", Duration::from_secs(3)).is_some(), "the QR block renders");
     driver.write(b"\x1b");
     std::thread::sleep(Duration::from_millis(200));
 
@@ -201,6 +204,57 @@ fn pty_diff_viewer_cycle() {
     driver.write(b"q");
     assert!(driver.wait_for_after(WORDMARK, mark, Duration::from_secs(3)), "closed back to home");
 
+    server.stop();
+    let mut exit_driver = exit_driver;
+    exit_driver.write(b"\x03");
+}
+
+/// F15 residual (narrow widths): the pair dialog's URLs WORD-WRAP,
+/// never hard-truncate. The ref renders the links through `<Link>`
+/// (ui/link.tsx:33-39), which sets NO `wrapMode`, and the
+/// TextRenderable default is `"word"` (@opentui/core
+/// chunk-node-wp7ct2m6.js:2833,2847) — at a 46-col terminal the
+/// Large dialog clamps to 44 cols (content 40), and the 48-char
+/// localhost link wraps onto continuation rows whose concatenation
+/// is the whole URL.
+#[test]
+fn pty_pair_narrow_width_url_wraps() {
+    let _guard = pty_lock();
+    let sandbox = sandbox_env("surf2-pair-narrow");
+    let server = FakeLlm::spawn(standard_sessions());
+    server.arm_pair();
+    let url = server.url.clone();
+    let harness = LiveHarness::attach(46, 30);
+    let mut driver = harness.handle();
+    let exit_driver = harness.handle();
+    std::thread::spawn(move || run_tui(&url, 46, 30, Duration::from_secs(60)));
+    drop(sandbox);
+    assert!(driver.wait_for(WORDMARK, Duration::from_secs(10)), "the wordmark rendered");
+
+    slash(&mut driver, "pair");
+    assert!(
+        driver.wait_for(b"Loading server information", Duration::from_secs(3)),
+        "the loading row"
+    );
+    assert!(
+        wait_row(&driver, "expire in 10 minutes", Duration::from_secs(3)).is_some(),
+        "the expiry copy"
+    );
+    // The 48-char link over a 40-col content area: the first row
+    // carries the fitting prefix, a continuation row the rest — the
+    // full URL is recoverable from the grid, nothing is dropped.
+    let head =
+        wait_row(&driver, "http://localhost:4096/auth/connect/pair-", Duration::from_secs(3));
+    assert!(head.is_some(), "the wrapped link head");
+    let tail = wait_row(&driver, "code-123", Duration::from_secs(2));
+    assert!(tail.is_some(), "the wrapped link continuation");
+    assert_ne!(head, tail, "the URL spans two rows (wrapped, not truncated)");
+    // The QR block still fits (31 cols < 40): its half-block rows
+    // render beside the wrapped text.
+    assert!(find_row(&driver, "▀▀▀").is_some(), "the QR block renders");
+
+    driver.write(b"\x1b");
+    std::thread::sleep(Duration::from_millis(200));
     server.stop();
     let mut exit_driver = exit_driver;
     exit_driver.write(b"\x03");

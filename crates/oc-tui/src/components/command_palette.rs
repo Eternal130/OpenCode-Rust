@@ -3258,7 +3258,8 @@ mod tests {
         let joined = pair_rows(&store)
             .iter()
             .filter_map(|row| match row {
-                crate::components::dialog_pair::PairRow::Gap => None,
+                crate::components::dialog_pair::PairRow::Gap
+                | crate::components::dialog_pair::PairRow::Qr { .. } => None,
                 crate::components::dialog_pair::PairRow::Text { text, .. } => Some(text.as_str()),
             })
             .collect::<Vec<_>>()
