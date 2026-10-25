@@ -2439,6 +2439,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "oc-uqr"
+version = "0.1.3"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "oc-util"
 version = "2.0.24"
 dependencies = [
