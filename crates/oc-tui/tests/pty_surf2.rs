@@ -115,7 +115,10 @@ fn pty_four_commands_open_real_surfaces() {
         wait_row(&driver, "expire in 10", Duration::from_secs(3)).is_some(),
         "the expiry copy wraps inside the 29-cell column (never one row past the split gate)"
     );
-    assert!(wait_row(&driver, "minutes.", Duration::from_secs(2)).is_some(), "the intro's tail row");
+    assert!(
+        wait_row(&driver, "minutes.", Duration::from_secs(2)).is_some(),
+        "the intro's tail row"
+    );
     assert!(
         wait_row(&driver, "http://localhost:4096", Duration::from_secs(3)).is_some(),
         "the localhost link's 29-cell prefix"
