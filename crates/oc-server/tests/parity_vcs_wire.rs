@@ -448,6 +448,70 @@ async fn worktree_remove_runs_git() {
     assert!(!dirty_dir.exists(), "forced remove deletes the directory");
 }
 
+/// RA-10: a stored strategy that resolves to no registered backend (only
+/// `git` exists) is ref `StrategyUnavailableError` (worktree.ts:198-201,
+/// 263) → wire `WorktreeError` 400 with `Worktree strategy unavailable:
+/// <id>` and NO forceRequired; nothing is removed.
+#[tokio::test]
+async fn worktree_remove_unknown_strategy_is_unavailable() {
+    let workspace = tempfile::tempdir().expect("workspace").keep();
+    seed_repo(&workspace);
+    let server = boot(workspace.clone()).await;
+    let (project_id, _) = project_id(&server).await;
+    let parent = tempfile::tempdir().expect("worktree parent").keep();
+
+    let created = server
+        .client
+        .worktree()
+        .create(&WorktreeCreateInput {
+            project_id: project_id.clone(),
+            name: Some("strange".to_owned()),
+            directory: Some(parent.to_string_lossy().into_owned()),
+            ..Default::default()
+        })
+        .await
+        .expect("worktree create");
+    let directory = std::path::PathBuf::from(&created.directory);
+
+    // Forge a row with an unregistered stored strategy (v2's plugin-only
+    // strategies have no Rust backend).
+    let update_project = project_id.clone();
+    let update_directory = directory.to_string_lossy().into_owned();
+    server
+        .state
+        .engine
+        .db
+        .transaction(move |tx| {
+            Ok(tx.execute(
+                "UPDATE worktree SET strategy = 'hg' WHERE project_id = ?1 AND directory = ?2",
+                (update_project, update_directory),
+            )?)
+        })
+        .await
+        .expect("forge strategy");
+
+    let (status, body) = raw_json(
+        server.addr,
+        "DELETE",
+        "/api/worktree",
+        &serde_json::json!({
+            "projectID": project_id,
+            "directory": directory.to_string_lossy(),
+            "force": true,
+        }),
+    )
+    .await;
+    assert_eq!(status, 400, "unknown strategy: {body}");
+    assert_eq!(body["_tag"], "WorktreeError");
+    assert_eq!(body["name"], "WorktreeError");
+    assert_eq!(
+        body["data"]["message"], "Worktree strategy unavailable: hg",
+        "ref StrategyUnavailableError message: {body}"
+    );
+    assert!(body["data"].get("forceRequired").is_none(), "no forceRequired: {body}");
+    assert!(directory.exists(), "nothing was removed");
+}
+
 /// HTTP-H5 standalone: every 400 worktree error envelope carries the
 /// literal name. (The remove test covers the runtime case; this pins the
 /// shape for create-path errors too.)

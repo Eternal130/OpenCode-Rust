@@ -326,11 +326,13 @@ async fn worktree_create(
     };
     let project_worktree = std::path::PathBuf::from(project_worktree);
 
-    // The source directory (v2 `source`): canonical `from` or the
-    // project's canonical checkout; anything else must already be a
-    // registered row (`SourceDirectoryNotFoundError`).
+    // The source directory (v2 `source`, worktree.ts:188-193): canonical
+    // `from` or the project's canonical checkout — ALWAYS validated
+    // against the registered rows (the canonical checkout is itself a
+    // row: project resolution commits it with Worktree.Resolved,
+    // project.ts:177-196), else `SourceDirectoryNotFoundError`.
     let source = canonical_directory(from.as_ref().unwrap_or(&project_worktree))?;
-    if source != project_worktree {
+    {
         let source_str = source.to_string_lossy().into_owned();
         let lookup_project = project_id.clone();
         let known = db
@@ -767,6 +769,16 @@ async fn worktree_remove(
     if stored.as_deref().is_none_or(str::is_empty) {
         return Err(ApiError::worktree(
             format!("Invalid worktree directory: {directory_str}"),
+            None,
+        ));
+    }
+    // ref getStrategy (worktree.ts:198-201,263): the stored strategy must
+    // resolve to a registered backend — only `git` exists — otherwise
+    // StrategyUnavailableError → wire `Worktree strategy unavailable: <id>`
+    // (no forceRequired).
+    if stored.as_deref() != Some("git") {
+        return Err(ApiError::worktree(
+            format!("Worktree strategy unavailable: {}", stored.unwrap_or_default()),
             None,
         ));
     }

@@ -50,15 +50,7 @@ impl ApiError {
         crate::errors::form_invalid_answer(id, message)
     }
     pub fn instruction_too_large(actual: i64, max: i64) -> Self {
-        ApiError::new(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            json!({
-                "_tag": "InstructionEntryValueTooLargeError",
-                "message": "Instruction entry value too large",
-                "actualBytes": actual,
-                "maxBytes": max,
-            }),
-        )
+        crate::errors::instruction_entry_too_large(actual, max)
     }
 
     // 401 / 403
@@ -171,29 +163,13 @@ impl ApiError {
         }
     }
     pub fn vcs_init_not_supported(provider_id: &str) -> Self {
-        ApiError::new(
-            StatusCode::NOT_IMPLEMENTED,
-            json!({
-                "_tag": "VcsInitNotSupportedError",
-                "providerID": provider_id,
-                "message": "VCS init not supported",
-            }),
-        )
+        crate::errors::vcs_init_not_supported(provider_id)
     }
-    /// v2 `WorktreeError` (protocol/groups/worktree.ts:13-24): 400 with
+    /// v2 `WorktreeError` (protocol/groups/worktree.ts:9-24): 400 with
     /// the literal `name: "WorktreeError"`; `forceRequired` surfaces only
     /// when a dirty tree demands `force` (undefined is dropped on the wire).
     pub fn worktree(message: impl Into<String>, force_required: Option<bool>) -> Self {
-        let mut data = json!({ "message": message.into() });
-        if force_required == Some(true) {
-            if let Value::Object(map) = &mut data {
-                map.insert("forceRequired".to_owned(), json!(true));
-            }
-        }
-        ApiError::new(
-            StatusCode::BAD_REQUEST,
-            json!({ "_tag": "WorktreeError", "name": "WorktreeError", "data": data }),
-        )
+        crate::errors::worktree_error(message, force_required)
     }
 }
 
