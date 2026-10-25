@@ -8,9 +8,14 @@
 
 /// ECC level order/format pair bits (`EccMap`, index.mjs:11-16).
 /// (`ecl[0]` indexes the tables, `ecl[1]` is the format-bit value.)
+/// The full ladder is kept for port fidelity though ref only uses L.
+#[allow(dead_code)]
 const LOW: [u8; 2] = [0, 1];
+#[allow(dead_code)]
 const MEDIUM: [u8; 2] = [1, 0];
+#[allow(dead_code)]
 const QUARTILE: [u8; 2] = [2, 3];
+#[allow(dead_code)]
 const HIGH: [u8; 2] = [3, 2];
 
 const ALPHANUMERIC_CHARSET: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:";
@@ -45,7 +50,8 @@ const NUM_ERROR_CORRECTION_BLOCKS: [[i16; 41]; 4] = [
 /// function-module mark matters to the encoder (`types[y][x]` truthy
 /// test in `drawCodewords`/`applyMask`); `Border` (−1) is nonzero
 /// too but never coexists with mask/draw phases.
-const TYPE_BORDER: u8 = 5;
+#[allow(dead_code)]
+const TYPE_BORDER: u8 = 5; // uqr QrCodeDataType.Border (port fidelity)
 const TYPE_DATA: u8 = 0;
 const TYPE_FUNCTION: u8 = 1;
 const TYPE_POSITION: u8 = 2;
@@ -74,10 +80,7 @@ struct QrCode {
 impl QrCode {
     /// `new QrCode(version, ecc, dataCodewords, msk)` (index.mjs:68-106).
     fn new(version: u8, ecc: [u8; 2], data_codewords: &[u8], mut msk: i8) -> QrCode {
-        assert!(
-            (MIN_VERSION..=MAX_VERSION).contains(&version),
-            "Version value out of range"
-        );
+        assert!((MIN_VERSION..=MAX_VERSION).contains(&version), "Version value out of range");
         assert!((-1..=7).contains(&msk), "Mask value out of range");
         let size = (version as usize) * 4 + 17;
         let mut code = QrCode {
@@ -157,10 +160,20 @@ impl QrCode {
             self.set_function_module((14 - i) as usize, 8, get_bit(bits, i), TYPE_FUNCTION);
         }
         for i in 0..8u32 {
-            self.set_function_module(self.size - 1 - i as usize, 8, get_bit(bits, i), TYPE_FUNCTION);
+            self.set_function_module(
+                self.size - 1 - i as usize,
+                8,
+                get_bit(bits, i),
+                TYPE_FUNCTION,
+            );
         }
         for i in 8..15u32 {
-            self.set_function_module(8, self.size - 15 + i as usize, get_bit(bits, i), TYPE_FUNCTION);
+            self.set_function_module(
+                8,
+                self.size - 15 + i as usize,
+                get_bit(bits, i),
+                TYPE_FUNCTION,
+            );
         }
         // This dark module is always present (index.mjs:164).
         self.set_function_module(8, self.size - 8, true, TYPE_FUNCTION);
@@ -333,7 +346,9 @@ impl QrCode {
                     run_x = 1;
                 }
             }
-            result += finder_penalty_terminate_and_count(run_color, run_x, &mut run_history, self.size) * PENALTY_N3;
+            result +=
+                finder_penalty_terminate_and_count(run_color, run_x, &mut run_history, self.size)
+                    * PENALTY_N3;
         }
         for x in 0..self.size {
             let mut run_color = false;
@@ -356,7 +371,9 @@ impl QrCode {
                     run_y = 1;
                 }
             }
-            result += finder_penalty_terminate_and_count(run_color, run_y, &mut run_history, self.size) * PENALTY_N3;
+            result +=
+                finder_penalty_terminate_and_count(run_color, run_y, &mut run_history, self.size)
+                    * PENALTY_N3;
         }
         for y in 0..self.size - 1 {
             for x in 0..self.size - 1 {
@@ -388,7 +405,8 @@ impl QrCode {
             let step = if self.version == 32 {
                 26
             } else {
-                (((self.version as usize * 4 + 4) + (num_align * 2 - 2) - 1) / (num_align * 2 - 2)) * 2
+                (((self.version as usize * 4 + 4) + (num_align * 2 - 2) - 1) / (num_align * 2 - 2))
+                    * 2
             };
             let mut result = vec![6usize];
             let mut pos = self.size - 7;
@@ -430,7 +448,11 @@ fn finder_penalty_terminate_and_count(
 }
 
 /// `finderPenaltyAddHistory` (index.mjs:427-432).
-fn finder_penalty_add_history(mut current_run_length: usize, run_history: &mut [usize; 7], size: usize) {
+fn finder_penalty_add_history(
+    mut current_run_length: usize,
+    run_history: &mut [usize; 7],
+    size: usize,
+) {
     if run_history[0] == 0 {
         current_run_length += size;
     }
@@ -526,7 +548,11 @@ fn is_numeric(text: &str) -> bool {
 
 /// `ALPHANUMERIC_REGEX` (`^[A-Z0-9 $%*+./:-]*$`, index.mjs:19).
 fn is_alphanumeric(text: &str) -> bool {
-    text.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || matches!(b, b' ' | b'$' | b'%' | b'*' | b'+' | b'.' | b'/' | b':'))
+    text.bytes().all(|b| {
+        b.is_ascii_uppercase()
+            || b.is_ascii_digit()
+            || matches!(b, b' ' | b'$' | b'%' | b'*' | b'+' | b'.' | b'/' | b':')
+    })
 }
 
 /// `getTotalBits` (index.mjs:501-511).
@@ -770,8 +796,7 @@ mod tests {
         assert_eq!(lines.len(), 16);
         assert!(lines.iter().all(|l| l.chars().count() == 31));
         // Only the four palette characters appear.
-        let set: std::collections::HashSet<char> =
-            compact.chars().filter(|c| *c != '\n').collect();
+        let set: std::collections::HashSet<char> = compact.chars().filter(|c| *c != '\n').collect();
         assert!(set.iter().all(|c| ['█', '▀', '▄', ' '].contains(c)), "{set:?}");
     }
 }
