@@ -10,6 +10,7 @@ workspace = true
 
 [dependencies]
 oc-util = { workspace = true }
+oc-uqr = { workspace = true }
 oc-tui-core = { workspace = true }
 oc-theme = { workspace = true }
 oc-syntax = { workspace = true }

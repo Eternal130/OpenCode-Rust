@@ -13,21 +13,18 @@
 //! paddingBottom 1, gap 1`, :90).
 //!
 //! REGISTERED divergences (bounded, see the task-7 report):
-//! * the QR block (ref :75-84, `renderUnicodeCompact(links[0])`) —
-//!   the repo carries no uqr/QR encoder (same REGISTERED gap as the
-//!   CLI's `pair`, oc-cli/src/handlers/misc.rs:225 +
-//!   docs/reposcan-findings.md:58); the text surface is ported now.
-//!
-//! F15 residual closed: the ≥96-column horizontal split. The ref
-//! gates on the TERMINAL width (`const horizontal = createMemo(()
-//! => dimensions().width >= 96)`, dialog-pair.tsx:39) — not the
-//! dialog content width — and in the split seats the text column at
-//! a FIXED 29 cells (`<box width={horizontal ? 29 : "100%"} …>`,
-//! :45) beside the QR column (flexGrow 1, :75-84). The earlier
-//! registration ("content width ≥ 96 never fires at Large") gated on
-//! the wrong width; the gate below is the terminal width, and the
-//! text walk wraps to 29 in the split — the QR column stays empty
-//! (the encoder gap above, another lane owns the QR surface).
+//! REGISTERED divergences — BOTH now CLOSED (2026-10-26):
+//! * QR (f15-a): the QR block (ref :75-84, `renderUnicodeCompact(
+//!   links[0], { border: 1 })`) renders via the vendored `oc-uqr`
+//!   crate (third_party/oc-uqr) — a faithful Rust port of the
+//!   ref-pinned uqr 0.1.3, matrix-identical by golden test (same
+//!   encoder closes the CLI `pair` gap, oc-cli misc.rs).
+//! * ≥96 split (f15-b): the ref gates on the TERMINAL width
+//!   (`createMemo(() => dimensions().width >= 96)`, dialog-pair.tsx:39)
+//!   and seats the text column at a FIXED 29 cells (`width={horizontal
+//!   ? 29 : "100%"}`, :45) beside the QR column. The earlier port
+//!   registered "content width ≥ 96 never fires at Large" — it gated
+//!   on the wrong width; the gate below is the terminal width.
 
 use crate::store::PairState;
 
@@ -73,6 +70,12 @@ pub enum PairRow {
     Gap,
     /// One text row, already wrapped to the content width.
     Text { text: String, style: PairStyle },
+    /// One row of the QR block (ref :81-83): a line of uqr's
+    /// `renderUnicodeCompact(links[0], { border: 1 })` half-block
+    /// output, painted `theme.text.base`. Pre-rendered (never
+    /// wrapped — a Large dialog's content is 84 cols, the QR for
+    /// any sane pairing URL is ≤ 43).
+    Qr { text: String },
 }
 
 /// A pair row's paint (the ref's `fg` ladder: `text.muted`,
@@ -121,30 +124,51 @@ pub fn rows(state: &PairState, content_width: usize) -> Vec<PairRow> {
         }
         // The loaded content (:44-74): the wrapped intro (:46-48),
         // the localhost block (:49-58), the links block (:59-68),
-        // the loopback hint (:69-73).
+        // the loopback hint (:69-73). The URL rows WORD-WRAP like
+        // every other text: the ref renders them through `<Link>`
+        // (ui/link.tsx:33-39), whose `<text>` sets NO `wrapMode`, and
+        // the TextRenderable default is `"word"`
+        // (@opentui/core chunk-node-wp7ct2m6.js:2833,2847 — the
+        // `_defaultOptions` / `options.wrapMode ??
+        // _defaultOptions.wrapMode` read). A hard truncation below
+        // some width is NOT ref behavior: an over-width URL wraps
+        // onto continuation rows (an unbroken token hard-breaks, as
+        // `wrap_label` does).
         PairState::Loaded { links, localhost, minutes, loopback } => {
             let mut out = muted_lines(&format!(
                 "Open a link to connect. Links work once and expire in {minutes} minutes."
             ));
+            let base_lines = |url: &str| -> Vec<PairRow> {
+                crate::wrap::wrap_label(url, width)
+                    .into_iter()
+                    .map(|line| PairRow::Text { text: line, style: PairStyle::Base })
+                    .collect()
+            };
             if let Some(url) = localhost {
                 out.push(PairRow::Gap);
                 out.push(PairRow::Text { text: "This device".to_owned(), style: PairStyle::Muted });
-                out.push(PairRow::Text {
-                    text: crate::wrap::take_width(url, width),
-                    style: PairStyle::Base,
-                });
+                out.extend(base_lines(url));
             }
             out.push(PairRow::Gap);
             out.push(PairRow::Text { text: "Links".to_owned(), style: PairStyle::Muted });
             for url in links {
-                out.push(PairRow::Text {
-                    text: crate::wrap::take_width(url, width),
-                    style: PairStyle::Base,
-                });
+                out.extend(base_lines(url));
             }
             if *loopback {
                 out.push(PairRow::Gap);
                 out.extend(muted_lines(LOOPBACK_HINT));
+            }
+            // The QR block (:75-84): the content box's `gap={2}`
+            // (:44) seats it two blank rows below the text column;
+            // `Show when={value.links[0]}` gates the QR text itself.
+            // Column layout (the port's only reachable layout) — the
+            // QR box is `width="100%"`, `alignItems="center"`.
+            out.push(PairRow::Gap);
+            out.push(PairRow::Gap);
+            if let Some(first) = links.first() {
+                for line in oc_uqr::render_unicode_compact(first, 1).split('\n') {
+                    out.push(PairRow::Qr { text: line.to_owned() });
+                }
             }
             out
         }
@@ -182,8 +206,17 @@ mod tests {
     fn texts(rows: &[PairRow]) -> Vec<String> {
         rows.iter()
             .filter_map(|row| match row {
-                PairRow::Gap => None,
+                PairRow::Gap | PairRow::Qr { .. } => None,
                 PairRow::Text { text, .. } => Some(text.clone()),
+            })
+            .collect()
+    }
+
+    fn qr_rows(rows: &[PairRow]) -> Vec<String> {
+        rows.iter()
+            .filter_map(|row| match row {
+                PairRow::Qr { text } => Some(text.clone()),
+                _ => None,
             })
             .collect()
     }
@@ -277,10 +310,6 @@ mod tests {
         assert_eq!(scroll_budget(36), usize::MAX);
     }
 
-    /// The horizontal-split gate is the TERMINAL width
-    /// (`dimensions().width >= 96`, dialog-pair.tsx:39) — NOT the
-    /// dialog content width (a Large dialog's content is 84; the
-    /// split still fires at a 96-column terminal).
     #[test]
     fn split_gate_is_terminal_width() {
         assert!(!is_horizontal(95), "below the threshold: stacked");
@@ -321,5 +350,114 @@ mod tests {
         assert!(joined.contains("This device"));
         assert!(joined.contains("Links"));
         assert!(joined.contains("auth/connect") || joined.contains("localhost"));
+    }
+
+    /// The QR block (ref dialog-pair.tsx:75-84): two `gap 2` rows
+    /// below the text column, then the compact unicode QR of the
+    /// FIRST link (`renderUnicodeCompact(links[0], { border: 1 })`)
+    /// — matrix-identical to the ref-pinned uqr (third_party/oc-uqr
+    /// goldens). At Large's 84-col content the 31-wide QR fits whole.
+    #[test]
+    fn qr_block_matches_uqr_output() {
+        let rows = rows(&loaded(), 84);
+        let qr = qr_rows(&rows);
+        assert!(!qr.is_empty(), "the QR rows render");
+        // The exact expected block: uqr renderUnicodeCompact of the
+        // first link (127.0.0.1 URL), border 1.
+        assert_eq!(
+            qr.join("\n"),
+            oc_uqr::render_unicode_compact("http://127.0.0.1:4096/auth/connect/pair-code-123", 1)
+        );
+        // The `gap 2` seat: exactly two Gap rows between the last
+        // text row and the first QR row.
+        let tail = &rows[rows.len() - qr.len() - 2..rows.len() - qr.len()];
+        assert!(matches!(tail[0], PairRow::Gap) && matches!(tail[1], PairRow::Gap));
+    }
+
+    /// No links → the `Show when={links[0]}` gate stays closed: the
+    /// two gap rows still render (the content box's `gap={2}` is
+    /// unconditional, dialog-pair.tsx:44) but no QR rows.
+    #[test]
+    fn qr_gated_on_first_link() {
+        let rows = rows(
+            &PairState::Loaded { links: vec![], localhost: None, minutes: 10, loopback: false },
+            84,
+        );
+        assert!(qr_rows(&rows).is_empty());
+        assert!(matches!(rows[rows.len() - 1], PairRow::Gap));
+        assert!(matches!(rows[rows.len() - 2], PairRow::Gap));
+    }
+
+    /// F15 residual: NO hard truncation of the URLs at narrow
+    /// content widths. The ref renders links through `<Link>`
+    /// (ui/link.tsx:33-39) with NO `wrapMode`, and the TextRenderable
+    /// default is `"word"` (@opentui/core chunk-node-wp7ct2m6.js
+    /// :2833,2847) — an over-width URL WRAPS (an unbroken token
+    /// hard-breaks), and the full URL is recoverable by joining the
+    /// row fragments. Truncating below any width column count is NOT
+    /// ref behavior.
+    #[test]
+    fn narrow_width_urls_wrap_never_truncate() {
+        for width in [20, 33, 43, 46, 53, 54, 60] {
+            let rows = rows(&loaded(), width);
+            for url in [URL, "http://127.0.0.1:4096/auth/connect/pair-code-123"] {
+                // The Base rows between "This device"/"Links" labels
+                // and the next block reassemble to the full URL.
+                let joined: String = rows
+                    .iter()
+                    .filter_map(|row| match row {
+                        PairRow::Text { text, style: PairStyle::Base } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("");
+                assert!(
+                    joined.contains(url),
+                    "width {width}: the full URL survives (got {joined:?})"
+                );
+                assert!(
+                    rows.iter().any(|row| matches!(
+                        row,
+                        PairRow::Text { text, style: PairStyle::Base } if text == url
+                    )) || rows
+                        .iter()
+                        .filter(|row| matches!(
+                            row,
+                            PairRow::Text { text, style: PairStyle::Base } if !text.is_empty()
+                        ))
+                        .count()
+                        >= 2,
+                    "width {width}: an over-width URL occupies continuation rows"
+                );
+            }
+            // Every row still fits the width (QR excluded: it is
+            // pre-rendered at its intrinsic 31 cols, ≥ every test
+            // width here).
+            for row in &rows {
+                if let PairRow::Text { text, .. } = row {
+                    assert!(
+                        crate::wrap::display_width(text) <= width,
+                        "width {width}: row fits: {text:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The specific old-bug shape: at 53/54 columns the URL (47
+    /// chars) used to be truncated to 53 cols by `take_width`; ref
+    /// wraps it instead (the port's URL is 47 cols so widths ≥ 47
+    /// hold it on one row).
+    #[test]
+    fn url_holds_whole_at_its_own_width() {
+        let rows = rows(&loaded(), URL.len());
+        assert!(
+            rows.iter().any(|row| matches!(
+                row,
+                PairRow::Text { text, style: PairStyle::Base } if text == URL
+            )),
+            "one whole-URL row at width {}",
+            URL.len()
+        );
     }
 }

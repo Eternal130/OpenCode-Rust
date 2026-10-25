@@ -16,6 +16,7 @@ members = [
     "crates/oc-cli",
     "tools/openapi-gen",
     "tools/parity",
+    "third_party/oc-uqr",
 ]
 
 [workspace.package]
@@ -49,6 +50,7 @@ oc-pty = { path = "crates/oc-pty" }
 oc-server = { path = "crates/oc-server" }
 oc-client = { path = "crates/oc-client" }
 oc-tui = { path = "crates/oc-tui" }
+oc-uqr = { path = "third_party/oc-uqr" }
 
 # OpenTUI (lane M0): API-level port of @opentui/{core,keymap,solid}@0.5.14
 # (github.com/Eternal130/opentui-rust) that the oc-tui migration

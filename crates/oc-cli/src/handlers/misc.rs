@@ -242,8 +242,7 @@ pub async fn reload(server: &ServerParams) -> i32 {
     0
 }
 
-/// `opencode pair` — one-time pairing links. QR rendering is deferred
-/// (REGISTERED: links print without the uqr block).
+/// `opencode pair` — one-time pairing links + the QR block.
 pub async fn pair(url: Option<&str>) -> i32 {
     // RB-03 — `--url` validation (ref commands.ts:524-532, done at
     // flag-parse time there): HTTP(S) only, no credentials, no query,
@@ -303,6 +302,16 @@ pub async fn pair(url: Option<&str>) -> i32 {
     } else {
         for link in &links {
             println!("  {link}");
+        }
+    }
+    // The QR block — ref commands/handlers/pair.ts:30-39: only when a
+    // first link exists, blank line before, `renderUnicodeCompact`
+    // with `border: 2`, every row indented by two spaces (the ref
+    // splits uqr's "\n"-joined rows and prefixes "  ").
+    if let Some(first) = links.first() {
+        println!();
+        for line in qr_block(first) {
+            println!("{line}");
         }
     }
     println!();
@@ -466,6 +475,14 @@ fn is_secret_key(key: &str) -> bool {
 /// credentials/query/hash (the URL's `username`/`password`/`search`/
 /// `hash` are all empty), normalize through the parsed href and strip
 /// trailing slashes (`url.href.replace(/\/+$/, "")`).
+/// The CLI pair output's QR block (ref commands/handlers/pair.ts
+/// :30-39): uqr `renderUnicodeCompact(link, { border: 2 })`, each
+/// row prefixed by two spaces. (uqr joins with "\n" on every
+/// platform — the ref's EOL-split comment, pair.ts:33.)
+fn qr_block(link: &str) -> Vec<String> {
+    oc_uqr::render_unicode_compact(link, 2).split('\n').map(|line| format!("  {line}")).collect()
+}
+
 fn validate_pair_url(raw: &str) -> Result<String, &'static str> {
     const MESSAGE: &str =
         "Expected an HTTP(S) server URL without credentials, query parameters, or a fragment";
@@ -496,6 +513,27 @@ fn installation_method(exe: &std::path::Path) -> &'static str {
 mod tests {
     use super::*;
 
+    // --- F15: the pair QR block ---------------------------------------
+
+    /// ref pair.ts:34 — `renderUnicodeCompact(links[0], { border: 2 })`
+    /// with every row indented 2. The block matches the vendored
+    /// oc-uqr output (itself golden-tested against the ref-pinned
+    /// uqr 0.1.3), so this pins the indentation + border choice.
+    #[test]
+    fn pair_qr_block_is_border_two_indented() {
+        let block = qr_block("http://localhost:4096/auth/connect/pair-code-123");
+        assert!(!block.is_empty(), "the QR rows render");
+        assert!(block.iter().all(|line| line.starts_with("  ")), "two-space indent");
+        let expected: Vec<String> =
+            oc_uqr::render_unicode_compact("http://localhost:4096/auth/connect/pair-code-123", 2)
+                .split('\n')
+                .map(|line| format!("  {line}"))
+                .collect();
+        assert_eq!(block, expected);
+        // border 2 → v3 (29) + 4 = 33 modules wide.
+        assert!(block.iter().all(|line| line.chars().count() == 33 + 2));
+    }
+
     // --- RB-03: pair --url validation (ref commands.ts:524-532) -------
 
     #[test]
@@ -524,10 +562,7 @@ mod tests {
         assert_eq!(validate_pair_url("http://user:pass@example.com"), err);
         // Empty-credential URL passes (ref falsy-password parity); the
         // href normalization drops the empty `:@` (WHATWG serialization).
-        assert_eq!(
-            validate_pair_url("http://:@example.com").as_deref(),
-            Ok("http://example.com"),
-        );
+        assert_eq!(validate_pair_url("http://:@example.com").as_deref(), Ok("http://example.com"),);
         assert_eq!(validate_pair_url("http://example.com/?q=1"), err);
         assert_eq!(validate_pair_url("http://example.com/#frag"), err);
         assert_eq!(validate_pair_url("not a url"), err);
