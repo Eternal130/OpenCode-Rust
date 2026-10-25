@@ -1,0 +1,6 @@
+# Repo-wide cargo config.
+# Incremental compilation caches grow unboundedly across profiles/worktrees
+# (pitfall 2.1#6: target/debug reached 476G, disk 99% full). Disable it
+# repo-wide; per-invocation override with CARGO_INCREMENTAL=1 if ever needed.
+[build]
+incremental = false
