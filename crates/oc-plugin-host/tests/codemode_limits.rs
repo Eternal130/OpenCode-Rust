@@ -251,3 +251,95 @@ fn codemode_timeout_kill_restarts_guest_without_strikes() {
     );
     host.shutdown();
 }
+
+/// RB-01: the structural resource caps (interpreter/limits.ts) ported
+/// to the guest bridge — MAX_STRING_LENGTH (1 << 24) /
+/// MAX_ARRAY_LENGTH (10_000_000) on every string/array crossing
+/// host↔guest, MAX_PENDING_PROMISES (10_000) on concurrently pending
+/// bridge requests. All error messages are the ref's exact text.
+struct CapsPort;
+
+#[async_trait]
+impl ToolPort for CapsPort {
+    async fn call(&self, _bridge: &Bridge, name: &str, _input: &Value) -> Result<Value, String> {
+        match name {
+            // An over-cap tool RESULT (host→guest crossing).
+            "huge" => Ok(json!("x".repeat((1 << 24) + 1))),
+            // Holds bridge requests open so a flood stays pending.
+            "slow" => {
+                tokio::time::sleep(Duration::from_millis(1500)).await;
+                Ok(json!("late"))
+            }
+            _ => Ok(json!("ok")),
+        }
+    }
+}
+
+#[test]
+fn guest_enforces_structural_caps() {
+    let sandbox = common::sandbox("codemode-structural-caps");
+    let config = PluginHostConfig {
+        env: vec![("OC_PLUGIN_TEST_SANDBOX".to_owned(), sandbox.display().to_string())],
+        tool_port: Some(Arc::new(CapsPort) as Arc<dyn ToolPort>),
+        ..PluginHostConfig::default()
+    };
+    let host = PluginHost::detect().start_detached_with(config, &[]);
+    if !host.enabled() {
+        eprintln!("bun unavailable; skipping");
+        return;
+    }
+    assert!(host.wait_ready(Duration::from_secs(15)));
+    let catalog = [spec("greet"), spec("huge"), spec("slow")];
+    let run_code = |code: &str| {
+        block_on(host.codemode_evaluate_async(code, &catalog, Duration::from_secs(60)))
+            .expect("cap breaches are program results, not transport errors")
+    };
+
+    // -- MAX_STRING_LENGTH: an oversized RETURN value cannot cross
+    //    guest→host (ref: `Invalid string length`).
+    let run = run_code("return \"x\".repeat((1 << 24) + 1);");
+    assert_eq!(run.error.as_deref(), Some("Invalid string length"));
+    assert!(run.value.is_none());
+
+    // An oversized tool INPUT cannot cross guest→host either.
+    let run = run_code("await tools.greet({ s: \"x\".repeat((1 << 24) + 1) }); return 1;");
+    assert_eq!(run.error.as_deref(), Some("Invalid string length"));
+    assert_eq!(run.tool_calls.len(), 1);
+    assert_eq!(run.tool_calls[0].status, "error");
+
+    // An oversized tool RESULT cannot cross host→guest.
+    let run = run_code("return await tools.huge({});");
+    assert_eq!(run.error.as_deref(), Some("Invalid string length"));
+
+    // Exactly AT the cap crosses fine (boundary is `>`, ref parity).
+    let run = run_code("return \"x\".repeat(1 << 24);");
+    assert!(run.error.is_none());
+    assert_eq!(run.value.as_ref().and_then(Value::as_str).map(str::len), Some(1 << 24));
+
+    // -- MAX_ARRAY_LENGTH: an oversized array return (ref: `Invalid
+    //    array length`) — sparse so the test stays cheap.
+    let run = run_code("const a = new Array(10000001); a[0] = 1; return a;");
+    assert_eq!(run.error.as_deref(), Some("Invalid array length"));
+
+    // At the cap: fine.
+    let run = run_code("const a = new Array(10000000); a[0] = 7; return a[0];");
+    assert_eq!(run.value, Some(json!(7)));
+
+    // -- MAX_PENDING_PROMISES: a flood of un-awaited bridge requests
+    //    rejects the (N+1)-th with the ref's exact message.
+    let run = run_code(
+        "const ps = []; for (let i = 0; i < 10005; i++) ps.push(tools.slow({})); await Promise.all(ps);",
+    );
+    assert_eq!(
+        run.error.as_deref(),
+        Some("Too many pending promises (limit 10000); await promises before creating more.")
+    );
+
+    // Normal usage is unaffected: tools roundtrip, ordinary values
+    // cross both directions untouched.
+    let run = run_code("return [await tools.greet({}), \"x\".repeat(10)];");
+    assert!(run.error.is_none());
+    assert_eq!(run.value, Some(json!(["ok", "xxxxxxxxxx"])));
+
+    host.shutdown();
+}
