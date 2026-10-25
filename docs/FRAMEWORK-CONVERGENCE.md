@@ -60,6 +60,32 @@ models together.
 
 | Pair | Blocker | Unblock condition |
 | --- | --- | --- |
-| **sound** | opentui-core `audio.rs` is `HeadlessAudioLib` + NULL sink — decode only, NOT audible. The port's inproc miniaudio (412 + 630 LOC) is audible. | Converge only when opentui-core gains a real playback sink (device output); until then the inproc engine stays (regression otherwise). |
-| **syntax** | oc-syntax: 16 + 4 languages (vendored grammars + `.scm` queries) emitting ratatui `Style` spans; opentui `TreeSitterClient`: 5 languages emitting `StyledText`. Convergence today = language-catalog and output-type regression. | Converge when upstream carries the language catalog and a ratatui-compatible span output. |
-| **terminal_pane** | oc-tui 468 LOC of protocol/plumbing vs opentui `embedded_terminal` VT engine — least overlap, different layers. | Revisit if oc-tui adopts the opentui rendering pipeline (same trigger as the `line_number` revisit above). |
+| **syntax** | oc-syntax: 16 + 4 languages (vendored grammars + `.scm` queries) emitting ratatui `Style` spans; opentui-rust `TreeSitterClient`: 5 languages emitting `StyledText`. **Correction (2026-10-25, user)**: opentui (TS upstream) ALSO carries only ~5 languages — the ref TUI's full language experience comes from its own runtime `.wasm` download system (parsers-config.ts), not from opentui core. So this is not "opentui-rust lagging opentui"; the 20-language catalog is this port's own advantage. Convergence would still be a language-catalog AND output-type regression. | Converge when an upstream (either) carries the language catalog AND a ratatui-compatible span output (or oc-tui's rendering migrates to opentui buffers — see "Rendering-stack migration" below). |
+| **terminal_pane** | **Correction (2026-10-25, user)**: terminal_pane is NOT an opentui feature at all — opentui (TS) has no terminal pane, so opentui-rust has nothing to port and never will. oc-tui's 468 LOC pane is protocol/plumbing unique to this port. | **Permanent local keep.** There is no upstream counterpart to converge to; embedded_terminal (opentui-rust's VT engine) is a different layer and only becomes relevant under the rendering-stack migration below. |
+
+## Unblocked upstream, pending in-repo convergence
+
+| Pair | Status |
+| --- | --- |
+| **sound** | **Upstream completed real audio output (2026-10-25, user report)** — the original blocker (opentui-rust `audio.rs` was decode-only `HeadlessAudioLib` + NULL sink) is gone upstream-side. Convergence is now actionable in this repo: bump the workspace opentui git rev past the audio-output landing, swap `sound/inproc.rs` (miniaudio) for `opentui_core::audio` behind the existing `SoundHalf` seam, keep behavior parity pinned by the existing sound/attention tests (v2 trigger matrix + OSC 9/99/777 + 5 vendored assets). Until that lane runs, the inproc engine stays (it is audible and tested); treat this as a follow-up lane, not a gap. |
+
+## Rendering-stack migration (ratatui → opentui) — recorded context
+
+oc-tui today renders its main path onto **ratatui** `Frame` cells; the
+opentui consumers in-tree are the experimental `*_solid.rs` path and
+`message/markdown.rs` (markdown/code/scrollbar/text/editor renderables).
+The remaining non-converged surfaces (syntax output type, line_number's
+taffy layout model, any render-side of terminal_pane) are all blocked on
+the same strategic decision: migrating oc-tui's rendering stack onto the
+opentui pipeline. That migration is **not scheduled** — it is the
+recorded direction for whenever convergence of those pairs is worth the
+golden-frame churn:
+
+* full stack migration makes line_number and opentui renderables
+  first-class, unlocks embedded_terminal reuse for pane rendering;
+* until then, convergence stays at the lossless logic layer
+  (clipboard/paste-eval/diff-parse, done) and everything
+  rendering-coupled keeps a local implementation with golden pins;
+* upstream changes are consumed via git rev bumps only (pin rule above);
+  the ratatui dependency itself is not removed by any currently planned
+  work.
