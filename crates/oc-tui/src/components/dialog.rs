@@ -1737,9 +1737,14 @@ mod tests {
             rows.iter().any(|row| row.contains("expire in 10")),
             "the wrapped intro's middle row"
         );
+        // f15-a: links WORD-WRAP inside the 29-cell column (ref
+        // TextRenderable default wrapMode "word") — the unbroken URL
+        // token hard-breaks across continuation rows instead of
+        // clipping, and the fragments reassemble to the whole link.
+        let joined = rows.join("");
         assert!(
-            !rows.iter().any(|row| row.contains("pair-code-123")),
-            "the link clips inside the 29-cell column"
+            joined.contains("pair-code-123"),
+            "the link wraps (fragments recoverable) inside the 29-cell column"
         );
         assert!(rows.iter().any(|row| row.contains("This device")), "the blocks survive");
     }

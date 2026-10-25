@@ -75,7 +75,7 @@ use std::rc::Rc;
 use opentui_core::styled_text::{StyledText, TextChunk};
 use opentui_core::Rgba;
 use opentui_solid::builder::ForItemSource;
-use opentui_solid::element::{Children, ForItem, PropValue};
+use opentui_solid::element::{Children, DynChildren, ForItem, PropValue};
 use opentui_solid::reactive::Reactive;
 use opentui_solid::{box_, for_list, map, show, text, Element, Signal, SolidRenderer};
 
@@ -292,9 +292,18 @@ struct DialogInputs {
     /// The image area's row count (`max(3, height - 8)`).
     preview_rows: usize,
     // -- F15: the pair dialog's content rows ---------------------------
-    /// The word-wrapped content walk (loading / error / loaded) —
-    /// [`crate::components::dialog_pair::rows`].
+    /// The word-wrapped TEXT column (loading / error / loaded) —
+    /// [`crate::components::dialog_pair::rows`] stacked (QR rows
+    /// included below the text) or
+    /// [`crate::components::dialog_pair::split_columns`]'s left
+    /// column in the ≥96 split.
     pair_rows: Vec<crate::components::dialog_pair::PairRow>,
+    /// The ≥96 horizontal split (dialog-pair.tsx:39): the QR column
+    /// renders BESIDE the text column (:75-84), not below it.
+    pair_split: bool,
+    /// The QR block's lines for the split column (empty stacked —
+    /// there the QR rows ride inside `pair_rows`).
+    pair_qr: Vec<String>,
 }
 
 /// TUI-10/24 + F15: the custom families' store-side sidecar — the
@@ -404,7 +413,17 @@ fn content_height(inputs: &DialogInputs) -> usize {
         Family::ImagePreview => inputs.preview_rows + 5,
         // F15 (dialog-pair.tsx:89-129): the `Pair` title row, the
         // root's gap 1, the content rows, the root paddingBottom 1.
-        Family::Pair => inputs.pair_rows.len() + 3,
+        // In the ≥96 split the QR column sits BESIDE the text
+        // column (:44 row flow) — the content height is the MAX of
+        // the two columns, not the stacked sum.
+        Family::Pair => {
+            let rows = if inputs.pair_split {
+                inputs.pair_rows.len().max(inputs.pair_qr.len())
+            } else {
+                inputs.pair_rows.len()
+            };
+            rows + 3
+        }
     }
 }
 
@@ -1617,6 +1636,7 @@ fn image_preview_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::Elemen
 /// error / the word-wrapped intro + link blocks + loopback hint) — a
 /// `For` over the pre-wrapped walk, one text element per row. The
 /// root mirrors the tsx: paddingLeft/right 2, paddingBottom 1, gap 1.
+#[allow(clippy::too_many_lines)] // one builder per layout arm (stacked / ≥96 split)
 fn pair_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilder {
     let title_row = box_().flex_direction("row").justify_content("space-between").children(
         Children::Static(vec![
@@ -1648,8 +1668,8 @@ fn pair_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilder 
                 .map(|(n, row)| {
                     let text = match row {
                         crate::components::dialog_pair::PairRow::Gap => String::new(),
-                        crate::components::dialog_pair::PairRow::Text { text, .. } => text.clone(),
-                        crate::components::dialog_pair::PairRow::Qr { text } => text.clone(),
+                        crate::components::dialog_pair::PairRow::Text { text, .. }
+                        | crate::components::dialog_pair::PairRow::Qr { text } => text.clone(),
                     };
                     ForItem { key: format!("P{n}"), value: PropValue::Str(text) }
                 })
@@ -1687,7 +1707,64 @@ fn pair_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilder 
             )
             .into_element()
     });
-    let content = box_().children_dyn(Rc::new(content_for));
+    // The ≥96 split (dialog-pair.tsx:39-45,75-84): the content box
+    // flips to `flexDirection="row"`, `alignItems="flex-start"` —
+    // the text column keeps its FIXED 29 cells (`width={horizontal ?
+    // 29 : "100%"}`, :45, `flexShrink={0}`) and the QR column
+    // (`flexGrow`, `alignItems="flex-end"`, :76-79) renders BESIDE
+    // it, the `gap={2}` (:44) as the QR column's marginLeft. The
+    // branch is read at mount time (the mount rebuilds on every size
+    // change, so the gate flip re-mounts the right shape).
+    let content_children = Rc::new(content_for);
+    let content = if inputs.get().pair_split {
+        let qr_source = ForItemSource {
+            source: map(inputs.clone(), |i: &DialogInputs| {
+                i.pair_qr
+                    .iter()
+                    .enumerate()
+                    .map(|(n, line)| ForItem {
+                        key: format!("Q{n}"),
+                        value: PropValue::Str(line.clone()),
+                    })
+                    .collect::<Vec<ForItem>>()
+            }),
+        };
+        let qr_inputs = inputs.clone();
+        let qr_for = for_list(Rc::new(qr_source), move |_item: &ForItem, index: usize| {
+            let inputs = qr_inputs.clone();
+            text()
+                .dyn_prop(
+                    "content",
+                    dyn_styled(map(inputs, move |i: &DialogInputs| {
+                        // The QR rows paint `theme.text.base`
+                        // (dialog-pair.tsx:82).
+                        match i.pair_qr.get(index) {
+                            Some(line) => styled(vec![chunk(line.clone(), i.colors.text, None, 0)]),
+                            None => styled(Vec::new()),
+                        }
+                    })),
+                )
+                .into_element()
+        });
+        let left = box_()
+            .width(29.0)
+            .flex_shrink(0.0)
+            .children_dyn(Rc::clone(&content_children) as Rc<dyn DynChildren>);
+        let right = box_()
+            .flex_grow(1.0)
+            .flex_shrink(0.0)
+            .align_items("flex-end")
+            .margin_left(2.0)
+            .children_dyn(Rc::new(qr_for));
+        box_()
+            .flex_direction("row")
+            .align_items("flex-start")
+            .children(Children::Static(vec![left.into_element(), right.into_element()]))
+    } else {
+        // Stacked (:44 column flow): the QR box below the text (its
+        // rows ride inside `pair_rows`).
+        box_().children_dyn(content_children)
+    };
     box_().padding_left(2.0).padding_right(2.0).padding_bottom(1.0).children(Children::Static(
         vec![title_row.into_element(), content.margin_top(1.0).into_element()],
     ))
@@ -2034,6 +2111,8 @@ fn build_inputs(
                 preview_footer: (String::new(), String::new(), String::new()),
                 preview_rows: 0,
                 pair_rows: Vec::new(),
+                pair_split: false,
+                pair_qr: Vec::new(),
                 plugin_rows: Vec::new(),
             }
         }
@@ -2065,6 +2144,8 @@ fn build_inputs(
             preview_footer: (String::new(), String::new(), String::new()),
             preview_rows: 0,
             pair_rows: Vec::new(),
+            pair_split: false,
+            pair_qr: Vec::new(),
         },
         // The connect prompts carry their title/placeholder/hints
         // through the props (OAuthCode's description block holds the
@@ -2098,6 +2179,8 @@ fn build_inputs(
             preview_footer: (String::new(), String::new(), String::new()),
             preview_rows: 0,
             pair_rows: Vec::new(),
+            pair_split: false,
+            pair_qr: Vec::new(),
         },
         Family::Help => {
             let content_width = box_width.saturating_sub(4);
@@ -2143,6 +2226,8 @@ fn build_inputs(
                 preview_footer: (String::new(), String::new(), String::new()),
                 preview_rows: 0,
                 pair_rows: Vec::new(),
+                pair_split: false,
+                pair_qr: Vec::new(),
             }
         }
         Family::PluginRows => {
@@ -2175,6 +2260,8 @@ fn build_inputs(
                 preview_footer: (String::new(), String::new(), String::new()),
                 preview_rows: 0,
                 pair_rows: Vec::new(),
+                pair_split: false,
+                pair_qr: Vec::new(),
             }
         }
         // -- TUI-25: DialogAlert / DialogConfirm --------------------
@@ -2229,6 +2316,8 @@ fn build_inputs(
                 preview_footer: (String::new(), String::new(), String::new()),
                 preview_rows: 0,
                 pair_rows: Vec::new(),
+                pair_split: false,
+                pair_qr: Vec::new(),
             }
         }
         // -- TUI-24: DialogErrorDetails ------------------------------
@@ -2270,6 +2359,8 @@ fn build_inputs(
                 preview_footer: (String::new(), String::new(), String::new()),
                 preview_rows: 0,
                 pair_rows: Vec::new(),
+                pair_split: false,
+                pair_qr: Vec::new(),
             }
         }
         // -- TUI-10: DialogImagePreview ------------------------------
@@ -2315,22 +2406,36 @@ fn build_inputs(
                 preview_footer: (previous, caption, next),
                 preview_rows,
                 pair_rows: Vec::new(),
+                pair_split: false,
+                pair_qr: Vec::new(),
             }
         }
         // -- F15: DialogPair — the custom (non-select) tree --------
         Family::Pair => {
             // The root box's inner width (paddingLeft/right 2,
-            // dialog-pair.tsx:90); the content walk wraps to it —
-            // EXCEPT in the ≥96-terminal horizontal split, where the
-            // text column is a FIXED 29 cells (`width={horizontal ?
-            // 29 : "100%"}`, dialog-pair.tsx:39+45; the QR column
-            // stays empty — the registered encoder gap).
+            // dialog-pair.tsx:90); the stacked walk wraps to it.
             let content_width = box_width.saturating_sub(4).max(1);
-            let walk = crate::components::dialog_pair::walk_width(terminal_width, content_width);
-            let mut pair_rows = crate::components::dialog_pair::rows(&sidecar.pair, walk);
             // The height<36 scrollbox (:104-112): the content window
             // clips to the budget (an invisible scrollbar).
-            pair_rows.truncate(crate::components::dialog_pair::scroll_budget(terminal_height));
+            let budget = crate::components::dialog_pair::scroll_budget(terminal_height);
+            let (pair_rows, pair_split, pair_qr) =
+                if crate::components::dialog_pair::is_horizontal(terminal_width) {
+                    // The ≥96 split (:39-45,75-84): the text column
+                    // wraps to its fixed 29 cells, the QR column
+                    // renders BESIDE it (both clipped to the budget).
+                    let (mut text, mut qr) =
+                        crate::components::dialog_pair::split_columns(&sidecar.pair);
+                    text.truncate(budget);
+                    qr.truncate(budget);
+                    (text, true, qr)
+                } else {
+                    // Stacked (:44 column flow): the QR box is the
+                    // content's SECOND child — below the text column.
+                    let mut rows =
+                        crate::components::dialog_pair::rows(&sidecar.pair, content_width);
+                    rows.truncate(budget);
+                    (rows, false, Vec::new())
+                };
             DialogInputs {
                 family,
                 box_width,
@@ -2359,6 +2464,8 @@ fn build_inputs(
                 preview_footer: (String::new(), String::new(), String::new()),
                 preview_rows: 0,
                 pair_rows,
+                pair_split,
+                pair_qr,
             }
         }
     }

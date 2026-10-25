@@ -90,11 +90,13 @@ pub enum PairStyle {
     ErrorBold,
 }
 
-/// The content walk (`dialog-pair.tsx:40-87`): the state's rows at
-/// `content_width` columns (the box's inner width — chrome width
-/// minus the root's paddingLeft/right 2).
+/// The TEXT column walk (`dialog-pair.tsx:44-74`): the loading /
+/// error states, or the wrapped intro + localhost/links blocks +
+/// loopback hint — the left child of the content box in BOTH
+/// layouts (its width is the caller's: 29 in the split,
+/// dialog-pair.tsx:45; the box's inner width stacked).
 #[must_use]
-pub fn rows(state: &PairState, content_width: usize) -> Vec<PairRow> {
+pub fn text_rows(state: &PairState, content_width: usize) -> Vec<PairRow> {
     let width = content_width.max(1);
     let muted_lines = |text: &str| -> Vec<PairRow> {
         crate::wrap::wrap_label(text, width)
@@ -158,21 +160,58 @@ pub fn rows(state: &PairState, content_width: usize) -> Vec<PairRow> {
                 out.push(PairRow::Gap);
                 out.extend(muted_lines(LOOPBACK_HINT));
             }
-            // The QR block (:75-84): the content box's `gap={2}`
-            // (:44) seats it two blank rows below the text column;
-            // `Show when={value.links[0]}` gates the QR text itself.
-            // Column layout (the port's only reachable layout) — the
-            // QR box is `width="100%"`, `alignItems="center"`.
-            out.push(PairRow::Gap);
-            out.push(PairRow::Gap);
-            if let Some(first) = links.first() {
-                for line in oc_uqr::render_unicode_compact(first, 1).split('\n') {
-                    out.push(PairRow::Qr { text: line.to_owned() });
-                }
-            }
             out
         }
     }
+}
+
+/// The QR block's lines (ref :81-83): uqr
+/// `renderUnicodeCompact(links[0], { border: 1 })`, gated on
+/// `Show when={value.links[0]}` (empty when there are no links, and
+/// empty by construction for the loading/error states — the ref
+/// mounts it inside the `Show when={info()}` content only).
+#[must_use]
+pub fn qr_lines(state: &PairState) -> Vec<String> {
+    match state {
+        PairState::Loaded { links, .. } => links
+            .first()
+            .map(|first| {
+                oc_uqr::render_unicode_compact(first, 1).split('\n').map(str::to_owned).collect()
+            })
+            .unwrap_or_default(),
+        PairState::Loading | PairState::Failed(_) => Vec::new(),
+    }
+}
+
+/// The STACKED content walk (`dialog-pair.tsx:44` with
+/// `flexDirection="column"`): the text column first, then the
+/// content box's `gap={2}` (two blank rows), then the QR box — the
+/// QR is the content box's SECOND child, rendered after the text
+/// box in column flow. The QR box is `width="100%"`,
+/// `alignItems="center"` (:76-79).
+#[must_use]
+pub fn rows(state: &PairState, content_width: usize) -> Vec<PairRow> {
+    let mut out = text_rows(state, content_width);
+    if matches!(state, PairState::Loaded { .. }) {
+        out.push(PairRow::Gap);
+        out.push(PairRow::Gap);
+        out.extend(qr_lines(state).into_iter().map(|text| PairRow::Qr { text }));
+    }
+    out
+}
+
+/// The SPLIT content (`dialog-pair.tsx:39-45,75-84` with
+/// `flexDirection="row"`): the text column wrapped to its fixed
+/// 29 cells (:45) on the left, the QR column (`flexGrow 1,
+/// alignItems="flex-end"`, :76-79) beside it — the QR is visible
+/// beside the text column regardless of the text column's height,
+/// so the dialog's content height is the MAX of the two columns,
+/// not the stacked sum. (The 2-cell gutter is the content box's
+/// `gap={2}`, :44 — painted by the tree as the QR column's
+/// marginLeft.)
+#[must_use]
+pub fn split_columns(state: &PairState) -> (Vec<PairRow>, Vec<String>) {
+    (text_rows(state, SPLIT_COLUMN_WIDTH), qr_lines(state))
 }
 
 /// The height<36 scrollbox budget (`dialog-pair.tsx:104-112`):
@@ -442,6 +481,40 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The SPLIT columns (dialog-pair.tsx:39-45,75-84): the text
+    /// column wrapped to its fixed 29 cells, the QR beside it — the
+    /// QR lines are NOT under the text rows (the height model is
+    /// max, not sum) and are the full uqr block for links[0].
+    #[test]
+    fn split_columns_seat_the_qr_beside_the_text() {
+        let (text, qr) = split_columns(&loaded());
+        assert!(
+            text.iter().all(|row| match row {
+                PairRow::Text { text, .. } => crate::wrap::display_width(text) <= 29,
+                _ => true,
+            }),
+            "the text column wraps to 29 cells"
+        );
+        assert!(qr_rows(&text).is_empty(), "no QR rows inside the text column");
+        assert_eq!(
+            qr.join("\n"),
+            oc_uqr::render_unicode_compact("http://127.0.0.1:4096/auth/connect/pair-code-123", 1),
+            "the QR column is the full uqr block for links[0], border 1"
+        );
+        // The pty proof's shape at 100×30 (scroll budget 17): the QR
+        // is fully visible beside the ≤17-row text column.
+        assert!(
+            qr.len() <= 17 && text.len() <= 17,
+            "both columns fit the 17-row budget: text {} qr {}",
+            text.len(),
+            qr.len()
+        );
+        // Loading/error: no QR column (ref mounts it inside
+        // `Show when={info()}`'s content only).
+        assert!(split_columns(&PairState::Loading).1.is_empty());
+        assert!(split_columns(&PairState::Failed("x".to_owned())).1.is_empty());
     }
 
     /// The specific old-bug shape: at 53/54 columns the URL (47
