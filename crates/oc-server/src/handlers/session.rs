@@ -209,13 +209,9 @@ async fn list(
     uri: Uri,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    // P10-E2: v2's schema middleware validates the query before the
-    // handler (limit: NumberFromString→PositiveInt, order: "asc"|"desc")
-    // and 400s with InvalidRequestError kind=Query — byte-pinned by the
-    // Phase-10 error-path battery.
-    if let Err(message) = super::schema_check::session_list_query(uri.query().unwrap_or_default()) {
-        return Err(ApiError::schema_rejection(message, "Query"));
-    }
+    // RA-01: session.list's query is enforced by the schema-error
+    // middleware (validate-first; identical bytes to the retired
+    // in-handler P10-E2 pin — see NUMBER_PARAMS + pinned_query_messages).
     let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let _ = &location;
     // The list read goes through the global store (v2 `Session.Service`)
@@ -389,13 +385,9 @@ async fn create(
     headers: HeaderMap,
     axum::Json(body): axum::Json<Value>,
 ) -> Result<Response, ApiError> {
-    // P10-E1: v2's schema middleware validates the payload before the
-    // handler (wrongly-typed fields 400 with InvalidRequestError
-    // kind=Payload, unknown fields stripped) — byte-pinned by the
-    // Phase-10 error-path battery.
-    if let Err(message) = super::schema_check::session_create_payload(&body) {
-        return Err(ApiError::schema_rejection(message, "Payload"));
-    }
+    // RA-01: session.create's payload is enforced by the schema-error
+    // middleware (validate-first; identical bytes to the retired
+    // in-handler P10-E1 pin — see pinned_effect_messages).
     // v2 takes the location in the request body for session create; the
     // query/header derivation is the fallback (deep-map §1).
     let location = if let Some(directory) = body["location"]["directory"].as_str() {
@@ -518,9 +510,18 @@ async fn remove(
 async fn update(
     State(state): State<SharedState>,
     Path(session_id): Path<String>,
-    axum::Json(body): axum::Json<Value>,
+    uri: Uri,
+    body: axum::body::Bytes,
 ) -> Result<Response, ApiError> {
     let (services, _) = session_services(&state, &session_id).await?;
+    // RA-01: v2 resolves the session (404) in location middleware BEFORE
+    // payload decode — validate the body here, after that resolution.
+    let body = crate::request_validation::validate_at_handler(
+        "session.update",
+        &axum::http::Method::PATCH,
+        &uri,
+        &body,
+    )?;
 
     // title: non-empty → rename; "" → regenerate (LLM-backed regeneration
     // lands with the title lane; empty clears, TODO(phase-9)).
@@ -558,9 +559,17 @@ async fn update(
 async fn switch_agent(
     State(state): State<SharedState>,
     Path(session_id): Path<String>,
-    axum::Json(body): axum::Json<Value>,
+    uri: Uri,
+    body: axum::body::Bytes,
 ) -> Result<Response, ApiError> {
     let (services, _) = session_services(&state, &session_id).await?;
+    // RA-01: post-location payload decode (404 first, then schema 400).
+    let body = crate::request_validation::validate_at_handler(
+        "session.switchAgent",
+        &axum::http::Method::POST,
+        &uri,
+        &body,
+    )?;
     let agent = body["agent"].as_str().unwrap_or_default();
     if services.graph.agents.get(&oc_schema::id::AgentId(agent.to_owned())).is_none() {
         return Err(ApiError::agent_not_found(agent));
@@ -577,9 +586,17 @@ async fn switch_agent(
 async fn switch_model(
     State(state): State<SharedState>,
     Path(session_id): Path<String>,
-    axum::Json(body): axum::Json<Value>,
+    uri: Uri,
+    body: axum::body::Bytes,
 ) -> Result<Response, ApiError> {
     let (services, _) = session_services(&state, &session_id).await?;
+    // RA-01: post-location payload decode (404 first, then schema 400).
+    let body = crate::request_validation::validate_at_handler(
+        "session.switchModel",
+        &axum::http::Method::POST,
+        &uri,
+        &body,
+    )?;
     publish_session_event(
         &services,
         "session.model.selected",
@@ -618,9 +635,17 @@ fn parse_delivery(body: &Value) -> Result<Delivery, ApiError> {
 async fn prompt(
     State(state): State<SharedState>,
     Path(session_id): Path<String>,
-    axum::Json(body): axum::Json<Value>,
+    uri: Uri,
+    body: axum::body::Bytes,
 ) -> Result<Response, ApiError> {
     let (services, _) = session_services(&state, &session_id).await?;
+    // RA-01: post-location payload decode (404 first, then schema 400).
+    let body = crate::request_validation::validate_at_handler(
+        "session.prompt",
+        &axum::http::Method::POST,
+        &uri,
+        &body,
+    )?;
     let message_id = body["id"].as_str().map_or_else(|| state.ids.new_id("msg"), String::from);
     let delivery = parse_delivery(&body)?;
     // `files` arrives in the PromptInput shape (URIs); materialize to
@@ -664,9 +689,17 @@ async fn prompt(
 async fn synthetic(
     State(state): State<SharedState>,
     Path(session_id): Path<String>,
-    axum::Json(body): axum::Json<Value>,
+    uri: Uri,
+    body: axum::body::Bytes,
 ) -> Result<Response, ApiError> {
     let (services, row) = session_services(&state, &session_id).await?;
+    // RA-01: post-location payload decode (404 first, then schema 400).
+    let body = crate::request_validation::validate_at_handler(
+        "session.synthetic",
+        &axum::http::Method::POST,
+        &uri,
+        &body,
+    )?;
     let message_id = body["id"].as_str().map_or_else(|| state.ids.new_id("msg"), String::from);
     let delivery = parse_delivery(&body)?;
     let payload = oc_schema::session_inbox::SyntheticPayload {
@@ -697,8 +730,16 @@ async fn interrupt(
     Path(session_id): Path<String>,
     uri: Uri,
 ) -> Result<Response, ApiError> {
-    let resume = query_field(&uri, "resume").as_deref() == Some("true");
     let (services, _) = session_services(&state, &session_id).await?;
+    // RA-01: session.interrupt is location-first WITH a query row — the
+    // 404 resolves first, then the query decode (kind Query).
+    crate::request_validation::validate_at_handler(
+        "session.interrupt",
+        &axum::http::Method::POST,
+        &uri,
+        &[],
+    )?;
+    let resume = query_field(&uri, "resume").as_deref() == Some("true");
     let options = oc_core::session::InterruptOptions {
         reason: Some(oc_schema::session_event::InterruptReason::User),
         await_settlement: true,
@@ -715,9 +756,17 @@ async fn interrupt(
 async fn compact(
     State(state): State<SharedState>,
     Path(session_id): Path<String>,
-    axum::Json(body): axum::Json<Value>,
+    uri: Uri,
+    body: axum::body::Bytes,
 ) -> Result<Response, ApiError> {
     let (services, _) = session_services(&state, &session_id).await?;
+    // RA-01: post-location payload decode (404 first, then schema 400).
+    let body = crate::request_validation::validate_at_handler(
+        "session.compact",
+        &axum::http::Method::POST,
+        &uri,
+        &body,
+    )?;
     let input_id = body["id"].as_str().map_or_else(|| state.ids.new_id("msg"), String::from);
     let delivery = match body["delivery"].as_str() {
         Some("steer") => Delivery::Steer,
@@ -801,9 +850,17 @@ async fn move_session(
 async fn fork(
     State(state): State<SharedState>,
     Path(session_id): Path<String>,
-    axum::Json(body): axum::Json<Value>,
+    uri: Uri,
+    body: axum::body::Bytes,
 ) -> Result<Response, ApiError> {
     let (services, _row) = session_services(&state, &session_id).await?;
+    // RA-01: post-location payload decode (404 first, then schema 400).
+    let body = crate::request_validation::validate_at_handler(
+        "session.fork",
+        &axum::http::Method::POST,
+        &uri,
+        &body,
+    )?;
     // v2 `Session.fork` (core session.ts:319-355): locate the boundary —
     // the `before` message when the payload names one (HTTP wire carries
     // the bare messageID, protocol groups/session.ts:313), else the newest
@@ -876,9 +933,17 @@ async fn fork(
 async fn command(
     State(state): State<SharedState>,
     Path(session_id): Path<String>,
-    axum::Json(body): axum::Json<Value>,
+    uri: Uri,
+    body: axum::body::Bytes,
 ) -> Result<Response, ApiError> {
     let (services, row) = session_services(&state, &session_id).await?;
+    // RA-01: post-location payload decode (404 first, then schema 400).
+    let body = crate::request_validation::validate_at_handler(
+        "session.command",
+        &axum::http::Method::POST,
+        &uri,
+        &body,
+    )?;
     let name = body["name"].as_str().unwrap_or_default();
     let text = body["text"].as_str().unwrap_or_default().to_owned();
     let Some(registration) = services.commands.get(name) else {
@@ -1149,9 +1214,17 @@ async fn diff(
 async fn generate(
     State(state): State<SharedState>,
     Path(session_id): Path<String>,
-    axum::Json(body): axum::Json<Value>,
+    uri: Uri,
+    body: axum::body::Bytes,
 ) -> Result<Response, ApiError> {
     let (services, _) = session_services(&state, &session_id).await?;
+    // RA-01: post-location payload decode (404 first, then schema 400).
+    let body = crate::request_validation::validate_at_handler(
+        "session.generate",
+        &axum::http::Method::POST,
+        &uri,
+        &body,
+    )?;
     let prompt = body["prompt"].as_str().unwrap_or_default().to_owned();
     // One-shot generation from the current session context without
     // mutating session history (session/generate.ts). Model/LLM failures
@@ -1214,9 +1287,17 @@ async fn shell_output_preview(
 async fn shell(
     State(state): State<SharedState>,
     Path(session_id): Path<String>,
-    axum::Json(body): axum::Json<Value>,
+    uri: Uri,
+    body: axum::body::Bytes,
 ) -> Result<Response, ApiError> {
     let (services, row) = session_services(&state, &session_id).await?;
+    // RA-01: post-location payload decode (404 first, then schema 400).
+    let body = crate::request_validation::validate_at_handler(
+        "session.shell",
+        &axum::http::Method::POST,
+        &uri,
+        &body,
+    )?;
     let command = body["command"].as_str().unwrap_or_default().to_owned();
     let input_id = body["id"].as_str().map(String::from);
     // v2 `Session.shell` (session/session.ts:179-222 + session/shell.ts):
@@ -1399,9 +1480,17 @@ async fn environment(
 async fn revert_stage(
     State(state): State<SharedState>,
     Path(session_id): Path<String>,
-    axum::Json(body): axum::Json<Value>,
+    uri: Uri,
+    body: axum::body::Bytes,
 ) -> Result<Response, ApiError> {
     let (location, _) = session_location(&state, &session_id).await?;
+    // RA-01: post-location payload decode (404 first, then schema 400).
+    let body = crate::request_validation::validate_at_handler(
+        "session.revert.stage",
+        &axum::http::Method::POST,
+        &uri,
+        &body,
+    )?;
     let message_id = body["messageID"].as_str().unwrap_or_default();
     let include_files = body["files"].as_bool().unwrap_or(false);
     let revert = state
@@ -1479,9 +1568,18 @@ async fn inbox_cancel(
 async fn inbox_update(
     State(state): State<SharedState>,
     Path((session_id, inbox_id)): Path<(String, String)>,
-    axum::Json(body): axum::Json<Value>,
+    uri: Uri,
+    body: axum::body::Bytes,
 ) -> Result<Response, ApiError> {
     let (services, _) = session_services(&state, &session_id).await?;
+    // RA-01: post-location decode (Params inboxID ^msg_ + payload; 404
+    // first, then schema 400).
+    let body = crate::request_validation::validate_at_handler(
+        "session.inbox.update",
+        &axum::http::Method::PATCH,
+        &uri,
+        &body,
+    )?;
     // steer-vs-queue (§3).
     let result = match body["delivery"].as_str() {
         Some("queue") => services.inbox.queue(&session_id, &inbox_id).await,
@@ -1557,9 +1655,17 @@ const INSTRUCTION_ENTRY_MAX_BYTES: i64 = 32 * 1024;
 async fn instruction_entry_put(
     State(state): State<SharedState>,
     Path((session_id, key)): Path<(String, String)>,
-    axum::Json(body): axum::Json<Value>,
+    uri: Uri,
+    body: axum::body::Bytes,
 ) -> Result<Response, ApiError> {
     let _ = session_services(&state, &session_id).await?;
+    // RA-01: post-location payload decode (404 first, then schema 400).
+    let body = crate::request_validation::validate_at_handler(
+        "experimental.session.instructions.entry.put",
+        &axum::http::Method::PUT,
+        &uri,
+        &body,
+    )?;
     let value = body["value"].clone();
     let encoded = serde_json::to_string(&value).map_err(|error| {
         crate::errors::debug_cause("session:invalid_request", &error);
@@ -1594,9 +1700,17 @@ async fn instruction_entry_put(
 async fn skill(
     State(state): State<SharedState>,
     Path(session_id): Path<String>,
-    axum::Json(body): axum::Json<Value>,
+    uri: Uri,
+    body: axum::body::Bytes,
 ) -> Result<Response, ApiError> {
     let (services, _) = session_services(&state, &session_id).await?;
+    // RA-01: post-location payload decode (404 first, then schema 400).
+    let body = crate::request_validation::validate_at_handler(
+        "experimental.session.skill",
+        &axum::http::Method::POST,
+        &uri,
+        &body,
+    )?;
     let skill_id = body["id"].as_str().unwrap_or_default();
     if !services.skills.list().iter().any(|skill| skill.id.as_str() == skill_id) {
         return Err(ApiError::skill_not_found(skill_id));

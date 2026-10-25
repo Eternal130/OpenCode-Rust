@@ -74,9 +74,17 @@ async fn session_list(
 async fn session_create(
     State(state): State<SharedState>,
     Path(session_id): Path<String>,
-    axum::Json(body): axum::Json<Value>,
+    uri: Uri,
+    body: axum::body::Bytes,
 ) -> Result<Response, ApiError> {
     let (services, _) = session_services(&state, &session_id).await?;
+    // RA-01: post-location payload decode (404 first, then schema 400).
+    let body = crate::request_validation::validate_at_handler(
+        "session.form.create",
+        &axum::http::Method::POST,
+        &uri,
+        &body,
+    )?;
     let input = CreateInput {
         session_id: session_id.clone(),
         title: body["title"].as_str().unwrap_or_default().to_owned(),
@@ -140,10 +148,19 @@ async fn session_get(
 async fn session_reply(
     State(state): State<SharedState>,
     Path((session_id, form_id)): Path<(String, String)>,
-    axum::Json(body): axum::Json<Value>,
+    uri: Uri,
+    body: axum::body::Bytes,
 ) -> Result<Response, ApiError> {
     let (services, _) = session_services(&state, &session_id).await?;
     owned_form(&services, &session_id, &form_id)?;
+    // RA-01: formLocation resolves the form (404) before payload decode —
+    // validate Params (formID ^frm_) + payload only after it.
+    let body = crate::request_validation::validate_at_handler(
+        "session.form.reply",
+        &axum::http::Method::POST,
+        &uri,
+        &body,
+    )?;
     let answer: Answer = parse_answer(&body["answer"])?;
     services.forms.reply(&FormId(form_id.clone()), answer).await.map_err(form_error)?;
     Ok(no_content())
@@ -156,6 +173,14 @@ async fn session_cancel(
 ) -> Result<Response, ApiError> {
     let (services, _) = session_services(&state, &session_id).await?;
     owned_form(&services, &session_id, &form_id)?;
+    // RA-01: form.cancel is form-location-first WITH a query row — the
+    // session+form 404s resolve first, then the query decode.
+    crate::request_validation::validate_at_handler(
+        "session.form.cancel",
+        &axum::http::Method::DELETE,
+        &uri,
+        &[],
+    )?;
     let message = query_field(&uri, "message");
     services
         .forms
