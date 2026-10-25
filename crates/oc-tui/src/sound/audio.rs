@@ -79,9 +79,7 @@ fn engine() -> &'static Mutex<EngineHalf> {
 /// Lock the global engine, absorbing poisoning (the channel must keep
 /// serving, never panic the TUI).
 fn lock() -> std::sync::MutexGuard<'static, EngineHalf> {
-    engine()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+    engine().lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Replace the global engine with one over an injected lib (the test
@@ -99,26 +97,29 @@ fn install_lib_for_test(lib: Box<dyn AudioLib + Send>) {
 #[must_use]
 pub fn play_file(file: &Path, volume: f64) -> bool {
     let mut guard = lock();
+    // v2 `loadSoundFile` → `loadSound(bytes)`: read + decode + cache
+    // by path (`audio.ts:23-36`). The engine borrow is scoped so the
+    // cache insert happens after it ends.
+    let sound = if let Some(sound) = guard.sounds.get(file).copied() {
+        sound
+    } else {
+        let Ok(bytes) = std::fs::read(file) else {
+            return false;
+        };
+        let Some(audio) = guard.audio.as_mut() else {
+            return false;
+        };
+        let Some(sound) = audio.load_sound(&bytes) else {
+            return false; // decode failure → the candidate loop falls through
+        };
+        sound
+    };
+    guard.sounds.insert(file.to_path_buf(), sound);
+    // v2 `play()`: `!isStarted() && !start()` → null (`audio.ts:41-42`)
+    // — retried on every play, exactly like native's lazy device start.
     let Some(audio) = guard.audio.as_mut() else {
         return false;
     };
-    // v2 `loadSoundFile` → `loadSound(bytes)`: read + decode + cache
-    // by path (`audio.ts:23-36`).
-    let sound = match guard.sounds.get(file).copied() {
-        Some(sound) => sound,
-        None => {
-            let Ok(bytes) = std::fs::read(file) else {
-                return false;
-            };
-            let Some(sound) = audio.load_sound(&bytes) else {
-                return false; // decode failure → the candidate loop falls through
-            };
-            guard.sounds.insert(file.to_path_buf(), sound);
-            sound
-        }
-    };
-    // v2 `play()`: `!isStarted() && !start()` → null (`audio.ts:41-42`)
-    // — retried on every play, exactly like native's lazy device start.
     if !audio.is_started() && !audio.start(None) {
         return false;
     }
@@ -157,9 +158,8 @@ mod tests {
     use super::*;
     use crate::attention::AttentionSoundName;
     use opentui_core::audio::{
-        AudioEngineHandle, AudioError, AudioLoadResult, AudioPlayResult,
-        HeadlessAudioLib, NativeAudioVoiceOptions, AUDIO_STATUS_ERR_DEVICE,
-        AUDIO_STATUS_ERR_DECODE, AUDIO_STATUS_OK,
+        AudioEngineHandle, AudioError, AudioLoadResult, AudioPlayResult, HeadlessAudioLib,
+        NativeAudioVoiceOptions, AUDIO_STATUS_ERR_DECODE, AUDIO_STATUS_ERR_DEVICE, AUDIO_STATUS_OK,
     };
     use std::sync::{Arc, Mutex};
 
@@ -216,7 +216,12 @@ mod tests {
             _sound: u32,
             options: Option<NativeAudioVoiceOptions>,
         ) -> AudioPlayResult {
-            let options = options.unwrap_or_else(NativeAudioVoiceOptions::defaults);
+            let options = options.unwrap_or(NativeAudioVoiceOptions {
+                volume: 1.0,
+                pan: 0.0,
+                loop_: false,
+                group_id: 0,
+            });
             self.state.lock().unwrap().plays.push(options);
             AudioPlayResult { status: AUDIO_STATUS_OK, voice_id: Some(1) }
         }
@@ -243,8 +248,7 @@ mod tests {
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
+                .map_or(0, |d| d.as_nanos())
         ));
         let resolver = crate::sound::builtin_sound_resolver(cache.clone());
         let path = resolver(name).expect("asset extracts");
@@ -310,12 +314,13 @@ mod tests {
     #[test]
     fn undecodable_input_falls_through() {
         let state = install(AUDIO_STATUS_OK);
-        let garbage = std::env::temp_dir().join(format!("oc-sound-garbage-{}.mp3", std::process::id()));
+        let garbage =
+            std::env::temp_dir().join(format!("oc-sound-garbage-{}.mp3", std::process::id()));
         std::fs::write(&garbage, b"garbage not an mp3").unwrap();
         assert!(!play_file(&garbage, 0.4));
         assert!(!play_file(std::path::Path::new("/nonexistent/asset.mp3"), 0.4));
         let state = state.lock().unwrap();
-        assert!(state.plays.is_empty());
+        assert!(state.plays.is_empty(), "play is never reached: {:?}", state.plays);
         assert_eq!(state.start_calls, 0, "start happens after a successful load");
         let _ = std::fs::remove_file(&garbage);
     }
@@ -348,10 +353,7 @@ mod tests {
         let (samples, channels, sample_rate) =
             lib.sound_shape(engine, id).expect("loaded sound has a shape");
         assert!((1..=2).contains(&channels), "channels {channels}");
-        assert!(
-            [22_050, 44_100, 48_000].contains(&sample_rate),
-            "sample rate {sample_rate}"
-        );
+        assert!([22_050, 44_100, 48_000].contains(&sample_rate), "sample rate {sample_rate}");
         let frames = samples / channels as usize;
         #[allow(clippy::cast_precision_loss)]
         let secs = frames as f64 / f64::from(sample_rate);
