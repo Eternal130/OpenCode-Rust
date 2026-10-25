@@ -342,6 +342,13 @@ fn guest_enforces_structural_caps() {
         Some("Too many pending promises (limit 10000); await promises before creating more.")
     );
 
+    // -- Cyclic return value (oracle gate followup F1): the depth guard
+    //    runs BEFORE the structural walk, so a self-referencing object
+    //    answers with the ref's clean depth error instead of wedging
+    //    the guest until the transport deadline kills it.
+    let run = run_code("const a = { x: 1 }; a.self = a; return a;");
+    assert_eq!(run.error.as_deref(), Some("Value exceeds the maximum depth of 32."));
+
     // Let the flood's slow replies drain so shutdown is quiet.
     std::thread::sleep(Duration::from_millis(2000));
 

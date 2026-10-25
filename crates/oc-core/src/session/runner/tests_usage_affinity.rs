@@ -166,7 +166,7 @@ async fn runner_usage_accumulates_across_turns_with_tier_escalation() {
     // 10_001·12.5) / 1e6 = 1.0850125.
     let tiered = 1.085_012_5_f64;
 
-    // Turn 2 below the tier — total must be tiered + base(0.0935).
+    // Turn 2 below the tier — total must be base(0.0935) + tiered.
     llm.always(usage_response("base turn", 60_000.0, 8_000.0, 1_000.0, 10_000.0, 10_000.0));
     harness.admit_prompt("msg_bill_3", "again").await;
     harness.execution.resume(harness.session_id().as_str()).await.expect("execution exit");

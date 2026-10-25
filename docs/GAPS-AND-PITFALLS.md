@@ -91,18 +91,19 @@
 
 | ID | 发现 | 域 | 严重度 | 说明 |
 |---|---|---|---|---|
-| RB-01 | CodeMode 缺结构性资源上限 | AI+插件 | 中 | v2 受限解释器有 MAX_STRING_LENGTH/MAX_ARRAY_LENGTH/MAX_PENDING_PROMISES 硬护栏（ref codemode/src/interpreter/limits.ts:1-21）；port 改用 bun 真 JS 引擎后无对等上限，仅 opt-in ExecutionLimits + 传输截止（oc-core/src/tool/codemode.rs:37-60 已自认）。失控/恶意 CodeMode 程序可无限吃 guest 内存直至 supervisor 兜底。建议：guest 注入全局代理或 host.js 侧分配计数 |
-| RB-02 | root `--session` 无存在性探测 | CLI/TUI | 中 | ref handlers/default.ts:96-103 先 findSession 判断存在再决定续写 vs 预分配 newSessionID；port 的 CLI 层直接透传、oc-tui `apply_boot_route`（app.rs:6192-6195）直接 `select_tab(session_id)`。`opencode -s <不存在的ID>` 行为可能与 v2 不同（创建 vs 报错/空 tab），需实测定性后修 |
-| RB-03 | `pair --url` 校验缺失 | CLI | 中 | ref commands.ts:524-532 拒绝非 HTTP(S)、带凭据/query/hash 的 URL 并规范化尾斜杠；port 仅 `trim_end_matches('/')`（oc-cli/src/handlers/misc.rs:242-243），非法 URL 静默进入配对链接 |
+| ~~RB-01~~ | CodeMode 缺结构性资源上限 | AI+插件 | 中 | **已闭环（2026-10-25，lane rb-f1）**：host.js 边界层移植 ref 限额——`checkValueLimits` 递归巡检每次 host↔guest 穿越（工具入参 guest→host 准入期、工具结果 host→guest、程序返回值），MAX_STRING_LENGTH=1<<24 / MAX_ARRAY_LENGTH=10M，错误消息与 ref 逐字平价（`Invalid string length`/`Invalid array length`，RangeError）；MAX_PENDING_PROMISES=10k 在 hostRequest 并发计数（超限拒绝消息 = ref promises.ts:45-49 逐字）；测试 oc-plugin-host/tests/codemode_limits.rs（超长串/超长数组/边界放行/万级 promise 洪泛/正常用法不回归）；codemode.rs 与 host.js 的"引擎内生故不移植"陈旧注释改写；合并 73f2af8 |
+| ~~RB-02~~ | root `--session` 无存在性探测 | CLI/TUI | 中 | **已闭环（2026-10-25，lane rb-f2）**：ref 语义定性（default.ts:44-114）——不存在**不报错**，id 作为 newSessionID 传给首个 prompt 创建的会话（HOME boot）；port 平价：CLI 层 `boot_session_ids` 经 `client.session().get` 探测，存在→`BootArgs.session` 路由 tab，不存在→`BootArgs.new_session_id`（HttpPromptSink take-once，首个 home 提交的 POST /api/session body id），非 SessionNotFoundError 查询错 fatal；fake-HTTP-server 4 腿单测 + oc-tui 2 测；合并 47f66d5 |
+| ~~RB-03~~ | `pair --url` 校验缺失 | CLI | 中 | **已闭环（2026-10-25，lane rb-f2）**：`validate_pair_url()`（misc.rs）——仅 HTTP(S)、拒绝 username/password/query/fragment、href 规范化 + 尾斜杠剥离，错误消息 ref 逐字（"Expected an HTTP(S) server URL without credentials, query parameters, or a fragment"）；任何 service 工作前先校验；6 单测含非法 scheme/凭据/query/hash 各腿；合并 47f66d5 |
 | ~~RB-04~~ | PORT_REPORT "Last-Event-ID 重订阅为新增"表述失真 | Server | 低（文档） | **已闭环（2026-10-25，lane rb-docs）**：PORT_REPORT §3 措辞改为"客户端重连协议预留（服务器不回放，v2 与 port 一致 live-only；断线恢复靠 `/api/experimental/session/:id/log?after=` cursor）"。事实依据：oc-server 全目录不消费该 header（grep 仅 oc-client/src/event_ext.rs 发送、oc-tui/src/data.rs 本地 4096 环去重）；服务器（v2 与 port）均不回放——与 G-14 进展2 的页内实测一致 |
 | ~~RB-05~~ | 内部 operationId 系统性改名 | Server | 低 | **已闭环（2026-10-25，lane rb-docs，文档化登记）**：PORT_REPORT §3 新增条目 + tools/openapi-gen/README.md 新增 "Internal operationId divergence" 小节（routes.gen.rs 为纯生成文件带 DO-NOT-EDIT 标记，注释按约定落在生成器 README）。要点：port 路由 id 带 `experimental.*` 前缀、`session.message.get/list` vs ref `session.message/messages`、`debug.location.list` vs ref `debug.location` 等；线上契约与 served openapi 不受影响（文档为参照逐字节拷贝），但按 operationId 做钩子/统计/插件映射的生态工具两侧不可互换——应按 path+method 映射 |
 | ~~RB-06~~ | 语法 query vendored 版本漂移风险 | TUI | 低 | **已闭环（2026-10-25，lane rb-docs）**：`tools/syntax-query-drift.sh` 落地——对 crates/oc-syntax/queries/ 下每个 vendored .scm，按 pin（crates.io crate 版本 / third_party README 标签）拉上游 raw URL 逐字节 diff（剥离 vendoring 头注释），输出 PASS/DRIFT/SKIP 汇总，DRIFT 非零退出；SKIP=上游无钉版 URL（hcl/markdown 为 nvim master 刻意不钉、clojure 无 v0.1.0 git tag）。首跑全绿：PASS=39 DRIFT=0 SKIP=4。已挂 runtime-gates 周 cron 新增独立 job `syntax-query-drift`（真实门，不入 gates-summary 账本，避免瞬时网络抖动误伤总判定）；默认 PR CI 不依赖网络不受影响 |
-| RB-07 | 图像协议探测为 env 启发式 | TUI | 低 | oc-tui/src/image.rs:26-35 依赖 KITTY_WINDOW_ID/TERM 命名，无同步 DA1 查询；冷门 sixel 终端可能落到占位框。PNG→sixel 转码未实现（仅直通；模块注释称 v2 同样降级，未从上游源码逐行确认 resolveImageRenderProtocol） |
-| RB-08 | CodeMode 嵌套结果取值口径 | AI+插件 | 低 | port 取 content parts 拼接文本，ref 优先声明 output schema 的结构化值（tool/codemode.rs:31-33 登记）。带 schema 的 MCP 工具输出在 JS 侧拿到 string，依赖字段访问的程序行为不同 |
-| RB-09 | usage/stats/affinity/history 子域无行级语义 diff | Core | 低（验证盲区） | 这些 session 子域无 ref 同构文件、语义分散于 engine/database/bus；本轮仅核实到"关键词命中 + projector 重放对账"层面（§1.3 补充）。建议补 usage 计费扇出与 affinity 会话亲和的定向对账测试 |
-| RB-10 | 零散超集/理论性偏差 | CLI/AI | 信息 | `api --param` 可重复（ref 单次，超集向后兼容）；calculateCost tier 相同 size 时 ref 取稳定排序首个 vs port `max_by_key` 取最后（现实成本表无重复 size，理论性）；websearch provider 为硬编码注册表（ref 效果层动态装配，上游新增需手动同步）；uninstall 无"安装法探测"输出行（RA-02 已补升级侧） |
+| RB-07 | 图像协议探测为 env 启发式 | TUI | 低 | **登记为具名分歧（2026-10-25，维持不修）**：oc-tui/src/image.rs:31-38 依赖 KITTY_WINDOW_ID/TERM/TERM_PROGRAM 命名探测，因同步 DA1 往返需要 run loop 未持有的异步输入泵而未实现——冷门 sixel 终端可能落到占位框；PNG→sixel 转码未实现（仅原始 sixel 字节直通，image.rs:15-18）。接受为终端宿主下的合理代价（与 RA-05 OSC 通知路线同类裁定），解锁条件 = 渲染栈迁移引入异步输入泵（docs/FRAMEWORK-CONVERGENCE.md） |
+| ~~RB-08~~ | CodeMode 嵌套结果取值口径 | AI+插件 | 低 | **已闭环**：`nested_value`（codemode.rs:1133-1154）优先返回声明 output schema 的结构化值（edit/patch/shell/mcp_resource/websearch 五个 seam 已产出 output 字段），content-parts 拼接文本仅作回退；RB burn-down 补齐陈旧模块注释（:34-36 曾仍声称"仅拼接文本"）；合并 73f2af8 |
+| ~~RB-09~~ | usage/stats/affinity/history 子域无行级语义 diff | Core | 低（验证盲区） | **已闭环 usage+affinity 两子域（2026-10-25，lane rb-f3）**：tests_usage_affinity.rs 5 个确定性离线测试——计费扇出手算对表（计价 turn 0.0935 入消息树 + session_v2 计数器；跨 turn 累计 + tier 升档 1.0850125）、affinity 优先级（parent > fork > self）、e2e 亲和头粘性 + parent 重键失效（镜像 ref session-runner.test.ts:4707-4741）；stats/history 子域维持登记（ref 无同构文件，语义由 projector 重放对账覆盖）；合并 9bac00e |
+| ~~RB-10~~ | 零散超集/理论性偏差 | CLI/AI | 信息 | **已闭环（2026-10-25）**：calculateCost tie-break 改 first-wins（严格大于 fold 替代 `max_by_key` 末位，含重复 tier 单测；合并 9bac00e）；uninstall 补 "Installation method:" 探测行（复用 updater::detect_method，含 unknown 警告腿，ref uninstall.ts:31-52 平价；合并 47f66d5）；`api --param` 可重复维持超集登记（向后兼容）；websearch 硬编码注册表维持登记（上游新增需手动同步，效果层动态装配为远期对齐项） |
 
 > 总判定：五域 0 个 ❌ 级缺失，PORT_REPORT 无虚报完成项；新登记项以 RB-01~RB-03（中）为收口优先级。
+> **2026-10-25 RB 系列 burn-down（deepwork rb-burndown）**：RB-01～RB-10 全部处置完毕——RB-01/02/03/04/05/06/08/09/10 闭环（四 lane：rb-f1/f2/f3/docs，串行合并 2b8c8a7→47f66d5），RB-07 登记为具名分歧（env 启发式图像探测，解锁条件=渲染栈异步输入泵）；oracle gate 结论见 .slim/deepwork/rb-burndown/oracle-gate.md。收尾配套：.cargo/config.toml 仓库级 incremental=false 固化（坑 2.1#6 建议落为制度，bdef59d）。
 
 ---
 
@@ -173,5 +174,5 @@
 | 写隔离 | 每 lane 独立 worktree；串行合并；删除清单核对 | 写隔离制度（2026-10-11） |
 | 合并 | 受影响 crate 构建+测试后推送；落地证明（git log -1） | 合并门（2026-10-18） |
 | oracle | 版本断言+指纹+always-refresh | `tools/diff`（opentui-rust） |
-| 磁盘 | 增量抑制（CARGO_INCREMENTAL=0）/周期 clean；清理门 mtime≥30 分钟视为在用 | 本册 2.1#6 |
+| 磁盘 | 增量抑制（仓库级 .cargo/config.toml incremental=false，2026-10-25 起强制）/周期 clean；清理门 mtime≥30 分钟视为在用 | 本册 2.1#6 |
 | 验证 | 交互面必须 PTY/field 级；组合模型必须源码级对比；金帧=回归套件 | 方法论登记（ROADMAP §4） |
