@@ -450,34 +450,11 @@ fn parse_theme_source(source: &str, name: &str) -> Result<ThemeDocument, String>
 /// Discover custom themes (`theme/discovery.ts discoverThemes`): every
 /// `<directory>/themes/*.json` (files + symlinks, sorted by path)
 /// across the given directories; later directories override earlier
-/// ones with the same name (the caller inserts in order). Unreadable
-/// files are logged + skipped.
+/// ones with the same name. Pure scan lives in oc-theme
+/// (`oc_theme::discover_themes`).
 #[must_use]
 pub fn discover_custom_themes(directories: &[PathBuf]) -> Vec<(String, String)> {
-    let mut found: Vec<(String, String)> = Vec::new();
-    for directory in directories {
-        let theme_dir = directory.join("themes");
-        let Ok(entries) = std::fs::read_dir(&theme_dir) else { continue };
-        let mut files: Vec<PathBuf> = entries
-            .filter_map(Result::ok)
-            .filter(|entry| {
-                entry.file_type().is_ok_and(|kind| kind.is_file() || kind.is_symlink())
-                    && entry.path().extension().is_some_and(|ext| ext == "json")
-            })
-            .map(|entry| entry.path())
-            .collect();
-        files.sort();
-        for file in files {
-            let Some(name) = file.file_stem().and_then(|stem| stem.to_str()) else { continue };
-            match std::fs::read_to_string(&file) {
-                Ok(source) => found.push((name.to_owned(), source)),
-                Err(error) => {
-                    crate::keymap::log_skip(&format!("theme {name}: unreadable ({error})"));
-                }
-            }
-        }
-    }
-    found
+    oc_theme::discover_themes(directories)
 }
 
 /// Register every discovered custom theme into the registry (invalid
@@ -495,32 +472,20 @@ pub fn register_custom_themes(registry: &mut ThemeRegistry, discovered: &[(Strin
 /// The TUI config directories for theme discovery
 /// (`util/config-directories.ts configDirectories`): the config root,
 /// then a `.opencode` dir in every cwd ancestor (root → leaf; later
-/// directories win).
+/// directories win). Lives in oc-theme (`oc_theme::config_directories`).
 #[must_use]
 pub fn config_directories(config_root: &Path, cwd: &Path) -> Vec<PathBuf> {
-    let mut directories = vec![config_root.to_path_buf()];
-    let cwd = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
-    let mut ancestors: Vec<PathBuf> = cwd.ancestors().map(Path::to_path_buf).collect();
-    ancestors.reverse(); // root first
-    for ancestor in ancestors {
-        directories.push(ancestor.join(".opencode"));
-    }
-    directories
+    oc_theme::config_directories(config_root, cwd)
 }
 
 // -- system mode (theme/system.ts terminalMode) -------------------------------
 
 /// System dark/light detection from a terminal background color: the
-/// reference's `terminalMode` luma rule
-/// (`0.299r + 0.587g + 0.114b > 0.5` on 0-1 components → light).
+/// reference's `terminalMode` luma rule. Pure classification lives in
+/// oc-theme (`oc_theme::mode_for_background`).
 #[must_use]
 pub fn mode_for_background(r: u8, g: u8, b: u8) -> Mode {
-    let luma = 0.299 * f64::from(r) + 0.587 * f64::from(g) + 0.114 * f64::from(b);
-    if luma > 127.5 {
-        Mode::Light
-    } else {
-        Mode::Dark
-    }
+    oc_theme::mode_for_background(r, g, b)
 }
 
 /// Detect the system mode: query the terminal background (OSC 11) with
