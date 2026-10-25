@@ -369,6 +369,8 @@ pub struct Engine {
     assembly_locks: Arc<DashMap<LocationRef, Arc<tokio::sync::Mutex<()>>>>,
     generation: Arc<AtomicU64>,
     sweeper: Option<tokio::task::JoinHandle<()>>,
+    /// RA-04 retention sweeps (tool-output + shell); aborted in `shutdown`.
+    cleanup_tasks: Vec<tokio::task::JoinHandle<()>>,
     /// The Code Mode interpreter seam (drives the per-location `execute`
     /// registration in `assemble`); `None` keeps the flat tool surface.
     code_mode_runtime: Option<Arc<dyn crate::tool::codemode::CodeModeRuntime>>,
@@ -452,11 +454,12 @@ impl Engine {
         let tool_output = Arc::new(ToolOutput::new(&options.data_root, options.clock.clone()));
         // RA-04 (tool-output.ts:129-144 / shell.ts:104-109): the two
         // hourly retention sweeps — spilled tool output and shell capture
-        // files — run for the process lifetime once the engine owns the
-        // data root (v2 scopes them to the server layer; the engine boot
-        // is the Rust equivalent lifecycle point).
-        tokio::spawn(crate::tool_output::spawn_cleanup_task(Arc::clone(&tool_output)));
-        crate::shell::spawn_cleanup_task(options.data_root.clone(), Arc::clone(&options.clock));
+        // files — run for the engine lifetime. Handles are retained and
+        // aborted in `shutdown` (v2 scopes these fibers to the layer).
+        let tool_output_cleanup =
+            crate::tool_output::spawn_cleanup_task(Arc::clone(&tool_output));
+        let shell_cleanup =
+            crate::shell::spawn_cleanup_task(options.data_root.clone(), Arc::clone(&options.clock));
         let projects = Arc::new(crate::project::SqliteProjectStore::new((*db).clone()));
         let llm: Arc<dyn LlmClient> =
             options.llm.clone().unwrap_or_else(|| Arc::new(RouteLlmClient));
@@ -601,6 +604,7 @@ impl Engine {
                     Arc::clone(&locations.globals().activity),
                 )
             }),
+            cleanup_tasks: vec![tool_output_cleanup, shell_cleanup],
             code_mode_runtime: options.code_mode_runtime.clone(),
             code_mode_timeout: options.code_mode_timeout,
             plugin_source: options.plugin_source.clone(),
@@ -729,6 +733,9 @@ impl Engine {
         }
         if let Some(sweeper) = &self.sweeper {
             sweeper.abort();
+        }
+        for task in &self.cleanup_tasks {
+            task.abort();
         }
     }
 

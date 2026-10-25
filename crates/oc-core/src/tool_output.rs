@@ -300,7 +300,7 @@ impl ToolOutput {
 }
 
 /// Spawns the hourly retention cleanup task (`cleanupLayer` — a scoped fiber
-/// in v2; a detached tokio task here, cancelled by dropping the join handle).
+/// in v2; a tokio task whose handle the caller retains and aborts at shutdown).
 pub fn spawn_cleanup_task(service: Arc<ToolOutput>) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(3_600));

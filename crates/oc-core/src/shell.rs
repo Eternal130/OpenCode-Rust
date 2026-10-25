@@ -70,8 +70,8 @@ pub fn cleanup_data_root(data_root: &std::path::Path, now_ms: u64) {
 }
 
 /// Spawns the hourly shell-capture retention sweep (shell.ts:104-109 — a
-/// scoped fiber in v2; a detached tokio task here, cancelled by dropping
-/// the join handle). The first tick runs immediately, so boot performs one
+/// scoped fiber in v2; a tokio task whose handle the caller retains and
+/// aborts at shutdown). The first tick runs immediately, so boot performs one
 /// sweep before settling into the hourly cadence.
 pub fn spawn_cleanup_task(
     data_root: PathBuf,
