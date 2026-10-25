@@ -10,9 +10,16 @@
 //!   migration to v2 documents.
 //! * [`syntax`] — `generateSyntax` highlighting rules.
 //! * [`builtins`] — the 34 embedded theme assets.
+//! * [`discovery`] — custom theme discovery (`discovery.ts` +
+//!   `config-directories.ts`): `<dir>/themes/*.json` scans across config
+//!   directories, later directories overriding earlier names.
+//! * [`system`] — system dark/light detection (`system.ts terminalMode`):
+//!   the background-luma classification rule; the OSC 11 probe itself
+//!   lives in oc-tui with the renderer/tty (see [`system`] docs).
 //!
-//! Theme discovery and system-theme detection are intentionally not ported
-//! (they need terminal I/O and live in oc-tui).
+//! The theme registry that merges builtins with discovered custom themes
+//! (`theme/index.ts listThemes`, precedence defaults < custom < system)
+//! lives in oc-tui where the resolved themes are consumed.
 
 // The color math is a line-by-line port of the TypeScript pipeline; numeric
 // casts mirror the reference arithmetic exactly and are safe by construction.
@@ -30,21 +37,25 @@
 
 pub mod builtins;
 pub mod color;
+pub mod discovery;
 pub mod expand;
 pub mod resolve;
 pub mod schema;
 pub mod syntax;
+pub mod system;
 pub mod types;
 pub mod v1;
 pub mod v1_migrate;
 
 pub use color::{ints_to_oklch, oklch_to_hex, rgb_to_oklch, Oklch, Rgba};
+pub use discovery::{config_directories, discover_themes, DiscoveredTheme};
 pub use expand::{expand_theme, expand_tokens, merge_theme};
 pub use resolve::{
     parse_theme_document, resolve_theme, resolve_theme_document, select_theme_mode, ThemeDocument,
 };
 pub use schema::ThemeError;
 pub use syntax::{convert_theme_to_styles, generate_syntax, SyntaxRule, SyntaxStyleDef};
+pub use system::mode_for_background;
 pub use types::{
     ActionStates, ActionVariant, FeedbackKind, HueMap, HueScale, Mode, ResolvedTheme,
     ResolvedThemeTokens, SemanticHue, StatefulColor, SurfaceName,
