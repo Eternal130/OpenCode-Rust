@@ -472,7 +472,10 @@ fn validate_pair_url(raw: &str) -> Result<String, &'static str> {
     let url = reqwest::Url::parse(raw).map_err(|_| MESSAGE)?;
     if !matches!(url.scheme(), "http" | "https")
         || !url.username().is_empty()
-        || url.password().is_some()
+        // ref checks `url.password` truthiness (commands.ts) — an EMPTY
+        // password (`http://:@host`) is falsy there and passes; mirror
+        // that instead of rejecting any Some("") (oracle gate nit).
+        || url.password().is_some_and(|p| !p.is_empty())
         || url.query().is_some()
         || url.fragment().is_some()
     {
@@ -519,6 +522,12 @@ mod tests {
             "Expected an HTTP(S) server URL without credentials, query parameters, or a fragment",
         );
         assert_eq!(validate_pair_url("http://user:pass@example.com"), err);
+        // Empty-credential URL passes (ref falsy-password parity); the
+        // href normalization drops the empty `:@` (WHATWG serialization).
+        assert_eq!(
+            validate_pair_url("http://:@example.com").as_deref(),
+            Ok("http://example.com"),
+        );
         assert_eq!(validate_pair_url("http://example.com/?q=1"), err);
         assert_eq!(validate_pair_url("http://example.com/#frag"), err);
         assert_eq!(validate_pair_url("not a url"), err);

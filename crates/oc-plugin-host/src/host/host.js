@@ -1624,17 +1624,19 @@ async function handleCodemodeEvaluate({ code, tools, token, limits }) {
   } catch (error) {
     return { ok: false, error: errText(error), calls };
   }
-  // The boundary walk's depth guard (data.ts:53) and the structural
-  // caps (interpreter/limits.ts:15-21) on the result crossing
-  // guest→host.
+  // The boundary walk's depth guard (data.ts:53) FIRST — a cyclic value
+  // (a.self = a) would otherwise infinite-loop the structural walk
+  // below; depth is cycle-safe and bounds the walk to <= 32 levels
+  // (oracle gate followup F1). Then the structural caps
+  // (interpreter/limits.ts:15-21) on the result crossing guest→host.
   if (value !== undefined) {
+    if (valueDepthExceeded(value)) {
+      return { ok: false, error: `Value exceeds the maximum depth of ${MAX_VALUE_DEPTH}.`, calls };
+    }
     try {
       checkValueLimits(value);
     } catch (error) {
       return { ok: false, error: errText(error), calls };
-    }
-    if (valueDepthExceeded(value)) {
-      return { ok: false, error: `Value exceeds the maximum depth of ${MAX_VALUE_DEPTH}.`, calls };
     }
   }
   // `undefined` (no explicit return) is OMITTED so the host formats
