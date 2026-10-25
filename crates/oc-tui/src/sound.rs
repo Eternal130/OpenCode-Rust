@@ -1,10 +1,12 @@
 //! Attention sound playback — the port of v2's audio channel
 //! (`packages/tui/src/audio.ts` + `attention.ts`'s `playSound`).
 //!
-//! v2 decodes + plays the built-in MP3 pack in-process through opentui's
-//! native miniaudio `Audio` API. On Linux this port now does the same
-//! ([`inproc`] over the vendored miniaudio — the same engine, decode
-//! path, and silent-no-op-when-no-device semantics); on other targets
+//! v2 decodes + plays the built-in MP3 pack in-process through
+//! opentui's `Audio` API (`opentui_core::audio`, the `device-audio`
+//! feature's real miniaudio playback device — the same engine
+//! upstream). On Linux this port does the same ([`audio`] over the
+//! opentui engine: the same decode path, volume model, and
+//! silent-no-op-when-no-device semantics); on other targets
 //! the historical mirror shells out to the first available system
 //! player, detached (`spawn`, stdio null):
 //!
@@ -27,9 +29,11 @@
 //! assert the exact argv without executing anything; the in-process
 //! half is exercised end-to-end (decoding needs no device).
 
-/// In-process miniaudio playback (Linux only — v2 parity).
+/// In-process playback over `opentui_core::audio` (Linux only — v2
+/// parity; the former vendored-miniaudio twin was deleted in the
+/// SOUND-CONV convergence lane).
 #[cfg(target_os = "linux")]
-pub mod inproc;
+pub mod audio;
 
 use std::ffi::OsString;
 use std::io;
@@ -41,10 +45,10 @@ use std::sync::OnceLock;
 use crate::attention::{AttentionEmitter, AttentionSoundName, SoundCandidate};
 
 /// The production sound half of the attention emitter: in-process
-/// miniaudio playback on Linux (v2 parity), the system-player spawn
-/// mirror elsewhere.
+/// playback through `opentui_core::audio` on Linux (v2 parity), the
+/// system-player spawn mirror elsewhere.
 #[cfg(target_os = "linux")]
-pub type SoundHalf = inproc::InprocSoundPlayer;
+pub type SoundHalf = audio::OpentuiSoundPlayer;
 
 /// The production sound half of the attention emitter outside Linux: the
 /// system-player spawn mirror.
