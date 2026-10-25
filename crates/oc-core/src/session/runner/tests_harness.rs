@@ -192,6 +192,15 @@ pub(crate) async fn harness() -> Harness {
 }
 
 pub(crate) async fn harness_with(llm: oc_ai::testing::TestLlm) -> Harness {
+    harness_with_model(llm, test_resolved_model()).await
+}
+
+/// Harness variant with an injected resolved model (e.g. priced models
+/// for usage-billing tests).
+pub(crate) async fn harness_with_model(
+    llm: oc_ai::testing::TestLlm,
+    resolved_model: ResolvedModel,
+) -> Harness {
     let dir = tempfile::Builder::new()
         .prefix("oc-core-runner-")
         .tempdir_in("/tmp/opencode")
@@ -225,7 +234,7 @@ pub(crate) async fn harness_with(llm: oc_ai::testing::TestLlm) -> Harness {
 
     let hooks = Arc::new(HookRegistry::new());
     let llm = Arc::new(TestLlmClient(llm));
-    let resolver = Arc::new(FixedResolver { resolved: test_resolved_model() });
+    let resolver = Arc::new(FixedResolver { resolved: resolved_model });
     let ids = Arc::new(SequentialIdGen::new());
 
     let directory = path.to_string_lossy().into_owned();
