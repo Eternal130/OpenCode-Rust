@@ -43,3 +43,19 @@ Run through this list in order when copying a new reference
 CI (RA-08): the `guards` job runs `cargo run -p openapi-gen --locked --
 --check` after the static guards — an updated spec without regeneration
 fails the build.
+
+## Internal operationId divergence vs the reference (RB-05)
+
+The served OpenAPI document is a byte-for-byte copy of the reference
+export, so the wire contract (paths, methods, schemas) is unaffected.
+The **internal route ids** emitted into `crates/oc-server/src/routes.gen.rs`,
+however, diverge systematically from the reference's internal handler
+names: an `experimental.*` prefix family (`experimental.config.update`,
+`experimental.fs.write`, `experimental.generate.text`, `experimental.mcp.*`,
+`experimental.integration.wellknown.add`, …), `session.message.get`/`
+`session.message.list` vs ref `session.message`/`session.messages`, and
+`debug.location.list` vs ref `debug.location`.
+
+Consequence: ecosystem tooling that keys on operationId (hooks,
+dashboards, plugin route mapping) is **not interchangeable** between the
+reference and this port — map by path+method, not by operationId.

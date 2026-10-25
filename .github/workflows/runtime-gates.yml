@@ -14,6 +14,7 @@
 #   build-archive ──> soak-30m           (opt-in, default OFF)
 #   build-archive ──> release-smoke      (opt-in, default OFF)
 #   build-archive ──> browser-e2e        (G-14 six-scenario browser smoke, default ON)
+#   syntax-query-drift                   (RB-06 vendored .scm vs upstream pins; standalone, schedule/dispatch only)
 #   platform-build                       (macos-latest, compiles from source)
 #   gates-summary                        (EXECUTED vs SKIPPED ledger; skip ≠ pass)
 #
@@ -1403,3 +1404,20 @@ jobs:
             echo "::error::at least one requested gate did not run green — see the table above"
             exit 1
           fi
+
+  # RB-06 vendored syntax-query drift audit: fetches each upstream query at
+  # its pinned tag and diffs against crates/oc-syntax/queries/. Standalone on
+  # purpose — no build-archive dependency (pure bash+curl) and intentionally
+  # NOT in the gates-summary ledger: it is a documentation-grade early
+  # warning, and adding it to `needs` there could turn the summary red on a
+  # transient raw.githubusercontent hiccup. The job itself is a real gate
+  # (continue-on-error is NOT set): drift means the pin provenance is stale.
+  syntax-query-drift:
+    name: syntax query drift (RB-06 vendored .scm audit)
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: vendored .scm vs upstream pins
+        run: tools/syntax-query-drift.sh
