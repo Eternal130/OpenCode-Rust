@@ -102,24 +102,27 @@ fn pty_four_commands_open_real_surfaces() {
     driver.write(b"\x1b");
     std::thread::sleep(Duration::from_millis(200));
 
-    // /pair — loading then the links.
+    // /pair — loading then the links. The harness is 100 columns —
+    // PAST the ≥96 horizontal-split gate (dialog-pair.tsx:39), so the
+    // text column is a FIXED 29 cells (:45): the 65-char intro wraps
+    // across rows and the link CLIPS at 29 — exactly the ref's split.
     slash(&mut driver, "pair");
     assert!(
         driver.wait_for(b"Loading server information", Duration::from_secs(3)),
         "the loading row"
     );
     assert!(
-        wait_row(&driver, "expire in 10 minutes", Duration::from_secs(3)).is_some(),
-        "the expiry copy"
+        wait_row(&driver, "expire in 10", Duration::from_secs(3)).is_some(),
+        "the expiry copy wraps inside the 29-cell column (never one row past the split gate)"
+    );
+    assert!(wait_row(&driver, "minutes.", Duration::from_secs(2)).is_some(), "the intro's tail row");
+    assert!(
+        wait_row(&driver, "http://localhost:4096", Duration::from_secs(3)).is_some(),
+        "the localhost link's 29-cell prefix"
     );
     assert!(
-        wait_row(
-            &driver,
-            "http://localhost:4096/auth/connect/pair-code-123",
-            Duration::from_secs(3)
-        )
-        .is_some(),
-        "the localhost link"
+        find_row(&driver, "http://localhost:4096/auth/connect/pair-code-123").is_none(),
+        "the full-width link CANNOT render in the split's 29-cell column"
     );
     driver.write(b"\x1b");
     std::thread::sleep(Duration::from_millis(200));
