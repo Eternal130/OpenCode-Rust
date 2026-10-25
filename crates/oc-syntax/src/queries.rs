@@ -25,7 +25,7 @@
 //!
 //! ## RA-07 — the 17-language gap close
 //!
-//! 14 default-on additions (bash, julia, elixir, xml, agda, r, hcl,
+//! 14 mainstream adds (bash, julia, elixir, xml, agda, r, hcl,
 //! haskell, ocaml, fsharp, clojure, nix, markdown, vue) with queries
 //! vendored at each grammar's exact pin (the repo's own query wherever
 //! one exists; hcl v1.1.0 ships none, so the nvim-treesitter query —
@@ -36,8 +36,13 @@
 //! ref, which uses opentui's built-in with code-fence language
 //! injections; this port has no injection support, so fenced code
 //! inside markdown blocks renders with the markdown query only (inner
-//! languages stay plain). Three more (swift, csharp, kotlin) ride
-//! behind non-default cargo features.
+//! languages stay plain). SIZE RULING: the default-on measurement came
+//! out at 128,169,600 B (122.3 MiB) vs the 82,507,456 B default
+//! baseline — +43.7 MiB, far past the 67.6 MiB ceiling — so all 17
+//! additions ship behind non-default cargo features: the 14 mainstream
+//! ones under `langs-extra`, swift/csharp/kotlin (the R-01b size
+//! drops) under `lang-swift`/`lang-csharp`/`lang-kotlin`, everything
+//! under the `all-languages` meta-feature.
 
 use std::sync::{Arc, OnceLock};
 
@@ -129,47 +134,60 @@ mod scm {
     pub const MAKE_HIGHLIGHTS: &str = include_str!("../queries/make-highlights.scm");
     /// `tree-sitter-bash` v0.25.0 `queries/highlights.scm` (RA-07; the
     /// exact v2 wasm pin, parsers-config.ts:72-79).
+    #[cfg(feature = "langs-extra")]
     pub const BASH_HIGHLIGHTS: &str = include_str!("../queries/bash-highlights.scm");
     /// `tree-sitter-julia` v0.23.1 `queries/highlights.scm` (RA-07;
     /// exact v2 pin, parsers-config.ts:225-232).
+    #[cfg(feature = "langs-extra")]
     pub const JULIA_HIGHLIGHTS: &str = include_str!("../queries/julia-highlights.scm");
     /// `tree-sitter-elixir` v0.3.5 `queries/highlights.scm` (RA-07;
     /// exact v2 pin, parsers-config.ts:310-320).
+    #[cfg(feature = "langs-extra")]
     pub const ELIXIR_HIGHLIGHTS: &str = include_str!("../queries/elixir-highlights.scm");
     /// `tree-sitter-xml` (tree-sitter-grammars) v0.7.0
     /// `queries/xml/highlights.scm` (RA-07; exact v2 pin,
     /// parsers-config.ts:365-375).
+    #[cfg(feature = "langs-extra")]
     pub const XML_HIGHLIGHTS: &str = include_str!("../queries/xml-highlights.scm");
     /// `tree-sitter-agda` v1.3.3 `queries/highlights.scm` (RA-07;
     /// exact v2 pin, parsers-config.ts:377-384).
+    #[cfg(feature = "langs-extra")]
     pub const AGDA_HIGHLIGHTS: &str = include_str!("../queries/agda-highlights.scm");
     /// `tree-sitter-r` v1.2.0 `queries/highlights.scm` (RA-07; the
     /// exact v2 wasm pin, parsers-config.ts:331-341).
+    #[cfg(feature = "langs-extra")]
     pub const R_HIGHLIGHTS: &str = include_str!("../queries/r-highlights.scm");
     /// `tree-sitter-r` v1.2.0 `queries/locals.scm` (same tag).
+    #[cfg(feature = "langs-extra")]
     pub const R_LOCALS: &str = include_str!("../queries/r-locals.scm");
     /// nvim-treesitter master `queries/hcl/highlights.scm` (RA-07) —
     /// hcl v1.1.0 (the crate closest to the ref's v1.2.0 wasm) ships
     /// no queries in its repo, and the ref itself routes nvim here
     /// (parsers-config.ts:180-187).
+    #[cfg(feature = "langs-extra")]
     pub const HCL_HIGHLIGHTS: &str = include_str!("../queries/hcl-highlights.scm");
     /// `tree-sitter-haskell` v0.23.1 `queries/highlights.scm` (RA-07;
     /// exact v2 pin, parsers-config.ts:207-214).
+    #[cfg(feature = "langs-extra")]
     pub const HASKELL_HIGHLIGHTS: &str = include_str!("../queries/haskell-highlights.scm");
     /// `tree-sitter-ocaml` v0.24.2 `queries/ocaml/highlights.scm`
     /// (RA-07; exact v2 pin, parsers-config.ts:244-252).
+    #[cfg(feature = "langs-extra")]
     pub const OCAML_HIGHLIGHTS: &str = include_str!("../queries/ocaml-highlights.scm");
     /// `tree-sitter-fsharp` v0.3.0 `queries/highlights.scm` (RA-07;
     /// exact v2 pin, parsers-config.ts:322-330).
+    #[cfg(feature = "langs-extra")]
     pub const FSHARP_HIGHLIGHTS: &str = include_str!("../queries/fsharp-highlights.scm");
     /// `tree-sitter-clojure` v0.1.0 `grammar-src/queries/highlights.scm`
     /// (RA-07) — the query shipped inside the published crate itself
     /// (the crates.io grammar-src submodule carries it; the ref routes
     /// the equivalent nvim query, parsers-config.ts:253-261).
+    #[cfg(feature = "langs-extra")]
     pub const CLOJURE_HIGHLIGHTS: &str = include_str!("../queries/clojure-highlights.scm");
     /// `tree-sitter-nix` (nix-community) v0.3.0
     /// `queries/highlights.scm` (RA-07; same lineage as the v2 wasm,
     /// parsers-config.ts:286-299).
+    #[cfg(feature = "langs-extra")]
     pub const NIX_HIGHLIGHTS: &str = include_str!("../queries/nix-highlights.scm");
     /// `tree-sitter-md` v0.5.4 (MDeiml/tree-sitter-markdown) block
     /// grammar `queries/highlights.scm` (RA-07). DEGRADED vs the ref:
@@ -178,23 +196,21 @@ mod scm {
     /// inside markdown renders with the markdown query only (inner
     /// languages stay plain) — injections.scm is deliberately NOT
     /// vendored.
+    #[cfg(feature = "langs-extra")]
     pub const MARKDOWN_HIGHLIGHTS: &str = include_str!("../queries/markdown-highlights.scm");
     /// `tree-sitter-md` v0.5.4 inline grammar
     /// `queries/highlights.scm` (the split parser's inline half,
     /// registered on its own `markdown-inline` filetype).
+    #[cfg(feature = "langs-extra")]
     pub const MARKDOWN_INLINE_HIGHLIGHTS: &str =
         include_str!("../queries/markdown-inline-highlights.scm");
-    /// anomalyco/tree-sitter-vue v0.1.2 `queries/html_tags/highlights.scm`
-    /// (RA-07; the first half of the ref's composed vue query,
-    /// parsers-config.ts:170-178 — the fork never published to
-    /// crates.io, so the grammar is vendored under third_party/).
-    pub const VUE_HTML_TAGS_HIGHLIGHTS: &str =
-        include_str!("../queries/vue-html-tags-highlights.scm");
-    /// anomalyco/tree-sitter-vue v0.1.2 `queries/vue/highlights.scm` —
-    /// the second half of the composed query (its `; inherits:
-    /// html_tags` dependency is satisfied by the file above, prefixed
-    /// per the ref's concat order).
-    pub const VUE_HIGHLIGHTS: &str = include_str!("../queries/vue-highlights.scm");
+    // The vue query (anomalyco fork v0.1.2, the ref's composed
+    // html_tags + vue pair, parsers-config.ts:170-178 — the fork never
+    // published to crates.io, so the grammar is vendored under
+    // third_party/) has no standalone consts: its two halves are
+    // composed with `concat!` over `include_str!` literals directly in
+    // the registry entry (concat! only takes literals — the same
+    // pattern as the typescript query above).
     /// `tree-sitter-swift` (alex-pinkus lineage) v0.7.1
     /// `queries/highlights.scm` — the exact v2 pin
     /// (parsers-config.ts:263-275); behind the `lang-swift` feature.
@@ -233,16 +249,18 @@ pub struct GrammarEntry {
 /// The static registry — the R-01 spike's 3 languages, the R-01b
 /// catalog extension (13 more grammars — javascript rides the
 /// already-vendored typescript query), the G-08 tail (lua, vim,
-/// scala, make), and the RA-07 gap close (14 default-on adds +
-/// swift/csharp/kotlin behind their `lang-*` features — all 37 ref
-/// languages register with every feature enabled). Built once into a
+/// scala, make), and the RA-07 gap close (15
+/// registrations behind `langs-extra` + swift/csharp/kotlin behind
+/// their `lang-*` features — all 37 ref languages register with
+/// `all-languages` enabled). Built once into a
 /// leaked Vec so cargo-feature-gated entries can join the table.
 #[rustfmt::skip] // one flat table: filetype, aliases, grammar, queries — scannable
-#[allow(clippy::too_many_lines)] // a 35-entry data table, not logic
+#[allow(clippy::too_many_lines)] // a 20+15-entry data table, not logic
 pub fn registry() -> &'static [GrammarEntry] {
     static REGISTRY: OnceLock<Vec<GrammarEntry>> = OnceLock::new();
     REGISTRY
         .get_or_init(|| {
+            #[allow(unused_mut)] // only the feature-gated pushes below need mut
             let mut entries = vec![
         GrammarEntry {
             filetype: "rust",
@@ -385,7 +403,13 @@ pub fn registry() -> &'static [GrammarEntry] {
             highlight_query: scm::MAKE_HIGHLIGHTS,
             locals_query: None,
         },
-        // -- RA-07: the language-gap close ----------------------------
+            ];
+            // -- RA-07: the 14 mainstream adds (15 registrations) —
+            // behind `langs-extra` after the size ruling (see the
+            // oc-syntax Cargo.toml note: 122.3 MiB default-on vs the
+            // 67.6 MiB ceiling).
+            #[cfg(feature = "langs-extra")]
+            entries.extend([
         GrammarEntry {
             filetype: "bash",
             aliases: &["sh", "shell", "zsh"],
@@ -506,7 +530,7 @@ pub fn registry() -> &'static [GrammarEntry] {
             ),
             locals_query: None,
         },
-            ];
+            ]);
             // -- RA-07 feature-gated re-adds (R-01b size drops) -------
             #[cfg(feature = "lang-swift")]
             entries.push(GrammarEntry {
@@ -622,16 +646,29 @@ mod tests {
     /// R-01b: auto-covers every catalog addition.
     #[test]
     fn every_registry_query_constructs() {
-        // 20 core filetypes + the 15 default-on RA-07 registrations
-        // (14 ref languages + the markdown split's inline half on its
-        // own label); the three R-01b size drops (swift/c-sharp/
-        // kotlin) re-add only behind their cargo features — all 37 ref
-        // languages + markdown-inline with every feature enabled (see
-        // ROADMAP R-01b + the RA-07 report).
-        #[cfg(not(any(feature = "lang-swift", feature = "lang-csharp", feature = "lang-kotlin")))]
-        assert_eq!(registry().len(), 35, "20 core + 15 RA-07 registrations (swift/c-sharp/kotlin behind lang-* features; see ROADMAP R-01b)");
-        #[cfg(all(feature = "lang-swift", feature = "lang-csharp", feature = "lang-kotlin"))]
-        assert_eq!(registry().len(), 38, "all 37 ref languages + markdown-inline with every lang-* feature enabled");
+        // 20 core filetypes by default; every RA-07 add is
+        // feature-gated after the size ruling (122.3 MiB default-on
+        // vs the 67.6 MiB ceiling): +15 behind `langs-extra`, +3
+        // behind lang-swift/lang-csharp/lang-kotlin — all 37 ref
+        // languages + markdown-inline with `all-languages` enabled.
+        #[cfg(not(feature = "langs-extra"))]
+        assert_eq!(registry().len(), 20, "default = 20 core filetypes; RA-07 adds sit behind langs-extra/lang-* features (size ruling, see Cargo.toml)");
+        #[cfg(all(
+            feature = "langs-extra",
+            not(any(feature = "lang-swift", feature = "lang-csharp", feature = "lang-kotlin"))
+        ))]
+        assert_eq!(registry().len(), 35, "20 core + 15 langs-extra registrations");
+        #[cfg(all(
+            feature = "langs-extra",
+            feature = "lang-swift",
+            feature = "lang-csharp",
+            feature = "lang-kotlin"
+        ))]
+        assert_eq!(
+            registry().len(),
+            38,
+            "all 37 ref languages + markdown-inline with all-languages enabled"
+        );
         for entry in registry() {
             let language = tree_sitter::Language::new(entry.language);
             let highlight = Query::new(&language, entry.highlight_query)
