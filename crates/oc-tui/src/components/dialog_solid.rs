@@ -1649,6 +1649,7 @@ fn pair_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilder 
                     let text = match row {
                         crate::components::dialog_pair::PairRow::Gap => String::new(),
                         crate::components::dialog_pair::PairRow::Text { text, .. } => text.clone(),
+                        crate::components::dialog_pair::PairRow::Qr { text } => text.clone(),
                     };
                     ForItem { key: format!("P{n}"), value: PropValue::Str(text) }
                 })
@@ -1674,6 +1675,12 @@ fn pair_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilder 
                             }
                         };
                         styled(vec![chunk(text.clone(), fg, None, bold)])
+                    }
+                    // The QR rows paint `theme.text.base` (ref
+                    // dialog-pair.tsx:82 — the `<text fg={theme.text.base}>`
+                    // wrapping renderUnicodeCompact).
+                    Some(crate::components::dialog_pair::PairRow::Qr { text }) => {
+                        styled(vec![chunk(text.clone(), i.colors.text, None, 0)])
                     }
                     None => styled(Vec::new()),
                 })),
