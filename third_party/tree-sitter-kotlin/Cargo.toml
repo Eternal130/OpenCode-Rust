@@ -1,0 +1,22 @@
+# Vendored grammar crate (RA-07, behind the `lang-kotlin` cargo feature) —
+# see README.md for provenance. The ref pins the 0.3.8 wasm
+# (parsers-config.ts:105-110); the crates.io `tree-sitter-kotlin` 0.3.8
+# release still binds old-style tree-sitter (a `language()` fn returning
+# `tree_sitter::Language`), so the pin is vendored as a path crate with
+# standard tree-sitter-language 0.1 bindings.
+[package]
+name = "tree-sitter-kotlin"
+description = "kotlin grammar for tree-sitter (vendored at tag 0.3.8)"
+version = "0.3.8"
+edition = "2021"
+license = "MIT"
+links = "tree_sitter_kotlin"
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+tree-sitter-language = "0.1"
+
+[build-dependencies]
+cc = "1.1"

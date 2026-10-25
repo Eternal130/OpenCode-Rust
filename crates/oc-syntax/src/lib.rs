@@ -29,6 +29,20 @@
 //! size (ROADMAP R-01b); the registry design carries the alias
 //! convention (`udiff`/`patch` for diff, `makefile`/`gnumake` for
 //! make, `vi` for vim).
+//!
+//! RA-07 closed the remaining language gaps — 14 mainstream filetypes
+//! (bash, julia, elixir, xml, agda, r, hcl, haskell, ocaml, fsharp,
+//! clojure, nix, markdown+markdown-inline, vue — 15 more registry
+//! entries under the non-default `langs-extra` feature after the size
+//! ruling: default-on measured 122.3 MiB vs the 82.5 MiB default
+//! baseline, far past the 67.6 MiB ceiling, so the default release
+//! binary is unchanged), plus the three R-01b size drops
+//! (csharp/kotlin/swift) re-added behind the non-default
+//! `lang-csharp`/`lang-kotlin`/`lang-swift` cargo features. vue and
+//! kotlin ship as vendored path crates under `third_party/` (their
+//! pins never published usable crates.io bindings). markdown is
+//! DEGRADED vs the ref: no injection support — code-fence inner
+//! languages render plain (see `queries` module docs).
 //! Binary-size and perf measurements accompany the R-01b report.
 
 mod engine;
