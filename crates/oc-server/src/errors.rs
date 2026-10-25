@@ -1063,15 +1063,9 @@ mod tests {
             })
         );
         assert_eq!(worktree_error("dirty", None).status, StatusCode::BAD_REQUEST);
-        assert_eq!(
-            worktree_error("dirty", Some(true)).body["data"]["forceRequired"],
-            json!(true)
-        );
+        assert_eq!(worktree_error("dirty", Some(true)).body["data"]["forceRequired"], json!(true));
         // `Some(false)` and `None` both drop the key (undefined dropped).
-        assert_eq!(
-            worktree_error("dirty", Some(false)).body["data"].get("forceRequired"),
-            None
-        );
+        assert_eq!(worktree_error("dirty", Some(false)).body["data"].get("forceRequired"), None);
 
         assert_eq!(
             vcs_init_not_supported("fallback").body,
@@ -1092,10 +1086,7 @@ mod tests {
                 "maxBytes": 1024
             })
         );
-        assert_eq!(
-            instruction_entry_too_large(5000, 1024).status,
-            StatusCode::PAYLOAD_TOO_LARGE
-        );
+        assert_eq!(instruction_entry_too_large(5000, 1024).status, StatusCode::PAYLOAD_TOO_LARGE);
     }
 
     // ------------------------------------------------------------------
