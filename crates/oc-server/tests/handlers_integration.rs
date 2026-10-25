@@ -740,7 +740,9 @@ async fn handlers_shell_round_trip() {
     assert!(output.output.contains("handler-lane"));
 
     let error =
-        client.shell().get("shl_missing", &ShellGetQuery::default()).await.expect_err("404");
+        // Pattern-valid but nonexistent id: `^sh_` passes Params validation
+        // so the handler 404 fires (ref decode order: Params → Query).
+        client.shell().get("sh_missing", &ShellGetQuery::default()).await.expect_err("404");
     assert_api(&error, 404, "ShellNotFoundError");
 
     client.shell().remove(&shell.id, &ShellRemoveQuery::default()).await.expect("remove");
