@@ -85,6 +85,25 @@
 
 > 同次审查核实：PORT_REPORT §3 既有登记项（插件宿主 R1–R5、单向迁移、更新通道换 feed+sha256、throw→skip、leader 和弦、P10-N1=RA-01、LSP 双侧共同缺失 G-09）均属实；141↔141 路由程序化对账全等；CLI 命令面逐 flag 对应。行动项优先级见 PORT_REVIEW_2026-10-25.md §4。
 
+### 1.5 五域全量对比审查新发现（2026-10-25 第二轮，CLI/Server/Core/AI+插件/TUI 五条并行 oracle 泳道；详见 docs/CODE_REVIEW-2026-10-25.md）
+
+> 本轮对全部功能域逐项对比 ref 与 port 源码。与 §1.4 撞项的 RA-01（请求校验）、RA-02（包管理器升级）经当前代码复核**确已闭环**（request_validation.rs:1509-1531 "rollout COMPLETE"、updater.rs:19-20 真实 argv 驱动），不重复登记。leader 和弦（PORT_REPORT §3）、OS 通知 OSC 路线（RA-05）、非 Linux 声音 spawn 回退（G-11 修正①）、`--force` rust-extra（G-13）等既有登记项亦不重复。
+
+| ID | 发现 | 域 | 严重度 | 说明 |
+|---|---|---|---|---|
+| RB-01 | CodeMode 缺结构性资源上限 | AI+插件 | 中 | v2 受限解释器有 MAX_STRING_LENGTH/MAX_ARRAY_LENGTH/MAX_PENDING_PROMISES 硬护栏（ref codemode/src/interpreter/limits.ts:1-21）；port 改用 bun 真 JS 引擎后无对等上限，仅 opt-in ExecutionLimits + 传输截止（oc-core/src/tool/codemode.rs:37-60 已自认）。失控/恶意 CodeMode 程序可无限吃 guest 内存直至 supervisor 兜底。建议：guest 注入全局代理或 host.js 侧分配计数 |
+| RB-02 | root `--session` 无存在性探测 | CLI/TUI | 中 | ref handlers/default.ts:96-103 先 findSession 判断存在再决定续写 vs 预分配 newSessionID；port 的 CLI 层直接透传、oc-tui `apply_boot_route`（app.rs:6192-6195）直接 `select_tab(session_id)`。`opencode -s <不存在的ID>` 行为可能与 v2 不同（创建 vs 报错/空 tab），需实测定性后修 |
+| RB-03 | `pair --url` 校验缺失 | CLI | 中 | ref commands.ts:524-532 拒绝非 HTTP(S)、带凭据/query/hash 的 URL 并规范化尾斜杠；port 仅 `trim_end_matches('/')`（oc-cli/src/handlers/misc.rs:242-243），非法 URL 静默进入配对链接 |
+| RB-04 | PORT_REPORT "Last-Event-ID 重订阅为新增"表述失真 | Server | 低（文档） | oc-server 全目录不消费该 header（grep 仅 oc-client/src/event_ext.rs 发送、oc-tui/src/data.rs 本地 4096 环去重）；服务器（v2 与 port）均不回放——与 G-14 进展2 的页内实测一致。PORT_REPORT §3 该条应改为"客户端重连协议预留"，避免被解读为断线续传能力 |
+| RB-05 | 内部 operationId 系统性改名 | Server | 低 | port 路由 id 带 `experimental.*` 前缀、`session.message.get/list` vs ref `session.message/messages`、`debug.location.list` vs `debug.location` 等（routes.gen.rs）。线上契约与 served openapi 不受影响（文档为参照逐字节拷贝），但按 operationId 做钩子/统计/插件映射的生态工具两侧不可互换——应文档化登记 |
+| RB-06 | 语法 query vendored 版本漂移风险 | TUI | 低 | ref 运行时从 nvim-treesitter 在线拉 query（parsers-config.ts 有"上游 query 破坏性变更"警告）；port vendored 固化（RA-07 已补覆盖面，但版本漂移面仍在）。建议：periodic 对照脚本 diff vendored .scm 与 ref pin 版 URL |
+| RB-07 | 图像协议探测为 env 启发式 | TUI | 低 | oc-tui/src/image.rs:26-35 依赖 KITTY_WINDOW_ID/TERM 命名，无同步 DA1 查询；冷门 sixel 终端可能落到占位框。PNG→sixel 转码未实现（仅直通；模块注释称 v2 同样降级，未从上游源码逐行确认 resolveImageRenderProtocol） |
+| RB-08 | CodeMode 嵌套结果取值口径 | AI+插件 | 低 | port 取 content parts 拼接文本，ref 优先声明 output schema 的结构化值（tool/codemode.rs:31-33 登记）。带 schema 的 MCP 工具输出在 JS 侧拿到 string，依赖字段访问的程序行为不同 |
+| RB-09 | usage/stats/affinity/history 子域无行级语义 diff | Core | 低（验证盲区） | 这些 session 子域无 ref 同构文件、语义分散于 engine/database/bus；本轮仅核实到"关键词命中 + projector 重放对账"层面（§1.3 补充）。建议补 usage 计费扇出与 affinity 会话亲和的定向对账测试 |
+| RB-10 | 零散超集/理论性偏差 | CLI/AI | 信息 | `api --param` 可重复（ref 单次，超集向后兼容）；calculateCost tier 相同 size 时 ref 取稳定排序首个 vs port `max_by_key` 取最后（现实成本表无重复 size，理论性）；websearch provider 为硬编码注册表（ref 效果层动态装配，上游新增需手动同步）；uninstall 无"安装法探测"输出行（RA-02 已补升级侧） |
+
+> 总判定：五域 0 个 ❌ 级缺失，PORT_REPORT 无虚报完成项；新登记项以 RB-01~RB-03（中）为收口优先级。
+
 ---
 
 ## 2. 踩坑记录（事故 → 根因 → 现行规则）
