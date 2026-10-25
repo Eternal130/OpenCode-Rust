@@ -157,8 +157,22 @@ in the allowlist with ledger IDs `HYGIENE-PKILL-LEGACY-PROBES` and
 tools/guards/
   run.sh                 runner (all guards, per-guard summary)
   guardlib.py            shared baseline/allowlist/reporting harness
-  <guard>.py             the eight guards
+  <guard>.py             the nine guards
   baseline/<guard>.json  current violation sets (only shrink)
   allowlist/<guard>.txt  ledger-backed exceptions (§9.2 format)
   snapshots/env_ref.txt  env_inventory's committed ref snapshot (CI mode)
 ```
+
+### error_envelope
+
+RA-09 reconciliation, no baseline/allowlist: every (operation, status,
+`_tag`) the pinned `tools/openapi-gen/openapi.json` declares as an error
+response (431 triples today) plus a 3-entry hand-maintained supplement
+for `LocationNotFoundError` (spec-invisible, produced by the
+request-location middleware) must be constructible by
+`crates/oc-server/src/errors.rs`. One-directional — registry richness
+beyond the spec (e.g. the readiness `code` envelopes) is fine. A spec
+regeneration that adds an error tag goes red until the registry gains
+the constructor; a tag change in both places stays green only if the
+status matches too.
+

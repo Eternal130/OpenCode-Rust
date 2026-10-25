@@ -130,7 +130,10 @@ async fn prompt_delivery_rejects_unknown_and_non_string_values() {
         // on the wire for these inputs — matching ref.
         assert_eq!(body["_tag"], "InvalidRequestError", "body: {body}");
         assert_eq!(body["kind"], "Payload", "body: {body}");
-        assert!(body["message"].as_str().unwrap().contains("Session.Inbox.Delivery"), "body: {body}");
+        assert!(
+            body["message"].as_str().unwrap().contains("Session.Inbox.Delivery"),
+            "body: {body}"
+        );
     }
 }
 
@@ -161,6 +164,9 @@ async fn synthetic_delivery_rejects_unknown_and_non_string_values() {
         let body = response.json();
         assert_eq!(body["_tag"], "InvalidRequestError", "body: {body}");
         assert_eq!(body["kind"], "Payload", "body: {body}");
-        assert!(body["message"].as_str().unwrap().contains("Session.Inbox.Delivery"), "body: {body}");
+        assert!(
+            body["message"].as_str().unwrap().contains("Session.Inbox.Delivery"),
+            "body: {body}"
+        );
     }
 }

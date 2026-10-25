@@ -23,6 +23,7 @@ GUARDS=(
   command_keymap
   ledger_integrity
   process_safety
+  error_envelope
 )
 
 extra=""
