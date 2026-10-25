@@ -456,8 +456,7 @@ impl Engine {
         // hourly retention sweeps — spilled tool output and shell capture
         // files — run for the engine lifetime. Handles are retained and
         // aborted in `shutdown` (v2 scopes these fibers to the layer).
-        let tool_output_cleanup =
-            crate::tool_output::spawn_cleanup_task(Arc::clone(&tool_output));
+        let tool_output_cleanup = crate::tool_output::spawn_cleanup_task(Arc::clone(&tool_output));
         let shell_cleanup =
             crate::shell::spawn_cleanup_task(options.data_root.clone(), Arc::clone(&options.clock));
         let projects = Arc::new(crate::project::SqliteProjectStore::new((*db).clone()));
