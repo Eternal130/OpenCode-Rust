@@ -17,6 +17,7 @@ means bumping the git rev in the workspace `Cargo.toml` and letting
 | **clipboard** | Converged (P2-CLIP). `oc-tui`'s `clipboard.rs` delegates to `opentui_core::clipboard` (host + OSC52 read/write, the reference `createTuiClipboard` twin). |
 | **paste** | Evaluated, **deliberately not adopted**. `opentui_core::paste` (`decode_paste_bytes`/`strip_ansi`) is a byte-decode helper; the port's paste path (`Event::Paste` → `App::paste_terminal_text` → `Composer::paste_resolved` → attachment resolution) already owns the same logic at a smaller footprint and is pinned by existing tests. Adopting it would be churn without a behavior win — revisit only if the two paste pipelines drift. |
 | **diff logic** | Converged (this lane). Patch PARSING is single-sourced in `opentui_core::renderables::diff::parse_patch` (jsdiff 9.0.0, line-faithful). `oc-tui`'s `components/diff_viewer.rs::parse_patch` is now a thin adapter onto opentui's `StructuredPatch`; the ratatui renderer, keymap, tree behavior, and all goldens are unchanged. Details below. |
+| **sound** | Converged (SOUND-CONV). `oc-tui`'s `sound/audio.rs` plays through `opentui_core::audio` (`device-audio` feature, opentui rev 18e2904) behind the existing `SoundHalf` seam; the duplicated local engine (`sound/inproc.rs` + `third_party/miniaudio-sys`) is deleted — nothing else used it. Headless degradation is a silent no-op (`err_device` → `false`), the system-player spawn fallback for non-Linux targets stays (documented port divergence). |
 
 ### Diff convergence details
 
@@ -67,7 +68,7 @@ models together.
 
 | Pair | Status |
 | --- | --- |
-| **sound** | **Upstream completed real audio output (2026-10-25, user report)** — the original blocker (opentui-rust `audio.rs` was decode-only `HeadlessAudioLib` + NULL sink) is gone upstream-side. Convergence is now actionable in this repo: bump the workspace opentui git rev past the audio-output landing, swap `sound/inproc.rs` (miniaudio) for `opentui_core::audio` behind the existing `SoundHalf` seam, keep behavior parity pinned by the existing sound/attention tests (v2 trigger matrix + OSC 9/99/777 + 5 vendored assets). Until that lane runs, the inproc engine stays (it is audible and tested); treat this as a follow-up lane, not a gap. |
+| *(none — sound converged 2026-10-25, see the Converged table)* | |
 
 ## Rendering-stack migration (ratatui → opentui) — recorded context
 
