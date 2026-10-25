@@ -55,7 +55,7 @@ UI placeholder pools). After classification:
 | formatter no-op | `oc-core/src/formatter.rs:7` | `Formatter::file` is a no-op seam (`TODO(formatter-lane)`); v2 default ships no formatters → default-parity, diverges only when user configures one |
 | `TODO(wave-C)` ×2 | `session/runner/compaction.rs:495` (compaction-hook short-circuit result), `context.rs:620-624` (reference-file guidance is a static "No reference files…" string) | registered runner-lane remainders |
 | skills URL sources | `oc-core/src/engine/skills.rs:11,289` | URL skill entries recognized, never fetched |
-| pair QR | `oc-cli/src/handlers/misc.rs:225` | links print without the uqr QR block (REGISTERED) |
+| ~~pair QR~~ | `oc-cli/src/handlers/misc.rs` | **CLOSED (F15 lane, 2026-10-26)**: `third_party/oc-uqr` (vendored faithful Rust port of the ref-pinned uqr 0.1.3, matrix-identical by golden test vs the ref's own node_modules) renders `renderUnicodeCompact` — border 2 + 2-space indent in the CLI pair output (ref `packages/cli/src/commands/handlers/pair.ts:30-39`), border 1 in the TUI DialogPair (ref `dialog-pair.tsx:75-84`); the TUI pair dialog's URLs also now word-wrap like ref (`<Link>` → TextRenderable default `wrapMode: "word"`) instead of hard-truncating below 54 cols |
 | `session.{other}` plugin seam | `oc-server/src/plugins.rs:569` | plugin-host session RPC supports prompt/get/list/messages/interrupt; the wider v2 surface errors with an explicit message |
 
 ### 1.3 Test scaffolding (excluded)
