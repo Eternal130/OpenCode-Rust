@@ -31,9 +31,9 @@
 //! * No `search`-over-inventory on the Rust side of the catalog — the
 //!   guest exposes the v2-ranked `search` builtin over the same entries
 //!   the catalog rendered (instructions stay faithful).
-//! * Nested results pass the joined text of the tool's content parts
-//!   (v2 prefers the declared output schema value; our registrations
-//!   carry none — the common single-text-part result is identical).
+//! * Nested results prefer the tool's declared structured output,
+//!   else the joined text of the content parts, else null (v2
+//!   codemode/tool.ts:101-106 via [`CodeModeLeaf::nested_value`]).
 //! * Confined-interpreter guarantees map onto the guest sandbox: the
 //!   catalog allowlist stands in for the interpreter's globals, and
 //!   the v2 `ExecutionLimits` (codemode.ts:22-41) are at parity as an
@@ -47,8 +47,12 @@
 //!   warnings/logs at the leaf ([`bound_output`]); `MAX_VALUE_DEPTH`
 //!   guards every value crossing guest↔host. The ref's other
 //!   structural caps (MAX_STRING_LENGTH/MAX_ARRAY_LENGTH/
-//!   MAX_PENDING_PROMISES, interpreter/limits.ts) are engine-inherent
-//!   inside a real JS engine and are not re-implemented.
+//!   MAX_PENDING_PROMISES, interpreter/limits.ts) are enforced by the
+//!   guest on the host↔guest bridge: every string/array crossing
+//!   (tool inputs, tool results, the return value) is checked with
+//!   the ref's exact messages, and a pending-request counter rejects
+//!   the (N+1)-th concurrent bridge promise with the ref's
+//!   `Too many pending promises` error.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -887,13 +891,15 @@ impl ExecutionLimits {
 /// walk in data.ts:53 counts the root at depth 0 and throws entering
 /// depth 33 — i.e. 32 container levels are legal, the 33rd is not).
 ///
-/// The ref's other always-on structural caps are NOT ported: in a
-/// real JS engine `MAX_STRING_LENGTH` (1 << 24), `MAX_ARRAY_LENGTH`
-/// (10_000_000) and `MAX_PENDING_PROMISES` (10_000) are inherent —
-/// they bound what one builtin call can build inside the v2
-/// interpreter's own allocator, a machine the bun guest does not have
-/// (and does not need: strings/arrays/promise counts are bounded by
-/// the engine + memory, not by interpreter bookkeeping).
+/// The ref's sibling structural caps ARE ported, on the guest side of
+/// the bridge: `MAX_STRING_LENGTH` (1 << 24) and `MAX_ARRAY_LENGTH`
+/// (10_000_000) are checked on every string/array crossing host↔guest
+/// (tool inputs, tool results, the return value) with the ref's exact
+/// `Invalid string length` / `Invalid array length` RangeErrors, and
+/// `MAX_PENDING_PROMISES` (10_000) bounds concurrently pending bridge
+/// requests (`Too many pending promises …`). In a real JS engine they
+/// bound what one builtin call can build; here they bound what one
+/// bridge crossing may carry.
 pub const MAX_VALUE_DEPTH: usize = 32;
 
 /// The boundary walk's throw (data.ts:53): `rangeError("Value exceeds

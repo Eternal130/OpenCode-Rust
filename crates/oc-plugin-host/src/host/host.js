@@ -93,8 +93,51 @@ function notify(method, params) {
   send({ jsonrpc: "2.0", method, params });
 }
 
+// --- Structural resource caps (interpreter/limits.ts, ported) ---
+// v2's confined interpreter bounds what one builtin call may build
+// inside its own allocator. A real JS engine has no such bookkeeping
+// machine, so the port enforces the same caps where the guest
+// controls the resource: every string/array crossing the host↔guest
+// bridge (tool inputs, tool results, the program return value), and
+// the count of promises pending on the bridge at once. Values copied
+// from interpreter/limits.ts:7-11.
+const MAX_STRING_LENGTH = 1 << 24;
+const MAX_ARRAY_LENGTH = 10_000_000;
+const MAX_PENDING_PROMISES = 10_000;
+
+// checkStringLength / checkArrayLength (interpreter/limits.ts:15-21)
+// as one boundary walk: the ref's exact RangeError messages, thrown
+// at the crossing instead of at allocation.
+function checkValueLimits(value) {
+  const stack = [value];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (typeof current === "string") {
+      if (current.length > MAX_STRING_LENGTH) throw new RangeError("Invalid string length");
+    } else if (Array.isArray(current)) {
+      if (current.length > MAX_ARRAY_LENGTH) throw new RangeError("Invalid array length");
+      for (let i = 0; i < current.length; i += 1) stack.push(current[i]);
+    } else if (current !== null && typeof current === "object") {
+      const values = Object.values(current);
+      for (let i = 0; i < values.length; i += 1) stack.push(values[i]);
+    }
+  }
+}
+
 function hostRequest(method, params) {
   return new Promise((resolve, reject) => {
+    // MAX_PENDING_PROMISES (interpreter/limits.ts:11, enforced at
+    // promises.ts:45-49): a bridge request is the guest's unit of
+    // pending work — the (N+1)-th rejects with the ref's exact
+    // message instead of queueing without bound.
+    if (pendingGuest.size >= MAX_PENDING_PROMISES) {
+      reject(
+        new RangeError(
+          `Too many pending promises (limit ${MAX_PENDING_PROMISES}); await promises before creating more.`,
+        ),
+      );
+      return;
+    }
     const id = nextGuestId++;
     pendingGuest.set(id, { resolve, reject });
     send({ jsonrpc: "2.0", id, method, params });
@@ -1347,12 +1390,15 @@ function resolveExecutionLimits(raw) {
   };
 }
 
-// MAX_VALUE_DEPTH (interpreter/limits.ts:13) — the ONE structural cap
-// that is not engine-inherent inside a real JS engine (the v2
-// interpreter's MAX_STRING_LENGTH / MAX_ARRAY_LENGTH / MAX_PENDING_PROMISES
-// bound its own allocator; bun's engine bounds those natively). The
-// boundary walk (data.ts:53) counts the root at depth 0 and throws
-// entering depth 33: 32 container levels cross, the 33rd does not.
+// MAX_VALUE_DEPTH (interpreter/limits.ts:13) — one of the four
+// structural caps, all ported now: the depth guard walks every value
+// crossing guest↔host (data.ts:53 counts the root at depth 0 and
+// throws entering depth 33: 32 container levels cross, the 33rd does
+// not), while MAX_STRING_LENGTH, MAX_ARRAY_LENGTH and
+// MAX_PENDING_PROMISES (see the caps block at hostRequest) bound the bridge's
+// payload sizes and pending-request count — a real JS engine needs no
+// interpreter-allocator bookkeeping, so the same limits are enforced
+// where the guest owns the resource.
 const MAX_VALUE_DEPTH = 32;
 
 function valueDepthExceeded(value, depth = 0) {
@@ -1399,10 +1445,12 @@ function buildToolsTree(entries, calls, token, maxToolCalls) {
         throw new Error(`Execution exceeded its tool-call limit of ${maxToolCalls}.`);
       }
       // The boundary walk's depth guard (data.ts:53) on tool inputs
-      // crossing guest→host.
+      // crossing guest→host, plus the structural caps
+      // (checkStringLength/checkArrayLength) on the same walk.
       if (valueDepthExceeded(input)) {
         throw new RangeError(`Value exceeds the maximum depth of ${MAX_VALUE_DEPTH}.`);
       }
+      checkValueLimits(input);
       const shown = displayInput(input);
       const record = { tool: entry.path, status: "running", ...(shown ? { input: shown } : {}) };
       calls.push(record);
@@ -1416,6 +1464,8 @@ function buildToolsTree(entries, calls, token, maxToolCalls) {
           token,
         });
         const value = result && typeof result === "object" && "value" in result ? result.value : result;
+        // Host→guest tool results get the same structural caps.
+        checkValueLimits(value);
         record.status = "completed";
         return value ?? null;
       } catch (error) {
@@ -1574,10 +1624,18 @@ async function handleCodemodeEvaluate({ code, tools, token, limits }) {
   } catch (error) {
     return { ok: false, error: errText(error), calls };
   }
-  // The boundary walk's depth guard (data.ts:53) on the result
-  // crossing guest→host.
-  if (value !== undefined && valueDepthExceeded(value)) {
-    return { ok: false, error: `Value exceeds the maximum depth of ${MAX_VALUE_DEPTH}.`, calls };
+  // The boundary walk's depth guard (data.ts:53) and the structural
+  // caps (interpreter/limits.ts:15-21) on the result crossing
+  // guest→host.
+  if (value !== undefined) {
+    try {
+      checkValueLimits(value);
+    } catch (error) {
+      return { ok: false, error: errText(error), calls };
+    }
+    if (valueDepthExceeded(value)) {
+      return { ok: false, error: `Value exceeds the maximum depth of ${MAX_VALUE_DEPTH}.`, calls };
+    }
   }
   // `undefined` (no explicit return) is OMITTED so the host formats
   // "undefined"; explicit null stays null.
