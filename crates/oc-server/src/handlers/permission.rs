@@ -171,9 +171,17 @@ async fn session_list(
 async fn session_create(
     State(state): State<SharedState>,
     Path(session_id): Path<String>,
-    axum::Json(body): axum::Json<Value>,
+    uri: Uri,
+    body: axum::body::Bytes,
 ) -> Result<Response, ApiError> {
     let (services, _) = session_services(&state, &session_id).await?;
+    // RA-01: post-location payload decode (404 first, then schema 400).
+    let body = crate::request_validation::validate_at_handler(
+        "session.permission.create",
+        &axum::http::Method::POST,
+        &uri,
+        &body,
+    )?;
     let parsed_body = AskBody::parse(&body);
     let input = oc_core::permission::AssertInput {
         id: parsed_body.id.map(PermissionId),
@@ -198,8 +206,17 @@ async fn session_create(
 async fn session_get(
     State(state): State<SharedState>,
     Path((session_id, request_id)): Path<(String, String)>,
+    uri: Uri,
 ) -> Result<Response, ApiError> {
     let (services, _) = session_services(&state, &session_id).await?;
+    // RA-01: the requestID path param decodes (^per) after the session
+    // 404 but BEFORE the handler's request lookup.
+    crate::request_validation::validate_at_handler(
+        "session.permission.get",
+        &axum::http::Method::GET,
+        &uri,
+        &[],
+    )?;
     let request = owned_request(&services, &request_id)
         .ok_or_else(|| ApiError::permission_not_found(&request_id))?;
     if request.session_id.as_str() != session_id {
@@ -211,9 +228,18 @@ async fn session_get(
 async fn session_reply(
     State(state): State<SharedState>,
     Path((session_id, request_id)): Path<(String, String)>,
-    axum::Json(body): axum::Json<Value>,
+    uri: Uri,
+    body: axum::body::Bytes,
 ) -> Result<Response, ApiError> {
     let (services, _) = session_services(&state, &session_id).await?;
+    // RA-01: post-location decode (Params requestID ^per + payload)
+    // before the handler's ownership lookup.
+    let body = crate::request_validation::validate_at_handler(
+        "session.permission.reply",
+        &axum::http::Method::POST,
+        &uri,
+        &body,
+    )?;
     // Ownership: a request belonging to another session is a 404 (§3).
     let request = owned_request(&services, &request_id)
         .ok_or_else(|| ApiError::permission_not_found(&request_id))?;
