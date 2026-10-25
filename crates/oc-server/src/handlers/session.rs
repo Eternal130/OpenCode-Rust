@@ -614,6 +614,9 @@ async fn switch_model(
 /// `steer`, `"steer"` ⇒ Steer, `"queue"` ⇒ Queue — anything else is a
 /// 400 (ref session-inbox.ts:11 allows only `steer | queue`; a bad
 /// value is a decode error, never silently coerced).
+/// Schema-unreachable defense: the generated payload validation
+/// (Session.Inbox.Delivery | null enum) rejects invalid values first with
+/// kind=Payload, so the error arms below survive only as belt-and-braces.
 fn parse_delivery(body: &Value) -> Result<Delivery, ApiError> {
     match body.get("delivery") {
         None => Ok(Delivery::Steer),
