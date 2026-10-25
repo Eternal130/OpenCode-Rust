@@ -253,9 +253,9 @@ fn codemode_timeout_kill_restarts_guest_without_strikes() {
 }
 
 /// RB-01: the structural resource caps (interpreter/limits.ts) ported
-/// to the guest bridge — MAX_STRING_LENGTH (1 << 24) /
-/// MAX_ARRAY_LENGTH (10_000_000) on every string/array crossing
-/// host↔guest, MAX_PENDING_PROMISES (10_000) on concurrently pending
+/// to the guest bridge — `MAX_STRING_LENGTH` (1 << 24) /
+/// `MAX_ARRAY_LENGTH` (10M) on every string/array crossing
+/// host↔guest, `MAX_PENDING_PROMISES` (10k) on concurrently pending
 /// bridge requests. All error messages are the ref's exact text.
 struct CapsPort;
 
@@ -301,11 +301,11 @@ fn guest_enforces_structural_caps() {
     assert_eq!(run.error.as_deref(), Some("Invalid string length"));
     assert!(run.value.is_none());
 
-    // An oversized tool INPUT cannot cross guest→host either.
+    // An oversized tool INPUT cannot cross guest→host either (the
+    // check fires at admission, before the call is recorded).
     let run = run_code("await tools.greet({ s: \"x\".repeat((1 << 24) + 1) }); return 1;");
     assert_eq!(run.error.as_deref(), Some("Invalid string length"));
-    assert_eq!(run.tool_calls.len(), 1);
-    assert_eq!(run.tool_calls[0].status, "error");
+    assert_eq!(run.tool_calls.len(), 0);
 
     // An oversized tool RESULT cannot cross host→guest.
     let run = run_code("return await tools.huge({});");
@@ -325,6 +325,13 @@ fn guest_enforces_structural_caps() {
     let run = run_code("const a = new Array(10000000); a[0] = 7; return a[0];");
     assert_eq!(run.value, Some(json!(7)));
 
+    // Normal usage is unaffected: tools roundtrip, ordinary values
+    // cross both directions untouched (checked BEFORE the flood — its
+    // 10 000 slow requests stay pending on the bridge afterwards).
+    let run = run_code("return [await tools.greet({}), \"x\".repeat(10)];");
+    assert!(run.error.is_none());
+    assert_eq!(run.value, Some(json!(["ok", "xxxxxxxxxx"])));
+
     // -- MAX_PENDING_PROMISES: a flood of un-awaited bridge requests
     //    rejects the (N+1)-th with the ref's exact message.
     let run = run_code(
@@ -335,11 +342,8 @@ fn guest_enforces_structural_caps() {
         Some("Too many pending promises (limit 10000); await promises before creating more.")
     );
 
-    // Normal usage is unaffected: tools roundtrip, ordinary values
-    // cross both directions untouched.
-    let run = run_code("return [await tools.greet({}), \"x\".repeat(10)];");
-    assert!(run.error.is_none());
-    assert_eq!(run.value, Some(json!(["ok", "xxxxxxxxxx"])));
+    // Let the flood's slow replies drain so shutdown is quiet.
+    std::thread::sleep(Duration::from_millis(2000));
 
     host.shutdown();
 }
