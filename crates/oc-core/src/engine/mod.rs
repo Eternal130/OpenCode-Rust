@@ -456,10 +456,7 @@ impl Engine {
         // data root (v2 scopes them to the server layer; the engine boot
         // is the Rust equivalent lifecycle point).
         tokio::spawn(crate::tool_output::spawn_cleanup_task(Arc::clone(&tool_output)));
-        crate::shell::spawn_cleanup_task(
-            options.data_root.clone(),
-            Arc::clone(&options.clock),
-        );
+        crate::shell::spawn_cleanup_task(options.data_root.clone(), Arc::clone(&options.clock));
         let projects = Arc::new(crate::project::SqliteProjectStore::new((*db).clone()));
         let llm: Arc<dyn LlmClient> =
             options.llm.clone().unwrap_or_else(|| Arc::new(RouteLlmClient));

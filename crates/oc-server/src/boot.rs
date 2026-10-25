@@ -150,22 +150,17 @@ impl oc_core::config::watch::ConfigUpdated for ConfigReloadBridge {
 
 /// The event types the event logger mirrors into the server log
 /// (`event-logger.ts` `EVENT_TYPES`).
-pub const EVENT_LOGGER_TYPES: &[&str] = &[
-    "agent.updated",
-    "provider.updated",
-    "model.updated",
-    "command.updated",
-    "config.updated",
-];
+pub const EVENT_LOGGER_TYPES: &[&str] =
+    &["agent.updated", "provider.updated", "model.updated", "command.updated", "config.updated"];
 
 /// The one log line an event-logger event produces — `logInfo("event",
 /// { event })` in v2; the Rust sink renders `[event] {"event":…}` so the
 /// payload shape stays inspectable and stable. Non-member types map to
 /// `None` (v2 logs nothing for them).
+#[must_use]
 pub fn event_logger_line(event: &oc_core::bus::Event) -> Option<String> {
     if EVENT_LOGGER_TYPES.contains(&event.type_.as_str()) {
-        let payload =
-            serde_json::to_string(event).unwrap_or_else(|_| "{}".to_string());
+        let payload = serde_json::to_string(event).unwrap_or_else(|_| "{}".to_string());
         Some(format!("[event] {{\"event\":{payload}}}"))
     } else {
         None
@@ -177,9 +172,8 @@ pub fn event_logger_line(event: &oc_core::bus::Event) -> Option<String> {
 /// ([`crate::errors::append_server_log`]). The returned guard detaches
 /// the listener on drop — the boot path leaks it for the process
 /// lifetime.
-pub fn attach_event_logger(
-    bus: &oc_core::bus::Bus,
-) -> oc_core::bus::ListenGuard {
+#[must_use]
+pub fn attach_event_logger(bus: &oc_core::bus::Bus) -> oc_core::bus::ListenGuard {
     bus.listen(std::sync::Arc::new(|event: &oc_core::bus::Event| {
         if let Some(line) = event_logger_line(event) {
             crate::errors::append_server_log(&line);
@@ -1293,6 +1287,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // env seam must stay held across the publish awaits
     async fn event_logger_listener_writes_published_events_to_the_log_sink() {
         // OPENCODE_LOG_FILE is the existing log-sink test seam (see
         // errors.rs tests) — serialize against their env lock pattern.

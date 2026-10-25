@@ -1,6 +1,7 @@
 //! Shell service tests (ported from shell.test.ts service-level behavior +
 //! tool-shell.test.ts notification formats).
 #![allow(clippy::assert_is_empty)] // deliberate empty-state assertions
+#![allow(clippy::duration_suboptimal_units)] // 7/8-day cutoffs read best in seconds
 
 use super::*;
 
@@ -481,8 +482,7 @@ mod parse_tests {
 
         crate::shell::cleanup_data_root(
             tmp.path(),
-            u64::try_from(now.duration_since(std::time::UNIX_EPOCH).unwrap().as_millis())
-                .unwrap(),
+            u64::try_from(now.duration_since(std::time::UNIX_EPOCH).unwrap().as_millis()).unwrap(),
         );
 
         assert!(!old_a.exists(), "stale capture in proj_a removed");
@@ -510,8 +510,7 @@ mod parse_tests {
 
         crate::shell::cleanup_data_root(
             tmp.path(),
-            u64::try_from(now.duration_since(std::time::UNIX_EPOCH).unwrap().as_millis())
-                .unwrap(),
+            u64::try_from(now.duration_since(std::time::UNIX_EPOCH).unwrap().as_millis()).unwrap(),
         );
 
         for path in &keep {

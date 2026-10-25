@@ -501,7 +501,8 @@ mod tests {
     async fn tool_output_spawn_cleanup_task_sweeps_on_the_first_tick() {
         let dir = tempfile::tempdir_in("/tmp/opencode").expect("tempdir");
         let now = std::time::SystemTime::now();
-        let service = Arc::new(ToolOutput::new(dir.path(), Arc::new(oc_util::determinism::SystemClock)));
+        let service =
+            Arc::new(ToolOutput::new(dir.path(), Arc::new(oc_util::determinism::SystemClock)));
         let directory = dir.path().join(DIRECTORY);
         std::fs::create_dir_all(&directory).expect("dirs");
         let old = directory.join(file_name(1));
