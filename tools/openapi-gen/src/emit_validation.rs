@@ -446,8 +446,9 @@ fn plain_prefix(pattern: &str) -> Option<&str> {
 /// and the query-params object node (+ arena index), if any.
 struct Row {
     operation_id: String,
-    body: String,  // rendered BodyValidation
-    query: String, // rendered QueryValidation
+    body: String,   // rendered BodyValidation
+    query: String,  // rendered QueryValidation
+    params: String, // rendered ParamsValidation (path-param patterns)
 }
 
 /// Walks ONE query parameter's schema. Query semantics differ from body
@@ -502,6 +503,40 @@ fn query_ir(root: &Ordered, walker: &mut Walker<'_>, op: &Operation) -> Option<I
     Some(Ir::Obj { fields })
 }
 
+/// The op's PATH parameters carrying a `^literal` pattern (Effect's
+/// `startsWith` id filters — `^ses`, `^msg_`, `^frm_`, `^per`, `^pty`,
+/// `^sh_`), spec declaration order. Non-pattern path params are plain
+/// strings (nothing can fail) and are omitted.
+fn params_ir(root: &Ordered, op: &Operation) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let path_item = match root.get("paths").and_then(|p| p.get(&op.path)) {
+        Some(item) => item,
+        None => return out,
+    };
+    let Some(method_item) = path_item.get(&op.method) else { return out };
+    for source in [path_item.get("parameters"), method_item.get("parameters")] {
+        let Some(list) = source else { continue };
+        for param in list.items() {
+            if param.get("in").and_then(Ordered::as_str) != Some("path") {
+                continue;
+            }
+            let Some(name) = param.get("name").and_then(Ordered::as_str) else { continue };
+            if out.iter().any(|(existing, _)| existing == name) {
+                continue;
+            }
+            let pattern = param
+                .get("schema")
+                .and_then(|schema| schema.get("pattern"))
+                .and_then(Ordered::as_str)
+                .and_then(plain_prefix);
+            if let Some(prefix) = pattern {
+                out.push((name.to_owned(), prefix.to_owned()));
+            }
+        }
+    }
+    out
+}
+
 /// Emits the artifact source. `operations` must be the shared parsed set
 /// (same (path, method) sort as the other emitters); `spec_json` is the
 /// RAW pinned document (re-parsed order-preserving here).
@@ -543,7 +578,21 @@ pub fn emit(spec_json: &str, operations: &[Operation], sha256: &str) -> String {
             Some(ir) => format!("QueryValidation::Params({})", arena.intern(&ir)),
             None => "QueryValidation::None".to_owned(),
         };
-        rows.push(Row { operation_id: op.operation_id.clone(), body, query });
+        let params = {
+            let specs = params_ir(&root, op);
+            if specs.is_empty() {
+                "ParamsValidation::None".to_owned()
+            } else {
+                let rendered: Vec<String> = specs
+                    .iter()
+                    .map(|(name, prefix)| {
+                        format!("ParamSpec {{ name: {name:?}, prefix: {prefix:?} }}")
+                    })
+                    .collect();
+                format!("ParamsValidation::Patterns(&[{}])", rendered.join(", "))
+            }
+        };
+        rows.push(Row { operation_id: op.operation_id.clone(), body, query, params });
     }
     rows.sort_by(|a, b| a.operation_id.cmp(&b.operation_id));
     let query_routes = rows.iter().filter(|r| r.query != "QueryValidation::None").count();
@@ -592,8 +641,8 @@ pub fn emit(spec_json: &str, operations: &[Operation], sha256: &str) -> String {
     out.push_str("pub static ROUTES: &[RouteValidation] = &[\n");
     for row in &rows {
         out.push_str(&format!(
-            "    RouteValidation {{ operation_id: {:?}, body: {}, query: {} }},\n",
-            row.operation_id, row.body, row.query
+            "    RouteValidation {{ operation_id: {:?}, body: {}, query: {}, params: {} }},\n",
+            row.operation_id, row.body, row.query, row.params
         ));
     }
     out.push_str("];\n\n");
@@ -686,11 +735,31 @@ pub enum QueryValidation {
     Params(u32),
 }
 
+/// One path parameter's `^literal` startsWith filter (spec `pattern`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ParamSpec {
+    /// Wire name (exact spelling, e.g. `sessionID`).
+    pub name: &'static str,
+    /// The `^literal` prefix without the anchor (e.g. `ses`).
+    pub prefix: &'static str,
+}
+
+/// What a route's path parameters must satisfy (v2 decodes them FIRST —
+/// Params → Query → Payload; kind `Params`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ParamsValidation {
+    /// No pattern-constrained path parameters (plain strings — no-op).
+    None,
+    /// `(name, prefix)` startsWith constraints, spec declaration order.
+    Patterns(&'static [ParamSpec]),
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RouteValidation {
     pub operation_id: &'static str,
     pub body: BodyValidation,
     pub query: QueryValidation,
+    pub params: ParamsValidation,
 }
 
 "#;
@@ -717,6 +786,15 @@ pub fn query_node(operation_id: &str) -> Option<u32> {
     match find(operation_id)?.query {
         QueryValidation::Params(node) => Some(node),
         QueryValidation::None => None,
+    }
+}
+
+/// Resolves the pattern-constrained path parameters for an operation
+/// (empty slice when none declare a `^literal` pattern).
+pub fn path_params(operation_id: &str) -> &'static [ParamSpec] {
+    match find(operation_id).map(|row| row.params) {
+        Some(ParamsValidation::Patterns(specs)) => specs,
+        _ => &[],
     }
 }
 
@@ -995,6 +1073,24 @@ mod tests {
                 "pty.connect {name}"
             );
         }
+    }
+
+    /// Path-param pattern pins (RA-01 slice 2): the `^literal` id
+    /// filters the seam's Params validation interprets.
+    #[test]
+    fn path_param_pins() {
+        fn specs(op: &str) -> Vec<(&'static str, &'static str)> {
+            path_params(op).iter().map(|s| (s.name, s.prefix)).collect()
+        }
+        assert_eq!(specs("session.get"), [("sessionID", "ses")]);
+        assert_eq!(specs("session.message.get"), [("sessionID", "ses"), ("messageID", "msg_")]);
+        assert_eq!(specs("session.form.get"), [("formID", "frm_")]);
+        assert_eq!(specs("session.permission.get"), [("sessionID", "ses"), ("requestID", "per")]);
+        assert_eq!(specs("pty.get"), [("ptyID", "pty")]);
+        assert_eq!(specs("shell.get"), [("id", "sh_")]);
+        // session.form.* carries NO sessionID pattern (formLocation group).
+        assert_eq!(specs("session.list"), Vec::<(&str, &str)>::new());
+        assert_eq!(specs("session.create"), Vec::<(&str, &str)>::new());
     }
 }
 "#;
