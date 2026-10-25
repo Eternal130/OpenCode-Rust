@@ -16,8 +16,11 @@
 //!   location (`OPENCODE_RELEASE_URL`), never opencode.ai — the 2.0.24
 //!   pin must not adopt newer TS releases.
 //! * `local-file` is a Rust-port extension (install from a tarball or
-//!   binary on disk); package-manager methods (`npm`, `brew`, …) are
-//!   detected for diagnostics but not driven.
+//!   binary on disk); package-manager methods (`npm`, `pnpm`, `bun`,
+//!   `yarn`, `vp`, `brew`) run the REAL v2 install commands (v2
+//!   `updater.ts` `commands` map) — the manager's registry is the
+//!   trust root, so there is no sha256 step on this path (v2 has
+//!   none either).
 //! * **Sibling refresh (p4 follow-up)**: the updater refreshes the
 //!   `oc-pty` sibling too — release archives co-package it
 //!   (`package/oc-pty`), and replacing only the main binary would
@@ -49,6 +52,7 @@ pub const RELEASE_TAG: &str = match option_env!("OC_RELEASE_TAG") {
 const TEMP_PREFIX: &str = "update-download-";
 
 /// The Rust-port extension methods.
+#[allow(dead_code)] // kept public for tests/diagnostics; the upgrade paths spell names out
 pub const EXTRA_METHODS: [&str; 2] = ["local-file", "github"];
 
 /// Every accepted `--method` value (v2's seven + the two extensions).
@@ -58,6 +62,164 @@ pub const ALL_METHODS: [&str; 9] =
 /// Environment variable holding the full release-tarball URL for the
 /// `github` method (may contain `{version}`/`{target}` placeholders).
 pub const RELEASE_URL_ENV: &str = "OPENCODE_RELEASE_URL";
+
+/// Environment variable overriding the package name the
+/// package-manager methods install (v2 resolves it from the
+/// `opencode.ai/update/api` release metadata; the Rust port has no
+/// such feed, so the name defaults to the published npm package and
+/// is overridable for tests/alternative distributions).
+pub const PACKAGE_ENV: &str = "OPENCODE_PACKAGE";
+
+/// The default package the package-manager methods install (v2's
+/// `@opencode-ai/cli`, the stream the ref updater drives).
+pub const DEFAULT_PACKAGE: &str = "@opencode-ai/cli";
+
+/// The package name package-manager methods install.
+#[must_use]
+pub fn package_name() -> String {
+    std::env::var(PACKAGE_ENV)
+        .ok()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| DEFAULT_PACKAGE.to_owned())
+}
+
+/// The package managers whose upgrade bodies are actually driven
+/// (v2 `commands` in `upgrade`): each installs `<pkg>@<version>`.
+#[allow(dead_code)] // exercised by the PATH-shim tests
+pub const PACKAGE_MANAGERS: [&str; 5] = ["npm", "pnpm", "bun", "yarn", "vp"];
+
+/// Exact install argv per manager (v2 `updater.ts` `commands` +
+/// bun/brew branches). Version must already be `v`-stripped.
+///
+/// * npm keeps the old package with `--force` (uninstalling can
+///   unlink the replacement command) — v2's dominant branch for the
+///   `cli` artifact when the installed package is not `cli-node`.
+/// * pnpm passes `--allow-build` (the package ships postinstall).
+/// * bun gets a private `--cache-dir` (it never prunes old versions
+///   from its shared cache) and `--trust` for postinstall.
+/// * vp uses `update` when the same package is already installed;
+///   `install --force` is only for cross-package migrations, which
+///   this port cannot detect (no installed-package probe), so the
+///   plain `update` shape is the default.
+#[must_use]
+pub fn package_manager_command(method: &str, package: &str, version: &str) -> Option<Vec<String>> {
+    let target = format!("{package}@{version}");
+    let command = match method {
+        "npm" => vec![
+            "npm".to_owned(),
+            "install".to_owned(),
+            "--global".to_owned(),
+            "--force".to_owned(),
+            target,
+        ],
+        "pnpm" => vec![
+            "pnpm".to_owned(),
+            "add".to_owned(),
+            "--global".to_owned(),
+            format!("--allow-build={package}"),
+            target,
+        ],
+        "bun" => vec![
+            "bun".to_owned(),
+            "install".to_owned(),
+            "--global".to_owned(),
+            "--trust".to_owned(),
+            target,
+        ],
+        "yarn" => vec!["yarn".to_owned(), "global".to_owned(), "add".to_owned(), target],
+        "vp" => vec!["vp".to_owned(), "update".to_owned(), "-g".to_owned(), target],
+        "brew" => vec!["brew".to_owned(), "upgrade".to_owned(), package.to_owned()],
+        _ => return None,
+    };
+    Some(command)
+}
+
+/// Tail-compress install output like v2 `conciseDetail`: strip
+/// control chars, keep the last 12 non-empty lines, clip to ~2000
+/// chars.
+#[must_use]
+pub fn concise_detail(output: &str) -> String {
+    let normalized = output.replace('\r', "\n");
+    let lines: Vec<&str> =
+        normalized.lines().map(str::trim_end).filter(|line| !line.trim().is_empty()).collect();
+    let tail: Vec<&str> = lines.iter().rev().take(12).rev().copied().collect();
+    let joined = tail.join("\n");
+    let mut detail = if joined.chars().count() > 2_000 {
+        let skipped = joined.chars().count() - 1_999;
+        format!("…{}", joined.chars().skip(skipped).collect::<String>())
+    } else {
+        joined
+    };
+    if lines.len() > 12 {
+        detail.push_str("\n\nOutput shortened to the last 12 lines.");
+    }
+    detail
+}
+
+/// Run one package-manager install command (v2 `runUpgrade`):
+/// 5-minute budget, output captured, non-zero exit or spawn failure
+/// becomes a clear `UpgradeError` carrying the command and the
+/// stderr/stdout tail. Package-manager installs have NO sha256 step
+/// in v2 — the manager's own registry integrity is the trust root —
+/// so this path is deliberately separate from the verified
+/// download+sidecar body used by the `github`/`curl` methods.
+pub async fn run_package_manager_command(command: &[String]) -> Result<(), UpgradeError> {
+    let display = command.join(" ");
+    let spawned = tokio::process::Command::new(&command[0])
+        .args(&command[1..])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .output();
+    let output = match tokio::time::timeout(Duration::from_secs(300), spawned).await {
+        Ok(Ok(output)) => output,
+        Ok(Err(error)) => {
+            return Err(UpgradeError(format!(
+                "{display} could not install OpenCode: failed to run {}: {error}. Fix the issue above, then run opencode upgrade again.",
+                command[0]
+            )));
+        }
+        Err(_) => {
+            return Err(UpgradeError(format!(
+                "{display} could not install OpenCode: the command timed out after 5 minutes. Fix the issue above, then run opencode upgrade again."
+            )));
+        }
+    };
+    if output.status.success() {
+        return Ok(());
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    let detail = if concise_detail(&stderr).is_empty() {
+        concise_detail(&stdout)
+    } else {
+        concise_detail(&stderr)
+    };
+    let detail = if detail.is_empty() {
+        format!(
+            "The command exited with code {} without any error output.",
+            output.status.code().unwrap_or(-1)
+        )
+    } else {
+        detail
+    };
+    Err(UpgradeError(format!(
+        "{display} could not install OpenCode: {detail}. Fix the issue above, then run opencode upgrade again."
+    )))
+}
+
+/// Upgrade via a package manager (v2 `upgrade` package-manager
+/// branches): resolve the package, build the exact argv, run it.
+pub async fn upgrade_via_package_manager(method: &str, version: &str) -> Result<(), UpgradeError> {
+    let version = version.trim().trim_start_matches('v');
+    let package = package_name();
+    let Some(command) = package_manager_command(method, &package, version) else {
+        return Err(UpgradeError(format!("Unknown package-manager method: {method}")));
+    };
+    println!("Running: {}", command.join(" "));
+    run_package_manager_command(&command).await
+}
 
 /// Failures of [`upgrade`] — one clear message each, like v2's
 /// `UpgradeError` (title/detail/command/retry collapsed).
@@ -164,16 +326,26 @@ pub async fn upgrade(request: UpgradeRequest) -> i32 {
     match method.as_str() {
         "local-file" => upgrade_from_file(Path::new(target), &exe),
         "github" | "curl" => upgrade_from_release(method == "curl", target, &exe).await,
-        "brew" => {
-            eprintln!(
-                "Error: This binary lives under a Homebrew Cellar; upgrade it with `brew upgrade opencode` (the Rust port does not drive package managers)."
-            );
-            1
+        "brew" | "npm" | "pnpm" | "bun" | "yarn" | "vp" => {
+            // v2 drives the real package-manager command (`npm install
+            // --global <pkg>@<ver>`, …). No sha256 step here: the
+            // manager's registry is the trust root (matches ref).
+            let version = target;
+            match upgrade_via_package_manager(&method, version).await {
+                Ok(()) => {
+                    println!("Upgrade complete ({method}).");
+                    0
+                }
+                Err(error) => {
+                    eprintln!("Error: {error}");
+                    1
+                }
+            }
         }
         other => {
             eprintln!(
-                "Error: Method {other:?} installs the TS release stream; the Rust port only supports {}.",
-                EXTRA_METHODS.join(", ")
+                "Error: Unknown upgrade method {other:?}; supported methods: {}.",
+                ALL_METHODS.join(", ")
             );
             1
         }
@@ -192,23 +364,16 @@ async fn upgrade_to_latest(requested_method: &str, exe: &Path) -> i32 {
             eprintln!("Error: local-file upgrades need a path argument (a tarball, zip, or binary on disk).");
             return 1;
         }
-        "brew" => {
+        "brew" | "npm" | "pnpm" | "bun" | "yarn" | "vp" => {
             eprintln!(
-                "Error: This binary lives under a Homebrew Cellar; upgrade it with `brew upgrade opencode` (the Rust port does not drive package managers)."
-            );
-            return 1;
-        }
-        "npm" | "pnpm" | "bun" | "yarn" | "vp" => {
-            eprintln!(
-                "Error: Method {requested_method:?} installs the TS release stream; the Rust port only supports {}.",
-                EXTRA_METHODS.join(", ")
+                "Error: Method {requested_method:?} needs an explicit version (e.g. `opencode upgrade 2.0.24 --method {requested_method}`); the release channel only serves the Rust artifact stream."
             );
             return 1;
         }
         // `auto` still refuses to drive a Cellar build it can detect.
         "auto" if detect_method(exe) == Some("brew") => {
             eprintln!(
-                "Error: This binary lives under a Homebrew Cellar; upgrade it with `brew upgrade opencode` (the Rust port does not drive package managers)."
+                "Error: This binary lives under a Homebrew Cellar; upgrade it with `brew upgrade opencode`."
             );
             return 1;
         }
@@ -1361,5 +1526,207 @@ mod tests {
         let errors = execute_removals(&plan);
         assert_eq!(errors.len(), 1, "remove_dir_all on a file reports, not panics");
         assert!(errors[0].starts_with("File:"), "{}", errors[0]);
+    }
+
+    // ------------------------------------------------------------------
+    // Package-manager upgrade execution (v2 runUpgrade) — fake
+    // binaries on PATH, never a real install
+    // ------------------------------------------------------------------
+
+    /// Write a fake `<name>` executable into `dir` that appends its
+    /// argv (one per line) to `log` and exits `code` after printing
+    /// `stderr_text` to stderr.
+    fn fake_manager(dir: &Path, name: &str, log: &Path, code: i32, stderr_text: &str) {
+        use std::os::unix::fs::PermissionsExt as _;
+        let script = dir.join(name);
+        let stderr_escaped = stderr_text.replace('\\', "\\\\").replace('\'', "'\\''");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\" >> '{}'; done\nprintf '%s\\n' '{}' >&2\nexit {code}\n",
+                log.display(),
+                stderr_escaped
+            ),
+        )
+        .expect("write fake manager");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod fake manager");
+    }
+
+    /// Env sandbox pointing PATH exclusively at `dir` (keeps /usr/bin
+    /// out so a REAL npm can never leak in).
+    struct PathGuard(Vec<(&'static str, Option<std::ffi::OsString>)>);
+
+    fn shim_path(dir: &Path) -> PathGuard {
+        let saved = vec![("PATH", std::env::var_os("PATH"))];
+        std::env::set_var("PATH", dir);
+        PathGuard(saved)
+    }
+
+    impl Drop for PathGuard {
+        fn drop(&mut self) {
+            for (name, value) in &self.0 {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
+    }
+
+    fn argv_of(log: &Path) -> Vec<String> {
+        std::fs::read_to_string(log).expect("log").lines().map(str::to_owned).collect()
+    }
+
+    #[test]
+    fn package_manager_commands_match_v2() {
+        let npm = package_manager_command("npm", "@opencode-ai/cli", "2.0.24").expect("npm");
+        assert_eq!(npm, vec!["npm", "install", "--global", "--force", "@opencode-ai/cli@2.0.24"]);
+        assert_eq!(
+            package_manager_command("pnpm", "pkg", "1.2.3").expect("pnpm"),
+            vec!["pnpm", "add", "--global", "--allow-build=pkg", "pkg@1.2.3"]
+        );
+        assert_eq!(
+            package_manager_command("bun", "pkg", "1.2.3").expect("bun"),
+            vec!["bun", "install", "--global", "--trust", "pkg@1.2.3"]
+        );
+        assert_eq!(
+            package_manager_command("yarn", "pkg", "1.2.3").expect("yarn"),
+            vec!["yarn", "global", "add", "pkg@1.2.3"]
+        );
+        assert_eq!(
+            package_manager_command("vp", "pkg", "1.2.3").expect("vp"),
+            vec!["vp", "update", "-g", "pkg@1.2.3"]
+        );
+        assert_eq!(
+            package_manager_command("brew", "opencode", "1.2.3").expect("brew"),
+            vec!["brew", "upgrade", "opencode"]
+        );
+        assert!(package_manager_command("curl", "pkg", "1.2.3").is_none());
+        assert!(package_manager_command("github", "pkg", "1.2.3").is_none());
+    }
+
+    #[tokio::test]
+    async fn npm_upgrade_runs_the_real_argv_via_a_path_shim() {
+        let dir = tempfile::tempdir().expect("dir");
+        let log = dir.path().join("argv.log");
+        fake_manager(dir.path(), "npm", &log, 0, "");
+        let _guard = shim_path(dir.path());
+
+        let saved = std::env::var(PACKAGE_ENV).ok();
+        std::env::remove_var(PACKAGE_ENV);
+        upgrade_via_package_manager("npm", "v2.0.24").await.expect("fake install succeeds");
+        match saved {
+            Some(saved) => std::env::set_var(PACKAGE_ENV, saved),
+            None => std::env::remove_var(PACKAGE_ENV),
+        }
+
+        let expected: Vec<String> =
+            ["install", "--global", "--force", &format!("{DEFAULT_PACKAGE}@2.0.24")]
+                .into_iter()
+                .map(str::to_owned)
+                .collect();
+        assert_eq!(argv_of(&log), expected);
+    }
+
+    #[tokio::test]
+    async fn every_manager_runs_its_own_argv() {
+        let dir = tempfile::tempdir().expect("dir");
+        let _guard = shim_path(dir.path());
+        let saved = std::env::var(PACKAGE_ENV).ok();
+        std::env::set_var(PACKAGE_ENV, "fake-pkg");
+        for method in PACKAGE_MANAGERS {
+            let log = dir.path().join(format!("{method}.log"));
+            fake_manager(dir.path(), method, &log, 0, "");
+            upgrade_via_package_manager(method, "3.0.0").await.expect("fake install");
+            let argv = argv_of(&log);
+            assert!(argv.contains(&"fake-pkg@3.0.0".to_owned()), "{method}: {argv:?}");
+            // Pinned versions, never floating tags.
+            assert!(!argv.iter().any(|arg| arg == "latest"), "{method}");
+        }
+        match saved {
+            Some(saved) => std::env::set_var(PACKAGE_ENV, saved),
+            None => std::env::remove_var(PACKAGE_ENV),
+        }
+    }
+
+    #[tokio::test]
+    async fn non_zero_exit_propagates_stderr_tail() {
+        let dir = tempfile::tempdir().expect("dir");
+        let log = dir.path().join("argv.log");
+        fake_manager(
+            dir.path(),
+            "npm",
+            &log,
+            3,
+            "npm ERR! code EACCES\nnpm ERR! permission denied",
+        );
+        let _guard = shim_path(dir.path());
+
+        let error = upgrade_via_package_manager("npm", "1.0.0").await.expect_err("exit 3");
+        assert!(error.0.contains("could not install OpenCode"), "{}", error.0);
+        assert!(error.0.contains("npm install --global"), "{}", error.0);
+        assert!(error.0.contains("EACCES"), "stderr tail survives: {}", error.0);
+        assert!(error.0.contains("permission denied"), "{}", error.0);
+    }
+
+    #[tokio::test]
+    async fn non_zero_exit_without_output_still_explains() {
+        let dir = tempfile::tempdir().expect("dir");
+        let log = dir.path().join("argv.log");
+        fake_manager(dir.path(), "vp", &log, 2, "");
+        let _guard = shim_path(dir.path());
+
+        let error = upgrade_via_package_manager("vp", "1.0.0").await.expect_err("exit 2");
+        assert!(error.0.contains("exited with code 2"), "{}", error.0);
+    }
+
+    #[tokio::test]
+    async fn missing_binary_is_a_clear_error() {
+        // PATH points at an empty dir: every manager name is missing.
+        let dir = tempfile::tempdir().expect("dir");
+        let _guard = shim_path(dir.path());
+
+        let error = run_package_manager_command(&[
+            "definitely-not-a-real-manager".to_owned(),
+            "x".to_owned(),
+        ])
+        .await
+        .expect_err("spawn fails");
+        assert!(error.0.contains("failed to run"), "{}", error.0);
+        assert!(error.0.contains("could not install OpenCode"), "{}", error.0);
+    }
+
+    #[tokio::test]
+    async fn upgrade_entrypoint_returns_zero_on_success_and_one_on_failure() {
+        let dir = tempfile::tempdir().expect("dir");
+        let log_ok = dir.path().join("ok.log");
+        fake_manager(dir.path(), "yarn", &log_ok, 0, "");
+        let log_bad = dir.path().join("bad.log");
+        fake_manager(dir.path(), "pnpm", &log_bad, 9, "boom");
+        let _guard = shim_path(dir.path());
+
+        let code =
+            upgrade(UpgradeRequest { method: "yarn".to_owned(), target: Some("4.5.6".to_owned()) })
+                .await;
+        assert_eq!(code, 0);
+        assert!(argv_of(&log_ok).iter().any(|arg| arg.contains("4.5.6")), "{:?}", argv_of(&log_ok));
+
+        let code =
+            upgrade(UpgradeRequest { method: "pnpm".to_owned(), target: Some("4.5.6".to_owned()) })
+                .await;
+        assert_eq!(code, 1);
+    }
+
+    #[test]
+    fn concise_detail_matches_v2_rules() {
+        // v2 only trimEnds each line: leading whitespace survives.
+        assert_eq!(concise_detail("  hello  \n\nworld\r\n"), "  hello\nworld");
+        let many = (1..=20).map(|i| i.to_string()).collect::<Vec<_>>().join("\n");
+        let detail = concise_detail(&many);
+        assert!(detail.starts_with('9'), "keeps the last 12 lines: {detail}");
+        assert!(detail.ends_with("Output shortened to the last 12 lines."));
+        let long = format!("{}\n", "x".repeat(3_000));
+        assert!(concise_detail(&long).starts_with('…'), "long output is clipped");
     }
 }
