@@ -57,9 +57,7 @@ fn discover_in_directory(directory: &Path) -> Vec<DiscoveredTheme> {
     let mut files: Vec<PathBuf> = entries
         .filter_map(Result::ok)
         .filter(|entry| {
-            entry
-                .file_type()
-                .is_ok_and(|kind| kind.is_file() || kind.is_symlink())
+            entry.file_type().is_ok_and(|kind| kind.is_file() || kind.is_symlink())
                 && entry.path().extension().is_some_and(|ext| ext == "json")
         })
         .map(|entry| entry.path())
@@ -132,10 +130,7 @@ mod tests {
         let root = temp_root("missing");
         assert_eq!(discover_themes(&[root.clone()]), Vec::<DiscoveredTheme>::new());
         // A completely absent directory is equally fine (ENOENT → empty).
-        assert_eq!(
-            discover_themes(&[root.join("nope")]),
-            Vec::<DiscoveredTheme>::new()
-        );
+        assert_eq!(discover_themes(&[root.join("nope")]), Vec::<DiscoveredTheme>::new());
         let _ = fs::remove_dir_all(&root);
     }
 

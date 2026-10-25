@@ -1,0 +1,20 @@
+# Vendored grammar crate (RA-07) — see README.md for provenance. The ref
+# pins the anomalyco fork v0.1.2 wasm (parsers-config.ts:170-178); no
+# crates.io release of that fork exists, so the pin is vendored as a
+# path crate with standard tree-sitter-language 0.1 bindings.
+[package]
+name = "tree-sitter-vue"
+description = "vue grammar for tree-sitter (vendored at anomalyco fork tag v0.1.2)"
+version = "0.1.2"
+edition = "2021"
+license = "MIT"
+links = "tree_sitter_vue"
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+tree-sitter-language = "0.1"
+
+[build-dependencies]
+cc = "1.1"
