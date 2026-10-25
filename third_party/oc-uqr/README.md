@@ -42,7 +42,9 @@ Regenerating `src/golden.json` (from the ref checkout):
                      ["http://localhost:4096/auth/connect/pair-code-123",2],
                      ["https://opencode.ai/auth/connect/abc123",1],
                      ["1234567890",1],["HELLO WORLD 123",1],["",1],["A",1],
-                     ["héllo wörld",1]];
+                     ["héllo wörld",1],
+                     // v5 long-URL coverage — keep in sync with golden.json.
+                     ["https://example.com/some/very/long/path/that/pushes/the/version/up?query=1&more=2#frag",1]];
       const out = [];
       for (const [text, border] of cases) {
         const r = uqr.encode(text, { border });

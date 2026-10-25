@@ -480,7 +480,7 @@ pub fn content_rows(groups: &[SelectGroup]) -> usize {
     rows
 }
 
-/// The scroll window height (`height()`, dialog-select.tsx:241):
+/// The scroll window height (`height()`, src/ui/dialog-select.tsx:241):
 /// `Math.min(rows(), Math.floor(dimensions().height / 2) - 6)` — NO
 /// minimum floor in the ref (the SE-F6 scan's "min-5 clamp" claim
 /// has no ref-source basis; the tsx clamps nothing, so short
