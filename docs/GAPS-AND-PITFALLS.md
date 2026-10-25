@@ -8,7 +8,7 @@
 
 ## 1. 当前缺口（截至 2026-10-24，v2.0.24 gap burn-down 收尾之后）
 
-> **2026-10-24 burn-down 收尾**：计划 docs/superpowers/plans/2026-10-23-v2-gap-burndown.md 的全部 lane 落地后，§1 所列功能缺口**除具名豁免外全部闭环**（台账：.superpowers/sdd/2026-10-23-v2-gap-burndown/progress.md）。发布就绪判定 = 台账清零或仅余具名豁免：R-04 前端范围外裁定、R1–R5 hook 注册豁免、(b)-类随机 coin、F15 残留具名豁免（QR 编码器缺失〔`oc-cli/src/handlers/misc.rs:225` 同源〕、≥96 列横排、<54 列 URL 截断、Enter 关闭 affordance、h<36 滚动裁剪）、**console variants/模型级 package/native-protocol 接入延后**（原 lane 降范围，待 native-protocol-binding lane 重开）、**OPENCODE_FAST_BOOT/skipInitialLoading 无对等**（CONFIG-E3 登记 open，boot pill 可达后更显性）。
+> **2026-10-24 burn-down 收尾**：计划 docs/superpowers/plans/2026-10-23-v2-gap-burndown.md 的全部 lane 落地后，§1 所列功能缺口**除具名豁免外全部闭环**（台账：.superpowers/sdd/2026-10-23-v2-gap-burndown/progress.md）。发布就绪判定 = 台账清零或仅余具名豁免：R-04 前端范围外裁定、R1–R5 hook 注册豁免、(b)-类随机 coin、F15 残留具名豁免收敛为 QR 编码器缺失〔`oc-cli/src/handlers/misc.rs:225` 同源〕、<54 列 URL 截断（≥96 横排、Enter 关闭、h<36 滚动已于 2026-10-26 f15-b 对齐 ref 源码关闭）、**console variants/模型级 package/native-protocol 接入延后**（原 lane 降范围，待 native-protocol-binding lane 重开）、**OPENCODE_FAST_BOOT/skipInitialLoading 无对等**（CONFIG-E3 登记 open，boot pill 可达后更显性）。
 
 > **2026-10-24 G 系列 burn-down（本日第二轮，deepwork g-series）**：G-01～G-17 全部处置完毕——除 G-09（维持登记：双侧一致的 LSP 非回归）与 G-14（六场景浏览器冒烟本地 3×全绿 + runtime-gates 周 cron 已挂，**完成待首周 cron 实跑观察后方可宣称"功能一致已验证"**）外全部闭环；G-11 收敛至无损集（clipboard/paste 评估/diff 逻辑），sound/syntax/terminal_pane 阻塞上游并附解锁条件（docs/FRAMEWORK-CONVERGENCE.md）；G-06 复核修正登记册"本体已备"的错误声明。三道 oracle gate 均 GO-WITH-FOLLOWUPS、followup 全部消化；全 workspace 4190/4190 绿。G 系列已同步 ROADMAP §2 台账（2026-10-24）。原有具名豁免（R-04、R1–R5、(b)-coin、F15 残留、console variants 延后、FAST_BOOT）维持不变。
 
@@ -46,7 +46,7 @@
 
 | ID | 分歧 | 处置状态 |
 |---|---|---|
-| F15 | TUI 窄宽度换行 | **已解决，前提被证伪（2026-10-24）**：live ref 证实为**截断而非换行**（dialog-select.tsx:885-919 两段式截断已 1:1 移植）；DialogPair 重移植为自定义换行对话框（此前误建模为 select 模式）；c2f59d7。残留具名豁免：QR 编码器、≥96 列横向分屏（port 恒为 stacked）、<54 列 URL 硬裁剪、Enter 关闭 affordance、h<36 scroll-clip |
+| F15 | TUI 窄宽度换行 | **已解决，前提被证伪（2026-10-24）**：live ref 证实为**截断而非换行**（dialog-select.tsx:885-919 两段式截断已 1:1 移植）；DialogPair 重移植为自定义换行对话框（此前误建模为 select 模式）；c2f59d7。残留具名豁免：QR 编码器、<54 列 URL 硬裁剪。2026-10-26 f15-b 收口三项残留：≥96 列横向分屏已移植（门槛=**终端**宽 `dimensions().width >= 96`，dialog-pair.tsx:39；文本列固定 29 格，:45；QR 列仍空——编码器豁免）；Enter 关闭 affordance 证实**登记过期**（dialog-help.tsx:14 return、dialog-alert.tsx:18-27、dialog-confirm.tsx:26-51、dialog-export-result.tsx:17-26 均已移植，dialog.rs:189/457/479/1142）；短视口滚动已对齐 ref 源码（dialog-select.tsx:241 无 min-5 下限——SE-F6 的"min-5"主张无 ref 出处，`viewport_height` 已改回 `min(rows, floor(h/2)-6)`；pair 的 h<36 预算 max(8, h−h/4−6) 与 dialog-pair.tsx:107 逐字一致） |
 | E12-F1 | 会话列表搜索：子会话泄漏 | **已裁定非分歧（2026-10-23 live ref 复核）**：live v2.0.24 从不渲染子会话行（服务端 `parentID:null` + `options()` 再过滤）；首轮 F1 系裸谓词孤立测试的伪影。证据 docs/e12-live-ref-recheck/（12/12 查询 parity） |
 | E12-F6 | 空白查询返回空 | **已裁定：裁剪后空查询 = 全量列表**（live ref 与本port一致返回全部父会话行）；谓词层保留子会话但渲染层永不含子行。与我们 `filter_indices` 语义一致，无需改码 |
 | E12-F4 | fuzzy picker vs 专用 substring 过滤 | **已裁定：substring（live ref 无 fuzzy：`zln`/`loginredirect` 均无结果）**；本port `session.list` 已挂 `.substring_filter()`——语义正确，闭环 |

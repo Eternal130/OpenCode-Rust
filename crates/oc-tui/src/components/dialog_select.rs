@@ -480,14 +480,15 @@ pub fn content_rows(groups: &[SelectGroup]) -> usize {
     rows
 }
 
-/// The scroll window height: `min(rows, max(5, floor(terminal_height /
-/// 2) - 6))` (`height()`). SE-F6: the ref clamps the window to a
-/// MINIMUM of 5 rows — a bare `floor(h/2) - 6` collapses to 0 at
-/// short viewports (12-row terminals: 0 list rows, the session dialog
-/// renders chrome only and the sessions stay invisible).
+/// The scroll window height (`height()`, dialog-select.tsx:241):
+/// `Math.min(rows(), Math.floor(dimensions().height / 2) - 6)` — NO
+/// minimum floor in the ref (the SE-F6 scan's "min-5 clamp" claim
+/// has no ref-source basis; the tsx clamps nothing, so short
+/// viewports show a proportionally small — possibly empty — list).
+/// The saturating form keeps negative results at 0 rows.
 #[must_use]
 pub fn viewport_height(rows: usize, terminal_height: usize) -> usize {
-    rows.min((terminal_height / 2).saturating_sub(6).max(5))
+    rows.min((terminal_height / 2).saturating_sub(6))
 }
 
 /// The DIALOG-CONTENT row of each flat option (the mouse surface,
@@ -1224,11 +1225,14 @@ mod tests {
         let props = SelectProps::new("Items", options);
         let groups = grouped(&props, "");
         assert_eq!(content_rows(&groups), 30);
-        // Viewport at terminal height 20: min(30, max(5, 10 - 6)) = 5 rows
-        // (SE-F6: the ref's min-5 window — never collapses to 0).
-        assert_eq!(viewport_height(30, 20), 5);
-        assert_eq!(viewport_height(30, 12), 5, "12-row terminals keep a 5-row window");
-        assert_eq!(viewport_height(3, 12), 3, "never above the row count");
+        // Viewport at terminal height 20: min(30, floor(20/2) - 6) = 4
+        // rows (dialog-select.tsx:241 — the ref carries NO min floor;
+        // at 12 rows the window is 0: chrome only).
+        assert_eq!(viewport_height(30, 20), 4);
+        assert_eq!(viewport_height(30, 12), 0, "12-row terminals: a 0-row window, exactly the ref");
+        assert_eq!(viewport_height(30, 21), 4);
+        assert_eq!(viewport_height(30, 22), 5);
+        assert_eq!(viewport_height(3, 12), 0, "never above the row count or the budget");
 
         let mut state = SelectState::default();
         for _ in 0..9 {
@@ -1236,26 +1240,29 @@ mod tests {
         }
         state.reveal(&props, 20);
         assert_eq!(state.selected, 9);
-        assert_eq!(state.scroll, 5, "edge-follow: selected row visible at the bottom");
+        assert_eq!(
+            state.scroll, 6,
+            "edge-follow: selected row visible at the bottom (4-row window)"
+        );
         state.move_selection(&props, -1);
         state.reveal(&props, 20);
-        assert_eq!(state.scroll, 5, "scroll does not jump upward while following");
+        assert_eq!(state.scroll, 6, "scroll does not jump upward while following");
         state.move_to_edge(&props, false);
         state.reveal(&props, 20);
         assert_eq!((state.selected, state.scroll), (0, 0), "home reveals from the top");
         state.move_to_edge(&props, true);
         state.reveal(&props, 20);
         assert_eq!(state.selected, 29);
-        assert_eq!(state.scroll, 25, "end pins the last row into the viewport");
+        assert_eq!(state.scroll, 26, "end pins the last row into the viewport");
 
         // The rendered window matches the scroll offset.
         let styles = styles();
         let view = render_select(&props, &state, &styles, Color::Rgb(10, 10, 10), 40, 20, Some(20));
         let text: String = view.rows[4].iter().map(|cell| cell.ch).collect();
-        assert!(text.contains("Item 25"), "first visible row at scroll 25: {text}");
-        let text: String = view.rows[8].iter().map(|cell| cell.ch).collect();
+        assert!(text.contains("Item 26"), "first visible row at scroll 26: {text}");
+        let text: String = view.rows[7].iter().map(|cell| cell.ch).collect();
         assert!(text.contains("Item 29"), "last visible row: {text}");
-        let text: String = view.rows[9].iter().map(|cell| cell.ch).collect();
+        let text: String = view.rows[8].iter().map(|cell| cell.ch).collect();
         assert_eq!(text.trim(), "", "row below the viewport is blank");
     }
 
@@ -1511,15 +1518,18 @@ mod tests {
         let long_groups = grouped(&long_props, "");
         let short_groups = grouped(&short_props, "");
         assert_eq!(content_rows(&long_groups), content_rows(&short_groups));
-        assert_eq!(viewport_height(content_rows(&long_groups), 20), 5);
+        assert_eq!(viewport_height(content_rows(&long_groups), 20), 4);
 
-        // Hit ranges: exactly one dialog row per option, consecutive.
+        // Hit ranges: exactly one dialog row per option, consecutive
+        // (the 4-row window at h=20 per dialog-select.tsx:241 — the
+        // fifth option is scrolled OUT, not a second row).
         let mut state = SelectState::default();
         state.reveal(&long_props, 20);
         let rows = option_dialog_rows(&long_props, &state, 20);
         assert_eq!(rows.len(), 12);
         assert_eq!(rows[0], Some(4));
-        assert_eq!(rows[4], Some(8), "each long option still occupies one row");
+        assert_eq!(rows[3], Some(7), "each long option still occupies one row");
+        assert_eq!(rows[4], None, "past the 4-row window: not on screen");
 
         // Movement by option + viewport centering: identical numbers
         // to the short-title control.
