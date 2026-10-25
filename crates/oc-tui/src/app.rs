@@ -4011,12 +4011,7 @@ impl HttpPromptSink {
         directory: String,
         events: tokio::sync::mpsc::UnboundedSender<PromptSinkEvent>,
     ) -> Self {
-        Self {
-            client,
-            directory,
-            events,
-            new_session_id: std::cell::RefCell::new(None),
-        }
+        Self { client, directory, events, new_session_id: std::cell::RefCell::new(None) }
     }
 
     /// Seed the pre-allocated first-session id (RB-02).
@@ -8837,10 +8832,8 @@ mod tests {
     fn prompt_sink_new_session_id_is_taken_once() {
         let client = oc_client::Client::new("http://127.0.0.1:1").expect("client");
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        let sink =
-            HttpPromptSink::new(client, "/tmp".to_owned(), tx).with_new_session_id(Some(
-                "ses_preallocated".to_owned(),
-            ));
+        let sink = HttpPromptSink::new(client, "/tmp".to_owned(), tx)
+            .with_new_session_id(Some("ses_preallocated".to_owned()));
         assert_eq!(sink.take_new_session_id().as_deref(), Some("ses_preallocated"));
         assert_eq!(sink.take_new_session_id(), None);
 

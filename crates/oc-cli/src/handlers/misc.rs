@@ -52,8 +52,7 @@ pub async fn root(
             return 1;
         }
     };
-    let boot =
-        oc_tui::app::BootArgs { continue_last, session, new_session_id, prompt, auto };
+    let boot = oc_tui::app::BootArgs { continue_last, session, new_session_id, prompt, auto };
     match oc_tui::app::run(client, boot).await {
         Ok(()) => 0,
         Err(message) => {
@@ -249,7 +248,7 @@ pub async fn pair(url: Option<&str>) -> i32 {
     // RB-03 — `--url` validation (ref commands.ts:524-532, done at
     // flag-parse time there): HTTP(S) only, no credentials, no query,
     // no fragment; the value is normalized through URL parsing with
-    /// trailing slashes stripped. Identical rejection message.
+    // trailing slashes stripped. Identical rejection message.
     let provided_url = match url {
         Some(url) => match validate_pair_url(url) {
             Ok(normalized) => Some(normalized),
@@ -430,9 +429,7 @@ async fn boot_session_ids(
     match session {
         Some(id) => match client.session().get(&id).await {
             Ok(_) => Ok((Some(id), None)),
-            Err(error) if error.api_name() == Some("SessionNotFoundError") => {
-                Ok((None, Some(id)))
-            }
+            Err(error) if error.api_name() == Some("SessionNotFoundError") => Ok((None, Some(id))),
             Err(error) => Err(util::error_message(&error.to_string())),
         },
         None => Ok((None, None)),
@@ -518,7 +515,9 @@ mod tests {
 
     #[test]
     fn pair_url_rejects_credentials_query_and_fragment() {
-        let err = Err("Expected an HTTP(S) server URL without credentials, query parameters, or a fragment");
+        let err = Err(
+            "Expected an HTTP(S) server URL without credentials, query parameters, or a fragment",
+        );
         assert_eq!(validate_pair_url("http://user:pass@example.com"), err);
         assert_eq!(validate_pair_url("http://example.com/?q=1"), err);
         assert_eq!(validate_pair_url("http://example.com/#frag"), err);
@@ -527,10 +526,7 @@ mod tests {
 
     #[test]
     fn pair_url_normalizes_trailing_slashes() {
-        assert_eq!(
-            validate_pair_url("https://example.com/").as_deref(),
-            Ok("https://example.com")
-        );
+        assert_eq!(validate_pair_url("https://example.com/").as_deref(), Ok("https://example.com"));
         assert_eq!(
             validate_pair_url("https://example.com///").as_deref(),
             Ok("https://example.com")
@@ -555,7 +551,8 @@ mod tests {
                     let mut buf = [0_u8; 4096];
                     let Ok(read) = socket.read(&mut buf).await else { return };
                     let head = String::from_utf8_lossy(&buf[..read]);
-                    let path = head.lines().next().unwrap_or_default().split(' ').nth(1).unwrap_or("");
+                    let path =
+                        head.lines().next().unwrap_or_default().split(' ').nth(1).unwrap_or("");
                     let id = path.rsplit('/').next().unwrap_or("");
                     let (status, body) = routes
                         .get(id)
@@ -577,7 +574,10 @@ mod tests {
         let mut routes = std::collections::HashMap::new();
         routes.insert(
             "ses_exists",
-            (200_u16, r#"{"data":{"sessionID":"ses_exists","created":0,"updated":0}}"#.to_owned()),
+            (
+                200_u16,
+                r#"{"data":{"id":"ses_exists","cost":0,"location":{"directory":"/tmp"},"projectID":"p","time":{"created":0,"updated":0},"tokens":{"cache":{"read":0,"write":0},"input":0,"output":0,"reasoning":0}}}"#.to_owned(),
+            ),
         );
         // 404 without a declared tag: transport-level UnexpectedStatus —
         // NOT SessionNotFound, so it must be fatal (ref rethrows).
@@ -608,7 +608,10 @@ mod tests {
     // --- RB-10c: installation method line (ref uninstall.ts:31,46) ---
 
     #[test]
-    fn installation_method_is_unknown_off_the_install_locations() {
+    fn installation_method_unknown_off_and_curl_at_the_install_location() {
+        // One test (not two): both scenarios mutate HOME — the repo's
+        // established pattern (updater's detect_method test) keeps the
+        // mutation inside a single test to avoid a parallel race.
         let home = tempfile::tempdir().expect("home");
         let saved = std::env::var("HOME").ok();
         std::env::set_var("HOME", home.path());
@@ -616,21 +619,11 @@ mod tests {
         std::fs::create_dir_all(elsewhere.parent().expect("parent")).expect("mkdir");
         std::fs::write(&elsewhere, "x").expect("write");
         assert_eq!(installation_method(&elsewhere), "unknown");
-        if let Some(saved) = saved {
-            std::env::set_var("HOME", saved);
-        } else {
-            std::env::remove_var("HOME");
-        }
-    }
-
-    #[test]
-    fn installation_method_detects_curl_location() {
-        let home = tempfile::tempdir().expect("home");
-        let saved = std::env::var("HOME").ok();
-        std::env::set_var("HOME", home.path());
         let installed = crate::services::updater::curl_binary();
         std::fs::create_dir_all(installed.parent().expect("parent")).expect("mkdir");
         std::fs::write(&installed, "x").expect("write");
+        // The tempdir is a symlinked /tmp path on some hosts — compare
+        // through the same canonicalization detect_method applies.
         let exe = std::fs::canonicalize(&installed).expect("canonical");
         assert_eq!(installation_method(&exe), "curl");
         if let Some(saved) = saved {
