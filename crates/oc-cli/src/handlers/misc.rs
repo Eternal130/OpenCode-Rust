@@ -294,7 +294,8 @@ pub async fn pair(url: Option<&str>) -> i32 {
     println!();
     println!(
         "  Open a link to connect. Links work once and expire in {} minutes.",
-        pairing.expires_in / 60
+        // ref pair.ts:27 uses Math.round on the minute count.
+        ((pairing.expires_in as f64) / 60.0).round()
     );
     println!();
     if links.is_empty() {
@@ -470,11 +471,6 @@ fn is_secret_key(key: &str) -> bool {
     ["apikey", "api_key", "secret", "token", "password"].iter().any(|needle| key.contains(needle))
 }
 
-/// RB-03 — the `pair --url` flag's `mapTryCatch` (ref
-/// commands.ts:524-532): parse, require `http:`/`https:`, reject
-/// credentials/query/hash (the URL's `username`/`password`/`search`/
-/// `hash` are all empty), normalize through the parsed href and strip
-/// trailing slashes (`url.href.replace(/\/+$/, "")`).
 /// The CLI pair output's QR block (ref commands/handlers/pair.ts
 /// :30-39): uqr `renderUnicodeCompact(link, { border: 2 })`, each
 /// row prefixed by two spaces. (uqr joins with "\n" on every
@@ -483,6 +479,11 @@ fn qr_block(link: &str) -> Vec<String> {
     oc_uqr::render_unicode_compact(link, 2).split('\n').map(|line| format!("  {line}")).collect()
 }
 
+/// RB-03 — the `pair --url` flag's `mapTryCatch` (ref
+/// commands.ts:524-532): parse, require `http:`/`https:`, reject
+/// credentials/query/hash (the URL's `username`/`password`/`search`/
+/// `hash` are all empty), normalize through the parsed href and strip
+/// trailing slashes (`url.href.replace(/\/+$/, "")`).
 fn validate_pair_url(raw: &str) -> Result<String, &'static str> {
     const MESSAGE: &str =
         "Expected an HTTP(S) server URL without credentials, query parameters, or a fragment";

@@ -4858,7 +4858,9 @@ pub fn spawn_loop_fetcher(
                                     .map(|url| link(url.trim_end_matches('/')))
                                     .collect(),
                                 localhost,
-                                minutes: u64::try_from(pairing.expires_in.max(0)).unwrap_or(0) / 60,
+                                // ref dialog-pair.tsx:30 `Math.round(expires_in / 60)`.
+                                minutes: u64::try_from(((pairing.expires_in.max(0) as f64) / 60.0).round() as i64)
+                                    .unwrap_or(0),
                                 loopback: server.urls.iter().any(|url| {
                                     let host = url
                                         .split_once("://")
