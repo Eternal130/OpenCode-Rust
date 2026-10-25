@@ -66,6 +66,25 @@
 - 最严格的验证门是 **opt-in/manual，不在 CI**：OpenAPI 启动差分与 DB 互操作电池需 `OC_P10=1`，跨二进制/TUI 冒烟同理——声明的"empty diff"依赖手动执行，存在跳过风险。**P10 盲区已自动化（2026-10-24）**：runtime-gates workflow 挂每周 cron（self-staging jobs；schedule arms 已修复 cron input 强转 no-op 问题）。注意：workflow 在已知红项（GATE-DB-STABLE/NULLROWS/TUI-RENAME）关闭前保持红——按设计保持诚实。
 - 旗舰插件（oh-my-opencode-slim）验收测试仅在有安装缓存的机器真跑，CI 自跳过（PLUG-D07 之后的回归正是它抓到的）。**已纳入每周 schedule（2026-10-24 起）**：omo staging 为 self-staging job，随 runtime-gates 周 cron 真跑。
 
+### 1.4 独立审查新发现（2026-10-25，四域 oracle 审查；详见 docs/PORT_REVIEW_2026-10-25.md）
+
+> 来源：core / server / TUI / AI+插件+CLI 四条并行独立审查泳道，全部以代码核实、不采信自述。以下为 PORT_REPORT §3 与本册此前**未登记或登记不充分**的条目。
+
+| ID | 发现 | 域 | 性质/状态 | 说明 |
+|---|---|---|---|---|
+| RA-01 | 请求 schema 校验仅覆盖 session.create/list 2/141 路由 | **已闭环（2026-10-25）** | 原"2/141"登记系滞后（HTTP-H0 后实际 28 body + 69/71 query 已由 middleware 全局执法）；本轮补齐剩余缝：post-location seam 18 body + 2 query op（404 解析后经 `validate_at_handler` 出 v2 形状 400）、path-param 模式校验（59 行 `^ses_/^msg_/^frm_/^per/^pty/^sh_`，Params→Query→Payload 序）、退役 `schema_check.rs`（362 行）；prompt/synthetic delivery 非法值改为 schema 层 `kind=Payload`（ref openapi 枚举约束核实）；oc-server 281/281 |
+| RA-02 | 包管理器升级路径降级为报错 | **已闭环（2026-10-25）** | npm/pnpm/bun/yarn/vp/brew 真实驱动（argv 逐字对齐 ref updater.ts，5 分钟超时、conciseDetail 输出压缩、OPENCODE_PACKAGE 可覆写包名）；PATH-shim 假二进制测试 8 项；oc-cli 211/211；合并 f26363f |
+| RA-03 | oc-theme discovery / system-theme 检测未移植 | **已闭环（2026-10-25）** | discovery（多目录扫描 + 后序覆盖 + 谐波合并）、config_directories（祖先 `.opencode` 遍历）、Rec.601 luma 明暗分类移植 oc-theme；oc-tui 去重委托；分歧文档化（坏 JSON 跳过不中止）；oc-theme/oc-tui 1264/1264；合并 83bfd1c |
+| RA-04 | `event-logger` / `file-retention` 无对位模块 | **已闭环（2026-10-25）** | 核实：日志基座（trim_log 50/25MiB）已在 errors.rs；本轮补 wiring——tool_output/shell retention 任务于 engine boot 挂起（此前 spawn_cleanup_task 零调用点 = 真实磁盘无界增长）、shell 侧清扫新实现（7d、sh_*.out）、5 事件 log 监听移植 boot；台账 TOOL-C11/TOOL-RETENTION 转 fixed；oc-core/oc-server 1344/1344；合并 03946f6 |
+| RA-05 | OS 通知通道协议分歧 | **登记为具名分歧（维持 OSC 路线）** | ref 走宿主 renderer 回调；rust 走 OSC 9/777/99（`os_notify.rs`）。裸 linux console/部分复用器静默丢失通知——接受为终端宿主下的合理代价（ref 回调依赖 GUI renderer，TUI 语境无对等面）；不修，仅登记 |
+| RA-06 | openai-responses WebSocket 已实现，报告滞后 | **已修订（2026-10-25）** | PORT_REPORT §3 "WebSocket 通道延后" 表述已删改为"已实现（ws-transport 默认 feature）" |
+| RA-07 | oc-syntax 语言查询覆盖面未对表 | **已闭环（2026-10-25）** | 对表结论：ref 37 门 vs rust 20 门；本轮 17/17 全补（8 门 ref pin 精确上游 crate、hcl 走 nvim-treesitter、markdown 降级无 injection、vue/kotlin third_party vendor）；默认构建体积未动（全部新语法门控在 `langs-extra`/`lang-*`/`all-languages` cargo features，default-on 实测 122.3MiB 超限故全量门控）；oc-syntax 35/35（default 与 all-languages）；合并 c15486f |
+| RA-08 | openapi 由运行时生成改为钉死快照伺服 | **已闭环（2026-10-25，登记补全）** | 快照滞后风险的制度化处置：ci.yml guards job 新增 `openapi-gen --check`；`tools/openapi-gen/README.md` 落地基线升级清单（7 步：换 spec→regen+fmt→--check→guards baseline→CAPPED_NODES 审计→p10 goldens→消息重探针） |
+| RA-09 | 错误信封手工注册表无对账 | **已闭环（2026-10-25）** | errors.ts 实为 30 类且 registry 全数已在；3 个 wire-only 内联信封（WorktreeError/VcsInitNotSupported/InstructionEntryTooLarge）收编 registry 单源；Rpc/RpcInternal 补 `data?` 字段；新增 `tools/guards/error_envelope.py` 从钉版 openapi 生成 (op,status,tag) 431+3 条对账（LocationNotFoundError spec 不可见补 3 条），进 guards CI；合并 32de6a0 |
+| RA-10 | worktree 策略枚举对应关系未验证 | **已闭环（2026-10-25）** | 对表结论：ref 无闭合枚举（StrategyID 开放串 + 唯一内建 git + 插件扩展点），git 策略端到端行为等价；修掉两处分歧：未知 stored strategy remove 现按 ref 出 `Worktree strategy unavailable`（原先盲目 git remove）、source 行校验跳过补齐（ref 无条件校验）；插件策略注册点登记为 R1–R5 家族具名豁免；合并 32de6a0 |
+
+> 同次审查核实：PORT_REPORT §3 既有登记项（插件宿主 R1–R5、单向迁移、更新通道换 feed+sha256、throw→skip、leader 和弦、P10-N1=RA-01、LSP 双侧共同缺失 G-09）均属实；141↔141 路由程序化对账全等；CLI 命令面逐 flag 对应。行动项优先级见 PORT_REVIEW_2026-10-25.md §4。
+
 ---
 
 ## 2. 踩坑记录（事故 → 根因 → 现行规则）
@@ -90,6 +109,7 @@
 | 2 | **扫描腿裸启 TUI 二进制锁死用户终端**：raw mode + alt screen 缓住真终端，两个 TUI 同写一屏→持续乱码、ctrl+c 被吃、被迫重启生产 v2 | E2 进程拉起腿未套 PTY harness，直接 `cargo run` 冒屏 | TUI 二进制任何 lane 只准在 vt/PTY harness 内或 stdout/stderr 重定向 + no-tty 模式启动；tmux/终端矩阵探针只碰自建会话；OSC/转义探针只写自有 PTY |
 | 3 | **测试进程泄露**：孤儿 rig/电池进程、stale ref-bun 进程（GATE3 一轮杀 12 个）、lane 死后后台矩阵孤儿化（rig 二进制消失、配对进程残留） | 后台长跑无归拢、teardown 不完整 | 长验证一律前台分块（≤45 分钟/块）；rig teardown 卫生项常设；GATE 轮清扫；清理门=mtime<30 分钟视为在用（两次误踩活动目录后立规） |
 | 4 | rig 使用陈旧二进制产物，两次被差分器抓获 | lane 换代码未重建 rig 缓存 | lane 收尾强制重建检查（已知陷阱清单） |
+| 5 | **孤儿 `sleep 300` 占住 dev-gate 全局锁 10+ 分钟**（2026-10-25，lane 收尾 watchdog 脱离父进程后持 flock 睡眠，全部构建排队静默堵死；宿主后台 shell 任务亦被清理丢失） | lane 派生的 sleep/watchdog 未在收尾时回收；flock 无超时 | lane 收尾自查自派生后台进程（派发模板新增必查项）；构建排队异常时先 `fuser /tmp/opencode/dev-gate.lock` 查持锁者；重试循环勿依赖宿主后台 shell 存活 |
 
 ### 2.3 宿主 / 会话生命周期
 

@@ -54,7 +54,7 @@
 - `serve --service` 已恢复 chdir 至 $HOME（per-location provider 覆盖已落地并实证"守护 A 服务 B"修复）
 - ~~pre-2.0.24 旧库升级路径：48 个迁移全部转译但验收只覆盖 v2.0.24 产库与空库（**首次启动建议备份数据目录**）~~ 电池已落地（2026-10-24）：合成 stepwise k=1..48 + 4 canary 边界全绿、常驻 CI（78976eb，见 MIGRATION.md §3.1）；真实历史语料门仍是 OC_P10；首启备份建议保留
 - 旗舰的 TUI export（dist/tui2.js）为 desktop/opentui 绑定——在 v2 桌面宿主外本就不可加载；Rust 侧以原生 ctx.ui.* slot 缝提供等价能力（6/6 slot 实测）
-- openai-responses 的 WebSocket 通道延后（SSE 回退路径完整，v2 默认亦可用 SSE）
+- openai-responses 的 WebSocket 通道已实现（`ws-transport` 为 oc-ai 默认 feature，`open_responses_channel.rs` WS 驱动在；2026-10-25 修订，此前误登记"延后"）
 - 请求 schema 校验仅覆盖电池中的 2 条路由（session.create/list），其余路由对畸形载荷的 400 形状与 v2 有分歧（P10-N1 同类）
 - TUI 非空草稿上 leader 和弦不触发（v2 键位表对和弦挂起 textarea——行为差异已登记）
 - ~~写回带 JSONC 注释的配置：拒绝并要求 --force（v2 保留注释重写）~~ 已修复（D-01）：`oc-core/src/config/jsonc_edit.rs` 移植 jsonc-parser 3.3.1 的 modify/applyEdits（位置保持式拼接 + 行级重缩进，2 空格），mcp add/plugin add/remove 默认保留注释逐字节改写；`--force` 保留为 rust-extra 显式丢弃注释覆盖（非对象根的拒绝边缘已登记）
