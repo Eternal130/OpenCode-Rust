@@ -920,6 +920,14 @@ fn route_target(operation_id: &str) -> (&'static str, String) {
         let substitution: &str = match param {
             "sessionID" => "ses_H0GEN",
             "formID" => "frm_H0GEN",
+            // Pattern-valid ids so the generated Params (path-param)
+            // validation passes and the matrix keeps probing Query kinds
+            // (v2 decode order: Params → Query → Payload). Mirrors the
+            // pending harness fix on the main worktree.
+            "messageID" | "inboxID" => "msg_H0GEN",
+            "ptyID" => "pty_H0GEN",
+            "requestID" => "per_H0GEN",
+            "id" => "sh_H0GEN",
             _ => "h0gen_id",
         };
         path.push_str(substitution);
