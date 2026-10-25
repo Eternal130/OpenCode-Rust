@@ -17,12 +17,46 @@
 //!   the repo carries no uqr/QR encoder (same REGISTERED gap as the
 //!   CLI's `pair`, oc-cli/src/handlers/misc.rs:225 +
 //!   docs/reposcan-findings.md:58); the text surface is ported now.
-//! * the horizontal ≥96-terminal split (ref :39-45) seats the QR
-//!   beside a 29-column intro column; without the QR the column
-//!   layout is the faithful surface. The gate is kept (content width
-//!   ≥ 96) but a Large dialog's content (88 − 4) never reaches it.
+//!
+//! F15 residual closed: the ≥96-column horizontal split. The ref
+//! gates on the TERMINAL width (`const horizontal = createMemo(()
+//! => dimensions().width >= 96)`, dialog-pair.tsx:39) — not the
+//! dialog content width — and in the split seats the text column at
+//! a FIXED 29 cells (`<box width={horizontal ? 29 : "100%"} …>`,
+//! :45) beside the QR column (flexGrow 1, :75-84). The earlier
+//! registration ("content width ≥ 96 never fires at Large") gated on
+//! the wrong width; the gate below is the terminal width, and the
+//! text walk wraps to 29 in the split — the QR column stays empty
+//! (the encoder gap above, another lane owns the QR surface).
 
 use crate::store::PairState;
+
+/// The horizontal-split gate (`dialog-pair.tsx:39`: `dimensions()
+/// .width >= 96` — the TERMINAL width, not the dialog's).
+pub const SPLIT_TERMINAL_WIDTH: usize = 96;
+
+/// The split's fixed text-column width (`dialog-pair.tsx:45`:
+/// `width={horizontal ? 29 : "100%"}`).
+pub const SPLIT_COLUMN_WIDTH: usize = 29;
+
+/// The split gate (dialog-pair.tsx:39): at ≥96 TERMINAL columns the
+/// content lays out as a horizontal row (text column | QR column).
+#[must_use]
+pub fn is_horizontal(terminal_width: usize) -> bool {
+    terminal_width >= SPLIT_TERMINAL_WIDTH
+}
+
+/// The width the text walk wraps to (dialog-pair.tsx:44-45): 29 in
+/// the horizontal split (the fixed left column), the box's inner
+/// width otherwise (`"100%"`).
+#[must_use]
+pub fn walk_width(terminal_width: usize, content_width: usize) -> usize {
+    if is_horizontal(terminal_width) {
+        SPLIT_COLUMN_WIDTH
+    } else {
+        content_width
+    }
+}
 
 /// The loopback hint (`dialog-pair.tsx:70-72`) — 76 chars, word-wrap
 /// territory at every dialog width below xlarge.
@@ -241,5 +275,51 @@ mod tests {
         assert_eq!(scroll_budget(20), 9);
         assert_eq!(scroll_budget(17), 8);
         assert_eq!(scroll_budget(36), usize::MAX);
+    }
+
+    /// The horizontal-split gate is the TERMINAL width
+    /// (`dimensions().width >= 96`, dialog-pair.tsx:39) — NOT the
+    /// dialog content width (a Large dialog's content is 84; the
+    /// split still fires at a 96-column terminal).
+    #[test]
+    fn split_gate_is_terminal_width() {
+        assert!(!is_horizontal(95), "below the threshold: stacked");
+        assert!(is_horizontal(96), "the ref's exact >= 96 gate");
+        assert!(is_horizontal(160));
+        // The walk width: 29 (the fixed text column, :45) in the
+        // split; the caller's content width otherwise.
+        assert_eq!(walk_width(96, 84), 29);
+        assert_eq!(walk_width(160, 84), 29);
+        assert_eq!(walk_width(95, 84), 84);
+        assert_eq!(walk_width(80, 60), 60);
+    }
+
+    /// In the split the text walk wraps to the 29-cell column
+    /// (dialog-pair.tsx:45): the intro breaks across rows and every
+    /// row fits 29 cells; below the gate the same intro is one row
+    /// at the full content width.
+    #[test]
+    fn split_wraps_the_text_column_to_29() {
+        let stacked = rows(&loaded(), 84);
+        assert!(
+            texts(&stacked).iter().any(|line| line.contains("expire in 10 minutes")),
+            "stacked keeps the whole intro on one row"
+        );
+        let split = rows(&loaded(), walk_width(96, 84));
+        assert!(
+            !texts(&split).iter().any(|line| line.contains("expire in 10 minutes")),
+            "the 29-cell column cannot hold the 65-char intro on one row"
+        );
+        for row in &split {
+            if let PairRow::Text { text, .. } = row {
+                assert!(crate::wrap::display_width(text) <= 29, "row fits 29: {text:?}");
+            }
+        }
+        // The blocks survive the narrow column: the labels and the
+        // (truncated) link rows are still present.
+        let joined = texts(&split).join("\n");
+        assert!(joined.contains("This device"));
+        assert!(joined.contains("Links"));
+        assert!(joined.contains("auth/connect") || joined.contains("localhost"));
     }
 }
