@@ -102,6 +102,8 @@ mod tests_retry;
 mod tests_step;
 #[cfg(test)]
 mod tests_tool_events;
+#[cfg(test)]
+mod tests_usage_affinity;
 
 use std::collections::BTreeMap;
 use std::pin::Pin;
@@ -515,7 +517,18 @@ impl SessionUsage {
                 }
                 None => false,
             })
-            .max_by_key(|cost| cost.tier.as_ref().map_or(0, |tier| tier.size));
+            // Ref usage.ts:26-29 — stable descending sort by tier size,
+            // take the FIRST: on equal sizes the earlier tier in the
+            // original order wins (`max_by_key` would take the last).
+            .fold(None, |best: Option<&model::Cost>, cost| match best {
+                Some(best)
+                    if best.tier.as_ref().map_or(0, |t| t.size)
+                        >= cost.tier.as_ref().map_or(0, |t| t.size) =>
+                {
+                    Some(best)
+                }
+                _ => Some(cost),
+            });
         let cost = tier.into_iter().chain(costs.iter().filter(|cost| cost.tier.is_none())).next();
         let Some(cost) = cost else { return Usd(Num(0.0)) };
         let total = (usage.input.0 * finite(cost.input.0 .0)
