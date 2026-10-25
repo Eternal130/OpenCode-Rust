@@ -561,6 +561,7 @@ fn run_td07_test<T: Send + 'static>(
         oc_tui::app::BootArgs {
             continue_last: false,
             session: Some("ses_route".to_owned()),
+            new_session_id: None,
             prompt: None,
             auto: false,
         },

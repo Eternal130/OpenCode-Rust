@@ -109,6 +109,7 @@ fn boot_session(id: &str) -> oc_tui::app::BootArgs {
     oc_tui::app::BootArgs {
         continue_last: false,
         session: Some(id.to_owned()),
+        new_session_id: None,
         prompt: None,
         auto: false,
     }
