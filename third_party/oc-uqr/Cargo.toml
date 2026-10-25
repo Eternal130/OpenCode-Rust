@@ -1,0 +1,14 @@
+# Vendored QR encoder — see README.md for provenance (uqr 0.1.3 / MIT).
+[package]
+name = "oc-uqr"
+description = "QR encoder + compact unicode renderer, a faithful Rust port of uqr 0.1.3 (vendored)"
+version = "0.1.3"
+edition = "2021"
+license = "MIT"
+
+[lib]
+path = "src/lib.rs"
+
+[dev-dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
