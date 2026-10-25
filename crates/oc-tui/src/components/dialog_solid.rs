@@ -1844,6 +1844,7 @@ pub fn render_overlay_solid(
                 plugin,
                 DialogColors::of(&DialogStyles::from_theme(theme)),
                 box_width,
+                width,
                 height,
                 sidecar,
             );
@@ -1861,7 +1862,7 @@ pub fn render_overlay_solid(
         }
     }
 
-    let inputs = build_inputs(entry, props, plugin, colors, box_width, height, sidecar);
+    let inputs = build_inputs(entry, props, plugin, colors, box_width, width, height, sidecar);
     let box_height = 1 + content_height(&inputs);
 
     DIALOG.with_borrow_mut(|slot| {
@@ -1964,6 +1965,7 @@ fn build_inputs(
     plugin: Option<&PluginDialogContent>,
     colors: DialogColors,
     box_width: usize,
+    terminal_width: usize,
     terminal_height: usize,
     sidecar: &DialogSidecar,
 ) -> DialogInputs {
@@ -2311,9 +2313,14 @@ fn build_inputs(
         // -- F15: DialogPair — the custom (non-select) tree --------
         Family::Pair => {
             // The root box's inner width (paddingLeft/right 2,
-            // dialog-pair.tsx:90); the content walk wraps to it.
+            // dialog-pair.tsx:90); the content walk wraps to it —
+            // EXCEPT in the ≥96-terminal horizontal split, where the
+            // text column is a FIXED 29 cells (`width={horizontal ?
+            // 29 : "100%"}`, dialog-pair.tsx:39+45; the QR column
+            // stays empty — the registered encoder gap).
             let content_width = box_width.saturating_sub(4).max(1);
-            let mut pair_rows = crate::components::dialog_pair::rows(&sidecar.pair, content_width);
+            let walk = crate::components::dialog_pair::walk_width(terminal_width, content_width);
+            let mut pair_rows = crate::components::dialog_pair::rows(&sidecar.pair, walk);
             // The height<36 scrollbox (:104-112): the content window
             // clips to the budget (an invisible scrollbar).
             pair_rows.truncate(crate::components::dialog_pair::scroll_budget(terminal_height));

@@ -1488,7 +1488,7 @@ mod tests {
     use crate::components::dialog_select::DialogStyles;
     use crate::reactive::Runtime;
     use crate::render::CellColor;
-    use crate::store::DialogSize;
+    use crate::store::{DialogSize, PairState};
     use ratatui::style::Color;
 
     fn rgb(color: CellColor) -> (u8, u8, u8) {
@@ -1691,6 +1691,57 @@ mod tests {
         let entry = store.top_dialog().expect("dialog opened");
         assert!(matches!(entry.kind, DialogKind::SessionRename { .. }));
         assert_eq!(entry.value, "Parity fake says hello.");
+    }
+
+    /// F15 residual: the pair dialog's ≥96 TERMINAL-column horizontal
+    /// split (dialog-pair.tsx:39 `dimensions().width >= 96`, :45 the
+    /// fixed 29-cell text column). Below the gate the Large box's
+    /// 84-cell walk keeps the whole intro on ONE row; past it the
+    /// column is 29 cells — the intro wraps and the full link CANNOT
+    /// render (it clips at 29). Rendering-field test: same store,
+    /// same dialog, only the terminal width differs.
+    #[test]
+    fn pair_dialog_split_gate_is_the_terminal_width() {
+        let theme = crate::theme::ThemeState::v2_dark();
+        let store = Store::new(Runtime::new());
+        store.set_pair_state(PairState::Loaded {
+            links: vec!["http://127.0.0.1:4096/auth/connect/pair-code-123".to_owned()],
+            localhost: Some("http://localhost:4096/auth/connect/pair-code-123".to_owned()),
+            minutes: 10,
+            loopback: false,
+        });
+        store.replace_dialog(DialogKind::Pair, DialogSize::Large);
+
+        // 95 columns: stacked — the 65-char intro fits one 84-cell row.
+        let mut frame = blank_base(95, 40);
+        render_overlay(&mut frame, &store, &theme, (95, 40));
+        let rows = frame.text_grid();
+        assert!(
+            rows.iter().any(|row| row.contains("expire in 10 minutes")),
+            "below the gate the full intro is one row"
+        );
+        assert!(
+            rows.iter().any(|row| row.contains("http://localhost:4096/auth/connect/pair-code-123")),
+            "below the gate the full link renders"
+        );
+
+        // 96 columns: the split — the text column is 29 cells.
+        let mut frame = blank_base(96, 40);
+        render_overlay(&mut frame, &store, &theme, (96, 40));
+        let rows = frame.text_grid();
+        assert!(
+            !rows.iter().any(|row| row.contains("expire in 10 minutes")),
+            "past the gate the intro cannot fit one row"
+        );
+        assert!(
+            rows.iter().any(|row| row.contains("expire in 10")),
+            "the wrapped intro's middle row"
+        );
+        assert!(
+            !rows.iter().any(|row| row.contains("pair-code-123")),
+            "the link clips inside the 29-cell column"
+        );
+        assert!(rows.iter().any(|row| row.contains("This device")), "the blocks survive");
     }
 
     /// `DialogHelp` (D-05 + the geometry wave): the prompt-family root
