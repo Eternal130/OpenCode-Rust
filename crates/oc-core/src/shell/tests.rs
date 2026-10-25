@@ -1,6 +1,7 @@
 //! Shell service tests (ported from shell.test.ts service-level behavior +
 //! tool-shell.test.ts notification formats).
 #![allow(clippy::assert_is_empty)] // deliberate empty-state assertions
+#![allow(clippy::duration_suboptimal_units)] // 7/8-day cutoffs read best in seconds
 
 use super::*;
 
@@ -446,5 +447,106 @@ mod parse_tests {
                 }
             }
         }
+    }
+
+    // -----------------------------------------------------------------
+    // RA-04 retention sweep (shell.ts:83-117 cleanup)
+    // -----------------------------------------------------------------
+
+    fn set_mtime(path: &std::path::Path, at: std::time::SystemTime) {
+        let file = std::fs::File::options().write(true).open(path).expect("open for times");
+        file.set_times(std::fs::FileTimes::new().set_modified(at)).expect("set mtime");
+    }
+
+    fn capture_dir(tmp: &tempfile::TempDir, project: &str) -> std::path::PathBuf {
+        let dir = tmp.path().join("shell").join(project);
+        std::fs::create_dir_all(&dir).expect("capture dir");
+        dir
+    }
+
+    #[test]
+    fn shell_cleanup_drops_stale_captures_and_keeps_recent_ones() {
+        let tmp = tempfile::tempdir().unwrap();
+        let now = std::time::SystemTime::now();
+        let dir_a = capture_dir(&tmp, "proj_a");
+        let dir_b = capture_dir(&tmp, "proj_b");
+        let old_a = dir_a.join("sh_000000000001AAAAAAAAAAAAAA.out");
+        let old_b = dir_b.join("sh_000000000002BBBBBBBBBBBBBB.out");
+        let recent = dir_a.join("sh_000000000003CCCCCCCCCCCCCC.out");
+        std::fs::write(&old_a, "old").unwrap();
+        std::fs::write(&old_b, "old").unwrap();
+        std::fs::write(&recent, "recent").unwrap();
+        set_mtime(&old_a, now - std::time::Duration::from_secs(8 * 24 * 60 * 60));
+        set_mtime(&old_b, now - std::time::Duration::from_secs(30 * 24 * 60 * 60));
+        set_mtime(&recent, now - std::time::Duration::from_secs(60));
+
+        crate::shell::cleanup_data_root(
+            tmp.path(),
+            u64::try_from(now.duration_since(std::time::UNIX_EPOCH).unwrap().as_millis()).unwrap(),
+        );
+
+        assert!(!old_a.exists(), "stale capture in proj_a removed");
+        assert!(!old_b.exists(), "stale capture in proj_b removed");
+        assert!(recent.exists(), "recent capture kept");
+    }
+
+    #[test]
+    fn shell_cleanup_filters_on_sh_prefix_and_out_suffix() {
+        let tmp = tempfile::tempdir().unwrap();
+        let now = std::time::SystemTime::now();
+        let dir = capture_dir(&tmp, "proj");
+        let stale = std::time::Duration::from_secs(8 * 24 * 60 * 60);
+        // Non-capture neighbors that must survive even when stale.
+        let keep = [
+            dir.join("tool_000000000001AAAAAAAAAAAAAA.out"),
+            dir.join("sh_000000000001AAAAAAAAAAAAAA.out.bak"),
+            dir.join("other_000000000001AAAAAAAAAAAAA.out"),
+            dir.join("sh_notes.txt"),
+        ];
+        for path in &keep {
+            std::fs::write(path, "keep").unwrap();
+            set_mtime(path, now - stale);
+        }
+
+        crate::shell::cleanup_data_root(
+            tmp.path(),
+            u64::try_from(now.duration_since(std::time::UNIX_EPOCH).unwrap().as_millis()).unwrap(),
+        );
+
+        for path in &keep {
+            assert!(path.exists(), "non-capture file kept: {}", path.display());
+        }
+    }
+
+    #[test]
+    fn shell_cleanup_ignores_a_missing_shell_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        // No <data>/shell at all — the sweep is a no-op, not an error.
+        crate::shell::cleanup_data_root(tmp.path(), 1_725_000_000_000);
+        assert!(!tmp.path().join("shell").exists());
+    }
+
+    #[tokio::test]
+    async fn shell_cleanup_task_runs_a_first_pass_on_spawn() {
+        let tmp = tempfile::tempdir().unwrap();
+        let now = std::time::SystemTime::now();
+        let dir = capture_dir(&tmp, "proj");
+        let old = dir.join("sh_000000000001AAAAAAAAAAAAAA.out");
+        std::fs::write(&old, "old").unwrap();
+        set_mtime(&old, now - std::time::Duration::from_secs(8 * 24 * 60 * 60));
+
+        let handle = crate::shell::spawn_cleanup_task(
+            tmp.path().to_path_buf(),
+            std::sync::Arc::new(oc_util::determinism::SystemClock),
+        );
+        // The first interval tick is immediate; give the runtime a beat.
+        for _ in 0..50 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            if !old.exists() {
+                break;
+            }
+        }
+        handle.abort();
+        assert!(!old.exists(), "spawned sweep removed the stale capture");
     }
 }
