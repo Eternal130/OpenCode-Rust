@@ -3998,6 +3998,10 @@ pub struct HttpPromptSink {
     client: oc_client::Client,
     directory: String,
     events: tokio::sync::mpsc::UnboundedSender<PromptSinkEvent>,
+    /// RB-02: the pre-allocated id of the first home-created session
+    /// (v2 `args.newSessionID`, handlers/default.ts:114). Taken ONCE —
+    /// only the first home submission uses it.
+    new_session_id: std::cell::RefCell<Option<String>>,
 }
 
 impl HttpPromptSink {
@@ -4007,7 +4011,21 @@ impl HttpPromptSink {
         directory: String,
         events: tokio::sync::mpsc::UnboundedSender<PromptSinkEvent>,
     ) -> Self {
-        Self { client, directory, events }
+        Self { client, directory, events, new_session_id: std::cell::RefCell::new(None) }
+    }
+
+    /// Seed the pre-allocated first-session id (RB-02).
+    #[must_use]
+    pub fn with_new_session_id(self, id: Option<String>) -> Self {
+        self.new_session_id.replace(id);
+        self
+    }
+
+    /// Take the pre-allocated id (once — the first taker wins, the
+    /// second home submission gets `None` like v2's one-shot
+    /// `newSessionID`).
+    fn take_new_session_id(&self) -> Option<String> {
+        self.new_session_id.borrow_mut().take()
     }
 }
 
@@ -4054,6 +4072,10 @@ impl crate::components::composer::PromptSink for HttpPromptSink {
             })
             .collect();
         let session_key = session_id.to_owned();
+        // RB-02: only a HOME submission can be the "first prompt" —
+        // it takes the pre-allocated `--session` id (v2 newSessionID).
+        let requested_session_id =
+            if session_key == HOME_PROMPT_KEY { self.take_new_session_id() } else { None };
         let delivery = match prompt.delivery.as_deref() {
             // TUI-TD07: the queue submit POSTs `delivery: "queue"`
             // (prompt/index.tsx:1322's `delivery`); every other submit
@@ -4068,6 +4090,7 @@ impl crate::components::composer::PromptSink for HttpPromptSink {
                 // Home submission: create the session first.
                 let body = oc_client::types::SessionCreateBody {
                     location: Some(oc_client::types::LocationPublicRef { directory }),
+                    id: requested_session_id,
                     ..oc_client::types::SessionCreateBody::default()
                 };
                 match client.session().create(&body).await {
@@ -6154,8 +6177,17 @@ pub struct BootArgs {
     /// placeholder through `session.list` limit 1, order desc,
     /// `parentID: null`, `directory: cwd`).
     pub continue_last: bool,
-    /// `--session <id>` / `-s`: open this session.
+    /// `--session <id>` / `-s`: open this session. The CLI handler
+    /// only sets this when the id EXISTS on the server (RB-02 — ref
+    /// `handlers/default.ts:53-61,111-114` probes with `findSession`
+    /// and passes `sessionID` only when found).
     pub session: Option<String>,
+    /// A `--session <id>` that does NOT exist yet: the id the FIRST
+    /// home-created session takes (ref `handlers/default.ts:54,114`:
+    /// "A missing --session ID becomes the ID of the session the first
+    /// prompt creates" — `newSessionID`). No route is applied; the
+    /// boot stays HOME until that prompt creates the session.
+    pub new_session_id: Option<String>,
     /// `--prompt <text>` (v2 `input.args.prompt`): the startup prompt
     /// — seeds the booted route's composer and auto-submits once on
     /// boot (app.tsx:626's `startupPrompt`; home.tsx:52-80 and
@@ -6401,11 +6433,10 @@ pub async fn run_with_size(
     let (sink_tx, mut sink_rx) = tokio::sync::mpsc::unbounded_channel::<PromptSinkEvent>();
     let directory =
         std::env::current_dir().map(|path| path.display().to_string()).unwrap_or_default();
-    app.store.set_prompt_sink(std::rc::Rc::new(HttpPromptSink::new(
-        client.clone(),
-        directory.clone(),
-        sink_tx,
-    )));
+    app.store.set_prompt_sink(std::rc::Rc::new(
+        HttpPromptSink::new(client.clone(), directory.clone(), sink_tx)
+            .with_new_session_id(boot.new_session_id.clone()),
+    ));
     // Wave A: the interrupt sink (the 2-press escape machine's fire
     // path) + the model-preference ring boot (`<state>/tui/model.json`
     // — shared with the mini host's document).
@@ -8775,6 +8806,41 @@ mod tests {
             None,
         );
         assert_eq!(store.route(), crate::store::Route::Home);
+    }
+
+    // RB-02 — a NON-EXISTENT `--session` id never routes (ref
+    // handlers/default.ts:111-114: `sessionID` only when the probe
+    // found it; otherwise `newSessionID` + the HOME boot).
+    #[test]
+    fn boot_route_nonexistent_session_id_stays_home() {
+        let store = Store::new(crate::reactive::Runtime::new());
+        apply_boot_route(
+            &store,
+            &BootArgs {
+                session: None,
+                new_session_id: Some("ses_missing".to_owned()),
+                ..BootArgs::default()
+            },
+            None,
+        );
+        assert_eq!(store.route(), crate::store::Route::Home);
+    }
+
+    // RB-02 — the pre-allocated id is taken ONCE (v2 `newSessionID`
+    // seeds exactly the first session the first prompt creates).
+    #[test]
+    fn prompt_sink_new_session_id_is_taken_once() {
+        let client = oc_client::Client::new("http://127.0.0.1:1").expect("client");
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let sink = HttpPromptSink::new(client, "/tmp".to_owned(), tx)
+            .with_new_session_id(Some("ses_preallocated".to_owned()));
+        assert_eq!(sink.take_new_session_id().as_deref(), Some("ses_preallocated"));
+        assert_eq!(sink.take_new_session_id(), None);
+
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let client = oc_client::Client::new("http://127.0.0.1:1").expect("client");
+        let plain = HttpPromptSink::new(client, "/tmp".to_owned(), tx);
+        assert_eq!(plain.take_new_session_id(), None);
     }
 }
 
