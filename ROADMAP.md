@@ -33,7 +33,7 @@
 | ID | Item | Status |
 |---|---|---|
 | R-01a | tree-sitter spike: oc-syntax crate + rust/python/ts + markdown code-block wiring (+3.1MiB; 18-language extrapolation 18.6MiB < 20 threshold, 19x perf headroom) | done (beta.4) |
-| R-01b | 15-language rollout + diff/tool-row wiring; size guardrail tripped (72.7MiB > 67.6 cap) → dropped swift/c-sharp/kotlin triple grammars, 16 filetypes ~64MiB; re-add path = cargo feature gate | done (beta.5) |
+| R-01b | 15-language rollout + diff/tool-row wiring; size guardrail tripped (72.7MiB > 67.6 cap) → dropped swift/c-sharp/kotlin triple grammars, 16 filetypes ~64MiB; re-add path = cargo feature gate | done (beta.5) — RA-07 re-added all three behind non-default `lang-swift`/`lang-csharp`/`lang-kotlin` features of oc-syntax (default release binary unchanged) |
 | R-02 | `opencode mini` split-pane frontend (scrollback echo + 4-line activity footer + permission/forms + demo mode, PTY integration tests) | done (beta.4) |
 | R-03 | `acp` editor protocol (official crate vendored, 13 methods + permission/form bridging, binary-level integration tests) | done (beta.4) |
 
