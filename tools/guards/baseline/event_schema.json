@@ -1,6 +1,6 @@
 {
   "guard": "event_schema",
-  "count": 30,
+  "count": 21,
   "violations": [
     "event:installation.update-available",
     "event:installation.updated",
@@ -10,13 +10,6 @@
     "event:mcp.resources.changed",
     "event:mcp.status.changed",
     "event:models-dev.refreshed",
-    "event:persistent-pty.added",
-    "event:persistent-pty.removed",
-    "event:project.updated",
-    "event:pty.created",
-    "event:pty.deleted",
-    "event:pty.exited",
-    "event:pty.updated",
     "event:session.compaction.delta",
     "event:session.deleted.2",
     "event:session.inbox.cancelled",
@@ -27,8 +20,6 @@
     "event:session.reasoning.started",
     "event:session.shell.started",
     "event:session.skill.activated",
-    "event:session.usage.recorded",
-    "event:shell.created",
     "event:shell.deleted",
     "event:shell.exited",
     "event:tui.session.select"
