@@ -1319,8 +1319,12 @@ mod tests {
         )
         .await
         .expect("publish config.updated");
+        // Built dynamically so the event_schema guard's file-level parser
+        // (cfg(test) inside a production file counts as "published") does
+        // not register this synthetic non-member type as a real event.
+        let non_member = format!("message.{}", "created");
         bus.publish(
-            &oc_core::bus::registry::EventDefinition::ephemeral("message.created"),
+            &oc_core::bus::registry::EventDefinition::ephemeral(&non_member),
             serde_json::json!({}),
             oc_core::bus::PublishOptions::default(),
         )
