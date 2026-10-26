@@ -309,9 +309,8 @@ pub fn family_of(package: &str) -> Option<ProtocolFamily> {
         // `openai/chat` (builtin-table reconciliation): the chat-model
         // re-export of the openai package (providers/openai/chat.ts:1)
         // — the OpenAI chat protocol at the baked api.openai.com base.
-        "@opencode/ai/providers/openai/chat" => ProtocolFamily::OpenAIChat,
-
-        "@opencode/ai/providers/azure/chat"
+        "@opencode/ai/providers/openai/chat"
+        | "@opencode/ai/providers/azure/chat"
         | "@opencode/ai/providers/alibaba/chat"
         | "@opencode/ai/providers/baseten"
         | "@opencode/ai/providers/cerebras"
@@ -353,8 +352,9 @@ pub fn family_of(package: &str) -> Option<ProtocolFamily> {
         // Vertex native (BE-4): the Gemini protocol deployed on aiplatform.
         // `google-vertex/gemini` is the gemini-model re-export of the
         // same package (providers/google-vertex/gemini.ts:1).
-        "@opencode/ai/providers/google-vertex"
-        | "@opencode/ai/providers/google-vertex/gemini" => ProtocolFamily::VertexGemini,
+        "@opencode/ai/providers/google-vertex" | "@opencode/ai/providers/google-vertex/gemini" => {
+            ProtocolFamily::VertexGemini
+        }
         // Vertex OpenAPI lanes (AI-V1): chat and responses on the
         // aiplatform `endpoints/openapi` root (providers/
         // google-vertex-chat.ts + google-vertex-responses.ts).
@@ -968,16 +968,11 @@ fn custom_native_language_model(
     specifier: &str,
     base_url: &str,
 ) -> Result<LanguageModel, ProviderError> {
-    let package = native::resolve_specifier(
-        specifier,
-        &custom.id,
-        Some(&model.id),
-        None,
-    )
-    .ok_or_else(|| ProviderError::UnsupportedProtocol {
-        provider: custom.id.clone(),
-        package: specifier.to_string(),
-    })?;
+    let package = native::resolve_specifier(specifier, &custom.id, Some(&model.id), None)
+        .ok_or_else(|| ProviderError::UnsupportedProtocol {
+            provider: custom.id.clone(),
+            package: specifier.to_string(),
+        })?;
     let family = family_of(&package).ok_or_else(|| ProviderError::UnsupportedProtocol {
         provider: custom.id.clone(),
         package: package.clone(),
@@ -1021,15 +1016,23 @@ fn custom_native_language_model(
     if let Some(base) = &base_url {
         let mut rest = BTreeMap::new();
         rest.insert("baseURL".to_string(), Value::String(base.clone()));
-        route_info.settings =
-            Some(oc_schema::model::Settings { rest, ..Default::default() });
+        route_info.settings = Some(oc_schema::model::Settings { rest, ..Default::default() });
     }
     let connection = ModelConnection {
         base_url: base_url.clone(),
         api_key: custom.api_key.clone(),
         headers: BTreeMap::new(),
     };
-    let route = build_route(context, family, &custom.id, &package, base_url, &[], &connection, &route_info)?;
+    let route = build_route(
+        context,
+        family,
+        &custom.id,
+        &package,
+        base_url,
+        &[],
+        &connection,
+        &route_info,
+    )?;
     // The same overlay fold as the fallback lane: provider-level under
     // model-level (model.ts:204-209).
     let provider_body = custom
@@ -1776,12 +1779,12 @@ mod tests {
     fn provider_facade_custom_native_binding_matrix() {
         let context = context();
         for (package, route_id, base) in [
-            ("@opencode/ai/providers/anthropic", "anthropic-messages", "https://api.anthropic.com/v1"),
             (
-                "@opencode/ai/providers/openai/chat",
-                "openai-chat",
-                "https://api.openai.com/v1",
+                "@opencode/ai/providers/anthropic",
+                "anthropic-messages",
+                "https://api.anthropic.com/v1",
             ),
+            ("@opencode/ai/providers/openai/chat", "openai-chat", "https://api.openai.com/v1"),
             (
                 "@opencode/ai/providers/openai/responses",
                 "openai-responses",
@@ -1802,8 +1805,7 @@ mod tests {
             let model =
                 custom_language_model(&context, &custom, "my-model").expect("{package} binds");
             assert!(model.route.id.contains(route_id), "{package}: {}", model.route.id);
-            let base_url =
-                model.route.endpoint.base_url.as_deref().unwrap_or_default().to_string();
+            let base_url = model.route.endpoint.base_url.as_deref().unwrap_or_default().to_string();
             assert!(base_url.starts_with(base), "{package}: {base_url}");
         }
     }
@@ -1817,8 +1819,7 @@ mod tests {
     fn provider_facade_custom_native_npm_alias_and_host_redirect() {
         let context = context();
         let custom = native_custom(Some("@ai-sdk/anthropic"), None);
-        let model =
-            custom_language_model(&context, &custom, "my-model").expect("npm alias binds");
+        let model = custom_language_model(&context, &custom, "my-model").expect("npm alias binds");
         assert!(model.route.id.contains("anthropic-messages"), "{}", model.route.id);
 
         let mut cohere = native_custom(Some("@ai-sdk/openai-compatible"), None);
@@ -1852,8 +1853,7 @@ mod tests {
         let context = context();
         let mut custom = native_custom(None, None);
         custom.base_url = "https://api.acme.test/v1".into();
-        let model =
-            custom_language_model(&context, &custom, "my-model").expect("fallback binds");
+        let model = custom_language_model(&context, &custom, "my-model").expect("fallback binds");
         assert_eq!(model.route.id, "openai-compatible-chat");
         assert_eq!(model.route.endpoint.base_url.as_deref(), Some("https://api.acme.test/v1"));
     }
@@ -1913,10 +1913,8 @@ mod tests {
         let catalog = Catalog::embedded();
         let mut info =
             catalog.model("anthropic", "claude-opus-4-5").expect("anthropic model info").clone();
-        info.settings = Some(oc_schema::model::Settings {
-            rest: rest.clone(),
-            ..Default::default()
-        });
+        info.settings =
+            Some(oc_schema::model::Settings { rest: rest.clone(), ..Default::default() });
         let route = apply_model_overlays(
             &openai_chat_route(Arc::new(oc_ai::route::transport::FailingTransport {
                 message: "facade unit test",

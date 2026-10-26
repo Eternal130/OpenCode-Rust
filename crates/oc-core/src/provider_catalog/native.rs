@@ -233,7 +233,7 @@ pub fn resolve_specifier(
         return Some("@opencode/ai/providers/azure/chat".to_string());
     }
     // Already a native entrypoint: accept exactly the builtin table.
-    BUILTIN_ENTRYPOINTS.contains(&npm.as_str()).then(|| npm.to_string())
+    BUILTIN_ENTRYPOINTS.contains(&npm.as_str()).then(|| npm.clone())
 }
 
 fn host_lookup(provider_id: &str, npm: &str) -> Option<String> {
