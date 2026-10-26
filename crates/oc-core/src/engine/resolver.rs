@@ -311,7 +311,17 @@ impl CatalogModelResolver {
                 }
                 let model = custom_language_model(&self.context, &provider, &canonical_model)
                     .map_err(|error| map_custom(error, &provider.id, &canonical_model))?;
-                let info = custom_model_info(&provider, &canonical_model, &self.catalog());
+                // CRED-A3: the selected variant's overlays fold into the
+                // merged Info exactly like the catalog path — console-
+                // declared variants (opencode.ts:282-293, merged onto
+                // the Info in `custom_model_info`) resolve through the
+                // same `withVariant` (model-resolver.ts:137-161), so
+                // `#id` references against console models work and
+                // unknown variants fail with VariantUnavailableError.
+                let info = with_variant(
+                    custom_model_info(&provider, &canonical_model, &self.catalog()),
+                    reference.variant.as_ref().map(|id| id.0.as_str()),
+                )?;
                 let canonical = oc_schema::model::Ref {
                     provider_id: oc_schema::id::ProviderId::parse(provider.id.clone()),
                     id: oc_schema::id::ModelId::parse(canonical_model),
@@ -922,12 +932,16 @@ pub fn custom_model_info(
         };
     }
     // M3 — v2's model-overlay rules on the merged Info (opencode.ts:272,
-    // 276-281): the provider-level package takes over the base's
-    // model-level package (cleared on the Info; the binding reads the
-    // provider package), and the model's own overlays — settings.baseURL,
-    // headers, body — merge onto the base Info per key (mergeOverlay
-    // semantics: the base record under the model overlay).
-    if custom.package.is_some() {
+    // 276-281): `model.package = config.package ?? (item.package !==
+    // undefined ? undefined : model.package)` — the MODEL-level package
+    // overrides the base, else a PROVIDER-level package clears the
+    // base's model-level package (the binding reads the provider
+    // package). The model's own overlays — settings.baseURL, headers,
+    // body — merge onto the base Info per key (mergeOverlay semantics:
+    // the base record under the model overlay).
+    if let Some(package) = &model.package {
+        info.package = Some(package.clone());
+    } else if custom.package.is_some() {
         info.package = None;
     }
     if let Some(headers) = &model.headers {
@@ -959,6 +973,47 @@ pub fn custom_model_info(
         let mut settings = info.settings.take().unwrap_or_default();
         settings.rest.insert("baseURL".to_owned(), Value::String(base_url.to_owned()));
         info.settings = Some(settings);
+    }
+    // Console variants merge PER ID over the base's (opencode.ts:282-293):
+    // an existing base variant with the same id is overlay-merged
+    // (settings deep mergeOverlay, headers union, body overlay wins per
+    // key); an unknown id is appended. Variants MERGE — they never
+    // replace the base's list (unlike cost).
+    for variant in &model.variants {
+        let index = match info.variants.iter().position(|existing| existing.id.0 == variant.id) {
+            Some(index) => index,
+            None => {
+                info.variants.push(oc_schema::model::Variant {
+                    id: oc_schema::id::ModelVariantId::parse(variant.id.clone()),
+                    settings: None,
+                    headers: None,
+                    body: None,
+                });
+                info.variants.len() - 1
+            }
+        };
+        let entry = &mut info.variants[index];
+        if let Some(variant_settings) = &variant.settings {
+            let mut next = entry.settings.clone().unwrap_or_default();
+            next.rest = merge_overlay_records(
+                entry.settings.as_ref().map(|settings| &settings.rest),
+                Some(&variant_settings.rest),
+            )
+            .unwrap_or_default();
+            if let Some(compaction) = variant_settings.compaction {
+                next.compaction = Some(compaction);
+            }
+            entry.settings = Some(next);
+        }
+        if variant.headers.is_some() {
+            entry.headers = oc_ai::schema::options::merge_string_records(&[
+                entry.headers.as_ref(),
+                variant.headers.as_ref(),
+            ]);
+        }
+        if variant.body.is_some() {
+            entry.body = merge_overlay_records(entry.body.as_ref(), variant.body.as_ref());
+        }
     }
     info
 }
@@ -1019,6 +1074,8 @@ mod console_merge_tests {
                     output: Some(64_000),
                 }),
                 base_url: None,
+                package: None,
+                variants: Vec::new(),
             }],
         }
     }
@@ -1165,6 +1222,146 @@ mod console_merge_tests {
         .with_console(console)
     }
 
+    /// Console variants merge PER ID over the base's — never replacing
+    /// the list (opencode.ts:282-293): an existing base variant with the
+    /// same id gets its overlays deep-merged (variant wins per key), an
+    /// unknown id is appended.
+    #[test]
+    fn custom_model_info_merges_console_variants_over_base() {
+        let catalog = catalog();
+        let base = catalog
+            .model("anthropic", "claude-opus-4-5")
+            .expect("catalog anthropic/claude-opus-4-5")
+            .clone();
+        let base_ids: Vec<String> = base.variants.iter().map(|v| v.id.0.clone()).collect();
+        assert!(base_ids.iter().any(|id| id == "high"), "base carries an effort `high` variant");
+        let mut custom = console_custom();
+        custom.canonical = Some("anthropic".into());
+        custom.models[0].id = "acme-opus".into();
+        custom.models[0].model_id = Some("claude-opus-4-5".into());
+        custom.models[0].capabilities = None;
+        custom.models[0].cost = None;
+        custom.models[0].limit = None;
+        // Overlay onto the EXISTING base `high` variant + a brand-new id
+        // (opencode.ts:283-286: find by id, else push `{ id }`).
+        custom.models[0].variants = vec![
+            crate::provider_catalog::facade::CustomModelVariant {
+                id: "high".into(),
+                settings: Some(oc_schema::model::Settings {
+                    rest: BTreeMap::from([("temperature".to_owned(), serde_json::json!(0.3))]),
+                    ..Default::default()
+                }),
+                headers: Some(BTreeMap::from([("x-v".to_owned(), "1".to_owned())])),
+                body: None,
+            },
+            crate::provider_catalog::facade::CustomModelVariant {
+                id: "turbo".into(),
+                settings: None,
+                headers: None,
+                body: Some(BTreeMap::from([("top_k".to_owned(), serde_json::json!(7))])),
+            },
+        ];
+        let info = custom_model_info(&custom, "acme-opus", &catalog);
+        let ids: Vec<String> = info.variants.iter().map(|v| v.id.0.clone()).collect();
+        // MERGE, not replace: every base variant survives plus `turbo`.
+        for id in &base_ids {
+            assert!(ids.contains(id), "base variant `{id}` survives the console merge");
+        }
+        assert!(ids.contains(&"turbo".to_owned()), "the new console variant is appended");
+        // The base `high` variant's overlays deep-merge under the
+        // console's (mergeOverlay: variant wins per key, opencode.ts:288-292).
+        let high = info.variants.iter().find(|v| v.id.0 == "high").unwrap();
+        assert_eq!(
+            high.settings.as_ref().and_then(|s| s.rest.get("temperature")),
+            Some(&serde_json::json!(0.3)),
+            "console variant setting lands on the base variant"
+        );
+        assert_eq!(
+            high.headers.as_ref().and_then(|h| h.get("x-v")).cloned(),
+            Some("1".to_owned()),
+            "console variant headers merge onto the base variant"
+        );
+        let turbo = info.variants.iter().find(|v| v.id.0 == "turbo").unwrap();
+        assert_eq!(
+            turbo.body.as_ref().and_then(|b| b.get("top_k")),
+            Some(&serde_json::json!(7)),
+            "the appended variant carries its own body overlay"
+        );
+    }
+
+    /// `model.package = config.package ?? (item.package !== undefined
+    /// ? undefined : model.package)` (opencode.ts:272): the MODEL-level
+    /// package overrides the base; else a provider-level package CLEARS
+    /// the base's; with neither the base package survives.
+    #[test]
+    fn custom_model_info_package_override_ladder() {
+        let catalog = catalog();
+        let base = catalog
+            .model("anthropic", "claude-opus-4-5")
+            .expect("catalog anthropic/claude-opus-4-5")
+            .clone();
+        let base_package = base.package.clone();
+        let mut custom = console_custom();
+        custom.canonical = Some("anthropic".into());
+        custom.models[0].model_id = Some("claude-opus-4-5".into());
+        custom.models[0].capabilities = None;
+        custom.models[0].cost = None;
+        custom.models[0].limit = None;
+
+        // Neither console package: the base model package survives.
+        let info = custom_model_info(&custom, "acme-large", &catalog);
+        assert_eq!(info.package, base_package, "no console package keeps the base's");
+
+        // Provider-level only: clears the base model package.
+        custom.package = Some("@opencode/ai/providers/anthropic".into());
+        let info = custom_model_info(&custom, "acme-large", &catalog);
+        assert_eq!(info.package, None, "provider package clears the model package");
+
+        // Model-level wins over both (opencode.ts:272 config.package first).
+        custom.models[0].package = Some("@opencode/ai/providers/openai-compatible".into());
+        let info = custom_model_info(&custom, "acme-large", &catalog);
+        assert_eq!(
+            info.package.as_deref(),
+            Some("@opencode/ai/providers/openai-compatible"),
+            "model package overrides even with a provider package set"
+        );
+    }
+
+    /// CRED-A3 wiring: console-declared variants resolve through
+    /// `withVariant` at bind (model-resolver.ts:137-161) — the selected
+    /// variant's settings fold into the bound Info, and an unknown
+    /// variant fails the resolution.
+    #[test]
+    fn console_bind_resolves_variant_overlays() {
+        let shared = crate::integration::console::ConsoleProviders::new();
+        let mut custom = console_custom();
+        custom.models[0].variants = vec![crate::provider_catalog::facade::CustomModelVariant {
+            id: "fast".into(),
+            settings: Some(oc_schema::model::Settings {
+                rest: BTreeMap::from([("temperature".to_owned(), serde_json::json!(0.1))]),
+                ..Default::default()
+            }),
+            headers: None,
+            body: None,
+        }];
+        shared.swap_for_test(vec![custom]);
+        let resolver = console_resolver(shared);
+        let reference = |variant: Option<&str>| oc_schema::model::Ref {
+            provider_id: oc_schema::id::ProviderId::parse("acme-ai".to_owned()),
+            id: oc_schema::id::ModelId::parse("acme-large".to_owned()),
+            variant: variant.map(|id| oc_schema::id::ModelVariantId::parse(id.to_owned())),
+        };
+        let (_model, info, _canonical) =
+            resolver.bind(&reference(Some("fast"))).expect("console variant binds");
+        assert_eq!(
+            info.settings.as_ref().and_then(|s| s.rest.get("temperature")),
+            Some(&serde_json::json!(0.1)),
+            "the selected console variant's settings fold into the Info"
+        );
+        let error = resolver.bind(&reference(Some("nope"))).expect_err("unknown variant fails");
+        assert!(error.to_string().contains("variant"), "{error}");
+    }
+
     /// The `cohere/north-mini-code-1-0` catalog model carries its own
     /// model-level api → `settings.baseURL` — the inherited base-model
     /// endpoint the precedence ladder must override or honor.
@@ -1202,6 +1399,8 @@ mod console_merge_tests {
                 cost: None,
                 limit: None,
                 base_url: None,
+                package: None,
+                variants: Vec::new(),
             }],
         }
     }

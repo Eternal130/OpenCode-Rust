@@ -179,6 +179,27 @@ pub struct CustomModel {
     /// The model-level `settings.baseURL` overlay (opencode.ts:276-279):
     /// outranks the provider-level endpoint at bind.
     pub base_url: Option<String>,
+    /// `models.<id>.package` (config/provider.ts:83) — overrides the
+    /// base model's package; when absent a PROVIDER-level package
+    /// clears the base model package instead (opencode.ts:272).
+    pub package: Option<String>,
+    /// `models.<id>.variants` (config/provider.ts:85-89) — `{id,
+    /// settings, headers, body}` entries merged per id over the base
+    /// model's variants (opencode.ts:282-293); variant settings are
+    /// already credential-stripped at projection
+    /// (`withoutCredentials(variant.settings)`, opencode.ts:289).
+    pub variants: Vec<CustomModelVariant>,
+}
+
+/// `Config.Model`'s variant entry (config/provider.ts:85-89): a
+/// `VariantID` plus the model overlay triple.
+#[derive(Debug, Clone, Default)]
+pub struct CustomModelVariant {
+    pub id: String,
+    /// Model overlay settings (`compaction` + arbitrary rest).
+    pub settings: Option<oc_schema::model::Settings>,
+    pub headers: Option<BTreeMap<String, String>>,
+    pub body: Option<BTreeMap<String, Value>>,
 }
 
 /// A user-defined custom provider (v2 `provider` config custom entries):

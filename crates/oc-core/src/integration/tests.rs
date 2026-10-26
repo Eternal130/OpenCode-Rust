@@ -2131,6 +2131,95 @@ async fn console_provider_resolves_through_the_snapshot() {
 // -- Task 3 (CONSOLE lane): decode + projection of the v2 merge fields
 // (opencode.ts:245-315, config/provider.ts:53-101) ------------------------------
 
+/// `models.<id>.variants` + `models.<id>.package` decode
+/// (config/provider.ts:83,85-89) and projection (opencode.ts:272,
+/// 282-293): variants carry per id with settings/headers/body overlays,
+/// and variant settings never carry credentials
+/// (`withoutCredentials(variant.settings)`, opencode.ts:289).
+#[test]
+fn console_decode_and_project_model_variants_and_package() {
+    let config: super::console::ConsoleConfig = serde_json::from_value(json!({
+        "providers": {
+            "gw": {
+                "settings": { "baseURL": "https://gw.test/v1" },
+                "models": {
+                    "acme-opus": {
+                        "package": "@opencode/ai/providers/openai-compatible",
+                        "variants": [
+                            {
+                                "id": "high",
+                                "settings": { "temperature": 0.3, "apiKey": "leak" },
+                                "headers": { "x-v": "1" },
+                                "body": { "top_k": 7 }
+                            },
+                            { "id": "turbo" }
+                        ]
+                    }
+                }
+            }
+        }
+    }))
+    .expect("decode");
+    let model = &config.providers["gw"].models.as_ref().unwrap()["acme-opus"];
+    assert_eq!(
+        model.package.as_deref(),
+        Some("@opencode/ai/providers/openai-compatible"),
+        "model-level package decodes (config/provider.ts:83, schema key `package` only)"
+    );
+    let variants = model.variants.as_ref().unwrap();
+    assert_eq!(variants.len(), 2);
+    assert_eq!(variants[0].id, "high");
+    assert!(variants[0].settings.is_some());
+    assert!(variants[1].headers.is_none(), "variant overlays are all optional");
+
+    let providers = super::console::to_custom_providers(&config);
+    let projected = &providers[0].models[0];
+    assert_eq!(projected.package.as_deref(), Some("@opencode/ai/providers/openai-compatible"));
+    assert_eq!(projected.variants.len(), 2, "both variants ride the projection");
+    let high = &projected.variants[0];
+    assert_eq!(high.id, "high");
+    let settings = high.settings.as_ref().expect("variant settings decode");
+    assert_eq!(settings.rest.get("temperature"), Some(&serde_json::json!(0.3)));
+    assert!(
+        !settings.rest.contains_key("apiKey"),
+        "credentials never ride variant settings (opencode.ts:289)"
+    );
+    assert_eq!(high.headers.as_ref().and_then(|h| h.get("x-v")).cloned(), Some("1".to_owned()));
+    assert_eq!(high.body.as_ref().unwrap().get("top_k"), Some(&serde_json::json!(7)));
+}
+
+/// `disabled` actually removes the model (opencode.ts:304
+/// `model.enabled = !config.disabled`; consumers filter `enabled` —
+/// model.ts:221 `available: all.filter(m => m.enabled)`, :264): the
+/// projection drops disabled entries, and a fully-disabled provider
+/// drops entirely.
+#[test]
+fn console_projection_drops_disabled_models() {
+    let config: super::console::ConsoleConfig = serde_json::from_value(json!({
+        "providers": {
+            "gw": {
+                "settings": { "baseURL": "https://gw.test/v1" },
+                "models": {
+                    "live": {},
+                    "hidden": { "disabled": true }
+                }
+            },
+            "all-hidden": {
+                "settings": { "baseURL": "https://gw.test/v1" },
+                "models": { "gone": { "disabled": true } }
+            }
+        }
+    }))
+    .expect("decode");
+    let providers = super::console::to_custom_providers(&config);
+    assert_eq!(providers.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), vec!["gw"]);
+    assert_eq!(
+        providers[0].models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+        vec!["live"],
+        "the disabled model is removed; the all-disabled provider drops"
+    );
+}
+
 /// The v2 console emits the provider package under `package`
 /// (config/provider.ts:97); our decode used the wrong key (`type`).
 /// `package` is primary, `type` stays accepted for legacy payloads.

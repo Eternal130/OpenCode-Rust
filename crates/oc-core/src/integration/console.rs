@@ -156,6 +156,31 @@ pub struct ConsoleModel {
     /// override.
     #[serde(default)]
     pub limit: Option<crate::provider_catalog::facade::PartialModelLimit>,
+    /// `models.<id>.package` (config/provider.ts:83) — the model-level
+    /// package override (opencode.ts:272). The schema key is `package`
+    /// only; the legacy `type` fallback is provider-level
+    /// (config/provider.ts:97).
+    #[serde(default)]
+    pub package: Option<String>,
+    /// `models.<id>.variants` (config/provider.ts:85-89): `{id,
+    /// settings, headers, body}` entries merged per id over the base
+    /// model's variants (opencode.ts:282-293).
+    #[serde(default)]
+    pub variants: Option<Vec<ConsoleModelVariant>>,
+    #[serde(default)]
+    pub settings: Option<Value>,
+    #[serde(default)]
+    pub headers: Option<BTreeMap<String, String>>,
+    #[serde(default)]
+    pub body: Option<BTreeMap<String, Value>>,
+}
+
+/// `Config.Model`'s variant entry (config/provider.ts:85-89):
+/// `VariantID` + the model overlay triple, all overlays optional.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct ConsoleModelVariant {
+    #[serde(default)]
+    pub id: String,
     #[serde(default)]
     pub settings: Option<Value>,
     #[serde(default)]
@@ -334,6 +359,36 @@ pub fn to_custom_providers(config: &ConsoleConfig) -> Vec<CustomProvider> {
                                     cost.entries().iter().map(ConsoleCost::normalized).collect()
                                 }),
                                 limit: model.limit,
+                                // The model-level package override
+                                // (opencode.ts:272) — consumed in
+                                // `custom_model_info`.
+                                package: model.package.clone(),
+                                // Console variants (opencode.ts:282-293):
+                                // carried per id with their overlays;
+                                // variant settings never carry
+                                // credentials (opencode.ts:289
+                                // `withoutCredentials(variant.settings)`).
+                                variants: model
+                                    .variants
+                                    .as_ref()
+                                    .map(|variants| {
+                                        variants
+                                            .iter()
+                                            .map(|variant| {
+                                                crate::provider_catalog::facade::CustomModelVariant {
+                                                    id: variant.id.clone(),
+                                                    settings: variant.settings.as_ref().map(|settings| {
+                                                        without_credentials(settings)
+                                                    }).and_then(|settings| {
+                                                        serde_json::from_value(settings).ok()
+                                                    }),
+                                                    headers: variant.headers.clone(),
+                                                    body: variant.body.clone(),
+                                                }
+                                            })
+                                            .collect()
+                                    })
+                                    .unwrap_or_default(),
                                 // The per-model baseURL overlay (opencode.ts:
                                 // 276-279) — outranks the provider's at bind.
                                 base_url: model_settings
