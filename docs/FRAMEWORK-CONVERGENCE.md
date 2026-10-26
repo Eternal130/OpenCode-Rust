@@ -137,7 +137,7 @@ strangler)
 
 | Phase | Scope | Size | Kill criterion |
 | --- | --- | --- | --- |
-| R1 | overlay chrome (toast, console overlay, devtools, plugin_page, location_missing, migration_overlay, tab rail+tooltip) | S/M | any NEW divergence class in the rig unions → keep that surface hand-rolled |
+| R1 | overlay chrome (toast, console overlay, devtools, plugin_page, location_missing, migration_overlay, tab rail+tooltip) | **done** (all seven migrated; see the R1 section in docs/migration-m1-tabstrip.md) | any NEW divergence class in the rig unions → keep that surface hand-rolled |
 | R2 | footer forms family (`footer/*.rs`; extract the form/permission/menu STATE MODEL painter-agnostic first) | L | form-focus/keydown semantics can't stay store-side, or worst-frame budget > ~10 ms → a permanently hand-rolled footer family is an acceptable outcome |
 | R3 | diff_viewer — gated on a `LineNumberRenderable` byte-parity spike first (gutter sign/width model, `,0` hunk-start bumps); adopt only if byte-identical or the re-pin ≤ the diff golden set (~tens of fixtures) | M, gated | **CLOSED 2026-10-26: keep local** — the spike found a structural alignment divergence (number right-aligned + fixed sign column vs the golden's left-aligned number + per-row sign column), not byte-identical and not a limited re-pin; line_number is a permanent local keep (see §Diff convergence details) |
 
