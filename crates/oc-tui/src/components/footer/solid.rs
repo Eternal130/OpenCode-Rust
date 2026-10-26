@@ -48,17 +48,19 @@ use crate::components::session_tabs_solid::frame_from_buffer;
 use crate::render::{CellColor, Frame};
 
 /// `OC_FOOTER_OPENTUI` — read once per process (the M1 protocol: a
-/// running session never switches renderers). Default OFF until the
-/// lane's rig proof.
+/// running session never switches renderers). Default ON since the
+/// R2 parity proof (9 footer goldens + 64 PTY tests green under the
+/// solid path, worst-frame 0.61 ms vs the 10 ms gate); `=0` forces
+/// the hand-rolled path during the one-release probation window.
 fn solid_enabled() -> bool {
     static FLAG: OnceLock<bool> = OnceLock::new();
-    *FLAG.get_or_init(|| std::env::var("OC_FOOTER_OPENTUI").is_ok_and(|value| value.trim() == "1"))
+    *FLAG.get_or_init(|| std::env::var("OC_FOOTER_OPENTUI").map(|value| value.trim() != "0").unwrap_or(true))
 }
 
 /// The family's dispatch seam: every `render_*` fn in the footer
-/// family finishes through here. Flag OFF (the default) keeps the
-/// hand-rolled Canvas path byte-for-byte; flag ON replays the
-/// recorded op stream through the opentui-solid tree.
+/// family finishes through here. Default (solid ON) replays the
+/// recorded op stream through the opentui-solid tree; `OC_FOOTER_OPENTUI=0`
+/// keeps the hand-rolled Canvas path byte-for-byte (probation rollback).
 #[must_use]
 pub fn finish(canvas: Canvas) -> Frame {
     if !solid_enabled() {
