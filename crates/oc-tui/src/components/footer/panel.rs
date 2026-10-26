@@ -42,9 +42,7 @@ pub fn footer_panel_layout(height: usize, limit: usize) -> PanelLayout {
     PanelLayout { compact, frame, limit: limit.min(available.saturating_sub(frame)).max(1) }
 }
 
-
 // -- menu items ---------------------------------------------------------------
-
 
 /// `footerMenuText` — truncate to a display width with `…`.
 #[must_use]

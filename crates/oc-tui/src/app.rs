@@ -45,9 +45,7 @@ use crate::components::command_palette::{CommandDispatcher as _, Dispatch, Store
 use crate::components::composer::render::prompt_text_width;
 use crate::components::composer::{ComposerEditCommand, ComposerKey, KeyOutcome};
 use crate::components::dialog::{execute_submission, handle_dialog_key, render_app};
-use crate::components::footer::form::{
-    form_key, form_sync, FormBodyState, FormCancel, FormReply,
-};
+use crate::components::footer::form::{form_key, form_sync, FormBodyState, FormCancel, FormReply};
 use crate::components::footer::permission::{
     create_permission_body_state, permission_key, PermissionBodyState, PermissionKey,
     PermissionReply, PermissionRequest,

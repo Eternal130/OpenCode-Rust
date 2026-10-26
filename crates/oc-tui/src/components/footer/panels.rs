@@ -25,7 +25,6 @@ pub use super::state::{
     RunModel, RunProvider, WORK_SPINNERS,
 };
 
-
 // -- panel renders ---------------------------------------------------------------
 
 fn panel_frame(
@@ -218,7 +217,6 @@ pub fn render_settings(
         false,
     )
 }
-
 
 #[cfg(test)]
 mod tests {
