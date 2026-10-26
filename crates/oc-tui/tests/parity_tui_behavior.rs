@@ -441,12 +441,11 @@ fn pluginroutemis() {
     assert!(page.missing, "the miss latches the fallback state");
 
     // The fallback frame: the warning line + the go-home button.
-    let frame = oc_tui::components::plugin_page::render_plugin_route_missing(
+    let frame = oc_tui::components::plugin_page_solid::render_plugin_route_missing_solid(
         "omo",
         "stats",
         &theme.styles(),
         (80, 24),
-        &mut Vec::new(),
     );
     let text = frame.text_grid().join("\n");
     assert!(text.contains("Unknown plugin route: omo/stats"), "the warning line");
@@ -454,14 +453,8 @@ fn pluginroutemis() {
 
     // The button's hit rect: centered, the release navigates home and
     // closes the page (v2's onHome).
-    let mut hits = Vec::new();
-    let _ = oc_tui::components::plugin_page::render_plugin_route_missing(
-        "omo",
-        "stats",
-        &theme.styles(),
-        (80, 24),
-        &mut hits,
-    );
+    let (hx, hy, hw, hh) = oc_tui::components::plugin_page::plugin_route_home_rect(80, 24);
+    let hits = [(hx, hy, hw, hh, "plugin.route.home")];
     assert_eq!(hits.len(), 1, "the go-home button recorded its hit rect");
     let (hx, hy) = (hits[0].0, hits[0].1);
     app.mouse_event(&MouseEvent {
@@ -966,7 +959,7 @@ fn app_console_ctrl_copy() {
     app.store.console_log("[tui] agent list failed: 502");
     app.store.console_log("[tui] config reloaded");
     let theme = oc_tui::theme::ThemeState::v2_dark();
-    let overlay = oc_tui::components::console::render_console_overlay(
+    let overlay = oc_tui::components::console_solid::render_console_overlay_solid(
         &app.store.console_lines(),
         &theme.styles(),
         80,

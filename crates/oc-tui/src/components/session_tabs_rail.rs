@@ -298,31 +298,6 @@ pub fn rail_paint_list(
     (placed, fills)
 }
 
-/// Paint the vertical rail at (`width`, `height`) — deterministic
-/// (animations off: the `TabPulse` separators render nothing at rest,
-/// the spinner is frame 0, the marquee is static). Returns the rail
-/// frame plus the compact hover tooltip (`(row, frame)`) when one is
-/// due — the tooltip renders at `left = width`, i.e. OVER the content
-/// column, so the compositor pastes it.
-#[allow(clippy::too_many_lines)] // one painter per rail mode, mirroring the tsx body
-#[must_use]
-pub fn paint_vertical_rail(
-    inputs: &RailInputs,
-    geometry: &RailGeometry,
-    height: usize,
-    styles: &ThemeStyles,
-) -> (Frame, Option<(usize, Frame)>) {
-    let base = ratatui::style::Style::new().fg(DEFAULT_FOREGROUND).bg(styles.background_raised);
-    let (placed, fills) = rail_paint_list(inputs, geometry, styles);
-    let mut frame =
-        paint_placed_with_fills(&placed, &fills, (geometry.width as u16, height as u16), base);
-    paint_rail_handle_hot(&mut frame, inputs, geometry, styles);
-    match paint_rail_tooltip(inputs, geometry, styles) {
-        Some(tooltip) => (frame, Some(tooltip)),
-        None => (frame, None),
-    }
-}
-
 /// The resize handle's highlight strip (the last column, painted
 /// while hovered/resizing) — a bridge recolor (bg only, the cell's
 /// glyph/fg kept), shared by both renderers.
@@ -358,7 +333,7 @@ pub fn paint_rail_tooltip(
     let index =
         inputs.tabs.iter().position(|tab| tab.tab.session_id == view.tab.session_id).unwrap_or(0);
     let row = geometry.item_row(index).saturating_sub(1);
-    Some((row, paint_tooltip(view, TOOLTIP_MAX_WIDTH, styles)))
+    Some((row, crate::components::session_tabs_rail_solid::paint_tooltip_solid(view, styles)))
 }
 
 /// The walk body (the painter's own geometry decisions, verbatim) —
@@ -705,50 +680,11 @@ fn push_half_row(
     });
 }
 
-/// The compact hover tooltip (`SessionTabHalfRow` top/bottom + the
-/// title/detail rows, session-tabs.tsx:1240-1280).
-#[must_use]
-fn paint_tooltip(view: &TabView, width: usize, styles: &ThemeStyles) -> Frame {
-    let base = ratatui::style::Style::new().fg(DEFAULT_FOREGROUND).bg(styles.background_raised);
-    let mut placed = Vec::new();
-    push_half_row(&mut placed, 0, width, "▄", styles.background_raised, styles);
-    let title = view.tab.title.clone().unwrap_or_else(|| "Untitled session".to_owned());
-    let title = take_width(&title, width.saturating_sub(2).max(1));
-    placed.push(Placed {
-        x: 1,
-        y: 1,
-        width: crate::wrap::display_width(&title),
-        lines: vec![PlacedLine::plain(
-            title.as_str(),
-            ratatui::style::Style::new()
-                .fg(styles.text.fg.unwrap_or(DEFAULT_FOREGROUND))
-                .bg(styles.background_raised),
-        )],
-        tag: None,
-    });
-    if let Some(detail) = &view.detail {
-        let text = take_width(detail, width.saturating_sub(2).max(1));
-        placed.push(Placed {
-            x: 1,
-            y: 2,
-            width: crate::wrap::display_width(&text),
-            lines: vec![PlacedLine::plain(
-                text.as_str(),
-                ratatui::style::Style::new()
-                    .fg(styles.text_muted.fg.unwrap_or(DEFAULT_FOREGROUND))
-                    .bg(styles.background_raised),
-            )],
-            tag: None,
-        });
-    }
-    push_half_row(&mut placed, 3, width, "▀", styles.background_raised, styles);
-    paint_placed_with_fills(&placed, &[], (width as u16, 4), base)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::components::session_tabs::TabStatus;
+    use crate::components::session_tabs_rail_solid::paint_vertical_rail_solid;
     use crate::store::{SessionTab, Unread};
 
     fn view(id: &str, title: &str) -> TabView {
@@ -822,7 +758,7 @@ mod tests {
         let tabs = [view("a", "Alpha")];
         let inputs = RailInputs { tabs: &tabs, active: Some("a"), ..RailInputs::default() };
         let geometry = RailGeometry::new(1, 42);
-        let (frame, tooltip) = paint_vertical_rail(&inputs, &geometry, 12, &styles());
+        let (frame, tooltip) = paint_vertical_rail_solid(&inputs, &geometry, 12, &styles());
         let grid = frame.text_grid();
         assert!(grid[0].trim().is_empty(), "the pad row is blank");
         assert!(
@@ -852,7 +788,7 @@ mod tests {
         let tabs = [view("a", "Alpha")];
         let inputs = RailInputs { tabs: &tabs, active: Some("a"), ..RailInputs::default() };
         let geometry = RailGeometry::new(1, 6);
-        let (frame, tooltip) = paint_vertical_rail(&inputs, &geometry, 10, &styles());
+        let (frame, tooltip) = paint_vertical_rail_solid(&inputs, &geometry, 10, &styles());
         let grid = frame.text_grid();
         assert!(grid[1].contains('⌕'), "the search button: {:?}", grid[1]);
         assert_eq!(grid[2], "▄▄▄▄▄▄", "the highlighted seam row");
@@ -861,7 +797,7 @@ mod tests {
         assert!(tooltip.is_none(), "no tooltip without a hover");
         // Unhighlighted seam: spaces.
         let inputs = RailInputs { tabs: &tabs, ..RailInputs::default() };
-        let (frame, _) = paint_vertical_rail(&inputs, &geometry, 10, &styles());
+        let (frame, _) = paint_vertical_rail_solid(&inputs, &geometry, 10, &styles());
         assert_eq!(frame.text_grid()[2], "      ", "no highlight below the seam");
     }
 }

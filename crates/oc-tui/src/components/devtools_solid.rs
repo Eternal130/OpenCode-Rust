@@ -56,8 +56,6 @@ pub fn paint_devtools_bar_solid(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::chrome_solid::first_divergence;
-    use crate::components::devtools::paint_devtools_bar;
     use crate::reactive::Runtime;
     use crate::render::{Cell, CellColor};
     use crate::store::Store;
@@ -71,36 +69,6 @@ mod tests {
             ],
             width,
             height,
-        }
-    }
-
-    /// The lane gate: the solid bar's row equals the old painter's
-    /// row write cell for cell, over the panel × width matrix (the
-    /// server/theme/tools/ui panels read live store state) — and the
-    /// frame-level composite (bg untouched above, full row at the
-    /// bottom) stays identical.
-    #[test]
-    fn solid_devtools_bar_equals_the_old_renderer() {
-        let store = Store::new(Runtime::new());
-        store.set_devtools_enabled(true);
-        let theme = ThemeState::v2_dark();
-        let styles = theme.styles();
-        store.devtools_set_entry("tools", "last", "bash");
-        for panel in 0..4usize {
-            store.devtools_cycle_panel(1);
-            let _ = panel;
-            for size in [(80u16, 24u16), (120, 30), (40, 10)] {
-                let mut old = base_frame(usize::from(size.0), usize::from(size.1));
-                let mut solid = base_frame(usize::from(size.0), usize::from(size.1));
-                paint_devtools_bar(&mut old, &store, &styles, size);
-                paint_devtools_bar_solid(&mut solid, &store, &styles, size);
-                if let Some((row, col, why)) = first_divergence(&solid, &old) {
-                    panic!(
-                        "panel={} size={size:?} at {row},{col}: {why}",
-                        store.devtools_state().panel
-                    );
-                }
-            }
         }
     }
 }

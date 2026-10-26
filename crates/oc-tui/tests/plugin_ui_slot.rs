@@ -259,7 +259,7 @@ fn slot_renders_and_clicks() {
 
     // The page paints over the app (App::frame's overlay seam — the
     // pure page renderer here).
-    let overlay = oc_tui::components::plugin_page::render_plugin_page(
+    let overlay = oc_tui::components::plugin_page_solid::render_plugin_page_solid(
         &page.title,
         &page.rows,
         &theme.styles(),
