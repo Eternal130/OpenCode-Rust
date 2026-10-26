@@ -6,7 +6,8 @@ section superseded 2026-10-26 by lane R0 (see below). Source recon:
 convergence".
 
 Upstream pin rule: **opentui is consumed via the workspace git rev
-(`bee57db`, crate path `opentui-core`) only.** No local `[patch]`
+(`18e2904`, crate path `opentui-core`; historical `bee57db` in older
+records) only.** No local `[patch]`
 overrides, no vendored copies of upstream crates; an upstream change
 means bumping the git rev in the workspace `Cargo.toml` and letting
 `Cargo.lock` carry it.
