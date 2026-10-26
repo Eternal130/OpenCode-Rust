@@ -246,9 +246,11 @@ fn unit_element(inputs: &Signal<ChromeInputs>, key: &str) -> Element {
             )
             .into_element()
     } else if is_spaces {
-        // The post-pass owns these cells — the tree mounts an empty
-        // placeholder so the key reconciles without rasterizing.
-        text().position("absolute").wrap_mode("none").flex_shrink(0.0).content("").into_element()
+        // The post-pass owns these cells — the tree mounts a zero-size
+        // placeholder so the key reconciles without rasterizing (an
+        // EMPTY text node is measurably pathological in layout; a
+        // 0×0 box is free).
+        box_().position("absolute").width(0.0).height(0.0).into_element()
     } else {
         text()
             .position("absolute")
@@ -417,6 +419,7 @@ fn chrome_frame_from_buffer(buffer: &OptimizedBuffer) -> Frame {
 
 /// The first cell-for-cell divergence between two frames (the parity
 /// gates' reporter): `(row, col, description)`.
+#[allow(dead_code)] // the parity gates reporter, kept for the next tail surfaces
 pub(crate) fn first_divergence(actual: &Frame, expected: &Frame) -> Option<(usize, usize, String)> {
     if actual.height != expected.height || actual.width != expected.width {
         return Some((
@@ -473,13 +476,20 @@ pub(crate) fn chrome_run_units(
     let mut spaces_start = 0usize;
     let mut spaces_len = 0usize;
     let mut index = 0usize;
-    let mut flush_glyphs = |units: &mut Vec<ChromeUnit>,
-                            glyph_run: &mut String,
-                            run_start: &mut usize| {
+    let flush_glyphs = |units: &mut Vec<ChromeUnit>,
+                        glyph_run: &mut String,
+                        run_start: &mut usize| {
         if glyph_run.is_empty() {
             return;
         }
-        if glyph_run.is_ascii() {
+        if glyph_run.is_ascii()
+            || !crate::wrap::flatten(glyph_run, ratatui::style::Style::new())
+                .iter()
+                .any(|atom| atom.width > 1)
+        {
+            // Width-1 graphemes (box-drawing rails included) lay out
+            // identically as ONE chunk — the raster's atom walk IS
+            // the painter's char cells.
             units.push(ChromeUnit {
                 key: format!("{key_base}@{top}#{run_start}"),
                 left: left + *run_start,
@@ -546,6 +556,7 @@ pub(crate) fn chrome_run_units(
 /// raster continuation), plus [`ChromeBody::Spaces`] stamps over the
 /// continuation cells (ch `' '`, the fill fg — the Canvas prefill's
 /// white — attrs 0, the destination bg kept).
+#[allow(clippy::too_many_arguments)] // the run-shaping seam (key/pos/text/style/fill)
 pub(crate) fn chrome_cluster_units(
     key_base: &str,
     left: usize,
@@ -639,21 +650,21 @@ pub(crate) fn chrome_frame(
     width: usize,
     height: usize,
     background: CellColor,
-    items: Vec<ChromeUnit>,
+    items: &[ChromeUnit],
 ) -> Frame {
     MOUNTS.with_borrow_mut(|mounts| {
         let key = (width, height, background);
         let mount = mounts
             .entry(surface)
-            .or_insert_with(|| ChromeMount::new(width, height, background, &items));
-        if mount.key != key {
-            *mount = ChromeMount::new(width, height, background, &items);
+            .or_insert_with(|| ChromeMount::new(width, height, background, items));
+        if mount.key == key {
+            mount.paint(items.to_vec());
         } else {
-            mount.paint(items.clone());
+            *mount = ChromeMount::new(width, height, background, items);
         }
         let buffer = &mount.renderer.renderer.current_render_buffer;
         let mut frame = chrome_frame_from_buffer(buffer);
-        stamp_spaces(&mut frame, &items);
+        stamp_spaces(&mut frame, items);
         frame
     })
 }
@@ -688,7 +699,7 @@ mod tests {
                 )]),
             },
         ];
-        let frame = chrome_frame("order_probe", 4, 1, CellColor::Default, units);
+        let frame = chrome_frame("order_probe", 4, 1, CellColor::Default, &units);
         let cell = frame.cell(0, 1);
         assert_eq!(
             (cell.ch, cell.fg),

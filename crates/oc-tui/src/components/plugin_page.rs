@@ -21,7 +21,6 @@ pub fn plugin_route_home_rect(width: usize, height: usize) -> (usize, usize, usi
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::theme::ThemeState;
 
     #[test]

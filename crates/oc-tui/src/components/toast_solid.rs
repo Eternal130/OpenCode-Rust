@@ -21,6 +21,7 @@ use oc_theme::types::ResolvedThemeTokens;
 
 /// The new-path twin of [`super::toast::render_toast_over_blank`].
 #[must_use]
+#[allow(clippy::too_many_lines)] // one shaper per panel variant, mirroring the old painter
 pub fn render_toast_over_blank_solid(
     toast: &ToastOptions,
     pending: usize,
@@ -123,7 +124,7 @@ pub fn render_toast_over_blank_solid(
     // message overwrites the rail cell).
     let mount_width = panel_width.max(content_x + message_width).max(content_x + title_width);
     let panel =
-        chrome_frame("toast_panel", mount_width.max(1), rows.max(1), CellColor::Default, units);
+        chrome_frame("toast_panel", mount_width.max(1), rows.max(1), CellColor::Default, &units);
 
     // Paste into the Canvas frame (the black prefill outside the
     // panel is the golden's own backdrop).
@@ -170,15 +171,4 @@ pub fn render_toast_over_blank_solid(
         }
     }
     canvas.into_frame()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::theme::ThemeState;
-
-    fn footer() -> (FooterTheme, ResolvedThemeTokens) {
-        let state = ThemeState::v2_dark();
-        (FooterTheme::from_resolved(&state.resolved.tokens), state.resolved.tokens)
-    }
 }

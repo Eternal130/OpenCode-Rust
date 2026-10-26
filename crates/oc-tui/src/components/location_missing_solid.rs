@@ -36,10 +36,9 @@ pub fn render_location_missing_solid(
     for row in 0..rows {
         units.extend(chrome_run_units("location.rail", 0, row, "▎", accent, CellColor::Default, 0));
     }
-    let mut line =
-        |units: &mut Vec<ChromeUnit>, key: &str, row: usize, x: usize, body: &str, fg| {
-            units.extend(chrome_run_units(key, x, row, &clip(body, x), fg, CellColor::Default, 0));
-        };
+    let line = |units: &mut Vec<ChromeUnit>, key: &str, row: usize, x: usize, body: &str, fg| {
+        units.extend(chrome_run_units(key, x, row, &clip(body, x), fg, CellColor::Default, 0));
+    };
     line(&mut units, "location.header.mark", 0, 2, "△", warning);
     line(&mut units, "location.header", 0, 4, "Session location unavailable", text);
     let home = std::env::var("HOME").unwrap_or_default();
@@ -96,16 +95,5 @@ pub fn render_location_missing_solid(
             reverse,
         ));
     }
-    chrome_frame("location_missing", width, rows, CellColor::Default, units)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::components::chrome_solid::first_divergence;
-    use crate::theme::ThemeState;
-
-    fn styles() -> ThemeStyles {
-        ThemeState::v2_dark().styles()
-    }
+    chrome_frame("location_missing", width, rows, CellColor::Default, &units)
 }

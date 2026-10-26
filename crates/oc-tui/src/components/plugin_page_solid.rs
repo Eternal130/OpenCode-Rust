@@ -7,7 +7,7 @@
 //! advance, see `chrome_run_units`). The parity gate pins the solid
 //! frame cell-for-cell against the old painter.
 
-use super::chrome_solid::{chrome_frame, chrome_run_units, ChromeUnit};
+use super::chrome_solid::{chrome_frame, chrome_run_units};
 use crate::render::CellColor;
 use crate::theme::ThemeStyles;
 
@@ -66,7 +66,7 @@ pub fn render_plugin_page_solid(
             0,
         ));
     }
-    chrome_frame("plugin_page", width.max(1), height.max(1), CellColor::Default, units)
+    chrome_frame("plugin_page", width.max(1), height.max(1), CellColor::Default, &units)
 }
 
 /// The missing-route fallback: the centered warning line + the
@@ -99,7 +99,7 @@ pub fn render_plugin_route_missing_solid(
         0,
     ));
     let button = "go home";
-    let (bx, by, bw, _bh) = super::plugin_page::plugin_route_home_rect(width, height);
+    let (bx, by, _bw, _bh) = super::plugin_page::plugin_route_home_rect(width, height);
     // The button's attrs band covers [bx, bx+bw): the leading pad,
     // the glyphs (fg = action) and the trailing pad — all reverse.
     units.extend(chrome_run_units(
@@ -129,20 +129,5 @@ pub fn render_plugin_route_missing_solid(
         CellColor::Default,
         reverse,
     ));
-    chrome_frame("plugin_route_missing", width.max(1), height.max(1), CellColor::Default, units)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::components::chrome_solid::first_divergence;
-    use crate::theme::ThemeState;
-
-    fn styles() -> ThemeStyles {
-        ThemeState::v2_dark().styles()
-    }
-
-    fn scenarios() -> Vec<(usize, usize)> {
-        vec![(40, 10), (60, 24), (80, 30), (120, 40), (26, 8), (10, 6)]
-    }
+    chrome_frame("plugin_route_missing", width.max(1), height.max(1), CellColor::Default, &units)
 }

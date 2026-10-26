@@ -20,7 +20,7 @@ pub fn render_console_overlay_solid(lines: &[String], styles: &ThemeStyles, widt
     let mut units = Vec::new();
     // The top border + the riding title.
     let top: String = std::iter::once('┌')
-        .chain(std::iter::repeat('─').take(width.saturating_sub(2)))
+        .chain(std::iter::repeat_n('─', width.saturating_sub(2)))
         .chain(std::iter::once('┐'))
         .collect();
     units.extend(chrome_run_units("console.top", 0, 0, &top, muted, CellColor::Default, 0));
@@ -35,7 +35,7 @@ pub fn render_console_overlay_solid(lines: &[String], styles: &ThemeStyles, widt
     ));
     // The bottom border (the cells' last row).
     let bottom: String = std::iter::once('└')
-        .chain(std::iter::repeat('─').take(width.saturating_sub(2)))
+        .chain(std::iter::repeat_n('─', width.saturating_sub(2)))
         .chain(std::iter::once('┘'))
         .collect();
     units.extend(chrome_run_units(
@@ -77,20 +77,5 @@ pub fn render_console_overlay_solid(lines: &[String], styles: &ThemeStyles, widt
             0,
         ));
     }
-    chrome_frame("console_overlay", width, rows, CellColor::Default, units)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::components::chrome_solid::first_divergence;
-    use crate::theme::ThemeState;
-
-    fn styles() -> ThemeStyles {
-        ThemeState::v2_dark().styles()
-    }
-
-    fn lines(count: usize) -> Vec<String> {
-        (0..count).map(|index| format!("line {index}: diag message")).collect()
-    }
+    chrome_frame("console_overlay", width, rows, CellColor::Default, &units)
 }

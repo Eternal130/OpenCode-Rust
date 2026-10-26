@@ -38,7 +38,7 @@ use crate::components::session_tabs::{TabStatus, TabView, NEW_SESSION_TAB_TITLE}
 use crate::components::tab_pulse::tint;
 use crate::components::tool_rows::DEFAULT_FOREGROUND;
 use crate::layout::{Placed, PlacedLine};
-use crate::render::{paint_placed_with_fills, CellColor, Fill, Frame};
+use crate::render::{CellColor, Fill, Frame};
 use crate::theme::ThemeStyles;
 use crate::wrap::take_width;
 

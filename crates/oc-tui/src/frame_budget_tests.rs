@@ -786,3 +786,132 @@ fn engine_keystroke_budget_body() {
         FRAME_BUDGET_MS
     );
 }
+
+/// Lane R1 — the overlay-chrome family's worst frame: the rail
+/// (non-compact, hover churn), the toast over a live-sized frame, the
+/// console overlay, the migration widget and the startup pill, all
+/// through the solid chrome mounts. Prior surfaces measured ≤5 ms vs
+/// the 40 ms gate (the lane re-checks >10 ms) — the chrome mounts are
+/// tiny trees, so the expectation is well under 1 ms each.
+#[test]
+fn frame_budget_overlay_chrome_solid() {
+    use crate::components::footer::theme::FooterTheme;
+    use crate::components::session_tabs::TabStatus;
+    use crate::components::session_tabs::TabView;
+    use crate::components::session_tabs_rail::RailGeometry;
+    use crate::components::session_tabs_rail::RailInputs;
+    use crate::components::session_tabs_rail_solid::paint_vertical_rail_solid;
+    use crate::store::{SessionTab, Unread};
+
+    let theme = theme();
+    let styles = theme.styles();
+    let tabs: Vec<TabView> = (0..12)
+        .map(|index| TabView {
+            tab: SessionTab {
+                session_id: format!("ses_{index}"),
+                title: Some(format!("Session {index} with a title")),
+            },
+            status: TabStatus { unread: Some(Unread::Activity), ..TabStatus::EMPTY },
+            detail: Some(format!("project{index} ⎇ main")),
+        })
+        .collect();
+    let geometry = RailGeometry::new(tabs.len(), 42);
+
+    let footer = FooterTheme::from_resolved(&theme.resolved.tokens);
+    let toast = crate::components::toast::ToastOptions {
+        title: Some("Fixture notice".into()),
+        message: "Toast rendered over session content".into(),
+        ..crate::components::toast::ToastOptions::info("m")
+    };
+    let console_lines: Vec<String> =
+        (0..40).map(|index| format!("line {index}: diagnostic message")).collect();
+    let progress = crate::components::migration_overlay::MigrationProgress {
+        label: "Migrating sessions".into(),
+        numerator: Some(2),
+        denominator: Some(5),
+    };
+
+    // Warmup (mounts, taffy, allocator).
+    for _ in 0..3 {
+        let hover_tab = tabs.first().map(|v| v.tab.session_id.clone()).unwrap_or_default();
+        let inputs = RailInputs {
+            tabs: &tabs,
+            active: Some("ses_0"),
+            hover: Some(&hover_tab),
+            ..RailInputs::default()
+        };
+        let _ = paint_vertical_rail_solid(&inputs, &geometry, HEIGHT, &styles);
+        let _ = crate::components::toast_solid::render_toast_over_blank_solid(
+            &toast,
+            0,
+            WIDTH,
+            HEIGHT,
+            &footer,
+            &theme.resolved.tokens,
+        );
+        let _ = crate::components::console_solid::render_console_overlay_solid(
+            &console_lines,
+            &styles,
+            WIDTH as u16,
+        );
+    }
+
+    let mut worst = 0u128;
+    let mut total = 0u128;
+    let frames = 20u128;
+    for frame in 0..frames {
+        let hovered = &tabs[(frame as usize) % tabs.len()].tab.session_id;
+        let start = std::time::Instant::now();
+        let inputs = RailInputs {
+            tabs: &tabs,
+            active: Some("ses_0"),
+            hover: Some(hovered),
+            handle_hot: frame % 2 == 0,
+            ..RailInputs::default()
+        };
+        let (rail, tooltip) = paint_vertical_rail_solid(&inputs, &geometry, HEIGHT, &styles);
+        let mut composited = rail;
+        crate::components::toast_solid::render_toast_over_blank_solid(
+            &toast,
+            frame as usize % 4,
+            WIDTH,
+            HEIGHT,
+            &footer,
+            &theme.resolved.tokens,
+        );
+        crate::components::console_solid::render_console_overlay_solid(
+            &console_lines,
+            &styles,
+            WIDTH as u16,
+        );
+        crate::components::overlays_solid::overlay_migration_solid(
+            &mut composited,
+            &styles,
+            &progress,
+            u64::try_from(frame * 80).unwrap_or(0),
+        );
+        crate::components::overlays_solid::overlay_startup_loading_solid(
+            &mut composited,
+            &styles,
+            "Loading plugins…",
+            u64::try_from(frame * 80).unwrap_or(0),
+        );
+        let elapsed = start.elapsed().as_millis();
+        worst = worst.max(elapsed);
+        total += elapsed;
+        assert_eq!(composited.height, HEIGHT);
+        let _ = tooltip.is_none();
+    }
+    eprintln!(
+        "[frame-budget] overlay-chrome solid (rail churn + toast + console + migration + pill) \
+         {WIDTH}x{HEIGHT}: worst {worst} ms, avg {} ms (budget {FRAME_BUDGET_MS} ms, {} build)",
+        total / frames,
+        if cfg!(debug_assertions) { "debug" } else { "release" },
+    );
+    #[cfg(not(debug_assertions))]
+    assert!(
+        worst <= frame_budget_ms(),
+        "overlay-chrome solid worst frame {worst} ms over budget {} ms",
+        frame_budget_ms()
+    );
+}

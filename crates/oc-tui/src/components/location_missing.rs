@@ -16,6 +16,7 @@ pub const LOCATION_MISSING_ROWS: usize = 6;
 
 /// The home directory for `abbreviateHome` (the same resolution the
 /// worktrees dialog uses — `$HOME` at render time).
+#[allow(dead_code)] // kept: the documented $HOME resolution note (render-time, the solid twin inlines it)
 fn home_directory() -> String {
     std::env::var("HOME").unwrap_or_default()
 }
