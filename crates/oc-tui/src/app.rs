@@ -2997,7 +2997,7 @@ impl App {
         // TUI-29 — the renderer console (`renderer.console`'s strip at
         // the top of the screen, over the app).
         if self.store.console_open() {
-            let overlay = crate::components::console::render_console_overlay(
+            let overlay = crate::components::console_solid::render_console_overlay_solid(
                 &self.store.console_lines(),
                 &theme.styles(),
                 self.size.0,

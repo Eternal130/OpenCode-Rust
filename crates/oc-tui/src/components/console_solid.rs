@@ -1,0 +1,116 @@
+//! Lane R1 — the renderer console overlay on the shared
+//! opentui-solid chrome bridge ([`crate::components::chrome_solid`]):
+//! the bordered `console` box with the ring's tail lines as absolute
+//! text units over a default (transparent) background. The parity
+//! gate pins the solid frame cell-for-cell against the old painter
+//! ([`super::console::render_console_overlay`]).
+
+use super::chrome_solid::{chrome_frame, chrome_run_units, first_divergence};
+use crate::render::{CellColor, Frame};
+use crate::theme::ThemeStyles;
+
+/// The new-path twin of [`super::console::render_console_overlay`].
+#[must_use]
+pub fn render_console_overlay_solid(lines: &[String], styles: &ThemeStyles, width: u16) -> Frame {
+    let width = usize::from(width).max(6);
+    let height = super::console::CONSOLE_ROWS.min(lines.len() + 2);
+    let rows = height.max(2);
+    let text = styles.text.fg.map_or(CellColor::Default, CellColor::from);
+    let muted = styles.text_muted.fg.map_or(CellColor::Default, CellColor::from);
+    let mut units = Vec::new();
+    // The top border + the riding title.
+    let top: String = std::iter::once('┌')
+        .chain(std::iter::repeat('─').take(width.saturating_sub(2)))
+        .chain(std::iter::once('┐'))
+        .collect();
+    units.extend(chrome_run_units("console.top", 0, 0, &top, muted, CellColor::Default, 0));
+    units.extend(chrome_run_units(
+        "console.title",
+        2,
+        0,
+        " console ",
+        muted,
+        CellColor::Default,
+        0,
+    ));
+    // The bottom border (the cells' last row).
+    let bottom: String = std::iter::once('└')
+        .chain(std::iter::repeat('─').take(width.saturating_sub(2)))
+        .chain(std::iter::once('┘'))
+        .collect();
+    units.extend(chrome_run_units(
+        "console.bottom",
+        0,
+        rows - 1,
+        &bottom,
+        muted,
+        CellColor::Default,
+        0,
+    ));
+    // The side borders (rows 1..rows-1; absent on a 2-row box).
+    for row in 1..rows.saturating_sub(1) {
+        units.extend(chrome_run_units("console.side", 0, row, "│", muted, CellColor::Default, 0));
+        units.extend(chrome_run_units(
+            "console.side.r",
+            width - 1,
+            row,
+            "│",
+            muted,
+            CellColor::Default,
+            0,
+        ));
+    }
+    // The tail: the newest `rows - 2` lines, one per row, clipped at
+    // column width − 2 (the old `at + 1 >= width` break).
+    let body = height.saturating_sub(2);
+    let tail: Vec<&String> = lines.iter().rev().take(body).collect();
+    for (offset, line) in tail.iter().rev().enumerate() {
+        let max = width.saturating_sub(2);
+        let clipped: String = line.chars().take(max).collect();
+        units.extend(chrome_run_units(
+            "console.line",
+            1,
+            1 + offset,
+            &clipped,
+            text,
+            CellColor::Default,
+            0,
+        ));
+    }
+    chrome_frame("console_overlay", width, rows, CellColor::Default, units)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::components::console::render_console_overlay;
+    use crate::theme::ThemeState;
+
+    fn styles() -> ThemeStyles {
+        ThemeState::v2_dark().styles()
+    }
+
+    fn lines(count: usize) -> Vec<String> {
+        (0..count).map(|index| format!("line {index}: diag message")).collect()
+    }
+
+    /// The lane gate: the solid console equals the old painter CELL
+    /// FOR CELL over the line-count × width matrix — the empty ring,
+    /// the short tail, the 12-row clamp, and the long-line clip.
+    #[test]
+    fn solid_console_overlay_equals_the_old_renderer() {
+        for count in [0usize, 1, 5, 10, 13, 40] {
+            for width in [20u16, 40, 80, 120, 6, 7] {
+                let mut long = lines(count);
+                if count > 3 {
+                    long[1] = format!("x{}", "y".repeat(200));
+                }
+                let old = render_console_overlay(&long, &styles(), width);
+                let solid = render_console_overlay_solid(&long, &styles(), width);
+                if let Some((row, col, why)) = first_divergence(&solid, &old) {
+                    panic!("count={count} width={width} at {row},{col}: {why}");
+                }
+            }
+        }
+    }
+}

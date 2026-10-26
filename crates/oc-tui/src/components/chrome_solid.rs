@@ -469,7 +469,7 @@ pub(crate) fn chrome_run_units(
 ) -> Vec<ChromeUnit> {
     let mut units = Vec::new();
     let mut glyph_run = String::new();
-    let mut run_start = 0usize;
+    let mut run_start = usize::MAX;
     let mut spaces_start = 0usize;
     let mut spaces_len = 0usize;
     let mut index = 0usize;
