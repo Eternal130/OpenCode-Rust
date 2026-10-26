@@ -54,7 +54,9 @@ use crate::render::{CellColor, Frame};
 /// path during the one-release probation window.
 fn solid_enabled() -> bool {
     static FLAG: OnceLock<bool> = OnceLock::new();
-    *FLAG.get_or_init(|| std::env::var("OC_FOOTER_OPENTUI").map(|value| value.trim() != "0").unwrap_or(true))
+    *FLAG.get_or_init(|| {
+        std::env::var("OC_FOOTER_OPENTUI").map_or(true, |value| value.trim() != "0")
+    })
 }
 
 /// The family's dispatch seam: every `render_*` fn in the footer

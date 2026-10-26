@@ -819,19 +819,18 @@ fn frame_budget_footer_family_old_vs_solid() {
     let states = [&ask, &reject];
 
     for path in ["old", "solid"] {
+        const FRAMES: u128 = 200;
         let mut worst_micros = 0u128;
         let mut total_micros = 0u128;
-        const FRAMES: u128 = 200;
         for frame in 0..FRAMES {
             let state = states[usize::from(frame % 2 == 1)];
             let start = std::time::Instant::now();
-            let painted = match path {
-                "old" => permission_body_canvas(&request, state, 200, 16, &theme).into_frame(),
-                _ => {
-                    let canvas = permission_body_canvas(&request, state, 200, 16, &theme);
-                    let (width, height) = canvas.dims();
-                    canvas_frame_solid(canvas.ops().to_vec().as_slice(), width, height)
-                }
+            let painted = if path == "old" {
+                permission_body_canvas(&request, state, 200, 16, &theme).into_frame()
+            } else {
+                let canvas = permission_body_canvas(&request, state, 200, 16, &theme);
+                let (width, height) = canvas.dims();
+                canvas_frame_solid(canvas.ops().to_vec().as_slice(), width, height)
             };
             let elapsed = start.elapsed();
             worst_micros = worst_micros.max(elapsed.as_micros());
