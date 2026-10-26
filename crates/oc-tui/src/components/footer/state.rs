@@ -1934,12 +1934,7 @@ pub struct FormStep {
 /// type.
 #[allow(clippy::too_many_lines)] // one port of the FORM_MODE layer set (form.tsx:547-720)
 #[must_use]
-pub fn form_key(
-    synced: &FormBodyState,
-    request: &FormRequest,
-    key: &str,
-    shift: bool,
-) -> FormStep {
+pub fn form_key(synced: &FormBodyState, request: &FormRequest, key: &str, shift: bool) -> FormStep {
     let current = synced.current(request);
     let textual = current.is_some_and(FormField::textual);
     let editing_layer = (synced.editing || textual) && !synced.confirm(request);
@@ -1969,11 +1964,9 @@ pub fn form_key(
                     next
                 }
             }
-            "up" if !textual && synced.selected > 0 => FormBodyState {
-                editing: false,
-                selected: synced.selected - 1,
-                ..synced.clone()
-            },
+            "up" if !textual && synced.selected > 0 => {
+                FormBodyState { editing: false, selected: synced.selected - 1, ..synced.clone() }
+            }
             "backspace" => {
                 let mut draft = synced.draft.clone();
                 draft.pop();
@@ -1982,10 +1975,9 @@ pub fn form_key(
             other => {
                 let mut chars = other.chars();
                 match (chars.next(), chars.next()) {
-                    (Some(ch), None) if !ch.is_control() => FormBodyState {
-                        draft: format!("{}{ch}", synced.draft),
-                        ..synced.clone()
-                    },
+                    (Some(ch), None) if !ch.is_control() => {
+                        FormBodyState { draft: format!("{}{ch}", synced.draft), ..synced.clone() }
+                    }
                     _ => synced.clone(),
                 }
             }
@@ -2007,7 +1999,8 @@ pub fn form_key(
                     // reply carries only answered keys.
                     reply = reply.or(form_reply(synced, request));
                     synced.clone()
-                } else if current.is_some_and(|field| matches!(field.kind, FieldKind::External { .. }))
+                } else if current
+                    .is_some_and(|field| matches!(field.kind, FieldKind::External { .. }))
                 {
                     // External steps acknowledge on enter (the URL
                     // row's `open link` → `I finished` → continue
@@ -2078,10 +2071,7 @@ mod tests {
             id: "frm_key".into(),
             session_id: "ses".into(),
             title: "Deployment".into(),
-            fields: vec![
-                FormField::text("service", "Service"),
-                FormField::text("notes", "Notes"),
-            ],
+            fields: vec![FormField::text("service", "Service"), FormField::text("notes", "Notes")],
         }
     }
 
@@ -2120,19 +2110,22 @@ mod tests {
         let typing = form_key(&state, &request, "a", false);
         assert!(!typing.cancel);
         assert_eq!(typing.state.draft, "a");
-        // Enter commits and advances to field 1.
-        let (committed, _) = form_commit_input(&typing.state, &request, "a");
-        let step = form_key(&committed, &request, "enter", false);
+        // Enter commits and advances to field 1; the second commit
+        // lands on the review step; tab there wraps back to field 0
+        // (`selectTab` modulo the fields + review tab).
+        let step = form_key(&typing.state, &request, "enter", false);
         assert_eq!(step.state.field, 1);
-        // Tab from the LAST field lands on the review step, and tab
-        // there wraps back to field 0 (`selectTab` modulo).
-        let (last, _) = form_commit_input(&step.state, &request, "n");
-        let review = form_key(&last, &request, "tab", false);
+        let review = form_key(&step.state, &request, "enter", false);
         assert_eq!(review.state.field, 2, "the review tab");
         let wrap = form_key(&review.state, &request, "tab", false);
         assert_eq!(wrap.state.field, 0, "tab wraps modulo the tab count");
-        let back = form_key(&review.state, &request, "tab", true);
-        assert_eq!(back.state.field, 1, "shift+tab steps back");
+        // The picker/review layer ignores shift on tab (the pump's
+        // verbatim port); shift+tab steps back only in the EDITING
+        // layer's tab arm.
+        let forward = form_key(&review.state, &request, "tab", true);
+        assert_eq!(forward.state.field, 0, "review tab ignores shift");
+        let back = form_key(&step.state, &request, "tab", true);
+        assert_eq!(back.state.field, 0, "editing-layer shift+tab steps back");
         // Escape on a TEXTUAL field cancels the form.
         let esc = form_key(&state, &request, "escape", false);
         assert!(esc.cancel, "textual escape dismisses");
@@ -2151,7 +2144,9 @@ mod tests {
         assert!(pick.reply.is_some(), "single-field picker replies");
         // A printable on the custom row opens the editor with the
         // draft seeded.
-        let mut on_custom = form_key(&form_key(&state, &request, "down", false).state, &request, "down", false).state;
+        let mut on_custom =
+            form_key(&form_key(&state, &request, "down", false).state, &request, "down", false)
+                .state;
         assert_eq!(on_custom.selected, 2, "the custom row");
         let typing = form_key(&on_custom, &request, "x", false);
         assert!(typing.state.editing, "the interceptor opens the editor");

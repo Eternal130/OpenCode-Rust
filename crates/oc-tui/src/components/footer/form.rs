@@ -21,7 +21,6 @@ pub use super::state::{
     FormRow, FormRowValue, FormStep,
 };
 
-
 // -- rendering ---------------------------------------------------------------
 
 /// Render the form body (`footer-form` golden: multi-field textual
