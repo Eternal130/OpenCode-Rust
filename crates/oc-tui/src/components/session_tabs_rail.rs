@@ -268,6 +268,12 @@ fn hover_color(styles: &ThemeStyles) -> ratatui::style::Color {
     ratatui::style::Color::Rgb(r, g, b)
 }
 
+/// [`hover_color`] exposed for the solid tooltip's seam chunks.
+#[must_use]
+pub fn hover_color_public(styles: &ThemeStyles) -> ratatui::style::Color {
+    hover_color(styles)
+}
+
 /// `sessionTabDetail`'s detail color (`tint(text.muted, bg, 0.35)`,
 /// session-tabs.tsx:820).
 fn detail_color(styles: &ThemeStyles, over: ratatui::style::Color) -> ratatui::style::Color {
@@ -275,6 +281,21 @@ fn detail_color(styles: &ThemeStyles, over: ratatui::style::Color) -> ratatui::s
     let muted = rgb(styles.text_muted.fg.unwrap_or(ratatui::style::Color::Rgb(128, 128, 128)));
     let (r, g, b) = tint(muted, bg, 0.35);
     ratatui::style::Color::Rgb(r, g, b)
+}
+
+/// The rail's paint walk — the ONE solver both renderers consume:
+/// the placed lines + fills (base style excluded). Extracted by lane
+/// R1 so the hand-rolled painter and the solid bridge share it.
+#[must_use]
+pub fn rail_paint_list(
+    inputs: &RailInputs,
+    geometry: &RailGeometry,
+    styles: &ThemeStyles,
+) -> (Vec<Placed>, Vec<Fill>) {
+    let mut placed: Vec<Placed> = Vec::new();
+    let mut fills = Vec::new();
+    rail_paint_walk(inputs, geometry, styles, &mut placed, &mut fills);
+    (placed, fills)
 }
 
 /// Paint the vertical rail at (`width`, `height`) — deterministic
@@ -292,8 +313,64 @@ pub fn paint_vertical_rail(
     styles: &ThemeStyles,
 ) -> (Frame, Option<(usize, Frame)>) {
     let base = ratatui::style::Style::new().fg(DEFAULT_FOREGROUND).bg(styles.background_raised);
-    let mut placed: Vec<Placed> = Vec::new();
-    let mut fills = Vec::new();
+    let (placed, fills) = rail_paint_list(inputs, geometry, styles);
+    let mut frame =
+        paint_placed_with_fills(&placed, &fills, (geometry.width as u16, height as u16), base);
+    paint_rail_handle_hot(&mut frame, inputs, geometry, styles);
+    match paint_rail_tooltip(inputs, geometry, styles) {
+        Some(tooltip) => (frame, Some(tooltip)),
+        None => (frame, None),
+    }
+}
+
+/// The resize handle's highlight strip (the last column, painted
+/// while hovered/resizing) — a bridge recolor (bg only, the cell's
+/// glyph/fg kept), shared by both renderers.
+pub fn paint_rail_handle_hot(
+    frame: &mut Frame,
+    inputs: &RailInputs,
+    geometry: &RailGeometry,
+    styles: &ThemeStyles,
+) {
+    let width = geometry.width;
+    if inputs.handle_hot && width >= 1 {
+        for row_cells in &mut frame.cells {
+            if let Some(cell) = row_cells.get_mut(width - 1) {
+                cell.bg = CellColor::from(styles.action_hovered);
+            }
+        }
+    }
+}
+
+/// The compact hover tooltip (session-tabs.tsx:1240-1280): at
+/// `left = width`, `min(54, total − width)` wide, 4 rows — seam,
+/// title, detail, seam. It rides OUTSIDE the rail frame (over the
+/// content column) — handed back to the compositor.
+#[must_use]
+pub fn paint_rail_tooltip(
+    inputs: &RailInputs,
+    geometry: &RailGeometry,
+    styles: &ThemeStyles,
+) -> Option<(usize, Frame)> {
+    let (true, Some(view)) = (geometry.compact, inputs.tooltip) else {
+        return None;
+    };
+    let index =
+        inputs.tabs.iter().position(|tab| tab.tab.session_id == view.tab.session_id).unwrap_or(0);
+    let row = geometry.item_row(index).saturating_sub(1);
+    Some((row, paint_tooltip(view, TOOLTIP_MAX_WIDTH, styles)))
+}
+
+/// The walk body (the painter's own geometry decisions, verbatim) —
+/// fills + placed lines, NO frame assembly (the renderers own that).
+#[allow(clippy::too_many_lines)] // one arm per rail mode, mirroring the tsx body
+fn rail_paint_walk(
+    inputs: &RailInputs,
+    geometry: &RailGeometry,
+    styles: &ThemeStyles,
+    placed: &mut Vec<Placed>,
+    fills: &mut Vec<Fill>,
+) {
     let width = geometry.width;
     let number_width = geometry.number_width;
     let highlighted = |id: &str, active: Option<&str>, hover: Option<&str>| -> bool {
@@ -365,8 +442,8 @@ pub fn paint_vertical_rail(
             // 1-row centered indicator + the highlight half-rows.
             if highlighted(id, inputs.active, inputs.hover) {
                 let border = half_row_border_bg(styles, index == 0, inputs);
-                push_half_row(&mut placed, row.saturating_sub(1), width, "▄", border, styles);
-                push_half_row(&mut placed, row + 1, width, "▀", border, styles);
+                push_half_row(placed, row.saturating_sub(1), width, "▄", border, styles);
+                push_half_row(placed, row + 1, width, "▀", border, styles);
             }
             // Compact selected uses the HOVERED bg (never the pill —
             // `tabBackground`, session-tabs.tsx:787-791).
@@ -548,37 +625,6 @@ pub fn paint_vertical_rail(
             tag: None,
         });
     }
-
-    let mut frame = paint_placed_with_fills(&placed, &fills, (width as u16, height as u16), base);
-
-    // The resize handle's highlight strip (the rail's last column —
-    // `pane-resize-handle.tsx`'s 1-wide raised box at `left = size −
-    // 1`, painted while hovered/resizing).
-    if inputs.handle_hot && width >= 1 {
-        for row_cells in &mut frame.cells {
-            if let Some(cell) = row_cells.get_mut(width - 1) {
-                cell.bg = CellColor::from(styles.action_hovered);
-            }
-        }
-    }
-
-    // The compact hover tooltip (session-tabs.tsx:1240-1280): at
-    // `left = width`, `min(54, total − width)` wide, 4 rows — seam,
-    // title, detail, seam. It rides OUTSIDE the rail frame (over the
-    // content column) — handed back to the compositor.
-    let tooltip = if let (true, Some(view)) = (geometry.compact, inputs.tooltip) {
-        let index = inputs
-            .tabs
-            .iter()
-            .position(|tab| tab.tab.session_id == view.tab.session_id)
-            .unwrap_or(0);
-        let row = geometry.item_row(index).saturating_sub(1);
-        Some((row, paint_tooltip(view, TOOLTIP_MAX_WIDTH, styles)))
-    } else {
-        None
-    };
-
-    (frame, tooltip)
 }
 
 /// `numberColor()` at rest (animations off — the ignition/sweep

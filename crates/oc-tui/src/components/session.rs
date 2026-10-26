@@ -213,7 +213,9 @@ pub fn paint_live_rail(
         tooltip,
     };
     let geometry = crate::components::session_tabs_rail::RailGeometry::new(views.len(), width);
-    crate::components::session_tabs_rail::paint_vertical_rail(&inputs, &geometry, height, styles)
+    crate::components::session_tabs_rail_solid::paint_vertical_rail_solid(
+        &inputs, &geometry, height, styles,
+    )
 }
 
 /// Render the session route: the tabs strip, the transcript (lane C's

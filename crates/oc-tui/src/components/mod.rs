@@ -67,6 +67,7 @@ pub mod session_tabs;
 /// (TD-25) — `component/session-tabs.tsx`'s `VerticalSessionTabs` +
 /// `session-tabs-rail.tsx`.
 pub mod session_tabs_rail;
+pub mod session_tabs_rail_solid;
 /// Lane M1: the tab strip on opentui-solid — the DEFAULT renderer
 /// (the hand-rolled one is the `OC_TABS_OPENTUI=0` fallback for one
 /// release; see the module doc + `docs/migration-m1-tabstrip.md`).

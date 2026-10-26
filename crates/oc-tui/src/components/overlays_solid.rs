@@ -16,9 +16,7 @@
 //! Parity gates pin the composited frames cell-for-cell against the
 //! old painters ([`super::overlays`] + [`super::migration_overlay`]).
 
-use super::chrome_solid::{
-    chrome_frame, chrome_run_units, first_divergence, ChromeBody, ChromeChunk, ChromeUnit,
-};
+use super::chrome_solid::{chrome_frame, chrome_run_units, ChromeBody, ChromeChunk, ChromeUnit};
 use super::migration_overlay::{progress_count, MigrationProgress};
 use crate::render::{Cell, CellColor, Frame};
 use crate::theme::ThemeStyles;
@@ -214,6 +212,7 @@ pub fn overlay_migration_solid(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::chrome_solid::first_divergence;
     use crate::components::migration_overlay::overlay_migration;
     use crate::components::overlays::{overlay_reconnecting, overlay_startup_loading};
     use crate::render::Cell;
