@@ -138,6 +138,104 @@ fn host_table(provider_id: &str) -> Option<HostEntry> {
     })
 }
 
+/// The ref builtin load table (`provider.ts:48-110` builtins map): every
+/// `@opencode/ai/providers/*` entrypoint v2 can bind without an npm
+/// install. The reconciliation gate: each of these must classify into a
+/// [`super::facade::family_of`] family (snapshot-tested there).
+pub const BUILTIN_ENTRYPOINTS: &[&str] = &[
+    "@opencode/ai/providers/amazon-bedrock",
+    "@opencode/ai/providers/amazon-bedrock/mantle",
+    "@opencode/ai/providers/amazon-bedrock/mantle/chat",
+    "@opencode/ai/providers/amazon-bedrock/mantle/responses",
+    "@opencode/ai/providers/alibaba/chat",
+    "@opencode/ai/providers/alibaba/messages",
+    "@opencode/ai/providers/alibaba/responses",
+    "@opencode/ai/providers/anthropic",
+    "@opencode/ai/providers/azure",
+    "@opencode/ai/providers/azure/chat",
+    "@opencode/ai/providers/azure/responses",
+    "@opencode/ai/providers/baseten",
+    "@opencode/ai/providers/cerebras",
+    "@opencode/ai/providers/cloudflare-ai-gateway",
+    "@opencode/ai/providers/cloudflare-workers-ai",
+    "@opencode/ai/providers/cohere",
+    "@opencode/ai/providers/cohere/chat",
+    "@opencode/ai/providers/deepinfra",
+    "@opencode/ai/providers/deepseek",
+    "@opencode/ai/providers/digitalocean",
+    "@opencode/ai/providers/fireworks",
+    "@opencode/ai/providers/google",
+    "@opencode/ai/providers/google/interactions",
+    "@opencode/ai/providers/google-vertex",
+    "@opencode/ai/providers/google-vertex/gemini",
+    "@opencode/ai/providers/google-vertex/chat",
+    "@opencode/ai/providers/google-vertex/responses",
+    "@opencode/ai/providers/google-vertex/messages",
+    "@opencode/ai/providers/groq",
+    "@opencode/ai/providers/meta/chat",
+    "@opencode/ai/providers/meta/messages",
+    "@opencode/ai/providers/meta/responses",
+    "@opencode/ai/providers/minimax/chat",
+    "@opencode/ai/providers/minimax/messages",
+    "@opencode/ai/providers/minimax/responses",
+    "@opencode/ai/providers/mistral",
+    "@opencode/ai/providers/moonshot/chat",
+    "@opencode/ai/providers/moonshot/messages",
+    "@opencode/ai/providers/moonshot/responses",
+    "@opencode/ai/providers/openai",
+    "@opencode/ai/providers/openai/chat",
+    "@opencode/ai/providers/openai/responses",
+    "@opencode/ai/providers/openai-compatible",
+    "@opencode/ai/providers/openrouter",
+    "@opencode/ai/providers/togetherai",
+    "@opencode/ai/providers/venice",
+    "@opencode/ai/providers/vercel-ai-gateway",
+    "@opencode/ai/providers/xai",
+    "@opencode/ai/providers/zai/chat",
+    "@opencode/ai/providers/zai-coding-plan/chat",
+    "@opencode/ai/providers/zai-coding-plan/messages",
+    "@opencode/ai/providers/zai-coding-plan/responses",
+];
+
+/// Resolve a CONFIG-specified package specifier (provider `package` /
+/// model `package`, config/provider.ts:74,97) to a native entrypoint in
+/// the context of one provider/model — the port of v2 `AISDKNative.
+/// resolve` (aisdk-native.ts:147-155) plus the builtin-table acceptance
+/// of `loadPackage` (provider.ts:112-115 falls through to the builtins
+/// map for every entry in [`BUILTIN_ENTRYPOINTS`]).
+///
+/// Resolution is context-aware, never raw string matching: npm names go
+/// through the PACKAGES table, HOSTS redirects only apply for their
+/// provider id (aisdk-native.ts:88-120), and the mantle/azure shape
+/// splits consult the model id / shape. `None` means "no native
+/// counterpart" — the caller fails with a precise error (the `aisdk:`
+/// npm-install bridge is not ported).
+#[must_use]
+pub fn resolve_specifier(
+    specifier: &str,
+    provider_id: &str,
+    model_id: Option<&str>,
+    shape: Option<&str>,
+) -> Option<String> {
+    let npm = package_name(specifier);
+    // aisdk:, PACKAGES, and host-conditional HOSTS lanes (resolve's
+    // first branch — native() applies the full context tables).
+    if specifier.starts_with(AISDK_PREFIX)
+        || packages(&npm).is_some()
+        || host_lookup(provider_id, &npm).is_some()
+    {
+        return native(&npm, provider_id, model_id, shape);
+    }
+    if npm == "@opencode/ai/providers/amazon-bedrock/mantle" {
+        return Some(mantle(model_id).to_string());
+    }
+    if npm == "@opencode/ai/providers/azure/responses" && azure_chat(shape) {
+        return Some("@opencode/ai/providers/azure/chat".to_string());
+    }
+    // Already a native entrypoint: accept exactly the builtin table.
+    BUILTIN_ENTRYPOINTS.contains(&npm.as_str()).then(|| npm.clone())
+}
+
 fn host_lookup(provider_id: &str, npm: &str) -> Option<String> {
     match host_table(provider_id)? {
         HostEntry::Protocols(name) => protocols(name, npm),
@@ -269,5 +367,103 @@ mod tests {
         assert_eq!(aisdk("aisdk:x"), "aisdk:x");
         assert_eq!(package_name("aisdk:x"), "x");
         assert_eq!(package_name("@opencode-ai/ai/x"), "@opencode/ai/x");
+    }
+
+    // ========================================================================
+    // resolve_specifier (config-specified packages, aisdk-native.ts:147-155
+    // + the loadPackage builtin table, provider.ts:48-115)
+    // ========================================================================
+
+    #[test]
+    fn provider_native_resolve_npm_alias_and_entrypoint() {
+        // npm alias → native entrypoint (PACKAGES)
+        assert_eq!(
+            resolve_specifier("@ai-sdk/anthropic", "myai", None, None),
+            Some("@opencode/ai/providers/anthropic".to_string())
+        );
+        // already-native entrypoint → identity (builtin table)
+        assert_eq!(
+            resolve_specifier("@opencode/ai/providers/anthropic", "myai", None, None),
+            Some("@opencode/ai/providers/anthropic".to_string())
+        );
+        // legacy scope migration (provider.ts:30-33 packageName)
+        assert_eq!(
+            resolve_specifier("@opencode-ai/ai/providers/anthropic", "myai", None, None),
+            Some("@opencode/ai/providers/anthropic".to_string())
+        );
+    }
+
+    #[test]
+    fn provider_native_resolve_is_host_conditional() {
+        // HOSTS redirect only for its provider id (aisdk-native.ts:88-120)
+        assert_eq!(
+            resolve_specifier("@ai-sdk/openai-compatible", "cohere", None, None),
+            Some("@opencode/ai/providers/cohere/chat".to_string())
+        );
+        assert_eq!(
+            resolve_specifier("@ai-sdk/openai-compatible", "myai", None, None),
+            Some("@opencode/ai/providers/openai-compatible".to_string())
+        );
+        // same-family-different-lane: the messages protocol package for
+        // an alibaba host, vs the plain anthropic entrypoint elsewhere
+        assert_eq!(
+            resolve_specifier("@ai-sdk/anthropic", "alibaba", None, None),
+            Some("@opencode/ai/providers/alibaba/messages".to_string())
+        );
+    }
+
+    #[test]
+    fn provider_native_resolve_shape_splits() {
+        assert_eq!(
+            resolve_specifier(
+                "@opencode/ai/providers/amazon-bedrock/mantle",
+                "amazon-bedrock",
+                Some("openai.gpt-oss-120b"),
+                None
+            ),
+            Some("@opencode/ai/providers/amazon-bedrock/mantle/chat".to_string())
+        );
+        assert_eq!(
+            resolve_specifier("@ai-sdk/azure", "azure", None, Some("completions")),
+            Some("@opencode/ai/providers/azure/chat".to_string())
+        );
+        assert_eq!(
+            resolve_specifier(
+                "@opencode/ai/providers/azure/responses",
+                "azure",
+                None,
+                Some("completions")
+            ),
+            Some("@opencode/ai/providers/azure/chat".to_string())
+        );
+    }
+
+    #[test]
+    fn provider_native_resolve_unknown_is_none() {
+        assert_eq!(resolve_specifier("aisdk:@ai-sdk/perplexity", "myai", None, None), None);
+        assert_eq!(resolve_specifier("@ai-sdk/perplexity", "myai", None, None), None);
+        assert_eq!(resolve_specifier("not-a-pkg", "myai", None, None), None);
+        assert_eq!(
+            resolve_specifier("@opencode/ai/providers/nonexistent", "myai", None, None),
+            None
+        );
+    }
+
+    #[test]
+    fn provider_native_builtin_table_matches_ref() {
+        // The exact ref builtin load map (provider.ts:48-110): spot
+        // entries of every protocol lane plus the reconciliation adds.
+        for package in [
+            "@opencode/ai/providers/azure",
+            "@opencode/ai/providers/google-vertex/gemini",
+            "@opencode/ai/providers/openai/chat",
+            "@opencode/ai/providers/openai/responses",
+            "@opencode/ai/providers/google/interactions",
+            "@opencode/ai/providers/xai",
+            "@opencode/ai/providers/zai-coding-plan/responses",
+        ] {
+            assert!(BUILTIN_ENTRYPOINTS.contains(&package), "{package} missing");
+            assert_eq!(resolve_specifier(package, "myai", None, None), Some(package.to_string()));
+        }
     }
 }

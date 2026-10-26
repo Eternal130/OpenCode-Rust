@@ -65,7 +65,7 @@ use oc_ai::LanguageModel;
 use oc_schema::model::Info as ModelInfo;
 use oc_schema::provider::Settings as ProviderSettings;
 
-use crate::provider_catalog::native::package_name;
+use crate::provider_catalog::native::{self, package_name};
 use crate::provider_catalog::{Catalog, Snapshot};
 
 /// Typed provider-binding failures (gate 3, Task 5: selecting a
@@ -291,6 +291,8 @@ pub fn family_of(package: &str) -> Option<ProtocolFamily> {
         "@opencode/ai/providers/google-vertex/messages" => ProtocolFamily::VertexMessages,
 
         "@opencode/ai/providers/openai"
+        | "@opencode/ai/providers/openai/responses"
+        | "@opencode/ai/providers/azure"
         | "@opencode/ai/providers/azure/responses"
         | "@opencode/ai/providers/alibaba/responses"
         | "@opencode/ai/providers/meta/responses"
@@ -304,7 +306,11 @@ pub fn family_of(package: &str) -> Option<ProtocolFamily> {
         // OpenAI Responses family).
         "@opencode/ai/providers/xai" => ProtocolFamily::XaiResponses,
 
-        "@opencode/ai/providers/azure/chat"
+        // `openai/chat` (builtin-table reconciliation): the chat-model
+        // re-export of the openai package (providers/openai/chat.ts:1)
+        // — the OpenAI chat protocol at the baked api.openai.com base.
+        "@opencode/ai/providers/openai/chat"
+        | "@opencode/ai/providers/azure/chat"
         | "@opencode/ai/providers/alibaba/chat"
         | "@opencode/ai/providers/baseten"
         | "@opencode/ai/providers/cerebras"
@@ -344,7 +350,11 @@ pub fn family_of(package: &str) -> Option<ProtocolFamily> {
         // registry entry, model-resolver.ts:458 auth list).
         "@opencode/ai/providers/google/interactions" => ProtocolFamily::GoogleInteractions,
         // Vertex native (BE-4): the Gemini protocol deployed on aiplatform.
-        "@opencode/ai/providers/google-vertex" => ProtocolFamily::VertexGemini,
+        // `google-vertex/gemini` is the gemini-model re-export of the
+        // same package (providers/google-vertex/gemini.ts:1).
+        "@opencode/ai/providers/google-vertex" | "@opencode/ai/providers/google-vertex/gemini" => {
+            ProtocolFamily::VertexGemini
+        }
         // Vertex OpenAPI lanes (AI-V1): chat and responses on the
         // aiplatform `endpoints/openapi` root (providers/
         // google-vertex-chat.ts + google-vertex-responses.ts).
@@ -698,6 +708,16 @@ fn build_route(
                     zai_chat_route(transport, Some(auth))
                 }
                 "@opencode/ai/providers/alibaba/chat" => alibaba_chat_route(transport, Some(auth)),
+                // builtin-table reconciliation: the chat-model re-export
+                // rides the same factory with the baked api.openai.com
+                // base (providers/openai/chat.ts:1).
+                "@opencode/ai/providers/openai/chat" => {
+                    openai_chat_route(transport).with(RoutePatch {
+                        provider: Some(provider_id.to_string()),
+                        auth: Some(auth),
+                        ..Default::default()
+                    })
+                }
                 _ => {
                     // generic chat: the provider's own endpoint is required
                     // (falling back to the OpenAI default URL would silently
@@ -796,6 +816,7 @@ fn package_has_baked_base(package: &str) -> bool {
             | "@opencode/ai/providers/zai/chat"
             | "@opencode/ai/providers/zai-coding-plan/chat"
             | "@opencode/ai/providers/alibaba/chat"
+            | "@opencode/ai/providers/openai/chat"
     )
 }
 
@@ -808,7 +829,9 @@ fn package_has_baked_base(package: &str) -> bool {
 fn apply_model_overlays(route: &Route, model: &ModelInfo) -> Route {
     let mut provider_options = serde_json::Map::new();
     if let Some(settings) = &model.settings {
-        provider_options.extend(settings.rest.clone());
+        // Credential/Core keys never reach native provider options
+        // (provider.ts:141-151 CORE_KEYS, model-resolver.ts:226).
+        provider_options.extend(native_settings(&settings.rest));
     }
     let http = HttpOptions {
         body: model.body.as_ref().map(|body| {
@@ -827,13 +850,43 @@ fn apply_model_overlays(route: &Route, model: &ModelInfo) -> Route {
     })
 }
 
-/// Bind a user-defined custom provider (config `provider.<id>` with
-/// `baseURL`/`apiKey`/npm-less models) through the openai-compatible
-/// facade. The provider- and model-level `headers`/`body` overlays ride
-/// the route defaults (transport headers + HTTP body overlay), the seam
-/// v2's own packages use for config overlays. A model-level
-/// `settings.baseURL` overlay outranks the provider's endpoint
-/// (opencode.ts:276-279).
+/// opencode settings consumed in Core; native packages never receive
+/// them (provider.ts:141-151 `CORE_KEYS` / `nativeSettings`).
+const CORE_KEYS: &[&str] =
+    &["chunkTimeout", "compaction", "fetch", "headerTimeout", "timeout", "transport"];
+
+/// Credential keys never passed raw into native settings
+/// (model-resolver.ts:226 `Struct.omit(mapped, ["accessToken",
+/// "apiKey", "authToken"])` + console projection withoutCredentials,
+/// opencode.ts:547-551).
+const CREDENTIAL_KEYS: &[&str] = &["accessToken", "apiKey", "authToken"];
+
+/// Strip the Core-consumed and credential keys from a settings record
+/// before it reaches native provider options (provider.ts:148
+/// nativeSettings + model-resolver.ts:226).
+fn native_settings(rest: &BTreeMap<String, Value>) -> serde_json::Map<String, Value> {
+    rest.iter()
+        .filter(|(key, _)| {
+            !CORE_KEYS.contains(&key.as_str()) && !CREDENTIAL_KEYS.contains(&key.as_str())
+        })
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
+}
+
+/// Bind a user-defined custom provider (config `provider.<id>` /
+/// console-issued provider). When the binding package — the MODEL-level
+/// `package` first, else the PROVIDER-level one (provider.ts:351
+/// `model.package ?? record.provider.package`) — resolves to a native
+/// `@opencode/ai/providers/*` entrypoint (native::resolve_specifier,
+/// the port of aisdk-native.ts:147-155 + the loadPackage builtin table),
+/// it binds through the SAME lane-specific family dispatch as the
+/// catalog (build_route — same-family-different-lane packages like
+/// `cohere/chat` vs `cohere` or `google-vertex/messages` pick their own
+/// constructors, never raw string matching). Without a package the
+/// openai-compatible facade remains the seam. The provider- and
+/// model-level `headers`/`body` overlays ride the route defaults; a
+/// model-level `settings.baseURL` overlay outranks the provider's
+/// endpoint (opencode.ts:276-279).
 pub fn custom_language_model(
     context: &FacadeContext,
     custom: &CustomProvider,
@@ -846,6 +899,16 @@ pub fn custom_language_model(
     // (opencode.ts:276-279 mergeOverlay).
     let base_url =
         model.base_url.as_deref().filter(|url| !url.is_empty()).unwrap_or(custom.base_url.as_str());
+    // Native-protocol binding (provider.ts:351): the model package
+    // overrides the provider's; resolution is context-aware (HOSTS
+    // redirects are host-conditional, the mantle split consults the
+    // model id). `None` resolution = no native counterpart → the
+    // registered exemption's clean typed error (the `aisdk:` npm-install
+    // bridge is not ported).
+    let specifier = model.package.as_deref().or(custom.package.as_deref());
+    if let Some(specifier) = specifier {
+        return custom_native_language_model(context, custom, model, specifier, base_url);
+    }
     if base_url.is_empty() {
         return Err(ProviderError::Configuration {
             provider: custom.id.clone(),
@@ -887,6 +950,111 @@ pub fn custom_language_model(
                 ..Default::default()
             });
     route.model(&model.id, None).map_err(|error| ProviderError::Configuration {
+        provider: custom.id.clone(),
+        message: error.to_string(),
+    })
+}
+
+/// The native-package custom binding: route through the catalog family
+/// dispatch with a synthesized route model (the custom lane has no
+/// catalog Info) and the merged overlays. Azure needs the customer's
+/// resource URL (azure.ts:22-23 `AzureURL` throws otherwise) — no
+/// endpoint is a configuration error, not a silent api.openai.com
+/// misroute.
+fn custom_native_language_model(
+    context: &FacadeContext,
+    custom: &CustomProvider,
+    model: &CustomModel,
+    specifier: &str,
+    base_url: &str,
+) -> Result<LanguageModel, ProviderError> {
+    let package = native::resolve_specifier(specifier, &custom.id, Some(&model.id), None)
+        .ok_or_else(|| ProviderError::UnsupportedProtocol {
+            provider: custom.id.clone(),
+            package: specifier.to_string(),
+        })?;
+    let family = family_of(&package).ok_or_else(|| ProviderError::UnsupportedProtocol {
+        provider: custom.id.clone(),
+        package: package.clone(),
+    })?;
+    let base_url = (!base_url.is_empty()).then(|| base_url.to_string());
+    if base_url.is_none() && package.starts_with("@opencode/ai/providers/azure") {
+        return Err(ProviderError::Configuration {
+            provider: custom.id.clone(),
+            message: format!(
+                "package `{package}` needs a baseURL (azure requires resourceName or baseURL, set provider.{}.baseURL)",
+                custom.id
+            ),
+        });
+    }
+    // The wire model id is the config `modelID` overlay when present —
+    // v2 binds `resolved.modelID ?? resolved.id` (model-resolver.ts:233).
+    let wire_id = model.model_id.as_deref().unwrap_or(&model.id);
+    // Synthesized route Info: build_route only reads the identity and
+    // the catalog settings baseURL (the Vertex lanes) — the endpoint
+    // precedence already collapsed into `base_url`.
+    let mut route_info = oc_schema::model::Info {
+        id: oc_schema::id::ModelId::parse(wire_id.to_string()),
+        model_id: oc_schema::id::ModelId::parse(wire_id.to_string()),
+        provider_id: oc_schema::id::ProviderId::parse(custom.id.clone()),
+        canonical: None,
+        family: None,
+        name: model.name.clone().unwrap_or_else(|| model.id.clone()),
+        compatibility: None,
+        package: Some(package.clone()),
+        settings: None,
+        headers: None,
+        body: None,
+        capabilities: oc_schema::model::Capabilities::default(),
+        variants: Vec::new(),
+        time: oc_schema::model::ModelTime { released: oc_schema::common::Num(0.0) },
+        cost: Vec::new(),
+        status: oc_schema::model::Status::Active,
+        enabled: true,
+        limit: oc_schema::model::ModelLimit { context: 0, input: None, output: 0 },
+    };
+    if let Some(base) = &base_url {
+        let mut rest = BTreeMap::new();
+        rest.insert("baseURL".to_string(), Value::String(base.clone()));
+        route_info.settings = Some(oc_schema::model::Settings { rest, ..Default::default() });
+    }
+    let connection = ModelConnection {
+        base_url: base_url.clone(),
+        api_key: custom.api_key.clone(),
+        headers: BTreeMap::new(),
+    };
+    let route = build_route(
+        context,
+        family,
+        &custom.id,
+        &package,
+        base_url,
+        &[],
+        &connection,
+        &route_info,
+    )?;
+    // The same overlay fold as the fallback lane: provider-level under
+    // model-level (model.ts:204-209).
+    let provider_body = custom
+        .body
+        .as_ref()
+        .map(|body| serde_json::Map::from_iter(body.iter().map(|(k, v)| (k.clone(), v.clone()))));
+    let model_body = model
+        .body
+        .as_ref()
+        .map(|body| serde_json::Map::from_iter(body.iter().map(|(k, v)| (k.clone(), v.clone()))));
+    let body = merge_json_records(&[provider_body.as_ref(), model_body.as_ref()]);
+    let headers = merge_string_records(&[custom.headers.as_ref(), model.headers.as_ref()]);
+    let http = HttpOptions { body, ..Default::default() };
+    let route = route.with(RoutePatch {
+        defaults: RouteDefaults {
+            headers: headers.clone(),
+            http: (http != HttpOptions::default()).then_some(http),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    route.model(wire_id, None).map_err(|error| ProviderError::Configuration {
         provider: custom.id.clone(),
         message: error.to_string(),
     })
@@ -1581,5 +1749,244 @@ mod tests {
         let (_transport, body_text) = route.prepare_transport(&prepared, &built).expect("wire");
         let wire: serde_json::Value = serde_json::from_str(&body_text).expect("json wire body");
         assert_eq!(wire.get("temperature"), Some(&serde_json::json!(0)));
+    }
+
+    // =========================================================================
+    // Native-protocol custom binding (provider/model `package`)
+    // =========================================================================
+
+    fn native_custom(package: Option<&str>, model_package: Option<&str>) -> CustomProvider {
+        CustomProvider {
+            id: "myai".into(),
+            name: "My AI".into(),
+            base_url: String::new(),
+            api_key: Some("native-key".into()),
+            package: package.map(str::to_string),
+            models: vec![CustomModel {
+                id: "my-model".into(),
+                package: model_package.map(str::to_string),
+                ..CustomModel::default()
+            }],
+            ..CustomProvider::default()
+        }
+    }
+
+    /// The binding matrix: each native package family binds through the
+    /// catalog family dispatch with the package's own default endpoint —
+    /// no baseURL required (provider.ts:351 + loadPackage builtins,
+    /// provider.ts:48-110).
+    #[test]
+    fn provider_facade_custom_native_binding_matrix() {
+        let context = context();
+        for (package, route_id, base) in [
+            (
+                "@opencode/ai/providers/anthropic",
+                "anthropic-messages",
+                "https://api.anthropic.com/v1",
+            ),
+            ("@opencode/ai/providers/openai/chat", "openai-chat", "https://api.openai.com/v1"),
+            (
+                "@opencode/ai/providers/openai/responses",
+                "openai-responses",
+                "https://api.openai.com/v1",
+            ),
+            (
+                "@opencode/ai/providers/google",
+                "gemini",
+                "https://generativelanguage.googleapis.com/v1beta",
+            ),
+            (
+                "@opencode/ai/providers/amazon-bedrock",
+                "bedrock-converse",
+                "https://bedrock-runtime.us-east-1.amazonaws.com",
+            ),
+        ] {
+            let custom = native_custom(Some(package), None);
+            let model =
+                custom_language_model(&context, &custom, "my-model").expect("{package} binds");
+            assert!(model.route.id.contains(route_id), "{package}: {}", model.route.id);
+            let base_url = model.route.endpoint.base_url.as_deref().unwrap_or_default().to_string();
+            assert!(base_url.starts_with(base), "{package}: {base_url}");
+        }
+    }
+
+    /// npm aliases resolve through the same PACKAGES table (config
+    /// `package: "@ai-sdk/anthropic"`, aisdk-native.ts:59-75) and the
+    /// HOSTS redirects stay host-conditional (aisdk-native.ts:88-120):
+    /// a `cohere`-id custom provider with `@ai-sdk/openai-compatible`
+    /// takes the Cohere COMPATIBILITY lane, never generic chat.
+    #[test]
+    fn provider_facade_custom_native_npm_alias_and_host_redirect() {
+        let context = context();
+        let custom = native_custom(Some("@ai-sdk/anthropic"), None);
+        let model = custom_language_model(&context, &custom, "my-model").expect("npm alias binds");
+        assert!(model.route.id.contains("anthropic-messages"), "{}", model.route.id);
+
+        let mut cohere = native_custom(Some("@ai-sdk/openai-compatible"), None);
+        cohere.id = "cohere".into();
+        let model =
+            custom_language_model(&context, &cohere, "my-model").expect("host redirect binds");
+        assert_eq!(model.route.id, "cohere-chat-completions", "lane-specific constructor");
+        assert_eq!(
+            model.route.endpoint.base_url.as_deref(),
+            Some("https://api.cohere.ai/compatibility/v1")
+        );
+    }
+
+    /// The model-level package overrides the provider's
+    /// (provider.ts:351 `model.package ?? record.provider.package`).
+    #[test]
+    fn provider_facade_custom_model_package_overrides_provider() {
+        let context = context();
+        let custom = native_custom(
+            Some("@opencode/ai/providers/anthropic"),
+            Some("@opencode/ai/providers/openai/responses"),
+        );
+        let model = custom_language_model(&context, &custom, "my-model").expect("binds");
+        assert!(model.route.id.contains("openai-responses"), "{}", model.route.id);
+    }
+
+    /// Without a package the openai-compatible fallback stays (with the
+    /// baseURL requirement and anonymous/bearer auth).
+    #[test]
+    fn provider_facade_custom_without_package_stays_openai_compatible() {
+        let context = context();
+        let mut custom = native_custom(None, None);
+        custom.base_url = "https://api.acme.test/v1".into();
+        let model = custom_language_model(&context, &custom, "my-model").expect("fallback binds");
+        assert_eq!(model.route.id, "openai-compatible-chat");
+        assert_eq!(model.route.endpoint.base_url.as_deref(), Some("https://api.acme.test/v1"));
+    }
+
+    /// Unknown and `aisdk:` packages fail with the precise typed error
+    /// naming the package (the npm-install bridge stays unported —
+    /// registered exemption).
+    #[test]
+    fn provider_facade_custom_unknown_package_precise_error() {
+        let context = context();
+        for package in ["aisdk:@ai-sdk/perplexity", "not-a-pkg", "@ai-sdk/unknown"] {
+            let custom = native_custom(Some(package), None);
+            assert_eq!(
+                custom_language_model(&context, &custom, "my-model").unwrap_err(),
+                ProviderError::UnsupportedProtocol {
+                    provider: "myai".into(),
+                    package: package.into(),
+                },
+                "{package}"
+            );
+        }
+    }
+
+    /// Azure needs the customer's resource URL (azure.ts:22-23) — a
+    /// package binding without an endpoint is a configuration error,
+    /// never a silent api.openai.com misroute.
+    #[test]
+    fn provider_facade_custom_azure_requires_base_url() {
+        let context = context();
+        let custom = native_custom(Some("@opencode/ai/providers/azure"), None);
+        let error = custom_language_model(&context, &custom, "my-model").unwrap_err();
+        assert!(matches!(error, ProviderError::Configuration { .. }), "{error}");
+        assert!(error.to_string().contains("needs a baseURL"), "{error}");
+    }
+
+    /// Credential/Core keys never reach native provider options
+    /// (provider.ts:141-151 CORE_KEYS, model-resolver.ts:226 credential
+    /// omit) — arbitrary settings ride through stripped.
+    #[test]
+    fn provider_facade_native_settings_strips_core_and_credentials() {
+        let mut rest = BTreeMap::new();
+        rest.insert("apiKey".to_string(), serde_json::json!("s3cret"));
+        rest.insert("authToken".to_string(), serde_json::json!("tok"));
+        rest.insert("accessToken".to_string(), serde_json::json!("acc"));
+        rest.insert("fetch".to_string(), serde_json::json!(false));
+        rest.insert("transport".to_string(), serde_json::json!("x"));
+        rest.insert("reasoningEffort".to_string(), serde_json::json!("high"));
+        let stripped = native_settings(&rest);
+        assert_eq!(
+            stripped,
+            serde_json::Map::from_iter([(
+                "reasoningEffort".to_string(),
+                serde_json::json!("high")
+            )])
+        );
+        // And the fold into route defaults keeps the strip.
+        let catalog = Catalog::embedded();
+        let mut info =
+            catalog.model("anthropic", "claude-opus-4-5").expect("anthropic model info").clone();
+        info.settings =
+            Some(oc_schema::model::Settings { rest: rest.clone(), ..Default::default() });
+        let route = apply_model_overlays(
+            &openai_chat_route(Arc::new(oc_ai::route::transport::FailingTransport {
+                message: "facade unit test",
+            })),
+            &info,
+        );
+        assert_eq!(
+            route.defaults.provider_options,
+            Some(stripped),
+            "credentials and Core keys never ride provider options"
+        );
+    }
+
+    /// Builtin-table reconciliation snapshot (provider.ts:48-110): every
+    /// ref builtin entrypoint must classify into a ported family — no
+    /// silent gap between the ref load table and `family_of`.
+    #[test]
+    fn provider_facade_builtin_table_snapshot() {
+        use crate::provider_catalog::native::BUILTIN_ENTRYPOINTS;
+        use std::collections::BTreeSet;
+        // The exact ref builtin table (provider.ts builtins map keys).
+        assert_eq!(BUILTIN_ENTRYPOINTS.len(), 52, "ref table has 52 entrypoints");
+        let mut seen = BTreeSet::new();
+        for package in BUILTIN_ENTRYPOINTS {
+            seen.insert(*package);
+            let family = family_of(package)
+                .unwrap_or_else(|| panic!("builtin `{package}` has no ported family"));
+            // every family a builtin can reach (the full ported dispatch)
+            assert!(
+                matches!(
+                    family,
+                    ProtocolFamily::AnthropicMessages
+                        | ProtocolFamily::OpenAIChat
+                        | ProtocolFamily::OpenAIResponses
+                        | ProtocolFamily::Gemini
+                        | ProtocolFamily::OpenAICompatible
+                        | ProtocolFamily::CohereChat
+                        | ProtocolFamily::MistralChat
+                        | ProtocolFamily::BedrockConverse
+                        | ProtocolFamily::BedrockMantleChat
+                        | ProtocolFamily::BedrockMantleResponses
+                        | ProtocolFamily::VertexGemini
+                        | ProtocolFamily::VertexMessages
+                        | ProtocolFamily::VertexChat
+                        | ProtocolFamily::VertexResponses
+                        | ProtocolFamily::XaiResponses
+                        | ProtocolFamily::GoogleInteractions
+                ),
+                "`{package}` maps to a real family"
+            );
+        }
+        assert_eq!(seen.len(), 52, "no duplicates");
+        // The reconciliation additions (previously UnsupportedProtocol):
+        assert_eq!(
+            family_of("@opencode/ai/providers/azure"),
+            Some(ProtocolFamily::OpenAIResponses),
+            "azure.ts:72 defaults to the responses route"
+        );
+        assert_eq!(
+            family_of("@opencode/ai/providers/google-vertex/gemini"),
+            Some(ProtocolFamily::VertexGemini),
+            "google-vertex/gemini.ts:1 re-exports the vertex model"
+        );
+        assert_eq!(
+            family_of("@opencode/ai/providers/openai/chat"),
+            Some(ProtocolFamily::OpenAIChat),
+            "openai/chat.ts:1 re-exports the chat model"
+        );
+        assert_eq!(
+            family_of("@opencode/ai/providers/openai/responses"),
+            Some(ProtocolFamily::OpenAIResponses),
+            "openai/responses.ts:1 re-exports the responses model"
+        );
     }
 }
