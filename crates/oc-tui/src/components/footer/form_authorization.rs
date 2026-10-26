@@ -104,6 +104,17 @@ pub fn render_form_authorization(
     height: usize,
     theme: &FooterTheme,
 ) -> Frame {
+    super::solid::finish(form_authorization_canvas(request, state, width, height, theme))
+}
+
+/// [`render_form_authorization`]'s canvas (the parity tests' op source).
+pub(crate) fn form_authorization_canvas(
+    request: &FormRequest,
+    state: &FormAuthorizationState,
+    width: usize,
+    height: usize,
+    theme: &FooterTheme,
+) -> Canvas {
     let mut canvas = Canvas::new(width, height);
     let panel_rows = height.saturating_sub(2).min(13);
     // Below the panel the renderer's background shows through.
@@ -165,7 +176,7 @@ pub fn render_form_authorization(
         Span::new("dismiss", theme.muted, theme.surface),
     ];
     canvas.spans(panel_rows.saturating_sub(2), x, &hints);
-    canvas.into_frame()
+    canvas
 }
 
 #[cfg(test)]

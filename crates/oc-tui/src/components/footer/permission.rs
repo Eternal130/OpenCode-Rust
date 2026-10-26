@@ -50,10 +50,21 @@ pub fn render_permission_body(
     height: usize,
     theme: &FooterTheme,
 ) -> Frame {
+    super::solid::finish(permission_body_canvas(request, state, width, height, theme))
+}
+
+/// [`render_permission_body`]'s canvas (the parity tests' op source).
+pub(crate) fn permission_body_canvas(
+    request: &PermissionRequest,
+    state: &PermissionBodyState,
+    width: usize,
+    height: usize,
+    theme: &FooterTheme,
+) -> Canvas {
     let mut canvas = Canvas::new(width, height);
     let compact = width < 56 || height < 12;
     if height < 2 {
-        return canvas.into_frame();
+        return canvas;
     }
     // The body fills everything below the one-row spacer above it:
     // header (3) · content (viewport rows + paddingBottom) · controls (3).
@@ -130,7 +141,7 @@ pub fn render_permission_body(
         canvas.fill_bg(y, 0, width, theme.pane);
     }
     render_permission_controls(&mut canvas, controls_y, request, state, width, theme, compact);
-    canvas.into_frame()
+    canvas
 }
 
 /// The controls row: buttons left (padding 2), hints right-aligned
@@ -260,9 +271,19 @@ pub fn render_reject_field(
     height: usize,
     theme: &FooterTheme,
 ) -> Frame {
+    super::solid::finish(reject_field_canvas(placeholder_visible, width, height, theme))
+}
+
+/// [`render_reject_field`]'s canvas (the parity tests' op source).
+pub(crate) fn reject_field_canvas(
+    placeholder_visible: bool,
+    width: usize,
+    height: usize,
+    theme: &FooterTheme,
+) -> Canvas {
     let mut canvas = Canvas::new(width, height);
     if height == 0 {
-        return canvas.into_frame();
+        return canvas;
     }
     canvas.fill_bg(0, 0, width, theme.formfield_focused_bg);
     if placeholder_visible {
@@ -276,7 +297,7 @@ pub fn render_reject_field(
             )],
         );
     }
-    canvas.into_frame()
+    canvas
 }
 
 #[cfg(test)]

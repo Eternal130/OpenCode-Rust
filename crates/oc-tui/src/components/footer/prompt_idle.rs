@@ -129,6 +129,16 @@ pub fn render_prompt_idle(
     height: usize,
     theme: &FooterTheme,
 ) -> Frame {
+    super::solid::finish(prompt_idle_canvas(state, width, height, theme))
+}
+
+/// [`render_prompt_idle`]'s canvas (the parity tests' op source).
+pub(crate) fn prompt_idle_canvas(
+    state: &PromptIdleState,
+    width: usize,
+    height: usize,
+    theme: &FooterTheme,
+) -> Canvas {
     let mut canvas = Canvas::new(width, height);
     // Composer row: ┃ rail (agent color), paddingLeft 1, the
     // transparent textarea region, paddingRight 2.
@@ -169,7 +179,7 @@ pub fn render_prompt_idle(
         }
         canvas.spans(1, 0, &spans);
     }
-    canvas.into_frame()
+    canvas
 }
 
 #[cfg(test)]
