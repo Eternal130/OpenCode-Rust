@@ -539,6 +539,55 @@ pub(crate) fn chrome_run_units(
     units
 }
 
+/// Cluster-aware shaping for painters whose canvas advances by
+/// grapheme cluster width but leaves continuation cells at the
+/// destination fill (the footer Canvas `spans` seam): one Text unit
+/// PER CLUSTER at its exact cell (wide clusters still plant their
+/// raster continuation), plus [`ChromeBody::Spaces`] stamps over the
+/// continuation cells (ch `' '`, the fill fg — the Canvas prefill's
+/// white — attrs 0, the destination bg kept).
+pub(crate) fn chrome_cluster_units(
+    key_base: &str,
+    left: usize,
+    top: usize,
+    run_text: &str,
+    fg: CellColor,
+    bg: CellColor,
+    attrs: u16,
+    fill_fg: CellColor,
+) -> Vec<ChromeUnit> {
+    if run_text.is_ascii() && !run_text.is_empty() {
+        return vec![ChromeUnit {
+            key: format!("{key_base}@{top}"),
+            left,
+            top,
+            body: ChromeBody::Text(vec![ChromeChunk::new(run_text, fg, bg, attrs)]),
+        }];
+    }
+    let mut units = Vec::new();
+    let mut x = left;
+    for (index, atom) in
+        crate::wrap::flatten(run_text, ratatui::style::Style::new()).into_iter().enumerate()
+    {
+        units.push(ChromeUnit {
+            key: format!("{key_base}@{top}#{index}"),
+            left: x,
+            top,
+            body: ChromeBody::Text(vec![ChromeChunk::new(atom.text.clone(), fg, bg, attrs)]),
+        });
+        if atom.width > 1 {
+            units.push(ChromeUnit {
+                key: format!("{key_base}@{top}#c{index}"),
+                left: x + 1,
+                top,
+                body: ChromeBody::Spaces { count: atom.width - 1, fg: fill_fg, attrs: 0 },
+            });
+        }
+        x += atom.width.max(1);
+    }
+    units
+}
+
 /// The bridge stamp pass: [`ChromeBody::Spaces`] units write their
 /// cells over the COPIED frame (char/fg/attrs; the destination bg
 /// kept — the old `put` loops never touch bg). A cell whose cluster

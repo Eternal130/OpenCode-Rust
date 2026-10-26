@@ -304,8 +304,14 @@ pub fn overlay_toast_over_frame(
     feedback: &ResolvedThemeTokens,
 ) {
     let term_width = frame.width;
-    let surface =
-        render_toast_over_blank(toast, pending, term_width, frame.height, theme, feedback);
+    let surface = super::toast_solid::render_toast_over_blank_solid(
+        toast,
+        pending,
+        term_width,
+        frame.height,
+        theme,
+        feedback,
+    );
     let message_width = display_width(&toast.message);
     let title_width = toast.title.as_deref().map_or(0, display_width);
     let (left, panel_width, top) = toast_geometry(message_width, title_width, term_width);
