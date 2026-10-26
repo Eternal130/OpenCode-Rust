@@ -360,7 +360,7 @@ pub fn render_session(
         // above `<Prompt>`): the failed directory's recovery screen
         // owns the composer's dock region.
         (
-            crate::components::location_missing::render_location_missing(
+            crate::components::location_missing_solid::render_location_missing_solid(
                 &directory,
                 &theme.styles(),
                 column - inset,

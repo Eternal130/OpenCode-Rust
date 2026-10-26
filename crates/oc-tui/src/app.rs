@@ -2978,15 +2978,14 @@ impl App {
         // derives the same button geometry from the size).
         if let Some(page) = self.store.plugin_route_page() {
             let overlay = if page.missing {
-                crate::components::plugin_page::render_plugin_route_missing(
+                crate::components::plugin_page_solid::render_plugin_route_missing_solid(
                     &page.plugin_id,
                     &page.name,
                     &theme.styles(),
                     self.size,
-                    &mut Vec::new(),
                 )
             } else {
-                crate::components::plugin_page::render_plugin_page(
+                crate::components::plugin_page_solid::render_plugin_page_solid(
                     &page.title,
                     &page.rows,
                     &theme.styles(),
