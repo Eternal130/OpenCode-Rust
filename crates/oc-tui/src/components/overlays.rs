@@ -242,6 +242,62 @@ mod tests {
         assert_eq!(fresh.startup_loading_text(10_000), None);
     }
 
+    /// CONFIG-E3 — `OPENCODE_FAST_BOOT` / `skipInitialLoading`
+    /// (app.tsx:351 + 1389-1391): the pill never mounts — neither the
+    /// 500 ms wait nor the ready hold ever produces text — and the
+    /// overlay painter leaves the frame clean.
+    #[test]
+    fn startup_loading_skipped_by_fast_boot() {
+        let store = Store::new(Runtime::new());
+        store.set_skip_initial_loading(true);
+        assert_eq!(store.startup_loading_text(0), None, "wait never arms");
+        assert_eq!(
+            store.startup_loading_text(10_000),
+            None,
+            "the 500 ms wait never fires — the component is unmounted (app.tsx:1389-1391)"
+        );
+        store.set_plugins_ready();
+        assert_eq!(
+            store.startup_loading_text(20_000),
+            None,
+            "the ready hold is equally irrelevant — nothing was ever shown"
+        );
+
+        // The painter side: `overlay_app_state` leaves the pill row
+        // empty (the clock advances past 500 ms so an armed pill would
+        // show if the skip were ignored).
+        let styles = crate::theme::ThemeState::v2_dark().styles();
+        let mut frame = frame_with(40, 10);
+        store.set_connection(crate::data::ConnectionState::Connected);
+        overlay_app_state(&mut frame, &store, &styles);
+        let row = String::from(frame.text_grid()[8].trim());
+        assert!(row.is_empty(), "pill row must stay clean: {row}");
+
+        // Without the flag the same clock position shows the pill.
+        let plain = Store::new(Runtime::new());
+        plain.set_connection(crate::data::ConnectionState::Connected);
+        assert_eq!(plain.startup_loading_text(0), None, "arms the wait");
+        assert_eq!(
+            plain.startup_loading_text(600),
+            Some("Loading plugins…"),
+            "unskipped boot still shows the pill"
+        );
+    }
+
+    /// CONFIG-E3 — the env parse mirrors JS
+    /// `Boolean(process.env.OPENCODE_FAST_BOOT)` (app.tsx:351):
+    /// unset and the empty string are false; ANY non-empty value —
+    /// including `"0"` and `"false"` — is true.
+    #[test]
+    fn fast_boot_env_semantics() {
+        assert!(!crate::app::fast_boot_from_env(None), "unset → false");
+        assert!(!crate::app::fast_boot_from_env(Some("")), "empty string → false");
+        assert!(crate::app::fast_boot_from_env(Some("1")));
+        assert!(crate::app::fast_boot_from_env(Some("0")), "JS truthiness: \"0\" → true");
+        assert!(crate::app::fast_boot_from_env(Some("false")), "\"false\" → true");
+        assert!(crate::app::fast_boot_from_env(Some(" ")));
+    }
+
     /// The pill renders above the frame content at bottom=1.
     #[test]
     fn startup_pill_geometry() {
