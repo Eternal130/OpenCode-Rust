@@ -1468,6 +1468,11 @@ pub struct Store {
     connection_since: Cell<u64>,
     /// SURF-2: the `StartupLoading` pill's state machine.
     startup_state: RefCell<StartupLoadingState>,
+    /// CONFIG-E3 — `skipInitialLoading`
+    /// (ref app.tsx:351 `skipInitialLoading: Boolean(process.env.OPENCODE_FAST_BOOT)`):
+    /// set at boot, the `StartupLoading` overlay never mounts
+    /// (app.tsx:1389-1391 `<Show when={!startup.skipInitialLoading}>`).
+    skip_initial_loading: std::cell::Cell<bool>,
     /// G-06 — the V1→V2 migration overlay's progress
     /// (`migration-overlay.tsx`): `Some` only while the poll reports
     /// `running`; completed/error clear it (error raises the toast).
@@ -3164,6 +3169,7 @@ impl Store {
             caret_cell: Cell::new(None),
             connection_since: Cell::new(0),
             startup_state: RefCell::new(StartupLoadingState::default()),
+            skip_initial_loading: std::cell::Cell::new(false),
             migration_progress: RefCell::new(None),
         }
     }
@@ -9518,6 +9524,14 @@ impl Store {
     /// Returns the pill's text when visible.
     #[must_use]
     pub fn startup_loading_text(&self, now_ms: u64) -> Option<&'static str> {
+        // CONFIG-E3 — fast boot skips the overlay entirely
+        // (app.tsx:1389-1391: the `<Show when={...}>` never mounts the
+        // component, so neither the wait nor the hold ever arms; the
+        // ready state itself is unaffected — `set_plugins_ready`
+        // still fires, it just has nothing to show).
+        if self.skip_initial_loading.get() {
+            return None;
+        }
         let mut state = self.startup_state.borrow_mut();
         if state.ready {
             if let Some(shown_at) = state.shown_at {
@@ -9541,6 +9555,14 @@ impl Store {
             }
             (Some(_), Some(_)) => Some("Loading plugins…"),
         }
+    }
+
+    /// CONFIG-E3 — arm `skipInitialLoading` from
+    /// `OPENCODE_FAST_BOOT` (app.tsx:351; see
+    /// [`crate::app::fast_boot_from_env`] for the JS `Boolean`
+    /// semantics).
+    pub fn set_skip_initial_loading(&self, skip: bool) {
+        self.skip_initial_loading.set(skip);
     }
 
     /// The plugin host finished booting (or none was configured) —

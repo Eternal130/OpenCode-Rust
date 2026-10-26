@@ -4859,8 +4859,10 @@ pub fn spawn_loop_fetcher(
                                     .collect(),
                                 localhost,
                                 // ref dialog-pair.tsx:30 `Math.round(expires_in / 60)`.
-                                minutes: u64::try_from(((pairing.expires_in.max(0) as f64) / 60.0).round() as i64)
-                                    .unwrap_or(0),
+                                minutes: u64::try_from(
+                                    ((pairing.expires_in.max(0) as f64) / 60.0).round() as i64,
+                                )
+                                .unwrap_or(0),
                                 loopback: server.urls.iter().any(|url| {
                                     let host = url
                                         .split_once("://")
@@ -6277,6 +6279,18 @@ fn write_mouse_flip(mouse: bool) {
 /// clock ticks (spinner/toast) → config-reload check → coalesced
 /// render → crossterm key wait (100 ms poll tick). `app.exit` (and any
 /// `Ctrl+c` on an empty prompt) breaks the loop.
+/// CONFIG-E3 — `OPENCODE_FAST_BOOT` parsing with the ref's exact JS
+/// semantics (app.tsx:351: `skipInitialLoading: Boolean(process.env.OPENCODE_FAST_BOOT)`):
+/// JS `Boolean` of a string is `false` only for `undefined`/the empty
+/// string — so `"0"`, `"false"` and `" "` are all **true**.
+#[must_use]
+pub fn fast_boot_from_env(value: Option<&str>) -> bool {
+    match value {
+        Some(v) => !v.is_empty(),
+        None => false,
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 pub async fn run_with_size(
     client: oc_client::Client,
@@ -6328,6 +6342,13 @@ pub async fn run_with_size(
     // App + config boot.
     let store = Store::new(crate::reactive::Runtime::new());
     let mut app = App::with_store(store, size);
+    // CONFIG-E3 — `skipInitialLoading` (ref app.tsx:351
+    // `skipInitialLoading: Boolean(process.env.OPENCODE_FAST_BOOT)`):
+    // suppresses the `StartupLoading` boot pill (app.tsx:1389-1391
+    // `<Show when={!startup.skipInitialLoading}>`).
+    if fast_boot_from_env(std::env::var("OPENCODE_FAST_BOOT").ok().as_deref()) {
+        app.store.set_skip_initial_loading(true);
+    }
     // R-07: the terminal's graphics protocol (env probe — see
     // `crate::image` for why not a DA1 round-trip).
     app.store.set_graphics_protocol(crate::image::detect_protocol());
