@@ -44,15 +44,43 @@ means bumping the git rev in the workspace `Cargo.toml` and letting
   file." fallback, matching upstream's error-view disposition. The
   legacy scanner tolerated anything; the vcs.diff endpoint emits valid
   unified diffs.
-* **line_number** (checked, not converged): the viewer's gutter is
-  painted inline in `paint_diff_row` (`␣` + number + sign + padding
-  into `Placed`/`Fill` ratatui rows, golden-pinned bytes);
-  opentui's `LineNumberRenderable` is a taffy-layout renderable with
-  its own width/sign model. Not trivially lossless under the
-  byte-identical bar — pending the R3 byte-parity spike
-  (`LineNumberRenderable` vs the pinned gutter bytes); if the spike
-  fails, line_number joins terminal_pane as a permanent local keep
-  (see "Rendering-stack migration" below).
+* **line_number** (checked 2026-10-26, lane R3 — **permanent local
+  keep**): the byte-parity spike ran opentui-core's
+  `LineNumberRenderable` gutter (rev `18e2904`,
+  `renderables/line_number.rs`) against the viewer's pinned inline
+  gutter. The gutter WIDTH models coincide (opentui
+  `calculate_width` :146-161 = max(min_width 3, digits + pad 1 + 1) +
+  sign widths 2 == the viewer's `1 + digits + 3` in
+  `paint_diff_row`, oc-tui `components/diff_viewer.rs`), but the
+  internal alignment is a different layout MODEL, not a rounding
+  quirk:
+  * **number alignment** — the viewer paints the number LEFT-aligned
+    at `x+1` in natural width (`paint_diff_row`,
+    diff_viewer.rs:1215-1226); opentui RIGHT-aligns it
+    (`line_num_x = maxBefore + 1 + availableSpace − numWidth − 1`,
+    LineNumberRenderable.ts:324-337 / line_number.rs:414-437).
+  * **sign column** — the viewer paints `" -"`/`" +"` immediately
+    AFTER the natural-width number (diff_viewer.rs:1227-1238), so the
+    sign column varies per row (golden rows ` 2 -` vs ` 21 -`);
+    opentui pins the sign at a FIXED column
+    `gutter_width − padding_right − max_after_width`
+    (LineNumberRenderable.ts:339-344 / line_number.rs:439-453).
+  Every row whose number is narrower than the file's widest number
+  diverges (the dominant case — visible in the primary golden fixture
+  `diff-viewer-split.w80.txt` itself, rows `   2 -  const oldFirst`
+  vs `   21 - const oldSecond`), so adoption is neither
+  byte-identical across the diff golden corpus (2 fixtures × text+ANSI
+  = 4 files, plus the in-crate golden/unit assertions) nor a
+  provably-limited re-pin: re-pinning would encode the opentui
+  alignment model OVER the upstream plugin's pinned layout
+  (`patch-diff.tsx`), i.e. divergence from the ported reference, not
+  convergence. The `,0` hunk-start bump interplay is unaffected — it
+  lives in patch PARSING (G-11 adapter, above), not the gutter.
+  Spike proof pinned in-repo:
+  `diff_viewer::tests::r3_line_number_gutter_diverges_from_opentui`
+  (paints both models for the golden's del rows 2/21 and asserts the
+  byte divergence). Verdict per the R3 decision rule: line_number
+  joins terminal_pane as a permanent local keep.
 
 Adapter-contract test:
 `diff_viewer::tests::diff_model_agrees_with_opentui_parse_patch`
@@ -111,12 +139,17 @@ strangler)
 | --- | --- | --- | --- |
 | R1 | overlay chrome (toast, console overlay, devtools, plugin_page, location_missing, migration_overlay, tab rail+tooltip) | S/M | any NEW divergence class in the rig unions → keep that surface hand-rolled |
 | R2 | footer forms family (`footer/*.rs`; extract the form/permission/menu STATE MODEL painter-agnostic first) | L | form-focus/keydown semantics can't stay store-side, or worst-frame budget > ~10 ms → a permanently hand-rolled footer family is an acceptable outcome |
-| R3 | diff_viewer — gated on a `LineNumberRenderable` byte-parity spike first (gutter sign/width model, `,0` hunk-start bumps); adopt only if byte-identical or the re-pin ≤ the diff golden set (~tens of fixtures) | M, gated | any diff rig corpus loses flag-symmetry → keep local |
+| R3 | diff_viewer — gated on a `LineNumberRenderable` byte-parity spike first (gutter sign/width model, `,0` hunk-start bumps); adopt only if byte-identical or the re-pin ≤ the diff golden set (~tens of fixtures) | M, gated | **CLOSED 2026-10-26: keep local** — the spike found a structural alignment divergence (number right-aligned + fixed sign column vs the golden's left-aligned number + per-row sign column), not byte-identical and not a limited re-pin; line_number is a permanent local keep (see §Diff convergence details) |
 
 ### Never migrate
 
 * `terminal_pane` — no upstream counterpart exists (the G-11
   correction); permanent local keep.
+* `diff_viewer`'s line-number gutter — the R3 spike verdict (2026-10-26):
+  opentui's `LineNumberRenderable` follows a different alignment model
+  (right-aligned numbers, fixed sign column) than the golden-pinned
+  upstream-plugin layout; permanent local keep (details in §Diff
+  convergence details, §line_number).
 * `mini/*` — separate embedded runtime with its own loop.
 * markdown re-home to opentui-core's `MarkdownRenderable` — stays
   deferred behind its own byte-parity lane (the M4 recorded decision;
@@ -129,6 +162,5 @@ strangler)
 Consequence for the blocked pairs above: **syntax** stays blocked on
 its own double precondition (language catalog AND span output) — the
 rendering-stack decision is no longer part of its blocker;
-**line_number** is no longer "blocked on the migration" but pending
-the R3 byte-parity spike, with a permanent local keep (like
-terminal_pane) as the recorded fallback.
+**line_number** closed 2026-10-26 by the R3 spike as a **permanent
+local keep** (like terminal_pane) — see §Diff convergence details.
