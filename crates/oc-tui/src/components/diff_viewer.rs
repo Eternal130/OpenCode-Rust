@@ -1557,4 +1557,84 @@ mod tests {
         assert!(opentui_core::renderables::diff::parse_patch(broken).is_err());
         assert_eq!(parse_patch(broken), [] as [Hunk; 0]);
     }
+
+    /// R3 byte-parity spike (FRAMEWORK-CONVERGENCE.md §line_number):
+    /// opentui-core's `LineNumberRenderable` gutter vs the viewer's
+    /// pinned inline gutter (`paint_diff_row`). Verdict recorded:
+    /// **permanent local keep** — the gutter WIDTH models coincide
+    /// (digits + 4 columns) but the internal alignment does not:
+    ///
+    /// * the viewer paints the number LEFT-aligned at `x+1` with the
+    ///   sign `" -"`/`" +"` immediately after the natural-width
+    ///   number, so the sign column VARIES per row (golden bytes:
+    ///   `   2 -  const oldFirst` vs `   21 - const oldSecond`);
+    /// * opentui right-aligns the number
+    ///   (`line_num_x = maxBefore + 1 + availableSpace − numWidth − 1`,
+    ///   LineNumberRenderable.ts:324-337) and pins the sign at
+    ///   `gutter_width − padding_right − max_after_width` (:339-344),
+    ///   a FIXED column.
+    ///
+    /// Every row whose number is narrower than the file's widest
+    /// number diverges — the dominant case (visible in the primary
+    /// golden fixture itself) — so adoption is neither byte-identical
+    /// nor a provably-limited re-pin.
+    #[test]
+    fn r3_line_number_gutter_diverges_from_opentui() {
+        use opentui_core::buffer::OptimizedBuffer;
+        use opentui_core::color::parse_color;
+        use opentui_core::renderables::line_number::{
+            calculate_sign_widths, paint_gutter, GutterState, LineNumberOptions, LineSign,
+        };
+
+        // The golden's del rows: a 2-digit field (widest number 42)
+        // carrying the numbers 2 and 21, sign " -" after the number.
+        let mut opts = LineNumberOptions::default();
+        for (line, number) in [(0i64, 2i64), (1, 21)] {
+            opts.line_signs.insert(
+                line,
+                LineSign {
+                    after: Some(" -".to_owned()),
+                    after_color: Some(parse_color("#ef4444")),
+                    ..Default::default()
+                },
+            );
+            opts.line_numbers.insert(line, number);
+        }
+        let state = GutterState::new(&opts);
+        let (before, after) = calculate_sign_widths(&state.line_signs);
+        assert_eq!((before, after), (0, 2), "sign width model matches the spike brief");
+        // Width model: opentui max(min_width 3, digits 2 + pad 1 + 1) + after 2
+        // == the viewer's 1 + digits + 3 == 6. The widths coincide…
+        let opentui_width = state.measure_ctx(2).calculate_width();
+        assert_eq!(opentui_width, 6);
+        assert_eq!(1 + 2 + 3, opentui_width as usize, "gutter widths agree");
+        // …the bytes do not. Paint the opentui gutter for the same rows.
+        let mut buffer = OptimizedBuffer::new(6, 2);
+        paint_gutter(&state, opentui_width, 2, &[0u32, 1], None, 0, &mut buffer, 0, 0);
+        let rows: Vec<String> =
+            buffer.char_frame().lines().map(|line| line.chars().take(6).collect()).collect();
+        // Number right-aligned, sign at a fixed column (3-4):
+        assert_eq!(rows[0], "  2 - ", "opentui row 0: right-aligned");
+        assert_eq!(rows[1], " 21 - ", "opentui row 1: sign column fixed");
+        // The viewer's pinned model: number left-aligned at col 1, the
+        // sign immediately after the natural-width number (col 2-3 for
+        // "2", col 3-4 for "21") — the sign column varies per row.
+        assert_eq!(" 2 -  ".chars().take(6).collect::<String>(), " 2 -  ");
+        assert_ne!(rows[0], " 2 -  ", "row 0 bytes diverge (number alignment)");
+        assert_ne!(rows[1], "21 -  ", "row 1 bytes diverge (leading pad column)");
+        // And the divergence is pinned in the golden corpus itself: the
+        // w80 text grid carries ` 2 - `-shaped rows next to ` 21 - `
+        // ones (sign right after the number, not column-aligned).
+        let frame = render_diff_viewer(
+            &diff_viewer_fixture(),
+            &DiffViewerState::default(),
+            &DiffViewerOptions::default(),
+            &theme(),
+            80,
+            24,
+        );
+        let grid = frame.text_grid();
+        assert!(grid[5].starts_with("   2 -  const oldFirst"), "golden model: {:?}", grid[5]);
+        assert!(grid[10].starts_with("   21 - const oldSecond"), "golden model: {:?}", grid[10]);
+    }
 }
