@@ -2144,7 +2144,7 @@ mod tests {
         assert!(pick.reply.is_some(), "single-field picker replies");
         // A printable on the custom row opens the editor with the
         // draft seeded.
-        let mut on_custom =
+        let on_custom =
             form_key(&form_key(&state, &request, "down", false).state, &request, "down", false)
                 .state;
         assert_eq!(on_custom.selected, 2, "the custom row");

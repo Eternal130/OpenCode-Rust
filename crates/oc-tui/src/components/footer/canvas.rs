@@ -44,9 +44,25 @@ impl Span {
     }
 }
 
+/// One recorded painting operation — the painter-agnostic op stream
+/// the opentui-solid bridge (lane R2 step 2) replays as absolute
+/// elements. Recording is write-beside: the Canvas's own painting is
+/// byte-identical to before.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CanvasOp {
+    /// `fill_bg`/`clear_bg` — a 1-row background segment (`bg ==
+    /// Default` marks a TRANSPARENT region, applied as a bridge-level
+    /// fixup: opentui cannot express bg-reset).
+    Fill { y: usize, x: usize, width: usize, bg: CellColor },
+    /// `spans` — one styled line at `(x, y)`.
+    Spans { y: usize, x: usize, spans: Vec<Span> },
+}
+
 /// A footer frame under construction.
+#[derive(Clone)]
 pub struct Canvas {
     frame: Frame,
+    ops: Vec<CanvasOp>,
 }
 
 impl Canvas {
@@ -55,7 +71,22 @@ impl Canvas {
     #[must_use]
     pub fn new(width: usize, height: usize) -> Self {
         let fill = Cell { ch: ' ', attrs: 0, fg: FILL_FG, bg: FILL_BG };
-        Self { frame: Frame { cells: vec![vec![fill; width]; height], width, height } }
+        Self {
+            frame: Frame { cells: vec![vec![fill; width]; height], width, height },
+            ops: Vec::new(),
+        }
+    }
+
+    /// The canvas dimensions.
+    #[must_use]
+    pub fn dims(&self) -> (usize, usize) {
+        (self.frame.width, self.frame.height)
+    }
+
+    /// The recorded op stream (the solid bridge's input).
+    #[must_use]
+    pub fn ops(&self) -> &[CanvasOp] {
+        &self.ops
     }
 
     pub fn frame_mut(&mut self) -> &mut Frame {
@@ -65,6 +96,7 @@ impl Canvas {
     /// Paint a row segment's background (surface / pane / focused),
     /// keeping the fill foreground.
     pub fn fill_bg(&mut self, y: usize, x: usize, width: usize, bg: CellColor) {
+        self.ops.push(CanvasOp::Fill { y, x, width, bg });
         for cell in self.row_cells(y, x, width) {
             cell.bg = bg;
         }
@@ -79,6 +111,7 @@ impl Canvas {
     /// Paint one line of spans at `(x, y)`, advancing by grapheme
     /// cluster width (leading cell carries the cluster's first char).
     pub fn spans(&mut self, y: usize, x: usize, spans: &[Span]) {
+        self.ops.push(CanvasOp::Spans { y, x, spans: spans.to_vec() });
         let mut x = x;
         for span in spans {
             let attrs = u16::from(span.bold);

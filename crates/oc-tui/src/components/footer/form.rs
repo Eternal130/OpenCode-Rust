@@ -33,10 +33,21 @@ pub fn render_form_body(
     height: usize,
     theme: &FooterTheme,
 ) -> Frame {
+    super::solid::finish(form_body_canvas(request, state, width, height, theme))
+}
+
+/// [`render_form_body`]'s canvas (the parity tests' op source).
+pub(crate) fn form_body_canvas(
+    request: &FormRequest,
+    state: &FormBodyState,
+    width: usize,
+    height: usize,
+    theme: &FooterTheme,
+) -> Canvas {
     let mut canvas = Canvas::new(width, height);
     let compact = width < 56 || height < 12;
     if height < 2 {
-        return canvas.into_frame();
+        return canvas;
     }
     let panel_end = height - 1; // inclusive — the body fills below the spacer
     for y in 1..=panel_end {
@@ -166,7 +177,7 @@ pub fn render_form_body(
     };
     canvas.spans(hints_y, text_x, &hints);
     let _ = compact;
-    canvas.into_frame()
+    canvas
 }
 
 fn answer_picked(state: &FormBodyState, field: &FormField, value: &FormRowValue) -> bool {

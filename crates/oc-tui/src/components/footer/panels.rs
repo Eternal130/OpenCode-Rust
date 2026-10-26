@@ -27,7 +27,7 @@ pub use super::state::{
 
 // -- panel renders ---------------------------------------------------------------
 
-fn panel_frame(
+fn panel_frame_canvas(
     width: usize,
     height: usize,
     term_height: usize,
@@ -42,7 +42,7 @@ fn panel_frame(
     empty: &str,
     theme: &FooterTheme,
     with_rail: bool,
-) -> Frame {
+) -> Canvas {
     let mut canvas = Canvas::new(width, height);
     let layout = footer_panel_layout(term_height, PANEL_LIST_ROWS);
     render_panel_shell(
@@ -73,17 +73,29 @@ fn panel_frame(
             canvas.spans(rail_y, 0, &rail);
         }
     }
-    canvas.into_frame()
+    canvas
+}
+
+/// The five pickers' dispatch: the panel frame through the family's
+/// solid seam (flag OFF keeps the hand-rolled bytes).
+fn panel_frame_finish(canvas: Canvas) -> Frame {
+    super::solid::finish(canvas)
 }
 
 /// `footer-command-menu`: static command groups. Terminal height
 /// `RUN_COMMAND_PANEL_ROWS + 1` in the corpus.
 #[must_use]
 pub fn render_command_menu(width: usize, height: usize, theme: &FooterTheme) -> Frame {
+    panel_frame_finish(command_menu_canvas(width, height, theme))
+}
+
+/// [`render_command_menu`]'s canvas (the parity tests' op source).
+#[must_use]
+pub(crate) fn command_menu_canvas(width: usize, height: usize, theme: &FooterTheme) -> Canvas {
     let entries =
         command_menu_entries(0, 0, 0, &["high".to_owned(), "minimal".to_owned()], "ctrl+t");
     let menu = FooterMenuState::new();
-    panel_frame(
+    panel_frame_canvas(
         width,
         height,
         RUN_COMMAND_PANEL_ROWS + 1,
@@ -111,9 +123,21 @@ pub fn render_model_select(
     height: usize,
     theme: &FooterTheme,
 ) -> Frame {
+    panel_frame_finish(model_select_canvas(providers, current, width, height, theme))
+}
+
+/// [`render_model_select`]'s canvas (the parity tests' op source).
+#[must_use]
+pub(crate) fn model_select_canvas(
+    providers: &[RunProvider],
+    current: Option<(&str, &str)>,
+    width: usize,
+    height: usize,
+    theme: &FooterTheme,
+) -> Canvas {
     let entries = model_entries(providers, current);
     let menu = reveal_current(&entries);
-    panel_frame(
+    panel_frame_canvas(
         width,
         height,
         RUN_COMMAND_PANEL_ROWS + 1,
@@ -141,9 +165,21 @@ pub fn render_agent_select(
     height: usize,
     theme: &FooterTheme,
 ) -> Frame {
+    panel_frame_finish(agent_select_canvas(agents, current, width, height, theme))
+}
+
+/// [`render_agent_select`]'s canvas (the parity tests' op source).
+#[must_use]
+pub(crate) fn agent_select_canvas(
+    agents: &[RunAgent],
+    current: Option<&str>,
+    width: usize,
+    height: usize,
+    theme: &FooterTheme,
+) -> Canvas {
     let entries = agent_entries(agents, current);
     let menu = reveal_current(&entries);
-    panel_frame(
+    panel_frame_canvas(
         width,
         height,
         RUN_COMMAND_PANEL_ROWS,
@@ -170,9 +206,21 @@ pub fn render_variant_select(
     height: usize,
     theme: &FooterTheme,
 ) -> Frame {
+    panel_frame_finish(variant_select_canvas(variants, current, width, height, theme))
+}
+
+/// [`render_variant_select`]'s canvas (the parity tests' op source).
+#[must_use]
+pub(crate) fn variant_select_canvas(
+    variants: &[String],
+    current: Option<&str>,
+    width: usize,
+    height: usize,
+    theme: &FooterTheme,
+) -> Canvas {
     let entries = variant_entries(variants, current);
     let menu = reveal_current(&entries);
-    panel_frame(
+    panel_frame_canvas(
         width,
         height,
         RUN_COMMAND_PANEL_ROWS,
@@ -198,9 +246,20 @@ pub fn render_settings(
     height: usize,
     theme: &FooterTheme,
 ) -> Frame {
+    panel_frame_finish(settings_canvas(settings, width, height, theme))
+}
+
+/// [`render_settings`]'s canvas (the parity tests' op source).
+#[must_use]
+pub(crate) fn settings_canvas(
+    settings: &MiniSettings,
+    width: usize,
+    height: usize,
+    theme: &FooterTheme,
+) -> Canvas {
     let entries = settings_entries(settings);
     let menu = FooterMenuState::new();
-    panel_frame(
+    panel_frame_canvas(
         width,
         height,
         RUN_COMMAND_PANEL_ROWS,

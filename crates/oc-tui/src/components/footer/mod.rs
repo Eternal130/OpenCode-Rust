@@ -28,6 +28,7 @@ pub mod permission;
 pub mod prompt_idle;
 #[cfg(test)]
 pub mod replay;
+pub mod solid;
 pub mod state;
 pub mod theme;
 
