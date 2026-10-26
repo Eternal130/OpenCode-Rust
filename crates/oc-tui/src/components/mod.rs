@@ -7,6 +7,7 @@
 //! 7.2 wave-2 assembly surfaces (sidebar pane, session route, VCS
 //! diff viewer).
 
+pub mod chrome_solid;
 pub mod command_palette;
 pub mod composer;
 /// Lane M3: the composer + footer on opentui-solid (the
@@ -15,7 +16,9 @@ pub mod composer;
 /// `docs/migration-m1-tabstrip.md`).
 pub mod composer_solid;
 pub mod console;
+pub mod console_solid;
 pub mod devtools;
+pub mod devtools_solid;
 pub mod dialog;
 pub mod dialog_config;
 pub mod dialog_open;
@@ -39,10 +42,12 @@ pub mod home;
 /// `docs/migration-m1-tabstrip.md`).
 pub mod home_solid;
 pub mod location_missing;
+pub mod location_missing_solid;
 pub mod marquee;
 pub mod message;
 pub mod migration_overlay;
 pub mod overlays;
+pub mod overlays_solid;
 /// Lane M6 (retired): the composer's subagent picker panel on
 /// opentui-solid — the ONLY renderer since the retirement lane
 /// deleted the `OC_SUBAGENT_OPENTUI` flag pair.
@@ -50,6 +55,7 @@ pub mod picker_solid;
 /// PLUG-TUI-SLOT: the plugin route page — the native full-screen
 /// page a plugin's registered route renders into.
 pub mod plugin_page;
+pub mod plugin_page_solid;
 /// PLUG-TUI-SLOT: the plugin UI-slot router — the ref's pure slot
 /// tree resolution (`packages/tui/src/plugin/structure.ts`) over the
 /// TUI's native mounted paths.
@@ -61,6 +67,7 @@ pub mod session_tabs;
 /// (TD-25) — `component/session-tabs.tsx`'s `VerticalSessionTabs` +
 /// `session-tabs-rail.tsx`.
 pub mod session_tabs_rail;
+pub mod session_tabs_rail_solid;
 /// Lane M1: the tab strip on opentui-solid — the DEFAULT renderer
 /// (the hand-rolled one is the `OC_TABS_OPENTUI=0` fallback for one
 /// release; see the module doc + `docs/migration-m1-tabstrip.md`).
@@ -75,6 +82,7 @@ pub mod subagent_picker;
 pub mod syntax;
 pub mod tab_pulse;
 pub mod toast;
+pub mod toast_solid;
 pub mod tool_rows;
 /// Lane M4: the transcript (message list) on opentui-solid — the
 /// DEFAULT renderer (the hand-rolled region walk is the

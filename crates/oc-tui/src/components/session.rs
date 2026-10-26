@@ -213,7 +213,9 @@ pub fn paint_live_rail(
         tooltip,
     };
     let geometry = crate::components::session_tabs_rail::RailGeometry::new(views.len(), width);
-    crate::components::session_tabs_rail::paint_vertical_rail(&inputs, &geometry, height, styles)
+    crate::components::session_tabs_rail_solid::paint_vertical_rail_solid(
+        &inputs, &geometry, height, styles,
+    )
 }
 
 /// Render the session route: the tabs strip, the transcript (lane C's
@@ -360,7 +362,7 @@ pub fn render_session(
         // above `<Prompt>`): the failed directory's recovery screen
         // owns the composer's dock region.
         (
-            crate::components::location_missing::render_location_missing(
+            crate::components::location_missing_solid::render_location_missing_solid(
                 &directory,
                 &theme.styles(),
                 column - inset,

@@ -2842,15 +2842,14 @@ impl App {
         // derives the same button geometry from the size).
         if let Some(page) = self.store.plugin_route_page() {
             let overlay = if page.missing {
-                crate::components::plugin_page::render_plugin_route_missing(
+                crate::components::plugin_page_solid::render_plugin_route_missing_solid(
                     &page.plugin_id,
                     &page.name,
                     &theme.styles(),
                     self.size,
-                    &mut Vec::new(),
                 )
             } else {
-                crate::components::plugin_page::render_plugin_page(
+                crate::components::plugin_page_solid::render_plugin_page_solid(
                     &page.title,
                     &page.rows,
                     &theme.styles(),
@@ -2862,7 +2861,7 @@ impl App {
         // TUI-29 — the renderer console (`renderer.console`'s strip at
         // the top of the screen, over the app).
         if self.store.console_open() {
-            let overlay = crate::components::console::render_console_overlay(
+            let overlay = crate::components::console_solid::render_console_overlay_solid(
                 &self.store.console_lines(),
                 &theme.styles(),
                 self.size.0,

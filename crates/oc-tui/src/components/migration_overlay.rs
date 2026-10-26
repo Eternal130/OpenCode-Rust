@@ -8,8 +8,6 @@
 //! the poll; an `error` status (or transport failure) stops the poll
 //! and shows the "Data migration failed" error toast (~10 s).
 
-use crate::render::{CellColor, Frame};
-use crate::theme::ThemeStyles;
 use oc_client::types::ExperimentalMigrationV1StatusResponse as StatusResponse;
 
 /// `Progress` (migration-overlay.tsx:9).
@@ -116,70 +114,12 @@ pub fn progress_count(progress: &MigrationProgress) -> String {
     }
 }
 
-/// `SPINNER_FRAMES` — the shared braille spinner (`component/spinner`,
-/// interval 80 ms — the same table the app-state overlays use).
-const SPINNER_FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-
-fn spinner_frame(elapsed_ms: u64) -> char {
-    SPINNER_FRAMES[((elapsed_ms / 80) % SPINNER_FRAMES.len() as u64) as usize]
-}
-
-/// Paint the overlay above every other surface (`zIndex` `10_000`): a
-/// raised box at `top=1, right=2` with a left `SplitBorder` rail in
-/// the info color, padding 2/2/1/1, one row of Spinner + label +
-/// counters (migration-overlay.tsx:47-70).
-pub fn overlay_migration(
-    frame: &mut Frame,
-    styles: &ThemeStyles,
-    progress: &MigrationProgress,
-    elapsed_ms: u64,
-) {
-    let width = frame.width;
-    if width < 6 || frame.height < 4 {
-        return;
-    }
-    let spinner = spinner_frame(elapsed_ms);
-    let content = format!("{spinner} {}{}", progress.label, progress_count(progress));
-    // border(1) + paddingLeft(2) + content + paddingRight(2).
-    let box_width = content.chars().count() + 1 + 2 + 2;
-    let left = width.saturating_sub(box_width + 2); // right=2
-    let top = 1; // top=1
-    let rows = top + 3; // paddingTop(1) + row + paddingBottom(1)
-    let raised = styles.background_raised;
-    let info = CellColor::from(styles.info);
-    let fg_base: CellColor = styles.text.fg.unwrap_or(ratatui::style::Color::Reset).into();
-    for row in top..rows.min(frame.height) {
-        for col in left..(left + box_width).min(width) {
-            if let Some(cell) = frame.cells.get_mut(row).and_then(|line| line.get_mut(col)) {
-                cell.bg = CellColor::from(raised);
-                cell.fg = fg_base;
-                cell.ch = ' ';
-                cell.attrs = 0;
-            }
-        }
-        // The SplitBorder left rail in the info color.
-        if let Some(cell) = frame.cells.get_mut(row).and_then(|line| line.get_mut(left)) {
-            cell.ch = '▎';
-            cell.fg = info;
-        }
-    }
-    // The content row (inside the paddings, after the rail).
-    let content_col = left + 1 + 2;
-    for (offset, ch) in content.chars().enumerate() {
-        if let Some(cell) =
-            frame.cells.get_mut(top + 1).and_then(|line| line.get_mut(content_col + offset))
-        {
-            cell.ch = ch;
-            cell.fg = info;
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::overlays_solid::overlay_migration_solid;
     use crate::reactive::Runtime;
-    use crate::render::Cell;
+    use crate::render::{Cell, CellColor, Frame};
     use crate::store::Store;
     use oc_client::types::{
         ExperimentalMigrationV1StatusResponseVariant1 as V1,
@@ -354,12 +294,12 @@ mod tests {
         store.set_migration_progress(Some(progress.clone()));
         let mut frame = frame_with(60, 12);
         if let Some(progress) = store.migration_progress() {
-            overlay_migration(&mut frame, &styles, &progress, store.clock());
+            overlay_migration_solid(&mut frame, &styles, &progress, store.clock());
         }
         let row = frame.text_grid()[2].clone();
         assert!(row.contains("Migrating sessions 2/5"), "content row: {row}");
         assert!(row.ends_with("  "), "right=2 margin");
-        let spinner = spinner_frame(0);
+        let spinner = '⠋';
         assert!(
             row.contains(&format!("{spinner} Migrating sessions 2/5")),
             "spinner + label + counters: {row}"
@@ -370,7 +310,7 @@ mod tests {
         store.set_migration_progress(None);
         let mut frame = frame_with(60, 12);
         if let Some(progress) = store.migration_progress() {
-            overlay_migration(&mut frame, &styles, &progress, store.clock());
+            overlay_migration_solid(&mut frame, &styles, &progress, store.clock());
         }
         assert!(!frame.text_grid().join("\n").contains("Migrating sessions"));
     }
