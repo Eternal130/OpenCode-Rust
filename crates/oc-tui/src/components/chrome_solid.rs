@@ -111,6 +111,16 @@ struct ChromeInputs {
 // ---------------------------------------------------------------------------
 
 fn chunk_rgba(color: CellColor) -> Option<Rgba> {
+    // The bridge's byte assumption (zero golden re-pins prove it
+    // holds today): a chrome unit never carries an INDEXED color —
+    // it has no faithful opentui channel, so it would fall to the
+    // transparent slot and render fg Default/white. Fail loudly at
+    // the shaping seam instead of silently mis-rendering (oracle
+    // gate F3); `Default` is legitimate and stays transparent.
+    debug_assert!(
+        !matches!(color, CellColor::Indexed(_)),
+        "chrome bridge: CellColor::Indexed has no opentui channel (paints Default)"
+    );
     match color {
         CellColor::Rgb(r, g, b) => Some(Rgba::rgb(r, g, b)),
         // Default/Indexed have no faithful opentui channel: leave
@@ -121,6 +131,11 @@ fn chunk_rgba(color: CellColor) -> Option<Rgba> {
 }
 
 fn background_rgba(color: CellColor) -> Rgba {
+    // The same F3 guard for the mount's background slot.
+    debug_assert!(
+        !matches!(color, CellColor::Indexed(_)),
+        "chrome bridge: CellColor::Indexed has no opentui channel (paints Default)"
+    );
     match color {
         CellColor::Rgb(r, g, b) => Rgba::rgb(r, g, b),
         // Transparent — `frame_color` maps alpha 0 back to Default.
@@ -162,12 +177,23 @@ fn chunk_text(chunks: &[ChromeChunk]) -> StyledText {
     StyledText::new(
         chunks
             .iter()
-            .map(|chunk| TextChunk {
-                text: chunk.text.clone(),
-                fg: chunk_rgba(chunk.fg),
-                bg: chunk_rgba(chunk.bg),
-                attributes: u32::from(chunk.attrs & 0xFF),
-                link: None,
+            .map(|chunk| {
+                // F3 guard: the chrome vocabulary is the low ECMA
+                // byte (the word `render::ansi` serializes) — a unit
+                // carrying bits ≥ 0x100 would be silently masked by
+                // the copy and mis-render. Fail at the seam instead.
+                debug_assert!(
+                    chunk.attrs & 0xFF == chunk.attrs,
+                    "chrome bridge: attrs {:#x} exceed the low ECMA byte",
+                    chunk.attrs
+                );
+                TextChunk {
+                    text: chunk.text.clone(),
+                    fg: chunk_rgba(chunk.fg),
+                    bg: chunk_rgba(chunk.bg),
+                    attributes: u32::from(chunk.attrs & 0xFF),
+                    link: None,
+                }
             })
             .collect::<Vec<TextChunk>>(),
     )
@@ -390,6 +416,15 @@ fn chrome_frame_from_buffer(buffer: &OptimizedBuffer) -> Frame {
             } else {
                 char::from_u32(cell.char).unwrap_or(' ')
             };
+            // F3 guard: the copy masks to the low ECMA byte — bits
+            // 8-31 carry the raster's hyperlink id pool, and a chrome
+            // unit never sets a link, so any high bits here would
+            // mean a future unit type broke the bridge's vocabulary.
+            debug_assert!(
+                cell.attributes >> 8 == 0,
+                "chrome bridge: buffer attributes {:#x} carry bits past the ECMA byte",
+                cell.attributes
+            );
             let attrs = (cell.attributes & 0xFF) as u16;
             // The raster's default-foreground snapshot is WHITE: an
             // untouched cell (transparent background, no attributes,

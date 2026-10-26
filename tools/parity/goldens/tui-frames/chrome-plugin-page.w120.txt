@@ -1,0 +1,10 @@
+                                                                                                                        
+  a-very-long-plugin-route-title-that-overflows-the-header-row                                             ctrl+c exit  
+                                                                                                                        
+  Usage statistics                                                                                                      
+  sessions: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 
+  plugins: 3                                                                                                            
+  a fourth row the 10-row page must clip                                                                                
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        

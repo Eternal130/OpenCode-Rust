@@ -1,0 +1,12 @@
+┌─ console ────────────────────────────────────────────────┐
+│line 30: renderer diagnostic message                      │
+│line 31: renderer diagnostic message                      │
+│line 32: renderer diagnostic message                      │
+│line 33: renderer diagnostic message                      │
+│line 34: renderer diagnostic message                      │
+│line 35: renderer diagnostic message                      │
+│line 36: renderer diagnostic message                      │
+│line 37: renderer diagnostic message                      │
+│line 38: renderer diagnostic message                      │
+│clipyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy│
+└──────────────────────────────────────────────────────────┘
