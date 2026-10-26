@@ -175,67 +175,10 @@ pub fn render_toast_over_blank_solid(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::chrome_solid::first_divergence;
-    use crate::components::toast::render_toast_over_blank;
     use crate::theme::ThemeState;
 
     fn footer() -> (FooterTheme, ResolvedThemeTokens) {
         let state = ThemeState::v2_dark();
         (FooterTheme::from_resolved(&state.resolved.tokens), state.resolved.tokens)
-    }
-
-    /// The lane gate: the solid panel equals the old painter CELL FOR
-    /// CELL over the variant × title × pending × size matrix (the
-    /// golden's 80×30 geometry, the narrow clamps, and a CJK message
-    /// whose continuation cells stay at the fill).
-    #[test]
-    fn solid_toast_equals_the_old_renderer() {
-        let (theme, feedback) = footer();
-        let mut matrix: Vec<(ToastOptions, usize, usize, usize)> = Vec::new();
-        for variant in ["info", "success", "warning", "error"] {
-            matrix.push((
-                ToastOptions {
-                    title: Some("Fixture notice".into()),
-                    message: "Toast rendered over session content".into(),
-                    variant,
-                    duration_ms: 60_000,
-                    action_label: None,
-                    action_command: None,
-                    modal: false,
-                },
-                0,
-                80,
-                30,
-            ));
-        }
-        matrix.push((ToastOptions::info("plain body"), 3, 80, 30));
-        matrix.push((ToastOptions::info("short"), 0, 20, 10));
-        matrix.push((
-            ToastOptions::info("a very much longer message body that must clamp"),
-            2,
-            40,
-            12,
-        ));
-        matrix.push((
-            ToastOptions {
-                title: Some("多行标题 with CJK".into()),
-                message: "正文 with 世界 clusters".into(),
-                ..ToastOptions::info("m")
-            },
-            1,
-            120,
-            30,
-        ));
-        for (toast, pending, width, height) in matrix {
-            let old = render_toast_over_blank(&toast, pending, width, height, &theme, &feedback);
-            let solid =
-                render_toast_over_blank_solid(&toast, pending, width, height, &theme, &feedback);
-            if let Some((row, col, why)) = first_divergence(&solid, &old) {
-                panic!(
-                    "variant={} title={:?} pending={pending} {width}x{height} at {row},{col}: {why}",
-                    toast.variant, toast.title
-                );
-            }
-        }
     }
 }

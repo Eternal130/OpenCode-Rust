@@ -20,7 +20,6 @@
 //! panel · `<leader>j` dump state to `/tmp/opencode/` (ref's
 //! state-dump action).
 
-use crate::render::{Cell, CellColor, Frame};
 use crate::store::Store;
 use crate::theme::ThemeStyles;
 use ratatui::style::Color;
@@ -206,31 +205,6 @@ pub fn bar_text(store: &Store, styles: &ThemeStyles, size: (u16, u16)) -> String
         }
     }
     parts.join(" ")
-}
-
-/// Paint the bar over the frame's LAST row — a no-op unless the
-/// feature is enabled AND the bar visible (the golden-frame guard).
-pub fn paint_devtools_bar(
-    frame: &mut Frame,
-    store: &Store,
-    styles: &ThemeStyles,
-    size: (u16, u16),
-) {
-    let state = store.devtools_state();
-    if !state.enabled || !state.visible || frame.height == 0 || frame.width == 0 {
-        return;
-    }
-    let text: String = {
-        let full = bar_text(store, styles, size);
-        full.chars().take(frame.width.saturating_sub(1)).collect()
-    };
-    let fg = styles.text_muted.fg.map_or(CellColor::Default, CellColor::from);
-    let bg = CellColor::from(styles.background_raised);
-    let row = frame.height - 1;
-    for col in 0..frame.width {
-        let ch = text.chars().nth(col).unwrap_or(' ');
-        frame.cells[row][col] = Cell { ch, attrs: 0, fg, bg };
-    }
 }
 
 use crate::store::ServerModel;

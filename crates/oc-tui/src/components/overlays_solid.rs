@@ -18,7 +18,7 @@
 
 use super::chrome_solid::{chrome_frame, chrome_run_units, ChromeBody, ChromeChunk, ChromeUnit};
 use super::migration_overlay::{progress_count, MigrationProgress};
-use crate::render::{Cell, CellColor, Frame};
+use crate::render::{CellColor, Frame};
 use crate::theme::ThemeStyles;
 
 /// `SPINNER_FRAMES` (component/spinner, 80 ms) — shared with the old
@@ -213,8 +213,6 @@ pub fn overlay_migration_solid(
 mod tests {
     use super::*;
     use crate::components::chrome_solid::first_divergence;
-    use crate::components::migration_overlay::overlay_migration;
-    use crate::components::overlays::{overlay_reconnecting, overlay_startup_loading};
     use crate::render::Cell;
     use crate::theme::ThemeState;
 
@@ -230,65 +228,6 @@ mod tests {
             ],
             width,
             height,
-        }
-    }
-
-    /// The reconnecting composite (scrim + box + copy tail) equals
-    /// the old painter cell for cell over the size × spinner matrix.
-    #[test]
-    fn solid_reconnecting_equals_the_old_renderer() {
-        for (width, height) in [(60usize, 12usize), (80, 24), (40, 10), (44, 8), (120, 30)] {
-            for elapsed in [0u64, 40, 80, 160, 333] {
-                let mut old = base_frame(width, height, 200);
-                let mut solid = base_frame(width, height, 200);
-                overlay_reconnecting(&mut old, &styles(), elapsed);
-                overlay_reconnecting_solid(&mut solid, &styles(), elapsed);
-                if let Some((row, col, why)) = first_divergence(&solid, &old) {
-                    panic!("{width}x{height} elapsed={elapsed} at {row},{col}: {why}");
-                }
-            }
-        }
-    }
-
-    /// The startup pill equals the old painter cell for cell.
-    #[test]
-    fn solid_startup_pill_equals_the_old_renderer() {
-        for (width, height) in [(40usize, 10usize), (80, 24), (20, 4), (4, 2), (60, 3)] {
-            for (text, elapsed) in [("Loading plugins…", 0u64), ("Finishing startup…", 240)] {
-                let mut old = base_frame(width, height, 60);
-                let mut solid = base_frame(width, height, 60);
-                overlay_startup_loading(&mut old, &styles(), text, elapsed);
-                overlay_startup_loading_solid(&mut solid, &styles(), text, elapsed);
-                if let Some((row, col, why)) = first_divergence(&solid, &old) {
-                    panic!("{width}x{height} {text} at {row},{col}: {why}");
-                }
-            }
-        }
-    }
-
-    /// The migration widget equals the old painter cell for cell
-    /// over the counter × size × spinner matrix.
-    #[test]
-    fn solid_migration_equals_the_old_renderer() {
-        for (numerator, denominator) in [(Some(2), Some(5)), (Some(3), None), (None, None)] {
-            let progress = MigrationProgress {
-                label: "Migrating sessions".to_owned(),
-                numerator,
-                denominator,
-            };
-            for (width, height) in [(60usize, 12usize), (80, 24), (30, 8), (6, 4)] {
-                for elapsed in [0u64, 90, 200] {
-                    let mut old = base_frame(width, height, 60);
-                    let mut solid = base_frame(width, height, 60);
-                    overlay_migration(&mut old, &styles(), &progress, elapsed);
-                    overlay_migration_solid(&mut solid, &styles(), &progress, elapsed);
-                    if let Some((row, col, why)) = first_divergence(&solid, &old) {
-                        panic!(
-                            "n={numerator:?} d={denominator:?} {width}x{height} e={elapsed} at {row},{col}: {why}"
-                        );
-                    }
-                }
-            }
         }
     }
 }

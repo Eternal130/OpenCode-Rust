@@ -192,89 +192,6 @@ pub fn toast_geometry(
     (left, panel, 1)
 }
 
-/// Render one toast over a blank terminal frame (the overlay region of
-/// the `toast-over-session` golden).
-#[must_use]
-pub fn render_toast_over_blank(
-    toast: &ToastOptions,
-    pending: usize,
-    term_width: usize,
-    term_height: usize,
-    theme: &FooterTheme,
-    feedback: &ResolvedThemeTokens,
-) -> Frame {
-    let mut canvas = Canvas::new(term_width, term_height);
-    paint_toast(
-        &mut canvas,
-        toast,
-        pending,
-        term_width,
-        theme,
-        feedback_color(feedback, toast.variant),
-    );
-    canvas.into_frame()
-}
-
-/// Paint the toast surface onto a canvas (absolute `top=1`, `right=2`).
-pub fn paint_toast(
-    canvas: &mut Canvas,
-    toast: &ToastOptions,
-    pending: usize,
-    term_width: usize,
-    theme: &FooterTheme,
-    border: crate::render::CellColor,
-) {
-    let message_width = display_width(&toast.message);
-    let title_width = toast.title.as_deref().map_or(0, display_width);
-    let (left, panel_width, top) = toast_geometry(message_width, title_width, term_width);
-    let bg = theme.pane;
-    // The rails sit on the backdrop (the surface behind the overlay —
-    // the sidebar in the session route).
-    let rail = Span::new("┃", border, theme.surface);
-    let content_x = left + 3; // rail + paddingLeft 2
-    let content_right = left + panel_width - 4; // last content column (padding 2)
-                                                // Every panel row carries the two rails over the backdrop with the
-                                                // raised-high interior; the content rows fill in between.
-    let rail_row = |canvas: &mut Canvas, row: usize| {
-        canvas.spans(row, left, std::slice::from_ref(&rail));
-        canvas.fill_bg(row, left + 1, panel_width - 2, bg);
-        canvas.spans(row, left + panel_width - 1, std::slice::from_ref(&rail));
-    };
-    if let Some(title) = &toast.title {
-        // paddingTop · title row (+ margin) · message · paddingBottom.
-        for row in [top, top + 1, top + 2, top + 3, top + 4] {
-            rail_row(canvas, row);
-        }
-        canvas.spans(top + 1, content_x, &[Span::new(title.clone(), theme.text, bg).bold()]);
-        let affordance = vec![
-            Span::new("  ", crate::components::footer::canvas::FILL_FG, bg),
-            Span::new("x", theme.muted, bg),
-        ];
-        canvas.spans_right(top + 1, content_right, &affordance);
-        canvas.spans(top + 3, content_x, &[Span::new(toast.message.clone(), theme.text, bg)]);
-    } else {
-        rail_row(canvas, top);
-        rail_row(canvas, top + 1);
-        canvas.spans(top + 1, content_x, &[Span::new(toast.message.clone(), theme.text, bg)]);
-    }
-    if pending > 0 {
-        canvas.spans(top + 2, content_x, &[Span::new(format!("+{pending} more"), theme.muted, bg)]);
-    }
-}
-
-/// Convenience: the toast surface rendered with the v2-dark fallback.
-#[must_use]
-pub fn render_toast_fallback_dark(
-    toast: &ToastOptions,
-    pending: usize,
-    width: usize,
-    height: usize,
-) -> Frame {
-    let theme_state = ThemeState::v2_dark();
-    let footer = FooterTheme::from_resolved(&theme_state.resolved.tokens);
-    render_toast_over_blank(toast, pending, width, height, &footer, &theme_state.resolved.tokens)
-}
-
 /// The toast's panel rows: 5 with a title (paddingTop · title · margin
 /// · message · paddingBottom), 2 without.
 fn panel_rows(toast: &ToastOptions) -> usize {
@@ -412,7 +329,16 @@ mod tests {
 
     #[test]
     fn surface_matches_the_golden_region() {
-        let frame = render_toast_fallback_dark(&notice(), 0, 80, 30);
+        let theme_state = crate::theme::ThemeState::v2_dark();
+        let footer = FooterTheme::from_resolved(&theme_state.resolved.tokens);
+        let frame = crate::components::toast_solid::render_toast_over_blank_solid(
+            &notice(),
+            0,
+            80,
+            30,
+            &footer,
+            &theme_state.resolved.tokens,
+        );
         let grid = frame.text_grid();
         assert_eq!(grid[1].chars().nth(37), Some('┃'), "left rail at x37");
         assert_eq!(grid[1].chars().nth(77), Some('┃'), "right rail at x77");

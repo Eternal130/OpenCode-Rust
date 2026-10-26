@@ -235,9 +235,7 @@ pub fn paint_tooltip_solid(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::chrome_solid::first_divergence;
     use crate::components::session_tabs::TabView;
-    use crate::components::session_tabs_rail::paint_vertical_rail;
     use crate::store::{SessionTab, Unread};
     use crate::theme::ThemeState;
 
@@ -254,76 +252,5 @@ mod tests {
 
     fn styles() -> ThemeStyles {
         ThemeState::v2_dark().styles()
-    }
-
-    /// The lane gate: the solid rail equals the old painter CELL FOR
-    /// CELL (char + attrs + fg + bg, the returned rail frame) across
-    /// the count × width × state matrix — non-compact pills/details,
-    /// the compact controls/seam/indicators, hover lifts, the home
-    /// new-tab promotion, the handle highlight, and the tooltip.
-    #[test]
-    fn solid_rail_equals_the_old_renderer() {
-        let tabs = vec![view("a", "Alpha"), view("b", "Beta with a longer title line")];
-        let one = vec![view("a", "Alpha")];
-        let cjk = vec![view("c", "多行 title with 世界 clusters")];
-        let cases: Vec<(Vec<TabView>, usize, usize, usize)> = vec![
-            (tabs.clone(), 42, 12, 0),
-            (one.clone(), 42, 12, 1),
-            (one.clone(), 6, 10, 0),
-            (tabs.clone(), 6, 12, 1),
-            (cjk.clone(), 42, 10, 0),
-            (tabs.clone(), 42, 4, 2),
-            (Vec::new(), 42, 12, 0),
-            (one.clone(), 12, 12, 0),
-        ];
-        for (tabs, width, height, active_index) in cases {
-            let inputs = RailInputs {
-                tabs: &tabs,
-                active: tabs.get(active_index).map(|v| v.tab.session_id.as_str()),
-                hover: tabs
-                    .first()
-                    .map(|v| v.tab.session_id.as_str())
-                    .filter(|_| active_index != 0),
-                add_hovered: true,
-                search_hovered: width < 12,
-                home_new_tab: tabs.is_empty(),
-                handle_hot: true,
-                tooltip: if width < 12 { tabs.first() } else { None },
-            };
-            let geometry = RailGeometry::new(tabs.len(), width);
-            let (old, old_tip) = paint_vertical_rail(&inputs, &geometry, height, &styles());
-            let (solid, solid_tip) =
-                paint_vertical_rail_solid(&inputs, &geometry, height, &styles());
-            if let Some((row, col, why)) = first_divergence(&solid, &old) {
-                panic!("width={width} height={height} at {row},{col}: {why}");
-            }
-            match (old_tip, solid_tip) {
-                (None, None) => {}
-                (Some((o_row, o_frame)), Some((s_row, s_frame))) => {
-                    assert_eq!(o_row, s_row);
-                    if let Some((row, col, why)) = first_divergence(&s_frame, &o_frame) {
-                        panic!("tooltip width={width} at {row},{col}: {why}");
-                    }
-                }
-                pair => panic!("tooltip presence mismatch: {pair:?}"),
-            }
-        }
-    }
-
-    /// Selection/hover churn patches the mount in place (no rebuild)
-    /// and keeps the frames equal.
-    #[test]
-    fn hover_churn_keeps_parity() {
-        let tabs = vec![view("a", "Alpha"), view("b", "Beta"), view("c", "Gamma")];
-        let geometry = RailGeometry::new(tabs.len(), 42);
-        for active in [None, Some("a"), Some("b"), Some("c"), Some("a")] {
-            let inputs =
-                RailInputs { tabs: &tabs, active, hover: Some("c"), ..RailInputs::default() };
-            let (old, _) = paint_vertical_rail(&inputs, &geometry, 14, &styles());
-            let (solid, _) = paint_vertical_rail_solid(&inputs, &geometry, 14, &styles());
-            if let Some((row, col, why)) = first_divergence(&solid, &old) {
-                panic!("active={active:?} at {row},{col}: {why}");
-            }
-        }
     }
 }

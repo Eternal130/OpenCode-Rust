@@ -103,28 +103,9 @@ pub fn render_location_missing_solid(
 mod tests {
     use super::*;
     use crate::components::chrome_solid::first_divergence;
-    use crate::components::location_missing::render_location_missing;
     use crate::theme::ThemeState;
 
     fn styles() -> ThemeStyles {
         ThemeState::v2_dark().styles()
-    }
-
-    /// The lane gate: the solid mount equals the old painter CELL
-    /// FOR CELL over the width matrix (the header/body/pill rows and
-    /// the directory truncation budgets — the truncateMiddle(…, 72)
-    /// overflow needs width > 73 to exercise).
-    #[test]
-    fn solid_location_missing_equals_the_old_renderer() {
-        let long = format!("/base/{}", "x".repeat(120));
-        for directory in ["/gone/dir", "/home/u/work", &long] {
-            for width in [40usize, 60, 80, 120, 4, 6] {
-                let old = render_location_missing(directory, &styles(), width);
-                let solid = render_location_missing_solid(directory, &styles(), width);
-                if let Some((row, col, why)) = first_divergence(&solid, &old) {
-                    panic!("dir={directory} width={width} at {row},{col}: {why}");
-                }
-            }
-        }
     }
 }

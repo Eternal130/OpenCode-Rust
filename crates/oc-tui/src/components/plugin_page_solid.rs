@@ -136,7 +136,6 @@ pub fn render_plugin_route_missing_solid(
 mod tests {
     use super::*;
     use crate::components::chrome_solid::first_divergence;
-    use crate::components::plugin_page::{render_plugin_page, render_plugin_route_missing};
     use crate::theme::ThemeState;
 
     fn styles() -> ThemeStyles {
@@ -145,58 +144,5 @@ mod tests {
 
     fn scenarios() -> Vec<(usize, usize)> {
         vec![(40, 10), (60, 24), (80, 30), (120, 40), (26, 8), (10, 6)]
-    }
-
-    /// The lane gate: the solid page equals the old painter CELL FOR
-    /// CELL (char + attrs + fg + bg) over the size matrix, incl. the
-    /// title/hint truncation budgets and the many-rows clip.
-    #[test]
-    fn solid_plugin_page_equals_the_old_renderer() {
-        for (width, height) in scenarios() {
-            for (title, rows) in [
-                ("stats", vec!["Usage statistics".to_owned(), "sessions: 12".to_owned()]),
-                (
-                    "a-very-long-plugin-route-title-that-overflows-the-row",
-                    vec!["r0".to_owned(), "r1".to_owned(), "r2".to_owned()],
-                ),
-                ("x", Vec::new()),
-            ] {
-                let old =
-                    render_plugin_page(title, &rows, &styles(), (width as u16, height as u16));
-                let solid = render_plugin_page_solid(
-                    title,
-                    &rows,
-                    &styles(),
-                    (width as u16, height as u16),
-                );
-                if let Some((row, col, why)) = first_divergence(&solid, &old) {
-                    panic!("page {width}x{height} title={title} at {row},{col}: {why}");
-                }
-            }
-        }
-    }
-
-    /// The fallback screen, cell for cell over the same matrix (the
-    /// centered warning + the reverse-video button band).
-    #[test]
-    fn solid_plugin_route_missing_equals_the_old_renderer() {
-        for (width, height) in scenarios() {
-            let old = render_plugin_route_missing(
-                "pkg",
-                "name",
-                &styles(),
-                (width as u16, height as u16),
-                &mut Vec::new(),
-            );
-            let solid = render_plugin_route_missing_solid(
-                "pkg",
-                "name",
-                &styles(),
-                (width as u16, height as u16),
-            );
-            if let Some((row, col, why)) = first_divergence(&solid, &old) {
-                panic!("missing {width}x{height} at {row},{col}: {why}");
-            }
-        }
     }
 }

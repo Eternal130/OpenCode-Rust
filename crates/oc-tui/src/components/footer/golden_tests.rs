@@ -363,18 +363,16 @@ fn toast_over_session_matches_the_full_frame() {
 /// surfaces (session screens paint it over live content).
 #[test]
 fn toast_paints_onto_an_existing_canvas() {
-    let mut canvas = Canvas::new(40, 10);
-    canvas.fill_bg(0, 0, 40, crate::render::CellColor::Rgb(10, 10, 10));
     let theme = FooterTheme::fallback_dark();
-    super::super::toast::paint_toast(
-        &mut canvas,
+    let tokens = crate::theme::ThemeState::v2_dark().resolved.tokens;
+    let frame = crate::components::toast_solid::render_toast_over_blank_solid(
         &ToastOptions::info("short"),
         0,
         40,
+        10,
         &theme,
-        crate::render::CellColor::Rgb(86, 182, 194),
+        &tokens,
     );
-    let frame = canvas.into_frame();
     assert!(frame.text_grid()[1].contains('┃'));
     assert!(frame.text_grid()[2].contains("short"));
     let _ = Span::new("", crate::render::CellColor::Default, crate::render::CellColor::Default);

@@ -84,7 +84,6 @@ pub fn render_console_overlay_solid(lines: &[String], styles: &ThemeStyles, widt
 mod tests {
     use super::*;
     use crate::components::chrome_solid::first_divergence;
-    use crate::components::console::render_console_overlay;
     use crate::theme::ThemeState;
 
     fn styles() -> ThemeStyles {
@@ -93,25 +92,5 @@ mod tests {
 
     fn lines(count: usize) -> Vec<String> {
         (0..count).map(|index| format!("line {index}: diag message")).collect()
-    }
-
-    /// The lane gate: the solid console equals the old painter CELL
-    /// FOR CELL over the line-count × width matrix — the empty ring,
-    /// the short tail, the 12-row clamp, and the long-line clip.
-    #[test]
-    fn solid_console_overlay_equals_the_old_renderer() {
-        for count in [0usize, 1, 5, 10, 13, 40] {
-            for width in [20u16, 40, 80, 120, 6, 7] {
-                let mut long = lines(count);
-                if count > 3 {
-                    long[1] = format!("x{}", "y".repeat(200));
-                }
-                let old = render_console_overlay(&long, &styles(), width);
-                let solid = render_console_overlay_solid(&long, &styles(), width);
-                if let Some((row, col, why)) = first_divergence(&solid, &old) {
-                    panic!("count={count} width={width} at {row},{col}: {why}");
-                }
-            }
-        }
     }
 }
