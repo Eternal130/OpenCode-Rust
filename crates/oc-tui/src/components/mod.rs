@@ -47,6 +47,7 @@ pub mod marquee;
 pub mod message;
 pub mod migration_overlay;
 pub mod overlays;
+pub mod overlays_solid;
 /// Lane M6 (retired): the composer's subagent picker panel on
 /// opentui-solid — the ONLY renderer since the retirement lane
 /// deleted the `OC_SUBAGENT_OPENTUI` flag pair.

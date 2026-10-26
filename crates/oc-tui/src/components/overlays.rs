@@ -133,15 +133,19 @@ pub fn overlay_startup_loading(
 pub fn overlay_app_state(frame: &mut Frame, store: &Store, styles: &ThemeStyles) {
     let now = store.clock();
     if let Some(text) = store.startup_loading_text(now) {
-        overlay_startup_loading(frame, styles, text, now);
+        super::overlays_solid::overlay_startup_loading_solid(frame, styles, text, now);
     }
     if store.reconnecting_overlay_visible(now) {
-        overlay_reconnecting(frame, styles, now.saturating_sub(store.connection_since()));
+        super::overlays_solid::overlay_reconnecting_solid(
+            frame,
+            styles,
+            now.saturating_sub(store.connection_since()),
+        );
     }
     // G-06 — the migration widget shares the 10_000 z-layer and paints
     // after (above) everything while the poll reports `running`.
     if let Some(progress) = store.migration_progress() {
-        super::migration_overlay::overlay_migration(frame, styles, &progress, now);
+        super::overlays_solid::overlay_migration_solid(frame, styles, &progress, now);
     }
 }
 
