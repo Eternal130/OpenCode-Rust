@@ -109,7 +109,7 @@ strangler)
 
 | Phase | Scope | Size | Kill criterion |
 | --- | --- | --- | --- |
-| R1 | overlay chrome (toast, console overlay, devtools, plugin_page, location_missing, migration_overlay, tab rail+tooltip) | S/M | any NEW divergence class in the rig unions → keep that surface hand-rolled |
+| R1 | overlay chrome (toast, console overlay, devtools, plugin_page, location_missing, migration_overlay, tab rail+tooltip) | **done** (all seven migrated; see the R1 section in docs/migration-m1-tabstrip.md) | any NEW divergence class in the rig unions → keep that surface hand-rolled |
 | R2 | footer forms family (`footer/*.rs`; extract the form/permission/menu STATE MODEL painter-agnostic first) | L | form-focus/keydown semantics can't stay store-side, or worst-frame budget > ~10 ms → a permanently hand-rolled footer family is an acceptable outcome |
 | R3 | diff_viewer — gated on a `LineNumberRenderable` byte-parity spike first (gutter sign/width model, `,0` hunk-start bumps); adopt only if byte-identical or the re-pin ≤ the diff golden set (~tens of fixtures) | M, gated | any diff rig corpus loses flag-symmetry → keep local |
 

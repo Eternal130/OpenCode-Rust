@@ -975,3 +975,84 @@ port (its own lane), not with any theme-table change.
   `OC_ENGINE_OPENTUI=0` kept the hand-rolled pair one release —
   the M-engine-retire lane (2026-10-22) then removed the flag,
   text_edit.rs + keymap/engine.rs, and the enum hops.
+
+
+---
+
+# Lane R1 — the overlay-chrome tail: seven surfaces, one shared bridge
+
+> Status: **done** (lane/r1, the "Remaining tail" R1 phase). All
+> seven overlay-chrome surfaces migrated onto the opentui-solid
+> pipeline via ONE shared flat-units bridge
+> (`crates/oc-tui/src/components/chrome_solid.rs`), then the old
+> painters were RETIRED (the M6/M-engine retire precedent — the
+> solid trees are the only renderers; the parity suites died with
+> the painters they compared against, the byte contract now pinned
+> by the goldens through the solid paths).
+
+Surfaces: plugin_page (+ its missing-route fallback),
+location_missing, the console overlay, the devtools bar, the toast
+panel, the app-state overlays (reconnecting scrim box, startup pill,
+the migration widget) and the vertical session-tab rail (+ its
+compact hover tooltip). All follow the M4/M5/M6 shape: the surface's
+own walk re-expressed as absolute units (opaque `Fill`s — the
+opentui white-fg fill signature matches the old painters' — plus
+styled text chunks), one keyed `For` under a positioned root, a
+per-surface mount keyed on geometry, the cell copy into the in-house
+`Frame`.
+
+## What this family ADDED to the template
+
+* **The transparent-space no-op (the toast/console/console-border
+  class).** opentui's `try_set_transparent_text_cell` SKIPS a
+  transparent-bg space over an existing glyph; the char-naive
+  painters' `put` loops OVERWRITE (`' '` + fg). The bridge's
+  `Spaces` unit stamps those cells over the COPIED frame (ch/fg/
+  attrs, destination bg kept), with a row-aware mask so a LATER
+  text unit's cluster cells still win (the hint-space-over-title
+  shape).
+* **Width-1 graphemes stay ONE chunk.** Box-drawing rails (`─`×200)
+  must not hit the per-char path: 200 units per border cost ~88 ms
+  per frame (measured); the width-1 fast path is ~1.8 ms for the
+  whole console. Per-char units are ONLY for runs with a wide
+  cluster (the char-naive one-cell-per-char advance).
+* **The raster's default fg is WHITE.** Untouched cells on a
+  transparent background read fg=white; the plain-page surfaces'
+  old bytes carry the terminal default — the cell copy restores
+  Default on exactly that signature (the M1 glow rule's dual).
+* **Attrs are ECMA 1:1 on the low byte** for this family (no
+  strikethrough remap — the chrome painters' attrs ARE the SGR word
+  `render::ansi` serializes).
+* **The rail walk was EXTRACTED** (`session_tabs_rail::
+  rail_paint_list`) — the ONE solver; the old painter consumed it
+  until retirement, the solid bridge consumes it still (the M3
+  "extract the geometry" rule).
+
+## Instruments (this lane's record)
+
+* **Unit parity gates** (the WIP series, now retired with the
+  painters): each surface's solid frame pinned cell-for-cell against
+  its old painter over a size/state matrix — plugin page ×6 sizes ×
+  truncation, location ×6 widths × directory truncation incl. the
+  reverse-video pill band, console ×6 line-counts ×6 widths incl.
+  the 12-row clamp + long-line clip, devtools ×4 panels ×3 sizes,
+  toast ×variants ×title/pending ×sizes incl. CJK clusters, the
+  three overlays ×spinner/counter/size matrices, the rail ×8
+  count/width/state cases incl. compact controls, hover lifts, the
+  handle highlight and the tooltip, + hover-churn gates. All green
+  before every dispatch flip (the commits carry them).
+* **Suite**: 1254 oc-tui tests green through the solid-only paths
+  (the goldens now pin the solid bytes); the 64-test PTY family
+  green; workspace 4265/4265.
+* **Budget** (release, 200×50): the family gate
+  (`frame_budget_overlay_chrome_solid`: rail hover-churn + toast +
+  console + migration + pill per frame) worst 4 ms vs the 40 ms
+  gate; per-surface worsts — rail 1.1 ms, console 1.8 ms, toast
+  0.14 ms, migration 0.07 ms, pill 0.007 ms. All 12 release budget
+  tests green.
+* **Rig A/B**: NOT RUN — the tui-diff rig (`verify-lane.sh`, the
+  bun-side runner) is not present in this environment (only
+  `tools/parity/tui-diff/cache/` exists); flag-symmetry evidence is
+  therefore the parity gates + the goldens + the PTY family above.
+  A rig pass on an environment that carries it remains the
+  outstanding follow-up for this lane.
