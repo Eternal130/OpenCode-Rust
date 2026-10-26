@@ -2,6 +2,11 @@
 //! `PanelShell` + `mini/footer.menu.tsx` `RunFooterMenu` + the
 //! select-controller window math): the title / search / list / bottom
 //! rail layout every picker panel renders through.
+//!
+//! The select CONTROLLER (the window/reveal/move math and
+//! [`FooterMenuState`]) and the menu item data live in
+//! [`super::state`] — extracted painter-agnostic in lane R2 step 1;
+//! this module re-exports them and keeps the shell painter.
 
 #![allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
 
@@ -11,10 +16,11 @@ use crate::render::CellColor;
 
 use crate::wrap::{display_width, take_width};
 
-/// `PANEL_LIST_ROWS` / `PANEL_FRAME_ROWS` / `RUN_COMMAND_PANEL_ROWS`.
-pub const PANEL_LIST_ROWS: usize = 10;
-pub const PANEL_FRAME_ROWS: usize = 6;
-pub const RUN_COMMAND_PANEL_ROWS: usize = PANEL_LIST_ROWS + PANEL_FRAME_ROWS;
+pub use super::state::{
+    move_selection_clamp, reconcile_selection, reveal_selection_offset, FooterMenuItem,
+    FooterMenuState, FooterTone, PANEL_FRAME_ROWS, PANEL_LIST_ROWS, RUN_COMMAND_PANEL_ROWS,
+};
+
 /// `FOOTER_COMPACT_WIDTH`.
 pub const FOOTER_COMPACT_WIDTH: usize = 40;
 /// `PANEL_PAD` (`panelPad`, non-mono).
@@ -36,125 +42,9 @@ pub fn footer_panel_layout(height: usize, limit: usize) -> PanelLayout {
     PanelLayout { compact, frame, limit: limit.min(available.saturating_sub(frame)).max(1) }
 }
 
-// -- select controller (`ui/select-controller.ts`) ----------------------------
-
-#[must_use]
-pub fn reconcile_selection(selected: usize, count: usize) -> usize {
-    selected.min(count.saturating_sub(1))
-}
-
-#[must_use]
-pub fn move_selection_clamp(selected: usize, count: usize, delta: i8) -> usize {
-    if count == 0 {
-        return 0;
-    }
-    let next =
-        (isize::try_from(selected).unwrap_or(isize::MAX)).saturating_add(isize::from(delta)).max(0);
-    reconcile_selection(usize::try_from(next).unwrap_or(0), count)
-}
-
-fn max_offset(count: usize, limit: usize) -> usize {
-    count.saturating_sub(limit)
-}
-
-#[must_use]
-pub fn reveal_selection_offset(
-    offset: usize,
-    count: usize,
-    limit: usize,
-    selected: usize,
-) -> usize {
-    let max = max_offset(count, limit);
-    if selected < offset {
-        return selected.min(max);
-    }
-    if selected >= offset + limit {
-        return (selected + 1).saturating_sub(limit).min(max);
-    }
-    offset.min(max)
-}
-
-#[must_use]
-pub fn move_selection_offset(
-    offset: usize,
-    count: usize,
-    limit: usize,
-    selected: usize,
-    direction: i8,
-) -> usize {
-    let max = max_offset(count, limit);
-    let margin = 2.min((limit.saturating_sub(1)) / 2);
-    if direction < 0 && selected < offset + margin {
-        return selected.saturating_sub(margin).min(max);
-    }
-    if direction > 0 && selected > offset + limit - margin - 1 {
-        return (selected + margin + 1).saturating_sub(limit).min(max);
-    }
-    offset.min(max)
-}
-
-/// `createFooterMenuState`: selection + window offset over a list.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FooterMenuState {
-    pub selected: usize,
-    pub offset: usize,
-}
-
-impl FooterMenuState {
-    #[must_use]
-    pub fn new() -> Self {
-        Self { selected: 0, offset: 0 }
-    }
-
-    pub fn reset(&mut self) {
-        self.selected = 0;
-        self.offset = 0;
-    }
-
-    /// `reveal` — jump to an index, keeping it in the window.
-    pub fn reveal(&mut self, index: usize, count: usize, limit: usize) {
-        self.selected = reconcile_selection(index, count);
-        self.offset = reveal_selection_offset(self.offset, count, limit, self.selected);
-    }
-
-    /// `move` — step the selection with the window following.
-    pub fn r#move(&mut self, dir: i8, count: usize, limit: usize) {
-        self.selected = move_selection_clamp(self.selected, count, dir);
-        self.offset = move_selection_offset(self.offset, count, limit, self.selected, dir);
-    }
-}
-
-impl Default for FooterMenuState {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 // -- menu items ---------------------------------------------------------------
 
-/// `footerTone` — the footer's color role.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum FooterTone {
-    #[default]
-    Muted,
-    Selection,
-    Running,
-    Error,
-    Success,
-}
-
-/// `RunFooterMenuItem`.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct FooterMenuItem {
-    pub display: String,
-    pub description: Option<String>,
-    pub category: String,
-    pub footer: Option<String>,
-    pub footer_tone: Option<FooterTone>,
-    pub current: bool,
-    /// A one-cell icon glyph rendered in a 2-wide column.
-    pub icon: Option<char>,
-}
 
 /// `footerMenuText` — truncate to a display width with `…`.
 #[must_use]
