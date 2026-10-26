@@ -154,7 +154,7 @@ pub fn paint_vertical_rail_solid(
     let (placed, fills) = rail_paint_list(inputs, geometry, styles);
     let units = shape(&placed, &fills, geometry.width, height, styles);
     let mut frame =
-        chrome_frame("tab_rail", geometry.width.max(1), height.max(1), CellColor::Default, units);
+        chrome_frame("tab_rail", geometry.width.max(1), height.max(1), CellColor::Default, &units);
     paint_rail_handle_hot(&mut frame, inputs, geometry, styles);
     // The compact hover tooltip (the solid twin of the shared
     // `paint_rail_tooltip`'s row math).
@@ -229,28 +229,5 @@ pub fn paint_tooltip_solid(
         top: 3,
         body: ChromeBody::Text(vec![ChromeChunk::new("▀".repeat(width), hover, raised, 0)]),
     });
-    chrome_frame("tab_rail_tooltip", width, 4, CellColor::Default, units)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::components::session_tabs::TabView;
-    use crate::store::{SessionTab, Unread};
-    use crate::theme::ThemeState;
-
-    fn view(id: &str, title: &str) -> TabView {
-        TabView {
-            tab: SessionTab { session_id: id.to_owned(), title: Some(title.to_owned()) },
-            status: crate::components::session_tabs::TabStatus {
-                unread: Some(Unread::Activity),
-                ..crate::components::session_tabs::TabStatus::EMPTY
-            },
-            detail: Some("project ⎇ main".to_owned()),
-        }
-    }
-
-    fn styles() -> ThemeStyles {
-        ThemeState::v2_dark().styles()
-    }
+    chrome_frame("tab_rail_tooltip", width, 4, CellColor::Default, &units)
 }

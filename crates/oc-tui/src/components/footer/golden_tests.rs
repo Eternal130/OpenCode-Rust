@@ -19,7 +19,7 @@ use super::permission::{
     create_permission_body_state, render_permission_body, render_reject_field, PermissionRequest,
 };
 use super::prompt_idle::{render_prompt_idle, PromptIdleState};
-use crate::components::footer::canvas::{Canvas, Span};
+use crate::components::footer::canvas::Span;
 use crate::components::footer::form::{render_form_body, FormBodyState};
 use crate::components::footer::theme::FooterTheme;
 use crate::components::sidebar::SidebarMode;

@@ -67,7 +67,7 @@ fn reconnecting_box(box_width: usize, styles: &ThemeStyles, elapsed_ms: u64) -> 
         raised,
         0,
     ));
-    chrome_frame("reconnecting_box", box_width.max(1), 4, CellColor::Default, units)
+    chrome_frame("reconnecting_box", box_width.max(1), 4, CellColor::Default, &units)
 }
 
 /// The reconnecting overlay: the scrim blend (bridge math) + the
@@ -103,13 +103,10 @@ pub fn overlay_reconnecting_solid(frame: &mut Frame, styles: &ThemeStyles, elaps
     let copy_start = left + 2;
     for (offset, ch) in copy.chars().enumerate() {
         let col = copy_start + offset;
-        if col >= left + box_width || col >= left + box_width.min(width.saturating_sub(left)) {
-            if col < width {
-                if let Some(cell) = frame.cells.get_mut(top + 2).and_then(|line| line.get_mut(col))
-                {
-                    cell.ch = ch;
-                    cell.fg = fg_muted;
-                }
+        if col >= left + box_width.min(width.saturating_sub(left)) && col < width {
+            if let Some(cell) = frame.cells.get_mut(top + 2).and_then(|line| line.get_mut(col)) {
+                cell.ch = ch;
+                cell.fg = fg_muted;
             }
         }
     }
@@ -152,7 +149,7 @@ pub fn overlay_startup_loading_solid(
         top: 0,
         body: ChromeBody::Text(vec![ChromeChunk::new(pill, fg_muted, raised, 0)]),
     }];
-    let pill_frame = chrome_frame("startup_pill", pill_width.max(1), 1, CellColor::Default, units);
+    let pill_frame = chrome_frame("startup_pill", pill_width.max(1), 1, CellColor::Default, &units);
     for col in 0..pill_width.min(width.saturating_sub(left)) {
         if let Some(slot) = frame.cells.get_mut(row).and_then(|line| line.get_mut(left + col)) {
             *slot = pill_frame.cell(0, col);
@@ -197,7 +194,7 @@ pub fn overlay_migration_solid(
     units.extend(chrome_run_units("mig.rail", 0, 1, "▎", info, raised, 0));
     units.extend(chrome_run_units("mig.rail", 0, 2, "▎", info, raised, 0));
     units.extend(chrome_run_units("mig.row", 3, 1, &content, info, raised, 0));
-    let mount = chrome_frame("migration_box", box_width.max(1), 3, CellColor::Default, units);
+    let mount = chrome_frame("migration_box", box_width.max(1), 3, CellColor::Default, &units);
     for row in 0..3.min(frame.height.saturating_sub(1)) {
         for col in 0..box_width.min(width.saturating_sub(left)) {
             if let Some(slot) =
@@ -205,29 +202,6 @@ pub fn overlay_migration_solid(
             {
                 *slot = mount.cell(row, col);
             }
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::components::chrome_solid::first_divergence;
-    use crate::render::Cell;
-    use crate::theme::ThemeState;
-
-    fn styles() -> ThemeStyles {
-        ThemeState::v2_dark().styles()
-    }
-
-    fn base_frame(width: usize, height: usize, bg: u8) -> Frame {
-        Frame {
-            cells: vec![
-                vec![Cell { bg: CellColor::Rgb(bg, bg, bg), ..Cell::default() }; width];
-                height
-            ],
-            width,
-            height,
         }
     }
 }

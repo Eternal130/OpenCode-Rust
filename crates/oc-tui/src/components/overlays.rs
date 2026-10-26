@@ -40,7 +40,7 @@ pub fn overlay_app_state(frame: &mut Frame, store: &Store, styles: &ThemeStyles)
 mod tests {
     use super::*;
     use crate::components::overlays_solid::{
-        overlay_migration_solid, overlay_reconnecting_solid, overlay_startup_loading_solid,
+        overlay_reconnecting_solid, overlay_startup_loading_solid,
     };
     use crate::reactive::Runtime;
     use crate::render::{Cell, CellColor};

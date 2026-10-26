@@ -8,10 +8,8 @@
 //! timers): `show` starts the current toast, `advance(now_ms)` fires
 //! the expiry, `dismiss` rotates the next entry in.
 
-use crate::components::footer::canvas::{Canvas, Span};
-use crate::components::footer::theme::{feedback_color, FooterTheme};
+use crate::components::footer::theme::FooterTheme;
 use crate::render::{Cell, Frame};
-use crate::theme::ThemeState;
 use crate::wrap::display_width;
 use oc_theme::types::ResolvedThemeTokens;
 
