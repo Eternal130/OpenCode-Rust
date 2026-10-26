@@ -786,3 +786,76 @@ fn engine_keystroke_budget_body() {
         FRAME_BUDGET_MS
     );
 }
+
+/// Lane R2: the footer family's worst-frame budget — the hand-rolled
+/// Canvas path vs the opentui-solid replay (`canvas_frame_solid`) on
+/// the family's densest surface (the permission body with the edit
+/// diff preview + the always-selected preview, at 200 cols), churned
+/// by alternating the selection/stage. The R2 gate is ~10 ms; the
+/// recorded prior surfaces sit at ≤5 ms.
+#[test]
+fn frame_budget_footer_family_old_vs_solid() {
+    use crate::components::footer::permission::{
+        create_permission_body_state, permission_body_canvas, PermissionBodyState,
+        PermissionOption, PermissionStage,
+    };
+    use crate::components::footer::solid::canvas_frame_solid;
+    use crate::components::footer::theme::FooterTheme;
+    use crate::components::footer::PermissionRequest;
+
+    let theme = FooterTheme::from_resolved(&theme().resolved.tokens);
+    let mut request = PermissionRequest {
+        id: "per_budget".into(),
+        session_id: "s".into(),
+        action: "edit".into(),
+        resources: vec!["crates/oc-tui/src/components/footer/permission.rs".into()],
+        save: vec!["src/**".into()],
+        ..PermissionRequest::default()
+    };
+    request.metadata = serde_json::json!({
+        "files": [ { "diff": "@@ -1,9 +1,9 @@\n-use std::old;\n+use std::new;\n const a = 1;\n const b = 2;\n const c = 3;\n const d = 4;\n const e = 5;\n const f = 6;\n const g = 7;\n const h = 8;\n const i = 9;\n const j = 10;\n" } ]
+    });
+    let ask = create_permission_body_state(&request);
+    let reject = PermissionBodyState {
+        stage: PermissionStage::Reject,
+        selected: PermissionOption::Reject,
+        message: "please be more careful with edits".into(),
+        ..ask.clone()
+    };
+    let states = [&ask, &reject];
+
+    for path in ["old", "solid"] {
+        let mut worst_micros = 0u128;
+        let mut total_micros = 0u128;
+        const FRAMES: u128 = 200;
+        for frame in 0..FRAMES {
+            let state = states[usize::from(frame % 2 == 1)];
+            let start = std::time::Instant::now();
+            let painted = match path {
+                "old" => permission_body_canvas(&request, state, 200, 16, &theme).into_frame(),
+                _ => {
+                    let canvas = permission_body_canvas(&request, state, 200, 16, &theme);
+                    let (width, height) = canvas.dims();
+                    canvas_frame_solid(canvas.ops().to_vec().as_slice(), width, height)
+                }
+            };
+            let elapsed = start.elapsed();
+            worst_micros = worst_micros.max(elapsed.as_micros());
+            total_micros += elapsed.as_micros();
+            assert_eq!((painted.width, painted.height), (200, 16));
+        }
+        println!(
+            "footer {path}: worst {} µs / avg {} µs over {FRAMES} frames ({})",
+            worst_micros,
+            total_micros / FRAMES,
+            if cfg!(debug_assertions) { "debug" } else { "release" },
+        );
+        // The R2 lane gate (~10 ms) — asserted in release only, the
+        // family's shared rule with the other budget tests.
+        #[cfg(not(debug_assertions))]
+        assert!(
+            worst_micros < 10_000,
+            "footer {path} worst frame {worst_micros} µs exceeds the 10 ms R2 gate"
+        );
+    }
+}
