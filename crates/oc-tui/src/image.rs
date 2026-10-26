@@ -29,13 +29,22 @@
 //!   → "No preview", mini/scrollback.surface.ts:390).
 //!
 //! Detection: v2/opentui probes the terminal at runtime (DA1 /
-//! graphics-capability queries). The Rust port detects from the
-//! environment — `KITTY_WINDOW_ID`/`TERM=xterm-kitty*` (kitty),
-//! `TERM`/`TERM_PROGRAM` naming ghostty (kitty graphics), `TERM`
-//! naming sixel (`*sixel*`, mlterm) — because a synchronous DA1
-//! round-trip needs the async input pump the current run loop does
-//! not own. The [`GraphicsProtocol::detect_from`] seam keeps the
-//! decision a pure function of env (tests inject maps).
+//! graphics-capability queries). Since lane R0 the boot capability
+//! probe (`crate::theme::probe_terminal`) performs that synchronous
+//! DA1 round-trip in its existing read window and feeds the verdict
+//! into [`resolve_protocol`]: attribute `4` in the `CSI ? {attrs} c`
+//! reply means sixel (e.g. xterm `-ti vt340`'s
+//! `\x1b[?62;4;6;8;15;22c`); an answered DA1 without it rules sixel
+//! out; no answer (pipes, dumb terminals) falls back to the
+//! environment heuristics — `KITTY_WINDOW_ID`/`TERM=xterm-kitty*`
+//! (kitty), `TERM`/`TERM_PROGRAM` naming ghostty (kitty graphics),
+//! `TERM` naming sixel (`*sixel*`, mlterm). Kitty stays env-decided:
+//! kitty's DA1 reply (`\x1b[?62;6;9;15;22c`) never carries the sixel
+//! attribute, and its graphics protocol is not a DA1-visible one —
+//! `KITTY_WINDOW_ID` is authoritative (ref-equivalent fast path).
+//! The [`GraphicsProtocol::detect_from`] seam keeps the env half a
+//! pure function of env (tests inject maps); [`resolve_protocol`]
+//! merges env + probe verdict as a pure decision table.
 
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -104,6 +113,30 @@ pub fn detect_from_env(env: &BTreeMap<String, String>) -> GraphicsProtocol {
 pub fn detect_protocol() -> GraphicsProtocol {
     let env: BTreeMap<String, String> = std::env::vars().collect();
     detect_from_env(&env)
+}
+
+/// The RB-07 decision table: merge the env heuristic with the boot
+/// DA1 probe's sixel verdict ([`crate::theme::TerminalProbe::da1_sixel`]).
+///
+/// * env says **kitty** (or ghostty) → `Kitty` — authoritative fast
+///   path, unchanged (kitty's DA1 reply never carries the sixel
+///   attribute and its graphics protocol is not DA1-visible).
+/// * DA1 **answered** (`Some`) → the probe is authoritative for
+///   sixel: `Some(true)` → `Sixel`, `Some(false)` → `None` (a
+///   terminal that answers DA1 without attribute 4 has no sixel,
+///   even under a `*sixel*`-named `TERM`).
+/// * DA1 **unanswered** (`None` — headless pipes, dumb terminals,
+///   probes swallowed by a multiplexer) → the env heuristic stands.
+#[must_use]
+pub fn resolve_protocol(env: GraphicsProtocol, da1_sixel: Option<bool>) -> GraphicsProtocol {
+    if env == GraphicsProtocol::Kitty {
+        return GraphicsProtocol::Kitty;
+    }
+    match da1_sixel {
+        Some(true) => GraphicsProtocol::Sixel,
+        Some(false) => GraphicsProtocol::None,
+        None => env,
+    }
 }
 
 /// FNV-1a over the payload — the stable placement id (forced nonzero:
@@ -255,6 +288,25 @@ mod tests {
             GraphicsProtocol::None
         );
         assert_eq!(detect_from_env(&BTreeMap::new()), GraphicsProtocol::None);
+    }
+
+    #[test]
+    fn resolution_merges_env_and_da1_probe() {
+        // Env kitty/ghostty stays authoritative (kitty's DA1 never
+        // reports the sixel attribute).
+        assert_eq!(resolve_protocol(GraphicsProtocol::Kitty, Some(false)), GraphicsProtocol::Kitty);
+        assert_eq!(resolve_protocol(GraphicsProtocol::Kitty, None), GraphicsProtocol::Kitty);
+        // DA1 answered: the probe is authoritative for sixel — both
+        // the upgrade (plain xterm-256color + attr 4) and the
+        // downgrade (a *sixel*-named TERM on a terminal that answers
+        // without attr 4).
+        assert_eq!(resolve_protocol(GraphicsProtocol::None, Some(true)), GraphicsProtocol::Sixel);
+        assert_eq!(resolve_protocol(GraphicsProtocol::Sixel, Some(true)), GraphicsProtocol::Sixel);
+        assert_eq!(resolve_protocol(GraphicsProtocol::Sixel, Some(false)), GraphicsProtocol::None);
+        assert_eq!(resolve_protocol(GraphicsProtocol::None, Some(false)), GraphicsProtocol::None);
+        // DA1 unanswered: env fallback stands.
+        assert_eq!(resolve_protocol(GraphicsProtocol::Sixel, None), GraphicsProtocol::Sixel);
+        assert_eq!(resolve_protocol(GraphicsProtocol::None, None), GraphicsProtocol::None);
     }
 
     #[test]
