@@ -860,6 +860,7 @@ fn frame_budget_footer_family_old_vs_solid() {
 /// the 40 ms gate (the lane re-checks >10 ms) — the chrome mounts are
 /// tiny trees, so the expectation is well under 1 ms each.
 #[test]
+#[allow(clippy::too_many_lines, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn frame_budget_overlay_chrome_solid() {
     use crate::components::footer::theme::FooterTheme;
     use crate::components::session_tabs::TabStatus;
