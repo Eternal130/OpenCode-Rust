@@ -28,6 +28,8 @@ pub mod permission;
 pub mod prompt_idle;
 #[cfg(test)]
 pub mod replay;
+pub mod solid;
+pub mod state;
 pub mod theme;
 
 #[cfg(test)]
@@ -36,176 +38,12 @@ mod golden_tests;
 pub use canvas::{Canvas, Span, FILL_BG, FILL_FG};
 pub use form::{FormField, FormRequest};
 pub use permission::PermissionRequest;
+pub use state::{pick_blocker_view, FooterMachine, FooterMode, FooterView, PromptRoute};
 pub use theme::FooterTheme;
 
-/// A prompt-route panel (`FooterPromptRoute`, the picker subset).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum PromptRoute {
-    #[default]
-    Composer,
-    Command,
-    Agent,
-    Model,
-    Variant,
-    Settings,
-    /// TUI-17 — the subagent inspector (`FooterPromptRoute`'s
-    /// `subagent` arm: one child's detail transcript over the
-    /// composer).
-    Subagent,
-}
-
-impl PromptRoute {
-    /// A panel route (anything the footer opens over the composer).
-    #[must_use]
-    pub fn is_panel(self) -> bool {
-        !matches!(self, Self::Composer)
-    }
-}
-
-/// The active footer view (`FooterView`): the prompt (route stack) or
-/// one of the blockers that preempts it.
-#[derive(Debug, Clone, PartialEq, Default)]
-pub enum FooterView {
-    #[default]
-    Prompt,
-    Permission {
-        request: PermissionRequest,
-    },
-    Form {
-        request: FormRequest,
-    },
-}
-
-impl FooterView {
-    /// The view name the footer status uses (`blockerStatus`).
-    #[must_use]
-    pub fn status(&self) -> &'static str {
-        match self {
-            Self::Permission { .. } => "awaiting permission",
-            Self::Form { .. } => "awaiting form",
-            Self::Prompt => "",
-        }
-    }
-}
-
-/// `pickBlockerView` — permission asks take precedence over forms,
-/// blockers take precedence over the prompt.
-#[must_use]
-pub fn pick_blocker_view(
-    permission: Option<&PermissionRequest>,
-    form: Option<&FormRequest>,
-) -> FooterView {
-    if let Some(request) = permission {
-        return FooterView::Permission { request: request.clone() };
-    }
-    if let Some(request) = form {
-        return FooterView::Form { request: request.clone() };
-    }
-    FooterView::Prompt
-}
-
-/// The footer controller state: blocker queues, the active view and
-/// the prompt route stack (`RunFooter.present` + the view-sync effect
-/// in `footer.view.tsx`).
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct FooterMachine {
-    pub view: FooterView,
-    pub route: PromptRoute,
-    pub permissions: Vec<PermissionRequest>,
-    pub forms: Vec<FormRequest>,
-}
-
-impl FooterMachine {
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// `permission.asked` — dedup by id, then re-derive the view.
-    pub fn permission_asked(&mut self, request: PermissionRequest) {
-        if !self.permissions.iter().any(|item| item.id == request.id) {
-            self.permissions.push(request);
-        }
-        self.sync_view();
-    }
-
-    /// `permission.replied` — drop the request, re-derive.
-    pub fn permission_replied(&mut self, request_id: &str) {
-        self.permissions.retain(|item| item.id != request_id);
-        self.sync_view();
-    }
-
-    /// `form.created` — dedup by id, then re-derive.
-    pub fn form_created(&mut self, request: FormRequest) {
-        if !self.forms.iter().any(|item| item.id == request.id) {
-            self.forms.push(request);
-        }
-        self.sync_view();
-    }
-
-    /// `form.replied` / `form.cancelled` — drop the form, re-derive.
-    pub fn form_removed(&mut self, form_id: &str) {
-        self.forms.retain(|item| item.id != form_id);
-        self.sync_view();
-    }
-
-    /// Open a picker route over the composer (no-op while a blocker
-    /// owns the footer).
-    pub fn open_route(&mut self, route: PromptRoute) {
-        if matches!(self.view, FooterView::Prompt) {
-            self.route = route;
-        }
-    }
-
-    /// Collapse any open panel back to the composer (`closePanel`).
-    pub fn close_panel(&mut self) {
-        self.route = PromptRoute::Composer;
-    }
-
-    /// The view-sync effect: blockers preempt the prompt (permission
-    /// first), and a blocker arriving over an open panel closes it.
-    fn sync_view(&mut self) {
-        self.view = pick_blocker_view(self.permissions.first(), self.forms.first());
-        if !matches!(self.view, FooterView::Prompt) && self.route.is_panel() {
-            self.route = PromptRoute::Composer;
-        }
-    }
-
-    /// The mode the render loop dispatches on (footer state machine
-    /// surface for callers).
-    #[must_use]
-    pub fn mode(&self) -> FooterMode {
-        match &self.view {
-            FooterView::Prompt => match self.route {
-                PromptRoute::Composer => FooterMode::PromptIdle,
-                PromptRoute::Command => FooterMode::CommandMenu,
-                PromptRoute::Agent => FooterMode::AgentSelect,
-                PromptRoute::Model => FooterMode::ModelSelect,
-                PromptRoute::Variant => FooterMode::Variant,
-                PromptRoute::Settings => FooterMode::Settings,
-                PromptRoute::Subagent => FooterMode::Subagent,
-            },
-            FooterView::Permission { .. } => FooterMode::Permission,
-            FooterView::Form { .. } => FooterMode::Form,
-        }
-    }
-}
-
-/// The flattened footer mode (dispatch key for the render loop).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FooterMode {
-    PromptIdle,
-    Form,
-    Permission,
-    CommandMenu,
-    ModelSelect,
-    AgentSelect,
-    Variant,
-    Settings,
-    /// TUI-17 — the mini subagent inspector (the session-route footer
-    /// never routes here; the mini pane renders it directly).
-    Subagent,
-}
+// The controller state machine (PromptRoute / FooterView /
+// FooterMachine / FooterMode) lives in `state` since lane R2
+// step 1; the re-exports above keep the historical paths live.
 
 #[cfg(test)]
 mod tests {

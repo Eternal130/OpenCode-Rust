@@ -3,525 +3,26 @@
 //! (permission, always, reject), the Allow once / Always allow /
 //! Reject affordances, the free-text [`RejectField`], and the request
 //! presentation (per-action icon/title/lines).
+//!
+//! The permission STATE MODEL (the request/reply types, the
+//! presentation solver, the two-stage machine and its
+//! [`permission_key`] keymap) lives in [`super::state`] — extracted
+//! painter-agnostic in lane R2 step 1; this module re-exports it and
+//! keeps the painter + the pointer-hit geometry.
 
 #![allow(clippy::too_many_lines, clippy::match_same_arms)]
 
 use super::canvas::{Canvas, Span, FILL_FG};
 use super::theme::FooterTheme;
 use crate::render::Frame;
-use serde::{Deserialize, Serialize};
 
-// Pure ports of the reference state machine keep its shape (long pure
-// functions, match arms that intentionally repeat); list-style doc
-// comments mirror the upstream header.
-
-/// `MiniPermissionRequest` (the subset the footer consumes; the tool
-/// state indirection stays with the message-flow lane — `input` /
-/// `metadata` arrive flattened).
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct PermissionRequest {
-    pub id: String,
-    #[serde(rename = "sessionID")]
-    pub session_id: String,
-    pub action: String,
-    #[serde(default)]
-    pub resources: Vec<String>,
-    /// Save patterns: non-empty ⇒ the "Always allow" option appears.
-    #[serde(default)]
-    pub save: Vec<String>,
-    #[serde(default)]
-    pub metadata: serde_json::Value,
-    #[serde(default)]
-    pub input: serde_json::Value,
-}
-
-/// `PermissionReply`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PermissionReply {
-    #[serde(rename = "sessionID")]
-    pub session_id: String,
-    #[serde(rename = "requestID")]
-    pub request_id: String,
-    pub decision: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub message: String,
-}
-
-/// `PermissionPresentation`: icon / title / lines per action
-/// (`util/permission.ts`). The edit arm carries the DIFF PREVIEW
-/// (TD19): `metadata.files[0].patch || .diff || metadata.diff`, else
-/// `input.patchText`, else the "No diff provided" fallback
-/// (util/permission.ts:32-43 + permission.tsx:77-82).
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct PermissionPresentation {
-    pub icon: &'static str,
-    pub title: String,
-    pub lines: Vec<String>,
-}
-
-fn text(value: &serde_json::Value, key: &str) -> String {
-    value.get(key).and_then(serde_json::Value::as_str).unwrap_or("").to_owned()
-}
-
-/// `canonicalToolName` (the alias pairs the footer needs).
-fn canonical_tool_name(action: &str) -> &str {
-    match action {
-        "bash" | "shell" => "shell",
-        "str_replace" | "edit" => "edit",
-        "read_file" | "read" => "read",
-        "list" | "ls" => "list",
-        "glob" => "glob",
-        "grep" | "rg" => "grep",
-        "subagent" | "task" | "spawn_agent" => "subagent",
-        "webfetch" | "fetch" => "webfetch",
-        "websearch" => "websearch",
-        "lsp" => "lsp",
-        "external_directory" => "external_directory",
-        "doom_loop" => "doom_loop",
-        other => other,
-    }
-}
-
-/// `permissionPresentation` for a request.
-#[must_use]
-pub fn permission_presentation(request: &PermissionRequest) -> PermissionPresentation {
-    let action = canonical_tool_name(&request.action);
-    let input = request.input.as_object().cloned().unwrap_or_default();
-    let value = |key: &str| {
-        input
-            .get(key)
-            .and_then(serde_json::Value::as_str)
-            .filter(|item| !item.is_empty())
-            .map(str::to_owned)
-    };
-    let path = value("path").or_else(|| value("filePath")).or_else(|| value("filepath"));
-    let resource = request.resources.first().cloned().unwrap_or_default();
-
-    match action {
-        "edit" => {
-            let file = path.clone().filter(|s| !s.is_empty()).unwrap_or(resource);
-            // The diff preview (TD19): the first file's patch/diff, a
-            // top-level metadata diff, or the input's patchText — the
-            // user approves file edits with the hunk lines visible.
-            let metadata = request.metadata.as_object().cloned().unwrap_or_default();
-            let text_of = |value: &serde_json::Value| {
-                value.as_str().filter(|item| !item.is_empty()).map(str::to_owned)
-            };
-            let first_file = metadata
-                .get("files")
-                .and_then(serde_json::Value::as_array)
-                .and_then(|files| files.first());
-            let diff = first_file
-                .and_then(|file| file.get("patch").or_else(|| file.get("diff")))
-                .and_then(text_of)
-                .or_else(|| metadata.get("diff").and_then(text_of));
-            let lines: Vec<String> = if let Some(diff) = diff {
-                diff.lines().map(str::to_owned).collect()
-            } else if let Some(patch) = value("patchText") {
-                patch.lines().map(str::to_owned).collect()
-            } else {
-                vec!["No diff provided".to_owned()]
-            };
-            PermissionPresentation { icon: "→", title: format!("Edit {file}"), lines }
-        }
-        "read" | "list" => {
-            let value = path.filter(|s| !s.is_empty()).unwrap_or(resource);
-            let title = if action == "read" { "Read" } else { "List" };
-            PermissionPresentation {
-                icon: "→",
-                title: format!("{title} {value}"),
-                lines: if value.is_empty() { Vec::new() } else { vec![format!("Path: {value}")] },
-            }
-        }
-        "glob" | "grep" => {
-            let pattern = value("pattern").filter(|s| !s.is_empty()).unwrap_or(resource);
-            let title = if action == "glob" { "Glob" } else { "Grep" };
-            PermissionPresentation {
-                icon: "✱",
-                title: format!("{title} \"{pattern}\""),
-                lines: if pattern.is_empty() {
-                    Vec::new()
-                } else {
-                    vec![format!("Pattern: {pattern}")]
-                },
-            }
-        }
-        "shell" => {
-            let command = value("command").unwrap_or_default();
-            PermissionPresentation {
-                icon: "#",
-                title: "Shell command".into(),
-                lines: if command.is_empty() {
-                    request.resources.iter().map(|item| format!("- {item}")).collect()
-                } else {
-                    vec![format!("$ {command}")]
-                },
-            }
-        }
-        "subagent" => {
-            let agent =
-                value("agent").filter(|s| !s.is_empty()).unwrap_or_else(|| "general".into());
-            let description = value("description").filter(|s| !s.is_empty());
-            PermissionPresentation {
-                icon: "#",
-                title: format!("{} Subagent", titlecase(&agent)),
-                lines: match description {
-                    Some(description) => vec![format!("◉ {description}")],
-                    None => Vec::new(),
-                },
-            }
-        }
-        "webfetch" => {
-            let url = value("url")
-                .filter(|s| !s.is_empty())
-                .or_else(|| {
-                    let url = text(&request.metadata, "url");
-                    (!url.is_empty()).then_some(url)
-                })
-                .unwrap_or_default();
-            PermissionPresentation {
-                icon: "%",
-                title: format!("WebFetch {url}"),
-                lines: if url.is_empty() { Vec::new() } else { vec![format!("URL: {url}")] },
-            }
-        }
-        "websearch" => {
-            let query = value("query")
-                .filter(|s| !s.is_empty())
-                .or_else(|| {
-                    let query = text(&request.metadata, "query");
-                    (!query.is_empty()).then_some(query)
-                })
-                .unwrap_or_default();
-            PermissionPresentation {
-                icon: "◈",
-                title: if query.is_empty() {
-                    "Web search".into()
-                } else {
-                    format!("Web search \"{query}\"")
-                },
-                lines: if query.is_empty() { Vec::new() } else { vec![format!("Query: {query}")] },
-            }
-        }
-        "lsp" => {
-            let file = path.unwrap_or_default();
-            let operation =
-                value("operation").filter(|s| !s.is_empty()).unwrap_or_else(|| "request".into());
-            PermissionPresentation {
-                icon: "→",
-                title: format!("LSP {operation} {file}").trim_end().to_owned(),
-                lines: vec![format!("Operation: {operation}"), format!("Path: {file}")],
-            }
-        }
-        "external_directory" => {
-            let parent = text(&request.metadata, "parentDir");
-            let filepath = text(&request.metadata, "filepath");
-            let raw = if !parent.is_empty() {
-                parent
-            } else if !filepath.is_empty() {
-                filepath
-            } else {
-                resource
-            };
-            PermissionPresentation {
-                icon: "←",
-                title: format!("Access external directory {raw}"),
-                lines: request.resources.iter().map(|item| format!("- {item}")).collect(),
-            }
-        }
-        "doom_loop" => PermissionPresentation {
-            icon: "⟳",
-            title: "Continue after repeated failures".into(),
-            lines: vec!["This keeps the session running despite repeated failures.".into()],
-        },
-        other => PermissionPresentation {
-            icon: "⚙",
-            title: format!("Call tool {other}"),
-            lines: vec![format!("Tool: {other}")],
-        },
-    }
-}
-
-fn titlecase(value: &str) -> String {
-    let mut chars = value.chars();
-    match chars.next() {
-        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-        None => String::new(),
-    }
-}
-
-/// `permissionAlwaysLines`.
-#[must_use]
-pub fn permission_always_lines(action: &str, save: &[String]) -> Vec<String> {
-    if save.len() == 1 && save[0] == "*" {
-        return vec![format!("This will always allow {action} for this project.")];
-    }
-    let mut lines =
-        vec!["This will always allow the following patterns for this project.".to_owned()];
-    lines.extend(save.iter().map(|item| format!("- {item}")));
-    lines
-}
-
-/// `permissionOptionLabel`.
-#[must_use]
-pub fn permission_option_label(option: PermissionOption) -> &'static str {
-    match option {
-        PermissionOption::Once => "Allow once",
-        PermissionOption::Always => "Always allow",
-        PermissionOption::Reject => "Reject",
-    }
-}
-
-/// `PermissionStage` — the session route's TWO-stage machine
-/// (`routes/session/permission.tsx:20`: `"permission" | "reject"`):
-/// the ask, and the child-session free-text reject prompt. There is
-/// NO always-confirmation stage — `always` replies on a single enter.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum PermissionStage {
-    #[default]
-    Permission,
-    Reject,
-}
-
-/// `PermissionOption`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PermissionOption {
-    Once,
-    Always,
-    Reject,
-}
-
-/// `PermissionBodyState`.
-#[derive(Debug, Clone, PartialEq)]
-pub struct PermissionBodyState {
-    pub request_id: String,
-    pub session_id: String,
-    pub stage: PermissionStage,
-    pub selected: PermissionOption,
-    pub message: String,
-    pub submitting: bool,
-}
-
-/// `createPermissionBodyState`.
-#[must_use]
-pub fn create_permission_body_state(request: &PermissionRequest) -> PermissionBodyState {
-    PermissionBodyState {
-        request_id: request.id.clone(),
-        session_id: request.session_id.clone(),
-        stage: PermissionStage::Permission,
-        selected: PermissionOption::Once,
-        message: String::new(),
-        submitting: false,
-    }
-}
-
-/// `permissionOptions(stage)` — the ask's three affordances (the
-/// reject stage offers none: its own enter/esc hint row).
-#[must_use]
-pub fn permission_options(stage: PermissionStage) -> Vec<PermissionOption> {
-    match stage {
-        PermissionStage::Permission => {
-            vec![PermissionOption::Once, PermissionOption::Always, PermissionOption::Reject]
-        }
-        PermissionStage::Reject => Vec::new(),
-    }
-}
-
-/// The options actually offered: "always" requires save patterns
-/// (`opts` in `RunPermissionBody`).
-#[must_use]
-pub fn permission_offered_options(
-    stage: PermissionStage,
-    request: &PermissionRequest,
-) -> Vec<PermissionOption> {
-    permission_options(stage)
-        .into_iter()
-        .filter(|option| *option != PermissionOption::Always || !request.save.is_empty())
-        .collect()
-}
-
-/// `permissionShift`.
-#[must_use]
-pub fn permission_shift(
-    state: &PermissionBodyState,
-    dir: i8,
-    list: &[PermissionOption],
-) -> PermissionBodyState {
-    if list.is_empty() {
-        return state.clone();
-    }
-    let idx = list.iter().position(|option| *option == state.selected).unwrap_or(0);
-    let next = (isize::try_from(idx).unwrap_or(0))
-        .saturating_add(isize::from(dir))
-        .rem_euclid(isize::try_from(list.len()).unwrap_or(1));
-    let next = usize::try_from(next).unwrap_or(0);
-    PermissionBodyState { selected: list[next], ..state.clone() }
-}
-
-/// One resolved step: the next state and/or the reply to send
-/// (`PermissionStep`).
-#[derive(Debug, Clone, PartialEq)]
-pub struct PermissionStep {
-    pub state: PermissionBodyState,
-    pub reply: Option<PermissionReply>,
-}
-
-/// `permissionRun` — the session route's `onSelect`
-/// (permission.tsx:243-257): `once` and `always` reply IMMEDIATELY
-/// (always needs NO confirmation round), and `reject` replies
-/// immediately on a TOP-LEVEL session while a CHILD session
-/// (`session()?.parentID`) opens the free-text stage instead.
-#[must_use]
-pub fn permission_run(
-    state: &PermissionBodyState,
-    option: PermissionOption,
-    child_session: bool,
-) -> PermissionStep {
-    if state.submitting {
-        return PermissionStep { state: state.clone(), reply: None };
-    }
-    let reply = |decision: &str, message: &str| PermissionReply {
-        session_id: state.session_id.clone(),
-        request_id: state.request_id.clone(),
-        decision: decision.to_owned(),
-        message: message.trim().to_owned(),
-    };
-    match state.stage {
-        PermissionStage::Permission => match option {
-            PermissionOption::Always => {
-                PermissionStep { state: state.clone(), reply: Some(reply("always", "")) }
-            }
-            PermissionOption::Reject => {
-                if child_session {
-                    PermissionStep {
-                        state: PermissionBodyState {
-                            stage: PermissionStage::Reject,
-                            selected: PermissionOption::Reject,
-                            ..state.clone()
-                        },
-                        reply: None,
-                    }
-                } else {
-                    PermissionStep { state: state.clone(), reply: Some(reply("reject", "")) }
-                }
-            }
-            PermissionOption::Once => {
-                PermissionStep { state: state.clone(), reply: Some(reply("once", "")) }
-            }
-        },
-        PermissionStage::Reject => PermissionStep { state: state.clone(), reply: None },
-    }
-}
-
-/// `permissionReject` — the reject stage's confirm (message included).
-#[must_use]
-pub fn permission_reject(state: &PermissionBodyState) -> Option<PermissionReply> {
-    if state.submitting {
-        return None;
-    }
-    Some(PermissionReply {
-        session_id: state.session_id.clone(),
-        request_id: state.request_id.clone(),
-        decision: "reject".into(),
-        message: state.message.trim().to_owned(),
-    })
-}
-
-/// `permissionCancel` — the reject stage's esc (back to the ask,
-/// selection on Reject).
-#[must_use]
-pub fn permission_cancel(state: &PermissionBodyState) -> PermissionBodyState {
-    PermissionBodyState {
-        stage: PermissionStage::Permission,
-        selected: PermissionOption::Reject,
-        ..state.clone()
-    }
-}
-
-/// A key event outcome for the permission body.
-#[derive(Debug, Clone, PartialEq)]
-pub enum PermissionKey {
-    /// State changed (re-render).
-    State(PermissionBodyState),
-    /// A reply should be sent (state already advanced where needed).
-    Reply(PermissionReply, PermissionBodyState),
-    /// The reject field consumed the key as text input.
-    Text(char),
-    /// Key not handled.
-    Ignored,
-}
-
-/// The `SessionQuestion` + `RejectPrompt` keymaps
-/// (permission.tsx:284-307, 440-496): left/right/tab shift the
-/// selection, return runs it; `escapeKey="reject"` makes escape run
-/// the REJECT path — immediate on a top-level session, the free-text
-/// stage on a child; inside the reject stage printable keys edit the
-/// message, enter confirms, esc cancels.
-#[must_use]
-pub fn permission_key(
-    state: &PermissionBodyState,
-    request: &PermissionRequest,
-    child_session: bool,
-    key: &str,
-) -> PermissionKey {
-    let offered = permission_offered_options(state.stage, request);
-    if state.stage == PermissionStage::Reject {
-        if key == "escape" {
-            return PermissionKey::State(permission_cancel(state));
-        }
-        if key == "enter" || key == "return" {
-            if let Some(reply) = permission_reject(state) {
-                return PermissionKey::Reply(reply, state.clone());
-            }
-        }
-        let mut chars = key.chars();
-        if let (Some(ch), None) = (chars.next(), chars.next()) {
-            if !ch.is_control() {
-                return PermissionKey::Text(ch);
-            }
-        }
-        if key == "backspace" {
-            return PermissionKey::Text('\u{8}');
-        }
-        return PermissionKey::Ignored;
-    }
-    match key {
-        "left" | "h" => PermissionKey::State(permission_shift(state, -1, &offered)),
-        "right" | "l" => PermissionKey::State(permission_shift(state, 1, &offered)),
-        "tab" => PermissionKey::State(permission_shift(state, 1, &offered)),
-        "enter" | "return" => {
-            let step = permission_run(state, state.selected, child_session);
-            match step.reply {
-                Some(reply) => PermissionKey::Reply(reply, step.state),
-                None => PermissionKey::State(step.state),
-            }
-        }
-        // `escapeKey="reject"` (permission.tsx:241, 437-438): the ask's
-        // escape runs the reject path — no expanded-fullscreen state
-        // to collapse first in the docked body.
-        "escape" => {
-            let step = permission_run(state, PermissionOption::Reject, child_session);
-            match step.reply {
-                Some(reply) => PermissionKey::Reply(reply, step.state),
-                None => PermissionKey::State(step.state),
-            }
-        }
-        _ => PermissionKey::Ignored,
-    }
-}
-
-/// Apply a [`PermissionKey::Text`] edit to the reject message
-/// (backspace = `\u{8}`).
-#[must_use]
-pub fn permission_type_message(state: &PermissionBodyState, ch: char) -> PermissionBodyState {
-    let mut message = state.message.clone();
-    if ch == '\u{8}' {
-        message.pop();
-    } else {
-        message.push(ch);
-    }
-    PermissionBodyState { message, ..state.clone() }
-}
+pub use super::state::{
+    create_permission_body_state, permission_always_lines, permission_cancel, permission_key,
+    permission_offered_options, permission_option_label, permission_options,
+    permission_presentation, permission_reject, permission_run, permission_shift,
+    permission_type_message, PermissionBodyState, PermissionKey, PermissionOption,
+    PermissionPresentation, PermissionReply, PermissionRequest, PermissionStage, PermissionStep,
+};
 
 // -- rendering ---------------------------------------------------------------
 
@@ -549,10 +50,21 @@ pub fn render_permission_body(
     height: usize,
     theme: &FooterTheme,
 ) -> Frame {
+    super::solid::finish(permission_body_canvas(request, state, width, height, theme))
+}
+
+/// [`render_permission_body`]'s canvas (the parity tests' op source).
+pub(crate) fn permission_body_canvas(
+    request: &PermissionRequest,
+    state: &PermissionBodyState,
+    width: usize,
+    height: usize,
+    theme: &FooterTheme,
+) -> Canvas {
     let mut canvas = Canvas::new(width, height);
     let compact = width < 56 || height < 12;
     if height < 2 {
-        return canvas.into_frame();
+        return canvas;
     }
     // The body fills everything below the one-row spacer above it:
     // header (3) · content (viewport rows + paddingBottom) · controls (3).
@@ -629,7 +141,7 @@ pub fn render_permission_body(
         canvas.fill_bg(y, 0, width, theme.pane);
     }
     render_permission_controls(&mut canvas, controls_y, request, state, width, theme, compact);
-    canvas.into_frame()
+    canvas
 }
 
 /// The controls row: buttons left (padding 2), hints right-aligned
@@ -759,9 +271,19 @@ pub fn render_reject_field(
     height: usize,
     theme: &FooterTheme,
 ) -> Frame {
+    super::solid::finish(reject_field_canvas(placeholder_visible, width, height, theme))
+}
+
+/// [`render_reject_field`]'s canvas (the parity tests' op source).
+pub(crate) fn reject_field_canvas(
+    placeholder_visible: bool,
+    width: usize,
+    height: usize,
+    theme: &FooterTheme,
+) -> Canvas {
     let mut canvas = Canvas::new(width, height);
     if height == 0 {
-        return canvas.into_frame();
+        return canvas;
     }
     canvas.fill_bg(0, 0, width, theme.formfield_focused_bg);
     if placeholder_visible {
@@ -775,7 +297,7 @@ pub fn render_reject_field(
             )],
         );
     }
-    canvas.into_frame()
+    canvas
 }
 
 #[cfg(test)]

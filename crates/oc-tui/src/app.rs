@@ -45,10 +45,7 @@ use crate::components::command_palette::{CommandDispatcher as _, Dispatch, Store
 use crate::components::composer::render::prompt_text_width;
 use crate::components::composer::{ComposerEditCommand, ComposerKey, KeyOutcome};
 use crate::components::dialog::{execute_submission, handle_dialog_key, render_app};
-use crate::components::footer::form::{
-    form_commit_input, form_move, form_pick, form_reply, form_set_field, form_sync, FormBodyState,
-    FormCancel, FormReply,
-};
+use crate::components::footer::form::{form_key, form_sync, FormBodyState, FormCancel, FormReply};
 use crate::components::footer::permission::{
     create_permission_body_state, permission_key, PermissionBodyState, PermissionKey,
     PermissionReply, PermissionRequest,
@@ -2002,159 +1999,26 @@ impl App {
         }
     }
 
-    /// One stroke while a form holds the footer (TD16): the
-    /// `FORM_MODE` keymap layers (form.tsx:547-720) — the editing/
-    /// textual layer (enter commits, tab/shift+tab step fields, esc
-    /// dismisses/closes the edit, printables edit the draft), the
-    /// picker layer (arrows move, digits select, enter picks, left/
-    /// right step fields, esc dismisses), and the review step (enter
-    /// submits, esc dismisses). Every other stroke is consumed — the
-    /// composer underneath must not type.
-    #[allow(clippy::too_many_lines)] // one port of the FORM_MODE layer set (form.tsx:547-720)
+    /// One stroke while a form holds the footer: the FORM_MODE layer
+    /// set (`form.tsx:547-720`) — ported store-side as
+    /// [`form_key`](crate::components::footer::form::form_key) (lane
+    /// R2 step 1); this pump hook only applies the step's side
+    /// effects (the reply settles the form server-side, the cancel
+    /// dismisses it). Every stroke is consumed — the composer
+    /// underneath must not type.
     fn stroke_in_form(&mut self, key: &str, shift: bool) {
-        use crate::components::footer::form::{FieldKind, FormField};
-
         let FooterView::Form { request } = self.store.footer().view.clone() else { return };
         let fresh = FormBodyState::new(&request);
         let synced = form_sync(self.form_states.get(&request.id).unwrap_or(&fresh), &request);
-        let current = synced.current(&request);
-        let textual = current.is_some_and(FormField::textual);
-        let editing_layer = (synced.editing || textual) && !synced.confirm(&request);
-
-        // The reply/cancel side effects land after the state match —
-        // the local queue keeps `&mut self` borrows clean.
-        let mut reply: Option<FormReply> = None;
-        let mut cancel = false;
-        let next = if editing_layer {
-            match key {
-                "escape" => {
-                    if textual {
-                        cancel = true;
-                        synced.clone()
-                    } else {
-                        FormBodyState { editing: false, ..synced.clone() }
-                    }
-                }
-                "tab" | "return" | "enter" => {
-                    let (next, fired) = form_commit_input(&synced, &request, synced.draft.trim());
-                    let submitted = fired.is_some();
-                    reply = reply.or(fired);
-                    if !submitted && !FormBodyState::single(&request) {
-                        let dir: i8 = if key == "tab" && shift { -1 } else { 1 };
-                        form_step_field(&next, &request, synced.field, dir)
-                    } else {
-                        next
-                    }
-                }
-                "up" if !textual && synced.selected > 0 => FormBodyState {
-                    editing: false,
-                    selected: synced.selected - 1,
-                    ..synced.clone()
-                },
-                "backspace" => {
-                    let mut draft = synced.draft.clone();
-                    draft.pop();
-                    FormBodyState { draft, ..synced.clone() }
-                }
-                other => {
-                    let mut chars = other.chars();
-                    match (chars.next(), chars.next()) {
-                        (Some(ch), None) if !ch.is_control() => FormBodyState {
-                            draft: format!("{}{ch}", synced.draft),
-                            ..synced.clone()
-                        },
-                        _ => synced.clone(),
-                    }
-                }
-            }
-        } else {
-            match key {
-                "escape" | "ctrl+c" => {
-                    cancel = true;
-                    synced.clone()
-                }
-                "left" | "h" => form_step_field(&synced, &request, synced.field, -1),
-                "right" | "l" | "tab" => form_step_field(&synced, &request, synced.field, 1),
-                "up" | "k" => form_move(&synced, &request, -1),
-                "down" | "j" => form_move(&synced, &request, 1),
-                "enter" | "return" => {
-                    if synced.confirm(&request) {
-                        // The review step's submit (`submit`, form.tsx:
-                        // 515-541): every field re-validates; the
-                        // reply carries only answered keys.
-                        reply = reply.or(form_reply(&synced, &request));
-                        synced.clone()
-                    } else if current
-                        .is_some_and(|field| matches!(field.kind, FieldKind::External { .. }))
-                    {
-                        // External steps acknowledge on enter (the URL
-                        // row's `open link` → `I finished` → continue
-                        // chain, form.tsx:488-509 — headless-safe: the
-                        // browser open degrades to the acknowledged
-                        // state without spawning anything).
-                        let mut answers = synced.answers.clone();
-                        if let Some(field) = current {
-                            answers.insert(field.key.clone(), serde_json::Value::Bool(true));
-                        }
-                        let acknowledged = FormBodyState { answers, ..synced.clone() };
-                        if FormBodyState::single(&request) {
-                            reply = reply.or(form_reply(&acknowledged, &request));
-                            acknowledged
-                        } else {
-                            form_set_field(&acknowledged, &request, synced.field + 1)
-                        }
-                    } else {
-                        let (next, fired) = form_pick(&synced, &request, synced.selected);
-                        reply = reply.or(fired);
-                        next
-                    }
-                }
-                other => {
-                    // Digits pick the n-th row (`1..9`, form.tsx:686);
-                    // a printable on the CUSTOM row opens the editor
-                    // (the interceptor, form.tsx:275-290).
-                    if let Some(digit) = other.chars().next().and_then(|c| c.to_digit(10)) {
-                        if (1..=9).contains(&digit) {
-                            let (next, fired) = form_pick(
-                                &synced,
-                                &request,
-                                usize::try_from(digit).unwrap_or(1) - 1,
-                            );
-                            reply = reply.or(fired);
-                            next
-                        } else {
-                            synced.clone()
-                        }
-                    } else {
-                        let mut chars = other.chars();
-                        match (chars.next(), chars.next()) {
-                            (Some(ch), None)
-                                if !ch.is_control()
-                                    && current.is_some_and(|field| {
-                                        field.custom() && synced.selected == field.rows().len()
-                                    }) =>
-                            {
-                                FormBodyState {
-                                    selected: current.map_or(0, |field| field.rows().len()),
-                                    editing: true,
-                                    draft: format!("{}{ch}", synced.draft),
-                                    ..synced.clone()
-                                }
-                            }
-                            _ => synced.clone(),
-                        }
-                    }
-                }
-            }
-        };
-        self.form_states.insert(request.id.clone(), next);
-        if let Some(reply) = reply {
+        let step = form_key(&synced, &request, key, shift);
+        self.form_states.insert(request.id.clone(), step.state);
+        if let Some(reply) = step.reply {
             self.form_replies.push(reply.clone());
             // The reply settles the form server-side
             // (`form.replied`) — the footer falls back locally.
             self.store.form_removed(&reply.form_id);
         }
-        if cancel {
+        if step.cancel {
             self.form_cancels.push(FormCancel {
                 session_id: request.session_id.clone(),
                 form_id: request.id.clone(),
@@ -3114,24 +2978,6 @@ impl App {
             "prompt"
         }
     }
-}
-
-/// `selectTab` with wrap (form.tsx:421-431 + 606-615): step `from` by
-/// `dir` modulo the tab count (`fields.len() + 1` review tab on
-/// multi-field forms; single-field forms have exactly one).
-fn form_step_field(
-    state: &FormBodyState,
-    request: &crate::components::footer::form::FormRequest,
-    from: usize,
-    dir: i8,
-) -> FormBodyState {
-    let tabs = if FormBodyState::single(request) { 1 } else { request.fields.len() + 1 };
-    if tabs == 0 {
-        return state.clone();
-    }
-    let tabs_i = isize::try_from(tabs).unwrap_or(1);
-    let next = (isize::try_from(from).unwrap_or(0) + isize::from(dir)).rem_euclid(tabs_i);
-    form_set_field(state, request, usize::try_from(next).unwrap_or(0))
 }
 
 /// Paste `region`'s rows at absolute y (right-clamped to the frame).
