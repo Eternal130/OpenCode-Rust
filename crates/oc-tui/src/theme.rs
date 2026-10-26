@@ -554,20 +554,30 @@ pub fn query_terminal_background_in_raw() -> Option<(u8, u8, u8)> {
 }
 
 /// The boot probe's findings: the OSC 11 background (the theme-mode
-/// seed) and the kitty keyboard advertisement (the `CSI ? u` query's
+/// seed), the kitty keyboard advertisement (the `CSI ? u` query's
 /// answer — crossterm 0.28 has no public event for it, so the answer
-/// is parsed in this same boot window; lane TAIL, auditC P2/TM-1).
+/// is parsed in this same boot window; lane TAIL, auditC P2/TM-1),
+/// and the DA1 (Primary Device Attributes) answer's sixel verdict
+/// (RB-07: `CSI c` → `CSI ? {attrs} c`; attribute `4` among the
+/// reply's `;`-separated parameters means sixel graphics — the
+/// VT240-class convention xterm `-ti vt340` and mlterm report as
+/// e.g. `\x1b[?62;4;6;8;15;22c`; terminals without sixel (kitty:
+/// `\x1b[?62;6;9;15;22c`) omit it). `None` = no DA1 answer inside
+/// the window (the env fallback's case).
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct TerminalProbe {
     /// The terminal background color (`None` on timeout).
     pub background: Option<(u8, u8, u8)>,
     /// The terminal answered the kitty keyboard query (`CSI ? flags u`).
     pub kitty_keyboard: bool,
+    /// The DA1 answer's sixel verdict (`None` = no DA1 answer).
+    pub da1_sixel: Option<bool>,
 }
 
-/// The combined boot probe: write the OSC 11 background query AND the
-/// kitty keyboard capability query together, read ONE 150 ms window,
-/// parse both answers (v2 writes both at boot; one window keeps the
+/// The combined boot probe: write the OSC 11 background query, the
+/// kitty keyboard capability query, AND the DA1 (`CSI c`) query
+/// together, read ONE 300 ms window, parse all three answers (v2
+/// writes its boot queries together; one window keeps the
 /// keystroke-drop exposure to a single interval).
 #[must_use]
 pub fn probe_terminal() -> TerminalProbe {
@@ -585,7 +595,7 @@ pub fn probe_terminal() -> TerminalProbe {
     let answer = (|| {
         {
             let mut stdout = std::io::stdout().lock();
-            let queries = b"\x1b]11;?\x07\x1b[?u";
+            let queries = b"\x1b]11;?\x07\x1b[?u\x1b[c";
             if stdout.write_all(queries).is_err() || stdout.flush().is_err() {
                 return TerminalProbe::default();
             }
@@ -596,16 +606,17 @@ pub fn probe_terminal() -> TerminalProbe {
     answer
 }
 
-/// Read the probe window until both answers land or the deadline:
-/// the OSC 11 color (`parse_osc_reply`) and the kitty advertisement
-/// (`CSI ? flags u` — any digit run before a `u` after `[?`).
+/// Read the probe window until all answers land or the deadline: the
+/// OSC 11 color (`parse_osc_reply`), the kitty advertisement
+/// (`CSI ? flags u` — any digit run before a `u` after `[?`), and the
+/// DA1 sixel verdict (`parse_da1_sixel` — `CSI ? attrs c`).
 #[allow(unsafe_code)] // poll/read on fd 0 are only reachable through libc FFI
 fn collect_probe_answers(timeout: std::time::Duration) -> TerminalProbe {
     let deadline = std::time::Instant::now() + timeout;
     let mut buffer: Vec<u8> = Vec::with_capacity(128);
     let mut probe = TerminalProbe::default();
     loop {
-        if probe.background.is_some() && probe.kitty_keyboard {
+        if probe.background.is_some() && probe.kitty_keyboard && probe.da1_sixel.is_some() {
             return probe;
         }
         let now = std::time::Instant::now();
@@ -635,6 +646,9 @@ fn collect_probe_answers(timeout: std::time::Duration) -> TerminalProbe {
         if !probe.kitty_keyboard {
             probe.kitty_keyboard = parse_kitty_advertisement(&buffer);
         }
+        if probe.da1_sixel.is_none() {
+            probe.da1_sixel = parse_da1_sixel(&buffer);
+        }
         // Overlong garbage never matches: give up rather than spin.
         if buffer.len() > 512 {
             return probe;
@@ -663,6 +677,50 @@ fn parse_kitty_advertisement(bytes: &[u8]) -> bool {
         index = start + 1;
     }
     false
+}
+
+/// The DA1 (Primary Device Attributes) sixel verdict: find a
+/// `CSI ? {attrs} c` reply (`ESC [ ?` … `c`) and report whether
+/// attribute `4` (sixel graphics, the VT240-class convention) is
+/// among its `;`-separated top-level parameters. Sub-parameters
+/// (`:`-groups, e.g. `4;` in `27;4:32`) only match on the leading
+/// value. `None` when no complete DA1 reply is in the buffer.
+fn parse_da1_sixel(bytes: &[u8]) -> Option<bool> {
+    let mut index = 0;
+    while let Some(at) = bytes[index..].iter().position(|b| *b == b'\x1b') {
+        let start = index + at;
+        let rest = &bytes[start..];
+        if rest.len() >= 3 && rest[1] == b'[' && rest[2] == b'?' {
+            let mut cursor = 3;
+            let mut attrs: Vec<&[u8]> = Vec::new();
+            let mut current = cursor;
+            let mut complete = false;
+            while cursor < rest.len() {
+                match rest[cursor] {
+                    digit if digit.is_ascii_digit() || digit == b':' => cursor += 1,
+                    b';' => {
+                        attrs.push(&rest[current..cursor]);
+                        cursor += 1;
+                        current = cursor;
+                    }
+                    b'c' => {
+                        attrs.push(&rest[current..cursor]);
+                        complete = true;
+                        break;
+                    }
+                    _ => break, // not a DA1 reply after all
+                }
+            }
+            if complete {
+                let sixel = attrs
+                    .iter()
+                    .any(|attr| attr.split(|b| *b == b':').next().is_some_and(|head| head == b"4"));
+                return Some(sixel);
+            }
+        }
+        index = start + 1;
+    }
+    None
 }
 
 /// Read the terminal's OSC 11 answer off fd 0, discarding anything
@@ -829,6 +887,38 @@ mod tests {
         // …and the gray border token is a DIFFERENT color (the rail
         // must never fall back to it when an agent is resolved).
         assert_ne!(styles.agent_color(0), styles.border);
+    }
+
+    /// RB-07 (lane R0): the DA1 sixel verdict. Attribute `4` among the
+    /// `CSI ? {attrs} c` reply's `;`-separated parameters = sixel
+    /// (xterm `-ti vt340` / mlterm style); an answered DA1 without it
+    /// = no sixel (kitty's reply); no/other replies = `None`.
+    #[test]
+    fn da1_sixel_verdict_parses() {
+        // xterm vt340-style: level 62 + sixel(4) + others.
+        assert_eq!(parse_da1_sixel(b"\x1b[?62;4;6;8;15;22c"), Some(true));
+        // The task-shape reply: `;4;` anywhere in the attribute list.
+        assert_eq!(parse_da1_sixel(b"\x1b[?62;4;6;8;15;18;21;22c"), Some(true));
+        // Sixel alone (minimal VT240-class reply).
+        assert_eq!(parse_da1_sixel(b"\x1b[?4c"), Some(true));
+        // kitty: answers DA1 but never with the sixel attribute.
+        assert_eq!(parse_da1_sixel(b"\x1b[?62;6;9;15;22c"), Some(false));
+        // The minimal `?6c` form still counts as answered-no-sixel.
+        assert_eq!(parse_da1_sixel(b"\x1b[?6c"), Some(false));
+        // Sub-parameter groups (`:`-separated) match on the leading
+        // value only (DA1 itself has none; the tolerance is safe).
+        assert_eq!(parse_da1_sixel(b"\x1b[?62;4:32c"), Some(true));
+        assert_eq!(parse_da1_sixel(b"\x1b[?62;14:32c"), Some(false));
+        // Mixed streams: the DA1 reply rides alongside other answers.
+        assert_eq!(
+            parse_da1_sixel(b"\x1b]11;rgb:1717/1717/1717\x1b\\\x1b[?1u\x1b[?62;4c"),
+            Some(true)
+        );
+        // Not a DA1 final byte / no reply yet.
+        assert_eq!(parse_da1_sixel(b"\x1b[?62;4"), None);
+        assert_eq!(parse_da1_sixel(b"\x1b[?1;2c\x1b[?1u"), Some(false)); // classic xterm DA1
+        assert_eq!(parse_da1_sixel(b""), None);
+        assert_eq!(parse_da1_sixel(b"garbage"), None);
     }
 
     /// The builtin registry: 34 entries (v2 opencode + 32 v1 + the

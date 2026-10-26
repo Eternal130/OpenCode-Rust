@@ -6349,8 +6349,9 @@ pub async fn run_with_size(
     if fast_boot_from_env(std::env::var("OPENCODE_FAST_BOOT").ok().as_deref()) {
         app.store.set_skip_initial_loading(true);
     }
-    // R-07: the terminal's graphics protocol (env probe — see
-    // `crate::image` for why not a DA1 round-trip).
+    // R-07: the terminal's graphics protocol — env probe seeds the
+    // store now; the boot DA1 round-trip below (RB-07, lane R0)
+    // refines it once the input thread's probe window answers.
     app.store.set_graphics_protocol(crate::image::detect_protocol());
     let config = crate::config::TuiConfig::load(&oc_util::global_roots::resolve());
     // SURF-2 (F-1): the config persistence sink — cli.json
@@ -6773,7 +6774,7 @@ pub async fn run_with_size(
     // the run future — and a stale reader from an abandoned boot is
     // stopped by the slot swap below before this one spawns.
     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<CrosstermEvent>(64);
-    let (probe_tx, probe_rx) = std::sync::mpsc::channel::<(Mode, bool)>();
+    let (probe_tx, probe_rx) = std::sync::mpsc::channel::<(Mode, bool, Option<bool>)>();
     let input_stop = {
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
         if let Ok(mut slot) = INPUT_READER_STOP.lock() {
@@ -6788,12 +6789,13 @@ pub async fn run_with_size(
         let input_stop = Arc::clone(&input_stop);
         std::thread::spawn(move || {
             // The combined boot probe (lane TAIL): OSC 11 background +
-            // the kitty keyboard capability query, one read window.
+            // the kitty keyboard capability query + DA1 (RB-07), one
+            // read window.
             let probe = crate::theme::probe_terminal();
             let mode = probe
                 .background
                 .map_or(Mode::Dark, |(r, g, b)| crate::theme::mode_for_background(r, g, b));
-            let _ = probe_tx.send((mode, probe.kitty_keyboard));
+            let _ = probe_tx.send((mode, probe.kitty_keyboard, probe.da1_sixel));
             loop {
                 if input_stop.load(std::sync::atomic::Ordering::Relaxed) {
                     break;
@@ -6811,12 +6813,22 @@ pub async fn run_with_size(
             }
         });
     }
-    if let Ok((mode, kitty_keyboard)) = probe_rx.recv_timeout(std::time::Duration::from_millis(800))
+    if let Ok((mode, kitty_keyboard, da1_sixel)) =
+        probe_rx.recv_timeout(std::time::Duration::from_millis(800))
     {
         system_mode = mode;
         // Refresh the store's system-mode input (the theme lock's
         // unlock target — SURF-2).
         app.store.set_theme_mode_inputs(config.theme.mode.clone(), system_mode);
+        // RB-07 (lane R0): the DA1 answer refines the graphics-
+        // protocol decision seeded from env above — attribute 4 in
+        // the `CSI ? attrs c` reply is authoritative for sixel; an
+        // answered DA1 without it rules sixel out; no answer keeps
+        // the env heuristic (see `crate::image::resolve_protocol`).
+        let resolved = crate::image::resolve_protocol(app.store.graphics_protocol(), da1_sixel);
+        if resolved != app.store.graphics_protocol() {
+            app.store.set_graphics_protocol(resolved);
+        }
         // Lane TAIL (auditC P2/TM-1): the terminal ANSWERED the kitty
         // keyboard query — push the v2 flag set (disambiguate escape
         // codes + report alternate keys; the ref pushes `CSI > 5u`).
