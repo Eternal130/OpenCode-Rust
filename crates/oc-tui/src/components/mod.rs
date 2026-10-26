@@ -16,7 +16,9 @@ pub mod composer;
 /// `docs/migration-m1-tabstrip.md`).
 pub mod composer_solid;
 pub mod console;
+pub mod console_solid;
 pub mod devtools;
+pub mod devtools_solid;
 pub mod dialog;
 pub mod dialog_config;
 pub mod dialog_open;
