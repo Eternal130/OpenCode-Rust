@@ -10,7 +10,7 @@
 //! cell-for-cell against [`super::toast::render_toast_over_blank`].
 
 use super::chrome_solid::{
-    chrome_cluster_units, chrome_frame, first_divergence, ChromeBody, ChromeChunk, ChromeUnit,
+    chrome_cluster_units, chrome_frame, ChromeBody, ChromeChunk, ChromeUnit,
 };
 use super::footer::canvas::{Canvas, FILL_FG};
 use super::footer::theme::{feedback_color, FooterTheme};
@@ -175,6 +175,7 @@ pub fn render_toast_over_blank_solid(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::chrome_solid::first_divergence;
     use crate::components::toast::render_toast_over_blank;
     use crate::theme::ThemeState;
 

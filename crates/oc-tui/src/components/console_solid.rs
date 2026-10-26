@@ -5,7 +5,7 @@
 //! gate pins the solid frame cell-for-cell against the old painter
 //! ([`super::console::render_console_overlay`]).
 
-use super::chrome_solid::{chrome_frame, chrome_run_units, first_divergence};
+use super::chrome_solid::{chrome_frame, chrome_run_units};
 use crate::render::{CellColor, Frame};
 use crate::theme::ThemeStyles;
 
@@ -83,6 +83,7 @@ pub fn render_console_overlay_solid(lines: &[String], styles: &ThemeStyles, widt
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::chrome_solid::first_divergence;
     use crate::components::console::render_console_overlay;
     use crate::theme::ThemeState;
 

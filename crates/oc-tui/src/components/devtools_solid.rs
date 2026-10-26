@@ -5,7 +5,7 @@
 //! the same fg/bg pair, which an opaque chunk writes natively). The
 //! panel text stays the shared [`super::devtools::bar_text`] solver.
 
-use super::chrome_solid::{chrome_frame, first_divergence, ChromeChunk, ChromeUnit};
+use super::chrome_solid::{chrome_frame, ChromeChunk, ChromeUnit};
 use crate::render::{CellColor, Frame};
 use crate::store::Store;
 use crate::theme::ThemeStyles;
@@ -56,6 +56,7 @@ pub fn paint_devtools_bar_solid(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::chrome_solid::first_divergence;
     use crate::components::devtools::paint_devtools_bar;
     use crate::reactive::Runtime;
     use crate::render::{Cell, CellColor};

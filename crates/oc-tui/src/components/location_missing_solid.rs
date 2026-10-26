@@ -6,7 +6,7 @@
 //! parity gate pins the solid frame cell-for-cell against the old
 //! painter ([`super::location_missing::render_location_missing`]).
 
-use super::chrome_solid::{chrome_frame, chrome_run_units, first_divergence, ChromeUnit};
+use super::chrome_solid::{chrome_frame, chrome_run_units, ChromeUnit};
 use crate::render::CellColor;
 use crate::theme::ThemeStyles;
 
@@ -102,6 +102,7 @@ pub fn render_location_missing_solid(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::chrome_solid::first_divergence;
     use crate::components::location_missing::render_location_missing;
     use crate::theme::ThemeState;
 
