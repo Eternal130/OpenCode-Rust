@@ -216,6 +216,7 @@ pub fn resolve_specifier(
     provider_id: &str,
     model_id: Option<&str>,
     shape: Option<&str>,
+    use_completion_urls: bool,
 ) -> Option<String> {
     let npm = package_name(specifier);
     // aisdk:, PACKAGES, and host-conditional HOSTS lanes (resolve's
@@ -224,12 +225,19 @@ pub fn resolve_specifier(
         || packages(&npm).is_some()
         || host_lookup(provider_id, &npm).is_some()
     {
+        // The settings arm of azureChat rides here too (aisdk-native.ts:
+        // 135 `@ai-sdk/azure` + azureChat(context), :139-141): the
+        // catalog lane has no settings, the config lane does.
+        if npm == "@ai-sdk/azure" && use_completion_urls {
+            return Some("@opencode/ai/providers/azure/chat".to_string());
+        }
         return native(&npm, provider_id, model_id, shape);
     }
     if npm == "@opencode/ai/providers/amazon-bedrock/mantle" {
         return Some(mantle(model_id).to_string());
     }
-    if npm == "@opencode/ai/providers/azure/responses" && azure_chat(shape) {
+    if npm == "@opencode/ai/providers/azure/responses" && (azure_chat(shape) || use_completion_urls)
+    {
         return Some("@opencode/ai/providers/azure/chat".to_string());
     }
     // Already a native entrypoint: accept exactly the builtin table.
@@ -248,8 +256,10 @@ fn host_lookup(provider_id: &str, npm: &str) -> Option<String> {
 }
 
 /// v2 `azureChat`: the Responses package switches to Chat when the model
-/// declares the completions shape (the settings-based variant is not
-/// consulted in catalog derivation).
+/// declares the completions shape or the settings set
+/// `useCompletionUrls: true` (aisdk-native.ts:126-127; the settings arm
+/// is threaded by `resolve_specifier` — catalog derivation has no
+/// settings).
 fn azure_chat(shape: Option<&str>) -> bool {
     shape == Some("completions")
 }
@@ -378,17 +388,17 @@ mod tests {
     fn provider_native_resolve_npm_alias_and_entrypoint() {
         // npm alias → native entrypoint (PACKAGES)
         assert_eq!(
-            resolve_specifier("@ai-sdk/anthropic", "myai", None, None),
+            resolve_specifier("@ai-sdk/anthropic", "myai", None, None, false),
             Some("@opencode/ai/providers/anthropic".to_string())
         );
         // already-native entrypoint → identity (builtin table)
         assert_eq!(
-            resolve_specifier("@opencode/ai/providers/anthropic", "myai", None, None),
+            resolve_specifier("@opencode/ai/providers/anthropic", "myai", None, None, false),
             Some("@opencode/ai/providers/anthropic".to_string())
         );
         // legacy scope migration (provider.ts:30-33 packageName)
         assert_eq!(
-            resolve_specifier("@opencode-ai/ai/providers/anthropic", "myai", None, None),
+            resolve_specifier("@opencode-ai/ai/providers/anthropic", "myai", None, None, false),
             Some("@opencode/ai/providers/anthropic".to_string())
         );
     }
@@ -397,17 +407,17 @@ mod tests {
     fn provider_native_resolve_is_host_conditional() {
         // HOSTS redirect only for its provider id (aisdk-native.ts:88-120)
         assert_eq!(
-            resolve_specifier("@ai-sdk/openai-compatible", "cohere", None, None),
+            resolve_specifier("@ai-sdk/openai-compatible", "cohere", None, None, false),
             Some("@opencode/ai/providers/cohere/chat".to_string())
         );
         assert_eq!(
-            resolve_specifier("@ai-sdk/openai-compatible", "myai", None, None),
+            resolve_specifier("@ai-sdk/openai-compatible", "myai", None, None, false),
             Some("@opencode/ai/providers/openai-compatible".to_string())
         );
         // same-family-different-lane: the messages protocol package for
         // an alibaba host, vs the plain anthropic entrypoint elsewhere
         assert_eq!(
-            resolve_specifier("@ai-sdk/anthropic", "alibaba", None, None),
+            resolve_specifier("@ai-sdk/anthropic", "alibaba", None, None, false),
             Some("@opencode/ai/providers/alibaba/messages".to_string())
         );
     }
@@ -419,12 +429,24 @@ mod tests {
                 "@opencode/ai/providers/amazon-bedrock/mantle",
                 "amazon-bedrock",
                 Some("openai.gpt-oss-120b"),
-                None
+                None,
+                false
             ),
             Some("@opencode/ai/providers/amazon-bedrock/mantle/chat".to_string())
         );
         assert_eq!(
-            resolve_specifier("@ai-sdk/azure", "azure", None, Some("completions")),
+            resolve_specifier("@ai-sdk/azure", "azure", None, Some("completions"), false),
+            Some("@opencode/ai/providers/azure/chat".to_string())
+        );
+        // F2: the settings arm — `useCompletionUrls === true` switches
+        // the azure package without the completions shape
+        // (aisdk-native.ts:126-127,44-45).
+        assert_eq!(
+            resolve_specifier("@ai-sdk/azure", "azure", None, None, true),
+            Some("@opencode/ai/providers/azure/chat".to_string())
+        );
+        assert_eq!(
+            resolve_specifier("@opencode/ai/providers/azure/responses", "azure", None, None, true),
             Some("@opencode/ai/providers/azure/chat".to_string())
         );
         assert_eq!(
@@ -432,7 +454,8 @@ mod tests {
                 "@opencode/ai/providers/azure/responses",
                 "azure",
                 None,
-                Some("completions")
+                Some("completions"),
+                false
             ),
             Some("@opencode/ai/providers/azure/chat".to_string())
         );
@@ -440,11 +463,11 @@ mod tests {
 
     #[test]
     fn provider_native_resolve_unknown_is_none() {
-        assert_eq!(resolve_specifier("aisdk:@ai-sdk/perplexity", "myai", None, None), None);
-        assert_eq!(resolve_specifier("@ai-sdk/perplexity", "myai", None, None), None);
-        assert_eq!(resolve_specifier("not-a-pkg", "myai", None, None), None);
+        assert_eq!(resolve_specifier("aisdk:@ai-sdk/perplexity", "myai", None, None, false), None);
+        assert_eq!(resolve_specifier("@ai-sdk/perplexity", "myai", None, None, false), None);
+        assert_eq!(resolve_specifier("not-a-pkg", "myai", None, None, false), None);
         assert_eq!(
-            resolve_specifier("@opencode/ai/providers/nonexistent", "myai", None, None),
+            resolve_specifier("@opencode/ai/providers/nonexistent", "myai", None, None, false),
             None
         );
     }
@@ -463,7 +486,10 @@ mod tests {
             "@opencode/ai/providers/zai-coding-plan/responses",
         ] {
             assert!(BUILTIN_ENTRYPOINTS.contains(&package), "{package} missing");
-            assert_eq!(resolve_specifier(package, "myai", None, None), Some(package.to_string()));
+            assert_eq!(
+                resolve_specifier(package, "myai", None, None, false),
+                Some(package.to_string())
+            );
         }
     }
 }

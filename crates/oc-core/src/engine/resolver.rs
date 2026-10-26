@@ -944,6 +944,23 @@ pub fn custom_model_info(
     } else if custom.package.is_some() {
         info.package = None;
     }
+    if let Some(settings) = &model.settings {
+        // `model.settings = mergeOverlay(withoutCredentials(model.settings),
+        // withoutCredentials(config.settings))` (opencode.ts:277-280): the
+        // base model's settings under the config overlay, per key.
+        let mut rest =
+            info.settings.as_ref().map(|settings| settings.rest.clone()).unwrap_or_default();
+        for (key, value) in &settings.rest {
+            rest.insert(key.clone(), value.clone());
+        }
+        info.settings = Some(oc_schema::model::Settings {
+            compaction: settings
+                .compaction
+                .clone()
+                .or_else(|| info.settings.as_ref().and_then(|s| s.compaction.clone())),
+            rest,
+        });
+    }
     if let Some(headers) = &model.headers {
         info.headers = merge_string_records(&[info.headers.as_ref(), Some(headers)]);
     }
@@ -1073,10 +1090,38 @@ mod console_merge_tests {
                     input: Some(100_000),
                     output: Some(64_000),
                 }),
+                settings: None,
                 base_url: None,
                 package: None,
                 variants: Vec::new(),
             }],
+        }
+    }
+
+    /// F1: the model settings overlay merges base-under-config per key on
+    /// the Info seam (`model.settings = mergeOverlay(
+    /// withoutCredentials(model.settings), withoutCredentials(
+    /// config.settings))`, opencode.ts:277-280).
+    #[test]
+    fn custom_model_info_merges_model_settings_over_base() {
+        let mut custom = console_custom();
+        // A catalog base carrying settings (anthropic/claude-opus-4-5).
+        custom.canonical = Some("anthropic".into());
+        let model = &mut custom.models[0];
+        model.model_id = Some("claude-opus-4-5".into());
+        model.settings = Some(oc_schema::model::Settings {
+            compaction: None,
+            rest: BTreeMap::from([("reasoningEffort".to_string(), serde_json::json!("high"))]),
+        });
+        let info = custom_model_info(&custom, "acme-large", &catalog());
+        let rest = info.settings.as_ref().expect("merged settings").rest.clone();
+        assert_eq!(rest.get("reasoningEffort"), Some(&serde_json::json!("high")));
+        // base model settings survive where the overlay is silent
+        // (mergeOverlay: base under config).
+        let base =
+            catalog().model("anthropic", "claude-opus-4-5").expect("base model").settings.clone();
+        for (key, value) in &base.unwrap_or_default().rest {
+            assert_eq!(rest.get(key), Some(value), "base key {key} survives");
         }
     }
 
@@ -1398,6 +1443,7 @@ mod console_merge_tests {
                 capabilities: None,
                 cost: None,
                 limit: None,
+                settings: None,
                 base_url: None,
                 package: None,
                 variants: Vec::new(),

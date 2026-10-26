@@ -14,6 +14,8 @@
 
 use std::collections::BTreeMap;
 
+use serde_json::Value;
+
 use oc_schema::config::ModelSelection;
 
 use crate::config::Loaded;
@@ -110,6 +112,12 @@ pub fn providers_from_config(loaded: &Loaded) -> ConfigProviders {
                                 // request body).
                                 headers: model.headers.clone(),
                                 body: model.body.clone(),
+                                // The model-level settings overlay beyond
+                                // baseURL (opencode.ts:277-280, the same
+                                // console/config fold): credential-stripped
+                                // (withoutCredentials, opencode.ts:547-551);
+                                // baseURL is consumed by the endpoint ladder.
+                                settings: model.settings.as_ref().map(model_overlay_settings),
                                 ..CustomModel::default()
                             })
                             .collect()
@@ -145,8 +153,29 @@ pub fn providers_from_config(loaded: &Loaded) -> ConfigProviders {
     out
 }
 
-/// Whether this document set contributes any provider binding (an empty
-/// overlay needs no wrapper — the engine-level resolver already covers
+/// Map a config `models.<id>.settings` record onto the model settings
+/// carried to binding: drop the credential keys (withoutCredentials,
+/// opencode.ts:547-551), the endpoint keys (consumed by the baseURL
+/// ladder, opencode.ts:276), and null values.
+fn model_overlay_settings(
+    settings: &oc_schema::config::provider::ModelSettings,
+) -> oc_schema::model::Settings {
+    const CREDENTIAL_KEYS: &[&str] = &["accessToken", "apiKey", "authToken"];
+    let rest = settings
+        .rest
+        .iter()
+        .filter(|(key, value)| {
+            value.is_some()
+                && !CREDENTIAL_KEYS.contains(&key.as_str())
+                && key.as_str() != "baseURL"
+                && key.as_str() != "base_url"
+        })
+        .map(|(key, value)| (key.clone(), value.clone().unwrap_or(Value::Null)))
+        .collect();
+    oc_schema::model::Settings { compaction: settings.compaction.clone(), rest }
+}
+
+/// Whether this document set contributes any provider binding (an empty/// overlay needs no wrapper — the engine-level resolver already covers
 /// the location).
 #[must_use]
 pub fn is_empty(providers: &ConfigProviders) -> bool {
@@ -229,7 +258,12 @@ mod tests {
                         "models": {
                             "acme-large": {
                                 "body": { "temperature": 0 },
-                                "headers": { "X-Tier": "gold" }
+                                "headers": { "X-Tier": "gold" },
+                                "settings": {
+                                    "reasoningEffort": "high",
+                                    "apiKey": "cfg-secret",
+                                    "fetch": true
+                                }
                             },
                             "acme-small": {}
                         }
@@ -257,6 +291,17 @@ mod tests {
         assert_eq!(large.headers.as_ref().and_then(|h| h.get("X-Tier")), Some(&"gold".to_string()));
         let small = acme.models.iter().find(|m| m.id == "acme-small").expect("small present");
         assert!(small.body.is_none() && small.headers.is_none());
+        // F1: model settings project credential-stripped, Core-consumed
+        // keys and the endpoint keys dropped at the overlay seam
+        // (opencode.ts:277-280 + 547-551).
+        assert!(small.settings.is_none(), "no settings entry stays None");
+        let rest = large.settings.as_ref().expect("settings captured").rest.clone();
+        assert_eq!(rest.get("reasoningEffort"), Some(&serde_json::json!("high")));
+        assert!(!rest.contains_key("apiKey"), "credentials stripped");
+        // Core keys survive the projection seam and are stripped at BIND
+        // (provider.ts:141-151 nativeSettings) — mirrored by the facade
+        // native_settings test.
+        assert_eq!(rest.get("fetch"), Some(&serde_json::json!(true)));
     }
 
     #[test]

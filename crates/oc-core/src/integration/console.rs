@@ -389,6 +389,14 @@ pub fn to_custom_providers(config: &ConsoleConfig) -> Vec<CustomProvider> {
                                             .collect()
                                     })
                                     .unwrap_or_default(),
+                                // The model-level settings overlay beyond
+                                // baseURL (opencode.ts:277-280): carried
+                                // credential-stripped (withoutCredentials,
+                                // opencode.ts:279) — the binding lanes feed
+                                // it into native provider options.
+                                settings: (!model_settings.is_null())
+                                    .then(|| serde_json::from_value(model_settings.clone()).ok())
+                                    .flatten(),
                                 // The per-model baseURL overlay (opencode.ts:
                                 // 276-279) — outranks the provider's at bind.
                                 base_url: model_settings
