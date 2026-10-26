@@ -1,0 +1,10 @@
+                          
+  a-very-longctrl+c exitt 
+                          
+  Usage statistics        
+  sessions: xxxxxxxxxxxxx 
+  plugins: 3              
+  a fourth row the 10-row 
+                          
+                          
+                          

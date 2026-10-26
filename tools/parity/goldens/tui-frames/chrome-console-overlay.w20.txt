@@ -1,0 +1,12 @@
+┌─ console ────────┐
+│line 30: renderer │
+│line 31: renderer │
+│line 32: renderer │
+│line 33: renderer │
+│line 34: renderer │
+│line 35: renderer │
+│line 36: renderer │
+│line 37: renderer │
+│line 38: renderer │
+│clipyyyyyyyyyyyyyy│
+└──────────────────┘

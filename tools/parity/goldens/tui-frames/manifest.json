@@ -1458,6 +1458,280 @@
      }
     }
    ]
+  },
+  {
+   "id": "chrome-console-overlay",
+   "source": "lane R1 retirement followup (oracle gate F1): in-house regression pin, no bun-side reference dump",
+   "description": "Renderer console overlay solid frame: the 40-line ring clamps at 12 rows, a 201-char line pins the per-width clip, six widths",
+   "componentClass": "chrome",
+   "class": "tier-a",
+   "comparisonDepth": "truecolor-canonical",
+   "variants": [
+    {
+     "width": 20,
+     "height": 12,
+     "rows": 12,
+     "cols": 20,
+     "txt": {
+      "bytes": 354,
+      "sha256": "c9ad7762c16d2c0c89bf1ac2d7c3dc97699dad8dcacb268308a9b9978289b48b"
+     },
+     "ansi": {
+      "bytes": 1170,
+      "sha256": "d0ab57e7229e3e06fdd14ff186c588e743a8506c56c649ac7a30af148752e369"
+     }
+    },
+    {
+     "width": 40,
+     "height": 12,
+     "rows": 12,
+     "cols": 40,
+     "txt": {
+      "bytes": 674,
+      "sha256": "b4e5fb059fc5693161adaac0a2794d15aab87c8ef67cf89eecb9e3890fef9184"
+     },
+     "ansi": {
+      "bytes": 1580,
+      "sha256": "d8f02c1b7057c94606d7ce19b20ae931112caf1c76eae7a0ede4c50552842070"
+     }
+    },
+    {
+     "width": 60,
+     "height": 12,
+     "rows": 12,
+     "cols": 60,
+     "txt": {
+      "bytes": 994,
+      "sha256": "639202872463c84fddd049bbc7ec13f6bbf799d98c61d6bf8afe547042cbc961"
+     },
+     "ansi": {
+      "bytes": 1900,
+      "sha256": "341bdd8607850253afa7dd0ac3fc500228eb45c76300347b15a08a48d2e7418e"
+     }
+    },
+    {
+     "width": 80,
+     "height": 12,
+     "rows": 12,
+     "cols": 80,
+     "txt": {
+      "bytes": 1314,
+      "sha256": "01612a4f28f4d6ad5e73dea6581b80a0220045838c3738fe225795fa5825f4ac"
+     },
+     "ansi": {
+      "bytes": 2220,
+      "sha256": "bb433e988b67882c556c242e6684c6307809ce033895962d78414338c788f61d"
+     }
+    },
+    {
+     "width": 120,
+     "height": 12,
+     "rows": 12,
+     "cols": 120,
+     "txt": {
+      "bytes": 1954,
+      "sha256": "735f956bc36400ef3b39d323164da9e7c517b29d81060d57a9a19929d948ba82"
+     },
+     "ansi": {
+      "bytes": 2860,
+      "sha256": "b38edecb2703d138ec33a68af522afb907a66501e4dde35b6b12eefc768ae460"
+     }
+    },
+    {
+     "width": 200,
+     "height": 12,
+     "rows": 12,
+     "cols": 200,
+     "txt": {
+      "bytes": 3234,
+      "sha256": "d65547d83151e8fac0da22e0ce7d8c9da972e2c81235a7e9248717471a1ca94d"
+     },
+     "ansi": {
+      "bytes": 4140,
+      "sha256": "cf278f0b5fbabc6a6b2442b5c3262a5780841a4c94daaceda2e7ed14b6e78890"
+     }
+    }
+   ]
+  },
+  {
+   "id": "chrome-plugin-page",
+   "source": "lane R1 retirement followup (oracle gate F1): in-house regression pin, no bun-side reference dump",
+   "description": "Plugin route page solid frame: overflowing title vs the right-aligned ctrl+c exit hint, body-row clips, four widths incl. the hint-suppression bound",
+   "componentClass": "chrome",
+   "class": "tier-a",
+   "comparisonDepth": "truecolor-canonical",
+   "variants": [
+    {
+     "width": 26,
+     "height": 10,
+     "rows": 10,
+     "cols": 26,
+     "txt": {
+      "bytes": 270,
+      "sha256": "ce86aaf663167a9b11f064328ac2d1edb99dd9efec4d688a15d9ba4c6d9dcc42"
+     },
+     "ansi": {
+      "bytes": 488,
+      "sha256": "0abe79bfb505792fc4b6a290fe9f7efa657d17052cb5fc007535b95ba68b2293"
+     }
+    },
+    {
+     "width": 40,
+     "height": 10,
+     "rows": 10,
+     "cols": 40,
+     "txt": {
+      "bytes": 410,
+      "sha256": "c27a53438ad88723546189c00c01c112d219309b39909446aebc561ef0c80e96"
+     },
+     "ansi": {
+      "bytes": 628,
+      "sha256": "0b7617ffbea0c1ec4095909ae7a8cadafaec3281645282367615cb82aad573f5"
+     }
+    },
+    {
+     "width": 80,
+     "height": 10,
+     "rows": 10,
+     "cols": 80,
+     "txt": {
+      "bytes": 810,
+      "sha256": "de9e2605845d48be86fe2c2933cdf23c0bb5ccfbebfb9e7e82205df81ceffcc8"
+     },
+     "ansi": {
+      "bytes": 1014,
+      "sha256": "120d51155684858933fe1b7f5a898aa8e109305b4774bf91b92d986469afb640"
+     }
+    },
+    {
+     "width": 120,
+     "height": 10,
+     "rows": 10,
+     "cols": 120,
+     "txt": {
+      "bytes": 1210,
+      "sha256": "8331dd6ea5a4d67efd3c0f04891a0e36e807304232d827f0b2681c8c82197911"
+     },
+     "ansi": {
+      "bytes": 1414,
+      "sha256": "a4015fe5232d04f7b9945d6c0af458985d5b705cea2833a0e3f34e4877618093"
+     }
+    }
+   ]
+  },
+  {
+   "id": "chrome-plugin-route-missing",
+   "source": "lane R1 retirement followup (oracle gate F1): in-house regression pin, no bun-side reference dump",
+   "description": "Unregistered plugin route fallback solid frame: centered warning line + the reverse-video go home button band",
+   "componentClass": "chrome",
+   "class": "tier-a",
+   "comparisonDepth": "truecolor-canonical",
+   "variants": [
+    {
+     "width": 40,
+     "height": 24,
+     "rows": 24,
+     "cols": 40,
+     "txt": {
+      "bytes": 984,
+      "sha256": "ff323466e535acc4fc5bd331489a954510021d6dcf8c18946035f1d1fe7d7d6e"
+     },
+     "ansi": {
+      "bytes": 1074,
+      "sha256": "3f2c90c5255346fbd613061c9e17b407c35ffaf50fc518fc3269d5c98a931b64"
+     }
+    },
+    {
+     "width": 80,
+     "height": 24,
+     "rows": 24,
+     "cols": 80,
+     "txt": {
+      "bytes": 1944,
+      "sha256": "0fa043b5d92e886960ea29552205af8148dcc42689ca12fa820fb51bca738144"
+     },
+     "ansi": {
+      "bytes": 2034,
+      "sha256": "5c9e1b3a5f7c5fcd345936a0bd655bb186dd75dd59f1e5de06a70ecc4039a190"
+     }
+    }
+   ]
+  },
+  {
+   "id": "chrome-devtools-bar-server",
+   "source": "lane R1 retirement followup (oracle gate F1): in-house regression pin, no bun-side reference dump",
+   "description": "Devtools bar solid row, server panel (fresh store: sse/models/providers counts) - the full-width muted-on-raised chunk",
+   "componentClass": "chrome",
+   "class": "tier-a",
+   "comparisonDepth": "truecolor-canonical",
+   "variants": [
+    {
+     "width": 80,
+     "height": 1,
+     "rows": 1,
+     "cols": 80,
+     "txt": {
+      "bytes": 81,
+      "sha256": "466e050e6fd4ecf641fee0cbe165aea8bb752800fbca2c4f53b155b7c3bd291f"
+     },
+     "ansi": {
+      "bytes": 120,
+      "sha256": "2489089977adde05a0a5a9c0f47d5a89e1b8a8149ef5cf8a93ffdc9fe4b0bc86"
+     }
+    },
+    {
+     "width": 120,
+     "height": 1,
+     "rows": 1,
+     "cols": 120,
+     "txt": {
+      "bytes": 121,
+      "sha256": "c8ed73e01b69817f34d469b5a2224d03c6c474b57d4e219d96fe5ac6e63a20fc"
+     },
+     "ansi": {
+      "bytes": 160,
+      "sha256": "40a88a01a165666bb5be8b2be1766d75ac9abac03a61b8370cf426d451658e6e"
+     }
+    }
+   ]
+  },
+  {
+   "id": "chrome-devtools-bar-theme",
+   "source": "lane R1 retirement followup (oracle gate F1): in-house regression pin, no bun-side reference dump",
+   "description": "Devtools bar solid row, theme panel (v2-dark theme name + accent/bg hex)",
+   "componentClass": "chrome",
+   "class": "tier-a",
+   "comparisonDepth": "truecolor-canonical",
+   "variants": [
+    {
+     "width": 80,
+     "height": 1,
+     "rows": 1,
+     "cols": 80,
+     "txt": {
+      "bytes": 81,
+      "sha256": "8408a802b3908428999cac8c96a1694d7604ec6476a2a24faaab392d602c2ed1"
+     },
+     "ansi": {
+      "bytes": 120,
+      "sha256": "094a3fb09339dc4ece85de836871217c825e6fcedbf65ab898a84d171ea91411"
+     }
+    },
+    {
+     "width": 120,
+     "height": 1,
+     "rows": 1,
+     "cols": 120,
+     "txt": {
+      "bytes": 121,
+      "sha256": "607473853b3b1cd661748a47db472e645293565efb070b34664f5b7207c3e409"
+     },
+     "ansi": {
+      "bytes": 160,
+      "sha256": "53f458b8fe4d5a41e64192fd6bcde70d7ed9a36d0b71398189bcf85717abc3f4"
+     }
+    }
+   ]
   }
  ],
  "replay": [

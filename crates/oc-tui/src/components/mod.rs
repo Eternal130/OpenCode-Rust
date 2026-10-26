@@ -7,6 +7,8 @@
 //! 7.2 wave-2 assembly surfaces (sidebar pane, session route, VCS
 //! diff viewer).
 
+#[cfg(test)]
+mod chrome_golden_tests;
 pub mod chrome_solid;
 pub mod command_palette;
 pub mod composer;
