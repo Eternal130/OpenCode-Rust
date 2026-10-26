@@ -176,6 +176,13 @@ pub struct CustomModel {
     pub cost: Option<Vec<oc_schema::model::Cost>>,
     /// `models.<id>.limit` — per-field override (opencode.ts:305).
     pub limit: Option<PartialModelLimit>,
+    /// `models.<id>.settings` (config/provider.ts:120; console
+    /// opencode.ts:277-280) — the model-level settings overlay beyond
+    /// `baseURL`, credential-stripped at projection
+    /// (`withoutCredentials(config.settings)`, opencode.ts:279). The
+    /// binding lanes feed it into native provider options via
+    /// `native_settings` (CORE_KEYS strip at bind, provider.ts:141-151).
+    pub settings: Option<oc_schema::model::Settings>,
     /// The model-level `settings.baseURL` overlay (opencode.ts:276-279):
     /// outranks the provider-level endpoint at bind.
     pub base_url: Option<String>,
@@ -873,6 +880,22 @@ fn native_settings(rest: &BTreeMap<String, Value>) -> serde_json::Map<String, Va
         .collect()
 }
 
+/// The custom model's settings record reaching native provider options
+/// (opencode.ts:277-280 `model.settings = mergeOverlay(...,
+/// withoutCredentials(config.settings))` fed to the package at
+/// model-resolver.ts:220-226): credential-stripped at projection,
+/// CORE_KEYS-stripped here; `baseURL` is consumed by the endpoint
+/// precedence ladder and never re-rides the options (opencode.ts:276
+/// deletes it from the base when superseded).
+fn custom_provider_options(model: &CustomModel) -> Option<serde_json::Map<String, Value>> {
+    let rest = model.settings.as_ref().map(|settings| &settings.rest)?;
+    let options = native_settings(rest)
+        .into_iter()
+        .filter(|(key, _)| key != "baseURL" && key != "base_url")
+        .collect::<serde_json::Map<String, Value>>();
+    (!options.is_empty()).then_some(options)
+}
+
 /// Bind a user-defined custom provider (config `provider.<id>` /
 /// console-issued provider). When the binding package — the MODEL-level
 /// `package` first, else the PROVIDER-level one (provider.ts:351
@@ -944,6 +967,7 @@ pub fn custom_language_model(
                 }),
                 defaults: RouteDefaults {
                     headers: headers.clone(),
+                    provider_options: custom_provider_options(model),
                     http: (http != HttpOptions::default()).then_some(http),
                     ..Default::default()
                 },
@@ -968,11 +992,26 @@ fn custom_native_language_model(
     specifier: &str,
     base_url: &str,
 ) -> Result<LanguageModel, ProviderError> {
-    let package = native::resolve_specifier(specifier, &custom.id, Some(&model.id), None)
-        .ok_or_else(|| ProviderError::UnsupportedProtocol {
-            provider: custom.id.clone(),
-            package: specifier.to_string(),
-        })?;
+    // `useCompletionUrls === true` switches the azure package to the
+    // chat lane exactly like the completions shape does
+    // (aisdk-native.ts:126-127 azureChat, :44-45).
+    let use_completion_urls = model
+        .settings
+        .as_ref()
+        .and_then(|settings| settings.rest.get("useCompletionUrls"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let package = native::resolve_specifier(
+        specifier,
+        &custom.id,
+        Some(&model.id),
+        None,
+        use_completion_urls,
+    )
+    .ok_or_else(|| ProviderError::UnsupportedProtocol {
+        provider: custom.id.clone(),
+        package: specifier.to_string(),
+    })?;
     let family = family_of(&package).ok_or_else(|| ProviderError::UnsupportedProtocol {
         provider: custom.id.clone(),
         package: package.clone(),
@@ -1049,6 +1088,7 @@ fn custom_native_language_model(
     let route = route.with(RoutePatch {
         defaults: RouteDefaults {
             headers: headers.clone(),
+            provider_options: custom_provider_options(model),
             http: (http != HttpOptions::default()).then_some(http),
             ..Default::default()
         },
@@ -1988,5 +2028,116 @@ mod tests {
             Some(ProtocolFamily::OpenAIResponses),
             "openai/responses.ts:1 re-exports the responses model"
         );
+    }
+
+    // =========================================================================
+    // Model settings beyond baseURL (F1) + azure useCompletionUrls (F2)
+    // =========================================================================
+
+    fn settings_model(rest: &[(&str, Value)]) -> CustomModel {
+        CustomModel {
+            id: "my-model".into(),
+            settings: Some(oc_schema::model::Settings {
+                compaction: None,
+                rest: rest.iter().map(|(key, value)| (key.to_string(), value.clone())).collect(),
+            }),
+            ..CustomModel::default()
+        }
+    }
+
+    /// F1: `models.<id>.settings` beyond baseURL reach native provider
+    /// options in BOTH custom lanes (opencode.ts:277-280 →
+    /// model-resolver.ts:220-226), credential-stripped
+    /// (withoutCredentials, opencode.ts:547-551) and CORE_KEYS-stripped
+    /// at bind (provider.ts:141-151); baseURL never re-rides the options
+    /// (consumed by the endpoint ladder, opencode.ts:276).
+    #[test]
+    fn provider_facade_custom_settings_reach_provider_options_both_lanes() {
+        let context = context();
+        let rest = vec![
+            ("reasoningEffort", serde_json::json!("high")),
+            ("temperature", serde_json::json!(0.2)),
+            ("useCompletionUrls", serde_json::json!(false)),
+            ("apiKey", serde_json::json!("s3cret")),
+            ("authToken", serde_json::json!("tok")),
+            ("accessToken", serde_json::json!("acc")),
+            ("fetch", serde_json::json!(true)),
+            ("compaction", serde_json::json!("drop")),
+            ("timeout", serde_json::json!(1000)),
+            ("baseURL", serde_json::json!("https://ignored.test/v1")),
+        ];
+        let expected = serde_json::Map::from_iter([
+            ("reasoningEffort".to_string(), serde_json::json!("high")),
+            ("temperature".to_string(), serde_json::json!(0.2)),
+            ("useCompletionUrls".to_string(), serde_json::json!(false)),
+        ]);
+
+        // native lane
+        let custom = CustomProvider {
+            id: "myai".into(),
+            name: "My AI".into(),
+            package: Some("@opencode/ai/providers/anthropic".into()),
+            models: vec![settings_model(&rest)],
+            ..CustomProvider::default()
+        };
+        let model = custom_language_model(&context, &custom, "my-model").expect("binds");
+        assert!(model.route.id.contains("anthropic-messages"));
+        assert_eq!(
+            Arc::clone(&model.route).defaults.provider_options,
+            Some(expected.clone()),
+            "native lane: settings reach provider options stripped"
+        );
+
+        // openai-compatible fallback lane
+        let custom = CustomProvider {
+            id: "acme".into(),
+            name: "Acme".into(),
+            base_url: "https://api.acme.test/v1".into(),
+            models: vec![settings_model(&rest)],
+            ..CustomProvider::default()
+        };
+        let model = custom_language_model(&context, &custom, "my-model").expect("binds");
+        assert_eq!(model.route.id, "openai-compatible-chat");
+        assert_eq!(
+            Arc::clone(&model.route).defaults.provider_options,
+            Some(expected),
+            "fallback lane: settings reach provider options stripped"
+        );
+    }
+
+    /// F2: `useCompletionUrls: true` switches the azure package to the
+    /// chat-completions URL lane exactly like the completions shape
+    /// (aisdk-native.ts:126-127 azureChat — shape OR settings — :44-45).
+    #[test]
+    fn provider_facade_custom_azure_use_completion_urls_switches_lane() {
+        let context = context();
+        let base = "https://res.openai.azure.com/openai";
+        let wire_url = |settings: &[(&str, Value)]| {
+            let custom = CustomProvider {
+                id: "azureish".into(),
+                name: "Azure".into(),
+                base_url: base.into(),
+                api_key: Some("azure-key".into()),
+                package: Some("@ai-sdk/azure".into()),
+                models: vec![settings_model(settings)],
+                ..CustomProvider::default()
+            };
+            let model = custom_language_model(&context, &custom, "my-model").expect("binds");
+            let route = Arc::clone(&model.route);
+            let mut request = oc_ai::schema::LLMRequest::new(model);
+            request.messages = vec![oc_ai::schema::Message::user("hi")];
+            let prepared = route.prepare_request(&request);
+            let body = route.build_body(&prepared).expect("body");
+            let (transport_request, _) = route.prepare_transport(&prepared, &body).expect("wire");
+            (route.id.clone(), transport_request.url.clone())
+        };
+        // default: the responses package → /responses URLs
+        let (id, url) = wire_url(&[]);
+        assert_eq!(id, "openai-responses");
+        assert!(url.ends_with("/responses"), "{url}");
+        // useCompletionUrls: true → azure/chat package → /chat/completions
+        let (id, url) = wire_url(&[("useCompletionUrls", serde_json::json!(true))]);
+        assert_eq!(id, "openai-chat", "the settings arm switched the package");
+        assert!(url.ends_with("/chat/completions"), "{url}");
     }
 }

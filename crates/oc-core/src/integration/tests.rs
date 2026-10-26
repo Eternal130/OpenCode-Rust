@@ -1951,7 +1951,14 @@ async fn console_config_fetch_and_provider_projection() {
                     "settings": { "baseURL": "https://gw.acme.test/v1", "apiKey": "secret-never" },
                     "headers": { "x-acme-team": "platform" },
                     "models": {
-                        "acme-large": { "name": "Acme Large" },
+                        "acme-large": {
+                            "name": "Acme Large",
+                            "settings": {
+                                "baseURL": "https://model.acme.test/v1",
+                                "reasoningEffort": "high",
+                                "apiKey": "model-secret-never"
+                            }
+                        },
                         "acme-hidden": { "name": "Hidden", "disabled": true }
                     }
                 }
@@ -1985,6 +1992,16 @@ async fn console_config_fetch_and_provider_projection() {
     assert_eq!(provider.models.len(), 1);
     assert_eq!(provider.models[0].id, "acme-large");
     assert_eq!(provider.models[0].name.as_deref(), Some("Acme Large"));
+    // F1: model settings beyond baseURL project credential-stripped
+    // (opencode.ts:277-280 withoutCredentials(config.settings)); the
+    // baseURL overlay rides its own field.
+    let model = &provider.models[0];
+    assert_eq!(model.base_url.as_deref(), Some("https://model.acme.test/v1"));
+    let rest = model.settings.as_ref().expect("settings projected").rest.clone();
+    assert_eq!(rest.get("reasoningEffort"), Some(&serde_json::json!("high")));
+    assert!(!rest.contains_key("apiKey"), "credentials never ride model settings");
+    // Credentials never ride provider settings (withoutCredentials).
+    assert!(provider.body.is_none());
     // Request shape: bearer + org header against the metadata server.
     let requests = mock.requests().join("\n").to_ascii_lowercase();
     assert!(requests.contains("authorization: bearer console-access"), "{requests}");
