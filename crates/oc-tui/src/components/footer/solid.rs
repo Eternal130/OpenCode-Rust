@@ -22,8 +22,9 @@
 //!   hand-rolled path for the whole frame — the footer palette is
 //!   all-RGB (`FooterTheme::from_resolved`), so the fallback is
 //!   defensive only.
-//! * **Flag**: `OC_FOOTER_OPENTUI` (`0` = hand-rolled, the default
-//!   until this lane's rig proof; read once per process at first
+//! * **Flag**: `OC_FOOTER_OPENTUI` — default ON since 6b61aca (the
+//!   R2 parity proof); `=0` forces the hand-rolled path during the
+//!   one-release probation window (read once per process at first
 //!   paint — the M1 protocol).
 //!
 //! Parity: every `*_canvas` builder in the family has a cell-for-cell
@@ -48,10 +49,9 @@ use crate::components::session_tabs_solid::frame_from_buffer;
 use crate::render::{CellColor, Frame};
 
 /// `OC_FOOTER_OPENTUI` — read once per process (the M1 protocol: a
-/// running session never switches renderers). Default ON since the
-/// R2 parity proof (9 footer goldens + 64 PTY tests green under the
-/// solid path, worst-frame 0.61 ms vs the 10 ms gate); `=0` forces
-/// the hand-rolled path during the one-release probation window.
+/// running session never switches renderers). Default ON since
+/// commit 6b61aca (the R2 parity proof); `=0` forces the hand-rolled
+/// path during the one-release probation window.
 fn solid_enabled() -> bool {
     static FLAG: OnceLock<bool> = OnceLock::new();
     *FLAG.get_or_init(|| std::env::var("OC_FOOTER_OPENTUI").map(|value| value.trim() != "0").unwrap_or(true))
