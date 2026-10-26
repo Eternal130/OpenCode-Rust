@@ -1,6 +1,7 @@
 # G-11 framework convergence — disposition ledger
 
-State: 2026-10-24, lane P3-DIFF (worktree `p3-diff`). Source recon:
+State: 2026-10-24, lane P3-DIFF (worktree `p3-diff`); rendering-stack
+section superseded 2026-10-26 by lane R0 (see below). Source recon:
 `.slim/deepwork/g-series/topic-tui-recon.md` § "G-11 framework
 convergence".
 
@@ -48,8 +49,10 @@ means bumping the git rev in the workspace `Cargo.toml` and letting
   into `Placed`/`Fill` ratatui rows, golden-pinned bytes);
   opentui's `LineNumberRenderable` is a taffy-layout renderable with
   its own width/sign model. Not trivially lossless under the
-  byte-identical bar — revisit only if oc-tui adopts the opentui
-  rendering pipeline (see `terminal_pane` below).
+  byte-identical bar — pending the R3 byte-parity spike
+  (`LineNumberRenderable` vs the pinned gutter bytes); if the spike
+  fails, line_number joins terminal_pane as a permanent local keep
+  (see "Rendering-stack migration" below).
 
 Adapter-contract test:
 `diff_viewer::tests::diff_model_agrees_with_opentui_parse_patch`
@@ -61,8 +64,8 @@ models together.
 
 | Pair | Blocker | Unblock condition |
 | --- | --- | --- |
-| **syntax** | oc-syntax: 16 + 4 languages (vendored grammars + `.scm` queries) emitting ratatui `Style` spans; opentui-rust `TreeSitterClient`: 5 languages emitting `StyledText`. **Correction (2026-10-25, user)**: opentui (TS upstream) ALSO carries only ~5 languages — the ref TUI's full language experience comes from its own runtime `.wasm` download system (parsers-config.ts), not from opentui core. So this is not "opentui-rust lagging opentui"; the 20-language catalog is this port's own advantage. Convergence would still be a language-catalog AND output-type regression. | Converge when an upstream (either) carries the language catalog AND a ratatui-compatible span output (or oc-tui's rendering migrates to opentui buffers — see "Rendering-stack migration" below). |
-| **terminal_pane** | **Correction (2026-10-25, user)**: terminal_pane is NOT an opentui feature at all — opentui (TS) has no terminal pane, so opentui-rust has nothing to port and never will. oc-tui's 468 LOC pane is protocol/plumbing unique to this port. | **Permanent local keep.** There is no upstream counterpart to converge to; embedded_terminal (opentui-rust's VT engine) is a different layer and only becomes relevant under the rendering-stack migration below. |
+| **syntax** | oc-syntax: 16 + 4 languages (vendored grammars + `.scm` queries) emitting ratatui `Style` spans; opentui-rust `TreeSitterClient`: 5 languages emitting `StyledText`. **Correction (2026-10-25, user)**: opentui (TS upstream) ALSO carries only ~5 languages — the ref TUI's full language experience comes from its own runtime `.wasm` download system (parsers-config.ts), not from opentui core. So this is not "opentui-rust lagging opentui"; the 20-language catalog is this port's own advantage. Convergence would still be a language-catalog AND output-type regression. | Converge when an upstream (either) carries the language catalog AND a ratatui-compatible span output. (The 2026-10-26 R0 correction removed "or oc-tui's rendering migrates to opentui buffers" — the hybrid rendering stack is now the declared target, not a precondition; see the section below.) |
+| **terminal_pane** | **Correction (2026-10-25, user)**: terminal_pane is NOT an opentui feature at all — opentui (TS) has no terminal pane, so opentui-rust has nothing to port and never will. oc-tui's 468 LOC pane is protocol/plumbing unique to this port. | **Permanent local keep.** There is no upstream counterpart to converge to; embedded_terminal (opentui-rust's VT engine) is a different layer and stays irrelevant to pane rendering (the hybrid rendering stack is the declared target — R0, 2026-10-26). |
 
 ## Unblocked upstream, pending in-repo convergence
 
@@ -70,23 +73,62 @@ models together.
 | --- | --- |
 | *(none — sound converged 2026-10-25, see the Converged table)* | |
 
-## Rendering-stack migration (ratatui → opentui) — recorded context
+## Rendering-stack migration (ratatui → opentui) — DECLARED TARGET (lane R0, 2026-10-26)
 
-oc-tui today renders its main path onto **ratatui** `Frame` cells; the
-opentui consumers in-tree are the experimental `*_solid.rs` path and
-`message/markdown.rs` (markdown/code/scrollbar/text/editor renderables).
-The remaining non-converged surfaces (syntax output type, line_number's
-taffy layout model, any render-side of terminal_pane) are all blocked on
-the same strategic decision: migrating oc-tui's rendering stack onto the
-opentui pipeline. That migration is **not scheduled** — it is the
-recorded direction for whenever convergence of those pairs is worth the
-golden-frame churn:
+**Status correction (2026-10-26, lane R0)**: this section previously
+recorded the migration as "not scheduled". That was stale — the
+strangler migration was already executed via lanes **M1–M6 + M-theme +
+M-engine** (see `docs/migration-m1-tabstrip.md`; every
+`OC_*_OPENTUI` selection flag is retired and the `*_solid.rs` trees
+are the only live renderers; the old ratatui painters were deleted
+after cell-for-cell parity gates). Full analysis:
+`.slim/deepwork/render-migration-assessment/oracle.md`.
 
-* full stack migration makes line_number and opentui renderables
-  first-class, unlocks embedded_terminal reuse for pane rendering;
-* until then, convergence stays at the lossless logic layer
-  (clipboard/paste-eval/diff-parse, done) and everything
-  rendering-coupled keeps a local implementation with golden pins;
-* upstream changes are consumed via git rev bumps only (pin rule above);
-  the ratatui dependency itself is not removed by any currently planned
-  work.
+The current **hybrid architecture is the TARGET, declared — not
+transitional debt**:
+
+```
+store → opentui-solid tree per surface → SolidRenderer.flush()
+  (taffy layout + raster) → OptimizedBuffer → frame_from_buffer
+  cell copy → oc-tui (ratatui) Frame → render/ansi.rs serializer → PTY
+```
+
+* ratatui stays as the compositor cell type / final Frame / diff
+  blitter; opentui is the per-surface raster; layout is taffy. The
+  goldens pin this in-house `render::Frame` vocabulary and are NOT to
+  be re-pinned for an upstream renderer.
+* Perf is inside budget (solid worst case 1.1×–6.7× per surface,
+  ≤ 5.0 ms absolute vs the 40 ms gate; re-check if a surface exceeds
+  ~10 ms worst).
+* Upstream changes are still consumed via git rev bumps only (pin
+  rule above); the ratatui dependency itself is not removed by any
+  planned work.
+
+### Remaining tail (phased; per-surface rollback is the point of the
+strangler)
+
+| Phase | Scope | Size | Kill criterion |
+| --- | --- | --- | --- |
+| R1 | overlay chrome (toast, console overlay, devtools, plugin_page, location_missing, migration_overlay, tab rail+tooltip) | S/M | any NEW divergence class in the rig unions → keep that surface hand-rolled |
+| R2 | footer forms family (`footer/*.rs`; extract the form/permission/menu STATE MODEL painter-agnostic first) | L | form-focus/keydown semantics can't stay store-side, or worst-frame budget > ~10 ms → a permanently hand-rolled footer family is an acceptable outcome |
+| R3 | diff_viewer — gated on a `LineNumberRenderable` byte-parity spike first (gutter sign/width model, `,0` hunk-start bumps); adopt only if byte-identical or the re-pin ≤ the diff golden set (~tens of fixtures) | M, gated | any diff rig corpus loses flag-symmetry → keep local |
+
+### Never migrate
+
+* `terminal_pane` — no upstream counterpart exists (the G-11
+  correction); permanent local keep.
+* `mini/*` — separate embedded runtime with its own loop.
+* markdown re-home to opentui-core's `MarkdownRenderable` — stays
+  deferred behind its own byte-parity lane (the M4 recorded decision;
+  two ports of the same upstream would fork the fallback contract),
+  or forever.
+* The final Frame / ANSI-serializer layer — ratatui stays as the
+  compositor cell target; removing it buys nothing and re-opens every
+  golden.
+
+Consequence for the blocked pairs above: **syntax** stays blocked on
+its own double precondition (language catalog AND span output) — the
+rendering-stack decision is no longer part of its blocker;
+**line_number** is no longer "blocked on the migration" but pending
+the R3 byte-parity spike, with a permanent local keep (like
+terminal_pane) as the recorded fallback.
