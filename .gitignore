@@ -13,3 +13,8 @@
 .vscode/
 .worktrees/
 .git-identity
+
+# Porting-process archives & runtime state (kept locally outside git)
+.superpowers/
+*.log
+tools/parity/tui-diff/cache/
