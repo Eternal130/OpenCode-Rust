@@ -28,9 +28,11 @@
 //!   `executeTool` wrapping).
 //!
 //! Divergences (documented, wave 4):
-//! * No `search`-over-inventory on the Rust side of the catalog — the
-//!   guest exposes the v2-ranked `search` builtin over the same entries
-//!   the catalog rendered (instructions stay faithful).
+//! * `search`-over-inventory IS available in the guest runtime: the
+//!   host renders each entry's ref-shaped `searchText` (names +
+//!   descriptions + input property names/descriptions,
+//!   [`search_text`]) and the guest runs the v2-ranked `search`
+//!   builtin (tokenize/termForms/rank, default limit 10) over it.
 //! * Nested results prefer the tool's declared structured output,
 //!   else the joined text of the content parts, else null (v2
 //!   codemode/tool.ts:101-106 via [`CodeModeLeaf::nested_value`]).
@@ -131,6 +133,11 @@ pub struct CatalogEntry {
     pub description: String,
     /// `toolExpression(path)(input): Promise<output>`.
     pub signature: String,
+    /// `toSearchEntry.searchText` (tool-runtime.ts:289-299): path +
+    /// description + input property names/descriptions, lowercased —
+    /// the lowest-tier match surface of the `search` builtin (our
+    /// namespaces carry no descriptions, exactly the v2 rows here).
+    pub search_text: String,
 }
 
 /// `qualifiedName` (codemode/tool.ts:296-300) over a registration.
@@ -141,6 +148,24 @@ pub fn qualified_path(registration: &ToolRegistration) -> String {
         Some(namespace) => format!("{namespace}.{normalized}"),
         None => normalized,
     }
+}
+
+/// `toSearchEntry.searchText` (tool-runtime.ts:289-299): path +
+/// description + input property names and their descriptions, joined
+/// with newlines and lowercased (the ref also folds namespace
+/// descriptions in — our namespaces carry none).
+#[must_use]
+pub fn search_text(path: &str, description: &str, input: &Value) -> String {
+    let mut parts = vec![path.to_string(), description.to_string()];
+    if let Some(properties) = input.get("properties").and_then(Value::as_object) {
+        for (name, property) in properties {
+            parts.push(name.clone());
+            if let Some(text) = property.get("description").and_then(Value::as_str) {
+                parts.push(text.to_string());
+            }
+        }
+    }
+    parts.join("\n").to_lowercase()
 }
 
 /// The code-mode half of a registry snapshot (permission filtering is
@@ -155,6 +180,7 @@ pub fn code_mode_entries(tools: &ToolRegistryState) -> Vec<CatalogEntry> {
             path: qualified_path(tool),
             description: tool.description.clone(),
             signature: signature(&qualified_path(tool), &tool.description, &tool.input),
+            search_text: search_text(&qualified_path(tool), &tool.description, &tool.input),
         })
         .collect()
 }
@@ -793,6 +819,8 @@ pub fn catalog_instructions(tools: &ToolRegistryState) -> String {
             hasher.update([0u8]);
             hasher.update(entry.signature.as_bytes());
             hasher.update([0u8]);
+            hasher.update(entry.search_text.as_bytes());
+            hasher.update([0u8]);
         }
         format!("{:x}", hasher.finalize())
     };
@@ -1380,6 +1408,7 @@ mod tests {
             path: path.to_string(),
             description: description.to_string(),
             signature: signature(path, description, &input),
+            search_text: search_text(path, description, &input),
         }
     }
 

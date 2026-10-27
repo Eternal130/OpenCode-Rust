@@ -174,11 +174,19 @@ impl Default for PluginHostConfig {
 /// One catalog entry handed to a Code Mode program (the wire shape of
 /// oc-core's `CatalogEntry` at the guest bridge).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CodeModeToolSpec {
     /// Qualified dotted path (`namespace.name`).
     pub path: String,
     pub description: String,
     pub signature: String,
+    /// The ref-shaped `searchText` (v2 `toSearchEntry`): path +
+    /// description + input property names/descriptions, lowercased —
+    /// the match surface of the guest's `search` builtin. Defaults
+    /// empty (older hosts) and the guest falls back to its local
+    /// approximation.
+    #[serde(default)]
+    pub search_text: String,
 }
 
 /// One observed tool call inside a Code Mode program (v2 `ExecuteCall`).
