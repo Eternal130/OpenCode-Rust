@@ -106,6 +106,34 @@ const CONFIG_CASCADE_LATER: &[&str] = &[
 /// Poll cadence for the config watcher.
 const POLL: Duration = Duration::from_millis(250);
 
+/// Every event type the announcer can publish inline — the exhaustive
+/// publish-side inventory used by the F3 drift guard in
+/// [`crate::event_manifest`]: every type passed to `publish_empty`
+/// (service frames, config cascades, `location.shutdown`,
+/// `config.updated`, `skill.updated`) plus the typed project /
+/// installation / watcher publishes. A future inline publish whose type
+/// is missing here (or unclassified in the manifest) fails the guard.
+#[cfg(test)]
+pub(crate) fn inline_published_types() -> Vec<&'static str> {
+    let mut set: Vec<&'static str> = Vec::new();
+    set.extend(SERVICE_FRAMES.iter().copied());
+    set.extend(CONFIG_CASCADE_FIRST.iter().copied());
+    set.extend(CONFIG_CASCADE_LATER.iter().copied());
+    for type_ in [
+        "location.shutdown",
+        "config.updated",
+        "project.updated",
+        "skill.updated",
+        oc_core::bus::registry::FILESYSTEM_CHANGED,
+        oc_core::bus::registry::VCS_BRANCH_UPDATED,
+        oc_core::bus::registry::INSTALLATION_UPDATED,
+        oc_core::bus::registry::INSTALLATION_UPDATE_AVAILABLE,
+    ] {
+        set.push(type_);
+    }
+    set
+}
+
 /// Announcer state: tracked locations (info-read), announced assemblies,
 /// and config baselines.
 pub struct Announcer {
