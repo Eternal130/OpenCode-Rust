@@ -282,9 +282,9 @@ impl SessionTitle {
                 if seq == expected_sequence {
                     Ok(())
                 } else {
-                    Err(crate::database::error::DbError::Pragma(format!(
-                        "\u{0}title-changed\u{1}{session_id_owned}"
-                    )))
+                    Err(crate::database::error::DbError::SessionConflict(
+                        crate::database::error::SessionConflict::TitleChanged(session_id_owned),
+                    ))
                 }
             }));
             let data = serde_json::json!({
@@ -308,8 +308,9 @@ impl SessionTitle {
     fn is_title_changed(error: &crate::bus::BusError) -> bool {
         matches!(
             error,
-            crate::bus::BusError::Db(crate::database::error::DbError::Pragma(message))
-                if message.starts_with("\u{0}title-changed")
+            crate::bus::BusError::Db(crate::database::error::DbError::SessionConflict(
+                crate::database::error::SessionConflict::TitleChanged(_)
+            ))
         )
     }
 
