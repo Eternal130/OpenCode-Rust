@@ -53,6 +53,7 @@ impl CodeModeRuntime for HostCodeModeRuntime {
                 path: entry.path.clone(),
                 description: entry.description.clone(),
                 signature: entry.signature.clone(),
+                search_text: entry.search_text.clone(),
             })
             .collect();
         match self.host.codemode_evaluate_async(code, &specs, self.timeout).await {
@@ -371,10 +372,146 @@ fn plugin_tool_becomes_invisible_direct_and_runs_via_execute() {
             path: "greet".into(),
             description: String::new(),
             signature: String::new(),
+            search_text: String::new(),
         }],
         Duration::from_secs(5),
     );
     assert_eq!(after.expect("guest responsive after the timeout").value, Some(json!(2)));
+
+    host.shutdown();
+}
+
+/// RC-02 — the `search` builtin over the inventory mirrors ref
+/// semantics (tool-runtime.ts makeSearch): tokenized ranking over
+/// paths, descriptions, and input params; namespace scoping; the
+/// exact-path shortcut; the v2 default limit of 10 with paging.
+#[test]
+fn codemode_search_matches_names_descriptions_and_params() {
+    let sandbox = common::sandbox("codemode-search");
+    let entry = common::copy_fixture(&sandbox, "helloworld.ts");
+    let host = common::host_with(&[entry], &sandbox);
+    if !host.enabled() {
+        eprintln!("bun unavailable; skipping");
+        return;
+    }
+    assert!(host.wait_ready(Duration::from_secs(15)));
+
+    let spec = |path: &str, description: &str, params: &str| CodeModeToolSpec {
+        path: path.to_string(),
+        description: description.to_string(),
+        signature: format!("tools.{path}(input): Promise<void>"),
+        search_text: oc_core::tool::codemode::search_text(
+            path,
+            description,
+            &json!({ "type": "object", "properties": serde_json::from_str::<Value>(params).expect("params json") }),
+        ),
+    };
+    let catalog = vec![
+        spec("fs.read_file", "Read a file from disk", r#"{ "path": { "type": "string", "description": "The file path to read" } }"#),
+        spec("fs.write_file", "Write a file to disk", r#"{ "path": { "type": "string" } }"#),
+        spec("weather.forecast", "Tomorrow's umbrella outlook", r#"{ "city": { "type": "string", "description": "rain chance by city" } }"#),
+    ];
+
+    let run = |code: &str| {
+        host.codemode_evaluate(code, &catalog, Duration::from_secs(5))
+            .expect("evaluate")
+            .value
+            .expect("value")
+    };
+
+    // Name hits: exact path ranks first, returned as toolExpression.
+    let found = run(r#"return search({ query: "read_file" })"#);
+    assert_eq!(found.pointer("/items/0/path"), Some(&json!("tools.fs.read_file")));
+
+    // Description hits: "umbrella" appears only in a description.
+    let found = run(r#"return search({ query: "umbrella" })"#);
+    assert_eq!(found.pointer("/items/0/path"), Some(&json!("tools.weather.forecast")));
+
+    // Param hits: "rain chance" appears only inside a param description.
+    let found = run(r#"return search({ query: "rain chance" })"#);
+    assert_eq!(found.pointer("/items/0/path"), Some(&json!("tools.weather.forecast")));
+
+    // Namespace scoping bounds the ranked set (the v2 rank runs over
+    // the SCOPED entries — the port's original bug ranked globally).
+    let found = run(r#"return search({ query: "file", namespace: "weather" })"#);
+    assert_eq!(
+        found.pointer("/items"),
+        Some(&json!([])),
+        "weather scope has no 'file' matches even though fs.* do"
+    );
+
+    // The exact-path shortcut accepts the toolExpression form.
+    let found = run(r#"return search({ query: "tools.fs.read_file" })"#);
+    assert_eq!(found.pointer("/items/0/path"), Some(&json!("tools.fs.read_file")));
+    assert_eq!(found.get("remaining"), Some(&json!(0)));
+
+    host.shutdown();
+}
+
+/// RC-02 — large-inventory behavior: the v2 default limit of 10 with
+/// `remaining`/`next.offset` paging (the port previously defaulted to
+/// 25), and plural-form matching ("files" finds `read_file`).
+#[test]
+fn codemode_search_large_inventory_pages_at_ten() {
+    let sandbox = common::sandbox("codemode-search-large");
+    let entry = common::copy_fixture(&sandbox, "helloworld.ts");
+    let host = common::host_with(&[entry], &sandbox);
+    if !host.enabled() {
+        eprintln!("bun unavailable; skipping");
+        return;
+    }
+    assert!(host.wait_ready(Duration::from_secs(15)));
+
+    let catalog: Vec<CodeModeToolSpec> = (0..35)
+        .map(|index| {
+            let path = format!("bulk.item_{index:02}");
+            CodeModeToolSpec {
+                path: path.clone(),
+                description: "bulk entry".to_string(),
+                signature: format!("tools.{path}(input): Promise<void>"),
+                search_text: oc_core::tool::codemode::search_text(
+                    &path,
+                    "bulk entry",
+                    &json!({ "type": "object", "properties": {} }),
+                ),
+            }
+        })
+        .collect();
+
+    let page = host
+        .codemode_evaluate(r#"return search({ query: "bulk" })"#, &catalog, Duration::from_secs(5))
+        .expect("evaluate")
+        .value
+        .expect("value");
+    assert_eq!(page.pointer("/items").and_then(Value::as_array).map(Vec::len), Some(10));
+    assert_eq!(page.get("remaining"), Some(&json!(25)));
+    assert_eq!(page.pointer("/next/offset"), Some(&json!(10)));
+
+    // Page through: the last page is short and `next` settles null.
+    let tail = host
+        .codemode_evaluate(
+            r#"return search({ query: "bulk", offset: 30 })"#,
+            &catalog,
+            Duration::from_secs(5),
+        )
+        .expect("evaluate")
+        .value
+        .expect("value");
+    assert_eq!(tail.pointer("/items").and_then(Value::as_array).map(Vec::len), Some(5));
+    assert_eq!(tail.get("remaining"), Some(&json!(0)));
+    assert_eq!(tail.get("next"), Some(&json!(null)));
+
+    // Plural form ("items") matches the singular path segment
+    // (termForms' `s` stripping, tool-runtime.ts:199-204).
+    let plural = host
+        .codemode_evaluate(r#"return search({ query: "items" })"#, &catalog, Duration::from_secs(5))
+        .expect("evaluate")
+        .value
+        .expect("value");
+    assert!(
+        !plural.pointer("/items").and_then(Value::as_array).unwrap_or(&vec![]).is_empty(),
+        "plural 'items' matches 'item_00' paths"
+    );
 
     host.shutdown();
 }
