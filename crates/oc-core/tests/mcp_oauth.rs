@@ -53,6 +53,16 @@ struct StubState {
     code_challenge: Option<String>,
     /// Unauthenticated initialize probes answered with the challenge.
     challenged: usize,
+    /// DCR `POST /register` hits.
+    register_hits: usize,
+    /// Advertise `client_id_metadata_document_supported`.
+    cimd: bool,
+    /// Overrides for `token_endpoint_auth_methods_supported` (None =
+    /// omit the field entirely).
+    auth_methods: Option<Vec<String>>,
+    /// Drop `registration_endpoint` from the metadata (a CIMD-only
+    /// server with no open DCR).
+    omit_registration: bool,
 }
 
 struct Stub {
@@ -254,20 +264,29 @@ async fn serve(
             respond_json(stream, "200 OK", &json!({ "authorization_servers": [base] })).await;
         }
         ("GET", "/.well-known/oauth-authorization-server") => {
-            respond_json(
-                stream,
-                "200 OK",
-                &json!({
-                    "issuer": base,
-                    "authorization_endpoint": format!("{base}/authorize"),
-                    "token_endpoint": format!("{base}/token"),
-                    "registration_endpoint": format!("{base}/register"),
-                    "scopes_supported": ["mcp:stub"],
-                }),
-            )
-            .await;
+            let (cimd, auth_methods, omit_registration) = {
+                let state = state.lock();
+                (state.cimd, state.auth_methods.clone(), state.omit_registration)
+            };
+            let mut metadata = json!({
+                "issuer": base,
+                "authorization_endpoint": format!("{base}/authorize"),
+                "token_endpoint": format!("{base}/token"),
+                "scopes_supported": ["mcp:stub"],
+            });
+            if !omit_registration {
+                metadata["registration_endpoint"] = json!(format!("{base}/register"));
+            }
+            if cimd {
+                metadata["client_id_metadata_document_supported"] = json!(true);
+            }
+            if let Some(methods) = &auth_methods {
+                metadata["token_endpoint_auth_methods_supported"] = json!(methods);
+            }
+            respond_json(stream, "200 OK", &metadata).await;
         }
         ("POST", "/register") => {
+            state.lock().register_hits += 1;
             respond_json(stream, "200 OK", &json!({ "client_id": "stub-client" })).await;
         }
         ("GET", "/authorize") => {
@@ -701,4 +720,201 @@ async fn oauth_connect() {
     };
     assert_eq!(rotated.access, "stub-access-2", "the rotation was persisted");
     assert_eq!(rotated.refresh, "stub-refresh-2", "the refresh token rotated on the row");
+}
+
+// ---------------------------------------------------------------------------
+// RD-04 — CIMD (client_id_metadata_document_supported, oauth.ts:431-445)
+// ---------------------------------------------------------------------------
+
+/// Drives authorize → browser redirect → loopback callback → exchange,
+/// returning the resolved credential.
+async fn login(authorization: oauth::Authorization) -> CredentialValue {
+    let AuthMode::Auto(callback) = authorization.mode else {
+        panic!("the loopback flow is the auto mode");
+    };
+    let browser = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("browser client");
+    let response = browser.get(&authorization.url).send().await.expect("authorize GET");
+    assert_eq!(response.status(), 302, "the stub redirects to the loopback callback");
+    let redirect = response.headers()["location"].to_str().expect("location").to_owned();
+    let callback = tokio::spawn(callback);
+    let page = reqwest::Client::new().get(&redirect).send().await.expect("callback GET");
+    assert_eq!(page.status(), 200, "the callback page answers success");
+    callback.await.expect("callback task").expect("the exchange resolves")
+}
+
+/// A CIMD-advertised server: DCR is skipped (no `/register` hit), the
+/// client id IS the metadata-document URL (oauth.ts:431-445 + SDK 2.0.0
+/// `auth()`: `client_id: clientMetadataUrl`), and the login completes
+/// end to end without any registration request.
+#[tokio::test]
+async fn cimd_server_skips_dcr_and_uses_the_metadata_document_client_id() {
+    let stub = stub().await;
+    {
+        let mut state = stub.state.lock();
+        state.cimd = true;
+        state.auth_methods = Some(vec!["none".to_owned()]);
+        state.omit_registration = true; // CIMD-only server: no open DCR at all
+    }
+    let server_url = format!("{}/mcp", stub.base);
+    let authorization = oauth::authorize(oauth::AuthorizeInput {
+        name: "cimdstub".to_owned(),
+        config: remote(&server_url),
+        method_id: "mcp_cimd".to_owned(),
+        http: reqwest::Client::new(),
+    })
+    .await
+    .expect("the authorize flow builds without a registration endpoint");
+
+    assert!(
+        authorization
+            .url
+            .contains(&format!("client_id={}", urlencoding::encode(oauth::CLIENT_METADATA_URL)))
+            || authorization
+                .url
+                .contains("client_id=https%3A%2F%2Fopencode.ai%2Foauth%2Fopencode%2Fclient.json"),
+        "the authorization URL carries the metadata-document client_id: {}",
+        authorization.url
+    );
+
+    let credential = login(authorization).await;
+    let CredentialValue::OAuth(value) = &credential else { panic!("oauth credential") };
+    assert_eq!(value.access, "stub-access-1", "the CIMD login exchanged the code");
+
+    let state = stub.state.lock();
+    assert_eq!(state.register_hits, 0, "CIMD pre-selection skips dynamic client registration");
+    assert_eq!(
+        state.code_grants[0].1,
+        oauth::CLIENT_METADATA_URL,
+        "the token exchange named the metadata-document client_id"
+    );
+    // The credential row keeps the CIMD client so refresh presents it too.
+    let client = value.metadata.as_ref().unwrap().get("client").cloned().unwrap_or_default();
+    assert_eq!(client["client_id"], json!(oauth::CLIENT_METADATA_URL));
+}
+
+/// A DCR-only server (no CIMD flag) is unchanged: `/register` answers
+/// and the registered client exchanges the code (oauth.ts:438 "dcr").
+#[tokio::test]
+async fn dcr_only_server_still_registers() {
+    let stub = stub().await; // no cimd flags: plain DCR metadata
+    let server_url = format!("{}/mcp", stub.base);
+    let authorization = oauth::authorize(oauth::AuthorizeInput {
+        name: "dcrstub".to_owned(),
+        config: remote(&server_url),
+        method_id: "mcp_dcr".to_owned(),
+        http: reqwest::Client::new(),
+    })
+    .await
+    .expect("the authorize flow builds");
+
+    let credential = login(authorization).await;
+    let CredentialValue::OAuth(value) = &credential else { panic!("oauth credential") };
+    assert_eq!(value.access, "stub-access-1");
+    let state = stub.state.lock();
+    assert_eq!(state.register_hits, 1, "the DCR leg posted /register exactly once");
+    assert_eq!(state.code_grants[0].1, "stub-client");
+}
+
+/// CIMD advertised but the token endpoint does not accept public
+/// clients (`none` missing from `token_endpoint_auth_methods_supported`):
+/// the flow falls back to DCR (oauth.ts:435 gate).
+#[tokio::test]
+async fn cimd_without_public_client_falls_back_to_dcr() {
+    let stub = stub().await;
+    {
+        let mut state = stub.state.lock();
+        state.cimd = true;
+        state.auth_methods = Some(vec!["client_secret_post".to_owned()]);
+    }
+    let server_url = format!("{}/mcp", stub.base);
+    let authorization = oauth::authorize(oauth::AuthorizeInput {
+        name: "cimdconf".to_owned(),
+        config: remote(&server_url),
+        method_id: "mcp_cimd_conf".to_owned(),
+        http: reqwest::Client::new(),
+    })
+    .await
+    .expect("the authorize flow builds");
+
+    let credential = login(authorization).await;
+    let CredentialValue::OAuth(value) = &credential else { panic!("oauth credential") };
+    assert_eq!(value.access, "stub-access-1");
+    let state = stub.state.lock();
+    assert_eq!(state.register_hits, 1, "no `none` auth method: DCR runs instead of CIMD");
+    assert_eq!(state.code_grants[0].1, "stub-client");
+}
+
+/// Failure leg: a server that neither advertises usable CIMD nor
+/// publishes a registration endpoint cannot serve any client id — the
+/// flow fails with the v2-shaped registration error.
+#[tokio::test]
+async fn cimd_only_server_with_confined_redirect_uri_fails_without_dcr() {
+    let stub = stub().await;
+    {
+        let mut state = stub.state.lock();
+        state.cimd = true;
+        state.omit_registration = true;
+        // Public-client method missing → CIMD gate closed, DCR wanted,
+        // but the CIMD-only server publishes no registration endpoint.
+    }
+    let server_url = format!("{}/mcp", stub.base);
+    let error = oauth::authorize(oauth::AuthorizeInput {
+        name: "cimdfail".to_owned(),
+        config: remote(&server_url),
+        method_id: "mcp_cimd_fail".to_owned(),
+        http: reqwest::Client::new(),
+    })
+    .await
+    .err()
+    .expect("no CIMD pre-selection and no registration endpoint");
+    assert!(
+        error.contains("registration_endpoint"),
+        "the failure names the missing registration endpoint: {error}"
+    );
+    assert_eq!(stub.state.lock().register_hits, 0);
+}
+
+/// A configured `redirect_uri` disables CIMD pre-selection even when
+/// the server advertises it (oauth.ts:433 — the published metadata
+/// document only lists the loopback redirect).
+#[tokio::test]
+async fn configured_redirect_uri_disables_cimd() {
+    let stub = stub().await;
+    {
+        let mut state = stub.state.lock();
+        state.cimd = true;
+        state.auth_methods = Some(vec!["none".to_owned()]);
+        state.omit_registration = true;
+    }
+    let server_url = format!("{}/mcp", stub.base);
+    // Reserve a free port for the pinned redirect_uri (binding it is the
+    // flow's job; pointing at the stub's own port would be a different
+    // failure).
+    let reserved = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.expect("reserve");
+    let free_port = reserved.local_addr().expect("addr").port();
+    drop(reserved);
+    let mut config = remote(&server_url);
+    config.oauth = Some(oc_schema::mcp::OAuthValue::Config(oc_schema::mcp::OAuthConfig {
+        redirect_uri: Some(format!("http://127.0.0.1:{free_port}/cb")),
+        ..Default::default()
+    }));
+    let result = oauth::authorize(oauth::AuthorizeInput {
+        name: "cimdredir".to_owned(),
+        config,
+        method_id: "mcp_cimd_redir".to_owned(),
+        http: reqwest::Client::new(),
+    })
+    .await;
+    // The pinned redirect forces DCR, which this CIMD-only server
+    // cannot serve: the same v2-shaped registration failure.
+    match result {
+        Err(error) => {
+            assert!(error.contains("registration_endpoint"), "{error}");
+            assert_eq!(stub.state.lock().register_hits, 0);
+        }
+        Ok(_) => panic!("a pinned redirect_uri must not take the CIMD path"),
+    }
 }
