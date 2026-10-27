@@ -662,7 +662,11 @@ async fn handlers_session_update_view_and_active() {
     assert_eq!(stale.time.viewed, Some(123.0));
 
     // Newer than the idle watermark (200) → not idle yet, no-op.
-    client.session().view(&session_id, &SessionViewBody { idle: 300.0 }).await.expect("future view");
+    client
+        .session()
+        .view(&session_id, &SessionViewBody { idle: 300.0 })
+        .await
+        .expect("future view");
     let future = client.session().get(&session_id).await.expect("get after future");
     assert_eq!(future.time.viewed, Some(123.0));
 
@@ -882,6 +886,170 @@ async fn handlers_export_import_round_trip_and_duplicate() {
             assert_eq!(message, "Session already exists: ses_imported1");
         }
         other => panic!("expected Api error, got {other:?}"),
+    }
+}
+
+/// RV-G4: the import replays the export's settled messages into the store
+/// (REF transfer.ts:64-154) — no more synthetic "imported" placeholders.
+#[tokio::test]
+async fn handlers_import_replays_messages_and_metadata() {
+    let server = boot().await;
+    let client = &server.client;
+    let created = create_session(client, "transfer-replay").await;
+
+    // A full export of a live session round-trips: importing it under a
+    // fresh id reproduces the message list.
+    let exported = client
+        .session()
+        .export(&created.id, &ExperimentalSessionExportQuery::default())
+        .await
+        .expect("export");
+    let roundtrip = ExperimentalSessionImportBody {
+        info: SessionInfo {
+            id: "ses_rvg4_roundtrip".to_owned(),
+            title: exported.info.title.clone(),
+            project_id: exported.info.project_id.clone(),
+            location: exported.info.location.clone(),
+            ..Default::default()
+        },
+        messages: exported.messages.clone(),
+        location: Some(exported.info.location.clone()),
+    };
+    let imported = client.session().import(&roundtrip).await.expect("roundtrip import");
+    assert_eq!(imported.id, "ses_rvg4_roundtrip");
+
+    let original = client
+        .message()
+        .list(
+            &created.id,
+            &SessionMessageListQuery {
+                order: Some(SessionMessageListQueryOrder::Asc),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("original messages");
+    let replayed = client
+        .message()
+        .list(
+            "ses_rvg4_roundtrip",
+            &SessionMessageListQuery {
+                order: Some(SessionMessageListQueryOrder::Asc),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("replayed messages");
+    assert_eq!(replayed.data.len(), original.data.len(), "all export messages replayed");
+
+    // A synthesized export with counters + times lands in the store and is
+    // readable back through the normal session read APIs.
+    let info = SessionInfo {
+        id: "ses_rvg4_replay".to_owned(),
+        title: Some("replayed".to_owned()),
+        project_id: exported.info.project_id.clone(),
+        location: exported.info.location.clone(),
+        cost: 0.75,
+        tokens: TokenUsageInfo {
+            input: 11.0,
+            output: 22.0,
+            reasoning: 3.0,
+            cache: TokenUsageInfoCache { read: 4.0, write: 5.0 },
+        },
+        time: SessionInfoTime {
+            created: 1_000.0,
+            updated: 2_000.0,
+            idle: Some(3_000.0),
+            viewed: Some(4_000.0),
+            archived: None,
+        },
+        ..Default::default()
+    };
+    let payload = ExperimentalSessionImportBody {
+        info,
+        messages: vec![
+            SessionMessageInfo::User(SessionMessageUser {
+                id: "msg_rvg4_user".to_owned(),
+                text: "replayed user text".to_owned(),
+                time: SessionMessageUserTime { created: 1_100.0 },
+                ..Default::default()
+            }),
+            // Unsettled (no time.completed) → filtered per REF isSettled.
+            SessionMessageInfo::Assistant(SessionMessageAssistant {
+                id: "msg_rvg4_running".to_owned(),
+                agent: "build".to_owned(),
+                model: ModelRef { id: "m".to_owned(), provider_id: "p".to_owned(), variant: None },
+                content: Vec::new(),
+                time: SessionMessageAssistantTime {
+                    created: 1_150.0,
+                    completed: None,
+                    streamed: None,
+                },
+                ..Default::default()
+            }),
+            SessionMessageInfo::Assistant(SessionMessageAssistant {
+                id: "msg_rvg4_done".to_owned(),
+                agent: "build".to_owned(),
+                model: ModelRef { id: "m".to_owned(), provider_id: "p".to_owned(), variant: None },
+                content: Vec::new(),
+                time: SessionMessageAssistantTime {
+                    created: 1_200.0,
+                    completed: Some(1_300.0),
+                    streamed: None,
+                },
+                ..Default::default()
+            }),
+        ],
+        location: Some(exported.info.location.clone()),
+    };
+    let imported = client.session().import(&payload).await.expect("import");
+    assert_eq!(imported.id, "ses_rvg4_replay");
+
+    // Session read API carries the imported counters/times.
+    let fetched = client.session().get("ses_rvg4_replay").await.expect("get");
+    assert_eq!(fetched.cost, 0.75);
+    assert_eq!(fetched.tokens.input, 11.0);
+    assert_eq!(fetched.time.created, 1_000.0);
+    assert_eq!(fetched.time.idle, Some(3_000.0));
+    assert_eq!(fetched.time.viewed, Some(3_000.0), "viewed = min(idle, viewed)");
+
+    // Message read API returns the settled messages, in export order.
+    let messages = client
+        .message()
+        .list(
+            "ses_rvg4_replay",
+            &SessionMessageListQuery {
+                order: Some(SessionMessageListQueryOrder::Asc),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("messages");
+    let shape: Vec<(&str, &str)> = messages
+        .data
+        .iter()
+        .map(|message| {
+            let id = match message {
+                SessionMessageInfo::User(m) => m.id.as_str(),
+                SessionMessageInfo::Assistant(m) => m.id.as_str(),
+                other => panic!("unexpected message: {other:?}"),
+            };
+            let type_ = match message {
+                SessionMessageInfo::User(_) => "user",
+                SessionMessageInfo::Assistant(_) => "assistant",
+                _ => unreachable!(),
+            };
+            (id, type_)
+        })
+        .collect();
+    assert_eq!(
+        shape,
+        [("msg_rvg4_user", "user"), ("msg_rvg4_done", "assistant")],
+        "running assistant filtered, settled kept"
+    );
+    match &messages.data[0] {
+        SessionMessageInfo::User(user) => assert_eq!(user.text, "replayed user text"),
+        other => panic!("expected user message, got {other:?}"),
     }
 }
 
