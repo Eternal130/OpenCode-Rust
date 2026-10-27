@@ -162,7 +162,11 @@ async fn runner_step_recover_full_then_success() {
     harness.execution.resume(harness.session_id().as_str()).await.unwrap();
     let events = harness.durable_events().await;
     assert!(events.iter().any(|(type_, _, _)| type_ == "session.step.ended"));
-    assert_eq!(harness.llm.0.requests().len(), 2, "the full request was re-sent");
+    assert_eq!(
+        harness.llm.as_ref().expect("scripted harness").0.requests().len(),
+        2,
+        "the full request was re-sent"
+    );
 }
 
 #[tokio::test]
@@ -215,7 +219,7 @@ async fn runner_step_max_steps_disables_tools_on_the_final_step() {
     harness.create_session().await;
     harness.admit_prompt("msg_ms", "do work").await;
     harness.execution.resume(harness.session_id().as_str()).await.unwrap();
-    let requests = harness.llm.0.requests();
+    let requests = harness.llm.as_ref().expect("scripted harness").0.requests();
     assert_eq!(requests.len(), 2);
     assert_eq!(requests[0].tool_choice, None);
     assert_eq!(requests[1].tool_choice, Some(ToolChoice::none()));
