@@ -37,6 +37,10 @@ pub enum ClientError {
     /// Serializing a request body to JSON failed.
     #[error("request encoding error: {0}")]
     Encoding(String),
+    /// A shared-event subscriber stopped draining and exceeded its
+    /// queued-event capacity (v2 shared-events `capacity` overflow).
+    #[error("event subscriber exceeded its {0}-event capacity")]
+    SubscriberCapacity(usize),
 }
 
 impl ClientError {

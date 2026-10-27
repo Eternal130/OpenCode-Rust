@@ -16,6 +16,7 @@
 
 pub mod error;
 pub mod event_ext;
+pub mod shared_events;
 pub mod sse;
 pub mod transport;
 
