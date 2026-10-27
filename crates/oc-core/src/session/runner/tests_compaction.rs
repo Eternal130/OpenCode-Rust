@@ -650,5 +650,46 @@ async fn runner_title_hook_result_short_circuits_the_model() {
     assert_eq!(llm.requests().len(), 1, "the hook title must skip the LLM");
 }
 
+/// RV-B9: compaction clears the spent accounting ONLY for the compacted
+/// session. REF compaction.ts:671 — `Effect.ensuring(Effect.sync(() =>
+/// spent.delete(trigger.context.session.id)))` — a map delete, not a clear.
+#[tokio::test]
+async fn runner_compaction_clears_spent_only_for_the_compacted_session() {
+    let llm = TestLlm::new();
+    llm.always(oc_ai::testing::text("unused"));
+    let harness = harness_with(llm).await;
+    let session = harness.create_session().await;
+    harness.compaction.test_spend(session.id.as_str()).await;
+    harness.compaction.test_spend("ses_other").await;
+    // Auto compaction off ⇒ the trigger skips the model path entirely, but
+    // the ensuring finalizer (spent delete) still runs.
+    harness.compaction.configure(crate::session::runner::compaction::Settings {
+        auto: false,
+        buffer: None,
+        keep: 15_000,
+    });
+    let context = crate::session::runner::context::Loaded {
+        session: session.clone(),
+        agent_id: oc_schema::id::AgentId::parse("build"),
+        agent: crate::session::runner::tests_harness::agent_info("build", None),
+        model: crate::session::runner::tests_harness::test_resolved_model(),
+        initial: String::new(),
+        messages: Vec::new(),
+        tools: Vec::new(),
+    };
+    let status = harness
+        .compaction
+        .compact(crate::session::runner::compaction::Trigger {
+            reason: crate::session::runner::compaction::Reason::Auto,
+            context,
+            input_id: None,
+        })
+        .await;
+    assert!(matches!(status, crate::session::runner::compaction::CompactStatus::Skipped));
+    let spent = harness.compaction.test_spent();
+    assert!(!spent.contains(&session.id.clone()), "the compacted session's spent is cleared");
+    assert!(spent.contains(&"ses_other".to_string()), "the other session's spent survives");
+}
+
 #[allow(dead_code)]
 fn unused(_: &Harness) {}

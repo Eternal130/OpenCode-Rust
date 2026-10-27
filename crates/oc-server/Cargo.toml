@@ -39,6 +39,9 @@ libc = "0.2"
 # the lighter decompress-only crate (already a transitive lock entry via
 # tower-http's compression-br).
 brotli-decompressor = "6"
+# RV-B8: stats day bucketing by the session's IANA timezone (REF stats.ts
+# `makeDateKey` uses Intl with `timeZone`). jiff bundles the tz database.
+jiff = "0.2"
 
 [dev-dependencies]
 tempfile = "3"

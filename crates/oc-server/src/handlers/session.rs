@@ -1932,9 +1932,9 @@ async fn stats(
     Ok(json_data(data))
 }
 
-/// An IANA-shaped timezone identifier (the port buckets activity days in
-/// UTC — no tz database rides the server crate; non-UTC bucketing is a
-/// registered approximation, HTTP-H4 notes).
+/// An IANA-shaped timezone identifier (REF validates via Intl; the port
+/// checks the shape here and date_key falls back to UTC for unknown
+/// zones — HTTP-H4 notes).
 fn valid_timezone(timezone: &str) -> bool {
     if timezone.is_empty() || timezone == "UTC" {
         return true;
@@ -2427,22 +2427,19 @@ fn compaction_events_sql(projected: bool) -> String {
     )
 }
 
-/// UTC day bucket `YYYY-MM-DD` for an epoch-ms timestamp. Non-UTC
-/// timezones bucket in UTC (registered approximation; see HTTP-H4).
-fn date_key(time: i64, _timezone: &str) -> String {
-    let days = time.div_euclid(86_400_000);
-    // Civil-from-days (Howard Hinnant's algorithm).
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let year = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = if month <= 2 { year + 1 } else { year };
-    format!("{year:04}-{month:02}-{day:02}")
+/// Day bucket `YYYY-MM-DD` for an epoch-ms timestamp in the given IANA
+/// timezone (REF stats.ts:402-410 `makeDateKey` — Intl `timeZone` local
+/// calendar date). Unknown/invalid zones fall back to UTC (the handler
+/// only checks the IANA shape up front).
+fn date_key(time: i64, timezone: &str) -> String {
+    let zone = jiff::tz::TimeZone::get(timezone).unwrap_or_else(|_| jiff::tz::TimeZone::UTC);
+    let Ok(instant) = jiff::Timestamp::from_millisecond(time) else {
+        return "1970-01-01".to_string();
+    };
+    instant
+        .to_zoned(zone)
+        .date()
+        .to_string()
 }
 
 /// Consecutive-day streak (stats.ts:393-405).
@@ -2500,4 +2497,26 @@ async fn log(
     headers: HeaderMap,
 ) -> Response {
     crate::sse::session_log_response(&state, &uri, &headers, &session_id).await
+}
+
+#[cfg(test)]
+mod rvb8_tests {
+    // RV-B8: day buckets follow the requested IANA timezone (REF stats.ts
+    // `makeDateKey` — Intl with `timeZone`), not UTC.
+    #[test]
+    fn stats_date_key_buckets_in_local_timezone() {
+        // 2024-06-15T23:30:00Z.
+        let time = 1_718_494_200_000i64;
+        assert_eq!(super::date_key(time, "UTC"), "2024-06-15");
+        // Tokyo is UTC+9 → already June 16 locally.
+        assert_eq!(super::date_key(time, "Asia/Tokyo"), "2024-06-16");
+        // Los Angeles is UTC-7 in June → still June 15.
+        assert_eq!(super::date_key(time, "America/Los_Angeles"), "2024-06-15");
+        // Across the UTC new-year boundary: 2024-12-31T23:30:00Z.
+        let nye = 1_735_687_800_000i64;
+        assert_eq!(super::date_key(nye, "UTC"), "2024-12-31");
+        assert_eq!(super::date_key(nye, "Pacific/Auckland"), "2025-01-01");
+        // Unknown zones fall back to UTC bucketing.
+        assert_eq!(super::date_key(time, "Not/AZone"), "2024-06-15");
+    }
 }
