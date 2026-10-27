@@ -22,10 +22,7 @@
 //!   `authorize` hook on the integration — the CLI-side port produces
 //!   the identical user flow (printed URL → browser → loopback
 //!   callback → stored credential) without the engine-side
-//!   integration registration this port's registry cannot reach;
-//! - CIMD (`client_id_metadata_document_supported`) is not pre-selected:
-//!   the flow registers dynamically (DCR) or uses the configured
-//!   client, which covers the interop-tested servers.
+//!   integration registration this port's registry cannot reach.
 
 use std::collections::BTreeMap;
 
@@ -42,8 +39,13 @@ use oc_schema::mcp::{OAuthConfig, OAuthValue as SchemaOAuthValue, RemoteConfig};
 /// expires within 5 minutes.
 pub const REFRESH_MARGIN_MS: i64 = 5 * 60 * 1000;
 
-/// `CLIENT_METADATA_URL`-equivalent client identity (CIMD is not
-/// pre-selected; DCR posts these fields).
+/// `CLIENT_METADATA_URL` (oauth.ts:27-28): servers that support CIMD
+/// (Client ID Metadata Document, SEP-991) accept this HTTPS URL as the
+/// `client_id` without registration — the document it serves IS the
+/// client metadata.
+pub const CLIENT_METADATA_URL: &str = "https://opencode.ai/oauth/opencode/client.json";
+
+/// `CLIENT_NAME`-equivalent client identity (DCR posts these fields).
 const CLIENT_NAME: &str = "opencode";
 const CLIENT_URI: &str = "https://opencode.ai";
 
@@ -233,6 +235,12 @@ pub struct Discovery {
     pub token_endpoint: String,
     pub registration_endpoint: Option<String>,
     pub scope: Option<String>,
+    /// `client_id_metadata_document_supported`: the server accepts a
+    /// CIMD URL as the `client_id` without registration (oauth.ts:434).
+    pub client_id_metadata_document_supported: bool,
+    /// `token_endpoint_auth_methods_supported` — CIMD additionally
+    /// requires the public-client `none` method (oauth.ts:435).
+    pub token_endpoint_auth_methods_supported: Option<Vec<String>>,
 }
 
 /// `{origin+path}/.well-known/oauth-protected-resource` — the RFC 9728
@@ -304,6 +312,17 @@ fn parse_metadata(body: &Value) -> Result<Discovery, String> {
             .and_then(Value::as_str)
             .map(str::to_owned),
         scope,
+        client_id_metadata_document_supported: body
+            .get("client_id_metadata_document_supported")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        token_endpoint_auth_methods_supported: body
+            .get("token_endpoint_auth_methods_supported")
+            .and_then(Value::as_array)
+            .map(|methods| {
+                methods.iter().filter_map(Value::as_str).map(str::to_owned).collect::<Vec<_>>()
+            })
+            .filter(|methods| !methods.is_empty()),
     })
 }
 
@@ -611,12 +630,28 @@ pub async fn authorize(input: AuthorizeInput) -> Result<Authorization, String> {
         .clone()
         .unwrap_or_else(|| format!("http://127.0.0.1:{port}{redirect_path}"));
 
-    // Static client or DCR (a configured client_id always wins).
+    // Static client, CIMD, or DCR (a configured client_id always wins).
+    // oauth.ts:431-439: CIMD needs the server to advertise it, the token
+    // endpoint to accept public clients (`none`), and no configured
+    // client_id or redirect_uri (our published document only lists the
+    // loopback redirect) — the metadata-document URL is then the
+    // client_id itself (SDK 2.0.0 `auth()`: `client_id:
+    // clientMetadataUrl`, no registration request).
+    let cimd = oauth.client_id.is_none()
+        && oauth.redirect_uri.is_none()
+        && discovery.client_id_metadata_document_supported
+        && discovery
+            .token_endpoint_auth_methods_supported
+            .as_deref()
+            .is_some_and(|methods| methods.iter().any(|method| method == "none"));
     let client = match (&oauth.client_id, &oauth.client_secret) {
         (Some(client_id), client_secret) => Some(StoredClient {
             client_id: client_id.clone(),
             client_secret: client_secret.clone(),
         }),
+        _ if cimd => {
+            Some(StoredClient { client_id: CLIENT_METADATA_URL.to_owned(), client_secret: None })
+        }
         _ => Some(
             register_client(&input.http, &discovery, &redirect_url, &oauth)
                 .await
