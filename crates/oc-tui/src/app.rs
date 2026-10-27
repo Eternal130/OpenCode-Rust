@@ -337,6 +337,8 @@ impl App {
         self.remerge_keybinds();
         // R-07: the transcript image strip's gate (`session.image_preview`).
         self.store.set_image_preview(config.session_image_preview);
+        // RD-06: the paste-summary fold's gate (`prompt.paste`).
+        self.store.set_prompt_paste(config.prompt_paste_compact);
         // CONFIG-T3 — the session.* display keys (index.tsx:229-241):
         // thinking/verbosity/tps/markdown reach the store on boot AND
         // every reload; grouping seeds the exploration toggle (the
@@ -410,6 +412,7 @@ impl App {
             text,
             "unix",
             &crate::components::composer::attachment::FsLocalFiles,
+            self.store.prompt_paste_compact(),
         );
         self.store.set_composer(&key, &composer);
         self.keymap.clear_pending();
@@ -420,10 +423,16 @@ impl App {
     /// toast, app.tsx:564-571).
     fn copy_selection(&mut self, rect: crate::selection::SelectionRect) {
         let Some(frame) = self.last_frame.clone() else { return };
-        let text = crate::selection::selected_text(&frame, rect);
-        if text.is_empty() {
+        let selected = crate::selection::selected_text(&frame, rect);
+        if selected.is_empty() {
             return;
         }
+        // RD-06 — pasted chips copy as their full text (the textarea's
+        // `getClipboardText` seam, prompt/index.tsx:1799-1801: the
+        // clipboard read-back expands every `[Pasted ~N lines]`
+        // placeholder in the copied span).
+        let key = self.prompt_key();
+        let text = self.store.composer(&key).expand_pasted_placeholders(&selected);
         if self.store.clipboard_write(&text).is_ok() {
             self.store.toast_show(crate::components::toast::ToastOptions {
                 title: None,
@@ -665,6 +674,53 @@ impl App {
                     }
                     self.store.request_redraw();
                     return;
+                }
+                // RD-06 — a release inside a folded paste chip expands
+                // it in place (the textarea's mousedown chain,
+                // prompt/index.tsx:1813-1827: `getAtOffset` finds the
+                // pasted extmark → `expandPastedText`). The session
+                // render records the textarea's rect (store ::
+                // prompt_text_hit); the cell maps back through the
+                // same wrap model the chip painted with.
+                if let Some(hit) = self.store.prompt_text_hit() {
+                    let key = self.prompt_key();
+                    if hit.session_id == key {
+                        let (cell_col, cell_row) = (col, row);
+                        if cell_row >= hit.y
+                            && cell_row < hit.y + hit.rows
+                            && cell_col >= hit.x
+                            && self.store.top_dialog().is_none()
+                        {
+                            let composer = self.store.composer(&key);
+                            let draft = composer.draft.clone();
+                            let mut hit_index = None;
+                            for (index, part) in draft.pasted.iter().enumerate() {
+                                let (row0, col0) = crate::components::composer::render::caret_cell(
+                                    &draft, hit.inner, part.start,
+                                );
+                                let (row1, col1) = crate::components::composer::render::caret_cell(
+                                    &draft, hit.inner, part.end,
+                                );
+                                if row0 == row1
+                                    && hit.y + row0 == cell_row
+                                    && cell_col - hit.x >= col0
+                                    && cell_col - hit.x < col1
+                                {
+                                    hit_index = Some(index);
+                                    break;
+                                }
+                            }
+                            if let Some(index) = hit_index {
+                                drop(composer);
+                                let mut composer = self.store.composer(&key);
+                                if composer.expand_pasted(index) {
+                                    self.store.set_composer(&key, &composer);
+                                    self.store.request_redraw();
+                                    return;
+                                }
+                            }
+                        }
+                    }
                 }
                 // TUI-10: the diff viewer's inline images — a left
                 // release inside one opens the preview over its bytes
@@ -2724,6 +2780,7 @@ impl App {
                                 &text,
                                 "unix",
                                 &crate::components::composer::attachment::FsLocalFiles,
+                                self.store.prompt_paste_compact(),
                             );
                         }
                     } else {
@@ -7064,7 +7121,11 @@ pub async fn run_with_size(
             let editor_guard =
                 stderr_guard.take().map(crate::stderr_redirect::StderrRedirect::restore);
             let key = app.prompt_key();
-            let draft = app.store.prompt_draft(&key).text.clone();
+            // RD-06 — $EDITOR pre-expands the pasted chips
+            // (`expandPromptInputPastedText`, prompt/index.tsx:556):
+            // the editor buffer opens over the draft with every
+            // `[Pasted ~N lines]` replaced by its full content.
+            let draft = app.store.prompt_draft(&key).expand_pasted_ranges();
             let cwd = std::env::current_dir().ok();
             let _ = disable_raw_mode();
             {
@@ -7104,7 +7165,7 @@ pub async fn run_with_size(
                 Ok(Some(text)) => {
                     let normalized = crate::editor::normalize_prompt_content(&text);
                     let mut composer = app.store.composer(&key);
-                    composer.draft.text = normalized;
+                    composer.set_text(&normalized);
                     app.store.set_composer(&key, &composer);
                 }
                 Err(crate::editor::EditorError::Exit(reason)) => {

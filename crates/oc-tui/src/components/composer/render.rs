@@ -375,12 +375,16 @@ fn unit_kind(ch: char) -> UnitKind {
     }
 }
 
-/// Split the draft into wrap units, honoring file-mention chips as
-/// atomic spans (their chars join the unit stream but never split).
+/// Split the draft into wrap units, honoring file-mention and paste
+/// chips as atomic spans (their chars join the unit stream but never
+/// split — RD-06: the `[Pasted ~N lines]` label wraps as one chip,
+/// like the attachment mentions).
 fn draft_units_uncached(draft: &PromptDraft) -> Vec<Unit> {
     let chars: Vec<char> = draft.text.chars().collect();
-    let chip_at =
-        |index: usize| draft.files.iter().any(|file| index >= file.start && index < file.end);
+    let chip_at = |index: usize| {
+        draft.files.iter().any(|file| index >= file.start && index < file.end)
+            || draft.pasted.iter().any(|part| index >= part.start && index < part.end)
+    };
     let mut units: Vec<Unit> = Vec::new();
     let mut index = 0usize;
     while index < chars.len() {
