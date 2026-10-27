@@ -1656,3 +1656,78 @@ async fn file_watcher_option_disables_the_service() {
     assert!(!engine.has_location_watcher(&location), "disabled watcher starts nothing");
     engine.shutdown().await;
 }
+
+/// RV-G2 + TTL sweeper end-to-end (gate-2 follow-up F2): a watched git
+/// location whose `HEAD` rewrites re-arm its activity through the
+/// location watcher (the pump touches on every `filesystem.changed`),
+/// keeping it alive past a TTL that expires an idle, unwatched location.
+#[tokio::test]
+async fn ttl_sweeper_expires_idle_location_but_watcher_re_arms_activity() {
+    let dir = tempfile::Builder::new()
+        .prefix("oc-core-engine-ttlwatch-")
+        .tempdir_in("/tmp/opencode")
+        .expect("sandbox under /tmp/opencode");
+    // Watched: a real git repo (HEAD exists, the watcher subscribes to it).
+    let watched_dir = dir.path().join("watched");
+    std::fs::create_dir_all(&watched_dir).expect("watched dir");
+    let repo = git2::Repository::init(&watched_dir).expect("git init");
+    let head = repo.path().join("HEAD");
+    // Idle: no VCS → no watch → nothing re-arms its activity.
+    let idle_dir = dir.path().join("idle");
+    std::fs::create_dir_all(&idle_dir).expect("idle dir");
+    std::fs::create_dir_all(dir.path().join("home")).expect("home");
+
+    let engine = Engine::boot(EngineOptions {
+        activity_sweeper: false,
+        ..EngineOptions::new(dir.path().join("data"), dir.path().join("home"))
+    })
+    .await;
+    let watched = LocationRef::new(watched_dir.clone(), None);
+    let idle = LocationRef::new(idle_dir, None);
+    engine.location(watched.clone()).await.expect("assemble watched");
+    engine.location(idle.clone()).await.expect("assemble idle");
+    assert!(engine.has_location_watcher(&watched), "git location watched");
+    // The idle location gets a watcher handle too, but with no VCS it
+    // reconciles to no watch target — nothing can re-arm its activity.
+
+    // Both locations active, then a short-TTL sweeper over the engine's
+    // own service map (the engine's built-in sweeper is disabled above).
+    let activity = Arc::clone(&engine.locations.globals().activity);
+    activity.touch(&watched);
+    activity.touch(&idle);
+    let sweeper = crate::location_services::spawn_activity_sweeper(
+        crate::location_services::SweeperConfig {
+            ttl: Duration::from_millis(400),
+            sweep_interval: Duration::from_millis(10),
+        },
+        Arc::clone(&engine.locations),
+        Arc::clone(&activity),
+    );
+
+    // Keep rewriting HEAD (branch flips) for well past the TTL: each
+    // change must re-arm the watched location's activity.
+    let deadline = std::time::Instant::now() + Duration::from_millis(900);
+    while std::time::Instant::now() < deadline {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        std::fs::write(&head, format!("ref: refs/heads/lane-{nanos}\n")).expect("rewrite HEAD");
+        tokio::time::sleep(Duration::from_millis(80)).await;
+    }
+
+    // The idle location expired (sweeper invalidates the service map);
+    // the HEAD-active one is still live.
+    let settled = tokio::time::timeout(Duration::from_secs(2), async {
+        while engine.locations.get(&idle).is_some() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    assert!(settled.is_ok(), "idle unwatched location expired after the TTL");
+    assert!(engine.locations.get(&watched).is_some(), "watched location re-armed past the TTL");
+    assert!(engine.has_location_watcher(&watched), "watch stays up while the location lives");
+
+    sweeper.abort();
+    engine.shutdown().await;
+}
