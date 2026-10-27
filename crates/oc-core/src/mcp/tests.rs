@@ -50,6 +50,11 @@ struct Script {
     /// Tools that elicit before answering: tool → `elicitation/create`
     /// params (the ref servers' `tools/call` → `elicitInput` flow).
     elicit_on_call: BTreeMap<String, serde_json::Value>,
+    /// Modern-era MRTR (SEP-2322): tools whose FIRST `tools/call`
+    /// answer is the given `input_required` payload; the retry (the
+    /// request carrying `inputResponses`) answers normally, embedding
+    /// the responses + echoed `requestState` (mcp.test.ts:164-176).
+    input_required: BTreeMap<String, serde_json::Value>,
     /// Emit a 404 on the next call-tool (session-expiry probe), then behave.
     expire_once: Arc<std::sync::atomic::AtomicBool>,
 }
@@ -315,6 +320,24 @@ fn respond(
         }
         ClientRequest::CallToolRequest(request) => {
             let name = request.params.name.as_ref();
+            if let Some(required) = script.input_required.get(name) {
+                if request.params.input_responses.is_none() {
+                    return response(required.clone(), id);
+                }
+                // The retry: echo what the client sent back.
+                let responses = serde_json::to_value(&request.params.input_responses)
+                    .unwrap_or(serde_json::Value::Null);
+                return response(
+                    serde_json::json!({
+                        "content": [{ "type": "text", "text": "retried" }],
+                        "structuredContent": {
+                            "inputResponses": responses,
+                            "requestState": request.params.request_state,
+                        },
+                    }),
+                    id,
+                );
+            }
             if script.expire_once.swap(false, std::sync::atomic::Ordering::SeqCst) {
                 return Some(JsonRpcMessage::error(
                     rmcp::ErrorData::new(
@@ -868,6 +891,174 @@ async fn mcp_client_elicitation_abort_race_answers_cancel() {
     {
         panic!("no elicitation answer should ride the wire after cancellation: {answer:?}");
     }
+    connection.close().await;
+}
+
+// ---------------------------------------------------------------------------
+// modern-era MRTR input_required (SEP-2322)
+// ---------------------------------------------------------------------------
+
+/// The id-less url elicitation the TS SDK's `elicitUrl` sends inside
+/// MRTR rounds — the shape rmcp's `UrlElicitationParams` cannot model
+/// (it requires `elicitationId`), so it arrives as `CustomResult`.
+fn id_less_url_input_required() -> serde_json::Value {
+    serde_json::json!({
+        "resultType": "input_required",
+        "inputRequests": {
+            "auth": {
+                "method": "elicitation/create",
+                "params": { "mode": "url", "message": "Authorize", "url": "https://example.com/authorize" },
+            },
+        },
+        "requestState": "opaque-state",
+    })
+}
+
+#[tokio::test]
+async fn mcp_client_modern_url_elicitation_settles_when_user_confirms() {
+    // Ref "settles modern MCP URL elicitations when the user confirms"
+    // (mcp.test.ts:1332): the `tools/call` answer is `input_required`
+    // carrying an id-less url elicitation; the form carries NO
+    // `elicitationID` metadata, the confirm reply settles it, and the
+    // client retries with `{auth: {action: "accept"}}` + the echoed
+    // `requestState` (mcp.test.ts:171: `{action: response.kind ===
+    // "elicit" ? response.action : "cancel"}` — no content key).
+    let forms = real_forms();
+    let script = Script {
+        input_required: BTreeMap::from([(
+            "url-elicitation".to_string(),
+            id_less_url_input_required(),
+        )]),
+        ..Script::new()
+    };
+    let (connection, _mock) =
+        connect_mock_with(script, Some(RegistryElicitation::adapter(Arc::new(forms.clone()))))
+            .await;
+    let call = tokio::spawn({
+        let connection = connection.clone();
+        async move { connection.call_tool("url-elicitation", None, None).await }
+    });
+    let form = await_global_form(&forms).await;
+    assert!(matches!(
+        form.fields[0],
+        oc_schema::form::Field::External { ref url, .. } if url == "https://example.com/authorize"
+    ));
+    assert!(
+        !form.metadata.as_ref().is_some_and(|m| m.contains_key("elicitationID")),
+        "id-less url elicitations park no completion id"
+    );
+    let mut answer = oc_schema::form::Answer::new();
+    answer.insert("elicitation".to_string(), oc_schema::form::FormValue::Bool(true));
+    forms.reply(&form.id, answer).await.expect("reply");
+    let result = call.await.expect("join").expect("call");
+    let structured = result.structured.expect("structured");
+    assert_eq!(
+        structured.pointer("/inputResponses/auth"),
+        Some(&serde_json::json!({ "action": "accept" })),
+        "url-mode MRTR answers carry no content key"
+    );
+    assert_eq!(
+        structured.get("requestState").and_then(serde_json::Value::as_str),
+        Some("opaque-state"),
+        "requestState is echoed verbatim"
+    );
+    connection.close().await;
+}
+
+#[tokio::test]
+async fn mcp_client_modern_form_elicitation_answers_with_content() {
+    // A form-mode elicitation inside `inputRequests` (elicitationId
+    // present parses to rmcp's typed `InputRequiredResult`; the driver
+    // handles both shapes): the answered form rides the retry as
+    // `{action: "accept", content: {...}}`.
+    let forms = real_forms();
+    let input_required = serde_json::json!({
+        "resultType": "input_required",
+        "inputRequests": {
+            "who": {
+                "method": "elicitation/create",
+                "params": {
+                    "mode": "form",
+                    "message": "Who?",
+                    "requestedSchema": {
+                        "type": "object",
+                        "properties": { "name": { "type": "string", "title": "Name" } },
+                        "required": ["name"],
+                    },
+                },
+            },
+        },
+    });
+    let script = Script {
+        input_required: BTreeMap::from([("form-elicitation".to_string(), input_required)]),
+        ..Script::new()
+    };
+    let (connection, _mock) =
+        connect_mock_with(script, Some(RegistryElicitation::adapter(Arc::new(forms.clone()))))
+            .await;
+    let call = tokio::spawn({
+        let connection = connection.clone();
+        async move { connection.call_tool("form-elicitation", None, None).await }
+    });
+    let form = await_global_form(&forms).await;
+    let mut answer = oc_schema::form::Answer::new();
+    answer.insert("name".to_string(), oc_schema::form::FormValue::String("Ada".into()));
+    forms.reply(&form.id, answer).await.expect("reply");
+    let result = call.await.expect("join").expect("call");
+    assert_eq!(
+        result.structured.expect("structured").pointer("/inputResponses/who"),
+        Some(&serde_json::json!({ "action": "accept", "content": { "name": "Ada" } }))
+    );
+    connection.close().await;
+}
+
+#[tokio::test]
+async fn mcp_client_input_required_without_handler_stays_opaque() {
+    // No elicitation handler installed ⇒ the capability was not
+    // advertised ⇒ `input_required` keeps the opaque v2 error (the
+    // boundary the ref SDK leaves to the server's discretion).
+    let script = Script {
+        input_required: BTreeMap::from([(
+            "url-elicitation".to_string(),
+            id_less_url_input_required(),
+        )]),
+        ..Script::new()
+    };
+    let (connection, _mock) = connect_mock(script).await;
+    let error = connection
+        .call_tool("url-elicitation", None, None)
+        .await
+        .expect_err("opaque degradation");
+    assert_eq!(error.message, "unexpected tools/call response");
+    connection.close().await;
+}
+
+#[tokio::test]
+async fn mcp_client_input_required_sampling_request_stays_opaque() {
+    // Sampling input requests are unfulfillable (v2 installs no
+    // sampling handler): parity-exact opaque error.
+    let input_required = serde_json::json!({
+        "resultType": "input_required",
+        "inputRequests": {
+            "ask": {
+                "method": "sampling/createMessage",
+                "params": {
+                    "messages": [{ "role": "user", "content": { "type": "text", "text": "hi" } }],
+                    "maxTokens": 10,
+                },
+            },
+        },
+    });
+    let forms = real_forms();
+    let script = Script {
+        input_required: BTreeMap::from([("sampled".to_string(), input_required)]),
+        ..Script::new()
+    };
+    let (connection, _mock) =
+        connect_mock_with(script, Some(RegistryElicitation::adapter(Arc::new(forms.clone()))))
+            .await;
+    let error = connection.call_tool("sampled", None, None).await.expect_err("opaque degradation");
+    assert_eq!(error.message, "unexpected tools/call response");
     connection.close().await;
 }
 
