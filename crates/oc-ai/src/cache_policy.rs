@@ -54,9 +54,8 @@ const RESPECTS_INLINE_HINTS: [&str; 15] = [
     "digitalocean",
 ];
 
-/// Gateway / model-alias policy quirks (Qwen, OpenRouter aliases) live in
+/// Gateway / model-alias policy quirks (Qwen, `OpenRouter` aliases) live in
 /// [`crate::customization`] — the per-provider seam consulted below.
-
 fn make_hint(ttl_seconds: Option<f64>) -> CacheHint {
     match ttl_seconds {
         Some(ttl_seconds) => CacheHint::ephemeral_ttl(ttl_seconds),
