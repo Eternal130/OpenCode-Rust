@@ -35,6 +35,9 @@ mod tests;
 mod tests_diff;
 #[cfg(test)]
 mod tests_parity;
+#[cfg(test)]
+mod tests_transfer;
+pub mod transfer;
 
 pub use execution::{
     CancelJobs, Continuation, DrainOutcome, InterruptOptions, RunError, SessionExecution,
@@ -52,3 +55,4 @@ pub use store::{
     CreateInput, CreateOutcome, ListAnchor, ListDirection, ListInput, ListOrder, MessagesInput,
     ResolvedProject, SessionStore,
 };
+pub use transfer::{import, ImportError, ImportInput};
