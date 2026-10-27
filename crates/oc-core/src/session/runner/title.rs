@@ -101,33 +101,31 @@ impl SessionTitle {
         let mut chunks: Vec<String> = Vec::new();
         let mut failed = false;
         let mut usage: Option<RecordedUsage> = None;
-        let mut stream = self
-            .llm
-            .stream(
-                self.requests
-                    .title(RequestInput {
-                        session: session.clone(),
-                        agent: agent.id.clone(),
-                        model: model.clone(),
-                        tools: None,
-                        system: agent
-                            .system
-                            .as_ref()
-                            .map(|system| {
-                                vec![oc_ai::schema::messages::SystemPart::new(system.clone())]
-                            })
-                            .unwrap_or_default(),
-                        messages: vec![oc_ai::schema::messages::Message::user(text)],
-                        tool_choice: None,
-                        web_socket: false,
-                        input_tokens: None,
-                    })
-                    .await
-                    .ok()?
-                    .request,
-            )
+        let prepared = self
+            .requests
+            .title(RequestInput {
+                session: session.clone(),
+                agent: agent.id.clone(),
+                model: model.clone(),
+                tools: None,
+                system: agent
+                    .system
+                    .as_ref()
+                    .map(|system| vec![oc_ai::schema::messages::SystemPart::new(system.clone())])
+                    .unwrap_or_default(),
+                messages: vec![oc_ai::schema::messages::Message::user(text)],
+                tool_choice: None,
+                web_socket: false,
+                input_tokens: None,
+            })
             .await
             .ok()?;
+        // title.ts:73 — a plugin-supplied title short-circuits the model
+        // request (no stream, no usage billing).
+        if let Some(title) = &prepared.title_result {
+            return Some(title.clone());
+        }
+        let mut stream = self.llm.stream(prepared.request).await.ok()?;
         use futures::StreamExt;
         while let Some(event) = stream.next().await {
             let Ok(event) = event else {
