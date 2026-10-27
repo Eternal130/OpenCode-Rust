@@ -13,9 +13,11 @@
 //!   `m=1` continuations, `q=2` (no reply), stable per-image ids so a
 //!   redraw replaces in place and `a=d` clears the ones that left.
 //! * **sixel** — detected, and *raw sixel bytes* (DCS `q` … `ST`)
-//!   pass through at the cursor. PNG → sixel transcoding is not
-//!   implemented; a sixel terminal without raw sixel data gets the
-//!   **blocks** rendering (v2's own no-resolution path:
+//!   pass through at the cursor. PNG → sixel transcoding (RB-07
+//!   residual) lives in [`sixel`]: a decodable PNG quantizes to ≤ 16
+//!   color registers and emits a standard DCS `q` sequence at the
+//!   cursor; a PNG that fails to decode keeps the **blocks**
+//!   rendering (v2's own no-resolution path:
 //!   `resolveImageRenderProtocol` maps `sixel` without a pixel
 //!   resolution to `blocks`), exactly like a terminal with no
 //!   protocol.
@@ -48,6 +50,8 @@
 
 use std::collections::BTreeMap;
 use std::io::Write;
+
+pub mod sixel;
 
 /// The terminal's image protocol (`protocol="auto"`'s resolution).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -197,16 +201,21 @@ pub fn cursor_move_escape(x: u16, y: u16) -> Vec<u8> {
     format!("\x1b[{};{}H", y + 1, x + 1).into_bytes()
 }
 
-/// The sixel passthrough bytes (positioned at the cursor). PNG data
-/// cannot pass through the sixel protocol (see module docs) — only
-/// [`ImageData::Sixel`] emits.
+/// The sixel emission for one placement (positioned at the cursor):
+/// raw sixel bytes pass through verbatim; PNG bytes transcode
+/// through [`sixel::encode_sixel_from_png`] (RB-07) — an undecodable
+/// PNG emits nothing and the placement reads as undrawable.
 #[must_use]
 pub fn sixel_display_escape(placement: &ImagePlacement) -> Vec<u8> {
-    let ImageData::Sixel(bytes) = &placement.data else {
+    let body = match &placement.data {
+        ImageData::Sixel(bytes) => Some(bytes.clone()),
+        ImageData::Png(bytes) => sixel::encode_sixel_from_png(bytes),
+    };
+    let Some(body) = body else {
         return Vec::new();
     };
     let mut out = cursor_move_escape(placement.x, placement.y);
-    out.extend_from_slice(bytes);
+    out.extend_from_slice(&body);
     out
 }
 
@@ -214,11 +223,16 @@ pub fn sixel_display_escape(placement: &ImagePlacement) -> Vec<u8> {
 /// covers the rest).
 #[must_use]
 pub fn drawable(protocol: GraphicsProtocol, data: &ImageData) -> bool {
-    matches!(
-        (protocol, data),
+    match (protocol, data) {
         (GraphicsProtocol::Kitty, ImageData::Png(_))
-            | (GraphicsProtocol::Sixel, ImageData::Sixel(_))
-    )
+        | (GraphicsProtocol::Sixel, ImageData::Sixel(_)) => true,
+        // Sixel + PNG draws only when the transcode path can decode
+        // the payload (RB-07); garbage keeps the blocks fallback.
+        (GraphicsProtocol::Sixel, ImageData::Png(bytes)) => {
+            crate::image_blocks::decode_png(bytes).is_some()
+        }
+        _ => false,
+    }
 }
 
 /// Emit one frame's placements to `writer` (the run loop's post-draw
@@ -367,6 +381,33 @@ mod tests {
             crate::clipboard::base64_encode::encode(&png),
             "chunks concatenate to the full base64 payload"
         );
+    }
+
+    #[test]
+    fn sixel_transcodes_decodable_png_and_skips_garbage() {
+        // RB-07: a real PNG renders under Sixel (CUP + transcoded DCS),
+        // an undecodable one stays with the blocks fallback.
+        let png_bytes = include_bytes!("../../tests/fixtures/r07-tiny-4x2.png").to_vec();
+        let good = ImagePlacement {
+            id: 21, data: ImageData::Png(png_bytes.clone()), x: 1, y: 1, cols: 4, rows: 2,
+        };
+        let bad = ImagePlacement {
+            id: 22, data: ImageData::Png(vec![1, 2, 3]), x: 1, y: 1, cols: 4, rows: 2,
+        };
+        assert!(drawable(GraphicsProtocol::Sixel, &good.data));
+        assert!(!drawable(GraphicsProtocol::Sixel, &bad.data));
+        let mut out = Vec::new();
+        let drawn =
+            emit_frame_images(&mut out, GraphicsProtocol::Sixel, &[good.clone(), bad]).unwrap();
+        assert_eq!(drawn, vec![21], "only the decodable PNG draws");
+        let body = sixel_display_escape(&good);
+        assert_eq!(out, body);
+        assert!(body.ends_with(b"\x1b\\"));
+        // Non-sixel terminals are unaffected: PNG stays undrawable
+        // under Kitty's counterpart check is covered above; None never
+        // draws.
+        assert!(!drawable(GraphicsProtocol::None, &good.data));
+        assert!(!drawable(GraphicsProtocol::Kitty, &ImageData::Sixel(b"x".to_vec())));
     }
 
     #[test]

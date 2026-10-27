@@ -86,18 +86,19 @@ fn kitty_terminal_receives_cup_then_the_apc_over_the_placeholder_rect() {
 }
 
 #[test]
-fn sixel_terminal_without_raw_sixel_data_renders_blocks() {
-    // The fixture is PNG; sixel cannot carry it without a
-    // transcoder — v2's own resolution for `sixel` without pixel
-    // resolution is the `blocks` protocol, and so is ours: no
-    // placement escapes, the thumb IS the block-glyph cells.
+fn sixel_terminal_transcodes_png_to_sixel() {
+    // RB-07: the fixture is PNG and sixel CAN now carry it — the
+    // transcoder (image::sixel) turns it into a DCS q sequence, so
+    // a placement escapes and no block-glyph cells render.
     let transcript = render_transcript(
         &[user_message_with_png()],
         &options(GraphicsProtocol::Sixel),
         &theme().styles(),
         80,
     );
-    assert_eq!(transcript.images, Vec::new());
+    assert_eq!(transcript.images.len(), 1, "one sixel placement escapes");
+    let body = crate::image::sixel_display_escape(&transcript.images[0]);
+    assert!(body.starts_with(b"\x1b[") && body.ends_with(b"\x1b\\"), "CUP + DCS…ST");
     let mut placed = Vec::new();
     let mut fills = Vec::new();
     for row in &transcript.rows {
@@ -111,8 +112,10 @@ fn sixel_terminal_without_raw_sixel_data_renders_blocks() {
         crate::components::tool_rows::fill_style(&theme().styles()),
     );
     let text = frame.text_grid().join("\n");
-    assert!(text.contains('▀'), "block glyphs on the wire: {text}");
-    assert!(!text.contains('┌'), "no placeholder box under blocks");
+    assert!(!text.contains('▀'), "no block glyphs over the sixel path: {text}");
+    // The bordered placeholder rect stays beneath the escape, the
+    // same semantics as the kitty path (escapes draw over the box).
+    assert!(text.contains('┌'), "placeholder box beneath the sixel escape");
 }
 
 #[test]
