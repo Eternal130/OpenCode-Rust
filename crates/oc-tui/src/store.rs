@@ -3830,6 +3830,7 @@ impl Store {
             text: draft.text,
             files: draft.files,
             agents: draft.agents,
+            skills: draft.skills,
             ..SubmittedPrompt::default()
         };
         let model = self.resolve_model(session_id);
@@ -8039,10 +8040,44 @@ impl Store {
                 if let Some(agents) = value.pointer("/prompt/agents").and_then(|v| v.as_array()) {
                     for agent in agents {
                         if let Some(name) = agent.get("name").and_then(|v| v.as_str()) {
+                            let start = usize::try_from(
+                                agent.get("start").and_then(serde_json::Value::as_u64).unwrap_or(0),
+                            )
+                            .unwrap_or(0);
+                            let end = usize::try_from(
+                                agent.get("end").and_then(serde_json::Value::as_u64).unwrap_or(0),
+                            )
+                            .unwrap_or(0);
                             draft.agents.push(crate::components::composer::AgentMention {
                                 name: name.to_owned(),
+                                start,
+                                end,
                             });
                         }
+                    }
+                }
+                // RD-05 — the `@skill` chips restore their ids + ranges.
+                if let Some(skills) = value.pointer("/prompt/skills").and_then(|v| v.as_array()) {
+                    for skill in skills {
+                        let Some(id) = skill.get("id").and_then(|v| v.as_str()) else { continue };
+                        let start = usize::try_from(
+                            skill.get("start").and_then(serde_json::Value::as_u64).unwrap_or(0),
+                        )
+                        .unwrap_or(0);
+                        let end = usize::try_from(
+                            skill.get("end").and_then(serde_json::Value::as_u64).unwrap_or(0),
+                        )
+                        .unwrap_or(0);
+                        draft.skills.push(crate::components::composer::SkillMention {
+                            id: id.to_owned(),
+                            name: skill
+                                .get("name")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or(id)
+                                .to_owned(),
+                            start,
+                            end,
+                        });
                     }
                 }
                 entries.push(StashEntry { prompt: draft, timestamp });
@@ -8093,13 +8128,33 @@ impl Store {
                     .prompt
                     .agents
                     .iter()
-                    .map(|agent| serde_json::json!({ "name": agent.name }))
+                    .map(|agent| {
+                        serde_json::json!({
+                            "name": agent.name,
+                            "start": agent.start,
+                            "end": agent.end,
+                        })
+                    })
+                    .collect();
+                let skills: Vec<serde_json::Value> = entry
+                    .prompt
+                    .skills
+                    .iter()
+                    .map(|skill| {
+                        serde_json::json!({
+                            "id": skill.id,
+                            "name": skill.name,
+                            "start": skill.start,
+                            "end": skill.end,
+                        })
+                    })
                     .collect();
                 serde_json::json!({
                     "prompt": {
                         "text": entry.prompt.text,
                         "files": files,
                         "agents": agents,
+                        "skills": skills,
                     },
                     "timestamp": entry.timestamp,
                 })
