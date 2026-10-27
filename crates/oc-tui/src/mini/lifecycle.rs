@@ -35,7 +35,9 @@ use ratatui::layout::Rect;
 use ratatui::Terminal;
 
 use super::scrollback::{format_commit_with, Commit};
-use super::splash::{directory_label, entry_splash_rows, exit_splash_rows};
+use super::splash::{
+    directory_label, entry_splash_layout, entry_splash_rows, exit_splash_rows, EntrySplashInput,
+};
 use super::{footer_base, FOOTER_HEIGHT, FORM_ROWS, PERMISSION_ROWS};
 use crate::components::footer::form::{
     form_commit_input, form_move, form_pick, render_form_body, FormBodyState, FormReply,
@@ -119,6 +121,12 @@ pub struct FooterPane {
     /// CONFIG-T4: the busy-cell clock anchor (`started()`,
     /// `footer.view.tsx:988`'s `age` input) — `None` while idle.
     busy_since: Option<Instant>,
+    /// RD-19 — the startup row (`footer.view.tsx:709-725`): while set,
+    /// the pane grows by ONE launch row whose spinner cell runs the
+    /// `SEED_LAUNCH` one-shot (`footer.ts:389-390`'s 800 ms window
+    /// — `(21 - 1) * 40`). The lifecycle clears it and flushes the
+    /// entry splash to scrollback when the animation completes.
+    pub startup: Option<StartupRow>,
     /// TUI-17 — the tracked child sessions (the runtime's
     /// `SubagentTracker` snapshot; `footer.view.tsx:139-149`).
     pub subagent_children: Vec<super::transport::SubagentChild>,
@@ -127,6 +135,22 @@ pub struct FooterPane {
     /// The detail scroll (rows from the bottom, sticky-bottom).
     subagent_scroll: usize,
 }
+
+/// RD-19 — the launch row's state (`footer.view.tsx:709-725`): the
+/// clock anchor plus the `entrySplashLayout` label/metadata this row
+/// paints (the spinner cell replaces the label's leading ▪ mark).
+#[derive(Debug)]
+pub struct StartupRow {
+    pub since: Instant,
+    /// `layout().label` — `▪ oc mini` when the mark fits.
+    pub label: String,
+    /// `layout().metadata` — ` v{version} · {detail}` when it fits.
+    pub metadata: String,
+}
+
+/// `SEED_LAUNCH`'s one-shot window (`footer.ts:390`):
+/// `(frames.length - 1) * interval` = 20 × 40 ms.
+pub const STARTUP_DURATION_MS: u64 = (21 - 1) * 40;
 
 impl FooterPane {
     #[must_use]
@@ -151,10 +175,21 @@ impl FooterPane {
             work_spinner: "block-soft-slide".to_owned(),
             mono: false,
             busy_since: None,
+            startup: None,
             subagent_children: Vec::new(),
             subagent_selected: None,
             subagent_scroll: 0,
         }
+    }
+
+    /// RD-19 — the launch one-shot's expiry (`footer.ts:390`'s
+    /// setTimeout window): true once `STARTUP_DURATION_MS` have
+    /// elapsed since the row mounted.
+    #[must_use]
+    pub fn startup_expired(&self) -> bool {
+        self.startup
+            .as_ref()
+            .is_some_and(|row| row.since.elapsed().as_millis() >= u128::from(STARTUP_DURATION_MS))
     }
 
     /// The busy-cell state (`busy()` in `footer.view.tsx:980`): a
@@ -481,23 +516,77 @@ impl FooterPane {
     /// TUI-17 — the inspector adds its 14 rows.
     #[must_use]
     pub fn pane_height(&self) -> usize {
-        match self.machine.view {
-            FooterView::Permission { .. } => footer_base(FOOTER_HEIGHT) + PERMISSION_ROWS,
-            FooterView::Form { .. } => footer_base(FOOTER_HEIGHT) + FORM_ROWS,
-            FooterView::Prompt => {
-                if self.machine.route == crate::components::footer::PromptRoute::Subagent {
-                    footer_base(FOOTER_HEIGHT) + super::footer_subagent::SUBAGENT_INSPECTOR_ROWS
-                } else {
-                    FOOTER_HEIGHT
+        // RD-19 — the launch row grows the dock by one
+        // (`footer.ts:762`'s `desired + (this.startup() ? 1 : 0)`).
+        let startup = usize::from(self.startup.is_some());
+        startup
+            + match self.machine.view {
+                FooterView::Permission { .. } => footer_base(FOOTER_HEIGHT) + PERMISSION_ROWS,
+                FooterView::Form { .. } => footer_base(FOOTER_HEIGHT) + FORM_ROWS,
+                FooterView::Prompt => {
+                    if self.machine.route == crate::components::footer::PromptRoute::Subagent {
+                        footer_base(FOOTER_HEIGHT)
+                            + super::footer_subagent::SUBAGENT_INSPECTOR_ROWS
+                    } else {
+                        FOOTER_HEIGHT
+                    }
                 }
             }
-        }
     }
 
     /// Compose the footer's [`crate::render::Frame`] (the dispatch the
-    /// render loop performs on `FooterView`).
+    /// render loop performs on `FooterView`). RD-19: the launch row
+    /// sits ABOVE the view body (`footer.view.tsx:709-725`'s first
+    /// box in the column) while the startup animation runs.
     #[must_use]
     pub fn render_frame(&self, width: usize, height: usize) -> crate::render::Frame {
+        let startup = usize::from(self.startup.is_some());
+        let mut frame = self.render_body(width, height - startup);
+        if let Some(row) = self.startup.as_ref().map(|row| self.render_startup_row(row, width)) {
+            frame.cells.insert(0, row);
+            frame.height += 1;
+        }
+        frame
+    }
+
+    /// The launch row (`footer.view.tsx:711-724`): the `SEED_LAUNCH`
+    /// one-shot spinner in cell 0 (the label's leading ▪ mark replaced
+    /// by the animated cell, colored `splash.right` with its glow
+    /// levels), then the label tail and the metadata (`splash.left`).
+    #[must_use]
+    fn render_startup_row(&self, startup: &StartupRow, width: usize) -> Vec<crate::render::Cell> {
+        use crate::render::{Cell, CellColor};
+        let splash = super::splash::SplashColors::from_footer_theme(&self.theme);
+        let right = CellColor::from(splash.right);
+        let left = CellColor::from(splash.left);
+        let animation = super::spinner::seed_launch();
+        let cell = animation.one_cell_frame(startup.since.elapsed());
+        let mut row: Vec<Cell> = Vec::with_capacity(width);
+        let mark = '\u{25aa}';
+        let (tail, metadata) = if startup.label.starts_with(mark) {
+            // The animated spinner replaces the label's first cell.
+            row.push(Cell { ch: cell.glyph, fg: apply_glow(right, cell.level), ..Cell::default() });
+            (startup.label[mark.len_utf8()..].to_owned(), startup.metadata.clone())
+        } else {
+            // A label without the mark (too narrow) renders as plain
+            // text — the ref's `Show when={label.startsWith("▪")}`.
+            (startup.label.clone(), startup.metadata.clone())
+        };
+        for ch in tail.chars().chain(metadata.chars()) {
+            if row.len() >= width {
+                break;
+            }
+            // `wrapMode="none"`: the tail clips at the terminal edge.
+            let color = if row.len() < tail.chars().count() { right } else { left };
+            row.push(Cell { ch, fg: color, ..Cell::default() });
+        }
+        row
+    }
+
+    /// The view body beneath the launch row (the previous
+    /// `render_frame` dispatch).
+    #[must_use]
+    fn render_body(&self, width: usize, height: usize) -> crate::render::Frame {
         match &self.machine.view {
             FooterView::Permission { request } => {
                 let state = self
@@ -582,9 +671,16 @@ impl FooterPane {
                     } else {
                         super::spinner::work_spinner(&self.work_spinner)
                     };
+                    // RD-19 — `oneCellFrame`'s glyph + glow level; the
+                    // ref mounts the spinner with `glow={!props.mono}`
+                    // (footer.view.tsx:985) so the per-frame alpha
+                    // applies except in mono.
+                    let cell = motion.one_cell_frame(since.elapsed());
+                    let level = if self.mono { 1.0 } else { cell.level };
                     paint_busy_cell(
                         &mut frame,
-                        motion.frame(since.elapsed()),
+                        cell.glyph,
+                        level,
                         self.theme.agent_color(0),
                         width,
                     );
@@ -633,19 +729,41 @@ fn blank_statusline_details(frame: &mut crate::render::Frame) {
 /// CONFIG-T4 busy cell (`footer.view.tsx:978-988`): the one-cell
 /// spinner box (glyph at col 0, its `gap={1}` at col 1) prepended to
 /// the statusline row; the status text was already rendered into the
-/// narrowed width, so the cells shift into place.
+/// narrowed width, so the cells shift into place. RD-19 — `level`
+/// carries `oneCellFrame`'s glow multiplier: the ref scales the
+/// spinner RGBA's alpha per frame (`color.a *= level`); the port's
+/// cell model composites over the (dark) theme background, so the
+/// level dims the RGB channels.
 fn paint_busy_cell(
     frame: &mut crate::render::Frame,
     glyph: char,
+    level: f64,
     color: crate::render::CellColor,
     width: usize,
 ) {
+    let color = apply_glow(color, level);
     let Some(row) = frame.cells.get_mut(1) else { return };
     let spacer = crate::render::Cell { ch: ' ', fg: color, ..crate::render::Cell::default() };
     let cell = crate::render::Cell { ch: glyph, fg: color, ..crate::render::Cell::default() };
     row.insert(0, cell);
     row.insert(1, spacer);
     row.truncate(width);
+}
+
+/// `color.a *= level` (`one-cell-spinner.tsx:29-34`) in the port's
+/// alpha-less cell model: scale the channels (alpha-over-black).
+fn apply_glow(color: crate::render::CellColor, level: f64) -> crate::render::CellColor {
+    let level = level.clamp(0.0, 1.0);
+    // level ∈ [0, 1] scales each channel back INTO u8 range — the
+    // float→u8 cast below is sign- and range-safe.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let dim = |channel: u8| (f64::from(channel) * level).round() as u8;
+    match color {
+        crate::render::CellColor::Rgb(r, g, b) => {
+            crate::render::CellColor::Rgb(dim(r), dim(g), dim(b))
+        }
+        other => other,
+    }
 }
 
 /// [`Lifecycle::boot`]'s inputs (`LifecycleInput`,
@@ -770,17 +888,53 @@ impl Lifecycle {
             home: input.home,
             directory: input.directory,
         };
-        // `queueSplash(entry)` (`runtime.lifecycle.ts:191-203`): the
-        // splash starts the transcript one row below prior output
-        // (paddingTop 1 → blank row + label row).
+        // `queueSplash(entry)` (`runtime.lifecycle.ts:191-203`) with
+        // RD-19's startup split (`runtime.lifecycle.ts:187-196`):
+        // splash=show AND NOT mono (the ref also requires
+        // `tuiConfig.animations !== false`; the port carries no
+        // animations knob into mini) mounts the SEED_LAUNCH launch row
+        // and DEFERS the entry splash to its completion — any other
+        // combination queues the splash at boot as before.
         if lifecycle.splash_enabled {
             let detail = directory_label(&lifecycle.directory, &lifecycle.home);
-            let rows =
-                entry_splash_rows(&lifecycle.version, Some(&detail), lifecycle.mono, width.max(1));
-            lifecycle.queue_rows(rows);
+            if lifecycle.mono {
+                let rows = entry_splash_rows(
+                    &lifecycle.version,
+                    Some(&detail),
+                    lifecycle.mono,
+                    width.max(1),
+                );
+                lifecycle.queue_rows(rows);
+            } else {
+                let layout =
+                    entry_splash_layout(&EntrySplashInput { width: width.max(1), version: &lifecycle.version, detail: Some(&detail), mono: false });
+                lifecycle.pane.startup = Some(StartupRow {
+                    since: Instant::now(),
+                    label: layout.label,
+                    metadata: layout.metadata,
+                });
+            }
         }
         lifecycle.flush()?;
         Ok(lifecycle)
+    }
+
+    /// RD-19 — `finishStartup` (`footer.ts:393-409`): when the
+    /// launch one-shot completes (`(21-1) × 40 ms`), drop the launch
+    /// row and queue the entry splash for scrollback (the ref's
+    /// setTimeout fires once; the flush tick is the port's driver).
+    fn finish_startup(&mut self) {
+        if !self.pane.startup_expired() {
+            return;
+        }
+        self.pane.startup = None;
+        if self.splash_enabled {
+            let detail = directory_label(&self.directory, &self.home);
+            let rows =
+                entry_splash_rows(&self.version, Some(&detail), self.mono, self.width.max(1));
+            self.queue_rows(rows);
+        }
+        self.force_draw = true;
     }
 
     fn queue_rows(&mut self, rows: Vec<String>) {
@@ -821,6 +975,7 @@ impl Lifecycle {
     /// buffer — mono rows stamp cluster-by-cluster (the same
     /// [`crate::wrap::flatten`] seam the canvas uses).
     pub fn flush(&mut self) -> Result<(), String> {
+        self.finish_startup();
         while let Some(rows) = self.pending.first().cloned() {
             let height = match &rows {
                 PendingRows::Plain(rows) => rows.len(),
@@ -1063,6 +1218,81 @@ mod tests {
 
     fn pane() -> FooterPane {
         FooterPane::new(FooterTheme::fallback_dark())
+    }
+
+    // -- RD-19: the SEED_LAUNCH launch row -------------------------------
+
+    /// The launch row grows the pane by one (`footer.ts:762`'s
+    /// `desired + (this.startup() ? 1 : 0)`) and renders ABOVE the
+    /// composer: the animated spinner cell first, then the label tail
+    /// and metadata.
+    #[test]
+    fn startup_row_grows_the_pane_and_renders_the_one_shot() {
+        let mut footer = pane();
+        assert_eq!(footer.pane_height(), super::super::FOOTER_HEIGHT);
+        footer.startup = Some(StartupRow {
+            since: std::time::Instant::now(),
+            label: "▪ oc mini".to_owned(),
+            metadata: " v2.0.24 · ~".to_owned(),
+        });
+        assert_eq!(footer.pane_height(), super::super::FOOTER_HEIGHT + 1);
+        let frame = footer.render_frame(80, footer.pane_height());
+        assert_eq!(frame.cells.len(), super::super::FOOTER_HEIGHT + 1);
+        // Cell 0: the SEED_LAUNCH spinner (a young age is an outline).
+        assert_eq!(frame.cells[0][0].ch, '\u{25ab}');
+        // The label tail follows (" oc mini") and the metadata after.
+        let text: String = frame.cells[0].iter().map(|cell| cell.ch).collect();
+        assert!(text.starts_with('\u{25ab}'), "{text}");
+        assert!(text.contains("oc mini"), "{text}");
+        assert!(text.contains("v2.0.24"), "{text}");
+        // The spinner's glow: the fg is the splash right color scaled
+        // by the frame's level (full strength at level 1.0 would be
+        // the unscaled color — the level here is the seed head's dim).
+        let splash =
+            crate::mini::splash::SplashColors::from_footer_theme(&footer.theme);
+        let level = super::super::spinner::seed_launch()
+            .one_cell_frame(std::time::Duration::from_millis(0))
+            .level;
+        assert_eq!(
+            frame.cells[0][0].fg,
+            apply_glow(crate::render::CellColor::from(splash.right), level)
+        );
+    }
+
+    /// A label without the ▪ mark (a narrow terminal) renders as
+    /// plain text — the ref's `Show when={label.startsWith("▪")}`
+    /// never mounts the spinner (`footer.view.tsx:712-717`).
+    #[test]
+    fn startup_row_without_the_mark_renders_plain_text() {
+        let mut footer = pane();
+        footer.startup = Some(StartupRow {
+            since: std::time::Instant::now(),
+            label: "oc m".to_owned(),
+            metadata: String::new(),
+        });
+        let frame = footer.render_frame(80, footer.pane_height());
+        let text: String = frame.cells[0].iter().map(|cell| cell.ch).collect();
+        assert!(text.starts_with("oc m"), "{text}");
+    }
+
+    /// The one-shot's expiry matches the ref's 800 ms setTimeout
+    /// (`footer.ts:390`).
+    #[test]
+    #[allow(clippy::unchecked_time_subtraction)] // the backdated anchors are ~1 s old
+    fn startup_row_expires_after_the_window() {
+        let mut footer = pane();
+        footer.startup = Some(StartupRow {
+            since: std::time::Instant::now() - std::time::Duration::from_millis(799),
+            label: "▪ oc mini".to_owned(),
+            metadata: String::new(),
+        });
+        assert!(!footer.startup_expired());
+        footer.startup = Some(StartupRow {
+            since: std::time::Instant::now() - std::time::Duration::from_millis(800),
+            label: "▪ oc mini".to_owned(),
+            metadata: String::new(),
+        });
+        assert!(footer.startup_expired());
     }
 
     fn permission(id: &str) -> PermissionRequest {

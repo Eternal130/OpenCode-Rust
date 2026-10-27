@@ -143,10 +143,10 @@ pub fn entry_splash_layout(input: &EntrySplashInput<'_>) -> EntrySplashLayout {
 
 #[derive(Debug, Clone, Default)]
 pub struct EntrySplashInput<'a> {
-    width: usize,
-    version: &'a str,
-    detail: Option<&'a str>,
-    mono: bool,
+    pub width: usize,
+    pub version: &'a str,
+    pub detail: Option<&'a str>,
+    pub mono: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

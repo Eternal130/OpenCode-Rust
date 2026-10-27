@@ -1003,6 +1003,45 @@ async fn mcp_registry_tools_sorted_by_server_then_name() {
     registry.shutdown().await;
 }
 
+/// RD-18 — the listing surfaces order like JS `localeCompare`
+/// (index.ts:632-770: servers/tools/prompts/resources): accent- and
+/// case-insensitive primary, so non-ASCII interleaves — byte order
+/// would put "Eclair" < "Zebra" < "apple" < "éclair".
+#[tokio::test]
+async fn mcp_listings_sort_like_locale_compare() {
+    let (_db, bus) = test_bus().await;
+    let mut servers = BTreeMap::new();
+    for name in ["Zebra", "apple", "éclair", "Eclair"] {
+        servers.insert(name.to_string(), local_config());
+    }
+    let registry = registry_with(
+        &bus,
+        scripted_connector(|| Script::new().tool("zz", "Z", None).tool("aa", "A", None)),
+        servers,
+    );
+    registry.reconcile().await;
+    wait_for_status(&registry, "apple", Status::Connected).await;
+    wait_for_status(&registry, "Zebra", Status::Connected).await;
+    let names: Vec<String> = registry.servers().into_iter().map(|info| info.name).collect();
+    assert_eq!(names, vec!["apple", "Eclair", "éclair", "Zebra"]);
+    let tools: Vec<String> =
+        registry.tools().iter().map(|tool| format!("{}/{}", tool.server, tool.name)).collect();
+    assert_eq!(
+        tools,
+        vec![
+            "apple/aa",
+            "apple/zz",
+            "Eclair/aa",
+            "Eclair/zz",
+            "éclair/aa",
+            "éclair/zz",
+            "Zebra/aa",
+            "Zebra/zz",
+        ]
+    );
+    registry.shutdown().await;
+}
+
 #[tokio::test]
 async fn mcp_registry_add_disconnect_reconnect() {
     let (_db, bus) = test_bus().await;

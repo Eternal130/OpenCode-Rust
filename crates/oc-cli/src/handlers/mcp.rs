@@ -50,7 +50,9 @@ async fn list() -> i32 {
         .map(|server| serde_json::to_value(server).expect("server serializes"))
         .collect();
     servers.sort_by(|a, b| {
-        a.get("name").and_then(Value::as_str).cmp(&b.get("name").and_then(Value::as_str))
+        let name_a = a.get("name").and_then(Value::as_str).unwrap_or_default();
+        let name_b = b.get("name").and_then(Value::as_str).unwrap_or_default();
+        oc_util::localecmp::locale_cmp(name_a, name_b)
     });
     if servers.is_empty() {
         println!("No MCP servers configured");
@@ -505,27 +507,45 @@ async fn logout(name: &str) -> i32 {
         }
     };
     let Some(server) = servers.data.iter().find(|server| server.name == name) else {
-        println!("No stored credentials for {name}");
-        return 0;
+        // RD-18 — resolveIntegration fails on an unknown server
+        // (mcp/resolve.ts:14-15: `Effect.fail(new Error("MCP server
+        // not found: …"))`), a command failure, not the soft
+        // no-credentials line.
+        eprintln!("{}", error_message(&format!("MCP server not found: {name}")));
+        return 1;
     };
     let Some(integration_id) = &server.integration_id else {
         println!("No stored credentials for {name}");
         return 0;
     };
-    // v2 logout resolves the integration's credential connections; the
-    // port reads the credential rows of the registry-derived integration
-    // id (the engine-side integration row is the CLI lane's future).
-    let credentials: Vec<String> = match client.credential().list().await {
-        Ok(rows) => rows
-            .into_iter()
-            .filter(|row| &row.integration_id == integration_id)
-            .map(|row| row.id)
-            .collect(),
+    // RD-18 — resolveIntegration's semantics (mcp/resolve.ts:8-24 +
+    // logout.ts:18-24): the MCP-owned integrationID resolves through
+    // `integration.get` (NEVER an integration-name match — provider/
+    // plugin integrations could collide), then the response's
+    // `connections` filter `type === "credential"` names the removals.
+    let integration = match client
+        .integration()
+        .get(integration_id, &oc_client::types::IntegrationGetQuery {
+            location: Some(location_query()),
+        })
+        .await
+    {
+        Ok(response) => response.data,
         Err(error) => {
             eprintln!("{}", error_message(&error.to_string()));
             return 1;
         }
     };
+    let credentials: Vec<String> = integration
+        .connections
+        .iter()
+        .filter_map(|connection| match connection {
+            oc_client::types::ConnectionInfo::CredentialInfo(credential) => {
+                Some(credential.id.clone())
+            }
+            oc_client::types::ConnectionInfo::EnvInfo(_) => None,
+        })
+        .collect();
     if credentials.is_empty() {
         println!("No stored credentials for {name}");
         return 0;
