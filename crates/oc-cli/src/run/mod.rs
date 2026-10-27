@@ -437,6 +437,9 @@ async fn run_inner(input: RunInput) -> Result<i32, String> {
         thinking: input.thinking,
         format: input.format,
         auto: input.auto,
+        // The standalone `run` spins up (or exclusively owns) its server;
+        // global-location forms belong to this run alone.
+        attached: false,
     };
     Ok(noninteractive::run_prompt(prompt).await)
 }
