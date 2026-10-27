@@ -90,10 +90,30 @@ impl FileMention {
     }
 }
 
-/// One agent mention (`@build`-style chips).
+/// One agent mention (`@build`-style chips). RD-05: the chip's char
+/// range inside `PromptDraft::text` (the extmark's virtual range —
+/// autocomplete.tsx:230-238) rides along so the part survives edits
+/// and submits as the wire `agents` attachment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentMention {
     pub name: String,
+    /// Char index of the `@` (the chip's first character).
+    pub start: usize,
+    /// Char index one past the chip label's last character.
+    pub end: usize,
+}
+
+/// One skill mention (`@skill`-style chips, RD-05): the wire shape is
+/// `PromptInput.SkillAttachment` `{id, mention}` — the name stays for
+/// the stash/render labels.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillMention {
+    pub id: String,
+    pub name: String,
+    /// Char index of the `@` (the chip's first character).
+    pub start: usize,
+    /// Char index one past the chip label's last character.
+    pub end: usize,
 }
 
 /// One folded paste (`store.prompt.pasted`, RD-06): the full pasted
@@ -132,6 +152,10 @@ pub struct PromptDraft {
     pub text: String,
     pub files: Vec<FileMention>,
     pub agents: Vec<AgentMention>,
+    /// RD-05 — the `@skill` chips (`store.prompt.skills`): each entry
+    /// tracks the chip range in `text` + the skill id the wire
+    /// `skills` attachment carries.
+    pub skills: Vec<SkillMention>,
     /// RD-06 — the folded pastes (`store.prompt.pasted`): each entry
     /// tracks the chip range in `text` + the full content it expands
     /// back to.
@@ -181,6 +205,9 @@ pub struct SubmittedPrompt {
     pub text: String,
     pub files: Vec<FileMention>,
     pub agents: Vec<AgentMention>,
+    /// RD-05 — the `@skill` chips (autocomplete.tsx:216-227): they
+    /// POST as the wire `skills` array (index.tsx:1362).
+    pub skills: Vec<SkillMention>,
     /// TUI-TD07 — the submit's inbox delivery ("queue" via
     /// `<leader>return`; the default "steer" sends None here and the
     /// wire body carries `delivery: "steer"`, prompt/index.tsx:1092).
@@ -286,6 +313,12 @@ pub struct Composer {
     /// (parallel to `files_undo`/`files_redo`, one-for-one).
     pub(crate) pasted_undo: Vec<Vec<PastedPart>>,
     pub(crate) pasted_redo: Vec<Vec<PastedPart>>,
+    /// RD-05 — the `@agent`/`@skill` chips mirrored onto the area's
+    /// undo stack (parallel to `files_undo`/`files_redo`).
+    pub(crate) agents_undo: Vec<Vec<AgentMention>>,
+    pub(crate) agents_redo: Vec<Vec<AgentMention>>,
+    pub(crate) skills_undo: Vec<Vec<SkillMention>>,
+    pub(crate) skills_redo: Vec<Vec<SkillMention>>,
     pub history: PromptHistory,
     pub placeholders: Vec<String>,
     pub placeholder_index: usize,
@@ -310,6 +343,10 @@ impl Default for Composer {
             files_redo: Vec::new(),
             pasted_undo: Vec::new(),
             pasted_redo: Vec::new(),
+            agents_undo: Vec::new(),
+            agents_redo: Vec::new(),
+            skills_undo: Vec::new(),
+            skills_redo: Vec::new(),
             history: PromptHistory::default(),
             placeholders: Vec::new(),
             placeholder_index: 0,
@@ -459,6 +496,10 @@ impl Composer {
         self.files_redo.clear();
         self.pasted_undo.clear();
         self.pasted_redo.clear();
+        self.agents_undo.clear();
+        self.agents_redo.clear();
+        self.skills_undo.clear();
+        self.skills_redo.clear();
         self.autocomplete.close();
     }
 
@@ -470,6 +511,10 @@ impl Composer {
         self.files_redo.clear();
         self.pasted_undo.clear();
         self.pasted_redo.clear();
+        self.agents_undo.clear();
+        self.agents_redo.clear();
+        self.skills_undo.clear();
+        self.skills_redo.clear();
         self.autocomplete.close();
     }
 
@@ -498,6 +543,22 @@ impl Composer {
                 part.end = part.end - removed + inserted;
             }
         }
+        // RD-05: the `@agent`/`@skill` chips' ranges shift under the
+        // same rule (their extmarks move with the buffer).
+        self.draft.agents.retain(|part| part.end <= replaced.start || part.start >= replaced.end);
+        for part in &mut self.draft.agents {
+            if part.start >= replaced.end {
+                part.start = part.start - removed + inserted;
+                part.end = part.end - removed + inserted;
+            }
+        }
+        self.draft.skills.retain(|part| part.end <= replaced.start || part.start >= replaced.end);
+        for part in &mut self.draft.skills {
+            if part.start >= replaced.end {
+                part.start = part.start - removed + inserted;
+                part.end = part.end - removed + inserted;
+            }
+        }
     }
 
     /// Mirror the mention + paste stacks onto the text area's history
@@ -508,6 +569,8 @@ impl Composer {
         &mut self,
         files_before: Vec<FileMention>,
         pasted_before: Vec<PastedPart>,
+        agents_before: Vec<AgentMention>,
+        skills_before: Vec<SkillMention>,
         snapshot: SnapshotKind,
     ) {
         match snapshot {
@@ -516,6 +579,10 @@ impl Composer {
                 self.files_redo.clear();
                 self.pasted_undo.push(pasted_before);
                 self.pasted_redo.clear();
+                self.agents_undo.push(agents_before);
+                self.agents_redo.clear();
+                self.skills_undo.push(skills_before);
+                self.skills_redo.clear();
             }
             SnapshotKind::Undone => {
                 self.files_redo.push(self.draft.files.clone());
@@ -526,6 +593,14 @@ impl Composer {
                 if let Some(pasted) = self.pasted_undo.pop() {
                     self.draft.pasted = pasted;
                 }
+                self.agents_redo.push(self.draft.agents.clone());
+                if let Some(agents) = self.agents_undo.pop() {
+                    self.draft.agents = agents;
+                }
+                self.skills_redo.push(self.draft.skills.clone());
+                if let Some(skills) = self.skills_undo.pop() {
+                    self.draft.skills = skills;
+                }
             }
             SnapshotKind::Redone => {
                 self.files_undo.push(self.draft.files.clone());
@@ -535,6 +610,14 @@ impl Composer {
                 self.pasted_undo.push(self.draft.pasted.clone());
                 if let Some(pasted) = self.pasted_redo.pop() {
                     self.draft.pasted = pasted;
+                }
+                self.agents_undo.push(self.draft.agents.clone());
+                if let Some(agents) = self.agents_redo.pop() {
+                    self.draft.agents = agents;
+                }
+                self.skills_undo.push(self.draft.skills.clone());
+                if let Some(skills) = self.skills_redo.pop() {
+                    self.draft.skills = skills;
                 }
             }
             SnapshotKind::None => {}
@@ -553,6 +636,8 @@ impl Composer {
         self.edit.mirror_text(&self.draft.text);
         let files_before = self.draft.files.clone();
         let pasted_before = self.draft.pasted.clone();
+        let agents_before = self.draft.agents.clone();
+        let skills_before = self.draft.skills.clone();
         let outcome = run(&mut self.edit);
         self.draft.text = self.edit.text();
         let text_changed = match &outcome {
@@ -561,7 +646,13 @@ impl Composer {
                 if !matches!(snapshot, SnapshotKind::Undone | SnapshotKind::Redone) {
                     self.apply_files_delta(replaced.clone(), *inserted);
                 }
-                self.mirror_files_history(files_before, pasted_before, *snapshot);
+                self.mirror_files_history(
+                    files_before,
+                    pasted_before,
+                    agents_before,
+                    skills_before,
+                    *snapshot,
+                );
                 replaced.start != replaced.end || *inserted > 0
             }
         };
@@ -608,8 +699,19 @@ impl Composer {
         {
             return Some(file.start..file.end);
         }
+        if let Some(part) =
+            self.draft.pasted.iter().find(|part| caret <= part.end && caret > part.start)
+        {
+            return Some(part.start..part.end);
+        }
+        // RD-05: `@agent`/`@skill` chips delete as one unit too.
+        if let Some(part) =
+            self.draft.agents.iter().find(|part| caret <= part.end && caret > part.start)
+        {
+            return Some(part.start..part.end);
+        }
         self.draft
-            .pasted
+            .skills
             .iter()
             .find(|part| caret <= part.end && caret > part.start)
             .map(|part| part.start..part.end)
@@ -624,8 +726,19 @@ impl Composer {
         {
             return Some(file.start..file.end);
         }
+        if let Some(part) =
+            self.draft.pasted.iter().find(|part| caret >= part.start && caret < part.end)
+        {
+            return Some(part.start..part.end);
+        }
+        // RD-05: `@agent`/`@skill` chips delete as one unit too.
+        if let Some(part) =
+            self.draft.agents.iter().find(|part| caret >= part.start && caret < part.end)
+        {
+            return Some(part.start..part.end);
+        }
         self.draft
-            .pasted
+            .skills
             .iter()
             .find(|part| caret >= part.start && caret < part.end)
             .map(|part| part.start..part.end)
@@ -649,6 +762,10 @@ impl Composer {
         self.files_redo.clear();
         self.pasted_undo.clear();
         self.pasted_redo.clear();
+        self.agents_undo.clear();
+        self.agents_redo.clear();
+        self.skills_undo.clear();
+        self.skills_redo.clear();
         if !text.is_empty() {
             self.insert_text(text);
         }
@@ -718,6 +835,10 @@ impl Composer {
         self.files_redo.clear();
         self.pasted_undo.clear();
         self.pasted_redo.clear();
+        self.agents_undo.clear();
+        self.agents_redo.clear();
+        self.skills_undo.clear();
+        self.skills_redo.clear();
         self.autocomplete.close();
     }
 
@@ -974,6 +1095,9 @@ impl Composer {
             text: self.draft.expand_pasted_ranges(),
             files: std::mem::take(&mut self.draft.files),
             agents: std::mem::take(&mut self.draft.agents),
+            // RD-05 — the `@skill` chips ride the submit as the wire
+            // `skills` array (index.tsx:1362).
+            skills: std::mem::take(&mut self.draft.skills),
             ..SubmittedPrompt::default()
         };
         self.draft.text.clear();
@@ -983,6 +1107,10 @@ impl Composer {
         self.files_redo.clear();
         self.pasted_undo.clear();
         self.pasted_redo.clear();
+        self.agents_undo.clear();
+        self.agents_redo.clear();
+        self.skills_undo.clear();
+        self.skills_redo.clear();
         self.autocomplete.close();
         Some(prompt)
     }
@@ -1200,6 +1328,27 @@ impl Composer {
         }
     }
 
+    /// RD-05 — replace the `@query` trigger token with the virtual
+    /// chip `@<name>` (autocomplete.tsx:160-190): the token range
+    /// (trigger index through the caret) deletes first, the chip (+ a
+    /// space unless the following char already is one) inserts, and
+    /// the chip's char range is returned for the structured part's
+    /// mention bookkeeping.
+    fn insert_reference_chip(&mut self, name: &str) -> (usize, usize) {
+        let caret = self.edit.caret();
+        let index = self.autocomplete.trigger_index;
+        let chars: Vec<char> = self.draft.text.chars().collect();
+        let needs_space = chars.get(caret).map_or(true, |ch| *ch != ' ');
+        if index < caret {
+            self.delete_range(index..caret);
+        }
+        let chip = format!("@{name}");
+        let end = index + chip.chars().count();
+        let insert = if needs_space { format!("{chip} ") } else { chip };
+        self.insert_text(&insert);
+        (index, end)
+    }
+
     /// Accept the selected autocomplete option (select/complete).
     ///
     /// Command mode follows v2's `select()` (`autocomplete.tsx:
@@ -1235,9 +1384,37 @@ impl Composer {
             }
             Some(autocomplete::Mode::Reference) => {
                 self.autocomplete.close();
-                let name = option.display.trim_start_matches('@');
-                self.insert_text(&format!("@{name} "));
-                KeyOutcome::Edited
+                // RD-05 — the `@agent`/`@skill` rows record their
+                // structured parts (autocomplete.tsx:160-238): the
+                // trigger token (`@query`) is replaced by the virtual
+                // chip `@<id>`, and the part tracks the chip's char
+                // range so edits/undo keep it consistent. Rows without
+                // a structured identity (references/files — no live
+                // source in the port) insert as plain text.
+                match option.reference {
+                    Some(autocomplete::Reference::Agent { name }) => {
+                        let (start, end) = self.insert_reference_chip(&name);
+                        // The ref pushes agents unconditionally (no
+                        // dedupe — autocomplete.tsx:230-238).
+                        self.draft.agents.push(AgentMention { name, start, end });
+                        KeyOutcome::Edited
+                    }
+                    Some(autocomplete::Reference::Skill { id }) => {
+                        // `hasSkill` (autocomplete.tsx:160): a skill
+                        // already attached is a no-op.
+                        if self.draft.skills.iter().any(|skill| skill.id == id) {
+                            return KeyOutcome::Edited;
+                        }
+                        let (start, end) = self.insert_reference_chip(&id);
+                        self.draft.skills.push(SkillMention { name: id.clone(), id, start, end });
+                        KeyOutcome::Edited
+                    }
+                    None => {
+                        let name = option.display.trim_start_matches('@');
+                        self.insert_text(&format!("@{name} "));
+                        KeyOutcome::Edited
+                    }
+                }
             }
             // TUI-28 — the directory rows' `select()` (autocomplete.
             // tsx:620-627): the recent rows carry NO `onSelect`, so
@@ -1600,5 +1777,128 @@ mod tests {
         assert_eq!(state.placeholder_text(), "Ask anything… \"Fix a TODO\"");
         state.placeholder_index = 1;
         assert_eq!(state.placeholder_text(), "Ask anything… \"Other\"");
+    }
+
+    /// RD-05 — accepting an `@agent` row records the structured part
+    /// (autocomplete.tsx:230-238): the `@query` token is replaced by
+    /// the virtual chip `@build `, and the part tracks the chip range.
+    #[test]
+    fn accepting_agent_completion_records_structured_part() {
+        let mut state = Composer::default();
+        state.set(PromptDraft { text: "hey @bu".into(), ..PromptDraft::default() });
+        state.set_caret(state.char_len());
+        // The popup opens on input; the app attaches the reference
+        // rows (here: the agent row for `build`).
+        state.autocomplete.on_input(&state.draft.text, state.edit.caret());
+        assert!(state.autocomplete.visible.is_some());
+        state.autocomplete.options = vec![autocomplete::AutocompleteOption {
+            display: "@build".into(),
+            reference: Some(autocomplete::Reference::Agent { name: "build".into() }),
+            ..autocomplete::AutocompleteOption::default()
+        }];
+        state.autocomplete.filtered_len = 1;
+        let outcome = state.accept_autocomplete();
+        assert!(matches!(outcome, KeyOutcome::Edited));
+        assert_eq!(state.draft.text, "hey @build ");
+        let agent = state.draft.agents.first().expect("structured agent part");
+        assert_eq!(agent.name, "build");
+        // The chip range covers `@build` (not the trailing space).
+        assert_eq!((agent.start, agent.end), (4, 10));
+    }
+
+    /// RD-05 — accepting an `@skill` row records the wire `skills`
+    /// part; a skill already attached is a no-op (`hasSkill`,
+    /// autocomplete.tsx:160).
+    #[test]
+    fn accepting_skill_completion_records_and_dedupes() {
+        let mut state = Composer::default();
+        state.set(PromptDraft { text: "@re".into(), ..PromptDraft::default() });
+        state.set_caret(state.char_len());
+        state.autocomplete.on_input(&state.draft.text, state.edit.caret());
+        state.autocomplete.options = vec![autocomplete::AutocompleteOption {
+            display: "@refactor".into(),
+            reference: Some(autocomplete::Reference::Skill { id: "refactor".into() }),
+            ..autocomplete::AutocompleteOption::default()
+        }];
+        state.autocomplete.filtered_len = 1;
+        assert!(matches!(state.accept_autocomplete(), KeyOutcome::Edited));
+        assert_eq!(state.draft.text, "@refactor ");
+        let skill = state.draft.skills.first().expect("structured skill part");
+        assert_eq!(skill.id, "refactor");
+        assert_eq!((skill.start, skill.end), (0, 9));
+
+        // Re-mentioning the same skill inserts the chip text but does
+        // NOT double-attach the part (hasSkill skip).
+        state.set(PromptDraft { text: "@re".into(), ..PromptDraft::default() });
+        state.set_caret(state.char_len());
+        state.autocomplete.on_input(&state.draft.text, state.edit.caret());
+        state.autocomplete.options = vec![autocomplete::AutocompleteOption {
+            display: "@refactor".into(),
+            reference: Some(autocomplete::Reference::Skill { id: "refactor".into() }),
+            ..autocomplete::AutocompleteOption::default()
+        }];
+        state.autocomplete.filtered_len = 1;
+        assert!(matches!(state.accept_autocomplete(), KeyOutcome::Edited));
+        assert_eq!(state.draft.skills.len(), 1, "skill parts dedupe");
+    }
+
+    /// RD-05 — the chips delete atomically (backspace over the chip
+    /// removes text AND part) and earlier edits shift the ranges.
+    #[test]
+    fn agent_skill_chips_stay_consistent_under_edits() {
+        let mut state = Composer::default();
+        state.set(PromptDraft { text: "hey @bu".into(), ..PromptDraft::default() });
+        state.set_caret(state.char_len());
+        state.autocomplete.on_input(&state.draft.text, state.edit.caret());
+        state.autocomplete.options = vec![autocomplete::AutocompleteOption {
+            display: "@build".into(),
+            reference: Some(autocomplete::Reference::Agent { name: "build".into() }),
+            ..autocomplete::AutocompleteOption::default()
+        }];
+        state.autocomplete.filtered_len = 1;
+        let _ = state.accept_autocomplete();
+        assert_eq!(state.draft.text, "hey @build ");
+
+        // Inserting before the chip shifts its range.
+        state.set_caret(0);
+        state.insert_text(">> ");
+        let agent = &state.draft.agents[0];
+        assert_eq!((agent.start, agent.end), (7, 13));
+
+        // Backspace at the chip's end deletes the whole chip + part.
+        state.set_caret(state.draft.agents[0].end);
+        state.handle_key(&ComposerKey::Backspace);
+        assert_eq!(state.draft.text, ">> hey  ");
+        assert!(state.draft.agents.is_empty(), "part removed with the chip");
+
+        // Undo restores the part with the chip.
+        state.undo();
+        assert_eq!(state.draft.text, ">> hey @build ");
+        assert_eq!(state.draft.agents.len(), 1, "undo restores the agent part");
+        assert_eq!((state.draft.agents[0].start, state.draft.agents[0].end), (7, 13));
+    }
+
+    /// RD-05 — the submit carries the structured parts
+    /// (index.tsx:1361-1362: `agents`/`skills` on the prompt POST).
+    #[test]
+    fn submit_carries_agent_and_skill_parts() {
+        let mut state = Composer::default();
+        state.set(PromptDraft {
+            text: "go @build ".into(),
+            agents: vec![AgentMention { name: "build".into(), start: 3, end: 9 }],
+            skills: vec![SkillMention {
+                id: "refactor".into(),
+                name: "refactor".into(),
+                start: 10,
+                end: 10,
+            }],
+            ..PromptDraft::default()
+        });
+        let prompt = state.take_submit().expect("submit");
+        assert_eq!(prompt.text, "go @build ");
+        assert_eq!(prompt.agents.len(), 1);
+        assert_eq!(prompt.skills.len(), 1);
+        assert_eq!(prompt.skills[0].id, "refactor");
+        assert!(state.draft.agents.is_empty() && state.draft.skills.is_empty());
     }
 }
