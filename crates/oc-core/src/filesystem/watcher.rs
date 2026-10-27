@@ -84,7 +84,7 @@ impl FileWatcher {
     /// Subscribes to a target; equivalent targets share one native watch
     /// (`RcMap` with structural keys in REF). Dropping the returned
     /// subscription detaches; the last drop tears the native watch down.
-    pub fn subscribe(self: &Arc<Self>, target: WatchTarget) -> Subscription {
+    pub fn subscribe(self: &Arc<Self>, target: &WatchTarget) -> Subscription {
         let key = target.key();
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -99,7 +99,7 @@ impl FileWatcher {
         let senders: Senders = Arc::new(Mutex::new(Vec::new()));
         let forward = Arc::clone(&senders);
         let Some(guard) = self.backend.subscribe(
-            &target,
+            target,
             Box::new(move |update: FsUpdate| {
                 let senders = forward.lock().unwrap();
                 for (_, sender) in senders.iter() {
@@ -163,7 +163,7 @@ pub fn spawn_publisher(
     let watcher = Arc::clone(watcher);
     tokio::spawn(async move {
         let mut subscription =
-            watcher.subscribe(WatchTarget::Directory { path: directory, ignore });
+            watcher.subscribe(&WatchTarget::Directory { path: directory, ignore });
         loop {
             tokio::select! {
                 _ = shutdown.changed() => break,
@@ -245,8 +245,8 @@ mod tests {
     async fn subscriptions_share_one_native_watch_and_teardown_on_last_drop() {
         let (watcher, backend) = fake_watcher();
         let target = dir_target(PathBuf::from("/repo"));
-        let first = watcher.subscribe(target.clone());
-        let second = watcher.subscribe(target);
+        let first = watcher.subscribe(&target);
+        let second = watcher.subscribe(&target);
         assert_eq!(backend.subscriptions().len(), 1, "equivalent targets share one watch");
         drop(second);
         assert_eq!(watcher.active_keys().len(), 1, "last-drop teardown only");
@@ -258,7 +258,7 @@ mod tests {
     async fn disabled_watcher_ends_immediately() {
         let watcher = FileWatcher::disabled();
         assert!(!watcher.enabled());
-        let mut subscription = watcher.subscribe(dir_target(PathBuf::from("/repo")));
+        let mut subscription = watcher.subscribe(&dir_target(PathBuf::from("/repo")));
         assert!(subscription.recv().await.is_none());
         assert!(watcher.active_keys().is_empty());
     }
@@ -267,7 +267,7 @@ mod tests {
     async fn ignore_rules_exclude_node_modules_and_git() {
         let (watcher, backend) = fake_watcher();
         let target = dir_target(PathBuf::from("/repo"));
-        let mut subscription = watcher.subscribe(target);
+        let mut subscription = watcher.subscribe(&target);
         backend.emit(&FsUpdate {
             kind: FsChangeKind::Create,
             path: PathBuf::from("/repo/node_modules/pkg/index.js"),
