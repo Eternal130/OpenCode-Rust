@@ -2443,6 +2443,11 @@ impl App {
                             composer.autocomplete.selected = 0;
                         }
                     }
+                    // RD-05 — the `@` reference rows (autocomplete.
+                    // tsx:404-438): skills first, then the non-hidden
+                    // non-primary agents, filtered by the live query —
+                    // accepting one records the structured part.
+                    self.attach_reference_options(&mut composer);
                     self.store.set_composer(&key, &composer);
                     self.handle_composer_outcome(&key, outcome);
                     self.keymap.clear_pending();
@@ -2476,9 +2481,56 @@ impl App {
             let mut composer = self.store.composer(&key);
             let outcome = composer.handle_key(&key_event);
             if outcome != KeyOutcome::Ignored {
+                // RD-05 — the `@` rows attach here too (the empty-draft
+                // first keystroke takes this path).
+                self.attach_reference_options(&mut composer);
                 self.store.set_composer(&key, &composer);
                 self.handle_composer_outcome(&key, outcome);
             }
+        }
+    }
+
+    /// RD-05 — attach the `@` reference rows (autocomplete.tsx:
+    /// 404-438): skills first, then the non-hidden non-`primary`
+    /// agents, filtered by the live query — accepting one records the
+    /// structured part (the wire `agents`/`skills` attachments).
+    fn attach_reference_options(&self, composer: &mut crate::components::composer::Composer) {
+        use crate::components::composer::autocomplete;
+        if composer.autocomplete.visible != Some(autocomplete::Mode::Reference) {
+            return;
+        }
+        let query = autocomplete::query_between(
+            &composer.draft.text,
+            composer.autocomplete.trigger_index,
+            composer.edit.caret(),
+        );
+        let lists = self.store.server_lists();
+        let skills: Vec<autocomplete::ReferenceSkill> = lists
+            .skills
+            .rows()
+            .map(|rows| {
+                rows.iter()
+                    .map(|skill| autocomplete::ReferenceSkill {
+                        id: skill.id.clone(),
+                        description: skill.description.clone(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let agents: Vec<autocomplete::ReferenceAgent> = lists
+            .agents
+            .rows()
+            .map(|rows| {
+                rows.iter()
+                    .filter(|agent| !agent.hidden && agent.mode != "primary")
+                    .map(|agent| autocomplete::ReferenceAgent { id: agent.id.clone() })
+                    .collect()
+            })
+            .unwrap_or_default();
+        composer.autocomplete.options = autocomplete::filter_references(&agents, &skills, &query);
+        composer.autocomplete.filtered_len = composer.autocomplete.options.len();
+        if composer.autocomplete.selected >= composer.autocomplete.filtered_len {
+            composer.autocomplete.selected = 0;
         }
     }
 
@@ -3973,6 +4025,13 @@ impl crate::components::composer::PromptSink for HttpPromptSink {
                 })
             })
             .collect();
+        // RD-05 — the `@agent`/`@skill` chips ride the POST as the
+        // wire `agents`/`skills` attachments (autocomplete.tsx:
+        // 216-238 → index.tsx:1361-1362): plain text is NOT
+        // equivalent — the server resolves skills into instructions
+        // for the LLM user message.
+        let agents = wire_agent_attachments(&prompt.agents);
+        let skills = wire_skill_attachments(&prompt.skills);
         let session_key = session_id.to_owned();
         // RB-02: only a HOME submission can be the "first prompt" —
         // it takes the pre-allocated `--session` id (v2 newSessionID).
@@ -4053,6 +4112,8 @@ impl crate::components::composer::PromptSink for HttpPromptSink {
             let body = oc_client::types::SessionPromptBody {
                 text,
                 files: (!files.is_empty()).then_some(files),
+                agents: (!agents.is_empty()).then_some(agents),
+                skills: (!skills.is_empty()).then_some(skills),
                 delivery,
                 id: inbox_id,
                 ..oc_client::types::SessionPromptBody::default()
@@ -4086,6 +4147,45 @@ impl crate::components::composer::PromptSink for HttpPromptSink {
             }
         });
     }
+}
+
+/// RD-05 — the composer's agent chips → the wire `agents` array
+/// (`Prompt.AgentAttachment` `{name, mention}` — the extmark's
+/// `{start, end, text}` rides as the mention).
+#[must_use]
+pub fn wire_agent_attachments(
+    agents: &[crate::components::composer::AgentMention],
+) -> Vec<oc_client::types::PromptAgentAttachment> {
+    agents
+        .iter()
+        .map(|agent| oc_client::types::PromptAgentAttachment {
+            name: agent.name.clone(),
+            mention: Some(oc_client::types::PromptMention {
+                start: u32::try_from(agent.start).map_or(f64::MAX, f64::from),
+                end: u32::try_from(agent.end).map_or(f64::MAX, f64::from),
+                text: format!("@{}", agent.name),
+            }),
+        })
+        .collect()
+}
+
+/// RD-05 — the composer's skill chips → the wire `skills` array
+/// (`PromptInput.SkillAttachment` `{id, mention}`).
+#[must_use]
+pub fn wire_skill_attachments(
+    skills: &[crate::components::composer::SkillMention],
+) -> Vec<oc_client::types::PromptInputSkillAttachment> {
+    skills
+        .iter()
+        .map(|skill| oc_client::types::PromptInputSkillAttachment {
+            id: skill.id.clone(),
+            mention: Some(oc_client::types::PromptMention {
+                start: u32::try_from(skill.start).map_or(f64::MAX, f64::from),
+                end: u32::try_from(skill.end).map_or(f64::MAX, f64::from),
+                text: format!("@{}", skill.name),
+            }),
+        })
+        .collect()
 }
 
 /// `errorMessage` (util/error.ts): the client error's message text.
@@ -8057,6 +8157,54 @@ mod tests {
     use super::*;
     use crate::store::DialogSize;
 
+    /// RD-05 — the prompt POST body carries the structured
+    /// `agents`/`skills` attachments (autocomplete.tsx:230-238 →
+    /// index.tsx:1361-1362): the chips map to the wire shapes
+    /// (`Prompt.AgentAttachment` `{name, mention}` /
+    /// `PromptInput.SkillAttachment` `{id, mention}`), and the JSON
+    /// body serializes them under `agents`/`skills` — plain text is
+    /// NOT equivalent (the server injects skill instructions).
+    #[test]
+    fn prompt_body_carries_structured_agent_and_skill_parts() {
+        let agents = vec![crate::components::composer::AgentMention {
+            name: "build".to_owned(),
+            start: 4,
+            end: 10,
+        }];
+        let skills = vec![crate::components::composer::SkillMention {
+            id: "refactor".to_owned(),
+            name: "refactor".to_owned(),
+            start: 11,
+            end: 20,
+        }];
+        let wire_agents = wire_agent_attachments(&agents);
+        let wire_skills = wire_skill_attachments(&skills);
+        assert_eq!(wire_agents[0].name, "build");
+        assert_eq!(wire_agents[0].mention.as_ref().expect("mention").text, "@build");
+        assert_eq!(wire_skills[0].id, "refactor");
+        assert_eq!(wire_skills[0].mention.as_ref().expect("mention").text, "@refactor");
+
+        let body = oc_client::types::SessionPromptBody {
+            text: "hey @build @refactor".to_owned(),
+            agents: Some(wire_agents),
+            skills: Some(wire_skills),
+            ..oc_client::types::SessionPromptBody::default()
+        };
+        let json = serde_json::to_value(&body).expect("serialize");
+        assert_eq!(json["agents"][0]["name"], "build");
+        assert_eq!(json["agents"][0]["mention"]["start"], 4.0);
+        assert_eq!(json["skills"][0]["id"], "refactor");
+        assert_eq!(json["skills"][0]["mention"]["text"], "@refactor");
+        // Empty parts stay off the wire (the ref's
+        // `skills?.length ? skills : undefined`).
+        let empty = oc_client::types::SessionPromptBody {
+            text: "plain".to_owned(),
+            ..oc_client::types::SessionPromptBody::default()
+        };
+        let json = serde_json::to_value(&empty).expect("serialize");
+        assert!(json.get("agents").is_none() && json.get("skills").is_none());
+    }
+
     /// G-03 — `prompt.paste` (ctrl+v) through the pluggable clipboard
     /// source (the read arm, prompt/index.tsx:470-491): an image/png
     /// read stages the `clipboard` attachment chip (data-URI payload,
@@ -8696,6 +8844,61 @@ mod tests {
         );
         assert_eq!(fresh.route(), crate::store::Route::Home, "restore never moves the boot route");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// RD-05 — the full `@agent`/`@skill` lane: typing `@` attaches
+    /// the reference rows from the store's agent/skill lists, Enter
+    /// accepts the selection as a STRUCTURED part (the token swaps for
+    /// the chip), and the submit forwards the parts on the prompt.
+    #[test]
+    fn at_mention_completion_records_structured_parts_end_to_end() {
+        let mut app = App::new((80, 24));
+        app.store.open_tab("s1", Some("S".to_owned()));
+        app.store.set_agents(crate::store::ListState::Loaded(vec![crate::store::ServerAgent {
+            id: "build".to_owned(),
+            name: "build".to_owned(),
+            mode: "subagent".to_owned(),
+            hidden: false,
+            ..crate::store::ServerAgent::default()
+        }]));
+        app.store.set_skills(crate::store::ListState::Loaded(vec![crate::store::ServerSkill {
+            id: "refactor".to_owned(),
+            name: "refactor".to_owned(),
+            description: Some("Refactor code".to_owned()),
+        }]));
+
+        app.press("@");
+        let composer = app.store.composer("s1");
+        assert_eq!(
+            composer.autocomplete.visible,
+            Some(crate::components::composer::autocomplete::Mode::Reference)
+        );
+        let displays: Vec<String> =
+            composer.autocomplete.options.iter().map(|o| o.display.clone()).collect();
+        assert_eq!(displays, vec!["@refactor", "@build"], "skills before agents");
+
+        // Type `bu` → only `@build` survives; Enter accepts it.
+        app.press("b");
+        app.press("u");
+        let composer = app.store.composer("s1");
+        assert_eq!(composer.autocomplete.options.len(), 1);
+        assert_eq!(composer.autocomplete.options[0].display, "@build");
+        app.press("enter");
+        let composer = app.store.composer("s1");
+        assert_eq!(composer.draft.text, "@build ");
+        assert_eq!(composer.draft.agents.len(), 1);
+        assert_eq!(composer.draft.agents[0].name, "build");
+        assert!(composer.autocomplete.visible.is_none(), "accept closes the popup");
+
+        // Submit: the structured parts ride the submission.
+        let sink = std::rc::Rc::new(crate::components::composer::RecordingPromptSink::default());
+        app.store.set_prompt_sink(sink.clone());
+        app.press("enter");
+        let submissions = sink.submissions.borrow();
+        let (_, prompt) = submissions.last().expect("submitted");
+        assert_eq!(prompt.text, "@build ");
+        assert_eq!(prompt.agents.len(), 1, "the agent part reaches the sink");
+        assert_eq!(prompt.agents[0].name, "build");
     }
 
     /// The boot route rules (v2 app.tsx:364-371 + 639-674): default

@@ -3071,7 +3071,7 @@ pub fn append_prompt_payload(store: &Store, session_id: &str, payload: &crate::s
     text.push_str(&payload.text);
     // `{...projectedPromptInput(payload), pasted: []}` (index.tsx:
     // 662-668): the refill carries no folded pastes.
-    composer.draft = PromptDraft { text, files, agents, pasted: Vec::new() };
+    composer.draft = PromptDraft { text, files, agents, skills: Vec::new(), pasted: Vec::new() };
     store.set_composer(session_id, &composer);
 }
 
