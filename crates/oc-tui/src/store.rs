@@ -1211,6 +1211,15 @@ pub struct Store {
     /// The external `$EDITOR` request flag (the run loop drains it:
     /// suspend → run → resume → replace the focused draft).
     editor_requested: Cell<bool>,
+    /// RD-06 — `prompt.paste !== "full"` (config.prompt?.paste, app.
+    /// tsx:573): the paste-summary fold is armed while compact
+    /// (default — an absent/`"compact"` value folds, `"full"` pastes
+    /// verbatim).
+    prompt_paste_compact: Cell<bool>,
+    /// RD-06 — the focused composer's textarea rect (the click-to-
+    /// expand hit, session.rs's mount geometry; `None` while the
+    /// prompt mount is replaced or holds no folded paste).
+    prompt_text_hit: std::cell::RefCell<Option<PromptTextHit>>,
     /// TUI-3: the compact rail's `⌕` search button hover lift
     /// (session-tabs-rail.tsx:24-36 — the pointer layer sets it).
     rail_search_hovered: Cell<bool>,
@@ -2538,6 +2547,20 @@ pub struct PickerEntryHits {
     pub rows: Vec<PickerEntryHit>,
 }
 
+/// RD-06 — the composer textarea's absolute rect (the paste-chip
+/// click-to-expand hit): the owning session route, the textarea's
+/// top-left cell, its visible row count, and the inner column width
+/// (the same `inner` the wrap model lays out at — the hit test maps
+/// the clicked cell back through `caret_cell`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PromptTextHit {
+    pub session_id: String,
+    pub x: usize,
+    pub y: usize,
+    pub rows: usize,
+    pub inner: usize,
+}
+
 /// The sidebar's wheel-scroll model (auditA #1): the content-slot
 /// offset plus the last render's geometry — the max offset is
 /// `content_height - viewport` (v2's scrollbar clamp), and the
@@ -3069,6 +3092,8 @@ impl Store {
             clipboard_sink: Rc::new(crate::clipboard::RecordingClipboardSink::default()),
             clipboard_source: Rc::new(crate::clipboard::CoreClipboardSource::new()),
             editor_requested: Cell::new(false),
+            prompt_paste_compact: Cell::new(true),
+            prompt_text_hit: std::cell::RefCell::new(None),
             rail_search_hovered: Cell::new(false),
             rail_handle_hot: Cell::new(false),
             attention: Cell::new(AttentionState::default()),
@@ -4784,6 +4809,45 @@ impl Store {
     #[must_use]
     pub fn take_editor_request(&self) -> bool {
         self.editor_requested.replace(false)
+    }
+
+    // -- RD-06: the paste-summary chip ---------------------------------------
+
+    /// Apply the boot/reload `prompt.paste` config (`"full"` disarms
+    /// the fold; anything else — absent, `"compact"` — arms it).
+    pub fn set_prompt_paste(&self, compact: bool) {
+        self.prompt_paste_compact.set(compact);
+    }
+
+    /// Whether the paste-summary fold is armed (`prompt.paste !==
+    /// "full"`).
+    #[must_use]
+    pub fn prompt_paste_compact(&self) -> bool {
+        self.prompt_paste_compact.get()
+    }
+
+    /// `app.toggle.paste_summary` (app.tsx:1193-1205): flip
+    /// `prompt.paste` between `"compact"` and `"full"` (persisted
+    /// through the config sink) and return the new armed state.
+    pub fn toggle_paste_summary(&self) -> bool {
+        let next = !self.prompt_paste_compact.get();
+        self.prompt_paste_compact.set(next);
+        let value = if next { "compact" } else { "full" };
+        self.settings_snapshot_set("prompt.paste", value);
+        self.config_sink.borrow().update_setting("prompt.paste", value);
+        next
+    }
+
+    /// Record the focused composer's textarea rect (session.rs's
+    /// mount geometry — the RD-06 click-to-expand hit).
+    pub fn set_prompt_text_hit(&self, hit: Option<PromptTextHit>) {
+        *self.prompt_text_hit.borrow_mut() = hit;
+    }
+
+    /// The recorded textarea hit (clone).
+    #[must_use]
+    pub fn prompt_text_hit(&self) -> Option<PromptTextHit> {
+        self.prompt_text_hit.borrow().clone()
     }
 
     // -- attention (bell) ---------------------------------------------------

@@ -96,6 +96,24 @@ pub struct AgentMention {
     pub name: String,
 }
 
+/// One folded paste (`store.prompt.pasted`, RD-06): the full pasted
+/// text plus the char range of its `[Pasted ~N lines]` virtual chip
+/// inside `PromptDraft::text` (the extmark's source range).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PastedPart {
+    /// The TRIMMED pasted content (ref stores `pastedContent`).
+    pub text: String,
+    /// Char index of the chip label's first character.
+    pub start: usize,
+    /// Char index one past the chip label's last character.
+    pub end: usize,
+}
+
+/// The paste-summary fold thresholds (`prompt/index.tsx:1452-1465`):
+/// a paste folds when it spans ≥3 lines OR exceeds 150 characters.
+pub const PASTE_SUMMARY_MIN_LINES: usize = 3;
+pub const PASTE_SUMMARY_MAX_CHARS: usize = 150;
+
 /// The composer's input mode (`store.mode`, prompt/index.tsx:91):
 /// `!` typed at caret 0 flips to [`ComposerMode::Shell`] — the
 /// footer swaps to `esc exit shell mode`, the metadata row labels
@@ -114,6 +132,10 @@ pub struct PromptDraft {
     pub text: String,
     pub files: Vec<FileMention>,
     pub agents: Vec<AgentMention>,
+    /// RD-06 — the folded pastes (`store.prompt.pasted`): each entry
+    /// tracks the chip range in `text` + the full content it expands
+    /// back to.
+    pub pasted: Vec<PastedPart>,
 }
 
 impl PromptDraft {
@@ -127,6 +149,29 @@ impl PromptDraft {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.text.is_empty()
+    }
+
+    /// `expandTrackedPastedText` (prompt/part.ts:10-15, RD-06): the
+    /// draft's text with every paste chip's range replaced by its
+    /// full content — back-to-front so the earlier ranges hold. The
+    /// submit (:1123-1132) and $EDITOR (:556) chains both read this
+    /// shape; a draft with no chips returns its text unchanged.
+    #[must_use]
+    pub fn expand_pasted_ranges(&self) -> String {
+        let mut ranges: Vec<&PastedPart> = self.pasted.iter().collect();
+        ranges.sort_by_key(|part| std::cmp::Reverse(part.start));
+        let mut result = self.text.clone();
+        for part in ranges {
+            if part.start >= part.end {
+                continue;
+            }
+            let start = char_to_byte(&result, part.start.min(result.chars().count()));
+            let end = char_to_byte(&result, part.end.min(result.chars().count()));
+            if start < end && end <= result.len() {
+                result.replace_range(start..end, &part.text);
+            }
+        }
+        result
     }
 }
 
@@ -237,6 +282,10 @@ pub struct Composer {
     /// (an undo restores chips with their text).
     pub(crate) files_undo: Vec<Vec<FileMention>>,
     pub(crate) files_redo: Vec<Vec<FileMention>>,
+    /// RD-06 — the folded pastes mirrored onto the area's undo stack
+    /// (parallel to `files_undo`/`files_redo`, one-for-one).
+    pub(crate) pasted_undo: Vec<Vec<PastedPart>>,
+    pub(crate) pasted_redo: Vec<Vec<PastedPart>>,
     pub history: PromptHistory,
     pub placeholders: Vec<String>,
     pub placeholder_index: usize,
@@ -259,6 +308,8 @@ impl Default for Composer {
             edit: Self::fresh_edit(),
             files_undo: Vec::new(),
             files_redo: Vec::new(),
+            pasted_undo: Vec::new(),
+            pasted_redo: Vec::new(),
             history: PromptHistory::default(),
             placeholders: Vec::new(),
             placeholder_index: 0,
@@ -406,6 +457,8 @@ impl Composer {
         self.edit.set_text(&self.draft.text);
         self.files_undo.clear();
         self.files_redo.clear();
+        self.pasted_undo.clear();
+        self.pasted_redo.clear();
         self.autocomplete.close();
     }
 
@@ -415,6 +468,8 @@ impl Composer {
         self.edit.set_text("");
         self.files_undo.clear();
         self.files_redo.clear();
+        self.pasted_undo.clear();
+        self.pasted_redo.clear();
         self.autocomplete.close();
     }
 
@@ -424,7 +479,9 @@ impl Composer {
 
     /// Shift the mention ranges over one text delta (the deleted char
     /// range and the inserted length): mentions INSIDE the replaced
-    /// range drop, mentions after it shift.
+    /// range drop, mentions after it shift. RD-06: the paste chips'
+    /// ranges shift under the same rule (the extmarks move with the
+    /// buffer).
     fn apply_files_delta(&mut self, replaced: std::ops::Range<usize>, inserted: usize) {
         let removed = replaced.len();
         self.draft.files.retain(|file| file.end <= replaced.start || file.start >= replaced.end);
@@ -434,27 +491,50 @@ impl Composer {
                 file.end = file.end - removed + inserted;
             }
         }
+        self.draft.pasted.retain(|part| part.end <= replaced.start || part.start >= replaced.end);
+        for part in &mut self.draft.pasted {
+            if part.start >= replaced.end {
+                part.start = part.start - removed + inserted;
+                part.end = part.end - removed + inserted;
+            }
+        }
     }
 
-    /// Mirror the mention stacks onto the text area's history event
-    /// (`files_undo`/`files_redo` track the area's snapshot stack
-    /// one-for-one).
-    fn mirror_files_history(&mut self, files_before: Vec<FileMention>, snapshot: SnapshotKind) {
+    /// Mirror the mention + paste stacks onto the text area's history
+    /// event (`files_undo`/`files_redo` track the area's snapshot
+    /// stack one-for-one; RD-06: `pasted_undo`/`pasted_redo` mirror
+    /// beside them).
+    fn mirror_files_history(
+        &mut self,
+        files_before: Vec<FileMention>,
+        pasted_before: Vec<PastedPart>,
+        snapshot: SnapshotKind,
+    ) {
         match snapshot {
             SnapshotKind::Pushed => {
                 self.files_undo.push(files_before);
                 self.files_redo.clear();
+                self.pasted_undo.push(pasted_before);
+                self.pasted_redo.clear();
             }
             SnapshotKind::Undone => {
                 self.files_redo.push(self.draft.files.clone());
                 if let Some(files) = self.files_undo.pop() {
                     self.draft.files = files;
                 }
+                self.pasted_redo.push(self.draft.pasted.clone());
+                if let Some(pasted) = self.pasted_undo.pop() {
+                    self.draft.pasted = pasted;
+                }
             }
             SnapshotKind::Redone => {
                 self.files_undo.push(self.draft.files.clone());
                 if let Some(files) = self.files_redo.pop() {
                     self.draft.files = files;
+                }
+                self.pasted_undo.push(self.draft.pasted.clone());
+                if let Some(pasted) = self.pasted_redo.pop() {
+                    self.draft.pasted = pasted;
                 }
             }
             SnapshotKind::None => {}
@@ -472,6 +552,7 @@ impl Composer {
     ) -> EditOutcome {
         self.edit.mirror_text(&self.draft.text);
         let files_before = self.draft.files.clone();
+        let pasted_before = self.draft.pasted.clone();
         let outcome = run(&mut self.edit);
         self.draft.text = self.edit.text();
         let text_changed = match &outcome {
@@ -480,7 +561,7 @@ impl Composer {
                 if !matches!(snapshot, SnapshotKind::Undone | SnapshotKind::Redone) {
                     self.apply_files_delta(replaced.clone(), *inserted);
                 }
-                self.mirror_files_history(files_before, *snapshot);
+                self.mirror_files_history(files_before, pasted_before, *snapshot);
                 replaced.start != replaced.end || *inserted > 0
             }
         };
@@ -518,25 +599,36 @@ impl Composer {
     }
 
     /// The mention chip the caret sits at the END of (backspace
-    /// deletes it atomically).
+    /// deletes it atomically). RD-06: paste chips delete the same way
+    /// (the extmark's atomic range).
     fn chip_before_caret(&self) -> Option<std::ops::Range<usize>> {
         let caret = self.edit.caret();
+        if let Some(file) =
+            self.draft.files.iter().find(|file| caret <= file.end && caret > file.start)
+        {
+            return Some(file.start..file.end);
+        }
         self.draft
-            .files
+            .pasted
             .iter()
-            .find(|file| caret <= file.end && caret > file.start)
-            .map(|file| file.start..file.end)
+            .find(|part| caret <= part.end && caret > part.start)
+            .map(|part| part.start..part.end)
     }
 
     /// The mention chip the caret sits at the START of (delete
-    /// forward).
+    /// forward). RD-06: paste chips included.
     fn chip_after_caret(&self) -> Option<std::ops::Range<usize>> {
         let caret = self.edit.caret();
+        if let Some(file) =
+            self.draft.files.iter().find(|file| caret >= file.start && caret < file.end)
+        {
+            return Some(file.start..file.end);
+        }
         self.draft
-            .files
+            .pasted
             .iter()
-            .find(|file| caret >= file.start && caret < file.end)
-            .map(|file| file.start..file.end)
+            .find(|part| caret >= part.start && caret < part.end)
+            .map(|part| part.start..part.end)
     }
 
     /// Insert text at the caret, keeping file mentions' ranges valid.
@@ -555,6 +647,8 @@ impl Composer {
         self.draft = PromptDraft::default();
         self.files_undo.clear();
         self.files_redo.clear();
+        self.pasted_undo.clear();
+        self.pasted_redo.clear();
         if !text.is_empty() {
             self.insert_text(text);
         }
@@ -622,6 +716,8 @@ impl Composer {
         self.edit.set_text("");
         self.files_undo.clear();
         self.files_redo.clear();
+        self.pasted_undo.clear();
+        self.pasted_redo.clear();
         self.autocomplete.close();
     }
 
@@ -629,6 +725,103 @@ impl Composer {
     pub fn paste(&mut self, text: &str) {
         let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
         self.insert_text(&normalized);
+    }
+
+    /// RD-06 — the fold decision (`prompt/index.tsx:1452-1465`): the
+    /// TRIMMED paste folds into a chip when it spans ≥3 lines OR
+    /// exceeds 150 characters (`Pasted ~N lines` counts LINES of the
+    /// trimmed content — newline count + 1). The `prompt.paste ===
+    /// "full"` config gate is the caller's (`compact` = fold armed).
+    #[must_use]
+    pub fn paste_should_summarize(text: &str) -> bool {
+        let trimmed = text.trim();
+        let line_count = trimmed.matches('\n').count() + 1;
+        line_count >= PASTE_SUMMARY_MIN_LINES || trimmed.chars().count() > PASTE_SUMMARY_MAX_CHARS
+    }
+
+    /// The chip label a folding paste inserts (`[Pasted ~N lines]`).
+    #[must_use]
+    pub fn paste_summary_label(text: &str) -> String {
+        let trimmed = text.trim();
+        let line_count = trimmed.matches('\n').count() + 1;
+        format!("[Pasted ~{line_count} lines]")
+    }
+
+    /// `pasteInputText`'s plain-text arm (prompt/index.tsx:1428-1469,
+    /// RD-06): normalize, then either fold into the tracked
+    /// `[Pasted ~N lines]` chip (thresholds + the `prompt.paste`
+    /// config gate — `compact`) or insert the normalized text.
+    pub fn paste_input_text(&mut self, text: &str, compact: bool) {
+        let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+        if compact && Self::paste_should_summarize(&normalized) {
+            let label = Self::paste_summary_label(&normalized);
+            let content = normalized.trim().to_owned();
+            self.paste_summary_chip(content, &label);
+            return;
+        }
+        self.insert_text(&normalized);
+    }
+
+    /// `pasteText(content, virtualText)` (prompt/index.tsx:1394-1421,
+    /// RD-06): the chip label inserts at the caret as a tracked
+    /// virtual chip + trailing space; the full content never enters
+    /// the buffer — it rides in `draft.pasted` until an expand chain
+    /// restores it.
+    fn paste_summary_chip(&mut self, content: String, label: &str) {
+        let start = self.edit.caret();
+        self.insert_text(&format!("{label} "));
+        let end = start + label.chars().count();
+        self.draft.pasted.push(PastedPart { text: content, start, end });
+    }
+
+    /// `expandPastedText(extmarkId)` (prompt/index.tsx:1424-1437,
+    /// RD-06): one chip expands in place — the label range is
+    /// replaced by the full content (the other chips' ranges shift
+    /// with the delta via the tracked insert).
+    pub fn expand_pasted(&mut self, index: usize) -> bool {
+        let Some(part) = self.draft.pasted.get(index).cloned() else {
+            return false;
+        };
+        if part.start >= part.end || part.end > self.char_len() {
+            return false;
+        }
+        self.draft.pasted.remove(index);
+        self.delete_range(part.start..part.end);
+        self.set_caret(part.start);
+        self.insert_text(&part.text);
+        true
+    }
+
+    /// The click/caret chain (`onMouseDown`, prompt/index.tsx:
+    /// 1813-1827, RD-06): expand the chip AT (or bordering) the
+    /// offset — `getAtOffset(cursorOffset)` finds the pasted extmark.
+    pub fn expand_pasted_at(&mut self, offset: usize) -> bool {
+        let Some(index) =
+            self.draft.pasted.iter().position(|part| offset >= part.start && offset <= part.end)
+        else {
+            return false;
+        };
+        self.expand_pasted(index)
+    }
+
+    /// `expandPastedTextPlaceholders` (prompt/part.ts:3-8, RD-06):
+    /// every chip's label occurrence in `text` swaps for its full
+    /// content — the clipboard read-back seam (`getClipboardText`,
+    /// prompt/index.tsx:1799-1801).
+    #[must_use]
+    pub fn expand_pasted_placeholders(&self, text: &str) -> String {
+        let chars: Vec<char> = self.draft.text.chars().collect();
+        let mut result = text.to_owned();
+        for part in &self.draft.pasted {
+            if part.end <= part.start || part.end > chars.len() {
+                continue;
+            }
+            let label: String = chars[part.start..part.end].iter().collect();
+            if !label.is_empty() {
+                result = result.replace(&label, &part.text);
+            }
+        }
+        result
     }
 
     /// `prompt.paste` — the ctrl+v COMMAND (D-05 object-binding
@@ -672,12 +865,15 @@ impl Composer {
     /// `pasteInputText`'s attachment arm (prompt/index.tsx:1437): a
     /// resolved paste stages its attachments (SVG text inserts as
     /// text) instead of the pasted path; plain text inserts verbatim.
-    /// Returns whether any attachment staged.
+    /// RD-06: the plain-text arm runs the fold decision (`compact` =
+    /// `prompt.paste !== "full"`). Returns whether any attachment
+    /// staged.
     pub fn paste_resolved(
         &mut self,
         text: &str,
         platform: &str,
         files: &dyn attachment::LocalFiles,
+        compact: bool,
     ) -> bool {
         let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
         let pasted = normalized.trim();
@@ -695,7 +891,7 @@ impl Composer {
             }
             return true;
         }
-        self.paste(&normalized);
+        self.paste_input_text(&normalized, compact);
         false
     }
 
@@ -770,14 +966,23 @@ impl Composer {
             return None;
         }
         let prompt = SubmittedPrompt {
-            text: std::mem::take(&mut self.draft.text),
+            // RD-06 — submit restores the full pasted text into the
+            // prompt body (`expandTrackedPastedText`, prompt/index.
+            // tsx:1123-1132): every chip's range swaps for its
+            // content, back-to-front, so the submitted text reads as
+            // if the paste never folded.
+            text: self.draft.expand_pasted_ranges(),
             files: std::mem::take(&mut self.draft.files),
             agents: std::mem::take(&mut self.draft.agents),
             ..SubmittedPrompt::default()
         };
+        self.draft.text.clear();
+        self.draft.pasted.clear();
         self.edit.set_text("");
         self.files_undo.clear();
         self.files_redo.clear();
+        self.pasted_undo.clear();
+        self.pasted_redo.clear();
         self.autocomplete.close();
         Some(prompt)
     }
@@ -1162,6 +1367,122 @@ mod tests {
         assert_eq!(state.draft.text, "a\nb\nc");
     }
 
+    /// RD-06 — the fold matrix (prompt/index.tsx:1452-1465): the
+    /// TRIMMED paste folds at ≥3 lines OR >150 chars; `prompt.paste
+    /// === "full"` (`compact: false`) inserts verbatim regardless.
+    /// `~N` counts LINES of the trimmed content (newline count + 1).
+    #[test]
+    fn paste_summary_detection_matrix() {
+        let fold = |text: &str| Composer::paste_should_summarize(text);
+        // 2 lines, short: verbatim.
+        assert!(!fold("one\ntwo"));
+        // Exactly 3 lines (2 newlines): folds — "~3 lines".
+        assert!(fold("one\ntwo\nthree"));
+        // 150 chars, one line: verbatim (the ref is `> 150`, strict).
+        assert!(!fold(&"x".repeat(150)));
+        // 151 chars: folds — "~1 lines" (ref's raw line count).
+        assert!(fold(&"x".repeat(151)));
+        // Detection reads the TRIMMED content: the 3 newlines inside
+        // count, the bounding whitespace does not.
+        assert!(fold("\n  a\nb\nc  \n"));
+        // CRLF normalizes BEFORE the thresholds (3 logical lines).
+        let mut crlf = Composer::default();
+        crlf.paste_input_text("a\r\nb\r\nc", true);
+        assert!(crlf.draft.text.contains("[Pasted ~3 lines]"));
+
+        // The label counts trimmed lines.
+        assert_eq!(Composer::paste_summary_label("a\nb\nc"), "[Pasted ~3 lines]");
+        assert_eq!(Composer::paste_summary_label(&"y".repeat(200)), "[Pasted ~1 lines]");
+
+        // compact = false (`prompt.paste: "full"`): never folds.
+        let mut full = Composer::default();
+        full.paste_input_text("a\nb\nc\nd", false);
+        assert_eq!(full.draft.text, "a\nb\nc\nd");
+        assert_eq!(full.draft.pasted.len(), 0, "full paste never folds");
+
+        // compact = true (the default gate): folds into the chip +
+        // trailing space, tracking the trimmed content.
+        let mut compact = Composer::default();
+        compact.insert_text("head ");
+        compact.paste_input_text("  a\nb\nc  ", true);
+        assert_eq!(compact.draft.text, "head [Pasted ~3 lines] ");
+        assert_eq!(compact.draft.pasted.len(), 1);
+        let part = &compact.draft.pasted[0];
+        assert_eq!(part.text, "a\nb\nc");
+        assert_eq!(part.start, 5);
+        assert_eq!(part.end, 5 + "[Pasted ~3 lines]".chars().count());
+    }
+
+    /// RD-06 — submit restores the folded pastes into the prompt body
+    /// (`expandTrackedPastedText`, prompt/index.tsx:1123-1132): the
+    /// chip ranges swap for their content back-to-front.
+    #[test]
+    fn submit_expands_folded_pastes() {
+        let mut state = Composer::default();
+        state.insert_text("before ");
+        state.paste_input_text("l1\nl2\nl3", true);
+        state.insert_text("mid ");
+        state.paste_input_text("x".repeat(160).as_str(), true);
+        let text = state.draft.text.clone();
+        assert_eq!(text, "before [Pasted ~3 lines] mid [Pasted ~1 lines] ");
+        let outcome = state.handle_key(&ComposerKey::Enter);
+        let KeyOutcome::Submitted(prompt) = outcome else {
+            panic!("expected a submit, got {outcome:?}");
+        };
+        assert_eq!(prompt.text, format!("before l1\nl2\nl3 mid {} ", "x".repeat(160)));
+        // The draft clears wholesale after the submit.
+        assert!(state.draft.text.is_empty());
+        assert_eq!(state.draft.pasted.len(), 0);
+    }
+
+    /// RD-06 — the expand chains: `expand_pasted` (click/`expand-
+    /// PastedText`) replaces the chip in place and shifts the other
+    /// chip's range; `expand_pasted_placeholders` (the clipboard
+    /// read-back) swaps label occurrences for the full content.
+    #[test]
+    fn paste_chip_expand_and_clipback_chains() {
+        let mut state = Composer::default();
+        state.insert_text("a ");
+        state.paste_input_text("l1\nl2\nl3", true);
+        state.insert_text("b ");
+        state.paste_input_text("m1\nm2\nm3", true);
+        assert_eq!(state.draft.text, "a [Pasted ~3 lines] b [Pasted ~3 lines] ");
+        // Expand the FIRST chip: the second chip's range shifts by the
+        // delta (5 chars label → 8 chars content).
+        assert!(state.expand_pasted(0));
+        assert_eq!(state.draft.text, "a l1\nl2\nl3 b [Pasted ~3 lines] ");
+        assert_eq!(state.draft.pasted.len(), 1);
+        assert_eq!(
+            (state.draft.pasted[0].start, state.draft.pasted[0].end),
+            (13, 13 + "[Pasted ~3 lines]".chars().count())
+        );
+        // The caret-offset hit (the mousedown chain's getAtOffset):
+        // inside the surviving chip expands it, an outside offset
+        // does not.
+        assert!(state.expand_pasted_at(state.draft.pasted[0].start + 2));
+        assert_eq!(state.draft.text, "a l1\nl2\nl3 b m1\nm2\nm3 ");
+        assert_eq!(state.draft.pasted.len(), 0);
+        assert!(!state.expand_pasted_at(0));
+
+        // The clipboard read-back: labels swap for content anywhere
+        // in the copied span.
+        let mut copy = Composer::default();
+        copy.paste_input_text("p1\np2\np3", true);
+        assert_eq!(
+            copy.expand_pasted_placeholders("see [Pasted ~3 lines] here"),
+            "see p1\np2\np3 here"
+        );
+
+        // Backspace deletes the chip atomically (the extmark range)
+        // and drops the tracked part.
+        let mut del = Composer::default();
+        del.paste_input_text("q1\nq2\nq3", true);
+        del.handle_key(&ComposerKey::Backspace); // the trailing space
+        del.handle_key(&ComposerKey::Backspace); // the whole chip
+        assert_eq!(del.draft.text, "");
+        assert_eq!(del.draft.pasted.len(), 0);
+    }
+
     /// D-05 — `input_paste` preventDefault object semantics: the
     /// ctrl+v STROKE resolves as the paste command WITH an event —
     /// suppressed at the handler (nothing inserts; the ^V byte never
@@ -1221,14 +1542,14 @@ mod tests {
             files: [("/tmp/shot.png".to_owned(), b"\x89PNG".to_vec())].into_iter().collect(),
         };
         let mut state = Composer::default();
-        assert!(state.paste_resolved("/tmp/shot.png", "linux", &files));
+        assert!(state.paste_resolved("/tmp/shot.png", "linux", &files, true));
         assert_eq!(state.draft.text, "[Image 1] ");
         assert_eq!(state.draft.files.len(), 1);
 
         let plain =
             MapFiles { files: [("/tmp/a.txt".to_owned(), b"hi".to_vec())].into_iter().collect() };
         let mut text_state = Composer::default();
-        assert!(!text_state.paste_resolved("just some words", "linux", &plain));
+        assert!(!text_state.paste_resolved("just some words", "linux", &plain, true));
         assert_eq!(text_state.draft.text, "just some words");
     }
 
