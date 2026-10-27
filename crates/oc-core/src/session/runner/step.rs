@@ -160,6 +160,10 @@ pub struct StepDeps {
     /// The tool-output budget service (tool-output.ts `truncate`); `None`
     /// publishes raw tool results (tests that pin untruncated output).
     pub tool_output: Option<Arc<crate::tool_output::ToolOutput>>,
+    /// The model-input image limits (image.ts `Image.normalize`, wired via
+    /// tool.ts `normalizeImages` on the settled tool result); `None`
+    /// disables normalization (tests that pin raw image content).
+    pub image_limits: Option<crate::image::Limits>,
     /// The execution's shutdown watch (runner-concurrency.md §4): the
     /// coordinator's interrupt signals it instead of dropping this
     /// future; the attempt observes it at await points and unwinds
@@ -699,6 +703,16 @@ async fn settle_tool_exit(
                 }
                 None => result,
             };
+            // tool.ts `normalizeImages` — inline images in the settled
+            // content are limit-checked / downscaled (or omitted with the
+            // REF note text) AFTER the output budget, matching REF order
+            // (truncate runs inside the tool fiber, normalize on the
+            // execute.after content).
+            let content = match deps.image_limits {
+                Some(limits) => crate::image::normalize_tool_content(result.content, &limits),
+                None => result.content,
+            };
+            let result = ToolRunResult { content, ..result };
             publisher.tool_execution(&id, &name, &result).await
         }
         ToolExit::Error { id, error, metadata } => {
