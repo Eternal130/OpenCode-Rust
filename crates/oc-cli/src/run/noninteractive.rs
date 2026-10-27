@@ -52,6 +52,12 @@ pub struct PromptInput {
     pub thinking: bool,
     pub format: Format,
     pub auto: bool,
+    /// True when the client is attached to a shared server rather than an
+    /// exclusive in-process one (ref `Input.attached`). The standalone `run`
+    /// owns its server, so global-location MCP elicitation forms belong to
+    /// this run and may be cancelled; an attached client must not cancel
+    /// input that may belong to another session.
+    pub attached: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -92,6 +98,7 @@ struct RenderState {
     exit_code: i32,
 }
 
+#[allow(clippy::struct_excessive_bools)]
 struct Loop {
     client: Client,
     session_id: String,
@@ -100,6 +107,7 @@ struct Loop {
     thinking: bool,
     format: Format,
     auto: bool,
+    attached: bool,
     stdout_tty: bool,
     state: Arc<Mutex<RenderState>>,
 }
@@ -438,6 +446,7 @@ pub async fn run_prompt(input: PromptInput) -> i32 {
         thinking,
         format,
         auto,
+        attached,
     } = input;
 
     // Agent/model selection happens before the prompt is submitted.
@@ -494,6 +503,7 @@ pub async fn run_prompt(input: PromptInput) -> i32 {
         thinking,
         format,
         auto,
+        attached,
         stdout_tty,
         state: Arc::clone(&state),
     };
@@ -538,6 +548,7 @@ pub async fn run_prompt(input: PromptInput) -> i32 {
             thinking,
             format,
             auto,
+            attached,
             stdout_tty,
             state: Arc::clone(&state),
         };
@@ -584,6 +595,25 @@ pub async fn run_prompt(input: PromptInput) -> i32 {
         for form in forms {
             let value = serde_json::to_value(&form).expect("form serializes");
             loop_ctx.cancel_form(&value).await;
+        }
+    }
+    // Ref noninteractive.ts:740-757 — the final sweep also clears lingering
+    // global-location elicitation forms, but only for an exclusive (not
+    // attached) client: a shared server's global forms may belong to
+    // another session.
+    if !attached {
+        let query = oc_client::types::FormListQuery {
+            location: Some(oc_client::types::QueryLocation { directory: Some(directory.clone()) }),
+        };
+        if let Ok(globals) = client.form().list(&query).await {
+            if globals.location.directory == directory {
+                for form in
+                    globals.data.iter().filter(|form| form.session_id == GLOBAL_FORM_SESSION_ID)
+                {
+                    let value = serde_json::to_value(form).expect("form serializes");
+                    loop_ctx.cancel_form(&value).await;
+                }
+            }
         }
     }
 
@@ -728,10 +758,20 @@ async fn consume(ctx: Loop, mut stream: oc_client::SseStream) {
             continue;
         }
         if event_type == "form.created" {
-            let form = field(&data, "form");
-            let session_id = text_field(form, "sessionID");
-            if ctx.lock().submitted && ctx.owns_session(&session_id).await {
-                ctx.cancel_form(form).await;
+            let form = field(&data, "form").clone();
+            let form_session = text_field(&form, "sessionID");
+            // Ref noninteractive.ts:225-235 — a global sentinel form is this
+            // run's blocker only when we own the server (not attached) AND
+            // the event's location matches ours.
+            let global_here = !ctx.attached
+                && form_session == GLOBAL_FORM_SESSION_ID
+                && event
+                    .get("location")
+                    .and_then(|location| location.get("directory"))
+                    .and_then(Value::as_str)
+                    == Some(ctx.directory.as_str());
+            if ctx.lock().submitted && (ctx.owns_session(&form_session).await || global_here) {
+                ctx.cancel_form(&form).await;
             }
             continue;
         }
@@ -1353,5 +1393,333 @@ mod tests {
         std::env::set_var("OPENCODE_NO_TTY_PROMPT", "0");
         assert!(permission_tty_prompt_enabled());
         std::env::remove_var("OPENCODE_NO_TTY_PROMPT");
+    }
+
+    // ---- RD-07: global-location MCP elicitation forms -------------------
+    //
+    // Hand-rolled TCP mock (the oc-client `transport.rs` fixture pattern):
+    // one thread per connection so the long-lived `/api/event` SSE stream
+    // never blocks the short JSON calls. Every raw request (headers+body)
+    // is recorded for assertion.
+
+    use std::fmt::Write as _;
+    use std::io::{Read as _, Write as _};
+    use std::net::{TcpListener, TcpStream};
+
+    const TEST_DIRECTORY: &str = "/tmp/opencode/rd7";
+
+    #[derive(Clone, Default)]
+    struct MockConfig {
+        /// Extra SSE events after `server.connected` (already-decoded event
+        /// objects; the mock performs the JSON-in-string double encoding).
+        sse_events: Vec<Value>,
+        /// Body for `GET /api/session/s1/form`.
+        session_forms: Vec<Value>,
+        /// Body for `GET /api/form` (location sweep), `None` → empty list.
+        global_forms: Vec<Value>,
+    }
+
+    struct RunMock {
+        addr: std::net::SocketAddr,
+        requests: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl RunMock {
+        fn url(&self) -> String {
+            format!("http://{}", self.addr)
+        }
+
+        fn requests(&self) -> Vec<String> {
+            self.requests.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
+        }
+    }
+
+    fn form_value(id: &str, session_id: &str) -> Value {
+        json!({ "fields": [], "id": id, "sessionID": session_id, "title": "t" })
+    }
+
+    fn event_value(kind: &str, data: &Value, location: Option<&str>) -> Value {
+        json!({
+            "type": kind,
+            "id": format!("evt_{kind}"),
+            "created": 1,
+            "data": data,
+            "location": location.map(|directory| json!({ "directory": directory })),
+        })
+    }
+
+    fn json_response(status: &str, body: &str) -> Vec<u8> {
+        format!(
+            "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .into_bytes()
+    }
+
+    fn empty_response() -> Vec<u8> {
+        b"HTTP/1.1 204 No Content\r\ncontent-length: 0\r\nconnection: close\r\n\r\n".to_vec()
+    }
+
+    /// Reads one full HTTP request (headers + content-length body).
+    fn read_request(stream: &mut TcpStream) -> std::io::Result<String> {
+        let mut buf = Vec::new();
+        let mut byte = [0u8; 1];
+        while !buf.ends_with(b"\r\n\r\n") {
+            let n = stream.read(&mut byte)?;
+            if n == 0 {
+                return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "eof"));
+            }
+            buf.push(byte[0]);
+        }
+        let head = String::from_utf8_lossy(&buf).to_string();
+        let length = head
+            .lines()
+            .find_map(|l| {
+                let (name, value) = l.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().ok())?
+            })
+            .unwrap_or(0);
+        let mut body = vec![0u8; length];
+        stream.read_exact(&mut body)?;
+        Ok(format!("{head}{}", String::from_utf8_lossy(&body)))
+    }
+
+    fn spawn_run_mock(config: MockConfig) -> RunMock {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock");
+        let addr = listener.local_addr().expect("addr");
+        let requests: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let handle_requests = Arc::clone(&requests);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let config = config.clone();
+                let requests = Arc::clone(&handle_requests);
+                std::thread::spawn(move || {
+                    let Ok(request) = read_request(&mut stream) else { return };
+                    requests
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .push(request.clone());
+                    let first = request.lines().next().unwrap_or_default().to_owned();
+                    let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(5)));
+                    let response = route(&first, &config);
+                    let _ = stream.write_all(&response);
+                    let _ = stream.flush();
+                    if first.starts_with("GET /api/event") {
+                        // Drain briefly so the client sees the frames before close.
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                    }
+                    let _ = stream.shutdown(std::net::Shutdown::Both);
+                });
+            }
+        });
+        RunMock { addr, requests }
+    }
+
+    fn route(first: &str, config: &MockConfig) -> Vec<u8> {
+        // The SSE endpoint: server.connected + configured events, each frame
+        // double-encoded (JSON-in-string, `V2EventEncoded` parity).
+        if first.starts_with("GET /api/event") {
+            let mut payload = String::new();
+            for event in std::iter::once(json!({ "type": "server.connected" }))
+                .chain(config.sse_events.iter().cloned())
+            {
+                let text = event.to_string();
+                let encoded = serde_json::to_string(&text).expect("encode sse frame");
+                let _ = write!(payload, "data: {encoded}\n\n");
+            }
+            return format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n{payload}"
+            )
+            .into_bytes();
+        }
+        if first.starts_with("POST /api/session/s1/prompt") {
+            return json_response(
+                "200 OK",
+                r#"{"data":{"delivery":"steer","id":"msg_prompt","payload":{"text":"hi"},"sessionID":"s1","time":{"created":1.0},"type":"user"}}"#,
+            );
+        }
+        if first.starts_with("GET /api/session/s1/permission") {
+            return json_response("200 OK", r#"{"data":[]}"#);
+        }
+        if first.starts_with("GET /api/session/s1/form") {
+            let body = json!({ "data": config.session_forms }).to_string();
+            return json_response("200 OK", &body);
+        }
+        if first.starts_with("GET /api/form") {
+            let body = json!({
+                "data": config.global_forms,
+                "location": { "directory": TEST_DIRECTORY },
+            })
+            .to_string();
+            return json_response("200 OK", &body);
+        }
+        if first.starts_with("DELETE /api/session/") {
+            return empty_response();
+        }
+        if first.starts_with("POST /api/experimental/session/s1/wait") {
+            return empty_response();
+        }
+        if first.starts_with("GET /api/session/s1/message") {
+            return json_response("200 OK", r#"{"cursor":{"next":null},"data":[]}"#);
+        }
+        json_response("404 Not Found", r#"{"error":"not found"}"#)
+    }
+
+    async fn run_against_mock(config: MockConfig, attached: bool) -> (RunMock, i32) {
+        let mut config = config;
+        // Terminal event so the consumer exits cleanly (a bare EOF is an
+        // "Event stream disconnected" error path unrelated to RD-07).
+        config.sse_events.push(event_value(
+            "session.execution.succeeded",
+            &json!({ "sessionID": "s1" }),
+            Some(TEST_DIRECTORY),
+        ));
+        let mock = spawn_run_mock(config);
+        let client = Client::new(&mock.url()).expect("client");
+        let input = PromptInput {
+            client,
+            session_id: "s1".to_owned(),
+            directory: TEST_DIRECTORY.to_owned(),
+            message: "hi".to_owned(),
+            files: Vec::new(),
+            agent: None,
+            model: None,
+            thinking: false,
+            format: Format::Default,
+            auto: false,
+            attached,
+        };
+        let code = tokio::time::timeout(std::time::Duration::from_secs(30), run_prompt(input))
+            .await
+            .expect("run_prompt completes");
+        (mock, code)
+    }
+
+    /// Waits (bounded) until a request matching `needle` shows up — the
+    /// consumer task may still be draining when `run_prompt` returns.
+    fn await_request(mock: &RunMock, needle: &str) -> bool {
+        for _ in 0..60 {
+            if mock.requests().iter().any(|r| r.contains(needle)) {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        false
+    }
+
+    /// A lingering global-location form is cancelled by the post-prompt
+    /// sweep, with the `x-opencode-directory` header injected (ref
+    /// noninteractive.ts:740-757 + formRequestOptions).
+    #[tokio::test]
+    async fn global_form_cancelled_after_prompt() {
+        let config =
+            MockConfig { global_forms: vec![form_value("frm_g", "global")], ..Default::default() };
+        let (mock, _code) = run_against_mock(config, false).await;
+        assert!(
+            mock.requests().iter().any(|r| r.starts_with("GET /api/form?")),
+            "global form sweep must run: {:?}",
+            mock.requests()
+        );
+        assert!(
+            await_request(&mock, "DELETE /api/session/global/form/frm_g"),
+            "global form must be cancelled: {:?}",
+            mock.requests()
+        );
+        let requests = mock.requests();
+        let cancel = requests
+            .iter()
+            .find(|r| r.starts_with("DELETE /api/session/global/form/frm_g"))
+            .expect("cancel request");
+        assert!(
+            cancel.contains(&format!("x-opencode-directory: {}", urlencoding(TEST_DIRECTORY))),
+            "cancel must carry the directory header: {cancel}"
+        );
+    }
+
+    /// A `form.created` event for the global sentinel at our location is
+    /// cancelled mid-run; a different location is left alone (ref :225-235).
+    #[tokio::test]
+    async fn global_form_created_event_cancelled_at_same_location() {
+        let here = event_value(
+            "form.created",
+            &json!({ "form": form_value("frm_ev", "global") }),
+            Some(TEST_DIRECTORY),
+        );
+        let elsewhere = event_value(
+            "form.created",
+            &json!({ "form": form_value("frm_other", "global") }),
+            Some("/elsewhere"),
+        );
+        let config = MockConfig { sse_events: vec![here, elsewhere], ..Default::default() };
+        let (mock, _code) = run_against_mock(config, false).await;
+        assert!(
+            await_request(&mock, "DELETE /api/session/global/form/frm_ev"),
+            "same-location global form must be cancelled: {:?}",
+            mock.requests()
+        );
+        assert!(
+            !await_request(&mock, "DELETE /api/session/global/form/frm_other"),
+            "a different location's form must not be cancelled"
+        );
+    }
+
+    /// An attached client never touches global forms (ref `!input.attached`).
+    #[tokio::test]
+    async fn attached_client_leaves_global_forms_alone() {
+        let event = event_value(
+            "form.created",
+            &json!({ "form": form_value("frm_a", "global") }),
+            Some(TEST_DIRECTORY),
+        );
+        let config = MockConfig {
+            sse_events: vec![event],
+            global_forms: vec![form_value("frm_l", "global")],
+            ..Default::default()
+        };
+        let (mock, _code) = run_against_mock(config, true).await;
+        assert!(
+            !mock.requests().iter().any(|r| r.starts_with("GET /api/form?")),
+            "attached client must not sweep global forms"
+        );
+        assert!(
+            !mock.requests().iter().any(|r| r.contains("/api/session/global/form/")),
+            "attached client must not cancel global forms: {:?}",
+            mock.requests()
+        );
+    }
+
+    /// A session-owned form is still cancelled without the directory header.
+    #[tokio::test]
+    async fn session_form_path_unchanged() {
+        let config =
+            MockConfig { session_forms: vec![form_value("frm_s", "s1")], ..Default::default() };
+        let (mock, _code) = run_against_mock(config, false).await;
+        assert!(
+            await_request(&mock, "DELETE /api/session/s1/form/frm_s"),
+            "session form must be cancelled: {:?}",
+            mock.requests()
+        );
+        let requests = mock.requests();
+        let cancel = requests
+            .iter()
+            .find(|r| r.starts_with("DELETE /api/session/s1/form/frm_s"))
+            .expect("cancel request");
+        assert!(
+            !cancel.contains("x-opencode-directory"),
+            "session form cancel must not carry the header: {cancel}"
+        );
+    }
+
+    /// No forms anywhere → the sweeps are no-ops (no DELETE at all).
+    #[tokio::test]
+    async fn no_forms_is_a_noop() {
+        let (mock, _code) = run_against_mock(MockConfig::default(), false).await;
+        assert!(
+            !mock.requests().iter().any(|r| r.starts_with("DELETE ")),
+            "nothing to cancel: {:?}",
+            mock.requests()
+        );
     }
 }
