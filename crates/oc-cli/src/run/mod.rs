@@ -189,11 +189,16 @@ fn client_error(error: &oc_client::ClientError) -> String {
     util::error_message(&error.to_string())
 }
 
-async fn find_session(client: &Client, session_id: &str) -> Option<SessionInfo> {
+/// `findSession` (session-target.ts:134-139): ONLY a declared
+/// `SessionNotFoundError` maps to `None` (the run proceeds to create a
+/// new session with the requested id); every other failure — network,
+/// 5xx, auth — propagates as a fatal error instead of silently
+/// masquerading as "session does not exist".
+async fn find_session(client: &Client, session_id: &str) -> Result<Option<SessionInfo>, String> {
     match client.session().get(session_id).await {
-        Ok(session) => Some(session),
-        Err(error) if error.api_name() == Some("SessionNotFoundError") => None,
-        Err(_) => None,
+        Ok(session) => Ok(Some(session)),
+        Err(error) if error.api_name() == Some("SessionNotFoundError") => Ok(None),
+        Err(error) => Err(client_error(&error)),
     }
 }
 
@@ -244,7 +249,7 @@ async fn resolve_session_target(
     environment: Option<std::collections::BTreeMap<String, String>>,
 ) -> Result<SessionTarget, String> {
     let explicit = match &input.session {
-        Some(id) => find_session(client, id).await,
+        Some(id) => find_session(client, id).await?,
         None => None,
     };
     if input.session.is_some() && explicit.is_none() && input.fork {
@@ -475,5 +480,69 @@ mod tests {
             Some(("openai".into(), "gpt".into(), Some("turbo".into())))
         );
         assert_eq!(parse_run_model(Some("nonsense")), None);
+    }
+
+    /// RD-10: a raw one-shot HTTP stub answering
+    /// `GET /api/session/:id` with a fixed status/body.
+    async fn session_get_stub(
+        status: &'static str,
+        body: &'static str,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        use tokio::io::AsyncReadExt as _;
+        use tokio::io::AsyncWriteExt as _;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind stub");
+        let addr = listener.local_addr().expect("addr");
+        let handle = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept");
+            let mut buffer = [0u8; 4096];
+            let _ = socket.read(&mut buffer).await;
+            let response = format!(
+                "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = socket.write_all(response.as_bytes()).await;
+            let _ = socket.shutdown().await;
+        });
+        (format!("http://{addr}"), handle)
+    }
+
+    /// RD-10: ONLY a declared `SessionNotFoundError` maps to `Ok(None)`
+    /// (the run proceeds to create a new session with the requested id).
+    #[tokio::test]
+    async fn find_session_not_found_maps_to_none() {
+        let (base, stub) = session_get_stub(
+            "404 Not Found",
+            r#"{"_tag":"SessionNotFoundError","sessionID":"ses_x","message":"Session not found: ses_x"}"#,
+        )
+        .await;
+        let client = Client::new(&base).expect("client");
+        assert!(find_session(&client, "ses_x").await.expect("not-found maps to None").is_none());
+        stub.await.expect("stub join");
+    }
+
+    /// RD-10: a 5xx (undeclared status) propagates as a fatal error —
+    /// never silently treated as "will create a new session".
+    #[tokio::test]
+    async fn find_session_server_error_propagates() {
+        let (base, stub) =
+            session_get_stub("500 Internal Server Error", r#"{"message":"boom"}"#).await;
+        let client = Client::new(&base).expect("client");
+        let error = find_session(&client, "ses_x").await.expect_err("500 must propagate");
+        assert!(error.contains("500"), "error surfaces the status: {error}");
+        stub.await.expect("stub join");
+    }
+
+    /// RD-10: an auth failure propagates as a fatal error.
+    #[tokio::test]
+    async fn find_session_unauthorized_propagates() {
+        let (base, stub) = session_get_stub(
+            "401 Unauthorized",
+            r#"{"_tag":"UnauthorizedError","message":"bad credentials"}"#,
+        )
+        .await;
+        let client = Client::new(&base).expect("client");
+        let error = find_session(&client, "ses_x").await.expect_err("401 must propagate");
+        assert!(error.contains("401") || error.contains("Unauthorized"), "auth error: {error}");
+        stub.await.expect("stub join");
     }
 }
