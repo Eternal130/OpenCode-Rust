@@ -8,7 +8,7 @@ use oc_ai::schema::messages::ToolChoice;
 use oc_ai::schema::{AiError, AiErrorReason, ReasonFields};
 use oc_ai::testing::{text, TestLlm, TestResponse};
 
-use super::tests_harness::harness_with;
+use super::tests_harness::{harness_with, NOW_MS};
 use crate::location::{ToolExecute, ToolRunFailure};
 
 fn overflow_error() -> AiError {
@@ -55,8 +55,7 @@ fn overflow_event_response() -> TestResponse {
 }
 
 #[tokio::test]
-async fn runner_step_completed_text_has_no_continuation() {
-    let llm = TestLlm::new();
+async fn runner_step_completed_text_has_no_continuation() {    let llm = TestLlm::new();
     llm.always(text("plain answer"));
     let harness = harness_with(llm).await;
     harness.create_session().await;
@@ -65,6 +64,36 @@ async fn runner_step_completed_text_has_no_continuation() {
     let events = harness.durable_events().await;
     assert_eq!(events.iter().filter(|(type_, _, _)| type_ == "session.step.started").count(), 1);
     assert!(events.iter().any(|(type_, _, _)| type_ == "session.step.ended"));
+}
+
+/// RD-02: `step.started` comes from the injected clock (step.ts
+/// `Clock.currentTimeMillis`), not a hardcoded 0, and the assistant
+/// message's `time.created` projects the same epoch-ms.
+#[tokio::test]
+async fn runner_step_started_uses_injected_clock() {
+    let llm = TestLlm::new();
+    llm.always(text("clocked"));
+    let harness = harness_with(llm).await;
+    harness.create_session().await;
+    harness.admit_prompt("msg_clk", "hi").await;
+    harness.execution.resume(harness.session_id().as_str()).await.unwrap();
+
+    let events = harness.durable_events().await;
+    let started = events
+        .iter()
+        .find(|(type_, _, _)| type_ == "session.step.started")
+        .expect("step.started published");
+    assert_eq!(started.2.get("started").and_then(|v| v.as_u64()), Some(NOW_MS));
+
+    let messages = harness.messages().await;
+    let assistant = messages
+        .iter()
+        .find(|(_, type_, _)| type_ == "assistant")
+        .expect("assistant message projected");
+    assert_eq!(
+        assistant.2.get("time").and_then(|t| t.get("created")).and_then(|v| v.as_u64()),
+        Some(NOW_MS)
+    );
 }
 
 #[tokio::test]

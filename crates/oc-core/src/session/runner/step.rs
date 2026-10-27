@@ -165,6 +165,10 @@ pub struct StepDeps {
     /// future; the attempt observes it at await points and unwinds
     /// through the finalization guard region.
     pub shutdown: watch::Receiver<bool>,
+    /// The injected clock (step.ts `Clock.currentTimeMillis`): provides
+    /// `session.step.started` / assistant `time.created` epoch-ms. Tests
+    /// inject a `FixedClock` to pin deterministic timestamps.
+    pub clock: Arc<dyn oc_util::determinism::Clock>,
 }
 
 enum LoopItem {
@@ -195,7 +199,7 @@ pub async fn attempt(deps: &StepDeps, input: AttemptInput) -> Result<Outcome, At
         input.agent.clone(),
         input.model.reference.clone(),
         input.model.provider_metadata_key().to_string(),
-        0,
+        u64::try_from(deps.clock.unix_ms().max(0)).unwrap_or_default(),
     );
     let tools_disabled = matches!(input.prepared.request.tool_choice, Some(ToolChoice::None {}));
 
