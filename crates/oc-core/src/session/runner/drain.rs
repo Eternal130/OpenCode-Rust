@@ -555,7 +555,13 @@ impl SessionRunner {
         // drain's `settle_stale_compactions` backstop.
         let outcome = tokio::select! {
             outcome = self.compaction.compact(trigger) => outcome,
-            () = shutdown_signal(shutdown) => return Err(RunFailure::Interrupted),
+            () = shutdown_signal(shutdown) => {
+                // F3 (B9): REF clears per-session spent via
+                // `Effect.ensuring`, which also runs on interrupt — the
+                // dropped compact future skipped its own tail.
+                self.compaction.clear_spent(session_id);
+                return Err(RunFailure::Interrupted);
+            }
         };
         match outcome {
             crate::session::runner::compaction::CompactStatus::Completed => Ok(()),
@@ -617,6 +623,9 @@ impl SessionRunner {
                     input_id: None,
                 }) => outcome,
                 () = shutdown_signal(shutdown) => {
+                    // F3 (B9): `Effect.ensuring` semantics — the dropped
+                    // compact future's spent tail never ran, clear it here.
+                    self.compaction.clear_spent(session_id.as_str());
                     let _ = self
                         .bus
                         .publish(

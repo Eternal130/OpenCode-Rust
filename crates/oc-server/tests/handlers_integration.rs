@@ -22,7 +22,7 @@ struct TestServer {
     client: Client,
     bus: std::sync::Arc<oc_core::bus::Bus>,
     db: std::sync::Arc<oc_core::database::Database>,
-    _workspace: tempfile::TempDir,
+    _workspace: Option<tempfile::TempDir>,
     _data: tempfile::TempDir,
 }
 
@@ -34,6 +34,16 @@ async fn boot_with(password: Option<String>) -> TestServer {
     let dir = tempfile::tempdir().expect("tempdir");
     let data = tempfile::tempdir().expect("data tempdir");
     std::env::set_current_dir(dir.path()).expect("chdir to workspace");
+    let mut server = boot_at(dir.path(), password).await;
+    // The engine's location points into the workspace tempdir — keep it
+    // alive for the server's lifetime (the cwd would otherwise dangle).
+    server._workspace = Some(dir);
+    server
+}
+
+async fn boot_at(workspace: &std::path::Path, password: Option<String>) -> TestServer {
+    let data = tempfile::tempdir().expect("data tempdir");
+    std::env::set_current_dir(workspace).expect("chdir to workspace");
     // Keep engine state OUT of the workspace so vcs status stays clean.
     let engine =
         Engine::boot(EngineOptions::new(data.path().join("data"), data.path().join("home"))).await;
@@ -55,7 +65,7 @@ async fn boot_with(password: Option<String>) -> TestServer {
         axum::serve(listener, router).await.expect("server");
     });
     let client = Client::new(&format!("http://{addr}")).expect("client");
-    TestServer { client, bus, db, _workspace: dir, _data: data }
+    TestServer { client, bus, db, _workspace: None, _data: data }
 }
 
 fn create_body(title: &str) -> SessionCreateBody {
@@ -749,6 +759,69 @@ async fn handlers_session_skill_injects_body_and_publishes_activation() {
         .await
         .expect_err("skill 404");
     assert_api(&error, 404, "SkillNotFoundError");
+}
+
+/// F1 (B3 drift): when the client's skill id is a message id (`msg_`
+/// prefix), the durable `session.skill.activated` event id derives from
+/// it via the `msg_` → `evt_` swap (ref `session/session.ts:237-239`)
+/// instead of being bus-minted.
+#[tokio::test]
+async fn handlers_session_skill_event_id_derives_from_message_id() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    std::fs::create_dir_all(workspace.path().join(".opencode").join("skill").join("msg_probe"))
+        .expect("skill dir");
+    std::fs::write(
+        workspace.path().join(".opencode").join("skill").join("msg_probe").join("SKILL.md"),
+        "---\nname: Msg Probe\ndescription: Derived-id probe skill\n---\nProbe body.",
+    )
+    .expect("skill file");
+    let server = boot_at(workspace.path(), None).await;
+    let client = &server.client;
+    // Pin the session (and its location services) to the fixture
+    // workspace: sibling tests chdir process-wide, so the default
+    // location cannot be trusted to be this workspace.
+    let directory = workspace.path().to_string_lossy().into_owned();
+    let skills = client
+        .skill()
+        .list(&SkillListQuery {
+            location: Some(oc_client::types::QueryLocation { directory: Some(directory.clone()) }),
+        })
+        .await
+        .expect("skill list");
+    assert!(
+        skills.data.iter().any(|s| s.id == "msg_probe"),
+        "config skill msg_probe discovered: {:?}",
+        skills.data.iter().map(|s| s.id.clone()).collect::<Vec<_>>()
+    );
+
+    let session_id = client
+        .session()
+        .create(&SessionCreateBody {
+            location: Some(LocationPublicRef { directory }),
+            ..create_body("skill-evt-id")
+        })
+        .await
+        .expect("create")
+        .id;
+    let mut events = server.bus.subscribe_types(&["session.skill.activated"]);
+    client
+        .session()
+        .skill(
+            &session_id,
+            &ExperimentalSessionSkillBody { id: "msg_probe".to_owned(), resume: Some(false) },
+        )
+        .await
+        .expect("skill 204");
+
+    let activated = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        futures::StreamExt::next(&mut events),
+    )
+    .await
+    .expect("activation event within 5s")
+    .expect("activation event present");
+    assert_eq!(activated.type_, "session.skill.activated");
+    assert_eq!(activated.id.as_str(), "evt_probe", "event id derives from the msg_ payload id");
 }
 
 #[tokio::test]

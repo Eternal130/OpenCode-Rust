@@ -166,6 +166,15 @@ pub(crate) async fn publish_session_event(
     type_: &str,
     data: Value,
 ) -> Result<(), ApiError> {
+    publish_session_event_opts(services, type_, data, PublishOptions::default()).await
+}
+
+pub(crate) async fn publish_session_event_opts(
+    services: &std::sync::Arc<LocationServices>,
+    type_: &str,
+    data: Value,
+    mut options: PublishOptions,
+) -> Result<(), ApiError> {
     let Some(definition) = registry::by_type_latest(type_) else {
         return Ok(());
     };
@@ -185,11 +194,10 @@ pub(crate) async fn publish_session_event(
     services
         .graph
         .bus
-        .publish(
-            definition,
-            data,
-            PublishOptions { location: Some(location), ..PublishOptions::default() },
-        )
+        .publish(definition, data, {
+            options.location = Some(location);
+            options
+        })
         .await
         .map(|_| ())
         .map_err(|error| {
@@ -1839,10 +1847,21 @@ async fn skill(
         name: skill.name.clone(),
         text: skill.content.clone(),
     };
-    publish_session_event(
+    // F1 (B3 drift): when the client supplies a message id, the durable
+    // event id derives from it (`msg_` → `evt_`, ref
+    // `session/session.ts:237-239`) preserving dedup/idempotency
+    // semantics; otherwise the bus mints a fresh id.
+    let mut options = PublishOptions::default();
+    if let Some(id) = body["id"].as_str() {
+        if let Ok(event_id) = oc_schema::id::EventId::parse(id.replacen("msg_", "evt_", 1)) {
+            options.id = Some(event_id);
+        }
+    }
+    publish_session_event_opts(
         &services,
         "session.skill.activated",
         serde_json::to_value(&activated).unwrap_or_else(|_| json!({})),
+        options,
     )
     .await?;
     if body["resume"].as_bool().unwrap_or(true) {
