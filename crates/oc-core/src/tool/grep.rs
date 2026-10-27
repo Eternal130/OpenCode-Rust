@@ -50,12 +50,42 @@ pub fn normalize_path(value: &str) -> String {
     out.replace('\\', "/")
 }
 
-/// One grep match row.
+/// One grep match row — `FileSystem.Match` minus the entry wrapper.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchMatch {
     pub path: String,
     pub line: u64,
+    /// `absolute_offset` of the match row.
+    pub offset: u64,
     pub text: String,
+    pub submatches: Vec<Submatch>,
+}
+
+/// `FileSystem.Submatch`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Submatch {
+    pub text: String,
+    pub start: u64,
+    pub end: u64,
+}
+
+/// Lexical `path.relative(base, target)` (node semantics: component-wise
+/// difference with `..` hops, forward slashes; both inputs already lexical).
+#[must_use]
+pub(crate) fn relative_to(base: &Path, target: &Path) -> String {
+    let base: Vec<_> = base.components().collect();
+    let target: Vec<_> = target.components().collect();
+    let mut common = 0;
+    while common < base.len().min(target.len()) && base[common] == target[common] {
+        common += 1;
+    }
+    let mut parts: Vec<String> = (common..base.len()).map(|_| "..".to_string()).collect();
+    parts.extend(
+        target[common..]
+            .iter()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned()),
+    );
+    if parts.is_empty() { ".".to_string() } else { parts.join("/") }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -216,15 +246,24 @@ pub async fn ripgrep_grep(
         let path = data["path"]["text"].as_str()?;
         let text = data["lines"]["text"].as_str()?;
         let line_number = data["line_number"].as_u64()?;
-        let _ =
-            data["submatches"].as_array().map(|submatches| submatches.len().min(MAX_SUBMATCHES));
+        let offset = data["absolute_offset"].as_u64().unwrap_or(0);
+        let submatches: Vec<Submatch> = data["submatches"]
+            .as_array()
+            .map(|rows| {
+                rows.iter().take(MAX_SUBMATCHES).map(|row| Submatch {
+                    text: row["match"]["text"].as_str().unwrap_or_default().to_string(),
+                    start: row["start"].as_u64().unwrap_or(0),
+                    end: row["end"].as_u64().unwrap_or(0),
+                }).collect()
+            })
+            .unwrap_or_default();
         let text = if text.chars().count() > MATCH_TEXT_CLAMP {
             let prefix: String = text.chars().take(MATCH_TEXT_CLAMP).collect();
             format!("{prefix}...")
         } else {
             text.to_string()
         };
-        Some(SearchMatch { path: normalize_path(path), line: line_number, text })
+        Some(SearchMatch { path: normalize_path(path), line: line_number, offset, text, submatches })
     })
     .await
 }
@@ -415,6 +454,28 @@ async fn run(
         move |relative| crate::file_access::lexical_resolve(&cwd_display, Path::new(relative)),
         truncated,
     );
+    // ref grep.ts Output = Match[] — each row wraps the entry and carries
+    // location-relative paths (path.relative(location.directory,
+    // path.resolve(cwd, entry.path))) for codemode/plugin consumers.
+    let location = services.directory.clone();
+    let output: Value = matches
+        .iter()
+        .map(|row| {
+            let absolute = crate::file_access::lexical_resolve(&cwd, Path::new(&row.path));
+            serde_json::json!({
+                "entry": { "path": relative_to(&location, &absolute), "type": "file" },
+                "line": row.line,
+                "offset": row.offset,
+                "text": row.text,
+                "submatches": row.submatches.iter().map(|submatch| serde_json::json!({
+                    "text": submatch.text,
+                    "start": submatch.start,
+                    "end": submatch.end,
+                })).collect::<Vec<_>>(),
+            })
+        })
+        .collect::<Vec<_>>()
+        .into();
     Ok(ToolOutcome {
         content: vec![Content::Text { text }],
         metadata: Some(
@@ -424,7 +485,7 @@ async fn run(
             }))
             .unwrap_or_default(),
         ),
-        output: None,
+        output: Some(output),
     })
 }
 
