@@ -53,7 +53,7 @@ pub fn openai_compatible_chat_configured(
     provider: &str,
     base_url: &str,
 ) -> Route {
-    openai_compatible_chat_route(transport).with(RoutePatch {
+    let mut patch = RoutePatch {
         provider: Some(provider.to_string()),
         endpoint: Some(crate::route::endpoint::EndpointPatch {
             base_url: Some(base_url.to_string()),
@@ -61,7 +61,15 @@ pub fn openai_compatible_chat_configured(
             query: None,
         }),
         ..Default::default()
-    })
+    };
+    // Per-provider seam (RC-06): providers registered with a
+    // `chat_metadata_key` customization override the re-badged metadata
+    // namespace; everyone else keeps the default `"openai"` key derived by
+    // `Route::with`.
+    if let Some(key) = crate::customization::for_route(provider).chat_metadata_key {
+        patch.provider_metadata_key = Some(key.to_string());
+    }
+    openai_compatible_chat_route(transport).with(patch)
 }
 
 /// Route for providers exposing an Open Responses-compatible `/responses`
