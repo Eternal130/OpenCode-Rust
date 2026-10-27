@@ -11,6 +11,7 @@ pub mod file_mutation;
 pub mod formatter;
 pub mod forms;
 pub mod hooks;
+pub mod image;
 pub mod integration;
 pub mod jobs;
 pub mod location;
