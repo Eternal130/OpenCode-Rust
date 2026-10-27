@@ -442,6 +442,14 @@ pub struct Prepared {
     /// WebSocket transport (`Prepared`'s `options.webSocket` — the
     /// channel executors ride them). `None` when no hooks registered.
     pub web_socket_seams: Option<oc_ai::schema::options::WebSocketSeams>,
+    /// The `session.compaction` hook's short-circuit `result`
+    /// (compaction.ts:396): set when a plugin supplied the summary, so
+    /// the model call is skipped. Only ever set for `RequestKind::Compaction`.
+    pub compaction_result: Option<crate::hooks::CompactionResult>,
+    /// The `session.title` hook's short-circuit `result` (title.ts:73):
+    /// set when a plugin supplied the title, so the model call is
+    /// skipped. Only ever set for `RequestKind::Title`.
+    pub title_result: Option<String>,
 }
 
 /// The request preparation service (`SessionModelRequest`).
@@ -501,6 +509,10 @@ impl SessionModelRequest {
             );
         }
 
+        // Hook short-circuit results (only the matching kind ever sets one).
+        let mut compaction_result = None;
+        let mut title_result = None;
+
         // Hooks see the default output limit and may change or remove it;
         // titles and generate keep the provider default.
         let mut options = serde_json::Map::new();
@@ -527,6 +539,9 @@ impl SessionModelRequest {
                     .dispatch_session_title(event)
                     .await
                     .map_err(|err| ModelError::Resolver(err.to_string()))?;
+                // title.ts:73 — a plugin-supplied title short-circuits the
+                // model request.
+                title_result.clone_from(&shaped.result);
                 let request = shaped.request;
                 (request.system, request.messages, record_to_map(&request.options), BTreeMap::new())
             }
@@ -541,15 +556,20 @@ impl SessionModelRequest {
                     tools: draft_tools.clone(),
                 };
                 let shaped = match other {
-                    RequestKind::Compaction => self
-                        .hooks
-                        .dispatch_session_compaction(crate::hooks::SessionCompactionEvent {
-                            context: event,
-                            result: None,
-                        })
-                        .await
-                        .map(|event| event.context)
-                        .map_err(|err| ModelError::Resolver(err.to_string()))?,
+                    RequestKind::Compaction => {
+                        let shaped = self
+                            .hooks
+                            .dispatch_session_compaction(crate::hooks::SessionCompactionEvent {
+                                context: event,
+                                result: None,
+                            })
+                            .await
+                            .map_err(|err| ModelError::Resolver(err.to_string()))?;
+                        // compaction.ts:396 — a plugin-supplied summary
+                        // short-circuits the model request.
+                        compaction_result.clone_from(&shaped.result);
+                        shaped.context
+                    }
                     _ => self
                         .hooks
                         .dispatch_session_context(event)
@@ -799,7 +819,14 @@ impl SessionModelRequest {
             }) as futures::future::BoxFuture<'static, ExecuteToolOutcome>
         });
 
-        Ok(Prepared { request, retry, execute_tool, web_socket_seams })
+        Ok(Prepared {
+            request,
+            retry,
+            execute_tool,
+            web_socket_seams,
+            compaction_result,
+            title_result,
+        })
     }
 
     /// `primary` — the context hook path with the loaded tools.
