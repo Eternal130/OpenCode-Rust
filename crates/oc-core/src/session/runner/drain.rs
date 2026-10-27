@@ -80,6 +80,9 @@ pub struct SessionRunner {
     snapshot: Option<Arc<dyn crate::snapshot::SnapshotService>>,
     /// The tool-output budget service (`None` publishes raw tool results).
     tool_output: Option<Arc<crate::tool_output::ToolOutput>>,
+    /// The model-input image limits (RV-G3): applied to settled tool
+    /// content via `normalizeImages`. REF defaults when not configured.
+    image_limits: crate::image::Limits,
     /// `FiberMap`-equivalent for title generation: one live task per
     /// session, `onlyIfMissing`.
     title_tasks: Mutex<HashMap<String, tokio::task::JoinHandle<()>>>,
@@ -129,6 +132,7 @@ impl SessionRunner {
             location_closed,
             snapshot: None,
             tool_output: None,
+            image_limits: crate::image::Limits::default(),
             title_tasks: Mutex::new(HashMap::new()),
             prompt_prepare: None,
         }
@@ -179,6 +183,15 @@ impl SessionRunner {
     #[must_use]
     pub fn with_tool_output(mut self, service: Arc<crate::tool_output::ToolOutput>) -> Self {
         self.tool_output = Some(service);
+        self
+    }
+
+    /// Attaches the model-input image limits (RV-G3, image.ts): settled
+    /// tool content passes through `normalizeImages` after the output
+    /// budget.
+    #[must_use]
+    pub fn with_image_limits(mut self, limits: crate::image::Limits) -> Self {
+        self.image_limits = limits;
         self
     }
 
@@ -555,7 +568,13 @@ impl SessionRunner {
         // drain's `settle_stale_compactions` backstop.
         let outcome = tokio::select! {
             outcome = self.compaction.compact(trigger) => outcome,
-            () = shutdown_signal(shutdown) => return Err(RunFailure::Interrupted),
+            () = shutdown_signal(shutdown) => {
+                // F3 (B9): REF clears per-session spent via
+                // `Effect.ensuring`, which also runs on interrupt — the
+                // dropped compact future skipped its own tail.
+                self.compaction.clear_spent(session_id);
+                return Err(RunFailure::Interrupted);
+            }
         };
         match outcome {
             crate::session::runner::compaction::CompactStatus::Completed => Ok(()),
@@ -617,6 +636,9 @@ impl SessionRunner {
                     input_id: None,
                 }) => outcome,
                 () = shutdown_signal(shutdown) => {
+                    // F3 (B9): `Effect.ensuring` semantics — the dropped
+                    // compact future's spent tail never ran, clear it here.
+                    self.compaction.clear_spent(session_id.as_str());
                     let _ = self
                         .bus
                         .publish(
@@ -723,6 +745,7 @@ impl SessionRunner {
                 llm: Arc::clone(&self.llm),
                 snapshot: self.snapshot.clone(),
                 tool_output: self.tool_output.clone(),
+                image_limits: Some(self.image_limits),
                 shutdown: shutdown.clone(),
                 clock: Arc::clone(&self.clock),
             };
