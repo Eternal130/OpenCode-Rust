@@ -4,10 +4,11 @@
 //!
 //! Handlers run inside the durable-commit transaction with `&mut Tx`
 //! (persist-then-publish contract, `bus.rs`). Defects (duplicate
-//! projections, inbox lifecycle conflicts) tunnel through
-//! [`DbError::Pragma`] markers so publishers can catch them:
-//! [`ALREADY_PROJECTED`] for `session.created`/`session.forked` races
-//! (→ store re-read), [`crate::session::inbox::CONFLICT_MARKER`] for inbox
+//! projections, inbox lifecycle conflicts) tunnel through the typed
+//! [`DbError::SessionConflict`] variants so publishers can catch them:
+//! [`crate::database::error::SessionConflict::AlreadyProjected`] for
+//! `session.created`/`session.forked` races (→ store re-read),
+//! [`crate::database::error::SessionConflict::InboxConflict`] for inbox
 //! lifecycle conflicts.
 
 #![allow(
@@ -39,21 +40,27 @@ use crate::session::message_updater::{
 };
 use futures::FutureExt as _;
 
-/// Marker for `SessionAlreadyProjected` defects.
-pub const ALREADY_PROJECTED: &str = "\u{0}session-already-projected\u{1}";
-
 /// The typed defect (`Effect.die(new SessionAlreadyProjected())`).
 #[derive(Debug, thiserror::Error)]
 #[error("session already projected")]
 pub struct SessionAlreadyProjected;
 
-fn tx_defect(marker: &str, detail: &str) -> DbError {
-    DbError::Pragma(format!("{marker}{detail}"))
+/// Raises the already-projected conflict from inside a projector
+/// transaction (tunneled out as [`DbError::SessionConflict`]).
+fn tx_defect(detail: &str) -> DbError {
+    DbError::SessionConflict(crate::database::error::SessionConflict::AlreadyProjected(
+        detail.to_string(),
+    ))
 }
 
 /// Detects the already-projected defect on a failed publish.
 pub fn is_already_projected(err: &crate::bus::BusError) -> bool {
-    matches!(err, crate::bus::BusError::Db(DbError::Pragma(message)) if message.starts_with(ALREADY_PROJECTED))
+    matches!(
+        err,
+        crate::bus::BusError::Db(DbError::SessionConflict(
+            crate::database::error::SessionConflict::AlreadyProjected(_)
+        ))
+    )
 }
 
 /// The fork copy batch size (projector.ts:49).
@@ -109,7 +116,7 @@ pub fn install_projectors(bus: &Bus) {
             ],
         )?;
         if inserted == 0 {
-            return Err(tx_defect(ALREADY_PROJECTED, &session_id));
+            return Err(tx_defect(&session_id));
         }
         Ok(())
     });
@@ -733,7 +740,7 @@ fn project_fork(tx: &mut Tx<'_>, event: &DurableEvent) -> Result<()> {
         ],
     )?;
     if inserted == 0 {
-        return Err(tx_defect(ALREADY_PROJECTED, &fork_session));
+        return Err(tx_defect(&fork_session));
     }
 
     if !event.data["instructionEntries"].is_null() {
