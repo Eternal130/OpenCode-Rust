@@ -238,10 +238,11 @@ impl SessionCompaction {
     /// `compact` (compaction.ts:205-240, 660-673). Manual compactions
     /// settle through their `/compact` inbox item, which the runner owns.
     pub async fn compact(&self, trigger: Trigger) -> CompactStatus {
+        let session_id = trigger.context.session.id.clone();
         let outcome = self.compact_inner(trigger).await;
         // REF compaction.ts: only the compacted session's spent accounting
         // is cleared — other sessions' billing must survive.
-        self.spent.lock().remove(&trigger.context.session.id);
+        self.spent.lock().remove(&session_id);
         outcome
     }
 
