@@ -223,11 +223,25 @@ impl SessionCompaction {
         *self.settings.read()
     }
 
+    /// `spent` test surface (RV-B9): seed and observe per-session billing.
+    #[cfg(test)]
+    pub(crate) async fn test_spend(&self, session_id: &str) {
+        self.spend(session_id, Some(RecordedUsage::default())).await;
+    }
+
+    /// The per-session spent map snapshot (test-only).
+    #[cfg(test)]
+    pub(crate) fn test_spent(&self) -> Vec<String> {
+        self.spent.lock().keys().cloned().collect()
+    }
+
     /// `compact` (compaction.ts:205-240, 660-673). Manual compactions
     /// settle through their `/compact` inbox item, which the runner owns.
     pub async fn compact(&self, trigger: Trigger) -> CompactStatus {
         let outcome = self.compact_inner(trigger).await;
-        self.spent.lock().clear();
+        // REF compaction.ts: only the compacted session's spent accounting
+        // is cleared — other sessions' billing must survive.
+        self.spent.lock().remove(&trigger.context.session.id);
         outcome
     }
 
