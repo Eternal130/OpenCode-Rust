@@ -707,6 +707,33 @@ async fn handlers_revert_commit_without_stage_conflicts() {
     assert_api(&error, 409, "ConflictError");
 }
 
+/// RD-12: staging a revert at a boundary message that does not exist is
+/// a `MessageNotFoundError` (ref revert.ts:91 → protocol errors.ts
+/// httpApiStatus 404), never a silent success with an empty file plan.
+#[tokio::test]
+async fn handlers_revert_stage_missing_boundary_is_message_not_found() {
+    let server = boot().await;
+    let client = &server.client;
+    let session_id = create_session(client, "revert-missing").await.id;
+
+    let error = client
+        .session()
+        .revert()
+        .stage(
+            &session_id,
+            &SessionRevertStageBody { message_id: "msg_missing".to_owned(), ..Default::default() },
+        )
+        .await
+        .expect_err("missing boundary must 404");
+    match &error {
+        ClientError::Api { status, name, fields, .. } => {
+            assert_eq!((*status, name.as_str()), (404, "MessageNotFoundError"));
+            assert_eq!(fields.get("messageID"), Some(&serde_json::json!("msg_missing")));
+        }
+        other => panic!("expected Api error, got {other:?}"),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Shell / fs / vcs / worktree
 // ---------------------------------------------------------------------------

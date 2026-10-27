@@ -237,6 +237,39 @@ async fn insert_assistant(
     .expect("insert assistant");
 }
 
+/// RD-12: a missing boundary message is a `MessageNotFoundError` (ref
+/// revert.ts:91), never a silent empty plan / staged event.
+#[tokio::test]
+async fn snapshot_revert_stage_missing_boundary_errors() {
+    let stack = revert_stack().await;
+    let session_id = SessionId("ses_revert_missing".into());
+    seed_session(&stack.db, &session_id).await;
+    let missing = MessageId::parse("msg_nope").expect("missing id");
+    let error = crate::session::revert::stage(
+        &stack.db,
+        &stack.bus,
+        stack.store.as_ref(),
+        &session_id,
+        &missing,
+        true,
+    )
+    .await
+    .expect_err("missing boundary must error");
+    assert_eq!(
+        error,
+        crate::session::revert::RevertError::MessageNotFound {
+            session_id: session_id.as_str().to_string(),
+            message_id: missing.as_str().to_string(),
+        }
+    );
+    // Nothing staged: no session.revert.staged event, no revert state.
+    assert!(crate::session::revert::read_revert(&stack.db, &session_id)
+        .await
+        .expect("read")
+        .is_none());
+    // The valid-id path is unchanged (see the flow test below).
+}
+
 #[tokio::test]
 async fn snapshot_revert_stage_clear_commit_flow() {
     let stack = revert_stack().await;

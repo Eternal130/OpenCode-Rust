@@ -1534,8 +1534,11 @@ impl Engine {
         session_id: &SessionId,
         message_id: &str,
         include_files: bool,
-    ) -> Result<oc_schema::session_support::Revert, String> {
-        let services = self.location(location.clone()).await.map_err(|error| error.to_string())?;
+    ) -> Result<oc_schema::session_support::Revert, crate::session::revert::RevertError> {
+        let services = self
+            .location(location.clone())
+            .await
+            .map_err(|error| crate::session::revert::RevertError::Db(error.to_string()))?;
         let message_id = oc_schema::id::MessageId::parse(message_id.to_string())
             .unwrap_or_else(|error| oc_schema::id::MessageId(error.value));
         crate::session::revert::stage(
