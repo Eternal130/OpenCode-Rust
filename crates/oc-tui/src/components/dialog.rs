@@ -1076,6 +1076,21 @@ pub fn execute_submission(
             }
             return crate::components::command_palette::Dispatch::Handled;
         }
+        // RD-17 — a palette setting row's activation (`onSelect`,
+        // command-palette.tsx:42-44): `dialog.replace` with
+        // DialogConfig opened at the setting — `current={settingID(
+        // setting)}` seeds the row selection (`findIndex` clamped
+        // to 0, dialog-config.tsx:329-332).
+        Some(DialogKind::CommandPalette) if value.starts_with("setting:") => {
+            let id = value.strip_prefix("setting:").unwrap_or(value);
+            store.replace_dialog(DialogKind::Settings, DialogSize::Medium);
+            let index = crate::components::dialog_config::settings_table()
+                .into_iter()
+                .position(|setting| setting.id() == id)
+                .unwrap_or(0);
+            store.update_dialog(|top| top.select.selected = index);
+            return crate::components::command_palette::Dispatch::Handled;
+        }
         Some(DialogKind::ThemeList) => {
             if !store.set_theme_by_name(command) {
                 // ThemeErrorToast (auditB #9): an unresolvable theme
