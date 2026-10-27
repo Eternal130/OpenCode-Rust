@@ -342,6 +342,55 @@ pub fn read_file(
 // toModelContent (read.ts)
 // ---------------------------------------------------------------------------
 
+/// The structured `Output` union (read.ts `Output` = FileContent |
+/// TextPage | ListPage) — REF-exact field names and casing for
+/// codemode/plugin consumers.
+#[must_use]
+pub fn structured_output(output: &ReadOutput) -> Value {
+    match output {
+        ReadOutput::File { uri, name, content, mime, base64 } => {
+            let mut value = serde_json::json!({
+                "type": "file",
+                "uri": uri,
+                "content": content,
+                "encoding": if *base64 { "base64" } else { "utf8" },
+                "mime": mime,
+            });
+            if let Some(name) = name {
+                value["name"] = Value::String(name.clone());
+            }
+            value
+        }
+        ReadOutput::TextPage { content, mime, offset, truncated, next } => {
+            let mut value = serde_json::json!({
+                "type": "text-page",
+                "content": content,
+                "mime": mime,
+                "offset": offset,
+                "truncated": truncated,
+            });
+            if let Some(next) = next {
+                value["next"] = serde_json::json!(next);
+            }
+            value
+        }
+        ReadOutput::ListPage { entries, truncated, next } => {
+            let mut value = serde_json::json!({
+                "type": "list-page",
+                "entries": entries.iter().map(|entry| serde_json::json!({
+                    "path": entry.path,
+                    "type": entry.kind,
+                })).collect::<Vec<_>>(),
+                "truncated": truncated,
+            });
+            if let Some(next) = next {
+                value["next"] = serde_json::json!(next);
+            }
+            value
+        }
+    }
+}
+
 /// `toModelContent` — the exact model text for a read output.
 #[must_use]
 pub fn to_model_content(path: &str, offset: Option<u64>, output: &ReadOutput) -> String {
@@ -631,7 +680,7 @@ async fn run(
                 },
             ],
             metadata: Some(record_of(serde_json::json!({ "truncated": false }))),
-            output: None,
+            output: Some(structured_output(&output)),
         });
     }
 
@@ -645,7 +694,7 @@ async fn run(
     Ok(ToolOutcome {
         content: vec![Content::Text { text }],
         metadata: Some(record_of(serde_json::json!({ "truncated": truncated }))),
-        output: None,
+        output: Some(structured_output(&output)),
     })
 }
 
