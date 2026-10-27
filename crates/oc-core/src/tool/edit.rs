@@ -406,7 +406,13 @@ async fn execute_edit(
                 .and_then(|v| serde_json::from_value(v).ok())
                 .unwrap_or_default(),
         ),
-        output: Some(serde_json::json!({ "replacements": replacements })),
+        output: Some(serde_json::json!({
+            // ref edit.ts Output = { files, replacements } — the files
+            // array carries the same FileDiff data as metadata so
+            // codemode/plugin consumers can read output.files.
+            "files": serde_json::to_value(&files).unwrap_or_default(),
+            "replacements": replacements,
+        })),
     })
 }
 

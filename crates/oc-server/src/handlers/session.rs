@@ -1500,7 +1500,21 @@ async fn revert_stage(
         .engine
         .revert_stage(&location, &parse_session_id(&session_id), message_id, include_files)
         .await
-        .map_err(|error| revert_error(&session_id, &error))?;
+        .map_err(|error| match error {
+            // ref revert.ts:91 → MessageNotFoundError envelope
+            // (protocol errors.ts: httpApiStatus 404).
+            oc_core::session::revert::RevertError::MessageNotFound { session_id, message_id } => {
+                crate::errors::message_not_found(
+                    &session_id,
+                    &message_id,
+                    format!("Message not found: {message_id}"),
+                )
+            }
+            oc_core::session::revert::RevertError::Db(message) => {
+                crate::errors::debug_cause("session:unknown_ref", &message);
+                revert_error(&session_id, &message)
+            }
+        })?;
     Ok(json_data(serde_json::to_value(&revert).unwrap_or_else(|_| json!({}))))
 }
 

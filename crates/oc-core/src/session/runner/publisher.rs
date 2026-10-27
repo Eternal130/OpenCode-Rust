@@ -195,6 +195,17 @@ impl Fragments {
         self.chunks.keys().cloned().collect()
     }
 
+    /// The earliest pending-batch deadline across open fragments
+    /// (`opened + DELTA_BATCH_INTERVAL`), or `None` when nothing batches.
+    fn earliest_deadline(&self) -> Option<std::time::Instant> {
+        self.chunks
+            .values()
+            .filter(|(_, _, _, pending, _)| !pending.is_empty())
+            .filter_map(|(_, _, _, _, opened)| *opened)
+            .min()
+            .map(|opened| opened + DELTA_BATCH_INTERVAL)
+    }
+
     fn values_joined(&self, id: &str) -> String {
         self.chunks.get(id).map(|(_, values, ..)| values.join("")).unwrap_or_default()
     }
@@ -359,9 +370,12 @@ impl LlmEventPublisher {
     }
 
     /// Publishes delta batches whose batching interval elapsed (v2's
-    /// forked timer, approximated on event arrival — publish ORDER is
-    /// preserved: every batch precedes the next published frame).
-    async fn flush_due_delta_batches(&mut self) -> PublishResult<()> {
+    /// forked timer in publish-llm-event.ts:162-177: the trailing flush
+    /// is owned by the provider fiber, so pending deltas publish on
+    /// their own deadline even while the stream is quiet — the step loop
+    /// races this against the next stream event). Publish ORDER is
+    /// preserved: every batch precedes the next published frame.
+    pub async fn flush_due_delta_batches(&mut self) -> PublishResult<()> {
         for (_id, ordinal, batch) in self.text.due_batches() {
             self.publish_text_delta(ordinal, &batch).await?;
         }
@@ -369,6 +383,13 @@ impl LlmEventPublisher {
             self.publish_reasoning_delta(ordinal, &batch).await?;
         }
         Ok(())
+    }
+
+    /// The earliest pending text/reasoning batch deadline (v2's forked
+    /// 100ms timer): the step loop sleeps until this instant so sparse
+    /// streams still flush on time.
+    pub fn earliest_delta_deadline(&self) -> Option<std::time::Instant> {
+        self.text.earliest_deadline().into_iter().chain(self.reasoning.earliest_deadline()).min()
     }
 
     async fn publish_text_started(&mut self, ordinal: u64) -> PublishResult<()> {
@@ -559,8 +580,9 @@ impl LlmEventPublisher {
     /// `publish` (publish-llm-event.ts:401-558). Marks the record
     /// synchronously before every await. Stream deltas coalesce per v2's
     /// `deltaBatchInterval` batching: appends accumulate, the batch
-    /// publishes when due (the next event after the interval), on
-    /// fragment starts, or with the fragment end.
+    /// publishes when due (on the step loop's 100ms timer — even with no
+    /// further stream events), on fragment starts, or with the fragment
+    /// end.
     pub async fn publish(&mut self, event: &LLMEvent) -> PublishResult<()> {
         self.flush_due_delta_batches().await?;
         match event {

@@ -83,6 +83,27 @@ pub struct SessionRevertState {
     pub files: Option<Vec<oc_schema::session_support::FileDiff>>,
 }
 
+/// Revert command failures (mapped to HTTP errors by the server shell).
+#[derive(Debug, Clone, PartialEq)]
+pub enum RevertError {
+    /// The boundary message does not exist in the session (ref
+    /// revert.ts:91 `MessageNotFoundError`) → 404 envelope.
+    MessageNotFound { session_id: String, message_id: String },
+    /// Storage / snapshot failure.
+    Db(String),
+}
+
+impl std::fmt::Display for RevertError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MessageNotFound { session_id, message_id } => {
+                write!(f, "Message not found: {message_id} (session: {session_id})")
+            }
+            Self::Db(message) => write!(f, "{message}"),
+        }
+    }
+}
+
 /// `stage` — stage a revert boundary at `message_id`.
 ///
 /// `files: false` skips restoring the assistant-plan paths (the
@@ -94,9 +115,9 @@ pub async fn stage(
     session_id: &SessionId,
     message_id: &MessageId,
     include_files: bool,
-) -> Result<Revert, String> {
+) -> Result<Revert, RevertError> {
     // session.revert?.snapshot ?? capture()
-    let existing = read_revert(db, session_id).await?;
+    let existing = read_revert(db, session_id).await.map_err(RevertError::Db)?;
     let original = match existing.as_ref().and_then(|state| state.snapshot.clone()) {
         Some(original) => Some(original),
         None => snapshot.capture().await,
@@ -121,7 +142,7 @@ pub async fn stage(
         snapshot
             .restore(&restore)
             .await
-            .map_err(|error| format!("revert stage failed: {error}"))?;
+            .map_err(|error| RevertError::Db(format!("revert stage failed: {error}")))?;
     }
     let paths: Vec<oc_schema::common::RelativePath> = if include_files {
         next.keys().map(|path| oc_schema::common::RelativePath(path.clone())).collect()
@@ -155,13 +176,13 @@ pub async fn stage(
     };
     let data = serde_json::json!({
         "sessionID": session_id.as_str(),
-        "revert": serde_json::to_value(&revert).map_err(|error| error.to_string())?,
+        "revert": serde_json::to_value(&revert).map_err(|error| RevertError::Db(error.to_string()))?,
     });
     let def = crate::bus::registry::by_type_latest("session.revert.staged")
-        .ok_or_else(|| "no session.revert.staged definition".to_string())?;
+        .ok_or_else(|| RevertError::Db("no session.revert.staged definition".to_string()))?;
     bus.publish(def, data, crate::bus::PublishOptions::default())
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| RevertError::Db(error.to_string()))?;
     Ok(revert)
 }
 
@@ -258,45 +279,58 @@ async fn plan(
     db: &Database,
     session_id: &SessionId,
     message_id: &MessageId,
-) -> Result<BTreeMap<String, SnapshotId>, String> {
+) -> Result<BTreeMap<String, SnapshotId>, RevertError> {
     let session = session_id.as_str().to_string();
     let boundary = message_id.as_str().to_string();
-    db.transaction(move |tx| {
-        let boundary_seq: Option<i64> = tx
-            .conn()
-            .query_row(
-                "SELECT seq FROM session_message WHERE session_id = ?1 AND id = ?2",
-                rusqlite::params![session, boundary],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|error| crate::database::error::DbError::from(error))?;
-        let Some(boundary_seq) = boundary_seq else {
-            return Ok(BTreeMap::new());
-        };
-        let mut statement = tx
-            .conn()
-            .prepare(
-                "SELECT data FROM session_message WHERE session_id = ?1 AND type = 'assistant' AND seq > ?2 ORDER BY seq ASC",
-            )
-            .map_err(|error| crate::database::error::DbError::from(error))?;
-        let rows = statement
-            .query_map(rusqlite::params![session, boundary_seq], |row| {
-                row.get::<_, String>(0)
-            })
-            .map_err(|error| crate::database::error::DbError::from(error))?;
-        let mut files: BTreeMap<String, SnapshotId> = BTreeMap::new();
-        for row in rows.flatten() {
-            let Ok(value) = serde_json::from_str::<serde_json::Value>(&row) else { continue };
-            let Some(start) = value["snapshot"]["start"].as_str() else { continue };
-            let Some(paths) = value["snapshot"]["files"].as_array() else { continue };
-            for path in paths {
-                let Some(path) = path.as_str() else { continue };
-                files.entry(path.to_string()).or_insert_with(|| SnapshotId::parse(start));
+    // The transaction returns `None` when the boundary message does not
+    // exist (converted to `MessageNotFound` outside — the tx error type
+    // is the db error).
+    let planned = db
+        .transaction(move |tx| {
+            let boundary_seq: Option<i64> = tx
+                .conn()
+                .query_row(
+                    "SELECT seq FROM session_message WHERE session_id = ?1 AND id = ?2",
+                    rusqlite::params![session, boundary],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|error| crate::database::error::DbError::from(error))?;
+            let Some(boundary_seq) = boundary_seq else {
+                return Ok(None);
+            };
+            let mut statement = tx
+                .conn()
+                .prepare(
+                    "SELECT data FROM session_message WHERE session_id = ?1 AND type = 'assistant' AND seq > ?2 ORDER BY seq ASC",
+                )
+                .map_err(|error| crate::database::error::DbError::from(error))?;
+            let rows = statement
+                .query_map(rusqlite::params![session, boundary_seq], |row| {
+                    row.get::<_, String>(0)
+                })
+                .map_err(|error| crate::database::error::DbError::from(error))?;
+            let mut files: BTreeMap<String, SnapshotId> = BTreeMap::new();
+            for row in rows.flatten() {
+                let Ok(value) = serde_json::from_str::<serde_json::Value>(&row) else { continue };
+                let Some(start) = value["snapshot"]["start"].as_str() else { continue };
+                let Some(paths) = value["snapshot"]["files"].as_array() else { continue };
+                for path in paths {
+                    let Some(path) = path.as_str() else { continue };
+                    files.entry(path.to_string()).or_insert_with(|| SnapshotId::parse(start));
+                }
             }
-        }
-        Ok(files)
-    })
-    .await
-    .map_err(|error| error.to_string())
+            Ok(Some(files))
+        })
+        .await
+        .map_err(|error| RevertError::Db(error.to_string()))?;
+    match planned {
+        Some(files) => Ok(files),
+        // ref revert.ts:91 — a missing boundary is a
+        // MessageNotFoundError, never a silent empty plan.
+        None => Err(RevertError::MessageNotFound {
+            session_id: session_id.as_str().to_string(),
+            message_id: message_id.as_str().to_string(),
+        }),
+    }
 }
