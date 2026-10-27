@@ -5,33 +5,135 @@
 //! advances through a frame table (`<Show when={busy()}>` →
 //! `OneCellSpinner animation={WORK_SPINNERS[miniSettings().work_spinner]}`,
 //! `footer.view.tsx:978-988`); `mini.mono` swaps in the ASCII
-//! `SEED_MONO` animation. The frame index is `elapsed / interval`
-//! (modulo the table); the >30 s `WORK_PACE` easing and the glow
-//! `levels` only change animation speed/brightness, not the frame
-//! set, so the mono port keeps the plain interval stepping.
+//! `SEED_MONO` animation. RD-19 — the full motion model: the per-frame
+//! glow `levels` (`color.a *= level`, one-cell-spinner.tsx:29-34),
+//! the `WORK_PACE` decel (one-cell-motion.ts:36-47's integrated-time
+//! easing, 1.2 → 0.96 across the second 30 s), the `intro` clip and
+//! the `once` one-shot — `SEED_LAUNCH`'s 21-frame × 40 ms startup-row
+//! animation.
 
 use std::time::Duration;
 
-/// One animation: the glyph table + the per-frame interval
-/// (`OneCellMotion`'s `frames`/`interval` subset the mono writer
-/// needs).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// `WORK_PACE` (`one-cell-motion.ts:47`): the busy animations' decel —
+/// rate 1.2 folding to 0.96 across the 30-60 s window.
+pub const WORK_PACE: Pace = Pace { initial: 1.2, end: 0.96, after_ms: 30_000, duration_ms: 30_000 };
+
+/// `pace` (`OneCellMotion`): the rate eases `initial` → `end` over
+/// `duration_ms` once `after_ms` of age have elapsed.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Pace {
+    pub initial: f64,
+    pub end: f64,
+    pub after_ms: u64,
+    pub duration_ms: u64,
+}
+
+/// One animation: the glyph table + the per-frame interval +
+/// RD-19's glow levels / intro clip / one-shot flag / pace easing
+/// (`OneCellMotion`, one-cell-motion.ts:5-13).
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Motion {
     pub frames: Vec<char>,
     pub interval_ms: u64,
+    /// The glow table (`levels`): one alpha multiplier per frame; an
+    /// empty table renders every frame at full strength.
+    pub levels: Vec<f64>,
+    /// The intro clip (`intro`): a table played FIRST, before the
+    /// main cycle (`SEED_WORK`'s 80-frame ramp).
+    pub intro: Option<Box<Motion>>,
+    /// `once`: the main cycle plays once and holds its last frame.
+    pub once: bool,
+    /// The `WORK_PACE` decel.
+    pub pace: Option<Pace>,
 }
 
 impl Motion {
-    /// The glyph for an elapsed age (`oneCellFrame`'s modulo walk —
-    /// intro/pace/once are splash-only paths the busy spinner never
-    /// uses).
+    /// The glyph for an elapsed age (`oneCellFrame`'s modulo walk).
     #[must_use]
     pub fn frame(&self, elapsed: Duration) -> char {
-        if self.frames.is_empty() || self.interval_ms == 0 {
-            return ' ';
+        self.one_cell_frame(elapsed).glyph
+    }
+
+    /// `oneCellFrame` (one-cell-motion.ts:18-45): the intro clip
+    /// plays first; the pace easing integrates the changing rate so
+    /// slowing down never jumps or restarts; `once` clips the final
+    /// frame. Returns the glyph, its glow level (1.0 when the table
+    /// has none) and the one-shot completion marker.
+    #[must_use]
+    // The ref math is float throughout (`elapsed` ms × rates) — the
+    // int→float widenings mirror it; the frame index crosses i64 for
+    // the `rem_euclid` walk and is pre-clamped to the table.
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_precision_loss,
+        clippy::cast_sign_loss,
+        clippy::cast_possible_wrap
+    )]
+    pub fn one_cell_frame(&self, elapsed: Duration) -> CellFrame {
+        let elapsed_ms = elapsed.as_millis() as f64;
+        let intro_duration = self
+            .intro
+            .as_ref()
+            .map_or(0.0, |intro| (intro.frames.len() * intro.interval_ms.max(1) as usize) as f64);
+        let intro = elapsed_ms < intro_duration;
+        let clip: &Motion = if intro { self.intro.as_deref().unwrap_or(self) } else { self };
+        let count = clip.frames.len();
+        if count == 0 || clip.interval_ms == 0 {
+            return CellFrame::default();
         }
-        let ticks = elapsed.as_millis() / u128::from(self.interval_ms);
-        self.frames[(ticks % self.frames.len() as u128) as usize]
+        // Integrate the changing rate so slowing down does not jump or
+        // restart the motion (`one-cell-motion.ts:31-38`).
+        let progress = match self.pace {
+            Some(pace) if pace.duration_ms > 0 => {
+                ((elapsed_ms - pace.after_ms as f64) / pace.duration_ms as f64).clamp(0.0, 1.0)
+            }
+            _ => 0.0,
+        };
+        let time = if intro {
+            elapsed_ms
+        } else {
+            match self.pace {
+                None => elapsed_ms - intro_duration,
+                Some(pace) => {
+                    let after = pace.after_ms as f64;
+                    let duration = pace.duration_ms as f64;
+                    (elapsed_ms - intro_duration) * pace.initial
+                        + (pace.end - pace.initial)
+                            * (duration * (progress * progress * progress
+                                - progress * progress * progress * progress / 2.0)
+                                + (elapsed_ms - after - duration).max(0.0))
+                }
+            }
+        };
+        // Keep cycle boundaries exact when individual frame intervals
+        // are fractional (`time * N / (interval * N)`).
+        let step = (clip.interval_ms as usize * count) as f64;
+        let frame_index = (time * count as f64 / step).floor();
+        let index = if !intro && self.once {
+            (frame_index as i64).clamp(0, count as i64 - 1) as usize
+        } else {
+            (frame_index as i64).rem_euclid(count as i64) as usize
+        };
+        CellFrame {
+            glyph: clip.frames[index],
+            level: clip.levels.get(index).copied().unwrap_or(1.0),
+            complete: !intro && self.once && frame_index >= count as f64 - 1.0,
+        }
+    }
+}
+
+/// One resolved spinner frame (`oneCellFrame`'s return): the glyph,
+/// its glow level and the one-shot completion marker.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CellFrame {
+    pub glyph: char,
+    pub level: f64,
+    pub complete: bool,
+}
+
+impl Default for CellFrame {
+    fn default() -> Self {
+        Self { glyph: ' ', level: 1.0, complete: false }
     }
 }
 
@@ -82,11 +184,20 @@ const OCTANT_MASKS: [u8; 26] = [
 ];
 
 /// `BLOCK_SOFT_SLIDE` (the default spinner): five soft-left blocks
-/// then five soft-right blocks.
+/// then five soft-right blocks, with the glow levels
+/// (`one-cell-motion.ts:58-61`).
 fn block_soft_slide() -> Motion {
     let mut frames = vec!['\u{1fbe6}'; 5];
     frames.extend(vec!['\u{1fbe7}'; 5]);
-    Motion { frames, interval_ms: 100 }
+    Motion {
+        levels: vec![0.55, 0.85, 1.0, 0.85, 0.55, 0.55, 0.85, 1.0, 0.85, 0.55],
+        ..plain(frames, 100)
+    }
+}
+
+/// A bare glyph table (no glow, intro, once or pace).
+fn plain(frames: Vec<char>, interval_ms: u64) -> Motion {
+    Motion { frames, interval_ms, ..Motion::default() }
 }
 
 /// `WORK_SPINNERS[id]` (`one-cell-motion.ts:77-106`): the twelve
@@ -98,52 +209,107 @@ pub fn work_spinner(id: &str) -> Motion {
     let octets = |frames: &[u8], interval_ms: u64| Motion {
         frames: frames.iter().map(|&mask| octant_glyph(mask)).collect(),
         interval_ms,
+        ..Motion::default()
     };
     match id {
         "block-soft-slide" => block_soft_slide(),
-        "block-soft-sweep" => {
-            octets(&[0x14, 0x14, 0x14, 0x1c, 0x3c, 0x38, 0x28, 0x28, 0x28, 0x38, 0x3c, 0x1c], 100)
+        // WORK_PACE decels the sweep and the comet (one-cell-motion.
+        // tsx:62-75's `pace: WORK_PACE`).
+        "block-soft-sweep" => Motion {
+            pace: Some(WORK_PACE),
+            ..octets(&[0x14, 0x14, 0x14, 0x1c, 0x3c, 0x38, 0x28, 0x28, 0x28, 0x38, 0x3c, 0x1c], 100)
+        },
+        "block-low-comet" => {
+            Motion { pace: Some(WORK_PACE), ..plain(block_low_comet(), 100) }
         }
-        "block-low-comet" => Motion { frames: block_low_comet(), interval_ms: 100 },
-        "block-low-duet" => Motion { frames: block_low_duet(), interval_ms: 60 },
+        "block-low-duet" => plain(block_low_duet(), 60),
         "block-shuttle" => octets(&[0x14, 0x28], 500),
         "block-bridge" => octets(&[0x14, 0x14, 0x14, 0x3c, 0x28, 0x28, 0x28, 0x3c], 120),
         "block-squeeze" => {
             octets(&[0x14, 0x14, 0x14, 0x10, 0x20, 0x28, 0x28, 0x28, 0x20, 0x10], 100)
         }
-        "small-toggle" => Motion { frames: vec!['\u{25ab}', '\u{25aa}'], interval_ms: 320 },
-        "square-toggle" => Motion { frames: vec!['\u{25a1}', '\u{25a0}'], interval_ms: 500 },
-        "grow-shrink" => Motion {
-            frames: vec!['\u{25ab}', '\u{25ab}', '\u{25aa}', '\u{25a0}', '\u{25aa}'],
-            interval_ms: 180,
-        },
-        "quadrant-orbit" => Motion {
-            frames: vec!['\u{2598}', '\u{259d}', '\u{2597}', '\u{2596}'],
-            interval_ms: 160,
-        },
-        "crosshatch" => Motion {
-            frames: vec!['\u{25a7}', '\u{25a9}', '\u{25a8}', '\u{25a9}'],
-            interval_ms: 240,
-        },
-        "density-wave" => Motion {
-            frames: vec![
+        "small-toggle" => plain(vec!['\u{25ab}', '\u{25aa}'], 320),
+        "square-toggle" => plain(vec!['\u{25a1}', '\u{25a0}'], 500),
+        "grow-shrink" => plain(
+            vec!['\u{25ab}', '\u{25ab}', '\u{25aa}', '\u{25a0}', '\u{25aa}'],
+            180,
+        ),
+        "quadrant-orbit" => plain(vec!['\u{2598}', '\u{259d}', '\u{2597}', '\u{2596}'], 160),
+        "crosshatch" => plain(vec!['\u{25a7}', '\u{25a9}', '\u{25a8}', '\u{25a9}'], 240),
+        "density-wave" => plain(
+            vec![
                 '\u{2591}', '\u{2591}', '\u{2591}', '\u{2592}', '\u{2593}', '\u{2588}', '\u{2593}',
                 '\u{2592}',
             ],
-            interval_ms: 160,
-        },
-        // `SEED_WORK`: forty identical ▫ frames (the glow levels are
-        // the only variation — one glyph for the mono writer).
-        "seed" => Motion { frames: vec!['\u{25aa}'], interval_ms: 40 },
+            160,
+        ),
+        // `SEED_WORK`: forty identical ▪ frames — the glow levels and
+        // the intro ramp ARE the animation (one-cell-motion.ts:49-46).
+        "seed" => seed_work(),
         _ => block_soft_slide(),
     }
 }
 
-/// `SEED_MONO` (`one-cell-motion.ts:107`): the ASCII spinner `mono`
+/// `SEED_WORK`'s glow level (`one-cell-motion.ts:53`): a cosine
+/// brightness walk, 0.3 → 1.0 → 0.3 across the cycle.
+// The count-bounded index→float widenings mirror the ref's
+// `index / count` phases.
+#[allow(clippy::cast_precision_loss)]
+fn seed_level(index: usize, count: usize) -> f64 {
+    let phase = index as f64 / count as f64;
+    0.3 + 0.7 * (1.0 - (phase * std::f64::consts::TAU).cos()) / 2.0
+}
+
+/// `SEED_WORK`'s INTRO level (`one-cell-motion.ts:56-59`): the
+/// piecewise ramp — quick attack over the first eighth, hold through
+/// the second quarter, cubic falloff after.
+#[allow(clippy::cast_precision_loss)]
+fn seed_intro_level(index: usize) -> f64 {
+    let phase = index as f64 / 80.0;
+    0.3 + 0.7
+        * (if phase < 0.125 {
+            phase / 0.125
+        } else if phase < 0.375 {
+            1.0
+        } else {
+            ((1.0 - phase) / 0.625).powi(3)
+        })
+}
+
+/// `SEED_WORK` (`one-cell-motion.ts:49-64`): the 40-frame seed cycle
+/// with its 80-frame intro ramp and the 1.25 → 0.5 decel.
+#[must_use]
+pub fn seed_work() -> Motion {
+    let levels = (0..40).map(|index| seed_level(index, 40)).collect();
+    let intro = Motion {
+        levels: (0..80).map(seed_intro_level).collect(),
+        ..plain(vec!['\u{25aa}'; 80], 40)
+    };
+    Motion {
+        intro: Some(Box::new(intro)),
+        pace: Some(Pace { initial: 1.25, end: 0.5, after_ms: 30_000, duration_ms: 30_000 }),
+        levels,
+        ..plain(vec!['\u{25aa}'; 40], 40)
+    }
+}
+
+/// `SEED_LAUNCH` (`one-cell-motion.ts:108-113`): the startup row's
+/// ONE-SHOT — 21 frames × 40 ms (10 ▪ outlines then 11 ▪ blocks),
+/// the seed levels' head, played once.
+#[must_use]
+pub fn seed_launch() -> Motion {
+    let frames = (0..21)
+        .map(|index| if index < 10 { '\u{25ab}' } else { '\u{25aa}' })
+        .collect();
+    let levels = (0..21).map(|index| seed_level(index, 40)).collect();
+    Motion { once: true, levels, ..plain(frames, 40) }
+}
+
+/// `SEED_MONO` (`one-cell-motion.ts:115`): the ASCII spinner `mono`
 /// selects (`animation={props.mono ? SEED_MONO : …}`).
 #[must_use]
 pub fn seed_mono() -> Motion {
-    Motion { frames: vec!['-', '\\', '|', '/'], interval_ms: 120 }
+    plain(vec!['-', '\\', '|', '/'], 120)
 }
 
 /// `BLOCK_LOW_COMET` (`one-cell-motion.ts:48-55`): a comet walking
@@ -226,7 +392,7 @@ mod tests {
 
     #[test]
     fn frame_advances_with_the_interval() {
-        let motion = Motion { frames: vec!['a', 'b', 'c'], interval_ms: 100 };
+        let motion = plain(vec!['a', 'b', 'c'], 100);
         assert_eq!(motion.frame(Duration::from_millis(0)), 'a');
         assert_eq!(motion.frame(Duration::from_millis(99)), 'a');
         assert_eq!(motion.frame(Duration::from_millis(100)), 'b');
@@ -256,5 +422,104 @@ mod tests {
     fn computed_walks_match_the_reference_counts() {
         assert_eq!(block_low_comet().len(), 30);
         assert_eq!(block_low_duet().len(), 24);
+    }
+
+    // -- RD-19: glow levels, pace easing, the SEED_LAUNCH one-shot --
+
+    /// `BLOCK_SOFT_SLIDE`'s glow table (`one-cell-motion.ts:60`): the
+    /// level walks 0.55 → 0.85 → 1.0 → 0.85 → 0.55 per half cycle.
+    #[test]
+    fn glow_levels_follow_the_frame() {
+        let slide = work_spinner("block-soft-slide");
+        assert_eq!(slide.levels.len(), 10);
+        assert_eq!(slide.levels[0], 0.55);
+        // 200 ms at interval 100 = frame 2 → full strength.
+        let frame = slide.one_cell_frame(Duration::from_millis(200));
+        assert_eq!(frame.glyph, '\u{1fbe6}');
+        assert_eq!(frame.level, 1.0);
+        // The comet and the sweep carry the WORK_PACE decel; the
+        // slide only glows (`one-cell-motion.ts:48-75`).
+        assert_eq!(work_spinner("block-soft-slide").pace, None);
+        assert_eq!(work_spinner("block-soft-sweep").pace, Some(WORK_PACE));
+        assert_eq!(work_spinner("block-low-comet").pace, Some(WORK_PACE));
+        let pace = work_spinner("block-soft-sweep").pace.expect("work pace");
+        assert_eq!((pace.initial, pace.end, pace.after_ms, pace.duration_ms), (1.2, 0.96, 30_000, 30_000));
+    }
+
+    /// The pace integration (`one-cell-motion.ts:31-38`): at 45 s
+    /// into the seed's 1.25 → 0.5 decel the integrated time is
+    /// 54140.625 ms → frame 1353 → cycle position 33. The levels
+    /// vector (index = position) makes the position observable.
+    #[test]
+    #[allow(clippy::cast_precision_loss)] // the mirror of the ref's float math
+    fn work_pace_integrates_the_decel() {
+        let motion = Motion {
+            levels: (0..40).map(f64::from).collect(),
+            pace: Some(Pace { initial: 1.25, end: 0.5, after_ms: 30_000, duration_ms: 30_000 }),
+            ..plain(vec!['x'; 40], 40)
+        };
+        // Pre-decel: rate 1.25 — 29999 ms integrates to 37498.75 →
+        // frame 937 → position 17.
+        assert_eq!(motion.one_cell_frame(Duration::from_millis(29_999)).level, 17.0);
+        // Mid-decel: progress 0.5.
+        assert_eq!(motion.one_cell_frame(Duration::from_secs(45)).level, 33.0);
+        // Post-decel: the rate settles at 0.5 — 75 s integrates to
+        // 1.25·30000 + (0.5-1.25)·(30000·(1 - 0.5) + 15000) + 0.5·15000
+        // (the closed form lands at frame position 10 for this curve).
+        let late = motion.one_cell_frame(Duration::from_secs(75)).level;
+        let expected = {
+            let progress = 1.0_f64;
+            let time = 75_000.0 * 1.25
+                + (0.5 - 1.25)
+                    * (30_000.0 * (progress * progress * progress
+                        - progress * progress * progress * progress / 2.0)
+                        + (75_000.0 - 60_000.0));
+            (((time * 40.0 / (40.0 * 40.0)).floor() as i64).rem_euclid(40)) as f64
+        };
+        assert_eq!(late, expected);
+    }
+
+    /// `SEED_WORK`'s intro (`one-cell-motion.ts:55-60`): the first
+    /// 3.2 s ride the 80-frame ramp — frame 25 sits in the hold
+    /// (full strength) where the main cycle would be dim.
+    #[test]
+    fn seed_intro_plays_before_the_cycle() {
+        let seed = seed_work();
+        let intro_frame = seed.one_cell_frame(Duration::from_millis(1_000));
+        assert_eq!(intro_frame.glyph, '\u{25aa}');
+        assert_eq!(intro_frame.level, 1.0, "intro frame 25 is in the hold");
+        // The main cycle at the same position in ITS table (frame 25,
+        // 1000 ms past the 3200 ms intro = 4200 ms): cosine level.
+        let cycle_frame = seed.one_cell_frame(Duration::from_millis(4_200));
+        let elapsed_ms = 4_200.0_f64 - 3_200.0;
+        let position = (elapsed_ms * 1.25 / 40.0).floor(); // rate 1.25 pre-decel
+        let index = (position as i64).rem_euclid(40) as usize;
+        assert_eq!(cycle_frame.level, seed.levels[index]);
+    }
+
+    /// `SEED_LAUNCH` (`one-cell-motion.ts:108-113`): 21 frames ×
+    /// 40 ms — 10 ▪ outlines then 11 ▪ blocks — played ONCE, holding
+    /// the last frame; complete at the 800 ms window's end.
+    #[test]
+    fn seed_launch_is_the_one_shot_table() {
+        let launch = seed_launch();
+        assert_eq!(launch.frames.len(), 21);
+        assert_eq!(launch.interval_ms, 40);
+        assert!(launch.once);
+        assert!(launch.frames.iter().take(10).all(|&glyph| glyph == '\u{25ab}'));
+        assert!(launch.frames.iter().skip(10).all(|&glyph| glyph == '\u{25aa}'));
+        // The seed levels' head rides along (the glow).
+        let seed = seed_work();
+        assert_eq!(launch.levels, seed.levels[..21]);
+
+        assert_eq!(launch.one_cell_frame(Duration::from_millis(0)).glyph, '\u{25ab}');
+        assert_eq!(launch.one_cell_frame(Duration::from_millis(400)).glyph, '\u{25aa}');
+        let end = launch.one_cell_frame(Duration::from_millis(800));
+        assert!(end.complete, "20 frames × 40 ms completes the one-shot");
+        let held = launch.one_cell_frame(Duration::from_secs(10));
+        assert!(held.complete);
+        assert_eq!(held.glyph, '\u{25aa}', "once holds the last frame");
+        // `STARTUP_DURATION_MS` matches the ref's setTimeout window.
+        assert_eq!(super::super::lifecycle::STARTUP_DURATION_MS, 800);
     }
 }
