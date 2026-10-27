@@ -227,7 +227,7 @@ async fn pump(
     location: LocationRef,
     mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) {
-    let mut subscription = watcher.subscribe(WatchTarget::File { path });
+    let mut subscription = watcher.subscribe(&WatchTarget::File { path });
     let schema_ref = schema_location(&location);
     loop {
         tokio::select! {
