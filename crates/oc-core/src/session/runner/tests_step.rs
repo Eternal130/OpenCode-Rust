@@ -205,6 +205,30 @@ async fn runner_step_declined_tool_interrupts_the_step() {
     assert!(events.iter().any(|(type_, _, _)| type_ == "session.execution.interrupted"));
 }
 
+/// RV-B1: retries do NOT consume step budget. REF llm.ts increments `step`
+/// only in the outer drain loop after a Completed `runStep`; a Retry inside
+/// the attempt loop stays on the same logical step.
+#[tokio::test]
+async fn runner_step_retry_does_not_consume_step_budget() {
+    // Agent steps=2. Attempt 1 (step 1) fails with a retryable rate limit;
+    // the retry must still be step 1 — no MAX_STEPS_PROMPT, tools stay on.
+    let llm = TestLlm::new();
+    llm.push([TestResponse::error(rate_limit()), text("after retry")]);
+    let harness = harness_with(llm).await;
+    harness.agents.update(&oc_schema::id::AgentId::parse("build"), |agent| agent.steps = Some(2));
+    harness.create_session().await;
+    harness.admit_prompt("msg_rb1", "hi").await;
+    harness.execution.resume(harness.session_id().as_str()).await.unwrap();
+    let requests = harness.llm.as_ref().expect("scripted harness").0.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[1].tool_choice, None,
+        "the retry is still step 1 — the step limit is not reached"
+    );
+    let last_message = requests[1].messages.last().unwrap();
+    assert_eq!(last_message.role, oc_ai::schema::messages::MessageRole::User);
+}
+
 #[tokio::test]
 async fn runner_step_max_steps_disables_tools_on_the_final_step() {
     // Agent steps=2: step 1 runs normally; step 2 (the continuation, with
