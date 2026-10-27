@@ -174,6 +174,9 @@ pub struct StepDeps {
 enum LoopItem {
     Outcome(Option<ToolExit>),
     Event(Option<Result<LLMEvent, AiError>>),
+    /// The 100ms delta-batch deadline elapsed while no stream event,
+    /// tool outcome, or shutdown arrived (v2's forked timer).
+    DeltaDeadline,
     Shutdown,
 }
 
@@ -230,11 +233,24 @@ pub async fn attempt(deps: &StepDeps, input: AttemptInput) -> Result<Outcome, At
         };
     let mut shutdown = deps.shutdown.clone();
     while let Some(polled) = stream.as_mut() {
+        // v2's forked delta timer (publish-llm-event.ts:162-177): the
+        // trailing flush is owned by the provider fiber, so pending
+        // text/reasoning batches publish on their 100ms deadline even
+        // while the stream is quiet — race the deadline against the
+        // next stream event / tool outcome / shutdown.
+        let delta_deadline =
+            publisher.earliest_delta_deadline().map(tokio::time::Instant::from_std);
         let next = tokio::select! {
             biased;
             _ = shutdown.changed() => LoopItem::Shutdown,
             outcome = outcome_rx.recv() => LoopItem::Outcome(outcome),
             event = polled.next() => LoopItem::Event(event),
+            () = async {
+                match delta_deadline {
+                    Some(deadline) => tokio::time::sleep_until(deadline).await,
+                    None => std::future::pending::<()>().await,
+                }
+            } => LoopItem::DeltaDeadline,
         };
         if matches!(next, LoopItem::Shutdown) {
             // The coordinator interrupted the execution: latch and leave
@@ -250,6 +266,9 @@ pub async fn attempt(deps: &StepDeps, input: AttemptInput) -> Result<Outcome, At
             break;
         }
         match next {
+            LoopItem::DeltaDeadline => {
+                publisher.flush_due_delta_batches().await?;
+            }
             LoopItem::Outcome(Some(exit)) => {
                 settle_tool_exit(&mut publisher, deps, exit).await?;
             }

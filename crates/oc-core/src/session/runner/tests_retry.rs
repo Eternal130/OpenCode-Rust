@@ -204,5 +204,5 @@ async fn runner_retry_wait_publishes_retry_scheduled_and_sleeps_the_remainder() 
     assert_eq!(retry.2["at"], serde_json::json!(0));
     assert_eq!(retry.2["error"]["type"], serde_json::json!("provider.internal"));
     let _ = Duration::from_millis(0);
-    let _ = bus_stack.llm.0.requests();
+    let _ = bus_stack.llm.as_ref().expect("scripted harness").0.requests();
 }

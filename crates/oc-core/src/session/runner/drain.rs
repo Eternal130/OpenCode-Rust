@@ -32,6 +32,16 @@ use crate::session::store::SessionStore;
 /// `CONTINUE_AFTER_INCOMPLETE_STREAM` (llm.ts:35-36).
 pub const CONTINUE_AFTER_INCOMPLETE_STREAM: &str = "The previous response was interrupted. Continue from where you left off without repeating completed content.";
 
+/// Resolves once the shutdown watch is (or becomes) signalled — the
+/// interrupt signal compaction awaits race against (RD-11).
+async fn shutdown_signal(shutdown: &tokio::sync::watch::Receiver<bool>) {
+    if *shutdown.borrow() {
+        return;
+    }
+    let mut watched = shutdown.clone();
+    let _ = watched.changed().await;
+}
+
 /// `StepFailedError`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StepFailed(pub oc_schema::common::SessionError);
@@ -227,7 +237,9 @@ impl SessionRunner {
         // step, continue.
         loop {
             let next = self
-                .advance_to_step(session_id, force, continuing, step, entering, promotable)
+                .advance_to_step(
+                    session_id, force, continuing, step, entering, promotable, &shutdown,
+                )
                 .await?;
             match next {
                 Boundary::Ready(context, ready_step) => {
@@ -249,6 +261,7 @@ impl SessionRunner {
     }
 
     /// `advanceToStep` (llm.ts:71-186) — the uninterruptible boundary loop.
+    #[allow(clippy::too_many_arguments)]
     async fn advance_to_step(
         &self,
         session_id: &str,
@@ -257,6 +270,7 @@ impl SessionRunner {
         mut step: u32,
         mut entering: bool,
         promotable: Promotable,
+        shutdown: &tokio::sync::watch::Receiver<bool>,
     ) -> Result<Boundary, RunFailure> {
         loop {
             // 1. Location closed ⇒ close the transport, Reloaded.
@@ -371,7 +385,7 @@ impl SessionRunner {
             }
             // 5. Manual compaction.
             if let Some(InboxInfo::Compaction { id, .. }) = &pending {
-                let outcome = self.manual_compaction(session_id, id.as_str()).await;
+                let outcome = self.manual_compaction(session_id, id.as_str(), shutdown).await;
                 match outcome {
                     Ok(()) => {
                         force = false;
@@ -489,7 +503,12 @@ impl SessionRunner {
 
     /// The manual-compaction run (llm.ts:113-157): preview context, then
     /// `compact(reason: "manual", inputID)`.
-    async fn manual_compaction(&self, session_id: &str, input_id: &str) -> Result<(), RunFailure> {
+    async fn manual_compaction(
+        &self,
+        session_id: &str,
+        input_id: &str,
+        shutdown: &tokio::sync::watch::Receiver<bool>,
+    ) -> Result<(), RunFailure> {
         let selected = self.context.select(session_id).await?;
         let model = self.context.resolve_model(&selected.session).map_err(|error| {
             RunFailure::unsurfaced(oc_schema::common::SessionError {
@@ -529,7 +548,16 @@ impl SessionRunner {
                     .unwrap_or_else(|error| MessageId(error.value)),
             ),
         };
-        match self.compaction.compact(trigger).await {
+        // RD-11 (ref compaction.ts:664-672): an interrupt settles a manual
+        // compaction immediately — the drain's own inbox-item cleanup
+        // publishes the failure, so here we only stop awaiting. Without
+        // this race the running compaction row lingers until a later
+        // drain's `settle_stale_compactions` backstop.
+        let outcome = tokio::select! {
+            outcome = self.compaction.compact(trigger) => outcome,
+            () = shutdown_signal(shutdown) => return Err(RunFailure::Interrupted),
+        };
+        match outcome {
             crate::session::runner::compaction::CompactStatus::Completed => Ok(()),
             crate::session::runner::compaction::CompactStatus::Skipped => Ok(()),
             crate::session::runner::compaction::CompactStatus::Failed { error } => {
@@ -578,14 +606,35 @@ impl SessionRunner {
                 }
             };
             // Auto compaction before every attempt.
-            let outcome = self
-                .compaction
-                .compact(CompactionTrigger {
+            // RD-11 (ref compaction.ts:664-672 `Effect.onInterrupt`): an
+            // interrupted non-manual compaction emits
+            // `compaction.interrupted` immediately — never left to the
+            // next drain's `settle_stale_compactions` backstop.
+            let outcome = tokio::select! {
+                outcome = self.compaction.compact(CompactionTrigger {
                     reason: CompactionReason::Auto,
                     context: loaded.clone(),
                     input_id: None,
-                })
-                .await;
+                }) => outcome,
+                () = shutdown_signal(shutdown) => {
+                    let _ = self
+                        .bus
+                        .publish(
+                            def("session.compaction.failed"),
+                            serde_json::json!({
+                                "sessionID": session_id.as_str(),
+                                "reason": "auto",
+                                "error": {
+                                    "type": "compaction.interrupted",
+                                    "message": "Compaction was interrupted",
+                                },
+                            }),
+                            PublishOptions::default(),
+                        )
+                        .await;
+                    return Err(RunFailure::Interrupted);
+                }
+            };
             match outcome {
                 crate::session::runner::compaction::CompactStatus::Failed { error } => {
                     return Err(RunFailure::surfaced(error));

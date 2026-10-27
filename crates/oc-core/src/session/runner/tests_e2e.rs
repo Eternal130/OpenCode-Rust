@@ -99,7 +99,7 @@ async fn runner_e2e_tool_call_turn_full_event_sequence_and_message_tree() {
     assert_eq!(shapes.len(), 4, "user + two assistants + the idle marker");
     assert_eq!(shapes[3].1, "idle");
     // The baseline DID reach the model request (system parts).
-    let requests = harness.llm.0.requests();
+    let requests = harness.llm.as_ref().expect("scripted harness").0.requests();
     let system: String = requests
         .first()
         .expect("one request")
