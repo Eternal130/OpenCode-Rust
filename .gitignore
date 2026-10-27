@@ -18,3 +18,4 @@
 .superpowers/
 *.log
 tools/parity/tui-diff/cache/
+.test-logs/
