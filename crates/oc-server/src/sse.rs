@@ -15,7 +15,6 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use futures::StreamExt;
-use oc_core::bus::registry;
 use oc_core::bus::{self, Bus, Event, LogItem};
 use parking_lot::Mutex;
 use serde_json::json;
@@ -148,24 +147,15 @@ impl SubscriberQueue {
     }
 }
 
-/// Whether an event type is public (`isOpenCodeEvent`): `server.connected`,
-/// any known registry type (`EventManifest.isServer` analog), `rpc.*`, or
-/// one of the v2 location-service frames the announcer publishes (they
-/// are schema'd public events in v2; the Rust registry inventory does not
-/// list them yet — see `announce`).
-///
-/// The registry's non-session inventory carries every v2
-/// `EventManifest.ServerDefinitions` type (auditD §3.4): the form/shell
-/// lifecycle frames oc-core already published, plus `session.status`,
-/// `session.idle`, `filesystem.changed`, `worktree.updated`,
-/// `vcs.branch.updated`, `credential.*`, `models-dev.refreshed`, `tui.*`,
-/// and `installation.*`.
+/// Whether an event type is public (`EventManifest.isServer`): the
+/// classification lives in ONE place — [`crate::event_manifest`] (the
+/// registry inventory + the service-frame segment it shares with the
+/// announcer, plus `server.connected` and `rpc.*`). The drift-guard tests
+/// there pin the set so new event types cannot silently miss
+/// classification.
 #[must_use]
 pub fn is_public_event(type_: &str) -> bool {
-    type_ == "server.connected"
-        || registry::by_type(type_).is_some()
-        || type_.starts_with("rpc.")
-        || crate::announce::SERVICE_FRAMES.contains(&type_)
+    crate::event_manifest::is_public(type_)
 }
 
 /// One subscriber's queue handle.

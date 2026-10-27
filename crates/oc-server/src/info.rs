@@ -1,5 +1,7 @@
 //! `GET /api/info` (`handlers/server.ts` + `process.ts infoResponse`).
 
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::Response;
 use serde_json::json;
@@ -46,13 +48,86 @@ pub fn info_response(state: &AppState) -> Response {
     response
 }
 
-/// `urls()`: the bound address formatted as `http://host:port` (IPv6 gets
-/// brackets). The unspecified-address expansion (`connectionURLs`) collapses
-/// to the bound form here since this shell binds concrete addresses.
+/// `urls()` (`connectionURLs`, server-info.ts:18-36): the bound address
+/// formatted as `http://host:port` (IPv6 gets brackets); an unspecified
+/// (wildcard) listen address expands to every non-internal interface
+/// address of the same family, de-duplicated in interface order.
 fn connection_urls(state: &AppState) -> Vec<String> {
     match *state.local_addr.read() {
-        Some(addr) => vec![format!("http://{}", addr)],
+        Some(addr) => expand_wildcard(addr),
         None => Vec::new(),
+    }
+}
+
+/// `connectionURLs`: `0.0.0.0` expands over IPv4 interface addresses,
+/// `::` over IPv6 (bracketed); a concrete host renders as-is.
+fn expand_wildcard(addr: SocketAddr) -> Vec<String> {
+    if !addr.ip().is_unspecified() {
+        return vec![format!("http://{addr}")];
+    }
+    let ipv4 = addr.is_ipv4();
+    let mut seen = std::collections::HashSet::new();
+    interface_addresses(ipv4)
+        .into_iter()
+        .filter(|ip| seen.insert(*ip))
+        .map(|ip| match ip {
+            IpAddr::V4(v4) => format!("http://{v4}:{}", addr.port()),
+            IpAddr::V6(v6) => format!("http://[{v6}]:{}", addr.port()),
+        })
+        .collect()
+}
+
+/// Non-loopback interface addresses of one family (`os.networkInterfaces()`
+/// filtered to `!internal && family`), via `getifaddrs(3)` (no new deps —
+/// libc is already a direct oc-server dependency). Interface order is
+/// preserved; failures yield an empty list (the wildcard then expands to
+/// no urls, exactly like an interface-less v2 host).
+#[allow(
+    unsafe_code,
+    reason = "getifaddrs(3) is the crate-free interface enumeration (RV-P6)"
+)]
+fn interface_addresses(ipv4: bool) -> Vec<IpAddr> {
+    #[cfg(unix)]
+    unsafe {
+        let mut addrs: *mut libc::ifaddrs = std::ptr::null_mut();
+        if libc::getifaddrs(&mut addrs) != 0 {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        let mut cursor = addrs;
+        while !cursor.is_null() {
+            let ifa = &*cursor;
+            cursor = (*ifa).ifa_next;
+            if (*ifa).ifa_addr.is_null() {
+                continue;
+            }
+            let sockaddr = (*ifa).ifa_addr;
+            let ip = match (*sockaddr).sa_family as i32 {
+                libc::AF_INET if ipv4 => IpAddr::V4(Ipv4Addr::from(
+                    (*(sockaddr as *const libc::sockaddr_in)).sin_addr.s_addr.to_ne_bytes(),
+                )),
+                libc::AF_INET6 if !ipv4 => {
+                    let sa = &*(sockaddr as *const libc::sockaddr_in6);
+                    // Scoped link-local addresses (`fe80::%x`) cannot form a
+                    // reachable URL hostname; skip them.
+                    if sa.sin6_scope_id != 0 {
+                        continue;
+                    }
+                    IpAddr::V6(Ipv6Addr::from(sa.sin6_addr.s6_addr))
+                }
+                _ => continue,
+            };
+            if !ip.is_loopback() {
+                out.push(ip);
+            }
+        }
+        libc::freeifaddrs(addrs);
+        out
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = ipv4;
+        Vec::new()
     }
 }
 
@@ -72,4 +147,40 @@ pub fn unavailable_response(readiness: Readiness) -> Response {
         response.headers_mut().insert(header::RETRY_AFTER, HeaderValue::from_static("1"));
     }
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn socket(host: &str) -> SocketAddr {
+        format!("{host}:0").parse().expect("socket addr")
+    }
+
+    #[test]
+    fn info_connection_urls_concrete_address_renders_as_is() {
+        assert_eq!(expand_wildcard(socket("127.0.0.1")), vec!["http://127.0.0.1:0"]);
+        assert_eq!(expand_wildcard(socket("[::1]")), vec!["http://[::1]:0"]);
+    }
+
+    #[test]
+    fn info_connection_urls_wildcard_expands_to_interface_addresses() {
+        let urls = expand_wildcard(socket("0.0.0.0"));
+        let expected: Vec<String> =
+            interface_addresses(true).into_iter().map(|ip| format!("http://{ip}:0")).collect();
+        assert_eq!(urls, expected);
+        // LAN discovery: a wildcard bind yields one URL per non-loopback
+        // interface address (no raw `0.0.0.0` left behind).
+        assert!(!urls.iter().any(|url| url.contains("0.0.0.0")));
+        for ip in interface_addresses(true) {
+            assert!(ip.is_ipv4() && !ip.is_loopback());
+        }
+    }
+
+    #[test]
+    fn info_connection_urls_ipv6_wildcard_brackets_expanded_addresses() {
+        for url in expand_wildcard(socket("[::]")) {
+            assert!(url.starts_with("http://["), "bracketed IPv6 url: {url}");
+        }
+    }
 }
