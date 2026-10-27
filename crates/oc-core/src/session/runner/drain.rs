@@ -675,6 +675,7 @@ impl SessionRunner {
                 snapshot: self.snapshot.clone(),
                 tool_output: self.tool_output.clone(),
                 shutdown: shutdown.clone(),
+                clock: Arc::clone(&self.clock),
             };
             let input = AttemptInput {
                 session_id: session_id.clone(),
