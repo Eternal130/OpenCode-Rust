@@ -500,8 +500,11 @@ impl SessionCompaction {
                 .unwrap_or_else(|| panic!("no session.compaction.started definition"));
             let _ = self.bus.publish(def, data, PublishOptions::default()).await;
         }
-        // TODO(wave-C): the `session.compaction` hook short-circuit result
-        // (`prepared.event.result`).
+        // compaction.ts:396 — a request hook supplied the summary itself,
+        // so no model call happens.
+        if let Some(supplied) = &prepared.compaction_result {
+            return Ok(self.result_from_hook(context, supplied, recent).await);
+        }
 
         let policy = RetryPolicy::new(
             SessionId::parse(context.session.id.clone()).unwrap_or_else(|err| SessionId(err.value)),
@@ -568,7 +571,10 @@ impl SessionCompaction {
                         continue;
                     }
                     // Other provider errors resend the same request under
-                    // the session's retry policy.
+                    // the session's retry policy (compaction.ts:444-451:
+                    // the prepared request's `session.retry` hook travels
+                    // with the policy, so plugin overrides apply to
+                    // compaction too).
                     let error = to_session_error(&cause);
                     let decision = policy
                         .decide(
@@ -577,7 +583,7 @@ impl SessionCompaction {
                             &context.agent_id,
                             &context.model.reference,
                             is_retryable(&cause),
-                            None,
+                            Some(Arc::clone(&prepared.retry)),
                         )
                         .await;
                     if !decision.retry {
@@ -629,6 +635,36 @@ impl SessionCompaction {
                     response: None,
                 })
             })
+    }
+
+    /// `fromHook` (compaction.ts:594-608): a request hook supplied the
+    /// summary itself, so no model call happens. The supplied tokens are
+    /// billed immediately (cost priced off the model's cost table).
+    async fn result_from_hook(
+        &self,
+        context: &Loaded,
+        supplied: &crate::hooks::CompactionResult,
+        recent: &str,
+    ) -> CompactOk {
+        let usage = supplied.tokens.as_ref().and_then(|tokens| {
+            serde_json::from_value::<oc_schema::common::TokenUsage>(tokens.clone()).ok().map(
+                |tokens| RecordedUsage {
+                    cost: SessionUsage::calculate_cost(&context.model.cost, &tokens),
+                    tokens,
+                },
+            )
+        });
+        self.spend(&context.session.id, usage).await;
+        CompactOk {
+            text: supplied.summary.clone(),
+            recent: recent.to_string(),
+            provider_state: supplied
+                .provider_state
+                .clone()
+                .and_then(|value| serde_json::from_value(value).ok()),
+            provider_context: None,
+            metadata: supplied.metadata.clone().map(|record| record.into_iter().collect()),
+        }
     }
 
     /// Each model call is billed as soon as it finishes (`spend`).

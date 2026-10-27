@@ -412,5 +412,243 @@ async fn runner_compaction_manual_run_through_the_inbox() {
         && data["summary"] == serde_json::json!("## Objective\n- ship the runner")));
 }
 
+// -- RD-03: `session.compaction` / `session.title` hook `result` ---------
+
+/// The text parts of a request message (test-side inspection of what the
+/// LLM was asked).
+fn message_texts(message: &oc_ai::schema::messages::Message) -> Vec<String> {
+    message
+        .content
+        .iter()
+        .filter_map(|part| match part {
+            oc_ai::schema::messages::ContentPart::Text { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn is_summary_request(request: &oc_ai::schema::messages::LLMRequest) -> bool {
+    request
+        .messages
+        .last()
+        .map(message_texts)
+        .is_some_and(|texts| texts.iter().any(|text| text.starts_with("You MUST summarize")))
+}
+
+#[tokio::test]
+async fn runner_compaction_hook_result_short_circuits_the_model() {
+    use crate::hooks::{fn_hook, CompactionResult, HookOptions, SessionCompactionEvent};
+
+    let llm = TestLlm::new();
+    llm.always(oc_ai::testing::text("ok"));
+    let harness = harness_with(llm.clone()).await;
+    let _keep = harness
+        .hooks
+        .register_session_compaction(
+            fn_hook(|event: &mut SessionCompactionEvent| {
+                event.result = Some(CompactionResult {
+                    summary: "## Hook-supplied summary".into(),
+                    provider_state: None,
+                    metadata: None,
+                    tokens: Some(serde_json::json!({
+                        "input": 5.0,
+                        "output": 7.0,
+                        "reasoning": 0.0,
+                        "cache": { "read": 0.0, "write": 0.0 }
+                    })),
+                });
+                Ok(())
+            }),
+            HookOptions::default(),
+        )
+        .await;
+    harness.create_session().await;
+    harness.admit_prompt("msg_hook_c_1", "hello there").await;
+    harness.execution.resume(harness.session_id().as_str()).await.unwrap();
+
+    // The summary request never reaches the model.
+    let summary_requests =
+        llm.requests().iter().filter(|request| is_summary_request(request)).count();
+    assert_eq!(summary_requests, 0);
+
+    harness
+        .inbox
+        .admit(
+            "msg_hook_c_2",
+            harness.session_id().as_str(),
+            Item::Compaction {
+                payload: oc_schema::session_inbox::CompactionPayload {},
+                delivery: Delivery::Steer,
+            },
+        )
+        .await
+        .unwrap();
+    harness.execution.resume(harness.session_id().as_str()).await.unwrap();
+
+    let events = harness.durable_events().await;
+    let ended = events
+        .iter()
+        .find(|(type_, _, _)| type_ == "session.compaction.ended")
+        .expect("compaction ended");
+    assert_eq!(ended.2["text"], serde_json::json!("## Hook-supplied summary"));
+    // One exchange: the hook result keeps the same verbatim `recent` the
+    // split produced (empty for a single exchange).
+    assert_eq!(ended.2["recent"], serde_json::json!(""));
+    // The hook-supplied tokens are billed onto the compaction.
+    assert_eq!(ended.2["tokens"]["input"], serde_json::json!(5));
+    assert_eq!(ended.2["tokens"]["output"], serde_json::json!(7));
+
+    // The persisted compaction row carries the hook's summary verbatim.
+    let messages = harness.messages().await;
+    assert!(messages.iter().any(|(_, type_, data)| type_ == "compaction"
+        && data["status"] == serde_json::json!("completed")
+        && data["summary"] == serde_json::json!("## Hook-supplied summary")));
+
+    // The model was never asked for a summary.
+    let summary_requests =
+        llm.requests().iter().filter(|request| is_summary_request(request)).count();
+    assert_eq!(summary_requests, 0, "the hook result must skip the LLM");
+}
+
+#[tokio::test]
+async fn runner_compaction_without_hook_result_uses_the_model() {
+    let llm = TestLlm::new();
+    llm.always(oc_ai::testing::text("## Objective\n- model summary"));
+    let harness = harness_with(llm.clone()).await;
+    harness.create_session().await;
+    harness.admit_prompt("msg_nohook_1", "hello there").await;
+    harness.execution.resume(harness.session_id().as_str()).await.unwrap();
+    harness
+        .inbox
+        .admit(
+            "msg_nohook_2",
+            harness.session_id().as_str(),
+            Item::Compaction {
+                payload: oc_schema::session_inbox::CompactionPayload {},
+                delivery: Delivery::Steer,
+            },
+        )
+        .await
+        .unwrap();
+    harness.execution.resume(harness.session_id().as_str()).await.unwrap();
+    let events = harness.durable_events().await;
+    let ended = events
+        .iter()
+        .find(|(type_, _, _)| type_ == "session.compaction.ended")
+        .expect("compaction ended");
+    assert_eq!(ended.2["text"], serde_json::json!("## Objective\n- model summary"));
+    let summary_requests =
+        llm.requests().iter().filter(|request| is_summary_request(request)).count();
+    assert_eq!(summary_requests, 1, "without a hook result the model summarizes");
+}
+
+// -- RD-09: compaction retry honors the `session.retry` hook --------------
+
+#[tokio::test]
+async fn runner_compaction_retry_hook_override_stops_the_retry() {
+    use crate::hooks::{fn_hook, HookOptions, RetryDecision, SessionRetryEvent};
+
+    let llm = TestLlm::new();
+    let rate_limit = || {
+        oc_ai::schema::AiError::new(oc_ai::schema::AiErrorReason::RateLimit {
+            fields: oc_ai::schema::ReasonFields::new("slow down"),
+            retry_after_ms: None,
+            rate_limit: None,
+        })
+    };
+    // Everything answers "ok" except the compaction summary request,
+    // which always fails with a retryable rate limit.
+    llm.serve(move |request: &oc_ai::schema::messages::LLMRequest| {
+        if is_summary_request(request) {
+            TestResponse::error(rate_limit())
+        } else {
+            oc_ai::testing::text("ok")
+        }
+    });
+    let harness = harness_with(llm.clone()).await;
+    // The prepared retry hook's NoRetry override applies to compaction
+    // (compaction.ts:444-451 passes `prepared.retry` into the policy).
+    let _keep = harness
+        .hooks
+        .register_session_retry(
+            fn_hook(|event: &mut SessionRetryEvent| {
+                event.decision = RetryDecision::NoRetry;
+                Ok(())
+            }),
+            HookOptions::default(),
+        )
+        .await;
+    harness.create_session().await;
+    harness.admit_prompt("msg_retry_c_1", "hello there").await;
+    harness.execution.resume(harness.session_id().as_str()).await.unwrap();
+    harness
+        .inbox
+        .admit(
+            "msg_retry_c_2",
+            harness.session_id().as_str(),
+            Item::Compaction {
+                payload: oc_schema::session_inbox::CompactionPayload {},
+                delivery: Delivery::Steer,
+            },
+        )
+        .await
+        .unwrap();
+    // The turn settles with the compaction failure; the drain surfaces it.
+    let _ = harness.execution.resume(harness.session_id().as_str()).await;
+
+    // The default policy would retry a rate limit; the hook's NoRetry
+    // override must win, so exactly one summary attempt happens and the
+    // compaction fails.
+    let events = harness.durable_events().await;
+    let failed = events
+        .iter()
+        .find(|(type_, _, _)| type_ == "session.compaction.failed")
+        .expect("compaction failed");
+    assert_eq!(failed.2["reason"], serde_json::json!("manual"));
+    assert_eq!(
+        failed.2["error"]["type"],
+        serde_json::json!("provider.rate-limit"),
+        "the failing summary surfaces as the provider error"
+    );
+    let summary_requests =
+        llm.requests().iter().filter(|request| is_summary_request(request)).count();
+    assert_eq!(summary_requests, 1, "the retry hook override stopped the resend");
+}
+
+// -- RD-03 (title): `session.title` hook `result` --------------------------
+
+#[tokio::test]
+async fn runner_title_hook_result_short_circuits_the_model() {
+    use crate::hooks::{fn_hook, HookOptions, SessionTitleEvent};
+
+    let llm = TestLlm::new();
+    llm.always(oc_ai::testing::text("ok"));
+    let harness = harness_with(llm.clone()).await;
+    let _keep = harness
+        .hooks
+        .register_session_title(
+            fn_hook(|event: &mut SessionTitleEvent| {
+                event.result = Some("Hook-supplied title".into());
+                Ok(())
+            }),
+            HookOptions::default(),
+        )
+        .await;
+    harness.create_session().await;
+    harness.admit_prompt("msg_hook_t_1", "hello there").await;
+    harness.execution.resume(harness.session_id().as_str()).await.unwrap();
+
+    // Title generation rides a forked task that can race the message
+    // rows; drive it directly (the drain path only fires it).
+    harness.title.generate(harness.session_id().as_str()).await;
+
+    let events = harness.durable_events().await;
+    let renamed =
+        events.iter().find(|(type_, _, _)| type_ == "session.renamed").expect("session renamed");
+    assert_eq!(renamed.2["title"], serde_json::json!("Hook-supplied title"));
+    // Only the chat turn hit the model; the title request was skipped.
+    assert_eq!(llm.requests().len(), 1, "the hook title must skip the LLM");
+}
+
 #[allow(dead_code)]
 fn unused(_: &Harness) {}
