@@ -11,7 +11,6 @@ mod services;
 mod ssh_askpass;
 mod util;
 
-use clap::Parser;
 use cli::{Cli, Commands, OutputFormat, ServerParams, UpgradeMethod};
 
 /// The `mini` section of `cli.json` (`resolved.mini` in v2's
@@ -31,7 +30,11 @@ async fn main() {
         std::process::exit(ssh_askpass::run().await);
     }
 
-    let cli = Cli::parse();
+    let cli = match cli::Cli::try_parse_from_checked(std::env::args_os()) {
+        Ok(cli) => cli,
+        // clap::Error::exit renders like every other arg error.
+        Err(error) => error.exit(),
+    };
     // `--print-logs` (runtime.ts:98): the global flag sets
     // `OPENCODE_PRINT_LOGS=1` in the process environment BEFORE any
     // handler runs. Consumers: the standalone server spawn inherits
@@ -212,6 +215,7 @@ async fn dispatch(cli: Cli) -> i32 {
         Some(Commands::Session { command }) => handlers::session::run(&command, &server).await,
         Some(Commands::Service { command }) => handlers::service_cmds::run(&command).await,
         Some(Commands::Reload) => handlers::misc::reload(&server).await,
+        Some(Commands::Completion { shell }) => handlers::misc::completion(shell),
         Some(Commands::Pair { url }) => handlers::misc::pair(url.as_deref()).await,
         Some(Commands::Serve { hostname, port, cors, service, stdio }) => {
             if service && stdio {

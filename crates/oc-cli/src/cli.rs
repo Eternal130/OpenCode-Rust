@@ -205,6 +205,34 @@ impl PathName {
     }
 }
 
+/// `completion <shell>` (rust-extra, RC-11 — the v2 ref has no
+/// completion command): the four clap_complete 4 shells the port
+/// generates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum CompletionShell {
+    Bash,
+    Zsh,
+    Fish,
+    Elvish,
+}
+
+impl CompletionShell {
+    #[must_use]
+    pub fn clap_complete_shell(self) -> clap_complete::Shell {
+        match self {
+            Self::Bash => clap_complete::Shell::Bash,
+            Self::Zsh => clap_complete::Shell::Zsh,
+            Self::Fish => clap_complete::Shell::Fish,
+            Self::Elvish => clap_complete::Shell::Elvish,
+        }
+    }
+}
+
+/// RC-12 — the ref Schema's `maxItems: 100` on the api header list;
+/// clap has no multi-occurrence count value_parser, so the check runs
+/// as a post-clap parse-time validation (see [`Cli::validate_extra`]).
+pub const MAX_API_HEADERS: usize = 100;
+
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     /// Upgrade `OpenCode` to the latest or a specific version
@@ -275,8 +303,8 @@ pub enum Commands {
         /// Show the last N days; 0 means today
         #[arg(long)]
         days: Option<u32>,
-        /// Show a calendar year
-        #[arg(long)]
+        /// Show a calendar year (1970-9999; ref Schema range)
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1970..=9999))]
         year: Option<u32>,
         /// Show lifetime statistics
         #[arg(long)]
@@ -390,6 +418,12 @@ pub enum Commands {
         #[arg(long, value_name = "URL")]
         url: Option<String>,
     },
+    /// Generate shell completion scripts (rust-extra: the v2 ref has
+    /// no completion command)
+    Completion {
+        /// Shell to generate the completion script for
+        shell: CompletionShell,
+    },
     /// Start the v2 API and web server
     Serve {
         #[arg(long)]
@@ -404,6 +438,40 @@ pub enum Commands {
         #[arg(long)]
         stdio: bool,
     },
+}
+
+impl Cli {
+    /// RC-12 — parse `args` with clap, then run the parse-time range
+    /// checks clap cannot express as value_parsers (multi-occurrence
+    /// counts). Errors are `clap::Error`s rendered like the other
+    /// arg errors, so callers just `exit()` on `Err`.
+    pub fn try_parse_from_checked<I, T>(args: I) -> Result<Self, clap::Error>
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<std::ffi::OsString> + Clone,
+    {
+        let cli = Self::try_parse_from(args)?;
+        cli.validate_extra()?;
+        Ok(cli)
+    }
+
+    /// RC-12 — `api --header`: the ref Schema caps the header list at
+    /// `maxItems: 100`; more than that dies at parse time.
+    fn validate_extra(&self) -> Result<(), clap::Error> {
+        if let Some(Commands::Api { header, .. }) = &self.command {
+            if header.len() > MAX_API_HEADERS {
+                return Err(clap::Error::raw(
+                    clap::error::ErrorKind::ValueValidation,
+                    format!(
+                        "error: too many --header values ({} given, at most {} allowed)\n",
+                        header.len(),
+                        MAX_API_HEADERS
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Subcommand, Debug)]
@@ -740,6 +808,82 @@ mod tests {
             let parsed = Cli::try_parse_from(["opencode", "upgrade", "-m", method])
                 .unwrap_or_else(|error| panic!("{method}: {error}"));
             assert!(matches!(parsed.command, Some(Commands::Upgrade { .. })), "{method} parses");
+        }
+    }
+
+    // --- RC-11: completion subcommand --------------------------------
+
+    /// RC-11 (rust-extra): every supported shell parses onto the
+    /// command tree; an unknown shell dies with clap's invalid-value
+    /// error listing the choices.
+    #[test]
+    fn completion_parses_every_shell_and_rejects_unknown() {
+        for shell in ["bash", "zsh", "fish", "elvish"] {
+            let parsed =
+                Cli::try_parse_from(["opencode", "completion", shell]).unwrap_or_else(|e| {
+                    panic!("{shell}: {e}");
+                });
+            assert!(
+                matches!(parsed.command, Some(Commands::Completion { .. })),
+                "{shell} parses"
+            );
+        }
+        let error = Cli::try_parse_from(["opencode", "completion", "powershell"]).unwrap_err();
+        let rendered = error.to_string();
+        assert!(rendered.contains("invalid value"), "{rendered}");
+        for choice in ["bash", "zsh", "fish", "elvish"] {
+            assert!(rendered.contains(choice), "must list {choice}: {rendered}");
+        }
+    }
+
+    // --- RC-12: parse-time range validation --------------------------
+
+    /// RC-12: `api --header` accepts at most 100 values (ref Schema
+    /// `maxItems: 100`); the boundary is exact and the error names
+    /// the limit.
+    #[test]
+    fn api_header_rejects_more_than_100_at_parse_time() {
+        let ok: Vec<String> =
+            (0..MAX_API_HEADERS).map(|i| format!("x-h{i}:v")).collect();
+        let mut argv = vec!["opencode".to_string(), "api".to_string(), "get".to_string(), "/x".to_string()];
+        for header in &ok {
+            argv.push("--header".into());
+            argv.push(header.clone());
+        }
+        Cli::try_parse_from_checked(argv).expect("exactly 100 headers parse");
+
+        let mut argv = vec!["opencode".to_string(), "api".to_string(), "get".to_string(), "/x".to_string()];
+        for header in ok {
+            argv.push("--header".into());
+            argv.push(format!("{header}extra"));
+        }
+        argv.push("--header".into());
+        argv.push("one:too-many".into());
+        let error = Cli::try_parse_from_checked(argv).unwrap_err();
+        let rendered = error.to_string();
+        assert!(rendered.contains("101"), "reports the count: {rendered}");
+        assert!(rendered.contains("100"), "reports the limit: {rendered}");
+    }
+
+    /// RC-12: `stats --year` requires 1970..=9999 (ref Schema range)
+    /// at the exact boundaries.
+    #[test]
+    fn stats_year_range_boundaries() {
+        for good in [1970u32, 9999] {
+            Cli::try_parse_from_checked(["opencode", "stats", "--year", &good.to_string()])
+                .unwrap_or_else(|e| panic!("{good} parses: {e}"));
+        }
+        for bad in [1969u32, 10_000] {
+            let error = Cli::try_parse_from_checked([
+                "opencode",
+                "stats",
+                "--year",
+                &bad.to_string(),
+            ])
+            .unwrap_err();
+            let rendered = error.to_string();
+            assert!(rendered.contains("invalid value"), "{bad}: {rendered}");
+            assert!(rendered.contains("1970..=9999"), "{bad} names the range: {rendered}");
         }
     }
 }
