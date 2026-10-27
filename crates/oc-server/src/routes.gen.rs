@@ -2,8 +2,8 @@
 // Regenerate with: cargo run -p openapi-gen
 // Source: tools/openapi-gen/openapi.json (sha256 0612418392961ef22f0337ce0e1e520270917665fc85f29c4af1c94d1e1873ee)
 //! Static route table for the opencode HttpApi surface (117 paths / 141 operations).
-//! Paths are axum-style templates: `:param` captures one segment, `*name`
-//! captures the remainder (axum 0.8 spellings: `{param}` / `{*name}`).
+//! Paths are axum-style templates (axum 0.7 spellings): `:param`
+//! captures one segment, `*name` captures the remainder.
 //! Consumed by the oc-server dispatch; mirrors oc-client namespaces 1:1.
 #![allow(clippy::struct_excessive_bools)]
 #![allow(clippy::doc_markdown, clippy::must_use_candidate)]
