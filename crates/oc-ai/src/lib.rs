@@ -62,6 +62,7 @@
 )]
 
 pub mod cache_policy;
+pub mod customization;
 pub mod effort_updates;
 pub mod media;
 pub mod protocols;
