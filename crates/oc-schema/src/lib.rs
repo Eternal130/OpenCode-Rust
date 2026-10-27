@@ -17,6 +17,9 @@
 //! is `{aggregateID, seq, version}` and is required on durable events only.
 //! Numbers use [`common::Num`] so whole values serialize as JSON integers,
 //! matching JavaScript output.
+//!
+//! Reference-file → Rust-module mapping table:
+//! [docs/SCHEMA-MAP.md](../../../docs/SCHEMA-MAP.md).
 
 pub mod agent;
 pub mod common;
