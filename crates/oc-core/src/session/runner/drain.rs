@@ -585,7 +585,7 @@ impl SessionRunner {
         let mut initial: Option<Loaded> = Some(*first);
         let recover_overflow = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let mut recover_continuation = true;
-        let mut step = step;
+        let step = step;
         // The retry policy is PER STEP (llm.ts creates it once per
         // `runStep`): its schedule counter caps the whole retry ladder
         // (MAX_RECURS). Constructing it inside the attempt loop reset the
@@ -738,7 +738,9 @@ impl SessionRunner {
                 is_location_closed: location_closed,
             };
             let outcome = crate::session::runner::step::attempt(&deps, input).await;
-            step += 1;
+            // REF llm.ts: the step counter only advances in the outer drain
+            // loop after a Completed run — retries, Continue, Compacted, and
+            // RecoverFull stay on the same logical step (budget intact).
             match map_attempt_failure(outcome) {
                 Err(failure) => return Err(failure),
                 Ok(Outcome::Completed { needs_continuation }) => return Ok(needs_continuation),
