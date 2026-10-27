@@ -774,6 +774,57 @@ async fn tool_read_media_as_base64_file_parts() {
 }
 
 // ---------------------------------------------------------------------------
+// Formatter integration (post-write formatting through the tool path)
+// ---------------------------------------------------------------------------
+
+#[cfg(unix)]
+#[tokio::test]
+async fn tool_write_formats_via_formatter_when_available() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let base = harness().await;
+    let bin = tempfile::tempdir_in("/tmp/opencode").expect("bin tempdir");
+    let rustfmt = bin.path().join("rustfmt");
+    std::fs::write(&rustfmt, "#!/bin/sh\nprintf 'fmt:%s' \"$(cat \"$1\")\" > \"$1\"\n")
+        .expect("script");
+    let mut perms = std::fs::metadata(&rustfmt).expect("stat").permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&rustfmt, perms).expect("chmod");
+
+    let services = Arc::new(crate::tool::ToolServices {
+        formatter: Arc::new(crate::formatter::BuiltinsFormatter::new(
+            base.dir.clone(),
+            base.dir.clone(),
+            vec![bin.path().to_path_buf()],
+        )),
+        ..(*base.services).clone_shape()
+    });
+    let tools = Arc::new(ToolRegistryState::new());
+    let hooks = Arc::new(crate::hooks::HookRegistry::new());
+    crate::tool::register_all(&tools, &hooks, &services).expect("register");
+
+    let settled = call(
+        &tools,
+        "write",
+        serde_json::json!({ "path": "src/lib.rs", "content": "fn main(){}" }),
+    )
+    .await
+    .expect("write");
+    assert_eq!(text_of(&settled), "Created file successfully: src/lib.rs");
+    // The fake rustfmt ran after the write (formatter.file post-write hook).
+    assert_eq!(
+        std::fs::read_to_string(base.dir.join("src/lib.rs")).expect("read"),
+        "fmt:fn main(){}"
+    );
+
+    // Non-matching extensions pass through untouched.
+    call(&tools, "write", serde_json::json!({ "path": "note.txt", "content": "plain" }))
+        .await
+        .expect("write txt");
+    assert_eq!(std::fs::read_to_string(base.dir.join("note.txt")).expect("read"), "plain");
+}
+
+// ---------------------------------------------------------------------------
 // AGENTS.md side effect
 // ---------------------------------------------------------------------------
 

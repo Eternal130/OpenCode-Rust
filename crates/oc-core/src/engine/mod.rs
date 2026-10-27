@@ -1028,7 +1028,11 @@ impl Engine {
                 location.as_path().to_path_buf(),
                 self.home.clone(),
             )),
-            formatter: Arc::new(crate::formatter::NoopFormatter::default()),
+            formatter: Arc::new(crate::formatter::BuiltinsFormatter::from_config_documents(
+                location.as_path().to_path_buf(),
+                worktree.clone(),
+                &config_documents,
+            )),
             instructions: Some(Arc::clone(&instructions) as Arc<dyn tool::InstructionInjection>),
             db: Some((*self.db).clone()),
             bus: Some((*self.bus).clone()),
