@@ -102,10 +102,40 @@ pub struct Bridge {
     pub(crate) shared: Arc<Shared>,
 }
 
+/// Hard per-dispatch timeout for BODY-MUTATING hooks — aligned with
+/// oc-server's `EXECUTE_TIMEOUT` (120 s) per the RC-03 ruling: a
+/// `tool.execute.*` / `tool.transform` / `chat.*` / `session.*`
+/// handler legitimately rides a full tool execution or model round
+/// trip, so the old 5 s dispatch budget killed healthy handlers.
+/// Cheap query hooks (e.g. `shell.create.before`) keep the configured
+/// [`crate::PluginHostConfig::dispatch_timeout`] (5 s default), and
+/// registration stays at its own 2 s budget.
+pub const MUTATING_DISPATCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// The two-class dispatch classification (RC-03): which hook points
+/// are body-mutating and thus ride [`MUTATING_DISPATCH_TIMEOUT`].
+#[must_use]
+pub fn is_mutating_hook(domain: &str, name: &str) -> bool {
+    match domain {
+        // session.* — every point observes/mutates a live message body
+        // or rides the model round trip.
+        "session" => true,
+        // tool.execute.* wrap a full tool execution; tool.transform
+        // rewrites the tool body itself.
+        "tool" => name == "transform" || name.starts_with("execute."),
+        // chat.message-style body mutators (future domain, classified
+        // wholesale like session).
+        "chat" => true,
+        _ => false,
+    }
+}
+
 impl Bridge {
     /// Dispatch one runtime hook event into the guest for `plugin_id`
     /// (sequential handlers, same object mutated). Returns the possibly
-    /// mutated event. Timeout-bounded by the dispatch timeout.
+    /// mutated event. Timeout-bounded by the dispatch timeout — the
+    /// 120 s mutating class for body-mutating hook points, the
+    /// configured (5 s) query class otherwise.
     ///
     /// # Errors
     /// [`HostError`] on timeout/guest failure.
@@ -116,6 +146,11 @@ impl Bridge {
         name: &str,
         event: Value,
     ) -> Result<Value, HostError> {
+        let timeout = if is_mutating_hook(domain, name) {
+            MUTATING_DISPATCH_TIMEOUT
+        } else {
+            self.shared.config.dispatch_timeout
+        };
         let result = self
             .shared
             .request(
@@ -126,7 +161,7 @@ impl Bridge {
                     "name": name,
                     "event": event,
                 }),
-                self.shared.config.dispatch_timeout,
+                timeout,
             )
             .await?;
         Ok(result.get("event").cloned().unwrap_or(Value::Null))

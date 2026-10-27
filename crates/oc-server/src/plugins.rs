@@ -631,6 +631,7 @@ impl CodeModeRuntime for HostCodeModeRuntime {
                 path: entry.path.clone(),
                 description: entry.description.clone(),
                 signature: entry.signature.clone(),
+                search_text: entry.search_text.clone(),
             })
             .collect();
         let token = self.router.insert(call);

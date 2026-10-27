@@ -45,12 +45,23 @@
 //!   they engage the 3.7 response cache (SEP-2549) — all behavior this
 //!   port must keep unchanged.
 //! - Modern-era url elicitations (`tools/call` answering
-//!   [`rmcp::model::ServerResult::InputRequiredResult`], 2026-07-28's
-//!   retry-with-input round) are not surfaced: the raw-request path maps
-//!   such answers to the opaque `unexpected tools/call response` error.
-//!   Single-round parity keeps this as-is; the legacy
-//!   `elicitation/create` flow (the only one v2.0.24-era servers use with
-//!   this client) is fully wired.
+//!   `resultType: "input_required"`, SEP-2322's MRTR
+//!   retry-with-input round) ARE surfaced: the client fulfills every
+//!   embedded `elicitation/create` request through the elicitation
+//!   handler and retries `tools/call` with `inputResponses` + the
+//!   echoed `requestState`, up to rmcp's
+//!   [`DEFAULT_MRTR_MAX_ROUNDS`] and under one shared
+//!   execution-timeout deadline. Two wire shapes reach the driver:
+//!   rmcp's typed [`rmcp::model::ServerResult::InputRequiredResult`]
+//!   (url elicitations carrying `elicitationId`) and the id-less url
+//!   shape rmcp cannot model (its `UrlElicitationParams` requires
+//!   `elicitationId`), which degrades to
+//!   [`rmcp::model::ServerResult::CustomResult`] and is parsed
+//!   leniently here. Non-elicitation input requests (sampling, roots)
+//!   and `input_required` without an installed elicitation handler
+//!   keep the opaque `unexpected tools/call response` error. The
+//!   legacy `elicitation/create` server-request flow remains fully
+//!   wired through the rmcp handler.
 
 // rmcp request constructors use `Default::default()` for their const-string
 // method markers; the pedantic `default_constructed_unit_structs`-style lints
@@ -207,7 +218,48 @@ pub fn to_call_tool_result(result: &rmcp::model::CallToolResult) -> CallToolResu
     }
 }
 
-/// Flattens an error and its source chain into display strings (statuses
+/// One modern-era `input_required` payload (`tools/call`, SEP-2322) as
+/// raw JSON, from either wire shape rmcp hands back: the typed
+/// [`ServerResult::InputRequiredResult`] (url elicitations carrying
+/// `elicitationId`) or the id-less url elicitation rmcp cannot model
+/// (its `UrlElicitationParams` requires the id), which degrades to
+/// [`ServerResult::CustomResult`] in the untagged union and is
+/// recognized by its `resultType` discriminator.
+fn input_required_payload(result: &ServerResult) -> Option<serde_json::Value> {
+    match result {
+        ServerResult::InputRequiredResult(required) => serde_json::to_value(required).ok(),
+        ServerResult::CustomResult(custom)
+            if custom.0.get("resultType").and_then(serde_json::Value::as_str)
+                == Some("input_required") =>
+        {
+            Some(custom.0.clone())
+        }
+        _ => None,
+    }
+}
+
+/// One embedded `elicitation/create` params object → the registry's
+/// params, lenient where rmcp is strict: a url-mode request WITHOUT
+/// `elicitationId` (the TS SDK's `elicitUrl` sends exactly that inside
+/// MRTR rounds; test/mcp.test.ts:168) keeps `elicitation_id: None` —
+/// no parked completion entry, no `elicitationID` form metadata.
+fn lenient_elicit_params(params: &serde_json::Value) -> Option<super::elicitation::ElicitationParams> {
+    let message = params.get("message").and_then(serde_json::Value::as_str)?.to_string();
+    if params.get("mode").and_then(serde_json::Value::as_str) == Some("url") {
+        let url = params.get("url").and_then(serde_json::Value::as_str)?.to_string();
+        let elicitation_id = params
+            .get("elicitationId")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        return Some(super::elicitation::ElicitationParams::Url { message, url, elicitation_id });
+    }
+    Some(super::elicitation::ElicitationParams::Form {
+        message,
+        requested_schema: params.get("requestedSchema").cloned().unwrap_or(serde_json::Value::Null),
+    })
+}
+
+
 /// live on inner errors and are lost once flattened to one message).
 fn error_chain(error: &(dyn std::error::Error + '_)) -> Vec<String> {
     let mut chain = vec![error.to_string()];
@@ -446,6 +498,8 @@ pub struct Connection {
     remote: bool,
     /// Set once an expiry was observed so the registry reconnects once.
     expiry_flag: Arc<std::sync::atomic::AtomicBool>,
+    /// The elicitation handler (drives MRTR `input_required` rounds).
+    elicitation: Option<Arc<super::elicitation::ClientElicitation>>,
 }
 
 impl Connection {
@@ -723,6 +777,15 @@ impl Connection {
     /// `callTool(name, args?, sessionID?)` — the session id travels as the
     /// `ai.opencode/sessionID` request meta; the SDK's auto progress token
     /// keeps long calls alive under the execution-timeout hard wall.
+    ///
+    /// A `tools/call` answer of `resultType: "input_required"` (modern
+    /// MRTR url/form elicitations) drives the retry-with-input round:
+    /// each embedded `elicitation/create` request is answered through
+    /// the elicitation handler and the call retried with
+    /// `inputResponses` + the echoed `requestState` (the TS SDK 2.0
+    /// client does the same inside `callTool`; test/mcp.test.ts:164-176
+    /// "Modern servers cannot call elicitInput; they return
+    /// input_required and the client retries").
     pub async fn call_tool(
         &self,
         name: &str,
@@ -740,23 +803,96 @@ impl Connection {
         if let Some(args) = args {
             params = params.with_arguments(args.clone());
         }
-        let result = self
-            .call_with_meta(
-                rmcp::model::ClientRequest::CallToolRequest(rmcp::model::CallToolRequest::new(
-                    params,
-                )),
-                self.execution_timeout,
-                meta,
-            )
-            .await
-            .map_err(|error| self.request_error("call MCP tool", error))?;
-        match result {
-            ServerResult::CallToolResult(result) => Ok(to_call_tool_result(&result)),
-            _ => Err(RequestError {
-                server: self.server_name().to_string(),
-                message: "unexpected tools/call response".to_string(),
-            }),
+        // One execution-timeout deadline spans every MRTR round — the
+        // TS SDK's single `timeout: execution` covers its internal
+        // retries the same way.
+        let deadline = tokio::time::Instant::now() + self.execution_timeout;
+        for _ in 0..rmcp::model::DEFAULT_MRTR_MAX_ROUNDS {
+            let timeout = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if timeout.is_zero() {
+                return Err(RequestError {
+                    server: self.server_name().to_string(),
+                    message: format!(
+                        "failed to call MCP tool: timed out after {}ms",
+                        self.execution_timeout.as_millis()
+                    ),
+                });
+            }
+            let result = self
+                .call_with_meta(
+                    rmcp::model::ClientRequest::CallToolRequest(rmcp::model::CallToolRequest::new(
+                        params.clone(),
+                    )),
+                    timeout,
+                    meta.clone(),
+                )
+                .await
+                .map_err(|error| self.request_error("call MCP tool", error))?;
+            match input_required_payload(&result) {
+                Some(required) => {
+                    params = self.fulfill_input_required(params, required).await?;
+                }
+                None => match result {
+                    ServerResult::CallToolResult(result) => return Ok(to_call_tool_result(&result)),
+                    _ => {
+                        return Err(RequestError {
+                            server: self.server_name().to_string(),
+                            message: "unexpected tools/call response".to_string(),
+                        })
+                    }
+                },
+            }
         }
+        // Round exhaustion mirrors the unfulfillable shapes: the opaque
+        // v2 error (rmcp's high-level helper errors out at the same
+        // bound).
+        Err(RequestError {
+            server: self.server_name().to_string(),
+            message: "unexpected tools/call response".to_string(),
+        })
+    }
+
+    /// One MRTR round: answer every embedded input request, then stage
+    /// the retry's `inputResponses` + `requestState`. Only
+    /// `elicitation/create` requests are fulfillable (the v2 client
+    /// installs no sampling handler); anything else — or an
+    /// `input_required` answer with no elicitation handler installed —
+    /// keeps the opaque `unexpected tools/call response` error.
+    async fn fulfill_input_required(
+        &self,
+        mut params: CallToolRequestParams,
+        required: serde_json::Value,
+    ) -> Result<CallToolRequestParams, RequestError> {
+        let opaque = || RequestError {
+            server: self.server_name().to_string(),
+            message: "unexpected tools/call response".to_string(),
+        };
+        let Some(elicitation) = self.elicitation.as_ref().map(Arc::clone) else {
+            return Err(opaque());
+        };
+        let mut responses = serde_json::Map::new();
+        if let Some(requests) = required.get("inputRequests").and_then(serde_json::Value::as_object)
+        {
+            for (key, request) in requests {
+                let method = request.get("method").and_then(serde_json::Value::as_str);
+                if method != Some("elicitation/create") {
+                    // sampling/roots input requests are unfulfillable
+                    // here (v2 installs no sampling handler either).
+                    return Err(opaque());
+                }
+                let Some(params) = request.get("params") else { return Err(opaque()) };
+                let Some(elicit) = lenient_elicit_params(params) else { return Err(opaque()) };
+                let url_mode = matches!(elicit, super::elicitation::ElicitationParams::Url { .. });
+                let answer = elicitation.answer(&self.server, elicit).await;
+                responses.insert(key.clone(), super::elicitation::result_wire(&answer, url_mode));
+            }
+        }
+        params.input_responses = Some(
+            responses.into_iter().map(|(key, value)| (key, value)).collect::<BTreeMap<_, _>>(),
+        );
+        params.request_state =
+            required.get("requestState").and_then(serde_json::Value::as_str).map(str::to_string);
+        Ok(params)
     }
 
     /// Install the registry's watch callbacks (list-changed). The
@@ -1157,5 +1293,6 @@ where
         execution_timeout: execution_timeout(input.config),
         remote,
         expiry_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        elicitation: input.elicitation.clone(),
     })
 }
