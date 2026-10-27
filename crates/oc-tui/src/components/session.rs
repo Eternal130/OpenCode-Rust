@@ -317,7 +317,7 @@ pub fn render_session(
     // over content columns [4, column−5] — the same walk
     // `picker_panel_paint` solves.
     let mut picker_hits = crate::store::PickerEntryHits::default();
-    let (mount, prompt_height, mount_height, caret_screen) = if picker_live {
+    let (mount, prompt_height, mount_height, caret_screen, text_hit) = if picker_live {
         let entries = store.picker_entries(session_id);
         let selected = store.picker_selection(session_id, entries.len());
         let column_u16 = u16::try_from(column).unwrap_or(u16::MAX);
@@ -355,6 +355,7 @@ pub fn render_session(
             // view keeps `Main flow final reply.` visible).
             crate::components::subagent_picker::PANEL_ROWS,
             None,
+            None,
         )
     } else if let Some(directory) = store.session_location_missing(session_id) {
         // TUI-30 — the SessionLocationMissing question REPLACES the
@@ -372,6 +373,7 @@ pub fn render_session(
             crate::components::location_missing::LOCATION_MISSING_ROWS,
             crate::components::location_missing::LOCATION_MISSING_ROWS,
             None,
+            None,
         )
     } else {
         composer_mount_frame(store, session_id, &theme, column - inset, content_width, height)
@@ -384,6 +386,16 @@ pub fn render_session(
     store.set_caret_cell(caret_screen.filter(|_| store.top_dialog().is_none()).map(|(x, y)| {
         (u16::try_from(x + inset + shift).unwrap_or(0), u16::try_from(y).unwrap_or(0))
     }));
+    // RD-06 — the paste-chip click hit (frame-local x → absolute,
+    // same offset the caret cell takes; cleared when the mount is
+    // replaced or nothing is folded).
+    match text_hit {
+        Some(mut hit) => {
+            hit.x += inset + shift;
+            store.set_prompt_text_hit(Some(hit));
+        }
+        None => store.set_prompt_text_hit(None),
+    }
     // The queued-prompt dock (v2's `QueuedPromptDock`,
     // index.tsx:2312-2342): one row above the composer —
     // `┃ {n} queued · {next}` — while prompts wait in the serial
@@ -1351,6 +1363,7 @@ fn composer_footer_hints(
 /// agent-colored rail, the blinking block caret, and the mount/prompt
 /// heights the route's layout needs.
 #[must_use]
+#[allow(clippy::too_many_lines)] // the composer mount: frame + caret + RD-06 paste-chip hit
 fn composer_mount_frame(
     store: &Store,
     session_id: &str,
@@ -1358,7 +1371,7 @@ fn composer_mount_frame(
     width: usize,
     terminal_width: usize,
     height: usize,
-) -> (Frame, usize, usize, Option<(usize, usize)>) {
+) -> (Frame, usize, usize, Option<(usize, usize)>, Option<crate::store::PromptTextHit>) {
     let composer = store.composer(session_id);
     // The popup over the composer: live slash-palette state
     // (`component/prompt/autocomplete.tsx`'s mount).
@@ -1472,7 +1485,26 @@ fn composer_mount_frame(
     )
     .map(|(x, cell_y)| (x, height - prompt_height + cell_y))
     .filter(|(_, row_y)| *row_y < height);
-    (frame, prompt_height, mount_height, caret_screen)
+    // RD-06 — the textarea's rect for the paste-chip click hit (the
+    // mouse handler's `expandPastedText` chain): the same pad/inner/
+    // rows math as `prompt_caret_screen_cell`; recorded only while a
+    // folded paste is on screen. `x` is frame-local (the caller adds
+    // inset + shift, like the caret cell).
+    let text_hit = (!composer.draft.pasted.is_empty()).then(|| {
+        let pad = if width >= 44 { 2 } else { 1 };
+        let inner = width.saturating_sub(1 + pad * 2).max(1);
+        let lines = crate::components::composer::render::layout_draft_lines(&composer.draft, inner);
+        let max_height = (height / 3).max(6);
+        let rows = (lines.len().max(1) + 1).min(max_height);
+        crate::store::PromptTextHit {
+            session_id: session_id.to_owned(),
+            x: 1 + pad,
+            y: height - prompt_height + (prompt_height - mount_height) + 1,
+            rows,
+            inner,
+        }
+    });
+    (frame, prompt_height, mount_height, caret_screen, text_hit)
 }
 
 /// The composer's metadata row inputs (#5, `PromptMetadataRow`): the
