@@ -156,7 +156,9 @@ pub(crate) struct Harness {
     pub inbox: SessionInbox,
     pub agents: Arc<AgentRegistry>,
     pub tools: Arc<ToolRegistryState>,
-    pub llm: Arc<TestLlmClient>,
+    /// The typed scripted client when the harness was built from a
+    /// `TestLlm` (`None` for fully custom clients).
+    pub llm: Option<Arc<TestLlmClient>>,
     pub hooks: Arc<HookRegistry>,
     pub compaction: Arc<crate::session::runner::compaction::SessionCompaction>,
     pub title: Arc<SessionTitle>,
@@ -203,6 +205,20 @@ pub(crate) async fn harness_with_model(
     llm: oc_ai::testing::TestLlm,
     resolved_model: ResolvedModel,
 ) -> Harness {
+    let typed = Arc::new(TestLlmClient(llm));
+    let mut harness =
+        harness_with_client(std::sync::Arc::clone(&typed) as Arc<dyn LlmClient>, resolved_model)
+            .await;
+    harness.llm = Some(typed);
+    harness
+}
+
+/// Harness variant with a fully custom LLM client (e.g. timing-controlled
+/// streams for the delta-batching timer tests).
+pub(crate) async fn harness_with_client(
+    llm: std::sync::Arc<dyn LlmClient>,
+    resolved_model: ResolvedModel,
+) -> Harness {
     let dir = tempfile::Builder::new()
         .prefix("oc-core-runner-")
         .tempdir_in("/tmp/opencode")
@@ -235,7 +251,6 @@ pub(crate) async fn harness_with_model(
     tools.register_executor("echo", Arc::new(StubTool("echo: ok")));
 
     let hooks = Arc::new(HookRegistry::new());
-    let llm = Arc::new(TestLlmClient(llm));
     let resolver = Arc::new(FixedResolver { resolved: resolved_model });
     let ids = Arc::new(SequentialIdGen::new());
 
@@ -314,7 +329,7 @@ pub(crate) async fn harness_with_model(
         inbox,
         agents,
         tools,
-        llm,
+        llm: None,
         hooks,
         compaction: compaction_handle,
         title: Arc::clone(&title),

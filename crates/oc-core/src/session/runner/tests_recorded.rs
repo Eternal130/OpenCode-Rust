@@ -431,7 +431,7 @@ async fn runner_drain_reuses_instructions_between_steps() {
     assert!(delta.contains_key("core/date"));
     // The initial baseline carries empty text, so no visible system
     // message projects; the assembled system prompt reached the request.
-    let requests = harness.llm.0.requests();
+    let requests = harness.llm.as_ref().expect("scripted harness").0.requests();
     let system: String = requests
         .first()
         .expect("one request")

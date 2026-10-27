@@ -93,6 +93,8 @@ mod tests_message;
 #[cfg(test)]
 mod tests_misc;
 #[cfg(test)]
+mod tests_rd11_rd13;
+#[cfg(test)]
 mod tests_recorded;
 #[cfg(test)]
 mod tests_request_path;
