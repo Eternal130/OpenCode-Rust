@@ -184,6 +184,10 @@ pub struct EngineOptions {
     pub default_model: Option<oc_schema::config::ModelSelection>,
     /// Whether to spawn the activity TTL sweeper (default true).
     pub activity_sweeper: bool,
+    /// Whether the file-watcher service runs (v2 `Watcher` options
+    /// `enabled`; the server's `fs.filewatcher` flag). Default true; off
+    /// boots a disabled watcher whose subscriptions end immediately.
+    pub file_watcher: bool,
     /// The Code Mode interpreter seam. When present, every location
     /// registers the synthesized `execute` tool and code-mode-eligible
     /// tools (MCP, plugin tools) become invisible-direct behind it
@@ -223,6 +227,7 @@ impl EngineOptions {
             custom_providers: Vec::new(),
             default_model: None,
             activity_sweeper: true,
+            file_watcher: true,
             code_mode_runtime: None,
             code_mode_timeout: std::time::Duration::from_secs(120),
             plugin_source: None,
@@ -369,6 +374,17 @@ pub struct Engine {
     assembly_locks: Arc<DashMap<LocationRef, Arc<tokio::sync::Mutex<()>>>>,
     generation: Arc<AtomicU64>,
     sweeper: Option<tokio::task::JoinHandle<()>>,
+    /// The general file-watcher service (v2 `Watcher`): feeds the
+    /// per-location location watchers; `disabled()` when the engine boots
+    /// with `file_watcher: false`.
+    file_watcher: Arc<crate::filesystem::watcher::FileWatcher>,
+    /// The shared location-watcher ignore policy (v2
+    /// `LocationWatcherPolicy` — `watcher.ignore` config entries).
+    watcher_policy: Arc<crate::filesystem::location_watcher::LocationWatcherPolicy>,
+    /// Per-location location watchers (v2 `LocationWatcher` nodes),
+    /// stopped on invalidate (no leaked watches/tasks).
+    location_watchers:
+        Arc<DashMap<LocationRef, crate::filesystem::location_watcher::LocationWatcherHandle>>,
     /// RA-04 retention sweeps (tool-output + shell); aborted in `shutdown`.
     cleanup_tasks: Vec<tokio::task::JoinHandle<()>>,
     /// The Code Mode interpreter seam (drives the per-location `execute`
@@ -574,6 +590,15 @@ impl Engine {
             PluginSupervisor::new(),
         );
         let locations = Arc::new(LocationServiceMap::new(Arc::new(globals)));
+        // The general file-watcher service (v2 Watcher node, started with
+        // the instance) + the shared location-watcher policy. The
+        // per-location LocationWatcher spawns at each location assembly.
+        let file_watcher = if options.file_watcher {
+            crate::filesystem::watcher::FileWatcher::new()
+        } else {
+            crate::filesystem::watcher::FileWatcher::disabled()
+        };
+        let watcher_policy = crate::filesystem::location_watcher::LocationWatcherPolicy::new();
         let engine = Engine {
             data_root: options.data_root.clone(),
             home: options.home.clone(),
@@ -603,6 +628,9 @@ impl Engine {
                     Arc::clone(&locations.globals().activity),
                 )
             }),
+            file_watcher,
+            watcher_policy,
+            location_watchers: Arc::new(DashMap::new()),
             cleanup_tasks: vec![tool_output_cleanup, shell_cleanup],
             code_mode_runtime: options.code_mode_runtime.clone(),
             code_mode_timeout: options.code_mode_timeout,
@@ -715,6 +743,11 @@ impl Engine {
         if let Some((_, shutdown)) = self.location_shutdown.remove(location) {
             let _ = shutdown.send(true);
         }
+        // Stop the location watcher (v2 layer finalizer): tearing the task
+        // down drops its watch subscription, so no native watch leaks.
+        if let Some((_, mut watcher)) = self.location_watchers.remove(location) {
+            watcher.stop().await;
+        }
         self.locations.invalidate(location).await;
     }
 
@@ -722,6 +755,12 @@ impl Engine {
     #[must_use]
     pub fn live_locations(&self) -> Vec<LocationRef> {
         self.services.locations()
+    }
+
+    /// Whether a location watcher is running for the location (RV-G2).
+    #[must_use]
+    pub fn has_location_watcher(&self, location: &LocationRef) -> bool {
+        self.location_watchers.contains_key(location)
     }
 
     /// Shuts the engine down: every location's shutdown sequence, then
@@ -1347,6 +1386,23 @@ impl Engine {
         let (effective, fresh_won) = self.services.insert(location.clone(), Arc::clone(&services));
         if fresh_won {
             self.location_shutdown.insert(location.clone(), bundle_shutdown);
+            // RV-G2 (v2 LocationWatcher node): watch the location's VCS
+            // HEAD/branch file, publishing `filesystem.changed` and
+            // re-arming its activity. Stopped in `invalidate` (v2 scopes
+            // the fiber to the location layer).
+            if self.file_watcher.enabled() {
+                let handle = crate::filesystem::location_watcher::LocationWatcher::spawn(
+                    crate::filesystem::location_watcher::LocationWatcherInput {
+                        watcher: Arc::clone(&self.file_watcher),
+                        bus: (*self.bus).clone(),
+                        activity: Arc::clone(&self.locations.globals().activity),
+                        location: location.clone(),
+                        vcs: services.project.vcs.clone(),
+                        policy: Arc::clone(&self.watcher_policy),
+                    },
+                );
+                self.location_watchers.insert(location.clone(), handle);
+            }
         } else {
             // An incumbent bundle is already registered (a lifecycle race
             // even the assembly lock cannot exclude): stop the fresh
