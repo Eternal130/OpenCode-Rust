@@ -53,14 +53,14 @@ fn fixed_clock() -> Arc<dyn Clock> {
     Arc::new(FixedClock::new(std::time::UNIX_EPOCH + Duration::from_millis(NOW_MS)))
 }
 
-struct Stack {
-    db: Database,
-    bus: Bus,
-    store: SessionStore,
-    inbox: SessionInbox,
+pub(super) struct Stack {
+    pub(super) db: Database,
+    pub(super) bus: Bus,
+    pub(super) store: SessionStore,
+    pub(super) inbox: SessionInbox,
 }
 
-async fn stack() -> Stack {
+pub(super) async fn stack() -> Stack {
     let dir = tempfile::Builder::new()
         .prefix("oc-core-session-")
         .tempdir_in("/tmp/opencode")
