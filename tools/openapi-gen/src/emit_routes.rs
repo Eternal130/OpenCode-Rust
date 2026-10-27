@@ -88,8 +88,8 @@ pub fn emit(infos: &[OpInfo], sha256: &str) -> String {
     out.push_str(
         "//! Static route table for the opencode HttpApi surface (117 paths / 141 operations).\n",
     );
-    out.push_str("//! Paths are axum-style templates: `:param` captures one segment, `*name`\n");
-    out.push_str("//! captures the remainder (axum 0.8 spellings: `{param}` / `{*name}`).\n");
+    out.push_str("//! Paths are axum-style templates (axum 0.7 spellings): `:param`\n");
+    out.push_str("//! captures one segment, `*name` captures the remainder.\n");
     out.push_str("//! Consumed by the oc-server dispatch; mirrors oc-client namespaces 1:1.\n");
     out.push_str("#![allow(clippy::struct_excessive_bools)]\n");
     // Generated-table lint posture: identifiers like `providerID` trip
