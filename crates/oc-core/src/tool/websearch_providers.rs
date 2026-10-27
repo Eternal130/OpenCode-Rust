@@ -1,8 +1,12 @@
 //! Ports of `packages/core/src/plugin/websearch/*` — the search providers
-//! (exa, firecrawl, parallel, tinyfish, tavily; the MCP-hosted provider is
-//! TODO(wave-D)). Each provider implements the v2 HTTP contracts; API keys
-//! resolve through the v2 env connection-method names (the integration
-//! host itself is a later lane).
+//! (exa, firecrawl, parallel, tinyfish, tavily). Four of them are
+//! "MCP-hosted" in v2 terms: `plugin/websearch/mcp.ts` (`WebSearchMcp.call`)
+//! is a plain HTTP `tools/call` JSON-RPC POST to the provider's fixed
+//! endpoint (NOT a user-configured MCP server — v2.0.24 never routes
+//! websearch through `Mcp.Service`; that seam does not exist upstream, so
+//! this port does not invent one). Each provider implements the v2 HTTP
+//! contracts; API keys resolve through the v2 env connection-method names
+//! (the integration host itself is a later lane).
 
 use std::time::Duration;
 
@@ -124,9 +128,17 @@ fn authorization(key: &Credential) -> Vec<(&'static str, String)> {
 
 pub struct ExaProvider {
     pub key: Credential,
+    /// Overridable for tests; defaults to [`EXA_ENDPOINT`].
+    pub endpoint: String,
 }
 
 pub const EXA_ENDPOINT: &str = "https://mcp.exa.ai/mcp";
+
+impl ExaProvider {
+    pub fn new(key: Credential) -> Self {
+        Self { key, endpoint: EXA_ENDPOINT.to_string() }
+    }
+}
 
 #[async_trait::async_trait]
 impl SearchProvider for ExaProvider {
@@ -137,9 +149,9 @@ impl SearchProvider for ExaProvider {
         "Exa"
     }
     async fn execute(&self, query: &str) -> Result<Vec<WebSearchResult>, ProviderError> {
-        let mut url = EXA_ENDPOINT.to_string();
+        let mut url = self.endpoint.clone();
         if let Some(key) = &self.key {
-            url = format!("{EXA_ENDPOINT}?exaApiKey={}", urlencoding::encode(key));
+            url = format!("{}?exaApiKey={}", url, urlencoding::encode(key));
         }
         let result = mcp_call(
             &url,
@@ -238,9 +250,17 @@ impl std::str::FromStr for chrono_like::Naive {
 
 pub struct TavilyProvider {
     pub key: Credential,
+    /// Overridable for tests; defaults to [`TAVILY_ENDPOINT`].
+    pub endpoint: String,
 }
 
 pub const TAVILY_ENDPOINT: &str = "https://api.tavily.com/search";
+
+impl TavilyProvider {
+    pub fn new(key: Credential) -> Self {
+        Self { key, endpoint: TAVILY_ENDPOINT.to_string() }
+    }
+}
 
 #[async_trait::async_trait]
 impl SearchProvider for TavilyProvider {
@@ -256,7 +276,7 @@ impl SearchProvider for TavilyProvider {
             .build()
             .map_err(|error| ProviderError::request(None, error.to_string()))?;
         let mut request = client
-            .post(TAVILY_ENDPOINT)
+            .post(&self.endpoint)
             .header("Accept", "application/json")
             .header("X-Client-Name", "opencode2")
             .json(&serde_json::json!({
@@ -308,9 +328,17 @@ impl SearchProvider for TavilyProvider {
 
 pub struct FirecrawlProvider {
     pub key: Credential,
+    /// Overridable for tests; defaults to [`FIRECRAWL_ENDPOINT`].
+    pub endpoint: String,
 }
 
 pub const FIRECRAWL_ENDPOINT: &str = "https://mcp.firecrawl.dev/v2/mcp";
+
+impl FirecrawlProvider {
+    pub fn new(key: Credential) -> Self {
+        Self { key, endpoint: FIRECRAWL_ENDPOINT.to_string() }
+    }
+}
 
 #[async_trait::async_trait]
 impl SearchProvider for FirecrawlProvider {
@@ -323,7 +351,7 @@ impl SearchProvider for FirecrawlProvider {
     async fn execute(&self, query: &str) -> Result<Vec<WebSearchResult>, ProviderError> {
         let headers = authorization(&self.key);
         let result = mcp_call(
-            FIRECRAWL_ENDPOINT,
+            &self.endpoint,
             "firecrawl_search",
             &serde_json::json!({ "query": query, "limit": 8 }),
             &headers,
@@ -364,9 +392,17 @@ impl SearchProvider for FirecrawlProvider {
 
 pub struct ParallelProvider {
     pub key: Credential,
+    /// Overridable for tests; defaults to [`PARALLEL_ENDPOINT`].
+    pub endpoint: String,
 }
 
 pub const PARALLEL_ENDPOINT: &str = "https://search.parallel.ai/mcp";
+
+impl ParallelProvider {
+    pub fn new(key: Credential) -> Self {
+        Self { key, endpoint: PARALLEL_ENDPOINT.to_string() }
+    }
+}
 
 #[async_trait::async_trait]
 impl SearchProvider for ParallelProvider {
@@ -379,7 +415,7 @@ impl SearchProvider for ParallelProvider {
     async fn execute(&self, query: &str) -> Result<Vec<WebSearchResult>, ProviderError> {
         let headers = authorization(&self.key);
         let result = mcp_call(
-            PARALLEL_ENDPOINT,
+            &self.endpoint,
             "web_search",
             &serde_json::json!({ "objective": query, "search_queries": [query] }),
             &headers,
@@ -426,9 +462,17 @@ impl SearchProvider for ParallelProvider {
 
 pub struct TinyFishProvider {
     pub key: Credential,
+    /// Overridable for tests; defaults to [`TINYFISH_ENDPOINT`].
+    pub endpoint: String,
 }
 
 pub const TINYFISH_ENDPOINT: &str = "https://agent.tinyfish.ai/mcp";
+
+impl TinyFishProvider {
+    pub fn new(key: Credential) -> Self {
+        Self { key, endpoint: TINYFISH_ENDPOINT.to_string() }
+    }
+}
 
 #[async_trait::async_trait]
 impl SearchProvider for TinyFishProvider {
@@ -444,7 +488,7 @@ impl SearchProvider for TinyFishProvider {
             None => vec![("X-TinyFish-Access-Mode", "keyless".to_string())],
         };
         let result =
-            mcp_call(TINYFISH_ENDPOINT, "search", &serde_json::json!({ "query": query }), &headers)
+            mcp_call(&self.endpoint, "search", &serde_json::json!({ "query": query }), &headers)
                 .await?;
         let content = result
             .get("content")
@@ -504,11 +548,11 @@ pub fn providers_with_keys(
     for id in ["exa", "firecrawl", "parallel", "tavily", "tinyfish"] {
         let Some(key) = key_for(id) else { continue };
         let provider: std::sync::Arc<dyn SearchProvider> = match id {
-            "exa" => std::sync::Arc::new(ExaProvider { key: Some(key) }),
-            "firecrawl" => std::sync::Arc::new(FirecrawlProvider { key: Some(key) }),
-            "parallel" => std::sync::Arc::new(ParallelProvider { key: Some(key) }),
-            "tavily" => std::sync::Arc::new(TavilyProvider { key: Some(key) }),
-            _ => std::sync::Arc::new(TinyFishProvider { key: Some(key) }),
+            "exa" => std::sync::Arc::new(ExaProvider::new(Some(key))),
+            "firecrawl" => std::sync::Arc::new(FirecrawlProvider::new(Some(key))),
+            "parallel" => std::sync::Arc::new(ParallelProvider::new(Some(key))),
+            "tavily" => std::sync::Arc::new(TavilyProvider::new(Some(key))),
+            _ => std::sync::Arc::new(TinyFishProvider::new(Some(key))),
         };
         providers.push(provider);
     }
@@ -570,5 +614,197 @@ mod tests {
         ] {
             assert_eq!(env_key_name(id), Some(name));
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // MCP-hosted path against a fake in-process MCP HTTP server
+    // (the repo's hand-rolled TcpListener harness pattern, e.g.
+    // engine/skills_url.rs `CatalogServer`).
+    // -------------------------------------------------------------------------
+
+    struct FakeMcpServer {
+        base: String,
+        state: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        handle: tokio::task::JoinHandle<()>,
+    }
+
+    impl Drop for FakeMcpServer {
+        fn drop(&mut self) {
+            self.handle.abort();
+        }
+    }
+
+    /// Serves `body` with `status` on every POST, recording each raw
+    /// request (request line + headers + body). `sse` wraps the body in a
+    /// `data:` line like real streamable-HTTP MCP responses.
+    async fn fake_mcp(status: &str, body: String, sse: bool) -> FakeMcpServer {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let state = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = std::sync::Arc::clone(&state);
+        let status = status.to_string();
+        let handle = tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let mut buffer = vec![0u8; 65_536];
+                let read = stream.read(&mut buffer).await.unwrap_or(0);
+                let request = String::from_utf8_lossy(&buffer[..read]).into_owned();
+                recorded.lock().unwrap().push(request);
+                let payload =
+                    if sse { format!("event: message\ndata: {body}\n\n") } else { body.clone() };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+                    payload.len()
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+        });
+        FakeMcpServer { base: format!("http://127.0.0.1:{port}"), state, handle }
+    }
+
+    fn last_request(server: &FakeMcpServer) -> String {
+        server.state.lock().unwrap().last().expect("recorded request").clone()
+    }
+
+    #[tokio::test]
+    async fn tool_websearch_mcp_exa_routes_tools_call_and_maps_results() {
+        let body = r#"{"result":{"content":[{"type":"text","text":"URL: https://a.example\nTitle: A\nPublished: 2024-01-15\nHighlights:\ngreat\n\n---\n\nURL: https://b.example\nTitle: N/A\nText:\nbody"}]}}"#.to_string();
+        let server = fake_mcp("200 OK", body, false).await;
+        let mut provider = ExaProvider::new(Some("secret".into()));
+        provider.endpoint = server.base.clone();
+        let results = provider.execute("rust mcp").await.unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].url, "https://a.example");
+        assert_eq!(results[0].time.published, Some(1_705_276_800_000));
+        assert_eq!(results[1].title, None);
+        // The v2 `WebSearchMcp.call` request contract: a `tools/call`
+        // JSON-RPC POST with the key in the URL query (`exaApiKey`) and
+        // the JSON/SSE Accept header.
+        let request = last_request(&server);
+        assert!(request.starts_with("POST /?exaApiKey=secret HTTP/"));
+        assert!(
+            request.contains("accept: application/json, text/event-stream")
+                || request.contains("Accept: application/json, text/event-stream")
+        );
+        let body_start = request.split("\r\n\r\n").nth(1).expect("body");
+        let rpc: serde_json::Value = serde_json::from_str(body_start.trim()).unwrap();
+        assert_eq!(rpc["jsonrpc"], "2.0");
+        assert_eq!(rpc["id"], 1);
+        assert_eq!(rpc["method"], "tools/call");
+        assert_eq!(rpc["params"]["name"], "web_search_exa");
+        assert_eq!(
+            rpc["params"]["arguments"],
+            serde_json::json!({ "query": "rust mcp", "numResults": 8 })
+        );
+    }
+
+    #[tokio::test]
+    async fn tool_websearch_mcp_exa_keyless_has_no_query() {
+        let body =
+            r#"{"result":{"content":[{"type":"text","text":"URL: https://k.example\nText:\nx"}]}}"#
+                .to_string();
+        let server = fake_mcp("200 OK", body, false).await;
+        let mut provider = ExaProvider::new(None);
+        provider.endpoint = server.base.clone();
+        assert_eq!(provider.execute("q").await.unwrap().len(), 1);
+        assert!(last_request(&server).starts_with("POST / HTTP/"));
+    }
+
+    #[tokio::test]
+    async fn tool_websearch_mcp_firecrawl_maps_data_web_and_bearer() {
+        let body = r#"{"result":{"content":[{"type":"text","text":"{\"success\":true,\"data\":{\"web\":[{\"url\":\"https://f\",\"title\":\"F\",\"description\":\"d\"}]}}"}]}}"#.to_string();
+        let server = fake_mcp("200 OK", body, false).await;
+        let mut provider = FirecrawlProvider::new(Some("fc-key".into()));
+        provider.endpoint = server.base.clone();
+        let results = provider.execute("q").await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].url, "https://f");
+        assert_eq!(results[0].content.as_deref(), Some("d"));
+        let request = last_request(&server);
+        assert!(
+            request.contains(&format!("authorization: Bearer fc-key"))
+                || request.contains("Authorization: Bearer fc-key")
+        );
+        let body_start = request.split("\r\n\r\n").nth(1).expect("body");
+        let rpc: serde_json::Value = serde_json::from_str(body_start.trim()).unwrap();
+        assert_eq!(rpc["params"]["name"], "firecrawl_search");
+        assert_eq!(rpc["params"]["arguments"], serde_json::json!({ "query": "q", "limit": 8 }));
+    }
+
+    #[tokio::test]
+    async fn tool_websearch_mcp_parallel_maps_structured_content_over_sse() {
+        // Streamable-HTTP MCP responses arrive as SSE `data:` lines —
+        // `WebSearchMcp.parseResponse` scans them.
+        let body = r#"{"result":{"content":[],"structuredContent":{"search_id":"s","session_id":"x","results":[{"url":"https://p","title":"P","publish_date":"2024-06-01","excerpts":["e1","e2"]}]}}}"#.to_string();
+        let server = fake_mcp("200 OK", body, true).await;
+        let mut provider = ParallelProvider::new(Some("par".into()));
+        provider.endpoint = server.base.clone();
+        let results = provider.execute("objective").await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].content.as_deref(), Some("e1\n\ne2"));
+        assert_eq!(results[0].time.published, Some(1_717_200_000_000));
+        let request = last_request(&server);
+        let body_start = request.split("\r\n\r\n").nth(1).expect("body");
+        let rpc: serde_json::Value = serde_json::from_str(body_start.trim()).unwrap();
+        assert_eq!(rpc["params"]["name"], "web_search");
+        assert_eq!(
+            rpc["params"]["arguments"],
+            serde_json::json!({ "objective": "objective", "search_queries": ["objective"] })
+        );
+    }
+
+    #[tokio::test]
+    async fn tool_websearch_mcp_tinyfish_key_and_keyless_headers() {
+        let body = r#"{"result":{"content":[{"type":"text","text":"{\"results\":[{\"url\":\"https://t\",\"title\":\"T\",\"snippet\":\"s\"}]}"}]}}"#.to_string();
+        let server = fake_mcp("200 OK", body, false).await;
+        let mut provider = TinyFishProvider::new(Some("tf".into()));
+        provider.endpoint = server.base.clone();
+        let results = provider.execute("q").await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].content.as_deref(), Some("s"));
+        let request = last_request(&server);
+        assert!(request.contains("x-api-key: tf") || request.contains("X-API-Key: tf"));
+        let body_start = request.split("\r\n\r\n").nth(1).expect("body");
+        let rpc: serde_json::Value = serde_json::from_str(body_start.trim()).unwrap();
+        assert_eq!(rpc["params"]["name"], "search");
+        assert_eq!(rpc["params"]["arguments"], serde_json::json!({ "query": "q" }));
+
+        // Keyless ⇒ `X-TinyFish-Access-Mode: keyless`, no API key.
+        let mut provider = TinyFishProvider::new(None);
+        provider.endpoint = server.base.clone();
+        assert_eq!(provider.execute("q").await.unwrap().len(), 1);
+        let request = last_request(&server);
+        assert!(
+            request.contains("x-tinyfish-access-mode: keyless")
+                || request.contains("X-TinyFish-Access-Mode: keyless")
+        );
+        assert!(!request.contains("tf"));
+    }
+
+    #[tokio::test]
+    async fn tool_websearch_mcp_http_error_surfaces_status() {
+        // The typed error carries the HTTP status so the random-selection
+        // cooldown rotation (429) can classify it (websearch.rs).
+        let server =
+            fake_mcp("429 Too Many Requests", r#"{"error":"limited"}"#.into(), false).await;
+        let mut provider = ParallelProvider::new(None);
+        provider.endpoint = server.base.clone();
+        let error = provider.execute("q").await.unwrap_err();
+        assert_eq!(error.status, Some(429));
+
+        let server = fake_mcp("500 Internal Server Error", "broken".into(), false).await;
+        let mut provider = FirecrawlProvider::new(None);
+        provider.endpoint = server.base.clone();
+        assert_eq!(provider.execute("q").await.unwrap_err().status, Some(500));
+    }
+
+    #[tokio::test]
+    async fn tool_websearch_mcp_unparseable_body_is_request_error() {
+        let server = fake_mcp("200 OK", "event: message\ndata: not-json\n".into(), false).await;
+        let mut provider = ExaProvider::new(None);
+        provider.endpoint = server.base.clone();
+        let error = provider.execute("q").await.unwrap_err();
+        assert_eq!(error.status, None);
+        assert!(error.message.contains("web_search_exa"));
     }
 }
