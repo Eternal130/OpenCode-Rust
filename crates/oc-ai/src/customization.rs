@@ -34,6 +34,10 @@ use crate::schema::CachePolicyObject;
 /// Provider-specific overrides. Every field defaults to `None` (= keep the
 /// generic behavior); `Default` yields the no-op customization.
 #[derive(Clone, Default, PartialEq, Debug)]
+// `PartialEq` compares the `auto_cache_policy` fn pointer for test
+// assertions; addresses of `fn` items are unique per monomorphization in
+// practice, and the comparison is only ever between entries and `noop()`.
+#[allow(unpredictable_function_pointer_comparisons)]
 pub struct ProviderCustomization {
     /// Resolve the cache policy applied when the request carries no explicit
     /// policy (`cache: None | Auto`). Receives the model id; return
@@ -69,7 +73,7 @@ fn qwen_policy() -> CachePolicyObject {
     }
 }
 
-/// Gateway routes (OpenRouter, Vercel AI Gateway) follow the upstream model
+/// Gateway routes (`OpenRouter`, Vercel AI Gateway) follow the upstream model
 /// alias: `~anthropic/...` keeps the full auto policy, `qwen/...`-style ids
 /// get the Qwen policy, everything else caches implicitly (no breakpoints).
 fn gateway_policy(model_id: &str) -> CachePolicyObject {
