@@ -42,11 +42,30 @@ pub const SERVICE_FRAMES: &[&str] = &[
     "plugin.updated",
 ];
 
+/// Event types that exist in the Rust registry inventory but are NOT part
+/// of the public wire surface — REF `packages/schema/src/event-manifest.ts`
+/// `ServerDefinitions` (event-manifest.ts:71-81) includes only
+/// `McpEvent.StatusChanged` and `McpEvent.ResourcesChanged` from the MCP
+/// module, and `packages/protocol/test/event.test.ts:28` pins
+/// `isOpenCodeEvent({ type: "mcp.tools.changed" }) === false`.
+///
+/// * `mcp.tools.changed` — private in REF (consumed only by in-process
+///   listeners; the Rust tool-bridge debounce subscribes the same way,
+///   `oc-core/src/mcp/registry.rs`).
+/// * `mcp.prompts.changed` — does not exist in REF at all. The Rust port
+///   publishes it locally (oc-core `mcp/registry.rs` prompts watch) for
+ ///  in-process consumers; documented divergence, kept private so it
+///   never reaches the public stream.
+pub const PRIVATE_TYPES: &[&str] = &["mcp.tools.changed", "mcp.prompts.changed"];
+
 /// Whether an event type is public (`EventManifest.isServer`):
 /// `server.connected`, any known registry type, `rpc.*`, or one of the
-/// service frames above.
+/// service frames above — minus the REF-private exceptions above.
 #[must_use]
 pub fn is_public(type_: &str) -> bool {
+    if PRIVATE_TYPES.contains(&type_) {
+        return false;
+    }
     type_ == CONNECTED
         || registry::by_type(type_).is_some()
         || type_.starts_with(RPC_PREFIX)
@@ -58,17 +77,57 @@ mod tests {
     use super::*;
 
     /// Drift guard 1: every event type in the registry inventory is
-    /// public — a new registry definition cannot miss classification.
+    /// public — a new registry definition cannot miss classification —
+    /// except the REF-private exceptions in [`PRIVATE_TYPES`], which must
+    /// all be real registry members (documented divergences, not typos).
     #[test]
     fn manifest_every_registry_definition_is_public() {
-        let definitions = registry::definitions();
+        let mut definitions: Vec<&registry::EventDefinition> =
+            registry::definitions().iter().collect();
+        definitions.extend(registry::non_session_definitions().iter());
         assert!(!definitions.is_empty(), "registry inventory is populated");
         for definition in definitions {
+            if PRIVATE_TYPES.contains(&definition.type_.as_str()) {
+                continue;
+            }
             assert!(
                 is_public(&definition.type_),
                 "registry type {} must be public",
                 definition.type_
             );
+        }
+        for type_ in PRIVATE_TYPES {
+            assert!(
+                registry::by_type(type_).is_some(),
+                "private type {type_} must still be a registry member"
+            );
+            assert!(!is_public(type_), "private type {type_} must not be public");
+        }
+    }
+
+    /// Drift guard 1b: the MCP public set is exactly REF's —
+    /// `ServerDefinitions` (event-manifest.ts:71-81) carries only
+    /// `McpEvent.StatusChanged` + `McpEvent.ResourcesChanged`, and
+    /// `protocol/test/event.test.ts:28` pins `mcp.tools.changed` private.
+    /// `mcp.prompts.changed` does not exist in REF (documented Rust-side
+    /// divergence, kept private).
+    #[test]
+    fn manifest_mcp_publicness_matches_ref() {
+        assert!(is_public("mcp.status.changed"));
+        assert!(is_public("mcp.resources.changed"));
+        assert!(!is_public("mcp.tools.changed"));
+        assert!(!is_public("mcp.prompts.changed"));
+    }
+
+    /// Drift guard 4 (F3, announce side ⊆ manifest): every event type the
+    /// announcer can publish inline must be classified public by this
+    /// manifest, so a future `publish_empty`/typed publish of an
+    /// unclassified type is caught here instead of silently being dropped
+    /// by the SSE feed.
+    #[test]
+    fn manifest_announce_publish_side_is_classified() {
+        for type_ in crate::announce::inline_published_types() {
+            assert!(is_public(type_), "announcer publishes {type_}, which must be public");
         }
     }
 
@@ -96,5 +155,7 @@ mod tests {
         assert!(!is_public("rpc"));
         assert!(!is_public("test.internal"));
         assert!(!is_public("weird.unknown"));
+        assert!(!is_public("mcp.tools.changed"));
+        assert!(!is_public("mcp.prompts.changed"));
     }
 }
