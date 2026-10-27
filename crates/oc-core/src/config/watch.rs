@@ -59,7 +59,7 @@ pub enum WatchTarget {
 }
 
 impl WatchTarget {
-    fn key(&self) -> String {
+    pub(crate) fn key(&self) -> String {
         match self {
             WatchTarget::File { path } => format!("file:{}", path.display()),
             WatchTarget::Entries { path, names } => {

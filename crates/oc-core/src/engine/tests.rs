@@ -1606,3 +1606,53 @@ fn engine_explore_permissions_gate_mutating_tools() {
     assert_effect("subagent", "general", Effect::Deny);
     assert_effect("external_directory", "/etc", Effect::Ask);
 }
+
+// -- RV-G2: location watcher wiring ----------------------------------------
+
+/// The engine boots the file-watcher service and starts a per-location
+/// `LocationWatcher` at assembly; `invalidate` stops it (no leaked
+/// watches or tasks).
+#[tokio::test]
+async fn location_watcher_starts_and_stops_with_location() {
+    let dir = tempfile::Builder::new()
+        .prefix("oc-core-engine-lw-")
+        .tempdir_in("/tmp/opencode")
+        .expect("sandbox under /tmp/opencode");
+    git2::Repository::init(dir.path()).expect("real git repo (HEAD exists)");
+    std::fs::create_dir_all(dir.path().join("home")).expect("home");
+    let engine = Engine::boot(EngineOptions {
+        activity_sweeper: false,
+        ..EngineOptions::new(dir.path().join("data"), dir.path().join("home"))
+    })
+    .await;
+    let location = LocationRef::new(dir.path().to_path_buf(), None);
+    engine.location(location.clone()).await.expect("assemble location");
+    assert!(engine.has_location_watcher(&location), "watcher started at assembly");
+
+    engine.invalidate(&location).await;
+    assert!(!engine.has_location_watcher(&location), "watcher stopped at invalidate");
+
+    engine.shutdown().await;
+}
+
+/// `file_watcher: false` boots the disabled watcher (v2 `enabled: false`)
+/// — no location watcher starts.
+#[tokio::test]
+async fn file_watcher_option_disables_the_service() {
+    let dir = tempfile::Builder::new()
+        .prefix("oc-core-engine-lwoff-")
+        .tempdir_in("/tmp/opencode")
+        .expect("sandbox under /tmp/opencode");
+    git2::Repository::init(dir.path()).expect("real git repo");
+    std::fs::create_dir_all(dir.path().join("home")).expect("home");
+    let engine = Engine::boot(EngineOptions {
+        activity_sweeper: false,
+        file_watcher: false,
+        ..EngineOptions::new(dir.path().join("data"), dir.path().join("home"))
+    })
+    .await;
+    let location = LocationRef::new(dir.path().to_path_buf(), None);
+    engine.location(location.clone()).await.expect("assemble location");
+    assert!(!engine.has_location_watcher(&location), "disabled watcher starts nothing");
+    engine.shutdown().await;
+}
