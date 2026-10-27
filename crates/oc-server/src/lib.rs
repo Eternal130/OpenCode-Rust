@@ -28,6 +28,7 @@ pub mod app_archive;
 pub mod assets;
 pub mod auth;
 pub mod errors;
+pub mod event_manifest;
 pub mod info;
 pub mod lifecycle;
 pub mod middleware;

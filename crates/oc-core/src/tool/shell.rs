@@ -14,6 +14,19 @@ use crate::tool::{
     permission_cause, BuiltinTool, ToolExecuteWithContext, ToolFailure, ToolOutcome, ToolServices,
 };
 
+/// `ShellTool.name`.
+pub const NAME: &str = "shell";
+
+/// The session-hook description refresh (shell.ts:280-288): rewrites the
+/// `shell` tool descriptor's description with the freshly resolved compat
+/// shell name. Called on every `context`/`compaction`/`generate` event —
+/// a config change to `shell` reaches the model on the next request
+/// without re-registering the tool.
+pub fn refresh_description(config_shell: Option<&str>, tool: &mut crate::hooks::ToolDescriptor) {
+    let shell_path = crate::shell::select::resolve(config_shell, true);
+    tool.description = description(Some(&crate::shell::select::name(&shell_path)));
+}
+
 /// `ShellTool.DEFAULT_TIMEOUT_MS`.
 pub const DEFAULT_TIMEOUT_MS: u64 = 2 * 60 * 1_000;
 
@@ -128,7 +141,9 @@ pub fn result_messages(output: &ShellToolOutput) -> Vec<String> {
 /// `backgroundResult`.
 fn background_result(shell_id: &str, file: &str) -> ShellToolOutput {
     ShellToolOutput {
-        output: format!("Command moved to the background (shell ID: {shell_id}).\nOutput is streaming to: {file}"),
+        output: format!(
+            "Command moved to the background (shell ID: {shell_id}).\nOutput is streaming to: {file}"
+        ),
         shell_id: Some(shell_id.to_string()),
         truncated: false,
         status: Some("running".into()),
@@ -219,7 +234,7 @@ async fn prepare(
                     "Working directory is not a directory: {}",
                     invocation.cwd
                 ))),
-            })
+            });
         }
         Err(_) => {
             return Err(ToolFailure {
@@ -228,7 +243,7 @@ async fn prepare(
                     "Working directory does not exist: {}",
                     invocation.cwd
                 ))),
-            })
+            });
         }
     }
     Ok(timeout)
@@ -547,12 +562,14 @@ fn tool_result(output: &ShellToolOutput) -> ToolOutcome {
     }
 }
 
-/// The shell builtin registration.
+/// The shell builtin registration. The description is registered WITHOUT
+/// the shell name (REF shell.ts:193 `description()`); the resolved shell
+/// arrives later — the engine's session context/compaction/generate hooks
+/// refresh it (`shell.ts:280-288`).
 pub fn tool(deps: Arc<ShellToolServices>) -> BuiltinTool {
-    let shell_path = select::resolve(deps.config_shell.as_deref(), true);
     BuiltinTool {
-        name: "shell",
-        description: description(Some(select::name(&shell_path).as_str())),
+        name: NAME,
+        description: description(None),
         input: serde_json::json!({
             "type": "object",
             "properties": {
@@ -683,6 +700,31 @@ mod tests {
         assert!(description.contains("Prefer dedicated tools over shell commands when possible."));
     }
 
+    /// RV-P9: registration carries NO pinned shell (REF registers
+    /// `description()`); the session hook refresh supplies it.
+    #[test]
+    fn tool_shell_registration_description_has_no_pinned_shell() {
+        let registration = description(None);
+        assert!(!registration.contains("Commands run on"));
+        assert!(registration.contains("Execute a shell command and return its output."));
+    }
+
+    /// RV-P9: the session-hook refresh (`shell.ts:280-288`) rewrites the
+    /// descriptor with the freshly resolved shell name.
+    #[test]
+    fn tool_shell_refresh_description_supplies_shell_name() {
+        let mut tool = crate::hooks::ToolDescriptor {
+            description: description(None),
+            input: serde_json::json!({}),
+        };
+        refresh_description(None, &mut tool);
+        assert!(tool.description.contains("Commands run on"));
+        assert!(tool.description.contains(&format!(
+            "using {}.",
+            crate::shell::select::name(&crate::shell::select::resolve(None, true))
+        )));
+    }
+
     /// RC-04 kill-race pin: the `Drop` guard's fire-and-forget cleanup
     /// (`shell.remove` + `jobs.cancel`) must actually COMPLETE once the
     /// owning future is dropped — even though `Drop` cannot await. This
@@ -708,14 +750,16 @@ mod tests {
         use oc_util::determinism::{AscendingIdGen, IdGen, SequentialRng, SystemClock};
         use std::sync::Arc;
 
-        let tmp = tempfile::tempdir_in("/tmp/opencode").expect("sandbox tempdir under /tmp/opencode");
-        let ids: Arc<dyn IdGen> = Arc::new(AscendingIdGen::new(
-            Arc::new(SystemClock),
-            Arc::new(SequentialRng::new()),
-        ));
+        let tmp =
+            tempfile::tempdir_in("/tmp/opencode").expect("sandbox tempdir under /tmp/opencode");
+        let ids: Arc<dyn IdGen> =
+            Arc::new(AscendingIdGen::new(Arc::new(SystemClock), Arc::new(SequentialRng::new())));
         let shell = Shell::new(tmp.path(), "cancelguard", Arc::clone(&ids), Arc::new(SystemClock));
-        let jobs_service =
-            jobs::Jobs::new(Database::open_in_memory().await.expect("db"), ids, Arc::new(SystemClock));
+        let jobs_service = jobs::Jobs::new(
+            Database::open_in_memory().await.expect("db"),
+            ids,
+            Arc::new(SystemClock),
+        );
 
         let info = shell
             .create(
@@ -814,14 +858,16 @@ mod tests {
         use oc_util::determinism::{AscendingIdGen, IdGen, SequentialRng, SystemClock};
         use std::sync::Arc;
 
-        let tmp = tempfile::tempdir_in("/tmp/opencode").expect("sandbox tempdir under /tmp/opencode");
-        let ids: Arc<dyn IdGen> = Arc::new(AscendingIdGen::new(
-            Arc::new(SystemClock),
-            Arc::new(SequentialRng::new()),
-        ));
+        let tmp =
+            tempfile::tempdir_in("/tmp/opencode").expect("sandbox tempdir under /tmp/opencode");
+        let ids: Arc<dyn IdGen> =
+            Arc::new(AscendingIdGen::new(Arc::new(SystemClock), Arc::new(SequentialRng::new())));
         let shell = Shell::new(tmp.path(), "cancelguard2", Arc::clone(&ids), Arc::new(SystemClock));
-        let jobs_service =
-            jobs::Jobs::new(Database::open_in_memory().await.expect("db"), ids, Arc::new(SystemClock));
+        let jobs_service = jobs::Jobs::new(
+            Database::open_in_memory().await.expect("db"),
+            ids,
+            Arc::new(SystemClock),
+        );
 
         let info = shell
             .create(

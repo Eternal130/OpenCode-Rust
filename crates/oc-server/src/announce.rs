@@ -66,19 +66,10 @@ use tokio::sync::watch;
 use crate::state::{AppState, Readiness};
 
 /// The empty-payload service frames published per boot/reload/config
-/// change (order within a group is canonicalized by the capture; the list
-/// order mirrors the v2 boot sequence).
-pub const SERVICE_FRAMES: &[&str] = &[
-    "integration.updated",
-    "provider.updated",
-    "model.updated",
-    "agent.updated",
-    "command.updated",
-    "skill.updated",
-    "websearch.updated",
-    "reference.updated",
-    "plugin.updated",
-];
+/// change — declared once in the event manifest (the single publicness
+/// source consumed by the SSE feed) and re-exported here for the
+/// announcer's publish paths.
+pub use crate::event_manifest::SERVICE_FRAMES;
 
 /// The config-change fan-out for the FIRST change after a location is
 /// tracked (cold services; multiset order = the reference's arrival
