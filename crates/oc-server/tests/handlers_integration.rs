@@ -20,6 +20,8 @@ use oc_util::determinism::{SystemClock, UuidV4IdGen};
 
 struct TestServer {
     client: Client,
+    bus: std::sync::Arc<oc_core::bus::Bus>,
+    db: std::sync::Arc<oc_core::database::Database>,
     _workspace: tempfile::TempDir,
     _data: tempfile::TempDir,
 }
@@ -35,6 +37,8 @@ async fn boot_with(password: Option<String>) -> TestServer {
     // Keep engine state OUT of the workspace so vcs status stays clean.
     let engine =
         Engine::boot(EngineOptions::new(data.path().join("data"), data.path().join("home"))).await;
+    let bus = std::sync::Arc::clone(&engine.bus);
+    let db = std::sync::Arc::clone(&engine.db);
     let state = Arc::new(AppState::new(
         engine,
         AuthConfig { password },
@@ -51,7 +55,7 @@ async fn boot_with(password: Option<String>) -> TestServer {
         axum::serve(listener, router).await.expect("server");
     });
     let client = Client::new(&format!("http://{addr}")).expect("client");
-    TestServer { client, _workspace: dir, _data: data }
+    TestServer { client, bus, db, _workspace: dir, _data: data }
 }
 
 fn create_body(title: &str) -> SessionCreateBody {
@@ -618,9 +622,39 @@ async fn handlers_session_update_view_and_active() {
         Some(&serde_json::json!("v"))
     );
 
+    // RV-B7: views only land on an idle session with monotone watermarks
+    // (ref `session/session.ts:61-70`). Seed `time.idle` directly (a
+    // fresh session is not idle and must ignore views outright).
+    let session = session_id.clone();
+    server
+        .db
+        .transaction(move |tx| {
+            tx.execute("UPDATE session_v2 SET time_idle = 200 WHERE id = ?1", (session,))?;
+            Ok(())
+        })
+        .await
+        .expect("seed time_idle");
+
+    // Fresh session (no idle watermark yet): the view is a no-op.
+    let fresh = create_session(client, "fresh view").await.id;
+    client.session().view(&fresh, &SessionViewBody { idle: 123.0 }).await.expect("view fresh");
+    let unviewed = client.session().get(&fresh).await.expect("get fresh");
+    assert_eq!(unviewed.time.viewed, None);
+
+    // idle=123 <= time.idle=200 and newer than viewed → lands.
     client.session().view(&session_id, &SessionViewBody { idle: 123.0 }).await.expect("view");
     let viewed = client.session().get(&session_id).await.expect("get after view");
     assert_eq!(viewed.time.viewed, Some(123.0));
+
+    // Older than the viewed watermark (123) → monotone guard keeps 123.
+    client.session().view(&session_id, &SessionViewBody { idle: 50.0 }).await.expect("stale view");
+    let stale = client.session().get(&session_id).await.expect("get after stale");
+    assert_eq!(stale.time.viewed, Some(123.0));
+
+    // Newer than the idle watermark (200) → not idle yet, no-op.
+    client.session().view(&session_id, &SessionViewBody { idle: 300.0 }).await.expect("future view");
+    let future = client.session().get(&session_id).await.expect("get after future");
+    assert_eq!(future.time.viewed, Some(123.0));
 
     // active: nothing running → empty map decode.
     let active = client.session().active().await.expect("active");
@@ -651,6 +685,87 @@ async fn handlers_session_update_view_and_active() {
         .await
         .expect("inbox steer");
     client.session().inbox().cancel(&session_id, &inbox_user.id).await.expect("inbox cancel");
+}
+
+// ---------------------------------------------------------------------------
+// Skill activation (RV-B3) + background (RV-B5)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn handlers_session_skill_injects_body_and_publishes_activation() {
+    let server = boot().await;
+    let client = &server.client;
+    let session_id = create_session(client, "skill").await.id;
+
+    let skills = client.skill().list(&SkillListQuery::default()).await.expect("skill list");
+    let skill = skills.data.iter().find(|s| s.id == "opencode").expect("built-in opencode skill");
+    let body = skill.content.clone();
+    assert!(!body.is_empty(), "opencode skill body is non-empty");
+
+    let mut events = server.bus.subscribe_types(&["session.skill.activated"]);
+    client
+        .session()
+        .skill(
+            &session_id,
+            &ExperimentalSessionSkillBody { id: "opencode".to_owned(), resume: Some(false) },
+        )
+        .await
+        .expect("skill 204");
+
+    // `session.skill.activated` is published carrying the markdown body
+    // (ref `session/session.ts:227-238`).
+    let activated = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        futures::StreamExt::next(&mut events),
+    )
+    .await
+    .expect("activation event within 5s")
+    .expect("activation event present");
+    assert_eq!(activated.type_, "session.skill.activated");
+    assert_eq!(activated.data["sessionID"], serde_json::json!(session_id));
+    assert_eq!(activated.data["id"], serde_json::json!("opencode"));
+    assert_eq!(activated.data["text"], serde_json::json!(body));
+
+    // The body enters the assembled context through the projected skill
+    // message (ref `to-llm-message.ts:286-287`).
+    let context = client.session().context(&session_id).await.expect("context");
+    let skill_message = context
+        .iter()
+        .find_map(|message| match message {
+            SessionMessageInfo::Skill(skill) => Some(skill),
+            _ => None,
+        })
+        .expect("skill message in assembled context");
+    assert_eq!(skill_message.skill, "opencode");
+    assert_eq!(skill_message.text, body);
+
+    // Unknown skill → 404 SkillNotFoundError.
+    let error = client
+        .session()
+        .skill(
+            &session_id,
+            &ExperimentalSessionSkillBody { id: "nope".to_owned(), resume: Some(false) },
+        )
+        .await
+        .expect_err("skill 404");
+    assert_api(&error, 404, "SkillNotFoundError");
+}
+
+#[tokio::test]
+async fn handlers_session_background_without_jobs_is_204_and_silent() {
+    let server = boot().await;
+    let client = &server.client;
+    let session_id = create_session(client, "background").await.id;
+
+    // No blocking jobs → backgroundAll is empty → 204 with NO synthetic
+    // notification (ref `session.ts:443-445` early return).
+    client.session().background(&session_id).await.expect("background 204");
+    let inbox = client.session().inbox().list(&session_id).await.expect("inbox list");
+    assert_eq!(inbox, Vec::new());
+
+    // Unknown session → 404.
+    let error = client.session().background("ses_missing").await.expect_err("404");
+    assert_api(&error, 404, "SessionNotFoundError");
 }
 
 // ---------------------------------------------------------------------------

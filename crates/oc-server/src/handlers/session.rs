@@ -635,12 +635,38 @@ fn parse_delivery(body: &Value) -> Result<Delivery, ApiError> {
     }
 }
 
+/// RV-B2: a staged revert commits only after prompt preparation succeeds
+/// (attachment materialization) and before new work is admitted — ref
+/// `session/session.ts:164-165` (prompt) and `:251` (compact).
+async fn commit_staged_revert(
+    state: &SharedState,
+    location: &LocationRef,
+    session_id: &str,
+) -> Result<(), ApiError> {
+    let parsed = parse_session_id(session_id);
+    let revert_state = oc_core::session::revert::read_revert(&state.engine.db, &parsed)
+        .await
+        .map_err(|error| {
+            crate::errors::debug_cause("session:unknown_ref", &error);
+            ApiError::unknown_ref()
+        })?;
+    if let Some(revert_state) = revert_state {
+        state
+            .engine
+            .revert_commit(location, &parsed, &revert_state)
+            .await
+            .map_err(|error| revert_error(session_id, &error))?;
+    }
+    Ok(())
+}
+
 async fn prompt(
     State(state): State<SharedState>,
     Path(session_id): Path<String>,
     uri: Uri,
     body: axum::body::Bytes,
 ) -> Result<Response, ApiError> {
+    let (location, _) = session_location(&state, &session_id).await?;
     let (services, _) = session_services(&state, &session_id).await?;
     // RA-01: post-location payload decode (404 first, then schema 400).
     let body = crate::request_validation::validate_at_handler(
@@ -660,6 +686,9 @@ async fn prompt(
         typed_value(&body, "files");
     let files = super::attachment::materialize_files(input_files.as_deref())
         .map_err(|error| ApiError::invalid_request(error.to_string()))?;
+    // RV-B2: commit the staged revert after preparation succeeds, before
+    // admitting the new work (ref `session/session.ts:164-165`).
+    commit_staged_revert(&state, &location, &session_id).await?;
     let payload = oc_schema::session_inbox::UserPayload {
         text: body["text"].as_str().unwrap_or_default().to_owned(),
         files,
@@ -762,6 +791,7 @@ async fn compact(
     uri: Uri,
     body: axum::body::Bytes,
 ) -> Result<Response, ApiError> {
+    let (location, _) = session_location(&state, &session_id).await?;
     let (services, _) = session_services(&state, &session_id).await?;
     // RA-01: post-location payload decode (404 first, then schema 400).
     let body = crate::request_validation::validate_at_handler(
@@ -771,10 +801,16 @@ async fn compact(
         &body,
     )?;
     let input_id = body["id"].as_str().map_or_else(|| state.ids.new_id("msg"), String::from);
+    // RV-B6: compaction defaults to steer (ref `session/session.ts:257` —
+    // `input.delivery ?? "steer"`); the schema validator rejects other
+    // values upstream.
     let delivery = match body["delivery"].as_str() {
-        Some("steer") => Delivery::Steer,
-        _ => Delivery::Queue,
+        Some("queue") => Delivery::Queue,
+        _ => Delivery::Steer,
     };
+    // RV-B2: a staged revert commits before compaction is admitted (ref
+    // `session/session.ts:251`).
+    commit_staged_revert(&state, &location, &session_id).await?;
     let info = services.inbox.admit_compaction(&input_id, &session_id, delivery).await.map_err(
         |error| match error {
             InboxError::Conflict(id) => {
@@ -1415,8 +1451,25 @@ async fn view(
     Path(session_id): Path<String>,
     axum::Json(body): axum::Json<Value>,
 ) -> Result<Response, ApiError> {
-    let (services, _) = session_services(&state, &session_id).await?;
-    let idle = body["idle"].as_f64().unwrap_or_else(|| now_ms(&state) as f64);
+    let (services, row) = session_services(&state, &session_id).await?;
+    // RV-B7: the view only lands when the session is idle (`time.idle`
+    // exists) and `idle` is monotone — no later than the last idle
+    // watermark and strictly newer than the last viewed watermark (ref
+    // `session/session.ts:61-70`). The projector still clamps with
+    // max(); these are the handler admission checks.
+    let Some(idle) = body["idle"].as_f64() else {
+        return Err(ApiError::invalid_request("Expected a number for idle"));
+    };
+    let admission = match row.time_idle {
+        Some(time_idle) => {
+            idle <= time_idle as f64
+                && row.time_viewed.map_or(true, |viewed| (viewed as f64) < idle)
+        }
+        None => false,
+    };
+    if !admission {
+        return Ok(no_content());
+    }
     publish_session_event(
         &services,
         "session.viewed",
@@ -1431,16 +1484,10 @@ async fn wait(
     Path(session_id): Path<String>,
 ) -> Result<Response, ApiError> {
     let (services, _) = session_services(&state, &session_id).await?;
-    // Poll settlement at 50ms (v2 waits on the execution exit; active()
-    // is the equivalent ownership probe; 10-minute ceiling).
-    for _ in 0..12_000 {
-        if !services.execution.active().contains(&session_id)
-            && !services.execution.is_active(&session_id)
-        {
-            return Ok(no_content());
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    }
+    // RV-B6: v2 awaits the execution's idle signal
+    // (`execution.awaitIdle`, ref `session/session.ts:265-268`) — not a
+    // poll loop.
+    services.execution.await_idle(&session_id).await;
     Ok(no_content())
 }
 
@@ -1448,9 +1495,55 @@ async fn background(
     State(state): State<SharedState>,
     Path(session_id): Path<String>,
 ) -> Result<Response, ApiError> {
-    // v2 background detaches the session from the caller's foreground
-    // tracking; the engine keeps executions running regardless — 204.
-    let _ = session_services(&state, &session_id).await?;
+    let (services, row) = session_services(&state, &session_id).await?;
+    // RV-B5: unblock every running job this session is blocked on
+    // (`jobs.backgroundAll`, ref `session.ts:442-459`) and, when any
+    // moved, inject the synthetic notification so the model learns to
+    // move on without waiting on the backgrounded work.
+    let backgrounded =
+        services.jobs.background_all(oc_core::jobs::BackgroundAllInput { session_id: &session_id, type_: None }).await;
+    if backgrounded.is_empty() {
+        return Ok(no_content());
+    }
+    let mut lines = vec![
+        "User requested that active blocking work be moved to the background.".to_owned(),
+        String::new(),
+        "Backgrounded work:".to_owned(),
+    ];
+    for job in &backgrounded {
+        let title = job.title.as_deref().unwrap_or_default();
+        let label = if title.is_empty() { job.id.as_str() } else { title };
+        lines.push(format!("- {}: {label}", job.type_));
+    }
+    lines.push(String::new());
+    lines.push(
+        "The backgrounded work is still unfinished. Move on to other work if you can. If there is nothing else useful to do, finish your response. Do not wait, sleep, poll, or report the backgrounded work as complete until a later completion notification is added to the conversation."
+            .to_owned(),
+    );
+    let text = lines.join("\n");
+    let notification_id = state.ids.new_id("msg");
+    let payload = oc_schema::session_inbox::SyntheticPayload {
+        text,
+        description: None,
+        metadata: None,
+    };
+    services
+        .inbox
+        .admit(&notification_id, &session_id, Item::Synthetic { payload, delivery: Delivery::Steer })
+        .await
+        .map_err(|error| match error {
+            // ref dies on a synthetic id conflict here (a defect, 500).
+            InboxError::Conflict(id) => {
+                crate::errors::debug_cause("session:background_conflict", &id);
+                ApiError::unknown_ref()
+            }
+            error => inbox_error(&error, &notification_id),
+        })?;
+    // Same wake semantics as the synthetic endpoint: resume unless a
+    // revert is staged (ref `session/session.ts:310`).
+    if row.revert.is_none() {
+        services.execution.wake(&session_id, oc_core::session::Promotable::Input);
+    }
     Ok(no_content())
 }
 
@@ -1729,26 +1822,29 @@ async fn skill(
         &body,
     )?;
     let skill_id = body["id"].as_str().unwrap_or_default();
-    if !services.skills.list().iter().any(|skill| skill.id.as_str() == skill_id) {
-        return Err(ApiError::skill_not_found(skill_id));
-    }
-    let message_id = state.ids.new_id("msg");
-    services
-        .inbox
-        .admit(
-            &message_id,
-            &session_id,
-            Item::Synthetic {
-                payload: oc_schema::session_inbox::SyntheticPayload {
-                    text: format!("/{skill_id}"),
-                    description: Some(skill_id.to_owned()),
-                    metadata: None,
-                },
-                delivery: Delivery::Steer,
-            },
-        )
-        .await
-        .map_err(|error| inbox_error(&error, &message_id))?;
+    let skill = services
+        .skills
+        .list()
+        .into_iter()
+        .find(|skill| skill.id.as_str() == skill_id)
+        .ok_or_else(|| ApiError::skill_not_found(skill_id))?;
+    // RV-B3: activation publishes the durable `session.skill.activated`
+    // event carrying the skill's markdown body (ref
+    // `session/session.ts:227-238`); the projector appends the skill
+    // message and the runner maps it into the LLM context
+    // (`to-llm-message.ts:286-287` — the body IS the user content).
+    let activated = oc_schema::session_event::SkillActivated {
+        session_id: parse_session_id(&session_id),
+        id: skill.id.clone(),
+        name: skill.name.clone(),
+        text: skill.content.clone(),
+    };
+    publish_session_event(
+        &services,
+        "session.skill.activated",
+        serde_json::to_value(&activated).unwrap_or_else(|_| json!({})),
+    )
+    .await?;
     if body["resume"].as_bool().unwrap_or(true) {
         // CD-1: the skill path is the one resume-join in the family, but
         // v2 FORKS it off the request fiber (ref `session.ts:241-244`:
