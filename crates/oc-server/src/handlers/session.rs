@@ -1508,8 +1508,10 @@ async fn background(
     // (`jobs.backgroundAll`, ref `session.ts:442-459`) and, when any
     // moved, inject the synthetic notification so the model learns to
     // move on without waiting on the backgrounded work.
-    let backgrounded =
-        services.jobs.background_all(oc_core::jobs::BackgroundAllInput { session_id: &session_id, type_: None }).await;
+    let backgrounded = services
+        .jobs
+        .background_all(oc_core::jobs::BackgroundAllInput { session_id: &session_id, type_: None })
+        .await;
     if backgrounded.is_empty() {
         return Ok(no_content());
     }
@@ -1530,14 +1532,15 @@ async fn background(
     );
     let text = lines.join("\n");
     let notification_id = state.ids.new_id("msg");
-    let payload = oc_schema::session_inbox::SyntheticPayload {
-        text,
-        description: None,
-        metadata: None,
-    };
+    let payload =
+        oc_schema::session_inbox::SyntheticPayload { text, description: None, metadata: None };
     services
         .inbox
-        .admit(&notification_id, &session_id, Item::Synthetic { payload, delivery: Delivery::Steer })
+        .admit(
+            &notification_id,
+            &session_id,
+            Item::Synthetic { payload, delivery: Delivery::Steer },
+        )
         .await
         .map_err(|error| match error {
             // ref dies on a synthetic id conflict here (a defect, 500).
@@ -1894,8 +1897,13 @@ async fn import(
     let location_services = services(&state, &location).await?;
     let info = body["info"].clone();
     let session_id = info["id"].as_str().unwrap_or_default().to_owned();
+    if session_id.is_empty() {
+        return Err(ApiError::invalid_request("missing session id".to_owned()));
+    }
 
-    // Duplicate → 409 "Session already exists: <id>" (§3).
+    // REF transfer.ts:64-154 — the import replays the exported messages
+    // into the local store (session.created + settled message rows + counter
+    // backfill). Duplicate → 409 "Session already exists: <id>" (§3).
     if location_services
         .store
         .get(&session_id)
@@ -1915,60 +1923,43 @@ async fn import(
     );
     let target_services = super::session::services(&state, &target).await?;
 
-    let row = state
-        .engine
-        .create_session(
-            &target,
-            CreateInput {
-                id: Some(parse_session_id(&session_id)),
-                parent_id: info["parentID"].as_str().map(parse_session_id),
-                location: Some(oc_schema::location::Ref {
-                    directory: oc_schema::common::AbsolutePath(
-                        target.as_path().to_string_lossy().into_owned(),
-                    ),
-                    workspace_id: None,
-                }),
-                title: info["title"].as_str().map(String::from),
-                agent: info["agent"].as_str().map(String::from),
-                model: opt_value(&info, "model")
-                    .and_then(|value| serde_json::from_value(value).ok()),
-                metadata: info["metadata"].as_object().map(|map| map.clone().into_iter().collect()),
-                permissions: opt_value(&info, "permissions")
-                    .and_then(|value| serde_json::from_value(value).ok()),
-                project: Some(ResolvedProject {
-                    id: target_services.project.id.clone(),
-                    directory: target_services.project.canonical.to_string_lossy().into_owned(),
-                }),
-                version: state.version.clone(),
+    let row = oc_core::session::transfer::import(
+        &target_services.store,
+        &target_services.graph.bus,
+        &target_services.graph.db,
+        oc_core::session::transfer::ImportInput {
+            data: body.clone(),
+            location: oc_schema::location::Ref {
+                directory: oc_schema::common::AbsolutePath(
+                    target.as_path().to_string_lossy().into_owned(),
+                ),
+                workspace_id: None,
             },
-        )
-        .await
-        .map_err(|error| {
+            project: oc_core::session::store::ResolvedProject {
+                id: target_services.project.id.clone(),
+                directory: target_services.project.canonical.to_string_lossy().into_owned(),
+            },
+            version: state.version.clone(),
+        },
+    )
+    .await
+    .map_err(|error| match &error {
+        oc_core::session::transfer::ImportError::Conflict(id) => {
+            ApiError::conflict(format!("Session already exists: {id}"))
+        }
+        oc_core::session::transfer::ImportError::InvalidData(message) => {
+            ApiError::invalid_request(format!("invalid session transfer payload: {message}"))
+        }
+        oc_core::session::transfer::ImportError::ParentNotFound(_) => {
             crate::errors::debug_cause("session:unknown_ref", &error);
             ApiError::unknown_ref()
-        })?;
-
-    // Replay the imported messages in order through the message projector.
-    if let Some(messages) = body["messages"].as_array() {
-        for message in messages {
-            if let Some(definition) = registry::by_type_latest("session.inbox.delivered") {
-                let _ = target_services
-                    .graph
-                    .bus
-                    .publish(
-                        definition,
-                        json!({ "sessionID": session_id, "inboxID": message["id"], "item": {
-                            "type": "synthetic",
-                            "payload": { "text": "", "description": "imported" },
-                            "delivery": "queue",
-                        }}),
-                        PublishOptions::default(),
-                    )
-                    .await;
-            }
-            let _ = message;
         }
-    }
+        _ => {
+            crate::errors::debug_cause("session:import", &error);
+            ApiError::unknown_ref()
+        }
+    })?;
+
     Ok(json_data(session_row_to_info(&row)))
 }
 
@@ -2551,10 +2542,7 @@ fn date_key(time: i64, timezone: &str) -> String {
     let Ok(instant) = jiff::Timestamp::from_millisecond(time) else {
         return "1970-01-01".to_string();
     };
-    instant
-        .to_zoned(zone)
-        .date()
-        .to_string()
+    instant.to_zoned(zone).date().to_string()
 }
 
 /// Consecutive-day streak (stats.ts:393-405).
