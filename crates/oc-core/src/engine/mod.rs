@@ -1069,7 +1069,7 @@ impl Engine {
             skills: Arc::clone(&skills),
             subagents: Arc::clone(&subagents),
             catalog: Arc::clone(&self.catalog),
-            config_documents,
+            config_documents: config_documents.clone(),
             home: self.home.clone(),
             projects: Arc::clone(&self.projects) as Arc<dyn crate::project::ProjectStore>,
             ids: Arc::clone(&self.ids),
@@ -1211,11 +1211,26 @@ impl Engine {
             Arc::clone(&resolver),
             deps,
         ));
+        // RV-G3 (image.ts `Image.node` in instance.ts): the location's
+        // `media.image` config resolves the model-input image limits;
+        // unset keys keep the REF defaults (autoResize 2000x2000 /
+        // 5 MiB base64). Both the request seam (prompt.ts
+        // `normalizeImageAttachment`) and the runner's tool settlement
+        // (tool.ts `normalizeImages`) consume them.
+        let image_limits = crate::image::Limits::from_config(
+            &config_documents
+                .iter()
+                .rev()
+                .find_map(|document| document.info.media.clone())
+                .and_then(|media| media.image)
+                .unwrap_or_default(),
+        );
         let requests = Arc::new(SessionModelRequest::new(
             Arc::clone(&graph.hooks),
             Arc::clone(&graph.tools),
             self.app.clone(),
-        ));
+        )
+        .with_image_limits(image_limits));
         let compaction = Arc::new(SessionCompaction::new(
             (*self.db).clone(),
             (*self.bus).clone(),
@@ -1273,6 +1288,7 @@ impl Engine {
             )
             .with_snapshot(Arc::clone(&snapshot))
             .with_tool_output(Arc::clone(&self.tool_output))
+            .with_image_limits(image_limits)
             // `SessionPrompt.prepare` (RUNTIME-P01/P02): the
             // `session.prompt` hook + `@skill` resolution fire on the
             // consume boundary — the location's hook registry (guest
