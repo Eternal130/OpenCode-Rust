@@ -1094,10 +1094,13 @@ impl McpRegistry {
     // reads
     // -----------------------------------------------------------------
 
-    /// `Mcp.servers` — sorted by name (`BTreeMap` iteration order).
+    /// `Mcp.servers` — `localeCompare` name order (index.ts:632-637;
+    /// RD-18: the collation, not the `BTreeMap` byte order, decides —
+    /// non-ASCII names interleave like the ref).
     #[must_use]
     pub fn servers(&self) -> Vec<ServerInfo> {
-        self.inner
+        let mut servers: Vec<ServerInfo> = self
+            .inner
             .entries
             .lock()
             .iter()
@@ -1106,7 +1109,9 @@ impl McpRegistry {
                 status: entry.status.lock().clone(),
                 integration_id: entry.integration_id.clone(),
             })
-            .collect()
+            .collect();
+        servers.sort_by(|a, b| oc_util::localecmp::locale_cmp(&a.name, &b.name));
+        servers
     }
 
     /// `Mcp.tools` — reads report what is connected now, sorted by
@@ -1120,7 +1125,10 @@ impl McpRegistry {
             .values()
             .flat_map(|entry| entry.tools.lock().clone().unwrap_or_default())
             .collect();
-        tools.sort_by(|a, b| a.server.cmp(&b.server).then_with(|| a.name.cmp(&b.name)));
+        tools.sort_by(|a, b| {
+            oc_util::localecmp::locale_cmp(&a.server, &b.server)
+                .then_with(|| oc_util::localecmp::locale_cmp(&a.name, &b.name))
+        });
         tools
     }
 
@@ -1217,7 +1225,7 @@ impl McpRegistry {
                 out.push(ServerInstructions { server, instructions });
             }
         }
-        out.sort_by(|a, b| a.server.cmp(&b.server));
+        out.sort_by(|a, b| oc_util::localecmp::locale_cmp(&a.server, &b.server));
         out
     }
 
@@ -1231,7 +1239,10 @@ impl McpRegistry {
             .values()
             .flat_map(|entry| entry.prompts.lock().clone().unwrap_or_default())
             .collect();
-        prompts.sort_by(|a, b| a.server.cmp(&b.server).then_with(|| a.name.cmp(&b.name)));
+        prompts.sort_by(|a, b| {
+            oc_util::localecmp::locale_cmp(&a.server, &b.server)
+                .then_with(|| oc_util::localecmp::locale_cmp(&a.name, &b.name))
+        });
         prompts
     }
 
@@ -1432,13 +1443,14 @@ pub fn merge_catalogs(catalogs: &[ResourceCatalog]) -> ResourceCatalog {
     let mut templates: Vec<ResourceTemplate> =
         catalogs.iter().flat_map(|catalog| catalog.templates.clone()).collect();
     resources.sort_by(|a, b| {
-        a.server.cmp(&b.server).then_with(|| a.name.cmp(&b.name)).then_with(|| a.uri.cmp(&b.uri))
+        oc_util::localecmp::locale_cmp(&a.server, &b.server)
+            .then_with(|| oc_util::localecmp::locale_cmp(&a.name, &b.name))
+            .then_with(|| oc_util::localecmp::locale_cmp(&a.uri, &b.uri))
     });
     templates.sort_by(|a, b| {
-        a.server
-            .cmp(&b.server)
-            .then_with(|| a.name.cmp(&b.name))
-            .then_with(|| a.uri_template.cmp(&b.uri_template))
+        oc_util::localecmp::locale_cmp(&a.server, &b.server)
+            .then_with(|| oc_util::localecmp::locale_cmp(&a.name, &b.name))
+            .then_with(|| oc_util::localecmp::locale_cmp(&a.uri_template, &b.uri_template))
     });
     ResourceCatalog { resources, templates }
 }

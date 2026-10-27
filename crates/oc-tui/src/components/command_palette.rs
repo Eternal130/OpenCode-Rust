@@ -1204,7 +1204,10 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
         }
         DialogKind::Mcp => {
             let mut servers = store.mcp_servers();
-            servers.sort_by(|left, right| left.name.cmp(&right.name));
+            // RD-18 — the ref dialog renders `mcp.servers()`' order
+            // (core localeCompare); the belt-and-braces re-sort uses
+            // the same collation.
+            servers.sort_by(|left, right| oc_util::localecmp::locale_cmp(&left.name, &right.name));
             let options = servers
                 .iter()
                 .map(|server| {
@@ -1611,11 +1614,11 @@ pub fn model_list_props(store: &Store, title: &'static str) -> SelectProps {
 }
 
 /// `localeCompare` approximation — the repo convention (ICU primary
-/// is case-insensitive; tertiary puts lowercase first on ties):
-/// case-folded compare, then lowercase-first tie-break. Identical to
-/// ICU for the ASCII corpus of provider/model names.
+/// is case-insensitive; tertiary puts lowercase first on ties).
+/// RD-18: the shared `oc-util` collation carries the non-ASCII
+/// folds; ASCII behavior is unchanged.
 fn locale_cmp(a: &str, b: &str) -> std::cmp::Ordering {
-    a.to_lowercase().cmp(&b.to_lowercase()).then_with(|| b.cmp(a))
+    oc_util::localecmp::locale_cmp(a, b)
 }
 
 /// TUI-9: `getRelativeTime` (dialog-stash.ts:11-24) — "just now" /
