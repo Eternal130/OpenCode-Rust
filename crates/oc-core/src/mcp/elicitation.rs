@@ -25,9 +25,9 @@
 //! `ClientHandler::create_elicitation` (`elicitation/create`,
 //! [`rmcp::model::ElicitRequestParams`]) to the registry handler and maps
 //! the answer back to [`rmcp::model::ElicitResult`]. Modern-era url
-//! elicitations (`tools/call` answering `InputRequiredResult`) are a
-//! different mechanism this port leaves single-round (see the client
-//! module docs).
+//! elicitations (`tools/call` answering `input_required`, SEP-2322's
+//! retry-with-input round) are driven by the client module's MRTR loop
+//! through [`ClientElicitation::answer`] / [`result_wire`].
 //!
 //! The form service itself is a seam ([`FormService`]): the real forms
 //! service implements it; tests use a scripted fake.
@@ -82,6 +82,35 @@ impl ElicitationAction {
             ElicitationAction::Cancel => "cancel",
         }
     }
+}
+
+/// The MRTR retry's `inputResponses` value for one elicitation answer —
+/// the wire form of `ElicitResult` (`{action}` / `{action, content}`),
+/// sharing the content-key semantics of
+/// [`ClientElicitation::to_result`]: url-mode accept answers
+/// `{action:"accept"}` with no content key, form-mode accept carries
+/// `content` (even when empty), cancel never does.
+#[must_use]
+pub fn result_wire(result: &ElicitationResult, url_mode: bool) -> serde_json::Value {
+    let mut wire = serde_json::Map::new();
+    wire.insert("action".to_string(), serde_json::Value::String(result.action.as_str().to_string()));
+    if !url_mode && result.action == ElicitationAction::Accept {
+        let mut content = serde_json::Map::new();
+        for (key, value) in &result.content {
+            let value = match value {
+                ElicitationValue::String(text) => serde_json::Value::String(text.clone()),
+                ElicitationValue::Number(number) => serde_json::Number::from_f64(*number)
+                    .map_or(serde_json::Value::Null, serde_json::Value::Number),
+                ElicitationValue::Bool(flag) => serde_json::Value::Bool(*flag),
+                ElicitationValue::Strings(items) => serde_json::Value::Array(
+                    items.iter().cloned().map(serde_json::Value::String).collect(),
+                ),
+            };
+            content.insert(key.clone(), value);
+        }
+        wire.insert("content".to_string(), serde_json::Value::Object(content));
+    }
+    serde_json::Value::Object(wire)
 }
 
 /// One elicited field value (scalar or string list).
@@ -647,6 +676,23 @@ impl ClientElicitation {
             },
         };
         Self::to_result(result, url_mode)
+    }
+
+    /// Modern-era MRTR round (SEP-2322): answer one elicitation request
+    /// embedded in a `tools/call` `input_required` result. The wire
+    /// parity of [`Self::handle`] minus the request envelope — the
+    /// retry carries the answer as an opaque `inputResponses` value,
+    /// not as a JSON-RPC response, so there is no cancellation token
+    /// to race (the surrounding `tools/call` owns the execution
+    /// deadline).
+    pub async fn answer(
+        &self,
+        server: &str,
+        params: ElicitationParams,
+    ) -> ElicitationResult {
+        // Inherent method by path — the `Arc` trait impl would otherwise
+        // shadow it during method resolution.
+        RegistryElicitation::create(&self.inner, ElicitationCreate { server, params }).await
     }
 
     /// Legacy `notifications/elicitation/complete` (client.ts:211-213):
