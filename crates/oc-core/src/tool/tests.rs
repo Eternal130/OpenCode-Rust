@@ -284,6 +284,13 @@ async fn tool_edit_replaces_relative_exact_text_once() {
     assert_eq!(files[0]["deletions"], 1);
     let patch = files[0]["patch"].as_str().expect("patch");
     assert!(patch.contains("-before\n+after"), "patch: {patch}");
+    // RD-14: structured output carries `files` (ref edit.ts Output =
+    // {files, replacements}) — same diff data as metadata.
+    let output = settled.output.expect("structured output");
+    assert_eq!(output["replacements"], serde_json::json!(1));
+    let output_files = output["files"].as_array().expect("output.files array");
+    assert_eq!(output_files.len(), files.len());
+    assert_eq!(output_files[0], files[0], "output.files mirrors metadata diff shape");
     assert_eq!(std::fs::read_to_string(harness.dir.join("hello.txt")).unwrap(), "after\nrest\n");
 }
 
