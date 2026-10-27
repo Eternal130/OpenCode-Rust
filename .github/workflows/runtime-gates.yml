@@ -14,6 +14,7 @@
 #   build-archive ──> soak-30m           (opt-in, default OFF)
 #   build-archive ──> release-smoke      (opt-in, default OFF)
 #   build-archive ──> browser-e2e        (G-14 six-scenario browser smoke, default ON)
+#   build-archive ──> p10-real-history    (OC_P10 real PRE-2.0.24 corpus gate; secret-fed or SKIPPED-GAP)
 #   syntax-query-drift                   (RB-06 vendored .scm vs upstream pins; standalone, schedule/dispatch only)
 #   platform-build                       (macos-latest, compiles from source)
 #   gates-summary                        (EXECUTED vs SKIPPED ledger; skip ≠ pass)
@@ -48,6 +49,12 @@
 #                             (x-goog-api-key) live leg.
 #   OC_CI_COPILOT_TOKEN       GitHub Copilot token (ghu_…) with /models
 #                             visibility — the AI-COPILOT-C6 /models sync.
+#   OC_CI_V2_HIST_DB_B64      OPTIONAL: a base64(+gzip) of a REAL
+#                             pre-2.0.24 user opencode.db (with -wal/-shm
+#                             already checkpointed). Drives the
+#                             p10-real-history job (the one OC_P10 gate a
+#                             runner cannot stage: real user history is
+#                             not fetchable). Absent => honest SKIPPED-GAP.
 # live=true requires ALL FOUR (an explicit live run without them is a
 # configuration error: this workflow fails loudly instead of going green).
 # live=false (default): cassette battery + LIVE-SKIP (secrets missing) /
@@ -143,6 +150,10 @@ on:
         default: false
       run_browser_e2e:
         description: "G-14 browser smoke (6 scenarios, headless Chrome; real SPA dist when stageable, else minimal-contract)"
+        type: boolean
+        default: true
+      run_p10_real_history:
+        description: "OC_P10 real PRE-2.0.24 db corpus import gate (runs only when OC_CI_V2_HIST_DB_B64 is provided; else an honest SKIPPED-GAP row)"
         type: boolean
         default: true
 
@@ -1264,7 +1275,7 @@ jobs:
           {
             echo "### browser-e2e (probe)"
             echo "- browser: \`${{ steps.chrome.outputs.browser }}\`"
-            echo "- spa: \`${{ steps.stage.outputs.spa_staged }}\`"
+            echo "- spa: recorded after the stage step below (see the G-14 summary)"
           } >> "$GITHUB_STEP_SUMMARY"
 
       # Real-SPA staging (release.yml web-assets shape, same pinned ref).
@@ -1333,13 +1344,183 @@ jobs:
             echo "- assets: \`${{ steps.stage.outputs.spa_staged }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
+  # OC_P10 real-history corpus gate — the ONE p10 gate the weekly cron
+  # could not honestly claim before this job. Coverage split (registry:
+  # pre-2.0.24 upgrade path):
+  #   - synthetic stepwise k=1..48 + 4 canary boundaries: ALREADY resident
+  #     in the default CI suite (78976eb, crates/oc-core
+  #     upgrade_battery.rs — not #[ignore]d, runs in ci.yml);
+  #   - p10_* exit battery + a REAL v2.0.24-WRITTEN db (48/48 migrations,
+  #     zero catch-up): ALREADY weekly via p10-battery + v2-db-fixture;
+  #   - a REAL PRE-2.0.24 historical user db (catch-up migrations, real
+  #     session history): ONLY coverable with a maintainer-supplied
+  #     corpus — user history is not fetchable or fabricatable, and a
+  #     synthetic db relabeled "real" is forbidden (honest naming).
+  # Contract: set the secret OC_CI_V2_HIST_DB_B64 to base64(-gzip) of a
+  # real pre-2.0.24 opencode.db (checkpoint your -wal first). Present =>
+  # the job validates provenance (migration rows 1..47 — 48/48 is the
+  # v2.0.24-written shape the p10-battery fixture already covers and is
+  # REFUSED here as mislabeled) and runs p10_db_import against the corpus
+  # copy. Absent => the gate degrades to an explicit SKIPPED-GAP verdict
+  # row in gates-summary (skip ≠ pass; the weekly run stays honest about
+  # what remains manual-only).
+  p10-real-history:
+    name: "p10 real-history corpus (OC_P10, pre-2.0.24 db import)"
+    needs: build-archive
+    # Schedule arm: cron coerces inputs to false (header note) — without
+    # it the weekly run silently skips this default-ON gate.
+    if: ${{ inputs.run_p10_real_history != false || github.event_name == 'schedule' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    # secrets are ILLEGAL in if: conditions at any level (header NOTE);
+    # presence is materialized as an env boolean here, value read ONLY in
+    # the decode step's env below.
+    env:
+      HAS_V2_HIST_DB: ${{ secrets.OC_CI_V2_HIST_DB_B64 != '' }}
+    outputs:
+      corpus: ${{ steps.corpus.outputs.corpus || steps.gap.outputs.corpus }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: runtime-gates-target
+          path: target
+
+      - name: Restore the exec bit on artifact-shipped binaries
+        run: |
+          set -euo pipefail
+          BINS="$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[].targets[] | select(.kind | index("bin")) | .name')"
+          if [ -z "$BINS" ]; then
+            echo "::error::cargo metadata enumerated zero workspace bins — refusing to no-op the exec-bit restore"
+            exit 1
+          fi
+          for bin in $BINS; do
+            if [ -f "target/debug/$bin" ]; then
+              chmod +x "target/debug/$bin"
+              echo "exec bit restored: target/debug/$bin"
+            fi
+          done
+
+      - name: Prepare scratch dir
+        run: mkdir -p /tmp/opencode
+
+      # Decode + PROVENANCE-VALIDATE the supplied corpus. The gate exists
+      # for the PRE-2.0.24 upgrade path, so the db must carry a partially
+      # applied migration journal (1..47 rows): 48/48 is the v2.0.24-
+      # written shape already covered weekly by v2-db-fixture and is
+      # refused here (mislabeled input is a configuration error — fail
+      # loudly, never relabel and never pass). 0 rows = not an opencode
+      # library db at all.
+      - name: Decode + validate the real-history corpus (when supplied)
+        id: corpus
+        if: env.HAS_V2_HIST_DB == 'true'
+        env:
+          # Secret VALUE read only here, never in an if:/expression.
+          OC_CI_V2_HIST_DB_B64: ${{ secrets.OC_CI_V2_HIST_DB_B64 }}
+        run: |
+          set -euo pipefail
+          echo "$OC_CI_V2_HIST_DB_B64" | base64 -d | gunzip > hist-opencode.db 2>/dev/null \
+            || echo "$OC_CI_V2_HIST_DB_B64" | base64 -d > hist-opencode.db
+          test -s hist-opencode.db
+          python3 - <<'PY'
+          import sqlite3, sys
+          conn = sqlite3.connect("hist-opencode.db")
+          try:
+              tables = [r[0] for r in conn.execute(
+                  "SELECT name FROM sqlite_master WHERE type = 'table'")]
+              if "migration" not in tables:
+                  print("::error::OC_CI_V2_HIST_DB_B64: migration table missing — not an opencode library db; refusing to run the real-history gate on it")
+                  sys.exit(1)
+              n = conn.execute("SELECT count(*) FROM migration").fetchone()[0]
+              if n < 1:
+                  print("::error::OC_CI_V2_HIST_DB_B64: migration table holds 0 rows — not an opencode library db")
+                  sys.exit(1)
+              if n >= 48:
+                  print(f"::error::OC_CI_V2_HIST_DB_B64: migration journal holds {n}/48 rows — this is the v2.0.24-written shape (already covered weekly by v2-db-fixture/p10-battery), NOT the pre-2.0.24 catch-up corpus this gate exists for. Supply a genuinely older db or unset the secret.")
+                  sys.exit(1)
+              sessions = conn.execute("SELECT count(*) FROM session_v2").fetchone()[0]
+              print(f"real-history corpus OK: {n}/48 migrations applied (catch-up expected), {sessions} session_v2 rows")
+          finally:
+              conn.close()
+          PY
+          echo "corpus=real" >> "$GITHUB_OUTPUT"
+
+      - name: Record the corpus GAP (no secret supplied)
+        id: gap
+        if: env.HAS_V2_HIST_DB != 'true'
+        run: |
+          echo "::warning::SKIPPED-GAP (real-history corpus not supplied): OC_CI_V2_HIST_DB_B64 is unset — the OC_P10 pre-2.0.24 real-corpus import gate cannot run on a runner (user history is not fetchable or fabricatable). Synthetic stepwise k=1..48 runs in ci.yml and the v2.0.24-written fixture runs in p10-battery; THIS row stays SKIPPED-GAP. Skip ≠ pass."
+          echo "corpus=gap" >> "$GITHUB_OUTPUT"
+
+      # Reference side staging (p10_db_import re-opens the imported copy
+      # with the pinned v2.0.24 reference after the Rust boot).
+      - name: Fetch the pinned v2.0.24 reference source
+        if: steps.corpus.outputs.corpus == 'real'
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 5 --retry-delay 5 --retry-all-errors \
+            -o ref.tar.gz "https://github.com/anomalyco/opencode/archive/${PARITY_REF}.tar.gz"
+          mkdir -p /tmp/opencode/ref
+          tar -xzf ref.tar.gz -C /tmp/opencode/ref --strip-components=1
+          test -d /tmp/opencode/ref/packages/cli
+
+      - uses: oven-sh/setup-bun@v2
+        if: steps.corpus.outputs.corpus == 'real'
+        with:
+          bun-version: ${{ env.BUN_PIN }}
+
+      - name: Expose bun to the harness (PARITY_BUN + PATH)
+        if: steps.corpus.outputs.corpus == 'real'
+        run: |
+          set -euo pipefail
+          BUN="$(command -v bun)"
+          test -n "$BUN"
+          echo "$(dirname "$BUN")" >> "$GITHUB_PATH"
+          echo "PARITY_BUN=$BUN" >> "$GITHUB_ENV"
+          "$BUN" --version
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.148
+
+      # The real-corpus leg: p10_db_import COPIES the corpus into a lane
+      # sandbox (the supplied file is only ever read), boots the Rust
+      # port, checks the migration journal gains ONLY catch-up rows, then
+      # re-opens with the reference. OC_GATE_STRICT=1: with the fixture
+      # wired this must pass — a red here is a real upgrade-path finding.
+      # PARITY_V2_DB_FIXTURE_PROMPT stays unset: the write-path prompt
+      # continue depends on the corpus's session model/providers and is
+      # not assumable of an arbitrary historical db.
+      - name: p10_db_import against the real-history corpus
+        if: steps.corpus.outputs.corpus == 'real'
+        run: cargo nextest run -p parity --locked --run-ignored only -E 'test(p10_db_import)'
+        env:
+          OC_P10: "1"
+          OC_GATE_STRICT: "1"
+          PARITY_V2_DB_FIXTURE: ${{ github.workspace }}/hist-opencode.db
+          PARITY_REF_SOURCE: /tmp/opencode/ref
+
+      - name: Summary
+        if: ${{ !cancelled() }}
+        run: |
+          {
+            echo "### p10-real-history (OC_P10 pre-2.0.24 corpus)"
+            if [ "${{ steps.corpus.outputs.corpus }}" = "real" ]; then
+              echo "- EXECUTED: p10_db_import (OC_P10=1 OC_GATE_STRICT=1) against a REAL pre-2.0.24 corpus supplied via OC_CI_V2_HIST_DB_B64 (provenance-validated: partial migration journal) — sandbox copy, journal catch-up check, reference re-open"
+            else
+              echo "- SKIPPED-GAP: no real pre-2.0.24 corpus supplied (OC_CI_V2_HIST_DB_B64 unset) — real user history cannot be fetched or fabricated on a runner. Covered elsewhere: synthetic stepwise k=1..48 (ci.yml, resident) + v2.0.24-written fixture (p10-battery, weekly). This row is the honest remainder; skip ≠ pass."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
   # Central EXECUTED vs SKIPPED ledger (loop §1: skip ≠ pass). Fails the
   # workflow when a gate the user asked for (toggle ON / default ON) did
   # not end green — including downstream-`skipped` after an upstream
   # failure, which plain `needs` would hide.
   gates-summary:
     name: gates summary (EXECUTED vs SKIPPED)
-    needs: [build-archive, v2-db-fixture, p10-battery, runtime-gates, ai-needs-runtime, tui-needs-runtime, soak-30m, release-smoke, platform-build, browser-e2e]
+    needs: [build-archive, v2-db-fixture, p10-battery, runtime-gates, ai-needs-runtime, tui-needs-runtime, soak-30m, release-smoke, platform-build, browser-e2e, p10-real-history]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -1383,6 +1564,14 @@ jobs:
           else
             rows="$rows browser-e2e:${{ needs.browser-e2e.result }}:${{ (inputs.run_browser_e2e != false || github.event_name == 'schedule') && '1' || '0' }}"
           fi
+          # p10-real-history verdict OVERRIDE: no corpus supplied = the
+          # gate degraded to its honest SKIPPED-GAP form (skip ≠ pass);
+          # with a corpus the job result stands as-is (strict run).
+          if [ "${{ needs.p10-real-history.outputs.corpus }}" = "gap" ]; then
+            rows="$rows p10-real-history:skipped-gap:${{ (inputs.run_p10_real_history != false || github.event_name == 'schedule') && '1' || '0' }}"
+          else
+            rows="$rows p10-real-history:${{ needs.p10-real-history.result }}:${{ (inputs.run_p10_real_history != false || github.event_name == 'schedule') && '1' || '0' }}"
+          fi
           for row in $rows; do
             gate="${row%%:*}"; rest="${row#*:}"; res="${rest%%:*}"; req="${rest##*:}"
             verdict="UNKNOWN"
@@ -1398,7 +1587,7 @@ jobs:
           done
           {
             echo ""
-            echo "Standing gaps (never count as passes): TUI-28/30/33/TD06/TD15/TD28 (no tests), AI live legs only when dispatched live=true WITHOUT the OC_CI_* secrets (config error, red), literal 30m single-session soak (cycle-loop approximation), v2-db-fixture GAP when present (db_import fails strict; census GAP-skips)."
+            echo "Standing gaps (never count as passes): TUI-28/30/33/TD06/TD15/TD28 (no tests), AI live legs only when dispatched live=true WITHOUT the OC_CI_* secrets (config error, red), literal 30m single-session soak (cycle-loop approximation), v2-db-fixture GAP when present (db_import fails strict; census GAP-skips), p10 real PRE-2.0.24 historical corpus (manual-only until a maintainer supplies OC_CI_V2_HIST_DB_B64; synthetic stepwise + v2.0.24-written fixture are covered)."
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "$fail" -ne 0 ]; then
             echo "::error::at least one requested gate did not run green — see the table above"
