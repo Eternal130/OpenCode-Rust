@@ -516,22 +516,33 @@ fn palette_options_slice(commands: &[&PaletteCommand], store: &Store) -> Vec<Sel
 /// active, then every registry command — `list()` in
 /// `command-palette.tsx` — then the plugin-registered commands (the
 /// oc-plugin-host registration snapshot's palette entries, group
-/// "Plugin"). The palette mounts flat with a `0.7` threshold.
+/// "Plugin"). RD-17 (`command-palette.tsx:49-60`): the FILTERED list
+/// swaps the suggested section for the per-setting rows — ref
+/// `list()` returns `[...options(), ...settingOptions]` under a
+/// filter and `suggested + options()` without one. The palette mounts
+/// flat with a `0.7` threshold.
 #[must_use]
 pub fn palette_props(store: &Store) -> SelectProps {
+    palette_props_filtered(store, "")
+}
+
+#[must_use]
+pub fn palette_props_filtered(store: &Store, filter: &str) -> SelectProps {
     let mut options = Vec::new();
-    let suggested: Vec<SelectOption> = PALETTE_COMMANDS
-        .iter()
-        .filter(|entry| entry.suggested(store))
-        .map(|entry| {
-            SelectOption::titled(entry.title, format!("suggested:{}", entry.command))
-                .categorized("Suggested")
-                .with_search(entry.command)
-                .with_footer(entry.footer())
-                .with_search_footer(entry.search_footer())
-        })
-        .collect();
-    options.extend(suggested);
+    if filter.is_empty() {
+        let suggested: Vec<SelectOption> = PALETTE_COMMANDS
+            .iter()
+            .filter(|entry| entry.suggested(store))
+            .map(|entry| {
+                SelectOption::titled(entry.title, format!("suggested:{}", entry.command))
+                    .categorized("Suggested")
+                    .with_search(entry.command)
+                    .with_footer(entry.footer())
+                    .with_search_footer(entry.search_footer())
+            })
+            .collect();
+        options.extend(suggested);
+    }
     // v2's conditional palette entries (`palette: undefined` — e.g.
     // variant.list without variants, app.tsx:923): a command whose
     // surface cannot open is REMOVED from the list, never advertised
@@ -563,7 +574,35 @@ pub fn palette_props(store: &Store) -> SelectProps {
     // command-palette.tsx:53-59).
     let mut seen = std::collections::HashSet::new();
     options.retain(|option| seen.insert(option.value.clone()));
+    // RD-17 — the per-setting rows ride the FILTERED list only
+    // (`if (ref?.filter) return [...options(), ...settingOptions]`):
+    // dedup above never sees them (their `setting:` values are
+    // unique), so they append after.
+    if !filter.is_empty() {
+        options.extend(palette_setting_options());
+    }
     SelectProps::new("Commands", options).flat(true).threshold(0.7)
+}
+
+/// RD-17 — the per-setting search rows (`settingOptions`,
+/// command-palette.tsx:36-45): one row per `settings[]` entry with the
+/// setting's title + category, the keywords as search text, a
+/// `Settings · {category}` search footer, and the `setting:{id}`
+/// value whose activation replaces the palette with `DialogConfig`
+/// opened at that setting.
+#[must_use]
+pub fn palette_setting_options() -> Vec<SelectOption> {
+    crate::components::dialog_config::settings_table()
+        .into_iter()
+        .map(|setting| {
+            let mut option = SelectOption::titled(setting.title, format!("setting:{}", setting.id()))
+                .categorized(setting.category);
+            if !setting.keywords.is_empty() {
+                option = option.with_search(setting.keywords);
+            }
+            option.with_search_footer(format!("Settings · {}", setting.category))
+        })
+        .collect()
 }
 
 /// The select props for one select-style dialog kind (the dialog
@@ -1165,7 +1204,10 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
         }
         DialogKind::Mcp => {
             let mut servers = store.mcp_servers();
-            servers.sort_by(|left, right| left.name.cmp(&right.name));
+            // RD-18 — the ref dialog renders `mcp.servers()`' order
+            // (core localeCompare); the belt-and-braces re-sort uses
+            // the same collation.
+            servers.sort_by(|left, right| oc_util::localecmp::locale_cmp(&left.name, &right.name));
             let options = servers
                 .iter()
                 .map(|server| {
@@ -1488,6 +1530,10 @@ pub fn select_props_for_entry(entry: &crate::store::DialogEntry, store: &Store) 
         DialogKind::ThemeList => {
             theme_list_props_with_current(store, entry.theme_initial.as_deref())
         }
+        // RD-17 — the palette's list tracks the live filter text
+        // (ref `list()` reads `ref?.filter`): suggested rows without
+        // one, the setting rows under one.
+        DialogKind::CommandPalette => palette_props_filtered(store, &entry.select.filter),
         kind => select_props_for(kind, store),
     }
 }
@@ -1568,11 +1614,11 @@ pub fn model_list_props(store: &Store, title: &'static str) -> SelectProps {
 }
 
 /// `localeCompare` approximation — the repo convention (ICU primary
-/// is case-insensitive; tertiary puts lowercase first on ties):
-/// case-folded compare, then lowercase-first tie-break. Identical to
-/// ICU for the ASCII corpus of provider/model names.
+/// is case-insensitive; tertiary puts lowercase first on ties).
+/// RD-18: the shared `oc-util` collation carries the non-ASCII
+/// folds; ASCII behavior is unchanged.
 fn locale_cmp(a: &str, b: &str) -> std::cmp::Ordering {
-    a.to_lowercase().cmp(&b.to_lowercase()).then_with(|| b.cmp(a))
+    oc_util::localecmp::locale_cmp(a, b)
 }
 
 /// TUI-9: `getRelativeTime` (dialog-stash.ts:11-24) — "just now" /
@@ -3403,6 +3449,65 @@ mod tests {
         assert_eq!(command_of_value(&first.value), "model.list");
         assert!(props.flat);
         assert_eq!(props.filter_threshold, Some(0.7));
+    }
+
+    /// RD-17 — searching the palette yields the per-setting rows
+    /// (`settingOptions`, command-palette.tsx:36-45): "theme" surfaces
+    /// the theme row with its keywords search text, the setting's
+    /// category, and the `Settings · {category}` search footer.
+    #[test]
+    fn palette_search_yields_setting_rows() {
+        let store = Store::new(Runtime::new());
+        let props = palette_props_filtered(&store, "theme");
+        let theme = props
+            .options
+            .iter()
+            .find(|option| option.value == "setting:theme.name")
+            .expect("the theme setting row");
+        assert_eq!(theme.title, "Theme");
+        assert_eq!(theme.category.as_deref(), Some("Appearance"));
+        assert_eq!(theme.search_footer.as_deref(), Some("Settings · Appearance"));
+        let search = theme.search_text.as_deref().unwrap_or_default();
+        assert!(search.contains("color scheme"), "keywords ride the search text");
+        // The fuzzy rank admits the row into the visible set.
+        let indices = crate::components::dialog_select::filter_indices(&props, "theme");
+        assert!(indices
+            .iter()
+            .any(|&index| props.options[index].value == "setting:theme.name"));
+    }
+
+    /// RD-17 — ref `list()` (command-palette.tsx:49-60): the
+    /// unfiltered palette shows the suggested section and NO setting
+    /// rows; a filter swaps them — no suggested mirrors, settings in.
+    #[test]
+    fn palette_filter_swaps_suggested_for_setting_rows() {
+        let store = Store::new(Runtime::new());
+        let unfiltered = palette_props(&store);
+        assert!(unfiltered.options.iter().any(|option| option.value.starts_with("suggested:")));
+        assert!(!unfiltered.options.iter().any(|option| option.value.starts_with("setting:")));
+        let filtered = palette_props_filtered(&store, "the");
+        assert!(!filtered.options.iter().any(|option| option.value.starts_with("suggested:")));
+        assert!(filtered.options.iter().any(|option| option.value.starts_with("setting:")));
+    }
+
+    /// RD-17 — activating a setting row replaces the palette with
+    /// DialogConfig AT that setting (`onSelect` → `dialog.replace(
+    /// () => <DialogConfig current={settingID(setting)} />`;
+    /// `findIndex` clamped to 0 seeds the row selection).
+    #[test]
+    fn activating_a_setting_row_opens_config_at_that_setting() {
+        use crate::components::dialog::execute_submission;
+        let store = Store::new(Runtime::new());
+        store.replace_dialog(DialogKind::CommandPalette, crate::store::DialogSize::Medium);
+        let mut dispatcher = StoreDispatcher;
+        execute_submission(&store, &mut dispatcher, "setting:session.sidebar");
+        let entry = store.top_dialog().unwrap();
+        assert!(matches!(entry.kind, DialogKind::Settings), "palette replaced by config");
+        let expected = crate::components::dialog_config::settings_table()
+            .into_iter()
+            .position(|setting| setting.id() == "session.sidebar")
+            .expect("the sidebar row exists");
+        assert_eq!(entry.select.selected, expected, "selection rests on the setting row");
     }
 
     #[test]
