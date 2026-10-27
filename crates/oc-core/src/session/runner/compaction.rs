@@ -240,10 +240,20 @@ impl SessionCompaction {
     pub async fn compact(&self, trigger: Trigger) -> CompactStatus {
         let session_id = trigger.context.session.id.clone();
         let outcome = self.compact_inner(trigger).await;
-        // REF compaction.ts: only the compacted session's spent accounting
-        // is cleared — other sessions' billing must survive.
-        self.spent.lock().remove(&session_id);
+        // REF compaction.ts `Effect.ensuring`: only the compacted
+        // session's spent accounting is cleared — other sessions'
+        // billing must survive. The drain's cancellation arms call
+        // [`Self::clear_spent`] directly when this future is dropped.
+        self.clear_spent(&session_id);
         outcome
+    }
+
+    /// `Effect.ensuring` tail (compaction.ts): drop the session's spent
+    /// accounting. Runs on normal completion AND on interrupt — the
+    /// drain's `tokio::select!` cancellation arms invoke this directly
+    /// because dropping the compact future skips `compact`'s own tail.
+    pub fn clear_spent(&self, session_id: &str) {
+        self.spent.lock().remove(session_id);
     }
 
     async fn compact_inner(&self, trigger: Trigger) -> CompactStatus {
