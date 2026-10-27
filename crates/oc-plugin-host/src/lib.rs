@@ -46,7 +46,11 @@
 //!    request id. Concurrent callers never serialize behind each
 //!    other's pending replies.
 //! 3. **Every bridge call is timeout-bounded** — 2 s registration /
-//!    5 s dispatch by default ([`PluginHostConfig`]). A timed-out call
+//!    5 s query-class dispatch by default ([`PluginHostConfig`]);
+//!    body-mutating hook points (`tool.transform`, `tool.execute.*`,
+//!    `chat.*`, `session.*`) ride the 120 s
+//!    [`MUTATING_DISPATCH_TIMEOUT`] aligned with oc-server's
+//!    `EXECUTE_TIMEOUT` ([`is_mutating_hook`]). A timed-out call
 //!    is removed from the pending map; a late reply is discarded by
 //!    id. A hung plugin costs exactly its own dispatch (logged,
 //!    counted via [`PluginHost::dispatch_counters`]), never the host.
@@ -98,7 +102,7 @@ pub mod ui;
 pub use context::{
     install::{default_root as install_root, install, InstallOptions, Installed},
     Bridge, HostState, NoSessionEngine, NoToolEngine, PermissionPort, SessionPort, ToolPort,
-    SESSION_METHODS,
+    is_mutating_hook, MUTATING_DISPATCH_TIMEOUT, SESSION_METHODS,
 };
 pub use registrations::{
     PluginAgent, PluginCommand, PluginDialog, PluginGroupRule, PluginHomeAction, PluginHook,
