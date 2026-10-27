@@ -2,7 +2,7 @@
 //! (Phase 10), acp/mini placeholders, models, reload, pair, and the
 //! debug subcommands.
 
-use crate::cli::{DebugCommands, ServerParams};
+use crate::cli::{CompletionShell, DebugCommands, ServerParams};
 use crate::handlers::connect;
 use crate::services::server_connection::{self, Mismatch};
 use crate::util;
@@ -502,6 +502,21 @@ fn validate_pair_url(raw: &str) -> Result<String, &'static str> {
     Ok(url.as_str().trim_end_matches('/').to_owned())
 }
 
+/// RC-11 (rust-extra) — `opencode completion <shell>`: write the
+/// clap_complete 4 script for the whole command tree to `out`.
+pub fn write_completion<W: std::io::Write>(shell: CompletionShell, out: &mut W) {
+    use clap::CommandFactory;
+    let mut cmd = crate::cli::Cli::command();
+    let name = cmd.get_name().to_owned();
+    clap_complete::generate(shell.clap_complete_shell(), &mut cmd, name, out);
+}
+
+/// The command handler — the script goes to stdout.
+pub fn completion(shell: CompletionShell) -> i32 {
+    write_completion(shell, &mut std::io::stdout());
+    0
+}
+
 /// RB-10c — the uninstall "Installation method:" line's method name
 /// (ref uninstall.ts:31 `updater.method()` + :46
 /// `method ?? "unknown"`). Detection lives in
@@ -513,6 +528,30 @@ fn installation_method(exe: &std::path::Path) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- RC-11: completion generation --------------------------------
+
+    /// RC-11 (rust-extra): every shell yields a non-empty script that
+    /// names the binary (bash/zsh) or its subcommands (fish/elvish).
+    #[test]
+    fn completion_generates_nonempty_scripts_for_every_shell() {
+        for shell in [
+            CompletionShell::Bash,
+            CompletionShell::Zsh,
+            CompletionShell::Fish,
+            CompletionShell::Elvish,
+        ] {
+            let mut buffer = Vec::new();
+            write_completion(shell, &mut buffer);
+            let script = String::from_utf8(buffer)
+                .unwrap_or_else(|e| panic!("{shell:?}: not utf8: {e}"));
+            assert!(!script.trim().is_empty(), "{shell:?}: script is non-empty");
+            assert!(
+                script.to_lowercase().contains("opencode"),
+                "{shell:?}: script references the binary"
+            );
+        }
+    }
 
     // --- F15: the pair QR block ---------------------------------------
 
