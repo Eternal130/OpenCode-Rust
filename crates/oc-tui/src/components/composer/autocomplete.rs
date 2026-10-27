@@ -57,6 +57,10 @@ pub struct Destructive {
 pub struct AutocompleteOption {
     pub display: String,
     pub description: Option<String>,
+    /// RD-05 — the `@` rows' structured identity (`kind: "agent"` /
+    /// `"skill"`): the accept path records the structured part
+    /// instead of leaving plain text.
+    pub reference: Option<Reference>,
     /// TUI-28 — the directory rows (`isDirectory`, autocomplete.tsx's
     /// complete/expand flow).
     pub is_directory: bool,
@@ -71,6 +75,32 @@ impl AutocompleteOption {
     pub fn command(display: impl Into<String>, description: Option<String>) -> Self {
         Self { display: display.into(), description, ..Self::default() }
     }
+}
+
+/// RD-05 — one `@`-mention row's structured identity
+/// (autocomplete.tsx:404-438): `kind: "agent"`/`"skill"` options carry
+/// the attachment value the accept path records (`PromptInput`'s
+/// `agents`/`skills`), not just display text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Reference {
+    /// `@<agent.id>` — the attachment value is `{name: agent.id}`.
+    Agent { name: String },
+    /// `@<skill.id>` — the attachment value is `{id: skill.id}`.
+    Skill { id: String },
+}
+
+/// One `@`-mention agent source row (autocomplete.tsx:404-418: the
+/// non-hidden, non-`primary` agents).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReferenceAgent {
+    pub id: String,
+}
+
+/// One `@`-mention skill source row (autocomplete.tsx:424-437).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReferenceSkill {
+    pub id: String,
+    pub description: Option<String>,
 }
 
 /// The registry the filter ranks (`keymapCommands()` — every command
@@ -591,6 +621,7 @@ pub fn directory_recents_options(
             AutocompleteOption {
                 display: value.clone(),
                 description: Some("recent".to_owned()),
+                reference: None,
                 is_directory: true,
                 absolute: Some(item.directory.clone()),
                 destructive: Some(Destructive {
@@ -656,6 +687,49 @@ pub fn filter_commands(registry: &SlashRegistry, query: &str) -> Vec<Autocomplet
             ..Default::default()
         })
         .collect()
+}
+
+/// RD-05 — the `@` reference rows (autocomplete.tsx:404-438 + the
+/// `options` memo :535-592): skills first, then agents (the ref
+/// ordering `[...skillOptions, ...referenceAliases, ...agents]` — no
+/// live file/reference source in the port yet). An empty query lists
+/// everything; otherwise a case-insensitive containment filter over
+/// `@<id>` with a prefix boost, capped at the ref's popup limit (10).
+#[must_use]
+pub fn filter_references(
+    agents: &[ReferenceAgent],
+    skills: &[ReferenceSkill],
+    query: &str,
+) -> Vec<AutocompleteOption> {
+    let skill_rows = skills.iter().map(|skill| AutocompleteOption {
+        display: format!("@{}", skill.id),
+        description: skill.description.clone(),
+        reference: Some(Reference::Skill { id: skill.id.clone() }),
+        ..AutocompleteOption::default()
+    });
+    let agent_rows = agents.iter().map(|agent| AutocompleteOption {
+        display: format!("@{}", agent.id),
+        description: None,
+        reference: Some(Reference::Agent { name: agent.id.clone() }),
+        ..AutocompleteOption::default()
+    });
+    let all: Vec<AutocompleteOption> = skill_rows.chain(agent_rows).collect();
+    if query.trim().is_empty() {
+        return all;
+    }
+    let needle = query.to_lowercase();
+    let prefix = format!("@{needle}");
+    let mut ranked: Vec<(u8, AutocompleteOption)> = all
+        .into_iter()
+        .filter_map(|option| {
+            let target = option.display.to_lowercase();
+            let at = target.find(&needle)?;
+            let boost = u8::from(target.starts_with(&prefix) && at == 0);
+            Some((boost, option))
+        })
+        .collect();
+    ranked.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.display.cmp(&b.1.display)));
+    ranked.into_iter().map(|(_, option)| option).take(10).collect()
 }
 
 /// The popup geometry (`height()`): `min(10, count, max(1, anchor_y))`.
@@ -767,5 +841,26 @@ mod tests {
         assert_eq!(popup_height(20, 2), 2);
         assert_eq!(popup_height(2, 30), 2);
         assert_eq!(popup_height(20, 30), 10);
+    }
+
+    /// RD-05 — the `@` rows: skills before agents (the ref ordering),
+    /// an empty query lists everything, and a query filters `@<id>`
+    /// case-insensitively with the structured identity attached.
+    #[test]
+    fn filter_references_orders_and_filters() {
+        let agents =
+            vec![ReferenceAgent { id: "build".into() }, ReferenceAgent { id: "plan".into() }];
+        let skills = vec![ReferenceSkill { id: "refactor".into(), description: Some("d".into()) }];
+        let all = filter_references(&agents, &skills, "");
+        assert_eq!(
+            all.iter().map(|option| option.display.clone()).collect::<Vec<_>>(),
+            vec!["@refactor", "@build", "@plan"]
+        );
+        assert_eq!(all[0].reference, Some(Reference::Skill { id: "refactor".into() }));
+        assert_eq!(all[1].reference, Some(Reference::Agent { name: "build".into() }));
+
+        let filtered = filter_references(&agents, &skills, "BU");
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].display, "@build");
     }
 }
