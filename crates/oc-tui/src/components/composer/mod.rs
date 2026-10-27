@@ -827,8 +827,30 @@ impl Composer {
         self.apply_edit(EditCommand::Redo)
     }
 
+    /// RD-16 — `clearPrompt`'s retention gate (prompt/index.tsx:100,
+    /// 1513-1526): a draft is worth keeping when the trimmed text
+    /// reaches `DRAFT_RETENTION_MIN_CHARS` OR any pasted/file/agent
+    /// part rides along — such drafts are appended to the input
+    /// history before the clear so ↑ recalls them. (v2 checks
+    /// `pasted`/`files`/`agents` only; skills don't gate.)
+    pub const DRAFT_RETENTION_MIN_CHARS: usize = 20;
+
+    #[must_use]
+    fn clear_retains_draft(draft: &PromptDraft) -> bool {
+        draft.text.trim().chars().count() >= Self::DRAFT_RETENTION_MIN_CHARS
+            || !draft.pasted.is_empty()
+            || !draft.files.is_empty()
+            || !draft.agents.is_empty()
+    }
+
     /// `prompt.clear` (ctrl+c in the composer) — clears the draft.
+    /// RD-16 (prompt/index.tsx:1513-1526 `clearPrompt`): before the
+    /// reset, a retaining draft (long text or any pasted/file/agent
+    /// part) is appended to the input history so ↑ recalls it.
     pub fn clear(&mut self) {
+        if Self::clear_retains_draft(&self.draft) {
+            self.history = self.history.clone().push(&self.draft.text);
+        }
         self.draft = PromptDraft::default();
         self.edit.set_text("");
         self.files_undo.clear();
@@ -1766,6 +1788,57 @@ mod tests {
         let mut state = composer("x");
         state.handle_key(&ComposerKey::CtrlC);
         assert!(state.draft.is_empty());
+    }
+
+    /// RD-16 — a LONG draft cleared by ctrl+c is appended to the
+    /// input history (prompt/index.tsx:1513-1526): ↑ recalls it.
+    #[test]
+    fn clear_saves_long_draft_to_history() {
+        let mut state = composer("this draft is definitely long enough to keep");
+        state.handle_key(&ComposerKey::CtrlC);
+        assert!(state.draft.is_empty());
+        // ↑ recalls the cleared draft (caret 0 → history_previous).
+        let outcome = state.handle_key(&ComposerKey::Up);
+        assert!(matches!(outcome, KeyOutcome::Edited));
+        assert_eq!(state.draft.text, "this draft is definitely long enough to keep");
+    }
+
+    /// RD-16 — a short bare draft clears WITHOUT a history append.
+    #[test]
+    fn clear_drops_short_bare_draft() {
+        let mut state = composer("short one");
+        state.handle_key(&ComposerKey::CtrlC);
+        assert!(state.draft.is_empty());
+        state.handle_key(&ComposerKey::Up);
+        assert!(state.draft.is_empty(), "nothing to recall");
+    }
+
+    /// RD-16 — the part arms of the gate: a short text WITH a
+    /// pasted/file/agent part still lands in the history (the ref's
+    /// `pasted.length > 0 || files.length > 0 || agents.length > 0`).
+    #[test]
+    fn clear_saves_short_draft_carrying_parts() {
+        let mut state = composer("see attached");
+        state.draft.pasted.push(crate::components::composer::PastedPart {
+            start: 4,
+            end: 4,
+            text: "the pasted body".into(),
+        });
+        state.handle_key(&ComposerKey::CtrlC);
+        state.handle_key(&ComposerKey::Up);
+        assert_eq!(state.draft.text, "see attached", "pasted part retains the draft");
+
+        let mut state = composer("x");
+        state.draft.files.push(FileMention {
+            name: "a.png".into(),
+            start: 1,
+            end: 1,
+            payload: None,
+            mention: None,
+        });
+        state.handle_key(&ComposerKey::CtrlC);
+        state.handle_key(&ComposerKey::Up);
+        assert_eq!(state.draft.text, "x", "file part retains the draft");
     }
 
     #[test]
