@@ -38,23 +38,20 @@ use crate::database::error::{DbError, Result};
 use crate::database::schema::{decode_json, encode_json, SessionInboxRow, SessionMessageRow};
 use crate::database::{Database, Tx};
 
-/// Marker tunneling `SessionInbox.LifecycleConflict` defects through the
-/// bus's transaction error channel (`DbError::Pragma`), mirroring how the
-/// bus itself tunnels `InvalidDurableEventError`.
-pub const CONFLICT_MARKER: &str = "\u{0}session-inbox-conflict\u{1}";
-
-/// Dies inside a projector transaction with a lifecycle conflict.
+/// Dies inside a projector transaction with a lifecycle conflict
+/// (tunneled out as [`DbError::SessionConflict`], mirroring how the bus
+/// itself tunnels `InvalidDurableEventError`).
 pub(crate) fn tx_conflict(id: &str) -> DbError {
-    DbError::Pragma(format!("{CONFLICT_MARKER}{id}"))
+    DbError::SessionConflict(crate::database::error::SessionConflict::InboxConflict(id.to_string()))
 }
 
 /// Extracts the conflicting id when an error (or bus-wrapped error) carries
 /// a lifecycle-conflict defect.
 pub fn conflict_id(err: &BusError) -> Option<String> {
     match err {
-        BusError::Db(DbError::Pragma(message)) => {
-            message.strip_prefix(CONFLICT_MARKER).map(str::to_string)
-        }
+        BusError::Db(DbError::SessionConflict(
+            crate::database::error::SessionConflict::InboxConflict(id),
+        )) => Some(id.clone()),
         _ => None,
     }
 }

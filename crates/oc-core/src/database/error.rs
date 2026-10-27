@@ -1,5 +1,29 @@
 //! Error type for the database service (`src/database/`).
 
+/// A recoverable session-level conflict raised inside a projector (or
+/// publish-commit) transaction and tunneled out through [`DbError`].
+///
+/// These used to travel as sentinel-prefixed strings inside
+/// [`DbError::Pragma`]; the typed variants make every raise/catch site
+/// pattern-matched (a missed strip or prefix collision can no longer turn
+/// a recoverable conflict into an undiagnosable database error).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum SessionConflict {
+    /// `session.created`/`session.forked` lost the projection race — the
+    /// caller re-reads the existing session identity.
+    #[error("session already projected: {0}")]
+    AlreadyProjected(String),
+    /// `SessionInbox.LifecycleConflict` — admission/delivery/cancel lost a
+    /// race; the conflicting inbox id is carried.
+    #[error("session inbox lifecycle conflict: {0}")]
+    InboxConflict(String),
+    /// An optimistic-concurrency title rename lost its expected-sequence
+    /// race (`\u{0}title-changed\u{1}` sentinel); the caller retries with a
+    /// fresh expectation.
+    #[error("session title changed concurrently: {0}")]
+    TitleChanged(String),
+}
+
 /// Errors surfaced by the database layer.
 #[derive(Debug, thiserror::Error)]
 pub enum DbError {
@@ -46,6 +70,11 @@ pub enum DbError {
     /// A boot-time pragma did not take effect.
     #[error("pragma failed: {0}")]
     Pragma(String),
+
+    /// A recoverable session conflict tunneled out of a projector
+    /// transaction (typed; see [`SessionConflict`]).
+    #[error(transparent)]
+    SessionConflict(#[from] SessionConflict),
 }
 
 /// Result alias for the database layer.

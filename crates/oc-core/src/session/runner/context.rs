@@ -34,8 +34,8 @@ use crate::session::runner::{ModelError, ModelResolver, ResolvedModel};
 // ---------------------------------------------------------------------------
 
 /// `Instructions.Unavailable` — the read failed temporarily; the stored
-/// value stands.
-pub const UNAVAILABLE_SENTINEL: &str = "\u{0}instructions.unavailable";
+/// value stands. Typed as [`ReadOutcome::Unavailable`] (the former
+/// `"\0instructions.unavailable"` string sentinel).
 
 /// `Instructions.removed` — an observed absence (hash-bucket sentinel).
 pub const REMOVED_SENTINEL: &str = "removed";
