@@ -55,7 +55,8 @@ fn overflow_event_response() -> TestResponse {
 }
 
 #[tokio::test]
-async fn runner_step_completed_text_has_no_continuation() {    let llm = TestLlm::new();
+async fn runner_step_completed_text_has_no_continuation() {
+    let llm = TestLlm::new();
     llm.always(text("plain answer"));
     let harness = harness_with(llm).await;
     harness.create_session().await;
