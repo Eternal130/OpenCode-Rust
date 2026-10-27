@@ -457,6 +457,11 @@ pub struct SessionModelRequest {
     hooks: Arc<HookRegistry>,
     tools: Arc<ToolRegistryState>,
     app: AppMetadata,
+    /// RV-G3 (prompt.ts `normalizeImageAttachment`): limits applied to
+    /// inline image parts of request messages. `None` = disabled (tests
+    /// that pin raw media payloads); the engine always attaches the
+    /// config-resolved limits.
+    image_limits: Option<crate::image::Limits>,
 }
 
 fn tool_definition(registration: &crate::location::ToolRegistration) -> ToolDefinition {
@@ -471,7 +476,74 @@ fn tool_definition(registration: &crate::location::ToolRegistration) -> ToolDefi
 
 impl SessionModelRequest {
     pub fn new(hooks: Arc<HookRegistry>, tools: Arc<ToolRegistryState>, app: AppMetadata) -> Self {
-        Self { hooks, tools, app }
+        Self { hooks, tools, app, image_limits: None }
+    }
+
+    /// Attaches the model-input image limits (RV-G3): inline image parts
+    /// of request messages are limit-checked / downscaled.
+    #[must_use]
+    pub fn with_image_limits(mut self, limits: crate::image::Limits) -> Self {
+        self.image_limits = Some(limits);
+        self
+    }
+
+    /// prompt.ts `normalizeImageAttachment` — the prompt-side seam. REF
+    /// runs this while the attachment is being read (before storage),
+    /// erroring the prompt on decode/size failures; the Rust port
+    /// resolves attachments server-side before this seam, so the limits
+    /// are enforced at request build time instead, degrading an
+    /// over-limit part to the REF omission note rather than failing an
+    /// already-stored session.
+    fn normalize_messages(&self, messages: Vec<Message>) -> Vec<Message> {
+        let Some(limits) = self.image_limits else {
+            return messages;
+        };
+        messages
+            .into_iter()
+            .map(|mut message| {
+                message.content = message
+                    .content
+                    .into_iter()
+                    .filter_map(|part| match part {
+                        ContentPart::Media { media, filename, cache, metadata, provider_metadata } => {
+                            if media.kind() != oc_ai::schema::media::Kind::Image {
+                                return Some(ContentPart::Media { media, filename, cache, metadata, provider_metadata });
+                            }
+                            let Some(inline) = media.inline() else {
+                                return Some(ContentPart::Media { media, filename, cache, metadata, provider_metadata });
+                            };
+                            let resource = filename.clone().unwrap_or_else(|| inline.mime.clone());
+                            match crate::image::normalize(&resource, &inline.base64, &limits) {
+                                Ok(normalized) => {
+                                    let mime = if normalized.mime.is_empty() {
+                                        inline.mime.clone()
+                                    } else {
+                                        normalized.mime
+                                    };
+                                    Some(ContentPart::Media {
+                                        media: oc_ai::schema::media::Asset {
+                                            source: oc_ai::schema::media::Source::Base64 {
+                                                data: normalized.base64,
+                                                media_type: mime.clone(),
+                                            },
+                                            media_type: mime,
+                                            ..media
+                                        },
+                                        filename,
+                                        cache,
+                                        metadata,
+                                        provider_metadata,
+                                    })
+                                }
+                                Err(error) => Some(ContentPart::text(format!("[1 image omitted: {error}]"))),
+                            }
+                        }
+                        other => Some(other),
+                    })
+                    .collect();
+                message
+            })
+            .collect()
     }
 
     /// `prepare` (model-request.ts:219-401).
@@ -480,6 +552,9 @@ impl SessionModelRequest {
         kind: RequestKind,
         input: RequestInput,
     ) -> Result<Prepared, ModelError> {
+        // RV-G3: prompt-side image limits run before the session hooks see
+        // the messages (prompt.ts normalizes attachments at read time).
+        let input = RequestInput { messages: self.normalize_messages(input.messages), ..input };
         let session = &input.session;
         let model = &input.model;
         let tools = input.tools.unwrap_or_default();

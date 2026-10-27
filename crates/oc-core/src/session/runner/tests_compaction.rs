@@ -691,5 +691,72 @@ async fn runner_compaction_clears_spent_only_for_the_compacted_session() {
     assert!(spent.contains(&"ses_other".to_string()), "the other session's spent survives");
 }
 
+/// F3 (B9): REF clears per-session spent through `Effect.ensuring`, which
+/// ALSO runs on interrupt. The drain's cancellation arm drops the in-flight
+/// compact future (skipping `compact`'s own tail), so it must clear the
+/// session's spent itself — per-session, never global.
+#[tokio::test]
+async fn runner_compaction_interrupt_clears_spent_for_the_interrupted_session() {
+    let llm = TestLlm::new();
+    llm.always(oc_ai::testing::text("## Objective\n- never reached"));
+    // Hold the summary stream after registration: the compaction is
+    // genuinely in flight when the shutdown arm fires.
+    let gate = llm.gate();
+    let llm = llm.clone();
+    let harness = harness_with(llm.clone()).await;
+    let session = harness.create_session().await;
+    // Seed spent: the interrupted session plus an unrelated one.
+    harness.compaction.test_spend(session.id.as_str()).await;
+    harness.compaction.test_spend("ses_other").await;
+
+    let loaded = crate::session::runner::context::Loaded {
+        session: session.clone(),
+        agent_id: oc_schema::id::AgentId::parse("build"),
+        agent: crate::session::runner::tests_harness::agent_info("build", None),
+        model: crate::session::runner::tests_harness::test_resolved_model(),
+        initial: String::new(),
+        messages: vec![oc_schema::session_message::Info::User {
+            id: oc_schema::id::MessageId::parse("msg_interrupt_1").unwrap(),
+            metadata: None,
+            time: oc_schema::session_message::Time { created: 1 },
+            text: "Summarize me".into(),
+            files: None,
+            agents: None,
+            skills: None,
+        }],
+        tools: Vec::new(),
+    };
+
+    // The drain's manual-compaction cancellation arm (drain.rs RD-11):
+    // shutdown races the compact future; on interrupt the future is
+    // dropped and the arm clears the session's spent itself.
+    let interrupted = tokio::select! {
+        outcome = harness.compaction.compact(crate::session::runner::compaction::Trigger {
+            reason: crate::session::runner::compaction::Reason::Manual,
+            context: loaded,
+            input_id: None,
+        }) => {
+            panic!("the gated compaction must not settle before the interrupt: {outcome:?}")
+        }
+        () = async {
+            llm.wait(1).await;
+            gate.started().await;
+        } => {
+            // Mirrors drain.rs: the compact future is dropped here — its
+            // own spent-clearing tail never runs.
+            harness.compaction.clear_spent(session.id.as_str());
+            true
+        }
+    };
+    assert!(interrupted, "the shutdown arm won the select");
+
+    let spent = harness.compaction.test_spent();
+    assert!(
+        !spent.contains(&session.id.clone()),
+        "the interrupted session's spent is cleared (Effect.ensuring semantics)"
+    );
+    assert!(spent.contains(&"ses_other".to_string()), "the other session's spent survives");
+}
+
 #[allow(dead_code)]
 fn unused(_: &Harness) {}

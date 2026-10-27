@@ -39,6 +39,9 @@ sha1 = "0.10"
 # directly adds no new packages and brings the audited RSA signer.
 ring = "0.17"
 base64 = "0.22"
+# RV-G3: model-input image limits/autoResize — decode + Lanczos3 resize +
+# PNG/JPEG re-encode (REF photon WASM equivalent). Only new dep for the lane.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
 # rmcp 3.7's built-in StreamableHttpClient impl is compiled against reqwest
