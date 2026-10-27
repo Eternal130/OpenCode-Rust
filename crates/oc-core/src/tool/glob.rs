@@ -153,6 +153,19 @@ async fn run(
         .map(|relative| root.join(relative).to_string_lossy().replace('\\', "/"))
         .collect();
     let _ = Path::new(&root);
+    // ref glob.ts Output = Entry[] — location-relative paths
+    // (path.relative(location.directory, path.resolve(root, entry.path))).
+    let location = services.directory.clone();
+    let output: Value = entries
+        .iter()
+        .map(|relative| {
+            serde_json::json!({
+                "path": super::grep::relative_to(&location, &root.join(relative)),
+                "type": "file",
+            })
+        })
+        .collect::<Vec<_>>()
+        .into();
     Ok(ToolOutcome {
         content: vec![Content::Text { text: to_model_content(&display, truncated) }],
         metadata: Some(
@@ -162,7 +175,7 @@ async fn run(
             }))
             .unwrap_or_default(),
         ),
-        output: None,
+        output: Some(output),
     })
 }
 
