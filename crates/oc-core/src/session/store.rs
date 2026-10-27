@@ -763,3 +763,59 @@ pub fn ids_of(rows: &[SessionRow]) -> Vec<String> {
 pub fn dedup(values: &[String]) -> HashSet<String> {
     values.iter().cloned().collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// RC-09 parity pin: `slug_create` intentionally diverges from the
+    /// reference TS wordlist (local 30×30 adjective-noun list vs upstream's
+    /// larger one). IDs are opaque, so the observable contract — not the
+    /// exact words — is what parity requires. This test pins that contract:
+    /// exactly two lowercase words joined by a single hyphen, drawn from the
+    /// local wordlist style (both sides seen across draws), bounded lengths,
+    /// no invalid characters, and enough spread to avoid collisions in
+    /// practice.
+    #[test]
+    fn slug_contract_pins_local_wordlist_style() {
+        let draws: HashSet<String> = (0..5_000).map(|_| slug_create()).collect();
+        assert!(!draws.is_empty());
+
+        let mut adjectives: HashSet<String> = HashSet::new();
+        let mut nouns: HashSet<String> = HashSet::new();
+        for slug in &draws {
+            // Format: exactly two words, single hyphen joiner.
+            let parts: Vec<&str> = slug.split('-').collect();
+            assert_eq!(parts.len(), 2, "slug must be two words joined by '-': {slug}");
+            let (adjective, noun) = (parts[0], parts[1]);
+
+            // Charset: lowercase ASCII letters only, no digits/unicode/spaces.
+            for (word, is_adjective) in [(adjective, true), (noun, false)] {
+                assert!(
+                    word.chars().all(|c| c.is_ascii_lowercase()),
+                    "invalid charset in slug: {slug}"
+                );
+                // Length bounds from the local wordlist style (adjectives
+                // 4..=6 letters, nouns 3..=9 — "junction" is the longest).
+                if is_adjective {
+                    assert!((4..=6).contains(&word.len()), "adjective out of bounds in {slug}");
+                } else {
+                    assert!((3..=9).contains(&word.len()), "noun out of bounds in {slug}");
+                }
+            }
+            adjectives.insert(adjective.to_string());
+            nouns.insert(noun.to_string());
+        }
+
+        // Local wordlist style: both sides of the list are exercised (the
+        // local lists have 30 entries each — see well above the mean of a
+        // degenerate source).
+        assert!(adjectives.len() >= 25, "adjective side under-sampled: {}", adjectives.len());
+        assert!(nouns.len() >= 25, "noun side under-sampled: {}", nouns.len());
+
+        // Uniqueness spread: with 30×30 = 900 combinations, 5_000 draws must
+        // produce a large distinct set (birthday-bound, ~866 expected) — a
+        // degenerate or constant source would fail this.
+        assert!(draws.len() >= 800, "uniqueness spread too small: {}", draws.len());
+    }
+}
