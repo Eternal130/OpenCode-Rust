@@ -1152,6 +1152,120 @@ async fn tool_grep_invalid_regex_message_shape() {
 }
 
 // ---------------------------------------------------------------------------
+// Structured Output (RV-P8) — REF-exact shapes for codemode consumers
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn tool_grep_structured_output_matches_ref_match_shape() {
+    let harness = harness().await;
+    let fixture = concat!(
+        "{\"type\":\"match\",\"data\":{\"path\":{\"text\":\"./src/a.ts\"},\"lines\":{\"text\":\"needle\\n\"},\"line_number\":3,\"absolute_offset\":42,\"submatches\":[{\"match\":{\"text\":\"needle\"},\"start\":1,\"end\":7}]}}\n",
+        "{\"type\":\"match\",\"data\":{\"path\":{\"text\":\"./src/b.rs\"},\"lines\":{\"text\":\"also needle here\\n\"},\"line_number\":8,\"absolute_offset\":90,\"submatches\":[{\"match\":{\"text\":\"needle\"},\"start\":5,\"end\":11}]}}\n"
+    );
+    let log = install_rg_shim(fixture);
+    let settled = call(&harness.tools, "grep", serde_json::json!({ "pattern": "needle" }))
+        .await
+        .expect("grep");
+    drop(log);
+    // ref grep.ts Output = FileSystem.Match[] with location-relative entry
+    // paths, line/offset/text and the submatch triples.
+    assert_eq!(
+        settled.output.expect("structured output"),
+        serde_json::json!([
+            {
+                "entry": { "path": "src/a.ts", "type": "file" },
+                "line": 3,
+                "offset": 42,
+                "text": "needle\n",
+                "submatches": [{ "text": "needle", "start": 1, "end": 7 }]
+            },
+            {
+                "entry": { "path": "src/b.rs", "type": "file" },
+                "line": 8,
+                "offset": 90,
+                "text": "also needle here\n",
+                "submatches": [{ "text": "needle", "start": 5, "end": 11 }]
+            }
+        ])
+    );
+}
+
+#[tokio::test]
+async fn tool_glob_structured_output_matches_ref_entry_shape() {
+    let harness = harness().await;
+    let log = install_rg_shim("src/visible.ts\n");
+    let settled = call(
+        &harness.tools,
+        "glob",
+        serde_json::json!({ "pattern": "**/*.ts", "hidden": false, "limit": 10 }),
+    )
+    .await
+    .expect("glob");
+    drop(log);
+    // ref glob.ts Output = FileSystem.Entry[] with location-relative paths.
+    assert_eq!(
+        settled.output.expect("structured output"),
+        serde_json::json!([{ "path": "src/visible.ts", "type": "file" }])
+    );
+}
+
+#[tokio::test]
+async fn tool_read_structured_output_matches_ref_union_shapes() {
+    let harness = harness().await;
+    // Whole-file read → FileContent (utf8).
+    std::fs::write(harness.dir.join("README.md"), "hello").expect("write");
+    let settled = call(&harness.tools, "read", serde_json::json!({ "path": "README.md" }))
+        .await
+        .expect("read file");
+    let dir = harness.dir.display();
+    assert_eq!(
+        settled.output.expect("structured output"),
+        serde_json::json!({
+            "type": "file",
+            "uri": format!("file://{dir}/README.md"),
+            "name": "README.md",
+            "content": "hello",
+            "encoding": "utf8",
+            "mime": "text/plain",
+        })
+    );
+
+    // Paged read → TextPage.
+    std::fs::write(harness.dir.join("page.txt"), "one\ntwo\n").expect("write");
+    let settled = call(
+        &harness.tools,
+        "read",
+        serde_json::json!({ "path": "page.txt", "offset": 2, "limit": 1 }),
+    )
+    .await
+    .expect("read page");
+    assert_eq!(
+        settled.output.expect("structured output"),
+        serde_json::json!({
+            "type": "text-page",
+            "content": "two",
+            "mime": "text/plain",
+            "offset": 2,
+            "truncated": false,
+        })
+    );
+
+    // Directory read → ListPage.
+    std::fs::create_dir_all(harness.dir.join("src")).expect("dir");
+    let settled = call(&harness.tools, "read", serde_json::json!({ "path": "src" }))
+        .await
+        .expect("read dir");
+    assert_eq!(
+        settled.output.expect("structured output"),
+        serde_json::json!({
+            "type": "list-page",
+            "entries": [],
+            "truncated": false,
+        })
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Patch (tool-patch.test.ts)
 // ---------------------------------------------------------------------------
 
