@@ -10,7 +10,7 @@ use crate::schema::{
 };
 
 /// Auto placement: last tool, first/last system parts, conversation tail.
-fn auto_policy() -> CachePolicyObject {
+pub(crate) fn auto_policy() -> CachePolicyObject {
     CachePolicyObject {
         tools: Some(true),
         system: Some(true),
@@ -19,7 +19,7 @@ fn auto_policy() -> CachePolicyObject {
     }
 }
 
-fn none_policy() -> CachePolicyObject {
+pub(crate) fn none_policy() -> CachePolicyObject {
     CachePolicyObject::default()
 }
 
@@ -54,29 +54,8 @@ const RESPECTS_INLINE_HINTS: [&str; 15] = [
     "digitalocean",
 ];
 
-/// Gemini uses only the last breakpoint, so a conversation-tail breakpoint
-/// writes a new cache every step and costs more than none. Qwen ignores
-/// breakpoints on tool definitions and caches tools with the system prompt.
-fn qwen_policy() -> CachePolicyObject {
-    CachePolicyObject {
-        tools: None,
-        system: Some(true),
-        messages: Some(CachePolicyMessages::Tail { tail: 1 }),
-        ttl_seconds: None,
-    }
-}
-
-fn gateway_policy(model_id: &str) -> CachePolicyObject {
-    // `~anthropic/claude-sonnet-latest` style IDs are OpenRouter aliases.
-    let id = model_id.trim_start_matches('~');
-    if id.starts_with("anthropic/") {
-        auto_policy()
-    } else if id.starts_with("qwen/") || id.starts_with("alibaba/qwen") {
-        qwen_policy()
-    } else {
-        none_policy()
-    }
-}
+/// Gateway / model-alias policy quirks (Qwen, OpenRouter aliases) live in
+/// [`crate::customization`] — the per-provider seam consulted below.
 
 fn make_hint(ttl_seconds: Option<f64>) -> CacheHint {
     match ttl_seconds {
@@ -324,16 +303,12 @@ pub fn apply_cache_policy(request: &LLMRequest) -> LLMRequest {
     if !RESPECTS_INLINE_HINTS.contains(&route) {
         return request.clone();
     }
-    let policy = if (route == "openrouter" || route == "vercel-ai-gateway-messages")
-        && matches!(request.cache, None | Some(CachePolicy::Auto))
-    {
-        gateway_policy(&request.model.id.0)
-    } else if route == "alibaba-chat" && matches!(request.cache, None | Some(CachePolicy::Auto)) {
-        if request.model.id.0.to_lowercase().starts_with("qwen") {
-            qwen_policy()
-        } else {
-            none_policy()
-        }
+    let policy = if matches!(request.cache, None | Some(CachePolicy::Auto)) {
+        // Per-provider seam (RC-06): registered customizations may override
+        // the default auto resolution (gateway aliases, alibaba-chat Qwen).
+        crate::customization::for_route(route)
+            .resolve_auto_cache_policy(&request.model.id.0)
+            .unwrap_or_else(|| resolve(request.cache.as_ref()))
     } else {
         resolve(request.cache.as_ref())
     };
