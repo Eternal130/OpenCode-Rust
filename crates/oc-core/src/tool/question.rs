@@ -43,6 +43,30 @@ pub fn to_model_content(questions: &[QuestionPrompt], answers: &[QuestionAnswer]
 
 /// `toField` — one question becomes one form field.
 fn to_field(question: &QuestionPrompt, index: usize) -> Field {
+    let options = question
+        .options
+        .iter()
+        .map(|option| oc_schema::form::Option_ {
+            value: option.label.clone(),
+            label: option.label.clone(),
+            description: Some(option.description.clone()),
+        })
+        .collect::<Vec<_>>();
+    if question.multiple == Some(true) {
+        return Field::Multiselect {
+            key: format!("q{index}"),
+            title: Some(question.header.clone()),
+            description: Some(question.question.clone()),
+            required: None,
+            hidden: None,
+            when: None,
+            options,
+            min_items: None,
+            max_items: None,
+            custom: Some(true),
+            default: None,
+        };
+    }
     Field::String {
         key: format!("q{index}"),
         title: Some(question.header.clone()),
@@ -56,17 +80,7 @@ fn to_field(question: &QuestionPrompt, index: usize) -> Field {
         pattern: None,
         placeholder: None,
         default: None,
-        options: Some(
-            question
-                .options
-                .iter()
-                .map(|option| oc_schema::form::Option_ {
-                    value: option.label.clone(),
-                    label: option.label.clone(),
-                    description: Some(option.description.clone()),
-                })
-                .collect(),
-        ),
+        options: Some(options),
         custom: Some(true),
     }
 }
@@ -277,5 +291,21 @@ mod tests {
             }
             _ => panic!("expected string field"),
         }
+    }
+
+    #[test]
+    fn tool_question_multiple_maps_to_multiselect() {
+        let mut question = prompt("Pick", "Pick");
+        question.multiple = Some(true);
+        match to_field(&question, 0) {
+            Field::Multiselect { key, custom, options, .. } => {
+                assert_eq!(key, "q0");
+                assert_eq!(custom, Some(true));
+                assert_eq!(options[0].value, "Yes");
+            }
+            _ => panic!("expected multiselect field"),
+        }
+        question.multiple = Some(false);
+        assert!(matches!(to_field(&question, 0), Field::String { .. }));
     }
 }
