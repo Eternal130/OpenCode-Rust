@@ -83,7 +83,8 @@
 | RA-09 | 错误信封手工注册表无对账 | **已闭环（2026-10-25）** | errors.ts 实为 30 类且 registry 全数已在；3 个 wire-only 内联信封（WorktreeError/VcsInitNotSupported/InstructionEntryTooLarge）收编 registry 单源；Rpc/RpcInternal 补 `data?` 字段；新增 `tools/guards/error_envelope.py` 从钉版 openapi 生成 (op,status,tag) 431+3 条对账（LocationNotFoundError spec 不可见补 3 条），进 guards CI；合并 32de6a0 |
 | RA-10 | worktree 策略枚举对应关系未验证 | **已闭环（2026-10-25）** | 对表结论：ref 无闭合枚举（StrategyID 开放串 + 唯一内建 git + 插件扩展点），git 策略端到端行为等价；修掉两处分歧：未知 stored strategy remove 现按 ref 出 `Worktree strategy unavailable`（原先盲目 git remove）、source 行校验跳过补齐（ref 无条件校验）；插件策略注册点登记为 R1–R5 家族具名豁免；合并 32de6a0 |
 
-> 同次审查核实：PORT_REPORT §3 既有登记项（插件宿主 R1–R5、单向迁移、更新通道换 feed+sha256、throw→skip、leader 和弦、P10-N1=RA-01、LSP 双侧共同缺失 G-09）均属实；141↔141 路由程序化对账全等；CLI 命令面逐 flag 对应。行动项优先级见 PORT_REVIEW_2026-10-25.md §4。
+> 同次审查核实：PORT_REPORT §3 既有登记项（插件宿主 R1–R5、单向迁移、更新通道换 feed+sha256、throw→skip、~~leader 和弦~~、P10-N1=RA-01、LSP 双侧共同缺失 G-09）均属实；141↔141 路由程序化对账全等；CLI 命令面逐 flag 对应。行动项优先级见 PORT_REVIEW_2026-10-25.md §4。
+> **2026-10-27 修正**：其中 "leader 和弦" 一项的属实裁定已被六域复审推翻——app.rs D-02（prompt/index.tsx:193 挂起语义 + 测试）早已落地，属登记过期而非真实分歧，PORT_REPORT §3 已同日销账（见 §1.6 头注）。
 
 ### 1.5 五域全量对比审查新发现（2026-10-25 第二轮，CLI/Server/Core/AI+插件/TUI 五条并行 oracle 泳道；详见 docs/CODE_REVIEW-2026-10-25.md）
 
@@ -104,6 +105,63 @@
 
 > 总判定：五域 0 个 ❌ 级缺失，PORT_REPORT 无虚报完成项；新登记项以 RB-01~RB-03（中）为收口优先级。
 > **2026-10-25 RB 系列 burn-down（deepwork rb-burndown）**：RB-01～RB-10 全部处置完毕——RB-01/02/03/04/05/06/08/09/10 闭环（四 lane：rb-f1/f2/f3/docs，串行合并 2b8c8a7→47f66d5），RB-07 登记为具名分歧（env 启发式图像探测，解锁条件=渲染栈异步输入泵；**2026-10-26 R0 修正：解锁条件陈旧，泵早已存在，DA1 探测已落地，仅 PNG→sixel 转码仍登记**）；oracle gate 结论见 .slim/deepwork/rb-burndown/oracle-gate.md。收尾配套：.cargo/config.toml 仓库级 incremental=false 固化（坑 2.1#6 建议落为制度，bdef59d）。
+
+### 1.6 六域全量对比审查新发现（2026-10-27，core / 工具+LSP+MCP+插件 / AI / Server / TUI / CLI+配置 六条并行 oracle 泳道）
+
+> 本轮对全部功能域逐项对比 ref 与 port 源码。与既有条目去重：PNG→sixel 转码（=RB-07 剩余）、半块字形/子像素 RGBA（PORT_REPORT §3 延后项）、OS 通知 OSC（=RA-05）、插件 hook 分歧家族（=R1–R5）、keymap throw→skip、flock 30s 降级（PORT_REPORT §3）、JWKS 无缓存（镜像 v2 行为，不登记为缺口）、v1 keybind 迁移丢注释（已登记）均不重复收录。同轮销账三处过期登记（见 PORT_REPORT §3 修订）："63 主题"口径（实为 34）、"/help 有 clamp"（D-05 已消除）、"leader 和弦非空草稿不触发"（D-02 已实现挂起语义）。
+
+| ID | 发现 | 域 | 严重度 | 说明 |
+|---|---|---|---|---|
+| RC-01 | rmcp 不支持 modern-era url elicitation | MCP | 中 | rmcp 3.7 的 FormElicitationCapability 不完全建模 v2 形状；`tools/call` 应答携带 url elicitation 的场景会退化为 opaque `unexpected tools/call response` 错误（mcp/elicitation.rs 有边界自述注释）。处置：补真服务器集成验证（现行 mcp/tests.rs 为单侧）；必要时自定义 elicitation 应答通道 |
+| RC-02 | CodeMode 无 inventory `search` | AI+插件 | 中 | ref codemode interpreter 提供 globals 目录搜索；port catalog 用静态渲染 allowlist 替代（tool/codemode.rs 自述）。工具极多时模型侧"提示-工具匹配面"与 ref 不同，可能影响发现行为。处置：评估按 ref 补 search-over-inventory |
+| RC-03 | 插件宿主 per-dispatch 硬超时截断语义 | 插件 | 中（R1–R5 家族新成员） | bun 子进程桥每次调用 2s/5s 硬超时——ref 进程内 hook 无此截断，慢 hook（如大 diff 的 codemod）在 port 会被打断。处置：并入 R1–R5 具名豁免台账，或为 tool.transform 类 hook 提供超时豁免（CodeMode 已豁免，普通插件未） |
+| RC-04 | shell 取消 Drop-guard 为 fire-and-forget | 工具 | 低 | ref 用 Effect.onInterrupt 保证 remove+cancel 完成序；port `ShellCancelGuard::drop` 走 `tokio::spawn`（自述幂等），进程随即退出时取消可能丢失，靠 Recovery::Shell 兜底。处置：补 kill-race 测试 |
+| RC-05 | 冲突/哨兵经 `\0` 字符串穿透事务错误通道 | Core | 低（结构债） | inbox 生命周期冲突（`"\0session-inbox-conflict\1"`）、`ALREADY_PROJECTED`、instruction 哨兵均以字符串 marker 经 `DbError::Pragma` 隧道回传；任何 strip 遗漏/前缀碰撞会把可恢复冲突变成不可诊断 DB 错误。处置：收敛为类型化 error 变体 |
+| RC-06 | oc-ai 无 per-provider 定制挂载点 | AI | 低（结构债） | ref ~60 个 per-provider 实体文件；port 折叠进 `openai_compatible` 包装 + `cache_policy.rs` 特判（如 alibaba Qwen 缓存规则）。行为当前等价，但新增 provider 专属定制（openrouter 选项、groq 参数类）缺少挂载点，易退化为 if/else 蔓延。处置：预留 ProviderCustomization seam |
+| RC-07 | anthropic_messages.rs 单文件 5420 行 | AI | 低（卫生） | vs ref 1673 行，膨胀主因测试内联（jeq 断言等）。处置：`#[cfg(test)]` 模块拆至 tests.rs |
+| RC-08 | routes.gen.rs 头注释与实际不符 | Server | 信息 | 注释自称 axum 0.8 `{param}` 语法，实际 axum 0.7 `:param`（生成器注释，DO-NOT-EDIT 文件——修生成器模板即可）；路由匹配为线性扫描 141 条 O(n)，当前规模可忽略 |
+| RC-09 | session slug 词表与 ref 不同 | Core | 信息（外观） | `slug_create` 自带 30×30 词表 vs ref TS 词表 → 生成 id 风格不同。id 为不透明字符串、无协议影响；跨版本 golden/对拍时需知晓。处置：parity 测试显式钉住 |
+| RC-10 | stats 聚合与 session move 目的地校验上移出 core | Core | 信息（分层） | `session.moved` 投影在 core，但 move.ts 的 FS 目的地三分类错误在 oc-server handler；stats.ts 聚合在 server/cli。非缺失；"core 层独立测试 move/stats"这一 v2 性质在 port 不成立，审查这两功能需看 oc-server |
+| RC-11 | shell 补全双侧缺失 | CLI | 信息 | ref 无 completion 命令，port 亦未引入 clap_complete。上游缺口，补齐成本极低（rust-extra 机会项） |
+| RC-12 | `api --header` 无 100 条上限 / `stats --year` 等无范围校验 | CLI | 信息 | ref 有 Schema 范围校验（year 1970-9999、header ≤100）；port parse 期只拒类型错。RB-10 超集家族同类，行为面无实际风险 |
+
+> 总判定：六域 0 个 ❌ 级新增缺失；RC-01～RC-03（中）为收口优先级，其余为登记性技术债/信息项。PORT_REPORT 三处过期登记已同日销账（"63 主题"、"/help clamp"、leader 和弦）。
+
+### 1.7 七域全量对比审查新发现（2026-10-27 第二轮，core-A 会话 / core-B 基础设施 / Server+Schema / AI providers / TUI 交互 / TUI 渲染 / CLI+插件 七条并行 oracle 泳道，逐文件通读两侧源码）
+
+> 与既有条目去重：RB-05（operationId 改名，本轮 141/141 路由程序化对账再证全等）、RA-07（37/20 语言门控）、RA-08（openapi 快照）、RB-07（PNG→sixel）、RC-05/06/09 等复核属实不重复收录。本轮另核销三处过期登记（见表尾"登记册修正"）。
+
+| ID | 发现 | 域 | 严重度 | 说明 |
+|---|---|---|---|---|
+| RD-01 | **`opencode mcp add <name> -- <command>` 本地 stdio MCP 路径完全不可用** | CLI | **高（功能缺失）** | `oc-cli/src/handlers/mcp.rs:214-217`：有 command 无 url 时必走 `let Some(url) = url else { 报错 return 1 }` 分支，函数体内无任何构造 `{type:"local", command}` 的代码；ref `mcp/add.ts:19-31` 从 `--` 后 argv 读 command 构造 local server。无测试覆盖该腿。修复需同时验证 clap trailing_var_arg（ref 允许 command 携带自身 flags 如 `npx -y`，add.ts:16-19） |
+| RD-02 | **`step.started` 时间戳恒 0，assistant 消息 `time.created` 被持久化为 epoch 0** | Core | **中（数据缺陷）** | `step.rs:191-199` 构造 publisher 硬编码 `0`（StepDeps 无 clock）→ `publisher.rs:324` `data["started"]=0` → `message_updater.rs:422-423,444` 写入 `time.created`。所有 assistant 消息时间=1970-01-01，按 created 排序/展示的消费方全部失真；无测试钉住。ref `step.ts:81` 取 `Clock.currentTimeMillis` |
+| RD-03 | `session.compaction` / `session.title` hook 的 `result` 短路未实现（**FINDINGS §3 登记"已达成"与现实相反**） | Core/插件 | 中 | ref：compaction deliver `if (prepared.event.result) return fromHook(...)`（compaction.ts:396）、title 同（title.ts:73）——插件可直接供给摘要/标题并跳过 LLM。rust：`compaction.rs:503-504` 明确 `TODO(wave-C)`；`model_request.rs:523/548` 构造事件 `result: None` 且 `Prepared` 无回传字段。插件供给被静默忽略、LLM 仍被调用。处置：补实现或销账 FINDINGS §3 |
+| RD-04 | MCP OAuth **CIMD**（client_id_metadata_document_supported 预选 CLIENT_METADATA_URL）未移植 | MCP | 中 | ref `oauth.ts:434-445`：发现文档声明 CIMD 时免 DCR 注册；rust `oauth.rs:26-28` 注释自述恒走 DCR/配置 client。CIMD-only（不开放 DCR）的服务器在 port 上无法完成登录 |
+| RD-05 | TUI `@agent`/`@skill` 补全只插纯文本，`SessionPromptBody.agents/skills` 字段全仓无生成构造点 | TUI | 中（待裁定） | ref `autocomplete.tsx:230-238` 构造结构化 parts、`prompt/index.tsx:1316-1322` POST 携带；rust `app.rs:3996-4002` 只设 text/files/delivery/id，`types.gen.rs:10247-10268` 的 agents/skills 字段零构造点。若服务端不解析裸 `@mention`，子代理/技能调用退化为普通文本。处置：先裁定服务端解析行为，再补 wire 字段或登记豁免 |
+| RD-06 | 粘贴摘要 chip（`[Pasted ~N lines]`）整体缺失 | TUI | 中 | ref `prompt/index.tsx:1453-1466`：≥3 行或 >150 字符且 `config.prompt.paste!=="full"` 时折叠为虚拟 chip，含提交还原（:1123-1132）、复制展开（:1800）、点击展开（:1455-1463）、$EDITOR 前展开（:556）四条链；rust `composer/mod.rs:628-632` 仅 CRLF 归一直插，`PromptDraft/SubmittedPrompt` 无 pasted 字段，全仓 grep 零命中；`app.toggle.paste_summary`（table.rs:529）为注册 no-op |
+| RD-07 | standalone `run` 对 `global` 会话的 MCP elicitation form 永不取消 | CLI | 中 | ref `noninteractive.ts:225-235` global 分支 cancelForm + `:740-757` prompt 后 `form.list({location})` 全局清扫；rust `noninteractive.rs:730-737` 仅经 `owns_session`（对 "global" 恒 false，:334-335）路由 → global form 无人应答；`cancel_form` 内 GLOBAL 头注入（:314-321）不可达。根因：PromptInput 无 `attached` 概念 |
+| RD-08 | workspace 运行时 seam（create/provision/connect/destroy + EnvironmentDriver）整体缺失 | Core | 低-中 | ref `workspace.ts:42-60` + `workspace/driver.ts:35-60` 定义远程执行面挂载点（`provision` 生产代码 grep 零命中）；rust 仅存 DB 表与 projector 的 workspaceID 字段（session/projector.rs:87,121）。ref core 无内置 provider、v2.0.24 无 HTTP 面，实际暴露面小，但架构 seam 缺失且未登记。连带：`environment/{driver,local,memory,unavailable}.ts` 的抽象（含 unavailable 语义）折叠为直接本地实现 |
+| RD-09 | compaction 重试决策不经过 `session.retry` hook | Core | 低-中 | ref `compaction.ts:444-451` 把 `prepared.retry` 传入 policy——插件 retry 覆盖对 compaction 生效；rust `compaction.rs:573-581` `decide(..., None)` 恒传 None，`Prepared.retry` 存在未接线。与 FINDINGS"session.retry 写回已修"主张在 compaction 路径冲突 |
+| RD-10 | `run -s/--session` 目标解析吞掉非 404 错误 | CLI | 低-中 | ref `session-target.ts:134-139` 仅 SessionNotFoundError→undefined，其余上抛；rust `run/mod.rs:192-198` `Err(_) => None`——网络/5xx/鉴权故障静默视为不存在，`--session <id>` 会用该 id 新建会话（:317-333），用户以为续写实为新体。RB-02 只登记了 TUI root 路径 |
+| RD-11 | compaction 被打断：立即结算变延迟结算 | Core | 低 | ref `compaction.ts:664-672` `Effect.onInterrupt` 即刻发 `compaction.interrupted`；rust 无中断钩子，靠下次 drain 入口 `settle_stale_compactions`（drain.rs:781）补结算——会话被打断后不再运行则 transcript 无限期残留 `status:"running"` 的 compaction 行 |
+| RD-12 | `revert.stage` 边界消息缺失：ref 报错，rust 静默成功 | Core | 低 | ref `revert.ts:91` 边界查不到即 MessageNotFoundError→400；rust `revert.rs:274-276` 返回空 BTreeMap 继续走完，stage 发布无文件计划的 `session.revert.staged`（200 语义） |
+| RD-13 | SSE text/reasoning delta 批的 100ms 定时器被"事件到达"近似 | Core | 低（时序） | ref `publish-llm-event.ts:162-177` 为每个 fragment fork 定时器，流静默 >100ms 也按时发布；rust `publisher.rs:131-170` `take_pending(due)` 只在下一 `publish()` 入口（:565）或 flush 时发布——流稀疏时 delta 帧扣留到下一事件，帧序与内容不变、节奏不同。模块头自述但未入登记册 |
+| RD-14 | edit 工具结构化 output 少 `files: FileDiff[]` 字段 | 工具 | 低 | ref `edit.ts:36-40` Output=`{files, replacements}`；rust `edit.rs:409` 仅 `{"replacements": N}`，files 只在 metadata。RB-08 闭环时声称结构化 output 已对齐——形状不全等，codemode/插件按 output.files 消费会取不到 |
+| RD-15 | `run` TTY 权限交互为未登记超集（改变默认行为） | CLI | 低 | ref `noninteractive.ts:158-186` TTY 上也无条件 auto-reject（--auto 才 approve）；rust `noninteractive.rs:259-277` 真 TTY 弹 dialoguer once/always/deny（注释自称 wave-6a/oracle gate-7 决策，`always` 决策为 ref run 无的路径；`OPENCODE_NO_TTY_PROMPT` 可退回）。属有意设计但应按诚实清单制度登记为具名分歧 |
+| RD-16 | ctrl+c 清空长草稿丢失历史保留 | TUI | 低 | ref `prompt/index.tsx:100,1513-1526`：text≥20 字符或含 pasted/files/agents 时先 `history.append` 再清（可 ↑ 唤回）；rust `composer/mod.rs:619-626` `clear()` 无条件重置，无历史 append |
+| RD-17 | command palette 缺 per-setting 搜索行 | TUI | 低 | ref `command-palette.tsx:36-45` 把 `settings[]` 逐条追加为可搜索行（`setting:{id}` → 定位打开 DialogConfig）；rust `command_palette.rs:514-566` 仅命令+suggested。搜 "theme" 等关键词少一类命中 |
+| RD-18 | `mcp logout`/`mcp list` 与 mcp registry 的排序/解析微差 | CLI/MCP | 信息 | ① logout：ref 经 resolveIntegration（id/name 解析+connections 过滤，logout.ts:18-24），rust 直接用 `server.integration_id` 过滤 credential 行（mcp.rs:494-504，注释自认）；② list 与 registry 排序：ref localeCompare（list.ts:15、index.ts:632-770）vs rust 字节序 `str::cmp`（mcp.rs:52-54、registry.rs:1097-1441）——非 ASCII/大小写混合名次序可分叉（与 RC-09 同族外观项，含 mcp servers/tools/prompts/resources 四处） |
+| RD-19 | mini busy spinner 丢弃 glow levels 与 WORK_PACE 缓动；SEED_LAUNCH 启动行动画疑似缺失 | TUI | 低（视觉） | ① ref `one-cell-spinner.tsx:29-34` 逐帧 alpha（`color.a *= level`）+ `one-cell-motion.ts:36-47` pace 1.2→0.96/30s 减速；rust `mini/spinner.rs:9-34` 注释自述"只改亮度/速度故略"；② ref `mini/footer.view.tsx:710-720`+`footer.ts:390` 启动行 SEED_LAUNCH 单次 21帧×40ms 动画，rust `mini/` 全目录 grep 零命中（runtime.rs:79 的 splash 是 entry/exit 配置非启动行） |
+| RD-20 | 零散信息级差异 | 多域 | 信息 | ① 配置解析器超集：rust 用 json5（额外接受单引号/裸键/十六进制）vs ref jsonc-parser（config.rs:535）；② system.txt 模板 rust 常量缺 ref 文件尾 1 换行（755 vs 756 字节）；③ title 乐观并发输局 rust 重试 20×50ms（ref 直接放弃，title.rs:258-305，超集）；④ pre-step 失败合成 step.started+failed 错误 part 上消息流（execution.rs:884-943，ref 只发 execution.failed，超出上游的补救性行为）；⑤ models.dev `released()` 只收严格 YYYY-MM-DD（catalog.rs:374-385），快照中 `2024-11` 等月份精度日期归 0，JS Date.parse 有效——同 provider 混合精度日期时同月内排序可翻转（§3 release-date 简化的未细化边界）；⑥ 孤儿评测录音 fixture：`oc-ai/test-fixtures/recordings/{typesafe,openrouter,opencode-zen}-evaluation/` 无任何 .rs 引用（ref experimental evaluation lane 为死代码，裁定范围外或删除） |
+| RD-21 | 文档性建议（不修码） | Server/Schema | 信息 | ① RB-05 的 31 处 operationId 改名中 `server.experimental.persistentPty.*` 命名空间（含 terminal 三条复用）未在 README 逐条列举，生态工具按 opID 映射会踩——建议 tools/openapi-gen/README.md 附完整 31 条清单；② oc-schema 模块重组（ref ~85 文件→rust 34）无 ref 文件→rust 模块映射表（Llm/Rpc/ModelsDev 散落 oc-core），建议 lib.rs 或 docs 补映射降低对表成本 |
+
+#### 登记册修正（2026-10-27，本轮销账三处过期/不实登记）
+
+1. **PORT_REPORT §3「input_paste 的 preventDefault 对象语义未移植」→ 过期**：`composer/mod.rs:343-359,645-651` + 测试 `:1171-1188` 已实现 D-05 双路语义（PasteDisposition::Prevented/NoEvent），应销账。
+2. **FINDINGS §3「session.prompt hook 生产路径未接线」「permission.evaluate 生产 dispatch 点未接线」→ 过期**：`prompt_prepare.rs:204-229` 与 `permission.rs:439-457` 实际已接线，应销账。
+3. **FINDINGS §3「compaction/title result 短路 none（已达成）」→ 不实**：见 RD-03，代码为 TODO(wave-C)，登记与现实相反——需销账或补实现（与 RD-03 同一处置）。
+
+> 总判定：七域再证 141/141 路由全等、AI provider 层无实质差异；本轮新增 RD-01（高，功能缺失级）+ RD-02..RD-07（中，6 项）+ RD-08..RD-19（低，12 项）+ RD-20/21（信息）。收口优先级：RD-01 → RD-02 → RD-03/RD-05（先裁定）→ RD-04/06/07。
 
 ---
 

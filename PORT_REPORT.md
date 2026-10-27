@@ -30,7 +30,7 @@
 ## 2. 工程规模与质量
 
 - **测试**：2181 通过（另有 9 个 opt-in 验收测试：M2 演练、TUI 冒烟×2、P10 电池×6——全部实测通过）
-- **验收方法论**（每项一致性主张都有参照实例背书）：274 个 LLM cassette 逐事件重放（121 交互含 HTTP 错误）+132 请求体 golden；projector 重放对账（165 真实事件→投影行与参照库逐列相等）；扫描器 420/420 语料；63 主题逐字节；shell 扫描器 bun-vs-Rust 420/420；TUI 66 帧 SHA 钉版双跑稳定；混沌测试（总线 8×5 并发序、死锁风暴、插件 kill -9）
+- **验收方法论**（每项一致性主张都有参照实例背书）：274 个 LLM cassette 逐事件重放（121 交互含 HTTP 错误）+132 请求体 golden；projector 重放对账（165 真实事件→投影行与参照库逐列相等）；扫描器 420/420 语料；63 主题逐字节（口径修正 2026-10-27：钉版 ref 该 checkout 实为 34 个 JSON＝33 v1 + 1 v2 opencode，rust 侧 SHA256 逐字节对齐 34 个，"63" 为陈旧口径）；shell 扫描器 bun-vs-Rust 420/420；TUI 66 帧 SHA 钉版双跑稳定；混沌测试（总线 8×5 并发序、死锁风暴、插件 kill -9）
 - **过程**：12 道 oracle 评审门（含 2 次驳回复审、1 次项目级 NOT APPROVED 整改）；每阶段 fmt/clippy -D warnings/nextest 全绿才提交；git 全程约 30 个里程碑提交
 - **运行环境**：全程非 root 用户（eternal130）开发与验收；参照构建（bun）自愈重建；跨属主 scratch 冲突根治
 
@@ -42,7 +42,7 @@
 - Last-Event-ID 为客户端重连协议预留（服务器不回放，v2 与 port 一致 live-only；断线恢复靠 `/api/experimental/session/:id/log?after=` cursor）+ 事件 id 4096 环去重；G11-F1 首连快照/流窗口竞态**已用时序证明关闭**（D-07，`oc-tui/tests/g11f1_proof.rs` 确定性仿真：delta 为 ephemeral ⇒ fetch 永不含在途增量文本，重叠在构造上不存在；完成守卫 + 双 4096 环兜底；"重放先于快照"序不可达）
 - 键位/主题配置解析 throw→skip（v2 会崩）；`input_paste` 的 preventDefault 对象语义未移植
 - dev 模式 `bun run` 参照服务器的外来注册表停止采用**精确 basename** 身份校验（宁拒杀不误杀——生产事故后的安全决策）
-- flock/watch 部分语义未移植（单进程场景无影响）；模型排序 release-date 精细序简化；/help 列表有 clamp
+- flock/watch 部分语义未移植（单进程场景无影响）；模型排序 release-date 精细序简化；~~/help 列表有 clamp~~（登记销账 2026-10-27：D-05 prompt-family 重移植后该 clamp 已消除，help 对话框带 golden 测试，登记过期）
 - **内部 operationId 与 v2 系统性不同（RB-05，不影响线上契约）**：served openapi 文档为参照逐字节拷贝、HTTP 路径/方法/shape 全一致，但内部路由 id 存在系统性改名——`experimental.*` 前缀（config.update/fs.write/generate.text/mcp.*/integration.wellknown.add 等）、`session.message.get/list` vs ref `session.message/messages`、`debug.location.list` vs ref `debug.location`（routes.gen.rs）。按 operationId 做钩子/统计/插件映射的生态工具在 ref 与 port 两侧**不可互换**（见 tools/openapi-gen/README.md 的 divergence 说明）
 
 **延后项（post-M2，未实现即诚实缺失）**
@@ -57,7 +57,7 @@
 - 旗舰的 TUI export（dist/tui2.js）为 desktop/opentui 绑定——在 v2 桌面宿主外本就不可加载；Rust 侧以原生 ctx.ui.* slot 缝提供等价能力（6/6 slot 实测）
 - openai-responses 的 WebSocket 通道已实现（`ws-transport` 为 oc-ai 默认 feature，`open_responses_channel.rs` WS 驱动在；2026-10-25 修订，此前误登记"延后"）
 - 请求 schema 校验仅覆盖电池中的 2 条路由（session.create/list），其余路由对畸形载荷的 400 形状与 v2 有分歧（P10-N1 同类）
-- TUI 非空草稿上 leader 和弦不触发（v2 键位表对和弦挂起 textarea——行为差异已登记）
+- ~~TUI 非空草稿上 leader 和弦不触发（v2 键位表对和弦挂起 textarea——行为差异已登记）~~ 登记销账（2026-10-27 审查）：D-02 已实现与 ref `prompt/index.tsx:193` 相同的挂起语义（app.rs:2308-2330，draft 保持、escape 清 pending），带逐行 ref 引注与测试，登记过期
 - ~~写回带 JSONC 注释的配置：拒绝并要求 --force（v2 保留注释重写）~~ 已修复（D-01）：`oc-core/src/config/jsonc_edit.rs` 移植 jsonc-parser 3.3.1 的 modify/applyEdits（位置保持式拼接 + 行级重缩进，2 空格），mcp add/plugin add/remove 默认保留注释逐字节改写；`--force` 保留为 rust-extra 显式丢弃注释覆盖（非对象根的拒绝边缘已登记）
 - TUI 本地状态（tab/会话列表）channel 目录已对齐 v2 出厂默认（stable）；从旧版 `local` 目录迁移不自动（存量状态重新累积）
 
