@@ -1530,12 +1530,17 @@ function makeSearch(entries) {
       .join("");
   const ranked = (scoped, query) => {
     const terms = tokenize(query).map(termForms);
-    return entries
+    return scoped
       .map((entry) => {
         const path = entry.path.toLowerCase();
         const description = String(entry.description ?? "").toLowerCase();
-        // v2's searchText (path + description + signature, lowercased).
-        const searchText = `${path} ${description} ${String(entry.signature ?? "").toLowerCase()}`;
+        // v2's searchText (toSearchEntry: path + description + input
+        // property names/descriptions), rendered host-side; the local
+        // approximation is only a fallback for pre-searchText hosts.
+        const searchText = String(
+          entry.searchText ??
+            `${path} ${description} ${String(entry.signature ?? "").toLowerCase()}`,
+        );
         const pathWords = tokenize(entry.path);
         const score = terms.reduce(
           (total, forms) =>
@@ -1574,7 +1579,7 @@ function makeSearch(entries) {
         : scoped.find((entry) => entry.path === pathQuery || toolExpression(entry.path) === trimmed);
     const ordered = exact !== undefined ? [exact] : ranked(scoped, String(query ?? ""));
     const start = Number.isFinite(offset) && offset > 0 ? Math.floor(offset) : 0;
-    const size = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 25;
+    const size = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 10;
     const items = ordered.slice(start, start + size).map((entry) => ({
       path: toolExpression(entry.path),
       description: String(entry.description ?? ""),

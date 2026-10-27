@@ -20,7 +20,7 @@ use oc_plugin_host::{
 };
 
 fn spec(path: &str) -> CodeModeToolSpec {
-    CodeModeToolSpec { path: path.to_owned(), description: String::new(), signature: String::new() }
+    CodeModeToolSpec { path: path.to_owned(), description: String::new(), signature: String::new(), search_text: String::new() }
 }
 
 /// A tool port that answers every nested call with `"ok"`.
