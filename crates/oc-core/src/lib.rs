@@ -8,6 +8,7 @@ pub mod engine;
 pub mod env;
 pub mod file_access;
 pub mod file_mutation;
+pub mod filesystem;
 pub mod formatter;
 pub mod forms;
 pub mod hooks;
