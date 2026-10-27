@@ -192,6 +192,59 @@ pub(crate) fn write_config_set_pub(
     }
 }
 
+/// The server value `mcp add` persists (mcp/add.ts:22-31): the mutual
+/// exclusion / validity checks, then `{type: "remote", url, headers?}` or
+/// `{type: "local", command, environment?}` (the command carries its own
+/// flags — captured by trailing_var_arg after `--`).
+fn build_server(
+    command: &[String],
+    url: Option<&str>,
+    header: Option<&str>,
+    env: Option<&str>,
+) -> Result<Value, String> {
+    let has_command = !command.is_empty();
+    if url.is_some() && has_command {
+        return Err("Provide either --url <url> or a command after --, not both".to_owned());
+    }
+    if url.is_none() && !has_command {
+        return Err("Provide either --url <url> or a command after --".to_owned());
+    }
+    if let Some(url) = url {
+        if reqwest::Url::parse(url).is_err() {
+            return Err(format!("Invalid URL: {url}"));
+        }
+        if env.is_some() {
+            return Err("--env is only valid for local MCP servers".to_owned());
+        }
+        let mut server = json!({ "type": "remote", "url": url });
+        if let Some(header) = header {
+            let Some((header_name, header_value)) = header.split_once('=') else {
+                return Err(format!("Invalid header, expected name=value: {header}"));
+            };
+            server
+                .as_object_mut()
+                .unwrap()
+                .insert("headers".to_owned(), json!({ header_name: header_value }));
+        }
+        Ok(server)
+    } else {
+        if header.is_some() {
+            return Err("--header is only valid for remote MCP servers".to_owned());
+        }
+        let mut server = json!({ "type": "local", "command": command });
+        if let Some(env) = env {
+            let Some((env_name, env_value)) = env.split_once('=') else {
+                return Err(format!("Invalid env, expected name=value: {env}"));
+            };
+            server
+                .as_object_mut()
+                .unwrap()
+                .insert("environment".to_owned(), json!({ env_name: env_value }));
+        }
+        Ok(server)
+    }
+}
+
 #[allow(clippy::unused_async)]
 async fn add(
     name: &str,
@@ -202,42 +255,13 @@ async fn add(
     global: bool,
     force: bool,
 ) -> i32 {
-    let has_command = !command.is_empty();
-    if url.is_some() && has_command {
-        eprintln!("Error: Provide either --url <url> or a command after --, not both");
-        return 1;
-    }
-    if url.is_none() && !has_command {
-        eprintln!("Error: Provide either --url <url> or a command after --");
-        return 1;
-    }
-    let Some(url) = url else {
-        eprintln!("Error: Provide either --url <url> or a command after --");
-        return 1;
-    };
-    if reqwest::Url::parse(url).is_err() {
-        eprintln!("Error: Invalid URL: {url}");
-        return 1;
-    }
-    if env.is_some() {
-        eprintln!("Error: --env is only valid for local MCP servers");
-        return 1;
-    }
-    if has_command && header.is_some() {
-        eprintln!("Error: --header is only valid for remote MCP servers");
-        return 1;
-    }
-    let mut server = json!({ "type": "remote", "url": url });
-    if let Some(header) = header {
-        let Some((header_name, header_value)) = header.split_once('=') else {
-            eprintln!("Error: Invalid header, expected name=value: {header}");
+    let server = match build_server(command, url, header, env) {
+        Ok(server) => server,
+        Err(message) => {
+            eprintln!("Error: {message}");
             return 1;
-        };
-        server
-            .as_object_mut()
-            .unwrap()
-            .insert("headers".to_owned(), json!({ header_name: header_value }));
-    }
+        }
+    };
     let directory = if global {
         oc_util::global_roots::resolve().config
     } else {
@@ -639,5 +663,137 @@ mod tests {
         write_config_set_pub(&path, &["mcp"], &json!({}), &json!({"mcp": {}}), false, false)
             .expect("creates the config");
         assert!(path.is_file());
+    }
+
+    // --- RD-01: `mcp add <name> -- <command>` local stdio servers ----
+
+    fn build(args: &[&str]) -> Result<Value, String> {
+        use clap::Parser;
+        let parsed = crate::cli::Cli::try_parse_from(
+            std::iter::once("opencode").chain(args.iter().copied()),
+        )
+        .expect("cli parses");
+        let Some(crate::cli::Commands::Mcp {
+            command: crate::cli::McpCommands::Add { name, command, url, header, env, .. },
+        }) = parsed.command
+        else {
+            panic!("expected mcp add, got {:?}", parsed.command);
+        };
+        let _ = name;
+        build_server(&command, url.as_deref(), header.as_deref(), env.as_deref())
+    }
+
+    #[test]
+    fn local_server_from_command_after_dash_dash() {
+        // RD-01: the previously-dead path — a command without --url must
+        // construct {type: "local", command: [...]} instead of erroring.
+        let server = build(&["mcp", "add", "example", "--", "npx", "-y", "@example/server"])
+            .expect("local server builds");
+        assert_eq!(server, json!({"type": "local", "command": ["npx", "-y", "@example/server"]}));
+    }
+
+    #[test]
+    fn local_server_with_env_and_flagged_command() {
+        // The command carries its own flags (trailing_var_arg after `--`)
+        // plus an --env pair → mcp/add.ts:31's `{...environment}`.
+        let server = build(&[
+            "mcp",
+            "add",
+            "example",
+            "--env",
+            "API_KEY=secret",
+            "--",
+            "npx",
+            "-y",
+            "@example/server",
+            "--port",
+            "8080",
+        ])
+        .expect("local server builds");
+        assert_eq!(
+            server,
+            json!({
+                "type": "local",
+                "command": ["npx", "-y", "@example/server", "--port", "8080"],
+                "environment": {"API_KEY": "secret"},
+            })
+        );
+    }
+
+    #[test]
+    fn local_server_persists_valid_server_config() {
+        // The persisted shape must round-trip through ServerConfig::Local.
+        let server = build(&["mcp", "add", "example", "--", "npx", "-y", "@example/server"])
+            .expect("builds");
+        let dir = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+        let path = dir.path().join("opencode.json");
+        write_config_set_pub(
+            &path,
+            &["mcp", "servers", "example"],
+            &server,
+            &json!({"mcp": {"servers": {"example": server}}}),
+            false,
+            false,
+        )
+        .expect("persist");
+        let config: Value =
+            json5::from_str(&std::fs::read_to_string(&path).expect("read back")).expect("parses");
+        let parsed: oc_schema::mcp::ServerConfig =
+            serde_json::from_value(config["mcp"]["servers"]["example"].clone())
+                .expect("ServerConfig");
+        let oc_schema::mcp::ServerConfig::Local(local) = parsed else {
+            panic!("expected local server config");
+        };
+        assert_eq!(
+            local.command,
+            vec!["npx".to_owned(), "-y".to_owned(), "@example/server".to_owned()]
+        );
+    }
+
+    #[test]
+    fn add_error_legs() {
+        // mcp/add.ts:22-27 error legs, in order.
+        assert_eq!(
+            build(&["mcp", "add", "x", "--url", "https://example.com", "--", "npx"]).unwrap_err(),
+            "Provide either --url <url> or a command after --, not both"
+        );
+        // Neither url nor command: clap yields an empty command vec.
+        assert_eq!(
+            build(&["mcp", "add", "x"]).unwrap_err(),
+            "Provide either --url <url> or a command after --"
+        );
+        assert_eq!(
+            build(&["mcp", "add", "x", "--url", "not-a-url"]).unwrap_err(),
+            "Invalid URL: not-a-url"
+        );
+        assert_eq!(
+            build(&["mcp", "add", "x", "--url", "https://example.com", "--env", "A=B"])
+                .unwrap_err(),
+            "--env is only valid for local MCP servers"
+        );
+        assert_eq!(
+            build(&["mcp", "add", "x", "--header", "A=B", "--", "npx"]).unwrap_err(),
+            "--header is only valid for remote MCP servers"
+        );
+        assert_eq!(
+            build(&["mcp", "add", "x", "--url", "https://example.com", "--header", "A"])
+                .unwrap_err(),
+            "Invalid header, expected name=value: A"
+        );
+        assert_eq!(
+            build(&["mcp", "add", "x", "--env", "NOEQUALS", "--", "npx"]).unwrap_err(),
+            "Invalid env, expected name=value: NOEQUALS"
+        );
+    }
+
+    #[test]
+    fn remote_server_still_builds() {
+        let server =
+            build(&["mcp", "add", "x", "--url", "https://example.com/sse", "--header", "A=B"])
+                .expect("remote builds");
+        assert_eq!(
+            server,
+            json!({"type": "remote", "url": "https://example.com/sse", "headers": {"A": "B"}})
+        );
     }
 }
