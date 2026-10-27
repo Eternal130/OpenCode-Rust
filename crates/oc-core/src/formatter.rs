@@ -744,6 +744,30 @@ impl Formatter for BuiltinsFormatter {
             .filter(|item| item.extensions.contains(&extension))
             .cloned()
             .collect();
+        // The whole resolve+run loop is blocking filesystem/process work
+        // (detection probes — including uncached `--help` subprocess runs
+        // — and the formatter exec itself), called from async write/edit/
+        // patch handlers: keep it off the async executor (F1).
+        run_blocking(|| self.run_matching(matching, filepath))
+    }
+}
+
+/// Executes `f` off the async executor: when on a multi-thread tokio
+/// runtime (the engine's), `block_in_place` moves the worker's other
+/// tasks away so the synchronous process spawns inside cannot stall the
+/// runtime; outside tokio (plain unit tests, non-tokio callers) it runs
+/// directly. Behavior-neutral — no timeout (REF has none).
+fn run_blocking<T>(f: impl FnOnce() -> T) -> T {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+            tokio::task::block_in_place(f)
+        }
+        _ => f(),
+    }
+}
+
+impl BuiltinsFormatter {
+    fn run_matching(&self, matching: Vec<Registered>, filepath: &Path) -> bool {
         for formatter in matching {
             let Some(template) = self.resolve(&formatter) else { continue };
             let command: Vec<String> = template
@@ -835,6 +859,7 @@ mod builtins_tests {
     use super::Formatter;
     use std::path::Path;
     use std::path::PathBuf;
+    use std::time::Duration;
 
     fn tempdir() -> tempfile::TempDir {
         tempfile::tempdir_in("/tmp/opencode").expect("tempdir")
@@ -1281,6 +1306,44 @@ mod builtins_tests {
         assert!(formatter.file(&target));
         let formatted = std::fs::read_to_string(&target).expect("read");
         assert!(formatted.contains("let x = 1;"), "rustfmt applied: {formatted}");
+    }
+
+    /// F1: `file`'s process spawn runs via `block_in_place` on a
+    /// multi-thread runtime — the executor keeps making progress while
+    /// the formatter subprocess runs.
+    #[test]
+    #[cfg(unix)]
+    fn file_blocking_run_does_not_stall_the_runtime() {
+        let project = tempdir();
+        let bin = tempdir();
+        // A deliberately slow formatter (300 ms) so a stalled executor
+        // would be observable.
+        fake_bin(bin.path(), "rustfmt", "sleep 0.3; exit 0");
+        let formatter = BuiltinsFormatter::new(
+            project.path().to_path_buf(),
+            project.path().to_path_buf(),
+            vec![bin.path().to_path_buf()],
+        );
+        let target = project.path().join("slow.rs");
+        std::fs::write(&target, "fn main(){}").expect("write");
+
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_time()
+            .build()
+            .expect("runtime");
+        let progressed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = std::sync::Arc::clone(&progressed);
+        rt.spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        let formatted = rt.block_on(async { formatter.file(&target) });
+        assert!(formatted, "slow formatter ran");
+        // The 50 ms timer tick landed while the 300 ms process ran — the
+        // executor was never blocked by `file`.
+        assert!(progressed.load(std::sync::atomic::Ordering::SeqCst));
+        rt.shutdown_timeout(Duration::from_secs(5));
     }
 
     /// findUp walks from the file's directory to the worktree boundary.
