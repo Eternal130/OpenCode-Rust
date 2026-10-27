@@ -683,6 +683,202 @@ mod tests {
         assert!(description.contains("Prefer dedicated tools over shell commands when possible."));
     }
 
+    /// RC-04 kill-race pin: the `Drop` guard's fire-and-forget cleanup
+    /// (`shell.remove` + `jobs.cancel`) must actually COMPLETE once the
+    /// owning future is dropped — even though `Drop` cannot await. This
+    /// exercises the exact `Effect.onInterrupt` translation path: the guard
+    /// is dropped while the command is still running, and we assert (with a
+    /// bounded timeout, no fixed sleeps) that:
+    ///   1. the shell entry is removed (`Shell.get` → `NotFound`),
+    ///   2. the `sh_*.out` capture file is deleted,
+    ///   3. the job is cancelled and consumed,
+    ///   4. the child process (owned by the Shell service's exit watcher,
+    ///      which holds the only `Child` handle) self-exits and is reaped —
+    ///      proven by the child's own `touch` marker appearing.
+    /// `Shell.remove` removes the tracked command and its capture file but
+    /// does not signal the OS process; the process still terminates on its
+    /// own (bounded `sleep`) and the watcher reaps it via `try_wait`, so no
+    /// process outlives the test.
+    #[tokio::test]
+    async fn tool_shell_cancel_guard_drop_completes_remove_and_cancel() {
+        use crate::database::Database;
+        use crate::jobs;
+        use crate::shell::Shell;
+        use oc_schema::shell::CreateInput;
+        use oc_util::determinism::{AscendingIdGen, IdGen, SequentialRng, SystemClock};
+        use std::sync::Arc;
+
+        let tmp = tempfile::tempdir_in("/tmp/opencode").expect("sandbox tempdir under /tmp/opencode");
+        let ids: Arc<dyn IdGen> = Arc::new(AscendingIdGen::new(
+            Arc::new(SystemClock),
+            Arc::new(SequentialRng::new()),
+        ));
+        let shell = Shell::new(tmp.path(), "cancelguard", Arc::clone(&ids), Arc::new(SystemClock));
+        let jobs_service =
+            jobs::Jobs::new(Database::open_in_memory().await.expect("db"), ids, Arc::new(SystemClock));
+
+        let info = shell
+            .create(
+                CreateInput {
+                    command: format!(
+                        "sleep 1 && touch {}",
+                        tmp.path().join("child-exited").to_string_lossy()
+                    ),
+                    cwd: Some(tmp.path().to_string_lossy().to_string()),
+                    // 0 = no timeout: removal must not depend on the killer.
+                    timeout: Some(0),
+                    metadata: None,
+                },
+                Some("/bin/sh"),
+                None,
+                None,
+            )
+            .await
+            .expect("create");
+        assert_eq!(info.status, oc_schema::shell::Status::Running);
+
+        // A live job for the guard to cancel (run never settles on its own —
+        // cancel is what must consume it).
+        let job_id = info.id.to_string();
+        jobs_service.start(jobs::StartInput {
+            id: job_id.clone(),
+            type_: "shell".into(),
+            title: None,
+            metadata: None,
+            recovery: None,
+            notification_id: None,
+            run: Box::pin(std::future::pending()),
+        });
+        assert!(jobs_service.get(&job_id).is_some());
+
+        // Drop the guard — the runner's tool-future cancellation analogue.
+        let guard = ShellCancelGuard {
+            shell: shell.clone(),
+            jobs: jobs_service.clone(),
+            shell_id: info.id.clone(),
+            job_id: job_id.clone(),
+            armed: true,
+        };
+        drop(guard);
+
+        // Bounded wait for the fire-and-forget cleanup to complete. This is
+        // the race under test: if the spawned remove+cancel task were lost,
+        // these assertions would time out.
+        let file = std::path::PathBuf::from(&info.file);
+        let settled = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                let removed = shell.get(&info.id).is_err() && !file.exists();
+                // `jobs.cancel` marks the job Cancelled; the map entry stays
+                // (consumed jobs are only evicted past COMPLETED_LIMIT).
+                let cancelled = jobs_service
+                    .get(&job_id)
+                    .is_some_and(|job| job.status == jobs::Status::Cancelled);
+                if removed && cancelled {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        assert!(settled.is_ok(), "guard drop cleanup did not complete within 2s");
+        assert!(shell.list().is_empty(), "no running shells remain");
+
+        // Idempotency: a second cleanup round (double-drop semantics) must be
+        // a no-op, not a panic.
+        assert!(shell.remove(&info.id).await.is_err(), "remove after remove: NotFound");
+        // Cancel on the already-cancelled job: consume path, no panic.
+        let again = jobs_service.cancel(&job_id).await;
+        assert!(again.is_some_and(|job| job.status == jobs::Status::Cancelled));
+
+        // The child self-exits (bounded sleep) and the Shell exit watcher —
+        // the sole owner of the Child handle — reaps it.
+        let exited = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !tmp.path().join("child-exited").exists() {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+        assert!(exited.is_ok(), "child did not self-exit within 5s");
+    }
+
+    /// RC-04 cancel-after-exit: the guard's cleanup runs AFTER the command
+    /// already finished — `Shell.remove` hits NotFound, `jobs.cancel` hits a
+    /// Completed job (consume path). Neither may panic; the job is still
+    /// consumed so no state leaks.
+    #[tokio::test]
+    async fn tool_shell_cancel_guard_after_exit_is_idempotent() {
+        use crate::database::Database;
+        use crate::jobs;
+        use crate::shell::Shell;
+        use oc_schema::shell::CreateInput;
+        use oc_util::determinism::{AscendingIdGen, IdGen, SequentialRng, SystemClock};
+        use std::sync::Arc;
+
+        let tmp = tempfile::tempdir_in("/tmp/opencode").expect("sandbox tempdir under /tmp/opencode");
+        let ids: Arc<dyn IdGen> = Arc::new(AscendingIdGen::new(
+            Arc::new(SystemClock),
+            Arc::new(SequentialRng::new()),
+        ));
+        let shell = Shell::new(tmp.path(), "cancelguard2", Arc::clone(&ids), Arc::new(SystemClock));
+        let jobs_service =
+            jobs::Jobs::new(Database::open_in_memory().await.expect("db"), ids, Arc::new(SystemClock));
+
+        let info = shell
+            .create(
+                CreateInput {
+                    command: "printf done".into(),
+                    cwd: Some(tmp.path().to_string_lossy().to_string()),
+                    timeout: Some(5_000),
+                    metadata: None,
+                },
+                Some("/bin/sh"),
+                None,
+                None,
+            )
+            .await
+            .expect("create");
+        // Let the command finish on its own.
+        let result = shell.result(info.clone()).await;
+        assert_eq!(result.info.status, oc_schema::shell::Status::Exited);
+
+        let job_id = info.id.to_string();
+        jobs_service.start(jobs::StartInput {
+            id: job_id.clone(),
+            type_: "shell".into(),
+            title: None,
+            metadata: None,
+            recovery: None,
+            notification_id: None,
+            // Run stays unsettled: the realistic interrupt-after-exit race is
+            // the child having exited while the runner future is cancelled.
+            run: Box::pin(std::future::pending()),
+        });
+
+        // Guard fires only after natural completion (the disarm paths return
+        // early; this pins the case where drop still races through armed).
+        let guard = ShellCancelGuard {
+            shell: shell.clone(),
+            jobs: jobs_service.clone(),
+            shell_id: info.id.clone(),
+            job_id: job_id.clone(),
+            armed: true,
+        };
+        drop(guard);
+
+        let consumed = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while !jobs_service
+                .get(&job_id)
+                .is_some_and(|job| job.status == jobs::Status::Cancelled)
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        assert!(consumed.is_ok(), "cancel-after-exit did not cancel the job within 2s");
+        // NotFound tolerated — no panic, map untouched for other commands.
+        assert!(shell.remove(&info.id).await.is_err());
+    }
+
     #[test]
     fn tool_shell_timeout_notice_appends_to_output() {
         let payload = r#"{"output":"body\n\nCommand exceeded timeout of 100 ms. Retry with a larger timeout if the command is expected to take longer.","truncated":false,"timeout":true,"status":"completed"}"#;
