@@ -69,9 +69,9 @@ divergence.
 
 | hook | v2 semantics | our semantics (post-spike) | observable delta | class |
 |---|---|---|---|---|
-| `session.prompt` | shared obj; `event.prompt` consumed after (prompt.ts) | typed event, `&mut` chain, consumed after | none (production admission path not wired yet — adapter TODO) | (a) |
-| `session.context` / `compaction` / `generate` | shared obj; `shaped` system/messages/options/tools consumed after; compaction `result` short-circuit mutated in place | dispatch → `shaped` consumed after (model_request.rs) | none | (a) |
-| `session.title` | shared obj; `request` + `result` short-circuit | dispatch → consumed after | none | (a) |
+| `session.prompt` | shared obj; `event.prompt` consumed after (prompt.ts) | typed event, `&mut` chain, consumed after | none — **production admission path wired (2026-10-27 销账：`prompt_prepare.rs:204-229`; earlier "not wired" note was stale)** | (a) |
+| `session.context` / `compaction` / `generate` | shared obj; `shaped` system/messages/options/tools consumed after; compaction `result` short-circuit mutated in place | dispatch → `shaped` consumed after (model_request.rs); compaction/title `result` short-circuit **closed 2026-10-27 (d03cab1, RD-03)** — earlier "none" claim was false, TODO(wave-C) is now implemented | none | (a) |
+| `session.title` | shared obj; `request` + `result` short-circuit | dispatch → consumed after; `result` short-circuit closed 2026-10-27 (d03cab1, RD-03) | none | (a) |
 | `session.model.request` | shared obj; `modelHook.baseURL/headers` consumed after | dispatch → consumed after | none | (a) |
 | `session.retry` | **return discarded**; caller reads local by-ref (retry.ts:80-87) | was: `dispatch(event.clone())` result dropped ⇒ plugin decision overrides silently ignored — **now writes the dispatched event back through `&mut`** | fixed + regression test; flagship-visible (see §4) | **(b) FIXED** |
 | `session.http.request` / `http.response` | trigger inside the fetch wrap; request/response consumed after (body re-read via `clone().arrayBuffer()`) | typed in hooks.rs; runner wrap unwired yet | none once wired (apply-after model fits) | (a) |
@@ -79,7 +79,7 @@ divergence.
 | `tool.execute.before` | shared obj; `before.input` consumed after; rejection = typed failure | dispatch → `before.input`; `HookError::ToolRejected` | none | (a) |
 | `tool.execute.after` (completed) | content/output/metadata read after; `normalizeContent` **applies emptied content** (runtime.ts:259 → stringified-output fallback) | was: emptied content kept the original output — **now applies emptied content with the output fallback** | fixed + test | **(b) FIXED** |
 | `tool.execute.after` (error leg) | `return yield* afterEvent.error` — plugin rewrite becomes the failure (tool.ts:140) | was: dispatched event discarded, original failure returned — **now applies message/metadata** (variant classification Error/PermissionRejected kept — see residuals) | fixed + test | **(b) FIXED** |
-| `permission.evaluate` | shared obj; `event.effect/message` consumed after | typed; production dispatch site unwired | none once wired | (a) |
+| `permission.evaluate` | shared obj; `event.effect/message` consumed after | typed; production dispatch site wired (**2026-10-27 销账**: `permission.rs:439-457`; earlier "unwired" note was stale) | none | (a) |
 | `shell.create.before` | shared obj; `invocation` fields consumed after | typed; unwired | none once wired | (a) |
 | `aisdk.sdk` / `aisdk.language` | plugin swaps the **in-process AI-SDK package / LanguageModel object** the host then uses | typed Rust events; a JS object cannot cross the process boundary, and the host's model path is Rust (`oc-ai`) | permanent divergence (§6) | **(c)** |
 | provider-scoped entries (all session/aisdk points) | scope re-checked **per entry against the live event** — mid-chain provider rewrites re-scope later entries | was: provider snapshotted before the loop — **now re-read per entry** (hooks.rs) | fixed + test | **(b) FIXED** |

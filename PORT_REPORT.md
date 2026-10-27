@@ -36,6 +36,8 @@
 
 ## 3. 与 v2.0.24 的已文档分歧（诚实清单）
 
+> **2026-10-27 rd-burndown 收口**：七域审查发现的 RD-01..RD-19 与 RC-01/02/03 已全部处置——RD-01..07/09..14/16..19 闭环（9519db5/56fbf75/d03cab1/b34802b/81fb0fc/746ec58/9861852/3d17358/aa39789/fbf93f7，逐项证据 .slim/deepwork/rd-burndown/），RD-08 workspace seam 与 RD-15 run TTY 权限交互登记为具名豁免/超集（不修）；详见 docs/GAPS-AND-PITFALLS.md §1.6/§1.7。
+
 **实现选择类**
 - **独立身份（Lane B）**：二进制更名 `opencode-rust`（`--version` 横幅 `opencode-rust v2.0.24`；`/api/info` 版本仍为 2.0.24 不变）；XDG 目录隔离为 `opencode-rust` 后缀（config/data/cache/state 四项，env 覆盖机制不变）；v2 存量数据**单向一次性拷贝迁移**（`oc_core::v2_migration`：数据库走 sqlite backup API、auth.json、扁平配置文件、npm/bin 插件缓存；log/repos 不拷；源目录永不改动——v2 的 v1→v2 迁移是原地升级，我们是拷贝，原因正是目录隔离；marker 文件闩死单向门，锁文件串行并发入口，硬失败仅告警不阻断启动）
 - 插件宿主为 **bun 子进程**（v2 进程内）：hook 可变对象为 copy-in/copy-out（v2 引用可变）——病态插件可观测差异，良性行为等价；换来崩溃隔离
