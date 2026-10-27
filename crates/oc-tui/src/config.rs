@@ -180,6 +180,10 @@ pub struct TuiConfig {
     /// a finished drag to the clipboard (the default off Windows),
     /// `"manual"` leaves copying to ctrl+y/ctrl+c.
     pub terminal_copy: CopyBehavior,
+    /// RD-06 — `prompt.paste !== "full"` (config.prompt?.paste, app.
+    /// tsx:573): the paste-summary fold arms while compact (absent /
+    /// `"compact"`); `"full"` pastes verbatim.
+    pub prompt_paste_compact: bool,
     /// The file this was loaded from (`None` when no config file
     /// exists — all defaults).
     pub path: Option<PathBuf>,
@@ -221,6 +225,7 @@ impl Default for TuiConfig {
             mouse: true,
             cursor: crate::terminal_proto::CursorConfig::default(),
             terminal_copy: CopyBehavior::Select,
+            prompt_paste_compact: true,
             path: None,
         }
     }
@@ -367,6 +372,8 @@ impl TuiConfig {
             } else {
                 CopyBehavior::Select
             },
+            prompt_paste_compact: info.prompt.as_ref().and_then(|prompt| prompt.paste.as_deref())
+                != Some("full"),
             cursor,
             path,
         }
@@ -487,6 +494,8 @@ impl TuiConfig {
             } else {
                 CopyBehavior::Select
             },
+            prompt_paste_compact: value.pointer("/prompt/paste").and_then(Value::as_str)
+                != Some("full"),
             cursor,
             path,
         }

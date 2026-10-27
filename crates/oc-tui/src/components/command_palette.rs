@@ -2792,6 +2792,15 @@ impl CommandDispatcher for StoreDispatcher {
                 store.clear_dialogs();
                 Dispatch::Handled
             }
+            // RD-06 — `app.toggle.paste_summary` (app.tsx:1193-1205):
+            // flip `prompt.paste` between "compact" (fold big pastes
+            // into `[Pasted ~N lines]` chips) and "full" (paste
+            // verbatim); persisted through the config sink.
+            "app.toggle.paste_summary" => {
+                store.toggle_paste_summary();
+                store.clear_dialogs();
+                Dispatch::Handled
+            }
             // The registered-but-surfaceless families (v2 parity: the
             // keymap consumes the stroke; no component answers):
             // which-key panel (the keymap addon's surface), scrap/
@@ -3060,7 +3069,9 @@ pub fn append_prompt_payload(store: &Store, session_id: &str, payload: &crate::s
         });
     }
     text.push_str(&payload.text);
-    composer.draft = PromptDraft { text, files, agents };
+    // `{...projectedPromptInput(payload), pasted: []}` (index.tsx:
+    // 662-668): the refill carries no folded pastes.
+    composer.draft = PromptDraft { text, files, agents, pasted: Vec::new() };
     store.set_composer(session_id, &composer);
 }
 
@@ -4343,6 +4354,45 @@ mod tests {
             config.calls.borrow().as_slice(),
             &[("session.grouping", "none".to_owned()), ("session.grouping", "auto".to_owned())]
         );
+    }
+
+    /// RD-06 — `app.toggle.paste_summary` (app.tsx:1193-1205): the
+    /// command flips `prompt.paste` compact↔full through the store
+    /// (the fold gate) and persists the value via the config sink.
+    #[test]
+    fn toggle_paste_summary_flips_and_persists() {
+        use crate::store::ConfigSink;
+        #[derive(Default)]
+        struct PasteSink(std::cell::RefCell<Vec<String>>);
+        impl ConfigSink for PasteSink {
+            fn update_theme_name(&self, _: &str) {}
+            fn update_theme_mode(&self, _: &str) {}
+            fn update_session_sidebar(&self, _: bool) {}
+            fn update_session_grouping(&self, _: bool) {}
+            fn update_setting(&self, path: &str, value: &str) {
+                assert_eq!(path, "prompt.paste");
+                self.0.borrow_mut().push(value.to_owned());
+            }
+        }
+        let store = Store::new(Runtime::new());
+        let sink = std::rc::Rc::new(PasteSink::default());
+        store.set_config_sink(sink.clone());
+        let mut dispatcher = StoreDispatcher;
+        // Default armed (absent config = `!== "full"`).
+        assert!(store.prompt_paste_compact());
+        assert_eq!(
+            dispatcher.dispatch(&store, "app.toggle.paste_summary", None),
+            Dispatch::Handled
+        );
+        assert!(!store.prompt_paste_compact(), "disabled → paste \"full\"");
+        assert_eq!(store.settings_snapshot_value("prompt.paste"), "full");
+        assert_eq!(
+            dispatcher.dispatch(&store, "app.toggle.paste_summary", None),
+            Dispatch::Handled
+        );
+        assert!(store.prompt_paste_compact(), "re-enabled → paste \"compact\"");
+        assert_eq!(store.settings_snapshot_value("prompt.paste"), "compact");
+        assert_eq!(sink.0.borrow().as_slice(), ["full".to_owned(), "compact".to_owned()]);
     }
 
     /// SA-F6: the Plugins dialog renders the ref's live shape — the
