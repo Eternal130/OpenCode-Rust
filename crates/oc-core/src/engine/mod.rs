@@ -1264,12 +1264,14 @@ impl Engine {
                 .and_then(|media| media.image)
                 .unwrap_or_default(),
         );
-        let requests = Arc::new(SessionModelRequest::new(
-            Arc::clone(&graph.hooks),
-            Arc::clone(&graph.tools),
-            self.app.clone(),
-        )
-        .with_image_limits(image_limits));
+        let requests = Arc::new(
+            SessionModelRequest::new(
+                Arc::clone(&graph.hooks),
+                Arc::clone(&graph.tools),
+                self.app.clone(),
+            )
+            .with_image_limits(image_limits),
+        );
         let compaction = Arc::new(SessionCompaction::new(
             (*self.db).clone(),
             (*self.bus).clone(),
@@ -2017,12 +2019,14 @@ fn shell_plugin(engine: &Engine, inputs: &Arc<PluginInputs>) -> InternalPlugin {
         // config `shell` key — consumed from the location's config
         // snapshot (shell.ts prepare / ConfigShellPlugin).
         let experimental = config_experimental(&inputs.config_documents);
+        let config_shell = config_shell_of(&inputs.config_documents);
+        let config_shell_context = config_shell.clone();
         let deps = Arc::new(ShellToolServices {
             shell: inputs.shell_for_tools(),
             jobs: (*inputs.jobs).clone(),
             env: (*inputs.session_env).clone(),
             portable_scanner: experimental.portable_shell_scanner.unwrap_or(false),
-            config_shell: config_shell_of(&inputs.config_documents),
+            config_shell: config_shell.clone(),
             synthetic: Arc::new(BusSyntheticPublisher { bus: bus.clone() }),
         });
         tool::register_builtin(
@@ -2030,7 +2034,42 @@ fn shell_plugin(engine: &Engine, inputs: &Arc<PluginInputs>) -> InternalPlugin {
             hooks,
             &inputs.tool_services,
             crate::tool::shell::tool(deps),
-        )
+        )?;
+        // The dynamic description refresh (shell.ts:280-288): on every
+        // session context/compaction/generate event the `shell` tool's
+        // description is rewritten with the freshly resolved compat shell
+        // name — a config change to `shell` reaches the model on the next
+        // request without re-registering the tool.
+        let refresh =
+            crate::hooks::fn_hook(move |event: &mut crate::hooks::SessionContextEvent| {
+                if let Some(tool) = event.tools.get_mut(crate::tool::shell::NAME) {
+                    crate::tool::shell::refresh_description(config_shell_context.as_deref(), tool);
+                }
+                Ok(())
+            });
+        let refresh_compaction =
+            crate::hooks::fn_hook(move |event: &mut crate::hooks::SessionCompactionEvent| {
+                if let Some(tool) = event.context.tools.get_mut(crate::tool::shell::NAME) {
+                    crate::tool::shell::refresh_description(config_shell.as_deref(), tool);
+                }
+                Ok(())
+            });
+        // Registrations live for the location lifetime (dropped with the
+        // graph) — the same pattern the subagent description hook uses.
+        // REF hooks context + compaction + generate (shell.ts:286-288);
+        // `SessionGenerateEvent` is the context event type.
+        std::mem::forget(futures::executor::block_on(hooks.register_session_context(
+            std::sync::Arc::clone(&refresh),
+            crate::hooks::HookOptions::default(),
+        )));
+        std::mem::forget(futures::executor::block_on(
+            hooks.register_session_generate(refresh, crate::hooks::HookOptions::default()),
+        ));
+        std::mem::forget(futures::executor::block_on(hooks.register_session_compaction(
+            refresh_compaction,
+            crate::hooks::HookOptions::default(),
+        )));
+        Ok(())
     })
 }
 
