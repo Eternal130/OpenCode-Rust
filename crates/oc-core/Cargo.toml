@@ -55,6 +55,9 @@ tree-sitter-bash = "0.25"
 tree-sitter-powershell = "0.26"
 rmcp = { version = "3.7.0", features = ["client", "transport-child-process", "transport-streamable-http-client", "transport-streamable-http-client-reqwest", "auth", "elicitation"] }
 portable-pty = "0.8"
+# Pinned to 0.15 like oc-tui (0.16 pulls unicode-width ^0.2.1, which
+# cannot unify with the rest of the workspace — see oc-tui's Cargo.toml).
+vt100 = "0.15"
 urlencoding = "2"
 libc = "0.2"
 
