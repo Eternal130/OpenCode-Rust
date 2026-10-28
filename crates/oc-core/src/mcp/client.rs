@@ -1008,6 +1008,29 @@ where
     start(input, transport, remote).await
 }
 
+/// Environment for a stdio MCP server, mirroring the ref's local spawner
+/// semantics (`mcp/stdio.ts` passes `extendEnv: true`, and the local
+/// cross-spawn spawner flattens that to `{ ...process.env, ...opts.env }`):
+/// the child inherits the host environment in full — nothing is stripped,
+/// `PATH`/`HOME` included — with `BUN_BE_BUN=1` set for `opencode`
+/// commands (so nested spawns resolve to the same runtime) and the server
+/// config's `environment` entries overriding host values on collision.
+/// Order: host env < `BUN_BE_BUN` < config `environment`.
+pub(super) fn stdio_environment(
+    host: impl IntoIterator<Item = (String, String)>,
+    command: &str,
+    environment: Option<&BTreeMap<String, String>>,
+) -> BTreeMap<String, String> {
+    let mut env: BTreeMap<String, String> = host.into_iter().collect();
+    if command == "opencode" {
+        env.insert("BUN_BE_BUN".to_string(), "1".to_string());
+    }
+    for (key, value) in environment.into_iter().flat_map(|map| map.iter()) {
+        env.insert(key.clone(), value.clone());
+    }
+    env
+}
+
 async fn connect_local(
     input: &ConnectInput<'_>,
     local: &oc_schema::mcp::LocalConfig,
@@ -1023,17 +1046,9 @@ async fn connect_local(
         Some(cwd) => normalize_path(&std::path::Path::new(input.directory).join(cwd)),
         None => input.directory.to_string(),
     };
+    let env = stdio_environment(std::env::vars(), command, local.environment.as_ref());
     let mut builder = tokio::process::Command::new(command);
-    builder.args(args).current_dir(&cwd);
-    // v2: stdio servers inherit the host environment (the spawner's
-    // `extendEnv: true`); `opencode` itself needs BUN_BE_BUN=1 so nested
-    // spawns resolve to the same runtime.
-    if command == "opencode" {
-        builder.env("BUN_BE_BUN", "1");
-    }
-    for (key, value) in local.environment.iter().flatten() {
-        builder.env(key, value);
-    }
+    builder.args(args).current_dir(&cwd).env_clear().envs(&env);
     #[cfg(unix)]
     {
         builder.process_group(0);
