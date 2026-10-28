@@ -83,23 +83,26 @@ fn expand_wildcard(addr: SocketAddr) -> Vec<String> {
 /// preserved; failures yield an empty list (the wildcard then expands to
 /// no urls, exactly like an interface-less v2 host).
 #[allow(unsafe_code, reason = "getifaddrs(3) is the crate-free interface enumeration (RV-P6)")]
+// getifaddrs yields sockaddr variants at their natural alignment; the
+// variant casts are the canonical libc idiom.
+#[allow(clippy::cast_ptr_alignment)]
 fn interface_addresses(ipv4: bool) -> Vec<IpAddr> {
     #[cfg(unix)]
     unsafe {
         let mut addrs: *mut libc::ifaddrs = std::ptr::null_mut();
-        if libc::getifaddrs(&mut addrs) != 0 {
+        if libc::getifaddrs(std::ptr::addr_of_mut!(addrs)) != 0 {
             return Vec::new();
         }
         let mut out = Vec::new();
         let mut cursor = addrs;
         while !cursor.is_null() {
             let ifa = &*cursor;
-            cursor = (*ifa).ifa_next;
-            if (*ifa).ifa_addr.is_null() {
+            cursor = ifa.ifa_next;
+            if ifa.ifa_addr.is_null() {
                 continue;
             }
-            let sockaddr = (*ifa).ifa_addr;
-            let ip = match (*sockaddr).sa_family as i32 {
+            let sockaddr = ifa.ifa_addr;
+            let ip = match i32::from((*sockaddr).sa_family) {
                 libc::AF_INET if ipv4 => IpAddr::V4(Ipv4Addr::from(
                     (*(sockaddr as *const libc::sockaddr_in)).sin_addr.s_addr.to_ne_bytes(),
                 )),

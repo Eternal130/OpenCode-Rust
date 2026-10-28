@@ -784,7 +784,7 @@ impl Connection {
     /// `inputResponses` + the echoed `requestState` (the TS SDK 2.0
     /// client does the same inside `callTool`; test/mcp.test.ts:164-176
     /// "Modern servers cannot call elicitInput; they return
-    /// input_required and the client retries").
+    /// `input_required` and the client retries").
     pub async fn call_tool(
         &self,
         name: &str,
@@ -888,9 +888,7 @@ impl Connection {
                 responses.insert(key.clone(), super::elicitation::result_wire(&answer, url_mode));
             }
         }
-        params.input_responses = Some(
-            responses.into_iter().map(|(key, value)| (key, value)).collect::<BTreeMap<_, _>>(),
-        );
+        params.input_responses = Some(responses.into_iter().collect::<BTreeMap<_, _>>());
         params.request_state =
             required.get("requestState").and_then(serde_json::Value::as_str).map(str::to_string);
         Ok(params)

@@ -1360,7 +1360,7 @@ impl Composer {
         let caret = self.edit.caret();
         let index = self.autocomplete.trigger_index;
         let chars: Vec<char> = self.draft.text.chars().collect();
-        let needs_space = chars.get(caret).map_or(true, |ch| *ch != ' ');
+        let needs_space = chars.get(caret).is_none_or(|ch| *ch != ' ');
         if index < caret {
             self.delete_range(index..caret);
         }
@@ -1630,7 +1630,7 @@ mod tests {
         };
         assert_eq!(prompt.text, format!("before l1\nl2\nl3 mid {} ", "x".repeat(160)));
         // The draft clears wholesale after the submit.
-        assert!(state.draft.text.is_empty());
+        assert_eq!(state.draft.text, "");
         assert_eq!(state.draft.pasted.len(), 0);
     }
 

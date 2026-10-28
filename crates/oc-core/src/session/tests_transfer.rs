@@ -172,7 +172,7 @@ async fn transfer_import_missing_parent_rejects() {
     .await
     {
         Err(ImportError::ParentNotFound(message)) => {
-            assert!(message.contains("ses_missing_parent"))
+            assert!(message.contains("ses_missing_parent"));
         }
         other => panic!("expected parent-not-found, got {other:?}"),
     }

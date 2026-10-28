@@ -862,7 +862,7 @@ pub fn enforces_params(operation_id: &str) -> bool {
 
 /// Validates one operation's path params against the generated pattern
 /// rows. A value that misses the `^literal` startsWith filter rejects
-/// with the pinned TreeFormatter message (kind `Params`); missing params
+/// with the pinned `TreeFormatter` message (kind `Params`); missing params
 /// cannot happen (the router matched the path shape).
 pub fn validate_params(operation_id: &str, params: &[(&str, &str)]) -> Result<(), String> {
     for spec in validation_gen::path_params(operation_id) {
@@ -1784,7 +1784,7 @@ mod tests {
     }
 
     /// Path-param (kind Params) pins: the generated `^literal` id
-    /// filters, TreeFormatter message shape, and the location-first
+    /// filters, `TreeFormatter` message shape, and the location-first
     /// carve-out (their 404 precedes any Params 400).
     #[test]
     fn pinned_params_messages() {
