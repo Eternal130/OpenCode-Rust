@@ -25,8 +25,14 @@
 //!   integration registration this port's registry cannot reach.
 
 use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::LazyLock;
 
 use base64::Engine as _;
+use futures::FutureExt as _;
+use futures::future::Shared;
 use rand::RngCore;
 use serde_json::Value;
 
@@ -832,12 +838,71 @@ async fn exchange_code(
 // refresh (oauth.ts:28-53 + the SDK provider's refresh grant)
 // ---------------------------------------------------------------------------
 
+/// One shared in-flight refresh (oauth.ts `refreshes`): concurrent
+/// callers of the same grant await the same future.
+type SharedRefresh =
+    Shared<Pin<Box<dyn Future<Output = Result<StoredTokens, String>> + Send>>>;
+
+/// Refresh tokens rotate, so concurrent refreshes of the same token
+/// share one request or the second gets `invalid_grant` (oauth.ts:29-33).
+static IN_FLIGHT_REFRESHES: LazyLock<parking_lot::Mutex<HashMap<String, SharedRefresh>>> =
+    LazyLock::new(|| parking_lot::Mutex::new(HashMap::new()));
+
+/// `refreshKey` (oauth.ts:35-38): the token endpoint URL, client id and
+/// refresh token identify one grant. The endpoint is only known after
+/// discovery (which runs inside the refresh), so the resource server
+/// URL stands in — one server, one token, one grant.
+fn refresh_key(config: &RemoteConfig, credential: &StoredCredential) -> String {
+    let client_id = match &credential.client {
+        Some(client) => client.client_id.clone(),
+        None => credential.method_id.clone(),
+    };
+    format!("{}\0{}\0{}", config.url, client_id, credential.refresh)
+}
+
 /// The refresh grant: rotates tokens for one stored sign-in. Discovery
 /// re-runs at refresh time exactly like the SDK's connect-time provider.
+///
+/// Concurrent refreshes for the same grant (same resource server, client
+/// id and refresh token) share one in-flight token request — the first
+/// caller performs it, later callers await the same result, and the map
+/// entry drops once the grant settles so a later refresh starts fresh.
 ///
 /// # Errors
 /// Flow failures (no token endpoint reachable, rejected grant).
 pub async fn refresh(
+    http: &reqwest::Client,
+    config: &RemoteConfig,
+    credential: &StoredCredential,
+) -> Result<StoredTokens, String> {
+    let key = refresh_key(config, credential);
+    let pending = {
+        let mut map = IN_FLIGHT_REFRESHES.lock();
+        if let Some(pending) = map.get(&key) {
+            pending.clone()
+        } else {
+            let http = http.clone();
+            let config = config.clone();
+            let credential = credential.clone();
+            let future: SharedRefresh = async move {
+                refresh_once(&http, &config, &credential).await
+            }
+            .boxed()
+            .shared();
+            map.insert(key.clone(), future.clone());
+            future
+        }
+    };
+    let outcome = pending.await;
+    // Only the inserter removes, and only after the grant settled —
+    // `refreshes.delete(key)` in the ref's `.finally`.
+    IN_FLIGHT_REFRESHES.lock().remove(&key);
+    outcome
+}
+
+/// The un-deduplicated refresh: discovery through the resource server's
+/// challenge, then the refresh grant against the token endpoint.
+async fn refresh_once(
     http: &reqwest::Client,
     config: &RemoteConfig,
     credential: &StoredCredential,
