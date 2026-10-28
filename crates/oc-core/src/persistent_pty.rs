@@ -1442,6 +1442,27 @@ impl Inner {
             let excess = live.buffer.len() - OUTPUT_LIMIT;
             live.buffer.drain(..excess);
             live.buffer_cursor += excess;
+            // Trimming by a byte count can split a multi-byte UTF-8
+            // codepoint (and any escape sequence in flight); back up to
+            // a char boundary so replay never emits invalid UTF-8
+            // (ref trims on its string buffer — pty.ts:219-221).
+            let mut extra = 0;
+            while extra < live.buffer.len()
+                && live.buffer[extra] & 0b1100_0000 == 0b1000_0000
+            {
+                extra += 1;
+            }
+            if extra > 0 {
+                if extra == live.buffer.len() {
+                    // Degenerate: only a partial codepoint survives. Drop
+                    // it entirely rather than replay invalid bytes.
+                    live.buffer_cursor += extra;
+                    live.buffer.clear();
+                } else {
+                    live.buffer.drain(..extra);
+                    live.buffer_cursor += extra;
+                }
+            }
         }
         let event = StreamEvent::Output(chunk.to_vec());
         for subscriber in live.subscribers.values_mut() {
@@ -2605,4 +2626,57 @@ mod tests {
         assert_eq!(typed["foregroundProcess"], serde_json::Value::Null);
         assert_eq!(typed, terminal_wire_json(&info));
     }
+
+    /// RW2 fix: the OUTPUT_LIMIT trim must back up to a UTF-8 char
+    /// boundary — draining by an arbitrary byte count can split a
+    /// multi-byte codepoint and replay invalid UTF-8 (ref trims its
+    /// string buffer — pty.ts:219-221).
+    #[test]
+    fn output_trim_respects_char_boundaries() {
+        let service = PersistentPty::hosted(Arc::new(|_, _| {}));
+        let id = PtyId("pty_t".into());
+        // Pre-fill so the next chunk overflows the limit and the trim
+        // point lands in the middle of a trailing two-byte char.
+        let mut live = Live {
+            info: Info {
+                id: id.clone(),
+                title: "t".into(),
+                command: "sh".into(),
+                args: vec![],
+                cwd: "/".into(),
+                status: crate::pty::Status::Running,
+                pid: 0,
+                exit_code: None,
+                session_id: SessionId::parse("ses_x").expect("session"),
+                foreground_process: None,
+                size: (80, 24),
+                output: (0, 0),
+            },
+            buffer: vec![b'a'; OUTPUT_LIMIT - 2],
+            buffer_cursor: 0,
+            writer: None,
+            master: None,
+            killer: None,
+            screen: Live::new_screen((80, 24), &[]),
+            generation: 0,
+            controller: None,
+            subscribers: HashMap::new(),
+            ended: HashMap::new(),
+        };
+        live.buffer.extend_from_slice("\u{e9}x".as_bytes()); // 2-byte char + 'x' -> LIMIT+1 bytes
+        service.inner.terminals.lock().insert(id.clone(), live);
+
+        // A LIMIT-2 byte chunk pushes the trim point (excess = LIMIT-1)
+        // exactly one byte into the trailing é — the naive drain would
+        // leave the buffer starting mid-codepoint.
+        service.inner.on_output(&id, &vec![b'b'; OUTPUT_LIMIT - 2]);
+        let terminals = service.inner.terminals.lock();
+        let live = terminals.get(&id).expect("live");
+        let text = String::from_utf8(live.buffer.clone()).expect("buffer stays valid UTF-8");
+        assert!(text.starts_with('x'), "buffer head: {:?}", &text[..4]);
+        assert!(text.ends_with('b'));
+        assert!(live.buffer.len() < OUTPUT_LIMIT);
+        assert_eq!(live.buffer_cursor, OUTPUT_LIMIT); // excess + the split codepoint byte
+    }
 }
+

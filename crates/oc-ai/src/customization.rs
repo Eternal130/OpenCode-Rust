@@ -168,7 +168,7 @@ fn alibaba_wrap(wrap: &mut AnthropicBodyWrap<'_>) -> Result<(), AiError> {
     let thinking_type = want_tool_string(object.get("type"))?;
     // `opts.thinking?.budgetTokens ?? opts.thinking?.budget_tokens`
     let budget = match (object.get("budgetTokens"), object.get("budget_tokens")) {
-        (Some(value), _) | (None, Some(value)) => Some(want_number(value)?),
+        (Some(value), _) | (None, Some(value)) => Some(want_integer(value)?),
         (None, None) => None,
     };
     let mut thinking = Map::new();
@@ -208,7 +208,12 @@ fn meta_wrap(wrap: &mut AnthropicBodyWrap<'_>) -> Result<(), AiError> {
         let Some(native) = wrap.tool_natives.get(index).copied().flatten() else {
             continue;
         };
-        let Some(meta) = native.get("meta") else { continue };
+        // Ref decodes `native.meta` with the WebSearch schema — a missing
+        // `meta` is an invalid request, not a silently-kept generic tool
+        // (meta-messages.ts:38-42).
+        let meta = native
+            .get("meta")
+            .ok_or_else(|| invalid_request("Expected an object, received undefined"))?;
         let Some(search) = meta.as_object() else {
             return Err(invalid_request(format!("Expected an object, received {meta}")));
         };
@@ -249,7 +254,15 @@ fn meta_wrap(wrap: &mut AnthropicBodyWrap<'_>) -> Result<(), AiError> {
                         }
                     }
                 }
-                Some(Value::Object(location_object.clone()))
+                // The ref schema emits only the declared keys
+                // (meta-responses.ts:15-23), not the whole input object.
+                let mut location = Map::new();
+                for key in ["type", "city", "region", "country", "timezone"] {
+                    if let Some(value) = location_object.get(key) {
+                        location.insert(key.into(), value.clone());
+                    }
+                }
+                Some(Value::Object(location))
             }
         };
         let mut remapped = Map::new();
@@ -276,6 +289,18 @@ fn want_number(value: &Value) -> Result<f64, AiError> {
     value
         .as_f64()
         .ok_or_else(|| invalid_request(format!("Expected a number, received {value}")))
+}
+
+/// `Schema.Int` check (ref alibaba-messages.ts:13-14): the thinking budget
+/// must be a number without a fractional part.
+fn want_integer(value: &Value) -> Result<f64, AiError> {
+    let number = want_number(value)?;
+    if number.fract() != 0.0 {
+        return Err(invalid_request(format!(
+            "Expected an integer, received {value}"
+        )));
+    }
+    Ok(number)
 }
 
 /// Static registry entries for the providers with known special cases.
@@ -352,6 +377,11 @@ pub fn register(provider: &str, customization: ProviderCustomization) {
 
 /// Look up the customization for a provider/route id. Unregistered ids
 /// resolve to the no-op customization (generic behavior everywhere).
+///
+/// The `id` is a provider id or a route id depending on which consumer
+/// hook performs the lookup (e.g. the cache policy resolution passes the
+/// resolved route), so entries must register under whichever key the
+/// relevant consumer will query.
 #[must_use]
 pub fn for_route(id: &str) -> ProviderCustomization {
     if let Some((_, customization)) = static_entries().iter().find(|(key, _)| *key == id) {
@@ -450,5 +480,103 @@ mod rw01_tests {
             ProviderCustomization { wrap_anthropic_body: Some(wrap), ..ProviderCustomization::noop() },
         );
         assert!(for_route("acme-anthropic").wrap_anthropic_body.is_some());
+    }
+}
+
+#[cfg(test)]
+mod rw2fix_tests {
+    use super::*;
+
+    fn wrap_context<'a>(
+        body: &'a mut Value,
+        natives: &'static [Option<&'static BTreeMap<String, Value>>],
+    ) -> AnthropicBodyWrap<'a> {
+        AnthropicBodyWrap {
+            provider: "meta",
+            raw_thinking: None,
+            tool_natives: natives,
+            max_tokens: 1024.0,
+            body,
+        }
+    }
+
+    fn static_native(value: Value) -> &'static BTreeMap<String, Value> {
+        Box::leak(serde_json::from_value(value).expect("native map"))
+    }
+
+    /// RW2 fix: a flatten-tool `native` without `meta` is an invalid
+    /// request (ref decodes `native.meta` with the WebSearch schema —
+    /// meta-messages.ts:38-42), not a silently-kept generic tool.
+    #[test]
+    fn meta_wrap_errors_on_missing_native_meta() {
+        let mut body = serde_json::json!({"tools": [{"type": "custom_tool", "name": "t"}]});
+        let empty: &'static BTreeMap<String, Value> = Box::leak(Box::new(BTreeMap::new()));
+        let natives: &'static [Option<&'static BTreeMap<String, Value>>] =
+            Box::leak(vec![Some(empty)].into_boxed_slice());
+        let mut context = wrap_context(&mut body, natives);
+        let error = meta_wrap(&mut context).expect_err("missing native.meta rejected");
+        assert!(
+            error.message().contains("Expected an object"),
+            "unexpected message: {}",
+            error.message()
+        );
+    }
+
+    /// RW2 fix: `user_location` re-emits only the schema keys
+    /// (meta-responses.ts:15-23) — extra input keys are dropped.
+    #[test]
+    fn meta_wrap_user_location_keeps_only_schema_keys() {
+        let mut body = serde_json::json!({"tools": [{"type": "custom_tool", "name": "t"}]});
+        let native = static_native(serde_json::json!({
+            "meta": {
+                "type": "web_search",
+                "user_location": {
+                    "type": "approximate",
+                    "city": "Springfield",
+                    "extra": "dropped",
+                },
+            },
+        }));
+        let natives: &'static [Option<&'static BTreeMap<String, Value>>] =
+            Box::leak(vec![Some(native)].into_boxed_slice());
+        let mut context = wrap_context(&mut body, natives);
+        meta_wrap(&mut context).expect("wrap ok");
+        let location = &body["tools"][0]["user_location"];
+        assert_eq!(location["type"], "approximate");
+        assert_eq!(location["city"], "Springfield");
+        assert!(location.get("extra").is_none(), "extra keys dropped: {location}");
+    }
+
+    /// RW2 fix: the alibaba thinking budget is `Schema.Int` — a
+    /// fractional value is rejected (alibaba-messages.ts:13-14).
+    #[test]
+    fn alibaba_wrap_rejects_fractional_thinking_budget() {
+        let raw = serde_json::json!({"type": "enabled", "budgetTokens": 1024.5});
+        let mut body = serde_json::json!({"max_tokens": 4096});
+        let mut context = AnthropicBodyWrap {
+            provider: "alibaba",
+            raw_thinking: Some(&raw),
+            tool_natives: &[],
+            max_tokens: 4096.0,
+            body: &mut body,
+        };
+        let error = alibaba_wrap(&mut context).expect_err("fractional budget rejected");
+        assert!(
+            error.message().contains("integer"),
+            "unexpected message: {}",
+            error.message()
+        );
+        // integers keep working
+        let raw = serde_json::json!({"type": "enabled", "budgetTokens": 1024});
+        let mut body = serde_json::json!({"max_tokens": 4096});
+        let mut context = AnthropicBodyWrap {
+            provider: "alibaba",
+            raw_thinking: Some(&raw),
+            tool_natives: &[],
+            max_tokens: 4096.0,
+            body: &mut body,
+        };
+        alibaba_wrap(&mut context).expect("integer budget accepted");
+        assert_eq!(body["thinking"]["budget_tokens"], 1024.0);
     }
 }
