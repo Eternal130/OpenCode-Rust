@@ -81,9 +81,9 @@ async fn find_substring_completion_ranks_first_and_fuzzy_falls_back() {
     assert!(!found.is_empty());
     assert!(found[0].ends_with("readme.md"), "substring completion first: {found:?}");
 
-    // Fuzzy subsequence: "rdt" matches readme.md and rust/.../docs/todo.md
-    // (scattered); substring-completing readme.md wins.
-    let envelope = find_raw(&server, "rdt").await;
+    // Fuzzy subsequence: "rdm" matches readme.md (tight: d-m adjacent)
+    // and the scattered rust/.../todo.md path; the tighter match wins.
+    let envelope = find_raw(&server, "rdm").await;
     let found = paths(&envelope);
     assert!(found.iter().any(|p| p.ends_with("readme.md")), "subsequence matches: {found:?}");
     assert!(found.iter().any(|p| p.ends_with("todo.md")), "subsequence matches: {found:?}");
