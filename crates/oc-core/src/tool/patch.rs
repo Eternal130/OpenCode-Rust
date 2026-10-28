@@ -356,7 +356,7 @@ async fn execute_patch(
 
     // ---- ONE permission assert over every resource -------------------------
     let patch_files: Vec<FileDiff> = prepared.iter().map(patch_file_as_is).collect();
-    let mut resources: Vec<String> = prepared
+    let targets: Vec<String> = prepared
         .iter()
         .flat_map(|change| {
             let mut targets = vec![change.target.resource.clone()];
@@ -366,8 +366,15 @@ async fn execute_patch(
             targets
         })
         .collect();
-    resources.sort();
-    resources.dedup();
+    // v2: `[...new Set(targets.map(...))]` (patch.ts:198) — insertion-order
+    // dedup for the permission resources; the `filepath` metadata keeps the
+    // full un-deduped target list in patch order (patch.ts:202).
+    let mut seen = std::collections::HashSet::new();
+    let resources: Vec<String> = targets
+        .iter()
+        .filter(|resource| seen.insert((*resource).clone()))
+        .cloned()
+        .collect();
     let mut assert_input =
         crate::permission::AssertInput::new(context.session_id.clone(), "edit", resources.clone());
     assert_input.agent = Some(context.agent.clone());
@@ -375,7 +382,7 @@ async fn execute_patch(
     let diffs_joined: String = patch_files.iter().map(|file| format!("{}\n", file.patch)).collect();
     assert_input.metadata = Some(
         serde_json::from_value(serde_json::json!({
-            "filepath": resources.join(", "),
+            "filepath": targets.join(", "),
             "diff": diffs_joined,
             "files": patch_files,
         }))
