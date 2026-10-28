@@ -260,17 +260,72 @@ pub async fn read_revert(
         Some(json) => {
             let value: serde_json::Value =
                 serde_json::from_str(&json).map_err(|error| error.to_string())?;
-            Some(SessionRevertState {
-                message_id: MessageId::parse(
-                    value["messageID"].as_str().unwrap_or_default().to_string(),
-                )
-                .unwrap_or_else(|error| MessageId(error.value)),
-                snapshot: value["snapshot"].as_str().map(SnapshotId::parse),
-                files: value["files"].as_array().map(|files| {
-                    files.iter().filter_map(|f| serde_json::from_value(f.clone()).ok()).collect()
-                }),
-            })
+            decode_persisted_revert(&value)
         }
+    })
+}
+
+/// `Session.Revert.Persisted` decode (ref session-revert.ts): the column
+/// holds either the current `Revert` shape or the legacy V1 shape whose
+/// files key by `path` (pre-FileDiff-canonical). Legacy rows map onto the
+/// current shape — `path` → `file`, `snapshot` string → `Snapshot.ID`.
+/// The ref decode computes no aggregation; neither does this one.
+#[must_use]
+pub fn decode_persisted_revert(value: &serde_json::Value) -> Option<SessionRevertState> {
+    // Current shape first: files entries carry `file`.
+    if let Ok(revert) = serde_json::from_value::<Revert>(value.clone()) {
+        return Some(SessionRevertState {
+            message_id: revert.message_id,
+            snapshot: revert.snapshot,
+            files: revert.files,
+        });
+    }
+    // Legacy V1 shape (ref `RevertV1` / `FileDiffV1`: `path`, plain-string
+    // snapshot, Finite additions/deletions).
+    #[derive(serde::Deserialize)]
+    struct FileDiffV1 {
+        path: String,
+        status: oc_schema::session_support::FileDiffStatus,
+        additions: serde_json::Number,
+        deletions: serde_json::Number,
+        patch: String,
+    }
+    #[derive(serde::Deserialize)]
+    struct RevertV1 {
+        #[serde(rename = "messageID")]
+        message_id: MessageId,
+        #[serde(default)]
+        part_id: Option<String>,
+        snapshot: Option<String>,
+        #[serde(default)]
+        files: Option<Vec<FileDiffV1>>,
+    }
+    let legacy: RevertV1 = serde_json::from_value(value.clone()).ok()?;
+    let files = legacy.files.map(|files| {
+        files
+            .into_iter()
+            .map(|file| oc_schema::session_support::FileDiff {
+                file: file.path,
+                patch: file.patch,
+                additions: file
+                    .additions
+                    .as_f64()
+                    .map(|v| v.max(0.0) as u64)
+                    .unwrap_or_default(),
+                deletions: file
+                    .deletions
+                    .as_f64()
+                    .map(|v| v.max(0.0) as u64)
+                    .unwrap_or_default(),
+                status: file.status,
+            })
+            .collect()
+    });
+    let _ = legacy.part_id; // parity surface: legacy partID has no current consumer
+    Some(SessionRevertState {
+        message_id: legacy.message_id,
+        snapshot: legacy.snapshot.map(SnapshotId::parse),
+        files,
     })
 }
 
@@ -332,5 +387,71 @@ async fn plan(
             session_id: session_id.as_str().to_string(),
             message_id: message_id.as_str().to_string(),
         }),
+    }
+}
+
+#[cfg(test)]
+mod persisted_decode_tests {
+    // RW-11: `Session.Revert.Persisted` decode — current shape passes
+    // through; TS-era rows with `path`-keyed files map onto the current
+    // FileDiff shape (ref session-revert.ts decode).
+    #![allow(clippy::assert_is_empty)]
+
+    use super::*;
+
+    #[test]
+    fn decodes_current_revert_rows() {
+        let value = serde_json::json!({
+            "messageID": "msg_1",
+            "snapshot": "snp_abc",
+            "files": [{ "file": "src/a.rs", "patch": "@@", "additions": 3, "deletions": 1, "status": "modified" }]
+        });
+        let state = decode_persisted_revert(&value).expect("current row decodes");
+        assert_eq!(state.message_id, MessageId("msg_1".into()));
+        assert_eq!(state.snapshot, Some(SnapshotId::parse("snp_abc")));
+        let files = state.files.expect("files present");
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].file, "src/a.rs");
+        assert_eq!(files[0].additions, 3);
+    }
+
+    #[test]
+    fn decodes_legacy_ts_era_revert_rows() {
+        // V1 shape: `path`-keyed files, plain-string snapshot, float-tolerant counts.
+        let value = serde_json::json!({
+            "messageID": "msg_2",
+            "partID": "prt_9",
+            "snapshot": "snp_legacy",
+            "diff": "--- legacy diff ---",
+            "files": [
+                { "path": "src/b.ts", "status": "added", "additions": 10.0, "deletions": 0, "patch": "@@ -0,0 +1 @@" },
+                { "path": "old.txt", "status": "deleted", "additions": 0, "deletions": 4.0, "patch": "@@" }
+            ]
+        });
+        let state = decode_persisted_revert(&value).expect("legacy row decodes");
+        assert_eq!(state.message_id, MessageId("msg_2".into()));
+        assert_eq!(state.snapshot, Some(SnapshotId::parse("snp_legacy")));
+        let files = state.files.expect("files mapped");
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].file, "src/b.ts");
+        assert_eq!(files[0].status, oc_schema::session_support::FileDiffStatus::Added);
+        assert_eq!(files[0].additions, 10);
+        assert_eq!(files[1].file, "old.txt");
+        assert_eq!(files[1].deletions, 4);
+    }
+
+    #[test]
+    fn decodes_legacy_row_without_files_or_snapshot() {
+        let value = serde_json::json!({ "messageID": "msg_3" });
+        let state = decode_persisted_revert(&value).expect("minimal legacy row decodes");
+        assert_eq!(state.message_id, MessageId("msg_3".into()));
+        assert_eq!(state.snapshot, None);
+        assert!(state.files.unwrap_or_default().is_empty());
+    }
+
+    #[test]
+    fn rejects_rows_without_a_message_id() {
+        assert!(decode_persisted_revert(&serde_json::json!({ "snapshot": "snp_x" })).is_none());
+        assert!(decode_persisted_revert(&serde_json::json!("garbage")).is_none());
     }
 }

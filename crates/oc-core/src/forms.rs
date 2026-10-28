@@ -74,6 +74,9 @@ pub enum FormError {
 struct Entry {
     form: Info,
     state: State,
+    /// Wall-clock settlement time (TTL eviction; `None` while pending —
+    /// ref `Cache.timeToLive`: pending → `Duration.infinity`).
+    settled_at: Option<u64>,
     /// Resolves with the terminal state.
     settled: watch::Sender<Option<State>>,
 }
@@ -86,7 +89,6 @@ pub struct Forms {
 
 struct Inner {
     ids: Arc<dyn IdGen>,
-    #[allow(dead_code)] // parity surface: form expiry timestamps (used by server phase)
     clock: Arc<dyn Clock>,
     forms: Mutex<HashMap<FormId, Entry>>,
     bus: Option<crate::bus::Bus>,
@@ -114,9 +116,22 @@ impl Forms {
         self
     }
 
-    #[allow(dead_code)] // parity surface: form expiry timestamps (used by server phase)
+    #[must_use]
     fn now_ms(&self) -> u64 {
-        u64::try_from(self.inner.clock.unix_ms()).unwrap_or(0)
+        u64::try_from(self.inner.clock.unix_ms().max(0)).unwrap_or(0)
+    }
+
+    /// Evict settled entries older than [`RETENTION_MS`] (ref form.ts:8
+    /// `RETENTION = Duration.minutes(10)` fed to `Cache.makeWith`'s
+    /// `timeToLive`: pending → infinity, settled → 10 minutes).
+    fn evict_expired(&self) {
+        let now = self.now_ms();
+        self.inner.forms.lock().retain(|_, entry| {
+            match entry.settled_at {
+                Some(settled_at) => now.saturating_sub(settled_at) < RETENTION_MS,
+                None => true, // pending forms never expire
+            }
+        });
     }
 
     async fn publish(&self, type_: &str, data: serde_json::Value) {
@@ -137,6 +152,7 @@ impl Forms {
         if let Some(invalid) = validate_fields(&input.fields) {
             return Err(InvalidFormError { message: invalid }.into());
         }
+        self.evict_expired();
         let form = Info {
             id: id.clone(),
             session_id: input.session_id.clone(),
@@ -145,7 +161,7 @@ impl Forms {
             fields: input.fields,
         };
         let (settled, _) = watch::channel(None);
-        let entry = Entry { form: form.clone(), state: State::Pending, settled };
+        let entry = Entry { form: form.clone(), state: State::Pending, settled_at: None, settled };
         let existed = {
             let mut forms = self.inner.forms.lock();
             if forms.contains_key(&id) {
@@ -198,6 +214,7 @@ impl Forms {
 
     /// `Form.get`.
     pub fn get(&self, id: &FormId) -> Result<Info, NotFoundError> {
+        self.evict_expired();
         self.inner
             .forms
             .lock()
@@ -209,6 +226,7 @@ impl Forms {
     /// `Form.list` — pending forms, optionally per session.
     #[must_use]
     pub fn list(&self, session_id: Option<&str>) -> Vec<Info> {
+        self.evict_expired();
         self.inner
             .forms
             .lock()
@@ -221,6 +239,7 @@ impl Forms {
 
     /// `Form.state`.
     pub fn state(&self, id: &FormId) -> Result<State, NotFoundError> {
+        self.evict_expired();
         self.inner
             .forms
             .lock()
@@ -231,6 +250,7 @@ impl Forms {
 
     /// `Form.reply`.
     pub async fn reply(&self, id: &FormId, answer: Answer) -> Result<(), FormError> {
+        self.evict_expired();
         let form = {
             let forms = self.inner.forms.lock();
             let entry = forms.get(id).ok_or_else(|| NotFoundError(id.clone()))?;
@@ -247,6 +267,7 @@ impl Forms {
             let mut forms = self.inner.forms.lock();
             if let Some(entry) = forms.get_mut(id) {
                 entry.state = next.clone();
+                entry.settled_at = Some(self.now_ms());
                 let _ = entry.settled.send(Some(next.clone()));
             }
         }
@@ -260,6 +281,7 @@ impl Forms {
 
     /// `Form.cancel`.
     pub async fn cancel(&self, id: &FormId, message: Option<&str>) -> Result<(), FormError> {
+        self.evict_expired();
         let session_id = {
             let forms = self.inner.forms.lock();
             let entry = forms.get(id).ok_or_else(|| NotFoundError(id.clone()))?;
@@ -273,6 +295,7 @@ impl Forms {
             let mut forms = self.inner.forms.lock();
             if let Some(entry) = forms.get_mut(id) {
                 entry.state = next.clone();
+                entry.settled_at = Some(self.now_ms());
                 let _ = entry.settled.send(Some(next));
             }
         }
@@ -714,9 +737,84 @@ fn days_in_month(year: i32, month: u32) -> u32 {
     }
 }
 
-fn is_date_time(_value: &str) -> bool {
-    // new Date(value) non-NaN — permissive; reject obvious garbage.
-    true
+fn is_date_time(value: &str) -> bool {
+    // new Date(value) non-NaN — JS parses ISO 8601 dates/date-times
+    // (optionally space-separated, fractional seconds, and Z/±HH:MM
+    // offsets; a missing offset reads as local time, still valid).
+    let (date, rest) = match value.split_once(['T', 't', ' ']) {
+        Some((date, rest)) => (date, Some(rest)),
+        None => (value, None),
+    };
+    if !is_date(date) {
+        return false;
+    }
+    let Some(rest) = rest else { return true };
+    // time: HH:mm[:ss[.fff]] followed by an optional offset.
+    let bytes = rest.as_bytes();
+    let mut index = 0;
+    let take_digits = |index: &mut usize, count: usize| -> Option<u32> {
+        if *index + count > bytes.len()
+            || !bytes[*index..*index + count].iter().all(u8::is_ascii_digit)
+        {
+            return None;
+        }
+        let text = &rest[*index..*index + count];
+        *index += count;
+        text.parse().ok()
+    };
+    let Some(hour) = take_digits(&mut index, 2) else { return false };
+    if index >= bytes.len() || bytes[index] != b':' {
+        return false;
+    }
+    index += 1;
+    let Some(minute) = take_digits(&mut index, 2) else { return false };
+    let mut second = 0;
+    let mut millis = 0;
+    if index < bytes.len() && bytes[index] == b':' {
+        index += 1;
+        let Some(sec) = take_digits(&mut index, 2) else { return false };
+        second = sec;
+        if index < bytes.len() && bytes[index] == b'.' {
+            index += 1;
+            let start = index;
+            while index < bytes.len() && bytes[index].is_ascii_digit() {
+                index += 1;
+            }
+            if index == start {
+                return false;
+            }
+            millis = rest[start..index].parse().unwrap_or(0);
+        }
+    }
+    hour < 24 && minute < 60 && second < 60 && millis < 1000 && is_offset(&rest[index..])
+}
+
+/// Trailing UTC offset: empty (local), `Z`/`z`, `±HH:MM`, `±HHMM`, or `±HH`.
+fn is_offset(rest: &str) -> bool {
+    if rest.is_empty() || rest == "Z" || rest == "z" {
+        return true;
+    }
+    let bytes = rest.as_bytes();
+    if bytes[0] != b'+' && bytes[0] != b'-' {
+        return false;
+    }
+    let digits = &bytes[1..];
+    let is_digits = |slice: &[u8]| slice.iter().all(u8::is_ascii_digit);
+    let (hour, minute): (u32, u32) = match digits.len() {
+        2 => (rest[1..3].parse().unwrap_or(99), 0),
+        4 => (rest[1..3].parse().unwrap_or(99), rest[3..5].parse().unwrap_or(99)),
+        5 if digits[2] == b':' => {
+            (rest[1..3].parse().unwrap_or(99), rest[4..6].parse().unwrap_or(99))
+        }
+        _ => return false,
+    };
+    let shape_ok = match digits.len() {
+        2 => is_digits(digits),
+        4 => is_digits(digits),
+        5 => is_digits(&digits[..2]) && is_digits(&digits[3..]),
+        _ => false,
+    };
+    shape_ok && hour < 24 && minute < 60
 }
 
 #[cfg(test)]
@@ -966,5 +1064,144 @@ mod tests {
                     .to_string()
             )
         );
+    }
+
+    /// Mutable wall clock for deterministic TTL tests.
+    struct MutableClock(parking_lot::Mutex<u64>);
+
+    impl MutableClock {
+        fn at(unix_ms: u64) -> Arc<Self> {
+            Arc::new(Self(parking_lot::Mutex::new(unix_ms)))
+        }
+        fn advance(&self, ms: u64) {
+            *self.0.lock() += ms;
+        }
+    }
+
+    impl oc_util::determinism::Clock for MutableClock {
+        fn now(&self) -> std::time::SystemTime {
+            std::time::UNIX_EPOCH + std::time::Duration::from_millis(*self.0.lock())
+        }
+    }
+
+    fn forms_with_clock(clock: Arc<MutableClock>) -> Forms {
+        Forms::new(Arc::new(SequentialIdGen::new()), clock)
+    }
+
+    async fn settle_one(forms: &Forms) -> FormId {
+        let created = forms
+            .create(NewForm {
+                session_id: "ses_ttl".into(),
+                title: "TTL".into(),
+                metadata: None,
+                fields: vec![string_field("name", false)],
+            })
+            .await
+            .unwrap();
+        forms
+            .reply(&created.id, answer(&[("name", FormValue::String("x".into()))]))
+            .await
+            .unwrap();
+        created.id
+    }
+
+    #[tokio::test]
+    async fn settled_forms_expire_after_retention_while_pending_forms_do_not() {
+        let clock = MutableClock::at(1_000_000);
+        let forms = forms_with_clock(Arc::clone(&clock));
+        let settled = settle_one(&forms).await;
+        let pending = forms
+            .create(NewForm {
+                session_id: "ses_ttl".into(),
+                title: "Pending".into(),
+                metadata: None,
+                fields: vec![string_field("name", false)],
+            })
+            .await
+            .unwrap();
+
+        // Just before the retention window closes the settled entry survives.
+        clock.advance(RETENTION_MS - 1_000);
+        assert!(matches!(forms.state(&settled).unwrap(), State::Answered { .. }));
+
+        // Past retention the settled entry is evicted; pending never expires.
+        clock.advance(2_000);
+        assert!(forms.get(&settled).is_err());
+        assert!(matches!(forms.state(&settled), Err(NotFoundError(_))));
+        assert!(forms.get(&pending.id).is_ok());
+        assert_eq!(forms.list(None).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn cancelled_forms_expire_after_retention_too() {
+        let clock = MutableClock::at(1_000_000);
+        let forms = forms_with_clock(Arc::clone(&clock));
+        let created = forms
+            .create(NewForm {
+                session_id: "ses_ttl".into(),
+                title: "Cancel TTL".into(),
+                metadata: None,
+                fields: vec![string_field("name", false)],
+            })
+            .await
+            .unwrap();
+        forms.cancel(&created.id, None).await.unwrap();
+        clock.advance(RETENTION_MS + 1);
+        assert!(forms.state(&created.id).is_err());
+    }
+
+    #[test]
+    fn date_time_format_validates_iso_shapes() {
+        let field = Field::String {
+            key: "when".into(),
+            title: None,
+            description: None,
+            required: None,
+            hidden: None,
+            when: None,
+            format: Some(oc_schema::form::StringFormat::DateTime),
+            min_length: None,
+            max_length: None,
+            pattern: None,
+            placeholder: None,
+            default: None,
+            options: None,
+            custom: None,
+        };
+        let valid = [
+            "2026-01-02T03:04:05Z",
+            "2026-01-02T03:04:05.123Z",
+            "2026-01-02t03:04:05z",
+            "2026-01-02 03:04:05",
+            "2026-01-02T03:04:05+02:00",
+            "2026-01-02T03:04:05-0200",
+            "2026-01-02",
+            "2026-01-02T03:04:05",
+        ];
+        for value in valid {
+            assert_eq!(
+                validate_answer(std::slice::from_ref(&field), &answer(&[("when", FormValue::String(value.into()))])),
+                None,
+                "expected valid: {value}"
+            );
+        }
+        let invalid = [
+            "not a date",
+            "2026-13-02T03:04:05Z",
+            "2026-02-30",
+            "2026-01-02T25:04:05Z",
+            "2026-01-02T03:60:05Z",
+            "2026-01-02T03:04:05+99:00",
+            "2026-01-02T03",
+            "2026-01-02T03:04:05.Z",
+            "26-01-02",
+        ];
+        for value in invalid {
+            assert_eq!(
+                validate_answer(std::slice::from_ref(&field), &answer(&[("when", FormValue::String(value.into()))])),
+                Some("Expected date-time for form field: when".to_string()),
+                "expected invalid: {value}"
+            );
+        }
     }
 }
