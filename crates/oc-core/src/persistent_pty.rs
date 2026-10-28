@@ -433,10 +433,11 @@ struct Live {
     writer: Option<Box<dyn std::io::Write + Send>>,
     master: Option<Box<dyn portable_pty::MasterPty + Send>>,
     killer: Option<Box<dyn portable_pty::ChildKiller + Send>>,
-    /// Visible screen rows (in-process machine tracks the plain text;
-    /// control-sequence-aware rendering belongs to the Phase 9 daemon).
-    rows: Vec<String>,
-    cursor: (usize, usize),
+    /// VT terminal emulator (RW-02): real screen tracking over the
+    /// output stream — CSI/OSC sequences, cursor movement, erase,
+    /// alt-screen and resize handled by `vt100` (the same crate the
+    /// TUI pane uses). Rows/cursor derive on demand.
+    screen: vt100::Parser,
     generation: u64,
     controller: Option<String>,
     subscribers: HashMap<u64, Subscriber>,
@@ -453,6 +454,42 @@ struct Subscriber {
 }
 
 const OUTPUT_LIMIT: usize = 1024 * 1024 * 8;
+
+impl Live {
+    /// A fresh VT grid at `size` (RW-02), with `history` bytes replayed
+    /// through it (restore path: the retained replay buffer IS the
+    /// screen's history — deterministic reconstruction).
+    fn new_screen(size: (u16, u16), history: &[u8]) -> vt100::Parser {
+        let mut parser = vt100::Parser::new(size.1.max(1), size.0.max(1), 0);
+        parser.process(history);
+        parser
+    }
+
+    /// The visible screen rows as plain text, trailing blanks trimmed
+    /// (`read`/`snapshot`/checkpoints all read this).
+    fn screen_rows(&self) -> Vec<String> {
+        vt_rows(&self.screen)
+    }
+
+    /// The screen cursor `(x, y)`.
+    fn screen_cursor(&self) -> (usize, usize) {
+        vt_cursor(&self.screen)
+    }
+}
+
+/// The visible rows of a VT grid as plain text, trailing blanks
+/// trimmed (RW-02; free so tests can drive raw streams).
+fn vt_rows(parser: &vt100::Parser) -> Vec<String> {
+    let screen = parser.screen();
+    let (_, cols) = screen.size();
+    screen.rows(0, cols).map(|row| row.trim_end().to_owned()).collect()
+}
+
+/// The cursor `(x, y)` of a VT grid.
+fn vt_cursor(parser: &vt100::Parser) -> (usize, usize) {
+    let (y, x) = parser.screen().cursor_position();
+    (usize::from(x), usize::from(y))
+}
 
 /// The daemon-protocol generation this machine speaks
 /// (`daemon.ts:8` `ProtocolVersion`; bumped on wire-format changes).
@@ -844,8 +881,7 @@ impl PersistentPty {
             writer: Some(writer),
             master: Some(pair.master),
             killer: Some(killer),
-            rows: vec![String::new(); rows as usize],
-            cursor: (0, 0),
+            screen: Live::new_screen((cols, rows), &[]),
             generation: 0,
             controller: None,
             subscribers: HashMap::new(),
@@ -990,16 +1026,17 @@ impl PersistentPty {
         let live = terminals
             .get(id)
             .ok_or_else(|| NotFoundError { pty_id: id.clone() }.into_unavailable())?;
-        let text = live.rows.join("\n");
+        let text = live.screen_rows().join("\n");
+        let cursor = live.screen_cursor();
         let checkpoint = wire::encode_checkpoint(&wire::CheckpointV1 {
             cols: live.info.size.0,
             rows: live.info.size.1,
-            cursor_x: u32::try_from(live.cursor.0).unwrap_or(u32::MAX),
-            cursor_y: u32::try_from(live.cursor.1).unwrap_or(u32::MAX),
+            cursor_x: u32::try_from(cursor.0).unwrap_or(u32::MAX),
+            cursor_y: u32::try_from(cursor.1).unwrap_or(u32::MAX),
             generation: live.generation,
             scrollback: text.clone(),
         });
-        Ok(Snapshot { info: live.info.clone(), text, checkpoint, cursor: live.cursor })
+        Ok(Snapshot { info: live.info.clone(), text, checkpoint, cursor })
     }
 
     /// `read(sessionID, lines?)` (index.ts:265-291): the current terminal
@@ -1025,8 +1062,8 @@ impl PersistentPty {
             let terminals = self.inner.terminals.lock();
             terminals.get(&id).map(|live| LiveShadow {
                 info: live.info.clone(),
-                rows: live.rows.clone(),
-                cursor: live.cursor,
+                rows: live.screen_rows(),
+                cursor: live.screen_cursor(),
             })
         };
         let Some(live) = shadow else {
@@ -1119,8 +1156,8 @@ impl PersistentPty {
                 info: live.info.clone(),
                 buffer: base64_encode(&live.buffer),
                 buffer_cursor: live.buffer_cursor,
-                rows: live.rows.clone(),
-                cursor: live.cursor,
+                rows: live.screen_rows(),
+                cursor: live.screen_cursor(),
                 generation: live.generation,
             })
             .collect();
@@ -1366,6 +1403,11 @@ impl Inner {
             if let Some(number) = info.id.0.rsplit('_').next().and_then(|n| n.parse::<u64>().ok()) {
                 *next_number = (*next_number).max(number);
             }
+            // RW-02: the VT grid is reconstructed by replaying the
+            // retained buffer through a fresh parser (the buffer IS
+            // the screen's history) — the stored `rows`/`cursor` stay
+            // the `state.json` snapshot shape for wire compatibility.
+            let screen = Live::new_screen(info.size, &buffer);
             terminals.insert(
                 info.id.clone(),
                 Live {
@@ -1375,8 +1417,7 @@ impl Inner {
                     writer: None,
                     master: None,
                     killer: None,
-                    rows: snapshot.rows.clone(),
-                    cursor: snapshot.cursor,
+                    screen,
                     generation: snapshot.generation,
                     controller: None,
                     subscribers: HashMap::new(),
@@ -1391,32 +1432,11 @@ impl Inner {
         let mut terminals = self.terminals.lock();
         let Some(live) = terminals.get_mut(id) else { return };
         live.info.output.1 += chunk.len();
-        for byte in chunk {
-            // In-process screen tracking: plain text with CR/LF/newline
-            // handling; control-sequence rendering is the daemon's job.
-            let (x, y) = live.cursor;
-            match byte {
-                b'\n' => {
-                    let next = (y + 1).min(live.rows.len().saturating_sub(1));
-                    live.cursor = (0, next);
-                }
-                b'\r' => live.cursor = (0, y),
-                0x08 => live.cursor = (x.saturating_sub(1), y),
-                _ => {
-                    if y < live.rows.len() {
-                        let row = &mut live.rows[y];
-                        if x < live.info.size.0 as usize {
-                            if row.len() <= x {
-                                row.push(' ');
-                            }
-                            let encoded = *byte as char;
-                            row.replace_range(x..=x, &encoded.to_string());
-                        }
-                        live.cursor = ((x + 1).min(live.info.size.0 as usize), y);
-                    }
-                }
-            }
-        }
+        // RW-02: real terminal emulation — the vt100 parser handles
+        // CSI/OSC escape sequences, cursor movement, erase ops, the
+        // alternate screen and line wrapping (replaces the naive
+        // \n/\r/0x08 byte model; the daemon host shares this code).
+        live.screen.process(chunk);
         live.buffer.extend_from_slice(chunk);
         if live.buffer.len() > OUTPUT_LIMIT {
             let excess = live.buffer.len() - OUTPUT_LIMIT;
@@ -1440,7 +1460,7 @@ impl Inner {
             let _ = master.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 });
         }
         live.info.size = (cols, rows);
-        live.rows.resize(rows as usize, String::new());
+        live.screen.set_size(rows.max(1), cols.max(1));
         if let Some(attachment) = attachment {
             if live.controller.as_deref() == Some(attachment) {
                 live.generation += 1;
@@ -1450,13 +1470,14 @@ impl Inner {
         // versioned §7 format — same bytes `snapshot` records) and the
         // generation (v2 daemon.ts:81-87,
         // handlers/persistent-pty.ts:141-145).
+        let cursor = live.screen_cursor();
         let checkpoint = wire::encode_checkpoint(&wire::CheckpointV1 {
             cols,
             rows,
-            cursor_x: u32::try_from(live.cursor.0).unwrap_or(u32::MAX),
-            cursor_y: u32::try_from(live.cursor.1).unwrap_or(u32::MAX),
+            cursor_x: u32::try_from(cursor.0).unwrap_or(u32::MAX),
+            cursor_y: u32::try_from(cursor.1).unwrap_or(u32::MAX),
             generation: live.generation,
-            scrollback: live.rows.join("\n"),
+            scrollback: live.screen_rows().join("\n"),
         });
         let event = StreamEvent::Resized { cols, rows, generation: live.generation, checkpoint };
         for subscriber in live.subscribers.values_mut() {
@@ -2426,6 +2447,112 @@ mod tests {
             })
             .expect("resized event");
         assert_eq!(wire::decode_checkpoint(&stream_checkpoint).expect("decode"), decoded);
+    }
+
+    // -- RW-02: vt100 screen tracking (deterministic ANSI streams) ----------
+
+    /// Feeds a raw byte stream through the machine's VT grid at `size`
+    /// and returns the derived `(rows, cursor)` — the exact derivation
+    /// `read`/`snapshot`/resize checkpoints use.
+    fn track(size: (u16, u16), stream: &[u8]) -> (Vec<String>, (usize, usize)) {
+        let parser = Live::new_screen(size, stream);
+        (vt_rows(&parser), vt_cursor(&parser))
+    }
+
+    /// Plain CR/LF text keeps the naive model's observable shape.
+    #[test]
+    fn vt_screen_plain_text() {
+        let (rows, cursor) = track((20, 5), b"hello\r\nworld");
+        assert_eq!(rows[0], "hello");
+        assert_eq!(rows[1], "world");
+        assert_eq!(cursor, (5, 1));
+    }
+
+    /// CSI SGR color attributes never leak into the text; only the
+    /// payload characters render (colored prompts stay readable).
+    #[test]
+    fn vt_screen_csi_colors_are_not_text() {
+        let (rows, _cursor) = track((40, 5), b"\x1b[32mgreen\x1b[0m \x1b[1;34mbold-blue\x1b[m!");
+        assert_eq!(rows[0], "green bold-blue!");
+    }
+
+    /// CSI cursor movement (CUP/CUF) places subsequent text at the
+    /// moved position instead of appending.
+    #[test]
+    fn vt_screen_cursor_movement() {
+        // Home to (row 2, col 6) [1-based] and overwrite.
+        let (rows, cursor) = track((20, 5), b"abcdef\r\nghijkl\x1b[2;6HX");
+        assert_eq!(rows[1], "ghijkX");
+        assert_eq!(cursor, (6, 1));
+        // Cursor-forward then text leaves the skipped cells blank.
+        let (rows, _cursor) = track((20, 5), b"a\x1b[3Cb");
+        assert_eq!(rows[0], "a   b");
+    }
+
+    /// OSC sequences (window title etc.) are consumed, not printed.
+    #[test]
+    fn vt_screen_osc_title_is_consumed() {
+        let (rows, cursor) = track((40, 5), b"\x1b]0;my title\x07visible");
+        assert_eq!(rows[0], "visible");
+        assert_eq!(cursor, (7, 0));
+    }
+
+    /// Erase-in-display (ED) clears the requested region.
+    #[test]
+    fn vt_screen_erase_in_display() {
+        let (rows, _cursor) = track((20, 5), b"keep\r\naaa\r\nbbb\r\nccc\x1b[3;1H\x1b[2J");
+        assert_eq!(rows[0], "");
+        assert_eq!(rows[1], "");
+        assert_eq!(rows[2], "");
+        // Erase from cursor to end of line (EL variant of the family).
+        let (rows, _cursor) = track((20, 5), b"abcdef\x1b[1;4H\x1b[K");
+        assert_eq!(rows[0], "abc");
+    }
+
+    /// The alternate screen: entering it snapshots the primary screen,
+    /// leaving it restores the primary contents (less/vim lifecycle).
+    #[test]
+    fn vt_screen_alt_screen_enter_exit() {
+        let stream = b"prompt$ \x1b[?1049hless-full-screen\x1b[?1049l";
+        let (rows, _cursor) = track((40, 5), stream);
+        assert_eq!(rows[0], "prompt$");
+        // While INSIDE the alt screen the primary content is hidden.
+        let parser = Live::new_screen((40, 5), b"prompt$ \x1b[?1049hless");
+        assert_eq!(vt_rows(&parser)[0], "less");
+    }
+
+    /// Resize applies the new grid size (RW-02): the same path
+    /// `resize` -> `screen.set_size` takes. vt100 keeps physical rows
+    /// (no reflow) — narrower cols truncate each row.
+    #[test]
+    fn vt_screen_resize_keeps_content() {
+        let mut parser = Live::new_screen((10, 5), b"hello world");
+        parser.set_size(10, 4);
+        let rows = vt_rows(&parser);
+        assert_eq!(rows.len(), 10);
+        assert_eq!(rows[0], "hell");
+        assert_eq!(rows[1], "d");
+    }
+
+    /// Line wrap: text past `cols` wraps onto the next row instead of
+    /// being dropped (the naive model clipped at the edge).
+    #[test]
+    fn vt_screen_wraps_long_lines() {
+        let (rows, _cursor) = track((5, 5), b"abcdefghij");
+        assert_eq!(rows[0], "abcde");
+        assert_eq!(rows[1], "fghij");
+    }
+
+    /// Handoff restore path: replaying the retained buffer through a
+    /// fresh parser reconstructs the pre-restart screen (RW-02 +
+    /// `Inner::restore`).
+    #[test]
+    fn vt_screen_restore_replays_buffer() {
+        let buffer = b"\x1b[33myellow\x1b[m\r\nnext";
+        let parser = Live::new_screen((20, 5), buffer);
+        let rows = vt_rows(&parser);
+        assert_eq!(rows[0], "yellow");
+        assert_eq!(rows[1], "next");
     }
 
     /// G-12: the typed [`oc_schema::persistent_pty::Info`] serialization
