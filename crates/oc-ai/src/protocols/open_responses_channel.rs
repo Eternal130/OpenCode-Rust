@@ -22,13 +22,13 @@ use crate::protocols::open_responses_continuation::{
     self, ContinuationDriverInput, ContinuationShape,
 };
 use crate::protocols::shared::invalid_request;
+use crate::route::Route;
 use crate::route::auth::Headers;
 use crate::route::client::{execute_http_frames, frames_to_events};
 use crate::route::transport::websocket::{
     self, ChannelConnect, FallbackFn, WebSocketChannelDriver, WebSocketChannelExchange,
     WebSocketChannelExecution, WebSocketChannelExecutor,
 };
-use crate::route::Route;
 use crate::schema::{
     AiError, AiErrorReason, HttpContext, HttpOptions, LLMEvent, LLMRequest, ReasonFields,
 };
@@ -399,6 +399,23 @@ pub async fn stream_channel(
         http: execution.http,
         complete: execution.complete,
     })
+}
+
+/// The channel options a route offers (v2: the openai/xai/azure built-ins
+/// default `transport: "websocket"`, but only OpenResponses WS-capable
+/// protocols carry a channel — xai-responses and every non-responses
+/// protocol return `None` and stay on HTTP SSE). Azure-flavored
+/// OpenResponses routes use the Azure-native gate + `api-version`-stripped
+/// WS URL.
+#[must_use]
+pub fn channel_options_for_route(route: &Route) -> Option<ChannelOptions> {
+    if route.protocol.id() != crate::protocols::openai_responses::ADAPTER {
+        return None;
+    }
+    if route.provider.as_ref().is_some_and(|p| p.as_str() == crate::protocols::azure::ID) {
+        return Some(crate::protocols::azure::responses_channel_options());
+    }
+    Some(crate::protocols::openai_responses::channel_transport())
 }
 
 /// Prepare the channel form of one request (used by tests and callers that

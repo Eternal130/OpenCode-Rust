@@ -18,15 +18,15 @@ use crate::bus::{Bus, PublishOptions};
 use crate::database::Database;
 use crate::session::execution::{Continuation, DrainOutcome, RunError};
 use crate::session::inbox::{Promotable, SessionInbox};
+use crate::session::runner::LlmClient;
 use crate::session::runner::compaction::{
     Reason as CompactionReason, SessionCompaction, Trigger as CompactionTrigger,
 };
 use crate::session::runner::context::{self, Loaded, SessionContext};
-use crate::session::runner::model_request::{prepare_primary, SessionModelRequest};
+use crate::session::runner::model_request::{SessionModelRequest, prepare_primary};
 use crate::session::runner::prompt_prepare::PromptPrepare;
 use crate::session::runner::step::{AttemptFailure, AttemptInput, Outcome, StepDeps};
 use crate::session::runner::title::SessionTitle;
-use crate::session::runner::LlmClient;
 use crate::session::store::SessionStore;
 
 /// `CONTINUE_AFTER_INCOMPLETE_STREAM` (llm.ts:35-36).
@@ -288,8 +288,9 @@ impl SessionRunner {
         loop {
             // 1. Location closed ⇒ close the transport, Reloaded.
             if (self.location_closed)() {
-                // modelTransport.close — TODO(wave-D): the per-session
-                // WebSocket transport lane.
+                // modelTransport.close (REF llm.ts:78) — the session's
+                // WebSocket channel closes with the location.
+                self.llm.close_transport(session_id).await;
                 return Ok(Boundary::Reloaded {
                     force,
                     continuation: continuing.then_some(Continuation { step }),
@@ -338,7 +339,9 @@ impl SessionRunner {
                             }
                         }
                         Some(InboxInfo::Move { id, payload, .. }) => {
-                            // Close transport, then InboxDelivered + Moved.
+                            // Close transport (REF llm.ts:95
+                            // modelTransport.close), then InboxDelivered + Moved.
+                            self.llm.close_transport(session_id).await;
                             let delivered = self
                                 .bus
                                 .publish(

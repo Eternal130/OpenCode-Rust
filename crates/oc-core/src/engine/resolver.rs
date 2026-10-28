@@ -64,12 +64,12 @@ use oc_ai::route::client::RoutePatch;
 use oc_ai::schema::options::{merge_json_records, merge_string_records};
 
 use crate::database::schema::SessionRow;
+use crate::provider_catalog::Catalog;
 use crate::provider_catalog::facade::{
-    custom_language_model, language_model_for_model, CustomModel, CustomProvider, FacadeContext,
-    ModelConnection,
+    CustomModel, CustomProvider, FacadeContext, ModelConnection, custom_language_model,
+    language_model_for_model,
 };
 use crate::provider_catalog::native::package_name;
-use crate::provider_catalog::Catalog;
 use crate::session::runner::{ModelError, ModelResolver, ResolvedModel};
 
 /// The production resolver: catalog + user connections + custom
@@ -469,7 +469,17 @@ impl ModelResolver for CatalogModelResolver {
         reference: &oc_schema::model::Ref,
     ) -> Result<ResolvedModel, ModelError> {
         let (model, info, canonical) = self.bind(reference)?;
-        Ok(resolved_from(model, info, &canonical))
+        // REF model-resolver.ts:397 — `transport: provider?.settings?.transport`
+        // (the provider plugins default openai/xai/azure to "websocket";
+        // omitted means HTTP). RV-P1: the session runner consults this.
+        let transport = self
+            .catalog()
+            .provider(&canonical.provider_id.0)
+            .and_then(|snapshot| snapshot.info.settings.as_ref())
+            .and_then(|settings| settings.transport);
+        let mut resolved = resolved_from(model, info, &canonical);
+        resolved.transport = transport;
+        Ok(resolved)
     }
 }
 
