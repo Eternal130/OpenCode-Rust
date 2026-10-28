@@ -192,11 +192,14 @@ pub struct RouteLlmClient;
 /// is a `makeGlobalNode` service — one owner per process, one socket per
 /// session id). `Lazy` so tests that never touch a websocket model pay
 /// nothing for the connector.
-static SESSION_CHANNELS: std::sync::OnceLock<Arc<oc_ai::route::transport::websocket::SessionChannels>> =
-    std::sync::OnceLock::new();
+static SESSION_CHANNELS: std::sync::OnceLock<
+    Arc<oc_ai::route::transport::websocket::SessionChannels>,
+> = std::sync::OnceLock::new();
 
 fn session_channels() -> Arc<oc_ai::route::transport::websocket::SessionChannels> {
-    Arc::clone(SESSION_CHANNELS.get_or_init(oc_ai::route::transport::websocket::default_session_channels))
+    Arc::clone(
+        SESSION_CHANNELS.get_or_init(oc_ai::route::transport::websocket::default_session_channels),
+    )
 }
 
 #[async_trait::async_trait]
@@ -232,9 +235,10 @@ impl LlmClient for RouteLlmClient {
         // sticky HTTP fallback inside the executor (refused connects,
         // repeated stream losses, oversized frames).
         let executor = session_channels().bind(session_id);
-        let channel =
-            oc_ai::protocols::open_responses_channel::stream_channel(&route, request, executor, &options)
-                .await?;
+        let channel = oc_ai::protocols::open_responses_channel::stream_channel(
+            &route, request, executor, &options,
+        )
+        .await?;
         // Commit the continuation checkpoint once the events stream ended
         // cleanly (v2 `execution.complete` after a successful stream).
         let oc_ai::protocols::open_responses_channel::ChannelStream { events, complete, .. } =
@@ -568,11 +572,7 @@ fn safe(value: Option<f64>) -> f64 {
 }
 
 fn finite(value: f64) -> f64 {
-    if value.is_finite() {
-        value
-    } else {
-        0.0
-    }
+    if value.is_finite() { value } else { 0.0 }
 }
 
 impl SessionUsage {
@@ -619,10 +619,10 @@ impl SessionUsage {
             });
         let cost = tier.into_iter().chain(costs.iter().filter(|cost| cost.tier.is_none())).next();
         let Some(cost) = cost else { return Usd(Num(0.0)) };
-        let total = (usage.input.0 * finite(cost.input.0 .0)
-            + (usage.output.0 + usage.reasoning.0) * finite(cost.output.0 .0)
-            + usage.cache.read.0 * finite(cost.cache.read.0 .0)
-            + usage.cache.write.0 * finite(cost.cache.write.0 .0))
+        let total = (usage.input.0 * finite(cost.input.0.0)
+            + (usage.output.0 + usage.reasoning.0) * finite(cost.output.0.0)
+            + usage.cache.read.0 * finite(cost.cache.read.0.0)
+            + usage.cache.write.0 * finite(cost.cache.write.0.0))
             / 1_000_000.0;
         Usd(Num(total))
     }
@@ -639,7 +639,7 @@ impl SessionUsage {
     #[must_use]
     pub fn add(left: &RecordedUsage, right: &RecordedUsage) -> RecordedUsage {
         RecordedUsage {
-            cost: Usd(Num(left.cost.0 .0 + right.cost.0 .0)),
+            cost: Usd(Num(left.cost.0.0 + right.cost.0.0)),
             tokens: TokenUsage {
                 input: Num(left.tokens.input.0 + right.tokens.input.0),
                 output: Num(left.tokens.output.0 + right.tokens.output.0),

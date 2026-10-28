@@ -14,15 +14,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures::{SinkExt as _, StreamExt as _};
-use oc_ai::protocols::openai_responses::{openai_responses_route, OpenAIResponsesRouteSpec};
 use oc_ai::protocols::open_responses_channel::channel_options_for_route;
+use oc_ai::protocols::openai_responses::{OpenAIResponsesRouteSpec, openai_responses_route};
+use oc_ai::route::RouteDefaults;
 use oc_ai::route::auth::{self, Secret};
 use oc_ai::route::transport::reqwest_transport::ReqwestTransport;
-use oc_ai::route::RouteDefaults;
 use oc_ai::schema::{
     ContentPart, LLMEvent, LLMRequest, Message, MessageRole, SystemPart, TransportType,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 
@@ -77,7 +77,8 @@ async fn ws_mock(reply: Vec<String>) -> WsMock {
                             .collect();
                         Ok(response)
                     };
-                    let Ok(mut websocket) = tokio_tungstenite::accept_hdr_async(stream, callback).await
+                    let Ok(mut websocket) =
+                        tokio_tungstenite::accept_hdr_async(stream, callback).await
                     else {
                         return;
                     };
@@ -263,7 +264,8 @@ fn assert_clean_terminal(events: &[Result<LLMEvent, oc_ai::schema::AiError>]) {
 #[test]
 fn channel_options_follow_route_protocol() {
     let responses = route(1);
-    let options = channel_options_for_route(&responses).expect("openai-responses offers the channel");
+    let options =
+        channel_options_for_route(&responses).expect("openai-responses offers the channel");
     assert_eq!(options.id, "openai-responses");
 
     let xai = oc_ai::protocols::xai_responses::xai_responses_route(
