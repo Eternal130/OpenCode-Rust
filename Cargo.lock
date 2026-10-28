@@ -2311,6 +2311,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "tokio-tungstenite",
  "tokio-util",
  "tree-sitter",
  "tree-sitter-bash",
