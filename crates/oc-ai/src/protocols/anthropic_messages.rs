@@ -1647,6 +1647,26 @@ impl crate::route::transport::Transport for BetaHeadersTransport {
 
 /// Build the Messages API body (port of `fromRequest`).
 pub fn body_from_request(request: &LLMRequest) -> Result<Value, AiError> {
+    // Per-provider seam (RW-01): providers with an Anthropic-family body
+    // wrapper (alibaba/zai thinking re-attach, meta web_search remap) build
+    // the generic body with the raw `thinking` option stripped; the hook
+    // then re-attaches the provider's own shape.
+    let provider = request.model.provider.0.as_str();
+    let wrap = crate::customization::for_route(provider).wrap_anthropic_body;
+    let stripped;
+    let raw_thinking;
+    let request: &LLMRequest = if wrap.is_some() {
+        let mut next = request.clone();
+        raw_thinking = next
+            .provider_options
+            .as_mut()
+            .and_then(|options| options.remove("thinking"));
+        stripped = next;
+        &stripped
+    } else {
+        raw_thinking = None;
+        request
+    };
     let options = decode_options(request.provider_options.as_ref())?;
     let management = options.context_management.clone();
     let output_config = options.output_config.clone();
@@ -1785,7 +1805,19 @@ pub fn body_from_request(request: &LLMRequest) -> Result<Value, AiError> {
             .collect();
         body.insert("context_management".into(), json!({"edits": edits}));
     }
-    Ok(Value::Object(body))
+    let mut body = Value::Object(body);
+    if let Some(wrap) = wrap {
+        let natives: Vec<Option<&std::collections::BTreeMap<String, Value>>> =
+            flattened_tools.iter().map(|tool| tool.native.as_ref()).collect();
+        wrap(&mut crate::customization::AnthropicBodyWrap {
+            provider,
+            raw_thinking: raw_thinking.as_ref(),
+            tool_natives: &natives,
+            max_tokens,
+            body: &mut body,
+        })?;
+    }
+    Ok(body)
 }
 
 // =============================================================================
