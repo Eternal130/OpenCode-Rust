@@ -916,7 +916,9 @@ fn pathdiff(from: &str, to: &str) -> String {
         parts.push((*part).to_string());
     }
     if parts.is_empty() {
-        ".".to_string()
+        // `path.relative(x, x)` is the empty string — projector.ts:531 stores
+        // the raw `path.relative(...)` result with no `|| "."` fallback.
+        String::new()
     } else {
         parts.join("/")
     }

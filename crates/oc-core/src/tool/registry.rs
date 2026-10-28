@@ -157,6 +157,30 @@ fn validate(
             }
         }
     }
+    if let Some(minimum) = object.get("minimum").and_then(|v| v.as_f64()) {
+        if let serde_json::Value::Number(number) = value {
+            if let Some(n) = number.as_f64() {
+                if n < minimum {
+                    issues.push(Issue {
+                        path: if path.is_empty() { "root".to_string() } else { path.to_string() },
+                        message: format!("must be greater than or equal to {minimum}"),
+                    });
+                }
+            }
+        }
+    }
+    if let Some(maximum) = object.get("maximum").and_then(|v| v.as_f64()) {
+        if let serde_json::Value::Number(number) = value {
+            if let Some(n) = number.as_f64() {
+                if n > maximum {
+                    issues.push(Issue {
+                        path: if path.is_empty() { "root".to_string() } else { path.to_string() },
+                        message: format!("must be less than or equal to {maximum}"),
+                    });
+                }
+            }
+        }
+    }
     if let Some(enum_values) = object.get("enum").and_then(|v| v.as_array()) {
         if !enum_values.contains(value) {
             issues.push(Issue {
@@ -544,5 +568,32 @@ impl ToolExecute for PipelineExecutor {
         context: &ToolCallContext,
     ) -> Result<ToolRunResult, ToolRunFailure> {
         self.run(input, context).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn validate_input_enforces_numeric_bounds() {
+        // v2 decodes tool inputs through effect Schemas with bound checks
+        // (e.g. webfetch `Timeout` is >0 and <=120, webfetch.ts:26) — an
+        // out-of-range value is an argument error, never silently clamped.
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "timeout": { "type": "integer", "minimum": 1, "maximum": 120 }
+            },
+            "required": ["timeout"]
+        });
+        assert!(validate_input(&schema, &json!({ "timeout": 30 })).is_empty());
+        let issues = validate_input(&schema, &json!({ "timeout": 500 }));
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].message, "must be less than or equal to 120");
+        let issues = validate_input(&schema, &json!({ "timeout": 0 }));
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].message, "must be greater than or equal to 1");
     }
 }
