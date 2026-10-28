@@ -21,11 +21,39 @@ use crate::route::protocol::{Protocol, ProtocolState};
 use crate::route::transport::SharedTransport;
 use crate::route::{merge_route_defaults, Route, RouteDefaults, RouteInput};
 use crate::schema::{AiError, AiErrorReason, LLMEvent, LLMRequest, ReasonFields};
-
 pub const ADAPTER: &str = "xai-responses";
 pub const NAME: &str = "xAI Responses";
 pub const PATH: &str = open_responses::PATH;
 pub const DEFAULT_BASE_URL: &str = "https://api.x.ai/v1";
+
+/// The WS socket rotation age (REF `RESPONSES_WEBSOCKET_ROTATE_AFTER_MS`,
+/// 24 hours — xAI keeps sockets far longer than OpenAI's 55 minutes).
+pub const WEBSOCKET_ROTATE_AFTER_MS: u64 = 24 * 60 * 1000;
+
+/// The `xai-responses` channel transport options (port of
+/// `OpenResponsesChannel.transport` in providers/xai.ts:43): the socket
+/// rotates after 24 hours, and xAI continues a chain only from stored
+/// responses — with `store: false` (the route default)
+/// `previous_response_id` fails with "Response with id=… not found", so
+/// those steps are sent in full over the reused connection. It also
+/// rejects `instructions` next to `previous_response_id` and keeps the
+/// instructions of the response it continues, so the continuation drops
+/// that field.
+#[must_use]
+pub fn responses_channel_options() -> crate::protocols::open_responses_channel::ChannelOptions {
+    crate::protocols::open_responses_channel::ChannelOptions::new(ADAPTER, NAME)
+        .with_rotate_after_ms(WEBSOCKET_ROTATE_AFTER_MS)
+        .with_continuation(Arc::new(|request: &Map<String, Value>| {
+            // `continuation: ({ instructions: _instructions, ...request }) =>
+            // (request.store === false ? undefined : request)`
+            if request.get("store") == Some(&Value::Bool(false)) {
+                return None;
+            }
+            let mut fields = request.clone();
+            fields.remove("instructions");
+            Some(fields)
+        }))
+}
 
 // =============================================================================
 // Provider adapter (xai-responses.ts:12-38)

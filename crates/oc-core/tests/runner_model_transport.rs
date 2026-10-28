@@ -259,8 +259,8 @@ fn assert_clean_terminal(events: &[Result<LLMEvent, oc_ai::schema::AiError>]) {
 // ---------------------------------------------------------------------------
 
 /// Unit: transport selection follows `ResolvedModel.transport` and the
-/// route's protocol (openai-responses incl. the Azure flavor offer the
-/// channel; xai-responses and every non-responses protocol stay on HTTP).
+/// route's protocol (openai-responses incl. the Azure and xAI flavors
+/// offer the channel; every non-responses protocol stays on HTTP).
 #[test]
 fn channel_options_follow_route_protocol() {
     let responses = route(1);
@@ -278,10 +278,24 @@ fn channel_options_follow_route_protocol() {
             defaults: RouteDefaults::default(),
         },
     );
+    let options = channel_options_for_route(&xai).expect("xai-responses offers the WS channel");
+    assert_eq!(options.id, "xai-responses");
+    assert_eq!(options.rotate_after_ms, Some(24 * 60 * 1000));
+    // xAI continues a chain only from stored responses and without
+    // `instructions` (REF providers/xai.ts:43).
+    let shape = options.continuation.as_ref().expect("xai-responses wires a continuation shape");
+    let mut request = serde_json::Map::new();
+    request.insert("store".to_string(), serde_json::json!(false));
+    request.insert("instructions".to_string(), serde_json::json!("be brief"));
+    request.insert("input".to_string(), serde_json::json!([]));
     assert!(
-        channel_options_for_route(&xai).is_none(),
-        "xai-responses has no WS channel (REF xai-responses.ts wires none)"
+        shape(&request).is_none(),
+        "store: false steps are sent in full (previous_response_id would 404)"
     );
+    request.insert("store".to_string(), serde_json::json!(true));
+    let fields = shape(&request).expect("stored responses continue");
+    assert!(fields.get("instructions").is_none(), "instructions must be dropped");
+    assert_eq!(fields.get("store"), Some(&serde_json::json!(true)));
 }
 
 /// End-to-end leg: `transport: websocket` + an OpenResponses route streams
