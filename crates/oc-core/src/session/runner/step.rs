@@ -228,7 +228,14 @@ pub async fn attempt(deps: &StepDeps, input: AttemptInput) -> Result<Outcome, At
     // still run and the message stream carries the error part).
     let mut stream_error: Option<AiError> = None;
     let mut stream: Option<crate::session::runner::LlmEventStream> =
-        match deps.llm.stream(input.prepared.request.clone()).await {
+        match deps.llm
+            .stream_for_session(
+                input.session_id.as_str(),
+                input.model.transport,
+                input.prepared.request.clone(),
+            )
+            .await
+        {
             Ok(stream) => Some(stream),
             Err(error) => {
                 stream_error = Some(error);

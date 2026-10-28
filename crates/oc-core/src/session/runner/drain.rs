@@ -288,8 +288,9 @@ impl SessionRunner {
         loop {
             // 1. Location closed ⇒ close the transport, Reloaded.
             if (self.location_closed)() {
-                // modelTransport.close — TODO(wave-D): the per-session
-                // WebSocket transport lane.
+                // modelTransport.close (REF llm.ts:78) — the session's
+                // WebSocket channel closes with the location.
+                self.llm.close_transport(session_id).await;
                 return Ok(Boundary::Reloaded {
                     force,
                     continuation: continuing.then_some(Continuation { step }),
@@ -338,7 +339,9 @@ impl SessionRunner {
                             }
                         }
                         Some(InboxInfo::Move { id, payload, .. }) => {
-                            // Close transport, then InboxDelivered + Moved.
+                            // Close transport (REF llm.ts:95
+                            // modelTransport.close), then InboxDelivered + Moved.
+                            self.llm.close_transport(session_id).await;
                             let delivered = self
                                 .bus
                                 .publish(

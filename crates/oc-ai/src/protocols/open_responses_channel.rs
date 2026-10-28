@@ -401,6 +401,23 @@ pub async fn stream_channel(
     })
 }
 
+/// The channel options a route offers (v2: the openai/xai/azure built-ins
+/// default `transport: "websocket"`, but only OpenResponses WS-capable
+/// protocols carry a channel — xai-responses and every non-responses
+/// protocol return `None` and stay on HTTP SSE). Azure-flavored
+/// OpenResponses routes use the Azure-native gate + `api-version`-stripped
+/// WS URL.
+#[must_use]
+pub fn channel_options_for_route(route: &Route) -> Option<ChannelOptions> {
+    if route.protocol.id() != crate::protocols::openai_responses::ADAPTER {
+        return None;
+    }
+    if route.provider.as_ref().is_some_and(|p| p.as_str() == crate::protocols::azure::ID) {
+        return Some(crate::protocols::azure::responses_channel_options());
+    }
+    Some(crate::protocols::openai_responses::channel_transport())
+}
+
 /// Prepare the channel form of one request (used by tests and callers that
 /// need the exchange parts without executing).
 pub fn prepare_channel(
