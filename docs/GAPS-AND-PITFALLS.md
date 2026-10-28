@@ -37,7 +37,7 @@
 | G-11 | oc-tui 自研框架件收敛至 opentui-rust | **已处置（2026-10-24；2026-10-25 上游事实修正）** | 已收敛：clipboard（G-03 同 lane）、paste（评估后**有意不采**）、diff 解析逻辑（parse_patch 单源化，golden 字节不变）。修正（2026-10-25）：①sound 已收敛（opentui rev 18e2904 上游落地真音频 → 本仓收敛 lane 合并 3f436ba：device-audio feature + OpentuiSoundPlayer 适配器经 SoundHalf seam，inproc 引擎与 third_party/miniaudio-sys 删除，非 Linux spawn 回退保留）；②语法目录 opentui（TS）同样只有 ~5 门（ref 全目录是其 TUI 自带 wasm 运行时，非 opentui core）——20 门目录是本 port 自身优势，收敛仍为回归，维持阻塞；③terminal_pane **非 opentui 功能**，无上游对应体，**永久本地保留**。渲染耦合项修正（2026-10-26 lane R0）：渲染栈 strangler 迁移（M1–M6 + M-theme + M-engine，docs/migration-m1-tabstrip.md）**已完成且 hybrid 架构（opentui raster → cell-copy → ratatui Frame blitter → 本地 ANSI 序列化）已被宣告为目标架构**（docs/FRAMEWORK-CONVERGENCE.md "Rendering-stack migration"），"渲染耦合项统一卡在渲染栈迁移、未排期"的旧表述作废——syntax 仍按自身双重前置条件（语言目录 + 兼容 span 输出）维持阻塞，line_number 改为 pending R3 字节平价 spike（失败则与 terminal_pane 同列永久本地保留），terminal_pane 维持永久本地保留；git rev pin 规则维持；合并 0806272 |
 | G-12 | oc-schema 缺 7 类事件类型化模型 | **已闭环（2026-10-24）** | pty/persistent-pty/filesystem/reference 四模块（ref 字段名/casing/可空性），9 个发射点全部类型化，golden 对表测试进常规 cargo CI + persistent-pty 与 terminal_wire_json 无漂移测试；pty 事件 info exitCode 对齐 ref casing（无内部消费方）；合并 304ae9e |
 | G-13 | CLI 枚举校验偏松 | **已闭环（2026-10-24）** | 五处 clap ValueEnum（upgrade --method 七选项+rust-extra local-file/github 保留、run/auth list --format、session list --format、debug paths）；--force 裁定：保留为文档化 rust-extra（默认路径即 v2 平价的 comment-preserving 写）；合并 f0c1791 |
-| G-14 | Web UI 功能一致性 E2E 验证 | 开放 | 前端 = 内嵌 ref 构建（app_archive.rs:44），不移植；一致性等价于服务端契约一致性。已对表：141 路由（含错误 _tag）、SSE 帧字节级、WS+ticket、auth/CORS/location。残留 4 类风险：① handler 长尾仅签名级验证（高频端点才做了 body 级）；② G-12 七类事件无 schema golden 对表，UI 按 shape 解析会**静默坏**；③ 时序/边界（分页 cursor、Last-Event-ID 断线重连、竞态）只能真跑；④ 资产钉定漂移（ref 前端演进需重建嵌入）。闭环 = 六场景浏览器冒烟（auth、会话/prompt 流式、文件树/mentions、PTY 面板、权限弹窗、事件重连）挂 **runtime-gates 周 cron（GitHub Actions runner，不占本机；首次稳定化本地错峰跑一轮再去 flaky 后再上 cron）**；G-12 类型化后的 golden 对表为纯 cargo 测试，进**常规 PR CI**（秒级确定性，勿等周 cron）；两项绿后方可宣称"功能一致已验证" |
+| G-14 | Web UI 功能一致性 E2E 验证 | 开放 | 前端 = 内嵌 ref 构建（app_archive.rs:44），不移植；一致性等价于服务端契约一致性。已对表：141 路由（含错误 _tag）、SSE 帧字节级、WS+ticket、auth/CORS/location。残留 4 类风险：① handler 长尾仅签名级验证（高频端点才做了 body 级）；② G-12 七类事件无 schema golden 对表，UI 按 shape 解析会**静默坏**；③ 时序/边界（分页 cursor、Last-Event-ID 断线重连、竞态）只能真跑；④ 资产钉定漂移（ref 前端演进需重建嵌入）。闭环 = 六场景浏览器冒烟（auth、会话/prompt 流式、文件树/mentions、PTY 面板、权限弹窗、事件重连）挂 **runtime-gates 周 cron（GitHub Actions runner，不占本机；首次稳定化本地错峰跑一轮再去 flaky 后再上 cron）**；G-12 类型化后的 golden 对表为纯 cargo 测试，进**常规 PR CI**（秒级确定性，勿等周 cron）；两项绿后方可宣称"功能一致已验证"。**2026-10-27 复核：首周 schedule cron 已于 2026-10-26T08:44Z 实跑（run 40294359979）且 `G-14 browser smoke` job EXECUTED=success（同 run §12.3 runtime gates、p10 battery 亦绿；30m soak/release smoke 为 skipped 属调度设计）——"待首周 cron 实跑观察"条件已满足** |
 | G-14 进展 | 浏览器冒烟 chunk 1 落地（2026-10-24，lane P3-E2E） | 进行中 | harness + 场景 1-2 绿：`tools/parity/tests/browser_e2e.rs`（chromiumoxide 0.9 dev-dep，headless `--no-sandbox` 新 profile；OC_BROWSER_E2E=1 运行时 opt-in；资产解析顺序 OC_BROWSER_APP_ASSETS → /tmp/opencode/ref/packages/app/dist → app-archive.json → 生成的 minimal contract page；本地实测 real-spa-dist 与 minimal-contract 两模式均绿）。S1（auth）：匿名 /api/info 401 + WWW-Authenticate Basic（harness 侧 minih——页内 fetch 带 sec-fetch-mode: cors 不发 challenge，auth.rs challenge_request 语义）+ Basic/auth_token 两路 200 + 真实 SPA shell 渲染。S2（流式）：页内 EventSource(auth_token) 收到 `session.text.delta` 全生命周期帧（v2 无 `message.part`，schema session-event.ts:405），页内 POST /api/session/:id/prompt（注意：**prompt 端点**，/message 是 GET-only 列表），最终 assistant 文本匹配 ScriptedFakeLlm。剩余 chunk：场景 3 文件树/mentions、4 PTY、5 权限弹窗、6 Last-Event-ID 重连 |
 | G-14 进展 2 | chunk 2 落地（2026-10-24，lane P3-E2E）：场景 3+6 绿 | 进行中 | S3：`RustSpawn::project_cwd` 把服务端 cwd 钉在种子工作区（默认镜像 ref/packages/cli）；页内断言 `/api/fs/list`（src/+README 可见）、`/api/fs/read/src/main.rs` 内容匹配、`/api/fs/find?query=`（SPA mention/context 自动补全走 `fsFind`，mock-api.ts:206）命中种子文件。S6（契约事实，两端源码一致）：①`/api/event` 为 **live-only**——帧是 `data:`-only 无 SSE `id:` 字段（sse.rs::frame 镜像 event-feed.ts::frame），浏览器 EventSource 永远不会带 Last-Event-ID，重连不重放断线窗口（页内实测：断线期间事件不回放、重连后 live 事件正常）；客户端靠 snapshot 重同步。②真正的 cursor 恢复面是 `GET /api/experimental/session/:id/log?after=<seq>`（ref session.log，handlers/session.ts:611）：页内 fetch 流读取实测 after=seq 重放严格大于 cursor（minSeq 11 > cursor 10）、无重复 id、`log.synced` 水位前进（10→19）、断线窗口事件全覆盖；`session.text.delta` 为 live-only 非持久（持久日志只有 text.started/ended 生命周期对）。harness 事实：nextest 每测试独立进程 → 场景串行化用跨进程 flock（目标目录 .scenario-lock），否则第二个并发 Chrome 在 gate 任务限额内 pthread_create EAGAIN 挂掉。剩余 chunk 3：S4 PTY 面板、S5 权限弹窗 + 稳定化 + runtime-gates cron 挂载 |
 | G-14 进展 3 | chunk 3 落地（2026-10-24，lane P3-E2E）：六场景全绿，cron 已挂 | **完成（待 cron 首跑观察）** | S4（全部腿页内）：POST /api/pty 建 sh → live 流 `pty.created`（typed info：id/status running/pid 数值/无 exitCode）；`POST /api/pty/:id/connect-token`（需 `x-opencode-ticket: 1` 头）出 ticket；ticket-exempt WS `GET /api/pty/:id/connect?ticket=` 附着——stdin=text 帧、stdout=text 帧、单条二进制 metaframe `0x00||{"cursor":N}`；`exit` → `pty.exited{exitCode:0}` + WS close 1000；PUT 更新出 `pty.updated`。S5：build agent 默认 `*/*` allow（oc-schema/agent Info::default）→ 用**会话级 ruleset**（POST /api/session 带 `permissions:[{action:"shell",resource:"*",effect:"ask"}]`，SessionRuleResolver 会话规则覆盖 agent 规则）让 shell 工具调用触发 `permission.asked`（typed：per_ id/sessionID/action/resources）；页内 `POST /api/session/:sid/permission/:rid/reply {"decision":"once"}`（204）→ `permission.replied` + execution.succeeded + transcript 带 shell 输出标记。稳定化：全六场景连跑 3×全绿（12.8s/12.0s/12.0s，每场景 1.5-9s 串行）；minimal-contract 回退模式亦 6/6（9.7s）。cron：runtime-gates.yml 新增 `browser-e2e` job（默认 ON + schedule 臂；镜像 release.yml web-assets 暂存真 SPA dist：同 PARITY_REF tarball + 定钉 bun 构建；dist 暂存失败 → battery 降级 minimal-contract、summary 记 SKIPPED-GAP；无浏览器 → 显式 skip-gap；gates-summary 增行含 `success-minimal-contract` verdict）。剩余：观察首周 cron 实跑 |
@@ -215,6 +215,7 @@
 | 8 | merge 后必须补 bun 内差分冒烟（纯 cargo 门看不见 JS 侧破坏，O2a×O2b 融合后 driver.ts 语法断裂存活） | 纯 Rust 门对 JS 侧盲 | harness 相关合并加 bun 冒烟 |
 | 9 | **子代理"默认测试通过"假象 + 过滤指令吞失败详情**：首轮 cargo test 用了过滤/未带 --no-fail-fast，失败被折叠成汇总行，失败原因不可见，被迫第二轮重测定位，拖长 lane 周期（2026-10-27 收口 session 多 lane 观察） | 测试报告只看退出码/末行汇总；过滤参数（--lib、name filter）把红测试藏进被滤掉的集合 | lane 验证纪律：① 首轮测试**不加过滤**并带 `--no-fail-fast`，拿到全部结果；② 报告必须**原样引用 `test result:` 行**（含 passed/failed 计数），禁止只写"green/通过"；③ 有失败时**同一轮**立即用 `--exact <name> -- --nocapture` 重跑单个红测试取回失败输出，不得先交报告再返工；④ dev-gate 输出被截断时读保存的完整输出文件而非重跑 |
 | 10 | **测试证据随会话丢失 → 重复测试**：lane 报告只活在子代理会话里，宿主重启/会话回收后 orchestrator 或后续 lane 拿不到原始 test result 行，只能整轮重跑验证（2026-10-27 合并门曾整轮重测 5 crate，数十分钟；且 /tmp/opencode 有被整体清空的前科 2.1#4） | 测试输出没有落盘为持久文件；依赖会话内存或易失 /tmp | **一切测试运行必须 tee 落盘**：`tools/dev-gate.sh 'cargo test …' 2>&1 \| tee .test-logs/<crate>-<yyyymmdd-HHMM>-<lane>.log`（.test-logs/ 进 .gitignore、不随 /tmp 清空；merge gate 同规则）；lane 最终报告**必须给出日志文件路径 + 关键 `test result:` 行**；后续任何"是否已验证"的争议先读日志文件，禁止凭记忆重跑；日志含红项时连同基线证伪证据（基线 commit + 复现输出）一并落同一目录 |
+| 11 | **plain `cargo test --workspace` 产生大面积假红**（2026-10-28 rv-burndown 收口：cargo test 直跑 oc-tui 数十测红——PTY/VT 套件 spawn 真终端+stub server，在无限流/无重试下时序全崩；同一棵树 nextest 4450/4450 绿） | 本仓 canonical 测试 harness 是 nextest（.config/nextest.toml：test-threads=4、全局 retry=1、be1/pty 家族 retry=2 + [profile.pty] test-threads=1 序列化）；plain cargo test 绕过全部降载与重试机制 | 全 workspace 验证一律 `cargo nextest run --workspace --locked --no-fail-fast`；PTY 家族另跑 `--profile pty` 序列化（镜像 ci.yml 两 job）；禁以 plain cargo test 的红作为回归证据，除非单测 --exact 定位复现 |
 
 ### 2.5 工程卫生
 
@@ -241,3 +242,91 @@
 | oracle | 版本断言+指纹+always-refresh | `tools/diff`（opentui-rust） |
 | 磁盘 | 增量抑制（仓库级 .cargo/config.toml incremental=false，2026-10-25 起强制）/周期 clean；清理门 mtime≥30 分钟视为在用 | 本册 2.1#6 |
 | 验证 | 交互面必须 PTY/field 级；组合模型必须源码级对比；金帧=回归套件 | 方法论登记（ROADMAP §4） |
+
+---
+
+## 4. 2026-10-27 全量对比审查发现（RV 系列）
+
+> 来源：7 通道逐域逐行对比 /opt/opencode-ref 与本仓（不采信本册及 PORT_REPORT/ROADMAP 的既有结论），汇总见 `PORT_REVIEW.md`。
+> 编号 RV-* 以避免与上文 G/F/R 系列冲突。**2026-10-27 冲突复核完毕**：§1「已闭环」与 RV 初版的 3 处冲突中，2 处系审查通道误报（RV-P2 撤销——PTY daemon 为默认后端已接线，frontend.rs `Frontend::new` spawn-if-absent + transport.rs 完整 makeDaemonTransport；RV-P3 撤销——设备流在 integration/flows.rs:366-437 完整实现，初查只搜了 mcp/oauth.rs）；RV-G3 收窄为「模型输入侧」（TUI 显示侧 R-07/R-08/RB-07 已闭环不冲突，但 media.rs 的 max_width/max_base64_bytes 配置字段全仓无消费者、无 autoResize）。RV-B1/RV-P1 经二次代码复核确认成立。
+
+> **2026-10-28 rv-burndown 收口（deepwork .slim/deepwork/rv-burndown/，四道 oracle gate 均 GO-WITH-FOLLOWUPS、followup 全消化）**：本节 RV 系列全部处置完毕——
+> **已闭环（实现）**：RV-B1..B9（B1 重试不耗步数/REF llm.ts:191-192、B2 revert 前置提交、B3 skill 正文注入+session.skill.activated+evt_ id 派生、B4 multiple→multiselect、B5 background jobs+合成通知（REF 自身 conflict→500 缺陷忠实保留）、B6 compact steer 默认+await_idle、B7 view idle/viewed 单调守卫+缺 idle 400、B8 jiff 本地时区聚合、B9 spent 清理收窄本会话+中断路径清理）；RV-G1（26 门 formatter 检测/执行/引擎接线+spawn_blocking off-runtime）；RV-G2（oc-core/filesystem watcher + location 活动 re-arm + filesystem.changed 首个发射器）；RV-G3（oc-core::image 输入侧 limits/autoResize 阶梯，image 0.25 仅 png+jpeg）；RV-G4（session/transfer.rs import 重放，端点 409/400/404/500 映射）；RV-P1（session runner 咨询 ResolvedModel.transport，openai/azure/xai WS 通道 + sticky HTTP 回退，xai 独立 24h rotation/continuation 语义，drain 双 close TODO 清零）；RV-P4（裁定为已移植的 WebSearchMcp.call 固定端点路径——stale TODO 撤销，端点可覆写+exa 覆写 bug 修复+7 个 fake-MCP 测试）；RV-P5（oc-client shared_events.rs 引用计数共享 SSE 复用器，REF 无 backoff 消费者驱动重连）；RV-P6（/api/info wildcard→getifaddrs 网卡 IP 展开）；RV-P7（event_manifest.rs 单一公开性事实源+双侧 drift guard，mcp.tools.changed 对齐 REF 私有）；RV-P8（grep/glob/read 结构化 Output 经 RB-08 seam）；RV-P9（shell 描述随 session hook 动态刷新）。§4.4 杂录 6 项修复（pathdiff ""/URL 协议大小写+registry min-max 校验/read 建议 raw 序/patch Set 去重/pinned catalog+session_move、models compact JSON）+ 校验器子集裁定 adequate。
+> **具名豁免（oracle 双侧证据裁定，.slim/deepwork/rv-burndown/rulings-4.md）**：RV-G5（REF experimental/ 仅 export、唯一消费方 exports.test.ts——死代码；port 孤儿评测 fixture 已删 5cdb6cb+fc2aabc）、RV-G6（Cloudflare Worker 云端面，无终端表面）、RV-P10（六条 /api/vcs 路由已在；REF 亦仅 git 单后端，无用户可见损失）、RV-P11（per-series 无活缺口：durable-event 已服务 log 端点；snapshot/Usd/TokenUsage 已类型化于 step 事件）、RV-P12（永久：REF 走 npm 动态 import 不可在 Rust 二进制复现，UnsupportedProtocol 为正确对等物）、RV-P13（effect 轨无终端 shipping 插件消费，port 惯性加载+显式消息）、RV-P14（仅扩展性表面；注意：不得引用 P14 作为 transport 默认值覆盖的依据——WS 默认值豁免见下行）。**附带豁免**：openai/xai/azure 的 websocket *默认值*来自 REF 未移植的 provider 插件 lane——config 显式 settings.transport 已端到端生效，默认值缺失登记为具名豁免（wire 语义等价 + HTTP 回退安全降级，oracle-gate-4.md finding 4.2）。
+> **验证**：nextest 全 workspace 4450/4450 绿（canonical harness，.test-logs/final-nextest-20261028.log）+ pty 序列化 profile 70/70 绿（.test-logs/final-pty-20261028.log）；此前一次 plain `cargo test --workspace` 的大面积 oc-tui 红系 **harness 误用**（绕过 nextest test-threads/retry/PTY 序列化），教训入 §2.4#11。下表为 2026-10-27 审查时的原始登记（历史快照，现状以上文为准）。
+
+### 4.1 功能级缺失
+
+| ID | 缺口 | REF 位置 | 现状 | 影响 |
+|---|---|---|---|---|
+| RV-G1 | Formatter 26 个内置工具链检测/执行 | core/src/formatter/builtins.ts (297 行) | oc-core/formatter.rs 为 Noop stub（自注 TODO(formatter-lane)） | edit/write/patch 后自动格式化不生效 |
+| RV-G2 | 通用文件监听服务 + location 活动检测 | filesystem/watcher.ts + location-watcher.ts (445 行) | 仅 config/watch.rs（notify）；FileSystem.Event.Changed 无发布者（G-12 已类型化该事件但无发射源） | 依赖文件变更事件的功能静默失效 |
+| RV-G3 | 模型输入侧图片 limits/autoResize（photon 缩放） | core/src/image.ts（tool.ts/instance.ts 消费） | oc-schema/config/media.rs 有 max_width/max_base64_bytes 字段但无消费者，无缩放实现（TUI 显示侧已闭环，见 R-07/R-08/RB-07） | 超限图片无法降采样/拒绝 |
+| RV-G4 | session import 回放 | session/transfer.ts (336 行) | 空 synthetic（"imported"）占位，内容全丢 | 导入功能名存实亡 |
+| RV-G5 | AI experimental/evaluation | packages/ai/src/experimental/ (543 行) | 无 | 实验性评测缺失 |
+| RV-G6 | packages/function（云函数验证） | ~460 行 | 无 | 低影响 |
+
+### 4.2 疑似移植 Bug
+
+| ID | 问题 | 位置 | REF 行为 |
+|---|---|---|---|
+| RV-B1 | 重试/Continue 也 `step += 1`，步数预算被重试侵蚀 | session/runner/drain.rs:741 | REF 仅每完成一步 +1，重试不耗步数 |
+| RV-B2 | prompt/compact 前未 commit staged revert | server session handler | REF session.ts:165 准入前先提交 |
+| RV-B3 | skill 端点只准入 `"/{skill_id}"` 占位文本，正文未进上下文，未发 session.skill.activated | skill 路径 | REF 注入技能正文并发布事件 |
+| RV-B4 | question multiple:true 未映射 multiselect | tool/question.rs:45-72 | question.ts:124 映射 multiselect |
+| RV-B5 | background 端点空 204 | server handler | REF 取消阻塞任务并注入合成通知 |
+| RV-B6 | compact 默认 delivery=Queue（REF steer）；wait 50ms 轮询（REF awaitIdle） | server handler | — |
+| RV-B7 | view 端点缺 idle/viewed 单调守卫 | server handler | 投影器 max() 兜底，影响有限 |
+| RV-B8 | stats 按 UTC 聚合（识别 IANA 名但不用） | handlers/session.rs | REF 按本地时区桶化 |
+| RV-B9 | compact() 清空全部会话的 spent 记账 | runner/compaction.rs | REF 只清本会话 |
+
+### 4.3 部分/占位实现
+
+| ID | 项 | 现状 |
+|---|---|---|
+| RV-P1 | model-transport（会话 WS 传输，REF 571 行） | 仅 seam 占位；modelTransport.close/plugins.awaitActivation TODO |
+| ~~RV-P2~~ | ~~持久 PTY daemon 接线~~ | **误报已撤销（2026-10-27 复核）**：Frontend::new 默认即 daemon 后端（spawn-if-absent），OC_PTY_DAEMON=0 为逃生舱；transport.rs 完整实现 makeDaemonTransport（daemon.ts:158-431）——§1 的 D1-D3 闭环记录属实 |
+| ~~RV-P3~~ | ~~OAuth 设备流~~ | **误报已撤销（2026-10-27 复核）**：integration/flows.rs:366-437 完整实现（request_device_code/verification_uri/轮询）；初查只搜了 mcp/oauth.rs |
+| RV-P4 | websearch MCP 托管 provider | TODO(wave-D) |
+| RV-P5 | oc-client 无重连/共享订阅/响应式层（REF shared-events.ts） | 仅裸 SseStream |
+| RV-P6 | /api/info wildcard 地址不展开（LAN 发现退化） | info.rs:49-56 |
+| RV-P7 | SSE 事件公开性为手工 registry + 补丁段（sse.rs:151-162） | REF EventManifest 单一事实源，漂移风险 |
+| RV-P8 | grep/glob/read 结构化 Output 未导出（output: None） | codemode/plugin 拿不到结构化结果 |
+| RV-P9 | shell 工具描述注册时固定 | REF 由 session hook 动态刷新 |
+| RV-P10 | VCS 抽象层/gitconfig-include/worktree 策略层未移植 | 功能大半被 git2+project.rs 吸收 |
+| RV-P11 | schema 长尾（snapshot/llm/money/token-usage/durable-event） | 需确认 durable-event 是否整域缺口 |
+| RV-P12 | 长尾 provider 适配器（poe/snowflake/digitalocean/xai 等） | 协议族归并，未逐个确认覆盖 |
+| RV-P13 | 插件 SDK 单轨（无 effect 轨） | host.js 提供 promise 轨 |
+| RV-P14 | state.ts Transformable 插件动态 transform 弱化 | 仅 config 热重载覆盖 |
+
+### 4.5 未闭环条目专项复核（2026-10-27，对 §1–§3 全部开放/豁免/登记项逐一以代码与 CI 证据核对）
+
+| 条目 | 复核结论 | 证据 |
+|---|---|---|
+| R-04（Web UI 范围外） | ✅ 属实 | app_archive.rs（19KB）存在且接线 boot.rs/lib.rs；范围外裁定有效 |
+| G-09（LSP 双侧缺失） | ✅ 属实 | REF write.ts:44 明注 "TODO: Add LSP ... after LSP runtime exists"；port 侧无 LSP 运行时符号 |
+| G-14（E2E 待 cron 观察） | ✅ 登记属实，且**观察条件已满足**：首周 schedule run（2026-10-26，40294359979）browser smoke job EXECUTED=success（§1 行已同步更新） | gh run view |
+| R1–R5（hook 永久豁免） | ✅ 属实 | FINDINGS.md §5 R1–R4 逐条在册 |
+| (b)-类随机 coin | ✅ 属实 | ROADMAP:133/189/218/220 定义为 placeholder 随机 coin 具名豁免（rig 比对已知差异） |
+| `aisdk:` 包桥接豁免 | ✅ 属实 | facade.rs:78/433 类型化 UnsupportedProtocol 精确报错 |
+| RA-05（OSC 通知分歧） | ✅ 属实 | os_notify.rs 头注释明确 osc9/99/777 矩阵 + env 覆写 |
+| RA-07（37/20 语言门控） | ✅ 属实 | oc-syntax Cargo.toml langs-extra(84)/all-languages(105) features 存在，发布默认 20 门 |
+| RC-10（move/stats 分层） | ✅ 属实 | move 目的地解析在 oc-server handlers/session.rs:814-817 |
+| RD-08（workspace seam 死代码豁免） | ✅ 属实 | REF provision 仅 workspace/driver.ts（注释），零生产调用 |
+| RD-15（run TTY 权限超集） | ✅ 属实 | OPENCODE_NO_TTY_PROMPT 在 run/noninteractive.rs:388-395/1375 |
+| RD-20①（json5 超集） | ✅ 属实 | config.rs:535 `json5::from_str` |
+| RD-20②（system.txt 差 1 字节） | ✅ 精确属实 | Rust SYSTEM_TEMPLATE 755 字节无尾换行 vs REF system.txt 756 字节（尾 `\n`） |
+| RD-20③（title 重试超集） | ✅ 属实 | title.rs `for attempt in 0..20` + 50ms sleep |
+| RD-20④（pre-step 合成 part） | ✅ 属实 | execution.rs:884+ publish_failed_turn_error + synthetic json |
+| RD-20⑤（released 严格日期） | ✅ 属实 | catalog.rs parse_iso_date_ms 强制 10 字节 YYYY-MM-DD（注释自认 JS 更宽） |
+| RD-20⑥（孤儿评测 fixture） | ✅ 属实 | oc-ai/test-fixtures/recordings/{typesafe,openrouter,opencode-zen}-evaluation/ 三目录在树 |
+| RB-09 残留（stats/history 盲区登记） | ✅ 维持（信息项，无需码变更） | — |
+| RB-10 残留（api --param 超集、websearch 硬编码注册表） | ✅ 属实 | websearch_providers.rs 头注释硬编码 5 provider（MCP-hosted 仍 TODO，与 RV-P4 同源） |
+| §1.3 验证盲区（browser_e2e 口径/P10 opt-in/旗舰插件 CI 跳过） | ✅ 属实 | runtime-gates.yml 含 browser-e2e(16)/p10-real-history(17)/syntax-query-drift(18)/omo staging(728) 各 job；p10-real-history 2026-10-27 才入树、尚无 run，SKIPPED-GAP 语义待首跑 |
+| pre-2.0.24 真实语料 cron | ✅ 属实（等待 secret + 首跑） | 同上 |
+
+**总判定：登记册全部未闭环条目 0 虚报、0 过期（唯一状态推进 = G-14 首周 cron 已绿，已在 §1 行内更新）。**
+
+### 4.4 小项杂录
+
+pathdiff 同路径 `"."` vs `""`；webfetch timeout clamp(1,120) 与 URL 协议大小写；read missing 建议排序；patch 资源去重排序；session_move pinned:true 未移植；models 内容 pretty vs compact；registry 校验器 JSON-Schema 子集；slug 词表本地化（有意）。扩展内联最多待补审：openai_chat.rs (5736)、facade.rs (2143)。
