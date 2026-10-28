@@ -166,7 +166,7 @@ fn with_remote() -> Fixture {
         ..parse_remote("owner/repo").expect("owner/repo parses")
     };
     // Keep the tempdir alive for the test body via leak (small, per-test).
-    let root = root.into_path();
+    let root = root.keep();
     Fixture { root, source, reference }
 }
 
@@ -205,7 +205,7 @@ fn cache_layer(fixture: &Fixture, store: Arc<dyn RefreshStore>, now: SystemTime)
 
 fn daily(fixture: &Fixture) -> (RepositoryCache, Arc<MemoryRefreshStore>) {
     let store = Arc::new(MemoryRefreshStore::default());
-    (cache_layer(fixture, Arc::clone(&store), SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000)), store)
+    (cache_layer(fixture, Arc::clone(&store) as Arc<dyn RefreshStore>, SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000)), store)
 }
 
 fn ensure(reference: &super::repository::RemoteReference) -> EnsureInput {
@@ -220,7 +220,7 @@ fn ensure(reference: &super::repository::RemoteReference) -> EnsureInput {
 fn cache_persists_daily_throttle_and_serializes_refreshes() {
     let fixture = with_remote();
     let (cache, store) = daily(&fixture);
-    let input = ensure(&cache, &fixture.reference);
+    let input = ensure(&fixture.reference);
     let initial = cache.ensure(&input).unwrap();
     assert_eq!(initial.status, "cloned");
     assert_eq!(read(&initial.local_path.join("README.md")), "one\n");
@@ -254,11 +254,14 @@ fn cache_persists_daily_throttle_and_serializes_refreshes() {
 fn cache_allows_forced_refresh() {
     let fixture = with_remote();
     let (cache, _) = daily(&fixture);
-    let input = ensure(&cache, &fixture.reference);
+    let input = ensure(&fixture.reference);
     let initial = cache.ensure(&input).unwrap();
     commit(&fixture.source, "two\n", "advance main");
 
-    assert_eq!(cache.ensure(&EnsureInput { refresh: Refresh::Forced, ..input }).unwrap().status, "refreshed");
+    assert_eq!(
+        cache.ensure(&EnsureInput { refresh: Refresh::Forced, ..ensure(&fixture.reference) }).unwrap().status,
+        "refreshed"
+    );
     assert_eq!(read(&initial.local_path.join("README.md")), "two\n");
     assert_eq!(cache.ensure(&input).unwrap().status, "cached");
 }
@@ -267,7 +270,7 @@ fn cache_allows_forced_refresh() {
 fn cache_throttles_failed_refresh_attempts() {
     let fixture = with_remote();
     let (cache, store) = daily(&fixture);
-    let input = ensure(&cache, &fixture.reference);
+    let input = ensure(&fixture.reference);
     let initial = cache.ensure(&input).unwrap();
     let key = format!("repository-cache:{}", initial.local_path.to_string_lossy());
     store.set_attempted_at(&key, 1_700_000_000_000 - 86_400_000);
@@ -607,7 +610,8 @@ fn guidance_source_reads_renders_and_removes() {
     };
     use std::collections::BTreeMap;
 
-    let infos = Arc::new(|| vec![instructions_info("docs", Some("Use for product documentation"))]);
+    let infos: Arc<dyn Fn() -> Vec<Info> + Send + Sync> =
+        Arc::new(|| vec![instructions_info("docs", Some("Use for product documentation"))]);
     let list: InstructionList = vec![reference_guidance_source(Arc::clone(&infos))];
 
     // Read: the described reference is a Value blob.
@@ -624,7 +628,7 @@ fn guidance_source_reads_renders_and_removes() {
     assert!(initial.contains("<description>Use for product documentation</description>"));
 
     // Update: an added reference renders as a delta.
-    let changed_infos = Arc::new(|| {
+    let changed_infos: Arc<dyn Fn() -> Vec<Info> + Send + Sync> = Arc::new(|| {
         vec![
             instructions_info("docs", Some("Use for product documentation")),
             instructions_info("examples", Some("Use for examples")),
@@ -643,7 +647,7 @@ fn guidance_source_reads_renders_and_removes() {
     ));
 
     // Removal: no described references is an observed absence.
-    let empty = Arc::new(Vec::new);
+    let empty: Arc<dyn Fn() -> Vec<Info> + Send + Sync> = Arc::new(Vec::new);
     let empty_list: InstructionList = vec![reference_guidance_source(empty)];
     let removed = instruction_read(&empty_list);
     assert_eq!(removed[0].1, ReadOutcome::Removed);

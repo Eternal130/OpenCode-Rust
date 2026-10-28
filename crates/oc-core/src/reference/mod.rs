@@ -95,11 +95,14 @@ impl ReferenceService {
     /// refresh store.
     #[must_use]
     pub fn new(repos_root: PathBuf, clock: Arc<dyn oc_util::determinism::Clock>) -> Self {
-        Self::with_cache(repos_root, RepositoryCache::new(
+        Self::with_cache(
             repos_root.clone(),
-            clock,
-            Arc::new(repository_cache::FileRefreshStore::new(&repos_root)),
-        ))
+            RepositoryCache::new(
+                repos_root.clone(),
+                clock,
+                Arc::new(repository_cache::FileRefreshStore::new(&repos_root)),
+            ),
+        )
     }
 
     /// Test shape: explicit cache (fixture roots, fake clock, injected

@@ -798,8 +798,14 @@ impl HookRegistry {
 
     /// Count of live registrations across every hook point (diagnostics).
     #[must_use]
-    pub fn total_hooks(&self) -> usize {
-        let lists = &*self.lists;
+    /// Registrations on the `tool.execute.before` point (builtin repair
+    /// hook + guest plugins).
+    #[must_use]
+    pub fn tool_execute_before_count(&self) -> usize {
+        self.lists.tool_execute_before.lock().entries.len()
+    }
+
+    pub fn total_hooks(&self) -> usize {        let lists = &*self.lists;
         lists.session_prompt.lock().entries.len()
             + lists.session_context.lock().entries.len()
             + lists.session_compaction.lock().entries.len()

@@ -109,7 +109,9 @@ pub fn repair(value: &Value, schema: &Value, root: &Value, depth: usize) -> Valu
                 types.iter().filter(|ty| ty.as_str() != Some("null")).collect();
             if candidates.len() == 1 {
                 let mut narrowed = schema.clone();
-                narrowed.insert("type".into(), candidates[0].clone());
+                if let Some(object) = narrowed.as_object_mut() {
+                    object.insert("type".to_owned(), candidates[0].clone());
+                }
                 return repair(value, &narrowed, root, depth + 1);
             }
             value.clone()
@@ -255,11 +257,11 @@ fn repair_object(value: &Value, schema: &Value, root: &Value, depth: usize) -> V
         .any(|keyword| schema.get(keyword).is_some_and(Value::is_array));
 
     let mut result: Map<String, Value> = parsed;
-    for key in parsed.keys() {
-        let current = &result[key];
-        let declared = properties.contains_key(key);
+    for key in result.keys().cloned().collect::<Vec<_>>() {
+        let current = &result[key.as_str()];
+        let declared = properties.contains_key(key.as_str());
         let property = if declared {
-            properties.get(key)
+            properties.get(key.as_str())
         } else if !patterned {
             schema.get("additionalProperties")
         } else {
@@ -272,7 +274,7 @@ fn repair_object(value: &Value, schema: &Value, root: &Value, depth: usize) -> V
             && !patterned
             && !composed
         {
-            result.remove(key);
+            result.remove(key.as_str());
             continue;
         }
         let Some(property) = property.filter(|property| property.is_object()) else {
@@ -286,12 +288,12 @@ fn repair_object(value: &Value, schema: &Value, root: &Value, depth: usize) -> V
             && !composed
             && ["anyOf", "oneOf", "allOf", "enum", "const", "$ref", "nullable"]
                 .iter()
-                .all(|keyword| !property.as_object().is_some_and(|map| map.contains_key(keyword)));
+                .all(|keyword| !property.as_object().is_some_and(|map| map.contains_key(*keyword)));
         let placeholder = current.as_object().is_some_and(Map::is_empty)
             && property.get("type").and_then(Value::as_str) != Some("object");
         if declared && !required.contains(&key.as_str()) && plain && (current.is_null() || placeholder)
         {
-            result.remove(key);
+            result.remove(key.as_str());
             continue;
         }
 
@@ -306,10 +308,7 @@ fn repair_object(value: &Value, schema: &Value, root: &Value, depth: usize) -> V
 /// `repairArray` (ref tool-input-repair.ts:112-152).
 fn repair_array(value: &Value, schema: &Value, root: &Value, depth: usize) -> Value {
     let parsed: Value = match value {
-        Value::String(text) => match serde_json::from_str::<Value>(text) {
-            Ok(parsed) => parsed,
-            Err(_) => return value.clone(),
-        },
+        Value::String(text) => serde_json::from_str::<Value>(text).unwrap_or_else(|_| value.clone()),
         parsed => parsed.clone(),
     };
     let prefix_items = schema.get("prefixItems").and_then(Value::as_array);
@@ -357,7 +356,7 @@ fn repair_array(value: &Value, schema: &Value, root: &Value, depth: usize) -> Va
         Some("array") => repaired.is_array(),
         Some("integer") => is_safe_integer(&repaired),
         Some("number") => is_number(&repaired),
-        Some("string" | "boolean") => js_type(&repaired) == ty,
+        Some("string" | "boolean") => js_type(&repaired) == ty.unwrap_or(""),
         _ => false,
     };
     if compatible {
