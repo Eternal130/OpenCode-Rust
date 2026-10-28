@@ -128,6 +128,11 @@ pub trait Spawned: Send {
 
 /// §8.1 resolution order as a pure function (fixture-testable):
 /// `OPENCODE_PTY_BIN` → `<exe-dir>/oc-pty` → PATH lookup of `oc-pty`.
+///
+/// RW-T2: an explicit `OPENCODE_PTY_BIN` override is validated
+/// ([`validate_external_binary`]) — an invalid override resolves to `None`
+/// rather than yielding a bad path; the production launcher surfaces the
+/// distinct failure reason before even resolving.
 #[must_use]
 pub fn resolve_binary_path(
     env_value: Option<&str>,
@@ -135,7 +140,8 @@ pub fn resolve_binary_path(
     path_env: &str,
 ) -> Option<PathBuf> {
     if let Some(value) = env_value.filter(|value| !value.is_empty()) {
-        return Some(PathBuf::from(value));
+        let path = PathBuf::from(value);
+        return validate_external_binary(&path).ok().map(|()| path);
     }
     if let Some(dir) = exe_dir {
         let candidate = dir.join("oc-pty");
@@ -161,6 +167,34 @@ fn is_executable_file(path: &Path) -> bool {
         && std::fs::metadata(path).is_ok_and(|meta| meta.permissions().mode() & 0o111 != 0)
 }
 
+/// RW-T2: basic validation for the explicit `OPENCODE_PTY_BIN` override.
+///
+/// Scope note: ref `binary.bun.ts` applies sha256/owner/lstat checks to its
+/// *pinned* bun binary — a hash pin over something the distribution itself
+/// shipped. For an explicit user-supplied env override the right scope is
+/// existence + regular file + executable bit with a clear error message; we
+/// deliberately do not hash-pin a path the user explicitly pointed at.
+pub(crate) fn validate_external_binary(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let meta = std::fs::metadata(path).map_err(|_| {
+        format!(
+            "OPENCODE_PTY_BIN path does not exist: {} — fix or unset the override to fall \
+             back to exe-sibling/PATH resolution",
+            path.display()
+        )
+    })?;
+    if !meta.is_file() {
+        return Err(format!("OPENCODE_PTY_BIN is not a regular file: {}", path.display()));
+    }
+    if meta.permissions().mode() & 0o111 == 0 {
+        return Err(format!(
+            "OPENCODE_PTY_BIN is not executable (missing +x bit): {}",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
 /// The production launcher: resolves the binary once (reset on
 /// failure, `ref: index.ts:131-135`) and spawns it detached with
 /// `stdio: ignore` (`daemon.ts:229-244`).
@@ -184,6 +218,16 @@ impl Default for BinaryLauncher {
 impl Launcher for BinaryLauncher {
     fn launch(&self, root: &Path, id: &str) -> Result<Box<dyn Spawned>, TransportError> {
         use std::os::unix::process::CommandExt as _;
+        // RW-T2: a bad explicit override fails fast with its own distinct
+        // error instead of spawning ENOENT or silently masking the mistake.
+        if let Some(value) =
+            std::env::var("OPENCODE_PTY_BIN").ok().filter(|value| !value.is_empty())
+        {
+            if let Err(reason) = validate_external_binary(Path::new(&value)) {
+                *self.cache.lock() = None;
+                return Err(TransportError::new(ErrorKind::Spawn, reason));
+            }
+        }
         let binary = self.cache.lock().clone().or_else(|| {
             let resolved = resolve_binary_path(
                 std::env::var("OPENCODE_PTY_BIN").ok().as_deref(),
@@ -1790,6 +1834,92 @@ mod tests {
         );
         // 4. Exhausted (no override, no sibling, empty PATH).
         assert_eq!(resolve_binary_path(None, Some(&sandbox.path().join("no-exe")), ""), None);
+    }
+
+    /// RW-T2: an explicit `OPENCODE_PTY_BIN` override gets basic binary
+    /// validation (existence + regular file + executable bit) with a clear
+    /// per-reason error — and an invalid override never silently falls
+    /// through to exe-sibling/PATH resolution.
+    #[test]
+    fn env_override_binary_validation() {
+        let sandbox = tempfile::Builder::new()
+            .prefix("oc-pty-rwt2-")
+            .tempdir_in("/tmp/opencode")
+            .expect("temp dir");
+
+        // Leg 1: non-existent path.
+        let missing = sandbox.path().join("does-not-exist");
+        let Err(reason) = validate_external_binary(&missing) else {
+            panic!("non-existent override must be rejected");
+        };
+        assert!(reason.contains("does not exist"), "{reason}");
+        assert!(reason.contains("OPENCODE_PTY_BIN"), "{reason}");
+
+        // Leg 2: directory (not a regular file).
+        let Err(reason) = validate_external_binary(sandbox.path()) else {
+            panic!("directory override must be rejected");
+        };
+        assert!(reason.contains("not a regular file"), "{reason}");
+
+        // Leg 3: existing regular file without the executable bit.
+        let noexec = sandbox.path().join("noexec");
+        std::fs::write(&noexec, b"#!/bin/sh\n").expect("write");
+        let Err(reason) = validate_external_binary(&noexec) else {
+            panic!("non-executable override must be rejected");
+        };
+        assert!(reason.contains("not executable"), "{reason}");
+
+        // Leg 4: valid executable passes, and resolution honors it.
+        std::fs::set_permissions(&noexec, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        validate_external_binary(&noexec).expect("executable regular file passes");
+        assert_eq!(
+            resolve_binary_path(
+                noexec.to_str(),
+                Some(sandbox.path()),
+                "" // invalid override must not fall through to any sibling/PATH
+            ),
+            Some(noexec.clone())
+        );
+
+        // Leg 5: an invalid override resolves to None even when a valid
+        // exe-sibling exists — the misconfiguration is not masked.
+        let sibling_dir = sandbox.path().join("exe");
+        std::fs::create_dir_all(&sibling_dir).expect("exe dir");
+        let sibling = sibling_dir.join("oc-pty");
+        std::fs::write(&sibling, b"#!/bin/sh\n").expect("sibling");
+        std::fs::set_permissions(&sibling, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        assert_eq!(
+            resolve_binary_path(
+                sandbox.path().join("does-not-exist").to_str(),
+                Some(&sibling_dir),
+                ""
+            ),
+            None,
+            "invalid override must not silently fall back to the exe-sibling"
+        );
+
+        // Leg 6: the production launcher fails fast with the distinct
+        // reason instead of the generic could-not-find message.
+        let saved_bin = std::env::var_os("OPENCODE_PTY_BIN");
+        std::env::set_var("OPENCODE_PTY_BIN", sandbox.path().join("does-not-exist"));
+        let result = BinaryLauncher::new().launch(Path::new("/tmp/opencode"), "rwt2-bad-override");
+        let locked = sandbox.path().join("locked");
+        std::fs::write(&locked, b"#!/bin/sh\n").expect("write");
+        std::env::set_var("OPENCODE_PTY_BIN", locked);
+        let result_noexec =
+            BinaryLauncher::new().launch(Path::new("/tmp/opencode"), "rwt2-noexec-override");
+        match saved_bin {
+            Some(value) => std::env::set_var("OPENCODE_PTY_BIN", value),
+            None => std::env::remove_var("OPENCODE_PTY_BIN"),
+        }
+        let Err(error) = result else {
+            panic!("launch with non-existent override must fail");
+        };
+        assert!(error.message.contains("does not exist"), "{}", error.message);
+        let Err(error) = result_noexec else {
+            panic!("launch with non-executable override must fail");
+        };
+        assert!(error.message.contains("not executable"), "{}", error.message);
     }
 
     /// F6: the §6 arm-B probe is read-only — a missing lock file is

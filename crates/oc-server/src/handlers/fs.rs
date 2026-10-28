@@ -302,10 +302,7 @@ async fn find(
         scored
             .sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)).then_with(|| a.2.cmp(&b.2)));
         scored.truncate(effective_limit);
-        scored
-            .into_iter()
-            .map(|(_, _, _, path, is_dir)| (path, is_dir))
-            .collect::<Vec<_>>()
+        scored.into_iter().map(|(_, _, _, path, is_dir)| (path, is_dir)).collect::<Vec<_>>()
     });
     let scored = blocking.await.map_err(|error| {
         crate::errors::debug_cause("fs:unknown_ref", &error);

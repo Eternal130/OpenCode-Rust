@@ -70,6 +70,9 @@ pub enum Reply {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PermissionSaved {
     pub id: PermissionSavedId,
+    // ref wire key is `projectID` (permission-saved.ts:16) — without this
+    // rename a direct serde serialization would emit snake_case.
+    #[serde(rename = "projectID")]
     pub project_id: ProjectId,
     pub action: String,
     pub resource: String,
@@ -107,5 +110,23 @@ mod tests {
         });
         let parsed: Source = serde_json::from_value(value.clone()).unwrap();
         assert_eq!(serde_json::to_value(&parsed).unwrap(), value);
+    }
+
+    /// RW-T1: direct serde of `PermissionSaved` emits the ref wire key
+    /// `projectID` (permission-saved.ts:16), not snake_case.
+    #[test]
+    fn permission_saved_wire_camel_case() {
+        let saved = PermissionSaved {
+            id: PermissionSavedId("psv_1".into()),
+            project_id: ProjectId("prj_1".into()),
+            action: "bash".into(),
+            resource: "*".into(),
+            time: PermissionSavedTime { created: 1, updated: 2 },
+        };
+        let json = serde_json::to_value(&saved).unwrap();
+        assert!(json.get("projectID").is_some(), "wire key must be projectID: {json}");
+        assert!(json.get("project_id").is_none(), "snake_case must not leak: {json}");
+        let back: PermissionSaved = serde_json::from_value(json).unwrap();
+        assert_eq!(back, saved);
     }
 }

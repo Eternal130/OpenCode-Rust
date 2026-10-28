@@ -153,6 +153,9 @@ pub struct Resource {
 pub struct ResourceTemplate {
     pub server: String,
     pub name: String,
+    // ref wire key is `uriTemplate` (mcp.ts:112); the live HTTP path
+    // hand-rolls the key (handlers/mcp.rs), this rename covers direct serde.
+    #[serde(rename = "uriTemplate")]
     pub uri_template: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -219,5 +222,23 @@ mod tests {
             serde_json::to_value(Status::Connected).unwrap(),
             serde_json::json!({"status": "connected"})
         );
+    }
+
+    /// RW-T1: direct serde of `ResourceTemplate` emits the ref wire key
+    /// `uriTemplate` (mcp.ts:112), not snake_case.
+    #[test]
+    fn resource_template_wire_camel_case() {
+        let template = ResourceTemplate {
+            server: "ctx".into(),
+            name: "docs".into(),
+            uri_template: "docs://{path}".into(),
+            description: None,
+            mime_type: None,
+        };
+        let json = serde_json::to_value(&template).unwrap();
+        assert!(json.get("uriTemplate").is_some(), "wire key must be uriTemplate: {json}");
+        assert!(json.get("uri_template").is_none(), "snake_case must not leak: {json}");
+        let back: ResourceTemplate = serde_json::from_value(json).unwrap();
+        assert_eq!(back, template);
     }
 }
