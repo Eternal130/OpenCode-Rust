@@ -136,6 +136,33 @@ fn resolve_method<'a>(methods: &'a [Value], target: &str) -> Result<&'a Value, S
     }
 }
 
+/// `util/open.ts openUrl` + `ui/prompt.ts openUrl` (login.ts:177): open an
+/// http(s) URL with the platform browser opener. Plain subprocess spawn —
+/// non-fatal on failure (REF pipes through `Effect.ignore`); the URL itself
+/// is always printed first as the manual fallback.
+fn open_url(url: &str) {
+    // Only http and https links can be opened in the browser (open.ts).
+    let Some((scheme, _rest)) = url.split_once("://") else { return };
+    if !matches!(scheme, "http" | "https") {
+        return;
+    }
+    // The `open` npm package's platform targets: xdg-open on Linux, `open`
+    // on macOS, `cmd /c start` on Windows (empty title arg first so quoted
+    // URLs are not swallowed as the console title).
+    let (program, prefix): (&str, Vec<&str>) = match std::env::consts::OS {
+        "macos" => ("open", Vec::new()),
+        "windows" => ("cmd", vec!["/c", "start", ""]),
+        _ => ("xdg-open", Vec::new()),
+    };
+    let _ = std::process::Command::new(program)
+        .args(&prefix)
+        .arg(url)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+}
+
 fn require_interactive(message: &str) -> Result<(), String> {
     if util::stdin_is_tty() && util::stdout_is_tty() {
         Ok(())
@@ -470,6 +497,10 @@ pub(crate) async fn oauth_login(
     }
     if let Some(url) = attempt.get("url").and_then(Value::as_str) {
         println!("│ {url}");
+        // login.ts:177 — open the browser when both ends are interactive.
+        if util::stdin_is_tty() && util::stdout_is_tty() {
+            open_url(url);
+        }
     }
     if attempt.get("mode").and_then(Value::as_str) == Some("code") {
         if let Err(message) = require_interactive(
@@ -887,4 +918,76 @@ async fn import(server: &ServerParams, file: Option<&str>) -> i32 {
         if skipped > 0 { format!(", skipped {skipped} already present") } else { String::new() }
     );
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::open_url;
+    use std::path::PathBuf;
+
+    /// `openUrl` spawns the platform opener (linux: xdg-open) with the URL
+    /// as argv[1]. A stub opener on PATH records what it received; the
+    /// nextest process isolation makes the PATH rewrite safe.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn open_url_spawns_the_platform_opener_with_the_url() {
+        let dir = tempfile::tempdir_in("/tmp/opencode").expect("tempdir"); // dev-dependency of the crate
+        let log = dir.path().join("urls.log");
+        let script = format!("printf '%s\\n' \"$1\" >> {}\nexit 0\n", log.display());
+        let opener = dir.path().join("xdg-open");
+        std::fs::write(&opener, format!("#!/bin/sh\n{script}")).expect("write opener");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&opener).expect("stat").permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&opener, perms).expect("chmod");
+        }
+        let mut path: Vec<PathBuf> =
+            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).collect();
+        path.insert(0, dir.path().to_path_buf());
+        std::env::set_var("PATH", std::env::join_paths(path).expect("join"));
+
+        open_url("https://auth.example.com/oauth/authorize?x=1");
+        open_url("http://auth.example.com/start");
+        // Give the spawned openers a moment to append, then verify.
+        for _ in 0..50 {
+            if std::fs::read_to_string(&log).is_ok_and(|text| text.lines().count() >= 2) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let logged = std::fs::read_to_string(&log).expect("opener ran");
+        assert!(logged.contains("https://auth.example.com/oauth/authorize?x=1"), "{logged}");
+        assert!(logged.contains("http://auth.example.com/start"), "{logged}");
+    }
+
+    /// open.ts: only http/https links are opened; anything else is
+    /// rejected without spawning (nothing new lands in the log).
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn open_url_rejects_non_http_links() {
+        let dir = tempfile::tempdir_in("/tmp/opencode").expect("tempdir");
+        let log = dir.path().join("reject.log");
+        let script = format!("printf '%s\\n' \"$1\" >> {}\nexit 0\n", log.display());
+        let opener = dir.path().join("xdg-open");
+        std::fs::write(&opener, format!("#!/bin/sh\n{script}")).expect("write opener");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&opener).expect("stat").permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&opener, perms).expect("chmod");
+        }
+        let mut path: Vec<PathBuf> =
+            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).collect();
+        path.insert(0, dir.path().to_path_buf());
+        std::env::set_var("PATH", std::env::join_paths(path).expect("join"));
+
+        open_url("file:///etc/passwd");
+        open_url("javascript:alert(1)");
+        open_url("not a url");
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(!log.exists(), "no opener spawn for non-http links");
+    }
 }

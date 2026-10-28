@@ -136,8 +136,9 @@ impl Formatter for NoopFormatter {
 // Port notes (mechanical divergences, all documented):
 // - oc-core has no logging bus, so REF's `Effect.logInfo/logError` on
 //   format attempts and failures become silent skips (same control flow).
-// - REF `Npm.which` may auto-install the package on a miss; the port only
-//   resolves `node_modules/.bin/<bin>` up the directory chain (no network).
+// - REF `Npm.which` resolves from the app npm cache and auto-installs on
+//   a miss (Arborist reify in REF); the port installs with bun/npm into
+//   the same cache layout (`npm_which`).
 // ---------------------------------------------------------------------------
 
 /// The `enabled` arm of a REF `Info`: how the concrete argv is resolved for
@@ -386,6 +387,9 @@ pub struct BuiltinsFormatter {
     /// Extra binary dirs searched before PATH (REF `global.bin`; the port
     /// leaves this configurable and empty by default).
     bin_dirs: Vec<PathBuf>,
+    /// Npm cache root override for `Npm.which` tests; `None` = the app
+    /// cache root (`<XDG_CACHE_HOME>/opencode-rust/npm`).
+    npm_cache: Option<PathBuf>,
     formatters: std::sync::Mutex<Vec<Registered>>,
     /// Resolved-argv cache (REF `commands` WeakMap: only successful
     /// resolutions are cached; `None` results re-probe next time).
@@ -401,9 +405,17 @@ impl BuiltinsFormatter {
             directory,
             worktree,
             bin_dirs,
+            npm_cache: None,
             formatters: std::sync::Mutex::new(builtin_formatters()),
             resolved: std::sync::Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Point `Npm.which` at a test cache root.
+    #[must_use]
+    pub fn with_npm_cache(mut self, root: PathBuf) -> Self {
+        self.npm_cache = Some(root);
+        self
     }
 
     /// The full config-plugin construction (`config/plugin/formatter.ts`):
@@ -585,6 +597,73 @@ impl BuiltinsFormatter {
         None
     }
 
+    /// REF `Npm.which(pkg, bin?)` (util/npm.ts): resolve the package's
+    /// binary from the global npm cache
+    /// `<cache>/npm/<pkg>@latest/<generation>/node_modules/.bin`, and when
+    /// no generation holds it, auto-install the package (`Npm.add`) and
+    /// pick from the fresh generation. Any failure yields `None` (REF
+    /// `orElseSucceed(Option.none)` → the formatter reports disabled).
+    fn npm_which(&self, package: &str, bin: &str) -> Option<String> {
+        let root = self
+            .npm_cache
+            .clone()
+            .unwrap_or_else(|| oc_util::global_roots::resolve().cache.join("npm"));
+        let key = format!("{package}@latest");
+        let base = root.join(&key);
+        // Existing generations (timestamp-named, newest first).
+        if let Some(picked) = newest_generation_bin(&base, package, bin) {
+            return Some(picked);
+        }
+        // `Npm.add`: install into a new generation directory. The REF
+        // Arborist reify maps to the same cache layout the plugin host
+        // installs into (`plugin-host/context/install.rs`): a scratch
+        // `package.json` declaring the dependency plus bun (preferred) or
+        // npm. Installs only happen when bun/npm is resolvable; a missing
+        // installer or failed install is a non-fatal disabled formatter.
+        let installer: Option<(String, Vec<String>)> = self
+            .which("bun")
+            .map(|bin| (bin, vec!["install".to_owned(), "--no-save".to_owned()]))
+            .or_else(|| {
+                self.which("npm").map(|bin| {
+                    (
+                        bin,
+                        vec![
+                            "install".to_owned(),
+                            "--no-save".to_owned(),
+                            "--no-audit".to_owned(),
+                            "--no-fund".to_owned(),
+                        ],
+                    )
+                })
+            });
+        let (program, args) = installer?;
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_millis());
+        let dir = base.join(stamp.to_string());
+        let mut dependencies = serde_json::Map::new();
+        dependencies.insert(package.to_owned(), serde_json::Value::String("latest".to_owned()));
+        let manifest = serde_json::json!({
+            "name": "opencode-formatter-install",
+            "private": true,
+            "dependencies": dependencies,
+        });
+        std::fs::create_dir_all(&dir).ok()?;
+        std::fs::write(dir.join("package.json"), manifest.to_string()).ok()?;
+        let output = std::process::Command::new(&program)
+            .args(&args)
+            .current_dir(&dir)
+            .env("NPM_CONFIG_FUND", "false")
+            .env("NPM_CONFIG_AUDIT", "false")
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            let _ = std::fs::remove_dir_all(&dir);
+            return None;
+        }
+        newest_generation_bin(&base, package, bin)
+    }
+
     fn read_text(&self, file: &Path) -> String {
         std::fs::read_to_string(file).unwrap_or_default()
     }
@@ -635,7 +714,10 @@ impl BuiltinsFormatter {
                 if !configured {
                     return None;
                 }
-                let path = self.npm_bin("biome")?;
+                // builtins.ts:136 — `npm.which("@biomejs/biome")` (global
+                // cache + on-demand install), NOT the project
+                // `node_modules/.bin` chain.
+                let path = self.npm_which("@biomejs/biome", "biome")?;
                 Some(vec![path, "format".into(), "--write".into(), "$FILE".into()])
             }
             Enabled::ClangFormat => {
@@ -793,6 +875,67 @@ impl BuiltinsFormatter {
     }
 }
 
+/// `Npm.which`'s `pick`: newest timestamp-named generation under `base`
+/// that has a populated `node_modules/.bin`, choosing `<bin>` when present
+/// (bin hint), else the package.json `bin` entry named after the package's
+/// unscoped name, else the first file.
+fn newest_generation_bin(base: &Path, package: &str, bin: &str) -> Option<String> {
+    let mut generations: Vec<PathBuf> = std::fs::read_dir(base)
+        .ok()?
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.chars().all(|ch| ch.is_ascii_digit()))
+        })
+        .collect();
+    generations.sort();
+    for generation in generations.into_iter().rev() {
+        let bin_dir = generation.join("node_modules").join(".bin");
+        let Ok(entries) = std::fs::read_dir(&bin_dir) else { continue };
+        let mut files: Vec<String> = entries
+            .filter_map(std::result::Result::ok)
+            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .collect();
+        if files.is_empty() {
+            continue;
+        }
+        files.sort();
+        if files.iter().any(|name| name == bin) {
+            return Some(bin_dir.join(bin).to_string_lossy().into_owned());
+        }
+        if files.len() == 1 {
+            return Some(bin_dir.join(&files[0]).to_string_lossy().into_owned());
+        }
+        // package.json `bin` field keyed by the unscoped package name.
+        let unscoped = package.rsplit('/').next().unwrap_or(package);
+        let manifest = std::fs::read_to_string(
+            generation.join("node_modules").join(package).join("package.json"),
+        )
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok());
+        if let Some(bin_field) = manifest.as_ref().and_then(|value| value.get("bin")) {
+            if bin_field.is_string() {
+                return Some(bin_dir.join(unscoped).to_string_lossy().into_owned());
+            }
+            if let Some(map) = bin_field.as_object() {
+                let selected = map
+                    .get(unscoped)
+                    .map(|_| unscoped)
+                    .or_else(|| map.keys().next().map(String::as_str));
+                if let Some(selected) = selected {
+                    return Some(bin_dir.join(selected).to_string_lossy().into_owned());
+                }
+            }
+        }
+        return Some(bin_dir.join(&files[0]).to_string_lossy().into_owned());
+    }
+    None
+}
+
 /// `which`-style executable-file check (unix mode bits; plain file elsewhere).
 fn is_executable_file(path: &Path) -> bool {
     let Ok(metadata) = std::fs::metadata(path) else { return false };
@@ -881,7 +1024,7 @@ mod builtins_tests {
     /// every PATH-resolvable binary (fakes shadow the real PATH because the
     /// formatter searches `bin_dirs` first).
     #[cfg(unix)]
-    fn fully_marked_project() -> (tempfile::TempDir, tempfile::TempDir) {
+    fn fully_marked_project() -> (tempfile::TempDir, tempfile::TempDir, tempfile::TempDir) {
         let project = tempdir();
         let bin = tempdir();
         for name in [
@@ -912,12 +1055,19 @@ mod builtins_tests {
         // formatter"; uv must accept `format --help`.
         fake_bin(bin.path(), "air", "echo 'The R language formatter'; exit 0");
         fake_bin(bin.path(), "uv", "exit 0");
-        // npm-resolved binaries.
+        // npm-resolved binaries (project node_modules: prettier/oxfmt).
         let npm_bin = project.path().join("node_modules/.bin");
         std::fs::create_dir_all(&npm_bin).expect("bin dir");
-        for name in ["prettier", "oxfmt", "biome"] {
+        for name in ["prettier", "oxfmt"] {
             fake_bin(&npm_bin, name, "exit 0");
         }
+        // biome resolves through `Npm.which` — the global npm cache, not
+        // the project node_modules chain.
+        let npm_cache = tempdir();
+        let generation = npm_cache.path().join("@biomejs/biome@latest/1700000000000");
+        let cache_bin = generation.join("node_modules/.bin");
+        std::fs::create_dir_all(&cache_bin).expect("cache bin dir");
+        fake_bin(&cache_bin, "biome", "exit 0");
         std::fs::write(project.path().join(".clang-format"), "").expect("write");
         std::fs::write(project.path().join(".ocamlformat"), "").expect("write");
         std::fs::write(project.path().join("biome.json"), "{}").expect("write");
@@ -935,7 +1085,7 @@ mod builtins_tests {
         let vendor = project.path().join("vendor/bin");
         std::fs::create_dir_all(&vendor).expect("vendor");
         fake_bin(&vendor, "pint", "exit 0");
-        (project, bin)
+        (project, bin, npm_cache)
     }
 
     fn resolve_all(formatter: &BuiltinsFormatter) -> Vec<(String, Option<Vec<String>>)> {
@@ -997,12 +1147,13 @@ mod builtins_tests {
     #[test]
     #[cfg(unix)]
     fn detection_resolves_ref_argv_for_all_26() {
-        let (project, bin) = fully_marked_project();
+        let (project, bin, npm_cache) = fully_marked_project();
         let formatter = BuiltinsFormatter::new(
             project.path().to_path_buf(),
             project.path().to_path_buf(),
             vec![bin.path().to_path_buf()],
-        );
+        )
+        .with_npm_cache(npm_cache.path().to_path_buf());
         let resolved = resolve_all(&formatter);
         assert_eq!(resolved.len(), 26, "all 26 registered");
         let get = |name: &str| {
@@ -1049,7 +1200,11 @@ mod builtins_tests {
         assert_eq!(
             get("biome"),
             vec![
-                project.path().join("node_modules/.bin/biome").to_string_lossy().into_owned(),
+                npm_cache
+                    .path()
+                    .join("@biomejs/biome@latest/1700000000000/node_modules/.bin/biome")
+                    .to_string_lossy()
+                    .into_owned(),
                 "format".into(),
                 "--write".into(),
                 "$FILE".into()
@@ -1468,5 +1623,142 @@ mod builtins_tests {
         std::fs::write(&target, "").expect("write");
         assert!(formatter.file(&target));
         assert_eq!(std::fs::read_to_string(&target).expect("read").trim(), "env=set-by-formatter");
+    }
+
+    // --- biome via `Npm.which` (RW-09) -------------------------------------
+
+    fn biome_formatter(project: &Path, bin: &Path, npm_cache: &Path) -> BuiltinsFormatter {
+        BuiltinsFormatter::new(
+            project.to_path_buf(),
+            project.to_path_buf(),
+            vec![bin.to_path_buf()],
+        )
+        .with_npm_cache(npm_cache.to_path_buf())
+    }
+
+    fn biome_registered(formatter: &BuiltinsFormatter) -> bool {
+        formatter
+            .formatters
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+            .any(|item| item.name == "biome")
+    }
+
+    fn resolve_biome(formatter: &BuiltinsFormatter) -> Option<Vec<String>> {
+        let registered = formatter
+            .formatters
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+            .find(|item| item.name == "biome")
+            .cloned()?;
+        formatter.resolve(&registered)
+    }
+
+    /// `Npm.which` auto-installs on a cache miss (`Npm.add`): the stub
+    /// `bun` on the bin path lays down node_modules/.bin/biome in the
+    /// generation the CLI manifest declares, and detection picks it up.
+    #[test]
+    #[cfg(unix)]
+    fn biome_auto_installs_on_cache_miss_via_stub_bun() {
+        let project = tempdir();
+        let bin = tempdir();
+        let npm_cache = tempdir();
+        // The stub installer runs with cwd = the generation dir; plant
+        // the binary + package.json npm would install there.
+        let script = r#"mkdir -p node_modules/.bin node_modules/@biomejs/biome
+printf '#!/bin/sh\nexit 0\n' > node_modules/.bin/biome
+chmod +x node_modules/.bin/biome
+printf '{"name":"@biomejs/biome","version":"1.0.0"}' > node_modules/@biomejs/biome/package.json
+exit 0
+"#;
+        fake_bin(bin.path(), "bun", script);
+        std::fs::write(project.path().join("biome.json"), "{}").expect("write");
+        let formatter = biome_formatter(project.path(), bin.path(), npm_cache.path());
+        assert!(biome_registered(&formatter), "biome registered");
+        let resolved = resolve_biome(&formatter).expect("biome resolves after install");
+        let path = PathBuf::from(&resolved[0]);
+        assert!(
+            path.starts_with(npm_cache.path().join("@biomejs/biome@latest")),
+            "installed into the cache: {}",
+            path.display()
+        );
+        assert!(
+            path.ends_with("node_modules/.bin/biome"),
+            "picked the biome bin: {}",
+            path.display()
+        );
+        assert_eq!(
+            &resolved[1..],
+            &["format".to_owned(), "--write".to_owned(), "$FILE".to_owned()]
+        );
+    }
+
+    /// With an existing cache generation, `Npm.which` resolves WITHOUT
+    /// invoking any installer (no bun/npm stubs on the bin path at all).
+    #[test]
+    #[cfg(unix)]
+    fn biome_resolves_from_existing_cache_generation_without_installer() {
+        let project = tempdir();
+        let bin = tempdir();
+        let npm_cache = tempdir();
+        let cache_bin = npm_cache.path().join("@biomejs/biome@latest/1/node_modules/.bin");
+        std::fs::create_dir_all(&cache_bin).expect("cache bin");
+        fake_bin(&cache_bin, "biome", "exit 0");
+        std::fs::write(project.path().join("biome.jsonc"), "{}").expect("write");
+        let formatter = biome_formatter(project.path(), bin.path(), npm_cache.path());
+        let resolved = resolve_biome(&formatter).expect("resolves from cache");
+        assert_eq!(PathBuf::from(&resolved[0]), cache_bin.join("biome"));
+    }
+
+    /// A miss with no resolvable installer (no bun/npm anywhere) stays
+    /// disabled — non-fatal, no cache writes. PATH is pinned to the empty
+    /// stub dir so a real npm/bun on the developer box can't install.
+    #[test]
+    #[cfg(unix)]
+    fn biome_without_installer_stays_disabled() {
+        let project = tempdir();
+        let bin = tempdir(); // no bun/npm stubs
+        std::env::set_var("PATH", bin.path());
+        let npm_cache = tempdir();
+        std::fs::write(project.path().join("biome.json"), "{}").expect("write");
+        let formatter = biome_formatter(project.path(), bin.path(), npm_cache.path());
+        assert!(resolve_biome(&formatter).is_none(), "disabled without installer");
+        // and the config marker still gates everything
+        let bare = tempdir();
+        let formatter = BuiltinsFormatter::new(
+            bare.path().to_path_buf(),
+            bare.path().to_path_buf(),
+            vec![bin.path().to_path_buf()],
+        )
+        .with_npm_cache(npm_cache.path().to_path_buf());
+        assert!(resolve_biome(&formatter).is_none(), "no biome.json → disabled");
+    }
+
+    /// The `pick` bin selection: newest generation wins, the bin hint
+    /// (`biome`) is chosen over other files in `.bin`.
+    #[test]
+    #[cfg(unix)]
+    fn biome_pick_prefers_newest_generation_and_bin_hint() {
+        let project = tempdir();
+        let bin = tempdir();
+        let npm_cache = tempdir();
+        for (gen, names) in [(1u64, &["aaa", "zzz"][..]), (2, &["aaa", "biome"][..])] {
+            let cache_bin =
+                npm_cache.path().join(format!("@biomejs/biome@latest/{gen}/node_modules/.bin"));
+            std::fs::create_dir_all(&cache_bin).expect("cache bin");
+            for name in names {
+                fake_bin(&cache_bin, name, "exit 0");
+            }
+        }
+        std::fs::write(project.path().join("biome.json"), "{}").expect("write");
+        let formatter = biome_formatter(project.path(), bin.path(), npm_cache.path());
+        let resolved = resolve_biome(&formatter).expect("resolves");
+        assert_eq!(
+            PathBuf::from(&resolved[0]),
+            npm_cache.path().join("@biomejs/biome@latest/2/node_modules/.bin/biome"),
+            "newest generation + bin hint"
+        );
     }
 }
