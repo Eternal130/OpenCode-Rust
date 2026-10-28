@@ -371,9 +371,9 @@ pathdiff 同路径 `"."` vs `""`；webfetch timeout clamp(1,120) 与 URL 协议�
 | RW-T7 | 依赖卫生：serde_yaml 0.9 上游归档停维；schemars 0.8（0.9 不兼容）、notify 6、dirs 5、dialoguer 0.11 落后主版本；vt100 pin 0.15（unicode-width 冲突） | 建议升级看板；serde_yaml 迁移优先 |
 | RW-T8 | `BUN_BE_BUN=1` 对 rust 空操作 | 排查 env 差异时勿被误导 |
 
-### 5.3 与既有裁定的张力（待裁定，非新缺口）
+### 5.3 与既有裁定的张力（2026-10-28 两项均已处置闭环）
 
-| 项 | 张力 |
+| 项 | 处置结果 |
 |---|---|
-| environment/workspace 驱动 | RD-08 裁定 workspace seam 为 REF 死代码不移植；但本轮核实 ref mcp/stdio.ts:84 **生产路径确实经 `environment.spawner`** spawn stdio MCP（非死代码）——rust mcp/client.rs:1026 直接宿主 tokio spawn 并继承全部环境。建议 RD-08 豁免范围收窄为 provision/registry 部分，stdio 执行平面单独立项裁定 |
-| run `attached:false` 无条件硬编码 | run/mod.rs:445-447 vs ref run.ts:149 默认 true；standalone 独占语义辩护成立（有测试 attached_client_leaves_global_forms_alone），与 RD-07 闭环一致；但 `--server` 共享目标下仍设 false 的组合未按连接类型区分，登记待核 |
+| environment/workspace 驱动 | **已闭环（2026-10-28，e86390d，前提修正）**：经 ref 代码核实，`mcp/stdio.ts` 本地分支以 `extendEnv: true` 调用 spawner，本地 cross-spawn spawner（cross-spawn-spawner.ts:111）扁平化为 `{...process.env, ...opts.env}`——**ref 本地分支本就继承宿主全部环境，不剥离任何变量**；剥离语义只存在于未移植的 workspace/sandbox 驱动。故 RD-08 豁免维持原范围（workspace seam），本轮"stdio 执行平面缺口"**不成立**。port 侧改动：将隐式继承抽成显式纯函数 `stdio_environment(host, command, config_env)`（宿主 env < BUN_BE_BUN〔仅 opencode 命令〕< 配置 environment），`env_clear().envs(...)` 显式应用 + 5 个单测钉住语义；oc-core 1194/1194 |
+| run `attached:false` 无条件硬编码 | **已闭环（2026-10-28，25dfc66）**：新增 `attached(Option<&StandaloneServer>)` 辅助——共享目标（显式 `--server` 与托管后台服务）传 `attached: true`（对齐 ref run.ts:149 `?? true`，全局表单清扫跳过），standalone 独占租约保持 `false`（attached_client_leaves_global_forms_alone 无回归）；ref 无 attached CLI flag（仅内部从 `input.server !== undefined` 派生），故不加 flag 管道；3 个新测试覆盖三分支；oc-cli 238/238。合并门（两 crate 同树）：nextest 1432/1432（.test-logs/merge-gate-rw53-20261028.log） |
