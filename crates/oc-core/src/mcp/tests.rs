@@ -47,6 +47,16 @@ struct Script {
     instructions: Option<String>,
     /// The initialize requests the client offered (protocol-offer probe).
     offers: Arc<parking_lot::Mutex<Vec<serde_json::Value>>>,
+    /// The `server/discover` probes the client sent (protocol
+    /// negotiation): raw request JSON — the `_meta.protocolVersion`
+    /// names the offered revision.
+    discovers: Arc<parking_lot::Mutex<Vec<serde_json::Value>>>,
+    /// `server/discover` answer: the versions a modern server declares,
+    /// or `None` = a legacy server answering method-not-found.
+    discover_supported: Option<Vec<rmcp::model::ProtocolVersion>>,
+    /// The `protocolVersion` the initialize answer echoes (defaults to
+    /// echoing the client's offer).
+    initialize_version: Option<&'static str>,
     /// Tools that elicit before answering: tool → `elicitation/create`
     /// params (the ref servers' `tools/call` → `elicitInput` flow).
     elicit_on_call: BTreeMap<String, serde_json::Value>,
@@ -270,12 +280,16 @@ fn respond(
                 .offers
                 .lock()
                 .push(serde_json::to_value(request).expect("initialize offer serializes"));
+            let protocol_version = script
+                .initialize_version
+                .map(str::to_owned)
+                .unwrap_or_else(|| rmcp::model::ProtocolVersion::V_2025_11_25.to_string());
             response(
                 serde_json::json!({
                         // The mock echoes the client's offered version back —
                         // v2.0.24's TS client offers `2025-11-25` (its
                         // SUPPORTED_PROTOCOL_VERSIONS[0], legacy handshake).
-                        "protocolVersion": rmcp::model::ProtocolVersion::V_2025_11_25.to_string(),
+                        "protocolVersion": protocol_version,
                         "capabilities": {
                             "tools": { "listChanged": true },
                             "resources": { "subscribe": true, "listChanged": true },
@@ -286,6 +300,30 @@ fn respond(
                 }),
                 id,
             )
+        }
+        ClientRequest::DiscoverRequest(request) => {
+            script
+                .discovers
+                .lock()
+                .push(serde_json::to_value(request).expect("discover probe serializes"));
+            let Some(supported) = script.discover_supported.clone() else {
+                // A legacy server: correlated error, not a modern-era
+                // rejection — the client falls back to initialize.
+                return Some(JsonRpcMessage::error(
+                    rmcp::ErrorData::new(
+                        rmcp::model::ErrorCode::METHOD_NOT_FOUND,
+                        "server/discover not found",
+                        None,
+                    ),
+                    Some(id),
+                ));
+            };
+            let mut result = rmcp::model::DiscoverResult::new(supported, Default::default());
+            result.set_server_info(rmcp::model::Implementation::new("mock", "1"));
+            Some(JsonRpcMessage::response(
+                ServerResult::DiscoverResult(result),
+                id,
+            ))
         }
         ClientRequest::ListToolsRequest(_) => {
             response(serde_json::json!({ "tools": *script.tools.lock() }), id)
@@ -382,6 +420,23 @@ fn local_config() -> ServerConfig {
 /// Connects the real client over a mock transport.
 async fn connect_mock(script: Script) -> (client::Connection, Mock) {
     connect_mock_with(script, None).await
+}
+
+/// Connects against an explicit server config (protocol-negotiation
+/// legs vary `config.protocol`).
+async fn connect_mock_config(
+    script: Script,
+    config: &ServerConfig,
+) -> Result<client::Connection, client::ConnectFailure> {
+    let (transport, _mock) = mock_pair(script);
+    let input = ConnectInput {
+        server: "mock",
+        config,
+        directory: "/tmp",
+        bearer: None,
+        elicitation: None,
+    };
+    client::connect_with_transport(&input, transport, false).await
 }
 
 /// Connects with an elicitation handler installed.
@@ -625,6 +680,143 @@ async fn mcp_client_offers_v2_protocol_version_2025_11_25() {
         Some("2025-11-25"),
         "client offers the v2.0.24 protocol version: {:?}",
         *offered
+    );
+}
+
+// ---------------------------------------------------------------------------
+// protocol negotiation (client.ts:193 + 393-397 negotiation(config.protocol))
+// ---------------------------------------------------------------------------
+
+fn protocol_config(protocol: Option<oc_schema::mcp::Protocol>) -> ServerConfig {
+    ServerConfig::Local(Box::new(LocalConfig {
+        command: vec!["mock".to_string()],
+        cwd: None,
+        environment: None,
+        disabled: None,
+        codemode: None,
+        timeout: None,
+        protocol,
+    }))
+}
+
+#[tokio::test]
+async fn mcp_client_auto_negotiates_modern_discover() {
+    // "auto" (client.ts:395): probe server/discover, prefer 2026-07-28.
+    let script = Script {
+        discover_supported: Some(vec![
+            rmcp::model::ProtocolVersion::V_2026_07_28,
+            rmcp::model::ProtocolVersion::V_2025_11_25,
+        ]),
+        ..Script::new()
+    };
+    let discovers = Arc::clone(&script.discovers);
+    let offers = Arc::clone(&script.offers);
+    let connection =
+        connect_mock_config(script, &protocol_config(Some(oc_schema::mcp::Protocol::Auto)))
+            .await
+            .expect("modern discover connect");
+    assert!(connection.tools().await.expect("tools").is_empty());
+    assert!(offers.lock().is_empty(), "no legacy initialize was sent");
+    let discovers = discovers.lock();
+    assert_eq!(discovers.len(), 1, "exactly one discover probe");
+    assert!(
+        serde_json::to_string(&discovers[0]).unwrap_or_default().contains("2026-07-28"),
+        "the probe offered 2026-07-28 first: {:?}",
+        *discovers
+    );
+}
+
+#[tokio::test]
+async fn mcp_client_auto_negotiates_older_declared_version() {
+    // The server declares only 2025-11-25: auto falls back within the
+    // supported range instead of failing.
+    let script = Script {
+        discover_supported: Some(vec![rmcp::model::ProtocolVersion::V_2025_11_25]),
+        ..Script::new()
+    };
+    let connection =
+        connect_mock_config(script, &protocol_config(Some(oc_schema::mcp::Protocol::Auto)))
+            .await
+            .expect("older declared version negotiates");
+    assert!(connection.tools().await.expect("tools").is_empty());
+}
+
+#[tokio::test]
+async fn mcp_client_auto_falls_back_to_legacy_initialize() {
+    // A legacy server answers the discover probe with a correlated
+    // error: auto falls back to the plain initialize handshake
+    // (client.ts "Absent config is legacy" sibling behavior).
+    let script = Script::new(); // discover_supported: None → method-not-found
+    let offers = Arc::clone(&script.offers);
+    let connection =
+        connect_mock_config(script, &protocol_config(Some(oc_schema::mcp::Protocol::Auto)))
+            .await
+            .expect("legacy fallback connect");
+    assert!(connection.tools().await.expect("tools").is_empty());
+    let offers = offers.lock();
+    assert_eq!(offers.len(), 1, "the fallback sent one initialize");
+    assert_eq!(
+        offers[0].pointer("/params/protocolVersion").and_then(serde_json::Value::as_str),
+        Some("2025-11-25"),
+        "the legacy fallback offers the v2 pin"
+    );
+}
+
+#[tokio::test]
+async fn mcp_client_legacy_mode_accepts_server_declared_older_version() {
+    // Explicit legacy: the initialize handshake accepts an old server
+    // answering 2025-06-18 instead of echoing the offer.
+    let script = Script { initialize_version: Some("2025-06-18"), ..Script::new() };
+    let connection =
+        connect_mock_config(script, &protocol_config(Some(oc_schema::mcp::Protocol::Legacy)))
+            .await
+            .expect("legacy handshake against an old server");
+    assert!(connection.tools().await.expect("tools").is_empty());
+}
+
+#[tokio::test]
+async fn mcp_client_pin_requires_the_declared_version() {
+    // Pin 2026-07-28 against a server declaring it: connect succeeds.
+    let script = Script {
+        discover_supported: Some(vec![rmcp::model::ProtocolVersion::V_2026_07_28]),
+        ..Script::new()
+    };
+    let connection = connect_mock_config(
+        script,
+        &protocol_config(Some(oc_schema::mcp::Protocol::Dated)),
+    )
+    .await
+    .expect("pinned version connect");
+    assert!(connection.tools().await.expect("tools").is_empty());
+}
+
+#[tokio::test]
+async fn mcp_client_pin_against_older_server_fails_with_the_hint() {
+    // Pin 2026-07-28 against a server declaring only 2025-11-25: the
+    // connect fails with v2's remediation hint (client.ts:376-380).
+    let script = Script {
+        discover_supported: Some(vec![rmcp::model::ProtocolVersion::V_2025_11_25]),
+        ..Script::new()
+    };
+    let error = connect_mock_config(
+        script,
+        &protocol_config(Some(oc_schema::mcp::Protocol::Dated)),
+    )
+    .await
+    .err()
+    .expect("the pin must not negotiate down");
+    let client::ConnectFailure::Connect(error) = error else {
+        panic!("expected a connect error")
+    };
+    assert!(
+        error.message.contains("the server supports 2025-11-25"),
+        "the hint names the server's versions: {}",
+        error.message
+    );
+    assert!(
+        error.message.contains("Set \"protocol\" for this server to one of those or to \"legacy\""),
+        "the hint suggests protocol/legacy: {}",
+        error.message
     );
 }
 
