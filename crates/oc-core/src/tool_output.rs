@@ -160,6 +160,29 @@ fn byte_len(text: &str) -> usize {
     text.len()
 }
 
+/// RW-T4: JS `String.prototype.length` semantics — UTF-16 code units
+/// (chars outside the BMP count 2). The ref truncation budget
+/// (`tool-output.ts:93`) is computed with this unit, not Unicode scalars.
+fn utf16_len(text: &str) -> usize {
+    text.chars().map(char::len_utf16).sum()
+}
+
+/// JS `String.prototype.slice(0, units)` analogue, rounded down to whole
+/// Rust chars (a lone surrogate is not representable in a Rust `String`).
+fn utf16_prefix(text: &str, units: usize) -> String {
+    let mut taken = 0usize;
+    let mut out = String::new();
+    for ch in text.chars() {
+        let len = ch.len_utf16();
+        if taken + len > units {
+            break;
+        }
+        out.push(ch);
+        taken += len;
+    }
+    out
+}
+
 /// The ToolOutput service bound to a spill directory and clock.
 pub struct ToolOutput {
     directory: PathBuf,
@@ -230,7 +253,10 @@ impl ToolOutput {
         );
 
         let mut bounded: Vec<Content> = Vec::new();
-        let mut remaining = kept.join("\n").chars().count();
+        // RW-T4: ref budget accounting is JS `.length`/`.slice()` — UTF-16
+        // code units (tool-output.ts:93 `kept.join("\n").length`), so an
+        // astral-plane char (emoji) counts as 2, not 1 scalar.
+        let mut remaining = utf16_len(&kept.join("\n"));
         let mut seen_text = false;
         let mut marked = false;
         for item in content {
@@ -241,15 +267,19 @@ impl ToolOutput {
                         remaining -= 1;
                     }
                     seen_text = true;
-                    if remaining >= item_text.chars().count() {
-                        remaining -= item_text.chars().count();
+                    let item_len = utf16_len(&item_text);
+                    if remaining >= item_len {
+                        remaining -= item_len;
                         bounded.push(Content::Text { text: item_text });
                         continue;
                     }
                     if remaining > 0 {
-                        bounded.push(Content::Text {
-                            text: item_text.chars().take(remaining).collect(),
-                        });
+                        // JS `.slice(0, remaining)` cuts on a UTF-16 code-unit
+                        // boundary (which can split a surrogate pair); Rust
+                        // `String` cannot hold a lone surrogate, so this
+                        // rounds down to the enclosing char — the kept-unit
+                        // accounting above still matches ref exactly.
+                        bounded.push(Content::Text { text: utf16_prefix(&item_text, remaining) });
                     }
                     if !marked {
                         bounded.push(Content::Text { text: marker.clone() });
@@ -449,6 +479,61 @@ mod tests {
         assert_eq!(result.content[0], Content::Text { text: "one".into() });
         let Content::Text { text: marker } = &result.content[1] else { panic!() };
         assert!(marker.starts_with("[showing lines 1-1 of 1; full output saved to "));
+    }
+
+    /// RW-T4: the truncation budget is UTF-16 code units (ref
+    /// `tool-output.ts:93` `kept.join("\n").length`), not Unicode scalars —
+    /// an astral-plane char counts 2. Direct unit checks.
+    #[test]
+    fn tool_output_budget_counts_utf16_code_units() {
+        assert_eq!(utf16_len("a"), 1);
+        assert_eq!(utf16_len("😀"), 2, "astral-plane emoji is 2 UTF-16 units");
+        assert_eq!(utf16_len("a😀b"), 4);
+        // JS `slice(0, n)` can strand a lone surrogate when n cuts a pair;
+        // a Rust String cannot hold one, so the prefix rounds down to the
+        // enclosing char (the kept-unit accounting above still matches ref).
+        assert_eq!(utf16_prefix("😀b", 1), "");
+        assert_eq!(utf16_prefix("😀b", 2), "😀");
+        assert_eq!(utf16_prefix("a😀b", 3), "a😀");
+        assert_eq!(utf16_prefix("a😀b", 100), "a😀b");
+    }
+
+    /// RW-T4: astral-plane truncation end-to-end — the kept-line budget for
+    /// `"😀😀😀\n..."` is 6 UTF-16 units (3 scalars under the old port
+    /// accounting); under either unit the cut lands on the same char
+    /// boundary here, but the emoji sequence must survive whole.
+    #[test]
+    fn tool_output_truncates_astral_plane_text_on_char_boundaries() {
+        let service = service(Limits { max_lines: 1, max_bytes: 1_000 });
+        let result = service.truncate(text("😀😀😀\nsecond line")).expect("truncate");
+        let Content::Text { text: kept } = &result.content[0] else { panic!() };
+        assert_eq!(kept, "😀😀😀", "6 UTF-16 units of budget keep exactly 3 emoji");
+        assert!(kept.chars().all(|c| !c.is_ascii()), "no partial scalars");
+        let Content::Text { text: marker } = &result.content[1] else { panic!() };
+        assert!(marker.starts_with("[showing lines 1-1 of 2; full output saved to "));
+    }
+
+    /// RW-T4: mixed BMP + astral content across multiple items — the
+    /// separator deduction and per-item fit checks all run in UTF-16 units
+    /// and the cut item keeps exactly its kept-line prefix ("a😀" = 3
+    /// units), never splitting the surrogate pair.
+    #[test]
+    fn tool_output_truncates_mixed_bmp_astral_items_in_utf16_units() {
+        let service = service(Limits { max_lines: 1, max_bytes: 1_000 });
+        let result = service
+            .truncate(ToolOutputResult {
+                content: vec![
+                    Content::Text { text: "a😀\nomitted tail".into() },
+                    Content::Text { text: "trailing item".into() },
+                ],
+                metadata: None,
+            })
+            .expect("truncate");
+        assert_eq!(result.content[0], Content::Text { text: "a😀".into() });
+        let Content::Text { text: marker } = &result.content[1] else { panic!() };
+        assert!(marker.starts_with("[showing lines 1-1 of 3; full output saved to "));
+        // The trailing item beyond the budget is fully replaced by the marker.
+        assert_eq!(result.content.len(), 2);
     }
 
     #[test]
