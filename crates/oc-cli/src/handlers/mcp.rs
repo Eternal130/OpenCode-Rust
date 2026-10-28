@@ -197,7 +197,7 @@ pub(crate) fn write_config_set_pub(
 /// The server value `mcp add` persists (mcp/add.ts:22-31): the mutual
 /// exclusion / validity checks, then `{type: "remote", url, headers?}` or
 /// `{type: "local", command, environment?}` (the command carries its own
-/// flags — captured by trailing_var_arg after `--`).
+/// flags — captured by `trailing_var_arg` after `--`).
 fn build_server(
     command: &[String],
     url: Option<&str>,

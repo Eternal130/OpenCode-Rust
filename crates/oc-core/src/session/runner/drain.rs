@@ -607,7 +607,6 @@ impl SessionRunner {
         let mut initial: Option<Loaded> = Some(*first);
         let recover_overflow = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let mut recover_continuation = true;
-        let step = step;
         // The retry policy is PER STEP (llm.ts creates it once per
         // `runStep`): its schedule counter caps the whole retry ladder
         // (MAX_RECURS). Constructing it inside the attempt loop reset the

@@ -509,10 +509,7 @@ fn query_ir(root: &Ordered, walker: &mut Walker<'_>, op: &Operation) -> Option<I
 /// strings (nothing can fail) and are omitted.
 fn params_ir(root: &Ordered, op: &Operation) -> Vec<(String, String)> {
     let mut out = Vec::new();
-    let path_item = match root.get("paths").and_then(|p| p.get(&op.path)) {
-        Some(item) => item,
-        None => return out,
-    };
+    let Some(path_item) = root.get("paths").and_then(|p| p.get(&op.path)) else { return out };
     let Some(method_item) = path_item.get(&op.method) else { return out };
     for source in [path_item.get("parameters"), method_item.get("parameters")] {
         let Some(list) = source else { continue };

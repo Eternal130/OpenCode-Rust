@@ -422,14 +422,14 @@ mod tests {
             &PairState::Loaded { links: vec![], localhost: None, minutes: 10, loopback: false },
             84,
         );
-        assert!(qr_rows(&rows).is_empty());
+        assert_eq!(qr_rows(&rows), Vec::<&str>::new());
         assert!(matches!(rows[rows.len() - 1], PairRow::Gap));
         assert!(matches!(rows[rows.len() - 2], PairRow::Gap));
     }
 
     /// F15 residual: NO hard truncation of the URLs at narrow
     /// content widths. The ref renders links through `<Link>`
-    /// (ui/link.tsx:33-39) with NO `wrapMode`, and the TextRenderable
+    /// (ui/link.tsx:33-39) with NO `wrapMode`, and the `TextRenderable`
     /// default is `"word"` (@opentui/core chunk-node-wp7ct2m6.js
     /// :2833,2847) — an over-width URL WRAPS (an unbroken token
     /// hard-breaks), and the full URL is recoverable by joining the
@@ -513,8 +513,8 @@ mod tests {
         );
         // Loading/error: no QR column (ref mounts it inside
         // `Show when={info()}`'s content only).
-        assert!(split_columns(&PairState::Loading).1.is_empty());
-        assert!(split_columns(&PairState::Failed("x".to_owned())).1.is_empty());
+        assert_eq!(split_columns(&PairState::Loading).1, Vec::<&str>::new());
+        assert_eq!(split_columns(&PairState::Failed("x".to_owned())).1, Vec::<&str>::new());
     }
 
     /// The specific old-bug shape: at 53/54 columns the URL (47

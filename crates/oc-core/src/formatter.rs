@@ -446,7 +446,7 @@ impl BuiltinsFormatter {
                             current.disabled = entry.disabled;
                         }
                         if entry.command.is_some() {
-                            current.command = entry.command.clone();
+                            current.command.clone_from(&entry.command);
                         }
                         if entry.environment.is_some() {
                             let mut env = current.environment.clone().unwrap_or_default();
@@ -456,7 +456,7 @@ impl BuiltinsFormatter {
                             current.environment = Some(env);
                         }
                         if entry.extensions.is_some() {
-                            current.extensions = entry.extensions.clone();
+                            current.extensions.clone_from(&entry.extensions);
                         }
                     }
                 }
@@ -491,7 +491,7 @@ impl BuiltinsFormatter {
             }
             let mut current = builtin.clone();
             if let Some(extensions) = &entry.extensions {
-                current.extensions = extensions.clone();
+                current.extensions.clone_from(extensions);
             }
             if let Some(environment) = &entry.environment {
                 let mut env = current.environment.clone();
@@ -630,8 +630,8 @@ impl BuiltinsFormatter {
                 None
             }
             Enabled::Biome => {
-                let configured =
-                    self.find_up("biome.json").len() > 0 || self.find_up("biome.jsonc").len() > 0;
+                let configured = !self.find_up("biome.json").is_empty()
+                    || !self.find_up("biome.jsonc").is_empty();
                 if !configured {
                     return None;
                 }
@@ -786,7 +786,7 @@ impl BuiltinsFormatter {
                 Ok(status) if status.success() => return true,
                 // Spawn failure / non-zero exit: REF logs and tries the next
                 // matching formatter; the port has no log bus → silent skip.
-                _ => continue,
+                _ => {}
             }
         }
         false

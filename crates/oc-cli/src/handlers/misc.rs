@@ -291,12 +291,11 @@ pub async fn pair(url: Option<&str>) -> i32 {
     };
     let links: Vec<String> =
         urls.iter().map(|url| format!("{url}/auth/connect/{}", pairing.code)).collect();
-    println!();
-    println!(
-        "  Open a link to connect. Links work once and expire in {} minutes.",
-        // ref pair.ts:27 uses Math.round on the minute count.
-        ((pairing.expires_in as f64) / 60.0).round()
-    );
+    // ref pair.ts:27 uses Math.round on the minute count; the float
+    // round-trip is port parity, the cast is intended.
+    #[allow(clippy::cast_precision_loss)]
+    let minutes = ((pairing.expires_in as f64) / 60.0).round();
+    println!("  Open a link to connect. Links work once and expire in {minutes} minutes.");
     println!();
     if links.is_empty() {
         println!("  (no server URLs)");
@@ -503,7 +502,7 @@ fn validate_pair_url(raw: &str) -> Result<String, &'static str> {
 }
 
 /// RC-11 (rust-extra) — `opencode completion <shell>`: write the
-/// clap_complete 4 script for the whole command tree to `out`.
+/// `clap_complete` 4 script for the whole command tree to `out`.
 pub fn write_completion<W: std::io::Write>(shell: CompletionShell, out: &mut W) {
     use clap::CommandFactory;
     let mut cmd = crate::cli::Cli::command();

@@ -966,8 +966,7 @@ pub fn custom_model_info(
         info.settings = Some(oc_schema::model::Settings {
             compaction: settings
                 .compaction
-                .clone()
-                .or_else(|| info.settings.as_ref().and_then(|s| s.compaction.clone())),
+                .or_else(|| info.settings.as_ref().and_then(|s| s.compaction)),
             rest,
         });
     }

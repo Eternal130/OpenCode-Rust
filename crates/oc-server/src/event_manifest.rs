@@ -54,7 +54,7 @@ pub const SERVICE_FRAMES: &[&str] = &[
 ///   `oc-core/src/mcp/registry.rs`).
 /// * `mcp.prompts.changed` — does not exist in REF at all. The Rust port
 ///   publishes it locally (oc-core `mcp/registry.rs` prompts watch) for
-///  in-process consumers; documented divergence, kept private so it
+///   in-process consumers; documented divergence, kept private so it
 ///   never reaches the public stream.
 pub const PRIVATE_TYPES: &[&str] = &["mcp.tools.changed", "mcp.prompts.changed"];
 
@@ -135,7 +135,7 @@ mod tests {
     /// so the announcer can never publish a frame the feed would filter
     /// out (frames also present in the registry — e.g.
     /// `integration.updated` — classify through registry membership; the
-    /// rest through the SERVICE_FRAMES segment).
+    /// rest through the `SERVICE_FRAMES` segment).
     #[test]
     fn manifest_every_service_frame_is_public() {
         for type_ in SERVICE_FRAMES {

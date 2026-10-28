@@ -2055,7 +2055,7 @@ impl App {
         }
     }
 
-    /// One stroke while a form holds the footer: the FORM_MODE layer
+    /// One stroke while a form holds the footer: the `FORM_MODE` layer
     /// set (`form.tsx:547-720`) — ported store-side as
     /// [`form_key`](crate::components::footer::form::form_key) (lane
     /// R2 step 1); this pump hook only applies the step's side
@@ -3995,6 +3995,8 @@ impl crate::components::composer::PromptSink for HttpPromptSink {
     /// committed model (the F8/F10/F22 dead-end fix: a session with no
     /// stored model gets the chain's resolution committed instead of
     /// failing with "No model is available").
+    // 1:1 port of the TS send path; splitting would obscure the mapping.
+    #[allow(clippy::too_many_lines)]
     fn send_with_model(
         &self,
         session_id: &str,
@@ -4860,7 +4862,12 @@ pub fn spawn_loop_fetcher(
                                     .map(|url| link(url.trim_end_matches('/')))
                                     .collect(),
                                 localhost,
-                                // ref dialog-pair.tsx:30 `Math.round(expires_in / 60)`.
+                                // ref dialog-pair.tsx:30 `Math.round(expires_in / 60)`;
+                                // the float round-trip is port parity, casts are intended.
+                                #[allow(
+                                    clippy::cast_possible_truncation,
+                                    clippy::cast_precision_loss
+                                )]
                                 minutes: u64::try_from(
                                     ((pairing.expires_in.max(0) as f64) / 60.0).round() as i64,
                                 )

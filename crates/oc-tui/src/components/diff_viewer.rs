@@ -1558,7 +1558,7 @@ mod tests {
         assert_eq!(parse_patch(broken), [] as [Hunk; 0]);
     }
 
-    /// R3 byte-parity spike (FRAMEWORK-CONVERGENCE.md §line_number):
+    /// R3 byte-parity spike (FRAMEWORK-CONVERGENCE.md, line-number section):
     /// opentui-core's `LineNumberRenderable` gutter vs the viewer's
     /// pinned inline gutter (`paint_diff_row`). Verdict recorded:
     /// **permanent local keep** — the gutter WIDTH models coincide

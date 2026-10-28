@@ -784,7 +784,7 @@ mod tests {
         // A live job for the guard to cancel (run never settles on its own —
         // cancel is what must consume it).
         let job_id = info.id.to_string();
-        jobs_service.start(jobs::StartInput {
+        let _job = jobs_service.start(jobs::StartInput {
             id: job_id.clone(),
             type_: "shell".into(),
             title: None,
@@ -888,7 +888,7 @@ mod tests {
         assert_eq!(result.info.status, oc_schema::shell::Status::Exited);
 
         let job_id = info.id.to_string();
-        jobs_service.start(jobs::StartInput {
+        let _job = jobs_service.start(jobs::StartInput {
             id: job_id.clone(),
             type_: "shell".into(),
             title: None,
