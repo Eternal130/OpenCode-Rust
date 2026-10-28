@@ -452,9 +452,13 @@ async fn per_location_activation() {
     std::fs::create_dir_all(&project_b).expect("B");
     let location_b = oc_core::location::LocationRef::new(project_b.clone(), None);
     let services_b = handle.state.engine.location(location_b.clone()).await.expect("B services");
-    assert!(
-        !services_b.graph.hooks.has_tool_execute_before(None),
-        "a plugin-less location's registry has no guest hooks"
+    // AUD-06 note: every location carries the builtin
+    // `opencode.tool.input.repair` hook (one registration); a plugin-less
+    // location must carry NOTHING beyond that builtin — no guest hooks.
+    assert_eq!(
+        services_b.graph.hooks.tool_execute_before_count(),
+        1,
+        "a plugin-less location's registry has no guest hooks (builtin repair only)"
     );
 
     // Location C (a second project whose config activates the SAME

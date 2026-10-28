@@ -273,7 +273,7 @@ fn build_file(rest: &str, remote: &str) -> Option<Reference> {
     if segments.is_empty() {
         return None;
     }
-    let repo = trim_git_suffix(segments.last().unwrap_or_default());
+    let repo = trim_git_suffix(segments.last().map(String::as_str).unwrap_or(""));
     Some(Reference::File(FileReference {
         segments,
         repo,
