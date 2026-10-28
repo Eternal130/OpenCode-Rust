@@ -54,7 +54,7 @@ pub const SERVICE_FRAMES: &[&str] = &[
 ///   `oc-core/src/mcp/registry.rs`).
 /// * `mcp.prompts.changed` — does not exist in REF at all. The Rust port
 ///   publishes it locally (oc-core `mcp/registry.rs` prompts watch) for
- ///  in-process consumers; documented divergence, kept private so it
+///  in-process consumers; documented divergence, kept private so it
 ///   never reaches the public stream.
 pub const PRIVATE_TYPES: &[&str] = &["mcp.tools.changed", "mcp.prompts.changed"];
 

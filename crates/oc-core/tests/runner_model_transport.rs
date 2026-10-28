@@ -15,14 +15,14 @@ use std::time::Duration;
 
 use futures::{SinkExt as _, StreamExt as _};
 use oc_ai::protocols::open_responses_channel::channel_options_for_route;
-use oc_ai::protocols::openai_responses::{OpenAIResponsesRouteSpec, openai_responses_route};
-use oc_ai::route::RouteDefaults;
+use oc_ai::protocols::openai_responses::{openai_responses_route, OpenAIResponsesRouteSpec};
 use oc_ai::route::auth::{self, Secret};
 use oc_ai::route::transport::reqwest_transport::ReqwestTransport;
+use oc_ai::route::RouteDefaults;
 use oc_ai::schema::{
     ContentPart, LLMEvent, LLMRequest, Message, MessageRole, SystemPart, TransportType,
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 

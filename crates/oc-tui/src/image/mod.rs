@@ -389,10 +389,20 @@ mod tests {
         // an undecodable one stays with the blocks fallback.
         let png_bytes = include_bytes!("../../tests/fixtures/r07-tiny-4x2.png").to_vec();
         let good = ImagePlacement {
-            id: 21, data: ImageData::Png(png_bytes.clone()), x: 1, y: 1, cols: 4, rows: 2,
+            id: 21,
+            data: ImageData::Png(png_bytes.clone()),
+            x: 1,
+            y: 1,
+            cols: 4,
+            rows: 2,
         };
         let bad = ImagePlacement {
-            id: 22, data: ImageData::Png(vec![1, 2, 3]), x: 1, y: 1, cols: 4, rows: 2,
+            id: 22,
+            data: ImageData::Png(vec![1, 2, 3]),
+            x: 1,
+            y: 1,
+            cols: 4,
+            rows: 2,
         };
         assert!(drawable(GraphicsProtocol::Sixel, &good.data));
         assert!(!drawable(GraphicsProtocol::Sixel, &bad.data));

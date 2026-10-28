@@ -1025,10 +1025,8 @@ async fn mcp_client_input_required_without_handler_stays_opaque() {
         ..Script::new()
     };
     let (connection, _mock) = connect_mock(script).await;
-    let error = connection
-        .call_tool("url-elicitation", None, None)
-        .await
-        .expect_err("opaque degradation");
+    let error =
+        connection.call_tool("url-elicitation", None, None).await.expect_err("opaque degradation");
     assert_eq!(error.message, "unexpected tools/call response");
     connection.close().await;
 }

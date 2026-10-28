@@ -595,8 +595,9 @@ pub fn palette_setting_options() -> Vec<SelectOption> {
     crate::components::dialog_config::settings_table()
         .into_iter()
         .map(|setting| {
-            let mut option = SelectOption::titled(setting.title, format!("setting:{}", setting.id()))
-                .categorized(setting.category);
+            let mut option =
+                SelectOption::titled(setting.title, format!("setting:{}", setting.id()))
+                    .categorized(setting.category);
             if !setting.keywords.is_empty() {
                 option = option.with_search(setting.keywords);
             }
@@ -3471,9 +3472,7 @@ mod tests {
         assert!(search.contains("color scheme"), "keywords ride the search text");
         // The fuzzy rank admits the row into the visible set.
         let indices = crate::components::dialog_select::filter_indices(&props, "theme");
-        assert!(indices
-            .iter()
-            .any(|&index| props.options[index].value == "setting:theme.name"));
+        assert!(indices.iter().any(|&index| props.options[index].value == "setting:theme.name"));
     }
 
     /// RD-17 — ref `list()` (command-palette.tsx:49-60): the

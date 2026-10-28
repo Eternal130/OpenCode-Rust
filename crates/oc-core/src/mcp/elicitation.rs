@@ -93,7 +93,10 @@ impl ElicitationAction {
 #[must_use]
 pub fn result_wire(result: &ElicitationResult, url_mode: bool) -> serde_json::Value {
     let mut wire = serde_json::Map::new();
-    wire.insert("action".to_string(), serde_json::Value::String(result.action.as_str().to_string()));
+    wire.insert(
+        "action".to_string(),
+        serde_json::Value::String(result.action.as_str().to_string()),
+    );
     if !url_mode && result.action == ElicitationAction::Accept {
         let mut content = serde_json::Map::new();
         for (key, value) in &result.content {
@@ -685,11 +688,7 @@ impl ClientElicitation {
     /// not as a JSON-RPC response, so there is no cancellation token
     /// to race (the surrounding `tools/call` owns the execution
     /// deadline).
-    pub async fn answer(
-        &self,
-        server: &str,
-        params: ElicitationParams,
-    ) -> ElicitationResult {
+    pub async fn answer(&self, server: &str, params: ElicitationParams) -> ElicitationResult {
         // Inherent method by path — the `Arc` trait impl would otherwise
         // shadow it during method resolution.
         RegistryElicitation::create(&self.inner, ElicitationCreate { server, params }).await

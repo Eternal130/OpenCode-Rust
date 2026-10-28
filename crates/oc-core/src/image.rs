@@ -130,7 +130,11 @@ pub struct Normalized {
 /// `resource` is the display name used in error messages. The input
 /// `base64` payload passes through untouched when it already satisfies
 /// every limit (REF returns `content` as-is).
-pub fn normalize(resource: &str, base64_content: &str, limits: &Limits) -> Result<Normalized, NormalizeError> {
+pub fn normalize(
+    resource: &str,
+    base64_content: &str,
+    limits: &Limits,
+) -> Result<Normalized, NormalizeError> {
     let bytes = base64_content.len();
     let decode_error = || NormalizeError::Decode { resource: resource.to_string() };
     let size_error = |width: u32, height: u32| NormalizeError::Size {
@@ -154,7 +158,8 @@ pub fn normalize(resource: &str, base64_content: &str, limits: &Limits) -> Resul
     }
     let decoded = image::load_from_memory_with_format(&raw, format).map_err(|_| decode_error())?;
     let (width, height) = (decoded.width(), decoded.height());
-    if width <= limits.max_width && height <= limits.max_height && bytes <= limits.max_base64_bytes {
+    if width <= limits.max_width && height <= limits.max_height && bytes <= limits.max_base64_bytes
+    {
         // Passthrough: the caller keeps its original MIME.
         return Ok(Normalized { base64: base64_content.to_string(), mime: String::new() });
     }
@@ -193,15 +198,18 @@ pub fn normalize(resource: &str, base64_content: &str, limits: &Limits) -> Resul
     }
 
     for &(target_w, target_h) in &sizes {
-        let resized =
-            image::imageops::resize(&decoded, target_w, target_h, image::imageops::FilterType::Lanczos3);
+        let resized = image::imageops::resize(
+            &decoded,
+            target_w,
+            target_h,
+            image::imageops::FilterType::Lanczos3,
+        );
         let resized = image::DynamicImage::ImageRgba8(resized);
         // Encoder ladder: PNG, then JPEG at each quality (photon.ts order).
         for (mime, encoded) in encode_candidates(&resized) {
             // Base64 uses four bytes per three input bytes, incl. padding.
             if encoded.len().div_ceil(3) * 4 <= limits.max_base64_bytes {
-                let payload =
-                    base64::engine::general_purpose::STANDARD.encode(&encoded);
+                let payload = base64::engine::general_purpose::STANDARD.encode(&encoded);
                 return Ok(Normalized { base64: payload, mime: mime.to_string() });
             }
         }
@@ -257,7 +265,8 @@ pub fn normalize_tool_content(content: Vec<Content>, limits: &Limits) -> Vec<Con
             // Passthrough keeps the original MIME (`mime` is empty on the
             // untouched path); the re-encode path carries the new one.
             Ok(normalized) => {
-                let new_mime = if normalized.mime.is_empty() { mime.clone() } else { normalized.mime };
+                let new_mime =
+                    if normalized.mime.is_empty() { mime.clone() } else { normalized.mime };
                 out.push(Content::File {
                     uri: format!("data:{new_mime};base64,{}", normalized.base64),
                     mime: new_mime,
@@ -308,7 +317,11 @@ mod tests {
 
     /// A solid PNG of the given size (no binary fixtures — generated).
     fn png(width: u32, height: u32) -> String {
-        let image = DynamicImage::ImageRgba8(RgbaImage::from_pixel(width, height, image::Rgba([200, 30, 30, 255])));
+        let image = DynamicImage::ImageRgba8(RgbaImage::from_pixel(
+            width,
+            height,
+            image::Rgba([200, 30, 30, 255]),
+        ));
         let mut bytes = Vec::new();
         image.write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png).unwrap();
         B64.encode(bytes)
@@ -348,7 +361,12 @@ mod tests {
     #[test]
     fn passthrough_when_within_limits() {
         let payload = png(8, 8);
-        let limits = Limits { auto_resize: true, max_width: 100, max_height: 100, max_base64_bytes: 1 << 20 };
+        let limits = Limits {
+            auto_resize: true,
+            max_width: 100,
+            max_height: 100,
+            max_base64_bytes: 1 << 20,
+        };
         let normalized = normalize("a.png", &payload, &limits).unwrap();
         assert_eq!(normalized.base64, payload);
         assert!(normalized.mime.is_empty());
@@ -369,7 +387,8 @@ mod tests {
     #[test]
     fn resize_shrinks_to_max_width_preserving_aspect() {
         let payload = png(200, 100);
-        let limits = Limits { auto_resize: true, max_width: 50, max_height: 50, max_base64_bytes: 1 << 20 };
+        let limits =
+            Limits { auto_resize: true, max_width: 50, max_height: 50, max_base64_bytes: 1 << 20 };
         let normalized = normalize("wide.png", &payload, &limits).unwrap();
         let (w, h) = png_dimensions(&normalized.base64);
         assert_eq!((w, h), (50, 25), "aspect ratio 2:1 preserved");
@@ -379,7 +398,8 @@ mod tests {
     #[test]
     fn resize_shrinks_to_max_height_preserving_aspect() {
         let payload = png(100, 200);
-        let limits = Limits { auto_resize: true, max_width: 50, max_height: 50, max_base64_bytes: 1 << 20 };
+        let limits =
+            Limits { auto_resize: true, max_width: 50, max_height: 50, max_base64_bytes: 1 << 20 };
         let normalized = normalize("tall.png", &payload, &limits).unwrap();
         let (w, h) = png_dimensions(&normalized.base64);
         assert_eq!((w, h), (25, 50));
@@ -388,13 +408,25 @@ mod tests {
     #[test]
     fn byte_limit_rejected_when_auto_resize_disabled() {
         let payload = png(64, 64);
-        let limits = Limits { auto_resize: false, max_width: 32, max_height: 32, max_base64_bytes: 1 << 20 };
+        let limits =
+            Limits { auto_resize: false, max_width: 32, max_height: 32, max_base64_bytes: 1 << 20 };
         let err = normalize("blocked.png", &payload, &limits).unwrap_err();
-        let NormalizeError::Size { resource, width, height, bytes, max_width, max_height, max_bytes } = &err
+        let NormalizeError::Size {
+            resource,
+            width,
+            height,
+            bytes,
+            max_width,
+            max_height,
+            max_bytes,
+        } = &err
         else {
             panic!("expected size error, got {err:?}");
         };
-        assert_eq!((resource.as_str(), *width, *height, *max_width, *max_height), ("blocked.png", 64, 64, 32, 32));
+        assert_eq!(
+            (resource.as_str(), *width, *height, *max_width, *max_height),
+            ("blocked.png", 64, 64, 32, 32)
+        );
         assert_eq!(*bytes, payload.len());
         assert_eq!(*max_bytes, 1 << 20);
         assert_eq!(
@@ -412,12 +444,17 @@ mod tests {
         // Max byte budget so small that even the smallest ladder step's
         // PNG/JPEG encodes exceed it.
         let payload = png(400, 400);
-        let limits = Limits { auto_resize: true, max_width: 32, max_height: 32, max_base64_bytes: 64 };
+        let limits =
+            Limits { auto_resize: true, max_width: 32, max_height: 32, max_base64_bytes: 64 };
         let err = normalize("huge.png", &payload, &limits).unwrap_err();
         assert!(matches!(err, NormalizeError::Size { .. }));
         // Before resize (autoResize off) the same input also rejects.
-        let limits_off = Limits { auto_resize: false, max_width: 32, max_height: 32, max_base64_bytes: 64 };
-        assert!(matches!(normalize("huge.png", &payload, &limits_off), Err(NormalizeError::Size { .. })));
+        let limits_off =
+            Limits { auto_resize: false, max_width: 32, max_height: 32, max_base64_bytes: 64 };
+        assert!(matches!(
+            normalize("huge.png", &payload, &limits_off),
+            Err(NormalizeError::Size { .. })
+        ));
     }
 
     #[test]
@@ -426,7 +463,16 @@ mod tests {
         let mut inner = RgbaImage::new(300, 300);
         for y in 0..300 {
             for x in 0..300 {
-                inner.put_pixel(x, y, image::Rgba([(x * 7 % 256) as u8, (y * 13 % 256) as u8, ((x + y) % 256) as u8, 255]));
+                inner.put_pixel(
+                    x,
+                    y,
+                    image::Rgba([
+                        (x * 7 % 256) as u8,
+                        (y * 13 % 256) as u8,
+                        ((x + y) % 256) as u8,
+                        255,
+                    ]),
+                );
             }
         }
         let mut bytes = Vec::new();
@@ -434,7 +480,12 @@ mod tests {
             .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
             .unwrap();
         let payload = B64.encode(&bytes);
-        let limits = Limits { auto_resize: true, max_width: 2000, max_height: 2000, max_base64_bytes: 32 * 1024 };
+        let limits = Limits {
+            auto_resize: true,
+            max_width: 2000,
+            max_height: 2000,
+            max_base64_bytes: 32 * 1024,
+        };
         let normalized = normalize("noise.png", &payload, &limits).unwrap();
         assert_eq!(normalized.mime, "image/jpeg");
         assert!(normalized.base64.len() <= limits.max_base64_bytes);
@@ -444,7 +495,8 @@ mod tests {
 
     #[test]
     fn format_passthrough_for_non_image_content() {
-        let limits = Limits { auto_resize: true, max_width: 4, max_height: 4, max_base64_bytes: 16 };
+        let limits =
+            Limits { auto_resize: true, max_width: 4, max_height: 4, max_base64_bytes: 16 };
         let content = vec![
             Content::Text { text: "hello".into() },
             Content::File { uri: "file:///x.txt".into(), mime: "text/plain".into(), name: None },
@@ -453,31 +505,49 @@ mod tests {
         ];
         let out = normalize_tool_content(content, &limits);
         assert_eq!(out.len(), 3);
-        assert_eq!(out[2], Content::File { uri: "file:///x.png".into(), mime: "image/png".into(), name: None });
+        assert_eq!(
+            out[2],
+            Content::File { uri: "file:///x.png".into(), mime: "image/png".into(), name: None }
+        );
     }
 
     #[test]
     fn tool_content_notes_for_omitted_images() {
-        let limits = Limits { auto_resize: false, max_width: 4, max_height: 4, max_base64_bytes: 16 };
+        let limits =
+            Limits { auto_resize: false, max_width: 4, max_height: 4, max_base64_bytes: 16 };
         let big = png(64, 64);
         let content = vec![
             Content::Text { text: "t".into() },
-            Content::File { uri: format!("data:image/png;base64,{big}"), mime: "image/png".into(), name: Some("one.png".into()) },
-            Content::File { uri: "data:image/png;base64,!!!not-base64!!!".into(), mime: "image/png".into(), name: None },
+            Content::File {
+                uri: format!("data:image/png;base64,{big}"),
+                mime: "image/png".into(),
+                name: Some("one.png".into()),
+            },
+            Content::File {
+                uri: "data:image/png;base64,!!!not-base64!!!".into(),
+                mime: "image/png".into(),
+                name: None,
+            },
         ];
         let out = normalize_tool_content(content, &limits);
         assert_eq!(out.len(), 3);
         assert_eq!(out[0], Content::Text { text: "t".into() });
-        assert_eq!(out[1], Content::Text { text: "[1 image omitted: could not be decoded.]".into() });
+        assert_eq!(
+            out[1],
+            Content::Text { text: "[1 image omitted: could not be decoded.]".into() }
+        );
         assert_eq!(
             out[2],
-            Content::Text { text: "[1 image omitted: could not be resized below the image size limit.]".into() }
+            Content::Text {
+                text: "[1 image omitted: could not be resized below the image size limit.]".into()
+            }
         );
     }
 
     #[test]
     fn tool_content_resizes_and_updates_uri_mime() {
-        let limits = Limits { auto_resize: true, max_width: 16, max_height: 16, max_base64_bytes: 1 << 20 };
+        let limits =
+            Limits { auto_resize: true, max_width: 16, max_height: 16, max_base64_bytes: 1 << 20 };
         let payload = png(64, 64);
         let content = vec![Content::File {
             uri: format!("data:image/png;base64,{payload}"),
@@ -500,4 +570,3 @@ mod tests {
         assert_eq!(data_uri_base64("https://x/y"), None);
     }
 }
-

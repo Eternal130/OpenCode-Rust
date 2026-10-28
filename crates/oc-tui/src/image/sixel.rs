@@ -85,12 +85,7 @@ fn downscale(image: Rgba8Image) -> Rgba8Image {
                     n += 1;
                 }
             }
-            data.extend_from_slice(&[
-                (r / n) as u8,
-                (g / n) as u8,
-                (b / n) as u8,
-                (a / n) as u8,
-            ]);
+            data.extend_from_slice(&[(r / n) as u8, (g / n) as u8, (b / n) as u8, (a / n) as u8]);
         }
     }
     Rgba8Image { width: w, height: h, data }
@@ -112,9 +107,13 @@ impl Box {
             }
         }
         let ranges = [u16::from(hi[0] - lo[0]), u16::from(hi[1] - lo[1]), u16::from(hi[2] - lo[2])];
-        if ranges[0] >= ranges[1] && ranges[0] >= ranges[2] { 0 }
-        else if ranges[1] >= ranges[2] { 1 }
-        else { 2 }
+        if ranges[0] >= ranges[1] && ranges[0] >= ranges[2] {
+            0
+        } else if ranges[1] >= ranges[2] {
+            1
+        } else {
+            2
+        }
     }
 
     fn average(&self) -> [u8; 3] {
@@ -234,11 +233,8 @@ fn emit(image: &Rgba8Image, indexed: &[Option<u8>], palette: &[[u8; 3]]) -> Vec<
     for (i, c) in palette.iter().enumerate() {
         // RGB in sixel's 0–100 percent scale (HIMILTI rounding down
         // is the de-facto encoder convention; deterministic either way).
-        let (r, g, b) = (
-            u32::from(c[0]) * 100 / 255,
-            u32::from(c[1]) * 100 / 255,
-            u32::from(c[2]) * 100 / 255,
-        );
+        let (r, g, b) =
+            (u32::from(c[0]) * 100 / 255, u32::from(c[1]) * 100 / 255, u32::from(c[2]) * 100 / 255);
         out.extend_from_slice(format!("#{i};2;{r};{g};{b}").as_bytes());
     }
     let bands = h.div_ceil(BAND);
@@ -374,10 +370,7 @@ mod tests {
         // DCS body (strip the ESC P q introducer — 'P'/'q' — and the
         // ST terminator — '\').
         let body = &sixel[3..sixel.len() - 2];
-        assert!(
-            !body.iter().any(|b| (0x40..=0x7E).contains(b)),
-            "no painted pixels"
-        );
+        assert!(!body.iter().any(|b| (0x40..=0x7E).contains(b)), "no painted pixels");
     }
 
     #[test]

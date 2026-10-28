@@ -505,12 +505,30 @@ impl SessionModelRequest {
                     .content
                     .into_iter()
                     .filter_map(|part| match part {
-                        ContentPart::Media { media, filename, cache, metadata, provider_metadata } => {
+                        ContentPart::Media {
+                            media,
+                            filename,
+                            cache,
+                            metadata,
+                            provider_metadata,
+                        } => {
                             if media.kind() != oc_ai::schema::media::Kind::Image {
-                                return Some(ContentPart::Media { media, filename, cache, metadata, provider_metadata });
+                                return Some(ContentPart::Media {
+                                    media,
+                                    filename,
+                                    cache,
+                                    metadata,
+                                    provider_metadata,
+                                });
                             }
                             let Some(inline) = media.inline() else {
-                                return Some(ContentPart::Media { media, filename, cache, metadata, provider_metadata });
+                                return Some(ContentPart::Media {
+                                    media,
+                                    filename,
+                                    cache,
+                                    metadata,
+                                    provider_metadata,
+                                });
                             };
                             let resource = filename.clone().unwrap_or_else(|| inline.mime.clone());
                             match crate::image::normalize(&resource, &inline.base64, &limits) {
@@ -535,7 +553,9 @@ impl SessionModelRequest {
                                         provider_metadata,
                                     })
                                 }
-                                Err(error) => Some(ContentPart::text(format!("[1 image omitted: {error}]"))),
+                                Err(error) => {
+                                    Some(ContentPart::text(format!("[1 image omitted: {error}]")))
+                                }
                             }
                         }
                         other => Some(other),

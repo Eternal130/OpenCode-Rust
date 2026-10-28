@@ -186,7 +186,13 @@ pub fn code_mode_entries(tools: &ToolRegistryState) -> Vec<CatalogEntry> {
             let pinned = path == "opencode.session_move";
             let signature = signature(&path, &tool.description, &tool.input);
             let search_text = search_text(&path, &tool.description, &tool.input);
-            CatalogEntry { pinned, path, description: tool.description.clone(), signature, search_text }
+            CatalogEntry {
+                pinned,
+                path,
+                description: tool.description.clone(),
+                signature,
+                search_text,
+            }
         })
         .collect()
 }
@@ -613,8 +619,11 @@ pub fn catalog_summary(entries: &[CatalogEntry]) -> CatalogSummary {
         .into_iter()
         .map(|(name, group)| {
             // Listings sorted by path inside the namespace.
-            let pinned_paths: std::collections::HashSet<&str> =
-                group.iter().filter(|entry| entry.pinned).map(|entry| entry.path.as_str()).collect();
+            let pinned_paths: std::collections::HashSet<&str> = group
+                .iter()
+                .filter(|entry| entry.pinned)
+                .map(|entry| entry.path.as_str())
+                .collect();
             let mut listings: Vec<Listing> = group
                 .iter()
                 .map(|entry| Listing { path: entry.path.clone(), line: listing_line(entry) })
@@ -631,7 +640,8 @@ pub fn catalog_summary(entries: &[CatalogEntry]) -> CatalogSummary {
             let selected = pinned.clone();
             // Selection order: cost ascending, then path (already sorted
             // stably by index = path order), pinned excluded.
-            let mut ranked: Vec<usize> = (0..listings.len()).filter(|at| !pinned.contains(at)).collect();
+            let mut ranked: Vec<usize> =
+                (0..listings.len()).filter(|at| !pinned.contains(at)).collect();
             ranked.sort_by_key(|&at| cost(&listings[at].line));
             Round { name, listings, ranked, selected, index: 0 }
         })

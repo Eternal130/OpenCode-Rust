@@ -101,8 +101,8 @@ pub mod ui;
 
 pub use context::{
     install::{default_root as install_root, install, InstallOptions, Installed},
-    Bridge, HostState, NoSessionEngine, NoToolEngine, PermissionPort, SessionPort, ToolPort,
-    is_mutating_hook, MUTATING_DISPATCH_TIMEOUT, SESSION_METHODS,
+    is_mutating_hook, Bridge, HostState, NoSessionEngine, NoToolEngine, PermissionPort,
+    SessionPort, ToolPort, MUTATING_DISPATCH_TIMEOUT, SESSION_METHODS,
 };
 pub use registrations::{
     PluginAgent, PluginCommand, PluginDialog, PluginGroupRule, PluginHomeAction, PluginHook,

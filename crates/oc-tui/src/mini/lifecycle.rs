@@ -525,8 +525,7 @@ impl FooterPane {
                 FooterView::Form { .. } => footer_base(FOOTER_HEIGHT) + FORM_ROWS,
                 FooterView::Prompt => {
                     if self.machine.route == crate::components::footer::PromptRoute::Subagent {
-                        footer_base(FOOTER_HEIGHT)
-                            + super::footer_subagent::SUBAGENT_INSPECTOR_ROWS
+                        footer_base(FOOTER_HEIGHT) + super::footer_subagent::SUBAGENT_INSPECTOR_ROWS
                     } else {
                         FOOTER_HEIGHT
                     }
@@ -906,8 +905,12 @@ impl Lifecycle {
                 );
                 lifecycle.queue_rows(rows);
             } else {
-                let layout =
-                    entry_splash_layout(&EntrySplashInput { width: width.max(1), version: &lifecycle.version, detail: Some(&detail), mono: false });
+                let layout = entry_splash_layout(&EntrySplashInput {
+                    width: width.max(1),
+                    version: &lifecycle.version,
+                    detail: Some(&detail),
+                    mono: false,
+                });
                 lifecycle.pane.startup = Some(StartupRow {
                     since: Instant::now(),
                     label: layout.label,
@@ -1248,8 +1251,7 @@ mod tests {
         // The spinner's glow: the fg is the splash right color scaled
         // by the frame's level (full strength at level 1.0 would be
         // the unscaled color — the level here is the seed head's dim).
-        let splash =
-            crate::mini::splash::SplashColors::from_footer_theme(&footer.theme);
+        let splash = crate::mini::splash::SplashColors::from_footer_theme(&footer.theme);
         let level = super::super::spinner::seed_launch()
             .one_cell_frame(std::time::Duration::from_millis(0))
             .level;

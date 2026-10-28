@@ -823,10 +823,7 @@ mod tests {
                 Cli::try_parse_from(["opencode", "completion", shell]).unwrap_or_else(|e| {
                     panic!("{shell}: {e}");
                 });
-            assert!(
-                matches!(parsed.command, Some(Commands::Completion { .. })),
-                "{shell} parses"
-            );
+            assert!(matches!(parsed.command, Some(Commands::Completion { .. })), "{shell} parses");
         }
         let error = Cli::try_parse_from(["opencode", "completion", "powershell"]).unwrap_err();
         let rendered = error.to_string();
@@ -843,16 +840,17 @@ mod tests {
     /// the limit.
     #[test]
     fn api_header_rejects_more_than_100_at_parse_time() {
-        let ok: Vec<String> =
-            (0..MAX_API_HEADERS).map(|i| format!("x-h{i}:v")).collect();
-        let mut argv = vec!["opencode".to_string(), "api".to_string(), "get".to_string(), "/x".to_string()];
+        let ok: Vec<String> = (0..MAX_API_HEADERS).map(|i| format!("x-h{i}:v")).collect();
+        let mut argv =
+            vec!["opencode".to_string(), "api".to_string(), "get".to_string(), "/x".to_string()];
         for header in &ok {
             argv.push("--header".into());
             argv.push(header.clone());
         }
         Cli::try_parse_from_checked(argv).expect("exactly 100 headers parse");
 
-        let mut argv = vec!["opencode".to_string(), "api".to_string(), "get".to_string(), "/x".to_string()];
+        let mut argv =
+            vec!["opencode".to_string(), "api".to_string(), "get".to_string(), "/x".to_string()];
         for header in ok {
             argv.push("--header".into());
             argv.push(format!("{header}extra"));
@@ -874,13 +872,9 @@ mod tests {
                 .unwrap_or_else(|e| panic!("{good} parses: {e}"));
         }
         for bad in [1969u32, 10_000] {
-            let error = Cli::try_parse_from_checked([
-                "opencode",
-                "stats",
-                "--year",
-                &bad.to_string(),
-            ])
-            .unwrap_err();
+            let error =
+                Cli::try_parse_from_checked(["opencode", "stats", "--year", &bad.to_string()])
+                    .unwrap_err();
             let rendered = error.to_string();
             assert!(rendered.contains("invalid value"), "{bad}: {rendered}");
             assert!(rendered.contains("1970..=9999"), "{bad} names the range: {rendered}");

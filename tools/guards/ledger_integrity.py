@@ -49,6 +49,14 @@ def collect() -> tuple[list[dict], dict]:  # noqa: C901 - flat is clearer here
     if not LEDGER_TOOL.is_file():
         raise guardlib.GuardError(f"ledger tool missing: {LEDGER_TOOL}")
 
+    # The parity ledger was archived out-of-repo (commit 54392a4,
+    # 2026-10-27) together with the other porting-process intermediates.
+    # Without the ledger file there is nothing to validate: report a
+    # clean skip instead of failing CI.
+    ledger_path = guardlib.ROOT / "docs" / "parity-ledger.jsonl"
+    if not ledger_path.is_file():
+        return [], {"skipped": "ledger archived out-of-repo (54392a4); no ledger to validate"}
+
     cmd = [sys.executable, str(LEDGER_TOOL), "validate", "--paths"]
     if EXIT_CRITERIA:
         cmd.append("--exit")

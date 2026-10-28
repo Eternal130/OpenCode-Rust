@@ -192,12 +192,8 @@ impl<A: SharedEvent> SharedEvents<A> {
                 })
             };
             let task = tokio::spawn(run(Arc::clone(inner), conn_id, Activity(activity)));
-            state.current = Some(Conn {
-                id: conn_id,
-                subscribers: HashMap::new(),
-                connected: None,
-                task,
-            });
+            state.current =
+                Some(Conn { id: conn_id, subscribers: HashMap::new(), connected: None, task });
         }
         let conn = state.current.as_mut().expect("current connection");
         let marker = conn.connected.clone();
@@ -251,8 +247,9 @@ impl<A: SharedEvent> SharedEvents<A> {
         if let Some(conn) = state.current.as_mut() {
             if conn.id == conn_id {
                 if let Some(sub) = conn.subscribers.remove(&sub_id) {
-                    sub.shared
-                        .finish(Some(Arc::new(ClientError::SubscriberCapacity(SUBSCRIBER_CAPACITY))));
+                    sub.shared.finish(Some(Arc::new(ClientError::SubscriberCapacity(
+                        SUBSCRIBER_CAPACITY,
+                    ))));
                 }
             }
         }
@@ -414,7 +411,10 @@ impl<A: SharedEvent> Stream for SharedSubscription<A> {
             // Overflow terminates immediately (buffered discarded),
             // matching the TS `push` behavior after completion.
             Poll::Pending => {
-                if matches!(&*this.shared.terminal.lock().expect("terminal lock"), Terminal::Ended | Terminal::Failed(_)) {
+                if matches!(
+                    &*this.shared.terminal.lock().expect("terminal lock"),
+                    Terminal::Ended | Terminal::Failed(_)
+                ) {
                     this.rx = None;
                     this.terminal_poll()
                 } else {
@@ -557,12 +557,8 @@ mod tests {
         harness.at(0).await;
         for value in [1, 2, 3] {
             harness.push(0, event("session.updated", value));
-            let events = futures::future::join_all([
-                first.next(),
-                second.next(),
-                third.next(),
-            ])
-            .await;
+            let events =
+                futures::future::join_all([first.next(), second.next(), third.next()]).await;
             for result in events {
                 assert_eq!(result.expect("event").expect("ok"), event("session.updated", value));
             }
@@ -621,7 +617,7 @@ mod tests {
         assert_eq!(first.next().await.unwrap().unwrap(), event("server.connected", 1));
         assert_eq!(second.next().await.unwrap().unwrap(), event("server.connected", 1));
         harness.close(0); // server closes the stream
-        // Buffered events are preserved, then the stream ends.
+                          // Buffered events are preserved, then the stream ends.
         assert_eq!(second.next().await.unwrap().unwrap(), event("session.updated", 2));
         assert!(second.next().await.is_none());
         assert_eq!(first.next().await.unwrap().unwrap(), event("session.updated", 2));

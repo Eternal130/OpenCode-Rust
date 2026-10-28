@@ -543,8 +543,8 @@ mod tests {
         ] {
             let mut buffer = Vec::new();
             write_completion(shell, &mut buffer);
-            let script = String::from_utf8(buffer)
-                .unwrap_or_else(|e| panic!("{shell:?}: not utf8: {e}"));
+            let script =
+                String::from_utf8(buffer).unwrap_or_else(|e| panic!("{shell:?}: not utf8: {e}"));
             assert!(!script.trim().is_empty(), "{shell:?}: script is non-empty");
             assert!(
                 script.to_lowercase().contains("opencode"),
