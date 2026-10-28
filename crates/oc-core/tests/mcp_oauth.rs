@@ -951,10 +951,7 @@ fn expired_credential() -> oauth::StoredCredential {
         expires: 1000,
         token_type: "Bearer".to_owned(),
         scope: None,
-        client: Some(oauth::StoredClient {
-            client_id: "stub-client".to_owned(),
-            client_secret: None,
-        }),
+        client: Some(oauth::StoredClient { client_id: "stub-client".to_owned(), client_secret: None }),
     }
 }
 
