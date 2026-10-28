@@ -2317,6 +2317,7 @@ dependencies = [
  "tree-sitter-bash",
  "tree-sitter-powershell",
  "urlencoding",
+ "vt100",
  "walkdir",
 ]
 
