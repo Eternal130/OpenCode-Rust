@@ -86,6 +86,7 @@ pub mod read;
 pub mod registry;
 pub mod shell;
 pub mod skill;
+pub mod tool_input_repair;
 pub mod webfetch;
 pub mod websearch;
 pub mod websearch_providers;
@@ -318,6 +319,9 @@ pub fn builtin_plugins(services: Arc<ToolServices>) -> Vec<InternalPlugin> {
     let leaves: Vec<fn(&Arc<ToolServices>) -> BuiltinTool> =
         vec![patch::tool, edit::tool, glob::tool, grep::tool, read::tool, write::tool];
     let mut plugins = Vec::new();
+    // The v2 `pre` boot order (internal.ts:213-…) leads with the input
+    // repair plugin before every tool registers.
+    plugins.push(tool_input_repair::plugin());
     for make in leaves {
         let services = Arc::clone(&services);
         let id = format!("opencode.tool.{}", make(&services).name);

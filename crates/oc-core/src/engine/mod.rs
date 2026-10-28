@@ -356,6 +356,10 @@ pub struct Engine {
     /// The project store (v2 `Project.Service` persistence): resolve /
     /// activate / update over the shared database.
     pub projects: Arc<crate::project::SqliteProjectStore>,
+    /// AUD-03: the project reference registry (v2 `Reference.Service`) —
+    /// named local/git sources over the global repos cache.
+    pub references: Arc<crate::reference::ReferenceService>,
+    reference_sweeper: Option<tokio::task::JoinHandle<()>>,
     tool_output: Arc<ToolOutput>,
     /// The v2 location service map (graph lifecycle authority: adopt /
     /// invalidate / reload + the TTL sweeper).
@@ -603,6 +607,25 @@ impl Engine {
             crate::filesystem::watcher::FileWatcher::disabled()
         };
         let watcher_policy = crate::filesystem::location_watcher::LocationWatcherPolicy::new();
+        // AUD-03: the global reference registry (reference.ts) over the
+        // global repos cache root, with the hourly refresh sweep
+        // (reference.ts:111-112).
+        let references = Arc::new(crate::reference::ReferenceService::new(
+            oc_util::global_roots::resolve().repos(),
+            Arc::clone(&options.clock),
+        ));
+        let reference_sweeper = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => Some(handle.spawn({
+                let references = Arc::clone(&references);
+                async move {
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+                        references.refresh_all();
+                    }
+                }
+            })),
+            Err(_) => None,
+        };
         let touch_bus: Bus = (*bus).clone();
         let engine = Engine {
             data_root: options.data_root.clone(),
@@ -619,6 +642,8 @@ impl Engine {
             resolver,
             facade_transport,
             projects,
+            references,
+            reference_sweeper,
             tool_output,
             locations: Arc::clone(&locations),
             services,
@@ -783,6 +808,9 @@ impl Engine {
         }
         if let Some(sweeper) = &self.sweeper {
             sweeper.abort();
+        }
+        if let Some(reference_sweeper) = &self.reference_sweeper {
+            reference_sweeper.abort();
         }
         // The bus auto-touch detaches with the engine (ListenGuard drop).
         let _ = &self.activity_touch;
@@ -1253,6 +1281,10 @@ impl Engine {
             skills: {
                 let skills = Arc::clone(&skills);
                 Arc::new(move || skills.list())
+            },
+            references: {
+                let references = Arc::clone(&self.references);
+                Arc::new(move || references.list())
             },
         };
         let context = Arc::new(SessionContext::new(
