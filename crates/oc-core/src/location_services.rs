@@ -138,6 +138,8 @@ impl GlobalServices {
 ///
 /// `TODO(lane-integration)`: the session runner lane touches on session
 /// activity events.
+/// RW-12 closed: durable session events re-arm activity via
+/// [`attach_activity_bus_touch`] (ref location-activity.ts `bus.listen`).
 pub struct LocationActivity {
     last_touch: DashMap<LocationRef, i64>,
     clock: Arc<dyn Clock>,
@@ -355,6 +357,30 @@ impl Default for SweeperConfig {
     fn default() -> Self {
         Self { ttl: LOCATION_TTL_DEFAULT, sweep_interval: LOCATION_SWEEP_DEFAULT }
     }
+}
+
+/// Re-arm activity from the bus (RW-12, ref location-activity.ts
+/// `bus.listen`): every **durable session event** carrying a location
+/// re-touches that location's activity entry — but only when the location
+/// is still live in the map (ref `RcMap.has`), so events for evicted
+/// locations do not resurrect them. The guard is dropped when the caller
+/// drops the returned [`crate::bus::ListenGuard`].
+pub fn attach_activity_bus_touch(
+    bus: &crate::bus::Bus,
+    map: Arc<LocationServiceMap>,
+    activity: Arc<LocationActivity>,
+) -> crate::bus::ListenGuard {
+    bus.listen(Arc::new(move |event| {
+        if event.durable.is_some() && crate::bus::registry::is_session_event(&event.type_) {
+            if let Some(location) = &event.location {
+                let location = crate::location::LocationRef::from(location);
+                if map.get(&location).is_some() {
+                    activity.touch(&location);
+                }
+            }
+        }
+        Ok(())
+    }))
 }
 
 /// Spawn the activity TTL sweeper task. Each pass:
@@ -759,6 +785,54 @@ mod tests {
         }
         assert_eq!(harness.map.len(), 1, "active location survives");
         sweeper.abort();
+    }
+
+    #[tokio::test]
+    async fn bus_session_events_rearm_activity_only_for_live_locations() {
+        let clock = MutableClock::at(1_000);
+        let harness = harness(&clock).await;
+        let live = loc_under(harness.dir.path(), "live");
+        harness.map.get_or_build(live.clone()).await.expect("boot");
+        let activity = Arc::clone(&harness.map.globals().activity);
+        // An entry for a location whose graph is gone must not resurrect.
+        let gone = loc_under(harness.dir.path(), "gone");
+        activity.touch_at(&gone, 1_000);
+        // Rewind the live entry into expiry range, then re-touch via the bus.
+        activity.touch_at(&live, 1_000);
+        clock.advance(50 * 60 * 1_000);
+
+        let _guard = attach_activity_bus_touch(
+            &harness.bus,
+            Arc::clone(&harness.map),
+            Arc::clone(&activity),
+        );
+        let definition = crate::bus::registry::by_type_latest("session.deleted")
+            .expect("session.deleted definition");
+        harness
+            .bus
+            .publish(
+                definition,
+                serde_json::json!({ "sessionID": "ses_rw12" }),
+                crate::bus::PublishOptions {
+                    location: Some(oc_schema::location::Ref {
+                        directory: oc_schema::common::AbsolutePath::parse(
+                            live.directory.to_string_lossy().into_owned(),
+                        ),
+                        workspace_id: None,
+                    }),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("publish durable session event");
+
+        let now = clock.unix_ms();
+        // The live location's entry was re-touched (fresh last_touch).
+        let live_touch = activity.last_touch(&live).expect("live entry re-touched");
+        assert!(now - live_touch < 60_000, "re-touch is fresh: {live_touch} vs {now}");
+        // The gone location was not resurrected by its (routed) event.
+        let gone_touch = activity.last_touch(&gone).expect("stale entry still there");
+        assert!(now - gone_touch > 60_000, "gone location untouched: {gone_touch} vs {now}");
     }
 
     #[tokio::test]

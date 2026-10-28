@@ -374,6 +374,10 @@ pub struct Engine {
     assembly_locks: Arc<DashMap<LocationRef, Arc<tokio::sync::Mutex<()>>>>,
     generation: Arc<AtomicU64>,
     sweeper: Option<tokio::task::JoinHandle<()>>,
+    /// Bus auto-touch for location activity (RW-12): durable session
+    /// events re-arm the emitting location's TTL entry. Dropped (detached)
+    /// with the engine.
+    activity_touch: Option<crate::bus::ListenGuard>,
     /// The general file-watcher service (v2 `Watcher`): feeds the
     /// per-location location watchers; `disabled()` when the engine boots
     /// with `file_watcher: false`.
@@ -599,6 +603,7 @@ impl Engine {
             crate::filesystem::watcher::FileWatcher::disabled()
         };
         let watcher_policy = crate::filesystem::location_watcher::LocationWatcherPolicy::new();
+        let touch_bus: Bus = (*bus).clone();
         let engine = Engine {
             data_root: options.data_root.clone(),
             home: options.home.clone(),
@@ -624,6 +629,13 @@ impl Engine {
             sweeper: options.activity_sweeper.then(|| {
                 crate::location_services::spawn_activity_sweeper(
                     crate::location_services::SweeperConfig::default(),
+                    Arc::clone(&locations),
+                    Arc::clone(&locations.globals().activity),
+                )
+            }),
+            activity_touch: options.activity_sweeper.then(|| {
+                crate::location_services::attach_activity_bus_touch(
+                    &touch_bus,
                     Arc::clone(&locations),
                     Arc::clone(&locations.globals().activity),
                 )
@@ -772,6 +784,8 @@ impl Engine {
         if let Some(sweeper) = &self.sweeper {
             sweeper.abort();
         }
+        // The bus auto-touch detaches with the engine (ListenGuard drop).
+        let _ = &self.activity_touch;
         for task in &self.cleanup_tasks {
             task.abort();
         }
