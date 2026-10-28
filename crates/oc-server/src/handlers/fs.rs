@@ -269,47 +269,151 @@ async fn find(
         _ => (true, true),
     };
 
-    let lowered = query.to_lowercase();
     let root = location.as_path().to_path_buf();
-    let mut matches = Vec::new();
-    walk(&root, &lowered, want_files, want_dirs, limit, &mut matches);
+    let exclusions = ScanExclusions::for_root(&root);
+    // REF builds an index of every (type-filtered) entry and ranks with
+    // fuzzy matching at query time; the port's equivalent is a bounded
+    // full walk (same entry budget as REF's ripgrep cap) + scoring.
+    let mut candidates = Vec::new();
+    walk(&root, want_files, want_dirs, &exclusions, &mut candidates);
 
-    let data: Vec<Value> = matches
+    // REF (filesystem/search.ts): every find path ranks candidates —
+    // fuzzysort.go in the ripgrep fallback, score-desc then
+    // path-length-asc in the fff layer — and defaults the limit to 50.
+    // Ranking equivalent: subsequence fuzzy score (substring matches win
+    // via the consecutive-run bonus), then shorter paths first.
+    let effective_limit = limit.unwrap_or(50);
+    let lowered = query.to_lowercase();
+    let query_chars: Vec<char> = lowered.chars().collect();
+    let mut scored: Vec<_> = candidates
         .into_iter()
-        .map(|(path, is_dir)| entry_json(&path.to_string_lossy(), is_dir))
+        .filter_map(|(path, is_dir)| {
+            let target = path.to_string_lossy().to_lowercase();
+            fuzzy_score(&query_chars, &target)
+                .map(|score| (score, target.chars().count(), target, path, is_dir))
+        })
+        .collect();
+    scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)).then_with(|| a.2.cmp(&b.2)));
+    scored.truncate(effective_limit);
+
+    let data: Vec<Value> = scored
+        .into_iter()
+        .map(|(_, _, _, path, is_dir)| entry_json(&path.to_string_lossy(), is_dir))
         .collect();
     Ok(super::common::json_location_data(&location.as_path().to_string_lossy(), Value::Array(data)))
 }
 
+/// REF's ripgrep fallback caps the scan (100_000 entries outside VCS
+/// locations); the port's bounded walk uses the same ceiling as the
+/// budget for entries considered before the walk gives up.
+const SCAN_ENTRY_BUDGET: usize = 100_000;
+
+/// Sensitive-directory exclusions for a scan (port of
+/// core/filesystem/protected.ts + search.ts wiring): when the scan root
+/// is the user's home, REF's `names()` basenames are excluded (ripgrep
+/// `exclude: NAME/**`); REF's absolute `paths()` are excluded on every
+/// scan. Table-bearing platforms are darwin/win32 only — linux tables
+/// are empty exactly like REF.
+struct ScanExclusions {
+    home_rooted: bool,
+    names: Vec<String>,
+    paths: Vec<std::path::PathBuf>,
+}
+
+impl ScanExclusions {
+    fn for_root(root: &std::path::Path) -> Self {
+        ScanExclusions {
+            home_rooted: oc_core::filesystem::protected::is_home(&root.to_string_lossy()),
+            names: oc_core::filesystem::protected::names()
+                .iter()
+                .map(|name| (*name).to_owned())
+                .collect(),
+            paths: oc_core::filesystem::protected::paths(),
+        }
+    }
+
+    fn is_excluded_dir(&self, name: &str, directory: &std::path::Path) -> bool {
+        // Heavy/irrelevant trees (pre-existing skip; ripgrep's defaults
+        // exclude .git/node_modules in REF).
+        if name == ".git" || name == "node_modules" || name == "target" {
+            return true;
+        }
+        if self.home_rooted && self.names.iter().any(|candidate| candidate == name) {
+            return true;
+        }
+        if self.paths.is_empty() {
+            return false;
+        }
+        let resolved = oc_core::filesystem::protected::resolve_lexical(directory);
+        self.paths.iter().any(|protected| resolved == *protected || resolved.starts_with(protected))
+    }
+}
+
+/// Fuzzy subsequence score, the ranking equivalent of REF's fuzzysort/fff
+/// usage: case-insensitive subsequence over the whole path string with a
+/// consecutive-run bonus (so substring completions — what the web UI's
+/// fsFind relies on — outrank scattered acronyms) and a word-start bonus
+/// after separators. Tighter matches edge out longer ones. `None` = no
+/// match. Deviation from fuzzysort's exact algorithm: single-pass greedy
+/// alignment (documented in the lane report).
+fn fuzzy_score(query: &[char], target: &str) -> Option<i64> {
+    let chars: Vec<char> = target.chars().collect();
+    let mut score: i64 = 0;
+    let mut matched = 0usize;
+    let mut previous: i64 = -2;
+    for (index, character) in chars.iter().enumerate() {
+        if matched < query.len() && *character == query[matched] {
+            score += 1;
+            let index = index as i64;
+            if index == previous + 1 {
+                score += 4;
+            }
+            let boundary =
+                index == 0 || matches!(chars[(index - 1) as usize], '/' | '-' | '_' | ' ' | '.');
+            if boundary {
+                score += 3;
+            }
+            previous = index;
+            matched += 1;
+        }
+    }
+    if matched < query.len() {
+        return None;
+    }
+    // Prefer tighter matches (fuzzysort's "closer spread" heuristic).
+    Some(score - (chars.len() as i64 - query.len() as i64) / 8)
+}
+
 fn walk(
     directory: &std::path::Path,
-    lowered_query: &str,
     want_files: bool,
     want_dirs: bool,
-    limit: Option<usize>,
+    exclusions: &ScanExclusions,
     out: &mut Vec<(std::path::PathBuf, bool)>,
 ) {
-    if let Some(limit) = limit {
-        if out.len() >= limit {
-            return;
-        }
+    if out.len() >= SCAN_ENTRY_BUDGET {
+        return;
     }
     let Ok(read_dir) = std::fs::read_dir(directory) else { return };
     let mut children: Vec<_> = read_dir.flatten().collect();
     children.sort_by_key(std::fs::DirEntry::file_name);
     for entry in children {
+        if out.len() >= SCAN_ENTRY_BUDGET {
+            return;
+        }
         let Ok(kind) = entry.file_type() else { continue };
-        let name = entry.file_name().to_string_lossy().to_lowercase();
         if kind.is_dir() {
-            if want_dirs && name.contains(lowered_query) {
-                out.push((entry.path(), true));
-            }
-            // Skip heavy/irrelevant trees.
-            if name == ".git" || name == "node_modules" || name == "target" {
+            // REF: ripgrep `exclude` globs keep protected trees out of the
+            // index entirely (directory entries derive from the parents of
+            // INCLUDED files) — excluded dirs are never candidates.
+            if exclusions.is_excluded_dir(&entry.file_name().to_string_lossy(), &entry.path()) {
                 continue;
             }
-            walk(&entry.path(), lowered_query, want_files, want_dirs, limit, out);
-        } else if want_files && name.contains(lowered_query) {
+            if want_dirs {
+                out.push((entry.path(), true));
+            }
+            walk(&entry.path(), want_files, want_dirs, exclusions, out);
+        } else if want_files {
             out.push((entry.path(), false));
         }
     }
@@ -350,4 +454,96 @@ async fn write(
 #[allow(dead_code)]
 fn _query(uri: &Uri, name: &str) -> Option<String> {
     parse_query_field(uri.query().unwrap_or_default(), name)
+}
+
+#[cfg(test)]
+mod find_tests {
+    use super::*;
+
+    fn chars(value: &str) -> Vec<char> {
+        value.chars().collect()
+    }
+
+    #[test]
+    fn fuzzy_substring_completion_outranks_scattered_subsequence() {
+        let substring = fuzzy_score(&chars("read"), "/a/readme.md").expect("substring matches");
+        let scattered =
+            fuzzy_score(&chars("read"), "/a/rust-e2e-doc.txt").expect("subsequence matches");
+        let missing = fuzzy_score(&chars("zzz"), "/a/readme.md");
+        assert!(substring > scattered, "substring completion must rank first");
+        assert_eq!(missing, None);
+    }
+
+    #[test]
+    fn fuzzy_is_case_insensitive_and_matches_empty_query() {
+        assert!(fuzzy_score(&chars("rdm"), "/a/README.MD").is_some());
+        // REF fuzzysort: empty query matches everything (score equal,
+        // shorter paths first).
+        assert!(fuzzy_score(&chars(""), "/anything/at/all.txt").is_some());
+    }
+
+    #[test]
+    fn fuzzy_prefers_tighter_matches() {
+        let tight = fuzzy_score(&chars("ab"), "/ab").expect("tight");
+        let loose = fuzzy_score(&chars("ab"), "/a/super/long/path/b").expect("loose");
+        assert!(tight > loose);
+    }
+
+    #[test]
+    fn exclusions_skip_home_names_only_when_rooted_at_home() {
+        let mut rooted = ScanExclusions { home_rooted: true, names: vec![], paths: vec![] };
+        rooted.names = vec!["Desktop".to_owned(), "Documents".to_owned()];
+        assert!(rooted.is_excluded_dir("Desktop", std::path::Path::new("/home/u/Desktop")));
+        assert!(!rooted.is_excluded_dir("projects", std::path::Path::new("/home/u/projects")));
+
+        let unrooted =
+            ScanExclusions { home_rooted: false, names: rooted.names.clone(), paths: vec![] };
+        assert!(!unrooted.is_excluded_dir("Desktop", std::path::Path::new("/repo/Desktop")));
+
+        // Case-sensitive like REF's ripgrep `exclude: NAME/**` globs.
+        assert!(!rooted.is_excluded_dir("desktop", std::path::Path::new("/home/u/desktop")));
+    }
+
+    #[test]
+    fn exclusions_cover_absolute_protected_paths_on_any_scan() {
+        let mut scan = ScanExclusions { home_rooted: false, names: vec![], paths: vec![] };
+        scan.paths = vec![std::path::PathBuf::from("/.Trashes")];
+        assert!(scan.is_excluded_dir("anything", std::path::Path::new("/.Trashes/sub")));
+        assert!(!scan.is_excluded_dir("Trashes", std::path::Path::new("/repo/Trashes")));
+    }
+
+    #[test]
+    fn exclusions_keep_heavy_tree_skips() {
+        let scan = ScanExclusions { home_rooted: false, names: vec![], paths: vec![] };
+        for name in [".git", "node_modules", "target"] {
+            assert!(scan.is_excluded_dir(name, std::path::Path::new("/repo").join(name)));
+        }
+    }
+
+    #[test]
+    fn walk_collects_candidates_without_descending_excluded_trees() {
+        let root = tempfile::tempdir_in("/tmp/opencode").expect("tempdir");
+        let path = root.path();
+        std::fs::write(path.join("readme.md"), "x").expect("write");
+        std::fs::create_dir_all(path.join(".git").join("deep")).expect("git");
+        std::fs::write(path.join(".git").join("deep").join("readme.git.md"), "x").expect("write");
+        std::fs::create_dir_all(path.join("notes")).expect("notes");
+        std::fs::write(path.join("notes").join("x.txt"), "x").expect("write");
+
+        let mut scan = ScanExclusions { home_rooted: false, names: vec![], paths: vec![] };
+        scan.names = vec!["notes".to_owned()];
+        let mut out = Vec::new();
+        walk(path, true, true, &scan, &mut out);
+        let names: Vec<String> = out
+            .iter()
+            .map(|(p, _)| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert!(names.contains(&"readme.md".to_owned()), "candidates: {names:?}");
+        assert!(!names.iter().any(|n| n.contains("git")), "excluded .git subtree: {names:?}");
+        // home_rooted=false → names table does not apply.
+        assert!(
+            names.contains(&"notes".to_owned()),
+            "names only apply on home-rooted scans: {names:?}"
+        );
+    }
 }

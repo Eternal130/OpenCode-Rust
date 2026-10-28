@@ -90,10 +90,16 @@ pub fn routes() -> Router<SharedState> {
 /// validating a payload answers the standard 500 envelope instead of
 /// aborting the connection task.
 pub fn mount(state: SharedState) -> Router {
-    routes()
+    let router = routes()
         .with_state(state)
         .layer(axum::middleware::from_fn(crate::request_validation::schema_error_middleware))
-        .layer(axum::middleware::from_fn(catch_panics))
+        .layer(axum::middleware::from_fn(catch_panics));
+    // RW-06: per-request OTel spans — only compiled (and only emitting)
+    // when the `otel` feature + OTEL_EXPORTER_OTLP_ENDPOINT are both
+    // active. Feature off: byte-identical middleware stack.
+    #[cfg(feature = "otel")]
+    let router = router.layer(axum::middleware::from_fn(crate::observability::request_span));
+    router
 }
 
 /// Panic containment for every API handler (hotfix BUG-D seam): without
