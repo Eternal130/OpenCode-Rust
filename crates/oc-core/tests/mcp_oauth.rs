@@ -55,6 +55,10 @@ struct StubState {
     challenged: usize,
     /// DCR `POST /register` hits.
     register_hits: usize,
+    /// Hold the refresh-grant answer until released (dedup tests).
+    refresh_gate: Option<Arc<tokio::sync::Notify>>,
+    /// Answer refresh grants with `invalid_grant`.
+    reject_refresh: bool,
     /// Advertise `client_id_metadata_document_supported`.
     cimd: bool,
     /// Overrides for `token_endpoint_auth_methods_supported` (None =
@@ -472,6 +476,19 @@ async fn serve_token(
         Some("refresh_token") => {
             let presented = form.get("refresh_token").cloned().unwrap_or_default();
             state.lock().refresh_grants.push(presented);
+            let gate = state.lock().refresh_gate.clone();
+            if let Some(gate) = gate {
+                gate.notified().await;
+            }
+            if state.lock().reject_refresh {
+                respond_json(
+                    stream,
+                    "400 Bad Request",
+                    &json!({ "error": "invalid_grant", "error_description": "token rotated" }),
+                )
+                .await;
+                return;
+            }
             respond_json(
                 stream,
                 "200 OK",
@@ -917,4 +934,126 @@ async fn configured_redirect_uri_disables_cimd() {
         }
         Ok(_) => panic!("a pinned redirect_uri must not take the CIMD path"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// refresh dedup (oauth.ts:29-45): concurrent refreshes of the same
+// grant share one in-flight token request
+// ---------------------------------------------------------------------------
+
+/// A stored sign-in whose access token is past expiry (refresh forced).
+fn expired_credential() -> oauth::StoredCredential {
+    oauth::StoredCredential {
+        id: "cred_test".to_owned(),
+        method_id: "mcp_stub".to_owned(),
+        access: "stub-access-1".to_owned(),
+        refresh: "stub-refresh-1".to_owned(),
+        expires: 1000,
+        token_type: "Bearer".to_owned(),
+        scope: None,
+        client: Some(oauth::StoredClient { client_id: "stub-client".to_owned(), client_secret: None }),
+    }
+}
+
+/// Waits until the stub saw `want` refresh grants.
+async fn await_refresh_grants(stub: &Stub, want: usize) {
+    for _ in 0..400 {
+        if stub.state.lock().refresh_grants.len() >= want {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!("the stub never saw {want} refresh grants");
+}
+
+#[tokio::test]
+async fn oauth_concurrent_refreshes_share_one_token_call() {
+    let stub = stub().await;
+    let gate = Arc::new(tokio::sync::Notify::new());
+    stub.state.lock().refresh_gate = Some(gate.clone());
+    let config = remote(&format!("{}/mcp", stub.base));
+    let http = reqwest::Client::new();
+    let credential = expired_credential();
+
+    // One direct refresh + one connect-time prepare_token race the same
+    // grant (prepare_token's expired-token path routes into refresh).
+    let a = {
+        let (http, config, credential) = (http.clone(), config.clone(), credential.clone());
+        tokio::spawn(async move { oauth::refresh(&http, &config, &credential).await })
+    };
+    let b = {
+        let (http, config, credential) = (http.clone(), config.clone(), credential.clone());
+        tokio::spawn(async move { oauth::prepare_token(&http, &config, &credential).await })
+    };
+
+    // The single grant arrived; hold the answer so a non-deduped second
+    // caller would have hit the endpoint too before the release.
+    await_refresh_grants(&stub, 1).await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(stub.state.lock().refresh_grants.len(), 1, "one in-flight token call");
+    gate.notify_one();
+
+    let refreshed = a.await.expect("refresh task").expect("the shared refresh resolves");
+    let prepared = b.await.expect("prepare task").expect("prepare_token resolves");
+    assert_eq!(refreshed.access_token, "stub-access-2");
+    match prepared {
+        PreparedToken::Refreshed { access, tokens } => {
+            assert_eq!(access, "stub-access-2");
+            assert_eq!(tokens.access_token, "stub-access-2");
+        }
+        other => panic!("the expired token must have refreshed: {other:?}"),
+    }
+    assert_eq!(
+        stub.state.lock().refresh_grants,
+        vec!["stub-refresh-1".to_owned()],
+        "both callers shared the single token call"
+    );
+
+    // The entry dropped with the grant: a later refresh starts fresh.
+    stub.state.lock().refresh_gate = None;
+    let again = oauth::refresh(&http, &config, &credential).await.expect("sequential re-refresh");
+    assert_eq!(again.access_token, "stub-access-2");
+    assert_eq!(stub.state.lock().refresh_grants.len(), 2, "the second refresh hit the endpoint");
+}
+
+#[tokio::test]
+async fn oauth_refresh_failure_propagates_to_every_waiter_then_recovers() {
+    let stub = stub().await;
+    let gate = Arc::new(tokio::sync::Notify::new());
+    {
+        let mut state = stub.state.lock();
+        state.refresh_gate = Some(gate.clone());
+        state.reject_refresh = true;
+    }
+    let config = remote(&format!("{}/mcp", stub.base));
+    let http = reqwest::Client::new();
+    let credential = expired_credential();
+
+    let a = {
+        let (http, config, credential) = (http.clone(), config.clone(), credential.clone());
+        tokio::spawn(async move { oauth::refresh(&http, &config, &credential).await })
+    };
+    let b = {
+        let (http, config, credential) = (http.clone(), config.clone(), credential.clone());
+        tokio::spawn(async move { oauth::refresh(&http, &config, &credential).await })
+    };
+    await_refresh_grants(&stub, 1).await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    gate.notify_one();
+
+    for outcome in [a.await.expect("a"), b.await.expect("b")] {
+        let error = outcome.expect_err("the rejected grant fails both waiters");
+        assert!(error.contains("invalid_grant"), "the grant rejection propagates: {error}");
+    }
+    assert_eq!(stub.state.lock().refresh_grants.len(), 1, "still only one token call");
+
+    // The failed grant left no stuck entry: recovery on the next refresh.
+    {
+        let mut state = stub.state.lock();
+        state.reject_refresh = false;
+        state.refresh_gate = None;
+    }
+    let recovered = oauth::refresh(&http, &config, &credential).await.expect("recovered refresh");
+    assert_eq!(recovered.access_token, "stub-access-2");
+    assert_eq!(stub.state.lock().refresh_grants.len(), 2);
 }

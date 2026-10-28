@@ -33,11 +33,17 @@
 //!   transport's own transparent 404 session recovery (new in 3.7,
 //!   `reinit_on_expired_session`) is disabled so expiry still surfaces to
 //!   the registry exactly like v2.
-//! - Protocol negotiation: v2.0.24's TS client offers `2025-11-25`
-//!   (its `SUPPORTED_PROTOCOL_VERSIONS[0]`, the legacy initialize
-//!   handshake); the pin matches that offered version, and rmcp's own
-//!   server-answer acceptance semantics decide the negotiated revision.
-//!   `config.protocol` stays advisory (tracked for the SDK swap).
+//! - Protocol negotiation (client.ts:193 + 393-397
+//!   `negotiation(config.protocol)`): absent/`legacy` runs the plain
+//!   `initialize` handshake offering `2025-11-25` (v2.0.24's TS client
+//!   offers its `SUPPORTED_PROTOCOL_VERSIONS[0]`); `auto` probes
+//!   `server/discover` preferring `2026-07-28` then `2025-11-25` and
+//!   falls back to the legacy handshake for old servers; a dated pin
+//!   (`2026-07-28`) requires the server to declare that revision —
+//!   otherwise the connect fails with v2's
+//!   `Set "protocol" for this server to one of those or to "legacy"`
+//!   hint (client.ts:376-380). rmcp's own server-answer acceptance
+//!   semantics decide the negotiated revision within the offered set.
 //! - Requests ride `send_cancellable_request` directly (not rmcp's
 //!   `call_tool`/`get_prompt`/`read_resource` convenience wrappers): the
 //!   wrappers neither accept per-request timeouts (catalog 30s / execution
@@ -75,7 +81,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures::FutureExt;
-use oc_schema::mcp::ServerConfig;
+use oc_schema::mcp::{Protocol, ServerConfig};
 use parking_lot::Mutex;
 use rmcp::model::{
     CallToolRequestParams, ClientCapabilities, ContentBlock, GetPromptRequestParams,
@@ -84,13 +90,14 @@ use rmcp::model::{
     RequestMetaObject, ServerPeerInfo, ServerResult,
 };
 use rmcp::service::{
-    NotificationContext, Peer, PeerRequestOptions, RequestContext, RoleClient, RunningService,
+    ClientLifecycleMode, ClientServiceExt, NotificationContext, Peer, PeerRequestOptions,
+    RequestContext, RoleClient, RunningService,
 };
 use rmcp::transport::streamable_http_client::{
     StreamableHttpClientTransport, StreamableHttpClientTransportConfig,
 };
 use rmcp::transport::TokioChildProcess;
-use rmcp::{ClientHandler, ServiceExt};
+use rmcp::ClientHandler;
 use thiserror::Error;
 
 /// Maximum time to establish and initialize the server.
@@ -963,6 +970,33 @@ pub fn config_timeout(config: &ServerConfig) -> Option<&oc_schema::mcp::TimeoutC
     }
 }
 
+/// `negotiation(config.protocol)` (client.ts:393-397): absent config is
+/// legacy — the plain `initialize` handshake with no discover probe;
+/// `"auto"` probes `server/discover` and falls back to legacy for old
+/// servers; a dated pin requires the server to declare that revision.
+fn lifecycle_mode(config: &ServerConfig) -> ClientLifecycleMode {
+    let protocol = match config {
+        ServerConfig::Local(local) => local.protocol,
+        ServerConfig::Remote(remote) => remote.protocol,
+    };
+    match protocol {
+        None | Some(Protocol::Legacy) => ClientLifecycleMode::Initialize,
+        Some(Protocol::Auto) => ClientLifecycleMode::Auto {
+            // v2 "auto" probes for 2026-07-28 first, 2025-11-25 next;
+            // the legacy fallback offers the same 2025-11-25 pin get_info
+            // carries.
+            preferred_versions: vec![
+                ProtocolVersion::V_2026_07_28,
+                ProtocolVersion::V_2025_11_25,
+            ],
+            legacy_version: Some(ProtocolVersion::V_2025_11_25),
+        },
+        Some(Protocol::Dated) => {
+            ClientLifecycleMode::Discover { preferred_versions: vec![ProtocolVersion::V_2026_07_28] }
+        }
+    }
+}
+
 fn startup_timeout(config: &ServerConfig) -> Duration {
     config_timeout(config)
         .and_then(|timeout| timeout.startup)
@@ -1226,6 +1260,34 @@ fn connect_failure(server: &str, error: &dyn std::error::Error) -> ConnectFailur
     ConnectError { server: server.to_string(), message: chain.join(": ") }.into()
 }
 
+/// The `UnsupportedProtocolVersionError` mapping (client.ts:376-380): a
+/// pin (or discover negotiation) the server cannot satisfy fails with
+/// v2's remediation hint naming the server's supported revisions.
+fn unsupported_protocol_message(server: &str, error: &rmcp::service::ClientInitializeError) -> Option<String> {
+    let rmcp::service::ClientInitializeError::NoCompatibleProtocolVersion {
+        client_supported,
+        server_supported,
+    } = error
+    else {
+        return None;
+    };
+    let supported = server_supported
+        .iter()
+        .map(|version| version.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let offered = client_supported
+        .iter()
+        .map(|version| version.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(format!(
+        "Unsupported protocol version for \"{server}\": the client offered {offered}, \
+         the server supports {supported}. \
+         Set \"protocol\" for this server to one of those or to \"legacy\"."
+    ))
+}
+
 fn normalize_path(path: &std::path::Path) -> String {
     let mut out = std::path::PathBuf::new();
     for component in path.components() {
@@ -1283,10 +1345,19 @@ where
         elicitation: input.elicitation.clone(),
     };
     let startup = startup_timeout(input.config);
-    let outcome = tokio::time::timeout(startup, handler.serve(transport)).await;
+    let outcome = tokio::time::timeout(
+        startup,
+        handler.serve_with_lifecycle(transport, lifecycle_mode(input.config)),
+    )
+    .await;
     let service = match outcome {
         Ok(Ok(service)) => service,
-        Ok(Err(error)) => return Err(connect_failure(input.server, &error)),
+        Ok(Err(error)) => {
+            if let Some(message) = unsupported_protocol_message(input.server, &error) {
+                return Err(ConnectError { server: input.server.to_string(), message }.into());
+            }
+            return Err(connect_failure(input.server, &error));
+        }
         Err(_) => {
             return Err(ConnectError {
                 server: input.server.to_string(),
