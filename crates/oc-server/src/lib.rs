@@ -32,6 +32,8 @@ pub mod event_manifest;
 pub mod info;
 pub mod lifecycle;
 pub mod middleware;
+#[cfg(feature = "otel")]
+pub mod observability;
 pub mod pairing;
 pub mod readiness;
 pub mod sse;

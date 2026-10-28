@@ -31,8 +31,8 @@ use std::pin::Pin;
 use std::sync::LazyLock;
 
 use base64::Engine as _;
-use futures::FutureExt as _;
 use futures::future::Shared;
+use futures::FutureExt as _;
 use rand::RngCore;
 use serde_json::Value;
 
@@ -840,8 +840,7 @@ async fn exchange_code(
 
 /// One shared in-flight refresh (oauth.ts `refreshes`): concurrent
 /// callers of the same grant await the same future.
-type SharedRefresh =
-    Shared<Pin<Box<dyn Future<Output = Result<StoredTokens, String>> + Send>>>;
+type SharedRefresh = Shared<Pin<Box<dyn Future<Output = Result<StoredTokens, String>> + Send>>>;
 
 /// Refresh tokens rotate, so concurrent refreshes of the same token
 /// share one request or the second gets `invalid_grant` (oauth.ts:29-33).
@@ -884,11 +883,8 @@ pub async fn refresh(
             let http = http.clone();
             let config = config.clone();
             let credential = credential.clone();
-            let future: SharedRefresh = async move {
-                refresh_once(&http, &config, &credential).await
-            }
-            .boxed()
-            .shared();
+            let future: SharedRefresh =
+                async move { refresh_once(&http, &config, &credential).await }.boxed().shared();
             map.insert(key.clone(), future.clone());
             future
         }
