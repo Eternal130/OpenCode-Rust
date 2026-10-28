@@ -8,6 +8,21 @@ license.workspace = true
 [lints]
 workspace = true
 
+[features]
+# RW-06: OTel telemetry skeleton (port of util observability.ts/otlp.ts).
+# DEFAULT OFF — the release build must not pull any otel/tracing crates
+# (verified via `cargo tree -e features --no-default-features` in the
+# lane log). Enabled only for explicit telemetry builds.
+otel = [
+    "dep:tracing",
+    "dep:tracing-opentelemetry",
+    "dep:tracing-subscriber",
+    "dep:opentelemetry",
+    "dep:opentelemetry-otlp",
+    "dep:opentelemetry_sdk",
+    "dep:tonic",
+]
+
 [dependencies]
 oc-ai = { workspace = true }
 oc-core = { workspace = true }
@@ -42,6 +57,16 @@ brotli-decompressor = "6"
 # RV-B8: stats day bucketing by the session's IANA timezone (REF stats.ts
 # `makeDateKey` uses Intl with `timeZone`). jiff bundles the tz database.
 jiff = "0.2"
+# RW-06 `otel` feature only (default OFF): OTLP span exporter skeleton.
+tracing = { version = "0.1", optional = true }
+tracing-opentelemetry = { version = "0.31", optional = true }
+tracing-subscriber = { version = "0.3", optional = true }
+opentelemetry = { version = "0.30", optional = true }
+opentelemetry-otlp = { version = "0.30", optional = true, features = ["grpc-tonic"] }
+opentelemetry_sdk = { version = "0.30", optional = true, features = ["rt-tokio"] }
+# Matches opentelemetry-otlp 0.30's tonic (must be the same minor to
+# build the exporter's MetadataMap).
+tonic = { version = "0.13", optional = true, default-features = false }
 
 [dev-dependencies]
 tempfile = "3"

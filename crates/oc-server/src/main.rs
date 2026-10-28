@@ -87,6 +87,15 @@ fn parse_args(args: &[String]) -> BootOptions {
 async fn main() -> io::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let stdio = args.iter().any(|arg| arg == "--stdio");
+    // RW-06: OTel telemetry skeleton — no-op unless the `otel` feature is
+    // compiled in AND OTEL_EXPORTER_OTLP_ENDPOINT is set (REF
+    // observability toggle). Keep the provider alive for the process
+    // lifetime so the batch exporter can drain on exit.
+    #[cfg(feature = "otel")]
+    let _otel_provider = {
+        let version = env!("CARGO_PKG_VERSION");
+        oc_server::observability::init(version)
+    };
     let mut options = parse_args(&args);
     options.password = std::env::var("OPENCODE_PASSWORD").ok().filter(|value| !value.is_empty());
     if stdio {

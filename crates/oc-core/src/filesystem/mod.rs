@@ -11,4 +11,5 @@
 //!   activity so the idle TTL sweeper can expire it.
 
 pub mod location_watcher;
+pub mod protected;
 pub mod watcher;
