@@ -32,7 +32,10 @@ fn decodes_base64_data_urls() {
     let file = materialize_attachment(&input(format!("data:application/octet-stream;base64,{encoded}")), None)
         .unwrap();
     assert_eq!(decode_b64(&file), bytes);
-    assert_eq!(file.mime, "application/octet-stream");
+    // The data-URL header mime is IGNORED (data URLs resolve with
+    // `mime: undefined`, prompt.ts:97-105) — `Mime.detect` sniffs the
+    // bytes: textual ⇒ text/plain.
+    assert_eq!(file.mime, "text/plain");
     assert_eq!(file.source, oc_schema::prompt::FileSource::Inline);
     assert!(file.name.is_none());
 }
@@ -118,16 +121,18 @@ fn slices_start_end_lines_for_text_plain() {
     let dir = scratch("slicing");
     let path = dir.join("notes.txt");
     std::fs::write(&path, "one\ntwo\nthree\nfour\nfive\n").unwrap();
+    // JS `slice(start - 1, end)` is end-EXCLUSIVE: `?start=2&end=4`
+    // yields lines 2-4.
     let uri = format!("file://{}?start=2&end=4", path.display());
     let file = materialize_attachment(&input(uri), None).unwrap();
     assert_eq!(file.mime, "text/plain");
-    assert_eq!(decode_b64(&file), b"two\nthree".to_vec());
+    assert_eq!(decode_b64(&file), b"two\nthree\nfour".to_vec());
     assert_eq!(file.name.as_deref(), Some("notes.txt"));
 
-    // start without end runs to the last line.
+    // start without end runs through the trailing empty line.
     let uri = format!("file://{}?start=4", path.display());
     let file = materialize_attachment(&input(uri), None).unwrap();
-    assert_eq!(decode_b64(&file), b"four\nfive".to_vec());
+    assert_eq!(decode_b64(&file), b"four\nfive\n".to_vec());
 
     // Non-positive / non-integer params are ignored (positiveInt,
     // prompt.ts:227-231) — the whole file stands.
@@ -164,11 +169,20 @@ fn materializes_directory_listings() {
 
 // --- image normalization ----------------------------------------------------
 
-const TINY_PNG: &[u8] = &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0];
+/// A real 1x1 PNG (encoded at test time so the normalizer can decode
+/// it; a bare signature header cannot).
+fn tiny_png() -> Vec<u8> {
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(1, 1, image::Rgba([0, 0, 0, 255])))
+        .write_to(&mut bytes, image::ImageFormat::Png)
+        .expect("encode 1x1 png");
+    bytes.into_inner()
+}
 
 #[test]
 fn image_attachments_normalize_under_limits_and_pass_through_without() {
-    let encoded = base64::engine::general_purpose::STANDARD.encode(TINY_PNG);
+    let png = tiny_png();
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&png);
     // `None` limits = the ResizerUnavailableError passthrough arm
     // (prompt.ts:145).
     let passthrough = materialize_attachment(
@@ -190,9 +204,12 @@ fn image_attachments_normalize_under_limits_and_pass_through_without() {
     assert_eq!(normalized.data, encoded);
     assert_eq!(normalized.mime, "image/png");
 
-    // A payload that cannot decode as an image is an AttachmentError
-    // carrying the normalizer's message (prompt.ts:146-147).
-    let junk = base64::engine::general_purpose::STANDARD.encode(&[0u8; 16]);
+    // A payload that sniffs as an image but cannot decode is an
+    // AttachmentError carrying the normalizer's message (prompt.ts:
+    // 146-147) — the data-URL header mime is ignored, `Mime.detect`
+    // reads the signature.
+    let truncated = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0];
+    let junk = base64::engine::general_purpose::STANDARD.encode(truncated);
     let error = materialize_attachment(
         &input(format!("data:image/png;base64,{junk}")),
         Some(&limits),
