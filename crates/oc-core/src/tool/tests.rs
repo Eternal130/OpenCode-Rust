@@ -1682,3 +1682,292 @@ async fn tool_pipeline_after_hook_can_suppress_content() {
         "an emptied content array must suppress the output (v2 normalizeContent)"
     );
 }
+
+// ---------------------------------------------------------------------------
+// AUD-07 — ripgrep binary acquisition (ripgrep/binary.ts) + exit-2 tolerance
+// ---------------------------------------------------------------------------
+
+fn rg_deps(env_override: Option<PathBuf>, path_binary: Option<PathBuf>, global_bin: PathBuf) -> crate::tool::ripgrep_runner::ResolveDeps {
+    crate::tool::ripgrep_runner::ResolveDeps {
+        env_override,
+        bundled: None,
+        path_binary,
+        global_bin,
+    }
+}
+
+#[tokio::test]
+async fn rg_resolve_order_env_path_cache_download() {
+    use crate::tool::ripgrep_runner::{resolve_with, RgSource};
+    let tmp = tempfile::tempdir_in("/tmp/opencode").unwrap();
+    let global_bin = tmp.path().join("bin");
+    std::fs::create_dir_all(&global_bin).unwrap();
+
+    let env_rg = tmp.path().join("env-rg");
+    std::fs::write(&env_rg, b"#!/bin/sh\nexit 0\n").unwrap();
+    set_executable(&env_rg);
+    let path_rg = tmp.path().join("path-rg");
+    std::fs::write(&path_rg, b"#!/bin/sh\nexit 0\n").unwrap();
+    set_executable(&path_rg);
+    let cache_rg = global_bin.join("rg");
+    std::fs::write(&cache_rg, b"#!/bin/sh\nexit 0\n").unwrap();
+    set_executable(&cache_rg);
+
+    let never = |url: String| async move {
+        panic!("no download expected, got {url}");
+    };
+
+    // env override wins over PATH and cache (binary.ts:100 + port seam).
+    let (found, source) = resolve_with(
+        &rg_deps(Some(env_rg.clone()), Some(path_rg.clone()), global_bin.clone()),
+        never,
+    )
+    .await
+    .unwrap();
+    assert_eq!((found, source), (env_rg, RgSource::EnvOverride));
+
+    // PATH beats the global cache (binary.ts:103).
+    let (found, source) =
+        resolve_with(&rg_deps(None, Some(path_rg.clone()), global_bin.clone()), never).await.unwrap();
+    assert_eq!((found, source), (path_rg, RgSource::Path));
+
+    // Global cache beats download (binary.ts:70-72).
+    let (found, source) =
+        resolve_with(&rg_deps(None, None, global_bin.clone()), never).await.unwrap();
+    assert_eq!((found, source), (cache_rg, RgSource::GlobalCache));
+
+    // Nothing anywhere + disabled downloader input resolves from the
+    // PATH candidate when it is the only source left.
+    let empty = tempfile::tempdir_in("/tmp/opencode").unwrap();
+    let result = resolve_with(&rg_deps(None, None, empty.path().join("bin")), never).await;
+    assert!(result.is_err(), "no source at all must fail, got {result:?}");
+}
+
+#[tokio::test]
+async fn rg_resolve_downloads_extracts_and_caches() {
+    use crate::tool::ripgrep_runner::{platform_config, resolve_with, RgError, RgSource, RG_VERSION};
+    let Some(config) = platform_config() else {
+        return; // platform without a managed artifact
+    };
+    if config.extension != "tar.gz" || !std::path::Path::new("/bin/tar").is_file() {
+        eprintln!("skipping: tar extraction fixture unavailable");
+        return;
+    }
+
+    // Build the release-shaped archive: ripgrep-<version>-<triple>/rg.
+    let tmp = tempfile::tempdir_in("/tmp/opencode").unwrap();
+    let staging = tmp.path().join("staging");
+    let inner = staging.join(format!("ripgrep-{RG_VERSION}-{}", config.platform));
+    std::fs::create_dir_all(&inner).unwrap();
+    std::fs::write(inner.join("rg"), b"#!/bin/sh\necho fake-rg\n").unwrap();
+    set_executable(&inner.join("rg"));
+    let archive = tmp.path().join(&config.filename().replace('/', "_"));
+    let status = std::process::Command::new("tar")
+        .arg("-czf").arg(&archive)
+        .arg("-C").arg(&staging)
+        .arg(format!("ripgrep-{RG_VERSION}-{}", config.platform))
+        .status()
+        .unwrap();
+    assert!(status.success(), "fixture tar build failed");
+    let bytes = std::fs::read(&archive).unwrap();
+
+    let global_bin = tmp.path().join("bin");
+    let expected_url = config.url();
+    let fetch_bytes = bytes.clone();
+    let (target, source) = resolve_with(
+        &rg_deps(None, None, global_bin.clone()),
+        move |url: String| {
+            let bytes = fetch_bytes.clone();
+            let expected_url = expected_url.clone();
+            async move {
+                assert_eq!(url, expected_url, "release 15.1.0 URL (binary.ts:121)");
+                Ok(bytes)
+            }
+        },
+    )
+    .await
+    .expect("download+extract");
+    assert_eq!(source, RgSource::Download);
+    assert!(target.is_file(), "extracted rg at {}", target.display());
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "#!/bin/sh\necho fake-rg\n");
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = std::fs::metadata(&target).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o755, "chmod 755 (binary.ts:96)");
+    }
+    assert!(!global_bin.join(config.filename()).exists(), "archive removed (binary.ts:135)");
+    assert!(
+        !std::fs::read_dir(&global_bin).unwrap().any(|entry| {
+            entry.map(|e| e.file_name().to_string_lossy().starts_with("ripgrep-15.1.0-")).unwrap_or(false)
+        }),
+        "extraction temp dir cleaned"
+    );
+
+    // Second resolution short-circuits at the global cache — no fetch needed.
+    let (_, source) = resolve_with(&rg_deps(None, None, global_bin.clone()), |url: String| async move {
+        panic!("cache hit must not download: {url}");
+    })
+    .await
+    .expect("cache");
+    assert_eq!(source, RgSource::GlobalCache);
+
+    // Empty download body is rejected verbatim (binary.ts:128).
+    let empty = tempfile::tempdir_in("/tmp/opencode").unwrap();
+    let error = resolve_with(&rg_deps(None, None, empty.path().join("bin")), |url: String| async move {
+        Ok(match url.as_str() { _ => Vec::new() })
+    })
+    .await
+    .expect_err("empty download");
+    assert_eq!(error, RgError::EmptyDownload(config.url()));
+}
+
+#[test]
+fn rg_platform_map_matches_ref_rows() {
+    use crate::tool::ripgrep_runner::platform_config_for;
+    assert_eq!(platform_config_for("x86_64", "linux").unwrap().platform, "x86_64-unknown-linux-musl");
+    assert_eq!(platform_config_for("aarch64", "linux").unwrap().platform, "aarch64-unknown-linux-gnu");
+    assert_eq!(platform_config_for("x86_64", "darwin").unwrap().extension, "tar.gz");
+    assert_eq!(platform_config_for("x86_64", "windows").unwrap().extension, "zip");
+    assert!(platform_config_for("riscv64", "linux").is_none(), "unsupported platform key");
+    // Filename/URL shapes (binary.ts:120-121).
+    let config = platform_config_for("x86_64", "linux").unwrap();
+    assert_eq!(config.filename(), format!("ripgrep-15.1.0-{}.tar.gz", config.platform));
+    assert!(config.url().starts_with("https://github.com/BurntSushi/ripgrep/releases/download/15.1.0/"));
+}
+
+#[tokio::test]
+async fn tool_grep_exit_two_tolerated_with_partial_results() {
+    // ref ripgrep.ts:148-151 — exit code 2 without a regex parse error
+    // (permission/config failures) falls through to the row result, so
+    // matches already streamed are returned instead of a hard error.
+    let dir = shim_dir();
+    let fixture = concat!(
+        "{\"type\":\"match\",\"data\":{\"path\":{\"text\":\"./target.txt\"},\"lines\":{\"text\":\"needle\\n\"},\"line_number\":1,\"absolute_offset\":0,\"submatches\":[{\"match\":{\"text\":\"needle\"},\"start\":0,\"end\":6}]}}\n"
+    );
+    let fixture_file = dir.join("partial-fixture.out");
+    std::fs::write(&fixture_file, fixture).unwrap();
+    let fixture_display = fixture_file.display();
+    let script = format!("#!/bin/sh\ncat '{fixture_display}'\nprintf 'grep: permission denied: secret.txt\\n' >&2\nexit 2\n");
+    let shim = dir.join("rg-exit2");
+    std::fs::write(&shim, script).unwrap();
+    set_executable(&shim);
+    std::env::set_var("OPENCODE_RG_PATH", &shim);
+    let harness = harness().await;
+    let settled = call(&harness.tools, "grep", serde_json::json!({ "pattern": "needle" }))
+        .await
+        .expect("partial results on exit 2");
+    assert_eq!(
+        text_of(&settled),
+        format!("Found 1 matches\n{}:\n  Line 1: needle\n", harness.dir.join("target.txt").display())
+    );
+    assert_eq!(settled.metadata.expect("metadata").get("matches"), Some(&serde_json::json!(1)));
+}
+
+// ---------------------------------------------------------------------------
+// AUD-08 — chunked reads + per-page binary detection
+// ---------------------------------------------------------------------------
+
+fn line_fill(count: usize, width: usize) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for n in 0..count {
+        let head = format!("line-{n:05}");
+        let pad = width.saturating_sub(head.len() + 1);
+        bytes.extend_from_slice(head.as_bytes());
+        bytes.extend(std::iter::repeat_n(b'x', pad));
+        bytes.push(b'\n');
+    }
+    bytes
+}
+
+#[test]
+fn read_large_file_chunked_memory_shape() {
+    use crate::tool::read::read_file_with;
+    // ~300 KiB of short lines: two 256 KiB chunks.
+    let body = line_fill(6000, 50);
+    let size = body.len() as u64;
+    assert!(size > 256 * 1024, "fixture must span two chunks ({} bytes)", size);
+    let path = PathBuf::from("/tmp/opencode/fake-large.txt");
+
+    // offset=1 with a small limit settles inside the first chunk: exactly
+    // ONE positioned read, never a whole-file load.
+    let mut calls: Vec<(u64, usize)> = Vec::new();
+    let outcome = read_file_with(size, &path, "large.txt", Some(1), Some(100), |start, len| {
+        calls.push((start, len));
+        Ok(body[start as usize..(start as usize + len).min(body.len())].to_vec())
+    })
+    .unwrap();
+    assert_eq!(calls, vec![(0, 256 * 1024)], "single first-chunk read");
+    match &outcome {
+        crate::tool::read::ReadOutput::TextPage { offset, next, truncated, .. } => {
+            assert_eq!(*offset, 1);
+            assert_eq!(*next, Some(101));
+            assert!(*truncated);
+        }
+        other => panic!("expected text page, got {other:?}"),
+    }
+
+    // A page near the end must stream every chunk (2 for 300 KiB) — and
+    // each request stays at the 256 KiB granularity.
+    let mut calls: Vec<(u64, usize)> = Vec::new();
+    read_file_with(size, &path, "large.txt", Some(6000), None, |start, len| {
+        calls.push((start, len));
+        Ok(body[start as usize..(start as usize + len).min(body.len())].to_vec())
+    })
+    .unwrap();
+    assert_eq!(calls, vec![(0, 256 * 1024), (256 * 1024, 256 * 1024)], "chunked walk to eof");
+}
+
+#[test]
+fn read_binary_detection_covers_only_the_consumed_page() {
+    use crate::tool::read::{read_file_with, ReadError, ReadOutput};
+    // 70 KiB text file (single first chunk) with a NUL deep inside —
+    // ref read-filesystem.ts:151-209: the binary flag is computed over
+    // the consumed range, so early pages succeed and only the page whose
+    // consumed span contains the NUL fails.
+    let mut body = line_fill(7000, 10); // 7000 lines, ~17 B each ≈ 119 KiB
+    let nul_line = 6800;
+    // splice a NUL into line `nul_line`
+    let mut line_starts: Vec<usize> = body
+        .iter()
+        .enumerate()
+        .filter_map(|(index, &byte)| (byte == b'\n').then_some(index + 1))
+        .collect();
+    line_starts.insert(0, 0);
+    let splice = line_starts[nul_line - 1];
+    body[splice + 2] = 0;
+    let size = body.len() as u64;
+    assert!(size > 50 * 1024, "paged (>50 KiB): {} bytes", size);
+    let path = PathBuf::from("/tmp/opencode/fake-binary-ish.txt");
+
+    // Page 1 (limit 10): consumed span has no NUL → text page succeeds.
+    let outcome = read_file_with(size, &path, "bin.txt", Some(1), Some(10), |start, len| {
+        Ok(body[start as usize..(start as usize + len).min(body.len())].to_vec())
+    })
+    .unwrap();
+    match &outcome {
+        ReadOutput::TextPage { offset, truncated, .. } => {
+            assert_eq!(*offset, 1);
+            assert!(*truncated);
+        }
+        other => panic!("early page must succeed, got {other:?}"),
+    }
+
+    // A page whose consumed range includes the NUL → BinaryFileError.
+    let error = read_file_with(size, &path, "bin.txt", Some(nul_line as u64), Some(10), |start, len| {
+        Ok(body[start as usize..(start as usize + len).min(body.len())].to_vec())
+    })
+    .unwrap_err();
+    assert_eq!(error, ReadError::Binary("bin.txt".to_string()));
+
+    // Multi-chunk parity: NUL in the SECOND 256 KiB chunk; a first-page
+    // read never touches it (memory shape AND binary scope).
+    let mut big = line_fill(11000, 50); // ≈ 537 KiB — spans three 256 KiB chunks
+    big[300 * 1024] = 0; // inside chunk 2
+    let big_size = big.len() as u64;
+    let outcome =
+        read_file_with(big_size, &path, "big.txt", Some(1), Some(100), |start, len| {
+            Ok(big[start as usize..(start as usize + len).min(big.len())].to_vec())
+        })
+        .unwrap();
+    assert!(matches!(outcome, ReadOutput::TextPage { .. }), "NUL beyond the consumed page is not fatal");
+}
