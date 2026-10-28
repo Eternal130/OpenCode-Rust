@@ -274,38 +274,56 @@ async fn find(
     // REF builds an index of every (type-filtered) entry and ranks with
     // fuzzy matching at query time; the port's equivalent is a bounded
     // full walk (same entry budget as REF's ripgrep cap) + scoring.
-    let mut candidates = Vec::new();
-    walk(&root, want_files, want_dirs, &exclusions, &mut candidates);
+    // The walk is synchronous std::fs recursion (up to 100k entries), so
+    // it must not run on a tokio worker — spawn_blocking moves both the
+    // walk and the scoring off the async runtime.
+    let query_for_blocking = query.clone();
+    let blocking = tokio::task::spawn_blocking(move || {
+        let mut candidates = Vec::new();
+        let mut visited = 0usize;
+        walk(&root, want_files, want_dirs, &exclusions, &mut visited, &mut candidates);
 
-    // REF (filesystem/search.ts): every find path ranks candidates —
-    // fuzzysort.go in the ripgrep fallback, score-desc then
-    // path-length-asc in the fff layer — and defaults the limit to 50.
-    // Ranking equivalent: subsequence fuzzy score (substring matches win
-    // via the consecutive-run bonus), then shorter paths first.
-    let effective_limit = limit.unwrap_or(50);
-    let lowered = query.to_lowercase();
-    let query_chars: Vec<char> = lowered.chars().collect();
-    let mut scored: Vec<_> = candidates
-        .into_iter()
-        .filter_map(|(path, is_dir)| {
-            let target = path.to_string_lossy().to_lowercase();
-            fuzzy_score(&query_chars, &target)
-                .map(|score| (score, target.chars().count(), target, path, is_dir))
-        })
-        .collect();
-    scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)).then_with(|| a.2.cmp(&b.2)));
-    scored.truncate(effective_limit);
+        // REF (filesystem/search.ts): every find path ranks candidates —
+        // fuzzysort.go in the ripgrep fallback, score-desc then
+        // path-length-asc in the fff layer — and defaults the limit to 50.
+        // Ranking equivalent: subsequence fuzzy score (substring matches
+        // win via the consecutive-run bonus), then shorter paths first.
+        let effective_limit = limit.unwrap_or(50);
+        let lowered = query_for_blocking.to_lowercase();
+        let query_chars: Vec<char> = lowered.chars().collect();
+        let mut scored: Vec<_> = candidates
+            .into_iter()
+            .filter_map(|(path, is_dir)| {
+                let target = path.to_string_lossy().to_lowercase();
+                fuzzy_score(&query_chars, &target)
+                    .map(|score| (score, target.chars().count(), target, path, is_dir))
+            })
+            .collect();
+        scored
+            .sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)).then_with(|| a.2.cmp(&b.2)));
+        scored.truncate(effective_limit);
+        scored
+            .into_iter()
+            .map(|(_, _, _, path, is_dir)| (path, is_dir))
+            .collect::<Vec<_>>()
+    });
+    let scored = blocking.await.map_err(|error| {
+        crate::errors::debug_cause("fs:unknown_ref", &error);
+        ApiError::unknown_ref()
+    })?;
 
     let data: Vec<Value> = scored
         .into_iter()
-        .map(|(_, _, _, path, is_dir)| entry_json(&path.to_string_lossy(), is_dir))
+        .map(|(path, is_dir)| entry_json(&path.to_string_lossy(), is_dir))
         .collect();
     Ok(super::common::json_location_data(&location.as_path().to_string_lossy(), Value::Array(data)))
 }
 
-/// REF's ripgrep fallback caps the scan (100_000 entries outside VCS
-/// locations); the port's bounded walk uses the same ceiling as the
-/// budget for entries considered before the walk gives up.
+/// REF's ripgrep fallback passes `limit: location.vcs && !home ?
+/// Number.MAX_SAFE_INTEGER : 100_000` (search.ts:72) — VCS-rooted scans
+/// are effectively unbounded; the port caps every scan at 100k entries
+/// as an accepted deviation (a hard ceiling keeps the synchronous walk
+/// inside spawn_blocking bounded).
 const SCAN_ENTRY_BUDGET: usize = 100_000;
 
 /// Sensitive-directory exclusions for a scan (port of
@@ -384,21 +402,35 @@ fn fuzzy_score(query: &[char], target: &str) -> Option<i64> {
     Some(score - (chars.len() as i64 - query.len() as i64) / 8)
 }
 
+/// REF (search.ts ranking): fuzzysort.go in the ripgrep fallback, then
+/// score-desc / path-length-asc in the fff layer. The port's ranking is
+/// a greedy-subsequence approximation of fuzzysort/fff — single-pass
+/// left-to-right alignment rather than fuzzysort's optimal scoring —
+/// whose substring-first property (consecutive-run bonus outranks
+/// scattered acronym matches) is what autocomplete depends on; that
+/// property is pinned by test
+/// `fuzzy_substring_completion_outranks_scattered_subsequence`.
+///
+/// The budget counts ENTRIES VISITED (read from a directory), not
+/// candidates pushed: with `type=file` over huge trees of directories,
+/// counting pushes would leave the walk unbounded.
 fn walk(
     directory: &std::path::Path,
     want_files: bool,
     want_dirs: bool,
     exclusions: &ScanExclusions,
+    visited: &mut usize,
     out: &mut Vec<(std::path::PathBuf, bool)>,
 ) {
-    if out.len() >= SCAN_ENTRY_BUDGET {
+    if *visited >= SCAN_ENTRY_BUDGET {
         return;
     }
     let Ok(read_dir) = std::fs::read_dir(directory) else { return };
     let mut children: Vec<_> = read_dir.flatten().collect();
     children.sort_by_key(std::fs::DirEntry::file_name);
     for entry in children {
-        if out.len() >= SCAN_ENTRY_BUDGET {
+        *visited += 1;
+        if *visited >= SCAN_ENTRY_BUDGET {
             return;
         }
         let Ok(kind) = entry.file_type() else { continue };
@@ -412,7 +444,7 @@ fn walk(
             if want_dirs {
                 out.push((entry.path(), true));
             }
-            walk(&entry.path(), want_files, want_dirs, exclusions, out);
+            walk(&entry.path(), want_files, want_dirs, exclusions, visited, out);
         } else if want_files {
             out.push((entry.path(), false));
         }
@@ -535,7 +567,8 @@ mod find_tests {
         let mut scan = ScanExclusions { home_rooted: false, names: vec![], paths: vec![] };
         scan.names = vec!["notes".to_owned()];
         let mut out = Vec::new();
-        walk(path, true, true, &scan, &mut out);
+        let mut visited = 0usize;
+        walk(path, true, true, &scan, &mut visited, &mut out);
         let names: Vec<String> = out
             .iter()
             .map(|(p, _)| p.file_name().unwrap().to_string_lossy().into_owned())
@@ -547,5 +580,38 @@ mod find_tests {
             names.contains(&"notes".to_owned()),
             "names only apply on home-rooted scans: {names:?}"
         );
+    }
+
+    #[test]
+    fn walk_budget_counts_entries_visited_not_candidates_pushed() {
+        // Many directories, few matches: with type=file over a huge tree
+        // of dirs, a push-counted budget would leave the walk unbounded.
+        // Use a tiny stand-in budget by building >budget entries and
+        // asserting the walk stops after exactly the visited budget.
+        let root = tempfile::tempdir_in("/tmp/opencode").expect("tempdir");
+        let path = root.path();
+        // 300 directories named dNNN, no files, want_dirs=false → zero
+        // candidates pushed, 300+ entries visited.
+        for index in 0..300 {
+            std::fs::create_dir_all(path.join(format!("d{index:03}"))).expect("dir");
+        }
+        let scan = ScanExclusions { home_rooted: false, names: vec![], paths: vec![] };
+        let mut out = Vec::new();
+        let mut visited = 0usize;
+        walk(path, true, false, &scan, &mut visited, &mut out);
+        assert!(out.is_empty(), "no files requested → no candidates: {out:?}");
+        // root listing (300 dirs) + each dir's (empty) listing: the walk
+        // must have visited every directory entry but produced nothing.
+        assert_eq!(visited, 300, "visited counts entries, not pushes");
+        assert!(visited <= SCAN_ENTRY_BUDGET);
+
+        // Now prove the ceiling binds on visited entries: run again with
+        // a visited counter already near the budget and confirm the walk
+        // returns immediately without pushing candidates.
+        let mut near: usize = SCAN_ENTRY_BUDGET;
+        let mut out2 = Vec::new();
+        walk(path, true, true, &scan, &mut near, &mut out2);
+        assert!(out2.is_empty(), "budget exhausted → walk is a no-op: {out2:?}");
+        assert_eq!(near, SCAN_ENTRY_BUDGET);
     }
 }

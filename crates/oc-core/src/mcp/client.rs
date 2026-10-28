@@ -985,6 +985,15 @@ fn lifecycle_mode(config: &ServerConfig) -> ClientLifecycleMode {
             // v2 "auto" probes for 2026-07-28 first, 2025-11-25 next;
             // the legacy fallback offers the same 2025-11-25 pin get_info
             // carries.
+            // rmcp check (3.7.0, service/client.rs): Auto discover waits
+            // `DEFAULT_AUTO_DISCOVER_TIMEOUT` = 10s before falling back
+            // to legacy. Ref uses @modelcontextprotocol/client 2.0.0
+            // with `{ mode: "auto" }` and no negotiation-level timeout
+            // (client.ts:393-397); its node_modules are absent from the
+            // checkout so any SDK-internal discover timeout is not
+            // inspectable — ref instead bounds the whole connect with
+            // config.timeout?.startup around client.connect
+            // (client.ts:218). No behavioral divergence found.
             preferred_versions: vec![
                 ProtocolVersion::V_2026_07_28,
                 ProtocolVersion::V_2025_11_25,
