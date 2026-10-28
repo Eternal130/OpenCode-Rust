@@ -147,8 +147,11 @@ impl ToolExecuteWithContext for WebFetchExecute {
         Box::pin(async move {
             let input: Input = serde_json::from_value(input)
                 .map_err(|error| ToolFailure::message(format!("Invalid arguments: {error}")))?;
-            // URL must use http:// or https://.
-            if !input.url.starts_with("http://") && !input.url.starts_with("https://") {
+            // URL must use http:// or https://. `new URL(...)` lowercases the
+            // scheme (webfetch.ts:70-72), so `HTTP://` is accepted — compare
+            // case-insensitively.
+            let lowered = input.url.to_ascii_lowercase();
+            if !lowered.starts_with("http://") && !lowered.starts_with("https://") {
                 return Err(ToolFailure {
                     message: format!("Unable to fetch {}", input.url),
                     cause: Some(super::FailureCause::Nested(
