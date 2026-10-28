@@ -16,7 +16,7 @@ use std::sync::Arc;
 use oc_schema::agent::Info as AgentInfo;
 use oc_schema::common::SessionError;
 use oc_schema::id::AgentId;
-use oc_schema::permission::Ruleset;
+use oc_schema::permission::{Effect, Ruleset};
 use oc_schema::session_message::{self as message, Info as MessageInfo};
 use oc_schema::session_support::ProviderContext;
 use rusqlite::OptionalExtension;
@@ -514,9 +514,12 @@ fn codemode_source(tools: Arc<ToolRegistryState>) -> InstructionSource {
 /// `core/mcp-guidance` (mcp/instructions.ts): connected servers render as
 /// `<mcp_instructions>` entries — codemode servers add the `execute`
 /// namespace line — and an empty visible set is an observed absence (the
-/// key stays out of the instruction delta).
+/// key stays out of the instruction delta). The read applies the
+/// `load(permissions)` visibility filter (`visible_mcp_summaries`) with
+/// the caller's merged agent + Session ruleset.
 pub(crate) fn mcp_guidance_source(
-    mcp: Arc<dyn Fn() -> Vec<McpServerSummary> + Send + Sync>,
+    mcp: Arc<dyn Fn() -> Vec<McpServerRaw> + Send + Sync>,
+    permissions: Ruleset,
 ) -> InstructionSource {
     fn entries(servers: &[McpServerSummary]) -> Vec<String> {
         servers
@@ -592,7 +595,7 @@ pub(crate) fn mcp_guidance_source(
     InstructionSource {
         key: "core/mcp-guidance".into(),
         read: Box::new(move || {
-            let servers = (mcp)();
+            let servers = visible_mcp_summaries(&(mcp)(), &permissions);
             if servers.is_empty() {
                 ReadOutcome::Removed
             } else {
@@ -1258,6 +1261,72 @@ pub struct McpServerSummary {
     pub codemode: bool,
 }
 
+/// One MCP tool as the guidance seam sees it (`Mcp.Tool`: name + Code
+/// Mode flag, server implied by the owning [`McpServerRaw`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpToolSummary {
+    pub name: String,
+    /// `tool.codemode !== false` (tool/mcp.ts:45) — `None` = unset.
+    pub codemode: Option<bool>,
+}
+
+/// The raw per-server guidance input (`mcp.instructions()` × `mcp.tools()`
+/// joined on server) BEFORE the permission filter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpServerRaw {
+    pub server: String,
+    pub instructions: String,
+    /// The tools this server owns (`tool.server === item.server`).
+    pub tools: Vec<McpToolSummary>,
+}
+
+/// `McpInstructions.load`'s visibility filter (mcp/instructions.ts:84-104):
+/// a server's guidance is useful only when this Session can reach at
+/// least one of its tools under the merged agent + Session ruleset.
+///
+/// - `canExecute` — a `deny` on `execute`/`*` hides every Code Mode
+///   server (`owned[0]?.codemode !== false`).
+/// - every remaining server needs at least one tool whose namespaced
+///   action (`{namespace(server)}_{tool}`) does not evaluate `deny`.
+/// - survivors sort by server (`localeCompare`).
+#[must_use]
+pub fn visible_mcp_summaries(
+    raw: &[McpServerRaw],
+    permissions: &Ruleset,
+) -> Vec<McpServerSummary> {
+    let rulesets = std::slice::from_ref(permissions);
+    let can_execute =
+        crate::permission::evaluate("execute", "*", &rulesets).effect != Effect::Deny;
+    let mut visible: Vec<McpServerSummary> = raw
+        .iter()
+        .filter_map(|item| {
+            let owned = &item.tools;
+            // `owned[0]?.codemode !== false` — no tools means `codemode`.
+            let codemode = owned.first().map(|tool| tool.codemode != Some(false)).unwrap_or(true);
+            if codemode && !can_execute {
+                return None;
+            }
+            if !owned.iter().any(|tool| {
+                crate::permission::evaluate(
+                    &crate::mcp::registry::tool_name(&item.server, &tool.name),
+                    "*",
+                    &rulesets,
+                )
+                .effect != Effect::Deny
+            }) {
+                return None;
+            }
+            Some(McpServerSummary {
+                server: item.server.clone(),
+                instructions: item.instructions.clone(),
+                codemode,
+            })
+        })
+        .collect();
+    visible.sort_by(|a, b| oc_util::localecmp::locale_cmp(&a.server, &b.server));
+    visible
+}
+
 /// Aux dependency handles the graph supplies (Wave B builtins + discovery
 /// seam; the composition root binds the catalog, MCP summaries, and the
 /// skill table).
@@ -1272,9 +1341,11 @@ pub struct ContextDeps {
     /// The provider catalog (`model.small` for the title fallback; an
     /// empty catalog keeps Wave B's "reuse the primary" behavior).
     pub catalog: Arc<crate::provider_catalog::Catalog>,
-    /// Connected MCP server summaries; empty = observed absence (the
+    /// Connected MCP server guidance (raw per-server instructions ×
+    /// tools); the guidance source applies the session's permission
+    /// filter at read time. Empty visible set = observed absence (the
     /// guidance key stays out of the instruction delta).
-    pub mcp: Arc<dyn Fn() -> Vec<McpServerSummary> + Send + Sync>,
+    pub mcp: Arc<dyn Fn() -> Vec<McpServerRaw> + Send + Sync>,
     /// Available skills (`description` present, autoinvoke enabled); empty
     /// = observed absence.
     pub skills: Arc<dyn Fn() -> Vec<oc_schema::skill::Skill> + Send + Sync>,
@@ -1427,10 +1498,10 @@ impl SessionContext {
     /// The instruction assembly in the cache-friendly order (context.ts
     /// :145-159): codemode → mcp → references → skills → discovery →
     /// builtins (date + env) → entries.
-    async fn instruction_list(&self, session_id: &str) -> InstructionList {
+    async fn instruction_list(&self, session_id: &str, permissions: &Ruleset) -> InstructionList {
         let mut list: InstructionList = vec![
             codemode_source(Arc::clone(&self.tools)),
-            mcp_guidance_source(Arc::clone(&self.deps.mcp)),
+            mcp_guidance_source(Arc::clone(&self.deps.mcp), permissions.clone()),
             reference_guidance_source(),
             skill_guidance_source(Arc::clone(&self.deps.skills)),
             discovery_source(Arc::clone(&self.deps.discovery)),
@@ -1471,7 +1542,7 @@ impl SessionContext {
             Some(&permissions),
             code_mode,
         );
-        let instructions = self.instruction_list(session_id).await;
+        let instructions = self.instruction_list(session_id, &permissions).await;
         Ok(Selection { session, agent_id: selection.id, agent, instructions, tools, permissions })
     }
 

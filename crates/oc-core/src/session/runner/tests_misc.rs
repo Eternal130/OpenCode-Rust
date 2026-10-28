@@ -8,6 +8,7 @@ use std::sync::Arc;
 use oc_ai::schema::messages::{ContentPart, Message};
 use oc_ai::schema::{AiError, AiErrorReason, ReasonFields, Usage};
 use oc_schema::common::{SessionError, TokenUsage, TokenUsageCache};
+use oc_schema::permission::Ruleset;
 
 use crate::session::runner::context::{
     instruction_diff, instruction_hash, instruction_read, render_initial, ReadOutcome,
@@ -777,21 +778,24 @@ fn runner_title_small_model_family_preference_order() {
 
 #[test]
 fn runner_mcp_guidance_renders_the_v2_body() {
-    use crate::session::runner::context::{mcp_guidance_source, McpServerSummary, ReadOutcome};
+    use crate::session::runner::context::{
+        mcp_guidance_source, McpServerRaw, McpToolSummary, ReadOutcome,
+    };
 
-    let summaries = vec![
-        McpServerSummary {
+    let raw = vec![
+        McpServerRaw {
             server: "context7".into(),
             instructions: "Use context7 for library docs.".into(),
-            codemode: true,
+            tools: vec![McpToolSummary { name: "docs".into(), codemode: None }],
         },
-        McpServerSummary {
+        McpServerRaw {
             server: "legacy".into(),
             instructions: "Direct tools only.".into(),
-            codemode: false,
+            tools: vec![McpToolSummary { name: "direct".into(), codemode: Some(false) }],
         },
     ];
-    let source = mcp_guidance_source(Arc::new(move || summaries.clone()));
+    // An empty ruleset evaluates `ask` (not `deny`) — everything visible.
+    let source = mcp_guidance_source(Arc::new(move || raw.clone()), Ruleset::new());
     assert_eq!(source.key, "core/mcp-guidance");
     let ReadOutcome::Value(value) = (source.read)() else {
         panic!("connected servers are an observed value");
@@ -804,8 +808,70 @@ fn runner_mcp_guidance_renders_the_v2_body() {
     );
 
     // Empty = observed absence: the key stays out of the instruction delta.
-    let empty = mcp_guidance_source(Arc::new(Vec::new));
+    let empty = mcp_guidance_source(Arc::new(Vec::new), Ruleset::new());
     assert!(matches!((empty.read)(), ReadOutcome::Removed));
+}
+
+#[test]
+fn runner_mcp_guidance_filters_by_permission() {
+    use crate::session::runner::context::{
+        visible_mcp_summaries, McpServerRaw, McpToolSummary,
+    };
+    use oc_schema::permission::{Effect, Rule, Ruleset};
+
+    let deny = |action: &str| {
+        vec![Rule {
+            action: action.into(),
+            resource: "*".into(),
+            effect: Effect::Deny,
+        }]
+    };
+
+    let raw = vec![
+        // A Code Mode server (unset codemode flag = true).
+        McpServerRaw {
+            server: "context7".into(),
+            instructions: "codemode".into(),
+            tools: vec![McpToolSummary { name: "docs".into(), codemode: None }],
+        },
+        // A direct-only server (`codemode: false`).
+        McpServerRaw {
+            server: "legacy".into(),
+            instructions: "direct".into(),
+            tools: vec![McpToolSummary { name: "direct".into(), codemode: Some(false) }],
+        },
+    ];
+
+    // Baseline: an empty ruleset evaluates `ask` — both visible.
+    let visible = visible_mcp_summaries(&raw, &Ruleset::new());
+    assert_eq!(visible.len(), 2);
+    assert!(visible[0].codemode);
+    assert!(!visible[1].codemode);
+
+    // `deny execute` hides every Code Mode server but keeps direct-only
+    // ones (instructions.ts:84-90).
+    let visible = visible_mcp_summaries(&raw, &deny("execute"));
+    assert_eq!(visible.len(), 1);
+    assert_eq!(visible[0].server, "legacy");
+    assert!(!visible[0].codemode, "codemode: false servers keep their direct tools");
+
+    // Denying the namespaced tool action hides the server even though
+    // `execute` is allowed (instructions.ts:91-97).
+    let visible = visible_mcp_summaries(&raw, &deny("context7_docs"));
+    assert_eq!(visible.len(), 1);
+    assert_eq!(visible[0].server, "legacy");
+
+    // A server with NO tools is never visible (`owned.some` is false,
+    // instructions.ts:91-97).
+    let toolless = vec![McpServerRaw {
+        server: "empty".into(),
+        instructions: "no tools".into(),
+        tools: Vec::new(),
+    }];
+    assert!(visible_mcp_summaries(&toolless, &Ruleset::new()).is_empty());
+
+    // Denying everything removes the guidance entirely (observed absence).
+    assert!(visible_mcp_summaries(&raw, &deny("*")).is_empty());
 }
 
 // -- session.retry mutation write-back (D-03: by-reference parity) ---------
