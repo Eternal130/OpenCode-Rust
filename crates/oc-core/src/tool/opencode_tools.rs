@@ -443,7 +443,9 @@ impl ToolExecuteWithContext for ModelsExecute {
             let output = self.list(&query, own.as_deref());
             Ok(ToolOutcome {
                 content: vec![oc_schema::tool::Content::Text {
-                    text: serde_json::to_string_pretty(&output).unwrap_or_default(),
+                    // `normalizeContent` stringifies output-only results with
+                    // compact `JSON.stringify` (runtime.ts:265-269).
+                    text: serde_json::to_string(&output).unwrap_or_default(),
                 }],
                 metadata: None,
                 output: Some(serde_json::to_value(&output).unwrap_or_default()),

@@ -138,6 +138,11 @@ pub struct CatalogEntry {
     /// the lowest-tier match surface of the `search` builtin (our
     /// namespaces carry no descriptions, exactly the v2 rows here).
     pub search_text: String,
+    /// `options.pinned` — pinned listings are always shown in the summary
+    /// (prepaid against the inline budget, excluded from the round-robin;
+    /// catalog.ts:79-90). The sole v2 registration with `pinned: true` is
+    /// `opencode.session_move` (opencode.ts:115).
+    pub pinned: bool,
 }
 
 /// `qualifiedName` (codemode/tool.ts:296-300) over a registration.
@@ -176,11 +181,12 @@ pub fn code_mode_entries(tools: &ToolRegistryState) -> Vec<CatalogEntry> {
         .snapshot(None)
         .iter()
         .filter(|tool| tool.codemode)
-        .map(|tool| CatalogEntry {
-            path: qualified_path(tool),
-            description: tool.description.clone(),
-            signature: signature(&qualified_path(tool), &tool.description, &tool.input),
-            search_text: search_text(&qualified_path(tool), &tool.description, &tool.input),
+        .map(|tool| {
+            let path = qualified_path(tool);
+            let pinned = path == "opencode.session_move";
+            let signature = signature(&path, &tool.description, &tool.input);
+            let search_text = search_text(&path, &tool.description, &tool.input);
+            CatalogEntry { pinned, path, description: tool.description.clone(), signature, search_text }
         })
         .collect()
 }
@@ -585,8 +591,9 @@ fn listing_line(entry: &CatalogEntry) -> String {
 /// `CodeModeCatalog.summarize` (catalog.ts:54-140): group by the first
 /// path segment (sorted), then select full listings shortest-first, one
 /// per namespace per round, until the inline budget is spent. Pinned
-/// listings don't exist here (registrations carry no `pinned` option),
-/// so every listing rides the round-robin.
+/// listings (`options.pinned`, e.g. `opencode.session_move`) are always
+/// selected — prepaid against the budget, excluded from the round-robin
+/// (catalog.ts:79-90, 113-120).
 #[must_use]
 pub fn catalog_summary(entries: &[CatalogEntry]) -> CatalogSummary {
     // Group by the first path segment (Map.groupBy over split(".", 1)).
@@ -606,21 +613,32 @@ pub fn catalog_summary(entries: &[CatalogEntry]) -> CatalogSummary {
         .into_iter()
         .map(|(name, group)| {
             // Listings sorted by path inside the namespace.
+            let pinned_paths: std::collections::HashSet<&str> =
+                group.iter().filter(|entry| entry.pinned).map(|entry| entry.path.as_str()).collect();
             let mut listings: Vec<Listing> = group
                 .iter()
                 .map(|entry| Listing { path: entry.path.clone(), line: listing_line(entry) })
                 .collect();
             listings.sort_by(|left, right| left.path.cmp(&right.path));
+            // Pinned listings are always selected (catalog.ts:84-90): seed
+            // them into `selected` and drop them from the rotation.
+            let pinned: Vec<usize> = listings
+                .iter()
+                .enumerate()
+                .filter(|(_, listing)| pinned_paths.contains(listing.path.as_str()))
+                .map(|(at, _)| at)
+                .collect();
+            let selected = pinned.clone();
             // Selection order: cost ascending, then path (already sorted
-            // stably by index = path order).
-            let mut ranked: Vec<usize> = (0..listings.len()).collect();
+            // stably by index = path order), pinned excluded.
+            let mut ranked: Vec<usize> = (0..listings.len()).filter(|at| !pinned.contains(at)).collect();
             ranked.sort_by_key(|&at| cost(&listings[at].line));
-            Round { name, listings, ranked, selected: Vec::new(), index: 0 }
+            Round { name, listings, ranked, selected, index: 0 }
         })
         .collect();
 
-    // Budget: namespace lines (with no entries shown) first, then the
-    // round-robin over ranked listings.
+    // Budget: namespace lines (with no entries shown) and the pinned
+    // listings first, then the round-robin over ranked listings.
     let head = rounds
         .iter()
         .map(|round| {
@@ -629,7 +647,7 @@ pub fn catalog_summary(entries: &[CatalogEntry]) -> CatalogSummary {
                 description: None,
                 count: round.listings.len(),
                 entries: Vec::new(),
-            }))
+            })) + round.selected.iter().map(|&at| cost(&round.listings[at].line)).sum::<usize>()
         })
         .sum::<usize>();
     let mut remaining = INLINE_BUDGET.saturating_sub(head);
@@ -821,6 +839,7 @@ pub fn catalog_instructions(tools: &ToolRegistryState) -> String {
             hasher.update([0u8]);
             hasher.update(entry.search_text.as_bytes());
             hasher.update([0u8]);
+            hasher.update([u8::from(entry.pinned)]);
         }
         format!("{:x}", hasher.finalize())
     };
@@ -1409,6 +1428,7 @@ mod tests {
             description: description.to_string(),
             signature: signature(path, description, &input),
             search_text: search_text(path, description, &input),
+            pinned: false,
         }
     }
 
@@ -1568,6 +1588,38 @@ mod tests {
         assert_eq!(
             instructions_from_value(&value),
             render_instructions(&summary_from_value(&value).unwrap())
+        );
+    }
+
+    #[test]
+    fn pinned_listing_is_always_shown_and_excluded_from_rotation() {
+        // catalog.ts:79-90/113-120: a pinned listing rides outside the
+        // round-robin — even with a zero remaining budget it stays selected.
+        let mut many: Vec<CatalogEntry> = (0..200)
+            .map(|index| {
+                let path = format!("opencode.tool{index:03}");
+                let description = format!("tool number {index} with a description");
+                let input = json!({ "type": "object", "properties": {} });
+                entry(&path, &description, input)
+            })
+            .collect();
+        let mut session_move = entry(
+            "opencode.session_move",
+            "Move a session to another directory, or omit sessionID to move the current session.",
+            json!({ "type": "object", "properties": {} }),
+        );
+        session_move.pinned = true;
+        many.push(session_move);
+        let summary = catalog_summary(&many);
+        assert!(summary.shown < summary.total, "budget engages");
+        let namespace = summary
+            .namespaces
+            .iter()
+            .find(|namespace| namespace.name == "opencode")
+            .expect("opencode namespace");
+        assert!(
+            namespace.entries.iter().any(|listing| listing.path == "opencode.session_move"),
+            "pinned session_move survives the budget: {namespace:?}"
         );
     }
 }

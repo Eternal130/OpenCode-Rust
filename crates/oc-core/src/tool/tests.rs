@@ -702,9 +702,17 @@ async fn tool_read_missing_file_suggestions_exact() {
         call(&harness.tools, "read", serde_json::json!({ "path": "__missing_read_target__.txt" }))
             .await
             .expect_err("missing");
+    let message = error_message(&failure);
+    // Suggestion order follows raw readdir order (v2 read.ts:154 — unsorted);
+    // both files always match, so assert the set order-insensitively.
+    assert!(message.starts_with(
+        "File not found: __missing_read_target__.txt\n\nDid you mean one of these?\n"
+    ));
+    let mut suggestions: Vec<&str> = message.lines().skip(3).collect();
+    suggestions.sort_unstable();
     assert_eq!(
-        error_message(&failure),
-        "File not found: __missing_read_target__.txt\n\nDid you mean one of these?\ncopy___missing_read_target__.txt\nold___missing_read_target__.txt"
+        suggestions,
+        vec!["copy___missing_read_target__.txt", "old___missing_read_target__.txt"]
     );
     // No suggestions ⇒ bare message.
     let failure = call(&harness.tools, "read", serde_json::json!({ "path": "nowhere.txt" }))

@@ -502,11 +502,13 @@ fn missing(input: &str, absolute: &Path) -> ToolFailure {
     let parent = absolute.parent().unwrap_or_else(|| Path::new("/"));
     let mut suggestions: Vec<String> = Vec::new();
     if let Ok(entries) = std::fs::read_dir(parent) {
-        let mut names: Vec<String> = entries
+        // v2 iterates `fs.readDirectory` (raw `readdir` order, read.ts:154 —
+        // no sort); `std::fs::read_dir` yields the same dirent order, so the
+        // suggestion order matches the reference byte-for-behavior.
+        let names: Vec<String> = entries
             .flatten()
             .map(|entry| entry.file_name().to_string_lossy().into_owned())
             .collect();
-        names.sort();
         for name in names {
             let candidate = name.to_lowercase();
             if candidate.contains(&base) || base.contains(&candidate) {
