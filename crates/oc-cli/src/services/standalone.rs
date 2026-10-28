@@ -27,6 +27,20 @@ pub struct StandaloneServer {
 }
 
 impl StandaloneServer {
+    /// Test-only instance (no child process) for exercising lease-dependent
+    /// logic without spawning a server.
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub(crate) fn test_stub(url: &str) -> StandaloneServer {
+        StandaloneServer {
+            url: url.to_owned(),
+            password: String::new(),
+            stdin: None,
+            child: None,
+            exited: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
     /// The lease endpoint as an authed endpoint pair.
     #[must_use]
     pub fn endpoint(&self) -> super::server_connection::Endpoint {

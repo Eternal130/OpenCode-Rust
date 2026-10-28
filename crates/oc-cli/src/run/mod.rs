@@ -442,11 +442,50 @@ async fn run_inner(input: RunInput) -> Result<i32, String> {
         thinking: input.thinking,
         format: input.format,
         auto: input.auto,
-        // The standalone `run` spins up (or exclusively owns) its server;
-        // global-location forms belong to this run alone.
-        attached: false,
+        // Ref `attached: options.attached ?? true`: shared servers (explicit
+        // `--server`, managed service) get `attached: true` so global forms
+        // belonging to other sessions are left alone; only the standalone
+        // exclusive server keeps `attached: false`.
+        attached: attached(input.server.standalone.as_ref()),
     };
     Ok(noninteractive::run_prompt(prompt).await)
+}
+
+/// Ref `ExecutionOptions.attached ?? true` (run.ts:149): a client talking
+/// to a shared server (explicit `--server <url>` target or the managed
+/// background service) must not sweep/cancel global forms that may belong
+/// to other sessions on the same daemon. Only the standalone exclusive
+/// server (spawned for, and owned by, this run) is safe to sweep, so it
+/// keeps `attached: false`.
+fn attached(standalone: Option<&crate::services::standalone::StandaloneServer>) -> bool {
+    standalone.is_none()
+}
+
+#[cfg(test)]
+mod attached_tests {
+    use super::attached;
+    use crate::services::standalone::StandaloneServer;
+
+    #[test]
+    fn explicit_server_target_defaults_to_attached() {
+        // `run --server <url>`: shared daemon, ref default `attached: true`.
+        assert!(attached(None), "--server shared target must be attached");
+    }
+
+    #[test]
+    fn managed_service_defaults_to_attached() {
+        // The managed background service is shared like an explicit target.
+        assert!(attached(None), "managed service client must be attached");
+    }
+
+    #[test]
+    fn standalone_lease_stays_detached() {
+        // The exclusive standalone server is this run's alone; the existing
+        // behavior (global-form sweep allowed) is pinned by
+        // `attached_client_leaves_global_forms_alone` in noninteractive.rs.
+        let server = StandaloneServer::test_stub("http://127.0.0.1:1");
+        assert!(!attached(Some(&server)), "standalone client must stay detached");
+    }
 }
 
 #[cfg(test)]
