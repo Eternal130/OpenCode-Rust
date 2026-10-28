@@ -99,6 +99,7 @@ pub struct Project {
 /// `Project.UpdateInput`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ProjectUpdateInput {
+    #[serde(rename = "projectID", alias = "project_id")]
     pub project_id: ProjectId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub canonical: Option<AbsolutePath>,
