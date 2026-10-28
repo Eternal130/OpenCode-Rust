@@ -64,12 +64,12 @@ use oc_ai::route::client::RoutePatch;
 use oc_ai::schema::options::{merge_json_records, merge_string_records};
 
 use crate::database::schema::SessionRow;
+use crate::provider_catalog::Catalog;
 use crate::provider_catalog::facade::{
-    custom_language_model, language_model_for_model, CustomModel, CustomProvider, FacadeContext,
-    ModelConnection,
+    CustomModel, CustomProvider, FacadeContext, ModelConnection, custom_language_model,
+    language_model_for_model,
 };
 use crate::provider_catalog::native::package_name;
-use crate::provider_catalog::Catalog;
 use crate::session::runner::{ModelError, ModelResolver, ResolvedModel};
 
 /// The production resolver: catalog + user connections + custom

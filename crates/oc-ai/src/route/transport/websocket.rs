@@ -1332,8 +1332,8 @@ pub mod tungstenite_connector {
     //! transport-error taxonomy.
 
     use super::{
-        annotate_transport_error, transport_error, CloseFn, SendFn, WebSocketConnection,
-        WebSocketConnector, WebSocketMessage, WebSocketRequest,
+        CloseFn, SendFn, WebSocketConnection, WebSocketConnector, WebSocketMessage,
+        WebSocketRequest, annotate_transport_error, transport_error,
     };
     use crate::schema::{AiError, TransportDelivery, TransportOperation, TransportPhase};
     use async_trait::async_trait;
@@ -1341,7 +1341,7 @@ pub mod tungstenite_connector {
     use std::sync::Arc;
     use tokio::sync::Mutex;
     use tokio_tungstenite::tungstenite::{
-        client::IntoClientRequest, handshake::client::generate_key, http, Message,
+        Message, client::IntoClientRequest, handshake::client::generate_key, http,
     };
 
     /// Connector over tokio-tungstenite (ws:// and wss://).
