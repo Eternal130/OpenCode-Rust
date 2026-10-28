@@ -24,6 +24,7 @@ pub mod fork;
 pub mod inbox;
 pub mod message_updater;
 pub mod projector;
+pub mod prompt;
 pub mod revert;
 pub mod runner;
 pub mod store;
@@ -35,6 +36,8 @@ mod tests;
 mod tests_diff;
 #[cfg(test)]
 mod tests_parity;
+#[cfg(test)]
+mod tests_prompt_attachment;
 #[cfg(test)]
 mod tests_transfer;
 pub mod transfer;

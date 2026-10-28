@@ -126,7 +126,9 @@ use crate::session::execution::{InterruptOptions, SessionExecution};
 use crate::session::inbox::SessionInbox;
 use crate::session::projector::install_projectors;
 use crate::session::runner::compaction::SessionCompaction;
-use crate::session::runner::context::{ContextDeps, McpServerSummary, SessionContext};
+use crate::session::runner::context::{
+    ContextDeps, McpServerRaw, McpToolSummary, SessionContext,
+};
 use crate::session::runner::drain::SessionRunner;
 use crate::session::runner::model_request::{AppMetadata, SessionModelRequest};
 use crate::session::runner::prompt_prepare::PromptPrepare;
@@ -1040,8 +1042,15 @@ impl Engine {
         let (bundle_shutdown, mut cache_shutdown) = tokio::sync::watch::channel(false);
         let mut reconcile_shutdown = cache_shutdown.clone();
 
-        // The MCP summary cache feeding the context guidance source.
-        let mcp_cache: Arc<parking_lot::Mutex<Vec<McpServerSummary>>> =
+        // The MCP summary cache feeding the context guidance source: the
+        // raw per-server instructions × tool snapshots (name + codemode
+        // flag). The ref fetches both per `load(permissions)` call
+        // (mcp/instructions.ts:81-83); the refresh loop keeps the raw
+        // pairing fresh (≤500ms staleness) while the permission filter
+        // runs at instruction-read time with each session's merged
+        // ruleset — tightened permissions cannot leak server guidance
+        // into the system prompt.
+        let mcp_cache: Arc<parking_lot::Mutex<Vec<McpServerRaw>>> =
             Arc::new(parking_lot::Mutex::new(Vec::new()));
         let mcp_for_cache = mcp.clone();
         let cache_for_refresh = Arc::clone(&mcp_cache);
@@ -1051,10 +1060,24 @@ impl Engine {
                     .instructions()
                     .await
                     .into_iter()
-                    .map(|item| McpServerSummary {
-                        server: item.server,
-                        instructions: item.instructions,
-                        codemode: true,
+                    .map(|item| {
+                        // The owning server's tools (`tool.server ===
+                        // item.server`, instructions.ts:88) with their
+                        // per-tool codemode flags.
+                        let tools = mcp_for_cache
+                            .tools()
+                            .into_iter()
+                            .filter(|tool| tool.server == item.server)
+                            .map(|tool| McpToolSummary {
+                                name: tool.name,
+                                codemode: tool.codemode,
+                            })
+                            .collect::<Vec<_>>();
+                        McpServerRaw {
+                            server: item.server,
+                            instructions: item.instructions,
+                            tools,
+                        }
                     })
                     .collect::<Vec<_>>();
                 *cache_for_refresh.lock() = summaries;
