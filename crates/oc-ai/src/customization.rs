@@ -101,7 +101,11 @@ impl AnthropicBodyWrap<'_> {
 impl ProviderCustomization {
     /// The no-op customization: every hook unset, generic behavior everywhere.
     pub const fn noop() -> Self {
-        Self { auto_cache_policy: None, chat_metadata_key: None, wrap_anthropic_body: None }
+        Self {
+            auto_cache_policy: None,
+            chat_metadata_key: None,
+            wrap_anthropic_body: None,
+        }
     }
 
     /// Apply the `auto_cache_policy` hook if the entry sets one.
@@ -215,7 +219,9 @@ fn meta_wrap(wrap: &mut AnthropicBodyWrap<'_>) -> Result<(), AiError> {
         };
         if search.get("type").and_then(Value::as_str) != Some("web_search") {
             let found = search.get("type").map_or_else(|| "undefined".into(), Value::to_string);
-            return Err(invalid_request(format!("Expected \"web_search\", received {found}")));
+            return Err(invalid_request(format!(
+                "Expected \"web_search\", received {found}"
+            )));
         }
         if let Some(size) = search.get("search_context_size") {
             if size.as_str().is_none() {
@@ -280,7 +286,9 @@ fn want_tool_string(value: Option<&Value>) -> Result<String, AiError> {
 }
 
 fn want_number(value: &Value) -> Result<f64, AiError> {
-    value.as_f64().ok_or_else(|| invalid_request(format!("Expected a number, received {value}")))
+    value
+        .as_f64()
+        .ok_or_else(|| invalid_request(format!("Expected a number, received {value}")))
 }
 
 /// `Schema.Int` check (ref alibaba-messages.ts:13-14): the thinking budget
@@ -288,7 +296,9 @@ fn want_number(value: &Value) -> Result<f64, AiError> {
 fn want_integer(value: &Value) -> Result<f64, AiError> {
     let number = want_number(value)?;
     if number.fract() != 0.0 {
-        return Err(invalid_request(format!("Expected an integer, received {value}")));
+        return Err(invalid_request(format!(
+            "Expected an integer, received {value}"
+        )));
     }
     Ok(number)
 }
@@ -467,10 +477,7 @@ mod rw01_tests {
         }
         register(
             "acme-anthropic",
-            ProviderCustomization {
-                wrap_anthropic_body: Some(wrap),
-                ..ProviderCustomization::noop()
-            },
+            ProviderCustomization { wrap_anthropic_body: Some(wrap), ..ProviderCustomization::noop() },
         );
         assert!(for_route("acme-anthropic").wrap_anthropic_body.is_some());
     }
@@ -554,7 +561,11 @@ mod rw2fix_tests {
             body: &mut body,
         };
         let error = alibaba_wrap(&mut context).expect_err("fractional budget rejected");
-        assert!(error.message().contains("integer"), "unexpected message: {}", error.message());
+        assert!(
+            error.message().contains("integer"),
+            "unexpected message: {}",
+            error.message()
+        );
         // integers keep working
         let raw = serde_json::json!({"type": "enabled", "budgetTokens": 1024});
         let mut body = serde_json::json!({"max_tokens": 4096});

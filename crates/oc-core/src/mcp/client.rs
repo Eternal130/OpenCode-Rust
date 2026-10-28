@@ -985,12 +985,15 @@ fn lifecycle_mode(config: &ServerConfig) -> ClientLifecycleMode {
             // v2 "auto" probes for 2026-07-28 first, 2025-11-25 next;
             // the legacy fallback offers the same 2025-11-25 pin get_info
             // carries.
-            preferred_versions: vec![ProtocolVersion::V_2026_07_28, ProtocolVersion::V_2025_11_25],
+            preferred_versions: vec![
+                ProtocolVersion::V_2026_07_28,
+                ProtocolVersion::V_2025_11_25,
+            ],
             legacy_version: Some(ProtocolVersion::V_2025_11_25),
         },
-        Some(Protocol::Dated) => ClientLifecycleMode::Discover {
-            preferred_versions: vec![ProtocolVersion::V_2026_07_28],
-        },
+        Some(Protocol::Dated) => {
+            ClientLifecycleMode::Discover { preferred_versions: vec![ProtocolVersion::V_2026_07_28] }
+        }
     }
 }
 
@@ -1260,10 +1263,7 @@ fn connect_failure(server: &str, error: &dyn std::error::Error) -> ConnectFailur
 /// The `UnsupportedProtocolVersionError` mapping (client.ts:376-380): a
 /// pin (or discover negotiation) the server cannot satisfy fails with
 /// v2's remediation hint naming the server's supported revisions.
-fn unsupported_protocol_message(
-    server: &str,
-    error: &rmcp::service::ClientInitializeError,
-) -> Option<String> {
+fn unsupported_protocol_message(server: &str, error: &rmcp::service::ClientInitializeError) -> Option<String> {
     let rmcp::service::ClientInitializeError::NoCompatibleProtocolVersion {
         client_supported,
         server_supported,
@@ -1271,10 +1271,16 @@ fn unsupported_protocol_message(
     else {
         return None;
     };
-    let supported =
-        server_supported.iter().map(|version| version.as_str()).collect::<Vec<_>>().join(", ");
-    let offered =
-        client_supported.iter().map(|version| version.as_str()).collect::<Vec<_>>().join(", ");
+    let supported = server_supported
+        .iter()
+        .map(|version| version.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let offered = client_supported
+        .iter()
+        .map(|version| version.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
     Some(format!(
         "Unsupported protocol version for \"{server}\": the client offered {offered}, \
          the server supports {supported}. \

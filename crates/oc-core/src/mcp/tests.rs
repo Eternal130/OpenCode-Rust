@@ -320,7 +320,10 @@ fn respond(
             };
             let mut result = rmcp::model::DiscoverResult::new(supported, Default::default());
             result.set_server_info(rmcp::model::Implementation::new("mock", "1"));
-            Some(JsonRpcMessage::response(ServerResult::DiscoverResult(result), id))
+            Some(JsonRpcMessage::response(
+                ServerResult::DiscoverResult(result),
+                id,
+            ))
         }
         ClientRequest::ListToolsRequest(_) => {
             response(serde_json::json!({ "tools": *script.tools.lock() }), id)
@@ -426,8 +429,13 @@ async fn connect_mock_config(
     config: &ServerConfig,
 ) -> Result<client::Connection, client::ConnectFailure> {
     let (transport, _mock) = mock_pair(script);
-    let input =
-        ConnectInput { server: "mock", config, directory: "/tmp", bearer: None, elicitation: None };
+    let input = ConnectInput {
+        server: "mock",
+        config,
+        directory: "/tmp",
+        bearer: None,
+        elicitation: None,
+    };
     client::connect_with_transport(&input, transport, false).await
 }
 
@@ -773,10 +781,12 @@ async fn mcp_client_pin_requires_the_declared_version() {
         discover_supported: Some(vec![rmcp::model::ProtocolVersion::V_2026_07_28]),
         ..Script::new()
     };
-    let connection =
-        connect_mock_config(script, &protocol_config(Some(oc_schema::mcp::Protocol::Dated)))
-            .await
-            .expect("pinned version connect");
+    let connection = connect_mock_config(
+        script,
+        &protocol_config(Some(oc_schema::mcp::Protocol::Dated)),
+    )
+    .await
+    .expect("pinned version connect");
     assert!(connection.tools().await.expect("tools").is_empty());
 }
 
@@ -788,12 +798,16 @@ async fn mcp_client_pin_against_older_server_fails_with_the_hint() {
         discover_supported: Some(vec![rmcp::model::ProtocolVersion::V_2025_11_25]),
         ..Script::new()
     };
-    let error =
-        connect_mock_config(script, &protocol_config(Some(oc_schema::mcp::Protocol::Dated)))
-            .await
-            .err()
-            .expect("the pin must not negotiate down");
-    let client::ConnectFailure::Connect(error) = error else { panic!("expected a connect error") };
+    let error = connect_mock_config(
+        script,
+        &protocol_config(Some(oc_schema::mcp::Protocol::Dated)),
+    )
+    .await
+    .err()
+    .expect("the pin must not negotiate down");
+    let client::ConnectFailure::Connect(error) = error else {
+        panic!("expected a connect error")
+    };
     assert!(
         error.message.contains("the server supports 2025-11-25"),
         "the hint names the server's versions: {}",

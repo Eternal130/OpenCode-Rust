@@ -2553,29 +2553,27 @@ async fn preserves_a_reasoning_signature_when_message_stop_closes_the_block() {
 // =============================================================================
 
 fn provider_model(provider: &str, id: &str) -> LanguageModel {
-    anthropic_messages_route(Arc::new(FailingTransport { message: "unit test route" }))
-        .with(RoutePatch {
+    anthropic_messages_route(Arc::new(FailingTransport { message: "unit test route" })).with(
+        RoutePatch {
             provider: Some(provider.into()),
             endpoint: Some(EndpointPatch {
                 base_url: Some("https://provider.test/v1/".into()),
                 ..Default::default()
             }),
             ..Default::default()
-        })
-        .model(id, None)
-        .expect("model builds")
+        },
+    )
+    .model(id, None)
+    .expect("model builds")
 }
 
 #[test]
 fn alibaba_messages_accepts_enabled_thinking_without_a_budget() {
     let model = provider_model("alibaba", "qwen3.5-flash");
     let mut request = base_request(model);
-    request.provider_options = Some(
-        serde_json::from_value(json!({
-            "thinking": {"type": "enabled"}
-        }))
-        .unwrap(),
-    );
+    request.provider_options = Some(serde_json::from_value(json!({
+        "thinking": {"type": "enabled"}
+    })).unwrap());
     let body = compile(&request).unwrap();
     assert_eq!(body["thinking"], json!({"type": "enabled"}));
 }
@@ -2584,20 +2582,16 @@ fn alibaba_messages_accepts_enabled_thinking_without_a_budget() {
 fn alibaba_messages_fits_an_explicit_budget_against_max_tokens() {
     let model = provider_model("alibaba", "qwen3.5-flash");
     let mut request = base_request(model);
-    request.generation =
-        Some(GenerationOptions { max_tokens: Some(30_000.0), ..Default::default() });
-    request.provider_options = Some(
-        serde_json::from_value(json!({"thinking": {"type": "enabled", "budgetTokens": 20_000}}))
-            .unwrap(),
-    );
+    request.generation = Some(GenerationOptions {
+        max_tokens: Some(30_000.0),
+        ..Default::default()
+    });
+    request.provider_options = Some(serde_json::from_value(json!({"thinking": {"type": "enabled", "budgetTokens": 20_000}})).unwrap());
     let body = compile(&request).unwrap();
     assert_eq!(body["thinking"], json!({"type": "enabled", "budget_tokens": 15_000}));
 
     // the wire spelling `budget_tokens` is accepted too
-    request.provider_options = Some(
-        serde_json::from_value(json!({"thinking": {"type": "enabled", "budget_tokens": 10_000}}))
-            .unwrap(),
-    );
+    request.provider_options = Some(serde_json::from_value(json!({"thinking": {"type": "enabled", "budget_tokens": 10_000}})).unwrap());
     let body = compile(&request).unwrap();
     assert_eq!(body["thinking"], json!({"type": "enabled", "budget_tokens": 10_000}));
 }
@@ -2614,8 +2608,7 @@ fn alibaba_messages_without_thinking_omits_the_key() {
 fn zai_messages_accepts_enabled_thinking_without_a_budget() {
     let model = provider_model("zai-coding-plan", "glm-5.2");
     let mut request = base_request(model);
-    request.provider_options =
-        Some(serde_json::from_value(json!({"thinking": {"type": "enabled"}})).unwrap());
+    request.provider_options = Some(serde_json::from_value(json!({"thinking": {"type": "enabled"}})).unwrap());
     let body = compile(&request).unwrap();
     assert_eq!(body["thinking"], json!({"type": "enabled"}));
 
@@ -2649,15 +2642,13 @@ fn meta_messages_remaps_native_meta_to_web_search() {
     let model = provider_model("meta", "llama-4-maverick");
     let mut request = base_request(model);
     let mut search = ToolDefinition::new("web_search", "Search the web", json!({"type": "object"}));
-    search.native = Some(
-        serde_json::from_value(json!({
+    search.native = Some(serde_json::from_value(json!({
             "meta": {
                 "type": "web_search",
                 "user_location": {"type": "approximate", "city": "Shanghai", "country": "CN"}
             }
-        }))
-        .unwrap(),
-    );
+        })
+        ).unwrap());
     let plain = ToolDefinition::new("lookup", "Look things up", json!({"type": "object"}));
     request = request.with_tool(search).with_tool(plain);
     let body = compile(&request).unwrap();
@@ -2681,10 +2672,8 @@ fn meta_messages_rejects_search_context_size() {
     let mut request = base_request(model);
     let mut search = ToolDefinition::new("web_search", "Search the web", json!({"type": "object"}));
     search.native = Some(
-        serde_json::from_value(
-            json!({"meta": {"type": "web_search", "search_context_size": "medium"}}),
-        )
-        .unwrap(),
+        serde_json::from_value(json!({"meta": {"type": "web_search", "search_context_size": "medium"}}))
+            .unwrap(),
     );
     request = request.with_tool(search);
     let error = compile(&request).unwrap_err();

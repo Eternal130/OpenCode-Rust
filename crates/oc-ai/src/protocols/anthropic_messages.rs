@@ -1657,8 +1657,10 @@ pub fn body_from_request(request: &LLMRequest) -> Result<Value, AiError> {
     let raw_thinking;
     let request: &LLMRequest = if wrap.is_some() {
         let mut next = request.clone();
-        raw_thinking =
-            next.provider_options.as_mut().and_then(|options| options.remove("thinking"));
+        raw_thinking = next
+            .provider_options
+            .as_mut()
+            .and_then(|options| options.remove("thinking"));
         stripped = next;
         &stripped
     } else {
