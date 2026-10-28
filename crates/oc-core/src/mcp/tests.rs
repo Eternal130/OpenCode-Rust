@@ -1831,3 +1831,74 @@ fn mcp_elicitation_field_conversion_rules() {
         Field::Integer { minimum: Some(1.0), maximum: Some(9.0), required: Some(true), .. }
     ));
 }
+
+// ---------------------------------------------------------------------------
+// stdio environment construction (local spawner parity)
+// ---------------------------------------------------------------------------
+
+/// Pins the local stdio env semantics to the ref's `extendEnv: true`
+/// behavior (`{ ...process.env, ...opts.env }` in the cross-spawn
+/// spawner): the host environment is inherited in full, `BUN_BE_BUN=1`
+/// is layered on for `opencode` commands, and the server config's
+/// `environment` overrides host values on collision.
+mod stdio_environment {
+    use super::client::stdio_environment;
+    use std::collections::BTreeMap;
+
+    fn host() -> Vec<(String, String)> {
+        vec![
+            ("PATH".to_string(), "/usr/bin".to_string()),
+            ("HOME".to_string(), "/home/user".to_string()),
+            ("OPENCODE_HOST".to_string(), "leaked".to_string()),
+            ("BUN_BE_BUN".to_string(), "host-value".to_string()),
+        ]
+    }
+
+    #[test]
+    fn inherits_host_environment_in_full() {
+        // Nothing is stripped: PATH, HOME, and unknown host vars all cross.
+        let env = stdio_environment(host(), "npx", None);
+        assert_eq!(env.get("PATH").map(String::as_str), Some("/usr/bin"));
+        assert_eq!(env.get("HOME").map(String::as_str), Some("/home/user"));
+        assert_eq!(env.get("OPENCODE_HOST").map(String::as_str), Some("leaked"));
+        // Not an opencode command: no BUN_BE_BUN is injected, but a host
+        // value (if any) survives untouched.
+        assert_eq!(env.get("BUN_BE_BUN").map(String::as_str), Some("host-value"));
+    }
+
+    #[test]
+    fn opencode_command_gets_bun_be_bun() {
+        let env = stdio_environment(host(), "opencode", None);
+        assert_eq!(env.get("BUN_BE_BUN").map(String::as_str), Some("1"));
+        // The rest of the host env is untouched.
+        assert_eq!(env.get("PATH").map(String::as_str), Some("/usr/bin"));
+    }
+
+    #[test]
+    fn config_environment_overrides_host_values() {
+        let mut config = BTreeMap::new();
+        config.insert("PATH".to_string(), "/custom/bin".to_string());
+        config.insert("MCP_VAR".to_string(), "set".to_string());
+        let env = stdio_environment(host(), "npx", Some(&config));
+        assert_eq!(env.get("PATH").map(String::as_str), Some("/custom/bin"));
+        assert_eq!(env.get("MCP_VAR").map(String::as_str), Some("set"));
+        assert_eq!(env.get("HOME").map(String::as_str), Some("/home/user"));
+    }
+
+    #[test]
+    fn config_environment_overrides_bun_be_bun() {
+        // Config sits above BUN_BE_BUN in the merge order.
+        let mut config = BTreeMap::new();
+        config.insert("BUN_BE_BUN".to_string(), "0".to_string());
+        let env = stdio_environment(host(), "opencode", Some(&config));
+        assert_eq!(env.get("BUN_BE_BUN").map(String::as_str), Some("0"));
+    }
+
+    #[test]
+    fn empty_config_keeps_host_env_verbatim() {
+        let config = BTreeMap::new();
+        let env = stdio_environment(host(), "npx", Some(&config));
+        assert_eq!(env.get("BUN_BE_BUN").map(String::as_str), Some("host-value"));
+        assert_eq!(env.len(), 4);
+    }
+}

@@ -330,3 +330,50 @@
 ### 4.4 小项杂录
 
 pathdiff 同路径 `"."` vs `""`；webfetch timeout clamp(1,120) 与 URL 协议大小写；read missing 建议排序；patch 资源去重排序；session_move pinned:true 未移植；models 内容 pretty vs compact；registry 校验器 JSON-Schema 子集；slug 词表本地化（有意）。扩展内联最多待补审：openai_chat.rs (5736)、facade.rs (2143)。
+
+---
+
+## 5. 2026-10-28 九线全量审查 + 四线复核新发现（RW 系列）
+
+> 来源：9 条并行审查线对 ref 全部对应包逐文件对比（core×3 / ai / tui / cli / client+server+plugin+pty / schema+util / 依赖审计），随后 4 条复核线对全部初判缺口二次验证（全 workspace grep 排除"移到别处实现"误报）。汇总报告：`FULL_PORT_REVIEW.md`（v2 修正版）。
+> **复核共推翻 8 项初判**（详见 FULL_PORT_REVIEW §二），其中与登记册相关的核实：rpc/event-manifest/durable-manifest 均有镜像实现（=RV-P7 闭环属实）；TUI /update UI 完整、autoupdate 默认 notify；SSE 编码失败语义与 ref 一致（踢全部订阅者）；glob brace/shell SIGKILL 无分叉；ULID 型 identifier 逐位 wire 兼容；chromiumoxide（dev-dep）/defmt（jiff 未启用 feature）不进发布闭包。
+> 与既有条目去重：workerd（=RV-G6 豁免）、effect/solid 客户端变体（=RV-P13 豁免）、插件子进程架构（=R1–R5 家族）、flock 降级（§1.6 已登记）、run TTY 权限超集（=RD-15）、v1 迁移浓缩（pre-2.0.24 升级路径行 + p10 cron 已覆盖）、opentui 双轨（=G-11/FRAMEWORK-CONVERGENCE，复核补正：**solid 路径为默认主渲染**（footer 等 env unset→ON，`=0` 回退手写），OC_TABS_OPENTUI 已退役、tabs lane 单轨化）、storybook（ADR-0013 不移植）。
+
+### 5.1 功能缺口（复核确认，未见于既有台账）
+
+| ID | 缺口 | 域 | 严重度 | 说明（文件:行 为审查时锚点） |
+|---|---|---|---|---|
+| RW-01 | Anthropic 系 per-provider **body 包装**未移植：alibaba/zai/minimax/moonshot 的 thinking-免-budgetTokens 豁免、meta 的 `native.meta`→`web_search` 重映射 | AI | 高 | facade.rs:288-292 全并入通用 AnthropicMessages family；anthropic_messages.rs:319 无预算 thinking 一律报错（ref alibaba-messages.ts:29-46 先剥离再重挂）。注意 RC-06 闭环的 customization seam 只有 cache_policy/chat_metadata_key 两钩子，**无 body-wrap 表达力**——修法建议在 seam 上加 `wrap_anthropic_body` hook 一次覆盖五 provider。ref 对应 protocols/{alibaba,zai,meta}-messages.ts |
+| RW-02 | persistent-pty 屏幕跟踪无终端仿真：on_output 仅处理 `\n`/`\r`/`0x08`，CSI/OSC 当可打印字节写入 rows | Core/PTY | 高 | persistent_pty.rs:1390-1419（注释自认归 Phase 9 daemon），oc-pty daemon.rs 复用同一朴素模型 → `read`/`snapshot`/`rows` 在 vim/less/带色提示符下乱码。workspace 已有 vt100 crate（oc-tui/terminal_pane.rs:139）可复用 |
+| RW-03 | MCP `config.protocol` 协商不生效：固定 pin `V_2025_11_25`，配置项 advisory | MCP | 中 | mcp/client.rs:457-462 vs ref client.ts:193,393-397（legacy/auto/pin）。声明旧协议的服务器可能握手失败 |
+| RW-04 | MCP OAuth 同 token 并发刷新无共享去重 | MCP | 中 | oauth.rs:840 无状态自由函数；endpoint_lock 仅按 URL 串行连接。rotation 下并发 prepare_token 第二个吃 invalid_grant（ref oauth.ts:30-51 refreshes map 明确警告此场景） |
+| RW-05 | `/api/fs/find` 降级为朴素子串 walk：fff 模糊索引、ripgrep 后备层、protected.ts 敏感目录表缺失 | Server/Filesystem | 中 | handlers/fs.rs:285-316（仅跳 .git/node_modules/target）→ home 根会扫 Desktop/.ssh 等。至少应先补 protected 排除 |
+| RW-06 | OTel 遥测零对应（连 tracing crate 都未引入）；oc-util observability 未移植 | Util/可观测 | 中 | ref util observability.ts + otlp.ts + 5 个 @opentelemetry 依赖。补齐路径：tracing + tracing-opentelemetry 骨架起步 |
+| RW-07 | CLI `auth login` 不自动打开浏览器 | CLI | 低 | auth.rs:471-473 只 println URL；全 workspace 无 OAuth URL 打开路径（oc-tui 的 xdg-open 是开文件夹，另一功能） |
+| RW-08 | `session list` 时间戳硬编码 UTC（函数名 `format_local_time` 名不副实）；无 less 分页；`session export` 无交互选择器 | CLI | 低 | session.rs:96-124/91/139-141 vs ref toLocaleString + less -R -S + autocomplete。RV-B8 已为 stats 引入 jiff 本地时区，可复用 |
+| RW-09 | biome formatter 解析差异：查 `node_modules/.bin/biome` 且不自动安装 | Core | 低 | formatter.rs:632-638,572 vs ref `npm.which("@biomejs/biome")` 可装 → 有 biome.json 但未装包的项目 **静默不格式化** |
+| RW-10 | 表单已结算条目无 TTL 淘汰（RETENTION_MS 常量零使用）；`is_date_time` 恒真 | Core | 低 | forms.rs:15 / :716-719。内存缓慢泄漏 + date-time 校验形同虚设 |
+| RW-11 | PersistedRevert 解码变换缺失（revert 列原样透传、聚合恒 None） | Core/迁移 | 低 | v1_migration.rs:1447-1457；v1 迁移主体（1959 行 + API + battery）在。读 TS 版历史 revert 数据会丢 |
+| RW-12 | LocationActivity 缺 bus 自动 touch 与清扫期 re-touch 复查 | Core | 低 | location_services.rs:139 TODO 自认；需与 RV-G2 的"location 活动 re-arm"闭环范围交叉核对，若 RV-G2 已覆盖 re-arm 则本条收窄为 bus 订阅 touch |
+| RW-13 | oc-util 真缺失：cross-spawn-spawner(556行)、open 完整跨平台版 | Util | 低 | npm/patch/bom/calendar/title-fallback 等其余初判"未移植"经复核均为换机制实现（bun 子进程 / oc-core tool/patch.rs / file_mutation / 注册过的简化），不列缺口 |
+| RW-14 | oc-ai experimental/（evaluation、system-one）未移植 | AI | 低 | 与 RV-G5 豁免（REF 侧死代码）合并审视：ref 侧确为死代码，本条可随 RV-G5 一并豁免，登记待裁定 |
+
+### 5.2 陷阱（行为差异/卫生问题，复核确认）
+
+| ID | 陷阱 | 说明 |
+|---|---|---|
+| RW-T1 | **schema 结构体 rename 卫生**：`PermissionSaved.project_id`、`Mcp.ResourceTemplate.uri_template`、`WorktreeOperationError.force_required` 缺 `#[serde(rename)]`（camelCase） | 当前线上路径全被 handler 手工 json!/生成端 rename/契约测试兜底（wire_fidelity.rs / parity_http_contract.rs / parity_vcs_wire.rs），**无 wire 缺陷**；但直接 serde 序列化这些结构体即产出 snake_case wire。`WorktreeOperationError` 现为零使用死代码。修法：补 rename（半小时级） |
+| RW-T2 | `OPENCODE_PTY_BIN` 环境路径**零校验**直接采用 | transport.rs:130-155；比 ref 弱（ref 对外部二进制做 sha256/属主/lstat 校验 binary.bun.ts）；rust 连可执行位都不查（exe-sibling/PATH 候选仅查可执行位） |
+| RW-T3 | reqwest 0.12/0.13 双版本共存（同一 rustls 编译两份，非双 TLS 栈） | 0.13 供 rmcp + oc-core MCP 客户端，**进发布闭包**；cmake 经 aws-lc-sys 出现在发布构建链（build-dep）。升级/安全评审需覆盖两套，统一窗口需排期 |
+| RW-T4 | tool_output 截断预算按 Unicode 标量，ref 按 UTF-16 码元 | tool_output.rs:233-251 vs tool-output.ts:93；emoji/增补平面下裁剪点不一致（golden 对拍 diff 来源之一） |
+| RW-T5 | MCP 会话过期判定偏宽：remote 连接错误链含 404 即重连+重放 | client.rs:533-552（读不到 rmcp 内部 session id 所致）；"方法不存在返回 404"的 modern 服务器会多一次重连 |
+| RW-T6 | glob 匹配器不支持 brace/extglob | 权限匹配两侧等价（ref wildcard 本身转义 `{}`），仅未来挪用时的分叉风险 |
+| RW-T7 | 依赖卫生：serde_yaml 0.9 上游归档停维；schemars 0.8（0.9 不兼容）、notify 6、dirs 5、dialoguer 0.11 落后主版本；vt100 pin 0.15（unicode-width 冲突） | 建议升级看板；serde_yaml 迁移优先 |
+| RW-T8 | `BUN_BE_BUN=1` 对 rust 空操作 | 排查 env 差异时勿被误导 |
+
+### 5.3 与既有裁定的张力（待裁定，非新缺口）
+
+| 项 | 张力 |
+|---|---|
+| environment/workspace 驱动 | RD-08 裁定 workspace seam 为 REF 死代码不移植；但本轮核实 ref mcp/stdio.ts:84 **生产路径确实经 `environment.spawner`** spawn stdio MCP（非死代码）——rust mcp/client.rs:1026 直接宿主 tokio spawn 并继承全部环境。建议 RD-08 豁免范围收窄为 provision/registry 部分，stdio 执行平面单独立项裁定 |
+| run `attached:false` 无条件硬编码 | run/mod.rs:445-447 vs ref run.ts:149 默认 true；standalone 独占语义辩护成立（有测试 attached_client_leaves_global_forms_alone），与 RD-07 闭环一致；但 `--server` 共享目标下仍设 false 的组合未按连接类型区分，登记待核 |
