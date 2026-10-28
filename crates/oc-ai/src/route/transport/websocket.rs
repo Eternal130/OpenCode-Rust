@@ -1282,6 +1282,44 @@ impl SessionChannels {
     }
 }
 
+/// The production session-channel owner (v2 `SessionModelTransport.node`'s
+/// global layer): the tokio-tungstenite connector when the `ws-transport`
+/// feature is on; without it every connect fails and each exchange's
+/// built-in HTTP SSE fallback carries the stream.
+#[must_use]
+pub fn default_session_channels() -> Arc<SessionChannels> {
+    SessionChannels::new(default_connector(), SessionChannelConfig::default())
+}
+
+#[cfg(feature = "ws-transport")]
+fn default_connector() -> Arc<dyn WebSocketConnector> {
+    Arc::new(tungstenite_connector::TokioTungsteniteConnector)
+}
+
+#[cfg(not(feature = "ws-transport"))]
+fn default_connector() -> Arc<dyn WebSocketConnector> {
+    Arc::new(UnavailableConnector)
+}
+
+/// Connect-failing stand-in for builds without `ws-transport`.
+#[cfg(not(feature = "ws-transport"))]
+struct UnavailableConnector;
+
+#[cfg(not(feature = "ws-transport"))]
+#[async_trait]
+impl WebSocketConnector for UnavailableConnector {
+    async fn open(&self, request: WebSocketRequest) -> Result<WebSocketConnection, AiError> {
+        Err(transport_error(
+            "WebSocket support is not compiled in",
+            TransportOperation::Request,
+            Some(TransportPhase::Connect),
+            Some(TransportDelivery::NotSent),
+            Some("unavailable".into()),
+            Some(request.url),
+        ))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // tokio-tungstenite connector (feature `ws-transport`)
 // ---------------------------------------------------------------------------

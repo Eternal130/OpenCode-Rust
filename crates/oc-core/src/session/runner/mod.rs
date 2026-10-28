@@ -150,6 +150,26 @@ pub trait LlmClient: Send + Sync {
     /// Streams one request to its terminal event.
     async fn stream(&self, request: LLMRequest) -> Result<LlmEventStream, AiError>;
 
+    /// Streams one request with the session's model transport consulted
+    /// (REF model-request.ts:352 `webSocket: "session"` + runner llm.ts:242):
+    /// when `transport` is websocket and the request's route offers the
+    /// OpenResponses WS channel, the stream rides the session's bound
+    /// channel executor (sticky HTTP fallback lives inside it). The
+    /// default ignores the transport and streams over HTTP SSE.
+    async fn stream_for_session(
+        &self,
+        session_id: &str,
+        transport: Option<oc_schema::provider::Transport>,
+        request: LLMRequest,
+    ) -> Result<LlmEventStream, AiError> {
+        let _ = (session_id, transport);
+        self.stream(request).await
+    }
+
+    /// Closes the session's model transport (REF runner llm.ts
+    /// `modelTransport.close(sessionID)` on location-closed and move).
+    async fn close_transport(&self, _session_id: &str) {}
+
     /// Whether the request's route supports native compaction for
     /// `mechanism` (`LLMClient.canCompact`).
     fn can_compact(&self, request: &LLMRequest, mechanism: CompactMechanism) -> bool;
@@ -168,12 +188,78 @@ pub trait LlmClient: Send + Sync {
 /// trigger (the `compact-2026-01-12` beta the messages protocol carries).
 pub struct RouteLlmClient;
 
+/// The process-global session channel owner (v2 `SessionModelTransport`
+/// is a `makeGlobalNode` service — one owner per process, one socket per
+/// session id). `Lazy` so tests that never touch a websocket model pay
+/// nothing for the connector.
+static SESSION_CHANNELS: std::sync::OnceLock<Arc<oc_ai::route::transport::websocket::SessionChannels>> =
+    std::sync::OnceLock::new();
+
+fn session_channels() -> Arc<oc_ai::route::transport::websocket::SessionChannels> {
+    Arc::clone(SESSION_CHANNELS.get_or_init(oc_ai::route::transport::websocket::default_session_channels))
+}
+
 #[async_trait::async_trait]
 impl LlmClient for RouteLlmClient {
     async fn stream(&self, request: LLMRequest) -> Result<LlmEventStream, AiError> {
         let route = Arc::clone(&request.model.route);
         let stream = route.stream(request).await?;
         Ok(Box::pin(stream))
+    }
+
+    async fn stream_for_session(
+        &self,
+        session_id: &str,
+        transport: Option<oc_schema::provider::Transport>,
+        request: LLMRequest,
+    ) -> Result<LlmEventStream, AiError> {
+        let route = Arc::clone(&request.model.route);
+        // REF model-request.ts:352: the WS channel is offered only when the
+        // caller asked for the session transport (`webSocket: "session"`,
+        // the runner always does) AND `model.transport === "websocket"`;
+        // `channel_options_for_route` then gates on the route's protocol
+        // (openai-responses incl. the Azure flavor; xai and everything
+        // else stay on HTTP SSE).
+        let channel_options = if transport == Some(oc_schema::provider::Transport::Websocket) {
+            oc_ai::protocols::open_responses_channel::channel_options_for_route(&route)
+        } else {
+            None
+        };
+        let Some(options) = channel_options else {
+            return self.stream(request).await;
+        };
+        // REF model-transport.ts `bind`: one long-lived socket per session,
+        // sticky HTTP fallback inside the executor (refused connects,
+        // repeated stream losses, oversized frames).
+        let executor = session_channels().bind(session_id);
+        let channel =
+            oc_ai::protocols::open_responses_channel::stream_channel(&route, request, executor, &options)
+                .await?;
+        // Commit the continuation checkpoint once the events stream ended
+        // cleanly (v2 `execution.complete` after a successful stream).
+        let oc_ai::protocols::open_responses_channel::ChannelStream { events, complete, .. } =
+            channel;
+        let wrapped = futures::stream::unfold(
+            (events, complete, true),
+            |(mut events, complete, clean)| async move {
+                use futures::StreamExt as _;
+                match events.next().await {
+                    Some(Ok(event)) => Some((Ok(event), (events, complete, clean))),
+                    Some(Err(error)) => Some((Err(error), (events, complete, false))),
+                    None => {
+                        if clean {
+                            let _ = complete();
+                        }
+                        None
+                    }
+                }
+            },
+        );
+        Ok(Box::pin(wrapped))
+    }
+
+    async fn close_transport(&self, session_id: &str) {
+        session_channels().close(session_id).await;
     }
 
     fn can_compact(&self, request: &LLMRequest, mechanism: CompactMechanism) -> bool {
