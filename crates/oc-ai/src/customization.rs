@@ -17,6 +17,11 @@
 //! - [`crate::protocols::openai_compatible`] — the `chat_metadata_key` hook
 //!   overrides the re-badged `providerMetadataKey` when a provider needs a
 //!   namespace other than `"openai"`.
+//! - [`crate::protocols::anthropic_messages`] — the `wrap_anthropic_body`
+//!   hook (RW-01) wraps the built body for the Anthropic-family providers
+//!   with per-provider protocols in the ref: `alibaba`/`zai-coding-plan`
+//!   re-attach `thinking` without Anthropic's mandatory budgetTokens, and
+//!   `meta` remaps `native.meta` web-search tools.
 //!
 //! Extension point: to add a customization, either add a `const` entry to
 //! [`static_entries`] (upstream providers) or call [`register`] (tests,
@@ -26,10 +31,14 @@
 //! All hooks are `Option` and default to `None` (no-op), so a provider
 //! without an entry behaves exactly as before this seam existed.
 
+use std::collections::BTreeMap;
 use std::sync::{Mutex, OnceLock};
 
+use serde_json::{Map, Value};
+
 use crate::cache_policy::{auto_policy, none_policy};
-use crate::schema::CachePolicyObject;
+use crate::protocols::shared::{fit_thinking_budget, invalid_request, number};
+use crate::schema::{AiError, CachePolicyObject};
 
 /// Provider-specific overrides. Every field defaults to `None` (= keep the
 /// generic behavior); `Default` yields the no-op customization.
@@ -46,12 +55,57 @@ pub struct ProviderCustomization {
     /// Override the `providerMetadataKey` re-badged onto
     /// `openai-compatible-chat` routes configured for this provider id.
     pub chat_metadata_key: Option<&'static str>,
+    /// Wrap the request body built by the generic Anthropic Messages
+    /// protocol (port of the per-provider `*-messages.ts` body wrappers).
+    ///
+    /// When set, the generic body build receives the request with the raw
+    /// `thinking` provider option stripped (so the generic
+    /// "`enabled` requires a budgetTokens" validation and budget fitting
+    /// do not run), and the hook re-attaches the provider's own `thinking`
+    /// shape and/or remaps tools afterwards.
+    pub wrap_anthropic_body: Option<fn(&mut AnthropicBodyWrap<'_>) -> Result<(), AiError>>,
+}
+
+/// Context handed to the [`ProviderCustomization::wrap_anthropic_body`] hook.
+pub struct AnthropicBodyWrap<'a> {
+    /// Provider id the customization was looked up by.
+    pub provider: &'a str,
+    /// The raw `thinking` provider-option value stripped before the generic
+    /// body build (`None` when the request carried no `thinking` option).
+    pub raw_thinking: Option<&'a Value>,
+    /// Flattened tool `native` maps, index-aligned with the built body's
+    /// `tools` array entries (empty when the body has no tools).
+    pub tool_natives: &'a [Option<&'a BTreeMap<String, Value>>],
+    /// The body's `max_tokens` (default applied).
+    pub max_tokens: f64,
+    /// The built Anthropic Messages body; the hook mutates it in place.
+    pub body: &'a mut Value,
+}
+
+impl AnthropicBodyWrap<'_> {
+    /// Set `body.thinking` to `value`, or remove the key when `None`
+    /// (the ref spreads `thinking: undefined`, dropping the key).
+    pub fn set_thinking(&mut self, value: Option<Value>) {
+        let Some(object) = self.body.as_object_mut() else { return };
+        match value {
+            Some(value) => {
+                object.insert("thinking".into(), value);
+            }
+            None => {
+                object.remove("thinking");
+            }
+        }
+    }
 }
 
 impl ProviderCustomization {
     /// The no-op customization: every hook unset, generic behavior everywhere.
     pub const fn noop() -> Self {
-        Self { auto_cache_policy: None, chat_metadata_key: None }
+        Self {
+            auto_cache_policy: None,
+            chat_metadata_key: None,
+            wrap_anthropic_body: None,
+        }
     }
 
     /// Apply the `auto_cache_policy` hook if the entry sets one.
@@ -98,6 +152,132 @@ fn alibaba_chat_policy(model_id: &str) -> CachePolicyObject {
     }
 }
 
+/// `alibaba-messages` body wrap (port of `alibaba-messages.ts:29-46`): Model
+/// Studio accepts enabled thinking without Anthropic's mandatory token
+/// budget. The generic build ran with `thinking` stripped; re-attach it from
+/// the raw option, fitting an explicit budget (`budgetTokens` or
+/// `budget_tokens`) against `max_tokens` like `ProviderShared.fitThinkingBudget`.
+fn alibaba_wrap(wrap: &mut AnthropicBodyWrap<'_>) -> Result<(), AiError> {
+    let Some(raw) = wrap.raw_thinking else {
+        wrap.set_thinking(None);
+        return Ok(());
+    };
+    let Some(object) = raw.as_object() else {
+        return Err(invalid_request(format!("Expected an object, received {raw}")));
+    };
+    let thinking_type = want_tool_string(object.get("type"))?;
+    // `opts.thinking?.budgetTokens ?? opts.thinking?.budget_tokens`
+    let budget = match (object.get("budgetTokens"), object.get("budget_tokens")) {
+        (Some(value), _) | (None, Some(value)) => Some(want_number(value)?),
+        (None, None) => None,
+    };
+    let mut thinking = Map::new();
+    thinking.insert("type".into(), serde_json::json!(thinking_type));
+    if let Some(budget) = budget {
+        let fitted = fit_thinking_budget(budget, Some(wrap.max_tokens), 1.0);
+        thinking.insert("budget_tokens".into(), number(fitted));
+    }
+    wrap.set_thinking(Some(Value::Object(thinking)));
+    Ok(())
+}
+
+/// `zai-messages` body wrap (port of `zai-messages.ts` `fromRequest`): Z.AI
+/// accepts enabled thinking without Anthropic's mandatory token budget; the
+/// wire shape is `{ type }` only.
+fn zai_wrap(wrap: &mut AnthropicBodyWrap<'_>) -> Result<(), AiError> {
+    let Some(raw) = wrap.raw_thinking else {
+        wrap.set_thinking(None);
+        return Ok(());
+    };
+    let Some(object) = raw.as_object() else {
+        return Err(invalid_request(format!("Expected an object, received {raw}")));
+    };
+    let thinking_type = want_tool_string(object.get("type"))?;
+    wrap.set_thinking(Some(serde_json::json!({"type": thinking_type})));
+    Ok(())
+}
+
+/// `meta-messages` body wrap (port of `meta-messages.ts` `fromRequest`):
+/// flatten-tool natives carrying `native.meta` web-search config are re-mapped
+/// to Anthropic's `{ type: "web_search", name: "web_search", user_location }`.
+fn meta_wrap(wrap: &mut AnthropicBodyWrap<'_>) -> Result<(), AiError> {
+    let Some(tools) = wrap.body.get_mut("tools").and_then(Value::as_array_mut) else {
+        return Ok(());
+    };
+    for (index, tool) in tools.iter_mut().enumerate() {
+        let Some(native) = wrap.tool_natives.get(index).copied().flatten() else {
+            continue;
+        };
+        let Some(meta) = native.get("meta") else { continue };
+        let Some(search) = meta.as_object() else {
+            return Err(invalid_request(format!("Expected an object, received {meta}")));
+        };
+        if search.get("type").and_then(Value::as_str) != Some("web_search") {
+            let found = search.get("type").map_or_else(|| "undefined".into(), Value::to_string);
+            return Err(invalid_request(format!(
+                "Expected \"web_search\", received {found}"
+            )));
+        }
+        if let Some(size) = search.get("search_context_size") {
+            if size.as_str().is_none() {
+                return Err(invalid_request(format!("Expected a string, received {size}")));
+            }
+            return Err(invalid_request("Meta Messages does not support searchContextSize"));
+        }
+        let user_location = match search.get("user_location") {
+            None => None,
+            Some(location) => {
+                let Some(location_object) = location.as_object() else {
+                    return Err(invalid_request(format!(
+                        "Expected an object, received {location}"
+                    )));
+                };
+                if location_object.get("type").and_then(Value::as_str) != Some("approximate") {
+                    let found = location_object
+                        .get("type")
+                        .map_or_else(|| "undefined".into(), Value::to_string);
+                    return Err(invalid_request(format!(
+                        "Expected \"approximate\", received {found}"
+                    )));
+                }
+                for key in ["city", "region", "country", "timezone"] {
+                    if let Some(value) = location_object.get(key) {
+                        if value.as_str().is_none() {
+                            return Err(invalid_request(format!(
+                                "Expected a string, received {value}"
+                            )));
+                        }
+                    }
+                }
+                Some(Value::Object(location_object.clone()))
+            }
+        };
+        let mut remapped = Map::new();
+        remapped.insert("type".into(), serde_json::json!("web_search"));
+        remapped.insert("name".into(), serde_json::json!("web_search"));
+        if let Some(user_location) = user_location {
+            remapped.insert("user_location".into(), user_location);
+        }
+        *tool = Value::Object(remapped);
+    }
+    Ok(())
+}
+
+/// `Schema.optional(Schema.String)`-style field check for the wrap schemas.
+fn want_tool_string(value: Option<&Value>) -> Result<String, AiError> {
+    match value {
+        Some(Value::String(text)) => Ok(text.clone()),
+        Some(other) => Err(invalid_request(format!("Expected a string, received {other}"))),
+        None => Err(invalid_request("Expected a string, received undefined")),
+    }
+}
+
+fn want_number(value: &Value) -> Result<f64, AiError> {
+    value
+        .as_f64()
+        .ok_or_else(|| invalid_request(format!("Expected a number, received {value}")))
+}
+
 /// Static registry entries for the providers with known special cases.
 /// New upstream special cases go here (see module docs).
 const fn static_entries() -> &'static [(&'static str, ProviderCustomization)] {
@@ -107,6 +287,7 @@ const fn static_entries() -> &'static [(&'static str, ProviderCustomization)] {
             ProviderCustomization {
                 auto_cache_policy: Some(gateway_policy),
                 chat_metadata_key: None,
+                wrap_anthropic_body: None,
             },
         ),
         (
@@ -114,6 +295,7 @@ const fn static_entries() -> &'static [(&'static str, ProviderCustomization)] {
             ProviderCustomization {
                 auto_cache_policy: Some(gateway_policy),
                 chat_metadata_key: None,
+                wrap_anthropic_body: None,
             },
         ),
         (
@@ -121,6 +303,31 @@ const fn static_entries() -> &'static [(&'static str, ProviderCustomization)] {
             ProviderCustomization {
                 auto_cache_policy: Some(alibaba_chat_policy),
                 chat_metadata_key: None,
+                wrap_anthropic_body: None,
+            },
+        ),
+        (
+            "alibaba",
+            ProviderCustomization {
+                auto_cache_policy: None,
+                chat_metadata_key: None,
+                wrap_anthropic_body: Some(alibaba_wrap),
+            },
+        ),
+        (
+            "zai-coding-plan",
+            ProviderCustomization {
+                auto_cache_policy: None,
+                chat_metadata_key: None,
+                wrap_anthropic_body: Some(zai_wrap),
+            },
+        ),
+        (
+            "meta",
+            ProviderCustomization {
+                auto_cache_policy: None,
+                chat_metadata_key: None,
+                wrap_anthropic_body: Some(meta_wrap),
             },
         ),
     ]
@@ -180,6 +387,7 @@ mod tests {
             ProviderCustomization {
                 auto_cache_policy: Some(hypothetical_policy),
                 chat_metadata_key: Some("acme"),
+                wrap_anthropic_body: None,
             },
         );
 
@@ -212,5 +420,35 @@ mod tests {
             for_route("alibaba-chat").resolve_auto_cache_policy("deepseek-v3"),
             Some(none_policy())
         );
+    }
+}
+
+#[cfg(test)]
+mod rw01_tests {
+    use super::*;
+
+    /// RW-01: the wrap_anthropic_body hook reaches the Anthropic-family
+    /// providers with body wrappers, and everyone else keeps the no-op.
+    #[test]
+    fn anthropic_body_wrap_registry_entries() {
+        assert!(for_route("alibaba").wrap_anthropic_body.is_some());
+        assert!(for_route("zai-coding-plan").wrap_anthropic_body.is_some());
+        assert!(for_route("meta").wrap_anthropic_body.is_some());
+        // unregistered providers (incl. ref's plain-protocol moonshot/minimax
+        // messages routes) and the pre-existing entries stay unchanged
+        assert_eq!(for_route("moonshotai"), ProviderCustomization::noop());
+        assert_eq!(for_route("minimax"), ProviderCustomization::noop());
+        assert_eq!(for_route("anthropic"), ProviderCustomization::noop());
+        assert_eq!(for_route("openrouter").wrap_anthropic_body, None);
+        assert_eq!(for_route("alibaba-chat").wrap_anthropic_body, None);
+        // runtime registration can still set the hook (extension point)
+        fn wrap(_: &mut AnthropicBodyWrap<'_>) -> Result<(), crate::schema::AiError> {
+            Ok(())
+        }
+        register(
+            "acme-anthropic",
+            ProviderCustomization { wrap_anthropic_body: Some(wrap), ..ProviderCustomization::noop() },
+        );
+        assert!(for_route("acme-anthropic").wrap_anthropic_body.is_some());
     }
 }
