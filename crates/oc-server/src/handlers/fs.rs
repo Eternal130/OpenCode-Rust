@@ -467,8 +467,8 @@ mod find_tests {
     #[test]
     fn fuzzy_substring_completion_outranks_scattered_subsequence() {
         let substring = fuzzy_score(&chars("read"), "/a/readme.md").expect("substring matches");
-        let scattered =
-            fuzzy_score(&chars("read"), "/a/rust-e2e-doc.txt").expect("subsequence matches");
+        let scattered = fuzzy_score(&chars("read"), "/a/rusty/example/asset/do.txt")
+            .expect("subsequence matches");
         let missing = fuzzy_score(&chars("zzz"), "/a/readme.md");
         assert!(substring > scattered, "substring completion must rank first");
         assert_eq!(missing, None);
@@ -476,7 +476,9 @@ mod find_tests {
 
     #[test]
     fn fuzzy_is_case_insensitive_and_matches_empty_query() {
-        assert!(fuzzy_score(&chars("rdm"), "/a/README.MD").is_some());
+        // Call-site contract: targets arrive lowercased (the handler
+        // lowercases both query and path like fuzzysort's prepare).
+        assert!(fuzzy_score(&chars("rdm"), "/a/readme.md").is_some());
         // REF fuzzysort: empty query matches everything (score equal,
         // shorter paths first).
         assert!(fuzzy_score(&chars(""), "/anything/at/all.txt").is_some());
@@ -516,7 +518,7 @@ mod find_tests {
     fn exclusions_keep_heavy_tree_skips() {
         let scan = ScanExclusions { home_rooted: false, names: vec![], paths: vec![] };
         for name in [".git", "node_modules", "target"] {
-            assert!(scan.is_excluded_dir(name, std::path::Path::new("/repo").join(name)));
+            assert!(scan.is_excluded_dir(name, &std::path::Path::new("/repo").join(name)));
         }
     }
 
