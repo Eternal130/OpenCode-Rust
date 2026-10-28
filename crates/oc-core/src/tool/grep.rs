@@ -115,7 +115,7 @@ async fn run_ripgrep<R>(
 ) -> Result<Vec<R>, RipgrepError> {
     use tokio::process::Command;
 
-    let binary = super::ripgrep_runner::binary();
+    let binary = super::ripgrep_runner::resolve_cached().await;
     let mut child = Command::new(&binary)
         .args(args)
         .current_dir(cwd)
@@ -181,7 +181,10 @@ async fn run_ripgrep<R>(
             if stderr.contains("regex parse error") || stderr.contains("error parsing regex") {
                 Err(RipgrepError::InvalidPattern(stderr.trim().to_string()))
             } else {
-                Err(RipgrepError::Failed(stderr.trim().to_string()))
+                // ref ripgrep.ts:148-151 — exit 2 beyond the invalid-pattern
+                // case (permission/config errors) is tolerated with partial
+                // results: `return code === 1 ? [] : rows`.
+                Ok(rows)
             }
         }
         Some(code) => Err(RipgrepError::Failed(format!("ripgrep failed with code {code}"))),
