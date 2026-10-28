@@ -221,8 +221,8 @@ impl LlmClient for RouteLlmClient {
         // caller asked for the session transport (`webSocket: "session"`,
         // the runner always does) AND `model.transport === "websocket"`;
         // `channel_options_for_route` then gates on the route's protocol
-        // (openai-responses incl. the Azure flavor; xai and everything
-        // else stay on HTTP SSE).
+        // (openai-responses incl. the Azure and xAI flavors; everything
+        // else stays on HTTP SSE).
         let channel_options = if transport == Some(oc_schema::provider::Transport::Websocket) {
             oc_ai::protocols::open_responses_channel::channel_options_for_route(&route)
         } else {

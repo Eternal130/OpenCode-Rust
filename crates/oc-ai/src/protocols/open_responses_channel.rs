@@ -87,6 +87,15 @@ impl ChannelOptions {
         self.headers = Some(headers);
         self
     }
+
+    #[must_use]
+    pub fn with_continuation(
+        mut self,
+        continuation: crate::protocols::open_responses_continuation::ContinuationShape,
+    ) -> Self {
+        self.continuation = Some(continuation);
+        self
+    }
 }
 
 /// The prepared channel form of one request (v2 `Prepared`).
@@ -402,20 +411,27 @@ pub async fn stream_channel(
 }
 
 /// The channel options a route offers (v2: the openai/xai/azure built-ins
-/// default `transport: "websocket"`, but only OpenResponses WS-capable
-/// protocols carry a channel — xai-responses and every non-responses
-/// protocol return `None` and stay on HTTP SSE). Azure-flavored
-/// OpenResponses routes use the Azure-native gate + `api-version`-stripped
-/// WS URL.
+/// default `transport: "websocket"`; every OpenResponses WS-capable
+/// protocol carries a channel, non-responses protocols return `None` and
+/// stay on HTTP SSE). Azure-flavored OpenResponses routes use the
+/// Azure-native gate + `api-version`-stripped WS URL; the xAI flavor
+/// rotates after 24h and continues only stored responses without
+/// `instructions` (REF providers/xai.ts:43).
 #[must_use]
 pub fn channel_options_for_route(route: &Route) -> Option<ChannelOptions> {
-    if route.protocol.id() != crate::protocols::openai_responses::ADAPTER {
-        return None;
+    match route.protocol.id() {
+        crate::protocols::openai_responses::ADAPTER => {
+            if route.provider.as_ref().is_some_and(|p| p.as_str() == crate::protocols::azure::ID) {
+                Some(crate::protocols::azure::responses_channel_options())
+            } else {
+                Some(crate::protocols::openai_responses::channel_transport())
+            }
+        }
+        crate::protocols::xai_responses::ADAPTER => {
+            Some(crate::protocols::xai_responses::responses_channel_options())
+        }
+        _ => None,
     }
-    if route.provider.as_ref().is_some_and(|p| p.as_str() == crate::protocols::azure::ID) {
-        return Some(crate::protocols::azure::responses_channel_options());
-    }
-    Some(crate::protocols::openai_responses::channel_transport())
 }
 
 /// Prepare the channel form of one request (used by tests and callers that
@@ -452,5 +468,31 @@ mod tests {
         let decoded: Value = serde_json::from_str(&message).unwrap();
         assert_eq!(decoded["model"], "gpt-test");
         assert!(channel_message(&json!([])).is_err());
+    }
+
+    #[test]
+    fn xai_responses_route_gets_the_xai_channel_flavor() {
+        use crate::route::transport::FailingTransport;
+        use crate::route::transport::SharedTransport;
+
+        let route = crate::protocols::xai_responses::xai_responses_route(
+            crate::protocols::xai_responses::XaiResponsesRouteSpec {
+                base_url: Some("https://api.x.ai.test/v1".into()),
+                auth: None,
+                transport: std::sync::Arc::new(FailingTransport { message: "never streamed" })
+                    as SharedTransport,
+                defaults: crate::route::RouteDefaults::default(),
+            },
+        );
+        let options = channel_options_for_route(&route).expect("xai-responses wires the channel");
+        assert_eq!(options.id, "xai-responses");
+        // xAI rotates after 24h (REF RESPONSES_WEBSOCKET_ROTATE_AFTER_MS),
+        // not OpenAI's 55 minutes.
+        assert_eq!(options.rotate_after_ms, Some(24 * 60 * 1000));
+        // No openai-beta handshake mapping and no enabled gate: xAI maps the
+        // plain ws:// form of the HTTP endpoint.
+        assert!(options.headers.is_none());
+        assert!(options.enabled.is_none());
+        assert!(options.url.is_none());
     }
 }
