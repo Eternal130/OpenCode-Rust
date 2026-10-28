@@ -33,11 +33,11 @@ use crate::session::runner::{ModelError, ModelResolver, ResolvedModel};
 // Instructions (instructions/index.ts)
 // ---------------------------------------------------------------------------
 
-/// `Instructions.Unavailable` — the read failed temporarily; the stored
-/// value stands. Typed as [`ReadOutcome::Unavailable`] (the former
-/// `"\0instructions.unavailable"` string sentinel).
-
-/// `Instructions.removed` — an observed absence (hash-bucket sentinel).
+// `Instructions.Unavailable` — the read failed temporarily; the stored
+// value stands. Typed as [`ReadOutcome::Unavailable`] (the former
+// `"\0instructions.unavailable"` string sentinel).
+//
+// `Instructions.removed` — an observed absence (hash-bucket sentinel).
 pub const REMOVED_SENTINEL: &str = "removed";
 
 /// One read outcome (`Schema.Json | Unavailable | Removed`).

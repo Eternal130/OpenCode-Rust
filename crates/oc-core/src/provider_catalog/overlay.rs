@@ -172,7 +172,7 @@ fn model_overlay_settings(
         })
         .map(|(key, value)| (key.clone(), value.clone().unwrap_or(Value::Null)))
         .collect();
-    oc_schema::model::Settings { compaction: settings.compaction.clone(), rest }
+    oc_schema::model::Settings { compaction: settings.compaction, rest }
 }
 
 /// Whether this document set contributes any provider binding (an empty/// overlay needs no wrapper — the engine-level resolver already covers

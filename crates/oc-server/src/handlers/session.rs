@@ -1470,8 +1470,7 @@ async fn view(
     };
     let admission = match row.time_idle {
         Some(time_idle) => {
-            idle <= time_idle as f64
-                && row.time_viewed.map_or(true, |viewed| (viewed as f64) < idle)
+            idle <= time_idle as f64 && row.time_viewed.is_none_or(|viewed| (viewed as f64) < idle)
         }
         None => false,
     };
@@ -2039,7 +2038,7 @@ async fn stats(
 }
 
 /// An IANA-shaped timezone identifier (REF validates via Intl; the port
-/// checks the shape here and date_key falls back to UTC for unknown
+/// checks the shape here and `date_key` falls back to UTC for unknown
 /// zones — HTTP-H4 notes).
 fn valid_timezone(timezone: &str) -> bool {
     if timezone.is_empty() || timezone == "UTC" {
@@ -2538,7 +2537,7 @@ fn compaction_events_sql(projected: bool) -> String {
 /// calendar date). Unknown/invalid zones fall back to UTC (the handler
 /// only checks the IANA shape up front).
 fn date_key(time: i64, timezone: &str) -> String {
-    let zone = jiff::tz::TimeZone::get(timezone).unwrap_or_else(|_| jiff::tz::TimeZone::UTC);
+    let zone = jiff::tz::TimeZone::get(timezone).unwrap_or(jiff::tz::TimeZone::UTC);
     let Ok(instant) = jiff::Timestamp::from_millisecond(time) else {
         return "1970-01-01".to_string();
     };

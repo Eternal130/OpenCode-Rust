@@ -504,7 +504,7 @@ impl SessionModelRequest {
                 message.content = message
                     .content
                     .into_iter()
-                    .filter_map(|part| match part {
+                    .map(|part| match part {
                         ContentPart::Media {
                             media,
                             filename,
@@ -513,22 +513,22 @@ impl SessionModelRequest {
                             provider_metadata,
                         } => {
                             if media.kind() != oc_ai::schema::media::Kind::Image {
-                                return Some(ContentPart::Media {
+                                return ContentPart::Media {
                                     media,
                                     filename,
                                     cache,
                                     metadata,
                                     provider_metadata,
-                                });
+                                };
                             }
                             let Some(inline) = media.inline() else {
-                                return Some(ContentPart::Media {
+                                return ContentPart::Media {
                                     media,
                                     filename,
                                     cache,
                                     metadata,
                                     provider_metadata,
-                                });
+                                };
                             };
                             let resource = filename.clone().unwrap_or_else(|| inline.mime.clone());
                             match crate::image::normalize(&resource, &inline.base64, &limits) {
@@ -538,7 +538,7 @@ impl SessionModelRequest {
                                     } else {
                                         normalized.mime
                                     };
-                                    Some(ContentPart::Media {
+                                    ContentPart::Media {
                                         media: oc_ai::schema::media::Asset {
                                             source: oc_ai::schema::media::Source::Base64 {
                                                 data: normalized.base64,
@@ -551,14 +551,14 @@ impl SessionModelRequest {
                                         cache,
                                         metadata,
                                         provider_metadata,
-                                    })
+                                    }
                                 }
                                 Err(error) => {
-                                    Some(ContentPart::text(format!("[1 image omitted: {error}]")))
+                                    ContentPart::text(format!("[1 image omitted: {error}]"))
                                 }
                             }
                         }
-                        other => Some(other),
+                        other => other,
                     })
                     .collect();
                 message

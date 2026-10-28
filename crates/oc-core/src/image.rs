@@ -369,7 +369,7 @@ mod tests {
         };
         let normalized = normalize("a.png", &payload, &limits).unwrap();
         assert_eq!(normalized.base64, payload);
-        assert!(normalized.mime.is_empty());
+        assert_eq!(normalized.mime, "");
     }
 
     #[test]

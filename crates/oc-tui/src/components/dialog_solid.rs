@@ -2043,6 +2043,9 @@ fn dialog_chrome_button_hits(
 // The per-family arms grew with the family set; same shape as the
 // dispatcher tables.
 #[allow(clippy::too_many_lines)]
+// One struct-literal builder for the dialog's input bundle; the 8th
+// arg keeps every field explicit rather than hiding defaults.
+#[allow(clippy::too_many_arguments)]
 fn build_inputs(
     entry: &DialogEntry,
     props: &SelectProps,

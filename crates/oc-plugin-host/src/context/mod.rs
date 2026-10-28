@@ -118,14 +118,13 @@ pub const MUTATING_DISPATCH_TIMEOUT: std::time::Duration = std::time::Duration::
 pub fn is_mutating_hook(domain: &str, name: &str) -> bool {
     match domain {
         // session.* — every point observes/mutates a live message body
-        // or rides the model round trip.
-        "session" => true,
+        // or rides the model round trip. chat.message-style body
+        // mutators (future domain) are classified wholesale like
+        // session.
+        "session" | "chat" => true,
         // tool.execute.* wrap a full tool execution; tool.transform
         // rewrites the tool body itself.
         "tool" => name == "transform" || name.starts_with("execute."),
-        // chat.message-style body mutators (future domain, classified
-        // wholesale like session).
-        "chat" => true,
         _ => false,
     }
 }

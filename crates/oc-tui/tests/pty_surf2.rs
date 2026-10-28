@@ -212,7 +212,7 @@ fn pty_diff_viewer_cycle() {
 /// F15 residual (narrow widths): the pair dialog's URLs WORD-WRAP,
 /// never hard-truncate. The ref renders the links through `<Link>`
 /// (ui/link.tsx:33-39), which sets NO `wrapMode`, and the
-/// TextRenderable default is `"word"` (@opentui/core
+/// `TextRenderable` default is `"word"` (@opentui/core
 /// chunk-node-wp7ct2m6.js:2833,2847) — at a 46-col terminal the
 /// Large dialog clamps to 44 cols (content 40), and the 48-char
 /// localhost link wraps onto continuation rows whose concatenation

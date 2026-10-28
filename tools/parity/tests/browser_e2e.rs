@@ -365,6 +365,8 @@ fn artifacts_dir(scenario: &str) -> PathBuf {
 /// conservative on purpose: an in-flight longer-than-a-day run keeps its
 /// artifacts.
 fn prune_stale_artifacts(root: &std::path::Path) {
+    // from_days() is not const-stable yet; 86_400 s says the same thing.
+    #[allow(clippy::duration_suboptimal_units)]
     const MAX_AGE: std::time::Duration = std::time::Duration::from_secs(86_400);
     let Ok(entries) = std::fs::read_dir(root) else { return };
     let cutoff = std::time::SystemTime::now().checked_sub(MAX_AGE).unwrap_or(std::time::UNIX_EPOCH);

@@ -3490,7 +3490,7 @@ mod tests {
     }
 
     /// RD-17 — activating a setting row replaces the palette with
-    /// DialogConfig AT that setting (`onSelect` → `dialog.replace(
+    /// `DialogConfig` AT that setting (`onSelect` → `dialog.replace(
     /// () => <DialogConfig current={settingID(setting)} />`;
     /// `findIndex` clamped to 0 seeds the row selection).
     #[test]
