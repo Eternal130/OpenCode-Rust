@@ -207,6 +207,12 @@ static RESOLVED: OnceCell<PathBuf> = OnceCell::const_new();
 /// `rg` PATH spawn when every source fails (best-effort parity with the
 /// previous synchronous behavior).
 pub async fn resolve_cached() -> PathBuf {
+    // The env override is honored per call (not cached) so re-pointing
+    // `OPENCODE_RG_PATH` takes effect immediately — the cache only pins
+    // the runtime discovery chain (PATH / global cache / download).
+    if let Some(path) = env_override() {
+        return path;
+    }
     RESOLVED
         .get_or_init(|| async {
             match resolve(|url| http_download(url)).await {

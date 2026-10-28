@@ -1714,7 +1714,7 @@ async fn rg_resolve_order_env_path_cache_download() {
     set_executable(&cache_rg);
 
     let never = |url: String| async move {
-        panic!("no download expected, got {url}");
+        Err::<Vec<u8>, String>(format!("no download expected, got {url}"))
     };
 
     // env override wins over PATH and cache (binary.ts:100 + port seam).
@@ -1826,7 +1826,7 @@ fn rg_platform_map_matches_ref_rows() {
     use crate::tool::ripgrep_runner::platform_config_for;
     assert_eq!(platform_config_for("x86_64", "linux").unwrap().platform, "x86_64-unknown-linux-musl");
     assert_eq!(platform_config_for("aarch64", "linux").unwrap().platform, "aarch64-unknown-linux-gnu");
-    assert_eq!(platform_config_for("x86_64", "darwin").unwrap().extension, "tar.gz");
+    assert_eq!(platform_config_for("x86_64", "macos").unwrap().extension, "tar.gz");
     assert_eq!(platform_config_for("x86_64", "windows").unwrap().extension, "zip");
     assert!(platform_config_for("riscv64", "linux").is_none(), "unsupported platform key");
     // Filename/URL shapes (binary.ts:120-121).
