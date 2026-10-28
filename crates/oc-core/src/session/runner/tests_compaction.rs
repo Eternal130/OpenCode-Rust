@@ -760,3 +760,139 @@ async fn runner_compaction_interrupt_clears_spent_for_the_interrupted_session() 
 
 #[allow(dead_code)]
 fn unused(_: &Harness) {}
+
+// -- AUD-04: native compaction trigger passthrough (compaction.ts:324-372,
+// `deliver(trigger, …)` — the reason rides through, never hard-coded) ------
+
+/// A scripted client whose route supports the in-stream compaction
+/// trigger: normal requests stream from the shared `TestLlm`, `compact`
+/// returns a fixed encrypted checkpoint.
+struct NativeCompactClient {
+    stream: TestLlm,
+}
+
+#[async_trait::async_trait]
+impl crate::session::runner::LlmClient for NativeCompactClient {
+    async fn stream(
+        &self,
+        request: oc_ai::schema::messages::LLMRequest,
+    ) -> Result<crate::session::runner::LlmEventStream, oc_ai::schema::AiError> {
+        Ok(Box::pin(self.stream.stream(request)))
+    }
+
+    fn can_compact(
+        &self,
+        _request: &oc_ai::schema::messages::LLMRequest,
+        mechanism: crate::session::runner::CompactMechanism,
+    ) -> bool {
+        mechanism == crate::session::runner::CompactMechanism::Trigger
+    }
+
+    async fn compact(
+        &self,
+        _request: oc_ai::schema::messages::LLMRequest,
+        _mechanism: crate::session::runner::CompactMechanism,
+    ) -> Result<crate::session::runner::CompactOutcome, oc_ai::schema::AiError> {
+        Ok(crate::session::runner::CompactOutcome {
+            replacement: Vec::new(),
+            checkpoint: Some(oc_ai::schema::messages::ContentPart::compaction_encrypted(
+                "parityfake",
+                "NATIVE-CHECKPOINT",
+            )),
+            usage: None,
+        })
+    }
+}
+
+/// The native-compaction harness: the session model carries
+/// `compaction: native` (a static test endpoint keeps provenance stable).
+async fn native_harness() -> Harness {
+    let llm = TestLlm::new();
+    llm.always(oc_ai::testing::text("ok"));
+    let mut model = super::tests_harness::test_resolved_model();
+    model.compaction = Some(oc_schema::provider::Compaction::Native);
+    super::tests_harness::harness_with_client(
+        std::sync::Arc::new(NativeCompactClient { stream: llm }),
+        model,
+    )
+    .await
+}
+
+/// A manual `/compact` on a native model must NOT publish
+/// `session.compaction.started` (ref deliver: `trigger.reason !==
+/// "manual"` skips the started event) and must settle with
+/// `ended(reason:"manual")` + the encrypted provider context.
+#[tokio::test]
+async fn runner_compaction_native_manual_publishes_no_started_and_manual_reason() {
+    let harness = native_harness().await;
+    harness.create_session().await;
+    harness.admit_prompt("msg_before_native_compact", "hello there").await;
+    harness.execution.resume(harness.session_id().as_str()).await.unwrap();
+    harness
+        .inbox
+        .admit(
+            "msg_native_compact_1",
+            harness.session_id().as_str(),
+            Item::Compaction {
+                payload: oc_schema::session_inbox::CompactionPayload {},
+                delivery: Delivery::Steer,
+            },
+        )
+        .await
+        .unwrap();
+    harness.execution.resume(harness.session_id().as_str()).await.unwrap();
+
+    let events = harness.durable_events().await;
+    // The drain's eager publish (ref runner/llm.ts:91) is the ONLY started
+    // event: reason "manual", tied to the `/compact` inbox item. Pre-fix the
+    // native path added a second `started` with reason "auto".
+    let started: Vec<_> =
+        events.iter().filter(|(type_, _, _)| type_ == "session.compaction.started").collect();
+    assert_eq!(
+        started.len(),
+        1,
+        "exactly one started event (got: {:?})",
+        started.iter().map(|(_, _, data)| data.clone()).collect::<Vec<_>>()
+    );
+    assert_eq!(started[0].2["reason"], serde_json::json!("manual"));
+    assert_eq!(started[0].2["inputID"], serde_json::json!("msg_native_compact_1"));
+    let ended = events
+        .iter()
+        .find(|(type_, _, _)| type_ == "session.compaction.ended")
+        .expect("native compaction ended");
+    assert_eq!(ended.2["reason"], serde_json::json!("manual"));
+    assert!(
+        ended.2.get("providerContext").is_some_and(|context| context["messages"].is_array()),
+        "the native window rides the ended event"
+    );
+}
+
+/// An auto compaction on a native model keeps the started event with
+/// `reason:"auto"` and settles with `ended(reason:"auto")` — the fix must
+/// not disturb the automatic path.
+#[tokio::test]
+async fn runner_compaction_native_auto_keeps_auto_started_and_ended() {
+    let harness = native_harness().await;
+    // Force `due`: a buffer of window-1 pins the ceiling at one token.
+    harness.compaction.configure(crate::session::runner::compaction::Settings {
+        auto: true,
+        buffer: Some(199_999),
+        keep: 15_000,
+    });
+    harness.create_session().await;
+    harness.admit_prompt("msg_native_auto", "hello there").await;
+    harness.execution.resume(harness.session_id().as_str()).await.unwrap();
+
+    let events = harness.durable_events().await;
+    let started = events
+        .iter()
+        .find(|(type_, _, _)| type_ == "session.compaction.started")
+        .expect("auto native compaction publishes a started event");
+    assert_eq!(started.2["reason"], serde_json::json!("auto"));
+    let ended = events
+        .iter()
+        .find(|(type_, _, _)| type_ == "session.compaction.ended")
+        .expect("native compaction ended");
+    assert_eq!(ended.2["reason"], serde_json::json!("auto"));
+    assert!(ended.2.get("providerContext").is_some());
+}
