@@ -189,8 +189,13 @@ pub struct InstructionEntrySnapshotItem {
 pub struct Revert {
     #[serde(rename = "messageID")]
     pub message_id: MessageId,
-    /// Legacy V1 compatibility state.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Legacy V1 compatibility state — ref wire key `partID`.
+    #[serde(
+        rename = "partID",
+        alias = "part_id",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub part_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub snapshot: Option<SnapshotId>,
@@ -203,7 +208,13 @@ pub struct Revert {
 pub struct RevertV1 {
     #[serde(rename = "messageID")]
     pub message_id: MessageId,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Legacy TS-era wire key `partID` (session-revert.ts RevertV1).
+    #[serde(
+        rename = "partID",
+        alias = "part_id",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub part_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub snapshot: Option<String>,
@@ -250,6 +261,31 @@ mod tests {
         let value = serde_json::json!({"type": "through", "messageID": "msg_2"});
         let parsed: ForkBoundary = serde_json::from_value(value.clone()).unwrap();
         assert_eq!(serde_json::to_value(&parsed).unwrap(), value);
+    }
+
+    /// RW followup: `Revert`/`RevertV1.part_id` ride the ref wire key
+    /// `partID` (session-revert.ts) — TS-era rows decode faithfully, with
+    /// snake_case alias tolerance for early port-written rows.
+    #[test]
+    fn revert_part_id_wire() {
+        let revert = Revert {
+            message_id: MessageId("msg_1".into()),
+            part_id: Some("prt_9".into()),
+            snapshot: None,
+            files: None,
+        };
+        let json = serde_json::to_value(&revert).unwrap();
+        assert!(json.get("partID").is_some(), "wire key must be partID: {json}");
+        let from_camel: Revert = serde_json::from_value(json).unwrap();
+        assert_eq!(from_camel, revert);
+        // TS-era row decode + snake_case alias tolerance.
+        let ts_era = serde_json::json!({"messageID": "msg_2", "partID": "prt_1"});
+        assert_eq!(serde_json::from_value::<Revert>(ts_era).unwrap().part_id, Some("prt_1".into()));
+        let port_written = serde_json::json!({"messageID": "msg_2", "part_id": "prt_1"});
+        assert_eq!(
+            serde_json::from_value::<Revert>(port_written).unwrap().part_id,
+            Some("prt_1".into())
+        );
     }
 
     #[test]

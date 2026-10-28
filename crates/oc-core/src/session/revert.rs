@@ -294,7 +294,10 @@ pub fn decode_persisted_revert(value: &serde_json::Value) -> Option<SessionRever
     struct RevertV1 {
         #[serde(rename = "messageID")]
         message_id: MessageId,
-        #[serde(default)]
+        // Legacy TS-era rows persist the camelCase `partID` key
+        // (session-revert.ts RevertV1.partID); alias keeps snake_case
+        // tolerance for rows written by early port builds.
+        #[serde(rename = "partID", alias = "part_id", default)]
         part_id: Option<String>,
         snapshot: Option<String>,
         #[serde(default)]
@@ -307,21 +310,16 @@ pub fn decode_persisted_revert(value: &serde_json::Value) -> Option<SessionRever
             .map(|file| oc_schema::session_support::FileDiff {
                 file: file.path,
                 patch: file.patch,
-                additions: file
-                    .additions
-                    .as_f64()
-                    .map(|v| v.max(0.0) as u64)
-                    .unwrap_or_default(),
-                deletions: file
-                    .deletions
-                    .as_f64()
-                    .map(|v| v.max(0.0) as u64)
-                    .unwrap_or_default(),
+                additions: file.additions.as_f64().map(|v| v.max(0.0) as u64).unwrap_or_default(),
+                deletions: file.deletions.as_f64().map(|v| v.max(0.0) as u64).unwrap_or_default(),
                 status: file.status,
             })
             .collect()
     });
-    let _ = legacy.part_id; // parity surface: legacy partID has no current consumer
+    // Ref decode maps partID through into Revert.partID; the port's
+    // SessionRevertState has no partID field, so the decoded value is
+    // dropped here — revisit if a consumer for legacy partID appears.
+    let _ = legacy.part_id;
     Some(SessionRevertState {
         message_id: legacy.message_id,
         snapshot: legacy.snapshot.map(SnapshotId::parse),
