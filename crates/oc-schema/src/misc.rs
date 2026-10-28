@@ -126,7 +126,9 @@ pub type WorktreeList = Vec<WorktreeDirectory>;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct WorktreeOperationError {
     pub message: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    // ref wire key is `forceRequired` (worktree.ts:49). Currently dead code
+    // (no emitter) but kept 1:1 with the ref wire shape.
+    #[serde(rename = "forceRequired", default, skip_serializing_if = "Option::is_none")]
     pub force_required: Option<bool>,
 }
 

@@ -1447,9 +1447,7 @@ impl Inner {
             // a char boundary so replay never emits invalid UTF-8
             // (ref trims on its string buffer — pty.ts:219-221).
             let mut extra = 0;
-            while extra < live.buffer.len()
-                && live.buffer[extra] & 0b1100_0000 == 0b1000_0000
-            {
+            while extra < live.buffer.len() && live.buffer[extra] & 0b1100_0000 == 0b1000_0000 {
                 extra += 1;
             }
             if extra > 0 {
@@ -2679,4 +2677,3 @@ mod tests {
         assert_eq!(live.buffer_cursor, OUTPUT_LIMIT); // excess + the split codepoint byte
     }
 }
-

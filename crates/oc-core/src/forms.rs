@@ -1098,10 +1098,7 @@ mod tests {
             })
             .await
             .unwrap();
-        forms
-            .reply(&created.id, answer(&[("name", FormValue::String("x".into()))]))
-            .await
-            .unwrap();
+        forms.reply(&created.id, answer(&[("name", FormValue::String("x".into()))])).await.unwrap();
         created.id
     }
 
@@ -1180,7 +1177,10 @@ mod tests {
         ];
         for value in valid {
             assert_eq!(
-                validate_answer(std::slice::from_ref(&field), &answer(&[("when", FormValue::String(value.into()))])),
+                validate_answer(
+                    std::slice::from_ref(&field),
+                    &answer(&[("when", FormValue::String(value.into()))])
+                ),
                 None,
                 "expected valid: {value}"
             );
@@ -1198,7 +1198,10 @@ mod tests {
         ];
         for value in invalid {
             assert_eq!(
-                validate_answer(std::slice::from_ref(&field), &answer(&[("when", FormValue::String(value.into()))])),
+                validate_answer(
+                    std::slice::from_ref(&field),
+                    &answer(&[("when", FormValue::String(value.into()))])
+                ),
                 Some("Expected date-time for form field: when".to_string()),
                 "expected invalid: {value}"
             );
