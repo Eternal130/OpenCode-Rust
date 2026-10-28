@@ -849,9 +849,12 @@ static IN_FLIGHT_REFRESHES: LazyLock<parking_lot::Mutex<HashMap<String, SharedRe
     LazyLock::new(|| parking_lot::Mutex::new(HashMap::new()));
 
 /// `refreshKey` (oauth.ts:35-38): the token endpoint URL, client id and
-/// refresh token identify one grant. The endpoint is only known after
-/// discovery (which runs inside the refresh), so the resource server
-/// URL stands in — one server, one token, one grant.
+/// refresh token identify one grant. DEDUP-KEY DEVIATION: the ref keys on
+/// the token endpoint URL (the request's own URL at share time), but the
+/// port computes the key BEFORE the refresh runs — the endpoint is only
+/// known after discovery (which runs inside the refresh) — so the
+/// resource server URL (`config.url`) stands in as a documented
+/// stand-in: one server, one token, one grant.
 fn refresh_key(config: &RemoteConfig, credential: &StoredCredential) -> String {
     let client_id = match &credential.client {
         Some(client) => client.client_id.clone(),
@@ -893,11 +896,20 @@ pub async fn refresh(
             future
         }
     };
-    let outcome = pending.await;
-    // Only the inserter removes, and only after the grant settled —
-    // `refreshes.delete(key)` in the ref's `.finally`.
-    IN_FLIGHT_REFRESHES.lock().remove(&key);
-    outcome
+    // Every awaiter removes the entry post-settle — `refreshes.delete(key)`
+    // in the ref's `.finally`. Removal runs on ALL unwind paths via Drop
+    // (an RAII guard): if `pending.await` unwinds — e.g. `refresh_once`
+    // panics inside the shared future — the map entry is still removed,
+    // so a later refresh starts fresh instead of awaiting a poisoned
+    // entry forever.
+    struct RemoveOnSettle(String);
+    impl Drop for RemoveOnSettle {
+        fn drop(&mut self) {
+            IN_FLIGHT_REFRESHES.lock().remove(&self.0);
+        }
+    }
+    let _guard = RemoveOnSettle(key);
+    pending.await
 }
 
 /// The un-deduplicated refresh: discovery through the resource server's
@@ -1093,6 +1105,46 @@ mod tests {
             params.get("resource_metadata").map(String::as_str),
             Some("https://srv/.well-known/oauth-protected-resource")
         );
+    }
+
+    #[tokio::test]
+    async fn refresh_removes_the_in_flight_entry_on_failure() {
+        // A refresh that fails (OAuth disabled → immediate Err) must not
+        // leave its dedup entry behind: the ref's `.finally` deletes the
+        // key on every settle path, and the port's Drop guard covers
+        // unwind paths too (a panicking refresh_once would drop the guard
+        // during unwinding). A later refresh must start fresh.
+        let config = RemoteConfig {
+            url: "https://srv/mcp".into(),
+            headers: None,
+            oauth: None,
+            disabled: None,
+            codemode: None,
+            timeout: None,
+            protocol: None,
+        };
+        let credential = stored_credential(
+            "cred_1",
+            &OAuthValue {
+                method_id: "mcp_abc".into(),
+                refresh: "ref".into(),
+                access: "acc".into(),
+                expires: now_ms() - 1000,
+                metadata: None,
+            },
+        );
+        let http = reqwest::Client::new();
+        let key = refresh_key(&config, &credential);
+        let first = refresh(&http, &config, &credential).await;
+        assert!(first.is_err(), "OAuth disabled → refresh fails");
+        assert!(
+            !IN_FLIGHT_REFRESHES.lock().contains_key(&key),
+            "failed refresh must remove its in-flight entry"
+        );
+        // And the second call is a fresh attempt, not a poisoned await.
+        let second = refresh(&http, &config, &credential).await;
+        assert!(second.is_err());
+        assert!(!IN_FLIGHT_REFRESHES.lock().contains_key(&key));
     }
 
     #[test]
