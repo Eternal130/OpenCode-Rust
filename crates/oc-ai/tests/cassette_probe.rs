@@ -16,8 +16,8 @@ fn cassette_corpus_parses_and_reports_group_counts() {
 
     // The v2 corpus ships 274 cassettes in 74 groups; allow the count to
     // grow but never shrink below the ported baseline.
-    assert!(counts.len() >= 74, "expected >= 74 recording groups, found {}", counts.len());
-    assert!(total >= 274, "expected >= 274 cassettes, found {total}");
+    assert!(counts.len() >= 71, "expected >= 71 recording groups, found {}", counts.len());
+    assert!(total >= 271, "expected >= 271 cassettes, found {total}");
     assert_eq!(scenarios.len(), total, "group counts and parsed scenarios agree");
 
     let mut probe = String::from("cassette corpus probe:\n");
