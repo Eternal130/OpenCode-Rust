@@ -1010,6 +1010,7 @@ async fn oauth_concurrent_refreshes_share_one_token_call() {
     );
 
     // The entry dropped with the grant: a later refresh starts fresh.
+    stub.state.lock().refresh_gate = None;
     let again = oauth::refresh(&http, &config, &credential).await.expect("sequential re-refresh");
     assert_eq!(again.access_token, "stub-access-2");
     assert_eq!(stub.state.lock().refresh_grants.len(), 2, "the second refresh hit the endpoint");
@@ -1047,7 +1048,11 @@ async fn oauth_refresh_failure_propagates_to_every_waiter_then_recovers() {
     assert_eq!(stub.state.lock().refresh_grants.len(), 1, "still only one token call");
 
     // The failed grant left no stuck entry: recovery on the next refresh.
-    stub.state.lock().reject_refresh = false;
+    {
+        let mut state = stub.state.lock();
+        state.reject_refresh = false;
+        state.refresh_gate = None;
+    }
     let recovered = oauth::refresh(&http, &config, &credential).await.expect("recovered refresh");
     assert_eq!(recovered.access_token, "stub-access-2");
     assert_eq!(stub.state.lock().refresh_grants.len(), 2);
