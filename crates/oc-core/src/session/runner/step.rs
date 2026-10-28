@@ -17,9 +17,9 @@
 use std::sync::Arc;
 
 use futures::StreamExt;
-use oc_ai::schema::ProviderFailureClassification;
 use oc_ai::schema::events::LLMEvent;
 use oc_ai::schema::messages::ToolChoice;
+use oc_ai::schema::ProviderFailureClassification;
 use oc_schema::common::{FinishReason, Record, SessionError};
 use oc_schema::id::{AgentId, MessageId, SessionId};
 use tokio::sync::{mpsc, watch};
@@ -34,8 +34,8 @@ use crate::session::runner::publisher::{
 };
 use crate::session::runner::retry::Decision;
 use crate::session::runner::{
-    LlmClient, ResolvedModel, SessionUsage, is_context_overflow_failure, is_interrupted_stream,
-    is_retry_full_transport, is_retryable, to_session_error, unknown_finish_error,
+    is_context_overflow_failure, is_interrupted_stream, is_retry_full_transport, is_retryable,
+    to_session_error, unknown_finish_error, LlmClient, ResolvedModel, SessionUsage,
 };
 
 /// How long finalization waits for tool fibers to observe the interrupt

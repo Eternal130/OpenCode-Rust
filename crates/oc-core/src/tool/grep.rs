@@ -80,12 +80,12 @@ pub(crate) fn relative_to(base: &Path, target: &Path) -> String {
         common += 1;
     }
     let mut parts: Vec<String> = (common..base.len()).map(|_| "..".to_string()).collect();
-    parts.extend(
-        target[common..]
-            .iter()
-            .map(|c| c.as_os_str().to_string_lossy().into_owned()),
-    );
-    if parts.is_empty() { ".".to_string() } else { parts.join("/") }
+    parts.extend(target[common..].iter().map(|c| c.as_os_str().to_string_lossy().into_owned()));
+    if parts.is_empty() {
+        ".".to_string()
+    } else {
+        parts.join("/")
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -250,11 +250,14 @@ pub async fn ripgrep_grep(
         let submatches: Vec<Submatch> = data["submatches"]
             .as_array()
             .map(|rows| {
-                rows.iter().take(MAX_SUBMATCHES).map(|row| Submatch {
-                    text: row["match"]["text"].as_str().unwrap_or_default().to_string(),
-                    start: row["start"].as_u64().unwrap_or(0),
-                    end: row["end"].as_u64().unwrap_or(0),
-                }).collect()
+                rows.iter()
+                    .take(MAX_SUBMATCHES)
+                    .map(|row| Submatch {
+                        text: row["match"]["text"].as_str().unwrap_or_default().to_string(),
+                        start: row["start"].as_u64().unwrap_or(0),
+                        end: row["end"].as_u64().unwrap_or(0),
+                    })
+                    .collect()
             })
             .unwrap_or_default();
         let text = if text.chars().count() > MATCH_TEXT_CLAMP {
@@ -263,7 +266,13 @@ pub async fn ripgrep_grep(
         } else {
             text.to_string()
         };
-        Some(SearchMatch { path: normalize_path(path), line: line_number, offset, text, submatches })
+        Some(SearchMatch {
+            path: normalize_path(path),
+            line: line_number,
+            offset,
+            text,
+            submatches,
+        })
     })
     .await
 }

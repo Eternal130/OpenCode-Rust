@@ -36,12 +36,11 @@ pub fn discover_themes(directories: &[PathBuf]) -> Vec<DiscoveredTheme> {
     let mut index: HashMap<String, usize> = HashMap::new();
     for directory in directories {
         for (name, source) in discover_in_directory(directory) {
-            match index.get(&name) {
-                Some(&slot) => found[slot] = (name, source),
-                None => {
-                    index.insert(name.clone(), found.len());
-                    found.push((name, source));
-                }
+            if let Some(&slot) = index.get(&name) {
+                found[slot] = (name, source);
+            } else {
+                index.insert(name.clone(), found.len());
+                found.push((name, source));
             }
         }
     }

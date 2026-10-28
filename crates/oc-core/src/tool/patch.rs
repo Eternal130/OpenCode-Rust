@@ -370,11 +370,8 @@ async fn execute_patch(
     // dedup for the permission resources; the `filepath` metadata keeps the
     // full un-deduped target list in patch order (patch.ts:202).
     let mut seen = std::collections::HashSet::new();
-    let resources: Vec<String> = targets
-        .iter()
-        .filter(|resource| seen.insert((*resource).clone()))
-        .cloned()
-        .collect();
+    let resources: Vec<String> =
+        targets.iter().filter(|resource| seen.insert((*resource).clone())).cloned().collect();
     let mut assert_input =
         crate::permission::AssertInput::new(context.session_id.clone(), "edit", resources.clone());
     assert_input.agent = Some(context.agent.clone());

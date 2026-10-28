@@ -1260,9 +1260,8 @@ async fn tool_read_structured_output_matches_ref_union_shapes() {
 
     // Directory read → ListPage.
     std::fs::create_dir_all(harness.dir.join("src")).expect("dir");
-    let settled = call(&harness.tools, "read", serde_json::json!({ "path": "src" }))
-        .await
-        .expect("read dir");
+    let settled =
+        call(&harness.tools, "read", serde_json::json!({ "path": "src" })).await.expect("read dir");
     assert_eq!(
         settled.output.expect("structured output"),
         serde_json::json!({

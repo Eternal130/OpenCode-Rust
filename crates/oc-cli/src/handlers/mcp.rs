@@ -525,9 +525,10 @@ async fn logout(name: &str) -> i32 {
     // `connections` filter `type === "credential"` names the removals.
     let integration = match client
         .integration()
-        .get(integration_id, &oc_client::types::IntegrationGetQuery {
-            location: Some(location_query()),
-        })
+        .get(
+            integration_id,
+            &oc_client::types::IntegrationGetQuery { location: Some(location_query()) },
+        )
         .await
     {
         Ok(response) => response.data,

@@ -67,16 +67,19 @@ fn connect_event_stream(
     client: crate::Client,
     activity: crate::shared_events::Activity,
 ) -> EventStream<serde_json::Value> {
-    Box::pin(futures::stream::once(async move {
-        client.event().subscribe().await.map(|sse| {
-            sse.with_on_activity(move || activity.signal())
-                .into_json_stream()
+    Box::pin(
+        futures::stream::once(async move {
+            client
+                .event()
+                .subscribe()
+                .await
+                .map(|sse| sse.with_on_activity(move || activity.signal()).into_json_stream())
         })
-    })
-    .flat_map(|result| match result {
-        Ok(stream) => stream.left_stream(),
-        Err(error) => futures::stream::once(async move { Err(error) }).right_stream(),
-    }))
+        .flat_map(|result| match result {
+            Ok(stream) => stream.left_stream(),
+            Err(error) => futures::stream::once(async move { Err(error) }).right_stream(),
+        }),
+    )
 }
 
 #[cfg(test)]
@@ -125,8 +128,6 @@ mod shared_tests {
     use futures::StreamExt;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
-
-    
 
     /// Encodes one `/api/event` data frame (JSON-in-string,
     /// double-decoded by `SseStream`).
@@ -218,7 +219,11 @@ mod shared_tests {
             }
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }
-        assert_eq!(client_closes.load(Ordering::SeqCst), 1, "last subscriber closes the connection");
+        assert_eq!(
+            client_closes.load(Ordering::SeqCst),
+            1,
+            "last subscriber closes the connection"
+        );
 
         // Fresh subscribe reconnects (second HTTP request) and receives
         // only the replacement connection's events — no replay of the
@@ -232,7 +237,11 @@ mod shared_tests {
             fresh.next().await.unwrap().unwrap(),
             serde_json::json!({"type": "session.updated", "value": 2})
         );
-        assert_eq!(requests.load(Ordering::SeqCst), 2, "fresh subscribe opens a replacement connection");
+        assert_eq!(
+            requests.load(Ordering::SeqCst),
+            2,
+            "fresh subscribe opens a replacement connection"
+        );
         drop(fresh);
     }
 }

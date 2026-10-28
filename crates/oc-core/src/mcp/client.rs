@@ -243,14 +243,14 @@ fn input_required_payload(result: &ServerResult) -> Option<serde_json::Value> {
 /// `elicitationId` (the TS SDK's `elicitUrl` sends exactly that inside
 /// MRTR rounds; test/mcp.test.ts:168) keeps `elicitation_id: None` —
 /// no parked completion entry, no `elicitationID` form metadata.
-fn lenient_elicit_params(params: &serde_json::Value) -> Option<super::elicitation::ElicitationParams> {
+fn lenient_elicit_params(
+    params: &serde_json::Value,
+) -> Option<super::elicitation::ElicitationParams> {
     let message = params.get("message").and_then(serde_json::Value::as_str)?.to_string();
     if params.get("mode").and_then(serde_json::Value::as_str) == Some("url") {
         let url = params.get("url").and_then(serde_json::Value::as_str)?.to_string();
-        let elicitation_id = params
-            .get("elicitationId")
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_string);
+        let elicitation_id =
+            params.get("elicitationId").and_then(serde_json::Value::as_str).map(str::to_string);
         return Some(super::elicitation::ElicitationParams::Url { message, url, elicitation_id });
     }
     Some(super::elicitation::ElicitationParams::Form {
@@ -258,7 +258,6 @@ fn lenient_elicit_params(params: &serde_json::Value) -> Option<super::elicitatio
         requested_schema: params.get("requestedSchema").cloned().unwrap_or(serde_json::Value::Null),
     })
 }
-
 
 /// live on inner errors and are lost once flattened to one message).
 fn error_chain(error: &(dyn std::error::Error + '_)) -> Vec<String> {
@@ -833,7 +832,9 @@ impl Connection {
                     params = self.fulfill_input_required(params, required).await?;
                 }
                 None => match result {
-                    ServerResult::CallToolResult(result) => return Ok(to_call_tool_result(&result)),
+                    ServerResult::CallToolResult(result) => {
+                        return Ok(to_call_tool_result(&result))
+                    }
                     _ => {
                         return Err(RequestError {
                             server: self.server_name().to_string(),

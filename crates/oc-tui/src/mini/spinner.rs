@@ -99,8 +99,9 @@ impl Motion {
                     let duration = pace.duration_ms as f64;
                     (elapsed_ms - intro_duration) * pace.initial
                         + (pace.end - pace.initial)
-                            * (duration * (progress * progress * progress
-                                - progress * progress * progress * progress / 2.0)
+                            * (duration
+                                * (progress * progress * progress
+                                    - progress * progress * progress * progress / 2.0)
                                 + (elapsed_ms - after - duration).max(0.0))
                 }
             }
@@ -219,9 +220,7 @@ pub fn work_spinner(id: &str) -> Motion {
             pace: Some(WORK_PACE),
             ..octets(&[0x14, 0x14, 0x14, 0x1c, 0x3c, 0x38, 0x28, 0x28, 0x28, 0x38, 0x3c, 0x1c], 100)
         },
-        "block-low-comet" => {
-            Motion { pace: Some(WORK_PACE), ..plain(block_low_comet(), 100) }
-        }
+        "block-low-comet" => Motion { pace: Some(WORK_PACE), ..plain(block_low_comet(), 100) },
         "block-low-duet" => plain(block_low_duet(), 60),
         "block-shuttle" => octets(&[0x14, 0x28], 500),
         "block-bridge" => octets(&[0x14, 0x14, 0x14, 0x3c, 0x28, 0x28, 0x28, 0x3c], 120),
@@ -230,10 +229,9 @@ pub fn work_spinner(id: &str) -> Motion {
         }
         "small-toggle" => plain(vec!['\u{25ab}', '\u{25aa}'], 320),
         "square-toggle" => plain(vec!['\u{25a1}', '\u{25a0}'], 500),
-        "grow-shrink" => plain(
-            vec!['\u{25ab}', '\u{25ab}', '\u{25aa}', '\u{25a0}', '\u{25aa}'],
-            180,
-        ),
+        "grow-shrink" => {
+            plain(vec!['\u{25ab}', '\u{25ab}', '\u{25aa}', '\u{25a0}', '\u{25aa}'], 180)
+        }
         "quadrant-orbit" => plain(vec!['\u{2598}', '\u{259d}', '\u{2597}', '\u{2596}'], 160),
         "crosshatch" => plain(vec!['\u{25a7}', '\u{25a9}', '\u{25a8}', '\u{25a9}'], 240),
         "density-wave" => plain(
@@ -298,9 +296,7 @@ pub fn seed_work() -> Motion {
 /// the seed levels' head, played once.
 #[must_use]
 pub fn seed_launch() -> Motion {
-    let frames = (0..21)
-        .map(|index| if index < 10 { '\u{25ab}' } else { '\u{25aa}' })
-        .collect();
+    let frames = (0..21).map(|index| if index < 10 { '\u{25ab}' } else { '\u{25aa}' }).collect();
     let levels = (0..21).map(|index| seed_level(index, 40)).collect();
     Motion { once: true, levels, ..plain(frames, 40) }
 }
@@ -443,7 +439,10 @@ mod tests {
         assert_eq!(work_spinner("block-soft-sweep").pace, Some(WORK_PACE));
         assert_eq!(work_spinner("block-low-comet").pace, Some(WORK_PACE));
         let pace = work_spinner("block-soft-sweep").pace.expect("work pace");
-        assert_eq!((pace.initial, pace.end, pace.after_ms, pace.duration_ms), (1.2, 0.96, 30_000, 30_000));
+        assert_eq!(
+            (pace.initial, pace.end, pace.after_ms, pace.duration_ms),
+            (1.2, 0.96, 30_000, 30_000)
+        );
     }
 
     /// The pace integration (`one-cell-motion.ts:31-38`): at 45 s
@@ -471,8 +470,9 @@ mod tests {
             let progress = 1.0_f64;
             let time = 75_000.0 * 1.25
                 + (0.5 - 1.25)
-                    * (30_000.0 * (progress * progress * progress
-                        - progress * progress * progress * progress / 2.0)
+                    * (30_000.0
+                        * (progress * progress * progress
+                            - progress * progress * progress * progress / 2.0)
                         + (75_000.0 - 60_000.0));
             (((time * 40.0 / (40.0 * 40.0)).floor() as i64).rem_euclid(40)) as f64
         };

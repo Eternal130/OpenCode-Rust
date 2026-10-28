@@ -18,15 +18,15 @@ use crate::bus::{Bus, PublishOptions};
 use crate::database::Database;
 use crate::session::execution::{Continuation, DrainOutcome, RunError};
 use crate::session::inbox::{Promotable, SessionInbox};
-use crate::session::runner::LlmClient;
 use crate::session::runner::compaction::{
     Reason as CompactionReason, SessionCompaction, Trigger as CompactionTrigger,
 };
 use crate::session::runner::context::{self, Loaded, SessionContext};
-use crate::session::runner::model_request::{SessionModelRequest, prepare_primary};
+use crate::session::runner::model_request::{prepare_primary, SessionModelRequest};
 use crate::session::runner::prompt_prepare::PromptPrepare;
 use crate::session::runner::step::{AttemptFailure, AttemptInput, Outcome, StepDeps};
 use crate::session::runner::title::SessionTitle;
+use crate::session::runner::LlmClient;
 use crate::session::store::SessionStore;
 
 /// `CONTINUE_AFTER_INCOMPLETE_STREAM` (llm.ts:35-36).

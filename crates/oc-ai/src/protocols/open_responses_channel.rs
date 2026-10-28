@@ -22,13 +22,13 @@ use crate::protocols::open_responses_continuation::{
     self, ContinuationDriverInput, ContinuationShape,
 };
 use crate::protocols::shared::invalid_request;
-use crate::route::Route;
 use crate::route::auth::Headers;
 use crate::route::client::{execute_http_frames, frames_to_events};
 use crate::route::transport::websocket::{
     self, ChannelConnect, FallbackFn, WebSocketChannelDriver, WebSocketChannelExchange,
     WebSocketChannelExecution, WebSocketChannelExecutor,
 };
+use crate::route::Route;
 use crate::schema::{
     AiError, AiErrorReason, HttpContext, HttpOptions, LLMEvent, LLMRequest, ReasonFields,
 };

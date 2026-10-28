@@ -82,10 +82,7 @@ fn expand_wildcard(addr: SocketAddr) -> Vec<String> {
 /// libc is already a direct oc-server dependency). Interface order is
 /// preserved; failures yield an empty list (the wildcard then expands to
 /// no urls, exactly like an interface-less v2 host).
-#[allow(
-    unsafe_code,
-    reason = "getifaddrs(3) is the crate-free interface enumeration (RV-P6)"
-)]
+#[allow(unsafe_code, reason = "getifaddrs(3) is the crate-free interface enumeration (RV-P6)")]
 fn interface_addresses(ipv4: bool) -> Vec<IpAddr> {
     #[cfg(unix)]
     unsafe {

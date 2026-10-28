@@ -407,9 +407,17 @@ fn codemode_search_matches_names_descriptions_and_params() {
         ),
     };
     let catalog = vec![
-        spec("fs.read_file", "Read a file from disk", r#"{ "path": { "type": "string", "description": "The file path to read" } }"#),
+        spec(
+            "fs.read_file",
+            "Read a file from disk",
+            r#"{ "path": { "type": "string", "description": "The file path to read" } }"#,
+        ),
         spec("fs.write_file", "Write a file to disk", r#"{ "path": { "type": "string" } }"#),
-        spec("weather.forecast", "Tomorrow's umbrella outlook", r#"{ "city": { "type": "string", "description": "rain chance by city" } }"#),
+        spec(
+            "weather.forecast",
+            "Tomorrow's umbrella outlook",
+            r#"{ "city": { "type": "string", "description": "rain chance by city" } }"#,
+        ),
     ];
 
     let run = |code: &str| {
