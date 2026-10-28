@@ -6,7 +6,7 @@
 //! stream_for_session`] — the surface step.rs calls with the resolved
 //! model's transport. The production [`RouteLlmClient`] answer is exercised
 //! end-to-end against a local WebSocket mock (ADR-0006: loopback only, no
-//! real providers): the OpenResponses WS channel opens with the expected
+//! real providers): the `OpenResponses` WS channel opens with the expected
 //! ws:// URL + handshake headers, sticky-falls-back to HTTP SSE on refused
 //! connects, and `transport: None` / WS-less routes never open a channel.
 
@@ -65,6 +65,9 @@ async fn ws_mock(reply: Vec<String>) -> WsMock {
                 let replies = Arc::clone(&replies);
                 tokio::spawn(async move {
                     let mut captured = Handshake::default();
+                    // Test-only handshake callback; the large Err type comes
+                    // from the tungstenite signature and never escapes.
+                    #[allow(clippy::result_large_err)]
                     let callback = |request: &tokio_tungstenite::tungstenite::handshake::server::Request,
                                     response: tokio_tungstenite::tungstenite::handshake::server::Response| {
                         captured.path = request.uri().to_string();
@@ -298,7 +301,7 @@ fn channel_options_follow_route_protocol() {
     assert_eq!(fields.get("store"), Some(&serde_json::json!(true)));
 }
 
-/// End-to-end leg: `transport: websocket` + an OpenResponses route streams
+/// End-to-end leg: `transport: websocket` + an `OpenResponses` route streams
 /// through the session channel — the handshake hits the ws:// form of the
 /// endpoint with the protocol + auth headers, and the request is one
 /// `response.create` message (stream options stripped).

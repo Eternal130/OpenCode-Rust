@@ -722,7 +722,7 @@ mod tests {
         assert_eq!(results[0].content.as_deref(), Some("d"));
         let request = last_request(&server);
         assert!(
-            request.contains(&format!("authorization: Bearer fc-key"))
+            request.contains("authorization: Bearer fc-key")
                 || request.contains("Authorization: Bearer fc-key")
         );
         let body_start = request.split("\r\n\r\n").nth(1).expect("body");

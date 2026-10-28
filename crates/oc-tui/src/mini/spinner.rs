@@ -474,7 +474,9 @@ mod tests {
                         * (progress * progress * progress
                             - progress * progress * progress * progress / 2.0)
                         + (75_000.0 - 60_000.0));
-            (((time * 40.0 / (40.0 * 40.0)).floor() as i64).rem_euclid(40)) as f64
+            #[allow(clippy::cast_possible_truncation)]
+            let frame = ((time * 40.0 / (40.0 * 40.0)).floor() as i64).rem_euclid(40);
+            frame as f64
         };
         assert_eq!(late, expected);
     }
@@ -493,6 +495,9 @@ mod tests {
         let cycle_frame = seed.one_cell_frame(Duration::from_millis(4_200));
         let elapsed_ms = 4_200.0_f64 - 3_200.0;
         let position = (elapsed_ms * 1.25 / 40.0).floor(); // rate 1.25 pre-decel
+                                                           // Frame-index math from the TS original; indices are tiny so
+                                                           // truncating casts cannot lose data here.
+        #[allow(clippy::cast_possible_truncation)]
         let index = (position as i64).rem_euclid(40) as usize;
         assert_eq!(cycle_frame.level, seed.levels[index]);
     }

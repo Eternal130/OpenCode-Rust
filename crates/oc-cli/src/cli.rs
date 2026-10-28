@@ -206,7 +206,7 @@ impl PathName {
 }
 
 /// `completion <shell>` (rust-extra, RC-11 — the v2 ref has no
-/// completion command): the four clap_complete 4 shells the port
+/// completion command): the four `clap_complete` 4 shells the port
 /// generates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub enum CompletionShell {
@@ -229,7 +229,7 @@ impl CompletionShell {
 }
 
 /// RC-12 — the ref Schema's `maxItems: 100` on the api header list;
-/// clap has no multi-occurrence count value_parser, so the check runs
+/// clap has no multi-occurrence count `value_parser`, so the check runs
 /// as a post-clap parse-time validation (see [`Cli::validate_extra`]).
 pub const MAX_API_HEADERS: usize = 100;
 
@@ -442,7 +442,7 @@ pub enum Commands {
 
 impl Cli {
     /// RC-12 — parse `args` with clap, then run the parse-time range
-    /// checks clap cannot express as value_parsers (multi-occurrence
+    /// checks clap cannot express as `value_parsers` (multi-occurrence
     /// counts). Errors are `clap::Error`s rendered like the other
     /// arg errors, so callers just `exit()` on `Err`.
     pub fn try_parse_from_checked<I, T>(args: I) -> Result<Self, clap::Error>

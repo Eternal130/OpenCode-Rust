@@ -7,7 +7,7 @@
 //! `Frame`, no theme). The painters in `super::{form, permission,
 //! panel, panels, prompt_idle}` consume this module; the keydown
 //! entry points are [`permission_key`] (the two-stage ask) and
-//! [`form_key`] (the FORM_MODE layer set, extracted from the
+//! [`form_key`] (the `FORM_MODE` layer set, extracted from the
 //! session-route pump so both the app and the mini runtime share
 //! one semantics source).
 //!
@@ -261,6 +261,9 @@ fn canonical_tool_name(action: &str) -> &str {
 
 /// `permissionPresentation` for a request.
 #[must_use]
+// Mirrors the TS presenter as one flat match chain; splitting it
+// would obscure the 1:1 port.
+#[allow(clippy::too_many_lines)]
 pub fn permission_presentation(request: &PermissionRequest) -> PermissionPresentation {
     let action = canonical_tool_name(&request.action);
     let input = request.input.as_object().cloned().unwrap_or_default();
@@ -664,8 +667,7 @@ pub fn permission_key(
     }
     match key {
         "left" | "h" => PermissionKey::State(permission_shift(state, -1, &offered)),
-        "right" | "l" => PermissionKey::State(permission_shift(state, 1, &offered)),
-        "tab" => PermissionKey::State(permission_shift(state, 1, &offered)),
+        "right" | "l" | "tab" => PermissionKey::State(permission_shift(state, 1, &offered)),
         "enter" | "return" => {
             let step = permission_run(state, state.selected, child_session);
             match step.reply {
@@ -2099,7 +2101,7 @@ mod tests {
         }
     }
 
-    /// The extracted FORM_MODE keymap keeps the pump's semantics:
+    /// The extracted `FORM_MODE` keymap keeps the pump's semantics:
     /// printables edit the draft, enter commits + advances, tab wraps
     /// back from the review step, escape on a textual field cancels.
     #[test]

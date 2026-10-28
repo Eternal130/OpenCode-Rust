@@ -27,7 +27,7 @@ pub const PATH: &str = open_responses::PATH;
 pub const DEFAULT_BASE_URL: &str = "https://api.x.ai/v1";
 
 /// The WS socket rotation age (REF `RESPONSES_WEBSOCKET_ROTATE_AFTER_MS`,
-/// 24 hours — xAI keeps sockets far longer than OpenAI's 55 minutes).
+/// 24 hours — xAI keeps sockets far longer than `OpenAI`'s 55 minutes).
 pub const WEBSOCKET_ROTATE_AFTER_MS: u64 = 24 * 60 * 1000;
 
 /// The `xai-responses` channel transport options (port of

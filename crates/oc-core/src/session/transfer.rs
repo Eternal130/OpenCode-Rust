@@ -20,7 +20,7 @@ use oc_schema::model;
 use oc_schema::permission::Ruleset;
 use oc_schema::session_support::SessionMetadata;
 use rusqlite::OptionalExtension;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::bus::{Bus, BusError};
 use crate::database::error::DbError;
@@ -64,6 +64,9 @@ pub enum ImportError {
 
 /// `SessionTransfer.import` — replays an exported session into the local
 /// store and returns the projected [`SessionRow`].
+// Import mirrors the TS original as one flat replay pass; splitting it
+// would obscure the 1:1 port, so the line budget is waived here.
+#[allow(clippy::too_many_lines)]
 pub async fn import(
     store: &SessionStore,
     bus: &Bus,
@@ -146,23 +149,21 @@ pub async fn import(
 
     let imported_at = crate::database::migrations::now_ms();
     let messages = settled_messages(&input.data);
-    let count = messages.len() as i64;
+    let count = i64::try_from(messages.len()).unwrap_or(i64::MAX);
 
     {
         let id = session_id.as_str().to_owned();
         let rows = messages;
         let cost = info.get("cost").and_then(Value::as_f64).unwrap_or_default();
-        let tokens =
-            info.get("tokens").cloned().unwrap_or_else(|| Value::Object(Default::default()));
+        let tokens = info.get("tokens").cloned().unwrap_or_else(|| Value::Object(Map::default()));
         let token = |key: &str| num_i64(tokens.get(key));
         let tokens_input = token("input");
         let tokens_output = token("output");
         let tokens_reasoning = token("reasoning");
-        let cache =
-            tokens.get("cache").cloned().unwrap_or_else(|| Value::Object(Default::default()));
+        let cache = tokens.get("cache").cloned().unwrap_or_else(|| Value::Object(Map::default()));
         let tokens_cache_read = num_i64(cache.get("read"));
         let tokens_cache_write = num_i64(cache.get("write"));
-        let time = info.get("time").cloned().unwrap_or_else(|| Value::Object(Default::default()));
+        let time = info.get("time").cloned().unwrap_or_else(|| Value::Object(Map::default()));
         let time_created = opt_num_i64(time.get("created")).unwrap_or(imported_at);
         let time_idle = opt_num_i64(time.get("idle"));
         let time_viewed = match (time_idle, opt_num_i64(time.get("viewed"))) {
@@ -185,7 +186,7 @@ pub async fn import(
                         row.id,
                         id,
                         row.type_,
-                        (index + 1) as i64,
+                        i64::try_from(index + 1).unwrap_or(i64::MAX),
                         row.time_created,
                         imported_at,
                         row.data,
@@ -243,12 +244,16 @@ pub async fn import(
 
 /// Wire times/tokens arrive as float millis (effect `DateTime` numbers);
 /// accept both integer and float JSON representations.
+// Float JSON numbers truncate toward zero intentionally (TS `| 0` parity).
+#[allow(clippy::cast_possible_truncation)]
 fn num_i64(value: Option<&Value>) -> i64 {
     value
         .and_then(|value| value.as_i64().or_else(|| value.as_f64().map(|f| f as i64)))
         .unwrap_or_default()
 }
 
+// Float JSON numbers truncate toward zero intentionally (TS `| 0` parity).
+#[allow(clippy::cast_possible_truncation)]
 fn opt_num_i64(value: Option<&Value>) -> Option<i64> {
     value.and_then(|value| value.as_i64().or_else(|| value.as_f64().map(|f| f as i64)))
 }
@@ -291,6 +296,8 @@ fn settled_messages(data: &Value) -> Vec<StagedMessage> {
         rest.remove("type");
         staged.push(StagedMessage {
             id: message.get("id").and_then(Value::as_str).unwrap_or_default().to_owned(),
+            // Float JSON numbers truncate toward zero intentionally (TS `| 0` parity).
+            #[allow(clippy::cast_possible_truncation)]
             time_created: message
                 .get("time")
                 .and_then(|time| time.get("created"))

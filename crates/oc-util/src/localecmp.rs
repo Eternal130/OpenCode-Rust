@@ -87,7 +87,7 @@ pub fn locale_cmp(a: &str, b: &str) -> Ordering {
 #[cfg(test)]
 mod tests {
     use super::locale_cmp;
-    use std::cmp::Ordering::{self, *};
+    use std::cmp::Ordering::*;
 
     fn assert_order(rising: &[&str]) {
         for (index, left) in rising.iter().enumerate() {

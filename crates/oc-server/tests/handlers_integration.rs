@@ -32,12 +32,17 @@ async fn boot() -> TestServer {
 
 async fn boot_with(password: Option<String>) -> TestServer {
     let dir = tempfile::tempdir().expect("tempdir");
-    let data = tempfile::tempdir().expect("data tempdir");
+    let _data = tempfile::tempdir().expect("data tempdir");
     std::env::set_current_dir(dir.path()).expect("chdir to workspace");
     let mut server = boot_at(dir.path(), password).await;
     // The engine's location points into the workspace tempdir — keep it
     // alive for the server's lifetime (the cwd would otherwise dangle).
-    server._workspace = Some(dir);
+    // Field keeps the workspace tempdir alive; underscore name is the
+    // existing struct convention.
+    #[allow(clippy::used_underscore_binding)]
+    {
+        server._workspace = Some(dir);
+    }
     server
 }
 
@@ -892,6 +897,9 @@ async fn handlers_export_import_round_trip_and_duplicate() {
 /// RV-G4: the import replays the export's settled messages into the store
 /// (REF transfer.ts:64-154) — no more synthetic "imported" placeholders.
 #[tokio::test]
+// One end-to-end import scenario; splitting the assertion chain would
+// obscure the replay contract.
+#[allow(clippy::too_many_lines)]
 async fn handlers_import_replays_messages_and_metadata() {
     let server = boot().await;
     let client = &server.client;

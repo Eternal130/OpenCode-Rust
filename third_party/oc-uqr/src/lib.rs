@@ -6,6 +6,10 @@
 //! only surface ported is what ref consumes:
 //! `encode(text, { border })` + `renderUnicodeCompact`.
 
+// Vendored, port-faithful code: clippy style lints (manual_div_ceil)
+// are suppressed crate-wide to keep the port byte-identical to uqr.
+#![allow(clippy::manual_div_ceil)]
+
 /// ECC level order/format pair bits (`EccMap`, index.mjs:11-16).
 /// (`ecl[0]` indexes the tables, `ecl[1]` is the format-bit value.)
 /// The full ladder is kept for port fidelity though ref only uses L.

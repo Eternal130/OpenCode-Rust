@@ -113,7 +113,7 @@ mod tests {
         fs::write(themes.join("b.json"), r#"{"base":1}"#).unwrap();
         fs::write(themes.join("a.json"), r#"{"base":2}"#).unwrap();
         fs::write(themes.join("c.txt"), "not a theme").unwrap();
-        let found = discover_themes(&[root.clone()]);
+        let found = discover_themes(std::slice::from_ref(&root));
         assert_eq!(
             found,
             vec![
@@ -127,7 +127,7 @@ mod tests {
     #[test]
     fn missing_themes_directory_is_skipped() {
         let root = temp_root("missing");
-        assert_eq!(discover_themes(&[root.clone()]), Vec::<DiscoveredTheme>::new());
+        assert_eq!(discover_themes(std::slice::from_ref(&root)), Vec::<DiscoveredTheme>::new());
         // A completely absent directory is equally fine (ENOENT → empty).
         assert_eq!(discover_themes(&[root.join("nope")]), Vec::<DiscoveredTheme>::new());
         let _ = fs::remove_dir_all(&root);

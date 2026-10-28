@@ -482,10 +482,10 @@ async fn worktree_remove_unknown_strategy_is_unavailable() {
         .engine
         .db
         .transaction(move |tx| {
-            Ok(tx.execute(
+            tx.execute(
                 "UPDATE worktree SET strategy = 'hg' WHERE project_id = ?1 AND directory = ?2",
                 (update_project, update_directory),
-            )?)
+            )
         })
         .await
         .expect("forge strategy");

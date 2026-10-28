@@ -58,6 +58,9 @@ pub fn encode_sixel_from_png(png: &[u8]) -> Option<Vec<u8>> {
 
 /// Box-average downscale when the longest side exceeds
 /// [`MAX_DIM`]; otherwise the image passes through unchanged.
+// Pixel math and short locals (w/h) mirror the reference encoder;
+// float casts are inherently lossy on purpose here.
+#[allow(clippy::cast_precision_loss, clippy::many_single_char_names)]
 fn downscale(image: Rgba8Image) -> Rgba8Image {
     let longest = image.width.max(image.height);
     if longest <= MAX_DIM {
@@ -197,6 +200,7 @@ fn quantize(image: &Rgba8Image) -> (Vec<Option<u8>>, Vec<[u8; 3]>) {
 }
 
 /// Nearest-register mapping off the decoded pixels.
+#[allow(clippy::needless_range_loop)]
 fn remap(image: &Rgba8Image, palette: &[[u8; 3]], indexed: &mut [Option<u8>]) {
     for i in 0..image.width * image.height {
         if indexed[i].is_none() {
@@ -225,6 +229,8 @@ fn remap(image: &Rgba8Image, palette: &[[u8; 3]], indexed: &mut [Option<u8>]) {
 
 /// Emit the sixel DCS body: raster attributes, color registers,
 /// then the banded pixel data.
+// Short locals (w/h, r/g/b) mirror the reference encoder's naming.
+#[allow(clippy::many_single_char_names)]
 fn emit(image: &Rgba8Image, indexed: &[Option<u8>], palette: &[[u8; 3]]) -> Vec<u8> {
     let (w, h) = (image.width, image.height);
     let mut out = Vec::with_capacity(64 + w * h / 4);
