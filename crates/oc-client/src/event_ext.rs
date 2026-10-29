@@ -59,6 +59,48 @@ impl crate::Client {
             Ok(connect_event_stream(client, activity))
         }))
     }
+
+    /// RE-06 — the typed counterpart of [`Client::shared_events`]: the
+    /// same shared `/api/event` multiplexer, but every frame is decoded
+    /// through [`crate::bus_event::BusEventFrame`] so consumers
+    /// dispatch on [`crate::bus_event::EventKind`] instead of probing
+    /// `get("type")` strings; envelope-shape drift is a loud error.
+    #[must_use]
+    pub fn shared_bus_events(&self) -> SharedEvents<crate::bus_event::BusEventFrame> {
+        let client = self.clone();
+        SharedEvents::new(Arc::new(move |activity| {
+            let client = client.clone();
+            Ok(connect_bus_event_stream(client, activity))
+        }))
+    }
+}
+
+/// Opens `/api/event` and adapts it into typed
+/// [`crate::bus_event::BusEventFrame`]s (loud decode: a frame without a
+/// string `type` terminates the stream with a
+/// [`crate::ClientError::MalformedResponse`] instead of silently
+/// dropping — see [`crate::bus_event`]).
+fn connect_bus_event_stream(
+    client: crate::Client,
+    activity: crate::shared_events::Activity,
+) -> EventStream<crate::bus_event::BusEventFrame> {
+    Box::pin(
+        futures::stream::once(async move {
+            client
+                .event()
+                .subscribe()
+                .await
+                .map(|sse| sse.with_on_activity(move || activity.signal()).into_json_stream())
+        })
+        .flat_map(|result| match result {
+            Ok(stream) => stream
+                .map(|result| {
+                    result.and_then(|value| crate::bus_event::BusEventFrame::decode(&value))
+                })
+                .left_stream(),
+            Err(error) => futures::stream::once(async move { Err(error) }).right_stream(),
+        }),
+    )
 }
 
 /// Opens `/api/event` and adapts [`crate::sse::SseStream`] into a boxed
@@ -122,8 +164,8 @@ mod tests {
 
 #[cfg(test)]
 mod shared_tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use futures::StreamExt;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};

@@ -25,8 +25,8 @@ use serde_json::Value;
 use crate::attention::AttentionState;
 use crate::clipboard::ClipboardSink;
 use crate::components::composer::{
-    autocomplete, Composer, PromptDraft, PromptHistory, PromptSink, RecordingPromptSink,
-    SubmittedPrompt,
+    Composer, PromptDraft, PromptHistory, PromptSink, RecordingPromptSink, SubmittedPrompt,
+    autocomplete,
 };
 use crate::components::dialog_select::SelectState;
 use crate::components::footer::{FooterMachine, PromptRoute};
@@ -463,7 +463,7 @@ pub const INTERRUPT_ARM_WINDOW_MS: u64 = 5000;
 /// The tabs model (`session-tabs-model.ts`): pure functions, ported
 /// one-to-one so the golden components share semantics with the store.
 pub mod model {
-    use super::{ClosedTab, SessionTab, TabHistory, CLOSED_TAB_LIMIT, TAB_HISTORY_LIMIT};
+    use super::{CLOSED_TAB_LIMIT, ClosedTab, SessionTab, TAB_HISTORY_LIMIT, TabHistory};
 
     /// `openSessionTab`: append or update the title in place.
     #[must_use]
@@ -3799,11 +3799,7 @@ impl Store {
     /// is non-empty).
     #[must_use]
     pub fn focus(&self) -> Focus {
-        if self.dialogs.get().is_empty() {
-            Focus::Route
-        } else {
-            Focus::Dialog
-        }
+        if self.dialogs.get().is_empty() { Focus::Route } else { Focus::Dialog }
     }
 
     #[must_use]
@@ -7961,11 +7957,7 @@ impl Store {
     /// The model-ring persistence flag (the run loop drains it: write
     /// `<state>/model.json` when set).
     pub fn take_model_ring_dirty(&self) -> Option<ModelRing> {
-        if self.model_ring_dirty.replace(false) {
-            Some(self.model_ring.get())
-        } else {
-            None
-        }
+        if self.model_ring_dirty.replace(false) { Some(self.model_ring.get()) } else { None }
     }
 
     /// The current selection's variant cycle
@@ -12841,6 +12833,7 @@ mod tests {
         store.set_event_tap(tap.clone());
         let event = |id: &str, type_: &str| BusEvent {
             id: id.to_owned(),
+            kind: oc_client::bus_event::EventKind::parse(type_),
             type_: type_.to_owned(),
             data: serde_json::json!({}),
             created: None,
@@ -12885,6 +12878,7 @@ mod tests {
         // snapshot must NOT append onto the complete message.
         store.ingest_all([Ingest::Event(BusEvent {
             id: "evt_d1".into(),
+            kind: oc_client::bus_event::EventKind::SessionTextDelta,
             type_: "session.text.delta".into(),
             data: serde_json::json!({
                 "sessionID": "ses_9", "assistantMessageID": "msg_a", "delta": "EXTRA"
@@ -12900,6 +12894,7 @@ mod tests {
         // accepts deltas again.
         store.ingest_all([Ingest::Event(BusEvent {
             id: "evt_s1".into(),
+            kind: oc_client::bus_event::EventKind::SessionStepStarted,
             type_: "session.step.started".into(),
             data: serde_json::json!({
                 "sessionID": "ses_9", "assistantMessageID": "msg_a"
@@ -12908,6 +12903,7 @@ mod tests {
         })]);
         store.ingest_all([Ingest::Event(BusEvent {
             id: "evt_d2".into(),
+            kind: oc_client::bus_event::EventKind::SessionTextDelta,
             type_: "session.text.delta".into(),
             data: serde_json::json!({
                 "sessionID": "ses_9", "assistantMessageID": "msg_a", "delta": "new turn"
