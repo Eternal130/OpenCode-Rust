@@ -1166,8 +1166,10 @@ pub fn render_app(store: &Store, theme: &crate::theme::ThemeState, size: (u16, u
             crate::store::StatsPhase::Loaded(info) => {
                 // The poster model rebuilds per paint from the
                 // immutable payload (the ref's createMemo over the
-                // resource value).
-                poster_storage = crate::components::stats_page::stats_poster(info, size);
+                // resource value). The calendar buckets by the LOCAL
+                // day (the fetch already sends local_timezone_name).
+                let timezone = crate::components::stats_page::local_timezone_name();
+                poster_storage = crate::components::stats_page::stats_poster(info, size, &timezone);
                 crate::components::stats_page_solid::StatsPhaseView::Loaded(&poster_storage)
             }
         };
