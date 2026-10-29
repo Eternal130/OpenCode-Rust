@@ -7,8 +7,8 @@
 
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use oc_plugin_host::{BroadcastTap, TapEvent};
@@ -151,6 +151,7 @@ fn plugin_registers_palette_keymap_theme_and_receives_events() {
     store.set_event_tap(Arc::new(HostTap { tap: host.tap() }));
     store.ingest_all([Ingest::Event(BusEvent {
         id: "evt_tui_1".to_owned(),
+        kind: oc_client::bus_event::EventKind::Unknown,
         type_: "tui.test".to_owned(),
         data: serde_json::json!({ "payload": "from-tui" }),
         created: Some(1),

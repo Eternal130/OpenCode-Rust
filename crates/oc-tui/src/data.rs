@@ -55,8 +55,8 @@
 
 use std::time::Duration;
 
-use oc_client::types::SessionMessageInfo;
 use oc_client::Client;
+use oc_client::types::SessionMessageInfo;
 use serde_json::Value;
 
 /// Connection state for the status line / reconnect overlay.
@@ -72,10 +72,18 @@ pub enum ConnectionState {
 }
 
 /// One bus event off the SSE feed (`oc_core::bus::Event` wire shape).
+/// RE-06: `kind` is the typed classification of the `type` discriminant
+/// (`oc_client::bus_event::EventKind` — the consumer-side mirror of the
+/// server's event manifest); dispatch on it instead of probing strings.
+/// `type_` stays for the store's reducer table and `Rpc`/`Unknown`
+/// passthrough, and `data` stays raw (decode via
+/// [`oc_client::bus_event::BusEventFrame::data`] when a typed payload is
+/// needed).
 #[derive(Debug, Clone, PartialEq)]
 pub struct BusEvent {
     pub id: String,
     pub type_: String,
+    pub kind: oc_client::bus_event::EventKind,
     pub data: Value,
     /// Envelope `created` (epoch ms) — the only timestamp SSE reducers
     /// may use (reasoning/tool completion times; `None` when absent).
@@ -85,19 +93,34 @@ pub struct BusEvent {
 impl BusEvent {
     #[must_use]
     pub fn new(type_: &str, data: Value) -> Self {
-        Self { id: String::new(), type_: type_.to_owned(), data, created: None }
+        Self {
+            id: String::new(),
+            kind: oc_client::bus_event::EventKind::parse(type_),
+            type_: type_.to_owned(),
+            data,
+            created: None,
+        }
     }
 
-    /// Decode the double-decoded SSE JSON payload.
+    /// Decode the double-decoded SSE JSON payload — typed via
+    /// [`oc_client::bus_event::BusEventFrame`] (loud on envelope-shape
+    /// drift; `None` preserves this constructor's legacy fallibility).
     #[must_use]
     pub fn from_json(value: &Value) -> Option<Self> {
-        let object = value.as_object()?;
+        let frame = oc_client::bus_event::BusEventFrame::decode(value).ok()?;
         Some(Self {
-            id: object.get("id").and_then(Value::as_str).unwrap_or_default().to_owned(),
-            type_: object.get("type").and_then(Value::as_str)?.to_owned(),
-            data: object.get("data").cloned().unwrap_or(Value::Null),
-            created: object.get("created").and_then(Value::as_u64),
+            id: frame.id.unwrap_or_default(),
+            type_: frame.type_,
+            kind: frame.kind,
+            data: frame.data,
+            created: frame.created,
         })
+    }
+
+    /// Whether this is the `server.connected` marker (typed dispatch).
+    #[must_use]
+    pub fn is_server_connected(&self) -> bool {
+        self.kind == oc_client::bus_event::EventKind::ServerConnected
     }
 
     /// A string field out of `data`.
@@ -294,8 +317,9 @@ pub trait ResyncSource: Send {
     fn fetch_forms(
         &self,
         session_id: &str,
-    ) -> impl std::future::Future<Output = Result<Vec<crate::components::footer::FormRequest>, String>>
-           + Send;
+    ) -> impl std::future::Future<
+        Output = Result<Vec<crate::components::footer::FormRequest>, String>,
+    > + Send;
 }
 
 /// The reconnect resync's blocker fetch set (RUNTIME-TD04): every OPEN
@@ -1044,9 +1068,7 @@ impl Connection {
             }
             while let Ok(Some(value)) = stream.next_json().await {
                 if let Some(event) = BusEvent::from_json(&value) {
-                    if event.type_ == "server.connected"
-                        && tx.send(Ingest::Connected).await.is_err()
-                    {
+                    if event.is_server_connected() && tx.send(Ingest::Connected).await.is_err() {
                         return;
                     }
                     if !event.id.is_empty() {
@@ -1076,9 +1098,14 @@ mod tests {
         });
         let event = BusEvent::from_json(&value).expect("decodes");
         assert_eq!(event.type_, "message.updated");
+        assert_eq!(event.kind, oc_client::bus_event::EventKind::MessageUpdated);
         assert_eq!(event.string("sessionID").as_deref(), Some("ses_1"));
         assert_eq!(event.id, "evt_1");
         assert!(BusEvent::from_json(&serde_json::json!({ "created": 0 })).is_none());
+        // Typed dispatch (RE-06): the connected marker classifies.
+        let connected =
+            BusEvent::from_json(&serde_json::json!({ "type": "server.connected" })).unwrap();
+        assert!(connected.is_server_connected());
     }
 
     #[test]
