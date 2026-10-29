@@ -3,13 +3,16 @@
 //! seam, ported to the Rust consume boundary.
 //!
 //! v2 fires the hook at prompt-submission time, before the inbox row
-//! exists; the Rust HTTP handler admits the raw wire payload (the
-//! handler is WIRE-owned), so the runner fires the seam at the Ready
-//! boundary — AFTER admission, BEFORE the row is delivered/projected
-//! and before the model turn. Once per pending user row (the drain
-//! tracks prepared inbox ids), with the prepared payload persisted
-//! back into the pending row so the `session.inbox.delivered`
-//! projector materializes the PREPARED user message (hook-mutated
+//! exists (prompt.ts:29-52); the HTTP handler calls
+//! [`PromptPrepare::prepare_input`] on the admission path so a failure
+//! rejects the request (ref-equivalent error codes: 400 skill /
+//! attachment, 500 hook) and no row is ever admitted. The drain-side
+//! [`PromptPrepare::prepare_pending`] remains as a BACKSTOP for
+//! engine-internal admits (commands, subagents, shell notifications)
+//! — the once-per-prompt [`PreparedRing`] keeps the two paths from
+//! double-firing the seam on the same row. With the prepared payload
+//! admitted directly, the `session.inbox.delivered` projector
+//! materializes the PREPARED user message (hook-mutated
 //! text/files/agents/metadata + resolved `skill.text`), matching the
 //! v2 observable: the stored user message and the model turn both see
 //! the prepared prompt.
@@ -188,6 +191,29 @@ impl PromptPrepare {
         })
         .await?;
         Ok(())
+    }
+
+    /// Prepares the wire payload of ONE prompt at submission time: hook
+    /// dispatch (copy-in/copy-out) then skill resolution over the
+    /// (possibly hook-shaped) request. This is the admission-path entry
+    /// the HTTP handler calls BEFORE the inbox row exists (ref
+    /// prompt.ts:29-91 fires at submit time; a failure rejects the
+    /// request — the row is never admitted). The row id joins the
+    /// [`PreparedRing`] so the drain-side backstop does not re-fire
+    /// the seam on the same row.
+    pub async fn prepare_input(
+        &self,
+        session_id: &SessionId,
+        message_id: &str,
+        payload: UserPayload,
+        delivery: Delivery,
+    ) -> Result<(UserPayload, Delivery), PromptPrepareError> {
+        let row = PendingUser { id: message_id.to_string(), payload, delivery };
+        let result = self.prepare_one(session_id, row).await;
+        // The seam fired (or failed) exactly once for this id — the
+        // drain-side backstop must skip it.
+        self.prepared.lock().mark(message_id);
+        result
     }
 
     /// Prepares one pending row: hook dispatch (copy-in/copy-out),

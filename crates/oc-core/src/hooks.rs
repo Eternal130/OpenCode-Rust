@@ -742,6 +742,12 @@ pub struct HookRegistry {
     lists: Arc<HookLists>,
     transforms: TransformDomains,
     events: tokio::sync::broadcast::Sender<EventEnvelope>,
+    /// Registry-lifetime registrations (built-in plugins): dropped with
+    /// the registry itself, so their handlers live exactly as long as
+    /// the hook lists they point into (F-2 — the sound replacement for
+    /// `std::mem::forget`ing a [`Registration`] to leak it past a
+    /// dropping closure).
+    owned: std::sync::Mutex<Vec<Registration>>,
 }
 
 impl fmt::Debug for HookRegistry {
@@ -787,7 +793,19 @@ impl HookRegistry {
             }),
             transforms: TransformDomains::new(),
             events,
+            owned: std::sync::Mutex::new(Vec::new()),
         }
+    }
+
+    /// Keeps a registration for the REGISTRY's lifetime: the handler
+    /// stays armed until the registry drops (v2 built-in plugins never
+    /// dispose their hooks). Callers that must scope a registration
+    /// themselves keep using [`HookScope`] / [`Registration::dispose`].
+    pub fn keep(&self, registration: Registration) {
+        self.owned
+            .lock()
+            .expect("hook registry owned-registrations lock poisoned")
+            .push(registration);
     }
 
     /// The transform domains owned by this registry (sharing its id space).

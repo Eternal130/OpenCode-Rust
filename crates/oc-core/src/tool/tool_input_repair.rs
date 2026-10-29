@@ -20,6 +20,7 @@
 //! equivalents — this module owns tool-input coercion at the
 //! `tool.execute.before` seam.
 
+use futures::FutureExt;
 use serde_json::{Map, Value};
 
 use crate::hooks::{HookOptions, InternalPlugin, ToolExecuteBeforeEvent};
@@ -29,6 +30,10 @@ use std::sync::Arc;
 const MAX_DEPTH: usize = 6;
 
 /// The registration step shared by the plugin closure and focused tests.
+///
+/// Registration storage is synchronous under an async surface (oracle
+/// gate 2 finding 6), so `now_or_never` completes it without an
+/// executor — never `block_on` (F-2).
 pub(crate) fn install_hook(
     hooks: &Arc<crate::hooks::HookRegistry>,
     tools: &Arc<crate::location::ToolRegistryState>,
@@ -49,10 +54,12 @@ pub(crate) fn install_hook(
         Ok(())
     });
     // Registrations live for the location lifetime (dropped with the
-    // graph), like the patch plugin's codemod hooks.
-    futures::executor::block_on(
-        hooks.register_tool_execute_before(handler, HookOptions::default()),
-    )
+    // registry, F-2 — the plugin closure hands ownership to
+    // `HookRegistry::keep`).
+    hooks
+        .register_tool_execute_before(handler, HookOptions::default())
+        .now_or_never()
+        .expect("hook registration never suspends")
 }
 
 /// The builtin plugin: hooks `execute.before` and repairs the input against
@@ -64,7 +71,9 @@ pub(crate) fn install_hook(
 #[must_use]
 pub fn plugin() -> InternalPlugin {
     InternalPlugin::new("opencode.tool.input.repair", |hooks, ports| {
-        std::mem::forget(install_hook(hooks, ports.tools));
+        // F-2: the registration is kept by the registry itself — sound
+        // ownership for the location lifetime, no leaked guard.
+        hooks.keep(install_hook(hooks, ports.tools));
         Ok(())
     })
 }

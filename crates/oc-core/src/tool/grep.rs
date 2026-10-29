@@ -166,7 +166,14 @@ async fn run_ripgrep<R>(
         let _ = child.kill().await;
         return Err(RipgrepError::Failed(timeout_message()));
     }
-    let _ = child.kill().await;
+    // Only kill when the result window stopped reading early (limit hit):
+    // the collector's stdout reader is gone, rg takes SIGPIPE and exits.
+    // Otherwise let the process finish so `wait` observes the TRUE exit
+    // code — an unconditional kill first would turn every completion into
+    // a signal status and mask exit-2 partial-result semantics (F-3).
+    if rows.len() > limit {
+        let _ = child.kill().await;
+    }
     let stderr = stderr_task.await.unwrap_or_default();
 
     if rows.len() > limit {

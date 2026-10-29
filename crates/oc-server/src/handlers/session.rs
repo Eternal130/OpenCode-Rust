@@ -694,9 +694,6 @@ async fn prompt(
         typed_value(&body, "files");
     let files = super::attachment::materialize_files(input_files.as_deref())
         .map_err(|error| ApiError::invalid_request(error.to_string()))?;
-    // RV-B2: commit the staged revert after preparation succeeds, before
-    // admitting the new work (ref `session/session.ts:164-165`).
-    commit_staged_revert(&state, &location, &session_id).await?;
     let payload = oc_schema::session_inbox::UserPayload {
         text: body["text"].as_str().unwrap_or_default().to_owned(),
         files,
@@ -704,6 +701,40 @@ async fn prompt(
         skills: typed_value(&body, "skills"),
         metadata: record_value(&body, "metadata"),
     };
+    // AUD-09: ref fires `session.prompt` at SUBMIT time — before the
+    // inbox row exists — and a failure rejects the HTTP request (ref
+    // session/session.ts:155-172 pipes `SessionPrompt.prepare`
+    // (prompt.ts:29-52) ahead of `admission.admit`; hook →
+    // materialize ordering at prompt.ts:40-54 — the Rust seam carries
+    // resolved attachments, so materialization runs first and its
+    // AttachmentError stays the same ref 400). Skill resolution
+    // (prompt.ts:56-76) rides the same seam: unknown skill ⇒ 400
+    // (`field: "skills"`), hook failure ⇒ 500 (ref leaves it uncaught
+    // in the handler). No row is admitted on failure — no poisoned
+    // inbox row to cancel.
+    let (payload, delivery) = if let Some(prepare) = services.runner.prompt_prepare() {
+        prepare
+            .prepare_input(&parse_session_id(&session_id), &message_id, payload, delivery)
+            .await
+            .map_err(|error| match error {
+                oc_core::session::runner::PromptPrepareError::SkillNotFound(skill) => {
+                    crate::errors::invalid_request_field(
+                        format!("Skill not found: {skill}"),
+                        "ParseError",
+                        "skills",
+                    )
+                }
+                other => {
+                    crate::errors::debug_cause("session.prompt", &other);
+                    ApiError::unknown_ref()
+                }
+            })?
+    } else {
+        (payload, delivery)
+    };
+    // RV-B2: commit the staged revert after preparation succeeds, before
+    // admitting the new work (ref `session/session.ts:164-165`).
+    commit_staged_revert(&state, &location, &session_id).await?;
     let info = services
         .inbox
         .admit(&message_id, &session_id, Item::User { payload, delivery })
