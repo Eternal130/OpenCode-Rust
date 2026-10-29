@@ -7,8 +7,13 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use super::repository::{cache_identity, cache_path, is_file, is_remote, parse, parse_remote, same, validate_branch, Reference};
-use super::repository_cache::{CacheError, EnsureInput, MemoryRefreshStore, Refresh, RefreshStore, RepositoryCache};
+use super::repository::{
+    cache_identity, cache_path, is_file, is_remote, parse, parse_remote, same, validate_branch,
+    Reference,
+};
+use super::repository_cache::{
+    CacheError, EnsureInput, MemoryRefreshStore, Refresh, RefreshStore, RepositoryCache,
+};
 use super::{GitSource, Info, LocalSource, ReferenceService, Source};
 use oc_util::determinism::Clock;
 
@@ -73,10 +78,7 @@ fn repository_keeps_file_references_distinct() {
     assert!(is_file(&reference));
     assert!(!is_remote(&reference));
     let unsupported = parse_remote(&url).unwrap_err();
-    assert!(matches!(
-        unsupported,
-        super::repository::RepositoryError::UnsupportedLocal(_)
-    ));
+    assert!(matches!(unsupported, super::repository::RepositoryError::UnsupportedLocal(_)));
 }
 
 #[test]
@@ -93,7 +95,15 @@ fn repository_rejects_unsafe_references_and_branches() {
     assert!(validate_branch("bad..branch").is_err());
     assert!(validate_branch("bad branch").is_err());
 
-    for input in ["..:repo", "git@..:repo", "../owner/repo", "ssh://../repo", "ssh://..:22/repo", "https://%2e%2e/owner/repo", ".:repo"] {
+    for input in [
+        "..:repo",
+        "git@..:repo",
+        "../owner/repo",
+        "ssh://../repo",
+        "ssh://..:22/repo",
+        "https://%2e%2e/owner/repo",
+        ".:repo",
+    ] {
         assert!(
             matches!(parse_remote(input), Err(RepositoryError::InvalidReference(_))),
             "{input} should be rejected"
@@ -157,7 +167,10 @@ fn with_remote() -> Fixture {
     git(&source, &["branch", "-M", "main"]);
     git(&source, &["remote", "add", "origin", &origin_url(&origin)]);
     git(&source, &["push", "-u", "origin", "main"]);
-    git(root.path(), &["--git-dir", origin.to_str().unwrap(), "symbolic-ref", "HEAD", "refs/heads/main"]);
+    git(
+        root.path(),
+        &["--git-dir", origin.to_str().unwrap(), "symbolic-ref", "HEAD", "refs/heads/main"],
+    );
     // The ref fixture overrides `remote` with the local origin URL (a
     // file:// remote clone source) while keeping the parsed owner/repo
     // identity — no network anywhere.
@@ -194,18 +207,25 @@ impl Clock for MutableClock {
     }
 }
 
-fn cache_layer(fixture: &Fixture, store: Arc<dyn RefreshStore>, now: SystemTime) -> RepositoryCache {
+fn cache_layer(
+    fixture: &Fixture,
+    store: Arc<dyn RefreshStore>,
+    now: SystemTime,
+) -> RepositoryCache {
     std::fs::create_dir_all(fixture.root.join("repos")).unwrap();
-    RepositoryCache::new(
-        fixture.root.join("repos"),
-        Arc::new(MutableClock(now)),
-        store,
-    )
+    RepositoryCache::new(fixture.root.join("repos"), Arc::new(MutableClock(now)), store)
 }
 
 fn daily(fixture: &Fixture) -> (RepositoryCache, Arc<MemoryRefreshStore>) {
     let store = Arc::new(MemoryRefreshStore::default());
-    (cache_layer(fixture, Arc::clone(&store) as Arc<dyn RefreshStore>, SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000)), store)
+    (
+        cache_layer(
+            fixture,
+            Arc::clone(&store) as Arc<dyn RefreshStore>,
+            SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000),
+        ),
+        store,
+    )
 }
 
 fn ensure(reference: &super::repository::RemoteReference) -> EnsureInput {
@@ -228,15 +248,17 @@ fn cache_persists_daily_throttle_and_serializes_refreshes() {
     commit(&fixture.source, "two\n", "advance main");
     // Fresh cache instance: the throttle record must persist (the ref test
     // recreates the layer between checks).
-    let cache = cache_layer(&fixture, Arc::clone(&store) as Arc<dyn RefreshStore>, SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_100));
+    let cache = cache_layer(
+        &fixture,
+        Arc::clone(&store) as Arc<dyn RefreshStore>,
+        SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_100),
+    );
     assert_eq!(cache.ensure(&ensure(&fixture.reference)).unwrap().status, "cached");
     let key = format!("repository-cache:{}", initial.local_path.to_string_lossy());
     store.set_attempted_at(&key, 1_700_000_100_000 - 86_400_000);
 
-    let results: Vec<_> = [0, 1]
-        .iter()
-        .map(|_| cache.ensure(&ensure(&fixture.reference)).unwrap().status)
-        .collect();
+    let results: Vec<_> =
+        [0, 1].iter().map(|_| cache.ensure(&ensure(&fixture.reference)).unwrap().status).collect();
     assert!(results.contains(&"refreshed"));
     assert!(results.contains(&"cached"));
     assert_eq!(read(&initial.local_path.join("README.md")), "two\n");
@@ -245,7 +267,8 @@ fn cache_persists_daily_throttle_and_serializes_refreshes() {
     std::fs::remove_dir_all(&initial.local_path).unwrap();
     let store2 = Arc::new(MemoryRefreshStore::default());
     store2.set_attempted_at(&key, 1_700_000_100_000);
-    let cache = cache_layer(&fixture, store2, SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_100));
+    let cache =
+        cache_layer(&fixture, store2, SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_100));
     assert_eq!(cache.ensure(&ensure(&fixture.reference)).unwrap().status, "cloned");
     assert_eq!(read(&initial.local_path.join("README.md")), "two\n");
 }
@@ -259,7 +282,10 @@ fn cache_allows_forced_refresh() {
     commit(&fixture.source, "two\n", "advance main");
 
     assert_eq!(
-        cache.ensure(&EnsureInput { refresh: Refresh::Forced, ..ensure(&fixture.reference) }).unwrap().status,
+        cache
+            .ensure(&EnsureInput { refresh: Refresh::Forced, ..ensure(&fixture.reference) })
+            .unwrap()
+            .status,
         "refreshed"
     );
     assert_eq!(read(&initial.local_path.join("README.md")), "two\n");
@@ -389,11 +415,20 @@ fn local_info(name: &str, path: &Path, description: Option<&str>) -> Info {
 fn reference_reads_the_editor_source_by_name() {
     let fixture = with_remote();
     let references = service(&fixture.root.join("repos"), daily(&fixture).0);
-    let source = Source::Local(LocalSource { path: PathBuf::from("/docs"), description: None, hidden: None });
+    let source = Source::Local(LocalSource {
+        path: PathBuf::from("/docs"),
+        description: None,
+        hidden: None,
+    });
     references.add("docs", source.clone());
     assert_eq!(references.get("docs"), Some(source.clone()));
     assert_eq!(references.get("missing"), None);
-    let replacement = Source::Git(GitSource { repository: "owner/repo".to_owned(), branch: None, description: None, hidden: None });
+    let replacement = Source::Git(GitSource {
+        repository: "owner/repo".to_owned(),
+        branch: None,
+        description: None,
+        hidden: None,
+    });
     references.add("docs", replacement.clone());
     assert_eq!(references.get("docs"), Some(replacement.clone()));
     references.remove("docs");
@@ -410,7 +445,11 @@ fn reference_drops_invalid_git_sources_and_derives_cache_paths() {
     let references = service(&repos, daily(&fixture).0);
     references.add(
         "docs",
-        Source::Local(LocalSource { path: PathBuf::from("/docs"), description: None, hidden: None }),
+        Source::Local(LocalSource {
+            path: PathBuf::from("/docs"),
+            description: None,
+            hidden: None,
+        }),
     );
     references.add(
         "sdk",
@@ -421,14 +460,32 @@ fn reference_drops_invalid_git_sources_and_derives_cache_paths() {
             hidden: Some(true),
         }),
     );
-    references.add("invalid", Source::Git(GitSource { repository: "invalid".to_owned(), branch: None, description: None, hidden: None }));
+    references.add(
+        "invalid",
+        Source::Git(GitSource {
+            repository: "invalid".to_owned(),
+            branch: None,
+            description: None,
+            hidden: None,
+        }),
+    );
     references.add(
         "invalid-branch",
-        Source::Git(GitSource { repository: "owner/repo".to_owned(), branch: Some("../escape".to_owned()), description: None, hidden: None }),
+        Source::Git(GitSource {
+            repository: "owner/repo".to_owned(),
+            branch: Some("../escape".to_owned()),
+            description: None,
+            hidden: None,
+        }),
     );
     references.add(
         "file",
-        Source::Git(GitSource { repository: "file:///docs".to_owned(), branch: None, description: None, hidden: None }),
+        Source::Git(GitSource {
+            repository: "file:///docs".to_owned(),
+            branch: None,
+            description: None,
+            hidden: None,
+        }),
     );
 
     let infos = references.list();
@@ -477,7 +534,8 @@ fn reference_refresh_ensures_git_sources_daily() {
 
     // reference.test.ts "reads batched references before cache work": a
     // mocked cache records the ensure inputs.
-    let operations: Arc<PLMutex<Vec<(String, Option<String>, Refresh)>>> = Arc::new(PLMutex::new(Vec::new()));
+    let operations: Arc<PLMutex<Vec<(String, Option<String>, Refresh)>>> =
+        Arc::new(PLMutex::new(Vec::new()));
     let recorder = {
         let operations = Arc::clone(&operations);
         let repos = PathBuf::from("/repos");
@@ -491,7 +549,11 @@ fn reference_refresh_ensures_git_sources_daily() {
                 repository: input.reference.label.clone(),
                 host: input.reference.host.clone(),
                 remote: input.reference.remote.clone(),
-                local_path: cache_path(&repos, &Reference::Remote(input.reference.clone()), input.branch.as_deref()),
+                local_path: cache_path(
+                    &repos,
+                    &Reference::Remote(input.reference.clone()),
+                    input.branch.as_deref(),
+                ),
                 status: "cached",
                 head: None,
                 branch: None,
@@ -505,11 +567,20 @@ fn reference_refresh_ensures_git_sources_daily() {
     };
     references.add(
         "docs",
-        Source::Local(LocalSource { path: PathBuf::from("/docs"), description: None, hidden: None }),
+        Source::Local(LocalSource {
+            path: PathBuf::from("/docs"),
+            description: None,
+            hidden: None,
+        }),
     );
     references.add(
         "invalid",
-        Source::Git(GitSource { repository: "invalid".to_owned(), branch: None, description: None, hidden: None }),
+        Source::Git(GitSource {
+            repository: "invalid".to_owned(),
+            branch: None,
+            description: None,
+            hidden: None,
+        }),
     );
     references.add(
         "sdk",
@@ -523,7 +594,11 @@ fn reference_refresh_ensures_git_sources_daily() {
     references.refresh_all();
     assert_eq!(
         operations.lock().as_slice(),
-        [("https://github.com/owner/repo.git".to_owned(), Some("feature/docs".to_owned()), Refresh::Daily)]
+        [(
+            "https://github.com/owner/repo.git".to_owned(),
+            Some("feature/docs".to_owned()),
+            Refresh::Daily
+        )]
     );
     // Idempotent per sweep: another refresh re-ensures (the cache
     // throttles).
@@ -605,8 +680,8 @@ fn instructions_restate_the_list_when_entries_change() {
 #[test]
 fn guidance_source_reads_renders_and_removes() {
     use crate::session::runner::context::{
-        instruction_read, reference_guidance_source, render_initial, render_update, InstructionList,
-        ReadOutcome,
+        instruction_read, reference_guidance_source, render_initial, render_update,
+        InstructionList, ReadOutcome,
     };
     use std::collections::BTreeMap;
 
@@ -655,4 +730,51 @@ fn guidance_source_reads_renders_and_removes() {
         std::iter::once(("core/reference-guidance".to_owned(), None)).collect();
     let removal = render_update(&empty_list, &values, &removal_delta);
     assert_eq!(removal, super::instructions::REMOVED_TEXT);
+}
+
+// ---------------------------------------------------------------------------
+// F-5: `reference.updated` on mutation (reference.ts:104-108)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn reference_mutation_publishes_reference_updated() {
+    let database = crate::database::Database::open_in_memory().await.expect("database");
+    let bus = std::sync::Arc::new(crate::bus::Bus::new(
+        database,
+        crate::bus::BusOptions::deterministic(),
+    ));
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let sink = std::sync::Arc::clone(&seen);
+    let _guard = bus.listen(std::sync::Arc::new(move |event: &crate::bus::Event| {
+        sink.lock().unwrap().push(event.type_.clone());
+        Ok(())
+    }));
+
+    let mut service = ReferenceService::with_ensure(
+        PathBuf::from("/repos"),
+        std::sync::Arc::new(|_| {
+            Err(CacheError::CloneFailed {
+                repository: "owner/repo".to_string(),
+                message: "test".to_string(),
+            })
+        }),
+    );
+    service.set_refresh_on_mutation(false);
+    let service = std::sync::Arc::new(service);
+    service.set_bus(std::sync::Arc::clone(&bus));
+
+    service.add(
+        "docs",
+        Source::Local(LocalSource {
+            path: PathBuf::from("/docs"),
+            description: None,
+            hidden: None,
+        }),
+    );
+    service.remove("docs");
+    // The publish is spawned on the current runtime; drive it to completion.
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let seen = seen.lock().unwrap().clone();
+    assert_eq!(seen, vec!["reference.updated".to_string(), "reference.updated".to_string()]);
 }
