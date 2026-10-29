@@ -46,7 +46,7 @@
 //! provider, reference, skill, tool-registry, vcs, websearch, worktree) live
 //! in [`TransformDomains`]. **Event subscription** (the `event` domain's
 //! async iterator) is a [`tokio::sync::broadcast`] channel. The **storage
-//! KV** and **RPC** ports are trait surfaces only (`TODO(plugin-lane)`).
+//! KV** port is a trait surface only (`TODO(plugin-lane)`).
 
 // The registration/disposal surface is async-first *by contract* (oracle
 // gate 2, finding 6: oc-plugin-host implements the blocking bridge
@@ -823,7 +823,8 @@ impl HookRegistry {
         self.lists.tool_execute_before.lock().entries.len()
     }
 
-    pub fn total_hooks(&self) -> usize {        let lists = &*self.lists;
+    pub fn total_hooks(&self) -> usize {
+        let lists = &*self.lists;
         lists.session_prompt.lock().entries.len()
             + lists.session_context.lock().entries.len()
             + lists.session_compaction.lock().entries.len()
@@ -1406,53 +1407,6 @@ impl PluginStorage for DatabasePluginStorage {
 }
 
 // =============================================================================
-// RPC port (trait surface only)
-// =============================================================================
-
-/// One RPC method's I/O schemas (JSON-Schema-equivalent definitions at the
-/// JS boundary; plugin-map §3).
-#[derive(Debug, Clone)]
-pub struct RpcMethodSchema {
-    pub input: Value,
-    pub output: Value,
-}
-
-/// A portable RPC definition (v2 `Rpc.PortableDefinition`).
-#[derive(Debug, Clone)]
-pub struct RpcDefinition {
-    pub id: String,
-    pub methods: BTreeMap<String, RpcMethodSchema>,
-    pub events: Vec<String>,
-}
-
-/// RPC failure.
-#[derive(Debug, Clone, thiserror::Error)]
-#[error("rpc: {0}")]
-pub struct RpcError(pub String);
-
-/// Dispatches method calls for one registered definition.
-#[async_trait]
-pub trait RpcHandler: Send + Sync {
-    async fn call(&self, method: &str, input: Value) -> Result<Value, RpcError>;
-}
-
-/// The RPC port (`ctx.rpc.register` + `events.emit`; callable from clients
-/// via `/api/rpc/{rpcID}/{method}`). Trait surface only.
-///
-/// `TODO(plugin-lane)`: wire to the server router + `rpc.*` events.
-#[async_trait]
-pub trait RpcPort: Send + Sync {
-    async fn register(
-        &self,
-        definition: RpcDefinition,
-        handler: Arc<dyn RpcHandler>,
-    ) -> Result<Registration, RpcError>;
-    async fn emit(&self, rpc_id: &str, event: &str, data: Value) -> Result<(), RpcError>;
-    /// Close the port (location shutdown sequence step).
-    async fn close(&self);
-}
-
-// =============================================================================
 // Internal plugin slots + supervisor (graph v2, oracle gate 4 finding 4)
 // =============================================================================
 
@@ -1488,8 +1442,8 @@ pub fn is_reserved_plugin_id(id: &str) -> bool {
 /// [`LocationPorts`](crate::location::LocationPorts) — the Rust shape of
 /// v2 `InternalPlugin { id, effect }` (`internal.ts`). The 14 tools, the
 /// agent seeds, config watchers, … hand-register through these slots;
-/// `oc-plugin-host` plugs guest plugins into the supervisor's host slot
-/// later (`TODO(plugin-lane)`).
+/// guest JS plugins boot via oc-server's `PluginHost`
+/// (crates/oc-server/src/plugins.rs), not here.
 pub struct InternalPlugin {
     id: String,
     #[allow(clippy::type_complexity)]
@@ -1543,9 +1497,10 @@ impl InternalPlugin {
 }
 
 /// Boots the per-location plugin set in the v2 supervisor order
-/// (`supervisor.ts:125-150`): internal **pre** plugins → host plugins
-/// (sdk + instance + packages; placeholder slot until the plugin lane) →
-/// internal **post** plugins.
+/// (`supervisor.ts:125-150`): internal **pre** plugins → host plugins →
+/// internal **post** plugins. Host plugins (sdk + instance + packages)
+/// are guest JS plugins: they boot via oc-server's `PluginHost`
+/// (crates/oc-server/src/plugins.rs), not here — internal plugins only.
 ///
 /// - **Dedup**: the first occurrence in boot order wins; later duplicates
 ///   are reported as failures (v2: "Registry activation dies on a
@@ -1558,9 +1513,6 @@ impl InternalPlugin {
 pub struct PluginSupervisor {
     pre: Vec<InternalPlugin>,
     post: Vec<InternalPlugin>,
-    /// Host-plugin slot (`TODO(plugin-lane)`): sdk plugins, instance-bound
-    /// plugins and config package plugins boot between pre and post.
-    host_slot: (),
 }
 
 impl fmt::Debug for PluginSupervisor {
@@ -1582,14 +1534,14 @@ impl PluginSupervisor {
     /// Empty supervisor (no internal plugins).
     #[must_use]
     pub fn new() -> Self {
-        Self { pre: Vec::new(), post: Vec::new(), host_slot: () }
+        Self { pre: Vec::new(), post: Vec::new() }
     }
 
     /// Supervisor with the internal pre/post slots (v2
     /// `PluginInternal.list() → { pre, post }`).
     #[must_use]
     pub fn with_internal(pre: Vec<InternalPlugin>, post: Vec<InternalPlugin>) -> Self {
-        Self { pre, post, host_slot: () }
+        Self { pre, post }
     }
 
     /// The internal pre plugins (boot order reference).
@@ -1629,7 +1581,7 @@ impl PluginSupervisor {
     }
 
     /// Boot every plugin into a fresh [`HookRegistry`] in supervisor order
-    /// (pre → host placeholder → post). Never fails the location: failures
+    /// (pre → post). Never fails the location: failures
     /// are contained in the outcome (v2 reports them as failed plugin
     /// states and activates the rest).
     #[must_use]
@@ -1643,9 +1595,6 @@ impl PluginSupervisor {
         for plugin in &self.pre {
             Self::boot_one(plugin, hooks, ports, &mut seen, &mut outcome);
         }
-        // Host slot: sdk + instance + package plugins register here
-        // (`TODO(plugin-lane)`); nothing to boot in Wave 0.
-        let () = self.host_slot;
         for plugin in &self.post {
             Self::boot_one(plugin, hooks, ports, &mut seen, &mut outcome);
         }
