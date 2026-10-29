@@ -264,6 +264,20 @@ pub fn handle_dialog_key(
             return DialogKeyOutcome::Consumed;
         }
     }
+    // -- RE-02: DialogPlugins' toggle (plugins.tsx:116-138/201-209) --
+    // enter (`plugins.toggle`, keybind table) on a REGISTERED row
+    // flips that plugin's active state and the dialog STAYS OPEN
+    // (v2's `onSelect` returns right after `toggle(entry)`); a
+    // FAULTED row keeps the TUI-24 enter → error-details submit.
+    if let DialogKind::Plugins = entry.kind {
+        let selected = entry.select.submit(&props).map(|option| option.value.clone());
+        if keymap.stroke_triggers(&stroke, "plugins.toggle") {
+            if let Some(id) = selected.filter(|id| store.plugin_fault(id).is_none()) {
+                store.plugin_toggle(&id);
+                return DialogKeyOutcome::Consumed;
+            }
+        }
+    }
     if let DialogKind::Debug = entry.kind {
         // `Keymap.createLayer`'s "Copy debug info" return binding
         // (dialog-debug.tsx:50-53): clipboard + the info toast.
@@ -1146,7 +1160,9 @@ pub fn execute_submission(
         // debug): informational submits just close. The plugin
         // manager's rows open the ERROR DETAILS on a failed plugin
         // (TUI-24 — v2's `enter view error` footer over a faulted
-        // row, plugins.tsx:250-270) and otherwise close.
+        // row, plugins.tsx:250-270); RE-02 routes non-faulted rows
+        // through `plugins.toggle` at the key layer (they never
+        // reach this submit), so only faulted rows land here.
         Some(DialogKind::Plugins) => {
             if let Some(error) = store.plugin_fault(value) {
                 let title = "TUI plugin error".to_owned();
@@ -1653,6 +1669,70 @@ mod tests {
         );
         assert_eq!(outcome, DialogKeyOutcome::Closed);
         assert_eq!(store.dialogs().len(), 0);
+    }
+
+    /// RE-02: the plugins dialog's enter is the ref's toggle —
+    /// `plugins.toggle` (plugins.tsx:201-209's `onSelect` →
+    /// `toggle(entry)`) flips the selected registered plugin's
+    /// active state and the dialog STAYS OPEN (never just closes);
+    /// a FAULTED row keeps the TUI-24 enter → error-details path.
+    #[test]
+    fn plugins_dialog_enter_toggles_and_stays_open() {
+        let store = Store::new(Runtime::new());
+        store.set_plugin_commands(vec![crate::store::PluginCommandEntry {
+            command: "hw.hello".into(),
+            title: "Say hello".into(),
+            plugin_id: "helloworld".into(),
+        }]);
+        store.replace_dialog(DialogKind::Plugins, DialogSize::Medium);
+        let mut keymap = Keymap::new();
+        keymap.push_mode("dialog");
+        let clock = crate::keymap::ManualClock::default();
+
+        // enter #1: disable — consumed, the dialog stays open.
+        let outcome = handle_dialog_key(
+            &store,
+            &mut keymap,
+            &clock,
+            crate::keymap::KeyStroke::parse("return").unwrap(),
+            (80, 24),
+        );
+        assert_eq!(outcome, DialogKeyOutcome::Consumed);
+        assert_eq!(store.dialogs().len(), 1, "the toggle never closes the dialog");
+        assert!(!store.plugin_active("helloworld"), "enter disabled the plugin");
+
+        // enter #2: re-enable — round trip through the key layer.
+        handle_dialog_key(
+            &store,
+            &mut keymap,
+            &clock,
+            crate::keymap::KeyStroke::parse("return").unwrap(),
+            (80, 24),
+        );
+        assert!(store.plugin_active("helloworld"));
+        assert_eq!(store.dialogs().len(), 1, "still open after the round trip");
+
+        // A FAULTED row keeps the TUI-24 behavior: enter opens the
+        // error details (the plugins dialog is replaced).
+        let mut faults = std::collections::HashMap::new();
+        faults.insert("helloworld".to_owned(), "load failed".to_owned());
+        store.set_plugin_faults(faults);
+        let outcome = handle_dialog_key(
+            &store,
+            &mut keymap,
+            &clock,
+            crate::keymap::KeyStroke::parse("return").unwrap(),
+            (80, 24),
+        );
+        assert_eq!(
+            outcome,
+            DialogKeyOutcome::Submitted("helloworld".to_owned()),
+            "faulted rows submit into the error details"
+        );
+        let mut dispatcher = store_dispatcher();
+        let dispatch = execute_submission(&store, &mut dispatcher, "helloworld");
+        assert_eq!(dispatch, crate::components::command_palette::Dispatch::Handled);
+        assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::ErrorDetails { .. }));
     }
 
     /// The rename prompt: prompt-family geometry (paddingLeft 2, no

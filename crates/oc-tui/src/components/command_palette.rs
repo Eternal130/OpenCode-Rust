@@ -556,8 +556,13 @@ pub fn palette_props_filtered(store: &Store, filter: &str) -> SelectProps {
         .collect();
     options.extend(palette_options_slice(&advertised, store));
     // The plugin layer (registration-time snapshot): id search text,
-    // the plugin id beside the group, no bindings display.
+    // the plugin id beside the group, no bindings display. RE-02:
+    // an INACTIVE plugin's rows drop (v2's deactivate clears the
+    // registration's contributions, context.tsx:144-148/213).
     for entry in store.plugin_commands() {
+        if !store.plugin_active(&entry.plugin_id) {
+            continue;
+        }
         options.push(
             SelectOption::titled(entry.title.clone(), entry.command.clone())
                 .categorized("Plugin")
@@ -1151,13 +1156,26 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
             let options = if ids.is_empty() {
                 Vec::new()
             } else {
-                ids.iter().map(|id| SelectOption::titled(id.clone(), id.clone())).collect()
+                // RE-02 (ref parity, plugins.tsx:54/308-318): the
+                // footer carries the status only when NOT active
+                // ("inactive"); an active row shows no status footer.
+                ids.iter()
+                    .map(|id| {
+                        let option = SelectOption::titled(id.clone(), id.clone());
+                        if store.plugin_active(id) {
+                            option
+                        } else {
+                            option.with_footer("inactive".to_owned())
+                        }
+                    })
+                    .collect()
             };
-            SelectProps::new("Plugins", options).with_action(SelectAction::new(
-                "dialog.plugins.check",
-                "ctrl+a",
-                "show internal",
-            ))
+            SelectProps::new("Plugins", options)
+                .with_action(SelectAction::new("dialog.plugins.check", "ctrl+a", "show internal"))
+                // RE-02: the `plugins.toggle` action (plugins.tsx:
+                // 231-237, side right) — enter flips the selected
+                // registered plugin's active state.
+                .with_action(SelectAction::new("plugins.toggle", "return", "toggle"))
         }
         // The tab context menu (lane KM — `TabContextMenu`'s actions,
         // session-tabs.tsx:391-417): a tab-scoped menu carries New
@@ -2740,9 +2758,10 @@ impl CommandDispatcher for StoreDispatcher {
                 Dispatch::Handled
             }
             // `plugins.list` (feature-plugins' DialogPlugins): the
-            // plugin manager select — the port's approximation lists
-            // the registered plugin ids (enable/disable state is not
-            // modeled; submits close).
+            // plugin manager select — one row per registered plugin
+            // id; RE-02 models per-plugin active state (enter =
+            // `plugins.toggle` flips it, faulted rows open the
+            // error details).
             "plugins.list" => {
                 store.replace_dialog(DialogKind::Plugins, DialogSize::Medium);
                 Dispatch::Handled
@@ -4547,5 +4566,88 @@ mod tests {
         assert!(text.contains("Search"), "the filter placeholder");
         assert!(text.contains("No items available"), "the shared empty state");
         assert!(text.contains("ctrl+a show internal"), "the footer hint");
+    }
+
+    /// RE-02: the plugins dialog models per-plugin active state —
+    /// rows default ACTIVE (no footer), `plugin_toggle` disables
+    /// (footer "inactive", the palette drops the plugin's command
+    /// rows) and the enable→disable→enable round trip rides the
+    /// toggle sink (v2's TUI-local activate/deactivate,
+    /// plugins.tsx:116-138 — the active map is the persistence
+    /// layer).
+    #[test]
+    fn plugins_dialog_active_state_toggle_round_trip() {
+        use crate::store::{PluginCommandEntry, RecordingPluginToggleSink};
+        let store = final_session_store();
+        store.set_plugin_commands(vec![
+            PluginCommandEntry {
+                command: "hw.hello".into(),
+                title: "Say hello".into(),
+                plugin_id: "helloworld".into(),
+            },
+            PluginCommandEntry {
+                command: "om.about".into(),
+                title: "About".into(),
+                plugin_id: "opencode.about".into(),
+            },
+        ]);
+        let sink = std::rc::Rc::new(RecordingPluginToggleSink::default());
+        store.set_plugin_toggle_sink(sink.clone());
+        store.replace_dialog(crate::store::DialogKind::Plugins, crate::store::DialogSize::Medium);
+        let props = select_props_for(&crate::store::DialogKind::Plugins, &store);
+        assert_eq!(props.title, "Plugins");
+        assert_eq!(props.options.len(), 2, "one row per registered plugin id");
+        assert!(props.options.iter().all(|option| option.footer.is_none()), "active → no footer");
+        assert!(
+            props.actions.iter().any(|action| action.command == "plugins.toggle"),
+            "the toggle action rides the footer: {:?}",
+            props.actions
+        );
+
+        // Default active for every registered id.
+        assert!(store.plugin_active("helloworld"));
+        assert!(store.plugin_active("opencode.about"));
+        // Both plugins' commands ride the palette while active.
+        assert_eq!(
+            palette_props(&store).options.iter().filter(|o| o.value == "hw.hello").count(),
+            1
+        );
+
+        // disable → the row carries the "inactive" footer (ref
+        // footer(), plugins.tsx:308-318) and the palette drops the
+        // plugin's command row (clearContributions).
+        assert!(!store.plugin_toggle("helloworld"), "toggle returns the NEW state");
+        assert!(!store.plugin_active("helloworld"));
+        assert!(store.plugin_active("opencode.about"));
+        let props = select_props_for(&crate::store::DialogKind::Plugins, &store);
+        let row =
+            props.options.iter().find(|option| option.value == "helloworld").expect("row stays");
+        assert_eq!(row.footer.as_deref(), Some("inactive"));
+        assert_eq!(
+            palette_props(&store).options.iter().filter(|o| o.value == "hw.hello").count(),
+            0,
+            "inactive plugin's palette rows drop"
+        );
+        assert!(
+            store.plugin_command("hw.hello").is_none(),
+            "inactive plugin's commands no longer dispatch"
+        );
+
+        // re-enable → active again, round trip recorded on the sink.
+        assert!(store.plugin_toggle("helloworld"));
+        assert!(store.plugin_active("helloworld"));
+        let props = select_props_for(&crate::store::DialogKind::Plugins, &store);
+        assert!(props
+            .options
+            .iter()
+            .find(|option| option.value == "helloworld")
+            .expect("row")
+            .footer
+            .is_none());
+        assert_eq!(
+            sink.calls.borrow().as_slice(),
+            [("helloworld".to_owned(), false), ("helloworld".to_owned(), true)],
+            "enable → disable → enable round trip on the toggle sink"
+        );
     }
 }
