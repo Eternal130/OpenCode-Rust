@@ -1364,11 +1364,11 @@
      "cols": 80,
      "txt": {
       "bytes": 2148,
-      "sha256": "4543d4f1686047a1d296e4c87cf398b5bd9385ffe0beb9bcdfd6dfa4452cdf01"
+      "sha256": "f74cdb4f387f506681bb912c079f3348d38a33da5b46b79dd97dc7fcda996ee1"
      },
      "ansi": {
       "bytes": 5893,
-      "sha256": "9080794d5ce68be4178e8d106bd562c37d859d2c6cad97d2e2c504d7767415a6"
+      "sha256": "4d35bb80690303667826af861b5f19ba7ef4e3d50b5e9383fdffbd3bc061f913"
      }
     }
    ]
