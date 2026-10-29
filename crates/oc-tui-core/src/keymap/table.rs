@@ -611,9 +611,10 @@ static DEFAULT_TABLE: &[CommandDef] = defs! {
     "session_interrupt" => "session.interrupt", "escape", "Interrupt current session", "base";
     "session_background" => "session.background", "ctrl+b", "Background blocking session tools", "base";
     "session_compact" => "session.compact", "<leader>c", "Compact the session", "base", palette Session;
-    // The aside/cd pair (keybind.ts:129-130 — lane KM): aside is a
-    // side-question mode absent in the port (consumed no-op); cd opens
-    // the working-directory select (the footer label's dialog).
+    // The aside/cd pair (keybind.ts:129-130 — lane KM): aside is the
+    // /btw side-question mode (RE-13 — session.generate one-shot +
+    // the Answer dialog); cd opens the working-directory select
+    // (the footer label's dialog).
     "session_aside" => "session.aside", "none", "Ask a side question", "base", palette Session;
     "session_cd" => "session.cd", "none", "Change working directory", "base", palette Session;
     // The transcript-display toggles (keybind.ts:134-135 — lane KM):
