@@ -7,6 +7,7 @@
                                                                                 
                                                                                 
   ┃ /agents      Switch agent                                                  ┃
+  ┃ /btw         Ask a side question                                           ┃
   ┃ /cd          Change working directory                                      ┃
   ┃ /clear       Clear session                                                 ┃
   ┃ /compact     Compact session                                               ┃
@@ -15,7 +16,6 @@
   ┃ /copy        Copy session transcript                                       ┃
   ┃ /debug       View debug info                                               ┃
   ┃ /diff        Open diff viewer                                              ┃
-  ┃ /editor      Open editor                                                   ┃
   ┃                                                                             
   ┃  /                                                                          
   ┃                                                                             

@@ -205,6 +205,14 @@ enum Family {
     /// chrome, then the resource states (loading / error / the
     /// word-wrapped intro + link blocks + loopback hint).
     Pair,
+    /// RE-13: `/btw`'s question prompt (btw.tsx:64-65 — `ctx.ui.
+    /// dialog.prompt({ title: "/btw", placeholder: "Ask anything"
+    /// })`): the prompt tree with the /btw chrome.
+    BtwPrompt,
+    /// RE-13: `/btw`'s `Answer` dialog (btw.tsx:88-172): the `/btw`
+    /// header + question, the markdown answer window, the `c copy /
+    /// j/k ↑/↓ scroll` footer.
+    BtwAnswer,
 }
 
 /// One rendered row of the scroll window — the same walk the old
@@ -304,6 +312,10 @@ struct DialogInputs {
     /// The QR block's lines for the split column (empty stacked —
     /// there the QR rows ride inside `pair_rows`).
     pair_qr: Vec<String>,
+    /// RE-13: the `/btw` answer window — the plain-text lines (the
+    /// For identity) and the styled rows (the markdown paint).
+    btw_window: Vec<String>,
+    btw_styled: Vec<StyledText>,
 }
 
 /// TUI-10/24 + F15: the custom families' store-side sidecar — the
@@ -319,6 +331,12 @@ pub struct DialogSidecar {
     /// seam itself is untouched; the sidecar only carries the
     /// snapshot the content walk reads).
     pub pair: crate::store::PairState,
+    /// RE-13: the `/btw` answer's full markdown render (styled rows
+    /// at the dialog's inner width — the render needs the theme, so
+    /// it is precomputed by the store-owning path) + the window's
+    /// scroll offset.
+    pub btw_rows: Vec<StyledText>,
+    pub btw_scroll: usize,
 }
 
 /// The windowed rows — the old renderer's walk (`render_select`),
@@ -383,6 +401,9 @@ fn content_height(inputs: &DialogInputs) -> usize {
         Family::Select => 4 + inputs.window.len() + 1 + usize::from(!inputs.actions.is_empty()) + 1,
         // title, gap, input, gap, footer, the footer's paddingBottom.
         Family::RenamePrompt | Family::WorktreeNamePrompt => 6,
+        // RE-13: the /btw question prompt — the same prompt tree
+        // (title, gap, input, gap, footer, the footer's pad).
+        Family::BtwPrompt => 6,
         // title, gap, input, gap, hints, gap, footer, pad.
         Family::ConnectPrompt => inputs.hint_lines.len() + 8,
         // title, gap, wrapped lines, hint paddingBottom, root gap,
@@ -424,6 +445,10 @@ fn content_height(inputs: &DialogInputs) -> usize {
             };
             rows + 3
         }
+        // RE-13 (btw.tsx:127-171): the `/btw` + question header, the
+        // root's gap 1, the markdown window, gap, the action footer,
+        // the root paddingBottom 1.
+        Family::BtwAnswer => inputs.btw_window.len() + 5,
     }
 }
 
@@ -1026,8 +1051,23 @@ fn connect_prompt_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::Eleme
 /// `text.base` for the rename textarea, `text.formfield.base` for
 /// the worktree-name input.
 fn prompt_builder(inputs: &Signal<DialogInputs>, worktree: bool) -> opentui_solid::ElementBuilder {
-    let title: &'static str = if worktree { "Name worktree" } else { "Rename session" };
-    let placeholder: &'static str = if worktree { "Worktree name" } else { "Session title" };
+    let (title, placeholder) = if worktree {
+        ("Name worktree", "Worktree name")
+    } else {
+        ("Rename session", "Session title")
+    };
+    prompt_builder_titled(inputs, title, placeholder, worktree)
+}
+
+/// RE-13: the parameterized prompt tree — the /btw question prompt
+/// reuses the exact chrome with its own title/placeholder (btw.tsx:
+/// 64-65: `{ title: "/btw", placeholder: "Ask anything" }`).
+fn prompt_builder_titled(
+    inputs: &Signal<DialogInputs>,
+    title: &'static str,
+    placeholder: &'static str,
+    worktree: bool,
+) -> opentui_solid::ElementBuilder {
     let title_row = box_().flex_direction("row").justify_content("space-between").children(
         Children::Static(vec![
             text()
@@ -1575,6 +1615,109 @@ fn error_details_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::Elemen
 }
 
 // ---------------------------------------------------------------------------
+// RE-13: the /btw Answer tree (feature-plugins/prompt/btw.tsx:127-171)
+// ---------------------------------------------------------------------------
+
+/// `/btw`'s `Answer`: the bold `/btw` + muted question header (the
+/// question collapses its whitespace and truncates, btw.tsx:130-
+/// 138), the markdown answer window (the styled rows ride
+/// `btw_styled`, the For identity `btw_window`), and the
+/// `c copy · j/k ↑/↓ scroll` footer (btw.tsx:161-169).
+fn btw_answer_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilder {
+    let title_row = box_().flex_direction("row").justify_content("space-between").children(
+        Children::Static(vec![
+            text()
+                .wrap_mode("none")
+                .dyn_prop(
+                    "content",
+                    dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                        let clip = i.box_width.saturating_sub(10).max(8);
+                        let label_width = display_width("/btw");
+                        let question_budget = clip.saturating_sub(label_width + 1);
+                        let question =
+                            i.error_source.split_whitespace().collect::<Vec<_>>().join(" ");
+                        let question = take_width(&question, question_budget);
+                        styled(vec![
+                            chunk("/btw".to_owned(), i.colors.text, None, 1),
+                            chunk(
+                                if question.is_empty() {
+                                    String::new()
+                                } else {
+                                    format!(" {question}")
+                                },
+                                i.colors.muted,
+                                None,
+                                0,
+                            ),
+                        ])
+                    })),
+                )
+                .into_element(),
+            text()
+                .dyn_prop(
+                    "content",
+                    dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                        styled(vec![chunk("esc".to_owned(), i.colors.muted, None, 0)])
+                    })),
+                )
+                .into_element(),
+        ]),
+    );
+    // The markdown window: one styled row per line (the identity is
+    // the plain text; the paint comes from the index into
+    // `btw_styled`).
+    let body_lines = ForItemSource {
+        source: map(inputs.clone(), |i: &DialogInputs| {
+            i.btw_window
+                .iter()
+                .enumerate()
+                .map(|(n, line)| ForItem {
+                    key: format!("B{n}"),
+                    value: PropValue::Str(line.clone()),
+                })
+                .collect::<Vec<ForItem>>()
+        }),
+    };
+    let body_inputs = inputs.clone();
+    let body_for = for_list(Rc::new(body_lines), move |item: &ForItem, index: usize| {
+        let fallback = match &item.value {
+            PropValue::Str(line) => line.clone(),
+            _ => String::new(),
+        };
+        let inputs = body_inputs.clone();
+        text()
+            .wrap_mode("none")
+            .dyn_prop(
+                "content",
+                dyn_styled(map(inputs, move |i: &DialogInputs| {
+                    i.btw_styled.get(index).cloned().unwrap_or_else(|| {
+                        styled(vec![chunk(fallback.clone(), i.colors.text, None, 0)])
+                    })
+                })),
+            )
+            .into_element()
+    });
+    let body =
+        box_().padding_left(2.0).padding_right(2.0).child(box_().children_dyn(Rc::new(body_for)));
+    // The action footer: `c copy`, `j/k ↑/↓ scroll` (gap 3).
+    let footer = text().dyn_prop(
+        "content",
+        dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+            styled(vec![
+                chunk("c".to_owned(), i.colors.text, None, 1),
+                chunk(" copy".to_owned(), i.colors.muted, None, 0),
+                chunk("   j/k ↑/↓ scroll".to_owned(), i.colors.muted, None, 0),
+            ])
+        })),
+    );
+    box_().children(Children::Static(vec![
+        title_row.into_element(),
+        body.margin_top(1.0).into_element(),
+        footer.margin_top(1.0).into_element(),
+    ]))
+}
+
+// ---------------------------------------------------------------------------
 // TUI-10: the image-preview tree (component/dialog-image-preview.tsx)
 // ---------------------------------------------------------------------------
 
@@ -1801,6 +1944,8 @@ fn chrome_element(
         Family::ErrorDetails => error_details_builder(&family_inputs),
         Family::ImagePreview => image_preview_builder(&family_inputs),
         Family::Pair => pair_builder(&family_inputs),
+        Family::BtwPrompt => prompt_builder_titled(&family_inputs, "/btw", "Ask anything", false),
+        Family::BtwAnswer => btw_answer_builder(&family_inputs),
     };
     box_()
         .width(width as f32)
@@ -2013,7 +2158,9 @@ fn dialog_chrome_button_hits(
         | Family::Confirm
         | Family::ErrorDetails
         | Family::ImagePreview
-        | Family::Pair => ("esc", 2),
+        | Family::Pair
+        | Family::BtwPrompt
+        | Family::BtwAnswer => ("esc", 2),
         Family::Help => ("esc/enter", 2),
     };
     let label_width = label.chars().count();
@@ -2059,6 +2206,10 @@ fn build_inputs(
     let family = match &entry.kind {
         DialogKind::SessionRename { .. } => Family::RenamePrompt,
         DialogKind::WorktreeName => Family::WorktreeNamePrompt,
+        // RE-13: the /btw pair — the question prompt + the Answer
+        // markdown dialog (btw.tsx:64-65, 88-172).
+        DialogKind::BtwPrompt => Family::BtwPrompt,
+        DialogKind::BtwAnswer { .. } => Family::BtwAnswer,
         // Lane FINAL: the connect-flow prompts (KeyMethod's API-key
         // input / OAuthCode's code entry) — the prompt tree with a
         // dynamic title + the attempt's URL/instructions rows.
@@ -2116,6 +2267,8 @@ fn build_inputs(
                 pair_rows: Vec::new(),
                 pair_split: false,
                 pair_qr: Vec::new(),
+                btw_window: Vec::new(),
+                btw_styled: Vec::new(),
                 plugin_rows: Vec::new(),
             }
         }
@@ -2149,7 +2302,101 @@ fn build_inputs(
             pair_rows: Vec::new(),
             pair_split: false,
             pair_qr: Vec::new(),
+            btw_window: Vec::new(),
+            btw_styled: Vec::new(),
         },
+        // RE-13: the /btw question prompt — the prompt tree's value
+        // arm (title "/btw" + placeholder "Ask anything" are the
+        // builder's, btw.tsx:65).
+        Family::BtwPrompt => DialogInputs {
+            family,
+            box_width,
+            colors,
+            title: String::new(),
+            placeholder: String::new(),
+            filter: String::new(),
+            options: Vec::new(),
+            flat: Vec::new(),
+            selected: 0,
+            current: None,
+            flatten: false,
+            destructive: false,
+            window: Vec::new(),
+            actions: Vec::new(),
+            prompt_value: entry.value.clone(),
+            hint_lines: Vec::new(),
+            plugin_title: String::new(),
+            plugin_rows: Vec::new(),
+            message: String::new(),
+            confirm_labels: (String::new(), String::new(), true),
+            error_source: String::new(),
+            error_window: Vec::new(),
+            diagnostic: String::new(),
+            preview_title: String::new(),
+            preview_footer: (String::new(), String::new(), String::new()),
+            preview_rows: 0,
+            pair_rows: Vec::new(),
+            pair_split: false,
+            pair_qr: Vec::new(),
+            btw_window: Vec::new(),
+            btw_styled: Vec::new(),
+        },
+        // RE-13: the /btw Answer dialog — the sidecar's markdown
+        // rows sliced to the window (the ref's scrollbox maxHeight,
+        // btw.tsx:101).
+        Family::BtwAnswer => {
+            let DialogKind::BtwAnswer { question, .. } = &entry.kind else {
+                unreachable!("the BtwAnswer family guard")
+            };
+            let window_rows = (terminal_height * 3 / 5).max(8).min(sidecar.btw_rows.len().max(1));
+            let btw_window: Vec<String> = sidecar
+                .btw_rows
+                .iter()
+                .skip(sidecar.btw_scroll)
+                .take(window_rows)
+                .map(|row| row.plain_text())
+                .collect();
+            let btw_styled: Vec<StyledText> = sidecar
+                .btw_rows
+                .iter()
+                .skip(sidecar.btw_scroll)
+                .take(window_rows)
+                .cloned()
+                .collect();
+            DialogInputs {
+                family,
+                box_width,
+                colors,
+                title: String::new(),
+                placeholder: String::new(),
+                filter: String::new(),
+                options: Vec::new(),
+                flat: Vec::new(),
+                selected: 0,
+                current: None,
+                flatten: false,
+                destructive: false,
+                window: Vec::new(),
+                actions: Vec::new(),
+                prompt_value: String::new(),
+                hint_lines: Vec::new(),
+                plugin_title: "/btw".to_owned(),
+                plugin_rows: Vec::new(),
+                message: String::new(),
+                confirm_labels: (String::new(), String::new(), true),
+                error_source: question.clone(),
+                error_window: Vec::new(),
+                diagnostic: String::new(),
+                preview_title: String::new(),
+                preview_footer: (String::new(), String::new(), String::new()),
+                preview_rows: 0,
+                pair_rows: Vec::new(),
+                pair_split: false,
+                pair_qr: Vec::new(),
+                btw_window,
+                btw_styled,
+            }
+        }
         // The connect prompts carry their title/placeholder/hints
         // through the props (OAuthCode's description block holds the
         // attempt's URL + instructions, dialog-integration.tsx:
@@ -2184,6 +2431,8 @@ fn build_inputs(
             pair_rows: Vec::new(),
             pair_split: false,
             pair_qr: Vec::new(),
+            btw_window: Vec::new(),
+            btw_styled: Vec::new(),
         },
         Family::Help => {
             let content_width = box_width.saturating_sub(4);
@@ -2231,6 +2480,8 @@ fn build_inputs(
                 pair_rows: Vec::new(),
                 pair_split: false,
                 pair_qr: Vec::new(),
+                btw_window: Vec::new(),
+                btw_styled: Vec::new(),
             }
         }
         Family::PluginRows => {
@@ -2265,6 +2516,8 @@ fn build_inputs(
                 pair_rows: Vec::new(),
                 pair_split: false,
                 pair_qr: Vec::new(),
+                btw_window: Vec::new(),
+                btw_styled: Vec::new(),
             }
         }
         // -- TUI-25: DialogAlert / DialogConfirm --------------------
@@ -2321,6 +2574,8 @@ fn build_inputs(
                 pair_rows: Vec::new(),
                 pair_split: false,
                 pair_qr: Vec::new(),
+                btw_window: Vec::new(),
+                btw_styled: Vec::new(),
             }
         }
         // -- TUI-24: DialogErrorDetails ------------------------------
@@ -2364,6 +2619,8 @@ fn build_inputs(
                 pair_rows: Vec::new(),
                 pair_split: false,
                 pair_qr: Vec::new(),
+                btw_window: Vec::new(),
+                btw_styled: Vec::new(),
             }
         }
         // -- TUI-10: DialogImagePreview ------------------------------
@@ -2411,6 +2668,8 @@ fn build_inputs(
                 pair_rows: Vec::new(),
                 pair_split: false,
                 pair_qr: Vec::new(),
+                btw_window: Vec::new(),
+                btw_styled: Vec::new(),
             }
         }
         // -- F15: DialogPair — the custom (non-select) tree --------
@@ -2469,6 +2728,8 @@ fn build_inputs(
                 pair_rows,
                 pair_split,
                 pair_qr,
+                btw_window: Vec::new(),
+                btw_styled: Vec::new(),
             }
         }
     }

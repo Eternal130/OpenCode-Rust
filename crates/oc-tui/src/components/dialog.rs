@@ -83,6 +83,7 @@ pub fn handle_dialog_key(
                 | DialogKind::WorktreeName
                 | DialogKind::IntegrationKey { .. }
                 | DialogKind::IntegrationCode { .. }
+                | DialogKind::BtwPrompt
         )
     };
     let is_select = match &entry.kind {
@@ -98,6 +99,8 @@ pub fn handle_dialog_key(
         | DialogKind::WorktreeName
         | DialogKind::IntegrationKey { .. }
         | DialogKind::IntegrationCode { .. }
+        | DialogKind::BtwPrompt
+        | DialogKind::BtwAnswer { .. }
         | DialogKind::ImagePreview
         | DialogKind::ErrorDetails { .. }
         | DialogKind::Alert { .. }
@@ -158,6 +161,7 @@ pub fn handle_dialog_key(
                     | DialogKind::WorktreeName
                     | DialogKind::IntegrationKey { .. }
                     | DialogKind::IntegrationCode { .. }
+                    | DialogKind::BtwPrompt
             );
 
     // -- modal layer (dialog.tsx) -------------------------------------------
@@ -532,6 +536,50 @@ pub fn handle_dialog_key(
         }
         return DialogKeyOutcome::Consumed;
     }
+    // -- RE-13: the /btw Answer dialog's action layer (btw.tsx:105-
+    // 125): `c` copies the answer, j/k/↑/↓ scroll the markdown
+    // window, page/home/end the long jumps. -------------------------
+    if let DialogKind::BtwAnswer { answer, .. } = &entry.kind {
+        let max = btw_answer_scroll_max(store, answer, terminal);
+        let (key, mods) = (stroke.key.as_str(), (stroke.ctrl, stroke.alt));
+        match (key, mods) {
+            ("up", (false, false)) | ("k", (false, false)) => {
+                store.btw_scroll_by(-1, max);
+                return DialogKeyOutcome::Consumed;
+            }
+            ("down", (false, false)) | ("j", (false, false)) => {
+                store.btw_scroll_by(1, max);
+                return DialogKeyOutcome::Consumed;
+            }
+            ("pageup", (false, false)) => {
+                store.btw_scroll_by(-(btw_answer_window_rows(terminal) as i64), max);
+                return DialogKeyOutcome::Consumed;
+            }
+            ("pagedown", (false, false)) => {
+                store.btw_scroll_by(btw_answer_window_rows(terminal) as i64, max);
+                return DialogKeyOutcome::Consumed;
+            }
+            ("home", (false, false)) => {
+                store.btw_scroll_by(i64::MIN / 2, 0);
+                return DialogKeyOutcome::Consumed;
+            }
+            ("end", (false, false)) => {
+                store.btw_scroll_by(i64::MAX / 2, max);
+                return DialogKeyOutcome::Consumed;
+            }
+            ("c", (false, false)) => {
+                let text = answer.trim().to_owned();
+                let _ = store.clipboard_write(&text);
+                store.toast_show(crate::components::toast::ToastOptions {
+                    message: "Copied to clipboard".to_owned(),
+                    variant: "info",
+                    ..crate::components::toast::ToastOptions::info("")
+                });
+                return DialogKeyOutcome::Consumed;
+            }
+            _ => return DialogKeyOutcome::Consumed,
+        }
+    }
     // -- TUI-24: DialogErrorDetails' action layer
     // (dialog-error-details.tsx:88-96 + the useKeyboard scroller). --
     if let DialogKind::ErrorDetails { error, context, .. } = &entry.kind {
@@ -735,11 +783,14 @@ pub fn render_overlay(
     };
     // TUI-10/24: the custom families' sidecar — the preview state +
     // the error scroll (this path owns the store). F15: the pair
-    // dialog's resource snapshot rides the same sidecar.
+    // dialog's resource snapshot rides the same sidecar. RE-13: the
+    // /btw answer's markdown rows + scroll.
     let sidecar = crate::components::dialog_solid::DialogSidecar {
         preview: store.image_preview_dialog(),
         error_scroll: store.error_details_scroll(),
         pair: store.pair_state(),
+        btw_rows: btw_answer_rows(store, &entry.kind, terminal),
+        btw_scroll: store.btw_scroll(),
     };
     let (rect, option_rows, button_hits) = render_overlay_with_options(
         base,
@@ -836,6 +887,9 @@ pub fn render_overlay_with_options(
         | DialogKind::Alert { .. }
         | DialogKind::Confirm { .. }
         // F15: the pair dialog's custom tree records none either.
+        // RE-13: the /btw prompt input + Answer markdown dialog.
+        | DialogKind::BtwPrompt
+        | DialogKind::BtwAnswer { .. }
         | DialogKind::Pair => false,
     } {
         crate::components::dialog_select::option_dialog_rows(
@@ -934,6 +988,81 @@ fn error_details_scroll_max(store: &Store, error: &str) -> usize {
     let inner = width.min(60).saturating_sub(6).max(1);
     let lines = crate::wrap::wrap_label(error, inner).len();
     lines.saturating_sub(20)
+}
+
+/// RE-13: the `/btw` answer window's row budget (btw.tsx:101 —
+/// `max(8, floor(height * 0.6))`).
+fn btw_answer_window_rows(terminal: (u16, u16)) -> usize {
+    (usize::from(terminal.1) * 3 / 5).max(8)
+}
+
+/// RE-13: the `/btw` answer window's scroll max — the markdown
+/// render at the large dialog's inner width minus the window rows.
+fn btw_answer_scroll_max(store: &Store, answer: &str, terminal: (u16, u16)) -> usize {
+    let width = usize::from(terminal.0).max(1);
+    let inner = width.min(crate::store::DialogSize::Large.width()).saturating_sub(6).max(1);
+    let styles =
+        crate::components::message::markdown::MarkdownStyles::from_theme(&store.theme().styles());
+    let lines = crate::components::message::markdown::render_markdown(answer, inner, &styles);
+    lines.len().saturating_sub(btw_answer_window_rows(terminal))
+}
+
+/// RE-13: the `/btw` answer's full markdown render — the styled rows
+/// the Answer dialog's scroll window slices. Ratatui spans convert
+/// to the dialog bridge's `StyledText` chunks (fg/bg RGB + the bold
+/// bit).
+fn btw_answer_rows(
+    store: &Store,
+    kind: &DialogKind,
+    terminal: (u16, u16),
+) -> Vec<opentui_core::styled_text::StyledText> {
+    let DialogKind::BtwAnswer { answer, .. } = kind else { return Vec::new() };
+    let width = usize::from(terminal.0).max(1);
+    let inner = width.min(crate::store::DialogSize::Large.width()).saturating_sub(6).max(1);
+    let styles =
+        crate::components::message::markdown::MarkdownStyles::from_theme(&store.theme().styles());
+    crate::components::message::markdown::render_markdown(answer, inner, &styles)
+        .iter()
+        .map(|line| {
+            opentui_core::styled_text::StyledText::new(
+                line.0
+                    .iter()
+                    .map(|span| {
+                        let fg = match span.style.fg {
+                            Some(ratatui::style::Color::Rgb(r, g, b)) => {
+                                Some(opentui_core::Rgba::rgb(r, g, b))
+                            }
+                            _ => None,
+                        };
+                        let bg = match span.style.bg {
+                            Some(ratatui::style::Color::Rgb(r, g, b)) => {
+                                Some(opentui_core::Rgba::rgb(r, g, b))
+                            }
+                            _ => None,
+                        };
+                        let mut attributes = 0u32;
+                        let modifiers = span.style.add_modifier;
+                        if modifiers.contains(ratatui::style::Modifier::BOLD) {
+                            attributes |= 1;
+                        }
+                        if modifiers.contains(ratatui::style::Modifier::ITALIC) {
+                            attributes |= 2;
+                        }
+                        if modifiers.contains(ratatui::style::Modifier::UNDERLINED) {
+                            attributes |= 4;
+                        }
+                        opentui_core::styled_text::TextChunk {
+                            text: span.text.clone(),
+                            fg,
+                            bg,
+                            attributes,
+                            link: span.link.clone(),
+                        }
+                    })
+                    .collect(),
+            )
+        })
+        .collect()
 }
 
 /// TUI-10: paint the image preview's pixels over the copied chrome
@@ -2118,4 +2247,105 @@ fn destructive_confirm_row_uses_the_destructive_pair() {
             .any(|cell| cell.bg == crate::render::CellColor::from(styles.destructive_focused_bg))
     });
     assert!(found, "the destructive selected pair painted");
+}
+
+// -- RE-13: the /btw Answer dialog --------------------------------------
+
+#[cfg(test)]
+mod btw_tests {
+    use super::*;
+    use crate::reactive::Runtime;
+
+    /// One frame row as plain text (grid assertions).
+    fn btw_frame_row(frame: &Frame, y: usize) -> String {
+        frame.cells[y].iter().map(|cell| cell.ch).collect()
+    }
+
+    #[test]
+    fn btw_answer_dialog_renders_markdown_and_copy_footer() {
+        let theme = crate::theme::ThemeState::v2_dark();
+        let store = Store::new(Runtime::new());
+        store.open_tab("s1", Some("S1".to_owned()));
+        store.btw_ask("s1", "what did we do?");
+        store.btw_answer("what did we do?", "You **ported** /btw.\n\n- one-shot answer");
+        let mut frame = blank_base(100, 30);
+        render_overlay(&mut frame, &store, &theme, (100, 30));
+        // The header carries the /btw label + the collapsed question
+        // (btw.tsx:130-138) and the action footer the copy hint
+        // (btw.tsx:161-169).
+        let rows: Vec<String> = (0..frame.height).map(|y| btw_frame_row(&frame, y)).collect();
+        let header = rows.iter().find(|row| row.contains("/btw")).expect("the /btw header");
+        assert!(header.contains("what did we do?"), "the question rides the header: {header}");
+        assert!(header.contains("esc"), "the escape hint");
+        assert!(rows.iter().any(|row| row.contains("ported")), "the markdown answer text");
+        assert!(rows.iter().any(|row| row.contains("copy")), "the copy action");
+    }
+
+    #[test]
+    fn btw_answer_dialog_scrolls_and_copies() {
+        let store = Store::new(Runtime::new());
+        store.open_tab("s1", Some("S1".to_owned()));
+        let answer = (0..40).map(|n| format!("line {n}")).collect::<Vec<_>>().join("\n\n");
+        store.btw_ask("s1", "q");
+        store.btw_answer("q", &answer);
+        let mut keymap = Keymap::new();
+        keymap.push_mode("dialog");
+        let clock = crate::keymap::ManualClock::default();
+        let scroll = store.btw_scroll();
+        assert_eq!(scroll, 0, "the window starts at the top");
+        // j scrolls one row (btw.tsx:119-120).
+        let outcome = handle_dialog_key(
+            &store,
+            &mut keymap,
+            &clock,
+            crate::keymap::KeyStroke::parse("j").unwrap(),
+            (100, 30),
+        );
+        assert_eq!(outcome, DialogKeyOutcome::Consumed);
+        assert_eq!(store.btw_scroll(), 1);
+        // end clamps to the max (btw.tsx:124).
+        handle_dialog_key(
+            &store,
+            &mut keymap,
+            &clock,
+            crate::keymap::KeyStroke::parse("end").unwrap(),
+            (100, 30),
+        );
+        assert!(store.btw_scroll() > 1, "end jumps to the bottom");
+        // c copies the answer (btw.tsx:105-110) — the toast confirms.
+        let outcome = handle_dialog_key(
+            &store,
+            &mut keymap,
+            &clock,
+            crate::keymap::KeyStroke::parse("c").unwrap(),
+            (100, 30),
+        );
+        assert_eq!(outcome, DialogKeyOutcome::Consumed);
+        let toast = store.toasts().current().cloned().expect("the copy toast");
+        assert_eq!(toast.message, "Copied to clipboard");
+        // escape closes (the modal layer).
+        let outcome = handle_dialog_key(
+            &store,
+            &mut keymap,
+            &clock,
+            crate::keymap::KeyStroke::parse("escape").unwrap(),
+            (100, 30),
+        );
+        assert_eq!(outcome, DialogKeyOutcome::Closed);
+        assert!(store.dialogs().is_empty());
+    }
+
+    fn blank_base(width: u16, height: u16) -> Frame {
+        let cell = crate::render::Cell {
+            ch: ' ',
+            attrs: 0,
+            fg: crate::render::CellColor::Rgb(255, 255, 255),
+            bg: crate::render::CellColor::Rgb(10, 10, 10),
+        };
+        Frame {
+            cells: vec![vec![cell; usize::from(width)]; usize::from(height)],
+            width: usize::from(width),
+            height: usize::from(height),
+        }
+    }
 }
