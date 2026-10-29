@@ -2527,7 +2527,16 @@ impl App {
                     .collect()
             })
             .unwrap_or_default();
-        composer.autocomplete.options = autocomplete::filter_references(&agents, &skills, &query);
+        // RE-03 — the ranked form carries the frecency factor
+        // (score × (1 + getFrecency(path)) for path-carrying rows).
+        let frecency = composer.autocomplete.frecency.clone();
+        composer.autocomplete.options = autocomplete::filter_references_ranked(
+            &agents,
+            &skills,
+            &query,
+            Some(&frecency),
+            autocomplete::now_ms(),
+        );
         composer.autocomplete.filtered_len = composer.autocomplete.options.len();
         if composer.autocomplete.selected >= composer.autocomplete.filtered_len {
             composer.autocomplete.selected = 0;
