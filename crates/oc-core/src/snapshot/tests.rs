@@ -454,3 +454,39 @@ async fn snapshot_non_git_vcs_is_disabled() {
     let error = service.restore(&restore).await.expect_err("restore gated");
     assert!(error.to_string().contains("Snapshots are disabled"), "{error}");
 }
+
+// F-16a: on a non-git location, `files`/`diff` fail like ref's repository
+// resolution (snapshot.ts:130-137/155-163 — `comparison` maps the failed
+// `git.repo` discover to `failure(operation, …)`), and — critically —
+// never initialize the bare snapshot store as a side effect.
+#[tokio::test]
+async fn snapshot_files_and_diff_error_on_non_git_without_initializing_a_store() {
+    let tmp = tempfile::tempdir_in("/tmp/opencode").expect("tempdir");
+    let worktree = tmp.path().join("plain");
+    std::fs::create_dir_all(&worktree).expect("worktree");
+    let service = store(&tmp.path().join("data"), &worktree, ".");
+    let git_directory = service.git_directory().to_path_buf();
+
+    let error = service
+        .files(
+            &oc_schema::id::SnapshotId::parse("4b825dc642cb6eb9a060e54bf8d69288fbee4904"),
+            &oc_schema::id::SnapshotId::parse("4b825dc642cb6eb9a060e54bf8d69288fbee4904"),
+        )
+        .await
+        .expect_err("files must fail on a non-git location");
+    assert!(error.to_string().contains("not a Git repository"), "error: {error}");
+    let error = service
+        .diff(
+            &oc_schema::id::SnapshotId::parse("4b825dc642cb6eb9a060e54bf8d69288fbee4904"),
+            &oc_schema::id::SnapshotId::parse("4b825dc642cb6eb9a060e54bf8d69288fbee4904"),
+            None,
+            None,
+        )
+        .await
+        .expect_err("diff must fail on a non-git location");
+    assert!(error.to_string().contains("not a Git repository"), "error: {error}");
+    assert!(
+        !git_directory.exists(),
+        "a bogus files/diff call must not initialize the bare snapshot store"
+    );
+}

@@ -271,6 +271,18 @@ pub async fn session_location(
     state: &SharedState,
     session_id: &str,
 ) -> Result<(LocationRef, oc_core::database::schema::SessionRow), ApiError> {
+    // AUD-18: ref decodes the `sessionID` path parameter against the
+    // `Session.ID` schema FIRST (server/src/location.ts:49-53 — a string
+    // starting with "ses", schema/session-id.ts:5-6) and answers 400
+    // `InvalidRequestError{message: "Invalid session ID", field:
+    // "sessionID"}` for malformed ids, before any table lookup. Only
+    // well-formed-but-missing ids reach the 404 below.
+    if !session_id.starts_with("ses") {
+        return Err(crate::errors::invalid_request_message_field(
+            "Invalid session ID",
+            "sessionID",
+        ));
+    }
     let store = oc_core::session::store::SessionStore::new((*state.engine.db).clone());
     let row = store
         .get(session_id)

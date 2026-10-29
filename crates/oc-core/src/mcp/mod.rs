@@ -15,6 +15,7 @@
 pub mod client;
 pub mod elicitation;
 pub mod oauth;
+pub mod oauth_page;
 pub mod registry;
 #[cfg(test)]
 mod tests;

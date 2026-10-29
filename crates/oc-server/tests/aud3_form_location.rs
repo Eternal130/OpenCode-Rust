@@ -101,8 +101,12 @@ async fn aud3_global_form_roundtrip_through_session_endpoints() {
         .expect("global form reply");
 }
 
-/// The escape hatch is exactly `"global"`: any other nonexistent session
-/// id still resolves through the session table and 404s.
+/// The escape hatch is exactly `"global"`: a well-formed but missing
+/// session id (`ses_…`) still resolves through the session table and
+/// 404s. A malformed id ("global-ish", no `ses` prefix) is 400 per ref
+/// (form-location.ts:30-38 falls through to sessionInfo, whose
+/// `Session.ID` decode fails → `InvalidRequestError`,
+/// server/src/location.ts:49-53) — AUD-18 aligned the port.
 #[tokio::test]
 async fn aud3_nonexistent_session_form_still_404s() {
     let (client, _state, _workspace) = boot().await;
@@ -120,7 +124,7 @@ async fn aud3_nonexistent_session_form_still_404s() {
         .form()
         .list("global-ish")
         .await
-        .expect_err("near-miss sentinel must still 404");
+        .expect_err("near-miss sentinel must 400 (malformed session id)");
     let ClientError::Api { status, .. } = &error else { panic!("expected api error, got {error}") };
-    assert_eq!(*status, 404);
+    assert_eq!(*status, 400);
 }

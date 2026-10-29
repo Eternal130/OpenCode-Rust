@@ -701,6 +701,19 @@ async fn prompt(
         skills: typed_value(&body, "skills"),
         metadata: record_value(&body, "metadata"),
     };
+    // F-09a: ref reconciles the message id BEFORE preparing
+    // (session/session.ts:151-160 — `admission.reconcile` ahead of
+    // `SessionPrompt.prepare`): a duplicate-id retry returns the existing
+    // row (or its 409) without dispatching the `session.prompt` hook, so
+    // the hook never double-fires for a retried submit.
+    if let Some(existing) = services
+        .inbox
+        .reconcile(&message_id, &session_id, "user", delivery)
+        .await
+        .map_err(|error| inbox_error(&error, &message_id))?
+    {
+        return Ok(json_data(inbox_info_json(&existing)));
+    }
     // AUD-09: ref fires `session.prompt` at SUBMIT time — before the
     // inbox row exists — and a failure rejects the HTTP request (ref
     // session/session.ts:155-172 pipes `SessionPrompt.prepare`
@@ -718,9 +731,10 @@ async fn prompt(
             .await
             .map_err(|error| match error {
                 oc_core::session::runner::PromptPrepareError::SkillNotFound(skill) => {
-                    crate::errors::invalid_request_field(
+                    // F-09b: ref's skills 400 (handlers/session.ts:336-337 →
+                    // InvalidRequestError) leaves `kind` absent on this leg.
+                    crate::errors::invalid_request_message_field(
                         format!("Skill not found: {skill}"),
-                        "ParseError",
                         "skills",
                     )
                 }
