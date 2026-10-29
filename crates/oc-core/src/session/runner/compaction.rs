@@ -307,7 +307,7 @@ impl SessionCompaction {
         let mut selected = trigger.context.clone();
         selected.model = model.clone();
         let result = if native {
-            self.compact_natively(&selected, budget, settings.keep).await
+            self.compact_natively(trigger.reason, &selected, budget, settings.keep).await
         } else {
             self.summarize(trigger.reason, &selected, budget, settings.keep).await
         };
@@ -404,8 +404,14 @@ impl SessionCompaction {
     // Native path (compaction.ts:324-372)
     // -----------------------------------------------------------------------
 
+    /// `compactNatively` (compaction.ts:324-372) — the trigger rides
+    /// through to `deliver` (ref passes `trigger`, not a hard-coded
+    /// reason): a manual `/compact` with a native model publishes no
+    /// `started(reason:"auto")` event and keeps the manual-path
+    /// constraints in the deliver loop.
     async fn compact_natively(
         &self,
+        reason: Reason,
         context: &Loaded,
         budget: i64,
         keep: i64,
@@ -493,7 +499,7 @@ impl SessionCompaction {
             }
         };
 
-        self.deliver(Reason::Auto, context, prepared, "", budget, send).await
+        self.deliver(reason, context, prepared, "", budget, send).await
     }
 
     // -----------------------------------------------------------------------

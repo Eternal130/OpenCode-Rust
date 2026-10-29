@@ -27,6 +27,27 @@ pub fn routes() -> axum::Router<SharedState> {
         .route("/api/session/:sessionID/form/:formID/reply", axum::routing::post(session_reply))
 }
 
+/// The form-location resolution (ref middleware/form-location.ts:27-38):
+/// every session-scoped form route runs through this instead of the plain
+/// session lookup. `sessionID === "global"` is the temporary MCP
+/// elicitation escape hatch — still location-scoped, but bypassing the
+/// session row lookup because some MCP elicitations cannot be attributed
+/// to a real session (they are stored under the sentinel
+/// [`oc_core::mcp::GLOBAL_ELICITATION_SESSION_ID`]). The location comes
+/// from the request itself (query/header ref), never a session row.
+async fn form_services(
+    state: &SharedState,
+    session_id: &str,
+    uri: &Uri,
+    headers: &HeaderMap,
+) -> Result<std::sync::Arc<oc_core::engine::LocationServices>, ApiError> {
+    if session_id == oc_core::mcp::GLOBAL_ELICITATION_SESSION_ID {
+        let location = resolve_location(state, uri.query().unwrap_or_default(), headers)?;
+        return services(state, &location).await;
+    }
+    session_services(state, session_id).await.map(|(services, _)| services)
+}
+
 fn form_json(form: &oc_schema::form::Info) -> Value {
     serde_json::to_value(form).unwrap_or_else(|_| json!({}))
 }
@@ -65,8 +86,10 @@ async fn list(
 async fn session_list(
     State(state): State<SharedState>,
     Path(session_id): Path<String>,
+    uri: Uri,
+    headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let (services, _) = session_services(&state, &session_id).await?;
+    let services = form_services(&state, &session_id, &uri, &headers).await?;
     let data: Vec<Value> = services.forms.list(Some(&session_id)).iter().map(form_json).collect();
     Ok(json_data(Value::Array(data)))
 }
@@ -75,9 +98,10 @@ async fn session_create(
     State(state): State<SharedState>,
     Path(session_id): Path<String>,
     uri: Uri,
+    headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<Response, ApiError> {
-    let (services, _) = session_services(&state, &session_id).await?;
+    let services = form_services(&state, &session_id, &uri, &headers).await?;
     // RA-01: post-location payload decode (404 first, then schema 400).
     let body = crate::request_validation::validate_at_handler(
         "session.form.create",
@@ -128,8 +152,10 @@ fn owned_form(
 async fn session_get(
     State(state): State<SharedState>,
     Path((session_id, form_id)): Path<(String, String)>,
+    uri: Uri,
+    headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let (services, _) = session_services(&state, &session_id).await?;
+    let services = form_services(&state, &session_id, &uri, &headers).await?;
     let info = owned_form(&services, &session_id, &form_id)?;
     let detail_state = services
         .forms
@@ -149,9 +175,10 @@ async fn session_reply(
     State(state): State<SharedState>,
     Path((session_id, form_id)): Path<(String, String)>,
     uri: Uri,
+    headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<Response, ApiError> {
-    let (services, _) = session_services(&state, &session_id).await?;
+    let services = form_services(&state, &session_id, &uri, &headers).await?;
     owned_form(&services, &session_id, &form_id)?;
     // RA-01: formLocation resolves the form (404) before payload decode —
     // validate Params (formID ^frm_) + payload only after it.
@@ -170,8 +197,9 @@ async fn session_cancel(
     State(state): State<SharedState>,
     Path((session_id, form_id)): Path<(String, String)>,
     uri: Uri,
+    headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let (services, _) = session_services(&state, &session_id).await?;
+    let services = form_services(&state, &session_id, &uri, &headers).await?;
     owned_form(&services, &session_id, &form_id)?;
     // RA-01: form.cancel is form-location-first WITH a query row — the
     // session+form 404s resolve first, then the query decode.
