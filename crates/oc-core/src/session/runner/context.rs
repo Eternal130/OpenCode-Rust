@@ -620,22 +620,55 @@ pub(crate) fn mcp_guidance_source(
     }
 }
 
-/// `core/reference-guidance` — TODO(wave-C): reference-file guidance.
-fn reference_guidance_source() -> InstructionSource {
+/// `core/reference-guidance` (reference/instructions.ts): the available
+/// list (`description` present), sorted by name; an empty list is an
+/// observed absence.
+pub(crate) fn reference_guidance_source(
+    references: Arc<dyn Fn() -> Vec<crate::reference::Info> + Send + Sync>,
+) -> InstructionSource {
+    let summaries = |infos: &[crate::reference::Info]| crate::reference::instructions::summaries(infos);
     InstructionSource {
         key: "core/reference-guidance".into(),
-        // TODO(wave-C): read the loaded reference-file summary; empty is an
-        // observed absence.
-        read: Box::new(|| ReadOutcome::Removed),
-        initial: Box::new(|_| {
-            Some(
-                "No reference files are currently loaded. Reference files add context when relevant work is detected."
-                    .to_string(),
-            )
+        read: Box::new(move || {
+            let visible = summaries(&(references)());
+            if visible.is_empty() {
+                ReadOutcome::Removed
+            } else {
+                ReadOutcome::Value(crate::reference::instructions::summary_value(&visible))
+            }
         }),
-        changed: Box::new(|_, _| Some("The loaded reference files changed.".to_string())),
-        removed: None,
+        initial: Box::new(|value| {
+            let visible = decode_summaries(value);
+            Some(crate::reference::instructions::render(&visible))
+        }),
+        changed: Box::new(|previous, current| {
+            let previous = decode_summaries(previous);
+            let current = decode_summaries(current);
+            Some(crate::reference::instructions::update(&previous, &current))
+        }),
+        removed: Some(Box::new(|_| {
+            Some(crate::reference::instructions::REMOVED_TEXT.to_string())
+        })),
     }
+}
+
+/// The stored blob back to summaries (the codec's JSON array).
+fn decode_summaries(value: &serde_json::Value) -> Vec<crate::reference::instructions::Summary> {
+    value
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let name = item.get("name")?.as_str()?.to_owned();
+                    let path = item.get("path")?.as_str()?.to_owned();
+                    let description =
+                        item.get("description").and_then(serde_json::Value::as_str).map(str::to_owned);
+                    Some(crate::reference::instructions::Summary { name, path, description })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// `core/skill-guidance` (skill/instructions.ts): the available list
@@ -1349,6 +1382,9 @@ pub struct ContextDeps {
     /// Available skills (`description` present, autoinvoke enabled); empty
     /// = observed absence.
     pub skills: Arc<dyn Fn() -> Vec<oc_schema::skill::Skill> + Send + Sync>,
+    /// Project references (`Reference.Service.list`); empty = observed
+    /// absence (the reference-guidance key stays out of the delta).
+    pub references: Arc<dyn Fn() -> Vec<crate::reference::Info> + Send + Sync>,
 }
 
 impl ContextDeps {
@@ -1374,6 +1410,7 @@ impl ContextDeps {
             catalog: Arc::new(crate::provider_catalog::Catalog::empty()),
             mcp: Arc::new(Vec::new),
             skills: Arc::new(move || builtins.clone()),
+            references: Arc::new(Vec::new),
         }
     }
 }
@@ -1502,7 +1539,7 @@ impl SessionContext {
         let mut list: InstructionList = vec![
             codemode_source(Arc::clone(&self.tools)),
             mcp_guidance_source(Arc::clone(&self.deps.mcp), permissions.clone()),
-            reference_guidance_source(),
+            reference_guidance_source(Arc::clone(&self.deps.references)),
             skill_guidance_source(Arc::clone(&self.deps.skills)),
             discovery_source(Arc::clone(&self.deps.discovery)),
             date_source(Arc::clone(&self.deps.clock)),
