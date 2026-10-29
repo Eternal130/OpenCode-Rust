@@ -126,9 +126,7 @@ use crate::session::execution::{InterruptOptions, SessionExecution};
 use crate::session::inbox::SessionInbox;
 use crate::session::projector::install_projectors;
 use crate::session::runner::compaction::SessionCompaction;
-use crate::session::runner::context::{
-    ContextDeps, McpServerRaw, McpToolSummary, SessionContext,
-};
+use crate::session::runner::context::{ContextDeps, McpServerRaw, McpToolSummary, SessionContext};
 use crate::session::runner::drain::SessionRunner;
 use crate::session::runner::model_request::{AppMetadata, SessionModelRequest};
 use crate::session::runner::prompt_prepare::PromptPrepare;
@@ -616,6 +614,9 @@ impl Engine {
             oc_util::global_roots::resolve().repos(),
             Arc::clone(&options.clock),
         ));
+        // F-5: the reference registry notify leg publishes
+        // `reference.updated` on every mutation (reference.ts:104-108).
+        references.set_bus(Arc::clone(&bus));
         let reference_sweeper = match tokio::runtime::Handle::try_current() {
             Ok(handle) => Some(handle.spawn({
                 let references = Arc::clone(&references);
@@ -1096,16 +1097,9 @@ impl Engine {
                             .tools()
                             .into_iter()
                             .filter(|tool| tool.server == item.server)
-                            .map(|tool| McpToolSummary {
-                                name: tool.name,
-                                codemode: tool.codemode,
-                            })
+                            .map(|tool| McpToolSummary { name: tool.name, codemode: tool.codemode })
                             .collect::<Vec<_>>();
-                        McpServerRaw {
-                            server: item.server,
-                            instructions: item.instructions,
-                            tools,
-                        }
+                        McpServerRaw { server: item.server, instructions: item.instructions, tools }
                     })
                     .collect::<Vec<_>>();
                 *cache_for_refresh.lock() = summaries;

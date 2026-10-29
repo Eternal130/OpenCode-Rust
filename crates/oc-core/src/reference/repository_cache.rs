@@ -170,7 +170,11 @@ impl RepositoryCache {
         }
 
         let repository = input.reference.label.clone();
-        let local_path = cache_path(&self.repos_root, &Reference::Remote(input.reference.clone()), input.branch.as_deref());
+        let local_path = cache_path(
+            &self.repos_root,
+            &Reference::Remote(input.reference.clone()),
+            input.branch.as_deref(),
+        );
         let key = format!("repository-cache:{}", local_path.to_string_lossy());
         let clone_target =
             parse(&input.reference.remote).unwrap_or(Reference::Remote(input.reference.clone()));
@@ -180,11 +184,9 @@ impl RepositoryCache {
             name.push(".lock");
             PathBuf::from(name)
         };
-        let _lock = oc_util::flock::FileLock::exclusive(&lock_path, self.lock_timeout)
-            .map_err(|error| CacheError::LockFailed {
-                path: lock_path.clone(),
-                message: error.to_string(),
-            })?;
+        let _lock = oc_util::flock::FileLock::exclusive(&lock_path, self.lock_timeout).map_err(
+            |error| CacheError::LockFailed { path: lock_path.clone(), message: error.to_string() },
+        )?;
 
         if let Some(parent) = local_path.parent() {
             std::fs::create_dir_all(parent).map_err(|error| CacheError::CacheOperation {
@@ -195,17 +197,14 @@ impl RepositoryCache {
         }
 
         let existing = discover(&local_path);
-        let origin = existing
-            .as_ref()
-            .and_then(|path| git_at(path, &["remote", "get-url", "origin"]).ok());
+        let origin =
+            existing.as_ref().and_then(|path| git_at(path, &["remote", "get-url", "origin"]).ok());
         let origin_reference = origin.as_deref().and_then(parse);
         // Discovery walks upward, so an enclosing repository with a
         // matching origin could masquerade as the cache entry; reuse
         // requires the checkout to live exactly at the cache path.
-        let worktree = existing
-            .is_some()
-            .then(|| std::fs::canonicalize(&local_path).ok())
-            .flatten();
+        let worktree =
+            existing.is_some().then(|| std::fs::canonicalize(&local_path).ok()).flatten();
         let reuse = matches!(
             (&existing, &origin_reference, &worktree),
             (Some(existing), Some(origin_reference), Some(worktree))
@@ -257,9 +256,8 @@ impl RepositoryCache {
                     repository: repository.clone(),
                     message: "Repository is unavailable".to_owned(),
                 })?;
-                git_at(&existing, &["fetch", "origin"]).map_err(|error| CacheError::FetchFailed {
-                    repository: repository.clone(),
-                    message: error,
+                git_at(&existing, &["fetch", "origin"]).map_err(|error| {
+                    CacheError::FetchFailed { repository: repository.clone(), message: error }
                 })?;
                 if let Some(branch) = &input.branch {
                     git_at(&existing, &["fetch", "origin", branch]).map_err(|error| {
@@ -302,7 +300,9 @@ impl RepositoryCache {
             local_path,
             status,
             head: checkout.as_deref().and_then(|path| git_at(path, &["rev-parse", "HEAD"]).ok()),
-            branch: checkout.as_deref().and_then(|path| git_at(path, &["rev-parse", "--abbrev-ref", "HEAD"]).ok()),
+            branch: checkout
+                .as_deref()
+                .and_then(|path| git_at(path, &["rev-parse", "--abbrev-ref", "HEAD"]).ok()),
         })
     }
 }
@@ -346,9 +346,7 @@ fn git_at(path: &Path, args: &[&str]) -> Result<String, String> {
 }
 
 fn run(command: &mut Command) -> Result<String, String> {
-    let output = command
-        .output()
-        .map_err(|error| error.to_string())?;
+    let output = command.output().map_err(|error| error.to_string())?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
     } else {

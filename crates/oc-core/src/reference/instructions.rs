@@ -31,10 +31,7 @@ pub fn summaries(infos: &[Info]) -> Vec<Summary> {
         })
         .collect();
     summaries.sort_by(|a, b| {
-        a.name
-            .to_lowercase()
-            .cmp(&b.name.to_lowercase())
-            .then_with(|| b.name.cmp(&a.name))
+        a.name.to_lowercase().cmp(&b.name.to_lowercase()).then_with(|| b.name.cmp(&a.name))
     });
     summaries
 }
@@ -66,9 +63,12 @@ fn entries(summaries: &[Summary]) -> Vec<String> {
                 format!("    <path>{}</path>", summary.path),
             ])
             .into_iter()
-            .chain(summary.description.iter().map(|description| {
-                format!("    <description>{description}</description>")
-            }))
+            .chain(
+                summary
+                    .description
+                    .iter()
+                    .map(|description| format!("    <description>{description}</description>")),
+            )
             .chain(std::iter::once("  </reference>".to_owned()))
         })
         .collect()
@@ -100,10 +100,9 @@ pub fn update(previous: &[Summary], current: &[Summary]) -> String {
     let removed: Vec<&Summary> =
         previous.iter().filter(|summary| !current_names.contains(&summary.name.as_str())).collect();
     let changed = current.iter().any(|after| {
-        previous
-            .iter()
-            .find(|before| before.name == after.name)
-            .is_some_and(|before| before.path != after.path || before.description != after.description)
+        previous.iter().find(|before| before.name == after.name).is_some_and(|before| {
+            before.path != after.path || before.description != after.description
+        })
     });
 
     if changed || (added.is_empty() && removed.is_empty()) {
@@ -117,7 +116,10 @@ pub fn update(previous: &[Summary], current: &[Summary]) -> String {
 
     let mut parts = Vec::new();
     if !added.is_empty() {
-        parts.push("New project references are available in addition to those previously listed:".to_owned());
+        parts.push(
+            "New project references are available in addition to those previously listed:"
+                .to_owned(),
+        );
         parts.extend(entries(&added.iter().map(|summary| (*summary).clone()).collect::<Vec<_>>()));
     }
     if !removed.is_empty() {
