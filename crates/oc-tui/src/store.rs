@@ -1588,6 +1588,14 @@ pub struct Store {
     /// The diff fetch seam (`vcs.base`/`vcs.diff` through the loop
     /// fetcher; tests record).
     diff_sink: std::cell::RefCell<Rc<dyn DiffSink>>,
+    /// RE-14 — the `/stats` page's live state (feature-plugins/
+    /// system/stats.tsx:182-216): mounted fullscreen while open, the
+    /// page's own escape layer, `stats.close` returns to
+    /// `return_route`.
+    stats_page: Signal<StatsPageState>,
+    /// RE-14 — the `session.stats` fetch seam (the loop fetcher's
+    /// worker; tests record).
+    stats_sink: std::cell::RefCell<Rc<dyn StatsSink>>,
     /// The open-url seam (lane KM — tests observe link clicks).
     open_url_sink: std::cell::RefCell<Option<OpenUrlSink>>,
     /// SURF-2 `DialogPair`'s resource state (server.info + pair).
@@ -2199,6 +2207,71 @@ pub struct RecordingDiffSink {
 impl DiffSink for RecordingDiffSink {
     fn fetch(&self, mode: DiffSource, session_id: Option<String>, generation: u64) {
         self.calls.borrow_mut().push((mode, session_id, generation));
+    }
+}
+
+/// RE-14 — the `/stats` page's resource phase (stats.tsx:141-176's
+/// `createResource`): loading, the error fallback, or the payload.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StatsPhase {
+    /// The resource is pending (`Gathering your stats…`).
+    Loading,
+    /// The fetch errored — the fixed fallback copy.
+    Failed(String),
+    /// `session.stats` resolved.
+    Loaded(std::sync::Arc<oc_client::types::SessionStatsInfo>),
+}
+
+impl Default for StatsPhase {
+    fn default() -> Self {
+        Self::Loading
+    }
+}
+
+/// RE-14 — the `/stats` page's live state (stats.tsx:140-186): the
+/// captured return route + the resource phase.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StatsPageState {
+    pub open: bool,
+    /// The route `stats.close` navigates back to (the plugin's
+    /// `previous` signal, stats.tsx:185).
+    pub return_route: Route,
+    pub phase: StatsPhase,
+    /// The fetch generation — stale replies drop.
+    pub generation: u64,
+}
+
+impl Default for StatsPageState {
+    fn default() -> Self {
+        Self { open: false, return_route: Route::Home, phase: StatsPhase::Loading, generation: 0 }
+    }
+}
+
+/// RE-14 — the stats fetch seam (`client.session.stats`,
+/// stats.tsx:141-147): the run loop wires the HTTP worker; tests
+/// record.
+pub trait StatsSink {
+    /// Fetch the year range (`from` ms + the local timezone name,
+    /// `tools: "none"`).
+    fn fetch(&self, generation: u64, from_ms: i64, timezone: String);
+}
+
+/// The default no-op sink.
+pub struct NoStatsSink;
+
+impl StatsSink for NoStatsSink {
+    fn fetch(&self, _generation: u64, _from_ms: i64, _timezone: String) {}
+}
+
+/// The recording sink (tests).
+#[derive(Default)]
+pub struct RecordingStatsSink {
+    pub calls: std::cell::RefCell<Vec<(u64, i64, String)>>,
+}
+
+impl StatsSink for RecordingStatsSink {
+    fn fetch(&self, generation: u64, from_ms: i64, timezone: String) {
+        self.calls.borrow_mut().push((generation, from_ms, timezone));
     }
 }
 
@@ -2981,6 +3054,8 @@ struct StoreSignals {
     plugins_failed: Signal<usize>,
     sidebar_mcp_open: Signal<bool>,
     diff_viewer: Signal<DiffViewerLive>,
+    /// RE-14 — the `/stats` page's live state.
+    stats_page: Signal<StatsPageState>,
     /// SURF-2 `DialogPair`'s resource state.
     pair: Signal<PairState>,
     /// Rename-pending per session (session → armed-at clock ms) — v2's
@@ -3045,6 +3120,7 @@ impl Store {
                 watchers.plugins_failed.get(),
                 watchers.sidebar_mcp_open.get(),
                 watchers.diff_viewer.get(),
+                watchers.stats_page.get(),
                 watchers.pair.get(),
                 watchers.project_list.get(),
                 watch_clock.get(),
@@ -3129,6 +3205,7 @@ impl Store {
             plugins_failed,
             sidebar_mcp_open,
             diff_viewer,
+            stats_page,
             pair,
             title_pending,
             update_notice,
@@ -3264,7 +3341,9 @@ impl Store {
             mcp_alerted: std::cell::RefCell::new(None),
             sidebar_mcp_open,
             diff_viewer,
+            stats_page,
             diff_sink: std::cell::RefCell::new(Rc::new(NoDiffSink)),
+            stats_sink: std::cell::RefCell::new(Rc::new(NoStatsSink)),
             open_url_sink: std::cell::RefCell::new(None),
             pair,
             title_pending,
@@ -3380,6 +3459,7 @@ impl Store {
         let plugins_failed = Signal::new(&runtime, 0usize);
         let sidebar_mcp_open = Signal::new(&runtime, true);
         let diff_viewer = Signal::new(&runtime, DiffViewerLive::default());
+        let stats_page = Signal::new(&runtime, StatsPageState::default());
         let pair = Signal::new(&runtime, PairState::default());
         let title_pending = Signal::new(&runtime, HashMap::<String, u64>::new());
         let update_notice = Signal::new(&runtime, None::<crate::components::update::UpdateNotice>);
@@ -3459,6 +3539,7 @@ impl Store {
                 plugins_failed,
                 sidebar_mcp_open,
                 diff_viewer,
+                stats_page,
                 pair,
                 title_pending,
                 update_notice,
@@ -7363,6 +7444,81 @@ impl Store {
         *self.diff_sink.borrow_mut() = sink;
     }
 
+    // -- RE-14: the /stats page (stats.tsx:182-216) ------------------
+
+    /// The `/stats` page is mounted fullscreen.
+    #[must_use]
+    pub fn stats_page_open(&self) -> bool {
+        self.stats_page.get().open
+    }
+
+    /// The `/stats` page's live state.
+    #[must_use]
+    pub fn stats_page_state(&self) -> StatsPageState {
+        self.stats_page.get()
+    }
+
+    /// `stats.open` (stats.tsx:196-209): capture the return route,
+    /// clear the dialogs, mount the page, kick the fetch. An
+    /// already-open page re-runs nothing (stats.tsx:203-204).
+    pub fn open_stats_page(&self, now_ms: i64) {
+        let current = self.stats_page.get();
+        if current.open {
+            return;
+        }
+        let return_route = self.route();
+        let generation = current.generation.wrapping_add(1);
+        self.stats_page.set(StatsPageState {
+            open: true,
+            return_route,
+            phase: StatsPhase::Loading,
+            generation,
+        });
+        self.clear_dialogs();
+        let from = crate::components::stats_page::year_start_ms(now_ms);
+        let timezone = crate::components::stats_page::local_timezone_name();
+        let sink = self.stats_sink.borrow().clone();
+        sink.fetch(generation, from, timezone);
+    }
+
+    /// The page's own escape layer (stats.tsx:151-153): back to the
+    /// captured return route.
+    pub fn close_stats_page(&self) {
+        let mut live = self.stats_page.get();
+        if !live.open {
+            return;
+        }
+        live.open = false;
+        live.phase = StatsPhase::Loading;
+        let back = live.return_route.clone();
+        self.stats_page.set(live);
+        self.navigate(back);
+    }
+
+    /// A `session.stats` result landing (the HTTP worker's reply):
+    /// stale generations drop (the resource re-runs per open).
+    pub fn stats_fetch_result(
+        &self,
+        generation: u64,
+        result: Result<oc_client::types::SessionStatsInfo, String>,
+    ) {
+        let mut live = self.stats_page.get();
+        if !live.open || live.generation != generation {
+            return;
+        }
+        live.phase = match result {
+            Ok(info) => StatsPhase::Loaded(std::sync::Arc::new(info)),
+            Err(error) => StatsPhase::Failed(error),
+        };
+        self.stats_page.set(live);
+    }
+
+    /// The stats fetch seam (tests inject; the run loop installs the
+    /// loop-fetcher worker).
+    pub fn set_stats_sink(&self, sink: Rc<dyn StatsSink>) {
+        *self.stats_sink.borrow_mut() = sink;
+    }
+
     // -- SURF-2: pair / mcp-toggle / variant ---------------------------------
 
     /// `DialogPair`'s fetch result (the run loop's HTTP worker).
@@ -7863,6 +8019,13 @@ impl Store {
         // (PLUG-TUI-SLOT: the plugin route is replaced exactly like
         // the ref's router replaces the visible route).
         self.close_plugin_route();
+        // RE-14: the stats page rides the same rule — it is mounted
+        // over the visible route, a navigation replaces it too.
+        if self.stats_page.get().open {
+            let mut live = self.stats_page.get();
+            live.open = false;
+            self.stats_page.set(live);
+        }
         // Pointer-registry lifetime (auditA §4.1, finding #2): v2's
         // hit targets are per-render-frame renderables — leaving a
         // route must disarm its recorded rects. `render_session`
