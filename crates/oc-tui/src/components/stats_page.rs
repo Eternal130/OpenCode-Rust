@@ -159,12 +159,22 @@ pub fn activity_calendar(
     from_ms: f64,
     to_ms: f64,
     max_weeks: usize,
+    timezone: &str,
 ) -> ActivityCalendarView {
-    // The ref extracts LOCAL dates then works in UTC ordinals so DST
-    // cannot add or drop cells; the port's inputs (the server's
-    // range + date keys) are already day-aligned, so the ordinals are
-    // the UTC day numbers of the range endpoints.
-    let ord = |ms: f64| (ms / 86_400_000.0).floor() as i64;
+    // The ref extracts LOCAL dates (activity-calendar.ts:8-11:
+    // `getFullYear/getMonth/getDate` on the instant) then works in
+    // day ordinals so DST cannot add or drop cells. The local day is
+    // resolved through jiff's bundled tz database — the same facility
+    // the server's stats handler uses for its date keys — so an
+    // instant near local midnight buckets into the LOCAL day, not the
+    // UTC one.
+    let zone = jiff::tz::TimeZone::get(timezone).unwrap_or(jiff::tz::TimeZone::UTC);
+    let ord = |ms: f64| {
+        jiff::Timestamp::from_millisecond(ms as i64).map_or(0, |instant| {
+            let date = instant.to_zoned(zone.clone()).date();
+            days_from_civil(i64::from(date.year()), date.month() as u32, date.day() as u32)
+        })
+    };
     let from = ord(from_ms);
     let to = ord(to_ms - 1.0);
     let monday = from - (weekday(from) + 6).rem_euclid(7);
@@ -379,16 +389,23 @@ fn month_label_row(calendar: &ActivityCalendarView) -> String {
 }
 
 /// `StatsPoster`'s layout (stats.tsx:30-137) as the line model the
-/// solid renderer paints. `size` is the terminal size.
+/// solid renderer paints. `size` is the terminal size; `timezone` is
+/// the local zone name the calendar buckets by (the same name the
+/// SessionStats fetch sends).
 #[must_use]
-pub fn stats_poster(stats: &SessionStatsInfo, size: (u16, u16)) -> Poster {
+pub fn stats_poster(stats: &SessionStatsInfo, size: (u16, u16), timezone: &str) -> Poster {
     let width = (usize::from(size.0).saturating_sub(8)).clamp(12, 110);
     let compact = size.1 < 38;
     let _gap = if compact { 1 } else { 2 };
     let metrics = stats_metrics(stats);
     let number = stats_number(metrics[0].1);
-    let calendar =
-        activity_calendar(&stats.activity, stats.range.from, stats.range.to, (width - 4) / 2);
+    let calendar = activity_calendar(
+        &stats.activity,
+        stats.range.from,
+        stats.range.to,
+        (width - 4) / 2,
+        timezone,
+    );
     let mut lines: Vec<Line> = Vec::new();
     macro_rules! spacer { () => { lines.push(Line::Spacer) }; }
     // The header (stats.tsx:63-68): title bold left, range right — a
@@ -577,6 +594,7 @@ mod tests {
             ms(2026, 1, 1),
             ms(2026, 1, 15),
             53,
+            "UTC",
         );
         assert_eq!(calendar.weeks.len(), 3, "12-29 .. 01-11 is 3 weeks incl. the lead");
         // Week 0 starts Monday 2025-12-29; its Thursday (day 3) is
@@ -614,6 +632,7 @@ mod tests {
             ms(2026, 1, 1),
             ms(2026, 3, 1),
             2,
+            "UTC",
         );
         assert!(calendar.clipped);
         assert_eq!(calendar.weeks.len(), 2);
@@ -624,6 +643,40 @@ mod tests {
         // `to` is exclusive: ordinal(to - 1) is Feb 28, so the final
         // Sunday sits one day past the range → -1.
         assert_eq!(calendar.weeks[1][6].level, -1);
+    }
+
+    /// F1 (ref1): the calendar buckets by the LOCAL day (the ref
+    /// extracts `getFullYear/getMonth/getDate` — activity-calendar.ts
+    /// :8-11). An instant at 23:30 local is already the NEXT UTC day;
+    /// UTC flooring would shift its bucket one day late.
+    #[test]
+    fn calendar_buckets_by_local_day_near_midnight() {
+        // America/Los_Angeles is UTC-8 in January: local 2026-01-01
+        // 23:30 PST is UTC 2026-01-02 07:30 — a next-day UTC instant.
+        let near_midnight = ms(2026, 1, 2) + 7.5 * 3_600_000.0;
+        assert_eq!(
+            (near_midnight / 86_400_000.0).floor() as i64,
+            days_from_civil(2026, 1, 2),
+            "the instant must land on the NEXT UTC day for the proof"
+        );
+        // The range endpoints are also past local midnight: UTC
+        // 2026-01-02 00:00 is local 2026-01-01 16:00 PST.
+        let calendar = activity_calendar(
+            &[activity("2026-01-01", 5)],
+            ms(2026, 1, 2),
+            ms(2026, 1, 6),
+            53,
+            "America/Los_Angeles",
+        );
+        let cell = calendar
+            .weeks
+            .iter()
+            .flatten()
+            .find(|cell| cell.date == "2026-01-01")
+            .expect("a local-day 2026-01-01 cell");
+        assert_eq!(cell.steps, 5, "the near-midnight instant buckets by its LOCAL day");
+        // The only distinct positive count → ceil(1/1·4) = 4.
+        assert_eq!(cell.level, 4);
     }
 
     /// The big-number bitmaps (stats.tsx:12-28, 81-91).
@@ -680,7 +733,7 @@ mod tests {
     /// M-W-S day rows and the metrics' " days" suffix.
     #[test]
     fn poster_lays_out_the_ref_rows() {
-        let poster = stats_poster(&fixture(), (120, 40));
+        let poster = stats_poster(&fixture(), (120, 40), "UTC");
         assert_eq!(poster.width, 110, "min(110, 120-8)");
         let lefts: Vec<&Line> = poster.lines.iter().collect();
         // Header: bold title, muted range (same row pair).
@@ -733,13 +786,13 @@ mod tests {
     /// number fallback when the glyphs cannot fit.
     #[test]
     fn poster_compact_and_narrow_shapes() {
-        let compact = stats_poster(&fixture(), (120, 20));
+        let compact = stats_poster(&fixture(), (120, 20), "UTC");
         assert!(!compact
             .lines
             .iter()
             .any(|line| matches!(line, Line::Left(runs) if runs.len() == 3)),
             "no logo rows when compact");
-        let narrow = stats_poster(&fixture(), (16, 40));
+        let narrow = stats_poster(&fixture(), (16, 40), "UTC");
         assert_eq!(narrow.width, 12);
         assert!(narrow.lines.iter().any(|line| matches!(
             line,
