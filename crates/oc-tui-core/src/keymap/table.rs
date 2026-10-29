@@ -558,6 +558,12 @@ static DEFAULT_TABLE: &[CommandDef] = defs! {
     "diff_switch_source" => "diff.switch_source", "d", "Switch diff viewer source", "diff";
     "diff_toggle_view" => "diff.toggle_view", "v", "Toggle diff viewer split or unified view", "diff";
     "diff_help" => "diff.help", "?,shift+?,shift+/", "Show more diff viewer shortcuts", "diff";
+    // RE-14 — the /stats page (feature-plugins/system/stats.tsx):
+    // `stats.open` is a palette System row + slash `/stats` (no
+    // default bind); the page's own layer binds ONLY escape → back
+    // (stats.tsx:151-153) — every other stroke resolves base.
+    "stats_open" => "stats.open", "none", "Usage statistics", "base", palette System;
+    "stats_close" => "stats.close", "escape", "Back to previous screen", "stats";
     // diff-viewer.tsx:726-732: the viewer's layer re-binds app.exit so
     // ctrl+d CLOSES the viewer instead of exiting while it is open
     // ("Specific diff bindings take precedence over app.exit's Ctrl+D").

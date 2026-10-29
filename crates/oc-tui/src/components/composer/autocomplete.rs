@@ -156,6 +156,7 @@ pub const V2_SLASH: &[(&str, &str)] = &[
     ("share", "Share session"),
     ("skills", "Skills"),
     ("status", "View status"),
+    ("stats", "Usage statistics"),
     ("themes", "Switch theme"),
     ("thinking", "Switch model variant"),
     ("timeline", "Jump to message"),
@@ -210,6 +211,8 @@ pub const SLASH_COMMANDS: &[(&str, &str)] = &[
     ("share", "session.share"),
     ("skills", "prompt.skills"),
     ("status", "opencode.status"),
+    // RE-14 — `/stats` (stats.tsx:199): the usage poster page.
+    ("stats", "stats.open"),
     ("themes", "theme.switch"),
     ("thinking", "variant.list"),
     ("timeline", "session.timeline"),
@@ -1280,5 +1283,16 @@ mod btw_tests {
         // The registry + display table carry the row.
         assert!(SLASH_COMMANDS.contains(&("btw", "session.aside")));
         assert!(V2_SLASH.contains(&("btw", "Ask a side question")));
+    }
+
+    /// RE-14: `/stats` is a plain (no-argument) slash command
+    /// (stats.tsx:199 — `slash: { name: "stats" }`): the head
+    /// dispatches `stats.open`, the draft never routes into the
+    /// composer.
+    #[test]
+    fn stats_slash_routes_to_the_stats_page() {
+        assert!(SLASH_COMMANDS.contains(&("stats", "stats.open")));
+        assert!(V2_SLASH.contains(&("stats", "Usage statistics")), "the display row");
+        assert!(!ARGUMENT_SLASHES.contains(&("stats", "stats.open")), "no argument");
     }
 }
