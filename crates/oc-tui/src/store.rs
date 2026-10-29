@@ -96,7 +96,10 @@ pub enum DialogKind {
     SessionRename { session_id: String },
     /// The plugin manager select (`plugins.list`, lane KM — v2's
     /// `DialogPlugins` approximation): one row per REGISTERED plugin
-    /// id; enable/disable state is not modeled (submits close).
+    /// id; RE-02 models the per-plugin `active` flag (v2's
+    /// `registrations[id].active`) — enter (`plugins.toggle`)
+    /// enable/disables the row, faulted rows keep the TUI-24
+    /// error-details submit.
     Plugins,
     /// The tab context menu (lane KM, auditA #8b — v2's
     /// `TabContextMenu`, session-tabs.tsx:372-538): opened by a
@@ -370,6 +373,13 @@ pub struct DialogsLaneState {
     /// TUI-24: the plugins dialog's fault table (plugin id → the
     /// load error string; fed from the plugin host's fault list).
     pub plugin_faults: std::collections::HashMap<String, String>,
+    /// RE-02: the per-plugin active map (v2's
+    /// `registrations[id].active`, context.tsx:150-231): ABSENT =
+    /// active (registration-time default); `plugins.toggle` flips a
+    /// row. v2.0.24 keeps this TUI-LOCAL (activate/deactivate runs
+    /// the registration's own cleanup/setup — no config write, no
+    /// server call), so the map itself is the persistence layer.
+    pub plugin_active: std::collections::BTreeMap<String, bool>,
     /// TUI-25: the ctx.ui.alert/confirm resolution queue — (guest
     /// request id, the settle value); the plugin pump drains it back
     /// into the host (`resolve_ui_request`).
@@ -1581,6 +1591,8 @@ pub struct Store {
     tab_pulses: RefCell<HashMap<String, crate::components::tab_pulse::TabPulseTrack>>,
     /// SURF-2 the MCP toggle seam (mcp.connect/disconnect).
     mcp_toggle_sink: std::cell::RefCell<Rc<dyn McpToggleSink>>,
+    /// RE-02: the plugin enable/disable seam (`plugins.toggle`).
+    plugin_toggle_sink: std::cell::RefCell<Rc<dyn PluginToggleSink>>,
     /// SURF-2 `DialogPair`'s fetch seam (server.info + server.pair).
     pair_refresh_sink: std::cell::RefCell<Option<Rc<dyn PairRefreshSink>>>,
     /// SURF-2 the config persistence sink (cli.json write-through).
@@ -2161,6 +2173,38 @@ pub trait McpToggleSink {
 /// dialog-pair.tsx:21-38): the run loop wires the HTTP worker.
 pub trait PairRefreshSink {
     fn refresh(&self);
+}
+
+/// RE-02: the plugin enable/disable seam (v2's plugin-manager
+/// `activate`/`deactivate`, plugins.tsx:121-138 — the toggle's
+/// effect observer). v2.0.24's toggle is TUI-local (the
+/// registration's contributions are torn down / re-added in the
+/// plugin manager store — context.tsx:150-231 — with no config or
+/// server round-trip), so the store's [`DialogsLaneState::
+/// plugin_active`] map is the port's persistence; embedders observe
+/// flips through this sink (e.g. to drop the plugin's palette
+/// contributions, mirroring v2's `clearContributions`).
+pub trait PluginToggleSink {
+    fn set_active(&self, plugin_id: &str, active: bool);
+}
+
+/// The default no-op sink.
+pub struct NoPluginToggleSink;
+
+impl PluginToggleSink for NoPluginToggleSink {
+    fn set_active(&self, _plugin_id: &str, _active: bool) {}
+}
+
+/// The recording sink (tests).
+#[derive(Default)]
+pub struct RecordingPluginToggleSink {
+    pub calls: std::cell::RefCell<Vec<(String, bool)>>,
+}
+
+impl PluginToggleSink for RecordingPluginToggleSink {
+    fn set_active(&self, plugin_id: &str, active: bool) {
+        self.calls.borrow_mut().push((plugin_id.to_owned(), active));
+    }
 }
 
 /// The config persistence seam (SURF-2, F-1's registered runtime
@@ -3176,6 +3220,7 @@ impl Store {
             update_dismissed: RefCell::new(Vec::new()),
             home_update_hit: RefCell::new(None),
             mcp_toggle_sink: std::cell::RefCell::new(Rc::new(NoMcpToggleSink)),
+            plugin_toggle_sink: std::cell::RefCell::new(Rc::new(NoPluginToggleSink)),
             pair_refresh_sink: std::cell::RefCell::new(None),
             config_sink: std::cell::RefCell::new(Rc::new(NoConfigSink)),
             tab_pulses: RefCell::new(HashMap::new()),
@@ -7283,6 +7328,11 @@ impl Store {
         *self.mcp_toggle_sink.borrow_mut() = sink;
     }
 
+    /// RE-02: the plugin enable/disable seam (`plugins.toggle`).
+    pub fn set_plugin_toggle_sink(&self, sink: Rc<dyn PluginToggleSink>) {
+        *self.plugin_toggle_sink.borrow_mut() = sink;
+    }
+
     /// `DialogPair`'s fetch seam (the run loop's HTTP worker).
     pub fn set_pair_refresh_sink(&self, sink: Rc<dyn PairRefreshSink>) {
         *self.pair_refresh_sink.borrow_mut() = Some(sink);
@@ -7307,6 +7357,30 @@ impl Store {
         let connect = row.status != "connected";
         let sink = self.mcp_toggle_sink.borrow().clone();
         sink.toggle(server, connect);
+    }
+
+    /// RE-02: a registered plugin's active flag (v2's
+    /// `registrations[id].active`, context.tsx:179/198 — true at
+    /// registration; ABSENT in the map = active).
+    #[must_use]
+    pub fn plugin_active(&self, plugin_id: &str) -> bool {
+        self.lane_dialogs.borrow().plugin_active.get(plugin_id).copied() != Some(false)
+    }
+
+    /// RE-02 — the toggle (v2's `toggle`, plugins.tsx:116-138:
+    /// `active ? deactivate(id) : activate(id)`): flips the
+    /// per-plugin active map (the port's persistence for v2's
+    /// TUI-local activate/deactivate — no config/server write in
+    /// v2.0.24) and notifies the sink (the palette drops an
+    /// inactive plugin's command rows, mirroring
+    /// `clearContributions`). Returns the NEW state.
+    pub fn plugin_toggle(&self, plugin_id: &str) -> bool {
+        let next = !self.plugin_active(plugin_id);
+        self.lane_dialogs.borrow_mut().plugin_active.insert(plugin_id.to_owned(), next);
+        let sink = self.plugin_toggle_sink.borrow().clone();
+        sink.set_active(plugin_id, next);
+        self.request_redraw();
+        next
     }
 
     /// The current model's variant ids (`local.model.variant.list`,
@@ -8781,10 +8855,15 @@ impl Store {
         self.plugin_commands.get()
     }
 
-    /// One plugin command by id.
+    /// One plugin command by id (RE-02: an INACTIVE plugin's
+    /// commands no longer dispatch — v2's deactivate tears the
+    /// registration's contributions down, context.tsx:208-231).
     #[must_use]
     pub fn plugin_command(&self, command: &str) -> Option<PluginCommandEntry> {
-        self.plugin_commands.get().into_iter().find(|entry| entry.command == command)
+        self.plugin_commands
+            .get()
+            .into_iter()
+            .find(|entry| entry.command == command && self.plugin_active(&entry.plugin_id))
     }
 
     /// Attach the post-ingest event tap (plugin-host broadcast seam).
