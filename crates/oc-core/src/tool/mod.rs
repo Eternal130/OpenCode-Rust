@@ -84,6 +84,7 @@ pub mod patch_util;
 pub mod question;
 pub mod read;
 pub mod registry;
+pub mod ripgrep_runner;
 pub mod shell;
 pub mod skill;
 pub mod tool_input_repair;
@@ -113,31 +114,8 @@ use crate::hooks::InternalPlugin;
 use crate::location::ToolCallContext;
 use crate::permission::Permission;
 
-/// `Ripgrep` runner configuration (the binary seam).
-pub mod ripgrep_runner {
-    use std::path::PathBuf;
-
-    /// Resolve the ripgrep binary: `OPENCODE_RG_PATH` → bundled
-    /// `<exe_dir>/rg` → `rg` from `PATH`.
-    #[must_use]
-    pub fn binary() -> PathBuf {
-        if let Some(path) = std::env::var_os("OPENCODE_RG_PATH") {
-            let path = PathBuf::from(path);
-            if path.is_file() {
-                return path;
-            }
-        }
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(dir) = exe.parent() {
-                let bundled = dir.join("rg");
-                if bundled.is_file() {
-                    return bundled;
-                }
-            }
-        }
-        PathBuf::from("rg")
-    }
-}
+/// `Ripgrep` binary acquisition — see the [`ripgrep_runner`] module
+/// (port of `ripgrep/binary.ts`).
 
 /// The per-location service bundle the tool leaves execute against
 /// (the injected half of the v2 layer graph).
