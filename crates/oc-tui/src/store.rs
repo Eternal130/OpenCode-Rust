@@ -1457,6 +1457,12 @@ pub struct Store {
     /// doc `directory-recents`, prompt/directory-recents.ts): the
     /// `/cd` completion's recent rows + their ctrl+d deletes.
     directory_recents: std::cell::RefCell<autocomplete::DirectoryRecents>,
+    /// RE-03 — the `@file` frecency template (prompt/frecency.tsx's
+    /// provider): the boot-loaded store (`<state>/frecency.jsonl` +
+    /// the append/compact sink) handed to every session composer's
+    /// autocomplete state (attached where its frecency carries no
+    /// sink yet).
+    frecency_template: std::cell::RefCell<autocomplete::Frecency>,
     /// TUI-TD12 — the staged `session.update {title}` requests (the
     /// run loop drains them into POSTs; `""` is the title-GENERATE
     /// arm, index.tsx:902-911).
@@ -3188,6 +3194,7 @@ impl Store {
             scroll_anchors: std::cell::RefCell::new(std::collections::HashMap::new()),
             pending_scroll_restore: std::cell::RefCell::new(std::collections::HashSet::new()),
             directory_recents: std::cell::RefCell::new(autocomplete::DirectoryRecents::default()),
+            frecency_template: std::cell::RefCell::new(autocomplete::Frecency::default()),
             rename_outbox: std::cell::RefCell::new(Vec::new()),
             console_open: Cell::new(false),
             console_ring: std::cell::RefCell::new(std::collections::VecDeque::new()),
@@ -3742,8 +3749,18 @@ impl Store {
     pub fn composer(&self, session_id: &str) -> Composer {
         let state = self.prompt.get();
         let draft = state.drafts.get(session_id).cloned().unwrap_or_default();
-        let autocomplete =
+        let mut autocomplete =
             state.autocomplete.get(session_id).cloned().unwrap_or_else(Composer::live_autocomplete);
+        // RE-03 — the frecency template (frecency.tsx's provider):
+        // the boot-loaded store (data + the `<state>/frecency.jsonl`
+        // sink) rides every session's autocomplete state, so accepts
+        // persist and reload like the ref's provider.
+        {
+            let template = self.frecency_template.borrow();
+            if template.file.is_some() && autocomplete.frecency.file.is_none() {
+                autocomplete.frecency = template.clone();
+            }
+        }
         let edit = state.edits.get(session_id).cloned().unwrap_or_else(Composer::fresh_edit);
         let mut composer = Composer {
             draft,
@@ -5971,6 +5988,14 @@ impl Store {
         let home = std::env::var("HOME").unwrap_or_default();
         let recents = self.directory_recents.borrow().list(project_id);
         autocomplete::directory_recents_options(&recents, &home)
+    }
+
+    /// RE-03 — install the boot-loaded frecency store (frecency.
+    /// tsx's onMount provider: `<state>/frecency.jsonl` data + the
+    /// append/compact sink) as the template every session composer's
+    /// autocomplete state inherits.
+    pub fn set_frecency_template(&self, frecency: autocomplete::Frecency) {
+        *self.frecency_template.borrow_mut() = frecency;
     }
 
     /// Stage the restore for a session re-entered with a saved anchor
