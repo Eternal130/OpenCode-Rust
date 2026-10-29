@@ -8,7 +8,7 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, Uri};
 use axum::response::Response;
 use oc_core::forms::{CreateInput, FormError};
-use oc_schema::form::{Answer, Fields, FormValue};
+use oc_schema::form::{Answer, Fields};
 use oc_schema::id::FormId;
 use serde_json::{json, Value};
 
@@ -218,9 +218,11 @@ async fn session_cancel(
     Ok(no_content())
 }
 
-/// `FormValue` re-export guard (keeps the schema import referenced when the
-/// answer parser is the only consumer).
-#[allow(dead_code)]
-fn _touch(value: FormValue) -> FormValue {
-    value
-}
+// F-4: the former `_touch(FormValue)` dead guard is REMOVED. Ref's
+// form-location middleware (middleware/form-location.ts:27-38) never
+// touches location activity — it only resolves location services (with
+// the "global" elicitation escape hatch, mirrored in `form_services`
+// above); the TTL/activity refresh is owned by the location map, not
+// the form routes. Nothing here consumes `FormValue` directly (answers
+// decode via `serde` into `Answer`), so the guard kept a phantom
+// import alive.

@@ -157,6 +157,15 @@ impl SessionRunner {
         self
     }
 
+    /// The attached `SessionPrompt.prepare` seam, if any (the HTTP
+    /// prompt handler calls [`PromptPrepare::prepare_input`] on the
+    /// admission path — submit-time hook dispatch per ref
+    /// prompt.ts:29-52 — before admitting the inbox row).
+    #[must_use]
+    pub fn prompt_prepare(&self) -> Option<&Arc<PromptPrepare>> {
+        self.prompt_prepare.as_ref()
+    }
+
     /// One-shot generation over the session context (`session.generate`
     /// route backing) — no session side effects.
     pub fn generation(&self) -> &Arc<crate::session::runner::SessionGenerate> {
