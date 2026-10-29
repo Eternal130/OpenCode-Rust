@@ -369,6 +369,10 @@ pub const TUI_SESSION_SELECT: &str = "tui.session.select";
 pub const INSTALLATION_UPDATED: &str = "installation.updated";
 /// `installation.update-available` `{version}` (`installation-event.ts`).
 pub const INSTALLATION_UPDATE_AVAILABLE: &str = "installation.update-available";
+/// `reference.updated` `{}` (schema/reference.ts:8): the reference
+/// registry notify leg (reference.ts:104-108) — published after every
+/// source transform/reload once the refresh is forked.
+pub const REFERENCE_UPDATED: &str = "reference.updated";
 
 static NON_SESSION: LazyLock<Vec<EventDefinition>> = LazyLock::new(|| {
     vec![
@@ -417,6 +421,8 @@ static NON_SESSION: LazyLock<Vec<EventDefinition>> = LazyLock::new(|| {
         // The integration-host registry notify (BE-3; append-only — the
         // positional accessors above are unaffected).
         EventDefinition::ephemeral(INTEGRATION_UPDATED),
+        // F-5: the reference registry notify (reference.ts:107).
+        EventDefinition::ephemeral(REFERENCE_UPDATED),
     ]
 });
 

@@ -80,8 +80,11 @@ pub fn parse(input: &str) -> Option<Reference> {
     // `github:owner/repo` shorthand.
     if let Some(rest) = cleaned.strip_prefix("github:") {
         let parts: Vec<&str> = rest.split('/').collect();
-        if parts.len() == 2 && !parts[0].is_empty() && !parts[1].is_empty()
-            && !parts[0].contains(char::is_whitespace) && !parts[1].contains(char::is_whitespace)
+        if parts.len() == 2
+            && !parts[0].is_empty()
+            && !parts[1].is_empty()
+            && !parts[0].contains(char::is_whitespace)
+            && !parts[1].contains(char::is_whitespace)
         {
             return build_remote(&parts[0].to_owned(), &[parts[1].to_owned()], None, None)
                 .map(Reference::Remote);
@@ -98,7 +101,8 @@ pub fn parse(input: &str) -> Option<Reference> {
             return build_remote(&direct[0], &direct[1..], None, None).map(Reference::Remote);
         }
         if direct.len() == 2 {
-            return build_remote(&"github.com".to_owned(), &direct, None, None).map(Reference::Remote);
+            return build_remote(&"github.com".to_owned(), &direct, None, None)
+                .map(Reference::Remote);
         }
     }
 
@@ -115,11 +119,7 @@ pub fn parse(input: &str) -> Option<Reference> {
     let host = percent_decode(host_raw).to_lowercase();
     let segments = parts(&pathname);
     let github = host == "github.com";
-    let remote = if github {
-        github_remote(&segments.join("/"))
-    } else {
-        cleaned.clone()
-    };
+    let remote = if github { github_remote(&segments.join("/")) } else { cleaned.clone() };
     build_remote(&host, &segments, Some(&remote), Some(&format!("{scheme}:")))
         .map(Reference::Remote)
 }
@@ -128,12 +128,12 @@ pub fn parse(input: &str) -> Option<Reference> {
 pub fn parse_remote(input: &str) -> Result<RemoteReference, RepositoryError> {
     match parse(input) {
         Some(Reference::Remote(reference)) => Ok(reference),
-        Some(Reference::File(_)) => Err(RepositoryError::UnsupportedLocal(
-            UnsupportedLocalRepositoryError {
+        Some(Reference::File(_)) => {
+            Err(RepositoryError::UnsupportedLocal(UnsupportedLocalRepositoryError {
                 repository: input.to_owned(),
                 message: "Local file repositories are not supported".to_owned(),
-            },
-        )),
+            }))
+        }
         None => Err(RepositoryError::InvalidReference(InvalidReferenceError {
             repository: input.to_owned(),
             message:
@@ -148,9 +148,7 @@ pub fn validate_branch(branch: &str) -> Result<(), InvalidBranchError> {
     let valid = !branch.is_empty()
         && !branch.starts_with('-')
         && !branch.contains("..")
-        && branch
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '.' | '-'));
+        && branch.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '.' | '-'));
     if valid {
         Ok(())
     } else {
@@ -229,7 +227,9 @@ fn build_remote(
         .map(|segment| trim_git_suffix(segment))
         .filter(|segment| !segment.is_empty())
         .collect();
-    if !safe_host(host) || segments.is_empty() || segments.iter().any(|segment| !safe_segment(segment))
+    if !safe_host(host)
+        || segments.is_empty()
+        || segments.iter().any(|segment| !safe_segment(segment))
     {
         return None;
     }
@@ -239,15 +239,13 @@ fn build_remote(
     Some(RemoteReference {
         owner: segments.first().filter(|_| segments.len() == 2).cloned(),
         repo: segments.last().cloned().unwrap_or_default(),
-        remote: remote
-            .map(str::to_owned)
-            .unwrap_or_else(|| {
-                if github {
-                    github_remote(&repository_path)
-                } else {
-                    format!("https://{host}/{repository_path}.git")
-                }
-            }),
+        remote: remote.map(str::to_owned).unwrap_or_else(|| {
+            if github {
+                github_remote(&repository_path)
+            } else {
+                format!("https://{host}/{repository_path}.git")
+            }
+        }),
         label: if github && segments.len() == 2 {
             repository_path.clone()
         } else {
@@ -319,7 +317,11 @@ fn parts(input: &str) -> Vec<String> {
 /// colon when the input has no `/` before it and no scheme.
 fn scp_split(input: &str) -> Option<(String, String)> {
     let body = match input.split_once('@') {
-        Some((user, rest)) if !user.is_empty() && !user.contains('/') && !user.contains(char::is_whitespace) => rest,
+        Some((user, rest))
+            if !user.is_empty() && !user.contains('/') && !user.contains(char::is_whitespace) =>
+        {
+            rest
+        }
         _ => input,
     };
     let (host, path) = body.split_once(':')?;

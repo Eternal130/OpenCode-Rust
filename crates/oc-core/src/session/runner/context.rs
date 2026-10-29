@@ -626,7 +626,8 @@ pub(crate) fn mcp_guidance_source(
 pub(crate) fn reference_guidance_source(
     references: Arc<dyn Fn() -> Vec<crate::reference::Info> + Send + Sync>,
 ) -> InstructionSource {
-    let summaries = |infos: &[crate::reference::Info]| crate::reference::instructions::summaries(infos);
+    let summaries =
+        |infos: &[crate::reference::Info]| crate::reference::instructions::summaries(infos);
     InstructionSource {
         key: "core/reference-guidance".into(),
         read: Box::new(move || {
@@ -646,9 +647,7 @@ pub(crate) fn reference_guidance_source(
             let current = decode_summaries(current);
             Some(crate::reference::instructions::update(&previous, &current))
         }),
-        removed: Some(Box::new(|_| {
-            Some(crate::reference::instructions::REMOVED_TEXT.to_string())
-        })),
+        removed: Some(Box::new(|_| Some(crate::reference::instructions::REMOVED_TEXT.to_string()))),
     }
 }
 
@@ -662,8 +661,10 @@ fn decode_summaries(value: &serde_json::Value) -> Vec<crate::reference::instruct
                 .filter_map(|item| {
                     let name = item.get("name")?.as_str()?.to_owned();
                     let path = item.get("path")?.as_str()?.to_owned();
-                    let description =
-                        item.get("description").and_then(serde_json::Value::as_str).map(str::to_owned);
+                    let description = item
+                        .get("description")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned);
                     Some(crate::reference::instructions::Summary { name, path, description })
                 })
                 .collect()
@@ -757,7 +758,7 @@ fn skill_guidance_source(
 
 /// `core/instructions` (instruction-discovery.ts): global first, then
 /// nearest → farthest project files, rendered as one block.
-fn discovery_source(
+pub(crate) fn discovery_source(
     discovery: Arc<dyn Fn() -> Vec<(String, String)> + Send + Sync>,
 ) -> InstructionSource {
     InstructionSource {
@@ -777,7 +778,7 @@ fn discovery_source(
             if files.is_empty() {
                 return None;
             }
-            Some(render_discovery(&files, false))
+            Some(render_discovery(&files))
         }),
         changed: Box::new(|previous, current| {
             let before = files_from(previous);
@@ -785,9 +786,11 @@ fn discovery_source(
             if before == after {
                 return None;
             }
-            Some(render_discovery(&after, before.is_empty()))
+            render_update_discovery(&before, &after)
         }),
-        removed: None,
+        removed: Some(Box::new(|_| {
+            Some("Previously loaded instructions no longer apply.".to_string())
+        })),
     }
 }
 
@@ -808,18 +811,64 @@ fn files_from(value: &serde_json::Value) -> Vec<(String, String)> {
         .unwrap_or_default()
 }
 
-fn render_discovery(files: &[(String, String)], initial: bool) -> String {
+fn render_discovery(files: &[(String, String)]) -> String {
+    files
+        .iter()
+        .map(|(path, content)| format!("Instructions from: {path}\n{content}"))
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+/// `renderUpdate` (ref instruction-discovery.ts:124-151): per-file
+/// removed/added/changed 三态 — changed files render a 3-context unified
+/// diff when it is shorter than restating the file, exactly the reference's
+/// shorter-wins rule.
+pub(crate) fn render_update_discovery(
+    previous: &[(String, String)],
+    current: &[(String, String)],
+) -> Option<String> {
+    let previous_by_key: std::collections::BTreeMap<&str, &str> =
+        previous.iter().map(|(path, content)| (path.as_str(), content.as_str())).collect();
+    let current_keys: std::collections::HashSet<&str> =
+        current.iter().map(|(path, _)| path.as_str()).collect();
+
     let mut parts: Vec<String> = Vec::new();
-    if !initial {
-        parts.push(
-            "Project instructions changed. The following supersedes previously loaded instructions."
-                .to_string(),
+    // removed — `The instructions from {path} no longer apply.`
+    for (path, _) in previous {
+        if !current_keys.contains(path.as_str()) {
+            parts.push(format!("The instructions from {path} no longer apply."));
+        }
+    }
+    // added — `New instructions apply from:\n{render([file])}`
+    for (path, content) in current {
+        if !previous_by_key.contains_key(path.as_str()) {
+            parts.push(format!(
+                "New instructions apply from:\nInstructions from: {path}\n{content}"
+            ));
+        }
+    }
+    // changed — diff vs replacement, shorter wins
+    for (path, after) in current {
+        let Some(before) = previous_by_key.get(path.as_str()) else { continue };
+        if *before == after.as_str() {
+            continue;
+        }
+        let patch = crate::tool::file_diff::two_files_patch_ctx(
+            path,
+            before,
+            after,
+            crate::tool::file_diff::GIT_DEFAULT_CONTEXT,
         );
+        let body = patch[patch.find("@@").unwrap_or(0)..].trim_end();
+        let diff =
+            format!("The instructions from {path} changed. Here's the diff:\n```diff\n{body}\n```");
+        let replacement = format!("The instructions changed:\nInstructions from: {path}\n{after}");
+        parts.push(if diff.len() < replacement.len() { diff } else { replacement });
     }
-    for (path, content) in files {
-        parts.push(format!("Instructions from: {path}\n{content}"));
+    if parts.is_empty() {
+        return None;
     }
-    parts.join("\n\n")
+    Some(parts.join("\n\n"))
 }
 
 const WEEKDAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -1323,13 +1372,9 @@ pub struct McpServerRaw {
 ///   action (`{namespace(server)}_{tool}`) does not evaluate `deny`.
 /// - survivors sort by server (`localeCompare`).
 #[must_use]
-pub fn visible_mcp_summaries(
-    raw: &[McpServerRaw],
-    permissions: &Ruleset,
-) -> Vec<McpServerSummary> {
+pub fn visible_mcp_summaries(raw: &[McpServerRaw], permissions: &Ruleset) -> Vec<McpServerSummary> {
     let rulesets = std::slice::from_ref(permissions);
-    let can_execute =
-        crate::permission::evaluate("execute", "*", &rulesets).effect != Effect::Deny;
+    let can_execute = crate::permission::evaluate("execute", "*", &rulesets).effect != Effect::Deny;
     let mut visible: Vec<McpServerSummary> = raw
         .iter()
         .filter_map(|item| {
@@ -1345,7 +1390,8 @@ pub fn visible_mcp_summaries(
                     "*",
                     &rulesets,
                 )
-                .effect != Effect::Deny
+                .effect
+                    != Effect::Deny
             }) {
                 return None;
             }

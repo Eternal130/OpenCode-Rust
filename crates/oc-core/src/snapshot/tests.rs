@@ -400,3 +400,57 @@ async fn seed_session(db: &crate::database::Database, session_id: &SessionId) {
     .await
     .expect("seed session");
 }
+
+#[tokio::test]
+async fn snapshot_diff_context_controls_hunk_width() {
+    // AUD-16: `git diff --unified=${context ?? 3}` (ref git.ts:535) —
+    // explicit contexts ride the patch engine; the default is 3.
+    let (tmp, worktree, _) = temp_project();
+    let old: String = (1..=10).map(|n| format!("{n}\n")).collect();
+    std::fs::write(worktree.join("file.txt"), &old).expect("write");
+    let service = store(tmp.path(), &worktree, ".");
+    let first = service.capture().await.expect("capture 1");
+    let new: String = (1..=10)
+        .map(|n| match n {
+            2 => "X\n".to_string(),
+            8 => "Y\n".to_string(),
+            _ => format!("{n}\n"),
+        })
+        .collect();
+    std::fs::write(worktree.join("file.txt"), &new).expect("edit");
+    let second = service.capture().await.expect("capture 2");
+
+    // context 1: five-line gap > 2*1 splits into two narrow hunks.
+    let narrow = service.diff(&first, &second, Some(1), None).await.expect("diff ctx 1");
+    assert_eq!(narrow[0].patch, "Index: file.txt\n===================================================================\n--- file.txt\n+++ file.txt\n@@ -1,3 +1,3 @@\n 1\n-2\n+X\n 3\n@@ -7,3 +7,3 @@\n 7\n-8\n+Y\n 9\n");
+
+    // context 0: bare change lines.
+    let bare = service.diff(&first, &second, Some(0), None).await.expect("diff ctx 0");
+    assert!(bare[0].patch.contains("@@ -2,1 +2,1 @@\n-2\n+X\n"), "{}", bare[0].patch);
+
+    // None ⇒ the git default 3: the five-line gap merges into one hunk.
+    let default = service.diff(&first, &second, None, None).await.expect("diff default");
+    assert!(default[0].patch.contains("@@ -1,10 +1,10 @@"), "{}", default[0].patch);
+}
+
+#[tokio::test]
+async fn snapshot_non_git_vcs_is_disabled() {
+    // AUD-16: the ref enable gate is `location.vcs?.type === "git" &&
+    // state.enabled` (ref snapshot.ts:115) — outside a Git repository
+    // capture silently yields `None` (snapshot.ts:117-118) and restore
+    // errors with "Snapshots are disabled" (snapshot.ts:197).
+    let tmp = tempfile::tempdir_in("/tmp/opencode").expect("tempdir");
+    let worktree = tmp.path().join("plain");
+    std::fs::create_dir_all(&worktree).expect("dir");
+    std::fs::write(worktree.join("file.txt"), "one\n").expect("write");
+    let service = store(tmp.path(), &worktree, ".");
+
+    assert!(service.capture().await.is_none(), "non-git vcs ⇒ no snapshot");
+    let mut restore = BTreeMap::new();
+    restore.insert(
+        "file.txt".to_string(),
+        oc_schema::id::SnapshotId::parse("4b825dc642cb6eb9a060e54bf8d69288fbee4904"),
+    );
+    let error = service.restore(&restore).await.expect_err("restore gated");
+    assert!(error.to_string().contains("Snapshots are disabled"), "{error}");
+}

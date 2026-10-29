@@ -7,7 +7,12 @@
 use oc_schema::session_support::{FileDiff, FileDiffStatus};
 
 /// Context lines around each change (the `diff` package default).
-const CONTEXT: usize = 4;
+pub const DEFAULT_CONTEXT: usize = 4;
+
+/// The unified-diff context git-side callers pass (`git diff
+/// --unified=${context ?? 3}`, ref git.ts:535; the instruction-discovery
+/// diff renderer uses `{ context: 3 }`, instruction-discovery.ts:135).
+pub const GIT_DEFAULT_CONTEXT: usize = 3;
 
 /// One tokenized line: the text without its terminator plus whether the
 /// terminator was a newline (`\r` stripped, like `diffLines` + the package's
@@ -129,9 +134,17 @@ fn diff_ops(old: &[Line], new: &[Line]) -> Vec<Annotated> {
     ops
 }
 
-/// `createTwoFilesPatch(file, file, before, after)`.
+/// `createTwoFilesPatch(file, file, before, after)` — the package's
+/// default 4-line context.
 #[must_use]
 pub fn two_files_patch(file: &str, before: &str, after: &str) -> String {
+    two_files_patch_ctx(file, before, after, DEFAULT_CONTEXT)
+}
+
+/// `createTwoFilesPatch(…, { context })` — hunk width under explicit
+/// control (jsdiff's `context` option).
+#[must_use]
+pub fn two_files_patch_ctx(file: &str, before: &str, after: &str, context: usize) -> String {
     let mut out = format!("Index: {file}\n===================================================================\n--- {file}\n+++ {file}\n");
     if before == after {
         return out;
@@ -147,8 +160,8 @@ pub fn two_files_patch(file: &str, before: &str, after: &str) -> String {
             continue;
         }
         // The change run starts here; extend through context runs that are
-        // within 2*CONTEXT of the last change (verified merge/split rule).
-        let hunk_start = index.saturating_sub(CONTEXT);
+        // within 2*context of the last change (verified merge/split rule).
+        let hunk_start = index.saturating_sub(context);
         let mut changes_end = index;
         let mut group_end = index;
         'extend: while group_end < ops.len() {
@@ -161,11 +174,11 @@ pub fn two_files_patch(file: &str, before: &str, after: &str) -> String {
             while run < ops.len() && ops[run].op == Op::Context {
                 run += 1;
             }
-            if run < ops.len() && run - changes_end - 1 <= 2 * CONTEXT {
+            if run < ops.len() && run - changes_end - 1 <= 2 * context {
                 group_end = run;
                 continue 'extend;
             }
-            group_end = (changes_end + 1 + CONTEXT).min(run);
+            group_end = (changes_end + 1 + context).min(run);
             break;
         }
         let hunk = &ops[hunk_start..group_end];
@@ -198,12 +211,25 @@ pub fn two_files_patch(file: &str, before: &str, after: &str) -> String {
 /// `fileDiff(file, before, after, status)` — counts from the line diff.
 #[must_use]
 pub fn file_diff(file: &str, before: &str, after: &str, status: FileDiffStatus) -> FileDiff {
+    file_diff_ctx(file, before, after, status, DEFAULT_CONTEXT)
+}
+
+/// `fileDiff(…)` with an explicit diff context (the git tree-diff callers:
+/// `--unified=${context ?? 3}`).
+#[must_use]
+pub fn file_diff_ctx(
+    file: &str,
+    before: &str,
+    after: &str,
+    status: FileDiffStatus,
+    context: usize,
+) -> FileDiff {
     let ops = diff_ops(&tokenize(before), &tokenize(after));
     let additions: u32 = ops.iter().filter(|a| a.op == Op::Insert).count() as u32;
     let deletions: u32 = ops.iter().filter(|a| a.op == Op::Delete).count() as u32;
     FileDiff {
         file: file.to_string(),
-        patch: two_files_patch(file, before, after),
+        patch: two_files_patch_ctx(file, before, after, context),
         additions: additions.into(),
         deletions: deletions.into(),
         status,
@@ -271,6 +297,31 @@ mod tests {
         assert_eq!(
             two_files_patch("f", &old, &far),
             "Index: f\n===================================================================\n--- f\n+++ f\n@@ -1,9 +1,9 @@\n 1\n 2\n 3\n 4\n-5\n+X\n 6\n 7\n 8\n 9\n@@ -11,5 +11,5 @@\n 11\n 12\n 13\n 14\n-15\n+Y\n"
+        );
+    }
+
+    #[test]
+    fn file_diff_explicit_context_narrows_hunks() {
+        // jsdiff `{ context: 1 }`: one context line around the change
+        // instead of the default four, and a smaller gap splits hunks.
+        let old: String = (1..=10).map(|n| format!("{n}\n")).collect();
+        let new: String = (1..=10)
+            .map(|n| match n {
+                2 => "X\n".to_string(),
+                8 => "Y\n".to_string(),
+                _ => format!("{n}\n"),
+            })
+            .collect();
+        assert_eq!(
+            two_files_patch_ctx("f", &old, &new, 1),
+            "Index: f\n===================================================================\n--- f\n+++ f\n@@ -1,3 +1,3 @@\n 1\n-2\n+X\n 3\n@@ -7,3 +7,3 @@\n 7\n-8\n+Y\n 9\n"
+        );
+        // context 0: bare change lines, zero-count sides anchor at the
+        // change position itself.
+        let single = two_files_patch_ctx("f", "a\nb\nc\n", "a\nB\nc\n", 0);
+        assert_eq!(
+            single,
+            "Index: f\n===================================================================\n--- f\n+++ f\n@@ -2,1 +2,1 @@\n-b\n+B\n"
         );
     }
 
