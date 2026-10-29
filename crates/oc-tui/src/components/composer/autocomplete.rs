@@ -68,6 +68,11 @@ pub struct AutocompleteOption {
     pub absolute: Option<String>,
     /// TUI-28 — the two-press delete (the recents rows).
     pub destructive: Option<Destructive>,
+    /// RE-03 — the file rows' relative path (autocomplete.tsx's
+    /// `path` field on file options): the frecency lookup key for
+    /// the reference-mode score multiplier, and the path the accept
+    /// path records into the frecency store.
+    pub path: Option<String>,
 }
 
 impl AutocompleteOption {
@@ -314,6 +319,10 @@ pub struct AutocompleteState {
     /// runs the delete.
     confirming: Option<String>,
     last_query: Option<String>,
+    /// RE-03 — the `@file` frecency store (frecency.tsx's provider on
+    /// the popup): ranks the reference rows (score × (1 + frecency))
+    /// and records accepts of path-carrying options.
+    pub frecency: Frecency,
 }
 
 impl AutocompleteState {
@@ -584,6 +593,182 @@ impl DirectoryRecents {
     }
 }
 
+/// RE-03 — one frecency record (`FrecencyEntry`, frecency.tsx:8):
+/// `{path, frequency, lastOpen}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FrecencyEntry {
+    pub frequency: u64,
+    /// `lastOpen` (ms epoch).
+    pub last_open: i64,
+}
+
+/// RE-03 — the `@file` frecency store (`prompt/frecency.tsx`): an
+/// in-memory `path → {frequency, lastOpen}` map loaded from (and
+/// appended back to) the state root's `frecency.jsonl`
+/// (storage.rs's `parse_frecency` is the boot read side). When
+/// `file` is attached (production boot), every `update` APPENDS one
+/// JSONL line (the ref's fire-and-forget `appendText`) and the
+/// over-cap pass REWRITES the compacted top-1000 (`writeText`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Frecency {
+    pub data: std::collections::HashMap<String, FrecencyEntry>,
+    /// `<state-root>/frecency.jsonl` — the persistence sink (`None`
+    /// in unit tests / headless composers).
+    pub file: Option<std::path::PathBuf>,
+}
+
+/// `path.resolve(paths.cwd, filePath)` (frecency.tsx:58/75): the
+/// store keys files by their ABSOLUTE path — relative inputs join
+/// the process cwd, then `.`/`..` normalize lexically.
+#[must_use]
+pub fn resolve_frecency_path(cwd: &std::path::Path, file: &str) -> String {
+    use std::path::Component;
+    let joined = if std::path::Path::new(file).is_absolute() {
+        std::path::PathBuf::from(file)
+    } else {
+        cwd.join(file)
+    };
+    let mut normalized = std::path::PathBuf::new();
+    for component in joined.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized.to_string_lossy().into_owned()
+}
+
+/// Best-effort JSONL append (`appendText`): create-on-first-write.
+fn append_line(file: &std::path::Path, line: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut handle = std::fs::OpenOptions::new().create(true).append(true).open(file)?;
+    handle.write_all(line.as_bytes())
+}
+
+/// Atomic rewrite (`writeText` — tmp + rename like storage.rs's heal).
+fn rewrite_file(file: &std::path::Path, body: &str) -> std::io::Result<()> {
+    let temporary = file.with_extension(format!("frecency.{}.tmp", std::process::id()));
+    std::fs::write(&temporary, body).and_then(|()| std::fs::rename(&temporary, file))
+}
+
+impl Frecency {
+    /// The store over parsed `frecency.jsonl` lines (the v2 provider's
+    /// onMount load — `parseFrecency` output keyed by `path`).
+    #[must_use]
+    pub fn from_parsed(entries: &[serde_json::Value]) -> Self {
+        let data = entries
+            .iter()
+            .filter_map(|entry| {
+                let path = entry.get("path")?.as_str()?.to_owned();
+                let frequency = entry.get("frequency")?.as_u64()?;
+                let last_open = entry.get("lastOpen")?.as_i64()?;
+                Some((path, FrecencyEntry { frequency, last_open }))
+            })
+            .collect();
+        Self { data, file: None }
+    }
+
+    /// The runtime store (frecency.tsx:43-53's onMount): load
+    /// `<state-root>/frecency.jsonl` and attach it as the update
+    /// sink (the boot heal already rewrote the compacted file).
+    #[must_use]
+    pub fn open(state_root: &std::path::Path) -> Self {
+        let file = state_root.join(crate::storage::FILE_FRECENCY);
+        let text = std::fs::read_to_string(&file).unwrap_or_default();
+        let mut store = Self::from_parsed(&crate::storage::parse_frecency(&text));
+        store.file = Some(file);
+        store
+    }
+
+    /// `calculateFrecency` (frecency.tsx:33-36):
+    /// `frequency / (1 + Δdays)` where Δdays is the days since
+    /// `lastOpen`; an absent path scores 0.
+    #[must_use]
+    pub fn get(&self, path: &str, now_ms: i64) -> f64 {
+        let Some(entry) = self.data.get(path) else { return 0.0 };
+        let delta_days = (now_ms - entry.last_open) as f64 / 86_400_000.0;
+        entry.frequency as f64 / (1.0 + delta_days)
+    }
+
+    /// `updateFrecency` (frecency.tsx:57-72): the ABSOLUTE path
+    /// (`path.resolve(cwd, …)`) gets frequency+1 with a fresh
+    /// `lastOpen`; with a sink attached, one JSONL line is appended
+    /// (fire-and-forget) and a store over
+    /// [`MAX_FRECENCY_ENTRIES`][crate::storage::MAX_FRECENCY_ENTRIES]
+    /// is compacted by rewriting the `lastOpen`-desc top-1000.
+    pub fn update(&mut self, path: &str, now_ms: i64) {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/"));
+        let key = resolve_frecency_path(&cwd, path);
+        let frequency = self.data.get(&key).map_or(0, |entry| entry.frequency) + 1;
+        self.data.insert(key.clone(), FrecencyEntry { frequency, last_open: now_ms });
+        if let Some(file) = self.file.clone() {
+            let line = format!(
+                "{{\"path\":{},\"frequency\":{frequency},\"lastOpen\":{now_ms}}}\n",
+                serde_json::to_string(&key).unwrap_or_else(|_| "\"\"".into())
+            );
+            let _ = append_line(&file, &line);
+        }
+        if self.data.len() > crate::storage::MAX_FRECENCY_ENTRIES {
+            let mut sorted: Vec<(String, FrecencyEntry)> =
+                self.data.iter().map(|(k, v)| (k.clone(), *v)).collect();
+            sorted.sort_by_key(|(_, entry)| std::cmp::Reverse(entry.last_open));
+            sorted.truncate(crate::storage::MAX_FRECENCY_ENTRIES);
+            self.data = sorted.iter().cloned().collect();
+            if let Some(file) = self.file.clone() {
+                let body = sorted
+                    .iter()
+                    .map(|(path, entry)| {
+                        format!(
+                            "{{\"path\":{},\"frequency\":{},\"lastOpen\":{}}}\n",
+                            serde_json::to_string(path).unwrap_or_else(|_| "\"\"".into()),
+                            entry.frequency,
+                            entry.last_open
+                        )
+                    })
+                    .collect::<String>();
+                let _ = rewrite_file(&file, &body);
+            }
+        }
+    }
+
+    /// The JSONL rewrite (`writeText`, frecency.tsx:68-71): one
+    /// `{path, frequency, lastOpen}` line per entry in insertion
+    /// order.
+    #[must_use]
+    pub fn encode_jsonl(&self) -> String {
+        let mut text = String::new();
+        for (path, entry) in &self.data {
+            text.push_str(&format!(
+                "{{\"path\":{},\"frequency\":{},\"lastOpen\":{}}}\n",
+                serde_json::to_string(path).unwrap_or_else(|_| "\"\"".into()),
+                entry.frequency,
+                entry.last_open
+            ));
+        }
+        text
+    }
+}
+
+/// RE-03 — the reference-mode scoreFn's frecency factor
+/// (autocomplete.tsx:569-570): `score * (1 + getFrecency(path))`,
+/// an identity when the option carries no path (commands/agents/
+/// skills).
+#[must_use]
+pub fn frecency_weighted(
+    score: f64,
+    path: Option<&str>,
+    frecency: Option<&Frecency>,
+    now_ms: i64,
+) -> f64 {
+    match (path, frecency) {
+        (Some(path), Some(frecency)) => score * (1.0 + frecency.get(path, now_ms)),
+        _ => score,
+    }
+}
+
 /// TUI-28 — `directoryRecentValue` (directory-completion.ts:92-98):
 /// the `~`-relative display (empty relative = `~`, a clean relative
 /// beneath home = `~/…`, anything else absolute).
@@ -624,6 +809,7 @@ pub fn directory_recents_options(
                 reference: None,
                 is_directory: true,
                 absolute: Some(item.directory.clone()),
+                path: None,
                 destructive: Some(Destructive {
                     id: item.directory.clone(),
                     confirm: "Press ctrl+d to confirm",
@@ -701,6 +887,21 @@ pub fn filter_references(
     skills: &[ReferenceSkill],
     query: &str,
 ) -> Vec<AutocompleteOption> {
+    filter_references_ranked(agents, skills, query, None, 0)
+}
+
+/// RE-03 — the ranked form of [`filter_references`]: the score
+/// (prefix boost) is multiplied by `(1 + frecency)` for options
+/// carrying a `path` — the ref scoreFn's factor
+/// (autocomplete.tsx:569-570: `score * (1 + frecencyScore)`).
+#[must_use]
+pub fn filter_references_ranked(
+    agents: &[ReferenceAgent],
+    skills: &[ReferenceSkill],
+    query: &str,
+    frecency: Option<&Frecency>,
+    now_ms: i64,
+) -> Vec<AutocompleteOption> {
     let skill_rows = skills.iter().map(|skill| AutocompleteOption {
         display: format!("@{}", skill.id),
         description: skill.description.clone(),
@@ -714,22 +915,53 @@ pub fn filter_references(
         ..AutocompleteOption::default()
     });
     let all: Vec<AutocompleteOption> = skill_rows.chain(agent_rows).collect();
+    rank_reference_options(all, query, frecency, now_ms)
+}
+
+/// RE-03 — rank pre-built `@` reference rows (the ref scoreFn,
+/// autocomplete.tsx:553-571, over the non-file option set): the
+/// containment filter with the `@{query}` prefix boost, the score
+/// multiplied by `(1 + getFrecency(path))` when the option carries
+/// a `path` (files/references), sliced to 10, ties by display.
+#[must_use]
+pub fn rank_reference_options(
+    options: Vec<AutocompleteOption>,
+    query: &str,
+    frecency: Option<&Frecency>,
+    now_ms: i64,
+) -> Vec<AutocompleteOption> {
     if query.trim().is_empty() {
-        return all;
+        return options;
     }
     let needle = query.to_lowercase();
     let prefix = format!("@{needle}");
-    let mut ranked: Vec<(u8, AutocompleteOption)> = all
+    let mut ranked: Vec<(f64, AutocompleteOption)> = options
         .into_iter()
         .filter_map(|option| {
             let target = option.display.to_lowercase();
             let at = target.find(&needle)?;
-            let boost = u8::from(target.starts_with(&prefix) && at == 0);
-            Some((boost, option))
+            // Base score 1 for a containment match (+1 more on the
+            // `@{query}` prefix), so the frecency factor
+            // (autocomplete.tsx:569-570) can reorder matched rows.
+            let boost = 1.0 + f64::from(u8::from(target.starts_with(&prefix)));
+            Some((frecency_weighted(boost, option.path.as_deref(), frecency, now_ms), option))
         })
         .collect();
-    ranked.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.display.cmp(&b.1.display)));
+    ranked.sort_by(|a, b| {
+        b.0.partial_cmp(&a.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.1.display.cmp(&b.1.display))
+    });
     ranked.into_iter().map(|(_, option)| option).take(10).collect()
+}
+
+/// Wall-clock epoch ms (`Date.now()`) — the frecency store's clock.
+#[must_use]
+pub fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 /// The popup geometry (`height()`): `min(10, count, max(1, anchor_y))`.
@@ -862,5 +1094,171 @@ mod tests {
         let filtered = filter_references(&agents, &skills, "BU");
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].display, "@build");
+    }
+
+    /// RE-03 — `calculateFrecency` (frecency.tsx:33-36):
+    /// `frequency / (1 + Δdays)`, 0 for an unknown path.
+    #[test]
+    fn frecency_decays_frequency_over_days() {
+        let day = 86_400_000i64;
+        let mut frecency = Frecency::default();
+        frecency
+            .data
+            .insert("src/main.rs".to_owned(), FrecencyEntry { frequency: 9, last_open: 100 * day });
+        assert_eq!(frecency.get("src/main.rs", 100 * day), 9.0, "same day: no decay");
+        assert!((frecency.get("src/main.rs", 103 * day) - 9.0 / 4.0).abs() < 1e-9, "3 days later");
+        assert_eq!(frecency.get("other.rs", 100 * day), 0.0, "unknown path scores 0");
+        // The scoreFn factor: score × (1 + frecency) (autocomplete.
+        // tsx:569-570); an identity without a path.
+        assert!(
+            (frecency_weighted(2.0, Some("src/main.rs"), Some(&frecency), 100 * day) - 20.0).abs()
+                < 1e-9
+        );
+        assert_eq!(frecency_weighted(2.0, None, Some(&frecency), 0), 2.0);
+    }
+
+    /// RE-03 — a frequent recent file outranks a rare old one at the
+    /// same base score (the `(1 + frecency)` factor reorders rows).
+    #[test]
+    fn frecency_ranks_frequent_recent_files_first() {
+        let day = 86_400_000i64;
+        let now = 100 * day;
+        let mut frecency = Frecency::default();
+        frecency.data.insert(
+            "old/rare.rs".to_owned(),
+            FrecencyEntry { frequency: 1, last_open: now - 10 * day },
+        );
+        frecency
+            .data
+            .insert("src/hot.rs".to_owned(), FrecencyEntry { frequency: 20, last_open: now });
+        let file = |display: &str, path: &str| AutocompleteOption {
+            display: format!("@{display}"),
+            path: Some(path.to_owned()),
+            ..AutocompleteOption::default()
+        };
+        let ranked = rank_reference_options(
+            vec![file("readme", "old/rare.rs"), file("readme", "src/hot.rs")],
+            "readme",
+            Some(&frecency),
+            now,
+        );
+        assert_eq!(
+            ranked[0].path.as_deref(),
+            Some("src/hot.rs"),
+            "hot file's (1+20) beats (1+1/11)"
+        );
+        assert_eq!(ranked[1].path.as_deref(), Some("old/rare.rs"));
+    }
+
+    /// RE-03 — `updateFrecency` (frecency.tsx:57-72): frequency+1
+    /// with a fresh `lastOpen`, and the parsed-JSONL load.
+    #[test]
+    fn frecency_update_increments_and_reloads() {
+        let mut frecency = Frecency::default();
+        let key = resolve_frecency_path(&std::env::current_dir().unwrap_or_default(), "a.rs");
+        frecency.update("a.rs", 1_000);
+        assert_eq!(frecency.data[&key], FrecencyEntry { frequency: 1, last_open: 1_000 });
+        frecency.update("a.rs", 2_000);
+        assert_eq!(frecency.data[&key], FrecencyEntry { frequency: 2, last_open: 2_000 });
+
+        let parsed = crate::storage::parse_frecency(
+            "{\"path\":\"/abs/a.rs\",\"frequency\":5,\"lastOpen\":9000}\n{\"path\":\"/abs/a.rs\",\"frequency\":6,\"lastOpen\":9500}\n",
+        );
+        let reloaded = Frecency::from_parsed(&parsed);
+        assert_eq!(
+            reloaded.data["/abs/a.rs"],
+            FrecencyEntry { frequency: 6, last_open: 9500 },
+            "last line wins"
+        );
+        assert!(reloaded.encode_jsonl().contains("\"frequency\":6"));
+    }
+
+    /// RE-03 — keys are ABSOLUTE (`path.resolve(cwd, filePath)`,
+    /// frecency.tsx:58/75): relative joins the cwd, `.`/`..`
+    /// normalize, absolute stays.
+    #[test]
+    fn frecency_keys_are_absolute() {
+        assert_eq!(
+            resolve_frecency_path(std::path::Path::new("/proj"), "src/main.rs"),
+            "/proj/src/main.rs"
+        );
+        assert_eq!(
+            resolve_frecency_path(std::path::Path::new("/proj"), "./src/../lib/a.rs"),
+            "/proj/lib/a.rs"
+        );
+        assert_eq!(
+            resolve_frecency_path(std::path::Path::new("/proj"), "/elsewhere/a.rs"),
+            "/elsewhere/a.rs"
+        );
+        let mut frecency = Frecency::default();
+        frecency.update("src/main.rs", 5_000);
+        let key = resolve_frecency_path(&std::env::current_dir().unwrap(), "src/main.rs");
+        assert_eq!(frecency.data.get(&key).map(|entry| entry.frequency), Some(1));
+    }
+
+    /// RE-03 — persistence: `update` APPENDS one JSONL line per
+    /// update (the ref's fire-and-forget `appendText`,
+    /// frecency.tsx:61) with the absolute key, and `open` reloads it.
+    #[test]
+    fn frecency_update_appends_and_reloads_across_restart() {
+        let dir =
+            std::env::temp_dir().join(format!("oc-tui-frecency-append-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+
+        let mut frecency = Frecency::open(&dir);
+        frecency.update("src/hot.rs", 1_000);
+        frecency.update("src/hot.rs", 2_000);
+        let file = dir.join(crate::storage::FILE_FRECENCY);
+        let text = std::fs::read_to_string(&file).expect("appended frecency.jsonl");
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 2, "one append per update");
+        let key = serde_json::to_string(&resolve_frecency_path(
+            &std::env::current_dir().unwrap(),
+            "src/hot.rs",
+        ))
+        .unwrap();
+        assert!(lines[0].contains(&key), "absolute key: {}", lines[0]);
+        assert!(lines[0].ends_with("\"frequency\":1,\"lastOpen\":1000}"));
+        assert!(lines[1].ends_with("\"frequency\":2,\"lastOpen\":2000}"));
+
+        // Restart: the store reloads (last line wins per path).
+        let reloaded = Frecency::open(&dir);
+        let hot = resolve_frecency_path(&std::env::current_dir().unwrap(), "src/hot.rs");
+        assert_eq!(
+            reloaded.data.get(&hot),
+            Some(&FrecencyEntry { frequency: 2, last_open: 2_000 }),
+            "restart keeps the recorded frecency"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// RE-03 — compaction at >1000 (frecency.tsx:63-71): the 1001st
+    /// update rewrites the file with the `lastOpen`-descending top
+    /// 1000 (the oldest entry dropped).
+    #[test]
+    fn frecency_compacts_the_file_at_1001() {
+        let dir = std::env::temp_dir().join(format!("oc-tui-frecency-cap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+
+        let mut frecency = Frecency::open(&dir);
+        for index in 0..crate::storage::MAX_FRECENCY_ENTRIES {
+            frecency.update(&format!("/old/file-{index}.rs"), 1_000 + index as i64);
+        }
+        let file = dir.join(crate::storage::FILE_FRECENCY);
+        let before = std::fs::read_to_string(&file).expect("appends");
+        assert_eq!(before.lines().count(), crate::storage::MAX_FRECENCY_ENTRIES);
+
+        // The 1001st distinct path pushes the store over the cap →
+        // the file is REWRITTEN compacted (newest 1000 kept).
+        frecency.update("/fresh/new.rs", 5_000_000);
+        let after = std::fs::read_to_string(&file).expect("compacted frecency.jsonl");
+        let lines: Vec<&str> = after.lines().collect();
+        assert_eq!(lines.len(), crate::storage::MAX_FRECENCY_ENTRIES, "compacted to the cap");
+        assert!(after.contains("/fresh/new.rs"), "the newest survives");
+        assert!(!after.contains("/old/file-0.rs"), "the oldest drops");
+        assert_eq!(frecency.data.len(), crate::storage::MAX_FRECENCY_ENTRIES);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -2527,7 +2527,16 @@ impl App {
                     .collect()
             })
             .unwrap_or_default();
-        composer.autocomplete.options = autocomplete::filter_references(&agents, &skills, &query);
+        // RE-03 — the ranked form carries the frecency factor
+        // (score × (1 + getFrecency(path)) for path-carrying rows).
+        let frecency = composer.autocomplete.frecency.clone();
+        composer.autocomplete.options = autocomplete::filter_references_ranked(
+            &agents,
+            &skills,
+            &query,
+            Some(&frecency),
+            autocomplete::now_ms(),
+        );
         composer.autocomplete.filtered_len = composer.autocomplete.options.len();
         if composer.autocomplete.selected >= composer.autocomplete.filtered_len {
             composer.autocomplete.selected = 0;
@@ -6351,6 +6360,13 @@ pub async fn run_with_size(
     // App + config boot.
     let store = Store::new(crate::reactive::Runtime::new());
     let mut app = App::with_store(store, size);
+    // RE-03 — the `@file` frecency provider (prompt/frecency.tsx:
+    // onMount load of `<state>/frecency.jsonl` + the append/compact
+    // sink on update): every session composer's autocomplete state
+    // inherits the store, so accepted files persist across restarts.
+    app.store.set_frecency_template(crate::components::composer::autocomplete::Frecency::open(
+        &oc_util::global_roots::resolve().state,
+    ));
     // CONFIG-E3 — `skipInitialLoading` (ref app.tsx:351
     // `skipInitialLoading: Boolean(process.env.OPENCODE_FAST_BOOT)`):
     // suppresses the `StartupLoading` boot pill (app.tsx:1389-1391
