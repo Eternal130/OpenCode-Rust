@@ -233,6 +233,25 @@ impl CompletionShell {
 /// as a post-clap parse-time validation (see [`Cli::validate_extra`]).
 pub const MAX_API_HEADERS: usize = 100;
 
+/// RE-05 — the ref Schema's `atMost(100)` on `run --file` (ref
+/// commands.ts ~:410-412); clap has no multi-occurrence count
+/// `value_parser`, so the check runs in [`Cli::validate_extra`].
+pub const MAX_RUN_FILES: usize = 100;
+
+/// RE-05 — the ref Schema's `atMost(100)` on `auth login --answer`
+/// (ref commands.ts ~:167-169); enforced in [`Cli::validate_extra`].
+pub const MAX_AUTH_ANSWERS: usize = 100;
+
+/// RE-05 — the ref Schema's `Schema.NonEmptyString` on `serve --cors`
+/// (ref commands.ts ~:542-546): an empty origin is invalid.
+fn parse_non_empty_string(value: &str) -> Result<String, String> {
+    if value.is_empty() {
+        Err("a non-empty string is required".to_owned())
+    } else {
+        Ok(value.to_owned())
+    }
+}
+
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     /// Upgrade `OpenCode` to the latest or a specific version
@@ -393,7 +412,7 @@ pub enum Commands {
         /// File to attach to the message
         #[arg(short = 'f', long, value_name = "FILE", action = ArgAction::Append)]
         file: Vec<String>,
-        /// Session title
+        /// Session title,
         #[arg(long)]
         title: Option<String>,
         /// Show thinking blocks
@@ -431,7 +450,7 @@ pub enum Commands {
         #[arg(long)]
         port: Option<u16>,
         /// Additional allowed CORS origin (repeat for multiple origins)
-        #[arg(long, action = ArgAction::Append)]
+        #[arg(long, action = ArgAction::Append, value_parser = parse_non_empty_string)]
         cors: Vec<String>,
         #[arg(long)]
         service: bool,
@@ -466,6 +485,37 @@ impl Cli {
                         "error: too many --header values ({} given, at most {} allowed)\n",
                         header.len(),
                         MAX_API_HEADERS
+                    ),
+                ));
+            }
+        }
+        // RE-05 — `run --file`: ref Schema caps the file list at
+        // `atMost(100)` (commands.ts ~:410-412).
+        if let Some(Commands::Run { file, .. }) = &self.command {
+            if file.len() > MAX_RUN_FILES {
+                return Err(clap::Error::raw(
+                    clap::error::ErrorKind::ValueValidation,
+                    format!(
+                        "error: too many --file values ({} given, at most {} allowed)\n",
+                        file.len(),
+                        MAX_RUN_FILES
+                    ),
+                ));
+            }
+        }
+        // RE-05 — `auth login --answer`: ref Schema caps the answer
+        // list at `atMost(100)` (commands.ts ~:167-169).
+        if let Some(Commands::Auth {
+            command: AuthCommands::Login { answer, .. },
+        }) = &self.command
+        {
+            if answer.len() > MAX_AUTH_ANSWERS {
+                return Err(clap::Error::raw(
+                    clap::error::ErrorKind::ValueValidation,
+                    format!(
+                        "error: too many --answer values ({} given, at most {} allowed)\n",
+                        answer.len(),
+                        MAX_AUTH_ANSWERS
                     ),
                 ));
             }
@@ -612,7 +662,7 @@ pub enum SessionCommands {
     /// List top-level sessions in the current project, newest first
     List {
         /// Limit to N most recent sessions (default: 100)
-        #[arg(short = 'n', long, value_name = "N")]
+        #[arg(short = 'n', long, value_name = "N", value_parser = clap::value_parser!(u32).range(1..))]
         max_count: Option<u32>,
         /// Output format
         #[arg(long, default_value_t = SessionListFormat::Table)]
@@ -879,5 +929,103 @@ mod tests {
             assert!(rendered.contains("invalid value"), "{bad}: {rendered}");
             assert!(rendered.contains("1970..=9999"), "{bad} names the range: {rendered}");
         }
+    }
+
+    // --- RE-05: ref-matching clap-level validation gaps ---------------
+
+    fn repeated_args(flag: &str, values: &[String]) -> Vec<String> {
+        let mut argv = Vec::new();
+        for value in values {
+            argv.push(flag.to_string());
+            argv.push(value.clone());
+        }
+        argv
+    }
+
+    /// RE-05: `run --file` accepts at most 100 values (ref
+    /// `Flag.atMost(100)`, commands.ts ~:410-412).
+    #[test]
+    fn run_file_rejects_more_than_100_at_parse_time() {
+        let ok: Vec<String> = (0..MAX_RUN_FILES).map(|i| format!("f{i}.txt")).collect();
+        let mut argv = vec!["opencode".to_string(), "run".to_string(), "hi".to_string()];
+        argv.extend(repeated_args("--file", &ok));
+        Cli::try_parse_from_checked(argv).expect("exactly 100 files parse");
+
+        let mut too_many = ok;
+        too_many.push("one-too-many.txt".to_string());
+        let mut argv = vec!["opencode".to_string(), "run".to_string(), "hi".to_string()];
+        argv.extend(repeated_args("--file", &too_many));
+        let error = Cli::try_parse_from_checked(argv).unwrap_err();
+        let rendered = error.to_string();
+        assert!(rendered.contains("101"), "reports the count: {rendered}");
+        assert!(rendered.contains("--file"), "names the flag: {rendered}");
+    }
+
+    /// RE-05: `auth login --answer` accepts at most 100 values (ref
+    /// `Flag.atMost(100)`, commands.ts ~:167-169).
+    #[test]
+    fn auth_login_answer_rejects_more_than_100_at_parse_time() {
+        let ok: Vec<String> = (0..MAX_AUTH_ANSWERS).map(|i| format!("k{i}=v")).collect();
+        let mut argv = vec!["opencode".to_string(), "auth".to_string(), "login".to_string()];
+        argv.extend(repeated_args("--answer", &ok));
+        Cli::try_parse_from_checked(argv).expect("exactly 100 answers parse");
+
+        let mut too_many = ok;
+        too_many.push("one=too-many".to_string());
+        let mut argv = vec!["opencode".to_string(), "auth".to_string(), "login".to_string()];
+        argv.extend(repeated_args("--answer", &too_many));
+        let error = Cli::try_parse_from_checked(argv).unwrap_err();
+        let rendered = error.to_string();
+        assert!(rendered.contains("101"), "reports the count: {rendered}");
+        assert!(rendered.contains("--answer"), "names the flag: {rendered}");
+    }
+
+    /// RE-05: `session list --max-count` ref Schema requires
+    /// `>= 1`; 0 must be rejected and 1 accepted.
+    #[test]
+    fn session_list_max_count_minimum_is_one() {
+        let parsed = Cli::try_parse_from_checked(["opencode", "session", "list", "--max-count", "1"])
+            .expect("max-count 1 parses");
+        assert!(
+            matches!(
+                &parsed.command,
+                Some(Commands::Session {
+                    command: SessionCommands::List { max_count: Some(1), .. }
+                })
+            ),
+            "max-count 1 parsed through"
+        );
+
+        let error =
+            Cli::try_parse_from_checked(["opencode", "session", "list", "--max-count", "0"])
+                .unwrap_err();
+        let rendered = error.to_string();
+        assert!(rendered.contains("invalid value"), "{rendered}");
+    }
+
+    /// RE-05: `serve --cors` is a ref `Schema.NonEmptyString`
+    /// (commands.ts ~:542-546); an empty origin must be rejected
+    /// while a valid one parses.
+    #[test]
+    fn serve_cors_rejects_empty_string() {
+        let parsed = Cli::try_parse_from_checked([
+            "opencode",
+            "serve",
+            "--cors",
+            "https://example.com",
+        ])
+        .expect("a valid origin parses");
+        assert!(
+            matches!(
+                &parsed.command,
+                Some(Commands::Serve { cors, .. }) if cors == &["https://example.com".to_string()]
+            ),
+            "valid cors origin parsed through"
+        );
+
+        let error = Cli::try_parse_from_checked(["opencode", "serve", "--cors", ""]).unwrap_err();
+        let rendered = error.to_string();
+        assert!(rendered.contains("invalid value"), "{rendered}");
+        assert!(rendered.contains("--cors"), "names the flag: {rendered}");
     }
 }
