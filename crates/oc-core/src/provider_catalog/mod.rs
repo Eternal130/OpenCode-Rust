@@ -18,6 +18,7 @@ pub mod catalog;
 pub mod facade;
 pub mod native;
 pub mod overlay;
+pub mod plugin_headers;
 pub mod refresh;
 pub mod source;
 pub mod support;

@@ -63,9 +63,10 @@ use oc_ai::route::{AuthDefinition, SharedTransport};
 use oc_ai::schema::options::{merge_json_records, merge_string_records, HttpOptions};
 use oc_ai::LanguageModel;
 use oc_schema::model::Info as ModelInfo;
-use oc_schema::provider::Settings as ProviderSettings;
+use oc_schema::provider::{Activation, Settings as ProviderSettings};
 
 use crate::provider_catalog::native::{self, package_name};
+use crate::provider_catalog::plugin_headers::plugin_provider_headers;
 use crate::provider_catalog::{Catalog, Snapshot};
 
 /// Typed provider-binding failures (gate 3, Task 5: selecting a
@@ -89,15 +90,29 @@ pub enum ProviderError {
 }
 
 /// Execution context for facade binding: the transport every route runs on
-/// (the process-agnostic seam, oracle gate 2 finding 7).
+/// (the process-agnostic seam, oracle gate 2 finding 7), plus the
+/// integration host consulted by the provider header plugins (the
+/// llmgateway gate; `None` = no integrations registered, AUD-10②).
 pub struct FacadeContext {
     pub transport: SharedTransport,
+    pub integrations: Option<Arc<crate::integration::IntegrationHost>>,
 }
 
 impl FacadeContext {
-    /// Context over one shared transport.
+    /// Context over one shared transport (no integrations).
     pub fn new(transport: SharedTransport) -> Self {
-        Self { transport }
+        Self { transport, integrations: None }
+    }
+
+    /// Attach the integration host (the llmgateway header gate).
+    #[must_use]
+    pub fn with_integrations(mut self, host: Arc<crate::integration::IntegrationHost>) -> Self {
+        self.integrations = Some(host);
+        self
+    }
+
+    fn integration_registered(&self, provider_id: &str) -> bool {
+        self.integrations.as_ref().is_some_and(|host| host.has_integration(provider_id))
     }
 }
 
@@ -447,17 +462,40 @@ pub fn language_model_for_model(
     let base_url = connection.base_url.clone().or(catalog_base);
     let env = &snapshot.environment;
 
-    let route =
-        build_route(context, family, provider_id, &package, base_url, env, connection, model)?;
+    let route = build_route(
+        context,
+        family,
+        provider_id,
+        &package,
+        base_url.clone(),
+        env,
+        connection,
+        model,
+    )?;
+    // Provider header plugins (AUD-10②): the ref cerebras/kilo/nvidia/
+    // llmgateway plugins spread their static sets over `provider.headers`
+    // after resolution, injected headers winning per key. Applied under
+    // the model overlays (which still win per key, matching the ref
+    // spread order plugin → model merge).
+    let mut headers = connection.headers.clone();
+    for (name, value) in plugin_provider_headers(
+        &package,
+        base_url.as_deref(),
+        snapshot.info.activation,
+        context.integration_registered(provider_id),
+        &headers,
+    ) {
+        headers.insert(name, value);
+    }
     // Connection headers ride the route defaults (transport headers) —
     // the seam credential-driven providers (copilot) use for their
     // client headers; model overlays apply after and win per key.
-    let route = if connection.headers.is_empty() {
+    let route = if headers.is_empty() {
         route
     } else {
         route.with(RoutePatch {
             defaults: RouteDefaults {
-                headers: Some(connection.headers.clone()),
+                headers: Some(headers),
                 ..Default::default()
             },
             ..Default::default()
@@ -953,7 +991,24 @@ pub fn custom_language_model(
         .as_ref()
         .map(|body| serde_json::Map::from_iter(body.iter().map(|(k, v)| (k.clone(), v.clone()))));
     let body = merge_json_records(&[provider_body.as_ref(), model_body.as_ref()]);
-    let headers = merge_string_records(&[custom.headers.as_ref(), model.headers.as_ref()]);
+    // Provider header plugins (AUD-10②): custom providers bind through
+    // the openai-compatible package, so a custom provider pointed at the
+    // kilo/nvidia/llmgateway gate URLs gets the same injected sets
+    // (spread under the model overlay, which wins per key like the ref
+    // spread order plugin → model merge). Config-defined providers are
+    // explicitly enabled (never the Disabled gate skip).
+    let plugin_headers = plugin_provider_headers(
+        "@opencode/ai/providers/openai-compatible",
+        Some(base_url),
+        Activation::Enabled,
+        context.integration_registered(&custom.id),
+        custom.headers.as_ref().unwrap_or(&BTreeMap::new()),
+    );
+    let headers = merge_string_records(&[
+        custom.headers.as_ref(),
+        Some(&plugin_headers),
+        model.headers.as_ref(),
+    ]);
     let http = HttpOptions { body, ..Default::default() };
     let route =
         openai_compatible_chat_configured(Arc::clone(&context.transport), &custom.id, base_url)
@@ -1067,7 +1122,7 @@ fn custom_native_language_model(
         family,
         &custom.id,
         &package,
-        base_url,
+        base_url.clone(),
         &[],
         &connection,
         &route_info,
@@ -1083,7 +1138,22 @@ fn custom_native_language_model(
         .as_ref()
         .map(|body| serde_json::Map::from_iter(body.iter().map(|(k, v)| (k.clone(), v.clone()))));
     let body = merge_json_records(&[provider_body.as_ref(), model_body.as_ref()]);
-    let headers = merge_string_records(&[custom.headers.as_ref(), model.headers.as_ref()]);
+    // AUD-10②: same provider header plugins as the catalog lane — the
+    // cerebras package match (and the openai-compatible gate URLs) apply
+    // to custom native bindings too; config-defined providers count as
+    // enabled.
+    let plugin_headers = plugin_provider_headers(
+        &package,
+        base_url.as_deref(),
+        Activation::Enabled,
+        context.integration_registered(&custom.id),
+        custom.headers.as_ref().unwrap_or(&BTreeMap::new()),
+    );
+    let headers = merge_string_records(&[
+        custom.headers.as_ref(),
+        Some(&plugin_headers),
+        model.headers.as_ref(),
+    ]);
     let http = HttpOptions { body, ..Default::default() };
     let route = route.with(RoutePatch {
         defaults: RouteDefaults {
