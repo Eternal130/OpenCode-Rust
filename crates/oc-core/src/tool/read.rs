@@ -210,19 +210,36 @@ fn list_page(dir: &Path, offset: u64, limit: u64) -> Result<ReadOutput, ReadErro
     })
 }
 
-/// The text-page budget (read-filesystem.ts `textPage`, eof-always variant
-/// over the whole file).
-fn text_page(
-    bytes: &[u8],
+/// `FIRST_CHUNK` — the 256 KiB rope-chunk read granularity
+/// (read-filesystem.ts:16).
+const FIRST_CHUNK: usize = 256 * 1024;
+
+/// One settled `textPage` result (read-filesystem.ts:290-313).
+struct PageResult {
+    entries: Vec<String>,
     offset: u64,
-    limit: u64,
-) -> Result<(Vec<String>, Option<u64>), ReadError> {
-    let decoded = String::from_utf8_lossy(bytes).into_owned();
+    next: Option<u64>,
+    /// Byte offset (within the input) just past the last consumed line.
+    consumed: usize,
+}
+
+/// The text-page budget (read-filesystem.ts `textPage`). Returns `None`
+/// when the input is not eof and no `next` boundary settled (the caller
+/// must read another chunk and retry).
+fn text_page(bytes: &[u8], eof: bool, offset: u64, limit: u64) -> Option<PageResult> {
+    let decoded = String::from_utf8_lossy(bytes);
     let mut split: Vec<&str> = decoded.split('\n').collect();
-    if decoded.ends_with('\n') {
+    // eof: a trailing newline ends the last line instead of starting an
+    // empty one; non-eof: the last element is a (possibly empty) partial
+    // line and is dropped.
+    if !eof || split.last() == Some(&"") {
         split.pop();
     }
-    let available: Vec<&str> = split.into_iter().collect();
+    let available: Vec<String> = split
+        .into_iter()
+        .map(|line| line.strip_suffix('\r').unwrap_or(line).to_string())
+        .collect();
+
     let mut entries: Vec<String> = Vec::new();
     let mut size = 0usize;
     let mut next: Option<u64> = None;
@@ -243,66 +260,218 @@ fn text_page(
     }
     if next.is_none()
         && entries.len() >= limit as usize
-        && offset - 1 + (entries.len() as u64) < available.len() as u64
+        && (!eof || offset - 1 + (entries.len() as u64) < available.len() as u64)
     {
         next = Some(offset + entries.len() as u64);
     }
-    Ok((entries, next))
+    if !eof && next.is_none() {
+        return None;
+    }
+
+    let consumed_lines = if next.is_none() { available.len() } else { (next.unwrap() - 1) as usize };
+    let consumed = if consumed_lines == 0 {
+        0
+    } else {
+        nth_newline(bytes, consumed_lines).unwrap_or(bytes.len())
+    };
+    Some(PageResult { entries, offset, next, consumed })
 }
 
-/// `read` — the filesystem surface.
+/// `textLeaf` — newline count of a chunk.
+fn newline_count(bytes: &[u8]) -> u64 {
+    bytes.iter().filter(|&&byte| byte == b'\n').count() as u64
+}
+
+/// `nthNewline` — byte index just past the `count`-th `\n`.
+fn nth_newline(bytes: &[u8], count: usize) -> Option<usize> {
+    let mut found = 0;
+    bytes.iter().enumerate().find_map(|(index, &byte)| {
+        if byte != b'\n' {
+            return None;
+        }
+        found += 1;
+        (found == count).then_some(index + 1)
+    })
+}
+
+/// `lineCount` — newlines plus a final unterminated line
+/// (read-filesystem.ts:318).
+fn total_line_count(newlines: u64, last: Option<u8>) -> u64 {
+    match last {
+        None | Some(b'\n') => newlines,
+        Some(_) => newlines + 1,
+    }
+}
+
+/// `textOffset` (rope order-statistic query) over the chunk list: byte
+/// offset just past the `newline`-th newline, i.e. where line
+/// `newline + 1` starts.
+fn text_offset(leaves: &[Vec<u8>], newline: u64) -> usize {
+    if newline == 0 {
+        return 0;
+    }
+    let mut remaining = newline;
+    let mut offset = 0usize;
+    for leaf in leaves {
+        let leaf_lines = newline_count(leaf);
+        if remaining <= leaf_lines {
+            return offset + nth_newline(leaf, remaining as usize).unwrap_or(leaf.len());
+        }
+        remaining -= leaf_lines;
+        offset += leaf.len();
+    }
+    offset
+}
+
+/// Concatenate every leaf from byte `start` onward (the `selected`
+/// buffer of the ref loop).
+fn selected_from(leaves: &[Vec<u8>], start: usize) -> Vec<u8> {
+    let mut position = 0usize;
+    let mut selected = Vec::new();
+    for leaf in leaves {
+        let leaf_start = position;
+        position += leaf.len();
+        if position <= start {
+            continue;
+        }
+        let skip = start.saturating_sub(leaf_start);
+        selected.extend_from_slice(&leaf[skip..]);
+    }
+    selected
+}
+
+/// Per-leaf NUL scan over the consumed prefix only (read-filesystem.ts
+/// :243-250) — the binary flag covers the consumed range, not the whole
+/// file.
+fn consumed_is_binary(leaves: &[Vec<u8>], consumed: usize) -> bool {
+    let mut checked = 0usize;
+    leaves.iter().any(|leaf| {
+        let length = leaf.len().min(consumed.saturating_sub(checked));
+        checked += leaf.len();
+        length > 0 && leaf[..length].contains(&0)
+    })
+}
+
+/// `makeTextPage` (read-filesystem.ts:265-283).
+fn make_text_page(
+    path: &Path,
+    resource: &str,
+    entries: Vec<String>,
+    offset: u64,
+    next: Option<u64>,
+    binary: bool,
+    lines: u64,
+) -> Result<ReadOutput, ReadError> {
+    if binary {
+        return Err(ReadError::Binary(resource.to_string()));
+    }
+    if entries.is_empty() && offset != 1 {
+        return Err(ReadError::OffsetOutOfRange { offset, lines });
+    }
+    Ok(ReadOutput::TextPage {
+        content: entries.join("\n"),
+        mime: mime_from_path(path),
+        offset,
+        truncated: next.is_some(),
+        next,
+    })
+}
+
+/// `read` — the filesystem surface (read-filesystem.ts:112-262), ported
+/// onto 256 KiB chunk reads so large files never load whole into memory
+/// unless the requested page requires it.
 pub fn read_file(
     path: &Path,
     resource: &str,
     offset: Option<u64>,
     limit: Option<u64>,
 ) -> Result<ReadOutput, ReadError> {
-    // JS `page.offset || 1` — a zero offset is falsy and reads as 1.
-    let paged_offset = offset.filter(|value| *value > 0).unwrap_or(1);
-    let paged_limit = limit.map_or(MAX_READ_LINES as u64, |v| v.min(MAX_READ_LINES as u64));
-    let symlink_metadata = std::fs::symlink_metadata(path).map_err(|error| match error.kind() {
-        std::io::ErrorKind::NotFound => ReadError::NotFound(path.to_path_buf()),
-        _ => ReadError::Io(error.to_string()),
-    })?;
+    let symlink_metadata = std::fs::symlink_metadata(path).map_err(read_error(path))?;
     let metadata = if symlink_metadata.file_type().is_symlink() {
-        std::fs::metadata(path).map_err(|error| match error.kind() {
-            std::io::ErrorKind::NotFound => ReadError::NotFound(path.to_path_buf()),
-            _ => ReadError::Io(error.to_string()),
-        })?
+        std::fs::metadata(path).map_err(read_error(path))?
     } else {
         symlink_metadata
     };
     if metadata.is_dir() {
+        let paged_offset = offset.filter(|value| *value > 0).unwrap_or(1);
+        let paged_limit = limit.map_or(MAX_READ_LINES as u64, |v| v.min(MAX_READ_LINES as u64));
         return list_page(path, paged_offset, paged_limit);
     }
 
-    let bytes = std::fs::read(path).map_err(|error| match error.kind() {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file =
+        std::fs::File::open(path).map_err(|error| match error.kind() {
+            std::io::ErrorKind::NotFound => ReadError::NotFound(path.to_path_buf()),
+            _ => ReadError::Io(error.to_string()),
+        })?;
+    let read_at = move |start: u64, length: usize| -> Result<Vec<u8>, ReadError> {
+        file.seek(SeekFrom::Start(start)).map_err(|error| ReadError::Io(error.to_string()))?;
+        let mut buffer = vec![0u8; length];
+        let mut filled = 0usize;
+        while filled < length {
+            let n = file
+                .read(&mut buffer[filled..])
+                .map_err(|error| ReadError::Io(error.to_string()))?;
+            if n == 0 {
+                break;
+            }
+            filled += n;
+        }
+        buffer.truncate(filled);
+        Ok(buffer)
+    };
+    read_file_with(metadata.len(), path, resource, offset, limit, read_at)
+}
+
+fn read_error(path: &Path) -> impl Fn(std::io::Error) -> ReadError + '_ {
+    move |error| match error.kind() {
         std::io::ErrorKind::NotFound => ReadError::NotFound(path.to_path_buf()),
         _ => ReadError::Io(error.to_string()),
-    })?;
+    }
+}
 
-    if let Some(media) = detect_mime(&bytes) {
-        if metadata.len() > MAX_MEDIA_INGEST_BYTES {
+/// The chunk-paged read pipeline (read-filesystem.ts:118-262). `read_at`
+/// is the positioned-chunk seam (tests count calls to bound memory
+/// shape); `size` is the file length.
+pub fn read_file_with(
+    size: u64,
+    path: &Path,
+    resource: &str,
+    offset: Option<u64>,
+    limit: Option<u64>,
+    mut read_at: impl FnMut(u64, usize) -> Result<Vec<u8>, ReadError>,
+) -> Result<ReadOutput, ReadError> {
+    // JS `page.offset || 1` — a zero offset is falsy and reads as 1.
+    let paged_offset = offset.filter(|value| *value > 0).unwrap_or(1);
+    let paged_limit = limit.map_or(MAX_READ_LINES as u64, |v| v.min(MAX_READ_LINES as u64));
+
+    let first = read_at(0, FIRST_CHUNK)?;
+
+    let media = detect_mime(&first);
+    if let Some(media) = media {
+        if size > MAX_MEDIA_INGEST_BYTES {
             return Err(ReadError::MediaLimit {
                 resource: resource.to_string(),
                 maximum_bytes: MAX_MEDIA_INGEST_BYTES,
             });
         }
+        let whole = if first.len() as u64 >= size { first } else { read_at(0, size as usize)? };
         return Ok(ReadOutput::File {
             uri: file_url(path),
             name: path.file_name().map(|n| n.to_string_lossy().into_owned()),
-            content: base64::engine::general_purpose::STANDARD.encode(&bytes),
+            content: base64::engine::general_purpose::STANDARD.encode(&whole),
             mime: media.to_string(),
             base64: true,
         });
     }
 
-    let paged = metadata.len() as usize > MAX_READ_BYTES || offset.is_some() || limit.is_some();
+    let paged = size as usize > MAX_READ_BYTES || offset.is_some() || limit.is_some();
     if !paged {
-        if bytes.contains(&0) {
+        // The whole file fits the first chunk and no paging was requested.
+        if first.contains(&0) {
             return Err(ReadError::Binary(resource.to_string()));
         }
-        let decoded = String::from_utf8_lossy(&bytes).into_owned();
+        let decoded = String::from_utf8_lossy(&first).into_owned();
         let clamped = decoded.split('\n').map(clamp_line).collect::<Vec<_>>().join("\n");
         return Ok(ReadOutput::File {
             uri: file_url(path),
@@ -313,29 +482,69 @@ pub fn read_file(
         });
     }
 
-    if bytes.contains(&0) {
-        // Binary check over the consumed span (eof-always ⇒ whole file).
-        return Err(ReadError::Binary(resource.to_string()));
+    // Complete first chunk: the whole file is already in memory — page
+    // directly with eof=true (read-filesystem.ts:157-165).
+    if first.len() as u64 >= size {
+        let Some(result) = text_page(&first, true, paged_offset, paged_limit) else {
+            return Err(ReadError::Io("Read page did not settle for a complete first chunk".into()));
+        };
+        let binary = first[..result.consumed].contains(&0);
+        let lines = total_line_count(newline_count(&first), first.last().copied());
+        return make_text_page(
+            path,
+            resource,
+            result.entries,
+            result.offset,
+            result.next,
+            binary,
+            lines,
+        );
     }
-    let (entries, next) = text_page(&bytes, paged_offset, paged_limit)?;
-    let line_count = {
-        let decoded = String::from_utf8_lossy(&bytes);
-        let mut lines = decoded.split('\n').count() as u64;
-        if decoded.ends_with('\n') {
-            lines = lines.saturating_sub(1);
+
+    // The chunk loop (read-filesystem.ts:169-257): accumulate 256 KiB
+    // rope leaves until the requested line settles (or eof), then page
+    // over the selected span.
+    let mut leaves: Vec<Vec<u8>> = vec![first];
+    let mut total_bytes;
+    let mut total_lines;
+    {
+        let head = &leaves[0];
+        total_bytes = head.len() as u64;
+        total_lines = newline_count(head);
+    }
+    let mut ended = false;
+    loop {
+        let eof = ended || total_bytes >= size;
+        if total_lines >= paged_offset - 1 || eof {
+            let start = text_offset(&leaves, paged_offset - 1);
+            let selected = selected_from(&leaves, start);
+            if let Some(result) = text_page(&selected, eof, 1, paged_limit) {
+                let next = result.next.map(|n| paged_offset + n - 1);
+                let consumed = start + result.consumed;
+                let binary = consumed_is_binary(&leaves, consumed);
+                let last = leaves.last().and_then(|leaf| leaf.last().copied());
+                let lines = total_line_count(total_lines, last);
+                return make_text_page(
+                    path,
+                    resource,
+                    result.entries,
+                    paged_offset,
+                    next,
+                    binary,
+                    lines,
+                );
+            }
         }
-        lines
-    };
-    if entries.is_empty() && paged_offset != 1 {
-        return Err(ReadError::OffsetOutOfRange { offset: paged_offset, lines: line_count });
+
+        let next_chunk = read_at(total_bytes, FIRST_CHUNK)?;
+        if next_chunk.is_empty() {
+            ended = true;
+            continue;
+        }
+        total_lines += newline_count(&next_chunk);
+        total_bytes += next_chunk.len() as u64;
+        leaves.push(next_chunk);
     }
-    Ok(ReadOutput::TextPage {
-        content: entries.join("\n"),
-        mime: mime_from_path(path),
-        offset: paged_offset,
-        truncated: next.is_some(),
-        next,
-    })
 }
 
 // ---------------------------------------------------------------------------
