@@ -165,6 +165,13 @@ pub struct HomeView<'a> {
     /// `(prefix, body, remote)` — `None` in every golden state (the
     /// notice is live-only).
     pub update: Option<(String, String, bool)>,
+    /// RE-04 — the banner's fade-in inputs (fade-in-text.tsx): the
+    /// store clock and the notice's mount stamp (`clock − since`
+    /// drives the 200 ms left-to-right FadeInText sweep; a frozen
+    /// clock pins the frame, and golden fixtures carry no notice so
+    /// their bytes never move).
+    pub update_clock_ms: u64,
+    pub update_since_ms: Option<u64>,
 }
 
 /// The home route's geometry plan — ONE resolution shared by the old
@@ -458,6 +465,10 @@ pub fn render_home(store: &Store, theme: &crate::theme::ThemeStyles, size: (u16,
             .update_notice()
             .filter(|notice| !(notice.remote && notice.is_installed()))
             .map(|notice| (notice.prefix().to_owned(), notice.body(), notice.remote)),
+        // RE-04 — the banner's FadeInText inputs: the store clock and
+        // the notice's mount stamp (a frozen clock pins the fade).
+        update_clock_ms: store.clock(),
+        update_since_ms: store.update_since(),
     };
     let _ = theme;
     // F9 — the tab strip leads the HOME route while tabs are open (v2

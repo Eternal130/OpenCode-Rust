@@ -1313,7 +1313,29 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
         DialogKind::Update => {
             let state = store.update_dialog_state();
             let (title, detail) = crate::components::update::dialog_rows(&state);
-            let mut options = vec![SelectOption::titled(title, detail).muted_placeholder()];
+            // RE-04 — the busy states render the `<Spinner shimmer>`
+            // row (dialog-update.tsx:107/115): the 80 ms braille
+            // glyph + the label swept by the shimmer-text mask
+            // (spinner.tsx:45 — the glyph table advances with the
+            // store clock; a frozen clock pins both).
+            let busy = matches!(
+                state,
+                crate::components::update::UpdateDialogState::Checking
+                    | crate::components::update::UpdateDialogState::Installing(_)
+            );
+            let title = if busy {
+                format!(
+                    "{} {title}",
+                    crate::components::message::rows::spinner_frame(store.clock())
+                )
+            } else {
+                title
+            };
+            let mut row = SelectOption::titled(title, detail).muted_placeholder();
+            if busy {
+                row = row.with_shimmer(store.clock());
+            }
+            let mut options = vec![row];
             options.push(SelectOption::titled("Skip this version", "skip"));
             if let Some(confirm) = crate::components::update::dialog_confirm(&state) {
                 options.push(SelectOption::titled(confirm, "confirm"));
