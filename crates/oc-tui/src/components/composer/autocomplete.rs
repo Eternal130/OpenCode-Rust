@@ -604,11 +604,54 @@ pub struct FrecencyEntry {
 
 /// RE-03 — the `@file` frecency store (`prompt/frecency.tsx`): an
 /// in-memory `path → {frequency, lastOpen}` map loaded from (and
-/// rewritten back to) the state root's `frecency.jsonl`
-/// (storage.rs's `parse_frecency` is the read side).
+/// appended back to) the state root's `frecency.jsonl`
+/// (storage.rs's `parse_frecency` is the boot read side). When
+/// `file` is attached (production boot), every `update` APPENDS one
+/// JSONL line (the ref's fire-and-forget `appendText`) and the
+/// over-cap pass REWRITES the compacted top-1000 (`writeText`).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Frecency {
     pub data: std::collections::HashMap<String, FrecencyEntry>,
+    /// `<state-root>/frecency.jsonl` — the persistence sink (`None`
+    /// in unit tests / headless composers).
+    pub file: Option<std::path::PathBuf>,
+}
+
+/// `path.resolve(paths.cwd, filePath)` (frecency.tsx:58/75): the
+/// store keys files by their ABSOLUTE path — relative inputs join
+/// the process cwd, then `.`/`..` normalize lexically.
+#[must_use]
+pub fn resolve_frecency_path(cwd: &std::path::Path, file: &str) -> String {
+    use std::path::Component;
+    let joined = if std::path::Path::new(file).is_absolute() {
+        std::path::PathBuf::from(file)
+    } else {
+        cwd.join(file)
+    };
+    let mut normalized = std::path::PathBuf::new();
+    for component in joined.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized.to_string_lossy().into_owned()
+}
+
+/// Best-effort JSONL append (`appendText`): create-on-first-write.
+fn append_line(file: &std::path::Path, line: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut handle = std::fs::OpenOptions::new().create(true).append(true).open(file)?;
+    handle.write_all(line.as_bytes())
+}
+
+/// Atomic rewrite (`writeText` — tmp + rename like storage.rs's heal).
+fn rewrite_file(file: &std::path::Path, body: &str) -> std::io::Result<()> {
+    let temporary = file.with_extension(format!("frecency.{}.tmp", std::process::id()));
+    std::fs::write(&temporary, body).and_then(|()| std::fs::rename(&temporary, file))
 }
 
 impl Frecency {
@@ -625,7 +668,19 @@ impl Frecency {
                 Some((path, FrecencyEntry { frequency, last_open }))
             })
             .collect();
-        Self { data }
+        Self { data, file: None }
+    }
+
+    /// The runtime store (frecency.tsx:43-53's onMount): load
+    /// `<state-root>/frecency.jsonl` and attach it as the update
+    /// sink (the boot heal already rewrote the compacted file).
+    #[must_use]
+    pub fn open(state_root: &std::path::Path) -> Self {
+        let file = state_root.join(crate::storage::FILE_FRECENCY);
+        let text = std::fs::read_to_string(&file).unwrap_or_default();
+        let mut store = Self::from_parsed(&crate::storage::parse_frecency(&text));
+        store.file = Some(file);
+        store
     }
 
     /// `calculateFrecency` (frecency.tsx:33-36):
@@ -638,22 +693,44 @@ impl Frecency {
         entry.frequency as f64 / (1.0 + delta_days)
     }
 
-    /// `updateFrecency` (frecency.tsx:57-72): frequency+1 with a fresh
-    /// `lastOpen`, capped at [`MAX_FRECENCY_ENTRIES`][crate::storage::MAX_FRECENCY_ENTRIES]
-    /// by `lastOpen`-descending order when over the cap.
+    /// `updateFrecency` (frecency.tsx:57-72): the ABSOLUTE path
+    /// (`path.resolve(cwd, …)`) gets frequency+1 with a fresh
+    /// `lastOpen`; with a sink attached, one JSONL line is appended
+    /// (fire-and-forget) and a store over
+    /// [`MAX_FRECENCY_ENTRIES`][crate::storage::MAX_FRECENCY_ENTRIES]
+    /// is compacted by rewriting the `lastOpen`-desc top-1000.
     pub fn update(&mut self, path: &str, now_ms: i64) {
-        let entry = self
-            .data
-            .entry(path.to_owned())
-            .or_insert(FrecencyEntry { frequency: 0, last_open: 0 });
-        entry.frequency += 1;
-        entry.last_open = now_ms;
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/"));
+        let key = resolve_frecency_path(&cwd, path);
+        let frequency = self.data.get(&key).map_or(0, |entry| entry.frequency) + 1;
+        self.data.insert(key.clone(), FrecencyEntry { frequency, last_open: now_ms });
+        if let Some(file) = self.file.clone() {
+            let line = format!(
+                "{{\"path\":{},\"frequency\":{frequency},\"lastOpen\":{now_ms}}}\n",
+                serde_json::to_string(&key).unwrap_or_else(|_| "\"\"".into())
+            );
+            let _ = append_line(&file, &line);
+        }
         if self.data.len() > crate::storage::MAX_FRECENCY_ENTRIES {
             let mut sorted: Vec<(String, FrecencyEntry)> =
                 self.data.iter().map(|(k, v)| (k.clone(), *v)).collect();
             sorted.sort_by_key(|(_, entry)| std::cmp::Reverse(entry.last_open));
             sorted.truncate(crate::storage::MAX_FRECENCY_ENTRIES);
-            self.data = sorted.into_iter().collect();
+            self.data = sorted.iter().cloned().collect();
+            if let Some(file) = self.file.clone() {
+                let body = sorted
+                    .iter()
+                    .map(|(path, entry)| {
+                        format!(
+                            "{{\"path\":{},\"frequency\":{},\"lastOpen\":{}}}\n",
+                            serde_json::to_string(path).unwrap_or_else(|_| "\"\"".into()),
+                            entry.frequency,
+                            entry.last_open
+                        )
+                    })
+                    .collect::<String>();
+                let _ = rewrite_file(&file, &body);
+            }
         }
     }
 
@@ -665,8 +742,10 @@ impl Frecency {
         let mut text = String::new();
         for (path, entry) in &self.data {
             text.push_str(&format!(
-                "{{\"path\":\"{path}\",\"frequency\":{},\"lastOpen\":{}}}\n",
-                entry.frequency, entry.last_open
+                "{{\"path\":{},\"frequency\":{},\"lastOpen\":{}}}\n",
+                serde_json::to_string(path).unwrap_or_else(|_| "\"\"".into()),
+                entry.frequency,
+                entry.last_open
             ));
         }
         text
@@ -1076,20 +1155,110 @@ mod tests {
     #[test]
     fn frecency_update_increments_and_reloads() {
         let mut frecency = Frecency::default();
+        let key = resolve_frecency_path(&std::env::current_dir().unwrap_or_default(), "a.rs");
         frecency.update("a.rs", 1_000);
-        assert_eq!(frecency.data["a.rs"], FrecencyEntry { frequency: 1, last_open: 1_000 });
+        assert_eq!(frecency.data[&key], FrecencyEntry { frequency: 1, last_open: 1_000 });
         frecency.update("a.rs", 2_000);
-        assert_eq!(frecency.data["a.rs"], FrecencyEntry { frequency: 2, last_open: 2_000 });
+        assert_eq!(frecency.data[&key], FrecencyEntry { frequency: 2, last_open: 2_000 });
 
         let parsed = crate::storage::parse_frecency(
-            "{\"path\":\"a.rs\",\"frequency\":5,\"lastOpen\":9000}\n{\"path\":\"a.rs\",\"frequency\":6,\"lastOpen\":9500}\n",
+            "{\"path\":\"/abs/a.rs\",\"frequency\":5,\"lastOpen\":9000}\n{\"path\":\"/abs/a.rs\",\"frequency\":6,\"lastOpen\":9500}\n",
         );
         let reloaded = Frecency::from_parsed(&parsed);
         assert_eq!(
-            reloaded.data["a.rs"],
+            reloaded.data["/abs/a.rs"],
             FrecencyEntry { frequency: 6, last_open: 9500 },
             "last line wins"
         );
         assert!(reloaded.encode_jsonl().contains("\"frequency\":6"));
+    }
+
+    /// RE-03 — keys are ABSOLUTE (`path.resolve(cwd, filePath)`,
+    /// frecency.tsx:58/75): relative joins the cwd, `.`/`..`
+    /// normalize, absolute stays.
+    #[test]
+    fn frecency_keys_are_absolute() {
+        assert_eq!(
+            resolve_frecency_path(std::path::Path::new("/proj"), "src/main.rs"),
+            "/proj/src/main.rs"
+        );
+        assert_eq!(
+            resolve_frecency_path(std::path::Path::new("/proj"), "./src/../lib/a.rs"),
+            "/proj/lib/a.rs"
+        );
+        assert_eq!(
+            resolve_frecency_path(std::path::Path::new("/proj"), "/elsewhere/a.rs"),
+            "/elsewhere/a.rs"
+        );
+        let mut frecency = Frecency::default();
+        frecency.update("src/main.rs", 5_000);
+        let key = resolve_frecency_path(&std::env::current_dir().unwrap(), "src/main.rs");
+        assert_eq!(frecency.data.get(&key).map(|entry| entry.frequency), Some(1));
+    }
+
+    /// RE-03 — persistence: `update` APPENDS one JSONL line per
+    /// update (the ref's fire-and-forget `appendText`,
+    /// frecency.tsx:61) with the absolute key, and `open` reloads it.
+    #[test]
+    fn frecency_update_appends_and_reloads_across_restart() {
+        let dir =
+            std::env::temp_dir().join(format!("oc-tui-frecency-append-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+
+        let mut frecency = Frecency::open(&dir);
+        frecency.update("src/hot.rs", 1_000);
+        frecency.update("src/hot.rs", 2_000);
+        let file = dir.join(crate::storage::FILE_FRECENCY);
+        let text = std::fs::read_to_string(&file).expect("appended frecency.jsonl");
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 2, "one append per update");
+        let key = serde_json::to_string(&resolve_frecency_path(
+            &std::env::current_dir().unwrap(),
+            "src/hot.rs",
+        ))
+        .unwrap();
+        assert!(lines[0].contains(&key), "absolute key: {}", lines[0]);
+        assert!(lines[0].ends_with("\"frequency\":1,\"lastOpen\":1000}"));
+        assert!(lines[1].ends_with("\"frequency\":2,\"lastOpen\":2000}"));
+
+        // Restart: the store reloads (last line wins per path).
+        let reloaded = Frecency::open(&dir);
+        let hot = resolve_frecency_path(&std::env::current_dir().unwrap(), "src/hot.rs");
+        assert_eq!(
+            reloaded.data.get(&hot),
+            Some(&FrecencyEntry { frequency: 2, last_open: 2_000 }),
+            "restart keeps the recorded frecency"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// RE-03 — compaction at >1000 (frecency.tsx:63-71): the 1001st
+    /// update rewrites the file with the `lastOpen`-descending top
+    /// 1000 (the oldest entry dropped).
+    #[test]
+    fn frecency_compacts_the_file_at_1001() {
+        let dir = std::env::temp_dir().join(format!("oc-tui-frecency-cap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+
+        let mut frecency = Frecency::open(&dir);
+        for index in 0..crate::storage::MAX_FRECENCY_ENTRIES {
+            frecency.update(&format!("/old/file-{index}.rs"), 1_000 + index as i64);
+        }
+        let file = dir.join(crate::storage::FILE_FRECENCY);
+        let before = std::fs::read_to_string(&file).expect("appends");
+        assert_eq!(before.lines().count(), crate::storage::MAX_FRECENCY_ENTRIES);
+
+        // The 1001st distinct path pushes the store over the cap →
+        // the file is REWRITTEN compacted (newest 1000 kept).
+        frecency.update("/fresh/new.rs", 5_000_000);
+        let after = std::fs::read_to_string(&file).expect("compacted frecency.jsonl");
+        let lines: Vec<&str> = after.lines().collect();
+        assert_eq!(lines.len(), crate::storage::MAX_FRECENCY_ENTRIES, "compacted to the cap");
+        assert!(after.contains("/fresh/new.rs"), "the newest survives");
+        assert!(!after.contains("/old/file-0.rs"), "the oldest drops");
+        assert_eq!(frecency.data.len(), crate::storage::MAX_FRECENCY_ENTRIES);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
