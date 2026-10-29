@@ -1943,8 +1943,12 @@ mod tests {
         // (the port's insert path — no chip replacement).
         assert_eq!(state.draft.text, "@sr@src/main.rs ");
         let before = autocomplete::now_ms();
+        let key = autocomplete::resolve_frecency_path(
+            &std::env::current_dir().unwrap_or_default(),
+            "src/main.rs",
+        );
         assert_eq!(
-            state.autocomplete.frecency.data.get("src/main.rs"),
+            state.autocomplete.frecency.data.get(&key),
             Some(&autocomplete::FrecencyEntry { frequency: 1, last_open: before }),
             "accept records frequency+1 at the wall clock"
         );
@@ -1960,7 +1964,7 @@ mod tests {
         }];
         state.autocomplete.filtered_len = 1;
         let _ = state.accept_autocomplete();
-        assert_eq!(state.autocomplete.frecency.data["src/main.rs"].frequency, 2);
+        assert_eq!(state.autocomplete.frecency.data[&key].frequency, 2);
     }
 
     /// RD-05 — the chips delete atomically (backspace over the chip
