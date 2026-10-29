@@ -73,6 +73,30 @@ fn default_format() -> String {
     "markdown".into()
 }
 
+/// AUD-19②: ref validates `timeout` against the input schema
+/// (webfetch.ts:29 — Finite, > 0, ≤ MAX_TIMEOUT_SECONDS) instead of
+/// clamping; out-of-range values fail the decode.
+fn resolve_timeout(timeout: Option<u64>) -> Result<u64, String> {
+    let timeout = timeout.unwrap_or(DEFAULT_TIMEOUT_SECONDS);
+    if timeout == 0 || timeout > MAX_TIMEOUT_SECONDS {
+        return Err(format!(
+            "Invalid arguments: timeout must be a number greater than 0 and at most {MAX_TIMEOUT_SECONDS}"
+        ));
+    }
+    Ok(timeout)
+}
+
+/// AUD-19①: a declared Content-Length above the cap rejects without
+/// downloading (http-body.ts:11-15). Non-numeric headers parse to `None`
+/// (ref's NaN → undefined) and fall through to the streamed cap.
+fn content_length_exceeds(headers: &reqwest::header::HeaderMap, maximum: usize) -> bool {
+    headers
+        .get("content-length")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .is_some_and(|declared| declared > maximum as u64)
+}
+
 async fn fetch(url: &str, format: &str, timeout: u64) -> Result<(Vec<u8>, String), String> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(timeout))
@@ -121,6 +145,11 @@ async fn fetch(url: &str, format: &str, timeout: u64) -> Result<(Vec<u8>, String
     }
     if !is_textual_mime(&mime) {
         return Err(format!("Unsupported fetched file content type: {mime}"));
+    }
+    // AUD-19①: reject on the declared Content-Length before reading the
+    // body (http-body.ts:11-15) — no streaming to the cap first.
+    if content_length_exceeds(response.headers(), MAX_BYTES) {
+        return Err(format!("Response too large (exceeds {MAX_BYTES} byte limit)"));
     }
     let mut body = Vec::new();
     let mut response = response;
@@ -185,8 +214,9 @@ impl ToolExecuteWithContext for WebFetchExecute {
                     cause: Some(permission_cause(&error)),
                 })?;
 
-            let timeout =
-                input.timeout.unwrap_or(DEFAULT_TIMEOUT_SECONDS).clamp(1, MAX_TIMEOUT_SECONDS);
+            // AUD-19②: schema-style validation, never clamping
+            // (webfetch.ts:29).
+            let timeout = resolve_timeout(input.timeout).map_err(ToolFailure::message)?;
             let (body, content_type) =
                 fetch(&input.url, &input.format, timeout).await.map_err(|error| ToolFailure {
                     message: format!("Unable to fetch {}", input.url),
@@ -264,5 +294,39 @@ mod tests {
     fn tool_webfetch_accept_headers() {
         assert!(accept_header("markdown").starts_with("text/markdown;q=1.0"));
         assert!(accept_header("html").starts_with("text/html;q=1.0"));
+    }
+
+    #[test]
+    fn tool_webfetch_timeout_validates_not_clamps() {
+        // AUD-19②: ref's schema (webfetch.ts:29) rejects instead of
+        // clamping — 0 and > MAX_TIMEOUT_SECONDS fail, 1/MAX/default pass.
+        assert_eq!(resolve_timeout(None), Ok(DEFAULT_TIMEOUT_SECONDS));
+        assert_eq!(resolve_timeout(Some(1)), Ok(1));
+        assert_eq!(resolve_timeout(Some(MAX_TIMEOUT_SECONDS)), Ok(MAX_TIMEOUT_SECONDS));
+        assert!(resolve_timeout(Some(0)).is_err());
+        assert!(resolve_timeout(Some(MAX_TIMEOUT_SECONDS + 1)).is_err());
+        assert!(resolve_timeout(Some(u64::MAX)).is_err());
+    }
+
+    #[test]
+    fn tool_webfetch_content_length_precheck() {
+        // AUD-19①: a declared Content-Length over the cap rejects without
+        // downloading (http-body.ts:11-15); under/at the cap, absent or
+        // non-numeric headers fall through to the streamed cap.
+        let headers = |value: &str| {
+            let mut map = reqwest::header::HeaderMap::new();
+            map.insert(
+                "content-length",
+                reqwest::header::HeaderValue::from_str(value).expect("header value"),
+            );
+            map
+        };
+        assert!(content_length_exceeds(&headers(&(MAX_BYTES + 1).to_string()), MAX_BYTES));
+        assert!(content_length_exceeds(&headers("999999999999"), MAX_BYTES));
+        assert!(!content_length_exceeds(&headers(&MAX_BYTES.to_string()), MAX_BYTES));
+        assert!(!content_length_exceeds(&headers("1024"), MAX_BYTES));
+        let mut empty = reqwest::header::HeaderMap::new();
+        empty.insert("x-other", reqwest::header::HeaderValue::from_static("1"));
+        assert!(!content_length_exceeds(&empty, MAX_BYTES));
     }
 }

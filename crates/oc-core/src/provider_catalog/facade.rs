@@ -995,8 +995,15 @@ pub fn custom_language_model(
     // the openai-compatible package, so a custom provider pointed at the
     // kilo/nvidia/llmgateway gate URLs gets the same injected sets
     // (spread under the model overlay, which wins per key like the ref
-    // spread order plugin → model merge). Config-defined providers are
-    // explicitly enabled (never the Disabled gate skip).
+    // spread order plugin → model merge).
+    //
+    // F-10a TODO(activation-gate): `Activation::Enabled` is hardcoded
+    // because config-defined custom providers have no catalog snapshot —
+    // a disabled provider config never reaches binding in the current
+    // call graph, so the llmgateway `activation !== Disabled` gate
+    // (plugin/provider/llmgateway.ts:12-15) is moot here. If a path ever
+    // binds a disabled custom provider, thread the real activation
+    // through `FacadeContext` instead.
     let plugin_headers = plugin_provider_headers(
         "@opencode/ai/providers/openai-compatible",
         Some(base_url),
@@ -1140,8 +1147,12 @@ fn custom_native_language_model(
     let body = merge_json_records(&[provider_body.as_ref(), model_body.as_ref()]);
     // AUD-10②: same provider header plugins as the catalog lane — the
     // cerebras package match (and the openai-compatible gate URLs) apply
-    // to custom native bindings too; config-defined providers count as
-    // enabled.
+    // to custom native bindings too.
+    //
+    // F-10a TODO(activation-gate): same as the openai-compatible custom
+    // lane above — config-defined providers carry no activation state;
+    // thread the real activation through `FacadeContext` if a disabled
+    // custom provider can ever reach binding.
     let plugin_headers = plugin_provider_headers(
         &package,
         base_url.as_deref(),

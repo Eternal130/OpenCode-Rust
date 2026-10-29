@@ -733,7 +733,7 @@ pub async fn authorize(input: AuthorizeInput) -> Result<Authorization, String> {
                 let url = reqwest::Url::parse(&format!("http://127.0.0.1{}", request.target))
                     .map_err(|error| format!("invalid OAuth callback request: {error}"))?;
                 if url.path() != expected_path {
-                    write_http_response(&mut stream, 404, "Not found").await;
+                    write_text_response(&mut stream, 404, "Not found").await;
                     continue;
                 }
                 let query: BTreeMap<String, String> = url
@@ -741,20 +741,33 @@ pub async fn authorize(input: AuthorizeInput) -> Result<Authorization, String> {
                     .map(|(key, value)| (key.into_owned(), value.into_owned()))
                     .collect();
                 if let Some(error) = query.get("error_description").or_else(|| query.get("error")) {
-                    write_http_response(
+                    // AUD-20①: ref answers the browser with the branded
+                    // HTML error card (`OauthCallbackPage.error(reason,
+                    // {provider})`, oauth.ts:365-371 + oauth/page.ts).
+                    write_html_response(
                         &mut stream,
                         400,
-                        &format!("Authorization failed: {error}"),
+                        &super::oauth_page::error(error, Some(&name)),
                     )
                     .await;
                     return Err(error.clone());
                 }
                 if query.get("state").map(String::as_str) != Some(expected_state.as_str()) {
-                    write_http_response(&mut stream, 400, "OAuth state mismatch").await;
+                    write_html_response(
+                        &mut stream,
+                        400,
+                        &super::oauth_page::error("OAuth state mismatch", Some(&name)),
+                    )
+                    .await;
                     return Err("OAuth state mismatch".to_owned());
                 }
                 let Some(code) = query.get("code") else {
-                    write_http_response(&mut stream, 400, "Missing authorization code").await;
+                    write_html_response(
+                        &mut stream,
+                        400,
+                        &super::oauth_page::error("Missing authorization code", Some(&name)),
+                    )
+                    .await;
                     return Err("Missing authorization code".to_owned());
                 };
                 // exchange, then answer the browser (the page waits for
@@ -771,10 +784,10 @@ pub async fn authorize(input: AuthorizeInput) -> Result<Authorization, String> {
                 .await;
                 match tokens {
                     Ok(tokens) => {
-                        write_http_response(
+                        write_html_response(
                             &mut stream,
                             200,
-                            &format!("Authorized {name}. You can close this window."),
+                            &super::oauth_page::success(Some(&name)),
                         )
                         .await;
                         return Ok(to_credential_value(
@@ -785,10 +798,10 @@ pub async fn authorize(input: AuthorizeInput) -> Result<Authorization, String> {
                         ));
                     }
                     Err(error) => {
-                        write_http_response(
+                        write_html_response(
                             &mut stream,
                             400,
-                            &format!("Token exchange failed: {error}"),
+                            &super::oauth_page::error(&error, Some(&name)),
                         )
                         .await;
                         return Err(error);
@@ -1011,30 +1024,61 @@ async fn read_http_request(stream: &mut tokio::net::TcpStream) -> Result<Callbac
     Ok(CallbackRequest { target })
 }
 
-async fn write_http_response(stream: &mut tokio::net::TcpStream, status: u16, body: &str) {
+async fn write_text_response(stream: &mut tokio::net::TcpStream, status: u16, body: &str) {
+    write_raw_response(stream, status, "text/plain", body).await;
+}
+
+/// AUD-20①: the loopback callback answers the browser with the branded
+/// OAuth page (`Content-Type: text/html`, ref oauth.ts:365-371/377-388).
+async fn write_html_response(stream: &mut tokio::net::TcpStream, status: u16, page: &str) {
+    write_raw_response(stream, status, "text/html", page).await;
+}
+
+async fn write_raw_response(
+    stream: &mut tokio::net::TcpStream,
+    status: u16,
+    content_type: &str,
+    body: &str,
+) {
     use tokio::io::AsyncWriteExt as _;
+    let response = raw_response(status, content_type, body);
+    let _ = stream.write_all(response.as_bytes()).await;
+    let _ = stream.shutdown().await;
+}
+
+fn raw_response(status: u16, content_type: &str, body: &str) -> String {
     let reason = match status {
         200 => "OK",
         400 => "Bad Request",
         404 => "Not Found",
         _ => "Error",
     };
-    let page = format!(
-        "<!doctype html><html><head><meta charset=\"utf-8\"><title>opencode MCP OAuth</title>\
-         <style>body{{font-family:system-ui;margin:3rem auto;max-width:32rem;text-align:center}}</style>\
-         </head><body><h2>opencode</h2><p>{body}</p></body></html>",
-    );
-    let response = format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{page}",
-        page.len()
-    );
-    let _ = stream.write_all(response.as_bytes()).await;
-    let _ = stream.shutdown().await;
+    format!(
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn oauth_callback_answers_text_html_branded_page() {
+        // AUD-20①: the success callback carries Content-Type: text/html
+        // and the OauthCallbackPage.success body (ref oauth.ts:377-388).
+        let page = super::super::oauth_page::success(Some("MCP"));
+        let wire = raw_response(200, "text/html", &page);
+        assert!(wire.starts_with("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n"));
+        assert!(wire.ends_with(&page));
+        assert!(page.starts_with("<!doctype html>"));
+        assert!(page.contains("<h1 class=\"headline\" id=\"oc-headline\">Authorization successful</h1>"));
+        let page = super::super::oauth_page::error("state mismatch", Some("MCP"));
+        let wire = raw_response(400, "text/html", &page);
+        assert!(wire.starts_with("HTTP/1.1 400 Bad Request\r\nContent-Type: text/html\r\n"));
+        assert!(page.contains("Authorization failed"));
+        assert!(page.contains("state mismatch"));
+    }
 
     #[test]
     fn credential_round_trip_keeps_the_client_and_expiry() {

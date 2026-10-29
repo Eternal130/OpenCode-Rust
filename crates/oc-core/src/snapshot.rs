@@ -399,6 +399,14 @@ impl GitSnapshotStore {
         from: &SnapshotId,
         to: &SnapshotId,
     ) -> Result<Vec<RelativePath>, SnapshotError> {
+        // F-16a: ref's `files` resolves the repository first
+        // (snapshot.ts:130-137 comparison → `git.repo` discover/create);
+        // on a non-git location that resolution FAILS (`failure("files",
+        // …)`) — it never initializes a bare store. Gate on the source
+        // repo before `open_repo` so a bogus call cannot create one.
+        if self.source_repo().is_none() {
+            return Err(operation_error("files", "Project is not a Git repository"));
+        }
         let repo = self.open_repo().map_err(|error| operation_error("files", error.message()))?;
         let changed = self.tree_diff_paths(&repo, from.as_str(), to.as_str())?;
         Ok(self.filter_ignored(changed).into_iter().map(RelativePath::parse).collect())
@@ -416,6 +424,12 @@ impl GitSnapshotStore {
     ) -> Result<Vec<FileDiff>, SnapshotError> {
         if let Some([]) = paths {
             return Ok(Vec::new());
+        }
+        // F-16a: same repository-resolution gate as `files` — ref's
+        // `comparison("diff", …)` fails on a non-git location
+        // (snapshot.ts:155-163) before any store access.
+        if self.source_repo().is_none() {
+            return Err(operation_error("diff", "Project is not a Git repository"));
         }
         let repo = self.open_repo().map_err(|error| operation_error("diff", error.message()))?;
         let from_tree = find_tree(&repo, from.as_str())?;

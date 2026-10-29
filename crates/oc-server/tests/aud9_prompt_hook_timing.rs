@@ -195,3 +195,85 @@ async fn unknown_skill_rejects_submit_with_400() {
     assert!(inbox.is_empty(), "no inbox row may be admitted for a rejected prompt");
 }
 
+
+// AUD-18: ref rejects a malformed sessionID path parameter with 400
+// BEFORE any table lookup. Two layers fire, same as ref: the schema
+// layer decodes the param (`params: { sessionID: Session.ID }`,
+// protocol groups/session.ts:285-286 — the httpapi decode error) and,
+// behind it, the location middleware's own decode
+// (server/src/location.ts:49-53 → InvalidRequestError{message:"Invalid
+// session ID", field:"sessionID"}). The port mirrors both: the
+// generated validation layer plus the `session_location` guard. Only a
+// well-formed (`ses`-prefixed) but missing id reaches the 404.
+#[tokio::test]
+async fn malformed_session_id_is_400_not_404() {
+    let server = boot().await;
+
+    let response = support::request(
+        server.addr,
+        "GET",
+        "/api/session/not-a-session-id",
+        &[],
+        b"",
+    )
+    .await
+    .expect("raw get");
+    assert_eq!(response.status, 400, "body: {}", response.text());
+    let body = response.json();
+    assert_eq!(body["_tag"], "InvalidRequestError", "body: {body}");
+    assert!(
+        body["message"].as_str().unwrap_or("").contains("starting with \"ses\"")
+            || body["message"] == "Invalid session ID",
+        "decode error surfaces: {body}"
+    );
+
+    let response = support::request(
+        server.addr,
+        "GET",
+        "/api/session/ses_0000000000000000000000000000000000000000000000000000000000000000",
+        &[],
+        b"",
+    )
+    .await
+    .expect("raw get");
+    assert_eq!(response.status, 404, "well-formed-but-missing stays 404: {}", response.text());
+}
+
+// F-09a: ref reconciles the message id BEFORE prepare
+// (session/session.ts:151-160) — a duplicate-id retry answers from the
+// existing row without dispatching the `session.prompt` hook a second
+// time.
+#[tokio::test]
+async fn duplicate_id_retry_does_not_refire_the_prompt_hook() {
+    let server = boot().await;
+    let session_id = create_session(&server.client).await;
+    let services = location_services(&server, &session_id).await;
+    let fires = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = std::sync::Arc::clone(&fires);
+    let _registration = services
+        .graph
+        .hooks
+        .register_session_prompt(
+            fn_hook(move |_event: &mut SessionPromptEvent| {
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            }),
+            HookOptions::default(),
+        )
+        .await;
+
+    let body = serde_json::json!({ "text": "once", "id": "msg_dup_retry", "resume": false });
+    let first = prompt_raw(server.addr, &session_id, &body).await;
+    assert_eq!(first.status, 200, "body: {}", first.text());
+    let second = prompt_raw(server.addr, &session_id, &body).await;
+    assert_eq!(second.status, 200, "body: {}", second.text());
+    assert_eq!(
+        fires.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the hook fires exactly once for a retried duplicate id"
+    );
+    assert_eq!(
+        first.json()["data"]["id"], second.json()["data"]["id"],
+        "the retry answers from the existing inbox row"
+    );
+}

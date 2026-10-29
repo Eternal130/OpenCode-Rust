@@ -125,6 +125,18 @@ pub fn invalid_request_kind(message: impl Into<String>, kind: impl Into<String>)
     )
 }
 
+/// `InvalidRequestError` 400 with `field` but no `kind` — the shape ref
+/// uses where the error is constructed directly rather than from a schema
+/// parse (e.g. server/src/location.ts:51-53's `Invalid session ID`).
+#[must_use]
+pub fn invalid_request_message_field(message: impl Into<String>, field: impl Into<String>) -> ApiError {
+    tagged(
+        "InvalidRequestError",
+        StatusCode::BAD_REQUEST,
+        json!({ "message": message.into(), "field": field.into() }),
+    )
+}
+
 /// `InvalidRequestError` 400 with `kind` + `field`.
 #[must_use]
 pub fn invalid_request_field(
