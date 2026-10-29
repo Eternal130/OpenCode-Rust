@@ -122,6 +122,7 @@ pub struct SlashRegistry {
 /// session" description outranks `/resume`'s display-only match).
 pub const V2_SLASH: &[(&str, &str)] = &[
     ("agents", "Switch agent"),
+    ("btw", "Ask a side question"),
     ("cd", "Change working directory"),
     ("clear", "Clear session"),
     ("compact", "Compact session"),
@@ -177,6 +178,7 @@ pub const V2_SLASH: &[(&str, &str)] = &[
 /// absent").
 pub const SLASH_COMMANDS: &[(&str, &str)] = &[
     ("agents", "agent.list"),
+    ("btw", "session.aside"),
     ("clear", "session.clear"),
     ("compact", "session.compact"),
     ("connect", "provider.connect"),
@@ -225,7 +227,8 @@ pub const SLASH_COMMANDS: &[(&str, &str)] = &[
 /// `/name`, run with the remaining text as `input`). v2's table:
 /// `/cd` (prompt/index.tsx:269) and `/rename`
 /// (routes/session/index.tsx:899).
-pub const ARGUMENT_SLASHES: &[(&str, &str)] = &[("cd", "session.cd"), ("rename", "session.rename")];
+pub const ARGUMENT_SLASHES: &[(&str, &str)] =
+    &[("cd", "session.cd"), ("rename", "session.rename"), ("btw", "session.aside")];
 
 /// `argumentSlash(input, keymapCommands())` (prompt/index.tsx:173-
 /// 183): the draft's `/name` head against the argument-taking table.
@@ -1260,5 +1263,22 @@ mod tests {
         assert!(!after.contains("/old/file-0.rs"), "the oldest drops");
         assert_eq!(frecency.data.len(), crate::storage::MAX_FRECENCY_ENTRIES);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod btw_tests {
+    use super::*;
+
+    /// RE-13: `/btw` takes arguments (btw.tsx:57 — `slash: { name:
+    /// "btw", arguments: true }`): the head intercepts the submit
+    /// with the remaining text as `input`.
+    #[test]
+    fn btw_is_an_argument_slash() {
+        assert_eq!(argument_slash("/btw what is this?"), Some(("session.aside", " what is this?")));
+        assert_eq!(argument_slash("/btw"), Some(("session.aside", "")));
+        // The registry + display table carry the row.
+        assert!(SLASH_COMMANDS.contains(&("btw", "session.aside")));
+        assert!(V2_SLASH.contains(&("btw", "Ask a side question")));
     }
 }

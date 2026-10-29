@@ -186,6 +186,14 @@ pub static PALETTE_COMMANDS: &[PaletteCommand] = &[
         group: "Session",
         bindings: &[],
     },
+    // RE-13 — `session.aside` (`/btw`, feature-plugins/prompt/btw.
+    // tsx:51-56): one-shot side answer, palette-listed in Session.
+    PaletteCommand {
+        command: "session.aside",
+        title: "Ask a side question",
+        group: "Session",
+        bindings: &[],
+    },
     PaletteCommand {
         command: "session.rename",
         title: "Rename session",
@@ -620,9 +628,11 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
     match kind {
         DialogKind::CommandPalette => palette_props(store),
         DialogKind::ThemeList => theme_list_props(store),
-        DialogKind::Help | DialogKind::SessionRename { .. } | DialogKind::WorktreeName => {
-            SelectProps::new("", Vec::new())
-        }
+        DialogKind::Help
+        | DialogKind::SessionRename { .. }
+        | DialogKind::WorktreeName
+        | DialogKind::BtwPrompt
+        | DialogKind::BtwAnswer { .. } => SelectProps::new("", Vec::new()),
         DialogKind::Plugin { id } => {
             // The delegation payload: plugin-supplied options at open
             // time. Rows-only content returns empty props (the dialog
@@ -2751,6 +2761,27 @@ impl CommandDispatcher for StoreDispatcher {
                     .replace_dialog(DialogKind::WorkingDirectory { directory }, DialogSize::Medium);
                 Dispatch::Handled
             }
+            // RE-13 — `session.aside` (`/btw`, btw.tsx:58-78): the
+            // one-shot side answer. Session route required (the
+            // route's context is the generate input); an argument
+            // runs directly, the bare command opens the question
+            // prompt (`ctx.ui.dialog.prompt`, btw.tsx:64-65).
+            "session.aside" => {
+                let Route::Session { session_id } = store.route() else {
+                    store.clear_dialogs();
+                    store.toast_show(crate::components::toast::ToastOptions {
+                        message: "Open a session first".to_owned(),
+                        variant: "warning",
+                        ..crate::components::toast::ToastOptions::info("")
+                    });
+                    return Dispatch::Handled;
+                };
+                match args.map(str::trim).filter(|text| !text.is_empty()) {
+                    Some(question) => store.btw_ask(&session_id, question),
+                    None => store.replace_dialog(DialogKind::BtwPrompt, DialogSize::Medium),
+                }
+                Dispatch::Handled
+            }
             // `session.toggle.exploration_grouping` (index.tsx:
             // 1049-1061): flip the transcript's grouping flag.
             "session.toggle.exploration_grouping" => {
@@ -2870,13 +2901,12 @@ impl CommandDispatcher for StoreDispatcher {
             // The registered-but-surfaceless families (v2 parity: the
             // keymap consumes the stroke; no component answers):
             // which-key panel (the keymap addon's surface), scrap/
-            // debug panel, service restart, aside mode, verbosity
+            // debug panel, service restart, verbosity
             // model, plugin install flow, the integrations + plugin
             // dialog actions.
             "app.debug"
             | "app.scrap"
             | "service.restart"
-            | "session.aside"
             | "plugins.install"
             | "dialog.integration.rename"
             | "dialog.integration.delete"
@@ -4649,5 +4679,69 @@ mod tests {
             [("helloworld".to_owned(), false), ("helloworld".to_owned(), true)],
             "enable → disable → enable round trip on the toggle sink"
         );
+    }
+
+    // -- RE-13: /btw (session.aside) --------------------------------
+    /// The dispatch is no longer swallowed (the surfaceless bucket
+    /// is gone): the session route + argument runs the one-shot
+    /// generate through the session-action sink, the bare command
+    /// opens the question prompt, and the home route warns.
+    #[test]
+    fn session_aside_dispatch_runs_generate_prompts_and_warns_off_session() {
+        use crate::store::{RecordingSessionActionSink, SessionActionCall};
+        let store = Store::new(Runtime::new());
+        let sink = std::rc::Rc::new(RecordingSessionActionSink::default());
+        store.set_session_action_sink(sink.clone());
+        let mut dispatcher = StoreDispatcher;
+
+        // Home route: v2's "Open a session first" warning toast
+        // (btw.tsx:60-62) — nothing runs.
+        assert_eq!(dispatcher.dispatch(&store, "session.aside", None), Dispatch::Handled);
+        assert!(sink.calls.borrow().is_empty(), "no generate off a session route");
+        let toast = store.toasts().current().cloned().expect("the warning toast");
+        assert_eq!(toast.message, "Open a session first");
+        assert_eq!(toast.variant, "warning");
+        store.toast_dismiss();
+
+        // Session route, NO argument: the fallback question prompt
+        // (btw.tsx:64-65 — ctx.ui.dialog.prompt's title/placeholder).
+        store.open_tab("s1", Some("S1".to_owned()));
+        assert!(matches!(store.route(), Route::Session { .. }));
+        assert_eq!(dispatcher.dispatch(&store, "session.aside", None), Dispatch::Handled);
+        assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::BtwPrompt));
+        assert!(sink.calls.borrow().is_empty(), "the prompt defers the generate");
+        store.clear_dialogs();
+
+        // Session route WITH the argument: the sink's `aside` call
+        // carries the instructions-joined prompt (btw.tsx:17-21, 69).
+        assert_eq!(
+            dispatcher.dispatch(&store, "session.aside", Some("what did we do?")),
+            Dispatch::Handled
+        );
+        assert_eq!(store.btw_pending(), 1, "the footer spinner arms");
+        let calls = sink.calls.borrow().clone();
+        match calls.as_slice() {
+            [SessionActionCall::Aside { session_id, question, prompt }] => {
+                assert_eq!(session_id, "s1");
+                assert_eq!(question, "what did we do?");
+                assert!(
+                    prompt.starts_with("The user is asking a quick side question"),
+                    "the fixed instructions prelude rides the prompt"
+                );
+                assert!(prompt.ends_with("what did we do?"));
+            }
+            other => panic!("unexpected sink calls {other:?}"),
+        }
+
+        // The result lands as the Answer dialog (btw.tsx:70-75).
+        store.btw_answer("what did we do?", "you ported /btw");
+        assert_eq!(store.btw_pending(), 0, "the spinner drops");
+        match &store.top_dialog().unwrap().kind {
+            DialogKind::BtwAnswer { question, answer } => {
+                assert_eq!(question, "what did we do?");
+                assert_eq!(answer, "you ported /btw");
+            }
+            other => panic!("unexpected dialog {other:?}"),
+        }
     }
 }

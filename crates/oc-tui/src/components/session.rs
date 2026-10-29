@@ -1324,6 +1324,13 @@ fn composer_footer_hints(
         } else {
             let mut hints = store.plugin_footer_hints();
             hints.extend(store.plugin_slot_rows("prompt.footer"));
+            // RE-13: `/btw`'s pending spinner (btw.tsx:28-40 — the
+            // `prompt.footer.status` slot's `<Spinner>/btw</Spinner>`
+            // while the side answer generates).
+            if store.btw_pending() > 0 {
+                let frame = crate::components::message::rows::spinner_frame(store.clock());
+                hints.push(format!("{frame} /btw"));
+            }
             hints
         },
         // Wave A: the interrupt hint while the session's turn runs
@@ -2127,6 +2134,39 @@ mod tests {
         let composer = store.composer("s1");
         let hints = composer_footer_hints(&store, "s1", &composer, "");
         assert!(hints.plugin_hints.contains(&"pf row".to_owned()), "{:?}", hints.plugin_hints);
+    }
+
+    /// RE-13: `/btw`'s pending spinner (btw.tsx:28-40) — the
+    /// `prompt.footer.status` segment shows `⠋ /btw` while the side
+    /// answer generates and drops when it lands.
+    #[test]
+    fn btw_pending_spinner_rides_the_composer_footer_status() {
+        let store = Store::new(Runtime::new());
+        store.open_tab("s1", None);
+        let composer = store.composer("s1");
+
+        let idle = composer_footer_hints(&store, "s1", &composer, "");
+        assert!(
+            idle.plugin_hints.iter().all(|hint| !hint.contains("/btw")),
+            "no spinner while idle: {:?}",
+            idle.plugin_hints
+        );
+
+        store.btw_ask("s1", "side question?");
+        let pending = composer_footer_hints(&store, "s1", &composer, "");
+        assert!(
+            pending.plugin_hints.iter().any(|hint| hint.ends_with("/btw")),
+            "the pending spinner segment: {:?}",
+            pending.plugin_hints
+        );
+
+        store.btw_answer("side question?", "an answer");
+        let settled = composer_footer_hints(&store, "s1", &composer, "");
+        assert!(
+            settled.plugin_hints.iter().all(|hint| !hint.contains("/btw")),
+            "the spinner drops once the answer lands: {:?}",
+            settled.plugin_hints
+        );
     }
 
     /// G-04: `sidebar.footer` sections ride the bottom of the
