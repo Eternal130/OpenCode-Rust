@@ -32,7 +32,7 @@ use oc_util::determinism::Clock;
 
 use crate::bus::Bus;
 use crate::database::Database;
-use crate::hooks::{PluginSupervisor, RpcPort};
+use crate::hooks::PluginSupervisor;
 use crate::location::{
     BootError, ConfigCache, FormsPort, LocationGraph, LocationRef, PermissionPending,
     SessionInterruptor,
@@ -81,8 +81,6 @@ pub struct GlobalServices {
     pub permissions: Arc<dyn PermissionPending>,
     /// Forms close placeholder.
     pub forms: Arc<dyn FormsPort>,
-    /// RPC port placeholder.
-    pub rpc: Arc<dyn RpcPort>,
     /// Location activity tracker (feeds the TTL sweeper).
     pub activity: Arc<LocationActivity>,
     /// Internal plugin slots (boot order pre → host → post).
@@ -106,7 +104,6 @@ impl GlobalServices {
         config_cache: Arc<dyn ConfigCache>,
         permissions: Arc<dyn PermissionPending>,
         forms: Arc<dyn FormsPort>,
-        rpc: Arc<dyn RpcPort>,
         plugins: PluginSupervisor,
     ) -> Self {
         let activity = Arc::new(LocationActivity::new(Arc::clone(&clock)));
@@ -121,7 +118,6 @@ impl GlobalServices {
             config_cache,
             permissions,
             forms,
-            rpc,
             activity,
             plugins,
         }
@@ -289,7 +285,7 @@ impl LocationServiceMap {
     }
 
     /// Invalidate a location: remove the entry, then run the shutdown
-    /// sequence (permission close → forms close → rpc close → publish
+    /// sequence (permission close → forms close → publish
     /// `location.shutdown`). Returns the old graph — its `Arc` survives in
     /// any outstanding borrows, which may keep using it.
     pub async fn invalidate(&self, location: &LocationRef) -> Option<Arc<LocationGraph>> {
@@ -493,33 +489,6 @@ mod tests {
         }
     }
 
-    struct RecordingRpc(Mutex<Vec<&'static str>>);
-
-    #[async_trait]
-    impl RpcPort for RecordingRpc {
-        #[allow(clippy::unused_async, clippy::unused_async_trait_impl, reason = "test fake")]
-        async fn register(
-            &self,
-            _definition: crate::hooks::RpcDefinition,
-            _handler: Arc<dyn crate::hooks::RpcHandler>,
-        ) -> Result<crate::hooks::Registration, crate::hooks::RpcError> {
-            Err(crate::hooks::RpcError("placeholder".into()))
-        }
-        #[allow(clippy::unused_async, clippy::unused_async_trait_impl, reason = "test fake")]
-        async fn emit(
-            &self,
-            _rpc_id: &str,
-            _event: &str,
-            _data: serde_json::Value,
-        ) -> Result<(), crate::hooks::RpcError> {
-            Ok(())
-        }
-        #[allow(clippy::unused_async, clippy::unused_async_trait_impl, reason = "test fake")]
-        async fn close(&self) {
-            self.0.lock().push("rpc.close");
-        }
-    }
-
     struct RecordingInterruptor(Mutex<Vec<(String, String)>>);
 
     #[async_trait]
@@ -542,7 +511,6 @@ mod tests {
         bus: Arc<Bus>,
         permissions: Arc<RecordingPermission>,
         forms: Arc<RecordingForms>,
-        rpc: Arc<RecordingRpc>,
         interruptor: Arc<RecordingInterruptor>,
         dir: tempfile::TempDir,
     }
@@ -550,7 +518,6 @@ mod tests {
     async fn harness(clock: &Arc<MutableClock>) -> Harness {
         let permissions = Arc::new(RecordingPermission(Mutex::new(Vec::new())));
         let forms = Arc::new(RecordingForms(Mutex::new(Vec::new())));
-        let rpc = Arc::new(RecordingRpc(Mutex::new(Vec::new())));
         let interruptor = Arc::new(RecordingInterruptor(Mutex::new(Vec::new())));
         let db = Arc::new(Database::open_in_memory().await.expect("database"));
         let bus = Arc::new(Bus::new(
@@ -572,7 +539,6 @@ mod tests {
             Arc::new(FixedConfig(1)),
             Arc::clone(&permissions) as Arc<dyn PermissionPending>,
             Arc::clone(&forms) as Arc<dyn FormsPort>,
-            Arc::clone(&rpc) as Arc<dyn RpcPort>,
             PluginSupervisor::new(),
         );
         Harness {
@@ -580,7 +546,6 @@ mod tests {
             bus,
             permissions,
             forms,
-            rpc,
             interruptor,
             dir,
         }
@@ -623,7 +588,6 @@ mod tests {
             "permission closes first"
         );
         assert_eq!(*harness.forms.0.lock(), vec!["forms.close"], "forms close second");
-        assert_eq!(*harness.rpc.0.lock(), vec!["rpc.close"], "rpc closes third");
         assert_eq!(
             drain(&mut live).await,
             vec![LOCATION_SHUTDOWN_EVENT.to_string()],

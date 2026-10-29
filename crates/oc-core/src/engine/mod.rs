@@ -111,7 +111,7 @@ use crate::bus::{Bus, BusOptions, Subscription};
 use crate::config::{self, managed_policy, GlobalDirs, Loader};
 use crate::database::Database;
 use crate::forms::Forms;
-use crate::hooks::{InternalPlugin, PluginSupervisor, RpcDefinition, RpcError, RpcPort};
+use crate::hooks::{InternalPlugin, PluginSupervisor};
 use crate::jobs::Jobs;
 use crate::location::{
     BootError, ConfigCache, FormsPort, LocationGraph, LocationRef, PermissionPending,
@@ -583,7 +583,6 @@ impl Engine {
         let services = ServiceRegistry::default();
         let interruptor = Arc::new(EngineInterruptor { services: services.clone() });
         let config_cache = Arc::new(EngineConfigCache { generation: Arc::new(AtomicU64::new(1)) });
-        let rpc = Arc::new(NoopRpcPort);
         let globals = GlobalServices::new(
             Arc::clone(&db),
             Arc::clone(&bus),
@@ -595,7 +594,6 @@ impl Engine {
             config_cache,
             Arc::new(EngineLevelPermissionPort),
             Arc::new(EngineLevelFormsPort),
-            rpc,
             PluginSupervisor::new(),
         );
         let locations = Arc::new(LocationServiceMap::new(Arc::new(globals)));
@@ -773,7 +771,7 @@ impl Engine {
     }
 
     /// Invalidates a location: graph shutdown sequence (per-location
-    /// permission close → forms close → rpc close → `location.shutdown`)
+    /// permission close → forms close → `location.shutdown`)
     /// + service teardown.
     pub async fn invalidate(&self, location: &LocationRef) {
         self.services.remove(location);
@@ -1514,7 +1512,6 @@ impl Engine {
             Arc::clone(&base.config_cache),
             Arc::new(LocationPermissionPort { permission: inputs.permission.clone() }),
             Arc::new(LocationFormsPort { forms: inputs.forms.clone() }),
-            Arc::new(NoopRpcPort),
             PluginSupervisor::with_internal(pre, Vec::new()),
         );
         let generation = self.generation.fetch_add(1, Ordering::SeqCst);
@@ -1931,31 +1928,6 @@ impl FormsPort for EngineLevelFormsPort {
     async fn close(&self) -> Vec<String> {
         Vec::new()
     }
-}
-
-/// A no-op RPC port (host plugins arrive with the plugin lane).
-struct NoopRpcPort;
-
-#[async_trait::async_trait]
-impl RpcPort for NoopRpcPort {
-    async fn register(
-        &self,
-        _definition: RpcDefinition,
-        _handler: Arc<dyn crate::hooks::RpcHandler>,
-    ) -> Result<crate::hooks::Registration, RpcError> {
-        Err(RpcError("rpc port not available".into()))
-    }
-
-    async fn emit(
-        &self,
-        _rpc_id: &str,
-        _event: &str,
-        _data: serde_json::Value,
-    ) -> Result<(), RpcError> {
-        Err(RpcError("rpc port not available".into()))
-    }
-
-    async fn close(&self) {}
 }
 
 // ===========================================================================

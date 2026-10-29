@@ -233,7 +233,6 @@ impl SessionRunner {
         let mut continuing = continuation.is_some();
         let mut step = continuation.map(|continuation| continuation.step).unwrap_or(1);
         let mut entering = true;
-        // plugins.awaitActivation — TODO(plugin-lane).
 
         // Entry gate (llm.ts:61-66).
         if !force && !continuing {
