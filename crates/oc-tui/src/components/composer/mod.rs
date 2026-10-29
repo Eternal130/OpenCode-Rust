@@ -1432,6 +1432,14 @@ impl Composer {
                         KeyOutcome::Edited
                     }
                     None => {
+                        // RE-03 — `insertPart` records the file part
+                        // (autocomplete.tsx:241: `part.type === "file"
+                        // && part.path → updateFrecency(path)`): the
+                        // file/reference rows (no structured identity)
+                        // bump the frecency store on accept.
+                        if let Some(path) = option.path.clone() {
+                            self.autocomplete.frecency.update(&path, autocomplete::now_ms());
+                        }
                         let name = option.display.trim_start_matches('@');
                         self.insert_text(&format!("@{name} "));
                         KeyOutcome::Edited
@@ -1913,6 +1921,50 @@ mod tests {
         state.autocomplete.filtered_len = 1;
         assert!(matches!(state.accept_autocomplete(), KeyOutcome::Edited));
         assert_eq!(state.draft.skills.len(), 1, "skill parts dedupe");
+    }
+
+    /// RE-03 — accepting a FILE row (a path-carrying option, the
+    /// ref's `insertPart` file-part record — autocomplete.tsx:241)
+    /// bumps the frecency store: frequency+1 with a fresh lastOpen.
+    #[test]
+    fn accepting_file_completion_records_frecency() {
+        let mut state = Composer::default();
+        state.set(PromptDraft { text: "@sr".into(), ..PromptDraft::default() });
+        state.set_caret(state.char_len());
+        state.autocomplete.on_input(&state.draft.text, state.edit.caret());
+        state.autocomplete.options = vec![autocomplete::AutocompleteOption {
+            display: "@src/main.rs".into(),
+            path: Some("src/main.rs".into()),
+            ..autocomplete::AutocompleteOption::default()
+        }];
+        state.autocomplete.filtered_len = 1;
+        assert!(matches!(state.accept_autocomplete(), KeyOutcome::Edited));
+        // The unstructured row inserts as plain text after the token
+        // (the port's insert path — no chip replacement).
+        assert_eq!(state.draft.text, "@sr@src/main.rs ");
+        let before = autocomplete::now_ms();
+        let key = autocomplete::resolve_frecency_path(
+            &std::env::current_dir().unwrap_or_default(),
+            "src/main.rs",
+        );
+        assert_eq!(
+            state.autocomplete.frecency.data.get(&key),
+            Some(&autocomplete::FrecencyEntry { frequency: 1, last_open: before }),
+            "accept records frequency+1 at the wall clock"
+        );
+
+        // A second accept of the same file increments, not resets.
+        state.set(PromptDraft { text: "@sr".into(), ..PromptDraft::default() });
+        state.set_caret(state.char_len());
+        state.autocomplete.on_input(&state.draft.text, state.edit.caret());
+        state.autocomplete.options = vec![autocomplete::AutocompleteOption {
+            display: "@src/main.rs".into(),
+            path: Some("src/main.rs".into()),
+            ..autocomplete::AutocompleteOption::default()
+        }];
+        state.autocomplete.filtered_len = 1;
+        let _ = state.accept_autocomplete();
+        assert_eq!(state.autocomplete.frecency.data[&key].frequency, 2);
     }
 
     /// RD-05 — the chips delete atomically (backspace over the chip
