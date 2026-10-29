@@ -196,12 +196,12 @@ mod tests {
             Some("https://integrate.api.nvidia.com/v1"),
             Activation::Auto,
             false,
-            &BTreeMap::from([(
-                "X-BILLING-INVOKE-ORIGIN".to_string(),
-                "custom-origin".to_string()
-            )]),
+            &BTreeMap::from([("X-BILLING-INVOKE-ORIGIN".to_string(), "custom-origin".to_string())]),
         );
-        assert_eq!(headers.get("X-BILLING-INVOKE-ORIGIN").map(String::as_str), Some("custom-origin"));
+        assert_eq!(
+            headers.get("X-BILLING-INVOKE-ORIGIN").map(String::as_str),
+            Some("custom-origin")
+        );
     }
 
     #[test]
@@ -223,9 +223,7 @@ mod tests {
         );
         // llmgateway.ts:12 — disabled providers are skipped; :15 — no
         // registered integration under the provider id is skipped.
-        for (activation, registered) in
-            [(Activation::Disabled, true), (Activation::Auto, false)]
-        {
+        for (activation, registered) in [(Activation::Disabled, true), (Activation::Auto, false)] {
             assert!(
                 plugin_provider_headers(
                     OPENAI_COMPATIBLE,

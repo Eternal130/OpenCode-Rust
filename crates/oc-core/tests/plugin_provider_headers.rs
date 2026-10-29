@@ -156,7 +156,8 @@ async fn llmgateway_requires_registered_integration() {
             headers: BTreeMap::new(),
         },
     );
-    let resolved = resolve(None, connections.clone(), "llmgateway", "grok-4-1-fast-reasoning").await;
+    let resolved =
+        resolve(None, connections.clone(), "llmgateway", "grok-4-1-fast-reasoning").await;
     assert_eq!(header(&resolved, "X-Source"), None, "unregistered integration must not inject");
 
     let (host, _dir) = host().await;
@@ -164,8 +165,7 @@ async fn llmgateway_requires_registered_integration() {
         host.has_integration("llmgateway"),
         "catalog registers the llmgateway integration (ref plugin parity)"
     );
-    let resolved =
-        resolve(Some(host), connections, "llmgateway", "grok-4-1-fast-reasoning").await;
+    let resolved = resolve(Some(host), connections, "llmgateway", "grok-4-1-fast-reasoning").await;
     assert_header(&resolved, "HTTP-Referer", Some("https://opencode.ai/"));
     assert_header(&resolved, "X-Title", Some("opencode"));
     assert_header(&resolved, "X-Source", Some("opencode"));
