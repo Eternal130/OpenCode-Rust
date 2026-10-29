@@ -59,6 +59,10 @@ pub struct SelectOption {
     /// `DialogSelectOption.truncateTitle` (dialog-select.tsx:79): the
     /// stage-1 truncation mode (see [`TitleTruncate`]).
     pub truncate_title: TitleTruncate,
+    /// RE-04 — `ShimmerText` over the title (`<Spinner shimmer={…}>`,
+    /// spinner.tsx:45): the shimmer's elapsed clock (ms). `None`
+    /// paints the plain static title.
+    pub shimmer: Option<u64>,
 }
 
 /// `DialogSelectOption.truncateTitle` (dialog-select.tsx:78-79,:
@@ -159,6 +163,7 @@ impl SelectOption {
             footer: None,
             title_width: None,
             truncate_title: TitleTruncate::default(),
+            shimmer: None,
         }
     }
 
@@ -213,6 +218,16 @@ impl SelectOption {
     #[must_use]
     pub fn without_title_truncation(mut self) -> Self {
         self.truncate_title = TitleTruncate::Off;
+        self
+    }
+
+    /// RE-04 — paint the title through the shimmer-text mask (the
+    /// 1200 ms highlight sweep toward `text.base`,
+    /// spinner.tsx:45 + shimmer-text.tsx). `elapsed_ms` is the
+    /// injected clock — frozen ⇒ the sweep pins.
+    #[must_use]
+    pub fn with_shimmer(mut self, elapsed_ms: u64) -> Self {
+        self.shimmer = Some(elapsed_ms);
         self
     }
 }
@@ -994,6 +1009,19 @@ fn paint_option_row(
     };
     let clip = title_clip_end(width, footer.as_deref());
 
+    // RE-04 — the shimmer row (`<Spinner shimmer={theme.text.base}>`,
+    // dialog-update.tsx:107/115): the title paints through the
+    // shimmer-text mask — `text.muted` glyphs with a `text.base`
+    // highlight band sweeping every 1200 ms.
+    if let Some(elapsed_ms) = option.shimmer {
+        let title = truncated_title(option);
+        if current {
+            let marker_fg = if selected { styles.selected_fg } else { styles.current_fg };
+            put(cells, 2, "●", marker_fg, row_bg, 0);
+        }
+        put_shimmer_bounded(cells, 4, clip, &title, styles, row_bg, elapsed_ms);
+        return;
+    }
     let at = if current {
         // paddingLeft 1, marker, gap 1, title at 4.
         let marker_fg = if selected { styles.selected_fg } else { styles.current_fg };
@@ -1059,6 +1087,47 @@ fn put_bounded(
     match cells.get_mut(start..limit) {
         Some(slice) => put(slice, 0, text, fg, bg, attrs) + start,
         None => start,
+    }
+}
+
+/// RE-04 — [`put_bounded`] through the shimmer-text mask: the run's
+/// glyphs paint `text.muted` with the passing band restored to
+/// `text.base` (`masked_text::shimmer_strengths`, spinner.tsx:45).
+/// Deterministic in `elapsed_ms` — a frozen clock pins the band.
+fn put_shimmer_bounded(
+    cells: &mut [Cell],
+    x: usize,
+    limit: usize,
+    text: &str,
+    styles: &DialogStyles,
+    bg: Color,
+    elapsed_ms: u64,
+) -> usize {
+    let start = x.min(limit);
+    let end = crate::wrap::display_width(text).max(1);
+    let strengths = crate::components::masked_text::shimmer_strengths(elapsed_ms, end, end);
+    let base = rgb_triplet(styles.muted);
+    let target = rgb_triplet(styles.text);
+    let mut at = start;
+    for atom in flatten(text, Style::new().fg(styles.muted).bg(bg)) {
+        if at >= limit || at >= cells.len() {
+            break;
+        }
+        let column = at - start;
+        let strength = strengths.get(column).copied().unwrap_or(0.0);
+        let (r, g, b) = crate::components::masked_text::mask_fg(base, target, strength);
+        cells[at] = cell(atom.text.chars().next().unwrap_or(' '), 0, Color::Rgb(r, g, b), bg);
+        at += atom.width.max(1);
+    }
+    at
+}
+
+/// One ratatui color as an RGB triple (`Default` → black; the
+/// shimmer math needs the concrete channels).
+fn rgb_triplet(color: Color) -> (u8, u8, u8) {
+    match color {
+        Color::Rgb(r, g, b) => (r, g, b),
+        _ => (0, 0, 0),
     }
 }
 
@@ -1148,6 +1217,52 @@ mod tests {
         assert_eq!(view.rows[4][4].attrs & 1, 0);
         // Description muted on unselected rows.
         assert_eq!(fg_color(&view.rows[4][9]), (128, 128, 128));
+    }
+
+    /// RE-04 — the shimmer title (`<Spinner shimmer>` over the row,
+    /// spinner.tsx:45): the band restores `text.base` where it
+    /// passes and the rest stays muted; a pinned clock is
+    /// deterministic; elapsed None paints the plain static title.
+    #[test]
+    fn shimmer_title_sweeps_and_pins() {
+        let styles = styles();
+        let muted = match styles.muted {
+            Color::Rgb(r, g, b) => (r, g, b),
+            _ => (0, 0, 0),
+        };
+        let target = match styles.text {
+            Color::Rgb(r, g, b) => (r, g, b),
+            _ => (0, 0, 0),
+        };
+        let surface = Color::Rgb(10, 10, 10);
+        let render = |shimmer: Option<u64>| {
+            let mut option = SelectOption::titled("Checking for updates…", " ");
+            if let Some(elapsed) = shimmer {
+                option = option.with_shimmer(elapsed);
+            }
+            let props = SelectProps::new("Update opencode", vec![option]).flat(true);
+            render_select(&props, &SelectState::default(), &styles, surface, 80, 20, Some(20))
+        };
+        // Determinism: the same pinned clock paints byte-equal rows.
+        let a = render(Some(600));
+        let b = render(Some(600));
+        assert_eq!(a.rows[4], b.rows[4], "a pinned clock pins the band");
+
+        // The band crosses the row: some glyph at text.base (the
+        // band), the rest muted.
+        let row = &a.rows[4];
+        let colors: Vec<(u8, u8, u8)> = (4..30).map(|x| fg_color(&row[x])).collect();
+        assert_ne!(muted, target, "the fixture styles differentiate");
+        assert_eq!(colors[0], muted, "behind the band the title stays muted");
+        assert!(colors.iter().any(|c| *c == target), "the passing band restores text.base");
+
+        // Without the shimmer flag the row paints the plain static
+        // title (the pre-RE-04 bytes: uniform, never the target).
+        let plain = render(None);
+        assert!(
+            plain.rows[4].iter().skip(4).take(24).all(|cell| fg_color(cell) != target),
+            "the plain row never shows the shimmer target"
+        );
     }
 
     #[test]
