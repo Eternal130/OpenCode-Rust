@@ -511,7 +511,8 @@ impl Engine {
             options.model_resolver.clone().unwrap_or_else(|| {
                 let typed = Arc::new(
                     resolver::CatalogModelResolver::new(
-                        FacadeContext::new(Arc::clone(&facade_transport)),
+                        FacadeContext::new(Arc::clone(&facade_transport))
+                            .with_integrations(Arc::clone(&integration)),
                         Arc::clone(&catalog),
                         options.connections.clone(),
                         options.custom_providers.clone(),
@@ -907,7 +908,8 @@ impl Engine {
             } else {
                 Arc::new(resolver::LocationModelResolver::new(
                     resolver::CatalogModelResolver::new(
-                        FacadeContext::new(Arc::clone(&self.facade_transport)),
+                        FacadeContext::new(Arc::clone(&self.facade_transport))
+                            .with_integrations(Arc::clone(&self.integration)),
                         // CRED-A1: locations assemble over the LIVE
                         // service catalog — a refresh mid-session feeds
                         // every newly assembled location.

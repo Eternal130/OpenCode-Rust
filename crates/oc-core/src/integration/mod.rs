@@ -252,6 +252,15 @@ impl IntegrationHost {
         name.clone_into(&mut entry.name);
     }
 
+    /// Whether an integration is registered under `id` — the id set the
+    /// ref `integrations.list()` projection exposes, which the
+    /// llmgateway header plugin gates on
+    /// (`configured.has(Integration.ID.make(provider.id))`,
+    /// plugin/provider/llmgateway.ts:9,15).
+    pub fn has_integration(&self, id: &str) -> bool {
+        self.entries.read().contains_key(id)
+    }
+
     /// Registers a method (editor.method.update — integration.ts:312-340):
     /// replaces the same-slot method, storing the OAuth implementation.
     pub fn update_method(
