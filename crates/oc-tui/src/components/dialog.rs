@@ -1150,6 +1150,28 @@ pub fn render_app(store: &Store, theme: &crate::theme::ThemeState, size: (u16, u
             usize::from(size.0),
             usize::from(size.1),
         )
+    } else if store.stats_page_open() {
+        // RE-14 — the `stats` plugin route (stats.tsx:156-178): the
+        // page box paints edge-to-edge with the scrollbox-centered
+        // poster (loading / error fallback states included).
+        let phase = store.stats_page_state().phase;
+        let poster_storage;
+        let view = match &phase {
+            crate::store::StatsPhase::Loading => {
+                crate::components::stats_page_solid::StatsPhaseView::Loading
+            }
+            crate::store::StatsPhase::Failed(_) => {
+                crate::components::stats_page_solid::StatsPhaseView::Failed
+            }
+            crate::store::StatsPhase::Loaded(info) => {
+                // The poster model rebuilds per paint from the
+                // immutable payload (the ref's createMemo over the
+                // resource value).
+                poster_storage = crate::components::stats_page::stats_poster(info, size);
+                crate::components::stats_page_solid::StatsPhaseView::Loaded(&poster_storage)
+            }
+        };
+        crate::components::stats_page_solid::render_stats_page_solid(view, &styles, size)
     } else {
         match store.route() {
             crate::store::Route::Home => crate::components::home::render_home(store, &styles, size),

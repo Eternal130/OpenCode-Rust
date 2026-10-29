@@ -194,6 +194,15 @@ pub static PALETTE_COMMANDS: &[PaletteCommand] = &[
         group: "Session",
         bindings: &[],
     },
+    // RE-14 — `stats.open` (`/stats`, feature-plugins/system/
+    // stats.tsx:196-209): the usage poster page, palette-listed in
+    // System.
+    PaletteCommand {
+        command: "stats.open",
+        title: "Usage statistics",
+        group: "System",
+        bindings: &[],
+    },
     PaletteCommand {
         command: "session.rename",
         title: "Rename session",
@@ -2782,6 +2791,18 @@ impl CommandDispatcher for StoreDispatcher {
                 }
                 Dispatch::Handled
             }
+            // RE-14 — `stats.open` (stats.tsx:196-209): clear the
+            // dialogs, mount the usage poster page (its resource —
+            // `session.stats` over the current year, `tools: "none"`
+            // — fetches through the stats sink; escape returns).
+            "stats.open" => {
+                store.open_stats_page(crate::components::stats_page::now_ms());
+                Dispatch::Handled
+            }
+            "stats.close" => {
+                store.close_stats_page();
+                Dispatch::Handled
+            }
             // `session.toggle.exploration_grouping` (index.tsx:
             // 1049-1061): flip the transcript's grouping flag.
             "session.toggle.exploration_grouping" => {
@@ -4745,3 +4766,94 @@ mod tests {
         }
     }
 }
+
+    // -- RE-14: /stats (stats.open) ---------------------------------
+    /// The command is registered on every surface (stats.tsx:194-
+    /// 211): the palette's System group, the slash table's `/stats`,
+    /// and the keymap's `stats.open` row (base, unbound) + the
+    /// page's own escape layer.
+    #[test]
+    fn stats_command_is_registered_on_every_surface() {
+        let row = PALETTE_COMMANDS
+            .iter()
+            .find(|command| command.command == "stats.open")
+            .expect("the palette row");
+        assert_eq!(row.title, "Usage statistics");
+        assert_eq!(row.group, "System");
+        assert!(crate::components::composer::autocomplete::SLASH_COMMANDS
+            .contains(&("stats", "stats.open")));
+        let table = crate::keymap::default_table();
+        let open = table.iter().find(|def| def.command == "stats.open").expect("stats.open def");
+        assert_eq!(open.layer, "base");
+        assert_eq!(open.defaults, "none");
+        let close = table.iter().find(|def| def.command == "stats.close").expect("stats.close def");
+        assert_eq!(close.layer, "stats");
+        assert!(close.defaults.contains("escape"));
+    }
+
+    /// `stats.open`'s dispatch (stats.tsx:196-209): mount the page
+    /// (loading), kick the stats fetch with the local year range,
+    /// ignore a re-run while open; `stats.close` returns to the
+    /// previous route; the resource landing paints the metrics;
+    /// stale generations drop.
+    #[test]
+    fn stats_open_dispatch_mounts_page_and_fetches() {
+        use crate::reactive::Runtime;
+        use crate::store::{RecordingStatsSink, StatsPhase};
+        let store = Store::new(Runtime::new());
+        let sink = std::rc::Rc::new(RecordingStatsSink::default());
+        store.set_stats_sink(sink.clone());
+        let mut dispatcher = StoreDispatcher;
+
+        // Off a session route: the page mounts over it and the fetch
+        // carries the year range (from = local Jan 1, tools none).
+        store.open_tab("s1", Some("S1".to_owned()));
+        assert!(matches!(store.route(), Route::Session { .. }));
+        assert_eq!(dispatcher.dispatch(&store, "stats.open", None), Dispatch::Handled);
+        assert!(store.stats_page_open());
+        assert!(matches!(store.stats_page_state().phase, StatsPhase::Loading));
+        let calls = sink.calls.borrow().clone();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, 1, "the first generation");
+        assert_eq!(
+            calls[0].1,
+            crate::components::stats_page::year_start_ms(crate::components::stats_page::now_ms()),
+            "from = the current year's Jan 1"
+        );
+
+        // A re-run while the page is open does nothing (stats.tsx:
+        // 203-204).
+        assert_eq!(dispatcher.dispatch(&store, "stats.open", None), Dispatch::Handled);
+        assert_eq!(sink.calls.borrow().len(), 1, "no refetch while open");
+
+        // The result lands: the payload rides the page.
+        let info = oc_client::types::SessionStatsInfo {
+            active_days: 3,
+            activity: Vec::new(),
+            cost: 0.0,
+            models: Vec::new(),
+            prompts: 4,
+            range: oc_client::types::SessionStatsInfoRange { from: 0.0, to: 1.0 },
+            sessions: 2,
+            steps: 4,
+            streak: 1,
+            subagents: 0,
+            tokens: oc_client::types::TokenUsageInfo::default(),
+            tools: oc_client::types::SessionStatsTools::None(
+                oc_client::types::SessionStatsToolsVariant1 {
+                    mode: oc_client::types::SessionStatsToolsVariant1Mode::None,
+                },
+            ),
+        };
+        store.stats_fetch_result(1, Ok(info));
+        assert!(matches!(store.stats_page_state().phase, StatsPhase::Loaded(_)));
+
+        // A stale generation drops.
+        store.stats_fetch_result(0, Err("stale".to_owned()));
+        assert!(!matches!(store.stats_page_state().phase, StatsPhase::Failed(_)));
+
+        // stats.close (the page's escape layer) returns to the route.
+        assert_eq!(dispatcher.dispatch(&store, "stats.close", None), Dispatch::Handled);
+        assert!(!store.stats_page_open());
+        assert!(matches!(store.route(), Route::Session { session_id } if session_id == "s1"));
+    }
