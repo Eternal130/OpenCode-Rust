@@ -2184,6 +2184,19 @@ impl App {
                         value.chars().map(|ch| u64::from(ch as u32)).fold(0u64, u64::wrapping_add);
                     self.store.worktree_create_from_name(value, seed);
                 }
+                // RE-13: the /btw question prompt's enter — the
+                // trimmed text re-runs `session.aside` against the
+                // session route (btw.tsx:64-66: an empty answer to
+                // the prompt cancels — nothing runs).
+                crate::store::DialogKind::BtwPrompt => {
+                    let question = value.trim().to_owned();
+                    if !question.is_empty() {
+                        if let crate::store::Route::Session { session_id } = self.store.route() {
+                            self.store.clear_dialogs();
+                            self.store.btw_ask(&session_id, &question);
+                        }
+                    }
+                }
                 // Lane FINAL: `KeyMethod`'s confirm
                 // (dialog-integration.tsx:489-500) — the key POST
                 // rides the sink; the dialog stays open until the
@@ -4475,6 +4488,14 @@ pub enum LoopRequest {
         session_id: String,
         before: Option<String>,
     },
+    /// RE-13: `/btw`'s `session.generate` (btw.tsx:68-69) — the
+    /// one-shot side answer; `question` rides along for the Answer
+    /// dialog's header.
+    SessionAside {
+        session_id: String,
+        question: String,
+        prompt: String,
+    },
     /// `session.undo`'s chain: interrupt → wait → `session.revert.stage`.
     SessionRevertStage {
         session_id: String,
@@ -4639,6 +4660,12 @@ pub enum LoopFetch {
     SessionForkResult {
         session_id: String,
         before: Option<String>,
+        result: Result<String, String>,
+    },
+    /// RE-13: `/btw`'s `session.generate` resolved (the side answer
+    /// text or the error string).
+    SessionAsideResult {
+        question: String,
         result: Result<String, String>,
     },
     /// `revert.stage` resolved (errors toast).
@@ -5230,6 +5257,25 @@ pub fn spawn_loop_fetcher(
                             tx.send(LoopFetch::SessionForkResult { session_id, before, result });
                     });
                 }
+                // RE-13: `/btw` — the one-shot `session.generate`
+                // (btw.tsx:68-77): the answer (or the error) lands
+                // back as the Answer dialog / the error toast.
+                LoopRequest::SessionAside { session_id, question, prompt } => {
+                    let client = client.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let result = client
+                            .session()
+                            .generate(
+                                &session_id,
+                                &oc_client::types::SessionGenerateBody { prompt },
+                            )
+                            .await
+                            .map(|response| response.data.text)
+                            .map_err(|error| error.to_string());
+                        let _ = tx.send(LoopFetch::SessionAsideResult { question, result });
+                    });
+                }
                 LoopRequest::SessionRevertStage { session_id, message_id } => {
                     let client = client.clone();
                     let tx = tx.clone();
@@ -5563,6 +5609,13 @@ impl crate::store::SessionActionSink for HttpSessionActionSink {
     }
     fn location_reload(&self) {
         let _ = self.tx.send(LoopRequest::LocationReload);
+    }
+    fn aside(&self, session_id: &str, question: &str, prompt: &str) {
+        let _ = self.tx.send(LoopRequest::SessionAside {
+            session_id: session_id.to_owned(),
+            question: question.to_owned(),
+            prompt: prompt.to_owned(),
+        });
     }
 }
 
@@ -7680,6 +7733,13 @@ pub async fn run_with_size(
                             ..crate::components::toast::ToastOptions::info("")
                         });
                     }
+                },
+                // RE-13: `/btw`'s generate result (btw.tsx:70-77): the
+                // Answer dialog on success, the error toast on failure
+                // (the pending spinner drops either way).
+                LoopFetch::SessionAsideResult { question, result } => match result {
+                    Ok(answer) => app.store.btw_answer(&question, &answer),
+                    Err(error) => app.store.btw_failed(&error),
                 },
                 LoopFetch::SessionRevertStageResult { result } => {
                     if let Err(error) = result {

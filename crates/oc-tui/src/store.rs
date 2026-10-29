@@ -81,6 +81,11 @@ impl DialogSize {
     }
 }
 
+/// RE-13: `/btw`'s fixed instruction prelude (btw.tsx:15-21) —
+/// `session.generate` exposes the session's tools but runs no tool
+/// loop, so a tool call would surface as an empty answer.
+pub const BTW_INSTRUCTIONS: &str = "The user is asking a quick side question about the conversation so far. Answer directly and concisely in markdown from what you already know. Do not call any tools and do not take any actions.";
+
 /// One open dialog's identity (the `ui/dialog.tsx` stack). The content
 /// state ([`SelectState`] for pickers, the prompt value for renames)
 /// rides along so the keypress pump can drive it.
@@ -250,6 +255,16 @@ pub enum DialogKind {
         /// list (v2 `onBack` re-seats the large mount).
         back_to_plugins: bool,
     },
+    /// RE-13: `/btw`'s fallback question prompt (`ctx.ui.dialog.
+    /// prompt({ title: "/btw", placeholder: "Ask anything" })`,
+    /// btw.tsx:65) — the no-argument arm; the submit re-runs
+    /// `session.aside` with the entered text against the session
+    /// route.
+    BtwPrompt,
+    /// RE-13: `/btw`'s `Answer` dialog (btw.tsx:71-74, 88-172): the
+    /// question header + the markdown-rendered one-shot answer in a
+    /// large scroll window, `c` copies, j/k ↑/↓ scroll.
+    BtwAnswer { question: String, answer: String },
     /// TUI-25: `ui/dialog-alert.tsx` — the generic alert tone:
     /// return/ok confirms; any close settles. `request_id` rides the
     /// plugin host's `ctx.ui.alert` promise; `confirm_command` is the
@@ -388,6 +403,12 @@ pub struct DialogsLaneState {
     pub settings: SettingsSnapshot,
     /// TUI-24: the error-details body's scroll offset.
     pub error_details_scroll: usize,
+    /// RE-13: the `/btw` answer dialog's scroll offset (btw.tsx:119-
+    /// 124's scrollbox).
+    pub btw_scroll: usize,
+    /// RE-13: the `/btw` pending counter (btw.tsx:26's `pending()`
+    /// signal — >0 arms the `prompt.footer.status` spinner).
+    pub btw_pending: usize,
     /// TUI-TD22: the experiments table (EMPTY in v2.0.24; tests
     /// inject rows to prove the toggle).
     pub experiments: Vec<Experiment>,
@@ -1863,18 +1884,43 @@ pub trait SessionActionSink {
     fn revert_stage(&self, session_id: &str, message_id: &str);
     /// `location.reload` (app.tsx:1026-1031).
     fn location_reload(&self);
+    /// RE-13: `session.generate` (btw.tsx:68-69) — the one-shot
+    /// side answer over the session's context; nothing is admitted
+    /// or persisted server-side. `question` rides along for the
+    /// answer dialog's header.
+    fn aside(&self, session_id: &str, question: &str, prompt: &str);
 }
 
 /// One recorded [`SessionActionSink`] call.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionActionCall {
-    Compact { session_id: String, model: Option<ModelSelection> },
-    Export { session_id: String, sanitize: bool, format: String, destination: String },
+    Compact {
+        session_id: String,
+        model: Option<ModelSelection>,
+    },
+    Export {
+        session_id: String,
+        sanitize: bool,
+        format: String,
+        destination: String,
+    },
     Remove(String),
     Background(String),
-    Fork { session_id: String, before: Option<String> },
-    RevertStage { session_id: String, message_id: String },
+    Fork {
+        session_id: String,
+        before: Option<String>,
+    },
+    RevertStage {
+        session_id: String,
+        message_id: String,
+    },
     LocationReload,
+    /// RE-13: the `/btw` one-shot generate.
+    Aside {
+        session_id: String,
+        question: String,
+        prompt: String,
+    },
 }
 
 /// The recording sink (tests + the default).
@@ -1918,6 +1964,13 @@ impl SessionActionSink for RecordingSessionActionSink {
     }
     fn location_reload(&self) {
         self.calls.borrow_mut().push(SessionActionCall::LocationReload);
+    }
+    fn aside(&self, session_id: &str, question: &str, prompt: &str) {
+        self.calls.borrow_mut().push(SessionActionCall::Aside {
+            session_id: session_id.to_owned(),
+            question: question.to_owned(),
+            prompt: prompt.to_owned(),
+        });
     }
 }
 
@@ -8466,6 +8519,70 @@ impl Store {
         let next = (i64::try_from(state.error_details_scroll).unwrap_or(0) + delta).clamp(0, max);
         state.error_details_scroll = usize::try_from(next).unwrap_or(0);
         drop(state);
+        self.request_redraw();
+    }
+
+    /// RE-13: `/btw`'s one-shot ask (btw.tsx:58-78) — the ref joins
+    /// the fixed no-tool instructions with the question and calls
+    /// `session.generate`; the pending counter arms the footer
+    /// spinner until the result lands.
+    pub fn btw_ask(&self, session_id: &str, question: &str) {
+        let prompt = format!("{}\n\n{}", BTW_INSTRUCTIONS, question);
+        self.lane_dialogs.borrow_mut().btw_pending += 1;
+        drop(self.lane_dialogs.borrow_mut());
+        self.session_action_sink.borrow().aside(session_id, question, &prompt);
+        self.request_redraw();
+    }
+
+    /// The `/btw` pending count (btw.tsx:26's `pending()` signal).
+    #[must_use]
+    pub fn btw_pending(&self) -> usize {
+        self.lane_dialogs.borrow().btw_pending
+    }
+
+    /// The `/btw` answer window's scroll offset.
+    #[must_use]
+    pub fn btw_scroll(&self) -> usize {
+        self.lane_dialogs.borrow().btw_scroll
+    }
+
+    /// Scroll the `/btw` answer window (btw.tsx:117-125).
+    pub fn btw_scroll_by(&self, delta: i64, max: usize) {
+        let mut state = self.lane_dialogs.borrow_mut();
+        let max = i64::try_from(max).unwrap_or(i64::MAX);
+        let next = (i64::try_from(state.btw_scroll).unwrap_or(0) + delta).clamp(0, max);
+        state.btw_scroll = usize::try_from(next).unwrap_or(0);
+        drop(state);
+        self.request_redraw();
+    }
+
+    /// RE-13: the generate result — the pending spinner drops and
+    /// the Answer dialog mounts (btw.tsx:70-75: large + centered).
+    pub fn btw_answer(&self, question: &str, answer: &str) {
+        {
+            let mut state = self.lane_dialogs.borrow_mut();
+            state.btw_pending = state.btw_pending.saturating_sub(1);
+            state.btw_scroll = 0;
+        }
+        self.replace_dialog(
+            DialogKind::BtwAnswer {
+                question: question.to_owned(),
+                answer: answer.trim().to_owned(),
+            },
+            DialogSize::Large,
+        );
+        self.request_redraw();
+    }
+
+    /// RE-13: the generate failure (btw.tsx:76's `toast.error`).
+    pub fn btw_failed(&self, error: &str) {
+        self.lane_dialogs.borrow_mut().btw_pending =
+            self.lane_dialogs.borrow().btw_pending.saturating_sub(1);
+        self.toast_show(crate::components::toast::ToastOptions {
+            message: error.to_owned(),
+            variant: "error",
+            ..crate::components::toast::ToastOptions::info("")
+        });
         self.request_redraw();
     }
 
