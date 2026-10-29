@@ -77,6 +77,7 @@ impl Frame {
     fn event(&self) -> BusEvent {
         BusEvent {
             id: self.id.to_owned(),
+            kind: oc_client::bus_event::EventKind::parse(self.type_),
             type_: self.type_.to_owned(),
             data: self.data.clone(),
             created: Some(self.t),
@@ -510,6 +511,7 @@ fn last_event_id_resume_mid_snapshot_is_idempotent() {
 fn ring_event(id: String) -> BusEvent {
     BusEvent {
         id,
+        kind: oc_client::bus_event::EventKind::SessionUpdated,
         type_: "session.updated".to_owned(),
         data: serde_json::json!({ "sessionID": "ses_ring" }),
         created: Some(1),
