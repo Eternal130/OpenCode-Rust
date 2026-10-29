@@ -551,25 +551,47 @@ pub fn paint_solid_home_view(view: &HomeView, theme: &ThemeState, size: (u16, u1
         let body_width = width_of(body);
         let total = prefix_width + body_width;
         let x0 = (width.saturating_sub(total)) / 2;
+        // RE-04 — the banner's FadeInText (home.tsx:151): one mask
+        // over the WHOLE row (prefix + body share the sweep, the gap
+        // column paints no glyph); each glyph blends toward the
+        // backdrop by its column's strength — the 200 ms
+        // left-to-right wipe, past which every strength is 0 (the
+        // plain static colors, byte-identical to the pre-fade paint).
+        let elapsed_ms = view
+            .update_since_ms
+            .map_or(crate::components::masked_text::FADE_DURATION_MS, |since| {
+                view.update_clock_ms.saturating_sub(since)
+            });
+        let fade =
+            crate::components::masked_text::fade_strengths(elapsed_ms, total, 0.0, None, total);
+        let backdrop = theme.resolved.tokens.background.base;
+        let backdrop = (backdrop.r, backdrop.g, backdrop.b);
+        let masked_fg = |column: usize, color: crate::render::CellColor| {
+            let crate::render::CellColor::Rgb(r, g, b) = color else { return color };
+            let strength = fade.get(column).copied().unwrap_or(0.0);
+            let (r, g, b) = crate::components::masked_text::mask_fg((r, g, b), backdrop, strength);
+            crate::render::CellColor::Rgb(r, g, b)
+        };
         let mut x = x0;
         if !*remote {
-            for ch in prefix.chars() {
+            for (column, ch) in prefix.chars().enumerate() {
                 if let Some(cell) = frame
                     .cells
                     .get_mut(row)
                     .and_then(|r| x.checked_sub(0).and_then(|_| r.get_mut(x)))
                 {
                     cell.ch = ch;
-                    cell.fg = selected;
+                    cell.fg = masked_fg(column, selected);
                 }
                 x += 1;
             }
             x += 1; // the gap
         }
-        for ch in body.chars() {
+        let body_offset = if *remote { 0 } else { prefix_width };
+        for (column, ch) in body.chars().enumerate() {
             if let Some(cell) = frame.cells.get_mut(row).and_then(|r| r.get_mut(x)) {
                 cell.ch = ch;
-                cell.fg = muted_color;
+                cell.fg = masked_fg(body_offset + column, muted_color);
             }
             x += 1;
         }
@@ -633,6 +655,8 @@ mod tests {
     fn owned_view(scenario: &Scenario, placeholder: String) -> HomeView<'static> {
         HomeView {
             update: None,
+            update_clock_ms: 0,
+            update_since_ms: None,
             draft: Box::leak(Box::new(scenario.draft.clone())),
             placeholder,
             location: String::new(),
@@ -659,6 +683,95 @@ mod tests {
     /// popup open, plugin actions, the <64-col version gate + the
     /// content-row collapse, tiny frames (no logo/footer), the
     /// caret — × widths 40/60/80/120/160 × heights 20/24/30 (the
+    // -- RE-04: the banner's FadeInText (fade-in-text.tsx) ----------
+
+    /// The banner view fixture: a LOCAL available notice mounted at
+    /// `since`, painted at `clock`.
+    fn banner_view(clock_ms: u64, since: u64) -> HomeView<'static> {
+        let scenario = Scenario::new("banner");
+        HomeView {
+            update: Some(("/update".into(), " to install v9.9.9".into(), false)),
+            update_clock_ms: clock_ms,
+            update_since_ms: Some(since),
+            ..owned_view(&scenario, "Ask".into())
+        }
+    }
+
+    /// The banner row's painted cells (the row carrying "/update").
+    fn banner_cells(frame: &crate::render::Frame) -> Vec<crate::render::Cell> {
+        frame
+            .cells
+            .iter()
+            .find(|row| row.iter().any(|cell| cell.ch == '/'))
+            .map(|row| row.clone())
+            .unwrap_or_default()
+    }
+
+    /// t=0: the fade is FULL (every glyph at the backdrop) and the
+    /// frame is byte-stable under a pinned clock (two renders agree).
+    #[test]
+    fn banner_fade_in_pins_at_t0() {
+        let theme = ThemeState::v2_dark();
+        let (frame_a, _, _) = paint_solid_home_view(&banner_view(0, 0), &theme, (80, 24));
+        let (frame_b, _, _) = paint_solid_home_view(&banner_view(0, 0), &theme, (80, 24));
+        assert_eq!(frame_a.cells, frame_b.cells, "a pinned clock is deterministic");
+        let backdrop = theme.resolved.tokens.background.base;
+        let cells = banner_cells(&frame_a);
+        assert!(!cells.is_empty(), "the banner paints");
+        // Strength 1 everywhere ⇒ each glyph IS the backdrop color.
+        for cell in cells.iter().filter(|cell| cell.ch != ' ') {
+            assert_eq!(
+                cell.fg,
+                crate::render::CellColor::Rgb(backdrop.r, backdrop.g, backdrop.b),
+                "t=0 keeps the whole banner at the backdrop"
+            );
+        }
+    }
+
+    /// Mid-fade the wipe differentiates the row (leading glyphs faded
+    /// in, trailing still at the backdrop); at ≥200 ms the fade is
+    /// over and the row equals the STATIC painter's colors.
+    #[test]
+    fn banner_fade_wipes_then_settles_plain() {
+        let theme = ThemeState::v2_dark();
+        let backdrop = theme.resolved.tokens.background.base;
+        let backdrop = crate::render::CellColor::Rgb(backdrop.r, backdrop.g, backdrop.b);
+        // t=100: coast(0.5)·(total+16) − 8 — the prefix (columns
+        // 0..7) is fully faded IN, the body's tail still hidden.
+        let (mid, _, _) = paint_solid_home_view(&banner_view(100, 0), &theme, (80, 24));
+        let cells = banner_cells(&mid);
+        let glyphs: Vec<(usize, &crate::render::Cell)> =
+            cells.iter().enumerate().filter(|(_, cell)| cell.ch != ' ').collect();
+        assert!(glyphs.len() > 4, "the banner carries the prefix + body");
+        assert_ne!(glyphs[0].1.fg, backdrop, "the leading glyph faded in");
+        assert_eq!(glyphs[glyphs.len() - 1].1.fg, backdrop, "the trailing glyph hides");
+        // t≥200: byte-identical to the settled (plain) paint.
+        let (settled, _, _) = paint_solid_home_view(&banner_view(200, 0), &theme, (80, 24));
+        let (later, _, _) = paint_solid_home_view(&banner_view(60_000, 0), &theme, (80, 24));
+        assert_eq!(settled.cells, later.cells, "past the duration the fade is inert");
+        let plain_view = banner_view(u64::MAX, 0);
+        let (plain, _, _) = paint_solid_home_view(&plain_view, &theme, (80, 24));
+        assert_eq!(settled.cells, plain.cells, "the settled fade equals the static paint");
+        let settled_cells = banner_cells(&settled);
+        assert!(
+            settled_cells.iter().any(|cell| cell.fg != backdrop),
+            "the settled banner shows its own colors"
+        );
+    }
+
+    /// A missing `since` (a view built without the store seam, e.g.
+    /// a foreign constructor) paints the banner PLAIN — the static
+    /// behavior, never a frozen fade.
+    #[test]
+    fn banner_without_since_paints_plain() {
+        let theme = ThemeState::v2_dark();
+        let mut view = banner_view(0, 0);
+        view.update_since_ms = None;
+        let (frame, _, _) = paint_solid_home_view(&view, &theme, (80, 24));
+        let (settled, _, _) = paint_solid_home_view(&banner_view(60_000, 0), &theme, (80, 24));
+        assert_eq!(frame.cells, settled.cells);
+    }
+
     /// The reactive path patches in place: a version-length change
     /// re-renders the SAME mount (same geometry).
     #[test]
