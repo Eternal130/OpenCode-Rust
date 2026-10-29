@@ -23,6 +23,10 @@ tokio = { workspace = true }
 json5 = "0.4"
 async-trait = "0.1"
 ratatui = "0.29"
+# F1 (ref1): the stats activity calendar extracts LOCAL date fields
+# (ref's `Date.getFullYear/getMonth/getDate`) — same tz-database
+# approach as oc-server/oc-cli stats (jiff bundles the tz db).
+jiff = "0.2"
 flate2 = "1.1"
 taffy = { version = "0.9", default-features = false, features = ["std", "flexbox", "taffy_tree"] }
 crossterm = "0.28"
