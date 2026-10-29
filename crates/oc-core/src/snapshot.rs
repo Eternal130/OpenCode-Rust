@@ -237,6 +237,14 @@ impl GitSnapshotStore {
         self.enabled.load(std::sync::atomic::Ordering::Acquire)
     }
 
+    /// The full enable gate (ref snapshot.ts:115):
+    /// `location.vcs?.type === "git" && state.get().enabled`. The port has
+    /// no VCS plugin registry here; a discoverable Git source repository is
+    /// the `type === "git"` oracle.
+    fn enabled_gate(&self) -> bool {
+        self.enabled() && self.source_repo().is_some()
+    }
+
     fn open_repo(&self) -> Result<git2::Repository, git2::Error> {
         if let Ok(repo) = git2::Repository::open_bare(&self.git_directory) {
             return Ok(repo);
@@ -397,10 +405,13 @@ impl GitSnapshotStore {
     }
 
     /// `diff` — per-file unified diffs with additions/deletions counts.
+    /// `context` is the `-U`/`--unified` width (`git diff --unified=${n}`,
+    /// ref git.ts:535).
     pub fn diff_blocking(
         &self,
         from: &SnapshotId,
         to: &SnapshotId,
+        context: u32,
         paths: Option<&[RelativePath]>,
     ) -> Result<Vec<FileDiff>, SnapshotError> {
         if let Some([]) = paths {
@@ -426,11 +437,12 @@ impl GitSnapshotStore {
                 (Some(_), None) => oc_schema::session_support::FileDiffStatus::Deleted,
                 _ => oc_schema::session_support::FileDiffStatus::Modified,
             };
-            let diff = super::tool::file_diff::file_diff(
+            let diff = super::tool::file_diff::file_diff_ctx(
                 &path,
                 before.as_deref().unwrap_or(""),
                 after.as_deref().unwrap_or(""),
                 status,
+                context as usize,
             );
             diffs.push(FileDiff { file: path, ..diff });
         }
@@ -442,7 +454,7 @@ impl GitSnapshotStore {
         &self,
         files: &BTreeMap<String, SnapshotId>,
     ) -> Result<(), SnapshotError> {
-        if !self.enabled() {
+        if !self.enabled_gate() {
             return Err(operation_error("restore", "Snapshots are disabled"));
         }
         let repo = self.open_repo().map_err(|error| operation_error("restore", error.message()))?;
@@ -584,6 +596,11 @@ fn build_tree(
 #[async_trait::async_trait]
 impl SnapshotService for GitSnapshotStore {
     async fn capture(&self) -> Option<SnapshotId> {
+        // Ref snapshot.ts:117-118: a non-git VCS (or a disabled snapshot
+        // state) captures NOTHING — `undefined` without even a warning.
+        if !self.enabled_gate() {
+            return None;
+        }
         match self.capture_blocking() {
             Ok(id) => Some(id),
             Err(error) => {
@@ -606,10 +623,12 @@ impl SnapshotService for GitSnapshotStore {
         &self,
         from: &SnapshotId,
         to: &SnapshotId,
-        _context: Option<u32>,
+        context: Option<u32>,
         paths: Option<&[RelativePath]>,
     ) -> Result<Vec<FileDiff>, SnapshotError> {
-        self.diff_blocking(from, to, paths)
+        // `--unified=${input.context ?? 3}` (ref git.ts:535).
+        let context = context.unwrap_or(super::tool::file_diff::GIT_DEFAULT_CONTEXT as u32);
+        self.diff_blocking(from, to, context, paths)
     }
 
     async fn restore(&self, files: &BTreeMap<String, SnapshotId>) -> Result<(), SnapshotError> {

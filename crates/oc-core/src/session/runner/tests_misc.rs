@@ -814,17 +814,11 @@ fn runner_mcp_guidance_renders_the_v2_body() {
 
 #[test]
 fn runner_mcp_guidance_filters_by_permission() {
-    use crate::session::runner::context::{
-        visible_mcp_summaries, McpServerRaw, McpToolSummary,
-    };
+    use crate::session::runner::context::{visible_mcp_summaries, McpServerRaw, McpToolSummary};
     use oc_schema::permission::{Effect, Rule, Ruleset};
 
     let deny = |action: &str| {
-        vec![Rule {
-            action: action.into(),
-            resource: "*".into(),
-            effect: Effect::Deny,
-        }]
+        vec![Rule { action: action.into(), resource: "*".into(), effect: Effect::Deny }]
     };
 
     let raw = vec![
@@ -948,4 +942,88 @@ async fn runner_retry_prepared_hook_writes_mutations_back() {
             panic!("retry hook decision override was dropped (write-back missing)")
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// AUD-14: AGENTS.md incremental diff rendering (renderUpdate,
+// ref instruction-discovery.ts:124-151)
+// ---------------------------------------------------------------------------
+
+fn discovery_update(previous: &[(&str, &str)], current: &[(&str, &str)]) -> Option<String> {
+    let to_owned = |files: &[(&str, &str)]| {
+        files.iter().map(|(p, c)| (p.to_string(), c.to_string())).collect::<Vec<_>>()
+    };
+    super::context::render_update_discovery(&to_owned(previous), &to_owned(current))
+}
+
+#[test]
+fn runner_discovery_changed_file_renders_ref_shaped_diff_block() {
+    // A 12-line file with a one-line edit near the end: the 3-context
+    // diff is shorter than restating the file, so shorter-wins picks it.
+    let old = (1..=12).map(|n| format!("line {n}\n")).collect::<Vec<_>>().join("");
+    let new = old.replace("line 12\n", "line twelve edited\n");
+    let update = discovery_update(&[("/repo/AGENTS.md", &old)], &[("/repo/AGENTS.md", &new)])
+        .expect("update");
+    // Ref shape: preamble + ```diff fence + 3-context hunks only (the
+    // `Index:`/`---`/`+++` header is sliced off at the first `@@`).
+    assert_eq!(
+        update,
+        "The instructions from /repo/AGENTS.md changed. Here's the diff:\n\
+         ```diff\n\
+         @@ -9,4 +9,4 @@\n line 9\n line 10\n line 11\n-line 12\n+line twelve edited\n\
+         ```"
+    );
+}
+
+#[test]
+fn runner_discovery_tiny_change_falls_back_to_full_restatement() {
+    // Shorter-wins (ref :148): on a tiny file the fenced diff is LONGER
+    // than restating it, so the replacement wins.
+    let update = discovery_update(
+        &[("/repo/AGENTS.md", "one\ntwo\nthree\n")],
+        &[("/repo/AGENTS.md", "one\ntwo\nTHREE\n")],
+    )
+    .expect("update");
+    assert_eq!(
+        update,
+        "The instructions changed:\nInstructions from: /repo/AGENTS.md\none\ntwo\nTHREE\n"
+    );
+}
+
+#[test]
+fn runner_discovery_added_and_removed_files_render_deltas() {
+    let update = discovery_update(
+        &[("/repo/AGENTS.md", "keep\n"), ("/repo/nested/AGENTS.md", "gone\n")],
+        &[("/repo/AGENTS.md", "keep\n"), ("/repo/other/AGENTS.md", "fresh\n")],
+    )
+    .expect("update");
+    assert_eq!(
+        update,
+        "The instructions from /repo/nested/AGENTS.md no longer apply.\n\n\
+         New instructions apply from:\nInstructions from: /repo/other/AGENTS.md\nfresh\n"
+    );
+}
+
+#[test]
+fn runner_discovery_diff_shorter_than_full_refetch() {
+    // A long file with a one-line change: the diff block must be shorter
+    // than restating the whole file (shorter-wins, ref :148) — i.e. the
+    // update is the diff, not the full content.
+    let big = (0..40).map(|n| format!("line {n}\n")).collect::<String>();
+    let edited = big.replace("line 20\n", "line 20 edited\n");
+    let update = discovery_update(&[("/repo/AGENTS.md", &big)], &[("/repo/AGENTS.md", &edited)])
+        .expect("update");
+    assert!(update.contains("```diff"), "{update}");
+    assert!(update.contains("@@ -18,7 +18,7 @@"), "{update}");
+    assert!(update.len() < big.len() + 100, "diff must beat full refetch: {}", update.len());
+}
+
+#[test]
+fn runner_discovery_unchanged_yields_none_and_removed_source_renders() {
+    assert_eq!(discovery_update(&[("/a", "x")], &[("/a", "x")]), None);
+    let source = super::context::discovery_source(std::sync::Arc::new(|| Vec::new()));
+    assert_eq!(
+        (source.removed.as_ref().unwrap())(&serde_json::json!([])),
+        Some("Previously loaded instructions no longer apply.".to_string())
+    );
 }
