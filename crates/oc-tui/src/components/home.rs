@@ -85,6 +85,17 @@ pub(crate) const LOGO_RIGHT: [&str; 4] =
 /// The logo's full width: left 19 + gap 1 + right 19.
 pub(crate) const LOGO_WIDTH: usize = 19 + 1 + 19;
 
+/// The wordmark halves for the stats poster (stats.tsx:70's `<Logo/>`
+/// — the same art the home screen paints).
+pub(crate) fn logo_left() -> &'static [&'static str; 4] {
+    &LOGO_LEFT
+}
+
+/// The wordmark's bold right half (stats poster reuse).
+pub(crate) fn logo_right() -> &'static [&'static str; 4] {
+    &LOGO_RIGHT
+}
+
 /// The prompt box's `maxWidth` (`routes/home.tsx`).
 const PROMPT_MAX_WIDTH: usize = 75;
 

@@ -1698,6 +1698,21 @@ impl App {
             self.stroke_in_dialog(stroke);
         } else if self.diff_live() {
             self.stroke_in_diff(&stroke);
+        } else if self.stats_live() {
+            // RE-14 — the stats page's layer binds only escape; base
+            // commands still resolve (stats.tsx:151-153 pushes the
+            // layer over the existing stack, nothing else is
+            // rebound), unbound strokes are consumed — the page
+            // carries no composer.
+            if let Outcome::Command { command, args } =
+                self.keymap.lookup(stroke.clone(), &self.clock)
+            {
+                let dispatch = self.dispatcher.dispatch(&self.store, &command, args.as_deref());
+                if let Dispatch::ServerPending(reason) = dispatch {
+                    let _ = reason;
+                }
+                self.keymap.clear_pending();
+            }
         } else if self.permission_live() {
             self.stroke_in_permission(expanded);
         } else if self.form_live() {
@@ -1763,6 +1778,11 @@ impl App {
     /// The diff viewer's plugin route is mounted (SURF-2).
     fn diff_live(&self) -> bool {
         self.store.diff_viewer_open()
+    }
+
+    /// RE-14 — the `/stats` page owns the screen while mounted.
+    fn stats_live(&self) -> bool {
+        self.store.stats_page_open()
     }
 
     /// One stroke while the diff viewer owns the screen: the `diff`
@@ -2914,7 +2934,11 @@ impl App {
         // composer under it, the `diff` layer owns the keys
         // (diff-viewer.tsx:798-800 mounts the layer while live).
         let diff = self.store.diff_viewer_open();
-        let input = !dialog && !self.permission_live() && !self.form_live() && !diff;
+        // RE-14 — the stats page is the same kind of full-screen
+        // route; its layer binds only escape → back (stats.tsx:
+        // 151-153), everything else resolves base.
+        let stats = self.store.stats_page_open();
+        let input = !dialog && !self.permission_live() && !self.form_live() && !diff && !stats;
         let picker = input && self.picker_live();
         let mut modes: Vec<&str> = Vec::new();
         if input {
@@ -2930,6 +2954,9 @@ impl App {
             // Current mode = the stack's last entry: `diff` shadows
             // base while the viewer is mounted.
             modes.push("diff");
+        }
+        if stats && !dialog && !diff {
+            modes.push("stats");
         }
         self.keymap.set_modes(&modes);
         self.dialog_mode = dialog;
@@ -4416,6 +4443,13 @@ pub enum LoopRequest {
     },
     /// `DialogPair`'s fetch (SURF-2): `server.info` + `server.pair`.
     Pair,
+    /// RE-14 — the `/stats` page's resource (`session.stats`,
+    /// stats.tsx:141-147): the year range + `tools: "none"`.
+    SessionStats {
+        generation: u64,
+        from_ms: i64,
+        timezone: String,
+    },
     /// The MCP toggle (SURF-2): `experimental.mcp.connect/disconnect`.
     McpToggle {
         server: String,
@@ -4616,6 +4650,11 @@ pub enum LoopFetch {
     },
     /// `DialogPair`'s resource result.
     Pair(Result<crate::store::PairState, String>),
+    /// RE-14 — the stats page's resource result.
+    SessionStats {
+        generation: u64,
+        result: Result<oc_client::types::SessionStatsInfo, String>,
+    },
     // -- Lane FINAL -------------------------------------------------
     /// The `integration.list` rows (pre-shaped).
     IntegrationList(Result<Vec<crate::store::IntegrationRow>, String>),
@@ -4921,6 +4960,29 @@ pub fn spawn_loop_fetcher(
                         }
                         .await;
                         let _ = tx.send(LoopFetch::Pair(result.map_err(|error: String| error)));
+                    });
+                }
+                // RE-14 — the stats poster's resource (stats.tsx:
+                // 141-147): `session.stats` with the local year
+                // range, `tools: "none"`.
+                LoopRequest::SessionStats { generation, from_ms, timezone } => {
+                    let client = client.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let result = client
+                            .session()
+                            .stats(&oc_client::types::ExperimentalSessionStatsQuery {
+                                from: Some(from_ms.to_string()),
+                                to: None,
+                                project: None,
+                                timezone: Some(timezone),
+                                tools: Some(
+                                    oc_client::types::ExperimentalSessionStatsQueryTools::None,
+                                ),
+                            })
+                            .await
+                            .map_err(|error| error.to_string());
+                        let _ = tx.send(LoopFetch::SessionStats { generation, result });
                     });
                 }
                 LoopRequest::McpToggle { server, connect } => {
@@ -6119,6 +6181,18 @@ impl crate::store::McpToggleSink for HttpMcpToggle {
     }
 }
 
+/// RE-14 — the stats fetch worker (`session.stats` through the loop
+/// fetcher).
+struct HttpStatsSink {
+    tx: tokio::sync::mpsc::UnboundedSender<LoopRequest>,
+}
+
+impl crate::store::StatsSink for HttpStatsSink {
+    fn fetch(&self, generation: u64, from_ms: i64, timezone: String) {
+        let _ = self.tx.send(LoopRequest::SessionStats { generation, from_ms, timezone });
+    }
+}
+
 /// The config persistence sink's HTTP-less production impl: oc-core's
 /// `CliConfig` service (flock + JSONC-preserving write-through).
 struct HttpConfigSink {
@@ -6751,6 +6825,9 @@ pub async fn run_with_size(
         app.store.set_pair_refresh_sink(std::rc::Rc::new(HttpPairRefresh { tx }));
         let tx = loop_fetch_tx.clone();
         app.store.set_mcp_toggle_sink(std::rc::Rc::new(HttpMcpToggle { tx }));
+        // RE-14: the stats page's fetch seam rides the loop fetcher.
+        app.store
+            .set_stats_sink(std::rc::Rc::new(HttpStatsSink { tx: loop_fetch_tx.clone() }));
     }
     // Lane FINAL: the integration connect machine + the session
     // actions ride the same loop fetcher.
@@ -7592,6 +7669,11 @@ pub async fn run_with_size(
                         Err(error) => crate::store::PairState::Failed(error),
                     };
                     app.store.set_pair_state(state);
+                }
+                // RE-14 — the stats resource lands (stale generations
+                // drop inside the store).
+                LoopFetch::SessionStats { generation, result } => {
+                    app.store.stats_fetch_result(generation, result);
                 }
                 // -- Lane FINAL: the connect machine's results ------
                 LoopFetch::IntegrationList(result) => match result {
