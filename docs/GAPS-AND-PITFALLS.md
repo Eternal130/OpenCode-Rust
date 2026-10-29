@@ -384,3 +384,53 @@ pathdiff 同路径 `"."` vs `""`；webfetch timeout clamp(1,120) 与 URL 协议�
 |---|---|
 | environment/workspace 驱动 | **已闭环（2026-10-28，e86390d，前提修正）**：经 ref 代码核实，`mcp/stdio.ts` 本地分支以 `extendEnv: true` 调用 spawner，本地 cross-spawn spawner（cross-spawn-spawner.ts:111）扁平化为 `{...process.env, ...opts.env}`——**ref 本地分支本就继承宿主全部环境，不剥离任何变量**；剥离语义只存在于未移植的 workspace/sandbox 驱动。故 RD-08 豁免维持原范围（workspace seam），本轮"stdio 执行平面缺口"**不成立**。port 侧改动：将隐式继承抽成显式纯函数 `stdio_environment(host, command, config_env)`（宿主 env < BUN_BE_BUN〔仅 opencode 命令〕< 配置 environment），`env_clear().envs(...)` 显式应用 + 5 个单测钉住语义；oc-core 1194/1194 |
 | run `attached:false` 无条件硬编码 | **已闭环（2026-10-28，25dfc66）**：新增 `attached(Option<&StandaloneServer>)` 辅助——共享目标（显式 `--server` 与托管后台服务）传 `attached: true`（对齐 ref run.ts:149 `?? true`，全局表单清扫跳过），standalone 独占租约保持 `false`（attached_client_leaves_global_forms_alone 无回归）；ref 无 attached CLI flag（仅内部从 `input.server !== undefined` 派生），故不加 flag 管道；3 个新测试覆盖三分支；oc-cli 238/238。合并门（两 crate 同树）：nextest 1432/1432（.test-logs/merge-gate-rw53-20261028.log） |
+
+---
+
+## 6. 2026-10-28 全域对比审查（九通道：session/engine、AI/provider、server/http、config/project、tools、MCP/plugin/skill、TUI、CLI/client/schema、依赖）新增缺口与复核结论
+
+> 方法：ref packages/{core,server,cli,tui,client,ai,protocol,schema} ↔ rust crates/oc-*，逐文件枚举对比、不采信仓内报告；下表仅收录**经 orchestrator 二次代码复核确认**的条目（证据 = 本仓代码位置）。与 §1/§5 已登记条目去重：workspace seam（RD-08/RW 系列）、Web UI（R-04）、LSP（G-09）等不重复列。
+
+### 6.1 新登记缺口（按优先级）
+
+| ID | 缺口 | 优先级 | 复核证据（rust / ref） |
+|---|---|---|---|
+| AUD-01 | **MCP instructions 汇总缓存 `codemode` 硬编码 `true`，且未按 `Permission.evaluate("execute")` 过滤工具/server**：权限收紧后 server 指引仍进系统提示（信息泄露）；codemode=false 的 server 提示行错误 | P0（安全） | oc-core/src/engine/mod.rs:1057（`codemode: true` 字面量）vs ref mcp/instructions.ts:63-108（按权限过滤 + 逐工具 codemode 标志）；汇总仅 500ms 轮询刷新（engine/mod.rs:1050-1070） |
+| AUD-02 | **服务端 prompt 附件物化管线缺失**：ref 在提交期对 files 做 data-URL 解码 / file-URI 读取 / start-end 行切片 / 目录列表物化 / MAX_ATTACHMENT_BYTES 上限 / 图片归一化；rust 全仓无对应（TUI 侧 composer/attachment.rs 仅客户端编码，不构成服务端校验） | P0（正确性/资源） | ref core/src/session/prompt.ts:54,93-225（`materializeAttachment`、`MAX_ATTACHMENT_BYTES`）；rust oc-core 无 `materialize`/`MAX_ATTACHMENT` 实现（grep 全仓仅命中无关注释） |
+| AUD-03 | **reference 域为 TODO 桩**：`core/reference-guidance` 指令块恒空（read 恒 Removed），git reference 仓库缓存/每日刷新/每小时巡检均无 | P1 | oc-core/src/session/runner/context.rs:620-624（`TODO(wave-C)` 自认）vs ref reference.ts:33-128 + reference/instructions.ts:20-95；oc-util/global_roots.rs:124-127 仅预留 `repos` 目录 |
+| AUD-04 | **native compaction 手动路径 trigger 硬编码**：手动 `/compact`（native 模型）错误发布 `session.compaction.started(reason:"auto")` 且跳过手动路径约束 | P1 | oc-core/src/session/runner/compaction.rs:496（`self.deliver(Reason::Auto, …)` 无条件）vs ref compaction.ts:324-372（透传 trigger） |
+| AUD-05 | **HTTP FormLocation 的 `"global"` 逃生门未接线**：core 侧哨兵已存在（elicitation.rs:166 `GLOBAL_ELICITATION_SESSION_ID`，elicitation 表单确实以 `session_id="global"` 落库），但 handlers/session.rs:126 `parse_session_id` 无特殊分支、`session_location`（common.rs:270-278）直接查 session 表 → 经 HTTP 查询/应答该表单得 404。收窄说明：这是**路由层缺口**而非整域缺失 | P1 | rust common.rs:270-278 vs ref middleware/form-location.ts:27-38（`sessionID === "global"` 直查全局 Form.Service） |
+| AUD-06 | **tool-input-repair 内置插件缺失**：字符串化/宽松类型工具参数修复（`'{"limit":"20"}'`→`{limit:20}` 等 9 类）无对应。注意：oc-ai 的 partial_json.rs/sanitize.rs 是流式解析/代理字符，**不是**等价物 | P1 | ref core/src/plugin/tool-input-repair.ts:1-30+；rust 全仓 `repair` 命中仅 partial_json/sanitize/markdown（均无关） |
+| AUD-07 | **rg 无自动下载**：ref 依次系统 rg→全局缓存→自动下载 GitHub release 15.1.0；rust 仅 `OPENCODE_RG_PATH`→bundled→PATH，无 rg 环境直接失败。另：rg 退出码 2（权限/config 类错误）rust 一律报错，ref 容忍并返回部分结果 | P1 | oc-core/src/tool/mod.rs:119-139 vs ref ripgrep/binary.ts:13-136；tool/grep.rs:180-186 vs ref ripgrep.ts:148-151 |
+| AUD-08 | **read 工具两处行为偏移**：① 整文件 `std::fs::read` 载入（ref 256KiB rope 分块），大文件内存峰值；② 分页路径对整个文件做 NUL 二进制检查（ref 仅检查已消费区间）→ >50KiB 二进制文件分页读整页报 Binary | P1 | oc-core/src/tool/read.rs（read_file=254；NUL 检查为全文级）vs ref read-filesystem.ts:14-402,151-209 |
+| AUD-09 | **prompt hook 时机架构性差异**：ref 在提交时（入 inbox 前）触发 `session.prompt`，失败即拒绝请求；rust 在 Ready 边界对已落库行触发，失败毒化/取消该行——API 错误码与时序可观察不同 | P2 | oc-core/src/session/runner/prompt_prepare.rs:1-26,273-305 vs ref core/src/session/prompt.ts:29-52 |
+| AUD-10 | **provider 长尾缺口**：① venice/zai-chat 个性化 body 扩展未在 customization.rs 找到条目（alibaba/zai-coding-plan/zai-messages 已确认在，customization.rs:180,333）；② 头部注入类 provider 插件（cerebras `X-Cereras-3rd-Party-Integration` 等 ~16 家）无对应；③ modal.com 远端模型目录缺失（provider_catalog 仅 models-dev 快照）；④ copilot 为组合复用（~700 行）vs ref 独立实现（~4k 行），边缘行为依赖 recordings 验证 | P2 | oc-ai/src/customization.rs:180-337（zai/alibaba 在、venice 无）；oc-core/src/provider_catalog/（无 modal 源）vs ref plugin/provider/*.ts（34 文件）+ modal/models.ts |
+| AUD-11 | **MCP 仅 SSE 的旧服务器无传输回退**：只有 StreamableHTTP + stdio；ref 经 SDK 对 legacy SSE 服务器内部降级 | P2 | oc-core/src/mcp/client.rs:1099-1210（仅 connect_remote/connect_local，无 SseClientTransport） |
+| AUD-12 | **CLI run v1 兼容 bridge 缺失**（runV1Bridge）；**oc-schema lib.rs:80-83 自认 TODO**：v1 legacy schema、rpc.ts、pty-ticket.ts、models-dev、event-manifest 集中索引未进 oc-schema（事件清单分散 3 模块 + oc-core registry） | P2 | oc-cli/src/run/ 无 v1 对应；oc-schema/src/lib.rs:80-83 |
+| AUD-13 | **TUI 语法高亮语言覆盖缺口**：缺 bash/csharp/kotlin/swift/haskell/julia/ocaml/clojure/vue/hcl（未知 filetype 纯文本回退）；无远程 wasm 加载（安全上反而更收敛）。注：与 G-08/G-11 的 20 门目录现状一致，此处登记 ref 全目录差距 | P2 | oc-syntax/lib.rs:1-408 vs ref parsers-config.ts:6-386 |
+| AUD-14 | **AGENTS.md 运行时变更语义弱化**：无 per-file watcher 自动重扫（依赖 config watch 通道）；变更时无 unified diff 增量渲染（ref removed/added/changed 三态 + 短者胜 diff），rust 全量重发（token 放大） | P2 | oc-core/src/config/instruction.rs:65-110（纯函数发现）vs ref config/plugin/instruction.ts:31-118 + instruction-discovery.ts:123-149 |
+| AUD-15 | **git 同步面缺失**：Git.sync（clone/fetch/checkout/resetHard）与 index.refresh/ignored、Vcs adapter（status/diff/base/initialize）无 core 对应；识别/快照/worktree/branch-list 已由 git2 覆盖。vcs/patch.ts 的大上下文（2^31-1）patch 语义亦无独立对应（file_diff.rs 固定 4 行上下文） | P2 | oc-core/project.rs（仅识别）、oc-server/handlers/project.rs:285-535（worktree/branch）vs ref git.ts:1-758、vcs/patch.ts:1-60 |
+| AUD-16 | **snapshot diff 忽略 `context` 参数**（`_context: Option<u32>` 未用）；enabled 门槛未检查 location vcs 类型 | P2 | oc-core/src/snapshot.rs:609 vs ref snapshot.ts:88-233 |
+| AUD-17 | **shell 工具 join 有界超时 5s**（ref 可无限等待卡死工具 fiber，rust abort 后按 interrupted 分类）；工具 metadata 的 signal/timeout 为 `Option`+skip_serialize（ref 恒输出，含 false/undefined 档）——字段**已存在**（见 6.2 复核推翻），仅序列化存在性有微小差异 | P3（有意取舍，登记备查） | oc-core/src/session/runner/step.rs:44 vs ref step.ts:87,136-144；tool/shell.rs:107-118 |
+| AUD-18 | **非法 sessionID 报 404 而非 400**：ref 对格式非法的 sessionID 先 400 InvalidRequestError；rust `parse_session_id` 回退原值直接查表 404 | P3 | oc-server/handlers/session.rs:126 vs ref location.ts:56-59 |
+| AUD-19 | **webfetch 无 content-length 预检**（超声明体积 ref 不下载，rust 流式读到 5MiB 上限才断）；timeout 用 clamp(1,120) 而非 schema 拒绝非法值 | P3 | oc-core/src/tool/webfetch.rs:73+ vs ref tool/http-body.ts:14-17 |
+| AUD-20 | **杂项**：OAuth 回调页纯文本（ref HTML 页，UX 降级）；OAuth 刷新去重 key 用 config.url 而非 token endpoint（oauth.rs:913-920 已文档化偏差，多 AS 同源场景理论误共享）；插件 Context 域 vcs/websearch/worktree/reference/experimental.terminal 无 port；KV 无通用门面（非插件调用方直接摸表）；凭据两侧均明文 SQLite（非回归，共同改进项） | P3 | 各通道明细表 |
+
+### 6.2 复核推翻/修正的通道结论（勿再登记）
+
+| 原结论 | 复核结果 |
+|---|---|
+| "shell metadata 缺 signal/timeout/truncated:false 字段" | **不成立**：`ShellToolOutput`（oc-core/src/tool/shell.rs:107-118）已含 `exit/signal/shell_id/truncated/timeout/status` 全字段且接线（:355-358）；仅 Option 字段 skip-serialize 与 ref 的恒输出存在序列化存在性微差，降级并入 AUD-17 |
+| "FormLocation `sessionID==="global"` 逃生门整体未移植" | **收窄**：core 哨兵 `GLOBAL_ELICITATION_SESSION_ID`（mcp/elicitation.rs:166）存在且 elicitation 表单确实落库为 `"global"`；缺的是 HTTP handlers 层放行（→ AUD-05） |
+| "hg VCS 缺失" | **修正**：project 身份的 hg 支持**已移植**（oc-core/src/project.rs，hg log -r roots(all()) 语义一致）；缺的仅是 ref plugin/vcs/hg.ts 的 VCS 信息工具面 |
+| "venice/zai 未覆盖" | **部分修正**：zai-coding-plan 与 zai-messages body wrap 均在（customization.rs:180,333-337，有测试 ：455）；**venice 未找到**条目，维持 AUD-10① |
+| "rg 退出码 2 rust 直接失败" | **维持**（AUD-07 一并登记），但补充：参数构造逐项一致，差异仅在错误容忍与二进制获取 |
+
+### 6.3 复核后确认无需登记（与 ref 持平或有意的文档化取舍）
+
+- 键位引擎/剪贴板/通知/主题/QR（uqr golden 对拍）：逐文件移植，测试钉死。
+- openapi.json 与 ref **md5 逐字节相同**（141 ops / 256 schemas 双向零差异），oc-server include_bytes 自host——全移植最强一致性锚点。
+- 141 HTTP 路由 1:1；鉴权/SSE/PTY-WS 边界语义（base64 padding 容错、JS f64 整数语义、cookie 端口命名、ticket scope、WS 4404/1000）均有测试。
+- 凭据明文存储：两侧一致，非移植回归。
+- `ignore@7.0.5`（ref package.json 声明但源码无 import）：rust 未替代属正确。
+- reqwest 双版本 / OTel optional / git2 内嵌：见 RW-T3、RW-06 及依赖对比通道结论，已有登记不重复。
