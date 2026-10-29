@@ -177,7 +177,7 @@ mod tests {
     fn poster_page_paints_the_ref_rows() {
         let theme = ThemeState::v2_dark();
         let stats = fixture();
-        let poster = super::super::stats_page::stats_poster(&stats, (120, 40));
+        let poster = super::super::stats_page::stats_poster(&stats, (120, 40), "UTC");
         let frame = render_stats_page_solid(StatsPhaseView::Loaded(&poster), &theme.styles(), (120, 40));
         let grid = frame.text_grid();
         let all = grid.join("\n");
