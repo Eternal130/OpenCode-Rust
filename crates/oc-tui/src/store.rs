@@ -1607,6 +1607,10 @@ pub struct Store {
     /// `update-notification.tsx`): the banner's notice + the dialog's
     /// live state.
     update_notice: Signal<Option<crate::components::update::UpdateNotice>>,
+    /// RE-04 — the clock stamp of the CURRENT banner notice (the
+    /// `FadeInText`'s `elapsed` source; `clock − since` drives the
+    /// 200 ms left-to-right text fade, home.tsx:151).
+    update_since: Cell<Option<u64>>,
     update_dialog: Signal<crate::components::update::UpdateDialogState>,
     /// The dismissed `source:version` keys (`update-notifications` —
     /// loaded/saved by the run loop's storage handle).
@@ -3348,6 +3352,7 @@ impl Store {
             pair,
             title_pending,
             update_notice,
+            update_since: Cell::new(None),
             update_dialog,
             update_dismissed: RefCell::new(Vec::new()),
             home_update_hit: RefCell::new(None),
@@ -5091,6 +5096,17 @@ impl Store {
             }
         }
         self.update_notice.set(Some(notice));
+        // RE-04 — the fade-in's zero (the banner mounts, the 200 ms
+        // FadeInText sweep starts at the CURRENT clock; a frozen
+        // clock pins the fade's frame).
+        self.update_since.set(Some(self.clock()));
+    }
+
+    /// RE-04 — the current banner notice's clock stamp (the
+    /// `FadeInText`'s `since`; `None` while no banner shows).
+    #[must_use]
+    pub fn update_since(&self) -> Option<u64> {
+        self.update_since.get()
     }
 
     /// TUI-TD27 — record/clear the banner's hit rect (the home
@@ -5115,6 +5131,7 @@ impl Store {
             history.truncate(100);
         }
         self.update_notice.set(None);
+        self.update_since.set(None);
     }
 
     /// The update dialog's live state.
