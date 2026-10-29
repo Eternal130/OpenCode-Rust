@@ -14,8 +14,10 @@
 //! identical document this client was generated from (sha256 in
 //! `oc_server::routes_gen::OPENAPI_SHA256`).
 
+pub mod bus_event;
 pub mod error;
 pub mod event_ext;
+pub mod rpc_typed;
 pub mod shared_events;
 pub mod sse;
 pub mod transport;
@@ -28,7 +30,7 @@ pub mod methods;
 
 pub use error::ClientError;
 pub use methods::*;
-pub use sse::{SseFrame, SseStream, MAX_SSE_EVENT_BYTES};
+pub use sse::{MAX_SSE_EVENT_BYTES, SseFrame, SseStream};
 
 use base64::Engine as _;
 

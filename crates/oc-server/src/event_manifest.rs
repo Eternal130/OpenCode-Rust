@@ -158,4 +158,88 @@ mod tests {
         assert!(!is_public("mcp.tools.changed"));
         assert!(!is_public("mcp.prompts.changed"));
     }
+
+    /// RE-06 drift guard (consumer mirror): the client-side typed event
+    /// classification (`oc_client::bus_event` — what oc-tui dispatches
+    /// on) stays in lockstep with this manifest. A type added to the
+    /// registry or the service frames without a client-side
+    /// `EventKind` variant fails here (and vice versa: a stale client
+    /// kind whose classification source disappeared fails too).
+    #[test]
+    fn manifest_client_event_kinds_match_public_surface() {
+        // The public surface this manifest admits (minus the `rpc.*`
+        // wildcard, which the client models as one `EventKind::Rpc`).
+        let mut public: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        public.insert(CONNECTED.to_owned());
+        for definition in registry::definitions() {
+            public.insert(definition.type_.clone());
+        }
+        for definition in registry::non_session_definitions() {
+            public.insert(definition.type_.clone());
+        }
+        for type_ in SERVICE_FRAMES {
+            public.insert((*type_).to_owned());
+        }
+
+        // Wire types that predate the registry inventory and stay on
+        // the feed through documented channels: the v1 legacy event
+        // surface (schema `v1/session.ts`) and the manifest-private
+        // registry members. These are client-known without being
+        // classified public here.
+        let legacy: std::collections::BTreeSet<&str> = [
+            "message.part.delta",
+            "message.part.removed",
+            "message.part.updated",
+            "message.removed",
+            "message.updated",
+            "session.diff",
+            "session.error",
+            "session.updated",
+            "log.synced",
+        ]
+        .into_iter()
+        .chain([
+            // Schema-defined public types the Rust registry inventory
+            // does not list yet (oc-schema unions: `ServerEvent`,
+            // `SessionCompactionEvent`, `LocationEvent`-family,
+            // `LspEvent`, `WorkspaceEvent`, `WorktreeEvent`) — the
+            // manifest classifies them only once a publisher registers
+            // them; the client knows them because oc-schema defines
+            // their wire shape.
+            "global.disposed",
+            "session.compacted",
+            "lsp.updated",
+            "workspace.failed",
+            "workspace.ready",
+            "workspace.status",
+            "worktree.failed",
+            "worktree.ready",
+        ])
+        .collect();
+
+        let client_known: std::collections::BTreeSet<&str> =
+            oc_client::bus_event::KNOWN_EVENT_TYPES.iter().copied().collect();
+
+        // Forward: every public type is client-known (a new server
+        // event type cannot silently fall back to `EventKind::Unknown`
+        // in consumers).
+        for type_ in &public {
+            assert!(
+                client_known.contains(type_.as_str()),
+                "public event type {type_} has no oc_client EventKind variant — \
+                 update oc-client/src/bus_event.rs"
+            );
+        }
+        // Reverse: every client-known type is public, a documented
+        // legacy wire type, or a manifest-private member.
+        for type_ in &client_known {
+            let classified = public.contains(*type_) || legacy.contains(type_);
+            assert!(
+                classified,
+                "oc_client EventKind knows {type_}, but no manifest source \
+                 (registry/service frame/{CONNECTED}) or legacy entry covers it — \
+                 stale client kind or missing manifest entry"
+            );
+        }
+    }
 }
