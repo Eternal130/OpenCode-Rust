@@ -25,11 +25,11 @@
 //!   running steps keep borrowing the old graph until they finish (v2:
 //!   "running steps keep borrowing old graph until boundary").
 //! - Invalidation runs the v2 shutdown sequence (`location-lifecycle.ts`):
-//!   permission close → forms close (placeholder) → rpc close (placeholder)
-//!   → publish `location.shutdown` (data `{}`, location-stamped).
+//!   permission close → forms close (placeholder) → publish
+//!   `location.shutdown` (data `{}`, location-stamped).
 //! - Plugin boot order (v2 `supervisor.ts`): internal **pre** plugins →
-//!   host plugins (placeholder slot, `TODO(plugin-lane)`) → internal
-//!   **post** plugins, with per-plugin failure containment.
+//!   host plugins (oc-server's `PluginHost`) → internal **post** plugins,
+//!   with per-plugin failure containment.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -41,7 +41,7 @@ use parking_lot::Mutex;
 
 use crate::bus::Bus;
 use crate::database::Database;
-use crate::hooks::{HookRegistry, PluginFailure, RpcPort};
+use crate::hooks::{HookRegistry, PluginFailure};
 use crate::provider_catalog::Catalog;
 
 // =============================================================================
@@ -782,8 +782,6 @@ pub struct LocationGraph {
     pub permissions: Arc<dyn PermissionPending>,
     /// Forms placeholder (closed second on shutdown).
     pub forms: Arc<dyn FormsPort>,
-    /// RPC port placeholder (closed third on shutdown).
-    pub rpc: Arc<dyn RpcPort>,
     /// Generation of the map at build time (diagnostics).
     pub built_at_generation: u64,
     /// Plugin boot failures (contained — the graph booted regardless).
@@ -905,7 +903,6 @@ impl LocationGraph {
             config: Arc::clone(&globals.config_cache),
             permissions: Arc::clone(&globals.permissions),
             forms: Arc::clone(&globals.forms),
-            rpc: Arc::clone(&globals.rpc),
             built_at_generation: generation,
             plugin_failures: outcome.failures,
         }))
@@ -928,14 +925,13 @@ impl LocationGraph {
     }
 
     /// v2 `LocationLifecycle.shutdown` sequence:
-    /// permission close → forms close → rpc close → publish
+    /// permission close → forms close → publish
     /// [`LOCATION_SHUTDOWN_EVENT`] (data `{}`, location-stamped —
     /// `location-lifecycle.ts`). Idempotent per graph instance (each step
     /// is delegated to the owning service).
     pub async fn shutdown(&self) {
         self.permissions.close().await;
         self.forms.close().await;
-        self.rpc.close().await;
         let _ = self
             .bus
             .publish(
