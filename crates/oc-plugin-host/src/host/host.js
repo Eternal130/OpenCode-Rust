@@ -508,7 +508,7 @@ async function handleRpcCall({ pluginId, rpcId, method, input }) {
 // ---------------------------------------------------------------------------
 // Runtime hook registry (guest-side handlers; coverage registered)
 // ---------------------------------------------------------------------------
-const hookHandlers = { session: new Map(), tool: new Map(), shell: new Map() };
+const hookHandlers = { session: new Map(), tool: new Map(), shell: new Map(), permission: new Map(), aisdk: new Map() };
 
 const SESSION_HOOKS = new Set([
   "prompt", "context", "compaction", "generate", "title", "model.request",
@@ -518,10 +518,25 @@ const SESSION_HOOKS = new Set([
 ]);
 const TOOL_HOOKS = new Set(["execute.before", "execute.after"]);
 const SHELL_HOOKS = new Set(["create.before"]);
+// PLUG-G2: the remaining v2 hook domains (host.ts:405 `permission.hook`,
+// host.ts:157-188 `aisdk.hook` — promise/permission.ts's `evaluate` and
+// promise/aisdk.ts's `sdk`/`language`).
+const PERMISSION_HOOKS = new Set(["evaluate"]);
+const AISDK_HOOKS = new Set(["sdk", "language"]);
 
 async function registerHook(pluginId, domain, name, handlers) {
   const known =
-    domain === "session" ? SESSION_HOOKS : domain === "tool" ? TOOL_HOOKS : domain === "shell" ? SHELL_HOOKS : null;
+    domain === "session"
+      ? SESSION_HOOKS
+      : domain === "tool"
+        ? TOOL_HOOKS
+        : domain === "shell"
+          ? SHELL_HOOKS
+          : domain === "permission"
+            ? PERMISSION_HOOKS
+            : domain === "aisdk"
+              ? AISDK_HOOKS
+              : null;
   if (!known || !known.has(name)) {
     throw new Error(`unknown ${domain} hook ${name}`);
   }
@@ -758,6 +773,8 @@ function makeCtx(pluginId, options) {
     // -- permission (PLUG-D11: the v2 PermissionDomain —
     //    list/get/reply over the engine's permission machinery) --------
     permission: {
+      // PLUG-G2: `ctx.permission.hook("evaluate", cb)` (host.ts:405).
+      hook: (name, handler) => registerHook(pluginId, "permission", name, handler),
       async list(args) {
         const result = await hostRequest("permission.list", { pluginId, args: args ?? {} });
         return result && typeof result === "object" && "value" in result ? result.value : result;
@@ -774,6 +791,12 @@ function makeCtx(pluginId, options) {
     // -- shell (the v2 ShellHooks domain: `create.before`) --------------------
     shell: {
       hook: (name, handler) => registerHook(pluginId, "shell", name, handler),
+    },
+
+    // -- aisdk (PLUG-G2: the v2 AISDKHooks domain — host.ts:157-188's
+    //    `aisdk.hook("sdk"|"language", cb)`) ------------------------------
+    aisdk: {
+      hook: (name, handler) => registerHook(pluginId, "aisdk", name, handler),
     },
 
     // -- rpc (PLUG-D14: `ctx.rpc.register(definition, handlers)`) ------------
