@@ -7344,6 +7344,8 @@ pub async fn run_with_size(
     let mut plugin_runtime: Option<crate::plugin_boot::TuiPluginRuntime> = None;
     let mut plugins_boot_done = false;
     let mut plugins_ready_fired = false;
+    // G-20(3) — the session id that already got its environment PUT.
+    let mut environment_sent: Option<String> = None;
 
     let result: Result<(), String> = loop {
         // Lane E2 — poll the plugin boot: one non-blocking poll on the
@@ -7432,6 +7434,37 @@ pub async fn run_with_size(
                 // The palette's exit contract (same as a typed
                 // command): a handled exit quits the pump.
                 app.exit_requested = true;
+            }
+        }
+        // G-20(3) — `session.environment` (app.tsx:487-499): once
+        // connected on the session route with the session loaded (the
+        // ref skips while `creating` — here the store not knowing the
+        // session yet is that state), PUT the terminal environment
+        // ONCE per session id. `input.environment` (app.tsx:332) is
+        // the host's env snapshot; the port's TUI rides its own
+        // process environment.
+        if let (
+            crate::data::ConnectionState::Connected,
+            crate::store::Route::Session { session_id },
+        ) = (app.store.connection(), app.store.route())
+        {
+            if app.store.session_info(&session_id).is_some()
+                && environment_sent.as_deref() != Some(session_id.as_str())
+            {
+                environment_sent = Some(session_id.clone());
+                let client = client.clone();
+                let body = oc_client::types::SessionEnvironmentBody {
+                    variables: std::env::vars().collect(),
+                };
+                tokio::spawn(async move {
+                    // `.catch(toast.error)` — a failure never retried,
+                    // never surfaced beyond the log seam.
+                    if let Err(error) = client.session().environment(&session_id, &body).await {
+                        if std::env::var("OC_TUI_DEBUG").ok().as_deref() == Some("1") {
+                            eprintln!("[tui] session.environment failed: {error}");
+                        }
+                    }
+                });
             }
         }
         // SURF-2 (lane E2): plugins ready — `set_plugins_ready()`
