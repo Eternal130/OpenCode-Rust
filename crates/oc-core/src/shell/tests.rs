@@ -562,10 +562,8 @@ mod parse_tests {
         let recent = dir.join("sh_000000000001BBBBBBBBBBBBBB.out");
         std::fs::write(&recent, "capture").unwrap();
         set_mtime(&recent, now - std::time::Duration::from_secs(120));
-        let now_ms = u64::try_from(
-            now.duration_since(std::time::UNIX_EPOCH).unwrap().as_millis(),
-        )
-        .unwrap();
+        let now_ms =
+            u64::try_from(now.duration_since(std::time::UNIX_EPOCH).unwrap().as_millis()).unwrap();
         // Default 7-day window: kept.
         crate::shell::cleanup_data_root(tmp.path(), now_ms);
         assert!(recent.exists(), "7-day default keeps a 2-minute-old capture");

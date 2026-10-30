@@ -101,10 +101,7 @@ mod tests {
 
     #[test]
     fn error_display_matches_tags() {
-        assert_eq!(
-            FilesError::NotFound { path: "/x".into() }.to_string(),
-            "not found: /x"
-        );
+        assert_eq!(FilesError::NotFound { path: "/x".into() }.to_string(), "not found: /x");
         assert_eq!(
             FilesError::WrongKind { path: "/x".into(), actual: FileType::Directory }.to_string(),
             "wrong kind at /x: Directory"

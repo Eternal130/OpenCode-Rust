@@ -720,12 +720,7 @@ impl Tx<'_> {
     /// bound, and a strict `after` cursor — the v2 `KV.scan` shape
     /// (`core/src/kv.ts:60-80`). Reads `limit + 1` rows so a leftover row
     /// reports `next` (the last returned key) without over-reading entries.
-    pub fn kv_scan(
-        &self,
-        prefix: &str,
-        after: Option<&str>,
-        limit: i64,
-    ) -> Result<KvScanResult> {
+    pub fn kv_scan(&self, prefix: &str, after: Option<&str>, limit: i64) -> Result<KvScanResult> {
         let limit = limit.clamp(1, 1000);
         let lower = if prefix.is_empty() { None } else { Some(prefix) };
         let upper = kv_prefix_end(prefix);
@@ -736,10 +731,9 @@ impl Tx<'_> {
              ORDER BY key LIMIT ?4",
         )?;
         let rows = statement
-            .query_map(
-                rusqlite::params![lower, upper, after, limit + 1],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-            )?
+            .query_map(rusqlite::params![lower, upper, after, limit + 1], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         let mut entries: Vec<KvEntry> = Vec::with_capacity(rows.len().min(limit as usize));
         for (key, encoded) in rows {
@@ -870,8 +864,7 @@ impl Database {
     ) -> Result<KvScanResult> {
         let prefix = prefix.to_string();
         let after = after.map(str::to_string);
-        self.transaction(move |tx| tx.kv_scan(&prefix, after.as_deref(), limit))
-            .await
+        self.transaction(move |tx| tx.kv_scan(&prefix, after.as_deref(), limit)).await
     }
 
     /// Journal ids currently recorded.
