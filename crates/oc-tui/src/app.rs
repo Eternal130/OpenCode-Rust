@@ -6956,6 +6956,17 @@ pub async fn run_with_size(
     // config doc; our ChannelStorage "sidebar" key stands in — the TUI
     // never rewrites the user's cli.json).
     app.store.set_sidebar_mode(config.session_sidebar);
+    // G-34 — `session.new_location` (`launch` | `inherit`, default
+    // launch — config/index.tsx:320): whether session.new/session.clear
+    // keep the CURRENT location on the home route.
+    {
+        let mode = oc_core::cli_config::CliConfig::open(&oc_util::global_roots::resolve())
+            .get()
+            .session
+            .and_then(|session| session.new_location);
+        app.store
+            .set_session_new_location(crate::store::NewSessionLocation::parse(mode.as_deref()));
+    }
     let tabs_storage = crate::storage::ChannelStorage::open_default_migrated().ok();
     if let Some(storage) = &tabs_storage {
         let doc: crate::storage::SidebarDoc = storage.read_or_default(crate::storage::KEY_SIDEBAR);
