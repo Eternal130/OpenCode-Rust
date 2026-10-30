@@ -425,18 +425,16 @@ pub fn apply_plugin_integration_methods(
     dispatcher: &Arc<dyn GuestHookDispatcher>,
     defs: &[PluginIntegrationMethodDef],
 ) -> usize {
-    use crate::integration::types::{FormAnswer, Method};
-    use crate::integration::{AuthMode, Authorization, CodeCallback, OAuthImplementation};
+    use crate::integration::types::{FormAnswer, CredentialValue, Method};
+    use crate::integration::{AuthMode, Authorization, CodeCallback, OAuthImplementation, RefreshFn};
+    use futures::future::BoxFuture;
     use serde_json::Value;
 
     let mut applied = 0usize;
     for definition in defs {
         let Value::Object(registration) = &definition.registration else { continue };
-        let Some(integration_id) =
-            registration.get("integrationID").and_then(Value::as_str)
-        else {
-            continue;
-        };
+        let Some(integration_id) = registration.get("integrationID").and_then(Value::as_str)
+        else { continue };
         let Some(method_value) = registration.get("method") else { continue };
         let Ok(method) = serde_json::from_value::<Method>(method_value.clone()) else {
             eprintln!(
@@ -445,143 +443,120 @@ pub fn apply_plugin_integration_methods(
             );
             continue;
         };
-        let plugin_id = definition.plugin_id.clone();
-        let dispatcher = Arc::clone(dispatcher);
-        let dispatcher_refresh = Arc::clone(&dispatcher);
-        let authorize = registration.get("authorize").and_then(Value::as_object).map(|shape| {
-            let plugin_id = plugin_id.clone();
+        // The guest's `authorize`/`refresh` closures cannot cross the
+        // boundary as JSON — the guest sends presence markers and
+        // serves the calls through the `integration.*` hook dispatches
+        // (`authorize` → `{url, instructions, mode, credential?}`,
+        // `callback` → `{credential}`, `refresh` → `{credential}`).
+        let has_authorize =
+            registration.get("authorize").and_then(Value::as_bool).unwrap_or(false);
+        let has_refresh = registration.get("refresh").and_then(Value::as_bool).unwrap_or(false);
+        let authorize = has_authorize.then(|| {
+            let plugin_id = definition.plugin_id.clone();
             let integration_id = integration_id.to_owned();
-            let mode = shape.get("mode").and_then(Value::as_str).unwrap_or("code").to_owned();
-            let url = shape
-                .get("url")
-                .and_then(Value::as_str)
-                .unwrap_or("about:blank")
-                .to_owned();
-            let instructions = shape
-                .get("instructions")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_owned();
-            let auto = shape.get("auto").and_then(Value::as_object).cloned();
-            let label = shape.get("label").and_then(Value::as_str).map(str::to_owned);
-            move |_answer: FormAnswer| -> futures::future::BoxFuture<'static, Result<Authorization, String>> {
+            let dispatcher = Arc::clone(dispatcher);
+            move |answer: FormAnswer| -> BoxFuture<'static, Result<Authorization, String>> {
                 let plugin_id = plugin_id.clone();
                 let integration_id = integration_id.clone();
-                let mode = mode.clone();
-                let url = url.clone();
-                let instructions = instructions.clone();
-                let auto = auto.clone();
                 let dispatcher = Arc::clone(&dispatcher);
-                let label = label.clone();
                 Box::pin(async move {
-                    if mode == "auto" {
-                        if let Some(auto) = auto {
-                            let reply = dispatcher
-                                .dispatch(
-                                    &plugin_id,
-                                    "integration",
-                                    "authorize",
-                                    serde_json::json!({
-                                        "integrationID": integration_id,
-                                        "mode": "auto",
-                                        "auto": auto,
-                                    }),
-                                )
-                                .await
-                                .map_err(|message| message)?;
-                            let credential = reply.get("credential").cloned().unwrap_or(Value::Null);
-                            let value: crate::integration::types::CredentialValue =
-                                serde_json::from_value(credential)
-                                    .map_err(|error| error.to_string())?;
-                            return Ok(Authorization {
-                                url,
-                                instructions,
-                                expires_at: None,
-                                mode: AuthMode::Auto(Box::pin(async move { Ok(value) })),
-                            });
-                        }
-                    }
-                    // Code mode: the callback crosses as a later
-                    // `integration.callback` dispatch ({code} → credential).
+                    let event = serde_json::json!({ "integrationID": integration_id, "answer": answer });
+                    let reply = dispatcher
+                        .dispatch(&plugin_id, "integration", "authorize", event)
+                        .await
+                        .map_err(|message| message)?;
+                    let Some(result) = reply.get("result") else {
+                        return Err("integration authorize: no result".to_owned());
+                    };
+                    let mode_is_auto =
+                        result.get("mode").and_then(Value::as_str) == Some("auto");
+                    // Both modes resolve the credential through a later
+                    // `integration.callback` dispatch (auto omits the
+                    // code, matching the ref's auto Effect).
                     let plugin_id_cb = plugin_id.clone();
                     let integration_id_cb = integration_id.clone();
-                    let label_cb = label.clone();
-                    let callback: CodeCallback = Arc::new(move |code: String| {
-                        let plugin_id = plugin_id_cb.clone();
-                        let integration_id = integration_id_cb.clone();
-                        let label = label_cb.clone();
-                        let dispatcher = Arc::clone(&dispatcher);
-                        Box::pin(async move {
-                            let reply = dispatcher
-                                .dispatch(
-                                    &plugin_id,
-                                    "integration",
-                                    "callback",
-                                    serde_json::json!({
-                                        "integrationID": integration_id,
-                                        "label": label,
-                                        "code": code,
-                                    }),
-                                )
-                                .await
-                                .map_err(|message| message)?;
-                            let value: crate::integration::types::CredentialValue =
-                                serde_json::from_value(
+                    let dispatcher_cb = Arc::clone(&dispatcher);
+                    let callback = Arc::new(
+                        move |code: Option<String>| -> futures::future::BoxFuture<'static, Result<CredentialValue, String>> {
+                            let plugin_id = plugin_id_cb.clone();
+                            let integration_id = integration_id_cb.clone();
+                            let dispatcher = Arc::clone(&dispatcher_cb);
+                            Box::pin(async move {
+                                let mut event =
+                                    serde_json::json!({ "integrationID": integration_id });
+                                if let Some(code) = code {
+                                    event["code"] = serde_json::json!(code);
+                                }
+                                let reply = dispatcher
+                                    .dispatch(&plugin_id, "integration", "callback", event)
+                                    .await
+                                    .map_err(|message| message)?;
+                                serde_json::from_value::<CredentialValue>(
                                     reply.get("credential").cloned().unwrap_or(Value::Null),
                                 )
-                                .map_err(|error| error.to_string())?;
-                            Ok(value)
-                        })
-                    });
+                                .map_err(|error| error.to_string())
+                            })
+                        },
+                    )
+                        as Arc<
+                            dyn Fn(
+                                    Option<String>,
+                                ) -> futures::future::BoxFuture<
+                                    'static,
+                                    Result<CredentialValue, String>,
+                                > + Send
+                                    + Sync,
+                        >;
+                    let mode = if mode_is_auto {
+                        AuthMode::Auto(callback(None))
+                    } else {
+                        AuthMode::Code(Arc::new(move |code: String| callback(Some(code)))
+                            as CodeCallback)
+                    };
                     Ok(Authorization {
-                        url,
-                        instructions,
+                        url: result
+                            .get("url")
+                            .and_then(Value::as_str)
+                            .unwrap_or("about:blank")
+                            .to_owned(),
+                        instructions: result
+                            .get("instructions")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned(),
                         expires_at: None,
-                        mode: AuthMode::Code(callback),
+                        mode,
                     })
                 })
             }
         });
-        let refresh = registration.get("refresh").and_then(Value::as_object).map(|_| {
+        let refresh = has_refresh.then(|| {
             let plugin_id = definition.plugin_id.clone();
             let integration_id = integration_id.to_owned();
-            Arc::new(move |value: crate::integration::types::OAuthValue| -> futures::future::BoxFuture<'static, Result<crate::integration::types::CredentialValue, String>> {
-                let plugin_id = plugin_id.clone();
-                let integration_id = integration_id.clone();
-                let dispatcher = Arc::clone(&dispatcher_refresh);
-                Box::pin(async move {
-                    let credential = serde_json::to_value(&value).unwrap_or(Value::Null);
-                    let reply = dispatcher
-                        .dispatch(
-                            &plugin_id,
-                            "integration",
-                            "refresh",
-                            serde_json::json!({
-                                "integrationID": integration_id,
-                                "credential": credential,
-                            }),
+            let dispatcher = Arc::clone(dispatcher);
+            Arc::new(
+                move |value: crate::integration::types::OAuthValue| -> BoxFuture<'static, Result<CredentialValue, String>> {
+                    let plugin_id = plugin_id.clone();
+                    let integration_id = integration_id.clone();
+                    let dispatcher = Arc::clone(&dispatcher);
+                    Box::pin(async move {
+                        let credential = serde_json::to_value(&value).unwrap_or(Value::Null);
+                        let event =
+                            serde_json::json!({ "integrationID": integration_id, "credential": credential });
+                        let reply = dispatcher
+                            .dispatch(&plugin_id, "integration", "refresh", event)
+                            .await
+                            .map_err(|message| message)?;
+                        serde_json::from_value::<CredentialValue>(
+                            reply.get("credential").cloned().unwrap_or(Value::Null),
                         )
-                        .await
-                        .map_err(|message| message)?;
-                    serde_json::from_value::<crate::integration::types::CredentialValue>(
-                        reply.get("credential").cloned().unwrap_or(Value::Null),
-                    )
-                    .map_err(|error| error.to_string())
-                })
-            })
-                as crate::integration::RefreshFn
+                        .map_err(|error| error.to_string())
+                    })
+                },
+            ) as RefreshFn
         });
-        let label = registration.get("label").and_then(Value::as_str).map(|label| {
-            let label = label.to_owned();
-            Arc::new(move |_value: &crate::integration::types::CredentialValue| {
-                Some(label.clone())
-            }) as crate::integration::LabelFn
-        });
-        let implementation = authorize.map(|authorize| OAuthImplementation {
-            authorize: Arc::new(authorize),
-            refresh,
-            label,
-        });
+        let implementation =
+            authorize.map(|authorize| OAuthImplementation { authorize: Arc::new(authorize), refresh, label: None });
         integration.update_method(integration_id, method, implementation);
         applied += 1;
     }

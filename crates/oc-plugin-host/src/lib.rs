@@ -103,7 +103,7 @@ pub use context::{
     install::{default_root as install_root, install, InstallOptions, Installed},
     update::{collect_stale, global_cache as update_cache, update, UpdateCache},
     is_mutating_hook, Bridge, HostState, NoSessionEngine, NoToolEngine, PermissionPort,
-    SessionPort, ToolPort, MUTATING_DISPATCH_TIMEOUT, SESSION_METHODS,
+    SessionPort, ToolPort, VcsPort, WebsearchPort, MUTATING_DISPATCH_TIMEOUT, SESSION_METHODS,
 };
 pub use registrations::{
     PluginAgent, PluginCommand, PluginDialog, PluginGroupRule, PluginHomeAction, PluginHook,
@@ -151,6 +151,12 @@ pub struct PluginHostConfig {
     /// `ctx.permission.*` routing target (PLUG-D11): the engine's
     /// permission machinery. `None` declines every call.
     pub permission_port: Option<Arc<dyn PermissionPort>>,
+    /// `ctx.websearch.providers/query` routing target (G-24): the
+    /// engine's WebSearch service. `None` declines every call.
+    pub websearch_port: Option<Arc<dyn WebsearchPort>>,
+    /// `ctx.vcs.get/base` routing target (G-24): the engine's vcs
+    /// adapters. `None` declines every call.
+    pub vcs_port: Option<Arc<dyn VcsPort>>,
     /// Config-sourced plugin options keyed by entry path (`ctx.options`,
     /// v2 plugin `{package, options}` entries).
     pub entry_options: BTreeMap<String, Value>,
@@ -171,6 +177,8 @@ impl Default for PluginHostConfig {
             tool_port: None,
             storage_port: None,
             permission_port: None,
+            websearch_port: None,
+            vcs_port: None,
             entry_options: BTreeMap::new(),
         }
     }
@@ -1156,6 +1164,8 @@ fn supervisor_config(
         tool_port: config.tool_port.take().or_else(|| Some(Arc::new(NoToolEngine))),
         storage_port: config.storage_port.take(),
         permission_port: config.permission_port.take(),
+        websearch_port: config.websearch_port.take(),
+        vcs_port: config.vcs_port.take(),
         entry_options: std::mem::take(&mut config.entry_options),
     }
 }
