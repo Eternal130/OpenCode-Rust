@@ -184,6 +184,11 @@ pub struct EngineOptions {
     pub default_model: Option<oc_schema::config::ModelSelection>,
     /// Whether to spawn the activity TTL sweeper (default true).
     pub activity_sweeper: bool,
+    /// File-retention sweep settings (G-14): how often the tool-output +
+    /// shell-capture retention sweeps run. Default hourly (the previous
+    /// hardcoded cadence); the server composition root seeds it from
+    /// `experimental.file_retention.cleanup_interval`.
+    pub file_retention: crate::file_retention::FileRetentionSettings,
     /// Whether the file-watcher service runs (v2 `Watcher` options
     /// `enabled`; the server's `fs.filewatcher` flag). Default true; off
     /// boots a disabled watcher whose subscriptions end immediately.
@@ -227,6 +232,7 @@ impl EngineOptions {
             custom_providers: Vec::new(),
             default_model: None,
             activity_sweeper: true,
+            file_retention: crate::file_retention::FileRetentionSettings::default(),
             file_watcher: true,
             code_mode_runtime: None,
             code_mode_timeout: std::time::Duration::from_secs(120),
@@ -484,9 +490,15 @@ impl Engine {
         // hourly retention sweeps — spilled tool output and shell capture
         // files — run for the engine lifetime. Handles are retained and
         // aborted in `shutdown` (v2 scopes these fibers to the layer).
-        let tool_output_cleanup = crate::tool_output::spawn_cleanup_task(Arc::clone(&tool_output));
-        let shell_cleanup =
-            crate::shell::spawn_cleanup_task(options.data_root.clone(), Arc::clone(&options.clock));
+        let tool_output_cleanup =
+            crate::tool_output::spawn_cleanup_task(Arc::clone(&tool_output), Some(
+                options.file_retention.cleanup_interval,
+            ));
+        let shell_cleanup = crate::shell::spawn_cleanup_task(
+            options.data_root.clone(),
+            Arc::clone(&options.clock),
+            Some(options.file_retention.cleanup_interval),
+        );
         let projects = Arc::new(crate::project::SqliteProjectStore::new((*db).clone()));
         let llm: Arc<dyn LlmClient> =
             options.llm.clone().unwrap_or_else(|| Arc::new(RouteLlmClient));

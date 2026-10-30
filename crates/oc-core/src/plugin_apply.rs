@@ -152,6 +152,18 @@ pub trait LocationPluginSource: Send + Sync {
         None
     }
 
+    /// G-5 — plugin-scoped state transforms over the assembled
+    /// config-derived AGENT state (the ref's `ctx.agent.transform`
+    /// rewrite surface: update/remove/default on the agent table).
+    /// Runs in `apply_location_plugins` AFTER the additive snapshot
+    /// application, in registration order, per
+    /// [`crate::state_transform`] semantics (grouped failure disables
+    /// the plugin's transform group; host failure aborts). Default:
+    /// none.
+    fn agent_state_transforms(&self) -> Vec<crate::state_transform::AgentTransform> {
+        Vec::new()
+    }
+
     /// PLUG-D07 — the per-location activation set: v2 activates plugins
     /// PER location (`plugin/supervisor.ts` is a location node; each
     /// location's config layers resolve that location's plugin
@@ -588,6 +600,29 @@ pub async fn apply_location_plugins(
     // not tracked separately).
     if active.as_ref().is_none_or(|ids| !ids.is_empty()) {
         apply_plugin_agent_default(agents, source.default_agent().as_deref());
+    }
+    // G-5: the state-transform chain — plugin-scoped rewrites over the
+    // assembled agent table (config + snapshot lanes), ref
+    // state.ts:172-194 semantics (registration order, grouped-failure
+    // isolation, fresh-candidate restart). Inactive plugins' transforms
+    // stay out of this location's rebuild (PLUG-D07).
+    let state_transforms: Vec<crate::state_transform::AgentTransform> = source
+        .agent_state_transforms()
+        .into_iter()
+        .filter(|transform| transform.plugin_id.as_deref().is_none_or(is_active))
+        .collect();
+    if !state_transforms.is_empty() {
+        if let Err(failure) =
+            crate::state_transform::apply_agent_state_transforms(agents, &state_transforms)
+        {
+            // Ungrouped (host) failure — ref propagates the read
+            // error; the assembly continues with the pre-transform
+            // agent state rather than failing the whole location.
+            eprintln!(
+                "opencode plugin-apply: agent state transform failed ({}): {} — keeping pre-transform agent state",
+                failure.state, failure.cause
+            );
+        }
     }
     // PLUG-D35: plugin skills merge into the location's skill table
     // (empty vec = a no-op read, never a lock round-trip).

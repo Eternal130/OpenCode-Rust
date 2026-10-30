@@ -304,7 +304,14 @@ impl ToolOutput {
     /// `cleanup` — drop spilled files whose modification time predates the
     /// retention cutoff (FileRetention.cleanup).
     pub fn cleanup(&self) {
-        let cutoff = u64::try_from(self.clock.unix_ms()).unwrap_or(0).saturating_sub(RETENTION_MS);
+        self.cleanup_with(RETENTION_MS);
+    }
+
+    /// `cleanup` with a caller-provided retention window (ref
+    /// `FileRetention.cleanup(fs, files, retention)` takes the Duration
+    /// from its caller; `cleanup` keeps the 7-day default).
+    pub fn cleanup_with(&self, retention_ms: u64) {
+        let cutoff = u64::try_from(self.clock.unix_ms()).unwrap_or(0).saturating_sub(retention_ms);
         let entries = match std::fs::read_dir(&self.directory) {
             Ok(entries) => entries,
             Err(_) => return,
@@ -329,11 +336,16 @@ impl ToolOutput {
     }
 }
 
-/// Spawns the hourly retention cleanup task (`cleanupLayer` — a scoped fiber
+/// Spawns the retention cleanup task (`cleanupLayer` — a scoped fiber
 /// in v2; a tokio task whose handle the caller retains and aborts at shutdown).
-pub fn spawn_cleanup_task(service: Arc<ToolOutput>) -> tokio::task::JoinHandle<()> {
+/// The interval is caller-provided (G-14); `None` keeps the hourly default.
+pub fn spawn_cleanup_task(
+    service: Arc<ToolOutput>,
+    interval: Option<std::time::Duration>,
+) -> tokio::task::JoinHandle<()> {
+    let interval = interval.unwrap_or(crate::file_retention::DEFAULT_CLEANUP_INTERVAL);
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(3_600));
+        let mut interval = tokio::time::interval(interval);
         loop {
             interval.tick().await;
             service.cleanup();
@@ -593,7 +605,7 @@ mod tests {
         let old = directory.join(file_name(1));
         std::fs::write(&old, "old").expect("write");
         set_mtime(&old, now - Duration::from_secs(8 * 24 * 60 * 60));
-        let handle = spawn_cleanup_task(Arc::clone(&service));
+        let handle = spawn_cleanup_task(Arc::clone(&service), None);
         for _ in 0..50 {
             tokio::time::sleep(Duration::from_millis(10)).await;
             if !old.exists() {
@@ -602,5 +614,28 @@ mod tests {
         }
         handle.abort();
         assert!(!old.exists(), "spawned sweep removed the stale spill");
+    }
+
+    /// G-14: a caller-provided retention window (ref
+    /// `FileRetention.cleanup(fs, files, retention)`) bounds the sweep —
+    /// a 1-minute window drops a 2-minute-old spill while the 7-day
+    /// default keeps it.
+    #[test]
+    fn tool_output_cleanup_with_a_caller_provided_retention_window() {
+        let dir = tempfile::tempdir_in("/tmp/opencode").expect("tempdir");
+        let now = std::time::SystemTime::now();
+        let clock = Arc::new(oc_util::determinism::SystemClock);
+        let service = ToolOutput::new(dir.path(), clock);
+        let directory = dir.path().join(DIRECTORY);
+        std::fs::create_dir_all(&directory).expect("dirs");
+        let stale = directory.join(file_name(2));
+        std::fs::write(&stale, "stale").expect("write");
+        set_mtime(&stale, now - Duration::from_secs(120));
+        // Default 7-day window: kept.
+        service.cleanup();
+        assert!(stale.exists(), "7-day default keeps a 2-minute-old spill");
+        // Caller-provided 1-minute window: dropped.
+        service.cleanup_with(60 * 1_000);
+        assert!(!stale.exists(), "1-minute caller-provided window drops it");
     }
 }
