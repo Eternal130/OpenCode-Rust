@@ -93,6 +93,12 @@ pub struct CatalogModelResolver {
     /// Console-issued providers (integration `opencode`), shared with the
     /// host and refreshed on credential events.
     console: Option<Arc<crate::integration::console::ConsoleProviders>>,
+    /// RF-01 — the running local-provider inventory (ollama/lmstudio/
+    /// vllm runtime discovery, ref plugin/provider/local.ts): consulted
+    /// FIRST — the ref transform removes the provider's existing models
+    /// before injecting the discovered ones, so a running server's
+    /// inventory is authoritative for its provider id.
+    local: Option<Arc<crate::provider_catalog::local::LocalDiscovery>>,
 }
 
 impl CatalogModelResolver {
@@ -113,6 +119,7 @@ impl CatalogModelResolver {
             default,
             credentials: None,
             console: None,
+            local: None,
         }
     }
 
@@ -145,6 +152,16 @@ impl CatalogModelResolver {
         console: Arc<crate::integration::console::ConsoleProviders>,
     ) -> Self {
         self.console = Some(console);
+        self
+    }
+
+    /// Attaches the running local-provider inventory (RF-01).
+    #[must_use]
+    pub fn with_local(
+        mut self,
+        local: Arc<crate::provider_catalog::local::LocalDiscovery>,
+    ) -> Self {
+        self.local = Some(local);
         self
     }
 
@@ -230,6 +247,38 @@ impl CatalogModelResolver {
         reference: &oc_schema::model::Ref,
     ) -> Result<(oc_ai::LanguageModel, oc_schema::model::Info, oc_schema::model::Ref), ModelError>
     {
+        // RF-01 — running local providers (ollama/lmstudio/vllm runtime
+        // discovery, ref plugin/provider/local.ts:48-78): the provider
+        // transform removes the provider's existing models before
+        // injecting the discovered inventory, so a discovered entry is
+        // AUTHORITATIVE for its provider id — catalog records ("lmstudio")
+        // and config customs with the id defer, and a model id the
+        // running server does not carry fails exactly like the ref's
+        // emptied registry (no catalog fallback).
+        if let Some(local) = &self.local {
+            if let Some(provider) = local.provider(&reference.provider_id.0) {
+                let canonical_model = provider
+                    .models
+                    .iter()
+                    .find(|model| model.id.eq_ignore_ascii_case(&reference.id.0))
+                    .map(|model| model.id.clone())
+                    .ok_or_else(|| {
+                        ModelError::Unavailable(provider.id.clone(), reference.id.0.clone())
+                    })?;
+                let model = custom_language_model(&self.context, &provider, &canonical_model)
+                    .map_err(|error| map_custom(error, &provider.id, &canonical_model))?;
+                let info = with_variant(
+                    custom_model_info(&provider, &canonical_model, &self.catalog()),
+                    reference.variant.as_ref().map(|id| id.0.as_str()),
+                )?;
+                let canonical = oc_schema::model::Ref {
+                    provider_id: oc_schema::id::ProviderId::parse(provider.id.clone()),
+                    id: oc_schema::id::ModelId::parse(canonical_model),
+                    variant: reference.variant.clone(),
+                };
+                return Ok((model, info, canonical));
+            }
+        }
         // Custom (config) providers: exact key first, then
         // case-insensitive — the provider map key IS the provider id
         // (v2 config/plugin/provider.ts:56-57,166-169), and user configs
@@ -1616,5 +1665,190 @@ mod console_merge_tests {
             })
             .expect_err("no endpoint anywhere");
         assert!(error.to_string().contains("baseURL"), "{error}");
+    }
+}
+
+#[cfg(test)]
+mod local_discovery_tests {
+    use super::*;
+    use crate::provider_catalog::local::test_support::http_mock;
+    use crate::provider_catalog::local::LocalDiscovery;
+    use oc_ai::route::transport::reqwest_transport::ReqwestTransport;
+
+    fn catalog() -> Arc<Catalog> {
+        Arc::new(Catalog::embedded().clone())
+    }
+
+    fn session() -> crate::database::schema::SessionRow {
+        crate::database::schema::SessionRow::new(
+            "ses_local".to_owned(),
+            "prj_local".to_owned(),
+            "/tmp/opencode",
+            "local discovery",
+            "test",
+        )
+        .expect("session row")
+    }
+
+    /// Boots a mock Ollama answering one tool-capable model.
+    async fn ollama_mock() -> u16 {
+        let mut routes = std::collections::HashMap::new();
+        routes.insert(
+            ("GET", "/api/tags"),
+            (
+                200,
+                serde_json::json!({
+                    "models": [
+                        { "name": "Llama 3", "model": "llama3", "digest": "d1",
+                          "details": { "family": "llama" } },
+                        { "name": "E", "model": "embedding", "digest": "d2",
+                          "details": { "family": "llama" } }
+                    ]
+                })
+                .to_string(),
+            ),
+        );
+        routes.insert(
+            ("POST", "/api/show"),
+            (
+                200,
+                serde_json::json!({
+                    "capabilities": ["completion", "tools"],
+                    "details": { "family": "llama" },
+                    "model_info": { "llama3.context_length": 8192 }
+                })
+                .to_string(),
+            ),
+        );
+        http_mock(routes).await.port
+    }
+
+    fn connections(port: u16) -> BTreeMap<String, ModelConnection> {
+        let mut map = BTreeMap::new();
+        map.insert(
+            "ollama".to_owned(),
+            ModelConnection {
+                base_url: Some(format!("http://127.0.0.1:{port}/v1")),
+                api_key: None,
+                headers: BTreeMap::new(),
+            },
+        );
+        map
+    }
+
+    /// RF-01 — a discovered local model resolves END-TO-END: the
+    /// reference provider transform rebinds ollama to the
+    /// openai-compatible package at the configured baseURL, so
+    /// `ollama/llama3` binds an openai-compatible chat route pointed at
+    /// the running server, with the discovered capabilities/limits on
+    /// the resolved info. A model the running server does not carry
+    /// fails (the transform emptied the provider's registry models — no
+    /// catalog fallback).
+    #[tokio::test]
+    async fn discovered_local_model_resolves_end_to_end() {
+        let port = ollama_mock().await;
+        let discovery = Arc::new(LocalDiscovery::new());
+        discovery.refresh(&connections(port)).await;
+        let context =
+            FacadeContext::new(Arc::new(ReqwestTransport::new()) as oc_ai::route::SharedTransport);
+        let resolver =
+            CatalogModelResolver::new(context, catalog(), BTreeMap::new(), Vec::new(), None)
+                .with_local(Arc::clone(&discovery));
+        let reference = oc_schema::model::Ref {
+            provider_id: oc_schema::id::ProviderId::parse("ollama"),
+            id: oc_schema::id::ModelId::parse("llama3"),
+            variant: None,
+        };
+        let resolved =
+            resolver.resolve_selected(&session(), &reference).expect("discovered model resolves");
+        assert_eq!(resolved.model.provider.as_str(), "ollama");
+        assert_eq!(resolved.model.id.as_str(), "llama3");
+        assert_eq!(resolved.model.route.id, "openai-compatible-chat");
+        assert_eq!(
+            resolved.model.route.endpoint.base_url.as_deref(),
+            Some(format!("http://127.0.0.1:{port}/v1").as_str()),
+            "routes to the running server's openai-compatible endpoint"
+        );
+        assert_eq!(resolved.capabilities.tools, true);
+        assert_eq!(resolved.limit.context, 8192, "discovered context limit carries");
+        // The provider's inventory is authoritative: an unknown model id
+        // fails instead of falling through to the catalog.
+        let missing = oc_schema::model::Ref {
+            provider_id: oc_schema::id::ProviderId::parse("ollama"),
+            id: oc_schema::id::ModelId::parse("nope"),
+            variant: None,
+        };
+        assert!(resolver.resolve_selected(&session(), &missing).is_err());
+    }
+
+    /// RF-01 — a CATALOG provider id the discovery snapshot owns
+    /// ("lmstudio") resolves through the discovered inventory, not the
+    /// frozen catalog entry.
+    #[tokio::test]
+    async fn discovered_lmstudio_shadows_the_catalog_entry() {
+        let mut routes = std::collections::HashMap::new();
+        routes.insert(
+            ("GET", "/api/v1/models"),
+            (
+                200,
+                serde_json::json!({ "models": [
+                    { "type": "llm", "key": "qwen3-coder", "display_name": "Qwen3 Coder",
+                      "architecture": "qwen", "max_context_length": 131072,
+                      "loaded_instances": [],
+                      "capabilities": { "vision": false, "trained_for_tool_use": true } }
+                ] })
+                .to_string(),
+            ),
+        );
+        let port = http_mock(routes).await.port;
+        let discovery = Arc::new(LocalDiscovery::new());
+        let mut connections = BTreeMap::new();
+        connections.insert(
+            "lmstudio".to_owned(),
+            ModelConnection {
+                base_url: Some(format!("http://127.0.0.1:{port}/api/v1")),
+                api_key: None,
+                headers: BTreeMap::new(),
+            },
+        );
+        discovery.refresh(&connections).await;
+        let context =
+            FacadeContext::new(Arc::new(ReqwestTransport::new()) as oc_ai::route::SharedTransport);
+        let resolver =
+            CatalogModelResolver::new(context, catalog(), BTreeMap::new(), Vec::new(), None)
+                .with_local(Arc::clone(&discovery));
+        let reference = oc_schema::model::Ref {
+            provider_id: oc_schema::id::ProviderId::parse("lmstudio"),
+            id: oc_schema::id::ModelId::parse("qwen3-coder"),
+            variant: None,
+        };
+        let resolved = resolver
+            .resolve_selected(&session(), &reference)
+            .expect("discovered lmstudio model resolves");
+        assert_eq!(resolved.model.route.id, "openai-compatible-chat");
+        assert_eq!(
+            resolved.model.route.endpoint.base_url.as_deref(),
+            Some(format!("http://127.0.0.1:{port}/api/v1").as_str())
+        );
+        assert_eq!(resolved.limit.context, 131072);
+    }
+
+    /// RF-01 — an empty snapshot is a no-op: hermetic boots (no refresh
+    /// loop) keep resolving exactly as before.
+    #[tokio::test]
+    async fn empty_local_snapshot_defers_to_the_custom_and_catalog_paths() {
+        let discovery = Arc::new(LocalDiscovery::new());
+        let context =
+            FacadeContext::new(Arc::new(ReqwestTransport::new()) as oc_ai::route::SharedTransport);
+        let resolver =
+            CatalogModelResolver::new(context, catalog(), BTreeMap::new(), Vec::new(), None)
+                .with_local(discovery);
+        let reference = oc_schema::model::Ref {
+            provider_id: oc_schema::id::ProviderId::parse("ollama"),
+            id: oc_schema::id::ModelId::parse("llama3"),
+            variant: None,
+        };
+        // ollama is not a catalog provider and nothing was discovered.
+        assert!(resolver.resolve_selected(&session(), &reference).is_err());
     }
 }
