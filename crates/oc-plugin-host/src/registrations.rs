@@ -500,18 +500,15 @@ impl Registrations {
             strategy.plugin_id != plugin_id || ids.iter().any(|id| id == strategy.id.as_str())
         });
         for id in ids {
-            self.worktree_strategies.insert(
-                id.clone(),
-                PluginWorktreeStrategy { plugin_id: plugin_id.to_owned(), id },
-            );
+            self.worktree_strategies
+                .insert(id.clone(), PluginWorktreeStrategy { plugin_id: plugin_id.to_owned(), id });
         }
     }
 
     /// G-24 — one `ctx.integration.method.update` registration
     /// (insert-or-replace by integrationID + method id/type).
     pub fn upsert_integration_method(&mut self, plugin_id: &str, registration: &Value) {
-        let Some(integration_id) = registration.get("integrationID").and_then(Value::as_str)
-        else {
+        let Some(integration_id) = registration.get("integrationID").and_then(Value::as_str) else {
             return;
         };
         let method_key = registration
@@ -520,7 +517,11 @@ impl Registrations {
             .and_then(Value::as_str)
             .map(str::to_owned)
             .or_else(|| {
-                registration.get("method").and_then(|m| m.get("type")).and_then(Value::as_str).map(str::to_owned)
+                registration
+                    .get("method")
+                    .and_then(|m| m.get("type"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
             })
             .unwrap_or_default();
         if method_key.is_empty() {

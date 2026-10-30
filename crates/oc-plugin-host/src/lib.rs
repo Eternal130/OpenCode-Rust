@@ -101,9 +101,10 @@ pub mod ui;
 
 pub use context::{
     install::{default_root as install_root, install, InstallOptions, Installed},
+    is_mutating_hook,
     update::{collect_stale, global_cache as update_cache, update, UpdateCache},
-    is_mutating_hook, Bridge, HostState, NoSessionEngine, NoToolEngine, PermissionPort,
-    SessionPort, ToolPort, VcsPort, WebsearchPort, MUTATING_DISPATCH_TIMEOUT, SESSION_METHODS,
+    Bridge, HostState, NoSessionEngine, NoToolEngine, PermissionPort, SessionPort, ToolPort,
+    VcsPort, WebsearchPort, MUTATING_DISPATCH_TIMEOUT, SESSION_METHODS,
 };
 pub use registrations::{
     PluginAgent, PluginCommand, PluginDialog, PluginGroupRule, PluginHomeAction, PluginHook,
@@ -860,7 +861,7 @@ impl PluginHost {
             // dead guest never echo internals).
             Err(HostError::Guest(why)) => return Ok(RpcOutcome::Internal(why)),
             Err(HostError::Timeout(_) | HostError::Exited(_)) => {
-                return Ok(RpcOutcome::Internal("RPC call failed".to_owned()))
+                return Ok(RpcOutcome::Internal("RPC call failed".to_owned()));
             }
         };
         // The guest answers `{ok: true, output?}` or `{ok: false,

@@ -248,7 +248,7 @@ impl WebSearch {
                         return Ok(WebSearchResponse {
                             provider_id: oc_schema::id::WebSearchId(provider.id().to_string()),
                             results,
-                        })
+                        });
                     }
                     Err(error) => {
                         let websearch_error = WebSearchError::Request {

@@ -373,8 +373,10 @@ impl crate::tool::websearch_providers::SearchProvider for GuestWebSearchProvider
     async fn execute(
         &self,
         query: &str,
-    ) -> Result<Vec<oc_schema::misc::WebSearchResult>, crate::tool::websearch_providers::ProviderError>
-    {
+    ) -> Result<
+        Vec<oc_schema::misc::WebSearchResult>,
+        crate::tool::websearch_providers::ProviderError,
+    > {
         let event = serde_json::json!({ "provider": self.id, "query": query });
         let reply = self
             .dispatcher
@@ -385,12 +387,12 @@ impl crate::tool::websearch_providers::SearchProvider for GuestWebSearchProvider
                 message,
             })?;
         let results = reply.get("results").cloned().unwrap_or(serde_json::Value::Null);
-        serde_json::from_value::<Vec<oc_schema::misc::WebSearchResult>>(results).map_err(
-            |error| crate::tool::websearch_providers::ProviderError {
+        serde_json::from_value::<Vec<oc_schema::misc::WebSearchResult>>(results).map_err(|error| {
+            crate::tool::websearch_providers::ProviderError {
                 status: None,
                 message: format!("guest websearch provider {}: {error}", self.id),
-            },
-        )
+            }
+        })
     }
 }
 
@@ -425,16 +427,19 @@ pub fn apply_plugin_integration_methods(
     dispatcher: &Arc<dyn GuestHookDispatcher>,
     defs: &[PluginIntegrationMethodDef],
 ) -> usize {
-    use crate::integration::types::{FormAnswer, CredentialValue, Method};
-    use crate::integration::{AuthMode, Authorization, CodeCallback, OAuthImplementation, RefreshFn};
+    use crate::integration::types::{CredentialValue, FormAnswer, Method};
+    use crate::integration::{
+        AuthMode, Authorization, CodeCallback, OAuthImplementation, RefreshFn,
+    };
     use futures::future::BoxFuture;
     use serde_json::Value;
 
     let mut applied = 0usize;
     for definition in defs {
         let Value::Object(registration) = &definition.registration else { continue };
-        let Some(integration_id) = registration.get("integrationID").and_then(Value::as_str)
-        else { continue };
+        let Some(integration_id) = registration.get("integrationID").and_then(Value::as_str) else {
+            continue;
+        };
         let Some(method_value) = registration.get("method") else { continue };
         let Ok(method) = serde_json::from_value::<Method>(method_value.clone()) else {
             eprintln!(
@@ -448,8 +453,7 @@ pub fn apply_plugin_integration_methods(
         // serves the calls through the `integration.*` hook dispatches
         // (`authorize` → `{url, instructions, mode, credential?}`,
         // `callback` → `{credential}`, `refresh` → `{credential}`).
-        let has_authorize =
-            registration.get("authorize").and_then(Value::as_bool).unwrap_or(false);
+        let has_authorize = registration.get("authorize").and_then(Value::as_bool).unwrap_or(false);
         let has_refresh = registration.get("refresh").and_then(Value::as_bool).unwrap_or(false);
         let authorize = has_authorize.then(|| {
             let plugin_id = definition.plugin_id.clone();
@@ -460,7 +464,8 @@ pub fn apply_plugin_integration_methods(
                 let integration_id = integration_id.clone();
                 let dispatcher = Arc::clone(&dispatcher);
                 Box::pin(async move {
-                    let event = serde_json::json!({ "integrationID": integration_id, "answer": answer });
+                    let event =
+                        serde_json::json!({ "integrationID": integration_id, "answer": answer });
                     let reply = dispatcher
                         .dispatch(&plugin_id, "integration", "authorize", event)
                         .await
@@ -468,8 +473,7 @@ pub fn apply_plugin_integration_methods(
                     let Some(result) = reply.get("result") else {
                         return Err("integration authorize: no result".to_owned());
                     };
-                    let mode_is_auto =
-                        result.get("mode").and_then(Value::as_str) == Some("auto");
+                    let mode_is_auto = result.get("mode").and_then(Value::as_str) == Some("auto");
                     // Both modes resolve the credential through a later
                     // `integration.callback` dispatch (auto omits the
                     // code, matching the ref's auto Effect).
@@ -477,7 +481,10 @@ pub fn apply_plugin_integration_methods(
                     let integration_id_cb = integration_id.clone();
                     let dispatcher_cb = Arc::clone(&dispatcher);
                     let callback = Arc::new(
-                        move |code: Option<String>| -> futures::future::BoxFuture<'static, Result<CredentialValue, String>> {
+                        move |code: Option<String>| -> futures::future::BoxFuture<
+                            'static,
+                            Result<CredentialValue, String>,
+                        > {
                             let plugin_id = plugin_id_cb.clone();
                             let integration_id = integration_id_cb.clone();
                             let dispatcher = Arc::clone(&dispatcher_cb);
@@ -505,13 +512,14 @@ pub fn apply_plugin_integration_methods(
                                     'static,
                                     Result<CredentialValue, String>,
                                 > + Send
-                                    + Sync,
+                                + Sync,
                         >;
                     let mode = if mode_is_auto {
                         AuthMode::Auto(callback(None))
                     } else {
-                        AuthMode::Code(Arc::new(move |code: String| callback(Some(code)))
-                            as CodeCallback)
+                        AuthMode::Code(
+                            Arc::new(move |code: String| callback(Some(code))) as CodeCallback
+                        )
                     };
                     Ok(Authorization {
                         url: result
@@ -555,8 +563,11 @@ pub fn apply_plugin_integration_methods(
                 },
             ) as RefreshFn
         });
-        let implementation =
-            authorize.map(|authorize| OAuthImplementation { authorize: Arc::new(authorize), refresh, label: None });
+        let implementation = authorize.map(|authorize| OAuthImplementation {
+            authorize: Arc::new(authorize),
+            refresh,
+            label: None,
+        });
         integration.update_method(integration_id, method, implementation);
         applied += 1;
     }
@@ -575,7 +586,10 @@ pub struct GuestWorktreeStrategy {
 
 impl GuestWorktreeStrategy {
     #[must_use]
-    pub fn new(dispatcher: Arc<dyn GuestHookDispatcher>, definition: &PluginWorktreeStrategyDef) -> Self {
+    pub fn new(
+        dispatcher: Arc<dyn GuestHookDispatcher>,
+        definition: &PluginWorktreeStrategyDef,
+    ) -> Self {
         Self { dispatcher, plugin_id: definition.plugin_id.clone(), id: definition.id.clone() }
     }
 
@@ -674,7 +688,8 @@ pub fn apply_plugin_worktree_strategies(
     defs: &[PluginWorktreeStrategyDef],
 ) -> usize {
     for definition in defs {
-        registry.add_strategy(Box::new(GuestWorktreeStrategy::new(Arc::clone(dispatcher), definition)));
+        registry
+            .add_strategy(Box::new(GuestWorktreeStrategy::new(Arc::clone(dispatcher), definition)));
     }
     defs.len()
 }
@@ -2351,7 +2366,7 @@ mod guest_hook_domain_tests {
     use crate::hooks::{AisdkLanguageEvent, AisdkSdkEvent, HookRegistry, PermissionEvaluateEvent};
     use oc_schema::id::{AgentId, SessionId};
     use oc_schema::permission::Effect as PermissionEffect;
-    use serde_json::{Value, json};
+    use serde_json::{json, Value};
 
     /// The mock guest: one recorded dispatch + a canned mutation per
     /// domain (the guest side of the round trip).
