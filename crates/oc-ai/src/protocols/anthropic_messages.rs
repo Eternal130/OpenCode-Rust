@@ -124,7 +124,7 @@ pub fn claude_version(id: &str) -> Option<ClaudeVersion> {
     })
 }
 
-fn compatibility_of(model: &LanguageModel) -> Option<&LanguageModelCompatibility> {
+pub(crate) fn compatibility_of(model: &LanguageModel) -> Option<&LanguageModelCompatibility> {
     model.compatibility.as_ref()
 }
 
