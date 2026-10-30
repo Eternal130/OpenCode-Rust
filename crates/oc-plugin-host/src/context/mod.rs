@@ -21,6 +21,7 @@
 
 pub mod codemode_defaults;
 pub mod install;
+pub mod update;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;

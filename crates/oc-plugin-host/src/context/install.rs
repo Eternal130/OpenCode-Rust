@@ -33,6 +33,8 @@ pub struct InstallOptions {
     pub allow_existing: bool,
     /// Hard timeout for the install command.
     pub timeout: Duration,
+    /// Explicit npm binary (tests / the update path); `None` = [`find_npm`].
+    pub npm: Option<PathBuf>,
     /// Explicit bun binary (tests); `None` = [`crate::bun::resolve_bun`].
     pub bun: Option<PathBuf>,
 }
@@ -44,6 +46,7 @@ impl Default for InstallOptions {
             offline: false,
             allow_existing: true,
             timeout: Duration::from_secs(300),
+            npm: None,
             bun: None,
         }
     }
@@ -174,12 +177,12 @@ fn run_installer(dir: &Path, options: &InstallOptions) -> Result<(), String> {
         let bun = bun.ok_or("bun.lock present but bun is unavailable")?;
         installer_args(bun, &["install", "--frozen-lockfile"], options.offline)
     } else if dir.join("package-lock.json").exists() {
-        let npm = find_npm().ok_or("package-lock.json present but npm is unavailable")?;
+        let npm = npm_for(options).ok_or("package-lock.json present but npm is unavailable")?;
         installer_args(npm, &["ci"], options.offline)
     } else if let Some(bun) = bun {
         installer_args(bun, &["install"], options.offline)
     } else {
-        let npm = find_npm().ok_or("neither bun nor npm is available to install plugins")?;
+        let npm = npm_for(options).ok_or("neither bun nor npm is available to install plugins")?;
         installer_args(npm, &["install", "--no-save", "--no-audit", "--no-fund"], options.offline)
     };
 
@@ -340,8 +343,15 @@ fn find_npm() -> Option<PathBuf> {
     std::env::split_paths(&path).map(|dir| dir.join("npm")).find(|candidate| candidate.is_file())
 }
 
-fn pin_latest(package: &str, options: &InstallOptions) -> Result<String, String> {
-    let npm = find_npm().ok_or("cannot pin an unpinned spec without npm")?;
+/// The npm to use: the explicit override, else the first `npm` on PATH.
+fn npm_for(options: &InstallOptions) -> Option<PathBuf> {
+    options.npm.clone().or_else(find_npm)
+}
+
+/// `npm view <pkg> version` — the registry probe (`plugin add`'s
+/// version pin AND the update path's latest resolution).
+pub fn pin_latest(package: &str, options: &InstallOptions) -> Result<String, String> {
+    let npm = npm_for(options).ok_or("cannot pin an unpinned spec without npm")?;
     let mut args = vec!["view".to_owned(), package.to_owned(), "version".to_owned()];
     if options.offline {
         args.push("--offline".into());
