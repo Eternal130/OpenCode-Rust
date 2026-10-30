@@ -11,7 +11,9 @@ use std::time::UNIX_EPOCH;
 use async_trait::async_trait;
 
 use crate::environment::driver::{CommandSpec, Driver, ProcessOutput, SpawnError, Spawner};
-use crate::environment::files::{DirEntry, FileType, Files, FilesError, FileInfo, Range, ReadResult};
+use crate::environment::files::{
+    DirEntry, FileInfo, FileType, Files, FilesError, Range, ReadResult,
+};
 
 /// Spawns real host processes (the cross-spawn equivalent).
 pub struct HostSpawner;
@@ -87,11 +89,7 @@ impl Spawner for HostSpawner {
         if let Some(task) = stdin_task {
             let _ = task.await;
         }
-        Ok(ProcessOutput {
-            exit_code: output.code().unwrap_or(-1),
-            stdout,
-            stderr,
-        })
+        Ok(ProcessOutput { exit_code: output.code().unwrap_or(-1), stdout, stderr })
     }
 }
 
@@ -149,13 +147,13 @@ impl Files for LocalFiles {
         let bytes = match range {
             None => std::fs::read(path).map_err(|error| attempt(path, error))?,
             Some(range) => {
-                let file = std::fs::File::open(path).map_err(|error| attempt_follow(path, error))?;
+                let file =
+                    std::fs::File::open(path).map_err(|error| attempt_follow(path, error))?;
                 let mut buffer = vec![0u8; range.length as usize];
                 #[cfg(unix)]
                 let read = {
                     use std::os::unix::fs::FileExt;
-                    file.read_at(&mut buffer, range.offset)
-                        .map_err(|error| attempt(path, error))?
+                    file.read_at(&mut buffer, range.offset).map_err(|error| attempt(path, error))?
                 };
                 #[cfg(not(unix))]
                 let read = {
@@ -208,11 +206,8 @@ impl Files for LocalFiles {
             Err(error) if is_missing(&error) => return Ok(()),
             Err(error) => return Err(attempt(path, error)),
         };
-        let result = if meta.is_dir() {
-            std::fs::remove_dir_all(path)
-        } else {
-            std::fs::remove_file(path)
-        };
+        let result =
+            if meta.is_dir() { std::fs::remove_dir_all(path) } else { std::fs::remove_file(path) };
         // A racing removal is fine under force semantics.
         if let Err(error) = result {
             if !is_missing(&error) {
@@ -252,11 +247,7 @@ fn stat(path: &str, follow: bool) -> Result<FileInfo, FilesError> {
     } else {
         std::fs::symlink_metadata(path).map_err(|error| attempt_follow(path, error))?
     };
-    Ok(FileInfo {
-        kind: file_type_meta(&meta),
-        size: meta.len(),
-        mtime_ms: mtime_ms(&meta),
-    })
+    Ok(FileInfo { kind: file_type_meta(&meta), size: meta.len(), mtime_ms: mtime_ms(&meta) })
 }
 
 fn file_type_meta(meta: &std::fs::Metadata) -> FileType {

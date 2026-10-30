@@ -74,7 +74,11 @@ impl PlatformConfig {
     }
 
     fn exe_name(&self) -> &'static str {
-        if self.extension == "zip" { "rg.exe" } else { "rg" }
+        if self.extension == "zip" {
+            "rg.exe"
+        } else {
+            "rg"
+        }
     }
 }
 
@@ -280,8 +284,9 @@ where
         return Ok((target, RgSource::GlobalCache));
     }
 
-    let config = platform_config()
-        .ok_or_else(|| RgError::UnsupportedPlatform(format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS)))?;
+    let config = platform_config().ok_or_else(|| {
+        RgError::UnsupportedPlatform(format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS))
+    })?;
     let url = config.url();
     let bytes = fetch(url.clone()).await.map_err(RgError::Download)?;
     if bytes.is_empty() {
@@ -289,9 +294,7 @@ where
     }
     std::fs::create_dir_all(&deps.global_bin).map_err(|error| RgError::Io(error.to_string()))?;
     let archive = deps.global_bin.join(config.filename());
-    tokio::fs::write(&archive, &bytes)
-        .await
-        .map_err(|error| RgError::Io(error.to_string()))?;
+    tokio::fs::write(&archive, &bytes).await.map_err(|error| RgError::Io(error.to_string()))?;
     let outcome = extract(&archive, &config, &target).await;
     let _ = tokio::fs::remove_file(&archive).await;
     outcome?;
@@ -312,7 +315,9 @@ async fn extract(archive: &Path, config: &PlatformConfig, target: &Path) -> Resu
     if config.extension == "zip" {
         // ref shells out to powershell `Expand-Archive` (binary.ts:81-91).
         let shell = which("powershell.exe").or_else(|| which("pwsh.exe"));
-        let shell = shell.map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|| "powershell.exe".to_string());
+        let shell = shell
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "powershell.exe".to_string());
         let script = format!(
             "$global:ProgressPreference = 'SilentlyContinue'; Expand-Archive -LiteralPath '{}' -DestinationPath '{}' -Force",
             archive.to_string_lossy().replace('\'', "''"),
@@ -325,18 +330,15 @@ async fn extract(archive: &Path, config: &PlatformConfig, target: &Path) -> Resu
             .await?;
     }
 
-    let extracted = dir
-        .join(format!("ripgrep-{RG_VERSION}-{}", config.platform))
-        .join(config.exe_name());
+    let extracted =
+        dir.join(format!("ripgrep-{RG_VERSION}-{}", config.platform)).join(config.exe_name());
     if !extracted.is_file() {
         return Err(RgError::Extract(format!(
             "ripgrep archive did not contain executable: {}",
             extracted.display()
         )));
     }
-    tokio::fs::copy(&extracted, target)
-        .await
-        .map_err(|error| RgError::Io(error.to_string()))?;
+    tokio::fs::copy(&extracted, target).await.map_err(|error| RgError::Io(error.to_string()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
@@ -344,7 +346,8 @@ async fn extract(archive: &Path, config: &PlatformConfig, target: &Path) -> Resu
             .map_err(|error| RgError::Io(error.to_string()))?
             .permissions();
         permissions.set_mode(0o755);
-        std::fs::set_permissions(target, permissions).map_err(|error| RgError::Io(error.to_string()))?;
+        std::fs::set_permissions(target, permissions)
+            .map_err(|error| RgError::Io(error.to_string()))?;
     }
     let _ = scope; // cleanup on drop
     Ok(())
@@ -359,9 +362,7 @@ fn global_bin_parent(target: &Path) -> Result<PathBuf, RgError> {
 
 /// `makeTempDirectoryScoped({ directory: global.bin, prefix: "ripgrep-" })`.
 async fn tempfile_in(base: PathBuf) -> Result<PathBuf, RgError> {
-    tokio::fs::create_dir_all(&base)
-        .await
-        .map_err(|error| RgError::Io(error.to_string()))?;
+    tokio::fs::create_dir_all(&base).await.map_err(|error| RgError::Io(error.to_string()))?;
     for _ in 0..16 {
         let suffix = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

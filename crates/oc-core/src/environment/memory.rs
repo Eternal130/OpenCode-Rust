@@ -11,7 +11,9 @@ use async_trait::async_trait;
 use parking_lot::Mutex;
 
 use crate::environment::driver::{CommandSpec, Driver, ProcessOutput, SpawnError, Spawner};
-use crate::environment::files::{DirEntry, FileType, Files, FilesError, FileInfo, Range, ReadResult};
+use crate::environment::files::{
+    DirEntry, FileInfo, FileType, Files, FilesError, Range, ReadResult,
+};
 
 #[derive(Debug, Clone)]
 enum Node {
@@ -95,11 +97,8 @@ fn resolve_seen(
     seen: &mut Vec<String>,
 ) -> Option<String> {
     let normalized = normalize(value);
-    let parts: Vec<String> = normalized
-        .split('/')
-        .filter(|part| !part.is_empty())
-        .map(str::to_string)
-        .collect();
+    let parts: Vec<String> =
+        normalized.split('/').filter(|part| !part.is_empty()).map(str::to_string).collect();
     walk(nodes, "/", &parts, 0, follow_final, seen)
 }
 
@@ -166,10 +165,7 @@ impl MemoryFs {
         let parent_path = dirname(&normalize(value));
         let key = resolve_key(nodes, &parent_path, true).unwrap_or(parent_path);
         match nodes.get(&key) {
-            None => Err(FilesError::failed(
-                dirname(value),
-                "Parent directory does not exist",
-            )),
+            None => Err(FilesError::failed(dirname(value), "Parent directory does not exist")),
             Some(Node::Directory { .. }) => Ok(()),
             Some(other) => Err(FilesError::failed(
                 dirname(value),
@@ -183,7 +179,10 @@ impl MemoryFs {
         match nodes.get(&target) {
             Some(Node::Directory { .. }) => return Ok(()),
             Some(other) => {
-                return Err(FilesError::failed(value, format!("Path is not a directory (it is {:?})", other.kind())));
+                return Err(FilesError::failed(
+                    value,
+                    format!("Path is not a directory (it is {:?})", other.kind()),
+                ));
             }
             None => {}
         }
@@ -222,10 +221,12 @@ impl Files for MemoryFs {
             Some(node) => node,
         };
         if original.kind() == FileType::Directory {
-            return Err(FilesError::WrongKind { path: value.to_string(), actual: FileType::Directory });
+            return Err(FilesError::WrongKind {
+                path: value.to_string(),
+                actual: FileType::Directory,
+            });
         }
-        let resolved = resolve_key(&nodes, value, true)
-            .and_then(|key| nodes.get(&key).cloned());
+        let resolved = resolve_key(&nodes, value, true).and_then(|key| nodes.get(&key).cloned());
         let node = match resolved {
             None => return Err(FilesError::NotFound { path: value.to_string() }),
             Some(node) => node,
@@ -259,10 +260,7 @@ impl Files for MemoryFs {
             }
             .ok_or_else(|| FilesError::failed(value, "Cannot resolve symlink"))?;
             Self::require_parent(&nodes, &target)?;
-            nodes.insert(
-                target,
-                Node::File { bytes: bytes.to_vec(), mtime_ms: now_ms() },
-            );
+            nodes.insert(target, Node::File { bytes: bytes.to_vec(), mtime_ms: now_ms() });
             Ok(())
         })();
         result
@@ -308,7 +306,8 @@ impl Files for MemoryFs {
             } else {
                 requested
             };
-            if node.kind() == FileType::Directory && destination.starts_with(&format!("{source}/")) {
+            if node.kind() == FileType::Directory && destination.starts_with(&format!("{source}/"))
+            {
                 return Err(FilesError::failed(from, "Cannot move a directory into itself"));
             }
             if let Some(existing) = nodes.get(&destination) {

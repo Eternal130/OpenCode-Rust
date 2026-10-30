@@ -143,13 +143,16 @@ pub fn repair(value: &Value, schema: &Value, root: &Value, depth: usize) -> Valu
                 return value.clone();
             }
             if branches.iter().any(|branch| {
-                !branch.is_object() || branch.get("type").and_then(Value::as_str) == Some(js_type(value))
+                !branch.is_object()
+                    || branch.get("type").and_then(Value::as_str) == Some(js_type(value))
             }) {
                 return value.clone();
             }
             let candidates: Vec<&Value> = branches
                 .iter()
-                .filter(|branch| branch.is_object() && branch.get("type").and_then(Value::as_str) != Some("null"))
+                .filter(|branch| {
+                    branch.is_object() && branch.get("type").and_then(Value::as_str) != Some("null")
+                })
                 .collect();
             if candidates.len() == 1 {
                 repair(value, candidates[0], root, depth + 1)
@@ -300,7 +303,10 @@ fn repair_object(value: &Value, schema: &Value, root: &Value, depth: usize) -> V
                 .all(|keyword| !property.as_object().is_some_and(|map| map.contains_key(*keyword)));
         let placeholder = current.as_object().is_some_and(Map::is_empty)
             && property.get("type").and_then(Value::as_str) != Some("object");
-        if declared && !required.contains(&key.as_str()) && plain && (current.is_null() || placeholder)
+        if declared
+            && !required.contains(&key.as_str())
+            && plain
+            && (current.is_null() || placeholder)
         {
             result.remove(key.as_str());
             continue;
@@ -317,7 +323,9 @@ fn repair_object(value: &Value, schema: &Value, root: &Value, depth: usize) -> V
 /// `repairArray` (ref tool-input-repair.ts:112-152).
 fn repair_array(value: &Value, schema: &Value, root: &Value, depth: usize) -> Value {
     let parsed: Value = match value {
-        Value::String(text) => serde_json::from_str::<Value>(text).unwrap_or_else(|_| value.clone()),
+        Value::String(text) => {
+            serde_json::from_str::<Value>(text).unwrap_or_else(|_| value.clone())
+        }
         parsed => parsed.clone(),
     };
     let prefix_items = schema.get("prefixItems").and_then(Value::as_array);
@@ -330,16 +338,15 @@ fn repair_array(value: &Value, schema: &Value, root: &Value, depth: usize) -> Va
             .enumerate()
             .map(|(index, item)| {
                 let member = match tuple {
-                    Some(tuple) => tuple
-                        .get(index)
-                        .filter(|member| !member.is_null())
-                        .or_else(|| {
+                    Some(tuple) => {
+                        tuple.get(index).filter(|member| !member.is_null()).or_else(|| {
                             if prefix_items.is_some() {
                                 schema.get("items")
                             } else {
                                 schema.get("additionalItems")
                             }
-                        }),
+                        })
+                    }
                     None => schema.get("items"),
                 };
                 match member.filter(|member| member.is_object()) {
@@ -379,7 +386,7 @@ fn repair_array(value: &Value, schema: &Value, root: &Value, depth: usize) -> Va
 mod tests {
     use super::*;
     use crate::hooks::{HookRegistry, HookScope};
-    use crate::location::{ToolRegistryState, ToolRegistration};
+    use crate::location::{ToolRegistration, ToolRegistryState};
     use serde_json::json;
 
     fn registry_with_tool(input_schema: Value) -> (Arc<HookRegistry>, Arc<ToolRegistryState>) {
@@ -432,7 +439,8 @@ mod tests {
             }),
             None,
         );
-        let input = json!({ "count": 2, "nested": { "enabled": true }, "items": [2, 3], "extra": "keep" });
+        let input =
+            json!({ "count": 2, "nested": { "enabled": true }, "items": [2, 3], "extra": "keep" });
         assert_eq!(run(input.clone(), schema).await, input);
     }
 
@@ -495,8 +503,11 @@ mod tests {
             json!({ "known": 2, "closed": { "keep": 3 }, "open": { "keep": 4, "extra": true }, "items": [{ "keep": 5 }] })
         );
         assert_eq!(
-            run(json!({ "extra": true }), json!({ "type": "object", "properties": {}, "additionalProperties": false }))
-                .await,
+            run(
+                json!({ "extra": true }),
+                json!({ "type": "object", "properties": {}, "additionalProperties": false })
+            )
+            .await,
             json!({})
         );
     }
@@ -592,7 +603,8 @@ mod tests {
             }),
             None,
         );
-        let input = json!({ "wrapped": null, "enumerated": null, "permissive": null, "constant": null });
+        let input =
+            json!({ "wrapped": null, "enumerated": null, "permissive": null, "constant": null });
         assert_eq!(run(input.clone(), schema).await, input);
     }
 
@@ -857,8 +869,11 @@ mod tests {
             input
         );
         assert_eq!(
-            run(input.clone(), json!({ "allOf": [object(json!({ "numeric": { "type": "integer" } }), None)] }))
-                .await,
+            run(
+                input.clone(),
+                json!({ "allOf": [object(json!({ "numeric": { "type": "integer" } }), None)] })
+            )
+            .await,
             input
         );
     }
@@ -878,7 +893,10 @@ mod tests {
                 call_id: "call".into(),
                 input: json!({ "x": "1" }),
             };
-            assert_eq!(registry.dispatch_tool_execute_before(event).await.unwrap().input, json!({ "x": "1" }));
+            assert_eq!(
+                registry.dispatch_tool_execute_before(event).await.unwrap().input,
+                json!({ "x": "1" })
+            );
         }
         // Non-object root schemas are not repaired.
         let (registry, tools) = registry_with_tool(json!({ "type": "string" }));
@@ -892,7 +910,9 @@ mod tests {
             call_id: "call".into(),
             input: json!({ "x": "1" }),
         };
-        assert_eq!(registry.dispatch_tool_execute_before(event).await.unwrap().input, json!({ "x": "1" }));
+        assert_eq!(
+            registry.dispatch_tool_execute_before(event).await.unwrap().input,
+            json!({ "x": "1" })
+        );
     }
 }
-

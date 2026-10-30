@@ -1072,7 +1072,8 @@ mod tests {
         assert!(wire.starts_with("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n"));
         assert!(wire.ends_with(&page));
         assert!(page.starts_with("<!doctype html>"));
-        assert!(page.contains("<h1 class=\"headline\" id=\"oc-headline\">Authorization successful</h1>"));
+        assert!(page
+            .contains("<h1 class=\"headline\" id=\"oc-headline\">Authorization successful</h1>"));
         let page = super::super::oauth_page::error("state mismatch", Some("MCP"));
         let wire = raw_response(400, "text/html", &page);
         assert!(wire.starts_with("HTTP/1.1 400 Bad Request\r\nContent-Type: text/html\r\n"));

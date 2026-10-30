@@ -55,27 +55,18 @@ async fn memory_read_range_and_errors() {
     let files = make_files(&driver.driver());
     files.write("/a.txt", b"0123456789").await.unwrap();
 
-    let read = files
-        .read("/a.txt", Some(Range { offset: 2, length: 3 }))
-        .await
-        .unwrap();
+    let read = files.read("/a.txt", Some(Range { offset: 2, length: 3 })).await.unwrap();
     assert_eq!(read.bytes, b"234");
     assert_eq!(read.info.size, 10);
 
-    assert!(matches!(
-        files.read("/missing", None).await,
-        Err(FilesError::NotFound { .. })
-    ));
+    assert!(matches!(files.read("/missing", None).await, Err(FilesError::NotFound { .. })));
     assert!(matches!(
         files.read("/", None).await,
         Err(FilesError::WrongKind { actual: FileType::Directory, .. })
     ));
     // Dangling symlink: lookup sees the symlink, resolution fails NotFound.
     driver.symlink("/gone", "/dangling").await.unwrap();
-    assert!(matches!(
-        files.read("/dangling", None).await,
-        Err(FilesError::NotFound { .. })
-    ));
+    assert!(matches!(files.read("/dangling", None).await, Err(FilesError::NotFound { .. })));
 }
 
 #[tokio::test]
@@ -89,10 +80,8 @@ async fn memory_list_sorts_and_preserves_entry_types() {
     driver.symlink("/a.txt", "/d/link").await.unwrap();
 
     let entries = files.list("/d").await.unwrap();
-    let names: Vec<(&str, FileType)> = entries
-        .iter()
-        .map(|entry| (entry.name.as_str(), entry.kind))
-        .collect();
+    let names: Vec<(&str, FileType)> =
+        entries.iter().map(|entry| (entry.name.as_str(), entry.kind)).collect();
     assert_eq!(
         names,
         vec![
@@ -132,10 +121,7 @@ async fn memory_move_into_dir_and_not_found() {
     assert!(matches!(files.stat("/a.txt").await, Err(FilesError::NotFound { .. })));
     assert_eq!(files.read("/d/a.txt", None).await.unwrap().bytes, b"x");
 
-    assert!(matches!(
-        files.r#move("/missing", "/d").await,
-        Err(FilesError::NotFound { .. })
-    ));
+    assert!(matches!(files.r#move("/missing", "/d").await, Err(FilesError::NotFound { .. })));
 }
 
 #[tokio::test]
@@ -176,10 +162,7 @@ async fn memory_write_through_symlink_and_type_following() {
     assert_eq!(type_following(files.as_ref(), "/link").await.unwrap(), FileType::File);
     files.mkdir("/d").await.unwrap();
     driver.symlink("/d", "/dirlink").await.unwrap();
-    assert_eq!(
-        type_following(files.as_ref(), "/dirlink").await.unwrap(),
-        FileType::Directory
-    );
+    assert_eq!(type_following(files.as_ref(), "/dirlink").await.unwrap(), FileType::Directory);
     driver.symlink("/gone", "/dangling").await.unwrap();
     assert!(matches!(
         type_following(files.as_ref(), "/dangling").await,
@@ -210,10 +193,8 @@ async fn exec_defaults_round_trip() {
 
     let read = files.read(file.to_str().unwrap(), None).await.unwrap();
     assert_eq!(read.bytes, b"0123456789");
-    let ranged = files
-        .read(file.to_str().unwrap(), Some(Range { offset: 2, length: 3 }))
-        .await
-        .unwrap();
+    let ranged =
+        files.read(file.to_str().unwrap(), Some(Range { offset: 2, length: 3 })).await.unwrap();
     assert_eq!(ranged.bytes, b"234");
 }
 
@@ -248,9 +229,7 @@ async fn exec_defaults_error_protocol() {
         perms.set_mode(0o555);
     }
     std::fs::set_permissions(&blocked, perms).unwrap();
-    let result = files
-        .r#move(source.to_str().unwrap(), blocked.to_str().unwrap())
-        .await;
+    let result = files.r#move(source.to_str().unwrap(), blocked.to_str().unwrap()).await;
     #[cfg(unix)]
     assert!(matches!(result, Err(FilesError::Failed { .. })));
     #[cfg(not(unix))]
@@ -296,10 +275,7 @@ async fn exec_defaults_move_into_dir() {
     files.mkdir(root.join("d").to_str().unwrap()).await.unwrap();
     let source = root.join("a.txt");
     files.write(source.to_str().unwrap(), b"x").await.unwrap();
-    files
-        .r#move(source.to_str().unwrap(), root.join("d").to_str().unwrap())
-        .await
-        .unwrap();
+    files.r#move(source.to_str().unwrap(), root.join("d").to_str().unwrap()).await.unwrap();
     assert!(std::fs::read(root.join("d/a.txt")).unwrap() == b"x");
     assert!(!source.exists());
 }
@@ -329,10 +305,7 @@ async fn local_driver_semantics() {
     }
 
     // Move into a directory lands at basename join.
-    files
-        .r#move(file.to_str().unwrap(), dir.to_str().unwrap())
-        .await
-        .unwrap();
+    files.r#move(file.to_str().unwrap(), dir.to_str().unwrap()).await.unwrap();
     assert!(std::fs::read(dir.join("a.txt")).unwrap() == b"hello");
     assert!(matches!(
         files.r#move(root.join("nope").to_str().unwrap(), dir.to_str().unwrap()).await,
@@ -384,10 +357,7 @@ async fn workspace_create_provision_connect_destroy() {
     assert!(service.destroy("wrk_a").await.unwrap().destroyed);
     assert!(!service.destroy("wrk_a").await.unwrap().destroyed);
     assert!(store.workspace_row("wrk_a").await.is_none());
-    assert!(matches!(
-        service.connect("wrk_a").await,
-        Err(WorkspaceError::NotFound(_))
-    ));
+    assert!(matches!(service.connect("wrk_a").await, Err(WorkspaceError::NotFound(_))));
 }
 
 #[tokio::test]
@@ -413,10 +383,7 @@ async fn environment_bind_local_and_workspace() {
     let environment = Environment::with_workspace(Arc::new(WorkspaceService::new(store.clone())));
 
     // No workspaceID: host driver.
-    let local_files = environment
-        .files(&LocationRef::new(root.clone(), None))
-        .await
-        .unwrap();
+    let local_files = environment.files(&LocationRef::new(root.clone(), None)).await.unwrap();
     let probe = root.join("local.txt");
     local_files.write(probe.to_str().unwrap(), b"local").await.unwrap();
     assert_eq!(local_files.read(probe.to_str().unwrap(), None).await.unwrap().bytes, b"local");
@@ -433,15 +400,11 @@ async fn environment_bind_local_and_workspace() {
     assert!(store.workspace_row("wrk_env").await.unwrap().2.is_some());
 
     // Unknown workspace is a bind failure by design.
-    let missing = environment
-        .files(&LocationRef::new(root.clone(), Some("wrk_gone".to_string())))
-        .await;
+    let missing =
+        environment.files(&LocationRef::new(root.clone(), Some("wrk_gone".to_string()))).await;
     assert!(missing.is_err());
 
     // Host-only environment rejects workspace locations.
     let host_only = Environment::local();
-    assert!(host_only
-        .bind(&LocationRef::new(root, Some("wrk_env".to_string())))
-        .await
-        .is_err());
+    assert!(host_only.bind(&LocationRef::new(root, Some("wrk_env".to_string()))).await.is_err());
 }

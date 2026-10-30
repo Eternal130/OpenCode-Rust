@@ -198,6 +198,25 @@ fn operation_error(operation: &'static str, message: impl Into<String>) -> Snaps
     SnapshotError::Operation { operation, message: message.into() }
 }
 
+/// Pins the snapshot store's git configuration (G-30): the ref ships an
+/// `opencode.gitconfig` include (`[core] autocrlf = false`, git.ts:23-33)
+/// and forces `-c core.quotepath=false` for patch diffs (git.ts:535), so
+/// snapshot operations never inherit the HOST's `~/.gitconfig` settings.
+/// `repo.config()` opens the full level stack, but `set_str` writes to
+/// the highest-priority writable level — the repo-local config file —
+/// which then overrides the global/system levels for every libgit2
+/// operation on this repository. Already-correct values are left alone
+/// so repeated opens do not rewrite the file.
+fn apply_snapshot_config(repo: &git2::Repository) -> Result<(), git2::Error> {
+    let mut config = repo.config()?;
+    for (key, value) in [("core.autocrlf", "false"), ("core.quotepath", "false")] {
+        if config.get_string(key).ok().as_deref() != Some(value) {
+            config.set_str(key, value)?;
+        }
+    }
+    Ok(())
+}
+
 impl GitSnapshotStore {
     /// Opens (creating) the store for `worktree` under `data_root`.
     /// `scope` is the location directory relative to the worktree (`"."`
@@ -247,6 +266,7 @@ impl GitSnapshotStore {
 
     fn open_repo(&self) -> Result<git2::Repository, git2::Error> {
         if let Ok(repo) = git2::Repository::open_bare(&self.git_directory) {
+            apply_snapshot_config(&repo)?;
             return Ok(repo);
         }
         // First use: initialize the bare store (SE-F3's deferred init).
@@ -257,7 +277,9 @@ impl GitSnapshotStore {
             &self.git_directory,
             git2::RepositoryInitOptions::new().bare(true).external_template(false).mkdir(true),
         );
-        git2::Repository::open_bare(&self.git_directory)
+        let repo = git2::Repository::open_bare(&self.git_directory)?;
+        apply_snapshot_config(&repo)?;
+        Ok(repo)
     }
 
     /// The SOURCE repository (ignore-rule oracle): `git.repo.discover`.
