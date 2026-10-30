@@ -665,6 +665,14 @@ impl SessionModelRequest {
                         compaction_result.clone_from(&shaped.result);
                         shaped.context
                     }
+                    // model-request.ts:410 — generate rides the
+                    // `session.generate` hook (`agentHook("generate", ...)`),
+                    // NOT `session.context`.
+                    RequestKind::Generate => self
+                        .hooks
+                        .dispatch_session_generate(event)
+                        .await
+                        .map_err(|err| ModelError::Resolver(err.to_string()))?,
                     _ => self
                         .hooks
                         .dispatch_session_context(event)
@@ -1186,6 +1194,104 @@ pub async fn prepare_primary(
             input_tokens,
         })
         .await
+}
+
+#[cfg(test)]
+mod hook_dispatch_tests {
+    // G-23: `session.generate` fires for generate-kind requests; the
+    // context hook does not (model-request.ts:410 — generate rides
+    // `agentHook("generate", ...)`, primary rides `agentHook("context")`).
+    use super::{AppMetadata, RequestInput, RequestKind, SessionModelRequest};
+    use crate::database::schema::SessionRow;
+    use crate::hooks::fn_hook;
+    use crate::session::runner::ResolvedModel;
+    use oc_ai::schema::messages::Message;
+    use std::sync::{Arc, Mutex};
+
+    fn resolved() -> ResolvedModel {
+        let route =
+            oc_ai::test_support::echo_route(Arc::new(oc_ai::route::transport::FailingTransport {
+                message: "never sent",
+            }));
+        let model = route.model("fake-model", Some("parityfake".into())).expect("route model");
+        ResolvedModel {
+            reference: oc_schema::model::Ref {
+                provider_id: oc_schema::id::ProviderId::parse("parityfake"),
+                id: oc_schema::id::ModelId::parse("fake-model"),
+                variant: Some(oc_schema::id::ModelVariantId::parse("default")),
+            },
+            model,
+            capabilities: oc_schema::model::Capabilities::default(),
+            cost: Vec::new(),
+            limit: oc_schema::model::ModelLimit { context: 200_000, input: None, output: 32_000 },
+            compaction: None,
+            transport: None,
+        }
+    }
+
+    fn input(model: &ResolvedModel, messages: Vec<Message>) -> RequestInput {
+        RequestInput {
+            session: SessionRow::new("ses_guard_1", "global", "/tmp/opencode", "guard", "test")
+                .expect("session row"),
+            agent: oc_schema::id::AgentId::parse("build"),
+            model: model.clone(),
+            tools: None,
+            system: Vec::new(),
+            messages,
+            tool_choice: None,
+            web_socket: false,
+            input_tokens: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn generate_kind_fires_session_generate_not_context() {
+        let hooks = Arc::new(crate::hooks::HookRegistry::new());
+        let tools = Arc::new(crate::location::ToolRegistryState::new());
+        let fired: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
+        let service = SessionModelRequest::new(Arc::clone(&hooks), tools, AppMetadata::default());
+
+        let generate_fired = Arc::clone(&fired);
+        std::mem::forget(
+            hooks
+                .register_session_generate(
+                    fn_hook(move |_event: &mut crate::hooks::SessionGenerateEvent| {
+                        generate_fired.lock().unwrap().push("generate");
+                        Ok(())
+                    }),
+                    crate::hooks::HookOptions::default(),
+                )
+                .await,
+        );
+        let context_fired = Arc::clone(&fired);
+        std::mem::forget(
+            hooks
+                .register_session_context(
+                    fn_hook(move |_event: &mut crate::hooks::SessionContextEvent| {
+                        context_fired.lock().unwrap().push("context");
+                        Ok(())
+                    }),
+                    crate::hooks::HookOptions::default(),
+                )
+                .await,
+        );
+
+        let model = resolved();
+        // Generate kind: only `session.generate` fires.
+        service
+            .prepare(RequestKind::Generate, input(&model, vec![Message::user("summarize")]))
+            .await
+            .expect("generate prepare");
+        assert_eq!(*fired.lock().unwrap(), vec!["generate"]);
+
+        // Primary kind: only `session.context` fires.
+        fired.lock().unwrap().clear();
+        service
+            .prepare(RequestKind::Primary, input(&model, vec![Message::user("hello")]))
+            .await
+            .expect("primary prepare");
+        assert_eq!(*fired.lock().unwrap(), vec!["context"]);
+    }
 }
 
 #[cfg(test)]
