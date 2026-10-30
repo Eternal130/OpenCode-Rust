@@ -49,7 +49,9 @@ impl FileRetentionSettings {
     /// config key).
     #[must_use]
     pub fn from_entries(entries: &[oc_schema::config::Entry]) -> Self {
-        Self::from_experimental(crate::config::latest(entries, |info| info.experimental.clone()).as_ref())
+        Self::from_experimental(
+            crate::config::latest(entries, |info| info.experimental.clone()).as_ref(),
+        )
     }
 }
 

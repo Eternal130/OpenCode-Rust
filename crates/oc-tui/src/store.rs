@@ -50,6 +50,47 @@ pub enum Route {
     Session { session_id: String },
 }
 
+/// G-34 — `session.new_location` (`"launch" | "inherit"`,
+/// config/index.tsx:173): where `session.new` lands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NewSessionLocation {
+    /// Home at the launch directory (the default).
+    #[default]
+    Launch,
+    /// Home at the CURRENT location (config/new-session-location.ts).
+    Inherit,
+}
+
+impl NewSessionLocation {
+    /// Parses the raw config value (unknown ⇒ the launch default).
+    #[must_use]
+    pub fn parse(raw: Option<&str>) -> Self {
+        match raw {
+            Some("inherit") => Self::Inherit,
+            _ => Self::Launch,
+        }
+    }
+}
+
+/// Port of `config/new-session-location.ts` (G-34): `Some(directory)`
+/// keeps the CURRENT location on the home route (inherit, when the
+/// current location resolves and is not the failed/unavailable one);
+/// `None` is the launch-directory default.
+#[must_use]
+pub fn new_session_location(
+    mode: NewSessionLocation,
+    current: Option<&str>,
+    unavailable: Option<&str>,
+) -> Option<String> {
+    (mode == NewSessionLocation::Inherit
+        && current.is_some()
+        // The ref also compares workspaceID; the port's location
+        // identity is the directory (no workspace dimension tracked).
+        && current != unavailable)
+        .then(|| current.map(str::to_owned))
+        .flatten()
+}
+
 /// What currently receives key input: the route, or the top dialog
 /// (the reference's keymap `modal` mode + the focused input renderable).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1351,6 +1392,12 @@ pub struct Store {
     /// `session.markdown === "source"` (index.tsx:231): raw text parts
     /// instead of rendered markdown (default rendered).
     session_markdown_source: Signal<bool>,
+    /// G-34 — `session.new_location` (default launch): where
+    /// `session.new`/`session.clear` home lands.
+    session_new_location: Signal<NewSessionLocation>,
+    /// G-34 — the home route's location override (`newSessionLocation`
+    /// result): `Some(directory)` keeps the CURRENT location.
+    home_location: std::cell::RefCell<Option<String>>,
     /// Plugin footer hint segments (one per plugin, latest wins).
     plugin_hints: Signal<Vec<(String, String)>>,
     /// Plugin home quick actions (registration-time).
@@ -3184,6 +3231,12 @@ struct StoreSignals {
     session_verbosity: Signal<String>,
     session_tps: Signal<bool>,
     session_markdown_source: Signal<bool>,
+    /// G-34 — `session.new_location` (default launch): where
+    /// `session.new`/`session.clear` home lands.
+    session_new_location: Signal<NewSessionLocation>,
+    /// G-34 — the home route's location override (`newSessionLocation`
+    /// result): `Some(directory)` keeps the CURRENT location.
+    home_location: std::cell::RefCell<Option<String>>,
     plugin_hints: Signal<Vec<(String, String)>>,
     plugin_home_actions: Signal<Vec<crate::components::home::PluginQuickAction>>,
     plugin_group_rules: Signal<crate::components::message::model::GroupRules>,
@@ -3334,6 +3387,8 @@ impl Store {
             session_verbosity,
             session_tps,
             session_markdown_source,
+            session_new_location,
+            home_location,
             plugin_hints,
             plugin_home_actions,
             plugin_group_rules,
@@ -3413,6 +3468,8 @@ impl Store {
             session_verbosity,
             session_tps,
             session_markdown_source,
+            session_new_location,
+            home_location,
             plugin_hints,
             plugin_home_actions,
             plugin_group_rules,
@@ -3591,6 +3648,7 @@ impl Store {
         let session_verbosity = Signal::new(&runtime, "medium".to_owned());
         let session_tps = Signal::new(&runtime, false);
         let session_markdown_source = Signal::new(&runtime, false);
+        let session_new_location = Signal::new(&runtime, NewSessionLocation::Launch);
         let plugin_hints = Signal::new(&runtime, Vec::<(String, String)>::new());
         let plugin_home_actions =
             Signal::new(&runtime, Vec::<crate::components::home::PluginQuickAction>::new());
@@ -3675,6 +3733,8 @@ impl Store {
                 session_verbosity,
                 session_tps,
                 session_markdown_source,
+                session_new_location,
+                home_location: std::cell::RefCell::new(None),
                 plugin_hints,
                 plugin_home_actions,
                 plugin_group_rules,
@@ -10204,6 +10264,32 @@ impl Store {
         self.session_markdown_source.set(source);
         self.request_redraw();
     }
+
+    /// G-34 — the `session.new_location` mode (launch | inherit).
+    #[must_use]
+    pub fn session_new_location(&self) -> NewSessionLocation {
+        self.session_new_location.get()
+    }
+
+    /// The `session.new_location` key's boot restore
+    /// (config/index.tsx:320 `input.session?.new_location ?? "launch"`).
+    pub fn set_session_new_location(&self, mode: NewSessionLocation) {
+        self.session_new_location.set(mode);
+    }
+
+    /// G-34 — the home route's location override (`None` = the launch
+    /// directory default, `Some` = the inherited current location).
+    #[must_use]
+    pub fn home_location(&self) -> Option<String> {
+        self.home_location.borrow().clone()
+    }
+
+    /// Sets/clears the home route's location override
+    /// (`newSessionLocation`, new-session-location.ts).
+    pub fn set_home_location(&self, directory: Option<String>) {
+        *self.home_location.borrow_mut() = directory;
+    }
+
 
     /// The `session.grouping` key's boot restore (`grouping !== "none"`
     /// — index.tsx:233; the toggle flips it at runtime).

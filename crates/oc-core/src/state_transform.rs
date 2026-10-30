@@ -286,15 +286,22 @@ mod tests {
     fn transforms_run_in_registration_order_and_chain() {
         let transforms = vec![
             AgentTransform::plugin("a", |editor| {
-                editor.update(&AgentId::parse("build"), |info| { info.system = Some(format!("{}+a", info.system.clone().unwrap_or_default())); });
+                editor.update(&AgentId::parse("build"), |info| {
+                    info.system = Some(format!("{}+a", info.system.clone().unwrap_or_default()));
+                });
                 Ok(())
             }),
             AgentTransform::plugin("b", |editor| {
                 // sees a's edit — chaining, not parallel bases
-                let prompt = editor.get(&AgentId::parse("build")).map(|a| a.system.clone().unwrap_or_default());
+                let prompt = editor
+                    .get(&AgentId::parse("build"))
+                    .map(|a| a.system.clone().unwrap_or_default());
                 match prompt {
                     Some(prompt) if prompt.ends_with("+a") => {
-                        editor.update(&AgentId::parse("build"), |info| { info.system = Some(format!("{}+b", info.system.clone().unwrap_or_default())); });
+                        editor.update(&AgentId::parse("build"), |info| {
+                            info.system =
+                                Some(format!("{}+b", info.system.clone().unwrap_or_default()));
+                        });
                         editor.default(Some(AgentId::parse("reviewer")));
                         Ok(())
                     }
@@ -304,7 +311,10 @@ mod tests {
         ];
         let (state, failures) = run_agent_transforms(&base(), &transforms).expect("ok");
         assert!(failures.is_empty());
-        assert_eq!(state.agents.iter().next().map(|a| a.system.clone().unwrap_or_default()), Some("base build+a+b".to_owned()));
+        assert_eq!(
+            state.agents.iter().next().map(|a| a.system.clone().unwrap_or_default()),
+            Some("base build+a+b".to_owned())
+        );
         assert_eq!(state.default, Some(AgentId::parse("reviewer")));
     }
 
@@ -317,12 +327,16 @@ mod tests {
             // fails → plugin "a" drops entirely and the rebuild
             // restarts from the fresh base (a1's edit must vanish).
             AgentTransform::plugin("a", move |editor| {
-                editor.update(&probe, |info| { info.system = Some(format!("{}+a1", info.system.clone().unwrap_or_default())); });
+                editor.update(&probe, |info| {
+                    info.system = Some(format!("{}+a1", info.system.clone().unwrap_or_default()));
+                });
                 Ok(())
             }),
             AgentTransform::plugin("a", |_| Err("a2 exploded".to_owned())),
             AgentTransform::plugin("b", move |editor| {
-                editor.update(&probe2, |info| { info.system = Some(format!("{}+b", info.system.clone().unwrap_or_default())); });
+                editor.update(&probe2, |info| {
+                    info.system = Some(format!("{}+b", info.system.clone().unwrap_or_default()));
+                });
                 Ok(())
             }),
         ];
@@ -331,14 +345,19 @@ mod tests {
         assert_eq!(failures[0].plugin_id.as_deref(), Some("a"));
         assert_eq!(failures[0].cause, "a2 exploded");
         // b's edit survived on a FRESH candidate (no "+a1").
-        assert_eq!(state.agents.iter().next().map(|a| a.system.clone().unwrap_or_default()), Some("base build+b".to_owned()));
+        assert_eq!(
+            state.agents.iter().next().map(|a| a.system.clone().unwrap_or_default()),
+            Some("base build+b".to_owned())
+        );
     }
 
     #[test]
     fn ungrouped_failure_propagates() {
         let transforms = vec![
             AgentTransform::plugin("a", |editor| {
-                editor.update(&AgentId::parse("build"), |info| { info.system = Some(format!("{}x", info.system.clone().unwrap_or_default())); });
+                editor.update(&AgentId::parse("build"), |info| {
+                    info.system = Some(format!("{}x", info.system.clone().unwrap_or_default()));
+                });
                 Ok(())
             }),
             AgentTransform::host(|_| Err("host bug".to_owned())),
@@ -371,13 +390,16 @@ mod tests {
         registry.set_default(Some(AgentId::parse("build")));
         let transforms = vec![
             AgentTransform::plugin("a", |editor| {
-                editor.update(&AgentId::parse("reviewer"), |info| { info.system = Some("rewritten".to_owned()); });
+                editor.update(&AgentId::parse("reviewer"), |info| {
+                    info.system = Some("rewritten".to_owned());
+                });
                 editor.remove(&AgentId::parse("build"));
                 Ok(())
             }),
             AgentTransform::plugin("b", |editor| {
-                let rewritten =
-                    editor.get(&AgentId::parse("reviewer")).map(|a| a.system.clone().unwrap_or_default());
+                let rewritten = editor
+                    .get(&AgentId::parse("reviewer"))
+                    .map(|a| a.system.clone().unwrap_or_default());
                 match rewritten {
                     Some(ref prompt) if prompt == "rewritten" => Ok(()),
                     other => Err(format!("second transform missed first's edit: {other:?}")),
@@ -387,7 +409,10 @@ mod tests {
         let applied = apply_agent_state_transforms(&registry, &transforms).expect("ok");
         assert_eq!(applied, 3); // build removed + reviewer rewritten + default cleared (build gone)
         assert!(registry.get(&AgentId::parse("build")).is_none());
-        assert_eq!(registry.get(&AgentId::parse("reviewer")).map(|a| a.system.clone().unwrap_or_default()), Some("rewritten".into()));
+        assert_eq!(
+            registry.get(&AgentId::parse("reviewer")).map(|a| a.system.clone().unwrap_or_default()),
+            Some("rewritten".into())
+        );
     }
 
     #[test]

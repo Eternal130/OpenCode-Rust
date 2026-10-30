@@ -160,6 +160,9 @@ struct Inner {
     hooks: Option<Arc<crate::hooks::HookRegistry>>,
     /// Config `shell` key (`ShellSelect` priority "config" input).
     config_shell: Option<String>,
+    /// G-33 — the capture truncation budget (config `tool_output`;
+    /// default = the compile-time constants, the previous behavior).
+    output_limits: crate::tool_output::Limits,
 }
 
 impl Shell {
@@ -183,6 +186,7 @@ impl Shell {
                 bus: None,
                 hooks: None,
                 config_shell: None,
+                output_limits: crate::tool_output::Limits::default(),
             }),
         }
     }
@@ -211,6 +215,16 @@ impl Shell {
     pub fn with_config_shell(mut self, shell: Option<String>) -> Self {
         let inner = Arc::get_mut(&mut self.inner).expect("config shell must attach before cloning");
         inner.config_shell = shell;
+        self
+    }
+
+    /// G-33 — attaches the config `tool_output` budget the bounded tail
+    /// capture truncates against (engine assembly wires this; default
+    /// keeps the compile-time constants).
+    #[must_use]
+    pub fn with_output_limits(mut self, limits: crate::tool_output::Limits) -> Self {
+        let inner = Arc::get_mut(&mut self.inner).expect("limits must attach before cloning");
+        inner.output_limits = limits;
         self
     }
 
@@ -380,8 +394,11 @@ impl Shell {
 
     /// The bounded tail capture of a finished command (`tool_output` limits).
     async fn capture(&self, info: &Info) -> Option<result::Capture> {
-        const MAX_LINES: usize = crate::tool_output::MAX_LINES;
-        const MAX_BYTES: usize = crate::tool_output::MAX_BYTES;
+        // G-33 — the configurable budget (config `tool_output`), no
+        // longer the raw compile-time constants.
+        let limits = self.inner.output_limits;
+        let max_lines = limits.max_lines;
+        let max_bytes = limits.max_bytes;
         let latest = self
             .output(&info.id, Some(OutputInput { cursor: Some(u64::MAX), limit: None }))
             .await
@@ -390,8 +407,8 @@ impl Shell {
             .output(
                 &info.id,
                 Some(OutputInput {
-                    cursor: Some(latest.size.saturating_sub(MAX_BYTES as u64)),
-                    limit: Some(MAX_BYTES as u64),
+                    cursor: Some(latest.size.saturating_sub(max_bytes as u64)),
+                    limit: Some(max_bytes as u64),
                 }),
             )
             .await
@@ -400,15 +417,15 @@ impl Shell {
         if page.output.ends_with('\n') {
             lines.pop();
         }
-        let truncated = latest.size > MAX_BYTES as u64 || lines.len() > MAX_LINES;
-        let text = if lines.len() > MAX_LINES {
-            lines[lines.len() - MAX_LINES..].join("\n")
+        let truncated = latest.size > max_bytes as u64 || lines.len() > max_lines;
+        let text = if lines.len() > max_lines {
+            lines[lines.len() - max_lines..].join("\n")
         } else {
             page.output.clone()
         };
         let newlines = self.newlines_of(&info.id);
         let total = newlines + u64::from(!page.output.is_empty() && !page.output.ends_with('\n'));
-        let shown = lines.len().min(MAX_LINES);
+        let shown = lines.len().min(max_lines);
         let notice = truncated.then(|| {
             format!(
                 "\n\n[showing lines {}-{total} of {total}; full output saved to {}]",

@@ -235,10 +235,8 @@ fn text_page(bytes: &[u8], eof: bool, offset: u64, limit: u64) -> Option<PageRes
     if !eof || split.last() == Some(&"") {
         split.pop();
     }
-    let available: Vec<String> = split
-        .into_iter()
-        .map(|line| line.strip_suffix('\r').unwrap_or(line).to_string())
-        .collect();
+    let available: Vec<String> =
+        split.into_iter().map(|line| line.strip_suffix('\r').unwrap_or(line).to_string()).collect();
 
     let mut entries: Vec<String> = Vec::new();
     let mut size = 0usize;
@@ -268,7 +266,8 @@ fn text_page(bytes: &[u8], eof: bool, offset: u64, limit: u64) -> Option<PageRes
         return None;
     }
 
-    let consumed_lines = if next.is_none() { available.len() } else { (next.unwrap() - 1) as usize };
+    let consumed_lines =
+        if next.is_none() { available.len() } else { (next.unwrap() - 1) as usize };
     let consumed = if consumed_lines == 0 {
         0
     } else {
@@ -399,11 +398,10 @@ pub fn read_file(
     }
 
     use std::io::{Read, Seek, SeekFrom};
-    let mut file =
-        std::fs::File::open(path).map_err(|error| match error.kind() {
-            std::io::ErrorKind::NotFound => ReadError::NotFound(path.to_path_buf()),
-            _ => ReadError::Io(error.to_string()),
-        })?;
+    let mut file = std::fs::File::open(path).map_err(|error| match error.kind() {
+        std::io::ErrorKind::NotFound => ReadError::NotFound(path.to_path_buf()),
+        _ => ReadError::Io(error.to_string()),
+    })?;
     let read_at = move |start: u64, length: usize| -> Result<Vec<u8>, ReadError> {
         file.seek(SeekFrom::Start(start)).map_err(|error| ReadError::Io(error.to_string()))?;
         let mut buffer = vec![0u8; length];
@@ -486,7 +484,9 @@ pub fn read_file_with(
     // directly with eof=true (read-filesystem.ts:157-165).
     if first.len() as u64 >= size {
         let Some(result) = text_page(&first, true, paged_offset, paged_limit) else {
-            return Err(ReadError::Io("Read page did not settle for a complete first chunk".into()));
+            return Err(ReadError::Io(
+                "Read page did not settle for a complete first chunk".into(),
+            ));
         };
         let binary = first[..result.consumed].contains(&0);
         let lines = total_line_count(newline_count(&first), first.last().copied());

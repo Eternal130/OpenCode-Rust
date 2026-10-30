@@ -161,16 +161,14 @@ mod tests {
 
     #[test]
     fn kilo_requires_the_openai_compatible_package() {
-        assert!(
-            plugin_provider_headers(
-                "@opencode/ai/providers/openai/chat",
-                Some("https://api.kilo.ai/api/gateway"),
-                Activation::Enabled,
-                false,
-                &existing(),
-            )
-            .is_empty()
-        );
+        assert!(plugin_provider_headers(
+            "@opencode/ai/providers/openai/chat",
+            Some("https://api.kilo.ai/api/gateway"),
+            Activation::Enabled,
+            false,
+            &existing(),
+        )
+        .is_empty());
     }
 
     #[test]

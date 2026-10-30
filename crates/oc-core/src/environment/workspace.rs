@@ -33,11 +33,7 @@ pub enum WorkspaceError {
     #[error("workspace provider not found: {0}")]
     ProviderNotFound(String),
     #[error("workspace {workspace_id} already exists with provider {existing_provider}, requested {provider}")]
-    CreateConflict {
-        workspace_id: String,
-        provider: String,
-        existing_provider: String,
-    },
+    CreateConflict { workspace_id: String, provider: String, existing_provider: String },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -60,12 +56,24 @@ pub trait WorkspaceDriver: Send + Sync {
     /// Get-or-create the provider resource backing this logical workspace.
     /// MUST be idempotent per `workspaceID`.
     async fn create(&self, workspace_id: &str) -> Result<Binding, WorkspaceError>;
-    async fn connect(&self, workspace_id: &str, binding: &Binding) -> Result<Driver, WorkspaceError>;
-    async fn suspend_for_idle(&self, workspace_id: &str, binding: &Binding) -> Result<(), WorkspaceError>;
+    async fn connect(
+        &self,
+        workspace_id: &str,
+        binding: &Binding,
+    ) -> Result<Driver, WorkspaceError>;
+    async fn suspend_for_idle(
+        &self,
+        workspace_id: &str,
+        binding: &Binding,
+    ) -> Result<(), WorkspaceError>;
     /// Release the provider resource. `binding` is `None` when none was
     /// persisted (never provisioned or interrupted mid-create); treat absence
     /// as success.
-    async fn destroy(&self, workspace_id: &str, binding: Option<&Binding>) -> Result<(), WorkspaceError>;
+    async fn destroy(
+        &self,
+        workspace_id: &str,
+        binding: Option<&Binding>,
+    ) -> Result<(), WorkspaceError>;
 }
 
 /// `WorkspaceDriver.Registry`.
@@ -100,15 +108,27 @@ impl WorkspaceDriver for LocalWorkspaceDriver {
         Ok(Binding::new())
     }
 
-    async fn connect(&self, _workspace_id: &str, _binding: &Binding) -> Result<Driver, WorkspaceError> {
+    async fn connect(
+        &self,
+        _workspace_id: &str,
+        _binding: &Binding,
+    ) -> Result<Driver, WorkspaceError> {
         Ok(make_local_driver_default())
     }
 
-    async fn suspend_for_idle(&self, _workspace_id: &str, _binding: &Binding) -> Result<(), WorkspaceError> {
+    async fn suspend_for_idle(
+        &self,
+        _workspace_id: &str,
+        _binding: &Binding,
+    ) -> Result<(), WorkspaceError> {
         Ok(())
     }
 
-    async fn destroy(&self, _workspace_id: &str, binding: Option<&Binding>) -> Result<(), WorkspaceError> {
+    async fn destroy(
+        &self,
+        _workspace_id: &str,
+        binding: Option<&Binding>,
+    ) -> Result<(), WorkspaceError> {
         let _ = binding;
         Ok(())
     }
@@ -135,9 +155,9 @@ impl WorkspaceService {
     /// Instantly commits a logical workspace ID. No provider work happens
     /// here.
     pub async fn create(&self, id: Option<&str>, provider: &str) -> Result<String, WorkspaceError> {
-        let workspace_id = id.map(str::to_string).unwrap_or_else(|| {
-            format!("wrk_{:032x}", rand::random::<u128>())
-        });
+        let workspace_id = id
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("wrk_{:032x}", rand::random::<u128>()));
         if let Some(row) = self.store.workspace_row(&workspace_id).await {
             if row.1 == provider {
                 return Ok(workspace_id);
@@ -198,15 +218,14 @@ impl WorkspaceService {
     /// record activity.
     pub async fn connect(&self, workspace_id: &str) -> Result<Driver, WorkspaceError> {
         let info = self.provision(workspace_id).await?;
-        let binding = info
-            .binding
-            .as_ref()
-            .and_then(|value| value.as_object().cloned())
-            .ok_or_else(|| {
-                WorkspaceError::Driver(format!(
-                    "workspace {workspace_id} has no binding after provision"
-                ))
-            })?;
+        let binding =
+            info.binding.as_ref().and_then(|value| value.as_object().cloned()).ok_or_else(
+                || {
+                    WorkspaceError::Driver(format!(
+                        "workspace {workspace_id} has no binding after provision"
+                    ))
+                },
+            )?;
         let driver = self.registry.get(&info.provider)?;
         let connected = driver.connect(workspace_id, &binding).await?;
         self.store.touch_workspace(workspace_id).await;
@@ -224,7 +243,8 @@ impl WorkspaceService {
         // provision may have created a resource that was never persisted. A
         // provider missing from the registry cannot block deleting a
         // never-provisioned row.
-        let binding: Option<Binding> = row.2.as_deref().and_then(|text| serde_json::from_str(text).ok());
+        let binding: Option<Binding> =
+            row.2.as_deref().and_then(|text| serde_json::from_str(text).ok());
         match self.registry.get(&row.1) {
             Ok(driver) => driver.destroy(workspace_id, binding.as_ref()).await?,
             Err(WorkspaceError::ProviderNotFound(_)) if binding.is_none() => {}

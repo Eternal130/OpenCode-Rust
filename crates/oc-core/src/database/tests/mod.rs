@@ -542,7 +542,10 @@ async fn kv_scan_filters_by_prefix_in_key_order() {
     // Empty prefix scans the whole store.
     let all = db.kv_scan("", None, 100).await.unwrap();
     assert_eq!(all.entries.len(), 5);
-    assert_eq!(all.entries.iter().map(|e| e.key.as_str()).collect::<Vec<_>>(), ["a1", "a2", "b1", "b2", "c"]);
+    assert_eq!(
+        all.entries.iter().map(|e| e.key.as_str()).collect::<Vec<_>>(),
+        ["a1", "a2", "b1", "b2", "c"]
+    );
 }
 
 #[tokio::test]
@@ -553,17 +556,11 @@ async fn kv_scan_paginates_across_page_boundary_with_key_cursors() {
         db.kv_set(&key, &serde_json::json!(index)).await.unwrap();
     }
     let first = db.kv_scan("k", None, 2).await.unwrap();
-    assert_eq!(
-        first.entries.iter().map(|e| e.key.as_str()).collect::<Vec<_>>(),
-        ["k0", "k1"]
-    );
+    assert_eq!(first.entries.iter().map(|e| e.key.as_str()).collect::<Vec<_>>(), ["k0", "k1"]);
     assert_eq!(first.next.as_deref(), Some("k1"), "leftover row reports cursor");
 
     let second = db.kv_scan("k", first.next.as_deref(), 2).await.unwrap();
-    assert_eq!(
-        second.entries.iter().map(|e| e.key.as_str()).collect::<Vec<_>>(),
-        ["k2", "k3"]
-    );
+    assert_eq!(second.entries.iter().map(|e| e.key.as_str()).collect::<Vec<_>>(), ["k2", "k3"]);
     assert_eq!(second.next.as_deref(), Some("k3"));
 
     let third = db.kv_scan("k", second.next.as_deref(), 2).await.unwrap();

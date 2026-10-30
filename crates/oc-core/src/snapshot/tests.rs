@@ -490,3 +490,89 @@ async fn snapshot_files_and_diff_error_on_non_git_without_initializing_a_store()
         "a bogus files/diff call must not initialize the bare snapshot store"
     );
 }
+
+// G-30 — the snapshot store pins its own git config (the ref's
+// `opencode.gitconfig` + `-c core.quotepath=false`): the host's global
+// `~/.gitconfig` (e.g. `autocrlf = true`) must never affect snapshot
+// diffing, and non-ASCII paths must round-trip raw.
+mod g30_config {
+    use super::*;
+    use crate::snapshot::SnapshotService as _;
+
+    /// Serializes env mutation (HOME changes must not race the other
+    /// snapshot tests in this binary).
+    static ENV_LOCK: Mutex = Mutex::new(());
+    type Mutex = std::sync::Mutex<()>;
+
+    #[tokio::test]
+    async fn snapshot_store_pins_core_config_over_a_hostile_global() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let home = tempfile::tempdir_in("/tmp/opencode").expect("home");
+        std::fs::write(
+            home.path().join(".gitconfig"),
+            "[core]\n\tautocrlf = true\n\tquotepath = true\n",
+        )
+        .expect("global config");
+        let previous_home = std::env::var("HOME").ok();
+        let previous_xdg = std::env::var("XDG_CONFIG_HOME").ok();
+        std::env::set_var("HOME", home.path());
+        std::env::set_var("XDG_CONFIG_HOME", home.path().join("nonexistent"));
+        struct Restore(Option<String>, Option<String>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                match self.0.take() {
+                    Some(value) => std::env::set_var("HOME", value),
+                    None => std::env::remove_var("HOME"),
+                }
+                match self.1.take() {
+                    Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
+                    None => std::env::remove_var("XDG_CONFIG_HOME"),
+                }
+            }
+        }
+        let _restore = Restore(previous_home, previous_xdg);
+
+        let (tmp, worktree, _) = temp_project();
+        std::fs::write(worktree.join("lf.txt"), "line\n").expect("write");
+        let service = store(tmp.path(), &worktree, ".");
+        let first = service.capture().await.expect("capture 1");
+        std::fs::write(worktree.join("lf.txt"), "line two\n").expect("edit");
+        let second = service.capture().await.expect("capture 2");
+
+        // Repo-local config overrides the hostile global for the store.
+        let repo = git2::Repository::open_bare(service.git_directory()).expect("open store");
+        let config = repo.config().expect("config").snapshot().expect("snapshot");
+        assert_eq!(config.get_string("core.autocrlf").as_deref(), Ok("false"));
+        assert_eq!(config.get_string("core.quotepath").as_deref(), Ok("false"));
+
+        // The diff is byte-exact on the LF file regardless of the
+        // host's autocrlf setting.
+        let diffs = service.diff(&first, &second, None, None).await.expect("diff");
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].file, "lf.txt");
+        assert!(diffs[0].additions >= 1);
+    }
+
+    #[tokio::test]
+    async fn snapshot_paths_with_non_ascii_round_trip() {
+        let (tmp, worktree, _) = temp_project();
+        let path = "dossié/über-file.txt";
+        std::fs::create_dir_all(worktree.join("dossié")).expect("dir");
+        std::fs::write(worktree.join("dossié/über-file.txt"), "café\n").expect("write");
+        let service = store(tmp.path(), &worktree, ".");
+        let first = service.capture().await.expect("capture 1");
+        std::fs::write(worktree.join("dossié/über-file.txt"), "thé\n").expect("edit");
+        let second = service.capture().await.expect("capture 2");
+
+        let files = service.files(&first, &second).await.expect("files");
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].0, path);
+
+        let diffs = service.diff(&first, &second, None, None).await.expect("diff");
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].file, path);
+        // quotepath=false semantics — the path stays raw UTF-8 in the
+        // patch body (never escaped/quoted).
+        assert!(diffs[0].patch.contains("über-file.txt"));
+    }
+}
