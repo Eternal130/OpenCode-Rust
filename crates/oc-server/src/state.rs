@@ -105,6 +105,11 @@ pub struct AppState {
     /// Well-known integration sources restored into the host registry at
     /// first use (v2's `WellKnownPlugin` boot transform).
     pub wellknown_restore: std::sync::OnceLock<bool>,
+    /// G-1 environment execution layer: per-location `Files`/spawner bind
+    /// (workspace driver when the location carries a `workspaceID`, host fs
+    /// otherwise). Consumer migration of tools/handlers is a later phase;
+    /// this is the service seam.
+    pub environment: std::sync::Arc<oc_core::environment::Environment>,
 }
 
 impl AppState {
@@ -120,6 +125,10 @@ impl AppState {
         let tmp_dir = oc_util::global_roots::resolve().tmp.clone();
         let engine = Arc::new(engine);
         let bus = engine.bus.as_ref().clone();
+        let workspace = std::sync::Arc::new(oc_core::environment::WorkspaceService::new(
+            std::sync::Arc::new(oc_core::project::SqliteProjectStore::new((*engine.db).clone())),
+        ));
+        let environment = std::sync::Arc::new(oc_core::environment::Environment::with_workspace(workspace));
         let pty = PtyService::new(bus.clone());
         let persistent_pty = Frontend::new(bus);
         Self {
@@ -144,6 +153,7 @@ impl AppState {
             boot_location: None,
             watched_config: None,
             wellknown_restore: std::sync::OnceLock::new(),
+            environment,
         }
     }
 
