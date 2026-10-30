@@ -482,3 +482,33 @@ pathdiff 同路径 `"."` vs `""`；webfetch timeout clamp(1,120) 与 URL 协议�
 | "title-shimmer 动画缺失" | **过期**：`sidebar.rs:282-318` + `session_tabs_solid.rs:662/773` 已实现（已从 RE-04 剔除） |
 
 > 总判定：本轮六域审查的候选缺口经复核后确认 12 项登记（RE-01 中、RE-02 低中、RE-03~06 低、RE-07/12 信息、RE-08~11 插件/SDK 域 P3~P4），推翻 4 项通道初判；其余候选均与既有条目（RA-02/RA-07/G-11/G-13/RC-12/RV-P4/RV-P5/RV-P12/RW-T3/AUD-13/AUD-20/F-10a 等）去重合并。收口优先级：RE-01（windows 产物无自升级与 R-11 的矛盾需裁定）→ RE-02 → RE-08（AUD-20 豁免清单补全）。
+
+---
+
+## 8. 2026-10-30 全量对比审查新增登记（RF 系列）
+
+> 来源：六条并行审查线（core 会话域 / AI+provider / server+sdk+plugin / CLI+TUI / config+auth+工具+MCP / 基础域+依赖总账）对 ref 与 port 逐文件逐行通读，随后四条复核线对全部初判缺口做可证伪式二次核查（要求行级证据，允许推翻初判）。汇总报告：`PORT_COMPARISON_REVIEW.md`（初轮）+ `PORT_COMPARISON_REVIEW_ROUND2.md`（复核终版）。
+> **去重**：与既有条目完全重合的初判不重复登记——workspace seam（=RD-08 具名豁免，复核再证 ref 生产仅 local driver）、operationId 改名（=RB-05/RD-21）、语法 17 门 feature 门控（=RA-07/AUD-13）、flock 降级（§1.6）、SystemOne/evaluation（=RW-14/RV-G5）、workerd/simulation/function（=RV-G6/ADR-0014）、插件 ctx 域（=RE-08/AUD-20）、aisdk: 长尾包桥（=RV-P12）、双轨渲染/PTY daemon（=G-11/RD-15 家族）、schema lib.rs TODO（=AUD-12）、未移植 web 前端族（=R-04）。
+
+### 8.1 新登记条目
+
+| ID | 缺口/陷阱 | 域 | 严重度 | 复核证据（rust / ref） |
+|---|---|---|---|---|
+| RF-01 | **本地 provider 动态模型发现完全缺失**：ollama `/api/tags`+show、lmstudio `/api/v1/models`、vllm `/v1/models` 运行期拉取并经 provider transform 注入的能力无对应——rust 全库（含 provider_catalog/oc-ai/config normalize）grep `ollama\|11434\|lmstudio\|vllm\|api/tags` 零命中。逃生口：custom provider 静态手工配置（facade.rs `CustomProvider`，models 需在 config 里静态枚举）可连本地服务，但新拉取的模型不自动出现。此缺口同时是 state transform 框架（RF-05）的最大消费场景 | AI/Provider | **中**（本地工作流功能回归） | plugin/provider/{ollama.ts:55, lmstudio.ts:31, vllm.ts:22} / facade.rs:227-241 + normalize.rs:1996 |
+| RF-02 | **插件更新链整体断裂**：① `plugin_update` HTTP handler 为静默 no-op stub（`let _targets = body["targets"].as_array(); Ok(no_content())`——API 契约与校验在，但什么都不做）；② oc-plugin-host 只有 `install`（固定版本 pin）与 `latest_install`（复用 pre-staged 树），无 update、无 `npm.check` outdated 检查（ref 有 24h 节流 + PubSub 广播驱动 TUI 更新提示）；③ 无 Arborist 代数目录 GC——重复 `plugin add` 累积安装树、磁盘无界增长（ref npm.ts:336-337 有 stale generation 清理）。注意：install 路径本身走 npm/bun 双路可用（`find_npm`），"bun 单路径"旧说法不准确 | 插件 | **中** | handlers/misc.rs:166-174 / npm.ts:29-34,305-337 + plugin/update.ts:19-56；install.rs:233,343 |
+| RF-03 | **长尾 provider UnsupportedProtocol 精确清单与报错时机（RV-P12 的细化登记）**：对 models-dev 快照 npm 全集与 native.rs PACKAGES 表做精确差集，实际走到 `UnsupportedProtocol` 的为 **9 家**：perplexity、v0、aihubmix、sap-ai-core、qvac、salad-cloud、gitlab、merge-gateway、watsonx。**修正**：snowflake-cortex（npm=@ai-sdk/openai-compatible）与 vercel 主入口（npm=@ai-sdk/gateway）实际支持，此前"~10 家含 snowflake/vercel"的口径有误。报错时机在 `language_model_for_model` 绑定期（发起会话时）而非列表期——模型可见、OAuth 可完成（gitlab 等流已由 providers_enterprise.rs 安装）、选中即失败，UX 比"列表不可见"更差。custom provider + baseURL workaround 已验证可行（facade.rs:1044-1085） | AI/Provider | 低-中（UX） | facade.rs:447-451,1201-1219 + native.rs:31-54 / models-dev snapshot 差集 |
+| RF-04 | **Windows 进程树清理无等价（并入 RE-01 家族补全）**：RE-01 已登记 updater unix-only；本条补 Windows 运行时行为——ref cross-spawn win32 侧 `taskkill /T /F` 进程树杀与 `overlapped` stdio 无 rust 等价（oc-pty/进程管理 grep 无 taskkill）；shell/select.rs 等已有 34 处 cfg(windows) 编译性分支（Git Bash 发现/COMSPEC/tilde 反斜杠展开在），但 ci.yml 单 Linux 矩阵、release.yml 含 windows 目标——**Windows 发布产物编译通过但零测试覆盖**，select.rs:5 自述 win32 分支"compile without the util layer" | CLI/平台 | 低-中（随 RE-01 推迟口径） | select.rs:5,25-196 / cross-spawn-spawner.ts:156,349-351,433-435 |
+| RF-05 | **运行期动态重配置面窄**：ref state.ts 的 transform 注册组（batch 合并/shutdown/插件运行期改写 snapshot.enabled、compaction.auto/keep 等）无对应；rust 为一次性 `configure()`（config 驱动初值已覆盖）。`PATCH /api/experimental/config` 只回流 `shell` 字段（misc 侧 handlers/config.rs:58-67 自述），compaction/snapshot 运行中引擎不可变。当前 shipping 场景受影响面小（G-05 热重载已覆盖 config→engine 重建路径），主要受害者是 RF-01 的动态 provider 注册等插件生态路径 | Core/配置 | 低 | snapshot.rs:172,652 + engine/mod.rs:1352 / state.ts:19-30,162-242 + handlers/config.rs:16,58-67 |
+| RF-06 | **packages/enterprise 前端未具名豁免（登记补全）**：RV-G6 豁免了 function（云函数），ADR-0014 豁免 script/simulation/identity/console/posts 等，但 enterprise（SolidStart 企业控制台前端）未单独具名——console 后端机制（boot/pairing/tickets/JWKS）rust 已有，缺的仅此前端呈现层。按 R-04 前端家族口径补具名豁免，防后续审查重复发现 | 范围 | 信息（豁免补全） | packages/enterprise/src/routes/ / oc-server boot+pairing 已覆盖后端面 |
+
+### 8.2 复核推翻的初判（勿再登记）
+
+| 初判结论 | 复核结果 |
+|---|---|
+| "provider-context legacy media（<2.0.15）迁移缺失" | **不成立**：`to_llm_message.rs:634-687` `upgrade_legacy_media` 完整复刻 provider-context.ts:96-118（mediaType/data→media.source.base64 重组，注释锚定在案） |
+| "feature-plugins Solid 动态热加载为近似实现" | **前提错误**：ref feature-plugins 是静态编译 builtin（builtins.ts:1-30 静态 import），热加载仅覆盖外部插件目录；rust 内置面为原生等价重实现 + 外部插件真热加载（supervisor digest-scan + CJS cache 逐出 + `?t=generation` cache-bust）——两侧均覆盖，等价替代 |
+| "插件宿主缺 shell.* 与 tool.execute" | **不成立**：ref ShellDomain 本就 hook-only（shell.ts:15-17，与 rust host.js:775-777 等价）；ref ToolDomain 无 execute 方法（tool.ts:54-60），rust 另有 codemode.tool 提供嵌套执行。缺失面精确为 RE-08/AUD-20 已登记的 10 命名空间，无新增 |
+| "operationId 漂移 31 个" | **口径修正**：vs 钉版 OpenAPI spec 为 141/141 字节全等（RD-21 已登记）；vs ref 内部端点名 31 个（RB-05 表）；vs ref OpenAPI identifier 注解仅 **10 个**（persistentPty 组带 `server.experimental.` 前缀，routes.gen.rs:401-669），路径/方法零差异。三个口径并存，生态工具应按 path+method 键控（RB-05 结论维持） |
+| "workspace/environment 执行域为架构性高风险缺失" | **降级维持 RD-08**：ref 生产路径仅 local driver（memory 为测试用、driver 注册表为空、unavailable 仅 workerd），属未来扩展点非行为回归——与 RD-08 具名豁免裁定一致，复核再证 |
+
+> 总判定：本轮六域+四复核线经与 §1/§4–§7 全量去重后净新增 6 项（RF-01/02 中、RF-03/04 低-中、RF-05 低、RF-06 信息），推翻 5 项初判；其余 30+ 初判均与既有登记（RA/RB/RC/RD/RV/RW/AUD/RE 系列）重合。收口优先级：RF-02（静默 no-op stub 比"未实现"更差，建议优先实现或临时改 501 显式报错）→ RF-01（评估动态发现是否随 custom provider 文档化收口）→ RF-03/04/05。
