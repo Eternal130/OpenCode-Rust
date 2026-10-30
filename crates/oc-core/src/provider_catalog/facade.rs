@@ -36,7 +36,9 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use oc_ai::protocols::anthropic_messages::{anthropic_messages_route, anthropic_route};
-use oc_ai::protocols::bedrock::{self as bedrock_lane, BedrockAuthOptions};
+use oc_ai::protocols::bedrock::{
+    self as bedrock_lane, BedrockAuthOptions, MantleMessagesConfig,
+};
 use oc_ai::protocols::cohere_chat::{cohere_route_for_package, CohereConfig};
 use oc_ai::protocols::copilot::{copilot_chat_route, CopilotConfig};
 use oc_ai::protocols::gemini::{google_route, GoogleConfig};
@@ -270,6 +272,9 @@ pub enum ProtocolFamily {
     BedrockMantleChat,
     /// Bedrock Mantle: the open-responses protocol on `bedrock-mantle`.
     BedrockMantleResponses,
+    /// Bedrock Mantle: the Anthropic Messages protocol on the mantle
+    /// `anthropic/v1` root (`bedrock-mantle-messages`).
+    BedrockMantleMessages,
     /// Vertex native: Gemini generateContent on aiplatform.
     VertexGemini,
     /// Vertex Claude Messages (AI-VERTEX-V2): the Anthropic Messages
@@ -393,6 +398,9 @@ pub fn family_of(package: &str) -> Option<ProtocolFamily> {
         "@opencode/ai/providers/amazon-bedrock/mantle/responses" => {
             ProtocolFamily::BedrockMantleResponses
         }
+        "@opencode/ai/providers/amazon-bedrock/mantle/messages" => {
+            ProtocolFamily::BedrockMantleMessages
+        }
 
         _ => return None,
     })
@@ -494,10 +502,7 @@ pub fn language_model_for_model(
         route
     } else {
         route.with(RoutePatch {
-            defaults: RouteDefaults {
-                headers: Some(headers),
-                ..Default::default()
-            },
+            defaults: RouteDefaults { headers: Some(headers), ..Default::default() },
             ..Default::default()
         })
     };
@@ -586,6 +591,29 @@ fn build_route(
                 provider_metadata_key: Some("mantle".to_string()),
                 auth: Some(auth),
                 endpoint: Some(EndpointPatch { base_url: Some(base), path: None, query: None }),
+                ..Default::default()
+            }))
+        }
+        ProtocolFamily::BedrockMantleMessages => {
+            let region = bedrock_lane::resolve_region(None, None);
+            let auth = bedrock_lane::resolve_auth(
+                &BedrockAuthOptions { api_key: connection.api_key.clone(), ..Default::default() },
+                "bedrock-mantle",
+                "Bedrock Mantle",
+            );
+            let base = base_url
+                .unwrap_or_else(|| format!("https://bedrock-mantle.{region}.api.aws/anthropic/v1"));
+            Ok(bedrock_lane::bedrock_mantle_messages_route(
+                transport,
+                MantleMessagesConfig {
+                    api_key: connection.api_key.clone(),
+                    base_url: Some(base),
+                    ..Default::default()
+                },
+            )
+            .with(RoutePatch {
+                provider: Some(provider_id.to_string()),
+                auth: Some(auth),
                 ..Default::default()
             }))
         }
@@ -2077,6 +2105,7 @@ mod tests {
                         | ProtocolFamily::BedrockConverse
                         | ProtocolFamily::BedrockMantleChat
                         | ProtocolFamily::BedrockMantleResponses
+                        | ProtocolFamily::BedrockMantleMessages
                         | ProtocolFamily::VertexGemini
                         | ProtocolFamily::VertexMessages
                         | ProtocolFamily::VertexChat
