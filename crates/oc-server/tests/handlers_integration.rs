@@ -10,9 +10,9 @@
 
 use std::sync::Arc;
 
+use oc_client::Client;
 use oc_client::error::ClientError;
 use oc_client::types::*;
-use oc_client::Client;
 use oc_core::engine::{Engine, EngineOptions};
 use oc_server::handlers;
 use oc_server::state::{AppState, AuthConfig};
@@ -206,9 +206,11 @@ async fn handlers_prompt_resume_false_and_inbox() {
     assert_eq!(inbox_user.session_id, session_id);
 
     let pending = client.session().inbox().list(&session_id).await.expect("inbox");
-    assert!(pending
-        .iter()
-        .any(|item| matches!(item, SessionInboxInfo::User(user) if user.id == "msg_custom1")));
+    assert!(
+        pending
+            .iter()
+            .any(|item| matches!(item, SessionInboxInfo::User(user) if user.id == "msg_custom1"))
+    );
 
     let error = client
         .session()
@@ -1410,4 +1412,54 @@ async fn handlers_misc_documented_shapes() {
     assert_api(&error, 400, "RpcError");
 
     let _ = client.migration().status().await.expect("migration status");
+}
+
+// ---------------------------------------------------------------------------
+// G-37 — session.message.get queries by id (single row), 404 when absent
+// ---------------------------------------------------------------------------
+
+/// Seeds a projected `session_message` row directly (the store has no
+/// test insert API — same pattern as parity_http_contract's seed).
+async fn seed_session_message(server: &TestServer, session_id: &str, id: &str, time: i64) {
+    let (session, message_id) = (session_id.to_owned(), id.to_owned());
+    server
+        .db
+        .transaction(move |tx| {
+            tx.execute(
+                "INSERT INTO session_message (id, session_id, type, seq, time_created, \
+                 time_updated, data) VALUES (?1, ?2, 'user', ?3, ?4, ?4, ?5)",
+                (message_id, session, time, time, r#"{"role":"user","text":"hi","time":{"created":100}}"#),
+            )?;
+            Ok(())
+        })
+        .await
+        .expect("seed message");
+}
+
+#[tokio::test]
+async fn handlers_message_get_returns_the_row_and_404s_absent() {
+    let server = boot().await;
+    let client = &server.client;
+    let session_id = create_session(client, "get-msg").await.id;
+    let other = create_session(client, "get-msg-other").await.id;
+    seed_session_message(&server, &session_id, "msg_get_1", 100).await;
+
+    // Found: the single row, by id (previously a full-transcript scan).
+    let message = client.message().get(&session_id, "msg_get_1").await.expect("message row");
+    let SessionMessageInfo::User(user) = &message else {
+        panic!("seeded user row must project as the user variant: {message:?}")
+    };
+    assert_eq!(user.id, "msg_get_1");
+
+    // Absent id → 404 with the v2 tag.
+    let error = client.message().get(&session_id, "msg_missing").await.expect_err("absent message");
+    assert_api(&error, 404, "MessageNotFoundError");
+
+    // Session-scoped: the SAME id under another session is absent.
+    let error = client
+        .message()
+        .get(&other, "msg_get_1")
+        .await
+        .expect_err("cross-session lookup is scoped");
+    assert_api(&error, 404, "MessageNotFoundError");
 }
