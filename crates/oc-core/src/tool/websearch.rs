@@ -54,6 +54,11 @@ pub struct WebSearch {
     config_selection: Option<Selection>,
     cooldowns: Mutex<HashMap<String, (u64, WebSearchError)>>,
     preferred: Mutex<HashMap<String, Option<String>>>,
+    /// G-24 — plugin-registered providers (`ctx.websearch.transform`,
+    /// ref host.ts:489-504): insert-or-replace by id, consulted BEFORE
+    /// the env-derived builtins (the transform's add wins id
+    /// collisions, matching v2's plugins-after-config order).
+    plugin_providers: parking_lot::RwLock<Vec<Arc<dyn SearchProvider>>>,
 }
 
 impl WebSearch {
@@ -64,7 +69,25 @@ impl WebSearch {
             config_selection: None,
             cooldowns: Mutex::new(HashMap::new()),
             preferred: Mutex::new(HashMap::new()),
+            plugin_providers: parking_lot::RwLock::new(Vec::new()),
         }
+    }
+
+    /// G-24 — `ctx.websearch.transform`'s `editor.add(definition)`
+    /// (websearch.ts transform): insert-or-replace by provider id.
+    pub fn add_provider(&self, provider: Arc<dyn SearchProvider>) {
+        let mut plugins = self.plugin_providers.write();
+        match plugins.iter().position(|existing| existing.id() == provider.id()) {
+            Some(at) => plugins[at] = provider,
+            None => plugins.push(provider),
+        }
+    }
+
+    /// The lookup order (plugin-registered first, then env builtins).
+    fn all(&self) -> Vec<Arc<dyn SearchProvider>> {
+        let mut all = self.plugin_providers.read().clone();
+        all.extend(self.providers.iter().cloned());
+        all
     }
 
     /// Seed the config-default selection (`websearch: false | {provider}`).
@@ -77,12 +100,15 @@ impl WebSearch {
     /// `WebSearch.providers` — id/name pairs sorted by display name.
     pub fn providers(&self) -> Vec<(String, String)> {
         let mut providers: Vec<(String, String)> =
-            self.providers.iter().map(|p| (p.id().to_string(), p.name().to_string())).collect();
+            self.all().iter().map(|p| (p.id().to_string(), p.name().to_string())).collect();
         providers.sort_by(|a, b| a.1.cmp(&b.1));
         providers
     }
 
     fn provider(&self, id: &str) -> Option<Arc<dyn SearchProvider>> {
+        if let Some(found) = self.plugin_providers.read().iter().find(|p| p.id() == id) {
+            return Some(found.clone());
+        }
         self.providers.iter().find(|provider| provider.id() == id).cloned()
     }
 
@@ -116,7 +142,7 @@ impl WebSearch {
                 let preferred = self.preferred.lock().get("global").and_then(|p| p.clone());
                 Ok(preferred
                     .and_then(|id| self.provider(&id))
-                    .or_else(|| self.providers.first().cloned())
+                    .or_else(|| self.all().first().cloned())
                     .map(|provider| (provider.id().to_string(), provider.name().to_string())))
             }
             Some(Selection::Provider(id)) => Ok(self
@@ -152,7 +178,7 @@ impl WebSearch {
         }
         let cooldowns = self.cooldowns.lock();
         let available: Vec<Arc<dyn SearchProvider>> = self
-            .providers
+            .all()
             .iter()
             .filter(|provider| {
                 !cooldowns.contains_key(provider.id())
@@ -621,10 +647,10 @@ mod tests {
 
     #[async_trait::async_trait]
     impl SearchProvider for FixedProvider {
-        fn id(&self) -> &'static str {
+        fn id(&self) -> &str {
             self.id
         }
-        fn name(&self) -> &'static str {
+        fn name(&self) -> &str {
             self.name
         }
         async fn execute(&self, _query: &str) -> Result<Vec<WebSearchResult>, ProviderError> {
@@ -684,10 +710,10 @@ mod tests {
 
         #[async_trait::async_trait]
         impl SearchProvider for StubProvider {
-            fn id(&self) -> &'static str {
+            fn id(&self) -> &str {
                 "stub"
             }
-            fn name(&self) -> &'static str {
+            fn name(&self) -> &str {
                 "Stub"
             }
             async fn execute(&self, query: &str) -> Result<Vec<WebSearchResult>, ProviderError> {

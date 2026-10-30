@@ -1234,6 +1234,42 @@ impl Engine {
             if active.as_ref().is_none_or(|ids| !ids.is_empty()) {
                 source.location_activated(&location.as_path().display().to_string(), &project.id);
             }
+            // G-24: the plugin-registered websearch providers land in
+            // THIS location's WebSearch registry, and the integration
+            // methods into the engine-level IntegrationHost — both
+            // bridged onto the guest dispatcher (the execute/authorize
+            // closures live in the guest process).
+            if let Some(dispatcher) = source.hook_dispatcher() {
+                let is_active = |plugin_id: &str| {
+                    active
+                        .as_ref()
+                        .is_none_or(|ids| ids.iter().any(|id| id == plugin_id))
+                };
+                let websearch_defs: Vec<_> = source
+                    .websearch_providers()
+                    .into_iter()
+                    .filter(|definition| is_active(&definition.plugin_id))
+                    .collect();
+                if !websearch_defs.is_empty() {
+                    crate::plugin_apply::apply_plugin_websearch_providers(
+                        websearch.as_ref(),
+                        &dispatcher,
+                        &websearch_defs,
+                    );
+                }
+                let integration_defs: Vec<_> = source
+                    .integration_methods()
+                    .into_iter()
+                    .filter(|definition| is_active(&definition.plugin_id))
+                    .collect();
+                if !integration_defs.is_empty() {
+                    crate::plugin_apply::apply_plugin_integration_methods(
+                        &self.integration,
+                        &dispatcher,
+                        &integration_defs,
+                    );
+                }
+            }
         }
 
         // The Code Mode surface (wave 4): with a runtime attached, the
