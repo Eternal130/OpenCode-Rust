@@ -171,7 +171,75 @@ async fn plugin_update(
 ) -> Result<Response, ApiError> {
     let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let _services = services(&state, &location).await?;
-    let _targets = body["targets"].as_array();
+    // The generated request validation owns the `{targets: string[]}`
+    // shape; a malformed body never reaches here.
+    let targets: Vec<String> = body["targets"]
+        .as_array()
+        .map(|array| {
+            array.iter().filter_map(Value::as_str).map(str::to_owned).collect()
+        })
+        .unwrap_or_default();
+
+    // handlers/plugin.ts (plugin.update): targets outside the current
+    // inventory are a 400 naming every offender.
+    let inventory: std::collections::HashSet<String> =
+        state.plugins.iter().flat_map(|boot| boot.package_targets()).collect();
+    let unknown: Vec<String> =
+        targets.iter().filter(|target| !inventory.contains(*target)).cloned().collect();
+    if !unknown.is_empty() {
+        return Err(crate::errors::invalid_request_message_field(
+            format!(
+                "Plugin packages are not in the current server inventory: {}",
+                unknown.join(", ")
+            ),
+            "targets",
+        ));
+    }
+
+    // Every update runs to completion — one failure never interrupts
+    // the rest; the failures roll up into one 503 (plugin.ts).
+    let root = oc_plugin_host::install_root();
+    let cache = oc_plugin_host::update_cache();
+    let mut failures: Vec<String> = Vec::new();
+    for target in &targets {
+        let owned = target.clone();
+        let result = tokio::task::spawn_blocking({
+            let root = root.clone();
+            move || {
+                oc_plugin_host::update(
+                    &owned,
+                    &root,
+                    cache,
+                    &oc_plugin_host::InstallOptions::default(),
+                )
+            }
+        })
+        .await;
+        match result {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => failures.push(format!("{target}: {error}")),
+            Err(error) => failures.push(format!("{target}: update task failed: {error}")),
+        }
+    }
+    if !failures.is_empty() {
+        return Err(ApiError::service_unavailable(
+            format!("Failed to update plugin packages: {}", failures.join("; ")),
+            Some("plugin"),
+        ));
+    }
+
+    // The ref notifies active locations to reload the updated plugins
+    // and publishes `plugin.updated` (plugin.ts:121/175) — the reload
+    // is contained (best-effort, logged), the event is the typed
+    // public `PluginEvent::Updated` registered on the bus (RF-02).
+    if let Some(boot) = state.plugins.as_ref() {
+        crate::plugins::reload_after_update(boot);
+    }
+    if let Some(definition) = oc_core::bus::registry::by_type(oc_core::bus::registry::PLUGIN_UPDATED)
+    {
+        let options = oc_core::bus::PublishOptions { global: true, ..Default::default() };
+        let _ = state.engine.bus.publish(definition, serde_json::json!({}), options).await;
+    }
     Ok(no_content())
 }
 

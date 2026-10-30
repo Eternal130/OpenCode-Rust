@@ -373,6 +373,10 @@ pub const INSTALLATION_UPDATE_AVAILABLE: &str = "installation.update-available";
 /// registry notify leg (reference.ts:104-108) — published after every
 /// source transform/reload once the refresh is forked.
 pub const REFERENCE_UPDATED: &str = "reference.updated";
+/// `plugin.updated` `{}` (schema/plugin.ts:45-48): the plugin registry
+/// notify — published after every plugin inventory change (the ref's
+/// plugin.ts:121/175), including the RF-02 update path's reload.
+pub const PLUGIN_UPDATED: &str = "plugin.updated";
 
 static NON_SESSION: LazyLock<Vec<EventDefinition>> = LazyLock::new(|| {
     vec![
@@ -423,6 +427,13 @@ static NON_SESSION: LazyLock<Vec<EventDefinition>> = LazyLock::new(|| {
         EventDefinition::ephemeral(INTEGRATION_UPDATED),
         // F-5: the reference registry notify (reference.ts:107).
         EventDefinition::ephemeral(REFERENCE_UPDATED),
+        // RF-02: the plugin registry notify (plugin.ts:121/175) — the
+        // typed event already exists on the public wire manifest
+        // (`PluginEvent::Updated`, oc-schema misc_events) and the
+        // server event manifest lists it public; this registers the
+        // bus definition so the update path can publish it
+        // (append-only — positional accessors unaffected).
+        EventDefinition::ephemeral(PLUGIN_UPDATED),
     ]
 });
 
