@@ -1269,6 +1269,10 @@ pub struct Store {
     /// The external `$EDITOR` request flag (the run loop drains it:
     /// suspend → run → resume → replace the focused draft).
     editor_requested: Cell<bool>,
+    /// G-20(2) — the `terminal.suspend` request flag (`ctrl+z`,
+    /// app.tsx:1119-1129): the run loop drains it, tears the terminal
+    /// down, stops the process group and restores on the continue.
+    terminal_suspend_requested: Cell<bool>,
     /// RD-06 — `prompt.paste !== "full"` (config.prompt?.paste, app.
     /// tsx:573): the paste-summary fold is armed while compact
     /// (default — an absent/`"compact"` value folds, `"full"` pastes
@@ -3421,6 +3425,7 @@ impl Store {
             clipboard_sink: Rc::new(crate::clipboard::RecordingClipboardSink::default()),
             clipboard_source: Rc::new(crate::clipboard::CoreClipboardSource::new()),
             editor_requested: Cell::new(false),
+            terminal_suspend_requested: Cell::new(false),
             prompt_paste_compact: Cell::new(true),
             prompt_text_hit: std::cell::RefCell::new(None),
             rail_search_hovered: Cell::new(false),
@@ -5220,6 +5225,21 @@ impl Store {
     #[must_use]
     pub fn take_editor_request(&self) -> bool {
         self.editor_requested.replace(false)
+    }
+
+    // -- G-20(2): terminal.suspend -------------------------------------------
+
+    /// Request `terminal.suspend` (the dispatcher stages it; the run
+    /// loop performs the actual teardown/stop/restore — signals and
+    /// terminal I/O live there, not in the store).
+    pub fn request_terminal_suspend(&self) {
+        self.terminal_suspend_requested.set(true);
+    }
+
+    /// Take the suspend request (the run loop's side).
+    #[must_use]
+    pub fn take_terminal_suspend(&self) -> bool {
+        self.terminal_suspend_requested.replace(false)
     }
 
     // -- RD-06: the paste-summary chip ---------------------------------------

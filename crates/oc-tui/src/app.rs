@@ -6917,6 +6917,10 @@ pub async fn run_with_size(
     // TUI-15 — the Zed selection poll (None when the gate is off or
     // no db resolves — the common non-Zed case stays untouched).
     let mut zed_rx = spawn_zed_poll();
+    // G-20(1) — the IDE editor socket (context/editor.ts's WebSocket
+    // arm): `None` when neither the env override nor a
+    // `~/.claude/ide/*.lock` endpoint resolves (the common case).
+    let mut ide_rx = crate::editor_ide::spawn_ide_socket();
 
     // The Worktrees dialog's worker (R-05): boot resolves the project
     // + list; dialog actions flow through the sink.
@@ -7344,6 +7348,8 @@ pub async fn run_with_size(
     let mut plugin_runtime: Option<crate::plugin_boot::TuiPluginRuntime> = None;
     let mut plugins_boot_done = false;
     let mut plugins_ready_fired = false;
+    // G-20(3) — the session id that already got its environment PUT.
+    let mut environment_sent: Option<String> = None;
 
     let result: Result<(), String> = loop {
         // Lane E2 — poll the plugin boot: one non-blocking poll on the
@@ -7434,6 +7440,37 @@ pub async fn run_with_size(
                 app.exit_requested = true;
             }
         }
+        // G-20(3) — `session.environment` (app.tsx:487-499): once
+        // connected on the session route with the session loaded (the
+        // ref skips while `creating` — here the store not knowing the
+        // session yet is that state), PUT the terminal environment
+        // ONCE per session id. `input.environment` (app.tsx:332) is
+        // the host's env snapshot; the port's TUI rides its own
+        // process environment.
+        if let (
+            crate::data::ConnectionState::Connected,
+            crate::store::Route::Session { session_id },
+        ) = (app.store.connection(), app.store.route())
+        {
+            if app.store.session_info(&session_id).is_some()
+                && environment_sent.as_deref() != Some(session_id.as_str())
+            {
+                environment_sent = Some(session_id.clone());
+                let client = client.clone();
+                let body = oc_client::types::SessionEnvironmentBody {
+                    variables: std::env::vars().collect(),
+                };
+                tokio::spawn(async move {
+                    // `.catch(toast.error)` — a failure never retried,
+                    // never surfaced beyond the log seam.
+                    if let Err(error) = client.session().environment(&session_id, &body).await {
+                        if std::env::var("OC_TUI_DEBUG").ok().as_deref() == Some("1") {
+                            eprintln!("[tui] session.environment failed: {error}");
+                        }
+                    }
+                });
+            }
+        }
         // SURF-2 (lane E2): plugins ready — `set_plugins_ready()`
         // flips any live StartupLoading pill to "Finishing startup…"
         // and starts its 3 s hold (startup-loading.tsx:13-31). Like
@@ -7519,6 +7556,16 @@ pub async fn run_with_size(
         if let Some(zed_rx) = zed_rx.as_mut() {
             while let Ok(result) = zed_rx.try_recv() {
                 app.store.apply_zed_selection(result);
+            }
+        }
+        // G-20(1) — fold the IDE socket's `selection_changed`
+        // notifications into the SAME seam (context/editor.ts:221-226:
+        // `setSelection({...selection, source: "websocket"})`).
+        if let Some(ide_rx) = ide_rx.as_mut() {
+            while let Ok(selection) = ide_rx.try_recv() {
+                app.store.apply_zed_selection(crate::editor_zed::ZedSelectionResult::Selection(
+                    selection,
+                ));
             }
         }
         // Drain the server-list fetches into the picker state.
@@ -7723,6 +7770,35 @@ pub async fn run_with_size(
                 }
                 Err(error) => eprintln!("opencode tui: {error:?}"),
                 Ok(None) => {}
+            }
+            app.store.request_redraw();
+        }
+        // G-20(2) — `terminal.suspend` (app.tsx:1119-1129): the
+        // dispatcher staged the request; perform the ref's run body —
+        // `renderer.suspend()` (leave the alt-screen, hand the mouse
+        // and paste/focus modes back, cooked mode), stop our OWN
+        // process group (`kill(0, SIGTSTP)` — never a foreign pid),
+        // and `renderer.resume()` on the SIGCONT (`renderer.once`
+        // parity via the continue latch in `suspend.rs`). The stderr
+        // redirect hands off for the suspend like the `$EDITOR` seam
+        // so the shell's own job-control messages reach the user.
+        if app.store.take_terminal_suspend() {
+            let stderr_pause =
+                stderr_guard.take().map(crate::stderr_redirect::StderrRedirect::restore);
+            let _ = disable_raw_mode();
+            {
+                let mut out = std::io::stdout();
+                crate::suspend::teardown(&mut out, applied_mouse);
+            }
+            crate::suspend::suspend_cycle();
+            let _ = enable_raw_mode();
+            {
+                let mut out = std::io::stdout();
+                crate::suspend::restore(&mut out, applied_mouse);
+            }
+            let _ = terminal.clear();
+            if stderr_pause.is_some() {
+                stderr_guard = crate::stderr_redirect::install(&crate::stderr_redirect::log_path());
             }
             app.store.request_redraw();
         }
