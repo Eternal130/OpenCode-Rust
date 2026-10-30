@@ -412,16 +412,15 @@ async fn worktree_create(
     // default backend; worktree/git.ts → git.ts:657): discover the
     // repository from the source, then
     // `git worktree add --detach -- <directory> <ref | HEAD>`.
-    let registry = oc_core::project::worktree_strategy::StrategyRegistry::new();
-    let strategy = registry
-        .get(registry.selected())
-        .expect("the default strategy is registered");
+    let registry = std::sync::Arc::clone(&state.worktree_strategies);
+    let strategy = registry.get(registry.selected()).expect("the default strategy is registered");
     let created = strategy
         .create(&oc_core::project::worktree_strategy::CreateInput {
             source_directory: source.clone(),
             directory: worktree_directory.clone(),
             branch: branch.map(str::to_owned),
         })
+        .await
         .map_err(strategy_error)?;
     let directory = canonical_directory(&created)?;
     let directory_str = directory.to_string_lossy().into_owned();
@@ -610,14 +609,14 @@ async fn worktree_refresh(
     // that vanished mid-scan. The first entry per root is the main
     // checkout (type "root", unowned); the rest are linked worktrees
     // (type "worktree" → the backend's strategy id).
-    let registry = oc_core::project::worktree_strategy::StrategyRegistry::new();
+    let registry = std::sync::Arc::clone(&state.worktree_strategies);
     let mut discovered: Vec<(std::path::PathBuf, Option<String>)> = Vec::new();
     for root in roots {
         if !root.is_dir() {
             continue;
         }
         for strategy in registry.discovery_order() {
-            for entry in strategy.list(&root) {
+            for entry in strategy.list(&root).await {
                 let Ok(real) = std::fs::canonicalize(&entry.directory) else {
                     continue;
                 };
@@ -744,7 +743,7 @@ async fn worktree_remove(
             None,
         ));
     };
-    let registry = oc_core::project::worktree_strategy::StrategyRegistry::new();
+    let registry = std::sync::Arc::clone(&state.worktree_strategies);
     let Some(strategy) = registry.get(&stored_id) else {
         return Err(ApiError::worktree(
             format!("Worktree strategy unavailable: {stored_id}"),
@@ -759,6 +758,7 @@ async fn worktree_remove(
             directory: worktree_directory.clone(),
             force,
         })
+        .await
         .map_err(|error| {
             crate::errors::debug_cause("worktree:remove", &format!("{error:?}"));
             strategy_error(error)
@@ -766,8 +766,7 @@ async fn worktree_remove(
 
     // Row delete + `worktree.updated` (worktree.ts:270-271) — by the
     // canonical directory the row stores.
-    let removed =
-        state.engine.projects.remove_worktree(&project_id, &worktree_directory).await;
+    let removed = state.engine.projects.remove_worktree(&project_id, &worktree_directory).await;
     if removed {
         publish_worktree_updated(&state, &project_id).await;
     }
@@ -823,7 +822,11 @@ fn hg_status_items(scope: &std::path::Path, rev: Option<&str>) -> Vec<DiffItem> 
         .filter_map(|entry| {
             let code = entry.get(..1)?.to_owned();
             let file = entry.get(2..)?.to_owned();
-            (!file.is_empty()).then(|| DiffItem { code: code.clone(), file, status: hg_kind(&code) })
+            (!file.is_empty()).then(|| DiffItem {
+                code: code.clone(),
+                file,
+                status: hg_kind(&code),
+            })
         })
         .collect()
 }
@@ -880,7 +883,11 @@ fn synthesized_patch(file: &str, content: &str, marker: char) -> String {
         return empty_patch(file);
     }
     let mut out = empty_patch(file);
-    let (old, new) = if marker == '+' { (format!("0,0"), format!("1,{}", lines.len())) } else { (format!("1,{}", lines.len()), format!("0,0") ) };
+    let (old, new) = if marker == '+' {
+        (format!("0,0"), format!("1,{}", lines.len()))
+    } else {
+        (format!("1,{}", lines.len()), format!("0,0"))
+    };
     out.push_str(&format!("@@ -{old} +{new} @@\n"));
     for line in lines {
         out.push(marker);
@@ -904,11 +911,7 @@ struct HgDiffEntry {
 /// `diffAgainst` (hg.ts:96-115): status items + a batched `hg diff --git`
 /// split per file, with synthesized add (`?`) and delete (`!`) patches —
 /// untracked and missing files never appear in `hg diff`.
-fn hg_diff_against(
-    scope: &std::path::Path,
-    rev: Option<&str>,
-    context: i64,
-) -> Vec<HgDiffEntry> {
+fn hg_diff_against(scope: &std::path::Path, rev: Option<&str>, context: i64) -> Vec<HgDiffEntry> {
     let mut items = hg_status_items(scope, rev);
     items.sort_by(|a, b| a.file.cmp(&b.file));
     items.dedup_by(|a, b| a.file == b.file);
@@ -933,8 +936,7 @@ fn hg_diff_against(
     if capped {
         chunks_vec.pop();
     }
-    let chunks: std::collections::HashMap<String, String> =
-        chunks_vec.into_iter().collect();
+    let chunks: std::collections::HashMap<String, String> = chunks_vec.into_iter().collect();
 
     let mut out = Vec::new();
     for item in items {
@@ -952,13 +954,7 @@ fn hg_diff_against(
             None => empty_patch(&item.file),
         };
         let (additions, deletions) = count_patch(&patch);
-        out.push(HgDiffEntry {
-            file: item.file,
-            patch,
-            additions,
-            deletions,
-            status: item.status,
-        });
+        out.push(HgDiffEntry { file: item.file, patch, additions, deletions, status: item.status });
     }
     out
 }
@@ -1316,7 +1312,9 @@ struct DiffItem {
 /// The jsdiff `emptyPatch` rendering (vcs/patch.ts:33-34), pinned against
 /// the reference's own `diff` package output.
 fn empty_patch(file: &str) -> String {
-    format!("Index: {file}\n===================================================================\n--- {file}\t\n+++ {file}\t\n")
+    format!(
+        "Index: {file}\n===================================================================\n--- {file}\t\n+++ {file}\t\n"
+    )
 }
 
 /// `kind` (git.ts:154-160): porcelain/status letter → wire status.

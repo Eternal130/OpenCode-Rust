@@ -380,6 +380,8 @@ function resetDomainsToBase() {
   // fully own their tables.
   domainStores.skills = new Map();
   domainStores.tools = new Map();
+  domainStores.websearch = [];
+  domainStores.worktree = [];
 }
 
 let domainsSeeded = false;
@@ -428,6 +430,16 @@ async function materializeDomain(kind, pluginId) {
     await hostRequest("tool.transform", {
       pluginId,
       tools: Array.from(domainStores.tools.values()),
+    });
+  } else if (kind === "websearch") {
+    await hostRequest("websearch.transform", {
+      pluginId,
+      providers: domainStores.websearch,
+    });
+  } else if (kind === "worktree") {
+    await hostRequest("worktree.transform", {
+      pluginId,
+      strategies: domainStores.worktree,
     });
   }
 }
@@ -508,7 +520,7 @@ async function handleRpcCall({ pluginId, rpcId, method, input }) {
 // ---------------------------------------------------------------------------
 // Runtime hook registry (guest-side handlers; coverage registered)
 // ---------------------------------------------------------------------------
-const hookHandlers = { session: new Map(), tool: new Map(), shell: new Map(), permission: new Map(), aisdk: new Map() };
+const hookHandlers = { session: new Map(), tool: new Map(), shell: new Map(), permission: new Map(), aisdk: new Map(), websearch: new Map(), worktree: new Map(), integration: new Map() };
 
 const SESSION_HOOKS = new Set([
   "prompt", "context", "compaction", "generate", "title", "model.request",
@@ -523,6 +535,19 @@ const SHELL_HOOKS = new Set(["create.before"]);
 // promise/aisdk.ts's `sdk`/`language`).
 const PERMISSION_HOOKS = new Set(["evaluate"]);
 const AISDK_HOOKS = new Set(["sdk", "language"]);
+// G-24: the vcs/websearch/worktree/integration domains (host.ts:468-522,
+// 631) — the guest serves provider executes, worktree ops, and the
+// integration OAuth closures through these dispatch points.
+const WEBSEARCH_HOOKS = new Set(["execute"]);
+// G-24: the guest-side closure tables — provider executes, worktree
+// strategy impls, and the pending OAuth callback survive only here
+// (functions never cross the JSON boundary; the host reaches them
+// through the domain hook dispatches).
+const websearchExecutors = new Map();
+const worktreeImpls = new Map();
+let pendingIntegrationCallback = null;
+const WORKTREE_HOOKS = new Set(["create", "remove", "list"]);
+const INTEGRATION_HOOKS = new Set(["authorize", "callback", "refresh"]);
 
 async function registerHook(pluginId, domain, name, handlers) {
   const known =
@@ -536,7 +561,13 @@ async function registerHook(pluginId, domain, name, handlers) {
             ? PERMISSION_HOOKS
             : domain === "aisdk"
               ? AISDK_HOOKS
-              : null;
+              : domain === "websearch"
+                ? WEBSEARCH_HOOKS
+                : domain === "worktree"
+                  ? WORKTREE_HOOKS
+                  : domain === "integration"
+                    ? INTEGRATION_HOOKS
+                    : null;
   if (!known || !known.has(name)) {
     throw new Error(`unknown ${domain} hook ${name}`);
   }
@@ -797,6 +828,163 @@ function makeCtx(pluginId, options) {
     //    `aisdk.hook("sdk"|"language", cb)`) ------------------------------
     aisdk: {
       hook: (name, handler) => registerHook(pluginId, "aisdk", name, handler),
+    },
+
+    // -- vcs (G-24: host.ts:468-470's read surface — get/base over the
+    //    engine's vcs adapters) ---------------------------------------------
+    vcs: {
+      async get() {
+        const result = await hostRequest("vcs.get", { pluginId, args: {} });
+        return result && typeof result === "object" && "value" in result ? result.value : result;
+      },
+      async base() {
+        const result = await hostRequest("vcs.base", { pluginId, args: {} });
+        return result && typeof result === "object" && "value" in result ? result.value : result;
+      },
+    },
+
+    // -- websearch (G-24: host.ts:479-504 — providers/query/reload over the
+    //    engine service + the transform that registers guest providers) ---
+    websearch: {
+      async providers() {
+        const result = await hostRequest("websearch.providers", { pluginId, args: {} });
+        return result && typeof result === "object" && "value" in result ? result.value : result;
+      },
+      async query(input) {
+        const result = await hostRequest("websearch.query", { pluginId, args: input ?? {} });
+        return result && typeof result === "object" && "value" in result ? result.value : result;
+      },
+      async reload() {
+        await materializeDomain("websearch", pluginId);
+      },
+      async transform(cb) {
+        await cb({
+          add: (definition) => {
+            const id = String(definition?.id ?? "");
+            if (!id) return;
+            websearchExecutors.set(`${pluginId}:${id}`, definition?.execute);
+            domainStores.websearch.push({
+              id,
+              name: String(definition?.name ?? definition?.id ?? id),
+            });
+          },
+          default: {
+            get: () => undefined,
+            set: () => {},
+          },
+        });
+        await registerHook(pluginId, "websearch", "execute", async (event) => {
+          if (!event || typeof event !== "object") return;
+          const run = websearchExecutors.get(`${pluginId}:${String(event.provider ?? "")}`);
+          if (typeof run !== "function") return;
+          const results = await run({ query: event.query });
+          event.results = Array.isArray(results) ? results : [];
+        });
+        await materializeDomain("websearch", pluginId);
+        return {
+          async dispose() {
+            for (const key of Array.from(websearchExecutors.keys())) {
+              if (key.startsWith(`${pluginId}:`)) websearchExecutors.delete(key);
+            }
+            domainStores.websearch = domainStores.websearch.filter(
+              (entry) => !websearchExecutors.has(`${pluginId}:${entry.id}`),
+            );
+            await materializeDomain("websearch", pluginId);
+          },
+        };
+      },
+    },
+
+    // -- worktree (G-24/G-4: host.ts:505-522's transform — plugin-registered
+    //    strategies; the ops dispatch back as worktree hooks) ---------------
+    worktree: {
+      async reload() {
+        await materializeDomain("worktree", pluginId);
+      },
+      async transform(cb) {
+        await cb({
+          add: (definition) => {
+            const id = String(definition?.id ?? "");
+            if (!id) return;
+            worktreeImpls.set(`${pluginId}:${id}`, definition);
+            domainStores.worktree.push({ id });
+          },
+        });
+        for (const op of ["create", "remove", "list"]) {
+          await registerHook(pluginId, "worktree", op, async (event) => {
+            if (!event || typeof event !== "object") return;
+            const impl = worktreeImpls.get(`${pluginId}:${String(event.strategy ?? "")}`);
+            if (!impl || typeof impl[op] !== "function") return;
+            const result = await impl[op](event.input ?? {});
+            if (op === "create") {
+              event.directory = typeof result === "string" ? result : result?.directory;
+            } else if (op === "remove") {
+              event.removed = result !== false;
+            } else {
+              event.entries = Array.isArray(result) ? result : [];
+            }
+          });
+        }
+        await materializeDomain("worktree", pluginId);
+        return {
+          async dispose() {
+            for (const key of Array.from(worktreeImpls.keys())) {
+              if (key.startsWith(`${pluginId}:`)) worktreeImpls.delete(key);
+            }
+            domainStores.worktree = domainStores.worktree.filter(
+              (entry) => !worktreeImpls.has(`${pluginId}:${entry.id}`),
+            );
+            await materializeDomain("worktree", pluginId);
+          },
+        };
+      },
+    },
+
+    // -- integration (G-24: host.ts:357-367's method channel — the
+    //    methodImplementation registration; authorize/refresh closures
+    //    dispatch back as integration hooks) --------------------------------
+    integration: {
+      method: {
+        async update(input) {
+          const hasAuthorize = typeof input?.authorize === "function";
+          const hasRefresh = typeof input?.refresh === "function";
+          const args = {
+            integrationID: input?.integrationID,
+            method: input?.method,
+            authorize: hasAuthorize,
+            refresh: hasRefresh,
+          };
+          if (hasAuthorize) {
+            await registerHook(pluginId, "integration", "authorize", async (event) => {
+              if (!event || typeof event !== "object") return;
+              const authorization = await input.authorize(event.answer ?? {});
+              if (!authorization || typeof authorization !== "object") return;
+              if (authorization.mode === "auto" && typeof authorization.callback === "function") {
+                pendingIntegrationCallback = authorization.callback;
+                const credential = await authorization.callback();
+                event.result = { ...authorization, callback: undefined, credential };
+              } else {
+                pendingIntegrationCallback = authorization.callback ?? null;
+                event.result = { ...authorization, callback: undefined };
+              }
+            });
+            await registerHook(pluginId, "integration", "callback", async (event) => {
+              if (!event || typeof event !== "object" || typeof pendingIntegrationCallback !== "function") {
+                return;
+              }
+              const credential = await pendingIntegrationCallback(event.code);
+              event.credential = credential;
+            });
+          }
+          if (hasRefresh) {
+            await registerHook(pluginId, "integration", "refresh", async (event) => {
+              if (!event || typeof event !== "object") return;
+              event.credential = await input.refresh(event.credential);
+            });
+          }
+          return hostRequest("integration.method.update", { pluginId, args });
+        },
+      },
     },
 
     // -- rpc (PLUG-D14: `ctx.rpc.register(definition, handlers)`) ------------
