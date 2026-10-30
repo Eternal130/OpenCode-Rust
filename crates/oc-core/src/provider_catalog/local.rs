@@ -159,9 +159,12 @@ impl LocalDiscovery {
     /// discover, and swap the snapshot entry when the inventory
     /// changed. Returns whether anything changed (the caller publishes
     /// `model.updated`). Unreachable/unparseable servers keep the last
-    /// entry; a server answering an EMPTY inventory removes it (the ref
-    /// transform only applies with models to inject, and a zero-model
-    /// reload resets `loaded.models`).
+    /// entry FOR THE SAME ENDPOINT (ref local.ts:115); a changed
+    /// connection (baseURL/apiKey repoint) clears the entry before
+    /// discovery (ref local.ts:126-127 — clear-on-repoint); a server
+    /// answering an EMPTY inventory removes it (the ref transform only
+    /// applies with models to inject, and a zero-model reload resets
+    /// `loaded.models`).
     pub async fn refresh(&self, connections: &BTreeMap<String, ModelConnection>) -> bool {
         let mut changed = false;
         for spec in LOCAL_SPECS {
@@ -172,6 +175,22 @@ impl LocalDiscovery {
                 continue;
             };
             let api_key = connection.and_then(|c| c.api_key.clone());
+            {
+                // Gate-2 F1 — clear-on-repoint (ref local.ts:117-131
+                // `reload`: when the configured endpoint or credential
+                // changes, `loaded.models = []` resets BEFORE any
+                // discovery, so stale models bound to the OLD URL stop
+                // being listable/usable immediately — even if the new
+                // endpoint never answers. The retained inventory is
+                // only for the SAME endpoint through transient outages.
+                let mut entries = self.entries.write();
+                if let Some(existing) = entries.get(spec.id) {
+                    if existing.base_url != endpoint.base_url || existing.api_key != api_key {
+                        entries.remove(spec.id);
+                        changed = true;
+                    }
+                }
+            }
             match discover(&self.client, spec, &endpoint, api_key.as_deref()).await {
                 Ok(models) => {
                     let stamp = fingerprint(&endpoint.base_url, api_key.as_deref(), &models);
@@ -816,5 +835,66 @@ mod tests {
         );
         assert!(!discovery.refresh(&connections).await);
         assert!(discovery.provider("ollama").is_some(), "last inventory kept");
+    }
+
+    /// Gate-2 F1 — clear-on-repoint: when the config connection for a
+    /// local spec changes (baseURL repoint), the retained inventory is
+    /// dropped IMMEDIATELY (ref local.ts:126-127 resets `loaded.models`
+    /// on endpoint change), so a dead new endpoint leaves the provider
+    /// EMPTY — the stale models bound to the OLD URL never stay
+    /// listable/usable until the new endpoint answers.
+    #[tokio::test]
+    async fn config_base_url_repoint_clears_the_inventory_immediately() {
+        // A live ollama answering one model.
+        let mut routes = HashMap::new();
+        routes.insert(
+            ("GET", "/api/tags"),
+            (
+                200,
+                serde_json::json!({ "models": [
+                    { "name": "Llama 3", "model": "llama3", "digest": "d1",
+                      "details": { "family": "llama" } }
+                ] })
+                .to_string(),
+            ),
+        );
+        routes.insert(
+            ("POST", "/api/show"),
+            (
+                200,
+                serde_json::json!({
+                    "capabilities": ["completion"],
+                    "details": { "family": "llama" },
+                    "model_info": { "llama3.context_length": 8192 }
+                })
+                .to_string(),
+            ),
+        );
+        let mock = http_mock(routes).await;
+        let discovery = LocalDiscovery::new();
+        discovery.refresh(&connection(mock.port, "/v1", None)).await;
+        let provider = discovery.provider("ollama").expect("inventory populated");
+        assert_eq!(provider.models.len(), 1);
+        assert_eq!(provider.base_url, format!("http://127.0.0.1:{}/v1", mock.port));
+
+        // The config repoints at a dead endpoint (a port that was
+        // released): the refresh clears the stale inventory, and the
+        // unreachable new target does NOT resurrect it.
+        let gone = {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+            listener.local_addr().expect("addr").port()
+        };
+        let repointed = connection(gone, "/v1", None);
+        assert!(
+            discovery.refresh(&repointed).await,
+            "the repoint itself is a change (inventory cleared)"
+        );
+        assert!(
+            discovery.provider("ollama").is_none(),
+            "no stale models bound to the OLD base URL stay listable/usable"
+        );
+        assert!(discovery.providers().is_empty());
+        // Same-endpoint refreshes still retain through outages (the
+        // previous test) — the clear only fires on an endpoint change.
     }
 }
