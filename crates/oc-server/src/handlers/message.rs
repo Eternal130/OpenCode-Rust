@@ -13,13 +13,13 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, Uri};
 use axum::response::{IntoResponse, Response};
 use oc_core::session::store::{ListDirection, ListOrder, MessagesInput};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use super::common::{
-    decode_message_cursor, encode_message_cursor, json_data, message_row_to_info, ApiError,
-    CursorDirection, ListOrderWire, SharedState,
+    ApiError, CursorDirection, ListOrderWire, SharedState, decode_message_cursor,
+    encode_message_cursor, json_data, message_row_to_info,
 };
-use super::session::{query_field, session_services, DEFAULT_LIMIT};
+use super::session::{DEFAULT_LIMIT, query_field, session_services};
 
 pub fn routes() -> axum::Router<SharedState> {
     axum::Router::new()
@@ -151,17 +151,16 @@ async fn get(
     Path((session_id, message_id)): Path<(String, String)>,
 ) -> Result<Response, ApiError> {
     let (services, _) = session_services(&state, &session_id).await?;
-    let rows = services
+    // G-37: single-row lookup by (session, id) — the primary key —
+    // instead of loading the whole transcript and scanning it.
+    let row = services
         .store
-        .messages(MessagesInput { session_id: session_id.clone(), ..Default::default() })
+        .get_message(&session_id, &message_id)
         .await
         .map_err(|error| {
             crate::errors::debug_cause("message:unknown_ref", &error);
             ApiError::unknown_ref()
-        })?;
-    let row = rows
-        .into_iter()
-        .find(|row| row.id == message_id)
+        })?
         .ok_or_else(|| ApiError::message_not_found(&session_id, &message_id))?;
     Ok(json_data(message_row_to_info(&row)))
 }

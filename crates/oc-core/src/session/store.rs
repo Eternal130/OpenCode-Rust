@@ -26,9 +26,9 @@ use oc_schema::session_support::SessionMetadata;
 use rusqlite::OptionalExtension;
 
 use crate::bus::{Bus, BusError, PublishOptions};
+use crate::database::Database;
 use crate::database::error::Result;
 use crate::database::schema::{SessionMessageRow, SessionRow};
-use crate::database::Database;
 
 /// The project resolution [`SessionStore::create`] needs
 /// (`projects.resolve(location.directory)`).
@@ -298,6 +298,31 @@ impl SessionStore {
             rows.reverse();
         }
         Ok(rows)
+    }
+
+    /// `get_message`: single-row message lookup by id, scoped to the
+    /// session — the O(1) backend for `session.message.get` (the
+    /// handler previously loaded the whole transcript and linearly
+    /// searched it; `session_message.session_id + id` is the primary
+    /// key, so this is a single indexed row).
+    pub async fn get_message(
+        &self,
+        session_id: &str,
+        message_id: &str,
+    ) -> Result<Option<SessionMessageRow>> {
+        let (session_id, message_id) = (session_id.to_string(), message_id.to_string());
+        self.db
+            .transaction(move |tx| {
+                Ok(tx
+                    .conn()
+                    .query_row(
+                        "SELECT * FROM session_message WHERE session_id = ?1 AND id = ?2",
+                        rusqlite::params![session_id, message_id],
+                        SessionMessageRow::decode_row,
+                    )
+                    .optional()?)
+            })
+            .await
     }
 
     async fn messages_query(
