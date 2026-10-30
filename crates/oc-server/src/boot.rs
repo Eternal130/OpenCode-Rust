@@ -420,6 +420,20 @@ pub async fn boot_and_serve(options: &BootOptions) -> io::Result<ServeHandle> {
         engine: Arc::clone(&app_state.engine),
         location: LocationRef::new(config_location.clone(), None),
     }));
+    // G-24: ctx.websearch.providers/query + ctx.vcs.get/base over the
+    // boot location's engine services, and the shared worktree-strategy
+    // registry seeded from the plugin snapshot (git + every
+    // `ctx.worktree.transform` strategy).
+    plugin_boot.websearch_slot.fill(Arc::new(crate::plugins::EngineWebsearchPort {
+        engine: Arc::clone(&app_state.engine),
+        location: LocationRef::new(config_location.clone(), None),
+    }));
+    plugin_boot.vcs_slot.fill(Arc::new(crate::plugins::EngineVcsPort {
+        engine: Arc::clone(&app_state.engine),
+        location: LocationRef::new(config_location.clone(), None),
+    }));
+    app_state.worktree_strategies =
+        crate::plugins::plugin_worktree_registry(&plugin_boot.host, &plugin_boot.resolution);
     app_state.plugins = Some(plugin_boot);
     // G-05: the reload bridge gets the engine handle (config.updated
     // publishing + location invalidation need it), and the watcher's

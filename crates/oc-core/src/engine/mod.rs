@@ -490,10 +490,10 @@ impl Engine {
         // hourly retention sweeps — spilled tool output and shell capture
         // files — run for the engine lifetime. Handles are retained and
         // aborted in `shutdown` (v2 scopes these fibers to the layer).
-        let tool_output_cleanup =
-            crate::tool_output::spawn_cleanup_task(Arc::clone(&tool_output), Some(
-                options.file_retention.cleanup_interval,
-            ));
+        let tool_output_cleanup = crate::tool_output::spawn_cleanup_task(
+            Arc::clone(&tool_output),
+            Some(options.file_retention.cleanup_interval),
+        );
         let shell_cleanup = crate::shell::spawn_cleanup_task(
             options.data_root.clone(),
             Arc::clone(&options.clock),
@@ -1233,6 +1233,40 @@ impl Engine {
             let active = source.active_plugins(&ops);
             if active.as_ref().is_none_or(|ids| !ids.is_empty()) {
                 source.location_activated(&location.as_path().display().to_string(), &project.id);
+            }
+            // G-24: the plugin-registered websearch providers land in
+            // THIS location's WebSearch registry, and the integration
+            // methods into the engine-level IntegrationHost — both
+            // bridged onto the guest dispatcher (the execute/authorize
+            // closures live in the guest process).
+            if let Some(dispatcher) = source.hook_dispatcher() {
+                let is_active = |plugin_id: &str| {
+                    active.as_ref().is_none_or(|ids| ids.iter().any(|id| id == plugin_id))
+                };
+                let websearch_defs: Vec<_> = source
+                    .websearch_providers()
+                    .into_iter()
+                    .filter(|definition| is_active(&definition.plugin_id))
+                    .collect();
+                if !websearch_defs.is_empty() {
+                    crate::plugin_apply::apply_plugin_websearch_providers(
+                        websearch.as_ref(),
+                        &dispatcher,
+                        &websearch_defs,
+                    );
+                }
+                let integration_defs: Vec<_> = source
+                    .integration_methods()
+                    .into_iter()
+                    .filter(|definition| is_active(&definition.plugin_id))
+                    .collect();
+                if !integration_defs.is_empty() {
+                    crate::plugin_apply::apply_plugin_integration_methods(
+                        &self.integration,
+                        &dispatcher,
+                        &integration_defs,
+                    );
+                }
             }
         }
 

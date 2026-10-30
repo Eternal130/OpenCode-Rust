@@ -110,6 +110,12 @@ pub struct AppState {
     /// otherwise). Consumer migration of tools/handlers is a later phase;
     /// this is the service seam.
     pub environment: std::sync::Arc<oc_core::environment::Environment>,
+    /// G-24 — the shared worktree-strategy registry (git + every
+    /// plugin-registered `ctx.worktree.transform` strategy, ref
+    /// strategies.ts:48-65). Seeded at boot from the plugin snapshot;
+    /// the worktree handlers read it instead of building a
+    /// request-local registry.
+    pub worktree_strategies: std::sync::Arc<oc_core::project::worktree_strategy::StrategyRegistry>,
 }
 
 impl AppState {
@@ -128,7 +134,8 @@ impl AppState {
         let workspace = std::sync::Arc::new(oc_core::environment::WorkspaceService::new(
             std::sync::Arc::new(oc_core::project::SqliteProjectStore::new((*engine.db).clone())),
         ));
-        let environment = std::sync::Arc::new(oc_core::environment::Environment::with_workspace(workspace));
+        let environment =
+            std::sync::Arc::new(oc_core::environment::Environment::with_workspace(workspace));
         let pty = PtyService::new(bus.clone());
         let persistent_pty = Frontend::new(bus);
         Self {
@@ -154,6 +161,9 @@ impl AppState {
             watched_config: None,
             wellknown_restore: std::sync::OnceLock::new(),
             environment,
+            worktree_strategies: std::sync::Arc::new(
+                oc_core::project::worktree_strategy::StrategyRegistry::new(),
+            ),
         }
     }
 
