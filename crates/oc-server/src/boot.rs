@@ -458,6 +458,22 @@ pub async fn boot_and_serve(options: &BootOptions) -> io::Result<ServeHandle> {
     }
     let shell = AppShell::new(Arc::clone(&state));
     let router = shell.router();
+    // RF-01 — the local-provider discovery loop (ollama/lmstudio/vllm,
+    // ref plugin/provider/local.ts:116 `refresh().repeat(spaced(30s))`
+    // forked at boot): one immediate pass then one every 30 s over the
+    // boot location's config connections (baseURL/apiKey overrides);
+    // a changed inventory publishes `model.updated`. Unreachable
+    // servers are silent no-ops that keep the last inventory — the
+    // loop never blocks readiness. Hermetic boots opt out through the
+    // same fetch gate as the models-dev loop (`OPENCODE_CATALOG_FETCH`
+    // or `OPENCODE_LOCAL_DISCOVERY` truthy-off).
+    if engine_local_discovery_enabled() {
+        tokio::spawn(local_discovery_loop(
+            Arc::clone(&state.engine),
+            config_location.clone(),
+            state.watched_config.clone(),
+        ));
+    }
     let on_listen = trace_boot.then(|| {
         Arc::new(move |addr: std::net::SocketAddr| {
             Box::pin(async move {
@@ -469,6 +485,48 @@ pub async fn boot_and_serve(options: &BootOptions) -> io::Result<ServeHandle> {
         }) as lifecycle::OnListen
     });
     lifecycle::serve(&options.serve, state, router, on_listen).await
+}
+
+/// Whether the RF-01 local-provider discovery loop runs (see the spawn
+/// site; default on for production boots).
+fn engine_local_discovery_enabled() -> bool {
+    if let Ok(value) = std::env::var("OPENCODE_LOCAL_DISCOVERY") {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "0" | "false" | "off" | "no" => return false,
+            _ => return true,
+        }
+    }
+    match std::env::var("OPENCODE_CATALOG_FETCH") {
+        Ok(value) => {
+            !matches!(value.trim().to_ascii_lowercase().as_str(), "0" | "false" | "off" | "no")
+        }
+        Err(_) => true,
+    }
+}
+
+/// RF-01 — the periodic local-provider refresh (ref local.ts:104-116):
+/// resolve each spec's endpoint against the current config connections,
+/// discover, swap changed inventories, and publish `model.updated` on a
+/// change. The config re-reads each pass (the ref re-resolves on
+/// `config.updated`; a 30 s re-read observes the same edits without a
+/// second watcher seam).
+async fn local_discovery_loop(
+    engine: Arc<Engine>,
+    config_location: PathBuf,
+    watched: Option<Arc<oc_core::config::WatchedConfig>>,
+) {
+    let location = LocationRef::new(config_location, None);
+    loop {
+        let loaded = match &watched {
+            Some(watched) => watched.loaded(),
+            None => location_config(&engine, &location),
+        };
+        let connections = providers_from_config(&loaded).connections;
+        if engine.local.refresh(&connections).await {
+            let _ = crate::announce::publish_empty(&engine, "model.updated", &location).await;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+    }
 }
 
 /// RUNTIME-L01 — the boot recovery sweep over the engine

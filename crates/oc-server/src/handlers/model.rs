@@ -154,7 +154,17 @@ async fn location_model_entries(
         .map(|(snapshot, model)| (model.time.released.0, model_json(snapshot, model)))
         .collect();
     let configured = crate::boot::location_custom_providers(engine, location);
+    // RF-01 — running local providers (ollama/lmstudio/vllm runtime
+    // discovery): the discovered inventory REPLACES a config custom
+    // with the same provider id (the ref transform removes the
+    // provider's existing models before injecting), so those ids skip
+    // the config rendering below and list through the discovery
+    // snapshot instead.
+    let local = engine.local.providers();
     for provider in &configured {
+        if local.iter().any(|entry| entry.id == provider.id) {
+            continue;
+        }
         for model in &provider.models {
             data.push((0.0, custom_model_json(provider, model)));
         }
@@ -166,11 +176,22 @@ async fn location_model_entries(
     // resolver checks its custom list before the console, so listing and
     // resolution stay in parity.
     for provider in crate::boot::console_custom_providers(engine) {
-        if configured.iter().any(|custom| custom.id == provider.id) {
+        if configured.iter().any(|custom| custom.id == provider.id)
+            || local.iter().any(|entry| entry.id == provider.id)
+        {
             continue;
         }
         for model in &provider.models {
             data.push(console_model_json(&provider, model, &catalog));
+        }
+    }
+    // RF-01 — the discovered local-provider models ride the same
+    // listing seam (rendered through the SAME resolver merge
+    // `console_model_json` uses, so limits/capabilities carry and the
+    // listing stays in parity with `bind`).
+    for provider in &local {
+        for model in &provider.models {
+            data.push(console_model_json(provider, model, &catalog));
         }
     }
     data.sort_by(|a, b| b.0.total_cmp(&a.0));
@@ -231,6 +252,13 @@ async fn model_default(
                 .into_iter()
                 .find(|provider| provider.id == selection.provider_id.as_str())
         };
+        // RF-01 — a discovered local provider renders its default
+        // through the same discovery snapshot the listing serves.
+        let local_custom = if configured_custom.is_some() || console_custom.is_some() {
+            None
+        } else {
+            state.engine.local.provider(selection.provider_id.as_str())
+        };
         // A custom (config/console) provider renders its own entry; a
         // catalog provider's default resolves through the catalog so the
         // payload keeps the full (client-parseable) Model.Info shape.
@@ -259,6 +287,13 @@ async fn model_default(
                     ..oc_core::provider_catalog::facade::CustomModel::default()
                 });
             Some(custom_model_json(&provider, &model))
+        } else if let Some(provider) = local_custom {
+            let catalog = state.engine.catalog_service.get();
+            provider
+                .models
+                .iter()
+                .find(|model| model.id == selection.model.as_str())
+                .map(|model| console_model_json(&provider, model, &catalog).1)
         } else if let Some(provider) = console_custom {
             let catalog = state.engine.catalog_service.get();
             provider
@@ -578,5 +613,98 @@ mod tests {
             fallback.get("capabilities").is_some_and(serde_json::Value::is_object),
             "the fallback keeps the full Model.Info shape"
         );
+    }
+
+    /// RF-01 — running local providers (ollama/lmstudio/vllm runtime
+    /// discovery) list through the same seam as console providers,
+    /// rendered with the discovered names/capabilities/limits, and the
+    /// `model` default selection resolves a discovered model.
+    #[tokio::test]
+    async fn local_discovery_models_list_and_default() {
+        use axum::routing::{get, post};
+        use serde_json::json;
+
+        // A loopback Ollama (ADR-0006: loopback-only mock, no real
+        // network): tags + a tool-capable show for llama3.
+        let app = axum::Router::new()
+            .route(
+                "/api/tags",
+                get(|| async {
+                    axum::Json(json!({ "models": [
+                        { "name": "Llama 3", "model": "llama3", "digest": "d1",
+                          "details": { "family": "llama" } }
+                    ] }))
+                }),
+            )
+            .route(
+                "/api/show",
+                post(|| async {
+                    axum::Json(json!({
+                        "capabilities": ["completion", "tools"],
+                        "details": { "family": "llama" },
+                        "model_info": { "llama3.context_length": 8192 }
+                    }))
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind mock");
+        let port = listener.local_addr().expect("addr").port();
+        tokio::spawn(async move { axum::serve(listener, app).await.expect("mock serves") });
+
+        let tmp = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+        std::fs::write(tmp.path().join("opencode.json"), r#"{ "model": "ollama/llama3" }"#)
+            .expect("write config");
+        let engine = oc_core::engine::Engine::boot(oc_core::engine::EngineOptions::new(
+            tmp.path().to_owned(),
+            tmp.path().to_owned(),
+        ))
+        .await;
+        let mut connections = std::collections::BTreeMap::new();
+        connections.insert(
+            "ollama".to_owned(),
+            oc_core::provider_catalog::facade::ModelConnection {
+                base_url: Some(format!("http://127.0.0.1:{port}/v1")),
+                api_key: None,
+                headers: Default::default(),
+            },
+        );
+        engine.local.refresh(&connections).await;
+
+        let location = oc_core::location::LocationRef::new(tmp.path().to_owned(), None);
+        let entries = location_model_entries(&engine, &location).await;
+        let llama = entries
+            .iter()
+            .find(|model| {
+                model.get("providerID").and_then(Value::as_str) == Some("ollama")
+                    && model.get("id").and_then(Value::as_str) == Some("llama3")
+            })
+            .expect("the discovered ollama model appears in the listing");
+        assert_eq!(llama["name"], json!("Llama 3"));
+        assert_eq!(llama["capabilities"]["tools"], json!(true));
+        assert_eq!(llama["capabilities"]["input"], json!(["text"]));
+        assert_eq!(llama["limit"]["context"], json!(8192));
+        assert_eq!(llama["cost"], json!([]), "discovered models are cost-free");
+
+        // The configured default `ollama/llama3` resolves through the
+        // discovery snapshot, not the (missing) catalog entry.
+        let state = std::sync::Arc::new(crate::state::AppState::new(
+            engine,
+            crate::state::AuthConfig { password: None },
+            "test".to_owned(),
+            std::sync::Arc::new(oc_util::determinism::UuidV4IdGen),
+            std::sync::Arc::new(oc_util::determinism::SystemClock),
+        ));
+        let uri: Uri = format!(
+            "http://localhost/api/model/default?location[directory]={}",
+            tmp.path().display()
+        )
+        .parse()
+        .expect("request uri");
+        let response = model_default(State(state), uri, HeaderMap::new())
+            .await
+            .expect("model.default responds");
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.expect("body");
+        let payload: Value = serde_json::from_slice(&bytes).expect("envelope json");
+        assert_eq!(payload["data"]["providerID"], json!("ollama"));
+        assert_eq!(payload["data"]["id"], json!("llama3"));
     }
 }
