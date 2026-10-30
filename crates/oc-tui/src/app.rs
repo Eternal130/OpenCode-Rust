@@ -7418,6 +7418,22 @@ pub async fn run_with_size(
             }
             app.store.ingest_all([message]);
         }
+        // G-21 — `tui.command.execute`: the store staged the command
+        // during the drain above; dispatch each through the palette
+        // (the ref's `keymap.dispatch`, app.tsx:1253-1256). Dispatch
+        // happens AFTER the full drain so the store state the command
+        // reads is the post-ingest one.
+        for command in app.store.take_bus_commands() {
+            if std::env::var("OC_TUI_DEBUG").ok().as_deref() == Some("1") {
+                eprintln!("[tui] bus command: {command}");
+            }
+            let dispatch = app.dispatcher.dispatch(&app.store, &command, None);
+            if command == "app.exit" && dispatch != Dispatch::Unknown {
+                // The palette's exit contract (same as a typed
+                // command): a handled exit quits the pump.
+                app.exit_requested = true;
+            }
+        }
         // SURF-2 (lane E2): plugins ready — `set_plugins_ready()`
         // flips any live StartupLoading pill to "Finishing startup…"
         // and starts its 3 s hold (startup-loading.tsx:13-31). Like
