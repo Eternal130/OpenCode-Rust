@@ -101,6 +101,7 @@ pub mod ui;
 
 pub use context::{
     install::{default_root as install_root, install, InstallOptions, Installed},
+    update::{collect_stale, global_cache as update_cache, update, UpdateCache},
     is_mutating_hook, Bridge, HostState, NoSessionEngine, NoToolEngine, PermissionPort,
     SessionPort, ToolPort, MUTATING_DISPATCH_TIMEOUT, SESSION_METHODS,
 };
