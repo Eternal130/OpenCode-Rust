@@ -58,6 +58,11 @@ fn git(dir: &std::path::Path, args: &[&str]) -> String {
 }
 
 async fn boot(workspace: std::path::PathBuf) -> TestServer {
+    // `set_current_dir` is process-global while the engine captures its
+    // launch directory at boot — serialize the critical section so
+    // parallel tests cannot boot in another test's workspace.
+    static BOOT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = BOOT_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
     let data = tempfile::tempdir().expect("data tempdir");
     std::env::set_current_dir(&workspace).expect("chdir to workspace");
     let engine =
@@ -69,6 +74,7 @@ async fn boot(workspace: std::path::PathBuf) -> TestServer {
         Arc::new(UuidV4IdGen),
         Arc::new(SystemClock),
     ));
+    drop(_guard);
     let router = handlers::mount(Arc::clone(&state));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("ephemeral bind");
     let addr = listener.local_addr().expect("addr");
@@ -835,4 +841,172 @@ async fn worktree_refresh() {
     .await;
     assert_eq!(status, 404, "unknown project: {body}");
     assert_eq!(body["_tag"], "ProjectNotFoundError");
+}
+
+// ---------------------------------------------------------------------------
+// G-9 — Mercurial adapter wire parity (plugin/vcs/hg.ts): info / status /
+// diff working+branch / unsupported base + committed / empty branch list.
+// ---------------------------------------------------------------------------
+
+/// Installs a stub `hg` driven by a state directory (no real Mercurial in
+/// the test environment) and returns the state dir. The stub implements
+/// exactly the commands the adapter shells out: `branch`, `log -r
+/// ancestor(., default)`, `cat -r -- `, `status -0`, and `diff --git`.
+fn fake_hg() -> std::path::PathBuf {
+    let bin = tempfile::tempdir().expect("fake bin").keep();
+    let state = tempfile::tempdir().expect("fake hg state").keep();
+    let script = bin.join("hg");
+    std::fs::write(
+        &script,
+        format!(
+            r#"#!/usr/bin/env bash
+set -u
+state="{state}"
+cmd="${{1:-}}"
+case "$cmd" in
+  branch)
+    if [[ -f "$state/branch" ]]; then cat "$state/branch"; else echo default; fi ;;
+  log)
+    if [[ "${{3:-}}" == "ancestor(., default)" ]]; then
+      echo "aabbccddeeff00112233445566778899aabbccdd"
+    else
+      echo "0000000000000000000000000000000000000001"
+    fi ;;
+  cat)
+    file="${{5:-}}"
+    if [[ -f "$state/old/$file" ]]; then cat "$state/old/$file"; else exit 1; fi ;;
+  status)
+    if [[ -f "$state/status" ]]; then
+      while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        printf '%s %s\0' "${{line:0:1}}" "${{line:2}}"
+      done < "$state/status"
+    fi ;;
+  diff)
+    if [[ -f "$state/diff" ]]; then cat "$state/diff"; fi ;;
+  *) exit 0 ;;
+esac
+"#,
+            state = state.display(),
+        ),
+    )
+    .expect("write fake hg");
+    use std::os::unix::fs::PermissionsExt as _;
+    let mut permissions = std::fs::metadata(&script).expect("stat fake hg").permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&script, permissions).expect("chmod fake hg");
+    let path = std::env::var("PATH").unwrap_or_default();
+    std::env::set_var("PATH", format!("{}:{}", bin.display(), path));
+    std::env::set_var("FAKE_HG_DIR", state.display().to_string());
+    state
+}
+
+#[tokio::test]
+async fn hg_vcs_wire() {
+    let workspace = tempfile::tempdir().expect("workspace").keep();
+    // An hg project: the `.hg` marker drives detection (no git repo here).
+    std::fs::create_dir_all(workspace.join(".hg")).expect("hg marker");
+    std::fs::write(workspace.join("README.md"), "changed\n").expect("modified file");
+    std::fs::write(workspace.join("new.txt"), "brand new\n").expect("untracked file");
+    let state = fake_hg();
+    // Working-tree facts: M README.md, ? new.txt, ! gone.txt.
+    std::fs::write(state.join("status"), "M README.md\n? new.txt\n! gone.txt\n").expect("status");
+    std::fs::create_dir_all(state.join("old")).expect("old dir");
+    std::fs::write(state.join("old/gone.txt"), "old contents\n").expect("deleted content");
+    std::fs::write(
+        state.join("diff"),
+        "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-readme\n+changed\n",
+    )
+    .expect("batch diff");
+
+    let server = boot(workspace.clone()).await;
+    let query = location_query(&workspace);
+
+    // info (hg.ts:118-120): `hg branch` + the literal default.
+    let (status, body) = raw_get(server.addr, &format!("/api/vcs?{query}")).await;
+    assert_eq!(status, 200, "vcs info: {body}");
+    assert_eq!(body["data"]["branch"]["current"], "default", "hg branch: {body}");
+    assert_eq!(body["data"]["branch"]["default"], "default", "hg default branch: {body}");
+    assert_eq!(body["data"]["provider"], "hg");
+
+    // base: no hg base op → ref returns 200 with null data (vcs.ts:198-201).
+    let (status, body) = raw_get(server.addr, &format!("/api/vcs/base?{query}")).await;
+    assert_eq!(status, 200, "hg base null: {body}");
+    assert!(body["data"].is_null(), "hg base data null: {body}");
+
+    // branch list: always [] (hg.ts:121-123).
+    let (status, body) = raw_get(server.addr, &format!("/api/vcs/branch?{query}")).await;
+    assert_eq!(status, 200, "hg branch list: {body}");
+    assert_eq!(body["data"].as_array().map(Vec::len), Some(0), "empty list: {body}");
+
+    // status (hg.ts:124-134): diffAgainst(parent) → FileStatus shape.
+    let (status, body) = raw_get(server.addr, &format!("/api/vcs/status?{query}")).await;
+    assert_eq!(status, 200, "hg status: {body}");
+    let entries = body["data"].as_array().cloned().unwrap_or_default();
+    let by_file = |name: &str| {
+        entries
+            .iter()
+            .find(|entry| entry["file"] == name)
+            .unwrap_or_else(|| panic!("no {name} in status: {entries:?}"))
+            .clone()
+    };
+    assert_eq!(by_file("README.md")["status"], "modified");
+    assert_eq!(by_file("README.md")["additions"], 1, "countPatch: {entries:?}");
+    assert_eq!(by_file("README.md")["deletions"], 1, "countPatch: {entries:?}");
+    assert_eq!(by_file("new.txt")["status"], "added", "? → added: {entries:?}");
+    assert_eq!(by_file("gone.txt")["status"], "deleted", "! → deleted: {entries:?}");
+
+    // working diff (hg.ts:135-136): batched patch + synthesized add/delete
+    // patches for `?`/`!` files that never appear in `hg diff`.
+    let (status, body) = raw_get(server.addr, &format!("/api/vcs/diff?{query}&mode=working")).await;
+    assert_eq!(status, 200, "hg working diff: {body}");
+    let files = body["data"].as_array().cloned().unwrap_or_default();
+    let diff_by_file = |name: &str| {
+        files
+            .iter()
+            .find(|entry| entry["file"] == name)
+            .unwrap_or_else(|| panic!("no {name} in diff: {files:?}"))
+            .clone()
+    };
+    let readme = diff_by_file("README.md");
+    assert!(readme["patch"].as_str().is_some_and(|p| p.contains("+changed")));
+    let new = diff_by_file("new.txt");
+    assert!(
+        new["patch"].as_str().is_some_and(|p| p.contains("+brand new")),
+        "untracked add patch synthesized from disk: {new}"
+    );
+    assert!(
+        new["patch"].as_str().is_some_and(|p| p.contains("@@ -0,0 +1,1 @@")),
+        "jsdiff addPatch hunk header: {new}"
+    );
+    let gone = diff_by_file("gone.txt");
+    assert!(
+        gone["patch"].as_str().is_some_and(|p| p.contains("-old contents")),
+        "missing-file delete patch synthesized from `hg cat`: {gone}"
+    );
+
+    // committed mode + explicit base → DiffError → 503 {service: vcs}.
+    let (status, body) =
+        raw_get(server.addr, &format!("/api/vcs/diff?{query}&mode=committed")).await;
+    assert_eq!(status, 503, "hg committed unsupported: {body}");
+    assert_eq!(body["service"], "vcs");
+    let (status, body) =
+        raw_get(server.addr, &format!("/api/vcs/diff?{query}&mode=branch&base=tip")).await;
+    assert_eq!(status, 503, "hg explicit base unsupported: {body}");
+    assert_eq!(body["service"], "vcs");
+
+    // branch mode on `default` → [] (hg.ts:143-144).
+    let (status, body) = raw_get(server.addr, &format!("/api/vcs/diff?{query}&mode=branch")).await;
+    assert_eq!(status, 200, "hg branch diff on default: {body}");
+    assert_eq!(body["data"].as_array().map(Vec::len), Some(0), "no base on default: {body}");
+
+    // branch mode on a feature branch → diff against ancestor(., default).
+    std::fs::write(state.join("branch"), "feature\n").expect("feature branch");
+    let (status, body) = raw_get(server.addr, &format!("/api/vcs/diff?{query}&mode=branch")).await;
+    assert_eq!(status, 200, "hg branch diff: {body}");
+    let files = body["data"].as_array().cloned().unwrap_or_default();
+    assert!(
+        files.iter().any(|entry| entry["file"] == "README.md"),
+        "branch diff lists tracked change: {files:?}"
+    );
 }
