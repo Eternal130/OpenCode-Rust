@@ -252,6 +252,13 @@ impl AgentRegistry {
         *self.configured_default.lock() = id;
     }
 
+    /// The configured default agent id (`config.agent.default` /
+    /// plugin `draft.default`), when set (G-5 transform base).
+    #[must_use]
+    pub fn configured_default(&self) -> Option<oc_schema::id::AgentId> {
+        self.configured_default.lock().clone()
+    }
+
     /// `Agent.get`.
     #[must_use]
     pub fn get(&self, id: &oc_schema::id::AgentId) -> Option<oc_schema::agent::Info> {

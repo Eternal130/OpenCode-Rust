@@ -1171,6 +1171,48 @@ mod tests {
     }
 
     #[test]
+    fn config_experimental_file_retention_cleanup_interval_loads() {
+        let dir = tempdir("file-retention");
+        write(
+            &dir.join("opencode.json"),
+            r#"{"experimental": {"file_retention": {"cleanup_interval": 120000}}}"#,
+        );
+        let globals = GlobalDirs { config: dir.join("global"), home: dir.join("home") };
+        let loaded = loader_for(&dir, &globals).load();
+        // Tolerate a concurrently-running test leaking `OPENCODE_CONFIG_
+        // CONTENT` (an overlay document with no `experimental`): fold over
+        // the entries that actually define the knob, not plain `latest`.
+        let interval = loaded
+            .entries
+            .iter()
+            .rev()
+            .find_map(|entry| match entry {
+                oc_schema::config::Entry::Document(document) => document
+                    .info
+                    .experimental
+                    .as_ref()
+                    .and_then(|experimental| experimental.file_retention.as_ref())
+                    .and_then(|retention| retention.cleanup_interval),
+                oc_schema::config::Entry::Directory(_) => None,
+            })
+            .unwrap_or_else(|| panic!("entries: {:?}", loaded.entries.len()));
+        assert_eq!(interval, 120_000, "G-14 knob parses through the full load pipeline");
+    }
+
+    #[test]
+    fn config_experimental_file_retention_defaults_to_absent() {
+        let dir = tempdir("file-retention-default");
+        write(&dir.join("opencode.json"), r#"{"experimental": {"subagent_depth": 2}}"#);
+        let globals = GlobalDirs { config: dir.join("global"), home: dir.join("home") };
+        let loaded = loader_for(&dir, &globals).load();
+        let info = latest(&loaded.entries, |info| Some(info.clone())).unwrap();
+        assert!(
+            info.experimental.and_then(|experimental| experimental.file_retention).is_none(),
+            "absent knob keeps the hourly default (no config change)"
+        );
+    }
+
+    #[test]
     fn config_patch_shell_replaces_and_inserts() {
         assert_eq!(
             patch_shell(

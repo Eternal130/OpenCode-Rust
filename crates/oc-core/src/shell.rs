@@ -43,7 +43,18 @@ pub const DIRECTORY: &str = "shell";
 /// capture files whose modification time predates the 7-day cutoff.
 /// Missing directories/files are expected between sweeps and ignored.
 pub fn cleanup_data_root(data_root: &std::path::Path, now_ms: u64) {
-    let cutoff = now_ms.saturating_sub(RETENTION_MS);
+    cleanup_data_root_with_retention(data_root, now_ms, RETENTION_MS);
+}
+
+/// `Shell.cleanup` with a caller-provided retention window (ref
+/// `FileRetention.cleanup(fs, files, retention)` takes the Duration from
+/// its caller; `cleanup_data_root` keeps the 7-day default).
+pub fn cleanup_data_root_with_retention(
+    data_root: &std::path::Path,
+    now_ms: u64,
+    retention_ms: u64,
+) {
+    let cutoff = now_ms.saturating_sub(retention_ms);
     let Ok(projects) = std::fs::read_dir(data_root.join(DIRECTORY)) else { return };
     for project in projects.flatten() {
         let Ok(captures) = std::fs::read_dir(project.path()) else { continue };
@@ -69,16 +80,19 @@ pub fn cleanup_data_root(data_root: &std::path::Path, now_ms: u64) {
     }
 }
 
-/// Spawns the hourly shell-capture retention sweep (shell.ts:104-109 — a
+/// Spawns the shell-capture retention sweep (shell.ts:104-109 — a
 /// scoped fiber in v2; a tokio task whose handle the caller retains and
 /// aborts at shutdown). The first tick runs immediately, so boot performs one
-/// sweep before settling into the hourly cadence.
+/// sweep before settling into the configured cadence. The interval is
+/// caller-provided (G-14); `None` keeps the hourly default.
 pub fn spawn_cleanup_task(
     data_root: PathBuf,
     clock: Arc<dyn Clock>,
+    interval: Option<std::time::Duration>,
 ) -> tokio::task::JoinHandle<()> {
+    let interval = interval.unwrap_or(crate::file_retention::DEFAULT_CLEANUP_INTERVAL);
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(3_600));
+        let mut interval = tokio::time::interval(interval);
         loop {
             interval.tick().await;
             cleanup_data_root(&data_root, u64::try_from(clock.unix_ms()).unwrap_or(0));

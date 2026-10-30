@@ -1070,6 +1070,26 @@ fn normalize_experimental(
                     ));
                 }
             }
+            if own(experimental, "file_retention") {
+                let retention = experimental.get("file_retention").unwrap();
+                if !is_record(Some(retention)) {
+                    invalid(&["experimental", "file_retention"], diagnostics);
+                } else if let Some(value) = retention.get("cleanup_interval") {
+                    if let Some(interval) = decode_value::<u64>(
+                        value,
+                        &["experimental", "file_retention", "cleanup_interval"],
+                        diagnostics,
+                    ) {
+                        result.push((
+                            "file_retention".to_string(),
+                            obj(vec![(
+                                "cleanup_interval".to_string(),
+                                Json::Number(serde_json::Number::from(interval)),
+                            )]),
+                        ));
+                    }
+                }
+            }
             native.extend(decode_list(
                 experimental.get("policies"),
                 &["experimental", "policies"],

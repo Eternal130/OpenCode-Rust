@@ -538,6 +538,7 @@ mod parse_tests {
         let handle = crate::shell::spawn_cleanup_task(
             tmp.path().to_path_buf(),
             std::sync::Arc::new(oc_util::determinism::SystemClock),
+            None,
         );
         // The first interval tick is immediate; give the runtime a beat.
         for _ in 0..50 {
@@ -548,5 +549,28 @@ mod parse_tests {
         }
         handle.abort();
         assert!(!old.exists(), "spawned sweep removed the stale capture");
+    }
+
+    /// G-14: a caller-provided retention window bounds the sweep — a
+    /// 1-minute window drops a 2-minute-old capture the 7-day default
+    /// keeps.
+    #[test]
+    fn shell_cleanup_honors_a_caller_provided_retention_window() {
+        let tmp = tempfile::tempdir().unwrap();
+        let now = std::time::SystemTime::now();
+        let dir = capture_dir(&tmp, "proj");
+        let recent = dir.join("sh_000000000001BBBBBBBBBBBBBB.out");
+        std::fs::write(&recent, "capture").unwrap();
+        set_mtime(&recent, now - std::time::Duration::from_secs(120));
+        let now_ms = u64::try_from(
+            now.duration_since(std::time::UNIX_EPOCH).unwrap().as_millis(),
+        )
+        .unwrap();
+        // Default 7-day window: kept.
+        crate::shell::cleanup_data_root(tmp.path(), now_ms);
+        assert!(recent.exists(), "7-day default keeps a 2-minute-old capture");
+        // Caller-provided 1-minute window: dropped.
+        crate::shell::cleanup_data_root_with_retention(tmp.path(), now_ms, 60 * 1_000);
+        assert!(!recent.exists(), "1-minute caller-provided window drops it");
     }
 }
