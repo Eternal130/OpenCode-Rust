@@ -3018,6 +3018,17 @@ impl CommandDispatcher for StoreDispatcher {
                 store.clear_dialogs();
                 Dispatch::Handled
             }
+            // G-20(2) — `terminal.suspend` (app.tsx:1119-1129): the
+            // store can't signal or touch the terminal, so the arm
+            // only STAGES the request; the run loop drains it
+            // (`take_terminal_suspend`), tears the terminal down,
+            // stops our own process group and restores on the
+            // continue (see `suspend.rs`).
+            "terminal.suspend" => {
+                store.request_terminal_suspend();
+                store.clear_dialogs();
+                Dispatch::Handled
+            }
             // RD-06 — `app.toggle.paste_summary` (app.tsx:1193-1205):
             // flip `prompt.paste` between "compact" (fold big pastes
             // into `[Pasted ~N lines]` chips) and "full" (paste

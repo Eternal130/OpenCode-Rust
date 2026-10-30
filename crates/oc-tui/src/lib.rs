@@ -33,6 +33,7 @@ pub mod config;
 pub mod data;
 pub mod diff_viewer_golden_tests;
 pub mod editor;
+pub mod editor_ide;
 pub mod editor_zed;
 /// Lane M6 (retired): the exit farewell (sessionEpilogue) on the
 /// opentui-solid builder tree — the ONLY renderer since the
@@ -69,6 +70,7 @@ pub mod spike;
 pub mod stderr_redirect;
 pub mod storage;
 pub mod store;
+pub mod suspend;
 pub mod terminal_pane;
 pub mod terminal_proto;
 pub mod theme;
