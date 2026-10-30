@@ -161,6 +161,21 @@ impl PluginBoot {
         }
     }
 
+    /// The package-source targets in the current inventory
+    /// (`plugin.update`'s unknown-target validation base).
+    #[must_use]
+    pub fn package_targets(&self) -> Vec<String> {
+        self.resolution
+            .lock()
+            .plugins
+            .iter()
+            .filter(|plugin| {
+                matches!(plugin.source, oc_plugin_host::PluginSourceKind::Package { .. })
+            })
+            .map(|plugin| plugin.target.clone())
+            .collect()
+    }
+
     /// `/api/plugin`'s list: every resolved plugin (host status merged
     /// in — active, failed, crash-disabled) plus the resolution
     /// failures, in v2's `Plugin.Info` shape.
@@ -497,6 +512,76 @@ pub fn refresh_after_config_change(boot: &PluginBoot, loaded: &Loaded) {
     // The live resolution cell drives per-location activation
     // (`active_plugins`) and `/api/plugin` — swap only on a clean diff;
     // a partial failure keeps the previous snapshot (conservative).
+    if clean {
+        *boot.resolution.lock() = resolved;
+    }
+}
+
+/// RF-02 — the post-update reload (`plugin/update`'s "notify active
+/// locations to reload" leg, plugin.ts's `Plugin.Event.Updated`
+/// publish): the update wrote NEW install generations under the cache
+/// root, so the current targets are re-resolved (the unchanged specs
+/// now point at the new entry paths) and every entry whose path moved
+/// is swapped in the live guest (`remove_entry` + `add_entry`), the
+/// digest reload runs for the surviving sources, and the resolution
+/// cell swaps on a clean diff. Contained like
+/// [`refresh_after_config_change`]: every failure is logged and the
+/// previous generation keeps its place.
+pub fn reload_after_update(boot: &PluginBoot) {
+    if !boot.ready {
+        return;
+    }
+    let previous = boot.resolution.lock().clone();
+    let ops: Vec<oc_plugin_host::PluginOp> = previous
+        .plugins
+        .iter()
+        .map(|plugin| oc_plugin_host::PluginOp::Add {
+            target: plugin.target.clone(),
+            options: plugin.options.clone(),
+        })
+        .collect();
+    let resolved = oc_plugin_host::resolve(&ops, None);
+    let mut clean = true;
+    for plugin in &resolved.plugins {
+        let Some(old) = previous.plugins.iter().find(|old| old.target == plugin.target) else {
+            continue;
+        };
+        if old.entry == plugin.entry {
+            continue;
+        }
+        match boot.host.remove_entry(&old.entry) {
+            Ok(true) => {} // unloaded; the new generation loads below
+            Ok(false) => {} // never loaded (a failed boot) — nothing to tear down
+            Err(error) => {
+                eprintln!("opencode plugin: updated {} unload failed ({error})", plugin.target);
+            }
+        }
+        match boot.host.add_entry(&plugin.entry) {
+            Ok(()) => {
+                eprintln!("opencode plugin: update swapped {} generation", plugin.target);
+            }
+            Err(error) => {
+                clean = false;
+                eprintln!(
+                    "opencode plugin: updated {} failed to load ({error}); previous generation kept",
+                    plugin.target
+                );
+            }
+        }
+    }
+    for (target, error) in &resolved.failures {
+        clean = false;
+        eprintln!("opencode plugin: post-update resolve {target} failed: {error}");
+    }
+    match boot.host.reload_now() {
+        Ok(count) if count > 0 => {
+            eprintln!("opencode plugin: post-update hot-reloaded {count} source(s)");
+        }
+        Ok(_) => {}
+        Err(error) => {
+            eprintln!("opencode plugin: post-update reload failed ({error}); keeping generations");
+        }
+    }
     if clean {
         *boot.resolution.lock() = resolved;
     }
