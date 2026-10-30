@@ -19,6 +19,15 @@ use crate::schema::{
 use crate::test_support::MockTransport;
 use std::sync::Arc;
 
+fn authed_route() -> Route {
+    route().with(RoutePatch {
+        auth: Some(crate::route::auth::Definition::bearer(crate::route::auth::Secret::Value(
+            "fixture".into(),
+        ))),
+        ..Default::default()
+    })
+}
+
 fn request_with(route: &Route, messages: Vec<Message>) -> LLMRequest {
     let mut request =
         LLMRequest::new(route.model("anthropic.claude-sonnet-4-20250514-v1:0", None).unwrap());
@@ -584,4 +593,195 @@ fn region_defaults_and_headers_on_the_converse_route() {
         ..Default::default()
     });
     assert_eq!(patched.endpoint.base_url.as_deref(), route.endpoint.base_url.as_deref());
+}
+
+// ===========================================================================
+// Thinking block-binding defaults (recorded fixtures,
+// bedrock-converse-thinking-binding/)
+// ===========================================================================
+
+use crate::schema::options::{GenerationOptions, HttpOptions};
+use crate::schema::SystemPart;
+use crate::test_support::Cassette;
+use serde_json::Value;
+use std::path::PathBuf;
+
+fn recording(group: &str, name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("test-fixtures/recordings")
+        .join(group)
+        .join(format!("{name}.json"))
+}
+
+fn recorded_request_body(cassette: &Cassette, index: usize) -> Value {
+    let body = cassette
+        .http_interactions()
+        .nth(index)
+        .unwrap()
+        .request
+        .as_ref()
+        .and_then(|request| request.body.as_ref())
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("interaction {index} has a recorded request body"));
+    serde_json::from_str(body).expect("recorded body parses")
+}
+
+/// Rebuilds the "accepts the default binding" recording (no thinking
+/// configured, no overlay) and asserts the exact wire body parity.
+#[test]
+fn fixture_default_binding_matches_recording() {
+    let cassette = Cassette::load(&recording(
+        "bedrock-converse-thinking-binding",
+        "accepts-the-default-binding-with-no-thinking-configured",
+    ))
+    .unwrap();
+    let expected = recorded_request_body(&cassette, 0);
+
+    let route = authed_route();
+    let mut request =
+        LLMRequest::new(route.model("global.anthropic.claude-opus-5-5", None).unwrap());
+    request.system = vec![SystemPart {
+        text: "Reply with the single word 'Hello'.".into(),
+        cache: None,
+        metadata: None,
+    }];
+    request.messages = vec![Message::user("Say hello.")];
+    request.cache = Some(crate::schema::CachePolicy::None);
+    request.generation = Some(GenerationOptions { max_tokens: Some(1024.0), ..Default::default() });
+    let prepared = route.prepare_request(&request);
+    let body = route.build_body(&prepared).unwrap();
+    let (_, body_text) = route.prepare_transport(&prepared, &body).unwrap();
+    let actual: Value = serde_json::from_str(&body_text).unwrap();
+    assert!(json_equal(&actual, &expected), "wire body matches the recording: {actual}");
+    assert_eq!(
+        actual["additionalModelRequestFields"]["thinking"],
+        json!({
+            "type": "adaptive",
+            "block_binding": {"prefix_mismatch_behavior": "drop_block"}
+        })
+    );
+    assert_eq!(
+        actual["additionalModelRequestFields"]["anthropic_beta"],
+        json!(["thinking-binding-controls-2026-08-01"])
+    );
+}
+
+/// Deep equality over parsed JSON with numbers compared as `f64`.
+#[allow(clippy::float_cmp)]
+fn json_equal(actual: &Value, expected: &Value) -> bool {
+    match (actual, expected) {
+        (Value::Number(a), Value::Number(b)) => {
+            a.as_f64().is_some_and(|a| b.as_f64().is_some_and(|b| a == b))
+        }
+        (Value::Object(a), Value::Object(b)) => {
+            a.len() == b.len()
+                && a.iter()
+                    .all(|(key, value)| b.get(key).is_some_and(|other| json_equal(value, other)))
+        }
+        (Value::Array(a), Value::Array(b)) => {
+            a.len() == b.len() && a.iter().zip(b).all(|(x, y)| json_equal(x, y))
+        }
+        _ => actual == expected,
+    }
+}
+
+/// Rebuilds the "keeps a session working after the system prompt changes"
+/// recording's first and third requests: the `http.body` overlay carries an
+/// explicit adaptive thinking config (+ effort), and the default injects
+/// `block_binding: drop_block` underneath it; the overlay can still override
+/// the binding behavior back to `error`.
+#[test]
+fn fixture_binding_default_merges_with_http_body_overlay() {
+    let cassette = Cassette::load(&recording(
+        "bedrock-converse-thinking-binding",
+        "keeps-a-session-working-after-the-system-prompt-changes",
+    ))
+    .unwrap();
+    let expected_first = recorded_request_body(&cassette, 0);
+    let expected_rejected = recorded_request_body(&cassette, 2);
+
+    let overlay = |binding: Option<&str>| {
+        let mut thinking = serde_json::Map::new();
+        thinking.insert("type".into(), json!("adaptive"));
+        thinking.insert("display".into(), json!("summarized"));
+        if let Some(behavior) = binding {
+            thinking.insert("block_binding".into(), json!({"prefix_mismatch_behavior": behavior}));
+        }
+        let mut fields = serde_json::Map::new();
+        fields.insert("thinking".into(), Value::Object(thinking));
+        fields.insert("output_config".into(), json!({"effort": "high"}));
+        let mut body = serde_json::Map::new();
+        body.insert("additionalModelRequestFields".into(), Value::Object(fields));
+        HttpOptions { body: Some(body), ..Default::default() }
+    };
+
+    let route = authed_route();
+    let mut request =
+        LLMRequest::new(route.model("global.anthropic.claude-opus-5-5", None).unwrap());
+    request.system = vec![SystemPart {
+        text: "You are a concise assistant.".into(),
+        cache: None,
+        metadata: None,
+    }];
+    request.messages = vec![Message::user(
+        "How many positive integers below 5000 have exactly 12 positive divisors? Reply with the number only.",
+    )];
+    request.cache = Some(crate::schema::CachePolicy::None);
+    request.generation =
+        Some(GenerationOptions { max_tokens: Some(12_000.0), ..Default::default() });
+
+    // First turn: no explicit binding — the default `drop_block` applies
+    // under the caller's `display`/`output_config` overlay.
+    request.http = Some(overlay(None));
+    let prepared = route.prepare_request(&request);
+    let body = route.build_body(&prepared).unwrap();
+    let (_, body_text) = route.prepare_transport(&prepared, &body).unwrap();
+    let actual: Value = serde_json::from_str(&body_text).unwrap();
+    assert_eq!(
+        actual["additionalModelRequestFields"], expected_first["additionalModelRequestFields"],
+        "default binding merges with the overlay"
+    );
+
+    // Rejected replay: the caller overrides the binding to `error`.
+    request.http = Some(overlay(Some("error")));
+    let prepared = route.prepare_request(&request);
+    let body = route.build_body(&prepared).unwrap();
+    let (_, body_text) = route.prepare_transport(&prepared, &body).unwrap();
+    let actual: Value = serde_json::from_str(&body_text).unwrap();
+    assert_eq!(
+        actual["additionalModelRequestFields"], expected_rejected["additionalModelRequestFields"],
+        "overlay can override the binding behavior"
+    );
+}
+
+/// `thinking: disabled` in the overlay suppresses the binding default
+/// entirely, and pre-5.1 Claude never gets one.
+#[test]
+fn binding_default_respects_disabled_and_model_support() {
+    let route = authed_route();
+    let mut request =
+        LLMRequest::new(route.model("global.anthropic.claude-opus-5-5", None).unwrap());
+    request.messages = vec![Message::user("hi")];
+    request.http = Some(HttpOptions {
+        body: Some(
+            serde_json::from_value(json!({
+                "additionalModelRequestFields": {
+                    "thinking": {"type": "disabled"}
+                }
+            }))
+            .unwrap(),
+        ),
+        ..Default::default()
+    });
+    let body = body_from(&request).unwrap();
+    assert!(
+        body.get("additionalModelRequestFields").is_none(),
+        "disabled thinking leaves the body untouched: {body}"
+    );
+
+    let mut old =
+        LLMRequest::new(route.model("anthropic.claude-sonnet-4-20250514-v1:0", None).unwrap());
+    old.messages = vec![Message::user("hi")];
+    let body = body_from(&old).unwrap();
+    assert!(body.get("additionalModelRequestFields").is_none(), "claude 4 gets no binding");
 }
