@@ -35,8 +35,8 @@
 //! the caret renders as v2's visible resting glyph, which in a golden
 //! frame is nothing.
 
-use crate::components::composer::autocomplete::AutocompleteOption;
 use crate::components::composer::PromptDraft;
+use crate::components::composer::autocomplete::AutocompleteOption;
 use crate::render::CellColor;
 use crate::theme::ThemeState;
 use crate::wrap::display_width;
@@ -98,10 +98,31 @@ pub struct FooterHints {
     /// TUI-15 — the label paints `hue.accent[500]` while PENDING
     /// (a selection not yet attached), muted once sent.
     pub editor_file_pending: bool,
+    /// G-35 — the running-state knight-rider spinner
+    /// (`prompt.footer.status`'s `<spinner interval={40}>`,
+    /// prompt/index.tsx:1892 + `ui/spinner.ts`): one cell per column
+    /// (glyph + RGBA trail color). EMPTY = idle — every golden stays
+    /// byte-exact while no turn is running.
+    pub spinner: Vec<SpinnerCell>,
     /// #33 — the location label's hover lift
     /// (`useWorkingDirectoryActions.hovered`: `text.base` under the
     /// pointer, `text.muted` at rest, prompt/index.tsx:1927).
     pub location_hovered: bool,
+}
+
+/// One painted cell of the running-state knight-rider spinner
+/// (`knight::composer_spinner_cell`): the frame glyph and its RGBA
+/// color (the painters blend the alpha over the page fill).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpinnerCell {
+    pub ch: char,
+    pub fg: oc_theme::Rgba,
+}
+
+impl Default for SpinnerCell {
+    fn default() -> Self {
+        Self { ch: ' ', fg: oc_theme::Rgba::TRANSPARENT }
+    }
 }
 
 /// The composer's metadata row (`PromptMetadataRow`,
@@ -709,6 +730,9 @@ pub(crate) fn palette(theme: &ThemeState) -> Palette {
 pub(crate) struct FooterPlan {
     /// The truncated location label ("" when nothing fits).
     pub location: String,
+    /// G-35 — the running-state spinner's x (the `<box marginLeft={1}>`
+    /// mount, prompt/index.tsx:1889-1892) — `None` when idle.
+    pub spinner_x: Option<usize>,
     /// The interrupt run's x (`esc ` first) — `None` when absent.
     pub interrupt_x: Option<usize>,
     /// The interrupt label after `esc `.
@@ -802,6 +826,12 @@ pub(crate) fn footer_plan(view: &PromptView, width: usize) -> FooterPlan {
     // prompt/index.tsx:137-144) sits at the row's left — `esc` in
     // text.base with the label muted — while a turn runs; the
     // location label follows it (empty hint ⇒ the golden geometry).
+    // G-35: while a turn runs the knight-rider spinner owns the row's
+    // first cells (`marginLeft={1}` + the frame width + the row's
+    // gap 1 before the interrupt run, prompt/index.tsx:1887-1893).
+    let spinner_width = view.footer.spinner.len();
+    let spinner_prefix =
+        (spinner_width > 0).then_some(1 + spinner_width + 1).filter(|prefix| *prefix > 0);
     let interrupt_width = display_width(&view.footer.interrupt);
     // The location truncates into whatever the right block leaves
     // (`flexShrink 1 minWidth 0` + the row's gap 2) — the RIGHT side
@@ -809,7 +839,8 @@ pub(crate) fn footer_plan(view: &PromptView, width: usize) -> FooterPlan {
     // the hints (#20). Nothing fits ⇒ the label vanishes.
     let location_budget = width
         .saturating_sub(right_block + 2)
-        .saturating_sub(if interrupt_width > 0 { interrupt_width + 2 } else { 0 });
+        .saturating_sub(if interrupt_width > 0 { interrupt_width + 2 } else { 0 })
+        .saturating_sub(spinner_prefix.filter(|_| interrupt_width > 0).unwrap_or(0));
     let location = if location_budget == 0 {
         String::new()
     } else {
@@ -820,8 +851,11 @@ pub(crate) fn footer_plan(view: &PromptView, width: usize) -> FooterPlan {
         let key_len = hint.len().saturating_sub(label.len());
         hint[..key_len].to_owned()
     };
-    let interrupt_x = (interrupt_width > 0)
-        .then(|| display_width(&location) + usize::from(!location.is_empty()) * 2);
+    let interrupt_x = (interrupt_width > 0).then(|| {
+        spinner_prefix.unwrap_or(0)
+            + display_width(&location)
+            + usize::from(!location.is_empty()) * 2
+    });
     let block_x = hints_shown.then(|| width.saturating_sub(block_width));
     let command_x = hints_shown.then(|| {
         if usage_width > 0 {
@@ -832,6 +866,7 @@ pub(crate) fn footer_plan(view: &PromptView, width: usize) -> FooterPlan {
     });
     FooterPlan {
         location,
+        spinner_x: (spinner_width > 0).then_some(1),
         interrupt_x,
         interrupt_label: view.footer.interrupt.strip_prefix("esc ").unwrap_or("").to_owned(),
         block_x,
@@ -1370,5 +1405,59 @@ mod tests {
 
     fn cell_color_of(color: oc_theme::Rgba) -> CellColor {
         CellColor::Rgb(color.r, color.g, color.b)
+    }
+
+    /// G-35 — the running-state knight-rider spinner paints the
+    /// footer row's first cells (`marginLeft 1` + the frame, then a
+    /// 1-gap before the interrupt run, prompt/index.tsx:1887-1893):
+    /// frame 0's lead ■ at x=1, the inactive ⬝ trail cells, and
+    /// `esc interrupt` at x = 1 + 8 + 1 (empty location while a turn
+    /// runs).
+    #[test]
+    fn running_spinner_paints_the_footer_row() {
+        use crate::components::composer::knight::{KnightOptions, composer_spinner_cell};
+        let theme = ThemeState::v2_dark();
+        let options = KnightOptions {
+            color: oc_theme::Rgba::from_ints(0xff, 0, 0, 0xff),
+            inactive_factor: 0.6,
+            min_alpha: 0.3,
+            ..KnightOptions::default()
+        };
+        let cells = composer_spinner_cell(&options, 0);
+        assert_eq!(cells.len(), 8, "width-8 frame");
+        let owned = draft("");
+        let view = PromptView {
+            draft: &owned,
+            placeholder: "Ask".into(),
+            autocomplete: None,
+            footer: FooterHints {
+                location: String::new(),
+                interrupt: "esc interrupt".into(),
+                spinner: cells.iter().map(|&(ch, fg)| SpinnerCell { ch, fg }).collect(),
+                ..FooterHints::default()
+            },
+            metadata: MetadataLine::default(),
+            terminal_width: 80,
+            top: 0,
+            rail: None,
+            caret: None,
+        };
+        let frame =
+            crate::components::composer_solid::render_prompt_frame_dispatch(&view, 80, 8, &theme);
+        // The footer row (row 5 in this mount shape — the composer's
+        // fixed-height footer; located by the lead block at x=1).
+        let footer = (0..frame.height)
+            .find(|&row| frame.cell(row, 1).ch == '■')
+            .expect("the spinner paints a footer row");
+        // Lead cell at x=1 in the agent (rail) color at full alpha.
+        assert_eq!(frame.cell(footer, 1).ch, '■', "the lead block");
+        assert_eq!(frame.cell(footer, 1).fg, CellColor::Rgb(0xff, 0, 0));
+        // Inactive trail cells dim (alpha < 255 blends toward the page
+        // fill — not the pure base color).
+        assert_eq!(frame.cell(footer, 2).ch, '⬝');
+        // The interrupt run follows the spinner + margin + gap.
+        assert_eq!(frame.cell(footer, 10).ch, 'e', "esc at x=1+8+1");
+        assert_eq!(frame.cell(footer, 11).ch, 's');
+        assert_eq!(frame.cell(footer, 12).ch, 'c');
     }
 }

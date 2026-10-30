@@ -505,6 +505,7 @@ pub fn paint_solid_home_view(view: &HomeView, theme: &ThemeState, size: (u16, u1
             command_shortcut: "ctrl+p".into(),
             plugin_hints: view.plugin_hints.clone(),
             interrupt: String::new(),
+            spinner: Vec::new(),
             usage: String::new(),
             location_hovered: view.location_hovered,
             // TUI-12 — the live segment is session-scoped (the home
