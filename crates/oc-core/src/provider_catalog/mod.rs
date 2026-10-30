@@ -16,6 +16,7 @@
 
 pub mod catalog;
 pub mod facade;
+pub mod local;
 pub mod native;
 pub mod overlay;
 pub mod plugin_headers;
@@ -29,6 +30,7 @@ pub use facade::{
     custom_language_model, family_of, language_model, CustomModel, CustomProvider, FacadeContext,
     ModelConnection, ProtocolFamily, ProviderError,
 };
+pub use local::{LocalDiscovery, LocalSpec, LMSTUDIO, LOCAL_SPECS, OLLAMA, VLLM};
 pub use native::{aisdk, native, native_package, package_name, AISDK_PREFIX};
 pub use overlay::{providers_from_config, ConfigProviders};
 pub use refresh::{CatalogKv, CatalogService, CatalogSource, RefreshOutcome, DEFAULT_SOURCE};
