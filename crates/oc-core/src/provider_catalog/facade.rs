@@ -36,9 +36,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use oc_ai::protocols::anthropic_messages::{anthropic_messages_route, anthropic_route};
-use oc_ai::protocols::bedrock::{
-    self as bedrock_lane, BedrockAuthOptions, MantleMessagesConfig,
-};
+use oc_ai::protocols::bedrock::{self as bedrock_lane, BedrockAuthOptions, MantleMessagesConfig};
 use oc_ai::protocols::cohere_chat::{cohere_route_for_package, CohereConfig};
 use oc_ai::protocols::copilot::{copilot_chat_route, CopilotConfig};
 use oc_ai::protocols::gemini::{google_route, GoogleConfig};

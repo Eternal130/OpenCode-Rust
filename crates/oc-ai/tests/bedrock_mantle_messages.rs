@@ -144,7 +144,7 @@ async fn replays_signed_thinking_through_a_tool_loop_and_native_system_update() 
         .expect("tool call in the response");
     assert_eq!(tool_call.0, "get_weather");
     assert_eq!(tool_call.1, json!({"city": "Paris"}));
-    assert!(!first.reasoning().is_empty(), "reasoning recorded");
+    assert_ne!(first.reasoning(), "", "reasoning recorded");
     let signature = first
         .message
         .content
@@ -178,23 +178,20 @@ async fn replays_signed_thinking_through_a_tool_loop_and_native_system_update() 
         })
         .expect("tool call id");
     let mut follow_up = initial.clone();
-    follow_up.messages = vec![
-        initial.messages.clone(),
-        vec![
-            first.message.clone(),
-            Message::tool_result(
-                call_id,
-                "get_weather",
-                ToolResultValue::Json { value: json!({"condition": "sunny", "temperatureC": 18}) },
-            ),
-            Message::system("Reply in French in one short sentence."),
-        ],
-    ]
-    .concat();
+    let additional_messages = vec![
+        first.message.clone(),
+        Message::tool_result(
+            call_id,
+            "get_weather",
+            ToolResultValue::Json { value: json!({"condition": "sunny", "temperatureC": 18}) },
+        ),
+        Message::system("Reply in French in one short sentence."),
+    ];
+    follow_up.messages = [initial.messages.clone(), additional_messages].concat();
     let body = compiled_body(&route, &follow_up);
     // Signed thinking replays under the assistant turn...
     let assistant = &body["messages"][1];
-    assert!(assistant["role"] == "assistant");
+    assert_eq!(assistant["role"], "assistant");
     let thinking = &assistant["content"][0];
     assert_eq!(thinking["type"], "thinking");
     assert_eq!(thinking["signature"], json!(signature));
@@ -243,14 +240,14 @@ async fn lowers_system_updates_to_wrapped_user_text_on_haiku_4_5() {
 
     let response = route.generate(request).await.expect("generates");
     assert_eq!(response.finish_reason.normalized, FinishReason::Stop);
-    assert!(!response.reasoning().is_empty());
+    assert_ne!(response.reasoning(), "");
     assert!(response.text().contains("437"), "{}", response.text());
     assert_eq!(mock.requests().len(), 1);
 }
 
 /// "applies mid-conversation effort updates and thinking block binding on
 /// Opus 5.5": the thinking binding default plus a native effort-update
-/// system message with the previous effort hoisted to output_config.
+/// system message with the previous effort hoisted to `output_config`.
 #[tokio::test]
 async fn applies_mid_conversation_effort_updates_and_thinking_block_binding_on_opus_5_5() {
     let (route, _mock) = fixture_route(
@@ -285,12 +282,12 @@ async fn applies_mid_conversation_effort_updates_and_thinking_block_binding_on_o
 
     let first = route.generate(first_request.clone()).await.expect("first turn");
     assert_eq!(first.finish_reason.normalized, FinishReason::Stop);
-    assert!(!first.reasoning().is_empty());
+    assert_ne!(first.reasoning(), "");
     assert!(first.text().replace(',', "").contains("1591"), "{}", first.text());
 
     let mut second_request =
         LLMRequest::new(route.model("anthropic.claude-opus-5-5", None).expect("model binds"));
-    second_request.messages = vec![
+    second_request.messages = [
         first_request.messages.clone(),
         vec![
             first.message.clone(),
@@ -327,8 +324,8 @@ async fn applies_mid_conversation_effort_updates_and_thinking_block_binding_on_o
 }
 
 /// "strips unsupported mid-conversation effort updates on Opus 5.0":
-/// Mantle rejects mid-conversation output_config below Claude 5.1, so the
-/// marker is dropped and the effort rides the top-level output_config.
+/// Mantle rejects mid-conversation `output_config` below Claude 5.1, so the
+/// marker is dropped and the effort rides the top-level `output_config`.
 #[tokio::test]
 async fn strips_unsupported_mid_conversation_effort_updates_on_opus_5_0() {
     let (route, _mock) =
