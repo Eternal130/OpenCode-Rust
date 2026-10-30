@@ -1357,6 +1357,11 @@ pub struct Store {
     event_tap: std::cell::RefCell<Option<std::sync::Arc<dyn EventTap>>>,
     /// Plugin command execution (bridges the palette to the host).
     plugin_sink: std::cell::RefCell<Rc<dyn PluginCommandSink>>,
+    /// G-21 — commands staged by `tui.command.execute` bus events.
+    /// The reducer cannot reach the palette dispatcher (it lives on
+    /// the App, the ref's `keymap.dispatch`); the pump drains this
+    /// queue right after the ingest drain and dispatches each entry.
+    bus_commands: std::cell::RefCell<Vec<String>>,
     /// The session-list refresh seam (F13 — the /sessions dialog's
     /// open-time refetch).
     session_list_sink: std::cell::RefCell<Rc<dyn SessionListSink>>,
@@ -3409,6 +3414,7 @@ impl Store {
             plugin_group_rules,
             event_tap: std::cell::RefCell::new(None),
             plugin_sink: std::cell::RefCell::new(Rc::new(NoPluginCommands)),
+            bus_commands: std::cell::RefCell::new(Vec::new()),
             session_list_sink: std::cell::RefCell::new(Rc::new(NoSessionListRefresh)),
             config_model: std::cell::RefCell::new(None),
             selection_sink: Rc::new(RecordingSelectionSink::default()),
@@ -9403,6 +9409,13 @@ impl Store {
         self.plugin_sink.borrow().execute(command, args)
     }
 
+    /// G-21 — drain commands staged by `tui.command.execute` bus
+    /// events. The App pump dispatches each through the palette
+    /// (the `keymap.dispatch` equivalent); draining clears the queue.
+    pub fn take_bus_commands(&self) -> Vec<String> {
+        self.bus_commands.borrow_mut().drain(..).collect()
+    }
+
     // -- plugin seams (wave 3: the TUI slot bridge) -----------------------------
 
     /// Attach the open-time plugin dialog content source (the
@@ -10883,6 +10896,26 @@ impl Store {
                     action_command: None,
                     modal: false,
                 });
+            }
+            // G-21 — `tui.command.execute` (ref app.tsx:1253-1256):
+            // `keymap.dispatch(evt.data.command)`. The store cannot
+            // reach the palette dispatcher (it lives on the App), so
+            // the command is staged here and the pump dispatches it
+            // through [`Store::take_bus_commands`] right after the
+            // ingest drain — same contract as the ref's keymap
+            // dispatch (a known command name or any
+            // plugin-registered string).
+            "tui.command.execute" => {
+                let Some(command) = event.string("command") else { return };
+                self.bus_commands.borrow_mut().push(command);
+            }
+            // G-21 — `tui.session.select` (ref app.tsx:1269-1274):
+            // `route.navigate({ type: "session", sessionID })`. The
+            // store's `navigate` is the route mechanism (tab open,
+            // unread clear, plugin-route/stats teardown all ride it).
+            "tui.session.select" => {
+                let Some(id) = event.string("sessionID") else { return };
+                self.navigate(Route::Session { session_id: id });
             }
             "message.updated" | "message.part.updated" => {
                 // A message arriving in a non-active session marks its
@@ -12540,6 +12573,61 @@ mod tests {
         assert!(store.toasts().current().is_some(), "inside the 5 s default duration");
         store.toast_advance(1_064_991);
         assert!(store.toasts().current().is_none(), "expired and the queue drained");
+    }
+
+    #[test]
+    fn bus_command_execute_stages_and_drains() {
+        // G-21 — `tui.command.execute` (ref app.tsx:1253-1256): the
+        // reducer stages the command; the App pump drains it through
+        // the palette (the `keymap.dispatch` equivalent).
+        let store = Store::new(Runtime::new());
+        store.ingest_all([Ingest::Event(BusEvent::new(
+            "tui.command.execute",
+            serde_json::json!({ "command": "session.list" }),
+        ))]);
+        store.ingest_all([Ingest::Event(BusEvent::new(
+            "tui.command.execute",
+            serde_json::json!({ "command": "theme.open" }),
+        ))]);
+        assert_eq!(
+            store.take_bus_commands(),
+            vec!["session.list".to_owned(), "theme.open".to_owned()],
+            "both commands staged in ingest order"
+        );
+        assert!(store.take_bus_commands().is_empty(), "draining clears the queue");
+        // A payload without a command string is a no-op.
+        store.ingest_all([Ingest::Event(BusEvent::new(
+            "tui.command.execute",
+            serde_json::json!({ "command": 42 }),
+        ))]);
+        assert!(store.take_bus_commands().is_empty());
+    }
+
+    #[test]
+    fn bus_session_select_navigates() {
+        // G-21 — `tui.session.select` (ref app.tsx:1269-1274):
+        // `route.navigate({ type: "session", sessionID })` — the
+        // store's `navigate` is the route mechanism.
+        let store = Store::new(Runtime::new());
+        store.ingest_all([Ingest::Event(BusEvent::new(
+            "tui.session.select",
+            serde_json::json!({ "sessionID": "ses_sel_1" }),
+        ))]);
+        assert_eq!(
+            store.route(),
+            Route::Session { session_id: "ses_sel_1".to_owned() },
+            "the event routes to the session"
+        );
+        // A payload without a sessionID keeps the current route.
+        store.ingest_all([Ingest::Event(BusEvent::new(
+            "tui.session.select",
+            serde_json::json!({}),
+        ))]);
+        assert_eq!(
+            store.route(),
+            Route::Session { session_id: "ses_sel_1".to_owned() },
+            "malformed payload is a no-op"
+        );
     }
 
     #[test]
