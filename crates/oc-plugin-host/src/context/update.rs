@@ -180,7 +180,8 @@ pub fn update(
     };
     // update.ts:58 — the cached check is stale the moment the tree changed.
     cache.clear(target);
-    // npm.ts:396 — sweep old generations after every update.    collect_stale(root);
+    // npm.ts:396 — sweep old generations after every update.
+    collect_stale(root);
     Ok(installed)
 }
 
