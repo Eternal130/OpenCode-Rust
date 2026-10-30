@@ -840,7 +840,10 @@ impl SqliteProjectStore {
     }
 
     /// Fetch one `workspace` row by id: `(id, provider, binding JSON, created_at, last_used_at)`.
-    pub async fn workspace_row(&self, id: &str) -> Option<(String, String, Option<String>, i64, i64)> {
+    pub async fn workspace_row(
+        &self,
+        id: &str,
+    ) -> Option<(String, String, Option<String>, i64, i64)> {
         let id = id.to_string();
         self.db
             .transaction(move |tx| {
@@ -1088,7 +1091,10 @@ pub mod worktree_strategy {
                     } else {
                         directory.join(raw)
                     };
-                    Some(ListEntry { directory: path, kind: if index == 0 { "root" } else { "worktree" } })
+                    Some(ListEntry {
+                        directory: path,
+                        kind: if index == 0 { "root" } else { "worktree" },
+                    })
                 })
                 .collect()
         }

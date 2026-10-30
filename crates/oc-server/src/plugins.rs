@@ -410,9 +410,7 @@ pub fn boot(
         // G-24: ctx.websearch.providers/query + ctx.vcs.get/base over
         // the boot location's engine services (slots filled after
         // Engine::boot, the permission-port pattern).
-        websearch_port: Some(
-            Arc::clone(&websearch_slot) as Arc<dyn oc_plugin_host::WebsearchPort>
-        ),
+        websearch_port: Some(Arc::clone(&websearch_slot) as Arc<dyn oc_plugin_host::WebsearchPort>),
         vcs_port: Some(Arc::clone(&vcs_slot) as Arc<dyn oc_plugin_host::VcsPort>),
         storage_port,
         entry_options: resolution.entry_options(),
@@ -569,7 +567,7 @@ pub fn reload_after_update(boot: &PluginBoot) {
             continue;
         }
         match boot.host.remove_entry(&old.entry) {
-            Ok(true) => {} // unloaded; the new generation loads below
+            Ok(true) => {}  // unloaded; the new generation loads below
             Ok(false) => {} // never loaded (a failed boot) — nothing to tear down
             Err(error) => {
                 eprintln!("opencode plugin: updated {} unload failed ({error})", plugin.target);
@@ -1922,7 +1920,8 @@ pub struct EngineWebsearchPort {
 #[async_trait]
 impl oc_plugin_host::WebsearchPort for EngineWebsearchPort {
     async fn providers(&self) -> Result<Value, String> {
-        let services = self.engine.location(self.location.clone()).await.map_err(|e| e.to_string())?;
+        let services =
+            self.engine.location(self.location.clone()).await.map_err(|e| e.to_string())?;
         Ok(serde_json::to_value(
             services
                 .websearch
@@ -1935,7 +1934,8 @@ impl oc_plugin_host::WebsearchPort for EngineWebsearchPort {
     }
 
     async fn query(&self, query: &str, provider_id: Option<&str>) -> Result<Value, String> {
-        let services = self.engine.location(self.location.clone()).await.map_err(|e| e.to_string())?;
+        let services =
+            self.engine.location(self.location.clone()).await.map_err(|e| e.to_string())?;
         let response = services
             .websearch
             .query(query, None, provider_id)
@@ -2001,7 +2001,8 @@ impl EngineVcsPort {
 #[async_trait]
 impl oc_plugin_host::VcsPort for EngineVcsPort {
     async fn get(&self) -> Result<Value, String> {
-        let services = self.engine.location(self.location.clone()).await.map_err(|e| e.to_string())?;
+        let services =
+            self.engine.location(self.location.clone()).await.map_err(|e| e.to_string())?;
         let Some(vcs) = &services.project.vcs else { return Ok(Value::Null) };
         let scope = services.project.canonical.as_path();
         // The hg adapter's literal default branch (handlers/project.rs
@@ -2025,14 +2026,15 @@ impl oc_plugin_host::VcsPort for EngineVcsPort {
     }
 
     async fn base(&self) -> Result<Value, String> {
-        let services = self.engine.location(self.location.clone()).await.map_err(|e| e.to_string())?;
+        let services =
+            self.engine.location(self.location.clone()).await.map_err(|e| e.to_string())?;
         if services.project.vcs.as_ref().is_some_and(|vcs| vcs.kind() == "hg") {
             // The hg adapter exposes no base op (vcs.ts:198-201 → null).
             return Ok(Value::Null);
         }
         let scope = services.project.canonical.as_path();
-        let branch =
-            Self::git_output(scope, &["rev-parse", "--abbrev-ref", "HEAD"]).map(|o| o.trim().to_owned());
+        let branch = Self::git_output(scope, &["rev-parse", "--abbrev-ref", "HEAD"])
+            .map(|o| o.trim().to_owned());
         // vcs.base (plugin/vcs/git.ts:286-317): the reflog's
         // "branch: Created from <base>" first, the default-branch
         // fallback second, `null` when neither resolves.
@@ -2080,9 +2082,11 @@ impl oc_plugin_host::VcsPort for EngineVcsSlot {
 
 impl EngineVcsSlot {
     fn port(&self) -> Result<Arc<EngineVcsPort>, String> {
-        self.0.read().expect("vcs slot poisoned").clone().ok_or_else(|| {
-            "vcs: the engine is not attached to the plugin host yet".to_owned()
-        })
+        self.0
+            .read()
+            .expect("vcs slot poisoned")
+            .clone()
+            .ok_or_else(|| "vcs: the engine is not attached to the plugin host yet".to_owned())
     }
 }
 

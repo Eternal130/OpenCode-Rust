@@ -33,7 +33,9 @@ impl WebsearchPort for MockWebsearchPort {
     }
 
     async fn query(&self, query: &str, provider_id: Option<&str>) -> Result<Value, String> {
-        Ok(json!({ "providerID": provider_id.unwrap_or("mocksearch"), "results": [{ "url": format!("https://mock.invalid/{query}"), "time": {} }] }))
+        Ok(
+            json!({ "providerID": provider_id.unwrap_or("mocksearch"), "results": [{ "url": format!("https://mock.invalid/{query}"), "time": {} }] }),
+        )
     }
 }
 
@@ -71,9 +73,12 @@ fn g24_domains_register_and_round_trip() {
 
     // -- setup-time host-port reads answered (the sandbox files) --------
     let vcs_file = sandbox.join("vcs.json");
-    let vcs = std::fs::read_to_string(&vcs_file)
-        .unwrap_or_else(|_| panic!("ctx.vcs.get resolved (vcs.error: {:?})",
-            std::fs::read_to_string(sandbox.join("vcs.error")).ok().or(Some("(none)".to_owned()))));
+    let vcs = std::fs::read_to_string(&vcs_file).unwrap_or_else(|_| {
+        panic!(
+            "ctx.vcs.get resolved (vcs.error: {:?})",
+            std::fs::read_to_string(sandbox.join("vcs.error")).ok().or(Some("(none)".to_owned()))
+        )
+    });
     assert!(vcs.contains("lane-h"), "vcs.get crossed the port: {vcs}");
     let providers = std::fs::read_to_string(sandbox.join("ws-providers.json"))
         .expect("ctx.websearch.providers resolved");
@@ -94,11 +99,8 @@ fn g24_domains_register_and_round_trip() {
     );
     assert_eq!(snapshot.integration_methods.len(), 1, "integration method registered");
     assert_eq!(snapshot.integration_methods[0].registration["integrationID"], json!("acme"));
-    let hook_keys: Vec<String> = snapshot
-        .hooks
-        .iter()
-        .map(|hook| format!("{}.{}", hook.domain, hook.name))
-        .collect();
+    let hook_keys: Vec<String> =
+        snapshot.hooks.iter().map(|hook| format!("{}.{}", hook.domain, hook.name)).collect();
     for expected in [
         "websearch.execute",
         "worktree.create",
@@ -108,7 +110,10 @@ fn g24_domains_register_and_round_trip() {
         "integration.callback",
         "integration.refresh",
     ] {
-        assert!(hook_keys.iter().any(|key| key == expected), "{expected} registered: {hook_keys:?}");
+        assert!(
+            hook_keys.iter().any(|key| key == expected),
+            "{expected} registered: {hook_keys:?}"
+        );
     }
 
     // -- websearch.execute: the guest provider's results ride back ------
@@ -119,8 +124,11 @@ fn g24_domains_register_and_round_trip() {
         json!({ "provider": "guestsearch", "query": "rust opencode" }),
     ))
     .expect("websearch.execute dispatch");
-    assert_eq!(event["results"][0]["url"], json!("https://example.invalid/guest?q=rust%20opencode"),
-        "guest provider executed: {event}");
+    assert_eq!(
+        event["results"][0]["url"],
+        json!("https://example.invalid/guest?q=rust%20opencode"),
+        "guest provider executed: {event}"
+    );
 
     // -- worktree.create / list: the guest strategy's ops ride back -----
     let event = futures_util_block_on(host.dispatch_hook_async(

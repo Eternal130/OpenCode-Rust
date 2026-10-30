@@ -490,10 +490,10 @@ impl Engine {
         // hourly retention sweeps — spilled tool output and shell capture
         // files — run for the engine lifetime. Handles are retained and
         // aborted in `shutdown` (v2 scopes these fibers to the layer).
-        let tool_output_cleanup =
-            crate::tool_output::spawn_cleanup_task(Arc::clone(&tool_output), Some(
-                options.file_retention.cleanup_interval,
-            ));
+        let tool_output_cleanup = crate::tool_output::spawn_cleanup_task(
+            Arc::clone(&tool_output),
+            Some(options.file_retention.cleanup_interval),
+        );
         let shell_cleanup = crate::shell::spawn_cleanup_task(
             options.data_root.clone(),
             Arc::clone(&options.clock),
@@ -1241,9 +1241,7 @@ impl Engine {
             // closures live in the guest process).
             if let Some(dispatcher) = source.hook_dispatcher() {
                 let is_active = |plugin_id: &str| {
-                    active
-                        .as_ref()
-                        .is_none_or(|ids| ids.iter().any(|id| id == plugin_id))
+                    active.as_ref().is_none_or(|ids| ids.iter().any(|id| id == plugin_id))
                 };
                 let websearch_defs: Vec<_> = source
                     .websearch_providers()

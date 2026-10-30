@@ -28,10 +28,11 @@ impl GuestHookDispatcher for MockGuest {
         name: &str,
         event: Value,
     ) -> Result<Value, String> {
-        self.calls
-            .lock()
-            .unwrap()
-            .push((format!("{domain}.{name}"), plugin_id.to_owned(), event.clone()));
+        self.calls.lock().unwrap().push((
+            format!("{domain}.{name}"),
+            plugin_id.to_owned(),
+            event.clone(),
+        ));
         Ok(match (domain, name) {
             ("websearch", "execute") => json!({
                 "results": [{ "url": "https://example.invalid/guest", "time": {} }]
@@ -70,8 +71,7 @@ fn shim(guest: &Arc<MockGuest>) -> Arc<dyn GuestHookDispatcher> {
 #[tokio::test]
 async fn guest_websearch_provider_registers_and_queries() {
     let db = oc_core::database::Database::open_in_memory().await.expect("database");
-    let search =
-        oc_core::tool::websearch::WebSearch::new(db, Vec::new());
+    let search = oc_core::tool::websearch::WebSearch::new(db, Vec::new());
     let guest = dispatcher();
     let defs = vec![PluginWebsearchProviderDef {
         plugin_id: "gdomains".to_owned(),
@@ -95,9 +95,7 @@ async fn guest_websearch_provider_registers_and_queries() {
 
 #[tokio::test]
 async fn guest_integration_method_registers_into_the_host() {
-    let db = Arc::new(
-        oc_core::database::Database::open_in_memory().await.expect("database"),
-    );
+    let db = Arc::new(oc_core::database::Database::open_in_memory().await.expect("database"));
     let bus = Arc::new(oc_core::bus::Bus::new(
         (*db).clone(),
         oc_core::bus::BusOptions { persist: false, ..oc_core::bus::BusOptions::deterministic() },

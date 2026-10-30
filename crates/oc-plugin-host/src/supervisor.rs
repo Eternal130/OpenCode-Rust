@@ -277,7 +277,9 @@ impl Shared {
         if self.codemode_kill_pending.swap(true, Ordering::Relaxed) {
             return; // a kill is already in flight
         }
-        eprintln!("opencode plugin-host: codemode evaluate deadline expired; killing the wedged guest (restart follows)");
+        eprintln!(
+            "opencode plugin-host: codemode evaluate deadline expired; killing the wedged guest (restart follows)"
+        );
         self.kill_tx.send_modify(|generation| *generation += 1);
     }
 
@@ -678,7 +680,9 @@ impl Shared {
                         }
                     }
                 }
-                other => protocol::error_response(id, &format!("unknown websearch method {other:?}")),
+                other => {
+                    protocol::error_response(id, &format!("unknown websearch method {other:?}"))
+                }
             };
             let _ = outbound.send(reply);
         });
@@ -2046,7 +2050,9 @@ fn spawn_reader(shared: Arc<Shared>, stdout: tokio::process::ChildStdout, genera
             // A deliberate codemode-timeout kill is NOT a plugin crash:
             // consume the exemption instead of attributing strikes.
             if shared.codemode_kill_pending.swap(false, Ordering::Relaxed) {
-                eprintln!("opencode plugin-host: deliberate codemode-timeout kill; crash attribution skipped");
+                eprintln!(
+                    "opencode plugin-host: deliberate codemode-timeout kill; crash attribution skipped"
+                );
             } else {
                 shared.attribute_crash();
             }

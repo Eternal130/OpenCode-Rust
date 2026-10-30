@@ -432,10 +432,8 @@ pub async fn boot_and_serve(options: &BootOptions) -> io::Result<ServeHandle> {
         engine: Arc::clone(&app_state.engine),
         location: LocationRef::new(config_location.clone(), None),
     }));
-    app_state.worktree_strategies = crate::plugins::plugin_worktree_registry(
-        &plugin_boot.host,
-        &plugin_boot.resolution,
-    );
+    app_state.worktree_strategies =
+        crate::plugins::plugin_worktree_registry(&plugin_boot.host, &plugin_boot.resolution);
     app_state.plugins = Some(plugin_boot);
     // G-05: the reload bridge gets the engine handle (config.updated
     // publishing + location invalidation need it), and the watcher's

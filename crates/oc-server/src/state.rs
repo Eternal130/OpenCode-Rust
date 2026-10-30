@@ -134,7 +134,8 @@ impl AppState {
         let workspace = std::sync::Arc::new(oc_core::environment::WorkspaceService::new(
             std::sync::Arc::new(oc_core::project::SqliteProjectStore::new((*engine.db).clone())),
         ));
-        let environment = std::sync::Arc::new(oc_core::environment::Environment::with_workspace(workspace));
+        let environment =
+            std::sync::Arc::new(oc_core::environment::Environment::with_workspace(workspace));
         let pty = PtyService::new(bus.clone());
         let persistent_pty = Frontend::new(bus);
         Self {
