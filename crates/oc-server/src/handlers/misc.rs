@@ -230,10 +230,12 @@ async fn plugin_update(
 
     // The ref notifies active locations to reload the updated plugins
     // and publishes `plugin.updated` (plugin.ts:121/175) — the reload
-    // is contained (best-effort, logged), the event is the typed
-    // public `PluginEvent::Updated` registered on the bus (RF-02).
-    if let Some(boot) = state.plugins.as_ref() {
-        crate::plugins::reload_after_update(boot);
+    // is contained (best-effort, logged; the host facade blocks on its
+    // own runtime, so it runs off the async workers), the event is the
+    // typed public `PluginEvent::Updated` registered on the bus (RF-02).
+    if let Some(boot) = state.plugins.clone() {
+        let _ = tokio::task::spawn_blocking(move || crate::plugins::reload_after_update(&boot))
+            .await;
     }
     if let Some(definition) = oc_core::bus::registry::by_type(oc_core::bus::registry::PLUGIN_UPDATED)
     {
