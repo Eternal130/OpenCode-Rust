@@ -25,8 +25,24 @@ pub const PERMISSIONS: &[&str] = &["edit", "shell", "read", "subagent", "externa
 /// `FORMS` (`demo.ts:61`).
 pub const FORMS: &[&str] = &["question", "external"];
 
-/// `KINDS` (`demo.ts:37-51`) — the `/fmt` set the Rust demo emits.
-pub const KINDS: &[&str] = &["text", "reasoning", "error", "markdown", "table", "mix"];
+/// `KINDS` (`demo.ts:34-48`) — the full 13-kind `/fmt` set (G-36:
+/// motion/shell/write/edit/patch/subagent/question joined the
+/// original six).
+pub const KINDS: &[&str] = &[
+    "motion",
+    "markdown",
+    "table",
+    "text",
+    "reasoning",
+    "shell",
+    "write",
+    "edit",
+    "patch",
+    "subagent",
+    "question",
+    "error",
+    "mix",
+];
 
 /// The intro note (`intro`, `demo.ts:903-921`) — byte-for-byte.
 #[must_use]
@@ -130,6 +146,21 @@ pub fn run_demo_prompt(text: &str, counter: usize) -> DemoOutcome {
                 );
             }
             let body = list[1..].join(" ");
+            // G-36 — `motion` (demo.ts:819-829): the 70-second working
+            // indicator with NO model calls; the port's bounded shape
+            // is the note (the live busy animation is the mini
+            // surface's one-cell spinner, not a transcript row).
+            if kind == "motion" {
+                return script(
+                    Some(Commit::user(text)),
+                    Vec::new(),
+                    None,
+                    None,
+                    Some(Commit::system(
+                        "Working indicator demo: 70 seconds, no model calls. Interrupt to stop early.",
+                    )),
+                );
+            }
             match demo_fmt(&kind, &body, counter) {
                 Some(rows) => script(Some(Commit::user(text)), rows, None, None, None),
                 None => script(
@@ -224,7 +255,83 @@ fn demo_fmt(kind: &str, body: &str, counter: usize) -> Option<Vec<Commit>> {
             },
             Commit::error("demo mixed scenario error"),
         ]),
+        // G-36 — the seven kinds the port was missing, mirroring the
+        // ref emitters (demo.ts:433-599): completed synthetic tools
+        // carrying the ref's inputs/outputs as the row text.
+        "shell" => Some(vec![
+            tool_commit(counter, "shell", "running", Phase::Progress, "Shell · git status"),
+            tool_commit(
+                counter,
+                "shell",
+                "completed",
+                Phase::Final,
+                "git status → On branch demo, nothing to commit, working tree clean (exit 0)",
+            ),
+        ]),
+        "write" => Some(vec![tool_commit(
+            counter,
+            "write",
+            "completed",
+            Phase::Final,
+            "Write · src/demo-format.ts (export const demo = 42)",
+        )]),
+        "edit" => Some(vec![tool_commit(
+            counter,
+            "edit",
+            "completed",
+            Phase::Final,
+            "Edit · src/demo-format.ts (−export const demo = 1 +export const demo = 42)",
+        )]),
+        "patch" => Some(vec![tool_commit(
+            counter,
+            "patch",
+            "completed",
+            Phase::Final,
+            "Patch · 2 files (src/demo-format.ts modified, README-demo.md added)",
+        )]),
+        "subagent" => Some(vec![
+            tool_commit(
+                counter,
+                "subagent",
+                "completed",
+                Phase::Final,
+                "Subagent · explore · Scan run/* for reducer touchpoints",
+            ),
+            commit(
+                CommitKind::Assistant,
+                Phase::Progress,
+                "Footer updates flow through stream.ts into RunFooter",
+            ),
+        ]),
+        "question" => Some(vec![tool_commit(
+            counter,
+            "question",
+            "completed",
+            Phase::Final,
+            "Question · Style: Diff · Extras: Usage, custom-note",
+        )]),
         _ => None,
+    }
+}
+
+/// A synthetic TOOL commit (the ref's `doneTool` rows): completed or
+/// running state with the shared demo ids.
+fn tool_commit(
+    counter: usize,
+    tool: &str,
+    state: &'static str,
+    phase: Phase,
+    text: &str,
+) -> Commit {
+    Commit {
+        kind: CommitKind::Tool,
+        phase,
+        text: text.to_owned(),
+        tool: Some(tool.to_owned()),
+        tool_state: Some(state),
+        message_id: Some(format!("demo_msg_{counter}")),
+        part_id: Some(format!("demo_part_{counter}")),
+        ..Commit::default()
     }
 }
 
@@ -365,7 +472,8 @@ mod tests {
             DemoOutcome::Script { note: Some(note), .. } => {
                 assert_eq!(
                     note.text,
-                    "Unknown kind \"bogus\". Use: text, reasoning, error, markdown, table, mix"
+                    "Unknown kind \"bogus\". Use: motion, markdown, table, text, reasoning, \
+                     shell, write, edit, patch, subagent, question, error, mix"
                 );
             }
             _ => panic!("expected the demo script"),
@@ -386,5 +494,60 @@ mod tests {
         assert!(demo_permission_reply("other", 1).is_none());
         assert_eq!(demo_form_reply("yes", 1).text, "Demo · Form submitted: answer=yes");
         assert_eq!(demo_form_cancel(1).text, "Demo · form cancelled");
+    }
+
+    /// G-36 — all 13 KINDS resolve to a script (rows, or the motion
+    /// note), mirroring the ref's 13-kind `/fmt` table (demo.ts:34-48).
+    #[test]
+    fn every_demo_kind_resolves() {
+        assert_eq!(KINDS.len(), 13);
+        for kind in KINDS {
+            let outcome = run_demo_prompt(&format!("/fmt {kind}"), 5);
+            match outcome {
+                DemoOutcome::Script { rows, note, .. } => {
+                    assert!(
+                        !rows.is_empty() || note.is_some(),
+                        "/fmt {kind} produced neither rows nor a note"
+                    );
+                    if let Some(note) = note {
+                        assert!(
+                            note.text.contains("Working indicator"),
+                            "motion note: {}",
+                            note.text
+                        );
+                    }
+                }
+                DemoOutcome::Passthrough => panic!("/fmt {kind} must not pass through"),
+            }
+        }
+    }
+
+    /// G-36 — the seven new kinds emit their synthetic tool rows
+    /// (the ref emitters' inputs/outputs, demo.ts:433-599).
+    #[test]
+    fn new_kinds_emit_tool_rows() {
+        for (kind, tool) in [
+            ("shell", "shell"),
+            ("write", "write"),
+            ("edit", "edit"),
+            ("patch", "patch"),
+            ("subagent", "subagent"),
+            ("question", "question"),
+        ] {
+            match run_demo_prompt(&format!("/fmt {kind}"), 7) {
+                DemoOutcome::Script { rows, .. } => {
+                    assert!(!rows.is_empty(), "/fmt {kind} needs rows");
+                    assert!(
+                        rows.iter().any(|row| row.tool.as_deref() == Some(tool)),
+                        "/fmt {kind} needs a {tool} row: {rows:?}"
+                    );
+                    assert!(
+                        rows.iter().any(|row| row.tool_state == Some("completed")),
+                        "/fmt {kind} completes its tool: {rows:?}"
+                    );
+                }
+                DemoOutcome::Passthrough => panic!("expected the demo script for {kind}"),
+            }
+        }
     }
 }

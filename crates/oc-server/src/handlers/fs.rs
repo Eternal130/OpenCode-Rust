@@ -9,9 +9,9 @@
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, Uri};
 use axum::response::Response;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use super::common::{parse_query_field, ApiError, SharedState};
+use super::common::{ApiError, SharedState, parse_query_field};
 use super::session::{query_field, services};
 
 pub fn routes() -> axum::Router<SharedState> {
@@ -271,6 +271,10 @@ async fn find(
 
     let root = location.as_path().to_path_buf();
     let exclusions = ScanExclusions::for_root(&root);
+    // G-31: VCS-rooted non-home scans are unbounded (ref search.ts:72
+    // `location.vcs && !home ? MAX_SAFE_INTEGER : 100_000`); the
+    // walk's budget is resolved per scan root.
+    let budget = scan_budget(&root, &exclusions);
     // REF builds an index of every (type-filtered) entry and ranks with
     // fuzzy matching at query time; the port's equivalent is a bounded
     // full walk (same entry budget as REF's ripgrep cap) + scoring.
@@ -281,7 +285,7 @@ async fn find(
     let blocking = tokio::task::spawn_blocking(move || {
         let mut candidates = Vec::new();
         let mut visited = 0usize;
-        walk(&root, want_files, want_dirs, &exclusions, &mut visited, &mut candidates);
+        walk(&root, want_files, want_dirs, &exclusions, budget, &mut visited, &mut candidates);
 
         // REF (filesystem/search.ts): every find path ranks candidates —
         // fuzzysort.go in the ripgrep fallback, score-desc then
@@ -318,10 +322,30 @@ async fn find(
 
 /// REF's ripgrep fallback passes `limit: location.vcs && !home ?
 /// Number.MAX_SAFE_INTEGER : 100_000` (search.ts:72) — VCS-rooted scans
-/// are effectively unbounded; the port caps every scan at 100k entries
-/// as an accepted deviation (a hard ceiling keeps the synchronous walk
-/// inside spawn_blocking bounded).
+/// are effectively UNBOUNDED, so every entry of a repo is a fuzzy
+/// candidate regardless of tree size; non-VCS (and home-rooted) scans
+/// keep the 100k ceiling as a hard bound on the synchronous walk.
+/// G-31 (bounded): the budget is per-scan — VCS roots get
+/// `usize::MAX` (ref semantics), everything else keeps
+/// [`SCAN_ENTRY_BUDGET`]. The ref's full in-memory index with the
+/// 10-second background refresh (search.ts `scan`/`refresh`) is OUT
+/// OF SCOPE for this fix — the port still walks per request.
 const SCAN_ENTRY_BUDGET: usize = 100_000;
+
+/// `location.vcs` for the scan root (search.ts:72's gate): the
+/// location directory is the root of a VCS checkout when it holds a
+/// `.git` entry (a directory, or the file git worktrees/submodules
+/// place at the root).
+fn is_vcs_root(root: &std::path::Path) -> bool {
+    root.join(".git").exists()
+}
+
+/// The per-scan entry budget: unlimited for VCS-rooted non-home
+/// scans (ref's `MAX_SAFE_INTEGER`), the 100k ceiling everywhere
+/// else.
+fn scan_budget(root: &std::path::Path, exclusions: &ScanExclusions) -> usize {
+    if is_vcs_root(root) && !exclusions.home_rooted { usize::MAX } else { SCAN_ENTRY_BUDGET }
+}
 
 /// Sensitive-directory exclusions for a scan (port of
 /// core/filesystem/protected.ts + search.ts wiring): when the scan root
@@ -416,10 +440,11 @@ fn walk(
     want_files: bool,
     want_dirs: bool,
     exclusions: &ScanExclusions,
+    budget: usize,
     visited: &mut usize,
     out: &mut Vec<(std::path::PathBuf, bool)>,
 ) {
-    if *visited >= SCAN_ENTRY_BUDGET {
+    if *visited >= budget {
         return;
     }
     let Ok(read_dir) = std::fs::read_dir(directory) else { return };
@@ -427,7 +452,7 @@ fn walk(
     children.sort_by_key(std::fs::DirEntry::file_name);
     for entry in children {
         *visited += 1;
-        if *visited >= SCAN_ENTRY_BUDGET {
+        if *visited >= budget {
             return;
         }
         let Ok(kind) = entry.file_type() else { continue };
@@ -441,7 +466,7 @@ fn walk(
             if want_dirs {
                 out.push((entry.path(), true));
             }
-            walk(&entry.path(), want_files, want_dirs, exclusions, visited, out);
+            walk(&entry.path(), want_files, want_dirs, exclusions, budget, visited, out);
         } else if want_files {
             out.push((entry.path(), false));
         }
@@ -565,7 +590,7 @@ mod find_tests {
         scan.names = vec!["notes".to_owned()];
         let mut out = Vec::new();
         let mut visited = 0usize;
-        walk(path, true, true, &scan, &mut visited, &mut out);
+        walk(path, true, true, &scan, SCAN_ENTRY_BUDGET, &mut visited, &mut out);
         let names: Vec<String> = out
             .iter()
             .map(|(p, _)| p.file_name().unwrap().to_string_lossy().into_owned())
@@ -595,7 +620,7 @@ mod find_tests {
         let scan = ScanExclusions { home_rooted: false, names: vec![], paths: vec![] };
         let mut out = Vec::new();
         let mut visited = 0usize;
-        walk(path, true, false, &scan, &mut visited, &mut out);
+        walk(path, true, false, &scan, SCAN_ENTRY_BUDGET, &mut visited, &mut out);
         assert!(out.is_empty(), "no files requested → no candidates: {out:?}");
         // root listing (300 dirs) + each dir's (empty) listing: the walk
         // must have visited every directory entry but produced nothing.
@@ -607,8 +632,65 @@ mod find_tests {
         // returns immediately without pushing candidates.
         let mut near: usize = SCAN_ENTRY_BUDGET;
         let mut out2 = Vec::new();
-        walk(path, true, true, &scan, &mut near, &mut out2);
+        walk(path, true, true, &scan, SCAN_ENTRY_BUDGET, &mut near, &mut out2);
         assert!(out2.is_empty(), "budget exhausted → walk is a no-op: {out2:?}");
         assert_eq!(near, SCAN_ENTRY_BUDGET);
+    }
+
+    /// G-31: VCS-rooted scans are unbounded (ref search.ts:72
+    /// `location.vcs && !home ? MAX_SAFE_INTEGER : 100_000`) — a tree
+    /// larger than a small stand-in budget is NOT truncated under the
+    /// VCS-root budget, while the plain budget stops at exactly that
+    /// many visited entries.
+    #[test]
+    fn vcs_root_scan_budget_is_unbounded() {
+        let root = tempfile::tempdir_in("/tmp/opencode").expect("tempdir");
+        let path = root.path();
+        // A repo checkout: .git marker (dir contents stay excluded)
+        // plus 40 files the small budget would cut off.
+        std::fs::create_dir_all(path.join(".git")).expect("git");
+        std::fs::write(path.join(".git").join("config"), "x").expect("write");
+        for index in 0..40 {
+            std::fs::write(path.join(format!("f{index:02}.txt")), "x").expect("write");
+        }
+        let scan = ScanExclusions { home_rooted: false, names: vec![], paths: vec![] };
+        assert_eq!(scan_budget(path, &scan), usize::MAX, "VCS root → unbounded");
+
+        // Bounded walk with a 10-entry stand-in budget stops early.
+        let mut out = Vec::new();
+        let mut visited = 0usize;
+        walk(path, true, false, &scan, 10, &mut visited, &mut out);
+        assert_eq!(visited, 10, "the plain budget truncates at 10 entries");
+        assert!(out.len() < 40, "truncated: {}/40 files", out.len());
+
+        // The SAME tree under the VCS-root budget collects every file.
+        let mut out = Vec::new();
+        let mut visited = 0usize;
+        walk(path, true, false, &scan, scan_budget(path, &scan), &mut visited, &mut out);
+        assert_eq!(out.len(), 40, "VCS-root budget must not truncate: got {}", out.len());
+        // .git stays excluded from candidates even unbounded.
+        assert!(!out.iter().any(|(p, _)| p.to_string_lossy().contains(".git")));
+    }
+
+    /// The budget gate: home-rooted scans keep the 100k ceiling even
+    /// with a `.git` at the root, and non-repo roots are bounded.
+    #[test]
+    fn scan_budget_gates_on_vcs_root_and_home() {
+        let repo = tempfile::tempdir_in("/tmp/opencode").expect("tempdir");
+        std::fs::create_dir_all(repo.path().join(".git")).expect("git");
+        let plain = tempfile::tempdir_in("/tmp/opencode").expect("tempdir");
+        std::fs::write(plain.path().join("a.txt"), "x").expect("write");
+
+        let scan = ScanExclusions { home_rooted: false, names: vec![], paths: vec![] };
+        assert_eq!(scan_budget(repo.path(), &scan), usize::MAX);
+        assert_eq!(scan_budget(plain.path(), &scan), SCAN_ENTRY_BUDGET);
+
+        let home_scan = ScanExclusions { home_rooted: true, names: vec![], paths: vec![] };
+        assert_eq!(
+            scan_budget(repo.path(), &home_scan),
+            SCAN_ENTRY_BUDGET,
+            "!home gates the unbounded arm"
+        );
+        assert!(!is_vcs_root(plain.path()));
     }
 }
