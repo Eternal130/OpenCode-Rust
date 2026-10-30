@@ -67,6 +67,14 @@ pub fn restore(out: &mut dyn std::io::Write, applied_mouse: bool) {
 /// `kill(0, …)` addresses the caller's own process group — never a
 /// foreign pid. `SIGTSTP`/`SIGCONT` dispositions are restored before
 /// returning.
+///
+/// # Orphaned process groups
+/// The kernel DISCARDS a `SIGTSTP` sent to an ORPHANED process group
+/// (a session with no non-member parent — e.g. a test harness that
+/// `setsid`s the TUI onto its own pty). The stop then never lands and
+/// the continue-latch wait would hang forever, so the wait is
+/// bounded: no latch within 2 s means the stop was discarded —
+/// return to the caller (the terminal restore still applies).
 #[cfg(unix)]
 pub fn suspend_cycle() {
     unsafe {
@@ -78,10 +86,13 @@ pub fn suspend_cycle() {
         // Stop OUR OWN process group (pid 0 = self group — the ref's
         // `process.kill(0, "SIGTSTP")`).
         libc::kill(0, libc::SIGTSTP);
-        // Stopped here. Once continued, the latch fires; poll it with
-        // a short sleep until it does (nanosleep is
-        // async-signal-safe and the stop already happened).
+        // Stopped here (unless the kernel discarded the stop — see
+        // the doc above). Once continued, the latch fires.
+        let deadline = std::time::SystemTime::now() + std::time::Duration::from_secs(2);
         while !CONTINUED.load(Ordering::SeqCst) {
+            if std::time::SystemTime::now() >= deadline {
+                break;
+            }
             let request = libc::timespec { tv_sec: 0, tv_nsec: 10_000_000 };
             let mut remaining = libc::timespec { tv_sec: 0, tv_nsec: 0 };
             libc::nanosleep(&request, &mut remaining);

@@ -559,6 +559,9 @@ struct FuzzPty {
     master: std::fs::File,
     output: Arc<Mutex<Vec<u8>>>,
     vt: Vt,
+    /// The exit code once OUR waitpid (the job-control poll) reaped
+    /// the child — std's try_wait then ECHILDs, so the poll caches it.
+    reaped: Option<i32>,
 }
 
 impl FuzzPty {
@@ -681,7 +684,7 @@ impl FuzzPty {
                 }
             });
         }
-        FuzzPty { child, master, output, vt: Vt::new() }
+        FuzzPty { child, master, output, vt: Vt::new(), reaped: None }
     }
 
     fn capture(&self) -> Vec<u8> {
@@ -713,6 +716,7 @@ impl FuzzPty {
         let mut last_cells = self.vt.cells.clone();
         while start.elapsed() < cap {
             std::thread::sleep(Duration::from_millis(60));
+            self.resume_if_stopped();
             self.refresh_screen();
             if self.vt.cells == last_cells {
                 if stable_since.elapsed() >= Duration::from_millis(240) {
@@ -735,10 +739,43 @@ impl FuzzPty {
         self.master.write_all(bytes).expect("write key");
     }
 
+    /// Job control (G-20(2)): `terminal.suspend` (ctrl+z in the fuzz
+    /// key space) stops the child's OWN process group and hands the
+    /// tty back in COOKED mode — a real shell's `fg` answers with
+    /// SIGCONT (and takes the SIGINT gun itself); mirror the continue
+    /// so the run keeps driving a suspended TUI instead of letting a
+    /// cooked-mode ctrl+c SIGINT it. Polled from the settle loop too
+    /// (the stop lands asynchronously after the key byte).
+    fn resume_if_stopped(&mut self) {
+        unsafe {
+            let mut status = 0;
+            let pid = self.child.id() as libc::pid_t;
+            let waited = libc::waitpid(pid, &mut status, libc::WNOHANG | libc::WUNTRACED);
+            if waited == pid {
+                if libc::WIFSTOPPED(status) {
+                    let _ = libc::kill(pid, libc::SIGCONT);
+                } else if self.reaped.is_none() {
+                    // Reaped an EXIT (WUNTRACED waitpid collects it) —
+                    // cache the code for exit_code().
+                    self.reaped =
+                        Some(if libc::WIFEXITED(status) { libc::WEXITSTATUS(status) } else { -1 });
+                }
+            }
+        }
+    }
+
     /// Poll the child: `None` while running, `Some(code)` on exit
     /// (signals map to negative codes).
     fn exit_code(&mut self) -> Option<i32> {
-        self.child.try_wait().expect("try_wait").map(|status| status.code().unwrap_or(-1))
+        if let Some(code) = self.reaped {
+            return Some(code);
+        }
+        match self.child.try_wait() {
+            Ok(status) => status.map(|status| status.code().unwrap_or(-1)),
+            // ECHILD after our own WUNTRACED poll reaped it.
+            Err(error) if error.raw_os_error() == Some(10) => self.reaped,
+            Err(error) => panic!("try_wait: {error}"),
+        }
     }
 
     fn kill(mut self) {
@@ -1199,16 +1236,19 @@ fn probe_recoverable(pty: &mut FuzzPty) -> Result<(), String> {
 fn exit_protocol(pty: &mut FuzzPty) -> Result<(), String> {
     pty.type_key(b"\x1b");
     std::thread::sleep(Duration::from_millis(300));
+    pty.resume_if_stopped();
     if pty.exit_code() == Some(0) {
         return Ok(());
     }
     pty.type_key(b"\x03");
     std::thread::sleep(Duration::from_millis(500));
+    pty.resume_if_stopped();
     if pty.exit_code() == Some(0) {
         return Ok(());
     }
     pty.type_key(b"\x03");
     std::thread::sleep(Duration::from_millis(600));
+    pty.resume_if_stopped();
     if pty.exit_code() == Some(0) {
         return Ok(());
     }

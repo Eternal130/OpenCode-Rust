@@ -6917,6 +6917,10 @@ pub async fn run_with_size(
     // TUI-15 — the Zed selection poll (None when the gate is off or
     // no db resolves — the common non-Zed case stays untouched).
     let mut zed_rx = spawn_zed_poll();
+    // G-20(1) — the IDE editor socket (context/editor.ts's WebSocket
+    // arm): `None` when neither the env override nor a
+    // `~/.claude/ide/*.lock` endpoint resolves (the common case).
+    let mut ide_rx = crate::editor_ide::spawn_ide_socket();
 
     // The Worktrees dialog's worker (R-05): boot resolves the project
     // + list; dialog actions flow through the sink.
@@ -7552,6 +7556,16 @@ pub async fn run_with_size(
         if let Some(zed_rx) = zed_rx.as_mut() {
             while let Ok(result) = zed_rx.try_recv() {
                 app.store.apply_zed_selection(result);
+            }
+        }
+        // G-20(1) — fold the IDE socket's `selection_changed`
+        // notifications into the SAME seam (context/editor.ts:221-226:
+        // `setSelection({...selection, source: "websocket"})`).
+        if let Some(ide_rx) = ide_rx.as_mut() {
+            while let Ok(selection) = ide_rx.try_recv() {
+                app.store.apply_zed_selection(crate::editor_zed::ZedSelectionResult::Selection(
+                    selection,
+                ));
             }
         }
         // Drain the server-list fetches into the picker state.
