@@ -16,7 +16,9 @@
 pub mod converse;
 pub mod credentials;
 pub mod event_stream;
+pub mod mantle_messages;
 pub mod sigv4;
 
 pub use converse::{bedrock_converse_route, bedrock_invoke_route, BedrockConverseProtocol};
+pub use mantle_messages::{bedrock_mantle_messages_route, MantleMessagesConfig};
 pub use sigv4::{resolve_auth, resolve_region, BedrockAuthMode, BedrockAuthOptions, Credentials};
