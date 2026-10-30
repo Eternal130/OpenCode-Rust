@@ -124,6 +124,24 @@ pub trait LocationPluginSource: Send + Sync {
         Vec::new()
     }
 
+    /// G-24 — plugin-registered websearch providers
+    /// (`ctx.websearch.transform`'s `editor.add`, ref host.ts:489-504).
+    fn websearch_providers(&self) -> Vec<PluginWebsearchProviderDef> {
+        Vec::new()
+    }
+
+    /// G-24 — plugin-registered worktree strategies
+    /// (`ctx.worktree.transform`'s `editor.add`, ref host.ts:505-522).
+    fn worktree_strategies(&self) -> Vec<PluginWorktreeStrategyDef> {
+        Vec::new()
+    }
+
+    /// G-24 — plugin-registered integration methods (ref host.ts:631
+    /// `methodImplementation` — `ctx.integration.method.update`).
+    fn integration_methods(&self) -> Vec<PluginIntegrationMethodDef> {
+        Vec::new()
+    }
+
     /// Plugin-registered commands (`command.add` registrations: name +
     /// description; execution dispatches back into the guest through
     /// the host's `command.execute` — CD-34's unsurfaced surface).
@@ -277,6 +295,413 @@ pub struct PluginHookDef {
     pub domain: String,
     /// e.g. `prompt`, `execute.before`, `create.before`.
     pub name: String,
+}
+
+/// One plugin-registered websearch provider as the engine sees it
+/// (G-24 — ref host.ts:489-504 `websearch.transform`'s
+/// `editor.add({id, name, execute})`): the execute closure stays in
+/// the GUEST; queries dispatch back through [`GuestHookDispatcher`]
+/// (domain `websearch`, name `execute`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginWebsearchProviderDef {
+    pub plugin_id: String,
+    pub id: String,
+    pub name: String,
+}
+
+/// One plugin-registered worktree strategy as the engine sees it
+/// (G-24/G-4 — ref host.ts:505-522 `worktree.transform`'s
+/// `editor.add({id, create, remove, list})`): the closures stay in
+/// the GUEST; ops dispatch back through [`GuestHookDispatcher`]
+/// (domain `worktree`, names `create`/`remove`/`list`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginWorktreeStrategyDef {
+    pub plugin_id: String,
+    pub id: String,
+}
+
+/// One plugin-registered integration method (G-24 — ref host.ts:631
+/// `methodImplementation`): the v2 `IntegrationMethodRegistration`
+/// JSON (`{integrationID, method, authorize?, refresh?, label?}`);
+/// the OAuth closures dispatch back into the guest through
+/// [`GuestHookDispatcher`] (domain `integration`, names
+/// `authorize`/`callback`/`refresh`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PluginIntegrationMethodDef {
+    pub plugin_id: String,
+    /// v2 `IntegrationMethodRegistration` JSON.
+    pub registration: Value,
+}
+
+/// One plugin-registered websearch provider bridged onto
+/// [`crate::tool::websearch_providers::SearchProvider`]: `execute`
+/// crosses the process boundary as a `websearch.execute` guest-hook
+/// dispatch (`{provider, query}` → `{results: [...]}`, 120 s class —
+/// a guest search rides a network round trip).
+pub struct GuestWebSearchProvider {
+    dispatcher: Arc<dyn GuestHookDispatcher>,
+    plugin_id: String,
+    id: String,
+    name: String,
+}
+
+impl GuestWebSearchProvider {
+    #[must_use]
+    pub fn new(
+        dispatcher: Arc<dyn GuestHookDispatcher>,
+        definition: &PluginWebsearchProviderDef,
+    ) -> Self {
+        Self {
+            dispatcher,
+            plugin_id: definition.plugin_id.clone(),
+            id: definition.id.clone(),
+            name: definition.name.clone(),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::tool::websearch_providers::SearchProvider for GuestWebSearchProvider {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    async fn execute(
+        &self,
+        query: &str,
+    ) -> Result<Vec<oc_schema::misc::WebSearchResult>, crate::tool::websearch_providers::ProviderError>
+    {
+        let event = serde_json::json!({ "provider": self.id, "query": query });
+        let reply = self
+            .dispatcher
+            .dispatch(&self.plugin_id, "websearch", "execute", event)
+            .await
+            .map_err(|message| crate::tool::websearch_providers::ProviderError {
+                status: None,
+                message,
+            })?;
+        let results = reply.get("results").cloned().unwrap_or(serde_json::Value::Null);
+        serde_json::from_value::<Vec<oc_schema::misc::WebSearchResult>>(results).map_err(
+            |error| crate::tool::websearch_providers::ProviderError {
+                status: None,
+                message: format!("guest websearch provider {}: {error}", self.id),
+            },
+        )
+    }
+}
+
+/// Apply plugin-registered websearch providers (G-24) into the
+/// location's [`crate::tool::websearch::WebSearch`] registry
+/// (insert-or-replace by id). Inactive plugins' providers stay out
+/// (PLUG-D07). Returns the applied count.
+pub fn apply_plugin_websearch_providers(
+    websearch: &crate::tool::websearch::WebSearch,
+    dispatcher: &Arc<dyn GuestHookDispatcher>,
+    defs: &[PluginWebsearchProviderDef],
+) -> usize {
+    for definition in defs {
+        websearch.add_provider(Arc::new(GuestWebSearchProvider::new(
+            Arc::clone(dispatcher),
+            definition,
+        )));
+    }
+    defs.len()
+}
+
+/// Apply plugin-registered integration methods (G-24) into the
+/// engine's [`crate::integration::IntegrationHost`] through
+/// `update_method` (the `editor.method.update` seam,
+/// integration.ts:312-340). The OAuth `authorize`/`refresh` closures
+/// dispatch back into the guest; `env`/`command`/`key` methods
+/// register without an implementation (the ref's methodImplementation
+/// env/command arms). Malformed registrations are skipped (contained,
+/// like the agents arm). Returns the applied count.
+pub fn apply_plugin_integration_methods(
+    integration: &crate::integration::IntegrationHost,
+    dispatcher: &Arc<dyn GuestHookDispatcher>,
+    defs: &[PluginIntegrationMethodDef],
+) -> usize {
+    use crate::integration::types::{FormAnswer, Method};
+    use crate::integration::{AuthMode, Authorization, CodeCallback, OAuthImplementation};
+    use serde_json::Value;
+
+    let mut applied = 0usize;
+    for definition in defs {
+        let Value::Object(registration) = &definition.registration else { continue };
+        let Some(integration_id) =
+            registration.get("integrationID").and_then(Value::as_str)
+        else {
+            continue;
+        };
+        let Some(method_value) = registration.get("method") else { continue };
+        let Ok(method) = serde_json::from_value::<Method>(method_value.clone()) else {
+            eprintln!(
+                "opencode plugin-apply: skipping malformed integration method {:?}",
+                integration_id
+            );
+            continue;
+        };
+        let plugin_id = definition.plugin_id.clone();
+        let dispatcher = Arc::clone(dispatcher);
+        let dispatcher_refresh = Arc::clone(&dispatcher);
+        let authorize = registration.get("authorize").and_then(Value::as_object).map(|shape| {
+            let plugin_id = plugin_id.clone();
+            let integration_id = integration_id.to_owned();
+            let mode = shape.get("mode").and_then(Value::as_str).unwrap_or("code").to_owned();
+            let url = shape
+                .get("url")
+                .and_then(Value::as_str)
+                .unwrap_or("about:blank")
+                .to_owned();
+            let instructions = shape
+                .get("instructions")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            let auto = shape.get("auto").and_then(Value::as_object).cloned();
+            let label = shape.get("label").and_then(Value::as_str).map(str::to_owned);
+            move |_answer: FormAnswer| -> futures::future::BoxFuture<'static, Result<Authorization, String>> {
+                let plugin_id = plugin_id.clone();
+                let integration_id = integration_id.clone();
+                let mode = mode.clone();
+                let url = url.clone();
+                let instructions = instructions.clone();
+                let auto = auto.clone();
+                let dispatcher = Arc::clone(&dispatcher);
+                let label = label.clone();
+                Box::pin(async move {
+                    if mode == "auto" {
+                        if let Some(auto) = auto {
+                            let reply = dispatcher
+                                .dispatch(
+                                    &plugin_id,
+                                    "integration",
+                                    "authorize",
+                                    serde_json::json!({
+                                        "integrationID": integration_id,
+                                        "mode": "auto",
+                                        "auto": auto,
+                                    }),
+                                )
+                                .await
+                                .map_err(|message| message)?;
+                            let credential = reply.get("credential").cloned().unwrap_or(Value::Null);
+                            let value: crate::integration::types::CredentialValue =
+                                serde_json::from_value(credential)
+                                    .map_err(|error| error.to_string())?;
+                            return Ok(Authorization {
+                                url,
+                                instructions,
+                                expires_at: None,
+                                mode: AuthMode::Auto(Box::pin(async move { Ok(value) })),
+                            });
+                        }
+                    }
+                    // Code mode: the callback crosses as a later
+                    // `integration.callback` dispatch ({code} → credential).
+                    let plugin_id_cb = plugin_id.clone();
+                    let integration_id_cb = integration_id.clone();
+                    let label_cb = label.clone();
+                    let callback: CodeCallback = Arc::new(move |code: String| {
+                        let plugin_id = plugin_id_cb.clone();
+                        let integration_id = integration_id_cb.clone();
+                        let label = label_cb.clone();
+                        let dispatcher = Arc::clone(&dispatcher);
+                        Box::pin(async move {
+                            let reply = dispatcher
+                                .dispatch(
+                                    &plugin_id,
+                                    "integration",
+                                    "callback",
+                                    serde_json::json!({
+                                        "integrationID": integration_id,
+                                        "label": label,
+                                        "code": code,
+                                    }),
+                                )
+                                .await
+                                .map_err(|message| message)?;
+                            let value: crate::integration::types::CredentialValue =
+                                serde_json::from_value(
+                                    reply.get("credential").cloned().unwrap_or(Value::Null),
+                                )
+                                .map_err(|error| error.to_string())?;
+                            Ok(value)
+                        })
+                    });
+                    Ok(Authorization {
+                        url,
+                        instructions,
+                        expires_at: None,
+                        mode: AuthMode::Code(callback),
+                    })
+                })
+            }
+        });
+        let refresh = registration.get("refresh").and_then(Value::as_object).map(|_| {
+            let plugin_id = definition.plugin_id.clone();
+            let integration_id = integration_id.to_owned();
+            Arc::new(move |value: crate::integration::types::OAuthValue| -> futures::future::BoxFuture<'static, Result<crate::integration::types::CredentialValue, String>> {
+                let plugin_id = plugin_id.clone();
+                let integration_id = integration_id.clone();
+                let dispatcher = Arc::clone(&dispatcher_refresh);
+                Box::pin(async move {
+                    let credential = serde_json::to_value(&value).unwrap_or(Value::Null);
+                    let reply = dispatcher
+                        .dispatch(
+                            &plugin_id,
+                            "integration",
+                            "refresh",
+                            serde_json::json!({
+                                "integrationID": integration_id,
+                                "credential": credential,
+                            }),
+                        )
+                        .await
+                        .map_err(|message| message)?;
+                    serde_json::from_value::<crate::integration::types::CredentialValue>(
+                        reply.get("credential").cloned().unwrap_or(Value::Null),
+                    )
+                    .map_err(|error| error.to_string())
+                })
+            })
+                as crate::integration::RefreshFn
+        });
+        let label = registration.get("label").and_then(Value::as_str).map(|label| {
+            let label = label.to_owned();
+            Arc::new(move |_value: &crate::integration::types::CredentialValue| {
+                Some(label.clone())
+            }) as crate::integration::LabelFn
+        });
+        let implementation = authorize.map(|authorize| OAuthImplementation {
+            authorize: Arc::new(authorize),
+            refresh,
+            label,
+        });
+        integration.update_method(integration_id, method, implementation);
+        applied += 1;
+    }
+    applied
+}
+
+/// One plugin-registered worktree strategy bridged onto
+/// [`crate::project::worktree_strategy::Strategy`]: every op crosses
+/// the process boundary as a `worktree.<op>` guest-hook dispatch
+/// carrying `{strategy, input}` and returning the JSON result.
+pub struct GuestWorktreeStrategy {
+    dispatcher: Arc<dyn GuestHookDispatcher>,
+    plugin_id: String,
+    id: String,
+}
+
+impl GuestWorktreeStrategy {
+    #[must_use]
+    pub fn new(dispatcher: Arc<dyn GuestHookDispatcher>, definition: &PluginWorktreeStrategyDef) -> Self {
+        Self { dispatcher, plugin_id: definition.plugin_id.clone(), id: definition.id.clone() }
+    }
+
+    fn error(message: String) -> crate::project::worktree_strategy::StrategyError {
+        crate::project::worktree_strategy::StrategyError::Failed { message, force_required: false }
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::project::worktree_strategy::Strategy for GuestWorktreeStrategy {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    async fn create(
+        &self,
+        input: &crate::project::worktree_strategy::CreateInput,
+    ) -> Result<std::path::PathBuf, crate::project::worktree_strategy::StrategyError> {
+        let event = serde_json::json!({
+            "strategy": self.id,
+            "input": {
+                "sourceDirectory": input.source_directory.display().to_string(),
+                "directory": input.directory.display().to_string(),
+                "branch": input.branch,
+            },
+        });
+        let reply = self
+            .dispatcher
+            .dispatch(&self.plugin_id, "worktree", "create", event)
+            .await
+            .map_err(Self::error)?;
+        let directory = reply.get("directory").and_then(Value::as_str).ok_or_else(|| {
+            Self::error(format!("guest worktree strategy {}: missing directory", self.id))
+        })?;
+        Ok(std::path::PathBuf::from(directory))
+    }
+
+    async fn remove(
+        &self,
+        input: &crate::project::worktree_strategy::RemoveInput,
+    ) -> Result<(), crate::project::worktree_strategy::StrategyError> {
+        let event = serde_json::json!({
+            "strategy": self.id,
+            "input": {
+                "directory": input.directory.display().to_string(),
+                "force": input.force,
+            },
+        });
+        self.dispatcher
+            .dispatch(&self.plugin_id, "worktree", "remove", event)
+            .await
+            .map_err(Self::error)
+            .map(|_| ())
+    }
+
+    async fn list(
+        &self,
+        directory: &std::path::Path,
+    ) -> Vec<crate::project::worktree_strategy::ListEntry> {
+        let event = serde_json::json!({
+            "strategy": self.id,
+            "input": { "directory": directory.display().to_string() },
+        });
+        let Ok(reply) = self.dispatcher.dispatch(&self.plugin_id, "worktree", "list", event).await
+        else {
+            return Vec::new();
+        };
+        reply
+            .get("entries")
+            .and_then(Value::as_array)
+            .map(|entries| {
+                entries
+                    .iter()
+                    .filter_map(|entry| {
+                        let directory = entry.get("directory")?.as_str()?;
+                        let kind = entry.get("kind")?.as_str()?;
+                        Some(crate::project::worktree_strategy::ListEntry {
+                            directory: std::path::PathBuf::from(directory),
+                            kind: if kind == "root" { "root" } else { "worktree" },
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
+
+/// Apply plugin-registered worktree strategies (G-24/G-4) into a
+/// [`crate::project::worktree_strategy::StrategyRegistry`]
+/// (insert-or-replace by id; the LAST registered becomes the selected
+/// default, matching v2's `editor.add` select semantics). Returns the
+/// applied count.
+pub fn apply_plugin_worktree_strategies(
+    registry: &mut crate::project::worktree_strategy::StrategyRegistry,
+    dispatcher: &Arc<dyn GuestHookDispatcher>,
+    defs: &[PluginWorktreeStrategyDef],
+) -> usize {
+    for definition in defs {
+        registry.add_strategy(Box::new(GuestWorktreeStrategy::new(Arc::clone(dispatcher), definition)));
+    }
+    defs.len()
 }
 
 impl PluginHookDef {

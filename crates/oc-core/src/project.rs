@@ -951,13 +951,17 @@ pub mod worktree_strategy {
         Failed { message: String, force_required: bool },
     }
 
-    /// The ref `Strategy` interface.
+    /// The ref `Strategy` interface. G-24: the ops are `async` so
+    /// plugin-registered strategies (`GuestWorktreeStrategy`) can
+    /// cross the guest boundary; `id` is `&str` (not `&'static`) for
+    /// the same reason.
+    #[async_trait::async_trait]
     pub trait Strategy: Send + Sync {
-        fn id(&self) -> &'static str;
+        fn id(&self) -> &str;
         /// Returns the created worktree's directory (uncanonicalized).
-        fn create(&self, input: &CreateInput) -> Result<PathBuf, StrategyError>;
-        fn remove(&self, input: &RemoveInput) -> Result<(), StrategyError>;
-        fn list(&self, directory: &Path) -> Vec<ListEntry>;
+        async fn create(&self, input: &CreateInput) -> Result<PathBuf, StrategyError>;
+        async fn remove(&self, input: &RemoveInput) -> Result<(), StrategyError>;
+        async fn list(&self, directory: &Path) -> Vec<ListEntry>;
     }
 
     fn git_output(directory: &Path, args: &[&str]) -> Option<String> {
@@ -977,12 +981,14 @@ pub mod worktree_strategy {
     #[derive(Debug, Clone, Copy, Default)]
     pub struct GitStrategy;
 
+    #[async_trait::async_trait]
+    #[async_trait::async_trait]
     impl Strategy for GitStrategy {
-        fn id(&self) -> &'static str {
+        fn id(&self) -> &str {
             GIT
         }
 
-        fn create(&self, input: &CreateInput) -> Result<PathBuf, StrategyError> {
+        async fn create(&self, input: &CreateInput) -> Result<PathBuf, StrategyError> {
             // `repo.discover(sourceDirectory)` — DirectoryUnavailableError
             // when the source is not inside a repository.
             let inside = std::process::Command::new("git")
@@ -1018,7 +1024,7 @@ pub mod worktree_strategy {
             Ok(input.directory.clone())
         }
 
-        fn remove(&self, input: &RemoveInput) -> Result<(), StrategyError> {
+        async fn remove(&self, input: &RemoveInput) -> Result<(), StrategyError> {
             let inside = std::process::Command::new("git")
                 .args(["rev-parse", "--is-inside-work-tree"])
                 .current_dir(&input.directory)
@@ -1068,7 +1074,7 @@ pub mod worktree_strategy {
             Ok(())
         }
 
-        fn list(&self, directory: &Path) -> Vec<ListEntry> {
+        async fn list(&self, directory: &Path) -> Vec<ListEntry> {
             let Some(output) = git_output(directory, &["worktree", "list", "--porcelain"]) else {
                 return Vec::new();
             };
@@ -1110,8 +1116,17 @@ pub mod worktree_strategy {
 
         /// The selected strategy id (the last registered).
         #[must_use]
-        pub fn selected(&self) -> &'static str {
+        pub fn selected(&self) -> &str {
             self.strategies.last().map_or(GIT, |strategy| strategy.id())
+        }
+
+        /// G-24/G-4 — plugin strategy registration (v2
+        /// `editor.add`, strategies.ts:48-65: delete+set+select —
+        /// append replaces a same-id strategy and makes it the
+        /// selected/default one).
+        pub fn add_strategy(&mut self, strategy: Box<dyn Strategy>) {
+            self.strategies.retain(|existing| existing.id() != strategy.id());
+            self.strategies.push(strategy);
         }
 
         /// Discovery order (worktree.ts:285): registration order reversed.

@@ -412,7 +412,7 @@ async fn worktree_create(
     // default backend; worktree/git.ts → git.ts:657): discover the
     // repository from the source, then
     // `git worktree add --detach -- <directory> <ref | HEAD>`.
-    let registry = oc_core::project::worktree_strategy::StrategyRegistry::new();
+    let registry = std::sync::Arc::clone(&state.worktree_strategies);
     let strategy = registry
         .get(registry.selected())
         .expect("the default strategy is registered");
@@ -422,6 +422,7 @@ async fn worktree_create(
             directory: worktree_directory.clone(),
             branch: branch.map(str::to_owned),
         })
+        .await
         .map_err(strategy_error)?;
     let directory = canonical_directory(&created)?;
     let directory_str = directory.to_string_lossy().into_owned();
@@ -610,14 +611,14 @@ async fn worktree_refresh(
     // that vanished mid-scan. The first entry per root is the main
     // checkout (type "root", unowned); the rest are linked worktrees
     // (type "worktree" → the backend's strategy id).
-    let registry = oc_core::project::worktree_strategy::StrategyRegistry::new();
+    let registry = std::sync::Arc::clone(&state.worktree_strategies);
     let mut discovered: Vec<(std::path::PathBuf, Option<String>)> = Vec::new();
     for root in roots {
         if !root.is_dir() {
             continue;
         }
         for strategy in registry.discovery_order() {
-            for entry in strategy.list(&root) {
+            for entry in strategy.list(&root).await {
                 let Ok(real) = std::fs::canonicalize(&entry.directory) else {
                     continue;
                 };
@@ -744,7 +745,7 @@ async fn worktree_remove(
             None,
         ));
     };
-    let registry = oc_core::project::worktree_strategy::StrategyRegistry::new();
+    let registry = std::sync::Arc::clone(&state.worktree_strategies);
     let Some(strategy) = registry.get(&stored_id) else {
         return Err(ApiError::worktree(
             format!("Worktree strategy unavailable: {stored_id}"),
@@ -759,6 +760,7 @@ async fn worktree_remove(
             directory: worktree_directory.clone(),
             force,
         })
+        .await
         .map_err(|error| {
             crate::errors::debug_cause("worktree:remove", &format!("{error:?}"));
             strategy_error(error)

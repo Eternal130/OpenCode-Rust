@@ -33,8 +33,10 @@ const MCP_TIMEOUT_SECONDS: u64 = 25;
 /// One provider implementation (`ProviderImplementation`).
 #[async_trait::async_trait]
 pub trait SearchProvider: Send + Sync {
-    fn id(&self) -> &'static str;
-    fn name(&self) -> &'static str;
+    /// `&str` (not `&'static`) so plugin-registered providers (G-24's
+    /// guest-backed `GuestWebSearchProvider`) can carry owned ids.
+    fn id(&self) -> &str;
+    fn name(&self) -> &str;
     async fn execute(&self, query: &str) -> Result<Vec<WebSearchResult>, ProviderError>;
 }
 
@@ -142,10 +144,10 @@ impl ExaProvider {
 
 #[async_trait::async_trait]
 impl SearchProvider for ExaProvider {
-    fn id(&self) -> &'static str {
+    fn id(&self) -> &str {
         "exa"
     }
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "Exa"
     }
     async fn execute(&self, query: &str) -> Result<Vec<WebSearchResult>, ProviderError> {
@@ -264,10 +266,10 @@ impl TavilyProvider {
 
 #[async_trait::async_trait]
 impl SearchProvider for TavilyProvider {
-    fn id(&self) -> &'static str {
+    fn id(&self) -> &str {
         "tavily"
     }
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "Tavily"
     }
     async fn execute(&self, query: &str) -> Result<Vec<WebSearchResult>, ProviderError> {
@@ -342,10 +344,10 @@ impl FirecrawlProvider {
 
 #[async_trait::async_trait]
 impl SearchProvider for FirecrawlProvider {
-    fn id(&self) -> &'static str {
+    fn id(&self) -> &str {
         "firecrawl"
     }
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "Firecrawl"
     }
     async fn execute(&self, query: &str) -> Result<Vec<WebSearchResult>, ProviderError> {
@@ -406,10 +408,10 @@ impl ParallelProvider {
 
 #[async_trait::async_trait]
 impl SearchProvider for ParallelProvider {
-    fn id(&self) -> &'static str {
+    fn id(&self) -> &str {
         "parallel"
     }
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "Parallel"
     }
     async fn execute(&self, query: &str) -> Result<Vec<WebSearchResult>, ProviderError> {
@@ -476,10 +478,10 @@ impl TinyFishProvider {
 
 #[async_trait::async_trait]
 impl SearchProvider for TinyFishProvider {
-    fn id(&self) -> &'static str {
+    fn id(&self) -> &str {
         "tinyfish"
     }
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "TinyFish"
     }
     async fn execute(&self, query: &str) -> Result<Vec<WebSearchResult>, ProviderError> {
