@@ -11,6 +11,7 @@
 //! lives in [`websocket`] — feature `ws-transport` adds the production
 //! tokio-tungstenite connector.
 
+pub mod proxy;
 pub mod websocket;
 
 use std::collections::BTreeMap;
