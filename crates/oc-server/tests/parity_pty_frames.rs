@@ -151,11 +151,22 @@ pub async fn ws_connect(
     target: &str,
     origin: Option<&str>,
 ) -> std::io::Result<(u16, Option<WsClient>)> {
+    ws_connect_with_host(addr, target, origin, &addr.to_string()).await
+}
+
+/// Like [`ws_connect`] but with an explicit `Host` header authority (the
+/// Origin/Host same-host comparison is port-sensitive).
+pub async fn ws_connect_with_host(
+    addr: std::net::SocketAddr,
+    target: &str,
+    origin: Option<&str>,
+    host: &str,
+) -> std::io::Result<(u16, Option<WsClient>)> {
     let mut stream = TcpStream::connect(addr).await?;
     // A fixed 16-byte key: the server only needs a decodable base64 value.
     let key = "dGhpcyBpcyBhIHRlc3Qga2V5IQ==";
     let mut request = format!(
-        "GET {target} HTTP/1.1\r\nhost: {addr}\r\nupgrade: websocket\r\nconnection: \
+        "GET {target} HTTP/1.1\r\nhost: {host}\r\nupgrade: websocket\r\nconnection: \
          Upgrade\r\nsec-websocket-key: {key}\r\nsec-websocket-version: 13\r\n"
     );
     if let Some(origin) = origin {
@@ -461,6 +472,77 @@ async fn origin_gate_no_consume() {
     .await
     .expect("ws");
     assert_eq!(status, 403, "tickets are single-use");
+}
+
+// ---------------------------------------------------------------------------
+// G-25 — the Origin/Host same-host check is PORT-SENSITIVE
+// (middleware.ts:66 compares the authorities exactly)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn origin_gate_same_host_different_port_rejected() {
+    let server = boot().await;
+    let pty_id = create_pty(&server, "sh", &["-c", "sleep 30"]).await;
+
+    // Issue a ticket via an allowlisted non-browser origin (the
+    // connect-token Origin gate rides the same predicate).
+    let (status, issued, _) = raw_http(
+        server.addr,
+        "POST",
+        &format!("/api/pty/{pty_id}/connect-token"),
+        &[("x-opencode-ticket", "1"), ("origin", "oc://renderer")],
+        &[],
+    )
+    .await;
+    assert_eq!(status, 200, "connect-token: {issued}");
+    let ticket = issued["data"]["ticket"].as_str().expect("ticket string").to_owned();
+
+    // Same host AND port → allowed.
+    let (status, socket) = ws_connect_with_host(
+        server.addr,
+        &format!("/api/pty/{pty_id}/connect?ticket={ticket}"),
+        Some("http://example.com:8080"),
+        "example.com:8080",
+    )
+    .await
+    .expect("ws");
+    assert_eq!(status, 101, "same-host same-port origin upgrades");
+    assert!(socket.is_some());
+
+    // Same host, DIFFERENT port → rejected (403, ticket not consumed).
+    let (status, issued, _) = raw_http(
+        server.addr,
+        "POST",
+        &format!("/api/pty/{pty_id}/connect-token"),
+        &[("x-opencode-ticket", "1"), ("origin", "oc://renderer")],
+        &[],
+    )
+    .await;
+    assert_eq!(status, 200, "connect-token: {issued}");
+    let ticket = issued["data"]["ticket"].as_str().expect("ticket string").to_owned();
+    let (status, socket) = ws_connect_with_host(
+        server.addr,
+        &format!("/api/pty/{pty_id}/connect?ticket={ticket}"),
+        Some("http://example.com:9999"),
+        "example.com:8080",
+    )
+    .await
+    .expect("ws");
+    assert_eq!(status, 403, "same-host different-port origin must be rejected");
+    assert!(socket.is_none());
+
+    // The rejected attempt did not burn the ticket: the exact authority
+    // still upgrades.
+    let (status, socket) = ws_connect_with_host(
+        server.addr,
+        &format!("/api/pty/{pty_id}/connect?ticket={ticket}"),
+        Some("http://example.com:8080"),
+        "example.com:8080",
+    )
+    .await
+    .expect("ws");
+    assert_eq!(status, 101, "unconsumed ticket upgrades cleanly");
+    assert!(socket.is_some());
 }
 
 // ---------------------------------------------------------------------------
