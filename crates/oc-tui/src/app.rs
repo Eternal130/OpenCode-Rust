@@ -906,8 +906,21 @@ impl App {
                 if !self.permission_live() && matches!(self.store.route(), Route::Session { .. }) {
                     if let Some(hit) = self.picker_entry_at(col, row) {
                         self.store.picker_hover_select(hit.index);
-                        let target = hit.session_id.clone();
-                        self.store.navigate(Route::Session { session_id: target });
+                        // The per-tab release (subagents-tab.tsx:221-227
+                        // navigates; terminals-tab.tsx:87-91 + shell-
+                        // tab.tsx:128-132 run the tab's own select).
+                        match self.store.picker().tab {
+                            crate::store::PickerTab::Subagents => {
+                                let target = hit.session_id.clone();
+                                self.store.navigate(Route::Session { session_id: target });
+                            }
+                            crate::store::PickerTab::Terminals => {
+                                self.store.picker_terminal_select();
+                            }
+                            crate::store::PickerTab::Shell => {
+                                self.store.picker_shell_select();
+                            }
+                        }
                         self.store.request_redraw();
                         return;
                     }
@@ -2524,9 +2537,11 @@ impl App {
     }
 
     /// RD-05 — attach the `@` reference rows (autocomplete.tsx:
-    /// 404-438): skills first, then the non-hidden non-`primary`
+    /// 404-460): skills first, then the configured reference sources
+    /// (G-6, `referenceAliases`), then the non-hidden non-`primary`
     /// agents, filtered by the live query — accepting one records the
-    /// structured part (the wire `agents`/`skills` attachments).
+    /// structured part (the wire `agents`/`skills`/`files`
+    /// attachments).
     fn attach_reference_options(&self, composer: &mut crate::components::composer::Composer) {
         use crate::components::composer::autocomplete;
         if composer.autocomplete.visible != Some(autocomplete::Mode::Reference) {
@@ -2550,6 +2565,17 @@ impl App {
                     .collect()
             })
             .unwrap_or_default();
+        // G-6 — the non-hidden reference entries (autocomplete.tsx:
+        // 450: `references().filter((reference) => !reference.hidden)`).
+        let references: Vec<autocomplete::ReferenceSourceRow> = lists
+            .references
+            .iter()
+            .filter(|reference| !reference.hidden)
+            .map(|reference| autocomplete::ReferenceSourceRow {
+                name: reference.name.clone(),
+                detail: reference.detail.clone(),
+            })
+            .collect();
         let agents: Vec<autocomplete::ReferenceAgent> = lists
             .agents
             .rows()
@@ -2566,6 +2592,7 @@ impl App {
         composer.autocomplete.options = autocomplete::filter_references_ranked(
             &agents,
             &skills,
+            &references,
             &query,
             Some(&frecency),
             autocomplete::now_ms(),
@@ -2921,6 +2948,28 @@ impl App {
         self.store.clear_dialogs();
     }
 
+    /// The composer panel's per-tab keymap families (the ref tabs' own
+    /// `Keymap.createLayer`s): each command resolves only while its tab
+    /// is the picker's active one (`enabled: () => composer.active(…)`,
+    /// shell-tab.tsx:64-66, terminals-tab.tsx:42-44, subagents-tab.tsx:
+    /// 136-138). The shared `composer.tab.prev/next` + `composer.close`
+    /// always resolve (composer/index.tsx:72-82's panel layer).
+    fn sync_composer_tab_layers(&mut self, picker: bool) {
+        let picker_tab = if let crate::store::Route::Session { session_id } = self.store.route() {
+            (picker && self.store.picker_live(&session_id)).then(|| self.store.picker().tab)
+        } else {
+            None
+        };
+        for (command, tab) in COMPOSER_TAB_COMMANDS {
+            let enabled = picker_tab.is_some_and(|active| {
+                active == *tab
+                    && (*tab != crate::store::PickerTab::Terminals
+                        || self.store.terminal_available())
+            });
+            self.keymap.set_command_enabled(command, enabled);
+        }
+    }
+
     /// Keep the keymap's mode stack aligned: `dialog` while dialogs are
     /// open (the reference's `modal` mode), `input` below it while a
     /// composer holds the route focus (the managed textarea layer),
@@ -2959,6 +3008,11 @@ impl App {
             modes.push("stats");
         }
         self.keymap.set_modes(&modes);
+        // The composer panel's per-tab keymap layers (ref: each tab
+        // registers its own `Keymap.createLayer` with `enabled: () =>
+        // composer.active(<id>)` — only the ACTIVE tab's family
+        // resolves; the other tabs' same-key bindings stay disabled).
+        self.sync_composer_tab_layers(picker);
         self.dialog_mode = dialog;
         self.input_mode = input;
     }
@@ -3416,6 +3470,10 @@ pub enum ServerListEvent {
     /// `DialogSkill`'s source; a failed fetch lands the dialog's
     /// "Could not load skills" state).
     Skills(Result<Vec<crate::store::ServerSkill>, String>),
+    /// G-6: the `reference.list` rows (`location.reference.list` —
+    /// the `@` completion's reference rows; a failed fetch is the
+    /// ref's `?? []` empty list).
+    References(Vec<crate::store::ServerReference>),
 }
 
 /// One `worktree.list` call mapped into the dialog's row type.
@@ -3826,6 +3884,28 @@ pub fn spawn_server_lists(
             })
             .map_err(|error| error.to_string());
         let _ = tx.send(ServerListEvent::Skills(skills)).await;
+        // G-6: the reference registry (`reference.list` — the `@`
+        // completion's reference rows). A failed fetch is the ref's
+        // `data.location.reference.list() ?? []` empty list; the wire
+        // `path` field carries the description's source text (the git
+        // repository or the local path).
+        let references = client
+            .reference()
+            .list(&oc_client::types::ReferenceListQuery { location: None })
+            .await
+            .map(|response| {
+                response
+                    .data
+                    .iter()
+                    .map(|reference| crate::store::ServerReference {
+                        name: reference.name.clone(),
+                        detail: reference.path.clone(),
+                        hidden: reference.hidden.unwrap_or(false),
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let _ = tx.send(ServerListEvent::References(references)).await;
     });
     (rx, task)
 }
@@ -3873,6 +3953,119 @@ impl crate::store::SelectionSink for HttpSelectionSink {
             }
         });
     }
+}
+
+/// G-6 — the production shell control seam (shell-tab.tsx:91-109):
+/// the Shell tab's output viewer fetch rides the loop's request
+/// channel (the result lands via `LoopFetch::ShellView`), and the
+/// kill DELETE is fire-and-forget like the ref's `void client.api.…`.
+pub struct HttpShellControlSink {
+    tx: tokio::sync::mpsc::UnboundedSender<LoopRequest>,
+    client: oc_client::Client,
+}
+
+impl HttpShellControlSink {
+    #[must_use]
+    pub fn new(
+        tx: tokio::sync::mpsc::UnboundedSender<LoopRequest>,
+        client: oc_client::Client,
+    ) -> Self {
+        Self { tx, client }
+    }
+}
+
+const SHELL_OUTPUT_PAGE_BYTES: u64 = 64 * 1024;
+
+/// The composer panel's per-tab keymap families (the ref tabs' own
+/// `Keymap.createLayer`s): each command resolves only while its tab
+/// is the picker's active one (`enabled: () => composer.active(…)`,
+/// shell-tab.tsx:64-66, terminals-tab.tsx:42-44, subagents-tab.tsx:
+/// 136-138). The shared `composer.tab.prev/next` + `composer.close`
+/// always resolve (composer/index.tsx:72-82's panel layer).
+const COMPOSER_TAB_COMMANDS: &[(&str, crate::store::PickerTab)] = &[
+    ("composer.subagent.up", crate::store::PickerTab::Subagents),
+    ("composer.subagent.down", crate::store::PickerTab::Subagents),
+    ("composer.subagent.select", crate::store::PickerTab::Subagents),
+    ("composer.subagent.toggle-activity", crate::store::PickerTab::Subagents),
+    ("composer.subagent.interrupt", crate::store::PickerTab::Subagents),
+    ("composer.shell.up", crate::store::PickerTab::Shell),
+    ("composer.shell.down", crate::store::PickerTab::Shell),
+    ("composer.shell.select", crate::store::PickerTab::Shell),
+    ("composer.shell.kill", crate::store::PickerTab::Shell),
+    ("composer.terminal.up", crate::store::PickerTab::Terminals),
+    ("composer.terminal.down", crate::store::PickerTab::Terminals),
+    ("composer.terminal.select", crate::store::PickerTab::Terminals),
+];
+
+impl crate::store::ShellControlSink for HttpShellControlSink {
+    /// `shell.get` + the output TAIL (dialog-shell-output.tsx:32-77's
+    /// open page: `cursor = max(0, size − 64KiB)`); the ref's 1 s
+    /// live poll is a documented simplification here — the viewer
+    /// renders one fetch at open time.
+    fn view(&self, shell_id: &str) {
+        let _ = self.tx.send(LoopRequest::ShellView { shell_id: shell_id.to_owned() });
+    }
+
+    /// `shell.remove` (shell-tab.tsx:104-107): fire-and-forget; the
+    /// `shell.deleted` echo removes the registry row.
+    fn remove(&self, shell_id: &str) {
+        let client = self.client.clone();
+        let shell_id = shell_id.to_owned();
+        tokio::spawn(async move {
+            if let Err(error) = client
+                .shell()
+                .remove(&shell_id, &oc_client::types::ShellRemoveQuery { location: None })
+                .await
+            {
+                crate::keymap::log_skip(&format!("shell kill: {error}"));
+            }
+        });
+    }
+}
+
+/// `status()` (dialog-shell-output.tsx:72-78): Running / Timed out /
+/// Killed / Exited (· code N).
+fn shell_status_label(info: &oc_client::types::ShellInfo) -> String {
+    match info.status {
+        oc_client::types::ShellInfoStatus::Running => "Running".to_owned(),
+        oc_client::types::ShellInfoStatus::Timeout => "Timed out".to_owned(),
+        oc_client::types::ShellInfoStatus::Killed => "Killed".to_owned(),
+        oc_client::types::ShellInfoStatus::Exited => {
+            info.exit.map_or_else(|| "Exited".to_owned(), |code| format!("Exited · code {code}"))
+        }
+    }
+}
+
+/// `strip-ansi`'s core pass (dialog-shell-output.tsx:11's text()):
+/// drop CSI/OSC escape sequences, keep the printable stream.
+fn strip_ansi_like(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' {
+            // CSI: swallow through the final byte (@-~); OSC: through BEL/ST.
+            if let Some(next) = chars.next() {
+                if next == '[' {
+                    for follow in chars.by_ref() {
+                        if ('@'..='~').contains(&follow) {
+                            break;
+                        }
+                    }
+                } else if next == ']' {
+                    let mut previous = '\0';
+                    for follow in chars.by_ref() {
+                        if follow == '\u{7}' || (previous == '\u{1b}' && follow == '\\') {
+                            break;
+                        }
+                        previous = follow;
+                    }
+                }
+            }
+            continue;
+        }
+        out.push(ch);
+    }
+    out
 }
 
 /// Map the pump's [`PermissionReply`] onto the generated client body
@@ -4513,6 +4706,11 @@ pub enum LoopRequest {
     SessionRemove {
         session_id: String,
     },
+    /// G-6 — the composer Shell tab's output viewer fetch
+    /// (`shell.get` + the output tail, dialog-shell-output.tsx:32-77).
+    ShellView {
+        shell_id: String,
+    },
     /// `session.background`.
     SessionBackground {
         session_id: String,
@@ -4639,6 +4837,9 @@ pub enum LoopFetch {
         message: String,
     },
     TerminalCapability(bool),
+    /// G-6 — the shell output viewer's content (`shell.get` +
+    /// `shell.output` tail; errors ride the view's `error` row).
+    ShellView(crate::store::ShellOutputView),
     LocationVcs {
         directory: String,
         branch: Result<Option<String>, String>,
@@ -5290,6 +5491,78 @@ pub fn spawn_loop_fetcher(
                                 "session remove {session_id}: {error}"
                             ));
                         }
+                    });
+                }
+                // G-6 — the shell output viewer's fetch (dialog-shell-
+                // output.tsx:32-77's open page: shell.get, then the
+                // tail page `cursor = max(0, size − 64KiB)`). Failures
+                // land the view's error row.
+                LoopRequest::ShellView { shell_id } => {
+                    let client = client.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let info = if let Ok(info) = client
+                            .shell()
+                            .get(&shell_id, &oc_client::types::ShellGetQuery { location: None })
+                            .await
+                        {
+                            info.data
+                        } else {
+                            let _ = tx.send(LoopFetch::ShellView(crate::store::ShellOutputView {
+                                shell_id,
+                                error: Some("Shell output is no longer available.".to_owned()),
+                                ..crate::store::ShellOutputView::default()
+                            }));
+                            return;
+                        };
+                        let size = client
+                            .shell()
+                            .output(
+                                &shell_id,
+                                &oc_client::types::ShellOutputQuery {
+                                    cursor: None,
+                                    limit: None,
+                                    location: None,
+                                },
+                            )
+                            .await
+                            .map_or(0, |page| u64::try_from(page.data.size).unwrap_or(0));
+                        let cursor = size.saturating_sub(SHELL_OUTPUT_PAGE_BYTES);
+                        let page = client
+                            .shell()
+                            .output(
+                                &shell_id,
+                                &oc_client::types::ShellOutputQuery {
+                                    cursor: Some(cursor.to_string()),
+                                    limit: Some(SHELL_OUTPUT_PAGE_BYTES.to_string()),
+                                    location: None,
+                                },
+                            )
+                            .await;
+                        let view = match page {
+                            Ok(page) => {
+                                let text = strip_ansi_like(&page.data.output)
+                                    .replace("\r\n", "\n")
+                                    .replace('\r', "\n");
+                                crate::store::ShellOutputView {
+                                    shell_id,
+                                    status: shell_status_label(&info),
+                                    command: info.command.clone(),
+                                    output: Some(text),
+                                    omitted: cursor > 0 || page.data.truncated,
+                                    error: None,
+                                }
+                            }
+                            Err(_) => crate::store::ShellOutputView {
+                                shell_id,
+                                status: shell_status_label(&info),
+                                command: info.command.clone(),
+                                output: Some(String::new()),
+                                omitted: false,
+                                error: Some("Unable to read shell output.".to_owned()),
+                            },
+                        };
+                        let _ = tx.send(LoopFetch::ShellView(view));
                     });
                 }
                 LoopRequest::SessionBackground { session_id } => {
@@ -6826,8 +7099,7 @@ pub async fn run_with_size(
         let tx = loop_fetch_tx.clone();
         app.store.set_mcp_toggle_sink(std::rc::Rc::new(HttpMcpToggle { tx }));
         // RE-14: the stats page's fetch seam rides the loop fetcher.
-        app.store
-            .set_stats_sink(std::rc::Rc::new(HttpStatsSink { tx: loop_fetch_tx.clone() }));
+        app.store.set_stats_sink(std::rc::Rc::new(HttpStatsSink { tx: loop_fetch_tx.clone() }));
     }
     // Lane FINAL: the integration connect machine + the session
     // actions ride the same loop fetcher.
@@ -6856,6 +7128,12 @@ pub async fn run_with_size(
         attached: std::sync::Mutex::new(None),
     }));
     let _ = loop_fetch_tx.send(LoopRequest::TerminalCapability);
+    // G-6 — the composer Shell tab's control seam (the output viewer's
+    // fetch rides the loop; the kill DELETEs directly off the client).
+    app.store.set_shell_sink(std::rc::Rc::new(HttpShellControlSink::new(
+        loop_fetch_tx.clone(),
+        client.clone(),
+    )));
     let mut persisted_tabs = app.store.tabs().tabs.clone();
 
     // Lane/chrome #4: the footer location's vcs lookup — one request
@@ -7263,6 +7541,9 @@ pub async fn run_with_size(
                 ServerListEvent::Skills(Err(error)) => {
                     app.store.set_skills(crate::store::ListState::Failed(error));
                 }
+                ServerListEvent::References(references) => {
+                    app.store.set_references(references);
+                }
             }
         }
         // G-06 — drain the migration watcher into the store.
@@ -7581,6 +7862,10 @@ pub async fn run_with_size(
                 // -- TUI-4: the terminal registry + pane stream ------
                 LoopFetch::TerminalCapability(available) => {
                     app.store.set_terminal_available(available);
+                }
+                // G-6 — the shell output viewer's content lands.
+                LoopFetch::ShellView(view) => {
+                    app.store.set_shell_view(Some(view));
                 }
                 LoopFetch::TerminalListed { session_id, result } => match result {
                     Ok(terminals) => app.store.set_terminals(&session_id, terminals),
@@ -9009,6 +9294,71 @@ mod tests {
         );
         assert_eq!(fresh.route(), crate::store::Route::Home, "restore never moves the boot route");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// G-6 — the `@` popup over the LOADED reference registry: the
+    /// rows order skills → references → agents with the ` <detail>`
+    /// descriptions (autocomplete.tsx:449-460 + the options memo).
+    #[test]
+    fn at_mention_lists_reference_sources_between_skills_and_agents() {
+        let mut app = App::new((80, 24));
+        app.store.open_tab("s1", Some("S".to_owned()));
+        app.store.set_agents(crate::store::ListState::Loaded(vec![crate::store::ServerAgent {
+            id: "build".to_owned(),
+            mode: "subagent".to_owned(),
+            ..crate::store::ServerAgent::default()
+        }]));
+        app.store.set_skills(crate::store::ListState::Loaded(vec![crate::store::ServerSkill {
+            id: "greet".to_owned(),
+            name: "greet".to_owned(),
+            description: None,
+        }]));
+        app.store.set_references(vec![crate::store::ServerReference {
+            name: "docs".to_owned(),
+            detail: "/tmp/docs".to_owned(),
+            hidden: false,
+        }]);
+
+        // The ref's word+space+`@` path (the PTY walk's "see @").
+        for ch in ["s", "e", "e", " ", "@"] {
+            app.press(ch);
+        }
+        let composer = app.store.composer("s1");
+        assert_eq!(
+            composer.autocomplete.visible,
+            Some(crate::components::composer::autocomplete::Mode::Reference)
+        );
+        let rows: Vec<(String, Option<String>)> = composer
+            .autocomplete
+            .options
+            .iter()
+            .map(|o| (o.display.clone(), o.description.clone()))
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                ("@greet".to_owned(), None),
+                ("@docs".to_owned(), Some(" /tmp/docs".to_owned())),
+                ("@build".to_owned(), None),
+            ],
+            "skills → references → agents (the ref ordering)"
+        );
+
+        // The popup PAINTS over the session composer (G-6: the
+        // reference mode joined the Command mode's popup mount).
+        let theme = crate::theme::ThemeState::v2_dark();
+        let frame =
+            crate::components::session::render_session(&app.store, "s1", &theme.styles(), (80, 24));
+        let grid = frame.text_grid();
+        let painted: Vec<String> = grid.iter().filter(|row| row.contains("@")).cloned().collect();
+        assert!(
+            painted.iter().any(|row| row.contains("@greet")),
+            "the popup's skill row never painted: {painted:?}"
+        );
+        assert!(
+            painted.iter().any(|row| row.contains("/tmp/docs")),
+            "the reference row's detail never painted: {painted:?}"
+        );
     }
 
     /// RD-05 — the full `@agent`/`@skill` lane: typing `@` attaches

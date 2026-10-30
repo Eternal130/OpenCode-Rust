@@ -126,6 +126,7 @@ pub fn handle_dialog_key(
         | DialogKind::WorkingDirectory { .. }
         | DialogKind::ServerList { .. }
         | DialogKind::ToolOutput { .. }
+        | DialogKind::ShellOutput { .. }
         | DialogKind::DiffSource
         | DialogKind::DiffHelp
         | DialogKind::Mcp
@@ -845,6 +846,7 @@ pub fn render_overlay_with_options(
         | DialogKind::MessageActions { .. }
         | DialogKind::WorkingDirectory { .. }
         | DialogKind::ToolOutput { .. }
+        | DialogKind::ShellOutput { .. }
         | DialogKind::DiffSource
         | DialogKind::DiffHelp
         | DialogKind::Plugins

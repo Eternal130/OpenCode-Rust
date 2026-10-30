@@ -395,10 +395,14 @@ pub fn render_home(store: &Store, theme: &crate::theme::ThemeStyles, size: (u16,
     // footer: the footer's left slot is the location label, #4).
     let metadata =
         crate::components::session::composer_metadata(store, crate::app::HOME_PROMPT_KEY);
-    // The live slash-palette popup + rail + blinking caret (the golden
-    // harness leaves all three absent — its HomeView defaults).
+    // The live slash-palette popup + the `@` reference rows (G-6) +
+    // rail + blinking caret (the golden harness leaves all three
+    // absent — its HomeView defaults).
     let autocomplete = match composer.autocomplete.visible {
-        Some(crate::components::composer::autocomplete::Mode::Command) => Some(AutocompleteView {
+        Some(
+            crate::components::composer::autocomplete::Mode::Command
+            | crate::components::composer::autocomplete::Mode::Reference,
+        ) => Some(AutocompleteView {
             options: &composer.autocomplete.options,
             selected: composer.autocomplete.selected,
             title_width: composer.autocomplete.registry.display_width(),

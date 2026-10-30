@@ -25,8 +25,8 @@ use serde_json::Value;
 use crate::attention::AttentionState;
 use crate::clipboard::ClipboardSink;
 use crate::components::composer::{
-    Composer, PromptDraft, PromptHistory, PromptSink, RecordingPromptSink, SubmittedPrompt,
-    autocomplete,
+    autocomplete, Composer, PromptDraft, PromptHistory, PromptSink, RecordingPromptSink,
+    SubmittedPrompt,
 };
 use crate::components::dialog_select::SelectState;
 use crate::components::footer::{FooterMachine, PromptRoute};
@@ -160,6 +160,13 @@ pub enum DialogKind {
     /// (dialog-shell-output.tsx). The content materializes from the
     /// transcript's tool part state.
     ToolOutput { session_id: String, message_id: String, part_id: String },
+    /// G-6: the composer Shell tab's output viewer
+    /// (`DialogShellOutput`, shell-tab.tsx:29-32 — `dialog.replace(`
+    /// `<DialogShellOutput shell …>)`): the shell's status + command
+    /// + captured output tail, fetched through the shell control
+    /// sink at open time. Like [`DialogKind::ToolOutput`]'s shell
+    /// role, the rows render through the select pipeline.
+    ShellOutput { shell_id: String },
     /// SURF-2: the diff source select (`diff.switch_source`,
     /// diff-viewer.tsx:735-767): All / Committed / Uncommitted
     /// (+ Last turn from a session route).
@@ -463,7 +470,7 @@ pub const INTERRUPT_ARM_WINDOW_MS: u64 = 5000;
 /// The tabs model (`session-tabs-model.ts`): pure functions, ported
 /// one-to-one so the golden components share semantics with the store.
 pub mod model {
-    use super::{CLOSED_TAB_LIMIT, ClosedTab, SessionTab, TAB_HISTORY_LIMIT, TabHistory};
+    use super::{ClosedTab, SessionTab, TabHistory, CLOSED_TAB_LIMIT, TAB_HISTORY_LIMIT};
 
     /// `openSessionTab`: append or update the title in place.
     #[must_use]
@@ -766,12 +773,28 @@ pub struct ServerLists {
     /// TUI-8: the skill inventory (`skill.list` — `DialogSkill`'s
     /// rows; `skill.sync`'s refresh rides the same fetch worker).
     pub skills: ListState<ServerSkill>,
+    /// G-6: the reference registry (`reference.list` — the `@`
+    /// completion's reference rows, autocomplete.tsx:444+449-460; the
+    /// ref's `data.location.reference.list() ?? []` — a failed fetch
+    /// is the empty list, no error UI).
+    pub references: Vec<ServerReference>,
     /// `useConnected()` — any integration has connections
     /// (`hasConnectedProvider` over `integration.list`,
     /// use-connected.tsx). Gates the models dialog's categories +
     /// grouped sort and the palette's suggested
     /// "Connect an integration" row.
     pub connected: bool,
+}
+
+/// One listed reference source (`Reference.Info` — the `@` completion's
+/// `referenceAliases` row source). `detail` is the description text —
+/// the wire `path` field, which the server projects to the git
+/// `repository` or the local `path` (autocomplete.tsx:456-457).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ServerReference {
+    pub name: String,
+    pub detail: String,
+    pub hidden: bool,
 }
 
 /// One skill row (`Skill.Info` — `DialogSkill`'s option: the padded
@@ -851,15 +874,19 @@ pub struct TerminalListed {
 // -- TUI-12: the live shell registry (the client data cache's map) --
 
 /// One in-flight shell (`shell.created`'s `info` row — the footer's
-/// live segment reads the id + the owning session only, footer.tsx:
-/// 27-33). The client cache's per-location map holds ONLY running
-/// shells: `shell.exited`/`shell.deleted` remove the row
+/// live segment reads the id + the owning session, footer.tsx:27-33,
+/// and the composer's Shell tab reads the command, shell-tab.tsx:139).
+/// The client cache's per-location map holds ONLY running shells:
+/// `shell.exited`/`shell.deleted` remove the row
 /// (client/src/solid/data.ts:100-102,1245-1261).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LiveShell {
     pub id: String,
     /// `metadata.sessionID` — the session that owns the shell.
     pub session_id: Option<String>,
+    /// The shell's command line (shell-tab.tsx:139 renders
+    /// `command.split("\n", 1)[0]` — the first line only).
+    pub command: String,
 }
 
 /// The terminal pane's IO seam (the run loop's WS attach task): typed
@@ -1463,6 +1490,12 @@ pub struct Store {
     picker: Signal<PickerState>,
     /// The interrupt API seam.
     interrupt_sink: std::cell::RefCell<Rc<dyn InterruptSink>>,
+    /// The composer Shell tab's control seam (G-6): the output
+    /// viewer's fetch + the kill POST.
+    shell_sink: std::cell::RefCell<Rc<dyn ShellControlSink>>,
+    /// The `DialogShellOutput` viewer's content (`shell.get` +
+    /// `shell.output` tail), `None` while the fetch is in flight.
+    shell_view: Signal<Option<ShellOutputView>>,
     /// The model-ring persistence flag (the run loop drains it).
     model_ring_dirty: Cell<bool>,
     /// #4: the footer's `{directory}:{branch}` location label — the
@@ -2477,7 +2510,12 @@ pub struct PickerState {
     pub filter_active: bool,
     /// The selected entry index (resets when the tab deactivates or
     /// the route changes — anchored to the route's current entry).
+    /// The Shell tab's selection persists across tab switches
+    /// (shell-tab.tsx keeps its component store; the subagents/
+    /// terminals tabs re-anchor on every activation).
     pub selected: usize,
+    /// The Shell tab's stashed selection (restored on re-entry).
+    pub shell_selected: usize,
     /// The route session the selection was anchored against
     /// (`selectedSessionID`, subagents-tab.tsx:65-91).
     pub anchored_to: Option<String>,
@@ -2490,6 +2528,7 @@ impl Default for PickerState {
             tab: PickerTab::Subagents,
             filter_active: true,
             selected: 0,
+            shell_selected: 0,
             anchored_to: None,
         }
     }
@@ -2509,6 +2548,47 @@ pub struct PickerEntry {
     pub current: bool,
     /// The tree prefix (`├─ `/`└─ ` at depth ≥ 1; "" at depth 0).
     pub prefix: String,
+    /// The row's VERBATIM label override (the Shell/Terminals tabs'
+    /// rows render one plain string — shell-tab.tsx:139's first
+    /// command line, terminals-tab.tsx:105's
+    /// `foregroundProcess ?? title ?? "+ New terminal"` — not the
+    /// `{prefix}{agent}: {title}` subagent shape). `None` = the
+    /// subagent shape.
+    pub label: Option<String>,
+}
+
+impl PickerEntry {
+    /// A subagent-family row (the `{prefix}{agent}: {title}` paint).
+    #[must_use]
+    pub fn subagent(
+        session_id: impl Into<String>,
+        agent: impl Into<String>,
+        title: impl Into<String>,
+    ) -> Self {
+        Self {
+            session_id: session_id.into(),
+            agent: agent.into(),
+            title: title.into(),
+            running: false,
+            current: false,
+            prefix: String::new(),
+            label: None,
+        }
+    }
+
+    /// A plain-label row (the Shell/Terminals tabs).
+    #[must_use]
+    pub fn plain(session_id: impl Into<String>, label: impl Into<String>) -> Self {
+        Self {
+            session_id: session_id.into(),
+            agent: String::new(),
+            title: String::new(),
+            running: false,
+            current: false,
+            prefix: String::new(),
+            label: Some(label.into()),
+        }
+    }
 }
 
 /// What a transcript hit does when released (`onMouseUp`).
@@ -2938,6 +3018,64 @@ impl InterruptSink for RecordingInterruptSink {
     }
 }
 
+/// The composer Shell tab's control seam (shell-tab.tsx:91-109):
+/// `composer.shell.select` fetches the shell's status + output tail
+/// for the `DialogShellOutput` viewer; `composer.shell.kill` DELETEs
+/// the shell (fire-and-forget like the ref's `void client.api.…`).
+pub trait ShellControlSink {
+    /// `shell.get` + `shell.output` (dialog-shell-output.tsx:32-77):
+    /// resolve the viewer's content into the store.
+    fn view(&self, shell_id: &str);
+    /// `shell.remove` (shell-tab.tsx:104-107).
+    fn remove(&self, shell_id: &str);
+}
+
+/// The no-op sink (no loop client attached).
+#[derive(Debug, Default)]
+pub struct NoShellControl;
+
+impl ShellControlSink for NoShellControl {
+    fn view(&self, _shell_id: &str) {}
+    fn remove(&self, _shell_id: &str) {}
+}
+
+/// The default recording sink (tests assert against its log).
+#[derive(Debug, Default)]
+pub struct RecordingShellControl {
+    pub views: std::cell::RefCell<Vec<String>>,
+    pub removes: std::cell::RefCell<Vec<String>>,
+}
+
+impl ShellControlSink for RecordingShellControl {
+    fn view(&self, shell_id: &str) {
+        self.views.borrow_mut().push(shell_id.to_owned());
+    }
+    fn remove(&self, shell_id: &str) {
+        self.removes.borrow_mut().push(shell_id.to_owned());
+    }
+}
+
+/// One `DialogShellOutput` viewer's content (dialog-shell-output.tsx:
+/// 84-141): the shell's status label, its command, and the captured
+/// output tail with the omitted notice. `None` while the fetch is in
+/// flight (the dialog shows the loading row).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ShellOutputView {
+    pub shell_id: String,
+    /// `status()` (dialog-shell-output.tsx:72-78): Running / Timed out
+    /// / Killed / Exited (· code N).
+    pub status: String,
+    pub command: String,
+    /// The captured tail (ANSI stripped, the last page). `None` until
+    /// the first page lands.
+    pub output: Option<String>,
+    /// The output exceeded the viewer's page window.
+    pub omitted: bool,
+    /// The error row ("Shell output is no longer available." on a
+    /// 404, the read failure otherwise).
+    pub error: Option<String>,
+}
+
 /// What one escape did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InterruptStep {
@@ -3215,6 +3353,7 @@ impl Store {
             update_notice,
             update_dialog,
         } = signals;
+        let shell_view = Signal::new(&runtime, None);
         Self {
             runtime,
             tabs,
@@ -3364,6 +3503,8 @@ impl Store {
             theme_mode_pref: RefCell::new(None),
             system_mode: Cell::new(oc_theme::types::Mode::Dark),
             interrupt_sink: std::cell::RefCell::new(Rc::new(RecordingInterruptSink::default())),
+            shell_sink: std::cell::RefCell::new(Rc::new(RecordingShellControl::default())),
+            shell_view,
             model_ring_dirty: Cell::new(false),
             revert_sink: std::cell::RefCell::new(Rc::new(RecordingRevertSink::default())),
             integration_sink: std::cell::RefCell::new(Rc::new(NoIntegrationSink)),
@@ -3799,7 +3940,11 @@ impl Store {
     /// is non-empty).
     #[must_use]
     pub fn focus(&self) -> Focus {
-        if self.dialogs.get().is_empty() { Focus::Route } else { Focus::Dialog }
+        if self.dialogs.get().is_empty() {
+            Focus::Route
+        } else {
+            Focus::Dialog
+        }
     }
 
     #[must_use]
@@ -4215,6 +4360,11 @@ impl Store {
     /// Merge the integration-connected fold (`useConnected`).
     pub fn set_integration_connected(&self, connected: bool) {
         self.server_lists.update(|lists| lists.connected = connected);
+    }
+
+    /// G-6 — merge the reference-registry fetch (`reference.list`).
+    pub fn set_references(&self, references: Vec<ServerReference>) {
+        self.server_lists.update(|lists| lists.references = references);
     }
 
     // -- the Worktrees dialog (R-05) ---------------------------------------
@@ -4639,7 +4789,12 @@ impl Store {
         if let Route::Session { session_id } = self.route.get() {
             let mut picker = self.picker.get();
             picker.open = true;
-            picker.tab = PickerTab::Terminals;
+            // Without the terminals availability the Terminals tab
+            // never registers (composer/index.tsx:129-131's
+            // `terminals` gate) — v2's `defaultTab` falls back to the
+            // first registered tab (Subagents, index.tsx:34-40).
+            picker.tab =
+                if self.terminal_available() { PickerTab::Terminals } else { PickerTab::Subagents };
             self.picker.set(picker);
             self.terminal_focus_right.set(false);
             self.terminal_sink.borrow().refresh(&session_id);
@@ -4801,7 +4956,8 @@ impl Store {
 
     /// The Terminals tab's rows (terminals-tab.tsx:79-108): one entry
     /// per listed terminal (`foregroundProcess ?? title`, the visible
-    /// pane `▪`-marked current) + the trailing `+ New terminal` slot.
+    /// pane the current row) + the trailing `+ New terminal` slot.
+    /// Each row renders its label VERBATIM (the plain-label entry).
     #[must_use]
     pub fn picker_terminals(&self, session_id: &str) -> Vec<PickerEntry> {
         let visible = self.terminal_pane_mounted(session_id);
@@ -4810,25 +4966,12 @@ impl Store {
             .into_iter()
             .map(|terminal| {
                 let current = visible.as_deref() == Some(terminal.id.as_str());
-                let title = terminal.label().to_owned();
-                PickerEntry {
-                    session_id: terminal.id,
-                    agent: "Terminals".to_owned(),
-                    title,
-                    running: false,
-                    current,
-                    prefix: String::new(),
-                }
+                let mut entry = PickerEntry::plain(terminal.id.clone(), terminal.label());
+                entry.current = current;
+                entry
             })
             .collect();
-        entries.push(PickerEntry {
-            session_id: String::new(),
-            agent: "Terminals".to_owned(),
-            title: "+ New terminal".to_owned(),
-            running: false,
-            current: false,
-            prefix: String::new(),
-        });
+        entries.push(PickerEntry::plain(String::new(), "+ New terminal"));
         entries
     }
 
@@ -4848,6 +4991,70 @@ impl Store {
                 _ => {
                     self.terminal_sink.borrow().create(&session_id);
                 }
+            }
+        }
+    }
+
+    /// The composer's registered tabs (composer/index.tsx:127-131 —
+    /// `SubagentsTab` + `ShellTab` always register; `TerminalsTab`
+    /// mounts only when the session terminals are available,
+    /// `terminals={sessions.available()}`, session-frame.tsx:294).
+    #[must_use]
+    pub fn picker_registered_tabs(&self) -> Vec<PickerTab> {
+        let mut tabs = vec![PickerTab::Subagents, PickerTab::Shell];
+        if self.terminal_available() {
+            tabs.push(PickerTab::Terminals);
+        }
+        tabs
+    }
+
+    /// The Shell tab's rows (shell-tab.tsx:20-22 + 117-144): the
+    /// session's in-flight shells — the registry holds only RUNNING
+    /// rows — one per shell, the command's first line as the label.
+    #[must_use]
+    pub fn picker_shells(&self, session_id: &str) -> Vec<PickerEntry> {
+        self.shells
+            .get()
+            .iter()
+            .filter(|shell| shell.session_id.as_deref() == Some(session_id))
+            .map(|shell| {
+                let command = shell.command.split('\n').next().unwrap_or_default();
+                PickerEntry::plain(shell.id.clone(), command.to_owned())
+            })
+            .collect()
+    }
+
+    /// `composer.shell.select` (shell-tab.tsx:29-32 + 91-96): open the
+    /// selected shell's output viewer (`DialogShellOutput`). The
+    /// fetch rides the sink; the dialog renders the loading state
+    /// until the view lands.
+    pub fn picker_shell_select(&self) {
+        if let Route::Session { session_id } = self.route.get() {
+            let entries = self.picker_shells(&session_id);
+            let selected = self.picker_selection(&session_id, entries.len());
+            if let Some(entry) = entries.get(selected) {
+                let id = entry.session_id.clone();
+                self.set_shell_view(None);
+                self.replace_dialog(
+                    DialogKind::ShellOutput { shell_id: id.clone() },
+                    DialogSize::Large,
+                );
+                self.shell_sink.borrow().view(&id);
+            }
+        }
+    }
+
+    /// `composer.shell.kill` (shell-tab.tsx:98-109): DELETE the
+    /// selected shell — fire-and-forget like the ref (`void
+    /// client.api.shell.remove`); the `shell.deleted` echo removes the
+    /// registry row.
+    pub fn picker_shell_kill(&self) {
+        if let Route::Session { session_id } = self.route.get() {
+            let entries = self.picker_shells(&session_id);
+            let selected = self.picker_selection(&session_id, entries.len());
+            if let Some(entry) = entries.get(selected) {
+                let id = entry.session_id.clone();
+                self.shell_sink.borrow().remove(&id);
             }
         }
     }
@@ -6534,6 +6741,22 @@ impl Store {
         *self.interrupt_sink.borrow_mut() = sink;
     }
 
+    /// Swap the shell control sink (the production HTTP impl).
+    pub fn set_shell_sink(&self, sink: Rc<dyn ShellControlSink>) {
+        *self.shell_sink.borrow_mut() = sink;
+    }
+
+    /// The shell output viewer's content (`DialogShellOutput`'s
+    /// fetch result), `None` while loading.
+    pub fn shell_view(&self) -> Option<ShellOutputView> {
+        self.shell_view.get()
+    }
+
+    /// Replace the shell output viewer's content.
+    pub fn set_shell_view(&self, view: Option<ShellOutputView>) {
+        self.shell_view.set(view);
+    }
+
     /// Whether the session's turn is RUNNING (the interrupt gate, v2's
     /// `enabled: status() === "running"`): the trailing message is
     /// either a submitted user prompt (no assistant yet) or an
@@ -7957,7 +8180,11 @@ impl Store {
     /// The model-ring persistence flag (the run loop drains it: write
     /// `<state>/model.json` when set).
     pub fn take_model_ring_dirty(&self) -> Option<ModelRing> {
-        if self.model_ring_dirty.replace(false) { Some(self.model_ring.get()) } else { None }
+        if self.model_ring_dirty.replace(false) {
+            Some(self.model_ring.get())
+        } else {
+            None
+        }
     }
 
     /// The current selection's variant cycle
@@ -9564,11 +9791,28 @@ impl Store {
         }
     }
 
-    /// The picker's tab cycle (`switchTab`, composer/index.tsx:65-70).
+    /// The picker's tab cycle (`switchTab`, composer/index.tsx:65-70):
+    /// cycle over the REGISTERED tabs (the Terminals tab only
+    /// registers when the session terminals are available), wrap both
+    /// ways, no-op with a single tab. The Shell tab's selection
+    /// persists across switches (shell-tab.tsx keeps its component
+    /// store); the other tabs reset to 0 and re-anchor on activation
+    /// (subagents-tab.tsx:71-94 clears on deactivation; terminals-tab
+    /// re-derives from the visible pane).
     pub fn picker_switch_tab(&self, forward: bool) {
+        let tabs = self.picker_registered_tabs();
+        if tabs.len() <= 1 {
+            return;
+        }
         let mut picker = self.picker.get();
-        picker.tab = picker.tab.cycle(forward);
-        picker.selected = 0;
+        let index = tabs.iter().position(|tab| *tab == picker.tab).unwrap_or(0);
+        let step = if forward { 1 } else { tabs.len() - 1 };
+        let leaving = picker.tab;
+        picker.tab = tabs[(index + step) % tabs.len()];
+        if leaving == PickerTab::Shell {
+            picker.shell_selected = picker.selected;
+        }
+        picker.selected = if picker.tab == PickerTab::Shell { picker.shell_selected } else { 0 };
         picker.anchored_to = None;
         self.picker.set(picker);
     }
@@ -9585,7 +9829,9 @@ impl Store {
     /// The picker's family entries for the routed session
     /// (`sessionFamily`, util/session.ts:9-35: the ROOT's descendant
     /// tree in registry order with `├─ `/`└─ ` prefixes), filtered by
-    /// the tab's activity filter (subagents-tab.tsx:39-63).
+    /// the tab's activity filter (subagents-tab.tsx:39-63). The Shell
+    /// tab lists the session's running shells instead (shell-tab.tsx:
+    /// 20-22); Terminals lists the registry + the add slot.
     #[must_use]
     pub fn picker_entries(&self, session_id: &str) -> Vec<PickerEntry> {
         // TUI-4 — the Terminals tab lists the registry rows + the
@@ -9593,6 +9839,11 @@ impl Store {
         // activity filter.
         if self.picker.get().tab == PickerTab::Terminals {
             return self.picker_terminals(session_id);
+        }
+        // G-6 — the Shell tab lists the session's in-flight shells
+        // (shell-tab.tsx:20-22: `listBySession(...).filter(running)`).
+        if self.picker.get().tab == PickerTab::Shell {
+            return self.picker_shells(session_id);
         }
         let index = self.session_index.borrow();
         // Registry order: insertion (first-seen) order like the client
@@ -9622,11 +9873,12 @@ impl Store {
     /// The selection with the anchor/clamp discipline applied
     /// (subagents-tab.tsx:71-94): anchoring to the route's entry on
     /// tab activation or route change, clamping when the filtered
-    /// list shrinks. Returns the effective selected index.
-    #[must_use]
+    /// list shrinks. The Shell tab carries NO anchor (shell-tab.tsx
+    /// keeps its plain component selection) — clamp only. Returns the
+    /// effective selected index.
     pub fn picker_selection(&self, session_id: &str, entries_len: usize) -> usize {
         let mut picker = self.picker.get();
-        if picker.anchored_to.as_deref() != Some(session_id) {
+        if picker.tab != PickerTab::Shell && picker.anchored_to.as_deref() != Some(session_id) {
             picker.anchored_to = Some(session_id.to_owned());
             picker.selected = 0;
             let entries = self.picker_entries(session_id);
@@ -9643,7 +9895,8 @@ impl Store {
         picker.selected
     }
 
-    /// `composer.subagent.up/down` (subagents-tab.tsx:140-162): the
+    /// `composer.subagent.up/down` + `composer.shell.up/down`
+    /// (subagents-tab.tsx:140-162, shell-tab.tsx:68-90): the
     /// wrap-around move (`up` at 0 CLOSES the composer — even with
     /// an empty filtered list, the tsx's close check precedes the
     /// move; `down` on an empty list is inert).
@@ -9666,6 +9919,24 @@ impl Store {
         } else {
             picker.selected -= 1;
         }
+        self.picker.set(picker);
+    }
+
+    /// `composer.terminal.up/down` (terminals-tab.tsx:47-57): the
+    /// wrap over the slots INCLUDING the `+ New terminal` row — the
+    /// terminals tab has NO close branch, `up` wraps to the last slot.
+    pub fn picker_move_wrap(&self, forward: bool) {
+        let route = match self.route.get() {
+            Route::Session { session_id } => session_id,
+            Route::Home => return,
+        };
+        let len = self.picker_entries(&route).len();
+        if len == 0 {
+            return;
+        }
+        let mut picker = self.picker.get();
+        picker.selected =
+            if forward { (picker.selected + 1) % len } else { (picker.selected + len - 1) % len };
         self.picker.set(picker);
     }
 
@@ -10449,6 +10720,13 @@ impl Store {
                         .pointer("/metadata/sessionID")
                         .and_then(serde_json::Value::as_str)
                         .map(str::to_owned),
+                    // shell-tab.tsx:139 — the row label is the command's
+                    // first line.
+                    command: info
+                        .get("command")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
                 };
                 if shell.id.is_empty() {
                     return;
@@ -11463,6 +11741,7 @@ fn picker_family_walk(
             running: index.is_running(id),
             current: *id == route,
             prefix,
+            label: None,
         });
         let mut next = ancestors.to_vec();
         next.push(last);
@@ -13508,6 +13787,171 @@ mod tests {
         assert_eq!(store.picker().selected, 0, "down wraps");
         store.picker_move(false);
         assert!(!store.picker().open, "up at the top closes the composer");
+    }
+
+    /// G-6 — the Shell tab (shell-tab.tsx): the rows come from the
+    /// live shell registry (one per in-flight shell, the command's
+    /// FIRST line as the verbatim label), `up` at the top closes,
+    /// select opens the output viewer through the sink, kill DELETEs
+    /// through the sink.
+    #[test]
+    fn composer_shell_tab_lists_selects_and_kills() {
+        let store = Store::new(Runtime::new());
+        store.open_tab("s1", Some("Root".to_owned()));
+        store.navigate(Route::Session { session_id: "s1".to_owned() });
+        store.ingest_all([
+            Ingest::Event(BusEvent::new(
+                "shell.created",
+                serde_json::json!({
+                    "info": {
+                        "id": "sh_1", "command": "cargo build\nsecond line",
+                        "metadata": {"sessionID": "s1"}, "status": "running"
+                    }
+                }),
+            )),
+            // Another session's shell never lists here.
+            Ingest::Event(BusEvent::new(
+                "shell.created",
+                serde_json::json!({
+                    "info": {"id": "sh_2", "command": "elsewhere",
+                             "metadata": {"sessionID": "s2"}}
+                }),
+            )),
+        ]);
+        let mut picker = store.picker();
+        picker.open = true;
+        picker.tab = PickerTab::Shell;
+        store.set_picker(picker);
+        let entries = store.picker_entries("s1");
+        assert_eq!(entries.len(), 1, "only the routed session's shells");
+        assert_eq!(entries[0].label.as_deref(), Some("cargo build"), "the first command line");
+        assert_eq!(entries[0].session_id, "sh_1");
+
+        // select: the output viewer opens + the sink fetch fires.
+        let sink = std::rc::Rc::new(RecordingShellControl::default());
+        store.set_shell_sink(sink.clone());
+        store.picker_shell_select();
+        assert_eq!(
+            store.top_dialog().map(|entry| entry.kind),
+            Some(DialogKind::ShellOutput { shell_id: "sh_1".to_owned() })
+        );
+        assert_eq!(sink.views.borrow().as_slice(), ["sh_1"]);
+        store.clear_dialogs();
+
+        // kill: the DELETE fires; the row stays until the SSE echo.
+        store.picker_shell_kill();
+        assert_eq!(sink.removes.borrow().as_slice(), ["sh_1"]);
+        assert_eq!(store.picker_entries("s1").len(), 1);
+        store.ingest_all([Ingest::Event(BusEvent::new(
+            "shell.deleted",
+            serde_json::json!({ "id": "sh_1" }),
+        ))]);
+        // The empty list renders the shell empty state (the paint
+        // test asserts the label; here the entries drain).
+        assert!(store.picker_entries("s1").is_empty());
+    }
+
+    /// G-6 — the Terminals tab's move WRAPS including the `+ New
+    /// terminal` slot and never closes (terminals-tab.tsx:47-57 has
+    /// no close branch), and the select on the add slot creates.
+    #[test]
+    fn composer_terminals_tab_wraps_and_the_add_slot_creates() {
+        let store = Store::new(Runtime::new());
+        store.open_tab("s1", Some("Root".to_owned()));
+        store.navigate(Route::Session { session_id: "s1".to_owned() });
+        store.set_terminal_available(true);
+        let mut picker = store.picker();
+        picker.open = true;
+        picker.tab = PickerTab::Terminals;
+        store.set_picker(picker);
+        let entries = store.picker_entries("s1");
+        assert_eq!(entries.len(), 1, "no terminals listed: the add slot only");
+        assert_eq!(entries[0].label.as_deref(), Some("+ New terminal"));
+
+        store.picker_move_wrap(false);
+        assert_eq!(store.picker().selected, 0, "`up` wraps back to the last slot");
+        store.picker_move_wrap(true);
+        assert_eq!(store.picker().selected, 0, "`down` wraps past the single slot");
+
+        // The select on the add slot: the composer closes + the
+        // create request rides the sink.
+        struct CreateSink(std::rc::Rc<std::cell::RefCell<Vec<String>>>);
+        impl TerminalSink for CreateSink {
+            fn refresh(&self, _session_id: &str) {}
+            fn create(&self, session_id: &str) {
+                self.0.borrow_mut().push(session_id.to_owned());
+            }
+            fn select(&self, _session_id: &str, _pty_id: Option<&str>) {}
+            fn send_frame(&self, _pty_id: &str, _frame: &[u8]) {}
+        }
+        let creates = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        store.set_terminal_sink(std::rc::Rc::new(CreateSink(std::rc::Rc::clone(&creates))));
+        store.picker_terminal_select();
+        assert!(!store.picker().open, "the select closes the composer");
+        assert_eq!(creates.borrow().as_slice(), ["s1"], "the add slot creates");
+    }
+
+    /// G-6 — tab switching: the strip's ring registers Terminals only
+    /// when the session terminals are available (composer/index.tsx:
+    /// 129-131), and the Shell tab's selection persists across
+    /// switches while the other tabs reset (shell-tab keeps its
+    /// component store; subagents/terminals re-anchor).
+    #[test]
+    fn composer_tab_switch_gates_terminals_and_keeps_shell_selection() {
+        let store = Store::new(Runtime::new());
+        store.open_tab("s1", Some("Root".to_owned()));
+        store.navigate(Route::Session { session_id: "s1".to_owned() });
+        // Without the capability: two tabs, the cycle skips Terminals.
+        assert_eq!(store.picker_registered_tabs(), vec![PickerTab::Subagents, PickerTab::Shell]);
+        let mut picker = store.picker();
+        picker.open = true;
+        store.set_picker(picker);
+        store.picker_switch_tab(true);
+        assert_eq!(store.picker().tab, PickerTab::Shell, "subagents → shell");
+        store.picker_switch_tab(true);
+        assert_eq!(store.picker().tab, PickerTab::Subagents, "shell wraps to subagents");
+        store.picker_switch_tab(false);
+        assert_eq!(store.picker().tab, PickerTab::Shell, "left wraps back to shell");
+        assert_eq!(store.picker().selected, 0, "the shell selection starts at 0");
+
+        // The shell selection persists across a round trip; the
+        // subagents selection resets.
+        let mut picker = store.picker();
+        picker.selected = 0;
+        store.set_picker(picker);
+        store.ingest_all([
+            Ingest::Event(BusEvent::new(
+                "shell.created",
+                serde_json::json!({
+                    "info": {"id": "sh_a", "command": "one",
+                             "metadata": {"sessionID": "s1"}}
+                }),
+            )),
+            Ingest::Event(BusEvent::new(
+                "shell.created",
+                serde_json::json!({
+                    "info": {"id": "sh_b", "command": "two",
+                             "metadata": {"sessionID": "s1"}}
+                }),
+            )),
+        ]);
+        store.picker_move(true);
+        assert_eq!(store.picker().selected, 1, "the move lands on the second shell");
+        store.picker_switch_tab(true); // → subagents
+        assert_eq!(store.picker().selected, 0, "the subagents tab resets");
+        store.picker_switch_tab(false); // → shell
+        assert_eq!(store.picker().selected, 1, "the shell selection restored");
+
+        // With the capability the ring covers all three tabs.
+        store.set_terminal_available(true);
+        assert_eq!(
+            store.picker_registered_tabs(),
+            vec![PickerTab::Subagents, PickerTab::Shell, PickerTab::Terminals]
+        );
+        store.picker_switch_tab(true);
+        assert_eq!(store.picker().tab, PickerTab::Terminals);
+        store.picker_switch_tab(true);
+        assert_eq!(store.picker().tab, PickerTab::Subagents);
     }
 
     /// #46 — the exit epilogue tracks the session route (title from

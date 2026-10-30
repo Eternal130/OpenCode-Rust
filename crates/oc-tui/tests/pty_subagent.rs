@@ -8,7 +8,8 @@
 //!   `✓ General Subagent — Check the fixture` between the user text
 //!   and the reply;
 //! * **#44** the picker: `down` on the empty composer opens the panel
-//!   (`Subagents  Shell  Terminals` + `No active subagents` +
+//! * **#44** the picker: `down` on the empty composer opens the panel
+//!   (`Subagents  Shell` + `No active subagents` +
 //!   `show inactive ctrl+a`), `ctrl+a` flips the filter to reveal the
 //!   completed run, `enter` (`composer.subagent.select`) navigates in;
 //! * **#45** the child-session view renders (its own transcript) with
@@ -250,7 +251,7 @@ fn drive_subagent_surfaces(h: &mut HarnessHandle) -> Result<(), String> {
 
     // #44 — `down` on the empty composer opens the picker.
     h.write(b"\x1b[B");
-    wait_row(h, "Subagents  Shell  Terminals", Duration::from_secs(5))
+    wait_row(h, "Subagents  Shell", Duration::from_secs(5))
         .ok_or_else(|| "`down` never opened the subagent picker".to_owned())?;
     wait_row(h, "No active subagents", Duration::from_secs(3))
         .ok_or_else(|| "the active-filter empty state never rendered".to_owned())?;
@@ -289,7 +290,7 @@ fn drive_subagent_surfaces(h: &mut HarnessHandle) -> Result<(), String> {
     h.write(b"\x1b");
     wait_row(h, "PARITY delegate to the researcher now", Duration::from_secs(5))
         .ok_or_else(|| "escape never returned to the parent session".to_owned())?;
-    if !wait_row_gone(h, "Subagents  Shell  Terminals", Duration::from_secs(3)) {
+    if !wait_row_gone(h, "Subagents  Shell", Duration::from_secs(3)) {
         return Err("the picker panel never folded on the parent".to_owned());
     }
 
@@ -341,7 +342,7 @@ fn drive_child_sidebar_suppression(h: &mut HarnessHandle) -> Result<(), String> 
     let tabs = (0..grid.rows)
         .find_map(|row| {
             let text = grid.row_text(row);
-            text.contains("Subagents  Shell  Terminals").then_some(text)
+            text.contains("Subagents  Shell").then_some(text)
         })
         .ok_or_else(|| "the child's picker never rendered".to_owned())?;
     let esc_col = tabs.find("esc").map(|index| tabs[..index].chars().count());
@@ -430,30 +431,32 @@ fn drive_picker_cycle(h: &mut HarnessHandle) -> Result<(), String> {
 
     // down opens the picker on the empty composer.
     h.write(b"\x1b[B");
-    wait_row(h, "Subagents  Shell  Terminals", Duration::from_secs(5))
+    wait_row(h, "Subagents  Shell", Duration::from_secs(5))
         .ok_or("`down` never opened the picker")?;
     // up at the top CLOSES (subagents-tab.tsx:145-151).
     h.write(b"\x1b[A");
-    if !wait_row_gone(h, "Subagents  Shell  Terminals", Duration::from_secs(3)) {
+    if !wait_row_gone(h, "Subagents  Shell", Duration::from_secs(3)) {
         return Err("`up` at the top never closed the picker".to_owned());
     }
     // down reopens; ctrl+a reveals the completed run.
     h.write(b"\x1b[B");
-    wait_row(h, "Subagents  Shell  Terminals", Duration::from_secs(3))
-        .ok_or("the picker never reopened")?;
+    wait_row(h, "Subagents  Shell", Duration::from_secs(3)).ok_or("the picker never reopened")?;
     h.write(b"\x01");
     wait_row(h, "General: Check the fixture", Duration::from_secs(3))
         .ok_or("ctrl+a never revealed the completed run")?;
-    // right cycles to the Shell tab (empty body), left back.
+    // right cycles to the Shell tab: no shells ran → the
+    // `No shell commands` empty state and the hints row carries only
+    // `tabs ←/→` (shell-tab.tsx:116 + the hints fn's empty-list gate);
+    // left cycles back.
     h.write(b"\x1b[C");
-    wait_row(h, "show active ctrl+a", Duration::from_secs(3))
+    wait_row(h, "No shell commands", Duration::from_secs(3))
         .ok_or("the Shell tab never mounted")?;
     h.write(b"\x1b[D");
     wait_row(h, "General: Check the fixture", Duration::from_secs(3))
         .ok_or("the tab never cycled back to Subagents")?;
     // esc closes back to the prompt (the parent route).
     h.write(b"\x1b");
-    if !wait_row_gone(h, "Subagents  Shell  Terminals", Duration::from_secs(3)) {
+    if !wait_row_gone(h, "Subagents  Shell", Duration::from_secs(3)) {
         return Err("`esc` never closed the picker".to_owned());
     }
     wait_session_mounted(h)?;

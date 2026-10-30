@@ -661,6 +661,7 @@ fn picker_panel_budget_body() {
             running: index % 2 == 0,
             current: index == 1,
             prefix: if index == 0 { String::new() } else { "├─ ".into() },
+            label: None,
         })
         .collect();
     let mut state = PickerState {
@@ -668,11 +669,19 @@ fn picker_panel_budget_body() {
         tab: PickerTab::Subagents,
         filter_active: false,
         selected: 0,
+        shell_selected: 0,
         anchored_to: None,
     };
     let _ = &store;
     let render = |state: &PickerState| {
-        let frame = picker_panel_frame_dispatch(state, &entries, state.selected, &theme, 200);
+        let frame = picker_panel_frame_dispatch(
+            state,
+            &entries,
+            state.selected,
+            &theme,
+            200,
+            &[PickerTab::Subagents, PickerTab::Shell, PickerTab::Terminals],
+        );
         assert_eq!(frame.height, crate::components::subagent_picker::PANEL_ROWS);
         frame
     };

@@ -30,7 +30,15 @@ bytes = "1"
 regex = "1"
 sha2 = "0.10"
 sha1 = "0.10"
-tokio = { version = "1", default-features = false, features = ["sync", "macros", "rt", "time"] }
+# "net"/"io-util" also back the WS proxy CONNECT tunnel (route/transport/proxy.rs).
+tokio = { version = "1", default-features = false, features = [
+    "sync",
+    "macros",
+    "rt",
+    "time",
+    "net",
+    "io-util",
+] }
 reqwest = { version = "0.12", optional = true, default-features = false, features = [
     "stream",
     "json",

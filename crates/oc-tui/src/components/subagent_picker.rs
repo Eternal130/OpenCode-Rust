@@ -88,7 +88,10 @@ impl PickerColors {
 /// The picker panel's placed/fill walk at the session column's width
 /// (the caller pastes the painted frame at the column's bottom, like
 /// the prompt mount — with one blank spacing row above and the pad
-/// row inside the mount).
+/// row inside the mount). `tabs` is the REGISTERED tab list
+/// (composer/index.tsx:127-131 — Terminals only when the session
+/// terminals are available); the strip paints it in registration
+/// order.
 #[must_use]
 pub fn picker_panel_paint(
     state: &PickerState,
@@ -96,6 +99,7 @@ pub fn picker_panel_paint(
     selected: usize,
     theme: &ThemeState,
     width: u16,
+    tabs: &[PickerTab],
 ) -> PickerPaint {
     let styles = theme.styles();
     let colors = PickerColors::resolve(theme);
@@ -132,12 +136,13 @@ pub fn picker_panel_paint(
 
     // Tabs row (row 1): labels at col 5 (the row's own paddingLeft 1),
     // gap 2; the active tab `text.base` BOLD, others muted. `esc`
-    // right-aligned muted at the content edge.
+    // right-aligned muted at the content edge. One tab paints its
+    // bare label (`tabList().length > 1` fallback, index.tsx:100-105).
     let tabs_row = 1usize;
     let mut x = left + 1;
-    for tab in [PickerTab::Subagents, PickerTab::Shell, PickerTab::Terminals] {
+    for tab in tabs {
         let label = tab.label();
-        let style = if tab == state.tab { base.add_modifier(Modifier::BOLD) } else { muted };
+        let style = if *tab == state.tab { base.add_modifier(Modifier::BOLD) } else { muted };
         placed.push(Placed {
             x,
             y: tabs_row,
@@ -159,13 +164,14 @@ pub fn picker_panel_paint(
 
     let muted_fg = styles.text_muted.fg.unwrap_or(crate::components::tool_rows::DEFAULT_FOREGROUND);
     paint_body(&mut placed, &mut fills, state, entries, selected, &colors, left, right, muted_fg);
-    paint_hints(&mut placed, state, base, muted, left);
+    paint_hints(&mut placed, state, entries, selected, base, muted, left);
 
     PickerPaint { placed, fills, content: (left, right), raised: colors.raised }
 }
 
-/// The body rows (3..8): the ` No {active|inactive} subagents`
-/// fallback or the entry rows (subagents-tab.tsx:196-254).
+/// The body rows (3..8): the per-tab empty fallback or the entry rows
+/// (subagents-tab.tsx:196-254, shell-tab.tsx:113-148). Shell rows
+/// render the plain ` No shell commands` fallback (shell-tab.tsx:116).
 #[allow(clippy::too_many_arguments)] // the body painter's geometry inputs
 fn paint_body(
     placed: &mut Vec<Placed>,
@@ -181,11 +187,16 @@ fn paint_body(
     let body_top = 3usize;
     let content_width = right.saturating_sub(left).max(1);
     if entries.is_empty() {
-        // ` No {active|inactive} subagents` — the text carries its own
-        // leading space and starts at the content column (no row
-        // padding).
-        let which = if state.filter_active { "active" } else { "inactive" };
-        let label = format!(" No {which} subagents");
+        // ` No {active|inactive} subagents` / ` No shell commands` —
+        // the text carries its own leading space and starts at the
+        // content column (no row padding).
+        let label = match state.tab {
+            PickerTab::Shell => " No shell commands".to_owned(),
+            _ => {
+                let which = if state.filter_active { "active" } else { "inactive" };
+                format!(" No {which} subagents")
+            }
+        };
         placed.push(Placed {
             x: left,
             y: body_top,
@@ -198,8 +209,20 @@ fn paint_body(
         });
         return;
     }
-    for (index, entry) in entries.iter().enumerate().take(BODY_ROWS) {
-        let y = body_top + index;
+    // Ref scrollbox scrolls the list and CENTERS on move; with a 5-row
+    // window we center the selection (clamped to list bounds) so lists
+    // longer than BODY_ROWS remain fully navigable.
+    let start = if entries.len() <= BODY_ROWS {
+        0
+    } else {
+        let center = BODY_ROWS / 2;
+        selected
+            .saturating_sub(center)
+            .min(entries.len() - BODY_ROWS)
+    };
+    for (offset, entry) in entries.iter().skip(start).take(BODY_ROWS).enumerate() {
+        let index = start + offset;
+        let y = body_top + offset;
         let active = index == selected;
         // The entry row's background spans the full content width
         // (`paddingLeft 1`/`paddingRight 1` cells paint too).
@@ -218,7 +241,14 @@ fn paint_body(
             height: 1,
             style: Style::new().fg(crate::components::tool_rows::DEFAULT_FOREGROUND).bg(fill),
         });
-        let label = format!("{}{}: {}", entry.prefix, entry.agent, entry.title);
+        // Shell/Terminals rows paint their label VERBATIM
+        // (shell-tab.tsx:139's first command line, terminals-tab.tsx:
+        // 105's `foregroundProcess ?? title`); the subagent shape is
+        // `{prefix}{agent}: {title}` (subagents-tab.tsx:240-241).
+        let label = entry
+            .label
+            .clone()
+            .unwrap_or_else(|| format!("{}{}: {}", entry.prefix, entry.agent, entry.title));
         let mut style = Style::new().fg(fg).bg(fill);
         if active {
             style = style.add_modifier(Modifier::BOLD);
@@ -250,12 +280,22 @@ fn paint_body(
     }
 }
 
-/// The hints row (row 9): `show {inactive|active} ctrl+a` + gap 2 +
-/// `tabs ←/→` — labels `text.base` BOLD, shortcuts muted (the
-/// shortcut cell carries its leading space).
+/// The hints row (row 9): the active tab's hints + `tabs ←/→`
+/// (composer/index.tsx:132-150 — each hint is a bold label + muted
+/// shortcut, groups gap 2 apart):
+///
+/// * Subagents (subagents-tab.tsx:120-131): `interrupt ctrl+d` when
+///   the SELECTED entry is running, then `show {inactive|active}
+///   ctrl+a`;
+/// * Shell (shell-tab.tsx:53-59): `output return` + `kill ctrl+d`
+///   only while a row is selected (the hints fn returns [] over an
+///   empty list);
+/// * Terminals: no hints (terminals-tab.tsx registers none).
 fn paint_hints(
     placed: &mut Vec<Placed>,
     state: &PickerState,
+    entries: &[PickerEntry],
+    selected: usize,
     base: Style,
     muted: Style,
     left: usize,
@@ -279,17 +319,37 @@ fn paint_hints(
             lines: vec![PlacedLine::plain(padded, muted)],
             tag: None,
         });
-        *x += shortcut.len() + 1;
+        // The row's flex `gap={2}` — two columns before the next group.
+        *x += shortcut.len() + 1 + 2;
     };
-    // TUI-4 — the Terminals tab has no activity filter hint
-    // (terminals-tab.tsx carries no ctrl+a binding).
-    if state.tab == PickerTab::Terminals {
-        hint(placed, &mut x, "tabs", "←/→");
-        return;
+    match state.tab {
+        // TUI-4 — the Terminals tab has no hints row content
+        // (terminals-tab.tsx carries no hints fn).
+        PickerTab::Terminals => {}
+        PickerTab::Shell => {
+            // shell-tab.tsx:53-59: hints exist only over a selection.
+            if !entries.is_empty() {
+                let _ = selected;
+                hint(placed, &mut x, "output", "return");
+                hint(placed, &mut x, "kill", "ctrl+d");
+            }
+        }
+        PickerTab::Subagents => {
+            // subagents-tab.tsx:122-125: the interrupt hint rides the
+            // SELECTED running entry.
+            if entries
+                .get(selected.min(entries.len().saturating_sub(1)))
+                .is_some_and(|entry| entry.running)
+            {
+                hint(placed, &mut x, "interrupt", "ctrl+d");
+            }
+            let which = if state.filter_active { "inactive" } else { "active" };
+            hint(placed, &mut x, &format!("show {which}"), "ctrl+a");
+        }
     }
-    let which = if state.filter_active { "inactive" } else { "active" };
-    hint(placed, &mut x, &format!("show {which}"), "ctrl+a");
-    x += 2; // gap 2 between hint groups
+    // `tabs ←/→` (index.tsx:143-150) — every tab, when the strip has
+    // more than one (the single-tab fallback drops it; the port's
+    // minimum strip is two tabs, so it always paints).
     hint(placed, &mut x, "tabs", "←/→");
 }
 
@@ -357,6 +417,7 @@ mod tests {
             selected,
             &theme,
             80,
+            &[PickerTab::Subagents, PickerTab::Shell, PickerTab::Terminals],
         );
         let grid = frame.text_grid();
         assert_eq!(grid.len(), PANEL_ROWS);
@@ -389,9 +450,55 @@ mod tests {
             0,
             &theme,
             80,
+            &[PickerTab::Subagents, PickerTab::Shell, PickerTab::Terminals],
         );
         let grid = frame.text_grid();
         assert_eq!(grid[3].trim_end(), "  ┃  No active subagents");
         assert_eq!(grid[9].trim_end(), "  ┃  show inactive ctrl+a  tabs ←/→");
+    }
+
+    /// G-6 — the Shell tab paints the running shells' first command
+    /// lines VERBATIM (shell-tab.tsx:116-141) with the `output`/`kill`
+    /// hints, and the Terminals tab paints `+ New terminal` with the
+    /// hints row carrying only `tabs ←/→` (terminals-tab.tsx has no
+    /// hints fn).
+    #[test]
+    fn shell_and_terminals_tabs_paint_plain_rows_and_their_hints() {
+        let store = Store::new(Runtime::new());
+        store.open_tab("s1", Some("Root".to_owned()));
+        store.ingest_all([crate::data::Ingest::Event(crate::data::BusEvent::new(
+            "shell.created",
+            serde_json::json!({
+                "info": {"id": "sh_1", "command": "cargo test --all\n--features slow",
+                         "metadata": {"sessionID": "s1"}}
+            }),
+        ))]);
+        let theme = ThemeState::v2_dark();
+        let tabs = [PickerTab::Subagents, PickerTab::Shell, PickerTab::Terminals];
+
+        let mut picker = store.picker();
+        picker.open = true;
+        picker.tab = PickerTab::Shell;
+        store.set_picker(picker);
+        let entries = store.picker_entries("s1");
+        assert_eq!(entries.len(), 1);
+        let frame = crate::components::picker_solid::picker_panel_frame_dispatch(
+            &store.picker(),
+            &entries,
+            0,
+            &theme,
+            80,
+            &tabs,
+        );
+        let grid = frame.text_grid();
+        assert_eq!(grid[3].trim_end(), "  ┃  cargo test --all");
+        assert_eq!(grid[9].trim_end(), "  ┃  output return  kill ctrl+d  tabs ←/→");
+
+        // The terminals tab: the add slot, and the hint row is just
+        // `tabs ←/→` — but WITHOUT the capability the tab never
+        // registers (picker_registered_tabs gates the strip).
+        store.set_terminal_available(false);
+        assert_eq!(store.picker_registered_tabs().len(), 2);
+        assert_eq!(store.picker_registered_tabs(), vec![PickerTab::Subagents, PickerTab::Shell]);
     }
 }
