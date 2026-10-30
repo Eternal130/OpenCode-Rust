@@ -315,6 +315,15 @@ fn resolve_one(target: &str, root: &Path) -> Result<ResolvedPlugin, String> {
 /// `<pkg>@<version>` directory (unpinned specs — the live layout keys
 /// them `@latest`, `plugin add` pins to the resolved version; the
 /// newest stamp under the greatest version-sort key wins).
+/// The installed package directory for an unpinned spec (the newest
+/// generation across every `<pkg>@<version>` key) — the update path's
+/// installed-version probe.
+#[must_use]
+pub fn resolve_installed_package(root: &Path, package: &str) -> Option<PathBuf> {
+    let installed = latest_any_install(root, package)?;
+    Some(installed.root.join("node_modules").join(&installed.package))
+}
+
 fn latest_any_install(root: &Path, package: &str) -> Option<super::context::install::Installed> {
     let mut versions: Vec<PathBuf> = std::fs::read_dir(root)
         .ok()?
