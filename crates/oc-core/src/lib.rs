@@ -5,6 +5,7 @@ pub mod cli_config;
 pub mod config;
 pub mod database;
 pub mod engine;
+pub mod environment;
 pub mod env;
 pub mod file_access;
 pub mod file_mutation;
