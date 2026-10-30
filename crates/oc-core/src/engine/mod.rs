@@ -404,6 +404,10 @@ pub struct Engine {
     plugin_source: Option<Arc<dyn crate::plugin_apply::LocationPluginSource>>,
     /// The app identity for the request User-Agent (options.app).
     app: AppMetadata,
+    /// RF-01 — the running local-provider inventory (ollama/lmstudio/
+    /// vllm runtime discovery): shared by the engine resolver and every
+    /// per-location overlay; the server's refresh loop keeps it fresh.
+    pub local: Arc<crate::provider_catalog::local::LocalDiscovery>,
 }
 
 impl Engine {
@@ -505,6 +509,11 @@ impl Engine {
         // re-reads `ModelsDev.get()` on every Refreshed event and
         // reloads integrations + providers, models-dev.ts:61-66).
         let mut catalog_resolver: Option<Arc<resolver::CatalogModelResolver>> = None;
+        // RF-01 — the shared local-provider discovery snapshot
+        // (ollama/lmstudio/vllm runtime inventory): empty at boot; the
+        // server composition root's refresh loop populates it and the
+        // resolvers read it live (never blocks boot, ref local.ts:116).
+        let local = Arc::new(crate::provider_catalog::local::LocalDiscovery::new());
         let resolver: Arc<dyn ModelResolver> =
             options.model_resolver.clone().unwrap_or_else(|| {
                 let typed = Arc::new(
@@ -517,7 +526,8 @@ impl Engine {
                         options.default_model.clone(),
                     )
                     .with_credentials(Arc::clone(&integration.credential_bindings()))
-                    .with_console(Arc::clone(&integration.console_providers())),
+                    .with_console(Arc::clone(&integration.console_providers()))
+                    .with_local(Arc::clone(&local)),
                 );
                 catalog_resolver = Some(Arc::clone(&typed));
                 typed
@@ -675,6 +685,7 @@ impl Engine {
             code_mode_timeout: options.code_mode_timeout,
             plugin_source: options.plugin_source.clone(),
             app: options.app,
+            local,
         };
         // DB-D2 (location-lifecycle.ts:36-45): every durable session
         // event re-activates its location's project (`Project.activate`,
@@ -921,7 +932,8 @@ impl Engine {
                         location_providers.default_model,
                     )
                     .with_credentials(Arc::clone(&self.integration.credential_bindings()))
-                    .with_console(Arc::clone(&self.integration.console_providers())),
+                    .with_console(Arc::clone(&self.integration.console_providers()))
+                    .with_local(Arc::clone(&self.local)),
                     Arc::clone(&self.resolver),
                 ))
             };
