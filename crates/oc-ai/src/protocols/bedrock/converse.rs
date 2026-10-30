@@ -9,6 +9,9 @@ use std::sync::Arc;
 
 use serde_json::{json, Map, Value};
 
+use crate::protocols::anthropic_messages::{
+    supports_thinking_block_binding, THINKING_BINDING_BETA,
+};
 use crate::protocols::shared::{
     self, decode_base64, encode_base64, fit_thinking_budget, parse_json,
     sum_non_cached_to_inclusive, total_tokens,
@@ -604,6 +607,30 @@ fn nova2_max_tokens(request: &LLMRequest, max_tokens: Option<f64>) -> Option<f64
 /// The Converse request body (port of `BedrockConverseBody` /
 /// `fromRequest`). Cache points are positional: emitted right after the
 /// content they mark, tools → system → messages order for the budget.
+/// Claude 5.1+ binds each thinking signature to the prefix above it. Ask
+/// Bedrock to drop the affected blocks instead of failing when that prefix
+/// changes (port of `applyThinkingBindingDefault`). `http.body` overlays
+/// this field by field, so callers can still override it.
+fn apply_thinking_binding_default(request: &LLMRequest, thinking: Option<Value>) -> Option<Value> {
+    let disabled = request
+        .http
+        .as_ref()
+        .and_then(|http| http.body.as_ref())
+        .and_then(|body| body.get("additionalModelRequestFields"))
+        .and_then(|fields| fields.get("thinking"))
+        .and_then(|thinking| thinking.get("type"))
+        .and_then(Value::as_str)
+        == Some("disabled");
+    if disabled || !supports_thinking_block_binding(&request.model) {
+        return thinking;
+    }
+    let mut thinking = thinking.unwrap_or_else(|| json!({"type": "adaptive"}));
+    if let Some(object) = thinking.as_object_mut() {
+        object.insert("block_binding".into(), json!({"prefix_mismatch_behavior": "drop_block"}));
+    }
+    Some(thinking)
+}
+
 pub fn body_from(request: &LLMRequest) -> Result<Value, AiError> {
     let generation = request.generation.as_ref();
     let tools = shared::flatten_tools(&request.tools);
@@ -640,6 +667,7 @@ pub fn body_from(request: &LLMRequest) -> Result<Value, AiError> {
                 "budget_tokens": fit_thinking_budget(budget_tokens, max_tokens, MIN_THINKING_BUDGET),
             })
         });
+    let thinking = apply_thinking_binding_default(request, thinking);
 
     let system = lower_system(request, &mut breakpoints);
     let messages = lower_messages(request, &mut breakpoints)?;
@@ -682,7 +710,12 @@ pub fn body_from(request: &LLMRequest) -> Result<Value, AiError> {
                 fields.insert("top_k".into(), json!(top_k));
             }
             if let Some(thinking) = thinking {
-                fields.insert("thinking".into(), thinking);
+                fields.insert("thinking".into(), thinking.clone());
+                // Converse takes Anthropic betas in the body, and Bedrock
+                // rejects `block_binding` without this one.
+                if thinking.get("block_binding").is_some() {
+                    fields.insert("anthropic_beta".into(), json!([THINKING_BINDING_BETA]));
+                }
             }
             Some(Value::Object(fields))
         }
