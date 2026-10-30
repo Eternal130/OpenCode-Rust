@@ -188,25 +188,16 @@ async fn connect_token(
 
 /// Origin policy: no Origin header (server-to-server) or an allowed CORS
 /// origin / same-host browser origin (deep-map §2 "forces preflight").
+/// The same-host match is PORT-SENSITIVE (middleware.ts:66 compares the
+/// Origin authority with the Host header exactly) — this rides the shared
+/// [`crate::middleware::is_allowed_request_origin`] / auth
+/// `same_origin_host` check instead of stripping ports.
 pub(super) fn origin_allowed(state: &SharedState, headers: &HeaderMap) -> bool {
-    let Some(origin) = headers.get(header::ORIGIN).and_then(|value| value.to_str().ok()) else {
-        return true;
-    };
-    if state.cors_origins.iter().any(|allowed| allowed == origin) {
-        return true;
-    }
-    // Same-host: match the Host header's authority.
-    if let Some(host) = headers.get(header::HOST).and_then(|value| value.to_str().ok()) {
-        let host = host.split(':').next().unwrap_or(host);
-        return origin
-            .trim_start_matches("http://")
-            .trim_start_matches("https://")
-            .split(':')
-            .next()
-            .unwrap_or(origin)
-            == host;
-    }
-    false
+    crate::middleware::is_allowed_request_origin(
+        headers.get(header::ORIGIN).and_then(|value| value.to_str().ok()),
+        headers.get(header::HOST).and_then(|value| value.to_str().ok()),
+        &state.cors_origins,
+    )
 }
 
 /// Consumes a connect ticket (single-use, scoped, 60s TTL) through the
@@ -412,10 +403,7 @@ fn decode_pty_input(bytes: &[u8]) -> Option<String> {
     // Mirrors ref protocol.ts:30-36: TextDecoder with `fatal: true` throws on
     // ANY invalid or truncated sequence and the catch drops the whole chunk —
     // the valid prefix is NOT forwarded.
-    std::str::from_utf8(bytes)
-        .ok()
-        .map(str::to_owned)
-        .filter(|text| !text.is_empty())
+    std::str::from_utf8(bytes).ok().map(str::to_owned).filter(|text| !text.is_empty())
 }
 
 #[cfg(test)]
@@ -466,4 +454,3 @@ mod tests {
         }
     }
 }
-
