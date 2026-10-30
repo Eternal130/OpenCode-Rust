@@ -660,6 +660,32 @@ impl SessionInboxRow {
 // Domain-shaped helpers on Tx
 // ---------------------------------------------------------------------------
 
+/// One scanned kv entry (`kv.ts` `Entry`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct KvEntry {
+    pub key: String,
+    pub value: serde_json::Value,
+}
+
+/// A `kv_scan` page (`kv.ts` `ScanResult`): `next` is the key cursor for the
+/// following page, absent when the scan is exhausted.
+#[derive(Debug, Clone, PartialEq)]
+pub struct KvScanResult {
+    pub entries: Vec<KvEntry>,
+    pub next: Option<String>,
+}
+
+/// `prefixEnd` (`kv.ts:85-90`): the exclusive upper bound for a prefix scan —
+/// the last code point below U+10FFFF bumped by one; `None` when the prefix
+/// is empty or entirely maximal (unbounded).
+fn kv_prefix_end(prefix: &str) -> Option<String> {
+    let points: Vec<char> = prefix.chars().collect();
+    let index = points.iter().rposition(|value| (*value as u32) < 0x10_FFFF)?;
+    let mut end: String = points[..index].iter().collect();
+    end.push(char::from_u32(points[index] as u32 + 1)?);
+    Some(end)
+}
+
 impl Tx<'_> {
     /// Upserts a kv entry (JSON value), refreshing `time_updated`.
     pub fn kv_set(&mut self, key: &str, value: &serde_json::Value) -> Result<()> {
@@ -687,6 +713,45 @@ impl Tx<'_> {
     pub fn kv_delete(&mut self, key: &str) -> Result<()> {
         self.execute("DELETE FROM kv WHERE key = ?1", rusqlite::params![key])?;
         Ok(())
+    }
+
+    /// Scans kv entries in key order with an inclusive `prefix` lower bound
+    /// (`None` when the prefix is empty), an exclusive `prefix_end` upper
+    /// bound, and a strict `after` cursor — the v2 `KV.scan` shape
+    /// (`core/src/kv.ts:60-80`). Reads `limit + 1` rows so a leftover row
+    /// reports `next` (the last returned key) without over-reading entries.
+    pub fn kv_scan(
+        &self,
+        prefix: &str,
+        after: Option<&str>,
+        limit: i64,
+    ) -> Result<KvScanResult> {
+        let limit = limit.clamp(1, 1000);
+        let lower = if prefix.is_empty() { None } else { Some(prefix) };
+        let upper = kv_prefix_end(prefix);
+        let mut statement = self.conn().prepare(
+            "SELECT key, value FROM kv \
+             WHERE (?1 IS NULL OR key >= ?1) AND (?2 IS NULL OR key < ?2) \
+               AND (?3 IS NULL OR key > ?3) \
+             ORDER BY key LIMIT ?4",
+        )?;
+        let rows = statement
+            .query_map(
+                rusqlite::params![lower, upper, after, limit + 1],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let mut entries: Vec<KvEntry> = Vec::with_capacity(rows.len().min(limit as usize));
+        for (key, encoded) in rows {
+            if entries.len() == limit as usize {
+                return Ok(KvScanResult {
+                    next: entries.last().map(|entry| entry.key.clone()),
+                    entries,
+                });
+            }
+            entries.push(KvEntry { key, value: decode_json(&encoded)? });
+        }
+        Ok(KvScanResult { entries, next: None })
     }
 
     /// Journal ids currently recorded (unordered).
@@ -793,6 +858,20 @@ impl Database {
     pub async fn kv_get(&self, key: &str) -> Result<Option<serde_json::Value>> {
         let key = key.to_string();
         self.transaction(move |tx| tx.kv_get(&key)).await
+    }
+
+    /// Scans kv entries (`KV.scan`): prefix filter + `after` cursor
+    /// pagination; `limit` defaults to 100 upstream — callers pass it here.
+    pub async fn kv_scan(
+        &self,
+        prefix: &str,
+        after: Option<&str>,
+        limit: i64,
+    ) -> Result<KvScanResult> {
+        let prefix = prefix.to_string();
+        let after = after.map(str::to_string);
+        self.transaction(move |tx| tx.kv_scan(&prefix, after.as_deref(), limit))
+            .await
     }
 
     /// Journal ids currently recorded.
