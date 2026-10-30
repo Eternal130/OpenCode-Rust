@@ -13,13 +13,13 @@
 
 use crate::components::composer::autocomplete;
 use crate::components::composer::render::{AutocompleteView, FooterHints, PromptView};
-use crate::components::message::list::{render_transcript, TranscriptOptions};
+use crate::components::message::list::{TranscriptOptions, render_transcript};
 use crate::components::message::model::ToolStatus;
 use crate::components::session_tabs::{Attention, TabStatus, TabView};
 use crate::components::sidebar::{
-    SidebarContextWidget, SidebarMcpWidget, SidebarSections, SidebarView, SIDEBAR_AUTO_BREAKPOINT,
+    SIDEBAR_AUTO_BREAKPOINT, SidebarContextWidget, SidebarMcpWidget, SidebarSections, SidebarView,
 };
-use crate::render::{paint_placed_with_fills, Frame};
+use crate::render::{Frame, paint_placed_with_fills};
 use crate::store::{SessionTab, Store};
 use ratatui::style::Style;
 
@@ -1285,10 +1285,15 @@ fn paint_queued_dock(
 /// v2's count pluralization (`${count} subagent${count === 1 ? "" : "s"}`,
 /// footer.tsx:24-32).
 fn plural_s(count: usize) -> &'static str {
-    if count == 1 {
-        ""
-    } else {
-        "s"
+    if count == 1 { "" } else { "s" }
+}
+
+/// A ratatui color back to its RGBA token (G-35's spinner input —
+/// the agent rail color or the `border.base` fallback).
+fn ratatui_color_to_rgba(color: ratatui::style::Color) -> oc_theme::Rgba {
+    match color {
+        ratatui::style::Color::Rgb(r, g, b) => oc_theme::Rgba::from_ints(r, g, b, 0xff),
+        _ => oc_theme::Rgba::from_ints(0x80, 0x80, 0x80, 0xff),
     }
 }
 
@@ -1341,6 +1346,29 @@ fn composer_footer_hints(
             .interrupt_hint_armed(session_id, store.clock())
             .map(|armed| if armed { "esc again to interrupt" } else { "esc interrupt" }.to_owned())
             .unwrap_or_default(),
+        // G-35 — the knight-rider gradient spinner while the turn
+        // runs (prompt/index.tsx:1632-1649 + 1892: `createFrames`/
+        // `createColors` over the agent color — `border.base` while
+        // unresolved — at `interval={40}`, blocks style,
+        // inactiveFactor 0.6, minAlpha 0.3).
+        spinner: if store.session_running(session_id) && !shell {
+            let color = store
+                .composer_rail_color(session_id)
+                .map(ratatui_color_to_rgba)
+                .unwrap_or_else(|| ratatui_color_to_rgba(store.theme().styles().border));
+            let options = crate::components::composer::knight::KnightOptions {
+                color,
+                inactive_factor: 0.6,
+                min_alpha: 0.3,
+                ..crate::components::composer::knight::KnightOptions::default()
+            };
+            crate::components::composer::knight::composer_spinner_cell(&options, store.clock())
+                .into_iter()
+                .map(|(ch, fg)| crate::components::composer::render::SpinnerCell { ch, fg })
+                .collect()
+        } else {
+            Vec::new()
+        },
         location_hovered: store.location_hovered(),
         // TUI-12 — the live segment (footer.tsx:20-33,47): the
         // family's running subagents + the session's in-flight
@@ -1648,11 +1676,7 @@ fn composer_usage(store: &Store, session_id: &str) -> String {
     let cost = store.session_cost(session_id);
     if cost > 0.0 {
         let money = crate::components::sidebar::format_usd(cost);
-        if context.is_empty() {
-            money
-        } else {
-            format!("{context} · {money}")
-        }
+        if context.is_empty() { money } else { format!("{context} · {money}") }
     } else {
         context
     }

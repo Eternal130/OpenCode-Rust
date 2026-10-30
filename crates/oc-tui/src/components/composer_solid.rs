@@ -70,17 +70,17 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use opentui_core::Rgba;
 use opentui_core::renderer::CliRendererConfig;
 use opentui_core::styled_text::{StyledText, TextChunk};
-use opentui_core::Rgba;
 use opentui_solid::builder::ForItemSource;
 use opentui_solid::element::{Children, ForItem, PropValue};
 use opentui_solid::reactive::Reactive;
-use opentui_solid::{box_, for_list, map, text, Element, Signal, SolidRenderer};
+use opentui_solid::{Element, Signal, SolidRenderer, box_, for_list, map, text};
 
 use crate::components::composer::autocomplete::popup_height;
 use crate::components::composer::render::{
-    caret_cell, footer_plan, layout_draft_lines, palette, truncate_width, PromptView,
+    PromptView, caret_cell, footer_plan, layout_draft_lines, palette, truncate_width,
 };
 use crate::components::session_tabs_solid::frame_from_buffer;
 use crate::render::{CellColor, Frame};
@@ -255,6 +255,10 @@ struct ComposerInputs {
     metadata_segments: Vec<(usize, StyledText)>,
     footer_location: StyledText,
     footer_interrupt: StyledText,
+    /// G-35 — the running-state knight-rider spinner (one chunk per
+    /// cell; the chunk fg carries the RGBA trail alpha — the ref's
+    /// `<spinner>` blends over the page fill).
+    footer_spinner: StyledText,
     /// The right block's first arm (`{key} agents` or the usage
     /// segment) + the `{key} commands` hint (two text elements — the
     /// 2-gap between them must stay page-fill, never a painted space
@@ -273,6 +277,7 @@ struct ComposerInputs {
     /// PENDING, muted once sent (index.tsx:1945-1952).
     footer_editor_file: StyledText,
     // -- dynamic geometry (content-dependent, patched) --------------------
+    spinner_x: usize,
     interrupt_x: usize,
     block_x: usize,
     command_x: usize,
@@ -420,6 +425,22 @@ fn shape(view: &PromptView, width: usize, height: usize, theme: &ThemeState) -> 
         ]),
         None => styled(Vec::new()),
     };
+    // G-35 — the running-state spinner cells (knight.rs): each cell
+    // is its own chunk so the per-cell trail alpha rides the fg
+    // (blended over the footer row's page fill by the renderer).
+    let footer_spinner = styled(
+        view.footer
+            .spinner
+            .iter()
+            .map(|cell| TextChunk {
+                text: cell.ch.to_string(),
+                fg: Some(Rgba::from_ints(cell.fg.r, cell.fg.g, cell.fg.b, cell.fg.a)),
+                bg: None,
+                attributes: 0,
+                link: None,
+            })
+            .collect(),
+    );
     let footer_block = if plan.block_x.is_some() {
         if plan.usage_first {
             one(plan.usage.clone(), colors.muted)
@@ -503,6 +524,7 @@ fn shape(view: &PromptView, width: usize, height: usize, theme: &ThemeState) -> 
         metadata_segments,
         footer_location,
         footer_interrupt,
+        footer_spinner,
         footer_block,
         footer_command,
         footer_plugin,
@@ -510,6 +532,7 @@ fn shape(view: &PromptView, width: usize, height: usize, theme: &ThemeState) -> 
         footer_shell,
         footer_editor_file,
         interrupt_x: plan.interrupt_x.unwrap_or(0),
+        spinner_x: plan.spinner_x.unwrap_or(0),
         block_x: plan.block_x.unwrap_or(0),
         command_x: plan.command_x.unwrap_or(0),
         plugin_x: plan.plugin.as_ref().map_or(0, |(x, _)| *x),
@@ -786,6 +809,12 @@ fn composer_element(inputs: &Signal<ComposerInputs>, geo: &ComposerInputs) -> El
             .flex_direction("row")
             .children(Children::Static(vec![
                 footer_text(|_| 0, |i: &ComposerInputs| i.footer_location.clone()),
+                // G-35 — the running-state spinner (idle renders an
+                // empty text at x=0, painting nothing).
+                footer_text(
+                    |i: &ComposerInputs| i.spinner_x,
+                    |i: &ComposerInputs| i.footer_spinner.clone(),
+                ),
                 footer_text(
                     |i: &ComposerInputs| i.interrupt_x,
                     |i: &ComposerInputs| i.footer_interrupt.clone(),
@@ -936,8 +965,8 @@ pub fn paint_solid_prompt_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::composer::render::{FooterHints, MetadataLine};
     use crate::components::composer::PromptDraft;
+    use crate::components::composer::render::{FooterHints, MetadataLine};
     use crate::theme::ThemeState;
 
     fn draft(text: &str) -> PromptDraft {
