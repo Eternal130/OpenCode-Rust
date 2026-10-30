@@ -238,6 +238,41 @@ async fn shell_truncation_notice_counts_lines() {
     assert_eq!(capture.output, "one\ntwo\nthree\n");
 }
 
+
+// G-33 — the capture truncation budget follows the config `tool_output`
+// keys (engine wiring: `with_output_limits`).
+#[tokio::test]
+async fn shell_capture_honors_configured_tool_output_limits() {
+    let tmp = tempfile::tempdir().unwrap();
+    let shell = service(&tmp).with_output_limits(crate::tool_output::Limits {
+        max_lines: 2,
+        max_bytes: 10_000,
+    });
+    let info = shell
+        .create(
+            CreateInput {
+                command: "printf 'one\ntwo\nthree\n'".into(),
+                cwd: Some(tmp.path().to_string_lossy().to_string()),
+                timeout: Some(5_000),
+                metadata: None,
+            },
+            Some("/bin/sh"),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    let result = shell.result(info).await;
+    let capture = result.capture.unwrap();
+    // 3 lines > the configured 2-line window: the tail keeps the LAST
+    // two lines and the notice reports the window.
+    assert!(capture.truncated, "output: {}", capture.output);
+    assert!(capture.output.contains("two"), "output: {}", capture.output);
+    assert!(capture.output.contains("three"), "output: {}", capture.output);
+    assert!(!capture.output.starts_with("one\n"), "output: {}", capture.output);
+    assert!(capture.output.contains("[showing lines 2-3 of 3"), "output: {}", capture.output);
+}
+
 // ---------------------------------------------------------------------------
 // ShellParse ports (shell-parse.test.ts) — security-pinned behavior
 // ---------------------------------------------------------------------------

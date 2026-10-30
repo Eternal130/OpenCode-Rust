@@ -138,6 +138,27 @@ impl Default for Limits {
     }
 }
 
+impl Limits {
+    /// G-33 — resolves the effective limits from the config's
+    /// `tool_output` key (`max_lines` / `max_bytes`). Absent keys keep
+    /// the compile-time defaults (2000 lines / 50 KiB).
+    #[must_use]
+    pub fn from_config(config: &oc_schema::config::ToolOutput) -> Self {
+        Self {
+            max_lines: config.max_lines.map_or(MAX_LINES, |lines| lines as usize),
+            max_bytes: config.max_bytes.map_or(MAX_BYTES, |bytes| bytes as usize),
+        }
+    }
+
+    /// Same resolution over already-loaded config entries
+    /// (`crate::config::latest` — highest-priority document wins).
+    #[must_use]
+    pub fn from_entries(entries: &[oc_schema::config::Entry]) -> Self {
+        crate::config::latest(entries, |info| info.tool_output.clone())
+            .map_or_else(Self::default, |config| Self::from_config(&config))
+    }
+}
+
 /// One tool result entering the budget (the normalize-result shape).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ToolOutputResult {
@@ -384,6 +405,43 @@ mod tests {
 
     fn text(text: &str) -> ToolOutputResult {
         ToolOutputResult { content: vec![Content::Text { text: text.into() }], metadata: None }
+    }
+
+    #[test]
+    fn tool_output_limits_resolve_from_the_config_keys() {
+        // G-33 — `tool_output.max_lines/max_bytes` were parsed but never
+        // consumed; `Limits::from_config` is the seam the engine boot
+        // applies.
+        let config = serde_json::from_value::<oc_schema::config::ToolOutput>(
+            serde_json::json!({"max_lines": 50, "max_bytes": 4096}),
+        )
+        .unwrap();
+        assert_eq!(
+            Limits::from_config(&config),
+            Limits { max_lines: 50, max_bytes: 4_096 }
+        );
+        // Absent keys keep the compile-time defaults.
+        let empty = oc_schema::config::ToolOutput::default();
+        assert_eq!(Limits::from_config(&empty), Limits::default());
+    }
+
+    #[test]
+    fn tool_output_configure_changes_truncation_behavior() {
+        // The service-level contract behind the engine-boot wiring:
+        // `configure(Limits::from_config(...))` changes what `truncate`
+        // keeps.
+        let low = Limits { max_lines: 1, max_bytes: 1_000 };
+        let low_service = service(low);
+        let result = low_service.truncate(text("one\ntwo")).expect("truncate");
+        let metadata = result.metadata.expect("metadata");
+        assert_eq!(metadata.get("truncated"), Some(&serde_json::json!(true)));
+
+        let high = service(Limits { max_lines: 10, max_bytes: 10_000 });
+        let result = high.truncate(text("one\ntwo")).expect("truncate");
+        assert_eq!(
+            result.metadata.expect("metadata").get("truncated"),
+            Some(&serde_json::json!(false))
+        );
     }
 
     #[test]

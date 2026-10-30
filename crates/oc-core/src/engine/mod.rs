@@ -189,6 +189,12 @@ pub struct EngineOptions {
     /// hardcoded cadence); the server composition root seeds it from
     /// `experimental.file_retention.cleanup_interval`.
     pub file_retention: crate::file_retention::FileRetentionSettings,
+    /// G-33 — the effective `tool_output` budget (`max_lines` /
+    /// `max_bytes`): seeds [`crate::tool_output::ToolOutput::configure`]
+    /// at boot and every location's shell capture truncation. Default
+    /// keeps the compile-time 2000-line / 50 KiB budget; the server
+    /// composition root seeds it from the `tool_output` config key.
+    pub tool_output_limits: crate::tool_output::Limits,
     /// Whether the file-watcher service runs (v2 `Watcher` options
     /// `enabled`; the server's `fs.filewatcher` flag). Default true; off
     /// boots a disabled watcher whose subscriptions end immediately.
@@ -233,6 +239,7 @@ impl EngineOptions {
             default_model: None,
             activity_sweeper: true,
             file_retention: crate::file_retention::FileRetentionSettings::default(),
+            tool_output_limits: crate::tool_output::Limits::default(),
             file_watcher: true,
             code_mode_runtime: None,
             code_mode_timeout: std::time::Duration::from_secs(120),
@@ -367,6 +374,9 @@ pub struct Engine {
     pub references: Arc<crate::reference::ReferenceService>,
     reference_sweeper: Option<tokio::task::JoinHandle<()>>,
     tool_output: Arc<ToolOutput>,
+    /// G-33 — the configured truncation budget for the per-location
+    /// shell captures (fed to each `Shell` at assembly).
+    tool_output_limits: crate::tool_output::Limits,
     /// The v2 location service map (graph lifecycle authority: adopt /
     /// invalidate / reload + the TTL sweeper).
     pub locations: Arc<LocationServiceMap>,
@@ -486,6 +496,11 @@ impl Engine {
             });
         }
         let tool_output = Arc::new(ToolOutput::new(&options.data_root, options.clock.clone()));
+        // G-33 — the config `tool_output.max_lines/max_bytes` keys were
+        // parsed but never consumed; the boot applies them to the shared
+        // service (`Editor.configure`, tool-output.ts) so every truncate
+        // call honors the configured budget.
+        tool_output.configure(options.tool_output_limits);
         // RA-04 (tool-output.ts:129-144 / shell.ts:104-109): the two
         // hourly retention sweeps — spilled tool output and shell capture
         // files — run for the engine lifetime. Handles are retained and
@@ -669,6 +684,7 @@ impl Engine {
             references,
             reference_sweeper,
             tool_output,
+            tool_output_limits: options.tool_output_limits,
             locations: Arc::clone(&locations),
             services,
             inputs: Arc::new(DashMap::new()),
@@ -1034,6 +1050,8 @@ impl Engine {
         // The `shell.create.before` production dispatch target + the
         // config `shell` key (ShellSelect "config" priority).
         .with_hooks(Arc::clone(&hooks))
+        // G-33 — the capture truncation budget (config `tool_output`).
+        .with_output_limits(self.tool_output_limits)
         .with_config_shell(config_shell_of(&config_documents));
         let jobs =
             Arc::new(Jobs::new((*self.db).clone(), Arc::clone(&self.ids), Arc::clone(&self.clock)));
