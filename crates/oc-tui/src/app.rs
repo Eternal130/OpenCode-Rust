@@ -7759,6 +7759,35 @@ pub async fn run_with_size(
             }
             app.store.request_redraw();
         }
+        // G-20(2) — `terminal.suspend` (app.tsx:1119-1129): the
+        // dispatcher staged the request; perform the ref's run body —
+        // `renderer.suspend()` (leave the alt-screen, hand the mouse
+        // and paste/focus modes back, cooked mode), stop our OWN
+        // process group (`kill(0, SIGTSTP)` — never a foreign pid),
+        // and `renderer.resume()` on the SIGCONT (`renderer.once`
+        // parity via the continue latch in `suspend.rs`). The stderr
+        // redirect hands off for the suspend like the `$EDITOR` seam
+        // so the shell's own job-control messages reach the user.
+        if app.store.take_terminal_suspend() {
+            let stderr_pause =
+                stderr_guard.take().map(crate::stderr_redirect::StderrRedirect::restore);
+            let _ = disable_raw_mode();
+            {
+                let mut out = std::io::stdout();
+                crate::suspend::teardown(&mut out, applied_mouse);
+            }
+            crate::suspend::suspend_cycle();
+            let _ = enable_raw_mode();
+            {
+                let mut out = std::io::stdout();
+                crate::suspend::restore(&mut out, applied_mouse);
+            }
+            let _ = terminal.clear();
+            if stderr_pause.is_some() {
+                stderr_guard = crate::stderr_redirect::install(&crate::stderr_redirect::log_path());
+            }
+            app.store.request_redraw();
+        }
         // Tabs persistence: save when the tab list changed — into the
         // CONFIGURED scope only (v2 `session-tabs.tsx:109-115` writes
         // `draft.cwd[cwd]` or `draft.global`), preserving the other
