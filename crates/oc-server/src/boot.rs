@@ -296,6 +296,10 @@ pub async fn boot_and_serve(options: &BootOptions) -> io::Result<ServeHandle> {
     // config document wins; absent/zero keeps the hourly default).
     engine_options.file_retention =
         oc_core::file_retention::FileRetentionSettings::from_entries(&snapshot.entries);
+    // G-33 — `tool_output.max_lines/max_bytes` (highest-priority config
+    // document wins; absent keys keep the 2000-line / 50 KiB defaults).
+    engine_options.tool_output_limits =
+        oc_core::tool_output::Limits::from_entries(&snapshot.entries);
     // The production server runs the models-dev refresh loop (v2
     // `ModelsDev` layer spawns it whenever `fetch` is on — the CLI
     // default); direct engine boots stay hermetic.

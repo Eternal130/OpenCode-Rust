@@ -5,8 +5,7 @@ use base64::Engine as _;
 use oc_schema::prompt::InputFileAttachment;
 
 use super::prompt::{
-    detect_mime, materialize_attachment, materialize_files, AttachmentError,
-    MAX_ATTACHMENT_BYTES,
+    detect_mime, materialize_attachment, materialize_files, AttachmentError, MAX_ATTACHMENT_BYTES,
 };
 
 fn input(uri: String) -> InputFileAttachment {
@@ -29,8 +28,11 @@ fn scratch(name: &str) -> std::path::PathBuf {
 fn decodes_base64_data_urls() {
     let bytes = b"hello attachment".to_vec();
     let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
-    let file = materialize_attachment(&input(format!("data:application/octet-stream;base64,{encoded}")), None)
-        .unwrap();
+    let file = materialize_attachment(
+        &input(format!("data:application/octet-stream;base64,{encoded}")),
+        None,
+    )
+    .unwrap();
     assert_eq!(decode_b64(&file), bytes);
     // The data-URL header mime is IGNORED (data URLs resolve with
     // `mime: undefined`, prompt.ts:97-105) — `Mime.detect` sniffs the
@@ -44,19 +46,15 @@ fn decodes_base64_data_urls() {
 fn decodes_percent_encoded_non_base64_data_urls() {
     // prompt.ts:217-218 — non-base64 payloads go through decodeURIComponent.
     let file =
-        materialize_attachment(&input("data:text/plain,hello%20w%C3%B6rld".into()), None)
-            .unwrap();
+        materialize_attachment(&input("data:text/plain,hello%20w%C3%B6rld".into()), None).unwrap();
     assert_eq!(decode_b64(&file), b"hello w\xc3\xb6rld".to_vec());
 }
 
 #[test]
 fn rejects_non_canonical_and_broken_data_urls() {
     // prompt.ts:219-221 — non-canonical base64 (`AAECAw=`) is rejected.
-    let error = materialize_attachment(
-        &input("data:image/png;base64,AAECAw=".into()),
-        None,
-    )
-    .unwrap_err();
+    let error =
+        materialize_attachment(&input("data:image/png;base64,AAECAw=".into()), None).unwrap_err();
     assert_eq!(
         error,
         AttachmentError::InvalidDataUrl { label: "inline attachment".into() },
@@ -69,11 +67,7 @@ fn rejects_non_canonical_and_broken_data_urls() {
     ));
     // A named attachment labels errors with the name, not the bytes
     // (prompt.ts:206-208).
-    let error = materialize_attachment(
-        &input("data:;base64,%%".into()),
-        None,
-    )
-    .unwrap_err();
+    let error = materialize_attachment(&input("data:;base64,%%".into()), None).unwrap_err();
     assert_eq!(error, AttachmentError::InvalidDataUrl { label: "inline attachment".into() });
 }
 
@@ -99,14 +93,14 @@ fn rejects_oversize_attachments() {
     let dir = scratch("oversize");
     let path = dir.join("big.bin");
     std::fs::write(&path, vec![b'a'; MAX_ATTACHMENT_BYTES + 1]).unwrap();
-    let error = materialize_attachment(
-        &input(format!("file://{}", path.display())),
-        None,
-    )
-    .unwrap_err();
+    let error =
+        materialize_attachment(&input(format!("file://{}", path.display())), None).unwrap_err();
     assert_eq!(
         error.to_string(),
-        format!("Attachment exceeds the {MAX_ATTACHMENT_BYTES} byte limit: file://{}", path.display())
+        format!(
+            "Attachment exceeds the {MAX_ATTACHMENT_BYTES} byte limit: file://{}",
+            path.display()
+        )
     );
     std::fs::remove_file(&path).ok();
     std::fs::remove_dir(&dir).ok();
@@ -173,9 +167,13 @@ fn materializes_directory_listings() {
 /// it; a bare signature header cannot).
 fn tiny_png() -> Vec<u8> {
     let mut bytes = std::io::Cursor::new(Vec::new());
-    image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(1, 1, image::Rgba([0, 0, 0, 255])))
-        .write_to(&mut bytes, image::ImageFormat::Png)
-        .expect("encode 1x1 png");
+    image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+        1,
+        1,
+        image::Rgba([0, 0, 0, 255]),
+    ))
+    .write_to(&mut bytes, image::ImageFormat::Png)
+    .expect("encode 1x1 png");
     bytes.into_inner()
 }
 
@@ -185,22 +183,17 @@ fn image_attachments_normalize_under_limits_and_pass_through_without() {
     let encoded = base64::engine::general_purpose::STANDARD.encode(&png);
     // `None` limits = the ResizerUnavailableError passthrough arm
     // (prompt.ts:145).
-    let passthrough = materialize_attachment(
-        &input(format!("data:image/png;base64,{encoded}")),
-        None,
-    )
-    .unwrap();
+    let passthrough =
+        materialize_attachment(&input(format!("data:image/png;base64,{encoded}")), None).unwrap();
     assert_eq!(passthrough.data, encoded);
     assert_eq!(passthrough.mime, "image/png");
 
     // Under limits the normalizer also passes the payload through
     // untouched (image.rs passthrough returns the original base64).
     let limits = crate::image::Limits::default();
-    let normalized = materialize_attachment(
-        &input(format!("data:image/png;base64,{encoded}")),
-        Some(&limits),
-    )
-    .unwrap();
+    let normalized =
+        materialize_attachment(&input(format!("data:image/png;base64,{encoded}")), Some(&limits))
+            .unwrap();
     assert_eq!(normalized.data, encoded);
     assert_eq!(normalized.mime, "image/png");
 
@@ -210,11 +203,9 @@ fn image_attachments_normalize_under_limits_and_pass_through_without() {
     // reads the signature.
     let truncated = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0];
     let junk = base64::engine::general_purpose::STANDARD.encode(truncated);
-    let error = materialize_attachment(
-        &input(format!("data:image/png;base64,{junk}")),
-        Some(&limits),
-    )
-    .unwrap_err();
+    let error =
+        materialize_attachment(&input(format!("data:image/png;base64,{junk}")), Some(&limits))
+            .unwrap_err();
     assert!(matches!(error, AttachmentError::Image(_)), "{error}");
 }
 

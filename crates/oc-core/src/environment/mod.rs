@@ -15,7 +15,7 @@ mod tests;
 
 pub use driver::{make_files, CommandSpec, Driver, ProcessOutput, SpawnError, Spawner};
 pub use files::{
-    type_following, DirEntry, FileType, Files, FilesError, FileInfo, Range, ReadResult,
+    type_following, DirEntry, FileInfo, FileType, Files, FilesError, Range, ReadResult,
 };
 pub use local::{make_local_driver, make_local_driver_default, HostSpawner, LocalFiles};
 pub use memory::MemoryDriver;

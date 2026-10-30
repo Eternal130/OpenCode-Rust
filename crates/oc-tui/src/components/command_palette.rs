@@ -24,7 +24,8 @@
 
 use crate::components::dialog_select::{SelectAction, SelectOption, SelectProps, SelectState};
 use crate::store::{
-    DialogKind, DialogSize, DiffSource, ListState, ModelSelection, Route, ServerAgent, Store,
+    new_session_location, DialogKind, DialogSize, DiffSource, ListState, ModelSelection, Route,
+    ServerAgent, Store,
 };
 use oc_tui_core::scroll::ScrollCommand;
 
@@ -2194,6 +2195,11 @@ impl CommandDispatcher for StoreDispatcher {
                 // CURRENT selection (`local.model.set` / the agent) —
                 // staging it onto the home draft (F10).
                 inherit_selection_onto_home(store);
+                // G-34 — `session.new_location` (new-session-location.
+                // ts): `inherit` keeps the home route at the CURRENT
+                // location (the routed session's directory), `launch`
+                // (the default) returns to the launch directory.
+                apply_new_session_location(store);
                 store.navigate(Route::Home);
                 store.clear_dialogs();
                 Dispatch::Handled
@@ -2204,6 +2210,9 @@ impl CommandDispatcher for StoreDispatcher {
                 }
                 // Same inheritance as session.new (app.tsx:742-749).
                 inherit_selection_onto_home(store);
+                // G-34 — the same `session.new_location` resolution as
+                // session.new (app.tsx:748-757).
+                apply_new_session_location(store);
                 store.navigate(Route::Home);
                 store.clear_dialogs();
                 Dispatch::Handled
@@ -3270,6 +3279,27 @@ fn inherit_selection_onto_home(store: &Store) {
     }
 }
 
+/// G-34 — resolves the home route's location for `session.new` /
+/// `session.clear` (config/new-session-location.ts over
+/// app.tsx:718-737): the routed session's directory is the CURRENT
+/// location; a location equal to the failed/unavailable one (the
+/// location worker's error state, TUI-30) does not inherit.
+fn apply_new_session_location(store: &Store) {
+    let current = match store.route() {
+        Route::Session { session_id } => store
+            .session_history()
+            .iter()
+            .find(|session| session.id == session_id)
+            .and_then(|session| session.directory.clone()),
+        Route::Home => None,
+    };
+    store.set_home_location(new_session_location(
+        store.session_new_location(),
+        current.as_deref(),
+        store.location_error().as_deref(),
+    ));
+}
+
 /// TUI-TD07 — `appendPrompt` (prompt/history.tsx:33-58) over a queued
 /// payload: the undo's composer refill — the text appends after a
 /// blank-line separator, the file payloads stage as attachment chips
@@ -3817,6 +3847,85 @@ mod tests {
     }
 
     /// The session-list dialog lists the HISTORY (the resync's
+
+    /// Shared body for the G-34 dispatch cases: seed one routed
+    /// session at `/work/cur` (optionally marked unavailable via the
+    /// location worker's error state), dispatch `session.new`, and
+    /// check the resolved home location.
+    fn session_new_location_dispatch_case(
+        mode: crate::store::NewSessionLocation,
+        expect_inherit: bool,
+        unavailable: bool,
+    ) {
+        use crate::data::{Ingest, SessionSnapshot};
+        let store = Store::new(Runtime::new());
+        store.ingest_all([Ingest::Resync {
+            sessions: vec![SessionSnapshot {
+                model: None,
+                id: "s1".into(),
+                title: Some("G-34 case".into()),
+                parent_id: None,
+                time_idle: None,
+                viewed: None,
+                directory: Some("/work/cur".into()),
+                ..Default::default()
+            }],
+            unread: Vec::new(),
+            messages: Vec::new(),
+            cursors: Vec::new(),
+            forms: Vec::new(),
+            permissions: Vec::new(),
+        }]);
+        store.navigate(Route::Session { session_id: "s1".into() });
+        if unavailable {
+            store.set_location_error(Some("/work/cur".to_owned()));
+        }
+        store.set_session_new_location(mode);
+        let mut dispatcher = StoreDispatcher;
+        assert_eq!(dispatcher.dispatch(&store, "session.new", None), Dispatch::Handled);
+        assert_eq!(store.route(), Route::Home);
+        let expected = if expect_inherit && !unavailable { Some("/work/cur") } else { None };
+        assert_eq!(store.home_location().as_deref(), expected);
+    }
+
+    /// G-34 — `session.new_location` (new-session-location.ts):
+    /// `inherit` keeps the home route at the routed session's
+    /// location; `launch` (the default) returns to the launch
+    /// directory; a failed/unavailable location never inherits.
+    #[test]
+    fn session_new_location_resolution() {
+        use crate::store::NewSessionLocation as Mode;
+        use crate::store::new_session_location;
+        assert_eq!(new_session_location(Mode::Inherit, Some("/a"), None).as_deref(), Some("/a"));
+        assert_eq!(new_session_location(Mode::Launch, Some("/a"), None), None);
+        assert_eq!(new_session_location(Mode::Inherit, None, None), None);
+        assert_eq!(new_session_location(Mode::Inherit, Some("/a"), Some("/a")), None);
+        assert_eq!(
+            new_session_location(Mode::Inherit, Some("/a"), Some("/b")).as_deref(),
+            Some("/a")
+        );
+    }
+
+    #[test]
+    fn session_new_inherit_keeps_the_current_location() {
+        session_new_location_dispatch_case(crate::store::NewSessionLocation::Inherit, true, false);
+    }
+
+    #[test]
+    fn session_new_launch_returns_to_the_launch_directory() {
+        session_new_location_dispatch_case(crate::store::NewSessionLocation::Launch, false, false);
+    }
+
+    #[test]
+    fn session_new_inherit_skips_an_unavailable_location() {
+        session_new_location_dispatch_case(
+            crate::store::NewSessionLocation::Inherit,
+            false,
+            /* unavailable */ true,
+        );
+    }
+
+
     /// session.list), not the open tabs — and selecting a row
     /// navigates (the route effect opens the tab).
     #[test]

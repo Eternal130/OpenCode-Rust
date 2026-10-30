@@ -98,19 +98,17 @@ pub fn detect_mime(bytes: &[u8]) -> &'static str {
     if starts_with(bytes, &[0x25, 0x50, 0x44, 0x46, 0x2D]) {
         return "application/pdf";
     }
-    if bytes.len() >= 12
-        && &bytes[0..4] == b"RIFF"
-        && &bytes[8..12] == b"WEBP"
-    {
+    if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
         return "image/webp";
     }
-    if bytes.len() >= 12
-        && &bytes[4..8] == b"ftyp"
-        && matches!(&bytes[8..12], b"avif" | b"avis")
-    {
+    if bytes.len() >= 12 && &bytes[4..8] == b"ftyp" && matches!(&bytes[8..12], b"avif" | b"avis") {
         return "image/avif";
     }
-    if is_text(bytes) { "text/plain" } else { "application/octet-stream" }
+    if is_text(bytes) {
+        "text/plain"
+    } else {
+        "application/octet-stream"
+    }
 }
 
 /// `isText` (mime.ts): empty ⇒ text; NUL bytes ⇒ binary; strict UTF-8
@@ -126,8 +124,7 @@ fn is_text(bytes: &[u8]) -> bool {
     if std::str::from_utf8(bytes).is_err() {
         return false;
     }
-    let controls =
-        bytes.iter().filter(|byte| **byte < 9 || (**byte > 13 && **byte < 32)).count();
+    let controls = bytes.iter().filter(|byte| **byte < 9 || (**byte > 13 && **byte < 32)).count();
     controls as f64 / bytes.len() as f64 <= 0.3
 }
 
@@ -150,8 +147,7 @@ fn decode_data_url(uri: &str, label: &str) -> Result<Vec<u8>, AttachmentError> {
     let Some(comma) = uri.find(',') else { return Err(invalid()) };
     let metadata = &uri[5..comma];
     let payload = &uri[comma + 1..];
-    let base64_encoded =
-        metadata.split(';').any(|part| part.to_ascii_lowercase() == "base64");
+    let base64_encoded = metadata.split(';').any(|part| part.to_ascii_lowercase() == "base64");
     if !base64_encoded {
         // decodeURIComponent: strict UTF-8 percent-decoding.
         return percent_decode(payload).ok_or_else(invalid).map(|text| text.into_bytes());
@@ -208,10 +204,9 @@ fn positive_int(value: Option<&str>) -> Option<usize> {
 /// `fileURLToPath` for the Unix paths the server accepts: percent-decode,
 /// reject `%2f`/`%5c` escapes and non-localhost authorities.
 fn file_url_to_path(uri: &str) -> Result<String, AttachmentError> {
-    let url =
-        uri.strip_prefix("file://").ok_or_else(|| AttachmentError::InvalidFileUri {
-            uri: uri.to_string(),
-        })?;
+    let url = uri
+        .strip_prefix("file://")
+        .ok_or_else(|| AttachmentError::InvalidFileUri { uri: uri.to_string() })?;
     let path = match url.split_once('/') {
         Some((host, _)) if !host.is_empty() && host != "localhost" => {
             return Err(AttachmentError::InvalidFileUri { uri: uri.to_string() });
@@ -231,9 +226,8 @@ fn file_url_to_path(uri: &str) -> Result<String, AttachmentError> {
 /// `readFileAttachment` (prompt.ts:151-201).
 fn read_file_attachment(uri: &str) -> Result<Resolved, AttachmentError> {
     // `new URL(uri)` — a scheme-less or malformed URI is invalid (:153-156).
-    let scheme_end = uri.find(':').ok_or_else(|| AttachmentError::InvalidUri {
-        uri: uri.to_string(),
-    })?;
+    let scheme_end =
+        uri.find(':').ok_or_else(|| AttachmentError::InvalidUri { uri: uri.to_string() })?;
     if scheme_end == 0
         || !uri[..scheme_end]
             .chars()
@@ -261,20 +255,16 @@ fn read_file_attachment(uri: &str) -> Result<Resolved, AttachmentError> {
         }
     }
     let target = file_url_to_path(path_part)?;
-    let info = std::fs::metadata(&target).map_err(|_| AttachmentError::ReadFailed {
-        uri: uri.to_string(),
-    })?;
-    let basename = std::path::Path::new(&target)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .map(str::to_owned);
+    let info = std::fs::metadata(&target)
+        .map_err(|_| AttachmentError::ReadFailed { uri: uri.to_string() })?;
+    let basename =
+        std::path::Path::new(&target).file_name().and_then(|name| name.to_str()).map(str::to_owned);
     if info.is_dir() {
         // Directory listing (:172-190): file/directory entries only,
         // directories first (then locale name order), `name + path.sep`
         // per directory, joined `\n`, `application/x-directory`.
-        let entries = std::fs::read_dir(&target).map_err(|_| AttachmentError::ReadFailed {
-            uri: uri.to_string(),
-        })?;
+        let entries = std::fs::read_dir(&target)
+            .map_err(|_| AttachmentError::ReadFailed { uri: uri.to_string() })?;
         let mut items: Vec<(bool, String)> = entries
             .filter_map(|entry| {
                 let entry = entry.ok()?;
@@ -293,9 +283,7 @@ fn read_file_attachment(uri: &str) -> Result<Resolved, AttachmentError> {
         items.sort_by(|a, b| {
             // `type === "directory" ? -1 : 1` on type mismatch, else
             // `name.localeCompare` — code-point order approximation.
-            b.0
-                .cmp(&a.0)
-                .then_with(|| a.1.cmp(&b.1))
+            b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1))
         });
         let separator = std::path::MAIN_SEPARATOR.to_string();
         let listing = items
@@ -322,9 +310,8 @@ fn read_file_attachment(uri: &str) -> Result<Resolved, AttachmentError> {
             limit: MAX_ATTACHMENT_BYTES,
         });
     }
-    let bytes = std::fs::read(&target).map_err(|_| AttachmentError::ReadFailed {
-        uri: uri.to_string(),
-    })?;
+    let bytes =
+        std::fs::read(&target).map_err(|_| AttachmentError::ReadFailed { uri: uri.to_string() })?;
     Ok(Resolved {
         bytes,
         source: FileSource::Uri { uri: uri.to_string() },
@@ -360,8 +347,7 @@ pub fn materialize_attachment(
     if resolved.bytes.len() > MAX_ATTACHMENT_BYTES {
         return Err(AttachmentError::TooLarge { label, limit: MAX_ATTACHMENT_BYTES });
     }
-    let mime =
-        resolved.mime.clone().unwrap_or_else(|| detect_mime(&resolved.bytes).to_owned());
+    let mime = resolved.mime.clone().unwrap_or_else(|| detect_mime(&resolved.bytes).to_owned());
     // `mime === "text/plain" && start !== undefined` slices the decoded
     // UTF-8 lines `[start-1, end)` (:114-123; JS `slice(end)` with
     // `end === undefined` runs to the end).

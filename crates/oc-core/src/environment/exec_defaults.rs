@@ -14,7 +14,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::environment::driver::{CommandSpec, ProcessOutput, Spawner};
-use crate::environment::files::{DirEntry, FileType, Files, FilesError, FileInfo, Range, ReadResult};
+use crate::environment::files::{
+    DirEntry, FileInfo, FileType, Files, FilesError, Range, ReadResult,
+};
 
 pub const MAX_DATA_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_ERROR_BYTES: usize = 64 * 1024;
@@ -84,10 +86,7 @@ find -H "$1" -mindepth 1 -maxdepth 1 -printf '%y\0%f\0'
 }
 
 fn move_script() -> String {
-    format!(
-        "{load}\nmv -- \"$1\" \"$2\"\n",
-        load = load_metadata("")
-    )
+    format!("{load}\nmv -- \"$1\" \"$2\"\n", load = load_metadata(""))
 }
 
 const WRITE_SCRIPT: &str = r#"mkdir -p "$(dirname "$1")" && cat > "$1""#;
@@ -113,7 +112,8 @@ impl ExecDefaults {
     ) -> Result<ProcessOutput, FilesError> {
         let mut env = std::collections::BTreeMap::new();
         env.insert("LC_ALL".to_string(), "C".to_string());
-        let mut argv = vec!["-c".to_string(), script.to_string(), "sh".to_string(), path.to_string()];
+        let mut argv =
+            vec!["-c".to_string(), script.to_string(), "sh".to_string(), path.to_string()];
         argv.extend(args.iter().cloned());
         let command = CommandSpec {
             command: "sh".to_string(),
@@ -133,10 +133,7 @@ impl ExecDefaults {
             .await
             .map_err(|cause| FilesError::failed(path, format!("spawn failed: {cause}")))?;
         if result.stdout.len() > MAX_DATA_BYTES || result.stderr.len() > MAX_ERROR_BYTES {
-            return Err(FilesError::failed(
-                path,
-                "Process output exceeded its collection limit",
-            ));
+            return Err(FilesError::failed(path, "Process output exceeded its collection limit"));
         }
         Ok(result)
     }
@@ -152,11 +149,9 @@ impl Files for ExecDefaults {
     async fn read(&self, path: &str, range: Option<Range>) -> Result<ReadResult, FilesError> {
         let args = match range {
             None => vec!["whole".to_string()],
-            Some(range) => vec![
-                "range".to_string(),
-                range.offset.to_string(),
-                range.length.to_string(),
-            ],
+            Some(range) => {
+                vec!["range".to_string(), range.offset.to_string(), range.length.to_string()]
+            }
         };
         let result = self.run(path, &read_script(), &args, None).await?;
         classify(path, &result, |stdout| {
@@ -263,20 +258,13 @@ fn parse_info(bytes: &[u8], path: &str) -> Result<FileInfo, FilesError> {
     if raw_type.is_empty() {
         // Ref throws a defect here; `path` stays the file path so the error
         // is attributable (the raw stdout rides in `message`).
-        return Err(FilesError::failed(
-            path,
-            format!("Invalid stat output: {text}"),
-        ));
+        return Err(FilesError::failed(path, format!("Invalid stat output: {text}")));
     }
-    let size = size
-        .map_err(|_| FilesError::failed(path, format!("Invalid stat output: {text}")))?;
-    let mtime = mtime
-        .map_err(|_| FilesError::failed(path, format!("Invalid stat output: {text}")))?;
-    Ok(FileInfo {
-        kind: parse_type(raw_type),
-        size,
-        mtime_ms: mtime * 1_000.0,
-    })
+    let size =
+        size.map_err(|_| FilesError::failed(path, format!("Invalid stat output: {text}")))?;
+    let mtime =
+        mtime.map_err(|_| FilesError::failed(path, format!("Invalid stat output: {text}")))?;
+    Ok(FileInfo { kind: parse_type(raw_type), size, mtime_ms: mtime * 1_000.0 })
 }
 
 fn parse_type(value: &str) -> FileType {

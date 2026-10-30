@@ -1687,7 +1687,11 @@ async fn tool_pipeline_after_hook_can_suppress_content() {
 // AUD-07 — ripgrep binary acquisition (ripgrep/binary.ts) + exit-2 tolerance
 // ---------------------------------------------------------------------------
 
-fn rg_deps(env_override: Option<PathBuf>, path_binary: Option<PathBuf>, global_bin: PathBuf) -> crate::tool::ripgrep_runner::ResolveDeps {
+fn rg_deps(
+    env_override: Option<PathBuf>,
+    path_binary: Option<PathBuf>,
+    global_bin: PathBuf,
+) -> crate::tool::ripgrep_runner::ResolveDeps {
     crate::tool::ripgrep_runner::ResolveDeps {
         env_override,
         bundled: None,
@@ -1728,7 +1732,9 @@ async fn rg_resolve_order_env_path_cache_download() {
 
     // PATH beats the global cache (binary.ts:103).
     let (found, source) =
-        resolve_with(&rg_deps(None, Some(path_rg.clone()), global_bin.clone()), never).await.unwrap();
+        resolve_with(&rg_deps(None, Some(path_rg.clone()), global_bin.clone()), never)
+            .await
+            .unwrap();
     assert_eq!((found, source), (path_rg, RgSource::Path));
 
     // Global cache beats download (binary.ts:70-72).
@@ -1745,7 +1751,9 @@ async fn rg_resolve_order_env_path_cache_download() {
 
 #[tokio::test]
 async fn rg_resolve_downloads_extracts_and_caches() {
-    use crate::tool::ripgrep_runner::{platform_config, resolve_with, RgError, RgSource, RG_VERSION};
+    use crate::tool::ripgrep_runner::{
+        platform_config, resolve_with, RgError, RgSource, RG_VERSION,
+    };
     let Some(config) = platform_config() else {
         return; // platform without a managed artifact
     };
@@ -1763,8 +1771,10 @@ async fn rg_resolve_downloads_extracts_and_caches() {
     set_executable(&inner.join("rg"));
     let archive = tmp.path().join(&config.filename().replace('/', "_"));
     let status = std::process::Command::new("tar")
-        .arg("-czf").arg(&archive)
-        .arg("-C").arg(&staging)
+        .arg("-czf")
+        .arg(&archive)
+        .arg("-C")
+        .arg(&staging)
         .arg(format!("ripgrep-{RG_VERSION}-{}", config.platform))
         .status()
         .unwrap();
@@ -1774,19 +1784,17 @@ async fn rg_resolve_downloads_extracts_and_caches() {
     let global_bin = tmp.path().join("bin");
     let expected_url = config.url();
     let fetch_bytes = bytes.clone();
-    let (target, source) = resolve_with(
-        &rg_deps(None, None, global_bin.clone()),
-        move |url: String| {
+    let (target, source) =
+        resolve_with(&rg_deps(None, None, global_bin.clone()), move |url: String| {
             let bytes = fetch_bytes.clone();
             let expected_url = expected_url.clone();
             async move {
                 assert_eq!(url, expected_url, "release 15.1.0 URL (binary.ts:121)");
                 Ok(bytes)
             }
-        },
-    )
-    .await
-    .expect("download+extract");
+        })
+        .await
+        .expect("download+extract");
     assert_eq!(source, RgSource::Download);
     assert!(target.is_file(), "extracted rg at {}", target.display());
     assert_eq!(std::fs::read_to_string(&target).unwrap(), "#!/bin/sh\necho fake-rg\n");
@@ -1798,41 +1806,55 @@ async fn rg_resolve_downloads_extracts_and_caches() {
     assert!(!global_bin.join(config.filename()).exists(), "archive removed (binary.ts:135)");
     assert!(
         !std::fs::read_dir(&global_bin).unwrap().any(|entry| {
-            entry.map(|e| e.file_name().to_string_lossy().starts_with("ripgrep-15.1.0-")).unwrap_or(false)
+            entry
+                .map(|e| e.file_name().to_string_lossy().starts_with("ripgrep-15.1.0-"))
+                .unwrap_or(false)
         }),
         "extraction temp dir cleaned"
     );
 
     // Second resolution short-circuits at the global cache — no fetch needed.
-    let (_, source) = resolve_with(&rg_deps(None, None, global_bin.clone()), |url: String| async move {
-        panic!("cache hit must not download: {url}");
-    })
-    .await
-    .expect("cache");
+    let (_, source) =
+        resolve_with(&rg_deps(None, None, global_bin.clone()), |url: String| async move {
+            panic!("cache hit must not download: {url}");
+        })
+        .await
+        .expect("cache");
     assert_eq!(source, RgSource::GlobalCache);
 
     // Empty download body is rejected verbatim (binary.ts:128).
     let empty = tempfile::tempdir_in("/tmp/opencode").unwrap();
-    let error = resolve_with(&rg_deps(None, None, empty.path().join("bin")), |url: String| async move {
-        Ok(match url.as_str() { _ => Vec::new() })
-    })
-    .await
-    .expect_err("empty download");
+    let error =
+        resolve_with(&rg_deps(None, None, empty.path().join("bin")), |url: String| async move {
+            Ok(match url.as_str() {
+                _ => Vec::new(),
+            })
+        })
+        .await
+        .expect_err("empty download");
     assert_eq!(error, RgError::EmptyDownload(config.url()));
 }
 
 #[test]
 fn rg_platform_map_matches_ref_rows() {
     use crate::tool::ripgrep_runner::platform_config_for;
-    assert_eq!(platform_config_for("x86_64", "linux").unwrap().platform, "x86_64-unknown-linux-musl");
-    assert_eq!(platform_config_for("aarch64", "linux").unwrap().platform, "aarch64-unknown-linux-gnu");
+    assert_eq!(
+        platform_config_for("x86_64", "linux").unwrap().platform,
+        "x86_64-unknown-linux-musl"
+    );
+    assert_eq!(
+        platform_config_for("aarch64", "linux").unwrap().platform,
+        "aarch64-unknown-linux-gnu"
+    );
     assert_eq!(platform_config_for("x86_64", "macos").unwrap().extension, "tar.gz");
     assert_eq!(platform_config_for("x86_64", "windows").unwrap().extension, "zip");
     assert!(platform_config_for("riscv64", "linux").is_none(), "unsupported platform key");
     // Filename/URL shapes (binary.ts:120-121).
     let config = platform_config_for("x86_64", "linux").unwrap();
     assert_eq!(config.filename(), format!("ripgrep-15.1.0-{}.tar.gz", config.platform));
-    assert!(config.url().starts_with("https://github.com/BurntSushi/ripgrep/releases/download/15.1.0/"));
+    assert!(config
+        .url()
+        .starts_with("https://github.com/BurntSushi/ripgrep/releases/download/15.1.0/"));
 }
 
 #[tokio::test]
@@ -1858,7 +1880,10 @@ async fn tool_grep_exit_two_tolerated_with_partial_results() {
         .expect("partial results on exit 2");
     assert_eq!(
         text_of(&settled),
-        format!("Found 1 matches\n{}:\n  Line 1: needle\n", harness.dir.join("target.txt").display())
+        format!(
+            "Found 1 matches\n{}:\n  Line 1: needle\n",
+            harness.dir.join("target.txt").display()
+        )
     );
     assert_eq!(settled.metadata.expect("metadata").get("matches"), Some(&serde_json::json!(1)));
 }
@@ -1953,10 +1978,11 @@ fn read_binary_detection_covers_only_the_consumed_page() {
     }
 
     // A page whose consumed range includes the NUL → BinaryFileError.
-    let error = read_file_with(size, &path, "bin.txt", Some(nul_line as u64), Some(10), |start, len| {
-        Ok(body[start as usize..(start as usize + len).min(body.len())].to_vec())
-    })
-    .unwrap_err();
+    let error =
+        read_file_with(size, &path, "bin.txt", Some(nul_line as u64), Some(10), |start, len| {
+            Ok(body[start as usize..(start as usize + len).min(body.len())].to_vec())
+        })
+        .unwrap_err();
     assert_eq!(error, ReadError::Binary("bin.txt".to_string()));
 
     // Multi-chunk parity: NUL in the SECOND 256 KiB chunk; a first-page
@@ -1964,10 +1990,12 @@ fn read_binary_detection_covers_only_the_consumed_page() {
     let mut big = line_fill(11000, 50); // ≈ 537 KiB — spans three 256 KiB chunks
     big[300 * 1024] = 0; // inside chunk 2
     let big_size = big.len() as u64;
-    let outcome =
-        read_file_with(big_size, &path, "big.txt", Some(1), Some(100), |start, len| {
-            Ok(big[start as usize..(start as usize + len).min(big.len())].to_vec())
-        })
-        .unwrap();
-    assert!(matches!(outcome, ReadOutput::TextPage { .. }), "NUL beyond the consumed page is not fatal");
+    let outcome = read_file_with(big_size, &path, "big.txt", Some(1), Some(100), |start, len| {
+        Ok(big[start as usize..(start as usize + len).min(big.len())].to_vec())
+    })
+    .unwrap();
+    assert!(
+        matches!(outcome, ReadOutput::TextPage { .. }),
+        "NUL beyond the consumed page is not fatal"
+    );
 }
