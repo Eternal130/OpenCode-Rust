@@ -17,6 +17,7 @@ use std::process::Command;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use rusqlite::OptionalExtension as _;
 use sha1::{Digest as _, Sha1};
 
 /// `Hash.fast` (util/hash.ts:4-7): SHA-1 hex (40 chars). DB-D1: the
@@ -190,6 +191,15 @@ pub trait ProjectStore: Send + Sync {
     async fn reassign_canonical(&self, id: &str, canonical: &Path);
     async fn worktree(&self, project_id: &str, directory: &Path) -> Option<WorktreeRow>;
     async fn insert_worktree(&self, row: &WorktreeRow);
+    /// `ops.create` (worktree.ts:154-175): claim/replace upsert over the
+    /// `(project_id, directory)` key — a strategy claims only rows whose
+    /// `strategy` is NULL; `replace: true` (the create path, where the
+    /// strategy owns the row) overwrites unconditionally. Returns whether
+    /// the write landed.
+    async fn claim_worktree(&self, row: &WorktreeRow, replace: bool) -> bool;
+    /// `ops.remove` (worktree.ts:176-185): delete the row; `true` when a
+    /// row was removed.
+    async fn remove_worktree(&self, project_id: &str, directory: &Path) -> bool;
     async fn list_projects(&self) -> Vec<ProjectRow>;
     async fn list_worktrees(&self) -> Vec<WorktreeRow>;
     /// Full-row read (`Project.Info`) for event payloads and updates.
@@ -259,6 +269,33 @@ impl ProjectStore for MemoryProjectStore {
         }) {
             worktrees.push(row.clone());
         }
+    }
+
+    async fn claim_worktree(&self, row: &WorktreeRow, replace: bool) -> bool {
+        let mut worktrees = self.worktrees.lock().unwrap_or_else(unpoison);
+        match worktrees.iter_mut().find(|existing| {
+            existing.project_id == row.project_id && existing.directory == row.directory
+        }) {
+            Some(existing) => {
+                // setWhere: claim only unowned rows unless replace.
+                if !(replace || (row.strategy.is_some() && existing.strategy.is_none())) {
+                    return false;
+                }
+                existing.strategy.clone_from(&row.strategy);
+                true
+            }
+            None => {
+                worktrees.push(row.clone());
+                true
+            }
+        }
+    }
+
+    async fn remove_worktree(&self, project_id: &str, directory: &Path) -> bool {
+        let mut worktrees = self.worktrees.lock().unwrap_or_else(unpoison);
+        let before = worktrees.len();
+        worktrees.retain(|row| !(row.project_id == project_id && row.directory == directory));
+        worktrees.len() != before
     }
 
     async fn list_projects(&self) -> Vec<ProjectRow> {
@@ -628,6 +665,52 @@ impl ProjectStore for SqliteProjectStore {
             .await;
     }
 
+    async fn claim_worktree(&self, row: &WorktreeRow, replace: bool) -> bool {
+        let Ok(directory) =
+            crate::database::schema::directory_storage(&row.directory.to_string_lossy())
+        else {
+            return false;
+        };
+        let project_id = row.project_id.clone();
+        let strategy = row.strategy.clone();
+        let now = crate::database::migrations::now_ms();
+        self.db
+            .transaction(move |tx| {
+                // v2 ops.create onConflictDoUpdate + setWhere
+                // (worktree.ts:162-169): discovery may claim an unowned
+                // row, but never replace another strategy's ownership —
+                // unless `replace` (the create path).
+                let landed = tx.execute(
+                    "INSERT INTO worktree (project_id, directory, strategy, time_created) \
+                     VALUES (?1, ?2, ?3, ?4) \
+                     ON CONFLICT (project_id, directory) DO UPDATE SET strategy = excluded.strategy \
+                     WHERE ?5 OR (excluded.strategy IS NOT NULL AND worktree.strategy IS NULL)",
+                    rusqlite::params![project_id, directory, strategy, now, replace],
+                )? != 0;
+                Ok(landed)
+            })
+            .await
+            .unwrap_or(false)
+    }
+
+    async fn remove_worktree(&self, project_id: &str, directory: &Path) -> bool {
+        let Ok(directory) =
+            crate::database::schema::directory_storage(&directory.to_string_lossy())
+        else {
+            return false;
+        };
+        let project_id = project_id.to_string();
+        self.db
+            .transaction(move |tx| {
+                Ok(tx.execute(
+                    "DELETE FROM worktree WHERE project_id = ?1 AND directory = ?2",
+                    rusqlite::params![project_id, directory],
+                )? != 0)
+            })
+            .await
+            .unwrap_or(false)
+    }
+
     async fn list_projects(&self) -> Vec<ProjectRow> {
         self.db
             .transaction(|tx| {
@@ -754,6 +837,293 @@ impl SqliteProjectStore {
             })
             .await
             .unwrap_or_default()
+    }
+
+    /// Fetch one `workspace` row by id: `(id, provider, binding JSON, created_at, last_used_at)`.
+    pub async fn workspace_row(&self, id: &str) -> Option<(String, String, Option<String>, i64, i64)> {
+        let id = id.to_string();
+        self.db
+            .transaction(move |tx| {
+                let mut statement = tx.conn().prepare(
+                    "SELECT id, provider, binding, created_at, last_used_at FROM workspace WHERE id = ?1",
+                )?;
+                let row = statement
+                    .query_row(rusqlite::params![id], |row| {
+                        Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
+                    })
+                    .optional()?;
+                Ok(row)
+            })
+            .await
+            .ok()
+            .flatten()
+    }
+
+    /// Persist a provisioned workspace `binding` (workspace service).
+    pub async fn save_workspace_binding(&self, id: &str, binding: &str) {
+        let id = id.to_string();
+        let binding = binding.to_string();
+        let _ = self
+            .db
+            .transaction(move |tx| {
+                tx.execute(
+                    "UPDATE workspace SET binding = ?2 WHERE id = ?1",
+                    rusqlite::params![id, binding],
+                )?;
+                Ok(())
+            })
+            .await;
+    }
+
+    /// Record workspace activity (`last_used_at` bump on connect).
+    pub async fn touch_workspace(&self, id: &str) {
+        let id = id.to_string();
+        let now = crate::database::migrations::now_ms();
+        let _ = self
+            .db
+            .transaction(move |tx| {
+                tx.execute(
+                    "UPDATE workspace SET last_used_at = ?2 WHERE id = ?1",
+                    rusqlite::params![id, now],
+                )?;
+                Ok(())
+            })
+            .await;
+    }
+
+    /// Delete a workspace row; reports whether a row was removed.
+    pub async fn delete_workspace(&self, id: &str) -> bool {
+        let id = id.to_string();
+        self.db
+            .transaction(move |tx| {
+                Ok(tx.execute("DELETE FROM workspace WHERE id = ?1", rusqlite::params![id])? != 0)
+            })
+            .await
+            .unwrap_or(false)
+    }
+}
+
+// =============================================================================
+// Worktree strategies (worktree/strategies.ts + worktree/git.ts)
+// =============================================================================
+
+/// Port of the ref `Strategy` abstraction (worktree/strategies.ts:15-24):
+/// `{ id, create({sourceDirectory, directory, branch?}), remove({directory,
+/// force}), list(directory) }`. Plugins may add further backends in v2; the
+/// Rust port mirrors the minimal surface with the default git strategy only.
+pub mod worktree_strategy {
+    use std::path::{Path, PathBuf};
+
+    /// The default (and, absent plugins, only) strategy id.
+    pub const GIT: &str = "git";
+
+    /// `Strategy.create` input (worktree/strategies.ts:17-21).
+    #[derive(Debug, Clone)]
+    pub struct CreateInput {
+        pub source_directory: PathBuf,
+        pub directory: PathBuf,
+        pub branch: Option<String>,
+    }
+
+    /// `Strategy.remove` input (worktree/strategies.ts:22).
+    #[derive(Debug, Clone)]
+    pub struct RemoveInput {
+        pub directory: PathBuf,
+        pub force: bool,
+    }
+
+    /// `Worktree.ListEntry` (worktree/git.ts:31-35): the on-disk directory
+    /// and whether it is the main checkout (`root`) or a linked worktree.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct ListEntry {
+        pub directory: PathBuf,
+        /// `"root"` | `"worktree"`.
+        pub kind: &'static str,
+    }
+
+    /// Strategy failures mapped to the wire's `WorktreeError` family.
+    #[derive(Debug)]
+    pub enum StrategyError {
+        /// `Worktree.DirectoryUnavailableError`.
+        DirectoryUnavailable(PathBuf),
+        /// A backend failure (git stderr/stdout or a spawn error);
+        /// `force_required` marks the dirty-tree `--force` demand.
+        Failed { message: String, force_required: bool },
+    }
+
+    /// The ref `Strategy` interface.
+    pub trait Strategy: Send + Sync {
+        fn id(&self) -> &'static str;
+        /// Returns the created worktree's directory (uncanonicalized).
+        fn create(&self, input: &CreateInput) -> Result<PathBuf, StrategyError>;
+        fn remove(&self, input: &RemoveInput) -> Result<(), StrategyError>;
+        fn list(&self, directory: &Path) -> Vec<ListEntry>;
+    }
+
+    fn git_output(directory: &Path, args: &[&str]) -> Option<String> {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(directory)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .ok()?;
+        output.status.success().then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+    }
+
+    /// The default git strategy (worktree/git.ts → git.ts:649-693):
+    /// `worktree add --detach -- <directory> <ref|HEAD>`, `worktree remove
+    /// [--force]` from the common dir, `worktree list --porcelain` with the
+    /// first entry typed `root` and the rest `worktree`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct GitStrategy;
+
+    impl Strategy for GitStrategy {
+        fn id(&self) -> &'static str {
+            GIT
+        }
+
+        fn create(&self, input: &CreateInput) -> Result<PathBuf, StrategyError> {
+            // `repo.discover(sourceDirectory)` — DirectoryUnavailableError
+            // when the source is not inside a repository.
+            let inside = std::process::Command::new("git")
+                .args(["rev-parse", "--is-inside-work-tree"])
+                .current_dir(&input.source_directory)
+                .stdin(std::process::Stdio::null())
+                .output()
+                .is_ok_and(|output| output.status.success());
+            if !inside {
+                return Err(StrategyError::DirectoryUnavailable(input.source_directory.clone()));
+            }
+            let reference = input.branch.as_deref().unwrap_or("HEAD");
+            let added = std::process::Command::new("git")
+                .args(["worktree", "add", "--detach", "--"])
+                .arg(&input.directory)
+                .arg(reference)
+                .current_dir(&input.source_directory)
+                .stdin(std::process::Stdio::null())
+                .output()
+                .map_err(|error| StrategyError::Failed {
+                    message: format!("Git failed: {error}"),
+                    force_required: false,
+                })?;
+            if !added.status.success() {
+                let stderr = String::from_utf8_lossy(&added.stderr).trim().to_string();
+                let stdout = String::from_utf8_lossy(&added.stdout).trim().to_string();
+                let message = (!stderr.is_empty())
+                    .then_some(stderr)
+                    .or((!stdout.is_empty()).then_some(stdout))
+                    .unwrap_or_else(|| "Git failed".to_owned());
+                return Err(StrategyError::Failed { message, force_required: false });
+            }
+            Ok(input.directory.clone())
+        }
+
+        fn remove(&self, input: &RemoveInput) -> Result<(), StrategyError> {
+            let inside = std::process::Command::new("git")
+                .args(["rev-parse", "--is-inside-work-tree"])
+                .current_dir(&input.directory)
+                .stdin(std::process::Stdio::null())
+                .output()
+                .is_ok_and(|output| output.status.success());
+            if !inside {
+                return Err(StrategyError::DirectoryUnavailable(input.directory.clone()));
+            }
+            // git.ts:621-633 — run from the common directory (the main
+            // checkout owns the worktree metadata).
+            let common = git_output(
+                &input.directory,
+                &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+            )
+            .map(|output| PathBuf::from(output.trim()))
+            .filter(|path| path.is_dir())
+            .unwrap_or_else(|| input.directory.clone());
+            let mut args = vec!["worktree".to_owned(), "remove".to_owned()];
+            if input.force {
+                args.push("--force".to_owned());
+            }
+            args.push(input.directory.to_string_lossy().into_owned());
+            let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+            let removal = std::process::Command::new("git")
+                .args(refs.as_slice())
+                .current_dir(&common)
+                .stdin(std::process::Stdio::null())
+                .output()
+                .map_err(|error| StrategyError::Failed {
+                    message: format!("Git failed: {error}"),
+                    force_required: false,
+                })?;
+            if !removal.status.success() {
+                let stderr = String::from_utf8_lossy(&removal.stderr).trim().to_string();
+                let stdout = String::from_utf8_lossy(&removal.stdout).trim().to_string();
+                let message = (!stderr.is_empty())
+                    .then_some(stderr)
+                    .or((!stdout.is_empty()).then_some(stdout))
+                    .unwrap_or_else(|| "Git failed".to_owned());
+                // git.ts:630-633 — the dirty-tree failure demands --force.
+                let dirty = message.contains("contains modified or untracked files")
+                    || message.contains("is dirty")
+                    || message.contains("--force");
+                return Err(StrategyError::Failed { message, force_required: dirty });
+            }
+            Ok(())
+        }
+
+        fn list(&self, directory: &Path) -> Vec<ListEntry> {
+            let Some(output) = git_output(directory, &["worktree", "list", "--porcelain"]) else {
+                return Vec::new();
+            };
+            output
+                .lines()
+                .enumerate()
+                .filter_map(|(index, line)| {
+                    let raw = line.strip_prefix("worktree ")?.trim();
+                    let path = if Path::new(raw).is_absolute() {
+                        PathBuf::from(raw)
+                    } else {
+                        directory.join(raw)
+                    };
+                    Some(ListEntry { directory: path, kind: if index == 0 { "root" } else { "worktree" } })
+                })
+                .collect()
+        }
+    }
+
+    /// The per-location registry (strategies.ts:48-65): git seeded by
+    /// default and selected; `add` would delete+set+select (plugin
+    /// strategies stay unsupported in the Rust port).
+    pub struct StrategyRegistry {
+        strategies: Vec<Box<dyn Strategy>>,
+    }
+
+    impl StrategyRegistry {
+        /// The default registry: the git strategy only.
+        #[must_use]
+        pub fn new() -> Self {
+            Self { strategies: vec![Box::new(GitStrategy)] }
+        }
+
+        /// Lookup by id (worktree.ts getStrategy).
+        #[must_use]
+        pub fn get(&self, id: &str) -> Option<&dyn Strategy> {
+            self.strategies.iter().find(|strategy| strategy.id() == id).map(|s| s.as_ref())
+        }
+
+        /// The selected strategy id (the last registered).
+        #[must_use]
+        pub fn selected(&self) -> &'static str {
+            self.strategies.last().map_or(GIT, |strategy| strategy.id())
+        }
+
+        /// Discovery order (worktree.ts:285): registration order reversed.
+        pub fn discovery_order(&self) -> Vec<&dyn Strategy> {
+            self.strategies.iter().rev().map(|s| s.as_ref()).collect()
+        }
+    }
+
+    impl Default for StrategyRegistry {
+        fn default() -> Self {
+            Self::new()
+        }
     }
 }
 

@@ -11,6 +11,7 @@ use serde_json::{json, Value};
 use super::common::{no_content, resolve_location, ApiError, SharedState};
 use super::session::{query_field, services};
 use oc_core::project::ProjectEvents as _;
+use oc_core::project::ProjectStore as _;
 
 pub fn routes() -> axum::Router<SharedState> {
     axum::Router::new()
@@ -252,6 +253,21 @@ fn canonical_directory(directory: &std::path::Path) -> Result<std::path::PathBuf
     })
 }
 
+/// Maps a backend [`StrategyError`] onto the wire `WorktreeError` shape.
+fn strategy_error(error: oc_core::project::worktree_strategy::StrategyError) -> ApiError {
+    match error {
+        oc_core::project::worktree_strategy::StrategyError::DirectoryUnavailable(directory) => {
+            ApiError::worktree(
+                format!("Worktree directory unavailable: {}", directory.display()),
+                None,
+            )
+        }
+        oc_core::project::worktree_strategy::StrategyError::Failed { message, force_required } => {
+            ApiError::worktree(message, force_required.then_some(true))
+        }
+    }
+}
+
 /// The configured worktree parent (v2 `ConfigWorktreePlugin`,
 /// config/plugin/worktree.ts): the last config document owning
 /// `worktree.directory` — `~/` expands against home, relatives resolve
@@ -392,65 +408,38 @@ async fn worktree_create(
         ));
     };
 
-    // The git strategy (worktree/git.ts → git.ts:657): discover the
+    // The selected strategy (worktree/strategies.ts — the registry's
+    // default backend; worktree/git.ts → git.ts:657): discover the
     // repository from the source, then
     // `git worktree add --detach -- <directory> <ref | HEAD>`.
-    let inside_repo = std::process::Command::new("git")
-        .args(["rev-parse", "--is-inside-work-tree"])
-        .current_dir(&source)
-        .stdin(std::process::Stdio::null())
-        .output()
-        .is_ok_and(|output| output.status.success());
-    if !inside_repo {
-        return Err(ApiError::worktree(
-            format!("Worktree directory unavailable: {}", source.display()),
-            None,
-        ));
-    }
-    let reference = branch.unwrap_or("HEAD");
-    let added = std::process::Command::new("git")
-        .args(["worktree", "add", "--detach", "--"])
-        .arg(&worktree_directory)
-        .arg(reference)
-        .current_dir(&source)
-        .stdin(std::process::Stdio::null())
-        .output()
-        .map_err(|error| {
-            crate::errors::debug_cause("worktree:spawn", &error);
-            ApiError::worktree(format!("Git failed: {error}"), None)
-        })?;
-    if !added.status.success() {
-        let message = {
-            let stderr = String::from_utf8_lossy(&added.stderr).trim().to_string();
-            let stdout = String::from_utf8_lossy(&added.stdout).trim().to_string();
-            (!stderr.is_empty())
-                .then_some(stderr)
-                .or((!stdout.is_empty()).then_some(stdout))
-                .unwrap_or_else(|| "Git failed".to_string())
-        };
-        return Err(ApiError::worktree(message, None));
-    }
-    let directory = canonical_directory(&worktree_directory)?;
+    let registry = oc_core::project::worktree_strategy::StrategyRegistry::new();
+    let strategy = registry
+        .get(registry.selected())
+        .expect("the default strategy is registered");
+    let created = strategy
+        .create(&oc_core::project::worktree_strategy::CreateInput {
+            source_directory: source.clone(),
+            directory: worktree_directory.clone(),
+            branch: branch.map(str::to_owned),
+        })
+        .map_err(strategy_error)?;
+    let directory = canonical_directory(&created)?;
     let directory_str = directory.to_string_lossy().into_owned();
 
-    // Row (v2 ops.create with `replace: true` — the git strategy owns the
+    // Row (v2 ops.create with `replace: true` — the strategy owns the
     // row) + `worktree.updated` when the write landed.
-    let row_project_id = project_id.clone();
-    let row_directory = directory_str.clone();
-    let written = db
-        .transaction(move |tx| {
-            Ok(tx.execute(
-                "INSERT INTO worktree (project_id, directory, strategy, time_created) \
-                 VALUES (?1, ?2, 'git', ?3) \
-                 ON CONFLICT (project_id, directory) DO UPDATE SET strategy = 'git'",
-                (row_project_id, row_directory, oc_core::database::migrations::now_ms()),
-            )? != 0)
-        })
-        .await
-        .map_err(|error| {
-            crate::errors::debug_cause("project:unknown_ref", &error);
-            ApiError::unknown_ref()
-        })?;
+    let written = state
+        .engine
+        .projects
+        .claim_worktree(
+            &oc_core::project::WorktreeRow {
+                project_id: project_id.clone(),
+                directory: directory.clone(),
+                strategy: Some(strategy.id().to_owned()),
+            },
+            true,
+        )
+        .await;
     if written {
         publish_worktree_updated(&state, &project_id).await;
     }
@@ -613,36 +602,31 @@ async fn worktree_refresh(
             .map(|(directory, _, _)| directory.clone()),
     );
 
-    // `git worktree list --porcelain` per root (the git strategy — the
-    // only registered backend). Strategy failures are swallowed like the
-    // ref's logWarning → []; each entry is canonicalized, skipping
-    // directories that vanished mid-scan. The first entry is the main
+    // Strategy discovery over the roots (worktree.ts:292-314): each
+    // registered backend (registration order reversed) lists the worktrees
+    // beneath a root. Strategy failures are swallowed like the ref's
+    // logWarning → [] (the strategy returns [] itself when git is
+    // unavailable); each entry is canonicalized, skipping directories
+    // that vanished mid-scan. The first entry per root is the main
     // checkout (type "root", unowned); the rest are linked worktrees
-    // (type "worktree" → strategy `git`).
-    let mut discovered: Vec<(std::path::PathBuf, Option<&'static str>)> = Vec::new();
+    // (type "worktree" → the backend's strategy id).
+    let registry = oc_core::project::worktree_strategy::StrategyRegistry::new();
+    let mut discovered: Vec<(std::path::PathBuf, Option<String>)> = Vec::new();
     for root in roots {
         if !root.is_dir() {
             continue;
         }
-        let Some(output) = git_output(&root, &["worktree", "list", "--porcelain"]) else {
-            continue;
-        };
-        for (index, line) in output.lines().filter(|line| line.starts_with("worktree ")).enumerate()
-        {
-            let raw = line["worktree ".len()..].trim();
-            let path = if std::path::Path::new(raw).is_absolute() {
-                std::path::PathBuf::from(raw)
-            } else {
-                root.join(raw)
-            };
-            let Ok(real) = std::fs::canonicalize(&path) else {
-                continue;
-            };
-            if discovered.iter().any(|(directory, _)| *directory == real) {
-                continue;
+        for strategy in registry.discovery_order() {
+            for entry in strategy.list(&root) {
+                let Ok(real) = std::fs::canonicalize(&entry.directory) else {
+                    continue;
+                };
+                if discovered.iter().any(|(directory, _)| *directory == real) {
+                    continue;
+                }
+                let strategy_id = (entry.kind == "worktree").then(|| strategy.id().to_owned());
+                discovered.push((real, strategy_id));
             }
-            let strategy = (index > 0).then_some("git");
-            discovered.push((real, strategy));
         }
     }
 
@@ -653,51 +637,36 @@ async fn worktree_refresh(
         .map(|(directory, _, _)| directory.clone())
         .collect();
 
-    // One transaction: upsert the discovered facts (never replacing
+    // Upsert the discovered facts through the store (never replacing
     // another strategy's ownership — ops.create's setWhere) and delete
     // the vanished rows (ops.remove), counting only landed writes.
-    let tx_project = project_id.clone();
-    let changes = db
-        .transaction(move |tx| {
-            let conn = tx.conn();
-            let now = oc_core::database::migrations::now_ms();
-            let mut updated: Vec<String> = Vec::new();
-            for (directory, strategy) in discovered {
-                let row = conn.query_row(
-                    "INSERT INTO worktree (project_id, directory, strategy, time_created) \
-                     VALUES (?1, ?2, ?3, ?4) \
-                     ON CONFLICT (project_id, directory) DO UPDATE SET strategy = excluded.strategy \
-                     WHERE ?3 IS NOT NULL AND worktree.strategy IS NULL \
-                     RETURNING directory",
-                    (&tx_project, directory.to_string_lossy(), strategy, now),
-                    |row| row.get::<_, String>(0),
-                );
-                if let Ok(directory) = row {
-                    updated.push(directory);
-                }
-            }
-            let mut removed: Vec<String> = Vec::new();
-            for directory in vanished {
-                let row = conn.query_row(
-                    "DELETE FROM worktree WHERE project_id = ?1 AND directory = ?2 \
-                     RETURNING directory",
-                    (&tx_project, directory.to_string_lossy()),
-                    |row| row.get::<_, String>(0),
-                );
-                if let Ok(directory) = row {
-                    removed.push(directory);
-                }
-            }
-            Ok((updated.len(), removed.len()))
-        })
-        .await
-        .map_err(|error| {
-            crate::errors::debug_cause("worktree:unknown_ref", &error);
-            ApiError::unknown_ref()
-        })?;
+    let mut updated = 0usize;
+    for (directory, strategy) in discovered {
+        if state
+            .engine
+            .projects
+            .claim_worktree(
+                &oc_core::project::WorktreeRow {
+                    project_id: project_id.clone(),
+                    directory,
+                    strategy,
+                },
+                false,
+            )
+            .await
+        {
+            updated += 1;
+        }
+    }
+    let mut removed = 0usize;
+    for directory in vanished {
+        if state.engine.projects.remove_worktree(&project_id, &directory).await {
+            removed += 1;
+        }
+    }
 
     // `changed(projectID, update)` — announce only when a write landed.
-    if changes.0 > 0 || changes.1 > 0 {
+    if updated > 0 || removed > 0 {
         publish_worktree_updated(&state, &project_id).await;
     }
     Ok(no_content())
@@ -735,10 +704,9 @@ async fn worktree_remove(
             crate::errors::debug_cause("worktree:unknown_ref", &error);
             ApiError::unknown_ref()
         })?;
-    let Some(project_worktree) = project else {
+    let Some(project) = project else {
         return Err(ApiError::project_not_found(&project_id));
     };
-    let project_worktree = std::path::PathBuf::from(project_worktree);
 
     // Canonical on-disk path (DirectoryUnavailableError when missing).
     let worktree_directory = canonical_directory(std::path::Path::new(&directory))?;
@@ -766,85 +734,41 @@ async fn worktree_remove(
             crate::errors::debug_cause("worktree:unknown_ref", &error);
             ApiError::unknown_ref()
         })?;
-    if stored.as_deref().is_none_or(str::is_empty) {
+    // ref getStrategy (worktree.ts:198-201,263): the stored strategy must
+    // resolve to a registered backend (only `git` is registered) —
+    // otherwise StrategyUnavailableError → wire `Worktree strategy
+    // unavailable: <id>` (no forceRequired).
+    let Some(stored_id) = stored.filter(|id| !id.is_empty()) else {
         return Err(ApiError::worktree(
             format!("Invalid worktree directory: {directory_str}"),
             None,
         ));
-    }
-    // ref getStrategy (worktree.ts:198-201,263): the stored strategy must
-    // resolve to a registered backend — only `git` exists — otherwise
-    // StrategyUnavailableError → wire `Worktree strategy unavailable: <id>`
-    // (no forceRequired).
-    if stored.as_deref() != Some("git") {
+    };
+    let registry = oc_core::project::worktree_strategy::StrategyRegistry::new();
+    let Some(strategy) = registry.get(&stored_id) else {
         return Err(ApiError::worktree(
-            format!("Worktree strategy unavailable: {}", stored.unwrap_or_default()),
+            format!("Worktree strategy unavailable: {stored_id}"),
             None,
         ));
-    }
+    };
 
-    // `git worktree remove [--force] <directory>` from the repository's
-    // common dir (git.ts:621-633 + 669-681: discover from the worktree,
-    // run from commonDirectory).
-    let common = git_output(
-        &worktree_directory,
-        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
-    )
-    .map(|output| std::path::PathBuf::from(output.trim()))
-    .filter(|path| path.is_dir())
-    .unwrap_or(project_worktree);
-    let mut args = vec!["worktree".to_owned(), "remove".to_owned()];
-    if force {
-        args.push("--force".to_owned());
-    }
-    args.push(directory_str.clone());
-    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    let refs = refs.as_slice();
-    let removal = std::process::Command::new("git")
-        .args(refs)
-        .current_dir(&common)
-        .stdin(std::process::Stdio::null())
-        .output();
-    match removal {
-        Ok(output) if output.status.success() => {}
-        Ok(output) => {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            let message = (!stderr.is_empty())
-                .then_some(stderr)
-                .or((!stdout.is_empty()).then_some(stdout))
-                .unwrap_or_else(|| "Git failed".to_owned());
-            // git.ts:630-633 — the dirty-tree failure demands --force. The
-            // v2 regex covers the English messages; the literal `--force`
-            // hint rides every locale's dirty-tree error.
-            let dirty = message.contains("contains modified or untracked files")
-                || message.contains("is dirty")
-                || message.contains("--force");
-            return Err(ApiError::worktree(message, Some(dirty)));
-        }
-        Err(error) => {
-            crate::errors::debug_cause("worktree:spawn", &error);
-            return Err(ApiError::worktree(format!("Git failed: {error}"), None));
-        }
-    }
+    // The backend's remove (`git worktree remove [--force]` from the
+    // repository's common dir — git.ts:621-633 + 669-681).
+    strategy
+        .remove(&oc_core::project::worktree_strategy::RemoveInput {
+            directory: worktree_directory.clone(),
+            force,
+        })
+        .map_err(|error| {
+            crate::errors::debug_cause("worktree:remove", &format!("{error:?}"));
+            strategy_error(error)
+        })?;
 
     // Row delete + `worktree.updated` (worktree.ts:270-271) — by the
     // canonical directory the row stores.
-    let delete_project = project_id.clone();
-    let delete_directory = directory_str;
-    let removed = db
-        .transaction(move |tx| {
-            tx.execute(
-                "DELETE FROM worktree WHERE project_id = ?1 AND directory = ?2",
-                (delete_project, delete_directory),
-            )
-        })
-        .await
-        .map_err(|error| {
-            crate::errors::debug_cause("worktree:unknown_ref", &error);
-            ApiError::unknown_ref()
-        })?;
-    if removed > 0 {
+    let removed =
+        state.engine.projects.remove_worktree(&project_id, &worktree_directory).await;
+    if removed {
         publish_worktree_updated(&state, &project_id).await;
     }
     Ok(no_content())
@@ -853,6 +777,197 @@ async fn worktree_remove(
 // ---------------------------------------------------------------------------
 // VCS
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// VCS — Mercurial adapter (plugin/vcs/hg.ts)
+// ---------------------------------------------------------------------------
+
+/// `makeHg` (hg.ts:166-185): every command runs with `HGPLAIN=1` from the
+/// worktree root; failures degrade to `None`.
+fn hg_output(directory: &std::path::Path, args: &[&str]) -> Option<String> {
+    let output = std::process::Command::new("hg")
+        .args(args)
+        .current_dir(directory)
+        .env("HGPLAIN", "1")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    output.status.success().then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// `kind` (hg.ts:160-164): hg status letter → wire status.
+fn hg_kind(code: &str) -> &'static str {
+    match code {
+        "A" | "?" => "added",
+        "R" | "!" => "deleted",
+        _ => "modified",
+    }
+}
+
+/// `statusNames` (hg.ts:187-200): `hg status -0 [--rev <rev>] .` parsed as
+/// NUL-separated `<code><space><file>` records.
+fn hg_status_items(scope: &std::path::Path, rev: Option<&str>) -> Vec<DiffItem> {
+    let mut args: Vec<String> = vec!["status".to_owned(), "-0".to_owned()];
+    if let Some(rev) = rev {
+        args.push("--rev".to_owned());
+        args.push(rev.to_owned());
+    }
+    args.push(".".to_owned());
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let Some(output) = hg_output(scope, refs.as_slice()) else {
+        return Vec::new();
+    };
+    output
+        .split('\u{0}')
+        .filter(|entry| !entry.is_empty())
+        .filter_map(|entry| {
+            let code = entry.get(..1)?.to_owned();
+            let file = entry.get(2..)?.to_owned();
+            (!file.is_empty()).then(|| DiffItem { code: code.clone(), file, status: hg_kind(&code) })
+        })
+        .collect()
+}
+
+/// `branch` (hg.ts:215-219): `hg branch` — the active named branch.
+fn hg_branch(scope: &std::path::Path) -> Option<String> {
+    hg_output(scope, &["branch"]).map(|output| output.trim().to_owned()).filter(|b| !b.is_empty())
+}
+
+/// `ancestor` (hg.ts:221-225): `hg log -r ancestor(., default) -T {node}`.
+fn hg_ancestor(scope: &std::path::Path) -> Option<String> {
+    hg_output(scope, &["log", "-r", "ancestor(., default)", "-T", "{node}"])
+        .map(|output| output.trim().to_owned())
+        .filter(|rev| !rev.is_empty())
+}
+
+/// `cat` (hg.ts:227-231): `hg cat -r <rev> -- <file>` (capped at
+/// `MAX_PATCH_BYTES`).
+fn hg_cat(scope: &std::path::Path, rev: &str, file: &str) -> Option<String> {
+    let content = hg_output(scope, &["cat", "-r", rev, "--", file])?;
+    (content.len() <= MAX_PATCH_BYTES).then_some(content)
+}
+
+/// `countPatch` (vcs/patch.ts:24-32): changed lines in a unified diff,
+/// ignoring the `+++`/`---` file headers.
+fn count_patch(patch: &str) -> (i64, i64) {
+    let mut additions = 0i64;
+    let mut deletions = 0i64;
+    for line in patch.split('\n') {
+        if line.starts_with('+') && !line.starts_with("+++") {
+            additions += 1;
+        } else if line.starts_with('-') && !line.starts_with("---") {
+            deletions += 1;
+        }
+    }
+    (additions, deletions)
+}
+
+/// `addPatch` (vcs/patch.ts:17-18, the jsdiff structuredPatch rendering
+/// for "" → content with zero context).
+fn add_patch(file: &str, content: &str) -> String {
+    synthesized_patch(file, content, '+')
+}
+
+/// `deletePatch` (vcs/patch.ts:20-21, content → "" with zero context).
+fn delete_patch(file: &str, content: &str) -> String {
+    synthesized_patch(file, content, '-')
+}
+
+fn synthesized_patch(file: &str, content: &str, marker: char) -> String {
+    // jsdiff keeps each newline-terminated line as one diff line.
+    let lines: Vec<&str> = content.split_inclusive('\n').collect();
+    if lines.is_empty() {
+        return empty_patch(file);
+    }
+    let mut out = empty_patch(file);
+    let (old, new) = if marker == '+' { (format!("0,0"), format!("1,{}", lines.len())) } else { (format!("1,{}", lines.len()), format!("0,0") ) };
+    out.push_str(&format!("@@ -{old} +{new} @@\n"));
+    for line in lines {
+        out.push(marker);
+        out.push_str(line);
+        if !line.ends_with('\n') {
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// One assembled hg `FileDiff.Info` / `FileStatus`.
+struct HgDiffEntry {
+    file: String,
+    patch: String,
+    additions: i64,
+    deletions: i64,
+    status: &'static str,
+}
+
+/// `diffAgainst` (hg.ts:96-115): status items + a batched `hg diff --git`
+/// split per file, with synthesized add (`?`) and delete (`!`) patches —
+/// untracked and missing files never appear in `hg diff`.
+fn hg_diff_against(
+    scope: &std::path::Path,
+    rev: Option<&str>,
+    context: i64,
+) -> Vec<HgDiffEntry> {
+    let mut items = hg_status_items(scope, rev);
+    items.sort_by(|a, b| a.file.cmp(&b.file));
+    items.dedup_by(|a, b| a.file == b.file);
+    if items.is_empty() {
+        return Vec::new();
+    }
+    // `diffPatch` (hg.ts:202-213), capped at MAX_TOTAL_PATCH_BYTES.
+    let mut args: Vec<String> =
+        vec!["diff".to_owned(), "--git".to_owned(), "--unified".to_owned(), context.to_string()];
+    if let Some(rev) = rev {
+        args.push("-r".to_owned());
+        args.push(rev.to_owned());
+    }
+    args.push(".".to_owned());
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let batch = hg_output(scope, refs.as_slice()).unwrap_or_default();
+    let capped = batch.len() > MAX_TOTAL_PATCH_BYTES;
+    let mut chunks_vec = split_git_patch(&batch);
+    // Truncation semantics per ref `splitGitPatch` (patch.ts:76-82): when the
+    // batch exceeds MAX_TOTAL_PATCH_BYTES only the trailing PARTIAL chunk is
+    // dropped — complete per-file chunks still serve real patches.
+    if capped {
+        chunks_vec.pop();
+    }
+    let chunks: std::collections::HashMap<String, String> =
+        chunks_vec.into_iter().collect();
+
+    let mut out = Vec::new();
+    for item in items {
+        let patch = match chunks.get(&item.file) {
+            Some(chunk) => chunk.clone(),
+            // `patchFor` (hg.ts:79-94): synthesize from file contents.
+            None if item.code == "?" => std::fs::read(scope.join(&item.file))
+                .ok()
+                .filter(|content| content.len() <= MAX_PATCH_BYTES)
+                .map(|content| add_patch(&item.file, &String::from_utf8_lossy(&content)))
+                .unwrap_or_else(|| empty_patch(&item.file)),
+            None if item.code == "!" => hg_cat(scope, rev.unwrap_or("."), &item.file)
+                .map(|content| delete_patch(&item.file, &content))
+                .unwrap_or_else(|| empty_patch(&item.file)),
+            None => empty_patch(&item.file),
+        };
+        let (additions, deletions) = count_patch(&patch);
+        out.push(HgDiffEntry {
+            file: item.file,
+            patch,
+            additions,
+            deletions,
+            status: item.status,
+        });
+    }
+    out
+}
+
+/// The project's detected VCS is Mercurial (adapter selection mirrors the
+/// ref plugin registration: hg only when the location's vcs is hg).
+fn is_hg(services: &oc_core::engine::LocationServices) -> bool {
+    services.project.vcs.as_ref().is_some_and(|vcs| vcs.kind() == "hg")
+}
 
 async fn vcs_get(
     State(state): State<SharedState>,
@@ -865,14 +980,29 @@ async fn vcs_get(
     // client's `VcsBranch` and the ref's `Info` agree; a flat string
     // here failed every typed client's deserialization).
     let data = match &services.project.vcs {
-        Some(vcs) => json!({
-            "branch": {
-                "current": git_output(services.project.canonical.as_path(), &["rev-parse", "--abbrev-ref", "HEAD"])
-                    .map(|output| output.trim().to_owned())
-                    .unwrap_or_default(),
-            },
-            "provider": vcs.kind(),
-        }),
+        Some(vcs) => {
+            // The hg adapter (hg.ts:118-120): `hg branch` with the
+            // literal default branch name.
+            if is_hg(&services) {
+                json!({
+                    "branch": {
+                        "current": hg_branch(services.project.canonical.as_path())
+                            .unwrap_or_default(),
+                        "default": "default",
+                    },
+                    "provider": vcs.kind(),
+                })
+            } else {
+                json!({
+                    "branch": {
+                        "current": git_output(services.project.canonical.as_path(), &["rev-parse", "--abbrev-ref", "HEAD"])
+                            .map(|output| output.trim().to_owned())
+                            .unwrap_or_default(),
+                    },
+                    "provider": vcs.kind(),
+                })
+            }
+        }
         None => Value::Null,
     };
     Ok(super::common::json_location_data(&location.as_path().to_string_lossy(), data))
@@ -888,6 +1018,15 @@ async fn vcs_base(
     // second, DiffError → 503 ServiceUnavailableError{service:"vcs"}.
     let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let services = services(&state, &location).await?;
+    // The hg adapter exposes no base op (hg.ts has none). Ref returns
+    // 200 with `null` data in that case (vcs.ts:198-201: a provider
+    // without `base` yields null), not an error.
+    if is_hg(&services) {
+        return Ok(super::common::json_location_data(
+            &location.as_path().to_string_lossy(),
+            Value::Null,
+        ));
+    }
     let scope = services.project.canonical.as_path();
     let unavailable =
         |message: &str| ApiError::service_unavailable(message.to_owned(), Some("vcs"));
@@ -1099,6 +1238,14 @@ async fn vcs_branch_list(
     // namespaces, committerdate-then-refname ordering, /HEAD filtered.
     let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let services = services(&state, &location).await?;
+    // The hg adapter's branch list is always empty (hg.ts:121-123) —
+    // named branches are not the git branch analog.
+    if is_hg(&services) {
+        return Ok(super::common::json_location_data(
+            &location.as_path().to_string_lossy(),
+            Value::Array(Vec::new()),
+        ));
+    }
     let search = query_field(&uri, "search");
     let limit = query_field(&uri, "limit")
         .and_then(|value| value.parse::<usize>().ok())
@@ -1215,6 +1362,47 @@ async fn vcs_diff(
         |message: &str| ApiError::service_unavailable(message.to_owned(), Some("vcs"));
 
     let context = context.unwrap_or(PATCH_CONTEXT_LINES);
+
+    // The hg adapter (hg.ts:135-148): working diff against the parent;
+    // committed mode and explicit bases are DiffError; branch mode diffs
+    // against `ancestor(., default)` (empty on/unusable from `default`).
+    if is_hg(&services) {
+        if mode == "committed" || base_param.is_some() {
+            return Err(ApiError::service_unavailable(
+                "The Mercurial provider does not support committed reviews or explicit bases",
+                Some("vcs"),
+            ));
+        }
+        let scope = services.project.canonical.as_path();
+        let entries = if mode == "branch" {
+            // On (or unable to read) `default` there is no review base → [].
+            match hg_branch(scope) {
+                Some(branch) if branch != "default" => match hg_ancestor(scope) {
+                    Some(rev) => hg_diff_against(scope, Some(&rev), context),
+                    None => Vec::new(),
+                },
+                _ => Vec::new(),
+            }
+        } else {
+            hg_diff_against(scope, None, context)
+        };
+        let files: Vec<Value> = entries
+            .into_iter()
+            .map(|entry| {
+                json!({
+                    "file": entry.file,
+                    "patch": entry.patch,
+                    "additions": entry.additions,
+                    "deletions": entry.deletions,
+                    "status": entry.status,
+                })
+            })
+            .collect();
+        return Ok(super::common::json_location_data(
+            &location.as_path().to_string_lossy(),
+            Value::Array(files),
+        ));
+    }
 
     // Mode routing (git.ts:101-117).
     let (reference, target): (Option<String>, Option<&str>) = if mode == "working" {
@@ -1580,6 +1768,25 @@ async fn vcs_status(
 ) -> Result<Response, ApiError> {
     let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let services = services(&state, &location).await?;
+    // The hg adapter (hg.ts:124-134): status = diffAgainst(parent) mapped
+    // to the FileStatus wire shape.
+    if is_hg(&services) {
+        let data: Vec<Value> = hg_diff_against(services.project.canonical.as_path(), None, 0)
+            .into_iter()
+            .map(|entry| {
+                json!({
+                    "file": entry.file,
+                    "status": entry.status,
+                    "additions": entry.additions,
+                    "deletions": entry.deletions,
+                })
+            })
+            .collect();
+        return Ok(super::common::json_location_data(
+            &location.as_path().to_string_lossy(),
+            Value::Array(data),
+        ));
+    }
     let output =
         git_output(services.project.canonical.as_path(), &["status", "--porcelain=v1", "-z"])
             .unwrap_or_default();
