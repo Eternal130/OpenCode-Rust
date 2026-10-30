@@ -49,7 +49,7 @@ use crate::components::subagent_picker::{
 };
 use crate::layout::{Placed, PlacedLine};
 use crate::render::Frame;
-use crate::store::{PickerEntry, PickerState};
+use crate::store::{PickerEntry, PickerState, PickerTab};
 use crate::theme::ThemeState;
 
 // ---------------------------------------------------------------------------
@@ -508,8 +508,9 @@ fn paint_solid_picker_panel(
     selected: usize,
     theme: &ThemeState,
     width: u16,
+    tabs: &[PickerTab],
 ) -> Frame {
-    let paint = picker_panel_paint(state, entries, selected, theme, width);
+    let paint = picker_panel_paint(state, entries, selected, theme, width, tabs);
     let colors = PickerColors::resolve(theme);
     let width = usize::from(width);
     let items = shape(&paint, width);
@@ -528,7 +529,8 @@ fn paint_solid_picker_panel(
 
 /// The panel frame's ONLY renderer (lane M6, retired): the
 /// width × [`PANEL_ROWS`] frame the session route pastes in place of
-/// the prompt mount.
+/// the prompt mount. `tabs` is the registered tab list (the Terminals
+/// tab registers only when the session terminals are available).
 #[must_use]
 pub fn picker_panel_frame_dispatch(
     state: &PickerState,
@@ -536,8 +538,9 @@ pub fn picker_panel_frame_dispatch(
     selected: usize,
     theme: &ThemeState,
     width: u16,
+    tabs: &[PickerTab],
 ) -> Frame {
-    paint_solid_picker_panel(state, entries, selected, theme, width)
+    paint_solid_picker_panel(state, entries, selected, theme, width, tabs)
 }
 
 #[cfg(test)]
@@ -560,6 +563,7 @@ mod tests {
                 running: index == 0,
                 current: index == 1,
                 prefix: if index == 0 { String::new() } else { "└─ ".into() },
+                label: None,
             })
             .collect()
     }
@@ -579,12 +583,20 @@ mod tests {
             tab: PickerTab::Subagents,
             filter_active: false,
             selected: 0,
+            shell_selected: 0,
             anchored_to: None,
         };
         let mut previous_mount = None;
         for selected in 0..4 {
             state.selected = selected;
-            let solid = paint_solid_picker_panel(&state, &list, selected, &theme(), 80);
+            let solid = paint_solid_picker_panel(
+                &state,
+                &list,
+                selected,
+                &theme(),
+                80,
+                &[PickerTab::Subagents, PickerTab::Shell, PickerTab::Terminals],
+            );
             assert_eq!(
                 solid.height,
                 crate::components::subagent_picker::PANEL_ROWS,

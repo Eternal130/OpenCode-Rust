@@ -83,15 +83,20 @@ impl AutocompleteOption {
 }
 
 /// RD-05 — one `@`-mention row's structured identity
-/// (autocomplete.tsx:404-438): `kind: "agent"`/`"skill"` options carry
-/// the attachment value the accept path records (`PromptInput`'s
-/// `agents`/`skills`), not just display text.
+/// (autocomplete.tsx:404-438): `kind: "agent"`/`"skill"`/`"reference"`
+/// options carry the attachment value the accept path records
+/// (`PromptInput`'s `agents`/`skills`/`files`), not just display text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reference {
     /// `@<agent.id>` — the attachment value is `{name: agent.id}`.
     Agent { name: String },
     /// `@<skill.id>` — the attachment value is `{id: skill.id}`.
     Skill { id: String },
+    /// G-6 — `@<reference.name>` (autocomplete.tsx:449-460, `kind:
+    /// "reference"`): the accept path records a FILE part
+    /// (`{type: "file", path: reference.name}`) — the wire `files`
+    /// attachment.
+    Source { name: String },
 }
 
 /// One `@`-mention agent source row (autocomplete.tsx:404-418: the
@@ -106,6 +111,18 @@ pub struct ReferenceAgent {
 pub struct ReferenceSkill {
     pub id: String,
     pub description: Option<String>,
+}
+
+/// G-6 — one `@`-mention reference-source row (autocomplete.tsx:
+/// 449-460, `referenceAliases`): the configured reference registry's
+/// non-hidden entries. `detail` is the description's source text —
+/// the git `repository` or the local `path` (ref:
+/// `source.type === "git" ? source.repository : source.path`; the
+/// server projects the same value onto the wire `path` field).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReferenceSourceRow {
+    pub name: String,
+    pub detail: String,
 }
 
 /// The registry the filter ranks (`keymapCommands()` — every command
@@ -881,19 +898,21 @@ pub fn filter_commands(registry: &SlashRegistry, query: &str) -> Vec<Autocomplet
         .collect()
 }
 
-/// RD-05 — the `@` reference rows (autocomplete.tsx:404-438 + the
-/// `options` memo :535-592): skills first, then agents (the ref
-/// ordering `[...skillOptions, ...referenceAliases, ...agents]` — no
-/// live file/reference source in the port yet). An empty query lists
-/// everything; otherwise a case-insensitive containment filter over
-/// `@<id>` with a prefix boost, capped at the ref's popup limit (10).
+/// RD-05 — the `@` reference rows (autocomplete.tsx:404-460 + the
+/// `options` memo :535-592): skills first, then the reference sources
+/// (`referenceAliases`), then the agents — the ref ordering
+/// `[...skillOptions, ...referenceAliases, ...agents]`. An empty
+/// query lists everything; otherwise a case-insensitive containment
+/// filter over `@<id>` with a prefix boost, capped at the ref's popup
+/// limit (10).
 #[must_use]
 pub fn filter_references(
     agents: &[ReferenceAgent],
     skills: &[ReferenceSkill],
+    references: &[ReferenceSourceRow],
     query: &str,
 ) -> Vec<AutocompleteOption> {
-    filter_references_ranked(agents, skills, query, None, 0)
+    filter_references_ranked(agents, skills, references, query, None, 0)
 }
 
 /// RE-03 — the ranked form of [`filter_references`]: the score
@@ -904,6 +923,7 @@ pub fn filter_references(
 pub fn filter_references_ranked(
     agents: &[ReferenceAgent],
     skills: &[ReferenceSkill],
+    references: &[ReferenceSourceRow],
     query: &str,
     frecency: Option<&Frecency>,
     now_ms: i64,
@@ -914,13 +934,24 @@ pub fn filter_references_ranked(
         reference: Some(Reference::Skill { id: skill.id.clone() }),
         ..AutocompleteOption::default()
     });
+    // G-6 — `referenceAliases` (autocomplete.tsx:449-460): the
+    // non-hidden entries, display `@<name>`, description ` <detail>`
+    // (the LEADING SPACE is part of the ref's description string).
+    // The rows carry no `path` (only file rows do) — the frecency
+    // factor is an identity here.
+    let reference_rows = references.iter().map(|reference| AutocompleteOption {
+        display: format!("@{}", reference.name),
+        description: Some(format!(" {}", reference.detail)),
+        reference: Some(Reference::Source { name: reference.name.clone() }),
+        ..AutocompleteOption::default()
+    });
     let agent_rows = agents.iter().map(|agent| AutocompleteOption {
         display: format!("@{}", agent.id),
         description: None,
         reference: Some(Reference::Agent { name: agent.id.clone() }),
         ..AutocompleteOption::default()
     });
-    let all: Vec<AutocompleteOption> = skill_rows.chain(agent_rows).collect();
+    let all: Vec<AutocompleteOption> = skill_rows.chain(reference_rows).chain(agent_rows).collect();
     rank_reference_options(all, query, frecency, now_ms)
 }
 
@@ -945,7 +976,9 @@ pub fn rank_reference_options(
         .into_iter()
         .filter_map(|option| {
             let target = option.display.to_lowercase();
-            let at = target.find(&needle)?;
+            if !target.contains(&needle) {
+                return None;
+            }
             // Base score 1 for a containment match (+1 more on the
             // `@{query}` prefix), so the frecency factor
             // (autocomplete.tsx:569-570) can reorder matched rows.
@@ -1081,23 +1114,30 @@ mod tests {
         assert_eq!(popup_height(20, 30), 10);
     }
 
-    /// RD-05 — the `@` rows: skills before agents (the ref ordering),
-    /// an empty query lists everything, and a query filters `@<id>`
-    /// case-insensitively with the structured identity attached.
+    /// RD-05 — the `@` rows: skills before the reference sources
+    /// before agents (the ref ordering), an empty query lists
+    /// everything, and a query filters `@<id>` case-insensitively
+    /// with the structured identity attached.
     #[test]
     fn filter_references_orders_and_filters() {
         let agents =
             vec![ReferenceAgent { id: "build".into() }, ReferenceAgent { id: "plan".into() }];
         let skills = vec![ReferenceSkill { id: "refactor".into(), description: Some("d".into()) }];
-        let all = filter_references(&agents, &skills, "");
+        let references =
+            vec![ReferenceSourceRow { name: "docs".into(), detail: "/tmp/docs".into() }];
+        let all = filter_references(&agents, &skills, &references, "");
         assert_eq!(
             all.iter().map(|option| option.display.clone()).collect::<Vec<_>>(),
-            vec!["@refactor", "@build", "@plan"]
+            vec!["@refactor", "@docs", "@build", "@plan"]
         );
         assert_eq!(all[0].reference, Some(Reference::Skill { id: "refactor".into() }));
-        assert_eq!(all[1].reference, Some(Reference::Agent { name: "build".into() }));
+        // G-6 — the reference row: `kind: "reference"`, the detail as
+        // the description WITH the ref's leading space.
+        assert_eq!(all[1].reference, Some(Reference::Source { name: "docs".into() }));
+        assert_eq!(all[1].description.as_deref(), Some(" /tmp/docs"));
+        assert_eq!(all[2].reference, Some(Reference::Agent { name: "build".into() }));
 
-        let filtered = filter_references(&agents, &skills, "BU");
+        let filtered = filter_references(&agents, &skills, &references, "BU");
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].display, "@build");
     }

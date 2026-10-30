@@ -1363,9 +1363,14 @@ pub mod tungstenite_connector {
             })?;
             let authority =
                 uri.authority().map(|authority| authority.as_str().to_string()).unwrap_or_default();
+            let target_host =
+                uri.host().unwrap_or_default().trim_matches(['[', ']']).to_string();
+            let target_port = uri
+                .port_u16()
+                .unwrap_or(if uri.scheme_str() == Some("wss") { 443 } else { 80 });
             let mut builder = http::Request::builder()
                 .method("GET")
-                .uri(uri)
+                .uri(&uri)
                 .header("host", authority)
                 .header("connection", "Upgrade")
                 .header("upgrade", "websocket")
@@ -1394,17 +1399,40 @@ pub mod tungstenite_connector {
                     Some(request.url.clone()),
                 )
             })?;
-            let (stream, response) =
-                tokio_tungstenite::connect_async(handshake).await.map_err(|error| {
-                    transport_error(
-                        format!("Failed to open WebSocket: {error}"),
-                        TransportOperation::Request,
-                        Some(TransportPhase::Connect),
-                        Some(TransportDelivery::NotSent),
-                        None,
-                        Some(request.url.clone()),
-                    )
-                })?;
+            // Proxy seam (gap G-8): HTTP(S)_PROXY / ALL_PROXY (minus
+            // NO_PROXY) tunnel the handshake via HTTP CONNECT, matching
+            // v2's http(s)-proxy-agent behavior for WS connections.
+            let (stream, response) = match super::super::proxy::resolve_for(&request.url)? {
+                None => tokio_tungstenite::connect_async(handshake).await,
+                Some(proxy) => {
+                    let tunnel =
+                        super::super::proxy::connect_through(&proxy, &target_host, target_port)
+                        .await
+                        .map_err(|error| {
+                            let mut error = error;
+                            if let crate::schema::AiErrorReason::Transport { url, .. } =
+                                &mut error.reason
+                            {
+                                *url = Some(request.url.clone());
+                            }
+                            error
+                        })?;
+                    // The connector upgrades the tunnel to TLS itself for
+                    // wss targets (rustls is on for the ws-transport feature).
+                    tokio_tungstenite::client_async_tls_with_config(handshake, tunnel, None, None)
+                        .await
+                }
+            }
+            .map_err(|error| {
+                transport_error(
+                    format!("Failed to open WebSocket: {error}"),
+                    TransportOperation::Request,
+                    Some(TransportPhase::Connect),
+                    Some(TransportDelivery::NotSent),
+                    None,
+                    Some(request.url.clone()),
+                )
+            })?;
             let http = Some(crate::schema::HttpContext {
                 url: request.url.clone(),
                 status: response.status().as_u16(),
@@ -1545,5 +1573,56 @@ mod tests {
         assert_eq!(DEFAULT_IDLE_TIMEOUT, DEFAULT_IDLE_TIMEOUT);
         assert_eq!(DEFAULT_IDLE_TIMEOUT.as_secs(), 1800);
         assert_eq!(MAX_STREAM_FAILURES, 5);
+    }
+}
+
+#[cfg(test)]
+mod proxy_tunnel_tests {
+    //! End-to-end WS-through-proxy check: a local stub proxy accepts the
+    //! CONNECT, then serves a real WebSocket endpoint over the tunnel.
+
+    use super::super::proxy::{connect_through, ProxyEndpoint};
+    use futures::{SinkExt as _, StreamExt as _};
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    use tokio_tungstenite::tungstenite::Message;
+    
+    #[tokio::test]
+    async fn websocket_handshakes_through_a_connect_proxy() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy_addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buffer = Vec::new();
+            let mut chunk = [0u8; 512];
+            loop {
+                let read = stream.read(&mut chunk).await.unwrap();
+                buffer.extend_from_slice(&chunk[..read]);
+                if buffer.windows(4).any(|w| w == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let head = String::from_utf8_lossy(&buffer);
+            assert!(head.starts_with("CONNECT upstream.test:80 "), "got: {head}");
+            stream.write_all(b"HTTP/1.1 200 Connection established\r\n\r\n").await.unwrap();
+            // the tunnel now carries the WebSocket: serve one frame
+            let ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let (mut sink, mut incoming) = ws.split();
+            let first = incoming.next().await.unwrap().unwrap();
+            sink.send(Message::Text(format!("echo:{first}"))).await.unwrap();
+        });
+
+        let proxy = ProxyEndpoint {
+            host: "127.0.0.1".into(),
+            port: proxy_addr.port(),
+            source: format!("http://127.0.0.1:{}", proxy_addr.port()),
+        };
+        let tunnel = connect_through(&proxy, "upstream.test", 80).await.unwrap();
+        let (ws, _response) =
+            tokio_tungstenite::client_async("ws://upstream.test/", tunnel).await.unwrap();
+        let (mut sink, mut incoming) = ws.split();
+        sink.send(Message::Text("ping".into())).await.unwrap();
+        let reply = incoming.next().await.unwrap().unwrap();
+        assert_eq!(reply.into_text().unwrap(), "echo:ping");
+        server.await.unwrap();
     }
 }

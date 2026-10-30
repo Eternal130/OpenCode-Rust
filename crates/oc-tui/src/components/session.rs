@@ -327,6 +327,7 @@ pub fn render_session(
             selected,
             &theme,
             column_u16,
+            &store.picker_registered_tabs(),
         );
         let top = height.saturating_sub(crate::components::subagent_picker::PICKER_MOUNT_ROWS);
         let visible = entries.len().min(crate::components::subagent_picker::BODY_ROWS);
@@ -1380,10 +1381,14 @@ fn composer_mount_frame(
     height: usize,
 ) -> (Frame, usize, usize, Option<(usize, usize)>, Option<crate::store::PromptTextHit>) {
     let composer = store.composer(session_id);
-    // The popup over the composer: live slash-palette state
-    // (`component/prompt/autocomplete.tsx`'s mount).
+    // The popup over the composer: the live slash palette + the `@`
+    // reference rows (G-6 — autocomplete.tsx's mount renders every
+    // mode's options; the port's Directory rows stay the caller's
+    // TUI-28 surface).
     let popup_options = match composer.autocomplete.visible {
-        Some(autocomplete::Mode::Command) => Some(composer.autocomplete.options.clone()),
+        Some(autocomplete::Mode::Command | autocomplete::Mode::Reference) => {
+            Some(composer.autocomplete.options.clone())
+        }
         _ => None,
     };
     let autocomplete = popup_options.as_ref().map(|options| AutocompleteView {
@@ -1408,7 +1413,10 @@ fn composer_mount_frame(
     // `top = popup_rows` inside it, pasted so the composer still docks
     // at the bottom (no popup ⇒ the previous single-mount shape).
     let anchor = height.saturating_sub(mount_height);
-    let popup_rows = if matches!(composer.autocomplete.visible, Some(autocomplete::Mode::Command)) {
+    let popup_rows = if matches!(
+        composer.autocomplete.visible,
+        Some(autocomplete::Mode::Command | autocomplete::Mode::Reference)
+    ) {
         crate::components::composer::autocomplete::popup_height(
             composer.autocomplete.options.len(),
             anchor,
@@ -2365,6 +2373,9 @@ mod tests {
         picker.open = true;
         picker.filter_active = false;
         store.set_picker(picker);
+        // The terminals capability arms the third tab (composer/index.
+        // tsx:129-131's `terminals` gate — session-frame.tsx:294).
+        store.set_terminal_available(true);
         let theme = crate::theme::ThemeState::v2_dark();
         let frame = render_session(&store, "root", &theme.styles(), (80, 24));
         let grid = frame.text_grid();

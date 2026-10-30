@@ -1575,6 +1575,72 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
                     .described("to another working directory"),
             ],
         ),
+        // G-6 — the composer Shell tab's output viewer
+        // (`DialogShellOutput`, shell-tab.tsx:29-32): the title row +
+        // status, the command, the omitted notice, and the captured
+        // tail — the same one-row-per-line shape as ToolOutput's
+        // shell role. Content lands through the shell control sink;
+        // the loading row covers the in-flight fetch.
+        DialogKind::ShellOutput { shell_id } => {
+            let mut options = Vec::new();
+            match store.shell_view() {
+                Some(view) if view.shell_id == *shell_id => {
+                    options.push(
+                        SelectOption::titled(view.status.clone(), "status").muted_placeholder(),
+                    );
+                    for line in view.command.lines() {
+                        options.push(
+                            SelectOption::titled(line.to_owned(), "command").muted_placeholder(),
+                        );
+                    }
+                    if view.omitted {
+                        options.push(
+                            SelectOption::titled(
+                                "Earlier output omitted · showing recent output",
+                                "omitted",
+                            )
+                            .muted_placeholder(),
+                        );
+                    }
+                    match &view.output {
+                        Some(output) => {
+                            for (index, line) in output.lines().enumerate() {
+                                options.push(
+                                    SelectOption::titled(line.to_owned(), format!("line:{index}"))
+                                        .categorized("Output"),
+                                );
+                            }
+                            if output.is_empty() {
+                                options.push(
+                                    SelectOption::titled(
+                                        "No captured output. Output redirected to files is not shown here.",
+                                        "empty",
+                                    )
+                                    .muted_placeholder(),
+                                );
+                            }
+                        }
+                        None => {
+                            options.push(
+                                SelectOption::titled("Loading output…", "loading")
+                                    .muted_placeholder(),
+                            );
+                        }
+                    }
+                    if let Some(error) = &view.error {
+                        options.push(
+                            SelectOption::titled(error.clone(), "error").categorized("Error"),
+                        );
+                    }
+                }
+                _ => {
+                    options.push(
+                        SelectOption::titled("Loading output…", "loading").muted_placeholder(),
+                    );
+                }
+            }
+            SelectProps::new("Shell output", options).flat(true)
+        }
     }
 }
 
@@ -2892,18 +2958,38 @@ impl CommandDispatcher for StoreDispatcher {
                 Dispatch::Handled
             }
             // The picker's terminals tab rows (terminals-tab.tsx:
-            // 66-79): the wrap move + the select (a terminal or the
-            // `+ New terminal` slot).
+            // 66-79): the wrap move over the slots INCLUDING the
+            // `+ New terminal` row (no close branch — `up` wraps), and
+            // the select (a terminal or the `+ New terminal` slot).
             "composer.terminal.up" => {
-                store.picker_move(false);
+                store.picker_move_wrap(false);
                 Dispatch::Handled
             }
             "composer.terminal.down" => {
-                store.picker_move(true);
+                store.picker_move_wrap(true);
                 Dispatch::Handled
             }
             "composer.terminal.select" => {
                 store.picker_terminal_select();
+                Dispatch::Handled
+            }
+            // G-6 — the picker's shell tab rows (shell-tab.tsx:64-111):
+            // the wrap move with `up`-at-0 closing (`picker_move`), the
+            // output viewer open, and the fire-and-forget kill.
+            "composer.shell.up" => {
+                store.picker_move(false);
+                Dispatch::Handled
+            }
+            "composer.shell.down" => {
+                store.picker_move(true);
+                Dispatch::Handled
+            }
+            "composer.shell.select" => {
+                store.picker_shell_select();
+                Dispatch::Handled
+            }
+            "composer.shell.kill" => {
+                store.picker_shell_kill();
                 Dispatch::Handled
             }
             // TUI-33 — `session.verbosity.cycle` (index.tsx:1064-
@@ -4789,93 +4875,93 @@ mod tests {
     }
 }
 
-    // -- RE-14: /stats (stats.open) ---------------------------------
-    /// The command is registered on every surface (stats.tsx:194-
-    /// 211): the palette's System group, the slash table's `/stats`,
-    /// and the keymap's `stats.open` row (base, unbound) + the
-    /// page's own escape layer.
-    #[test]
-    fn stats_command_is_registered_on_every_surface() {
-        let row = PALETTE_COMMANDS
-            .iter()
-            .find(|command| command.command == "stats.open")
-            .expect("the palette row");
-        assert_eq!(row.title, "Usage statistics");
-        assert_eq!(row.group, "System");
-        assert!(crate::components::composer::autocomplete::SLASH_COMMANDS
-            .contains(&("stats", "stats.open")));
-        let table = crate::keymap::default_table();
-        let open = table.iter().find(|def| def.command == "stats.open").expect("stats.open def");
-        assert_eq!(open.layer, "base");
-        assert_eq!(open.defaults, "none");
-        let close = table.iter().find(|def| def.command == "stats.close").expect("stats.close def");
-        assert_eq!(close.layer, "stats");
-        assert!(close.defaults.contains("escape"));
-    }
+// -- RE-14: /stats (stats.open) ---------------------------------
+/// The command is registered on every surface (stats.tsx:194-
+/// 211): the palette's System group, the slash table's `/stats`,
+/// and the keymap's `stats.open` row (base, unbound) + the
+/// page's own escape layer.
+#[test]
+fn stats_command_is_registered_on_every_surface() {
+    let row = PALETTE_COMMANDS
+        .iter()
+        .find(|command| command.command == "stats.open")
+        .expect("the palette row");
+    assert_eq!(row.title, "Usage statistics");
+    assert_eq!(row.group, "System");
+    assert!(crate::components::composer::autocomplete::SLASH_COMMANDS
+        .contains(&("stats", "stats.open")));
+    let table = crate::keymap::default_table();
+    let open = table.iter().find(|def| def.command == "stats.open").expect("stats.open def");
+    assert_eq!(open.layer, "base");
+    assert_eq!(open.defaults, "none");
+    let close = table.iter().find(|def| def.command == "stats.close").expect("stats.close def");
+    assert_eq!(close.layer, "stats");
+    assert!(close.defaults.contains("escape"));
+}
 
-    /// `stats.open`'s dispatch (stats.tsx:196-209): mount the page
-    /// (loading), kick the stats fetch with the local year range,
-    /// ignore a re-run while open; `stats.close` returns to the
-    /// previous route; the resource landing paints the metrics;
-    /// stale generations drop.
-    #[test]
-    fn stats_open_dispatch_mounts_page_and_fetches() {
-        use crate::reactive::Runtime;
-        use crate::store::{RecordingStatsSink, StatsPhase};
-        let store = Store::new(Runtime::new());
-        let sink = std::rc::Rc::new(RecordingStatsSink::default());
-        store.set_stats_sink(sink.clone());
-        let mut dispatcher = StoreDispatcher;
+/// `stats.open`'s dispatch (stats.tsx:196-209): mount the page
+/// (loading), kick the stats fetch with the local year range,
+/// ignore a re-run while open; `stats.close` returns to the
+/// previous route; the resource landing paints the metrics;
+/// stale generations drop.
+#[test]
+fn stats_open_dispatch_mounts_page_and_fetches() {
+    use crate::reactive::Runtime;
+    use crate::store::{RecordingStatsSink, StatsPhase};
+    let store = Store::new(Runtime::new());
+    let sink = std::rc::Rc::new(RecordingStatsSink::default());
+    store.set_stats_sink(sink.clone());
+    let mut dispatcher = StoreDispatcher;
 
-        // Off a session route: the page mounts over it and the fetch
-        // carries the year range (from = local Jan 1, tools none).
-        store.open_tab("s1", Some("S1".to_owned()));
-        assert!(matches!(store.route(), Route::Session { .. }));
-        assert_eq!(dispatcher.dispatch(&store, "stats.open", None), Dispatch::Handled);
-        assert!(store.stats_page_open());
-        assert!(matches!(store.stats_page_state().phase, StatsPhase::Loading));
-        let calls = sink.calls.borrow().clone();
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].0, 1, "the first generation");
-        assert_eq!(
-            calls[0].1,
-            crate::components::stats_page::year_start_ms(crate::components::stats_page::now_ms()),
-            "from = the current year's Jan 1"
-        );
+    // Off a session route: the page mounts over it and the fetch
+    // carries the year range (from = local Jan 1, tools none).
+    store.open_tab("s1", Some("S1".to_owned()));
+    assert!(matches!(store.route(), Route::Session { .. }));
+    assert_eq!(dispatcher.dispatch(&store, "stats.open", None), Dispatch::Handled);
+    assert!(store.stats_page_open());
+    assert!(matches!(store.stats_page_state().phase, StatsPhase::Loading));
+    let calls = sink.calls.borrow().clone();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].0, 1, "the first generation");
+    assert_eq!(
+        calls[0].1,
+        crate::components::stats_page::year_start_ms(crate::components::stats_page::now_ms()),
+        "from = the current year's Jan 1"
+    );
 
-        // A re-run while the page is open does nothing (stats.tsx:
-        // 203-204).
-        assert_eq!(dispatcher.dispatch(&store, "stats.open", None), Dispatch::Handled);
-        assert_eq!(sink.calls.borrow().len(), 1, "no refetch while open");
+    // A re-run while the page is open does nothing (stats.tsx:
+    // 203-204).
+    assert_eq!(dispatcher.dispatch(&store, "stats.open", None), Dispatch::Handled);
+    assert_eq!(sink.calls.borrow().len(), 1, "no refetch while open");
 
-        // The result lands: the payload rides the page.
-        let info = oc_client::types::SessionStatsInfo {
-            active_days: 3,
-            activity: Vec::new(),
-            cost: 0.0,
-            models: Vec::new(),
-            prompts: 4,
-            range: oc_client::types::SessionStatsInfoRange { from: 0.0, to: 1.0 },
-            sessions: 2,
-            steps: 4,
-            streak: 1,
-            subagents: 0,
-            tokens: oc_client::types::TokenUsageInfo::default(),
-            tools: oc_client::types::SessionStatsTools::None(
-                oc_client::types::SessionStatsToolsVariant1 {
-                    mode: oc_client::types::SessionStatsToolsVariant1Mode::None,
-                },
-            ),
-        };
-        store.stats_fetch_result(1, Ok(info));
-        assert!(matches!(store.stats_page_state().phase, StatsPhase::Loaded(_)));
+    // The result lands: the payload rides the page.
+    let info = oc_client::types::SessionStatsInfo {
+        active_days: 3,
+        activity: Vec::new(),
+        cost: 0.0,
+        models: Vec::new(),
+        prompts: 4,
+        range: oc_client::types::SessionStatsInfoRange { from: 0.0, to: 1.0 },
+        sessions: 2,
+        steps: 4,
+        streak: 1,
+        subagents: 0,
+        tokens: oc_client::types::TokenUsageInfo::default(),
+        tools: oc_client::types::SessionStatsTools::None(
+            oc_client::types::SessionStatsToolsVariant1 {
+                mode: oc_client::types::SessionStatsToolsVariant1Mode::None,
+            },
+        ),
+    };
+    store.stats_fetch_result(1, Ok(info));
+    assert!(matches!(store.stats_page_state().phase, StatsPhase::Loaded(_)));
 
-        // A stale generation drops.
-        store.stats_fetch_result(0, Err("stale".to_owned()));
-        assert!(!matches!(store.stats_page_state().phase, StatsPhase::Failed(_)));
+    // A stale generation drops.
+    store.stats_fetch_result(0, Err("stale".to_owned()));
+    assert!(!matches!(store.stats_page_state().phase, StatsPhase::Failed(_)));
 
-        // stats.close (the page's escape layer) returns to the route.
-        assert_eq!(dispatcher.dispatch(&store, "stats.close", None), Dispatch::Handled);
-        assert!(!store.stats_page_open());
-        assert!(matches!(store.route(), Route::Session { session_id } if session_id == "s1"));
-    }
+    // stats.close (the page's escape layer) returns to the route.
+    assert_eq!(dispatcher.dispatch(&store, "stats.close", None), Dispatch::Handled);
+    assert!(!store.stats_page_open());
+    assert!(matches!(store.route(), Route::Session { session_id } if session_id == "s1"));
+}

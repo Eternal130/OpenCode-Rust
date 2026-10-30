@@ -605,6 +605,15 @@ pub struct FakeLlm {
     /// Whether `/api/skill` answers (opt-in — TUI-8's `DialogSkill`
     /// proof): two skills.
     pub skills: Arc<AtomicBool>,
+    /// G-6 — whether `/api/reference` answers (the `@` completion's
+    /// reference rows): two sources (one local, one git).
+    pub references: Arc<AtomicBool>,
+    /// G-6 — every `DELETE /api/shell/{id}` path (the composer's
+    /// shell-kill server-side evidence).
+    pub shell_deletes: Arc<Mutex<Vec<String>>>,
+    /// G-6 — whether `GET /api/shell*` answers (the shell output
+    /// viewer's `shell.get` + `shell.output` fetches).
+    pub shell_output: Arc<AtomicBool>,
     /// TUI-14 — every `POST /api/session/:id/shell` body (the
     /// shell-mode submit's server-side evidence).
     pub shell_posts: Arc<Mutex<Vec<String>>>,
@@ -636,6 +645,9 @@ impl FakeLlm {
         let pair = Arc::new(AtomicBool::new(false));
         let integrations = Arc::new(AtomicBool::new(false));
         let skills = Arc::new(AtomicBool::new(false));
+        let references = Arc::new(AtomicBool::new(false));
+        let shell_output = Arc::new(AtomicBool::new(false));
+        let shell_deletes: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let shell_posts: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let synthetic_posts: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let interrupt_posts: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
@@ -653,6 +665,9 @@ impl FakeLlm {
         let shared_pair = Arc::clone(&pair);
         let shared_integrations = Arc::clone(&integrations);
         let shared_skills = Arc::clone(&skills);
+        let shared_references = Arc::clone(&references);
+        let shared_shell_output = Arc::clone(&shell_output);
+        let shared_shell_deletes = Arc::clone(&shell_deletes);
         let shared_shell_posts = Arc::clone(&shell_posts);
         let shared_synthetic_posts = Arc::clone(&synthetic_posts);
         let shared_interrupt_posts = Arc::clone(&interrupt_posts);
@@ -673,6 +688,9 @@ impl FakeLlm {
                         let pair = Arc::clone(&shared_pair);
                         let integrations = Arc::clone(&shared_integrations);
                         let skills = Arc::clone(&shared_skills);
+                        let references = Arc::clone(&shared_references);
+                        let shell_output = Arc::clone(&shared_shell_output);
+                        let shell_deletes = Arc::clone(&shared_shell_deletes);
                         let shell_posts = Arc::clone(&shared_shell_posts);
                         let synthetic_posts = Arc::clone(&shared_synthetic_posts);
                         let interrupt_posts = Arc::clone(&shared_interrupt_posts);
@@ -691,6 +709,9 @@ impl FakeLlm {
                                 &pair,
                                 &integrations,
                                 &skills,
+                                &references,
+                                &shell_output,
+                                &shell_deletes,
                                 &shell_posts,
                                 &synthetic_posts,
                                 &interrupt_posts,
@@ -716,6 +737,9 @@ impl FakeLlm {
             pair,
             integrations,
             skills,
+            references,
+            shell_output,
+            shell_deletes,
             shell_posts,
             synthetic_posts,
             interrupt_posts,
@@ -774,6 +798,18 @@ impl FakeLlm {
         self.skills.store(true, Ordering::SeqCst);
     }
 
+    /// G-6 — answer `/api/reference` with the two-source fixture (the
+    /// `@` completion's reference rows).
+    pub fn arm_references(&self) {
+        self.references.store(true, Ordering::SeqCst);
+    }
+
+    /// G-6 — answer `GET /api/shell/{id}` + `/output` (the shell
+    /// output viewer's fetch) and record `DELETE /api/shell/{id}`.
+    pub fn arm_shell_output(&self) {
+        self.shell_output.store(true, Ordering::SeqCst);
+    }
+
     /// Arm the streaming script (played on the SSE feed after the
     /// first prompt POST). No script = a quiet held-open stream.
     pub fn arm_script(&self, script: Vec<ScriptEvent>) {
@@ -808,6 +844,9 @@ fn handle(
     pair: &Arc<AtomicBool>,
     integrations: &Arc<AtomicBool>,
     skills: &Arc<AtomicBool>,
+    references: &Arc<AtomicBool>,
+    shell_output: &Arc<AtomicBool>,
+    shell_deletes: &Arc<Mutex<Vec<String>>>,
     shell_posts: &Arc<Mutex<Vec<String>>>,
     synthetic_posts: &Arc<Mutex<Vec<String>>>,
     interrupt_posts: &Arc<Mutex<Vec<String>>>,
@@ -859,6 +898,51 @@ fn handle(
     // would fail the status parse and raise the error toast).
     if method == "GET" && path == "/api/experimental/migration/v1" {
         let body = r#"{"status":"completed"}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\ncontent-length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        let _ = socket.write_all(response.as_bytes());
+        return;
+    }
+    // G-6 — the composer's shell-kill (shell-tab.tsx:104-107): record
+    // the DELETE path, answer 204 No Content.
+    if method == "DELETE" && path.split('?').next().unwrap_or_default().starts_with("/api/shell/") {
+        shell_deletes
+            .lock()
+            .expect("shell deletes")
+            .push(path.split('?').next().unwrap_or_default().to_owned());
+        let response = b"HTTP/1.1 204 No Content\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
+        let _ = socket.write_all(response);
+        return;
+    }
+    // G-6 — the shell output viewer's fetches (dialog-shell-output.
+    // tsx): `shell.get` answers the running Info row; `shell.output`
+    // answers one captured-tail page.
+    if shell_output.load(Ordering::SeqCst)
+        && method == "GET"
+        && path.split('?').next().unwrap_or_default().starts_with("/api/shell/")
+    {
+        let bare = path.split('?').next().unwrap_or_default();
+        let body = if bare.ends_with("/output") {
+            r#"{"data":{"cursor":0,"output":"build finished","size":14,"truncated":false},"location":{"directory":"/tmp"}}"#.to_owned()
+        } else {
+            r#"{"data":{"id":"sh_1","status":"running","command":"cargo build","cwd":"/tmp","shell":"bash","file":"/tmp/sh_1.out","metadata":{},"time":{"started":0}},"location":{"directory":"/tmp"}}"#.to_owned()
+        };
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\ncontent-length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        let _ = socket.write_all(response.as_bytes());
+        return;
+    }
+    // G-6 — the reference registry (`reference.list`, the `@`
+    // completion's reference rows): one local source + one git.
+    if references.load(Ordering::SeqCst)
+        && method == "GET"
+        && path.split('?').next().unwrap_or_default() == "/api/reference"
+    {
+        let body = r#"{"data":[{"name":"docs","path":"/tmp/docs","description":null,"hidden":null,"source":{"type":"local","path":"/tmp/docs"}},{"name":"vendor","path":"github.com/acme/vendor","description":null,"hidden":null,"source":{"type":"git","repository":"github.com/acme/vendor","branch":null}}],"location":{"directory":"/tmp"}}"#.to_owned();
         let response = format!(
             "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\ncontent-length: {}\r\n\r\n{body}",
             body.len()

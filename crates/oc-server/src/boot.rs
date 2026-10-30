@@ -320,6 +320,10 @@ pub async fn boot_and_serve(options: &BootOptions) -> io::Result<ServeHandle> {
     // off). Applied after the infra gate so a truthy disable always
     // wins, exactly like v2's `fetch: !truthy(...)`.
     server_process_env::apply_models_env(&mut engine_options);
+    // G-8: the DISABLE_FFF / SIMULATE switches — honored (fff pins the
+    // pure ripgrep search lane) or explicitly rejected (simulation is
+    // not in this build) with a one-line boot note each.
+    server_process_env::log_env_switch_notes();
 
     // The production plugin host (wave-12): boot from the resolved
     // config's `plugins[]` BEFORE `Engine::boot` — the engine options

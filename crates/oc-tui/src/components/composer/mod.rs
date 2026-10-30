@@ -1431,6 +1431,35 @@ impl Composer {
                         self.draft.skills.push(SkillMention { name: id.clone(), id, start, end });
                         KeyOutcome::Edited
                     }
+                    Some(autocomplete::Reference::Source { name }) => {
+                        // G-6 — `referenceAliases`' onSelect
+                        // (autocomplete.tsx:451-458): `insertPart(name,
+                        // {type: "file", path: name, …})` — the chip
+                        // records a FILE part (the wire `files`
+                        // attachment) and the frecency store bumps on
+                        // `part.path` (autocomplete.tsx:262). The ref
+                        // dedupes by uri and MOVES the existing
+                        // mention; the closest rust identity is the
+                        // name — an existing chip moves its range.
+                        let existing = self.draft.files.iter().position(|file| file.name == name);
+                        let (start, end) = self.insert_reference_chip(&name);
+                        match existing {
+                            Some(index) => {
+                                let file = &mut self.draft.files[index];
+                                file.start = start;
+                                file.end = end;
+                            }
+                            None => self.draft.files.push(FileMention {
+                                name: name.clone(),
+                                start,
+                                end,
+                                payload: None,
+                                mention: None,
+                            }),
+                        }
+                        self.autocomplete.frecency.update(&name, autocomplete::now_ms());
+                        KeyOutcome::Edited
+                    }
                     None => {
                         // RE-03 — `insertPart` records the file part
                         // (autocomplete.tsx:241: `part.type === "file"
@@ -1921,6 +1950,55 @@ mod tests {
         state.autocomplete.filtered_len = 1;
         assert!(matches!(state.accept_autocomplete(), KeyOutcome::Edited));
         assert_eq!(state.draft.skills.len(), 1, "skill parts dedupe");
+    }
+
+    /// G-6 — accepting an `@<reference>` row (autocomplete.tsx:
+    /// 449-460) inserts the chip and records a FILE part with the
+    /// reference's name (`insertPart(name, {type: "file", path: name
+    /// …})`), plus the frecency bump on `part.path`. Re-mentioning
+    /// moves the existing part's range instead of duplicating (the
+    /// ref's uri-dedupe, keyed by name here).
+    #[test]
+    fn accepting_reference_source_records_a_file_part() {
+        let mut state = Composer::default();
+        state.set(PromptDraft { text: "see @do".into(), ..PromptDraft::default() });
+        state.set_caret(state.char_len());
+        state.autocomplete.on_input(&state.draft.text, state.edit.caret());
+        state.autocomplete.options = vec![autocomplete::AutocompleteOption {
+            display: "@docs".into(),
+            description: Some(" /tmp/docs".into()),
+            reference: Some(autocomplete::Reference::Source { name: "docs".into() }),
+            ..autocomplete::AutocompleteOption::default()
+        }];
+        state.autocomplete.filtered_len = 1;
+        assert!(matches!(state.accept_autocomplete(), KeyOutcome::Edited));
+        assert_eq!(state.draft.text, "see @docs ");
+        let file = state.draft.files.first().expect("structured file part");
+        assert_eq!(file.name, "docs");
+        assert_eq!((file.start, file.end), (4, 9));
+        // The frecency bump keyed on the reference name (ref:
+        // `frecency.updateFrecency(part.path)` — part.path = name).
+        let key = autocomplete::resolve_frecency_path(
+            &std::env::current_dir().unwrap_or_default(),
+            "docs",
+        );
+        assert_eq!(state.autocomplete.frecency.data.get(&key).map(|e| e.frequency), Some(1));
+
+        // A second mention MOVES the part (no duplicate).
+        state.set(PromptDraft { text: "@do".into(), ..PromptDraft::default() });
+        state.set_caret(state.char_len());
+        state.autocomplete.on_input(&state.draft.text, state.edit.caret());
+        state.autocomplete.options = vec![autocomplete::AutocompleteOption {
+            display: "@docs".into(),
+            reference: Some(autocomplete::Reference::Source { name: "docs".into() }),
+            ..autocomplete::AutocompleteOption::default()
+        }];
+        state.autocomplete.filtered_len = 1;
+        assert!(matches!(state.accept_autocomplete(), KeyOutcome::Edited));
+        assert_eq!(state.draft.files.len(), 1, "the reference part moves, never duplicates");
+        let file = state.draft.files.first().expect("moved part");
+        assert_eq!((file.start, file.end), (0, 5));
+        assert_eq!(state.autocomplete.frecency.data.get(&key).map(|e| e.frequency), Some(2));
     }
 
     /// RE-03 — accepting a FILE row (a path-carrying option, the
