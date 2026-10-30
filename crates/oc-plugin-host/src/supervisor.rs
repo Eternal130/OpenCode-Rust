@@ -118,6 +118,11 @@ pub struct SupervisorConfig {
     /// The permission backend (PLUG-D11): `None` declines every
     /// `ctx.permission.*` call; the embedder binds the engine port.
     pub permission_port: Option<Arc<dyn PermissionPort>>,
+    /// The websearch backend (G-24): `None` declines every
+    /// `ctx.websearch.providers/query` call.
+    pub websearch_port: Option<Arc<dyn crate::context::WebsearchPort>>,
+    /// The vcs backend (G-24): `None` declines every `ctx.vcs.*` call.
+    pub vcs_port: Option<Arc<dyn crate::context::VcsPort>>,
 }
 
 impl Default for SupervisorConfig {
@@ -140,6 +145,8 @@ impl Default for SupervisorConfig {
             entry_options: BTreeMap::new(),
             storage_port: None,
             permission_port: None,
+            websearch_port: None,
+            vcs_port: None,
         }
     }
 }
@@ -341,6 +348,41 @@ impl Shared {
             "agent.transform" | "mcp.transform" | "skill.transform" | "tool.transform" => {
                 Some(answer_transform(self, id, method, params))
             }
+            // -- G-24: the websearch/worktree transform materializations
+            //    (registration time only — same synchronous shape as
+            //    the wave-2 domains; the closures stay in the guest).
+            "websearch.transform" | "worktree.transform" => {
+                let mut registrations =
+                    self.registrations.write().expect("registrations poisoned");
+                let plugin_id = params.get("pluginId").and_then(Value::as_str).unwrap_or("?");
+                match method {
+                    "websearch.transform" => registrations.merge_websearch_providers(
+                        plugin_id,
+                        params.get("providers").and_then(Value::as_array).cloned().unwrap_or_default().as_slice(),
+                    ),
+                    _ => registrations.merge_worktree_strategies(
+                        plugin_id,
+                        params.get("strategies").and_then(Value::as_array).cloned().unwrap_or_default().as_slice(),
+                    ),
+                }
+                Some(protocol::response(id, Value::Null))
+            }
+            // -- G-24: `ctx.integration.method.update` — the v2
+            //    IntegrationMethodRegistration lands in the snapshot
+            //    (the engine applies it into the IntegrationHost).
+            "integration.method.update" => {
+                if let Some(registration) = params.get("args") {
+                    let plugin_id =
+                        params.get("pluginId").and_then(Value::as_str).unwrap_or("?").to_owned();
+                    let mut registrations =
+                        self.registrations.write().expect("registrations poisoned");
+                    if registration.get("integrationID").and_then(Value::as_str).is_some() {
+                        registrations.upsert_integration_method(&plugin_id, registration);
+                        return Some(protocol::response(id, Value::Null));
+                    }
+                }
+                Some(protocol::error_response(id, "integration.method.update requires args.integrationID"))
+            }
             "hook.register" => {
                 let hook = crate::registrations::PluginHook {
                     plugin_id: params
@@ -380,6 +422,18 @@ impl Shared {
             //    reply resolves a pending ask, which may run tools).
             "permission.list" | "permission.get" | "permission.reply" => {
                 self.answer_permission_async(id, method, params);
+                None
+            }
+            // -- G-24: `ctx.websearch.providers/query` over the
+            //    engine's WebSearch service (async off the reader).
+            "websearch.providers" | "websearch.query" => {
+                self.answer_websearch_async(id, method, params);
+                None
+            }
+            // -- G-24: `ctx.vcs.get/base` over the engine's vcs
+            //    adapters (async off the reader).
+            "vcs.get" | "vcs.base" => {
+                self.answer_vcs_async(id, method, params);
                 None
             }
             // -- wave 4: Code Mode nested tool calls (`tools.<path>`
@@ -578,6 +632,88 @@ impl Shared {
                 other => {
                     protocol::error_response(id, &format!("unknown permission method {other:?}"))
                 }
+            };
+            let _ = outbound.send(reply);
+        });
+    }
+
+    /// The async `ctx.websearch.*` path (G-24): the engine's WebSearch
+    /// service answers off the reader (deadlock rule 1).
+    fn answer_websearch_async(self: &Arc<Self>, id: u64, method: &str, params: &Value) {
+        let Some(handle) = self.runtime_handle.clone() else {
+            let outbound = self.outbound.read().expect("outbound lock poisoned").clone();
+            let _ = outbound.send(protocol::error_response(id, "plugin host runtime unavailable"));
+            return;
+        };
+        let Some(port) = self.config.websearch_port.clone() else {
+            let outbound = self.outbound.read().expect("outbound lock poisoned").clone();
+            let _ = outbound.send(protocol::error_response(
+                id,
+                &format!("websearch.{method}: no websearch engine attached to the plugin host"),
+            ));
+            return;
+        };
+        let args = params.get("args").cloned().unwrap_or(Value::Null);
+        let query = args.get("query").and_then(Value::as_str).unwrap_or_default().to_owned();
+        let provider_id = args
+            .get("providerID")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned);
+        let method = method.to_owned();
+        let outbound = self.outbound.read().expect("outbound lock poisoned").clone();
+        handle.spawn(async move {
+            let reply = match method.as_str() {
+                "websearch.providers" => match port.providers().await {
+                    Ok(value) => protocol::response(id, json!({ "value": value })),
+                    Err(message) => protocol::error_response(id, &message),
+                },
+                "websearch.query" => {
+                    if query.is_empty() {
+                        protocol::error_response(id, "websearch.query requires a query")
+                    } else {
+                        match port.query(&query, provider_id.as_deref()).await {
+                            Ok(value) => protocol::response(id, json!({ "value": value })),
+                            Err(message) => protocol::error_response(id, &message),
+                        }
+                    }
+                }
+                other => protocol::error_response(id, &format!("unknown websearch method {other:?}")),
+            };
+            let _ = outbound.send(reply);
+        });
+    }
+
+    /// The async `ctx.vcs.*` path (G-24): the engine's vcs adapters
+    /// answer off the reader.
+    fn answer_vcs_async(self: &Arc<Self>, id: u64, method: &str, params: &Value) {
+        let _ = params;
+        let Some(handle) = self.runtime_handle.clone() else {
+            let outbound = self.outbound.read().expect("outbound lock poisoned").clone();
+            let _ = outbound.send(protocol::error_response(id, "plugin host runtime unavailable"));
+            return;
+        };
+        let Some(port) = self.config.vcs_port.clone() else {
+            let outbound = self.outbound.read().expect("outbound lock poisoned").clone();
+            let _ = outbound.send(protocol::error_response(
+                id,
+                &format!("vcs.{method}: no vcs engine attached to the plugin host"),
+            ));
+            return;
+        };
+        let method = method.to_owned();
+        let outbound = self.outbound.read().expect("outbound lock poisoned").clone();
+        handle.spawn(async move {
+            let reply = match method.as_str() {
+                "vcs.get" => match port.get().await {
+                    Ok(value) => protocol::response(id, json!({ "value": value })),
+                    Err(message) => protocol::error_response(id, &message),
+                },
+                "vcs.base" => match port.base().await {
+                    Ok(value) => protocol::response(id, json!({ "value": value })),
+                    Err(message) => protocol::error_response(id, &message),
+                },
+                other => protocol::error_response(id, &format!("unknown vcs method {other:?}")),
             };
             let _ = outbound.send(reply);
         });

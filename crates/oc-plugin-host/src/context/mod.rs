@@ -126,6 +126,11 @@ pub fn is_mutating_hook(domain: &str, name: &str) -> bool {
         // tool.execute.* wrap a full tool execution; tool.transform
         // rewrites the tool body itself.
         "tool" => name == "transform" || name.starts_with("execute."),
+        // G-24: a guest websearch provider's execute rides a full
+        // network search round trip; the integration OAuth hooks
+        // (authorize/callback/refresh) ride token exchanges.
+        "websearch" => name == "execute",
+        "integration" => matches!(name, "authorize" | "callback" | "refresh"),
         _ => false,
     }
 }
@@ -288,6 +293,30 @@ pub trait PermissionPort: Send + Sync {
         decision: &str,
         message: Option<String>,
     ) -> Result<(), String>;
+}
+
+/// `ctx.websearch.providers/query` routing target (G-24 — the v2
+/// `WebSearchDomain` minus the transform surface, ref host.ts:479-489).
+#[async_trait]
+pub trait WebsearchPort: Send + Sync {
+    /// `websearch.providers()` — `[{id, name}]` JSON.
+    async fn providers(&self) -> Result<Value, String>;
+
+    /// `websearch.query({query, providerID?})` — the v2
+    /// `WebSearch.Response` JSON (`{providerID, results}`).
+    async fn query(&self, query: &str, provider_id: Option<&str>) -> Result<Value, String>;
+}
+
+/// `ctx.vcs.get/base` routing target (G-24 — the v2 `VcsDomain`'s
+/// read surface, ref host.ts:468-470): the location's vcs info
+/// (`{branch: {current, default?}, provider}`) and merge-base ref.
+#[async_trait]
+pub trait VcsPort: Send + Sync {
+    /// `vcs.get()` — `Vcs.Info` JSON (`null` outside a repository).
+    async fn get(&self) -> Result<Value, String>;
+
+    /// `vcs.base()` — the base ref string, or `null`.
+    async fn base(&self) -> Result<Value, String>;
 }
 
 #[cfg(test)]

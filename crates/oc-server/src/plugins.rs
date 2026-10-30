@@ -94,6 +94,10 @@ pub struct PluginBoot {
     pub session_slot: Arc<EngineSessionSlot>,
     /// The permission-port slot (PLUG-D11; filled after `Engine::boot`).
     pub permission_slot: Arc<EnginePermissionSlot>,
+    /// The websearch-port slot (G-24; filled after `Engine::boot`).
+    pub websearch_slot: Arc<EngineWebsearchSlot>,
+    /// The vcs-port slot (G-24; filled after `Engine::boot`).
+    pub vcs_slot: Arc<EngineVcsSlot>,
 }
 
 /// One `/api/rpc` call's failure (PLUG-D14): the v2 error channel —
@@ -134,6 +138,8 @@ impl PluginBoot {
             router: Arc::new(TokenRouter::default()),
             session_slot: Arc::new(EngineSessionSlot::default()),
             permission_slot: Arc::new(EnginePermissionSlot::default()),
+            websearch_slot: Arc::new(EngineWebsearchSlot::default()),
+            vcs_slot: Arc::new(EngineVcsSlot::default()),
         }
     }
 
@@ -318,6 +324,8 @@ pub fn boot(
     let router = Arc::new(TokenRouter::default());
     let session_slot = Arc::new(EngineSessionSlot::default());
     let permission_slot = Arc::new(EnginePermissionSlot::default());
+    let websearch_slot = Arc::new(EngineWebsearchSlot::default());
+    let vcs_slot = Arc::new(EngineVcsSlot::default());
     if !detected.enabled() && resolution.entries().is_empty() {
         eprintln!(
             "opencode plugin: no plugins configured and bun is unavailable; staying flat (no Code Mode runtime)"
@@ -329,6 +337,8 @@ pub fn boot(
             router,
             session_slot,
             permission_slot,
+            websearch_slot,
+            vcs_slot,
         });
     }
 
@@ -397,6 +407,13 @@ pub fn boot(
         permission_port: Some(
             Arc::clone(&permission_slot) as Arc<dyn oc_plugin_host::PermissionPort>
         ),
+        // G-24: ctx.websearch.providers/query + ctx.vcs.get/base over
+        // the boot location's engine services (slots filled after
+        // Engine::boot, the permission-port pattern).
+        websearch_port: Some(
+            Arc::clone(&websearch_slot) as Arc<dyn oc_plugin_host::WebsearchPort>
+        ),
+        vcs_port: Some(Arc::clone(&vcs_slot) as Arc<dyn oc_plugin_host::VcsPort>),
         storage_port,
         entry_options: resolution.entry_options(),
         // The registration pass spans bun cold start + every entry's
@@ -419,6 +436,8 @@ pub fn boot(
         router,
         session_slot,
         permission_slot,
+        websearch_slot,
+        vcs_slot,
     })
 }
 
@@ -914,6 +933,52 @@ impl LocationPluginSource for HostPluginSource {
             .map(|skill| oc_core::plugin_apply::PluginSkillDef {
                 plugin_id: skill.plugin_id.clone(),
                 info: skill.info.clone(),
+            })
+            .collect()
+    }
+
+    /// G-24 — plugin-registered websearch providers
+    /// (`ctx.websearch.transform`): the engine's `assemble` merges them
+    /// into every location's WebSearch registry (the execute closure
+    /// stays in the guest).
+    fn websearch_providers(&self) -> Vec<oc_core::plugin_apply::PluginWebsearchProviderDef> {
+        self.host
+            .registrations()
+            .websearch_providers
+            .iter()
+            .map(|provider| oc_core::plugin_apply::PluginWebsearchProviderDef {
+                plugin_id: provider.plugin_id.clone(),
+                id: provider.id.clone(),
+                name: provider.name.clone(),
+            })
+            .collect()
+    }
+
+    /// G-24 — plugin-registered worktree strategies
+    /// (`ctx.worktree.transform`): boot applies them into the server's
+    /// shared [`oc_core::project::worktree_strategy::StrategyRegistry`].
+    fn worktree_strategies(&self) -> Vec<oc_core::plugin_apply::PluginWorktreeStrategyDef> {
+        self.host
+            .registrations()
+            .worktree_strategies
+            .iter()
+            .map(|strategy| oc_core::plugin_apply::PluginWorktreeStrategyDef {
+                plugin_id: strategy.plugin_id.clone(),
+                id: strategy.id.clone(),
+            })
+            .collect()
+    }
+
+    /// G-24 — plugin-registered integration methods
+    /// (`ctx.integration.method.update`, ref host.ts:631).
+    fn integration_methods(&self) -> Vec<oc_core::plugin_apply::PluginIntegrationMethodDef> {
+        self.host
+            .registrations()
+            .integration_methods
+            .iter()
+            .map(|method| oc_core::plugin_apply::PluginIntegrationMethodDef {
+                plugin_id: method.plugin_id.clone(),
+                registration: method.registration.clone(),
             })
             .collect()
     }
@@ -1844,4 +1909,201 @@ impl EnginePermissionSlot {
             "permission: the engine is not attached to the plugin host yet".to_owned()
         })
     }
+}
+
+/// The engine-backed [`oc_plugin_host::WebsearchPort`] (G-24 —
+/// `ctx.websearch.providers/query` over the boot location's WebSearch
+/// service).
+pub struct EngineWebsearchPort {
+    pub engine: Arc<Engine>,
+    pub location: LocationRef,
+}
+
+#[async_trait]
+impl oc_plugin_host::WebsearchPort for EngineWebsearchPort {
+    async fn providers(&self) -> Result<Value, String> {
+        let services = self.engine.location(self.location.clone()).await.map_err(|e| e.to_string())?;
+        Ok(serde_json::to_value(
+            services
+                .websearch
+                .providers()
+                .into_iter()
+                .map(|(id, name)| serde_json::json!({ "id": id, "name": name }))
+                .collect::<Vec<_>>(),
+        )
+        .unwrap_or(Value::Null))
+    }
+
+    async fn query(&self, query: &str, provider_id: Option<&str>) -> Result<Value, String> {
+        let services = self.engine.location(self.location.clone()).await.map_err(|e| e.to_string())?;
+        let response = services
+            .websearch
+            .query(query, None, provider_id)
+            .await
+            .map_err(|error| error.to_string())?;
+        serde_json::to_value(&response).map_err(|error| error.to_string())
+    }
+}
+
+/// The pre-engine websearch-port placeholder (the same slot pattern).
+#[derive(Default)]
+pub struct EngineWebsearchSlot(std::sync::RwLock<Option<Arc<EngineWebsearchPort>>>);
+
+impl EngineWebsearchSlot {
+    pub fn fill(&self, port: Arc<EngineWebsearchPort>) {
+        let mut slot = self.0.write().expect("websearch slot poisoned");
+        if slot.is_none() {
+            *slot = Some(port);
+        }
+    }
+}
+
+#[async_trait]
+impl oc_plugin_host::WebsearchPort for EngineWebsearchSlot {
+    async fn providers(&self) -> Result<Value, String> {
+        self.port()?.providers().await
+    }
+
+    async fn query(&self, query: &str, provider_id: Option<&str>) -> Result<Value, String> {
+        self.port()?.query(query, provider_id).await
+    }
+}
+
+impl EngineWebsearchSlot {
+    fn port(&self) -> Result<Arc<EngineWebsearchPort>, String> {
+        self.0.read().expect("websearch slot poisoned").clone().ok_or_else(|| {
+            "websearch: the engine is not attached to the plugin host yet".to_owned()
+        })
+    }
+}
+
+/// The engine-backed [`oc_plugin_host::VcsPort`] (G-24 —
+/// `ctx.vcs.get/base` over the boot location's resolved project; the
+/// git adapter's branch/base shapes mirror handlers/project.rs's
+/// vcs_get/vcs_base).
+pub struct EngineVcsPort {
+    pub engine: Arc<Engine>,
+    pub location: LocationRef,
+}
+
+impl EngineVcsPort {
+    fn git_output(directory: &std::path::Path, args: &[&str]) -> Option<String> {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(directory)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .ok()?;
+        output.status.success().then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+    }
+}
+
+#[async_trait]
+impl oc_plugin_host::VcsPort for EngineVcsPort {
+    async fn get(&self) -> Result<Value, String> {
+        let services = self.engine.location(self.location.clone()).await.map_err(|e| e.to_string())?;
+        let Some(vcs) = &services.project.vcs else { return Ok(Value::Null) };
+        let scope = services.project.canonical.as_path();
+        // The hg adapter's literal default branch (handlers/project.rs
+        // hg_branch); git reads the checked-out ref.
+        let (current, default) = if vcs.kind() == "hg" {
+            (
+                Self::git_output(scope, &["branch"]).map(|o| o.trim().to_owned()),
+                "default".to_owned(),
+            )
+        } else {
+            (
+                Self::git_output(scope, &["rev-parse", "--abbrev-ref", "HEAD"])
+                    .map(|o| o.trim().to_owned()),
+                "main".to_owned(),
+            )
+        };
+        Ok(serde_json::json!({
+            "branch": { "current": current.unwrap_or_default(), "default": default },
+            "provider": vcs.kind(),
+        }))
+    }
+
+    async fn base(&self) -> Result<Value, String> {
+        let services = self.engine.location(self.location.clone()).await.map_err(|e| e.to_string())?;
+        if services.project.vcs.as_ref().is_some_and(|vcs| vcs.kind() == "hg") {
+            // The hg adapter exposes no base op (vcs.ts:198-201 → null).
+            return Ok(Value::Null);
+        }
+        let scope = services.project.canonical.as_path();
+        let branch =
+            Self::git_output(scope, &["rev-parse", "--abbrev-ref", "HEAD"]).map(|o| o.trim().to_owned());
+        // vcs.base (plugin/vcs/git.ts:286-317): the reflog's
+        // "branch: Created from <base>" first, the default-branch
+        // fallback second, `null` when neither resolves.
+        if let Some(branch) = branch.as_deref() {
+            if let Some(reflog) =
+                Self::git_output(scope, &["reflog", "show", "-1", "--format=%gs", branch])
+            {
+                if let Some(base) = reflog.trim().strip_prefix("branch: Created from ") {
+                    return Ok(serde_json::json!(base));
+                }
+            }
+        }
+        for candidate in ["main", "master"] {
+            if Self::git_output(scope, &["rev-parse", "--verify", candidate]).is_some() {
+                return Ok(serde_json::json!(candidate));
+            }
+        }
+        Ok(Value::Null)
+    }
+}
+
+/// The pre-engine vcs-port placeholder (the same slot pattern).
+#[derive(Default)]
+pub struct EngineVcsSlot(std::sync::RwLock<Option<Arc<EngineVcsPort>>>);
+
+impl EngineVcsSlot {
+    pub fn fill(&self, port: Arc<EngineVcsPort>) {
+        let mut slot = self.0.write().expect("vcs slot poisoned");
+        if slot.is_none() {
+            *slot = Some(port);
+        }
+    }
+}
+
+#[async_trait]
+impl oc_plugin_host::VcsPort for EngineVcsSlot {
+    async fn get(&self) -> Result<Value, String> {
+        self.port()?.get().await
+    }
+
+    async fn base(&self) -> Result<Value, String> {
+        self.port()?.base().await
+    }
+}
+
+impl EngineVcsSlot {
+    fn port(&self) -> Result<Arc<EngineVcsPort>, String> {
+        self.0.read().expect("vcs slot poisoned").clone().ok_or_else(|| {
+            "vcs: the engine is not attached to the plugin host yet".to_owned()
+        })
+    }
+}
+
+/// G-24 — build the server's shared worktree-strategy registry from the
+/// plugin host's snapshot (git + every plugin-registered
+/// `ctx.worktree.transform` strategy, guest-dispatched).
+pub fn plugin_worktree_registry(
+    host: &Arc<PluginHost>,
+    resolution: &Arc<parking_lot::Mutex<Resolution>>,
+) -> std::sync::Arc<oc_core::project::worktree_strategy::StrategyRegistry> {
+    let source = HostPluginSource { host: Arc::clone(host), resolution: Arc::clone(resolution) };
+    let mut registry = oc_core::project::worktree_strategy::StrategyRegistry::new();
+    if let Some(dispatcher) = source.hook_dispatcher() {
+        let defs = source.worktree_strategies();
+        if !defs.is_empty() {
+            oc_core::plugin_apply::apply_plugin_worktree_strategies(
+                &mut registry,
+                &dispatcher,
+                &defs,
+            );
+        }
+    }
+    std::sync::Arc::new(registry)
 }

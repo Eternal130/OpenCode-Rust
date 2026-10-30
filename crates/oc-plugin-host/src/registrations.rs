@@ -62,6 +62,36 @@ pub struct PluginSkill {
     pub info: Value,
 }
 
+/// One websearch provider registered through `ctx.websearch.transform`'s
+/// `editor.add` (G-24 — the execute closure stays in the guest).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginWebsearchProvider {
+    pub plugin_id: String,
+    pub id: String,
+    pub name: String,
+}
+
+/// One worktree strategy registered through `ctx.worktree.transform`'s
+/// `editor.add` (G-24/G-4 — the create/remove/list closures stay in
+/// the guest).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginWorktreeStrategy {
+    pub plugin_id: String,
+    pub id: String,
+}
+
+/// One integration method registration (`ctx.integration.method.update`
+/// → the v2 `IntegrationMethodRegistration` shape, host.ts:631) —
+/// `{integrationID, method, authorize?, refresh?, label?}` JSON.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PluginIntegrationMethod {
+    pub plugin_id: String,
+    /// The registration key: `integrationID` + method id/type.
+    pub key: String,
+    /// The raw v2 `IntegrationMethodRegistration` JSON.
+    pub registration: Value,
+}
+
 /// One tool registered through `ctx.tool.transform` (v2 `Tool.Info`
 /// at the JS boundary: name/description/input JSON-Schema plus
 /// `options {codemode, namespace}`; execution dispatches to the guest
@@ -303,6 +333,12 @@ pub struct RegistrationSnapshot {
     pub plugins: Vec<PluginStatus>,
     /// The table-global default agent (`draft.default(id)`), when set.
     pub default_agent: Option<String>,
+    /// G-24 — plugin-registered websearch providers, by id.
+    pub websearch_providers: Vec<PluginWebsearchProvider>,
+    /// G-24 — plugin-registered worktree strategies, by id.
+    pub worktree_strategies: Vec<PluginWorktreeStrategy>,
+    /// G-24 — plugin-registered integration methods, by key.
+    pub integration_methods: Vec<PluginIntegrationMethod>,
 }
 
 /// The mutable registration store behind the snapshot (interior to the
@@ -350,6 +386,12 @@ pub struct Registrations {
     pub plugins: BTreeMap<String, PluginStatus>,
     /// The table-global default agent id.
     pub agent_default: Option<String>,
+    /// G-24 — plugin websearch providers by id.
+    pub websearch_providers: BTreeMap<String, PluginWebsearchProvider>,
+    /// G-24 — plugin worktree strategies by id.
+    pub worktree_strategies: BTreeMap<String, PluginWorktreeStrategy>,
+    /// G-24 — plugin integration methods by key.
+    pub integration_methods: BTreeMap<String, PluginIntegrationMethod>,
 }
 
 impl Registrations {
@@ -372,6 +414,9 @@ impl Registrations {
         self.slot_claims.retain(|claim| claim.plugin_id != plugin_id);
         self.routes.retain(|_, route| route.plugin_id != plugin_id);
         self.keymap_commands.retain(|command| command.plugin_id != plugin_id);
+        self.websearch_providers.retain(|_, provider| provider.plugin_id != plugin_id);
+        self.worktree_strategies.retain(|_, strategy| strategy.plugin_id != plugin_id);
+        self.integration_methods.retain(|_, method| method.plugin_id != plugin_id);
         if let Some(default) = self.agent_default.as_ref() {
             if !self.agents.contains_key(default) {
                 self.agent_default = None;
@@ -419,6 +464,77 @@ impl Registrations {
                 PluginMcp { plugin_id: provenance, name: name.clone(), config: config.clone() },
             );
         }
+    }
+
+    /// G-24 — merge one `ctx.websearch.transform` materialization
+    /// (whole-table, by provider id; the execute closure stays in the
+    /// guest).
+    pub fn merge_websearch_providers(&mut self, plugin_id: &str, providers: &[Value]) {
+        let ids: Vec<(String, String)> = providers
+            .iter()
+            .filter_map(|definition| {
+                let id = definition.get("id")?.as_str()?;
+                let name = definition.get("name")?.as_str()?;
+                Some((id.to_owned(), name.to_owned()))
+            })
+            .collect();
+        self.websearch_providers.retain(|_, provider| {
+            provider.plugin_id != plugin_id || ids.iter().any(|(id, _)| id == provider.id.as_str())
+        });
+        for (id, name) in ids {
+            self.websearch_providers.insert(
+                id.clone(),
+                PluginWebsearchProvider { plugin_id: plugin_id.to_owned(), id, name },
+            );
+        }
+    }
+
+    /// G-24 — merge one `ctx.worktree.transform` materialization
+    /// (whole-table, by strategy id).
+    pub fn merge_worktree_strategies(&mut self, plugin_id: &str, strategies: &[Value]) {
+        let ids: Vec<String> = strategies
+            .iter()
+            .filter_map(|definition| definition.get("id")?.as_str().map(str::to_owned))
+            .collect();
+        self.worktree_strategies.retain(|_, strategy| {
+            strategy.plugin_id != plugin_id || ids.iter().any(|id| id == strategy.id.as_str())
+        });
+        for id in ids {
+            self.worktree_strategies.insert(
+                id.clone(),
+                PluginWorktreeStrategy { plugin_id: plugin_id.to_owned(), id },
+            );
+        }
+    }
+
+    /// G-24 — one `ctx.integration.method.update` registration
+    /// (insert-or-replace by integrationID + method id/type).
+    pub fn upsert_integration_method(&mut self, plugin_id: &str, registration: &Value) {
+        let Some(integration_id) = registration.get("integrationID").and_then(Value::as_str)
+        else {
+            return;
+        };
+        let method_key = registration
+            .get("method")
+            .and_then(|method| method.get("id"))
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .or_else(|| {
+                registration.get("method").and_then(|m| m.get("type")).and_then(Value::as_str).map(str::to_owned)
+            })
+            .unwrap_or_default();
+        if method_key.is_empty() {
+            return;
+        }
+        let key = format!("{integration_id}:{method_key}");
+        self.integration_methods.insert(
+            key.clone(),
+            PluginIntegrationMethod {
+                plugin_id: plugin_id.to_owned(),
+                key,
+                registration: registration.clone(),
+            },
+        );
     }
 
     /// Merge one `ctx.skill.transform` materialization (whole-table, by
@@ -522,6 +638,9 @@ impl Registrations {
             slot_claims: self.slot_claims.clone(),
             routes: self.routes.values().cloned().collect(),
             keymap_commands: self.keymap_commands.clone(),
+            websearch_providers: self.websearch_providers.values().cloned().collect(),
+            worktree_strategies: self.worktree_strategies.values().cloned().collect(),
+            integration_methods: self.integration_methods.values().cloned().collect(),
             plugins: self.plugins.values().cloned().collect(),
             default_agent: self.agent_default.clone(),
         }
