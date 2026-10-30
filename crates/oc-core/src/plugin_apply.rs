@@ -260,7 +260,8 @@ pub struct PluginMcpDef {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginHookDef {
     pub plugin_id: String,
-    /// `session` | `tool` | `shell` (the guest-bridge domains).
+    /// `session` | `tool` | `shell` | `permission` | `aisdk` (the
+    /// guest-bridge domains).
     pub domain: String,
     /// e.g. `prompt`, `execute.before`, `create.before`.
     pub name: String,
@@ -293,8 +294,10 @@ pub trait GuestHookDispatcher: Send + Sync {
 /// Typed ↔ v2-JSON codec pair for one hook event (the
 /// process-isolation boundary's serialization seam): `encode` mirrors
 /// the v2 event shape (camelCase wire fields), `decode` parses the
-/// guest's possibly-mutated copy back.
-pub type HookCodec<E> = (fn(&E) -> Value, fn(Value) -> Option<E>);
+/// guest's possibly-mutated copy back — carrying the ORIGINAL event so
+/// non-JSON fields (the aisdk handle fields, ADR-0005's documented
+/// process-isolation divergence) survive the round trip.
+pub type HookCodec<E> = (fn(&E) -> Value, fn(&E, Value) -> Option<E>);
 
 /// The [`HookHandler`] forwarder: serialize, dispatch to the guest,
 /// merge the mutated copy back. A guest failure fails the dispatch
@@ -314,7 +317,7 @@ impl<E: Send + 'static> HookHandler<E> for GuestHookHandler<E> {
         let json = encode(event);
         match self.dispatcher.dispatch(&self.plugin_id, self.domain, self.name, json).await {
             Ok(updated) => {
-                if let Some(parsed) = decode(updated) {
+                if let Some(parsed) = decode(event, updated) {
                     *event = parsed;
                 }
                 Ok(())
@@ -461,7 +464,27 @@ async fn register_guest_hook(
             ws_receive_to_json,
             ws_receive_from_json
         ),
-        // permission/aisdk are not guest-bridge domains.
+        // PLUG-G2: the remaining v2 hook domains (ref packages/plugin/src/promise/aisdk.ts:21
+        // `aisdk.hook`, promise/permission.ts:23 `permission.hook`) — the host-side
+        // dispatch sites are hooks.rs's permission_evaluate / aisdk_sdk
+        // / aisdk_language points; the guest bridge mirrors them.
+        "permission.evaluate" => point!(
+            register_permission_evaluate,
+            "permission",
+            "evaluate",
+            permission_to_json,
+            permission_from_json
+        ),
+        "aisdk.sdk" => {
+            point!(register_aisdk_sdk, "aisdk", "sdk", aisdk_sdk_to_json, aisdk_sdk_from_json)
+        }
+        "aisdk.language" => point!(
+            register_aisdk_language,
+            "aisdk",
+            "language",
+            aisdk_language_to_json,
+            aisdk_language_from_json
+        ),
         other => {
             eprintln!(
                 "opencode plugin-apply: skipping guest hook {other} (no production dispatch site yet)"
@@ -624,14 +647,16 @@ mod wire {
     //! `session/model-request.ts`).
 
     use crate::hooks::{
-        CompactionResult, RetryDecision, SessionCompactionEvent, SessionContextEvent,
-        SessionModelRequestEvent, SessionPromptEvent, SessionRequestEvent, SessionRetryEvent,
-        SessionTitleEvent, ShellCreateBeforeEvent, ToolDescriptor, ToolExecuteAfterEvent,
-        ToolExecuteBeforeEvent, ToolOutcome,
+        AisdkLanguageEvent, AisdkSdkEvent, CompactionResult, PermissionEvaluateEvent,
+        RetryDecision, SessionCompactionEvent, SessionContextEvent, SessionModelRequestEvent,
+        SessionPromptEvent, SessionRequestEvent, SessionRetryEvent, SessionTitleEvent,
+        ShellCreateBeforeEvent, ToolDescriptor, ToolExecuteAfterEvent, ToolExecuteBeforeEvent,
+        ToolOutcome,
     };
     use oc_ai::schema::messages::{Message, SystemPart};
     use oc_schema::id::{AgentId, MessageId, SessionId};
     use oc_schema::model::Ref as ModelRef;
+    use oc_schema::permission::Effect as PermissionEffect;
     use oc_schema::prompt::Prompt;
     use oc_schema::session_inbox::Delivery;
     use oc_schema::tool::ToolError;
@@ -883,7 +908,10 @@ mod wire {
         encode(&PromptEvent::from(event.clone()))
     }
 
-    pub fn prompt_from_json(json: Value) -> Option<SessionPromptEvent> {
+    pub fn prompt_from_json(
+        _original: &SessionPromptEvent,
+        json: Value,
+    ) -> Option<SessionPromptEvent> {
         serde_json::from_value::<PromptEvent>(json).ok().map(SessionPromptEvent::from)
     }
 
@@ -942,7 +970,10 @@ mod wire {
         encode(&context_wire(event))
     }
 
-    pub fn context_from_json(json: Value) -> Option<SessionContextEvent> {
+    pub fn context_from_json(
+        _original: &SessionContextEvent,
+        json: Value,
+    ) -> Option<SessionContextEvent> {
         serde_json::from_value::<ContextEvent>(json).ok().map(context_from_wire)
     }
 
@@ -962,7 +993,10 @@ mod wire {
         map
     }
 
-    pub fn compaction_from_json(json: Value) -> Option<SessionCompactionEvent> {
+    pub fn compaction_from_json(
+        _original: &SessionCompactionEvent,
+        json: Value,
+    ) -> Option<SessionCompactionEvent> {
         let result =
             json.as_object().and_then(|object| object.get("result").cloned()).and_then(|result| {
                 serde_json::from_value::<CompactionResultWire>(result).ok().map(
@@ -990,7 +1024,10 @@ mod wire {
         })
     }
 
-    pub fn title_from_json(json: Value) -> Option<SessionTitleEvent> {
+    pub fn title_from_json(
+        _original: &SessionTitleEvent,
+        json: Value,
+    ) -> Option<SessionTitleEvent> {
         let wire = serde_json::from_value::<TitleEvent>(json).ok()?;
         Some(SessionTitleEvent {
             request: SessionRequestEvent {
@@ -1015,7 +1052,10 @@ mod wire {
         })
     }
 
-    pub fn model_request_from_json(json: Value) -> Option<SessionModelRequestEvent> {
+    pub fn model_request_from_json(
+        _original: &SessionModelRequestEvent,
+        json: Value,
+    ) -> Option<SessionModelRequestEvent> {
         let wire = serde_json::from_value::<ModelRequestEvent>(json).ok()?;
         let kind = match wire.kind.as_str() {
             "compaction" => crate::hooks::SessionRequestKind::Compaction,
@@ -1096,7 +1136,10 @@ mod wire {
         })
     }
 
-    pub fn http_request_from_json(json: Value) -> Option<crate::hooks::SessionHttpRequestEvent> {
+    pub fn http_request_from_json(
+        _original: &crate::hooks::SessionHttpRequestEvent,
+        json: Value,
+    ) -> Option<crate::hooks::SessionHttpRequestEvent> {
         let wire = serde_json::from_value::<HttpRequestEvent>(json).ok()?;
         let scope = transport_scope(&wire.scope);
         Some(crate::hooks::SessionHttpRequestEvent {
@@ -1125,7 +1168,10 @@ mod wire {
         })
     }
 
-    pub fn http_response_from_json(json: Value) -> Option<crate::hooks::SessionHttpResponseEvent> {
+    pub fn http_response_from_json(
+        _original: &crate::hooks::SessionHttpResponseEvent,
+        json: Value,
+    ) -> Option<crate::hooks::SessionHttpResponseEvent> {
         let wire = serde_json::from_value::<HttpResponseEvent>(json).ok()?;
         let scope = transport_scope(&wire.scope);
         Some(crate::hooks::SessionHttpResponseEvent {
@@ -1155,7 +1201,10 @@ mod wire {
         })
     }
 
-    pub fn ws_handshake_from_json(json: Value) -> Option<crate::hooks::SessionWsHandshakeEvent> {
+    pub fn ws_handshake_from_json(
+        _original: &crate::hooks::SessionWsHandshakeEvent,
+        json: Value,
+    ) -> Option<crate::hooks::SessionWsHandshakeEvent> {
         let wire = serde_json::from_value::<WsHandshakeEvent>(json).ok()?;
         let scope = transport_scope(&wire.scope);
         Some(crate::hooks::SessionWsHandshakeEvent {
@@ -1180,7 +1229,10 @@ mod wire {
         })
     }
 
-    pub fn ws_send_from_json(json: Value) -> Option<crate::hooks::SessionWsSendEvent> {
+    pub fn ws_send_from_json(
+        _original: &crate::hooks::SessionWsSendEvent,
+        json: Value,
+    ) -> Option<crate::hooks::SessionWsSendEvent> {
         let wire = serde_json::from_value::<WsFrameEvent>(json).ok()?;
         let scope = transport_scope(&wire.scope);
         Some(crate::hooks::SessionWsSendEvent {
@@ -1204,7 +1256,10 @@ mod wire {
         })
     }
 
-    pub fn ws_receive_from_json(json: Value) -> Option<crate::hooks::SessionWsReceiveEvent> {
+    pub fn ws_receive_from_json(
+        _original: &crate::hooks::SessionWsReceiveEvent,
+        json: Value,
+    ) -> Option<crate::hooks::SessionWsReceiveEvent> {
         let wire = serde_json::from_value::<WsFrameEvent>(json).ok()?;
         let scope = transport_scope(&wire.scope);
         Some(crate::hooks::SessionWsReceiveEvent {
@@ -1233,7 +1288,10 @@ mod wire {
         })
     }
 
-    pub fn retry_from_json(json: Value) -> Option<SessionRetryEvent> {
+    pub fn retry_from_json(
+        _original: &SessionRetryEvent,
+        json: Value,
+    ) -> Option<SessionRetryEvent> {
         let wire = serde_json::from_value::<RetryEvent>(json).ok()?;
         let decision = if wire.decision.retry {
             RetryDecision::Retry { delay_ms: wire.decision.delay.unwrap_or(0) }
@@ -1261,7 +1319,10 @@ mod wire {
         })
     }
 
-    pub fn tool_before_from_json(json: Value) -> Option<ToolExecuteBeforeEvent> {
+    pub fn tool_before_from_json(
+        _original: &ToolExecuteBeforeEvent,
+        json: Value,
+    ) -> Option<ToolExecuteBeforeEvent> {
         let wire = serde_json::from_value::<ToolBeforeEvent>(json).ok()?;
         Some(ToolExecuteBeforeEvent {
             tool: wire.tool,
@@ -1293,7 +1354,10 @@ mod wire {
         })
     }
 
-    pub fn tool_after_from_json(json: Value) -> Option<ToolExecuteAfterEvent> {
+    pub fn tool_after_from_json(
+        _original: &ToolExecuteAfterEvent,
+        json: Value,
+    ) -> Option<ToolExecuteAfterEvent> {
         let wire = serde_json::from_value::<ToolAfterEvent>(json).ok()?;
         let outcome = if wire.status == "error" {
             ToolOutcome::Error {
@@ -1327,7 +1391,10 @@ mod wire {
         })
     }
 
-    pub fn shell_before_from_json(json: Value) -> Option<ShellCreateBeforeEvent> {
+    pub fn shell_before_from_json(
+        _original: &ShellCreateBeforeEvent,
+        json: Value,
+    ) -> Option<ShellCreateBeforeEvent> {
         let wire = serde_json::from_value::<ShellBeforeEvent>(json).ok()?;
         Some(ShellCreateBeforeEvent {
             command: wire.command,
@@ -1335,6 +1402,154 @@ mod wire {
             timeout_ms: wire.timeout,
             shell: wire.shell,
             env: wire.env,
+        })
+    }
+
+    // -- permission.evaluate / aisdk.* (PLUG-G2) ----------------------------
+    //
+    // Wire shapes per the ref: permission.evaluate is
+    // `PermissionEvaluation` (promise/permission.ts:9-18) and the aisdk
+    // pair is `AISDKHooks` (promise/aisdk.ts:5-19). The aisdk handle
+    // fields (`sdk`, `language`) are process-local objects — they do
+    // NOT cross the JSON wire: encode emits a `sdk` only when the
+    // current handle IS a JSON value (a previous guest swap), and
+    // decode preserves the ORIGINAL handle unless the guest returned a
+    // new JSON `sdk` (wrapped as the new handle). The `language`
+    // handle always stays the original (a `LanguageModel` carries a
+    // live route — a documented process-isolation divergence).
+
+    #[derive(Serialize, Deserialize)]
+    pub struct PermissionEvent {
+        #[serde(rename = "sessionID")]
+        pub session_id: SessionId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub agent: Option<AgentId>,
+        pub action: String,
+        #[serde(default)]
+        pub resources: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub metadata: Option<serde_json::Map<String, Value>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub source: Option<Value>,
+        pub effect: PermissionEffect,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub message: Option<String>,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub struct AisdkSdkEventWire {
+        pub model: oc_schema::model::Info,
+        pub package: String,
+        #[serde(default)]
+        pub options: serde_json::Map<String, Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub sdk: Option<Value>,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub struct AisdkLanguageEventWire {
+        pub model: oc_schema::model::Info,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub sdk: Option<Value>,
+        #[serde(default)]
+        pub options: serde_json::Map<String, Value>,
+    }
+
+    /// The JSON view of one opaque sdk handle, when it IS JSON (a
+    /// previous guest swap); native handles cross as nothing.
+    fn sdk_handle_json(handle: &Option<crate::hooks::SdkHandle>) -> Option<Value> {
+        let handle = handle.as_ref()?;
+        handle.clone().downcast::<Value>().ok().map(|boxed| (*boxed).clone())
+    }
+
+    /// Wrap a guest-returned JSON sdk as the new opaque handle.
+    fn sdk_handle_of(value: Value) -> crate::hooks::SdkHandle {
+        std::sync::Arc::new(value)
+    }
+
+    pub fn permission_to_json(event: &PermissionEvaluateEvent) -> Value {
+        encode(&PermissionEvent {
+            session_id: event.session_id.clone(),
+            agent: event.agent.clone(),
+            action: event.action.clone(),
+            resources: event.resources.clone(),
+            metadata: event.metadata.clone(),
+            source: event.source.clone(),
+            effect: event.effect,
+            message: event.message.clone(),
+        })
+    }
+
+    pub fn permission_from_json(
+        _original: &PermissionEvaluateEvent,
+        json: Value,
+    ) -> Option<PermissionEvaluateEvent> {
+        let wire = serde_json::from_value::<PermissionEvent>(json).ok()?;
+        Some(PermissionEvaluateEvent {
+            session_id: wire.session_id,
+            agent: wire.agent,
+            action: wire.action,
+            resources: wire.resources,
+            metadata: wire.metadata,
+            source: wire.source,
+            effect: wire.effect,
+            message: wire.message,
+        })
+    }
+
+    pub fn aisdk_sdk_to_json(event: &AisdkSdkEvent) -> Value {
+        encode(&AisdkSdkEventWire {
+            model: event.model.clone(),
+            package: event.package.clone(),
+            options: event.options.clone(),
+            sdk: sdk_handle_json(&event.sdk),
+        })
+    }
+
+    pub fn aisdk_sdk_from_json(original: &AisdkSdkEvent, json: Value) -> Option<AisdkSdkEvent> {
+        let wire = serde_json::from_value::<AisdkSdkEventWire>(json).ok()?;
+        Some(AisdkSdkEvent {
+            model: wire.model,
+            package: wire.package,
+            options: wire.options,
+            sdk: match wire.sdk {
+                // The guest swapped the package instance: its JSON
+                // value becomes the new handle (host.ts:160-169's
+                // `event.sdk = output.sdk` seam).
+                // EDGE: an explicit guest `sdk: null` deserializes to
+                // `None` here, so it PRESERVES the original handle
+                // rather than clearing it — serde cannot distinguish
+                // absent from null in `Option<Value>`. Accepted
+                // divergence; revisit if a guest ever needs to clear.
+                Some(value) => Some(sdk_handle_of(value)),
+                None => original.sdk.clone(),
+            },
+        })
+    }
+
+    pub fn aisdk_language_to_json(event: &AisdkLanguageEvent) -> Value {
+        encode(&AisdkLanguageEventWire {
+            model: event.model.clone(),
+            sdk: sdk_handle_json(&event.sdk),
+            options: event.options.clone(),
+        })
+    }
+
+    pub fn aisdk_language_from_json(
+        original: &AisdkLanguageEvent,
+        json: Value,
+    ) -> Option<AisdkLanguageEvent> {
+        let wire = serde_json::from_value::<AisdkLanguageEventWire>(json).ok()?;
+        Some(AisdkLanguageEvent {
+            model: wire.model,
+            sdk: match wire.sdk {
+                Some(value) => Some(sdk_handle_of(value)),
+                None => original.sdk.clone(),
+            },
+            options: wire.options,
+            // The `LanguageModel` handle cannot be rebuilt from JSON —
+            // the original rides through (ADR-0005 divergence).
+            language: original.language.clone(),
         })
     }
 }
@@ -1685,5 +1900,220 @@ mod per_location_tests {
         .await;
         assert!(agents.get(&AgentId::parse("alpha-agent")).is_none());
         assert!(tools.get("alpha_tool").is_none());
+    }
+}
+
+#[cfg(test)]
+mod guest_hook_domain_tests {
+    //! PLUG-G2 — the `permission.evaluate` / `aisdk.sdk` /
+    //! `aisdk.language` guest-bridge domains: guest registration (the
+    //! snapshot's `PluginHook` rows land through
+    //! [`register_guest_hook`]) + host dispatch round-trip through a
+    //! mock [`GuestHookDispatcher`] (the same copy-in/copy-out seam
+    //! the bun bridge rides).
+
+    use super::*;
+    use crate::hooks::{AisdkLanguageEvent, AisdkSdkEvent, HookRegistry, PermissionEvaluateEvent};
+    use oc_schema::id::{AgentId, SessionId};
+    use oc_schema::permission::Effect as PermissionEffect;
+    use serde_json::{Value, json};
+
+    /// The mock guest: one recorded dispatch + a canned mutation per
+    /// domain (the guest side of the round trip).
+    struct MockGuest {
+        calls: std::sync::Mutex<Vec<(String, String, String, Value)>>,
+    }
+
+    #[async_trait::async_trait]
+    impl GuestHookDispatcher for MockGuest {
+        async fn dispatch(
+            &self,
+            plugin_id: &str,
+            domain: &str,
+            name: &str,
+            event: Value,
+        ) -> Result<Value, String> {
+            self.calls.lock().unwrap().push((
+                plugin_id.to_owned(),
+                domain.to_owned(),
+                name.to_owned(),
+                event.clone(),
+            ));
+            let mut event = event;
+            if let Value::Object(map) = &mut event {
+                match (domain, name) {
+                    ("permission", "evaluate") => {
+                        map.insert("effect".into(), json!("deny"));
+                        map.insert("message".into(), json!("denied-by-plugin"));
+                    }
+                    ("aisdk", "sdk") => {
+                        map.insert("package".into(), json!("@ai-sdk/swapped"));
+                        map.insert("sdk".into(), json!({ "wrapped": true }));
+                    }
+                    ("aisdk", "language") => {
+                        map.insert("options".into(), json!({ "touched": "by-plugin" }));
+                    }
+                    _ => {}
+                }
+            }
+            Ok(event)
+        }
+    }
+
+    struct HookedSource {
+        dispatcher: Arc<MockGuest>,
+    }
+
+    impl LocationPluginSource for HookedSource {
+        fn hooks(&self) -> Vec<PluginHookDef> {
+            vec![
+                PluginHookDef {
+                    plugin_id: "plugindemo".into(),
+                    domain: "permission".into(),
+                    name: "evaluate".into(),
+                },
+                PluginHookDef {
+                    plugin_id: "plugindemo".into(),
+                    domain: "aisdk".into(),
+                    name: "sdk".into(),
+                },
+                PluginHookDef {
+                    plugin_id: "plugindemo".into(),
+                    domain: "aisdk".into(),
+                    name: "language".into(),
+                },
+            ]
+        }
+
+        fn hook_dispatcher(&self) -> Option<Arc<dyn GuestHookDispatcher>> {
+            Some(Arc::new(MockGuestShim(Arc::clone(&self.dispatcher)))
+                as Arc<dyn GuestHookDispatcher>)
+        }
+    }
+
+    /// Arc<MockGuest> → dispatcher shim (MockGuest itself is the
+    /// impl; this works around the CoerceUnsized split).
+    struct MockGuestShim(Arc<MockGuest>);
+
+    #[async_trait::async_trait]
+    impl GuestHookDispatcher for MockGuestShim {
+        async fn dispatch(
+            &self,
+            plugin_id: &str,
+            domain: &str,
+            name: &str,
+            event: Value,
+        ) -> Result<Value, String> {
+            self.0.dispatch(plugin_id, domain, name, event).await
+        }
+    }
+
+    async fn apply(hooks: &Arc<HookRegistry>, source: &HookedSource) {
+        let agents = Arc::new(AgentRegistry::new());
+        let tools = Arc::new(ToolRegistryState::new());
+        let skills = Arc::new(crate::engine::skills::ConfigSkillTable::empty());
+        let database = crate::database::Database::open_in_memory().await.expect("database");
+        let bus = crate::bus::Bus::new(database, crate::bus::BusOptions::deterministic());
+        let connector: crate::mcp::Connector = Arc::new(|input: crate::mcp::ConnectInput<'_>| {
+            let server = input.server.to_string();
+            Box::pin(async move {
+                Err(crate::mcp::ConnectFailure::Connect(crate::mcp::ConnectError {
+                    server,
+                    message: "test connector".to_owned(),
+                }))
+            })
+        });
+        let mcp = crate::mcp::McpRegistry::with_connector(
+            bus,
+            connector,
+            Arc::new(crate::mcp::NoCredentials),
+        )
+        .with_directory("/tmp");
+        apply_location_plugins(source, hooks, &agents, &tools, None, &mcp, &skills, &[]).await;
+    }
+
+    fn model_info() -> oc_schema::model::Info {
+        serde_json::from_value(json!({
+            "id": "glm-5.3", "modelID": "glm-5.3", "providerID": "own",
+            "name": "GLM",
+            "capabilities": { "tools": true, "input": ["text"], "output": ["text"] },
+            "variants": [],
+            "time": { "released": 0 }, "cost": [], "status": "beta",
+            "enabled": true, "limit": { "context": 1, "input": 1, "output": 1 }
+        }))
+        .expect("model info")
+    }
+
+    /// permission.evaluate: registration lands + the host dispatch
+    /// round-trips the guest's effect/message rewrite.
+    #[tokio::test]
+    async fn permission_evaluate_round_trips() {
+        let hooks = Arc::new(HookRegistry::new());
+        let source = HookedSource { dispatcher: MockGuest::default_shim() };
+        apply(&hooks, &source).await;
+        assert!(hooks.has_permission_evaluate(None), "the guest hook registered");
+
+        let event = PermissionEvaluateEvent {
+            session_id: SessionId::parse("ses_perm").expect("session id"),
+            agent: Some(AgentId::parse("build")),
+            action: "read".into(),
+            resources: vec![".env".into()],
+            metadata: None,
+            source: None,
+            effect: PermissionEffect::Ask,
+            message: None,
+        };
+        let result = hooks.dispatch_permission_evaluate(event).await.expect("dispatch");
+        assert_eq!(result.effect, PermissionEffect::Deny, "the guest's effect rode back");
+        assert_eq!(result.message.as_deref(), Some("denied-by-plugin"));
+    }
+
+    /// aisdk.sdk: the guest's package swap + the JSON sdk handle swap
+    /// ride back (the handle becomes the wrapped guest value).
+    #[tokio::test]
+    async fn aisdk_sdk_round_trips() {
+        let hooks = Arc::new(HookRegistry::new());
+        let source = HookedSource { dispatcher: MockGuest::default_shim() };
+        apply(&hooks, &source).await;
+        assert!(hooks.has_aisdk_sdk(None), "the guest hook registered");
+
+        let event = AisdkSdkEvent {
+            model: model_info(),
+            package: "@ai-sdk/anthropic".into(),
+            options: serde_json::Map::new(),
+            sdk: None,
+        };
+        let result = hooks.dispatch_aisdk_sdk(event).await.expect("dispatch");
+        assert_eq!(result.package, "@ai-sdk/swapped", "the guest swapped the package");
+        let handle = result.sdk.expect("the guest's sdk value became a handle");
+        let downcast = handle.downcast::<Value>().expect("the handle wraps JSON");
+        assert_eq!(*downcast, json!({ "wrapped": true }));
+    }
+
+    /// aisdk.language: the JSON fields mutate; the non-serializable
+    /// `language` handle rides through untouched (documented
+    /// divergence — a LanguageModel carries a live route).
+    #[tokio::test]
+    async fn aisdk_language_round_trips() {
+        let hooks = Arc::new(HookRegistry::new());
+        let source = HookedSource { dispatcher: MockGuest::default_shim() };
+        apply(&hooks, &source).await;
+        assert!(hooks.has_aisdk_language(None), "the guest hook registered");
+
+        let event = AisdkLanguageEvent {
+            model: model_info(),
+            sdk: None,
+            options: serde_json::Map::new(),
+            language: None,
+        };
+        let result = hooks.dispatch_aisdk_language(event).await.expect("dispatch");
+        assert_eq!(result.options.get("touched"), Some(&json!("by-plugin")));
+        assert!(result.language.is_none(), "the original handle rides through");
+    }
+
+    impl MockGuest {
+        fn default_shim() -> Arc<MockGuest> {
+            Arc::new(MockGuest { calls: std::sync::Mutex::new(Vec::new()) })
+        }
     }
 }
