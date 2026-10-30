@@ -502,3 +502,109 @@ fn database_savepoint_names_use_oc_core_prefix() {
     }
     conn.execute_batch("COMMIT").unwrap();
 }
+
+// ---------------------------------------------------------------------------
+// kv_scan (v2 KV.scan: prefix filter + cursor pagination, kv.ts:60-80)
+// ---------------------------------------------------------------------------
+
+use crate::database::schema::KvEntry;
+
+async fn kv_scan_db(tag: &str) -> (Database, tempfile::TempDir) {
+    let dir = tmp_dir(tag);
+    let db = open(&dir.path().join("db.sqlite")).await;
+    (db, dir)
+}
+
+#[tokio::test]
+async fn kv_scan_empty_store_returns_no_entries_and_no_cursor() {
+    let (db, _dir) = kv_scan_db("kv-scan-empty").await;
+    let page = db.kv_scan("", None, 100).await.unwrap();
+    assert!(page.entries.is_empty());
+    assert_eq!(page.next, None);
+}
+
+#[tokio::test]
+async fn kv_scan_filters_by_prefix_in_key_order() {
+    let (db, _dir) = kv_scan_db("kv-scan-prefix").await;
+    for key in ["a1", "a2", "b1", "b2", "c"] {
+        db.kv_set(key, &serde_json::json!(key)).await.unwrap();
+    }
+    let page = db.kv_scan("a", None, 100).await.unwrap();
+    assert_eq!(
+        page.entries,
+        vec![
+            KvEntry { key: "a1".into(), value: serde_json::json!("a1") },
+            KvEntry { key: "a2".into(), value: serde_json::json!("a2") },
+        ]
+    );
+    assert_eq!(page.next, None, "prefix fits within one page");
+
+    // Empty prefix scans the whole store.
+    let all = db.kv_scan("", None, 100).await.unwrap();
+    assert_eq!(all.entries.len(), 5);
+    assert_eq!(all.entries.iter().map(|e| e.key.as_str()).collect::<Vec<_>>(), ["a1", "a2", "b1", "b2", "c"]);
+}
+
+#[tokio::test]
+async fn kv_scan_paginates_across_page_boundary_with_key_cursors() {
+    let (db, _dir) = kv_scan_db("kv-scan-pages").await;
+    for index in 0..5 {
+        let key = format!("k{index}");
+        db.kv_set(&key, &serde_json::json!(index)).await.unwrap();
+    }
+    let first = db.kv_scan("k", None, 2).await.unwrap();
+    assert_eq!(
+        first.entries.iter().map(|e| e.key.as_str()).collect::<Vec<_>>(),
+        ["k0", "k1"]
+    );
+    assert_eq!(first.next.as_deref(), Some("k1"), "leftover row reports cursor");
+
+    let second = db.kv_scan("k", first.next.as_deref(), 2).await.unwrap();
+    assert_eq!(
+        second.entries.iter().map(|e| e.key.as_str()).collect::<Vec<_>>(),
+        ["k2", "k3"]
+    );
+    assert_eq!(second.next.as_deref(), Some("k3"));
+
+    let third = db.kv_scan("k", second.next.as_deref(), 2).await.unwrap();
+    assert_eq!(third.entries.iter().map(|e| e.key.as_str()).collect::<Vec<_>>(), ["k4"]);
+    assert_eq!(third.next, None, "cursor exhausted");
+}
+
+#[tokio::test]
+async fn kv_scan_exhaustion_returns_no_next() {
+    let (db, _dir) = kv_scan_db("kv-scan-exhaust").await;
+    db.kv_set("x1", &serde_json::json!(1)).await.unwrap();
+    let page = db.kv_scan("x", None, 1000).await.unwrap();
+    assert_eq!(page.entries.len(), 1);
+    assert_eq!(page.next, None);
+
+    // Cursor past the last key yields an empty final page.
+    let tail = db.kv_scan("x", Some("x1"), 1000).await.unwrap();
+    assert!(tail.entries.is_empty());
+    assert_eq!(tail.next, None);
+}
+
+#[tokio::test]
+async fn kv_scan_delete_during_iteration_skips_the_deleted_key() {
+    // v2 KV.scan uses a last-key cursor (`after`), so deleting the cursor's
+    // successor between pages just shrinks the next page; the deleted key
+    // never appears. (The cursor key itself being deleted is fine too: the
+    // bound is strict `>`.)
+    let (db, _dir) = kv_scan_db("kv-scan-delete").await;
+    for index in 0..4 {
+        let key = format!("d{index}");
+        db.kv_set(&key, &serde_json::json!(index)).await.unwrap();
+    }
+    let first = db.kv_scan("d", None, 2).await.unwrap();
+    assert_eq!(first.next.as_deref(), Some("d1"));
+    db.kv_set("d0", &serde_json::json!(0)).await.unwrap(); // keep cursor alive
+    db.transaction(|tx| tx.kv_delete("d2")).await.unwrap();
+    let second = db.kv_scan("d", first.next.as_deref(), 2).await.unwrap();
+    assert_eq!(
+        second.entries.iter().map(|e| e.key.as_str()).collect::<Vec<_>>(),
+        ["d3"],
+        "deleted d2 skipped; scan converges"
+    );
+    assert_eq!(second.next, None);
+}

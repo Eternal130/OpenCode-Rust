@@ -60,7 +60,7 @@ pub fn is_allowed_cors_origin(input: Option<&str>, cors: &[String]) -> bool {
     if input.starts_with("http://127.0.0.1:") {
         return true;
     }
-    if input == "oc://renderer" {
+    if input.starts_with("oc://renderer") {
         return true;
     }
     if input == "tauri://localhost"
@@ -309,6 +309,7 @@ mod tests {
         assert!(!is_allowed_cors_origin(Some("null"), &options));
         assert!(!is_allowed_cors_origin(Some("https://evilopencode.ai"), &options));
         assert!(is_allowed_cors_origin(Some("oc://renderer"), &options));
+        assert!(is_allowed_cors_origin(Some("oc://renderer/xyz"), &options));
         assert!(is_allowed_cors_origin(Some("tauri://localhost"), &options));
     }
 

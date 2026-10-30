@@ -334,8 +334,8 @@ async fn pty_session(
     // v2 pty.ts:198-199 + pty/protocol.ts — replay chunks first (64 KiB
     // text frames), then ONE binary control frame `0x00 || {"cursor":N}`,
     // then activation.
-    for chunk in replay.as_bytes().chunks(64 * 1024) {
-        let _ = outbox_tx.send(Message::Text(String::from_utf8_lossy(chunk).into_owned()));
+    for chunk in replay_chunks(&replay, 64 * 1024) {
+        let _ = outbox_tx.send(Message::Text(chunk.to_owned()));
     }
     let meta_json = json!({ "cursor": replay_cursor }).to_string();
     let mut meta = Vec::with_capacity(meta_json.len() + 1);
@@ -364,7 +364,9 @@ async fn pty_session(
                         attachment.write(&text);
                     }
                     Some(Ok(Message::Binary(bytes))) => {
-                        attachment.write(&String::from_utf8_lossy(&bytes));
+                        if let Some(text) = decode_pty_input(&bytes) {
+                            attachment.write(&text);
+                        }
                     }
                     Some(Ok(Message::Close(_)) | Err(_)) | None => break,
                     _ => {}
@@ -385,3 +387,83 @@ fn socket_split(
     use futures::StreamExt as _;
     socket.split()
 }
+
+/// Replay chunks (`protocol.ts:23-27`) sliced on char boundaries so no frame
+/// ever splits a multi-byte UTF-8 sequence.
+fn replay_chunks(data: &str, size: usize) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    while start < data.len() {
+        let mut end = (start + size).min(data.len());
+        // Grow past a split multi-byte character so chunks are never empty.
+        while end < data.len() && !data.is_char_boundary(end) {
+            end += 1;
+        }
+        out.push(&data[start..end]);
+        start = end;
+    }
+    out
+}
+
+/// Decodes inbound binary frames. Mirrors `protocol.ts:30-36`: invalid UTF-8
+/// is dropped — only the valid prefix (if any) is forwarded, never U+FFFD
+/// replacement characters.
+fn decode_pty_input(bytes: &[u8]) -> Option<String> {
+    // Mirrors ref protocol.ts:30-36: TextDecoder with `fatal: true` throws on
+    // ANY invalid or truncated sequence and the catch drops the whole chunk —
+    // the valid prefix is NOT forwarded.
+    std::str::from_utf8(bytes)
+        .ok()
+        .map(str::to_owned)
+        .filter(|text| !text.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decodes_pure_ascii() {
+        assert_eq!(decode_pty_input(b"ls -la\r\n").as_deref(), Some("ls -la\r\n"));
+    }
+
+    #[test]
+    fn decodes_valid_multibyte() {
+        let input = "héllo → 🎉";
+        assert_eq!(decode_pty_input(input.as_bytes()).as_deref(), Some(input));
+    }
+
+    #[test]
+    fn truncation_mid_character_drops_whole_chunk() {
+        let input = "héllo → 🎉".as_bytes();
+        // Truncate inside the final 4-byte emoji: ref's fatal decoder rejects
+        // the truncated sequence and drops the entire chunk.
+        let truncated = &input[..input.len() - 2];
+        assert_eq!(decode_pty_input(truncated), None);
+    }
+
+    #[test]
+    fn invalid_bytes_drop_whole_chunk_without_replacement_chars() {
+        // "ok" followed by two standalone continuation bytes: fatal decode
+        // fails, so the whole chunk is dropped (valid prefix not forwarded).
+        let mut bytes = b"ok".to_vec();
+        bytes.extend_from_slice(&[0x80, 0x81]);
+        assert_eq!(decode_pty_input(&bytes), None);
+
+        // Entirely invalid input decodes to nothing.
+        assert_eq!(decode_pty_input(&[0xff, 0xfe, 0xfd]), None);
+    }
+
+    #[test]
+    fn replay_chunks_never_split_characters() {
+        let data = "éééééééééé";
+        for size in 1..=data.len() + 1 {
+            let chunks = replay_chunks(data, size);
+            assert_eq!(chunks.concat(), data);
+            for chunk in &chunks {
+                assert!(std::str::from_utf8(chunk.as_bytes()).is_ok());
+            }
+        }
+    }
+}
+
