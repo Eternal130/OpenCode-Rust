@@ -19,7 +19,7 @@ use serde_json::Value;
 use crate::database::schema::SessionRow;
 use crate::hooks::HookRegistry;
 use crate::location::{ToolRegistryState, ToolRunFailure, ToolRunResult};
-use crate::session::runner::context::Loaded;
+use crate::session::runner::context::{provenance, provenance_matches, Loaded};
 use crate::session::runner::{to_llm_message, ModelError, ResolvedModel};
 
 /// Inline-image budget triggers (model-request.ts:43-46).
@@ -797,6 +797,29 @@ impl SessionModelRequest {
             }
         }
 
+        // ProviderContext/route-hook guard (model-request.ts:304-318):
+        // history selects opaque/encrypted compaction windows against the
+        // catalog route BEFORE hooks run; a `model.request` hook that
+        // reroutes the request must not carry an existing window to
+        // another deployment. `prepare` has no error channel, so like hook
+        // failures this dies here — the request is never sent.
+        if let Some(selected) = provenance(model) {
+            let routed = routed_provenance(&request, model);
+            if !provenance_matches(&selected, routed.as_ref())
+                && request.messages.iter().any(|message| {
+                    message
+                        .content
+                        .iter()
+                        .any(|part| matches!(part, ContentPart::Compaction { .. }))
+                })
+            {
+                return Err(ModelError::Resolver(
+                    "Provider context is incompatible with the route selected by model request hooks"
+                        .to_owned(),
+                ));
+            }
+        }
+
         // PLUG-M02 — the transport-layer hook dispatch (model-request.ts
         // 320-375). `session.http.request`/`session.http.response` wrap
         // EVERY HTTP request the route executes (the WebSocket fallback
@@ -946,6 +969,24 @@ impl SessionModelRequest {
     pub async fn title(&self, input: RequestInput) -> Result<Prepared, ModelError> {
         self.prepare(RequestKind::Title, input).await
     }
+}
+
+/// The routed provenance of a prepared request (after hooks) — the same
+/// helper the compaction path's native guard uses.
+pub(crate) fn routed_provenance(
+    request: &oc_ai::schema::messages::LLMRequest,
+    model: &ResolvedModel,
+) -> Option<oc_schema::session_support::Provenance> {
+    let routed = ResolvedModel {
+        model: request.model.clone(),
+        reference: model.reference.clone(),
+        capabilities: model.capabilities.clone(),
+        cost: model.cost.clone(),
+        limit: model.limit,
+        compaction: model.compaction,
+        transport: model.transport,
+    };
+    provenance(&routed)
 }
 
 fn canonical(value: &Value) -> String {
@@ -1291,6 +1332,102 @@ mod hook_dispatch_tests {
             .await
             .expect("primary prepare");
         assert_eq!(*fired.lock().unwrap(), vec!["context"]);
+    }
+}
+
+#[cfg(test)]
+mod route_guard_tests {
+    // G-22: a `model.request` baseURL rewrite incompatible with an opaque
+    // compaction window in the prompt dies before the request is sent
+    // (model-request.ts:304-318).
+    use super::{AppMetadata, RequestInput, RequestKind, SessionModelRequest};
+    use crate::database::schema::SessionRow;
+    use crate::hooks::fn_hook;
+    use crate::session::runner::ResolvedModel;
+    use oc_ai::schema::messages::{ContentPart, Message};
+    use std::sync::Arc;
+
+    fn resolved() -> ResolvedModel {
+        let route =
+            oc_ai::test_support::echo_route(Arc::new(oc_ai::route::transport::FailingTransport {
+                message: "never sent",
+            }));
+        let model = route.model("fake-model", Some("parityfake".into())).expect("route model");
+        ResolvedModel {
+            reference: oc_schema::model::Ref {
+                provider_id: oc_schema::id::ProviderId::parse("parityfake"),
+                id: oc_schema::id::ModelId::parse("fake-model"),
+                variant: Some(oc_schema::id::ModelVariantId::parse("default")),
+            },
+            model,
+            capabilities: oc_schema::model::Capabilities::default(),
+            cost: Vec::new(),
+            limit: oc_schema::model::ModelLimit { context: 200_000, input: None, output: 32_000 },
+            compaction: None,
+            transport: None,
+        }
+    }
+
+    fn input(model: &ResolvedModel, messages: Vec<Message>) -> RequestInput {
+        RequestInput {
+            session: SessionRow::new("ses_guard_1", "global", "/tmp/opencode", "guard", "test")
+                .expect("session row"),
+            agent: oc_schema::id::AgentId::parse("build"),
+            model: model.clone(),
+            tools: None,
+            system: Vec::new(),
+            messages,
+            tool_choice: None,
+            web_socket: false,
+            input_tokens: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn route_rewrite_with_opaque_window_dies() {
+        let hooks = Arc::new(crate::hooks::HookRegistry::new());
+        let tools = Arc::new(crate::location::ToolRegistryState::new());
+        std::mem::forget(
+            hooks
+                .register_session_model_request(
+                    fn_hook(|event: &mut crate::hooks::SessionModelRequestEvent| {
+                        event.base_url = Some("https://elsewhere.test".into());
+                        Ok(())
+                    }),
+                    crate::hooks::HookOptions::default(),
+                )
+                .await,
+        );
+        let service = SessionModelRequest::new(Arc::clone(&hooks), tools, AppMetadata::default());
+
+        let model = resolved();
+        // An opaque compaction window in the prompt + an incompatible
+        // baseURL rewrite → die (never send).
+        let window = vec![Message::assistant(vec![ContentPart::compaction_encrypted(
+            "parityfake",
+            "opaque-window",
+        )])];
+        let error = match service.prepare(RequestKind::Primary, input(&model, window)).await {
+            Ok(_) => panic!("incompatible rewrite must die"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains(
+                "Provider context is incompatible with the route selected by model request hooks"
+            ),
+            "unexpected error: {error}"
+        );
+
+        // The same rewrite without a compaction window is allowed and the
+        // route is patched.
+        let prepared = service
+            .prepare(RequestKind::Primary, input(&model, vec![Message::user("hello")]))
+            .await
+            .expect("rewrite without a window is fine");
+        assert_eq!(
+            prepared.request.model.route.endpoint.base_url.as_deref(),
+            Some("https://elsewhere.test")
+        );
     }
 }
 

@@ -434,7 +434,10 @@ impl SessionCompaction {
         let Some(provenance_value) = provenance(&context.model) else {
             return unsupported("Provider compaction requires a stable, configured endpoint");
         };
-        let routed = routed_provenance(&prepared, &context.model);
+        let routed = crate::session::runner::model_request::routed_provenance(
+            &prepared.request,
+            &context.model,
+        );
         if !provenance_matches(&provenance_value, routed.as_ref()) {
             return unsupported(
                 "Provider compaction requires the endpoint in provider/model settings, not a model.request rewrite",
@@ -906,23 +909,6 @@ fn is_payload_too_large(error: &AiError) -> bool {
             ..
         }
     )
-}
-
-/// The routed provenance of a prepared request (after hooks).
-fn routed_provenance(
-    prepared: &Prepared,
-    model: &ResolvedModel,
-) -> Option<oc_schema::session_support::Provenance> {
-    let routed = ResolvedModel {
-        model: prepared.request.model.clone(),
-        reference: model.reference.clone(),
-        capabilities: model.capabilities.clone(),
-        cost: model.cost.clone(),
-        limit: model.limit,
-        compaction: model.compaction,
-        transport: model.transport,
-    };
-    provenance(&routed)
 }
 
 /// `due` (compaction.ts:242-251).
