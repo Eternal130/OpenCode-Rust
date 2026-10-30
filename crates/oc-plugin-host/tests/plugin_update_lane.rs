@@ -126,6 +126,61 @@ fn update_detects_installs_and_rechecks() {
 }
 
 #[test]
+fn update_sweeps_stale_generations_after_the_update() {
+    // F1 regression: `update()` must run the GC sweep (npm.ts:396) —
+    // stale generations (> 7 d, beyond the keep-2 floor) disappear as
+    // a side effect of the update itself, not only via a manual
+    // `collect_stale` call.
+    let box_ = sandbox("gc-after-update");
+    let npm = npm_shim(&box_);
+    let bun = bun_shim(&box_);
+    let root = box_.join("npm-cache");
+    std::fs::create_dir_all(&root).expect("cache root");
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
+    let day = 24 * 60 * 60 * 1_000u128;
+    // The installed 1.0.0 line: two fresh generations (the keep-2
+    // floor protects them whatever their age) plus two stale ones past
+    // the 7-day retention.
+    stage(&root, "demo-plugin", "1.0.0", &now.to_string());
+    stage(&root, "demo-plugin", "1.0.0", &(now - day).to_string());
+    stage(&root, "demo-plugin", "1.0.0", &(now - 8 * day).to_string());
+    stage(&root, "demo-plugin", "1.0.0", &(now - 9 * day).to_string());
+
+    let options = InstallOptions {
+        root: Some(root.clone()),
+        npm: Some(npm),
+        bun: Some(bun),
+        ..InstallOptions::default()
+    };
+    std::fs::write(box_.join("registry-version.txt"), "2.0.0").expect("bump registry");
+    let cache = UpdateCache::new();
+    let installed = update("demo-plugin", &root, &cache, &options).expect("update runs");
+    assert_eq!(installed.version, "2.0.0");
+
+    // GC ran as part of the update: the stale 1.0.0 generations (past
+    // retention AND beyond the keep-2 floor) are gone; the two newest
+    // survive unconditionally.
+    let stamps = stamp_dirs(&root, "demo-plugin", "1.0.0");
+    assert!(
+        !stamps.contains(&(now - 8 * day).to_string()),
+        "stale generation swept by update(): {stamps:?}"
+    );
+    assert!(
+        !stamps.contains(&(now - 9 * day).to_string()),
+        "stale generation swept by update(): {stamps:?}"
+    );
+    assert!(stamps.contains(&now.to_string()), "newest generation kept: {stamps:?}");
+    assert!(
+        stamps.contains(&(now - day).to_string()),
+        "keep-2 floor protects the second-newest: {stamps:?}"
+    );
+}
+
+#[test]
 fn update_failure_surfaces_the_installer_error() {
     let box_ = sandbox("fail");
     let npm = npm_shim(&box_);
