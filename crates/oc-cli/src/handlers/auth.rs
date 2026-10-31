@@ -277,12 +277,15 @@ async fn login(
     method: Option<&str>,
     answers: &[String],
 ) -> i32 {
-    let Some(target) = target else {
-        eprintln!(
-            "Error: Pass an integration ID or name when running without an interactive terminal"
-        );
-        return 1;
-    };
+    if target.is_none() {
+        // ref auth/login.ts `requireInteractive` — selector only on a TTY.
+        if let Err(message) =
+            require_interactive("Pass an integration ID or name when running without an interactive terminal")
+        {
+            eprintln!("Error: {message}");
+            return 1;
+        }
+    }
     println!("◆ Connect an integration");
     let resolved = match connect(server, None).await {
         Ok(resolved) => resolved,
@@ -291,21 +294,23 @@ async fn login(
     let client = resolved.endpoint.client();
 
     // Well-known provider URL discovery.
-    if target.starts_with("http://") || target.starts_with("https://") {
-        if let Err(error) = client
-            .integration()
-            .wellknown_add(
-                &oc_client::types::ExperimentalIntegrationWellknownAddQuery {
-                    location: Some(location_query()),
-                },
-                &oc_client::types::ExperimentalIntegrationWellknownAddBody {
-                    url: target.to_owned(),
-                },
-            )
-            .await
-        {
-            eprintln!("{}", error_message(&error.to_string()));
-            return 1;
+    if let Some(target) = target {
+        if target.starts_with("http://") || target.starts_with("https://") {
+            if let Err(error) = client
+                .integration()
+                .wellknown_add(
+                    &oc_client::types::ExperimentalIntegrationWellknownAddQuery {
+                        location: Some(location_query()),
+                    },
+                    &oc_client::types::ExperimentalIntegrationWellknownAddBody {
+                        url: target.to_owned(),
+                    },
+                )
+                .await
+            {
+                eprintln!("{}", error_message(&error.to_string()));
+                return 1;
+            }
         }
     }
     let integrations = match load_integrations(&client).await {
@@ -315,11 +320,50 @@ async fn login(
             return 1;
         }
     };
-    let integration = match resolve_integration(&integrations, target) {
-        Ok(integration) => integration,
-        Err(message) => {
-            eprintln!("{message}");
+    let integration = if let Some(target) = target {
+        match resolve_integration(&integrations, target) {
+            Ok(integration) => integration,
+            Err(message) => {
+                eprintln!("{message}");
+                return 1;
+            }
+        }
+    } else {
+        // ref findIntegration: no target → interactive selector
+        // (auth/login.ts:46-110 `loginChoices` + `selectIntegration`).
+        let choices = login_choices(&integrations);
+        if choices.is_empty() {
+            eprintln!("Error: No authentication integrations are available");
             return 1;
+        }
+        let items: Vec<String> =
+            choices.iter().map(|choice| choice.display()).collect::<Vec<_>>().to_vec();
+        println!("◇ Select integration");
+        match Select::new()
+            .with_prompt("Select integration")
+            .items(&items)
+            .default(0)
+            .max_length(10)
+            .interact_opt()
+        {
+            Ok(Some(index)) => {
+                let id = choices[index].id.clone();
+                match resolve_integration(&integrations, &id) {
+                    Ok(integration) => integration,
+                    Err(message) => {
+                        eprintln!("{message}");
+                        return 1;
+                    }
+                }
+            }
+            Ok(None) => {
+                println!("Cancelled");
+                return 1;
+            }
+            Err(error) => {
+                eprintln!("Error: {error}");
+                return 1;
+            }
         }
     };
     let integration_name =
@@ -920,9 +964,94 @@ async fn import(server: &ServerParams, file: Option<&str>) -> i32 {
     0
 }
 
+/// A selectable login integration (ref auth/login.ts `loginChoices` +
+/// ui/integration-picker.ts `IntegrationChoice`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LoginChoice {
+    id: String,
+    label: String,
+    category: &'static str,
+    connected: bool,
+}
+
+impl LoginChoice {
+    /// Selector row (integration-picker.ts): `label ✓` with a connected
+    /// marker; category headings are conveyed by sort order.
+    fn display(&self) -> String {
+        if self.connected {
+            format!("{} ✓", self.label)
+        } else {
+            self.label.clone()
+        }
+    }
+}
+
+/// `integrationPriority` (login.ts:26-33): MCP-source integrations first,
+/// then well-known providers, then the rest (name, then id, as tiebreak).
+const LOGIN_PRIORITY: [(&str, usize); 6] = [
+    ("opencode-go", 0),
+    ("opencode", 1),
+    ("openai", 2),
+    ("github-copilot", 3),
+    ("anthropic", 4),
+    ("google", 5),
+];
+
+/// `loginChoices` (ref auth/login.ts:46-110): integrations with at least one
+/// interactive method, sorted MCP → Popular → Services, with connected
+/// markers derived from existing connections.
+fn login_choices(integrations: &[Value]) -> Vec<LoginChoice> {
+    let mut entries: Vec<((usize, usize), LoginChoice)> = integrations
+        .iter()
+        .filter(|integration| !connect_methods(integration).is_empty())
+        .map(|integration| {
+            let id = integration.get("id").and_then(Value::as_str).unwrap_or_default().to_owned();
+            let label =
+                integration.get("name").and_then(Value::as_str).unwrap_or_default().to_owned();
+            let is_mcp = integration
+                .get("metadata")
+                .and_then(|metadata| metadata.get("source"))
+                .and_then(Value::as_str)
+                == Some("mcp");
+            let priority = LOGIN_PRIORITY
+                .iter()
+                .find(|(key, _)| *key == id)
+                .map_or(LOGIN_PRIORITY.len(), |&(_, priority)| priority);
+            let popular = priority < LOGIN_PRIORITY.len();
+            let category = if is_mcp {
+                "MCP"
+            } else if popular {
+                "Popular"
+            } else {
+                "Services"
+            };
+            let rank = if is_mcp { 0 } else { 1 };
+            let connected = integration
+                .get("connections")
+                .and_then(Value::as_array)
+                .is_some_and(|connections| !connections.is_empty());
+            (
+                (rank, priority),
+                LoginChoice { id, label, category, connected },
+            )
+        })
+        .collect();
+    entries.sort_by(|left, right| {
+        let ((left_rank, left_priority), left) = left;
+        let ((right_rank, right_priority), right) = right;
+        left_rank
+            .cmp(right_rank)
+            .then(left_priority.cmp(right_priority))
+            .then_with(|| left.label.to_lowercase().cmp(&right.label.to_lowercase()))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    entries.into_iter().map(|(_, choice)| choice).collect()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::open_url;
+    use super::{connect_methods, login_choices, open_url, require_interactive, util};
+    use serde_json::json;
     use std::path::PathBuf;
 
     /// `openUrl` spawns the platform opener (linux: xdg-open) with the URL
@@ -989,5 +1118,86 @@ mod tests {
         open_url("not a url");
         std::thread::sleep(std::time::Duration::from_millis(200));
         assert!(!log.exists(), "no opener spawn for non-http links");
+    }
+
+    fn integration(id: &str, name: &str, methods: usize, source: Option<&str>, connected: bool) -> serde_json::Value {
+        let mut value = json!({
+            "id": id,
+            "name": name,
+            "methods": (0..methods)
+                .map(|index| json!({ "id": format!("m{index}"), "type": "oauth", "label": format!("method {index}") }))
+                .collect::<Vec<_>>(),
+            "connections": if connected { json!([{ "type": "credential" }]) } else { json!([]) },
+        });
+        if let Some(source) = source {
+            value["metadata"] = json!({ "source": source });
+        }
+        value
+    }
+
+    /// `loginChoices` (login.ts:46-110): MCP first, then priority order,
+    /// then name; env-only integrations are excluded; connected markers
+    /// derive from connections.
+    #[test]
+    fn login_choices_sorts_mcp_then_popular_then_services() {
+        let integrations = vec![
+            integration("zeta", "Zeta", 1, None, false),
+            integration("anthropic", "Anthropic", 1, None, true),
+            integration("custom-mcp", "Custom MCP", 1, Some("mcp"), false),
+            integration("openai", "OpenAI", 1, None, false),
+            integration("opencode", "OpenCode", 1, None, false),
+            integration("env-only", "Env Only", 0, None, false),
+        ];
+        let choices = login_choices(&integrations);
+        let ids: Vec<&str> = choices.iter().map(|choice| choice.id.as_str()).collect();
+        assert_eq!(ids, vec!["custom-mcp", "opencode", "openai", "anthropic", "zeta"]);
+        assert_eq!(choices[0].category, "MCP");
+        assert_eq!(choices[1].category, "Popular");
+        assert_eq!(choices[4].category, "Services");
+        assert!(choices.iter().all(|choice| choice.id != "env-only"));
+    }
+
+    /// Connected integrations render the `✓` marker (integration-picker.ts).
+    #[test]
+    fn login_choice_display_marks_connected() {
+        let connected = super::LoginChoice {
+            id: "id".into(),
+            label: "Anthropic".into(),
+            category: "Popular",
+            connected: true,
+        };
+        assert_eq!(connected.display(), "Anthropic ✓");
+        let disconnected = super::LoginChoice { connected: false, ..connected };
+        assert_eq!(disconnected.display(), "Anthropic");
+    }
+
+    /// `connectMethods` parity sanity for the selector filter: env methods
+    /// are excluded, key sorts last.
+    #[test]
+    fn connect_methods_excludes_env_and_orders_key_last() {
+        let value = json!({
+            "methods": [
+                { "id": "key", "type": "key", "label": "API key" },
+                { "id": "env", "type": "env" },
+                { "id": "oauth", "type": "oauth", "label": "OAuth" },
+            ]
+        });
+        let methods = connect_methods(&value);
+        let kinds: Vec<&str> =
+            methods.iter().map(|method| method["type"].as_str().unwrap()).collect();
+        assert_eq!(kinds, vec!["oauth", "key"]);
+    }
+
+    /// `require_interactive` is the non-TTY gate for `auth login` without a
+    /// target (login.ts `requireInteractive`): under the plain nextest
+    /// profile stdin/stdout are pipes (gated), under the PTY profile they
+    /// are TTYs (allowed) — assert whichever environment we run in.
+    #[test]
+    fn require_interactive_gates_non_tty_login() {
+        let tty = util::stdin_is_tty() && util::stdout_is_tty();
+        let gated = super::require_interactive(
+            "Pass an integration ID or name when running without an interactive terminal",
+        );
+        assert_eq!(gated.is_ok(), tty);
     }
 }
