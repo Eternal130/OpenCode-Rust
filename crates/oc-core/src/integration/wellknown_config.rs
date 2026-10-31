@@ -54,11 +54,17 @@ impl WellknownDocuments {
         Arc::new(Self::default())
     }
 
-    fn swap(&self, next: BTreeMap<String, Vec<WellknownDocument>>) {
+    /// Swaps the snapshot; returns whether the documents changed
+    /// (deep compare — v2 `refresh`'s `isDeepStrictEqual` gate).
+    fn swap(&self, next: BTreeMap<String, Vec<WellknownDocument>>) -> bool {
+        let current: BTreeMap<String, Vec<WellknownDocument>> =
+            self.entries.iter().map(|entry| (entry.key().clone(), entry.value().clone())).collect();
+        let changed = current != next;
         self.entries.clear();
         for (origin, documents) in next {
             self.entries.insert(origin, documents);
         }
+        changed
     }
 
     /// Test seam: install documents directly.
@@ -202,6 +208,18 @@ impl crate::integration::IntegrationHost {
                 next.insert(origin, documents);
             }
         }
-        self.wellknown_documents_shared.swap(next);
+        // G-56 — a changed snapshot publishes the wellknown "Updated"
+        // face (v2 `WellKnown.Event.Updated`, wellknown.ts:143; the
+        // Rust bus rides `integration.updated`): the server's config
+        // reload subscription reloads the watched config (config.ts:
+        // 307-311 subscribe WellKnown.Event.Updated → reload).
+        if self.wellknown_documents_shared.swap(next) {
+            if let Some(definition) =
+                crate::bus::registry::by_type(crate::bus::registry::INTEGRATION_UPDATED)
+            {
+                let _ =
+                    self.bus.publish(definition, serde_json::json!({}), Default::default()).await;
+            }
+        }
     }
 }
