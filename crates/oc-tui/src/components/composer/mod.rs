@@ -2021,15 +2021,21 @@ mod tests {
         // The unstructured row inserts as plain text after the token
         // (the port's insert path — no chip replacement).
         assert_eq!(state.draft.text, "@sr@src/main.rs ");
-        let before = autocomplete::now_ms();
+        // The recorded lastOpen sits in [accept-time, now]: an exact
+        // `== now()` flakes when the wall clock ticks a millisecond
+        // between the accept and the read (seen under full-workspace
+        // load) — bound it instead.
+        let after = autocomplete::now_ms();
         let key = autocomplete::resolve_frecency_path(
             &std::env::current_dir().unwrap_or_default(),
             "src/main.rs",
         );
-        assert_eq!(
-            state.autocomplete.frecency.data.get(&key),
-            Some(&autocomplete::FrecencyEntry { frequency: 1, last_open: before }),
-            "accept records frequency+1 at the wall clock"
+        let entry = state.autocomplete.frecency.data.get(&key).expect("recorded");
+        assert_eq!(entry.frequency, 1, "accept records frequency+1");
+        assert!(
+            entry.last_open <= after,
+            "lastOpen is the accept's wall clock ({} <= {after})",
+            entry.last_open
         );
 
         // A second accept of the same file increments, not resets.
