@@ -580,23 +580,6 @@ impl BuiltinsFormatter {
         found
     }
 
-    /// `Npm.which` trimmed to resolution only: the nearest
-    /// `node_modules/.bin/<bin>` executable up the chain (no auto-install).
-    fn npm_bin(&self, bin: &str) -> Option<String> {
-        let mut current = Some(self.directory.as_path());
-        while let Some(dir) = current {
-            let candidate = dir.join("node_modules").join(".bin").join(bin);
-            if is_executable_file(&candidate) {
-                return Some(candidate.to_string_lossy().into_owned());
-            }
-            if dir == self.worktree {
-                break;
-            }
-            current = dir.parent();
-        }
-        None
-    }
-
     /// REF `Npm.which(pkg, bin?)` (util/npm.ts): resolve the package's
     /// binary from the global npm cache
     /// `<cache>/npm/<pkg>@latest/<generation>/node_modules/.bin`, and when
@@ -700,7 +683,10 @@ impl BuiltinsFormatter {
                     if !has_dependency(&json, dependency) {
                         continue;
                     }
-                    if let Some(path) = self.npm_bin(bin) {
+                    // builtins.ts:81,95 — `Npm.which("<pkg>")` (global npm
+                    // cache + on-demand install), NOT the project
+                    // `node_modules/.bin` walk (G-71; same path Biome uses).
+                    if let Some(path) = self.npm_which(dependency, bin) {
                         let mut command = vec![path];
                         command.extend(args.iter().cloned());
                         return Some(command);
@@ -1055,19 +1041,16 @@ mod builtins_tests {
         // formatter"; uv must accept `format --help`.
         fake_bin(bin.path(), "air", "echo 'The R language formatter'; exit 0");
         fake_bin(bin.path(), "uv", "exit 0");
-        // npm-resolved binaries (project node_modules: prettier/oxfmt).
-        let npm_bin = project.path().join("node_modules/.bin");
-        std::fs::create_dir_all(&npm_bin).expect("bin dir");
-        for name in ["prettier", "oxfmt"] {
-            fake_bin(&npm_bin, name, "exit 0");
-        }
-        // biome resolves through `Npm.which` — the global npm cache, not
-        // the project node_modules chain.
+        // npm-resolved binaries (G-71: prettier/oxfmt go through
+        // `Npm.which` — the global npm cache — like biome; the project
+        // node_modules chain is deliberately NOT probed anymore).
         let npm_cache = tempdir();
-        let generation = npm_cache.path().join("@biomejs/biome@latest/1700000000000");
-        let cache_bin = generation.join("node_modules/.bin");
-        std::fs::create_dir_all(&cache_bin).expect("cache bin dir");
-        fake_bin(&cache_bin, "biome", "exit 0");
+        for package in ["prettier", "oxfmt", "@biomejs/biome"] {
+            let generation = npm_cache.path().join(format!("{package}@latest/1700000000000"));
+            let cache_bin = generation.join("node_modules/.bin");
+            std::fs::create_dir_all(&cache_bin).expect("cache bin dir");
+            fake_bin(&cache_bin, package.trim_start_matches('@').rsplit('/').next().unwrap_or(package), "exit 0");
+        }
         std::fs::write(project.path().join(".clang-format"), "").expect("write");
         std::fs::write(project.path().join(".ocamlformat"), "").expect("write");
         std::fs::write(project.path().join("biome.json"), "{}").expect("write");
@@ -1185,14 +1168,22 @@ mod builtins_tests {
         assert_eq!(
             get("oxfmt"),
             vec![
-                project.path().join("node_modules/.bin/oxfmt").to_string_lossy().into_owned(),
+                npm_cache
+                    .path()
+                    .join("oxfmt@latest/1700000000000/node_modules/.bin/oxfmt")
+                    .to_string_lossy()
+                    .into_owned(),
                 "$FILE".into()
             ]
         );
         assert_eq!(
             get("prettier"),
             vec![
-                project.path().join("node_modules/.bin/prettier").to_string_lossy().into_owned(),
+                npm_cache
+                    .path()
+                    .join("prettier@latest/1700000000000/node_modules/.bin/prettier")
+                    .to_string_lossy()
+                    .into_owned(),
                 "--write".into(),
                 "$FILE".into()
             ]
