@@ -1,7 +1,7 @@
 // Generated file — DO NOT EDIT by hand.
 // Regenerate with: cargo run -p openapi-gen
-// Source: tools/openapi-gen/openapi.json (sha256 0612418392961ef22f0337ce0e1e520270917665fc85f29c4af1c94d1e1873ee)
-//! Request-validation constraint table for the 141-op HttpApi surface
+// Source: tools/openapi-gen/openapi.json (sha256 5165970367be69ae9e46000c74a55c530f2bcaaceb6aecfa4a333c6bf9233d60)
+//! Request-validation constraint table for the 142-op HttpApi surface
 //! (HTTP-H0): one row per operation mapping its request body AND its
 //! declared query parameters to JSON-shape constraints. DATA ONLY —
 //! the interpreter/seam lives in `request_validation.rs`, which
@@ -20,10 +20,10 @@
 //! spec — the seam carries those probe-pinned bounds separately.
 #![allow(clippy::must_use_candidate, clippy::doc_markdown)]
 
-pub const OPENAPI_SHA256: &str = "0612418392961ef22f0337ce0e1e520270917665fc85f29c4af1c94d1e1873ee";
-pub const OPERATION_COUNT: usize = 141;
+pub const OPENAPI_SHA256: &str = "5165970367be69ae9e46000c74a55c530f2bcaaceb6aecfa4a333c6bf9233d60";
+pub const OPERATION_COUNT: usize = 142;
 /// Operations declaring at least one query parameter.
-pub const QUERY_PARAM_ROUTES: usize = 71;
+pub const QUERY_PARAM_ROUTES: usize = 72;
 
 /// `$ref` back-edges / nests beyond the generator cap (8) —
 /// emitted as `Any` (accept), counted here so drift is reviewable.
@@ -421,25 +421,26 @@ pub static NODES: &[SchemaNode] = &[
     SchemaNode::Obj { fields: &[FieldSpec { name: "code", required: false, ty: 1 }] }, // 92
     SchemaNode::Obj { fields: &[FieldSpec { name: "projectID", required: false, ty: 0 }] }, // 93
     SchemaNode::Obj { fields: &[FieldSpec { name: "target", required: false, ty: 1 }] }, // 94
-    SchemaNode::Obj { fields: &[FieldSpec { name: "targets", required: true, ty: 19 }] }, // 95
+    SchemaNode::Obj { fields: &[FieldSpec { name: "target", required: true, ty: 0 }] }, // 95
+    SchemaNode::Obj { fields: &[FieldSpec { name: "targets", required: true, ty: 19 }] }, // 96
     SchemaNode::Obj {
         fields: &[
             FieldSpec { name: "url", required: false, ty: 0 },
             FieldSpec { name: "override", required: false, ty: 0 },
             FieldSpec { name: "color", required: false, ty: 0 },
         ],
-    }, // 96
-    SchemaNode::Ref { label: "Project.Icon", node: 96 }, // 97
-    SchemaNode::Obj { fields: &[FieldSpec { name: "start", required: false, ty: 0 }] }, // 98
-    SchemaNode::Ref { label: "Project.Commands", node: 98 }, // 99
+    }, // 97
+    SchemaNode::Ref { label: "Project.Icon", node: 97 }, // 98
+    SchemaNode::Obj { fields: &[FieldSpec { name: "start", required: false, ty: 0 }] }, // 99
+    SchemaNode::Ref { label: "Project.Commands", node: 99 }, // 100
     SchemaNode::Obj {
         fields: &[
             FieldSpec { name: "canonical", required: false, ty: 0 },
             FieldSpec { name: "name", required: false, ty: 0 },
-            FieldSpec { name: "icon", required: false, ty: 97 },
-            FieldSpec { name: "commands", required: false, ty: 99 },
+            FieldSpec { name: "icon", required: false, ty: 98 },
+            FieldSpec { name: "commands", required: false, ty: 100 },
         ],
-    }, // 100
+    }, // 101
     SchemaNode::Obj {
         fields: &[
             FieldSpec { name: "command", required: false, ty: 0 },
@@ -448,150 +449,150 @@ pub static NODES: &[SchemaNode] = &[
             FieldSpec { name: "title", required: false, ty: 0 },
             FieldSpec { name: "env", required: false, ty: 20 },
         ],
-    }, // 101
+    }, // 102
     SchemaNode::Obj {
         fields: &[
             FieldSpec { name: "rows", required: true, ty: 21 },
             FieldSpec { name: "cols", required: true, ty: 21 },
         ],
-    }, // 102
+    }, // 103
     SchemaNode::Obj {
         fields: &[
             FieldSpec { name: "title", required: false, ty: 0 },
-            FieldSpec { name: "size", required: false, ty: 102 },
+            FieldSpec { name: "size", required: false, ty: 103 },
         ],
-    }, // 103
+    }, // 104
     SchemaNode::Obj {
         fields: &[
             FieldSpec { name: "location[directory]", required: false, ty: 0 },
             FieldSpec { name: "cursor", required: false, ty: 0 },
             FieldSpec { name: "ticket", required: false, ty: 0 },
         ],
-    }, // 104
-    SchemaNode::Obj { fields: &[FieldSpec { name: "input", required: false, ty: 4 }] }, // 105
-    SchemaNode::Ref { label: "Rpc.Input", node: 105 }, // 106
-    SchemaNode::Literal(&["asc", "desc"]), // 107
-    SchemaNode::Literal(&["null"]), // 108
-    SchemaNode::Union(&[36, 108]), // 109
+    }, // 105
+    SchemaNode::Obj { fields: &[FieldSpec { name: "input", required: false, ty: 4 }] }, // 106
+    SchemaNode::Ref { label: "Rpc.Input", node: 106 }, // 107
+    SchemaNode::Literal(&["asc", "desc"]), // 108
+    SchemaNode::Literal(&["null"]), // 109
+    SchemaNode::Union(&[36, 109]), // 110
     SchemaNode::Obj {
         fields: &[
             FieldSpec { name: "limit", required: false, ty: 0 },
-            FieldSpec { name: "order", required: false, ty: 107 },
+            FieldSpec { name: "order", required: false, ty: 108 },
             FieldSpec { name: "search", required: false, ty: 0 },
-            FieldSpec { name: "parentID", required: false, ty: 109 },
+            FieldSpec { name: "parentID", required: false, ty: 110 },
             FieldSpec { name: "directory", required: false, ty: 0 },
             FieldSpec { name: "project", required: false, ty: 0 },
             FieldSpec { name: "subpath", required: false, ty: 0 },
             FieldSpec { name: "cursor", required: false, ty: 0 },
         ],
-    }, // 110
-    SchemaNode::Nullable(36), // 111
-    SchemaNode::Nullable(47), // 112
-    SchemaNode::Nullable(53), // 113
+    }, // 111
+    SchemaNode::Nullable(36), // 112
+    SchemaNode::Nullable(47), // 113
+    SchemaNode::Nullable(53), // 114
     SchemaNode::Obj {
         fields: &[
-            FieldSpec { name: "id", required: false, ty: 111 },
-            FieldSpec { name: "parentID", required: false, ty: 111 },
+            FieldSpec { name: "id", required: false, ty: 112 },
+            FieldSpec { name: "parentID", required: false, ty: 112 },
             FieldSpec { name: "title", required: false, ty: 1 },
             FieldSpec { name: "agent", required: false, ty: 1 },
             FieldSpec { name: "model", required: false, ty: 15 },
             FieldSpec { name: "location", required: false, ty: 68 },
-            FieldSpec { name: "metadata", required: false, ty: 112 },
-            FieldSpec { name: "permissions", required: false, ty: 113 },
+            FieldSpec { name: "metadata", required: false, ty: 113 },
+            FieldSpec { name: "permissions", required: false, ty: 114 },
         ],
-    }, // 114
+    }, // 115
     SchemaNode::Obj {
         fields: &[
             FieldSpec { name: "title", required: false, ty: 1 },
-            FieldSpec { name: "metadata", required: false, ty: 112 },
-            FieldSpec { name: "permissions", required: false, ty: 113 },
+            FieldSpec { name: "metadata", required: false, ty: 113 },
+            FieldSpec { name: "permissions", required: false, ty: 114 },
         ],
-    }, // 115
-    SchemaNode::Obj { fields: &[FieldSpec { name: "agent", required: true, ty: 0 }] }, // 116
+    }, // 116
+    SchemaNode::Obj { fields: &[FieldSpec { name: "agent", required: true, ty: 0 }] }, // 117
     SchemaNode::Obj {
         fields: &[
             FieldSpec { name: "start", required: true, ty: 39 },
             FieldSpec { name: "end", required: true, ty: 39 },
             FieldSpec { name: "text", required: true, ty: 0 },
         ],
-    }, // 117
-    SchemaNode::Ref { label: "Prompt.Mention", node: 117 }, // 118
+    }, // 118
+    SchemaNode::Ref { label: "Prompt.Mention", node: 118 }, // 119
     SchemaNode::Obj {
         fields: &[
             FieldSpec { name: "uri", required: true, ty: 0 },
             FieldSpec { name: "name", required: false, ty: 0 },
             FieldSpec { name: "description", required: false, ty: 0 },
-            FieldSpec { name: "mention", required: false, ty: 118 },
+            FieldSpec { name: "mention", required: false, ty: 119 },
         ],
-    }, // 119
-    SchemaNode::Ref { label: "PromptInput.FileAttachment", node: 119 }, // 120
-    SchemaNode::Arr(120),    // 121
+    }, // 120
+    SchemaNode::Ref { label: "PromptInput.FileAttachment", node: 120 }, // 121
+    SchemaNode::Arr(121),    // 122
     SchemaNode::Obj {
         fields: &[
             FieldSpec { name: "name", required: true, ty: 0 },
-            FieldSpec { name: "mention", required: false, ty: 118 },
+            FieldSpec { name: "mention", required: false, ty: 119 },
         ],
-    }, // 122
-    SchemaNode::Ref { label: "Prompt.AgentAttachment", node: 122 }, // 123
-    SchemaNode::Arr(123),    // 124
+    }, // 123
+    SchemaNode::Ref { label: "Prompt.AgentAttachment", node: 123 }, // 124
+    SchemaNode::Arr(124),    // 125
     SchemaNode::Obj {
         fields: &[
             FieldSpec { name: "id", required: true, ty: 0 },
-            FieldSpec { name: "mention", required: false, ty: 118 },
+            FieldSpec { name: "mention", required: false, ty: 119 },
         ],
-    }, // 125
-    SchemaNode::Ref { label: "PromptInput.SkillAttachment", node: 125 }, // 126
-    SchemaNode::Arr(126),    // 127
-    SchemaNode::Literal(&["steer", "queue"]), // 128
-    SchemaNode::Ref { label: "Session.Inbox.Delivery", node: 128 }, // 129
-    SchemaNode::Nullable(129), // 130
+    }, // 126
+    SchemaNode::Ref { label: "PromptInput.SkillAttachment", node: 126 }, // 127
+    SchemaNode::Arr(127),    // 128
+    SchemaNode::Literal(&["steer", "queue"]), // 129
+    SchemaNode::Ref { label: "Session.Inbox.Delivery", node: 129 }, // 130
+    SchemaNode::Nullable(130), // 131
     SchemaNode::Obj {
         fields: &[
             FieldSpec { name: "name", required: true, ty: 0 },
             FieldSpec { name: "text", required: true, ty: 0 },
-            FieldSpec { name: "files", required: false, ty: 121 },
-            FieldSpec { name: "agents", required: false, ty: 124 },
-            FieldSpec { name: "skills", required: false, ty: 127 },
-            FieldSpec { name: "delivery", required: false, ty: 130 },
+            FieldSpec { name: "files", required: false, ty: 122 },
+            FieldSpec { name: "agents", required: false, ty: 125 },
+            FieldSpec { name: "skills", required: false, ty: 128 },
+            FieldSpec { name: "delivery", required: false, ty: 131 },
         ],
-    }, // 131
-    SchemaNode::Nullable(54), // 132
+    }, // 132
+    SchemaNode::Nullable(54), // 133
     SchemaNode::Obj {
         fields: &[
-            FieldSpec { name: "id", required: false, ty: 132 },
-            FieldSpec { name: "delivery", required: false, ty: 130 },
+            FieldSpec { name: "id", required: false, ty: 133 },
+            FieldSpec { name: "delivery", required: false, ty: 131 },
         ],
-    }, // 133
+    }, // 134
     SchemaNode::Obj {
         fields: &[
             FieldSpec { name: "from", required: false, ty: 54 },
             FieldSpec { name: "to", required: false, ty: 54 },
             FieldSpec { name: "context", required: false, ty: 0 },
         ],
-    }, // 134
-    SchemaNode::Obj { fields: &[FieldSpec { name: "variables", required: true, ty: 20 }] }, // 135
-    SchemaNode::Obj { fields: &[FieldSpec { name: "before", required: false, ty: 132 }] }, // 136
-    SchemaNode::Pattern { prefix: "frm_" }, // 137
-    SchemaNode::Nullable(137), // 138
-    SchemaNode::Ref { label: "Form.Metadata", node: 46 }, // 139
-    SchemaNode::Ref { label: "Form.Field", node: 4 }, // 140
-    SchemaNode::Arr(140),    // 141
-    SchemaNode::Ref { label: "Form.Fields", node: 141 }, // 142
+    }, // 135
+    SchemaNode::Obj { fields: &[FieldSpec { name: "variables", required: true, ty: 20 }] }, // 136
+    SchemaNode::Obj { fields: &[FieldSpec { name: "before", required: false, ty: 133 }] }, // 137
+    SchemaNode::Pattern { prefix: "frm_" }, // 138
+    SchemaNode::Nullable(138), // 139
+    SchemaNode::Ref { label: "Form.Metadata", node: 46 }, // 140
+    SchemaNode::Ref { label: "Form.Field", node: 4 }, // 141
+    SchemaNode::Arr(141),    // 142
+    SchemaNode::Ref { label: "Form.Fields", node: 142 }, // 143
     SchemaNode::Obj {
         fields: &[
-            FieldSpec { name: "id", required: false, ty: 138 },
+            FieldSpec { name: "id", required: false, ty: 139 },
             FieldSpec { name: "title", required: true, ty: 0 },
-            FieldSpec { name: "metadata", required: false, ty: 139 },
-            FieldSpec { name: "fields", required: true, ty: 142 },
+            FieldSpec { name: "metadata", required: false, ty: 140 },
+            FieldSpec { name: "fields", required: true, ty: 143 },
         ],
-    }, // 143
-    SchemaNode::Ref { label: "Form.CreatePayload", node: 143 }, // 144
-    SchemaNode::Obj { fields: &[FieldSpec { name: "message", required: false, ty: 0 }] }, // 145
-    SchemaNode::Obj { fields: &[FieldSpec { name: "answer", required: true, ty: 88 }] }, // 146
-    SchemaNode::Ref { label: "Form.Reply", node: 146 }, // 147
-    SchemaNode::Obj { fields: &[FieldSpec { name: "prompt", required: true, ty: 0 }] }, // 148
-    SchemaNode::Obj { fields: &[FieldSpec { name: "delivery", required: true, ty: 129 }] }, // 149
-    SchemaNode::Obj { fields: &[FieldSpec { name: "resume", required: false, ty: 72 }] }, // 150
+    }, // 144
+    SchemaNode::Ref { label: "Form.CreatePayload", node: 144 }, // 145
+    SchemaNode::Obj { fields: &[FieldSpec { name: "message", required: false, ty: 0 }] }, // 146
+    SchemaNode::Obj { fields: &[FieldSpec { name: "answer", required: true, ty: 88 }] }, // 147
+    SchemaNode::Ref { label: "Form.Reply", node: 147 }, // 148
+    SchemaNode::Obj { fields: &[FieldSpec { name: "prompt", required: true, ty: 0 }] }, // 149
+    SchemaNode::Obj { fields: &[FieldSpec { name: "delivery", required: true, ty: 130 }] }, // 150
+    SchemaNode::Obj { fields: &[FieldSpec { name: "resume", required: false, ty: 72 }] }, // 151
     SchemaNode::Literal(&[
         "agent-switched",
         "model-switched",
@@ -603,87 +604,87 @@ pub static NODES: &[SchemaNode] = &[
         "shell",
         "assistant",
         "compaction",
-    ]), // 151
+    ]), // 152
     SchemaNode::Obj {
         fields: &[
             FieldSpec { name: "limit", required: false, ty: 0 },
-            FieldSpec { name: "order", required: false, ty: 107 },
+            FieldSpec { name: "order", required: false, ty: 108 },
             FieldSpec { name: "cursor", required: false, ty: 0 },
-            FieldSpec { name: "type", required: false, ty: 151 },
+            FieldSpec { name: "type", required: false, ty: 152 },
         ],
-    }, // 152
-    SchemaNode::Obj { fields: &[FieldSpec { name: "model", required: true, ty: 14 }] }, // 153
+    }, // 153
+    SchemaNode::Obj { fields: &[FieldSpec { name: "model", required: true, ty: 14 }] }, // 154
     SchemaNode::Obj {
         fields: &[
             FieldSpec { name: "directory", required: true, ty: 0 },
-            FieldSpec { name: "delivery", required: false, ty: 130 },
+            FieldSpec { name: "delivery", required: false, ty: 131 },
         ],
-    }, // 154
-    SchemaNode::Pattern { prefix: "per" }, // 155
-    SchemaNode::Nullable(155), // 156
-    SchemaNode::Literal(&["tool"]), // 157
+    }, // 155
+    SchemaNode::Pattern { prefix: "per" }, // 156
+    SchemaNode::Nullable(156), // 157
+    SchemaNode::Literal(&["tool"]), // 158
     SchemaNode::Obj {
         fields: &[
-            FieldSpec { name: "type", required: true, ty: 157 },
+            FieldSpec { name: "type", required: true, ty: 158 },
             FieldSpec { name: "messageID", required: true, ty: 0 },
             FieldSpec { name: "id", required: true, ty: 0 },
         ],
-    }, // 158
-    SchemaNode::Ref { label: "Permission.Source", node: 158 }, // 159
+    }, // 159
+    SchemaNode::Ref { label: "Permission.Source", node: 159 }, // 160
     SchemaNode::Obj {
         fields: &[
-            FieldSpec { name: "id", required: false, ty: 156 },
+            FieldSpec { name: "id", required: false, ty: 157 },
             FieldSpec { name: "action", required: true, ty: 0 },
             FieldSpec { name: "resources", required: true, ty: 19 },
             FieldSpec { name: "save", required: false, ty: 19 },
             FieldSpec { name: "metadata", required: false, ty: 46 },
-            FieldSpec { name: "source", required: false, ty: 159 },
+            FieldSpec { name: "source", required: false, ty: 160 },
             FieldSpec { name: "agent", required: false, ty: 1 },
         ],
-    }, // 160
-    SchemaNode::Literal(&["once", "always", "reject"]), // 161
-    SchemaNode::Ref { label: "Permission.Reply", node: 161 }, // 162
+    }, // 161
+    SchemaNode::Literal(&["once", "always", "reject"]), // 162
+    SchemaNode::Ref { label: "Permission.Reply", node: 162 }, // 163
     SchemaNode::Obj {
         fields: &[
-            FieldSpec { name: "decision", required: true, ty: 162 },
+            FieldSpec { name: "decision", required: true, ty: 163 },
             FieldSpec { name: "message", required: false, ty: 1 },
         ],
-    }, // 163
+    }, // 164
     SchemaNode::Obj {
         fields: &[
-            FieldSpec { name: "id", required: false, ty: 132 },
+            FieldSpec { name: "id", required: false, ty: 133 },
             FieldSpec { name: "text", required: true, ty: 0 },
-            FieldSpec { name: "files", required: false, ty: 121 },
-            FieldSpec { name: "agents", required: false, ty: 124 },
-            FieldSpec { name: "skills", required: false, ty: 127 },
+            FieldSpec { name: "files", required: false, ty: 122 },
+            FieldSpec { name: "agents", required: false, ty: 125 },
+            FieldSpec { name: "skills", required: false, ty: 128 },
             FieldSpec { name: "metadata", required: false, ty: 46 },
-            FieldSpec { name: "delivery", required: false, ty: 130 },
+            FieldSpec { name: "delivery", required: false, ty: 131 },
             FieldSpec { name: "resume", required: false, ty: 76 },
         ],
-    }, // 164
+    }, // 165
     SchemaNode::Obj {
         fields: &[
             FieldSpec { name: "messageID", required: true, ty: 54 },
             FieldSpec { name: "files", required: false, ty: 76 },
         ],
-    }, // 165
-    SchemaNode::Obj {
-        fields: &[
-            FieldSpec { name: "id", required: false, ty: 132 },
-            FieldSpec { name: "command", required: true, ty: 0 },
-        ],
     }, // 166
     SchemaNode::Obj {
         fields: &[
-            FieldSpec { name: "id", required: false, ty: 132 },
+            FieldSpec { name: "id", required: false, ty: 133 },
+            FieldSpec { name: "command", required: true, ty: 0 },
+        ],
+    }, // 167
+    SchemaNode::Obj {
+        fields: &[
+            FieldSpec { name: "id", required: false, ty: 133 },
             FieldSpec { name: "text", required: true, ty: 0 },
             FieldSpec { name: "description", required: false, ty: 1 },
             FieldSpec { name: "metadata", required: false, ty: 46 },
-            FieldSpec { name: "delivery", required: false, ty: 130 },
+            FieldSpec { name: "delivery", required: false, ty: 131 },
             FieldSpec { name: "resume", required: false, ty: 76 },
         ],
-    }, // 167
-    SchemaNode::Obj { fields: &[FieldSpec { name: "idle", required: true, ty: 39 }] }, // 168
+    }, // 168
+    SchemaNode::Obj { fields: &[FieldSpec { name: "idle", required: true, ty: 39 }] }, // 169
     SchemaNode::Obj {
         fields: &[
             FieldSpec { name: "command", required: true, ty: 0 },
@@ -691,52 +692,52 @@ pub static NODES: &[SchemaNode] = &[
             FieldSpec { name: "timeout", required: false, ty: 55 },
             FieldSpec { name: "metadata", required: false, ty: 46 },
         ],
-    }, // 169
+    }, // 170
     SchemaNode::Obj {
         fields: &[
             FieldSpec { name: "location", required: false, ty: 2 },
             FieldSpec { name: "cursor", required: false, ty: 0 },
             FieldSpec { name: "limit", required: false, ty: 0 },
         ],
-    }, // 170
+    }, // 171
     SchemaNode::Obj {
         fields: &[
             FieldSpec { name: "location", required: false, ty: 2 },
             FieldSpec { name: "search", required: false, ty: 0 },
             FieldSpec { name: "limit", required: false, ty: 0 },
         ],
-    }, // 171
-    SchemaNode::Literal(&["working", "branch", "committed"]), // 172
-    SchemaNode::Ref { label: "Vcs.Mode", node: 172 }, // 173
+    }, // 172
+    SchemaNode::Literal(&["working", "branch", "committed"]), // 173
+    SchemaNode::Ref { label: "Vcs.Mode", node: 173 }, // 174
     SchemaNode::Obj {
         fields: &[
             FieldSpec { name: "location", required: false, ty: 2 },
-            FieldSpec { name: "mode", required: true, ty: 173 },
+            FieldSpec { name: "mode", required: true, ty: 174 },
             FieldSpec { name: "base", required: false, ty: 0 },
             FieldSpec { name: "context", required: false, ty: 0 },
         ],
-    }, // 174
+    }, // 175
     SchemaNode::Obj {
         fields: &[
             FieldSpec { name: "location", required: false, ty: 2 },
             FieldSpec { name: "provider", required: false, ty: 0 },
         ],
-    }, // 175
+    }, // 176
     SchemaNode::Obj {
         fields: &[
             FieldSpec { name: "query", required: true, ty: 0 },
             FieldSpec { name: "providerID", required: false, ty: 0 },
         ],
-    }, // 176
+    }, // 177
     SchemaNode::Obj {
         fields: &[
             FieldSpec { name: "projectID", required: true, ty: 0 },
             FieldSpec { name: "directory", required: true, ty: 0 },
             FieldSpec { name: "force", required: true, ty: 6 },
         ],
-    }, // 177
-    SchemaNode::Ref { label: "Worktree.RemoveInput", node: 177 }, // 178
-    SchemaNode::Obj { fields: &[FieldSpec { name: "projectID", required: true, ty: 0 }] }, // 179
+    }, // 178
+    SchemaNode::Ref { label: "Worktree.RemoveInput", node: 178 }, // 179
+    SchemaNode::Obj { fields: &[FieldSpec { name: "projectID", required: true, ty: 0 }] }, // 180
     SchemaNode::Obj {
         fields: &[
             FieldSpec { name: "projectID", required: true, ty: 0 },
@@ -745,8 +746,8 @@ pub static NODES: &[SchemaNode] = &[
             FieldSpec { name: "directory", required: false, ty: 0 },
             FieldSpec { name: "name", required: false, ty: 0 },
         ],
-    }, // 180
-    SchemaNode::Ref { label: "Worktree.CreateInput", node: 180 }, // 181
+    }, // 181
+    SchemaNode::Ref { label: "Worktree.CreateInput", node: 181 }, // 182
 ];
 
 pub static ROUTES: &[RouteValidation] = &[
@@ -1081,6 +1082,12 @@ pub static ROUTES: &[RouteValidation] = &[
         params: ParamsValidation::None,
     },
     RouteValidation {
+        operation_id: "plugin.install",
+        body: BodyValidation::Json(95),
+        query: QueryValidation::Params(3),
+        params: ParamsValidation::None,
+    },
+    RouteValidation {
         operation_id: "plugin.list",
         body: BodyValidation::None,
         query: QueryValidation::Params(3),
@@ -1088,7 +1095,7 @@ pub static ROUTES: &[RouteValidation] = &[
     },
     RouteValidation {
         operation_id: "plugin.update",
-        body: BodyValidation::Json(95),
+        body: BodyValidation::Json(96),
         query: QueryValidation::Params(3),
         params: ParamsValidation::None,
     },
@@ -1100,7 +1107,7 @@ pub static ROUTES: &[RouteValidation] = &[
     },
     RouteValidation {
         operation_id: "project.update",
-        body: BodyValidation::Json(100),
+        body: BodyValidation::Json(101),
         query: QueryValidation::None,
         params: ParamsValidation::None,
     },
@@ -1119,7 +1126,7 @@ pub static ROUTES: &[RouteValidation] = &[
     RouteValidation {
         operation_id: "pty.connect",
         body: BodyValidation::None,
-        query: QueryValidation::Params(104),
+        query: QueryValidation::Params(105),
         params: ParamsValidation::Patterns(&[ParamSpec { name: "ptyID", prefix: "pty" }]),
     },
     RouteValidation {
@@ -1130,7 +1137,7 @@ pub static ROUTES: &[RouteValidation] = &[
     },
     RouteValidation {
         operation_id: "pty.create",
-        body: BodyValidation::Json(101),
+        body: BodyValidation::Json(102),
         query: QueryValidation::Params(3),
         params: ParamsValidation::None,
     },
@@ -1154,7 +1161,7 @@ pub static ROUTES: &[RouteValidation] = &[
     },
     RouteValidation {
         operation_id: "pty.update",
-        body: BodyValidation::Json(103),
+        body: BodyValidation::Json(104),
         query: QueryValidation::Params(3),
         params: ParamsValidation::Patterns(&[ParamSpec { name: "ptyID", prefix: "pty" }]),
     },
@@ -1166,7 +1173,7 @@ pub static ROUTES: &[RouteValidation] = &[
     },
     RouteValidation {
         operation_id: "rpc.call",
-        body: BodyValidation::Json(106),
+        body: BodyValidation::Json(107),
         query: QueryValidation::Params(3),
         params: ParamsValidation::None,
     },
@@ -1262,13 +1269,13 @@ pub static ROUTES: &[RouteValidation] = &[
     },
     RouteValidation {
         operation_id: "session.command",
-        body: BodyValidation::Json(131),
+        body: BodyValidation::Json(132),
         query: QueryValidation::None,
         params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
         operation_id: "session.compact",
-        body: BodyValidation::Json(133),
+        body: BodyValidation::Json(134),
         query: QueryValidation::None,
         params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
@@ -1280,37 +1287,37 @@ pub static ROUTES: &[RouteValidation] = &[
     },
     RouteValidation {
         operation_id: "session.create",
-        body: BodyValidation::Json(114),
+        body: BodyValidation::Json(115),
         query: QueryValidation::None,
         params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "session.diff",
         body: BodyValidation::None,
-        query: QueryValidation::Params(134),
+        query: QueryValidation::Params(135),
         params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
         operation_id: "session.environment",
-        body: BodyValidation::Json(135),
+        body: BodyValidation::Json(136),
         query: QueryValidation::None,
         params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
         operation_id: "session.fork",
-        body: BodyValidation::Json(136),
+        body: BodyValidation::Json(137),
         query: QueryValidation::None,
         params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
         operation_id: "session.form.cancel",
         body: BodyValidation::None,
-        query: QueryValidation::Params(145),
+        query: QueryValidation::Params(146),
         params: ParamsValidation::Patterns(&[ParamSpec { name: "formID", prefix: "frm_" }]),
     },
     RouteValidation {
         operation_id: "session.form.create",
-        body: BodyValidation::Json(144),
+        body: BodyValidation::Json(145),
         query: QueryValidation::None,
         params: ParamsValidation::None,
     },
@@ -1328,13 +1335,13 @@ pub static ROUTES: &[RouteValidation] = &[
     },
     RouteValidation {
         operation_id: "session.form.reply",
-        body: BodyValidation::Json(147),
+        body: BodyValidation::Json(148),
         query: QueryValidation::None,
         params: ParamsValidation::Patterns(&[ParamSpec { name: "formID", prefix: "frm_" }]),
     },
     RouteValidation {
         operation_id: "session.generate",
-        body: BodyValidation::Json(148),
+        body: BodyValidation::Json(149),
         query: QueryValidation::None,
         params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
@@ -1361,7 +1368,7 @@ pub static ROUTES: &[RouteValidation] = &[
     },
     RouteValidation {
         operation_id: "session.inbox.update",
-        body: BodyValidation::Json(149),
+        body: BodyValidation::Json(150),
         query: QueryValidation::None,
         params: ParamsValidation::Patterns(&[
             ParamSpec { name: "sessionID", prefix: "ses" },
@@ -1371,13 +1378,13 @@ pub static ROUTES: &[RouteValidation] = &[
     RouteValidation {
         operation_id: "session.interrupt",
         body: BodyValidation::None,
-        query: QueryValidation::Params(150),
+        query: QueryValidation::Params(151),
         params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
         operation_id: "session.list",
         body: BodyValidation::None,
-        query: QueryValidation::Params(110),
+        query: QueryValidation::Params(111),
         params: ParamsValidation::None,
     },
     RouteValidation {
@@ -1398,18 +1405,18 @@ pub static ROUTES: &[RouteValidation] = &[
     RouteValidation {
         operation_id: "session.message.list",
         body: BodyValidation::None,
-        query: QueryValidation::Params(152),
+        query: QueryValidation::Params(153),
         params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
         operation_id: "session.move",
-        body: BodyValidation::Json(154),
+        body: BodyValidation::Json(155),
         query: QueryValidation::None,
         params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
         operation_id: "session.permission.create",
-        body: BodyValidation::Json(160),
+        body: BodyValidation::Json(161),
         query: QueryValidation::None,
         params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
@@ -1430,7 +1437,7 @@ pub static ROUTES: &[RouteValidation] = &[
     },
     RouteValidation {
         operation_id: "session.permission.reply",
-        body: BodyValidation::Json(163),
+        body: BodyValidation::Json(164),
         query: QueryValidation::None,
         params: ParamsValidation::Patterns(&[
             ParamSpec { name: "sessionID", prefix: "ses" },
@@ -1439,7 +1446,7 @@ pub static ROUTES: &[RouteValidation] = &[
     },
     RouteValidation {
         operation_id: "session.prompt",
-        body: BodyValidation::Json(164),
+        body: BodyValidation::Json(165),
         query: QueryValidation::None,
         params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
@@ -1463,49 +1470,49 @@ pub static ROUTES: &[RouteValidation] = &[
     },
     RouteValidation {
         operation_id: "session.revert.stage",
-        body: BodyValidation::Json(165),
-        query: QueryValidation::None,
-        params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
-    },
-    RouteValidation {
-        operation_id: "session.shell",
         body: BodyValidation::Json(166),
         query: QueryValidation::None,
         params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
-        operation_id: "session.switchAgent",
-        body: BodyValidation::Json(116),
-        query: QueryValidation::None,
-        params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
-    },
-    RouteValidation {
-        operation_id: "session.switchModel",
-        body: BodyValidation::Json(153),
-        query: QueryValidation::None,
-        params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
-    },
-    RouteValidation {
-        operation_id: "session.synthetic",
+        operation_id: "session.shell",
         body: BodyValidation::Json(167),
         query: QueryValidation::None,
         params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
-        operation_id: "session.update",
-        body: BodyValidation::Json(115),
+        operation_id: "session.switchAgent",
+        body: BodyValidation::Json(117),
         query: QueryValidation::None,
         params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
-        operation_id: "session.view",
+        operation_id: "session.switchModel",
+        body: BodyValidation::Json(154),
+        query: QueryValidation::None,
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
+    },
+    RouteValidation {
+        operation_id: "session.synthetic",
         body: BodyValidation::Json(168),
         query: QueryValidation::None,
         params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
     },
     RouteValidation {
-        operation_id: "shell.create",
+        operation_id: "session.update",
+        body: BodyValidation::Json(116),
+        query: QueryValidation::None,
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
+    },
+    RouteValidation {
+        operation_id: "session.view",
         body: BodyValidation::Json(169),
+        query: QueryValidation::None,
+        params: ParamsValidation::Patterns(&[ParamSpec { name: "sessionID", prefix: "ses" }]),
+    },
+    RouteValidation {
+        operation_id: "shell.create",
+        body: BodyValidation::Json(170),
         query: QueryValidation::Params(3),
         params: ParamsValidation::None,
     },
@@ -1524,7 +1531,7 @@ pub static ROUTES: &[RouteValidation] = &[
     RouteValidation {
         operation_id: "shell.output",
         body: BodyValidation::None,
-        query: QueryValidation::Params(170),
+        query: QueryValidation::Params(171),
         params: ParamsValidation::Patterns(&[ParamSpec { name: "id", prefix: "sh_" }]),
     },
     RouteValidation {
@@ -1548,13 +1555,13 @@ pub static ROUTES: &[RouteValidation] = &[
     RouteValidation {
         operation_id: "vcs.branch.list",
         body: BodyValidation::None,
-        query: QueryValidation::Params(171),
+        query: QueryValidation::Params(172),
         params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "vcs.diff",
         body: BodyValidation::None,
-        query: QueryValidation::Params(174),
+        query: QueryValidation::Params(175),
         params: ParamsValidation::None,
     },
     RouteValidation {
@@ -1566,7 +1573,7 @@ pub static ROUTES: &[RouteValidation] = &[
     RouteValidation {
         operation_id: "vcs.init",
         body: BodyValidation::None,
-        query: QueryValidation::Params(175),
+        query: QueryValidation::Params(176),
         params: ParamsValidation::None,
     },
     RouteValidation {
@@ -1583,31 +1590,31 @@ pub static ROUTES: &[RouteValidation] = &[
     },
     RouteValidation {
         operation_id: "websearch.query",
-        body: BodyValidation::Json(176),
+        body: BodyValidation::Json(177),
         query: QueryValidation::Params(3),
         params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "worktree.create",
-        body: BodyValidation::Json(181),
+        body: BodyValidation::Json(182),
         query: QueryValidation::None,
         params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "worktree.list",
         body: BodyValidation::None,
-        query: QueryValidation::Params(179),
+        query: QueryValidation::Params(180),
         params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "worktree.refresh",
-        body: BodyValidation::Json(179),
+        body: BodyValidation::Json(180),
         query: QueryValidation::None,
         params: ParamsValidation::None,
     },
     RouteValidation {
         operation_id: "worktree.remove",
-        body: BodyValidation::Json(178),
+        body: BodyValidation::Json(179),
         query: QueryValidation::None,
         params: ParamsValidation::None,
     },

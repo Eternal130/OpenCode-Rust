@@ -62,8 +62,8 @@ pub fn generate_from_spec(spec_json: &str) -> Generated {
     let sha = oc_util::hash::sha256_hex(spec_json);
     let operations = model::parse_operations(&spec);
     assert!(
-        operations.len() == 141,
-        "expected 141 operations from the pinned spec, found {} — \
+        operations.len() == 142,
+        "expected 142 operations from the pinned spec, found {} — \
          the spec drifted; re-pin deliberately and update this check",
         operations.len()
     );

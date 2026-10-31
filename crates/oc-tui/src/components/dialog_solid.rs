@@ -209,6 +209,10 @@ enum Family {
     /// dialog.prompt({ title: "/btw", placeholder: "Ask anything"
     /// })`): the prompt tree with the /btw chrome.
     BtwPrompt,
+    /// G-29: the plugin install prompt (`plugins.install`): the
+    /// prompt tree titled "Install plugin" over the package-spec
+    /// input.
+    PluginInstallPrompt,
     /// RE-13: `/btw`'s `Answer` dialog (btw.tsx:88-172): the `/btw`
     /// header + question, the markdown answer window, the `c copy /
     /// j/k ↑/↓ scroll` footer.
@@ -404,6 +408,8 @@ fn content_height(inputs: &DialogInputs) -> usize {
         // RE-13: the /btw question prompt — the same prompt tree
         // (title, gap, input, gap, footer, the footer's pad).
         Family::BtwPrompt => 6,
+        // G-29: the plugin install prompt — the same prompt tree.
+        Family::PluginInstallPrompt => 6,
         // title, gap, input, gap, hints, gap, footer, pad.
         Family::ConnectPrompt => inputs.hint_lines.len() + 8,
         // title, gap, wrapped lines, hint paddingBottom, root gap,
@@ -1945,6 +1951,12 @@ fn chrome_element(
         Family::ImagePreview => image_preview_builder(&family_inputs),
         Family::Pair => pair_builder(&family_inputs),
         Family::BtwPrompt => prompt_builder_titled(&family_inputs, "/btw", "Ask anything", false),
+        Family::PluginInstallPrompt => prompt_builder_titled(
+            &family_inputs,
+            "Install plugin",
+            "npm package or git specifier",
+            false,
+        ),
         Family::BtwAnswer => btw_answer_builder(&family_inputs),
     };
     box_()
@@ -2160,6 +2172,7 @@ fn dialog_chrome_button_hits(
         | Family::ImagePreview
         | Family::Pair
         | Family::BtwPrompt
+        | Family::PluginInstallPrompt
         | Family::BtwAnswer => ("esc", 2),
         Family::Help => ("esc/enter", 2),
     };
@@ -2209,6 +2222,8 @@ fn build_inputs(
         // RE-13: the /btw pair — the question prompt + the Answer
         // markdown dialog (btw.tsx:64-65, 88-172).
         DialogKind::BtwPrompt => Family::BtwPrompt,
+        // G-29: the plugin install prompt.
+        DialogKind::PluginInstall => Family::PluginInstallPrompt,
         DialogKind::BtwAnswer { .. } => Family::BtwAnswer,
         // Lane FINAL: the connect-flow prompts (KeyMethod's API-key
         // input / OAuthCode's code entry) — the prompt tree with a
@@ -2308,7 +2323,7 @@ fn build_inputs(
         // RE-13: the /btw question prompt — the prompt tree's value
         // arm (title "/btw" + placeholder "Ask anything" are the
         // builder's, btw.tsx:65).
-        Family::BtwPrompt => DialogInputs {
+        Family::BtwPrompt | Family::PluginInstallPrompt => DialogInputs {
             family,
             box_width,
             colors,

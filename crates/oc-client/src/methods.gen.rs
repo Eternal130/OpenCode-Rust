@@ -2,7 +2,7 @@
 // Regenerate with: cargo run -p openapi-gen
 //! Namespaced oc-client methods for all HttpApi operations.
 //! Mirrors the v2 SDK namespaces; every method maps 1:1 onto a route in
-//! `oc_server::routes_gen::ROUTES` (operationId parity, 141/141).
+//! `oc_server::routes_gen::ROUTES` (operationId parity, 142/142).
 #![allow(clippy::too_many_lines, clippy::struct_excessive_bools)]
 #![allow(unused_mut, clippy::must_use_candidate, clippy::vec_init_then_push)]
 #![allow(clippy::doc_markdown)]
@@ -64,6 +64,7 @@ pub static OPERATION_IDS: &[&str] = &[
     "permission.saved.remove",
     "persistentPty.connect",
     "plugin.check",
+    "plugin.install",
     "plugin.list",
     "plugin.update",
     "project.list",
@@ -2175,6 +2176,35 @@ pub mod plugin {
                     body: crate::transport::Body::Json(&body_value),
                     success: 200,
                     declared: &[400, 401],
+                })
+                .await
+        }
+
+        /// POST /api/plugin/install — operationId `plugin.install`
+        /// Declared errors: `400` unknown, `401` UnauthorizedErrorEncoded, `503` ServiceUnavailableErrorEncoded
+        pub async fn install(
+            &self,
+            query: &crate::types::PluginInstallQuery,
+            body: &crate::types::PluginInstallBody,
+        ) -> Result<(), crate::ClientError> {
+            let mut pairs: Vec<(String, String)> = Vec::new();
+            if let Some(loc) = &query.location {
+                if let Some(dir) = &loc.directory {
+                    pairs.push(("location[directory]".to_owned(), dir.clone()));
+                }
+            }
+            let mut hdrs: Vec<(&'static str, String)> = Vec::new();
+            let body_value = crate::transport::encode_body(body)?;
+            self.client
+                .execute_empty(&crate::transport::Call {
+                    method: reqwest::Method::POST,
+                    path: "/api/plugin/install",
+                    path_params: &[],
+                    query: &pairs,
+                    headers: &hdrs,
+                    body: crate::transport::Body::Json(&body_value),
+                    success: 204,
+                    declared: &[400, 401, 503],
                 })
                 .await
         }

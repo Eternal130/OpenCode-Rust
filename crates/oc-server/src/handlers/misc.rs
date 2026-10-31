@@ -22,6 +22,7 @@ pub fn routes() -> axum::Router<SharedState> {
         .route("/api/plugin", axum::routing::get(plugin_list))
         .route("/api/plugin/check", axum::routing::post(plugin_check))
         .route("/api/plugin/update", axum::routing::post(plugin_update))
+        .route("/api/plugin/install", axum::routing::post(plugin_install))
         // rpc
         .route("/api/rpc/:rpcID/:method", axum::routing::post(rpc_call))
         // websearch
@@ -159,8 +160,61 @@ async fn plugin_check(
 ) -> Result<Response, ApiError> {
     let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let _services = services(&state, &location).await?;
-    let _ = body["target"].as_str();
-    Ok(json_location_data(&location.as_path().to_string_lossy(), Value::Array(Vec::new())))
+    // handlers/plugin.ts (plugin.check): the inventory's PACKAGE sources
+    // are the check targets, optionally narrowed to one `target`; a named
+    // target outside the inventory is a 400 naming it.
+    let mut inventory: Vec<String> =
+        state.plugins.iter().flat_map(|boot| boot.package_targets()).collect();
+    inventory.sort();
+    inventory.dedup();
+    let targets: Vec<String> = match body["target"].as_str() {
+        Some(target) if !target.is_empty() => {
+            if !inventory.iter().any(|seen| seen == target) {
+                return Err(crate::errors::invalid_request_message_field(
+                    format!("Plugin package is not in the current server inventory: {target}"),
+                    "target",
+                ));
+            }
+            vec![target.to_owned()]
+        }
+        _ => inventory,
+    };
+
+    // The ref passes `{refresh: true}` (the 24 h throttle must not mask a
+    // user-asked check); the probe runs the npm registry lookup, so it
+    // parks on the blocking pool.
+    let cache = oc_plugin_host::update_cache();
+    let root = oc_plugin_host::install_root();
+    let mut outdated: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for target in &targets {
+        let result = tokio::task::spawn_blocking({
+            let target = target.clone();
+            let root = root.clone();
+            move || cache.check(&target, &root, &oc_plugin_host::InstallOptions::default(), true)
+        })
+        .await;
+        let flagged = matches!(result, Ok(true));
+        if flagged {
+            outdated.insert(target.clone());
+        }
+    }
+
+    // The response is the inventory with fresh `outdated` flags applied
+    // directly (the ref's `mutate(result.data)` — the caller must not
+    // wait for a `plugin.updated` event).
+    let mut plugins = state.plugins.as_ref().map_or_else(Vec::new, |boot| boot.list_info());
+    for info in &mut plugins {
+        if let oc_schema::misc::PluginSource::Package { target, outdated: flag, .. } =
+            &mut info.source
+        {
+            if outdated.contains(target) {
+                *flag = Some(true);
+            }
+        }
+    }
+    let data: Vec<Value> =
+        plugins.iter().map(|info| serde_json::to_value(info).unwrap_or(Value::Null)).collect();
+    Ok(json_location_data(&location.as_path().to_string_lossy(), Value::Array(data)))
 }
 
 async fn plugin_update(
@@ -175,9 +229,7 @@ async fn plugin_update(
     // shape; a malformed body never reaches here.
     let targets: Vec<String> = body["targets"]
         .as_array()
-        .map(|array| {
-            array.iter().filter_map(Value::as_str).map(str::to_owned).collect()
-        })
+        .map(|array| array.iter().filter_map(Value::as_str).map(str::to_owned).collect())
         .unwrap_or_default();
 
     // handlers/plugin.ts (plugin.update): targets outside the current
@@ -234,10 +286,143 @@ async fn plugin_update(
     // own runtime, so it runs off the async workers), the event is the
     // typed public `PluginEvent::Updated` registered on the bus (RF-02).
     if let Some(boot) = state.plugins.clone() {
-        let _ = tokio::task::spawn_blocking(move || crate::plugins::reload_after_update(&boot))
-            .await;
+        let _ =
+            tokio::task::spawn_blocking(move || crate::plugins::reload_after_update(&boot)).await;
     }
-    if let Some(definition) = oc_core::bus::registry::by_type(oc_core::bus::registry::PLUGIN_UPDATED)
+    if let Some(definition) =
+        oc_core::bus::registry::by_type(oc_core::bus::registry::PLUGIN_UPDATED)
+    {
+        let options = oc_core::bus::PublishOptions { global: true, ..Default::default() };
+        let _ = state.engine.bus.publish(definition, serde_json::json!({}), options).await;
+    }
+    Ok(no_content())
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/plugin/install — G-29 (the TUI plugin manager's install flow)
+// ---------------------------------------------------------------------------
+
+/// The global config candidates (`opencode plugin add`'s resolution order
+/// — the user-scope configuration file the installer appends to).
+fn global_config_path() -> std::path::PathBuf {
+    let directory = oc_util::global_roots::resolve().config;
+    let candidates = [
+        directory.join("opencode.json"),
+        directory.join("opencode.jsonc"),
+        directory.join(".opencode").join("opencode.json"),
+        directory.join(".opencode").join("opencode.jsonc"),
+    ];
+    candidates
+        .iter()
+        .find(|candidate| candidate.is_file())
+        .cloned()
+        .unwrap_or_else(|| candidates[0].clone())
+}
+
+/// Append `target` to the global config's `plugins[]` (the CLI `plugin
+/// add` server arm): comment-preserving edit via the jsonc editor, a
+/// parse failure or an unwritable file rolls into the caller's error.
+fn append_global_plugin(target: &str) -> Result<(), String> {
+    let path = global_config_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let existing = std::fs::read_to_string(&path).unwrap_or_else(|_| "{}".to_owned());
+    let parsed = oc_core::cli_config::jsonc::parse_jsonc(&existing)
+        .map_err(|error| format!("{} is not parseable: {error}", path.display()))?;
+    let mut plugins: Vec<Value> =
+        parsed.get("plugins").and_then(Value::as_array).cloned().unwrap_or_default();
+    if plugins.iter().any(|entry| entry.as_str() == Some(target)) {
+        return Ok(()); // already configured — idempotent
+    }
+    plugins.push(Value::String(target.to_owned()));
+    let merged = serde_json::to_value(plugins).expect("plugins array serializes");
+    match oc_core::config::jsonc_edit::set_path(&existing, &["plugins"], Some(&merged)) {
+        Ok(Some(mut updated)) => {
+            if !updated.ends_with('\n') {
+                updated.push('\n');
+            }
+            std::fs::write(&path, updated).map_err(|error| error.to_string())
+        }
+        Ok(None) => Ok(()),
+        Err(_) => Err(format!(
+            "{} does not contain a JSON object at the root, so it cannot be edited in place",
+            path.display()
+        )),
+    }
+}
+
+/// The `plugin add` target guard (the CLI's `add`): directive-ish specs
+/// (`*`, `name.*`, `-flag`, the reserved `opencode.*` namespace) are not
+/// installable package targets.
+fn installable_target(target: &str) -> bool {
+    !(target.starts_with('-')
+        || target == "*"
+        || target.ends_with(".*")
+        || target.starts_with("opencode."))
+}
+
+async fn plugin_install(
+    State(state): State<SharedState>,
+    uri: Uri,
+    headers: HeaderMap,
+    axum::Json(body): axum::Json<Value>,
+) -> Result<Response, ApiError> {
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
+    let _services = services(&state, &location).await?;
+    // The generated request validation owns the `{target: string}` shape.
+    let target = body["target"].as_str().unwrap_or_default().trim().to_owned();
+    if !installable_target(&target) {
+        return Err(crate::errors::invalid_request_message_field(
+            "Plugin target must be an npm registry package or Git package specifier".to_owned(),
+            "target",
+        ));
+    }
+
+    // The pinned install (the CLI `plugin add` path — frozen when a
+    // lockfile exists, reuse-first): npm/bun spawns park on the
+    // blocking pool.
+    let install_target = target.clone();
+    let install = tokio::task::spawn_blocking(move || {
+        oc_plugin_host::install(&install_target, &oc_plugin_host::InstallOptions::default())
+    })
+    .await
+    .map_err(|error| {
+        ApiError::service_unavailable(
+            format!("Failed to install plugin package: {target}: {error}"),
+            Some("plugin"),
+        )
+    })?;
+    if let Err(error) = install {
+        return Err(ApiError::service_unavailable(
+            format!("Failed to install plugin package: {target}: {error}"),
+            Some("plugin"),
+        ));
+    }
+
+    // Persist into the user scope (`opencode plugin add`'s config leg);
+    // a config write failure fails the request (the package is cached,
+    // but the plugin would silently vanish on the next boot).
+    if let Err(error) = append_global_plugin(&target) {
+        return Err(ApiError::service_unavailable(
+            format!("Failed to add plugin to the global configuration: {error}"),
+            Some("plugin"),
+        ));
+    }
+
+    // Activate in the running server: load the new entry's generation
+    // into the live host (G-05's add leg) and swap the resolution cell
+    // so `/api/plugin` lists it immediately; contained like every
+    // reload — a failure logs and keeps the previous state.
+    if let Some(boot) = state.plugins.clone() {
+        let boot_target = target.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            crate::plugins::activate_installed_plugin(&boot, &boot_target)
+        })
+        .await;
+    }
+    if let Some(definition) =
+        oc_core::bus::registry::by_type(oc_core::bus::registry::PLUGIN_UPDATED)
     {
         let options = oc_core::bus::PublishOptions { global: true, ..Default::default() };
         let _ = state.engine.bus.publish(definition, serde_json::json!({}), options).await;
