@@ -445,29 +445,95 @@ async fn boot_session_ids(
     }
 }
 
-/// `redactConfig` (debug/redact.ts): mask secret-ish values.
+/// `redactConfig` (debug/redact.ts): mask secret-ish values. The
+/// `headers` flag is sticky through `headers` sub-objects (ref
+/// `headers || key.toLowerCase() === "headers"`).
 fn redact_config(value: serde_json::Value) -> serde_json::Value {
+    redact_config_inner(value, false)
+}
+
+fn redact_config_inner(value: serde_json::Value, headers: bool) -> serde_json::Value {
     match value {
         serde_json::Value::Object(map) => {
             serde_json::Map::from_iter(map.into_iter().map(|(key, value)| {
-                let redacted =
-                    if is_secret_key(&key) && value.as_str().is_some_and(|s| !s.is_empty()) {
-                        serde_json::Value::String("***".to_owned())
+                let redacted = if value.as_str().is_some_and(|s| !s.is_empty()) {
+                    if headers || is_secret_key(&key) {
+                        Some(serde_json::Value::String("***".to_owned()))
                     } else {
-                        redact_config(value)
-                    };
+                        value.as_str().and_then(redact_url).map(serde_json::Value::String)
+                    }
+                } else {
+                    None
+                };
+                let redacted = redacted.unwrap_or_else(|| {
+                    redact_config_inner(value, headers || key.to_ascii_lowercase() == "headers")
+                });
                 (key, redacted)
             }))
             .into()
         }
-        serde_json::Value::Array(items) => items.into_iter().map(redact_config).collect(),
+        serde_json::Value::Array(items) => {
+            items.into_iter().map(|item| redact_config_inner(item, headers)).collect()
+        }
         other => other,
     }
 }
 
+/// ref redact.ts:16-21: an http(s) URL value is masked whole when it
+/// carries userinfo or any secret-looking query param name.
+fn redact_url(value: &str) -> Option<String> {
+    // ^https?:\/\//i — only http(s) URL values are considered.
+    let is_http = value.len() >= 8 && value[..8].eq_ignore_ascii_case("https://");
+    let is_https = value.len() >= 7 && value[..7].eq_ignore_ascii_case("http://");
+    if !is_http && !is_https {
+        return None;
+    }
+    let url = reqwest::Url::parse(value).ok()?;
+    if !url.username().is_empty() || url.password().is_some_and(|p| !p.is_empty()) {
+        return Some("***".to_owned());
+    }
+    for (name, _) in url.query_pairs() {
+        if is_secret_key(&name) {
+            return Some("***".to_owned());
+        }
+    }
+    None
+}
+
+/// ref redact.ts:3 secretName —
+/// /(?:api.?key|secret|password|token$|authorization$|cookie$|credential|private.?key)/i
+/// (contains for the first two groups, END-ANCHORED for
+/// token/authorization/cookie).
 fn is_secret_key(key: &str) -> bool {
     let key = key.to_ascii_lowercase();
-    ["apikey", "api_key", "secret", "token", "password"].iter().any(|needle| key.contains(needle))
+    if key.contains("apikey")
+        || key.contains("secret")
+        || key.contains("password")
+        || key.contains("credential")
+        || matches_flexible_pair(&key, "api", "key")
+        || matches_flexible_pair(&key, "private", "key")
+    {
+        return true;
+    }
+    key.ends_with("token") || key.ends_with("authorization") || key.ends_with("cookie")
+}
+
+/// `a.?b` — "ab" directly joined, or exactly one character between.
+fn matches_flexible_pair(key: &str, prefix: &str, suffix: &str) -> bool {
+    let mut start = 0;
+    while let Some(found) = key[start..].find(prefix) {
+        let after = start + found + prefix.len();
+        if key[after..].starts_with(suffix) {
+            return true;
+        }
+        if let Some(next) = key[after..].chars().next() {
+            if key[after + next.len_utf8()..].starts_with(suffix) {
+                return true;
+            }
+        }
+        start += found + 1;
+    }
+    false
 }
 
 /// The CLI pair output's QR block (ref commands/handlers/pair.ts
@@ -550,6 +616,81 @@ mod tests {
                 "{shell:?}: script references the binary"
             );
         }
+    }
+
+    // --- G-52: `opencode debug config` redaction parity ----------------
+
+    fn redacted(json: serde_json::Value) -> serde_json::Value {
+        redact_config(json)
+    }
+
+    #[test]
+    fn redact_masks_secret_named_keys() {
+        let value = serde_json::json!({
+            "apiKey": "sk-1",
+            "api_key": "sk-2",
+            "apiKeyVariant": "sk-3",
+            "secret": "s",
+            "mySecretThing": "s",
+            "password": "p",
+            "credentials": "c",
+            "privateKey": "k",
+            "private_key": "k",
+            "myToken": "t",
+            "authorization": "Bearer x",
+            "cookie": "session=1",
+            "harmless": "keep",
+            "tokenMiddle": "keep",
+        });
+        let out = redacted(value);
+        assert_eq!(out["apiKey"], "***");
+        assert_eq!(out["api_key"], "***");
+        assert_eq!(out["apiKeyVariant"], "***");
+        assert_eq!(out["secret"], "***");
+        assert_eq!(out["mySecretThing"], "***");
+        assert_eq!(out["password"], "***");
+        assert_eq!(out["credentials"], "***");
+        assert_eq!(out["privateKey"], "***");
+        assert_eq!(out["private_key"], "***");
+        // token/authorization/cookie are END-anchored in the ref regex.
+        assert_eq!(out["myToken"], "***");
+        assert_eq!(out["authorization"], "***");
+        assert_eq!(out["cookie"], "***");
+        assert_eq!(out["harmless"], "keep");
+        assert_eq!(out["tokenMiddle"], "keep", "token$ is end-anchored");
+    }
+
+    #[test]
+    fn redact_masks_urls_with_userinfo_or_secret_query_params() {
+        let value = serde_json::json!({
+            "endpoint": "https://user:pw@example.com/api",
+            "mcpUrl": "https://example.com/api?api_key=sk-1",
+            "plainUrl": "https://example.com/api?limit=10",
+            "notAUrl": "ftp://user:pw@example.com/x",
+        });
+        let out = redacted(value);
+        assert_eq!(out["endpoint"], "***", "userinfo masked");
+        assert_eq!(out["mcpUrl"], "***", "secret query param masked");
+        assert_eq!(out["plainUrl"], "https://example.com/api?limit=10");
+        assert_eq!(out["notAUrl"], "ftp://user:pw@example.com/x", "only http(s) considered");
+    }
+
+    #[test]
+    fn redact_masks_every_value_under_headers_and_recurses() {
+        let value = serde_json::json!({
+            "provider": {
+                "headers": { "X-Custom": "anything" },
+                "nested": [{ "headers": { "Also": "masked" }, "url": "https://a.example.com" }],
+            }
+        });
+        let out = redacted(value);
+        assert_eq!(out["provider"]["headers"]["X-Custom"], "***");
+        assert_eq!(out["provider"]["nested"][0]["headers"]["Also"], "***");
+        assert_eq!(
+            out["provider"]["nested"][0]["url"],
+            "https://a.example.com",
+            "headers flag does not leak to siblings"
+        );
     }
 
     // --- F15: the pair QR block ---------------------------------------
