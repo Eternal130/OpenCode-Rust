@@ -4134,9 +4134,9 @@ const COMPOSER_TAB_COMMANDS: &[(&str, crate::store::PickerTab)] = &[
 
 impl crate::store::ShellControlSink for HttpShellControlSink {
     /// `shell.get` + the output TAIL (dialog-shell-output.tsx:32-77's
-    /// open page: `cursor = max(0, size − 64KiB)`); the ref's 1 s
-    /// live poll is a documented simplification here — the viewer
-    /// renders one fetch at open time.
+    /// open page: `cursor = max(0, size − 64KiB)`). The run loop's
+    /// periodic tick re-issues this every 1s while the viewer is the
+    /// topmost dialog (the ref's 1s live poll).
     fn view(&self, shell_id: &str) {
         let _ = self.tx.send(LoopRequest::ShellView { shell_id: shell_id.to_owned() });
     }
@@ -7337,6 +7337,11 @@ pub async fn run_with_size(
         .and_then(|path| std::fs::metadata(path).ok())
         .and_then(|meta| meta.modified().ok());
     let mut last_tick = std::time::Instant::now();
+    // G-6 residual — the shell output viewer's 1s live poll (ref
+    // dialog-shell-output.tsx refreshes the open viewer every 1s).
+    // Rides the existing periodic tick like the other polling
+    // features; no dedicated thread.
+    let mut shell_view_polled_at = std::time::Instant::now();
     // Lane TAIL: the theme re-probe cooldown (the ?997 stand-in).
     let mut theme_probe_at = std::time::Instant::now();
     let mut redraw_at = 0u64;
@@ -8418,6 +8423,17 @@ pub async fn run_with_size(
         }
         if ticked {
             last_tick = std::time::Instant::now();
+        }
+        // G-6 residual — the shell output viewer's 1s live refresh
+        // (dialog-shell-output.tsx polls `shell.get` + the tail page
+        // every 1s while the viewer is open; the 64KiB tail cap rides
+        // unchanged inside the fetch). The topmost dialog decides the
+        // target; a closed viewer simply stops polling.
+        if shell_view_polled_at.elapsed() >= std::time::Duration::from_secs(1) {
+            shell_view_polled_at = std::time::Instant::now();
+            if let Some(shell_id) = app.store.active_shell_output_viewer() {
+                let _ = loop_fetch_tx.send(LoopRequest::ShellView { shell_id });
+            }
         }
         // Config reload: keybinds + theme re-merge through the store.
         let mtime = config
