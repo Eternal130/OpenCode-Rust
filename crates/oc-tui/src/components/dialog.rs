@@ -84,6 +84,7 @@ pub fn handle_dialog_key(
                 | DialogKind::IntegrationKey { .. }
                 | DialogKind::IntegrationCode { .. }
                 | DialogKind::BtwPrompt
+                | DialogKind::PluginInstall
         )
     };
     let is_select = match &entry.kind {
@@ -100,6 +101,7 @@ pub fn handle_dialog_key(
         | DialogKind::IntegrationKey { .. }
         | DialogKind::IntegrationCode { .. }
         | DialogKind::BtwPrompt
+        | DialogKind::PluginInstall
         | DialogKind::BtwAnswer { .. }
         | DialogKind::ImagePreview
         | DialogKind::ErrorDetails { .. }
@@ -163,6 +165,7 @@ pub fn handle_dialog_key(
                     | DialogKind::IntegrationKey { .. }
                     | DialogKind::IntegrationCode { .. }
                     | DialogKind::BtwPrompt
+                    | DialogKind::PluginInstall
             );
 
     // -- modal layer (dialog.tsx) -------------------------------------------
@@ -277,7 +280,12 @@ pub fn handle_dialog_key(
     if let DialogKind::Plugins = entry.kind {
         let selected = entry.select.submit(&props).map(|option| option.value.clone());
         if keymap.stroke_triggers(&stroke, "plugins.toggle") {
-            if let Some(id) = selected.filter(|id| store.plugin_fault(id).is_none()) {
+            // G-29: server rows never toggle (the ref's toggle is
+            // TUI-runtime only — a server row's enter is the update
+            // submit, handled at the submit layer).
+            if let Some(id) =
+                selected.filter(|id| !id.starts_with("server:") && store.plugin_fault(id).is_none())
+            {
                 store.plugin_toggle(&id);
                 return DialogKeyOutcome::Consumed;
             }
@@ -883,6 +891,8 @@ pub fn render_overlay_with_options(
         | DialogKind::WorktreeName
         | DialogKind::IntegrationKey { .. }
         | DialogKind::IntegrationCode { .. }
+        // G-29: the plugin install prompt input.
+        | DialogKind::PluginInstall
         // TUI-10/24/25: the custom-key families carry no option rows.
         | DialogKind::ImagePreview
         | DialogKind::ErrorDetails { .. }
@@ -1319,6 +1329,22 @@ pub fn execute_submission(
         // through `plugins.toggle` at the key layer (they never
         // reach this submit), so only faulted rows land here.
         Some(DialogKind::Plugins) => {
+            // G-29: a SERVER row's enter is the ref's `update(entry)`
+            // (plugins.tsx:120-139) — an outdated row fires its
+            // `plugin.update` and the dialog STAYS open (the pending
+            // spinner rides the row); anything else just closes.
+            if let Some(target) = value.strip_prefix("server:") {
+                if store
+                    .server_plugins()
+                    .iter()
+                    .any(|row| row.target == target && row.outdated && !row.updating)
+                {
+                    store.plugins_update_target(target);
+                    return crate::components::command_palette::Dispatch::Handled;
+                }
+                store.clear_dialogs();
+                return crate::components::command_palette::Dispatch::Handled;
+            }
             if let Some(error) = store.plugin_fault(value) {
                 let title = "TUI plugin error".to_owned();
                 let context = format!("Plugin: {value}\nStatus: failed");

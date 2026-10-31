@@ -147,6 +147,12 @@ pub enum DialogKind {
     /// enable/disables the row, faulted rows keep the TUI-24
     /// error-details submit.
     Plugins,
+    /// G-29: the plugin install prompt (`plugins.install` /
+    /// `dialog.plugins.install`): the package-spec input (npm registry
+    /// or git specifier); enter fires `plugin.install` through the
+    /// plugin-server sink, the result lands as a toast + a check
+    /// refresh.
+    PluginInstall,
     /// The tab context menu (lane KM, auditA #8b — v2's
     /// `TabContextMenu`, session-tabs.tsx:372-538): opened by a
     /// right-press at `(x, y)`; `session_id = None` renders the
@@ -1079,6 +1085,72 @@ impl WorktreeSink for RecordingWorktreeSink {
     }
 }
 
+// ---------------------------------------------------------------------------
+// G-29 — the plugin manager's server flows (check / update / install)
+// ---------------------------------------------------------------------------
+
+/// One server-runtime plugin row (the ref PluginsDialog's `server:`
+/// entries — `plugin.list` / `plugin.check` rows with the fresh
+/// `outdated` flags, plugins.tsx:74-81).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ServerPluginRow {
+    /// The package target (the update action's payload).
+    pub target: String,
+    /// The loaded plugin id (`plugin.id ?? source`).
+    pub id: String,
+    /// `plugin.state.status` ("active" | "failed").
+    pub status: String,
+    /// The failure text (`plugin.state.error`).
+    pub error: Option<String>,
+    /// The fresh `source.outdated` flag from `plugin.check`.
+    pub outdated: bool,
+    /// An update is in flight for this row (the pending spinner).
+    pub updating: bool,
+}
+
+/// The plugin-manager server API seam (v2's `client.plugin.check` /
+/// `.update` calls in feature-plugins/system/plugins.tsx:120-176 plus
+/// the install flow's endpoint): the dialog's actions run through it;
+/// tests record, production POSTs through oc-client (spawned —
+/// results land back via the store's result setters, mirroring the
+/// ref's refetch-on-`plugin.updated` flow).
+pub trait PluginServerSink {
+    /// `plugin.check` (the "check for updates" action).
+    fn check(&self);
+    /// `plugin.update` for one target.
+    fn update(&self, target: &str);
+    /// `plugin.install` for one package spec.
+    fn install(&self, target: &str);
+}
+
+/// One recorded [`PluginServerSink`] call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PluginServerCall {
+    Check,
+    Update(String),
+    Install(String),
+}
+
+/// The test sink: records every call.
+#[derive(Debug, Default)]
+pub struct RecordingPluginServerSink {
+    pub calls: std::cell::RefCell<Vec<PluginServerCall>>,
+}
+
+impl PluginServerSink for RecordingPluginServerSink {
+    fn check(&self) {
+        self.calls.borrow_mut().push(PluginServerCall::Check);
+    }
+
+    fn update(&self, target: &str) {
+        self.calls.borrow_mut().push(PluginServerCall::Update(target.to_owned()));
+    }
+
+    fn install(&self, target: &str) {
+        self.calls.borrow_mut().push(PluginServerCall::Install(target.to_owned()));
+    }
+}
+
 /// What one ctrl+d press did in the two-press delete machine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeleteStep {
@@ -1297,6 +1369,14 @@ pub struct Store {
     worktrees: Signal<crate::components::dialog_worktrees::WorktreeDialogState>,
     /// The worktree API seam (the dialog's actions).
     worktree_sink: std::cell::RefCell<Rc<dyn WorktreeSink>>,
+    /// G-29: the plugin manager's server rows (`plugin.list` /
+    /// `plugin.check` results with the fresh `outdated` flags).
+    server_plugins: Signal<Vec<ServerPluginRow>>,
+    /// G-29: a `plugin.check` is in flight (the "checking for
+    /// updates" action state, plugins.tsx:214-218).
+    plugins_checking: Signal<bool>,
+    /// G-29: the plugin-manager server API seam.
+    plugin_server_sink: std::cell::RefCell<Rc<dyn PluginServerSink>>,
     /// The engine prompt API stub submissions forward to.
     prompt_sink: std::rc::Rc<dyn PromptSink>,
     /// The server selection API (model/agent switch POSTs).
@@ -3418,6 +3498,10 @@ impl Store {
             update_dialog,
         } = signals;
         let shell_view = Signal::new(&runtime, None);
+        // G-29 — the plugin manager's server rows (not part of the
+        // redraw-effect watcher set: the setters request redraws).
+        let server_plugins = Signal::new(&runtime, Vec::<ServerPluginRow>::new());
+        let plugins_checking = Signal::new(&runtime, false);
         Self {
             runtime,
             tabs,
@@ -3450,6 +3534,11 @@ impl Store {
             selection,
             worktrees,
             worktree_sink: std::cell::RefCell::new(Rc::new(RecordingWorktreeSink::default())),
+            server_plugins,
+            plugins_checking,
+            plugin_server_sink: std::cell::RefCell::new(Rc::new(
+                RecordingPluginServerSink::default(),
+            )),
             prompt_sink,
             plugin_commands,
             plugin_dialogs,
@@ -4449,6 +4538,160 @@ impl Store {
     /// Swap the worktree sink.
     pub fn set_worktree_sink(&self, sink: Rc<dyn WorktreeSink>) {
         *self.worktree_sink.borrow_mut() = sink;
+    }
+
+    // -- G-29: the plugin manager's server flows --------------------------
+
+    /// Swap the plugin-server sink (production: the oc-client worker).
+    pub fn set_plugin_server_sink(&self, sink: Rc<dyn PluginServerSink>) {
+        *self.plugin_server_sink.borrow_mut() = sink;
+    }
+
+    /// The current server plugin rows (the plugins dialog's `server:`
+    /// entries).
+    pub fn server_plugins(&self) -> Vec<ServerPluginRow> {
+        self.server_plugins.get()
+    }
+
+    /// Whether a `plugin.check` is in flight.
+    pub fn plugins_checking(&self) -> bool {
+        self.plugins_checking.get()
+    }
+
+    /// `dialog.plugins.check` (plugins.tsx:214-218): the "check for
+    /// updates" action — one in-flight check at a time, the fetch
+    /// rides the sink; the result replaces the rows (the ref applies
+    /// the response directly instead of waiting for the event).
+    pub fn plugins_check(&self) {
+        if self.plugins_checking.get() {
+            return;
+        }
+        self.plugins_checking.set(true);
+        self.plugin_server_sink.borrow().check();
+    }
+
+    /// A `plugin.check` result: the rows replace the list (in-flight
+    /// update flags survive by target), a failure lands as the ref's
+    /// `toast.error` and keeps the previous rows.
+    pub fn set_server_plugins(&self, result: Result<Vec<ServerPluginRow>, String>) {
+        self.plugins_checking.set(false);
+        match result {
+            Ok(rows) => {
+                self.server_plugins.update(|current| {
+                    for row in &mut *current {
+                        row.updating =
+                            rows.iter().any(|fresh| fresh.target == row.target && fresh.updating);
+                    }
+                    *current = rows;
+                });
+            }
+            Err(error) => {
+                self.toast_show(crate::components::toast::ToastOptions {
+                    title: Some("Plugin check failed".to_owned()),
+                    message: error,
+                    variant: "error",
+                    ..crate::components::toast::ToastOptions::info("")
+                });
+            }
+        }
+        self.request_redraw();
+    }
+
+    /// `dialog.plugins.update` (plugins.tsx:120-139): update every
+    /// OUTDATED row (the ref fires per focused entry; the palette
+    /// command reaches every flagged row — the same pending-spinner
+    /// semantics, one `plugin.update` per target).
+    pub fn plugins_update_outdated(&self) {
+        let targets: Vec<String> = self
+            .server_plugins
+            .get()
+            .iter()
+            .filter(|row| row.outdated && !row.updating)
+            .map(|row| row.target.clone())
+            .collect();
+        for target in targets {
+            self.set_plugin_updating(&target, true);
+            self.plugin_server_sink.borrow().update(&target);
+        }
+    }
+
+    /// `plugin.update` for ONE target (a server row's enter — the
+    /// ref's per-entry `update(entry)`).
+    pub fn plugins_update_target(&self, target: &str) {
+        self.set_plugin_updating(target, true);
+        self.plugin_server_sink.borrow().update(target);
+    }
+
+    /// Flip one row's in-flight update flag.
+    pub fn set_plugin_updating(&self, target: &str, updating: bool) {
+        self.server_plugins.update(|rows| {
+            if let Some(row) = rows.iter_mut().find(|row| row.target == target) {
+                row.updating = updating;
+            }
+        });
+        self.request_redraw();
+    }
+
+    /// A `plugin.update` result (plugins.tsx:131-137: refetch on
+    /// success, `toast.error` on failure).
+    pub fn apply_plugin_update_result(&self, target: &str, result: Result<(), String>) {
+        self.set_plugin_updating(target, false);
+        match result {
+            Ok(()) => self.server_plugins.update(|rows| {
+                if let Some(row) = rows.iter_mut().find(|row| row.target == target) {
+                    row.outdated = false;
+                }
+            }),
+            Err(error) => {
+                self.toast_show(crate::components::toast::ToastOptions {
+                    title: Some(format!("Failed to update plugin {target}")),
+                    message: error,
+                    variant: "error",
+                    ..crate::components::toast::ToastOptions::info("")
+                });
+            }
+        }
+    }
+
+    /// `plugins.install` / `dialog.plugins.install`: the package-spec
+    /// prompt (the ref's keybind is surfaceless; the port gives it the
+    /// `/btw` prompt shape — enter fires `plugin.install`).
+    pub fn plugins_install_open(&self) {
+        self.replace_dialog(DialogKind::PluginInstall, DialogSize::Medium);
+    }
+
+    /// The install prompt's submit: the trimmed spec fires the sink
+    /// (an empty answer cancels, btw.tsx:64-66's prompt rule).
+    pub fn plugins_install_submit(&self, spec: &str) {
+        let spec = spec.trim();
+        if spec.is_empty() {
+            return;
+        }
+        self.plugin_server_sink.borrow().install(spec);
+    }
+
+    /// A `plugin.install` result: success toasts and refreshes the
+    /// server rows (a check re-fetches the inventory with fresh
+    /// flags), failure lands as the error toast.
+    pub fn apply_plugin_install_result(&self, result: Result<String, String>) {
+        match result {
+            Ok(target) => {
+                self.toast_show(crate::components::toast::ToastOptions {
+                    message: format!("Installed {target}"),
+                    variant: "info",
+                    ..crate::components::toast::ToastOptions::info("")
+                });
+                self.plugin_server_sink.borrow().check();
+            }
+            Err(error) => {
+                self.toast_show(crate::components::toast::ToastOptions {
+                    title: Some("Plugin install failed".to_owned()),
+                    message: error,
+                    variant: "error",
+                    ..crate::components::toast::ToastOptions::info("")
+                });
+            }
+        }
     }
 
     /// Bind the dialog's project (`projectID` + the current checkout
@@ -10289,7 +10532,6 @@ impl Store {
     pub fn set_home_location(&self, directory: Option<String>) {
         *self.home_location.borrow_mut() = directory;
     }
-
 
     /// The `session.grouping` key's boot restore (`grouping !== "none"`
     /// — index.tsx:233; the toggle flips it at runtime).

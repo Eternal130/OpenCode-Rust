@@ -86,7 +86,7 @@ pub fn emit(infos: &[OpInfo], sha256: &str) -> String {
     out.push_str(ROUTES_HEADER);
     out.push_str(&format!("// Source: tools/openapi-gen/openapi.json (sha256 {sha256})\n"));
     out.push_str(
-        "//! Static route table for the opencode HttpApi surface (117 paths / 141 operations).\n",
+        "//! Static route table for the opencode HttpApi surface (118 paths / 142 operations).\n",
     );
     out.push_str("//! Paths are axum-style templates (axum 0.7 spellings): `:param`\n");
     out.push_str("//! captures one segment, `*name` captures the remainder.\n");

@@ -642,6 +642,7 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
         | DialogKind::SessionRename { .. }
         | DialogKind::WorktreeName
         | DialogKind::BtwPrompt
+        | DialogKind::PluginInstall
         | DialogKind::BtwAnswer { .. } => SelectProps::new("", Vec::new()),
         DialogKind::Plugin { id } => {
             // The delegation payload: plugin-supplied options at open
@@ -1190,8 +1191,53 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
                     })
                     .collect()
             };
+            // G-29: the SERVER rows (plugins.tsx:74-81 — the
+            // `plugin.list`/`plugin.check` entries) follow the
+            // registered ids: one row per package source, the
+            // `update available` footer on a fresh `outdated` flag
+            // (the ref paints it info-colored), `updating` while an
+            // update is in flight.
+            let mut options = options;
+            for row in store.server_plugins() {
+                let option = SelectOption::titled(
+                    if row.id.is_empty() { row.target.clone() } else { row.id.clone() },
+                    format!("server:{}", row.target),
+                )
+                .categorized("Server");
+                let footer = if row.updating {
+                    "updating".to_owned()
+                } else if row.outdated {
+                    "update available".to_owned()
+                } else if let Some(error) = &row.error {
+                    error.clone()
+                } else {
+                    String::new()
+                };
+                options.push(if footer.is_empty() { option } else { option.with_footer(footer) });
+            }
             SelectProps::new("Plugins", options)
-                .with_action(SelectAction::new("dialog.plugins.check", "ctrl+a", "show internal"))
+                // G-29: the "check for updates" action
+                // (plugins.tsx:214-218 — ctrl+a here, the port's
+                // surfaceless-command slot before).
+                .with_action(SelectAction::new(
+                    "dialog.plugins.check",
+                    "ctrl+a",
+                    if store.plugins_checking() {
+                        "checking for updates"
+                    } else {
+                        "check for updates"
+                    },
+                ))
+                // G-29: the install action (the ref's shift+i keybind,
+                // keybind.ts:281).
+                .with_action(SelectAction::new(
+                    "dialog.plugins.install",
+                    "shift+i",
+                    "install plugin",
+                ))
+                // G-29: the update action (plugins.tsx:240-246 —
+                // every outdated row, side right).
+                .with_action(SelectAction::new("dialog.plugins.update", "shift+u", "update"))
                 // RE-02: the `plugins.toggle` action (plugins.tsx:
                 // 231-237, side right) — enter flips the selected
                 // registered plugin's active state.
@@ -3047,22 +3093,40 @@ impl CommandDispatcher for StoreDispatcher {
                 store.clear_dialogs();
                 Dispatch::Handled
             }
+            // G-29 — the plugin manager's install flow (`plugins.
+            // install`, keybind "Install plugin" — keybind.ts:288):
+            // the package-spec prompt; the submit fires
+            // `plugin.install` through the plugin-server sink.
+            "plugins.install" | "dialog.plugins.install" => {
+                store.plugins_install_open();
+                Dispatch::Handled
+            }
+            // G-29 — `dialog.plugins.check` (plugins.tsx:214-218):
+            // the "check for updates" action — `plugin.check` rides
+            // the sink; the fresh rows (with `outdated` flags)
+            // replace the dialog's server entries.
+            "dialog.plugins.check" => {
+                store.plugins_check();
+                Dispatch::Handled
+            }
+            // G-29 — `dialog.plugins.update` (plugins.tsx:240-246):
+            // every outdated server row's `plugin.update` (the
+            // pending spinner rides the row; results land as toasts).
+            "dialog.plugins.update" => {
+                store.plugins_update_outdated();
+                Dispatch::Handled
+            }
             // The registered-but-surfaceless families (v2 parity: the
             // keymap consumes the stroke; no component answers):
             // which-key panel (the keymap addon's surface), scrap/
             // debug panel, service restart, verbosity
-            // model, plugin install flow, the integrations + plugin
-            // dialog actions.
+            // model, the integrations dialog actions.
             "app.debug"
             | "app.scrap"
             | "service.restart"
-            | "plugins.install"
             | "dialog.integration.rename"
             | "dialog.integration.delete"
             | "dialog.plugins.error"
-            | "dialog.plugins.install"
-            | "dialog.plugins.update"
-            | "dialog.plugins.check"
             | "which-key.toggle"
             | "which-key.layout.toggle"
             | "which-key.pending.toggle"
@@ -3894,8 +3958,8 @@ mod tests {
     /// directory; a failed/unavailable location never inherits.
     #[test]
     fn session_new_location_resolution() {
-        use crate::store::NewSessionLocation as Mode;
         use crate::store::new_session_location;
+        use crate::store::NewSessionLocation as Mode;
         assert_eq!(new_session_location(Mode::Inherit, Some("/a"), None).as_deref(), Some("/a"));
         assert_eq!(new_session_location(Mode::Launch, Some("/a"), None), None);
         assert_eq!(new_session_location(Mode::Inherit, None, None), None);
@@ -3924,7 +3988,6 @@ mod tests {
             /* unavailable */ true,
         );
     }
-
 
     /// session.list), not the open tabs — and selecting a row
     /// navigates (the route effect opens the tab).
@@ -4817,8 +4880,13 @@ mod tests {
             props
                 .actions
                 .iter()
-                .any(|action| action.title == "ctrl+a" && action.label == "show internal"),
-            "the footer hint pair: {:?}",
+                .any(|action| action.title == "ctrl+a" && action.label == "check for updates"),
+            "the G-29 check action hint: {:?}",
+            props.actions
+        );
+        assert!(
+            props.actions.iter().any(|action| action.command == "dialog.plugins.install"),
+            "the G-29 install action: {:?}",
             props.actions
         );
         // The rendered overlay carries the rows (Search placeholder,
@@ -4844,7 +4912,7 @@ mod tests {
         assert!(text.contains("Plugins"), "the title");
         assert!(text.contains("Search"), "the filter placeholder");
         assert!(text.contains("No items available"), "the shared empty state");
-        assert!(text.contains("ctrl+a show internal"), "the footer hint");
+        assert!(text.contains("ctrl+a check for updates"), "the footer hint");
     }
 
     /// RE-02: the plugins dialog models per-plugin active state —
@@ -4927,6 +4995,183 @@ mod tests {
             sink.calls.borrow().as_slice(),
             [("helloworld".to_owned(), false), ("helloworld".to_owned(), true)],
             "enable → disable → enable round trip on the toggle sink"
+        );
+    }
+
+    /// G-29: `dialog.plugins.check` fires the sink's check and the
+    /// fresh rows (with `outdated` flags) render as the dialog's
+    /// SERVER entries — the `update available` footer (plugins.tsx:
+    /// 304-318's footer()); a failed check toasts and keeps the rows.
+    #[test]
+    fn plugins_check_flow_updates_server_rows() {
+        use crate::store::{PluginServerCall, RecordingPluginServerSink, ServerPluginRow};
+        let store = final_session_store();
+        let sink = std::rc::Rc::new(RecordingPluginServerSink::default());
+        store.set_plugin_server_sink(sink.clone());
+        store.replace_dialog(crate::store::DialogKind::Plugins, crate::store::DialogSize::Medium);
+
+        let mut dispatcher = StoreDispatcher;
+        assert_eq!(dispatcher.dispatch(&store, "dialog.plugins.check", None), Dispatch::Handled);
+        assert!(store.plugins_checking(), "the check is in flight");
+        assert_eq!(sink.calls.borrow().as_slice(), [PluginServerCall::Check]);
+
+        // The fresh inventory: one outdated package + one current.
+        store.set_server_plugins(Ok(vec![
+            ServerPluginRow {
+                target: "demo-plugin".into(),
+                id: "demo-plugin".into(),
+                status: "active".into(),
+                error: None,
+                outdated: true,
+                updating: false,
+            },
+            ServerPluginRow {
+                target: "other-plugin".into(),
+                id: "other-plugin".into(),
+                status: "active".into(),
+                error: None,
+                outdated: false,
+                updating: false,
+            },
+        ]));
+        assert!(!store.plugins_checking(), "the check settled");
+        let props = select_props_for(&crate::store::DialogKind::Plugins, &store);
+        let flagged =
+            props.options.iter().find(|option| option.value == "server:demo-plugin").expect("row");
+        assert_eq!(flagged.footer.as_deref(), Some("update available"));
+        let current =
+            props.options.iter().find(|option| option.value == "server:other-plugin").expect("r");
+        assert_eq!(current.footer, None, "a current row carries no footer");
+
+        // A failed check: the error toast lands, the rows stay.
+        store.set_server_plugins(Err("registry unreachable".to_owned()));
+        assert!(
+            store
+                .toasts()
+                .current()
+                .is_some_and(|toast| toast.message.contains("registry unreachable")),
+            "the failure toasts"
+        );
+        assert_eq!(store.server_plugins().len(), 2, "the previous rows stay");
+    }
+
+    /// G-29: `dialog.plugins.update` fires one `plugin.update` per
+    /// OUTDATED row (the pending `updating` flag rides the row); a
+    /// success clears the flag, a failure toasts (plugins.tsx:
+    /// 120-139).
+    #[test]
+    fn plugins_update_flow_targets_outdated_rows() {
+        use crate::store::{PluginServerCall, RecordingPluginServerSink, ServerPluginRow};
+        let store = final_session_store();
+        let sink = std::rc::Rc::new(RecordingPluginServerSink::default());
+        store.set_plugin_server_sink(sink.clone());
+        store.set_server_plugins(Ok(vec![
+            ServerPluginRow {
+                target: "demo-plugin".into(),
+                id: "demo-plugin".into(),
+                status: "active".into(),
+                error: None,
+                outdated: true,
+                updating: false,
+            },
+            ServerPluginRow {
+                target: "other-plugin".into(),
+                id: "other-plugin".into(),
+                status: "active".into(),
+                error: None,
+                outdated: false,
+                updating: false,
+            },
+        ]));
+
+        let mut dispatcher = StoreDispatcher;
+        assert_eq!(dispatcher.dispatch(&store, "dialog.plugins.update", None), Dispatch::Handled);
+        assert_eq!(
+            sink.calls.borrow().as_slice(),
+            [PluginServerCall::Update("demo-plugin".to_owned())],
+            "only the outdated row updates"
+        );
+        assert!(store
+            .server_plugins()
+            .iter()
+            .any(|row| row.target == "demo-plugin" && row.updating));
+
+        // Success: the pending flag + the outdated flag clear.
+        store.apply_plugin_update_result("demo-plugin", Ok(()));
+        let row = store
+            .server_plugins()
+            .into_iter()
+            .find(|row| row.target == "demo-plugin")
+            .expect("row");
+        assert!(!row.updating && !row.outdated);
+
+        // Failure: the error toast names the target.
+        store.plugins_update_target("other-plugin");
+        store.apply_plugin_update_result("other-plugin", Err("npm exited 1".to_owned()));
+        assert!(
+            store.toasts().current().is_some_and(|toast| toast
+                .title
+                .as_deref()
+                .is_some_and(|title| title.contains("other-plugin"))),
+            "the failure toast names the target"
+        );
+    }
+
+    /// G-29: `plugins.install` opens the package-spec prompt; the
+    /// submit fires `plugin.install` through the sink (an empty spec
+    /// cancels); a success toasts and re-checks, a failure toasts the
+    /// error.
+    #[test]
+    fn plugins_install_flow_prompt_and_result() {
+        use crate::store::{PluginServerCall, RecordingPluginServerSink};
+        let store = final_session_store();
+        let sink = std::rc::Rc::new(RecordingPluginServerSink::default());
+        store.set_plugin_server_sink(sink.clone());
+
+        let mut dispatcher = StoreDispatcher;
+        for command in ["plugins.install", "dialog.plugins.install"] {
+            assert_eq!(dispatcher.dispatch(&store, command, None), Dispatch::Handled);
+            assert!(
+                matches!(
+                    store.top_dialog().map(|entry| entry.kind),
+                    Some(crate::store::DialogKind::PluginInstall)
+                ),
+                "{command} opens the install prompt"
+            );
+            store.clear_dialogs();
+        }
+
+        // The submit: the trimmed spec fires the sink; empty cancels.
+        store.plugins_install_open();
+        store.plugins_install_submit("  demo-plugin  ");
+        store.plugins_install_submit("   ");
+        assert_eq!(
+            sink.calls.borrow().as_slice(),
+            [PluginServerCall::Install("demo-plugin".to_owned())],
+            "the trimmed spec fires once, the empty spec cancels"
+        );
+
+        // A success toasts and triggers the inventory refresh (the
+        // ref's refetch-on-event leg).
+        store.apply_plugin_install_result(Ok("demo-plugin".to_owned()));
+        assert!(
+            store.toasts().current().is_some_and(|toast| toast.message.contains("demo-plugin")),
+            "the success toast names the target"
+        );
+        assert_eq!(
+            sink.calls.borrow().as_slice(),
+            [PluginServerCall::Install("demo-plugin".to_owned()), PluginServerCall::Check],
+            "a successful install re-checks the inventory"
+        );
+
+        // A failure lands as the error toast.
+        store.apply_plugin_install_result(Err("package not found".to_owned()));
+        assert!(
+            store
+                .toasts()
+                .current()
+                .is_some_and(|toast| toast.message.contains("package not found")),
+            "the failure toast carries the error"
         );
     }
 

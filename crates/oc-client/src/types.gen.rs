@@ -1,7 +1,7 @@
 // Generated file — DO NOT EDIT by hand.
 // Regenerate with: cargo run -p openapi-gen
-// Source: tools/openapi-gen/openapi.json (sha256 0612418392961ef22f0337ce0e1e520270917665fc85f29c4af1c94d1e1873ee)
-//! Wire types for the opencode HttpApi (764 generated types).
+// Source: tools/openapi-gen/openapi.json (sha256 5165970367be69ae9e46000c74a55c530f2bcaaceb6aecfa4a333c6bf9233d60)
+//! Wire types for the opencode HttpApi (766 generated types).
 //! Field names use exact wire spellings via `#[serde(rename)]` — camelCase,
 //! including `ID` suffixes (`sessionID`, `parentID`, ...).
 //! Unions: discriminated where the schema provides a singleton-enum tag,
@@ -9679,6 +9679,20 @@ pub struct PluginCheckResponse {
     /// Wire field: `location`.
     #[serde(rename = "location")]
     pub location: LocationPublicRef,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PluginInstallQuery {
+    /// Wire param: `location` (query).
+    pub location: Option<QueryLocation>,
+}
+
+/// Request body for `plugin.install`.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PluginInstallBody {
+    /// Wire field: `target`.
+    #[serde(rename = "target")]
+    pub target: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]

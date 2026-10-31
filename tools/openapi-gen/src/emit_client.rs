@@ -126,7 +126,7 @@ pub fn emit(infos: &[OpInfo]) -> String {
     out.push_str(crate::emit_routes::ROUTES_HEADER);
     out.push_str("//! Namespaced oc-client methods for all HttpApi operations.\n");
     out.push_str("//! Mirrors the v2 SDK namespaces; every method maps 1:1 onto a route in\n");
-    out.push_str("//! `oc_server::routes_gen::ROUTES` (operationId parity, 141/141).\n");
+    out.push_str("//! `oc_server::routes_gen::ROUTES` (operationId parity, 142/142).\n");
     out.push_str("#![allow(clippy::too_many_lines, clippy::struct_excessive_bools)]\n");
     out.push_str("#![allow(unused_mut, clippy::must_use_candidate, clippy::vec_init_then_push)]\n");
     out.push_str("#![allow(clippy::doc_markdown)]\n\n");

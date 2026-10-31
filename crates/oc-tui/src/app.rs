@@ -2249,6 +2249,16 @@ impl App {
                         );
                     }
                 }
+                // G-29: the plugin install prompt's enter — the spec
+                // fires `plugin.install` through the plugin-server
+                // sink (the result toast + check refresh land through
+                // the worker's event drain).
+                crate::store::DialogKind::PluginInstall => {
+                    let spec = value.trim().to_owned();
+                    if !spec.is_empty() {
+                        self.store.plugins_install_submit(&spec);
+                    }
+                }
                 _ => {}
             }
         }
@@ -3669,6 +3679,131 @@ impl crate::store::WorktreeSink for HttpWorktreeSink {
             session_id: session_id.to_owned(),
             directory: directory.to_owned(),
         });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// G-29 — the plugin manager's server worker (check / update / install)
+// ---------------------------------------------------------------------------
+
+/// The plugin-server worker's requests (the sink → the spawned task).
+#[derive(Debug)]
+enum PluginServerRequest {
+    Check,
+    Update(String),
+    Install(String),
+}
+
+/// The plugin-server worker's events (the spawned task → the pump →
+/// the store's plugin setters).
+#[derive(Debug)]
+pub enum PluginServerEvent {
+    /// A `plugin.check` result (the fresh inventory rows).
+    Checked(Result<Vec<crate::store::ServerPluginRow>, String>),
+    /// A `plugin.update` result for one target.
+    Updated { target: String, result: Result<(), String> },
+    /// A `plugin.install` result (the installed target on success).
+    Installed(Result<String, String>),
+}
+
+/// Map one `plugin.list`/`plugin.check` row onto the dialog's row type
+/// (plugins.tsx:74-81 — only PACKAGE sources render; the fresh
+/// `outdated` flag rides the check response).
+fn plugin_server_row(info: &oc_client::types::PluginInfo) -> Option<crate::store::ServerPluginRow> {
+    let oc_client::types::PluginSource::Package(package) = &info.source else {
+        return None;
+    };
+    let (status, error) = match &info.state {
+        oc_client::types::PluginState::Active(_) => ("active", None),
+        oc_client::types::PluginState::Failed(failed) => ("failed", Some(failed.error.clone())),
+    };
+    Some(crate::store::ServerPluginRow {
+        target: package.target.clone(),
+        id: info.id.clone().unwrap_or_default(),
+        status: status.to_owned(),
+        error,
+        outdated: package.outdated.unwrap_or(false),
+        updating: package.updating.unwrap_or(false),
+    })
+}
+
+/// The Plugins dialog's production seam: a spawned worker owning the
+/// oc-client `plugin.*` calls (the dialog actions send requests; the
+/// results arrive as [`PluginServerEvent`]s the pump applies to the
+/// store — mirroring the ref's `plugin.check` mutate + refetch flow).
+fn spawn_plugin_server_worker(
+    client: oc_client::Client,
+) -> (tokio::sync::mpsc::Sender<PluginServerRequest>, tokio::sync::mpsc::Receiver<PluginServerEvent>)
+{
+    let (req_tx, mut req_rx) = tokio::sync::mpsc::channel::<PluginServerRequest>(16);
+    let (tx, rx) = tokio::sync::mpsc::channel::<PluginServerEvent>(16);
+    tokio::spawn(async move {
+        while let Some(request) = req_rx.recv().await {
+            match request {
+                PluginServerRequest::Check => {
+                    // The check response carries the fresh `outdated`
+                    // flags for the whole inventory (the ref applies it
+                    // directly — plugins.tsx:159-176).
+                    let result = client
+                        .plugin()
+                        .check(
+                            &oc_client::types::PluginCheckQuery { location: None },
+                            &oc_client::types::PluginCheckBody { target: None },
+                        )
+                        .await
+                        .map(|response| {
+                            response.data.iter().filter_map(plugin_server_row).collect::<Vec<_>>()
+                        })
+                        .map_err(|error| error.to_string());
+                    let _ = tx.send(PluginServerEvent::Checked(result)).await;
+                }
+                PluginServerRequest::Update(target) => {
+                    let result = client
+                        .plugin()
+                        .update(
+                            &oc_client::types::PluginUpdateQuery { location: None },
+                            &oc_client::types::PluginUpdateBody { targets: vec![target.clone()] },
+                        )
+                        .await
+                        .map(|_| ())
+                        .map_err(|error| error.to_string());
+                    let _ = tx.send(PluginServerEvent::Updated { target, result }).await;
+                }
+                PluginServerRequest::Install(target) => {
+                    let result = client
+                        .plugin()
+                        .install(
+                            &oc_client::types::PluginInstallQuery { location: None },
+                            &oc_client::types::PluginInstallBody { target: target.clone() },
+                        )
+                        .await
+                        .map(|_| target.clone())
+                        .map_err(|error| error.to_string());
+                    let _ = tx.send(PluginServerEvent::Installed(result)).await;
+                }
+            }
+        }
+    });
+    (req_tx, rx)
+}
+
+/// The production plugin-server sink: dialog actions become worker
+/// requests (fire-and-forget; results arrive as events).
+struct HttpPluginServerSink {
+    tx: tokio::sync::mpsc::Sender<PluginServerRequest>,
+}
+
+impl crate::store::PluginServerSink for HttpPluginServerSink {
+    fn check(&self) {
+        let _ = self.tx.blocking_send(PluginServerRequest::Check);
+    }
+
+    fn update(&self, target: &str) {
+        let _ = self.tx.blocking_send(PluginServerRequest::Update(target.to_owned()));
+    }
+
+    fn install(&self, target: &str) {
+        let _ = self.tx.blocking_send(PluginServerRequest::Install(target.to_owned()));
     }
 }
 
@@ -6930,6 +7065,12 @@ pub async fn run_with_size(
     );
     app.store.set_worktree_sink(std::rc::Rc::new(HttpWorktreeSink { tx: worktree_tx }));
 
+    // G-29 — the Plugins dialog's server worker: check/update/install
+    // flow through the sink; results land as toasts + row updates.
+    let (plugin_server_tx, mut plugin_server_rx) = spawn_plugin_server_worker(client.clone());
+    app.store
+        .set_plugin_server_sink(std::rc::Rc::new(HttpPluginServerSink { tx: plugin_server_tx }));
+
     // Tabs persistence (v2's useStorage contract — see storage.rs):
     // restore on boot, save on change. The open-tabs model restores
     // ONLY the configured scope (`config.tabs.scope`, default cwd —
@@ -7683,6 +7824,22 @@ pub async fn run_with_size(
                         );
                     }
                 },
+            }
+        }
+        // Drain the plugin-server worker (G-29): check results replace
+        // the plugins dialog's server rows, update/install results land
+        // as toasts (the ref's toast.error / refetch flow).
+        while let Ok(event) = plugin_server_rx.try_recv() {
+            match event {
+                PluginServerEvent::Checked(result) => {
+                    app.store.set_server_plugins(result);
+                }
+                PluginServerEvent::Updated { target, result } => {
+                    app.store.apply_plugin_update_result(&target, result);
+                }
+                PluginServerEvent::Installed(result) => {
+                    app.store.apply_plugin_install_result(result);
+                }
             }
         }
         // Drain the prompt-sink events (home submissions creating
