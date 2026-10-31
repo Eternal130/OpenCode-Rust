@@ -17,8 +17,10 @@ use oc_server::boot::{boot_and_serve, BootOptions};
 use oc_server::lifecycle::ServeOptions;
 
 fn sandbox(tag: &str) -> PathBuf {
-    let root =
-        PathBuf::from(format!("/tmp/opencode/oc-server-plugin-update-{tag}-{}", std::process::id()));
+    let root = PathBuf::from(format!(
+        "/tmp/opencode/oc-server-plugin-update-{tag}-{}",
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&root);
     let home = root.join("home");
     let project = root.join("project");
@@ -44,11 +46,8 @@ fn stage_generation(home: &Path, version: &str, stamp: &str) {
         json!({ "name": "demo-plugin", "version": version, "main": "plugin.js" }).to_string(),
     )
     .expect("manifest");
-    std::fs::write(
-        pkg.join("plugin.js"),
-        "export default { id: 'demo-plugin', async setup() {} }",
-    )
-    .expect("entry");
+    std::fs::write(pkg.join("plugin.js"), "export default { id: 'demo-plugin', async setup() {} }")
+        .expect("entry");
 }
 
 /// The `npm view demo-plugin version` shim: answers with the current
@@ -97,10 +96,7 @@ fn redirect_env(home: &Path, shims: &Path) {
     std::env::remove_var("OPENCODE_CONFIG");
     // The registry shim wins; everything after it still resolves.
     let path = std::env::var_os("PATH").unwrap_or_default();
-    std::env::set_var(
-        "PATH",
-        format!("{}:{}", shims.display(), path.to_string_lossy()),
-    );
+    std::env::set_var("PATH", format!("{}:{}", shims.display(), path.to_string_lossy()));
 }
 
 #[tokio::test]
@@ -112,8 +108,11 @@ async fn plugin_update_performs_the_update() {
     // The update target generation (pre-staged — the install reuse
     // path, exactly what `plugin add` leaves behind after a pin).
     stage_generation(&home, "2.0.0", "2000");
-    std::fs::write(project.join("opencode.json"), json!({ "plugins": ["demo-plugin"] }).to_string())
-        .expect("config");
+    std::fs::write(
+        project.join("opencode.json"),
+        json!({ "plugins": ["demo-plugin"] }).to_string(),
+    )
+    .expect("config");
     let shims = npm_shim(&root, "2.0.0");
     redirect_env(&home, &shims);
 
@@ -125,9 +124,7 @@ async fn plugin_update_performs_the_update() {
         .plugin()
         .update(
             &oc_client::types::PluginUpdateQuery { location: None },
-            &oc_client::types::PluginUpdateBody {
-                targets: vec!["not-a-plugin".to_owned()],
-            },
+            &oc_client::types::PluginUpdateBody { targets: vec!["not-a-plugin".to_owned()] },
         )
         .await
         .expect_err("unknown target is a 400");
@@ -188,8 +185,11 @@ async fn plugin_update_rolls_failures_into_a_503() {
     let home = root.join("home");
     let project = root.join("project");
     stage_generation(&home, "1.0.0", "1000");
-    std::fs::write(project.join("opencode.json"), json!({ "plugins": ["demo-plugin"] }).to_string())
-        .expect("config");
+    std::fs::write(
+        project.join("opencode.json"),
+        json!({ "plugins": ["demo-plugin"] }).to_string(),
+    )
+    .expect("config");
     // An empty registry answer → the version pin fails → the update
     // fails → one 503 carrying the rolled-up failure.
     let shims = npm_shim(&root, "");

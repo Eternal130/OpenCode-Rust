@@ -699,13 +699,10 @@ async fn resized_checkpoint() {
 #[tokio::test]
 async fn persistent_connect_unknown_pty_upgrades_then_closes_4404() {
     let server = boot().await;
-    let (status, socket) = ws_connect(
-        server.addr,
-        "/api/experimental/persistent-pty/pty_missing/connect",
-        None,
-    )
-    .await
-    .expect("ws");
+    let (status, socket) =
+        ws_connect(server.addr, "/api/experimental/persistent-pty/pty_missing/connect", None)
+            .await
+            .expect("ws");
     assert_eq!(status, 101, "unknown pty still upgrades");
     let mut socket = socket.expect("upgraded");
     let close = socket.recv(std::time::Duration::from_secs(10)).await.expect("close frame");
@@ -762,9 +759,10 @@ async fn persistent_nonframed_binary_input_is_raw() {
         if frame.opcode == 0x2 {
             collected.extend_from_slice(&frame.payload);
             let text = "héllo".as_bytes();
-            if collected.windows(text.len() + 2).any(|window| {
-                window[..text.len()] == *text && window[text.len()] == 0xFF
-            }) {
+            if collected
+                .windows(text.len() + 2)
+                .any(|window| window[..text.len()] == *text && window[text.len()] == 0xFF)
+            {
                 assert!(
                     !collected.windows(3).any(|window| window == [0xEF, 0xBF, 0xBD].as_slice()),
                     "raw 0xFF must not become U+FFFD"
@@ -826,7 +824,11 @@ async fn persistent_update_requires_valid_size() {
         .await;
         assert_eq!(status, 400, "{name}: {response}");
         assert_eq!(response["_tag"], "InvalidRequestError", "{name}: {response}");
-        assert_eq!(response["message"].as_str().unwrap_or_default(), *expected, "{name}: {response}");
+        assert_eq!(
+            response["message"].as_str().unwrap_or_default(),
+            *expected,
+            "{name}: {response}"
+        );
     }
 
     // Valid size still resizes.

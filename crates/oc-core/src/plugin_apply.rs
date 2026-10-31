@@ -130,6 +130,20 @@ pub trait LocationPluginSource: Send + Sync {
         Vec::new()
     }
 
+    /// G-64 — plugin provider definitions (`ctx.provider.transform`'s
+    /// editor table, ref host.ts:196-223). Applied into every
+    /// location's provider overlay by [`apply_plugin_providers`].
+    fn provider_defs(&self) -> Vec<PluginProviderDef> {
+        Vec::new()
+    }
+
+    /// G-64 — plugin reference sources (`ctx.reference.transform`'s
+    /// editor table, ref host.ts:432-443). Applied into the engine's
+    /// `ReferenceService` by [`apply_plugin_references`].
+    fn reference_defs(&self) -> Vec<PluginReferenceDef> {
+        Vec::new()
+    }
+
     /// G-24 — plugin-registered worktree strategies
     /// (`ctx.worktree.transform`'s `editor.add`, ref host.ts:505-522).
     fn worktree_strategies(&self) -> Vec<PluginWorktreeStrategyDef> {
@@ -297,6 +311,29 @@ pub struct PluginHookDef {
     pub name: String,
 }
 
+/// One plugin provider definition as the engine sees it (G-64 — ref
+/// host.ts:196-223 `provider.transform`'s editor table): the raw
+/// definition JSON (`{id, name?, baseURL?, apiKey?, models?}`); the
+/// location overlay folds it into an openai-compatible custom provider
+/// (`apply_plugin_providers`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PluginProviderDef {
+    pub plugin_id: String,
+    pub id: String,
+    pub definition: Value,
+}
+
+/// One plugin reference source as the engine sees it (G-64 — ref
+/// host.ts:432-443 `reference.transform`'s editor table): a
+/// `Reference.Source` JSON (`{type: "local", path}` / `{type: "git",
+/// repository, ref?, path?}`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PluginReferenceDef {
+    pub plugin_id: String,
+    pub name: String,
+    pub source: Value,
+}
+
 /// One plugin-registered websearch provider as the engine sees it
 /// (G-24 — ref host.ts:489-504 `websearch.transform`'s
 /// `editor.add({id, name, execute})`): the execute closure stays in
@@ -393,6 +430,174 @@ impl crate::tool::websearch_providers::SearchProvider for GuestWebSearchProvider
                 message: format!("guest websearch provider {}: {error}", self.id),
             }
         })
+    }
+}
+
+/// G-64 — apply plugin provider definitions (ref host.ts:196-223's
+/// `provider.transform` table) into one location's provider overlay:
+/// every definition with a `baseURL` becomes an openai-compatible
+/// [`CustomProvider`] (insert-or-replace by id, plugins AFTER config —
+/// the v2 activation order). Definitions without a `baseURL` land as
+/// connection overlays when they carry an `apiKey` (the CRED-A4 fold).
+pub fn apply_plugin_providers(
+    overlay: &mut crate::provider_catalog::overlay::ConfigProviders,
+    defs: &[PluginProviderDef],
+) {
+    for def in defs {
+        let Some(custom) = custom_provider_from_def(&def.id, &def.definition) else {
+            continue;
+        };
+        // apiKey-only entries (no baseURL): the connection overlay.
+        if custom.base_url.is_empty() {
+            if let Some(api_key) = custom.api_key.clone() {
+                let entry = overlay.connections.entry(custom.id.clone()).or_default();
+                entry.api_key = Some(api_key);
+            }
+            continue;
+        }
+        match overlay.custom.iter().position(|existing| existing.id == custom.id) {
+            Some(at) => overlay.custom[at] = custom,
+            None => overlay.custom.push(custom),
+        }
+    }
+}
+
+/// One definition JSON → [`CustomProvider`] (None when it carries no
+/// `baseURL` and no `apiKey`). The model map folds into
+/// [`facade::CustomModel`]s; unknown fields are ignored (the editor's
+/// JSON is the ref's provider definition shape).
+fn custom_provider_from_def(
+    id: &str,
+    definition: &Value,
+) -> Option<crate::provider_catalog::facade::CustomProvider> {
+    use crate::provider_catalog::facade::{CustomModel, CustomProvider};
+    let str_field = |key: &str| {
+        definition
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    };
+    let base_url = str_field("baseURL").or_else(|| str_field("base_url")).unwrap_or_default();
+    let api_key = str_field("apiKey").or_else(|| str_field("api_key"));
+    if base_url.is_empty() && api_key.is_none() {
+        return None;
+    }
+    let models = match definition.get("models") {
+        Some(Value::Object(map)) => map
+            .iter()
+            .map(|(model_id, model)| CustomModel {
+                id: model_id.clone(),
+                name: model.get("name").and_then(Value::as_str).map(str::to_owned),
+                headers: None,
+                body: None,
+                model_id: model.get("modelID").and_then(Value::as_str).map(str::to_owned),
+                family: model.get("family").and_then(Value::as_str).map(str::to_owned),
+                compatibility: model
+                    .get("compatibility")
+                    .and_then(|value| serde_json::from_value(value.clone()).ok()),
+                capabilities: model
+                    .get("capabilities")
+                    .and_then(|value| serde_json::from_value(value.clone()).ok()),
+                cost: model
+                    .get("cost")
+                    .and_then(|value| serde_json::from_value(value.clone()).ok()),
+                limit: model
+                    .get("limit")
+                    .and_then(|value| serde_json::from_value(value.clone()).ok()),
+                settings: None,
+                base_url: model
+                    .get("baseURL")
+                    .or_else(|| model.get("base_url"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                package: None,
+                variants: Vec::new(),
+            })
+            .collect::<Vec<_>>(),
+        Some(Value::Array(entries)) => entries
+            .iter()
+            .filter_map(|model| {
+                let model_id = model.get("id").and_then(Value::as_str)?.to_owned();
+                Some(CustomModel {
+                    id: model_id,
+                    name: model.get("name").and_then(Value::as_str).map(str::to_owned),
+                    headers: None,
+                    body: None,
+                    model_id: model.get("modelID").and_then(Value::as_str).map(str::to_owned),
+                    family: model.get("family").and_then(Value::as_str).map(str::to_owned),
+                    compatibility: model
+                        .get("compatibility")
+                        .and_then(|value| serde_json::from_value(value.clone()).ok()),
+                    capabilities: model
+                        .get("capabilities")
+                        .and_then(|value| serde_json::from_value(value.clone()).ok()),
+                    cost: model
+                        .get("cost")
+                        .and_then(|value| serde_json::from_value(value.clone()).ok()),
+                    limit: model
+                        .get("limit")
+                        .and_then(|value| serde_json::from_value(value.clone()).ok()),
+                    settings: None,
+                    base_url: model
+                        .get("baseURL")
+                        .or_else(|| model.get("base_url"))
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                    package: None,
+                    variants: Vec::new(),
+                })
+            })
+            .collect::<Vec<_>>(),
+        _ => Vec::new(),
+    };
+    Some(CustomProvider {
+        id: id.to_owned(),
+        name: str_field("name").unwrap_or_else(|| id.to_owned()),
+        base_url,
+        api_key,
+        headers: definition
+            .get("headers")
+            .and_then(|value| serde_json::from_value(value.clone()).ok()),
+        body: definition.get("body").and_then(|value| serde_json::from_value(value.clone()).ok()),
+        canonical: None,
+        package: None,
+        models,
+    })
+}
+
+/// G-64 — apply plugin reference sources (ref host.ts:432-443's
+/// `reference.transform` table) into the engine's `ReferenceService`
+/// (`add`/`remove` by name; insert-or-replace semantics).
+pub fn apply_plugin_references(
+    service: &Arc<crate::reference::ReferenceService>,
+    defs: &[PluginReferenceDef],
+) {
+    for def in defs {
+        let source = reference_source_from_json(&def.source);
+        service.add(def.name.clone(), source);
+    }
+}
+
+/// One `Reference.Source` JSON → [`crate::reference::Source`]
+/// (`{type: "local", path}` / `{type: "git", repository, branch?}`; an
+/// unknown shape degrades to a local source pointing at the raw value).
+fn reference_source_from_json(source: &Value) -> crate::reference::Source {
+    let str_field = |key: &str| source.get(key).and_then(Value::as_str).map(str::to_owned);
+    let description = str_field("description");
+    let hidden = source.get("hidden").and_then(Value::as_bool);
+    match str_field("type").as_deref() {
+        Some("git") => crate::reference::Source::Git(crate::reference::GitSource {
+            repository: str_field("repository").unwrap_or_default(),
+            branch: str_field("branch").or_else(|| str_field("ref")),
+            description,
+            hidden,
+        }),
+        _ => crate::reference::Source::Local(crate::reference::LocalSource {
+            path: std::path::PathBuf::from(str_field("path").unwrap_or_default()),
+            description,
+            hidden,
+        }),
     }
 }
 

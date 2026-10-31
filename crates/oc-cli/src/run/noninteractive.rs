@@ -1539,7 +1539,8 @@ mod tests {
                         // client reads the first frame BEFORE submitting
                         // the prompt); the remaining frames follow.
                         let _ = stream.write_all(&sse_head());
-                        let _ = stream.write_all(&sse_frame(&json!({ "type": "server.connected" })));
+                        let _ =
+                            stream.write_all(&sse_frame(&json!({ "type": "server.connected" })));
                         let _ = stream.flush();
                         if config.promote_prompt {
                             // The run's message id is client-generated;

@@ -267,10 +267,13 @@ const domainStores = {
   mcps: new Map(), // name -> Mcp.ServerConfig
   skills: new Map(), // id -> Skill.Info
   tools: new Map(), // name -> tool definition
+  providers: new Map(), // G-64: id -> provider definition
+  references: new Map(), // G-64: name -> Reference.Source
+  vcs: new Map(), // G-24 residual: id -> vcs provider row
 };
 
 /** Registered editors per domain, in registration order. */
-const domainEditors = { agent: [], mcp: [], skill: [], tool: [], command: [] };
+const domainEditors = { agent: [], mcp: [], skill: [], tool: [], command: [], provider: [], reference: [] };
 
 function defaultAgent(id) {
   // v2 Agent.Info.default (packages/schema/src/agent.ts).
@@ -365,7 +368,79 @@ const editors = {
   command: {
     add: (definition) => definition, // shaped in the domain wrapper
   },
+  provider: {
+    // G-64 (adapter.ts:346-370's editor surface): list/get/add/update/
+    // remove plus the models sub-editor, mirroring the ref
+    // ProviderDomain (IDs are strings on the wire).
+    list: () => Array.from(domainStores.providers.values()),
+    get: (id) => domainStores.providers.get(String(id)),
+    add: (definition) => {
+      const id = String(definition?.id ?? "");
+      if (!id) throw new Error("provider.add requires an id");
+      domainStores.providers.set(id, cloneJson(definition));
+    },
+    update: (id, update) => {
+      const current = domainStores.providers.get(String(id));
+      if (!current) return;
+      deepMerge(current, update ?? {});
+    },
+    remove: (id) => {
+      domainStores.providers.delete(String(id));
+    },
+    models: {
+      set: (id, models) => {
+        const current = domainStores.providers.get(String(id));
+        if (!current) return;
+        current.models = typeof models === "object" && models !== null ? cloneJson(models) : {};
+      },
+      update: (providerID, modelID, update) => {
+        const current = domainStores.providers.get(String(providerID));
+        if (!current) return;
+        current.models = current.models ?? {};
+        if (!current.models[modelID]) current.models[modelID] = { id: modelID };
+        deepMerge(current.models[modelID], update ?? {});
+      },
+      remove: (providerID, modelID) => {
+        const current = domainStores.providers.get(String(providerID));
+        if (!current?.models) return;
+        delete current.models[modelID];
+      },
+    },
+  },
+  reference: {
+    // G-64 (adapter.ts:427-452): add(name, source)/remove/list/get.
+    list: () =>
+      Array.from(domainStores.references.entries()).map(([name, source]) => ({ name, source })),
+    get: (name) => domainStores.references.get(String(name)),
+    add: (name, source) => {
+      const key = String(name ?? "");
+      if (!key) throw new Error("reference.add requires a name");
+      domainStores.references.set(key, cloneJson(source ?? {}));
+    },
+    remove: (name) => {
+      domainStores.references.delete(String(name));
+    },
+  },
 };
+
+/** Shallow-recursive plain-object merge (the ref editor `update`
+ *  semantics: the patch's keys win; nested objects merge). */
+function deepMerge(target, patch) {
+  for (const [key, value] of Object.entries(patch)) {
+    if (
+      value !== null &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      target[key] !== null &&
+      typeof target[key] === "object" &&
+      !Array.isArray(target[key])
+    ) {
+      deepMerge(target[key], value);
+    } else {
+      target[key] = value;
+    }
+  }
+}
 
 function cloneJson(value) {
   return structuredClone(value);
@@ -380,6 +455,9 @@ function resetDomainsToBase() {
   // fully own their tables.
   domainStores.skills = new Map();
   domainStores.tools = new Map();
+  domainStores.providers = new Map();
+  domainStores.references = new Map();
+  domainStores.vcs = new Map();
   domainStores.websearch = [];
   domainStores.worktree = [];
 }
@@ -441,6 +519,21 @@ async function materializeDomain(kind, pluginId) {
       pluginId,
       strategies: domainStores.worktree,
     });
+  } else if (kind === "provider") {
+    await hostRequest("provider.transform", {
+      pluginId,
+      providers: Array.from(domainStores.providers.values()),
+    });
+  } else if (kind === "reference") {
+    await hostRequest("reference.transform", {
+      pluginId,
+      references: Array.from(domainStores.references.entries()).map(([name, source]) => ({ name, source })),
+    });
+  } else if (kind === "vcs") {
+    await hostRequest("vcs.transform", {
+      pluginId,
+      providers: Array.from(domainStores.vcs.values()),
+    });
   }
 }
 
@@ -462,6 +555,12 @@ async function rederiveDomain(kind, pluginId) {
     },
     tool: () => {
       domainStores.tools = new Map();
+    },
+    provider: () => {
+      domainStores.providers = new Map();
+    },
+    reference: () => {
+      domainStores.references = new Map();
     },
   };
   (bases[kind] ?? (() => {}))();
@@ -831,7 +930,8 @@ function makeCtx(pluginId, options) {
     },
 
     // -- vcs (G-24: host.ts:468-470's read surface — get/base over the
-    //    engine's vcs adapters) ---------------------------------------------
+    //    engine's vcs adapters; G-24 residual: transform registers
+    //    guest vcs providers, reload invalidates host vcs state) -----
     vcs: {
       async get() {
         const result = await hostRequest("vcs.get", { pluginId, args: {} });
@@ -841,7 +941,110 @@ function makeCtx(pluginId, options) {
         const result = await hostRequest("vcs.base", { pluginId, args: {} });
         return result && typeof result === "object" && "value" in result ? result.value : result;
       },
+      async reload() {
+        await hostRequest("vcs.reload", { pluginId, args: {} });
+      },
+      async transform(cb) {
+        await cb({
+          add: (definition) => {
+            const id = String(definition?.id ?? "");
+            if (!id) return;
+            domainStores.vcs.set(id, {
+              id,
+              name: String(definition?.name ?? definition?.id ?? id),
+            });
+          },
+          default: {
+            get: () => undefined,
+            set: () => {},
+          },
+        });
+        await materializeDomain("vcs", pluginId);
+        return {
+          async dispose() {
+            domainStores.vcs = new Map(
+              Array.from(domainStores.vcs.entries()).filter(([id]) => id.startsWith(`${pluginId}:`)),
+            );
+            await materializeDomain("vcs", pluginId);
+          },
+        };
+      },
     },
+
+    // -- provider (G-64: adapter.ts:346-370 — list/get over the host's
+    //    provider registry; transform's editor table mirrors the ref
+    //    ProviderDomain; reload re-derives the registry) ---------------
+    provider: {
+      async list() {
+        const result = await hostRequest("provider.list", { pluginId, args: {} });
+        return result && typeof result === "object" && "value" in result ? result.value : result;
+      },
+      async get(input) {
+        const id = typeof input === "string" ? input : input?.id;
+        const result = await hostRequest("provider.get", { pluginId, args: { id: String(id ?? "") } });
+        return result && typeof result === "object" && "value" in result ? result.value : result;
+      },
+      async reload() {
+        await hostRequest("provider.reload", { pluginId, args: {} });
+      },
+      async transform(cb) {
+        const entry = { cb };
+        domainEditors.provider.push(entry);
+        cb(editors.provider);
+        await materializeDomain("provider", pluginId);
+        return {
+          async dispose() {
+            const at = domainEditors.provider.indexOf(entry);
+            if (at >= 0) domainEditors.provider.splice(at, 1);
+            await rederiveDomain("provider", pluginId);
+          },
+        };
+      },
+    },
+
+    // -- reference (G-64: adapter.ts:427-452's reference domain — list
+    //    over the `@`-completion registry; transform adds/removes
+    //    named sources; reload refreshes) -------------------------------
+    reference: {
+      async list() {
+        const result = await hostRequest("reference.list", { pluginId, args: {} });
+        return result && typeof result === "object" && "value" in result ? result.value : result;
+      },
+      async reload() {
+        await hostRequest("reference.reload", { pluginId, args: {} });
+      },
+      async transform(cb) {
+        const entry = { cb };
+        domainEditors.reference.push(entry);
+        cb(editors.reference);
+        await materializeDomain("reference", pluginId);
+        return {
+          async dispose() {
+            const at = domainEditors.reference.indexOf(entry);
+            if (at >= 0) domainEditors.reference.splice(at, 1);
+            await rederiveDomain("reference", pluginId);
+          },
+        };
+      },
+    },
+
+    // -- experimental (G-64: host.ts:267-269 — persistentPty.read) ----
+    experimental: {
+      terminal: {
+        async read(input) {
+          const args = typeof input === "string" ? { sessionID: input } : input ?? {};
+          const result = await hostRequest("experimental.terminal.read", {
+            pluginId,
+            args: {
+              sessionID: String(args.sessionID ?? ""),
+              lines: typeof args.lines === "number" ? args.lines : null,
+            },
+          });
+          return result && typeof result === "object" && "value" in result ? result.value : result;
+        },
+      },
+    },
+
 
     // -- websearch (G-24: host.ts:479-504 — providers/query/reload over the
     //    engine service + the transform that registers guest providers) ---
@@ -869,8 +1072,19 @@ function makeCtx(pluginId, options) {
             });
           },
           default: {
-            get: () => undefined,
-            set: () => {},
+            // G-24 residual: the persisted websearch editor default
+            // (ref websearch.ts lands the selection in the auth/config
+            // store; the port persists it in the engine KV).
+            get: async () => {
+              const result = await hostRequest("websearch.default.get", { pluginId, args: {} });
+              return result && typeof result === "object" && "value" in result ? result.value : result;
+            },
+            set: async (selection) => {
+              await hostRequest("websearch.default.set", {
+                pluginId,
+                args: { selection: selection === undefined ? null : selection },
+              });
+            },
           },
         });
         await registerHook(pluginId, "websearch", "execute", async (event) => {
@@ -942,8 +1156,79 @@ function makeCtx(pluginId, options) {
 
     // -- integration (G-24: host.ts:357-367's method channel — the
     //    methodImplementation registration; authorize/refresh closures
-    //    dispatch back as integration hooks) --------------------------------
+    //    dispatch back as integration hooks. G-64: host.ts:274-357's
+    //    list/get/connect.key/oauth.*/command.*/connection.* method
+    //    surface over the engine's IntegrationHost) ---------------------
     integration: {
+      async list() {
+        const result = await hostRequest("integration.list", { pluginId, args: {} });
+        return result && typeof result === "object" && "value" in result ? result.value : result;
+      },
+      async get(input) {
+        const result = await hostRequest("integration.get", {
+          pluginId,
+          args: { integrationID: String(input?.integrationID ?? input ?? "") },
+        });
+        return result && typeof result === "object" && "value" in result ? result.value : result;
+      },
+      connect: {
+        async key(input) {
+          const args = input ?? {};
+          return hostRequest("integration.connect.key", { pluginId, args });
+        },
+      },
+      oauth: {
+        async connect(input) {
+          const args = input ?? {};
+          return hostRequest("integration.oauth.connect", { pluginId, args });
+        },
+        async status(input) {
+          const args = input ?? {};
+          return hostRequest("integration.oauth.status", { pluginId, args });
+        },
+        async complete(input) {
+          const args = input ?? {};
+          return hostRequest("integration.oauth.complete", { pluginId, args });
+        },
+        async cancel(input) {
+          const args = input ?? {};
+          return hostRequest("integration.oauth.cancel", { pluginId, args });
+        },
+      },
+      command: {
+        async connect(input) {
+          const args = input ?? {};
+          return hostRequest("integration.command.connect", { pluginId, args });
+        },
+        async status(input) {
+          const args = input ?? {};
+          return hostRequest("integration.command.status", { pluginId, args });
+        },
+        async cancel(input) {
+          const args = input ?? {};
+          return hostRequest("integration.command.cancel", { pluginId, args });
+        },
+      },
+      connection: {
+        async active(id) {
+          const result = await hostRequest("integration.connection.active", {
+            pluginId,
+            args: { id: String(id ?? "") },
+          });
+          return result && typeof result === "object" && "value" in result ? result.value : result;
+        },
+        async resolve(connection) {
+          const result = await hostRequest("integration.connection.resolve", {
+            pluginId,
+            args: connection ?? {},
+          });
+          return result && typeof result === "object" && "value" in result ? result.value : result;
+        },
+        async status(input) {
+          const args = input ?? {};
+          return hostRequest("integration.connection.status", { pluginId, args });
+        },
+      },
       method: {
         async update(input) {
           const hasAuthorize = typeof input?.authorize === "function";

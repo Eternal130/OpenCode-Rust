@@ -63,11 +63,6 @@ pub mod plugin_page_solid;
 /// tree resolution (`packages/tui/src/plugin/structure.ts`) over the
 /// TUI's native mounted paths.
 pub mod plugin_slots;
-/// RE-14 — the `/stats` usage poster's model (stats-data.ts +
-/// activity-calendar.ts + StatsPoster's layout).
-pub mod stats_page;
-/// RE-14 — the `/stats` page's solid renderer (stats.tsx:140-186).
-pub mod stats_page_solid;
 pub mod session;
 pub mod session_screen;
 pub mod session_tabs;
@@ -86,6 +81,11 @@ pub mod sidebar;
 /// stays the fallback — see the module doc + the M5 section of
 /// `docs/migration-m1-tabstrip.md`).
 pub mod sidebar_solid;
+/// RE-14 — the `/stats` usage poster's model (stats-data.ts +
+/// activity-calendar.ts + StatsPoster's layout).
+pub mod stats_page;
+/// RE-14 — the `/stats` page's solid renderer (stats.tsx:140-186).
+pub mod stats_page_solid;
 pub mod subagent_picker;
 pub mod syntax;
 pub mod tab_pulse;

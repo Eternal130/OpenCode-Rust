@@ -3116,6 +3116,35 @@ impl CommandDispatcher for StoreDispatcher {
                 store.plugins_update_outdated();
                 Dispatch::Handled
             }
+            // G-46 — `dialog.plugins.error` (plugins.tsx:224-228's "view
+            // error" action): the failed plugin(s)' error text in the
+            // error-details dialog (scrollable, esc re-seats the
+            // plugins list, enter copies/investigates — the dialog's
+            // own action layer). A no-op when no row failed.
+            "dialog.plugins.error" => {
+                let failed: Vec<_> =
+                    store.server_plugins().into_iter().filter(|row| row.error.is_some()).collect();
+                if failed.is_empty() {
+                    Dispatch::Handled
+                } else {
+                    let body = failed
+                        .iter()
+                        .map(|row| format!("{}: {}", row.id, row.error.clone().unwrap_or_default()))
+                        .collect::<Vec<_>>()
+                        .join("\n\n");
+                    let targets =
+                        failed.iter().map(|row| row.target.clone()).collect::<Vec<_>>().join(", ");
+                    store.open_error_details(
+                        "Plugin errors",
+                        "plugin",
+                        &body,
+                        &format!("failed plugin(s): {targets}"),
+                        "",
+                        true,
+                    );
+                    Dispatch::Handled
+                }
+            }
             // The registered-but-surfaceless families (v2 parity: the
             // keymap consumes the stroke; no component answers):
             // which-key panel (the keymap addon's surface), scrap/
@@ -3126,7 +3155,6 @@ impl CommandDispatcher for StoreDispatcher {
             | "service.restart"
             | "dialog.integration.rename"
             | "dialog.integration.delete"
-            | "dialog.plugins.error"
             | "which-key.toggle"
             | "which-key.layout.toggle"
             | "which-key.pending.toggle"
@@ -3586,10 +3614,10 @@ mod tests {
             crate::components::dialog_pair::rows(&store.pair_state(), 84)
         };
         assert!(pair_rows(&store).iter().any(|row| matches!(
-            row,
-            crate::components::dialog_pair::PairRow::Text { text, style: crate::components::dialog_pair::PairStyle::Muted }
-                if text == "Loading server information…"
-        )));
+        row,
+        crate::components::dialog_pair::PairRow::Text { text, style: crate::components::dialog_pair::PairStyle::Muted }
+            if text == "Loading server information…"
+    )));
         store.set_pair_state(PairState::Loaded {
             links: vec!["http://127.0.0.1:4096/auth/connect/abc".to_owned()],
             localhost: Some("http://localhost:4096/auth/connect/abc".to_owned()),
@@ -3610,10 +3638,10 @@ mod tests {
         assert!(joined.contains("opencode service set hostname 0.0.0.0"));
         store.set_pair_state(PairState::Failed("connection refused".to_owned()));
         assert!(pair_rows(&store).iter().any(|row| matches!(
-            row,
-            crate::components::dialog_pair::PairRow::Text { text, style: crate::components::dialog_pair::PairStyle::ErrorBold }
-                if text == "Could not load server information"
-        )));
+        row,
+        crate::components::dialog_pair::PairRow::Text { text, style: crate::components::dialog_pair::PairStyle::ErrorBold }
+            if text == "Could not load server information"
+    )));
         store.clear_dialogs();
 
         // /debug — the env entries (dialog-debug.tsx:25-35).
@@ -5338,4 +5366,59 @@ fn stats_open_dispatch_mounts_page_and_fetches() {
     assert_eq!(dispatcher.dispatch(&store, "stats.close", None), Dispatch::Handled);
     assert!(!store.stats_page_open());
     assert!(matches!(store.route(), Route::Session { session_id } if session_id == "s1"));
+}
+
+/// G-46 — `dialog.plugins.error` (plugins.tsx:224-228's "view
+/// error"): the failed rows' error text opens in the error-details
+/// dialog (esc re-seats the plugins list); no failed rows is a
+/// no-op.
+#[test]
+fn plugins_error_opens_error_details_for_failed_rows() {
+    use crate::reactive::Runtime;
+    let store = Store::new(Runtime::new());
+    store.set_server_plugins(Ok(vec![
+        crate::store::ServerPluginRow {
+            target: "@corp/good".into(),
+            id: "good".into(),
+            status: "active".into(),
+            error: None,
+            outdated: false,
+            updating: false,
+        },
+        crate::store::ServerPluginRow {
+            target: "@corp/bad".into(),
+            id: "bad".into(),
+            status: "failed".into(),
+            error: Some("cannot resolve module".into()),
+            outdated: false,
+            updating: false,
+        },
+    ]));
+
+    // No failed rows yet after clearing: first prove the arm opens
+    // the dialog for the failed set.
+    let mut dispatcher = StoreDispatcher;
+    assert_eq!(dispatcher.dispatch(&store, "dialog.plugins.error", None), Dispatch::Handled);
+    match &store.top_dialog().unwrap().kind {
+        DialogKind::ErrorDetails { title, error, context, back_to_plugins, .. } => {
+            assert_eq!(title, "Plugin errors");
+            assert!(error.contains("bad: cannot resolve module"), "error body: {error}");
+            assert!(context.contains("@corp/bad"), "context lists the failed target: {context}");
+            assert!(*back_to_plugins, "esc re-seats the plugins list");
+        }
+        other => panic!("unexpected dialog {other:?}"),
+    }
+
+    // The no-failures case is a contained no-op (no dialog swap).
+    store.set_server_plugins(Ok(vec![crate::store::ServerPluginRow {
+        target: "@corp/good".into(),
+        id: "good".into(),
+        status: "active".into(),
+        error: None,
+        outdated: false,
+        updating: false,
+    }]));
+    store.clear_dialogs();
+    assert_eq!(dispatcher.dispatch(&store, "dialog.plugins.error", None), Dispatch::Handled);
+    assert!(store.top_dialog().is_none(), "no failed rows: no dialog opened");
 }

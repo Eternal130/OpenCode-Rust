@@ -9,9 +9,9 @@
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, Uri};
 use axum::response::Response;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
-use super::common::{ApiError, SharedState, parse_query_field};
+use super::common::{parse_query_field, ApiError, SharedState};
 use super::session::{query_field, services};
 
 pub fn routes() -> axum::Router<SharedState> {
@@ -344,7 +344,11 @@ fn is_vcs_root(root: &std::path::Path) -> bool {
 /// scans (ref's `MAX_SAFE_INTEGER`), the 100k ceiling everywhere
 /// else.
 fn scan_budget(root: &std::path::Path, exclusions: &ScanExclusions) -> usize {
-    if is_vcs_root(root) && !exclusions.home_rooted { usize::MAX } else { SCAN_ENTRY_BUDGET }
+    if is_vcs_root(root) && !exclusions.home_rooted {
+        usize::MAX
+    } else {
+        SCAN_ENTRY_BUDGET
+    }
 }
 
 /// Sensitive-directory exclusions for a scan (port of

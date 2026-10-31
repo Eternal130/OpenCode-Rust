@@ -28,13 +28,20 @@ fn run_style(style: RunStyle, styles: &ThemeStyles) -> (CellColor, u16) {
 }
 
 /// Paint one poster line at `(x, y)` — each run is one unit.
-fn paint_line(units: &mut Vec<crate::components::chrome_solid::ChromeUnit>, line: &Line, x0: usize, y: usize, width: usize, styles: &ThemeStyles) {
+fn paint_line(
+    units: &mut Vec<crate::components::chrome_solid::ChromeUnit>,
+    line: &Line,
+    x0: usize,
+    y: usize,
+    width: usize,
+    styles: &ThemeStyles,
+) {
     let runs: Vec<(usize, Run)> = match line {
         Line::Spacer => return,
         Line::Left(runs) => runs.iter().map(|run| (0, run.clone())).collect(),
         Line::Center(runs) => {
-            let text_width: usize =
-                runs.iter().map(|run| run.text.chars().count()).sum::<usize>() + runs.len().saturating_sub(1);
+            let text_width: usize = runs.iter().map(|run| run.text.chars().count()).sum::<usize>()
+                + runs.len().saturating_sub(1);
             let x = width.saturating_sub(text_width) / 2;
             let mut at = x;
             runs.iter()
@@ -46,8 +53,8 @@ fn paint_line(units: &mut Vec<crate::components::chrome_solid::ChromeUnit>, line
                 .collect()
         }
         Line::Right(runs) => {
-            let text_width: usize =
-                runs.iter().map(|run| run.text.chars().count()).sum::<usize>() + runs.len().saturating_sub(1);
+            let text_width: usize = runs.iter().map(|run| run.text.chars().count()).sum::<usize>()
+                + runs.len().saturating_sub(1);
             let x = width.saturating_sub(text_width);
             let mut at = x;
             runs.iter()
@@ -90,14 +97,23 @@ pub fn render_stats_page_solid(
             let line = "Gathering your stats…";
             let x = width.saturating_sub(line.chars().count()) / 2;
             let y = height / 2;
-            let units = chrome_run_units("stats.loading", x, y, line, CellColor::from(styles.text_muted.fg.unwrap_or_default()), bg, 0);
+            let units = chrome_run_units(
+                "stats.loading",
+                x,
+                y,
+                line,
+                CellColor::from(styles.text_muted.fg.unwrap_or_default()),
+                bg,
+                0,
+            );
             chrome_frame("stats_page", width.max(1), height.max(1), bg, &units)
         }
         StatsPhaseView::Failed => {
             let line = "Could not load stats. Reopen /stats to try again.";
             let x = width.saturating_sub(line.chars().count()) / 2;
             let y = height / 2;
-            let units = chrome_run_units("stats.error", x, y, line, CellColor::from(styles.error), bg, 0);
+            let units =
+                chrome_run_units("stats.error", x, y, line, CellColor::from(styles.error), bg, 0);
             chrome_frame("stats_page", width.max(1), height.max(1), bg, &units)
         }
         StatsPhaseView::Loaded(poster) => render_poster_solid(poster, styles, size),
@@ -108,7 +124,11 @@ pub fn render_stats_page_solid(
 /// the block centered in the terminal (the scrollbox's centered
 /// content; paddingTop/Bottom 1).
 #[must_use]
-pub fn render_poster_solid(poster: &Poster, styles: &ThemeStyles, size: (u16, u16)) -> crate::render::Frame {
+pub fn render_poster_solid(
+    poster: &Poster,
+    styles: &ThemeStyles,
+    size: (u16, u16),
+) -> crate::render::Frame {
     let (width, height) = (usize::from(size.0), usize::from(size.1));
     let bg = page_bg(styles);
     let content = poster.lines.len();
@@ -151,7 +171,7 @@ mod tests {
             prompts: 300,
             range: SessionStatsInfoRange {
                 from: 1_767_225_600_000.0, // 2026-01-01T00:00:00Z
-                to: 1_772_323_200_000.0, // 2026-03-01T00:00:00Z
+                to: 1_772_323_200_000.0,   // 2026-03-01T00:00:00Z
             },
             sessions: 42,
             steps: 300,
@@ -178,7 +198,8 @@ mod tests {
         let theme = ThemeState::v2_dark();
         let stats = fixture();
         let poster = super::super::stats_page::stats_poster(&stats, (120, 40), "UTC");
-        let frame = render_stats_page_solid(StatsPhaseView::Loaded(&poster), &theme.styles(), (120, 40));
+        let frame =
+            render_stats_page_solid(StatsPhaseView::Loaded(&poster), &theme.styles(), (120, 40));
         let grid = frame.text_grid();
         let all = grid.join("\n");
         assert!(all.contains("opencode / stats"), "the header title");
@@ -196,11 +217,9 @@ mod tests {
     #[test]
     fn page_paints_loading_and_error_states() {
         let theme = ThemeState::v2_dark();
-        let loading =
-            render_stats_page_solid(StatsPhaseView::Loading, &theme.styles(), (80, 24));
+        let loading = render_stats_page_solid(StatsPhaseView::Loading, &theme.styles(), (80, 24));
         assert!(loading.text_grid().join("\n").contains("Gathering your stats…"));
-        let failed =
-            render_stats_page_solid(StatsPhaseView::Failed, &theme.styles(), (80, 24));
+        let failed = render_stats_page_solid(StatsPhaseView::Failed, &theme.styles(), (80, 24));
         assert!(failed
             .text_grid()
             .join("\n")

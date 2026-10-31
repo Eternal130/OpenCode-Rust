@@ -70,17 +70,17 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use opentui_core::Rgba;
 use opentui_core::renderer::CliRendererConfig;
 use opentui_core::styled_text::{StyledText, TextChunk};
+use opentui_core::Rgba;
 use opentui_solid::builder::ForItemSource;
 use opentui_solid::element::{Children, ForItem, PropValue};
 use opentui_solid::reactive::Reactive;
-use opentui_solid::{Element, Signal, SolidRenderer, box_, for_list, map, text};
+use opentui_solid::{box_, for_list, map, text, Element, Signal, SolidRenderer};
 
 use crate::components::composer::autocomplete::popup_height;
 use crate::components::composer::render::{
-    PromptView, caret_cell, footer_plan, layout_draft_lines, palette, truncate_width,
+    caret_cell, footer_plan, layout_draft_lines, palette, truncate_width, PromptView,
 };
 use crate::components::session_tabs_solid::frame_from_buffer;
 use crate::render::{CellColor, Frame};
@@ -965,8 +965,8 @@ pub fn paint_solid_prompt_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::composer::PromptDraft;
     use crate::components::composer::render::{FooterHints, MetadataLine};
+    use crate::components::composer::PromptDraft;
     use crate::theme::ThemeState;
 
     fn draft(text: &str) -> PromptDraft {

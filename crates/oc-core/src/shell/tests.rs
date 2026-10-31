@@ -238,16 +238,13 @@ async fn shell_truncation_notice_counts_lines() {
     assert_eq!(capture.output, "one\ntwo\nthree\n");
 }
 
-
 // G-33 — the capture truncation budget follows the config `tool_output`
 // keys (engine wiring: `with_output_limits`).
 #[tokio::test]
 async fn shell_capture_honors_configured_tool_output_limits() {
     let tmp = tempfile::tempdir().unwrap();
-    let shell = service(&tmp).with_output_limits(crate::tool_output::Limits {
-        max_lines: 2,
-        max_bytes: 10_000,
-    });
+    let shell = service(&tmp)
+        .with_output_limits(crate::tool_output::Limits { max_lines: 2, max_bytes: 10_000 });
     let info = shell
         .create(
             CreateInput {

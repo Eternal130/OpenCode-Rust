@@ -216,9 +216,7 @@ fn paint_body(
         0
     } else {
         let center = BODY_ROWS / 2;
-        selected
-            .saturating_sub(center)
-            .min(entries.len() - BODY_ROWS)
+        selected.saturating_sub(center).min(entries.len() - BODY_ROWS)
     };
     for (offset, entry) in entries.iter().skip(start).take(BODY_ROWS).enumerate() {
         let index = start + offset;

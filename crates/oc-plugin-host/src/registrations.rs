@@ -92,6 +92,37 @@ pub struct PluginIntegrationMethod {
     pub registration: Value,
 }
 
+/// One provider definition from a `ctx.provider.transform`
+/// materialization (G-64 — the whole derived table crosses; the
+/// definition JSON mirrors the v2 provider editor's records).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PluginProviderDef {
+    pub plugin_id: String,
+    pub id: String,
+    /// The provider definition JSON (name/models/settings/…).
+    pub definition: Value,
+}
+
+/// One reference source from a `ctx.reference.transform`
+/// materialization (G-64 — `editor.add(name, source)` records).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PluginReferenceDef {
+    pub plugin_id: String,
+    pub name: String,
+    /// The `Reference.Source` JSON (`{type: "local"|"git", …}`).
+    pub source: Value,
+}
+
+/// One vcs provider registered through `ctx.vcs.transform`'s
+/// `editor.add` (G-24 residual — the id/name row; the info/base/
+/// branches/status/diff closures stay in the guest).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginVcsProvider {
+    pub plugin_id: String,
+    pub id: String,
+    pub name: String,
+}
+
 /// One tool registered through `ctx.tool.transform` (v2 `Tool.Info`
 /// at the JS boundary: name/description/input JSON-Schema plus
 /// `options {codemode, namespace}`; execution dispatches to the guest
@@ -339,6 +370,12 @@ pub struct RegistrationSnapshot {
     pub worktree_strategies: Vec<PluginWorktreeStrategy>,
     /// G-24 — plugin-registered integration methods, by key.
     pub integration_methods: Vec<PluginIntegrationMethod>,
+    /// G-64 — plugin provider definitions, by id.
+    pub providers: Vec<PluginProviderDef>,
+    /// G-64 — plugin reference sources, by name.
+    pub references: Vec<PluginReferenceDef>,
+    /// G-24 residual — plugin vcs provider rows, by id.
+    pub vcs_providers: Vec<PluginVcsProvider>,
 }
 
 /// The mutable registration store behind the snapshot (interior to the
@@ -392,6 +429,12 @@ pub struct Registrations {
     pub worktree_strategies: BTreeMap<String, PluginWorktreeStrategy>,
     /// G-24 — plugin integration methods by key.
     pub integration_methods: BTreeMap<String, PluginIntegrationMethod>,
+    /// G-64 — plugin provider definitions by id.
+    pub providers: BTreeMap<String, PluginProviderDef>,
+    /// G-64 — plugin reference sources by name.
+    pub references: BTreeMap<String, PluginReferenceDef>,
+    /// G-24 residual — plugin vcs provider rows by id.
+    pub vcs_providers: BTreeMap<String, PluginVcsProvider>,
 }
 
 impl Registrations {
@@ -417,6 +460,9 @@ impl Registrations {
         self.websearch_providers.retain(|_, provider| provider.plugin_id != plugin_id);
         self.worktree_strategies.retain(|_, strategy| strategy.plugin_id != plugin_id);
         self.integration_methods.retain(|_, method| method.plugin_id != plugin_id);
+        self.providers.retain(|_, provider| provider.plugin_id != plugin_id);
+        self.references.retain(|_, reference| reference.plugin_id != plugin_id);
+        self.vcs_providers.retain(|_, provider| provider.plugin_id != plugin_id);
         if let Some(default) = self.agent_default.as_ref() {
             if !self.agents.contains_key(default) {
                 self.agent_default = None;
@@ -538,6 +584,80 @@ impl Registrations {
         );
     }
 
+    /// G-64 — merge one `ctx.provider.transform` materialization
+    /// (whole-table, by provider id; the definition JSON crosses whole,
+    /// the engine applies it into the location overlay).
+    pub fn merge_providers(&mut self, plugin_id: &str, providers: &[Value]) {
+        let incoming: Vec<(String, Value)> = providers
+            .iter()
+            .filter_map(|definition| {
+                let id = definition.get("id").and_then(Value::as_str)?;
+                Some((id.to_owned(), definition.clone()))
+            })
+            .collect();
+        self.providers.retain(|_, provider| {
+            provider.plugin_id != plugin_id
+                || incoming.iter().any(|(id, _)| id == provider.id.as_str())
+        });
+        for (id, definition) in incoming {
+            let provenance = self
+                .providers
+                .get(&id)
+                .map_or_else(|| plugin_id.to_owned(), |p| p.plugin_id.clone());
+            self.providers
+                .insert(id.clone(), PluginProviderDef { plugin_id: provenance, id, definition });
+        }
+    }
+
+    /// G-64 — merge one `ctx.reference.transform` materialization
+    /// (whole-table, by reference name).
+    pub fn merge_references(&mut self, plugin_id: &str, references: &[Value]) {
+        let incoming: Vec<(String, Value)> = references
+            .iter()
+            .filter_map(|entry| {
+                let name = entry.get("name").and_then(Value::as_str)?;
+                let source = entry.get("source").cloned().unwrap_or(Value::Null);
+                Some((name.to_owned(), source))
+            })
+            .collect();
+        self.references.retain(|_, reference| {
+            reference.plugin_id != plugin_id
+                || incoming.iter().any(|(name, _)| name == reference.name.as_str())
+        });
+        for (name, source) in incoming {
+            let provenance = self
+                .references
+                .get(&name)
+                .map_or_else(|| plugin_id.to_owned(), |r| r.plugin_id.clone());
+            self.references
+                .insert(name.clone(), PluginReferenceDef { plugin_id: provenance, name, source });
+        }
+    }
+
+    /// G-24 residual — merge one `ctx.vcs.transform` materialization
+    /// (whole-table, by vcs provider id; the closures stay in the
+    /// guest).
+    pub fn merge_vcs_providers(&mut self, plugin_id: &str, providers: &[Value]) {
+        let incoming: Vec<(String, String)> = providers
+            .iter()
+            .filter_map(|definition| {
+                let id = definition.get("id")?.as_str()?;
+                let name = definition.get("name").and_then(Value::as_str).unwrap_or(id);
+                Some((id.to_owned(), name.to_owned()))
+            })
+            .collect();
+        self.vcs_providers.retain(|_, provider| {
+            provider.plugin_id != plugin_id
+                || incoming.iter().any(|(id, _)| id == provider.id.as_str())
+        });
+        for (id, name) in incoming {
+            self.vcs_providers.insert(
+                id.clone(),
+                PluginVcsProvider { plugin_id: plugin_id.to_owned(), id, name },
+            );
+        }
+    }
+
     /// Merge one `ctx.skill.transform` materialization (whole-table, by
     /// skill id).
     pub fn merge_skills(&mut self, plugin_id: &str, skills: &[Value]) {
@@ -642,6 +762,9 @@ impl Registrations {
             websearch_providers: self.websearch_providers.values().cloned().collect(),
             worktree_strategies: self.worktree_strategies.values().cloned().collect(),
             integration_methods: self.integration_methods.values().cloned().collect(),
+            providers: self.providers.values().cloned().collect(),
+            references: self.references.values().cloned().collect(),
+            vcs_providers: self.vcs_providers.values().cloned().collect(),
             plugins: self.plugins.values().cloned().collect(),
             default_agent: self.agent_default.clone(),
         }
