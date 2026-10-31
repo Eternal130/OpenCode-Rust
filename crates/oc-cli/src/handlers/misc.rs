@@ -687,8 +687,7 @@ mod tests {
         assert_eq!(out["provider"]["headers"]["X-Custom"], "***");
         assert_eq!(out["provider"]["nested"][0]["headers"]["Also"], "***");
         assert_eq!(
-            out["provider"]["nested"][0]["url"],
-            "https://a.example.com",
+            out["provider"]["nested"][0]["url"], "https://a.example.com",
             "headers flag does not leak to siblings"
         );
     }

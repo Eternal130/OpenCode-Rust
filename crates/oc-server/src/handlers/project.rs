@@ -412,7 +412,7 @@ async fn worktree_create(
     // default backend; worktree/git.ts → git.ts:657): discover the
     // repository from the source, then
     // `git worktree add --detach -- <directory> <ref | HEAD>`.
-    let registry = std::sync::Arc::clone(&state.worktree_strategies);
+    let registry = state.worktree_strategies.read().clone();
     let strategy = registry.get(registry.selected()).expect("the default strategy is registered");
     let created = strategy
         .create(&oc_core::project::worktree_strategy::CreateInput {
@@ -609,7 +609,7 @@ async fn worktree_refresh(
     // that vanished mid-scan. The first entry per root is the main
     // checkout (type "root", unowned); the rest are linked worktrees
     // (type "worktree" → the backend's strategy id).
-    let registry = std::sync::Arc::clone(&state.worktree_strategies);
+    let registry = state.worktree_strategies.read().clone();
     let mut discovered: Vec<(std::path::PathBuf, Option<String>)> = Vec::new();
     for root in roots {
         if !root.is_dir() {
@@ -743,7 +743,7 @@ async fn worktree_remove(
             None,
         ));
     };
-    let registry = std::sync::Arc::clone(&state.worktree_strategies);
+    let registry = state.worktree_strategies.read().clone();
     let Some(strategy) = registry.get(&stored_id) else {
         return Err(ApiError::worktree(
             format!("Worktree strategy unavailable: {stored_id}"),

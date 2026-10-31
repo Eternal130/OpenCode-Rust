@@ -103,13 +103,15 @@ pub use context::{
     install::{default_root as install_root, install, InstallOptions, Installed},
     is_mutating_hook,
     update::{collect_stale, global_cache as update_cache, update, UpdateCache},
-    Bridge, HostState, NoSessionEngine, NoToolEngine, PermissionPort, SessionPort, ToolPort,
-    VcsPort, WebsearchPort, MUTATING_DISPATCH_TIMEOUT, SESSION_METHODS,
+    Bridge, HostState, IntegrationPort, NoSessionEngine, NoToolEngine, PermissionPort,
+    ProviderPort, ReferencePort, SessionPort, TerminalPort, ToolPort, VcsPort, WebsearchPort,
+    MUTATING_DISPATCH_TIMEOUT, SESSION_METHODS,
 };
 pub use registrations::{
     PluginAgent, PluginCommand, PluginDialog, PluginGroupRule, PluginHomeAction, PluginHook,
-    PluginKeymapCommand, PluginMcp, PluginRoute, PluginRpc, PluginSkill, PluginSlotClaim,
-    PluginState, PluginStatus, PluginTheme, PluginTool, RegistrationSnapshot,
+    PluginKeymapCommand, PluginMcp, PluginProviderDef, PluginReferenceDef, PluginRoute, PluginRpc,
+    PluginSkill, PluginSlotClaim, PluginState, PluginStatus, PluginTheme, PluginTool,
+    PluginVcsProvider, RegistrationSnapshot,
 };
 pub use resolve::{
     discover_directory_ops, parse_ops, resolve, PluginOp, PluginSourceKind, Resolution,
@@ -158,6 +160,18 @@ pub struct PluginHostConfig {
     /// `ctx.vcs.get/base` routing target (G-24): the engine's vcs
     /// adapters. `None` declines every call.
     pub vcs_port: Option<Arc<dyn VcsPort>>,
+    /// `ctx.provider.list/get/reload` routing target (G-64): the
+    /// engine's provider registry. `None` declines every call.
+    pub provider_port: Option<Arc<dyn ProviderPort>>,
+    /// `ctx.reference.list/reload` routing target (G-64): the engine's
+    /// reference registry. `None` declines every call.
+    pub reference_port: Option<Arc<dyn ReferencePort>>,
+    /// `ctx.experimental.terminal.read` routing target (G-64): the
+    /// persistent pty. `None` declines every call.
+    pub terminal_port: Option<Arc<dyn TerminalPort>>,
+    /// `ctx.integration.*` routing target (G-64): the engine's
+    /// IntegrationHost. `None` declines every call.
+    pub integration_port: Option<Arc<dyn IntegrationPort>>,
     /// Config-sourced plugin options keyed by entry path (`ctx.options`,
     /// v2 plugin `{package, options}` entries).
     pub entry_options: BTreeMap<String, Value>,
@@ -180,6 +194,10 @@ impl Default for PluginHostConfig {
             permission_port: None,
             websearch_port: None,
             vcs_port: None,
+            provider_port: None,
+            reference_port: None,
+            terminal_port: None,
+            integration_port: None,
             entry_options: BTreeMap::new(),
         }
     }
@@ -1167,6 +1185,10 @@ fn supervisor_config(
         permission_port: config.permission_port.take(),
         websearch_port: config.websearch_port.take(),
         vcs_port: config.vcs_port.take(),
+        provider_port: config.provider_port.take(),
+        reference_port: config.reference_port.take(),
+        terminal_port: config.terminal_port.take(),
+        integration_port: config.integration_port.take(),
         entry_options: std::mem::take(&mut config.entry_options),
     }
 }

@@ -12,8 +12,7 @@ use std::path::{Path, PathBuf};
 use oc_plugin_host::{install_root, update, update_cache, InstallOptions, UpdateCache};
 
 fn sandbox(tag: &str) -> PathBuf {
-    let dir =
-        PathBuf::from(format!("/tmp/opencode/ocph-update-lane-{tag}-{}", std::process::id()));
+    let dir = PathBuf::from(format!("/tmp/opencode/ocph-update-lane-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("sandbox dir");
     dir
@@ -54,11 +53,8 @@ fn bun_shim(dir: &Path) -> PathBuf {
 }
 
 fn stage(root: &Path, package: &str, version: &str, stamp: &str) {
-    let pkg = root
-        .join(format!("{package}@{version}"))
-        .join(stamp)
-        .join("node_modules")
-        .join(package);
+    let pkg =
+        root.join(format!("{package}@{version}")).join(stamp).join("node_modules").join(package);
     std::fs::create_dir_all(&pkg).expect("stage dir");
     std::fs::write(
         pkg.join("package.json"),
@@ -137,10 +133,8 @@ fn update_sweeps_stale_generations_after_the_update() {
     let root = box_.join("npm-cache");
     std::fs::create_dir_all(&root).expect("cache root");
 
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis();
+    let now =
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis();
     let day = 24 * 60 * 60 * 1_000u128;
     // The installed 1.0.0 line: two fresh generations (the keep-2
     // floor protects them whatever their age) plus two stale ones past

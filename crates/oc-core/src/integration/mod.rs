@@ -32,6 +32,13 @@ use types::{
     KeyValue, Method, OAuthValue, StoredCredential,
 };
 
+pub use types::{
+    Attempt as IntegrationAttempt, AttemptStatus as IntegrationAttemptStatus,
+    CommandAttempt as IntegrationCommandAttempt,
+    CommandAttemptStatus as IntegrationCommandAttemptStatus,
+    CredentialValue as IntegrationCredentialValue, FormAnswer as IntegrationFormAnswer,
+};
+
 /// v2 attempt timings (integration.ts:237-239).
 const ATTEMPT_LIFETIME_MS: i64 = 10 * 60 * 1000;
 const TERMINAL_RETENTION_MS: i64 = 60 * 1000;

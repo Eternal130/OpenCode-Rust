@@ -9,8 +9,8 @@
 //! arm here (`None` limits, prompt.ts:145).
 
 pub use oc_core::session::prompt::{
-    detect_mime, materialize_attachment as materialize_attachment_with_limits,
-    AttachmentError, MAX_ATTACHMENT_BYTES,
+    detect_mime, materialize_attachment as materialize_attachment_with_limits, AttachmentError,
+    MAX_ATTACHMENT_BYTES,
 };
 use oc_schema::prompt::{FileAttachment, InputFileAttachment};
 

@@ -505,9 +505,7 @@ impl Cli {
         }
         // RE-05 — `auth login --answer`: ref Schema caps the answer
         // list at `atMost(100)` (commands.ts ~:167-169).
-        if let Some(Commands::Auth {
-            command: AuthCommands::Login { answer, .. },
-        }) = &self.command
+        if let Some(Commands::Auth { command: AuthCommands::Login { answer, .. } }) = &self.command
         {
             if answer.len() > MAX_AUTH_ANSWERS {
                 return Err(clap::Error::raw(
@@ -984,8 +982,9 @@ mod tests {
     /// `>= 1`; 0 must be rejected and 1 accepted.
     #[test]
     fn session_list_max_count_minimum_is_one() {
-        let parsed = Cli::try_parse_from_checked(["opencode", "session", "list", "--max-count", "1"])
-            .expect("max-count 1 parses");
+        let parsed =
+            Cli::try_parse_from_checked(["opencode", "session", "list", "--max-count", "1"])
+                .expect("max-count 1 parses");
         assert!(
             matches!(
                 &parsed.command,
@@ -1008,13 +1007,9 @@ mod tests {
     /// while a valid one parses.
     #[test]
     fn serve_cors_rejects_empty_string() {
-        let parsed = Cli::try_parse_from_checked([
-            "opencode",
-            "serve",
-            "--cors",
-            "https://example.com",
-        ])
-        .expect("a valid origin parses");
+        let parsed =
+            Cli::try_parse_from_checked(["opencode", "serve", "--cors", "https://example.com"])
+                .expect("a valid origin parses");
         assert!(
             matches!(
                 &parsed.command,

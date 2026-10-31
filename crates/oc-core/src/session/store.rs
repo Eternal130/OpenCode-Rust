@@ -26,9 +26,9 @@ use oc_schema::session_support::SessionMetadata;
 use rusqlite::OptionalExtension;
 
 use crate::bus::{Bus, BusError, PublishOptions};
-use crate::database::Database;
 use crate::database::error::Result;
 use crate::database::schema::{SessionMessageRow, SessionRow};
+use crate::database::Database;
 
 /// The project resolution [`SessionStore::create`] needs
 /// (`projects.resolve(location.directory)`).

@@ -10,9 +10,9 @@
 
 use std::sync::Arc;
 
-use oc_client::Client;
 use oc_client::error::ClientError;
 use oc_client::types::*;
+use oc_client::Client;
 use oc_core::engine::{Engine, EngineOptions};
 use oc_server::handlers;
 use oc_server::state::{AppState, AuthConfig};
@@ -206,11 +206,9 @@ async fn handlers_prompt_resume_false_and_inbox() {
     assert_eq!(inbox_user.session_id, session_id);
 
     let pending = client.session().inbox().list(&session_id).await.expect("inbox");
-    assert!(
-        pending
-            .iter()
-            .any(|item| matches!(item, SessionInboxInfo::User(user) if user.id == "msg_custom1"))
-    );
+    assert!(pending
+        .iter()
+        .any(|item| matches!(item, SessionInboxInfo::User(user) if user.id == "msg_custom1")));
 
     let error = client
         .session()
@@ -1151,7 +1149,9 @@ async fn handlers_shell_create_defaults_cwd_to_location() {
     // boot() chdirs to the workspace tempdir, which is the location.
     let directory = std::env::current_dir().expect("cwd").to_string_lossy().into_owned();
 
-    for body in [serde_json::json!({"command": "pwd"}), serde_json::json!({"command": "pwd", "cwd": ""})] {
+    for body in
+        [serde_json::json!({"command": "pwd"}), serde_json::json!({"command": "pwd", "cwd": ""})]
+    {
         let shell = client
             .shell()
             .create(&ShellCreateQuery::default(), &serde_json::from_value(body).unwrap())
@@ -1159,18 +1159,24 @@ async fn handlers_shell_create_defaults_cwd_to_location() {
             .expect("shell create")
             .data;
         for _ in 0..50 {
-            let current = client.shell().get(&shell.id, &ShellGetQuery::default()).await.expect("get");
+            let current =
+                client.shell().get(&shell.id, &ShellGetQuery::default()).await.expect("get");
             if current.data.status != ShellInfoStatus::Running {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(40)).await;
         }
-        let output =
-            client.shell().output(&shell.id, &ShellOutputQuery::default()).await.expect("output").data;
+        let output = client
+            .shell()
+            .output(&shell.id, &ShellOutputQuery::default())
+            .await
+            .expect("output")
+            .data;
         let printed = output.output.trim();
         assert!(
-            printed == directory || std::path::Path::new(printed).canonicalize().ok().as_deref()
-                == std::path::Path::new(&directory).canonicalize().ok().as_deref(),
+            printed == directory
+                || std::path::Path::new(printed).canonicalize().ok().as_deref()
+                    == std::path::Path::new(&directory).canonicalize().ok().as_deref(),
             "pwd {printed:?} should be location {directory:?}"
         );
         client.shell().remove(&shell.id, &ShellRemoveQuery::default()).await.expect("remove");
@@ -1464,7 +1470,13 @@ async fn seed_session_message(server: &TestServer, session_id: &str, id: &str, t
             tx.execute(
                 "INSERT INTO session_message (id, session_id, type, seq, time_created, \
                  time_updated, data) VALUES (?1, ?2, 'user', ?3, ?4, ?4, ?5)",
-                (message_id, session, time, time, r#"{"role":"user","text":"hi","time":{"created":100}}"#),
+                (
+                    message_id,
+                    session,
+                    time,
+                    time,
+                    r#"{"role":"user","text":"hi","time":{"created":100}}"#,
+                ),
             )?;
             Ok(())
         })

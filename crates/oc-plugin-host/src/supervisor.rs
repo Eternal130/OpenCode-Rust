@@ -123,6 +123,18 @@ pub struct SupervisorConfig {
     pub websearch_port: Option<Arc<dyn crate::context::WebsearchPort>>,
     /// The vcs backend (G-24): `None` declines every `ctx.vcs.*` call.
     pub vcs_port: Option<Arc<dyn crate::context::VcsPort>>,
+    /// The provider registry backend (G-64): `None` declines every
+    /// `ctx.provider.list/get/reload` call.
+    pub provider_port: Option<Arc<dyn crate::context::ProviderPort>>,
+    /// The reference registry backend (G-64): `None` declines every
+    /// `ctx.reference.*` call.
+    pub reference_port: Option<Arc<dyn crate::context::ReferencePort>>,
+    /// The persistent-pty read backend (G-64): `None` declines
+    /// `ctx.experimental.terminal.read`.
+    pub terminal_port: Option<Arc<dyn crate::context::TerminalPort>>,
+    /// The integration backend (G-64): `None` declines every
+    /// `ctx.integration.*` / `ctx.integration.connection.*` call.
+    pub integration_port: Option<Arc<dyn crate::context::IntegrationPort>>,
 }
 
 impl Default for SupervisorConfig {
@@ -147,6 +159,10 @@ impl Default for SupervisorConfig {
             permission_port: None,
             websearch_port: None,
             vcs_port: None,
+            provider_port: None,
+            reference_port: None,
+            terminal_port: None,
+            integration_port: None,
         }
     }
 }
@@ -353,12 +369,27 @@ impl Shared {
             // -- G-24: the websearch/worktree transform materializations
             //    (registration time only — same synchronous shape as
             //    the wave-2 domains; the closures stay in the guest).
-            "websearch.transform" | "worktree.transform" => {
+            //    G-64/G-24 residual: the provider/reference/vcs
+            //    transform tables follow the same merge.
+            "websearch.transform" | "worktree.transform" | "provider.transform"
+            | "reference.transform" | "vcs.transform" => {
                 let mut registrations =
                     self.registrations.write().expect("registrations poisoned");
                 let plugin_id = params.get("pluginId").and_then(Value::as_str).unwrap_or("?");
                 match method {
                     "websearch.transform" => registrations.merge_websearch_providers(
+                        plugin_id,
+                        params.get("providers").and_then(Value::as_array).cloned().unwrap_or_default().as_slice(),
+                    ),
+                    "provider.transform" => registrations.merge_providers(
+                        plugin_id,
+                        params.get("providers").and_then(Value::as_array).cloned().unwrap_or_default().as_slice(),
+                    ),
+                    "reference.transform" => registrations.merge_references(
+                        plugin_id,
+                        params.get("references").and_then(Value::as_array).cloned().unwrap_or_default().as_slice(),
+                    ),
+                    "vcs.transform" => registrations.merge_vcs_providers(
                         plugin_id,
                         params.get("providers").and_then(Value::as_array).cloned().unwrap_or_default().as_slice(),
                     ),
@@ -428,14 +459,52 @@ impl Shared {
             }
             // -- G-24: `ctx.websearch.providers/query` over the
             //    engine's WebSearch service (async off the reader).
-            "websearch.providers" | "websearch.query" => {
+            "websearch.providers" | "websearch.query" | "websearch.default.get"
+            | "websearch.default.set" => {
                 self.answer_websearch_async(id, method, params);
                 None
             }
-            // -- G-24: `ctx.vcs.get/base` over the engine's vcs
+            // -- G-24: `ctx.vcs.get/base/reload` over the engine's vcs
             //    adapters (async off the reader).
-            "vcs.get" | "vcs.base" => {
+            "vcs.get" | "vcs.base" | "vcs.reload" => {
                 self.answer_vcs_async(id, method, params);
+                None
+            }
+            // -- G-64: `ctx.provider.list/get/reload` over the engine's
+            //    provider registry (async off the reader).
+            "provider.list" | "provider.get" | "provider.reload" => {
+                self.answer_provider_async(id, method, params);
+                None
+            }
+            // -- G-64: `ctx.reference.list/reload` over the engine's
+            //    reference registry (async off the reader).
+            "reference.list" | "reference.reload" => {
+                self.answer_reference_async(id, method, params);
+                None
+            }
+            // -- G-64: `ctx.experimental.terminal.read` over the
+            //    persistent pty (async off the reader).
+            "experimental.terminal.read" => {
+                self.answer_terminal_async(id, method, params);
+                None
+            }
+            // -- G-64: `ctx.integration.*` + `ctx.integration.connection.*`
+            //    over the engine's IntegrationHost (one passthrough
+            //    method; async off the reader).
+            "integration.list"
+            | "integration.get"
+            | "integration.connect.key"
+            | "integration.oauth.connect"
+            | "integration.oauth.status"
+            | "integration.oauth.complete"
+            | "integration.oauth.cancel"
+            | "integration.command.connect"
+            | "integration.command.status"
+            | "integration.command.cancel"
+            | "integration.connection.active"
+            | "integration.connection.resolve"
+            | "integration.connection.status" => {
+                self.answer_integration_async(id, method, params);
                 None
             }
             // -- wave 4: Code Mode nested tool calls (`tools.<path>`
@@ -662,12 +731,21 @@ impl Shared {
             .and_then(Value::as_str)
             .filter(|id| !id.is_empty())
             .map(str::to_owned);
+        let selection = args.get("selection").cloned().unwrap_or(Value::Null);
         let method = method.to_owned();
         let outbound = self.outbound.read().expect("outbound lock poisoned").clone();
         handle.spawn(async move {
             let reply = match method.as_str() {
                 "websearch.providers" => match port.providers().await {
                     Ok(value) => protocol::response(id, json!({ "value": value })),
+                    Err(message) => protocol::error_response(id, &message),
+                },
+                "websearch.default.get" => match port.default_provider().await {
+                    Ok(value) => protocol::response(id, json!({ "value": value })),
+                    Err(message) => protocol::error_response(id, &message),
+                },
+                "websearch.default.set" => match port.set_default(selection).await {
+                    Ok(()) => protocol::response(id, Value::Null),
                     Err(message) => protocol::error_response(id, &message),
                 },
                 "websearch.query" => {
@@ -717,10 +795,176 @@ impl Shared {
                     Ok(value) => protocol::response(id, json!({ "value": value })),
                     Err(message) => protocol::error_response(id, &message),
                 },
+                "vcs.reload" => match port.reload().await {
+                    Ok(()) => protocol::response(id, Value::Null),
+                    Err(message) => protocol::error_response(id, &message),
+                },
                 other => protocol::error_response(id, &format!("unknown vcs method {other:?}")),
             };
             let _ = outbound.send(reply);
         });
+    }
+
+    /// G-64 — the async `ctx.provider.*` path: the engine's provider
+    /// registry answers off the reader (deadlock rule 1).
+    fn answer_provider_async(self: &Arc<Self>, id: u64, method: &str, params: &Value) {
+        let args = params.get("args").cloned().unwrap_or(Value::Null);
+        let provider_id = args
+            .get("id")
+            .or_else(|| args.get("providerID"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let Some(handle) = self.runtime_handle.clone() else {
+            self.reply_inline(id, "plugin host runtime unavailable");
+            return;
+        };
+        let port = match self.config.provider_port.clone() {
+            Some(port) => port,
+            None => {
+                self.reply_inline(
+                    id,
+                    &format!("provider.{method}: no provider registry attached to the plugin host"),
+                );
+                return;
+            }
+        };
+        let method = method.to_owned();
+        let outbound = self.outbound.read().expect("outbound lock poisoned").clone();
+        handle.spawn(async move {
+            let reply = match method.as_str() {
+                "provider.list" => match port.list().await {
+                    Ok(value) => protocol::response(id, json!({ "value": value })),
+                    Err(message) => protocol::error_response(id, &message),
+                },
+                "provider.get" => match port.get(&provider_id).await {
+                    Ok(value) => protocol::response(id, json!({ "value": value })),
+                    Err(message) => protocol::error_response(id, &message),
+                },
+                "provider.reload" => match port.reload().await {
+                    Ok(()) => protocol::response(id, Value::Null),
+                    Err(message) => protocol::error_response(id, &message),
+                },
+                other => {
+                    protocol::error_response(id, &format!("unknown provider method {other:?}"))
+                }
+            };
+            let _ = outbound.send(reply);
+        });
+    }
+
+    /// G-64 — the async `ctx.reference.*` path (the `@`-completion
+    /// reference registry).
+    fn answer_reference_async(self: &Arc<Self>, id: u64, method: &str, _params: &Value) {
+        let Some(handle) = self.runtime_handle.clone() else {
+            self.reply_inline(id, "plugin host runtime unavailable");
+            return;
+        };
+        let port = match self.config.reference_port.clone() {
+            Some(port) => port,
+            None => {
+                self.reply_inline(
+                    id,
+                    &format!(
+                        "reference.{method}: no reference registry attached to the plugin host"
+                    ),
+                );
+                return;
+            }
+        };
+        let method = method.to_owned();
+        let outbound = self.outbound.read().expect("outbound lock poisoned").clone();
+        handle.spawn(async move {
+            let reply = match method.as_str() {
+                "reference.list" => match port.list().await {
+                    Ok(value) => protocol::response(id, json!({ "value": value })),
+                    Err(message) => protocol::error_response(id, &message),
+                },
+                "reference.reload" => match port.reload().await {
+                    Ok(()) => protocol::response(id, Value::Null),
+                    Err(message) => protocol::error_response(id, &message),
+                },
+                other => {
+                    protocol::error_response(id, &format!("unknown reference method {other:?}"))
+                }
+            };
+            let _ = outbound.send(reply);
+        });
+    }
+
+    /// G-64 — the async `ctx.experimental.terminal.read` path (the
+    /// persistent pty's session terminal).
+    fn answer_terminal_async(self: &Arc<Self>, id: u64, method: &str, params: &Value) {
+        let args = params.get("args").cloned().unwrap_or(Value::Null);
+        let session_id =
+            args.get("sessionID").and_then(Value::as_str).unwrap_or_default().to_owned();
+        let lines =
+            args.get("lines").and_then(Value::as_u64).and_then(|lines| u32::try_from(lines).ok());
+        let Some(handle) = self.runtime_handle.clone() else {
+            self.reply_inline(id, "plugin host runtime unavailable");
+            return;
+        };
+        let port = match self.config.terminal_port.clone() {
+            Some(port) => port,
+            None => {
+                self.reply_inline(
+                    id,
+                    &format!("{method}: no terminal service attached to the plugin host"),
+                );
+                return;
+            }
+        };
+        let method = method.to_owned();
+        let outbound = self.outbound.read().expect("outbound lock poisoned").clone();
+        handle.spawn(async move {
+            let reply = if session_id.is_empty() {
+                protocol::error_response(id, "experimental.terminal.read requires a sessionID")
+            } else {
+                match port.read(&session_id, lines).await {
+                    Ok(value) => protocol::response(id, json!({ "value": value })),
+                    Err(message) => protocol::error_response(id, &message),
+                }
+            };
+            let _ = method; // only the read arm exists today
+            let _ = outbound.send(reply);
+        });
+    }
+
+    /// G-64 — the async `ctx.integration.*` passthrough (the ref's
+    /// method channel over the engine's IntegrationHost).
+    fn answer_integration_async(self: &Arc<Self>, id: u64, method: &str, params: &Value) {
+        let args = params.get("args").cloned().unwrap_or(Value::Null);
+        let Some(handle) = self.runtime_handle.clone() else {
+            self.reply_inline(id, "plugin host runtime unavailable");
+            return;
+        };
+        let port = match self.config.integration_port.clone() {
+            Some(port) => port,
+            None => {
+                self.reply_inline(
+                    id,
+                    &format!("{method}: no integration service attached to the plugin host"),
+                );
+                return;
+            }
+        };
+        // The ref method name: `integration.oauth.connect` →
+        // `oauth.connect` (the IntegrationHost port's keys).
+        let inner = method.strip_prefix("integration.").unwrap_or(method).to_owned();
+        let outbound = self.outbound.read().expect("outbound lock poisoned").clone();
+        handle.spawn(async move {
+            let reply = match port.call(&inner, &args).await {
+                Ok(value) => protocol::response(id, json!({ "value": value })),
+                Err(message) => protocol::error_response(id, &message),
+            };
+            let _ = outbound.send(reply);
+        });
+    }
+
+    /// Best-effort immediate error reply (no runtime / no port bound).
+    fn reply_inline(&self, id: u64, message: &str) {
+        let outbound = self.outbound.read().expect("outbound lock poisoned").clone();
+        let _ = outbound.send(protocol::error_response(id, message));
     }
 
     /// The async `session.*` path: spawn the port call onto the

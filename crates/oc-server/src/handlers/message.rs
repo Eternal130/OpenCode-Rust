@@ -13,13 +13,13 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, Uri};
 use axum::response::{IntoResponse, Response};
 use oc_core::session::store::{ListDirection, ListOrder, MessagesInput};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use super::common::{
-    ApiError, CursorDirection, ListOrderWire, SharedState, decode_message_cursor,
-    encode_message_cursor, json_data, message_row_to_info,
+    decode_message_cursor, encode_message_cursor, json_data, message_row_to_info, ApiError,
+    CursorDirection, ListOrderWire, SharedState,
 };
-use super::session::{DEFAULT_LIMIT, query_field, session_services};
+use super::session::{query_field, session_services, DEFAULT_LIMIT};
 
 pub fn routes() -> axum::Router<SharedState> {
     axum::Router::new()

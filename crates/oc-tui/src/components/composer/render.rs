@@ -35,8 +35,8 @@
 //! the caret renders as v2's visible resting glyph, which in a golden
 //! frame is nothing.
 
-use crate::components::composer::PromptDraft;
 use crate::components::composer::autocomplete::AutocompleteOption;
+use crate::components::composer::PromptDraft;
 use crate::render::CellColor;
 use crate::theme::ThemeState;
 use crate::wrap::display_width;
@@ -1415,7 +1415,7 @@ mod tests {
     /// runs).
     #[test]
     fn running_spinner_paints_the_footer_row() {
-        use crate::components::composer::knight::{KnightOptions, composer_spinner_cell};
+        use crate::components::composer::knight::{composer_spinner_cell, KnightOptions};
         let theme = ThemeState::v2_dark();
         let options = KnightOptions {
             color: oc_theme::Rgba::from_ints(0xff, 0, 0, 0xff),

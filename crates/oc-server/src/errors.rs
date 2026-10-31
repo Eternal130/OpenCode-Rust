@@ -129,7 +129,10 @@ pub fn invalid_request_kind(message: impl Into<String>, kind: impl Into<String>)
 /// uses where the error is constructed directly rather than from a schema
 /// parse (e.g. server/src/location.ts:51-53's `Invalid session ID`).
 #[must_use]
-pub fn invalid_request_message_field(message: impl Into<String>, field: impl Into<String>) -> ApiError {
+pub fn invalid_request_message_field(
+    message: impl Into<String>,
+    field: impl Into<String>,
+) -> ApiError {
     tagged(
         "InvalidRequestError",
         StatusCode::BAD_REQUEST,

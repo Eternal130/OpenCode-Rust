@@ -164,8 +164,8 @@ mod tests {
 
 #[cfg(test)]
 mod shared_tests {
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
 
     use futures::StreamExt;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};

@@ -115,7 +115,12 @@ pub struct AppState {
     /// strategies.ts:48-65). Seeded at boot from the plugin snapshot;
     /// the worktree handlers read it instead of building a
     /// request-local registry.
-    pub worktree_strategies: std::sync::Arc<oc_core::project::worktree_strategy::StrategyRegistry>,
+    /// G-24 residual: behind a RwLock so the post-update hot reload can
+    /// re-run the strategy-registry seeding (mirror of boot.rs's
+    /// `plugin_worktree_registry`) when a plugin update lands.
+    pub worktree_strategies: std::sync::Arc<
+        parking_lot::RwLock<std::sync::Arc<oc_core::project::worktree_strategy::StrategyRegistry>>,
+    >,
 }
 
 impl AppState {
@@ -161,9 +166,9 @@ impl AppState {
             watched_config: None,
             wellknown_restore: std::sync::OnceLock::new(),
             environment,
-            worktree_strategies: std::sync::Arc::new(
-                oc_core::project::worktree_strategy::StrategyRegistry::new(),
-            ),
+            worktree_strategies: std::sync::Arc::new(parking_lot::RwLock::new(
+                std::sync::Arc::new(oc_core::project::worktree_strategy::StrategyRegistry::new()),
+            )),
         }
     }
 
