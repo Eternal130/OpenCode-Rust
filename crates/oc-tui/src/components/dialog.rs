@@ -130,6 +130,7 @@ pub fn handle_dialog_key(
         | DialogKind::ToolOutput { .. }
         | DialogKind::ShellOutput { .. }
         | DialogKind::DiffSource
+        | DialogKind::DiffBase
         | DialogKind::DiffHelp
         | DialogKind::Mcp
         | DialogKind::McpError { .. }
@@ -856,6 +857,7 @@ pub fn render_overlay_with_options(
         | DialogKind::ToolOutput { .. }
         | DialogKind::ShellOutput { .. }
         | DialogKind::DiffSource
+        | DialogKind::DiffBase
         | DialogKind::DiffHelp
         | DialogKind::Plugins
         | DialogKind::TabMenu { .. }
@@ -1316,9 +1318,22 @@ pub fn execute_submission(
         // diff-viewer.tsx:748-751): close + switch (a refetch rides
         // the store's diff sink).
         Some(DialogKind::DiffSource) => {
+            // G-69 — the Base row opens the branch selector instead
+            // (`onSelect: props.onChooseBase`, diff-viewer.tsx:752-755).
+            if value == "base" {
+                store.open_diff_base_dialog();
+                return crate::components::command_palette::Dispatch::Handled;
+            }
             let mode = crate::store::DiffSource::parse(value);
             store.clear_dialogs();
             store.switch_diff_source(mode);
+            return crate::components::command_palette::Dispatch::Handled;
+        }
+        // G-69 — the base selector's `onSelect` (diff-viewer.tsx:
+        // 277-282): remember the ref (until the TUI exits) + refetch.
+        Some(DialogKind::DiffBase) => {
+            store.clear_dialogs();
+            store.select_diff_base(value);
             return crate::components::command_palette::Dispatch::Handled;
         }
         // The rows-only surfaces (diff shortcuts, status, pair,

@@ -216,8 +216,12 @@ pub enum DialogKind {
     ShellOutput { shell_id: String },
     /// SURF-2: the diff source select (`diff.switch_source`,
     /// diff-viewer.tsx:735-767): All / Committed / Uncommitted
-    /// (+ Last turn from a session route).
+    /// (+ Last turn from a session route) + G-69's Base row.
     DiffSource,
+    /// G-69 — the diff BASE BRANCH selector (`DiffBaseDialog`,
+    /// diff-viewer.tsx:246-290): `vcs.branch.list` rows, footer
+    /// "Remembered until the TUI exits".
+    DiffBase,
     /// SURF-2: the diff shortcuts dialog (`DiffViewerHelpDialog`,
     /// diff-viewer.tsx:1100-1192) — `diff.help`.
     DiffHelp,
@@ -1761,6 +1765,19 @@ pub struct Store {
     /// The diff fetch seam (`vcs.base`/`vcs.diff` through the loop
     /// fetcher; tests record).
     diff_sink: std::cell::RefCell<Rc<dyn DiffSink>>,
+    /// G-69 — `memory.bases` (diff-viewer.tsx:118,229-232): the
+    /// CHOSEN base ref per location key, remembered until the TUI
+    /// exits (the in-memory Map the ref's review memory holds).
+    diff_bases: RefCell<std::collections::HashMap<String, String>>,
+    /// G-69 — the diff viewer's directory (the launch cwd the diff
+    /// worker fetches; keys the bases memory + the branch list).
+    diff_directory: RefCell<String>,
+    /// G-69 — `vcs.branch.list`'s loaded rows (the base selector's
+    /// options; fetched through [`BranchListSink`] at dialog open).
+    diff_branches: RefCell<Option<Vec<String>>>,
+    /// G-69 — the branch-list fetch seam (the loop fetcher's
+    /// `vcs.branch.list` worker; tests record).
+    branch_list_sink: std::cell::RefCell<Rc<dyn BranchListSink>>,
     /// RE-14 — the `/stats` page's live state (feature-plugins/
     /// system/stats.tsx:182-216): mounted fullscreen while open, the
     /// page's own escape layer, `stats.close` returns to
@@ -2364,26 +2381,71 @@ impl DiffViewerLive {
 /// diff-viewer.tsx:144-168): the run loop wires the HTTP worker;
 /// tests record.
 pub trait DiffSink {
-    /// Fetch `mode` (with the viewer's session for `turn`).
-    fn fetch(&self, mode: DiffSource, session_id: Option<String>, generation: u64);
+    /// Fetch `mode` (with the viewer's session for `turn` and G-69's
+    /// CHOSEN base ref — `diffInput().selected`, diff-viewer.tsx:141).
+    fn fetch(
+        &self,
+        mode: DiffSource,
+        session_id: Option<String>,
+        base: Option<String>,
+        generation: u64,
+    );
 }
 
 /// The default no-op sink.
 pub struct NoDiffSink;
 
 impl DiffSink for NoDiffSink {
-    fn fetch(&self, _mode: DiffSource, _session_id: Option<String>, _generation: u64) {}
+    fn fetch(
+        &self,
+        _mode: DiffSource,
+        _session_id: Option<String>,
+        _base: Option<String>,
+        _generation: u64,
+    ) {
+    }
 }
 
 /// The recording sink (tests).
 #[derive(Default)]
 pub struct RecordingDiffSink {
-    pub calls: std::cell::RefCell<Vec<(DiffSource, Option<String>, u64)>>,
+    pub calls: std::cell::RefCell<Vec<(DiffSource, Option<String>, Option<String>, u64)>>,
 }
 
 impl DiffSink for RecordingDiffSink {
-    fn fetch(&self, mode: DiffSource, session_id: Option<String>, generation: u64) {
-        self.calls.borrow_mut().push((mode, session_id, generation));
+    fn fetch(
+        &self,
+        mode: DiffSource,
+        session_id: Option<String>,
+        base: Option<String>,
+        generation: u64,
+    ) {
+        self.calls.borrow_mut().push((mode, session_id, base, generation));
+    }
+}
+
+/// G-69 — the branch-list fetch seam (`vcs.branch.list` through the
+/// loop fetcher; tests record).
+pub trait BranchListSink {
+    fn fetch(&self, directory: &str);
+}
+
+/// The default no-op sink.
+pub struct NoBranchListSink;
+
+impl BranchListSink for NoBranchListSink {
+    fn fetch(&self, _directory: &str) {}
+}
+
+/// The recording sink (tests).
+#[derive(Default)]
+pub struct RecordingBranchListSink {
+    pub calls: std::cell::RefCell<Vec<String>>,
+}
+
+impl BranchListSink for RecordingBranchListSink {
+    fn fetch(&self, directory: &str) {
+        self.calls.borrow_mut().push(directory.to_owned());
     }
 }
 
@@ -3648,6 +3710,10 @@ impl Store {
             diff_viewer,
             stats_page,
             diff_sink: std::cell::RefCell::new(Rc::new(NoDiffSink)),
+            diff_bases: RefCell::new(std::collections::HashMap::new()),
+            diff_directory: RefCell::new(String::new()),
+            diff_branches: RefCell::new(None),
+            branch_list_sink: std::cell::RefCell::new(Rc::new(NoBranchListSink)),
             stats_sink: std::cell::RefCell::new(Rc::new(NoStatsSink)),
             open_url_sink: std::cell::RefCell::new(None),
             pair,
@@ -7943,7 +8009,7 @@ impl Store {
         });
         self.clear_dialogs();
         let sink = self.diff_sink.borrow().clone();
-        sink.fetch(mode, session_id, generation);
+        sink.fetch(mode, session_id, self.selected_diff_base(), generation);
     }
 
     /// `diff.close` (diff-viewer.tsx:554-557): unmount + navigate back
@@ -7980,7 +8046,7 @@ impl Store {
         let session_id = live.session_id.clone();
         self.diff_viewer.set(live);
         let sink = self.diff_sink.borrow().clone();
-        sink.fetch(mode, session_id, generation);
+        sink.fetch(mode, session_id, self.selected_diff_base(), generation);
     }
 
     /// A fetch result landing (the HTTP worker's reply): stale
@@ -8027,6 +8093,92 @@ impl Store {
     /// HTTP worker). The closure form accepts the loop-fetcher sender.
     pub fn set_diff_sink(&self, sink: Rc<dyn DiffSink>) {
         *self.diff_sink.borrow_mut() = sink;
+    }
+
+    // -- G-69: the diff base memory + the base-branch selector ------
+
+    /// The diff worker's directory (keys the bases memory + the
+    /// branch list; the run loop sets it at boot).
+    pub fn set_diff_directory(&self, directory: &str) {
+        *self.diff_directory.borrow_mut() = directory.to_owned();
+    }
+
+    /// `memory.bases[baseKey()]` → `diffInput().selected` — the
+    /// CHOSEN base ref for the viewer's directory, remembered until
+    /// the TUI exits. (The ref's key also folds in the current
+    /// branch; the TUI process owns ONE directory and never switches
+    /// branches in-place, so the directory alone keys it.)
+    #[must_use]
+    pub fn selected_diff_base(&self) -> Option<String> {
+        let directory = self.diff_directory.borrow();
+        self.diff_bases.borrow().get(directory.as_str()).cloned()
+    }
+
+    /// `onSelect` of `DiffBaseDialog` (diff-viewer.tsx:277-282):
+    /// remember the chosen ref (`updateMemory(draft => draft.bases
+    /// [key] = ref)`) and refetch the CURRENT mode with it
+    /// (`selected` short-circuits the lazy base, :178-180).
+    pub fn select_diff_base(&self, base: &str) {
+        let directory = self.diff_directory.borrow().clone();
+        if !directory.is_empty() {
+            self.diff_bases.borrow_mut().insert(directory, base.to_owned());
+        }
+        let live = self.diff_viewer.get();
+        if !live.open {
+            return;
+        }
+        let generation = live.generation.wrapping_add(1);
+        let mode = live.mode;
+        let session_id = live.session_id.clone();
+        drop(live);
+        self.update_diff_viewer(|live| {
+            live.phase = DiffPhase::Loading;
+            live.base = None;
+            live.generation = generation;
+            true
+        });
+        let sink = self.diff_sink.borrow().clone();
+        sink.fetch(mode, session_id, Some(base.to_owned()), generation);
+    }
+
+    /// `onChooseBase` (diff-viewer.tsx:222-235): open the base
+    /// selector — the branch list (re)fetches through the sink, then
+    /// the dialog replaces the source select.
+    pub fn open_diff_base_dialog(&self) {
+        let directory = self.diff_directory.borrow().clone();
+        if !directory.is_empty() {
+            let sink = self.branch_list_sink.borrow().clone();
+            sink.fetch(&directory);
+        }
+        self.replace_dialog(DialogKind::DiffBase, DialogSize::Medium);
+    }
+
+    /// `vcs.branch.list`'s rows landing (the HTTP worker's reply).
+    pub fn set_diff_branches(&self, branches: Vec<String>) {
+        *self.diff_branches.borrow_mut() = Some(branches);
+    }
+
+    /// The base selector's options (empty until the list loads).
+    #[must_use]
+    pub fn diff_branches(&self) -> Vec<String> {
+        self.diff_branches.borrow().clone().unwrap_or_default()
+    }
+
+    /// The branch-list fetch seam (tests inject; the run loop
+    /// installs the HTTP worker).
+    pub fn set_branch_list_sink(&self, sink: Rc<dyn BranchListSink>) {
+        *self.branch_list_sink.borrow_mut() = sink;
+    }
+
+    /// Closure-based sink install (the run loop's HTTP worker).
+    pub fn set_branch_list_sink_fn(&self, fetch: impl Fn(&str) + 'static) {
+        struct FnBranchListSink<F: Fn(&str)>(F);
+        impl<F: Fn(&str)> BranchListSink for FnBranchListSink<F> {
+            fn fetch(&self, directory: &str) {
+                (self.0)(directory);
+            }
+        }
+        *self.branch_list_sink.borrow_mut() = Rc::new(FnBranchListSink(fetch));
     }
 
     // -- RE-14: the /stats page (stats.tsx:182-216) ------------------
@@ -8219,11 +8371,20 @@ impl Store {
     }
 
     /// Closure-based sink install (the run loop's HTTP worker).
-    pub fn set_diff_sink_fn(&self, fetch: impl Fn(DiffSource, Option<String>, u64) + 'static) {
-        struct FnDiffSink<F: Fn(DiffSource, Option<String>, u64)>(F);
-        impl<F: Fn(DiffSource, Option<String>, u64)> DiffSink for FnDiffSink<F> {
-            fn fetch(&self, mode: DiffSource, session_id: Option<String>, generation: u64) {
-                (self.0)(mode, session_id, generation);
+    pub fn set_diff_sink_fn(
+        &self,
+        fetch: impl Fn(DiffSource, Option<String>, Option<String>, u64) + 'static,
+    ) {
+        struct FnDiffSink<F: Fn(DiffSource, Option<String>, Option<String>, u64)>(F);
+        impl<F: Fn(DiffSource, Option<String>, Option<String>, u64)> DiffSink for FnDiffSink<F> {
+            fn fetch(
+                &self,
+                mode: DiffSource,
+                session_id: Option<String>,
+                base: Option<String>,
+                generation: u64,
+            ) {
+                (self.0)(mode, session_id, base, generation);
             }
         }
         *self.diff_sink.borrow_mut() = Rc::new(FnDiffSink(fetch));
