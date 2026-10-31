@@ -297,43 +297,47 @@ fn validate(
     }
     match value {
         serde_json::Value::Object(fields) => {
-            if let Some(properties) = object.get("properties") {
-                if let Some(required) = object.get("required").and_then(|v| v.as_array()) {
-                    for key in required {
-                        if let Some(key) = key.as_str() {
-                            if !fields.contains_key(key) {
-                                issues.push(Issue {
-                                    path: if path.is_empty() {
-                                        key.to_string()
-                                    } else {
-                                        format!("{path}.{key}")
-                                    },
-                                    message: "is required".to_string(),
-                                });
-                            }
+            // `required` applies regardless of `properties`.
+            if let Some(required) = object.get("required").and_then(|v| v.as_array()) {
+                for key in required {
+                    if let Some(key) = key.as_str() {
+                        if !fields.contains_key(key) {
+                            issues.push(Issue {
+                                path: if path.is_empty() {
+                                    key.to_string()
+                                } else {
+                                    format!("{path}.{key}")
+                                },
+                                message: "is required".to_string(),
+                            });
                         }
                     }
                 }
-                let additional = object.get("additionalProperties");
-                for (key, field) in fields {
-                    match properties.get(key) {
-                        Some(field_schema) => {
-                            validate(field_schema, root, field, &join_path(path, key), issues, depth + 1);
-                        }
-                        None => match additional {
-                            // `false` → extra properties are rejected.
-                            Some(serde_json::Value::Bool(false)) => issues.push(Issue {
-                                path: join_path(path, key),
-                                message: "must NOT have additional properties".to_string(),
-                            }),
-                            // Schema → validate the extra property against it.
-                            Some(schema @ serde_json::Value::Object(_)) => {
-                                validate(schema, root, field, &join_path(path, key), issues, depth + 1);
-                            }
-                            // Absent / `true` → open object.
-                            _ => {}
-                        },
+            }
+            // `additionalProperties` is enforced whether or not the
+            // schema declares `properties`: without it the known-key set
+            // is simply empty (a `const`/`enum` object form still fails
+            // on extras through this same path).
+            let properties = object.get("properties");
+            let additional = object.get("additionalProperties");
+            for (key, field) in fields {
+                match properties.and_then(|props| props.get(key)) {
+                    Some(field_schema) => {
+                        validate(field_schema, root, field, &join_path(path, key), issues, depth + 1);
                     }
+                    None => match additional {
+                        // `false` → extra properties are rejected.
+                        Some(serde_json::Value::Bool(false)) => issues.push(Issue {
+                            path: join_path(path, key),
+                            message: "must NOT have additional properties".to_string(),
+                        }),
+                        // Schema → validate the extra property against it.
+                        Some(schema @ serde_json::Value::Object(_)) => {
+                            validate(schema, root, field, &join_path(path, key), issues, depth + 1);
+                        }
+                        // Absent / `true` → open object.
+                        _ => {}
+                    },
                 }
             }
         }
@@ -875,6 +879,28 @@ mod tests {
         assert_eq!(issues[0].message, "must NOT have more than 3 items");
         let issues = validate_input(&schema, &json!({ "xs": [1, 1] }));
         assert_eq!(issues[0].message, "must NOT have duplicate items");
+    }
+
+    /// Review fix1 — `additionalProperties` applies with or without a
+    /// `properties` key: a `properties`-less closed object still rejects
+    /// extras, and the schema form still validates/rejects them.
+    #[test]
+    fn validate_input_additional_properties_without_properties() {
+        // Bool form, no `properties`: every key is extra.
+        let closed = json!({ "type": "object", "additionalProperties": false });
+        assert!(validate_input(&closed, &json!({})).is_empty());
+        let issues = validate_input(&closed, &json!({ "extra": 1 }));
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].path, "extra");
+        assert_eq!(issues[0].message, "must NOT have additional properties");
+
+        // Schema form, no `properties`: extras validate against it.
+        let typed = json!({ "type": "object", "additionalProperties": { "type": "string" } });
+        assert!(validate_input(&typed, &json!({ "any": "ok" })).is_empty());
+        let issues = validate_input(&typed, &json!({ "any": 5 }));
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].path, "any");
+        assert_eq!(issues[0].message, "Expected string, received number");
     }
 
     #[test]
