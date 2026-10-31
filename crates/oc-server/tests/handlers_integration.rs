@@ -1499,3 +1499,42 @@ async fn handlers_message_get_returns_the_row_and_404s_absent() {
         .expect_err("cross-session lookup is scoped");
     assert_api(&error, 404, "MessageNotFoundError");
 }
+
+// G-77 — project.ts:358-362 + location.ts:43-44: `project.directory` is
+// this checkout's directory; `project.canonical` is the main-worktree
+// realpath. A linked git worktree makes the two observably different.
+#[tokio::test]
+async fn handlers_location_get_directory_vs_canonical() {
+    let root = tempfile::tempdir().expect("root");
+    let main_dir = root.path().join("main");
+    let linked = root.path().join("linked");
+    std::fs::create_dir_all(&main_dir).expect("main dir");
+    for args in [
+        vec!["init", "-q"],
+        vec!["config", "user.email", "t@t"],
+        vec!["config", "user.name", "t"],
+        vec!["commit", "-q", "--allow-empty", "-m", "init"],
+        vec!["worktree", "add", "-q", linked.to_str().unwrap(), "-b", "linked"],
+    ] {
+        let status = std::process::Command::new("git")
+            .args(&args)
+            .current_dir(&main_dir)
+            .status()
+            .expect("git");
+        assert!(status.success(), "git {args:?}");
+    }
+    let server = boot_at(&linked, None).await;
+    let location =
+        server.client.location().get(&LocationGetQuery::default()).await.expect("location get");
+    let directory = std::path::PathBuf::from(&location.project.directory);
+    let canonical = std::path::PathBuf::from(&location.project.canonical);
+    assert!(
+        directory.starts_with(&linked),
+        "directory is this checkout: {directory:?} vs {linked:?}"
+    );
+    assert!(
+        canonical.starts_with(main_dir.as_path()),
+        "canonical is the main worktree: {canonical:?} vs {main_dir:?}"
+    );
+    assert_ne!(directory, canonical, "linked worktree makes them distinct");
+}
