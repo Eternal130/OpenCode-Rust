@@ -398,12 +398,12 @@ G-18 ✅ / G-19 ✅(死校验残留) / G-20 ✅ / G-21 ✅ / G-22 ✅ / G-23 ✅
 ### G-67 ✅（lane6）：剪贴板 failed/timed-out/limit-exceeded 读按 clipboard.ts 抛错语义变为 Err，粘贴路径 toast.error 展示（消息逐字对齐 ref）
 - rust `clipboard.rs:388-399`：failed/timed-out/limit-exceeded 统一 `_ => None`，粘贴静默无操作。ref `clipboard.ts:30-35` 抛错，上层 `prompt/index.tsx:373-388` toast。超限粘贴（大图）用户无任何提示。
 
-### G-68 ✅（lane6）：mini/fragment.rs 移植 stream-v2.fragment.ts（project/delta 覆盖消费/end/restore append|covered|conflict，接入 transport）；mini/image.ts 移植 stream-v2.image.ts（user/tool 图片 commit + freshImages 去重）
+### G-68 ✅（lane6，fix1 后仅 restore 为保留 seam）：mini/fragment.rs 移植 stream-v2.fragment.ts；project/delta 覆盖消费/end 已接入 transport 折叠 + 回放生产路径（replay_history→replay_message_commits：重放投影进同一 reconciler，图片 commit 随回放触发，重复回放不重绘）；mini/image.rs 移植 stream-v2.image.ts（kind user/tool、metadata+payload 身份去重先于 mime 过滤）。restore(append|covered|conflict) 为保留 seam：rust mini 为 mono 写直写终端回滚区、无本地行缓冲重放（ref 的 restore 消费点是 resize-replay 重纳本地行），无生产消费点
 - fragment reconciler（message part 重投影/restore append|covered|conflict，ref `mini/stream-v2.fragment.ts:1-83`）：rust mini 全目录 grep 0 命中；transport.rs:128-137 仅 delta 累加。
 - mini 图片 commit + 去重（ref `stream-v2.image.ts:1-20`）：rust mini/ grep "image" 0 命中。
 - （subagent tracker 已移植并撤销：transport.rs:455-620 对标 stream-v2.subagent.ts。）
 
-### G-69 ✅（lane6）：bases 记忆（TUI 退出前记住）+ 按目录懒缓存（vcs.base 一次，viewer 关闭失效）+ DiffBase 选择器（vcs.branch.list，Diff source 对话框 Base 行）
+### G-69 ✅（lane6）：bases 记忆（TUI 退出前记住）+ 按目录懒缓存（vcs.base 一次，**任何**关闭路径失效——Store::close_diff_viewer 统一失效）+ DiffBase 选择器（vcs.branch.list，Diff source 对话框 Base 行）
 - rust `fetch_diff`（app.rs:6463-6551）每次 fresh 调 `vcs().base`，无记忆 Map/懒缓存；全库无 `vcs.branch.list` 消费——**无任何入口可选 base 分支**（错误文案 "Choose a base branch" 存在但无选择器）。ref `diff-viewer.tsx:110-124,280`（bases 记忆 + 懒缓存 + "Remembered until TUI exits"）。
 
 ### G-70 ✅ snapshot store 与 project id 不做 realpath（已修：store id 改为 canonicalize(worktree) 哈希；commit 022c5ef）

@@ -8023,6 +8023,11 @@ impl Store {
         let back = live.return_route.clone();
         self.diff_viewer.set(live);
         self.navigate(back);
+        // G-69 — the lazy base cache dies with the viewer (the ref's
+        // per-instance `bases` Map, diff-viewer.tsx:117-128): EVERY
+        // close path invalidates, so a re-open after a branch switch
+        // re-resolves instead of serving the stale base.
+        crate::app::invalidate_diff_base_cache();
     }
 
     /// `diff.switch_source`'s selection (the source dialog's

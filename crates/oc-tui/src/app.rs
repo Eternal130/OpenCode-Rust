@@ -1810,10 +1810,9 @@ impl App {
         {
             if command == "app.exit" {
                 if stroke.ctrl && !stroke.alt && stroke.key == "d" {
+                    // G-69 — the invalidation rides the store's close
+                    // (every close path, not just this chord).
                     self.store.close_diff_viewer();
-                    // G-69 — the lazy base cache dies with the viewer
-                    // (the ref's per-instance `bases` Map).
-                    invalidate_diff_base_cache();
                 } else {
                     self.request_exit();
                 }
@@ -9165,6 +9164,69 @@ mod tests {
             .await
             .expect("post-invalidate fetch");
         assert_eq!(*base_hits.lock().expect("hits"), 2, "invalidation forces a re-resolve");
+
+        server.abort();
+    }
+
+    /// G-69 (fix #2) — EVERY close path invalidates the lazy base
+    /// cache (`diff.close`/`Store::close_diff_viewer`, not just the
+    /// ctrl+d chord): a fetch → viewer close → fetch re-resolves the
+    /// base instead of serving the stale cache.
+    #[tokio::test]
+    async fn diff_viewer_close_invalidates_the_base_cache() {
+        use std::sync::{Arc, Mutex};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let base_hits: Arc<Mutex<u32>> = Arc::new(Mutex::new(0));
+        let hits = Arc::clone(&base_hits);
+        let server = tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = listener.accept().await.expect("accept");
+                let hits = Arc::clone(&hits);
+                let (mut reader, mut writer) = socket.split();
+                let mut request = vec![0u8; 8192];
+                let _ = reader.read(&mut request).await;
+                let head = String::from_utf8_lossy(&request);
+                let path = head.split_whitespace().nth(1).unwrap_or_default().to_owned();
+                let (status, body) = if path.starts_with("/api/vcs/base") {
+                    *hits.lock().expect("hits") += 1;
+                    (
+                        "200 OK",
+                        r#"{"data":{"name":"main","ref":"refs/heads/main","source":"default"},"location":{"directory":"/tmp"}}"#,
+                    )
+                } else if path.starts_with("/api/vcs/diff") {
+                    ("200 OK", r#"{"data":[],"location":{"directory":"/tmp"}}"#)
+                } else {
+                    ("404 Not Found", "{}")
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\ncontent-type: application/json\r\nconnection: close\r\n\r\n{body}"
+                );
+                let _ = writer.write_all(response.as_bytes()).await;
+            }
+        });
+        let url = format!("http://{addr}");
+        let client = oc_client::Client::new(&url).expect("client");
+        invalidate_diff_base_cache();
+
+        // Prime the cache...
+        let _ = fetch_diff(&client, crate::store::DiffSource::Branch, None, "/tmp", None)
+            .await
+            .expect("prime");
+        assert_eq!(*base_hits.lock().expect("hits"), 1);
+        // ...open + close the viewer through the STORE's close (the
+        // `diff.close` path — no key chord involved).
+        let store = crate::store::Store::new(crate::reactive::Runtime::new());
+        store.set_diff_sink(std::rc::Rc::new(crate::store::NoDiffSink));
+        store.open_diff_viewer(None);
+        store.close_diff_viewer();
+        // The next lazy fetch re-resolves (a cache MISS).
+        let _ = fetch_diff(&client, crate::store::DiffSource::Branch, None, "/tmp", None)
+            .await
+            .expect("post-close fetch");
+        assert_eq!(*base_hits.lock().expect("hits"), 2, "close invalidated the cache");
 
         server.abort();
     }

@@ -205,17 +205,25 @@ impl TransportState {
     fn text_ended(&mut self, data: &Value) -> Fold {
         let key = part_key(data);
         let event_text = text_field(data, "text");
+        let fragment = FragmentRef {
+            message_id: message_id(data).unwrap_or_default(),
+            part_id: key.clone(),
+        };
+        // An event without the final text keeps the COMMITTED text —
+        // the reconciler's value (a projection's full text included),
+        // never the streamed-chunks tail alone (a covered chunk a
+        // projection consumed would otherwise drop from the final
+        // commit).
+        let committed =
+            self.fragments.value(&fragment).map(str::to_owned).unwrap_or_default();
         let text = if event_text.is_empty() {
-            self.texts.remove(&key).unwrap_or_default()
+            committed.clone().is_empty().then(|| self.texts.remove(&key)).flatten().unwrap_or(committed)
         } else {
             event_text
         };
         // G-68 — the part closes at the reconciler's `end` (the
         // committed text snaps to the final text verbatim).
-        self.fragments.end(
-            &FragmentRef { message_id: message_id(data).unwrap_or_default(), part_id: key.clone() },
-            &text,
-        );
+        self.fragments.end(&fragment, &text);
         self.texts.remove(&key);
         Fold::Commit(Commit {
             kind: CommitKind::Assistant,
@@ -250,15 +258,19 @@ impl TransportState {
     fn reasoning_ended(&mut self, data: &Value) -> Fold {
         let key = part_key(data);
         let event_text = text_field(data, "text");
+        let fragment = FragmentRef {
+            message_id: message_id(data).unwrap_or_default(),
+            part_id: key.clone(),
+        };
+        // Same covered-prefix preservation as `text_ended`.
+        let committed =
+            self.fragments.value(&fragment).map(str::to_owned).unwrap_or_default();
         let text = if event_text.is_empty() {
-            self.reasons.remove(&key).unwrap_or_default()
+            committed.clone().is_empty().then(|| self.reasons.remove(&key)).flatten().unwrap_or(committed)
         } else {
             event_text
         };
-        self.fragments.end(
-            &FragmentRef { message_id: message_id(data).unwrap_or_default(), part_id: key.clone() },
-            &text,
-        );
+        self.fragments.end(&fragment, &text);
         self.reasons.remove(&key);
         Fold::Commit(Commit {
             kind: CommitKind::Reasoning,
@@ -868,31 +880,43 @@ mod tests {
         assert_eq!(state.restore_part("m1", "text:0", "zzz"), FragmentRestore::Conflict);
     }
 
-    /// G-68 — the image commits (stream-v2.image.ts): a user
-    /// message's image files commit once each (labels from name /
-    /// mention / `[Image N]`, payload-deduped), a tool part's
-    /// `data:image/*` content commits per part, and REPLAYS dedup by
-    /// `(messageID, partID)`.
+    /// G-68 — the image commits (stream-v2.image.ts + the dedup's
+    /// identity, attachment.ts:24-74): an inline image WITH mention
+    /// text dedups on metadata([mime,name,description,mention]) +
+    /// payload; different mention text keeps the row; the mime filter
+    /// runs AFTER the dedup (survivors number `[Image N]`); user
+    /// commits are kind User, tool commits kind Tool; REPLAYS dedup
+    /// by `(messageID, partID)`.
     #[test]
     fn image_parts_commit_and_dedupe() {
         let mut state = TransportState { session_id: "s1".into(), ..Default::default() };
         let files = vec![
-            json!({ "mime": "image/png", "data": "AAEC", "name": "shot.png" }),
-            json!({ "mime": "image/png", "data": "AAEC" }), // same payload: deduped
+            // Same metadata + payload as #2 → deduped.
+            json!({ "mime": "image/png", "data": "AAEC", "name": "shot.png",
+                    "mention": { "text": "[Image 1]" } }),
+            json!({ "mime": "image/png", "data": "AAEC", "name": "shot.png",
+                    "mention": { "text": "[Image 1]" } }),
+            // Same payload, DIFFERENT mention → a distinct row.
+            json!({ "mime": "image/png", "data": "AAEC", "name": "dup.png",
+                    "mention": { "text": "[Image 2]" } }),
+            // No mention text → never deduped (the identity is None).
+            json!({ "mime": "image/png", "data": "QUJD" }),
             json!({ "mime": "text/plain", "data": "aGk=" }), // not an image
-            json!({ "mime": "image/jpeg", "data": "QUJD", "mention": { "text": "pic.jpg" } }),
         ];
         let commits = state.commit_user_images("msg_u", &files);
-        assert_eq!(commits.len(), 2, "payload-dedup + the mime filter");
+        assert_eq!(commits.len(), 3, "metadata+payload dedup, mime filter after");
+        assert_eq!(commits[0].kind, CommitKind::User);
         assert_eq!(commits[0].text, "shot.png", "the name label");
         assert_eq!(commits[0].image.as_deref(), Some("data:image/png;base64,AAEC"));
         assert_eq!(commits[0].part_id.as_deref(), Some("image:0"));
         assert_eq!(commits[0].phase, Phase::Final);
-        assert_eq!(commits[1].text, "pic.jpg", "the mention label");
+        assert_eq!(commits[1].text, "dup.png");
+        // The mention-less survivor gets the numbered label (index 2).
+        assert_eq!(commits[2].text, "[Image 3]");
         // The replay: the SAME files commit nothing.
         assert!(state.commit_user_images("msg_u", &files).is_empty(), "replays dedupe");
 
-        // The tool arm: data:image/* URIs only.
+        // The tool arm: data:image/* URIs only, kind Tool.
         let tool_state = json!({ "content": [
             { "type": "file", "mime": "image/png", "uri": "data:image/png;base64,AAEC", "name": "out.png" },
             { "type": "file", "mime": "text/plain", "uri": "data:text/plain;base64,aGk=" },
@@ -900,12 +924,47 @@ mod tests {
         ]});
         let tool_commits = state.commit_tool_images("prt_1", &tool_state, "msg_a");
         assert_eq!(tool_commits.len(), 1);
+        assert_eq!(tool_commits[0].kind, CommitKind::Tool, "the ref's kind: tool");
         assert_eq!(tool_commits[0].text, "out.png");
         assert_eq!(tool_commits[0].part_id.as_deref(), Some("prt_1:image:0"));
-        assert!(
-            state.commit_tool_images("prt_1", &tool_state, "msg_a").is_empty(),
-            "replays dedupe"
+        assert!(state.commit_tool_images("prt_1", &tool_state, "msg_a").is_empty(), "replays dedupe");
+    }
+
+    /// G-68 (fix #5) — an `ended` WITHOUT the final text preserves the
+    /// committed prefix: a projection's full text (whose covered
+    /// chunks the stream consumed) still lands in the final commit.
+    #[test]
+    fn ended_without_text_preserves_the_projected_prefix() {
+        let mut state = TransportState { session_id: "s1".into(), ..Default::default() };
+        state.project_part("m1", "text", 0, "one two three", true);
+        // The stream re-delivers covered chunks (consumed)...
+        assert_eq!(
+            state.fold(&event(
+                "session.text.delta",
+                &json!({ "sessionID": "s1", "messageID": "m1", "partID": "text:0", "delta": "one two " }),
+            )),
+            Fold::Ignored
         );
+        // ...and closes with NO final text: the commit carries the
+        // FULL committed (projected) text, not just streamed chunks.
+        let ended = state.fold(&event(
+            "session.text.ended",
+            &json!({ "sessionID": "s1", "messageID": "m1", "partID": "text:0" }),
+        ));
+        match ended {
+            Fold::Commit(commit) => assert_eq!(commit.text, "one two three"),
+            other => panic!("ended folded: {other:?}"),
+        }
+        // The reasoning arm keeps the same guarantee.
+        state.project_part("m1", "reasoning", 0, "think", true);
+        let ended = state.fold(&event(
+            "session.reasoning.ended",
+            &json!({ "sessionID": "s1", "messageID": "m1", "partID": "reasoning:0" }),
+        ));
+        match ended {
+            Fold::Commit(commit) => assert_eq!(commit.text, "think"),
+            other => panic!("reasoning ended folded: {other:?}"),
+        }
     }
 
     #[test]
