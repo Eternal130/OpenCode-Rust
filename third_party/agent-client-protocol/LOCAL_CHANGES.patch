@@ -1,0 +1,18 @@
+# Local changes to vendored agent-client-protocol-3.3.0 (crates.io) vs the pristine
+# tarball (sha256 02898d848a20eb09b8a392e85bb3a4c79dba01d369758185d102b001362a60da). Regenerate with
+#   python3 tools/guards/acp_drift.py --update
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -308,9 +308,11 @@
+ ]
+ 
+ [dependencies.serde_json]
++# Vendored from crates.io 3.3.0 with ONE change: `preserve_order` is
++# dropped (workspace feature unification — see
++# third_party/agent-client-protocol-schema's note).
+ version = "1"
+ features = [
+-    "preserve_order",
+     "raw_value",
+ ]
+ 
