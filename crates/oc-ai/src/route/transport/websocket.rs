@@ -1363,11 +1363,9 @@ pub mod tungstenite_connector {
             })?;
             let authority =
                 uri.authority().map(|authority| authority.as_str().to_string()).unwrap_or_default();
-            let target_host =
-                uri.host().unwrap_or_default().trim_matches(['[', ']']).to_string();
-            let target_port = uri
-                .port_u16()
-                .unwrap_or(if uri.scheme_str() == Some("wss") { 443 } else { 80 });
+            let target_host = uri.host().unwrap_or_default().trim_matches(['[', ']']).to_string();
+            let target_port =
+                uri.port_u16().unwrap_or(if uri.scheme_str() == Some("wss") { 443 } else { 80 });
             let mut builder = http::Request::builder()
                 .method("GET")
                 .uri(&uri)
@@ -1400,27 +1398,49 @@ pub mod tungstenite_connector {
                 )
             })?;
             // Proxy seam (gap G-8): HTTP(S)_PROXY / ALL_PROXY (minus
-            // NO_PROXY) tunnel the handshake via HTTP CONNECT, matching
-            // v2's http(s)-proxy-agent behavior for WS connections.
+            // NO_PROXY) tunnel the handshake — `http://` via plain
+            // CONNECT, `https://` via TLS-to-proxy CONNECT, `socks5`
+            // via the SOCKS5 handshake — matching v2's http(s)/socks
+            // proxy-agent behavior for WS connections. Both arms
+            // converge on the same stream type: the direct dial wraps
+            // in the same tunnel enum so the TLS-upgrading connector
+            // handles wss uniformly.
+            let dial = |tunnel: super::super::proxy::ProxyTunnel| {
+                tokio_tungstenite::client_async_tls_with_config(handshake, tunnel, None, None)
+            };
             let (stream, response) = match super::super::proxy::resolve_for(&request.url)? {
-                None => tokio_tungstenite::connect_async(handshake).await,
+                None => {
+                    let direct =
+                        tokio::net::TcpStream::connect((target_host.as_str(), target_port))
+                            .await
+                            .map_err(|error| {
+                            transport_error(
+                                format!("Failed to open WebSocket: {error}"),
+                                TransportOperation::Request,
+                                Some(TransportPhase::Connect),
+                                Some(TransportDelivery::NotSent),
+                                None,
+                                Some(request.url.clone()),
+                            )
+                        })?;
+                    dial(super::super::proxy::ProxyTunnel::Plain(direct)).await
+                }
                 Some(proxy) => {
                     let tunnel =
                         super::super::proxy::connect_through(&proxy, &target_host, target_port)
-                        .await
-                        .map_err(|error| {
-                            let mut error = error;
-                            if let crate::schema::AiErrorReason::Transport { url, .. } =
-                                &mut error.reason
-                            {
-                                *url = Some(request.url.clone());
-                            }
-                            error
-                        })?;
+                            .await
+                            .map_err(|error| {
+                                let mut error = error;
+                                if let crate::schema::AiErrorReason::Transport { url, .. } =
+                                    &mut error.reason
+                                {
+                                    *url = Some(request.url.clone());
+                                }
+                                error
+                            })?;
                     // The connector upgrades the tunnel to TLS itself for
                     // wss targets (rustls is on for the ws-transport feature).
-                    tokio_tungstenite::client_async_tls_with_config(handshake, tunnel, None, None)
-                        .await
+                    dial(tunnel).await
                 }
             }
             .map_err(|error| {
@@ -1585,7 +1605,7 @@ mod proxy_tunnel_tests {
     use futures::{SinkExt as _, StreamExt as _};
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
     use tokio_tungstenite::tungstenite::Message;
-    
+
     #[tokio::test]
     async fn websocket_handshakes_through_a_connect_proxy() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1614,6 +1634,7 @@ mod proxy_tunnel_tests {
         let proxy = ProxyEndpoint {
             host: "127.0.0.1".into(),
             port: proxy_addr.port(),
+            scheme: super::super::proxy::ProxyScheme::Http,
             source: format!("http://127.0.0.1:{}", proxy_addr.port()),
         };
         let tunnel = connect_through(&proxy, "upstream.test", 80).await.unwrap();
