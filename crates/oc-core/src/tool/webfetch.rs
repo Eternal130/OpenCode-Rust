@@ -69,6 +69,16 @@ struct Input {
     timeout: Option<u64>,
 }
 
+/// The permission-assert metadata (G-74): ref webfetch.ts:128
+/// `metadata: input` — the FULL input record (url, format, timeout).
+fn permission_metadata(input: &Input) -> serde_json::Value {
+    serde_json::json!({
+        "url": input.url,
+        "format": input.format,
+        "timeout": input.timeout,
+    })
+}
+
 fn default_format() -> String {
     "markdown".into()
 }
@@ -198,10 +208,11 @@ impl ToolExecuteWithContext for WebFetchExecute {
                     resources: vec![input.url.clone()],
                     save: Some(vec!["*".into()]),
                     metadata: Some(
-                        serde_json::from_value(
-                            serde_json::json!({ "url": input.url, "format": input.format }),
-                        )
-                        .unwrap_or_default(),
+                        // ref webfetch.ts:128 `metadata: input` — the FULL
+                        // input record (url, format, timeout), not a
+                        // hand-picked subset (G-74).
+                        serde_json::from_value(permission_metadata(&input))
+                            .unwrap_or_default(),
                     ),
                     source: Some(oc_schema::permission::Source::Tool {
                         message_id: context.message_id.clone(),
@@ -281,6 +292,22 @@ mod tests {
         assert!(is_textual_mime("application/json"));
         assert!(is_textual_mime(""));
         assert!(!is_textual_mime("application/octet-stream"));
+    }
+
+    /// G-74: the permission-assert metadata is the FULL input record
+    /// (ref webfetch.ts:128 `metadata: input`) — timeout included.
+    #[test]
+    fn tool_webfetch_permission_metadata_carries_full_input() {
+        let explicit = Input { url: "https://example.com".into(), format: "html".into(), timeout: Some(9) };
+        assert_eq!(
+            super::permission_metadata(&explicit),
+            serde_json::json!({ "url": "https://example.com", "format": "html", "timeout": 9 })
+        );
+        let defaulted = Input { url: "https://example.com".into(), format: "markdown".into(), timeout: None };
+        assert_eq!(
+            super::permission_metadata(&defaulted)["timeout"],
+            serde_json::Value::Null
+        );
     }
 
     #[test]
