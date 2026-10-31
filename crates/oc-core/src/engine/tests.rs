@@ -1731,3 +1731,51 @@ async fn ttl_sweeper_expires_idle_location_but_watcher_re_arms_activity() {
     sweeper.abort();
     engine.shutdown().await;
 }
+
+// G-48 — the tool_output budget hot re-applies on a config reload: the
+// shared service's limits swap (`reload_tool_output_limits`, the reload
+// bridge's seam) and a location assembled AFTER the reload observes the
+// new budget through `ToolOutput::current_limits`.
+#[tokio::test]
+async fn tool_output_limits_hot_reapply_on_config_reload() {
+    let root = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+    std::fs::create_dir_all(root.path().join("home")).expect("home");
+    let engine = Arc::new(
+        Engine::boot(EngineOptions {
+            activity_sweeper: false,
+            clock: fixed_clock(),
+            tool_output_limits: crate::tool_output::Limits { max_lines: 2, max_bytes: 100_000 },
+            ..EngineOptions::new(root.path().join("data"), root.path().join("home"))
+        })
+        .await,
+    );
+    let location = LocationRef::new(root.path().to_path_buf(), None);
+    let services = engine.location(location.clone()).await.expect("assemble");
+    let create = oc_schema::shell::CreateInput {
+        command: "printf 'one\ntwo\nthree\n'".to_owned(),
+        cwd: Some(root.path().display().to_string()),
+        timeout: Some(5_000),
+        metadata: None,
+    };
+    let info = services
+        .shell
+        .create(create.clone(), Some("/bin/sh"), None, None)
+        .await
+        .expect("shell create");
+    let result = services.shell.result(info).await;
+    let capture = result.capture.expect("capture");
+    assert!(capture.truncated, "3 lines under the 2-line boot budget truncate");
+
+    // The reload path: re-apply the default budget + invalidate, so the
+    // next assembly reads the new limits (boot bridge order).
+    engine.reload_tool_output_limits(crate::tool_output::Limits::default());
+    engine.invalidate(&location).await;
+    let services = engine.location(location.clone()).await.expect("re-assemble");
+    let info =
+        services.shell.create(create, Some("/bin/sh"), None, None).await.expect("shell create");
+    let result = services.shell.result(info).await;
+    let capture = result.capture.expect("capture");
+    assert!(!capture.truncated, "default budget keeps 3 lines: {}", capture.output);
+
+    engine.shutdown().await;
+}
