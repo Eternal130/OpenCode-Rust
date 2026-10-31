@@ -66,6 +66,7 @@ fn harness_view<'a>(
         top: 2,
         rail: None,
         caret: None,
+        selection: None,
     }
 }
 

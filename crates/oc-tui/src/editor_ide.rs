@@ -34,7 +34,12 @@ pub struct IdeConnection {
 /// editor.ts:116-119): the first value that parses as a valid port.
 #[must_use]
 pub fn env_editor_port(claude_port: Option<&str>, opencode_port: Option<&str>) -> Option<u16> {
-    let value = claude_port.or(opencode_port)?;
+    // G-47 — the ref's `||` is FALSY: an EMPTY-STRING claude value
+    // falls through to the OPENCODE candidate (editor.ts:118's
+    // `CLAUDE_CODE_SSE_PORT || OPENCODE_EDITOR_SSE_PORT`); a
+    // NON-EMPTY value that fails to parse stays chosen (the ref's
+    // parseInt NaN — no fallback).
+    let value = claude_port.filter(|value| !value.is_empty()).or(opencode_port)?;
     let parsed = value.trim().parse::<u16>().ok()?;
     (parsed > 0).then_some(parsed)
 }
@@ -221,11 +226,22 @@ pub fn spawn_ide_socket() -> Option<tokio::sync::mpsc::Receiver<ZedSelection>> {
     tokio::spawn(async move {
         let mut attempt: u32 = 0;
         loop {
-            if connect_once(&connection, &tx).await {
+            let outcome = connect_once(&connection, &tx).await;
+            if outcome.stopped {
                 // The channel closed — the run loop ended.
                 return;
             }
-            // `scheduleReconnect` (context/editor.ts:290-296):
+            // G-47 — the backoff RESETS on a successful connection
+            // (`current.addEventListener("open", ... attempt = 0)`,
+            // context/editor.ts:223): without it every reconnect
+            // after the first jittered failure waits the CAPPED 10 s
+            // forever. A session that OPENED and later closed starts
+            // the ladder over at attempt 1 (1 s); only consecutive
+            // failures keep climbing.
+            if outcome.opened {
+                attempt = 0;
+            }
+            // `scheduleReconnect` (context/editor.ts:278-282):
             // `min(1000 * 2^(attempt-1), 10_000)`.
             attempt += 1;
             let delay = std::time::Duration::from_millis(
@@ -237,17 +253,27 @@ pub fn spawn_ide_socket() -> Option<tokio::sync::mpsc::Receiver<ZedSelection>> {
     Some(rx)
 }
 
-/// One connection attempt (`connect`'s socket arm): returns `true`
-/// when the RECEIVER dropped (stop), `false` to reconnect.
+/// One connection attempt's outcome: `stopped` = the RECEIVER dropped
+/// (the task ends); `opened` = the socket CONNECTED at least once
+/// (G-47's backoff-reset signal).
+struct ConnectOutcome {
+    stopped: bool,
+    opened: bool,
+}
+
+/// One connection attempt (`connect`'s socket arm).
 async fn connect_once(
     connection: &IdeConnection,
     tx: &tokio::sync::mpsc::Sender<ZedSelection>,
-) -> bool {
+) -> ConnectOutcome {
     use futures::{SinkExt as _, StreamExt as _};
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
     let url = format!("ws://127.0.0.1:{}", connection.port);
-    let Ok(mut request) = url.as_str().into_client_request() else { return tx.is_closed() };
+    let outcome = |stopped: bool, opened: bool| ConnectOutcome { stopped, opened };
+    let Ok(mut request) = url.as_str().into_client_request() else {
+        return outcome(tx.is_closed(), false);
+    };
     // The auth header (editor.ts:394-401).
     if let Some(token) = &connection.auth_token {
         request
@@ -255,7 +281,9 @@ async fn connect_once(
             .insert("x-claude-code-ide-authorization", token.parse().expect("header value"));
     }
     let Ok((mut socket, _response)) = tokio_tungstenite::connect_async(request).await else {
-        return tx.is_closed();
+        // The dial itself failed — the connection never OPENED (the
+        // backoff keeps climbing).
+        return outcome(tx.is_closed(), false);
     };
     // `initialize` (context/editor.ts:208-214) +
     // `notifications/initialized` on the reply (:271-275).
@@ -274,7 +302,9 @@ async fn connect_once(
         .await
         .is_err()
     {
-        return tx.is_closed();
+        // The handshake write failed on an OPEN socket — still an
+        // opened session for the reset rule.
+        return outcome(tx.is_closed(), true);
     }
     while let Some(message) = socket.next().await {
         let text = match message {
@@ -289,7 +319,7 @@ async fn connect_once(
             Some("selection_changed") => {
                 if let Some(selection) = decode_selection(body.get("params").unwrap_or(&value)) {
                     if tx.send(selection).await.is_err() {
-                        return true;
+                        return outcome(true, true);
                     }
                 }
             }
@@ -310,7 +340,9 @@ async fn connect_once(
             }
         }
     }
-    tx.is_closed()
+    // The socket CLOSED after an open session (the reader loop broke
+    // on Close/EOF) — reconnect with the ladder RESET.
+    outcome(tx.is_closed(), true)
 }
 
 #[cfg(test)]
@@ -327,6 +359,35 @@ mod tests {
         assert_eq!(env_editor_port(Some("0"), Some("0")), None);
         assert_eq!(env_editor_port(None, None), None);
         assert_eq!(env_editor_port(Some(""), Some("x")), None);
+        // G-47 — the ref's `||` is falsy: an EMPTY-STRING claude
+        // value falls through to the OPENCODE candidate.
+        assert_eq!(env_editor_port(Some(""), Some("8081")), Some(8081));
+        assert_eq!(env_editor_port(Some(""), Some("")), None);
+        // Whitespace-only is TRUTHY in the ref (only "" falses) and
+        // parseInt("  ") is NaN — no fallback.
+        assert_eq!(env_editor_port(Some("  "), Some("8081")), None);
+        // parseInt trims leading whitespace (Number.parseInt).
+        assert_eq!(env_editor_port(Some(" 81"), None), Some(81));
+    }
+
+    /// G-47 — the backoff ladder RESETS after a successful connection
+    /// (`open` → `attempt = 0`, context/editor.ts:223): a session
+    /// that opened and closed reconnects at attempt 1 (1 s), while
+    /// consecutive dial failures keep climbing to the 10 s cap.
+    #[test]
+    fn reconnect_backoff_resets_after_an_opened_session() {
+        let delay = |opened: bool, attempt: u32| {
+            // The loop's post-outcome math, mirrored.
+            let attempt = if opened { 0 } else { attempt };
+            let attempt = attempt + 1;
+            (1000u64.saturating_mul(1 << (attempt - 1).min(4))).min(10_000)
+        };
+        // Consecutive failures climb: 1s, 2s, 4s, 8s, 10s, 10s.
+        let ladder = (0..6).map(|attempt| delay(false, attempt)).collect::<Vec<_>>();
+        assert_eq!(ladder, [1000, 2000, 4000, 8000, 10_000, 10_000]);
+        // An OPENED session resets: the next reconnect waits 1 s —
+        // even after the ladder had already capped at 10 s.
+        assert_eq!(delay(true, 5), 1000);
     }
 
     #[test]

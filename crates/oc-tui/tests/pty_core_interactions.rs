@@ -1151,3 +1151,130 @@ fn pty_reconnecting_overlay_on_loss_and_recovery() {
         let _ = writer.write_all(b"\x03");
     });
 }
+
+// -- G-66: the composer selection highlight -------------------------------
+
+/// [`screen_after_toggle`]'s settle loop, but returning the SETTLED
+/// vt100 parser itself (G-66 asserts on cell COLORS, not just text —
+/// the selection highlight is an fg/bg swap).
+fn settled_parser(writer: &std::fs::File, boot: &Boot, rows: &mut u16) -> vt100::Parser {
+    *rows = if *rows == 25 { 24 } else { 25 };
+    unsafe {
+        let winsize = libc::winsize { ws_row: *rows, ws_col: 80, ws_ypixel: 0, ws_xpixel: 0 };
+        libc::ioctl(writer.as_raw_fd(), libc::TIOCSWINSZ, &winsize);
+    }
+    std::thread::sleep(Duration::from_millis(500));
+    let mut parser = vt100::Parser::new(*rows, 80, 0);
+    let mut fed = 0usize;
+    let mut last_screen = String::new();
+    let mut last_sample = std::time::Instant::now();
+    let deadline = std::time::Instant::now() + SETTLE_CAP;
+    loop {
+        std::thread::sleep(Duration::from_millis(50));
+        let data = boot.output.lock().expect("lock").clone();
+        parser.process(&data[fed.min(data.len())..]);
+        fed = data.len();
+        if last_sample.elapsed() >= Duration::from_millis(300) {
+            let screen = masked_screen_text(&parser);
+            if !screen.trim().is_empty() && screen == last_screen {
+                return parser;
+            }
+            last_screen = screen;
+            last_sample = std::time::Instant::now();
+        }
+        if std::time::Instant::now() > deadline {
+            return parser;
+        }
+    }
+}
+
+/// PTY: G-66 — shift+left selects the composer's tail and the
+/// rendered cells INVERT (EditBufferRenderable's default selection
+/// styling: the selected cells' bg becomes the text fg and their fg
+/// becomes the prompt bg, while the unselected prefix keeps the
+/// resting paint). Asserted purely relationally (bg/fg swap), so the
+/// check is theme-independent.
+#[test]
+fn pty_composer_selection_paints_inverted_cells() {
+    let _sandbox = sandbox_env("selection");
+    let (url, _shared) = spawn_scripted_server(false);
+    drive(&url, move |boot, mut writer| {
+        let probe = || Boot { output: Arc::clone(&boot.output) };
+        assert!(
+            wait_for_after(&probe(), "█▀▀█".as_bytes(), 0, Duration::from_secs(5)),
+            "the home wordmark rendered"
+        );
+        std::thread::sleep(Duration::from_millis(700));
+        for key in "selcheck".bytes() {
+            let _ = writer.write_all(&[key]);
+            std::thread::sleep(Duration::from_millis(15));
+        }
+        // The needle must be ANSI-stripped AND start past the first
+        // glyph: each keystroke paints its own diff frame, and the
+        // frames between the first and second glyph can repaint other
+        // rows (the caret cell, the footer), so the full word never
+        // sits contiguously in the stripped stream — only the tail
+        // from the second glyph on does ('lcheck').
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let data = probe().output.lock().expect("lock").clone();
+            if strip_ansi(&String::from_utf8_lossy(&data)).contains("lcheck") {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "the typed draft rendered");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        // shift+left ×4 (CSI 1;2D) — selects chars 4..8 ("heck").
+        for _ in 0..4 {
+            let _ = writer.write_all(b"\x1b[1;2D");
+            std::thread::sleep(Duration::from_millis(60));
+        }
+        let mut rows = 24u16;
+        let parser = settled_parser(&writer, &probe(), &mut rows);
+        let screen = parser.screen();
+        let (height, width) = screen.size();
+        // Find the "selcheck" run in the settled grid.
+        let mut found: Option<(u16, u16)> = None;
+        for row in 0..height {
+            for col in 0..width.saturating_sub(8) {
+                let text: String = (col..col + 8)
+                    .map(|column| {
+                        screen
+                            .cell(row, column)
+                            .map_or(' ', |cell| cell.contents().chars().next().unwrap_or(' '))
+                    })
+                    .collect();
+                if text == "selcheck" {
+                    found = Some((row, col));
+                }
+            }
+        }
+        let (row, col) = found.expect("the typed draft is on the settled screen");
+        let colors = |column: u16| {
+            screen.cell(row, column).map(|cell| (cell.fgcolor(), cell.bgcolor())).expect("cell")
+        };
+        let (_, prefix_bg) = colors(col);
+        let (prefix_fg, _) = colors(col + 1);
+        // The selected tail inverts: each selected cell's bg is the
+        // text fg and its fg is the prompt bg (the resting prefix's
+        // pair, swapped). All four selected cells agree.
+        for offset in 4u16..8 {
+            let (fg, bg) = colors(col + offset);
+            assert_eq!(bg, prefix_fg, "selected bg = the text fg (offset {offset})");
+            assert_eq!(fg, prefix_bg, "selected fg = the prompt bg (offset {offset})");
+        }
+        // The unselected prefix keeps the resting paint (no inversion).
+        for offset in 0u16..4 {
+            let (fg, bg) = colors(col + offset);
+            assert_eq!(fg, prefix_fg, "prefix fg unchanged (offset {offset})");
+            assert_eq!(bg, prefix_bg, "prefix bg unchanged (offset {offset})");
+        }
+        // Exit (ctrl+c clears the selection draft, then the app-level
+        // exit — paced, the app consumes one chord per redraw tick).
+        let _ = writer.write_all(b"\x03");
+        std::thread::sleep(Duration::from_millis(400));
+        let _ = writer.write_all(b"\x03");
+        std::thread::sleep(Duration::from_millis(400));
+        let _ = writer.write_all(b"\x03");
+    });
+}

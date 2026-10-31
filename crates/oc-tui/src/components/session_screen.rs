@@ -252,6 +252,7 @@ pub fn session_composer_frame(
         top: 0,
         rail: None,
         caret: None,
+        selection: None,
     };
     crate::components::composer_solid::render_prompt_frame_dispatch(
         &view,

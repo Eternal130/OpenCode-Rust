@@ -1524,9 +1524,38 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
                         .described(DiffSource::Turn.description()),
                 );
             }
+            // G-69 — the Base row (`...(props.onChooseBase ? [{title:
+            // "Base", value: "base", description: base ?? "Choose…",
+            // onSelect: onChooseBase}] : [])`, diff-viewer.tsx:746-756):
+            // the base-needing modes' branch selector entry point.
+            if matches!(live.mode, DiffSource::Branch | DiffSource::Committed) {
+                let current = store
+                    .selected_diff_base()
+                    .or_else(|| live.base.clone())
+                    .unwrap_or_else(|| "Choose…".to_owned());
+                options.push(SelectOption::titled("Base", "base").described(current));
+            }
             SelectProps::new("Diff source", options)
                 .flat(true)
                 .with_current(Some(live.mode.vcs_mode().to_owned()))
+        }
+        // G-69 — the base branch selector (`DiffBaseDialog`,
+        // diff-viewer.tsx:246-290): one row per `vcs.branch.list`
+        // branch, the current one marked, the ref's footer line.
+        DialogKind::DiffBase => {
+            let live = store.diff_viewer();
+            let current =
+                store.selected_diff_base().or_else(|| live.base.clone()).unwrap_or_default();
+            let options = store
+                .diff_branches()
+                .into_iter()
+                .map(|name| SelectOption::titled(&name, name.clone()).with_search(name))
+                .collect::<Vec<_>>();
+            SelectProps::new("Choose a base branch", options)
+                .flat(true)
+                .with_current((!current.is_empty()).then_some(current))
+                .with_hints(vec!["Remembered until the TUI exits".to_owned()])
+                .with_empty_texts("No branches", "No branches")
         }
         // The diff shortcuts dialog (`DiffViewerHelpDialog`,
         // diff-viewer.tsx:1100-1192): the viewer's key groups with the
