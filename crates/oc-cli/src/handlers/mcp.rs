@@ -370,7 +370,7 @@ async fn auth(name: Option<&str>) -> i32 {
         name: name.to_owned(),
         config: (*config).clone(),
         method_id: integration_id.clone(),
-        http: reqwest::Client::new(),
+        http: oc_http::client(),
     })
     .await
     {

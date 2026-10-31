@@ -216,7 +216,7 @@ pub async fn fetch_latest(
     feed: &str,
     current: &ReleaseVer,
 ) -> Result<Option<Candidate>, FeedError> {
-    let client = reqwest::Client::builder()
+    let client = oc_http::builder()
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(15))
         .build()

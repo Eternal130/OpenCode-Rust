@@ -30,7 +30,7 @@ pub mod methods;
 
 pub use error::ClientError;
 pub use methods::*;
-pub use sse::{MAX_SSE_EVENT_BYTES, SseFrame, SseStream};
+pub use sse::{SseFrame, SseStream, MAX_SSE_EVENT_BYTES};
 
 use base64::Engine as _;
 
@@ -57,7 +57,7 @@ impl Client {
             base.pop();
         }
         Ok(Self {
-            http: reqwest::Client::new(),
+            http: oc_http::client(),
             base,
             basic: None,
             auth_token: None,
