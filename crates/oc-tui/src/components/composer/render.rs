@@ -289,6 +289,16 @@ pub struct PromptView<'a> {
     /// cell; `None` paints nothing (the golden frames pin the resting
     /// glyph-less state — the caller gates this on the blink phase).
     pub caret: Option<usize>,
+    /// G-66 — the active selection (char range, normalized; the
+    /// editing engine's `selection()`). `None`/empty paints nothing
+    /// (every golden stays byte-exact); `Some` paints the range's
+    /// cells with the ref's DEFAULT selection styling — the fg/bg
+    /// swap (EditBufferRenderable's no-selectionBg branch,
+    /// editor.rs's INVERSE-after-selection rule: opaque line bg
+    /// becomes the fg) — since the upstream prompt mount sets NO
+    /// `selectionBg`/`selectionFg` (prompt/index.tsx never passes
+    /// them, opentui defaults them to undefined).
+    pub selection: Option<std::ops::Range<usize>>,
 }
 
 /// The composer cursor's blink period (`input.cursor.blinking`'s
@@ -1088,6 +1098,7 @@ mod tests {
             top: 0,
             rail: None,
             caret,
+            selection: None,
         };
         let with = crate::components::composer_solid::render_prompt_frame_dispatch(
             &view(Some(2)),
@@ -1129,6 +1140,7 @@ mod tests {
             top: 0,
             rail,
             caret: None,
+            selection: None,
         };
         let gray = crate::components::composer_solid::render_prompt_frame_dispatch(
             &view(None),
@@ -1220,6 +1232,7 @@ mod tests {
             // (`composer_rail_color`); the metadata agent paints it.
             rail: Some(CellColor::from(ThemeState::v2_dark().styles().agent_colors[0])),
             caret: None,
+            selection: None,
         };
         crate::components::composer_solid::render_prompt_frame_dispatch(
             &view,
@@ -1388,6 +1401,7 @@ mod tests {
             top: 0,
             rail: None,
             caret: None,
+            selection: None,
         };
         let frame = crate::components::composer_solid::render_prompt_frame_dispatch(
             &view,
@@ -1441,6 +1455,7 @@ mod tests {
             top: 0,
             rail: None,
             caret: None,
+            selection: None,
         };
         let frame =
             crate::components::composer_solid::render_prompt_frame_dispatch(&view, 80, 8, &theme);

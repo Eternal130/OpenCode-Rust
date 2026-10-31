@@ -958,6 +958,29 @@ pub fn paint_solid_prompt_frame(
                 }
             }
         }
+        // G-66 — the selection highlight (bridge-level, the caret
+        // block's twin): the ref's DEFAULT selection styling, the
+        // fg/bg swap (EditBufferRenderable's no-selectionBg branch —
+        // the prompt mount passes no selection colors, so opentui
+        // inverts: the opaque prompt-bg line bg becomes the fg, the
+        // text fg becomes the bg). Each char offset maps through the
+        // SAME wrap walk [`caret_cell`] the caret block uses, so the
+        // painted cells land exactly where the text renders; wrap-
+        // consumed spaces and chips' wide seconds fall where the
+        // layout puts them (the walk yields each cluster's origin
+        // cell, wide glyphs recolor per advance).
+        if let Some(range) = view.selection.clone().filter(|range| !range.is_empty()) {
+            let inner = width.saturating_sub(1 + pad * 2).max(1);
+            for offset in range {
+                let (row, col) = caret_cell(view.draft, inner, offset);
+                if row < textarea_rows {
+                    let (x, y) = (1 + pad + col, top + 1 + row);
+                    if let Some(cell) = frame.cells.get_mut(y).and_then(|line| line.get_mut(x)) {
+                        std::mem::swap(&mut cell.fg, &mut cell.bg);
+                    }
+                }
+            }
+        }
         frame
     })
 }
@@ -971,6 +994,46 @@ mod tests {
 
     fn draft(text: &str) -> PromptDraft {
         PromptDraft { text: text.to_owned(), ..PromptDraft::default() }
+    }
+
+    /// G-66 — the selection paints with the ref's DEFAULT styling,
+    /// the fg/bg swap (EditBufferRenderable's no-selectionBg branch):
+    /// selected glyph cells carry `text.base` bg + `prompt-bg` fg
+    /// while the unselected neighbors keep the resting paint.
+    #[test]
+    fn selection_range_paints_inverted_cells() {
+        let theme = ThemeState::v2_dark();
+        let owned = draft("hello world");
+        let view = |selection: Option<std::ops::Range<usize>>| PromptView {
+            draft: &owned,
+            placeholder: String::new(),
+            autocomplete: None,
+            footer: FooterHints::default(),
+            metadata: MetadataLine::default(),
+            terminal_width: 80,
+            top: 0,
+            rail: None,
+            caret: None,
+            selection,
+        };
+        let plain = paint_solid_prompt_frame(&view(None), 80, 8, &theme);
+        let selected = paint_solid_prompt_frame(&view(Some(0..5)), 80, 8, &theme);
+        // text_x = 1 + pad(2) = 3, text_y = 1: "hello" occupies
+        // (1, 3..8) — all five cells invert, the rest is untouched.
+        for col in 3..8usize {
+            let plain_cell = plain.cell(1, col);
+            let cell = selected.cell(1, col);
+            assert_eq!(cell.ch, plain_cell.ch, "glyph untouched at col {col}");
+            assert_eq!(cell.bg, plain_cell.fg, "bg = the old fg at col {col}");
+            assert_eq!(cell.fg, plain_cell.bg, "fg = the old bg at col {col}");
+        }
+        // The space + "world" past the selection keep the rest paint.
+        for col in 8..14usize {
+            assert_eq!(selected.cell(1, col), plain.cell(1, col), "col {col} untouched");
+        }
+        // An empty range paints nothing (the golden contract).
+        let empty = paint_solid_prompt_frame(&view(Some(2..2)), 80, 8, &theme);
+        assert_eq!(empty, plain, "an empty selection is a no-op");
     }
 
     /// The reactive path patches in place: typing churn on the last
@@ -992,6 +1055,7 @@ mod tests {
                 top: 0,
                 rail: None,
                 caret: None,
+                selection: None,
             };
             paint_solid_prompt_frame(&view, 80, 8, &theme)
         };
@@ -1026,6 +1090,7 @@ mod tests {
             top: 0,
             rail: None,
             caret: None,
+            selection: None,
         };
         let mut first: Option<Frame> = None;
         for width in [80usize, 40, 120, 80] {

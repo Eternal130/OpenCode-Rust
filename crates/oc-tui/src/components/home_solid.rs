@@ -527,6 +527,7 @@ pub fn paint_solid_home_view(view: &HomeView, theme: &ThemeState, size: (u16, u1
         top: 1 + plan.popup_rows,
         rail: view.rail,
         caret: None,
+        selection: view.selection.clone(),
     };
     let prompt_frame = render_prompt_frame_dispatch(
         &prompt_view,
@@ -675,6 +676,7 @@ mod tests {
             autocomplete: scenario.autocomplete.clone(),
             rail: None,
             caret: scenario.caret,
+            selection: None,
         }
     }
 
