@@ -822,7 +822,10 @@ impl Shared {
         let port = match self.config.provider_port.clone() {
             Some(port) => port,
             None => {
-                self.reply_inline(id, &format!("provider.{method}: no provider registry attached to the plugin host"));
+                self.reply_inline(
+                    id,
+                    &format!("provider.{method}: no provider registry attached to the plugin host"),
+                );
                 return;
             }
         };
@@ -842,7 +845,9 @@ impl Shared {
                     Ok(()) => protocol::response(id, Value::Null),
                     Err(message) => protocol::error_response(id, &message),
                 },
-                other => protocol::error_response(id, &format!("unknown provider method {other:?}")),
+                other => {
+                    protocol::error_response(id, &format!("unknown provider method {other:?}"))
+                }
             };
             let _ = outbound.send(reply);
         });
@@ -858,7 +863,12 @@ impl Shared {
         let port = match self.config.reference_port.clone() {
             Some(port) => port,
             None => {
-                self.reply_inline(id, &format!("reference.{method}: no reference registry attached to the plugin host"));
+                self.reply_inline(
+                    id,
+                    &format!(
+                        "reference.{method}: no reference registry attached to the plugin host"
+                    ),
+                );
                 return;
             }
         };
@@ -874,7 +884,9 @@ impl Shared {
                     Ok(()) => protocol::response(id, Value::Null),
                     Err(message) => protocol::error_response(id, &message),
                 },
-                other => protocol::error_response(id, &format!("unknown reference method {other:?}")),
+                other => {
+                    protocol::error_response(id, &format!("unknown reference method {other:?}"))
+                }
             };
             let _ = outbound.send(reply);
         });
@@ -884,11 +896,10 @@ impl Shared {
     /// persistent pty's session terminal).
     fn answer_terminal_async(self: &Arc<Self>, id: u64, method: &str, params: &Value) {
         let args = params.get("args").cloned().unwrap_or(Value::Null);
-        let session_id = args.get("sessionID").and_then(Value::as_str).unwrap_or_default().to_owned();
-        let lines = args
-            .get("lines")
-            .and_then(Value::as_u64)
-            .and_then(|lines| u32::try_from(lines).ok());
+        let session_id =
+            args.get("sessionID").and_then(Value::as_str).unwrap_or_default().to_owned();
+        let lines =
+            args.get("lines").and_then(Value::as_u64).and_then(|lines| u32::try_from(lines).ok());
         let Some(handle) = self.runtime_handle.clone() else {
             self.reply_inline(id, "plugin host runtime unavailable");
             return;
@@ -896,7 +907,10 @@ impl Shared {
         let port = match self.config.terminal_port.clone() {
             Some(port) => port,
             None => {
-                self.reply_inline(id, &format!("{method}: no terminal service attached to the plugin host"));
+                self.reply_inline(
+                    id,
+                    &format!("{method}: no terminal service attached to the plugin host"),
+                );
                 return;
             }
         };
@@ -927,7 +941,10 @@ impl Shared {
         let port = match self.config.integration_port.clone() {
             Some(port) => port,
             None => {
-                self.reply_inline(id, &format!("{method}: no integration service attached to the plugin host"));
+                self.reply_inline(
+                    id,
+                    &format!("{method}: no integration service attached to the plugin host"),
+                );
                 return;
             }
         };

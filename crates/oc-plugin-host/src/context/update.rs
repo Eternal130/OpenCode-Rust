@@ -129,10 +129,9 @@ fn now_ms() -> u128 {
 /// not carry the real version).
 pub fn installed_version(root: &Path, package: &str) -> Option<String> {
     let installed = resolve_installed_package(root, &package)?;
-    let manifest: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(installed.join("package.json")).ok()?,
-    )
-    .ok()?;
+    let manifest: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(installed.join("package.json")).ok()?)
+            .ok()?;
     manifest.get("version").and_then(|value| value.as_str()).map(str::to_owned)
 }
 
@@ -169,14 +168,14 @@ pub fn update(
     // npm.ts:394 — an immutable (pinned) spec just re-adds (idempotent:
     // the reuse path returns the existing generation).
     let installed = if requested.is_some() {
-        install::install(target, &InstallOptions { root: Some(root.to_owned()), ..options.clone() })?
+        install::install(
+            target,
+            &InstallOptions { root: Some(root.to_owned()), ..options.clone() },
+        )?
     } else {
         let latest = registry_latest(&package, options)?;
         let spec = format!("{package}@{latest}");
-        install::install(&spec, &InstallOptions {
-            root: Some(root.to_owned()),
-            ..options.clone()
-        })?
+        install::install(&spec, &InstallOptions { root: Some(root.to_owned()), ..options.clone() })?
     };
     // update.ts:58 — the cached check is stale the moment the tree changed.
     cache.clear(target);
@@ -203,7 +202,8 @@ pub fn collect_stale(root: &Path) {
             if let Some(stamp) = name.strip_prefix(".staging-") {
                 // `.staging-<startedAt>-<uuid>` — the ref's interrupted
                 // install leftovers (1 h retention).
-                let Some(started) = stamp.split('-').next().and_then(|digits| digits.parse::<u128>().ok())
+                let Some(started) =
+                    stamp.split('-').next().and_then(|digits| digits.parse::<u128>().ok())
                 else {
                     continue;
                 };
@@ -263,7 +263,11 @@ mod tests {
     use std::path::PathBuf;
 
     fn stage(root: &Path, package: &str, version: &str, stamp: &str) -> PathBuf {
-        let pkg = root.join(format!("{package}@{version}")).join(stamp).join("node_modules").join(package);
+        let pkg = root
+            .join(format!("{package}@{version}"))
+            .join(stamp)
+            .join("node_modules")
+            .join(package);
         std::fs::create_dir_all(&pkg).unwrap();
         std::fs::write(
             pkg.join("package.json"),
@@ -329,7 +333,8 @@ mod tests {
     /// A minimal fake `npm` shim: `view <pkg> version` echoes the
     /// version written to `version.txt` next to the shim.
     fn stage_npm_shim(version: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("ocph-npm-shim-{}-{}", std::process::id(), version));
+        let dir =
+            std::env::temp_dir().join(format!("ocph-npm-shim-{}-{}", std::process::id(), version));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("version.txt"), version).unwrap();
         let shim = dir.join("npm");
@@ -362,8 +367,15 @@ mod tests {
         stage(&root, "demo-plugin", "1.0.0", &(now - 9 * day).to_string());
         stage(&root, "demo-plugin", "1.0.0", &(now - 10 * day).to_string());
         // An interrupted staging dir (2 h old) and a fresh one.
-        std::fs::create_dir_all(root.join("demo-plugin@1.0.0").join(format!(".staging-{}-deadbeef", now - 2 * 60 * 60 * 1_000))).unwrap();
-        std::fs::create_dir_all(root.join("demo-plugin@1.0.0").join(format!(".staging-{now}-live"))).unwrap();
+        std::fs::create_dir_all(
+            root.join("demo-plugin@1.0.0")
+                .join(format!(".staging-{}-deadbeef", now - 2 * 60 * 60 * 1_000)),
+        )
+        .unwrap();
+        std::fs::create_dir_all(
+            root.join("demo-plugin@1.0.0").join(format!(".staging-{now}-live")),
+        )
+        .unwrap();
 
         collect_stale(&root);
 
@@ -378,7 +390,9 @@ mod tests {
         assert!(!names.contains(&(now - 10 * day).to_string()), "stale gen removed: {names:?}");
         assert!(names.contains(&(now - day).to_string()), "newest kept: {names:?}");
         assert!(names.contains(&(now - 2 * day).to_string()), "second-newest kept: {names:?}");
-        assert!(!names.iter().any(|name| name.starts_with(".staging-") && name.contains("deadbeef")));
+        assert!(!names
+            .iter()
+            .any(|name| name.starts_with(".staging-") && name.contains("deadbeef")));
         assert!(names.iter().any(|name| name.starts_with(".staging-") && name.contains("live")));
     }
 
@@ -395,8 +409,7 @@ mod tests {
         stage(&root, "demo-plugin", "1.0.0", &(now - 10 * day).to_string());
         collect_stale(&root);
         let key = root.join("demo-plugin@1.0.0");
-        let count =
-            std::fs::read_dir(&key).unwrap().filter_map(|entry| entry.ok()).count();
+        let count = std::fs::read_dir(&key).unwrap().filter_map(|entry| entry.ok()).count();
         assert_eq!(count, 2, "keep-2 floor");
     }
 

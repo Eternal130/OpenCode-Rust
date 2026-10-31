@@ -25,12 +25,12 @@ pub mod knight;
 pub mod render;
 
 pub use attachment::{
-    PastedAttachment, parse_pasted_filepaths, prompt_attachment_label, resolve_pasted_attachments,
+    parse_pasted_filepaths, prompt_attachment_label, resolve_pasted_attachments, PastedAttachment,
 };
 pub use autocomplete::{AutocompleteState, SlashEntry, SlashRegistry};
 pub use oc_tui_core::text_edit::EditCommand as ComposerEditCommand;
 pub use oc_tui_core::text_edit::{EditCore, EditOutcome, SnapshotKind};
-pub use render::{AutocompleteView, FooterHints, PromptView, prompt_text_width};
+pub use render::{prompt_text_width, AutocompleteView, FooterHints, PromptView};
 
 use oc_tui_core::text_edit::EditCommand;
 
@@ -476,7 +476,11 @@ impl Composer {
 
     /// Run one selection command (`{ select: true }` motions).
     fn select_command(&mut self, command: EditCommand) -> KeyOutcome {
-        if self.apply_edit(command) { KeyOutcome::Edited } else { KeyOutcome::Ignored }
+        if self.apply_edit(command) {
+            KeyOutcome::Edited
+        } else {
+            KeyOutcome::Ignored
+        }
     }
 
     /// The selected text, if any.

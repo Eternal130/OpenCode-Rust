@@ -225,8 +225,12 @@ mod tests {
         let (name, output) = prepare(&skill).unwrap();
         assert_eq!(name, "Effect");
         // G-53: the envelope lists file PATHS, never contents.
-        assert!(output.starts_with("<skill_content name=\"Effect\">\n# Skill: Effect\n"), "{output}");
-        let listed_reference = format!("<file>{}</file>", directory.path().join("reference.md").display());
+        assert!(
+            output.starts_with("<skill_content name=\"Effect\">\n# Skill: Effect\n"),
+            "{output}"
+        );
+        let listed_reference =
+            format!("<file>{}</file>", directory.path().join("reference.md").display());
         assert!(output.contains(&listed_reference), "{output}");
         assert!(!output.contains("reference contents"), "no file contents in the output");
         assert!(output.ends_with("</skill_files>\n</skill_content>"));
@@ -241,7 +245,8 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("SKILL.md"), "unused").unwrap();
         for n in 0..15 {
-            std::fs::write(directory.path().join(format!("f{n:02}.txt")), format!("contents {n}")).unwrap();
+            std::fs::write(directory.path().join(format!("f{n:02}.txt")), format!("contents {n}"))
+                .unwrap();
         }
         let skill = Skill {
             id: SkillId::parse("many"),

@@ -109,8 +109,8 @@ pub use context::{
 };
 pub use registrations::{
     PluginAgent, PluginCommand, PluginDialog, PluginGroupRule, PluginHomeAction, PluginHook,
-    PluginKeymapCommand, PluginMcp, PluginProviderDef, PluginReferenceDef, PluginRoute,
-    PluginRpc, PluginSkill, PluginSlotClaim, PluginState, PluginStatus, PluginTheme, PluginTool,
+    PluginKeymapCommand, PluginMcp, PluginProviderDef, PluginReferenceDef, PluginRoute, PluginRpc,
+    PluginSkill, PluginSlotClaim, PluginState, PluginStatus, PluginTheme, PluginTool,
     PluginVcsProvider, RegistrationSnapshot,
 };
 pub use resolve::{

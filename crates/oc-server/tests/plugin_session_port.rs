@@ -77,7 +77,11 @@ async fn engine_session_port_covers_the_v2_domain() {
         vec!["config", "user.name", "t"],
         vec!["commit", "-q", "--allow-empty", "-m", "init"],
     ] {
-        std::process::Command::new("git").args(&args).current_dir(&box_.project).status().expect("git");
+        std::process::Command::new("git")
+            .args(&args)
+            .current_dir(&box_.project)
+            .status()
+            .expect("git");
     }
     let handle = boot_and_serve(&box_.options()).await.expect("boot and serve");
     let location = oc_core::location::LocationRef::new(box_.project.clone(), None);
@@ -139,9 +143,12 @@ async fn engine_session_port_covers_the_v2_domain() {
             "git checkout must use VCS identity, not the directory-hash fallback"
         );
         assert!(
-            worktree.as_deref().is_some_and(|dir| std::path::Path::new(dir)
-                .starts_with(std::path::Path::new(&box_.project))),
-            "project {project_id} should map to a worktree under the sandbox: {worktree:?} vs {:?}", box_.project
+            worktree
+                .as_deref()
+                .is_some_and(|dir| std::path::Path::new(dir)
+                    .starts_with(std::path::Path::new(&box_.project))),
+            "project {project_id} should map to a worktree under the sandbox: {worktree:?} vs {:?}",
+            box_.project
         );
     }
 

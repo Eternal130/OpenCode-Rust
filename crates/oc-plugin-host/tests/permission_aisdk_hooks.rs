@@ -37,15 +37,10 @@ fn permission_and_aisdk_hooks_register_and_round_trip() {
     // Registration coverage: all three subscriptions survive the
     // guest's domain whitelist (the former "unknown hook" failure).
     let hooks = &host.registrations().hooks;
-    let keys: Vec<String> = hooks
-        .iter()
-        .map(|hook| format!("{}.{}", hook.domain, hook.name))
-        .collect();
+    let keys: Vec<String> =
+        hooks.iter().map(|hook| format!("{}.{}", hook.domain, hook.name)).collect();
     for expected in ["permission.evaluate", "aisdk.sdk", "aisdk.language"] {
-        assert!(
-            keys.iter().any(|key| key == expected),
-            "{expected} registered: {keys:?}"
-        );
+        assert!(keys.iter().any(|key| key == expected), "{expected} registered: {keys:?}");
     }
 
     // permission.evaluate: the guest's effect/message rewrite rides back.

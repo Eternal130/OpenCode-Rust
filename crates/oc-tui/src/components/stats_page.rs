@@ -183,8 +183,7 @@ pub fn activity_calendar(
     let start = monday + (total - count).max(0) * 7;
     let values: std::collections::HashMap<&str, i64> =
         activity.iter().map(|day| (day.date.as_str(), day.steps)).collect();
-    let mut levels: Vec<i64> =
-        values.values().copied().filter(|steps| *steps > 0).collect();
+    let mut levels: Vec<i64> = values.values().copied().filter(|steps| *steps > 0).collect();
     levels.sort_unstable();
     levels.dedup();
     let weeks = (0..count)
@@ -199,7 +198,10 @@ pub fn activity_calendar(
                     } else if steps == 0 {
                         0
                     } else {
-                        let index = levels.iter().position(|value| *value == steps).map_or(0, |index: usize| index as i64);
+                        let index = levels
+                            .iter()
+                            .position(|value| *value == steps)
+                            .map_or(0, |index: usize| index as i64);
                         let len = i64::try_from(levels.len()).unwrap_or(1).max(1);
                         (((index + 1) as f64 / len as f64) * 4.0).ceil().max(1.0) as i32
                     };
@@ -285,19 +287,23 @@ pub struct Poster {
 /// two spaces. `None` when any character lacks a bitmap.
 #[must_use]
 pub fn big_number_rows(number: &str) -> Option<Vec<String>> {
-    let glyphs: Vec<&[&str; 5]> =
-        number.chars().map(|ch| DIGITS.iter().find(|(key, _)| *key == ch.encode_utf8(&mut [0; 4])).map(|(_, rows)| rows)).collect::<Option<Vec<_>>>()?;
-    Some((0..5)
-        .map(|row| {
-            glyphs
-                .iter()
-                .map(|glyph| {
-                    glyph[row].replace('1', "\u{2588}\u{2588}").replace('0', "  ")
-                })
-                .collect::<Vec<_>>()
-                .join("  ")
+    let glyphs: Vec<&[&str; 5]> = number
+        .chars()
+        .map(|ch| {
+            DIGITS.iter().find(|(key, _)| *key == ch.encode_utf8(&mut [0; 4])).map(|(_, rows)| rows)
         })
-        .collect())
+        .collect::<Option<Vec<_>>>()?;
+    Some(
+        (0..5)
+            .map(|row| {
+                glyphs
+                    .iter()
+                    .map(|glyph| glyph[row].replace('1', "\u{2588}\u{2588}").replace('0', "  "))
+                    .collect::<Vec<_>>()
+                    .join("  ")
+            })
+            .collect(),
+    )
 }
 
 /// The big glyph block's display width (`sum(char_width·2 + 2) − 2`,
@@ -306,7 +312,10 @@ fn big_number_width(number: &str) -> Option<usize> {
     let glyphs: Vec<usize> = number
         .chars()
         .map(|ch| {
-            DIGITS.iter().find(|(key, _)| *key == ch.encode_utf8(&mut [0; 4])).map(|(_, rows)| rows[0].chars().count() * 2)
+            DIGITS
+                .iter()
+                .find(|(key, _)| *key == ch.encode_utf8(&mut [0; 4]))
+                .map(|(_, rows)| rows[0].chars().count() * 2)
         })
         .collect::<Option<Vec<_>>>()?;
     Some(glyphs.iter().map(|width| width + 2).sum::<usize>().saturating_sub(2))
@@ -381,8 +390,7 @@ fn month_label_row(calendar: &ActivityCalendarView) -> String {
     let mut row = String::from("    ");
     for month in &calendar.months {
         let span = month.span * 2;
-        let label =
-            if month.label.chars().count() <= span { month.label.as_str() } else { "" };
+        let label = if month.label.chars().count() <= span { month.label.as_str() } else { "" };
         row.push_str(&format!("{label:<span$}"));
     }
     row
@@ -407,7 +415,11 @@ pub fn stats_poster(stats: &SessionStatsInfo, size: (u16, u16), timezone: &str) 
         timezone,
     );
     let mut lines: Vec<Line> = Vec::new();
-    macro_rules! spacer { () => { lines.push(Line::Spacer) }; }
+    macro_rules! spacer {
+        () => {
+            lines.push(Line::Spacer)
+        };
+    }
     // The header (stats.tsx:63-68): title bold left, range right — a
     // column below 44 cols (the children center in the narrow box).
     let dates = range_label(stats.range.from, stats.range.to);
@@ -424,7 +436,11 @@ pub fn stats_poster(stats: &SessionStatsInfo, size: (u16, u16), timezone: &str) 
     // renders the SAME art on home (home.rs LOGO_*) — those display
     // strings are reused: the left half muted, the right bold.
     if !compact {
-        const GO_RIGHT: [&str; 3] = ["\u{2588}\u{2580}\u{2580}\u{2588}", "\u{2588}__\u{2588}", "\u{2580}\u{2580}\u{2580}\u{2580}"];
+        const GO_RIGHT: [&str; 3] = [
+            "\u{2588}\u{2580}\u{2580}\u{2588}",
+            "\u{2588}__\u{2588}",
+            "\u{2580}\u{2580}\u{2580}\u{2580}",
+        ];
         if width >= 44 {
             for (left, right) in crate::components::home::logo_left()
                 .iter()
@@ -457,9 +473,8 @@ pub fn stats_poster(stats: &SessionStatsInfo, size: (u16, u16), timezone: &str) 
     }
     // The big TOKENS number (stats.tsx:72-94): the glyph block when
     // every character has a bitmap AND it fits, else the bold string.
-    let big = big_number_rows(&number).filter(|_rows| {
-        big_number_width(&number).is_some_and(|block| block + 1 + 6 <= width)
-    });
+    let big = big_number_rows(&number)
+        .filter(|_rows| big_number_width(&number).is_some_and(|block| block + 1 + 6 <= width));
     match (&big, big_number_width(&number)) {
         (Some(rows), Some(block)) => {
             let x = (width - (block + 1 + 6)) / 2;
@@ -502,9 +517,10 @@ pub fn stats_poster(stats: &SessionStatsInfo, size: (u16, u16), timezone: &str) 
         lines.push(Line::At(row));
     }
     if calendar.clipped {
-        lines.push(Line::Center(vec![
-            Run::new(format!("Your last {} weeks", calendar.weeks.len()), RunStyle::Muted),
-        ]));
+        lines.push(Line::Center(vec![Run::new(
+            format!("Your last {} weeks", calendar.weeks.len()),
+            RunStyle::Muted,
+        )]));
     }
     spacer!();
     // The three footer metrics (stats.tsx:120-132): value bold over
@@ -512,7 +528,14 @@ pub fn stats_poster(stats: &SessionStatsInfo, size: (u16, u16), timezone: &str) 
     let entries: Vec<(String, &str)> = metrics[1..]
         .iter()
         .map(|(label, value)| {
-            (format!("{}{}", stats_number(*value), if *label == "best streak" { " days" } else { "" }), *label)
+            (
+                format!(
+                    "{}{}",
+                    stats_number(*value),
+                    if *label == "best streak" { " days" } else { "" }
+                ),
+                *label,
+            )
         })
         .collect();
     let slot = width / 3;
@@ -746,14 +769,18 @@ mod tests {
             if runs.last().is_some_and(|run| run.style == RunStyle::Bold)
             && runs[0].style == RunStyle::Muted));
         // The big "1.2M TOKENS" block (fits 110 cols).
-        let big = poster.lines.iter().position(|line| matches!(
-            line,
-            Line::At(runs) if runs.iter().any(|(_, run)| run.text == "TOKENS")
-        ));
+        let big = poster.lines.iter().position(|line| {
+            matches!(
+                line,
+                Line::At(runs) if runs.iter().any(|(_, run)| run.text == "TOKENS")
+            )
+        });
         let big = big.expect("the TOKENS label rides the big block's middle row");
         let Line::At(runs) = &poster.lines[big] else { unreachable!() };
-        assert!(runs.iter().any(|(x, run)| *x > 0 && run.text.contains('\u{2588}')),
-            "the glyph block paints ██ cells");
+        assert!(
+            runs.iter().any(|(x, run)| *x > 0 && run.text.contains('\u{2588}')),
+            "the glyph block paints ██ cells"
+        );
         // The calendar: the month-label row, then the M-W-S rows —
         // Monday's row holds one cell per week, first cell level 1.
         let monday = poster
@@ -766,20 +793,30 @@ mod tests {
                 _ => None,
             })
             .expect("the Monday row");
-        assert!(monday.iter().any(|(_, run)| run.text == "\u{25a0} " && run.style == RunStyle::Shade(3)),
-            "2026-01-05 (Monday, steps 4 → level 3): {monday:?}");
+        assert!(
+            monday
+                .iter()
+                .any(|(_, run)| run.text == "\u{25a0} " && run.style == RunStyle::Shade(3)),
+            "2026-01-05 (Monday, steps 4 → level 3): {monday:?}"
+        );
         // Metrics: "7 days" bold over "best streak" muted, then
         // "120"/"active days", "42"/"sessions".
-        let flat: Vec<&Run> = poster.lines.iter().flat_map(|line| match line {
-            Line::At(runs) => runs.iter().map(|(_, run)| run).collect(),
-            _ => Vec::new(),
-        }).collect();
+        let flat: Vec<&Run> = poster
+            .lines
+            .iter()
+            .flat_map(|line| match line {
+                Line::At(runs) => runs.iter().map(|(_, run)| run).collect(),
+                _ => Vec::new(),
+            })
+            .collect();
         assert!(flat.iter().any(|run| run.text == "7 days" && run.style == RunStyle::Bold));
         assert!(flat.iter().any(|run| run.text == "best streak" && run.style == RunStyle::Muted));
         assert!(flat.iter().any(|run| run.text == "120" && run.style == RunStyle::Bold));
         assert!(flat.iter().any(|run| run.text == "sessions"));
         // The sign-off.
-        assert!(matches!(poster.lines.last(), Some(Line::Right(runs)) if runs[0].text == "opencode.ai"));
+        assert!(
+            matches!(poster.lines.last(), Some(Line::Right(runs)) if runs[0].text == "opencode.ai")
+        );
     }
 
     /// The compact/narrow shapes: no logo under 38 rows, the inline
@@ -787,17 +824,19 @@ mod tests {
     #[test]
     fn poster_compact_and_narrow_shapes() {
         let compact = stats_poster(&fixture(), (120, 20), "UTC");
-        assert!(!compact
-            .lines
-            .iter()
-            .any(|line| matches!(line, Line::Left(runs) if runs.len() == 3)),
-            "no logo rows when compact");
+        assert!(
+            !compact.lines.iter().any(|line| matches!(line, Line::Left(runs) if runs.len() == 3)),
+            "no logo rows when compact"
+        );
         let narrow = stats_poster(&fixture(), (16, 40), "UTC");
         assert_eq!(narrow.width, 12);
-        assert!(narrow.lines.iter().any(|line| matches!(
-            line,
-            Line::Center(runs) if runs.iter().any(|run| run.text == "1.2M")
-        )), "the glyph block cannot fit 12 cols → the bold fallback");
+        assert!(
+            narrow.lines.iter().any(|line| matches!(
+                line,
+                Line::Center(runs) if runs.iter().any(|run| run.text == "1.2M")
+            )),
+            "the glyph block cannot fit 12 cols → the bold fallback"
+        );
     }
 
     /// The fetch inputs (stats.tsx:143-146): local January 1st + the
