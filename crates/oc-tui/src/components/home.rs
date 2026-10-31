@@ -412,10 +412,13 @@ pub fn render_home(store: &Store, theme: &crate::theme::ThemeStyles, size: (u16,
     let view = HomeView {
         draft: &composer.draft,
         placeholder,
-        // #4: home shows where the next session will be created —
-        // the launch cwd (`currentLocation.ref ??
-        // data.location.default()`, prompt/index.tsx:1605-1610).
-        location: store.footer_location(),
+        // #4/G-34: home shows where the next session will be created —
+        // the route's own location first (`session.new_location` =
+        // inherit keeps the routed session's directory; the inherited
+        // override is raw, no `:{branch}` suffix), else the launch cwd
+        // (`currentLocation.ref ?? data.location.default()`,
+        // prompt/index.tsx:1605-1610).
+        location: store.home_location().unwrap_or_else(|| store.footer_location()),
         directory: String::new(),
         location_hovered: store.location_hovered(),
         shell_mode,

@@ -232,6 +232,14 @@ impl ToolOutput {
         *self.limits.lock().unwrap_or_else(|p| p.into_inner()) = limits;
     }
 
+    /// The effective limits (G-48 — hot re-apply reads back what a
+    /// reload configured, so per-location consumers assembled after a
+    /// reload observe the new budget without a re-boot).
+    #[must_use]
+    pub fn current_limits(&self) -> Limits {
+        *self.limits.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
     /// `truncate` — the budget pipeline. Results already carrying a
     /// `truncated` metadata flag pass through untouched.
     pub fn truncate(&self, result: ToolOutputResult) -> std::io::Result<ToolOutputResult> {
@@ -416,10 +424,7 @@ mod tests {
             serde_json::json!({"max_lines": 50, "max_bytes": 4096}),
         )
         .unwrap();
-        assert_eq!(
-            Limits::from_config(&config),
-            Limits { max_lines: 50, max_bytes: 4_096 }
-        );
+        assert_eq!(Limits::from_config(&config), Limits { max_lines: 50, max_bytes: 4_096 });
         // Absent keys keep the compile-time defaults.
         let empty = oc_schema::config::ToolOutput::default();
         assert_eq!(Limits::from_config(&empty), Limits::default());
