@@ -7086,11 +7086,10 @@ impl Store {
         self.shell_view.set(view);
     }
 
-    /// G-6 residual — the shell id of the TOPMOST `DialogShellOutput`
-    /// viewer, when one is open. The run loop rides its periodic tick
-    /// on this to re-fetch the view every 1s (ref
-    /// dialog-shell-output.tsx's 1s live poll) without spawning any
-    /// thread of its own.
+    /// The shell id of the TOPMOST `DialogShellOutput` viewer, when one
+    /// is open. The run loop rides its periodic tick on this to
+    /// re-fetch the view every 1s (ref dialog-shell-output.tsx's 1s
+    /// live poll) without spawning any thread of its own.
     #[must_use]
     pub fn active_shell_output_viewer(&self) -> Option<String> {
         self.dialogs.get().last().and_then(|entry| match &entry.kind {
@@ -14993,9 +14992,9 @@ fn parent_route_resolves_through_the_registry() {
     assert!(!store.navigate_parent("root"), "a root has no parent");
 }
 
-/// G-6 residual — the 1s viewer poll targets ONLY the topmost
-/// `DialogShellOutput`: the run loop re-issues `ShellView` while it is
-/// topmost and stops the moment another dialog (or none) covers it.
+/// The 1s viewer poll targets ONLY the topmost `DialogShellOutput`:
+/// the run loop re-issues `ShellView` while it is topmost and stops
+/// the moment another dialog (or none) covers it.
 #[test]
 fn shell_output_viewer_poll_targets_topmost_dialog() {
     let store = Store::new(Runtime::new());

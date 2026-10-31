@@ -8,7 +8,9 @@
 //! a process to completion — unusable for a live JSON-RPC stdio session —
 //! so this module adds the piped counterpart: [`StdioSpawner::spawn_piped`]
 //! returns the child's stdin/stdout pipes plus a `stop` closure that
-//! terminates the process (SIGTERM, escalating to SIGKILL) when invoked.
+//! terminates the process (immediate SIGKILL via `start_kill`, then
+//! waits up to `FORCE_KILL_AFTER` for reaping — matching rmcp's
+//! kill-on-drop behavior rather than ref's SIGTERM grace period).
 //! The [`Driver`](crate::environment::driver::Driver) carries one per
 //! execution plane: the local driver spawns on the host exactly like the
 //! previous direct `tokio::process::Command` use; a workspace driver
@@ -24,8 +26,8 @@ use std::collections::BTreeMap;
 pub type BoxedWriter = Box<dyn tokio::io::AsyncWrite + Send + Unpin>;
 /// Piped stdout half of a spawned child.
 pub type BoxedReader = Box<dyn tokio::io::AsyncRead + Send + Unpin>;
-/// Best-effort termination (SIGTERM → escalate to SIGKILL after the
-/// grace period); fire-and-forget, callable exactly once.
+/// Best-effort termination (immediate SIGKILL, then bounded wait for
+/// reaping); fire-and-forget, callable exactly once.
 pub type StopChild = Box<dyn FnOnce() + Send>;
 
 /// One streaming stdio spawn request (`ChildProcess.make` minus the

@@ -7337,7 +7337,7 @@ pub async fn run_with_size(
         .and_then(|path| std::fs::metadata(path).ok())
         .and_then(|meta| meta.modified().ok());
     let mut last_tick = std::time::Instant::now();
-    // G-6 residual — the shell output viewer's 1s live poll (ref
+    // The shell output viewer's 1s live poll (ref
     // dialog-shell-output.tsx refreshes the open viewer every 1s).
     // Rides the existing periodic tick like the other polling
     // features; no dedicated thread.
@@ -8424,11 +8424,11 @@ pub async fn run_with_size(
         if ticked {
             last_tick = std::time::Instant::now();
         }
-        // G-6 residual — the shell output viewer's 1s live refresh
-        // (dialog-shell-output.tsx polls `shell.get` + the tail page
-        // every 1s while the viewer is open; the 64KiB tail cap rides
-        // unchanged inside the fetch). The topmost dialog decides the
-        // target; a closed viewer simply stops polling.
+        // The shell output viewer's 1s live refresh (dialog-shell-output
+        // .tsx polls `shell.get` + the tail page every 1s while the viewer
+        // is open; the 64KiB tail cap rides unchanged inside the fetch).
+        // The topmost dialog decides the target; a closed viewer simply
+        // stops polling.
         if shell_view_polled_at.elapsed() >= std::time::Duration::from_secs(1) {
             shell_view_polled_at = std::time::Instant::now();
             if let Some(shell_id) = app.store.active_shell_output_viewer() {

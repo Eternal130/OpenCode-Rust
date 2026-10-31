@@ -1,12 +1,13 @@
-//! WebSocket proxy support (gap G-8): the v2 stack routes WebSocket
+//! WebSocket proxy support: the v2 stack routes WebSocket
 //! connections through `http(s)-proxy-agent`, so `HTTP_PROXY` /
 //! `HTTPS_PROXY` / `ALL_PROXY` (and `NO_PROXY`) apply to WS transports
 //! the same way reqwest applies them to HTTP. The rust port's WS
 //! connector dials directly, so this module selects a proxy for a
 //! target URL from the environment and tunnels the WebSocket through
-//! it (G-8 residual): `http://` proxies get a plain CONNECT,
-//! `https://` proxies get a TLS leg to the proxy first (rustls, the
-//! same stack the 0.13 side uses) then CONNECT inside it, and
+//! it: `http://` proxies get a plain CONNECT, `https://` proxies get a
+//! TLS leg to the proxy first (rustls with webpki roots — intentional
+//! for this WS stack; the 0.13 reqwest stack uses the platform
+//! verifier instead, see G-26) then CONNECT inside it, and
 //! `socks5://` / `socks5h://` / `socks://` proxies (alias socks5,
 //! default port 1080) run the SOCKS5 handshake via `tokio-socks`
 //! (new dependency: the SOCKS5 greeting/method/connect exchange is a
@@ -315,10 +316,11 @@ impl tokio::io::AsyncWrite for ProxyTunnel {
 /// Dials the proxy for `target_host:target_port` and returns the
 /// tunnel ready for the WebSocket handshake: an `http://` proxy gets a
 /// plain `CONNECT`, an `https://` proxy gets a rustls TLS leg first
-/// (webpki roots — the same stack the 0.13 side uses), and a `socks5`
-/// proxy runs the SOCKS5 handshake (`tokio-socks`; the target host is
-/// resolved locally, matching `socks5`/`socks5h` aliasing here since
-/// nothing remote resolves differently for WS targets).
+/// (webpki roots — intentional for this WS transport stack; the 0.13
+/// reqwest stack uses the platform verifier instead, see G-26), and a
+/// `socks5` proxy runs the SOCKS5 handshake (`tokio-socks`; the target
+/// host is resolved locally, matching `socks5`/`socks5h` aliasing here
+/// since nothing remote resolves differently for WS targets).
 pub async fn connect_through(
     proxy: &ProxyEndpoint,
     target_host: &str,
@@ -613,7 +615,8 @@ mod tests {
         assert_eq!(parse_proxy_url("proxy.corp").unwrap().port, 80);
         assert_eq!(parse_proxy_url("http://[::1]:8118").unwrap().host, "::1");
         assert_eq!(parse_proxy_url("http://[::1]").unwrap().port, 80);
-        // G-8 residual — https and socks5 proxy URLs now parse.
+        // https and socks5 proxy URLs are supported (TLS-to-proxy and the
+        // tokio-socks handshake); only socks4/4a stay out of scope.
         let https = parse_proxy_url("https://proxy:8443").unwrap();
         assert_eq!((https.scheme, https.port), (ProxyScheme::Https, 8443));
         assert_eq!(parse_proxy_url("https://proxy").unwrap().port, 443);
@@ -656,12 +659,11 @@ mod tests {
 
 #[cfg(all(test, feature = "ws-transport"))]
 mod scheme_tunnel_tests {
-    //! G-8 residual — end-to-end tunnels over the newly supported
-    //! schemes: a real SOCKS5 stub (greeting → no-auth → CONNECT) and
-    //! an https CONNECT stub (self-signed rustls TLS to the proxy, the
-    //! CONNECT riding inside the session). Both then carry a real
-    //! WebSocket exchange, like the http CONNECT stub in
-    //! `websocket.rs`.
+    //! End-to-end tunnels over the supported schemes: a real SOCKS5
+    //! stub (greeting → no-auth → CONNECT) and an https CONNECT stub
+    //! (self-signed rustls TLS to the proxy, the CONNECT riding inside
+    //! the session). Both then carry a real WebSocket exchange, like
+    //! the http CONNECT stub in `websocket.rs`.
 
     use super::{
         connect_through, https_connect, parse_proxy_url, proxy_tls_connector, ProxyEndpoint,

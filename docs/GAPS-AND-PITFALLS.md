@@ -1,5 +1,9 @@
 # 移植缺口与坑（Gaps & Pitfalls）
 
+> **2026-10-31 第六轮复核**：对文档现存未关闭条目逐项现状验证——G-4/G-6/G-8 已悄然修复收口；G-1 残留缩小（mcp/stdio 已迁）、G-24/G-31 部分清偿；G-34/G-41..G-48 确认仍在。详见文末第六轮。
+
+> **2026-10-31 第五轮全量对比审查**：9 通道全量对读 + 4 通道缺口复核，新立 G-50..G-78（含 5 项🔴：G-50 snapshot 保真、G-51 persistent-pty Origin、G-52 debug config 脱敏、G-53 skill 输出、G-54 run 表单退出码），订正 G-17 断言与勘误 #4 半边，撤销 12 项初报。详见文末第五轮。
+
 > **2026-10-31 收口轮（gap-burndown-3）**：G-18..G-27、G-29..G-31、G-33..G-37 全部落地并合并 main（单 lane 串行、worktree 隔离、dev-gate、合并门测试，日志在 .test-logs/merge-*）。残留清单与 G-1/G-6/G-8 残留项同轮清偿（MCP stdio 经 Environment seam、Shell 查看 1s 轮询、https/socks5 WS 代理）。G-26 双栈信任统一（oc-http crate，platform-verifier + webpki 降级）。G-28 维持有界化设计（声明为插件生态 breaking change）、G-32 v1/legacy schema 维持有意不移植（纯 v2 面无影响）——两项裁决为文档化决策。仍开放的工程残留：G-1 tools/handlers 全量 consumer 迁移（read/write/edit/shell/glob/grep/patch、pty）、G-24 有界外项（guest 侧 worktree host-op 调用、vcs.transform/reload、websearch editor.default.set 持久化、worktree 注册表热重载）、G-31 内存索引（10s 刷新）。
 >
 > 2026-10-30 二次复核版；同日 burndown 完成状态更新（gb2-burndown，commits a193f4b..phase-6）。每条均经两侧源码取证（rust `/opt/opencode-rust` vs ref `/opt/opencode-ref`），未采信仓库内既有评审文档。总报告见 `COMPREHENSIVE_PORT_AUDIT.md`。
@@ -79,7 +83,7 @@
 - `/openapi.json` 为 sha256 钉死的静态文档；ref 升级后需人工走 baseline-bump 流程（有 sha 断言兜底）。
 
 ### G-17 ℹ️ 有意省略（正确决策，无需补；未变）
-- ref 死代码：`mcp/resolve.ts`、`plugin/inventory.ts`、`debug/redact.ts`（ref 自身未注册）；ref 的 `ignore` 依赖在其源码中也无 import。
+- ref 死代码：`mcp/resolve.ts`、`plugin/inventory.ts`；ref 的 `ignore` 依赖在其源码中也无 import。（勘误：`debug/redact.ts` 并非死代码——ref 调用链完整 `cli/src/index.ts:41 → handlers/debug/config.ts:8,16`，见第五轮 G-52。）
 - Web/GUI/云生态：web/desktop/enterprise/console/app/posts/storybook/identity/containers/function 等整包不移植（codemode/latex/merman/simulation 的**功能本体**已在 oc-core/oc-tui 内实现或按上文明示处理）。
 - rust-extra 超出 ref 表面的部分（`upgrade -m local-file|github`、completion、`--force`、run 的 TTY 权限提示、serve hostname 解析报错、`$PWD` 陈旧值守卫等）均为防御性收紧且有注释。
 
@@ -319,3 +323,184 @@
 
 ## 复审判定汇总
 G-18 ✅ / G-19 ✅(死校验残留) / G-20 ✅ / G-21 ✅ / G-22 ✅ / G-23 ✅ / G-24 ✅(bounded) / G-25 ✅ / G-26 ✅ / G-27 ✅(F1=新 G-45) / G-29 ✅(error 面残留) / G-30 ✅(惰性钉定) / G-31 ⚠️ / G-33 ✅(无热重载) / G-34 ⚠️(半接线) / G-35 ✅ / G-36 ✅ / G-37 ✅ / G-6 ✅ / G-8 ✅(G-41..G-44 残留) / G-1 ✅(consumer 迁移仍开放)
+
+---
+
+# 第五轮全量对比审查（2026-10-31）
+
+> 9 通道全量对比（session/配置/工具/infra/AI/TUI/server/CLI/schema-plugin，逐文件对读，总报告 `PORT_AUDIT_2026-10-31.md`）后，又对全部初报缺口做 4 通道只读二次取证。本节收录经核验 CONFIRMED 的新缺口（G-50..G-78）、既有条目订正与归类、以及撤销清单（勿再立项）。
+
+## 🔴 高
+
+### G-50 ❌ snapshot restore/capture 不保真文件模式与符号链接
+- rust `snapshot.rs:489-527`：`restore_blocking` 过滤 Blob 后直接 `fs::write`，tree entry 的 filemode（100755/120000）被完全忽略——symlink blob（内容=目标路径）被还原为**含目标文本的普通文件**，可执行位丢失；capture 侧同样只以 blob 内容入库，元数据双向丢失。
+- ref `git.ts:596-617` 经 `git checkout <tree> -- <file>` 原生恢复 exec bit 与 symlink。用户 revert 后仓库即损坏。
+- 与 G-30 同文件邻接但语义独立（G-30=gitconfig 钥匙）。
+
+### G-51 ❌ persistent-pty WS connect 缺 Origin 前置检查（安全）
+- rust `persistent_pty.rs:275-283`：ticket 分支仅 `consume_ticket`，`:283` `let _ = headers;` 显式丢弃；同文件 `connect_token`（:247-249）反而有 `origin_allowed`——工具在手边未复用。
+- ref `persistent-pty.ts:110-115`：`isAllowedRequestOrigin` 不通过即 403 且不消费 ticket。修复即 connect 分支复用 `origin_allowed`。
+- 非 G-25 重复（G-25 是 pty.rs connect-token 端口剥离，已修）。
+
+### G-52 ❌ `opencode debug config` 脱敏弱于 ref（安全）
+- ref `handlers/debug/redact.ts:2` secretName 含 `credential|private.?key|authorization$|cookie$`；`:11-17` URL 凭据/query-secret 整体打码 + headers 子树传播脱敏。调用链完整（index.ts:41 → config.ts:8,16）——**订正 G-17 原"redact 是 ref 死代码"断言（已改）**。
+- rust `oc-cli/handlers/misc.rs` `is_secret_key`（~:472-476）仅 `apikey/api_key/secret/token/password` contains；无 URL 检查、无 headers 传播。可能明文打印 ref 会遮蔽的密钥。
+
+### G-53 ❌ skill 工具输出格式错位
+- ref：`tool/plugin/skill.ts:38` content = `Skill.prepare` → `toModelOutput`（skill.ts:36-53）= `<skill_content>` 信封 + `fs.scan` 采样**路径** `.slice(0,10)`。
+- rust `tool/skill.rs:24-47`：`prepare()` 把目录**全部文件内容**拼接（非递归、无 10 上限、无信封）；执行器 :172 调用之。信封实现已存在（`prompt_text` :55-82）但仅 prompt 附件路径使用。大技能目录会撑爆上下文。
+
+### G-54 ❌ run 非交互：非 question 表单取消退出码 0（ref 为 1）
+- ref `run/noninteractive.ts:203-204`：`formCancelled` 非 v1 → `process.exitCode = 1`。
+- rust `run/noninteractive.rs:334` 仅置 `form_cancelled`；该标志在 :672-685/:1100/:1119/:1135 被用作**跳过**错误路径的条件，最终 exit 0。脚本按退出码判断 run 成败会漏检。修复：cancel_form 非 continuing 分支 `record_exit(1)`。
+
+## 🟡 中
+
+### G-55 ❌ shell create 缺省 cwd 继承服务器进程 cwd
+- rust `shell.rs:562` `unwrap_or_default()`，`create_invocation` 仅非空时 `current_dir`（:648-650）。工具路径安全（tool/shell.rs:165-168 显式覆写）；**生产命中点：HTTP `POST /api/shell`**（oc-server/handlers/shell.rs:40-52 直接透传可能为 None 的 body.cwd）。ref `shell.ts:265` `input.cwd ?? location.directory`。修复：handler 侧用 location 兜底。
+
+### G-56 ❌ 凭据/wellknown 变更不驱动 config 重载与 location 失效（勘误 #4 半边修正）
+- 刷新循环与 HostWellknownSource 接线属实（engine/mod.rs:570-596、:900-903）——勘误 #4 只对了这一半。缺的半边：①全仓 `request_reload` 生产调用点为零（仅 WatchedConfig 自身文件 watch 驱动，config.rs:655,671）；②credential/integration 事件不触发 location invalidate（ConfigReloadBridge 只挂文件 watch，boot.rs:113-140）——已 assemble 的 location 持旧 wellknown 快照直到其他原因失效；③boot 的 watch_loader 无 `.with_wellknown`（boot.rs:241-266）。
+- ref `config.ts:306-322` 订阅 Credential.Switched / WellKnown.Updated → `reload()`；10 分钟刷新后亦 reload（:323-341）。与 G-48 同族不同面。
+
+### G-57 ❌ 删除非 active 凭据多发 `credential.switched(credentialID:null)`
+- rust `integration/credential.rs:331-360`：非 active 分支返回 `Some((Some(integration), None))`，发布门只判 integration——非 active 删除也发 Switched。oc-server/handlers/credential.rs 同病。
+- ref `credential.ts:268-269,314-319`：`{switched:false}` 只发 updated；仅删 active 才发 Switched。修复：发布门加 switched 判定。
+
+### G-58 ❌ Session.create 项目解析仅目录身份（插件 API 命中点）
+- rust `store.rs:604-609` project 缺省回落 `hash("directory:…")`。HTTP/命令/transfer 主路径均显式传 `services.project`（完整 Resolver，engine/mod.rs:872-887）；**生产命中点：插件 `session.create`**（oc-server/plugins.rs:1300-1313 `CreateInput::default()` → project=None）。ref `session.ts:271` 无条件 `projects.resolve`（含 realpath + VCS 发现）。
+
+### G-59 ❌ 工具输入校验为 JSON-Schema 子集，MCP 外部 schema 弱校验
+- MCP schema 有注册并校验（mcp/registry.rs:1749 → tool/registry.rs:383 `validate_input`），真实缺口是子集语义：rust `registry.rs:88-232` 仅 type/enum/min/max/required/items 等，pattern/oneOf/$defs 引用等静默放行。ref `runtime.ts:107-113,251-258` 经 jsonSchema() 全量 draft-07/2020-12 转换校验。坏参数穿透到 leaf。
+
+### G-60 ❌ list_mcp_resources 模型内容固定占位文本
+- rust `tool/mcp_resource.rs:213` content 恒 `"Listed MCP resources"`；ref `runtime.ts:57,259-264` normalizeContent → stringify(catalog) 全文。模型在直接对话路径拿不到目录内容（output JSON 仍正确）。
+
+### G-61 ❌ CLI auth login 无 target 时缺交互集成选择器
+- rust `oc-cli/handlers/auth.rs:278-284`：无条件报错 exit 1。ref `auth/login.ts:46-110`：TTY 下 `selectIntegration`（MCP/Popular/Services 分类、connected 标记）。
+
+### G-62 ❌ CLI plugin check/update 不覆盖 TUI(npm) 插件
+- rust `oc-cli/handlers/plugin.rs` check（:426+）/update（:478+）只调 server 运行时；`configured_tui_plugins` 仅 list 使用。ref `plugin/inventory.ts:52-78` TUI 项走 `npm.check`；`plugin/update.ts:29` 走 `npm.update`。CLI 层缺口，与 G-29/G-46（TUI 管理页）不同层，交叉引用。
+
+### G-63 ❌ persistent-pty connect 协议分歧（404 vs 4404；二进制 lossy）
+- ① 不存在的 pty：rust `persistent_pty.rs:276-278` 升级前 HTTP 404；ref（persistent-pty.ts:126,152-158）一律升级后 `CloseEvent(4404, "terminal unavailable")`——WS 客户端错误路径完全不同。
+- ② 非 framed 二进制输入：rust `persistent_pty.rs:482-484` `from_utf8_lossy`（U+FFFD 污染）；ref `persistent-pty.ts:203-216` 原样字节直传。G-10 覆盖的是 pty.rs 输出方向，本条是输入方向，独立。
+
+### G-64 ❌ 插件 Context API 面残留（G-24 API 面追加）
+- host.js:624-1056 Context 域清单缺：`provider.list/get/transform/reload`、`reference.list/transform/reload`（ref adapter.ts:348-352,448-452）；`experimental.terminal.read`（:334-337）；`integration.list/get/connect.key/oauth.{connect,status,complete,cancel}` 与 `connection.{active,resolve,status}`（:360-370,427-430，rust 仅 method.update）。依赖这些域的插件运行时 method_not_found。G-24 原文只记 hook 面，本条为 API 面。
+
+### G-65 ❌ aisdk hook 注册面在、生产派发点为零（G-2 残留）
+- 注册/桥接在（hooks.rs:916-919、plugin_apply.rs:894-909、host.js:827-830），但 `dispatch_aisdk_sdk/language` 生产 0 调用点（仅测试）。ref `aisdk.ts:346-354` 在 language model 构建时派发，且 `runLanguage` 可**替换** language model（变换点非纯观察）。rust 把 copilot lane 选择内联硬编码（copilot.rs:179 注释自认），插件无法介入。G-2 原文"3 个 hook 域已桥接"未覆盖此点。
+
+### G-66 ❌ composer 选区高亮渲染缺失（模型层已备）
+- rust 模型在（oc-tui-core/text_edit.rs:276,372-383 anchor/range API），渲染消费缺（composer/render.rs 无 selection 绘制）；upstream `EditBufferRenderable.ts:67-68,143-144,279` 有 `selectionBg/selectionFg`。`input.select.*` 键位有绑定但屏幕无反馈。（IME 半条已撤销：upstream 亦无 composition 渲染，终端模拟器自理。）
+
+### G-67 ❌ 剪贴板读臂错误全折叠 None（G-39 读臂扩展）
+- rust `clipboard.rs:388-399`：failed/timed-out/limit-exceeded 统一 `_ => None`，粘贴静默无操作。ref `clipboard.ts:30-35` 抛错，上层 `prompt/index.tsx:373-388` toast。超限粘贴（大图）用户无任何提示。
+
+### G-68 ❌ mini fragment 调和与 image commits 缺失
+- fragment reconciler（message part 重投影/restore append|covered|conflict，ref `mini/stream-v2.fragment.ts:1-83`）：rust mini 全目录 grep 0 命中；transport.rs:128-137 仅 delta 累加。
+- mini 图片 commit + 去重（ref `stream-v2.image.ts:1-20`）：rust mini/ grep "image" 0 命中。
+- （subagent tracker 已移植并撤销：transport.rs:455-620 对标 stream-v2.subagent.ts。）
+
+### G-69 ❌ Diff base 对话框/记忆/懒缓存缺失（turn 模式已实现）
+- rust `fetch_diff`（app.rs:6463-6551）每次 fresh 调 `vcs().base`，无记忆 Map/懒缓存；全库无 `vcs.branch.list` 消费——**无任何入口可选 base 分支**（错误文案 "Choose a base branch" 存在但无选择器）。ref `diff-viewer.tsx:110-124,280`（bases 记忆 + 懒缓存 + "Remembered until TUI exits"）。
+
+### G-70 ❌ snapshot store 与 project id 不做 realpath（身份分裂）
+- rust `snapshot.rs:230-233` `hash_fast(worktree)` 无 canonicalize，且 Resolver 的 "canonical" 本身是词法的（project.rs:1252-1254、:964 自认）。ref `snapshot.ts:93-96` 先 `fs.realPath`（project.ts:338 同）。经 symlink 进入的仓库 → 不同 store，快照历史分裂。
+
+### G-71 ❌ prettier/oxfmt 探测走项目 node_modules/.bin（同文件自相矛盾）
+- rust `formatter.rs:585-598`（`npm_bin` 向上找 node_modules/.bin）供 prettier/oxfmt；同文件 Biome 分支（:708-718）反而正确走 `npm_which`。ref `builtins.ts:81,95` `Npm.which`（全局 cache + 缺失自动安装，npm.ts:400-435）。项目声明依赖但未安装（或 pnpm/bun 布局）时 rust 报 disabled、ref 可用。
+
+### G-72 ❌ MCP stdio 缺 16MiB 帧上限与 stderr 尾巴诊断
+- rust `mcp/client.rs` 无帧上限（rmcp 传输）；spawn 侧 `environment/stdio.rs:70-107` stderr **inherited** 不 pipe。ref `mcp/stdio.ts:15,121`（MAX_FRAME_BYTES=16MiB fail-fast）+ `:56,91,146-184`（stderr 滚动保留进崩溃诊断）。失控 server 可撑爆内存；崩溃只报 exit code 无线索。
+
+## 🟢 低
+
+### G-73 ❌ heredoc 剥离不容忍闭合标记尾随空白
+- rust `patch_util.rs:105-108` `strip_suffix` 后仅剥一个 `\n`；`"EOF "`/`"EOF\n"` → 整个 heredoc 剥离失败 → "first line must be '*** Begin Patch'"。ref `util/patch.ts:381` 正则尾部 `\2\s*$` 容忍。（create_dir_all 半条已撤销：ref Bun.write 同样建父目录。）
+
+### G-74 ❌ progress 事件缺口 + webfetch permission metadata 缺 timeout
+- shell `context.progress({shellID})`（ref shell.ts:217）、websearch `progress({provider})`（websearch.ts:63）、codemode `progress({toolCalls})`（codemode/tool.ts:88）均零移植；webfetch permission metadata 仅 `{url,format}`（webfetch.rs:198-201 vs ref `metadata: input` 含 timeout）。
+
+### G-75 ❌ session export/import CLI 行为偏差
+- export 取消：rust 退出 0 + println 到 stdout（session.rs:245-247,156-158）；ref 130 + clack UI 全走 stderr（export.ts:30,53-66）——管道重定向时污染导出内容。
+- import：rust 任意 JSON 直通；ref 经 SessionTransfer Schema 校验规范化（import.ts:25-26）。
+
+### G-76 ❌ persistentPty.update payload 放宽
+- rust `persistent_pty.rs:175-186`：size 可缺省（静默跳过 resize 仍 200）、非法值回退 80/24；ref schema `size` 必填 PositiveInt，缺失 → 400（persistent-pty.ts:36-39）。oc-schema 无 UpdateInput 类型。
+
+### G-77 ❌ location.get 的 project.directory 被 canonical 覆盖
+- rust `location.rs:40-44` 两字段同源 canonical；ref `project.ts:358-362` directory=实际检出目录、canonical=realpath（:43-44 注释明言语义不同，:135 依赖二者不等分支）。
+
+### G-78 ❌ session.log 非法 sessionID 400 文案
+- rust `sse.rs:493` message 为原始值回显；ref schema ParseError 形如 "Expected sessionID to be…"；rust 自身 after/follow 参数（sse.rs:504,518）已用该格式，sessionID 处不一致。一行修复。
+
+## 归类与收编（不另立项）
+
+- **POST /api/plugin/install（rust 独有路由）**→ G-17 rust-extra 家族（misc.rs:25 注释明言服务 G-29 安装流；ref protocol 仅 list/check/update）。
+- **function 云分享服务端整包缺失** → 纯重复 G-17（:82 明列）。
+- **oc-schema 缺 filesystem 非事件类型 + rpc.ts + v1/legacy** → G-32 子集（lib.rs:80-82 自认，已裁决有意）。
+- **OTLP 遥测** → 纯重复 G-38（otel feature 非 default）。
+- **OSC52 100KB 上限 + 空写直通** → 并入 G-39 备注：上限为防御性（终端普遍拒绝大 payload）且带显式错误；空写是对 v2 行为的有意 parity 修正（clipboard.rs:257-267 注释）。
+- **codemode 沙箱架构（自研受限解释器 → Bun guest 真执行，无 Bun 即不可用）** → 收编为文档化决策（体例同 G-28/G-32）：codemode.rs:21-52 论证 + plugins.rs:241-255 接线；原仅记录于 PORT_AUDIT_2026-10-31.md M25。
+- **评测/实验 lane（evaluation/system-one/opencode-zen/typesafe-ai）** → 归类 G-7/G-17；zen/typesafe-ai 唯一暴露面就是 experimental.evaluation（providers/opencode-zen.ts:1-25、typesafe-ai.ts:1-19），无常规 chat 导出。
+- **AI SDK 公共 API 面（AIClient/promise/generation/tool builder）** → 归类 G-17 有意省略：ref 全仓无外部消费者（grep 0 导入），插件 tool 面已有等价（host.js:353、registrations.rs:95,574）。
+- **非 Linux 音频走系统播放器 spawn** → 记录性差异：Linux（本构建目标）已进程内 miniaudio（sound/audio.rs:1-9，SOUND-CONV lane），非 Linux 为显式降级残留。
+- **classify_provider_failure cause 恒 None** → 记录性差异：rust `ProviderFailure` 输入结构本无 cause 字段（provider_error.rs:317-329），错误链由 `#[source]` 上层承载；ref 中 cause 也不参与分类判定。
+- **storybook/simulation** → 纯重复 G-8/G-17。
+
+## 勘误（第五轮经核验撤销的初报缺口，勿再列入待修）
+
+1. **read 工具丢 realpath 越界防护** — 初报对照错面：ref 工具边界同样是词法的（file-access.ts:67-95）；realpath 双栅栏属 HTTP FileSystem.read 服务，rust 侧已完整对齐（oc-server/handlers/fs.rs:119-141 `resolve_contained`：词法 contains → canonicalize → 二次 contains）。仅 AGENTS.md 发现走查用词法路径（tool/read.rs:855-868 vs ref realpath）属外观级差异。
+2. **step.failed finish 强制映射 ContentFilter** — ref schema 将 finish 约束为单字面量 `["content-filter"]`（session-event.ts:379），updater `?? "error"`；rust StepFailFinish 同样只接受 content-filter（session_event.rs:383-412）——完全等价。
+3. **engine.prompt 绕过 SessionPrompt.prepare** — seam 已在生产接线（engine/mod.rs:1497-1505 无条件）；drain 侧 backstop 覆盖裸 admit 路径（drain.rs:508-514 + prompt_prepare.rs PreparedRing 防双发），可观测面与 ref 等价。
+4. **glob 搜索根≠location 显示路径基准不同** — 两侧 produce 相同绝对路径（glob.rs:151-154 `root.join(rel)` = glob.ts:131 `path.resolve(location.directory, rel)`），无模型可见差异。
+5. **git.ts 服务未统一移植** — 唯一消费方 repository-cache 已完整移植（reference/repository_cache.rs:235-287：clone/fetch/checkout -B/reset --hard + daily 节流 + self-healing），无行为缺失。
+6. **client permission 命名空间重组** — wire 逐路径一致（permission.rs:19-30 ↔ protocol/groups/permission.ts:23-117），仅内部函数命名不同。
+7. **AIClient SDK 公共面 / cause 链 / IME / mini subagent tracker / diff turn 模式** — 见上文归类与撤销说明。
+
+## 复审判定汇总（第五轮）
+初报 35 项：CONFIRMED 新立 G-50..G-78（29 项，其中 G-63/G-64/G-68/G-69/G-75 各含 2 子项）；归类既有 G 条目 8 项（G-7/G-17 ×3/G-32 ×2/G-38/G-39）；RETRACTED 12 项（见勘误）；另订正 G-17 一处断言、勘误 #4 半边（→ G-56）。
+
+---
+
+# 第六轮复核（2026-10-31，第五轮同日：对文档现存未关闭条目的现状验证）
+
+> 2 通道只读取证。目的：发现被后续提交悄然修复的项（收口标 ✅）、确认仍在的项、修正过时表述与路径。G-50..G-78 刚经第五轮双通道取证，不在本轮范围。
+
+## 已收口（复核确认修复）
+
+- **G-4 ✅（插件注册自定义 worktree strategy 已实现）**：guest `ctx.worktree.transform`（host.js:898-941）→ dispatch（supervisor.rs:356-369）→ `merge_worktree_strategies`（registrations.rs:494,643）→ `GuestWorktreeStrategy` 入注册表（plugin_apply.rs:685-695 → plugins.rs:2134-2151 → boot.rs:439-440）。测试 g24_domains.rs:96-98、g24_plugin_domains.rs:133。残留：注册表仍 boot 一次性（见 G-24 热重载子项）。project.rs:1103-1105 的"不支持"注释已失实（`add_strategy` 在 :1133 被调用）。
+- **G-6 ✅（Shell 输出查看器 1s 轮询已实现）**：app.rs:8427-8437 对活跃 ShellOutput viewer 每秒重发 `LoopRequest::ShellView`；fetch 本体 app.rs:5635-5701。代码内 "G-6 residual" 注释已过时，可清理。
+- **G-8 ✅（https/socks5 代理已支持）**：proxy.rs:10-14 模块头；socks5/socks5h 经 `tokio-socks`（socks5_connect :432-438），https 走 TLS-to-proxy（:318-320,:354），仅 socks4/4a 拒绝（:184-191，范围声明）；socks5 真桩 WS 端到端测试（:684）。proxy.rs:616 "G-8 residual" 注释已过时。
+- **G-33 的"config 键无人消费"半边 ✅**：shell.rs:225 `with_output_limits` + engine/mod.rs:1053-1054 已消费。**G-48 热重载半边仍在**（见下）。
+
+## 部分清偿（条目修正）
+
+- **G-1 ⚠️（残留清单缩小）**：`mcp/client.rs` 已切 Environment stdio seam（client.rs:103 `use crate::environment::stdio::{...}`，:1059-1065,1152-1158，注释明言 workspace driver 扩展点）——从残留清单移除。仍直连 std::fs/portable_pty 的 8 个 consumer：read.rs（:179,388-401,713,764）、write/edit（经 file_mutation.rs:115,127-128,253-279）、tool/shell.rs（:227）、glob.rs（:124）、grep.rs（:427）、patch.rs（:401,417,426,444,452）、oc-core/pty.rs（:439 portable_pty）+ oc-server/handlers/pty.rs。
+- **G-24 ⚠️（worktree guest-op 子项已清偿）**：vcs.transform/vcs.reload 仍缺（supervisor.rs:437 仅 `vcs.get|vcs.base`）；websearch `editor.default.set` 仍 no-op stub（host.js:871-874）；worktree 注册表热重载仍缺（`reload_after_update` plugins.rs:547-589 只做 entry swap，不重建 registry）。
+- **G-31 ⚠️（VCS 根不限量已修）**：`scan_budget`（fs.rs:346-348）对 `is_vcs_root && !home_rooted → usize::MAX`，对齐 ref search.ts:72。仍在：每请求 spawn_blocking 全量 walk（:285-288）、无内存索引/10s 刷新（:330-332 自认 OUT OF SCOPE）、非 VCS 根仍 100k（:333）、`is_vcs_root` 仍为 `.git exists` 嗅探（:339-341，不认 hg/父仓子目录；fs.rs:260 `_services` 未用 `services.project.vcs`）。
+
+## 确认仍在（不变）
+
+- **G-34 ⚠️**：home_location 仍 write-only（set 唯一调用 command_palette.rs:3360；`home_location()` 唯一读者是测试 :3952；home 路由仍走 `footer_location()` home.rs:418、session.rs:1230,1318）。
+- **G-48 ❌**：tool_output 仍 boot 一次性（Limits::from_entries 仅 boot.rs:301-302；`configure` 唯一调用 engine/mod.rs:503；config reload 路径无重赋值）。
+- **G-41 ❌**：代理 userinfo 仍丢弃（proxy.rs:200 `rsplit_once('@')`）；CONNECT 无 Proxy-Authorization（:483-484）；SOCKS5 匿名（:438-441）。
+- **G-42 ❌**：WSS_PROXY/WS_PROXY 仍未咨询（proxy.rs:52-56 仅 HTTPS/HTTP(S)/ALL 族）。
+- **G-43 ❌**：loopback（127.0.0.1/localhost/::1）仍无直连旁路。
+- **G-44 ❌**：NO_PROXY 仍 bare-host 后缀匹配（:135）、`*.foo.com` 永不命中（:131 保留 `*`）、仅逗号分隔（:118；ref 为精确相等 + 空白/逗号分隔）。
+- **G-45 ❌**：acp_drift.py:58 VENDORED 仍只覆盖主包，agent-client-protocol-schema 未守卫。
+- **G-46 ❌**：dialog.plugins.error 仍 surfaceless（command_palette.rs:3121-3129 `Dispatch::Handled` 无操作）。
+- **G-47 ❌**：IDE backoff 仍不复位（editor_ide.rs:222-234 attempt 只增不减）；空字符串 env 仍阻断 fallback（:36-39 `or()` 吞掉合法备选）。
+- **G-49 ℹ️**：4 子项仍准确（spinner 受 mini/runtime.rs:38-39 TICK=100ms 约束；stdio.rs:11,:27 vs :104 措辞与实现不符；project.rs:1103-1105 过时注释——本条与 G-4 修复同源，可随清理收口；proxy.rs:367-369,:318 webpki 一致性声明在 G-26 后仍失效）。
+- **G-28 ℹ️ / G-32 ℹ️**：决策现状未变（ui.rs:1-15 有界 slot bridge；oc-schema lib.rs:80-82 TODO 自认）。
+
+## 路径勘误
+
+- 文档多处 `oc-ai/src/...` 应为 `crates/oc-ai/src/...`（本轮引用已按现行路径取证；proxy.rs 内部行号基本未漂移）。
+
+## 第六轮判定汇总
+复核 15 项：✅ 收口 3（G-4、G-6、G-8）+ 1 半边（G-33 消费）；⚠️ 部分清偿 3（G-1 缩小、G-24、G-31）；❌/⚠️ 不变 8（G-34、G-41..G-48 各项、G-49）；决策项 2 现状不变（G-28/G-32）。
+
+过时注释清理：已完成（2026-10-31 第六轮同日）——app.rs:8427/store.rs:7089/:14996（G-6 residual，共 3 处 + app.rs:7340）、proxy.rs 模块头/`:318`/`:616`/`:661`（G-8 residual + 失效的 webpki 一致性声明，改为指向 G-26 决策）、project.rs:1103-1105（插件 strategy 已支持，指向 GuestWorktreeStrategy）、environment/stdio.rs 模块头与 `StopChild` doc（SIGTERM 措辞改为与 `start_kill` 实现一致的"immediate SIGKILL + bounded reap wait"）。均为注释级修改，无行为变化；oc-ai 的 fmt 差异为 llm.rs 既有问题，与本次无关。
