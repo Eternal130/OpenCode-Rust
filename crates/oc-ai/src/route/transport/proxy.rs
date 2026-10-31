@@ -32,12 +32,14 @@ pub fn env_truthy(value: &str) -> bool {
     value == "1" || value.eq_ignore_ascii_case("true")
 }
 
-/// Selects the proxy URL for `target` per the standard env precedence:
-/// secure targets (`wss`/`https`) honor `HTTPS_PROXY` first, plain
-/// targets (`ws`/`http`) honor `HTTP_PROXY` first, and `ALL_PROXY`
-/// covers both; lowercase spellings are checked after the canonical
-/// ones. `NO_PROXY` (comma-separated host suffixes, `*` = bypass all)
-/// removes a matching target.
+/// Selects the proxy URL for `target` per the env precedence the TS
+/// stack uses (websocket-constructor.ts:42-47): secure targets
+/// (`wss`/`https`) honor `WSS_PROXY` first, plain targets (`ws`/`http`)
+/// honor `WS_PROXY` first, then the standard `HTTPS_PROXY`/`HTTP_PROXY`
+/// spellings and `ALL_PROXY`; lowercase spellings are checked after
+/// the canonical ones (empty values are skipped). `NO_PROXY`
+/// (comma/whitespace-separated entries, `*` = bypass all) removes a
+/// matching target.
 #[must_use]
 pub fn select_proxy(target: &str, env: &EnvLookup<'_>) -> Option<String> {
     let secure = match target.split_once("://") {
@@ -51,9 +53,13 @@ pub fn select_proxy(target: &str, env: &EnvLookup<'_>) -> Option<String> {
         None => false,
     };
     let candidates: &[&str] = if secure {
-        &["HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"]
+        &[
+            "WSS_PROXY", "wss_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy",
+        ]
     } else {
-        &["HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"]
+        &[
+            "WS_PROXY", "ws_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy",
+        ]
     };
     let proxy = candidates.iter().find_map(|name| env(name).filter(|value| !value.is_empty()))?;
     let host = target_host(target)?;
@@ -627,6 +633,35 @@ mod tests {
         // empty values are ignored
         assert_eq!(select_proxy("wss://a.test", &map(&[("HTTPS_PROXY", "")])), None);
         assert_eq!(select_proxy("ftp://a.test", &env), None);
+    }
+
+    #[test]
+    fn ws_family_env_vars_are_consulted_first() {
+        // G-42: WSS_PROXY / WS_PROXY win over the standard spellings
+        // (websocket-constructor.ts:43-47); empty values are skipped.
+        let env = map(&[
+            ("WSS_PROXY", "wss-proxy:1"),
+            ("HTTPS_PROXY", "https-proxy:2"),
+            ("WS_PROXY", "ws-proxy:3"),
+            ("HTTP_PROXY", "http-proxy:4"),
+        ]);
+        assert_eq!(select_proxy("wss://api.example.com", &env), Some("wss-proxy:1".into()));
+        assert_eq!(select_proxy("ws://api.example.com", &env), Some("ws-proxy:3".into()));
+        // empty WSS_PROXY falls through to HTTPS_PROXY
+        assert_eq!(
+            select_proxy("wss://api.example.com", &map(&[("WSS_PROXY", ""), ("HTTPS_PROXY", "https-proxy:2")])),
+            Some("https-proxy:2".into())
+        );
+        // ... but a set WSS_PROXY shadows ALL_PROXY too
+        assert_eq!(
+            select_proxy("wss://api.example.com", &map(&[("WSS_PROXY", "wss:9"), ("ALL_PROXY", "any:5")])),
+            Some("wss:9".into())
+        );
+        // ALL_PROXY still covers ws when nothing scheme-specific is set
+        assert_eq!(
+            select_proxy("ws://api.example.com", &map(&[("ALL_PROXY", "any:5")])),
+            Some("any:5".into())
+        );
     }
 
     #[test]
