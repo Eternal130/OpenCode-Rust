@@ -166,8 +166,36 @@ pub struct ProxyEndpoint {
     pub host: String,
     pub port: u16,
     pub scheme: ProxyScheme,
+    /// Proxy auth from the URL's userinfo (percent-decoded), honored
+    /// by both CONNECT (Basic `Proxy-Authorization`) and SOCKS5.
+    pub username: Option<String>,
+    pub password: Option<String>,
     /// The raw URL the endpoint came from (error reporting).
     pub source: String,
+}
+
+/// Percent-decodes a URL userinfo component (the `decodeURIComponent`
+/// step https-proxy-agent applies to `url.username` / `url.password`).
+fn percent_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            let hex = |byte: u8| (byte as char).to_digit(16);
+            match (hex(bytes[index + 1]), hex(bytes[index + 2])) {
+                (Some(high), Some(low)) => {
+                    out.push((high * 16 + low) as u8);
+                    index += 3;
+                    continue;
+                }
+                _ => {}
+            }
+        }
+        out.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Parses a proxy URL into a dialable endpoint. `http://` and
@@ -198,7 +226,16 @@ pub fn parse_proxy_url(url: &str) -> Result<ProxyEndpoint, String> {
         ProxyScheme::Socks5 => 1080,
     };
     let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
-    let authority = authority.rsplit_once('@').map_or(authority, |(_, after)| after);
+    let (userinfo, authority) = match authority.rsplit_once('@') {
+        Some((userinfo, after)) => (Some(userinfo), after),
+        None => (None, authority),
+    };
+    // ref consumes `url.auth` for both proxy families; a missing
+    // password component is the empty string (WHATWG URL semantics)
+    let (username, password) = userinfo.map_or((None, None), |auth| {
+        let (user, pass) = auth.split_once(':').unwrap_or((auth, ""));
+        (Some(percent_decode(user)), Some(percent_decode(pass)))
+    });
     if authority.is_empty() {
         return Err(format!("proxy URL has no host ({url})"));
     }
@@ -226,7 +263,14 @@ pub fn parse_proxy_url(url: &str) -> Result<ProxyEndpoint, String> {
     } else {
         Some(port.parse().map_err(|_| format!("invalid proxy port in {url}"))?)
     };
-    Ok(ProxyEndpoint { host, port: port.unwrap_or(default_port), scheme, source: url.to_string() })
+    Ok(ProxyEndpoint {
+        host,
+        port: port.unwrap_or(default_port),
+        scheme,
+        username,
+        password,
+        source: url.to_string(),
+    })
 }
 
 /// The default CONNECT budget (v2 `CONNECT_TIMEOUT` is 15s; the tunnel
@@ -428,8 +472,9 @@ async fn https_connect(
     run_connect(proxy, future).await
 }
 
-/// SOCKS5 handshake (`tokio-socks`): greet → no-auth → CONNECT the
-/// target; the returned stream is the raw tunnel.
+/// SOCKS5 handshake (`tokio-socks`): greet → (no-auth or
+/// username/password when the proxy URL carries userinfo) → CONNECT
+/// the target; the returned stream is the raw tunnel.
 #[cfg(feature = "ws-transport")]
 async fn socks5_connect(
     proxy: &ProxyEndpoint,
@@ -437,11 +482,24 @@ async fn socks5_connect(
     target_port: u16,
 ) -> Result<tokio::net::TcpStream, AiError> {
     let future = async {
-        let stream = tokio_socks::tcp::Socks5Stream::connect(
-            (proxy.host.as_str(), proxy.port),
-            (target_host.to_string(), target_port),
-        )
-        .await
+        let stream = match (&proxy.username, &proxy.password) {
+            (Some(username), Some(password)) => {
+                tokio_socks::tcp::Socks5Stream::connect_with_password(
+                    (proxy.host.as_str(), proxy.port),
+                    (target_host.to_string(), target_port),
+                    username,
+                    password,
+                )
+                .await
+            }
+            _ => {
+                tokio_socks::tcp::Socks5Stream::connect(
+                    (proxy.host.as_str(), proxy.port),
+                    (target_host.to_string(), target_port),
+                )
+                .await
+            }
+        }
         .map_err(|error| format!("SOCKS5 proxy {} failed: {error}", proxy.source))?;
         Ok(stream.into_inner())
     };
@@ -467,7 +525,7 @@ async fn http_connect(
 
 async fn http_connect_over<S>(
     stream: &mut S,
-    _proxy: &ProxyEndpoint,
+    proxy: &ProxyEndpoint,
     target_host: &str,
     target_port: u16,
 ) -> Result<(), String>
@@ -476,14 +534,24 @@ where
 {
     // NOTE: any bytes read past the CONNECT response header are discarded —
     // harmless for ws/wss because the CLIENT speaks first after the upgrade.
+    use base64::Engine as _;
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
     let host_display = if target_host.contains(':') {
         format!("[{target_host}]")
     } else {
         target_host.to_string()
     };
+    // Basic Proxy-Authorization when the proxy URL carries userinfo
+    let authorization = proxy.username.as_ref().map(|username| {
+        let credentials = format!("{username}:{}", proxy.password.as_deref().unwrap_or_default());
+        format!(
+            "Proxy-Authorization: Basic {}\r\n",
+            base64::engine::general_purpose::STANDARD.encode(credentials)
+        )
+    });
     let request = format!(
-        "CONNECT {host_display}:{target_port} HTTP/1.1\r\nHost: {host_display}:{target_port}\r\nProxy-Connection: keep-alive\r\n\r\n"
+        "CONNECT {host_display}:{target_port} HTTP/1.1\r\nHost: {host_display}:{target_port}\r\n{}Proxy-Connection: keep-alive\r\n\r\n",
+        authorization.unwrap_or_default()
     );
     stream.write_all(request.as_bytes()).await.map_err(|e| format!("proxy write failed: {e}"))?;
     let mut buffer = Vec::new();
@@ -609,6 +677,8 @@ mod tests {
                 host: "proxy".into(),
                 port: 8080,
                 scheme: ProxyScheme::Http,
+                username: None,
+                password: None,
                 source: "http://proxy:8080".into()
             }
         );
@@ -628,6 +698,31 @@ mod tests {
         assert!(parse_proxy_url("socks4://proxy:1080").is_err(), "socks4 stays unsupported");
         assert!(parse_proxy_url("gopher://proxy").is_err());
         assert!(parse_proxy_url("http://proxy:notaport").is_err());
+    }
+
+    #[test]
+    fn proxy_url_userinfo_is_kept_and_decoded() {
+        // ref consumes url.auth for both proxy families (G-41)
+        let endpoint = parse_proxy_url("http://user:pass@proxy:8080").unwrap();
+        assert_eq!(
+            (endpoint.username.as_deref(), endpoint.password.as_deref()),
+            (Some("user"), Some("pass"))
+        );
+        // percent-encoded userinfo is decoded
+        let endpoint = parse_proxy_url("http://us%40er:p%3Ass@proxy").unwrap();
+        assert_eq!(
+            (endpoint.username.as_deref(), endpoint.password.as_deref()),
+            (Some("us@er"), Some("p:ss"))
+        );
+        // a username without a password keeps the empty password
+        let endpoint = parse_proxy_url("socks5://user@proxy:1080").unwrap();
+        assert_eq!(
+            (endpoint.username.as_deref(), endpoint.password.as_deref()),
+            (Some("user"), Some(""))
+        );
+        // no userinfo → no credentials
+        let endpoint = parse_proxy_url("http://proxy").unwrap();
+        assert_eq!((endpoint.username, endpoint.password), (None, None));
     }
 
     #[test]
@@ -725,6 +820,8 @@ mod scheme_tunnel_tests {
             host: "127.0.0.1".into(),
             port: addr.port(),
             scheme: ProxyScheme::Socks5,
+            username: None,
+            password: None,
             source: format!("socks5://127.0.0.1:{}", addr.port()),
         };
         let tunnel = connect_through(&proxy, "upstream.test", 80).await.unwrap();
@@ -782,6 +879,8 @@ mod scheme_tunnel_tests {
             host: "127.0.0.1".into(),
             port: addr.port(),
             scheme: ProxyScheme::Https,
+            username: None,
+            password: None,
             source: format!("https://127.0.0.1:{}", addr.port()),
         };
         // The stub's certificate is the ONLY root the client trusts —
