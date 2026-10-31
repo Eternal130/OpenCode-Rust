@@ -3923,6 +3923,10 @@ mod tests {
     ) {
         use crate::data::{Ingest, SessionSnapshot};
         let store = Store::new(Runtime::new());
+        // G-34 consumer wiring: the prompt sink's shared cell mirrors
+        // the resolution (the home submission's create-directory).
+        let cell = std::rc::Rc::new(std::cell::RefCell::new(None));
+        store.set_home_location_cell(std::rc::Rc::clone(&cell));
         store.ingest_all([Ingest::Resync {
             sessions: vec![SessionSnapshot {
                 model: None,
@@ -3950,6 +3954,11 @@ mod tests {
         assert_eq!(store.route(), Route::Home);
         let expected = if expect_inherit && !unavailable { Some("/work/cur") } else { None };
         assert_eq!(store.home_location().as_deref(), expected);
+        assert_eq!(
+            cell.borrow().as_deref(),
+            expected,
+            "the shared cell (the sink's create-directory) mirrors the resolution"
+        );
     }
 
     /// G-34 — `session.new_location` (new-session-location.ts):

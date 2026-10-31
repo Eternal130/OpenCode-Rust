@@ -4328,6 +4328,12 @@ pub fn post_session_rename(client: oc_client::Client, session_id: String, title:
 pub struct HttpPromptSink {
     client: oc_client::Client,
     directory: String,
+    /// G-34 — the home route's location override (`session.new_location
+    /// = inherit`, new-session-location.ts): when the routed session's
+    /// directory was inherited onto the home route, the home submission
+    /// creates its session THERE instead of the launch directory. The
+    /// SHARED cell is written by the store's `set_home_location` seam.
+    home_directory: std::rc::Rc<std::cell::RefCell<Option<String>>>,
     events: tokio::sync::mpsc::UnboundedSender<PromptSinkEvent>,
     /// RB-02: the pre-allocated id of the first home-created session
     /// (v2 `args.newSessionID`, handlers/default.ts:114). Taken ONCE —
@@ -4342,7 +4348,32 @@ impl HttpPromptSink {
         directory: String,
         events: tokio::sync::mpsc::UnboundedSender<PromptSinkEvent>,
     ) -> Self {
-        Self { client, directory, events, new_session_id: std::cell::RefCell::new(None) }
+        Self {
+            client,
+            directory,
+            home_directory: std::rc::Rc::new(std::cell::RefCell::new(None)),
+            events,
+            new_session_id: std::cell::RefCell::new(None),
+        }
+    }
+
+    /// G-34 — shares the home-route location cell with the store's
+    /// `home_location` resolution (`None` keeps the launch directory).
+    #[must_use]
+    pub fn with_home_directory_cell(
+        self,
+        cell: std::rc::Rc<std::cell::RefCell<Option<String>>>,
+    ) -> Self {
+        *cell.borrow_mut() = self.home_directory.borrow().clone();
+        Self { home_directory: cell, ..self }
+    }
+
+    /// The directory a HOME submission creates its session in: the
+    /// inherited override when one is set (G-34 `inherit`), else the
+    /// launch directory (v2 `data.location.default().directory`).
+    #[must_use]
+    pub fn effective_home_directory(&self) -> String {
+        self.home_directory.borrow().clone().unwrap_or_else(|| self.directory.clone())
     }
 
     /// Seed the pre-allocated first-session id (RB-02).
@@ -4382,7 +4413,9 @@ impl crate::components::composer::PromptSink for HttpPromptSink {
     ) {
         let client = self.client.clone();
         let events = self.events.clone();
-        let directory = self.directory.clone();
+        // G-34 — the home route's resolved location (inherit → the
+        // routed session's directory; app.tsx:718-737).
+        let directory = self.effective_home_directory();
         let text = prompt.text.clone();
         let model = model.cloned();
         // R-07: staged attachment chips ride as `PromptInput.FileAttachment`
@@ -7017,9 +7050,15 @@ pub async fn run_with_size(
     let (sink_tx, mut sink_rx) = tokio::sync::mpsc::unbounded_channel::<PromptSinkEvent>();
     let directory =
         std::env::current_dir().map(|path| path.display().to_string()).unwrap_or_default();
+    // G-34 — the home route's location rides a SHARED cell: the
+    // store's `set_home_location` (session.new's newSessionLocation
+    // resolution) writes, the sink reads at submission time.
+    let home_directory = std::rc::Rc::new(std::cell::RefCell::new(None));
+    app.store.set_home_location_cell(std::rc::Rc::clone(&home_directory));
     app.store.set_prompt_sink(std::rc::Rc::new(
         HttpPromptSink::new(client.clone(), directory.clone(), sink_tx)
-            .with_new_session_id(boot.new_session_id.clone()),
+            .with_new_session_id(boot.new_session_id.clone())
+            .with_home_directory_cell(home_directory),
     ));
     // Wave A: the interrupt sink (the 2-press escape machine's fire
     // path) + the model-preference ring boot (`<state>/tui/model.json`
@@ -9776,6 +9815,28 @@ mod tests {
         let client = oc_client::Client::new("http://127.0.0.1:1").expect("client");
         let plain = HttpPromptSink::new(client, "/tmp".to_owned(), tx);
         assert_eq!(plain.take_new_session_id(), None);
+    }
+
+    /// G-34 — the home submission's create-directory follows the shared
+    /// home-location cell (`session.new_location` = inherit keeps the
+    /// routed session's directory; new-session-location.ts over
+    /// app.tsx:718-737).
+    #[test]
+    fn prompt_sink_home_directory_follows_the_shared_cell() {
+        let client = oc_client::Client::new("http://127.0.0.1:1").expect("client");
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let cell = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let sink = HttpPromptSink::new(client, "/launch".to_owned(), tx)
+            .with_home_directory_cell(std::rc::Rc::clone(&cell));
+        assert_eq!(sink.effective_home_directory(), "/launch", "launch mode keeps the boot dir");
+        *cell.borrow_mut() = Some("/work/cur".to_owned());
+        assert_eq!(
+            sink.effective_home_directory(),
+            "/work/cur",
+            "inherit mode targets the routed session's directory"
+        );
+        *cell.borrow_mut() = None;
+        assert_eq!(sink.effective_home_directory(), "/launch", "clearing returns to launch");
     }
 }
 
