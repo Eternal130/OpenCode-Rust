@@ -8,7 +8,7 @@
 //! Proven on the real run loop over a PTY: the dialog renders the
 //! reference's shape — the "Plugins" title, the "Search" placeholder,
 //! the shared "No items available" empty state (ui/dialog-select.tsx
-//! :723) and the `ctrl+a show internal` footer hint — and the
+//! :723) and the G-29 `ctrl+a check for updates` action hint — and the
 //! composer does NOT keep the typed text (`select()` removes the
 //! trigger token, autocomplete.tsx:615-626).
 
@@ -54,7 +54,7 @@ fn vt_plugins_slash_command_opens_the_live_dialog() {
             if !text.contains("Search") {
                 return Err(format!("no Search placeholder: {screen:?}"));
             }
-            if !text.contains("ctrl+a show internal") {
+            if !text.contains("ctrl+a check for updates") {
                 return Err(format!("no footer hint: {screen:?}"));
             }
             // The composer must NOT retain the typed text — the

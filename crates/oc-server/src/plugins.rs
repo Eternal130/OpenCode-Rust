@@ -604,6 +604,44 @@ pub fn reload_after_update(boot: &PluginBoot) {
     }
 }
 
+/// G-29 — `POST /api/plugin/install`'s activation leg: the install
+/// wrote a new generation under the cache root and the global config
+/// now names the target; load the new entry's generation into the live
+/// guest and swap the resolution cell so `/api/plugin` (and every
+/// location's activation set) sees it immediately. Contained like
+/// [`refresh_after_config_change`]: a failed load is logged, the
+/// resolution still swaps (the entry lists with its load status), and
+/// a dead host keeps the previous state.
+pub fn activate_installed_plugin(boot: &PluginBoot, target: &str) {
+    let previous = boot.resolution.lock().clone();
+    let mut ops: Vec<oc_plugin_host::PluginOp> = previous
+        .plugins
+        .iter()
+        .map(|plugin| oc_plugin_host::PluginOp::Add {
+            target: plugin.target.clone(),
+            options: plugin.options.clone(),
+        })
+        .collect();
+    ops.push(oc_plugin_host::PluginOp::Add { target: target.to_owned(), options: Value::Null });
+    let resolved = oc_plugin_host::resolve(&ops, None);
+    if let Some(plugin) = resolved.plugins.iter().find(|plugin| plugin.target == target) {
+        match boot.host.add_entry(&plugin.entry) {
+            Ok(()) => {
+                eprintln!("opencode plugin: install loaded {target} generation");
+            }
+            Err(error) => {
+                eprintln!(
+                    "opencode plugin: install of {target} failed to load ({error}); it activates on the next boot",
+                );
+            }
+        }
+    }
+    for (failed, error) in &resolved.failures {
+        eprintln!("opencode plugin: post-install resolve {failed} failed: {error}");
+    }
+    *boot.resolution.lock() = resolved;
+}
+
 /// The supervisor resolve diff (supervisor.ts:23-94, add/remove only):
 /// replay the current ops over the previously-loaded targets; `*` and
 /// `name.*` remove selectors match like the boot reduction

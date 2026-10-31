@@ -31,6 +31,19 @@ tools/guards/run.sh --update-baseline  # record current sets (see below)
 
 CI runs the `guards` job (`.github/workflows/ci.yml`) — python3 only.
 
+## Standalone guard: `acp_drift.py` (G-27)
+
+Not part of `run.sh` (it needs pristine upstream sources, not just the
+tree): `acp_drift.py` proves `third_party/agent-client-protocol` is
+exactly crates.io `agent-client-protocol` 3.3.0 plus the committed
+`third_party/agent-client-protocol/LOCAL_CHANGES.patch` (the
+`preserve_order` default-feature removal). It sources the pristine
+sources from the cargo registry cache, else downloads the
+sha256-pinned `.crate` from static.crates.io (`ACP_PRISTINE_DIR`
+overrides; `--offline` refuses the download; `--update` regenerates
+the patch). Exit 0 clean / 1 drift / 2 guard error. Runs in the
+`acp-drift` job of `.github/workflows/ci.yml`.
+
 ## Updating baselines / allowlists
 
 `--update-baseline` rewrites the baseline with the current set. It is a

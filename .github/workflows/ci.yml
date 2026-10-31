@@ -34,6 +34,22 @@ jobs:
       - name: OpenAPI generation drift check
         run: cargo run -p openapi-gen --locked -- --check
 
+  # G-27 — vendored ACP drift: third_party/agent-client-protocol must be
+  # exactly crates.io 3.3.0 plus the committed LOCAL_CHANGES.patch (the
+  # preserve_order-removal). Stdlib python3; sources the pristine crate
+  # from the cargo registry cache, else downloads the checksum-pinned
+  # .crate from static.crates.io (no cache on runners), applies the
+  # committed patch to the pristine copy and diffs it against the
+  # vendored tree. Any vendored edit without a patch update fails.
+  acp-drift:
+    name: vendored ACP drift check (G-27)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: vendored agent-client-protocol vs upstream 3.3.0 + LOCAL_CHANGES.patch
+        run: python3 tools/guards/acp_drift.py
+
   lint:
     name: fmt + clippy
     runs-on: ubuntu-latest

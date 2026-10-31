@@ -1,15 +1,15 @@
 // Generated file — DO NOT EDIT by hand.
 // Regenerate with: cargo run -p openapi-gen
-// Source: tools/openapi-gen/openapi.json (sha256 0612418392961ef22f0337ce0e1e520270917665fc85f29c4af1c94d1e1873ee)
-//! Static route table for the opencode HttpApi surface (117 paths / 141 operations).
+// Source: tools/openapi-gen/openapi.json (sha256 5165970367be69ae9e46000c74a55c530f2bcaaceb6aecfa4a333c6bf9233d60)
+//! Static route table for the opencode HttpApi surface (118 paths / 142 operations).
 //! Paths are axum-style templates (axum 0.7 spellings): `:param`
 //! captures one segment, `*name` captures the remainder.
 //! Consumed by the oc-server dispatch; mirrors oc-client namespaces 1:1.
 #![allow(clippy::struct_excessive_bools)]
 #![allow(clippy::doc_markdown, clippy::must_use_candidate)]
 
-pub const OPENAPI_SHA256: &str = "0612418392961ef22f0337ce0e1e520270917665fc85f29c4af1c94d1e1873ee";
-pub const OPERATION_COUNT: usize = 141;
+pub const OPENAPI_SHA256: &str = "5165970367be69ae9e46000c74a55c530f2bcaaceb6aecfa4a333c6bf9233d60";
+pub const OPERATION_COUNT: usize = 142;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Method {
@@ -1150,6 +1150,23 @@ pub static ROUTES: &[Route] = &[
         response_schema: "PluginCheckResponse",
         success_status: 200,
         error_statuses: &[400, 401],
+    },
+    Route {
+        method: Method::Post,
+        path: "/api/plugin/install",
+        operation_id: "plugin.install",
+        group: "plugin",
+        client_method: "plugin::install",
+        path_params: &[],
+        query_params: &[QueryParam {
+            name: "location",
+            rust_type: "Option<QueryLocation>",
+            required: false,
+        }],
+        request_schema: "PluginInstallBody",
+        response_schema: "()",
+        success_status: 204,
+        error_statuses: &[400, 401, 503],
     },
     Route {
         method: Method::Post,
