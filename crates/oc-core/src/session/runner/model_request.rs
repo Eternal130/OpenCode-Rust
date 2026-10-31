@@ -718,7 +718,56 @@ impl SessionModelRequest {
         headers.insert("x-opencode-session".into(), affinity.clone());
         headers.insert("x-opencode-client".into(), self.app.name.clone());
 
-        let mut request = oc_ai::schema::messages::LLMRequest::new(model.model.clone());
+        // G-65 (ref aisdk.ts:346-354): the sdk/language transform points
+        // run at language-model construction — `runSDK` may swap the
+        // package instance and `runLanguage` may REPLACE the language
+        // model (transform points, not observers). The dispatch feeds
+        // the language event the sdk event's handle; a returned
+        // language handle becomes the request's target. The options a
+        // hook returns ride into the provider options (the copilot
+        // lane selection's `endpoint` override flows through here —
+        // the inline selection stays the default when no hook runs).
+        let mut language_model = model.model.clone();
+        let mut provider_options = provider_options;
+        let mut sdk_handle: Option<crate::hooks::SdkHandle> = None;
+        let mut package = format!("@ai-sdk/{}", model.reference.provider_id.as_str());
+        if self.hooks.has_aisdk_sdk(None) {
+            let event = crate::hooks::AisdkSdkEvent {
+                model: aisdk_model_info(model),
+                package: package.clone(),
+                options: provider_options.clone().into_iter().collect(),
+                sdk: None,
+            };
+            let shaped = self
+                .hooks
+                .dispatch_aisdk_sdk(event)
+                .await
+                .map_err(|err| ModelError::Resolver(err.to_string()))?;
+            if !shaped.package.is_empty() {
+                package = shaped.package;
+            }
+            sdk_handle = shaped.sdk;
+        }
+        if self.hooks.has_aisdk_language(None) {
+            let event = crate::hooks::AisdkLanguageEvent {
+                model: aisdk_model_info(model),
+                sdk: sdk_handle,
+                options: provider_options.clone().into_iter().collect(),
+                language: Some(model.model.clone()),
+            };
+            let shaped = self
+                .hooks
+                .dispatch_aisdk_language(event)
+                .await
+                .map_err(|err| ModelError::Resolver(err.to_string()))?;
+            if let Some(replacement) = shaped.language {
+                language_model = replacement;
+            }
+            for (key, value) in shaped.options {
+                provider_options.insert(key, value);
+            }
+        }
+        let mut request = oc_ai::schema::messages::LLMRequest::new(language_model);
         request.system = shaped_system;
         request.messages = bound_images(unsupported_parts(shaped_messages, &model.capabilities));
         request.tools = hooked
@@ -991,6 +1040,18 @@ pub(crate) fn routed_provenance(
 
 fn canonical(value: &Value) -> String {
     crate::session::runner::context::instruction_hash(value)
+}
+
+/// The G-65 dispatch's `Model.Info` projection: the resolved model's
+/// identity + capabilities over the permissive placeholder shape (the
+/// resolver's catalog info is not carried on [`ResolvedModel`]).
+fn aisdk_model_info(model: &ResolvedModel) -> oc_schema::model::Info {
+    let mut info = oc_schema::model::Info::default_for(
+        model.reference.provider_id.clone(),
+        model.reference.id.clone(),
+    );
+    info.capabilities = model.capabilities.clone();
+    info
 }
 
 // ---------------------------------------------------------------------------
@@ -1467,5 +1528,160 @@ mod tools_exec_name_tests {
             serde_json::json!({"type": "object"}),
         );
         assert_eq!(tool_definition(&bare).name, "read");
+    }
+}
+
+#[cfg(test)]
+mod aisdk_dispatch_tests {
+    // G-65 (aisdk.ts:346-354): the sdk/language hook pair runs at
+    // language-model construction; a language replacement changes the
+    // request target, and the sdk handle flows into the language event.
+    use super::{AppMetadata, RequestInput, RequestKind, SessionModelRequest};
+    use crate::database::schema::SessionRow;
+    use crate::hooks::fn_hook;
+    use crate::session::runner::ResolvedModel;
+    use oc_ai::schema::messages::Message;
+    use std::sync::{Arc, Mutex};
+
+    fn resolved() -> ResolvedModel {
+        let route =
+            oc_ai::test_support::echo_route(Arc::new(oc_ai::route::transport::FailingTransport {
+                message: "never sent",
+            }));
+        let model = route.model("fake-model", Some("parityfake".into())).expect("route model");
+        ResolvedModel {
+            reference: oc_schema::model::Ref {
+                provider_id: oc_schema::id::ProviderId::parse("parityfake"),
+                id: oc_schema::id::ModelId::parse("fake-model"),
+                variant: Some(oc_schema::id::ModelVariantId::parse("default")),
+            },
+            model,
+            capabilities: oc_schema::model::Capabilities::default(),
+            cost: Vec::new(),
+            limit: oc_schema::model::ModelLimit { context: 200_000, input: None, output: 32_000 },
+            compaction: None,
+            transport: None,
+        }
+    }
+
+    fn input(model: &ResolvedModel, messages: Vec<Message>) -> RequestInput {
+        RequestInput {
+            session: SessionRow::new("ses_aisdk_1", "global", "/tmp/opencode", "guard", "test")
+                .expect("session row"),
+            agent: oc_schema::id::AgentId::parse("build"),
+            model: model.clone(),
+            tools: None,
+            system: Vec::new(),
+            messages,
+            tool_choice: None,
+            web_socket: false,
+            input_tokens: None,
+        }
+    }
+
+    fn service(hooks: Arc<crate::hooks::HookRegistry>) -> SessionModelRequest {
+        let tools = Arc::new(crate::location::ToolRegistryState::new());
+        SessionModelRequest::new(hooks, tools, AppMetadata::default())
+    }
+
+    /// A language hook REPLACING the language model changes the
+    /// request's target (the transform point, not an observer).
+    #[tokio::test]
+    async fn language_replacement_changes_request_target() {
+        let hooks = Arc::new(crate::hooks::HookRegistry::new());
+        std::mem::forget(
+            hooks
+                .register_aisdk_language(
+                    fn_hook(|event: &mut crate::hooks::AisdkLanguageEvent| {
+                        let route = oc_ai::test_support::echo_route(Arc::new(
+                            oc_ai::route::transport::FailingTransport {
+                                message: "never sent",
+                            },
+                        ));
+                        let replacement =
+                            route.model("replaced-model", Some("parityfake".into()))
+                                .expect("replacement model");
+                        event.language = Some(replacement);
+                        event
+                            .options
+                            .insert("endpoint".into(), serde_json::json!("responses"));
+                        Ok(())
+                    }),
+                    crate::hooks::HookOptions::default(),
+                )
+                .await,
+        );
+
+        let model = resolved();
+        let prepared = service(Arc::clone(&hooks))
+            .prepare(RequestKind::Primary, input(&model, vec![Message::user("hello")]))
+            .await
+            .expect("prepare");
+        assert_eq!(
+            prepared.request.model.id.0, "replaced-model",
+            "the hook's language handle became the request target"
+        );
+        let options = prepared.request.provider_options.expect("provider options set");
+        assert_eq!(
+            options.get("endpoint"),
+            Some(&serde_json::json!("responses")),
+            "the hook's options rode into the provider options (the copilot lane seam)"
+        );
+    }
+
+    /// Without hooks the resolved model stays the target (the inline
+    /// default — copilot.rs's lane selection is unchanged).
+    #[tokio::test]
+    async fn no_hooks_keeps_resolved_target() {
+        let model = resolved();
+        let prepared = service(Arc::new(crate::hooks::HookRegistry::new()))
+            .prepare(RequestKind::Primary, input(&model, vec![Message::user("hello")]))
+            .await
+            .expect("prepare");
+        assert_eq!(prepared.request.model.id.0, "fake-model");
+    }
+
+    /// The sdk event runs FIRST and its handle feeds the language event
+    /// (aisdk.ts:346-354's runSDK → runLanguage chaining).
+    #[tokio::test]
+    async fn sdk_handle_flows_into_language_event() {
+        let hooks = Arc::new(crate::hooks::HookRegistry::new());
+        std::mem::forget(
+            hooks
+                .register_aisdk_sdk(
+                    fn_hook(|event: &mut crate::hooks::AisdkSdkEvent| {
+                        event.package = "@ai-sdk/swapped".into();
+                        event.sdk = Some(Arc::new(serde_json::json!({ "wrapped": true })));
+                        Ok(())
+                    }),
+                    crate::hooks::HookOptions::default(),
+                )
+                .await,
+        );
+        let saw_sdk: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
+        let marker = Arc::clone(&saw_sdk);
+        std::mem::forget(
+            hooks
+                .register_aisdk_language(
+                    fn_hook(move |event: &mut crate::hooks::AisdkLanguageEvent| {
+                        let has = event
+                            .sdk
+                            .as_ref()
+                            .and_then(|handle| handle.downcast_ref::<serde_json::Value>())
+                            .is_some_and(|value| value["wrapped"] == serde_json::json!(true));
+                        *marker.lock().unwrap() = has;
+                        Ok(())
+                    }),
+                    crate::hooks::HookOptions::default(),
+                )
+                .await,
+        );
+
+        let model = resolved();
+        service(Arc::clone(&hooks))
+            .prepare(RequestKind::Primary, input(&model, vec![Message::user("hello")]))
+            .await
+            .expect("prepare");
+        assert!(*saw_sdk.lock().unwrap(), "the sdk event's handle reached the language event");
     }
 }
