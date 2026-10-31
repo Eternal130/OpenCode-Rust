@@ -1810,6 +1810,8 @@ impl App {
         {
             if command == "app.exit" {
                 if stroke.ctrl && !stroke.alt && stroke.key == "d" {
+                    // G-69 — the invalidation rides the store's close
+                    // (every close path, not just this chord).
                     self.store.close_diff_viewer();
                 } else {
                     self.request_exit();
@@ -2892,7 +2894,23 @@ impl App {
             // frames); no usable read (headless/unsupported) inserts
             // nothing — bracketed paste stays the other entry.
             KeyOutcome::Paste(_) => {
-                if let Some(content) = self.store.clipboard_read() {
+                // G-67 — the read arm's error path: the ref's adapter
+                // throws on failed/timed-out/limit-exceeded reads
+                // (clipboard.ts:27-34) and `enqueuePaste`'s catch
+                // surfaces the message as an ERROR toast
+                // (prompt/index.tsx:373-389) — never a silent no-op.
+                let read = self.store.clipboard_read();
+                let content = match read {
+                    Ok(content) => content,
+                    Err(error) => {
+                        let mut toast =
+                            crate::components::toast::ToastOptions::info(error.message());
+                        toast.variant = "error";
+                        self.store.toast_show(toast);
+                        return;
+                    }
+                };
+                if let Some(content) = content {
                     let key = self.prompt_key();
                     let mut composer = self.store.composer(&key);
                     if content.mime.starts_with("image/") {
@@ -4794,11 +4812,17 @@ pub enum LoopRequest {
     SessionList,
     /// `vcs.get` for one directory (the footer's branch lookup).
     LocationVcs(String),
+    /// G-69 — `vcs.branch.list` for the diff base selector.
+    BranchList {
+        directory: String,
+    },
     /// The diff viewer's fetch (SURF-2): `vcs.base` + `vcs.diff` for
     /// branch/committed/working, `session.diff` for turn.
     Diff {
         mode: crate::store::DiffSource,
         session_id: Option<String>,
+        /// G-69 — the CHOSEN base ref (the selector's memory).
+        base: Option<String>,
         generation: u64,
         directory: String,
     },
@@ -5011,6 +5035,11 @@ pub enum LoopFetch {
     LocationVcs {
         directory: String,
         branch: Result<Option<String>, String>,
+    },
+    /// G-69 — `vcs.branch.list`'s rows for the diff base selector
+    /// (failures already collapsed to the empty list).
+    BranchList {
+        branches: Vec<String>,
     },
     /// The diff viewer's fetch result (base name + files, or error).
     Diff {
@@ -5258,13 +5287,43 @@ pub fn spawn_loop_fetcher(
                         let _ = tx.send(LoopFetch::LocationVcs { directory, branch });
                     });
                 }
-                LoopRequest::Diff { mode, session_id, generation, directory } => {
+                LoopRequest::Diff { mode, session_id, base, generation, directory } => {
                     let client = client.clone();
                     let tx = tx.clone();
                     tokio::spawn(async move {
-                        let result =
-                            fetch_diff(&client, mode, session_id.as_deref(), &directory).await;
+                        let result = fetch_diff(
+                            &client,
+                            mode,
+                            session_id.as_deref(),
+                            &directory,
+                            base.as_deref(),
+                        )
+                        .await;
                         let _ = tx.send(LoopFetch::Diff { generation, result });
+                    });
+                }
+                LoopRequest::BranchList { directory } => {
+                    let client = client.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        // `vcs.branch.list({location, limit: 100})` —
+                        // DiffBaseDialog's `branches` resource
+                        // (diff-viewer.tsx:251); failures render the
+                        // empty list (the dialog's Empty view).
+                        let branches = client
+                            .vcs()
+                            .branch()
+                            .list(&oc_client::types::VcsBranchListQuery {
+                                limit: Some("100".to_owned()),
+                                location: Some(oc_client::types::QueryLocation {
+                                    directory: Some(directory.clone()),
+                                }),
+                                search: None,
+                            })
+                            .await
+                            .map(|response| response.data)
+                            .unwrap_or_default();
+                        let _ = tx.send(LoopFetch::BranchList { branches });
                     });
                 }
                 LoopRequest::Pair => {
@@ -6491,18 +6550,44 @@ impl crate::store::SessionListSink for HttpSessionListSink {
     }
 }
 
+/// G-69 — the lazy per-repo base cache (`bases`, diff-viewer.tsx:
+/// 117-128): one `vcs.base` resolution per directory, shared across
+/// the viewer's mode changes until the viewer closes (the ref's Map
+/// is per-component-instance; the invalidation on close mirrors it).
+fn diff_base_cache(
+) -> &'static std::sync::Mutex<std::collections::HashMap<String, Option<(String, String)>>> {
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, Option<(String, String)>>>,
+    > = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Invalidate the lazy base cache (the viewer closed — the next open
+/// recomputes; a CHOSEN base still short-circuits regardless).
+pub fn invalidate_diff_base_cache() {
+    diff_base_cache().lock().expect("diff base cache").clear();
+}
+
 /// The diff viewer's resource fetch (`createResource(diffInput)`,
 /// diff-viewer.tsx:144-168): `turn` reads `session.diff`; the VCS
 /// modes resolve the lazy base first (branch/committed), then
 /// `vcs.diff` with `context: 12` (`VCS_DIFF_CONTEXT_LINES`). A
 /// base-needing mode that resolves no base yields the unavailable
 /// body (committed) / a base-less branch diff.
+///
+/// G-69: `selected` (the base-branch selector's CHOSEN ref)
+/// short-circuits the lazy lookup (`input.selected ? {name: input
+/// .selected, ref: input.selected} : await loadBase(...)`,
+/// diff-viewer.tsx:178-180), and the RESOLVED base caches per
+/// directory — `loadBase`'s per-viewer `bases` Map (:117-128): mode
+/// changes share one base computation until the viewer closes.
 #[allow(clippy::too_many_lines)] // one arm per source, the resource port
 async fn fetch_diff(
     client: &oc_client::Client,
     mode: crate::store::DiffSource,
     session_id: Option<&str>,
     directory: &str,
+    selected_base: Option<&str>,
 ) -> Result<(Option<String>, Vec<crate::components::diff_viewer::DiffFile>), String> {
     use crate::components::diff_viewer::{DiffFile, FileStatus};
     let location =
@@ -6569,16 +6654,32 @@ async fn fetch_diff(
             .map_err(|error| error.to_string())?;
         return Ok((None, normalize(response)));
     }
-    // The lazy base lookup (branch/committed).
+    // The lazy base lookup (branch/committed) — G-69: the chosen
+    // base wins (`selected` short-circuits), else the per-directory
+    // cache, else ONE `vcs.base` request that lands in the cache.
     let mut base: Option<(String, String)> = None;
     if matches!(mode, crate::store::DiffSource::Branch | crate::store::DiffSource::Committed) {
-        let resolved = client
-            .vcs()
-            .base(&oc_client::types::VcsBaseQuery { location: location() })
-            .await
-            .map_err(|error| error.to_string())?;
-        if let Some(info) = resolved.data {
-            base = Some((info.name, info.ref_));
+        if let Some(selected) = selected_base {
+            base = Some((selected.to_owned(), selected.to_owned()));
+        } else {
+            let cached = diff_base_cache().lock().expect("diff base cache").get(directory).cloned();
+            let resolved = match cached {
+                Some(hit) => hit,
+                None => {
+                    let response = client
+                        .vcs()
+                        .base(&oc_client::types::VcsBaseQuery { location: location() })
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    let hit = response.data.map(|info| (info.name, info.ref_));
+                    diff_base_cache()
+                        .lock()
+                        .expect("diff base cache")
+                        .insert(directory.to_owned(), hit.clone());
+                    hit
+                }
+            };
+            base = resolved;
         }
     }
     if mode == crate::store::DiffSource::Committed && base.is_none() {
@@ -7278,13 +7379,23 @@ pub async fn run_with_size(
     {
         let tx = loop_fetch_tx.clone();
         let directory = directory.clone();
-        app.store.set_diff_sink_fn(move |mode, session_id, generation| {
+        app.store.set_diff_directory(&directory);
+        app.store.set_diff_sink_fn(move |mode, session_id, base, generation| {
             let _ = tx.send(LoopRequest::Diff {
                 mode,
                 session_id,
+                base,
                 generation,
                 directory: directory.clone(),
             });
+        });
+    }
+    // G-69 — the base selector's branch list (`vcs.branch.list`) rides
+    // the same ordered loop fetcher.
+    {
+        let tx = loop_fetch_tx.clone();
+        app.store.set_branch_list_sink_fn(move |directory| {
+            let _ = tx.send(LoopRequest::BranchList { directory: directory.to_owned() });
         });
     }
     // SURF-2: DialogPair's fetch seam + the MCP toggle worker.
@@ -8246,6 +8357,10 @@ pub async fn run_with_size(
                 LoopFetch::LocationVcs { branch: Err(error), .. } => {
                     eprintln!("opencode tui: vcs lookup skipped: {error}");
                 }
+                // G-69 — the base selector's branch rows landed.
+                LoopFetch::BranchList { branches } => {
+                    app.store.set_diff_branches(branches);
+                }
                 // The diff viewer's resource result (stale
                 // generations drop inside the store).
                 LoopFetch::Diff { generation, result } => {
@@ -8885,6 +9000,16 @@ fn crossterm_key_to_spec(key: &crossterm::event::KeyEvent) -> Option<String> {
             // both shift+tab — v2's `agent.cycle` chord.
             KeyCode::Tab | KeyCode::BackTab => Some("shift+tab".to_owned()),
             KeyCode::F(f) => Some(format!("shift+f{f}")),
+            // G-66 — the modified-arrow family (`ESC [ 1;2A..D`):
+            // shift+arrows are `input.select.*`'s chords (keymap
+            // table.rs:712-715); they used to drop here, so the
+            // selection keybindings never fired on the live route.
+            KeyCode::Up => Some("shift+up".to_owned()),
+            KeyCode::Down => Some("shift+down".to_owned()),
+            KeyCode::Left => Some("shift+left".to_owned()),
+            KeyCode::Right => Some("shift+right".to_owned()),
+            KeyCode::Home => Some("shift+home".to_owned()),
+            KeyCode::End => Some("shift+end".to_owned()),
             _ => None,
         };
     }
@@ -8970,6 +9095,185 @@ mod tests {
         assert!(json.get("agents").is_none() && json.get("skills").is_none());
     }
 
+    /// G-69 — the lazy per-repo base cache (`loadBase`'s `bases` Map,
+    /// diff-viewer.tsx:117-128): two base-needing fetches share ONE
+    /// `vcs.base` request; a CHOSEN base short-circuits it entirely
+    /// (never even the cache); invalidation forces a re-fetch.
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)] // the scripted HTTP listener
+    async fn diff_base_is_lazy_cached_and_the_selection_short_circuits() {
+        use std::sync::{Arc, Mutex};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let base_hits: Arc<Mutex<u32>> = Arc::new(Mutex::new(0));
+        let hits = Arc::clone(&base_hits);
+        let server = tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = listener.accept().await.expect("accept");
+                let hits = Arc::clone(&hits);
+                let (mut reader, mut writer) = socket.split();
+                let mut request = vec![0u8; 8192];
+                let _ = reader.read(&mut request).await;
+                let head = String::from_utf8_lossy(&request);
+                let path = head.split_whitespace().nth(1).unwrap_or_default().to_owned();
+                let (status, body) = if path.starts_with("/api/vcs/base") {
+                    *hits.lock().expect("hits") += 1;
+                    (
+                        "200 OK",
+                        r#"{"data":{"name":"main","ref":"refs/heads/main","source":"default"},"location":{"directory":"/tmp"}}"#,
+                    )
+                } else if path.starts_with("/api/vcs/diff") {
+                    ("200 OK", r#"{"data":[],"location":{"directory":"/tmp"}}"#)
+                } else {
+                    ("404 Not Found", "{}")
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\ncontent-type: application/json\r\nconnection: close\r\n\r\n{body}"
+                );
+                let _ = writer.write_all(response.as_bytes()).await;
+            }
+        });
+        let url = format!("http://{addr}");
+        let client = oc_client::Client::new(&url).expect("client");
+        invalidate_diff_base_cache();
+
+        // Two base-needing fetches: ONE vcs.base request (the cache).
+        let first = fetch_diff(&client, crate::store::DiffSource::Branch, None, "/tmp", None)
+            .await
+            .expect("first fetch");
+        assert_eq!(first.0.as_deref(), Some("main"));
+        let second = fetch_diff(&client, crate::store::DiffSource::Committed, None, "/tmp", None)
+            .await
+            .expect("second fetch");
+        assert_eq!(second.0.as_deref(), Some("main"));
+        assert_eq!(*base_hits.lock().expect("hits"), 1, "the base resolved once");
+
+        // The CHOSEN base short-circuits: no vcs.base at all.
+        let chosen =
+            fetch_diff(&client, crate::store::DiffSource::Branch, None, "/tmp", Some("dev"))
+                .await
+                .expect("chosen fetch");
+        assert_eq!(chosen.0.as_deref(), Some("dev"));
+        assert_eq!(*base_hits.lock().expect("hits"), 1, "the selection never hit vcs.base");
+
+        // Invalidated: the next lazy fetch recomputes.
+        invalidate_diff_base_cache();
+        let _ = fetch_diff(&client, crate::store::DiffSource::Branch, None, "/tmp", None)
+            .await
+            .expect("post-invalidate fetch");
+        assert_eq!(*base_hits.lock().expect("hits"), 2, "invalidation forces a re-resolve");
+
+        server.abort();
+    }
+
+    /// G-69 (fix #2) — EVERY close path invalidates the lazy base
+    /// cache (`diff.close`/`Store::close_diff_viewer`, not just the
+    /// ctrl+d chord): a fetch → viewer close → fetch re-resolves the
+    /// base instead of serving the stale cache.
+    #[tokio::test]
+    async fn diff_viewer_close_invalidates_the_base_cache() {
+        use std::sync::{Arc, Mutex};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let base_hits: Arc<Mutex<u32>> = Arc::new(Mutex::new(0));
+        let hits = Arc::clone(&base_hits);
+        let server = tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = listener.accept().await.expect("accept");
+                let hits = Arc::clone(&hits);
+                let (mut reader, mut writer) = socket.split();
+                let mut request = vec![0u8; 8192];
+                let _ = reader.read(&mut request).await;
+                let head = String::from_utf8_lossy(&request);
+                let path = head.split_whitespace().nth(1).unwrap_or_default().to_owned();
+                let (status, body) = if path.starts_with("/api/vcs/base") {
+                    *hits.lock().expect("hits") += 1;
+                    (
+                        "200 OK",
+                        r#"{"data":{"name":"main","ref":"refs/heads/main","source":"default"},"location":{"directory":"/tmp"}}"#,
+                    )
+                } else if path.starts_with("/api/vcs/diff") {
+                    ("200 OK", r#"{"data":[],"location":{"directory":"/tmp"}}"#)
+                } else {
+                    ("404 Not Found", "{}")
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\ncontent-type: application/json\r\nconnection: close\r\n\r\n{body}"
+                );
+                let _ = writer.write_all(response.as_bytes()).await;
+            }
+        });
+        let url = format!("http://{addr}");
+        let client = oc_client::Client::new(&url).expect("client");
+        invalidate_diff_base_cache();
+
+        // Prime the cache...
+        let _ = fetch_diff(&client, crate::store::DiffSource::Branch, None, "/tmp", None)
+            .await
+            .expect("prime");
+        assert_eq!(*base_hits.lock().expect("hits"), 1);
+        // ...open + close the viewer through the STORE's close (the
+        // `diff.close` path — no key chord involved).
+        let store = crate::store::Store::new(crate::reactive::Runtime::new());
+        store.set_diff_sink(std::rc::Rc::new(crate::store::NoDiffSink));
+        store.open_diff_viewer(None);
+        store.close_diff_viewer();
+        // The next lazy fetch re-resolves (a cache MISS).
+        let _ = fetch_diff(&client, crate::store::DiffSource::Branch, None, "/tmp", None)
+            .await
+            .expect("post-close fetch");
+        assert_eq!(*base_hits.lock().expect("hits"), 2, "close invalidated the cache");
+
+        server.abort();
+    }
+
+    /// G-69 (store seam) — the chosen base persists across fetch calls
+    /// (remembered until the TUI exits): every later mode switch and
+    /// re-open carries it, and `select_diff_base` refetches with it.
+    #[test]
+    fn diff_base_selection_persists_across_fetches() {
+        let store = crate::store::Store::new(crate::reactive::Runtime::new());
+        store.set_diff_directory("/tmp");
+        let sink: std::rc::Rc<crate::store::RecordingDiffSink> =
+            std::rc::Rc::new(crate::store::RecordingDiffSink::default());
+        store.set_diff_sink(std::rc::Rc::clone(&sink) as std::rc::Rc<dyn crate::store::DiffSink>);
+        store.open_diff_viewer(None);
+        // The lazy base (no selection yet).
+        assert_eq!(
+            sink.calls.borrow().last().map(|(_, _, base, _)| base.clone()),
+            Some(None),
+            "the first fetch is lazy"
+        );
+        // A chosen ref: the immediate refetch carries it...
+        store.select_diff_base("dev");
+        assert_eq!(
+            sink.calls.borrow().last().map(|(_, _, base, _)| base.clone()),
+            Some(Some("dev".to_owned())),
+            "the selection refetches with the chosen base"
+        );
+        // ...and every later mode switch + re-open keeps it.
+        store.switch_diff_source(crate::store::DiffSource::Committed);
+        store.switch_diff_source(crate::store::DiffSource::Working);
+        store.close_diff_viewer();
+        store.open_diff_viewer(None);
+        let calls = sink.calls.borrow();
+        assert!(
+            calls.iter().skip(1).all(|(_, _, base, _)| base.as_deref() == Some("dev")),
+            "the selection persists across every later fetch: {calls:?}"
+        );
+        // The base selector's open fetches the branch list.
+        let branches = std::rc::Rc::new(crate::store::RecordingBranchListSink::default());
+        store.set_branch_list_sink(
+            std::rc::Rc::clone(&branches) as std::rc::Rc<dyn crate::store::BranchListSink>
+        );
+        store.open_diff_base_dialog();
+        assert_eq!(branches.calls.borrow().as_slice(), ["/tmp".to_owned()]);
+    }
+
     /// G-03 — `prompt.paste` (ctrl+v) through the pluggable clipboard
     /// source (the read arm, prompt/index.tsx:470-491): an image/png
     /// read stages the `clipboard` attachment chip (data-URI payload,
@@ -8984,6 +9288,7 @@ mod tests {
                 mime: "image/png".to_owned(),
                 data: "AAECAw==".to_owned(),
             }),
+            error: None,
         }));
         app.press("ctrl+v");
         let composer = app.store.composer(&app.prompt_key());
@@ -9008,6 +9313,7 @@ mod tests {
                 // base64("just some words")
                 data: "anVzdCBzb21lIHdvcmRz".to_owned(),
             }),
+            error: None,
         }));
         app.press("ctrl+v");
         assert_eq!(app.store.composer(&app.prompt_key()).draft.text, "just some words");
@@ -9019,6 +9325,37 @@ mod tests {
         ));
         headless.press("ctrl+v");
         assert_eq!(headless.store.composer(&headless.prompt_key()).draft.text, "");
+    }
+
+    /// G-67 — the read arm's error path: a failed/timed-out/over-
+    /// limit clipboard read surfaces as an ERROR toast carrying the
+    /// ref's thrown message (clipboard.ts:27-34 → prompt/index.tsx:
+    /// 373-389's `toast.error(error)`), and the draft is untouched.
+    #[test]
+    fn prompt_paste_error_raises_the_error_toast() {
+        let mut app = App::new((80, 24));
+        app.store.set_clipboard_source(std::rc::Rc::new(crate::clipboard::FixedClipboardSource {
+            error: Some(crate::clipboard::ClipboardReadError::TimedOut),
+            content: None,
+        }));
+        app.press("ctrl+v");
+        let toasts = app.store.toasts();
+        let current = toasts.current().expect("the error toast");
+        assert_eq!(current.message, "Clipboard read timed out");
+        assert_eq!(current.variant, "error");
+        assert_eq!(app.store.composer(&app.prompt_key()).draft.text, "");
+
+        // The limit-exceeded arm carries the RangeError's wording.
+        let mut over = App::new((80, 24));
+        over.store.set_clipboard_source(std::rc::Rc::new(crate::clipboard::FixedClipboardSource {
+            error: Some(crate::clipboard::ClipboardReadError::LimitExceeded),
+            content: None,
+        }));
+        over.press("ctrl+v");
+        assert_eq!(
+            over.store.toasts().current().expect("toast").message,
+            "Clipboard content exceeded configured read or image conversion limits"
+        );
     }
 
     /// TUI-7 — the session-list filter's six semantics at App level

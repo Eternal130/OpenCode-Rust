@@ -12,6 +12,8 @@ use oc_client::types::{PermissionReply, SessionPermissionReplyBody, SessionPromp
 use oc_client::Client;
 use serde_json::Value;
 
+use super::fragment::{fragment_ref, FragmentReconciler, FragmentRef, FragmentRestore};
+use super::image;
 use super::scrollback::{Commit, CommitKind, Phase};
 use crate::components::footer::permission::PermissionRequest;
 use crate::components::footer::{FormField, FormRequest};
@@ -82,6 +84,12 @@ pub struct TransportState {
     running: bool,
     /// A terminal execution event arrived (`waitForIdle`'s signal).
     terminated: bool,
+    /// G-68 — the fragment reconciler (`state.fragments`,
+    /// stream-v2.fragment.ts): message-part re-projection with the
+    /// append/covered/conflict restore modes.
+    fragments: FragmentReconciler,
+    /// G-68 — the image-commit dedup set (`state.imageIDs`).
+    image_ids: std::collections::HashSet<String>,
 }
 
 fn text_field(value: &Value, key: &str) -> String {
@@ -173,12 +181,21 @@ impl TransportState {
 
     fn text_delta(&mut self, data: &Value) -> Fold {
         let key = part_key(data);
+        let delta = text_field(data, "delta");
+        // G-68 — the reconciler owns the accumulation: a chunk a
+        // prior projection already showed is consumed (no commit —
+        // the covered-tail rule, stream-v2.fragment.ts:49-56).
+        let fragment =
+            FragmentRef { message_id: message_id(data).unwrap_or_default(), part_id: key.clone() };
+        let Some(update) = self.fragments.delta(&fragment, &delta) else {
+            return Fold::Ignored;
+        };
         let accumulated = self.texts.entry(key.clone()).or_default();
-        accumulated.push_str(&text_field(data, "delta"));
+        accumulated.push_str(&delta);
         Fold::Commit(Commit {
             kind: CommitKind::Assistant,
             phase: Phase::Progress,
-            text: accumulated.clone(),
+            text: update.text,
             message_id: message_id(data),
             part_id: Some(key),
             ..Commit::default()
@@ -187,7 +204,27 @@ impl TransportState {
 
     fn text_ended(&mut self, data: &Value) -> Fold {
         let key = part_key(data);
-        let text = self.texts.remove(&key).unwrap_or_default();
+        let event_text = text_field(data, "text");
+        let fragment = FragmentRef {
+            message_id: message_id(data).unwrap_or_default(),
+            part_id: key.clone(),
+        };
+        // An event without the final text keeps the COMMITTED text —
+        // the reconciler's value (a projection's full text included),
+        // never the streamed-chunks tail alone (a covered chunk a
+        // projection consumed would otherwise drop from the final
+        // commit).
+        let committed =
+            self.fragments.value(&fragment).map(str::to_owned).unwrap_or_default();
+        let text = if event_text.is_empty() {
+            committed.clone().is_empty().then(|| self.texts.remove(&key)).flatten().unwrap_or(committed)
+        } else {
+            event_text
+        };
+        // G-68 — the part closes at the reconciler's `end` (the
+        // committed text snaps to the final text verbatim).
+        self.fragments.end(&fragment, &text);
+        self.texts.remove(&key);
         Fold::Commit(Commit {
             kind: CommitKind::Assistant,
             phase: Phase::Final,
@@ -200,12 +237,18 @@ impl TransportState {
 
     fn reasoning_delta(&mut self, data: &Value) -> Fold {
         let key = part_key(data);
+        let delta = text_field(data, "delta");
+        let fragment =
+            FragmentRef { message_id: message_id(data).unwrap_or_default(), part_id: key.clone() };
+        let Some(update) = self.fragments.delta(&fragment, &delta) else {
+            return Fold::Ignored;
+        };
         let accumulated = self.reasons.entry(key.clone()).or_default();
-        accumulated.push_str(&text_field(data, "delta"));
+        accumulated.push_str(&delta);
         Fold::Commit(Commit {
             kind: CommitKind::Reasoning,
             phase: Phase::Progress,
-            text: accumulated.clone(),
+            text: update.text,
             message_id: message_id(data),
             part_id: Some(key),
             ..Commit::default()
@@ -214,7 +257,21 @@ impl TransportState {
 
     fn reasoning_ended(&mut self, data: &Value) -> Fold {
         let key = part_key(data);
-        let text = self.reasons.remove(&key).unwrap_or_default();
+        let event_text = text_field(data, "text");
+        let fragment = FragmentRef {
+            message_id: message_id(data).unwrap_or_default(),
+            part_id: key.clone(),
+        };
+        // Same covered-prefix preservation as `text_ended`.
+        let committed =
+            self.fragments.value(&fragment).map(str::to_owned).unwrap_or_default();
+        let text = if event_text.is_empty() {
+            committed.clone().is_empty().then(|| self.reasons.remove(&key)).flatten().unwrap_or(committed)
+        } else {
+            event_text
+        };
+        self.fragments.end(&fragment, &text);
+        self.reasons.remove(&key);
         Fold::Commit(Commit {
             kind: CommitKind::Reasoning,
             phase: Phase::Final,
@@ -293,6 +350,57 @@ impl TransportState {
     /// A new turn begins (`runPromptTurn`): clear the terminal marker.
     pub fn begin_turn(&mut self) {
         self.terminated = false;
+    }
+
+    // -- G-68: the fragment + image seams (stream-v2.fragment.ts /
+    // stream-v2.image.ts) ---------------------------------------------
+
+    /// `renderMessage`'s text/reasoning arms (transport.ts:851-881):
+    /// re-project a message part's FULL text. `visible` records the
+    /// projection (an invisible hydrate keeps the committed text).
+    #[must_use]
+    pub fn project_part(
+        &mut self,
+        message_id: &str,
+        kind: &str,
+        ordinal: usize,
+        text: &str,
+        visible: bool,
+    ) -> super::fragment::FragmentUpdate {
+        self.fragments.project(&fragment_ref(message_id, kind, ordinal), text, visible)
+    }
+
+    /// The reconnect replay's row re-admission (transport.ts:1697-
+    /// 1710): classify a LOCAL row's text against the server's part
+    /// text — `Append` replays only the suffix, `Covered` drops the
+    /// row, `Conflict` keeps it verbatim.
+    pub fn restore_part(&mut self, message_id: &str, part_id: &str, text: &str) -> FragmentRestore {
+        self.fragments.restore(
+            &FragmentRef { message_id: message_id.to_owned(), part_id: part_id.to_owned() },
+            text,
+        )
+    }
+
+    /// `renderUser`'s image arm (transport.ts:609): the user
+    /// message's image files commit once each (payload-deduped,
+    /// `(messageID, partID)`-deduped across replays).
+    #[must_use]
+    pub fn commit_user_images(&mut self, message_id: &str, files: &[Value]) -> Vec<Commit> {
+        let commits = image::user_image_commits(message_id, files);
+        image::fresh_images(&mut self.image_ids, commits)
+    }
+
+    /// `renderTool`'s image arm (transport.ts:758): the tool part's
+    /// `data:image/*` display content commits once per part.
+    #[must_use]
+    pub fn commit_tool_images(
+        &mut self,
+        part_id: &str,
+        part_state: &Value,
+        message_id: &str,
+    ) -> Vec<Commit> {
+        let commits = image::tool_image_commits(part_id, part_state, message_id);
+        image::fresh_images(&mut self.image_ids, commits)
     }
 }
 
@@ -718,6 +826,145 @@ mod tests {
             other => panic!("ended folded: {other:?}"),
         }
         assert!(!state.is_running());
+    }
+
+    /// G-68 — the reconciler at the transport seam: a delta a prior
+    /// PROJECTION already showed is consumed (Ignored — never a
+    /// double-append), and `text.ended`'s server text wins.
+    #[test]
+    fn projected_parts_consume_covered_deltas() {
+        let mut state = TransportState { session_id: "s1".into(), ..Default::default() };
+        // Hydrate rendered the part in full.
+        let update = state.project_part("m1", "text", 0, "one two three", true);
+        assert_eq!(update.previous, "");
+        // The stream re-delivers mid-projection chunks: consumed.
+        let covered = state.fold(&event(
+            "session.text.delta",
+            &json!({ "sessionID": "s1", "messageID": "m1", "partID": "text:0", "delta": "two " }),
+        ));
+        assert_eq!(covered, Fold::Ignored, "a covered chunk never commits");
+        // ... past the projection the delta appends.
+        let fresh = state.fold(&event(
+            "session.text.delta",
+            &json!({ "sessionID": "s1", "messageID": "m1", "partID": "text:0", "delta": " four" }),
+        ));
+        match fresh {
+            Fold::Commit(commit) => assert_eq!(commit.text, "one two three four"),
+            other => panic!("delta folded: {other:?}"),
+        }
+        // The part closes at the server's final text.
+        let ended = state.fold(&event(
+            "session.text.ended",
+            &json!({ "sessionID": "s1", "messageID": "m1", "partID": "text:0", "text": "FINAL" }),
+        ));
+        match ended {
+            Fold::Commit(commit) => {
+                assert_eq!(commit.text, "FINAL");
+                assert_eq!(commit.phase, Phase::Final);
+            }
+            other => panic!("ended folded: {other:?}"),
+        }
+    }
+
+    /// G-68 — the restore modes over the transport seam: `append`
+    /// replays only the suffix, `covered` drops, `conflict` keeps.
+    #[test]
+    fn restore_classifies_local_rows() {
+        let mut state = TransportState { session_id: "s1".into(), ..Default::default() };
+        state.project_part("m1", "text", 0, "abc", true);
+        assert_eq!(
+            state.restore_part("m1", "text:0", "abcdef"),
+            FragmentRestore::Append { suffix: "def".to_owned() }
+        );
+        assert_eq!(state.restore_part("m1", "text:0", "abc"), FragmentRestore::Covered);
+        assert_eq!(state.restore_part("m1", "text:0", "zzz"), FragmentRestore::Conflict);
+    }
+
+    /// G-68 — the image commits (stream-v2.image.ts + the dedup's
+    /// identity, attachment.ts:24-74): an inline image WITH mention
+    /// text dedups on metadata([mime,name,description,mention]) +
+    /// payload; different mention text keeps the row; the mime filter
+    /// runs AFTER the dedup (survivors number `[Image N]`); user
+    /// commits are kind User, tool commits kind Tool; REPLAYS dedup
+    /// by `(messageID, partID)`.
+    #[test]
+    fn image_parts_commit_and_dedupe() {
+        let mut state = TransportState { session_id: "s1".into(), ..Default::default() };
+        let files = vec![
+            // Same metadata + payload as #2 → deduped.
+            json!({ "mime": "image/png", "data": "AAEC", "name": "shot.png",
+                    "mention": { "text": "[Image 1]" } }),
+            json!({ "mime": "image/png", "data": "AAEC", "name": "shot.png",
+                    "mention": { "text": "[Image 1]" } }),
+            // Same payload, DIFFERENT mention → a distinct row.
+            json!({ "mime": "image/png", "data": "AAEC", "name": "dup.png",
+                    "mention": { "text": "[Image 2]" } }),
+            // No mention text → never deduped (the identity is None).
+            json!({ "mime": "image/png", "data": "QUJD" }),
+            json!({ "mime": "text/plain", "data": "aGk=" }), // not an image
+        ];
+        let commits = state.commit_user_images("msg_u", &files);
+        assert_eq!(commits.len(), 3, "metadata+payload dedup, mime filter after");
+        assert_eq!(commits[0].kind, CommitKind::User);
+        assert_eq!(commits[0].text, "shot.png", "the name label");
+        assert_eq!(commits[0].image.as_deref(), Some("data:image/png;base64,AAEC"));
+        assert_eq!(commits[0].part_id.as_deref(), Some("image:0"));
+        assert_eq!(commits[0].phase, Phase::Final);
+        assert_eq!(commits[1].text, "dup.png");
+        // The mention-less survivor gets the numbered label (index 2).
+        assert_eq!(commits[2].text, "[Image 3]");
+        // The replay: the SAME files commit nothing.
+        assert!(state.commit_user_images("msg_u", &files).is_empty(), "replays dedupe");
+
+        // The tool arm: data:image/* URIs only, kind Tool.
+        let tool_state = json!({ "content": [
+            { "type": "file", "mime": "image/png", "uri": "data:image/png;base64,AAEC", "name": "out.png" },
+            { "type": "file", "mime": "text/plain", "uri": "data:text/plain;base64,aGk=" },
+            { "type": "file", "mime": "image/png", "uri": "file:///tmp/no.txt" },
+        ]});
+        let tool_commits = state.commit_tool_images("prt_1", &tool_state, "msg_a");
+        assert_eq!(tool_commits.len(), 1);
+        assert_eq!(tool_commits[0].kind, CommitKind::Tool, "the ref's kind: tool");
+        assert_eq!(tool_commits[0].text, "out.png");
+        assert_eq!(tool_commits[0].part_id.as_deref(), Some("prt_1:image:0"));
+        assert!(state.commit_tool_images("prt_1", &tool_state, "msg_a").is_empty(), "replays dedupe");
+    }
+
+    /// G-68 (fix #5) — an `ended` WITHOUT the final text preserves the
+    /// committed prefix: a projection's full text (whose covered
+    /// chunks the stream consumed) still lands in the final commit.
+    #[test]
+    fn ended_without_text_preserves_the_projected_prefix() {
+        let mut state = TransportState { session_id: "s1".into(), ..Default::default() };
+        state.project_part("m1", "text", 0, "one two three", true);
+        // The stream re-delivers covered chunks (consumed)...
+        assert_eq!(
+            state.fold(&event(
+                "session.text.delta",
+                &json!({ "sessionID": "s1", "messageID": "m1", "partID": "text:0", "delta": "one two " }),
+            )),
+            Fold::Ignored
+        );
+        // ...and closes with NO final text: the commit carries the
+        // FULL committed (projected) text, not just streamed chunks.
+        let ended = state.fold(&event(
+            "session.text.ended",
+            &json!({ "sessionID": "s1", "messageID": "m1", "partID": "text:0" }),
+        ));
+        match ended {
+            Fold::Commit(commit) => assert_eq!(commit.text, "one two three"),
+            other => panic!("ended folded: {other:?}"),
+        }
+        // The reasoning arm keeps the same guarantee.
+        state.project_part("m1", "reasoning", 0, "think", true);
+        let ended = state.fold(&event(
+            "session.reasoning.ended",
+            &json!({ "sessionID": "s1", "messageID": "m1", "partID": "reasoning:0" }),
+        ));
+        match ended {
+            Fold::Commit(commit) => assert_eq!(commit.text, "think"),
+            other => panic!("reasoning ended folded: {other:?}"),
+        }
     }
 
     #[test]

@@ -161,6 +161,11 @@ pub struct HomeView<'a> {
     /// The blinking block caret offset (`None` = hidden phase / golden
     /// frames).
     pub caret: Option<usize>,
+    /// G-66 — the composer's active selection (the editing engine's
+    /// `selection()`; `None` paints nothing — every golden stays
+    /// byte-exact). The home composer's prompt mount inverts the
+    /// selected cells exactly like the session route's.
+    pub selection: Option<std::ops::Range<usize>>,
     /// The update-notification banner (auditB #10, home.tsx:125-175):
     /// `(prefix, body, remote)` — `None` in every golden state (the
     /// notice is live-only).
@@ -462,6 +467,8 @@ pub fn render_home(store: &Store, theme: &crate::theme::ThemeStyles, size: (u16,
         // NEW-S1a: the caret's char offset — the terminal cursor
         // positions at the computed cell (never a painted block).
         caret: Some(composer.caret()),
+        // G-66 — the active selection (the editing engine's anchor).
+        selection: composer.edit.selection(),
         // Lane TAIL (auditB #10): the update banner (home.tsx:125 —
         // between the logo and the prompt; the golden fixture carries
         // no notice).

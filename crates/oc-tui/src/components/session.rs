@@ -1483,6 +1483,7 @@ fn composer_mount_frame(
         top: prompt_height - mount_height,
         rail,
         caret: None,
+        selection: composer.edit.selection(),
     };
     // #33 — the location label's hit rect (the footer row is the
     // prompt mount's LAST row: pasted at `height - prompt_height`,

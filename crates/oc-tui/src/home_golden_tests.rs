@@ -39,6 +39,7 @@ fn view(draft: &PromptDraft) -> HomeView<'_> {
         autocomplete: None,
         rail: None,
         caret: None,
+        selection: None,
         update: None,
         update_clock_ms: 0,
         update_since_ms: None,

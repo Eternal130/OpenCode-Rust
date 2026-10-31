@@ -306,14 +306,49 @@ pub struct ClipboardContent {
     pub data: String,
 }
 
+/// G-67 — a clipboard read that FAILED (clipboard.ts:27-34's throw
+/// arms): the ref's adapter converts the service's non-`read`
+/// statuses into thrown errors the paste flow surfaces as a toast
+/// (prompt/index.tsx:373-389's `enqueuePaste` catch →
+/// `toast.error(error)`), instead of the silent `None` the statuses
+/// used to collapse into.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClipboardReadError {
+    /// `status: "timed-out"` → `new Error("Clipboard read timed out")`.
+    TimedOut,
+    /// `status: "limit-exceeded"` → `RangeError("Clipboard content
+    /// exceeded configured read or image conversion limits")`.
+    LimitExceeded,
+    /// `status: "failed"` → the service's own error string.
+    Failed(String),
+}
+
+impl ClipboardReadError {
+    /// The thrown error's message (the toast body, verbatim from the
+    /// ref's constructors).
+    #[must_use]
+    pub fn message(&self) -> String {
+        match self {
+            Self::TimedOut => "Clipboard read timed out".to_owned(),
+            Self::LimitExceeded => {
+                "Clipboard content exceeded configured read or image conversion limits".to_owned()
+            }
+            Self::Failed(error) => error.clone(),
+        }
+    }
+}
+
 /// The clipboard READ seam (G-03): `prompt.paste` (ctrl+v) reads
 /// `{preferredTypes: ["image/png", "text/plain"]}` through it;
 /// production layers the host paste tools over the OSC 52 query
 /// window, tests inject fakes (host-clipboard behavior is
 /// untestable in CI).
 pub trait ClipboardSource {
-    /// `None` = no usable content (headless, unsupported, empty).
-    fn read(&self) -> Option<ClipboardContent>;
+    /// `Ok(None)` = no usable content (headless, unsupported, empty);
+    /// `Err(_)` = the read FAILED (G-67 — timed out / over the limit
+    /// / the backend errored), which the paste flow surfaces as a
+    /// toast instead of the silent no-op.
+    fn read(&self) -> Result<Option<ClipboardContent>, ClipboardReadError>;
 }
 
 /// The production host backend: the platform paste tools first
@@ -380,20 +415,29 @@ impl Default for CoreClipboardSource {
 }
 
 impl ClipboardSource for CoreClipboardSource {
-    fn read(&self) -> Option<ClipboardContent> {
+    fn read(&self) -> Result<Option<ClipboardContent>, ClipboardReadError> {
         // ref `preferredTypes` (prompt/index.tsx:474-483): image/png
         // before text/plain.
         let options = ClipboardReadOptions {
             preferred_types: vec!["image/png".to_owned(), "text/plain".to_owned()],
             ..ClipboardReadOptions::default()
         };
-        let mut service = self.service.lock().ok()?;
+        let mut service = self.service.lock().map_err(|_| {
+            ClipboardReadError::Failed("clipboard service lock poisoned".to_owned())
+        })?;
         match service.read(&options) {
-            Ok(ClipboardReadResult::Read(representation)) => Some(ClipboardContent {
+            Ok(ClipboardReadResult::Read(representation)) => Ok(Some(ClipboardContent {
                 mime: representation.mime_type,
                 data: base64_encode::encode(&representation.bytes),
-            }),
-            _ => None,
+            })),
+            // G-67 — the throw arms (clipboard.ts:27-34): failed/
+            // timed-out/limit-exceeded surface as errors (a toast on
+            // paste), NOT the silent `None` they used to collapse to.
+            Ok(ClipboardReadResult::TimedOut) => Err(ClipboardReadError::TimedOut),
+            Ok(ClipboardReadResult::LimitExceeded) => Err(ClipboardReadError::LimitExceeded),
+            Ok(ClipboardReadResult::Failed { error }) => Err(ClipboardReadError::Failed(error)),
+            Ok(_) => Ok(None),
+            Err(error) => Err(ClipboardReadError::Failed(error.to_string())),
         }
     }
 }
@@ -402,11 +446,16 @@ impl ClipboardSource for CoreClipboardSource {
 #[derive(Debug, Default)]
 pub struct FixedClipboardSource {
     pub content: Option<ClipboardContent>,
+    /// G-67 — the injected error (when set, `read` fails with it).
+    pub error: Option<ClipboardReadError>,
 }
 
 impl ClipboardSource for FixedClipboardSource {
-    fn read(&self) -> Option<ClipboardContent> {
-        self.content.clone()
+    fn read(&self) -> Result<Option<ClipboardContent>, ClipboardReadError> {
+        if let Some(error) = &self.error {
+            return Err(error.clone());
+        }
+        Ok(self.content.clone())
     }
 }
 
@@ -517,15 +566,15 @@ mod tests {
         }));
         assert_eq!(
             source.read(),
-            Some(ClipboardContent {
+            Ok(Some(ClipboardContent {
                 mime: "image/png".to_owned(),
                 data: base64_encode::encode(&png)
-            })
+            }))
         );
 
         let empty =
             CoreClipboardSource::with_backend(Box::new(FakeBackend { representation: None }));
-        assert_eq!(empty.read(), None);
+        assert_eq!(empty.read(), Ok(None));
     }
 
     /// The fixed source hands back exactly what was injected (the
@@ -537,11 +586,60 @@ mod tests {
                 mime: "text/plain".to_owned(),
                 data: "aGk=".to_owned(),
             }),
+            error: None,
         };
         assert_eq!(
             source.read(),
-            Some(ClipboardContent { mime: "text/plain".to_owned(), data: "aGk=".to_owned() })
+            Ok(Some(ClipboardContent { mime: "text/plain".to_owned(), data: "aGk=".to_owned() }))
         );
-        assert_eq!(FixedClipboardSource::default().read(), None);
+        assert_eq!(FixedClipboardSource::default().read(), Ok(None));
+    }
+
+    /// G-67 — the throw arms (clipboard.ts:27-34): timed-out /
+    /// limit-exceeded / failed reads surface as errors carrying the
+    /// ref's exact thrown messages, never the silent `None` the
+    /// statuses used to collapse into.
+    #[test]
+    fn error_statuses_surface_as_read_errors() {
+        let mk = |result| CoreClipboardSource::with_backend(Box::new(ScriptedBackend(result)));
+        assert_eq!(mk(ClipboardReadResult::TimedOut).read(), Err(ClipboardReadError::TimedOut));
+        assert_eq!(
+            mk(ClipboardReadResult::LimitExceeded).read(),
+            Err(ClipboardReadError::LimitExceeded)
+        );
+        assert_eq!(
+            mk(ClipboardReadResult::Failed { error: "host tool crashed".to_owned() }).read(),
+            Err(ClipboardReadError::Failed("host tool crashed".to_owned()))
+        );
+        // The ref's exact thrown messages (the toast bodies).
+        assert_eq!(ClipboardReadError::TimedOut.message(), "Clipboard read timed out");
+        assert_eq!(
+            ClipboardReadError::LimitExceeded.message(),
+            "Clipboard content exceeded configured read or image conversion limits"
+        );
+        assert_eq!(
+            ClipboardReadError::Failed("xclip: no display".to_owned()).message(),
+            "xclip: no display"
+        );
+    }
+
+    /// A host backend that returns one scripted read result.
+    struct ScriptedBackend(ClipboardReadResult);
+
+    impl HostClipboardBackend for ScriptedBackend {
+        fn read(&mut self, _options: &HostClipboardReadOptions) -> ClipboardReadResult {
+            self.0.clone()
+        }
+        fn write_text(
+            &mut self,
+            _text: &str,
+            _options: &HostClipboardWriteOptions,
+        ) -> HostClipboardWriteResult {
+            HostClipboardWriteResult::Unsupported
+        }
+        fn clear(&mut self, _options: &HostClipboardWriteOptions) -> HostClipboardClearResult {
+            HostClipboardClearResult::Unsupported
+        }
+        fn dispose(&mut self) {}
     }
 }
