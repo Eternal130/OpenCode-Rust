@@ -15,15 +15,15 @@ pub mod workspace;
 mod tests;
 
 pub use driver::{make_files, CommandSpec, Driver, ProcessOutput, SpawnError, Spawner};
-pub use stdio::{
-    BoxedReader, BoxedWriter, FailingStdioSpawner, LocalStdioSpawner, PipedProcess, StdioSpec,
-    StdioSpawner, StopChild,
-};
 pub use files::{
     type_following, DirEntry, FileInfo, FileType, Files, FilesError, Range, ReadResult,
 };
 pub use local::{make_local_driver, make_local_driver_default, HostSpawner, LocalFiles};
 pub use memory::MemoryDriver;
+pub use stdio::{
+    BoxedReader, BoxedWriter, FailingStdioSpawner, LocalStdioSpawner, PipedProcess, StdioSpawner,
+    StdioSpec, StopChild,
+};
 pub use unavailable::UnavailableSpawner;
 pub use workspace::{
     Binding, DestroyResult, LocalWorkspaceDriver, Registry, WorkspaceDriver, WorkspaceError,

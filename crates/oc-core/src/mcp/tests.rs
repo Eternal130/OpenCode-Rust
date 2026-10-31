@@ -426,8 +426,14 @@ async fn connect_mock_config(
     config: &ServerConfig,
 ) -> Result<client::Connection, client::ConnectFailure> {
     let (transport, _mock) = mock_pair(script);
-    let input =
-        ConnectInput { server: "mock", config, directory: "/tmp", bearer: None, elicitation: None, stdio: None };
+    let input = ConnectInput {
+        server: "mock",
+        config,
+        directory: "/tmp",
+        bearer: None,
+        elicitation: None,
+        stdio: None,
+    };
     client::connect_with_transport(&input, transport, false).await
 }
 
@@ -443,7 +449,7 @@ async fn connect_mock_with(
         directory: "/tmp",
         bearer: None,
         elicitation,
-    stdio: None,
+        stdio: None,
     };
     let connection =
         client::connect_with_transport(&input, transport, false).await.expect("mock connect");
@@ -469,7 +475,7 @@ fn scripted_connector(next: impl FnMut() -> Script + Send + Sync + 'static) -> C
                     directory: &directory,
                     bearer,
                     elicitation,
-                stdio: None,
+                    stdio: None,
                 },
                 transport,
                 false,
@@ -607,7 +613,7 @@ async fn mcp_client_answers_roots_list_with_location_directory() {
         directory: "/repo space",
         bearer: None,
         elicitation: None,
-    stdio: None,
+        stdio: None,
     };
     let connection =
         client::connect_with_transport(&input, transport, false).await.expect("connect");
@@ -642,7 +648,7 @@ async fn mcp_client_classifies_session_expiry_once() {
         directory: "/tmp",
         bearer: None,
         elicitation: None,
-    stdio: None,
+        stdio: None,
     };
     // Remote classification requires remote=true.
     let connection =
@@ -1266,7 +1272,7 @@ async fn mcp_registry_passes_elicitation_handler_to_connector() {
                     directory: &directory,
                     bearer,
                     elicitation,
-                stdio: None,
+                    stdio: None,
                 },
                 transport,
                 false,
@@ -1470,7 +1476,7 @@ async fn mcp_registry_reconciles_only_changed_servers() {
                     directory: &directory,
                     bearer,
                     elicitation,
-                stdio: None,
+                    stdio: None,
                 },
                 transport,
                 false,
@@ -1531,7 +1537,7 @@ async fn mcp_registry_recovers_and_replays_after_session_expiry() {
                     directory: &directory,
                     bearer,
                     elicitation,
-                stdio: None,
+                    stdio: None,
                 },
                 transport,
                 true,
@@ -1580,7 +1586,7 @@ async fn mcp_registry_watch_tools_changed_refreshes_catalog() {
                     directory: &directory,
                     bearer,
                     elicitation,
-                stdio: None,
+                    stdio: None,
                 },
                 transport,
                 false,
@@ -2028,7 +2034,8 @@ fn mcp_elicitation_field_conversion_rules() {
 /// is layered on for `opencode` commands, and the server config's
 /// `environment` overrides host values on collision.
 mod stdio_environment {
-    use super::client::stdio_environment;    use std::collections::BTreeMap;
+    use super::client::stdio_environment;
+    use std::collections::BTreeMap;
 
     fn host() -> Vec<(String, String)> {
         vec![
@@ -2095,7 +2102,7 @@ mod stdio_environment {
 mod stdio_environment_seam {
     use super::*;
     use crate::environment::stdio::{
-        LocalStdioSpawner, PipedProcess, StdioSpec, StdioSpawner, StopChild,
+        LocalStdioSpawner, PipedProcess, StdioSpawner, StdioSpec, StopChild,
     };
     use std::sync::Mutex;
 
@@ -2123,10 +2130,7 @@ mod stdio_environment_seam {
         let config = ServerConfig::Local(Box::new(LocalConfig {
             command: vec!["opencode".to_string(), "mcp".to_string(), "serve".to_string()],
             cwd: Some("sub".to_string()),
-            environment: Some(BTreeMap::from([(
-                "MCP_VAR".to_string(),
-                "set".to_string(),
-            )])),
+            environment: Some(BTreeMap::from([("MCP_VAR".to_string(), "set".to_string())])),
             disabled: None,
             codemode: None,
             timeout: None,
