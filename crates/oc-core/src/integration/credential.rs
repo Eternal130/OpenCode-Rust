@@ -332,6 +332,8 @@ impl CredentialStore {
                     tx.conn().query_row(ACTIVE_PICK_SQL, (&integration,), |row| row.get(0)).ok();
                 tx.execute("DELETE FROM credential WHERE id = ?1", [&id])?;
                 if active.as_deref() != Some(id.as_str()) {
+                    // credential.ts:268-269 — not the picked-active row:
+                    // `{switched:false}` → only `credential.updated`.
                     return Ok(Some((Some(integration), None)));
                 }
                 let replacement: Option<String> = tx
@@ -345,13 +347,16 @@ impl CredentialStore {
                 if let Some(replacement) = &replacement {
                     tx.execute("UPDATE credential SET active = 1 WHERE id = ?1", [replacement])?;
                 }
-                Ok(Some((Some(integration), replacement)))
+                // Active row removed → switched, replacement id or null.
+                Ok(Some((Some(integration), Some(replacement))))
             })
             .await
             .map_err(|error| StoreError::Database(error.to_string()))?;
-        if let Some((integration, replacement)) = removed {
+        if let Some((integration, switched)) = removed {
             self.publish(registry::CREDENTIAL_UPDATED, json!({})).await;
-            if let Some(integration) = integration {
+            // credential.ts:314-319 — `credential.switched` only when the
+            // removed credential WAS active (`{switched:true}`).
+            if let (Some(integration), Some(replacement)) = (integration, switched) {
                 self.publish(
                     registry::CREDENTIAL_SWITCHED,
                     json!({ "integrationID": integration, "credentialID": replacement }),

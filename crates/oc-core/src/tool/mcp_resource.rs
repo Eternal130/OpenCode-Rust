@@ -206,11 +206,15 @@ impl ToolExecute for ListMcpResourcesTool {
         let output = list_resources(&self.registry, &self.permission, server, context).await?;
         let mut metadata = oc_schema::common::Record::default();
         metadata.insert("mcp.output".into(), output.clone());
-        // TOOL-D1: the declared output is the resource catalog
-        // (mcp-resource.ts:27,45-46); the metadata stash stays for wire
-        // compatibility.
+        // TOOL-D1 + G-60: the declared output is the resource catalog
+        // (mcp-resource.ts:27,45-46); normalizeContent stringifies the
+        // output when no explicit content parts exist (runtime.ts:57) —
+        // the tool's text IS the full catalog JSON, not a placeholder.
+        // The metadata stash stays for wire compatibility.
         Ok(ToolRunResult {
-            content: vec![Content::Text { text: "Listed MCP resources".to_string() }],
+            content: vec![Content::Text {
+                text: serde_json::to_string(&output).unwrap_or_default(),
+            }],
             metadata: Some(metadata),
             output: Some(output),
         })
@@ -388,6 +392,27 @@ mod tests {
             ),
             other => panic!("expected error failure, got {other:?}"),
         }
+    }
+
+    /// G-60 — normalizeContent (runtime.ts:57): with no explicit content
+    /// parts, the tool's text IS the stringified catalog (full JSON, not
+    /// a placeholder).
+    #[tokio::test]
+    async fn list_mcp_resources_content_is_the_catalog_json() {
+        let (registry, permission) = fixture().await;
+        let session = SessionId::parse("ses_1").expect("session");
+        let tool = ListMcpResourcesTool { registry, permission };
+        let result = tool
+            .execute_with_context(&serde_json::json!({}), &context(&session))
+            .await
+            .expect("list");
+        let [Content::Text { text }] = &result.content[..] else {
+            panic!("expected one text part: {:?}", result.content)
+        };
+        let output = result.output.as_ref().expect("output");
+        assert_eq!(text, &serde_json::to_string(output).unwrap(), "text = compact catalog JSON");
+        let catalog: serde_json::Value = serde_json::from_str(text).expect("valid JSON text");
+        assert!(catalog.get("resources").is_some() && catalog.get("templates").is_some());
     }
 
     #[tokio::test]

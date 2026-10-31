@@ -257,13 +257,24 @@ impl Frontend {
         data: &str,
         attachment_id: Option<&str>,
     ) -> PubResult<()> {
+        self.write_bytes(id, data.as_bytes(), attachment_id).await
+    }
+
+    /// `write` with raw bytes — non-framed WS binary input is forwarded
+    /// byte-for-byte (persistent-pty.ts:203-216).
+    pub async fn write_bytes(
+        &self,
+        id: &PtyId,
+        data: &[u8],
+        attachment_id: Option<&str>,
+    ) -> PubResult<()> {
         match &self.backend {
-            Backend::InProcess(machine) => machine.write(id, data, attachment_id).await,
+            Backend::InProcess(machine) => machine.write_bytes(id, data, attachment_id).await,
             Backend::Daemon(transport) => {
                 let request = WireRequest::Write {
                     id: terminal_number(id)?,
                     attachment_id: attachment_id.map(str::to_owned),
-                    data_base64: super::base64_encode(data.as_bytes()),
+                    data_base64: super::base64_encode(data),
                 };
                 expect_ok(transport.request(request, false).await)
             }

@@ -68,6 +68,17 @@ impl Sandbox {
 async fn engine_session_port_covers_the_v2_domain() {
     let box_ = sandbox("domain");
     box_.redirect_env();
+    // A real git checkout: project identity is VCS-derived (root commit),
+    // distinct from the non-VCS `directory:<path>` fallback hash — that
+    // distinction is what G-58 pins.
+    for args in [
+        vec!["init", "-q"],
+        vec!["config", "user.email", "t@t"],
+        vec!["config", "user.name", "t"],
+        vec!["commit", "-q", "--allow-empty", "-m", "init"],
+    ] {
+        std::process::Command::new("git").args(&args).current_dir(&box_.project).status().expect("git");
+    }
     let handle = boot_and_serve(&box_.options()).await.expect("boot and serve");
     let location = oc_core::location::LocationRef::new(box_.project.clone(), None);
     let port = EngineSessionPort {
@@ -83,6 +94,56 @@ async fn engine_session_port_covers_the_v2_domain() {
         .expect("session.create routes to the engine");
     let session_id = created["id"].as_str().expect("created id").to_owned();
     assert_eq!(created["title"], json!("plugin-made"));
+    // G-58 — ref session.ts:271: create resolves the location's project
+    // unconditionally; the projected row carries that project id (not
+    // the directory-hash fallback of a bare `CreateInput::default()`).
+    {
+        let query_id = session_id.clone();
+        let stored: Option<(String, Option<String>)> = handle
+            .state
+            .engine
+            .db
+            .transaction(move |tx| {
+                let row: Option<String> = tx
+                    .conn()
+                    .query_row(
+                        "SELECT project_id FROM session_v2 WHERE id = ?1",
+                        [&query_id],
+                        |row| row.get(0),
+                    )
+                    .ok();
+                let out = row.map(|project_id| {
+                    let worktree: Option<String> = tx
+                        .conn()
+                        .query_row(
+                            "SELECT worktree FROM project WHERE id = ?1",
+                            [&project_id],
+                            |row| row.get(0),
+                        )
+                        .ok();
+                    (project_id, worktree)
+                });
+                Ok(out)
+            })
+            .await
+            .expect("db read");
+        let Some((project_id, worktree)) = stored else {
+            panic!("session row must carry the resolved project id");
+        };
+        let fallback = oc_core::project::hash_fast(&format!(
+            "directory:{}",
+            std::fs::canonicalize(&box_.project).expect("canonicalize").display()
+        ));
+        assert_ne!(
+            project_id, fallback,
+            "git checkout must use VCS identity, not the directory-hash fallback"
+        );
+        assert!(
+            worktree.as_deref().is_some_and(|dir| std::path::Path::new(dir)
+                .starts_with(std::path::Path::new(&box_.project))),
+            "project {project_id} should map to a worktree under the sandbox: {worktree:?} vs {:?}", box_.project
+        );
+    }
 
     // get.
     let fetched = port.invoke("get", &json!({ "sessionID": session_id })).await.expect("get");

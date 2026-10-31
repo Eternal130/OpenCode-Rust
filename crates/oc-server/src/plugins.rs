@@ -1306,6 +1306,17 @@ impl EngineSessionPort {
                                 workspace_id: None,
                             }),
                             version: "2.0.24".to_owned(),
+                            // ref session.ts:271 — unconditional
+                            // `projects.resolve`: the caller-resolved
+                            // project for the location (identity by
+                            // project id, not the directory-hash
+                            // fallback).
+                            project: Some(oc_core::session::ResolvedProject {
+                                id: services.project.id.clone(),
+                                directory: services.project.canonical
+                                    .to_string_lossy()
+                                    .into_owned(),
+                            }),
                             ..oc_core::session::store::CreateInput::default()
                         },
                     )
