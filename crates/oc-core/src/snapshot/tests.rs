@@ -562,7 +562,6 @@ async fn snapshot_store_id_is_stable_across_symlinked_worktree_paths() {
     assert_eq!(via_real.git_directory(), via_alias.git_directory());
 }
 
-
 // `opencode.gitconfig` + `-c core.quotepath=false`): the host's global
 // `~/.gitconfig` (e.g. `autocrlf = true`) must never affect snapshot
 // diffing, and non-ASCII paths must round-trip raw.

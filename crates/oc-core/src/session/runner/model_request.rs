@@ -1594,17 +1594,13 @@ mod aisdk_dispatch_tests {
                 .register_aisdk_language(
                     fn_hook(|event: &mut crate::hooks::AisdkLanguageEvent| {
                         let route = oc_ai::test_support::echo_route(Arc::new(
-                            oc_ai::route::transport::FailingTransport {
-                                message: "never sent",
-                            },
+                            oc_ai::route::transport::FailingTransport { message: "never sent" },
                         ));
-                        let replacement =
-                            route.model("replaced-model", Some("parityfake".into()))
-                                .expect("replacement model");
+                        let replacement = route
+                            .model("replaced-model", Some("parityfake".into()))
+                            .expect("replacement model");
                         event.language = Some(replacement);
-                        event
-                            .options
-                            .insert("endpoint".into(), serde_json::json!("responses"));
+                        event.options.insert("endpoint".into(), serde_json::json!("responses"));
                         Ok(())
                     }),
                     crate::hooks::HookOptions::default(),

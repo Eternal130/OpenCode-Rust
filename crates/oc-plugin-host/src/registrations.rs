@@ -600,8 +600,10 @@ impl Registrations {
                 || incoming.iter().any(|(id, _)| id == provider.id.as_str())
         });
         for (id, definition) in incoming {
-            let provenance =
-                self.providers.get(&id).map_or_else(|| plugin_id.to_owned(), |p| p.plugin_id.clone());
+            let provenance = self
+                .providers
+                .get(&id)
+                .map_or_else(|| plugin_id.to_owned(), |p| p.plugin_id.clone());
             self.providers
                 .insert(id.clone(), PluginProviderDef { plugin_id: provenance, id, definition });
         }
@@ -627,10 +629,8 @@ impl Registrations {
                 .references
                 .get(&name)
                 .map_or_else(|| plugin_id.to_owned(), |r| r.plugin_id.clone());
-            self.references.insert(
-                name.clone(),
-                PluginReferenceDef { plugin_id: provenance, name, source },
-            );
+            self.references
+                .insert(name.clone(), PluginReferenceDef { plugin_id: provenance, name, source });
         }
     }
 
@@ -647,7 +647,8 @@ impl Registrations {
             })
             .collect();
         self.vcs_providers.retain(|_, provider| {
-            provider.plugin_id != plugin_id || incoming.iter().any(|(id, _)| id == provider.id.as_str())
+            provider.plugin_id != plugin_id
+                || incoming.iter().any(|(id, _)| id == provider.id.as_str())
         });
         for (id, name) in incoming {
             self.vcs_providers.insert(

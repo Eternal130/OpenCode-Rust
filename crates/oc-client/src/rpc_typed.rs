@@ -11,8 +11,8 @@
 //! drops it, and bounded to a generic wrapper rather than codegen of
 //! all 141 RPC method definitions.
 
-use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde::Serialize;
 
 use crate::error::ClientError;
 

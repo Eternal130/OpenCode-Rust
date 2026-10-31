@@ -1366,17 +1366,14 @@ mod tests {
         // The credential-side change the reload must pick up: a
         // wellknown document (what a credential switch / wellknown
         // refresh produces) enters the host snapshot, then the event.
-        handle
-            .state
-            .engine
-            .integration
-            .wellknown_documents()
-            .push_for_test(vec![oc_core::config::WellknownDocument {
+        handle.state.engine.integration.wellknown_documents().push_for_test(vec![
+            oc_core::config::WellknownDocument {
                 source: "https://example.com".to_owned(),
                 dir: project.clone(),
                 text: r#"{"username": "wellknown"}"#.to_owned(),
                 env: std::collections::BTreeMap::new(),
-            }]);
+            },
+        ]);
         // The simulated credential switch.
         let definition =
             oc_core::bus::registry::by_type(oc_core::bus::registry::CREDENTIAL_SWITCHED)

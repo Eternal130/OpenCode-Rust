@@ -1383,7 +1383,9 @@ impl EngineSessionPort {
                             // fallback).
                             project: Some(oc_core::session::ResolvedProject {
                                 id: services.project.id.clone(),
-                                directory: services.project.canonical
+                                directory: services
+                                    .project
+                                    .canonical
                                     .to_string_lossy()
                                     .into_owned(),
                             }),
@@ -2077,16 +2079,12 @@ impl oc_plugin_host::WebsearchPort for EngineWebsearchPort {
         let services =
             self.engine.location(self.location.clone()).await.map_err(|e| e.to_string())?;
         let parsed = match &selection {
-            Value::String(id) if id == "random" => {
-                oc_core::tool::websearch::Selection::Random
-            }
+            Value::String(id) if id == "random" => oc_core::tool::websearch::Selection::Random,
             Value::Bool(false) => oc_core::tool::websearch::Selection::Disabled,
-            Value::String(id) => {
-                oc_core::tool::websearch::Selection::Provider(id.clone())
-            }
-            other => {
-                return Err(format!("websearch default selection must be a provider id, \"random\", or false: {other}"))
-            }
+            Value::String(id) => oc_core::tool::websearch::Selection::Provider(id.clone()),
+            other => return Err(format!(
+                "websearch default selection must be a provider id, \"random\", or false: {other}"
+            )),
         };
         services.websearch.select(&parsed).await;
         Ok(())
@@ -2262,10 +2260,7 @@ impl oc_plugin_host::ProviderPort for EngineProviderPort {
 
     async fn get(&self, id: &str) -> Result<Value, String> {
         let catalog = self.engine.catalog_service.get();
-        Ok(catalog
-            .provider(id)
-            .map(Self::snapshot_json)
-            .unwrap_or(Value::Null))
+        Ok(catalog.provider(id).map(Self::snapshot_json).unwrap_or(Value::Null))
     }
 
     async fn reload(&self) -> Result<(), String> {
@@ -2328,12 +2323,14 @@ impl oc_plugin_host::ReferencePort for EngineReferencePort {
                 .references
                 .list()
                 .into_iter()
-                .map(|info| serde_json::json!({
-                    "name": info.name,
-                    "path": info.path.display().to_string(),
-                    "description": info.description,
-                    "hidden": info.hidden,
-                }))
+                .map(|info| {
+                    serde_json::json!({
+                        "name": info.name,
+                        "path": info.path.display().to_string(),
+                        "description": info.description,
+                        "hidden": info.hidden,
+                    })
+                })
                 .collect::<Vec<_>>(),
         )
         .unwrap_or(Value::Null))
@@ -2373,11 +2370,9 @@ impl oc_plugin_host::ReferencePort for EngineReferenceSlot {
 
 impl EngineReferenceSlot {
     fn port(&self) -> Result<Arc<EngineReferencePort>, String> {
-        self.0
-            .read()
-            .expect("reference slot poisoned")
-            .clone()
-            .ok_or_else(|| "reference: the engine is not attached to the plugin host yet".to_owned())
+        self.0.read().expect("reference slot poisoned").clone().ok_or_else(|| {
+            "reference: the engine is not attached to the plugin host yet".to_owned()
+        })
     }
 }
 
@@ -2391,13 +2386,8 @@ pub struct EngineTerminalPort {
 #[async_trait]
 impl oc_plugin_host::TerminalPort for EngineTerminalPort {
     async fn read(&self, session_id: &str, lines: Option<u32>) -> Result<Value, String> {
-        let session_id =
-            oc_schema::id::SessionId::parse(session_id).map_err(|e| e.to_string())?;
-        let result = self
-            .pty
-            .read(&session_id, lines)
-            .await
-            .map_err(|error| error.to_string())?;
+        let session_id = oc_schema::id::SessionId::parse(session_id).map_err(|e| e.to_string())?;
+        let result = self.pty.read(&session_id, lines).await.map_err(|error| error.to_string())?;
         Ok(result
             .map(|read| {
                 serde_json::json!({
@@ -2435,14 +2425,10 @@ impl oc_plugin_host::TerminalPort for EngineTerminalSlot {
 
 impl EngineTerminalSlot {
     fn port(&self) -> Result<Arc<EngineTerminalPort>, String> {
-        self.0
-            .read()
-            .expect("terminal slot poisoned")
-            .clone()
-            .ok_or_else(|| {
-                "experimental.terminal: the terminal service is not attached to the plugin host yet"
-                    .to_owned()
-            })
+        self.0.read().expect("terminal slot poisoned").clone().ok_or_else(|| {
+            "experimental.terminal: the terminal service is not attached to the plugin host yet"
+                .to_owned()
+        })
     }
 }
 
@@ -2456,17 +2442,16 @@ pub struct EngineIntegrationPort {
 #[async_trait]
 impl oc_plugin_host::IntegrationPort for EngineIntegrationPort {
     async fn call(&self, method: &str, args: &Value) -> Result<Value, String> {
-        use oc_core::integration::types::{ConnectionInfo, ConnectionStatus, IntegrationError, FormAnswer};
-        let host = self.engine.integration.clone();
-        let field = |key: &str| {
-            args.get(key).and_then(Value::as_str).unwrap_or_default().to_owned()
+        use oc_core::integration::types::{
+            ConnectionInfo, ConnectionStatus, FormAnswer, IntegrationError,
         };
+        let host = self.engine.integration.clone();
+        let field =
+            |key: &str| args.get(key).and_then(Value::as_str).unwrap_or_default().to_owned();
         let answer: FormAnswer = args
             .get("answer")
             .and_then(Value::as_object)
-            .map(|answer| {
-                answer.iter().map(|(key, value)| (key.clone(), value.clone())).collect()
-            })
+            .map(|answer| answer.iter().map(|(key, value)| (key.clone(), value.clone())).collect())
             .unwrap_or_default();
         let label = args.get("label").and_then(Value::as_str).map(str::to_owned);
         let err = |error: IntegrationError| error.to_string();
@@ -2498,7 +2483,9 @@ impl oc_plugin_host::IntegrationPort for EngineIntegrationPort {
                 let integration_id = field("integrationID");
                 let method_id = field("methodID");
                 if integration_id.is_empty() || method_id.is_empty() {
-                    return Err("integration.oauth.connect requires integrationID and methodID".into());
+                    return Err(
+                        "integration.oauth.connect requires integrationID and methodID".into()
+                    );
                 }
                 let attempt = host
                     .oauth_connect(&integration_id, &method_id, &answer, label.as_deref())

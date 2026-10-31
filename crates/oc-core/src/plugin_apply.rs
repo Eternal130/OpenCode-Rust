@@ -450,8 +450,7 @@ pub fn apply_plugin_providers(
         // apiKey-only entries (no baseURL): the connection overlay.
         if custom.base_url.is_empty() {
             if let Some(api_key) = custom.api_key.clone() {
-                let entry =
-                    overlay.connections.entry(custom.id.clone()).or_default();
+                let entry = overlay.connections.entry(custom.id.clone()).or_default();
                 entry.api_key = Some(api_key);
             }
             continue;
@@ -467,7 +466,10 @@ pub fn apply_plugin_providers(
 /// `baseURL` and no `apiKey`). The model map folds into
 /// [`facade::CustomModel`]s; unknown fields are ignored (the editor's
 /// JSON is the ref's provider definition shape).
-fn custom_provider_from_def(id: &str, definition: &Value) -> Option<crate::provider_catalog::facade::CustomProvider> {
+fn custom_provider_from_def(
+    id: &str,
+    definition: &Value,
+) -> Option<crate::provider_catalog::facade::CustomProvider> {
     use crate::provider_catalog::facade::{CustomModel, CustomProvider};
     let str_field = |key: &str| {
         definition
@@ -557,9 +559,7 @@ fn custom_provider_from_def(id: &str, definition: &Value) -> Option<crate::provi
         headers: definition
             .get("headers")
             .and_then(|value| serde_json::from_value(value.clone()).ok()),
-        body: definition
-            .get("body")
-            .and_then(|value| serde_json::from_value(value.clone()).ok()),
+        body: definition.get("body").and_then(|value| serde_json::from_value(value.clone()).ok()),
         canonical: None,
         package: None,
         models,

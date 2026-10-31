@@ -55,8 +55,8 @@
 
 use std::time::Duration;
 
-use oc_client::Client;
 use oc_client::types::SessionMessageInfo;
+use oc_client::Client;
 use serde_json::Value;
 
 /// Connection state for the status line / reconnect overlay.
@@ -317,9 +317,8 @@ pub trait ResyncSource: Send {
     fn fetch_forms(
         &self,
         session_id: &str,
-    ) -> impl std::future::Future<
-        Output = Result<Vec<crate::components::footer::FormRequest>, String>,
-    > + Send;
+    ) -> impl std::future::Future<Output = Result<Vec<crate::components::footer::FormRequest>, String>>
+           + Send;
 }
 
 /// The reconnect resync's blocker fetch set (RUNTIME-TD04): every OPEN

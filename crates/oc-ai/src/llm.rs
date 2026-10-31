@@ -24,7 +24,8 @@ use crate::schema::{
 pub const GENERATE_OBJECT_TOOL_NAME: &str = "generate_object";
 
 /// The synthetic tool description (ref `GENERATE_OBJECT_TOOL_DESCRIPTION`).
-pub const GENERATE_OBJECT_TOOL_DESCRIPTION: &str = "Return the structured result by calling this tool.";
+pub const GENERATE_OBJECT_TOOL_DESCRIPTION: &str =
+    "Return the structured result by calling this tool.";
 
 /// Result of [`generate_object`] (port of `GenerateObjectResponse<T>`; the
 /// Rust object is the raw decoded `serde_json::Value`).
@@ -135,21 +136,18 @@ fn validate_json_schema(value: &Value, schema: &Value, path: &str) -> Result<(),
                 for name in required {
                     if let Some(name) = name.as_str() {
                         if !object.contains_key(name) {
-                            return Err(format!("{}: missing required property `{name}`", at(path)));
+                            return Err(format!(
+                                "{}: missing required property `{name}`",
+                                at(path)
+                            ));
                         }
                     }
                 }
             }
-            if let (Some(properties), Value::Object(object)) =
-                (schema.get("properties"), value)
-            {
+            if let (Some(properties), Value::Object(object)) = (schema.get("properties"), value) {
                 for (name, property_schema) in properties.as_object().into_iter().flatten() {
                     if let Some(property) = object.get(name) {
-                        validate_json_schema(
-                            property,
-                            property_schema,
-                            &format!("{path}/{name}"),
-                        )?;
+                        validate_json_schema(property, property_schema, &format!("{path}/{name}"))?;
                     }
                 }
             }
@@ -179,20 +177,13 @@ fn check_type(value: &Value, types: &Value, path: &str) -> Result<(), String> {
     };
     let ok = match types {
         Value::String(name) => matches(name),
-        Value::Array(names) => names.iter().any(|name| {
-            name.as_str().is_none_or(matches)
-        }),
+        Value::Array(names) => names.iter().any(|name| name.as_str().is_none_or(matches)),
         _ => true,
     };
     if ok {
         Ok(())
     } else {
-        Err(format!(
-            "{}: expected type {} but found {}",
-            at(path),
-            types,
-            json_type(value)
-        ))
+        Err(format!("{}: expected type {} but found {}", at(path), types, json_type(value)))
     }
 }
 
@@ -299,18 +290,12 @@ mod tests {
             Ok((state, events))
         }
 
-        fn on_halt(
-            &self,
-            state: ProtocolState,
-        ) -> Result<(ProtocolState, Vec<LLMEvent>), AiError> {
+        fn on_halt(&self, state: ProtocolState) -> Result<(ProtocolState, Vec<LLMEvent>), AiError> {
             Ok((state, Vec::new()))
         }
     }
 
-    fn tool_call_route(
-        tool_name: &str,
-        tool_input: Value,
-    ) -> (Arc<MockTransport>, Route) {
+    fn tool_call_route(tool_name: &str, tool_input: Value) -> (Arc<MockTransport>, Route) {
         let transport = Arc::new(MockTransport::from_interactions(vec![RecordedInteraction {
             method: "POST".into(),
             url: "https://tool.test/call".into(),
@@ -322,10 +307,7 @@ mod tests {
             id: "tool-call".into(),
             provider: Some("test".into()),
             provider_metadata_key: None,
-            protocol: Arc::new(ToolCallProtocol {
-                tool_name: tool_name.into(),
-                tool_input,
-            }),
+            protocol: Arc::new(ToolCallProtocol { tool_name: tool_name.into(), tool_input }),
             endpoint: Endpoint::path("/call").with_base_url("https://tool.test"),
             auth: None,
             framing: Framing::sse(),
@@ -368,8 +350,7 @@ mod tests {
 
     #[tokio::test]
     async fn forces_the_generate_object_tool_on_the_wire() {
-        let (transport, route) =
-            tool_call_route("generate_object", json!({ "name": "Ada" }));
+        let (transport, route) = tool_call_route("generate_object", json!({ "name": "Ada" }));
         generate_object(object_request(&route), person_schema()).await.unwrap();
         let sent: Value = serde_json::from_slice(&transport.requests()[0].body).unwrap();
         // tools are replaced with exactly the forced synthetic tool…
@@ -410,7 +391,8 @@ mod tests {
     async fn schema_decode_failure_fails_with_invalid_provider_output() {
         // tool called, but input misses the required `name`
         let (_transport, route) =
-            tool_call_route("generate_object", json!({ "age": "not a number" }));        let error = generate_object(object_request(&route), person_schema())
+            tool_call_route("generate_object", json!({ "age": "not a number" }));
+        let error = generate_object(object_request(&route), person_schema())
             .await
             .expect_err("input violates the schema");
         match error.reason {

@@ -151,10 +151,7 @@ fn g64_domains_register_and_round_trip() {
     // -- setup-time port reads answered (the sandbox files) ------------
     let providers = read("provider-list.json");
     assert!(providers.contains("mockprov"), "provider.list crossed the port: {providers}");
-    assert!(
-        read("provider-get.json").contains("Mock Provider"),
-        "provider.get crossed the port"
-    );
+    assert!(read("provider-get.json").contains("Mock Provider"), "provider.get crossed the port");
     let references = read("reference-list.json");
     assert!(references.contains("mockdocs"), "reference.list crossed the port: {references}");
     let terminal = read("terminal-read.json");
@@ -163,10 +160,7 @@ fn g64_domains_register_and_round_trip() {
         "experimental.terminal.read crossed the port: {terminal}"
     );
     let integrations = read("integration-list.json");
-    assert!(
-        integrations.contains("mockint"),
-        "integration.list crossed the port: {integrations}"
-    );
+    assert!(integrations.contains("mockint"), "integration.list crossed the port: {integrations}");
     let active = read("connection-active.json");
     assert!(
         active.contains("credential"),
@@ -200,23 +194,23 @@ fn g64_domains_register_and_round_trip() {
     // -- the websearch editor default persisted + read back -------------
     let default = read("websearch-default.json");
     assert_eq!(
-        default.trim(), "mocksearch",
+        default.trim(),
+        "mocksearch",
         "editor.default.set persisted and get round-tripped: {default}"
     );
 
     // -- the provider definition crossed with its models ---------------
-    let plugprov = snapshot
-        .providers
-        .iter()
-        .find(|def| def.id == "plugprov")
-        .expect("plugprov registered");
+    let plugprov =
+        snapshot.providers.iter().find(|def| def.id == "plugprov").expect("plugprov registered");
     assert_eq!(
-        plugprov.definition["baseURL"], json!("https://plug.invalid/v1"),
+        plugprov.definition["baseURL"],
+        json!("https://plug.invalid/v1"),
         "provider definition rode whole: {}",
         plugprov.definition
     );
     assert_eq!(
-        plugprov.definition["models"]["plug-mini"]["name"], json!("Plug Mini"),
+        plugprov.definition["models"]["plug-mini"]["name"],
+        json!("Plug Mini"),
         "the models sub-editor landed: {}",
         plugprov.definition
     );

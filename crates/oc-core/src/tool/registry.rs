@@ -186,8 +186,7 @@ fn validate(
         }
     }
     if let Some(list) = object.get("oneOf").and_then(|v| v.as_array()) {
-        let matches =
-            list.iter().filter(|sub| schema_matches(sub, root, value, depth)).count();
+        let matches = list.iter().filter(|sub| schema_matches(sub, root, value, depth)).count();
         if matches != 1 {
             issues.push(Issue {
                 path: if path.is_empty() { "root".to_string() } else { path.to_string() },
@@ -323,7 +322,14 @@ fn validate(
             for (key, field) in fields {
                 match properties.and_then(|props| props.get(key)) {
                     Some(field_schema) => {
-                        validate(field_schema, root, field, &join_path(path, key), issues, depth + 1);
+                        validate(
+                            field_schema,
+                            root,
+                            field,
+                            &join_path(path, key),
+                            issues,
+                            depth + 1,
+                        );
                     }
                     None => match additional {
                         // `false` → extra properties are rejected.
@@ -373,7 +379,14 @@ fn validate(
             }
             if let Some(item_schema) = object.get("items") {
                 for (index, item) in items.iter().enumerate() {
-                    validate(item_schema, root, item, &format!("{path}[{index}]"), issues, depth + 1);
+                    validate(
+                        item_schema,
+                        root,
+                        item,
+                        &format!("{path}[{index}]"),
+                        issues,
+                        depth + 1,
+                    );
                 }
             }
         }
@@ -807,7 +820,9 @@ mod tests {
         assert_eq!(issues[0].message, "must match exactly one schema in oneOf");
         // Matches neither.
         let issues = validate_input(&schema, &json!({ "c": true }));
-        assert!(issues.iter().any(|issue| issue.message == "must match exactly one schema in oneOf"));
+        assert!(issues
+            .iter()
+            .any(|issue| issue.message == "must match exactly one schema in oneOf"));
     }
 
     #[test]

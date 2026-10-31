@@ -73,7 +73,10 @@ async fn create_session(client: &Client) -> String {
 /// admission-path dispatch consults) — resolved through the session
 /// ROW's directory like the server's session-location middleware, not
 /// the caller's cwd spelling.
-async fn location_services(server: &TestServer, session_id: &str) -> Arc<oc_core::engine::LocationServices> {
+async fn location_services(
+    server: &TestServer,
+    session_id: &str,
+) -> Arc<oc_core::engine::LocationServices> {
     let store = oc_core::session::store::SessionStore::new((*server.state.engine.db).clone());
     let row = store.get(session_id).await.expect("session row").expect("row exists");
     let location =
@@ -116,12 +119,9 @@ async fn failing_hook_rejects_submit_without_admitting_a_row() {
         )
         .await;
 
-    let response = prompt_raw(
-        server.addr,
-        &session_id,
-        &serde_json::json!({ "text": "hi", "resume": false }),
-    )
-    .await;
+    let response =
+        prompt_raw(server.addr, &session_id, &serde_json::json!({ "text": "hi", "resume": false }))
+            .await;
     assert_eq!(response.status, 500, "hook failure must reject the submit");
     assert_eq!(response.json()["_tag"], "UnknownError", "body: {}", response.text());
 
@@ -195,7 +195,6 @@ async fn unknown_skill_rejects_submit_with_400() {
     assert!(inbox.is_empty(), "no inbox row may be admitted for a rejected prompt");
 }
 
-
 // AUD-18: ref rejects a malformed sessionID path parameter with 400
 // BEFORE any table lookup. Two layers fire, same as ref: the schema
 // layer decodes the param (`params: { sessionID: Session.ID }`,
@@ -209,15 +208,9 @@ async fn unknown_skill_rejects_submit_with_400() {
 async fn malformed_session_id_is_400_not_404() {
     let server = boot().await;
 
-    let response = support::request(
-        server.addr,
-        "GET",
-        "/api/session/not-a-session-id",
-        &[],
-        b"",
-    )
-    .await
-    .expect("raw get");
+    let response = support::request(server.addr, "GET", "/api/session/not-a-session-id", &[], b"")
+        .await
+        .expect("raw get");
     assert_eq!(response.status, 400, "body: {}", response.text());
     let body = response.json();
     assert_eq!(body["_tag"], "InvalidRequestError", "body: {body}");
@@ -273,7 +266,8 @@ async fn duplicate_id_retry_does_not_refire_the_prompt_hook() {
         "the hook fires exactly once for a retried duplicate id"
     );
     assert_eq!(
-        first.json()["data"]["id"], second.json()["data"]["id"],
+        first.json()["data"]["id"],
+        second.json()["data"]["id"],
         "the retry answers from the existing inbox row"
     );
 }

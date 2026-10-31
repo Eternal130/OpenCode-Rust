@@ -3122,19 +3122,14 @@ impl CommandDispatcher for StoreDispatcher {
             // plugins list, enter copies/investigates — the dialog's
             // own action layer). A no-op when no row failed.
             "dialog.plugins.error" => {
-                let failed: Vec<_> = store
-                    .server_plugins()
-                    .into_iter()
-                    .filter(|row| row.error.is_some())
-                    .collect();
+                let failed: Vec<_> =
+                    store.server_plugins().into_iter().filter(|row| row.error.is_some()).collect();
                 if failed.is_empty() {
                     Dispatch::Handled
                 } else {
                     let body = failed
                         .iter()
-                        .map(|row| {
-                            format!("{}: {}", row.id, row.error.clone().unwrap_or_default())
-                        })
+                        .map(|row| format!("{}: {}", row.id, row.error.clone().unwrap_or_default()))
                         .collect::<Vec<_>>()
                         .join("\n\n");
                     let targets =
@@ -3453,1833 +3448,1833 @@ pub fn init_select_state(state: &mut SelectState, props: &SelectProps) {
 #[cfg(test)]
 mod tests {
     use super::*;
-use crate::reactive::Runtime;
-use crate::store::{ListState, ServerProvider};
+    use crate::reactive::Runtime;
+    use crate::store::{ListState, ServerProvider};
 
-#[test]
-fn registry_covers_the_replay_anchors() {
-    assert_eq!(palette_command("session.new").unwrap().title, "New session");
-    assert_eq!(palette_command("session.rename").unwrap().title, "Rename session");
-    assert_eq!(palette_command("session.rename").unwrap().group, "Session");
-    assert_eq!(palette_command("model.list").unwrap().bindings, &["ctrl+x m"][..]);
-    // The v2 table leaves theme.switch unbound.
-    assert_eq!(palette_command("theme.switch").unwrap().bindings.len(), 0);
-}
-
-/// L1 — the palette's suggested set carries "Connect an
-/// integration" while NO integration is connected
-/// (`suggested: !connected()`, app.tsx:946-948), between
-/// "Switch model" and "Open settings" (registration order); a
-/// connected integration drops it again.
-#[test]
-fn palette_suggests_connect_an_integration_only_while_unconnected() {
-    let store = Store::new(Runtime::new());
-    let props = palette_props(&store);
-    let suggested: Vec<&str> = props
-        .options
-        .iter()
-        .filter(|option| option.category.as_deref() == Some("Suggested"))
-        .map(|option| option.title.as_str())
-        .collect();
-    assert_eq!(
-        suggested,
-        vec!["Switch model", "Connect an integration", "Open settings"],
-        "the unconnected suggested trio"
-    );
-
-    store.set_integration_connected(true);
-    let props = palette_props(&store);
-    let suggested: Vec<&str> = props
-        .options
-        .iter()
-        .filter(|option| option.category.as_deref() == Some("Suggested"))
-        .map(|option| option.title.as_str())
-        .collect();
-    assert_eq!(suggested, vec!["Switch model", "Open settings"], "connected drops it");
-}
-
-/// L1 — the agent/variant listings mount their component titles
-/// ("Select agent" / "Select variant"), not the palette rows'.
-#[test]
-fn agent_and_variant_dialogs_mount_component_titles() {
-    let store = Store::new(Runtime::new());
-    let mut dispatcher = StoreDispatcher;
-    assert_eq!(dispatcher.dispatch(&store, "agent.list", None), Dispatch::Handled);
-    match &store.top_dialog().unwrap().kind {
-        DialogKind::ServerList { command, title } => {
-            assert_eq!(*command, "agent.list");
-            assert_eq!(*title, "Select agent");
-        }
-        other => panic!("unexpected dialog {other:?}"),
+    #[test]
+    fn registry_covers_the_replay_anchors() {
+        assert_eq!(palette_command("session.new").unwrap().title, "New session");
+        assert_eq!(palette_command("session.rename").unwrap().title, "Rename session");
+        assert_eq!(palette_command("session.rename").unwrap().group, "Session");
+        assert_eq!(palette_command("model.list").unwrap().bindings, &["ctrl+x m"][..]);
+        // The v2 table leaves theme.switch unbound.
+        assert_eq!(palette_command("theme.switch").unwrap().bindings.len(), 0);
     }
-    // SURF-2: variant.list now mounts the REAL DialogVariant —
-    // seeded with a variant-carrying model (the no-variants guard
-    // toasts instead, dialog-variant.tsx:926-931).
-    store.set_models(
-        ListState::Loaded(vec![
-            {
-                let mut entry = model("opencode", "grok", "Grok", false, false);
-                entry.variants = vec!["high".to_owned(), "low".to_owned()];
-                entry
+
+    /// L1 — the palette's suggested set carries "Connect an
+    /// integration" while NO integration is connected
+    /// (`suggested: !connected()`, app.tsx:946-948), between
+    /// "Switch model" and "Open settings" (registration order); a
+    /// connected integration drops it again.
+    #[test]
+    fn palette_suggests_connect_an_integration_only_while_unconnected() {
+        let store = Store::new(Runtime::new());
+        let props = palette_props(&store);
+        let suggested: Vec<&str> = props
+            .options
+            .iter()
+            .filter(|option| option.category.as_deref() == Some("Suggested"))
+            .map(|option| option.title.as_str())
+            .collect();
+        assert_eq!(
+            suggested,
+            vec!["Switch model", "Connect an integration", "Open settings"],
+            "the unconnected suggested trio"
+        );
+
+        store.set_integration_connected(true);
+        let props = palette_props(&store);
+        let suggested: Vec<&str> = props
+            .options
+            .iter()
+            .filter(|option| option.category.as_deref() == Some("Suggested"))
+            .map(|option| option.title.as_str())
+            .collect();
+        assert_eq!(suggested, vec!["Switch model", "Open settings"], "connected drops it");
+    }
+
+    /// L1 — the agent/variant listings mount their component titles
+    /// ("Select agent" / "Select variant"), not the palette rows'.
+    #[test]
+    fn agent_and_variant_dialogs_mount_component_titles() {
+        let store = Store::new(Runtime::new());
+        let mut dispatcher = StoreDispatcher;
+        assert_eq!(dispatcher.dispatch(&store, "agent.list", None), Dispatch::Handled);
+        match &store.top_dialog().unwrap().kind {
+            DialogKind::ServerList { command, title } => {
+                assert_eq!(*command, "agent.list");
+                assert_eq!(*title, "Select agent");
+            }
+            other => panic!("unexpected dialog {other:?}"),
+        }
+        // SURF-2: variant.list now mounts the REAL DialogVariant —
+        // seeded with a variant-carrying model (the no-variants guard
+        // toasts instead, dialog-variant.tsx:926-931).
+        store.set_models(
+            ListState::Loaded(vec![
+                {
+                    let mut entry = model("opencode", "grok", "Grok", false, false);
+                    entry.variants = vec!["high".to_owned(), "low".to_owned()];
+                    entry
+                },
+                model("opencode", "kimi", "Kimi", false, false),
+            ]),
+            Vec::new(),
+        );
+        store.stage_model(
+            crate::app::HOME_PROMPT_KEY,
+            ModelSelection {
+                provider_id: "opencode".to_owned(),
+                model_id: "grok".to_owned(),
+                variant: None,
             },
-            model("opencode", "kimi", "Kimi", false, false),
-        ]),
-        Vec::new(),
-    );
-    store.stage_model(
-        crate::app::HOME_PROMPT_KEY,
-        ModelSelection {
-            provider_id: "opencode".to_owned(),
-            model_id: "grok".to_owned(),
-            variant: None,
-        },
-    );
-    assert_eq!(dispatcher.dispatch(&store, "variant.list", None), Dispatch::Handled);
-    assert!(
-        matches!(&store.top_dialog().unwrap().kind, DialogKind::Variant),
-        "the variant dialog mounts: {:?}",
-        store.top_dialog().unwrap().kind
-    );
-    let props = select_props_for(&store.top_dialog().unwrap().kind, &store);
-    let titles: Vec<&str> = props.options.iter().map(|option| option.title.as_str()).collect();
-    assert_eq!(titles, vec!["Default", "high", "low"], "the variant rows");
-    assert_eq!(props.current.as_deref(), Some("default"), "the current marker");
+        );
+        assert_eq!(dispatcher.dispatch(&store, "variant.list", None), Dispatch::Handled);
+        assert!(
+            matches!(&store.top_dialog().unwrap().kind, DialogKind::Variant),
+            "the variant dialog mounts: {:?}",
+            store.top_dialog().unwrap().kind
+        );
+        let props = select_props_for(&store.top_dialog().unwrap().kind, &store);
+        let titles: Vec<&str> = props.options.iter().map(|option| option.title.as_str()).collect();
+        assert_eq!(titles, vec!["Default", "high", "low"], "the variant rows");
+        assert_eq!(props.current.as_deref(), Some("default"), "the current marker");
 
-    // The no-variants guard: without variants the command toasts.
-    store.clear_dialogs();
-    store.stage_model(
-        crate::app::HOME_PROMPT_KEY,
-        ModelSelection {
-            provider_id: "opencode".to_owned(),
-            model_id: "kimi".to_owned(),
-            variant: None,
-        },
-    );
-    assert_eq!(dispatcher.dispatch(&store, "variant.list", None), Dispatch::Handled);
-    assert!(store.dialogs().is_empty(), "no dialog on the guard path");
-    let toast = store.toasts().current().cloned().expect("the guard toast");
-    assert_eq!(toast.title.as_deref(), Some("No variants available"));
-    assert_eq!(toast.message, "The current model does not support any variants.");
-}
+        // The no-variants guard: without variants the command toasts.
+        store.clear_dialogs();
+        store.stage_model(
+            crate::app::HOME_PROMPT_KEY,
+            ModelSelection {
+                provider_id: "opencode".to_owned(),
+                model_id: "kimi".to_owned(),
+                variant: None,
+            },
+        );
+        assert_eq!(dispatcher.dispatch(&store, "variant.list", None), Dispatch::Handled);
+        assert!(store.dialogs().is_empty(), "no dialog on the guard path");
+        let toast = store.toasts().current().cloned().expect("the guard toast");
+        assert_eq!(toast.title.as_deref(), Some("No variants available"));
+        assert_eq!(toast.message, "The current model does not support any variants.");
+    }
 
-/// SURF-2: the six pure-TUI command wirings mount their REAL
-/// surfaces (auditE's traceability row — TUI wiring over working
-/// core): /mcps /status /variants /pair /debug /timeline.
-#[test]
-#[allow(clippy::too_many_lines)] // one command per block, the SURF-2 wiring proof
-fn six_tui_commands_mount_real_surfaces() {
-    use crate::store::{McpServerRow, PairState, RecordingMcpToggleSink};
-    let store = Store::new(Runtime::new());
-    let toggle_sink = std::rc::Rc::new(RecordingMcpToggleSink::default());
-    store.set_mcp_toggle_sink(toggle_sink.clone());
-    let mut dispatcher = StoreDispatcher;
+    /// SURF-2: the six pure-TUI command wirings mount their REAL
+    /// surfaces (auditE's traceability row — TUI wiring over working
+    /// core): /mcps /status /variants /pair /debug /timeline.
+    #[test]
+    #[allow(clippy::too_many_lines)] // one command per block, the SURF-2 wiring proof
+    fn six_tui_commands_mount_real_surfaces() {
+        use crate::store::{McpServerRow, PairState, RecordingMcpToggleSink};
+        let store = Store::new(Runtime::new());
+        let toggle_sink = std::rc::Rc::new(RecordingMcpToggleSink::default());
+        store.set_mcp_toggle_sink(toggle_sink.clone());
+        let mut dispatcher = StoreDispatcher;
 
-    // /mcps — the live rows with status footers (dialog-mcp.tsx).
-    store.set_mcp_servers(vec![
-        McpServerRow { name: "beta".into(), status: "connected", error: None },
-        McpServerRow {
-            name: "alpha".into(),
-            status: "failed",
-            error: Some("spawn failed".into()),
-        },
-    ]);
-    assert_eq!(dispatcher.dispatch(&store, "mcp.list", None), Dispatch::Handled);
-    assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::Mcp));
-    let props = select_props_for(&store.top_dialog().unwrap().kind, &store);
-    assert_eq!(props.options[0].value, "alpha", "sorted by name");
-    assert_eq!(props.options[0].footer.as_deref(), Some("Failed !"));
-    assert_eq!(props.options[1].footer.as_deref(), Some("Connected ✓"));
-    // Submit on the failed row → the error details dialog.
-    let details =
-        crate::components::dialog::execute_submission(&store, &mut dispatcher, "alpha");
-    assert_eq!(details, Dispatch::Handled);
-    assert!(matches!(
-        &store.top_dialog().unwrap().kind,
-        DialogKind::McpError { name } if name == "alpha"
-    ));
-    let props = select_props_for(&store.top_dialog().unwrap().kind, &store);
-    let text = props.options.iter().map(|o| o.title.clone()).collect::<Vec<_>>().join("\n");
-    assert!(text.contains("spawn failed") && text.contains("Status: failed"));
+        // /mcps — the live rows with status footers (dialog-mcp.tsx).
+        store.set_mcp_servers(vec![
+            McpServerRow { name: "beta".into(), status: "connected", error: None },
+            McpServerRow {
+                name: "alpha".into(),
+                status: "failed",
+                error: Some("spawn failed".into()),
+            },
+        ]);
+        assert_eq!(dispatcher.dispatch(&store, "mcp.list", None), Dispatch::Handled);
+        assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::Mcp));
+        let props = select_props_for(&store.top_dialog().unwrap().kind, &store);
+        assert_eq!(props.options[0].value, "alpha", "sorted by name");
+        assert_eq!(props.options[0].footer.as_deref(), Some("Failed !"));
+        assert_eq!(props.options[1].footer.as_deref(), Some("Connected ✓"));
+        // Submit on the failed row → the error details dialog.
+        let details =
+            crate::components::dialog::execute_submission(&store, &mut dispatcher, "alpha");
+        assert_eq!(details, Dispatch::Handled);
+        assert!(matches!(
+            &store.top_dialog().unwrap().kind,
+            DialogKind::McpError { name } if name == "alpha"
+        ));
+        let props = select_props_for(&store.top_dialog().unwrap().kind, &store);
+        let text = props.options.iter().map(|o| o.title.clone()).collect::<Vec<_>>().join("\n");
+        assert!(text.contains("spawn failed") && text.contains("Status: failed"));
 
-    // /status — the count + bullet rows (dialog-status.tsx).
-    assert_eq!(dispatcher.dispatch(&store, "opencode.status", None), Dispatch::Handled);
-    assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::Status));
-    let props = select_props_for(&store.top_dialog().unwrap().kind, &store);
-    let rows: Vec<&str> = props.options.iter().map(|o| o.title.as_str()).collect();
-    assert_eq!(rows[0], "2 MCP servers");
-    assert!(rows[1].contains("• beta Connected"), "list order: {rows:?}");
-    assert!(rows[2].contains("• alpha spawn failed"), "the failed error text: {rows:?}");
-    store.clear_dialogs();
+        // /status — the count + bullet rows (dialog-status.tsx).
+        assert_eq!(dispatcher.dispatch(&store, "opencode.status", None), Dispatch::Handled);
+        assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::Status));
+        let props = select_props_for(&store.top_dialog().unwrap().kind, &store);
+        let rows: Vec<&str> = props.options.iter().map(|o| o.title.as_str()).collect();
+        assert_eq!(rows[0], "2 MCP servers");
+        assert!(rows[1].contains("• beta Connected"), "list order: {rows:?}");
+        assert!(rows[2].contains("• alpha spawn failed"), "the failed error text: {rows:?}");
+        store.clear_dialogs();
 
-    // /pair — the CUSTOM dialog's rows (F15: dialog-pair.tsx is
-    // not a DialogSelect — the word-wrapped content walk).
-    assert_eq!(dispatcher.dispatch(&store, "server.pair", None), Dispatch::Handled);
-    assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::Pair));
-    let pair_rows = |store: &crate::store::Store| {
-        crate::components::dialog_pair::rows(&store.pair_state(), 84)
-    };
-    assert!(pair_rows(&store).iter().any(|row| matches!(
+        // /pair — the CUSTOM dialog's rows (F15: dialog-pair.tsx is
+        // not a DialogSelect — the word-wrapped content walk).
+        assert_eq!(dispatcher.dispatch(&store, "server.pair", None), Dispatch::Handled);
+        assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::Pair));
+        let pair_rows = |store: &crate::store::Store| {
+            crate::components::dialog_pair::rows(&store.pair_state(), 84)
+        };
+        assert!(pair_rows(&store).iter().any(|row| matches!(
         row,
         crate::components::dialog_pair::PairRow::Text { text, style: crate::components::dialog_pair::PairStyle::Muted }
             if text == "Loading server information…"
     )));
-    store.set_pair_state(PairState::Loaded {
-        links: vec!["http://127.0.0.1:4096/auth/connect/abc".to_owned()],
-        localhost: Some("http://localhost:4096/auth/connect/abc".to_owned()),
-        minutes: 5,
-        loopback: true,
-    });
-    let joined = pair_rows(&store)
-        .iter()
-        .filter_map(|row| match row {
-            crate::components::dialog_pair::PairRow::Gap
-            | crate::components::dialog_pair::PairRow::Qr { .. } => None,
-            crate::components::dialog_pair::PairRow::Text { text, .. } => Some(text.as_str()),
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(joined.contains("expire in 5 minutes"), "{joined}");
-    assert!(joined.contains("This device"));
-    assert!(joined.contains("opencode service set hostname 0.0.0.0"));
-    store.set_pair_state(PairState::Failed("connection refused".to_owned()));
-    assert!(pair_rows(&store).iter().any(|row| matches!(
+        store.set_pair_state(PairState::Loaded {
+            links: vec!["http://127.0.0.1:4096/auth/connect/abc".to_owned()],
+            localhost: Some("http://localhost:4096/auth/connect/abc".to_owned()),
+            minutes: 5,
+            loopback: true,
+        });
+        let joined = pair_rows(&store)
+            .iter()
+            .filter_map(|row| match row {
+                crate::components::dialog_pair::PairRow::Gap
+                | crate::components::dialog_pair::PairRow::Qr { .. } => None,
+                crate::components::dialog_pair::PairRow::Text { text, .. } => Some(text.as_str()),
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(joined.contains("expire in 5 minutes"), "{joined}");
+        assert!(joined.contains("This device"));
+        assert!(joined.contains("opencode service set hostname 0.0.0.0"));
+        store.set_pair_state(PairState::Failed("connection refused".to_owned()));
+        assert!(pair_rows(&store).iter().any(|row| matches!(
         row,
         crate::components::dialog_pair::PairRow::Text { text, style: crate::components::dialog_pair::PairStyle::ErrorBold }
             if text == "Could not load server information"
     )));
-    store.clear_dialogs();
+        store.clear_dialogs();
 
-    // /debug — the env entries (dialog-debug.tsx:25-35).
-    assert_eq!(dispatcher.dispatch(&store, "opencode.debug", None), Dispatch::Handled);
-    assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::Debug));
-    let props = select_props_for(&store.top_dialog().unwrap().kind, &store);
-    let text = props.options.iter().map(|o| o.title.clone()).collect::<Vec<_>>().join("\n");
-    assert!(text.contains("Version"));
-    assert!(text.contains("Session ID"));
-    assert!(text.starts_with("Debug") || props.title == "Debug");
-    store.clear_dialogs();
+        // /debug — the env entries (dialog-debug.tsx:25-35).
+        assert_eq!(dispatcher.dispatch(&store, "opencode.debug", None), Dispatch::Handled);
+        assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::Debug));
+        let props = select_props_for(&store.top_dialog().unwrap().kind, &store);
+        let text = props.options.iter().map(|o| o.title.clone()).collect::<Vec<_>>().join("\n");
+        assert!(text.contains("Version"));
+        assert!(text.contains("Session ID"));
+        assert!(text.starts_with("Debug") || props.title == "Debug");
+        store.clear_dialogs();
 
-    // session.timeline — the user-message rows newest-first
-    // (dialog-timeline.tsx:21-39).
-    store.open_tab("s1", None);
-    store.ingest_all([crate::data::Ingest::MessagesSnapshot {
-        session_id: "s1".to_owned(),
-        messages: vec![
-            crate::components::message::model::Message::User {
-                id: "u1".to_owned(),
-                text: "first turn".to_owned(),
-                created: 1_000,
-                files: Vec::new(),
-            },
-            crate::components::message::model::Message::User {
-                id: "u2".to_owned(),
-                text: "second turn".to_owned(),
-                created: 3_600_000,
-                files: Vec::new(),
-            },
-        ],
-    }]);
-    assert_eq!(dispatcher.dispatch(&store, "session.timeline", None), Dispatch::Handled);
-    assert!(matches!(
-        &store.top_dialog().unwrap().kind,
-        DialogKind::Timeline { session_id } if session_id == "s1"
-    ));
-    let props = select_props_for(&store.top_dialog().unwrap().kind, &store);
-    assert_eq!(props.options[0].value, "u2", "newest first");
-    assert_eq!(props.options[1].value, "u1");
-    // Submit → the message actions over that message.
-    let dispatch = crate::components::dialog::execute_submission(&store, &mut dispatcher, "u1");
-    assert_eq!(dispatch, Dispatch::Handled);
-    assert!(matches!(
-        &store.top_dialog().unwrap().kind,
-        DialogKind::MessageActions { message_id, .. } if message_id == "u1"
-    ));
-}
-
-/// The MCP toggle action (`dialog.mcp.toggle` = space) rides the
-/// sink with the right direction (dialog-mcp.tsx:113-132).
-#[test]
-fn mcp_toggle_action_directions() {
-    use crate::store::{McpServerRow, RecordingMcpToggleSink};
-    let store = Store::new(Runtime::new());
-    let sink = std::rc::Rc::new(RecordingMcpToggleSink::default());
-    store.set_mcp_toggle_sink(sink.clone());
-    store.set_mcp_servers(vec![
-        McpServerRow { name: "on".into(), status: "connected", error: None },
-        McpServerRow { name: "off".into(), status: "failed", error: Some("x".into()) },
-        McpServerRow { name: "wait".into(), status: "pending", error: None },
-    ]);
-    store.mcp_toggle("on");
-    store.mcp_toggle("off");
-    store.mcp_toggle("wait");
-    let calls = sink.calls.borrow().clone();
-    assert_eq!(calls, vec![("on".to_owned(), false), ("off".to_owned(), true)]);
-}
-/// (`focusCurrent={false}`, dialog-model.tsx:171): the current
-/// model only carries its `●` marker, never the selection.
-#[test]
-fn models_dialog_cursor_rests_on_row_zero() {
-    let store = Store::new(Runtime::new());
-    store.open_tab("s1", None);
-    store.set_models(
-        ListState::Loaded(vec![
-            model("opencode", "grok", "Grok", false, false),
-            model("anthropic", "claude", "Claude", false, false),
-        ]),
-        vec![ServerProvider { id: "anthropic".into(), name: "Anthropic".into() }],
-    );
-    store.set_integration_connected(true);
-    let _ = store.effective_model("s1");
-    store.stage_model(
-        "s1",
-        crate::store::ModelSelection {
-            provider_id: "anthropic".into(),
-            model_id: "claude".into(),
-            variant: None,
-        },
-    );
-    store.open_dialog(
-        DialogKind::ServerList { command: "model.list", title: "Select model" },
-        DialogSize::Medium,
-    );
-    let entry = store.top_dialog().unwrap();
-    assert_eq!(entry.select.selected, 0, "cursor on the first row, not the current model");
-}
-
-#[test]
-fn palette_options_carry_both_footers_and_id_search() {
-    let options = palette_options(PALETTE_COMMANDS);
-    let new_session = options.iter().find(|o| o.value == "session.new").unwrap();
-    assert_eq!(new_session.footer.as_deref(), Some("ctrl+x n"));
-    assert_eq!(new_session.search_footer.as_deref(), Some("Session · ctrl+x n"));
-    assert_eq!(new_session.search_text.as_deref(), Some("session.new"));
-    assert_eq!(new_session.category.as_deref(), Some("Session"));
-}
-
-#[test]
-fn palette_props_prepend_the_suggested_section() {
-    let store = Store::new(Runtime::new());
-    let props = palette_props(&store);
-    let first = props.options.first().unwrap();
-    assert_eq!(first.category.as_deref(), Some("Suggested"));
-    assert!(first.value.starts_with("suggested:"));
-    assert_eq!(command_of_value(&first.value), "model.list");
-    assert!(props.flat);
-    assert_eq!(props.filter_threshold, Some(0.7));
-}
-
-/// RD-17 — searching the palette yields the per-setting rows
-/// (`settingOptions`, command-palette.tsx:36-45): "theme" surfaces
-/// the theme row with its keywords search text, the setting's
-/// category, and the `Settings · {category}` search footer.
-#[test]
-fn palette_search_yields_setting_rows() {
-    let store = Store::new(Runtime::new());
-    let props = palette_props_filtered(&store, "theme");
-    let theme = props
-        .options
-        .iter()
-        .find(|option| option.value == "setting:theme.name")
-        .expect("the theme setting row");
-    assert_eq!(theme.title, "Theme");
-    assert_eq!(theme.category.as_deref(), Some("Appearance"));
-    assert_eq!(theme.search_footer.as_deref(), Some("Settings · Appearance"));
-    let search = theme.search_text.as_deref().unwrap_or_default();
-    assert!(search.contains("color scheme"), "keywords ride the search text");
-    // The fuzzy rank admits the row into the visible set.
-    let indices = crate::components::dialog_select::filter_indices(&props, "theme");
-    assert!(indices.iter().any(|&index| props.options[index].value == "setting:theme.name"));
-}
-
-/// RD-17 — ref `list()` (command-palette.tsx:49-60): the
-/// unfiltered palette shows the suggested section and NO setting
-/// rows; a filter swaps them — no suggested mirrors, settings in.
-#[test]
-fn palette_filter_swaps_suggested_for_setting_rows() {
-    let store = Store::new(Runtime::new());
-    let unfiltered = palette_props(&store);
-    assert!(unfiltered.options.iter().any(|option| option.value.starts_with("suggested:")));
-    assert!(!unfiltered.options.iter().any(|option| option.value.starts_with("setting:")));
-    let filtered = palette_props_filtered(&store, "the");
-    assert!(!filtered.options.iter().any(|option| option.value.starts_with("suggested:")));
-    assert!(filtered.options.iter().any(|option| option.value.starts_with("setting:")));
-}
-
-/// RD-17 — activating a setting row replaces the palette with
-/// `DialogConfig` AT that setting (`onSelect` → `dialog.replace(
-/// () => <DialogConfig current={settingID(setting)} />`;
-/// `findIndex` clamped to 0 seeds the row selection).
-#[test]
-fn activating_a_setting_row_opens_config_at_that_setting() {
-    use crate::components::dialog::execute_submission;
-    let store = Store::new(Runtime::new());
-    store.replace_dialog(DialogKind::CommandPalette, crate::store::DialogSize::Medium);
-    let mut dispatcher = StoreDispatcher;
-    execute_submission(&store, &mut dispatcher, "setting:session.sidebar");
-    let entry = store.top_dialog().unwrap();
-    assert!(matches!(entry.kind, DialogKind::Settings), "palette replaced by config");
-    let expected = crate::components::dialog_config::settings_table()
-        .into_iter()
-        .position(|setting| setting.id() == "session.sidebar")
-        .expect("the sidebar row exists");
-    assert_eq!(entry.select.selected, expected, "selection rests on the setting row");
-}
-
-#[test]
-fn dispatcher_routes_local_actions_and_stubbed_server_calls() {
-    let store = Store::new(Runtime::new());
-    let mut dispatcher = StoreDispatcher;
-    assert_eq!(dispatcher.dispatch(&store, "session.new", None), Dispatch::Handled);
-    assert_eq!(store.route(), Route::Home);
-    assert_eq!(dispatcher.dispatch(&store, "command.palette.show", None), Dispatch::Handled);
-    assert_eq!(store.top_dialog().unwrap().kind, DialogKind::CommandPalette);
-    assert_eq!(dispatcher.dispatch(&store, "theme.switch", None), Dispatch::Handled);
-    assert_eq!(store.top_dialog().unwrap().kind, DialogKind::ThemeList);
-    // Server-backed listings open the live-data surface — the
-    // mounted DIALOG title is the component mount's
-    // (`DialogModel` → "Select model", dialog-model.tsx:122),
-    // NOT the palette row's "Switch model" (app.tsx:840).
-    assert_eq!(dispatcher.dispatch(&store, "model.list", None), Dispatch::Handled);
-    match &store.top_dialog().unwrap().kind {
-        DialogKind::ServerList { command, title } => {
-            assert_eq!(*command, "model.list");
-            assert_eq!(*title, "Select model");
-        }
-        other => panic!("unexpected dialog {other:?}"),
+        // session.timeline — the user-message rows newest-first
+        // (dialog-timeline.tsx:21-39).
+        store.open_tab("s1", None);
+        store.ingest_all([crate::data::Ingest::MessagesSnapshot {
+            session_id: "s1".to_owned(),
+            messages: vec![
+                crate::components::message::model::Message::User {
+                    id: "u1".to_owned(),
+                    text: "first turn".to_owned(),
+                    created: 1_000,
+                    files: Vec::new(),
+                },
+                crate::components::message::model::Message::User {
+                    id: "u2".to_owned(),
+                    text: "second turn".to_owned(),
+                    created: 3_600_000,
+                    files: Vec::new(),
+                },
+            ],
+        }]);
+        assert_eq!(dispatcher.dispatch(&store, "session.timeline", None), Dispatch::Handled);
+        assert!(matches!(
+            &store.top_dialog().unwrap().kind,
+            DialogKind::Timeline { session_id } if session_id == "s1"
+        ));
+        let props = select_props_for(&store.top_dialog().unwrap().kind, &store);
+        assert_eq!(props.options[0].value, "u2", "newest first");
+        assert_eq!(props.options[1].value, "u1");
+        // Submit → the message actions over that message.
+        let dispatch = crate::components::dialog::execute_submission(&store, &mut dispatcher, "u1");
+        assert_eq!(dispatch, Dispatch::Handled);
+        assert!(matches!(
+            &store.top_dialog().unwrap().kind,
+            DialogKind::MessageActions { message_id, .. } if message_id == "u1"
+        ));
     }
-    assert_eq!(dispatcher.dispatch(&store, "nope.nope", None), Dispatch::Unknown);
-}
 
-/// SURF-2: the diff viewer's open → fetch → scroll → close cycle
-/// through the dispatcher (the `diff` plugin route).
-#[test]
-fn diff_viewer_opens_scrolls_and_closes() {
-    use crate::store::{DiffPhase, RecordingDiffSink};
-    let store = Store::new(Runtime::new());
-    let sink = std::rc::Rc::new(RecordingDiffSink::default());
-    store.set_diff_sink(sink.clone());
-    let mut dispatcher = StoreDispatcher;
-
-    // `diff.open` from home: loading phase, no session (the turn
-    // source unavailable), dialog cleared.
-    assert_eq!(dispatcher.dispatch(&store, "diff.open", None), Dispatch::Handled);
-    let live = store.diff_viewer();
-    assert!(live.open, "mounted");
-    assert_eq!(live.return_route, Route::Home);
-    assert_eq!(live.mode, crate::store::DiffSource::Branch, "default source");
-    assert!(matches!(live.phase, DiffPhase::Loading));
-    assert_eq!(sink.calls.borrow().len(), 1, "fetch kicked");
-    assert!(store.dialogs().is_empty(), "dialog cleared (diff-viewer.tsx:1225)");
-
-    // The fetch lands: files + a resolved base.
-    store.diff_fetch_result(
-        live.generation,
-        Ok((Some("main".to_owned()), crate::components::diff_viewer::diff_viewer_fixture())),
-    );
-    let live = store.diff_viewer();
-    assert!(matches!(live.phase, DiffPhase::Loaded(_)), "loaded");
-    assert_eq!(live.base.as_deref(), Some("main"));
-    assert_eq!(live.source_detail(), "vs main");
-
-    // The viewer preferences + scroll family.
-    assert_eq!(dispatcher.dispatch(&store, "diff.toggle_file_tree", None), Dispatch::Handled);
-    assert!(!store.diff_viewer().viewer.tree_enabled, "tree toggled off");
-    assert_eq!(dispatcher.dispatch(&store, "diff.down", None), Dispatch::Handled);
-    assert_eq!(store.diff_viewer().scroll, 1, "scrolled one line");
-    assert_eq!(dispatcher.dispatch(&store, "diff.first", None), Dispatch::Handled);
-    assert_eq!(store.diff_viewer().scroll, 0, "back to top");
-
-    // The source dialog + switch.
-    assert_eq!(dispatcher.dispatch(&store, "diff.switch_source", None), Dispatch::Handled);
-    assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::DiffSource));
-    store.clear_dialogs();
-    store.switch_diff_source(crate::store::DiffSource::Working);
-    assert_eq!(store.diff_viewer().mode, crate::store::DiffSource::Working);
-    assert_eq!(sink.calls.borrow().len(), 2, "switch refetches");
-    assert!(matches!(store.diff_viewer().phase, DiffPhase::Loading));
-
-    // Empty diff → the "No changes to show" body.
-    let generation = store.diff_viewer().generation;
-    store.diff_fetch_result(generation, Ok((None, Vec::new())));
-    assert!(
-        matches!(store.diff_viewer().phase, DiffPhase::Loaded(ref files) if files.is_empty())
-    );
-
-    // Close returns to the captured route.
-    assert_eq!(dispatcher.dispatch(&store, "diff.close", None), Dispatch::Handled);
-    assert!(!store.diff_viewer().open, "unmounted");
-    assert_eq!(store.route(), Route::Home);
-}
-
-// -- F3.i: the server-backed pickers ---------------------------------
-
-fn model(
-    provider: &str,
-    id: &str,
-    name: &str,
-    free: bool,
-    deprecated: bool,
-) -> crate::store::ServerModel {
-    crate::store::ServerModel {
-        provider_id: provider.into(),
-        id: id.into(),
-        name: name.into(),
-        cost_input: if free { 0.0 } else { 1.25 },
-        free,
-        deprecated,
-        variants: Vec::new(),
-        released: 0.0,
-        context_limit: None,
+    /// The MCP toggle action (`dialog.mcp.toggle` = space) rides the
+    /// sink with the right direction (dialog-mcp.tsx:113-132).
+    #[test]
+    fn mcp_toggle_action_directions() {
+        use crate::store::{McpServerRow, RecordingMcpToggleSink};
+        let store = Store::new(Runtime::new());
+        let sink = std::rc::Rc::new(RecordingMcpToggleSink::default());
+        store.set_mcp_toggle_sink(sink.clone());
+        store.set_mcp_servers(vec![
+            McpServerRow { name: "on".into(), status: "connected", error: None },
+            McpServerRow { name: "off".into(), status: "failed", error: Some("x".into()) },
+            McpServerRow { name: "wait".into(), status: "pending", error: None },
+        ]);
+        store.mcp_toggle("on");
+        store.mcp_toggle("off");
+        store.mcp_toggle("wait");
+        let calls = sink.calls.borrow().clone();
+        assert_eq!(calls, vec![("on".to_owned(), false), ("off".to_owned(), true)]);
     }
-}
-
-fn agent(id: &str, mode: &str, hidden: bool) -> crate::store::ServerAgent {
-    crate::store::ServerAgent {
-        id: id.into(),
-        name: id.into(),
-        description: Some("Does things".into()),
-        mode: mode.into(),
-        hidden,
-    }
-}
-
-/// The session-list dialog lists the HISTORY (the resync's
-
-/// Shared body for the G-34 dispatch cases: seed one routed
-/// session at `/work/cur` (optionally marked unavailable via the
-/// location worker's error state), dispatch `session.new`, and
-/// check the resolved home location.
-fn session_new_location_dispatch_case(
-    mode: crate::store::NewSessionLocation,
-    expect_inherit: bool,
-    unavailable: bool,
-) {
-    use crate::data::{Ingest, SessionSnapshot};
-    let store = Store::new(Runtime::new());
-    // G-34 consumer wiring: the prompt sink's shared cell mirrors
-    // the resolution (the home submission's create-directory).
-    let cell = std::rc::Rc::new(std::cell::RefCell::new(None));
-    store.set_home_location_cell(std::rc::Rc::clone(&cell));
-    store.ingest_all([Ingest::Resync {
-        sessions: vec![SessionSnapshot {
-            model: None,
-            id: "s1".into(),
-            title: Some("G-34 case".into()),
-            parent_id: None,
-            time_idle: None,
-            viewed: None,
-            directory: Some("/work/cur".into()),
-            ..Default::default()
-        }],
-        unread: Vec::new(),
-        messages: Vec::new(),
-        cursors: Vec::new(),
-        forms: Vec::new(),
-        permissions: Vec::new(),
-    }]);
-    store.navigate(Route::Session { session_id: "s1".into() });
-    if unavailable {
-        store.set_location_error(Some("/work/cur".to_owned()));
-    }
-    store.set_session_new_location(mode);
-    let mut dispatcher = StoreDispatcher;
-    assert_eq!(dispatcher.dispatch(&store, "session.new", None), Dispatch::Handled);
-    assert_eq!(store.route(), Route::Home);
-    let expected = if expect_inherit && !unavailable { Some("/work/cur") } else { None };
-    assert_eq!(store.home_location().as_deref(), expected);
-    assert_eq!(
-        cell.borrow().as_deref(),
-        expected,
-        "the shared cell (the sink's create-directory) mirrors the resolution"
-    );
-}
-
-/// G-34 — `session.new_location` (new-session-location.ts):
-/// `inherit` keeps the home route at the routed session's
-/// location; `launch` (the default) returns to the launch
-/// directory; a failed/unavailable location never inherits.
-#[test]
-fn session_new_location_resolution() {
-    use crate::store::new_session_location;
-    use crate::store::NewSessionLocation as Mode;
-    assert_eq!(new_session_location(Mode::Inherit, Some("/a"), None).as_deref(), Some("/a"));
-    assert_eq!(new_session_location(Mode::Launch, Some("/a"), None), None);
-    assert_eq!(new_session_location(Mode::Inherit, None, None), None);
-    assert_eq!(new_session_location(Mode::Inherit, Some("/a"), Some("/a")), None);
-    assert_eq!(
-        new_session_location(Mode::Inherit, Some("/a"), Some("/b")).as_deref(),
-        Some("/a")
-    );
-}
-
-#[test]
-fn session_new_inherit_keeps_the_current_location() {
-    session_new_location_dispatch_case(crate::store::NewSessionLocation::Inherit, true, false);
-}
-
-#[test]
-fn session_new_launch_returns_to_the_launch_directory() {
-    session_new_location_dispatch_case(crate::store::NewSessionLocation::Launch, false, false);
-}
-
-#[test]
-fn session_new_inherit_skips_an_unavailable_location() {
-    session_new_location_dispatch_case(
-        crate::store::NewSessionLocation::Inherit,
-        false,
-        /* unavailable */ true,
-    );
-}
-
-/// session.list), not the open tabs — and selecting a row
-/// navigates (the route effect opens the tab).
-#[test]
-fn session_list_dialog_rows_come_from_history_not_tabs() {
-    use crate::data::{Ingest, SessionSnapshot};
-    let store = Store::new(Runtime::new());
-    store.open_tab("s_open", Some("Open tab".to_owned()));
-    store.ingest_all([Ingest::Resync {
-        sessions: vec![
-            SessionSnapshot {
-                model: None,
-                id: "s_hist".into(),
-                title: Some("History row".into()),
-                parent_id: None,
-                time_idle: None,
-                viewed: None,
-                ..Default::default()
-            },
-            SessionSnapshot {
-                model: None,
-                id: "s_open".into(),
-                title: Some("Open tab".into()),
-                parent_id: None,
-                time_idle: None,
-                viewed: None,
-                ..Default::default()
-            },
-        ],
-        unread: Vec::new(),
-        messages: Vec::new(),
-        cursors: Vec::new(),
-        permissions: Vec::new(),
-        forms: Vec::new(),
-    }]);
-    let props = select_props_for(
-        &DialogKind::ServerList { command: "session.list", title: "Sessions" },
-        &store,
-    );
-    let titles: Vec<&str> = props.options.iter().map(|option| option.title.as_str()).collect();
-    assert_eq!(titles, vec!["History row", "Open tab"], "history rows, newest first");
-    // Accepting a history row opens its tab through navigation.
-    execute_server_list_selection(&store, "session.list", "s_hist");
-    assert_eq!(store.route(), crate::store::Route::Session { session_id: "s_hist".to_owned() });
-    assert!(store.tabs().tabs.iter().any(|tab| tab.session_id == "s_hist"));
-}
-
-/// The model picker renders loaded rows (Free footers,
-/// provider/model values), a muted loading row while the fetch is
-/// in flight, and the error text when it failed. While
-/// UNCONNECTED (the rig + fresh boots) the rows carry NO
-/// categories and the footer action reads "View all integrations"
-/// (dialog-model.tsx:77-97/168-176); connected flips to provider
-/// categories + "Connect an integration".
-#[test]
-fn model_list_props_cover_loaded_loading_and_error_states() {
-    let store = Store::new(Runtime::new());
-    store.open_tab("s1", None);
-
-    // Loading: one muted status row.
-    let props = model_list_props(&store, "Select model");
-    assert_eq!(props.options.len(), 1);
-    assert!(props.options[0].title.contains("Loading models"));
-
-    // Loaded (UNCONNECTED default): deprecated filtered, Free
-    // footer, no categories, the integrations footer action.
-    store.set_models(
-        ListState::Loaded(vec![
-            model("anthropic", "claude", "Claude", true, false),
-            model("anthropic", "old", "Old", false, true),
-            model("custom", "local-1", "Local One", false, false),
-        ]),
-        vec![ServerProvider { id: "anthropic".into(), name: "Anthropic".into() }],
-    );
-    let props = model_list_props(&store, "Select model");
-    assert_eq!(props.options.len(), 2, "deprecated row filtered");
-    assert_eq!(props.options[0].title, "Claude");
-    assert_eq!(props.options[0].value, "anthropic/claude");
-    assert_eq!(props.options[0].category, None, "unconnected renders flat");
-    assert_eq!(props.options[0].footer.as_deref(), Some("Free"));
-    assert_eq!(props.options[1].footer, None, "paid model has no footer");
-    assert_eq!(
-        props.actions,
-        vec![SelectAction::new("model.dialog.provider", "View all integrations", "ctrl+a")],
-        "the unconnected footer action (dialog-model.tsx:168-176)"
-    );
-
-    // Connected: provider-name categories (group headers return)
-    // and the "Connect an integration" wording.
-    store.set_integration_connected(true);
-    let props = model_list_props(&store, "Select model");
-    assert_eq!(props.options[0].category.as_deref(), Some("Anthropic"));
-    assert_eq!(props.options[1].category.as_deref(), Some("custom"), "no provider row");
-    assert_eq!(
-        props.actions,
-        vec![SelectAction::new("model.dialog.provider", "Connect an integration", "ctrl+a")]
-    );
-
-    // Failed: the error surfaces in the row.
-    store.set_models(ListState::Failed("503".into()), Vec::new());
-    let props = model_list_props(&store, "Select model");
-    assert!(props.options[0].title.contains("Models unavailable"));
-    assert!(props.options[0].title.contains("503"));
-}
-
-/// D-05 — `sortModelOptions` ported verbatim from
-/// `dialog-model.tsx:185-211`. Vectors from the reference's
-/// model-options test (the SHIPPED comparator's behavior —
-/// verified against the ref source in both bun and node).
-#[test]
-fn sort_model_options_orders_opencode_go_before_zen_and_others() {
-    let rows = [
-        row("openai", "OpenAI", "GPT 5", false, 3.0),
-        row("opencode", "OpenCode Zen", "Claude Sonnet 4", false, 1.0),
-        row("anthropic", "Anthropic", "Claude Opus 4", false, 2.0),
-        row("opencode-go", "OpenCode Go", "Kimi K3", false, 0.0),
-    ];
-    let titles = sorted_titles(&rows, true);
-    assert_eq!(titles, vec!["Kimi K3", "Claude Sonnet 4", "Claude Opus 4", "GPT 5"]);
-}
-
-#[test]
-fn sort_model_options_grouped_puts_the_opencode_group_first() {
-    // The ref's test-1 input under `grouped = true` (browse): the
-    // opencode provider group wins before anthropic's rows — the
-    // shipped comparator's output (the ref test file's expectation
-    // here predates the provider-grouping keys).
-    let rows = [
-        row("opencode", "OpenCode Zen", "Claude Haiku 3", false, 1.0),
-        row("anthropic", "Anthropic", "Claude Haiku 4.5", false, 2.0),
-        row("anthropic", "Anthropic", "Claude Haiku Free", true, 0.0),
-    ];
-    let titles = sorted_titles(&rows, true);
-    assert_eq!(titles, vec!["Claude Haiku 3", "Claude Haiku Free", "Claude Haiku 4.5"]);
-    // Ungrouped (the search path): free-first, then release desc.
-    let titles = sorted_titles(&rows, false);
-    assert_eq!(titles, vec!["Claude Haiku Free", "Claude Haiku 4.5", "Claude Haiku 3"]);
-}
-
-#[test]
-fn sort_model_options_ungrouped_free_first_regardless_of_provider() {
-    let rows = [
-        row("opencode-go", "OpenCode Go", "Go model", false, 3.0),
-        row("opencode", "OpenCode Zen", "Free Zen model", true, 1.0),
-        row("anthropic", "Anthropic", "Anthropic model", false, 4.0),
-    ];
-    let titles = sorted_titles(&rows, false);
-    assert_eq!(titles, vec!["Free Zen model", "Anthropic model", "Go model"]);
-}
-
-#[test]
-fn sort_model_options_groups_by_provider_name_then_newest_release() {
-    let rows = [
-        row("google", "Google", "Gemini 2.5 Pro", false, 5.0),
-        row("anthropic", "Anthropic", "Claude Sonnet 4", false, 4.0),
-        row("anthropic", "Anthropic", "Claude Opus 4", false, 6.0),
-        row("openai", "OpenAI", "GPT 5", false, 7.0),
-    ];
-    let titles = sorted_titles(&rows, true);
-    assert_eq!(
-        titles,
-        vec!["Claude Opus 4", "Claude Sonnet 4", "Gemini 2.5 Pro", "GPT 5"],
-        "provider-name groups stay contiguous, newest first inside"
-    );
-}
-
-#[test]
-fn sort_model_options_title_collation_breaks_release_ties() {
-    let rows = [
-        row("anthropic", "Anthropic", "Claude Sonnet 4", false, 5.0),
-        row("anthropic", "Anthropic", "Claude Opus 4", false, 5.0),
-    ];
-    let titles = sorted_titles(&rows, true);
-    assert_eq!(titles, vec!["Claude Opus 4", "Claude Sonnet 4"]);
-}
-
-/// Sort-input row helper: one `ServerModel` + its provider name.
-fn row(
-    provider_id: &str,
-    provider_name: &str,
-    title: &str,
-    free: bool,
-    released: f64,
-) -> (crate::store::ServerModel, String) {
-    (
-        crate::store::ServerModel {
-            provider_id: provider_id.into(),
-            id: title.to_lowercase().replace(' ', "-"),
-            name: title.into(),
-            cost_input: if free { 0.0 } else { 1.0 },
-            free,
-            deprecated: false,
-            variants: Vec::new(),
-            released,
-            context_limit: None,
-        },
-        provider_name.into(),
-    )
-}
-
-fn sorted_titles(rows: &[(crate::store::ServerModel, String)], grouped: bool) -> Vec<String> {
-    let mut borrowed: Vec<&crate::store::ServerModel> =
-        rows.iter().map(|(model, _)| model).collect();
-    let names: Vec<(String, String)> =
-        rows.iter().map(|(model, name)| (model.provider_id.clone(), name.clone())).collect();
-    let resolve = move |id: &str| -> String {
-        names
-            .iter()
-            .find(|(provider, _)| provider == id)
-            .map_or_else(|| id.to_owned(), |(_, name)| name.clone())
-    };
-    sort_model_options(&mut borrowed, grouped, &resolve);
-    borrowed.iter().map(|model| model.name.clone()).collect()
-}
-
-/// The agent picker filters subagent/hidden rows, carries the
-/// description, and marks the active session's selection current.
-#[test]
-fn agent_list_props_filter_and_mark_current() {
-    let store = Store::new(Runtime::new());
-    store.open_tab("s1", None);
-    store.set_agents(ListState::Loaded(vec![
-        agent("build", "all", false),
-        agent("explore", "subagent", false),
-        agent("secret", "all", true),
-    ]));
-    store.select_agent("s1", "build");
-    // Re-point the sink log assertion: the default recording sink
-    // captured the call.
-    let props = agent_list_props(&store, "Switch agent");
-    assert_eq!(props.options.len(), 1, "subagent + hidden filtered");
-    assert_eq!(props.options[0].title, "build");
-    assert_eq!(props.options[0].description.as_deref(), Some("Does things"));
-    assert_eq!(props.current.as_deref(), Some("build"), "current from the selection");
-}
-
-/// Model/agent submissions apply through the selection sink on a
-/// session route and stage without a POST on home; unknown agents
-/// warn (v2's `local.agent.set` toast).
-#[test]
-fn server_list_submissions_apply_via_the_sink() {
-    use crate::store::{RecordingSelectionSink, SelectionCall};
-    let mut store = Store::new(Runtime::new());
-    let sink = std::rc::Rc::new(RecordingSelectionSink::default());
-    let sink_dyn: std::rc::Rc<dyn crate::store::SelectionSink> = sink.clone();
-    store.set_selection_sink(sink_dyn);
-    store.open_tab("s1", None);
-
-    // Model on the session route: state + sink.
-    assert_eq!(
-        execute_server_list_selection(&store, "model.list", "anthropic/claude"),
-        Dispatch::Handled
-    );
-    assert_eq!(
-        sink.calls.borrow().as_slice(),
-        &[(
-            "s1".into(),
-            SelectionCall::Model {
+    /// (`focusCurrent={false}`, dialog-model.tsx:171): the current
+    /// model only carries its `●` marker, never the selection.
+    #[test]
+    fn models_dialog_cursor_rests_on_row_zero() {
+        let store = Store::new(Runtime::new());
+        store.open_tab("s1", None);
+        store.set_models(
+            ListState::Loaded(vec![
+                model("opencode", "grok", "Grok", false, false),
+                model("anthropic", "claude", "Claude", false, false),
+            ]),
+            vec![ServerProvider { id: "anthropic".into(), name: "Anthropic".into() }],
+        );
+        store.set_integration_connected(true);
+        let _ = store.effective_model("s1");
+        store.stage_model(
+            "s1",
+            crate::store::ModelSelection {
                 provider_id: "anthropic".into(),
                 model_id: "claude".into(),
-                variant: None
+                variant: None,
+            },
+        );
+        store.open_dialog(
+            DialogKind::ServerList { command: "model.list", title: "Select model" },
+            DialogSize::Medium,
+        );
+        let entry = store.top_dialog().unwrap();
+        assert_eq!(entry.select.selected, 0, "cursor on the first row, not the current model");
+    }
+
+    #[test]
+    fn palette_options_carry_both_footers_and_id_search() {
+        let options = palette_options(PALETTE_COMMANDS);
+        let new_session = options.iter().find(|o| o.value == "session.new").unwrap();
+        assert_eq!(new_session.footer.as_deref(), Some("ctrl+x n"));
+        assert_eq!(new_session.search_footer.as_deref(), Some("Session · ctrl+x n"));
+        assert_eq!(new_session.search_text.as_deref(), Some("session.new"));
+        assert_eq!(new_session.category.as_deref(), Some("Session"));
+    }
+
+    #[test]
+    fn palette_props_prepend_the_suggested_section() {
+        let store = Store::new(Runtime::new());
+        let props = palette_props(&store);
+        let first = props.options.first().unwrap();
+        assert_eq!(first.category.as_deref(), Some("Suggested"));
+        assert!(first.value.starts_with("suggested:"));
+        assert_eq!(command_of_value(&first.value), "model.list");
+        assert!(props.flat);
+        assert_eq!(props.filter_threshold, Some(0.7));
+    }
+
+    /// RD-17 — searching the palette yields the per-setting rows
+    /// (`settingOptions`, command-palette.tsx:36-45): "theme" surfaces
+    /// the theme row with its keywords search text, the setting's
+    /// category, and the `Settings · {category}` search footer.
+    #[test]
+    fn palette_search_yields_setting_rows() {
+        let store = Store::new(Runtime::new());
+        let props = palette_props_filtered(&store, "theme");
+        let theme = props
+            .options
+            .iter()
+            .find(|option| option.value == "setting:theme.name")
+            .expect("the theme setting row");
+        assert_eq!(theme.title, "Theme");
+        assert_eq!(theme.category.as_deref(), Some("Appearance"));
+        assert_eq!(theme.search_footer.as_deref(), Some("Settings · Appearance"));
+        let search = theme.search_text.as_deref().unwrap_or_default();
+        assert!(search.contains("color scheme"), "keywords ride the search text");
+        // The fuzzy rank admits the row into the visible set.
+        let indices = crate::components::dialog_select::filter_indices(&props, "theme");
+        assert!(indices.iter().any(|&index| props.options[index].value == "setting:theme.name"));
+    }
+
+    /// RD-17 — ref `list()` (command-palette.tsx:49-60): the
+    /// unfiltered palette shows the suggested section and NO setting
+    /// rows; a filter swaps them — no suggested mirrors, settings in.
+    #[test]
+    fn palette_filter_swaps_suggested_for_setting_rows() {
+        let store = Store::new(Runtime::new());
+        let unfiltered = palette_props(&store);
+        assert!(unfiltered.options.iter().any(|option| option.value.starts_with("suggested:")));
+        assert!(!unfiltered.options.iter().any(|option| option.value.starts_with("setting:")));
+        let filtered = palette_props_filtered(&store, "the");
+        assert!(!filtered.options.iter().any(|option| option.value.starts_with("suggested:")));
+        assert!(filtered.options.iter().any(|option| option.value.starts_with("setting:")));
+    }
+
+    /// RD-17 — activating a setting row replaces the palette with
+    /// `DialogConfig` AT that setting (`onSelect` → `dialog.replace(
+    /// () => <DialogConfig current={settingID(setting)} />`;
+    /// `findIndex` clamped to 0 seeds the row selection).
+    #[test]
+    fn activating_a_setting_row_opens_config_at_that_setting() {
+        use crate::components::dialog::execute_submission;
+        let store = Store::new(Runtime::new());
+        store.replace_dialog(DialogKind::CommandPalette, crate::store::DialogSize::Medium);
+        let mut dispatcher = StoreDispatcher;
+        execute_submission(&store, &mut dispatcher, "setting:session.sidebar");
+        let entry = store.top_dialog().unwrap();
+        assert!(matches!(entry.kind, DialogKind::Settings), "palette replaced by config");
+        let expected = crate::components::dialog_config::settings_table()
+            .into_iter()
+            .position(|setting| setting.id() == "session.sidebar")
+            .expect("the sidebar row exists");
+        assert_eq!(entry.select.selected, expected, "selection rests on the setting row");
+    }
+
+    #[test]
+    fn dispatcher_routes_local_actions_and_stubbed_server_calls() {
+        let store = Store::new(Runtime::new());
+        let mut dispatcher = StoreDispatcher;
+        assert_eq!(dispatcher.dispatch(&store, "session.new", None), Dispatch::Handled);
+        assert_eq!(store.route(), Route::Home);
+        assert_eq!(dispatcher.dispatch(&store, "command.palette.show", None), Dispatch::Handled);
+        assert_eq!(store.top_dialog().unwrap().kind, DialogKind::CommandPalette);
+        assert_eq!(dispatcher.dispatch(&store, "theme.switch", None), Dispatch::Handled);
+        assert_eq!(store.top_dialog().unwrap().kind, DialogKind::ThemeList);
+        // Server-backed listings open the live-data surface — the
+        // mounted DIALOG title is the component mount's
+        // (`DialogModel` → "Select model", dialog-model.tsx:122),
+        // NOT the palette row's "Switch model" (app.tsx:840).
+        assert_eq!(dispatcher.dispatch(&store, "model.list", None), Dispatch::Handled);
+        match &store.top_dialog().unwrap().kind {
+            DialogKind::ServerList { command, title } => {
+                assert_eq!(*command, "model.list");
+                assert_eq!(*title, "Select model");
             }
-        )]
-    );
-    let selection = store.selection_for("s1");
-    assert_eq!(selection.model.as_ref().unwrap().model_id, "claude");
-
-    // Agent on the session route: state + sink.
-    store.set_agents(ListState::Loaded(vec![agent("review", "primary", false)]));
-    assert_eq!(
-        execute_server_list_selection(&store, "agent.list", "review"),
-        Dispatch::Handled
-    );
-    assert_eq!(
-        sink.calls.borrow().last(),
-        Some(&("s1".into(), SelectionCall::Agent("review".into())))
-    );
-
-    // Home: staged only — no sink call.
-    store.navigate(Route::Home);
-    execute_server_list_selection(&store, "model.list", "opencode/grok");
-    assert_eq!(sink.calls.borrow().len(), 2, "no third call from the home stage");
-    assert_eq!(
-        store.selection_for(crate::app::HOME_PROMPT_KEY).model.as_ref().unwrap().model_id,
-        "grok"
-    );
-
-    // Unknown agent (list loaded, id absent): warning toast, no call.
-    execute_server_list_selection(&store, "agent.list", "ghost");
-    assert_eq!(sink.calls.borrow().len(), 2);
-    let toasts = store.toasts();
-    assert_eq!(
-        toasts.current().map(|toast| toast.message.as_str()),
-        Some("Agent not found: ghost")
-    );
-    assert_eq!(toasts.current().unwrap().variant, "warning");
-}
-
-/// `messages.copy`: the exact v2 toasts for every miss, the OSC-52
-/// write through the clipboard sink on hit.
-#[test]
-fn messages_copy_resolves_text_and_toasts() {
-    use crate::components::message::model::{Message, PartTime};
-    let mut store = Store::new(Runtime::new());
-    let clipboard = std::rc::Rc::new(crate::clipboard::RecordingClipboardSink::default());
-    let clipboard_dyn: std::rc::Rc<dyn crate::clipboard::ClipboardSink> = clipboard.clone();
-    store.set_clipboard_sink(clipboard_dyn);
-    store.open_tab("s1", None);
-
-    // No assistant messages yet.
-    copy_message_to_clipboard(&store);
-    assert!(
-        clipboard.writes.lock().unwrap().is_empty(),
-        "nothing written without an assistant message"
-    );
-    assert_eq!(
-        store.toasts().current().map(|toast| toast.message.as_str()),
-        Some("No assistant messages found")
-    );
-    assert_eq!(store.toasts().current().unwrap().variant, "error");
-
-    // An assistant message whose LAST turn has the text parts.
-    store.set_messages(
-        "s1",
-        vec![
-            Message::User {
-                id: "u1".into(),
-                text: "question".into(),
-                created: 0,
-                files: Vec::new(),
-            },
-            Message::Assistant {
-                id: "a1".into(),
-                agent: "build".into(),
-                model: String::new(),
-                parts: vec![
-                    crate::components::message::model::Part::Tool {
-                        id: "t1".into(),
-                        name: "read".into(),
-                        time: PartTime::default(),
-                        state: crate::components::message::model::ToolState::default(),
-                    },
-                    crate::components::message::model::Part::Text {
-                        text: "first ".into(),
-                        time: PartTime::default(),
-                    },
-                    crate::components::message::model::Part::Text {
-                        text: "second".into(),
-                        time: PartTime::default(),
-                    },
-                ],
-                finish: None,
-                error: None,
-                time: PartTime::default(),
-                tokens: None,
-                usage_total: None,
-            },
-        ],
-    );
-    copy_message_to_clipboard(&store);
-    assert_eq!(
-        clipboard.writes.lock().unwrap().as_slice(),
-        &["first \nsecond".to_owned()],
-        "text parts joined \\n and trimmed"
-    );
-    assert_eq!(
-        store.toasts().current().map(|toast| toast.message.as_str()),
-        Some("Message copied to clipboard!")
-    );
-    assert_eq!(store.toasts().current().unwrap().variant, "success");
-}
-
-/// `<leader>e` requests the editor flow; `help.show` opens the Help
-/// dialog.
-#[test]
-fn editor_request_and_help_dialog_commands() {
-    let store = Store::new(Runtime::new());
-    let mut dispatcher = StoreDispatcher;
-    assert!(!store.take_editor_request());
-    assert_eq!(dispatcher.dispatch(&store, "prompt.editor", None), Dispatch::Handled);
-    assert!(store.take_editor_request(), "the flag drained once");
-    assert!(!store.take_editor_request(), "and exactly once");
-
-    assert_eq!(dispatcher.dispatch(&store, "help.show", None), Dispatch::Handled);
-    assert_eq!(store.top_dialog().unwrap().kind, DialogKind::Help);
-}
-
-// -- dogfood wave 1 -------------------------------------------------------
-
-/// F10 — `session.new` inherits the active session's selection (v2
-/// app.tsx:728-731 `local.model.set(model)` + the agent): the
-/// staged home draft carries the pick into the next submission.
-#[test]
-fn session_new_inherits_the_current_selection() {
-    let store = Store::new(Runtime::new());
-    store.open_tab("s1", Some("S".to_owned()));
-    store.select_model(
-        "s1",
-        &ModelSelection {
-            provider_id: "parityfake".into(),
-            model_id: "picked-model".into(),
-            variant: None,
-        },
-    );
-    store.select_agent("s1", "review");
-
-    let mut dispatcher = StoreDispatcher;
-    assert_eq!(dispatcher.dispatch(&store, "session.new", None), Dispatch::Handled);
-    assert_eq!(store.route(), Route::Home, "session.new routed home");
-    let staged = store.selection_for(crate::app::HOME_PROMPT_KEY);
-    assert_eq!(
-        staged.model.map(|model| model.model_id),
-        Some("picked-model".to_owned()),
-        "the model staged onto the home draft"
-    );
-    assert_eq!(staged.agent.as_deref(), Some("review"), "the agent staged too");
-
-    // Home's own stage (no session route) is untouched by the walk.
-    assert_eq!(dispatcher.dispatch(&store, "session.new", None), Dispatch::Handled);
-    assert_eq!(
-        store.selection_for(crate::app::HOME_PROMPT_KEY).model.map(|m| m.model_id),
-        Some("picked-model".to_owned()),
-        "a home-route session.new keeps the existing stage"
-    );
-}
-
-/// F13 — opening the session-list dialog fires a `session.list`
-/// refetch through the sink (the boot resync snapshot goes stale).
-#[test]
-fn session_list_dialog_open_fires_the_refresh_sink() {
-    let store = Store::new(Runtime::new());
-    let sink = std::rc::Rc::new(crate::store::RecordingSessionListSink::default());
-    store.set_session_list_sink(
-        std::rc::Rc::clone(&sink) as std::rc::Rc<dyn crate::store::SessionListSink>
-    );
-    let mut dispatcher = StoreDispatcher;
-    assert_eq!(dispatcher.dispatch(&store, "session.list", None), Dispatch::Handled);
-    assert_eq!(sink.calls.get(), 1, "the dialog open refreshed the list");
-    // Other listings do not fire it.
-    assert_eq!(dispatcher.dispatch(&store, "model.list", None), Dispatch::Handled);
-    assert_eq!(sink.calls.get(), 1);
-}
-
-/// F14 — a plugin command claiming a builtin id renders ONE row
-/// (the registry's own); the suggested-section mirrors stay.
-#[test]
-fn palette_dedups_plugin_entries_claiming_builtin_ids() {
-    let store = Store::new(Runtime::new());
-    store.set_plugin_commands(vec![crate::store::PluginCommandEntry {
-        command: "help.show".to_owned(),
-        title: "Help again".to_owned(),
-        plugin_id: "omos".to_owned(),
-    }]);
-    let props = palette_props(&store);
-    let values: Vec<&str> = props.options.iter().map(|option| option.value.as_str()).collect();
-    let duplicates = values.iter().filter(|value| **value == "help.show").count();
-    assert_eq!(duplicates, 1, "one dispatchable help.show row: {values:?}");
-    // The suggested mirror (prefixed) survives by design.
-    assert!(
-        values.iter().any(|value| value.starts_with("suggested:")),
-        "v2's suggested section keeps its prefixed copies"
-    );
-}
-
-// -- Lane FINAL: the stub-dispatch family + the six session
-// commands ----------------------------------------------------------
-
-fn final_session_store() -> Store {
-    let store = Store::new(crate::reactive::Runtime::new());
-    store.open_tab("ses_1", Some("Session one".to_owned()));
-    store.navigate(Route::Session { session_id: "ses_1".to_owned() });
-    store.set_messages(
-        "ses_1",
-        vec![
-            crate::components::message::model::Message::User {
-                id: "u1".into(),
-                text: "first question".into(),
-                created: 1_000,
-                files: Vec::new(),
-            },
-            crate::components::message::model::Message::User {
-                id: "u2".into(),
-                text: "second question".into(),
-                created: 2_000,
-                files: Vec::new(),
-            },
-        ],
-    );
-    store
-}
-
-/// `provider.connect` mounts the real integration list over the
-/// BE-3 host (the list fetch fires through the sink) — never the
-/// old "Not wired in this build" stub.
-#[test]
-fn final_provider_connect_mounts_integration_list() {
-    use crate::store::RecordingIntegrationSink;
-    let store = Store::new(crate::reactive::Runtime::new());
-    let sink = std::rc::Rc::new(RecordingIntegrationSink::default());
-    store.set_integration_sink(sink.clone());
-    let mut dispatcher = StoreDispatcher;
-    assert_eq!(dispatcher.dispatch(&store, "provider.connect", None), Dispatch::Handled);
-    assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::Integration));
-    assert_eq!(
-        sink.calls.borrow().as_slice(),
-        &[crate::store::IntegrationCall::List],
-        "the open fired integration.list"
-    );
-    // The list dialog renders the rows (v2's sort + categories +
-    // the connected footer).
-    store.integration_list_loaded(vec![crate::store::IntegrationRow {
-        id: "anthropic".into(),
-        name: "Anthropic".into(),
-        category: "Popular",
-        methods: vec![crate::store::IntegrationMethod {
-            id: "key".into(),
-            kind: "key",
-            label: "API key".into(),
-        }],
-        accounts: Vec::new(),
-        summary: String::new(),
-        sign_in_required: false,
-    }]);
-    let props = select_props_for(&store.top_dialog().unwrap().kind, &store);
-    assert_eq!(props.title, "Connect an integration");
-    assert_eq!(props.options[0].title, "Anthropic");
-    assert_eq!(props.options[0].category.as_deref(), Some("Popular"));
-
-    // The connect chain: row → (single method) → the key prompt →
-    // the sink POST.
-    let submit =
-        crate::components::dialog::execute_submission(&store, &mut dispatcher, "anthropic");
-    assert_eq!(submit, Dispatch::Handled);
-    assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::IntegrationKey { .. }));
-    store.integration_key_submit("anthropic", "sk-test");
-    assert_eq!(
-        sink.calls.borrow()[1],
-        crate::store::IntegrationCall::ConnectKey {
-            integration_id: "anthropic".into(),
-            key: "sk-test".into()
+            other => panic!("unexpected dialog {other:?}"),
         }
-    );
-    // The connected event: toast + clear + refetch.
-    store.integration_connected("Anthropic");
-    assert!(store.dialogs().is_empty(), "the flow closed on connect");
-    assert_eq!(sink.calls.borrow().last(), Some(&crate::store::IntegrationCall::List));
-    assert!(store.toasts().current().is_some_and(|toast| toast.message.contains("Connected")));
-}
+        assert_eq!(dispatcher.dispatch(&store, "nope.nope", None), Dispatch::Unknown);
+    }
 
-/// The OAuth code path: `oauth.connect` (code mode) mounts the
-/// code-entry prompt with the attempt's URL; the submit fires
-/// `oauth.complete`.
-#[test]
-fn final_oauth_code_entry_flow() {
-    use crate::store::{IntegrationAttempt, RecordingIntegrationSink};
-    let store = Store::new(crate::reactive::Runtime::new());
-    let sink = std::rc::Rc::new(RecordingIntegrationSink::default());
-    store.set_integration_sink(sink.clone());
-    store.integration_list_loaded(vec![crate::store::IntegrationRow {
-        id: "github".into(),
-        name: "GitHub".into(),
-        category: "Popular",
-        methods: vec![crate::store::IntegrationMethod {
-            id: "oauth-browser".into(),
-            kind: "oauth",
-            label: "Browser".into(),
-        }],
-        accounts: Vec::new(),
-        summary: String::new(),
-        sign_in_required: false,
-    }]);
-    let mut dispatcher = StoreDispatcher;
-    dispatcher.dispatch(&store, "provider.connect", None);
-    store.integration_list_loaded(store_rows(&store));
-    crate::components::dialog::execute_submission(&store, &mut dispatcher, "github");
-    store.integration_oauth_started(IntegrationAttempt {
-        integration_id: "github".into(),
-        attempt_id: "att_1".into(),
-        kind: "oauth",
-        code_mode: true,
-        url: "https://github.com/login/device".into(),
-        instructions: "Enter code ABCD-1234".into(),
-        title: "Browser".into(),
-    });
-    assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::IntegrationCode { .. }));
-    // The prompt shows the URL (v2's description block).
-    let props = select_props_for(&store.top_dialog().unwrap().kind, &store);
-    assert!(props.hints.iter().any(|hint| hint.contains("github.com/login/device")));
-    store.integration_code_submit("github", "att_1", "ABCD-1234");
-    assert_eq!(
-        sink.calls.borrow()[1],
-        crate::store::IntegrationCall::OauthComplete {
+    /// SURF-2: the diff viewer's open → fetch → scroll → close cycle
+    /// through the dispatcher (the `diff` plugin route).
+    #[test]
+    fn diff_viewer_opens_scrolls_and_closes() {
+        use crate::store::{DiffPhase, RecordingDiffSink};
+        let store = Store::new(Runtime::new());
+        let sink = std::rc::Rc::new(RecordingDiffSink::default());
+        store.set_diff_sink(sink.clone());
+        let mut dispatcher = StoreDispatcher;
+
+        // `diff.open` from home: loading phase, no session (the turn
+        // source unavailable), dialog cleared.
+        assert_eq!(dispatcher.dispatch(&store, "diff.open", None), Dispatch::Handled);
+        let live = store.diff_viewer();
+        assert!(live.open, "mounted");
+        assert_eq!(live.return_route, Route::Home);
+        assert_eq!(live.mode, crate::store::DiffSource::Branch, "default source");
+        assert!(matches!(live.phase, DiffPhase::Loading));
+        assert_eq!(sink.calls.borrow().len(), 1, "fetch kicked");
+        assert!(store.dialogs().is_empty(), "dialog cleared (diff-viewer.tsx:1225)");
+
+        // The fetch lands: files + a resolved base.
+        store.diff_fetch_result(
+            live.generation,
+            Ok((Some("main".to_owned()), crate::components::diff_viewer::diff_viewer_fixture())),
+        );
+        let live = store.diff_viewer();
+        assert!(matches!(live.phase, DiffPhase::Loaded(_)), "loaded");
+        assert_eq!(live.base.as_deref(), Some("main"));
+        assert_eq!(live.source_detail(), "vs main");
+
+        // The viewer preferences + scroll family.
+        assert_eq!(dispatcher.dispatch(&store, "diff.toggle_file_tree", None), Dispatch::Handled);
+        assert!(!store.diff_viewer().viewer.tree_enabled, "tree toggled off");
+        assert_eq!(dispatcher.dispatch(&store, "diff.down", None), Dispatch::Handled);
+        assert_eq!(store.diff_viewer().scroll, 1, "scrolled one line");
+        assert_eq!(dispatcher.dispatch(&store, "diff.first", None), Dispatch::Handled);
+        assert_eq!(store.diff_viewer().scroll, 0, "back to top");
+
+        // The source dialog + switch.
+        assert_eq!(dispatcher.dispatch(&store, "diff.switch_source", None), Dispatch::Handled);
+        assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::DiffSource));
+        store.clear_dialogs();
+        store.switch_diff_source(crate::store::DiffSource::Working);
+        assert_eq!(store.diff_viewer().mode, crate::store::DiffSource::Working);
+        assert_eq!(sink.calls.borrow().len(), 2, "switch refetches");
+        assert!(matches!(store.diff_viewer().phase, DiffPhase::Loading));
+
+        // Empty diff → the "No changes to show" body.
+        let generation = store.diff_viewer().generation;
+        store.diff_fetch_result(generation, Ok((None, Vec::new())));
+        assert!(
+            matches!(store.diff_viewer().phase, DiffPhase::Loaded(ref files) if files.is_empty())
+        );
+
+        // Close returns to the captured route.
+        assert_eq!(dispatcher.dispatch(&store, "diff.close", None), Dispatch::Handled);
+        assert!(!store.diff_viewer().open, "unmounted");
+        assert_eq!(store.route(), Route::Home);
+    }
+
+    // -- F3.i: the server-backed pickers ---------------------------------
+
+    fn model(
+        provider: &str,
+        id: &str,
+        name: &str,
+        free: bool,
+        deprecated: bool,
+    ) -> crate::store::ServerModel {
+        crate::store::ServerModel {
+            provider_id: provider.into(),
+            id: id.into(),
+            name: name.into(),
+            cost_input: if free { 0.0 } else { 1.25 },
+            free,
+            deprecated,
+            variants: Vec::new(),
+            released: 0.0,
+            context_limit: None,
+        }
+    }
+
+    fn agent(id: &str, mode: &str, hidden: bool) -> crate::store::ServerAgent {
+        crate::store::ServerAgent {
+            id: id.into(),
+            name: id.into(),
+            description: Some("Does things".into()),
+            mode: mode.into(),
+            hidden,
+        }
+    }
+
+    /// The session-list dialog lists the HISTORY (the resync's
+
+    /// Shared body for the G-34 dispatch cases: seed one routed
+    /// session at `/work/cur` (optionally marked unavailable via the
+    /// location worker's error state), dispatch `session.new`, and
+    /// check the resolved home location.
+    fn session_new_location_dispatch_case(
+        mode: crate::store::NewSessionLocation,
+        expect_inherit: bool,
+        unavailable: bool,
+    ) {
+        use crate::data::{Ingest, SessionSnapshot};
+        let store = Store::new(Runtime::new());
+        // G-34 consumer wiring: the prompt sink's shared cell mirrors
+        // the resolution (the home submission's create-directory).
+        let cell = std::rc::Rc::new(std::cell::RefCell::new(None));
+        store.set_home_location_cell(std::rc::Rc::clone(&cell));
+        store.ingest_all([Ingest::Resync {
+            sessions: vec![SessionSnapshot {
+                model: None,
+                id: "s1".into(),
+                title: Some("G-34 case".into()),
+                parent_id: None,
+                time_idle: None,
+                viewed: None,
+                directory: Some("/work/cur".into()),
+                ..Default::default()
+            }],
+            unread: Vec::new(),
+            messages: Vec::new(),
+            cursors: Vec::new(),
+            forms: Vec::new(),
+            permissions: Vec::new(),
+        }]);
+        store.navigate(Route::Session { session_id: "s1".into() });
+        if unavailable {
+            store.set_location_error(Some("/work/cur".to_owned()));
+        }
+        store.set_session_new_location(mode);
+        let mut dispatcher = StoreDispatcher;
+        assert_eq!(dispatcher.dispatch(&store, "session.new", None), Dispatch::Handled);
+        assert_eq!(store.route(), Route::Home);
+        let expected = if expect_inherit && !unavailable { Some("/work/cur") } else { None };
+        assert_eq!(store.home_location().as_deref(), expected);
+        assert_eq!(
+            cell.borrow().as_deref(),
+            expected,
+            "the shared cell (the sink's create-directory) mirrors the resolution"
+        );
+    }
+
+    /// G-34 — `session.new_location` (new-session-location.ts):
+    /// `inherit` keeps the home route at the routed session's
+    /// location; `launch` (the default) returns to the launch
+    /// directory; a failed/unavailable location never inherits.
+    #[test]
+    fn session_new_location_resolution() {
+        use crate::store::new_session_location;
+        use crate::store::NewSessionLocation as Mode;
+        assert_eq!(new_session_location(Mode::Inherit, Some("/a"), None).as_deref(), Some("/a"));
+        assert_eq!(new_session_location(Mode::Launch, Some("/a"), None), None);
+        assert_eq!(new_session_location(Mode::Inherit, None, None), None);
+        assert_eq!(new_session_location(Mode::Inherit, Some("/a"), Some("/a")), None);
+        assert_eq!(
+            new_session_location(Mode::Inherit, Some("/a"), Some("/b")).as_deref(),
+            Some("/a")
+        );
+    }
+
+    #[test]
+    fn session_new_inherit_keeps_the_current_location() {
+        session_new_location_dispatch_case(crate::store::NewSessionLocation::Inherit, true, false);
+    }
+
+    #[test]
+    fn session_new_launch_returns_to_the_launch_directory() {
+        session_new_location_dispatch_case(crate::store::NewSessionLocation::Launch, false, false);
+    }
+
+    #[test]
+    fn session_new_inherit_skips_an_unavailable_location() {
+        session_new_location_dispatch_case(
+            crate::store::NewSessionLocation::Inherit,
+            false,
+            /* unavailable */ true,
+        );
+    }
+
+    /// session.list), not the open tabs — and selecting a row
+    /// navigates (the route effect opens the tab).
+    #[test]
+    fn session_list_dialog_rows_come_from_history_not_tabs() {
+        use crate::data::{Ingest, SessionSnapshot};
+        let store = Store::new(Runtime::new());
+        store.open_tab("s_open", Some("Open tab".to_owned()));
+        store.ingest_all([Ingest::Resync {
+            sessions: vec![
+                SessionSnapshot {
+                    model: None,
+                    id: "s_hist".into(),
+                    title: Some("History row".into()),
+                    parent_id: None,
+                    time_idle: None,
+                    viewed: None,
+                    ..Default::default()
+                },
+                SessionSnapshot {
+                    model: None,
+                    id: "s_open".into(),
+                    title: Some("Open tab".into()),
+                    parent_id: None,
+                    time_idle: None,
+                    viewed: None,
+                    ..Default::default()
+                },
+            ],
+            unread: Vec::new(),
+            messages: Vec::new(),
+            cursors: Vec::new(),
+            permissions: Vec::new(),
+            forms: Vec::new(),
+        }]);
+        let props = select_props_for(
+            &DialogKind::ServerList { command: "session.list", title: "Sessions" },
+            &store,
+        );
+        let titles: Vec<&str> = props.options.iter().map(|option| option.title.as_str()).collect();
+        assert_eq!(titles, vec!["History row", "Open tab"], "history rows, newest first");
+        // Accepting a history row opens its tab through navigation.
+        execute_server_list_selection(&store, "session.list", "s_hist");
+        assert_eq!(store.route(), crate::store::Route::Session { session_id: "s_hist".to_owned() });
+        assert!(store.tabs().tabs.iter().any(|tab| tab.session_id == "s_hist"));
+    }
+
+    /// The model picker renders loaded rows (Free footers,
+    /// provider/model values), a muted loading row while the fetch is
+    /// in flight, and the error text when it failed. While
+    /// UNCONNECTED (the rig + fresh boots) the rows carry NO
+    /// categories and the footer action reads "View all integrations"
+    /// (dialog-model.tsx:77-97/168-176); connected flips to provider
+    /// categories + "Connect an integration".
+    #[test]
+    fn model_list_props_cover_loaded_loading_and_error_states() {
+        let store = Store::new(Runtime::new());
+        store.open_tab("s1", None);
+
+        // Loading: one muted status row.
+        let props = model_list_props(&store, "Select model");
+        assert_eq!(props.options.len(), 1);
+        assert!(props.options[0].title.contains("Loading models"));
+
+        // Loaded (UNCONNECTED default): deprecated filtered, Free
+        // footer, no categories, the integrations footer action.
+        store.set_models(
+            ListState::Loaded(vec![
+                model("anthropic", "claude", "Claude", true, false),
+                model("anthropic", "old", "Old", false, true),
+                model("custom", "local-1", "Local One", false, false),
+            ]),
+            vec![ServerProvider { id: "anthropic".into(), name: "Anthropic".into() }],
+        );
+        let props = model_list_props(&store, "Select model");
+        assert_eq!(props.options.len(), 2, "deprecated row filtered");
+        assert_eq!(props.options[0].title, "Claude");
+        assert_eq!(props.options[0].value, "anthropic/claude");
+        assert_eq!(props.options[0].category, None, "unconnected renders flat");
+        assert_eq!(props.options[0].footer.as_deref(), Some("Free"));
+        assert_eq!(props.options[1].footer, None, "paid model has no footer");
+        assert_eq!(
+            props.actions,
+            vec![SelectAction::new("model.dialog.provider", "View all integrations", "ctrl+a")],
+            "the unconnected footer action (dialog-model.tsx:168-176)"
+        );
+
+        // Connected: provider-name categories (group headers return)
+        // and the "Connect an integration" wording.
+        store.set_integration_connected(true);
+        let props = model_list_props(&store, "Select model");
+        assert_eq!(props.options[0].category.as_deref(), Some("Anthropic"));
+        assert_eq!(props.options[1].category.as_deref(), Some("custom"), "no provider row");
+        assert_eq!(
+            props.actions,
+            vec![SelectAction::new("model.dialog.provider", "Connect an integration", "ctrl+a")]
+        );
+
+        // Failed: the error surfaces in the row.
+        store.set_models(ListState::Failed("503".into()), Vec::new());
+        let props = model_list_props(&store, "Select model");
+        assert!(props.options[0].title.contains("Models unavailable"));
+        assert!(props.options[0].title.contains("503"));
+    }
+
+    /// D-05 — `sortModelOptions` ported verbatim from
+    /// `dialog-model.tsx:185-211`. Vectors from the reference's
+    /// model-options test (the SHIPPED comparator's behavior —
+    /// verified against the ref source in both bun and node).
+    #[test]
+    fn sort_model_options_orders_opencode_go_before_zen_and_others() {
+        let rows = [
+            row("openai", "OpenAI", "GPT 5", false, 3.0),
+            row("opencode", "OpenCode Zen", "Claude Sonnet 4", false, 1.0),
+            row("anthropic", "Anthropic", "Claude Opus 4", false, 2.0),
+            row("opencode-go", "OpenCode Go", "Kimi K3", false, 0.0),
+        ];
+        let titles = sorted_titles(&rows, true);
+        assert_eq!(titles, vec!["Kimi K3", "Claude Sonnet 4", "Claude Opus 4", "GPT 5"]);
+    }
+
+    #[test]
+    fn sort_model_options_grouped_puts_the_opencode_group_first() {
+        // The ref's test-1 input under `grouped = true` (browse): the
+        // opencode provider group wins before anthropic's rows — the
+        // shipped comparator's output (the ref test file's expectation
+        // here predates the provider-grouping keys).
+        let rows = [
+            row("opencode", "OpenCode Zen", "Claude Haiku 3", false, 1.0),
+            row("anthropic", "Anthropic", "Claude Haiku 4.5", false, 2.0),
+            row("anthropic", "Anthropic", "Claude Haiku Free", true, 0.0),
+        ];
+        let titles = sorted_titles(&rows, true);
+        assert_eq!(titles, vec!["Claude Haiku 3", "Claude Haiku Free", "Claude Haiku 4.5"]);
+        // Ungrouped (the search path): free-first, then release desc.
+        let titles = sorted_titles(&rows, false);
+        assert_eq!(titles, vec!["Claude Haiku Free", "Claude Haiku 4.5", "Claude Haiku 3"]);
+    }
+
+    #[test]
+    fn sort_model_options_ungrouped_free_first_regardless_of_provider() {
+        let rows = [
+            row("opencode-go", "OpenCode Go", "Go model", false, 3.0),
+            row("opencode", "OpenCode Zen", "Free Zen model", true, 1.0),
+            row("anthropic", "Anthropic", "Anthropic model", false, 4.0),
+        ];
+        let titles = sorted_titles(&rows, false);
+        assert_eq!(titles, vec!["Free Zen model", "Anthropic model", "Go model"]);
+    }
+
+    #[test]
+    fn sort_model_options_groups_by_provider_name_then_newest_release() {
+        let rows = [
+            row("google", "Google", "Gemini 2.5 Pro", false, 5.0),
+            row("anthropic", "Anthropic", "Claude Sonnet 4", false, 4.0),
+            row("anthropic", "Anthropic", "Claude Opus 4", false, 6.0),
+            row("openai", "OpenAI", "GPT 5", false, 7.0),
+        ];
+        let titles = sorted_titles(&rows, true);
+        assert_eq!(
+            titles,
+            vec!["Claude Opus 4", "Claude Sonnet 4", "Gemini 2.5 Pro", "GPT 5"],
+            "provider-name groups stay contiguous, newest first inside"
+        );
+    }
+
+    #[test]
+    fn sort_model_options_title_collation_breaks_release_ties() {
+        let rows = [
+            row("anthropic", "Anthropic", "Claude Sonnet 4", false, 5.0),
+            row("anthropic", "Anthropic", "Claude Opus 4", false, 5.0),
+        ];
+        let titles = sorted_titles(&rows, true);
+        assert_eq!(titles, vec!["Claude Opus 4", "Claude Sonnet 4"]);
+    }
+
+    /// Sort-input row helper: one `ServerModel` + its provider name.
+    fn row(
+        provider_id: &str,
+        provider_name: &str,
+        title: &str,
+        free: bool,
+        released: f64,
+    ) -> (crate::store::ServerModel, String) {
+        (
+            crate::store::ServerModel {
+                provider_id: provider_id.into(),
+                id: title.to_lowercase().replace(' ', "-"),
+                name: title.into(),
+                cost_input: if free { 0.0 } else { 1.0 },
+                free,
+                deprecated: false,
+                variants: Vec::new(),
+                released,
+                context_limit: None,
+            },
+            provider_name.into(),
+        )
+    }
+
+    fn sorted_titles(rows: &[(crate::store::ServerModel, String)], grouped: bool) -> Vec<String> {
+        let mut borrowed: Vec<&crate::store::ServerModel> =
+            rows.iter().map(|(model, _)| model).collect();
+        let names: Vec<(String, String)> =
+            rows.iter().map(|(model, name)| (model.provider_id.clone(), name.clone())).collect();
+        let resolve = move |id: &str| -> String {
+            names
+                .iter()
+                .find(|(provider, _)| provider == id)
+                .map_or_else(|| id.to_owned(), |(_, name)| name.clone())
+        };
+        sort_model_options(&mut borrowed, grouped, &resolve);
+        borrowed.iter().map(|model| model.name.clone()).collect()
+    }
+
+    /// The agent picker filters subagent/hidden rows, carries the
+    /// description, and marks the active session's selection current.
+    #[test]
+    fn agent_list_props_filter_and_mark_current() {
+        let store = Store::new(Runtime::new());
+        store.open_tab("s1", None);
+        store.set_agents(ListState::Loaded(vec![
+            agent("build", "all", false),
+            agent("explore", "subagent", false),
+            agent("secret", "all", true),
+        ]));
+        store.select_agent("s1", "build");
+        // Re-point the sink log assertion: the default recording sink
+        // captured the call.
+        let props = agent_list_props(&store, "Switch agent");
+        assert_eq!(props.options.len(), 1, "subagent + hidden filtered");
+        assert_eq!(props.options[0].title, "build");
+        assert_eq!(props.options[0].description.as_deref(), Some("Does things"));
+        assert_eq!(props.current.as_deref(), Some("build"), "current from the selection");
+    }
+
+    /// Model/agent submissions apply through the selection sink on a
+    /// session route and stage without a POST on home; unknown agents
+    /// warn (v2's `local.agent.set` toast).
+    #[test]
+    fn server_list_submissions_apply_via_the_sink() {
+        use crate::store::{RecordingSelectionSink, SelectionCall};
+        let mut store = Store::new(Runtime::new());
+        let sink = std::rc::Rc::new(RecordingSelectionSink::default());
+        let sink_dyn: std::rc::Rc<dyn crate::store::SelectionSink> = sink.clone();
+        store.set_selection_sink(sink_dyn);
+        store.open_tab("s1", None);
+
+        // Model on the session route: state + sink.
+        assert_eq!(
+            execute_server_list_selection(&store, "model.list", "anthropic/claude"),
+            Dispatch::Handled
+        );
+        assert_eq!(
+            sink.calls.borrow().as_slice(),
+            &[(
+                "s1".into(),
+                SelectionCall::Model {
+                    provider_id: "anthropic".into(),
+                    model_id: "claude".into(),
+                    variant: None
+                }
+            )]
+        );
+        let selection = store.selection_for("s1");
+        assert_eq!(selection.model.as_ref().unwrap().model_id, "claude");
+
+        // Agent on the session route: state + sink.
+        store.set_agents(ListState::Loaded(vec![agent("review", "primary", false)]));
+        assert_eq!(
+            execute_server_list_selection(&store, "agent.list", "review"),
+            Dispatch::Handled
+        );
+        assert_eq!(
+            sink.calls.borrow().last(),
+            Some(&("s1".into(), SelectionCall::Agent("review".into())))
+        );
+
+        // Home: staged only — no sink call.
+        store.navigate(Route::Home);
+        execute_server_list_selection(&store, "model.list", "opencode/grok");
+        assert_eq!(sink.calls.borrow().len(), 2, "no third call from the home stage");
+        assert_eq!(
+            store.selection_for(crate::app::HOME_PROMPT_KEY).model.as_ref().unwrap().model_id,
+            "grok"
+        );
+
+        // Unknown agent (list loaded, id absent): warning toast, no call.
+        execute_server_list_selection(&store, "agent.list", "ghost");
+        assert_eq!(sink.calls.borrow().len(), 2);
+        let toasts = store.toasts();
+        assert_eq!(
+            toasts.current().map(|toast| toast.message.as_str()),
+            Some("Agent not found: ghost")
+        );
+        assert_eq!(toasts.current().unwrap().variant, "warning");
+    }
+
+    /// `messages.copy`: the exact v2 toasts for every miss, the OSC-52
+    /// write through the clipboard sink on hit.
+    #[test]
+    fn messages_copy_resolves_text_and_toasts() {
+        use crate::components::message::model::{Message, PartTime};
+        let mut store = Store::new(Runtime::new());
+        let clipboard = std::rc::Rc::new(crate::clipboard::RecordingClipboardSink::default());
+        let clipboard_dyn: std::rc::Rc<dyn crate::clipboard::ClipboardSink> = clipboard.clone();
+        store.set_clipboard_sink(clipboard_dyn);
+        store.open_tab("s1", None);
+
+        // No assistant messages yet.
+        copy_message_to_clipboard(&store);
+        assert!(
+            clipboard.writes.lock().unwrap().is_empty(),
+            "nothing written without an assistant message"
+        );
+        assert_eq!(
+            store.toasts().current().map(|toast| toast.message.as_str()),
+            Some("No assistant messages found")
+        );
+        assert_eq!(store.toasts().current().unwrap().variant, "error");
+
+        // An assistant message whose LAST turn has the text parts.
+        store.set_messages(
+            "s1",
+            vec![
+                Message::User {
+                    id: "u1".into(),
+                    text: "question".into(),
+                    created: 0,
+                    files: Vec::new(),
+                },
+                Message::Assistant {
+                    id: "a1".into(),
+                    agent: "build".into(),
+                    model: String::new(),
+                    parts: vec![
+                        crate::components::message::model::Part::Tool {
+                            id: "t1".into(),
+                            name: "read".into(),
+                            time: PartTime::default(),
+                            state: crate::components::message::model::ToolState::default(),
+                        },
+                        crate::components::message::model::Part::Text {
+                            text: "first ".into(),
+                            time: PartTime::default(),
+                        },
+                        crate::components::message::model::Part::Text {
+                            text: "second".into(),
+                            time: PartTime::default(),
+                        },
+                    ],
+                    finish: None,
+                    error: None,
+                    time: PartTime::default(),
+                    tokens: None,
+                    usage_total: None,
+                },
+            ],
+        );
+        copy_message_to_clipboard(&store);
+        assert_eq!(
+            clipboard.writes.lock().unwrap().as_slice(),
+            &["first \nsecond".to_owned()],
+            "text parts joined \\n and trimmed"
+        );
+        assert_eq!(
+            store.toasts().current().map(|toast| toast.message.as_str()),
+            Some("Message copied to clipboard!")
+        );
+        assert_eq!(store.toasts().current().unwrap().variant, "success");
+    }
+
+    /// `<leader>e` requests the editor flow; `help.show` opens the Help
+    /// dialog.
+    #[test]
+    fn editor_request_and_help_dialog_commands() {
+        let store = Store::new(Runtime::new());
+        let mut dispatcher = StoreDispatcher;
+        assert!(!store.take_editor_request());
+        assert_eq!(dispatcher.dispatch(&store, "prompt.editor", None), Dispatch::Handled);
+        assert!(store.take_editor_request(), "the flag drained once");
+        assert!(!store.take_editor_request(), "and exactly once");
+
+        assert_eq!(dispatcher.dispatch(&store, "help.show", None), Dispatch::Handled);
+        assert_eq!(store.top_dialog().unwrap().kind, DialogKind::Help);
+    }
+
+    // -- dogfood wave 1 -------------------------------------------------------
+
+    /// F10 — `session.new` inherits the active session's selection (v2
+    /// app.tsx:728-731 `local.model.set(model)` + the agent): the
+    /// staged home draft carries the pick into the next submission.
+    #[test]
+    fn session_new_inherits_the_current_selection() {
+        let store = Store::new(Runtime::new());
+        store.open_tab("s1", Some("S".to_owned()));
+        store.select_model(
+            "s1",
+            &ModelSelection {
+                provider_id: "parityfake".into(),
+                model_id: "picked-model".into(),
+                variant: None,
+            },
+        );
+        store.select_agent("s1", "review");
+
+        let mut dispatcher = StoreDispatcher;
+        assert_eq!(dispatcher.dispatch(&store, "session.new", None), Dispatch::Handled);
+        assert_eq!(store.route(), Route::Home, "session.new routed home");
+        let staged = store.selection_for(crate::app::HOME_PROMPT_KEY);
+        assert_eq!(
+            staged.model.map(|model| model.model_id),
+            Some("picked-model".to_owned()),
+            "the model staged onto the home draft"
+        );
+        assert_eq!(staged.agent.as_deref(), Some("review"), "the agent staged too");
+
+        // Home's own stage (no session route) is untouched by the walk.
+        assert_eq!(dispatcher.dispatch(&store, "session.new", None), Dispatch::Handled);
+        assert_eq!(
+            store.selection_for(crate::app::HOME_PROMPT_KEY).model.map(|m| m.model_id),
+            Some("picked-model".to_owned()),
+            "a home-route session.new keeps the existing stage"
+        );
+    }
+
+    /// F13 — opening the session-list dialog fires a `session.list`
+    /// refetch through the sink (the boot resync snapshot goes stale).
+    #[test]
+    fn session_list_dialog_open_fires_the_refresh_sink() {
+        let store = Store::new(Runtime::new());
+        let sink = std::rc::Rc::new(crate::store::RecordingSessionListSink::default());
+        store.set_session_list_sink(
+            std::rc::Rc::clone(&sink) as std::rc::Rc<dyn crate::store::SessionListSink>
+        );
+        let mut dispatcher = StoreDispatcher;
+        assert_eq!(dispatcher.dispatch(&store, "session.list", None), Dispatch::Handled);
+        assert_eq!(sink.calls.get(), 1, "the dialog open refreshed the list");
+        // Other listings do not fire it.
+        assert_eq!(dispatcher.dispatch(&store, "model.list", None), Dispatch::Handled);
+        assert_eq!(sink.calls.get(), 1);
+    }
+
+    /// F14 — a plugin command claiming a builtin id renders ONE row
+    /// (the registry's own); the suggested-section mirrors stay.
+    #[test]
+    fn palette_dedups_plugin_entries_claiming_builtin_ids() {
+        let store = Store::new(Runtime::new());
+        store.set_plugin_commands(vec![crate::store::PluginCommandEntry {
+            command: "help.show".to_owned(),
+            title: "Help again".to_owned(),
+            plugin_id: "omos".to_owned(),
+        }]);
+        let props = palette_props(&store);
+        let values: Vec<&str> = props.options.iter().map(|option| option.value.as_str()).collect();
+        let duplicates = values.iter().filter(|value| **value == "help.show").count();
+        assert_eq!(duplicates, 1, "one dispatchable help.show row: {values:?}");
+        // The suggested mirror (prefixed) survives by design.
+        assert!(
+            values.iter().any(|value| value.starts_with("suggested:")),
+            "v2's suggested section keeps its prefixed copies"
+        );
+    }
+
+    // -- Lane FINAL: the stub-dispatch family + the six session
+    // commands ----------------------------------------------------------
+
+    fn final_session_store() -> Store {
+        let store = Store::new(crate::reactive::Runtime::new());
+        store.open_tab("ses_1", Some("Session one".to_owned()));
+        store.navigate(Route::Session { session_id: "ses_1".to_owned() });
+        store.set_messages(
+            "ses_1",
+            vec![
+                crate::components::message::model::Message::User {
+                    id: "u1".into(),
+                    text: "first question".into(),
+                    created: 1_000,
+                    files: Vec::new(),
+                },
+                crate::components::message::model::Message::User {
+                    id: "u2".into(),
+                    text: "second question".into(),
+                    created: 2_000,
+                    files: Vec::new(),
+                },
+            ],
+        );
+        store
+    }
+
+    /// `provider.connect` mounts the real integration list over the
+    /// BE-3 host (the list fetch fires through the sink) — never the
+    /// old "Not wired in this build" stub.
+    #[test]
+    fn final_provider_connect_mounts_integration_list() {
+        use crate::store::RecordingIntegrationSink;
+        let store = Store::new(crate::reactive::Runtime::new());
+        let sink = std::rc::Rc::new(RecordingIntegrationSink::default());
+        store.set_integration_sink(sink.clone());
+        let mut dispatcher = StoreDispatcher;
+        assert_eq!(dispatcher.dispatch(&store, "provider.connect", None), Dispatch::Handled);
+        assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::Integration));
+        assert_eq!(
+            sink.calls.borrow().as_slice(),
+            &[crate::store::IntegrationCall::List],
+            "the open fired integration.list"
+        );
+        // The list dialog renders the rows (v2's sort + categories +
+        // the connected footer).
+        store.integration_list_loaded(vec![crate::store::IntegrationRow {
+            id: "anthropic".into(),
+            name: "Anthropic".into(),
+            category: "Popular",
+            methods: vec![crate::store::IntegrationMethod {
+                id: "key".into(),
+                kind: "key",
+                label: "API key".into(),
+            }],
+            accounts: Vec::new(),
+            summary: String::new(),
+            sign_in_required: false,
+        }]);
+        let props = select_props_for(&store.top_dialog().unwrap().kind, &store);
+        assert_eq!(props.title, "Connect an integration");
+        assert_eq!(props.options[0].title, "Anthropic");
+        assert_eq!(props.options[0].category.as_deref(), Some("Popular"));
+
+        // The connect chain: row → (single method) → the key prompt →
+        // the sink POST.
+        let submit =
+            crate::components::dialog::execute_submission(&store, &mut dispatcher, "anthropic");
+        assert_eq!(submit, Dispatch::Handled);
+        assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::IntegrationKey { .. }));
+        store.integration_key_submit("anthropic", "sk-test");
+        assert_eq!(
+            sink.calls.borrow()[1],
+            crate::store::IntegrationCall::ConnectKey {
+                integration_id: "anthropic".into(),
+                key: "sk-test".into()
+            }
+        );
+        // The connected event: toast + clear + refetch.
+        store.integration_connected("Anthropic");
+        assert!(store.dialogs().is_empty(), "the flow closed on connect");
+        assert_eq!(sink.calls.borrow().last(), Some(&crate::store::IntegrationCall::List));
+        assert!(store.toasts().current().is_some_and(|toast| toast.message.contains("Connected")));
+    }
+
+    /// The OAuth code path: `oauth.connect` (code mode) mounts the
+    /// code-entry prompt with the attempt's URL; the submit fires
+    /// `oauth.complete`.
+    #[test]
+    fn final_oauth_code_entry_flow() {
+        use crate::store::{IntegrationAttempt, RecordingIntegrationSink};
+        let store = Store::new(crate::reactive::Runtime::new());
+        let sink = std::rc::Rc::new(RecordingIntegrationSink::default());
+        store.set_integration_sink(sink.clone());
+        store.integration_list_loaded(vec![crate::store::IntegrationRow {
+            id: "github".into(),
+            name: "GitHub".into(),
+            category: "Popular",
+            methods: vec![crate::store::IntegrationMethod {
+                id: "oauth-browser".into(),
+                kind: "oauth",
+                label: "Browser".into(),
+            }],
+            accounts: Vec::new(),
+            summary: String::new(),
+            sign_in_required: false,
+        }]);
+        let mut dispatcher = StoreDispatcher;
+        dispatcher.dispatch(&store, "provider.connect", None);
+        store.integration_list_loaded(store_rows(&store));
+        crate::components::dialog::execute_submission(&store, &mut dispatcher, "github");
+        store.integration_oauth_started(IntegrationAttempt {
             integration_id: "github".into(),
             attempt_id: "att_1".into(),
-            code: "ABCD-1234".into()
-        }
-    );
-}
-
-fn store_rows(store: &Store) -> Vec<crate::store::IntegrationRow> {
-    match store.integration_list() {
-        crate::store::IntegrationListState::Loaded(rows) => rows,
-        _ => Vec::new(),
+            kind: "oauth",
+            code_mode: true,
+            url: "https://github.com/login/device".into(),
+            instructions: "Enter code ABCD-1234".into(),
+            title: "Browser".into(),
+        });
+        assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::IntegrationCode { .. }));
+        // The prompt shows the URL (v2's description block).
+        let props = select_props_for(&store.top_dialog().unwrap().kind, &store);
+        assert!(props.hints.iter().any(|hint| hint.contains("github.com/login/device")));
+        store.integration_code_submit("github", "att_1", "ABCD-1234");
+        assert_eq!(
+            sink.calls.borrow()[1],
+            crate::store::IntegrationCall::OauthComplete {
+                integration_id: "github".into(),
+                attempt_id: "att_1".into(),
+                code: "ABCD-1234".into()
+            }
+        );
     }
-}
 
-/// The other six stub dispatches resolve to their real v2
-/// surfaces (or v2's own mirrored behavior).
-#[test]
-fn final_six_stub_dispatches_resolve() {
-    use crate::store::{RecordingRevertSink, RecordingSessionActionSink};
-    let store = final_session_store();
-    let actions = std::rc::Rc::new(RecordingSessionActionSink::default());
-    store.set_session_action_sink(actions.clone());
-    store.set_revert_sink(std::rc::Rc::new(RecordingRevertSink::default()));
-    store.set_open_url_sink(Some(std::rc::Rc::new(|_url: String| {})));
-    let mut dispatcher = StoreDispatcher;
-
-    // open.menu → DialogOpen (TUI-5, lane-tui2): the Sessions
-    // recents + Projects sections select at the large size
-    // (dialog-open.tsx:338's `size: "large"`).
-    dispatcher.dispatch(&store, "open.menu", None);
-    assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::Open));
-    assert_eq!(store.top_dialog().unwrap().size, crate::store::DialogSize::Large);
-    store.clear_dialogs();
-
-    // opencode.settings → the FULL Settings table (TUI-23 — every
-    // v2.0.24 row, order verbatim).
-    dispatcher.dispatch(&store, "opencode.settings", None);
-    assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::Settings));
-    let props = select_props_for(&store.top_dialog().unwrap().kind, &store);
-    let ids: Vec<&str> = props.options.iter().map(|option| option.value.as_str()).collect();
-    assert_eq!(ids.len(), crate::components::dialog_config::settings_table().len());
-    for expected in
-        ["theme.name", "theme.mode", "session.sidebar", "session.grouping", "debug.devtools"]
-    {
-        assert!(ids.contains(&expected), "the {expected} row is present");
-    }
-    store.clear_dialogs();
-
-    // session.share mirrors v2's unavailable toast.
-    dispatcher.dispatch(&store, "session.share", None);
-    let toast = store.toasts().current().cloned().expect("the share toast");
-    assert_eq!(toast.message, "Sharing is not implemented for V2 sessions yet");
-    store.clear_dialogs();
-
-    // location.reload → the info toast + the POST.
-    dispatcher.dispatch(&store, "location.reload", None);
-    assert!(store
-        .toasts()
-        .current()
-        .is_some_and(|toast| toast.message == "Reloading configuration…"));
-    assert_eq!(
-        actions.calls.borrow().as_slice(),
-        &[crate::store::SessionActionCall::LocationReload]
-    );
-    store.clear_dialogs();
-
-    // session.fork → the fork picker ("Full session" + the user
-    // messages newest-first).
-    dispatcher.dispatch(&store, "session.fork", None);
-    assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::ForkPicker { .. }));
-    let props = select_props_for(&store.top_dialog().unwrap().kind, &store);
-    assert_eq!(props.options[0].title, "Full session");
-    assert_eq!(props.options[1].title, "second question");
-    assert_eq!(props.options[2].title, "first question");
-    // Submitting a row fires the fork POST with `before`.
-    let submit = crate::components::dialog::execute_submission(
-        &store,
-        &mut dispatcher,
-        props.options[1].value.as_str(),
-    );
-    assert_eq!(submit, Dispatch::Handled);
-    assert_eq!(
-        actions.calls.borrow()[1],
-        crate::store::SessionActionCall::Fork {
-            session_id: "ses_1".into(),
-            before: Some("u2".into())
-        }
-    );
-
-    // docs.open → the URL open path.
-    let opened = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
-    let opened_url = opened.clone();
-    store.set_open_url_sink(Some(std::rc::Rc::new(move |url: String| {
-        *opened_url.borrow_mut() = url;
-    })));
-    dispatcher.dispatch(&store, "docs.open", None);
-    assert_eq!(*opened.borrow(), "https://opencode.ai/docs");
-}
-
-/// The six dead session commands act through the sink.
-#[test]
-fn final_six_session_commands_act() {
-    use crate::store::{ModelSelection, RecordingRevertSink, RecordingSessionActionSink};
-    let store = final_session_store();
-    let actions = std::rc::Rc::new(RecordingSessionActionSink::default());
-    store.set_session_action_sink(actions.clone());
-    let reverts = std::rc::Rc::new(RecordingRevertSink::default());
-    store.set_revert_sink(reverts.clone());
-    let mut dispatcher = StoreDispatcher;
-
-    // compact → the POST with the current model.
-    store.select_model(
-        "ses_1",
-        &ModelSelection {
-            provider_id: "anthropic".into(),
-            model_id: "claude".into(),
-            variant: None,
-        },
-    );
-    dispatcher.dispatch(&store, "session.compact", None);
-    assert_eq!(
-        actions.calls.borrow()[0],
-        crate::store::SessionActionCall::Compact {
-            session_id: "ses_1".into(),
-            model: Some(ModelSelection {
-                provider_id: "anthropic".into(),
-                model_id: "claude".into(),
-                variant: None
-            })
-        }
-    );
-
-    // undo → revert.stage on the LAST user message + the composer
-    // seed.
-    dispatcher.dispatch(&store, "session.undo", None);
-    assert_eq!(
-        actions.calls.borrow()[1],
-        crate::store::SessionActionCall::RevertStage {
-            session_id: "ses_1".into(),
-            message_id: "u2".into()
-        }
-    );
-    assert_eq!(store.composer("ses_1").draft.text, "second question");
-
-    // redo → the staged revert clears through the revert sink
-    // (the SSE staged event seeds the state first).
-    store.ingest_all([crate::data::Ingest::Event(crate::data::BusEvent::new(
-        "session.revert.staged",
-        serde_json::json!({
-            "sessionID": "ses_1",
-            "revert": { "messageID": "u1", "files": [] }
-        }),
-    ))]);
-    dispatcher.dispatch(&store, "session.redo", None);
-    assert_eq!(reverts.calls.borrow().as_slice(), &["ses_1".to_owned()]);
-
-    // background → the POST.
-    dispatcher.dispatch(&store, "session.background", None);
-    assert_eq!(
-        actions.calls.borrow().last(),
-        Some(&crate::store::SessionActionCall::Background("ses_1".into()))
-    );
-
-    // export → the destination dialog → the POST.
-    dispatcher.dispatch(&store, "session.export", None);
-    assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::SessionExport { .. }));
-    let submit =
-        crate::components::dialog::execute_submission(&store, &mut dispatcher, "markdown:file");
-    assert_eq!(submit, Dispatch::Handled);
-    assert_eq!(
-        actions.calls.borrow().last(),
-        Some(&crate::store::SessionActionCall::Export {
-            session_id: "ses_1".into(),
-            sanitize: false,
-            format: "markdown".into(),
-            destination: "file".into()
-        })
-    );
-
-    // delete: NOT a palette row (v2 lists it only as the sessions
-    // dialog's ctrl+d action); the two-press fires session.remove.
-    assert!(palette_props(&store)
-        .options
-        .iter()
-        .all(|option| option.value != "session.delete"));
-    store.session_delete_pressed("ses_1");
-    assert!(actions
-        .calls
-        .borrow()
-        .iter()
-        .all(|call| !matches!(call, crate::store::SessionActionCall::Remove(_))));
-    store.session_delete_pressed("ses_1");
-    assert_eq!(
-        actions.calls.borrow().last(),
-        Some(&crate::store::SessionActionCall::Remove("ses_1".into()))
-    );
-}
-
-/// `session.redo`'s palette row delists exactly when v2's
-/// `enabled` gate is off (no staged revert on the route).
-#[test]
-fn final_session_redo_delists_without_revert() {
-    let store = final_session_store();
-    let props = palette_props(&store);
-    let advertised: Vec<&str> =
-        props.options.iter().map(|option| option.value.as_str()).collect();
-    assert!(!advertised.contains(&"session.redo"), "no revert staged — delisted");
-    store.ingest_all([crate::data::Ingest::Event(crate::data::BusEvent::new(
-        "session.revert.staged",
-        serde_json::json!({
-            "sessionID": "ses_1",
-            "revert": { "messageID": "u1", "files": [] }
-        }),
-    ))]);
-    let props = palette_props(&store);
-    let advertised: Vec<&str> =
-        props.options.iter().map(|option| option.value.as_str()).collect();
-    assert!(advertised.contains(&"session.redo"), "staged revert — listed");
-    // The export row is palette-visible (index.tsx:1201-1207).
-    assert!(advertised.contains(&"session.export"));
-}
-
-/// The Settings dialog's cycles write through the config sink
-/// (should-fix #5's grouping half).
-#[test]
-fn final_settings_cycles_persist() {
-    use crate::store::RecordingConfigSink;
-    let store = final_session_store();
-    let config = std::rc::Rc::new(RecordingConfigSink::default());
-    store.set_config_sink(config.clone());
-    // The store default groups (v2 `session.grouping: "auto"`);
-    // one cycle flips to none, the next back to auto.
-    store.setting_cycle("session.grouping", 1);
-    assert_eq!(config.calls.borrow().as_slice(), &[("session.grouping", "none".to_owned())]);
-    store.setting_cycle("session.grouping", 1);
-    assert_eq!(
-        config.calls.borrow().as_slice(),
-        &[("session.grouping", "none".to_owned()), ("session.grouping", "auto".to_owned())]
-    );
-}
-
-/// RD-06 — `app.toggle.paste_summary` (app.tsx:1193-1205): the
-/// command flips `prompt.paste` compact↔full through the store
-/// (the fold gate) and persists the value via the config sink.
-#[test]
-fn toggle_paste_summary_flips_and_persists() {
-    use crate::store::ConfigSink;
-    #[derive(Default)]
-    struct PasteSink(std::cell::RefCell<Vec<String>>);
-    impl ConfigSink for PasteSink {
-        fn update_theme_name(&self, _: &str) {}
-        fn update_theme_mode(&self, _: &str) {}
-        fn update_session_sidebar(&self, _: bool) {}
-        fn update_session_grouping(&self, _: bool) {}
-        fn update_setting(&self, path: &str, value: &str) {
-            assert_eq!(path, "prompt.paste");
-            self.0.borrow_mut().push(value.to_owned());
+    fn store_rows(store: &Store) -> Vec<crate::store::IntegrationRow> {
+        match store.integration_list() {
+            crate::store::IntegrationListState::Loaded(rows) => rows,
+            _ => Vec::new(),
         }
     }
-    let store = Store::new(Runtime::new());
-    let sink = std::rc::Rc::new(PasteSink::default());
-    store.set_config_sink(sink.clone());
-    let mut dispatcher = StoreDispatcher;
-    // Default armed (absent config = `!== "full"`).
-    assert!(store.prompt_paste_compact());
-    assert_eq!(
-        dispatcher.dispatch(&store, "app.toggle.paste_summary", None),
-        Dispatch::Handled
-    );
-    assert!(!store.prompt_paste_compact(), "disabled → paste \"full\"");
-    assert_eq!(store.settings_snapshot_value("prompt.paste"), "full");
-    assert_eq!(
-        dispatcher.dispatch(&store, "app.toggle.paste_summary", None),
-        Dispatch::Handled
-    );
-    assert!(store.prompt_paste_compact(), "re-enabled → paste \"compact\"");
-    assert_eq!(store.settings_snapshot_value("prompt.paste"), "compact");
-    assert_eq!(sink.0.borrow().as_slice(), ["full".to_owned(), "compact".to_owned()]);
-}
 
-/// SA-F6: the Plugins dialog renders the ref's live shape — the
-/// shared "No items available" empty state (ui/dialog-select.tsx
-/// :723) and the `ctrl+a show internal` footerHints pair riding
-/// the footer bar (plugins.tsx:199 + dialog-select.tsx:170-173).
-#[test]
-fn plugins_dialog_renders_the_reference_shape() {
-    let theme = crate::theme::ThemeState::v2_dark();
-    let store = final_session_store();
-    store.replace_dialog(crate::store::DialogKind::Plugins, crate::store::DialogSize::Medium);
-    let props = select_props_for(&crate::store::DialogKind::Plugins, &store);
-    assert_eq!(props.title, "Plugins");
-    assert!(
-        props.options.is_empty(),
-        "no registered plugin ids → the shared empty state renders"
-    );
-    assert_eq!(props.empty_text, None, "no override — the shared placeholder shows");
-    assert!(
-        props
-            .actions
-            .iter()
-            .any(|action| action.title == "ctrl+a" && action.label == "check for updates"),
-        "the G-29 check action hint: {:?}",
-        props.actions
-    );
-    assert!(
-        props.actions.iter().any(|action| action.command == "dialog.plugins.install"),
-        "the G-29 install action: {:?}",
-        props.actions
-    );
-    // The rendered overlay carries the rows (Search placeholder,
-    // the empty state, the footer hint).
-    let cell = crate::render::Cell {
-        ch: ' ',
-        attrs: 0,
-        fg: crate::render::CellColor::Rgb(255, 255, 255),
-        bg: crate::render::CellColor::Rgb(10, 10, 10),
-    };
-    let mut frame =
-        crate::render::Frame { cells: vec![vec![cell; 80]; 24], width: 80, height: 24 };
-    crate::components::dialog::render_overlay_with(
-        &mut frame,
-        &store.top_dialog().expect("open"),
-        &props,
-        None,
-        &theme,
-        (80, 24),
-    );
-    let rows = frame.text_grid();
-    let text = rows.concat();
-    assert!(text.contains("Plugins"), "the title");
-    assert!(text.contains("Search"), "the filter placeholder");
-    assert!(text.contains("No items available"), "the shared empty state");
-    assert!(text.contains("ctrl+a check for updates"), "the footer hint");
-}
+    /// The other six stub dispatches resolve to their real v2
+    /// surfaces (or v2's own mirrored behavior).
+    #[test]
+    fn final_six_stub_dispatches_resolve() {
+        use crate::store::{RecordingRevertSink, RecordingSessionActionSink};
+        let store = final_session_store();
+        let actions = std::rc::Rc::new(RecordingSessionActionSink::default());
+        store.set_session_action_sink(actions.clone());
+        store.set_revert_sink(std::rc::Rc::new(RecordingRevertSink::default()));
+        store.set_open_url_sink(Some(std::rc::Rc::new(|_url: String| {})));
+        let mut dispatcher = StoreDispatcher;
 
-/// RE-02: the plugins dialog models per-plugin active state —
-/// rows default ACTIVE (no footer), `plugin_toggle` disables
-/// (footer "inactive", the palette drops the plugin's command
-/// rows) and the enable→disable→enable round trip rides the
-/// toggle sink (v2's TUI-local activate/deactivate,
-/// plugins.tsx:116-138 — the active map is the persistence
-/// layer).
-#[test]
-fn plugins_dialog_active_state_toggle_round_trip() {
-    use crate::store::{PluginCommandEntry, RecordingPluginToggleSink};
-    let store = final_session_store();
-    store.set_plugin_commands(vec![
-        PluginCommandEntry {
-            command: "hw.hello".into(),
-            title: "Say hello".into(),
-            plugin_id: "helloworld".into(),
-        },
-        PluginCommandEntry {
-            command: "om.about".into(),
-            title: "About".into(),
-            plugin_id: "opencode.about".into(),
-        },
-    ]);
-    let sink = std::rc::Rc::new(RecordingPluginToggleSink::default());
-    store.set_plugin_toggle_sink(sink.clone());
-    store.replace_dialog(crate::store::DialogKind::Plugins, crate::store::DialogSize::Medium);
-    let props = select_props_for(&crate::store::DialogKind::Plugins, &store);
-    assert_eq!(props.title, "Plugins");
-    assert_eq!(props.options.len(), 2, "one row per registered plugin id");
-    assert!(props.options.iter().all(|option| option.footer.is_none()), "active → no footer");
-    assert!(
-        props.actions.iter().any(|action| action.command == "plugins.toggle"),
-        "the toggle action rides the footer: {:?}",
-        props.actions
-    );
+        // open.menu → DialogOpen (TUI-5, lane-tui2): the Sessions
+        // recents + Projects sections select at the large size
+        // (dialog-open.tsx:338's `size: "large"`).
+        dispatcher.dispatch(&store, "open.menu", None);
+        assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::Open));
+        assert_eq!(store.top_dialog().unwrap().size, crate::store::DialogSize::Large);
+        store.clear_dialogs();
 
-    // Default active for every registered id.
-    assert!(store.plugin_active("helloworld"));
-    assert!(store.plugin_active("opencode.about"));
-    // Both plugins' commands ride the palette while active.
-    assert_eq!(
-        palette_props(&store).options.iter().filter(|o| o.value == "hw.hello").count(),
-        1
-    );
+        // opencode.settings → the FULL Settings table (TUI-23 — every
+        // v2.0.24 row, order verbatim).
+        dispatcher.dispatch(&store, "opencode.settings", None);
+        assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::Settings));
+        let props = select_props_for(&store.top_dialog().unwrap().kind, &store);
+        let ids: Vec<&str> = props.options.iter().map(|option| option.value.as_str()).collect();
+        assert_eq!(ids.len(), crate::components::dialog_config::settings_table().len());
+        for expected in
+            ["theme.name", "theme.mode", "session.sidebar", "session.grouping", "debug.devtools"]
+        {
+            assert!(ids.contains(&expected), "the {expected} row is present");
+        }
+        store.clear_dialogs();
 
-    // disable → the row carries the "inactive" footer (ref
-    // footer(), plugins.tsx:308-318) and the palette drops the
-    // plugin's command row (clearContributions).
-    assert!(!store.plugin_toggle("helloworld"), "toggle returns the NEW state");
-    assert!(!store.plugin_active("helloworld"));
-    assert!(store.plugin_active("opencode.about"));
-    let props = select_props_for(&crate::store::DialogKind::Plugins, &store);
-    let row =
-        props.options.iter().find(|option| option.value == "helloworld").expect("row stays");
-    assert_eq!(row.footer.as_deref(), Some("inactive"));
-    assert_eq!(
-        palette_props(&store).options.iter().filter(|o| o.value == "hw.hello").count(),
-        0,
-        "inactive plugin's palette rows drop"
-    );
-    assert!(
-        store.plugin_command("hw.hello").is_none(),
-        "inactive plugin's commands no longer dispatch"
-    );
+        // session.share mirrors v2's unavailable toast.
+        dispatcher.dispatch(&store, "session.share", None);
+        let toast = store.toasts().current().cloned().expect("the share toast");
+        assert_eq!(toast.message, "Sharing is not implemented for V2 sessions yet");
+        store.clear_dialogs();
 
-    // re-enable → active again, round trip recorded on the sink.
-    assert!(store.plugin_toggle("helloworld"));
-    assert!(store.plugin_active("helloworld"));
-    let props = select_props_for(&crate::store::DialogKind::Plugins, &store);
-    assert!(props
-        .options
-        .iter()
-        .find(|option| option.value == "helloworld")
-        .expect("row")
-        .footer
-        .is_none());
-    assert_eq!(
-        sink.calls.borrow().as_slice(),
-        [("helloworld".to_owned(), false), ("helloworld".to_owned(), true)],
-        "enable → disable → enable round trip on the toggle sink"
-    );
-}
-
-/// G-29: `dialog.plugins.check` fires the sink's check and the
-/// fresh rows (with `outdated` flags) render as the dialog's
-/// SERVER entries — the `update available` footer (plugins.tsx:
-/// 304-318's footer()); a failed check toasts and keeps the rows.
-#[test]
-fn plugins_check_flow_updates_server_rows() {
-    use crate::store::{PluginServerCall, RecordingPluginServerSink, ServerPluginRow};
-    let store = final_session_store();
-    let sink = std::rc::Rc::new(RecordingPluginServerSink::default());
-    store.set_plugin_server_sink(sink.clone());
-    store.replace_dialog(crate::store::DialogKind::Plugins, crate::store::DialogSize::Medium);
-
-    let mut dispatcher = StoreDispatcher;
-    assert_eq!(dispatcher.dispatch(&store, "dialog.plugins.check", None), Dispatch::Handled);
-    assert!(store.plugins_checking(), "the check is in flight");
-    assert_eq!(sink.calls.borrow().as_slice(), [PluginServerCall::Check]);
-
-    // The fresh inventory: one outdated package + one current.
-    store.set_server_plugins(Ok(vec![
-        ServerPluginRow {
-            target: "demo-plugin".into(),
-            id: "demo-plugin".into(),
-            status: "active".into(),
-            error: None,
-            outdated: true,
-            updating: false,
-        },
-        ServerPluginRow {
-            target: "other-plugin".into(),
-            id: "other-plugin".into(),
-            status: "active".into(),
-            error: None,
-            outdated: false,
-            updating: false,
-        },
-    ]));
-    assert!(!store.plugins_checking(), "the check settled");
-    let props = select_props_for(&crate::store::DialogKind::Plugins, &store);
-    let flagged =
-        props.options.iter().find(|option| option.value == "server:demo-plugin").expect("row");
-    assert_eq!(flagged.footer.as_deref(), Some("update available"));
-    let current =
-        props.options.iter().find(|option| option.value == "server:other-plugin").expect("r");
-    assert_eq!(current.footer, None, "a current row carries no footer");
-
-    // A failed check: the error toast lands, the rows stay.
-    store.set_server_plugins(Err("registry unreachable".to_owned()));
-    assert!(
-        store
+        // location.reload → the info toast + the POST.
+        dispatcher.dispatch(&store, "location.reload", None);
+        assert!(store
             .toasts()
             .current()
-            .is_some_and(|toast| toast.message.contains("registry unreachable")),
-        "the failure toasts"
-    );
-    assert_eq!(store.server_plugins().len(), 2, "the previous rows stay");
-}
-
-/// G-29: `dialog.plugins.update` fires one `plugin.update` per
-/// OUTDATED row (the pending `updating` flag rides the row); a
-/// success clears the flag, a failure toasts (plugins.tsx:
-/// 120-139).
-#[test]
-fn plugins_update_flow_targets_outdated_rows() {
-    use crate::store::{PluginServerCall, RecordingPluginServerSink, ServerPluginRow};
-    let store = final_session_store();
-    let sink = std::rc::Rc::new(RecordingPluginServerSink::default());
-    store.set_plugin_server_sink(sink.clone());
-    store.set_server_plugins(Ok(vec![
-        ServerPluginRow {
-            target: "demo-plugin".into(),
-            id: "demo-plugin".into(),
-            status: "active".into(),
-            error: None,
-            outdated: true,
-            updating: false,
-        },
-        ServerPluginRow {
-            target: "other-plugin".into(),
-            id: "other-plugin".into(),
-            status: "active".into(),
-            error: None,
-            outdated: false,
-            updating: false,
-        },
-    ]));
-
-    let mut dispatcher = StoreDispatcher;
-    assert_eq!(dispatcher.dispatch(&store, "dialog.plugins.update", None), Dispatch::Handled);
-    assert_eq!(
-        sink.calls.borrow().as_slice(),
-        [PluginServerCall::Update("demo-plugin".to_owned())],
-        "only the outdated row updates"
-    );
-    assert!(store
-        .server_plugins()
-        .iter()
-        .any(|row| row.target == "demo-plugin" && row.updating));
-
-    // Success: the pending flag + the outdated flag clear.
-    store.apply_plugin_update_result("demo-plugin", Ok(()));
-    let row = store
-        .server_plugins()
-        .into_iter()
-        .find(|row| row.target == "demo-plugin")
-        .expect("row");
-    assert!(!row.updating && !row.outdated);
-
-    // Failure: the error toast names the target.
-    store.plugins_update_target("other-plugin");
-    store.apply_plugin_update_result("other-plugin", Err("npm exited 1".to_owned()));
-    assert!(
-        store.toasts().current().is_some_and(|toast| toast
-            .title
-            .as_deref()
-            .is_some_and(|title| title.contains("other-plugin"))),
-        "the failure toast names the target"
-    );
-}
-
-/// G-29: `plugins.install` opens the package-spec prompt; the
-/// submit fires `plugin.install` through the sink (an empty spec
-/// cancels); a success toasts and re-checks, a failure toasts the
-/// error.
-#[test]
-fn plugins_install_flow_prompt_and_result() {
-    use crate::store::{PluginServerCall, RecordingPluginServerSink};
-    let store = final_session_store();
-    let sink = std::rc::Rc::new(RecordingPluginServerSink::default());
-    store.set_plugin_server_sink(sink.clone());
-
-    let mut dispatcher = StoreDispatcher;
-    for command in ["plugins.install", "dialog.plugins.install"] {
-        assert_eq!(dispatcher.dispatch(&store, command, None), Dispatch::Handled);
-        assert!(
-            matches!(
-                store.top_dialog().map(|entry| entry.kind),
-                Some(crate::store::DialogKind::PluginInstall)
-            ),
-            "{command} opens the install prompt"
+            .is_some_and(|toast| toast.message == "Reloading configuration…"));
+        assert_eq!(
+            actions.calls.borrow().as_slice(),
+            &[crate::store::SessionActionCall::LocationReload]
         );
         store.clear_dialogs();
+
+        // session.fork → the fork picker ("Full session" + the user
+        // messages newest-first).
+        dispatcher.dispatch(&store, "session.fork", None);
+        assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::ForkPicker { .. }));
+        let props = select_props_for(&store.top_dialog().unwrap().kind, &store);
+        assert_eq!(props.options[0].title, "Full session");
+        assert_eq!(props.options[1].title, "second question");
+        assert_eq!(props.options[2].title, "first question");
+        // Submitting a row fires the fork POST with `before`.
+        let submit = crate::components::dialog::execute_submission(
+            &store,
+            &mut dispatcher,
+            props.options[1].value.as_str(),
+        );
+        assert_eq!(submit, Dispatch::Handled);
+        assert_eq!(
+            actions.calls.borrow()[1],
+            crate::store::SessionActionCall::Fork {
+                session_id: "ses_1".into(),
+                before: Some("u2".into())
+            }
+        );
+
+        // docs.open → the URL open path.
+        let opened = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
+        let opened_url = opened.clone();
+        store.set_open_url_sink(Some(std::rc::Rc::new(move |url: String| {
+            *opened_url.borrow_mut() = url;
+        })));
+        dispatcher.dispatch(&store, "docs.open", None);
+        assert_eq!(*opened.borrow(), "https://opencode.ai/docs");
     }
 
-    // The submit: the trimmed spec fires the sink; empty cancels.
-    store.plugins_install_open();
-    store.plugins_install_submit("  demo-plugin  ");
-    store.plugins_install_submit("   ");
-    assert_eq!(
-        sink.calls.borrow().as_slice(),
-        [PluginServerCall::Install("demo-plugin".to_owned())],
-        "the trimmed spec fires once, the empty spec cancels"
-    );
+    /// The six dead session commands act through the sink.
+    #[test]
+    fn final_six_session_commands_act() {
+        use crate::store::{ModelSelection, RecordingRevertSink, RecordingSessionActionSink};
+        let store = final_session_store();
+        let actions = std::rc::Rc::new(RecordingSessionActionSink::default());
+        store.set_session_action_sink(actions.clone());
+        let reverts = std::rc::Rc::new(RecordingRevertSink::default());
+        store.set_revert_sink(reverts.clone());
+        let mut dispatcher = StoreDispatcher;
 
-    // A success toasts and triggers the inventory refresh (the
-    // ref's refetch-on-event leg).
-    store.apply_plugin_install_result(Ok("demo-plugin".to_owned()));
-    assert!(
-        store.toasts().current().is_some_and(|toast| toast.message.contains("demo-plugin")),
-        "the success toast names the target"
-    );
-    assert_eq!(
-        sink.calls.borrow().as_slice(),
-        [PluginServerCall::Install("demo-plugin".to_owned()), PluginServerCall::Check],
-        "a successful install re-checks the inventory"
-    );
+        // compact → the POST with the current model.
+        store.select_model(
+            "ses_1",
+            &ModelSelection {
+                provider_id: "anthropic".into(),
+                model_id: "claude".into(),
+                variant: None,
+            },
+        );
+        dispatcher.dispatch(&store, "session.compact", None);
+        assert_eq!(
+            actions.calls.borrow()[0],
+            crate::store::SessionActionCall::Compact {
+                session_id: "ses_1".into(),
+                model: Some(ModelSelection {
+                    provider_id: "anthropic".into(),
+                    model_id: "claude".into(),
+                    variant: None
+                })
+            }
+        );
 
-    // A failure lands as the error toast.
-    store.apply_plugin_install_result(Err("package not found".to_owned()));
-    assert!(
-        store
-            .toasts()
-            .current()
-            .is_some_and(|toast| toast.message.contains("package not found")),
-        "the failure toast carries the error"
-    );
-}
+        // undo → revert.stage on the LAST user message + the composer
+        // seed.
+        dispatcher.dispatch(&store, "session.undo", None);
+        assert_eq!(
+            actions.calls.borrow()[1],
+            crate::store::SessionActionCall::RevertStage {
+                session_id: "ses_1".into(),
+                message_id: "u2".into()
+            }
+        );
+        assert_eq!(store.composer("ses_1").draft.text, "second question");
 
-// -- RE-13: /btw (session.aside) --------------------------------
-/// The dispatch is no longer swallowed (the surfaceless bucket
-/// is gone): the session route + argument runs the one-shot
-/// generate through the session-action sink, the bare command
-/// opens the question prompt, and the home route warns.
-#[test]
-fn session_aside_dispatch_runs_generate_prompts_and_warns_off_session() {
-    use crate::store::{RecordingSessionActionSink, SessionActionCall};
-    let store = Store::new(Runtime::new());
-    let sink = std::rc::Rc::new(RecordingSessionActionSink::default());
-    store.set_session_action_sink(sink.clone());
-    let mut dispatcher = StoreDispatcher;
+        // redo → the staged revert clears through the revert sink
+        // (the SSE staged event seeds the state first).
+        store.ingest_all([crate::data::Ingest::Event(crate::data::BusEvent::new(
+            "session.revert.staged",
+            serde_json::json!({
+                "sessionID": "ses_1",
+                "revert": { "messageID": "u1", "files": [] }
+            }),
+        ))]);
+        dispatcher.dispatch(&store, "session.redo", None);
+        assert_eq!(reverts.calls.borrow().as_slice(), &["ses_1".to_owned()]);
 
-    // Home route: v2's "Open a session first" warning toast
-    // (btw.tsx:60-62) — nothing runs.
-    assert_eq!(dispatcher.dispatch(&store, "session.aside", None), Dispatch::Handled);
-    assert!(sink.calls.borrow().is_empty(), "no generate off a session route");
-    let toast = store.toasts().current().cloned().expect("the warning toast");
-    assert_eq!(toast.message, "Open a session first");
-    assert_eq!(toast.variant, "warning");
-    store.toast_dismiss();
+        // background → the POST.
+        dispatcher.dispatch(&store, "session.background", None);
+        assert_eq!(
+            actions.calls.borrow().last(),
+            Some(&crate::store::SessionActionCall::Background("ses_1".into()))
+        );
 
-    // Session route, NO argument: the fallback question prompt
-    // (btw.tsx:64-65 — ctx.ui.dialog.prompt's title/placeholder).
-    store.open_tab("s1", Some("S1".to_owned()));
-    assert!(matches!(store.route(), Route::Session { .. }));
-    assert_eq!(dispatcher.dispatch(&store, "session.aside", None), Dispatch::Handled);
-    assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::BtwPrompt));
-    assert!(sink.calls.borrow().is_empty(), "the prompt defers the generate");
-    store.clear_dialogs();
+        // export → the destination dialog → the POST.
+        dispatcher.dispatch(&store, "session.export", None);
+        assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::SessionExport { .. }));
+        let submit =
+            crate::components::dialog::execute_submission(&store, &mut dispatcher, "markdown:file");
+        assert_eq!(submit, Dispatch::Handled);
+        assert_eq!(
+            actions.calls.borrow().last(),
+            Some(&crate::store::SessionActionCall::Export {
+                session_id: "ses_1".into(),
+                sanitize: false,
+                format: "markdown".into(),
+                destination: "file".into()
+            })
+        );
 
-    // Session route WITH the argument: the sink's `aside` call
-    // carries the instructions-joined prompt (btw.tsx:17-21, 69).
-    assert_eq!(
-        dispatcher.dispatch(&store, "session.aside", Some("what did we do?")),
-        Dispatch::Handled
-    );
-    assert_eq!(store.btw_pending(), 1, "the footer spinner arms");
-    let calls = sink.calls.borrow().clone();
-    match calls.as_slice() {
-        [SessionActionCall::Aside { session_id, question, prompt }] => {
-            assert_eq!(session_id, "s1");
-            assert_eq!(question, "what did we do?");
+        // delete: NOT a palette row (v2 lists it only as the sessions
+        // dialog's ctrl+d action); the two-press fires session.remove.
+        assert!(palette_props(&store)
+            .options
+            .iter()
+            .all(|option| option.value != "session.delete"));
+        store.session_delete_pressed("ses_1");
+        assert!(actions
+            .calls
+            .borrow()
+            .iter()
+            .all(|call| !matches!(call, crate::store::SessionActionCall::Remove(_))));
+        store.session_delete_pressed("ses_1");
+        assert_eq!(
+            actions.calls.borrow().last(),
+            Some(&crate::store::SessionActionCall::Remove("ses_1".into()))
+        );
+    }
+
+    /// `session.redo`'s palette row delists exactly when v2's
+    /// `enabled` gate is off (no staged revert on the route).
+    #[test]
+    fn final_session_redo_delists_without_revert() {
+        let store = final_session_store();
+        let props = palette_props(&store);
+        let advertised: Vec<&str> =
+            props.options.iter().map(|option| option.value.as_str()).collect();
+        assert!(!advertised.contains(&"session.redo"), "no revert staged — delisted");
+        store.ingest_all([crate::data::Ingest::Event(crate::data::BusEvent::new(
+            "session.revert.staged",
+            serde_json::json!({
+                "sessionID": "ses_1",
+                "revert": { "messageID": "u1", "files": [] }
+            }),
+        ))]);
+        let props = palette_props(&store);
+        let advertised: Vec<&str> =
+            props.options.iter().map(|option| option.value.as_str()).collect();
+        assert!(advertised.contains(&"session.redo"), "staged revert — listed");
+        // The export row is palette-visible (index.tsx:1201-1207).
+        assert!(advertised.contains(&"session.export"));
+    }
+
+    /// The Settings dialog's cycles write through the config sink
+    /// (should-fix #5's grouping half).
+    #[test]
+    fn final_settings_cycles_persist() {
+        use crate::store::RecordingConfigSink;
+        let store = final_session_store();
+        let config = std::rc::Rc::new(RecordingConfigSink::default());
+        store.set_config_sink(config.clone());
+        // The store default groups (v2 `session.grouping: "auto"`);
+        // one cycle flips to none, the next back to auto.
+        store.setting_cycle("session.grouping", 1);
+        assert_eq!(config.calls.borrow().as_slice(), &[("session.grouping", "none".to_owned())]);
+        store.setting_cycle("session.grouping", 1);
+        assert_eq!(
+            config.calls.borrow().as_slice(),
+            &[("session.grouping", "none".to_owned()), ("session.grouping", "auto".to_owned())]
+        );
+    }
+
+    /// RD-06 — `app.toggle.paste_summary` (app.tsx:1193-1205): the
+    /// command flips `prompt.paste` compact↔full through the store
+    /// (the fold gate) and persists the value via the config sink.
+    #[test]
+    fn toggle_paste_summary_flips_and_persists() {
+        use crate::store::ConfigSink;
+        #[derive(Default)]
+        struct PasteSink(std::cell::RefCell<Vec<String>>);
+        impl ConfigSink for PasteSink {
+            fn update_theme_name(&self, _: &str) {}
+            fn update_theme_mode(&self, _: &str) {}
+            fn update_session_sidebar(&self, _: bool) {}
+            fn update_session_grouping(&self, _: bool) {}
+            fn update_setting(&self, path: &str, value: &str) {
+                assert_eq!(path, "prompt.paste");
+                self.0.borrow_mut().push(value.to_owned());
+            }
+        }
+        let store = Store::new(Runtime::new());
+        let sink = std::rc::Rc::new(PasteSink::default());
+        store.set_config_sink(sink.clone());
+        let mut dispatcher = StoreDispatcher;
+        // Default armed (absent config = `!== "full"`).
+        assert!(store.prompt_paste_compact());
+        assert_eq!(
+            dispatcher.dispatch(&store, "app.toggle.paste_summary", None),
+            Dispatch::Handled
+        );
+        assert!(!store.prompt_paste_compact(), "disabled → paste \"full\"");
+        assert_eq!(store.settings_snapshot_value("prompt.paste"), "full");
+        assert_eq!(
+            dispatcher.dispatch(&store, "app.toggle.paste_summary", None),
+            Dispatch::Handled
+        );
+        assert!(store.prompt_paste_compact(), "re-enabled → paste \"compact\"");
+        assert_eq!(store.settings_snapshot_value("prompt.paste"), "compact");
+        assert_eq!(sink.0.borrow().as_slice(), ["full".to_owned(), "compact".to_owned()]);
+    }
+
+    /// SA-F6: the Plugins dialog renders the ref's live shape — the
+    /// shared "No items available" empty state (ui/dialog-select.tsx
+    /// :723) and the `ctrl+a show internal` footerHints pair riding
+    /// the footer bar (plugins.tsx:199 + dialog-select.tsx:170-173).
+    #[test]
+    fn plugins_dialog_renders_the_reference_shape() {
+        let theme = crate::theme::ThemeState::v2_dark();
+        let store = final_session_store();
+        store.replace_dialog(crate::store::DialogKind::Plugins, crate::store::DialogSize::Medium);
+        let props = select_props_for(&crate::store::DialogKind::Plugins, &store);
+        assert_eq!(props.title, "Plugins");
+        assert!(
+            props.options.is_empty(),
+            "no registered plugin ids → the shared empty state renders"
+        );
+        assert_eq!(props.empty_text, None, "no override — the shared placeholder shows");
+        assert!(
+            props
+                .actions
+                .iter()
+                .any(|action| action.title == "ctrl+a" && action.label == "check for updates"),
+            "the G-29 check action hint: {:?}",
+            props.actions
+        );
+        assert!(
+            props.actions.iter().any(|action| action.command == "dialog.plugins.install"),
+            "the G-29 install action: {:?}",
+            props.actions
+        );
+        // The rendered overlay carries the rows (Search placeholder,
+        // the empty state, the footer hint).
+        let cell = crate::render::Cell {
+            ch: ' ',
+            attrs: 0,
+            fg: crate::render::CellColor::Rgb(255, 255, 255),
+            bg: crate::render::CellColor::Rgb(10, 10, 10),
+        };
+        let mut frame =
+            crate::render::Frame { cells: vec![vec![cell; 80]; 24], width: 80, height: 24 };
+        crate::components::dialog::render_overlay_with(
+            &mut frame,
+            &store.top_dialog().expect("open"),
+            &props,
+            None,
+            &theme,
+            (80, 24),
+        );
+        let rows = frame.text_grid();
+        let text = rows.concat();
+        assert!(text.contains("Plugins"), "the title");
+        assert!(text.contains("Search"), "the filter placeholder");
+        assert!(text.contains("No items available"), "the shared empty state");
+        assert!(text.contains("ctrl+a check for updates"), "the footer hint");
+    }
+
+    /// RE-02: the plugins dialog models per-plugin active state —
+    /// rows default ACTIVE (no footer), `plugin_toggle` disables
+    /// (footer "inactive", the palette drops the plugin's command
+    /// rows) and the enable→disable→enable round trip rides the
+    /// toggle sink (v2's TUI-local activate/deactivate,
+    /// plugins.tsx:116-138 — the active map is the persistence
+    /// layer).
+    #[test]
+    fn plugins_dialog_active_state_toggle_round_trip() {
+        use crate::store::{PluginCommandEntry, RecordingPluginToggleSink};
+        let store = final_session_store();
+        store.set_plugin_commands(vec![
+            PluginCommandEntry {
+                command: "hw.hello".into(),
+                title: "Say hello".into(),
+                plugin_id: "helloworld".into(),
+            },
+            PluginCommandEntry {
+                command: "om.about".into(),
+                title: "About".into(),
+                plugin_id: "opencode.about".into(),
+            },
+        ]);
+        let sink = std::rc::Rc::new(RecordingPluginToggleSink::default());
+        store.set_plugin_toggle_sink(sink.clone());
+        store.replace_dialog(crate::store::DialogKind::Plugins, crate::store::DialogSize::Medium);
+        let props = select_props_for(&crate::store::DialogKind::Plugins, &store);
+        assert_eq!(props.title, "Plugins");
+        assert_eq!(props.options.len(), 2, "one row per registered plugin id");
+        assert!(props.options.iter().all(|option| option.footer.is_none()), "active → no footer");
+        assert!(
+            props.actions.iter().any(|action| action.command == "plugins.toggle"),
+            "the toggle action rides the footer: {:?}",
+            props.actions
+        );
+
+        // Default active for every registered id.
+        assert!(store.plugin_active("helloworld"));
+        assert!(store.plugin_active("opencode.about"));
+        // Both plugins' commands ride the palette while active.
+        assert_eq!(
+            palette_props(&store).options.iter().filter(|o| o.value == "hw.hello").count(),
+            1
+        );
+
+        // disable → the row carries the "inactive" footer (ref
+        // footer(), plugins.tsx:308-318) and the palette drops the
+        // plugin's command row (clearContributions).
+        assert!(!store.plugin_toggle("helloworld"), "toggle returns the NEW state");
+        assert!(!store.plugin_active("helloworld"));
+        assert!(store.plugin_active("opencode.about"));
+        let props = select_props_for(&crate::store::DialogKind::Plugins, &store);
+        let row =
+            props.options.iter().find(|option| option.value == "helloworld").expect("row stays");
+        assert_eq!(row.footer.as_deref(), Some("inactive"));
+        assert_eq!(
+            palette_props(&store).options.iter().filter(|o| o.value == "hw.hello").count(),
+            0,
+            "inactive plugin's palette rows drop"
+        );
+        assert!(
+            store.plugin_command("hw.hello").is_none(),
+            "inactive plugin's commands no longer dispatch"
+        );
+
+        // re-enable → active again, round trip recorded on the sink.
+        assert!(store.plugin_toggle("helloworld"));
+        assert!(store.plugin_active("helloworld"));
+        let props = select_props_for(&crate::store::DialogKind::Plugins, &store);
+        assert!(props
+            .options
+            .iter()
+            .find(|option| option.value == "helloworld")
+            .expect("row")
+            .footer
+            .is_none());
+        assert_eq!(
+            sink.calls.borrow().as_slice(),
+            [("helloworld".to_owned(), false), ("helloworld".to_owned(), true)],
+            "enable → disable → enable round trip on the toggle sink"
+        );
+    }
+
+    /// G-29: `dialog.plugins.check` fires the sink's check and the
+    /// fresh rows (with `outdated` flags) render as the dialog's
+    /// SERVER entries — the `update available` footer (plugins.tsx:
+    /// 304-318's footer()); a failed check toasts and keeps the rows.
+    #[test]
+    fn plugins_check_flow_updates_server_rows() {
+        use crate::store::{PluginServerCall, RecordingPluginServerSink, ServerPluginRow};
+        let store = final_session_store();
+        let sink = std::rc::Rc::new(RecordingPluginServerSink::default());
+        store.set_plugin_server_sink(sink.clone());
+        store.replace_dialog(crate::store::DialogKind::Plugins, crate::store::DialogSize::Medium);
+
+        let mut dispatcher = StoreDispatcher;
+        assert_eq!(dispatcher.dispatch(&store, "dialog.plugins.check", None), Dispatch::Handled);
+        assert!(store.plugins_checking(), "the check is in flight");
+        assert_eq!(sink.calls.borrow().as_slice(), [PluginServerCall::Check]);
+
+        // The fresh inventory: one outdated package + one current.
+        store.set_server_plugins(Ok(vec![
+            ServerPluginRow {
+                target: "demo-plugin".into(),
+                id: "demo-plugin".into(),
+                status: "active".into(),
+                error: None,
+                outdated: true,
+                updating: false,
+            },
+            ServerPluginRow {
+                target: "other-plugin".into(),
+                id: "other-plugin".into(),
+                status: "active".into(),
+                error: None,
+                outdated: false,
+                updating: false,
+            },
+        ]));
+        assert!(!store.plugins_checking(), "the check settled");
+        let props = select_props_for(&crate::store::DialogKind::Plugins, &store);
+        let flagged =
+            props.options.iter().find(|option| option.value == "server:demo-plugin").expect("row");
+        assert_eq!(flagged.footer.as_deref(), Some("update available"));
+        let current =
+            props.options.iter().find(|option| option.value == "server:other-plugin").expect("r");
+        assert_eq!(current.footer, None, "a current row carries no footer");
+
+        // A failed check: the error toast lands, the rows stay.
+        store.set_server_plugins(Err("registry unreachable".to_owned()));
+        assert!(
+            store
+                .toasts()
+                .current()
+                .is_some_and(|toast| toast.message.contains("registry unreachable")),
+            "the failure toasts"
+        );
+        assert_eq!(store.server_plugins().len(), 2, "the previous rows stay");
+    }
+
+    /// G-29: `dialog.plugins.update` fires one `plugin.update` per
+    /// OUTDATED row (the pending `updating` flag rides the row); a
+    /// success clears the flag, a failure toasts (plugins.tsx:
+    /// 120-139).
+    #[test]
+    fn plugins_update_flow_targets_outdated_rows() {
+        use crate::store::{PluginServerCall, RecordingPluginServerSink, ServerPluginRow};
+        let store = final_session_store();
+        let sink = std::rc::Rc::new(RecordingPluginServerSink::default());
+        store.set_plugin_server_sink(sink.clone());
+        store.set_server_plugins(Ok(vec![
+            ServerPluginRow {
+                target: "demo-plugin".into(),
+                id: "demo-plugin".into(),
+                status: "active".into(),
+                error: None,
+                outdated: true,
+                updating: false,
+            },
+            ServerPluginRow {
+                target: "other-plugin".into(),
+                id: "other-plugin".into(),
+                status: "active".into(),
+                error: None,
+                outdated: false,
+                updating: false,
+            },
+        ]));
+
+        let mut dispatcher = StoreDispatcher;
+        assert_eq!(dispatcher.dispatch(&store, "dialog.plugins.update", None), Dispatch::Handled);
+        assert_eq!(
+            sink.calls.borrow().as_slice(),
+            [PluginServerCall::Update("demo-plugin".to_owned())],
+            "only the outdated row updates"
+        );
+        assert!(store
+            .server_plugins()
+            .iter()
+            .any(|row| row.target == "demo-plugin" && row.updating));
+
+        // Success: the pending flag + the outdated flag clear.
+        store.apply_plugin_update_result("demo-plugin", Ok(()));
+        let row = store
+            .server_plugins()
+            .into_iter()
+            .find(|row| row.target == "demo-plugin")
+            .expect("row");
+        assert!(!row.updating && !row.outdated);
+
+        // Failure: the error toast names the target.
+        store.plugins_update_target("other-plugin");
+        store.apply_plugin_update_result("other-plugin", Err("npm exited 1".to_owned()));
+        assert!(
+            store.toasts().current().is_some_and(|toast| toast
+                .title
+                .as_deref()
+                .is_some_and(|title| title.contains("other-plugin"))),
+            "the failure toast names the target"
+        );
+    }
+
+    /// G-29: `plugins.install` opens the package-spec prompt; the
+    /// submit fires `plugin.install` through the sink (an empty spec
+    /// cancels); a success toasts and re-checks, a failure toasts the
+    /// error.
+    #[test]
+    fn plugins_install_flow_prompt_and_result() {
+        use crate::store::{PluginServerCall, RecordingPluginServerSink};
+        let store = final_session_store();
+        let sink = std::rc::Rc::new(RecordingPluginServerSink::default());
+        store.set_plugin_server_sink(sink.clone());
+
+        let mut dispatcher = StoreDispatcher;
+        for command in ["plugins.install", "dialog.plugins.install"] {
+            assert_eq!(dispatcher.dispatch(&store, command, None), Dispatch::Handled);
             assert!(
-                prompt.starts_with("The user is asking a quick side question"),
-                "the fixed instructions prelude rides the prompt"
+                matches!(
+                    store.top_dialog().map(|entry| entry.kind),
+                    Some(crate::store::DialogKind::PluginInstall)
+                ),
+                "{command} opens the install prompt"
             );
-            assert!(prompt.ends_with("what did we do?"));
+            store.clear_dialogs();
         }
-        other => panic!("unexpected sink calls {other:?}"),
+
+        // The submit: the trimmed spec fires the sink; empty cancels.
+        store.plugins_install_open();
+        store.plugins_install_submit("  demo-plugin  ");
+        store.plugins_install_submit("   ");
+        assert_eq!(
+            sink.calls.borrow().as_slice(),
+            [PluginServerCall::Install("demo-plugin".to_owned())],
+            "the trimmed spec fires once, the empty spec cancels"
+        );
+
+        // A success toasts and triggers the inventory refresh (the
+        // ref's refetch-on-event leg).
+        store.apply_plugin_install_result(Ok("demo-plugin".to_owned()));
+        assert!(
+            store.toasts().current().is_some_and(|toast| toast.message.contains("demo-plugin")),
+            "the success toast names the target"
+        );
+        assert_eq!(
+            sink.calls.borrow().as_slice(),
+            [PluginServerCall::Install("demo-plugin".to_owned()), PluginServerCall::Check],
+            "a successful install re-checks the inventory"
+        );
+
+        // A failure lands as the error toast.
+        store.apply_plugin_install_result(Err("package not found".to_owned()));
+        assert!(
+            store
+                .toasts()
+                .current()
+                .is_some_and(|toast| toast.message.contains("package not found")),
+            "the failure toast carries the error"
+        );
     }
 
-    // The result lands as the Answer dialog (btw.tsx:70-75).
-    store.btw_answer("what did we do?", "you ported /btw");
-    assert_eq!(store.btw_pending(), 0, "the spinner drops");
-    match &store.top_dialog().unwrap().kind {
-        DialogKind::BtwAnswer { question, answer } => {
-            assert_eq!(question, "what did we do?");
-            assert_eq!(answer, "you ported /btw");
+    // -- RE-13: /btw (session.aside) --------------------------------
+    /// The dispatch is no longer swallowed (the surfaceless bucket
+    /// is gone): the session route + argument runs the one-shot
+    /// generate through the session-action sink, the bare command
+    /// opens the question prompt, and the home route warns.
+    #[test]
+    fn session_aside_dispatch_runs_generate_prompts_and_warns_off_session() {
+        use crate::store::{RecordingSessionActionSink, SessionActionCall};
+        let store = Store::new(Runtime::new());
+        let sink = std::rc::Rc::new(RecordingSessionActionSink::default());
+        store.set_session_action_sink(sink.clone());
+        let mut dispatcher = StoreDispatcher;
+
+        // Home route: v2's "Open a session first" warning toast
+        // (btw.tsx:60-62) — nothing runs.
+        assert_eq!(dispatcher.dispatch(&store, "session.aside", None), Dispatch::Handled);
+        assert!(sink.calls.borrow().is_empty(), "no generate off a session route");
+        let toast = store.toasts().current().cloned().expect("the warning toast");
+        assert_eq!(toast.message, "Open a session first");
+        assert_eq!(toast.variant, "warning");
+        store.toast_dismiss();
+
+        // Session route, NO argument: the fallback question prompt
+        // (btw.tsx:64-65 — ctx.ui.dialog.prompt's title/placeholder).
+        store.open_tab("s1", Some("S1".to_owned()));
+        assert!(matches!(store.route(), Route::Session { .. }));
+        assert_eq!(dispatcher.dispatch(&store, "session.aside", None), Dispatch::Handled);
+        assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::BtwPrompt));
+        assert!(sink.calls.borrow().is_empty(), "the prompt defers the generate");
+        store.clear_dialogs();
+
+        // Session route WITH the argument: the sink's `aside` call
+        // carries the instructions-joined prompt (btw.tsx:17-21, 69).
+        assert_eq!(
+            dispatcher.dispatch(&store, "session.aside", Some("what did we do?")),
+            Dispatch::Handled
+        );
+        assert_eq!(store.btw_pending(), 1, "the footer spinner arms");
+        let calls = sink.calls.borrow().clone();
+        match calls.as_slice() {
+            [SessionActionCall::Aside { session_id, question, prompt }] => {
+                assert_eq!(session_id, "s1");
+                assert_eq!(question, "what did we do?");
+                assert!(
+                    prompt.starts_with("The user is asking a quick side question"),
+                    "the fixed instructions prelude rides the prompt"
+                );
+                assert!(prompt.ends_with("what did we do?"));
+            }
+            other => panic!("unexpected sink calls {other:?}"),
         }
-        other => panic!("unexpected dialog {other:?}"),
+
+        // The result lands as the Answer dialog (btw.tsx:70-75).
+        store.btw_answer("what did we do?", "you ported /btw");
+        assert_eq!(store.btw_pending(), 0, "the spinner drops");
+        match &store.top_dialog().unwrap().kind {
+            DialogKind::BtwAnswer { question, answer } => {
+                assert_eq!(question, "what did we do?");
+                assert_eq!(answer, "you ported /btw");
+            }
+            other => panic!("unexpected dialog {other:?}"),
+        }
     }
-}
 }
 
 // -- RE-14: /stats (stats.open) ---------------------------------
@@ -5289,21 +5284,21 @@ fn session_aside_dispatch_runs_generate_prompts_and_warns_off_session() {
 /// page's own escape layer.
 #[test]
 fn stats_command_is_registered_on_every_surface() {
-let row = PALETTE_COMMANDS
-    .iter()
-    .find(|command| command.command == "stats.open")
-    .expect("the palette row");
-assert_eq!(row.title, "Usage statistics");
-assert_eq!(row.group, "System");
-assert!(crate::components::composer::autocomplete::SLASH_COMMANDS
-    .contains(&("stats", "stats.open")));
-let table = crate::keymap::default_table();
-let open = table.iter().find(|def| def.command == "stats.open").expect("stats.open def");
-assert_eq!(open.layer, "base");
-assert_eq!(open.defaults, "none");
-let close = table.iter().find(|def| def.command == "stats.close").expect("stats.close def");
-assert_eq!(close.layer, "stats");
-assert!(close.defaults.contains("escape"));
+    let row = PALETTE_COMMANDS
+        .iter()
+        .find(|command| command.command == "stats.open")
+        .expect("the palette row");
+    assert_eq!(row.title, "Usage statistics");
+    assert_eq!(row.group, "System");
+    assert!(crate::components::composer::autocomplete::SLASH_COMMANDS
+        .contains(&("stats", "stats.open")));
+    let table = crate::keymap::default_table();
+    let open = table.iter().find(|def| def.command == "stats.open").expect("stats.open def");
+    assert_eq!(open.layer, "base");
+    assert_eq!(open.defaults, "none");
+    let close = table.iter().find(|def| def.command == "stats.close").expect("stats.close def");
+    assert_eq!(close.layer, "stats");
+    assert!(close.defaults.contains("escape"));
 }
 
 /// `stats.open`'s dispatch (stats.tsx:196-209): mount the page
@@ -5313,64 +5308,64 @@ assert!(close.defaults.contains("escape"));
 /// stale generations drop.
 #[test]
 fn stats_open_dispatch_mounts_page_and_fetches() {
-use crate::reactive::Runtime;
-use crate::store::{RecordingStatsSink, StatsPhase};
-let store = Store::new(Runtime::new());
-let sink = std::rc::Rc::new(RecordingStatsSink::default());
-store.set_stats_sink(sink.clone());
-let mut dispatcher = StoreDispatcher;
+    use crate::reactive::Runtime;
+    use crate::store::{RecordingStatsSink, StatsPhase};
+    let store = Store::new(Runtime::new());
+    let sink = std::rc::Rc::new(RecordingStatsSink::default());
+    store.set_stats_sink(sink.clone());
+    let mut dispatcher = StoreDispatcher;
 
-// Off a session route: the page mounts over it and the fetch
-// carries the year range (from = local Jan 1, tools none).
-store.open_tab("s1", Some("S1".to_owned()));
-assert!(matches!(store.route(), Route::Session { .. }));
-assert_eq!(dispatcher.dispatch(&store, "stats.open", None), Dispatch::Handled);
-assert!(store.stats_page_open());
-assert!(matches!(store.stats_page_state().phase, StatsPhase::Loading));
-let calls = sink.calls.borrow().clone();
-assert_eq!(calls.len(), 1);
-assert_eq!(calls[0].0, 1, "the first generation");
-assert_eq!(
-    calls[0].1,
-    crate::components::stats_page::year_start_ms(crate::components::stats_page::now_ms()),
-    "from = the current year's Jan 1"
-);
+    // Off a session route: the page mounts over it and the fetch
+    // carries the year range (from = local Jan 1, tools none).
+    store.open_tab("s1", Some("S1".to_owned()));
+    assert!(matches!(store.route(), Route::Session { .. }));
+    assert_eq!(dispatcher.dispatch(&store, "stats.open", None), Dispatch::Handled);
+    assert!(store.stats_page_open());
+    assert!(matches!(store.stats_page_state().phase, StatsPhase::Loading));
+    let calls = sink.calls.borrow().clone();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].0, 1, "the first generation");
+    assert_eq!(
+        calls[0].1,
+        crate::components::stats_page::year_start_ms(crate::components::stats_page::now_ms()),
+        "from = the current year's Jan 1"
+    );
 
-// A re-run while the page is open does nothing (stats.tsx:
-// 203-204).
-assert_eq!(dispatcher.dispatch(&store, "stats.open", None), Dispatch::Handled);
-assert_eq!(sink.calls.borrow().len(), 1, "no refetch while open");
+    // A re-run while the page is open does nothing (stats.tsx:
+    // 203-204).
+    assert_eq!(dispatcher.dispatch(&store, "stats.open", None), Dispatch::Handled);
+    assert_eq!(sink.calls.borrow().len(), 1, "no refetch while open");
 
-// The result lands: the payload rides the page.
-let info = oc_client::types::SessionStatsInfo {
-    active_days: 3,
-    activity: Vec::new(),
-    cost: 0.0,
-    models: Vec::new(),
-    prompts: 4,
-    range: oc_client::types::SessionStatsInfoRange { from: 0.0, to: 1.0 },
-    sessions: 2,
-    steps: 4,
-    streak: 1,
-    subagents: 0,
-    tokens: oc_client::types::TokenUsageInfo::default(),
-    tools: oc_client::types::SessionStatsTools::None(
-        oc_client::types::SessionStatsToolsVariant1 {
-            mode: oc_client::types::SessionStatsToolsVariant1Mode::None,
-        },
-    ),
-};
-store.stats_fetch_result(1, Ok(info));
-assert!(matches!(store.stats_page_state().phase, StatsPhase::Loaded(_)));
+    // The result lands: the payload rides the page.
+    let info = oc_client::types::SessionStatsInfo {
+        active_days: 3,
+        activity: Vec::new(),
+        cost: 0.0,
+        models: Vec::new(),
+        prompts: 4,
+        range: oc_client::types::SessionStatsInfoRange { from: 0.0, to: 1.0 },
+        sessions: 2,
+        steps: 4,
+        streak: 1,
+        subagents: 0,
+        tokens: oc_client::types::TokenUsageInfo::default(),
+        tools: oc_client::types::SessionStatsTools::None(
+            oc_client::types::SessionStatsToolsVariant1 {
+                mode: oc_client::types::SessionStatsToolsVariant1Mode::None,
+            },
+        ),
+    };
+    store.stats_fetch_result(1, Ok(info));
+    assert!(matches!(store.stats_page_state().phase, StatsPhase::Loaded(_)));
 
-// A stale generation drops.
-store.stats_fetch_result(0, Err("stale".to_owned()));
-assert!(!matches!(store.stats_page_state().phase, StatsPhase::Failed(_)));
+    // A stale generation drops.
+    store.stats_fetch_result(0, Err("stale".to_owned()));
+    assert!(!matches!(store.stats_page_state().phase, StatsPhase::Failed(_)));
 
-// stats.close (the page's escape layer) returns to the route.
-assert_eq!(dispatcher.dispatch(&store, "stats.close", None), Dispatch::Handled);
-assert!(!store.stats_page_open());
-assert!(matches!(store.route(), Route::Session { session_id } if session_id == "s1"));
+    // stats.close (the page's escape layer) returns to the route.
+    assert_eq!(dispatcher.dispatch(&store, "stats.close", None), Dispatch::Handled);
+    assert!(!store.stats_page_open());
+    assert!(matches!(store.route(), Route::Session { session_id } if session_id == "s1"));
 }
 
 /// G-46 — `dialog.plugins.error` (plugins.tsx:224-228's "view
@@ -5379,8 +5374,8 @@ assert!(matches!(store.route(), Route::Session { session_id } if session_id == "
 /// no-op.
 #[test]
 fn plugins_error_opens_error_details_for_failed_rows() {
-use crate::reactive::Runtime;
-let store = Store::new(Runtime::new());
+    use crate::reactive::Runtime;
+    let store = Store::new(Runtime::new());
     store.set_server_plugins(Ok(vec![
         crate::store::ServerPluginRow {
             target: "@corp/good".into(),
@@ -5426,4 +5421,4 @@ let store = Store::new(Runtime::new());
     store.clear_dialogs();
     assert_eq!(dispatcher.dispatch(&store, "dialog.plugins.error", None), Dispatch::Handled);
     assert!(store.top_dialog().is_none(), "no failed rows: no dialog opened");
-    }
+}
