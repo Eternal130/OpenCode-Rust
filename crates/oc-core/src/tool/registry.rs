@@ -81,13 +81,17 @@ pub struct Issue {
 }
 
 /// A minimal JSON-Schema validator over the keyword subset the built-in
-/// tool schemas use: object `required`, per-property `type`, `enum`,
-/// `minLength`/`maxLength`, `minimum`/`maximum`, and nested object/array
-/// items. Unknown keywords are ignored (like effect's conversion passthrough).
+/// and MCP tool schemas use: object `required`, per-property `type`,
+/// `enum`, `minLength`/`maxLength`, `minimum`/`maximum`, nested object/
+/// array `items`, plus the G-59 additions: `pattern`, `oneOf`/`anyOf`/
+/// `allOf`, `$defs` + local `$ref` resolution, `minItems`/`maxItems`,
+/// `additionalProperties` (bool + schema), and `uniqueItems`. `format`
+/// stays lenient; unknown keywords are ignored (like effect's conversion
+/// passthrough).
 #[must_use]
 pub fn validate_input(schema: &serde_json::Value, value: &serde_json::Value) -> Vec<Issue> {
     let mut issues = Vec::new();
-    validate(schema, value, "", &mut issues);
+    validate(schema, schema, value, "", &mut issues, 0);
     issues
 }
 
@@ -114,13 +118,83 @@ fn custom_message(schema: &serde_json::Value) -> Option<&str> {
     schema.get("x-opencode-message").and_then(|v| v.as_str())
 }
 
+/// Local `#/...` JSON-pointer `$ref` resolution against the root schema
+/// (covers `$defs` and any other in-document anchor).
+fn resolve_ref<'a>(root: &'a serde_json::Value, reference: &str) -> Option<&'a serde_json::Value> {
+    let pointer = reference.strip_prefix('#')?;
+    if pointer.is_empty() {
+        return Some(root);
+    }
+    let pointer = pointer.strip_prefix('/')?;
+    let mut current = root;
+    for raw in pointer.split('/') {
+        let token = raw.replace("~1", "/").replace("~0", "~");
+        let next = current.as_object().and_then(|map| map.get(&token)).or_else(|| {
+            let index = token.parse::<usize>().ok()?;
+            current.as_array().and_then(|items| items.get(index))
+        })?;
+        current = next;
+    }
+    Some(current)
+}
+
+/// Does `value` satisfy `schema`? (scratch validation, no side effects).
+fn schema_matches(
+    schema: &serde_json::Value,
+    root: &serde_json::Value,
+    value: &serde_json::Value,
+    depth: usize,
+) -> bool {
+    let mut scratch = Vec::new();
+    validate(schema, root, value, "", &mut scratch, depth + 1);
+    scratch.is_empty()
+}
+
+#[allow(clippy::too_many_lines)] // one keyword arm each, mirroring ajv-style checks
 fn validate(
     schema: &serde_json::Value,
+    root: &serde_json::Value,
     value: &serde_json::Value,
     path: &str,
     issues: &mut Vec<Issue>,
+    depth: usize,
 ) {
+    // Cycle guard for recursive `$ref`s.
+    if depth > 64 {
+        return;
+    }
     let Some(object) = schema.as_object() else { return };
+    // Local `$ref`: validate against the referenced subschema; external
+    // refs are ignored (lenient, like the MCP passthrough).
+    if let Some(reference) = object.get("$ref").and_then(|v| v.as_str()) {
+        if let Some(resolved) = resolve_ref(root, reference) {
+            validate(resolved, root, value, path, issues, depth + 1);
+        }
+        return;
+    }
+    if let Some(list) = object.get("allOf").and_then(|v| v.as_array()) {
+        for sub in list {
+            validate(sub, root, value, path, issues, depth + 1);
+        }
+    }
+    if let Some(list) = object.get("anyOf").and_then(|v| v.as_array()) {
+        if !list.iter().any(|sub| schema_matches(sub, root, value, depth)) {
+            issues.push(Issue {
+                path: if path.is_empty() { "root".to_string() } else { path.to_string() },
+                message: "must match a schema in anyOf".to_string(),
+            });
+        }
+    }
+    if let Some(list) = object.get("oneOf").and_then(|v| v.as_array()) {
+        let matches =
+            list.iter().filter(|sub| schema_matches(sub, root, value, depth)).count();
+        if matches != 1 {
+            issues.push(Issue {
+                path: if path.is_empty() { "root".to_string() } else { path.to_string() },
+                message: "must match exactly one schema in oneOf".to_string(),
+            });
+        }
+    }
     if let Some(expected) = object.get("type").and_then(|v| v.as_str()) {
         let matches = match (expected, value) {
             ("string", serde_json::Value::String(_)) => true,
@@ -154,6 +228,35 @@ fn validate(
                     path: if path.is_empty() { "root".to_string() } else { path.to_string() },
                     message,
                 });
+            }
+        }
+    }
+    if let Some(max_length) = object.get("maxLength").and_then(|v| v.as_u64()) {
+        if let serde_json::Value::String(text) = value {
+            if (text.chars().count() as u64) > max_length {
+                let message = custom_message(schema)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| format!("must NOT have more than {max_length} characters"));
+                issues.push(Issue {
+                    path: if path.is_empty() { "root".to_string() } else { path.to_string() },
+                    message,
+                });
+            }
+        }
+    }
+    if let Some(pattern) = object.get("pattern").and_then(|v| v.as_str()) {
+        if let serde_json::Value::String(text) = value {
+            // Invalid pattern → lenient skip (no schema error surface).
+            if let Ok(regex) = regex::Regex::new(pattern) {
+                if !regex.is_match(text) {
+                    let message = custom_message(schema)
+                        .map(str::to_string)
+                        .unwrap_or_else(|| format!("must match pattern \"{pattern}\""));
+                    issues.push(Issue {
+                        path: if path.is_empty() { "root".to_string() } else { path.to_string() },
+                        message,
+                    });
+                }
             }
         }
     }
@@ -194,36 +297,79 @@ fn validate(
     }
     match value {
         serde_json::Value::Object(fields) => {
-            if let (Some(required), Some(properties)) =
-                (object.get("required").and_then(|v| v.as_array()), object.get("properties"))
-            {
-                for key in required {
-                    if let Some(key) = key.as_str() {
-                        if !fields.contains_key(key) {
-                            issues.push(Issue {
-                                path: if path.is_empty() {
-                                    key.to_string()
-                                } else {
-                                    format!("{path}.{key}")
-                                },
-                                message: "is required".to_string(),
-                            });
+            if let Some(properties) = object.get("properties") {
+                if let Some(required) = object.get("required").and_then(|v| v.as_array()) {
+                    for key in required {
+                        if let Some(key) = key.as_str() {
+                            if !fields.contains_key(key) {
+                                issues.push(Issue {
+                                    path: if path.is_empty() {
+                                        key.to_string()
+                                    } else {
+                                        format!("{path}.{key}")
+                                    },
+                                    message: "is required".to_string(),
+                                });
+                            }
                         }
                     }
                 }
+                let additional = object.get("additionalProperties");
                 for (key, field) in fields {
-                    if let Some(field_schema) =
-                        properties.get(key).or_else(|| object.get("additionalProperties"))
-                    {
-                        validate(field_schema, field, &join_path(path, key), issues);
+                    match properties.get(key) {
+                        Some(field_schema) => {
+                            validate(field_schema, root, field, &join_path(path, key), issues, depth + 1);
+                        }
+                        None => match additional {
+                            // `false` → extra properties are rejected.
+                            Some(serde_json::Value::Bool(false)) => issues.push(Issue {
+                                path: join_path(path, key),
+                                message: "must NOT have additional properties".to_string(),
+                            }),
+                            // Schema → validate the extra property against it.
+                            Some(schema @ serde_json::Value::Object(_)) => {
+                                validate(schema, root, field, &join_path(path, key), issues, depth + 1);
+                            }
+                            // Absent / `true` → open object.
+                            _ => {}
+                        },
                     }
                 }
             }
         }
         serde_json::Value::Array(items) => {
+            if let Some(min_items) = object.get("minItems").and_then(|v| v.as_u64()) {
+                if (items.len() as u64) < min_items {
+                    issues.push(Issue {
+                        path: if path.is_empty() { "root".to_string() } else { path.to_string() },
+                        message: format!("must NOT have fewer than {min_items} items"),
+                    });
+                }
+            }
+            if let Some(max_items) = object.get("maxItems").and_then(|v| v.as_u64()) {
+                if (items.len() as u64) > max_items {
+                    issues.push(Issue {
+                        path: if path.is_empty() { "root".to_string() } else { path.to_string() },
+                        message: format!("must NOT have more than {max_items} items"),
+                    });
+                }
+            }
+            if object.get("uniqueItems").and_then(|v| v.as_bool()) == Some(true) {
+                let mut seen = Vec::with_capacity(items.len());
+                if items.iter().any(|item| {
+                    let dup = seen.contains(item);
+                    seen.push(item.clone());
+                    dup
+                }) {
+                    issues.push(Issue {
+                        path: if path.is_empty() { "root".to_string() } else { path.to_string() },
+                        message: "must NOT have duplicate items".to_string(),
+                    });
+                }
+            }
             if let Some(item_schema) = object.get("items") {
                 for (index, item) in items.iter().enumerate() {
-                    validate(item_schema, item, &format!("{path}[{index}]"), issues);
+                    validate(item_schema, root, item, &format!("{path}[{index}]"), issues, depth + 1);
                 }
             }
         }
@@ -595,5 +741,164 @@ mod tests {
         let issues = validate_input(&schema, &json!({ "timeout": 0 }));
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].message, "must be greater than or equal to 1");
+    }
+
+    // G-59 — the fuller keyword subset (MCP external schemas flow through
+    // the same validator; each new keyword needs a pin).
+
+    #[test]
+    fn validate_input_enforces_pattern() {
+        let schema = json!({
+            "type": "object",
+            "properties": { "name": { "type": "string", "pattern": "^[a-z]+$" } },
+            "required": ["name"]
+        });
+        assert!(validate_input(&schema, &json!({ "name": "abc" })).is_empty());
+        let issues = validate_input(&schema, &json!({ "name": "ABC" }));
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].path, "name");
+        // Invalid regex stays lenient (no validator crash).
+        let lenient = json!({ "type": "object", "properties": {
+            "x": { "type": "string", "pattern": "[" }
+        }});
+        assert!(validate_input(&lenient, &json!({ "x": "any" })).is_empty());
+    }
+
+    #[test]
+    fn validate_input_enforces_string_lengths() {
+        let schema = json!({
+            "type": "object",
+            "properties": { "s": { "type": "string", "minLength": 2, "maxLength": 4 } }
+        });
+        assert!(validate_input(&schema, &json!({ "s": "abc" })).is_empty());
+        let issues = validate_input(&schema, &json!({ "s": "a" }));
+        assert_eq!(issues[0].message, "must NOT have fewer than 2 characters");
+        let issues = validate_input(&schema, &json!({ "s": "abcde" }));
+        assert_eq!(issues[0].message, "must NOT have more than 4 characters");
+    }
+
+    #[test]
+    fn validate_input_enforces_one_of() {
+        let schema = json!({
+            "oneOf": [
+                { "type": "object", "properties": { "a": { "type": "string" } }, "required": ["a"],
+                  "additionalProperties": false },
+                { "type": "object", "properties": { "b": { "type": "integer" } }, "required": ["b"],
+                  "additionalProperties": false }
+            ]
+        });
+        assert!(validate_input(&schema, &json!({ "a": "x" })).is_empty());
+        assert!(validate_input(&schema, &json!({ "b": 1 })).is_empty());
+        // Matches both → oneOf failure. (Strict branches make mixed shapes
+        // match neither; loosen to observe the >1 case.)
+        let overlap = json!({
+            "oneOf": [
+                { "type": "object", "properties": { "a": { "type": "string" } } },
+                { "type": "object", "properties": { "b": { "type": "integer" } } }
+            ]
+        });
+        let issues = validate_input(&overlap, &json!({ "a": "x", "b": 1 }));
+        assert_eq!(issues[0].message, "must match exactly one schema in oneOf");
+        let issues = validate_input(&schema, &json!({ "a": "x", "b": 1 }));
+        assert_eq!(issues[0].message, "must match exactly one schema in oneOf");
+        // Matches neither.
+        let issues = validate_input(&schema, &json!({ "c": true }));
+        assert!(issues.iter().any(|issue| issue.message == "must match exactly one schema in oneOf"));
+    }
+
+    #[test]
+    fn validate_input_enforces_any_of_and_all_of() {
+        let any = json!({
+            "anyOf": [ { "type": "string" }, { "type": "integer" } ]
+        });
+        assert!(validate_input(&any, &json!("x")).is_empty());
+        let issues = validate_input(&any, &json!(true));
+        assert_eq!(issues[0].message, "must match a schema in anyOf");
+
+        let all = json!({
+            "allOf": [
+                { "type": "string", "minLength": 2 },
+                { "pattern": "^a" }
+            ]
+        });
+        assert!(validate_input(&all, &json!("ab")).is_empty());
+        let issues = validate_input(&all, &json!("bc"));
+        assert!(issues.iter().any(|issue| issue.message.contains("pattern")));
+    }
+
+    #[test]
+    fn validate_input_resolves_local_defs_refs() {
+        let schema = json!({
+            "$defs": { "hex": { "type": "string", "pattern": "^[0-9a-f]+$" } },
+            "type": "object",
+            "properties": { "hash": { "$ref": "#/$defs/hex" } },
+            "required": ["hash"]
+        });
+        assert!(validate_input(&schema, &json!({ "hash": "deadbeef" })).is_empty());
+        let issues = validate_input(&schema, &json!({ "hash": "XYZ" }));
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].path, "hash");
+    }
+
+    #[test]
+    fn validate_input_recursive_ref_terminates() {
+        let schema = json!({
+            "$defs": {
+                "node": {
+                    "type": "object",
+                    "properties": { "child": { "$ref": "#/$defs/node" } }
+                }
+            },
+            "$ref": "#/$defs/node"
+        });
+        assert!(validate_input(&schema, &json!({ "child": { "child": {} } })).is_empty());
+    }
+
+    #[test]
+    fn validate_input_enforces_array_bounds_and_unique_items() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "xs": {
+                    "type": "array",
+                    "items": { "type": "integer" },
+                    "minItems": 1,
+                    "maxItems": 3,
+                    "uniqueItems": true
+                }
+            }
+        });
+        assert!(validate_input(&schema, &json!({ "xs": [1, 2] })).is_empty());
+        let issues = validate_input(&schema, &json!({ "xs": [] }));
+        assert_eq!(issues[0].message, "must NOT have fewer than 1 items");
+        let issues = validate_input(&schema, &json!({ "xs": [1, 2, 3, 4] }));
+        assert_eq!(issues[0].message, "must NOT have more than 3 items");
+        let issues = validate_input(&schema, &json!({ "xs": [1, 1] }));
+        assert_eq!(issues[0].message, "must NOT have duplicate items");
+    }
+
+    #[test]
+    fn validate_input_enforces_additional_properties() {
+        let closed = json!({
+            "type": "object",
+            "properties": { "known": { "type": "string" } },
+            "additionalProperties": false
+        });
+        assert!(validate_input(&closed, &json!({ "known": "x" })).is_empty());
+        let issues = validate_input(&closed, &json!({ "known": "x", "extra": 1 }));
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].path, "extra");
+        assert_eq!(issues[0].message, "must NOT have additional properties");
+
+        // Schema form: extras are validated against it.
+        let open = json!({
+            "type": "object",
+            "properties": { "known": { "type": "string" } },
+            "additionalProperties": { "type": "boolean" }
+        });
+        assert!(validate_input(&open, &json!({ "flag": true })).is_empty());
+        let issues = validate_input(&open, &json!({ "flag": "yes" }));
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].path, "flag");
     }
 }
