@@ -168,6 +168,7 @@ const ENFORCED_OPS: &[&str] = &[
     "integration.oauth.complete",
     "integration.oauth.connect",
     "plugin.check",
+    "plugin.install",
     "plugin.update",
     "project.update",
     "pty.create",
@@ -1509,7 +1510,7 @@ mod tests {
     /// The rollout is COMPLETE (2026-10-21): [`ENFORCED_OPS`] is exactly the
     /// set of JSON-body operations minus the location-first routes
     /// (24 sessionLocationMiddleware + 5 formLocationMiddleware ops, ids
-    /// from the `OpenAPI` identifiers). 28 of the 46 JSON-body ops; the
+    /// from the `OpenAPI` identifiers). 29 of the 47 JSON-body ops; the
     /// other 18 stay out forever (not deferred — their v2 endpoints
     /// resolve the session/form first, so a validate-first 400 would
     /// DIVERGE from v2's 404).
@@ -1522,7 +1523,7 @@ mod tests {
             .filter(|row| matches!(row.body, validation_gen::BodyValidation::Json(_)))
             .map(|row| row.operation_id)
             .collect();
-        assert_eq!(json_body_ops.len(), 46, "46 JSON-body operations");
+        assert_eq!(json_body_ops.len(), 47, "47 JSON-body operations");
         let validate_first: std::collections::BTreeSet<&str> =
             json_body_ops.into_iter().filter(|op| !location_first(op)).collect();
         let enforced: std::collections::BTreeSet<&str> = ENFORCED_OPS.iter().copied().collect();

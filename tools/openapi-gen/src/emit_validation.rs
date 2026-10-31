@@ -598,7 +598,7 @@ pub fn emit(spec_json: &str, operations: &[Operation], sha256: &str) -> String {
     out.push_str(crate::emit_routes::ROUTES_HEADER);
     out.push_str(&format!("// Source: tools/openapi-gen/openapi.json (sha256 {sha256})\n"));
     out.push_str(
-        "//! Request-validation constraint table for the 141-op HttpApi surface\n\
+        "//! Request-validation constraint table for the 142-op HttpApi surface\n\
          //! (HTTP-H0): one row per operation mapping its request body AND its\n\
          //! declared query parameters to JSON-shape constraints. DATA ONLY —\n\
          //! the interpreter/seam lives in `request_validation.rs`, which\n\

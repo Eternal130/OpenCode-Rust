@@ -990,11 +990,11 @@ async fn generated_body_validation_matrix() {
 
     let json_ops: Vec<&oc_server::validation_gen::RouteValidation> =
         VALIDATION.iter().filter(|row| matches!(row.body, BodyValidation::Json(_))).collect();
-    assert_eq!(json_ops.len(), 46, "46 JSON-body operations");
+    assert_eq!(json_ops.len(), 47, "47 JSON-body operations");
 
     let validate_first: Vec<_> =
         json_ops.iter().filter(|row| !LOCATION_FIRST.contains(&row.operation_id)).collect();
-    assert_eq!(validate_first.len(), 28, "28 validate-first body operations");
+    assert_eq!(validate_first.len(), 29, "29 validate-first body operations");
 
     let mut probes_run = 0usize;
     for row in &validate_first {
@@ -1093,11 +1093,11 @@ async fn generated_query_validation_matrix() {
     let query_ops: Vec<&oc_server::validation_gen::RouteValidation> =
         VALIDATION.iter().filter(|row| matches!(row.query, QueryValidation::Params(_))).collect();
     assert_eq!(query_ops.len(), oc_server::validation_gen::QUERY_PARAM_ROUTES);
-    assert_eq!(query_ops.len(), 71, "71 ops declare query parameters");
+    assert_eq!(query_ops.len(), 72, "72 ops declare query parameters");
 
     let enforced: Vec<_> =
         query_ops.iter().filter(|row| !LOCATION_FIRST.contains(&row.operation_id)).collect();
-    assert_eq!(enforced.len(), 69, "71 - session.interrupt - session.form.cancel");
+    assert_eq!(enforced.len(), 70, "72 - session.interrupt - session.form.cancel");
 
     let mut probed = 0usize;
     let mut accept_all: Vec<&str> = Vec::new();

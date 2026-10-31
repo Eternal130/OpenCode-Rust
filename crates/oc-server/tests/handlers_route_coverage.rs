@@ -1,4 +1,4 @@
-//! Route-coverage manifest test: every one of the 141 `routes_gen`
+//! Route-coverage manifest test: every one of the 142 `routes_gen`
 //! operations must be mounted on the handler table. Each operation gets a
 //! probe request through the real router (axum `tower::Service::oneshot`);
 //! an UNMOUNTED route would fall through to axum's default fallback —
@@ -64,7 +64,7 @@ fn sample_params(route: &Route) -> Vec<(&'static str, String)> {
 }
 
 #[tokio::test]
-async fn handlers_all_141_operations_mounted() {
+async fn handlers_all_142_operations_mounted() {
     let mut router = router().await;
     let mut unmounted = Vec::new();
 
@@ -119,5 +119,5 @@ async fn handlers_all_141_operations_mounted() {
         unmounted.len(),
         routes_gen::OPERATION_COUNT,
     );
-    assert_eq!(routes_gen::OPERATION_COUNT, 141);
+    assert_eq!(routes_gen::OPERATION_COUNT, 142);
 }
