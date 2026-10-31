@@ -309,10 +309,10 @@
 ## 新登记缺口（G-41..G-49）
 
 ### 🟡 中
-- **G-41 ❌ 代理 URL 凭据被丢弃**：proxy.rs:200 剥掉 userinfo，CONNECT 无 Proxy-Authorization（:483-485），SOCKS5 匿名（:438）——需认证的企业代理得 407。ref proxy-agents 消费 `url.auth`。
-- **G-42 ❌ WSS_PROXY/WS_PROXY 未咨询**：proxy.rs:52-56 仅 HTTPS/HTTP(S)_PROXY/ALL_PROXY；ref websocket-constructor.ts:43-47 先查 WS 族。
-- **G-43 ❌ 无 loopback 目标绕过**：ref 对 127.0.0.1/localhost/::1 恒直连（:38）；rust 无此旁路。
-- **G-44 ❌ NO_PROXY bare-host 语义偏差**：rust 对 bare host 做后缀匹配、`*.foo.com` 永不命中、仅逗号分隔；ref 为 bare host 精确相等（`.`/`*` 前缀才后缀）、空白+逗号分隔（ref :23-36）。
+- **G-41 ✅ 代理 URL 凭据被丢弃**：已修复——userinfo 解析保留（percent-decode），CONNECT 发 Basic `Proxy-Authorization`，SOCKS5 username/password 认证。
+- **G-42 ✅ WSS_PROXY/WS_PROXY 未咨询**：已修复——WS 族优先于标准族（websocket-constructor.ts:43-47 语义）。
+- **G-43 ✅ 无 loopback 目标绕过**：已修复——127.0.0.1/localhost/::1 恒直连。
+- **G-44 ✅ NO_PROXY bare-host 语义偏差**：已修复——bare host 精确相等、`.`/`*` 前缀后缀匹配、空白+逗号分隔。
 
 ### 🟢 低
 - **G-45 ❌ agent-client-protocol-schema 无 drift 守卫**：同为 vendored+同一 preserve_order 改动（third_party/agent-client-protocol-schema/Cargo.toml:103，同样经 [patch.crates-io] 钉定），acp_drift.py:39-40 的 VENDORED 硬编码只覆盖主包。扩 guard 即可。
@@ -322,7 +322,7 @@
 - **G-49 ℹ️ 记录性/文档债**：spinner 帧率受 pump tick（50-100ms）约束而非 40ms 定时器（帧数学精确）；session.environment 每 session 单发（ref 效果重触发，PUT 幂等无害）；stdio.rs 模块头宣称 SIGTERM→SIGKILL 升级但实现为即杀（沿袭 rmcp 行为，措辞与 ref 2s 优雅等待不符）；project.rs:1103-1105 注释"插件 strategy 不支持"已过时（add_strategy 就在其下）；proxy.rs:367 注释"webpki 与 0.13 栈一致"在 G-26 后已失效（0.13 现走 platform-verifier；ws 链路留 webpki 为有意）。
 
 ## 复审判定汇总
-G-18 ✅ / G-19 ✅(死校验残留) / G-20 ✅ / G-21 ✅ / G-22 ✅ / G-23 ✅ / G-24 ✅(bounded) / G-25 ✅ / G-26 ✅ / G-27 ✅(F1=新 G-45) / G-29 ✅(error 面残留) / G-30 ✅(惰性钉定) / G-31 ⚠️ / G-33 ✅(无热重载) / G-34 ⚠️(半接线) / G-35 ✅ / G-36 ✅ / G-37 ✅ / G-6 ✅ / G-8 ✅(G-41..G-44 残留) / G-1 ✅(consumer 迁移仍开放)
+G-18 ✅ / G-19 ✅(死校验残留) / G-20 ✅ / G-21 ✅ / G-22 ✅ / G-23 ✅ / G-24 ✅(bounded) / G-25 ✅ / G-26 ✅ / G-27 ✅(F1=新 G-45) / G-29 ✅(error 面残留) / G-30 ✅(惰性钉定) / G-31 ⚠️ / G-33 ✅(无热重载) / G-34 ⚠️(半接线) / G-35 ✅ / G-36 ✅ / G-37 ✅ / G-6 ✅ / G-8 ✅(G-41..G-44 已由 lane2 收口) / G-41 ✅ / G-42 ✅ / G-43 ✅ / G-44 ✅ / G-1 ✅(consumer 迁移仍开放)
 
 ---
 
@@ -486,10 +486,10 @@ G-18 ✅ / G-19 ✅(死校验残留) / G-20 ✅ / G-21 ✅ / G-22 ✅ / G-23 ✅
 
 - **G-34 ⚠️**：home_location 仍 write-only（set 唯一调用 command_palette.rs:3360；`home_location()` 唯一读者是测试 :3952；home 路由仍走 `footer_location()` home.rs:418、session.rs:1230,1318）。
 - **G-48 ❌**：tool_output 仍 boot 一次性（Limits::from_entries 仅 boot.rs:301-302；`configure` 唯一调用 engine/mod.rs:503；config reload 路径无重赋值）。
-- **G-41 ❌**：代理 userinfo 仍丢弃（proxy.rs:200 `rsplit_once('@')`）；CONNECT 无 Proxy-Authorization（:483-484）；SOCKS5 匿名（:438-441）。
-- **G-42 ❌**：WSS_PROXY/WS_PROXY 仍未咨询（proxy.rs:52-56 仅 HTTPS/HTTP(S)/ALL 族）。
-- **G-43 ❌**：loopback（127.0.0.1/localhost/::1）仍无直连旁路。
-- **G-44 ❌**：NO_PROXY 仍 bare-host 后缀匹配（:135）、`*.foo.com` 永不命中（:131 保留 `*`）、仅逗号分隔（:118；ref 为精确相等 + 空白/逗号分隔）。
+- **G-41 ✅**：代理 userinfo 已保留并消费——CONNECT 发 Basic `Proxy-Authorization`、SOCKS5 用 username/password（lane2, 0f932c2）。
+- **G-42 ✅**：WSS_PROXY/WS_PROXY 已优先咨询，再回落 HTTPS/HTTP(S)_PROXY/ALL_PROXY（lane2, 17947d9）。
+- **G-43 ✅**：loopback（127.0.0.1/localhost/::1）已恒直连（lane2, 2d889a9）。
+- **G-44 ✅**：NO_PROXY 已改 ref 语义——bare host 精确相等、`.`/`*` 前缀后缀匹配、空白+逗号分隔（lane2, df29fd3）。
 - **G-45 ❌**：acp_drift.py:58 VENDORED 仍只覆盖主包，agent-client-protocol-schema 未守卫。
 - **G-46 ❌**：dialog.plugins.error 仍 surfaceless（command_palette.rs:3121-3129 `Dispatch::Handled` 无操作）。
 - **G-47 ❌**：IDE backoff 仍不复位（editor_ide.rs:222-234 attempt 只增不减）；空字符串 env 仍阻断 fallback（:36-39 `or()` 吞掉合法备选）。
