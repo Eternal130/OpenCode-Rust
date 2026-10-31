@@ -65,6 +65,10 @@ pub fn select_proxy(target: &str, env: &EnvLookup<'_>) -> Option<String> {
     let host = target_host(target)?;
     let port = target_port(target);
     let effective_port = port.or_else(|| default_port(target));
+    // loopback targets never use a proxy (websocket-constructor.ts:40)
+    if matches!(host.as_str(), "127.0.0.1" | "localhost" | "::1") {
+        return None;
+    }
     if no_proxy_bypasses(
         &host,
         effective_port,
@@ -662,6 +666,26 @@ mod tests {
             select_proxy("ws://api.example.com", &map(&[("ALL_PROXY", "any:5")])),
             Some("any:5".into())
         );
+    }
+
+    #[test]
+    fn loopback_targets_bypass_the_proxy_entirely() {
+        // G-43: 127.0.0.1 / localhost / ::1 always connect directly,
+        // regardless of env or NO_PROXY (websocket-constructor.ts:40).
+        let env = map(&[("ALL_PROXY", "proxy:8080"), ("WSS_PROXY", "wss:9"), ("WS_PROXY", "ws:8")]);
+        for target in [
+            "wss://127.0.0.1/v1",
+            "ws://127.0.0.1:8080/v1",
+            "wss://localhost/v1",
+            "ws://LOCALHOST:9000",
+            "wss://[::1]/v1",
+            "ws://[::1]:9000/v1",
+        ] {
+            assert_eq!(select_proxy(target, &env), None, "{target}");
+        }
+        // non-loopback hosts still route through the proxy
+        assert_eq!(select_proxy("wss://127.0.0.2/v1", &env), Some("wss:9".into()));
+        assert_eq!(select_proxy("ws://localhost.example.com/v1", &env), Some("ws:8".into()));
     }
 
     #[test]
