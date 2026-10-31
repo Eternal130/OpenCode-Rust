@@ -179,11 +179,43 @@ async fn update(
 ) -> Result<Response, ApiError> {
     let shared = pty_state::shared(&state);
     let id = PtyId(pty_id.clone());
-    if let Some(size) = body["size"].as_object() {
-        let cols = size["cols"].as_u64().unwrap_or(80) as u16;
-        let rows = size["rows"].as_u64().unwrap_or(24) as u16;
-        shared.persistent.resize(&id, cols, rows, None).await.map_err(unavailable)?;
-    }
+    // G-76 — ref schema persistent-pty.ts:38-41: `size` is REQUIRED
+    // ({cols, rows} positive ints). Missing or invalid sizes are 400s
+    // (schema-style messages, sse.rs sibling patterns) — never the old
+    // silent 80/24 fallback.
+    let reject = |message: String| crate::errors::invalid_request_kind(message, "ParseError");
+    let Some(size) = body.get("size").filter(|value| !value.is_null()) else {
+        return Err(reject("Expected size to be an object, received undefined".to_owned()));
+    };
+    let Some(object) = size.as_object() else {
+        return Err(reject(format!(
+            "Expected size to be an object, received {}",
+            match size {
+                Value::Null => "null".to_string(),
+                other => other.to_string(),
+            }
+        )));
+    };
+    let dimension = |key: &str| -> Result<u16, ApiError> {
+        match object.get(key).filter(|value| !value.is_null()) {
+            None => Err(reject(format!(
+                "Expected size.{key} to be a positive integer, received undefined"
+            ))),
+            Some(value @ Value::Number(_)) => match value.as_u64().filter(|n| *n > 0) {
+                Some(n) if n <= u16::MAX as u64 => Ok(n as u16),
+                _ => Err(reject(format!(
+                    "Expected size.{key} to be a positive integer, received {value}"
+                ))),
+            },
+            Some(value) => Err(reject(format!(
+                "Expected size.{key} to be a positive integer, received {value}"
+            ))),
+        }
+    };
+    let cols = dimension("cols")?;
+    let rows = dimension("rows")?;
+    let attachment_id = body["attachmentID"].as_str();
+    shared.persistent.resize(&id, cols, rows, attachment_id).await.map_err(unavailable)?;
     let info = shared.persistent.get(&id).await.map_err(unavailable)?;
     Ok(json_data(info_json(&info)))
 }

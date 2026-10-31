@@ -33,6 +33,15 @@ pub struct Size {
     pub rows: u16,
 }
 
+/// `PersistentPty.UpdateInput` (persistent-pty.ts:38-41) — `size`
+/// REQUIRED ({cols, rows} positive ints), `attachmentID` optional.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct UpdateInput {
+    #[serde(default, rename = "attachmentID", skip_serializing_if = "Option::is_none")]
+    pub attachment_id: Option<String>,
+    pub size: Size,
+}
+
 /// `PersistentPty.Info.output` — absolute byte window `[head, tail)`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Output {
