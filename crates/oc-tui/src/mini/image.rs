@@ -12,26 +12,65 @@ use serde_json::Value;
 use super::fragment::FragmentRef;
 use super::scrollback::{Commit, CommitKind, Phase};
 
+/// `deduplicateVisibleImages`'s identity (attachment.ts:65-74): an
+/// INLINE image file WITH mention text keys on
+/// `JSON.stringify([mime, name, description, mention.text])` +
+/// payload — identical metadata+payload renders once. `None` = the
+/// file never dedups (the caller keeps it; the mime filter runs
+/// AFTER, per the ref's `dedupe(…).filter(image/*)` order).
+fn image_identity(file: &Value) -> Option<(String, String)> {
+    let text = |key: &str| file.get(key).and_then(Value::as_str).unwrap_or_default();
+    let mime = text("mime");
+    let mention = file
+        .get("mention")
+        .and_then(|mention| mention.get("text"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if !mime.starts_with("image/") || mention.is_empty() {
+        return None;
+    }
+    let opt = |value: &str| {
+        (!value.is_empty()).then(|| serde_json::Value::String(value.to_owned()))
+    };
+    let name = text("name");
+    let description = text("description");
+    let metadata = serde_json::Value::Array(vec![
+        serde_json::Value::String(mime.to_owned()),
+        opt(&name).unwrap_or(serde_json::Value::Null),
+        opt(&description).unwrap_or(serde_json::Value::Null),
+        serde_json::Value::String(mention.to_owned()),
+    ])
+    .to_string();
+    Some((metadata, text("data").to_owned()))
+}
+
 /// `userImageCommits`: one commit per VISIBLE image file of a user
-/// message (`deduplicateVisibleImages` + the `image/*` filter),
+/// message — `deduplicateVisibleImages(files).filter(image/*)`
+/// (stream-v2.image.ts:9-19: the dedup runs BEFORE the mime filter;
+/// only the SURVIVORS number the `[Image N]` labels),
 /// `partID = image:{index}`.
 #[must_use]
 pub fn user_image_commits(message_id: &str, files: &[Value]) -> Vec<Commit> {
-    let mut seen_payloads: Vec<&str> = Vec::new();
+    // `deduplicateByIdentity` (attachment.ts:24-38): metadata → the
+    // payloads seen; a repeat metadata+payload drops.
+    let mut seen: std::collections::HashMap<String, std::collections::HashSet<String>> =
+        std::collections::HashMap::new();
     let mut commits = Vec::new();
     let mut index = 0usize;
     for file in files {
+        if let Some((metadata, payload)) = image_identity(file) {
+            let payloads = seen.entry(metadata).or_default();
+            if payloads.contains(&payload) {
+                continue;
+            }
+            payloads.insert(payload);
+        }
         let text = |key: &str| file.get(key).and_then(Value::as_str).unwrap_or_default();
         let mime = text("mime");
         if !mime.starts_with("image/") {
             continue;
         }
         let data = text("data");
-        // `deduplicateVisibleImages`: identical payloads render once.
-        if seen_payloads.contains(&data) {
-            continue;
-        }
-        seen_payloads.push(data);
         let name = text("name");
         let mention = file
             .get("mention")
@@ -50,6 +89,7 @@ pub fn user_image_commits(message_id: &str, files: &[Value]) -> Vec<Commit> {
             &format!("image:{index}"),
             &label,
             &format!("data:{mime};base64,{data}"),
+            CommitKind::User,
         ));
         index += 1;
     }
@@ -75,17 +115,30 @@ pub fn tool_image_commits(part_id: &str, part_state: &Value, message_id: &str) -
         let name = text("name");
         let label =
             if name.is_empty() { format!("[Image {}]", index + 1) } else { name.to_owned() };
-        commits.push(image_commit(message_id, &format!("{part_id}:image:{index}"), &label, uri));
+        commits.push(image_commit(
+            message_id,
+            &format!("{part_id}:image:{index}"),
+            &label,
+            uri,
+            CommitKind::Tool,
+        ));
         index += 1;
     }
     commits
 }
 
-/// The shared `ImageCommit` shape (`kind`/`source`/`phase: "final"`
-/// + the image URI).
-fn image_commit(message_id: &str, part_id: &str, label: &str, image: &str) -> Commit {
+/// The shared `ImageCommit` shape (`phase: "final"` + the image URI;
+/// `kind` = the ref's source row — "user" for user files, "tool" for
+/// tool display content, stream-v2.image.ts:11/22).
+fn image_commit(
+    message_id: &str,
+    part_id: &str,
+    label: &str,
+    image: &str,
+    kind: CommitKind,
+) -> Commit {
     Commit {
-        kind: CommitKind::User,
+        kind,
         text: label.to_owned(),
         phase: Phase::Final,
         message_id: Some(message_id.to_owned()),

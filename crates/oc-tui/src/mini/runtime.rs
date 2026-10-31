@@ -200,9 +200,24 @@ pub async fn run(input: MiniInput) -> Result<i32, String> {
     // Replay: the session's prior transcript into scrollback
     // (`resolveSessionInfo` + `footer.event({ type: "history" })`,
     // `runtime.ts:474-491` — the newest `replayLimit` messages).
+    // G-68 — the transport exists BEFORE the replay so the replay's
+    // message projections land in the SAME fragment reconciler the
+    // live stream folds through (a replayed part's text becomes the
+    // committed prefix the live deltas consume from —
+    // `hydrate(attempt, {render: true})` before `apply`, transport.ts:
+    // 955-991).
+    let mut transport = TransportState::new(&session_id);
     let mut shown = false;
     if input.target.resume && input.replay {
-        replay_history(&mut lifecycle, &client, &session_id, input.replay_limit).await;
+        replay_history(
+            &mut lifecycle,
+            &client,
+            &session_id,
+            input.replay_limit,
+            &mut transport,
+            &settings,
+        )
+        .await;
         shown = true;
     }
 
@@ -242,7 +257,7 @@ pub async fn run(input: MiniInput) -> Result<i32, String> {
         client,
         session_id: session_id.clone(),
         session_title: input.target.session_title.clone(),
-        transport: TransportState::new(&session_id),
+        transport,
         queue: PromptQueue::new(false),
         history: PromptHistory::new(),
         pending: Vec::new(),
@@ -598,12 +613,16 @@ impl Runtime {
 }
 
 /// Replay the session's prior transcript (`resolveSessionInfo`,
-/// `runtime.boot.ts` — the newest messages, user + assistant text).
+/// `runtime.boot.ts`) — the ref's `renderMessage(message, render =
+/// true)` walk (transport.ts:802-899), one message at a time through
+/// [`replay_message_commits`].
 async fn replay_history(
     lifecycle: &mut Lifecycle,
     client: &Client,
     session_id: &str,
     limit: Option<usize>,
+    transport: &mut TransportState,
+    settings: &MiniSettings,
 ) {
     let query = oc_client::types::SessionMessageListQuery {
         limit: limit.map(|limit| limit.to_string()).or(Some("200".to_owned())),
@@ -613,37 +632,131 @@ async fn replay_history(
     let Ok(page) = client.message().list(session_id, &query).await else { return };
     let mut messages = page.data;
     messages.reverse();
-    for message in &messages {
+    for (index, message) in messages.iter().enumerate() {
         let Ok(value) = serde_json::to_value(message) else { continue };
-        let kind = value.get("type").and_then(Value::as_str).unwrap_or_default();
-        let role = value.get("role").and_then(Value::as_str).unwrap_or_default();
-        let text = value
-            .get("parts")
-            .and_then(Value::as_array)
-            .map(|parts| {
-                parts
-                    .iter()
-                    .filter_map(|part| {
-                        let part_type = part.get("type").and_then(Value::as_str)?;
-                        if part_type != "text" {
-                            return None;
-                        }
-                        part.get("text").and_then(Value::as_str).map(str::to_owned)
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            })
-            .unwrap_or_default();
-        if text.trim().is_empty() {
-            continue;
+        for commit in replay_message_commits(&value, index, transport, settings) {
+            lifecycle.append(commit);
         }
-        let commit = if kind == "user" || role == "user" {
-            Commit::user(&text)
-        } else {
-            Commit { kind: CommitKind::Assistant, phase: Phase::Final, text, ..Commit::default() }
-        };
-        lifecycle.append(commit);
     }
+}
+
+/// `renderMessage` (transport.ts:802-899): one projected message →
+/// its scrollback commits. Every text/reasoning part re-projects
+/// through the fragment reconciler (the suffix past the committed
+/// prefix appends — a replayed part never double-prints), the user
+/// message's image files commit (deduped), and the tool parts'
+/// `data:image/*` display content commits (deduped). The projections
+/// land in the SAME reconciler the live stream folds through, so
+/// post-replay deltas consume the projected prefix instead of
+/// double-appending (G-68's production wiring).
+fn replay_message_commits(
+    value: &Value,
+    fallback_index: usize,
+    transport: &mut TransportState,
+    settings: &MiniSettings,
+) -> Vec<Commit> {
+    fn text(part: &Value) -> &str {
+        part.get("text").and_then(Value::as_str).unwrap_or_default()
+    }
+    let mut commits = Vec::new();
+    let parts = value.get("parts").and_then(Value::as_array).cloned().unwrap_or_default();
+    let kind = value.get("type").and_then(Value::as_str).unwrap_or_default();
+    let role = value.get("role").and_then(Value::as_str).unwrap_or_default();
+    let message_id = value
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("replay:{fallback_index}"));
+
+    if kind == "user" || role == "user" {
+        // `renderUser` (transport.ts:600-616): the text row, then the
+        // image files' commits.
+        let joined = parts
+            .iter()
+            .filter(|part| part.get("type").and_then(Value::as_str) == Some("text"))
+            .map(|part| text(part).to_owned())
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !joined.trim().is_empty() {
+            commits.push(Commit::user(&joined));
+        }
+        let files = value.get("files").and_then(Value::as_array).cloned().unwrap_or_default();
+        commits.extend(transport.commit_user_images(&message_id, &files));
+        return commits;
+    }
+
+    // The assistant walk (transport.ts:846-881): per-part projections
+    // with the showTools()/thinking visibility gates.
+    let has_tools = parts.iter().any(|part| part.get("type").and_then(Value::as_str) == Some("tool"));
+    let mut text_ordinal = 0usize;
+    let mut reasoning_ordinal = 0usize;
+    for part in &parts {
+        let part_id_of = |update_key: &str| {
+            update_key.split('\u{0}').nth(1).unwrap_or_default().to_owned()
+        };
+        match part.get("type").and_then(Value::as_str) {
+            Some("text") => {
+                let fragment_text = text(part);
+                let visible = settings.tools || !has_tools;
+                let update =
+                    transport.project_part(&message_id, "text", text_ordinal, fragment_text, visible);
+                text_ordinal += 1;
+                if visible && fragment_text.len() > update.previous.len() {
+                    let suffix = &fragment_text[update.previous.len()..];
+                    commits.push(Commit {
+                        kind: CommitKind::Assistant,
+                        phase: Phase::Progress,
+                        text: suffix.to_owned(),
+                        message_id: Some(message_id.clone()),
+                        part_id: Some(part_id_of(&update.key)),
+                        ..Commit::default()
+                    });
+                }
+            }
+            Some("reasoning") => {
+                let fragment_text = text(part);
+                let visible = settings.thinking;
+                let update = transport.project_part(
+                    &message_id,
+                    "reasoning",
+                    reasoning_ordinal,
+                    fragment_text,
+                    visible,
+                );
+                reasoning_ordinal += 1;
+                if visible && fragment_text.len() > update.previous.len() {
+                    // The ref prefixes the FIRST run
+                    // (`update.previous.length === 0 ?
+                    // `Thinking: ${item.text}` : suffix`,
+                    // transport.ts:873-876).
+                    let suffix = &fragment_text[update.previous.len()..];
+                    let row = if update.previous.is_empty() {
+                        format!("Thinking: {fragment_text}")
+                    } else {
+                        suffix.to_owned()
+                    };
+                    commits.push(Commit {
+                        kind: CommitKind::Reasoning,
+                        phase: Phase::Progress,
+                        text: row,
+                        message_id: Some(message_id.clone()),
+                        part_id: Some(part_id_of(&update.key)),
+                        ..Commit::default()
+                    });
+                }
+            }
+            // `renderTool`'s image arm (transport.ts:758): the part's
+            // `data:image/*` display content commits.
+            Some("tool") => {
+                let part_id = format!("prt_{}", part.get("id").and_then(Value::as_str).unwrap_or_default());
+                let state = part.get("state").cloned().unwrap_or(Value::Null);
+                commits.extend(transport.commit_tool_images(&part_id, &state, &message_id));
+            }
+            _ => {}
+        }
+    }
+    commits
 }
 
 /// Map a crossterm key into the footer vocabulary.
@@ -666,5 +779,100 @@ fn map_key(key: &crossterm::event::KeyEvent) -> Option<FooterKey> {
         KeyCode::PageDown => Some(FooterKey::PageDown),
         KeyCode::Char(char) => Some(FooterKey::Printable(char)),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// G-68 (fix #1) — the replay's production wiring: projections
+    /// land in the SAME reconciler the live stream folds through.
+    /// A replayed assistant part's text becomes the committed prefix
+    /// (a re-replay never double-prints, a live covered delta is
+    /// consumed, an `ended` without text keeps the full projection),
+    /// and the user/tool image arms fire on the replay walk.
+    #[test]
+    fn replay_projects_fragments_and_commits_images() {
+        let settings = MiniSettings { tools: false, thinking: true, ..MiniSettings::default() };
+        let mut transport = TransportState::new("s1");
+
+        // A user message with an image file: text row + image commit.
+        let user = serde_json::json!({
+            "id": "msg_u1", "type": "user",
+            "parts": [{ "type": "text", "text": "look" }],
+            "files": [{ "mime": "image/png", "data": "AAEC", "name": "shot.png" }],
+        });
+        let commits = replay_message_commits(&user, 0, &mut transport, &settings);
+        assert_eq!(commits.len(), 2, "the text row + the image commit");
+        assert_eq!(commits[0].kind, CommitKind::User);
+        assert_eq!(commits[1].image.as_deref(), Some("data:image/png;base64,AAEC"));
+
+        // An assistant message: the text part projects visibly (no
+        // tools in the message) with the `text:0` part id.
+        let assistant = serde_json::json!({
+            "id": "msg_a1", "type": "assistant",
+            "parts": [
+                { "type": "reasoning", "text": "hmm" },
+                { "type": "text", "text": "one two three" },
+            ],
+        });
+        let commits = replay_message_commits(&assistant, 1, &mut transport, &settings);
+        assert_eq!(commits.len(), 2, "one reasoning + one text row");
+        assert_eq!(commits[0].kind, CommitKind::Reasoning);
+        assert_eq!(commits[0].text, "Thinking: hmm");
+        assert_eq!(commits[1].kind, CommitKind::Assistant);
+        assert_eq!(commits[1].text, "one two three");
+        assert_eq!(commits[1].part_id.as_deref(), Some("text:0"));
+
+        // The projection covers the live stream: covered deltas fold
+        // to Ignored, the tail appends, the final commit keeps all.
+        let covered = transport.fold(&serde_json::json!({
+            "type": "session.text.delta",
+            "data": { "sessionID": "s1", "messageID": "msg_a1", "partID": "text:0", "delta": "one two " },
+        }));
+        assert_eq!(covered, super::super::transport::Fold::Ignored, "covered by the replay");
+        let tail = transport.fold(&serde_json::json!({
+            "type": "session.text.delta",
+            "data": { "sessionID": "s1", "messageID": "msg_a1", "partID": "text:0", "delta": " four" },
+        }));
+        match tail {
+            super::super::transport::Fold::Commit(commit) => assert_eq!(commit.text, "one two three four"),
+            other => panic!("tail folded: {other:?}"),
+        }
+        let ended = transport.fold(&serde_json::json!({
+            "type": "session.text.ended",
+            "data": { "sessionID": "s1", "messageID": "msg_a1", "partID": "text:0" },
+        }));
+        match ended {
+            super::super::transport::Fold::Commit(commit) => {
+                assert_eq!(commit.text, "one two three four", "the final keeps the projection");
+            }
+            other => panic!("ended folded: {other:?}"),
+        }
+
+        // A re-replay of the SAME message never double-prints: the
+        // committed prefix swallows the projection.
+        let re = replay_message_commits(&assistant, 1, &mut transport, &settings);
+        assert!(re.is_empty(), "a fully-committed part replays nothing: {re:?}");
+
+        // A tool part's data:image/* display content commits (kind
+        // Tool), and replays dedup.
+        let tool = serde_json::json!({
+            "id": "msg_a2", "type": "assistant",
+            "parts": [
+                { "type": "text", "text": "here" },
+                { "type": "tool", "id": "9", "state": { "content": [
+                    { "type": "file", "mime": "image/png", "uri": "data:image/png;base64,AAEC", "name": "out.png" },
+                ] } },
+            ],
+        });
+        let commits = replay_message_commits(&tool, 2, &mut transport, &settings);
+        // showTools() false + the message HAS a tool part → the text
+        // row hides (transport.ts:854's visible gate).
+        assert_eq!(commits.len(), 1, "only the tool image commit");
+        assert_eq!(commits[0].kind, CommitKind::Tool);
+        assert_eq!(commits[0].part_id.as_deref(), Some("prt_9:image:0"));
+        assert!(replay_message_commits(&tool, 2, &mut transport, &settings).is_empty());
     }
 }
