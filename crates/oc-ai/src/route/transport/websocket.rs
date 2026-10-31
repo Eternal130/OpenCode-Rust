@@ -1635,6 +1635,8 @@ mod proxy_tunnel_tests {
             host: "127.0.0.1".into(),
             port: proxy_addr.port(),
             scheme: super::super::proxy::ProxyScheme::Http,
+            username: None,
+            password: None,
             source: format!("http://127.0.0.1:{}", proxy_addr.port()),
         };
         let tunnel = connect_through(&proxy, "upstream.test", 80).await.unwrap();

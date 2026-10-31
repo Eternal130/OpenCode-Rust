@@ -2331,6 +2331,7 @@ version = "2.0.24"
 dependencies = [
  "async-stream",
  "async-trait",
+ "base64 0.22.1",
  "bytes",
  "futures",
  "oc-http",
