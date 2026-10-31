@@ -1,0 +1,21 @@
+# Local changes to vendored agent-client-protocol-schema-1.11.0 (crates.io) vs the pristine
+# tarball (sha256 3d9a84a76a4f44721e0d8dabcd85b219893c43d6171a4a033d84844d85880823). Regenerate with
+#   python3 tools/guards/acp_drift.py --update
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -100,9 +100,14 @@
+ ]
+ 
+ [dependencies.serde_json]
++# Vendored from crates.io 1.11.0 with ONE change: `preserve_order` is
++# dropped. Upstream enables it unconditionally, and Cargo feature
++# unification would flip serde_json's map iteration order for the whole
++# workspace (breaking the port's sorted-order conventions — codemode
++# signatures, openapi-gen regeneration, parity goldens). ACP JSON
++# objects are order-insensitive on the wire, so behavior is unchanged.
+ version = "1"
+ features = [
+-    "preserve_order",
+     "raw_value",
+ ]
+ 

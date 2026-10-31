@@ -267,6 +267,33 @@ fn configured_tui_plugins() -> Vec<(String, String)> {
     rows
 }
 
+/// fix1 (ref inventory.ts `configured`): TUI-plugin targets configured
+/// in cli.json `plugins[]` that have NO installation at all — same
+/// directive/builtin filtering as [`configured_tui_plugins`], but the
+/// install requirement dropped (deduped).
+fn configured_uninstalled_tui_targets() -> Vec<String> {
+    let info = cli_config().get();
+    let Some(plugins) = info.plugins else { return Vec::new() };
+    let mut rows = Vec::new();
+    for spec in plugins {
+        let target = match &spec {
+            oc_core::cli_config::PluginSpec::Directive(target) => target.clone(),
+            oc_core::cli_config::PluginSpec::Entry { package, .. } => package.clone(),
+        };
+        if target.starts_with('-')
+            || target == "*"
+            || target.ends_with(".*")
+            || target.starts_with("opencode.")
+        {
+            continue;
+        }
+        if newest_installed(&target).is_none() && !rows.contains(&target) {
+            rows.push(target);
+        }
+    }
+    rows
+}
+
 fn add(package: &str, force: bool) -> i32 {
     if package.starts_with('-')
         || package == "*"
@@ -445,28 +472,141 @@ async fn check(target: Option<&str>, server: &ServerParams) -> i32 {
     };
     let value = serde_json::to_value(&response.data).expect("check serializes");
     let items = value.as_array().cloned().unwrap_or_default();
-    let mut output = Vec::new();
+    // Merged Server + TUI inventory (ref plugin/inventory.ts `inspect`):
+    // server rows from the runtime check, TUI rows from the cli.json
+    // plugin set checked through npm (`npm.check`).
+    let mut rows: Vec<PluginRow> = Vec::new();
     let mut errors = false;
     for item in &items {
-        if item.get("error").is_some_and(|error| !error.is_null()) {
-            errors = true;
-        }
-        let name = item.get("name").and_then(Value::as_str).unwrap_or("-");
-        let current = item.get("version").and_then(Value::as_str).unwrap_or("-");
-        let latest = item
-            .get("latest")
+        let error = item.get("error").filter(|error| !error.is_null()).and_then(Value::as_str);
+        errors |= error.is_some();
+        let target_id = item.get("target").and_then(Value::as_str).unwrap_or("-");
+        let name = item
+            .get("name")
             .and_then(Value::as_str)
-            .map_or_else(|| current.to_owned(), str::to_owned);
-        output.push(format!("{name} {current} → {latest}"));
+            .filter(|name| !name.is_empty())
+            .unwrap_or(target_id);
+        rows.push(PluginRow {
+            runtime: "Server",
+            target: target_id.to_owned(),
+            name: name.to_owned(),
+            version: item.get("version").and_then(Value::as_str).map(str::to_owned),
+            outdated: item.get("outdated").and_then(Value::as_bool).unwrap_or(false),
+            error: error.map(str::to_owned),
+        });
     }
+    for (tui_target, version) in configured_tui_plugins() {
+        if target.is_some_and(|target| target != tui_target) {
+            continue;
+        }
+        // Blocking registry probe — off the async runtime, like `update`.
+        let check_target = tui_target.clone();
+        let checked = tokio::task::spawn_blocking(move || {
+            oc_plugin_host::npm_check(
+                &check_target,
+                &oc_plugin_host::install_root(),
+                &oc_plugin_host::InstallOptions::default(),
+            )
+        })
+        .await
+        .unwrap_or_else(|error| Err(error.to_string()));
+        let (outdated, error) = match checked {
+            Ok(outdated) => (outdated, None),
+            Err(error) => {
+                errors = true;
+                (false, Some(error))
+            }
+        };
+        rows.push(PluginRow {
+            runtime: "TUI",
+            target: tui_target.clone(),
+            name: tui_target,
+            version: Some(version),
+            outdated,
+            error,
+        });
+    }
+    // fix1: configured-but-UNINSTALLED TUI plugin targets still surface
+    // (ref inventory.ts checks every configured installable target — an
+    // absent install is a `check failed` row naming the cause, not
+    // silence). No version: nothing is installed to name one.
+    for tui_target in configured_uninstalled_tui_targets() {
+        if target.is_some_and(|target| target != tui_target) {
+            continue;
+        }
+        errors = true;
+        let message = format!("package is not installed: {tui_target}");
+        rows.push(PluginRow {
+            runtime: "TUI",
+            target: tui_target.clone(),
+            name: tui_target,
+            version: None,
+            outdated: false,
+            error: Some(message),
+        });
+    }
+    if let Some(target) = target.filter(|_| rows.is_empty()) {
+        eprintln!("Error: Plugin is not configured: {target}");
+        return 1;
+    }
+    let output = format_plugin_rows(&rows);
     if output.is_empty() {
         println!("No package plugins found");
     } else {
-        for line in output {
-            println!("{line}");
-        }
+        println!("{output}");
     }
     i32::from(errors)
+}
+
+/// One merged inventory row (ref plugin/inventory.ts `Item`).
+struct PluginRow {
+    runtime: &'static str,
+    target: String,
+    name: String,
+    version: Option<String>,
+    outdated: bool,
+    error: Option<String>,
+}
+
+/// ref inventory.ts `displayVersion`: a 40/64-char hex sha is shown as
+/// its 7-char prefix.
+fn display_version(version: &str) -> String {
+    let hexish = version.len() == 40 || version.len() == 64;
+    if hexish && version.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        version.chars().take(7).collect()
+    } else {
+        version.to_owned()
+    }
+}
+
+/// ref inventory.ts `format`: per-runtime sections, each row
+/// `  name version (update available|current|check failed)`.
+fn format_plugin_rows(rows: &[PluginRow]) -> String {
+    let mut out = String::new();
+    for runtime in ["Server", "TUI"] {
+        let section: Vec<&PluginRow> =
+            rows.iter().filter(|row| row.runtime == runtime).collect();
+        if section.is_empty() {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(runtime);
+        for row in section {
+            let status = if row.error.is_some() {
+                "check failed"
+            } else if row.outdated {
+                "update available"
+            } else {
+                "current"
+            };
+            let version =
+                row.version.as_deref().map(display_version).unwrap_or_default();
+            out.push_str(&format!("\n  {name} {version} ({status})", name = row.name));
+        }
+    }
+    out
 }
 
 async fn update(target: Option<&str>, server: &ServerParams) -> i32 {
@@ -507,6 +647,12 @@ async fn update(target: Option<&str>, server: &ServerParams) -> i32 {
             continue;
         }
         let target_id = item.get("target").and_then(Value::as_str).unwrap_or_default().to_owned();
+        let name = item
+            .get("name")
+            .and_then(Value::as_str)
+            .filter(|name| !name.is_empty())
+            .unwrap_or(&target_id)
+            .to_owned();
         match client
             .plugin()
             .update(
@@ -516,17 +662,65 @@ async fn update(target: Option<&str>, server: &ServerParams) -> i32 {
             .await
         {
             Ok(()) => {
-                println!(
-                    "Updated Server plugin \"{}\"",
-                    item.get("name").and_then(Value::as_str).unwrap_or("-")
-                );
+                println!("Updated Server plugin \"{name}\"");
                 updated += 1;
             }
             Err(error) => {
-                eprintln!(
-                    "Failed to update Server plugin \"{}\": {error}",
-                    item.get("name").and_then(Value::as_str).unwrap_or("-")
-                );
+                eprintln!("Failed to update Server plugin \"{name}\": {error}");
+                errors += 1;
+            }
+        }
+    }
+    // TUI plugins (ref plugin/update.ts): the cli.json plugin set goes
+    // through the npm update path (`npm.update`), not the server runtime.
+    // fix1: uninstalled configured targets join too (ref inspect includes
+    // them; the check fails with "package is not installed" and the
+    // handler exits 1).
+    let mut tui_targets: Vec<String> =
+        configured_tui_plugins().into_iter().map(|(target, _)| target).collect();
+    tui_targets.extend(configured_uninstalled_tui_targets());
+    for tui_target in tui_targets {
+        if target.is_some_and(|target| target != tui_target) {
+            continue;
+        }
+        let root = oc_plugin_host::install_root();
+        let cache = oc_plugin_host::update_cache();
+        let check_target = tui_target.clone();
+        let checked = tokio::task::spawn_blocking(move || {
+            oc_plugin_host::npm_check(
+                &check_target,
+                &oc_plugin_host::install_root(),
+                &oc_plugin_host::InstallOptions::default(),
+            )
+        })
+        .await
+        .unwrap_or_else(|error| Err(error.to_string()));
+        match checked {
+            Ok(true) => {}
+            Ok(false) => continue,
+            Err(error) => {
+                eprintln!("Failed to check TUI plugin \"{tui_target}\": {error}");
+                errors += 1;
+                continue;
+            }
+        }
+        // Blocking install work — off the async runtime.
+        let display_target = tui_target.clone();
+        match tokio::task::spawn_blocking(move || {
+            oc_plugin_host::update(&tui_target, &root, cache, &oc_plugin_host::InstallOptions::default())
+        })
+        .await
+        {
+            Ok(Ok(_)) => {
+                println!("Updated TUI plugin \"{display_target}\"");
+                updated += 1;
+            }
+            Ok(Err(error)) => {
+                eprintln!("Failed to update TUI plugin \"{display_target}\": {error}");
+                errors += 1;
+            }
+            Err(error) => {
+                eprintln!("Failed to update TUI plugin \"{display_target}\": {error}");
                 errors += 1;
             }
         }
@@ -535,4 +729,66 @@ async fn update(target: Option<&str>, server: &ServerParams) -> i32 {
         println!("No plugin updates available");
     }
     i32::from(errors > 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{display_version, format_plugin_rows, PluginRow};
+
+    fn row(runtime: &'static str, name: &str, version: Option<&str>, outdated: bool, error: bool) -> PluginRow {
+        PluginRow {
+            runtime,
+            target: name.to_owned(),
+            name: name.to_owned(),
+            version: version.map(str::to_owned),
+            outdated,
+            error: error.then(|| "probe failed".to_owned()),
+        }
+    }
+
+    /// ref inventory.ts `displayVersion`: 40/64-char hex revisions are
+    /// truncated to 7 chars; plain semver passes through.
+    #[test]
+    fn display_version_truncates_hex_revisions() {
+        let sha = "0123456789abcdef0123456789abcdef01234567";
+        assert_eq!(display_version(sha), "0123456");
+        assert_eq!(display_version("1.2.3"), "1.2.3");
+        // 40 chars but not hex — shown in full.
+        let not_hex = "z".repeat(40);
+        assert_eq!(display_version(&not_hex), not_hex);
+    }
+
+    /// ref inventory.ts `format`: per-runtime sections with the
+    /// update-available / current / check-failed status per row.
+    #[test]
+    fn format_merges_server_and_tui_sections() {
+        let rows = vec![
+            row("Server", "numbers", Some("1.0.0"), false, false),
+            row("Server", "stale", Some("0.9.0"), true, false),
+            row("Server", "broken", Some("0.1.0"), false, true),
+            row("TUI", "tui-plugin", Some("2.0.0"), false, false),
+        ];
+        assert_eq!(
+            format_plugin_rows(&rows),
+            "Server\n  numbers 1.0.0 (current)\n  stale 0.9.0 (update available)\n  \
+             broken 0.1.0 (check failed)\nTUI\n  tui-plugin 2.0.0 (current)"
+        );
+    }
+
+    /// Sections with no rows are omitted entirely (format's flatMap).
+    #[test]
+    fn format_omits_empty_sections() {
+        let rows = vec![row("TUI", "only-tui", None, false, false)];
+        assert_eq!(format_plugin_rows(&rows), "TUI\n  only-tui  (current)");
+        assert_eq!(format_plugin_rows(&[]), "");
+    }
+
+    /// fix1: a configured-but-uninstalled TUI target surfaces as a
+    /// versionless `check failed` row (ref inventory.ts `npm.check`
+    /// error path), not silence.
+    #[test]
+    fn format_renders_not_installed_tui_rows_as_check_failed() {
+        let rows = vec![row("TUI", "missing-plugin", None, false, true)];
+        assert_eq!(format_plugin_rows(&rows), "TUI\n  missing-plugin  (check failed)");
+    }
 }

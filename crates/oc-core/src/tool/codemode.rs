@@ -1190,6 +1190,11 @@ pub struct CodeModeLeaf {
     pub timeout: std::time::Duration,
     /// Opt-in execution budgets (default: unlimited — v2 parity).
     pub limits: ExecutionLimits,
+    /// v2 `context.progress({toolCalls})` (codemode/tool.ts:88 — the
+    /// `record` helper publishes the running call list). The rust
+    /// runtime seam is opaque to per-call updates, so the payload fires
+    /// once with the final call list when the program settles.
+    pub progress: Option<crate::tool::ProgressFn>,
 }
 
 impl CodeModeLeaf {
@@ -1368,6 +1373,12 @@ impl super::ToolExecuteWithContext for CodeModeLeaf {
             if outcome.truncated {
                 metadata.insert("truncated".to_string(), Value::Bool(true));
             }
+            // codemode/tool.ts:88 — `context.progress({toolCalls})` with
+            // the (settled) call list.
+            if let Some(progress) = &self.progress {
+                let tool_calls = metadata.get("toolCalls").cloned().unwrap_or(Value::Array(Vec::new()));
+                progress(context, serde_json::json!({ "toolCalls": tool_calls }));
+            }
             Ok(super::ToolOutcome {
                 content: vec![Content::Text { text: output }],
                 metadata: Some(metadata.into_iter().collect()),
@@ -1397,6 +1408,7 @@ pub fn register_code_mode(
         runtime,
         timeout,
         ExecutionLimits::default(),
+        None,
     )
 }
 
@@ -1412,12 +1424,13 @@ pub fn register_code_mode_with_limits(
     runtime: Arc<dyn CodeModeRuntime>,
     timeout: std::time::Duration,
     limits: ExecutionLimits,
+    progress: Option<crate::tool::ProgressFn>,
 ) {
     state.register(execute_registration());
     let executor = registry::pipeline_executor(
         EXECUTE_NAME,
         execute_input_schema(),
-        Arc::new(CodeModeLeaf { runtime, registry: Arc::clone(state), timeout, limits }),
+        Arc::new(CodeModeLeaf { runtime, registry: Arc::clone(state), timeout, limits, progress }),
         services,
         hooks,
     );
@@ -2078,6 +2091,14 @@ mod limits_tests {
         runtime: Arc<dyn CodeModeRuntime>,
         limits: ExecutionLimits,
     ) -> (Arc<ToolRegistryState>, Arc<crate::hooks::HookRegistry>) {
+        limited_harness_with_progress(runtime, limits, None).await
+    }
+
+    async fn limited_harness_with_progress(
+        runtime: Arc<dyn CodeModeRuntime>,
+        limits: ExecutionLimits,
+        progress: Option<crate::tool::ProgressFn>,
+    ) -> (Arc<ToolRegistryState>, Arc<crate::hooks::HookRegistry>) {
         let harness = harness_for_codemode().await;
         let state = Arc::new(ToolRegistryState::new());
         let hooks = Arc::new(crate::hooks::HookRegistry::new());
@@ -2134,6 +2155,7 @@ mod limits_tests {
             runtime,
             std::time::Duration::from_secs(5),
             limits,
+            progress,
         );
         (state, hooks)
     }
@@ -2143,6 +2165,33 @@ mod limits_tests {
             oc_schema::tool::Content::Text { text } => text.clone(),
             _ => String::new(),
         }
+    }
+
+    /// G-74: the codemode leaf emits `context.progress({toolCalls})`
+    /// (codemode/tool.ts:88) — the payload observed on the channel.
+    #[tokio::test]
+    async fn tool_codemode_progress_payload_carries_tool_calls() {
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = Arc::clone(&seen);
+        let (state, _hooks) = limited_harness_with_progress(
+            Arc::new(ProbeRuntime(Probe::Call(2))),
+            ExecutionLimits::default(),
+            Some(Arc::new(move |_context, payload| {
+                sink.lock().expect("progress sink").push(payload);
+            })),
+        )
+        .await;
+        let result = call(&state, EXECUTE_NAME, json!({ "code": "two" }))
+            .await
+            .expect("program runs");
+        assert!(result.metadata.is_some());
+        let seen = seen.lock().expect("progress sink");
+        assert_eq!(seen.len(), 1, "one progress emission");
+        let calls =
+            seen[0].get("toolCalls").and_then(Value::as_array).expect("toolCalls payload");
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0]["tool"], "greet");
+        assert_eq!(calls[0]["status"], "completed");
     }
 
     #[tokio::test]

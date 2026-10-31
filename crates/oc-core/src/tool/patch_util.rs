@@ -108,9 +108,12 @@ fn strip_heredoc(input: &str) -> String {
         return input.to_string();
     }
     let rest = rest.trim_start();
-    let Some(body_and_tag) = rest.strip_suffix(name) else { return input.to_string() };
+    // `\n\2\s*$` (ref util/patch.ts:381): the closing marker is preceded
+    // by a newline and followed by ANY trailing whitespace (spaces, tabs,
+    // newlines) to the end — tolerate it when stripping the wrapper.
+    let Some(body_and_tag) = rest.trim_end().strip_suffix(name) else { return input.to_string() };
     // `…\n<body>\n<name>` — one newline separates body from the closing tag.
-    body_and_tag.strip_suffix('\n').map_or_else(|| input.to_string(), |body| body.to_string())
+    body_and_tag.strip_suffix('\n').map_or_else(|| input.to_string(), str::to_string)
 }
 
 fn is_boundary(line: &str) -> bool {
@@ -607,6 +610,20 @@ mod tests {
             parse("cat <<'EOF'\n*** Begin Patch\n*** Add File: a.txt\n+x\n*** End Patch\nEOF")
                 .expect("heredoc");
         assert_eq!(hunks.len(), 1);
+    }
+
+    /// G-75 (ref util/patch.ts:381 `\n\2\s*$`): any trailing whitespace
+    /// after the closing marker is tolerated when unwrapping.
+    #[test]
+    fn patch_util_tolerates_trailing_whitespace_after_heredoc_marker() {
+        for wrapper in [
+            "cat <<'EOF'\n*** Begin Patch\n*** Add File: a.txt\n+x\n*** End Patch\nEOF ",
+            "cat <<'EOF'\n*** Begin Patch\n*** Add File: a.txt\n+x\n*** End Patch\nEOF\n",
+            "cat <<'EOF'\n*** Begin Patch\n*** Add File: a.txt\n+x\n*** End Patch\nEOF  \t\n\n",
+        ] {
+            let hunks = parse(wrapper).expect("heredoc with trailing whitespace");
+            assert_eq!(hunks.len(), 1, "{wrapper:?}");
+        }
     }
 
     #[test]

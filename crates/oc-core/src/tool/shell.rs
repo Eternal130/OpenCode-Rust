@@ -71,6 +71,10 @@ pub struct ShellToolServices {
     /// Emits the synthetic notification into the owning session
     /// (`sessions.synthetic`).
     pub synthetic: Arc<dyn SyntheticPublisher>,
+    /// v2 `context.progress` (shell.ts:217 `context.progress({shellID})`)
+    /// — the per-call progress channel; the runner publishes
+    /// `session.tool.progress` with the tool CALL id.
+    pub progress: Option<super::ProgressFn>,
 }
 
 /// `sessions.synthetic` seam — publishes the `<shell …>` notification into
@@ -100,6 +104,11 @@ impl SyntheticPublisher for NoopSynthetic {
         _notification_id: Option<&str>,
     ) {
     }
+}
+
+/// The shell progress payload (shell.ts:217): `{shellID}`.
+fn shell_progress_payload(shell_id: &oc_schema::id::ShellId) -> serde_json::Value {
+    serde_json::json!({ "shellID": shell_id.as_str() })
 }
 
 /// `ShellTool.Output`.
@@ -333,6 +342,11 @@ impl ToolExecuteWithContext for ShellExecute {
                     message: format!("Unable to execute command: {}", input.command),
                     cause: Some(super::FailureCause::Nested(error.to_string())),
                 })?;
+            // shell.ts:217 — `context.progress({shellID: info.id})` right
+            // after the process is spawned (the LIVE shell-card metadata).
+            if let Some(progress) = &deps.progress {
+                progress(&context, shell_progress_payload(&info.id));
+            }
 
             // The run body settles into the job carrying the structured
             // output as JSON (notifications and the foreground result both
@@ -679,6 +693,16 @@ mod tests {
             timeout: None,
         };
         assert_eq!(result_messages(&running), vec!["streaming", BACKGROUND_INSTRUCTION]);
+    }
+
+    /// G-74: the progress payload (shell.ts:217) is `{shellID}`.
+    #[test]
+    fn tool_shell_progress_payload_is_shell_id() {
+        let id = oc_schema::id::ShellId::parse("sh_123").expect("shell id");
+        assert_eq!(
+            shell_progress_payload(&id),
+            serde_json::json!({ "shellID": "sh_123" })
+        );
     }
 
     #[test]

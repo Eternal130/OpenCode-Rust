@@ -154,8 +154,12 @@ async fn export(server: &ServerParams, session: Option<&str>, sanitize: bool) ->
     let session_id = match session {
         Some(session_id) => session_id.to_owned(),
         None => match select_session_for_export(&client).await {
-            Ok(Some(id)) => id,
-            Ok(None) => return 0, // nothing found / cancelled
+            Ok(ExportPick::Picked(id)) => id,
+            // log.error("No sessions found") → outro("Done"), exit 0.
+            Ok(ExportPick::NoSessions) => return 0,
+            // export.ts:62-66 — `cancel("Cancelled")` + `process.exitCode
+            // = 130` (Ctrl-C convention).
+            Ok(ExportPick::Cancelled) => return 130,
             Err(message) => {
                 eprintln!("{message}");
                 return 1;
@@ -187,9 +191,18 @@ async fn export(server: &ServerParams, session: Option<&str>, sanitize: bool) ->
 }
 
 /// The export.ts interactive selector (`autocomplete` over the 50 most
-/// recent sessions; hint = local timestamp - last 8 of the ID). Returns
-/// `Ok(None)` for "no sessions"/"cancelled", `Err` on transport failure.
-async fn select_session_for_export(client: &oc_client::Client) -> Result<Option<String>, String> {
+/// recent sessions; hint = local timestamp - last 8 of the ID).
+/// `Err` on transport failure.
+enum ExportPick {
+    Picked(String),
+    /// "No sessions found" → Done, exit 0.
+    NoSessions,
+    /// Cancelled → exit 130 (export.ts:62-66).
+    Cancelled,
+}
+
+#[allow(clippy::too_many_lines)]
+async fn select_session_for_export(client: &oc_client::Client) -> Result<ExportPick, String> {
     if !(util::stdin_is_tty() && util::stderr_is_tty()) {
         return Err("Pass a session ID when running without an interactive terminal".to_owned());
     }
@@ -208,7 +221,7 @@ async fn select_session_for_export(client: &oc_client::Client) -> Result<Option<
         .map_err(|error| error_message(&error.to_string()))?;
     if page.data.is_empty() {
         eprintln!("No sessions found");
-        return Ok(None);
+        return Ok(ExportPick::NoSessions);
     }
     let items: Vec<(String, String)> = page
         .data
@@ -235,20 +248,34 @@ async fn select_session_for_export(client: &oc_client::Client) -> Result<Option<
             (session.id.clone(), format!("{title} ({hint})"))
         })
         .collect();
-    println!("◆ Export session");
+    // G-75/export.ts: ALL clack UI goes to stderr — stdout is reserved
+    // for the exported session content.
+    eprintln!("◆ Export session");
     let picked = dialoguer::FuzzySelect::new()
         .with_prompt("Select session to export")
         .items(&items.iter().map(|(_, label)| label).collect::<Vec<_>>())
         .default(0)
         .max_length(10)
         .interact_opt();
-    if let Ok(Some(index)) = picked {
-        println!("◇ Exporting session...");
-        Ok(Some(items[index].0.clone()))
-    } else {
-        println!("Cancelled");
-        Ok(None)
+    match picked {
+        Ok(Some(index)) => {
+            eprintln!("◇ Exporting session...");
+            Ok(ExportPick::Picked(items[index].0.clone()))
+        }
+        _ => {
+            eprintln!("Cancelled");
+            Ok(ExportPick::Cancelled)
+        }
     }
+}
+
+/// `Schema.decodeUnknownEffect(SessionTransfer.Data)` (import.ts:25-26):
+/// validate the imported structure against the SessionTransfer shape —
+/// top-level `info` (Session.Info) and `messages` (array) required.
+fn validate_transfer(data: &serde_json::Value) -> Result<(), String> {
+    serde_json::from_value::<oc_schema::session::TransferData>(data.clone())
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 async fn import(server: &ServerParams, file: &str, directory: Option<&str>) -> i32 {
@@ -281,6 +308,13 @@ async fn import(server: &ServerParams, file: &str, directory: Option<&str>) -> i
         eprintln!("Error: Failed to read session data: invalid JSON");
         return 1;
     };
+    // import.ts:25-26 — the payload is validated against the
+    // SessionTransfer schema shape ({info: Session.Info, messages: []})
+    // BEFORE import; a bad payload rejects with a clear error.
+    if let Err(error) = validate_transfer(&data) {
+        eprintln!("Error: Invalid session data: {error}");
+        return 1;
+    }
     let resolved = match connect(server, None).await {
         Ok(resolved) => resolved,
         Err(code) => return code,
@@ -348,7 +382,70 @@ use base64::Engine as _;
 
 #[cfg(test)]
 mod tests {
-    use super::format_local_time;
+    use super::{format_local_time, validate_transfer};
+    use serde_json::json;
+
+    /// A minimal valid SessionTransfer payload (the export endpoint's
+    /// shape): `{info: Session.Info, messages: []}`.
+    fn transfer() -> serde_json::Value {
+        let info = oc_schema::session::Info {
+            id: oc_schema::id::SessionId::parse("ses_x").unwrap(),
+            parent_id: None,
+            fork: None,
+            project_id: oc_schema::id::ProjectId::global(),
+            agent: None,
+            model: None,
+            cost: oc_schema::common::Usd::zero(),
+            tokens: Default::default(),
+            outcome: None,
+            time: oc_schema::session::Time {
+                created: 1,
+                updated: 2,
+                idle: None,
+                viewed: None,
+                archived: None,
+            },
+            title: None,
+            location: oc_schema::location::Ref {
+                directory: oc_schema::common::AbsolutePath::parse("/repo"),
+                workspace_id: None,
+            },
+            subpath: None,
+            metadata: None,
+            permissions: None,
+            revert: None,
+        };
+        serde_json::to_value(oc_schema::session::TransferData { info, messages: Vec::new() })
+            .expect("serializes")
+    }
+
+    /// import.ts:25-26 — the payload must match the SessionTransfer
+    /// schema shape before anything is imported.
+    #[test]
+    fn session_import_accepts_a_well_formed_transfer() {
+        assert!(validate_transfer(&transfer()).is_ok(), "{:?}", validate_transfer(&transfer()));
+    }
+
+    #[test]
+    fn session_import_rejects_malformed_transfers() {
+        // Missing top-level fields.
+        let error = validate_transfer(&json!({})).expect_err("no fields");
+        assert!(error.contains("missing field `info`"), "{error}");
+        // messages must be an array.
+        let error = validate_transfer(&json!({
+            "info": transfer()["info"],
+            "messages": "nope",
+        }))
+        .expect_err("messages type");
+        assert!(error.contains("sequence") || error.contains("messages"), "{error}");
+        // info must be a Session.Info (id is required and shaped).
+        let error = validate_transfer(&json!({
+            "info": { "id": "not a session" },
+            "messages": [],
+        }))
+        .expect_err("bad info");
+        assert!(!error.is_empty());
+    }
 
     /// `toLocaleString` parity: TZ env pins the zone (each nextest test
     /// runs in its own process, so the env write is isolated).
