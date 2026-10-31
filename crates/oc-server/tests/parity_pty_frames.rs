@@ -775,3 +775,68 @@ async fn persistent_nonframed_binary_input_is_raw() {
     }
     panic!("raw binary echo not observed, collected: {collected:02X?}");
 }
+
+/// G-76 — `persistentPty.update` requires `size` (positive ints); the
+/// old 80/24 silent fallback is gone. Missing/invalid → 400.
+#[tokio::test]
+async fn persistent_update_requires_valid_size() {
+    let server = boot().await;
+    let session_id = create_session(&server.client, "g76").await;
+    let (status, created, _) = raw_http(
+        server.addr,
+        "POST",
+        &format!("/api/experimental/session/{session_id}/terminal"),
+        &[("content-type", "application/json")],
+        serde_json::json!({ "title": "g76", "command": "sh", "args": ["-c", "sleep 30"], "env": {} })
+            .to_string()
+            .as_bytes(),
+    )
+    .await;
+    assert_eq!(status, 200, "terminal create: {created}");
+    let pty_id = created["data"]["id"].as_str().expect("pty id").to_owned();
+
+    // Byte-pinned schema messages (the payload-validation layer owns
+    // them; the handler keeps a second enforcement for parity).
+    let cases: &[(&str, Value, &str)] = &[
+        ("missing size", serde_json::json!({}), "Missing key\n  at [\"size\"]"),
+        (
+            "cols zero",
+            serde_json::json!({ "size": { "cols": 0, "rows": 30 } }),
+            "Expected a value greater than 0\n  at [\"size\"][\"cols\"]",
+        ),
+        (
+            "cols not a number",
+            serde_json::json!({ "size": { "cols": "wide", "rows": 30 } }),
+            "Expected number\n  at [\"size\"][\"cols\"]",
+        ),
+        (
+            "rows missing",
+            serde_json::json!({ "size": { "cols": 100 } }),
+            "Missing key\n  at [\"size\"][\"rows\"]",
+        ),
+    ];
+    for (name, body, expected) in cases {
+        let (status, response, _) = raw_http(
+            server.addr,
+            "PUT",
+            &format!("/api/experimental/persistent-pty/{pty_id}"),
+            &[("content-type", "application/json")],
+            body.to_string().as_bytes(),
+        )
+        .await;
+        assert_eq!(status, 400, "{name}: {response}");
+        assert_eq!(response["_tag"], "InvalidRequestError", "{name}: {response}");
+        assert_eq!(response["message"].as_str().unwrap_or_default(), *expected, "{name}: {response}");
+    }
+
+    // Valid size still resizes.
+    let (status, _, body) = raw_http(
+        server.addr,
+        "PUT",
+        &format!("/api/experimental/persistent-pty/{pty_id}"),
+        &[("content-type", "application/json")],
+        serde_json::json!({ "size": { "cols": 100, "rows": 30 } }).to_string().as_bytes(),
+    )
+    .await;
+    assert_eq!(status, 200, "valid resize: {body}");
+}
