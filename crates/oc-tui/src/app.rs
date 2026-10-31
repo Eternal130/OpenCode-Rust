@@ -2892,7 +2892,23 @@ impl App {
             // frames); no usable read (headless/unsupported) inserts
             // nothing — bracketed paste stays the other entry.
             KeyOutcome::Paste(_) => {
-                if let Some(content) = self.store.clipboard_read() {
+                // G-67 — the read arm's error path: the ref's adapter
+                // throws on failed/timed-out/limit-exceeded reads
+                // (clipboard.ts:27-34) and `enqueuePaste`'s catch
+                // surfaces the message as an ERROR toast
+                // (prompt/index.tsx:373-389) — never a silent no-op.
+                let read = self.store.clipboard_read();
+                let content = match read {
+                    Ok(content) => content,
+                    Err(error) => {
+                        let mut toast =
+                            crate::components::toast::ToastOptions::info(error.message());
+                        toast.variant = "error";
+                        self.store.toast_show(toast);
+                        return;
+                    }
+                };
+                if let Some(content) = content {
                     let key = self.prompt_key();
                     let mut composer = self.store.composer(&key);
                     if content.mime.starts_with("image/") {
@@ -8994,6 +9010,7 @@ mod tests {
                 mime: "image/png".to_owned(),
                 data: "AAECAw==".to_owned(),
             }),
+            error: None,
         }));
         app.press("ctrl+v");
         let composer = app.store.composer(&app.prompt_key());
@@ -9018,6 +9035,7 @@ mod tests {
                 // base64("just some words")
                 data: "anVzdCBzb21lIHdvcmRz".to_owned(),
             }),
+            error: None,
         }));
         app.press("ctrl+v");
         assert_eq!(app.store.composer(&app.prompt_key()).draft.text, "just some words");
@@ -9029,6 +9047,37 @@ mod tests {
         ));
         headless.press("ctrl+v");
         assert_eq!(headless.store.composer(&headless.prompt_key()).draft.text, "");
+    }
+
+    /// G-67 — the read arm's error path: a failed/timed-out/over-
+    /// limit clipboard read surfaces as an ERROR toast carrying the
+    /// ref's thrown message (clipboard.ts:27-34 → prompt/index.tsx:
+    /// 373-389's `toast.error(error)`), and the draft is untouched.
+    #[test]
+    fn prompt_paste_error_raises_the_error_toast() {
+        let mut app = App::new((80, 24));
+        app.store.set_clipboard_source(std::rc::Rc::new(crate::clipboard::FixedClipboardSource {
+            error: Some(crate::clipboard::ClipboardReadError::TimedOut),
+            content: None,
+        }));
+        app.press("ctrl+v");
+        let toasts = app.store.toasts();
+        let current = toasts.current().expect("the error toast");
+        assert_eq!(current.message, "Clipboard read timed out");
+        assert_eq!(current.variant, "error");
+        assert_eq!(app.store.composer(&app.prompt_key()).draft.text, "");
+
+        // The limit-exceeded arm carries the RangeError's wording.
+        let mut over = App::new((80, 24));
+        over.store.set_clipboard_source(std::rc::Rc::new(crate::clipboard::FixedClipboardSource {
+            error: Some(crate::clipboard::ClipboardReadError::LimitExceeded),
+            content: None,
+        }));
+        over.press("ctrl+v");
+        assert_eq!(
+            over.store.toasts().current().expect("toast").message,
+            "Clipboard content exceeded configured read or image conversion limits"
+        );
     }
 
     /// TUI-7 — the session-list filter's six semantics at App level
