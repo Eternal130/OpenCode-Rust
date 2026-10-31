@@ -489,9 +489,18 @@ pub async fn session_log_response(
     use crate::errors;
 
     // Session id validation (Schema.decodeUnknownEffect(Session.ID)).
-    let Ok(session) = oc_schema::id::SessionId::parse(session_id) else {
-        return errors::invalid_request_field(session_id.to_owned(), "ParseError", "sessionID")
-            .into_response();
+    // G-78 — the schema ParseError format like the after/follow params
+    // below (e.g. `Expected sessionID to be a string starting with
+    // "ses_", received "not-an-id"`), never a raw echo of the value.
+    let Ok(session) = oc_schema::id::SessionId::parse(session_id.to_owned()) else {
+        return errors::invalid_request_field(
+            format!(
+                "Expected sessionID to be a string starting with \"ses_\", received \"{session_id}\""
+            ),
+            "ParseError",
+            "sessionID",
+        )
+        .into_response();
     };
 
     // after: NumberFromString; follow: BooleanFromString.
