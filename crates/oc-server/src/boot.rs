@@ -126,6 +126,15 @@ impl oc_core::config::watch::ConfigUpdated for ConfigReloadBridge {
         let location = self.location.clone();
         self.runtime.spawn(async move {
             crate::announce::publish_empty(&engine, "config.updated", &location).await;
+            // G-48 — the tool_output budget re-derives from the
+            // reloaded entries BEFORE the invalidations below, so every
+            // re-assembled location's shell captures honor the new
+            // limits (v2 ConfigEntryObserver, tool-output.ts).
+            if let Some((watched, _)) = hooks.as_ref() {
+                engine.reload_tool_output_limits(oc_core::tool_output::Limits::from_entries(
+                    &watched.loaded().entries,
+                ));
+            }
             for live in engine.live_locations() {
                 engine.invalidate(&live).await;
             }
@@ -253,12 +262,6 @@ pub async fn boot_and_serve(options: &BootOptions) -> io::Result<ServeHandle> {
         runtime: tokio::runtime::Handle::current(),
         location: LocationRef::new(config_location.clone(), None),
     });
-    let watched_config = oc_core::config::WatchedConfig::start(
-        watch_loader,
-        oc_core::config::watch::NotifyBackend::new(),
-        config_reload.clone(),
-        None,
-    );
     let providers = providers_from_config(&snapshot);
     if trace_boot {
         let sources = &snapshot.sources;
@@ -444,6 +447,44 @@ pub async fn boot_and_serve(options: &BootOptions) -> io::Result<ServeHandle> {
     // Arc rides on AppState so the reload loop's Weak target stays
     // alive for the process lifetime.
     *config_reload.engine.lock().unwrap() = Some(Arc::clone(&app_state.engine));
+    // G-05/G-56 — start the live watcher now that the engine exists:
+    // the watched loader carries the host's wellknown source (v2
+    // `loadWellknownEntry` participates in every Config reload,
+    // config.ts:145-170), so credential/wellknown changes surface as
+    // entry changes and the reload bridge invalidates the assembled
+    // location graphs.
+    let watch_loader = watch_loader.with_wellknown(Arc::new(
+        oc_core::integration::wellknown_config::HostWellknownSource::new(Arc::clone(
+            app_state.engine.integration.wellknown_documents(),
+        )),
+    ));
+    let watched_config = oc_core::config::WatchedConfig::start(
+        watch_loader,
+        oc_core::config::watch::NotifyBackend::new(),
+        config_reload.clone(),
+        None,
+    );
+    // G-56 — `Credential.Switched` / `WellKnown.Updated` drive a config
+    // reload (config.ts:306-311 subscribes both → `reload()`): the
+    // reload re-reads the wellknown docs (the engine's own loop has
+    // refreshed them by the time `integration.updated` fires); a reload
+    // that changes entries flows the existing bridge — config.updated +
+    // every live location invalidated — while a deep-equal reload stays
+    // silent (the m1 goldens pin the boot cascade's `integration.
+    // updated` as a NO-OP for locations).
+    {
+        use futures::StreamExt as _;
+        let watched = Arc::clone(&watched_config);
+        let mut subscription = app_state.engine.bus.subscribe_types(&[
+            oc_core::bus::registry::CREDENTIAL_SWITCHED,
+            oc_core::bus::registry::INTEGRATION_UPDATED,
+        ]);
+        tokio::spawn(async move {
+            while subscription.next().await.is_some() {
+                watched.request_reload();
+            }
+        });
+    }
     if let (Some(boot), watched) = (&app_state.plugins, &watched_config) {
         *config_reload.hooks.lock().unwrap() = Some((Arc::clone(watched), Arc::clone(boot)));
     }
@@ -1254,6 +1295,101 @@ mod tests {
                     .expect("sse read deadline")
                     .expect("sse alive");
             buffer.extend_from_slice(&chunk[..read]);
+        }
+
+        handle.shutdown_and_join().await.expect("shutdown");
+    }
+
+    /// G-56 — a simulated `credential.switched` bus event drives the
+    /// config reload subscription: the watched config re-loads WITH the
+    /// wellknown contributions (`.with_wellknown`), and a reload whose
+    /// entries changed flows the existing bridge — `config.updated` +
+    /// invalidation of every live location graph (config.ts:306-311
+    /// Credential.Switched → `reload()`).
+    #[tokio::test]
+    async fn boot_credential_switched_reloads_config_and_invalidates_locations() {
+        let root = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+        let project = root.path().join("proj");
+        std::fs::create_dir_all(&project).expect("project dir");
+        std::fs::write(project.join("opencode.json"), r#"{"shell": "one"}"#)
+            .expect("project config");
+        let home = root.path().join("home");
+        std::fs::create_dir_all(&home).expect("home");
+        struct FetchEnv(Option<String>);
+        impl Drop for FetchEnv {
+            fn drop(&mut self) {
+                match self.0.clone() {
+                    Some(value) => std::env::set_var("OPENCODE_CATALOG_FETCH", value),
+                    None => std::env::remove_var("OPENCODE_CATALOG_FETCH"),
+                }
+            }
+        }
+        let prior_fetch = std::env::var("OPENCODE_CATALOG_FETCH").ok();
+        std::env::set_var("OPENCODE_CATALOG_FETCH", "0");
+        let _env = Env::redirect_into(&home);
+        let _fetch_env = FetchEnv(prior_fetch);
+
+        let options = BootOptions {
+            serve: ServeOptions { hostname: IpAddr::from([127, 0, 0, 1]), port: Some(0) },
+            password: None,
+            cors_origins: Vec::new(),
+            version: "test".to_owned(),
+            data_root: root.path().join("data"),
+            home,
+            config_location: Some(project.clone()),
+        };
+        let handle = boot_and_serve(&options).await.expect("boot and serve");
+        assert!(handle.state.watched_config.is_some(), "the boot started the watcher");
+
+        // Force a location assembly so the invalidation below is
+        // observable, and subscribe to the bridge's publish.
+        let mut subscription =
+            handle.state.engine.bus.subscribe_types(&[oc_core::bus::registry::CONFIG_UPDATED]);
+        let location = LocationRef::new(project.clone(), None);
+        let _ = handle.state.engine.location(location.clone()).await.expect("assemble");
+        assert!(handle.state.engine.locations.get(&location).is_some());
+
+        // The credential-side change the reload must pick up: a
+        // wellknown document (what a credential switch / wellknown
+        // refresh produces) enters the host snapshot, then the event.
+        handle
+            .state
+            .engine
+            .integration
+            .wellknown_documents()
+            .push_for_test(vec![oc_core::config::WellknownDocument {
+                source: "https://example.com".to_owned(),
+                dir: project.clone(),
+                text: r#"{"username": "wellknown"}"#.to_owned(),
+                env: std::collections::BTreeMap::new(),
+            }]);
+        // The simulated credential switch.
+        let definition =
+            oc_core::bus::registry::by_type(oc_core::bus::registry::CREDENTIAL_SWITCHED)
+                .expect("credential.switched registered");
+        handle
+            .state
+            .engine
+            .bus
+            .publish(definition, serde_json::json!({}), oc_core::bus::PublishOptions::default())
+            .await
+            .expect("publish credential.switched");
+
+        // The event-driven reload changed entries → the bridge published
+        // `config.updated` and invalidated the live location graph.
+        use futures::StreamExt as _;
+        let event = tokio::time::timeout(std::time::Duration::from_secs(10), subscription.next())
+            .await
+            .expect("config.updated within deadline")
+            .expect("subscription alive");
+        assert_eq!(event.type_, "config.updated");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while handle.state.engine.locations.get(&location).is_some() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "credential.switched never invalidated the location"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
 
         handle.shutdown_and_join().await.expect("shutdown");

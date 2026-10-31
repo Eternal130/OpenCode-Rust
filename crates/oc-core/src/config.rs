@@ -80,7 +80,7 @@ pub struct Options {
 }
 
 /// One wellknown-derived document (remote/credential-derived configs).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WellknownDocument {
     /// Origin identifier used in diagnostics.
     pub source: String,
@@ -1235,6 +1235,64 @@ mod tests {
         fn on_config_updated(&self) {
             self.count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
+    }
+
+    /// G-56 — a credential/wellknown event (the boot's subscription
+    /// calls `request_reload`) re-loads the wellknown contributions:
+    /// changed documents fire the reload callback, so the server's
+    /// bridge invalidates the assembled locations.
+    #[test]
+    fn config_watched_config_reload_on_wellknown_change_via_request_reload() {
+        use std::sync::atomic::AtomicBool;
+
+        struct Toggling {
+            flipped: AtomicBool,
+        }
+        impl WellknownSource for Toggling {
+            fn documents(&self, _env: &dyn Fn(&str) -> Option<String>) -> Vec<WellknownDocument> {
+                let token = if self.flipped.load(std::sync::atomic::Ordering::SeqCst) {
+                    "two"
+                } else {
+                    "one"
+                };
+                vec![WellknownDocument {
+                    source: "https://example.com".to_string(),
+                    dir: PathBuf::from("/tmp"),
+                    text: r#"{"username": "wellknown-{env:OC_WK_TOKEN}"}"#.to_string(),
+                    env: [("OC_WK_TOKEN".to_string(), token.to_string())].into_iter().collect(),
+                }]
+            }
+        }
+
+        let dir = tempdir("watched-wellknown");
+        let global = dir.join("global");
+        let project = dir.join("project");
+        fs::create_dir_all(&global).unwrap();
+        fs::create_dir_all(&project).unwrap();
+        write(&project.join("opencode.json"), r#"{"shell": "one"}"#);
+
+        let source = Arc::new(Toggling { flipped: AtomicBool::new(false) });
+        let loader =
+            Loader::new(project.clone(), GlobalDirs { config: global, home: dir.join("home") })
+                .with_wellknown(Arc::clone(&source) as Arc<dyn WellknownSource>)
+                .with_env(Arc::new(|_| None));
+        let backend = watch::FakeBackend::new();
+        let handler = Arc::new(CountingUpdates { count: std::sync::atomic::AtomicUsize::new(0) });
+        let service = WatchedConfig::start(loader, backend, handler.clone(), None);
+        assert_eq!(
+            latest(&service.entries(), |info| info.username.clone()).as_deref(),
+            Some("wellknown-one")
+        );
+
+        // The "credential switch": the wellknown documents change and
+        // the event subscription requests a reload.
+        source.flipped.store(true, std::sync::atomic::Ordering::SeqCst);
+        service.request_reload();
+        wait_until(2_000, || {
+            latest(&service.entries(), |info| info.username.clone()).as_deref()
+                == Some("wellknown-two")
+        });
+        assert_eq!(handler.count.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     fn wait_until(deadline_ms: u64, condition: impl Fn() -> bool) {

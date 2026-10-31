@@ -168,7 +168,7 @@
 
 ## 🟢 低
 
-### G-33 ✅ shell 输出截断上限 config 失联
+### G-33 ✅ shell 输出截断上限 config 失联（热重载半边由 G-48 lane4 收口，全项 ✅）
 - schema 能解析 `tool_output.max_lines/max_bytes`（oc-schema/config/tool_output.rs:10-15、normalize.rs:550），`ToolOutput::configure` 也存在（tool_output.rs:209-214），但 engine 从不调用（engine/mod.rs:488 仅 `ToolOutput::new`）——config 键解析后全程无人消费；shell.rs:382-384 直接用编译期常量。默认值与 ref 一致，仅显式配置失效。修复即 boot 时 `configure(Limits::from_config)`。
 
 ### G-34 ✅ session.new_location (launch/inherit) 未消费
@@ -300,7 +300,7 @@
 
 ## 既有条目状态修正
 
-- **G-34 ⚠️（降级为 PARTIAL）**：`home_location` 生产路径 write-only——`set_home_location`（store.rs:10545）唯一调用方是 `apply_new_session_location`（command_palette.rs:3360），`home_location()` 唯一读者是测试。Home 路由标签走 `footer_location`（boot location worker 设置），inherit 模式解析正确但无消费者，可见行为与 launch 相同。需把解析结果接到 home 路由的 directory 语义（ref app.tsx:718-737）。
+- **G-34 ✅（lane4 收口）**：原 PARTIAL 半边已接——`set_home_location` 写通共享 cell，`HttpPromptSink` 按 home_location 解析 home create-directory（inherit → 当前会话目录，ref app.tsx:718-737），home 状态行显示继承目录。
 - **G-30 ℹ️（补充）**：repo-local autocrlf/quotepath 钉定当前行为惰性——快照管道全程 raw blob/OID-map/treebuilder/手写 diff，从不咨询 git config；parity 为偶得（raw passthrough 即无 CRLF 误报）。钉定仅防未来 libgit2 操作。ref 另钉 7 个 key（longpaths/symlinks/fsmonitor/untrackedCache/manyFiles/index.version/threads，ref git.ts:23-33）未移植，当前行为中性。
 - **G-31 ⚠️（补充）**：`is_vcs_root` 弱于 ref `location.vcs`——仓库子目录 location 与 hg 仓库在 rust 侧仍 100k 截断（保守方向）；handler 手里已有 `services.project.vcs`（fs.rs:260 绑定 `_services`）却用文件系统嗅探。
 - **G-19 ⚠️（补充）**：`validate_config`（mantle_messages.rs:199-221）零调用——ref 的 bearer-without-key fail-fast（ProviderConfigurationError）永不触发，rust 静默 SigV4 回退；`auth/profile/region/credentials` settings 键在 oc-core ModelConnection seam（baseURL/apiKey/headers，facade.rs:123-136）无处解析（承自 converse lane 的既有模式）。
@@ -318,11 +318,11 @@
 - **G-45 ❌ agent-client-protocol-schema 无 drift 守卫**：同为 vendored+同一 preserve_order 改动（third_party/agent-client-protocol-schema/Cargo.toml:103，同样经 [patch.crates-io] 钉定），acp_drift.py:39-40 的 VENDORED 硬编码只覆盖主包。扩 guard 即可。
 - **G-46 ❌ dialog.plugins.error 仍无操作面**：command_palette.rs:3129 留在 surfaceless 组；ref plugins.tsx:224-228 有 error 详情动作。
 - **G-47 ❌ IDE socket backoff 不复位**：连接成功后 `attempt` 不清零（editor_ide.rs:222-235 vs ref editor.ts:243）→ 抖动后重连恒等 10s；另空字符串 env 值阻断 fallback（ref `||` 视 "" 为 falsy）。
-- **G-48 ❌ tool_output 限制 boot 一次性应用**：ref 经 ConfigEntryObserver 活跃重应用（config/plugin/tool-output.ts）；rust 改 `tool_output.*` 需重启。
+- **G-48 ✅（lane4）**：reload bridge 在失效 location 前重导 `Limits::from_entries` 并 `Engine::reload_tool_output_limits`（boot.rs ConfigReloadBridge），assemble 改读 `ToolOutput::current_limits` 活值——改 `tool_output.*` 免重启生效。
 - **G-49 ℹ️ 记录性/文档债**：spinner 帧率受 pump tick（50-100ms）约束而非 40ms 定时器（帧数学精确）；session.environment 每 session 单发（ref 效果重触发，PUT 幂等无害）；stdio.rs 模块头宣称 SIGTERM→SIGKILL 升级但实现为即杀（沿袭 rmcp 行为，措辞与 ref 2s 优雅等待不符）；project.rs:1103-1105 注释"插件 strategy 不支持"已过时（add_strategy 就在其下）；proxy.rs:367 注释"webpki 与 0.13 栈一致"在 G-26 后已失效（0.13 现走 platform-verifier；ws 链路留 webpki 为有意）。
 
 ## 复审判定汇总
-G-18 ✅ / G-19 ✅(死校验残留) / G-20 ✅ / G-21 ✅ / G-22 ✅ / G-23 ✅ / G-24 ✅(bounded) / G-25 ✅ / G-26 ✅ / G-27 ✅(F1=新 G-45) / G-29 ✅(error 面残留) / G-30 ✅(惰性钉定) / G-31 ⚠️ / G-33 ✅(无热重载) / G-34 ⚠️(半接线) / G-35 ✅ / G-36 ✅ / G-37 ✅ / G-6 ✅ / G-8 ✅(G-41..G-44 已由 lane2 收口) / G-41 ✅ / G-42 ✅ / G-43 ✅ / G-44 ✅ / G-1 ✅(consumer 迁移仍开放)
+G-18 ✅ / G-19 ✅(死校验残留) / G-20 ✅ / G-21 ✅ / G-22 ✅ / G-23 ✅ / G-24 ✅(bounded) / G-25 ✅ / G-26 ✅ / G-27 ✅(F1=新 G-45) / G-29 ✅(error 面残留) / G-30 ✅(惰性钉定) / G-31 ⚠️ / G-33 ✅(热重载半边由 G-48 lane4 收口) / G-34 ✅(lane4) / G-35 ✅ / G-36 ✅ / G-37 ✅ / G-6 ✅ / G-8 ✅(G-41..G-44 已由 lane2 收口) / G-41 ✅ / G-42 ✅ / G-43 ✅ / G-44 ✅ / G-1 ✅(consumer 迁移仍开放)
 
 ---
 
@@ -359,7 +359,7 @@ G-18 ✅ / G-19 ✅(死校验残留) / G-20 ✅ / G-21 ✅ / G-22 ✅ / G-23 ✅
 ### G-55 ✅ shell create 缺省 cwd 继承服务器进程 cwd（已修：handler 侧 cwd None/空回退 location.directory，对齐 shell.ts:265；commit lane3）
 - rust `shell.rs:562` `unwrap_or_default()`，`create_invocation` 仅非空时 `current_dir`（:648-650）。工具路径安全（tool/shell.rs:165-168 显式覆写）；**生产命中点：HTTP `POST /api/shell`**（oc-server/handlers/shell.rs:40-52 直接透传可能为 None 的 body.cwd）。ref `shell.ts:265` `input.cwd ?? location.directory`。修复：handler 侧用 location 兜底。
 
-### G-56 ❌ 凭据/wellknown 变更不驱动 config 重载与 location 失效（勘误 #4 半边修正）
+### G-56 ✅ 凭据/wellknown 变更不驱动 config 重载与 location 失效（勘误 #4 半边修正；lane4 收口：boot 订阅 credential.switched/integration.updated → request_reload + location 失效，watch_loader 加 .with_wellknown，refresh 变更时发布 integration.updated 驱动周期刷新后重载）
 - 刷新循环与 HostWellknownSource 接线属实（engine/mod.rs:570-596、:900-903）——勘误 #4 只对了这一半。缺的半边：①全仓 `request_reload` 生产调用点为零（仅 WatchedConfig 自身文件 watch 驱动，config.rs:655,671）；②credential/integration 事件不触发 location invalidate（ConfigReloadBridge 只挂文件 watch，boot.rs:113-140）——已 assemble 的 location 持旧 wellknown 快照直到其他原因失效；③boot 的 watch_loader 无 `.with_wellknown`（boot.rs:241-266）。
 - ref `config.ts:306-322` 订阅 Credential.Switched / WellKnown.Updated → `reload()`；10 分钟刷新后亦 reload（:323-341）。与 G-48 同族不同面。
 
@@ -474,7 +474,7 @@ G-18 ✅ / G-19 ✅(死校验残留) / G-20 ✅ / G-21 ✅ / G-22 ✅ / G-23 ✅
 - **G-4 ✅（插件注册自定义 worktree strategy 已实现）**：guest `ctx.worktree.transform`（host.js:898-941）→ dispatch（supervisor.rs:356-369）→ `merge_worktree_strategies`（registrations.rs:494,643）→ `GuestWorktreeStrategy` 入注册表（plugin_apply.rs:685-695 → plugins.rs:2134-2151 → boot.rs:439-440）。测试 g24_domains.rs:96-98、g24_plugin_domains.rs:133。残留：注册表仍 boot 一次性（见 G-24 热重载子项）。project.rs:1103-1105 的"不支持"注释已失实（`add_strategy` 在 :1133 被调用）。
 - **G-6 ✅（Shell 输出查看器 1s 轮询已实现）**：app.rs:8427-8437 对活跃 ShellOutput viewer 每秒重发 `LoopRequest::ShellView`；fetch 本体 app.rs:5635-5701。代码内 "G-6 residual" 注释已过时，可清理。
 - **G-8 ✅（https/socks5 代理已支持）**：proxy.rs:10-14 模块头；socks5/socks5h 经 `tokio-socks`（socks5_connect :432-438），https 走 TLS-to-proxy（:318-320,:354），仅 socks4/4a 拒绝（:184-191，范围声明）；socks5 真桩 WS 端到端测试（:684）。proxy.rs:616 "G-8 residual" 注释已过时。
-- **G-33 的"config 键无人消费"半边 ✅**：shell.rs:225 `with_output_limits` + engine/mod.rs:1053-1054 已消费。**G-48 热重载半边仍在**（见下）。
+- **G-33 的"config 键无人消费"半边 ✅**：shell.rs:225 `with_output_limits` + engine assemble 已消费。**G-48 热重载半边 ✅（lane4）**。
 
 ## 部分清偿（条目修正）
 
@@ -484,8 +484,8 @@ G-18 ✅ / G-19 ✅(死校验残留) / G-20 ✅ / G-21 ✅ / G-22 ✅ / G-23 ✅
 
 ## 确认仍在（不变）
 
-- **G-34 ⚠️**：home_location 仍 write-only（set 唯一调用 command_palette.rs:3360；`home_location()` 唯一读者是测试 :3952；home 路由仍走 `footer_location()` home.rs:418、session.rs:1230,1318）。
-- **G-48 ❌**：tool_output 仍 boot 一次性（Limits::from_entries 仅 boot.rs:301-302；`configure` 唯一调用 engine/mod.rs:503；config reload 路径无重赋值）。
+- **G-34 ✅（lane4）**：home_location 已接消费端——`set_home_location` 写通共享 cell，`HttpPromptSink` 提交时按其解析 home create-directory（inherit → 当前会话目录），home 状态行显示继承目录。
+- **G-48 ✅（lane4）**：config reload 路径重赋值（bridge 重导 Limits + `reload_tool_output_limits`，assemble 读 `current_limits` 活值）。
 - **G-41 ✅**：代理 userinfo 已保留并消费——CONNECT 发 Basic `Proxy-Authorization`、SOCKS5 用 username/password（lane2, 0f932c2）。
 - **G-42 ✅**：WSS_PROXY/WS_PROXY 已优先咨询，再回落 HTTPS/HTTP(S)_PROXY/ALL_PROXY（lane2, 17947d9）。
 - **G-43 ✅**：loopback（127.0.0.1/localhost/::1）已恒直连（lane2, 2d889a9）。

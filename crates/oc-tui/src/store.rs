@@ -1478,6 +1478,10 @@ pub struct Store {
     /// G-34 — the home route's location override (`newSessionLocation`
     /// result): `Some(directory)` keeps the CURRENT location.
     home_location: std::cell::RefCell<Option<String>>,
+    /// G-34 — the shared cell the prompt sink reads at submission time
+    /// (the home create-directory write-through; `None` until the run
+    /// loop shares its `HttpPromptSink` cell).
+    home_location_cell: std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<Option<String>>>>>,
     /// Plugin footer hint segments (one per plugin, latest wins).
     plugin_hints: Signal<Vec<(String, String)>>,
     /// Plugin home quick actions (registration-time).
@@ -3559,6 +3563,7 @@ impl Store {
             session_markdown_source,
             session_new_location,
             home_location,
+            home_location_cell: std::cell::RefCell::new(None),
             plugin_hints,
             plugin_home_actions,
             plugin_group_rules,
@@ -10540,9 +10545,21 @@ impl Store {
     }
 
     /// Sets/clears the home route's location override
-    /// (`newSessionLocation`, new-session-location.ts).
+    /// (`newSessionLocation`, new-session-location.ts). The shared
+    /// prompt-sink cell (when wired) mirrors the resolution so the
+    /// home submission creates its session in the inherited directory.
     pub fn set_home_location(&self, directory: Option<String>) {
-        *self.home_location.borrow_mut() = directory;
+        *self.home_location.borrow_mut() = directory.clone();
+        if let Some(cell) = self.home_location_cell.borrow().as_ref() {
+            *cell.borrow_mut() = directory;
+        }
+    }
+
+    /// G-34 — shares the prompt sink's home-directory cell (the run
+    /// loop wires it next to `HttpPromptSink`; tests seed it directly).
+    pub fn set_home_location_cell(&self, cell: std::rc::Rc<std::cell::RefCell<Option<String>>>) {
+        *cell.borrow_mut() = self.home_location.borrow().clone();
+        *self.home_location_cell.borrow_mut() = Some(cell);
     }
 
     /// The `session.grouping` key's boot restore (`grouping !== "none"`
