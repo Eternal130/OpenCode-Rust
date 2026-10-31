@@ -274,13 +274,19 @@ async fn connect(
         return (StatusCode::NOT_FOUND, "").into_response();
     }
     if let Some(ticket) = parse_query_field(query, "ticket") {
+        // G-51: the WS ticket path runs the SAME origin check as
+        // `connect_token` (ref persistent-pty.ts:110-118) — a disallowed
+        // origin must NOT consume the ticket and rejects with 403 before
+        // the upgrade.
+        if !origin_allowed(&state, &headers) {
+            return (StatusCode::FORBIDDEN, "").into_response();
+        }
         let location =
             oc_core::location::LocationRef::new(std::env::current_dir().unwrap_or_default(), None);
         if !super::pty::consume_ticket(&state, &ticket, &pty_id, &location) {
             return (StatusCode::FORBIDDEN, "").into_response();
         }
     }
-    let _ = headers;
     let cursor = match parse_query_field(query, "cursor") {
         None => 0usize,
         Some(raw) => match raw.parse::<usize>() {
