@@ -633,11 +633,17 @@ async fn server_sse_requires_auth() {
 async fn server_session_log_validation_and_not_found() {
     let server = Server::boot("secret", Duration::from_secs(15)).await;
 
-    // Invalid session id → 400 InvalidRequestError.
+    // Invalid session id → 400 InvalidRequestError (G-78: schema
+    // ParseError message, not a raw echo).
     let response =
         server.get("/api/experimental/session/not-an-id/log", &auth_headers("secret")).await;
     assert_eq!(response.status, 400);
-    assert_eq!(response.json()["_tag"], "InvalidRequestError");
+    let body = response.json();
+    assert_eq!(body["_tag"], "InvalidRequestError");
+    assert_eq!(
+        body["message"],
+        "Expected sessionID to be a string starting with \"ses_\", received \"not-an-id\""
+    );
 
     // Valid id, no such session → 404 SessionNotFoundError.
     let response =
