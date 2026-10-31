@@ -102,7 +102,7 @@ pub mod ui;
 pub use context::{
     install::{default_root as install_root, install, InstallOptions, Installed},
     is_mutating_hook,
-    update::{collect_stale, global_cache as update_cache, update, UpdateCache},
+    update::{collect_stale, global_cache as update_cache, npm_check, update, UpdateCache},
     Bridge, HostState, IntegrationPort, NoSessionEngine, NoToolEngine, PermissionPort,
     ProviderPort, ReferencePort, SessionPort, TerminalPort, ToolPort, VcsPort, WebsearchPort,
     MUTATING_DISPATCH_TIMEOUT, SESSION_METHODS,

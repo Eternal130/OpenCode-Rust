@@ -137,8 +137,15 @@ pub fn installed_version(root: &Path, package: &str) -> Option<String> {
 
 /// Outdated = the installed version differs from the registry latest
 /// (npm.ts:360-384 for registry specs: `installed !== available`).
-fn check_outdated(target: &str, root: &Path, options: &InstallOptions) -> Result<bool, String> {
-    let (package, requested) = split_spec(target);
+/// `npm.check` (npm.ts:360-384): outdated = installed version differs
+/// from the registry latest; pinned specs are immutable (false). Public
+/// for the CLI plugin check over the TUI (cli.json) plugin set — the ref
+/// inventory calls `npm.check` directly (no 24 h cache).
+pub fn npm_check(target: &str, root: &Path, options: &InstallOptions) -> Result<bool, String> {
+    check_outdated(target, root, options)
+}
+
+fn check_outdated(target: &str, root: &Path, options: &InstallOptions) -> Result<bool, String> {    let (package, requested) = split_spec(target);
     // A pinned spec is immutable (npm.ts:368 `!target.mutable → false`).
     if requested.is_some() {
         return Ok(false);
