@@ -448,6 +448,11 @@ struct Inner {
     /// The elicitation handler shared by every connection (index.ts:231 —
     /// one handler per location, its pending-URL map keyed server+id).
     elicitation: SyncMutex<Option<Arc<super::elicitation::ClientElicitation>>>,
+    /// G-1 residual — the Environment stdio seam stdio servers spawn
+    /// through (ref `mcp/stdio.ts` routes spawns through the location's
+    /// Environment spawner). Defaults to the local host spawner; the
+    /// engine installs the location-bound Environment service's driver.
+    stdio: SyncMutex<Arc<dyn crate::environment::stdio::StdioSpawner>>,
 }
 
 /// The registry service (`Mcp.Service`). Clone shares all state.
@@ -502,6 +507,9 @@ impl McpRegistry {
                 config_source: SyncMutex::new(Arc::new(BTreeMap::new)),
                 directory: SyncMutex::new(directory),
                 elicitation: SyncMutex::new(None),
+                stdio: SyncMutex::new(std::sync::Arc::new(
+                    crate::environment::stdio::LocalStdioSpawner,
+                )),
             }),
         };
         Self::spawn_credential_reconnect(bus, registry.clone());
@@ -519,6 +527,18 @@ impl McpRegistry {
         elicitation: Arc<super::elicitation::ClientElicitation>,
     ) -> Self {
         *self.inner.elicitation.lock() = Some(elicitation);
+        self.clone()
+    }
+
+    /// Installs the Environment stdio spawn seam (G-1 residual): stdio
+    /// servers spawn through the location-bound Environment service's
+    /// driver instead of a host-bound process.
+    #[must_use]
+    pub fn with_stdio_spawner(
+        &self,
+        stdio: Arc<dyn crate::environment::stdio::StdioSpawner>,
+    ) -> Self {
+        *self.inner.stdio.lock() = stdio;
         self.clone()
     }
 
@@ -641,6 +661,7 @@ impl McpRegistry {
         };
         let directory = self.inner.directory.lock().clone();
         let elicitation = self.inner.elicitation.lock().clone();
+        let stdio = self.inner.stdio.lock().clone();
         let connect = {
             let connector = Arc::clone(&self.inner.connector);
             let server = name.to_string();
@@ -653,6 +674,7 @@ impl McpRegistry {
                     directory: &directory,
                     bearer,
                     elicitation,
+                    stdio: Some(stdio),
                 })
                 .await
             }
@@ -1490,6 +1512,7 @@ fn production_connector() -> Connector {
         let directory = input.directory.to_string();
         let bearer = input.bearer.clone();
         let elicitation = input.elicitation.clone();
+        let stdio = input.stdio.clone();
         Box::pin(async move {
             client::connect(ConnectInput {
                 server: &server,
@@ -1497,6 +1520,7 @@ fn production_connector() -> Connector {
                 directory: &directory,
                 bearer,
                 elicitation,
+                stdio,
             })
             .await
         })
