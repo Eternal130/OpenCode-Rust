@@ -1569,9 +1569,9 @@ mod tests {
             .map(|row| row.operation_id)
             .collect();
         assert_eq!(query_ops.len(), validation_gen::QUERY_PARAM_ROUTES);
-        assert_eq!(validation_gen::QUERY_PARAM_ROUTES, 71);
+        assert_eq!(validation_gen::QUERY_PARAM_ROUTES, 72);
         let enforced: usize = query_ops.iter().filter(|op| enforces_query(op)).copied().count();
-        assert_eq!(enforced, 69, "71 query rows - session.interrupt - session.form.cancel");
+        assert_eq!(enforced, 70, "72 query rows - session.interrupt - session.form.cancel");
         for op in ["session.interrupt", "session.form.cancel"] {
             assert!(!enforces_query(op), "{op} is location-first");
         }
