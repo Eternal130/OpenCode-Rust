@@ -98,6 +98,14 @@ pub struct PluginBoot {
     pub websearch_slot: Arc<EngineWebsearchSlot>,
     /// The vcs-port slot (G-24; filled after `Engine::boot`).
     pub vcs_slot: Arc<EngineVcsSlot>,
+    /// The provider-port slot (G-64; filled after `Engine::boot`).
+    pub provider_slot: Arc<EngineProviderSlot>,
+    /// The reference-port slot (G-64; filled after `Engine::boot`).
+    pub reference_slot: Arc<EngineReferenceSlot>,
+    /// The terminal-port slot (G-64; filled after `Engine::boot`).
+    pub terminal_slot: Arc<EngineTerminalSlot>,
+    /// The integration-port slot (G-64; filled after `Engine::boot`).
+    pub integration_slot: Arc<EngineIntegrationSlot>,
 }
 
 /// One `/api/rpc` call's failure (PLUG-D14): the v2 error channel —
@@ -140,6 +148,10 @@ impl PluginBoot {
             permission_slot: Arc::new(EnginePermissionSlot::default()),
             websearch_slot: Arc::new(EngineWebsearchSlot::default()),
             vcs_slot: Arc::new(EngineVcsSlot::default()),
+            provider_slot: Arc::new(EngineProviderSlot::default()),
+            reference_slot: Arc::new(EngineReferenceSlot::default()),
+            terminal_slot: Arc::new(EngineTerminalSlot::default()),
+            integration_slot: Arc::new(EngineIntegrationSlot::default()),
         }
     }
 
@@ -326,6 +338,10 @@ pub fn boot(
     let permission_slot = Arc::new(EnginePermissionSlot::default());
     let websearch_slot = Arc::new(EngineWebsearchSlot::default());
     let vcs_slot = Arc::new(EngineVcsSlot::default());
+    let provider_slot = Arc::new(EngineProviderSlot::default());
+    let reference_slot = Arc::new(EngineReferenceSlot::default());
+    let terminal_slot = Arc::new(EngineTerminalSlot::default());
+    let integration_slot = Arc::new(EngineIntegrationSlot::default());
     if !detected.enabled() && resolution.entries().is_empty() {
         eprintln!(
             "opencode plugin: no plugins configured and bun is unavailable; staying flat (no Code Mode runtime)"
@@ -339,6 +355,10 @@ pub fn boot(
             permission_slot,
             websearch_slot,
             vcs_slot,
+            provider_slot,
+            reference_slot,
+            terminal_slot,
+            integration_slot,
         });
     }
 
@@ -412,6 +432,15 @@ pub fn boot(
         // Engine::boot, the permission-port pattern).
         websearch_port: Some(Arc::clone(&websearch_slot) as Arc<dyn oc_plugin_host::WebsearchPort>),
         vcs_port: Some(Arc::clone(&vcs_slot) as Arc<dyn oc_plugin_host::VcsPort>),
+        // G-64: ctx.provider.*/reference.*/experimental.terminal.read/
+        // integration.* over the boot location's engine services (slots
+        // filled after Engine::boot, the same pattern).
+        provider_port: Some(Arc::clone(&provider_slot) as Arc<dyn oc_plugin_host::ProviderPort>),
+        reference_port: Some(Arc::clone(&reference_slot) as Arc<dyn oc_plugin_host::ReferencePort>),
+        terminal_port: Some(Arc::clone(&terminal_slot) as Arc<dyn oc_plugin_host::TerminalPort>),
+        integration_port: Some(
+            Arc::clone(&integration_slot) as Arc<dyn oc_plugin_host::IntegrationPort>
+        ),
         storage_port,
         entry_options: resolution.entry_options(),
         // The registration pass spans bun cold start + every entry's
@@ -436,6 +465,10 @@ pub fn boot(
         permission_slot,
         websearch_slot,
         vcs_slot,
+        provider_slot,
+        reference_slot,
+        terminal_slot,
+        integration_slot,
     })
 }
 
@@ -544,9 +577,9 @@ pub fn refresh_after_config_change(boot: &PluginBoot, loaded: &Loaded) {
 /// cell swaps on a clean diff. Contained like
 /// [`refresh_after_config_change`]: every failure is logged and the
 /// previous generation keeps its place.
-pub fn reload_after_update(boot: &PluginBoot) {
+pub fn reload_after_update(boot: &PluginBoot) -> bool {
     if !boot.ready {
-        return;
+        return false;
     }
     let previous = boot.resolution.lock().clone();
     let ops: Vec<oc_plugin_host::PluginOp> = previous
@@ -559,6 +592,7 @@ pub fn reload_after_update(boot: &PluginBoot) {
         .collect();
     let resolved = oc_plugin_host::resolve(&ops, None);
     let mut clean = true;
+    let mut swapped_any = false;
     for plugin in &resolved.plugins {
         let Some(old) = previous.plugins.iter().find(|old| old.target == plugin.target) else {
             continue;
@@ -566,6 +600,7 @@ pub fn reload_after_update(boot: &PluginBoot) {
         if old.entry == plugin.entry {
             continue;
         }
+        swapped_any = true;
         match boot.host.remove_entry(&old.entry) {
             Ok(true) => {}  // unloaded; the new generation loads below
             Ok(false) => {} // never loaded (a failed boot) — nothing to tear down
@@ -590,8 +625,10 @@ pub fn reload_after_update(boot: &PluginBoot) {
         clean = false;
         eprintln!("opencode plugin: post-update resolve {target} failed: {error}");
     }
+    let mut touched = swapped_any;
     match boot.host.reload_now() {
         Ok(count) if count > 0 => {
+            touched = true;
             eprintln!("opencode plugin: post-update hot-reloaded {count} source(s)");
         }
         Ok(_) => {}
@@ -602,6 +639,7 @@ pub fn reload_after_update(boot: &PluginBoot) {
     if clean {
         *boot.resolution.lock() = resolved;
     }
+    touched
 }
 
 /// G-29 — `POST /api/plugin/install`'s activation leg: the install
@@ -969,6 +1007,38 @@ impl LocationPluginSource for HostPluginSource {
             .map(|skill| oc_core::plugin_apply::PluginSkillDef {
                 plugin_id: skill.plugin_id.clone(),
                 info: skill.info.clone(),
+            })
+            .collect()
+    }
+
+    /// G-64 — plugin provider definitions (`ctx.provider.transform`'s
+    /// editor table): the engine's `assemble` folds them into every
+    /// location's provider overlay (`apply_plugin_providers`).
+    fn provider_defs(&self) -> Vec<oc_core::plugin_apply::PluginProviderDef> {
+        self.host
+            .registrations()
+            .providers
+            .iter()
+            .map(|def| oc_core::plugin_apply::PluginProviderDef {
+                plugin_id: def.plugin_id.clone(),
+                id: def.id.clone(),
+                definition: def.definition.clone(),
+            })
+            .collect()
+    }
+
+    /// G-64 — plugin reference sources (`ctx.reference.transform`'s
+    /// editor table): the engine's `assemble` applies them into the
+    /// `ReferenceService` (`apply_plugin_references`).
+    fn reference_defs(&self) -> Vec<oc_core::plugin_apply::PluginReferenceDef> {
+        self.host
+            .registrations()
+            .references
+            .iter()
+            .map(|def| oc_core::plugin_apply::PluginReferenceDef {
+                plugin_id: def.plugin_id.clone(),
+                name: def.name.clone(),
+                source: def.source.clone(),
             })
             .collect()
     }
@@ -1992,6 +2062,35 @@ impl oc_plugin_host::WebsearchPort for EngineWebsearchPort {
             .map_err(|error| error.to_string())?;
         serde_json::to_value(&response).map_err(|error| error.to_string())
     }
+
+    /// G-24 residual — `editor.default.get`: the persisted selection.
+    async fn default_provider(&self) -> Result<Value, String> {
+        let services =
+            self.engine.location(self.location.clone()).await.map_err(|e| e.to_string())?;
+        Ok(services.websearch.selection_json().await)
+    }
+
+    /// G-24 residual — `editor.default.set(selection)`: persisted
+    /// through the engine KV (`WebSearch.select`, the same store the
+    /// ref's auth/config selection lands in).
+    async fn set_default(&self, selection: Value) -> Result<(), String> {
+        let services =
+            self.engine.location(self.location.clone()).await.map_err(|e| e.to_string())?;
+        let parsed = match &selection {
+            Value::String(id) if id == "random" => {
+                oc_core::tool::websearch::Selection::Random
+            }
+            Value::Bool(false) => oc_core::tool::websearch::Selection::Disabled,
+            Value::String(id) => {
+                oc_core::tool::websearch::Selection::Provider(id.clone())
+            }
+            other => {
+                return Err(format!("websearch default selection must be a provider id, \"random\", or false: {other}"))
+            }
+        };
+        services.websearch.select(&parsed).await;
+        Ok(())
+    }
 }
 
 /// The pre-engine websearch-port placeholder (the same slot pattern).
@@ -2136,6 +2235,384 @@ impl EngineVcsSlot {
             .expect("vcs slot poisoned")
             .clone()
             .ok_or_else(|| "vcs: the engine is not attached to the plugin host yet".to_owned())
+    }
+}
+
+/// The engine-backed [`oc_plugin_host::ProviderPort`] (G-64 —
+/// `ctx.provider.list/get/reload` over the live provider catalog).
+pub struct EngineProviderPort {
+    pub engine: Arc<Engine>,
+}
+
+impl EngineProviderPort {
+    fn snapshot_json(snapshot: &oc_core::provider_catalog::catalog::Snapshot) -> Value {
+        serde_json::to_value(&snapshot.info).unwrap_or(Value::Null)
+    }
+}
+
+#[async_trait]
+impl oc_plugin_host::ProviderPort for EngineProviderPort {
+    async fn list(&self) -> Result<Value, String> {
+        let catalog = self.engine.catalog_service.get();
+        Ok(serde_json::to_value(
+            catalog.providers().iter().map(Self::snapshot_json).collect::<Vec<_>>(),
+        )
+        .unwrap_or(Value::Null))
+    }
+
+    async fn get(&self, id: &str) -> Result<Value, String> {
+        let catalog = self.engine.catalog_service.get();
+        Ok(catalog
+            .provider(id)
+            .map(Self::snapshot_json)
+            .unwrap_or(Value::Null))
+    }
+
+    async fn reload(&self) -> Result<(), String> {
+        // `provider.reload` (ref providers.reload): a fresh catalog
+        // refresh; a failure surfaces (the next location assembly
+        // reads the live service catalog either way).
+        self.engine.catalog_service.refresh(true).await.map(|_| ()).map_err(|e| e)
+    }
+}
+
+/// The pre-engine provider-port placeholder (the slot pattern).
+#[derive(Default)]
+pub struct EngineProviderSlot(std::sync::RwLock<Option<Arc<EngineProviderPort>>>);
+
+impl EngineProviderSlot {
+    pub fn fill(&self, port: Arc<EngineProviderPort>) {
+        let mut slot = self.0.write().expect("provider slot poisoned");
+        if slot.is_none() {
+            *slot = Some(port);
+        }
+    }
+}
+
+#[async_trait]
+impl oc_plugin_host::ProviderPort for EngineProviderSlot {
+    async fn list(&self) -> Result<Value, String> {
+        self.port()?.list().await
+    }
+
+    async fn get(&self, id: &str) -> Result<Value, String> {
+        self.port()?.get(id).await
+    }
+
+    async fn reload(&self) -> Result<(), String> {
+        self.port()?.reload().await
+    }
+}
+
+impl EngineProviderSlot {
+    fn port(&self) -> Result<Arc<EngineProviderPort>, String> {
+        self.0
+            .read()
+            .expect("provider slot poisoned")
+            .clone()
+            .ok_or_else(|| "provider: the engine is not attached to the plugin host yet".to_owned())
+    }
+}
+
+/// The engine-backed [`oc_plugin_host::ReferencePort`] (G-64 —
+/// `ctx.reference.list/reload` over the engine's `ReferenceService`).
+pub struct EngineReferencePort {
+    pub engine: Arc<Engine>,
+}
+
+#[async_trait]
+impl oc_plugin_host::ReferencePort for EngineReferencePort {
+    async fn list(&self) -> Result<Value, String> {
+        Ok(serde_json::to_value(
+            self.engine
+                .references
+                .list()
+                .into_iter()
+                .map(|info| serde_json::json!({
+                    "name": info.name,
+                    "path": info.path.display().to_string(),
+                    "description": info.description,
+                    "hidden": info.hidden,
+                }))
+                .collect::<Vec<_>>(),
+        )
+        .unwrap_or(Value::Null))
+    }
+
+    async fn reload(&self) -> Result<(), String> {
+        // `reference.reload` (ref reference.ts:104-108): refresh every
+        // source (a forked refresh-all).
+        self.engine.references.refresh_all();
+        Ok(())
+    }
+}
+
+/// The pre-engine reference-port placeholder.
+#[derive(Default)]
+pub struct EngineReferenceSlot(std::sync::RwLock<Option<Arc<EngineReferencePort>>>);
+
+impl EngineReferenceSlot {
+    pub fn fill(&self, port: Arc<EngineReferencePort>) {
+        let mut slot = self.0.write().expect("reference slot poisoned");
+        if slot.is_none() {
+            *slot = Some(port);
+        }
+    }
+}
+
+#[async_trait]
+impl oc_plugin_host::ReferencePort for EngineReferenceSlot {
+    async fn list(&self) -> Result<Value, String> {
+        self.port()?.list().await
+    }
+
+    async fn reload(&self) -> Result<(), String> {
+        self.port()?.reload().await
+    }
+}
+
+impl EngineReferenceSlot {
+    fn port(&self) -> Result<Arc<EngineReferencePort>, String> {
+        self.0
+            .read()
+            .expect("reference slot poisoned")
+            .clone()
+            .ok_or_else(|| "reference: the engine is not attached to the plugin host yet".to_owned())
+    }
+}
+
+/// The persistent-pty-backed [`oc_plugin_host::TerminalPort`] (G-64 —
+/// `ctx.experimental.terminal.read(sessionID, lines)` over the
+/// frontend's session terminal).
+pub struct EngineTerminalPort {
+    pub pty: oc_core::persistent_pty::frontend::Frontend,
+}
+
+#[async_trait]
+impl oc_plugin_host::TerminalPort for EngineTerminalPort {
+    async fn read(&self, session_id: &str, lines: Option<u32>) -> Result<Value, String> {
+        let session_id =
+            oc_schema::id::SessionId::parse(session_id).map_err(|e| e.to_string())?;
+        let result = self
+            .pty
+            .read(&session_id, lines)
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok(result
+            .map(|read| {
+                serde_json::json!({
+                    "id": read.pty_id,
+                    "title": read.title,
+                    "cwd": read.cwd,
+                    "foregroundProcess": read.foreground_process,
+                    "text": read.screen.text,
+                    "cursor": { "x": read.screen.cursor.0, "y": read.screen.cursor.1 },
+                })
+            })
+            .unwrap_or(Value::Null))
+    }
+}
+
+/// The pre-engine terminal-port placeholder.
+#[derive(Default)]
+pub struct EngineTerminalSlot(std::sync::RwLock<Option<Arc<EngineTerminalPort>>>);
+
+impl EngineTerminalSlot {
+    pub fn fill(&self, port: Arc<EngineTerminalPort>) {
+        let mut slot = self.0.write().expect("terminal slot poisoned");
+        if slot.is_none() {
+            *slot = Some(port);
+        }
+    }
+}
+
+#[async_trait]
+impl oc_plugin_host::TerminalPort for EngineTerminalSlot {
+    async fn read(&self, session_id: &str, lines: Option<u32>) -> Result<Value, String> {
+        self.port()?.read(session_id, lines).await
+    }
+}
+
+impl EngineTerminalSlot {
+    fn port(&self) -> Result<Arc<EngineTerminalPort>, String> {
+        self.0
+            .read()
+            .expect("terminal slot poisoned")
+            .clone()
+            .ok_or_else(|| {
+                "experimental.terminal: the terminal service is not attached to the plugin host yet"
+                    .to_owned()
+            })
+    }
+}
+
+/// The engine-backed [`oc_plugin_host::IntegrationPort`] (G-64 — the
+/// ref host.ts:274-357 method channel over the engine's
+/// `IntegrationHost`; JSON args map onto the typed surface).
+pub struct EngineIntegrationPort {
+    pub engine: Arc<Engine>,
+}
+
+#[async_trait]
+impl oc_plugin_host::IntegrationPort for EngineIntegrationPort {
+    async fn call(&self, method: &str, args: &Value) -> Result<Value, String> {
+        use oc_core::integration::types::{ConnectionInfo, ConnectionStatus, IntegrationError, FormAnswer};
+        let host = self.engine.integration.clone();
+        let field = |key: &str| {
+            args.get(key).and_then(Value::as_str).unwrap_or_default().to_owned()
+        };
+        let answer: FormAnswer = args
+            .get("answer")
+            .and_then(Value::as_object)
+            .map(|answer| {
+                answer.iter().map(|(key, value)| (key.clone(), value.clone())).collect()
+            })
+            .unwrap_or_default();
+        let label = args.get("label").and_then(Value::as_str).map(str::to_owned);
+        let err = |error: IntegrationError| error.to_string();
+        match method {
+            "list" => {
+                let infos = host.list().await.map_err(|e| e.to_string())?;
+                serde_json::to_value(&infos).map_err(|e| e.to_string())
+            }
+            "get" => {
+                let integration_id = field("integrationID");
+                if integration_id.is_empty() {
+                    return Err("integration.get requires an integrationID".into());
+                }
+                let info = host.get(&integration_id).await.map_err(|e| e.to_string())?;
+                serde_json::to_value(&info).map_err(|e| e.to_string())
+            }
+            "connect.key" => {
+                let integration_id = field("integrationID");
+                let key = field("key");
+                if integration_id.is_empty() || key.is_empty() {
+                    return Err("integration.connect.key requires integrationID and key".into());
+                }
+                host.connect_key(&integration_id, &key, &answer, label.as_deref())
+                    .await
+                    .map_err(err)?;
+                Ok(Value::Null)
+            }
+            "oauth.connect" => {
+                let integration_id = field("integrationID");
+                let method_id = field("methodID");
+                if integration_id.is_empty() || method_id.is_empty() {
+                    return Err("integration.oauth.connect requires integrationID and methodID".into());
+                }
+                let attempt = host
+                    .oauth_connect(&integration_id, &method_id, &answer, label.as_deref())
+                    .await
+                    .map_err(err)?;
+                serde_json::to_value(&attempt).map_err(|e| e.to_string())
+            }
+            "oauth.status" => {
+                let status = host
+                    .oauth_status(&field("integrationID"), &field("attemptID"))
+                    .await
+                    .map_err(err)?;
+                serde_json::to_value(&status).map_err(|e| e.to_string())
+            }
+            "oauth.complete" => {
+                let code = args.get("code").and_then(Value::as_str).map(str::to_owned);
+                host.oauth_complete(&field("integrationID"), &field("attemptID"), code.as_deref())
+                    .await
+                    .map_err(err)?;
+                Ok(Value::Null)
+            }
+            "oauth.cancel" => {
+                host.oauth_cancel(&field("integrationID"), &field("attemptID")).await;
+                Ok(Value::Null)
+            }
+            "command.connect" => {
+                let integration_id = field("integrationID");
+                let method_id = field("methodID");
+                if integration_id.is_empty() || method_id.is_empty() {
+                    return Err(
+                        "integration.command.connect requires integrationID and methodID".into()
+                    );
+                }
+                let attempt = host
+                    .command_connect(&integration_id, &method_id, label.as_deref())
+                    .await
+                    .map_err(err)?;
+                serde_json::to_value(&attempt).map_err(|e| e.to_string())
+            }
+            "command.status" => {
+                let status = host
+                    .command_status(&field("integrationID"), &field("attemptID"))
+                    .await
+                    .map_err(err)?;
+                serde_json::to_value(&status).map_err(|e| e.to_string())
+            }
+            "command.cancel" => {
+                host.command_cancel(&field("integrationID"), &field("attemptID")).await;
+                Ok(Value::Null)
+            }
+            "connection.active" => {
+                let id = field("id");
+                if id.is_empty() {
+                    return Err("integration.connection.active requires an id".into());
+                }
+                let connection = host.connection_active(&id).await.map_err(|e| e.to_string())?;
+                serde_json::to_value(&connection).map_err(|e| e.to_string())
+            }
+            "connection.resolve" => {
+                let connection: ConnectionInfo =
+                    serde_json::from_value(args.clone()).map_err(|e| e.to_string())?;
+                let value = host.connection_resolve(&connection).await.map_err(err)?;
+                serde_json::to_value(&value).map_err(|e| e.to_string())
+            }
+            "connection.status" => {
+                let integration_id = field("integrationID");
+                if integration_id.is_empty() {
+                    return Err("integration.connection.status requires an integrationID".into());
+                }
+                let connection: ConnectionInfo = args
+                    .get("connection")
+                    .cloned()
+                    .ok_or_else(|| "integration.connection.status requires a connection".to_owned())
+                    .and_then(|value| serde_json::from_value(value).map_err(|e| e.to_string()))?;
+                let status = match args.get("status") {
+                    Some(Value::Object(map)) => Some(
+                        serde_json::from_value::<ConnectionStatus>(Value::Object(map.clone()))
+                            .map_err(|e| e.to_string())?,
+                    ),
+                    _ => None,
+                };
+                host.connection_status(&integration_id, &connection, status).await;
+                Ok(Value::Null)
+            }
+            other => Err(format!("unknown integration method {other:?}")),
+        }
+    }
+}
+
+/// The pre-engine integration-port placeholder.
+#[derive(Default)]
+pub struct EngineIntegrationSlot(std::sync::RwLock<Option<Arc<EngineIntegrationPort>>>);
+
+impl EngineIntegrationSlot {
+    pub fn fill(&self, port: Arc<EngineIntegrationPort>) {
+        let mut slot = self.0.write().expect("integration slot poisoned");
+        if slot.is_none() {
+            *slot = Some(port);
+        }
+    }
+}
+
+#[async_trait]
+impl oc_plugin_host::IntegrationPort for EngineIntegrationSlot {
+    async fn call(&self, method: &str, args: &Value) -> Result<Value, String> {
+        self.port()?.call(method, args).await
+    }
+}
+
+impl EngineIntegrationSlot {
+    fn port(&self) -> Result<Arc<EngineIntegrationPort>, String> {
+        self.0.read().expect("integration slot poisoned").clone().ok_or_else(|| {
+            "integration: the engine is not attached to the plugin host yet".to_owned()
+        })
     }
 }
 

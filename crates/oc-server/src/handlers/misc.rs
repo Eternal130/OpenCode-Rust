@@ -286,8 +286,20 @@ async fn plugin_update(
     // own runtime, so it runs off the async workers), the event is the
     // typed public `PluginEvent::Updated` registered on the bus (RF-02).
     if let Some(boot) = state.plugins.clone() {
-        let _ =
-            tokio::task::spawn_blocking(move || crate::plugins::reload_after_update(&boot)).await;
+        let strategies = std::sync::Arc::clone(&state.worktree_strategies);
+        let _ = tokio::task::spawn_blocking(move || {
+            let reloaded = crate::plugins::reload_after_update(&boot);
+            // G-24 residual — re-run the worktree-strategy registry
+            // seeding after the update (mirror of boot.rs's
+            // `plugin_worktree_registry`): the updated plugin's guest
+            // worktree strategies re-register instead of the registry
+            // holding the dead generations' entries.
+            if reloaded {
+                *strategies.write() =
+                    crate::plugins::plugin_worktree_registry(&boot.host, &boot.resolution);
+            }
+        })
+        .await;
     }
     if let Some(definition) =
         oc_core::bus::registry::by_type(oc_core::bus::registry::PLUGIN_UPDATED)

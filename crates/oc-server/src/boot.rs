@@ -439,7 +439,21 @@ pub async fn boot_and_serve(options: &BootOptions) -> io::Result<ServeHandle> {
         engine: Arc::clone(&app_state.engine),
         location: LocationRef::new(config_location.clone(), None),
     }));
-    app_state.worktree_strategies =
+    // G-64: ctx.provider.*/reference.*/experimental.terminal.read/
+    // integration.* over the engine's registries + the persistent pty.
+    plugin_boot.provider_slot.fill(Arc::new(crate::plugins::EngineProviderPort {
+        engine: Arc::clone(&app_state.engine),
+    }));
+    plugin_boot.reference_slot.fill(Arc::new(crate::plugins::EngineReferencePort {
+        engine: Arc::clone(&app_state.engine),
+    }));
+    plugin_boot.terminal_slot.fill(Arc::new(crate::plugins::EngineTerminalPort {
+        pty: app_state.persistent_pty.clone(),
+    }));
+    plugin_boot.integration_slot.fill(Arc::new(crate::plugins::EngineIntegrationPort {
+        engine: Arc::clone(&app_state.engine),
+    }));
+    *app_state.worktree_strategies.write() =
         crate::plugins::plugin_worktree_registry(&plugin_boot.host, &plugin_boot.resolution);
     app_state.plugins = Some(plugin_boot);
     // G-05: the reload bridge gets the engine handle (config.updated
