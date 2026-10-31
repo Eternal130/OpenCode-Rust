@@ -304,7 +304,7 @@
 - **G-30 ℹ️（补充）**：repo-local autocrlf/quotepath 钉定当前行为惰性——快照管道全程 raw blob/OID-map/treebuilder/手写 diff，从不咨询 git config；parity 为偶得（raw passthrough 即无 CRLF 误报）。钉定仅防未来 libgit2 操作。ref 另钉 7 个 key（longpaths/symlinks/fsmonitor/untrackedCache/manyFiles/index.version/threads，ref git.ts:23-33）未移植，当前行为中性。
 - **G-31 ⚠️（补充）**：`is_vcs_root` 弱于 ref `location.vcs`——仓库子目录 location 与 hg 仓库在 rust 侧仍 100k 截断（保守方向）；handler 手里已有 `services.project.vcs`（fs.rs:260 绑定 `_services`）却用文件系统嗅探。
 - **G-19 ⚠️（补充）**：`validate_config`（mantle_messages.rs:199-221）零调用——ref 的 bearer-without-key fail-fast（ProviderConfigurationError）永不触发，rust 静默 SigV4 回退；`auth/profile/region/credentials` settings 键在 oc-core ModelConnection seam（baseURL/apiKey/headers，facade.rs:123-136）无处解析（承自 converse lane 的既有模式）。
-- **G-24（bounded 清单精确化）**：guest 侧 worktree host-op、`vcs.transform`/`vcs.reload`（dispatch 表仅有 websearch/worktree transform，supervisor.rs:356-369）、websearch `editor.default.set` 持久化（host.js:875-877 为 no-op stub）、worktree 注册表热重载（`AppState.worktree_strategies` 仅 boot.rs:439 赋值，`reload_after_update` 不重播种）。
+- **G-24 ✅（lane5 清偿全部 bounded 外项）**：`vcs.transform`/`vcs.reload` 已接（supervisor 派发 + 注册表合并）、websearch `editor.default.set` 已持久化（引擎 KV）、worktree 注册表热重载已接（`reload_after_update` 后重跑 `plugin_worktree_registry` 播种，`AppState.worktree_strategies` 可热换）。guest 侧 worktree host-op 此前已清偿。
 
 ## 新登记缺口（G-41..G-49）
 
@@ -316,7 +316,7 @@
 
 ### 🟢 低
 - **G-45 ❌ agent-client-protocol-schema 无 drift 守卫**：同为 vendored+同一 preserve_order 改动（third_party/agent-client-protocol-schema/Cargo.toml:103，同样经 [patch.crates-io] 钉定），acp_drift.py:39-40 的 VENDORED 硬编码只覆盖主包。扩 guard 即可。
-- **G-46 ❌ dialog.plugins.error 仍无操作面**：command_palette.rs:3129 留在 surfaceless 组；ref plugins.tsx:224-228 有 error 详情动作。
+- **G-46 ✅（lane5）**：dialog.plugins.error 打开失败插件的 error 详情（ErrorDetails 对话框，esc 回插件列表；无失败行为无操作）。
 - **G-47 ❌ IDE socket backoff 不复位**：连接成功后 `attempt` 不清零（editor_ide.rs:222-235 vs ref editor.ts:243）→ 抖动后重连恒等 10s；另空字符串 env 值阻断 fallback（ref `||` 视 "" 为 falsy）。
 - **G-48 ✅（lane4）**：reload bridge 在失效 location 前重导 `Limits::from_entries` 并 `Engine::reload_tool_output_limits`（boot.rs ConfigReloadBridge），assemble 改读 `ToolOutput::current_limits` 活值——改 `tool_output.*` 免重启生效。
 - **G-49 ℹ️ 记录性/文档债**：spinner 帧率受 pump tick（50-100ms）约束而非 40ms 定时器（帧数学精确）；session.environment 每 session 单发（ref 效果重触发，PUT 幂等无害）；stdio.rs 模块头宣称 SIGTERM→SIGKILL 升级但实现为即杀（沿袭 rmcp 行为，措辞与 ref 2s 优雅等待不符）；project.rs:1103-1105 注释"插件 strategy 不支持"已过时（add_strategy 就在其下）；proxy.rs:367 注释"webpki 与 0.13 栈一致"在 G-26 后已失效（0.13 现走 platform-verifier；ws 链路留 webpki 为有意）。
@@ -386,11 +386,11 @@ G-18 ✅ / G-19 ✅(死校验残留) / G-20 ✅ / G-21 ✅ / G-22 ✅ / G-23 ✅
 - ① 不存在的 pty：rust `persistent_pty.rs:276-278` 升级前 HTTP 404；ref（persistent-pty.ts:126,152-158）一律升级后 `CloseEvent(4404, "terminal unavailable")`——WS 客户端错误路径完全不同。
 - ② 非 framed 二进制输入：rust `persistent_pty.rs:482-484` `from_utf8_lossy`（U+FFFD 污染）；ref `persistent-pty.ts:203-216` 原样字节直传。G-10 覆盖的是 pty.rs 输出方向，本条是输入方向，独立。
 
-### G-64 ❌ 插件 Context API 面残留（G-24 API 面追加）
-- host.js:624-1056 Context 域清单缺：`provider.list/get/transform/reload`、`reference.list/transform/reload`（ref adapter.ts:348-352,448-452）；`experimental.terminal.read`（:334-337）；`integration.list/get/connect.key/oauth.{connect,status,complete,cancel}` 与 `connection.{active,resolve,status}`（:360-370,427-430，rust 仅 method.update）。依赖这些域的插件运行时 method_not_found。G-24 原文只记 hook 面，本条为 API 面。
+### G-64 ✅ 插件 Context API 面残留（G-24 API 面追加）（lane5 收口）
+- 已全部落地：`ctx.provider.list/get/transform/reload`（editor 表含 models 子编辑器；transform defs 经 `apply_plugin_providers` 折入 location overlay）、`ctx.reference.list/transform/reload`（`apply_plugin_references` 入 ReferenceService）、`ctx.experimental.terminal.read`（persistent-pty Frontend.read）、`ctx.integration.list/get/connect.key/oauth.{connect,status,complete,cancel}/command.*` 与 `connection.{active,resolve,status}`（oc-plugin-host ProviderPort/ReferencePort/TerminalPort/IntegrationPort + supervisor 异步派发 + oc-server Engine*Port 槽位模式）。guest 集成测试 g64_domains.rs。注：`ctx.vcs.transform` 的 vcs provider 行进注册表快照，但 guest vcs adapter 未接 project 解析（无既有宿主缝，见 lane5 report concerns）。
 
-### G-65 ❌ aisdk hook 注册面在、生产派发点为零（G-2 残留）
-- 注册/桥接在（hooks.rs:916-919、plugin_apply.rs:894-909、host.js:827-830），但 `dispatch_aisdk_sdk/language` 生产 0 调用点（仅测试）。ref `aisdk.ts:346-354` 在 language model 构建时派发，且 `runLanguage` 可**替换** language model（变换点非纯观察）。rust 把 copilot lane 选择内联硬编码（copilot.rs:179 注释自认），插件无法介入。G-2 原文"3 个 hook 域已桥接"未覆盖此点。
+### G-65 ✅ aisdk hook 注册面在、生产派发点为零（G-2 残留）（lane5 收口）
+- 生产派发点已接：`SessionModelRequest::prepare`（model_request.rs）在 language model 绑定请求处派发 `aisdk.sdk` → `aisdk.language`（aisdk.ts:346-354 的 runSDK → runLanguage 链；sdk 句柄流入 language 事件；返回的 language 句柄**替换**请求目标——变换点；language 事件的 options 并入 provider options，copilot lane 的 `endpoint` 覆盖由此流入，无 hook 时内联 lane 选择保持默认）。测试 model_request.rs aisdk_dispatch_tests。
 
 ### G-66 ❌ composer 选区高亮渲染缺失（模型层已备）
 - rust 模型在（oc-tui-core/text_edit.rs:276,372-383 anchor/range API），渲染消费缺（composer/render.rs 无 selection 绘制）；upstream `EditBufferRenderable.ts:67-68,143-144,279` 有 `selectionBg/selectionFg`。`input.select.*` 键位有绑定但屏幕无反馈。（IME 半条已撤销：upstream 亦无 composition 渲染，终端模拟器自理。）
@@ -479,7 +479,7 @@ G-18 ✅ / G-19 ✅(死校验残留) / G-20 ✅ / G-21 ✅ / G-22 ✅ / G-23 ✅
 ## 部分清偿（条目修正）
 
 - **G-1 ⚠️（残留清单缩小）**：`mcp/client.rs` 已切 Environment stdio seam（client.rs:103 `use crate::environment::stdio::{...}`，:1059-1065,1152-1158，注释明言 workspace driver 扩展点）——从残留清单移除。仍直连 std::fs/portable_pty 的 8 个 consumer：read.rs（:179,388-401,713,764）、write/edit（经 file_mutation.rs:115,127-128,253-279）、tool/shell.rs（:227）、glob.rs（:124）、grep.rs（:427）、patch.rs（:401,417,426,444,452）、oc-core/pty.rs（:439 portable_pty）+ oc-server/handlers/pty.rs。
-- **G-24 ⚠️（worktree guest-op 子项已清偿）**：vcs.transform/vcs.reload 仍缺（supervisor.rs:437 仅 `vcs.get|vcs.base`）；websearch `editor.default.set` 仍 no-op stub（host.js:871-874）；worktree 注册表热重载仍缺（`reload_after_update` plugins.rs:547-589 只做 entry swap，不重建 registry）。
+- **G-24 ✅（lane5 清偿 bounded 外项）**：vcs.transform/vcs.reload 已接（supervisor 派发 + 注册表合并；reload 走 VcsPort——EngineVcsPort 实时计算，reload 为契约面）；websearch `editor.default.set` 已持久化（host.js → WebsearchPort::set_default → `WebSearch.select` 引擎 KV，与 ref 的 auth/config 存储等位）；worktree 注册表热重载已接（`reload_after_update` 返回是否有代际移动，plugin/update handler 重跑 `plugin_worktree_registry` 播种；`AppState.worktree_strategies` 移入 `Arc<RwLock<…>>` 可热换）。guest vcs provider 的 info/base 闭包仍留 guest 侧（无宿主缝，见 lane5 report）。
 - **G-31 ⚠️（VCS 根不限量已修）**：`scan_budget`（fs.rs:346-348）对 `is_vcs_root && !home_rooted → usize::MAX`，对齐 ref search.ts:72。仍在：每请求 spawn_blocking 全量 walk（:285-288）、无内存索引/10s 刷新（:330-332 自认 OUT OF SCOPE）、非 VCS 根仍 100k（:333）、`is_vcs_root` 仍为 `.git exists` 嗅探（:339-341，不认 hg/父仓子目录；fs.rs:260 `_services` 未用 `services.project.vcs`）。
 
 ## 确认仍在（不变）
@@ -491,7 +491,7 @@ G-18 ✅ / G-19 ✅(死校验残留) / G-20 ✅ / G-21 ✅ / G-22 ✅ / G-23 ✅
 - **G-43 ✅**：loopback（127.0.0.1/localhost/::1）已恒直连（lane2, 2d889a9）。
 - **G-44 ✅**：NO_PROXY 已改 ref 语义——bare host 精确相等、`.`/`*` 前缀后缀匹配、空白+逗号分隔（lane2, df29fd3）。
 - **G-45 ❌**：acp_drift.py:58 VENDORED 仍只覆盖主包，agent-client-protocol-schema 未守卫。
-- **G-46 ❌**：dialog.plugins.error 仍 surfaceless（command_palette.rs:3121-3129 `Dispatch::Handled` 无操作）。
+- **G-46 ✅（lane5 收口）**：dialog.plugins.error 打开失败插件的 error 详情（plugins.tsx:224-228 的 "view error"）——ErrorDetails 对话框（可滚动、esc 回插件列表；无失败行为无操作）。
 - **G-47 ❌**：IDE backoff 仍不复位（editor_ide.rs:222-234 attempt 只增不减）；空字符串 env 仍阻断 fallback（:36-39 `or()` 吞掉合法备选）。
 - **G-49 ℹ️**：4 子项仍准确（spinner 受 mini/runtime.rs:38-39 TICK=100ms 约束；stdio.rs:11,:27 vs :104 措辞与实现不符；project.rs:1103-1105 过时注释——本条与 G-4 修复同源，可随清理收口；proxy.rs:367-369,:318 webpki 一致性声明在 G-26 后仍失效）。
 - **G-28 ℹ️ / G-32 ℹ️**：决策现状未变（ui.rs:1-15 有界 slot bridge；oc-schema lib.rs:80-82 TODO 自认）。
