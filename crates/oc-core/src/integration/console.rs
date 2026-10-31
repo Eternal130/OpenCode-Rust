@@ -258,7 +258,7 @@ pub async fn fetch_config(
 ) -> Result<Option<ConsoleConfig>, ConsoleError> {
     let view = ConsoleCredential::of(credential);
     let server = view.server();
-    let client = reqwest::Client::new();
+    let client = oc_http::client();
     let mut request = client
         .get(format!("{}/api/v2/config", server.trim_end_matches('/')))
         .header("Accept", "application/json");

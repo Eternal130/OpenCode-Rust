@@ -51,7 +51,7 @@ async fn mcp_call(
     arguments: &serde_json::Value,
     headers: &[(&str, String)],
 ) -> Result<serde_json::Value, ProviderError> {
-    let client = reqwest::Client::builder()
+    let client = oc_http::builder()
         .timeout(Duration::from_secs(MCP_TIMEOUT_SECONDS))
         .build()
         .map_err(|error| ProviderError::request(None, error.to_string()))?;
@@ -273,7 +273,7 @@ impl SearchProvider for TavilyProvider {
         "Tavily"
     }
     async fn execute(&self, query: &str) -> Result<Vec<WebSearchResult>, ProviderError> {
-        let client = reqwest::Client::builder()
+        let client = oc_http::builder()
             .timeout(Duration::from_secs(MCP_TIMEOUT_SECONDS))
             .build()
             .map_err(|error| ProviderError::request(None, error.to_string()))?;

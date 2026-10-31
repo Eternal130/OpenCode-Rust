@@ -107,7 +107,7 @@ pub async fn pull_url_sources(entries: &[String], cache_root: &Path) -> PulledUr
     // restart-recovery boot, oc-server boot.rs). The shared client
     // bounds BOTH the index fetch and every file GET; the retry
     // semantics around it are unchanged.
-    let client = reqwest::Client::builder()
+    let client = oc_http::builder()
         .timeout(Duration::from_secs(30))
         .build()
         .expect("skill-pull HTTP client builds");

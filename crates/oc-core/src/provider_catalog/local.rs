@@ -138,7 +138,7 @@ impl LocalDiscovery {
     /// An empty snapshot over a shared HTTP client.
     #[must_use]
     pub fn new() -> Self {
-        let client = reqwest::Client::builder().build().unwrap_or_else(|_| reqwest::Client::new());
+        let client = oc_http::builder().build().unwrap_or_else(|_| oc_http::client());
         Self { client, entries: parking_lot::RwLock::new(BTreeMap::new()) }
     }
 

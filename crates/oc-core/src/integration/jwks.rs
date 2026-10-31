@@ -32,7 +32,7 @@ impl RemoteJwks {
         // ID-token verification indefinitely. A 30 s total request
         // timeout (matching the skill-pull client, skills_url.rs) is
         // defensive hardening — v2 behavior is otherwise preserved.
-        let http = reqwest::Client::builder()
+        let http = oc_http::builder()
             .timeout(Duration::from_secs(30))
             .build()
             .expect("JWKS HTTP client builds");

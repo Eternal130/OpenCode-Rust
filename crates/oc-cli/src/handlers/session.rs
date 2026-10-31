@@ -253,7 +253,7 @@ async fn select_session_for_export(client: &oc_client::Client) -> Result<Option<
 
 async fn import(server: &ServerParams, file: &str, directory: Option<&str>) -> i32 {
     let text = if file.starts_with("http://") || file.starts_with("https://") {
-        match reqwest::Client::new().get(file).send().await {
+        match oc_http::client().get(file).send().await {
             Ok(response) if response.status().is_success() => {
                 response.text().await.unwrap_or_default()
             }
@@ -308,7 +308,7 @@ async fn import(server: &ServerParams, file: &str, directory: Option<&str>) -> i
         object
             .insert("location".to_owned(), serde_json::json!({ "directory": location.directory }));
     }
-    let response = reqwest::Client::new()
+    let response = oc_http::client()
         .post(format!("{}/api/experimental/session/import", resolved.endpoint.url))
         .header(
             "authorization",

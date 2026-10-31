@@ -1,0 +1,25 @@
+[package]
+name = "oc-http"
+description = "opencode reqwest 0.12 HTTP client factory with unified platform TLS trust (G-26)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# Same reqwest 0.12 stack the rest of the workspace uses (G-26 keeps the
+# intentional 0.12/0.13 dual-stack; this crate owns the 0.12 client shape).
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "aws-lc-rs", "ring"] }
+rustls-platform-verifier = "0.7"
+# Fallback only: if the platform verifier cannot be initialised (e.g. a
+# minimal container without a system trust store) we degrade to the
+# well-known Mozilla root set rather than panicking.
+webpki-roots = "1"
+
+[dev-dependencies]
+tokio = { workspace = true }
+rcgen = "0.14.10"
+tokio-rustls = { version = "0.26", default-features = false, features = ["logging", "tls12", "aws_lc_rs"] }

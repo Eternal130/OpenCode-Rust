@@ -13,7 +13,7 @@ default = ["reqwest-transport", "ws-transport"]
 # Process-agnostic HTTP transport backed by reqwest. The route/protocol layer
 # only sees the `Transport` trait (raw byte streams); nothing reqwest-shaped
 # leaks into protocol or route signatures.
-reqwest-transport = ["dep:reqwest"]
+reqwest-transport = ["dep:reqwest", "dep:oc-http"]
 # WebSocket channel transport (openai-responses WS path, AI-M1): connector +
 # channel executor machinery; `ws-transport` adds the production
 # tokio-tungstenite connector. The channel types themselves always build.
@@ -44,6 +44,8 @@ reqwest = { version = "0.12", optional = true, default-features = false, feature
     "json",
     "rustls-tls",
 ] }
+# G-26: platform-verifier TLS trust for the reqwest transport's clients.
+oc-http = { workspace = true, optional = true }
 tokio-tungstenite = { version = "0.24", optional = true, default-features = false, features = [
     "connect",
     "handshake",
