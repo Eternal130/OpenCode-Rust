@@ -305,6 +305,19 @@ pub trait WebsearchPort: Send + Sync {
     /// `websearch.query({query, providerID?})` — the v2
     /// `WebSearch.Response` JSON (`{providerID, results}`).
     async fn query(&self, query: &str, provider_id: Option<&str>) -> Result<Value, String>;
+
+    /// G-24 residual — `editor.default.get` (the persisted selection:
+    /// a provider id, `"random"`, `false`, or `null`).
+    async fn default_provider(&self) -> Result<Value, String> {
+        Ok(Value::Null)
+    }
+
+    /// G-24 residual — `editor.default.set(selection)` (persisted; ref
+    /// websearch.ts lands it in the auth/config store, the Rust port
+    /// in the engine KV next to `WebSearch.select`).
+    async fn set_default(&self, _selection: Value) -> Result<(), String> {
+        Err("websearch.default: no websearch engine attached to the plugin host".to_owned())
+    }
 }
 
 /// `ctx.vcs.get/base` routing target (G-24 — the v2 `VcsDomain`'s
@@ -317,6 +330,60 @@ pub trait VcsPort: Send + Sync {
 
     /// `vcs.base()` — the base ref string, or `null`.
     async fn base(&self) -> Result<Value, String>;
+
+    /// G-24 residual — `vcs.reload()`: invalidate cached vcs state so
+    /// the next read re-derives. Default: a no-op (a port computing
+    /// every read live has nothing to invalidate).
+    async fn reload(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+/// `ctx.provider.list/get/reload` routing target (G-64 — the v2
+/// ProviderDomain read surface, ref host.ts:196-223: the provider
+/// registry/catalog rows and the reload trigger).
+#[async_trait]
+pub trait ProviderPort: Send + Sync {
+    /// `provider.list()` — `Provider.Info[]` JSON.
+    async fn list(&self) -> Result<Value, String>;
+
+    /// `provider.get({id})` — one `Provider.Info`, `null` when unknown.
+    async fn get(&self, id: &str) -> Result<Value, String>;
+
+    /// `provider.reload()` — re-derive the provider registry.
+    async fn reload(&self) -> Result<(), String>;
+}
+
+/// `ctx.reference.list/reload` routing target (G-64 — ref
+/// host.ts:432-443: the `@`-completion reference registry).
+#[async_trait]
+pub trait ReferencePort: Send + Sync {
+    /// `reference.list()` — `Reference.Info[]` JSON.
+    async fn list(&self) -> Result<Value, String>;
+
+    /// `reference.reload()` — refresh every source.
+    async fn reload(&self) -> Result<(), String>;
+}
+
+/// `ctx.experimental.terminal.read` routing target (G-64 — ref
+/// host.ts:267-269: `persistentPty.read(sessionID, lines)`).
+#[async_trait]
+pub trait TerminalPort: Send + Sync {
+    /// The session's current terminal text (tail-bounded by `lines`);
+    /// `null` when nothing is selected (`ReadResult` JSON otherwise).
+    async fn read(&self, session_id: &str, lines: Option<u32>) -> Result<Value, String>;
+}
+
+/// `ctx.integration.*` routing target (G-64 — ref host.ts:274-357's
+/// method channel: list/get/connect.key/oauth.*/command.*/connection.*
+/// over the engine's IntegrationHost). One `call` carrying the ref
+/// method name keeps the supervisor arm flat; the engine port maps
+/// 1:1 onto the IntegrationHost surface.
+#[async_trait]
+pub trait IntegrationPort: Send + Sync {
+    /// One integration-domain call (`method`: the ref method name,
+    /// e.g. `oauth.connect`; `args`: its input record).
+    async fn call(&self, method: &str, args: &Value) -> Result<Value, String>;
 }
 
 #[cfg(test)]

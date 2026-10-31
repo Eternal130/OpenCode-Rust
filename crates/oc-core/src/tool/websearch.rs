@@ -152,6 +152,18 @@ impl WebSearch {
         }
     }
 
+    /// The current selection as wire JSON (G-24 residual — the plugin
+    /// host's `websearch.default.get`): a provider id, `"random"`,
+    /// `false`, or `null`.
+    pub async fn selection_json(&self) -> serde_json::Value {
+        match self.stored_selection().await {
+            Some(Selection::Provider(id)) => serde_json::json!(id),
+            Some(Selection::Random) => serde_json::json!("random"),
+            Some(Selection::Disabled) => serde_json::json!(false),
+            None => serde_json::Value::Null,
+        }
+    }
+
     /// `WebSearch.select`.
     pub async fn select(&self, selection: &Selection) {
         let value = match selection {
