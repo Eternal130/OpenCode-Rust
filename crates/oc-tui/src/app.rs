@@ -8885,6 +8885,16 @@ fn crossterm_key_to_spec(key: &crossterm::event::KeyEvent) -> Option<String> {
             // both shift+tab — v2's `agent.cycle` chord.
             KeyCode::Tab | KeyCode::BackTab => Some("shift+tab".to_owned()),
             KeyCode::F(f) => Some(format!("shift+f{f}")),
+            // G-66 — the modified-arrow family (`ESC [ 1;2A..D`):
+            // shift+arrows are `input.select.*`'s chords (keymap
+            // table.rs:712-715); they used to drop here, so the
+            // selection keybindings never fired on the live route.
+            KeyCode::Up => Some("shift+up".to_owned()),
+            KeyCode::Down => Some("shift+down".to_owned()),
+            KeyCode::Left => Some("shift+left".to_owned()),
+            KeyCode::Right => Some("shift+right".to_owned()),
+            KeyCode::Home => Some("shift+home".to_owned()),
+            KeyCode::End => Some("shift+end".to_owned()),
             _ => None,
         };
     }
