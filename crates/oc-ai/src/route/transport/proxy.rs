@@ -14,6 +14,11 @@
 //! protocol of its own; nothing else in the tree carries it).
 //! `socks4://` stays unsupported. Proxy selection + `NO_PROXY` are
 //! pure functions so tests can drive them without process env races.
+//! Parity with the TS stack (websocket-constructor.ts): loopback
+//! targets (127.0.0.1 / localhost / ::1) always connect directly,
+//! `WSS_PROXY` / `WS_PROXY` are consulted before the standard
+//! spellings, and proxy URL userinfo is honored (Basic
+//! `Proxy-Authorization` on CONNECT, username/password on SOCKS5).
 
 use std::time::Duration;
 
@@ -32,12 +37,14 @@ pub fn env_truthy(value: &str) -> bool {
     value == "1" || value.eq_ignore_ascii_case("true")
 }
 
-/// Selects the proxy URL for `target` per the standard env precedence:
-/// secure targets (`wss`/`https`) honor `HTTPS_PROXY` first, plain
-/// targets (`ws`/`http`) honor `HTTP_PROXY` first, and `ALL_PROXY`
-/// covers both; lowercase spellings are checked after the canonical
-/// ones. `NO_PROXY` (comma-separated host suffixes, `*` = bypass all)
-/// removes a matching target.
+/// Selects the proxy URL for `target` per the env precedence the TS
+/// stack uses (websocket-constructor.ts:42-47): secure targets
+/// (`wss`/`https`) honor `WSS_PROXY` first, plain targets (`ws`/`http`)
+/// honor `WS_PROXY` first, then the standard `HTTPS_PROXY`/`HTTP_PROXY`
+/// spellings and `ALL_PROXY`; lowercase spellings are checked after
+/// the canonical ones (empty values are skipped). `NO_PROXY`
+/// (comma/whitespace-separated entries, `*` = bypass all) removes a
+/// matching target.
 #[must_use]
 pub fn select_proxy(target: &str, env: &EnvLookup<'_>) -> Option<String> {
     let secure = match target.split_once("://") {
@@ -51,14 +58,18 @@ pub fn select_proxy(target: &str, env: &EnvLookup<'_>) -> Option<String> {
         None => false,
     };
     let candidates: &[&str] = if secure {
-        &["HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"]
+        &["WSS_PROXY", "wss_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"]
     } else {
-        &["HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"]
+        &["WS_PROXY", "ws_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"]
     };
     let proxy = candidates.iter().find_map(|name| env(name).filter(|value| !value.is_empty()))?;
     let host = target_host(target)?;
     let port = target_port(target);
     let effective_port = port.or_else(|| default_port(target));
+    // loopback targets never use a proxy (websocket-constructor.ts:40)
+    if matches!(host.as_str(), "127.0.0.1" | "localhost" | "::1") {
+        return None;
+    }
     if no_proxy_bypasses(
         &host,
         effective_port,
@@ -107,16 +118,17 @@ fn target_port(target: &str) -> Option<u16> {
     Some(port)
 }
 
-/// `NO_PROXY` matching (the `proxy-from-env` semantics v2 inherits):
-/// comma-separated entries, `*` bypasses everything, an entry matches
-/// when it equals the host or is a dot-separated suffix of it (leading
-/// dots are optional). An entry may pin a port (`host:port`), in which
-/// case the target's port must match too.
+/// `NO_PROXY` matching (websocket-constructor.ts:24-36): entries are
+/// separated by whitespace AND commas, `*` bypasses everything, a
+/// bare host matches only on exact (case-insensitive) equality, a
+/// leading `.` (or `*`, which is stripped first) means a domain
+/// suffix, and an entry may pin a port (`host:port`) which the
+/// target's effective port must then match.
 #[must_use]
 pub fn no_proxy_bypasses(host: &str, port: Option<u16>, no_proxy: Option<&str>) -> bool {
     let Some(no_proxy) = no_proxy else { return false };
     let host = host.to_ascii_lowercase();
-    for entry in no_proxy.split(',') {
+    for entry in no_proxy.split(|c: char| c.is_whitespace() || c == ',') {
         let entry = entry.trim();
         if entry.is_empty() {
             continue;
@@ -129,11 +141,17 @@ pub fn no_proxy_bypasses(host: &str, port: Option<u16>, no_proxy: Option<&str>) 
             Some((host, port)) if !host.contains(':') => (host, port),
             _ => (entry, ""),
         };
-        let entry_host = entry_host.trim_start_matches('.').to_ascii_lowercase();
+        // ref strips ONE leading `*`, then a leading `.` means suffix
+        let entry_host = entry_host.strip_prefix('*').unwrap_or(entry_host);
+        let entry_host = entry_host.to_ascii_lowercase();
         if entry_host.is_empty() {
             continue;
         }
-        let host_match = host == entry_host || host.ends_with(&format!(".{entry_host}"));
+        let host_match = if entry_host.starts_with('.') {
+            host.ends_with(&entry_host)
+        } else {
+            host == entry_host
+        };
         if !host_match {
             continue;
         }
@@ -166,8 +184,36 @@ pub struct ProxyEndpoint {
     pub host: String,
     pub port: u16,
     pub scheme: ProxyScheme,
+    /// Proxy auth from the URL's userinfo (percent-decoded), honored
+    /// by both CONNECT (Basic `Proxy-Authorization`) and SOCKS5.
+    pub username: Option<String>,
+    pub password: Option<String>,
     /// The raw URL the endpoint came from (error reporting).
     pub source: String,
+}
+
+/// Percent-decodes a URL userinfo component (the `decodeURIComponent`
+/// step https-proxy-agent applies to `url.username` / `url.password`).
+fn percent_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            let hex = |byte: u8| (byte as char).to_digit(16);
+            match (hex(bytes[index + 1]), hex(bytes[index + 2])) {
+                (Some(high), Some(low)) => {
+                    out.push((high * 16 + low) as u8);
+                    index += 3;
+                    continue;
+                }
+                _ => {}
+            }
+        }
+        out.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Parses a proxy URL into a dialable endpoint. `http://` and
@@ -198,7 +244,16 @@ pub fn parse_proxy_url(url: &str) -> Result<ProxyEndpoint, String> {
         ProxyScheme::Socks5 => 1080,
     };
     let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
-    let authority = authority.rsplit_once('@').map_or(authority, |(_, after)| after);
+    let (userinfo, authority) = match authority.rsplit_once('@') {
+        Some((userinfo, after)) => (Some(userinfo), after),
+        None => (None, authority),
+    };
+    // ref consumes `url.auth` for both proxy families; a missing
+    // password component is the empty string (WHATWG URL semantics)
+    let (username, password) = userinfo.map_or((None, None), |auth| {
+        let (user, pass) = auth.split_once(':').unwrap_or((auth, ""));
+        (Some(percent_decode(user)), Some(percent_decode(pass)))
+    });
     if authority.is_empty() {
         return Err(format!("proxy URL has no host ({url})"));
     }
@@ -226,7 +281,14 @@ pub fn parse_proxy_url(url: &str) -> Result<ProxyEndpoint, String> {
     } else {
         Some(port.parse().map_err(|_| format!("invalid proxy port in {url}"))?)
     };
-    Ok(ProxyEndpoint { host, port: port.unwrap_or(default_port), scheme, source: url.to_string() })
+    Ok(ProxyEndpoint {
+        host,
+        port: port.unwrap_or(default_port),
+        scheme,
+        username,
+        password,
+        source: url.to_string(),
+    })
 }
 
 /// The default CONNECT budget (v2 `CONNECT_TIMEOUT` is 15s; the tunnel
@@ -428,8 +490,9 @@ async fn https_connect(
     run_connect(proxy, future).await
 }
 
-/// SOCKS5 handshake (`tokio-socks`): greet → no-auth → CONNECT the
-/// target; the returned stream is the raw tunnel.
+/// SOCKS5 handshake (`tokio-socks`): greet → (no-auth or
+/// username/password when the proxy URL carries userinfo) → CONNECT
+/// the target; the returned stream is the raw tunnel.
 #[cfg(feature = "ws-transport")]
 async fn socks5_connect(
     proxy: &ProxyEndpoint,
@@ -437,11 +500,24 @@ async fn socks5_connect(
     target_port: u16,
 ) -> Result<tokio::net::TcpStream, AiError> {
     let future = async {
-        let stream = tokio_socks::tcp::Socks5Stream::connect(
-            (proxy.host.as_str(), proxy.port),
-            (target_host.to_string(), target_port),
-        )
-        .await
+        let stream = match (&proxy.username, &proxy.password) {
+            (Some(username), Some(password)) => {
+                tokio_socks::tcp::Socks5Stream::connect_with_password(
+                    (proxy.host.as_str(), proxy.port),
+                    (target_host.to_string(), target_port),
+                    username,
+                    password,
+                )
+                .await
+            }
+            _ => {
+                tokio_socks::tcp::Socks5Stream::connect(
+                    (proxy.host.as_str(), proxy.port),
+                    (target_host.to_string(), target_port),
+                )
+                .await
+            }
+        }
         .map_err(|error| format!("SOCKS5 proxy {} failed: {error}", proxy.source))?;
         Ok(stream.into_inner())
     };
@@ -467,7 +543,7 @@ async fn http_connect(
 
 async fn http_connect_over<S>(
     stream: &mut S,
-    _proxy: &ProxyEndpoint,
+    proxy: &ProxyEndpoint,
     target_host: &str,
     target_port: u16,
 ) -> Result<(), String>
@@ -476,14 +552,24 @@ where
 {
     // NOTE: any bytes read past the CONNECT response header are discarded —
     // harmless for ws/wss because the CLIENT speaks first after the upgrade.
+    use base64::Engine as _;
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
     let host_display = if target_host.contains(':') {
         format!("[{target_host}]")
     } else {
         target_host.to_string()
     };
+    // Basic Proxy-Authorization when the proxy URL carries userinfo
+    let authorization = proxy.username.as_ref().map(|username| {
+        let credentials = format!("{username}:{}", proxy.password.as_deref().unwrap_or_default());
+        format!(
+            "Proxy-Authorization: Basic {}\r\n",
+            base64::engine::general_purpose::STANDARD.encode(credentials)
+        )
+    });
     let request = format!(
-        "CONNECT {host_display}:{target_port} HTTP/1.1\r\nHost: {host_display}:{target_port}\r\nProxy-Connection: keep-alive\r\n\r\n"
+        "CONNECT {host_display}:{target_port} HTTP/1.1\r\nHost: {host_display}:{target_port}\r\n{}Proxy-Connection: keep-alive\r\n\r\n",
+        authorization.unwrap_or_default()
     );
     stream.write_all(request.as_bytes()).await.map_err(|e| format!("proxy write failed: {e}"))?;
     let mut buffer = Vec::new();
@@ -562,9 +648,66 @@ mod tests {
     }
 
     #[test]
+    fn ws_family_env_vars_are_consulted_first() {
+        // G-42: WSS_PROXY / WS_PROXY win over the standard spellings
+        // (websocket-constructor.ts:43-47); empty values are skipped.
+        let env = map(&[
+            ("WSS_PROXY", "wss-proxy:1"),
+            ("HTTPS_PROXY", "https-proxy:2"),
+            ("WS_PROXY", "ws-proxy:3"),
+            ("HTTP_PROXY", "http-proxy:4"),
+        ]);
+        assert_eq!(select_proxy("wss://api.example.com", &env), Some("wss-proxy:1".into()));
+        assert_eq!(select_proxy("ws://api.example.com", &env), Some("ws-proxy:3".into()));
+        // empty WSS_PROXY falls through to HTTPS_PROXY
+        assert_eq!(
+            select_proxy(
+                "wss://api.example.com",
+                &map(&[("WSS_PROXY", ""), ("HTTPS_PROXY", "https-proxy:2")])
+            ),
+            Some("https-proxy:2".into())
+        );
+        // ... but a set WSS_PROXY shadows ALL_PROXY too
+        assert_eq!(
+            select_proxy(
+                "wss://api.example.com",
+                &map(&[("WSS_PROXY", "wss:9"), ("ALL_PROXY", "any:5")])
+            ),
+            Some("wss:9".into())
+        );
+        // ALL_PROXY still covers ws when nothing scheme-specific is set
+        assert_eq!(
+            select_proxy("ws://api.example.com", &map(&[("ALL_PROXY", "any:5")])),
+            Some("any:5".into())
+        );
+    }
+
+    #[test]
+    fn loopback_targets_bypass_the_proxy_entirely() {
+        // G-43: 127.0.0.1 / localhost / ::1 always connect directly,
+        // regardless of env or NO_PROXY (websocket-constructor.ts:40).
+        let env = map(&[("ALL_PROXY", "proxy:8080"), ("WSS_PROXY", "wss:9"), ("WS_PROXY", "ws:8")]);
+        for target in [
+            "wss://127.0.0.1/v1",
+            "ws://127.0.0.1:8080/v1",
+            "wss://localhost/v1",
+            "ws://LOCALHOST:9000",
+            "wss://[::1]/v1",
+            "ws://[::1]:9000/v1",
+        ] {
+            assert_eq!(select_proxy(target, &env), None, "{target}");
+        }
+        // non-loopback hosts still route through the proxy
+        assert_eq!(select_proxy("wss://127.0.0.2/v1", &env), Some("wss:9".into()));
+        assert_eq!(select_proxy("ws://localhost.example.com/v1", &env), Some("ws:8".into()));
+    }
+
+    #[test]
     fn no_proxy_matches_suffixes_and_star() {
         assert!(no_proxy_bypasses("api.example.com", None, Some("api.example.com")));
-        assert!(no_proxy_bypasses("API.EXAMPLE.COM", None, Some("example.com")));
+        assert!(no_proxy_bypasses("api.example.com", None, Some("api.example.com")));
+        // bare hosts match ONLY on exact equality (ref :34)
+        assert!(!no_proxy_bypasses("api.example.com", None, Some("example.com")));
         assert!(no_proxy_bypasses("sub.example.com", None, Some(".example.com")));
         assert!(no_proxy_bypasses("anything", None, Some("*")));
         assert!(no_proxy_bypasses("localhost", None, Some("localhost, other.test")));
@@ -609,6 +752,8 @@ mod tests {
                 host: "proxy".into(),
                 port: 8080,
                 scheme: ProxyScheme::Http,
+                username: None,
+                password: None,
                 source: "http://proxy:8080".into()
             }
         );
@@ -628,6 +773,31 @@ mod tests {
         assert!(parse_proxy_url("socks4://proxy:1080").is_err(), "socks4 stays unsupported");
         assert!(parse_proxy_url("gopher://proxy").is_err());
         assert!(parse_proxy_url("http://proxy:notaport").is_err());
+    }
+
+    #[test]
+    fn proxy_url_userinfo_is_kept_and_decoded() {
+        // ref consumes url.auth for both proxy families (G-41)
+        let endpoint = parse_proxy_url("http://user:pass@proxy:8080").unwrap();
+        assert_eq!(
+            (endpoint.username.as_deref(), endpoint.password.as_deref()),
+            (Some("user"), Some("pass"))
+        );
+        // percent-encoded userinfo is decoded
+        let endpoint = parse_proxy_url("http://us%40er:p%3Ass@proxy").unwrap();
+        assert_eq!(
+            (endpoint.username.as_deref(), endpoint.password.as_deref()),
+            (Some("us@er"), Some("p:ss"))
+        );
+        // a username without a password keeps the empty password
+        let endpoint = parse_proxy_url("socks5://user@proxy:1080").unwrap();
+        assert_eq!(
+            (endpoint.username.as_deref(), endpoint.password.as_deref()),
+            (Some("user"), Some(""))
+        );
+        // no userinfo → no credentials
+        let endpoint = parse_proxy_url("http://proxy").unwrap();
+        assert_eq!((endpoint.username, endpoint.password), (None, None));
     }
 
     #[test]
@@ -654,6 +824,39 @@ mod tests {
         assert!(!env_truthy("0"));
         assert!(!env_truthy("yes"));
         assert!(!env_truthy(""));
+    }
+
+    #[test]
+    fn no_proxy_table_mirrors_the_reference() {
+        // G-44 table straight off websocket-constructor.ts:24-36
+        let table: &[(&str, &str, bool)] = &[
+            // exact bare-host equality (case-insensitive)
+            ("api.foo.com", "api.foo.com", true),
+            ("API.FOO.COM", "api.foo.com", true),
+            ("sub.api.foo.com", "api.foo.com", false),
+            // leading '.' → domain suffix (dot included)
+            ("sub.foo.com", ".foo.com", true),
+            ("foo.com", ".foo.com", false),
+            ("notfoo.com", ".foo.com", false),
+            // leading '*' → stripped to a dot-suffix match
+            ("sub.foo.com", "*.foo.com", true),
+            ("foo.com", "*.foo.com", false),
+            // '*' alone matches everything
+            ("anything.test", "*", true),
+            // whitespace AND comma separation
+            ("a.test", "other.test\ta.test", true),
+            ("a.test", "other.test a.test", true),
+            ("a.test", "other.test,,a.test", true),
+            ("a.test", " b.test , a.test ", true),
+            ("a.test", "b.test,c.test", false),
+        ];
+        for (host, entry, expected) in table {
+            assert_eq!(
+                no_proxy_bypasses(host, None, Some(entry)),
+                *expected,
+                "host={host} entry={entry}"
+            );
+        }
     }
 }
 
@@ -725,6 +928,8 @@ mod scheme_tunnel_tests {
             host: "127.0.0.1".into(),
             port: addr.port(),
             scheme: ProxyScheme::Socks5,
+            username: None,
+            password: None,
             source: format!("socks5://127.0.0.1:{}", addr.port()),
         };
         let tunnel = connect_through(&proxy, "upstream.test", 80).await.unwrap();
@@ -782,6 +987,8 @@ mod scheme_tunnel_tests {
             host: "127.0.0.1".into(),
             port: addr.port(),
             scheme: ProxyScheme::Https,
+            username: None,
+            password: None,
             source: format!("https://127.0.0.1:{}", addr.port()),
         };
         // The stub's certificate is the ONLY root the client trusts —
@@ -801,5 +1008,50 @@ mod scheme_tunnel_tests {
         assert_eq!(parse_proxy_url("proxy:3128").unwrap().scheme, ProxyScheme::Http);
         assert_eq!(parse_proxy_url("socks5h://p").unwrap().scheme, ProxyScheme::Socks5);
         assert_eq!(parse_proxy_url("https://p").unwrap().scheme, ProxyScheme::Https);
+    }
+
+    #[tokio::test]
+    async fn connect_sends_basic_proxy_authorization_from_userinfo() {
+        // G-41 end-to-end: the proxy URL's userinfo becomes a Basic
+        // Proxy-Authorization header on the CONNECT (the stub rejects
+        // the exchange without it).
+        use base64::Engine as _;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buffer = Vec::new();
+            let mut chunk = [0u8; 512];
+            loop {
+                let read = stream.read(&mut chunk).await.unwrap();
+                buffer.extend_from_slice(&chunk[..read]);
+                if buffer.windows(4).any(|w| w == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let head = String::from_utf8_lossy(&buffer).to_string();
+            let expected = format!(
+                "Proxy-Authorization: Basic {}\r\n",
+                base64::engine::general_purpose::STANDARD.encode("user:p@ss")
+            );
+            if !head.contains(&expected) {
+                stream
+                    .write_all(b"HTTP/1.1 407 Proxy Authentication Required\r\n\r\n")
+                    .await
+                    .unwrap();
+                panic!("CONNECT missing Proxy-Authorization, got: {head}");
+            }
+            stream.write_all(b"HTTP/1.1 200 Connection established\r\n\r\n").await.unwrap();
+            let ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let (mut sink, mut incoming) = ws.split();
+            let first = incoming.next().await.unwrap().unwrap();
+            sink.send(Message::Text(format!("echo:{first}"))).await.unwrap();
+        });
+
+        let proxy = parse_proxy_url(&format!("http://user:p%40ss@127.0.0.1:{}", addr.port()))
+            .expect("proxy URL with userinfo");
+        let tunnel = connect_through(&proxy, "upstream.test", 80).await.unwrap();
+        echo_over(tunnel).await;
+        server.await.unwrap();
     }
 }
