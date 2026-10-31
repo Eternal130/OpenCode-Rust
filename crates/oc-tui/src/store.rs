@@ -5515,7 +5515,10 @@ impl Store {
 
     /// Read the host clipboard (`prompt.paste` — `{preferredTypes:
     /// ["image/png", "text/plain"]}` → `{data: base64, mime}`).
-    pub fn clipboard_read(&self) -> Option<crate::clipboard::ClipboardContent> {
+    pub fn clipboard_read(
+        &self,
+    ) -> Result<Option<crate::clipboard::ClipboardContent>, crate::clipboard::ClipboardReadError>
+    {
         self.clipboard_source.read()
     }
 

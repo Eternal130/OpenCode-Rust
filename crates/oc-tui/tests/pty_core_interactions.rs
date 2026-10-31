@@ -1157,11 +1157,7 @@ fn pty_reconnecting_overlay_on_loss_and_recovery() {
 /// [`screen_after_toggle`]'s settle loop, but returning the SETTLED
 /// vt100 parser itself (G-66 asserts on cell COLORS, not just text —
 /// the selection highlight is an fg/bg swap).
-fn settled_parser(
-    writer: &std::fs::File,
-    boot: &Boot,
-    rows: &mut u16,
-) -> vt100::Parser {
+fn settled_parser(writer: &std::fs::File, boot: &Boot, rows: &mut u16) -> vt100::Parser {
     *rows = if *rows == 25 { 24 } else { 25 };
     unsafe {
         let winsize = libc::winsize { ws_row: *rows, ws_col: 80, ws_ypixel: 0, ws_xpixel: 0 };
@@ -1225,10 +1221,7 @@ fn pty_composer_selection_paints_inverted_cells() {
             if strip_ansi(&String::from_utf8_lossy(&data)).contains("lcheck") {
                 break;
             }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "the typed draft rendered"
-            );
+            assert!(std::time::Instant::now() < deadline, "the typed draft rendered");
             std::thread::sleep(Duration::from_millis(50));
         }
         // shift+left ×4 (CSI 1;2D) — selects chars 4..8 ("heck").
@@ -1258,10 +1251,7 @@ fn pty_composer_selection_paints_inverted_cells() {
         }
         let (row, col) = found.expect("the typed draft is on the settled screen");
         let colors = |column: u16| {
-            screen
-                .cell(row, column)
-                .map(|cell| (cell.fgcolor(), cell.bgcolor()))
-                .expect("cell")
+            screen.cell(row, column).map(|cell| (cell.fgcolor(), cell.bgcolor())).expect("cell")
         };
         let (_, prefix_bg) = colors(col);
         let (prefix_fg, _) = colors(col + 1);
