@@ -426,8 +426,14 @@ async fn connect_mock_config(
     config: &ServerConfig,
 ) -> Result<client::Connection, client::ConnectFailure> {
     let (transport, _mock) = mock_pair(script);
-    let input =
-        ConnectInput { server: "mock", config, directory: "/tmp", bearer: None, elicitation: None };
+    let input = ConnectInput {
+        server: "mock",
+        config,
+        directory: "/tmp",
+        bearer: None,
+        elicitation: None,
+        stdio: None,
+    };
     client::connect_with_transport(&input, transport, false).await
 }
 
@@ -443,6 +449,7 @@ async fn connect_mock_with(
         directory: "/tmp",
         bearer: None,
         elicitation,
+        stdio: None,
     };
     let connection =
         client::connect_with_transport(&input, transport, false).await.expect("mock connect");
@@ -468,6 +475,7 @@ fn scripted_connector(next: impl FnMut() -> Script + Send + Sync + 'static) -> C
                     directory: &directory,
                     bearer,
                     elicitation,
+                    stdio: None,
                 },
                 transport,
                 false,
@@ -605,6 +613,7 @@ async fn mcp_client_answers_roots_list_with_location_directory() {
         directory: "/repo space",
         bearer: None,
         elicitation: None,
+        stdio: None,
     };
     let connection =
         client::connect_with_transport(&input, transport, false).await.expect("connect");
@@ -639,6 +648,7 @@ async fn mcp_client_classifies_session_expiry_once() {
         directory: "/tmp",
         bearer: None,
         elicitation: None,
+        stdio: None,
     };
     // Remote classification requires remote=true.
     let connection =
@@ -1262,6 +1272,7 @@ async fn mcp_registry_passes_elicitation_handler_to_connector() {
                     directory: &directory,
                     bearer,
                     elicitation,
+                    stdio: None,
                 },
                 transport,
                 false,
@@ -1465,6 +1476,7 @@ async fn mcp_registry_reconciles_only_changed_servers() {
                     directory: &directory,
                     bearer,
                     elicitation,
+                    stdio: None,
                 },
                 transport,
                 false,
@@ -1525,6 +1537,7 @@ async fn mcp_registry_recovers_and_replays_after_session_expiry() {
                     directory: &directory,
                     bearer,
                     elicitation,
+                    stdio: None,
                 },
                 transport,
                 true,
@@ -1573,6 +1586,7 @@ async fn mcp_registry_watch_tools_changed_refreshes_catalog() {
                     directory: &directory,
                     bearer,
                     elicitation,
+                    stdio: None,
                 },
                 transport,
                 false,
@@ -2078,5 +2092,114 @@ mod stdio_environment {
         let env = stdio_environment(host(), "npx", Some(&config));
         assert_eq!(env.get("BUN_BE_BUN").map(String::as_str), Some("host-value"));
         assert_eq!(env.len(), 4);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// G-1 residual — stdio spawns route through the Environment seam
+// ---------------------------------------------------------------------------
+
+mod stdio_environment_seam {
+    use super::*;
+    use crate::environment::stdio::{
+        LocalStdioSpawner, PipedProcess, StdioSpawner, StdioSpec, StopChild,
+    };
+    use std::sync::Mutex;
+
+    /// Records the spawn request and hands back a child that speaks
+    /// nothing (stdout is immediate EOF → the handshake fails fast).
+    struct RecordingSpawner {
+        recorded: Mutex<Option<StdioSpec>>,
+    }
+
+    #[async_trait::async_trait]
+    impl StdioSpawner for RecordingSpawner {
+        async fn spawn_piped(&self, spec: StdioSpec) -> Result<PipedProcess, String> {
+            *self.recorded.lock().unwrap() = Some(spec);
+            Ok(PipedProcess {
+                stdin: Box::new(tokio::io::sink()),
+                stdout: Box::new(tokio::io::empty()),
+                stop: Box::new(|| {}) as StopChild,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn connect_local_spawns_through_the_environment_stdio_seam() {
+        let spawner = Arc::new(RecordingSpawner { recorded: Mutex::new(None) });
+        let config = ServerConfig::Local(Box::new(LocalConfig {
+            command: vec!["opencode".to_string(), "mcp".to_string(), "serve".to_string()],
+            cwd: Some("sub".to_string()),
+            environment: Some(BTreeMap::from([("MCP_VAR".to_string(), "set".to_string())])),
+            disabled: None,
+            codemode: None,
+            timeout: None,
+            protocol: None,
+        }));
+        let input = ConnectInput {
+            server: "seam",
+            config: &config,
+            directory: "/base",
+            bearer: None,
+            elicitation: None,
+            stdio: Some(spawner.clone()),
+        };
+        // The mute child ends the handshake — any ConnectError proves the
+        // spawn reached OUR spawner (no host process was consulted).
+        let result = tokio::time::timeout(Duration::from_secs(10), client::connect(input)).await;
+        let failure = match result.expect("settles") {
+            Ok(connection) => {
+                connection.close().await;
+                panic!("mute child cannot connect");
+            }
+            Err(failure) => failure,
+        };
+        assert!(matches!(failure, client::ConnectFailure::Connect(_)), "{failure:?}");
+        let spec = spawner.recorded.lock().unwrap().take().expect("spawn recorded");
+        assert_eq!(spec.command, "opencode");
+        assert_eq!(spec.args, vec!["mcp".to_string(), "serve".to_string()]);
+        // cwd resolves against the location directory.
+        assert_eq!(spec.cwd, "/base/sub");
+        // extend_env: the spawner (not the client) merges the execution
+        // plane's environment underneath the overlay.
+        assert!(spec.extend_env);
+        // The overlay carries BUN_BE_BUN for `opencode` + the config env.
+        assert_eq!(spec.env.get("BUN_BE_BUN").map(String::as_str), Some("1"));
+        assert_eq!(spec.env.get("MCP_VAR").map(String::as_str), Some("set"));
+    }
+
+    /// Byte-for-byte parity with the previous direct spawn: the local
+    /// spawner's `extend_env` merge reproduces `stdio_environment(host,
+    /// ...)` exactly (the merge oracle the old client code computed).
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn local_spawner_extend_env_matches_stdio_environment() {
+        let config_env = BTreeMap::from([
+            ("PATH".to_string(), "/custom/bin".to_string()),
+            ("MCP_VAR".to_string(), "set".to_string()),
+        ]);
+        let overlay = client::stdio_overlay("opencode", Some(&config_env));
+        let mut process = LocalStdioSpawner
+            .spawn_piped(StdioSpec {
+                command: "/usr/bin/env".to_string(),
+                args: vec![],
+                cwd: "/tmp".to_string(),
+                env: overlay,
+                extend_env: true,
+            })
+            .await
+            .expect("spawn env");
+        use tokio::io::AsyncReadExt as _;
+        let mut raw = Vec::new();
+        process.stdout.read_to_end(&mut raw).await.expect("read env output");
+        drop(process.stop); // reap-side cleanup; the child already exited
+        let printed: BTreeMap<String, String> = String::from_utf8(raw)
+            .expect("utf8")
+            .lines()
+            .filter_map(|line| line.split_once('='))
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        let expected = client::stdio_environment(std::env::vars(), "opencode", Some(&config_env));
+        assert_eq!(printed, expected, "local seam merge is byte-for-byte the old env");
     }
 }

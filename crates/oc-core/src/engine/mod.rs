@@ -1063,8 +1063,29 @@ impl Engine {
         // handler into every connect).
         let mcp_config = mcp_servers_from_config(&loaded);
         let mcp_source = Arc::new(move || mcp_config.clone());
+        // G-1 residual — stdio MCP servers spawn through the
+        // location-bound Environment execution seam (ref `mcp/stdio.ts`
+        // routes its spawns through `Environment.Service`'s spawner, so a
+        // workspace-backed location runs its MCP servers inside the
+        // workspace). Only the local driver ships today, so behavior is
+        // byte-identical to the previous host-bound spawn; a bind
+        // failure (unknown/destroyed workspace placement) falls back to
+        // the local spawner rather than dying at boot.
+        let workspace =
+            Arc::new(crate::environment::WorkspaceService::new(Arc::clone(&self.projects)));
+        let environment = crate::environment::Environment::with_workspace(workspace);
+        let stdio = match environment.bind(location).await {
+            Ok(driver) => driver.stdio,
+            Err(cause) => {
+                // oc-core carries no logger; a configuration defect here
+                // is non-fatal (local fallback keeps MCP stdio alive).
+                eprintln!("opencode: MCP stdio fell back to the local spawner: {cause}");
+                Arc::new(crate::environment::stdio::LocalStdioSpawner)
+            }
+        };
         let mcp = McpRegistry::new((*self.bus).clone(), (*self.db).clone())
             .with_config_source(mcp_source)
+            .with_stdio_spawner(stdio)
             .with_elicitation(crate::mcp::RegistryElicitation::adapter(Arc::new(forms.clone())));
 
         // AGENTS.md injection + skill table. The session-scoped services
