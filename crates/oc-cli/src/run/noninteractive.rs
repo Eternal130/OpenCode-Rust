@@ -331,7 +331,12 @@ impl Loop {
         if continuing {
             return;
         }
+        // G-54 (ref run/noninteractive.ts:203-204): a cancelled
+        // non-question form fails the run — `formCancelled = true;
+        // process.exitCode = 1`. The error-path skips keyed on
+        // `form_cancelled` below then return this code instead of 0.
         self.lock().form_cancelled = true;
+        self.record_exit(1);
     }
 
     /// `ownsSession`: this run's session plus its child (subagent) sessions.
@@ -1417,6 +1422,12 @@ mod tests {
         session_forms: Vec<Value>,
         /// Body for `GET /api/form` (location sweep), `None` → empty list.
         global_forms: Vec<Value>,
+        /// Emit a `session.inbox.delivered` event for the run's OWN
+        /// message id (parsed from the recorded prompt POST body) so the
+        /// prompt promotes and the run finishes cleanly — exit-code
+        /// assertions then measure the cancel semantics, not the
+        /// "Prompt was not promoted" path.
+        promote_prompt: bool,
     }
 
     struct RunMock {
@@ -1454,6 +1465,26 @@ mod tests {
             body.len()
         )
         .into_bytes()
+    }
+
+    fn sse_head() -> Vec<u8> {
+        b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n".to_vec()
+    }
+
+    fn sse_frame(event: &Value) -> Vec<u8> {
+        let text = event.to_string();
+        let encoded = serde_json::to_string(&text).expect("encode sse frame");
+        format!("data: {encoded}\n\n").into_bytes()
+    }
+
+    fn sse_response(config: &MockConfig) -> Vec<u8> {
+        let mut payload = sse_head();
+        for event in std::iter::once(json!({ "type": "server.connected" }))
+            .chain(config.sse_events.iter().cloned())
+        {
+            payload.extend(sse_frame(&event));
+        }
+        payload
     }
 
     fn empty_response() -> Vec<u8> {
@@ -1503,7 +1534,55 @@ mod tests {
                         .push(request.clone());
                     let first = request.lines().next().unwrap_or_default().to_owned();
                     let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(5)));
-                    let response = route(&first, &config);
+                    if first.starts_with("GET /api/event") {
+                        // Head + server.connected go out immediately (the
+                        // client reads the first frame BEFORE submitting
+                        // the prompt); the remaining frames follow.
+                        let _ = stream.write_all(&sse_head());
+                        let _ = stream.write_all(&sse_frame(&json!({ "type": "server.connected" })));
+                        let _ = stream.flush();
+                        if config.promote_prompt {
+                            // The run's message id is client-generated;
+                            // wait (bounded) for the prompt POST and
+                            // reflect its id into the inbox event so the
+                            // prompt promotes.
+                            let mut prompt_id = None;
+                            for _ in 0..600 {
+                                let found = requests
+                                    .lock()
+                                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                    .iter()
+                                    .find(|r| r.starts_with("POST /api/session/s1/prompt"))
+                                    .and_then(|r| {
+                                        let start = r.find("\"id\":\"")? + 6;
+                                        let rest = &r[start..];
+                                        let end = rest.find('"')?;
+                                        Some(rest[..end].to_owned())
+                                    });
+                                if let Some(id) = found {
+                                    prompt_id = Some(id);
+                                    break;
+                                }
+                                std::thread::sleep(std::time::Duration::from_millis(10));
+                            }
+                            if let Some(id) = prompt_id {
+                                let _ = stream.write_all(&sse_frame(&event_value(
+                                    "session.inbox.delivered",
+                                    &json!({ "inboxID": id, "sessionID": "s1" }),
+                                    Some(TEST_DIRECTORY),
+                                )));
+                            }
+                        }
+                        for event in &config.sse_events {
+                            let _ = stream.write_all(&sse_frame(event));
+                        }
+                        let _ = stream.flush();
+                        // Drain briefly so the client sees the frames before close.
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                        let _ = stream.shutdown(std::net::Shutdown::Both);
+                        return;
+                    }
+                    let response = route(&first, &config, &requests);
                     let _ = stream.write_all(&response);
                     let _ = stream.flush();
                     if first.starts_with("GET /api/event") {
@@ -1517,22 +1596,9 @@ mod tests {
         RunMock { addr, requests }
     }
 
-    fn route(first: &str, config: &MockConfig) -> Vec<u8> {
-        // The SSE endpoint: server.connected + configured events, each frame
-        // double-encoded (JSON-in-string, `V2EventEncoded` parity).
+    fn route(first: &str, config: &MockConfig, requests: &Arc<Mutex<Vec<String>>>) -> Vec<u8> {
         if first.starts_with("GET /api/event") {
-            let mut payload = String::new();
-            for event in std::iter::once(json!({ "type": "server.connected" }))
-                .chain(config.sse_events.iter().cloned())
-            {
-                let text = event.to_string();
-                let encoded = serde_json::to_string(&text).expect("encode sse frame");
-                let _ = write!(payload, "data: {encoded}\n\n");
-            }
-            return format!(
-                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n{payload}"
-            )
-            .into_bytes();
+            return sse_response(config);
         }
         if first.starts_with("POST /api/session/s1/prompt") {
             return json_response(
@@ -1562,7 +1628,29 @@ mod tests {
             return empty_response();
         }
         if first.starts_with("GET /api/session/s1/message") {
-            return json_response("200 OK", r#"{"cursor":{"next":null},"data":[]}"#);
+            // Reflect the run's prompt id so reconcile finds it (the id
+            // is client-generated; see the promote_prompt note above).
+            let prompt_id = requests
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .iter()
+                .find_map(|r| {
+                    if !r.starts_with("POST /api/session/s1/prompt") {
+                        return None;
+                    }
+                    let start = r.find("\"id\":\"")? + 6;
+                    let rest = &r[start..];
+                    let end = rest.find('"')?;
+                    Some(rest[..end].to_owned())
+                })
+                .unwrap_or_else(|| "msg_missing".to_owned());
+            let body = json!({
+                "cursor": { "next": null },
+                "data": [ { "id": prompt_id, "sessionID": "s1", "type": "user",
+                            "text": "hi", "time": { "created": 1.0 }, "content": [] } ],
+            })
+            .to_string();
+            return json_response("200 OK", &body);
         }
         json_response("404 Not Found", r#"{"error":"not found"}"#)
     }
@@ -1636,6 +1724,51 @@ mod tests {
             cancel.contains(&format!("x-opencode-directory: {}", urlencoding(TEST_DIRECTORY))),
             "cancel must carry the directory header: {cancel}"
         );
+    }
+
+    /// G-54 (ref run/noninteractive.ts:203-204): a cancelled
+    /// NON-question form fails the run with exit code 1; a question
+    /// form cancelled with feedback keeps exit 0.
+    #[tokio::test]
+    async fn cancelled_non_question_form_exits_one() {
+        let plain = event_value(
+            "form.created",
+            &json!({ "form": form_value("frm_plain", "s1") }),
+            Some(TEST_DIRECTORY),
+        );
+        let config =
+            MockConfig { sse_events: vec![plain], promote_prompt: true, ..Default::default() };
+        let (mock, code) = run_against_mock(config, false).await;
+        assert!(
+            await_request(&mock, "DELETE /api/session/s1/form/frm_plain"),
+            "non-question form must be cancelled: {:?}",
+            mock.requests()
+        );
+        assert_eq!(code, 1, "a cancelled non-question form exits 1");
+    }
+
+    #[tokio::test]
+    async fn cancelled_question_form_keeps_exit_zero() {
+        let question = event_value(
+            "form.created",
+            &json!({ "form": {
+                "fields": [],
+                "id": "frm_q",
+                "sessionID": "s1",
+                "title": "t",
+                "metadata": { "kind": "question" }
+            } }),
+            Some(TEST_DIRECTORY),
+        );
+        let config =
+            MockConfig { sse_events: vec![question], promote_prompt: true, ..Default::default() };
+        let (mock, code) = run_against_mock(config, false).await;
+        assert!(
+            await_request(&mock, "DELETE /api/session/s1/form/frm_q"),
+            "question form must be cancelled with feedback: {:?}",
+            mock.requests()
+        );
+        assert_eq!(code, 0, "a question form cancel continues the run (exit 0)");
     }
 
     /// A `form.created` event for the global sentinel at our location is

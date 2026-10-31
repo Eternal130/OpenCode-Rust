@@ -546,6 +546,66 @@ async fn origin_gate_same_host_different_port_rejected() {
 }
 
 // ---------------------------------------------------------------------------
+// G-51 — persistent-PTY WS connect: ticket branch Origin check
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn persistent_connect_ticket_origin_gate_rejects_without_consuming() {
+    let server = boot().await;
+    let session_id = create_session(&server.client, "g51").await;
+    let (status, created, _) = raw_http(
+        server.addr,
+        "POST",
+        &format!("/api/experimental/session/{session_id}/terminal"),
+        &[("content-type", "application/json")],
+        serde_json::json!({ "title": "g51", "command": "sh", "args": ["-c", "sleep 30"], "env": {} })
+            .to_string()
+            .as_bytes(),
+    )
+    .await;
+    assert_eq!(status, 200, "terminal create: {created}");
+    let pty_id = created["data"]["id"].as_str().expect("pty id").to_owned();
+
+    // Issue a ticket through the persistent-pty connect-token route.
+    let (status, issued, _) = raw_http(
+        server.addr,
+        "POST",
+        &format!("/api/experimental/persistent-pty/{pty_id}/connect-token"),
+        &[("x-opencode-ticket", "1"), ("origin", "oc://renderer")],
+        &[],
+    )
+    .await;
+    assert_eq!(status, 200, "connect-token: {issued}");
+    let ticket = issued["data"]["ticket"].as_str().expect("ticket string").to_owned();
+
+    // Disallowed origin (same host, different port) → 403, ticket NOT
+    // consumed (ref persistent-pty.ts:110-118).
+    let (status, socket) = ws_connect_with_host(
+        server.addr,
+        &format!("/api/experimental/persistent-pty/{pty_id}/connect?ticket={ticket}"),
+        Some("http://example.com:9999"),
+        "example.com:8080",
+    )
+    .await
+    .expect("ws");
+    assert_eq!(status, 403, "disallowed origin must be rejected");
+    assert!(socket.is_none());
+
+    // The rejected attempt did not burn the ticket: the matching
+    // authority still upgrades.
+    let (status, socket) = ws_connect_with_host(
+        server.addr,
+        &format!("/api/experimental/persistent-pty/{pty_id}/connect?ticket={ticket}"),
+        Some("http://example.com:8080"),
+        "example.com:8080",
+    )
+    .await
+    .expect("ws");
+    assert_eq!(status, 101, "unconsumed ticket upgrades cleanly");
+    assert!(socket.is_some());
+}
+
+// ---------------------------------------------------------------------------
 // PTY-F3 — persistent-PTY resized frames carry the checkpoint
 // ---------------------------------------------------------------------------
 

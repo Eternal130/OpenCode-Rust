@@ -15,57 +15,28 @@ pub fn description() -> String {
     "Load a specialized skill's instructions and resources into the current conversation when the task at hand matches its description.\n\nThe skill ID must match an available skill or a skill explicitly referenced by the user.".to_string()
 }
 
-/// `Skill.prepare` — the model-facing output for one skill: the front-matter
-/// body plus referenced files (`instructions.md` convention: name directory,
-/// `output` = content).
+/// `Skill.prepare` (ref skill.ts:53-62 + plugin/skill.ts:38): the model
+/// facing output is the `<skill_content>` ENVELOPE (trimmed body, base
+/// directory note, and a sampled file-path listing — absolute, sorted,
+/// capped at 10, `SKILL.md` excluded) — never the raw file contents.
 pub fn prepare(skill: &Skill) -> std::io::Result<(String, String)> {
-    // name + directory from the SKILL.md path; output = the skill content
-    // joined with the referenced files inside the directory.
-    let path = std::path::Path::new(skill.path.as_str());
-    let directory =
-        path.parent().map(std::path::Path::to_string_lossy).unwrap_or_default().to_string();
-    let mut output = skill.content.clone();
-    if let Ok(entries) = std::fs::read_dir(&directory) {
-        let mut references: Vec<String> = entries
-            .flatten()
-            .filter(|entry| {
-                entry.path().is_file() && entry.file_name().to_string_lossy() != "SKILL.md"
-            })
-            .map(|entry| entry.path().to_string_lossy().to_string())
-            .collect();
-        references.sort();
-        for reference in references {
-            if let Ok(text) = std::fs::read_to_string(&reference) {
-                if !output.is_empty() {
-                    output.push_str("\n\n");
-                }
-                output.push_str(&text);
-            }
-        }
-    }
-    Ok((skill.name.to_string(), output))
+    let files = sample_skill_files(skill)?;
+    Ok((skill.name.to_string(), to_model_output(skill, files)))
 }
 
-/// `Skill.prepare` for the PROMPT path (core/session/prompt.ts:71 →
-/// `Skill.prepare(...).output` = `Skill.toModelOutput`): the model-facing
-/// text injected for an `@skill` attachment — the `<skill_content>`
-/// envelope wrapping the trimmed body, the base-directory note, and a
-/// SAMPLED file list (up to 10 files, `SKILL.md` excluded, scanned
-/// recursively with dot-files, sorted — ref skill.ts:33-73). Distinct
-/// from [`prepare`]: the tool leaf joins raw file CONTENTS; the prompt
-/// attachment carries the enveloped list.
+/// `Skill.prepare(...).output` for the PROMPT path (core/session/prompt.ts:71
+/// → `Skill.toModelOutput`): the same envelope injected for an `@skill`
+/// attachment.
 pub fn prompt_text(skill: &Skill) -> std::io::Result<String> {
+    let files = sample_skill_files(skill)?;
+    Ok(to_model_output(skill, files))
+}
+
+/// `toModelOutput` (ref skill.ts:33-50) — the `<skill_content>` envelope.
+fn to_model_output(skill: &Skill, files: Vec<String>) -> String {
     let path = std::path::Path::new(skill.path.as_str());
     let directory =
         path.parent().map(std::path::Path::to_string_lossy).unwrap_or_default().to_string();
-    // Only `SKILL.md` skills sample files (skill.ts:58-62); a bare
-    // skill file contributes the envelope with an empty list.
-    let mut files: Vec<String> = Vec::new();
-    if path.file_name().is_some_and(|name| name == "SKILL.md") {
-        collect_skill_files(std::path::Path::new(&directory), &mut files, 0);
-        files.sort();
-        files.truncate(10);
-    }
     let mut output = String::new();
     output.push_str(&format!("<skill_content name=\"{}\">\n", skill.name.as_str()));
     output.push_str(&format!("# Skill: {}\n\n", skill.name.as_str()));
@@ -82,7 +53,24 @@ pub fn prompt_text(skill: &Skill) -> std::io::Result<String> {
     }
     output.push_str("</skill_files>\n");
     output.push_str("</skill_content>");
-    Ok(output)
+    output
+}
+
+/// `fs.scan("**/*", { include: "file", dot: true })` under the skill
+/// directory — only `SKILL.md` skills sample files (skill.ts:58-62);
+/// a bare skill file contributes an empty list. Sorted, sliced to 10
+/// (ref skill.ts:59-63).
+fn sample_skill_files(skill: &Skill) -> std::io::Result<Vec<String>> {
+    let path = std::path::Path::new(skill.path.as_str());
+    let directory =
+        path.parent().map(std::path::Path::to_string_lossy).unwrap_or_default().to_string();
+    let mut files: Vec<String> = Vec::new();
+    if path.file_name().is_some_and(|name| name == "SKILL.md") {
+        collect_skill_files(std::path::Path::new(&directory), &mut files, 0);
+        files.sort();
+        files.truncate(10);
+    }
+    Ok(files)
 }
 
 /// Recursive file sampler (`fs.scan("**/*", { include: "file", dot: true })`,
@@ -225,7 +213,7 @@ mod tests {
     fn tool_skill_prepare_loads_model_facing_content() {
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("SKILL.md"), "unused").unwrap();
-        std::fs::write(directory.path().join("reference.md"), "reference").unwrap();
+        std::fs::write(directory.path().join("reference.md"), "reference contents").unwrap();
         let skill = Skill {
             id: SkillId::parse("effect"),
             name: SkillName::parse("Effect"),
@@ -236,7 +224,39 @@ mod tests {
         };
         let (name, output) = prepare(&skill).unwrap();
         assert_eq!(name, "Effect");
-        assert_eq!(output, "# Effect\n\nGuidance\n\nreference");
+        // G-53: the envelope lists file PATHS, never contents.
+        assert!(output.starts_with("<skill_content name=\"Effect\">\n# Skill: Effect\n"), "{output}");
+        let listed_reference = format!("<file>{}</file>", directory.path().join("reference.md").display());
+        assert!(output.contains(&listed_reference), "{output}");
+        assert!(!output.contains("reference contents"), "no file contents in the output");
+        assert!(output.ends_with("</skill_files>\n</skill_content>"));
+        // The prompt path shares the same envelope.
+        assert_eq!(prompt_text(&skill).unwrap(), output);
+    }
+
+    // G-53: >10 files ⇒ at most 10 sampled paths (ref skill.ts:63
+    // `.slice(0, 10)`), and no file contents ride the output.
+    #[test]
+    fn tool_skill_prepare_caps_the_file_listing_at_ten() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("SKILL.md"), "unused").unwrap();
+        for n in 0..15 {
+            std::fs::write(directory.path().join(format!("f{n:02}.txt")), format!("contents {n}")).unwrap();
+        }
+        let skill = Skill {
+            id: SkillId::parse("many"),
+            name: SkillName::parse("Many"),
+            description: None,
+            auto_invoke: None,
+            path: AbsolutePath::parse(directory.path().join("SKILL.md").to_str().unwrap()),
+            content: "Guidance".into(),
+        };
+        let (_, output) = prepare(&skill).unwrap();
+        let listed = output.matches("<file>").count();
+        assert_eq!(listed, 10, "exactly the 10-file sample cap: {output}");
+        for n in 0..15 {
+            assert!(!output.contains(&format!("contents {n}")), "no file contents: {output}");
+        }
     }
 
     #[test]

@@ -332,25 +332,25 @@ G-18 ✅ / G-19 ✅(死校验残留) / G-20 ✅ / G-21 ✅ / G-22 ✅ / G-23 ✅
 
 ## 🔴 高
 
-### G-50 ❌ snapshot restore/capture 不保真文件模式与符号链接
+### G-50 ✅ snapshot restore/capture 不保真文件模式与符号链接（已修：restore 按 tree entry filemode 恢复 symlink/可执行位，capture 以 read_link 入库 symlink 目标；commit 022c5ef）
 - rust `snapshot.rs:489-527`：`restore_blocking` 过滤 Blob 后直接 `fs::write`，tree entry 的 filemode（100755/120000）被完全忽略——symlink blob（内容=目标路径）被还原为**含目标文本的普通文件**，可执行位丢失；capture 侧同样只以 blob 内容入库，元数据双向丢失。
 - ref `git.ts:596-617` 经 `git checkout <tree> -- <file>` 原生恢复 exec bit 与 symlink。用户 revert 后仓库即损坏。
 - 与 G-30 同文件邻接但语义独立（G-30=gitconfig 钥匙）。
 
-### G-51 ❌ persistent-pty WS connect 缺 Origin 前置检查（安全）
+### G-51 ✅ persistent-pty WS connect 缺 Origin 前置检查（已修：connect ticket 分支复用 origin_allowed，403 且不消费 ticket；commit d5f5c00）
 - rust `persistent_pty.rs:275-283`：ticket 分支仅 `consume_ticket`，`:283` `let _ = headers;` 显式丢弃；同文件 `connect_token`（:247-249）反而有 `origin_allowed`——工具在手边未复用。
 - ref `persistent-pty.ts:110-115`：`isAllowedRequestOrigin` 不通过即 403 且不消费 ticket。修复即 connect 分支复用 `origin_allowed`。
 - 非 G-25 重复（G-25 是 pty.rs connect-token 端口剥离，已修）。
 
-### G-52 ❌ `opencode debug config` 脱敏弱于 ref（安全）
+### G-52 ✅ `opencode debug config` 脱敏弱于 ref（已修：secretName 全量对齐 + URL userinfo/query-secret 整体打码 + headers 子树传播；commit 45d7765）
 - ref `handlers/debug/redact.ts:2` secretName 含 `credential|private.?key|authorization$|cookie$`；`:11-17` URL 凭据/query-secret 整体打码 + headers 子树传播脱敏。调用链完整（index.ts:41 → config.ts:8,16）——**订正 G-17 原"redact 是 ref 死代码"断言（已改）**。
 - rust `oc-cli/handlers/misc.rs` `is_secret_key`（~:472-476）仅 `apikey/api_key/secret/token/password` contains；无 URL 检查、无 headers 传播。可能明文打印 ref 会遮蔽的密钥。
 
-### G-53 ❌ skill 工具输出格式错位
+### G-53 ✅ skill 工具输出格式错位（已修：prepare/prompt 共享 toModelOutput 信封 + 采样路径 .slice(0,10)；commit acf2e09）
 - ref：`tool/plugin/skill.ts:38` content = `Skill.prepare` → `toModelOutput`（skill.ts:36-53）= `<skill_content>` 信封 + `fs.scan` 采样**路径** `.slice(0,10)`。
 - rust `tool/skill.rs:24-47`：`prepare()` 把目录**全部文件内容**拼接（非递归、无 10 上限、无信封）；执行器 :172 调用之。信封实现已存在（`prompt_text` :55-82）但仅 prompt 附件路径使用。大技能目录会撑爆上下文。
 
-### G-54 ❌ run 非交互：非 question 表单取消退出码 0（ref 为 1）
+### G-54 ✅ run 非交互：非 question 表单取消退出码 0（已修：cancel_form 非 continuing 分支 record_exit(1)；commit 2f0e21a）
 - ref `run/noninteractive.ts:203-204`：`formCancelled` 非 v1 → `process.exitCode = 1`。
 - rust `run/noninteractive.rs:334` 仅置 `form_cancelled`；该标志在 :672-685/:1100/:1119/:1135 被用作**跳过**错误路径的条件，最终 exit 0。脚本按退出码判断 run 成败会漏检。修复：cancel_form 非 continuing 分支 `record_exit(1)`。
 
@@ -406,7 +406,7 @@ G-18 ✅ / G-19 ✅(死校验残留) / G-20 ✅ / G-21 ✅ / G-22 ✅ / G-23 ✅
 ### G-69 ❌ Diff base 对话框/记忆/懒缓存缺失（turn 模式已实现）
 - rust `fetch_diff`（app.rs:6463-6551）每次 fresh 调 `vcs().base`，无记忆 Map/懒缓存；全库无 `vcs.branch.list` 消费——**无任何入口可选 base 分支**（错误文案 "Choose a base branch" 存在但无选择器）。ref `diff-viewer.tsx:110-124,280`（bases 记忆 + 懒缓存 + "Remembered until TUI exits"）。
 
-### G-70 ❌ snapshot store 与 project id 不做 realpath（身份分裂）
+### G-70 ✅ snapshot store 与 project id 不做 realpath（已修：store id 改为 canonicalize(worktree) 哈希；commit 022c5ef）
 - rust `snapshot.rs:230-233` `hash_fast(worktree)` 无 canonicalize，且 Resolver 的 "canonical" 本身是词法的（project.rs:1252-1254、:964 自认）。ref `snapshot.ts:93-96` 先 `fs.realPath`（project.ts:338 同）。经 symlink 进入的仓库 → 不同 store，快照历史分裂。
 
 ### G-71 ❌ prettier/oxfmt 探测走项目 node_modules/.bin（同文件自相矛盾）
