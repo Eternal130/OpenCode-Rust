@@ -2120,6 +2120,7 @@ mod stdio_environment_seam {
                 stdin: Box::new(tokio::io::sink()),
                 stdout: Box::new(tokio::io::empty()),
                 stop: Box::new(|| {}) as StopChild,
+                stderr_tail: None,
             })
         }
     }
@@ -2166,6 +2167,52 @@ mod stdio_environment_seam {
         // The overlay carries BUN_BE_BUN for `opencode` + the config env.
         assert_eq!(spec.env.get("BUN_BE_BUN").map(String::as_str), Some("1"));
         assert_eq!(spec.env.get("MCP_VAR").map(String::as_str), Some("set"));
+    }
+
+    /// G-72: a local server that dies immediately after printing to
+    /// stderr surfaces the stderr tail in the connect-failure message.
+    #[tokio::test]
+    async fn connect_local_crash_diagnostics_include_stderr_tail() {
+        struct PassthroughSpawner;
+        #[async_trait::async_trait]
+        impl StdioSpawner for PassthroughSpawner {
+            async fn spawn_piped(&self, spec: StdioSpec) -> Result<PipedProcess, String> {
+                LocalStdioSpawner.spawn_piped(spec).await
+            }
+        }
+        let config = ServerConfig::Local(Box::new(LocalConfig {
+            command: vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                "echo 'fatal: port taken' >&2; exit 3".to_string(),
+            ],
+            cwd: None,
+            environment: None,
+            disabled: None,
+            codemode: None,
+            timeout: None,
+            protocol: None,
+        }));
+        let input = ConnectInput {
+            server: "crasher",
+            config: &config,
+            directory: "/tmp",
+            bearer: None,
+            elicitation: None,
+            stdio: Some(Arc::new(PassthroughSpawner)),
+        };
+        let result = tokio::time::timeout(Duration::from_secs(10), client::connect(input)).await;
+        let failure = match result.expect("settles") {
+            Ok(connection) => {
+                connection.close().await;
+                panic!("a dying child cannot connect");
+            }
+            Err(failure) => failure,
+        };
+        let client::ConnectFailure::Connect(error) = failure else {
+            panic!("expected a plain connect error");
+        };
+        assert!(error.message.contains("fatal: port taken"), "{}", error.message);
     }
 
     /// Byte-for-byte parity with the previous direct spawn: the local

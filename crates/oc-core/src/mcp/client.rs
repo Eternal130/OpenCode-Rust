@@ -100,7 +100,7 @@ use rmcp::ClientHandler;
 use thiserror::Error;
 use tokio::io::AsyncRead;
 
-use crate::environment::stdio::{PipedProcess, StdioSpawner, StdioSpec};
+use crate::environment::stdio::{FrameCapReader, PipedProcess, StdioSpawner, StdioSpec};
 
 /// Maximum time to establish and initialize the server.
 pub const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
@@ -1158,14 +1158,53 @@ async fn connect_local(
         env: stdio_overlay(command, local.environment.as_ref()),
         extend_env: true,
     };
-    let PipedProcess { stdin, stdout, stop } = spawner
+    let PipedProcess { stdin, stdout, stop, stderr_tail } = spawner
         .spawn_piped(spec)
         .await
         .map_err(|error| connect_failure(input.server, &StdioSpawnFailure(error)))?;
-    let stdout = StopOnDropReader { inner: stdout, stop: Some(stop) };
+    // G-72: rmcp's codec owns the framing, so the ref's 16 MiB frame cap
+    // (mcp/stdio.ts:15,121) is enforced at this seam — the reader we hand
+    // the transport — as a fail-fast io::Error on an oversized line.
+    let stdout = FrameCapReader::new(stdout);
+    let stdout = StopOnDropReader { inner: Box::new(stdout), stop: Some(stop) };
     // rmcp's async-rw transport over (read, write) — the same plumbing
     // TokioChildProcess wrapped internally.
-    start(input, (stdout, stdin), false).await
+    match start(input, (stdout, stdin), false).await {
+        Ok(connection) => Ok(connection),
+        Err(failure) => {
+            // G-72 crash diagnostics (ref mcp/stdio.ts:165-180): the
+            // process's last stderr bytes usually name the cause of an
+            // exit-during-handshake; give the drain task a short grace
+            // (the ref waits EXIT_WAIT on the exit code) and append the
+            // tail to the failure text.
+            let tail = stderr_tail.as_ref().map(|tail| async {
+                let deadline = tokio::time::Instant::now()
+                    + tokio::time::Duration::from_millis(300);
+                loop {
+                    let snapshot = tail.snapshot();
+                    if !snapshot.is_empty() || deadline < tokio::time::Instant::now() {
+                        return snapshot;
+                    }
+                    tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+                }
+            });
+            let tail = match tail {
+                Some(tail) => {
+                    let snapshot = tail.await;
+                    if snapshot.is_empty() { None } else { Some(snapshot) }
+                }
+                None => None,
+            };
+            match tail {
+                Some(tail) => Err(ConnectError {
+                    server: input.server.to_string(),
+                    message: format!("{failure}: {tail}"),
+                }
+                .into()),
+                None => Err(failure),
+            }
+        }
+    }
 }
 
 async fn connect_remote(
