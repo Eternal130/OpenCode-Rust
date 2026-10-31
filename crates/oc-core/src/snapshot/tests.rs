@@ -491,7 +491,78 @@ async fn snapshot_files_and_diff_error_on_non_git_without_initializing_a_store()
     );
 }
 
-// G-30 — the snapshot store pins its own git config (the ref's
+// G-50: capture/restore round-trips filemodes — a symlink snapshots its
+// target string (mode 120000) and restores as a symlink; an executable
+// (mode 100755) restores with the exec bit set. `git checkout <tree>`
+// semantics (ref git.ts:596-617).
+#[cfg(unix)]
+#[tokio::test]
+async fn snapshot_restore_preserves_symlink_and_exec_modes() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let (tmp, worktree, _) = temp_project();
+    std::fs::write(worktree.join("target.txt"), "contents\n").expect("write");
+    std::os::unix::fs::symlink("target.txt", worktree.join("link")).expect("symlink");
+    std::fs::write(worktree.join("run.sh"), "#!/bin/sh\n").expect("write script");
+    std::fs::set_permissions(worktree.join("run.sh"), std::fs::Permissions::from_mode(0o755))
+        .expect("chmod");
+    let service = store(tmp.path(), &worktree, ".");
+
+    let snap = service.capture().await.expect("capture");
+    // The symlink entry's mode is 120000 and its blob is the target string.
+    let repo = git2::Repository::open_bare(service.git_directory()).expect("store");
+    let tree = repo.find_tree(git2::Oid::from_str(snap.as_str()).unwrap()).expect("tree");
+    let link = tree.get_name("link").expect("link entry");
+    assert_eq!(link.filemode(), 0o120000);
+    let blob = repo.find_blob(link.id()).expect("blob");
+    assert_eq!(blob.content(), b"target.txt");
+    let script = tree.get_name("run.sh").expect("script entry");
+    assert_eq!(script.filemode(), 0o100755);
+
+    // Trash the worktree state, then restore.
+    std::fs::remove_file(worktree.join("link")).expect("unlink");
+    std::fs::write(worktree.join("link"), "now a plain file").expect("replace with file");
+    std::fs::write(worktree.join("run.sh"), "edited\n").expect("edit script");
+    std::fs::set_permissions(worktree.join("run.sh"), std::fs::Permissions::from_mode(0o644))
+        .expect("chmod down");
+
+    let mut restore = BTreeMap::new();
+    restore.insert("link".to_string(), snap.clone());
+    restore.insert("run.sh".to_string(), snap.clone());
+    service.restore(&restore).await.expect("restore");
+
+    // Symlink: still a symlink pointing at the original target, and its
+    // target file reads through the link.
+    let meta = std::fs::symlink_metadata(worktree.join("link")).expect("link meta");
+    assert!(meta.file_type().is_symlink(), "link restored as a symlink");
+    assert_eq!(std::fs::read_link(worktree.join("link")).unwrap(), Path::new("target.txt"));
+    assert_eq!(
+        std::fs::read_to_string(worktree.join("link")).unwrap(),
+        "contents\n",
+        "reading through the restored link resolves the original target"
+    );
+    // Executable: content restored AND mode 0755.
+    assert_eq!(std::fs::read_to_string(worktree.join("run.sh")).unwrap(), "#!/bin/sh\n");
+    let mode = std::fs::metadata(worktree.join("run.sh")).unwrap().permissions().mode();
+    assert_eq!(mode & 0o111, 0o111, "executable bit restored");
+}
+
+// G-70: the store id hashes the CANONICAL worktree path (ref
+// snapshot.ts:93-96 `fs.realPath`), so a symlinked alias resolves to the
+// same snapshot store.
+#[cfg(unix)]
+#[tokio::test]
+async fn snapshot_store_id_is_stable_across_symlinked_worktree_paths() {
+    let (tmp, worktree, _) = temp_project();
+    let alias = tmp.path().join("alias");
+    std::os::unix::fs::symlink(&worktree, &alias).expect("alias symlink");
+
+    let via_real = GitSnapshotStore::open(tmp.path(), "proj_snap", &worktree, ".").expect("real");
+    let via_alias = GitSnapshotStore::open(tmp.path(), "proj_snap", &alias, ".").expect("alias");
+    assert_eq!(via_real.git_directory(), via_alias.git_directory());
+}
+
+
 // `opencode.gitconfig` + `-c core.quotepath=false`): the host's global
 // `~/.gitconfig` (e.g. `autocrlf = true`) must never affect snapshot
 // diffing, and non-ASCII paths must round-trip raw.
