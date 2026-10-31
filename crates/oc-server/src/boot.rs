@@ -467,13 +467,14 @@ pub async fn boot_and_serve(options: &BootOptions) -> io::Result<ServeHandle> {
     // G-56 — `Credential.Switched` / `WellKnown.Updated` drive a config
     // reload (config.ts:306-311 subscribes both → `reload()`): the
     // reload re-reads the wellknown docs (the engine's own loop has
-    // refreshed them by the time `integration.updated` fires) and every
-    // live location graph is invalidated so the next use re-assembles
-    // from the credential-derived config.
+    // refreshed them by the time `integration.updated` fires); a reload
+    // that changes entries flows the existing bridge — config.updated +
+    // every live location invalidated — while a deep-equal reload stays
+    // silent (the m1 goldens pin the boot cascade's `integration.
+    // updated` as a NO-OP for locations).
     {
         use futures::StreamExt as _;
         let watched = Arc::clone(&watched_config);
-        let engine = Arc::clone(&app_state.engine);
         let mut subscription = app_state.engine.bus.subscribe_types(&[
             oc_core::bus::registry::CREDENTIAL_SWITCHED,
             oc_core::bus::registry::INTEGRATION_UPDATED,
@@ -481,9 +482,6 @@ pub async fn boot_and_serve(options: &BootOptions) -> io::Result<ServeHandle> {
         tokio::spawn(async move {
             while subscription.next().await.is_some() {
                 watched.request_reload();
-                for live in engine.live_locations() {
-                    engine.invalidate(&live).await;
-                }
             }
         });
     }
@@ -1303,11 +1301,11 @@ mod tests {
     }
 
     /// G-56 — a simulated `credential.switched` bus event drives the
-    /// config reload subscription: the watched config is reloaded (the
-    /// wellknown contributions participate via `.with_wellknown`) and
-    /// every live location graph is invalidated so the next use
-    /// re-assembles from the credential-derived config (config.ts:
-    /// 306-311 Credential.Switched → `reload()`).
+    /// config reload subscription: the watched config re-loads WITH the
+    /// wellknown contributions (`.with_wellknown`), and a reload whose
+    /// entries changed flows the existing bridge — `config.updated` +
+    /// invalidation of every live location graph (config.ts:306-311
+    /// Credential.Switched → `reload()`).
     #[tokio::test]
     async fn boot_credential_switched_reloads_config_and_invalidates_locations() {
         let root = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
@@ -1343,11 +1341,28 @@ mod tests {
         let handle = boot_and_serve(&options).await.expect("boot and serve");
         assert!(handle.state.watched_config.is_some(), "the boot started the watcher");
 
-        // Force a location assembly so the invalidation is observable.
+        // Force a location assembly so the invalidation below is
+        // observable, and subscribe to the bridge's publish.
+        let mut subscription =
+            handle.state.engine.bus.subscribe_types(&[oc_core::bus::registry::CONFIG_UPDATED]);
         let location = LocationRef::new(project.clone(), None);
         let _ = handle.state.engine.location(location.clone()).await.expect("assemble");
         assert!(handle.state.engine.locations.get(&location).is_some());
 
+        // The credential-side change the reload must pick up: a
+        // wellknown document (what a credential switch / wellknown
+        // refresh produces) enters the host snapshot, then the event.
+        handle
+            .state
+            .engine
+            .integration
+            .wellknown_documents()
+            .push_for_test(vec![oc_core::config::WellknownDocument {
+                source: "https://example.com".to_owned(),
+                dir: project.clone(),
+                text: r#"{"username": "wellknown"}"#.to_owned(),
+                env: std::collections::BTreeMap::new(),
+            }]);
         // The simulated credential switch.
         let definition =
             oc_core::bus::registry::by_type(oc_core::bus::registry::CREDENTIAL_SWITCHED)
@@ -1360,8 +1375,14 @@ mod tests {
             .await
             .expect("publish credential.switched");
 
-        // The live location graph was invalidated by the reload
-        // subscription (reload request + invalidation).
+        // The event-driven reload changed entries → the bridge published
+        // `config.updated` and invalidated the live location graph.
+        use futures::StreamExt as _;
+        let event = tokio::time::timeout(std::time::Duration::from_secs(10), subscription.next())
+            .await
+            .expect("config.updated within deadline")
+            .expect("subscription alive");
+        assert_eq!(event.type_, "config.updated");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while handle.state.engine.locations.get(&location).is_some() {
             assert!(
