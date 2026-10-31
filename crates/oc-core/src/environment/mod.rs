@@ -7,6 +7,7 @@ pub mod exec_defaults;
 pub mod files;
 pub mod local;
 pub mod memory;
+pub mod stdio;
 pub mod unavailable;
 pub mod workspace;
 
@@ -14,6 +15,10 @@ pub mod workspace;
 mod tests;
 
 pub use driver::{make_files, CommandSpec, Driver, ProcessOutput, SpawnError, Spawner};
+pub use stdio::{
+    BoxedReader, BoxedWriter, FailingStdioSpawner, LocalStdioSpawner, PipedProcess, StdioSpec,
+    StdioSpawner, StopChild,
+};
 pub use files::{
     type_following, DirEntry, FileInfo, FileType, Files, FilesError, Range, ReadResult,
 };
@@ -72,5 +77,16 @@ impl Environment {
     pub async fn files(&self, location: &LocationRef) -> Result<Arc<dyn Files>, String> {
         let driver = self.bind(location).await?;
         Ok(make_files(&driver))
+    }
+
+    /// Resolved streaming stdio spawner for a location — the seam the
+    /// MCP stdio transport spawns its servers through (ref
+    /// `mcp/stdio.ts` uses `Environment.Service`'s spawner).
+    pub async fn stdio(
+        &self,
+        location: &LocationRef,
+    ) -> Result<Arc<dyn crate::environment::stdio::StdioSpawner>, String> {
+        let driver = self.bind(location).await?;
+        Ok(driver.stdio)
     }
 }

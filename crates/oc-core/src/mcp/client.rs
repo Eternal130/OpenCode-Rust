@@ -96,9 +96,11 @@ use rmcp::service::{
 use rmcp::transport::streamable_http_client::{
     StreamableHttpClientTransport, StreamableHttpClientTransportConfig,
 };
-use rmcp::transport::TokioChildProcess;
 use rmcp::ClientHandler;
 use thiserror::Error;
+use tokio::io::AsyncRead;
+
+use crate::environment::stdio::{PipedProcess, StdioSpec, StdioSpawner};
 
 /// Maximum time to establish and initialize the server.
 pub const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
@@ -950,6 +952,12 @@ pub struct ConnectInput<'a> {
     /// argument): present ⇒ the client advertises the elicitation
     /// capability and answers `elicitation/create`.
     pub elicitation: Option<Arc<super::elicitation::ClientElicitation>>,
+    /// G-1 residual — the Environment stdio seam: stdio servers spawn
+    /// through this [`StdioSpawner`] (the location-bound Environment
+    /// service's driver) instead of a host-bound `Command`, mirroring
+    /// the ref's `mcp/stdio.ts`. `None` falls back to the local host
+    /// spawner (byte-identical spawn).
+    pub stdio: Option<Arc<dyn StdioSpawner>>,
 }
 
 /// Typed connect failures (`NeedsAuthError` / `ConnectError`).
@@ -1046,14 +1054,34 @@ where
     start(input, transport, remote).await
 }
 
-/// Environment for a stdio MCP server, mirroring the ref's local spawner
-/// semantics (`mcp/stdio.ts` passes `extendEnv: true`, and the local
-/// cross-spawn spawner flattens that to `{ ...process.env, ...opts.env }`):
-/// the child inherits the host environment in full — nothing is stripped,
-/// `PATH`/`HOME` included — with `BUN_BE_BUN=1` set for `opencode`
-/// commands (so nested spawns resolve to the same runtime) and the server
-/// config's `environment` entries overriding host values on collision.
-/// Order: host env < `BUN_BE_BUN` < config `environment`.
+/// Environment overlay a stdio MCP server declares (the caller side of
+/// the seam): `BUN_BE_BUN=1` for `opencode` commands (so nested spawns
+/// resolve to the same runtime) plus the server config's `environment`
+/// entries. The HOST environment is deliberately NOT merged here — the
+/// spawner merges its execution plane's own environment underneath via
+/// `extend_env` (the local driver extends with the host `process.env`,
+/// exactly the `{ ...process.env, ...opts.env }` cross-spawn semantics;
+/// a workspace driver would extend with the sandbox's environment so
+/// host variables never cross the seam). [`stdio_environment`] remains
+/// as the merge oracle for the local driver's byte-for-byte behavior.
+pub(super) fn stdio_overlay(
+    command: &str,
+    environment: Option<&BTreeMap<String, String>>,
+) -> BTreeMap<String, String> {
+    let mut env = BTreeMap::new();
+    if command == "opencode" {
+        env.insert("BUN_BE_BUN".to_string(), "1".to_string());
+    }
+    for (key, value) in environment.into_iter().flat_map(|map| map.iter()) {
+        env.insert(key.clone(), value.clone());
+    }
+    env
+}
+
+/// The local-driver merge oracle: `{ ...host, ...overlay(command,
+/// environment) }` — exactly the environment the local stdio spawner's
+/// `extend_env` path produces.
+#[cfg(test)]
 pub(super) fn stdio_environment(
     host: impl IntoIterator<Item = (String, String)>,
     command: &str,
@@ -1068,6 +1096,38 @@ pub(super) fn stdio_environment(
     }
     env
 }
+
+/// Stdout half carrying the child's stop closure: when the transport
+/// drops the reader (connection closed / service torn down) the child is
+/// killed, mirroring the scope-owned `ChildProcessHandle` of the ref's
+/// env-routed stdio transport (and rmcp's kill-on-drop child).
+struct StopOnDropReader {
+    inner: crate::environment::stdio::BoxedReader,
+    stop: Option<crate::environment::stdio::StopChild>,
+}
+
+impl AsyncRead for StopOnDropReader {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        Pin::new(self.inner.as_mut()).poll_read(cx, buf)
+    }
+}
+
+impl Drop for StopOnDropReader {
+    fn drop(&mut self) {
+        if let Some(stop) = self.stop.take() {
+            stop();
+        }
+    }
+}
+
+/// A connect-time spawn failure surfaced through the stdio seam.
+#[derive(Debug, Error)]
+#[error("{0}")]
+struct StdioSpawnFailure(String);
 
 async fn connect_local(
     input: &ConnectInput<'_>,
@@ -1084,16 +1144,28 @@ async fn connect_local(
         Some(cwd) => normalize_path(&std::path::Path::new(input.directory).join(cwd)),
         None => input.directory.to_string(),
     };
-    let env = stdio_environment(std::env::vars(), command, local.environment.as_ref());
-    let mut builder = tokio::process::Command::new(command);
-    builder.args(args).current_dir(&cwd).env_clear().envs(&env);
-    #[cfg(unix)]
-    {
-        builder.process_group(0);
-    }
-    let transport =
-        TokioChildProcess::new(builder).map_err(|error| connect_failure(input.server, &error))?;
-    start(input, transport, false).await
+    // G-1 residual — spawn through the Environment stdio seam (the
+    // location-bound driver) instead of a host-bound Command; the local
+    // driver reproduces the previous spawn byte-for-byte (`extend_env`
+    // merges the host environment beneath the overlay).
+    let spawner = input.stdio.clone().unwrap_or_else(|| {
+        Arc::new(crate::environment::stdio::LocalStdioSpawner) as Arc<dyn StdioSpawner>
+    });
+    let spec = StdioSpec {
+        command: command.clone(),
+        args: args.to_vec(),
+        cwd,
+        env: stdio_overlay(command, local.environment.as_ref()),
+        extend_env: true,
+    };
+    let PipedProcess { stdin, stdout, stop } = spawner
+        .spawn_piped(spec)
+        .await
+        .map_err(|error| connect_failure(input.server, &StdioSpawnFailure(error)))?;
+    let stdout = StopOnDropReader { inner: stdout, stop: Some(stop) };
+    // rmcp's async-rw transport over (read, write) — the same plumbing
+    // TokioChildProcess wrapped internally.
+    start(input, (stdout, stdin), false).await
 }
 
 async fn connect_remote(
