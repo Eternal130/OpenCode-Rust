@@ -963,8 +963,21 @@ impl PersistentPty {
         data: &str,
         attachment_id: Option<&str>,
     ) -> PubResult<()> {
+        self.write_bytes(id, data.as_bytes(), attachment_id).await
+    }
+
+    /// `write` with raw bytes (index.ts:182-192) — non-framed WS binary
+    /// input is forwarded byte-for-byte (persistent-pty.ts:203-216); a
+    /// lossy UTF-8 round-trip would corrupt multibyte/escape sequences.
+    #[allow(clippy::unused_async_trait_impl)] // async surface parity with index.ts
+    pub async fn write_bytes(
+        &self,
+        id: &PtyId,
+        data: &[u8],
+        attachment_id: Option<&str>,
+    ) -> PubResult<()> {
         self.get(id)?;
-        self.inner.write(id, data.as_bytes(), attachment_id);
+        self.inner.write(id, data, attachment_id);
         Ok(())
     }
 

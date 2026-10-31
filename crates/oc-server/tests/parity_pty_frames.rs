@@ -204,6 +204,11 @@ impl WsClient {
         self.send_frame(0x1, text.as_bytes()).await
     }
 
+    /// Sends one masked binary frame.
+    pub async fn send_binary(&mut self, payload: &[u8]) -> std::io::Result<()> {
+        self.send_frame(0x2, payload).await
+    }
+
     async fn send_frame(&mut self, opcode: u8, payload: &[u8]) -> std::io::Result<()> {
         use rand::Rng as _;
         let mask: [u8; 4] = rand::thread_rng().gen();
@@ -682,4 +687,91 @@ async fn resized_checkpoint() {
         "resized carries a non-empty base64 checkpoint: {resized}"
     );
     assert!(resized["generation"].is_u64(), "resized carries the attachment generation: {resized}");
+}
+
+// ---------------------------------------------------------------------------
+// G-63 — persistent-PTY connect parity for unknown ids + raw binary input
+// ---------------------------------------------------------------------------
+
+/// Unknown persistent pty: the WS upgrade ALWAYS completes, then the
+/// socket closes with CloseEvent(4404, "terminal unavailable")
+/// (ref persistent-pty.ts:126,152-158) — never a pre-upgrade 404.
+#[tokio::test]
+async fn persistent_connect_unknown_pty_upgrades_then_closes_4404() {
+    let server = boot().await;
+    let (status, socket) = ws_connect(
+        server.addr,
+        "/api/experimental/persistent-pty/pty_missing/connect",
+        None,
+    )
+    .await
+    .expect("ws");
+    assert_eq!(status, 101, "unknown pty still upgrades");
+    let mut socket = socket.expect("upgraded");
+    let close = socket.recv(std::time::Duration::from_secs(10)).await.expect("close frame");
+    assert_eq!(close_code(&close), 4404);
+    assert_eq!(close_reason(&close), "terminal unavailable");
+}
+
+/// Non-framed binary input is forwarded byte-for-byte (ref :203-216): a
+/// multibyte/invalid-UTF-8 payload must survive the round trip through
+/// `cat` un-mangled (the old path lossy-converted to U+FFFD).
+#[tokio::test]
+async fn persistent_nonframed_binary_input_is_raw() {
+    let server = boot().await;
+    let session_id = create_session(&server.client, "g63").await;
+    let (status, created, _) = raw_http(
+        server.addr,
+        "POST",
+        &format!("/api/experimental/session/{session_id}/terminal"),
+        &[("content-type", "application/json")],
+        serde_json::json!({ "title": "g63", "command": "sh", "args": ["-c", "cat; sleep 30"], "env": {} })
+            .to_string()
+            .as_bytes(),
+    )
+    .await;
+    assert_eq!(status, 200, "terminal create: {created}");
+    let pty_id = created["data"]["id"].as_str().expect("pty id").to_owned();
+
+    let (status, socket) = ws_connect(
+        server.addr,
+        &format!("/api/experimental/persistent-pty/{pty_id}/connect"),
+        None,
+    )
+    .await
+    .expect("ws");
+    assert_eq!(status, 101);
+    let mut socket = socket.expect("upgraded");
+    while let Some(frame) = socket.recv(std::time::Duration::from_secs(10)).await {
+        if frame.opcode == 0x1 && frame.text().contains("\"replay_complete\"") {
+            break;
+        }
+    }
+
+    // "héllo" (multibyte UTF-8) + a raw 0xFF byte + a newline.
+    let mut payload = "héllo".as_bytes().to_vec();
+    payload.push(0xFF);
+    payload.push(b'\n');
+    socket.send_binary(&payload).await.expect("send binary");
+
+    // The terminal echoes the input verbatim (writer echo + cat output).
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut collected: Vec<u8> = Vec::new();
+    while tokio::time::Instant::now() < deadline {
+        let Some(frame) = socket.recv(std::time::Duration::from_secs(2)).await else { break };
+        if frame.opcode == 0x2 {
+            collected.extend_from_slice(&frame.payload);
+            let text = "héllo".as_bytes();
+            if collected.windows(text.len() + 2).any(|window| {
+                window[..text.len()] == *text && window[text.len()] == 0xFF
+            }) {
+                assert!(
+                    !collected.windows(3).any(|window| window == [0xEF, 0xBF, 0xBD].as_slice()),
+                    "raw 0xFF must not become U+FFFD"
+                );
+                return;
+            }
+        }
+    }
+    panic!("raw binary echo not observed, collected: {collected:02X?}");
 }
