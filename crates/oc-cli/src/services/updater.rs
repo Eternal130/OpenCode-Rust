@@ -600,7 +600,7 @@ async fn fetch_text(url: &str) -> Result<String, String> {
 }
 
 async fn download_bytes(url: &str, total: Duration) -> Result<Vec<u8>, String> {
-    let client = reqwest::Client::builder()
+    let client = oc_http::builder()
         .connect_timeout(Duration::from_secs(5))
         .timeout(total)
         .build()

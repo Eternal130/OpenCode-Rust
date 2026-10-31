@@ -140,7 +140,7 @@ fn opencode_server(answer: &FormAnswer) -> String {
 
 async fn opencode_authorize(answer: FormAnswer) -> Result<Authorization, String> {
     let server = opencode_server(&answer);
-    let http = reqwest::Client::new();
+    let http = oc_http::client();
     let device = flows::request_device_code(
         &http,
         &format!("{server}/auth/device/code"),
@@ -213,7 +213,7 @@ async fn opencode_refresh(value: OAuthValue) -> Result<CredentialValue, String> 
         .and_then(|metadata| metadata.get("server"))
         .and_then(Value::as_str)
         .map_or_else(|| OPENCODE_DEFAULT_SERVER.to_owned(), String::from);
-    let http = reqwest::Client::new();
+    let http = oc_http::client();
     let response = http
         .post(format!("{server}/auth/device/token"))
         .form(&[
@@ -401,7 +401,7 @@ async fn copilot_authorize(answer: FormAnswer) -> Result<Authorization, String> 
         "github.com".to_owned()
     };
     let (device_endpoint, token_endpoint, api) = copilot_urls(&domain);
-    let http = reqwest::Client::new();
+    let http = oc_http::client();
     let device = flows::request_device_code(
         &http,
         &device_endpoint,
@@ -515,7 +515,7 @@ fn install_xai(host: &IntegrationHost) {
 }
 
 async fn xai_authorize(_answer: FormAnswer) -> Result<Authorization, String> {
-    let http = reqwest::Client::new();
+    let http = oc_http::client();
     let device = flows::request_device_code(
         &http,
         &format!("{XAI_ISSUER}/device/code"),
@@ -571,7 +571,7 @@ async fn xai_authorize(_answer: FormAnswer) -> Result<Authorization, String> {
 }
 
 async fn xai_refresh(value: OAuthValue) -> Result<CredentialValue, String> {
-    let http = reqwest::Client::new();
+    let http = oc_http::client();
     let response = http
         .post(format!("{XAI_ISSUER}/token"))
         .form(&[
@@ -805,7 +805,7 @@ async fn poe_exchange(
     redirect: &str,
     verifier: &str,
 ) -> Result<CredentialValue, String> {
-    let http = reqwest::Client::new();
+    let http = oc_http::client();
     let response = http
         .post(token_url)
         .form(&[

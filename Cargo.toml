@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/oc-util",
+    "crates/oc-http",
     "crates/oc-schema",
     "crates/oc-theme",
     "crates/oc-ai",
@@ -39,6 +40,7 @@ tree-sitter-toml = { path = "third_party/tree-sitter-toml" }
 
 [workspace.dependencies]
 oc-util = { path = "crates/oc-util" }
+oc-http = { path = "crates/oc-http" }
 oc-tui-core = { path = "crates/oc-tui-core" }
 oc-schema = { path = "crates/oc-schema" }
 oc-theme = { path = "crates/oc-theme" }

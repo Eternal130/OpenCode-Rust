@@ -55,7 +55,7 @@ impl ReqwestCatalogSource {
 #[async_trait]
 impl CatalogSource for ReqwestCatalogSource {
     async fn fetch_text(&self) -> Result<String, String> {
-        let client = reqwest::Client::builder()
+        let client = oc_http::builder()
             .timeout(Duration::from_secs(10))
             .build()
             .map_err(|error| format!("catalog http client: {error}"))?;

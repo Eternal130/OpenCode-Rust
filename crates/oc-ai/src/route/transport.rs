@@ -518,7 +518,7 @@ pub mod reqwest_transport {
     impl ReqwestTransport {
         #[must_use]
         pub fn new() -> Self {
-            Self { client: reqwest::Client::new() }
+            Self { client: oc_http::client() }
         }
 
         #[must_use]

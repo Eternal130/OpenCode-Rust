@@ -146,7 +146,7 @@ pub async fn run(
     } else {
         let mut spec_url = reqwest::Url::parse(&endpoint.url).expect("valid endpoint url");
         spec_url.set_path("/openapi.json");
-        let spec_request = reqwest::Client::new().get(spec_url);
+        let spec_request = oc_http::client().get(spec_url);
         let spec_request = match basic_auth_header(endpoint.password.as_deref()) {
             Some(auth) => spec_request.header("authorization", auth),
             None => spec_request,
@@ -204,7 +204,7 @@ pub async fn run(
 
     let method =
         reqwest::Method::from_bytes(resolved_request.method.as_bytes()).expect("valid method");
-    let http = reqwest::Client::new();
+    let http = oc_http::client();
     let mut request = http.request(method, url);
     if let Some(auth) = basic_auth_header(endpoint.password.as_deref()) {
         request = request.header("authorization", auth);

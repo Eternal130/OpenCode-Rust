@@ -15,7 +15,7 @@ pub type Http = reqwest::Client;
 
 #[must_use]
 pub fn http_client(useragent: &str) -> Http {
-    reqwest::Client::builder().user_agent(useragent).build().expect("reqwest client")
+    oc_http::builder().user_agent(useragent).build().expect("reqwest client")
 }
 
 // ---------------------------------------------------------------------------

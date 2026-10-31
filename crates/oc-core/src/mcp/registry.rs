@@ -500,7 +500,7 @@ impl McpRegistry {
                 endpoint_loads: dashmap::DashMap::new(),
                 connector,
                 credentials,
-                http: reqwest::Client::new(),
+                http: oc_http::client(),
                 applied: SyncMutex::new(None),
                 overrides: SyncMutex::new(BTreeMap::new()),
                 reconcile_lock: AsyncMutex::new(()),
