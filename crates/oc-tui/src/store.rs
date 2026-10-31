@@ -7086,6 +7086,19 @@ impl Store {
         self.shell_view.set(view);
     }
 
+    /// G-6 residual — the shell id of the TOPMOST `DialogShellOutput`
+    /// viewer, when one is open. The run loop rides its periodic tick
+    /// on this to re-fetch the view every 1s (ref
+    /// dialog-shell-output.tsx's 1s live poll) without spawning any
+    /// thread of its own.
+    #[must_use]
+    pub fn active_shell_output_viewer(&self) -> Option<String> {
+        self.dialogs.get().last().and_then(|entry| match &entry.kind {
+            DialogKind::ShellOutput { shell_id } => Some(shell_id.clone()),
+            _ => None,
+        })
+    }
+
     /// Whether the session's turn is RUNNING (the interrupt gate, v2's
     /// `enabled: status() === "running"`): the trailing message is
     /// either a submitted user prompt (no assistant yet) or an
@@ -14978,4 +14991,21 @@ fn parent_route_resolves_through_the_registry() {
     assert!(store.navigate_parent("kid"), "the up-route navigated");
     assert_eq!(store.route(), Route::Session { session_id: "root".to_owned() });
     assert!(!store.navigate_parent("root"), "a root has no parent");
+}
+
+/// G-6 residual — the 1s viewer poll targets ONLY the topmost
+/// `DialogShellOutput`: the run loop re-issues `ShellView` while it is
+/// topmost and stops the moment another dialog (or none) covers it.
+#[test]
+fn shell_output_viewer_poll_targets_topmost_dialog() {
+    let store = Store::new(Runtime::new());
+    assert_eq!(store.active_shell_output_viewer(), None, "no dialog open");
+    store.push_dialog(DialogKind::ShellOutput { shell_id: "shl_a".to_owned() });
+    assert_eq!(store.active_shell_output_viewer().as_deref(), Some("shl_a"));
+    store.push_dialog(DialogKind::ServerList { command: "model.list", title: "Switch model" });
+    assert_eq!(store.active_shell_output_viewer(), None, "a covered viewer stops polling");
+    store.pop_dialog();
+    assert_eq!(store.active_shell_output_viewer().as_deref(), Some("shl_a"));
+    store.pop_dialog();
+    assert_eq!(store.active_shell_output_viewer(), None, "closed viewer stops polling");
 }
