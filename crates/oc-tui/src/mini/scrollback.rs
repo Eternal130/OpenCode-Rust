@@ -33,6 +33,11 @@ pub struct Commit {
     pub compaction: bool,
     /// `summary` (the turn-summary row: rendered by the caller).
     pub summary: bool,
+    /// G-68 — `StreamCommit["image"]`: the image commit's data URI
+    /// (`data:{mime};base64,{data}`, stream-v2.image.ts). `None` on
+    /// every text commit (the mono writer renders the row's `text`
+    /// label; the URI is the dedup/display seam).
+    pub image: Option<String>,
 }
 
 /// `StreamCommit["kind"]` (the text subset).
