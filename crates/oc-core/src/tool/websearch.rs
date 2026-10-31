@@ -309,12 +309,21 @@ fn current_year() -> i64 {
     now_ms() as i64 / 31_557_600_000 + 1970
 }
 
+/// The websearch progress payload (websearch.ts:63): `{provider}`.
+fn provider_progress_payload(provider: &str) -> serde_json::Value {
+    serde_json::json!({ "provider": provider })
+}
+
 /// The websearch leaf executor (Form-based provider selection included).
 pub struct WebSearchExecute {
     pub search: Arc<WebSearch>,
     pub forms: Forms,
     /// Serializes the consent flow across concurrent searches.
     lock: Arc<tokio::sync::Mutex<()>>,
+    /// v2 `context.progress({provider})` (websearch.ts:63
+    /// `onProvider: provider => context.progress({provider: provider.id})`)
+    /// — the LIVE metadata for the running search card.
+    progress: Option<super::ProgressFn>,
 }
 
 #[derive(serde::Deserialize)]
@@ -324,7 +333,14 @@ struct Input {
 
 impl WebSearchExecute {
     pub fn new(search: Arc<WebSearch>, forms: Forms) -> Self {
-        Self { search, forms, lock: Arc::new(tokio::sync::Mutex::new(())) }
+        Self { search, forms, lock: Arc::new(tokio::sync::Mutex::new(())), progress: None }
+    }
+
+    /// Attach the runner's `context.progress` channel (websearch.ts:63).
+    #[must_use]
+    pub fn with_progress(mut self, progress: Option<super::ProgressFn>) -> Self {
+        self.progress = progress;
+        self
     }
 }
 
@@ -502,6 +518,7 @@ impl ToolExecuteWithContext for WebSearchExecute {
         let search_service = Arc::clone(&self.search);
         let executor_forms = self.forms.clone();
         let executor_lock = Arc::clone(&self.lock);
+        let executor_progress = self.progress.clone();
         Box::pin(async move {
             let input: Input = serde_json::from_value(input)
                 .map_err(|error| ToolFailure::message(format!("Invalid arguments: {error}")))?;
@@ -569,6 +586,13 @@ impl ToolExecuteWithContext for WebSearchExecute {
                 };
                 ToolFailure { message, cause: Some(super::FailureCause::Nested(error.to_string())) }
             })?;
+            // websearch.ts:63 — `context.progress({provider: provider.id})`
+            // when the provider takes over. The rust `WebSearch.query` seam
+            // resolves the provider internally, so the payload fires with
+            // the resolved provider at the result boundary.
+            if let Some(progress) = &executor_progress {
+                progress(&context, provider_progress_payload(&response.provider_id.0));
+            }
             let content = if response.results.is_empty() {
                 NO_RESULTS.to_string()
             } else {
@@ -684,6 +708,12 @@ mod tests {
                 Arc::new(FixedProvider { id: "tavily", name: "Tavily" }),
             ],
         )
+    }
+
+    /// G-74: the progress payload (websearch.ts:63) is `{provider}`.
+    #[test]
+    fn tool_websearch_progress_payload_is_provider_id() {
+        assert_eq!(provider_progress_payload("exa"), serde_json::json!({ "provider": "exa" }));
     }
 
     #[tokio::test]

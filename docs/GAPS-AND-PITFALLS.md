@@ -315,7 +315,7 @@
 - **G-44 ✅ NO_PROXY bare-host 语义偏差**：已修复——bare host 精确相等、`.`/`*` 前缀后缀匹配、空白+逗号分隔。
 
 ### 🟢 低
-- **G-45 ❌ agent-client-protocol-schema 无 drift 守卫**：同为 vendored+同一 preserve_order 改动（third_party/agent-client-protocol-schema/Cargo.toml:103，同样经 [patch.crates-io] 钉定），acp_drift.py:39-40 的 VENDORED 硬编码只覆盖主包。扩 guard 即可。
+- **G-45 ✅（lane7）**：acp_drift.py 已按 crate 参数化（每 crate 钉 sha256、独立 pristine env 覆盖 ACP_SCHEMA_PRISTINE_DIR），agent-client-protocol-schema 1.11.0 与主包同样走 upstream+LOCAL_CHANGES.patch 端到端校验，guard 对两包跑通。
 - **G-46 ✅（lane5）**：dialog.plugins.error 打开失败插件的 error 详情（ErrorDetails 对话框，esc 回插件列表；无失败行为无操作）。
 - **G-47 ✅（lane6）**：连接成功即复位 backoff attempt（editor.ts:223 open 监听）；空字符串 CLAUDE_CODE_SSE_PORT 现按 ref falsy `||` 落到 OPENCODE_EDITOR_SSE_PORT。
 - **G-48 ✅（lane4）**：reload bridge 在失效 location 前重导 `Limits::from_entries` 并 `Engine::reload_tool_output_limits`（boot.rs ConfigReloadBridge），assemble 改读 `ToolOutput::current_limits` 活值——改 `tool_output.*` 免重启生效。
@@ -376,11 +376,11 @@ G-18 ✅ / G-19 ✅(死校验残留) / G-20 ✅ / G-21 ✅ / G-22 ✅ / G-23 ✅
 ### G-60 ✅ list_mcp_resources 模型内容固定占位文本（已修：content 改为 stringify(catalog) 全 JSON）
 - rust `tool/mcp_resource.rs:213` content 恒 `"Listed MCP resources"`；ref `runtime.ts:57,259-264` normalizeContent → stringify(catalog) 全文。模型在直接对话路径拿不到目录内容（output JSON 仍正确）。
 
-### G-61 ❌ CLI auth login 无 target 时缺交互集成选择器
-- rust `oc-cli/handlers/auth.rs:278-284`：无条件报错 exit 1。ref `auth/login.ts:46-110`：TTY 下 `selectIntegration`（MCP/Popular/Services 分类、connected 标记）。
+### G-61 ✅（lane7）：CLI auth login 无 target 时走交互集成选择器
+- TTY 无 target 时弹 dialoguer 选择器：loginChoices 排序（MCP → Popular[优先级表] → Services，name/id 决胜）+ connected ✓ 标记，选中后按 id 解析；非 TTY 保持 requireInteractive 报错。
 
-### G-62 ❌ CLI plugin check/update 不覆盖 TUI(npm) 插件
-- rust `oc-cli/handlers/plugin.rs` check（:426+）/update（:478+）只调 server 运行时；`configured_tui_plugins` 仅 list 使用。ref `plugin/inventory.ts:52-78` TUI 项走 `npm.check`；`plugin/update.ts:29` 走 `npm.update`。CLI 层缺口，与 G-29/G-46（TUI 管理页）不同层，交叉引用。
+### G-62 ✅（lane7）：CLI plugin check/update 覆盖 TUI(npm) 插件
+- check 合并 Server+TUI 分区输出（ref inventory.ts `format`：每行 `name version (update available|current|check failed)`，hex 版本截 7 位），TUI 项走 oc-plugin-host `npm_check`（无 24h 缓存）；update 对 TUI 项走 npm update 安装流，任一 check/update 错误 exit 1。
 
 ### G-63 ✅ persistent-pty connect 协议分歧（已修：未知 pty 一律升级后 4404 关闭；非 framed 二进制输入原样字节直传 write_bytes）
 - ① 不存在的 pty：rust `persistent_pty.rs:276-278` 升级前 HTTP 404；ref（persistent-pty.ts:126,152-158）一律升级后 `CloseEvent(4404, "terminal unavailable")`——WS 客户端错误路径完全不同。
@@ -409,23 +409,22 @@ G-18 ✅ / G-19 ✅(死校验残留) / G-20 ✅ / G-21 ✅ / G-22 ✅ / G-23 ✅
 ### G-70 ✅ snapshot store 与 project id 不做 realpath（已修：store id 改为 canonicalize(worktree) 哈希；commit 022c5ef）
 - rust `snapshot.rs:230-233` `hash_fast(worktree)` 无 canonicalize，且 Resolver 的 "canonical" 本身是词法的（project.rs:1252-1254、:964 自认）。ref `snapshot.ts:93-96` 先 `fs.realPath`（project.ts:338 同）。经 symlink 进入的仓库 → 不同 store，快照历史分裂。
 
-### G-71 ❌ prettier/oxfmt 探测走项目 node_modules/.bin（同文件自相矛盾）
-- rust `formatter.rs:585-598`（`npm_bin` 向上找 node_modules/.bin）供 prettier/oxfmt；同文件 Biome 分支（:708-718）反而正确走 `npm_which`。ref `builtins.ts:81,95` `Npm.which`（全局 cache + 缺失自动安装，npm.ts:400-435）。项目声明依赖但未安装（或 pnpm/bun 布局）时 rust 报 disabled、ref 可用。
+### G-71 ✅（lane7）：prettier/oxfmt 探测改走 npm_which
+- PackageJsonDependency 分支改用与 Biome 相同的 `npm_which`（全局 cache 世代 + 按需自动安装），依赖探测仍以 findUp package.json 为门；项目 node_modules/.bin 链 `npm_bin` 已删除。
 
-### G-72 ❌ MCP stdio 缺 16MiB 帧上限与 stderr 尾巴诊断
-- rust `mcp/client.rs` 无帧上限（rmcp 传输）；spawn 侧 `environment/stdio.rs:70-107` stderr **inherited** 不 pipe。ref `mcp/stdio.ts:15,121`（MAX_FRAME_BYTES=16MiB fail-fast）+ `:56,91,146-184`（stderr 滚动保留进崩溃诊断）。失控 server 可撑爆内存；崩溃只报 exit code 无线索。
+### G-72 ✅（lane7）：MCP stdio 16MiB 帧上限 + stderr 尾巴诊断
+- rmcp codec 拥有分帧，故上限在受控 seam 实施：交给传输的 reader 包 `FrameCapReader`（按行计数、超限 fail-fast 报 "MCP stdio frame exceeded 16 MiB"，读缓冲回滚遵守 AsyncRead 错误契约）；LocalStdioSpawner stderr 改 pipe + 后台 drain 进 8KiB 滚动尾巴，本地 server connect 失败附带尾巴文本（短 grace 等待 drain）。
 
 ## 🟢 低
 
-### G-73 ❌ heredoc 剥离不容忍闭合标记尾随空白
-- rust `patch_util.rs:105-108` `strip_suffix` 后仅剥一个 `\n`；`"EOF "`/`"EOF\n"` → 整个 heredoc 剥离失败 → "first line must be '*** Begin Patch'"。ref `util/patch.ts:381` 正则尾部 `\2\s*$` 容忍。（create_dir_all 半条已撤销：ref Bun.write 同样建父目录。）
+### G-73 ✅（lane7）：heredoc 剥离容忍闭合标记尾随空白
+- strip_heredoc 闭合标记后先 trim_end 再剥标记与前置换行，`"EOF "`/`"EOF\n"`/`"EOF \t\n\n"` 均正常剥离。（create_dir_all 半条已撤销：ref Bun.write 同样建父目录。）
 
-### G-74 ❌ progress 事件缺口 + webfetch permission metadata 缺 timeout
-- shell `context.progress({shellID})`（ref shell.ts:217）、websearch `progress({provider})`（websearch.ts:63）、codemode `progress({toolCalls})`（codemode/tool.ts:88）均零移植；webfetch permission metadata 仅 `{url,format}`（webfetch.rs:198-201 vs ref `metadata: input` 含 timeout）。
+### G-74 ✅（lane7）：progress 事件 + webfetch permission metadata
+- 共享 `ProgressFn` 通道（runner 级 session.tool.progress 发布器，同 subagent）：shell spawn 后 `{shellID}`、websearch 结果边界 `{provider}`（rust query seam 内部定 provider，故在结果边界发）、codemode 叶子 `{toolCalls}`（runtime seam 对逐调用更新不可见，程序落定后发一次完整清单）；webfetch permission metadata 为完整输入 `{url,format,timeout}`。
 
-### G-75 ❌ session export/import CLI 行为偏差
-- export 取消：rust 退出 0 + println 到 stdout（session.rs:245-247,156-158）；ref 130 + clack UI 全走 stderr（export.ts:30,53-66）——管道重定向时污染导出内容。
-- import：rust 任意 JSON 直通；ref 经 SessionTransfer Schema 校验规范化（import.ts:25-26）。
+### G-75 ✅（lane7）：session export/import CLI 行为对齐
+- export：选择器 clack 风格状态输出全走 stderr（stdout 保留给导出内容），取消 exit 130、无会话仍 exit 0；import：先按 SessionTransfer 形状（`{info: Session.Info, messages: []}`）校验，坏载荷报清晰错误拒绝。
 
 ### G-76 ✅ persistentPty.update payload 放宽（已修：oc-schema 增 UpdateInput；size 必填、非法 400，无 80/24 回退）
 - rust `persistent_pty.rs:175-186`：size 可缺省（静默跳过 resize 仍 200）、非法值回退 80/24；ref schema `size` 必填 PositiveInt，缺失 → 400（persistent-pty.ts:36-39）。oc-schema 无 UpdateInput 类型。
@@ -490,7 +489,7 @@ G-18 ✅ / G-19 ✅(死校验残留) / G-20 ✅ / G-21 ✅ / G-22 ✅ / G-23 ✅
 - **G-42 ✅**：WSS_PROXY/WS_PROXY 已优先咨询，再回落 HTTPS/HTTP(S)_PROXY/ALL_PROXY（lane2, 17947d9）。
 - **G-43 ✅**：loopback（127.0.0.1/localhost/::1）已恒直连（lane2, 2d889a9）。
 - **G-44 ✅**：NO_PROXY 已改 ref 语义——bare host 精确相等、`.`/`*` 前缀后缀匹配、空白+逗号分隔（lane2, df29fd3）。
-- **G-45 ❌**：acp_drift.py:58 VENDORED 仍只覆盖主包，agent-client-protocol-schema 未守卫。
+- **G-45 ✅（lane7）**：guard 已按 crate 参数化，schema 包同样守卫（LOCAL_CHANGES.patch 已提交）。
 - **G-46 ✅（lane5 收口）**：dialog.plugins.error 打开失败插件的 error 详情（plugins.tsx:224-228 的 "view error"）——ErrorDetails 对话框（可滚动、esc 回插件列表；无失败行为无操作）。
 - **G-47 ✅（lane6 收口）**：backoff 复位 + falsy env fallback 均已修（editor_ide.rs ConnectOutcome.opened → attempt=0；env_editor_port filter 空串）。
 - **G-49 ℹ️**：4 子项仍准确（spinner 受 mini/runtime.rs:38-39 TICK=100ms 约束；stdio.rs:11,:27 vs :104 措辞与实现不符；project.rs:1103-1105 过时注释——本条与 G-4 修复同源，可随清理收口；proxy.rs:367-369,:318 webpki 一致性声明在 G-26 后仍失效）。

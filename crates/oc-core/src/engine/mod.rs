@@ -1341,12 +1341,15 @@ impl Engine {
         // nested call). The request shaping and the catalog instruction
         // key off the executor's presence.
         if let Some(runtime) = self.code_mode_runtime.clone() {
-            crate::tool::codemode::register_code_mode(
+            crate::tool::codemode::register_code_mode_with_limits(
                 &graph.tools,
                 &graph.hooks,
                 &tool_services,
                 runtime,
                 self.code_mode_timeout,
+                crate::tool::codemode::ExecutionLimits::default(),
+                // codemode/tool.ts:88 `context.progress({toolCalls})`.
+                Some(tool_progress_channel(scoped_bus.clone())),
             );
         }
 
@@ -2188,6 +2191,9 @@ fn shell_plugin(engine: &Engine, inputs: &Arc<PluginInputs>) -> InternalPlugin {
             portable_scanner: experimental.portable_shell_scanner.unwrap_or(false),
             config_shell: config_shell.clone(),
             synthetic: Arc::new(BusSyntheticPublisher { bus: bus.clone() }),
+            // shell.ts:217 `context.progress({shellID})` — the same
+            // runner-level channel the subagent tool uses.
+            progress: Some(tool_progress_channel(bus.clone())),
         });
         tool::register_builtin(
             ports.tools,
@@ -2242,6 +2248,27 @@ fn skill_plugin(inputs: &Arc<PluginInputs>) -> InternalPlugin {
             &inputs.tool_services,
             skill_tool::tool(Arc::clone(&inputs.skills) as Arc<dyn SkillTable>),
         )
+    })
+}
+
+/// The runner-level `context.progress` channel (step.ts:96): a tool's
+/// progress payload lands as an ephemeral `session.tool.progress` event
+/// on the bus carrying the tool CALL id (G-74; shared by the shell,
+/// websearch, codemode, and subagent tools).
+fn tool_progress_channel(bus: crate::bus::Bus) -> tool::ProgressFn {
+    Arc::new(move |context: &crate::location::ToolCallContext, metadata| {
+        let data = serde_json::json!({
+            "sessionID": context.session_id.as_str(),
+            "assistantMessageID": context.message_id,
+            "id": context.call_id,
+            "metadata": metadata,
+        });
+        let bus = bus.clone();
+        tokio::spawn(async move {
+            let def = crate::bus::registry::by_type_latest("session.tool.progress")
+                .unwrap_or_else(|| panic!("no session.tool.progress definition"));
+            let _ = bus.publish(def, data, crate::bus::PublishOptions::default()).await;
+        });
     })
 }
 
@@ -2371,14 +2398,19 @@ fn websearch_plugin(inputs: &Arc<PluginInputs>) -> InternalPlugin {
     let inputs = Arc::clone(inputs);
     InternalPlugin::new("opencode.tool.websearch", move |hooks, ports| {
         let search = Arc::clone(&inputs.websearch);
+        let progress = inputs
+            .tool_services
+            .bus
+            .clone()
+            .map(|bus| tool_progress_channel(bus));
         tool::register_builtin(
             ports.tools,
             hooks,
             &inputs.tool_services,
-            websearch::tool(Arc::new(websearch::WebSearchExecute::new(
-                search,
-                inputs.forms.clone(),
-            ))),
+            websearch::tool(Arc::new(
+                websearch::WebSearchExecute::new(search, inputs.forms.clone())
+                    .with_progress(progress),
+            )),
         )
     })
 }

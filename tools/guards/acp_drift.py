@@ -3,8 +3,10 @@
 r"""G-27 — vendored ACP drift detection.
 
 ``third_party/agent-client-protocol`` is crates.io ``agent-client-protocol``
-3.3.0 with ONE local change (the ``preserve_order`` default-feature removal,
-see the comment at the bottom of the vendored ``Cargo.toml``). Nothing
+3.3.0 and ``third_party/agent-client-protocol-schema`` is crates.io
+``agent-client-protocol-schema`` 1.11.0 — each with ONE local change (the
+``preserve_order`` default-feature removal, see the comments at the bottom
+of the vendored ``Cargo.toml`` files). Nothing
 enforced that "exactly upstream + exactly the recorded local changes"
 invariant — a silent edit to the vendored sources would ride every build
 with no provenance. This guard enforces it:
@@ -47,16 +49,39 @@ import tempfile
 import urllib.request
 from pathlib import Path
 
-VERSION = "3.3.0"
-CRATE = f"agent-client-protocol-{VERSION}"
-CRATE_URL = f"https://static.crates.io/crates/agent-client-protocol/{CRATE}.crate"
-# sha256 of the .crate tarball (computed from the registry cache; the same
-# pin makes the download leg tamper-evident offline or on).
-CRATE_SHA256 = "02898d848a20eb09b8a392e85bb3a4c79dba01d369758185d102b001362a60da"
-
 REPO = Path(__file__).resolve().parent.parent.parent
-VENDORED = REPO / "third_party" / "agent-client-protocol"
-PATCH = VENDORED / "LOCAL_CHANGES.patch"
+
+
+class CrateSpec:
+    """One vendored crates.io crate the guard watches."""
+
+    def __init__(self, name: str, version: str, sha256: str, env_override: str):
+        self.name = name
+        self.version = version
+        self.crate = f"{name}-{version}"
+        self.url = f"https://static.crates.io/crates/{name}/{self.crate}.crate"
+        # sha256 of the .crate tarball (computed from the registry cache;
+        # the same pin makes the download leg tamper-evident offline or on).
+        self.sha256 = sha256
+        self.vendored = REPO / "third_party" / name
+        self.patch = self.vendored / "LOCAL_CHANGES.patch"
+        self.env_override = env_override
+
+
+CRATES = [
+    CrateSpec(
+        "agent-client-protocol",
+        "3.3.0",
+        "02898d848a20eb09b8a392e85bb3a4c79dba01d369758185d102b001362a60da",
+        "ACP_PRISTINE_DIR",
+    ),
+    CrateSpec(
+        "agent-client-protocol-schema",
+        "1.11.0",
+        "3d9a84a76a4f44721e0d8dabcd85b219893c43d6171a4a033d84844d85880823",
+        "ACP_SCHEMA_PRISTINE_DIR",
+    ),
+]
 
 # Registry-side metadata that never belongs to the vendored tree (skipped
 # on the pristine side; their absence in the vendored tree is not drift).
@@ -77,7 +102,7 @@ def log(verbose: bool, message: str) -> None:
 # step 1 — pristine sources
 # --------------------------------------------------------------------------
 
-def registry_candidates() -> list[Path]:
+def registry_candidates(spec: CrateSpec) -> list[Path]:
     roots = []
     cargo_home = os.environ.get("CARGO_HOME")
     if cargo_home:
@@ -87,45 +112,45 @@ def registry_candidates() -> list[Path]:
     for root in roots:
         src = root / "registry" / "src"
         if src.is_dir():
-            found.extend(sorted(src.glob(f"*/{CRATE}")))
+            found.extend(sorted(src.glob(f"*/{spec.crate}")))
     return [path for path in found if (path / "Cargo.toml").is_file()]
 
 
-def download_pristine(dest: Path) -> Path:
-    print(f"acp-drift: downloading pinned {CRATE}.crate (sha256 {CRATE_SHA256[:16]}…)")
-    archive = dest / f"{CRATE}.crate"
-    urllib.request.urlretrieve(CRATE_URL, archive)  # noqa: S310 - pinned https URL
+def download_pristine(spec: CrateSpec, dest: Path) -> Path:
+    print(f"acp-drift: downloading pinned {spec.crate}.crate (sha256 {spec.sha256[:16]}…)")
+    archive = dest / f"{spec.crate}.crate"
+    urllib.request.urlretrieve(spec.url, archive)  # noqa: S310 - pinned https URL
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-    if digest != CRATE_SHA256:
+    if digest != spec.sha256:
         raise RuntimeError(
-            f"{CRATE}.crate sha256 mismatch: got {digest}, pinned {CRATE_SHA256}"
+            f"{spec.crate}.crate sha256 mismatch: got {digest}, pinned {spec.sha256}"
         )
     with tarfile.open(archive) as tar:
         tar.extractall(dest, filter="data")
-    extracted = dest / CRATE
+    extracted = dest / spec.crate
     if not (extracted / "Cargo.toml").is_file():
         raise RuntimeError(f"archive layout unexpected: no Cargo.toml under {extracted}")
     return extracted
 
 
-def locate_pristine(tmp: Path, offline: bool, verbose: bool) -> Path:
-    override = os.environ.get("ACP_PRISTINE_DIR")
+def locate_pristine(spec: CrateSpec, tmp: Path, offline: bool, verbose: bool) -> Path:
+    override = os.environ.get(spec.env_override)
     if override:
         path = Path(override)
         if not (path / "Cargo.toml").is_file():
-            raise RuntimeError(f"ACP_PRISTINE_DIR={path} has no Cargo.toml")
-        log(verbose, f"pristine from ACP_PRISTINE_DIR: {path}")
+            raise RuntimeError(f"{spec.env_override}={path} has no Cargo.toml")
+        log(verbose, f"pristine from {spec.env_override}: {path}")
         return path
-    for candidate in registry_candidates():
+    for candidate in registry_candidates(spec):
         log(verbose, f"pristine from registry cache: {candidate}")
         return candidate
     if offline:
         raise RuntimeError(
             "no pristine sources in the registry cache and --offline refuses the "
             "download; run without --offline, or fetch the .crate manually "
-            f"(sha256 {CRATE_SHA256}) and point ACP_PRISTINE_DIR at it"
+            f"(sha256 {spec.sha256}) and point {spec.env_override} at it"
         )
-    return download_pristine(tmp)
+    return download_pristine(spec, tmp)
 
 
 # --------------------------------------------------------------------------
@@ -144,10 +169,10 @@ def tree_files(root: Path, skip: set[str] = frozenset()) -> dict[str, bytes]:
     return files
 
 
-def render_patch(pristine: Path) -> str:
+def render_patch(spec: CrateSpec, pristine: Path) -> str:
     """Unified diff pristine → vendored over text files, stable output."""
     left = tree_files(pristine, skip=PRISTINE_ONLY | OUT_OF_SCOPE)
-    right = tree_files(VENDORED, skip=OUT_OF_SCOPE)
+    right = tree_files(spec.vendored, skip=OUT_OF_SCOPE)
     chunks = []
     for rel in sorted(set(left) | set(right)):
         old = left.get(rel)
@@ -172,8 +197,8 @@ def render_patch(pristine: Path) -> str:
             "".join(line if line.endswith("\n") else line + "\n" for line in diff)
         )
     header = (
-        f"# Local changes to vendored {CRATE} (crates.io) vs the pristine\n"
-        f"# tarball (sha256 {CRATE_SHA256}). Regenerate with\n"
+        f"# Local changes to vendored {spec.crate} (crates.io) vs the pristine\n"
+        f"# tarball (sha256 {spec.sha256}). Regenerate with\n"
         f"#   python3 tools/guards/acp_drift.py --update\n"
     )
     return header + "".join(chunks)
@@ -272,6 +297,75 @@ def apply_patch(pristine: Path, patch_text: str, target: Path) -> list[str]:
     return touched
 
 
+def run_guard(spec: CrateSpec, update: bool, offline: bool, verbose: bool, tmp: Path) -> int:
+    if not (spec.vendored / "Cargo.toml").is_file():
+        print(f"acp-drift: missing vendored tree at {spec.vendored}", file=sys.stderr)
+        return 2
+
+    pristine = locate_pristine(spec, tmp, offline=offline, verbose=verbose)
+    expected = render_patch(spec, pristine)
+
+    if update:
+        spec.patch.write_text(expected)
+        print(f"acp-drift: regenerated {spec.patch.relative_to(REPO)} — commit it")
+        return 0
+
+    if not spec.patch.is_file():
+        spec.patch.write_text(expected)
+        print(
+            f"acp-drift: extracted {spec.patch.relative_to(REPO)} (none was committed); "
+            "commit it and re-run",
+            file=sys.stderr,
+        )
+        return 2
+
+    committed = spec.patch.read_text()
+    if committed != expected:
+        print(
+            "acp-drift: LOCAL_CHANGES.patch is stale vs the vendored tree — "
+            "regenerate with `python3 tools/guards/acp_drift.py --update` "
+            "and commit (with a ledger note) if the change is intentional",
+            file=sys.stderr,
+        )
+        for line in difflib.unified_diff(
+            committed.splitlines(), expected.splitlines(),
+            fromfile="committed LOCAL_CHANGES.patch", tofile="vendored tree",
+            lineterm="",
+        ):
+            print(line, file=sys.stderr)
+        return 1
+
+    # The patch matches the computed diff; prove it end-to-end by
+    # applying the COMMITTED bytes to the pristine copy and diffing
+    # against the vendored tree (catches a hand-massaged patch that
+    # textually equals nothing real, and any applier drift).
+    staged = tmp / f"staged-{spec.name}"
+    try:
+        apply_patch(pristine, committed, staged)
+    except RuntimeError as error:
+        print(f"acp-drift: {error}", file=sys.stderr)
+        return 2
+    residual = []
+    for rel, blob in tree_files(staged, skip=PRISTINE_ONLY | OUT_OF_SCOPE).items():
+        want = (spec.vendored / rel)
+        if not want.is_file() or want.read_bytes() != blob:
+            residual.append(rel)
+    extra = [
+        rel for rel in tree_files(spec.vendored, skip=OUT_OF_SCOPE)
+        if not (staged / rel).is_file()
+    ]
+    if residual or extra:
+        print(
+            f"acp-drift: DRIFT — vendored third_party/{spec.name} "
+            f"differs from upstream {spec.version} + LOCAL_CHANGES.patch:",
+            file=sys.stderr,
+        )
+        for rel in sorted(set(residual) | set(extra)):
+            print(f"  {rel}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--update", action="store_true", help="regenerate LOCAL_CHANGES.patch")
@@ -279,78 +373,13 @@ def main() -> int:
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
 
-    if not (VENDORED / "Cargo.toml").is_file():
-        print(f"acp-drift: missing vendored tree at {VENDORED}", file=sys.stderr)
-        return 2
-
     with tempfile.TemporaryDirectory(prefix="acp-drift-") as raw:
-        try:
-            pristine = locate_pristine(Path(raw), offline=args.offline, verbose=args.verbose)
-            expected = render_patch(pristine)
-        except RuntimeError as error:
-            print(f"acp-drift: {error}", file=sys.stderr)
-            return 2
-
-        if args.update:
-            PATCH.write_text(expected)
-            print(f"acp-drift: regenerated {PATCH.relative_to(REPO)} — commit it")
-            return 0
-
-        if not PATCH.is_file():
-            PATCH.write_text(expected)
-            print(
-                f"acp-drift: extracted {PATCH.relative_to(REPO)} (none was committed); "
-                "commit it and re-run",
-                file=sys.stderr,
-            )
-            return 2
-
-        committed = PATCH.read_text()
-        if committed != expected:
-            print(
-                "acp-drift: LOCAL_CHANGES.patch is stale vs the vendored tree — "
-                "regenerate with `python3 tools/guards/acp_drift.py --update` "
-                "and commit (with a ledger note) if the change is intentional",
-                file=sys.stderr,
-            )
-            for line in difflib.unified_diff(
-                committed.splitlines(), expected.splitlines(),
-                fromfile="committed LOCAL_CHANGES.patch", tofile="vendored tree",
-                lineterm="",
-            ):
-                print(line, file=sys.stderr)
-            return 1
-
-        # The patch matches the computed diff; prove it end-to-end by
-        # applying the COMMITTED bytes to the pristine copy and diffing
-        # against the vendored tree (catches a hand-massaged patch that
-        # textually equals nothing real, and any applier drift).
-        staged = Path(raw) / "staged"
-        try:
-            apply_patch(pristine, committed, staged)
-        except RuntimeError as error:
-            print(f"acp-drift: {error}", file=sys.stderr)
-            return 2
-        residual = []
-        for rel, blob in tree_files(staged, skip=PRISTINE_ONLY | OUT_OF_SCOPE).items():
-            want = (VENDORED / rel)
-            if not want.is_file() or want.read_bytes() != blob:
-                residual.append(rel)
-        extra = [
-            rel for rel in tree_files(VENDORED, skip=OUT_OF_SCOPE)
-            if not (staged / rel).is_file()
-        ]
-        if residual or extra:
-            print(
-                "acp-drift: DRIFT — vendored third_party/agent-client-protocol "
-                "differs from upstream 3.3.0 + LOCAL_CHANGES.patch:",
-                file=sys.stderr,
-            )
-            for rel in sorted(set(residual) | set(extra)):
-                print(f"  {rel}", file=sys.stderr)
-            return 1
-
-    print("acp-drift: ok — vendored tree is upstream 3.3.0 + LOCAL_CHANGES.patch")
+        failures = 0
+        for spec in CRATES:
+            status = run_guard(spec, args.update, args.offline, args.verbose, Path(raw))
+            if status != 0:
+                return status
+            print(f"acp-drift: ok — third_party/{spec.name} is upstream {spec.version} + LOCAL_CHANGES.patch")
     return 0
 
 
