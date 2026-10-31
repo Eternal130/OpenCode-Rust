@@ -126,6 +126,15 @@ impl oc_core::config::watch::ConfigUpdated for ConfigReloadBridge {
         let location = self.location.clone();
         self.runtime.spawn(async move {
             crate::announce::publish_empty(&engine, "config.updated", &location).await;
+            // G-48 — the tool_output budget re-derives from the
+            // reloaded entries BEFORE the invalidations below, so every
+            // re-assembled location's shell captures honor the new
+            // limits (v2 ConfigEntryObserver, tool-output.ts).
+            if let Some((watched, _)) = hooks.as_ref() {
+                engine.reload_tool_output_limits(oc_core::tool_output::Limits::from_entries(
+                    &watched.loaded().entries,
+                ));
+            }
             for live in engine.live_locations() {
                 engine.invalidate(&live).await;
             }

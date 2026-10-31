@@ -374,9 +374,6 @@ pub struct Engine {
     pub references: Arc<crate::reference::ReferenceService>,
     reference_sweeper: Option<tokio::task::JoinHandle<()>>,
     tool_output: Arc<ToolOutput>,
-    /// G-33 — the configured truncation budget for the per-location
-    /// shell captures (fed to each `Shell` at assembly).
-    tool_output_limits: crate::tool_output::Limits,
     /// The v2 location service map (graph lifecycle authority: adopt /
     /// invalidate / reload + the TTL sweeper).
     pub locations: Arc<LocationServiceMap>,
@@ -684,7 +681,6 @@ impl Engine {
             references,
             reference_sweeper,
             tool_output,
-            tool_output_limits: options.tool_output_limits,
             locations: Arc::clone(&locations),
             services,
             inputs: Arc::new(DashMap::new()),
@@ -833,6 +829,15 @@ impl Engine {
     #[must_use]
     pub fn live_locations(&self) -> Vec<LocationRef> {
         self.services.locations()
+    }
+
+    /// G-48 — hot re-apply of the config `tool_output` budget on a
+    /// config reload (v2 ConfigEntryObserver, config/plugin/tool-output
+    /// .ts): swaps the shared service's limits; locations invalidated
+    /// after this re-assemble their `Shell` captures under the new
+    /// budget (assembly reads `ToolOutput::current_limits` live).
+    pub fn reload_tool_output_limits(&self, limits: crate::tool_output::Limits) {
+        self.tool_output.configure(limits);
     }
 
     /// Whether a location watcher is running for the location (RV-G2).
@@ -1050,8 +1055,11 @@ impl Engine {
         // The `shell.create.before` production dispatch target + the
         // config `shell` key (ShellSelect "config" priority).
         .with_hooks(Arc::clone(&hooks))
-        // G-33 — the capture truncation budget (config `tool_output`).
-        .with_output_limits(self.tool_output_limits)
+        // G-33 — the capture truncation budget (config `tool_output`):
+        // read LIVE from the shared service so a G-48 hot re-apply
+        // (`reload_tool_output_limits`) reaches locations assembled
+        // after the reload.
+        .with_output_limits(self.tool_output.current_limits())
         .with_config_shell(config_shell_of(&config_documents));
         let jobs =
             Arc::new(Jobs::new((*self.db).clone(), Arc::clone(&self.ids), Arc::clone(&self.clock)));
