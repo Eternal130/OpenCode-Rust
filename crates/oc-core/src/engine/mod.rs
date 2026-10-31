@@ -916,6 +916,24 @@ impl Engine {
         // daemon booted in one directory thereby serves every project's
         // config-seeded providers.
         let mut location_providers = providers_from_config(&loaded);
+        // G-64: the plugin host's `ctx.provider.transform` table folds
+        // into THIS location's overlay before the resolver binds (the
+        // same v2 activation order — plugins after config); the
+        // `ctx.reference.transform` sources land in the engine's
+        // ReferenceService.
+        if let Some(source) = &self.plugin_source {
+            let provider_defs = source.provider_defs();
+            if !provider_defs.is_empty() {
+                crate::plugin_apply::apply_plugin_providers(
+                    &mut location_providers,
+                    &provider_defs,
+                );
+            }
+            let reference_defs = source.reference_defs();
+            if !reference_defs.is_empty() {
+                crate::plugin_apply::apply_plugin_references(&self.references, &reference_defs);
+            }
+        }
         let config_documents = Arc::new(crate::config::agent_md::load_documents(&loaded.entries));
 
         // The managed-policy runtime (CONFIG-C7, config/plugin/policy.ts):
