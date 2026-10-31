@@ -100,7 +100,7 @@ use rmcp::ClientHandler;
 use thiserror::Error;
 use tokio::io::AsyncRead;
 
-use crate::environment::stdio::{PipedProcess, StdioSpec, StdioSpawner};
+use crate::environment::stdio::{PipedProcess, StdioSpawner, StdioSpec};
 
 /// Maximum time to establish and initialize the server.
 pub const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);

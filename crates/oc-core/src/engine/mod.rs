@@ -1071,9 +1071,8 @@ impl Engine {
         // byte-identical to the previous host-bound spawn; a bind
         // failure (unknown/destroyed workspace placement) falls back to
         // the local spawner rather than dying at boot.
-        let workspace = Arc::new(crate::environment::WorkspaceService::new(Arc::clone(
-            &self.projects,
-        )));
+        let workspace =
+            Arc::new(crate::environment::WorkspaceService::new(Arc::clone(&self.projects)));
         let environment = crate::environment::Environment::with_workspace(workspace);
         let stdio = match environment.bind(location).await {
             Ok(driver) => driver.stdio,
