@@ -1102,7 +1102,8 @@ pub mod worktree_strategy {
 
     /// The per-location registry (strategies.ts:48-65): git seeded by
     /// default and selected; `add` would delete+set+select (plugin
-    /// strategies stay unsupported in the Rust port).
+    /// strategies register via `GuestWorktreeStrategy` — see
+    /// plugin_apply.rs and oc-server/plugins.rs).
     pub struct StrategyRegistry {
         strategies: Vec<Box<dyn Strategy>>,
     }
