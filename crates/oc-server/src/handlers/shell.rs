@@ -43,9 +43,16 @@ async fn create(
 ) -> Result<Response, ApiError> {
     let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let services = services(&state, &location).await?;
+    // ref shell.ts:265 — `cwd: input.cwd ?? location.directory`: fall back to
+    // the location's directory when the request omits cwd (or sends "").
+    let cwd = body["cwd"]
+        .as_str()
+        .filter(|value| !value.is_empty())
+        .map(String::from)
+        .unwrap_or_else(|| location.as_path().to_string_lossy().into_owned());
     let input = oc_schema::shell::CreateInput {
         command: body["command"].as_str().unwrap_or_default().to_owned(),
-        cwd: body["cwd"].as_str().map(String::from),
+        cwd: Some(cwd),
         timeout: body.get("timeout").and_then(Value::as_u64),
         metadata: body["metadata"].as_object().map(|map| map.clone().into_iter().collect()),
     };

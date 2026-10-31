@@ -1141,6 +1141,42 @@ async fn handlers_shell_round_trip() {
     client.shell().remove(&shell.id, &ShellRemoveQuery::default()).await.expect("remove");
 }
 
+// G-55 — ref shell.ts:265 `input.cwd ?? location.directory`: omitting cwd
+// (or sending "") must spawn in the location's directory, not the server's
+// process cwd.
+#[tokio::test]
+async fn handlers_shell_create_defaults_cwd_to_location() {
+    let server = boot().await;
+    let client = &server.client;
+    // boot() chdirs to the workspace tempdir, which is the location.
+    let directory = std::env::current_dir().expect("cwd").to_string_lossy().into_owned();
+
+    for body in [serde_json::json!({"command": "pwd"}), serde_json::json!({"command": "pwd", "cwd": ""})] {
+        let shell = client
+            .shell()
+            .create(&ShellCreateQuery::default(), &serde_json::from_value(body).unwrap())
+            .await
+            .expect("shell create")
+            .data;
+        for _ in 0..50 {
+            let current = client.shell().get(&shell.id, &ShellGetQuery::default()).await.expect("get");
+            if current.data.status != ShellInfoStatus::Running {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+        }
+        let output =
+            client.shell().output(&shell.id, &ShellOutputQuery::default()).await.expect("output").data;
+        let printed = output.output.trim();
+        assert!(
+            printed == directory || std::path::Path::new(printed).canonicalize().ok().as_deref()
+                == std::path::Path::new(&directory).canonicalize().ok().as_deref(),
+            "pwd {printed:?} should be location {directory:?}"
+        );
+        client.shell().remove(&shell.id, &ShellRemoveQuery::default()).await.expect("remove");
+    }
+}
+
 #[tokio::test]
 async fn handlers_fs_read_write_list() {
     let server = boot().await;
