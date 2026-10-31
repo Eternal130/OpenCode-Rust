@@ -356,24 +356,24 @@ G-18 ✅ / G-19 ✅(死校验残留) / G-20 ✅ / G-21 ✅ / G-22 ✅ / G-23 ✅
 
 ## 🟡 中
 
-### G-55 ❌ shell create 缺省 cwd 继承服务器进程 cwd
+### G-55 ✅ shell create 缺省 cwd 继承服务器进程 cwd（已修：handler 侧 cwd None/空回退 location.directory，对齐 shell.ts:265；commit lane3）
 - rust `shell.rs:562` `unwrap_or_default()`，`create_invocation` 仅非空时 `current_dir`（:648-650）。工具路径安全（tool/shell.rs:165-168 显式覆写）；**生产命中点：HTTP `POST /api/shell`**（oc-server/handlers/shell.rs:40-52 直接透传可能为 None 的 body.cwd）。ref `shell.ts:265` `input.cwd ?? location.directory`。修复：handler 侧用 location 兜底。
 
 ### G-56 ❌ 凭据/wellknown 变更不驱动 config 重载与 location 失效（勘误 #4 半边修正）
 - 刷新循环与 HostWellknownSource 接线属实（engine/mod.rs:570-596、:900-903）——勘误 #4 只对了这一半。缺的半边：①全仓 `request_reload` 生产调用点为零（仅 WatchedConfig 自身文件 watch 驱动，config.rs:655,671）；②credential/integration 事件不触发 location invalidate（ConfigReloadBridge 只挂文件 watch，boot.rs:113-140）——已 assemble 的 location 持旧 wellknown 快照直到其他原因失效；③boot 的 watch_loader 无 `.with_wellknown`（boot.rs:241-266）。
 - ref `config.ts:306-322` 订阅 Credential.Switched / WellKnown.Updated → `reload()`；10 分钟刷新后亦 reload（:323-341）。与 G-48 同族不同面。
 
-### G-57 ❌ 删除非 active 凭据多发 `credential.switched(credentialID:null)`
+### G-57 ✅ 删除非 active 凭据多发 `credential.switched(credentialID:null)`（已修：store 发布门改为仅删 active 才发 Switched，对齐 credential.ts:314-319；handler 原本已正确）
 - rust `integration/credential.rs:331-360`：非 active 分支返回 `Some((Some(integration), None))`，发布门只判 integration——非 active 删除也发 Switched。oc-server/handlers/credential.rs 同病。
 - ref `credential.ts:268-269,314-319`：`{switched:false}` 只发 updated；仅删 active 才发 Switched。修复：发布门加 switched 判定。
 
-### G-58 ❌ Session.create 项目解析仅目录身份（插件 API 命中点）
+### G-58 ✅ Session.create 项目解析仅目录身份（已修：插件 session.create 传 services.project 完整解析，对齐 session.ts:271）
 - rust `store.rs:604-609` project 缺省回落 `hash("directory:…")`。HTTP/命令/transfer 主路径均显式传 `services.project`（完整 Resolver，engine/mod.rs:872-887）；**生产命中点：插件 `session.create`**（oc-server/plugins.rs:1300-1313 `CreateInput::default()` → project=None）。ref `session.ts:271` 无条件 `projects.resolve`（含 realpath + VCS 发现）。
 
-### G-59 ❌ 工具输入校验为 JSON-Schema 子集，MCP 外部 schema 弱校验
+### G-59 ✅ 工具输入校验为 JSON-Schema 子集（已修：扩展 pattern/oneOf/anyOf/allOf/$defs+$ref/minItems/maxItems/uniqueItems/additionalProperties；format 保持宽松；无新依赖）
 - MCP schema 有注册并校验（mcp/registry.rs:1749 → tool/registry.rs:383 `validate_input`），真实缺口是子集语义：rust `registry.rs:88-232` 仅 type/enum/min/max/required/items 等，pattern/oneOf/$defs 引用等静默放行。ref `runtime.ts:107-113,251-258` 经 jsonSchema() 全量 draft-07/2020-12 转换校验。坏参数穿透到 leaf。
 
-### G-60 ❌ list_mcp_resources 模型内容固定占位文本
+### G-60 ✅ list_mcp_resources 模型内容固定占位文本（已修：content 改为 stringify(catalog) 全 JSON）
 - rust `tool/mcp_resource.rs:213` content 恒 `"Listed MCP resources"`；ref `runtime.ts:57,259-264` normalizeContent → stringify(catalog) 全文。模型在直接对话路径拿不到目录内容（output JSON 仍正确）。
 
 ### G-61 ❌ CLI auth login 无 target 时缺交互集成选择器
@@ -382,7 +382,7 @@ G-18 ✅ / G-19 ✅(死校验残留) / G-20 ✅ / G-21 ✅ / G-22 ✅ / G-23 ✅
 ### G-62 ❌ CLI plugin check/update 不覆盖 TUI(npm) 插件
 - rust `oc-cli/handlers/plugin.rs` check（:426+）/update（:478+）只调 server 运行时；`configured_tui_plugins` 仅 list 使用。ref `plugin/inventory.ts:52-78` TUI 项走 `npm.check`；`plugin/update.ts:29` 走 `npm.update`。CLI 层缺口，与 G-29/G-46（TUI 管理页）不同层，交叉引用。
 
-### G-63 ❌ persistent-pty connect 协议分歧（404 vs 4404；二进制 lossy）
+### G-63 ✅ persistent-pty connect 协议分歧（已修：未知 pty 一律升级后 4404 关闭；非 framed 二进制输入原样字节直传 write_bytes）
 - ① 不存在的 pty：rust `persistent_pty.rs:276-278` 升级前 HTTP 404；ref（persistent-pty.ts:126,152-158）一律升级后 `CloseEvent(4404, "terminal unavailable")`——WS 客户端错误路径完全不同。
 - ② 非 framed 二进制输入：rust `persistent_pty.rs:482-484` `from_utf8_lossy`（U+FFFD 污染）；ref `persistent-pty.ts:203-216` 原样字节直传。G-10 覆盖的是 pty.rs 输出方向，本条是输入方向，独立。
 
@@ -427,13 +427,13 @@ G-18 ✅ / G-19 ✅(死校验残留) / G-20 ✅ / G-21 ✅ / G-22 ✅ / G-23 ✅
 - export 取消：rust 退出 0 + println 到 stdout（session.rs:245-247,156-158）；ref 130 + clack UI 全走 stderr（export.ts:30,53-66）——管道重定向时污染导出内容。
 - import：rust 任意 JSON 直通；ref 经 SessionTransfer Schema 校验规范化（import.ts:25-26）。
 
-### G-76 ❌ persistentPty.update payload 放宽
+### G-76 ✅ persistentPty.update payload 放宽（已修：oc-schema 增 UpdateInput；size 必填、非法 400，无 80/24 回退）
 - rust `persistent_pty.rs:175-186`：size 可缺省（静默跳过 resize 仍 200）、非法值回退 80/24；ref schema `size` 必填 PositiveInt，缺失 → 400（persistent-pty.ts:36-39）。oc-schema 无 UpdateInput 类型。
 
-### G-77 ❌ location.get 的 project.directory 被 canonical 覆盖
+### G-77 ✅ location.get 的 project.directory 被 canonical 覆盖（已修：directory=检出目录、canonical=main worktree realpath）
 - rust `location.rs:40-44` 两字段同源 canonical；ref `project.ts:358-362` directory=实际检出目录、canonical=realpath（:43-44 注释明言语义不同，:135 依赖二者不等分支）。
 
-### G-78 ❌ session.log 非法 sessionID 400 文案
+### G-78 ✅ session.log 非法 sessionID 400 文案（已修：schema ParseError 格式 `Expected sessionID to be …`）
 - rust `sse.rs:493` message 为原始值回显；ref schema ParseError 形如 "Expected sessionID to be…"；rust 自身 after/follow 参数（sse.rs:504,518）已用该格式，sessionID 处不一致。一行修复。
 
 ## 归类与收编（不另立项）

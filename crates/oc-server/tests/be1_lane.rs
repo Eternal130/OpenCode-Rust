@@ -138,6 +138,67 @@ async fn be1_sse_credential_events_on_create_activate_and_remove() {
     );
 }
 
+/// G-57 — removing a NON-active credential (credential.ts:268-269,
+/// `{switched:false}`) publishes only `credential.updated`; no
+/// `credential.switched` may follow.
+#[tokio::test]
+async fn be1_sse_credential_remove_non_active_does_not_switch() {
+    let server = boot(tempfile::tempdir().expect("workspace").keep()).await;
+    let client = &server.client;
+    let mut stream = feed(&server.state).subscribe();
+
+    let dormant = client
+        .credential()
+        .create(&CredentialCreateInput {
+            id: None,
+            integration_id: "github".to_owned(),
+            label: Some("dormant".to_owned()),
+            activate: Some(false),
+            value: CredentialValue::Key(CredentialKey {
+                key: "sk-dormant".to_owned(),
+                ..CredentialKey::default()
+            }),
+        })
+        .await
+        .expect("dormant create");
+    let active = client
+        .credential()
+        .create(&CredentialCreateInput {
+            id: None,
+            integration_id: "github".to_owned(),
+            label: Some("active".to_owned()),
+            activate: Some(true),
+            value: CredentialValue::Key(CredentialKey {
+                key: "sk-active".to_owned(),
+                ..CredentialKey::default()
+            }),
+        })
+        .await
+        .expect("active create");
+    // Drain the create-time events.
+    let _ = expect_frame(&mut stream, "\"type\":\"credential.switched\"", "create switched").await;
+
+    // Removing the dormant row: updated only, no switched.
+    client.credential().remove(&dormant.id).await.expect("remove dormant");
+    expect_frame(&mut stream, "\"type\":\"credential.updated\"", "dormant remove updated").await;
+    let mut saw_switched = false;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        let Ok(frame) = tokio::time::timeout(remaining, stream.recv()).await else { break };
+        let frame = frame.expect("stream ended").expect("ok frame");
+        if frame.to_string().contains("\"type\":\"credential.switched\"") {
+            saw_switched = true;
+            break;
+        }
+    }
+    assert!(!saw_switched, "non-active removal must not emit credential.switched");
+    let _ = active;
+}
+
 /// worktree.updated publishes on a row-owning create (worktree.ts:228).
 #[tokio::test]
 async fn be1_sse_worktree_updated_on_create() {

@@ -37,7 +37,11 @@ async fn get(
         "directory": location.as_path().to_string_lossy(),
         "project": {
             "id": project.id,
-            "directory": project.canonical.to_string_lossy(),
+            // G-77 — project.ts:358-362 + location.ts:43-44: `directory`
+            // is this checkout's directory (resolve input / worktree);
+            // `canonical` is the main-worktree realpath. They differ for
+            // linked worktrees and symlinked checkouts.
+            "directory": project.directory.to_string_lossy(),
             "canonical": project.canonical.to_string_lossy(),
         },
     }))
