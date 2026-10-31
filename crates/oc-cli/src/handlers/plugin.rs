@@ -267,6 +267,33 @@ fn configured_tui_plugins() -> Vec<(String, String)> {
     rows
 }
 
+/// fix1 (ref inventory.ts `configured`): TUI-plugin targets configured
+/// in cli.json `plugins[]` that have NO installation at all — same
+/// directive/builtin filtering as [`configured_tui_plugins`], but the
+/// install requirement dropped (deduped).
+fn configured_uninstalled_tui_targets() -> Vec<String> {
+    let info = cli_config().get();
+    let Some(plugins) = info.plugins else { return Vec::new() };
+    let mut rows = Vec::new();
+    for spec in plugins {
+        let target = match &spec {
+            oc_core::cli_config::PluginSpec::Directive(target) => target.clone(),
+            oc_core::cli_config::PluginSpec::Entry { package, .. } => package.clone(),
+        };
+        if target.starts_with('-')
+            || target == "*"
+            || target.ends_with(".*")
+            || target.starts_with("opencode.")
+        {
+            continue;
+        }
+        if newest_installed(&target).is_none() && !rows.contains(&target) {
+            rows.push(target);
+        }
+    }
+    rows
+}
+
 fn add(package: &str, force: bool) -> i32 {
     if package.starts_with('-')
         || package == "*"
@@ -472,9 +499,17 @@ async fn check(target: Option<&str>, server: &ServerParams) -> i32 {
         if target.is_some_and(|target| target != tui_target) {
             continue;
         }
-        let root = oc_plugin_host::install_root();
-        let options = oc_plugin_host::InstallOptions::default();
-        let checked = oc_plugin_host::npm_check(&tui_target, &root, &options);
+        // Blocking registry probe — off the async runtime, like `update`.
+        let check_target = tui_target.clone();
+        let checked = tokio::task::spawn_blocking(move || {
+            oc_plugin_host::npm_check(
+                &check_target,
+                &oc_plugin_host::install_root(),
+                &oc_plugin_host::InstallOptions::default(),
+            )
+        })
+        .await
+        .unwrap_or_else(|error| Err(error.to_string()));
         let (outdated, error) = match checked {
             Ok(outdated) => (outdated, None),
             Err(error) => {
@@ -489,6 +524,25 @@ async fn check(target: Option<&str>, server: &ServerParams) -> i32 {
             version: Some(version),
             outdated,
             error,
+        });
+    }
+    // fix1: configured-but-UNINSTALLED TUI plugin targets still surface
+    // (ref inventory.ts checks every configured installable target — an
+    // absent install is a `check failed` row naming the cause, not
+    // silence). No version: nothing is installed to name one.
+    for tui_target in configured_uninstalled_tui_targets() {
+        if target.is_some_and(|target| target != tui_target) {
+            continue;
+        }
+        errors = true;
+        let message = format!("package is not installed: {tui_target}");
+        rows.push(PluginRow {
+            runtime: "TUI",
+            target: tui_target.clone(),
+            name: tui_target,
+            version: None,
+            outdated: false,
+            error: Some(message),
         });
     }
     if let Some(target) = target.filter(|_| rows.is_empty()) {
@@ -619,14 +673,29 @@ async fn update(target: Option<&str>, server: &ServerParams) -> i32 {
     }
     // TUI plugins (ref plugin/update.ts): the cli.json plugin set goes
     // through the npm update path (`npm.update`), not the server runtime.
-    for (tui_target, _) in configured_tui_plugins() {
+    // fix1: uninstalled configured targets join too (ref inspect includes
+    // them; the check fails with "package is not installed" and the
+    // handler exits 1).
+    let mut tui_targets: Vec<String> =
+        configured_tui_plugins().into_iter().map(|(target, _)| target).collect();
+    tui_targets.extend(configured_uninstalled_tui_targets());
+    for tui_target in tui_targets {
         if target.is_some_and(|target| target != tui_target) {
             continue;
         }
         let root = oc_plugin_host::install_root();
         let cache = oc_plugin_host::update_cache();
-        match oc_plugin_host::npm_check(&tui_target, &root, &oc_plugin_host::InstallOptions::default())
-        {
+        let check_target = tui_target.clone();
+        let checked = tokio::task::spawn_blocking(move || {
+            oc_plugin_host::npm_check(
+                &check_target,
+                &oc_plugin_host::install_root(),
+                &oc_plugin_host::InstallOptions::default(),
+            )
+        })
+        .await
+        .unwrap_or_else(|error| Err(error.to_string()));
+        match checked {
             Ok(true) => {}
             Ok(false) => continue,
             Err(error) => {
@@ -635,7 +704,7 @@ async fn update(target: Option<&str>, server: &ServerParams) -> i32 {
                 continue;
             }
         }
-        // Blocking install work — the CLI is already on a worker thread.
+        // Blocking install work — off the async runtime.
         let display_target = tui_target.clone();
         match tokio::task::spawn_blocking(move || {
             oc_plugin_host::update(&tui_target, &root, cache, &oc_plugin_host::InstallOptions::default())
@@ -712,5 +781,14 @@ mod tests {
         let rows = vec![row("TUI", "only-tui", None, false, false)];
         assert_eq!(format_plugin_rows(&rows), "TUI\n  only-tui  (current)");
         assert_eq!(format_plugin_rows(&[]), "");
+    }
+
+    /// fix1: a configured-but-uninstalled TUI target surfaces as a
+    /// versionless `check failed` row (ref inventory.ts `npm.check`
+    /// error path), not silence.
+    #[test]
+    fn format_renders_not_installed_tui_rows_as_check_failed() {
+        let rows = vec![row("TUI", "missing-plugin", None, false, true)];
+        assert_eq!(format_plugin_rows(&rows), "TUI\n  missing-plugin  (check failed)");
     }
 }

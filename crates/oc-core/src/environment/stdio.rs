@@ -134,31 +134,38 @@ where
 
 /// The rolling stderr tail a spawner's drain task maintains
 /// (ref mcp/stdio.ts:55 `stderr = (stderr + output).slice(-STDERR_TAIL)`).
+/// Stores raw BYTES: a mid-code-point truncation of a String would panic
+/// (`String::drain` requires a char boundary) and kill the drain task —
+/// with it dead the child's stderr pipe fills and the server deadlocks.
 #[derive(Default)]
 pub struct StderrTail {
-    buffer: std::sync::Mutex<String>,
+    buffer: std::sync::Mutex<Vec<u8>>,
 }
 
 impl StderrTail {
     /// Append a chunk, keeping only the last [`STDERR_TAIL_BYTES`] bytes.
     pub fn push(&self, chunk: &[u8]) {
         let mut buffer = self.buffer.lock().unwrap_or_else(|poison| poison.into_inner());
-        // Convert lossily at chunk boundaries — diagnostics, not protocol.
-        buffer.push_str(&String::from_utf8_lossy(chunk));
+        buffer.extend_from_slice(chunk);
         let excess = buffer.len().saturating_sub(STDERR_TAIL_BYTES);
         if excess > 0 {
-            drop(buffer.drain(..excess));
+            buffer.drain(..excess);
         }
     }
 
-    /// The retained tail, trimmed (empty when the child said nothing).
+    /// The retained tail (lossily decoded — diagnostics, not protocol),
+    /// trimmed (empty when the child said nothing). Any leading partial
+    /// code point from the byte-boundary truncation is skipped.
     #[must_use]
     pub fn snapshot(&self) -> String {
-        self.buffer
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .trim()
-            .to_owned()
+        let buffer = self.buffer.lock().unwrap_or_else(|poison| poison.into_inner());
+        // The window may open mid-code-point after truncation: skip
+        // leading UTF-8 continuation bytes (0b10xxxxxx).
+        let mut start = 0;
+        while start < buffer.len() && buffer[start] & 0b1100_0000 == 0b1000_0000 {
+            start += 1;
+        }
+        String::from_utf8_lossy(&buffer[start..]).trim().to_owned()
     }
 }
 
@@ -298,5 +305,25 @@ mod tests {
         assert!(snapshot.ends_with(&"x".repeat(64)), "newest bytes retained");
         assert!(!snapshot.contains("first"), "old bytes dropped");
         assert_eq!(StderrTail::default().snapshot(), "");
+    }
+
+    /// fix1: byte-boundary truncation of multibyte stderr must not panic
+    /// (a String drain at a non-char-boundary would kill the drain task,
+    /// fill the pipe, and deadlock the server); the snapshot opens at a
+    /// char boundary instead.
+    #[test]
+    fn stderr_tail_truncates_multibyte_without_panicking() {
+        let tail = StderrTail::default();
+        // CJK + emoji, each char 3-4 bytes: overflow the 8 KiB window so
+        // the cut lands mid-code-point (8192 is not a multiple of 3 or 4).
+        let text = "错误致命💥".repeat(2_000); // ~7 bytes/char, 14 KB
+        tail.push(text.as_bytes());
+        let snapshot = tail.snapshot();
+        assert!(snapshot.chars().count() > 1_000, "most of the tail survives");
+        // snapshot() must yield a valid String at char boundaries: no
+        // U+FFFD storm from a split code point at the head.
+        assert!(snapshot.chars().filter(|char| *char == '\u{FFFD}').count() <= 1);
+        // The newest bytes are retained (trailing emoji run present).
+        assert!(snapshot.ends_with("💥"), "{}…", snapshot.chars().rev().take(6).collect::<String>());
     }
 }
