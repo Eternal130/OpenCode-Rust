@@ -38,6 +38,8 @@
 
 pub mod demo;
 pub mod footer_subagent;
+pub mod fragment;
+pub mod image;
 pub mod lifecycle;
 pub mod model_pref;
 pub mod mono;
