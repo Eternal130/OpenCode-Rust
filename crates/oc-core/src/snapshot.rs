@@ -227,10 +227,17 @@ impl GitSnapshotStore {
         worktree: &Path,
         scope: &str,
     ) -> Result<Self, SnapshotError> {
+        // Ref snapshot.ts:93-96 hashes `fs.realPath(source.worktree)` —
+        // the canonical worktree path, so alias/symlinked invocations
+        // share one store. (Resolver's `canonical` is lexical; only the
+        // OS realpath used here resolves symlinks.) Fall back to the
+        // input path when canonicalization fails (e.g. it does not
+        // exist yet).
+        let canonical = std::fs::canonicalize(worktree).unwrap_or_else(|_| worktree.to_path_buf());
         let git_directory = data_root
             .join("snapshot")
             .join(project_id)
-            .join(hash_fast(worktree.to_string_lossy().as_bytes()));
+            .join(hash_fast(canonical.to_string_lossy().as_bytes()));
         // SE-F3 (deferred init): the bare store is created on FIRST
         // USE (`open_repo` below), not here — the reference's
         // Snapshot module is lazy (session-scoped captures only; zero
@@ -360,7 +367,20 @@ impl GitSnapshotStore {
                         }
                     }
                 }
-                let Ok(bytes) = std::fs::read(&absolute) else { continue };
+                // G-50: symlink entries snapshot the LINK TARGET string as
+                // the blob content (mode 120000) — `git checkout <tree>`
+                // semantics; a plain `fs::read` would follow the link.
+                let bytes: Vec<u8> = if file_type.is_symlink() {
+                    match std::fs::read_link(&absolute) {
+                        Ok(target) => target.to_string_lossy().into_owned().into_bytes(),
+                        Err(_) => continue,
+                    }
+                } else {
+                    match std::fs::read(&absolute) {
+                        Ok(bytes) => bytes,
+                        Err(_) => continue,
+                    }
+                };
                 let Ok(blob) = repo.blob(&bytes) else { continue };
                 let mode = if file_type.is_symlink() {
                     0o120000
@@ -516,8 +536,32 @@ impl GitSnapshotStore {
                         std::fs::create_dir_all(parent)
                             .map_err(|error| operation_error("restore", error.to_string()))?;
                     }
+                    // G-50: honor the tree entry's filemode, matching
+                    // `git checkout <tree> -- <path>` (ref git.ts:601-606):
+                    // 120000 ⇒ symlink whose target is the blob content;
+                    // 100755 ⇒ executable bit; anything else ⇒ plain file.
+                    let mode = entry.filemode();
+                    #[cfg(unix)]
+                    if mode == 0o120000 {
+                        use std::os::unix::ffi::OsStringExt as _;
+                        let target = std::ffi::OsString::from_vec(blob.content().to_vec());
+                        // Remove whatever occupies the path first (git
+                        // checkout overwrites files/symlinks alike).
+                        remove_recursive(&absolute)
+                            .map_err(|error| operation_error("restore", error.to_string()))?;
+                        std::os::unix::fs::symlink(target, &absolute)
+                            .map_err(|error| operation_error("restore", error.to_string()))?;
+                        continue;
+                    }
                     std::fs::write(&absolute, blob.content())
                         .map_err(|error| operation_error("restore", error.to_string()))?;
+                    #[cfg(unix)]
+                    if mode == 0o100755 {
+                        use std::os::unix::fs::PermissionsExt as _;
+                        let perms = std::fs::Permissions::from_mode(0o755);
+                        std::fs::set_permissions(&absolute, perms)
+                            .map_err(|error| operation_error("restore", error.to_string()))?;
+                    }
                 }
                 None => {
                     // Path absent from its tree ⇒ remove (recursive force).
