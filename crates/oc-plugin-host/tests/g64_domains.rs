@@ -13,8 +13,49 @@ use std::path::Path;
 use std::time::Duration;
 
 use oc_plugin_host::{
-    IntegrationPort, PluginHostConfig, ProviderPort, ReferencePort, TerminalPort,
+    IntegrationPort, PluginHostConfig, ProviderPort, ReferencePort, TerminalPort, VcsPort,
+    WebsearchPort,
 };
+
+/// The mock vcs port (the G-24 residual reload surface).
+struct MockVcsPort;
+
+#[async_trait::async_trait]
+impl VcsPort for MockVcsPort {
+    async fn get(&self) -> Result<Value, String> {
+        Ok(json!({ "branch": { "current": "lane-h", "default": "main" }, "provider": "git" }))
+    }
+
+    async fn base(&self) -> Result<Value, String> {
+        Ok(json!("origin/main"))
+    }
+}
+
+/// The mock websearch port (the G-24 residual persistence seam): the
+/// default selection round-trips through a captured cell.
+struct MockWebsearchPort {
+    default: std::sync::Mutex<Value>,
+}
+
+#[async_trait::async_trait]
+impl WebsearchPort for MockWebsearchPort {
+    async fn providers(&self) -> Result<Value, String> {
+        Ok(json!([{ "id": "mocksearch", "name": "Mock Search" }]))
+    }
+
+    async fn query(&self, _query: &str, _provider_id: Option<&str>) -> Result<Value, String> {
+        Ok(json!({ "providerID": "mocksearch", "results": [] }))
+    }
+
+    async fn default_provider(&self) -> Result<Value, String> {
+        Ok(self.default.lock().unwrap().clone())
+    }
+
+    async fn set_default(&self, selection: Value) -> Result<(), String> {
+        *self.default.lock().unwrap() = selection;
+        Ok(())
+    }
+}
 use serde_json::{json, Value};
 
 struct MockProviderPort;
@@ -92,6 +133,10 @@ fn g64_domains_register_and_round_trip() {
         reference_port: Some(std::sync::Arc::new(MockReferencePort)),
         terminal_port: Some(std::sync::Arc::new(MockTerminalPort)),
         integration_port: Some(std::sync::Arc::new(MockIntegrationPort)),
+        vcs_port: Some(std::sync::Arc::new(MockVcsPort)),
+        websearch_port: Some(std::sync::Arc::new(MockWebsearchPort {
+            default: std::sync::Mutex::new(Value::Null),
+        })),
         ..PluginHostConfig::default()
     };
     let host = oc_plugin_host::PluginHost::detect().start_detached_with(config, &[entry]);
@@ -150,6 +195,13 @@ fn g64_domains_register_and_round_trip() {
         snapshot.vcs_providers.iter().any(|provider| provider.id == "plugvcs"),
         "vcs.transform registered: {:?}",
         snapshot.vcs_providers
+    );
+
+    // -- the websearch editor default persisted + read back -------------
+    let default = read("websearch-default.json");
+    assert_eq!(
+        default.trim(), "mocksearch",
+        "editor.default.set persisted and get round-tripped: {default}"
     );
 
     // -- the provider definition crossed with its models ---------------

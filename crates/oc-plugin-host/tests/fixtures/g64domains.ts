@@ -68,9 +68,15 @@ export default {
     await ctx.vcs.reload();
 
     // -- websearch editor.default.set persistence (G-24 residual) ------
-    await ctx.websearch.transform((editor) => {
-      editor.default.set("mocksearch");
-    });
+    try {
+      await ctx.websearch.transform(async (editor) => {
+        await editor.default.set("mocksearch");
+        const current = await editor.default.get();
+        await write("websearch-default.json", current ?? null);
+      });
+    } catch (error) {
+      await write("websearch-default.error", String(error));
+    }
 
     return async () => {};
   },
