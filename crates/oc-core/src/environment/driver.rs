@@ -48,11 +48,14 @@ pub trait Spawner: Send + Sync {
     async fn spawn(&self, command: CommandSpec) -> Result<ProcessOutput, SpawnError>;
 }
 
-/// `Driver { spawner, overrides? }`.
+/// `Driver { spawner, overrides?, stdio }` — `stdio` is the streaming
+/// (piped) spawn counterpart the MCP stdio transport uses; every driver
+/// carries one, defaulting to the same execution plane as `spawner`.
 #[derive(Clone)]
 pub struct Driver {
     pub spawner: Arc<dyn Spawner>,
     pub overrides: Option<Arc<dyn Files>>,
+    pub stdio: Arc<dyn crate::environment::stdio::StdioSpawner>,
 }
 
 /// `makeFiles(driver) = { ...execDefaults(driver.spawner), ...driver.overrides }`.

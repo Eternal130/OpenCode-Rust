@@ -368,7 +368,13 @@ impl MemoryDriver {
 
     /// The `Driver` view: failing spawner + in-memory `Files` overrides.
     pub fn driver(&self) -> Driver {
-        Driver { spawner: self.fs.clone(), overrides: Some(self.fs.clone()) }
+        Driver {
+            spawner: self.fs.clone(),
+            overrides: Some(self.fs.clone()),
+            stdio: std::sync::Arc::new(crate::environment::stdio::FailingStdioSpawner(
+                "The memory driver cannot spawn processes",
+            )),
+        }
     }
 
     /// Extra helper: `symlink(target, path)`.

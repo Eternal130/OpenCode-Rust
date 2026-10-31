@@ -126,7 +126,11 @@ async fn read_capped<R: tokio::io::AsyncRead + Unpin>(
 /// `makeLocalDriver(spawner)` — overrides the full `Files` surface with raw
 /// host-fs operations and keeps the spawner for process work.
 pub fn make_local_driver(spawner: std::sync::Arc<dyn Spawner>) -> Driver {
-    Driver { spawner, overrides: Some(std::sync::Arc::new(LocalFiles)) }
+    Driver {
+        spawner,
+        overrides: Some(std::sync::Arc::new(LocalFiles)),
+        stdio: std::sync::Arc::new(crate::environment::stdio::LocalStdioSpawner),
+    }
 }
 
 /// Convenience: local driver over [`HostSpawner`].

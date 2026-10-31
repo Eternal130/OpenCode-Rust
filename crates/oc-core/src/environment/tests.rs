@@ -177,7 +177,11 @@ async fn memory_write_through_symlink_and_type_following() {
 #[tokio::test]
 async fn exec_defaults_round_trip() {
     let root = temp_root("exec-roundtrip").await;
-    let driver = Driver { spawner: Arc::new(HostSpawner), overrides: None };
+    let driver = Driver {
+        spawner: Arc::new(HostSpawner),
+        overrides: None,
+        stdio: Arc::new(crate::environment::stdio::LocalStdioSpawner),
+    };
     let files = make_files(&driver);
     let dir = root.join("d");
     let dir_str = dir.to_str().unwrap();
@@ -201,7 +205,11 @@ async fn exec_defaults_round_trip() {
 #[tokio::test]
 async fn exec_defaults_error_protocol() {
     let root = temp_root("exec-errors").await;
-    let driver = Driver { spawner: Arc::new(HostSpawner), overrides: None };
+    let driver = Driver {
+        spawner: Arc::new(HostSpawner),
+        overrides: None,
+        stdio: Arc::new(crate::environment::stdio::LocalStdioSpawner),
+    };
     let files = make_files(&driver);
 
     // 44: NotFound.
@@ -246,7 +254,11 @@ async fn exec_defaults_error_protocol() {
 #[tokio::test]
 async fn exec_defaults_symlink_semantics() {
     let root = temp_root("exec-symlink").await;
-    let driver = Driver { spawner: Arc::new(HostSpawner), overrides: None };
+    let driver = Driver {
+        spawner: Arc::new(HostSpawner),
+        overrides: None,
+        stdio: Arc::new(crate::environment::stdio::LocalStdioSpawner),
+    };
     let files = make_files(&driver);
     let target = root.join("real.txt");
     std::fs::write(&target, b"body").unwrap();
@@ -270,7 +282,11 @@ async fn exec_defaults_symlink_semantics() {
 #[tokio::test]
 async fn exec_defaults_move_into_dir() {
     let root = temp_root("exec-move").await;
-    let driver = Driver { spawner: Arc::new(HostSpawner), overrides: None };
+    let driver = Driver {
+        spawner: Arc::new(HostSpawner),
+        overrides: None,
+        stdio: Arc::new(crate::environment::stdio::LocalStdioSpawner),
+    };
     let files = make_files(&driver);
     files.mkdir(root.join("d").to_str().unwrap()).await.unwrap();
     let source = root.join("a.txt");
