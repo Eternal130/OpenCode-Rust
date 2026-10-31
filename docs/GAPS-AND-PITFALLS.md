@@ -1,5 +1,7 @@
 # 移植缺口与坑（Gaps & Pitfalls）
 
+> **2026-10-31 收口轮（gap-burndown-3）**：G-18..G-27、G-29..G-31、G-33..G-37 全部落地并合并 main（单 lane 串行、worktree 隔离、dev-gate、合并门测试，日志在 .test-logs/merge-*）。残留清单与 G-1/G-6/G-8 残留项同轮清偿（MCP stdio 经 Environment seam、Shell 查看 1s 轮询、https/socks5 WS 代理）。G-26 双栈信任统一（oc-http crate，platform-verifier + webpki 降级）。G-28 维持有界化设计（声明为插件生态 breaking change）、G-32 v1/legacy schema 维持有意不移植（纯 v2 面无影响）——两项裁决为文档化决策。仍开放的工程残留：G-1 tools/handlers 全量 consumer 迁移（read/write/edit/shell/glob/grep/patch、pty）、G-24 有界外项（guest 侧 worktree host-op 调用、vcs.transform/reload、websearch editor.default.set 持久化、worktree 注册表热重载）、G-31 内存索引（10s 刷新）。
+>
 > 2026-10-30 二次复核版；同日 burndown 完成状态更新（gb2-burndown，commits a193f4b..phase-6）。每条均经两侧源码取证（rust `/opt/opencode-rust` vs ref `/opt/opencode-ref`），未采信仓库内既有评审文档。总报告见 `COMPREHENSIVE_PORT_AUDIT.md`。
 >
 > 状态图例：✅ 已解决（本轮 burndown 落地）· ❌ 缺失 · ⚠️ 部分/偏差 · ℹ️ 有意决策（已文档化）· 🧹 清理项
@@ -95,50 +97,50 @@
 
 ## 🔴 高
 
-### G-18 ❌ bedrock-converse thinking block_binding 默认值缺失
+### G-18 ✅ bedrock-converse thinking block_binding 默认值缺失
 - ref `packages/ai/src/protocols/bedrock-converse.ts:485-503,562-563`：Claude 5.1+ 注入 `adaptive + drop_block + anthropic_beta: thinking-binding-controls-2026-08-01`。
 - rust `crates/oc-ai/src/protocols/bedrock/converse.rs:630-685`：thinking 仅从 provider_options 透传，无 block_binding/adaptive/drop_block/anthropic_beta 任何痕迹（同仓 `anthropic_messages.rs:1493-1518` 已有 `applyThinkingBindingDefault` 能力，未接到 converse 路径）。
 - 后果：Bedrock Claude 5.1+ 会话中 system 提示变更 → `Invalid signature in thinking block` 硬错误，长会话断流。fixture `test-fixtures/recordings/bedrock-converse-thinking-binding/` 已拷入但无测试引用（死 fixture，可直接补测试）。
 
-### G-19 ❌ bedrock-mantle-messages 路由整条缺失
+### G-19 ✅ bedrock-mantle-messages 路由整条缺失
 - ref `packages/ai/src/providers/amazon-bedrock-mantle.ts`：anthropic-messages 协议跑在 mantle host（含 effort 更新、haiku system 降级、签名 thinking 回放，4 组 recorded fixture）。
 - rust `cache_policy.rs:44` 白名单留名，但 `ProtocolFamily`（provider_catalog/facade.rs:269-272,391-394）仅有 BedrockMantleChat/Responses，无 anthropic-messages-on-mantle 变体；4 组 fixture 同样已拷入无引用。
 - 后果：Bedrock Mantle 上 Claude 的主推理通道不可用。**修复优先级最高（与 G-18 同组）。**
 
-### G-20 ❌ IDE/编辑器实时集成组缺失（高）
+### G-20 ✅ IDE/编辑器实时集成组缺失（高）
 - **WebSocket 集成**：ref `tui/src/context/editor.ts:107-376`（`~/.claude/ide/*.lock` 发现、`CLAUDE_CODE_SSE_PORT || OPENCODE_EDITOR_SSE_PORT`、JSON-RPC selection 推送、`x-claude-code-ide-authorization`）。rust 全仓 grep 零命中；仅有 Zed sqlite 轮询（editor_zed.rs:83-95）+ `$EDITOR`（editor.rs:6）。守卫基线（tools/guards env_ref.txt:34）记录了该 env 但无实现。
 - **terminal.suspend 死键**：键位表绑定 ctrl+z（oc-tui-core/keymap/table.rs:786），但 oc-tui 无任何 SIGTSTP/suspend 分发臂（ref app.tsx:1120 有）。按键被消费无动作。
 - **session.environment 不上报**：ref app.tsx:489-499 就绪后 PUT；rust 仅 .gen 生成代码存在（methods.gen.rs:3633），无调用方。
 - 三项同组：VS Code/JetBrains 编辑器上下文（@-reference 选区）完全不可用。
 
-### G-21 ❌ tui.command.execute / tui.session.select 事件未处理
+### G-21 ✅ tui.command.execute / tui.session.select 事件未处理
 - schema/总线/客户端侧齐全（oc-schema/events.rs:306-362、oc-client/bus_event.rs:144,409、bus/registry.rs:362-367），但消费侧仅 `tui.toast.show`（store.rs:10853）。ref app.tsx:1253-1274 将其分别接到 keymap.dispatch 与 route.navigate。
 - 后果：插件经 `ctx.event` 发的命令/路由定向指令被静默丢弃——插件 API 契约级缺口。
 
 ## 🟡 中
 
-### G-22 ❌ ProviderContext/路由 hook 不兼容防护缺失（主请求路径）
+### G-22 ✅ ProviderContext/路由 hook 不兼容防护缺失（主请求路径）
 - ref `model-request.ts:304-318`：每请求检查 model.request hook 改写 baseURL 是否与含 compaction part 的 opaque window 兼容，不兼容即 die。
 - rust 仅压缩路径有防护（compaction.rs:434-442）；主路径 model_request.rs:747-788 应用 RoutePatch 后无任何 provenance 检查（grep 0 命中）。
 - 后果：改写 baseURL 的 hook 可把加密 compaction window 发往另一部署，产生不可回放历史且无 die 信号。
 
-### G-23 ❌ session.generate hook 定义但零调用（含死注册）
+### G-23 ✅ session.generate hook 定义但零调用（含死注册）
 - rust `model_request.rs:653-673`：`RequestKind::Generate` 落入 `dispatch_session_context`；`dispatch_session_generate`（hooks.rs:891）全仓 0 调用点。
 - 更糟的是已有 3 处注册（engine/mod.rs:2127,2255、tool/patch.rs:561）——注册了永不派发的 hook。需追查这些 handler 期望的触发点，可能已是功能性 bug 而非纯接口缺口。
 
-### G-24 ❌ 插件 host 域缺失：websearch / vcs / worktree transform + integration methodImplementation
+### G-24 ✅ 插件 host 域缺失：websearch / vcs / worktree transform + integration methodImplementation
 - ref `plugin/host.ts:468-490`（vcs get/base、websearch providers/query/reload/transform）、`:631`（integration 方法注册通道）。
 - rust oc-plugin-host hook 域仅 `session|chat|tool`（context/mod.rs:120-132）；grep websearch/vcs/worktree 零命中。oc-core 有内部 OAuthImplementation 注册表但无插件暴露通道。与 G-4 残留（worktree strategy）同族。
 
-### G-25 ❌ pty connect-token Origin 校验忽略端口（未复用既有实现）
+### G-25 ✅ pty connect-token Origin 校验忽略端口（未复用既有实现）
 - rust `oc-server/handlers/pty.rs:191-207`：Origin 与 Host 均剥端口比较；ref（middleware.ts:66）含端口精确比较。auth.rs:210-227 的 `origin_host` 本就是端口敏感实现但未复用。
 - 同主机不同端口页面可通过检查；利用受 ticket 单次+60s TTL 缓解。修复即改为复用 `is_allowed_request_origin`。
 
-### G-26 ⚠️ reqwest 0.12/0.13 双栈证书验证不一致
+### G-26 ✅(bounded) reqwest 0.12/0.13 双栈证书验证不一致
 - Cargo.lock:3213/3255 双版本共存（有意，oc-core/Cargo.toml:44-50 有注释）。两栈同走 rustls 0.23（aws-lc-rs provider），但 0.12 栈用 `webpki-roots`（Cargo.lock:3243）、0.13 栈用 `rustls-platform-verifier`（:3277）。
 - 后果：企业自签 CA/中间盒环境下两栈连接行为不一致（0.12 栈拒绝系统信任证书）。与 G-8 同属传输层债务。
 
-### G-27 ⚠️ ACP vendored patch 无上游 drift 检测
+### G-27 ✅(bounded) ACP vendored patch 无上游 drift 检测
 - third_party/agent-client-protocol（crates.io 3.3.0 去 preserve_order 单点改动；ref 用 @agentclientprotocol/sdk 1.6.0——版本代差本身也是对齐风险）。CI（ci.yml/runtime-gates.yml）仅有 OpenAPI 与 vendored .scm drift 检测，无 ACP 上游 diff 检测。
 - 上游发版需手工重打 patch，否则 feature unification 静默翻转全 workspace serde_json Map 顺序。属 G-16 族，单列因有具体 CI 补法。
 
@@ -146,10 +148,10 @@
 - rust 有 JSX 面（host.js:1857-1900 @opentui/solid shim 的 createElement/setProp/insert + supervisor.rs:1051-1111 ui.slot.register/router.register），但渲染树跨 IPC 时拍平为 `{title, rows, clickable}` 有界结构（supervisor.rs:964-966）。无任意组件树/markdown code-block renderer 注册面。
 - 行式插件（sidebar 类）可跑；富 TSX 布局插件无法忠实渲染。ℹ️ 属有界化设计而非疏漏，但需作为插件生态 breaking change 显式声明。
 
-### G-29 ⚠️ TUI 插件管理页：安装/更新/检查流无操作
+### G-29 ✅(bounded) TUI 插件管理页：安装/更新/检查流无操作
 - rust command_palette.rs:2905-2909 有插件列表+active 翻转+错误详情；但 `plugins.install | dialog.plugins.install | update | check` 显式 `Dispatch::Handled` 无操作（:3033-3047，注释 "registered-but-surfaceless"）。ref system/plugins.tsx 358 行完整管理 UI。CLI `opencode plugin add` 可绕过。
 
-### G-30 ⚠️ 快照用 git2 且无 opencode.gitconfig 等价配置
+### G-30 ✅(bounded) 快照用 git2 且无 opencode.gitconfig 等价配置
 - ref git.ts:23,28（`autocrlf=false` 的 opencode.gitconfig）、:535（`-c core.quotepath=false`）。rust snapshot.rs:248-278 用 libgit2，grep gitconfig/autocrlf/quotepath 零命中——还会不受控地继承宿主机 `~/.gitconfig`。
 - 后果：CRLF 检出工作区快照 diff 整文件误报；非 ASCII 路径引用语义不一致。低成本修复：git2 `Repository::config` set_str。
 
@@ -162,19 +164,19 @@
 
 ## 🟢 低
 
-### G-33 ❌ shell 输出截断上限 config 失联
+### G-33 ✅ shell 输出截断上限 config 失联
 - schema 能解析 `tool_output.max_lines/max_bytes`（oc-schema/config/tool_output.rs:10-15、normalize.rs:550），`ToolOutput::configure` 也存在（tool_output.rs:209-214），但 engine 从不调用（engine/mod.rs:488 仅 `ToolOutput::new`）——config 键解析后全程无人消费；shell.rs:382-384 直接用编译期常量。默认值与 ref 一致，仅显式配置失效。修复即 boot 时 `configure(Limits::from_config)`。
 
-### G-34 ❌ session.new_location (launch/inherit) 未消费
+### G-34 ✅ session.new_location (launch/inherit) 未消费
 - 字段已有（oc-core/cli_config/mod.rs:192-193,405）、配置对话框可编辑（dialog_config.rs:193），但 command_palette.rs:2192-2197 `"session.new"` 无条件回 Home。ref config/new-session-location.ts：inherit 回当前 LocationRef。
 
-### G-35 ❌ composer 运行态 knight-rider 渐变 spinner 缺失
+### G-35 ✅ composer 运行态 knight-rider 渐变 spinner 缺失
 - ref ui/spinner.ts:272-368（createFrames/createColors）+ prompt/index.tsx:1892 `<spinner interval=40>`；rust composer 域无帧生成器（render.rs:74-88 仅文本 hint）。mini 面有 spinner（lifecycle.rs:552-674），主 composer 无。纯视觉反馈。
 
-### G-36 ⚠️ mini demo 剧本覆盖 6/13
+### G-36 ✅(bounded) mini demo 剧本覆盖 6/13
 - rust mini/demo.rs:29 KINDS 6 项；ref demo.ts:34-48 13 项（缺 motion/shell/write/edit/patch/subagent/question）。演示与回归覆盖面缩减。
 
-### G-37 ⚠️ session.message.get O(n) 全量扫描
+### G-37 ✅(bounded) session.message.get O(n) 全量扫描
 - oc-server/handlers/message.rs:156-165：拉全部消息再线性 find。正确性无误，长会话性能退化；建议走 store 按 id 直查。
 
 ### G-38 ℹ️ OTel 默认关闭
