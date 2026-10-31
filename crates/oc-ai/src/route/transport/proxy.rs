@@ -117,16 +117,17 @@ fn target_port(target: &str) -> Option<u16> {
     Some(port)
 }
 
-/// `NO_PROXY` matching (the `proxy-from-env` semantics v2 inherits):
-/// comma-separated entries, `*` bypasses everything, an entry matches
-/// when it equals the host or is a dot-separated suffix of it (leading
-/// dots are optional). An entry may pin a port (`host:port`), in which
-/// case the target's port must match too.
+/// `NO_PROXY` matching (websocket-constructor.ts:24-36): entries are
+/// separated by whitespace AND commas, `*` bypasses everything, a
+/// bare host matches only on exact (case-insensitive) equality, a
+/// leading `.` (or `*`, which is stripped first) means a domain
+/// suffix, and an entry may pin a port (`host:port`) which the
+/// target's effective port must then match.
 #[must_use]
 pub fn no_proxy_bypasses(host: &str, port: Option<u16>, no_proxy: Option<&str>) -> bool {
     let Some(no_proxy) = no_proxy else { return false };
     let host = host.to_ascii_lowercase();
-    for entry in no_proxy.split(',') {
+    for entry in no_proxy.split(|c: char| c.is_whitespace() || c == ',') {
         let entry = entry.trim();
         if entry.is_empty() {
             continue;
@@ -139,11 +140,17 @@ pub fn no_proxy_bypasses(host: &str, port: Option<u16>, no_proxy: Option<&str>) 
             Some((host, port)) if !host.contains(':') => (host, port),
             _ => (entry, ""),
         };
-        let entry_host = entry_host.trim_start_matches('.').to_ascii_lowercase();
+        // ref strips ONE leading `*`, then a leading `.` means suffix
+        let entry_host = entry_host.strip_prefix('*').unwrap_or(entry_host);
+        let entry_host = entry_host.to_ascii_lowercase();
         if entry_host.is_empty() {
             continue;
         }
-        let host_match = host == entry_host || host.ends_with(&format!(".{entry_host}"));
+        let host_match = if entry_host.starts_with('.') {
+            host.ends_with(&entry_host)
+        } else {
+            host == entry_host
+        };
         if !host_match {
             continue;
         }
@@ -691,7 +698,9 @@ mod tests {
     #[test]
     fn no_proxy_matches_suffixes_and_star() {
         assert!(no_proxy_bypasses("api.example.com", None, Some("api.example.com")));
-        assert!(no_proxy_bypasses("API.EXAMPLE.COM", None, Some("example.com")));
+        assert!(no_proxy_bypasses("api.example.com", None, Some("api.example.com")));
+        // bare hosts match ONLY on exact equality (ref :34)
+        assert!(!no_proxy_bypasses("api.example.com", None, Some("example.com")));
         assert!(no_proxy_bypasses("sub.example.com", None, Some(".example.com")));
         assert!(no_proxy_bypasses("anything", None, Some("*")));
         assert!(no_proxy_bypasses("localhost", None, Some("localhost, other.test")));
