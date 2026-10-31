@@ -148,7 +148,7 @@ impl crate::integration::IntegrationHost {
             .as_array()
             .map(|items| items.iter().filter_map(Value::as_str).map(String::from).collect())
             .unwrap_or_default();
-        let client = reqwest::Client::new();
+        let client = oc_http::client();
         let mut next = BTreeMap::new();
         for origin in origins {
             let origin = origin.trim_end_matches('/').to_owned();

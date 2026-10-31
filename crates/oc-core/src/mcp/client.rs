@@ -1208,7 +1208,7 @@ async fn connect_remote(
     // while the workspace stays on 0.12; both wrap the same `http` crate,
     // so one `HeaderMap` feeds the pre-flight (0.12) and the transport
     // (0.13) identically.
-    let preflight_client = reqwest::Client::builder()
+    let preflight_client = oc_http::builder()
         .default_headers(headers.clone())
         .build()
         .map_err(|error| connect_failure(input.server, &error))?;

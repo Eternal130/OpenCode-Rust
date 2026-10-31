@@ -410,7 +410,7 @@ async fn run_extract(program: &str, args: &[&str]) -> Result<(), RgError> {
 
 /// Real HTTP fetch of a release archive (runtime only — never in tests).
 async fn http_download(url: String) -> Result<Vec<u8>, String> {
-    let client = reqwest::Client::new();
+    let client = oc_http::client();
     let response = client.get(&url).send().await.map_err(|error| error.to_string())?;
     let status = response.status();
     if !status.is_success() {

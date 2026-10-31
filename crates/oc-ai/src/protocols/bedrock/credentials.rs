@@ -387,7 +387,7 @@ async fn imds_leg(options: &DefaultChainOptions) -> Result<Credentials, String> 
 #[cfg(feature = "reqwest-transport")]
 async fn imds_token(base: &str) -> Option<String> {
     let url = format!("{base}/latest/api/token");
-    let response = reqwest::Client::new()
+    let response = oc_http::client()
         .put(&url)
         .timeout(LEG_TIMEOUT)
         .header("x-aws-ec2-metadata-token-ttl-seconds", IMDS_TOKEN_TTL_SECONDS)
@@ -411,7 +411,7 @@ async fn imds_token(_base: &str) -> Option<String> {
 
 #[cfg(feature = "reqwest-transport")]
 async fn http_get_text(url: &str, headers: &[(&str, &str)]) -> Result<String, String> {
-    let mut request = reqwest::Client::new().get(url).timeout(LEG_TIMEOUT);
+    let mut request = oc_http::client().get(url).timeout(LEG_TIMEOUT);
     for (name, value) in headers {
         request = request.header(*name, *value);
     }

@@ -16,6 +16,8 @@ workspace = true
 oc-core = { workspace = true }
 oc-schema = { workspace = true }
 oc-util = { workspace = true }
+# G-26: unified platform TLS trust for the reqwest 0.12 HTTP stack.
+oc-http = { workspace = true }
 oc-client = { workspace = true }
 oc-uqr = { workspace = true }
 oc-server = { workspace = true }

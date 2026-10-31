@@ -185,7 +185,7 @@ pub(super) async fn gitlab_exchange_at(
     fields: Vec<(&str, String)>,
     describe_grant: bool,
 ) -> Result<OAuthValue, String> {
-    let http = reqwest::Client::new();
+    let http = oc_http::client();
     let mut body: Vec<(&str, String)> = fields;
     body.push(("client_id", client_id.to_owned()));
     let pairs: Vec<(&str, &str)> = body.iter().map(|(key, value)| (*key, value.as_str())).collect();
@@ -676,7 +676,7 @@ pub(super) async fn snowflake_token_at(
     account: &str,
     fields: Vec<(&str, String)>,
 ) -> Result<OAuthValue, String> {
-    let http = reqwest::Client::new();
+    let http = oc_http::client();
     let basic = base64::engine::general_purpose::STANDARD
         .encode(format!("{SNOWFLAKE_CLIENT_ID}:{SNOWFLAKE_CLIENT_ID}"));
     let mut body: Vec<(&str, String)> = fields;
@@ -865,7 +865,7 @@ pub(super) async fn openai_exchange_at(
     issuer: &str,
     fields: Vec<(&str, String)>,
 ) -> Result<(String, String, String, f64), String> {
-    let http = reqwest::Client::new();
+    let http = oc_http::client();
     let pairs: Vec<(&str, &str)> =
         fields.iter().map(|(key, value)| (*key, value.as_str())).collect();
     let (status, body) = post_form(&http, &format!("{issuer}/oauth/token"), &pairs).await?;
@@ -997,7 +997,7 @@ pub(super) async fn openai_headless_authorize_at(
     _answer: FormAnswer,
     issuer: &str,
 ) -> Result<Authorization, String> {
-    let http = reqwest::Client::new();
+    let http = oc_http::client();
     let response = http
         .post(format!("{issuer}/api/accounts/deviceauth/usercode"))
         .header("Content-Type", "application/json")
@@ -1020,7 +1020,7 @@ pub(super) async fn openai_headless_authorize_at(
     let issuer = issuer.to_owned();
     let issuer_for_url = issuer.clone();
     let callback: BoxFuture<'static, Result<CredentialValue, String>> = Box::pin(async move {
-        let http = reqwest::Client::new();
+        let http = oc_http::client();
         loop {
             let response = http
                 .post(format!("{issuer}/api/accounts/deviceauth/token"))
@@ -1139,7 +1139,7 @@ pub(super) async fn chatgpt_exchange_at(
     token_url: &str,
     fields: Vec<(&str, String)>,
 ) -> Result<(String, String, String, String, f64), String> {
-    let http = reqwest::Client::new();
+    let http = oc_http::client();
     let pairs: Vec<(&str, &str)> =
         fields.iter().map(|(key, value)| (*key, value.as_str())).collect();
     let (status, body) = post_form(&http, token_url, &pairs).await?;

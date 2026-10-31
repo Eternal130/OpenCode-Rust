@@ -1174,7 +1174,7 @@ mod tests {
                 metadata: None,
             },
         );
-        let http = reqwest::Client::new();
+        let http = oc_http::client();
         let key = refresh_key(&config, &credential);
         let first = refresh(&http, &config, &credential).await;
         assert!(first.is_err(), "OAuth disabled → refresh fails");

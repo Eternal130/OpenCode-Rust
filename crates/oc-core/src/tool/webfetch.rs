@@ -98,7 +98,7 @@ fn content_length_exceeds(headers: &reqwest::header::HeaderMap, maximum: usize) 
 }
 
 async fn fetch(url: &str, format: &str, timeout: u64) -> Result<(Vec<u8>, String), String> {
-    let client = reqwest::Client::builder()
+    let client = oc_http::builder()
         .timeout(Duration::from_secs(timeout))
         .build()
         .map_err(|error| error.to_string())?;

@@ -11,6 +11,8 @@ workspace = true
 [dependencies]
 oc-schema = { workspace = true }
 oc-util = { workspace = true }
+# G-26: unified platform TLS trust for the reqwest 0.12 HTTP stack.
+oc-http = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
