@@ -1,4 +1,4 @@
-//! Generator invariants: determinism, route/client parity (141/141),
+//! Generator invariants: determinism, route/client parity (142/142),
 //! checked-in artifact drift, pinned-spec hash, namespace coverage.
 
 use std::collections::BTreeSet;
@@ -40,9 +40,9 @@ fn deterministic_output() {
 }
 
 #[test]
-fn covers_141_operations_with_no_warnings() {
+fn covers_142_operations_with_no_warnings() {
     let generated = openapi_gen::generate_pinned();
-    assert_eq!(generated.operation_count, 141);
+    assert_eq!(generated.operation_count, 142);
     assert!(
         generated.warnings.is_empty(),
         "unexpected generator warnings: {:?}",
@@ -51,19 +51,19 @@ fn covers_141_operations_with_no_warnings() {
 }
 
 #[test]
-fn route_client_parity_141() {
+fn route_client_parity_142() {
     let generated = openapi_gen::generate_pinned();
     let routes = route_operation_ids(&generated.routes_rs);
     let client = client_operation_ids(&generated.methods_rs);
-    assert_eq!(routes.len(), 141, "route table must cover 141 ops");
-    assert_eq!(client.len(), 141, "client must expose 141 op ids");
+    assert_eq!(routes.len(), 142, "route table must cover 142 ops");
+    assert_eq!(client.len(), 142, "client must expose 142 op ids");
     assert_eq!(routes, client, "every emitted route must have a matching client method");
     // And each id is backed by exactly one generated async method.
     let method_count = generated.methods_rs.matches("pub async fn ").count();
-    assert_eq!(method_count, 141, "one async fn per operation");
+    assert_eq!(method_count, 142, "one async fn per operation");
     // Route table rows agree.
     let route_rows = generated.routes_rs.matches("Route {").count() - 1; // minus the struct def
-    assert_eq!(route_rows, 141);
+    assert_eq!(route_rows, 142);
 }
 
 #[test]
@@ -120,7 +120,7 @@ fn normalize_ws_ignores_formatting_only_changes() {
 #[test]
 fn pinned_spec_hash_is_embedded_and_disk_copy_matches() {
     let generated = openapi_gen::generate_pinned();
-    let expected = "0612418392961ef22f0337ce0e1e520270917665fc85f29c4af1c94d1e1873ee";
+    let expected = "5165970367be69ae9e46000c74a55c530f2bcaaceb6aecfa4a333c6bf9233d60";
     assert_eq!(generated.spec_sha256, expected);
     assert!(generated.routes_rs.contains(expected));
     assert!(generated.types_rs.contains(expected));
