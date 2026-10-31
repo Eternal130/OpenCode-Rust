@@ -288,3 +288,34 @@
 
 ---
 
+---
+
+# 第四轮复审（2026-10-31，gap-burndown-3 收口后）
+
+> 对本轮落地的 24 项修复做 3 通道只读代码级复审（oc-ai / core+server / TUI，逐项对照 ref 源码 file:line 取证）。裁决：20 项 CONFIRMED、4 项 PARTIAL（G-30/G-31/G-34 + G-19 的死校验）。无回归；以下为新登记缺口与半接线残留。
+
+## 既有条目状态修正
+
+- **G-34 ⚠️（降级为 PARTIAL）**：`home_location` 生产路径 write-only——`set_home_location`（store.rs:10545）唯一调用方是 `apply_new_session_location`（command_palette.rs:3360），`home_location()` 唯一读者是测试。Home 路由标签走 `footer_location`（boot location worker 设置），inherit 模式解析正确但无消费者，可见行为与 launch 相同。需把解析结果接到 home 路由的 directory 语义（ref app.tsx:718-737）。
+- **G-30 ℹ️（补充）**：repo-local autocrlf/quotepath 钉定当前行为惰性——快照管道全程 raw blob/OID-map/treebuilder/手写 diff，从不咨询 git config；parity 为偶得（raw passthrough 即无 CRLF 误报）。钉定仅防未来 libgit2 操作。ref 另钉 7 个 key（longpaths/symlinks/fsmonitor/untrackedCache/manyFiles/index.version/threads，ref git.ts:23-33）未移植，当前行为中性。
+- **G-31 ⚠️（补充）**：`is_vcs_root` 弱于 ref `location.vcs`——仓库子目录 location 与 hg 仓库在 rust 侧仍 100k 截断（保守方向）；handler 手里已有 `services.project.vcs`（fs.rs:260 绑定 `_services`）却用文件系统嗅探。
+- **G-19 ⚠️（补充）**：`validate_config`（mantle_messages.rs:199-221）零调用——ref 的 bearer-without-key fail-fast（ProviderConfigurationError）永不触发，rust 静默 SigV4 回退；`auth/profile/region/credentials` settings 键在 oc-core ModelConnection seam（baseURL/apiKey/headers，facade.rs:123-136）无处解析（承自 converse lane 的既有模式）。
+- **G-24（bounded 清单精确化）**：guest 侧 worktree host-op、`vcs.transform`/`vcs.reload`（dispatch 表仅有 websearch/worktree transform，supervisor.rs:356-369）、websearch `editor.default.set` 持久化（host.js:875-877 为 no-op stub）、worktree 注册表热重载（`AppState.worktree_strategies` 仅 boot.rs:439 赋值，`reload_after_update` 不重播种）。
+
+## 新登记缺口（G-41..G-49）
+
+### 🟡 中
+- **G-41 ❌ 代理 URL 凭据被丢弃**：proxy.rs:200 剥掉 userinfo，CONNECT 无 Proxy-Authorization（:483-485），SOCKS5 匿名（:438）——需认证的企业代理得 407。ref proxy-agents 消费 `url.auth`。
+- **G-42 ❌ WSS_PROXY/WS_PROXY 未咨询**：proxy.rs:52-56 仅 HTTPS/HTTP(S)_PROXY/ALL_PROXY；ref websocket-constructor.ts:43-47 先查 WS 族。
+- **G-43 ❌ 无 loopback 目标绕过**：ref 对 127.0.0.1/localhost/::1 恒直连（:38）；rust 无此旁路。
+- **G-44 ❌ NO_PROXY bare-host 语义偏差**：rust 对 bare host 做后缀匹配、`*.foo.com` 永不命中、仅逗号分隔；ref 为 bare host 精确相等（`.`/`*` 前缀才后缀）、空白+逗号分隔（ref :23-36）。
+
+### 🟢 低
+- **G-45 ❌ agent-client-protocol-schema 无 drift 守卫**：同为 vendored+同一 preserve_order 改动（third_party/agent-client-protocol-schema/Cargo.toml:103，同样经 [patch.crates-io] 钉定），acp_drift.py:39-40 的 VENDORED 硬编码只覆盖主包。扩 guard 即可。
+- **G-46 ❌ dialog.plugins.error 仍无操作面**：command_palette.rs:3129 留在 surfaceless 组；ref plugins.tsx:224-228 有 error 详情动作。
+- **G-47 ❌ IDE socket backoff 不复位**：连接成功后 `attempt` 不清零（editor_ide.rs:222-235 vs ref editor.ts:243）→ 抖动后重连恒等 10s；另空字符串 env 值阻断 fallback（ref `||` 视 "" 为 falsy）。
+- **G-48 ❌ tool_output 限制 boot 一次性应用**：ref 经 ConfigEntryObserver 活跃重应用（config/plugin/tool-output.ts）；rust 改 `tool_output.*` 需重启。
+- **G-49 ℹ️ 记录性/文档债**：spinner 帧率受 pump tick（50-100ms）约束而非 40ms 定时器（帧数学精确）；session.environment 每 session 单发（ref 效果重触发，PUT 幂等无害）；stdio.rs 模块头宣称 SIGTERM→SIGKILL 升级但实现为即杀（沿袭 rmcp 行为，措辞与 ref 2s 优雅等待不符）；project.rs:1103-1105 注释"插件 strategy 不支持"已过时（add_strategy 就在其下）；proxy.rs:367 注释"webpki 与 0.13 栈一致"在 G-26 后已失效（0.13 现走 platform-verifier；ws 链路留 webpki 为有意）。
+
+## 复审判定汇总
+G-18 ✅ / G-19 ✅(死校验残留) / G-20 ✅ / G-21 ✅ / G-22 ✅ / G-23 ✅ / G-24 ✅(bounded) / G-25 ✅ / G-26 ✅ / G-27 ✅(F1=新 G-45) / G-29 ✅(error 面残留) / G-30 ✅(惰性钉定) / G-31 ⚠️ / G-33 ✅(无热重载) / G-34 ⚠️(半接线) / G-35 ✅ / G-36 ✅ / G-37 ✅ / G-6 ✅ / G-8 ✅(G-41..G-44 残留) / G-1 ✅(consumer 迁移仍开放)
