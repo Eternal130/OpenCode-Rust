@@ -62,13 +62,19 @@ pub const ALL_METHODS: [&str; 9] =
 /// Environment variable holding the full release-tarball URL for the
 /// `github` method (may contain `{version}`/`{target}` placeholders).
 pub const RELEASE_URL_ENV: &str = "OPENCODE_RELEASE_URL";
-
 /// Environment variable overriding the package name the
 /// package-manager methods install (v2 resolves it from the
 /// `opencode.ai/update/api` release metadata; the Rust port has no
 /// such feed, so the name defaults to the published npm package and
 /// is overridable for tests/alternative distributions).
 pub const PACKAGE_ENV: &str = "OPENCODE_PACKAGE";
+/// Environment variable overriding the installer-script URL the
+/// `curl` method downloads (defaults to the official v2 installer;
+/// overridable for tests/air-gapped mirrors, mirroring
+/// [`RELEASE_URL_ENV`]).
+pub const INSTALLER_URL_ENV: &str = "OPENCODE_INSTALLER_URL";
+/// The official OpenCode installer script (v2 `curl` method source).
+pub const DEFAULT_INSTALLER_URL: &str = "https://opencode.ai/v2/install";
 
 /// The default package the package-manager methods install (v2's
 /// `@opencode-ai/cli`, the stream the ref updater drives).
@@ -234,6 +240,109 @@ impl std::fmt::Display for UpgradeError {
 
 impl std::error::Error for UpgradeError {}
 
+/// The installer-script URL the `curl` method downloads: the
+/// `OPENCODE_INSTALLER_URL` override when set, else the official v2
+/// installer.
+#[must_use]
+pub fn installer_url() -> String {
+    std::env::var(INSTALLER_URL_ENV)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_INSTALLER_URL.to_owned())
+}
+
+/// The interpreter that runs the downloaded installer script. v2
+/// resolves Git Bash on Windows (a bare `bash` may be the WSL
+/// launcher); everywhere else plain `bash`.
+#[must_use]
+pub fn installer_shell() -> String {
+    if cfg!(windows) {
+        // Git Bash's bash.exe location set; fall back to PATH lookup.
+        for candidate in
+            [r"C:\Program Files\Git\bin\bash.exe", r"C:\Program Files (x86)\Git\bin\bash.exe"]
+        {
+            if std::path::Path::new(candidate).is_file() {
+                return candidate.to_owned();
+            }
+        }
+    }
+    "bash".to_owned()
+}
+
+/// The two commands the `curl` method runs (v2 `upgrade` curl
+/// branch): download the official installer to a temp file, then
+/// execute it for the exact version with `--no-modify-path` (the
+/// upgrade path never edits shell rc files — v2 parity).
+#[must_use]
+pub fn installer_commands(
+    installer: &Path,
+    url: &str,
+    version: &str,
+) -> (Vec<String>, Vec<String>) {
+    let download = vec![
+        "curl".to_owned(),
+        "-fsSL".to_owned(),
+        "-o".to_owned(),
+        installer.to_string_lossy().into_owned(),
+        url.to_owned(),
+    ];
+    let run = vec![
+        installer_shell(),
+        installer.to_string_lossy().into_owned(),
+        "--version".to_owned(),
+        version.to_owned(),
+        "--no-modify-path".to_owned(),
+    ];
+    (download, run)
+}
+
+/// `curl` method: run the official OpenCode installer (v2 parity —
+/// download `https://opencode.ai/v2/install` and execute it with
+/// `bash <installer> --version <version> --no-modify-path`). Unlike
+/// `github` this does NOT use the `OPENCODE_RELEASE_URL` tarball:
+/// the installer script owns placement (bin dir, ptys, symlinks).
+async fn upgrade_via_installer_script(target: &str) -> i32 {
+    let version = target.trim().trim_start_matches('v');
+    let url = installer_url();
+    let unique_nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    let directory =
+        std::env::temp_dir().join(format!("oc-installer-{}-{unique_nanos}", std::process::id()));
+    if let Err(error) = std::fs::create_dir_all(&directory) {
+        eprintln!(
+            "Error: Could not prepare the OpenCode upgrade: failed to create {}: {error}",
+            directory.display()
+        );
+        eprintln!("Fix the issue above, then run opencode upgrade again.");
+        return 1;
+    }
+    let installer = directory.join("install");
+    let (download, run) = installer_commands(&installer, &url, version);
+    println!("Downloading the OpenCode installer ({url})");
+    println!("Running the official OpenCode installer: opencode upgrade v{version} --method curl");
+    if let Err(error) = run_package_manager_command(&download).await {
+        eprintln!("Error: Could not download the OpenCode installer: {error}");
+        eprintln!("Check your network, then run opencode upgrade again.");
+        let _ = std::fs::remove_dir_all(&directory);
+        return 1;
+    }
+    let result = run_package_manager_command(&run).await;
+    let _ = std::fs::remove_dir_all(&directory);
+    match result {
+        Ok(()) => {
+            println!("Upgrade complete (curl: the OpenCode installer replaced the binary).");
+            0
+        }
+        Err(error) => {
+            eprintln!("Error: The OpenCode installer failed: {error}");
+            eprintln!("Fix the issue above, then run opencode upgrade again.");
+            1
+        }
+    }
+}
+
 /// The curl-method install location (v2 `curlBinary`):
 /// `$HOME/.opencode/bin/opencode-rust`.
 #[must_use]
@@ -323,10 +432,22 @@ pub async fn upgrade(request: UpgradeRequest) -> i32 {
         return 1;
     }
     println!("Using method: {method}");
-    match method.as_str() {
+    // G-99: the explicit-target routes — `curl` runs the official
+    // installer script (v2 parity), `github` the verified release
+    // tarball. Pure seam so dispatch is unit-testable without
+    // network/spawn.
+    let Some(route) = explicit_target_route(&method) else {
+        eprintln!(
+            "Error: Unknown upgrade method {method:?}; supported methods: {}.",
+            ALL_METHODS.join(", ")
+        );
+        return 1;
+    };
+    match route {
         "local-file" => upgrade_from_file(Path::new(target), &exe),
-        "github" | "curl" => upgrade_from_release(method == "curl", target, &exe).await,
-        "brew" | "npm" | "pnpm" | "bun" | "yarn" | "vp" => {
+        "installer-script" => upgrade_via_installer_script(target).await,
+        "release-download" => upgrade_from_release(target, &exe).await,
+        _ => {
             // v2 drives the real package-manager command (`npm install
             // --global <pkg>@<ver>`, …). No sha256 step here: the
             // manager's registry is the trust root (matches ref).
@@ -342,13 +463,20 @@ pub async fn upgrade(request: UpgradeRequest) -> i32 {
                 }
             }
         }
-        other => {
-            eprintln!(
-                "Error: Unknown upgrade method {other:?}; supported methods: {}.",
-                ALL_METHODS.join(", ")
-            );
-            1
-        }
+    }
+}
+
+/// Route name for an explicit-target upgrade (see [`upgrade`]):
+/// `installer-script` (curl), `release-download` (github),
+/// `local-file`, or `package-manager`. `None` = unknown method.
+#[must_use]
+pub fn explicit_target_route(method: &str) -> Option<&'static str> {
+    match method {
+        "curl" => Some("installer-script"),
+        "github" => Some("release-download"),
+        "local-file" => Some("local-file"),
+        "brew" | "npm" | "pnpm" | "bun" | "yarn" | "vp" => Some("package-manager"),
+        _ => None,
     }
 }
 
@@ -436,13 +564,15 @@ fn upgrade_from_file(source: &Path, exe: &Path) -> i32 {
     }
 }
 
-/// `github`/`curl` with an EXPLICIT target: download the
+/// `github` with an EXPLICIT target: download the
 /// `OPENCODE_RELEASE_URL` tarball (placeholders filled), verify against
 /// the `<url>.sha256` sidecar when one is reachable, replace. The
 /// explicit-target path stays sidecar-optional so offline/harness
 /// installs (`OPENCODE_RELEASE_URL` at a bare local tarball) keep
-/// working exactly as before.
-async fn upgrade_from_release(via_installer_semantics: bool, target: &str, exe: &Path) -> i32 {
+/// working exactly as before. (`curl` no longer shares this body —
+/// it runs the official installer script, see
+/// [`upgrade_via_installer_script`].)
+async fn upgrade_from_release(target: &str, exe: &Path) -> i32 {
     let version = target.trim_start_matches('v');
     let url = match release_url(version) {
         Ok(url) => url,
@@ -451,7 +581,6 @@ async fn upgrade_from_release(via_installer_semantics: bool, target: &str, exe: 
             return 1;
         }
     };
-    let _ = via_installer_semantics; // both names share the download+replace body
     println!("Downloading {url}");
     match install_from_url_pair(&url, &format!("{url}.sha256"), exe, false).await {
         Ok(verified) => {
@@ -988,6 +1117,54 @@ pub fn execute_removals(plan: &[Removal]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// G-99: `curl` must route to the official installer script and
+    /// `github` to the release download — never share a body.
+    #[test]
+    fn g99_curl_and_github_have_distinct_routes() {
+        assert_eq!(explicit_target_route("curl"), Some("installer-script"));
+        assert_eq!(explicit_target_route("github"), Some("release-download"));
+        assert_eq!(explicit_target_route("local-file"), Some("local-file"));
+        for method in ["brew", "npm", "pnpm", "bun", "yarn", "vp"] {
+            assert_eq!(explicit_target_route(method), Some("package-manager"));
+        }
+        assert_eq!(explicit_target_route("does-not-exist"), None);
+    }
+
+    /// G-99: the installer commands mirror v2's curl branch —
+    /// `curl -fsSL -o <tmp>/install <url>` then
+    /// `bash <installer> --version <version> --no-modify-path`.
+    #[test]
+    fn g99_installer_commands_match_the_v2_shape() {
+        let installer = std::path::Path::new("/tmp/oc-update-abc/install");
+        let (download, run) =
+            installer_commands(installer, "https://opencode.ai/v2/install", "2.0.24");
+        assert_eq!(download[0], "curl");
+        assert_eq!(download[1], "-fsSL");
+        assert_eq!(download[2], "-o");
+        assert_eq!(download[3].as_str(), "/tmp/oc-update-abc/install");
+        assert_eq!(download[4], "https://opencode.ai/v2/install");
+        assert_eq!(run[0], installer_shell());
+        assert_eq!(run[1].as_str(), "/tmp/oc-update-abc/install");
+        assert_eq!(&run[2..], ["--version", "2.0.24", "--no-modify-path"]);
+    }
+
+    /// G-99: the installer URL comes from `OPENCODE_INSTALLER_URL`
+    /// when set, else the official v2 installer.
+    #[test]
+    fn g99_installer_url_env_override() {
+        let saved = std::env::var(INSTALLER_URL_ENV).ok();
+        std::env::set_var(INSTALLER_URL_ENV, "https://mirror.example/install.sh");
+        assert_eq!(installer_url(), "https://mirror.example/install.sh");
+        std::env::remove_var(INSTALLER_URL_ENV);
+        assert_eq!(installer_url(), DEFAULT_INSTALLER_URL);
+        std::env::set_var(INSTALLER_URL_ENV, "   ");
+        assert_eq!(installer_url(), DEFAULT_INSTALLER_URL, "blank overrides are ignored");
+        match saved {
+            Some(saved) => std::env::set_var(INSTALLER_URL_ENV, saved),
+            None => std::env::remove_var(INSTALLER_URL_ENV),
+        }
+    }
 
     #[test]
     fn method_detection_curl_only_at_the_install_location() {

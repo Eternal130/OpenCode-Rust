@@ -343,8 +343,8 @@ pub enum Commands {
         /// Show every detailed section
         #[arg(long)]
         full: bool,
-        /// Number of rows in detailed sections
-        #[arg(long, default_value_t = 5)]
+        /// Number of rows in detailed sections (>=1; ref Schema minimum)
+        #[arg(long, default_value_t = 5, value_parser = clap::value_parser!(u32).range(1..))]
         limit: u32,
         /// Output statistics as JSON
         #[arg(long)]
@@ -927,6 +927,18 @@ mod tests {
             assert!(rendered.contains("invalid value"), "{bad}: {rendered}");
             assert!(rendered.contains("1970..=9999"), "{bad} names the range: {rendered}");
         }
+    }
+
+    /// G-104: `stats --limit` requires >=1 (ref Schema `minimum: 1`)
+    /// at the exact boundary.
+    #[test]
+    fn stats_limit_rejects_zero_at_parse_time() {
+        Cli::try_parse_from_checked(["opencode", "stats", "--limit", "5"])
+            .unwrap_or_else(|e| panic!("limit 5 parses: {e}"));
+        let error = Cli::try_parse_from_checked(["opencode", "stats", "--limit", "0"]).unwrap_err();
+        let rendered = error.to_string();
+        assert!(rendered.contains("invalid value"), "0 rejected: {rendered}");
+        assert!(rendered.contains("1.."), "names the range: {rendered}");
     }
 
     // --- RE-05: ref-matching clap-level validation gaps ---------------
