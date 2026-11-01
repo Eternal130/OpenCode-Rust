@@ -19,6 +19,7 @@ struct TestServer {
     addr: std::net::SocketAddr,
     workspace: tempfile::TempDir,
     _data: tempfile::TempDir,
+    state: Arc<AppState>,
 }
 
 async fn boot() -> TestServer {
@@ -41,7 +42,7 @@ async fn boot() -> TestServer {
     tokio::spawn(async move {
         let _ = axum::serve(listener, router).await;
     });
-    TestServer { addr, workspace, _data: data }
+    TestServer { addr, workspace, _data: data, state }
 }
 
 async fn find_raw(server: &TestServer, query: &str) -> serde_json::Value {
@@ -173,4 +174,30 @@ async fn find_excludes_protected_and_heavy_trees() {
     // rather than inventing a linux table. End-to-end home scanning is not
     // fixture-safe; the table gating itself is unit-covered in
     // oc-core::filesystem::protected.
+}
+
+/// G-31 T2: repeated finds are served from the shared in-memory index —
+/// one build on first access, no walk per request (the 10s freshness
+/// window keeps the cached entries; unit-covered further in
+/// handlers::fs::index_tests).
+#[tokio::test]
+async fn find_serves_from_the_shared_index_no_walk_per_request() {
+    let server = boot().await;
+    let workspace = server.workspace.path().to_path_buf();
+    std::fs::write(workspace.join("indexed.txt"), "x").expect("write");
+
+    let first = find_raw(&server, "indexed").await;
+    assert_eq!(paths(&first).len(), 1);
+    let builds_after_first = server.state.fs_index.builds();
+    assert_eq!(builds_after_first, 1, "build-on-first-miss");
+
+    for _ in 0..3 {
+        let again = find_raw(&server, "indexed").await;
+        assert_eq!(paths(&again).len(), 1);
+    }
+    assert_eq!(
+        server.state.fs_index.builds(),
+        builds_after_first,
+        "requests inside the freshness window must not rewalk"
+    );
 }
