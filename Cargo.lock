@@ -2522,6 +2522,7 @@ dependencies = [
  "oc-ai",
  "oc-client",
  "oc-core",
+ "oc-http",
  "oc-plugin-host",
  "oc-schema",
  "oc-tui",

@@ -55,16 +55,11 @@ async fn request_list(
 // GET /api/permission/saved, DELETE /api/permission/saved/:id
 // ---------------------------------------------------------------------------
 
-async fn saved_list(
-    State(state): State<SharedState>,
-    uri: Uri,
-    headers: HeaderMap,
-) -> Result<Response, ApiError> {
-    // The saved-grant family resolves the request location (v2 location
-    // middleware: query → header → cwd) and goes through the location's
-    // services — assembling the location when cold (SSE-visible boot).
-    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
-    let _services = services(&state, &location).await?;
+async fn saved_list(State(state): State<SharedState>, uri: Uri) -> Result<Response, ApiError> {
+    // G-97: the saved-grant family is registered BEFORE the location
+    // middleware in the ref protocol (permission.ts:37,49) — it reads the
+    // global store directly: no location resolution, no cold-boot service
+    // assembly, no 404 on an absent directory.
     let project_id = query_field(&uri, "projectID");
     let rows = state
         .engine
@@ -129,16 +124,11 @@ async fn saved_list(
 
 async fn saved_remove(
     State(state): State<SharedState>,
-    uri: Uri,
-    headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Response, ApiError> {
-    // v2: the location middleware resolves the request location (cwd
-    // default) and the delete runs through the location's permission
-    // service — the cold boot of the server's own cwd location is pinned
-    // by the permission_saved golden.
-    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
-    let _services = services(&state, &location).await?;
+    // G-97: pre-location-middleware placement (permission.ts:49) — the
+    // delete runs straight against the store without resolving or
+    // booting the request location.
     let db = state.engine.db.clone();
     let id = id.clone();
     db.transaction(move |tx| {
@@ -186,12 +176,12 @@ async fn session_create(
     let input = oc_core::permission::AssertInput {
         id: parsed_body.id.map(PermissionId),
         session_id: parse_session_id(&session_id),
-        agent: None,
+        agent: parsed_body.agent.map(oc_schema::id::AgentId),
         action: parsed_body.action,
         resources: parsed_body.resources,
         save: parsed_body.save,
-        metadata: None,
-        source: None,
+        metadata: parsed_body.metadata,
+        source: parsed_body.source,
     };
     let result = services.permission.ask(input).await.map_err(|error| {
         crate::errors::debug_cause("permission:unknown_ref", &error);
@@ -274,15 +264,19 @@ fn owned_request(
 /// Request-body projection for `permission ask`.
 struct AskBody {
     id: Option<String>,
+    agent: Option<String>,
     action: String,
     resources: Vec<String>,
     save: Option<Vec<String>>,
+    metadata: Option<oc_schema::common::Record>,
+    source: Option<oc_schema::permission::Source>,
 }
 
 impl AskBody {
     fn parse(body: &Value) -> Self {
         Self {
             id: body["id"].as_str().map(String::from),
+            agent: body["agent"].as_str().map(String::from),
             action: body["action"].as_str().unwrap_or_default().to_owned(),
             resources: body["resources"]
                 .as_array()
@@ -291,6 +285,10 @@ impl AskBody {
             save: body["save"]
                 .as_array()
                 .map(|items| items.iter().filter_map(Value::as_str).map(String::from).collect()),
+            metadata: body["metadata"]
+                .as_object()
+                .map(|map| map.iter().map(|(key, value)| (key.clone(), value.clone())).collect()),
+            source: serde_json::from_value(body["source"].clone()).ok(),
         }
     }
 }
