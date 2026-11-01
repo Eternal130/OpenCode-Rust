@@ -51,6 +51,12 @@ retries = 2
 filter = 'test(pty_lane_if)'
 retries = 2
 
+# lane F (G-83): the which-key panel's live-PTY proof — same
+# spawn-contention class as the other lane PTY families.
+[[profile.default.overrides]]
+filter = 'test(pty_g83)'
+retries = 2
+
 # lane PTYD D3: real-binary process-level daemon tests (oc-pty
 # tests/process.rs) — same serialized real-process class as the PTY
 # suites; the 8 MiB replay scenarios (i15/slow) read child output
