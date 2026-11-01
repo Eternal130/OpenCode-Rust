@@ -634,12 +634,14 @@ mod tests {
         let mut keymap = Keymap::new();
         let clock = ManualClock::default();
         // G-103 — <leader>q is SHARED (keybind.ts:48 app.exit vs :131
-        // session.queued_prompts): the queue manager's later
-        // registration wins while both are enabled.
+        // session.queued_prompts): this engine resolves the same-key
+        // conflict to the EARLIER registration (app.exit); the app
+        // layer stands app.exit down while the queue is live so the
+        // manager keeps the chord (see app.rs's G-103 arbitration).
         assert_pending_leader(&keymap.lookup(stroke("ctrl+x"), &clock));
         assert_eq!(
             keymap.lookup(stroke("q"), &clock),
-            Outcome::Command { command: "session.queued_prompts".to_owned(), args: None }
+            Outcome::Command { command: "app.exit".to_owned(), args: None }
         );
         // n → session.new; e → prompt.editor; m → model.list; w → tab close.
         for (chord_tail, command) in [
@@ -752,8 +754,12 @@ mod tests {
             keymap.bindings_for("session.tab.select.10"),
             vec!["ctrl+x 0".to_owned(), "ctrl+0".to_owned()]
         );
-        // Wave A decollision: app.exit keeps ctrl+c/ctrl+d only.
-        assert_eq!(keymap.bindings_for("app.exit"), vec!["ctrl+c".to_owned(), "ctrl+d".to_owned()]);
+        // G-103 — app.exit also claims the shared <leader>q
+        // (keybind.ts:48).
+        assert_eq!(
+            keymap.bindings_for("app.exit"),
+            vec!["ctrl+c".to_owned(), "ctrl+d".to_owned(), "ctrl+x q".to_owned()]
+        );
     }
 
     #[test]
@@ -1020,35 +1026,35 @@ mod override_tests {
     }
 
     /// G-103 — the shared `<leader>q` arbitration (keybind.ts:48
-    /// `app.exit` vs :131 `session.queued_prompts`, resolved by
-    /// registration order): the queue manager wins while enabled; a
-    /// DISABLED queue manager (v2 index.tsx:1268's
-    /// `enabled: queuedPrompts().length > 0` — the port's gate) falls
-    /// the chord through to app.exit.
+    /// `app.exit` vs :131 `session.queued_prompts`): both enabled →
+    /// the EARLIER registration (app.exit) takes the chord; the
+    /// queue manager claims it whenever app.exit stands down (the
+    /// app layer's live-queue condition, and the ref's
+    /// empty-prompt gate — index.tsx app.exit layer + :1268).
     #[test]
     fn leader_q_arbitrates_between_exit_and_queue_manager() {
         let mut keymap = Keymap::new();
         let clock = ManualClock::default();
         assert_pending_leader(&keymap.lookup(stroke("ctrl+x"), &clock));
-        // Both enabled: the later registration (the queue manager)
-        // takes the chord.
-        assert_eq!(
-            keymap.lookup(stroke("q"), &clock),
-            Outcome::Command { command: "session.queued_prompts".to_owned(), args: None }
-        );
-        // The queue empty (queue manager gated off): app.exit claims
-        // the chord.
-        keymap.set_command_enabled("session.queued_prompts", false);
-        assert_pending_leader(&keymap.lookup(stroke("ctrl+x"), &clock));
+        // Both enabled: app.exit (registered first) takes the chord.
         assert_eq!(
             keymap.lookup(stroke("q"), &clock),
             Outcome::Command { command: "app.exit".to_owned(), args: None }
         );
-        // Re-enabled: the manager takes it back.
-        keymap.set_command_enabled("session.queued_prompts", true);
+        // app.exit stood down (the live-queue arbitration / the
+        // non-empty-draft gate): the queue manager claims the chord.
+        keymap.set_command_enabled("app.exit", false);
+        assert_pending_leader(&keymap.lookup(stroke("ctrl+x"), &clock));
         assert_eq!(
             keymap.lookup(stroke("q"), &clock),
             Outcome::Command { command: "session.queued_prompts".to_owned(), args: None }
+        );
+        // ctrl+d falls to session.delete (its own claim) while
+        // app.exit is stood down — the gate is per-command, not
+        // per-key.
+        assert_eq!(
+            keymap.lookup(stroke("ctrl+d"), &clock),
+            Outcome::Command { command: "session.delete".to_owned(), args: None }
         );
     }
 
