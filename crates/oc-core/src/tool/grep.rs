@@ -424,13 +424,18 @@ async fn run(
     }
 
     let root = target.absolute.clone();
-    let metadata = std::fs::metadata(&root).map_err(|_| {
-        ToolFailure::message(format!(
-            "Search path does not exist: {}",
-            path.clone().unwrap_or_else(|| ".".into())
-        ))
-    })?;
-    let (cwd, file): (PathBuf, Option<String>) = if metadata.is_dir() {
+    // G-1: follow-kind probe through the Files seam (`type_following`
+    // follows a final symlink like std::fs::metadata did).
+    let kind = crate::environment::type_following(services.files.as_ref(), &root.to_string_lossy())
+        .await
+        .map_err(|_| {
+            ToolFailure::message(format!(
+                "Search path does not exist: {}",
+                path.clone().unwrap_or_else(|| ".".into())
+            ))
+        })?;
+    let (cwd, file): (PathBuf, Option<String>) = if kind == crate::environment::FileType::Directory
+    {
         (root.clone(), None)
     } else {
         (
