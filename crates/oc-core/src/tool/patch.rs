@@ -484,12 +484,17 @@ async fn execute_patch(
     }
 
     // ---- formatter resync ---------------------------------------------------
-    // G-90 — ref patch.ts:258-267: a failed read or formatter sync is an
-    // EXPLICIT failure (`Failed to read ${target}` / `Failed to sync
-    // ${target}`), never a silent skip or a stale-text fallback.
+    // G-90 — ref patch.ts:256-258: only NON-delete targets resync
+    // (`applied.filter((item) => item.type !== "delete")`), and a failed
+    // read or formatter sync is an EXPLICIT failure (`Failed to read
+    // ${target}` / `Failed to sync ${target}`), never a silent skip or a
+    // stale-text fallback.
     let mut formatted: std::collections::HashMap<PathBuf, String> =
         std::collections::HashMap::new();
-    for (_, _, absolute) in &applied {
+    for (kind, _, absolute) in &applied {
+        if *kind == "delete" {
+            continue;
+        }
         let current =
             crate::file_mutation::read_text(services.files.as_ref(), absolute).await.map_err(
                 |error| {
