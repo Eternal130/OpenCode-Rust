@@ -429,4 +429,58 @@ mod tests {
         let wrapped = composer_spinner_cell(&options, 40 * 54);
         assert_eq!(wrapped, first, "the cycle wraps modulo 54 frames");
     }
+
+    /// G-49a — the frame index is derived from ELAPSED TIME at
+    /// render (`elapsed_ms/40 % frames.len()`), so the ref's 40 ms
+    /// interval MATH holds at any repaint rate: consecutive 40 ms
+    /// elapsed steps walk consecutive frames, and even a 100 ms
+    /// pump-tick clock (mini/runtime.rs TICK / the app loop's plain
+    /// tick) lands on exactly `floor(elapsed/40)` — never off the
+    /// 40 ms grid. (A faster whole-frame repaint was evaluated and
+    /// rejected: the run loop has no composer-area-only repaint, and
+    /// a 40 ms global cadence disturbs the pump — the shared PTY
+    /// harness closes bursts only on >80 ms quiet gaps and the
+    /// registered temporal tests pin the 100 ms cadence.)
+    #[test]
+    fn frame_progression_follows_the_40ms_cadence_math() {
+        let options = KnightOptions {
+            color: RED,
+            style: KnightStyle::Blocks,
+            inactive_factor: 0.6,
+            min_alpha: 0.3,
+            ..KnightOptions::default()
+        };
+        let frames = create_frames(&options);
+        let frame_at = |elapsed: u64| -> String {
+            composer_spinner_cell(&options, elapsed)
+                .iter()
+                .map(|(glyph, _)| *glyph)
+                .collect()
+        };
+        // Consecutive 40 ms elapsed steps → consecutive frame indices
+        // (the ref's timer advances one frame per step).
+        for index in 0..12u64 {
+            let elapsed = index * SPINNER_INTERVAL_MS;
+            let expected = frames[(elapsed / SPINNER_INTERVAL_MS % frames.len() as u64) as usize]
+                .clone();
+            assert_eq!(frame_at(elapsed), expected, "elapsed {elapsed} ms → frame {index}");
+        }
+        // Sub-interval elapsed stays on the SAME frame (39 ms is
+        // still frame 0 — the index floors onto the 40 ms grid).
+        assert_eq!(frame_at(39), frames[0]);
+        assert_eq!(frame_at(41), frames[1]);
+        // A 100 ms pump-tick clock samples the same math exactly:
+        // index = floor(elapsed/40) % 54 — precise, just visually
+        // skipping the in-between frames (0, 2, 5, 7, 10, …).
+        let sampled: Vec<u64> = (0..5u64).map(|tick| tick * 100 / SPINNER_INTERVAL_MS).collect();
+        assert_eq!(sampled, vec![0, 2, 5, 7, 10]);
+        for (tick, index) in sampled.iter().enumerate() {
+            let elapsed = tick as u64 * 100;
+            assert_eq!(
+                frame_at(elapsed),
+                frames[(*index % frames.len() as u64) as usize],
+                "tick {tick} lands on grid index {index}"
+            );
+        }
+    }
 }
