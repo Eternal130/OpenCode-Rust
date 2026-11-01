@@ -16,6 +16,16 @@ use crate::environment::files::{
 };
 
 /// Spawns real host processes (the cross-spawn equivalent).
+///
+/// KNOWN BOUNDED DIVERGENCE (G-92, G-8/G-17 family): the ref routes
+/// every spawn through `CrossSpawnSpawner` (`packages/util/src/
+/// cross-spawn-spawner.ts`, the `cross-spawn` shim for Windows
+/// `.cmd`/`.bat`/PATHEXT resolution) and detects `npm_execpath` to pick
+/// the package manager. Neither is ported — this project targets
+/// non-Windows only, where `tokio::process::Command` resolves executables
+/// the same way the ref's direct-spawn fast path does. If Windows
+/// support ever lands, that shim + `npm_execpath` detection must be
+/// ported here (and in `oc-plugin-host`'s supervisor spawn) first.
 pub struct HostSpawner;
 
 #[async_trait]

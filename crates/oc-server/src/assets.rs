@@ -235,35 +235,11 @@ fn attribute_offset(tag: &[u8], name: &[u8], with_value: bool) -> Option<usize> 
 // ---------------------------------------------------------------------------
 
 /// `FSUtil.mimeType`: extension lookup with an octet-stream fallback.
+/// G-92: the table lives in `oc_util::mime` (the shared union); this
+/// wrapper only adds the fallback policy.
 #[must_use]
 pub fn mime_type(name: &str) -> &'static str {
-    let extension = name.rsplit_once('.').map(|(_, tail)| tail.to_ascii_lowercase());
-    match extension.as_deref() {
-        Some("html" | "htm") => "text/html",
-        Some("js" | "mjs") => "text/javascript",
-        Some("css") => "text/css",
-        Some("json" | "map") => "application/json",
-        Some("svg") => "image/svg+xml",
-        Some("png") => "image/png",
-        Some("jpg" | "jpeg") => "image/jpeg",
-        Some("gif") => "image/gif",
-        Some("webp") => "image/webp",
-        Some("avif") => "image/avif",
-        Some("ico") => "image/vnd.microsoft.icon",
-        Some("webmanifest") => "application/manifest+json",
-        Some("txt") => "text/plain",
-        Some("xml") => "application/xml",
-        Some("wasm") => "application/wasm",
-        Some("woff") => "font/woff",
-        Some("woff2") => "font/woff2",
-        Some("ttf") => "font/ttf",
-        Some("otf") => "font/otf",
-        Some("mp4") => "video/mp4",
-        Some("webm") => "video/webm",
-        Some("mp3") => "audio/mpeg",
-        Some("pdf") => "application/pdf",
-        _ => "application/octet-stream",
-    }
+    oc_util::mime::from_path(name).unwrap_or(oc_util::mime::OCTET_STREAM)
 }
 
 fn response_with(

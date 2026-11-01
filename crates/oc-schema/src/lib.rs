@@ -78,6 +78,18 @@ pub use session_message::{
 pub use session_support::{ProviderContext, Revert, SessionMetadata};
 
 // TODO(port): v1/ legacy schemas, models-dev refresh plumbing, rpc.ts,
-// pty-ticket.ts, filesystem(.v1).ts non-event schemas, snapshot store
-// types, legacy-event.ts, durable-event-manifest.ts,
-// event-manifest.ts index, Worktree.adopt projection helper.
+// pty-ticket.ts, filesystem(.v1).ts non-event schemas, legacy-event.ts,
+// durable-event-manifest.ts.
+//
+// G-87 adjudication (previously listed here):
+// - event-manifest.ts index: ALREADY PORTED — the publicness index lives
+//   in `oc-server/src/event_manifest.rs` (ServerDefinitions/isServer
+//   equivalent) backed by the oc-core bus registry; nothing left here.
+// - snapshot store types: INTENTIONALLY NOT PORTED to oc-schema — the
+//   ref's `schema/src/snapshot.ts` is a 6-line branded-ID module with no
+//   wire consumer (the store is core-internal and already ported in
+//   `oc-core/src/snapshot/`).
+// - Worktree.adopt projection: IMPLEMENTED (G-87) as
+//   [`crate::misc::worktree_adopt`] (pure client-store projection,
+//   worktree.ts:73 1:1); the DB-side twin is oc-core's session
+//   projector `project_worktree`.
