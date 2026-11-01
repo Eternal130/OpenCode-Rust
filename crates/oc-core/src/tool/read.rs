@@ -788,7 +788,10 @@ async fn alternate_path(
     absolute: &Path,
 ) -> Option<PathBuf> {
     let canonical = |name: &str| -> String {
-        name.chars()
+        use unicode_normalization::UnicodeNormalization;
+        // REF order (read.ts:139-143): NFC FIRST, then the NBSP/curly
+        // quote replacements.
+        name.nfc()
             .map(|c| match c {
                 '\u{00A0}' | '\u{202F}' => ' ',
                 '\u{2018}' | '\u{2019}' => '\'',

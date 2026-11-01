@@ -749,6 +749,24 @@ async fn tool_read_recovers_unique_typography_variant() {
 }
 
 #[tokio::test]
+async fn tool_read_recovers_unique_nfd_variant() {
+    let harness = harness().await;
+    // The on-disk name is NFD ("e" + combining acute); the request is
+    // NFC ("é") — canonical() NFC-normalizes BOTH sides before the
+    // typography replacements (read.ts:139-143).
+    let recovered = harness.dir.join("cafe\u{0301}.txt");
+    std::fs::write(&recovered, "hello").expect("write");
+    let settled = call(
+        &harness.tools,
+        "read",
+        serde_json::json!({ "path": "caf\u{00e9}.txt" }),
+    )
+    .await
+    .expect("recovered");
+    assert!(text_of(&settled).starts_with("Read file cafe"), "{}", text_of(&settled));
+}
+
+#[tokio::test]
 async fn tool_read_binary_file_error() {
     let harness = harness().await;
     std::fs::write(harness.dir.join("archive.dat"), b"abc\x00def").expect("write");
