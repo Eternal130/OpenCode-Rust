@@ -130,6 +130,7 @@ pub fn make_local_driver(spawner: std::sync::Arc<dyn Spawner>) -> Driver {
         spawner,
         overrides: Some(std::sync::Arc::new(LocalFiles)),
         stdio: std::sync::Arc::new(crate::environment::stdio::LocalStdioSpawner),
+        pty: std::sync::Arc::new(crate::environment::pty::LocalPtySpawner),
     }
 }
 

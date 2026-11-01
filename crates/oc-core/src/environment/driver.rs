@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use crate::environment::exec_defaults::ExecDefaults;
 use crate::environment::files::Files;
+use crate::environment::pty::PtySpawner;
 
 /// A spawn request: `command args...` with extra env (`extend_env` merges the
 /// current process env) and optional stdin bytes.
@@ -48,14 +49,16 @@ pub trait Spawner: Send + Sync {
     async fn spawn(&self, command: CommandSpec) -> Result<ProcessOutput, SpawnError>;
 }
 
-/// `Driver { spawner, overrides?, stdio }` — `stdio` is the streaming
-/// (piped) spawn counterpart the MCP stdio transport uses; every driver
-/// carries one, defaulting to the same execution plane as `spawner`.
+/// `Driver { spawner, overrides?, stdio, pty }` — `stdio` is the streaming
+/// (piped) spawn counterpart the MCP stdio transport uses; `pty` provisions
+/// pseudo-terminals (the pty session machine's spawn seam); every driver
+/// carries both, defaulting to the same execution plane as `spawner`.
 #[derive(Clone)]
 pub struct Driver {
     pub spawner: Arc<dyn Spawner>,
     pub overrides: Option<Arc<dyn Files>>,
     pub stdio: Arc<dyn crate::environment::stdio::StdioSpawner>,
+    pub pty: Arc<dyn PtySpawner>,
 }
 
 /// `makeFiles(driver) = { ...execDefaults(driver.spawner), ...driver.overrides }`.

@@ -24,11 +24,11 @@ use std::sync::Arc;
 
 use oc_util::determinism::{AscendingIdGen, IdGen, SystemClock, SystemRng};
 use parking_lot::Mutex;
-use portable_pty::{ChildKiller, CommandBuilder, PtySize};
 
 use tokio::sync::mpsc;
 
 use crate::bus::{Bus, PublishOptions};
+use crate::environment::pty::{PtyChildKiller, PtyMaster, PtySpawnRequest, PtySpawner};
 
 /// Retained-output ceiling (pty.ts:12).
 pub const BUFFER_LIMIT: usize = 1024 * 1024 * 2;
@@ -152,8 +152,8 @@ struct Session {
     /// Subscribers parked by an exit while inactive.
     ended: HashMap<u64, Subscriber>,
     writer: Option<Box<dyn std::io::Write + Send>>,
-    killer: Option<Box<dyn ChildKiller + Send>>,
-    resizer: Option<Box<dyn portable_pty::MasterPty + Send>>,
+    killer: Option<Box<dyn PtyChildKiller>>,
+    resizer: Option<Box<dyn PtyMaster>>,
 }
 
 enum ChildEvent {
@@ -320,6 +320,10 @@ pub struct PtyService {
     default_command: Arc<dyn Fn() -> Option<(String, Vec<String>)> + Send + Sync>,
     /// Default working directory (location directory).
     default_cwd: Arc<dyn Fn() -> String + Send + Sync>,
+    /// G-1 — the default PTY provisioner (the local portable-pty
+    /// driver). Per-location spawns can override through
+    /// [`PtyService::create_with`].
+    spawner: Arc<dyn PtySpawner>,
 }
 
 impl PtyService {
@@ -338,7 +342,17 @@ impl PtyService {
             }),
             default_command: Arc::new(|| None),
             default_cwd: Arc::new(|| std::env::temp_dir().to_string_lossy().into_owned()),
+            spawner: Arc::new(crate::environment::pty::LocalPtySpawner),
         }
+    }
+
+    /// Overrides the PTY provisioner seam (G-1: the Environment `pty`
+    /// capability; the local driver wraps the previous portable-pty
+    /// spawn verbatim).
+    #[must_use]
+    pub fn with_spawner(mut self, spawner: Arc<dyn PtySpawner>) -> Self {
+        self.spawner = spawner;
+        self
     }
 
     /// Overrides the shell-selection seam (the C2 shell lane wires the
@@ -406,8 +420,24 @@ impl PtyService {
 
     /// `Pty.create` (pty.ts:166-245): spawn through the pty, wire the data
     /// path into the buffer + subscribers, publish `pty.created`.
-    #[allow(clippy::too_many_lines)] // mirrors pty.ts create: spawn, wire, publish
+    ///
+    /// Spawns through the service's default provisioner (the local
+    /// portable-pty driver); per-location callers use
+    /// [`PtyService::create_with`] with the Environment-resolved spawner.
+    #[must_use]
     pub fn create(&self, input: &CreateInput) -> std::io::Result<Info> {
+        self.create_with(self.spawner.clone(), input)
+    }
+
+    /// `Pty.create` over an explicit PTY provisioner — the G-1
+    /// Environment `pty` seam (the server handler resolves it per
+    /// location, like the Files seam).
+    #[allow(clippy::too_many_lines)] // mirrors pty.ts create: spawn, wire, publish
+    pub fn create_with(
+        &self,
+        spawner: Arc<dyn PtySpawner>,
+        input: &CreateInput,
+    ) -> std::io::Result<Info> {
         let id = self.next_id();
         let (command, base_args) = match &input.command {
             Some(command) => (command.clone(), Vec::new()),
@@ -430,27 +460,17 @@ impl PtyService {
         env.insert("OPENCODE_TERMINAL".to_string(), "1".to_string());
 
         let (cols, rows) = input.size.unwrap_or((80, 24));
-        let mut builder = CommandBuilder::new(&command);
-        builder.args(&args);
-        builder.cwd(&cwd);
-        for (key, value) in &env {
-            builder.env(key, value);
-        }
-        let pty_system = portable_pty::native_pty_system();
-        let pair = pty_system
-            .openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
-            .map_err(|error| std::io::Error::other(error.to_string()))?;
-        let reader = pair
-            .master
-            .try_clone_reader()
-            .map_err(|error| std::io::Error::other(error.to_string()))?;
-        let writer =
-            pair.master.take_writer().map_err(|error| std::io::Error::other(error.to_string()))?;
-        let mut child = pair
-            .slave
-            .spawn_command(builder)
-            .map_err(|error| std::io::Error::other(error.to_string()))?;
-        drop(pair.slave);
+        // G-1 — spawn through the Environment `pty` seam (the local
+        // driver wraps the previous portable-pty spawn verbatim).
+        let spawned = spawner.spawn(PtySpawnRequest {
+            command: command.clone(),
+            args: args.clone(),
+            cwd: cwd.clone(),
+            env,
+            cols,
+            rows,
+        })?;
+        let crate::environment::pty::PtySpawned { reader, writer, master, mut child } = spawned;
         let killer = child.clone_killer();
         let pid = child.process_id().unwrap_or(0);
 
@@ -476,7 +496,7 @@ impl PtyService {
             ended: HashMap::new(),
             writer: Some(writer),
             killer: Some(killer),
-            resizer: Some(pair.master),
+            resizer: Some(master),
         };
         self.inner.sessions.lock().insert(id.clone(), session);
 
@@ -506,8 +526,7 @@ impl PtyService {
         // Exit path: reap the child for the real exit code.
         let exit_tx = events_tx.clone();
         std::thread::spawn(move || {
-            let code =
-                child.wait().ok().map(|status| i32::try_from(status.exit_code()).unwrap_or(0));
+            let code = child.wait().ok().flatten();
             let _ = exit_tx.send(ChildEvent::Exit(code));
         });
 
@@ -604,8 +623,7 @@ impl PtyService {
             if let Some((cols, rows)) = input.size {
                 if session.info.status == Status::Running {
                     if let Some(resizer) = session.resizer.as_mut() {
-                        let _ =
-                            resizer.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 });
+                        let _ = resizer.resize(cols, rows);
                     }
                 }
             }
