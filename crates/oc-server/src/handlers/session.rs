@@ -508,12 +508,25 @@ async fn remove(
 ) -> Result<Response, ApiError> {
     let (services, _) = session_services(&state, &session_id).await?;
     let bus = services.graph.bus.as_ref().clone();
-    services.store.remove(&bus, &session_id).await.map_err(|error| {
+    // `Session.remove` (ref session.ts:367-377): interrupt → await idle
+    // (bounded) → recursively delete children → clear the session
+    // environment → publish `session.deleted`. The core helper owns the
+    // ordering; see `oc_core::session::remove_tree`.
+    oc_core::session::remove_tree(
+        &services.store,
+        &services.execution,
+        &services.session_env,
+        &bus,
+        &session_id,
+    )
+    .await
+    .map_err(|error| {
         crate::errors::debug_cause("session:unknown_ref", &error);
         ApiError::unknown_ref()
     })?;
     Ok(no_content())
 }
+
 
 async fn update(
     State(state): State<SharedState>,

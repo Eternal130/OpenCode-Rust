@@ -3434,3 +3434,112 @@ thread_local! {
     static WAKER: std::cell::RefCell<Option<Box<dyn Fn(String, Promotable) + Send>>> =
         const { std::cell::RefCell::new(None) };
 }
+
+// ------------------------------------------------------- Session.remove tree
+
+/// G-79: `Session.remove` deletes the whole descendant tree (ref
+/// session.ts:367-377 — children are removed recursively BEFORE the
+/// parent) and clears each session's environment; unrelated sessions
+/// survive.
+#[tokio::test]
+async fn session_remove_tree_deletes_descendants_recursively() {
+    use crate::env::SessionEnv;
+
+    let stack = stack().await;
+    let execution = Arc::new(SessionExecution::new(
+        stack.store.clone(),
+        stack.bus.clone(),
+        stack.inbox.clone(),
+        None,
+        Arc::new(|_, _, _, _, _| Box::pin(async { Ok(DrainOutcome::Complete) })),
+    ));
+    let env = SessionEnv::new();
+
+    seed_session_raw(&stack.db, "ses_rm_root").await;
+    seed_session_with(&stack.db, "ses_rm_child", &[("parent_id", "ses_rm_root".to_string())])
+        .await;
+    seed_session_with(&stack.db, "ses_rm_grand", &[("parent_id", "ses_rm_child".to_string())])
+        .await;
+    // An unrelated branch that must survive.
+    seed_session_raw(&stack.db, "ses_rm_other").await;
+    seed_session_with(&stack.db, "ses_rm_keep", &[("parent_id", "ses_rm_other".to_string())])
+        .await;
+
+    env.set(
+        "ses_rm_root",
+        std::collections::HashMap::from([("KEY".to_string(), "value".to_string())]),
+    );
+
+    crate::session::remove_tree(&stack.store, &execution, &env, &stack.bus, "ses_rm_root")
+        .await
+        .expect("remove tree");
+
+    for gone in ["ses_rm_root", "ses_rm_child", "ses_rm_grand"] {
+        assert!(
+            stack.store.get(gone).await.unwrap().is_none(),
+            "{gone} should have been deleted with the tree"
+        );
+    }
+    assert!(stack.store.get("ses_rm_other").await.unwrap().is_some());
+    assert!(stack.store.get("ses_rm_keep").await.unwrap().is_some(), "children of survivors stay");
+    assert!(env.get("ses_rm_root").is_none(), "environments.clear ran for the removed session");
+}
+
+/// G-79: removal interrupts a running execution BEFORE deleting the row —
+/// the drain must observe the shutdown signal while the session still
+/// exists (ref removes only after `awaitIdle`).
+#[tokio::test]
+async fn session_remove_tree_interrupts_running_execution_before_delete() {
+    let stack = stack().await;
+    let store = stack.store.clone();
+    // The drain wedges until shutdown, then records whether the session
+    // row still existed at unwind time — the interrupt-before-remove
+    // ordering proof.
+    let unwind_state = Arc::new(std::sync::Mutex::new(None::<bool>));
+    let drain_store = store.clone();
+    let drain: crate::session::execution::DrainFn = {
+        let unwind_state = Arc::clone(&unwind_state);
+        Arc::new(move |session, _, _, _, mut shutdown| {
+            let unwind_state = Arc::clone(&unwind_state);
+            let store = drain_store.clone();
+            Box::pin(async move {
+                let _ = shutdown.changed().await;
+                let still_present = store.get(&session).await.ok().flatten().is_some();
+                *unwind_state.lock().unwrap() = Some(still_present);
+                Err(RunError::Interrupted)
+            })
+        })
+    };
+    let execution = Arc::new(SessionExecution::new(
+        store.clone(),
+        stack.bus.clone(),
+        stack.inbox.clone(),
+        None,
+        drain,
+    ));
+    let env = crate::env::SessionEnv::new();
+    seed_session_raw(&stack.db, "ses_rm_running").await;
+
+    tokio::spawn({
+        let execution = Arc::clone(&execution);
+        let id = "ses_rm_running".to_string();
+        async move {
+            let _ = execution.resume(&id).await;
+        }
+    });
+    while !execution.is_active("ses_rm_running") {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+
+    crate::session::remove_tree(&store, &execution, &env, &stack.bus, "ses_rm_running")
+        .await
+        .expect("remove tree while running");
+
+    assert_eq!(
+        *unwind_state.lock().unwrap(),
+        Some(true),
+        "the drain unwound while the row still existed — interrupt precedes delete"
+    );
+    assert!(store.get("ses_rm_running").await.unwrap().is_none());
+    assert!(!execution.is_active("ses_rm_running"));
+}
