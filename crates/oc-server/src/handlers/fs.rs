@@ -504,6 +504,19 @@ fn walk(
 
 type IndexEntries = std::sync::Arc<Vec<(std::path::PathBuf, bool)>>;
 
+/// How long an awaiter of an in-flight FIRST build waits before giving
+/// up and serving whatever the slot holds (empty) — bounds the poll
+/// loop so a wedged/slow builder can never hang a request forever
+/// (review C1). The background refresher or a later request still
+/// repairs the slot.
+const AWAIT_BUILD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Roots whose slot no request touched for this long are evicted (and
+/// their refresher stopped): the process-wide map must not keep
+/// re-walking vanished/idle locations forever (review I1; ref's index
+/// dies with its Location scope). Rebuild-on-miss makes eviction safe.
+const IDLE_EVICT_MS: i64 = 300_000;
+
 struct IndexSlot {
     /// When this index settled (unix ms); a request older than
     /// `refresh_ms` past this triggers a rebuild.
@@ -511,10 +524,18 @@ struct IndexSlot {
     entries: IndexEntries,
     /// Single-flight claim for in-progress rebuilds (ref's `refreshing`
     /// Deferred): concurrent stale requests serve the LAST GOOD index
-    /// instead of piling up walks.
+    /// instead of piling up walks. Held through a [`ClaimGuard`] so a
+    /// cancelled (or panicking) builder still releases it.
     refreshing: std::sync::atomic::AtomicBool,
-    /// Whether the 10s background refresher was started for this root.
+    /// Whether a background refresher task is live for this root.
     refresher_started: std::sync::atomic::AtomicBool,
+    /// Last request access (unix ms) — feeds the idle eviction.
+    last_used_ms: std::sync::atomic::AtomicI64,
+    /// Latest request-supplied build parameters (review I2): the
+    /// background refresher re-reads these per rebuild instead of
+    /// freezing the values of whichever request spawned it.
+    budget: std::sync::atomic::AtomicU64,
+    exclusions: ScanExclusions,
 }
 
 impl IndexSlot {
@@ -524,6 +545,26 @@ impl IndexSlot {
             entries: std::sync::Arc::new(Vec::new()),
             refreshing: std::sync::atomic::AtomicBool::new(false),
             refresher_started: std::sync::atomic::AtomicBool::new(false),
+            last_used_ms: std::sync::atomic::AtomicI64::new(i64::MIN),
+            budget: std::sync::atomic::AtomicU64::new(0),
+            exclusions: ScanExclusions { home_rooted: false, names: Vec::new(), paths: Vec::new() },
+        }
+    }
+}
+
+/// Releases a slot's `refreshing` claim when dropped — including on
+/// future cancellation (client disconnect mid-build) and panics — so a
+/// leaked claim can never wedge every later search for that root
+/// (review C1).
+struct ClaimGuard<'a> {
+    slots: &'a dashmap::DashMap<std::path::PathBuf, IndexSlot>,
+    root: std::path::PathBuf,
+}
+
+impl Drop for ClaimGuard<'_> {
+    fn drop(&mut self) {
+        if let Some(slot) = self.slots.get(&self.root) {
+            slot.refreshing.store(false, std::sync::atomic::Ordering::Release);
         }
     }
 }
@@ -539,12 +580,16 @@ impl IndexSlot {
 /// location (re)load walks synchronously like ref's un-initialized
 /// first `find` awaits its scan). No separate config-reload hook: a
 /// moved/reloaded location resolves to a different canonical root and
-/// therefore a fresh slot; stale slots for vanished roots are only
-/// kept alive by their background refresher while the state lives
-/// (bounded by the location count).
+/// therefore a fresh slot; slots self-evict when their root vanishes
+/// or after [`IDLE_EVICT_MS`] without a request (rebuild-on-miss makes
+/// eviction safe), so the map tracks LIVE roots, not every root ever
+/// queried.
 pub struct SearchIndex {
     clock: std::sync::Arc<dyn oc_util::determinism::Clock>,
     refresh_ms: i64,
+    /// Bound for awaiting an in-flight first build ([`AWAIT_BUILD_TIMEOUT`]
+    /// in production; shorter in tests).
+    await_timeout: std::time::Duration,
     /// Production (`new`) starts per-root background refreshers; the
     /// test constructor disables them (tiny test windows would spin).
     background: bool,
@@ -559,20 +604,27 @@ impl SearchIndex {
         SearchIndex {
             clock,
             refresh_ms: REFRESH_INTERVAL_MS,
+            await_timeout: AWAIT_BUILD_TIMEOUT,
             background: true,
             slots: dashmap::DashMap::new(),
             builds: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
-    /// Test constructor: explicit freshness window, no background
-    /// refreshers (rebuilds happen through the request path).
+    /// Test constructor: explicit freshness window (also the refresher
+    /// period) and await bound, no background refreshers (call
+    /// `spawn_refresher` directly to exercise the loop).
     #[must_use]
     pub fn with_refresh_ms(
         clock: std::sync::Arc<dyn oc_util::determinism::Clock>,
         refresh_ms: i64,
     ) -> Self {
-        SearchIndex { background: false, refresh_ms, ..Self::new(clock) }
+        SearchIndex {
+            background: false,
+            refresh_ms,
+            await_timeout: std::time::Duration::from_millis(200),
+            ..Self::new(clock)
+        }
     }
 
     /// Total walk-driven index builds across all roots.
@@ -584,7 +636,7 @@ impl SearchIndex {
     /// fresh slot's entries; on miss or a stale slot, rebuild
     /// (build-on-first-miss; ref awaits the first scan) and then serve.
     /// Concurrent stale requests collapse onto one rebuild; losers
-    /// serve the last good index.
+    /// serve the last good index (or await a first build, bounded).
     pub(crate) async fn entries(
         self: &std::sync::Arc<Self>,
         root: std::path::PathBuf,
@@ -592,69 +644,92 @@ impl SearchIndex {
         exclusions: ScanExclusions,
         now_ms: i64,
     ) -> IndexEntries {
-        if let Some(slot) = self.slots.get(&root) {
-            if now_ms < slot.settled_at + self.refresh_ms {
+        // Record the access + latest build parameters (the refresher
+        // re-reads them per rebuild — review I2).
+        let (fresh_entries, needs_refresher) = {
+            let mut slot = self.slots.entry(root.clone()).or_insert_with(IndexSlot::empty);
+            slot.last_used_ms.store(now_ms, std::sync::atomic::Ordering::Relaxed);
+            slot.budget.store(budget as u64, std::sync::atomic::Ordering::Relaxed);
+            slot.exclusions = exclusions.clone();
+            let fresh = now_ms < slot.settled_at + self.refresh_ms;
+            let refreshing = slot.refreshing.load(std::sync::atomic::Ordering::Acquire);
+            let initialized = slot.settled_at != i64::MIN;
+            let needs_refresher =
+                self.background && !slot.refresher_started.swap(true, std::sync::atomic::Ordering::AcqRel);
+            (fresh || (refreshing && initialized), needs_refresher)
+        };
+        if needs_refresher {
+            self.spawn_refresher(root.clone());
+        }
+        if fresh_entries {
+            // Fresh cache, or a refresh in flight over a last good
+            // index (ref serves the previous map mid-scan).
+            if let Some(slot) = self.slots.get(&root) {
                 return slot.entries.clone();
             }
-            if slot.refreshing.load(std::sync::atomic::Ordering::Acquire) {
-                if slot.settled_at != i64::MIN {
-                    // ref serves the last good index while a refresh is
-                    // in flight.
-                    return slot.entries.clone();
-                }
-                // First build in flight: ref's un-initialized find
-                // AWAITS the initial scan — poll until it lands.
-                drop(slot);
-                while let Some(pending) = self.slots.get(&root) {
-                    if !pending.refreshing.load(std::sync::atomic::Ordering::Acquire) {
-                        return pending.entries.clone();
-                    }
-                    drop(pending);
-                    tokio::time::sleep(std::time::Duration::from_millis(2)).await;
-                }
-                return std::sync::Arc::new(Vec::new());
-            }
         }
-        let claimed = {
-            let mut slot = self.slots.entry(root.clone()).or_insert_with(IndexSlot::empty);
-            !slot.refreshing.swap(true, std::sync::atomic::Ordering::AcqRel)
+        let Some(slot) = self.slots.get(&root) else {
+            return std::sync::Arc::new(Vec::new());
         };
-        if claimed {
-            self.rebuild(root.clone(), budget, exclusions.clone()).await;
-            if let Some(slot) = self.slots.get(&root) {
-                slot.refreshing.store(false, std::sync::atomic::Ordering::Release);
-                if self.background
-                    && !slot.refresher_started.swap(true, std::sync::atomic::Ordering::AcqRel)
-                {
-                    drop(slot);
-                    self.spawn_refresher(root.clone(), budget, exclusions);
-                }
+        if slot.refreshing.load(std::sync::atomic::Ordering::Acquire) {
+            // First build in flight: ref's un-initialized find AWAITS
+            // the initial scan — bounded (review C1) so a wedged
+            // builder cannot hang the request.
+            drop(slot);
+            return self.await_first_build(&root).await;
+        }
+        drop(slot);
+        // Claim the single-flight rebuild; the guard releases the claim
+        // on completion, cancellation, or panic (review C1).
+        let guard = {
+            let mut slot = self.slots.entry(root.clone()).or_insert_with(IndexSlot::empty);
+            if slot.refreshing.swap(true, std::sync::atomic::Ordering::AcqRel) {
+                None
+            } else {
+                Some(ClaimGuard { slots: &self.slots, root: root.clone() })
             }
+        };
+        if let Some(guard) = guard {
+            self.rebuild(&root, budget, &exclusions).await;
+            drop(guard);
             return self.slots.get(&root).map(|slot| slot.entries.clone()).unwrap_or_default();
         }
-        // Lost the single-flight claim: same await/last-good split as
-        // the fast path above.
+        // Lost the single-flight claim: await (first build) or serve
+        // the last good index, bounded.
+        self.await_first_build(&root).await
+    }
+
+    /// Bounded wait for an in-flight build: polls the claim with the
+    /// 2ms sleep until the claim clears (or a last-good index exists)
+    /// and gives up at [`AWAIT_BUILD_TIMEOUT`] — serving whatever the
+    /// slot holds rather than hanging (review C1).
+    async fn await_first_build(&self, root: &std::path::Path) -> IndexEntries {
+        let deadline = tokio::time::Instant::now() + self.await_timeout;
         loop {
-            let Some(slot) = self.slots.get(&root) else { break };
-            if !slot.refreshing.load(std::sync::atomic::Ordering::Acquire) {
-                break;
-            }
-            if slot.settled_at != i64::MIN {
+            let Some(slot) = self.slots.get(root) else { break };
+            if !slot.refreshing.load(std::sync::atomic::Ordering::Acquire)
+                || slot.settled_at != i64::MIN
+            {
                 return slot.entries.clone();
             }
             drop(slot);
+            if tokio::time::Instant::now() >= deadline {
+                break;
+            }
             tokio::time::sleep(std::time::Duration::from_millis(2)).await;
         }
-        self.slots.get(&root).map(|slot| slot.entries.clone()).unwrap_or_default()
+        self.slots.get(root).map(|slot| slot.entries.clone()).unwrap_or_default()
     }
 
     /// One walk + swap (ref `scan`): builds on `spawn_blocking` (the
     /// std::fs recursion must not run on a tokio worker), replaces the
     /// slot's entries only on success — a failed refresh keeps the
     /// last good index (ref keeps the previous map alive mid-scan).
-    async fn rebuild(&self, root: std::path::PathBuf, budget: usize, exclusions: ScanExclusions) {
+    /// A vanished root self-evicts its slot afterwards (review I1).
+    async fn rebuild(&self, root: &std::path::Path, budget: usize, exclusions: &ScanExclusions) {
         self.builds.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let scan_root = root.clone();
+        let scan_root = root.to_path_buf();
+        let exclusions = exclusions.clone();
         let walked = tokio::task::spawn_blocking(move || {
             // The index carries files AND directories (ref indexes
             // files plus every parent directory); type filtering
@@ -666,25 +741,30 @@ impl SearchIndex {
         })
         .await;
         if let Ok(entries) = walked {
-            if let Some(mut slot) = self.slots.get_mut(&root) {
+            if let Some(mut slot) = self.slots.get_mut(root) {
                 slot.entries = std::sync::Arc::new(entries);
                 slot.settled_at = self.clock.unix_ms();
             }
+        }
+        // I1 self-eviction: the location/root is gone — drop the slot
+        // (and with it the reason for the refresher to keep walking).
+        if !root.exists() {
+            self.slots.remove(root);
         }
     }
 
     /// The 10-second background refresher (ref `refresh`'s forked scan
     /// loop): one task per indexed root, holding only a `Weak` handle
     /// so it dies with the server state. On refresh error the last
-    /// good index stays (rebuild swaps only on success).
-    fn spawn_refresher(
-        self: &std::sync::Arc<Self>,
-        root: std::path::PathBuf,
-        budget: usize,
-        exclusions: ScanExclusions,
-    ) {
+    /// good index stays (rebuild swaps only on success). Build
+    /// parameters are re-read from the slot's latest request-supplied
+    /// values on EVERY tick (review I2), and the loop stops (evicting
+    /// the slot) when the root vanished or went idle (review I1).
+    fn spawn_refresher(self: &std::sync::Arc<Self>, root: std::path::PathBuf) {
         let weak = std::sync::Arc::downgrade(self);
-        let period = std::time::Duration::from_millis(u64::try_from(self.refresh_ms).unwrap_or(10_000).max(1));
+        let period = std::time::Duration::from_millis(
+            u64::try_from(self.refresh_ms).unwrap_or(10_000).max(1),
+        );
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(period);
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -692,7 +772,31 @@ impl SearchIndex {
             loop {
                 tick.tick().await;
                 let Some(index) = weak.upgrade() else { break };
-                index.rebuild(root.clone(), budget, exclusions.clone()).await;
+                let Some(slot) = index.slots.get(&root) else { break };
+                let last_used = slot.last_used_ms.load(std::sync::atomic::Ordering::Relaxed);
+                let budget = usize::try_from(
+                    slot.budget.load(std::sync::atomic::Ordering::Relaxed),
+                )
+                .unwrap_or(usize::MAX);
+                let exclusions = slot.exclusions.clone();
+                drop(slot);
+                // I1: idle roots are evicted, not walked forever.
+                if index.clock.unix_ms().saturating_sub(last_used) > IDLE_EVICT_MS {
+                    index.slots.remove(&root);
+                    break;
+                }
+                index.rebuild(&root, budget, &exclusions).await;
+                if !index.slots.contains_key(&root) {
+                    break; // evicted by the rebuild (vanished root)
+                }
+            }
+            // Let a later request re-spawn the refresher (the loop only
+            // exits with the slot gone or the state dying, but keep the
+            // flag honest anyway).
+            if let Some(index) = weak.upgrade() {
+                if let Some(slot) = index.slots.get(&root) {
+                    slot.refresher_started.store(false, std::sync::atomic::Ordering::Release);
+                }
             }
         });
     }
@@ -1078,5 +1182,157 @@ mod index_tests {
         // The single-flight claim bounds builds to one per staleness
         // window even under a thundering herd of first requests.
         assert_eq!(index.builds(), 1, "one build, not one per request");
+    }
+
+    /// C1: a first-miss build whose request future is CANCELLED
+    /// (client disconnect) must not leak the single-flight claim — the
+    /// next request rebuilds itself instead of spinning forever in the
+    /// awaiter loop.
+    #[tokio::test]
+    async fn cancelled_first_build_releases_the_single_flight_claim() {
+        let clock = std::sync::Arc::new(FakeClock(std::sync::Mutex::new(1_000)));
+        let index = index(&clock);
+        let root = tempfile::tempdir_in("/tmp/opencode").expect("tempdir");
+        for i in 0..200 {
+            std::fs::write(root.path().join(format!("f{i:03}.txt")), "x").expect("write");
+        }
+        // Cancel the first-miss build almost immediately.
+        let mut first = Box::pin(index.entries(
+            root.path().to_path_buf(),
+            SCAN_ENTRY_BUDGET,
+            scan(root.path()),
+            1_000,
+        ));
+        tokio::select! {
+            _ = &mut first => {}
+            _ = tokio::time::sleep(std::time::Duration::from_millis(1)) => {}
+        }
+        drop(first); // cancellation vector: Drop runs the ClaimGuard
+
+        // The claim is free: the next request completes promptly (no
+        // unbounded wait on a leaked claim) and serves real entries.
+        let served = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            index.entries(root.path().to_path_buf(), SCAN_ENTRY_BUDGET, scan(root.path()), 1_001),
+        )
+        .await
+        .expect("next request must not hang on a leaked claim");
+        assert!(!served.is_empty(), "index rebuilt and served");
+    }
+
+    /// C1: the awaiter path is BOUNDED — a slot whose first build never
+    /// completes cannot hang the request past the await deadline (the
+    /// test constructor pins a 200ms deadline).
+    #[tokio::test]
+    async fn awaiter_gives_up_at_the_deadline() {
+        let clock = std::sync::Arc::new(FakeClock(std::sync::Mutex::new(1_000)));
+        let index = index(&clock);
+        let root = tempfile::tempdir_in("/tmp/opencode").expect("tempdir");
+        // Wedge the slot: claim held, never initialized.
+        index.slots.entry(root.path().to_path_buf()).or_insert_with(IndexSlot::empty).refreshing =
+            std::sync::atomic::AtomicBool::new(true);
+        let start = std::time::Instant::now();
+        let served = tokio::time::timeout(
+            std::time::Duration::from_secs(30), // wall-clock bound of the test itself
+            index.entries(root.path().to_path_buf(), SCAN_ENTRY_BUDGET, scan(root.path()), 1_000),
+        )
+        .await
+        .expect("bounded wait must return, not hang");
+        assert!(served.is_empty(), "nothing built → empty entries, served anyway");
+        assert!(start.elapsed() < std::time::Duration::from_secs(5), "gave up at the deadline");
+    }
+
+    /// I1: a vanished root self-evicts — the rebuild drops the slot and
+    /// the refresher loop stops (no eternal re-walk of dead locations).
+    #[tokio::test]
+    async fn vanished_root_evicts_its_slot_and_stops_refreshing() {
+        let clock = std::sync::Arc::new(FakeClock(std::sync::Mutex::new(1_000)));
+        let index = std::sync::Arc::new(SearchIndex::with_refresh_ms(
+            std::sync::Arc::clone(&clock) as std::sync::Arc<dyn Clock>,
+            50,
+        ));
+        let root = tempfile::tempdir_in("/tmp/opencode").expect("tempdir");
+        std::fs::write(root.path().join("a.txt"), "x").expect("write");
+        let _ = index
+            .entries(root.path().to_path_buf(), SCAN_ENTRY_BUDGET, scan(root.path()), 1_000)
+            .await;
+        assert!(index.slots.contains_key(root.path()));
+        index.spawn_refresher(root.path().to_path_buf());
+
+        let root_path = root.path().to_path_buf();
+        root.close().expect("remove the root directory");
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        assert!(
+            !index.slots.contains_key(&root_path),
+            "vanished root must self-evict"
+        );
+        let builds_after_eviction = index.builds();
+
+        // And rebuild-on-miss keeps eviction safe: a (re)created root
+        // builds a fresh slot on the next request.
+        std::fs::create_dir_all(&root_path).expect("recreate");
+        std::fs::write(root_path.join("b.txt"), "x").expect("write");
+        let rebuilt = index
+            .entries(root_path.clone(), SCAN_ENTRY_BUDGET, scan(&root_path), 2_000)
+            .await;
+        assert!(names(&rebuilt).contains(&"b.txt".to_owned()));
+        assert!(index.builds() > builds_after_eviction);
+    }
+
+    /// I1: idle roots (no request within [`IDLE_EVICT_MS`]) are evicted
+    /// by their refresher instead of being re-walked forever.
+    #[tokio::test]
+    async fn idle_root_is_evicted_by_the_refresher() {
+        let clock = std::sync::Arc::new(FakeClock(std::sync::Mutex::new(1_000)));
+        let index = std::sync::Arc::new(SearchIndex::with_refresh_ms(
+            std::sync::Arc::clone(&clock) as std::sync::Arc<dyn Clock>,
+            50,
+        ));
+        let root = tempfile::tempdir_in("/tmp/opencode").expect("tempdir");
+        std::fs::write(root.path().join("a.txt"), "x").expect("write");
+        let _ = index
+            .entries(root.path().to_path_buf(), SCAN_ENTRY_BUDGET, scan(root.path()), 1_000)
+            .await;
+        index.spawn_refresher(root.path().to_path_buf());
+        // No further access: advance the clock past the idle TTL — the
+        // next refresher tick must evict rather than rebuild.
+        *clock.0.lock().unwrap() = 1_000 + IDLE_EVICT_MS + 1;
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        assert!(!index.slots.contains_key(root.path()), "idle root must be evicted");
+    }
+
+    /// I2: the refresher re-reads build parameters per tick — a budget
+    /// change supplied by a later request governs subsequent background
+    /// rebuilds instead of the frozen spawn-time value.
+    #[tokio::test]
+    async fn refresher_reads_current_params_per_rebuild() {
+        let clock = std::sync::Arc::new(FakeClock(std::sync::Mutex::new(1_000)));
+        let index = std::sync::Arc::new(SearchIndex::with_refresh_ms(
+            std::sync::Arc::clone(&clock) as std::sync::Arc<dyn Clock>,
+            50,
+        ));
+        let root = tempfile::tempdir_in("/tmp/opencode").expect("tempdir");
+        for i in 0..10 {
+            std::fs::write(root.path().join(format!("f{i:02}.txt")), "x").expect("write");
+        }
+        // First access with a wide budget: all 10 files indexed.
+        let wide = index
+            .entries(root.path().to_path_buf(), SCAN_ENTRY_BUDGET, scan(root.path()), 1_000)
+            .await;
+        assert_eq!(wide.len(), 10);
+        // A later request supplies a TIGHT budget (fresh window → no
+        // rebuild, but the slot's params are updated)…
+        let _ = index
+            .entries(root.path().to_path_buf(), 3, scan(root.path()), 1_010)
+            .await;
+        // …so the refresher's next background rebuild uses budget 3.
+        index.spawn_refresher(root.path().to_path_buf());
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        let rebuilt = index
+            .slots
+            .get(root.path())
+            .map(|slot| slot.entries.clone())
+            .expect("slot alive (recently used)");
+        assert!(rebuilt.len() < 10, "refresher rebuilt with the current budget: {}", rebuilt.len());
     }
 }
