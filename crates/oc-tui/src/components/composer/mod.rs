@@ -1567,6 +1567,37 @@ mod tests {
         state
     }
 
+    /// G-93 — the `$EDITOR` round-trip re-attaches the chips whose
+    /// mention text survived the edit and drops the removed ones
+    /// (`realignPromptInputMentions`, prompt/index.tsx:570-573); the
+    /// plain `set_text` (the pre-G-93 behavior) wipes everything.
+    #[test]
+    fn set_text_realigned_keeps_surviving_mentions() {
+        let mut state = Composer::default();
+        state.set(PromptDraft {
+            text: "check @a.rs and @build".to_owned(),
+            files: vec![FileMention {
+                name: "@a.rs".to_owned(),
+                start: 6,
+                end: 11,
+                payload: None,
+                mention: None,
+            }],
+            agents: vec![AgentMention { name: "build".to_owned(), start: 16, end: 22 }],
+            ..PromptDraft::default()
+        });
+        // The editor removed @a.rs and edited around @build.
+        state.set_text_realigned("check @a.rs and @build", "now only @build remains");
+        assert_eq!(state.draft.text, "now only @build remains");
+        assert!(state.draft.files.is_empty(), "the removed @a.rs chip dropped");
+        assert_eq!(state.draft.agents.len(), 1, "the @build chip re-attached");
+        assert_eq!(state.draft.agents[0].name, "build");
+        assert_eq!(state.draft.agents[0].start, 9);
+        assert_eq!(state.draft.agents[0].end, 15);
+        // The edit state carries the new text (caret at the end).
+        assert_eq!(state.caret(), state.draft.text.chars().count());
+    }
+
     #[test]
     fn multiline_editing_per_the_v2_table() {
         let mut state = Composer::default();
