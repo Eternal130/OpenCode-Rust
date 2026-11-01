@@ -265,6 +265,66 @@ pub fn protected_resource_url(server_url: &str) -> Option<String> {
     ))
 }
 
+/// RFC 8707 §2: a resource URL carries no fragment. Strips it from the
+/// configured server URL to produce the flow's resource *identity*
+/// (oauth.ts `resourceUrlFromServerUrl` + `identity = new URL(config.url)`).
+#[must_use]
+pub fn identity_url(server_url: &str) -> Option<reqwest::Url> {
+    let mut url = reqwest::Url::parse(server_url).ok()?;
+    url.set_fragment(None);
+    Some(url)
+}
+
+/// The SDK `checkResourceAllowed` semantics (RFC 8707 resource
+/// indicators): the requested resource matches the configured one when
+/// they share an origin (scheme, host, port) and the requested path is
+/// the configured path or a subpath of it. Trailing slashes are padded
+/// onto both paths before the prefix compare so `/api` does not match
+/// `/api123`.
+#[must_use]
+pub fn check_resource_allowed(requested: &reqwest::Url, configured: &reqwest::Url) -> bool {
+    if requested.origin() != configured.origin() {
+        return false;
+    }
+    // Handle cases like requested=/foo and configured=/foo/
+    if requested.path().len() < configured.path().len() {
+        return false;
+    }
+    let pad = |path: &str| {
+        if path.ends_with('/') {
+            path.to_owned()
+        } else {
+            format!("{path}/")
+        }
+    };
+    let requested_path = pad(requested.path());
+    let configured_path = pad(configured.path());
+    requested_path.starts_with(&configured_path)
+}
+
+/// oauth.ts `validateResourceURL` (oauth.ts:166-176): an absent
+/// server-returned resource falls back to the configured identity; a
+/// present one must cover the configured identity or the flow is
+/// rejected — the token must not be bound to a different resource. When
+/// it covers (and only differs in query), the configured identity is
+/// returned so a later refresh names the same resource the login did.
+pub fn validate_resource_url(server_url: &str, resource: Option<&str>) -> Result<String, String> {
+    let identity = identity_url(server_url)
+        .ok_or_else(|| format!("cannot parse the MCP server url {server_url}"))?;
+    let Some(resource) = resource else {
+        return Ok(identity.to_string());
+    };
+    let configured = reqwest::Url::parse(resource)
+        .map_err(|error| format!("invalid resource {resource}: {error}"))?;
+    if !check_resource_allowed(&identity, &configured) {
+        return Err(format!("Protected resource {resource} does not cover {identity}"));
+    }
+    if configured.origin() == identity.origin() && configured.path() == identity.path() {
+        return Ok(identity.to_string());
+    }
+    Ok(configured.to_string())
+}
+
 /// `{server}/.well-known/oauth-authorization-server` (RFC 8414 style
 /// suffix; the interop-tested servers publish it at the root).
 #[must_use]
@@ -354,6 +414,12 @@ async fn discover(
         .or_else(|| protected_resource_url(server_url))
         .ok_or_else(|| format!("cannot derive the resource metadata URL for {server_url}"))?;
     let resource = get_json(http, &probe).await?;
+    // oauth.ts `validateResourceURL` (via the SDK): when the protected
+    // resource metadata names its own `resource`, it must cover the
+    // configured server URL or the flow stops (RFC 8707).
+    if let Some(advertised) = resource.get("resource").and_then(Value::as_str) {
+        validate_resource_url(server_url, Some(advertised))?;
+    }
     let server = resource
         .get("authorization_servers")
         .and_then(Value::as_array)
@@ -1206,5 +1272,73 @@ mod tests {
         let challenge = code_challenge(&verifier);
         assert_eq!(challenge.len(), 43, "base64url(sha256) is 43 chars");
         assert_ne!(challenge, verifier);
+    }
+
+    #[test]
+    fn resource_covering_the_identity_is_allowed() {
+        // Exact match (query differences stay bound to the identity).
+        assert_eq!(
+            validate_resource_url("https://example.com/mcp", Some("https://example.com/mcp")).as_deref(),
+            Ok("https://example.com/mcp")
+        );
+        // The server may echo back query parameters — same identity.
+        assert_eq!(
+            validate_resource_url("https://example.com/mcp", Some("https://example.com/mcp?x=1")).as_deref(),
+            Ok("https://example.com/mcp")
+        );
+        // A shorter configured path covers a deeper identity (subpath).
+        assert_eq!(
+            validate_resource_url("https://example.com/api/mcp", Some("https://example.com/api")).as_deref(),
+            Ok("https://example.com/api")
+        );
+        // Trailing-slash equivalence the allowed direction: /foo covers /foo/.
+        assert_eq!(
+            validate_resource_url("https://example.com/foo/", Some("https://example.com/foo")).as_deref(),
+            Ok("https://example.com/foo")
+        );
+        // Explicit port matches itself.
+        assert_eq!(
+            validate_resource_url("https://example.com:8443/mcp", Some("https://example.com:8443/mcp")).as_deref(),
+            Ok("https://example.com:8443/mcp")
+        );
+        // No server-returned resource → the configured identity.
+        assert_eq!(
+            validate_resource_url("https://example.com/mcp#frag", None).as_deref(),
+            Ok("https://example.com/mcp")
+        );
+    }
+
+    #[test]
+    fn resource_not_covering_the_identity_is_rejected() {
+        // Different host.
+        assert_eq!(
+            validate_resource_url("https://example.com/mcp", Some("https://evil.example/mcp")),
+            Err("Protected resource https://evil.example/mcp does not cover https://example.com/mcp".to_owned())
+        );
+        // Different scheme.
+        assert_eq!(
+            validate_resource_url("https://example.com/mcp", Some("http://example.com/mcp")),
+            Err("Protected resource http://example.com/mcp does not cover https://example.com/mcp".to_owned())
+        );
+        // Different port.
+        assert_eq!(
+            validate_resource_url("https://example.com/mcp", Some("https://example.com:8443/mcp")),
+            Err("Protected resource https://example.com:8443/mcp does not cover https://example.com/mcp".to_owned())
+        );
+        // The configured path must be a prefix of the identity path.
+        assert_eq!(
+            validate_resource_url("https://example.com/mcp", Some("https://example.com/api")),
+            Err("Protected resource https://example.com/api does not cover https://example.com/mcp".to_owned())
+        );
+        // Prefix compare is segment-aware: /api does not cover /api123.
+        assert_eq!(
+            validate_resource_url("https://example.com/api123", Some("https://example.com/api")),
+            Err("Protected resource https://example.com/api does not cover https://example.com/api123".to_owned())
+        );
+        // A longer configured path (/foo/) does not cover a shorter identity (/foo).
+        assert_eq!(
+            validate_resource_url("https://example.com/foo", Some("https://example.com/foo/")),
+            Err("Protected resource https://example.com/foo/ does not cover https://example.com/foo".to_owned())
+        );
     }
 }
