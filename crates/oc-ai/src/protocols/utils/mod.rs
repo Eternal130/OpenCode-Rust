@@ -3,6 +3,7 @@
 //! options, hosted tool items, and the compaction checkpoint machines.
 
 pub mod gemini_generate_content;
+pub mod gateway_protocol;
 pub mod gemini_json_schema;
 pub mod lifecycle;
 pub mod open_responses_options;

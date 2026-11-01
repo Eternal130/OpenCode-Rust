@@ -35,6 +35,7 @@ use std::sync::Arc;
 use serde::Deserialize;
 use serde_json::Value;
 
+use oc_ai::protocols::alibaba_responses::{alibaba_responses_route, AlibabaResponsesRouteSpec};
 use oc_ai::protocols::anthropic_messages::{anthropic_messages_route, anthropic_route};
 use oc_ai::protocols::bedrock::{self as bedrock_lane, BedrockAuthOptions, MantleMessagesConfig};
 use oc_ai::protocols::cohere_chat::{cohere_route_for_package, CohereConfig};
@@ -55,6 +56,9 @@ use oc_ai::protocols::vertex::{
     VertexEndpointConfig,
 };
 use oc_ai::protocols::vertex_messages::{vertex_messages_route, VertexMessagesConfig};
+use oc_ai::protocols::vercel_gateway::{
+    route_for_model as vercel_gateway_route_for_model, VercelGatewayRouteSpec,
+};
 use oc_ai::protocols::xai_responses::{xai_auth, xai_responses_route, XaiResponsesRouteSpec};
 use oc_ai::route::auth::{self, Secret};
 use oc_ai::route::client::{Route, RouteDefaults, RoutePatch};
@@ -297,6 +301,15 @@ pub enum ProtocolFamily {
     GoogleInteractions,
     /// GitHub Copilot: openai-compatible chat + the Copilot header policy.
     CopilotChat,
+    /// Alibaba Responses (G-84): the Open Responses baseline with the Model
+    /// Studio dialect (`enable_thinking` / `previous_response_id` /
+    /// `conversation`, named tool_choice → `allowed_tools`, the
+    /// web_search / web_extractor / code_interpreter hosted tools).
+    AlibabaResponses,
+    /// Vercel AI Gateway (G-81): Messages / Responses / Chat routes wrapped
+    /// by the gateway protocol seam (`providerOptions.gateway` body
+    /// injection + gateway usage/cost metadata on finish events).
+    VercelGateway,
 }
 
 /// Classify a native package into a ported family (`None` → unsupported).
@@ -319,11 +332,15 @@ pub fn family_of(package: &str) -> Option<ProtocolFamily> {
         | "@opencode/ai/providers/openai/responses"
         | "@opencode/ai/providers/azure"
         | "@opencode/ai/providers/azure/responses"
-        | "@opencode/ai/providers/alibaba/responses"
         | "@opencode/ai/providers/meta/responses"
         | "@opencode/ai/providers/minimax/responses"
         | "@opencode/ai/providers/moonshot/responses"
         | "@opencode/ai/providers/zai-coding-plan/responses" => ProtocolFamily::OpenAIResponses,
+
+        // Alibaba Responses (G-84): its own native lane — the Model Studio
+        // responses dialect, NOT the plain OpenAI Responses family
+        // (providers/alibaba.ts responsesRoute).
+        "@opencode/ai/providers/alibaba/responses" => ProtocolFamily::AlibabaResponses,
 
         // xAI (AI-M5): the native `xai-responses` protocol — the Open
         // Responses baseline with the Grok hosted tool vocabulary and the
@@ -353,8 +370,14 @@ pub fn family_of(package: &str) -> Option<ProtocolFamily> {
         | "@opencode/ai/providers/zai-coding-plan/chat"
         | "@opencode/ai/providers/openrouter"
         | "@opencode/ai/providers/cloudflare-workers-ai"
-        | "@opencode/ai/providers/cloudflare-ai-gateway"
-        | "@opencode/ai/providers/vercel-ai-gateway" => ProtocolFamily::OpenAIChat,
+        | "@opencode/ai/providers/cloudflare-ai-gateway" => ProtocolFamily::OpenAIChat,
+
+        // Vercel AI Gateway (G-81): its own native lane — per-model dispatch
+        // over the gateway-wrapped Messages/Responses/Chat routes
+        // (providers/vercel-ai-gateway.ts:205-229, 272-277).
+        "@opencode/ai/providers/vercel-ai-gateway" | "@ai-sdk/gateway" => {
+            ProtocolFamily::VercelGateway
+        }
 
         // Cohere (AI-COHERE-MISTRAL): BOTH the native package and the
         // `/chat` OpenAI-compatibility lane route through the landed
@@ -766,6 +789,39 @@ fn build_route(
             },
         )
         .with(RoutePatch { provider: Some(provider_id.to_string()), ..Default::default() })),
+        ProtocolFamily::VercelGateway => {
+            // G-81: per-model dispatch over the gateway-wrapped routes;
+            // auth is the optional key → AI_GATEWAY_API_KEY →
+            // VERCEL_OIDC_TOKEN bearer chain (the catalog env list rides
+            // `bearer_auth`).
+            let auth = bearer_auth(api_key, env);
+            Ok(vercel_gateway_route_for_model(
+                &VercelGatewayRouteSpec {
+                    base_url,
+                    auth: Some(auth),
+                    transport,
+                    defaults: RouteDefaults::default(),
+                },
+                model.id.as_str(),
+            )
+            .with(RoutePatch { provider: Some(provider_id.to_string()), ..Default::default() }))
+        }
+        ProtocolFamily::AlibabaResponses => {
+            // G-84: the Model Studio responses lane at the dashscope
+            // compatible-mode root (the catalog `api` / provider baseURL).
+            let base_url = base_url.ok_or_else(|| ProviderError::Configuration {
+                provider: provider_id.to_string(),
+                message: format!(
+                    "package `{package}` needs a baseURL (set provider.{provider_id}.baseURL)"
+                ),
+            })?;
+            Ok(alibaba_responses_route(AlibabaResponsesRouteSpec {
+                base_url,
+                auth: Some(bearer_auth(api_key, env)),
+                transport,
+            })
+            .with(RoutePatch { provider: Some(provider_id.to_string()), ..Default::default() }))
+        }
         ProtocolFamily::OpenAIChat => {
             let auth = bearer_auth(api_key, env);
             let baked = package_has_baked_base(package);
