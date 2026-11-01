@@ -40,7 +40,7 @@ const SESSION: &str = "ses_tool_test";
 pub(super) struct Harness {
     dir: PathBuf,
     outside: PathBuf,
-    tools: Arc<ToolRegistryState>,
+    pub(crate) tools: Arc<ToolRegistryState>,
     pub(super) services: Arc<ToolServices>,
     #[allow(dead_code)]
     permission: Permission,
