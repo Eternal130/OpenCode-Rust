@@ -181,6 +181,7 @@ async fn exec_defaults_round_trip() {
         spawner: Arc::new(HostSpawner),
         overrides: None,
         stdio: Arc::new(crate::environment::stdio::LocalStdioSpawner),
+        pty: Arc::new(crate::environment::pty::LocalPtySpawner),
     };
     let files = make_files(&driver);
     let dir = root.join("d");
@@ -209,6 +210,7 @@ async fn exec_defaults_error_protocol() {
         spawner: Arc::new(HostSpawner),
         overrides: None,
         stdio: Arc::new(crate::environment::stdio::LocalStdioSpawner),
+        pty: Arc::new(crate::environment::pty::LocalPtySpawner),
     };
     let files = make_files(&driver);
 
@@ -258,6 +260,7 @@ async fn exec_defaults_symlink_semantics() {
         spawner: Arc::new(HostSpawner),
         overrides: None,
         stdio: Arc::new(crate::environment::stdio::LocalStdioSpawner),
+        pty: Arc::new(crate::environment::pty::LocalPtySpawner),
     };
     let files = make_files(&driver);
     let target = root.join("real.txt");
@@ -286,6 +289,7 @@ async fn exec_defaults_move_into_dir() {
         spawner: Arc::new(HostSpawner),
         overrides: None,
         stdio: Arc::new(crate::environment::stdio::LocalStdioSpawner),
+        pty: Arc::new(crate::environment::pty::LocalPtySpawner),
     };
     let files = make_files(&driver);
     files.mkdir(root.join("d").to_str().unwrap()).await.unwrap();
@@ -423,4 +427,52 @@ async fn environment_bind_local_and_workspace() {
     // Host-only environment rejects workspace locations.
     let host_only = Environment::local();
     assert!(host_only.bind(&LocationRef::new(root, Some("wrk_env".to_string()))).await.is_err());
+}
+
+// ===========================================================================
+// PTY seam (G-1 lane 9b)
+// ===========================================================================
+
+#[tokio::test]
+async fn environment_pty_resolves_per_location() {
+    let (store, root) = sqlite_store("env-pty").await;
+    let environment = Environment::with_workspace(Arc::new(WorkspaceService::new(store.clone())));
+
+    // No workspaceID: the local portable-pty driver.
+    let local = environment.pty(&LocationRef::new(root.clone(), None)).await.unwrap();
+    let info = crate::pty::PtyService::new(crate::bus::Bus::new(
+        crate::database::Database::open_in_memory().await.unwrap(),
+        crate::bus::BusOptions::deterministic(),
+    ))
+    .create_with(
+        local,
+        &crate::pty::CreateInput {
+            command: Some("/bin/sh".to_string()),
+            args: Some(vec!["-c".to_string(), "exit 0".to_string()]),
+            cwd: Some("/tmp".to_string()),
+            ..crate::pty::CreateInput::default()
+        },
+    )
+    .unwrap();
+    assert!(info.pid > 0);
+
+    // Unknown workspace is a bind failure by design (same as Files).
+    let missing = environment.pty(&LocationRef::new(root, Some("wrk_gone".to_string()))).await;
+    assert!(missing.is_err());
+}
+
+/// The memory driver's pty capability fails closed (parity with its
+/// stdio spawner).
+#[tokio::test]
+async fn memory_driver_pty_fails_closed() {
+    let driver = MemoryDriver::new().driver();
+    let spawned = driver.pty.spawn(crate::environment::pty::PtySpawnRequest {
+        command: "/bin/sh".to_string(),
+        args: Vec::new(),
+        cwd: "/tmp".to_string(),
+        env: Default::default(),
+        cols: 80,
+        rows: 24,
+    });
+    assert!(spawned.is_err());
 }
