@@ -1919,7 +1919,7 @@ async fn read_large_file_chunked_memory_shape() {
     // offset=1 with a small limit settles inside the first chunk: exactly
     // ONE positioned read, never a whole-file load.
     let mut calls: Vec<(u64, usize)> = Vec::new();
-    let outcome = read_file_with(size, &path, "large.txt", Some(1), Some(100), |start, len| {
+    let outcome = read_file_with(size, &path, "large.txt", Some(1), Some(100), None, |start, len| {
         calls.push((start, len));
         let start = start as usize;
         let end = (start + len).min(body.len());
@@ -1941,7 +1941,7 @@ async fn read_large_file_chunked_memory_shape() {
     // A page near the end must stream every chunk (2 for 300 KiB) — and
     // each request stays at the 256 KiB granularity.
     let mut calls: Vec<(u64, usize)> = Vec::new();
-    read_file_with(size, &path, "large.txt", Some(6000), None, |start, len| {
+    read_file_with(size, &path, "large.txt", Some(6000), None, None, |start, len| {
         calls.push((start, len));
         let start = start as usize;
         let end = (start + len).min(body.len());
@@ -1951,6 +1951,38 @@ async fn read_large_file_chunked_memory_shape() {
     .await
     .unwrap();
     assert_eq!(calls, vec![(0, 256 * 1024), (256 * 1024, 256 * 1024)], "chunked walk to eof");
+}
+
+#[tokio::test]
+async fn read_prefetched_first_chunk_is_not_reread() {
+    use crate::tool::read::{read_file_with, ReadError};
+    use futures::future::BoxFuture;
+    // read_file's dir-detection/size probe already fetched chunk 0; the
+    // pipeline must consume it instead of re-reading (one round trip per
+    // chunk on remote drivers).
+    let body = line_fill(6000, 50);
+    let size = body.len() as u64;
+    let path = PathBuf::from("/tmp/opencode/fake-prefetched.txt");
+    let mut calls: Vec<(u64, usize)> = Vec::new();
+    let outcome = read_file_with(
+        size,
+        &path,
+        "large.txt",
+        Some(1),
+        Some(100),
+        Some(body[..256 * 1024].to_vec()),
+        |start, len| {
+            calls.push((start, len));
+            let start = start as usize;
+            let end = (start + len).min(body.len());
+            let chunk = body[start..end].to_vec();
+            Box::pin(async move { Ok(chunk) }) as BoxFuture<'_, Result<Vec<u8>, ReadError>>
+        },
+    )
+    .await
+    .unwrap();
+    assert!(calls.is_empty(), "page settled in the prefetched chunk: no extra reads");
+    assert!(matches!(outcome, crate::tool::read::ReadOutput::TextPage { .. }));
 }
 
 #[tokio::test]
@@ -1977,7 +2009,7 @@ async fn read_binary_detection_covers_only_the_consumed_page() {
     let path = PathBuf::from("/tmp/opencode/fake-binary-ish.txt");
 
     // Page 1 (limit 10): consumed span has no NUL → text page succeeds.
-    let outcome = read_file_with(size, &path, "bin.txt", Some(1), Some(10), |start, len| {
+    let outcome = read_file_with(size, &path, "bin.txt", Some(1), Some(10), None, |start, len| {
         let start = start as usize;
         let end = (start + len).min(body.len());
         let chunk = body[start..end].to_vec();
@@ -1995,7 +2027,7 @@ async fn read_binary_detection_covers_only_the_consumed_page() {
 
     // A page whose consumed range includes the NUL → BinaryFileError.
     let error =
-        read_file_with(size, &path, "bin.txt", Some(nul_line as u64), Some(10), |start, len| {
+        read_file_with(size, &path, "bin.txt", Some(nul_line as u64), Some(10), None, |start, len| {
         let start = start as usize;
         let end = (start + len).min(body.len());
         let chunk = body[start..end].to_vec();
@@ -2010,7 +2042,7 @@ async fn read_binary_detection_covers_only_the_consumed_page() {
     let mut big = line_fill(11000, 50); // ≈ 537 KiB — spans three 256 KiB chunks
     big[300 * 1024] = 0; // inside chunk 2
     let big_size = big.len() as u64;
-    let outcome = read_file_with(big_size, &path, "big.txt", Some(1), Some(100), |start, len| {
+    let outcome = read_file_with(big_size, &path, "big.txt", Some(1), Some(100), None, |start, len| {
         let start = start as usize;
         let end = (start + len).min(big.len());
         let chunk = big[start..end].to_vec();
