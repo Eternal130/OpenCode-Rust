@@ -111,21 +111,47 @@ pub struct TextContent {
 }
 
 /// `FileMutation.readText` — decode bytes, splitting off a leading BOM.
-pub fn read_text(absolute: &Path) -> std::io::Result<TextContent> {
-    let bytes = std::fs::read(absolute)?;
-    let text = String::from_utf8_lossy(&bytes).into_owned();
+/// G-1: routed through the Environment `Files` seam (whole-file `read`,
+/// final symlink followed). The FilesError taxonomy maps onto io::Error
+/// so callers keep their exact kind-based message mapping.
+pub async fn read_text(
+    files: &dyn crate::environment::Files,
+    absolute: &Path,
+) -> std::io::Result<TextContent> {
+    let bytes = files
+        .read(&absolute.to_string_lossy(), None)
+        .await
+        .map_err(std::io::Error::from)?
+        .bytes;
+    decode_text(&bytes)
+}
+
+fn decode_text(bytes: &[u8]) -> std::io::Result<TextContent> {
+    let text = String::from_utf8_lossy(bytes).into_owned();
     let (bom, text) = bom_split(&text);
     let text = text.to_string();
     Ok(TextContent { text, bom })
 }
 
 /// `FileMutation.syncTextBom` — normalize the stored BOM to `bom`; returns
-/// the text and whether a rewrite happened.
-pub fn sync_text_bom(absolute: &Path, bom: bool) -> std::io::Result<TextContent> {
-    let current = read_text(absolute)?;
+/// the text and whether a rewrite happened (G-1: through the Files seam).
+pub async fn sync_text_bom(
+    files: &dyn crate::environment::Files,
+    absolute: &Path,
+    bom: bool,
+) -> std::io::Result<TextContent> {
+    let current = read_text(files, absolute).await?;
     let canonical = bom_join(&current.text, bom);
-    if canonical != String::from_utf8_lossy(&std::fs::read(absolute)?).into_owned() {
-        std::fs::write(absolute, canonical.as_bytes())?;
+    let stored = files
+        .read(&absolute.to_string_lossy(), None)
+        .await
+        .map_err(std::io::Error::from)?
+        .bytes;
+    if canonical.as_bytes() != stored.as_slice() {
+        files
+            .write(&absolute.to_string_lossy(), canonical.as_bytes())
+            .await
+            .map_err(std::io::Error::from)?;
     }
     Ok(TextContent { text: current.text, bom })
 }
@@ -183,19 +209,56 @@ impl TransactionGuard {
     }
 }
 
+impl std::fmt::Debug for FileMutation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FileMutation")
+            .field("location_directory", &self.location_directory)
+            .field("home", &self.home)
+            .finish_non_exhaustive()
+    }
+}
+
 /// The FileMutation service (one per Location; the transaction table is
-/// process-global).
-#[derive(Debug, Default)]
+/// process-global). G-1: every read/write routes through the
+/// location-bound Environment `Files` seam; the default constructor uses
+/// the local host-fs driver (byte-identical to the previous raw
+/// `std::fs` behavior).
 pub struct FileMutation {
     location_directory: PathBuf,
     home: PathBuf,
+    files: Arc<dyn crate::environment::Files>,
+}
+
+impl Default for FileMutation {
+    fn default() -> Self {
+        Self::new(PathBuf::new(), PathBuf::new())
+    }
 }
 
 impl FileMutation {
-    /// Service bound to a Location directory (for `resolvePath`).
+    /// Service bound to a Location directory (for `resolvePath`) over the
+    /// local host-fs driver.
     #[must_use]
     pub fn new(location_directory: PathBuf, home: PathBuf) -> Self {
-        Self { location_directory, home }
+        Self::with_files(location_directory, home, Arc::new(crate::environment::LocalFiles))
+    }
+
+    /// Service over an explicit Environment `Files` handle (the engine
+    /// passes the location-bound driver resolved from the Environment
+    /// service, mirroring the MCP stdio seam wiring).
+    #[must_use]
+    pub fn with_files(
+        location_directory: PathBuf,
+        home: PathBuf,
+        files: Arc<dyn crate::environment::Files>,
+    ) -> Self {
+        Self { location_directory, home, files }
+    }
+
+    /// The bound `Files` handle (the same driver the tool services carry).
+    #[must_use]
+    pub fn files(&self) -> &Arc<dyn crate::environment::Files> {
+        &self.files
     }
 
     /// Resolve an input path against the location (file-access.ts
@@ -240,7 +303,10 @@ impl FileMutation {
         tables().targets.entry(key).or_insert_with(|| Arc::new(AsyncMutex::new(()))).clone()
     }
 
-    /// `write` — serialized per-target write of raw content.
+    /// `write` — serialized per-target write of raw content (G-1: through
+    /// the Files seam; `Files::write` creates missing parents exactly like
+    /// the previous explicit `create_dir_all`, and `stat`'s lstat answers
+    /// the existed probe).
     pub async fn write(
         &self,
         target: &MutationTarget,
@@ -248,11 +314,9 @@ impl FileMutation {
     ) -> std::io::Result<WriteResult> {
         let lock = self.lock_target(&target.absolute).await;
         let _guard = lock.lock().await;
-        let existed = target.absolute.symlink_metadata().is_ok();
-        if let Some(parent) = target.absolute.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&target.absolute, content)?;
+        let path = target.absolute.to_string_lossy().into_owned();
+        let existed = self.files.stat(&path).await.is_ok();
+        self.files.write(&path, &content).await.map_err(std::io::Error::from)?;
         Ok(WriteResult {
             operation: "write",
             target: target.absolute.clone(),
@@ -270,13 +334,14 @@ impl FileMutation {
         let lock = self.lock_target(&target.absolute).await;
         let _guard = lock.lock().await;
         let (next_bom, next_text) = bom_split(content);
-        let current = std::fs::read(&target.absolute).ok();
+        let path = target.absolute.to_string_lossy().into_owned();
+        let current = self.files.read(&path, None).await.ok().map(|result| result.bytes);
         let existed = current.is_some();
         let keep_bom = current.as_deref().is_some_and(bom_has) || next_bom;
-        if let Some(parent) = target.absolute.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&target.absolute, bom_join(next_text, keep_bom).as_bytes())?;
+        self.files
+            .write(&path, bom_join(next_text, keep_bom).as_bytes())
+            .await
+            .map_err(std::io::Error::from)?;
         Ok(WriteResult {
             operation: "write",
             target: target.absolute.clone(),

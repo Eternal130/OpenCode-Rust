@@ -1224,9 +1224,10 @@ impl Engine {
                 self.home.clone(),
             ),
             permission: permission.clone(),
-            mutation: Arc::new(crate::file_mutation::FileMutation::new(
+            mutation: Arc::new(crate::file_mutation::FileMutation::with_files(
                 location.as_path().to_path_buf(),
                 self.home.clone(),
+                tool_files.clone(),
             )),
             files: tool_files,
             formatter: Arc::new(crate::formatter::BuiltinsFormatter::from_config_documents(

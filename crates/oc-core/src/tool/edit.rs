@@ -265,6 +265,16 @@ fn blanket(path: &str, error: crate::permission::PermissionError) -> ToolFailure
     }
 }
 
+/// Follow-kind directory probe through the Files seam (the previous
+/// `Path::is_dir` followed the final symlink; `type_following` is the
+/// Files contract's equivalent).
+async fn is_directory(services: &ToolServices, absolute: &std::path::Path) -> bool {
+    crate::environment::type_following(services.files.as_ref(), &absolute.to_string_lossy())
+        .await
+        .map(|kind| kind == crate::environment::FileType::Directory)
+        .unwrap_or(false)
+}
+
 async fn execute_edit(
     services: &ToolServices,
     path: &str,
@@ -274,11 +284,14 @@ async fn execute_edit(
     context: &Context,
     target: &crate::file_access::Target,
 ) -> Result<ToolOutcome, ToolFailure> {
-    let original = match crate::file_mutation::read_text(&target.absolute) {
+    let original = match crate::file_mutation::read_text(services.files.as_ref(), &target.absolute)
+        .await
+    {
         Ok(content) => content,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             // Distinguish directory (WrongKind) from missing.
-            if target.absolute.is_dir() {
+            let is_dir = is_directory(services, &target.absolute).await;
+            if is_dir {
                 return Err(ToolFailure::message(format!(
                     "Path is a directory, not a file: {path}"
                 )));
@@ -286,7 +299,8 @@ async fn execute_edit(
             return Err(ToolFailure::message(format!("File not found: {path}")));
         }
         Err(error) => {
-            if target.absolute.is_dir() {
+            let is_dir = is_directory(services, &target.absolute).await;
+            if is_dir {
                 return Err(ToolFailure::message(format!(
                     "Path is a directory, not a file: {path}"
                 )));
@@ -383,11 +397,13 @@ async fn execute_edit(
         })?;
     let bom = original.bom || replacement_bom;
     let formatted = if services.formatter.file(&target.absolute) {
-        crate::file_mutation::sync_text_bom(&target.absolute, bom)
+        crate::file_mutation::sync_text_bom(services.files.as_ref(), &target.absolute, bom)
+            .await
             .map(|content| content.text)
             .unwrap_or_default()
     } else {
-        crate::file_mutation::read_text(&target.absolute)
+        crate::file_mutation::read_text(services.files.as_ref(), &target.absolute)
+            .await
             .map(|content| content.text)
             .unwrap_or_default()
     };
