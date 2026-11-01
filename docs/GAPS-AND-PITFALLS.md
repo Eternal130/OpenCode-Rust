@@ -161,7 +161,7 @@
 
 ### G-31 ✅ 文件模糊搜索索引 + VCS 根判定（lane8 收口：resolver 判根 + 内存索引 10s 刷新）
 - ~~rust oc-server/handlers/fs.rs:254-330：每请求 spawn_blocking 全量 walk；SCAN_ENTRY_BUDGET=100_000 统一上限~~ lane8 已收口：`is_vcs_root` 改用 project resolver（`services.project.vcs` + canonical 根相等，hg 仓库生效；仓库子目录 location 保持 100k 保守语义，与旧 `.git` 嗅探一致）；`/api/fs/find` 改读进程级 `SearchIndex`（AppState 字段）——按 canonical root 键控、10s 后台刷新（spawn_blocking walk，失败保留上次好索引）、首访同步构建（build-on-first-miss）、并发请求 single-flight；非 VCS 根 100k 预算在**索引构建时**施加。排名/打分语义不变（仅候选来源改为索引）。
-- 残留偏差（文档化）：VCS 判根沿用「检出根才算」的保守语义（ref 的 `location.vcs` 对仓库内任意目录都为真值）；失效策略为 root 键控 + 新鲜度窗口重建（ref 亦无显式 config 失效钩子），未做显式 config-reload 钩子。
+- 残留偏差（文档化）：VCS 判根沿用「检出根才算」的保守语义（ref 的 `location.vcs` 对仓库内任意目录都为真值）；失效策略为 root 键控 + 新鲜度窗口重建（ref 亦无显式 config 失效钩子），未做显式 config-reload 钩子。fix1 加固：single-flight claim 由 Drop guard 持有（取消/panic 不泄漏）+ 首建等待有界（30s）；slot 自淘汰（根目录消失或 5 分钟无访问即驱逐、停刷，rebuild-on-miss 保证安全）；后台刷新每 tick 重读最新请求参数（budget/exclusions 不再冻结于 spawn 时）。另注：常驻 10s 后台刷新任务是本 lane brief 指定项（ref 实为按需 refresh-on-access），额外稳态开销已知。
 
 ### G-32 ❌ v1/legacy schema 未移植
 - oc-schema/src/lib.rs:80-82 TODO 仍在：legacy-event、v1 session 事件、models-dev refresh、rpc.ts、pty-ticket、durable-event-manifest。仅影响旧数据互操作/回放，纯 v2 面无影响。
