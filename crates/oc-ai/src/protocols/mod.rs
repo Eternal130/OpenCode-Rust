@@ -39,6 +39,13 @@ pub mod open_responses;
 // (`native.alibaba`).
 pub mod alibaba_responses;
 
+// Meta Responses — the Open Responses baseline with the `native.meta`
+// hosted tool vocabulary (web_search / image_generation), the signed-ID
+// replay transform for provider-executed image results, base64 image
+// results with format sniffing, message annotations on text-end events,
+// and terminal-only item recovery (completedItems dedup).
+pub mod meta_responses;
+
 // Vercel AI Gateway (G-81) — Messages / Responses / Chat routes wrapped by
 // the gateway protocol seam: providerOptions.gateway body injection and
 // provider_metadata.gateway usage/cost merged into finish events.
