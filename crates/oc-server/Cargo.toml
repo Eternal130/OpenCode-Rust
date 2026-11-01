@@ -69,7 +69,11 @@ opentelemetry_sdk = { version = "0.30", optional = true, features = ["rt-tokio"]
 tonic = { version = "0.13", optional = true, default-features = false }
 
 [dev-dependencies]
+futures = "0.3"
 tempfile = "3"
+# Wire tests for the lane-10 gaps drive raw HTTP (permission.saved has no
+# generated client method) on the same unified-TLS reqwest stack.
+oc-http = { workspace = true }
 oc-tui = { workspace = true }
 # In-test fixture compression (app-archive round-trip + serving parity
 # tests) — same crate the CI-equivalent quality (q6) exercises. Already

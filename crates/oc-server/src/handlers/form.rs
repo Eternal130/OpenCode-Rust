@@ -112,7 +112,9 @@ async fn session_create(
     let input = CreateInput {
         session_id: session_id.clone(),
         title: body["title"].as_str().unwrap_or_default().to_owned(),
-        metadata: None,
+        metadata: body["metadata"]
+            .as_object()
+            .map(|map| map.iter().map(|(key, value)| (key.clone(), value.clone())).collect()),
         fields: parse_fields(&body["fields"])?,
     };
     let form = match body["id"].as_str() {

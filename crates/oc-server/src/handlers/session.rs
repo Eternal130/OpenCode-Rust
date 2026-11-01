@@ -527,7 +527,6 @@ async fn remove(
     Ok(no_content())
 }
 
-
 async fn update(
     State(state): State<SharedState>,
     Path(session_id): Path<String>,
@@ -1240,8 +1239,27 @@ async fn context(
             crate::errors::debug_cause("session:unknown_ref", &error);
             ApiError::unknown_ref()
         })?;
+    // G-96: the active context starts at the latest COMPLETED compaction
+    // (history.ts:28-95 — rows with seq >= the compaction's seq, the
+    // compaction row itself included; running/failed compactions and
+    // pre-compaction messages are excluded).
+    let rows = match rows.iter().rposition(is_completed_compaction) {
+        Some(index) => &rows[index..],
+        None => &rows[..],
+    };
     let data: Vec<Value> = rows.iter().map(message_row_to_info).collect();
     Ok(json_data(Value::Array(data)))
+}
+
+/// Completed-compaction probe (`latestCompaction`, history.ts:28):
+/// a `compaction` message whose `status` is `completed`.
+fn is_completed_compaction(row: &oc_core::database::schema::SessionMessageRow) -> bool {
+    row.type_ == "compaction"
+        && serde_json::from_str::<Value>(&row.data)
+            .ok()
+            .and_then(|data| data["status"].as_str().map(str::to_owned))
+            .as_deref()
+            == Some("completed")
 }
 
 async fn diff(

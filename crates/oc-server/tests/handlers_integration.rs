@@ -160,7 +160,8 @@ async fn handlers_session_remove_deletes_descendants() {
 }
 
 #[tokio::test]
-async fn handlers_session_list_cursor_round_trip() {    let server = boot().await;
+async fn handlers_session_list_cursor_round_trip() {
+    let server = boot().await;
     let client = &server.client;
 
     for index in 0..3 {
@@ -1585,4 +1586,221 @@ async fn handlers_location_get_directory_vs_canonical() {
         "canonical is the main worktree: {canonical:?} vs {main_dir:?}"
     );
     assert_ne!(directory, canonical, "linked worktree makes them distinct");
+}
+
+// ---------------------------------------------------------------------------
+// Round-10 gaps — G-94..G-97
+// ---------------------------------------------------------------------------
+
+/// G-94: `POST /api/session/:id/permission` passes the payload's
+/// agent/metadata/source into the pending request (ref permission.ts:63 —
+/// the full payload flows into `Permission.Request`).
+#[tokio::test]
+async fn g94_permission_create_passes_payload_metadata_source() {
+    let server = boot().await;
+    let client = &server.client;
+    let session_id = client
+        .session()
+        .create(&SessionCreateBody {
+            title: Some("g94".to_owned()),
+            permissions: Some(vec![PermissionRule {
+                action: "g94.action".to_owned(),
+                resource: "res-1".to_owned(),
+                effect: PermissionEffect::Ask,
+            }]),
+            ..Default::default()
+        })
+        .await
+        .expect("create")
+        .id;
+
+    let mut metadata = std::collections::BTreeMap::new();
+    metadata.insert("origin".to_owned(), serde_json::json!("g94-test"));
+    let ask = client
+        .session()
+        .permission_create(
+            &session_id,
+            &SessionPermissionCreateBody {
+                action: "g94.action".to_owned(),
+                resources: vec!["res-1".to_owned()],
+                agent: Some("general".to_owned()),
+                metadata: Some(metadata),
+                source: Some(PermissionSource::Tool(PermissionSourceVariant1 {
+                    id: "call_1".to_owned(),
+                    message_id: "msg_g94".to_owned(),
+                    type_: PermissionSourceVariant1Type::Tool,
+                })),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("ask with full payload");
+
+    let got = client.session().permission_get(&session_id, &ask.id).await.expect("get");
+    let metadata = got.metadata.as_ref().expect("metadata passed through");
+    assert_eq!(metadata.get("origin"), Some(&serde_json::json!("g94-test")));
+    // Single-variant wire union (`Permission.Source` = tool).
+    let PermissionSource::Tool(tool) = got.source.expect("source passed through");
+    assert_eq!(tool.id, "call_1");
+    assert_eq!(tool.message_id, "msg_g94");
+}
+
+/// G-95: `POST /api/session/:id/form` passes the payload's metadata into
+/// the created form (ref `Form.CreatePayload.metadata`).
+#[tokio::test]
+async fn g95_form_create_passes_payload_metadata() {
+    let server = boot().await;
+    let client = &server.client;
+    let session_id = create_session(client, "g95").await.id;
+
+    let mut metadata = std::collections::BTreeMap::new();
+    metadata.insert("kind".to_owned(), serde_json::json!("elicitation"));
+    let form = client
+        .session()
+        .form()
+        .create(
+            &session_id,
+            &FormCreatePayload {
+                title: "g95 form".to_owned(),
+                metadata: Some(metadata),
+                fields: vec![FormField::StringField(FormStringField {
+                    key: "answer".to_owned(),
+                    ..Default::default()
+                })],
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("form create");
+    let metadata = form.metadata.as_ref().expect("create response metadata");
+    assert_eq!(metadata.get("kind"), Some(&serde_json::json!("elicitation")));
+
+    let detail = client.session().form().get(&session_id, &form.id).await.expect("form get");
+    let metadata = detail.metadata.as_ref().expect("stored metadata");
+    assert_eq!(metadata.get("kind"), Some(&serde_json::json!("elicitation")));
+}
+
+/// Seeds a projected `session_message` row with an explicit type/data.
+async fn g96_seed_message(
+    server: &TestServer,
+    session_id: &str,
+    id: &str,
+    seq: i64,
+    type_: &str,
+    data: &str,
+) {
+    let (session, message_id) = (session_id.to_owned(), id.to_owned());
+    let data = data.to_owned();
+    let type_owned = type_.to_owned();
+    server
+        .db
+        .transaction(move |tx| {
+            tx.execute(
+                "INSERT INTO session_message (id, session_id, type, seq, time_created, \
+                 time_updated, data) VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6)",
+                (message_id, session, type_owned, seq, seq, data),
+            )?;
+            Ok(())
+        })
+        .await
+        .expect("seed message");
+}
+
+/// G-96: `GET /api/session/:id/context` returns the active window AFTER the
+/// latest completed compaction (ref history.ts:28-95): the compaction row is
+/// the first entry, everything before it is excluded, and a later
+/// non-completed compaction does not extend the truncation.
+#[tokio::test]
+async fn g96_context_truncates_at_latest_completed_compaction() {
+    let server = boot().await;
+    let client = &server.client;
+    let session_id = create_session(client, "g96").await.id;
+
+    g96_seed_message(
+        &server,
+        &session_id,
+        "msg_pre",
+        1,
+        "user",
+        r#"{"role":"user","text":"before","time":{"created":1}}"#,
+    )
+    .await;
+    g96_seed_message(
+        &server,
+        &session_id,
+        "msg_compaction_1",
+        2,
+        "compaction",
+        r#"{"status":"completed","reason":"manual","recent":"recent","summary":"summary","time":{"created":2}}"#,
+    )
+    .await;
+    g96_seed_message(
+        &server,
+        &session_id,
+        "msg_post",
+        3,
+        "user",
+        r#"{"role":"user","text":"after","time":{"created":3}}"#,
+    )
+    .await;
+    g96_seed_message(
+        &server,
+        &session_id,
+        "msg_compaction_2",
+        4,
+        "compaction",
+        r#"{"status":"running","reason":"auto","time":{"created":4}}"#,
+    )
+    .await;
+
+    let text = {
+        let base = server.client.base_url().to_owned();
+        oc_http::client()
+            .get(format!("{base}/api/session/{session_id}/context"))
+            .send()
+            .await
+            .expect("raw context")
+            .text()
+            .await
+            .expect("body")
+    };
+    let context = serde_json::from_str::<serde_json::Value>(&text).expect("decode envelope");
+    let context = context["data"].as_array().expect("data array");
+    let ids: Vec<&str> =
+        context.iter().map(|message| message["id"].as_str().expect("id")).collect();
+    assert_eq!(ids, vec!["msg_compaction_1", "msg_post", "msg_compaction_2"], "active window only");
+}
+
+/// G-97: the saved-permission family is registered BEFORE the location
+/// middleware in the ref protocol (permission.ts:37,49) — list/remove must
+/// not resolve or boot the request location: an absent directory is not a
+/// 404 and no location boot-cascade events hit the bus.
+#[tokio::test]
+async fn g97_permission_saved_bypasses_location_resolution() {
+    let server = boot().await;
+    let base = server.client.base_url().to_owned();
+    let mut subscription = server.bus.subscribe();
+    let http = oc_http::client();
+
+    let missing = "/nonexistent/g97/location";
+    let list = http
+        .get(format!("{base}/api/permission/saved?location%5Bdirectory%5D={missing}"))
+        .send()
+        .await
+        .expect("saved list");
+    assert_eq!(list.status(), 200, "no location 404 on saved list");
+
+    let remove = http
+        .delete(format!("{base}/api/permission/saved/prm_g97?location%5Bdirectory%5D={missing}"))
+        .send()
+        .await
+        .expect("saved remove");
+    assert_eq!(remove.status(), 204, "no location 404 on saved remove");
+
+    // No boot cascade: the requests above must not have assembled the
+    // (invalid) location, so no events were published while it ran.
+    use futures::{FutureExt as _, StreamExt as _};
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let next = subscription.next().now_or_never();
+    assert!(next.is_none(), "no bus events during saved-permission requests");
 }
