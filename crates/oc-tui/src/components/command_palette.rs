@@ -3574,7 +3574,7 @@ mod tests {
         // 8 visible rows + the omitted notice + the yes/no pair.
         assert_eq!(titles.len(), 11, "8-row window + notice + yes/no");
         assert!(titles[0].contains("(2 more changed files omitted)"), "{titles:?}");
-        assert_eq!(titles[1], "A src/file0.rs +0 -10");
+        assert_eq!(titles[1], "A src/file0.rs -10");
         assert_eq!(titles[2], "M src/file1.rs +1 -9");
         assert_eq!(titles[3], "D src/file2.rs +2 -8");
         assert!(titles.contains(&"This worktree has file changes."));

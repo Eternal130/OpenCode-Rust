@@ -2470,17 +2470,19 @@ impl App {
         let key = self.prompt_key();
         let draft_empty = self.store.prompt_draft(&key).is_empty();
         self.keymap.set_command_enabled("app.exit", draft_empty);
-        // G-103 — the shared `<leader>q` chord's arbitration: v2's
-        // queued-prompts binding is `enabled: queuedPrompts().length >
-        // 0` (index.tsx:1268), so with the queue empty the chord falls
-        // to app.exit's later claim (keybind.ts:48 vs :131). Gating
-        // here reproduces the ref's registration-order outcome on the
-        // port's engine (the queue manager wins while live).
+        // G-103 — the shared `<leader>q` chord's arbitration state:
+        // while the queue is LIVE the manager keeps priority over
+        // app.exit's claim (keybind.ts:48 vs :131 — v2's session
+        // component wins the shared chord while
+        // `queuedPrompts().length > 0`, index.tsx:1268). This engine
+        // resolves a same-key conflict to the EARLIER registration
+        // (app.exit), so steps 1/1b stand app.exit down for the chord
+        // continuation while `queue_live`; an EMPTY queue leaves the
+        // chord on app.exit exactly like the ref's registration order.
         let queue_live = match self.store.route() {
             Route::Session { session_id } => !self.store.queued_prompts(&session_id).is_empty(),
             Route::Home => false,
         };
-        self.keymap.set_command_enabled("session.queued_prompts", queue_live);
 
         // 1. The conditional app.exit layer (empty prompt only): base
         //    chords resolve ABOVE the textarea — <leader>q / ctrl+c /
@@ -2491,6 +2493,17 @@ impl App {
         //    base for those.
         if draft_empty {
             let had_pending = self.keymap.pending_display().is_some();
+            // G-103 — the shared <leader>q arbitration (keybind.ts:48
+            // vs :131): this engine resolves a two-command conflict to
+            // the EARLIER registration (app.exit), so while a chord
+            // continuation is resolving AND the queue is live, app.exit
+            // stands down for the stroke — the queue manager's binding
+            // takes the chord (v2's session component wins the shared
+            // `<leader>q` while `queuedPrompts().length > 0`,
+            // index.tsx:1268).
+            if had_pending && queue_live {
+                self.keymap.set_command_enabled("app.exit", false);
+            }
             match self.keymap.lookup_base(stroke.clone(), &self.clock) {
                 Outcome::Command { command, .. } if command == "app.exit" => {
                     self.request_exit();
@@ -2519,12 +2532,18 @@ impl App {
         //     (event) || leader()) return`). The leader therefore arms
         //     over text, the continuation resolves through the base
         //     layer, the chord executes, and the draft stays intact.
-        //     `app.exit` is disabled above while text exists, so
-        //     <leader>q falls through fresh and types `q`; an
+        //     `app.exit` is disabled above while text exists, so an
+        //     unmatched continuation types into the draft; an
         //     unmatched/escape continuation is consumed by the keymap
         //     (escape clears the pending sequence), never the textarea.
         else if self.keymap.pending_display().is_some() || self.keymap.is_leader(stroke) {
             let had_pending = self.keymap.pending_display().is_some();
+            // G-103 — same arbitration as step 1 (app.exit stands down
+            // for the chord continuation while the queue is live; the
+            // next stroke's top-of-ladder gate restores it).
+            if had_pending && queue_live {
+                self.keymap.set_command_enabled("app.exit", false);
+            }
             match self.keymap.lookup_base(stroke.clone(), &self.clock) {
                 Outcome::Command { command, .. } if command == "app.exit" => {
                     self.request_exit();

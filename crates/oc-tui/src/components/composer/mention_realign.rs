@@ -85,7 +85,7 @@ pub(crate) fn realign_mentions(
             .filter(|candidate| {
                 !protected
                     .iter()
-                    .any(|range| range.start < candidate.end && range.end > range.start)
+                    .any(|range| range.start < candidate.end && range.end > candidate.start)
             })
             .collect();
         for (item, candidate) in assign_mentions(mentions, items, &available) {
@@ -268,7 +268,7 @@ mod tests {
         let mentions = [mention("@file.rs", 4), mention("@build", 21)];
         let aligned = realign_mentions(content, &mentions);
         assert_eq!(aligned[0], Some(4..12));
-        assert_eq!(aligned[1], Some(21..27));
+        assert_eq!(aligned[1], Some(20..26));
     }
 
     /// A mention the edit REMOVED is dropped, not re-attached
@@ -279,7 +279,7 @@ mod tests {
         let mentions = [mention("@file.rs", 4), mention("@build", 21)];
         let aligned = realign_mentions(content, &mentions);
         assert_eq!(aligned[0], None, "the removed @file.rs is dropped");
-        assert_eq!(aligned[1], Some(10..16));
+        assert_eq!(aligned[1], Some(9..15));
     }
 
     /// Two mentions of the SAME text both re-attach, each to its own
