@@ -322,6 +322,8 @@ struct PluginInputs {
     /// This location's websearch service (v2 `WebSearch.Service`): the
     /// env-key-eligible providers + the config-seeded default selection.
     websearch: Arc<crate::tool::websearch::WebSearch>,
+    /// G-82 — this location's progress recorder (shared with the runner).
+    progress_log: crate::session::runner::publisher::ProgressLog,
 }
 
 impl PluginInputs {
@@ -1213,6 +1215,12 @@ impl Engine {
                 Arc::new(crate::environment::LocalFiles) as Arc<dyn crate::environment::Files>
             }
         };
+        // G-82 — the engine-side progress recorder shared by the tools'
+        // `ProgressFn` closures (created below, before any attempt exists)
+        // and the location's session runner (whose step publishers fold
+        // recorded progress into failure snapshots).
+        let progress_log: crate::session::runner::publisher::ProgressLog =
+            std::sync::Arc::new(std::sync::Mutex::new(Default::default()));
         let tool_services = Arc::new(ToolServices {
             directory: location.as_path().to_path_buf(),
             project_directory: worktree.clone(),
@@ -1276,6 +1284,7 @@ impl Engine {
             projects: Arc::clone(&self.projects) as Arc<dyn crate::project::ProjectStore>,
             ids: Arc::clone(&self.ids),
             websearch: Arc::clone(&websearch),
+            progress_log: progress_log.clone(),
         });
         self.inputs.insert(location.clone(), Arc::clone(&inputs));
         let graph = self.build_graph(location.clone(), &inputs).await?;
@@ -1364,7 +1373,7 @@ impl Engine {
                 self.code_mode_timeout,
                 crate::tool::codemode::ExecutionLimits::default(),
                 // codemode/tool.ts:88 `context.progress({toolCalls})`.
-                Some(tool_progress_channel(scoped_bus.clone())),
+                Some(tool_progress_channel(scoped_bus.clone(), progress_log.clone())),
             );
         }
 
@@ -1534,6 +1543,9 @@ impl Engine {
             .with_snapshot(Arc::clone(&snapshot))
             .with_tool_output(Arc::clone(&self.tool_output))
             .with_image_limits(image_limits)
+            // G-82 — the location's progress recorder (see
+            // `tool_progress_channel`).
+            .with_progress_log(progress_log)
             // `SessionPrompt.prepare` (RUNTIME-P01/P02): the
             // `session.prompt` hook + `@skill` resolution fire on the
             // consume boundary — the location's hook registry (guest
@@ -2208,7 +2220,7 @@ fn shell_plugin(engine: &Engine, inputs: &Arc<PluginInputs>) -> InternalPlugin {
             synthetic: Arc::new(BusSyntheticPublisher { bus: bus.clone() }),
             // shell.ts:217 `context.progress({shellID})` — the same
             // runner-level channel the subagent tool uses.
-            progress: Some(tool_progress_channel(bus.clone())),
+            progress: Some(tool_progress_channel(bus.clone(), inputs.progress_log.clone())),
         });
         tool::register_builtin(
             ports.tools,
@@ -2269,9 +2281,28 @@ fn skill_plugin(inputs: &Arc<PluginInputs>) -> InternalPlugin {
 /// The runner-level `context.progress` channel (step.ts:96): a tool's
 /// progress payload lands as an ephemeral `session.tool.progress` event
 /// on the bus carrying the tool CALL id (G-74; shared by the shell,
-/// websearch, codemode, and subagent tools).
-fn tool_progress_channel(bus: crate::bus::Bus) -> tool::ProgressFn {
+/// websearch, codemode, and subagent tools). G-82: the payload is ALSO
+/// recorded into the location's [`publisher::ProgressLog`] — the
+/// registration-time stand-in for `publisher.progress(call.id, update)`
+/// (publish-llm-event.ts:562-572) — so failure snapshots and the
+/// subagent abort suffix observe the live metadata.
+fn tool_progress_channel(
+    bus: crate::bus::Bus,
+    log: crate::session::runner::publisher::ProgressLog,
+) -> tool::ProgressFn {
     Arc::new(move |context: &crate::location::ToolCallContext, metadata| {
+        {
+            let record: crate::session::runner::Record = match &metadata {
+                serde_json::Value::Object(fields) => {
+                    fields.iter().map(|(key, value)| (key.clone(), value.clone())).collect()
+                }
+                other => {
+                    vec![("value".to_string(), other.clone())].into_iter().collect()
+                }
+            };
+            let mut locked = log.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            locked.insert((context.session_id.as_str().to_string(), context.call_id.clone()), record);
+        }
         let data = serde_json::json!({
             "sessionID": context.session_id.as_str(),
             "assistantMessageID": context.message_id,
@@ -2321,24 +2352,10 @@ fn subagent_plugin(inputs: &Arc<PluginInputs>) -> InternalPlugin {
             // metadata the TUI's subagent card click surface reads
             // (metadata.sessionID arms NavigateToSession while the child
             // runs; beta.13 bug 2 left this unwired, so a RUNNING card
-            // was not clickable).
-            progress: Some(Arc::new({
-                let bus = progress_bus.clone();
-                move |context: &crate::location::ToolCallContext, metadata| {
-                    let data = serde_json::json!({
-                        "sessionID": context.session_id.as_str(),
-                        "assistantMessageID": context.message_id,
-                        "id": context.call_id,
-                        "metadata": metadata,
-                    });
-                    let bus = bus.clone();
-                    tokio::spawn(async move {
-                        let def = crate::bus::registry::by_type_latest("session.tool.progress")
-                            .unwrap_or_else(|| panic!("no session.tool.progress definition"));
-                        let _ = bus.publish(def, data, crate::bus::PublishOptions::default()).await;
-                    });
-                }
-            })),
+            // was not clickable). G-82: also recorded into the location's
+            // progress log so failure snapshots / abort suffixes observe
+            // it.
+            progress: Some(tool_progress_channel(progress_bus.clone(), inputs.progress_log.clone())),
             interrupt: None,
         };
         crate::tool::subagent::register(
@@ -2417,7 +2434,7 @@ fn websearch_plugin(inputs: &Arc<PluginInputs>) -> InternalPlugin {
             .tool_services
             .bus
             .clone()
-            .map(|bus| tool_progress_channel(bus));
+            .map(|bus| tool_progress_channel(bus, inputs.progress_log.clone()));
         tool::register_builtin(
             ports.tools,
             hooks,

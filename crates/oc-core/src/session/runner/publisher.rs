@@ -238,6 +238,18 @@ fn finish_reason_json(reason: FinishReason) -> serde_json::Value {
     serde_json::to_value(reason).unwrap_or_default()
 }
 
+/// G-82 — the engine-side recorder behind the tools' `ProgressFn`
+/// closures. The closures are captured at tool REGISTRATION time (before
+/// any attempt or publisher exists), so they cannot call
+/// [`LlmEventPublisher::progress`] directly; instead they record their
+/// latest metadata here (keyed `(sessionID, callID)`) alongside the
+/// ephemeral bus publish. A step's publisher folds the recorded entry
+/// into its failure snapshots and the subagent abort suffix — the
+/// observable half of ref `publish-llm-event.ts:562-572`
+/// (`tool.progress = update` before the publish).
+pub type ProgressLog =
+    std::sync::Arc<std::sync::Mutex<BTreeMap<(String, String), Record>>>;
+
 /// The publisher. Construct one per attempt; the step loop owns it.
 pub struct LlmEventPublisher {
     bus: Bus,
@@ -254,6 +266,9 @@ pub struct LlmEventPublisher {
     step_failure: Option<SessionError>,
     step_settlement: Option<StepSettlement>,
     tools: BTreeMap<String, ToolRecord>,
+    /// G-82 — the engine-side progress recorder shared with the tools'
+    /// `ProgressFn` closures (recorded at registration time).
+    pub(crate) progress_log: Option<ProgressLog>,
     text: Fragments,
     reasoning: Fragments,
     tool_input: Fragments,
@@ -269,6 +284,7 @@ impl LlmEventPublisher {
         model: model::Ref,
         provider_metadata_key: impl Into<String>,
         started: u64,
+        progress_log: Option<ProgressLog>,
     ) -> Self {
         Self {
             bus,
@@ -284,6 +300,7 @@ impl LlmEventPublisher {
             step_failure: None,
             step_settlement: None,
             tools: BTreeMap::new(),
+            progress_log,
             text: Fragments { single: true, kind: "text", ..Default::default() },
             reasoning: Fragments { single: true, kind: "reasoning", ..Default::default() },
             tool_input: Fragments { single: false, kind: "tool input", ..Default::default() },
@@ -560,7 +577,7 @@ impl LlmEventPublisher {
     /// `failureSnapshot` — the last progress metadata merged with the event
     /// metadata.
     fn take_tool_failure_snapshot(&mut self, id: &str, metadata: Option<Record>) -> Option<Record> {
-        let progress = self.tools.get(id).and_then(|tool| tool.progress.clone());
+        let progress = self.recorded_progress(id);
         match (progress, metadata) {
             (None, None) => None,
             (None, Some(metadata)) => Some(metadata),
@@ -570,6 +587,27 @@ impl LlmEventPublisher {
                 merged.extend(metadata);
                 Some(merged)
             }
+        }
+    }
+
+    /// G-82 — the last recorded progress for a call: the publisher's own
+    /// record first (the `progress()` path), then the engine-side
+    /// `ProgressFn` recorder (registration-time closures that cannot reach
+    /// this publisher directly).
+    fn recorded_progress(&self, id: &str) -> Option<Record> {
+        if let Some(progress) = self.tools.get(id).and_then(|tool| tool.progress.clone()) {
+            return Some(progress);
+        }
+        let log = self.progress_log.as_ref()?;
+        let locked = log.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        locked.get(&(self.session_id.clone(), id.to_string())).cloned()
+    }
+
+    /// G-82 — drop a settled call's engine-side progress entry.
+    fn clear_progress_log(&self, id: &str) {
+        if let Some(log) = self.progress_log.as_ref() {
+            let mut locked = log.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            locked.remove(&(self.session_id.clone(), id.to_string()));
         }
     }
 
@@ -912,6 +950,7 @@ impl LlmEventPublisher {
         let executed = self.tools.get_mut(id).expect("checked above");
         executed.settled = true;
         let executed = executed.provider_executed;
+        self.clear_progress_log(id);
         let mut data = self.base();
         data["id"] = serde_json::json!(id);
         data["content"] = serde_json::to_value(&result.content).unwrap_or_default();
@@ -964,12 +1003,11 @@ impl LlmEventPublisher {
         tool.settled = true;
         let executed = tool.provider_executed;
         let name = tool.name.clone();
-        let progress_session = tool
-            .progress
-            .as_ref()
-            .and_then(|progress| progress.get("sessionID"))
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_string);
+        let progress_session = self
+            .recorded_progress(id)
+            .and_then(|progress| progress.get("sessionID").cloned())
+            .and_then(|value| value.as_str().map(str::to_string));
+        self.clear_progress_log(id);
         let mut error = error;
         if name == "subagent" && error.error_type == "aborted" {
             if let Some(session) = progress_session {
