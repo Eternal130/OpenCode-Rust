@@ -438,7 +438,7 @@ pub async fn read_file(
                 .map_err(|error| read_error(&path)(error.into()))
         }) as futures::future::BoxFuture<'static, Result<Vec<u8>, ReadError>>
     };
-    read_file_with(size, path, resource, offset, limit, read_at).await
+    read_file_with(size, path, resource, offset, limit, Some(first.bytes), read_at).await
 }
 
 fn read_error(path: &Path) -> impl Fn(std::io::Error) -> ReadError + '_ {
@@ -450,14 +450,19 @@ fn read_error(path: &Path) -> impl Fn(std::io::Error) -> ReadError + '_ {
 
 /// The chunk-paged read pipeline (read-filesystem.ts:118-262). `read_at`
 /// is the positioned-chunk seam (tests count calls to bound memory
-/// shape); `size` is the file length. G-1: the seam is asynchronous so
-/// the Files-trait `read(path, range)` backs it.
+/// shape); `size` is the file length. `first_chunk` is a caller-already-
+/// read chunk 0 (the dir-detection/size probe in [`read_file`] reads it,
+/// so it is passed through instead of being re-read — chunk 0 is fetched
+/// exactly once per call); `None` makes the pipeline fetch it itself.
+/// G-1: the seam is asynchronous so the Files-trait `read(path, range)`
+/// backs it.
 pub async fn read_file_with<'a, F>(
     size: u64,
     path: &Path,
     resource: &str,
     offset: Option<u64>,
     limit: Option<u64>,
+    first_chunk: Option<Vec<u8>>,
     mut read_at: F,
 ) -> Result<ReadOutput, ReadError>
 where
@@ -467,7 +472,10 @@ where
     let paged_offset = offset.filter(|value| *value > 0).unwrap_or(1);
     let paged_limit = limit.map_or(MAX_READ_LINES as u64, |v| v.min(MAX_READ_LINES as u64));
 
-    let first = read_at(0, FIRST_CHUNK).await?;
+    let first = match first_chunk {
+        Some(first) => first,
+        None => read_at(0, FIRST_CHUNK).await?,
+    };
 
     let media = detect_mime(&first);
     if let Some(media) = media {
