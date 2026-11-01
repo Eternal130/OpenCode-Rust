@@ -245,8 +245,15 @@ fn blanky(directory: &str, cause: &str) -> ToolFailure {
 /// paging (page 20 / limit 100).
 pub struct ModelsExecute {
     pub catalog: crate::provider_catalog::catalog::Catalog,
-    /// `session.model.providerID` of the current session, when known.
+    /// `session.model.providerID` of the current session, when pinned
+    /// (tests/embedders). G-86: production wiring resolves this at
+    /// EXECUTION time from the invoking session's row via `store`
+    /// (ref opencode.ts:134-142 `ctx.session.get({sessionID}).model?.
+    /// providerID`).
     pub own_provider: parking_lot::Mutex<Option<String>>,
+    /// The session store backing the G-86 own-provider resolution;
+    /// `None` (tests) leaves `own_provider` as-is.
+    pub store: Option<crate::session::store::SessionStore>,
 }
 
 fn status_str(status: &oc_schema::model::Status) -> String {
@@ -297,6 +304,18 @@ pub struct ModelsQuery {
 }
 
 impl ModelsExecute {
+    /// G-86 — `own` from the invoking session's row: the stored
+    /// `session.model` reference's `providerID` (opencode.ts:134-142).
+    /// A missing session or model — or a store read failure — degrades
+    /// to `None` (no own-first boost), matching ref's optional chain.
+    async fn session_own_provider(&self, session_id: &str) -> Option<String> {
+        let store = self.store.as_ref()?;
+        let session = store.get(session_id).await.ok()??;
+        let raw = session.model.as_deref()?;
+        let reference: oc_schema::model::Ref = serde_json::from_str(raw).ok()?;
+        Some(reference.provider_id.0.clone())
+    }
+
     /// The model listing over the catalog (models tool core).
     pub fn list(&self, input: &ModelsQuery, own: Option<&str>) -> ModelsOutput {
         let offset = input.offset.unwrap_or(0);
@@ -431,7 +450,7 @@ impl ToolExecuteWithContext for ModelsExecute {
         &'a self,
         _services: &'a ToolServices,
         input: &'a serde_json::Value,
-        _context: &'a crate::location::ToolCallContext,
+        context: &'a crate::location::ToolCallContext,
     ) -> std::pin::Pin<
         Box<dyn std::future::Future<Output = Result<ToolOutcome, ToolFailure>> + Send + 'a>,
     > {
@@ -439,7 +458,13 @@ impl ToolExecuteWithContext for ModelsExecute {
         Box::pin(async move {
             let query: ModelsQuery = serde_json::from_value(input)
                 .map_err(|error| ToolFailure::message(format!("Invalid arguments: {error}")))?;
-            let own = self.own_provider.lock().clone();
+            // G-86 — ref opencode.ts:134-142: `own` is the invoking
+            // session's selected model provider, read at execution time.
+            let pinned = self.own_provider.lock().clone();
+            let own = match pinned {
+                Some(pinned) => Some(pinned),
+                None => self.session_own_provider(context.session_id.as_str()).await,
+            };
             let output = self.list(&query, own.as_deref());
             Ok(ToolOutcome {
                 content: vec![oc_schema::tool::Content::Text {
@@ -498,7 +523,10 @@ pub fn session_move_tool(deps: SessionMoveServices) -> BuiltinTool {
 }
 
 /// `models` registration.
-pub fn models_tool(catalog: crate::provider_catalog::catalog::Catalog) -> BuiltinTool {
+pub fn models_tool(
+    catalog: crate::provider_catalog::catalog::Catalog,
+    store: crate::session::store::SessionStore,
+) -> BuiltinTool {
     BuiltinTool {
         name: "models",
         description: "Search the models available to use. Use this to turn a model name the user mentions into an exact reference before running a subagent on it. Check your own provider first.".into(),
@@ -515,7 +543,11 @@ pub fn models_tool(catalog: crate::provider_catalog::catalog::Catalog) -> Builti
         permission: None,
         codemode: true,
         namespace: Some("opencode"),
-        execute: Arc::new(ModelsExecute { catalog, own_provider: parking_lot::Mutex::new(None) }),
+        execute: Arc::new(ModelsExecute {
+            catalog,
+            own_provider: parking_lot::Mutex::new(None),
+            store: Some(store),
+        }),
     }
 }
 
@@ -573,10 +605,53 @@ mod tests {
         .expect("catalog parses")
     }
 
+    /// G-86 — `own` resolves from the invoking session's row at
+    /// execution time (`session.model.providerID`), sorting that
+    /// provider's models first (opencode.ts:134-142,157-163).
+    #[tokio::test]
+    async fn tool_opencode_models_own_provider_resolves_from_session() {
+        let db = crate::database::Database::open_in_memory().await.expect("db");
+        {
+            let project = crate::database::schema::ProjectRow::new("proj_g86", "/tmp/opencode", None)
+                .expect("project");
+            db.transaction(move |tx| crate::database::schema::ProjectRow::insert(tx, &project))
+            .await
+            .expect("project insert");
+        }
+        let mut row = crate::database::schema::SessionRow::new(
+            "ses_g86",
+            "proj_g86",
+            "/tmp/opencode",
+            "slug",
+            "1",
+        )
+        .expect("row");
+        row.model = Some(r#"{"id":"new","providerID":"mine"}"#.to_string());
+        db.transaction(move |tx| crate::database::schema::SessionRow::insert(tx, &row))
+            .await
+            .expect("insert");
+
+        let execute = ModelsExecute {
+            catalog: catalog(),
+            own_provider: parking_lot::Mutex::new(None),
+            store: Some(crate::session::store::SessionStore::new(db)),
+        };
+        // Resolved straight off the session row.
+        assert_eq!(execute.session_own_provider("ses_g86").await, Some("mine".to_string()));
+        // Unknown session / missing model degrade to None.
+        assert_eq!(execute.session_own_provider("ses_none").await, None);
+
+        // The resolved own provider orders the listing.
+        let own = execute.session_own_provider("ses_g86").await;
+        let output = execute.list(&ModelsQuery::default(), own.as_deref());
+        assert_eq!(output.providers[0].id, "mine");
+        assert_eq!(output.providers[0].models[0].id, "mine/new");
+    }
+
     #[test]
     fn tool_opencode_models_sorts_own_provider_first_with_family_dedup() {
         let execute =
-            ModelsExecute { catalog: catalog(), own_provider: parking_lot::Mutex::new(None) };
+            ModelsExecute { catalog: catalog(), own_provider: parking_lot::Mutex::new(None), store: None };
         let output = execute.list(&ModelsQuery::default(), Some("mine"));
         assert_eq!(output.total, 2, "family dedup drops Mine Old");
         assert_eq!(output.providers.len(), 2, "mine first, then other");
@@ -595,7 +670,7 @@ mod tests {
     #[test]
     fn tool_opencode_models_pages() {
         let execute =
-            ModelsExecute { catalog: catalog(), own_provider: parking_lot::Mutex::new(None) };
+            ModelsExecute { catalog: catalog(), own_provider: parking_lot::Mutex::new(None), store: None };
         let page = execute.list(
             &ModelsQuery { limit: Some(1), offset: Some(0), all: Some(true), ..Default::default() },
             Some("other"),
@@ -614,7 +689,7 @@ mod tests {
     #[test]
     fn tool_opencode_models_filters_by_query_and_provider() {
         let execute =
-            ModelsExecute { catalog: catalog(), own_provider: parking_lot::Mutex::new(None) };
+            ModelsExecute { catalog: catalog(), own_provider: parking_lot::Mutex::new(None), store: None };
         let output =
             execute.list(&ModelsQuery { query: Some("solo".into()), ..Default::default() }, None);
         assert_eq!(output.total, 1);
@@ -647,7 +722,7 @@ mod tests {
             }"#,
         )
         .expect("catalog parses");
-        let execute = ModelsExecute { catalog: mixed, own_provider: parking_lot::Mutex::new(None) };
+        let execute = ModelsExecute { catalog: mixed, own_provider: parking_lot::Mutex::new(None), store: None };
         let output = execute.list(&ModelsQuery::default(), None);
         let order: Vec<&str> = output.providers.iter().map(|page| page.id.as_str()).collect();
         assert_eq!(order, vec!["anthropic", "Z.ai"], "localeCompare, not byte order");

@@ -2172,7 +2172,14 @@ fn opencode_plugin(inputs: &Arc<PluginInputs>) -> InternalPlugin {
             ports.tools,
             hooks,
             &inputs.tool_services,
-            opencode_tools::models_tool(inputs.catalog.as_ref().clone()),
+            // G-86 — the session store backing the models tool's
+            // own-provider resolution (session.model.providerID).
+            opencode_tools::models_tool(
+                inputs.catalog.as_ref().clone(),
+                crate::session::store::SessionStore::new(
+                    inputs.tool_services.db.clone().expect("tool services db"),
+                ),
+            ),
         )
     })
 }
