@@ -72,6 +72,20 @@ async fn create(
 ) -> Result<Response, ApiError> {
     let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let shared = pty_state::shared(&state);
+    // G-1 — pty creation routes through the location-bound Environment
+    // `pty` seam (workspace driver when the location carries a
+    // `workspaceID`, local portable-pty driver otherwise), exactly like
+    // the file tools' Files seam. A bind failure (unknown/destroyed
+    // workspace placement) falls back to the local driver rather than
+    // failing the request.
+    let spawner = match state.environment.pty(&location).await {
+        Ok(spawner) => spawner,
+        Err(cause) => {
+            eprintln!("opencode: pty create fell back to the local pty driver: {cause}");
+            std::sync::Arc::new(oc_core::environment::pty::LocalPtySpawner)
+                as std::sync::Arc<dyn oc_core::environment::pty::PtySpawner>
+        }
+    };
     let input = CreateInput {
         command: body["command"].as_str().map(String::from),
         args: body["args"]
@@ -93,7 +107,7 @@ async fn create(
             .as_object()
             .and_then(|size| Some((size["cols"].as_u64()? as u16, size["rows"].as_u64()? as u16))),
     };
-    let info = shared.pty.create(&input).map_err(|error| {
+    let info = shared.pty.create_with(spawner, &input).map_err(|error| {
         crate::errors::debug_cause("pty:unknown_ref", &error);
         ApiError::unknown_ref()
     })?;
