@@ -796,8 +796,11 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
             };
             if let Some(count) = omitted {
                 options.push(
-                    SelectOption::titled(format!("({count} more changed files omitted)"), "omitted")
-                        .muted_placeholder(),
+                    SelectOption::titled(
+                        format!("({count} more changed files omitted)"),
+                        "omitted",
+                    )
+                    .muted_placeholder(),
                 );
             }
             for file in visible {
@@ -822,7 +825,9 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
                 SelectOption::titled("This worktree has file changes.", "yes")
                     .described("Do you want to delete it anyway? Yes deletes it."),
             );
-            options.push(SelectOption::titled("Keep the worktree", "no").described("Cancels the delete."));
+            options.push(
+                SelectOption::titled("Keep the worktree", "no").described("Cancels the delete."),
+            );
             SelectProps::new("Delete worktree?", options).destructive()
         }
         DialogKind::ServerList { command: "agent.list", title } => agent_list_props(store, title),

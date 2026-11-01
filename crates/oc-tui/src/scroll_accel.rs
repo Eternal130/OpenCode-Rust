@@ -70,9 +70,8 @@ impl MacOsScrollAccel {
         if self.velocity_history.len() > HISTORY_SIZE {
             self.velocity_history.pop_front();
         }
-        let avg_interval =
-            self.velocity_history.iter().copied().sum::<i64>() as f64
-                / self.velocity_history.len() as f64;
+        let avg_interval = self.velocity_history.iter().copied().sum::<i64>() as f64
+            / self.velocity_history.len() as f64;
         let velocity = REFERENCE_INTERVAL_MS / avg_interval;
         let x = velocity / TAU;
         let multiplier = 1.0 + A * (x.exp() - 1.0);

@@ -425,7 +425,12 @@ mod tests {
         assert_eq!(store.worktree_dialog().removing.as_deref(), Some("/home/u/.worktrees/feat-a"));
 
         // The server rejects with forceRequired → the confirm dialog.
-        store.apply_worktree_remove_failed("/home/u/.worktrees/feat-a", "has changes", true, Vec::new());
+        store.apply_worktree_remove_failed(
+            "/home/u/.worktrees/feat-a",
+            "has changes",
+            true,
+            Vec::new(),
+        );
         assert!(matches!(
             store.top_dialog().map(|entry| entry.kind),
             Some(DialogKind::WorktreeDeleteConfirm { .. })
