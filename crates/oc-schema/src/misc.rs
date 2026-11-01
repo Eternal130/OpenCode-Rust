@@ -118,9 +118,101 @@ pub enum WorktreeEntryType {
 /// `Worktree.List`.
 pub type WorktreeList = Vec<WorktreeDirectory>;
 
-// TODO(port): Worktree.adopt() — session/project reattribution projection
-// helper from worktree.ts (pure function over session + worktree.resolved
-// event data); belongs in oc-core once the projector lands.
+/// Input to [`worktree_adopt`] — the session-side facts (a subset of
+/// `Session.Info`: `projectID`, `directory`, and `workspaceID?`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorktreeAdoptSession {
+    pub project_id: ProjectId,
+    /// Session directory (may use backslashes on Windows-style paths).
+    pub directory: String,
+    pub workspace_id: Option<String>,
+}
+
+/// Input to [`worktree_adopt`] — the `worktree.resolved` event data
+/// (`Worktree.Resolved`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorktreeAdoptEvent {
+    pub project_id: ProjectId,
+    pub directory: String,
+    pub previous: ProjectId,
+    pub adopted: Option<Vec<ProjectId>>,
+}
+
+/// The [`worktree_adopt`] result: the session's new ownership.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorktreeAdopted {
+    pub project_id: ProjectId,
+    /// `None` when the session sits at the worktree root itself.
+    pub subpath: Option<String>,
+}
+
+/// `Worktree.adopt` (worktree.ts:73) — the pure client-store projection:
+/// given a session and a `worktree.resolved` event, decides whether the
+/// session's ownership follows the directory's new project identity, and
+/// with which subpath. G-87: ported 1:1 from the ref (consumed there by
+/// `packages/client/src/solid/data.ts` on every `worktree.resolved`
+/// frame; the DB-side twin is `oc-core`'s session projector
+/// `project_worktree`). Returns `None` when the session is not adopted.
+#[must_use]
+pub fn worktree_adopt(
+    session: &WorktreeAdoptSession,
+    event: &WorktreeAdoptEvent,
+) -> Option<WorktreeAdopted> {
+    if session.workspace_id.is_some() {
+        return None;
+    }
+    let explicitly_adopted =
+        event.adopted.as_ref().is_some_and(|ids| ids.contains(&session.project_id));
+    if session.project_id != event.previous
+        && !session.project_id.is_global()
+        && !explicitly_adopted
+    {
+        return None;
+    }
+    if session.project_id == event.project_id {
+        return None;
+    }
+    let directory = normalize_slashes(&session.directory);
+    let root = normalize_slashes(&event.directory);
+    // Windows drive-letter roots compare case-insensitively (`/c:/...`).
+    let windows = root.len() >= 2
+        && root.starts_with('/')
+        && root.as_bytes()[1].is_ascii_alphabetic()
+        && root[2..].starts_with(':');
+    let (key, parent) = if windows {
+        (directory.to_lowercase(), root.to_lowercase())
+    } else {
+        (directory.clone(), root.clone())
+    };
+    if key != parent && !key.starts_with(&format!("{parent}/")) {
+        return None;
+    }
+    let subpath = (key != parent).then(|| directory[root.len() + 1..].to_string());
+    Some(WorktreeAdopted { project_id: event.project_id.clone(), subpath })
+}
+
+/// The ref's `normalize` (worktree.ts:91-101): backslashes → forward
+/// slashes, then a segment fold dropping empty/`.` segments and
+/// cancelling `..` against the accumulated tail.
+fn normalize_slashes(value: &str) -> String {
+    let mut result = String::new();
+    for segment in value.replace('\\', "/").split('/') {
+        if segment.is_empty() || segment == "." {
+            continue;
+        }
+        if segment == ".." {
+            if let Some(pos) = result.rfind('/') {
+                result.truncate(pos);
+            } else {
+                result.clear();
+            }
+            continue;
+        }
+        result.push('/');
+        result.push_str(segment);
+    }
+    result
+}
 
 /// `Worktree.OperationError`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -300,5 +392,103 @@ mod tests {
         let parsed: PluginSource = serde_json::from_value(value.clone()).unwrap();
         assert!(matches!(parsed, PluginSource::Package { .. }));
         assert_eq!(serde_json::to_value(&parsed).unwrap(), value);
+    }
+
+    fn adopt_case(
+        session_project: &str,
+        session_dir: &str,
+        event_previous: &str,
+        event_adopted: Option<&[&str]>,
+    ) -> Option<super::WorktreeAdopted> {
+        super::worktree_adopt(
+            &super::WorktreeAdoptSession {
+                project_id: ProjectId::parse(session_project),
+                directory: session_dir.to_string(),
+                workspace_id: None,
+            },
+            &super::WorktreeAdoptEvent {
+                project_id: ProjectId::parse("proj_new"),
+                directory: "/repo/.worktrees/feature".to_string(),
+                previous: ProjectId::parse(event_previous),
+                adopted: event_adopted
+                    .map(|ids| ids.iter().map(|id| ProjectId::parse(*id)).collect()),
+            },
+        )
+    }
+
+    #[test]
+    fn worktree_adopt_follows_previous_identity() {
+        let adopted = adopt_case("proj_old", "/repo/.worktrees/feature/sub", "proj_old", None)
+            .expect("previous-identity session under the resolved root is adopted");
+        assert_eq!(adopted.project_id, ProjectId::parse("proj_new"));
+        assert_eq!(adopted.subpath.as_deref(), Some("sub"));
+    }
+
+    #[test]
+    fn worktree_adopt_root_session_has_no_subpath() {
+        let adopted = adopt_case("proj_old", "/repo/.worktrees/feature", "proj_old", None)
+            .expect("root session is adopted");
+        assert_eq!(adopted.subpath, None);
+    }
+
+    #[test]
+    fn worktree_adopt_explicitly_adopted_project_uses_canonical_directory() {
+        // Explicitly adopted projects are candidates regardless of
+        // `previous`; adoption still requires the session directory to be
+        // contained in the resolved root (ref `Worktree.adopt` keep).
+        let adopted = adopt_case(
+            "proj_marker",
+            "/repo/.worktrees/feature/nested",
+            "proj_old",
+            Some(&["proj_marker"]),
+        )
+        .expect("explicitly adopted + contained adopts");
+        assert_eq!(adopted.project_id, ProjectId::parse("proj_new"));
+        assert_eq!(adopted.subpath.as_deref(), Some("nested"));
+    }
+
+    #[test]
+    fn worktree_adopt_rejects_non_candidates() {
+        // Neither previous, global, nor explicitly adopted → not a candidate.
+        assert!(adopt_case("proj_other", "/repo/.worktrees/feature", "proj_old", None).is_none());
+        // Workspace sessions never re-attribute.
+        let workspace = super::worktree_adopt(
+            &super::WorktreeAdoptSession {
+                project_id: ProjectId::parse("proj_old"),
+                directory: "/repo/.worktrees/feature".to_string(),
+                workspace_id: Some("ws_1".to_string()),
+            },
+            &super::WorktreeAdoptEvent {
+                project_id: ProjectId::parse("proj_new"),
+                directory: "/repo/.worktrees/feature".to_string(),
+                previous: ProjectId::parse("proj_old"),
+                adopted: None,
+            },
+        );
+        assert!(workspace.is_none());
+    }
+
+    #[test]
+    fn worktree_adopt_rejects_same_project_and_outside_directory() {
+        // Already the resolved project → no move.
+        assert!(adopt_case("proj_new", "/repo/.worktrees/feature", "proj_new", None).is_none());
+        // Under previous identity but outside the resolved directory → no move.
+        assert!(adopt_case("proj_old", "/elsewhere", "proj_old", None).is_none());
+        // Global sessions adopt when contained.
+        let adopted = adopt_case("global", "/repo/.worktrees/feature/x.ts", "proj_old", None)
+            .expect("global session under the root adopts");
+        assert_eq!(adopted.subpath.as_deref(), Some("x.ts"));
+    }
+
+    #[test]
+    fn worktree_adopt_normalizes_backslashes_and_dots() {
+        let adopted = adopt_case(
+            "proj_old",
+            "/repo/.worktrees/feature/./sub/../sub2\\deep",
+            "proj_old",
+            None,
+        )
+        .expect("normalized path is contained");
+        assert_eq!(adopted.subpath.as_deref(), Some("sub2/deep"));
     }
 }

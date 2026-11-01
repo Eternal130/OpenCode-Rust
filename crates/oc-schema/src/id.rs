@@ -230,6 +230,13 @@ impl ProjectId {
     pub fn global() -> Self {
         Self("global".to_string())
     }
+
+    /// Whether this is the synthetic [`ProjectId::global`] identity
+    /// (the G-87 `Worktree.adopt` candidate check).
+    #[must_use]
+    pub fn is_global(&self) -> bool {
+        self.0 == "global"
+    }
 }
 
 impl ProviderId {

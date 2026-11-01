@@ -20,18 +20,18 @@ pub const MAX_PASTED_FILEPATHS: usize = 32;
 /// total staged data of a multi-path paste.
 pub const MAX_LOCAL_ATTACHMENT_BYTES: usize = 20 * 1024 * 1024;
 
-/// The extension → mime table (`mimeTypes`, local-attachment.ts:61).
+/// The extension → mime filter (`mimeTypes`, local-attachment.ts:61).
+/// G-92: the MIME values come from the shared `oc_util::mime` union
+/// table; this site keeps the ref's restricted image/pdf/svg allowlist
+/// (unknown extensions still yield `None`, which fails the image/pdf
+/// filter downstream exactly like v2's table miss).
 #[must_use]
 pub fn mime_from_extension(extension: &str) -> Option<&'static str> {
-    let lower = extension.to_ascii_lowercase();
-    match lower.as_str() {
-        ".avif" => Some("image/avif"),
-        ".gif" => Some("image/gif"),
-        ".jpeg" | ".jpg" => Some("image/jpeg"),
-        ".pdf" => Some("application/pdf"),
-        ".png" => Some("image/png"),
-        ".svg" => Some("image/svg+xml"),
-        ".webp" => Some("image/webp"),
+    let core = extension.strip_prefix('.')?.to_ascii_lowercase();
+    match core.as_str() {
+        "avif" | "gif" | "jpeg" | "jpg" | "pdf" | "png" | "svg" | "webp" => {
+            oc_util::mime::from_extension(&core)
+        }
         _ => None,
     }
 }

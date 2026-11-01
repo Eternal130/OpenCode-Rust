@@ -136,26 +136,16 @@ fn detect_mime(bytes: &[u8]) -> Option<&'static str> {
 }
 
 /// `mimeType(path)` — extension fallback (mime-types `lookup`).
+/// G-92: the table lives in `oc_util::mime` (the shared union); the
+/// fallback policy (octet-stream) stays here. Note `xml` now resolves
+/// to `application/xml`, the actual `mime-types` value (the old local
+/// table's `text/xml` was drift).
 fn mime_from_path(path: &Path) -> String {
-    match path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref() {
-        Some("txt" | "text" | "md" | "markdown") => "text/plain".to_string(),
-        Some("json") => "application/json".to_string(),
-        Some("js" | "mjs" | "cjs") => "text/javascript".to_string(),
-        Some("ts" | "tsx") => "text/typescript".to_string(),
-        Some("css") => "text/css".to_string(),
-        Some("html" | "htm") => "text/html".to_string(),
-        Some("xml") => "text/xml".to_string(),
-        Some("yaml" | "yml") => "text/yaml".to_string(),
-        Some("py") => "text/x-python".to_string(),
-        Some("rs") => "text/rust".to_string(),
-        Some("toml") => "text/toml".to_string(),
-        Some("pdf") => "application/pdf".to_string(),
-        Some("png") => "image/png".to_string(),
-        Some("jpg" | "jpeg") => "image/jpeg".to_string(),
-        Some("gif") => "image/gif".to_string(),
-        Some("webp") => "image/webp".to_string(),
-        _ => "application/octet-stream".to_string(),
-    }
+    path.extension()
+        .and_then(|e| e.to_str())
+        .and_then(oc_util::mime::from_extension)
+        .unwrap_or(oc_util::mime::OCTET_STREAM)
+        .to_string()
 }
 
 fn file_url(path: &Path) -> String {
@@ -416,8 +406,7 @@ pub async fn read_file(
             ..
         }) => {
             let paged_offset = offset.filter(|value| *value > 0).unwrap_or(1);
-            let paged_limit =
-                limit.map_or(MAX_READ_LINES as u64, |v| v.min(MAX_READ_LINES as u64));
+            let paged_limit = limit.map_or(MAX_READ_LINES as u64, |v| v.min(MAX_READ_LINES as u64));
             return list_page(files.as_ref(), path, paged_offset, paged_limit).await;
         }
         Err(error) => return Err(read_error(path)(error.into())),
@@ -485,7 +474,8 @@ where
                 maximum_bytes: MAX_MEDIA_INGEST_BYTES,
             });
         }
-        let whole = if first.len() as u64 >= size { first } else { read_at(0, size as usize).await? };
+        let whole =
+            if first.len() as u64 >= size { first } else { read_at(0, size as usize).await? };
         return Ok(ReadOutput::File {
             uri: file_url(path),
             name: path.file_name().map(|n| n.to_string_lossy().into_owned()),
@@ -743,7 +733,11 @@ async fn leaf_failure(
 
 /// `missing` — sibling suggestions (entries via the Files `list` seam,
 /// which preserves the raw dirent order the ref's `readdir` yields).
-async fn missing(files: &dyn crate::environment::Files, input: &str, absolute: &Path) -> ToolFailure {
+async fn missing(
+    files: &dyn crate::environment::Files,
+    input: &str,
+    absolute: &Path,
+) -> ToolFailure {
     let base = absolute.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
     let parent = absolute.parent().unwrap_or_else(|| Path::new("/"));
     let mut suggestions: Vec<String> = Vec::new();
@@ -783,10 +777,7 @@ fn join_display(input: &str, entry: &str) -> String {
 /// `alternatePath` — recover a uniquely-matching sibling under NFC +
 /// typography canonicalization (candidate scan via the Files `list`
 /// seam's own-kind entries — the same dirent `is_file` filter).
-async fn alternate_path(
-    files: &dyn crate::environment::Files,
-    absolute: &Path,
-) -> Option<PathBuf> {
+async fn alternate_path(files: &dyn crate::environment::Files, absolute: &Path) -> Option<PathBuf> {
     let canonical = |name: &str| -> String {
         use unicode_normalization::UnicodeNormalization;
         // REF order (read.ts:139-143): NFC FIRST, then the NBSP/curly
@@ -843,49 +834,53 @@ async fn run(
         })?;
 
     let files = std::sync::Arc::clone(&services.files);
-    let outcome = match read_file(files.clone(), &requested.absolute, &requested.resource, offset, limit).await
-    {
-        Ok(output) => (output, requested, path.clone()),
-        Err(ReadError::NotFound(_)) => {
-            let Some(alternate) = alternate_path(files.as_ref(), &requested.absolute).await else {
-                return Err(missing(files.as_ref(), &path, &requested.absolute).await);
-            };
-            let sibling = services
-                .access
-                .authorize_read(
-                    &alternate.to_string_lossy(),
-                    &invocation,
-                    Some(&ReadOptions { sibling_of: requested.clone() }),
-                )
-                .await
-                .map_err(|error| ToolFailure {
-                    message: format!("Unable to read {path}"),
-                    cause: Some(super::permission_cause(&error)),
-                })?;
-            match read_file(files.clone(), &sibling.absolute, &sibling.resource, offset, limit).await
-            {
-                Ok(ReadOutput::ListPage { .. }) => {
-                    return Err(missing(files.as_ref(), &path, &requested.absolute).await)
-                }
-                Ok(output) => (
-                    output,
-                    sibling,
-                    join_display(
-                        &path,
-                        &alternate
-                            .file_name()
-                            .map(|n| n.to_string_lossy().into_owned())
-                            .unwrap_or_default(),
+    let outcome =
+        match read_file(files.clone(), &requested.absolute, &requested.resource, offset, limit)
+            .await
+        {
+            Ok(output) => (output, requested, path.clone()),
+            Err(ReadError::NotFound(_)) => {
+                let Some(alternate) = alternate_path(files.as_ref(), &requested.absolute).await
+                else {
+                    return Err(missing(files.as_ref(), &path, &requested.absolute).await);
+                };
+                let sibling = services
+                    .access
+                    .authorize_read(
+                        &alternate.to_string_lossy(),
+                        &invocation,
+                        Some(&ReadOptions { sibling_of: requested.clone() }),
+                    )
+                    .await
+                    .map_err(|error| ToolFailure {
+                        message: format!("Unable to read {path}"),
+                        cause: Some(super::permission_cause(&error)),
+                    })?;
+                match read_file(files.clone(), &sibling.absolute, &sibling.resource, offset, limit)
+                    .await
+                {
+                    Ok(ReadOutput::ListPage { .. }) => {
+                        return Err(missing(files.as_ref(), &path, &requested.absolute).await)
+                    }
+                    Ok(output) => (
+                        output,
+                        sibling,
+                        join_display(
+                            &path,
+                            &alternate
+                                .file_name()
+                                .map(|n| n.to_string_lossy().into_owned())
+                                .unwrap_or_default(),
+                        ),
                     ),
-                ),
-                Err(ReadError::NotFound(_)) => {
-                    return Err(missing(files.as_ref(), &path, &requested.absolute).await)
+                    Err(ReadError::NotFound(_)) => {
+                        return Err(missing(files.as_ref(), &path, &requested.absolute).await)
+                    }
+                    Err(error) => return Err(leaf_failure(files.as_ref(), &path, error).await),
                 }
-                Err(error) => return Err(leaf_failure(files.as_ref(), &path, error).await),
             }
-        }
-        Err(error) => return Err(leaf_failure(files.as_ref(), &path, error).await),
-    };
+            Err(error) => return Err(leaf_failure(files.as_ref(), &path, error).await),
+        };
     let (output, target, display_path) = outcome;
 
     // AGENTS.md side effect: walk UP from the read dir to the location root
@@ -922,7 +917,12 @@ async fn run(
 
     if let ReadOutput::File { content, mime, base64: true, .. } = &output {
         if !MEDIA_MIMES.contains(&mime.as_str()) {
-            return Err(leaf_failure(files.as_ref(), &path, ReadError::Binary(target.resource.clone())).await);
+            return Err(leaf_failure(
+                files.as_ref(),
+                &path,
+                ReadError::Binary(target.resource.clone()),
+            )
+            .await);
         }
         let summary = if mime == "application/pdf" {
             "PDF read successfully"

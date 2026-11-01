@@ -4,8 +4,15 @@
 //! Supported pattern subset: `*` (any run within a segment), `**` as a whole
 //! segment (any run across segments, and may match zero segments when followed
 //! by `/`), `?` (exactly one non-separator character), and `[abc]` / `[a-z]` /
-//! `[!a-z]` character classes. Braces and extglobs are not supported; dotfiles
-//! always match (the `dot: true` default). Matching is case-sensitive.
+//! `[!a-z]` character classes. Dotfiles always match (the `dot: true`
+//! default). Matching is case-sensitive.
+//!
+//! KNOWN BOUNDED DIVERGENCE (G-92): the ref's `minimatch` also supports
+//! brace expansion (`{a,b}`) and extglobs (`!(...)`, `+(...)`, …); this
+//! port deliberately does not — no ref caller passes such a pattern to
+//! this seam today. Do not silently widen callers to braces/extglobs;
+//! if a future need appears, extend `compile` here first and pin it
+//! with a parity test.
 //!
 //! Directory scanning (`Glob.scan`) needs a filesystem walker and is deferred
 //! to the crate that owns that dependency.
