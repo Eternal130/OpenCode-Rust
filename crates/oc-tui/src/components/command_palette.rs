@@ -3183,9 +3183,20 @@ impl CommandDispatcher for StoreDispatcher {
             | "app.scrap"
             | "service.restart"
             | "dialog.integration.rename"
-            | "dialog.integration.delete"
-            | "which-key.toggle"
-            | "which-key.layout.toggle"
+            | "dialog.integration.delete" => Dispatch::Handled,
+            // G-83 — the which-key panel now EXISTS (the bounded
+            // port of the keymap addon's surface): `which-key.toggle`
+            // opens/dismisses the root listing (the app's sync
+            // materializes the entries from `active_keys`). The
+            // remaining family members (layout/pending preview/
+            // group/scroll/page/home/end) drive panel chrome the
+            // bounded port does not carry — they stay consumed
+            // no-ops so the strokes never leak into the composer.
+            "which-key.toggle" => {
+                store.which_key_toggle();
+                Dispatch::Handled
+            }
+            "which-key.layout.toggle"
             | "which-key.pending.toggle"
             | "which-key.group.previous"
             | "which-key.group.next"

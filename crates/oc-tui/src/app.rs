@@ -1635,11 +1635,28 @@ impl App {
         self.press("enter");
     }
 
+    /// One keypress (the replay/PTY entry). G-83: the which-key
+    /// panel syncs after EVERY stroke — including the early-return
+    /// intercepts (console copy, selection, mode exits) that clear
+    /// the pending sequence — so the overlay can never go stale.
     pub fn press(&mut self, spec: &str) {
+        self.press_inner(spec);
+        self.sync_which_key();
+    }
+
+    fn press_inner(&mut self, spec: &str) {
         // ErrorComponent mode: any key exits (the fallback's only
         // action — v2's ErrorBoundary dismiss).
         if self.error_mode.is_some() {
             self.exit_requested = true;
+            return;
+        }
+        // G-83 — the which-key root listing: escape closes the panel
+        // (the addon's dismiss; a pending-prefix panel closes through
+        // the keymap's own escape-clears sequence instead).
+        if self.store.which_key_root_open() && matches!(spec, "escape" | "esc") {
+            self.store.which_key_toggle();
+            self.keymap.clear_pending();
             return;
         }
         // TUI-29 — the console's `copy-selection` binding
@@ -1770,6 +1787,59 @@ impl App {
         }
         self.sync_modes();
         self.store.runtime.run_effects();
+    }
+
+    /// G-83 — the which-key panel's sync: after every stroke, the
+    /// panel mirrors the keymap's pending sequence — a live prefix
+    /// shows its continuations (`active_keys`, the engine's
+    /// `getActiveKeys` surface), a completed/cancelled/dropped
+    /// sequence closes it, and `which-key.toggle`'s root listing
+    /// (no pending chord) lists the top-level bindings instead.
+    fn sync_which_key(&mut self) {
+        use crate::components::which_key::WhichKeyView;
+        if let Some(prefix) = self.keymap.pending_display() {
+            let entries = self.which_key_entries();
+            self.store.set_which_key(Some(WhichKeyView { prefix: Some(prefix), entries }));
+        } else if self.store.which_key_root_open() {
+            let entries = self.which_key_entries();
+            self.store.set_which_key(Some(WhichKeyView { prefix: None, entries }));
+        } else {
+            self.store.set_which_key(None);
+        }
+    }
+
+    /// The panel's rows from the keymap's reachable next keys: the
+    /// key's display + the table's label for the completion's
+    /// command (sorted by key, capped at the bounded row limit).
+    fn which_key_entries(&mut self) -> Vec<crate::components::which_key::WhichKeyEntry> {
+        use crate::components::which_key::{WhichKeyEntry, WHICH_KEY_MAX_ENTRIES};
+        let mut entries: Vec<_> = self
+            .keymap
+            .active_keys()
+            .into_iter()
+            .map(|key| {
+                let label = key
+                    .command
+                    .as_deref()
+                    .and_then(|command| self.keymap.command_def(command))
+                    .map_or_else(
+                        || {
+                            // A pure prefix (no unambiguous command)
+                            // keeps the continuation marker.
+                            if key.continues {
+                                "…".to_owned()
+                            } else {
+                                "-".to_owned()
+                            }
+                        },
+                        |def| def.description.to_owned(),
+                    );
+                WhichKeyEntry { key: key.display, label }
+            })
+            .collect();
+        entries.sort_by(|a, b| a.key.cmp(&b.key));
+        entries.truncate(WHICH_KEY_MAX_ENTRIES);
+        entries
     }
 
     /// TUI-30 — the routed session's location failed to resolve (the
@@ -3107,6 +3177,18 @@ impl App {
                 self.size.0,
             );
             paste_frame(&mut frame, &overlay, 0);
+        }
+        // G-83 — the which-key panel: a compact bottom overlay while
+        // a chord prefix is pending (or the root listing is on),
+        // above every route surface.
+        if let Some(view) = self.store.which_key() {
+            let overlay = crate::components::which_key::render_which_key_solid(
+                &view,
+                &theme.styles(),
+                self.size.0,
+            );
+            let y = usize::from(self.size.1).saturating_sub(overlay.height);
+            paste_frame(&mut frame, &overlay, y);
         }
         let footer_theme = FooterTheme::from_resolved(&theme.resolved.tokens);
         if let FooterView::Permission { request } = self.store.footer().view.clone() {
@@ -13080,4 +13162,80 @@ fn home_footer_chips_are_clickable() {
         ),
         "the plugins chip dispatched plugins.list"
     );
+}
+
+/// G-83 — the which-key panel's field-level proofs (the live-PTY
+/// twin lives in tests/pty_lane_g83.rs).
+#[cfg(test)]
+mod which_key_tests {
+    use super::App;
+
+    /// A prefix stroke opens the panel listing the chord's
+    /// continuations with the table's labels, sorted by key.
+    #[test]
+    fn leader_prefix_opens_which_key_panel() {
+        let mut app = App::new((80, 24));
+        app.store.open_tab("s1", Some("S".to_owned()));
+        assert!(app.store.which_key().is_none(), "closed at rest");
+        app.press("ctrl+x");
+        let view = app.store.which_key().expect("the panel opens on the leader");
+        assert_eq!(view.prefix.as_deref(), Some("<leader>"), "{view:?}");
+        let keys: Vec<&str> = view.entries.iter().map(|e| e.key.as_str()).collect();
+        // The bounded surface caps the sorted listing (digits sort
+        // first); the in-cap rows carry the table's own labels.
+        assert!(keys.contains(&"a"), "the <leader>a continuation lists: {keys:?}");
+        let a = view.entries.iter().find(|e| e.key == "a").expect("a entry");
+        assert_eq!(a.label, "List agents", "the table's label rides the row");
+        assert_eq!(view.entries.len(), crate::components::which_key::WHICH_KEY_MAX_ENTRIES);
+        assert!(
+            view.entries.windows(2).all(|w| w[0].key <= w[1].key),
+            "the rows are sorted by key: {:?}",
+            view.entries
+        );
+        // The frame actually paints the panel (bottom overlay).
+        let frame = app.frame_text();
+        assert!(frame.contains("<leader>"), "the prefix rides the border: {frame}");
+        assert!(frame.contains("List agents"), "{frame}");
+    }
+
+    /// Chord completion, escape and an unbound continuation each
+    /// dismiss the panel.
+    #[test]
+    fn which_key_panel_dismisses_on_completion_escape_and_unbound() {
+        // Completion: <leader>n opens the session list dialog and the
+        // panel closes with the pending sequence.
+        let mut app = App::new((80, 24));
+        app.store.open_tab("s1", Some("S".to_owned()));
+        app.press("ctrl+x");
+        assert!(app.store.which_key().is_some());
+        app.press("n");
+        assert!(app.store.which_key().is_none(), "completion closes the panel");
+        // Escape: the keymap's escape-clears cancels the chord.
+        app.press("ctrl+x");
+        assert!(app.store.which_key().is_some());
+        app.press("escape");
+        assert!(app.store.which_key().is_none(), "escape closes the panel");
+        // An unbound continuation drops the pending sequence (and the
+        // panel with it).
+        app.press("ctrl+x");
+        assert!(app.store.which_key().is_some());
+        app.press("z");
+        assert!(app.store.which_key().is_none(), "an unbound key closes the panel");
+    }
+
+    /// `which-key.toggle` (ctrl+alt+k) opens the ROOT listing; escape
+    /// dismisses it.
+    #[test]
+    fn which_key_toggle_opens_root_listing() {
+        let mut app = App::new((80, 24));
+        app.store.open_tab("s1", Some("S".to_owned()));
+        app.press("ctrl+alt+k");
+        let view = app.store.which_key().expect("the root listing opens");
+        assert!(view.prefix.is_none(), "no chord pending at the root: {view:?}");
+        assert!(!view.entries.is_empty(), "the root lists top-level keys");
+        let frame = app.frame_text();
+        assert!(frame.contains("which-key"), "the root title rides the border: {frame}");
+        app.press("escape");
+        assert!(app.store.which_key().is_none(), "escape dismisses the root listing");
+    }
 }

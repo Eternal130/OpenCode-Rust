@@ -1678,6 +1678,13 @@ pub struct Store {
     /// TUI-29 — the renderer console's open flag
     /// (`renderer.console.toggle()`, app.tsx:1110-1118).
     console_open: Cell<bool>,
+    /// G-83 — the which-key panel's live view (`Some` while the
+    /// overlay shows: a pending chord prefix, or the root listing
+    /// `which-key.toggle` opened).
+    which_key: RefCell<Option<crate::components::which_key::WhichKeyView>>,
+    /// G-83 — `which-key.toggle`'s root listing flag (the panel
+    /// shows the top-level bindings while set).
+    which_key_root: Cell<bool>,
     /// TUI-29 — the console's captured diagnostics ring (the tail
     /// renders in the overlay).
     console_ring: std::cell::RefCell<std::collections::VecDeque<String>>,
@@ -3748,6 +3755,8 @@ impl Store {
             frecency_template: std::cell::RefCell::new(autocomplete::Frecency::default()),
             rename_outbox: std::cell::RefCell::new(Vec::new()),
             console_open: Cell::new(false),
+            which_key: RefCell::new(None),
+            which_key_root: Cell::new(false),
             console_ring: std::cell::RefCell::new(std::collections::VecDeque::new()),
             caret_cell: Cell::new(None),
             connection_since: Cell::new(0),
@@ -4147,6 +4156,35 @@ impl Store {
     #[must_use]
     pub fn console_open(&self) -> bool {
         self.console_open.get()
+    }
+
+    /// G-83 — the which-key panel's live view (`None` while closed).
+    #[must_use]
+    pub fn which_key(&self) -> Option<crate::components::which_key::WhichKeyView> {
+        self.which_key.borrow().clone()
+    }
+
+    /// G-83 — replace the which-key view (the app syncs it after
+    /// every stroke); redraws only on an actual change.
+    pub fn set_which_key(&self, view: Option<crate::components::which_key::WhichKeyView>) {
+        let changed = *self.which_key.borrow() != view;
+        if changed {
+            *self.which_key.borrow_mut() = view;
+            self.request_redraw();
+        }
+    }
+
+    /// G-83 — `which-key.toggle`: flip the root listing flag (the
+    /// app materializes the entries on the next sync).
+    pub fn which_key_toggle(&self) {
+        self.which_key_root.set(!self.which_key_root.get());
+        self.request_redraw();
+    }
+
+    /// G-83 — whether the root listing is on.
+    #[must_use]
+    pub fn which_key_root_open(&self) -> bool {
+        self.which_key_root.get()
     }
 
     /// Capture one diagnostic line into the console's ring (the
