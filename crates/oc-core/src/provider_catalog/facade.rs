@@ -2166,6 +2166,8 @@ mod tests {
                         | ProtocolFamily::VertexResponses
                         | ProtocolFamily::XaiResponses
                         | ProtocolFamily::GoogleInteractions
+                        | ProtocolFamily::AlibabaResponses
+                        | ProtocolFamily::VercelGateway
                 ),
                 "`{package}` maps to a real family"
             );
@@ -2181,6 +2183,20 @@ mod tests {
             family_of("@opencode/ai/providers/google-vertex/gemini"),
             Some(ProtocolFamily::VertexGemini),
             "google-vertex/gemini.ts:1 re-exports the vertex model"
+        );
+        // G-84: alibaba/responses is the Model Studio responses dialect,
+        // not the plain OpenAI Responses family.
+        assert_eq!(
+            family_of("@opencode/ai/providers/alibaba/responses"),
+            Some(ProtocolFamily::AlibabaResponses),
+            "alibaba responsesRoute uses the AlibabaResponses protocol"
+        );
+        // G-81: the gateway dispatches per model family over the
+        // gateway-wrapped Messages/Responses/Chat routes.
+        assert_eq!(
+            family_of("@opencode/ai/providers/vercel-ai-gateway"),
+            Some(ProtocolFamily::VercelGateway),
+            "vercel-ai-gateway routes through the gateway protocol wrapper"
         );
         assert_eq!(
             family_of("@opencode/ai/providers/openai/chat"),
