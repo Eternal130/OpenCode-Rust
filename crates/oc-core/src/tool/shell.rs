@@ -184,7 +184,7 @@ async fn prepare(
     )
     .map_err(|error| ToolFailure {
         message: format!("Unable to execute command: {}", invocation.command),
-        cause: Some(super::FailureCause::Nested(error)),
+        cause: Some(crate::tool::FailureCause::Nested(error)),
     })?;
     let mut targets = vec![target.clone()];
     for directory in &parsed.directories {
@@ -235,16 +235,19 @@ async fn prepare(
     // spawning. G-1 — the cwd check routes through the location-bound
     // Environment Files seam (`ToolServices.files`): a workspace-backed
     // location validates (and would resolve) the working directory inside
-    // the workspace's execution plane, not the host fs. The local driver
-    // is the previous `std::fs::metadata` path verbatim (follow-symlink
-    // `stat`), so local behavior is identical.
-    let workdir = services.files.stat(&invocation.cwd).await;
+    // the workspace's execution plane, not the host fs. The probe is
+    // `type_following` (follow-symlink semantics): a symlinked directory
+    // passes and a dangling symlink reports NotFound — matching the old
+    // `std::fs::metadata` behavior exactly; `Files::stat` alone is
+    // lstat-like and would reject symlinked cwds.
+    let workdir =
+        crate::environment::files::type_following(&*services.files, &invocation.cwd).await;
     match workdir {
-        Ok(meta) if meta.kind == crate::environment::files::FileType::Directory => {}
+        Ok(kind) if kind == crate::environment::files::FileType::Directory => {}
         Ok(_) => {
             return Err(ToolFailure {
                 message: format!("Unable to execute command: {}", invocation.command),
-                cause: Some(super::FailureCause::Nested(format!(
+                cause: Some(crate::tool::FailureCause::Nested(format!(
                     "Working directory is not a directory: {}",
                     invocation.cwd
                 ))),
@@ -253,7 +256,7 @@ async fn prepare(
         Err(_) => {
             return Err(ToolFailure {
                 message: format!("Unable to execute command: {}", invocation.command),
-                cause: Some(super::FailureCause::Nested(format!(
+                cause: Some(crate::tool::FailureCause::Nested(format!(
                     "Working directory does not exist: {}",
                     invocation.cwd
                 ))),
@@ -326,7 +329,7 @@ impl ToolExecuteWithContext for ShellExecute {
             deps.shell.trigger_create_before(&mut invocation).await.map_err(|error| {
                 ToolFailure {
                     message: format!("Unable to execute command: {}", input.command),
-                    cause: Some(super::FailureCause::Nested(error.to_string())),
+                    cause: Some(crate::tool::FailureCause::Nested(error.to_string())),
                 }
             })?;
             invocation.env.insert("AGENT".into(), "1".into());
@@ -348,7 +351,7 @@ impl ToolExecuteWithContext for ShellExecute {
                 .await
                 .map_err(|error| ToolFailure {
                     message: format!("Unable to execute command: {}", input.command),
-                    cause: Some(super::FailureCause::Nested(error.to_string())),
+                    cause: Some(crate::tool::FailureCause::Nested(error.to_string())),
                 })?;
             // shell.ts:217 — `context.progress({shellID: info.id})` right
             // after the process is spawned (the LIVE shell-card metadata).
@@ -490,7 +493,7 @@ impl ToolExecuteWithContext for ShellExecute {
                 {
                     Err(ToolFailure {
                         message: format!("Unable to execute command: {}", input.command),
-                        cause: Some(super::FailureCause::Nested(
+                        cause: Some(crate::tool::FailureCause::Nested(
                             info.error.unwrap_or_else(|| "Command failed".into()),
                         )),
                     })
@@ -500,7 +503,7 @@ impl ToolExecuteWithContext for ShellExecute {
                 {
                     Err(ToolFailure {
                         message: format!("Unable to execute command: {}", input.command),
-                        cause: Some(super::FailureCause::Nested("Command cancelled".into())),
+                        cause: Some(crate::tool::FailureCause::Nested("Command cancelled".into())),
                     })
                 }
                 Some(BlockResult::Finished { info }) => {
@@ -515,7 +518,7 @@ impl ToolExecuteWithContext for ShellExecute {
                 }
                 None => Err(ToolFailure {
                     message: format!("Unable to execute command: {}", input.command),
-                    cause: Some(super::FailureCause::Nested("job missing".into())),
+                    cause: Some(crate::tool::FailureCause::Nested("job missing".into())),
                 }),
             }
         })
@@ -633,7 +636,7 @@ pub async fn user_command(
     // `shell.create.before` dispatch applies here too.
     deps.shell.trigger_create_before(&mut invocation).await.map_err(|error| ToolFailure {
         message: format!("Unable to execute command: {command}"),
-        cause: Some(super::FailureCause::Nested(error.to_string())),
+        cause: Some(crate::tool::FailureCause::Nested(error.to_string())),
     })?;
     invocation.env.insert("AGENT".into(), "1".into());
     invocation.env.insert("OPENCODE".into(), "1".into());
@@ -657,7 +660,7 @@ pub async fn user_command(
         .await
         .map_err(|error| ToolFailure {
             message: format!("Unable to execute command: {command}"),
-            cause: Some(super::FailureCause::Nested(error.to_string())),
+            cause: Some(crate::tool::FailureCause::Nested(error.to_string())),
         })?;
     let result = deps.shell.result(started).await;
     Ok(shell_result::user_notification(&result))
@@ -958,5 +961,85 @@ mod tests {
     fn tool_shell_timeout_notice_appends_to_output() {
         let payload = r#"{"output":"body\n\nCommand exceeded timeout of 100 ms. Retry with a larger timeout if the command is expected to take longer.","truncated":false,"timeout":true,"status":"completed"}"#;
         assert!(decode_messages(payload).contains("Command exceeded timeout of 100 ms."));
+    }
+
+    /// fix1 (C-1): the pre-spawn cwd probe must be FOLLOW semantics — a
+    /// symlinked directory passes, a dangling symlink reports
+    /// "Working directory does not exist", a symlink to a file reports
+    /// "Working directory is not a directory" — exactly the old
+    /// `std::fs::metadata` behavior, now through the Environment Files
+    /// seam (`type_following`; plain `Files::stat` is lstat-like and
+    /// would reject symlinked cwds).
+    #[tokio::test]
+    async fn tool_shell_prepare_cwd_follows_symlinks_through_files_seam() {
+        let harness = crate::tool::tests::harness().await;
+        let root = harness.dir().to_path_buf();
+
+        let real = root.join("real-dir");
+        std::fs::create_dir_all(&real).expect("real dir");
+        let linked = root.join("link-dir");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&real, &linked).expect("dir symlink");
+
+        let context = crate::location::ToolCallContext {
+            session_id: oc_schema::id::SessionId("ses_shell_cwd".into()),
+            agent: oc_schema::id::AgentId::parse("build"),
+            message_id: "msg_1".into(),
+            call_id: "call_1".into(),
+        };
+        let invocation = |cwd: String| crate::shell::Invocation {
+            cwd,
+            command: "true".into(),
+            timeout: 0,
+            shell: "/bin/sh".into(),
+            env: HashMap::new(),
+        };
+
+        // A symlinked directory passes.
+        #[cfg(unix)]
+        {
+            let mut input = invocation(linked.to_string_lossy().to_string());
+            prepare(&harness.services, &mut input, &context, false)
+                .await
+                .expect("symlinked cwd is a valid working directory");
+        }
+
+        // A dangling symlink reads as missing (follow-semantics NotFound).
+        #[cfg(unix)]
+        {
+            let dangling = root.join("dangling-link");
+            std::os::unix::fs::symlink(root.join("gone"), &dangling).expect("dangling symlink");
+            let mut input = invocation(dangling.to_string_lossy().to_string());
+            let failure = prepare(&harness.services, &mut input, &context, false)
+                .await
+                .expect_err("dangling cwd must fail");
+            match failure.cause {
+                Some(crate::tool::FailureCause::Nested(text)) => assert_eq!(
+                    text,
+                    format!("Working directory does not exist: {}", dangling.to_string_lossy())
+                ),
+                other => panic!("expected nested cause, got {other:?}"),
+            }
+        }
+
+        // A symlink to a FILE is "not a directory".
+        #[cfg(unix)]
+        {
+            let file = root.join("real.txt");
+            std::fs::write(&file, b"x").expect("file");
+            let link = root.join("link-file");
+            std::os::unix::fs::symlink(&file, &link).expect("file symlink");
+            let mut input = invocation(link.to_string_lossy().to_string());
+            let failure = prepare(&harness.services, &mut input, &context, false)
+                .await
+                .expect_err("file cwd must fail");
+            match failure.cause {
+                Some(crate::tool::FailureCause::Nested(text)) => assert_eq!(
+                    text,
+                    format!("Working directory is not a directory: {}", link.to_string_lossy())
+                ),
+                other => panic!("expected nested cause, got {other:?}"),
+            }
+        }
     }
 }
