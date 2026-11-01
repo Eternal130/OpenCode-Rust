@@ -64,6 +64,7 @@ pub mod reactive;
 pub mod render;
 pub mod replay;
 pub mod screen_golden_tests;
+pub mod scroll_accel;
 pub mod selection;
 pub mod sound;
 pub mod spike;

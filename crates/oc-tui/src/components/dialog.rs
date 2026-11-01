@@ -1470,7 +1470,7 @@ pub fn execute_submission(
         // The forced-delete confirm: "yes" re-fires the remove with
         // `force: true`; anything else just closes (v2's
         // `DialogWorkspaceFileChanges` yes/no).
-        Some(DialogKind::WorktreeDeleteConfirm { directory }) => {
+        Some(DialogKind::WorktreeDeleteConfirm { directory, .. }) => {
             let forced = value == "yes";
             if forced {
                 let project = store.worktree_dialog().project_id;
@@ -2302,7 +2302,7 @@ mod tests {
 fn destructive_confirm_row_uses_the_destructive_pair() {
     let store = Store::new(crate::reactive::Runtime::new());
     store.open_dialog(
-        crate::store::DialogKind::WorktreeDeleteConfirm { directory: "/w/dying".to_owned() },
+        crate::store::DialogKind::WorktreeDeleteConfirm { directory: "/w/dying".to_owned(), files: Vec::new() },
         crate::store::DialogSize::Medium,
     );
     let theme = crate::theme::ThemeState::v2_dark();
