@@ -71,7 +71,7 @@ fn allow_all() -> oc_schema::permission::Ruleset {
     vec![Rule { action: "*".into(), resource: "*".into(), effect: Effect::Allow }]
 }
 
-fn deny_action(action: &str) -> oc_schema::permission::Ruleset {
+pub(super) fn deny_action(action: &str) -> oc_schema::permission::Ruleset {
     // Last matching rule wins: allow everything, then deny the target
     // action (permission::evaluate semantics).
     vec![
@@ -96,7 +96,7 @@ pub(super) async fn harness_for_codemode() -> Harness {
     harness().await
 }
 
-async fn harness_with(rules: oc_schema::permission::Ruleset) -> Harness {
+pub(super) async fn harness_with(rules: oc_schema::permission::Ruleset) -> Harness {
     let dir = tempfile::tempdir_in("/tmp/opencode").expect("tempdir");
     let outside = tempfile::tempdir_in("/tmp/opencode").expect("outside tempdir");
     let home = dir.path().join("home");
@@ -756,13 +756,9 @@ async fn tool_read_recovers_unique_nfd_variant() {
     // typography replacements (read.ts:139-143).
     let recovered = harness.dir.join("cafe\u{0301}.txt");
     std::fs::write(&recovered, "hello").expect("write");
-    let settled = call(
-        &harness.tools,
-        "read",
-        serde_json::json!({ "path": "caf\u{00e9}.txt" }),
-    )
-    .await
-    .expect("recovered");
+    let settled = call(&harness.tools, "read", serde_json::json!({ "path": "caf\u{00e9}.txt" }))
+        .await
+        .expect("recovered");
     assert!(text_of(&settled).starts_with("Read file cafe"), "{}", text_of(&settled));
 }
 
@@ -1051,15 +1047,18 @@ async fn tool_glob_no_files_and_truncation_footer() {
         .expect("glob default limit");
     drop(log);
     // 100 entries + empty line + footer.
-    assert_eq!(settled.content[0], oc_schema::tool::Content::Text {
-        text: format!(
-            "{}\n\n(Results are truncated: showing first 100 results. Consider using a more specific path or pattern.)",
-            (0..100)
-                .map(|n| format!("{}/file{n}.txt", harness.dir.display()))
-                .collect::<Vec<_>>()
-                .join("\n")
-        )
-    });
+    assert_eq!(
+        settled.content[0],
+        oc_schema::tool::Content::Text {
+            text: format!(
+                "{}\n\n(Results are truncated: showing first 100 results. Consider using a more specific path or pattern.)",
+                (0..100)
+                    .map(|n| format!("{}/file{n}.txt", harness.dir.display()))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            )
+        }
+    );
     assert_eq!(
         settled.metadata.expect("metadata").get("truncated"),
         Some(&serde_json::json!(true))
@@ -1470,11 +1469,17 @@ impl crate::environment::Files for ResyncFailsFiles {
         Ok(done)
     }
 
-    async fn stat(&self, path: &str) -> Result<crate::environment::FileInfo, crate::environment::FilesError> {
+    async fn stat(
+        &self,
+        path: &str,
+    ) -> Result<crate::environment::FileInfo, crate::environment::FilesError> {
         crate::environment::LocalFiles.stat(path).await
     }
 
-    async fn list(&self, path: &str) -> Result<Vec<crate::environment::DirEntry>, crate::environment::FilesError> {
+    async fn list(
+        &self,
+        path: &str,
+    ) -> Result<Vec<crate::environment::DirEntry>, crate::environment::FilesError> {
         crate::environment::LocalFiles.list(path).await
     }
 
@@ -1854,7 +1859,7 @@ fn rg_deps(
 
 #[tokio::test]
 async fn rg_resolve_order_env_path_cache_download() {
-    use crate::tool::ripgrep_runner::{resolve_with, RgSource};
+    use crate::tool::ripgrep_runner::{RgSource, resolve_with};
     let tmp = tempfile::tempdir_in("/tmp/opencode").unwrap();
     let global_bin = tmp.path().join("bin");
     std::fs::create_dir_all(&global_bin).unwrap();
@@ -1904,7 +1909,7 @@ async fn rg_resolve_order_env_path_cache_download() {
 #[tokio::test]
 async fn rg_resolve_downloads_extracts_and_caches() {
     use crate::tool::ripgrep_runner::{
-        platform_config, resolve_with, RgError, RgSource, RG_VERSION,
+        RG_VERSION, RgError, RgSource, platform_config, resolve_with,
     };
     let Some(config) = platform_config() else {
         return; // platform without a managed artifact
@@ -2004,9 +2009,9 @@ fn rg_platform_map_matches_ref_rows() {
     // Filename/URL shapes (binary.ts:120-121).
     let config = platform_config_for("x86_64", "linux").unwrap();
     assert_eq!(config.filename(), format!("ripgrep-15.1.0-{}.tar.gz", config.platform));
-    assert!(config
-        .url()
-        .starts_with("https://github.com/BurntSushi/ripgrep/releases/download/15.1.0/"));
+    assert!(
+        config.url().starts_with("https://github.com/BurntSushi/ripgrep/releases/download/15.1.0/")
+    );
 }
 
 #[tokio::test]
@@ -2021,7 +2026,9 @@ async fn tool_grep_exit_two_tolerated_with_partial_results() {
     let fixture_file = dir.join("partial-fixture.out");
     std::fs::write(&fixture_file, fixture).unwrap();
     let fixture_display = fixture_file.display();
-    let script = format!("#!/bin/sh\ncat '{fixture_display}'\nprintf 'grep: permission denied: secret.txt\\n' >&2\nexit 2\n");
+    let script = format!(
+        "#!/bin/sh\ncat '{fixture_display}'\nprintf 'grep: permission denied: secret.txt\\n' >&2\nexit 2\n"
+    );
     let shim = dir.join("rg-exit2");
     std::fs::write(&shim, script).unwrap();
     set_executable(&shim);
@@ -2069,15 +2076,17 @@ async fn read_large_file_chunked_memory_shape() {
     // offset=1 with a small limit settles inside the first chunk: exactly
     // ONE positioned read, never a whole-file load.
     let mut calls: Vec<(u64, usize)> = Vec::new();
-    let outcome = read_file_with(size, &path, "large.txt", Some(1), Some(100), None, |start, len| {
-        calls.push((start, len));
-        let start = start as usize;
-        let end = (start + len).min(body.len());
-        let chunk = body[start..end].to_vec();
-        Box::pin(async move { Ok(chunk) }) as BoxFuture<'_, Result<Vec<u8>, crate::tool::read::ReadError>>
-    })
-    .await
-    .unwrap();
+    let outcome =
+        read_file_with(size, &path, "large.txt", Some(1), Some(100), None, |start, len| {
+            calls.push((start, len));
+            let start = start as usize;
+            let end = (start + len).min(body.len());
+            let chunk = body[start..end].to_vec();
+            Box::pin(async move { Ok(chunk) })
+                as BoxFuture<'_, Result<Vec<u8>, crate::tool::read::ReadError>>
+        })
+        .await
+        .unwrap();
     assert_eq!(calls, vec![(0, 256 * 1024)], "single first-chunk read");
     match &outcome {
         crate::tool::read::ReadOutput::TextPage { offset, next, truncated, .. } => {
@@ -2096,7 +2105,8 @@ async fn read_large_file_chunked_memory_shape() {
         let start = start as usize;
         let end = (start + len).min(body.len());
         let chunk = body[start..end].to_vec();
-        Box::pin(async move { Ok(chunk) }) as BoxFuture<'_, Result<Vec<u8>, crate::tool::read::ReadError>>
+        Box::pin(async move { Ok(chunk) })
+            as BoxFuture<'_, Result<Vec<u8>, crate::tool::read::ReadError>>
     })
     .await
     .unwrap();
@@ -2105,7 +2115,7 @@ async fn read_large_file_chunked_memory_shape() {
 
 #[tokio::test]
 async fn read_prefetched_first_chunk_is_not_reread() {
-    use crate::tool::read::{read_file_with, ReadError};
+    use crate::tool::read::{ReadError, read_file_with};
     use futures::future::BoxFuture;
     // read_file's dir-detection/size probe already fetched chunk 0; the
     // pipeline must consume it instead of re-reading (one round trip per
@@ -2137,7 +2147,7 @@ async fn read_prefetched_first_chunk_is_not_reread() {
 
 #[tokio::test]
 async fn read_binary_detection_covers_only_the_consumed_page() {
-    use crate::tool::read::{read_file_with, ReadError, ReadOutput};
+    use crate::tool::read::{ReadError, ReadOutput, read_file_with};
     use futures::future::BoxFuture;
     // 70 KiB text file (single first chunk) with a NUL deep inside —
     // ref read-filesystem.ts:151-209: the binary flag is computed over
@@ -2176,13 +2186,20 @@ async fn read_binary_detection_covers_only_the_consumed_page() {
     }
 
     // A page whose consumed range includes the NUL → BinaryFileError.
-    let error =
-        read_file_with(size, &path, "bin.txt", Some(nul_line as u64), Some(10), None, |start, len| {
-        let start = start as usize;
-        let end = (start + len).min(body.len());
-        let chunk = body[start..end].to_vec();
-        Box::pin(async move { Ok(chunk) }) as BoxFuture<'_, Result<Vec<u8>, ReadError>>
-    })
+    let error = read_file_with(
+        size,
+        &path,
+        "bin.txt",
+        Some(nul_line as u64),
+        Some(10),
+        None,
+        |start, len| {
+            let start = start as usize;
+            let end = (start + len).min(body.len());
+            let chunk = body[start..end].to_vec();
+            Box::pin(async move { Ok(chunk) }) as BoxFuture<'_, Result<Vec<u8>, ReadError>>
+        },
+    )
     .await
     .unwrap_err();
     assert_eq!(error, ReadError::Binary("bin.txt".to_string()));
@@ -2192,14 +2209,15 @@ async fn read_binary_detection_covers_only_the_consumed_page() {
     let mut big = line_fill(11000, 50); // ≈ 537 KiB — spans three 256 KiB chunks
     big[300 * 1024] = 0; // inside chunk 2
     let big_size = big.len() as u64;
-    let outcome = read_file_with(big_size, &path, "big.txt", Some(1), Some(100), None, |start, len| {
-        let start = start as usize;
-        let end = (start + len).min(big.len());
-        let chunk = big[start..end].to_vec();
-        Box::pin(async move { Ok(chunk) }) as BoxFuture<'_, Result<Vec<u8>, ReadError>>
-    })
-    .await
-    .unwrap();
+    let outcome =
+        read_file_with(big_size, &path, "big.txt", Some(1), Some(100), None, |start, len| {
+            let start = start as usize;
+            let end = (start + len).min(big.len());
+            let chunk = big[start..end].to_vec();
+            Box::pin(async move { Ok(chunk) }) as BoxFuture<'_, Result<Vec<u8>, ReadError>>
+        })
+        .await
+        .unwrap();
     assert!(
         matches!(outcome, ReadOutput::TextPage { .. }),
         "NUL beyond the consumed page is not fatal"

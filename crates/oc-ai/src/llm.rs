@@ -9,9 +9,10 @@
 //! Rust ports the TS *dynamic* mode (`jsonSchema`): the schema is only
 //! available at runtime (`serde_json::Value`), so the decoded `.object` is a
 //! `serde_json::Value`. The typed mode's `tool._decode(call.input)` step is
-//! mirrored by a self-contained JSON Schema subset validator (see
-//! [`validate_json_schema`]) so malformed tool input still surfaces as the
-//! ref's `InvalidProviderOutput` "schema decode" error.
+//! mirrored by the shared JSON Schema validator ([`crate::json_schema`],
+//! the same engine the tool decode pipeline uses — G-100) so malformed
+//! tool input still surfaces as the ref's `InvalidProviderOutput`
+//! "schema decode" error.
 
 use serde_json::Value;
 
@@ -107,103 +108,35 @@ pub async fn generate_object(
     Ok(GenerateObjectResponse { object, response })
 }
 
-/// Validate a value against the supported JSON Schema subset
-/// (`type`, `enum`, `required`, `properties`, `items`), returning the first
-/// violation as a human-readable path message. Schemas outside the subset
-/// pass through unchecked (caller-supplied keyword coverage is opt-in, like
-/// the ref dynamic mode where the handler validates what it needs).
+/// Validate a value against the supported JSON Schema subset, returning
+/// the first violation as a human-readable path message. G-100: this now
+/// delegates to the shared validator ([`crate::json_schema::validate_input`],
+/// the same engine the tool decode pipeline uses) so the full keyword set
+/// — `oneOf`/`anyOf`/`allOf`, `$defs` + `$ref`, string/numeric/array
+/// bounds, `pattern`, `additionalProperties`, `uniqueItems` — is enforced
+/// like the ref's Effect JsonSchema decode. Boolean schemas (`true`
+/// accepts anything / `false` forbids everything) are handled here since
+/// the shared engine only walks object schemas.
 fn validate_json_schema(value: &Value, schema: &Value, path: &str) -> Result<(), String> {
     match schema {
         Value::Bool(true) | Value::Null => Ok(()),
         Value::Bool(false) => Err(format!("{}: schema forbids any value", at(path))),
-        Value::Object(schema) => {
-            if let Some(types) = schema.get("type") {
-                check_type(value, types, path)?;
+        _ => match crate::json_schema::validate_input(schema, value).into_iter().next() {
+            None => Ok(()),
+            Some(issue) => {
+                let location = match issue.path.as_str() {
+                    "" | "root" => at(path).to_string(),
+                    issue_path if path.is_empty() => issue_path.to_string(),
+                    issue_path => format!("{path}/{issue_path}"),
+                };
+                Err(format!("{location}: {}", issue.message))
             }
-            if let Some(enumeration) = schema.get("enum").and_then(Value::as_array) {
-                if !enumeration.contains(value) {
-                    return Err(format!(
-                        "{}: expected one of {} but found {}",
-                        at(path),
-                        Value::Array(enumeration.clone()),
-                        value
-                    ));
-                }
-            }
-            if let (Some(required), Value::Object(object)) =
-                (schema.get("required").and_then(Value::as_array), value)
-            {
-                for name in required {
-                    if let Some(name) = name.as_str() {
-                        if !object.contains_key(name) {
-                            return Err(format!(
-                                "{}: missing required property `{name}`",
-                                at(path)
-                            ));
-                        }
-                    }
-                }
-            }
-            if let (Some(properties), Value::Object(object)) = (schema.get("properties"), value) {
-                for (name, property_schema) in properties.as_object().into_iter().flatten() {
-                    if let Some(property) = object.get(name) {
-                        validate_json_schema(property, property_schema, &format!("{path}/{name}"))?;
-                    }
-                }
-            }
-            if let Some(items) = schema.get("items") {
-                if let Value::Array(elements) = value {
-                    for (index, element) in elements.iter().enumerate() {
-                        validate_json_schema(element, items, &format!("{path}/{index}"))?;
-                    }
-                }
-            }
-            Ok(())
-        }
-        other => Err(format!("{}: unsupported schema {other}", at(path))),
-    }
-}
-
-fn check_type(value: &Value, types: &Value, path: &str) -> Result<(), String> {
-    let matches = |name: &str| match name {
-        "object" => value.is_object(),
-        "array" => value.is_array(),
-        "string" => value.is_string(),
-        "number" => value.is_number(),
-        "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
-        "boolean" => value.is_boolean(),
-        "null" => value.is_null(),
-        _ => true,
-    };
-    let ok = match types {
-        Value::String(name) => matches(name),
-        Value::Array(names) => names.iter().any(|name| name.as_str().is_none_or(matches)),
-        _ => true,
-    };
-    if ok {
-        Ok(())
-    } else {
-        Err(format!("{}: expected type {} but found {}", at(path), types, json_type(value)))
-    }
-}
-
-fn json_type(value: &Value) -> &'static str {
-    match value {
-        Value::Null => "null",
-        Value::Bool(_) => "boolean",
-        Value::Number(_) => "number",
-        Value::String(_) => "string",
-        Value::Array(_) => "array",
-        Value::Object(_) => "object",
+        },
     }
 }
 
 fn at(path: &str) -> &str {
-    if path.is_empty() {
-        "value"
-    } else {
-        path
-    }
+    if path.is_empty() { "value" } else { path }
 }
 
 /// Convenience re-export used by tests assembling finish events.
@@ -405,7 +338,8 @@ mod tests {
             error.message()
         );
         // both the missing required property and the bad type are caught
-        assert!(error.message().contains("missing required property `name`"));
+        // (shared-validator issue format: `name: is required`)
+        assert!(error.message().contains("name: is required"));
     }
 
     #[test]
@@ -428,6 +362,86 @@ mod tests {
 
     fn validate_json_none(schema: &Value) -> Result<(), String> {
         validate_json_schema(&Value::Null, schema, "")
+    }
+
+    /// G-100 — the output validator enforces the full keyword set of the
+    /// shared engine (mirroring the ref's Effect JsonSchema decode):
+    /// one valid + one invalid case per newly covered keyword.
+    #[test]
+    fn validator_covers_one_of_any_of_all_of() {
+        let one_of = json!({
+            "oneOf": [
+                { "type": "object", "properties": { "a": { "type": "string" } }, "required": ["a"], "additionalProperties": false },
+                { "type": "object", "properties": { "b": { "type": "integer" } }, "required": ["b"], "additionalProperties": false },
+            ]
+        });
+        assert!(validate_json_schema(&json!({ "a": "x" }), &one_of, "").is_ok());
+        assert!(validate_json_schema(&json!({ "a": "x", "b": 1 }), &one_of, "").is_err());
+        assert!(validate_json_schema(&json!({ "c": true }), &one_of, "").is_err());
+
+        let any_of = json!({ "anyOf": [{ "type": "string" }, { "type": "integer" }] });
+        assert!(validate_json_schema(&json!("x"), &any_of, "").is_ok());
+        assert!(validate_json_schema(&json!(true), &any_of, "").is_err());
+
+        let all_of = json!({ "allOf": [{ "type": "string" }, { "minLength": 2 }] });
+        assert!(validate_json_schema(&json!("ab"), &all_of, "").is_ok());
+        assert!(validate_json_schema(&json!("a"), &all_of, "").is_err());
+    }
+
+    #[test]
+    fn validator_resolves_defs_refs() {
+        let schema = json!({
+            "$defs": { "hex": { "type": "string", "pattern": "^[0-9a-f]+$" } },
+            "type": "object",
+            "properties": { "hash": { "$ref": "#/$defs/hex" } }
+        });
+        assert!(validate_json_schema(&json!({ "hash": "deadbeef" }), &schema, "").is_ok());
+        assert!(validate_json_schema(&json!({ "hash": "XYZ" }), &schema, "").is_err());
+    }
+
+    #[test]
+    fn validator_enforces_string_and_numeric_bounds() {
+        let text =
+            json!({ "type": "string", "minLength": 2, "maxLength": 4, "pattern": "^[a-z]+$" });
+        assert!(validate_json_schema(&json!("abc"), &text, "").is_ok());
+        assert!(validate_json_schema(&json!("a"), &text, "").is_err());
+        assert!(validate_json_schema(&json!("abcde"), &text, "").is_err());
+        assert!(validate_json_schema(&json!("ABC"), &text, "").is_err());
+
+        let number = json!({ "type": "number", "minimum": 1, "maximum": 10 });
+        assert!(validate_json_schema(&json!(5), &number, "").is_ok());
+        assert!(validate_json_schema(&json!(0), &number, "").is_err());
+        assert!(validate_json_schema(&json!(11), &number, "").is_err());
+    }
+
+    #[test]
+    fn validator_enforces_array_bounds_and_unique_items() {
+        let schema = json!({ "type": "array", "minItems": 1, "maxItems": 3, "uniqueItems": true });
+        assert!(validate_json_schema(&json!([1, 2]), &schema, "").is_ok());
+        assert!(validate_json_schema(&json!([]), &schema, "").is_err());
+        assert!(validate_json_schema(&json!([1, 2, 3, 4]), &schema, "").is_err());
+        assert!(validate_json_schema(&json!([1, 1]), &schema, "").is_err());
+    }
+
+    #[test]
+    fn validator_enforces_additional_properties_and_type_unions() {
+        let closed = json!({
+            "type": "object",
+            "properties": { "known": { "type": "string" } },
+            "additionalProperties": false
+        });
+        assert!(validate_json_schema(&json!({ "known": "x" }), &closed, "").is_ok());
+        assert!(validate_json_schema(&json!({ "known": "x", "extra": 1 }), &closed, "").is_err());
+
+        let typed = json!({ "additionalProperties": { "type": "string" } });
+        assert!(validate_json_schema(&json!({ "any": "ok" }), &typed, "").is_ok());
+        assert!(validate_json_schema(&json!({ "any": 5 }), &typed, "").is_err());
+
+        // `type` unions (common in generateObject schemas) still work.
+        let union = json!({ "type": ["string", "null"] });
+        assert!(validate_json_schema(&json!("x"), &union, "").is_ok());
+        assert!(validate_json_none(&union).is_ok());
+        assert!(validate_json_schema(&json!(1), &union, "").is_err());
     }
 
     #[test]
