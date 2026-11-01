@@ -32,6 +32,18 @@ pub mod azure;
 // (AI-M1); this module carries the shared event decoding.
 pub mod open_responses;
 
+// Alibaba Responses (G-84) — the Open Responses baseline with the Model
+// Studio dialect: enable_thinking / previous_response_id / conversation
+// knobs, named tool_choice → allowed_tools, and the web_search /
+// web_extractor / code_interpreter hosted tool vocabulary
+// (`native.alibaba`).
+pub mod alibaba_responses;
+
+// Vercel AI Gateway (G-81) — Messages / Responses / Chat routes wrapped by
+// the gateway protocol seam: providerOptions.gateway body injection and
+// provider_metadata.gateway usage/cost merged into finish events.
+pub mod vercel_gateway;
+
 // Open Responses channel transport (AI-M1) — the WS form of an Open
 // Responses request: create message, base channel driver, HTTP fallback,
 // and the stream glue over a WebSocketChannelExecutor.
