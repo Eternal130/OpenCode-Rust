@@ -29,6 +29,10 @@ use crate::store::{
 };
 use oc_tui_core::scroll::ScrollCommand;
 
+/// G-101 — the workspace file-changes rows' window (ref
+/// dialog-workspace-file-changes.tsx:45 `min(files.length, 8)`).
+const WORKSPACE_FILE_CHANGES_WINDOW: usize = 8;
+
 /// One palette-visible command (`KeymapCommand` from the app tables).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PaletteCommand {
@@ -775,17 +779,52 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
             matches!(store.route(), crate::store::Route::Session { .. }),
             &home_directory(),
         ),
-        // The forced-delete confirm: v2's file-changes dialog in its
-        // yes/no role (`DialogWorkspaceFileChanges.show`).
-        DialogKind::WorktreeDeleteConfirm { .. } => SelectProps::new(
-            "Delete worktree?",
-            vec![
+        // G-101 — the file-changes rows (`DialogWorkspaceFileChanges`,
+        // dialog-workspace-file-changes.tsx:63-105): every changed file
+        // renders `A`/`D`/`M` + the path + the `+N`/`-N` counts inside
+        // an 8-row window (ref `height = min(files.length, 8)` — the
+        // rows beyond the window fold into the omitted notice; a
+        // bounded deviation: the ref's scrollbox wheels through the
+        // list, the select dialog's fixed window shows the FIRST 8).
+        DialogKind::WorktreeDeleteConfirm { files, .. } => {
+            let mut options = Vec::new();
+            let window = files.len().min(WORKSPACE_FILE_CHANGES_WINDOW);
+            let (omitted, visible) = if files.len() > window {
+                (Some(files.len() - window), &files[..window])
+            } else {
+                (None, &files[..])
+            };
+            if let Some(count) = omitted {
+                options.push(
+                    SelectOption::titled(format!("({count} more changed files omitted)"), "omitted")
+                        .muted_placeholder(),
+                );
+            }
+            for file in visible {
+                // The path truncates width-adaptively (ref caps it at
+                // `min(60, width-2-6-countWidth)`; bounded to the 60
+                // column cap here — the select dialog owns its width).
+                let counts = file.change_counts();
+                let max_path = 60usize.saturating_sub(counts.chars().count() + 2);
+                let path: String = if file.file.chars().count() > max_path {
+                    let mut truncated: String = file.file.chars().take(max_path).collect();
+                    truncated.push('…');
+                    truncated
+                } else {
+                    file.file.clone()
+                };
+                options.push(SelectOption::titled(
+                    format!("{} {}{}", file.status_label(), path, counts),
+                    format!("file:{}", file.file),
+                ));
+            }
+            options.push(
                 SelectOption::titled("This worktree has file changes.", "yes")
                     .described("Do you want to delete it anyway? Yes deletes it."),
-                SelectOption::titled("Keep the worktree", "no").described("Cancels the delete."),
-            ],
-        )
-        .destructive(),
+            );
+            options.push(SelectOption::titled("Keep the worktree", "no").described("Cancels the delete."));
+            SelectProps::new("Delete worktree?", options).destructive()
+        }
         DialogKind::ServerList { command: "agent.list", title } => agent_list_props(store, title),
         DialogKind::ServerList { command: "session.list", title } => {
             // The session list dialog renders the HISTORY (v2's
@@ -3499,6 +3538,62 @@ mod tests {
         assert_eq!(palette_command("model.list").unwrap().bindings, &["ctrl+x m"][..]);
         // The v2 table leaves theme.switch unbound.
         assert_eq!(palette_command("theme.switch").unwrap().bindings.len(), 0);
+    }
+
+    /// G-101 — the delete-confirm dialog renders the per-file status
+    /// list (`A`/`D`/`M` + `+N`/`-N`, dialog-workspace-file-changes.tsx:
+    /// 63-105): the rows surface in the props and the 8-row window
+    /// folds the tail into the omitted notice.
+    #[test]
+    fn worktree_delete_confirm_lists_file_changes() {
+        let store = Store::new(Runtime::new());
+        let files: Vec<crate::store::WorktreeFileChange> = (0..10)
+            .map(|index| crate::store::WorktreeFileChange {
+                file: format!("src/file{index}.rs"),
+                status: match index % 3 {
+                    0 => "added".to_owned(),
+                    1 => "modified".to_owned(),
+                    _ => "deleted".to_owned(),
+                },
+                additions: index,
+                deletions: 10 - index,
+            })
+            .collect();
+        store.open_dialog(
+            DialogKind::WorktreeDeleteConfirm { directory: "/w/dying".to_owned(), files },
+            crate::store::DialogSize::Medium,
+        );
+        let props = select_props_for(&store.top_dialog().unwrap().kind, &store);
+        assert_eq!(props.title, "Delete worktree?");
+        let titles: Vec<&str> = props.options.iter().map(|option| option.title.as_str()).collect();
+        // 8 visible rows + the omitted notice + the yes/no pair.
+        assert_eq!(titles.len(), 11, "8-row window + notice + yes/no");
+        assert!(titles[0].contains("(2 more changed files omitted)"), "{titles:?}");
+        assert_eq!(titles[1], "A src/file0.rs +0 -10");
+        assert_eq!(titles[2], "M src/file1.rs +1 -9");
+        assert_eq!(titles[3], "D src/file2.rs +2 -8");
+        assert!(titles.contains(&"This worktree has file changes."));
+        assert!(titles.contains(&"Keep the worktree"));
+        // The yes/no values still ride their rows (the forced remove
+        // re-fires on "yes").
+        assert!(props.options.iter().any(|option| option.value == "yes"));
+        assert!(props.options.iter().any(|option| option.value == "no"));
+        // Zero-count rows show no +/- suffix (changeCountWidth).
+        store.clear_dialogs();
+        store.open_dialog(
+            DialogKind::WorktreeDeleteConfirm {
+                directory: "/w/clean".to_owned(),
+                files: vec![crate::store::WorktreeFileChange {
+                    file: "a.ts".to_owned(),
+                    status: "modified".to_owned(),
+                    additions: 0,
+                    deletions: 0,
+                }],
+            },
+            crate::store::DialogSize::Medium,
+        );
+        let props = select_props_for(&store.top_dialog().unwrap().kind, &store);
+        assert_eq!(props.options[0].title, "M a.ts");
     }
 
     /// L1 — the palette's suggested set carries "Connect an

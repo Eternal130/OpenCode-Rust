@@ -506,9 +506,16 @@ macro_rules! defs {
 
 static DEFAULT_TABLE: &[CommandDef] = defs! {
     "leader" => "leader", "ctrl+x", "Leader key for keybind combinations", "base";
-    // <leader>q decollided (audit §1b / keybind.ts:131): the chord belongs to
-    // session.queued_prompts; app.exit keeps ctrl+c/ctrl+d.
-    "app_exit" => "app.exit", "ctrl+c,ctrl+d", "Exit the application", "base", palette System;
+    // <leader>q joins app.exit (keybind.ts:48: "ctrl+c,ctrl+d,<leader>q")
+    // coexisting with session.queued_prompts' own <leader>q (:131).
+    // G-103 arbitration: the queue manager's binding (registered
+    // later in this table — v2's session component registers after
+    // the app shell) wins the shared chord while its queue is live;
+    // app.rs gates `session.queued_prompts`'s enablement on the live
+    // queue (v2 index.tsx:1268 `enabled: queuedPrompts().length > 0`),
+    // so an empty queue falls the chord through to app.exit exactly
+    // like the ref's registration order.
+    "app_exit" => "app.exit", "ctrl+c,ctrl+d,<leader>q", "Exit the application", "base", palette System;
     // Lane KM (auditA #8a — the 53-entry backlog, v2 keybind.ts:49-63):
     // the app-level family. app.clear clears the MINI screen (v2 has no
     // mini surface here — the dispatcher consumes the stroke, a no-op);

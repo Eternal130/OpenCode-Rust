@@ -20,8 +20,10 @@
 //! interaction audit §1b, both matching v2 `config/keybind.ts`):
 //! * `theme.switch` default `none` (line 92) — was drifted to
 //!   `<leader>t` (the terminal pane toggle's chord in v2, line 99);
-//! * `app.exit` default `ctrl+c,ctrl+d` — `<leader>q` belongs to
-//!   `session.queued_prompts` (line 131).
+//! * `app.exit` default `ctrl+c,ctrl+d,<leader>q` (line 48) — the
+//!   chord coexists with `session.queued_prompts` (line 131): the
+//!   queue manager's later registration wins while its queue is
+//!   live, an empty queue falls through to app.exit (G-103).
 
 pub mod opentui;
 pub mod table;
@@ -631,8 +633,9 @@ mod tests {
     fn leader_chords_resolve() {
         let mut keymap = Keymap::new();
         let clock = ManualClock::default();
-        // <leader>q decollided (Wave A): the chord belongs to
-        // session.queued_prompts, never app.exit.
+        // G-103 — <leader>q is SHARED (keybind.ts:48 app.exit vs :131
+        // session.queued_prompts): the queue manager's later
+        // registration wins while both are enabled.
         assert_pending_leader(&keymap.lookup(stroke("ctrl+x"), &clock));
         assert_eq!(
             keymap.lookup(stroke("q"), &clock),
@@ -1014,6 +1017,39 @@ mod override_tests {
         keymap.set_command_enabled("app.exit", false);
         keymap.apply_overrides(&overrides(&serde_json::json!({ "session.rename": "f9" })));
         assert_eq!(keymap.lookup(stroke("ctrl+c"), &clock), Outcome::Unhandled);
+    }
+
+    /// G-103 — the shared `<leader>q` arbitration (keybind.ts:48
+    /// `app.exit` vs :131 `session.queued_prompts`, resolved by
+    /// registration order): the queue manager wins while enabled; a
+    /// DISABLED queue manager (v2 index.tsx:1268's
+    /// `enabled: queuedPrompts().length > 0` — the port's gate) falls
+    /// the chord through to app.exit.
+    #[test]
+    fn leader_q_arbitrates_between_exit_and_queue_manager() {
+        let mut keymap = Keymap::new();
+        let clock = ManualClock::default();
+        assert_pending_leader(&keymap.lookup(stroke("ctrl+x"), &clock));
+        // Both enabled: the later registration (the queue manager)
+        // takes the chord.
+        assert_eq!(
+            keymap.lookup(stroke("q"), &clock),
+            Outcome::Command { command: "session.queued_prompts".to_owned(), args: None }
+        );
+        // The queue empty (queue manager gated off): app.exit claims
+        // the chord.
+        keymap.set_command_enabled("session.queued_prompts", false);
+        assert_pending_leader(&keymap.lookup(stroke("ctrl+x"), &clock));
+        assert_eq!(
+            keymap.lookup(stroke("q"), &clock),
+            Outcome::Command { command: "app.exit".to_owned(), args: None }
+        );
+        // Re-enabled: the manager takes it back.
+        keymap.set_command_enabled("session.queued_prompts", true);
+        assert_eq!(
+            keymap.lookup(stroke("q"), &clock),
+            Outcome::Command { command: "session.queued_prompts".to_owned(), args: None }
+        );
     }
 
     fn owned(command: &str, defaults: &[&str]) -> OwnedCommandDef {

@@ -127,6 +127,44 @@ impl DialogSize {
 /// loop, so a tool call would surface as an empty answer.
 pub const BTW_INSTRUCTIONS: &str = "The user is asking a quick side question about the conversation so far. Answer directly and concisely in markdown from what you already know. Do not call any tools and do not take any actions.";
 
+/// G-101 — one `vcs.status` row for the worktree delete-confirm
+/// dialog (ref `VcsFileStatus`; rendered by
+/// `dialog-workspace-file-changes.tsx` as `A`/`D`/`M` + the
+/// `+N`/`-N` change counts).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct WorktreeFileChange {
+    pub file: String,
+    /// `added` | `modified` | `deleted`.
+    pub status: String,
+    pub additions: i64,
+    pub deletions: i64,
+}
+
+impl WorktreeFileChange {
+    /// `statusLabel` (dialog-workspace-file-changes.tsx:26-30).
+    #[must_use]
+    pub fn status_label(&self) -> &'static str {
+        match self.status.as_str() {
+            "added" => "A",
+            "deleted" => "D",
+            _ => "M",
+        }
+    }
+
+    /// The `+N`/`-N` suffix (changeCountWidth's payload).
+    #[must_use]
+    pub fn change_counts(&self) -> String {
+        let mut out = String::new();
+        if self.additions != 0 {
+            out.push_str(&format!(" +{}", self.additions));
+        }
+        if self.deletions != 0 {
+            out.push_str(&format!(" -{}", self.deletions));
+        }
+        out
+    }
+}
+
 /// One open dialog's identity (the `ui/dialog.tsx` stack). The content
 /// state ([`SelectState`] for pickers, the prompt value for renames)
 /// rides along so the keypress pump can drive it.
@@ -178,8 +216,12 @@ pub enum DialogKind {
     /// confirms the slugified value, esc cancels).
     WorktreeName,
     /// `DialogWorkspaceFileChanges` in its delete-confirm role: the
-    /// forced-remove question after a `forceRequired` rejection.
-    WorktreeDeleteConfirm { directory: String },
+    /// forced-remove question after a `forceRequired` rejection. G-101
+    /// — `files` carries the `vcs.status` rows (ref
+    /// dialog-workspaces.tsx:255-262 fetches them before showing the
+    /// dialog); the dialog renders the per-file A/D/M +
+    /// additions/deletions list (dialog-workspace-file-changes.tsx).
+    WorktreeDeleteConfirm { directory: String, files: Vec<WorktreeFileChange> },
     /// `DialogMessage` (`routes/session/dialog-message.tsx`): the
     /// user-message "Message Actions" select (Jump to / Revert /
     /// Copy / Fork) opened by clicking a user-message block
@@ -1567,6 +1609,14 @@ pub struct Store {
     /// mounts it in one); the port's pane is one flat walk, so the
     /// wheel drives this offset and the render re-slices.
     sidebar_scroll: std::cell::RefCell<SidebarScrollState>,
+    /// G-102 — the wheel-step model (`util/scroll.ts`'s
+    /// `getScrollAcceleration`): the live `scroll.acceleration` /
+    /// `scroll.speed` config selects the model (macOS accel streak or
+    /// a constant speed, default 3). `wheel_config_key` caches the
+    /// selection so a settings change rebuilds the model (streak
+    /// reset), while ticks read the live state.
+    wheel_accel: std::cell::RefCell<crate::scroll_accel::ScrollAcceleration>,
+    wheel_config_key: std::cell::RefCell<String>,
     /// The permission body's pointer targets (auditA #4) at
     /// ABSOLUTE screen cells — recorded by the render (`App::frame`,
     /// the body's mount), cleared when the ask resolves.
@@ -3679,6 +3729,10 @@ impl Store {
             plugin_section_hits: std::cell::RefCell::new(PluginSectionHits::default()),
             plugin_click_sink: std::cell::RefCell::new(None),
             sidebar_scroll: std::cell::RefCell::new(SidebarScrollState::default()),
+            wheel_accel: std::cell::RefCell::new(crate::scroll_accel::ScrollAcceleration::from_config(
+                false, None
+            )),
+            wheel_config_key: std::cell::RefCell::new(String::new()),
             permission_pointer_hits: std::cell::RefCell::new(None),
             dialog_button_hits: std::cell::RefCell::new(Vec::new()),
             lane_dialogs: std::cell::RefCell::new(DialogsLaneState::default()),
@@ -4887,14 +4941,20 @@ impl Store {
     /// A `worktree.remove` failed. `force_required` (v2's
     /// `error.data.forceRequired === true`) opens the file-changes
     /// confirm dialog; anything else surfaces the error toast.
-    pub fn apply_worktree_remove_failed(&self, directory: &str, error: &str, force_required: bool) {
+    pub fn apply_worktree_remove_failed(
+        &self,
+        directory: &str,
+        error: &str,
+        force_required: bool,
+        files: Vec<WorktreeFileChange>,
+    ) {
         self.worktrees.update(|state| {
             state.removing = None;
             state.pending_delete = None;
         });
         if force_required {
             self.replace_dialog(
-                DialogKind::WorktreeDeleteConfirm { directory: directory.to_owned() },
+                DialogKind::WorktreeDeleteConfirm { directory: directory.to_owned(), files },
                 DialogSize::Medium,
             );
         } else {
@@ -6616,13 +6676,31 @@ impl Store {
         *self.sidebar_scroll.borrow()
     }
 
+    /// G-102 — the wheel step for one scroll event (rows, always ≥0):
+    /// the live `scroll.acceleration` / `scroll.speed` config drives
+    /// `util/scroll.ts`'s model selection — the macOS accel streak
+    /// (`MacOSScrollAccel`), a constant `scroll.speed`, or the 3-row
+    /// default. A settings change between events rebuilds the model
+    /// (the streak resets, mirroring v2's `createMemo` over the
+    /// config object).
+    pub fn wheel_step(&self, now_ms: i64) -> i32 {
+        let acceleration = self.settings_snapshot_value("scroll.acceleration") == "true";
+        let speed = self.settings_snapshot_value("scroll.speed").trim().parse::<f64>().ok();
+        let key = format!("{acceleration}:{speed:?}");
+        if *self.wheel_config_key.borrow() != key {
+            *self.wheel_config_key.borrow_mut() = key;
+            *self.wheel_accel.borrow_mut() =
+                crate::scroll_accel::ScrollAcceleration::from_config(acceleration, speed);
+        }
+        self.wheel_accel.borrow_mut().tick(now_ms).clamp(0, i32::MAX as i64) as i32
+    }
+
     /// Wheel-scroll the sidebar's content slot by `delta` rows
     /// (negative up); `true` when the offset moved (the redraw key).
-    /// v2's scrollbox wheel is a LINE scroll (opentui's terminal
-    /// wheel delta: 3 rows a notch — `direction === "up" ? -3 : 3`
-    /// in the core's own embedded-terminal translation); no
-    /// acceleration model (the port's wheel stream carries no
-    /// timestamps to feed v2's `MacOSScrollAccel`).
+    /// v2's scrollbox wheel runs through `getScrollAcceleration`
+    /// (util/scroll.ts) — the caller passes the ACCELERATED step from
+    /// [`Store::wheel_step`] (G-102; the default model reproduces the
+    /// 3-rows-a-notch line scroll).
     pub fn sidebar_scroll_by(&self, delta: i32) -> bool {
         let mut state = self.sidebar_scroll.borrow_mut();
         let max = state.max_offset();
@@ -15053,6 +15131,34 @@ fn undo_returns_the_payload_and_cancels() {
         sink.calls.borrow()
     );
     assert!(store.undo_queued_prompt("s1").is_none(), "an empty queue misses");
+}
+
+// -- G-102: the wheel-step model (util/scroll.ts) ------------------
+
+#[test]
+fn wheel_step_consumes_live_scroll_config() {
+    let store = Store::new(Runtime::new());
+    // Default: 3 rows a notch.
+    assert_eq!(store.wheel_step(0), 3);
+    // scroll.speed applies live (the settings dialog writes the
+    // snapshot).
+    store.settings_snapshot_set("scroll.speed", "5.00");
+    assert_eq!(store.wheel_step(100), 5);
+    // scroll.acceleration wins over the speed (scroll.ts:20-28
+    // checks acceleration first): an isolated event steps 1.
+    store.settings_snapshot_set("scroll.acceleration", "true");
+    assert_eq!(store.wheel_step(1_000), 1);
+    // A fast streak ramps the step up.
+    let mut now = 1_000i64;
+    let mut peak = 1;
+    for _ in 0..10 {
+        now += 15;
+        peak = peak.max(store.wheel_step(now));
+    }
+    assert!(peak >= 4, "the streak accelerated, peak {peak}");
+    // Toggling acceleration back off restores the constant speed.
+    store.settings_snapshot_set("scroll.acceleration", "false");
+    assert_eq!(store.wheel_step(now + 100), 5);
 }
 
 // -- TUI-TD02/TD05: the navigation + mount-window walk ------------

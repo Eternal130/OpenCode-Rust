@@ -22,6 +22,7 @@ pub mod attachment;
 pub mod autocomplete;
 pub mod golden_tests;
 pub mod knight;
+pub mod mention_realign;
 pub mod render;
 
 pub use attachment::{
@@ -770,6 +771,18 @@ impl Composer {
         if !text.is_empty() {
             self.insert_text(text);
         }
+    }
+
+    /// G-93 — the `$EDITOR` return path (prompt/index.tsx:566-576):
+    /// `input.setText(normalized)` then
+    /// `setStore("prompt", realignPromptInputMentions(normalized,
+    /// editorPrompt))` — the attachments re-attach to their mention
+    /// occurrences in the EDITED text instead of being wiped. The
+    /// caller passes the EXPANDED text the editor opened over (the
+    /// pre-edit coordinate space the chip ranges were shifted into).
+    pub fn set_text_realigned(&mut self, expanded_before: &str, text: &str) {
+        let draft = mention_realign::realign_draft(&self.draft, expanded_before, text);
+        self.set(draft);
     }
 
     /// `input.newline` (shift/ctrl/alt+return, ctrl+j).

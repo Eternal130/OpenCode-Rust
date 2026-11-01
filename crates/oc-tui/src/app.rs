@@ -1375,13 +1375,21 @@ impl App {
             // permission → sidebar columns → the transcript.
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
                 let down = matches!(mouse.kind, MouseEventKind::ScrollDown);
+                // G-102 — the wheel step runs through v2's
+                // `getScrollAcceleration` (util/scroll.ts:20-28): the
+                // live `scroll.acceleration`/`scroll.speed` config
+                // selects the model; the default reproduces the
+                // 3-rows-a-notch line scroll. The event's arrival
+                // time feeds the streak (crossterm carries no wheel
+                // timestamps — `Date.now()` at `tick` in the ref).
+                let now_ms = i64::try_from(self.clock.now_ms_value()).unwrap_or(0);
+                let step = self.store.wheel_step(now_ms) as i32;
+                let delta = if down { step } else { -step };
                 // A modal select's option window scrolls WITHOUT
                 // moving the selection (v2's scrollbox; the rows
-                // keep their own pointer tracking). Terminal-wheel
-                // semantics: 3 rows a notch (opentui's own
-                // `direction === "up" ? -3 : 3` delta).
+                // keep their own pointer tracking).
                 if !self.store.dialogs().is_empty() {
-                    if self.dialog_scroll_window_by(if down { 3 } else { -3 }) {
+                    if self.dialog_scroll_window_by(delta) {
                         self.store.request_redraw();
                     }
                     return;
@@ -1398,7 +1406,7 @@ impl App {
                     // pane's columns scrolls the sections (v2's
                     // `sidebar.content` scrollbox).
                     if self.store.sidebar_scroll().contains_col(col)
-                        && self.store.sidebar_scroll_by(if down { 3 } else { -3 })
+                        && self.store.sidebar_scroll_by(delta)
                     {
                         self.store.request_redraw();
                         return;
@@ -1409,7 +1417,10 @@ impl App {
                     // `session.page.up/down` (the E1 half-page math:
                     // ±viewport/2 with js_round, sticky re-arming at
                     // the tail — `scroll_driver_matches_the_ported_
-                    // scrollbar_math` pins the exact landing).
+                    // scrollbar_math` pins the exact landing). G-102
+                    // bounded deviation: the transcript keeps the
+                    // page-step mapping (the pinned scrollbar math),
+                    // not the accelerated row step.
                     let command = if down {
                         oc_tui_core::scroll::ScrollCommand::PageDown
                     } else {
@@ -2459,6 +2470,17 @@ impl App {
         let key = self.prompt_key();
         let draft_empty = self.store.prompt_draft(&key).is_empty();
         self.keymap.set_command_enabled("app.exit", draft_empty);
+        // G-103 — the shared `<leader>q` chord's arbitration: v2's
+        // queued-prompts binding is `enabled: queuedPrompts().length >
+        // 0` (index.tsx:1268), so with the queue empty the chord falls
+        // to app.exit's later claim (keybind.ts:48 vs :131). Gating
+        // here reproduces the ref's registration-order outcome on the
+        // port's engine (the queue manager wins while live).
+        let queue_live = match self.store.route() {
+            Route::Session { session_id } => !self.store.queued_prompts(&session_id).is_empty(),
+            Route::Home => false,
+        };
+        self.keymap.set_command_enabled("session.queued_prompts", queue_live);
 
         // 1. The conditional app.exit layer (empty prompt only): base
         //    chords resolve ABOVE the textarea — <leader>q / ctrl+c /
@@ -3628,8 +3650,14 @@ pub enum WorktreeEvent {
     /// A `worktree.create` result (the new directory).
     Created(Result<String, String>),
     /// A `worktree.remove` result; the error pair carries
-    /// (message, forceRequired).
-    RemoveResult { directory: String, result: Result<(), (String, bool)> },
+    /// (message, forceRequired). G-101: a `forceRequired` rejection
+    /// rides with the `vcs.status` rows (dialog-workspaces.tsx:
+    /// 255-262 fetches them for the file-changes dialog).
+    RemoveResult {
+        directory: String,
+        result: Result<(), (String, bool)>,
+        files: Vec<crate::store::WorktreeFileChange>,
+    },
 }
 
 /// The Worktrees dialog's production seam: a spawned worker owning
@@ -3695,6 +3723,7 @@ fn spawn_worktree_worker(
                     let _ = tx.send(WorktreeEvent::Created(result)).await;
                 }
                 WorktreeRequest::Remove { project_id, directory, force } => {
+                    let directory_for_result = directory.clone();
                     let result = client
                         .worktree()
                         .remove(&oc_client::types::WorktreeRemoveInput {
@@ -3718,7 +3747,43 @@ fn spawn_worktree_worker(
                             };
                             (error.to_string(), force_required)
                         });
-                    let _ = tx.send(WorktreeEvent::RemoveResult { directory, result }).await;
+                    // G-101 — the file-changes rows for the confirm
+                    // dialog (dialog-workspaces.tsx:253-262): the
+                    // `forceRequired` rejection is followed by ONE
+                    // `vcs.status` fetch on the worktree's directory;
+                    // failures degrade to an empty list (ref's
+                    // `.catch(() => undefined)` → `status?.data ?? []`).
+                    let files = match &result {
+                        Err((_, true)) => client
+                            .vcs()
+                            .status(&oc_client::types::VcsStatusQuery {
+                                location: Some(oc_client::types::QueryLocation {
+                                    directory: Some(directory.clone()),
+                                }),
+                            })
+                            .await
+                            .map(|status| {
+                                status
+                                    .data
+                                    .into_iter()
+                                    .map(|file| crate::store::WorktreeFileChange {
+                                        file: file.file,
+                                        status: file.status.as_str().to_owned(),
+                                        additions: file.additions,
+                                        deletions: file.deletions,
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
+                        _ => Vec::new(),
+                    };
+                    let _ = tx
+                        .send(WorktreeEvent::RemoveResult {
+                            directory: directory_for_result,
+                            result,
+                            files,
+                        })
+                        .await;
                 }
                 WorktreeRequest::MoveSession { session_id, directory } => {
                     // `session.move` POST — failures log (v2 toasts
@@ -8051,13 +8116,14 @@ pub async fn run_with_size(
                         modal: false,
                     });
                 }
-                WorktreeEvent::RemoveResult { directory, result } => match result {
+                WorktreeEvent::RemoveResult { directory, result, files } => match result {
                     Ok(()) => app.store.apply_worktree_removed(&directory),
                     Err((message, force_required)) => {
                         app.store.apply_worktree_remove_failed(
                             &directory,
                             &message,
                             force_required,
+                            files,
                         );
                     }
                 },
@@ -8167,7 +8233,11 @@ pub async fn run_with_size(
                 Ok(Some(text)) => {
                     let normalized = crate::editor::normalize_prompt_content(&text);
                     let mut composer = app.store.composer(&key);
-                    composer.set_text(&normalized);
+                    // G-93 — the editor round-trip must not wipe the
+                    // attachments (prompt/index.tsx:566-576): the
+                    // chips re-attach to their mention occurrences in
+                    // the edited text; removed mentions drop.
+                    composer.set_text_realigned(&draft, &normalized);
                     app.store.set_composer(&key, &composer);
                 }
                 Err(crate::editor::EditorError::Exit(reason)) => {
@@ -11332,10 +11402,29 @@ mod core_interaction_tests {
         app.press("enter");
         assert_eq!(app.store.queued_prompts("s1"), Vec::<crate::store::QueuedPrompt>::new());
         assert!(app.store.dialogs().is_empty(), "the last action closed the manager");
-        // An empty queue is a no-op (v2's enabled gate).
+        // An empty queue leaves the chord to app.exit (G-103 —
+        // keybind.ts:48; the manager never opens).
         app.press("ctrl+x");
         app.press("q");
         assert!(app.store.dialogs().is_empty(), "empty queue never opens");
+        assert!(app.exit_requested, "G-103: the empty queue exits via app.exit");
+    }
+
+    /// G-103 — the shared `<leader>q` chord (keybind.ts:48 vs :131):
+    /// a LIVE queue keeps the manager's priority over app.exit's
+    /// claim (registration-order arbitration).
+    #[test]
+    fn leader_q_with_live_queue_never_exits() {
+        let mut app = App::new((80, 24));
+        app.store.open_tab("s1", Some("S".to_owned()));
+        app.store.queue_prompt("s1", "queued", &[]);
+        app.press("ctrl+x");
+        app.press("q");
+        assert!(!app.exit_requested, "the manager wins the shared chord");
+        assert!(
+            app.frame_text().contains("Queued prompts"),
+            "the manager opened instead of exiting"
+        );
     }
 
     /// TUI-TD07 — the manager's ctrl+u undo: the SELECTED row cancels
