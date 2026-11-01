@@ -1,5 +1,7 @@
 # 移植缺口与坑（Gaps & Pitfalls）
 
+> **2026-11-01 第九轮（七域全量复审）**：7 通道对 ref 全功能域（core 会话/工具/AI/server/TUI/CLI/schema-plugin-pty-syntax）逐行对读后，对初报缺口逐项源码复核：确认 12 项新立项（G-93..G-104）、撤销 3 项初报（见文末第九轮勘误）、5 项归类既有条目。详见文末第九轮。
+
 > **2026-11-01 第七轮 burndown（gap-burndown-4）**：G-50..G-78 全部 + G-41..G-48 残留 + G-31/G-34/G-24 残留 + G-1 consumer 迁移（read/write/edit/glob/grep/patch/shell/pty 全走 Environment seam）经 lanes 1-9 串行落地并合并 main（merge commits 8f5c7a2..c289c2b：lane1 G-50/51/52/53/54/70；lane2 G-41..G-44；lane3 G-55/57/58/59/60/63/76/77/78；lane4 G-56/48/34/33；lane5 G-64/65+G-24 残留+G-46；lane6 G-66/67/68/69/47；lane7 G-61/62/71/72/73/74/75/45；lane8 G-31；lane9a/9b G-1）。本轮（lane10）核验并钉定 G-49a spinner 40ms 帧数学（帧索引按流逝时间派生，repaint 维持 pump tick——文档化决策），并完成文档终扫。现存未关闭项均为**文档化决策**：G-28 有界 TSX shim、G-32 v1/legacy schema 有意不移植、G-12/G-13/G-16/G-17/G-38/G-39/G-40 ℹ️ 维持不变；少量 deferred minors 见 .superpowers/sdd/ 各 lane report（如 G-68 mini restore 保留 seam、G-24 guest vcs provider info/base 闭包留 guest 侧、G-36 demo 剧本 6/13 bounded、G-9 nested scope 简化）。
 
 > **2026-10-31 第六轮复核**：对文档现存未关闭条目逐项现状验证——G-4/G-6/G-8 已悄然修复收口；G-1 残留缩小（mcp/stdio 已迁）、G-24/G-31 部分清偿；G-34/G-41..G-48 确认仍在。详见文末第六轮。
@@ -618,3 +620,108 @@ G-18 ✅ / G-19 ✅(死校验残留) / G-20 ✅ / G-21 ✅ / G-22 ✅ / G-23 ✅
 
 ## 第八轮 burndown 判定
 G-79..G-92 全部 ✅（G-83 采用补面板方案；G-87 三子项实现/已移植/文档化各一；G-92 代码收敛+分歧注释）。现存未关闭项维持既有文档化决策：G-28（有界 TSX shim）、G-32（v1/legacy 不移植，G-87 子项已并注）、G-12/G-13/G-16/G-17/G-38/G-39/G-40 ℹ️。
+
+---
+
+# 第九轮（2026-11-01，七域全量复审 + 逐项源码复核）
+
+> 来源：7 通道并行逐行审查（core 会话/消息/Agent、内置工具、AI 层、server/API、TUI、CLI/client/SDK、schema/theme/util/plugin/pty/syntax），明细即本轮报告。对全部初报缺口逐项重新取证后：**确认 12 项**（G-93..G-104，续编号）、**撤销 3 项初报**（勘误见文末）、**归类既有条目 5 项**（不另立项）。风险排序：🔴 高 1 / 🟡 中 7 / 🟢 低 4。
+
+## 🔴 高
+
+### G-93 ❌ `$EDITOR` 往返丢失全部 mention 附件
+- Rust：`oc-tui/src/app.rs:8165-8172` 编辑器返回后仅 `composer.set_text(&normalized)`；而 `components/composer/mod.rs:759-773` 的 `set_text` 无条件 `draft = PromptDraft::default()` 并清空 files/agents/skills 的全部 undo/redo 栈——`@文件/@agent/@skill` 附件静默全丢。
+- Ref：`packages/tui/src/prompt/index.tsx`（`$EDITOR` 返回分支）调 `realignPromptInputMentions`（`prompt/mention.ts:20-140`，DP 最大匹配按最小代价把附件重挂到编辑后文本）+ `restoreExtmarksFromPrompt`。
+- 修法提示：移植 realign DP，或在编辑器往返前快照附件、返回后按 mention 文本仍在文中重挂。
+
+## 🟡 中
+
+### G-94 ❌ `POST /api/session/:id/permission` 丢弃 payload 的 agent/metadata/source
+- Rust：`oc-server/src/handlers/permission.rs:189-194` 三字段硬编码 `None`（仅 resources 透传 :191）。
+- Ref：`protocol/groups/permission.ts:63` 全量透传写入 `Permission.Request`。
+- 影响：依赖 request.metadata（权限弹窗上下文）/agent 归属的客户端行为缺失。
+
+### G-95 ❌ `POST /api/session/:id/form` 丢弃 payload 的 metadata
+- Rust：`oc-server/src/handlers/form.rs:115` `metadata: None` 恒置空。Ref `FormCreatePayload` 含 metadata 并透传。
+
+### G-96 ❌ `GET /api/session/:id/context` 未按 compaction 截断
+- Rust：`oc-server/src/handlers/session.rs:1226-1245` 返回**全部**消息（`ListOrder::Asc` 全量）。
+- Ref：`session.ts:567` 语义为"最近一次 compaction 之后的活动上下文"（latestCompaction 之后的窗口）。
+- 影响：长会话经该端点取上下文的客户端拿到被压缩掉的历史。
+
+### G-97 ⚠️ permission.saved list/remove 引入 ref 没有的 location 装配副作用
+- Rust：`oc-server/src/handlers/permission.rs:58-66`（saved_list）/remove 路径先 `resolve_location` + `services()`——冷启动触发 SSE 可见的 boot 级联、目录无效返回 404（注释自认是"v2 location middleware"，但 ref 中这两端点注册于组中间件**之前**、不经 location 解析）。
+- Ref：`groups/permission.ts:37,49` 无 location 副作用、无该 404 路径。
+
+### G-98 ⚠️ webfetch 非法 timeout 的校验时机后移至权限 assert 之后
+- Rust：`oc-core/src/tool/webfetch.rs:208`（permission.assert）→ `:236` 才 `resolve_timeout`；`timeout<=0/>120` 的输入在解码期不拒绝（注释 AUD-19② 自认可知），用户会先看到授权弹窗、批准后才收到 "Invalid arguments"。
+- Ref：`webfetch.ts:29` schema 解码期即拒绝，不触发权限确认。
+- 注：与 G-89（超时预算/文案，已修）不同面，本条是**校验顺序**。修法：`resolve_timeout` 提到 assert 之前。
+
+### G-99 ⚠️ `upgrade --method curl` 语义偏差（执行自有 release 下载而非官方安装脚本）
+- Rust：`oc-cli/src/services/updater.rs:328` `"github" | "curl" => upgrade_from_release(...)`，`:454` 显式 `let _ = via_installer_semantics;`——curl 与 rust-extra 的 github 方法共用"下载本移植自身 release tarball"路径。
+- Ref：curl 方法执行官方安装脚本（`curl -fsSL https://opencode.ai/install`）。
+- 影响：用户显式 `--method curl` 得到不同发行流。修法：要么实现 installer 脚本路径，要么将 curl 从方法表移除/改名，避免静默语义替换。
+
+### G-100 ⚠️ `LLM.generateObject` 的 jsonSchema 模式输出校验为手写子集
+- Rust：`oc-ai/src/llm.rs` `validate_json_schema` 仅覆盖 type/enum/required/properties/items（+递归）；`oneOf/anyOf/allOf/$ref/minLength/pattern/minimum/additionalProperties` 等静默放行。
+- Ref：Effect JsonSchema 完整解码，畸形输出报 `InvalidProviderOutputError`。
+- 关联：G-59 已修**工具输入**校验子集（tool/registry），本条是 llm.rs **输出**校验器，独立半边。动态 schema（MCP/插件清单）调用方防错弱于 ref。
+
+### G-101 ⚠️ workspace file-changes 对话框降级为纯 yes/no 确认
+- Rust：`oc-tui/src/components/command_palette.rs:778-783` 仅固定文案 "This worktree has file changes." + yes/no。
+- Ref：`dialog-workspace-file-changes.tsx:29-60` 渲染逐文件 `A/D/M` 状态与 `+N/−N` 增删计数（宽度自适应、8 行滚动窗）——强删 worktree/forceRequired 场景用户看不到将丢弃哪些改动。
+
+## 🟢 低
+
+### G-102 ⚠️ 滚轮加速模型缺失（scroll.acceleration/speed 配置无行为效果）
+- Rust：`oc-tui/src/store.rs:6624` 注释自认 wheel 流无加速模型；`dialog_config.rs:303-308` 的 `scroll.acceleration` 行可切换但无消费点（默认步长 3 已对齐，默认路径一致）。
+- Ref：`tui/src/util/scroll.ts:20-28`（MacOSScrollAccel / speed 默认 3）被 12 个表面消费。
+
+### G-103 ⚠️ `app.exit` 默认键位缺 `<leader>q`
+- Rust：`oc-tui-core/src/keymap/table.rs:511` 仅 `ctrl+c,ctrl+d`（注释 :510 说明裁决：`<leader>q` 单归 session.queued_prompts）。
+- Ref：`config/keybind.ts:48` `ctrl+c,ctrl+d,<leader>q`（与 :131 queued_prompts 同键并存，靠注册顺序仲裁）。行为面不完全一致——习惯 `<leader>q` 退出的用户得到队列面板而非退出。
+
+### G-104 ⚠️ `stats --limit` 缺 `>=1` 下界
+- Rust：`oc-cli/src/cli.rs:348` 裸 `u32`，`--limit 0` 可解析（渲染层随后报上限提示）。
+- Ref：`commands.ts:332-335` Schema 要求 `>=1`。修法：`value_parser!(u32).range(1..)` 一行。
+
+## 归类与收编（不另立项）
+
+- **experimental AI 模块（evaluation/system-one）缺失** → 已有裁决：G-7（有意不移植，ref 主流程不消费）/G-17。
+- **markdown 代码围栏无语法 injection、csharp/kotlin/swift feature 门控** → 纯重复 G-13。
+- **插件进程外 bun 沙箱（超时/崩溃重启/热重载）与 TSX 有界 shim** → G-28（文档化决策）。
+- **CodeMode execute 走插件宿主 guest 运行时** → 第五轮已收编为文档化决策（codemode.rs:21-52）。
+- **`POST /api/plugin/install` rust 独有端点** → G-17 rust-extra 家族（第五轮归类项）。
+- **Session.remove 10s 有界等待 / restart 恢复 / model-transport** → G-79 ✅ 已收口（remove_tree + 有界等待为文档化决策；jobs.rs `prepare_resume`/`DEFAULT_MAX_RESUME_ATTEMPTS`/`RESUME_EXHAUSTED_MESSAGE` 均已实现；model_request.rs:888,1075-1186 有 http_interceptors + WS handshake 对等面）。
+
+## 第九轮勘误（经复核撤销的初报，勿再立项）
+
+1. **restart 恢复服务未移植** — 初报未找到等价物，实际 `oc-core/src/jobs.rs:636-726` 已有 `prepare_resume`/`RESUME_EXHAUSTED_MESSAGE`/`DEFAULT_MAX_RESUME_ATTEMPTS`（对齐 restart.ts:14-24,67-84）。
+2. **model-transport 拦截层不完整** — `model_request.rs:888,915,1071-1186` 已有 `http_interceptors`（request/response 对，response 可回放 before-request 快照=G-91 修复产物）与 WS handshake 派发面。
+3. **persistent-pty 回放分块 1MiB（与 G-10 的 64KiB 冲突）** — 复核 `oc-server/src/handlers/pty.rs:342` 确认按 64KiB 字符边界分块；G-10 记录正确，1MiB 说法是初报误读（1MiB 为 read 分块上限，非 WS 回放帧）。
+
+## 第九轮判定汇总
+初报 20 项：确认立项 12（G-93..G-104，🔴 1：G-93；🟡 7：G-94..G-101；🟢 4：G-102..G-104）；归类既有 5（G-7/G-13/G-17/G-28 + G-79 关联组）；撤销 3（见勘误）。优先级建议：G-93 > G-98 ≈ G-94 > G-96 ≈ G-99 > G-95 ≈ G-97 ≈ G-100 ≈ G-101 > G-102 ≈ G-103 ≈ G-104。
+
+---
+
+# 第十轮 burndown 收口（2026-11-02，gap-burndown-6）
+
+> G-93..G-104 全部 12 项经 lanes 1-4 串行落地并 fast-forward 合并 main（55032d4 / 4e5a55c / 56d5584 / 8d2aef7）。全程 worktree 隔离（`.worktrees/`，合并后已回收）、dev-gate 单入口、nextest 未过滤验证、日志落盘 `.test-logs/*-lane[1-4].log`。各 lane 报告含字面 `Summary:` 行与 `git log -1` 落地证明。
+
+- **G-93 ✅（lane1）**：`oc-tui/src/components/composer/mention_realign.rs` 全量移植 ref mention.ts realign DP（group-by-text、longest-first、保护区间、memoized 最小代价最大匹配）；`Composer::set_text_realigned` 保留幸存 @file/@agent/@skill 附件；$EDITOR 返回分支改调之。偏差文档化：char-offset DP（非 display-width）、无文本 mention 丢弃。
+- **G-94 ✅（lane2）**：permission create handler 透传 payload agent/metadata/source（AssertInput 字段本已有，handler 此前硬编码 None）。注：Permission.Request 双侧均无 agent 字段，agent 流入 AssertInput（wire 断言 metadata/source）。
+- **G-95 ✅（lane2）**：form create 透传 payload metadata。
+- **G-96 ✅（lane2）**：`GET /api/session/:id/context` 截断至最近一次**已完成** compaction 行之后的窗口（ref history.ts latestCompaction gte 语义；running/failed compaction 不扩窗）。
+- **G-97 ✅（lane2）**：`GET/DELETE /api/permission/saved` 不再 resolve_location/装配 services（对齐 ref 前置中间件注册）；无效目录不再 404、不触发 boot 级联。
+- **G-98 ✅（lane3）**：webfetch timeout（<=0 / >120）校验移至 permission.assert 之前（ref 解码期拒绝语义）；测试证明非法 timeout 不触发权限弹窗。
+- **G-99 ✅（lane4）**：`upgrade --method curl` 走官方安装脚本路径——下载 `https://opencode.ai/v2/install` 后 `<bash> <installer> --version <v> --no-modify-path`（对齐 ref updater.ts，非 pipe-to-sh 初稿设想）；github 保持 release 下载；`OPENCODE_INSTALLER_URL` env 覆盖；网络/spawn 桩测试。
+- **G-100 ✅（lane3）**：G-59 JSON Schema 校验器上移为共享 `oc-ai/src/json_schema.rs`（oc-core→oc-ai 依赖方向合规，registry.rs re-export 保持 API）；generateObject 输出校验补齐 oneOf/anyOf/allG、$defs+$ref、minLength/maxLength/pattern、minimum/maximum、minItems/maxItems/uniqueItems、additionalProperties、type 联合；零新依赖。
+- **G-101 ✅（lane1）**：workspace file-changes 对话框渲染逐文件 A/D/M + 路径 + `+N/−N` 计数（8 行窗口 + 省略提示）；数据经 worktree worker 在 forceRequired 拒绝时拉 vcs.status（失败降级空表）。偏差：固定 8 行窗口（非滚轮 scrollbox）。
+- **G-102 ✅（lane1）**：`oc-tui/src/scroll_accel.rs` 字节级移植 MacOSScrollAccel（3 样本窗、150ms streak、`1+0.8·(e^(v/3)−1)` 钳 6×）+ CustomSpeed + 配置序；`Store::wheel_step` 消费 live `scroll.acceleration`/`scroll.speed`。偏差：整行取整、transcript 保持分页步长映射。
+- **G-103 ✅（lane1）**：`app.exit` 默认键位补 `<leader>q`（keybind.ts:48）；队列面板存活时（queuedPrompts 非空）app.exit 对 chord 续键让位——复刻 ref 注册序仲裁。
+- **G-104 ✅（lane4）**：`stats --limit` 加 `value_parser!(u32).range(1..)`，0 在解析期拒绝。
+
+## 第十轮判定
+G-93..G-104 全部 ✅。现存未关闭项维持既有文档化决策：G-28（有界 TSX shim）、G-32（v1/legacy 不移植）、G-12/G-13/G-16/G-17/G-38/G-39/G-40 ℹ️。
