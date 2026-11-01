@@ -257,7 +257,7 @@ async fn find(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let location = resolve_location_for_fs(&state, &uri, &headers)?;
-    let _services = services(&state, &location).await?;
+    let services = services(&state, &location).await?;
     let Some(query) = query_field(&uri, "query") else {
         return Err(ApiError::invalid_request("query is required"));
     };
@@ -273,8 +273,10 @@ async fn find(
     let exclusions = ScanExclusions::for_root(&root);
     // G-31: VCS-rooted non-home scans are unbounded (ref search.ts:72
     // `location.vcs && !home ? MAX_SAFE_INTEGER : 100_000`); the
-    // walk's budget is resolved per scan root.
-    let budget = scan_budget(&root, &exclusions);
+    // walk's budget is resolved per scan root via the project
+    // resolver's vcs info (T1 — covers hg worktrees, sub-directory
+    // locations stay budgeted).
+    let budget = scan_budget(is_vcs_root(&services.project, &root), &exclusions);
     // REF builds an index of every (type-filtered) entry and ranks with
     // fuzzy matching at query time; the port's equivalent is a bounded
     // full walk (same entry budget as REF's ripgrep cap) + scoring.
@@ -332,19 +334,30 @@ async fn find(
 /// OF SCOPE for this fix — the port still walks per request.
 const SCAN_ENTRY_BUDGET: usize = 100_000;
 
-/// `location.vcs` for the scan root (search.ts:72's gate): the
-/// location directory is the root of a VCS checkout when it holds a
-/// `.git` entry (a directory, or the file git worktrees/submodules
-/// place at the root).
-fn is_vcs_root(root: &std::path::Path) -> bool {
-    root.join(".git").exists()
+/// `location.vcs` for the scan root (search.ts:72's gate), resolved via
+/// the PROJECT RESOLVER instead of sniffing `.git` (T1): the resolver
+/// walks to the nearest `.git`/`.hg` marker and reports the checkout
+/// directory + vcs kind, so hg worktrees qualify too. Conservative
+/// semantics preserved: only the ROOT of the checkout (the resolver's
+/// directory equals the scan root) counts — a location placed in a
+/// sub-directory of a repository stays budgeted, matching the old
+/// `.git`-existence-at-root sniff.
+fn is_vcs_root(project: &oc_core::project::Resolved, root: &std::path::Path) -> bool {
+    if project.vcs.is_none() {
+        return false;
+    }
+    let canonical_root =
+        std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    // The resolver's directory is already canonical (config::resolve_path
+    // realpaths on success).
+    project.directory == canonical_root
 }
 
 /// The per-scan entry budget: unlimited for VCS-rooted non-home
 /// scans (ref's `MAX_SAFE_INTEGER`), the 100k ceiling everywhere
 /// else.
-fn scan_budget(root: &std::path::Path, exclusions: &ScanExclusions) -> usize {
-    if is_vcs_root(root) && !exclusions.home_rooted {
+fn scan_budget(vcs_root: bool, exclusions: &ScanExclusions) -> usize {
+    if vcs_root && !exclusions.home_rooted {
         usize::MAX
     } else {
         SCAN_ENTRY_BUDGET
@@ -658,7 +671,8 @@ mod find_tests {
             std::fs::write(path.join(format!("f{index:02}.txt")), "x").expect("write");
         }
         let scan = ScanExclusions { home_rooted: false, names: vec![], paths: vec![] };
-        assert_eq!(scan_budget(path, &scan), usize::MAX, "VCS root → unbounded");
+        let budget = |vcs_root: bool| scan_budget(vcs_root, &scan);
+        assert_eq!(budget(true), usize::MAX, "VCS root → unbounded");
 
         // Bounded walk with a 10-entry stand-in budget stops early.
         let mut out = Vec::new();
@@ -670,31 +684,64 @@ mod find_tests {
         // The SAME tree under the VCS-root budget collects every file.
         let mut out = Vec::new();
         let mut visited = 0usize;
-        walk(path, true, false, &scan, scan_budget(path, &scan), &mut visited, &mut out);
+        walk(path, true, false, &scan, budget(true), &mut visited, &mut out);
         assert_eq!(out.len(), 40, "VCS-root budget must not truncate: got {}", out.len());
         // .git stays excluded from candidates even unbounded.
         assert!(!out.iter().any(|(p, _)| p.to_string_lossy().contains(".git")));
     }
 
     /// The budget gate: home-rooted scans keep the 100k ceiling even
-    /// with a `.git` at the root, and non-repo roots are bounded.
+    /// at a repo root, and non-repo roots are bounded.
     #[test]
     fn scan_budget_gates_on_vcs_root_and_home() {
-        let repo = tempfile::tempdir_in("/tmp/opencode").expect("tempdir");
-        std::fs::create_dir_all(repo.path().join(".git")).expect("git");
-        let plain = tempfile::tempdir_in("/tmp/opencode").expect("tempdir");
-        std::fs::write(plain.path().join("a.txt"), "x").expect("write");
-
         let scan = ScanExclusions { home_rooted: false, names: vec![], paths: vec![] };
-        assert_eq!(scan_budget(repo.path(), &scan), usize::MAX);
-        assert_eq!(scan_budget(plain.path(), &scan), SCAN_ENTRY_BUDGET);
+        assert_eq!(scan_budget(true, &scan), usize::MAX);
+        assert_eq!(scan_budget(false, &scan), SCAN_ENTRY_BUDGET);
 
         let home_scan = ScanExclusions { home_rooted: true, names: vec![], paths: vec![] };
         assert_eq!(
-            scan_budget(repo.path(), &home_scan),
+            scan_budget(true, &home_scan),
             SCAN_ENTRY_BUDGET,
             "!home gates the unbounded arm"
         );
-        assert!(!is_vcs_root(plain.path()));
+    }
+
+    fn resolved(directory: &std::path::Path, vcs: Option<oc_core::project::Vcs>) -> oc_core::project::Resolved {
+        oc_core::project::Resolved {
+            previous: None,
+            id: "test".to_owned(),
+            directory: directory.to_path_buf(),
+            canonical: directory.to_path_buf(),
+            vcs,
+        }
+    }
+
+    /// T1: VCS-root status comes from the project resolver — git AND hg
+    /// checkout roots qualify; sub-directory locations and vcs-less
+    /// projects stay budgeted (root-of-worktree-only semantics).
+    #[test]
+    fn is_vcs_root_uses_project_resolver() {
+        let repo = tempfile::tempdir_in("/tmp/opencode").expect("tempdir");
+        // A git checkout root (the resolver would report this directory).
+        std::fs::create_dir_all(repo.path().join(".git")).expect("git");
+        let root = std::fs::canonicalize(repo.path()).expect("canonical");
+        let git = resolved(&root, Some(oc_core::project::Vcs::Git { store: root.join(".git") }));
+        assert!(is_vcs_root(&git, &root), "git checkout root → vcs root");
+        assert!(is_vcs_root(&git, repo.path()), "non-canonical root input still matches");
+
+        // hg root qualifies too (covered by the resolver's Vcs::Hg arm).
+        let hg = resolved(&root, Some(oc_core::project::Vcs::Hg { store: root.join(".hg") }));
+        assert!(is_vcs_root(&hg, &root), "hg checkout root → vcs root");
+
+        // Sub-directory of the checkout: resolver directory != scan root
+        // → budgeted (conservative, same as the old root-only sniff).
+        let sub = repo.path().join("sub");
+        std::fs::create_dir_all(&sub).expect("sub");
+        assert!(!is_vcs_root(&git, &sub), "sub-directory stays budgeted");
+
+        // No vcs at all.
+        let plain = tempfile::tempdir_in("/tmp/opencode").expect("tempdir");
+        let none = resolved(plain.path(), None);
+        assert!(!is_vcs_root(&none, plain.path()));
     }
 }
