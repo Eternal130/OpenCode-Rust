@@ -83,6 +83,9 @@ pub struct SessionRunner {
     /// The model-input image limits (RV-G3): applied to settled tool
     /// content via `normalizeImages`. REF defaults when not configured.
     image_limits: crate::image::Limits,
+    /// G-82 — the engine-side progress recorder shared with the tools'
+    /// `ProgressFn` closures (failure snapshots / subagent abort suffix).
+    progress_log: Option<crate::session::runner::publisher::ProgressLog>,
     /// `FiberMap`-equivalent for title generation: one live task per
     /// session, `onlyIfMissing`.
     title_tasks: Mutex<HashMap<String, tokio::task::JoinHandle<()>>>,
@@ -133,6 +136,7 @@ impl SessionRunner {
             snapshot: None,
             tool_output: None,
             image_limits: crate::image::Limits::default(),
+            progress_log: None,
             title_tasks: Mutex::new(HashMap::new()),
             prompt_prepare: None,
         }
@@ -201,6 +205,19 @@ impl SessionRunner {
     #[must_use]
     pub fn with_image_limits(mut self, limits: crate::image::Limits) -> Self {
         self.image_limits = limits;
+        self
+    }
+
+    /// Attaches the engine-side progress recorder (G-82): the tools'
+    /// `ProgressFn` closures record their latest metadata here; the step
+    /// publisher folds it into failure snapshots and the subagent abort
+    /// suffix.
+    #[must_use]
+    pub fn with_progress_log(
+        mut self,
+        log: crate::session::runner::publisher::ProgressLog,
+    ) -> Self {
+        self.progress_log = Some(log);
         self
     }
 
@@ -758,6 +775,7 @@ impl SessionRunner {
                 image_limits: Some(self.image_limits),
                 shutdown: shutdown.clone(),
                 clock: Arc::clone(&self.clock),
+                progress_log: self.progress_log.clone(),
             };
             let input = AttemptInput {
                 session_id: session_id.clone(),

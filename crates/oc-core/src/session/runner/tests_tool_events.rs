@@ -26,6 +26,7 @@ pub(crate) fn publisher(harness: &Harness, message: &str) -> LlmEventPublisher {
         },
         "parityfake",
         0,
+        None,
     )
 }
 
@@ -314,6 +315,67 @@ async fn runner_tool_events_subagent_failure_appends_child_session() {
         serde_json::json!("Tool execution interrupted (sessionID: ses_child_1)")
     );
     assert_eq!(failed.2["metadata"]["sessionID"], serde_json::json!("ses_child_1"));
+}
+
+/// G-82 — the engine-side `ProgressFn` recorder: `ProgressFn` closures
+/// are captured at tool registration (before any publisher exists), so
+/// they record into the shared [`ProgressLog`] instead of calling
+/// `progress()`. A step publisher folds the recorded entry into the
+/// failure snapshot and the subagent abort suffix.
+#[tokio::test]
+async fn runner_tool_events_failed_carries_progress_from_log() {
+    let harness = harness().await;
+    harness.create_session().await;
+    let mut publisher = {
+        let mut publisher = publisher(&harness, "msg_g82");
+        publisher.progress_log = Some(std::sync::Arc::new(std::sync::Mutex::new(
+            [(
+                (harness.session_id().as_str().to_string(), "call_g82".to_string()),
+                oc_schema::common::Record::from([
+                    ("sessionID".to_string(), serde_json::json!("ses_child_g82")),
+                    ("status".to_string(), serde_json::json!("running")),
+                ]),
+            )]
+            .into_iter()
+            .collect(),
+        )));
+        publisher
+    };
+    publisher
+        .publish(&LLMEvent::ToolInputStart {
+            id: "call_g82".into(),
+            name: "subagent".into(),
+            namespace: None,
+            provider_executed: None,
+            provider_metadata: None,
+        })
+        .await
+        .unwrap();
+    publisher.publish(&tool_call("call_g82", "subagent")).await.unwrap();
+    let settled = publisher
+        .fail_tool(
+            "call_g82",
+            SessionError {
+                error_type: "aborted".into(),
+                message: "Tool execution interrupted".into(),
+                status: None,
+                response: None,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(settled);
+    let events = harness.durable_events().await;
+    let failed = events.iter().find(|(type_, _, _)| type_ == "session.tool.failed").unwrap();
+    assert_eq!(
+        failed.2["error"]["message"],
+        serde_json::json!("Tool execution interrupted (sessionID: ses_child_g82)")
+    );
+    assert_eq!(failed.2["metadata"]["sessionID"], serde_json::json!("ses_child_g82"));
+    assert_eq!(failed.2["metadata"]["status"], serde_json::json!("running"));
+    // The settled call's entry is dropped from the log.
+    // (`clear_progress_log` runs on the terminal publish.)
 }
 
 #[tokio::test]

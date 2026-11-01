@@ -173,6 +173,9 @@ pub struct StepDeps {
     /// `session.step.started` / assistant `time.created` epoch-ms. Tests
     /// inject a `FixedClock` to pin deterministic timestamps.
     pub clock: Arc<dyn oc_util::determinism::Clock>,
+    /// G-82 — the engine-side progress recorder shared with the tools'
+    /// `ProgressFn` closures; `None` disables the log fallback.
+    pub progress_log: Option<crate::session::runner::publisher::ProgressLog>,
 }
 
 enum LoopItem {
@@ -207,6 +210,7 @@ pub async fn attempt(deps: &StepDeps, input: AttemptInput) -> Result<Outcome, At
         input.model.reference.clone(),
         input.model.provider_metadata_key().to_string(),
         u64::try_from(deps.clock.unix_ms().max(0)).unwrap_or_default(),
+        deps.progress_log.clone(),
     );
     let tools_disabled = matches!(input.prepared.request.tool_choice, Some(ToolChoice::None {}));
 
