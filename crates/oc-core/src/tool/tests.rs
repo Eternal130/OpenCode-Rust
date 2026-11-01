@@ -80,8 +80,15 @@ fn deny_action(action: &str) -> oc_schema::permission::Ruleset {
     ]
 }
 
-async fn harness() -> Harness {
+pub(super) async fn harness() -> Harness {
     harness_with(allow_all()).await
+}
+
+impl Harness {
+    /// The location tempdir (the shell lane's cwd-probe tests).
+    pub(super) fn dir(&self) -> &Path {
+        &self.dir
+    }
 }
 
 /// The same harness for codemode's executor tests (crate-internal).
