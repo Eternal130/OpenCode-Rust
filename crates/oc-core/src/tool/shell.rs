@@ -232,10 +232,15 @@ async fn prepare(
             })?;
     }
     // Approval can outlive the directory, so validate immediately before
-    // spawning.
-    let workdir = std::fs::metadata(&invocation.cwd);
+    // spawning. G-1 — the cwd check routes through the location-bound
+    // Environment Files seam (`ToolServices.files`): a workspace-backed
+    // location validates (and would resolve) the working directory inside
+    // the workspace's execution plane, not the host fs. The local driver
+    // is the previous `std::fs::metadata` path verbatim (follow-symlink
+    // `stat`), so local behavior is identical.
+    let workdir = services.files.stat(&invocation.cwd).await;
     match workdir {
-        Ok(meta) if meta.is_dir() => {}
+        Ok(meta) if meta.kind == crate::environment::files::FileType::Directory => {}
         Ok(_) => {
             return Err(ToolFailure {
                 message: format!("Unable to execute command: {}", invocation.command),
@@ -306,6 +311,9 @@ impl ToolExecuteWithContext for ShellExecute {
             }
             let compatible_shell = select::resolve(deps.config_shell.as_deref(), true);
             let mut invocation = crate::shell::Invocation {
+                // Default cwd = the location directory (unchanged); any
+                // spawn-related fs check in `prepare` goes through the
+                // location-bound Environment Files seam.
                 cwd: input
                     .workdir
                     .clone()
@@ -699,10 +707,7 @@ mod tests {
     #[test]
     fn tool_shell_progress_payload_is_shell_id() {
         let id = oc_schema::id::ShellId::parse("sh_123").expect("shell id");
-        assert_eq!(
-            shell_progress_payload(&id),
-            serde_json::json!({ "shellID": "sh_123" })
-        );
+        assert_eq!(shell_progress_payload(&id), serde_json::json!({ "shellID": "sh_123" }));
     }
 
     #[test]
