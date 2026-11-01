@@ -121,6 +121,11 @@ pub struct AppState {
     pub worktree_strategies: std::sync::Arc<
         parking_lot::RwLock<std::sync::Arc<oc_core::project::worktree_strategy::StrategyRegistry>>,
     >,
+    /// G-31 T2 — the process-wide fs search index (ref filesystem/
+    /// search.ts): per-canonical-root entry lists refreshed every 10s
+    /// by background tasks; `/api/fs/find` reads it instead of walking
+    /// per request.
+    pub fs_index: std::sync::Arc<crate::handlers::fs::SearchIndex>,
 }
 
 impl AppState {
@@ -135,6 +140,7 @@ impl AppState {
         let (shutdown, _shutdown_rx) = tokio::sync::watch::channel(false);
         let tmp_dir = oc_util::global_roots::resolve().tmp.clone();
         let engine = Arc::new(engine);
+        let fs_index = std::sync::Arc::new(crate::handlers::fs::SearchIndex::new(std::sync::Arc::clone(&clock)));
         let bus = engine.bus.as_ref().clone();
         let workspace = std::sync::Arc::new(oc_core::environment::WorkspaceService::new(
             std::sync::Arc::new(oc_core::project::SqliteProjectStore::new((*engine.db).clone())),
@@ -169,6 +175,7 @@ impl AppState {
             worktree_strategies: std::sync::Arc::new(parking_lot::RwLock::new(
                 std::sync::Arc::new(oc_core::project::worktree_strategy::StrategyRegistry::new()),
             )),
+            fs_index,
         }
     }
 
