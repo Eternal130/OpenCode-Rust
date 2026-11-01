@@ -401,13 +401,20 @@ async fn execute_patch(
     for change in &prepared {
         match change.kind {
             "delete" => {
-                std::fs::remove_file(&change.target.absolute).map_err(|error| {
-                    fail(
-                        &format!("Failed to delete {}", change.target.resource),
-                        &error_message(&error),
-                        &applied.iter().map(|(_, r, _)| r.clone()).collect::<Vec<_>>(),
-                    )
-                })?;
+                // G-1: `remove_file` keeps the exact std::fs::remove_file
+                // failure shape (NotFound / EISDIR) through the seam.
+                services
+                    .files
+                    .remove_file(&change.target.absolute.to_string_lossy())
+                    .await
+                    .map_err(|error| {
+                        let error = std::io::Error::from(error);
+                        fail(
+                            &format!("Failed to delete {}", change.target.resource),
+                            &error_message(&error),
+                            &applied.iter().map(|(_, r, _)| r.clone()).collect::<Vec<_>>(),
+                        )
+                    })?;
                 applied.push((
                     "delete",
                     change.target.resource.clone(),
@@ -417,25 +424,35 @@ async fn execute_patch(
             "update" if change.move_target.is_some() => {
                 let move_target =
                     change.move_target.clone().unwrap_or_else(|| change.target.clone());
-                std::fs::write(&move_target.absolute, change.content.as_bytes()).map_err(
-                    |error| {
+                // The move leg writes WITHOUT creating parents (a missing
+                // parent stays an error) — `write_file` vs `write`.
+                services
+                    .files
+                    .write_file(&move_target.absolute.to_string_lossy(), change.content.as_bytes())
+                    .await
+                    .map_err(|error| {
+                        let error = std::io::Error::from(error);
                         fail(
                             &format!("Failed to write {}", move_target.resource),
                             &error_message(&error),
                             &applied.iter().map(|(_, r, _)| r.clone()).collect::<Vec<_>>(),
                         )
-                    },
-                )?;
-                std::fs::remove_file(&change.target.absolute).map_err(|error| {
-                    fail(
-                        &format!(
-                            "Wrote {} but failed to remove {}",
-                            move_target.resource, change.target.resource
-                        ),
-                        &error_message(&error),
-                        &applied.iter().map(|(_, r, _)| r.clone()).collect::<Vec<_>>(),
-                    )
-                })?;
+                    })?;
+                services
+                    .files
+                    .remove_file(&change.target.absolute.to_string_lossy())
+                    .await
+                    .map_err(|error| {
+                        let error = std::io::Error::from(error);
+                        fail(
+                            &format!(
+                                "Wrote {} but failed to remove {}",
+                                move_target.resource, change.target.resource
+                            ),
+                            &error_message(&error),
+                            &applied.iter().map(|(_, r, _)| r.clone()).collect::<Vec<_>>(),
+                        )
+                    })?;
                 applied.push((
                     "update",
                     move_target.resource.clone(),
@@ -443,24 +460,20 @@ async fn execute_patch(
                 ));
             }
             kind => {
-                if let Some(parent) = change.target.absolute.parent() {
-                    std::fs::create_dir_all(parent).map_err(|error| {
+                // `Files::write` creates missing parents (the previous
+                // explicit create_dir_all) then writes.
+                services
+                    .files
+                    .write(&change.target.absolute.to_string_lossy(), change.content.as_bytes())
+                    .await
+                    .map_err(|error| {
+                        let error = std::io::Error::from(error);
                         fail(
                             &format!("Failed to write {}", change.target.resource),
                             &error_message(&error),
                             &applied.iter().map(|(_, r, _)| r.clone()).collect::<Vec<_>>(),
                         )
                     })?;
-                }
-                std::fs::write(&change.target.absolute, change.content.as_bytes()).map_err(
-                    |error| {
-                        fail(
-                            &format!("Failed to write {}", change.target.resource),
-                            &error_message(&error),
-                            &applied.iter().map(|(_, r, _)| r.clone()).collect::<Vec<_>>(),
-                        )
-                    },
-                )?;
                 applied.push((
                     kind,
                     change.target.resource.clone(),
