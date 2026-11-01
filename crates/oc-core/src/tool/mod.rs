@@ -139,6 +139,12 @@ pub struct ToolServices {
     pub permission: Permission,
     /// Serialized mutations + BOM helpers.
     pub mutation: Arc<FileMutation>,
+    /// G-1 — the location-bound Environment `Files` seam (workspace
+    /// driver when the location carries a `workspaceID`, host fs
+    /// otherwise). The engine resolves it per location exactly like the
+    /// MCP stdio seam (bind failure falls back to the local driver), and
+    /// the file tools route their fs operations through it.
+    pub files: Arc<dyn crate::environment::Files>,
     /// The post-write formatter hook (no-op until the formatter lane).
     pub formatter: Arc<dyn Formatter>,
     /// The AGENTS.md injection seam (`SessionInstructions`); `None` skips

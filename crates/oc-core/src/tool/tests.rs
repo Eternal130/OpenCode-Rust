@@ -124,6 +124,7 @@ async fn harness_with(rules: oc_schema::permission::Ruleset) -> Harness {
         access,
         permission: permission.clone(),
         mutation,
+        files: Arc::new(crate::environment::LocalFiles),
         formatter: Arc::new(NoopFormatter::new()),
         instructions: None,
         db: None,
@@ -892,6 +893,7 @@ impl ToolServices {
             access: self.access.clone(),
             permission: self.permission.clone(),
             mutation: Arc::clone(&self.mutation),
+            files: Arc::clone(&self.files),
             formatter: Arc::clone(&self.formatter),
             instructions: self.instructions.clone(),
             db: self.db.clone(),
@@ -1904,9 +1906,10 @@ fn line_fill(count: usize, width: usize) -> Vec<u8> {
     bytes
 }
 
-#[test]
-fn read_large_file_chunked_memory_shape() {
+#[tokio::test]
+async fn read_large_file_chunked_memory_shape() {
     use crate::tool::read::read_file_with;
+    use futures::future::BoxFuture;
     // ~300 KiB of short lines: two 256 KiB chunks.
     let body = line_fill(6000, 50);
     let size = body.len() as u64;
@@ -1916,10 +1919,14 @@ fn read_large_file_chunked_memory_shape() {
     // offset=1 with a small limit settles inside the first chunk: exactly
     // ONE positioned read, never a whole-file load.
     let mut calls: Vec<(u64, usize)> = Vec::new();
-    let outcome = read_file_with(size, &path, "large.txt", Some(1), Some(100), |start, len| {
+    let outcome = read_file_with(size, &path, "large.txt", Some(1), Some(100), None, |start, len| {
         calls.push((start, len));
-        Ok(body[start as usize..(start as usize + len).min(body.len())].to_vec())
+        let start = start as usize;
+        let end = (start + len).min(body.len());
+        let chunk = body[start..end].to_vec();
+        Box::pin(async move { Ok(chunk) }) as BoxFuture<'_, Result<Vec<u8>, crate::tool::read::ReadError>>
     })
+    .await
     .unwrap();
     assert_eq!(calls, vec![(0, 256 * 1024)], "single first-chunk read");
     match &outcome {
@@ -1934,17 +1941,54 @@ fn read_large_file_chunked_memory_shape() {
     // A page near the end must stream every chunk (2 for 300 KiB) — and
     // each request stays at the 256 KiB granularity.
     let mut calls: Vec<(u64, usize)> = Vec::new();
-    read_file_with(size, &path, "large.txt", Some(6000), None, |start, len| {
+    read_file_with(size, &path, "large.txt", Some(6000), None, None, |start, len| {
         calls.push((start, len));
-        Ok(body[start as usize..(start as usize + len).min(body.len())].to_vec())
+        let start = start as usize;
+        let end = (start + len).min(body.len());
+        let chunk = body[start..end].to_vec();
+        Box::pin(async move { Ok(chunk) }) as BoxFuture<'_, Result<Vec<u8>, crate::tool::read::ReadError>>
     })
+    .await
     .unwrap();
     assert_eq!(calls, vec![(0, 256 * 1024), (256 * 1024, 256 * 1024)], "chunked walk to eof");
 }
 
-#[test]
-fn read_binary_detection_covers_only_the_consumed_page() {
+#[tokio::test]
+async fn read_prefetched_first_chunk_is_not_reread() {
+    use crate::tool::read::{read_file_with, ReadError};
+    use futures::future::BoxFuture;
+    // read_file's dir-detection/size probe already fetched chunk 0; the
+    // pipeline must consume it instead of re-reading (one round trip per
+    // chunk on remote drivers).
+    let body = line_fill(6000, 50);
+    let size = body.len() as u64;
+    let path = PathBuf::from("/tmp/opencode/fake-prefetched.txt");
+    let mut calls: Vec<(u64, usize)> = Vec::new();
+    let outcome = read_file_with(
+        size,
+        &path,
+        "large.txt",
+        Some(1),
+        Some(100),
+        Some(body[..256 * 1024].to_vec()),
+        |start, len| {
+            calls.push((start, len));
+            let start = start as usize;
+            let end = (start + len).min(body.len());
+            let chunk = body[start..end].to_vec();
+            Box::pin(async move { Ok(chunk) }) as BoxFuture<'_, Result<Vec<u8>, ReadError>>
+        },
+    )
+    .await
+    .unwrap();
+    assert!(calls.is_empty(), "page settled in the prefetched chunk: no extra reads");
+    assert!(matches!(outcome, crate::tool::read::ReadOutput::TextPage { .. }));
+}
+
+#[tokio::test]
+async fn read_binary_detection_covers_only_the_consumed_page() {
     use crate::tool::read::{read_file_with, ReadError, ReadOutput};
+    use futures::future::BoxFuture;
     // 70 KiB text file (single first chunk) with a NUL deep inside —
     // ref read-filesystem.ts:151-209: the binary flag is computed over
     // the consumed range, so early pages succeed and only the page whose
@@ -1965,9 +2009,13 @@ fn read_binary_detection_covers_only_the_consumed_page() {
     let path = PathBuf::from("/tmp/opencode/fake-binary-ish.txt");
 
     // Page 1 (limit 10): consumed span has no NUL → text page succeeds.
-    let outcome = read_file_with(size, &path, "bin.txt", Some(1), Some(10), |start, len| {
-        Ok(body[start as usize..(start as usize + len).min(body.len())].to_vec())
+    let outcome = read_file_with(size, &path, "bin.txt", Some(1), Some(10), None, |start, len| {
+        let start = start as usize;
+        let end = (start + len).min(body.len());
+        let chunk = body[start..end].to_vec();
+        Box::pin(async move { Ok(chunk) }) as BoxFuture<'_, Result<Vec<u8>, ReadError>>
     })
+    .await
     .unwrap();
     match &outcome {
         ReadOutput::TextPage { offset, truncated, .. } => {
@@ -1979,10 +2027,14 @@ fn read_binary_detection_covers_only_the_consumed_page() {
 
     // A page whose consumed range includes the NUL → BinaryFileError.
     let error =
-        read_file_with(size, &path, "bin.txt", Some(nul_line as u64), Some(10), |start, len| {
-            Ok(body[start as usize..(start as usize + len).min(body.len())].to_vec())
-        })
-        .unwrap_err();
+        read_file_with(size, &path, "bin.txt", Some(nul_line as u64), Some(10), None, |start, len| {
+        let start = start as usize;
+        let end = (start + len).min(body.len());
+        let chunk = body[start..end].to_vec();
+        Box::pin(async move { Ok(chunk) }) as BoxFuture<'_, Result<Vec<u8>, ReadError>>
+    })
+    .await
+    .unwrap_err();
     assert_eq!(error, ReadError::Binary("bin.txt".to_string()));
 
     // Multi-chunk parity: NUL in the SECOND 256 KiB chunk; a first-page
@@ -1990,9 +2042,13 @@ fn read_binary_detection_covers_only_the_consumed_page() {
     let mut big = line_fill(11000, 50); // ≈ 537 KiB — spans three 256 KiB chunks
     big[300 * 1024] = 0; // inside chunk 2
     let big_size = big.len() as u64;
-    let outcome = read_file_with(big_size, &path, "big.txt", Some(1), Some(100), |start, len| {
-        Ok(big[start as usize..(start as usize + len).min(big.len())].to_vec())
+    let outcome = read_file_with(big_size, &path, "big.txt", Some(1), Some(100), None, |start, len| {
+        let start = start as usize;
+        let end = (start + len).min(big.len());
+        let chunk = big[start..end].to_vec();
+        Box::pin(async move { Ok(chunk) }) as BoxFuture<'_, Result<Vec<u8>, ReadError>>
     })
+    .await
     .unwrap();
     assert!(
         matches!(outcome, ReadOutput::TextPage { .. }),

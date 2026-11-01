@@ -270,7 +270,9 @@ async fn execute_patch(
             }
             Hunk::Delete { .. } => {
                 let content =
-                    crate::file_mutation::read_text(&target.absolute).map_err(|error| {
+                    crate::file_mutation::read_text(services.files.as_ref(), &target.absolute)
+                        .await
+                        .map_err(|error| {
                         ToolFailure::message(format!(
                             "patch verification failed: Failed to delete {}: {}",
                             target.resource,
@@ -290,7 +292,8 @@ async fn execute_patch(
                 let previous = updates.get(&target.absolute);
                 let original = match previous {
                     Some(previous) => previous.clone(),
-                    None => crate::file_mutation::read_text(&target.absolute)
+                    None => crate::file_mutation::read_text(services.files.as_ref(), &target.absolute)
+                        .await
                         .map_err(|error| {
                             ToolFailure::message(format!(
                                 "patch verification failed: Failed to read file to update {}: {}",
@@ -398,13 +401,20 @@ async fn execute_patch(
     for change in &prepared {
         match change.kind {
             "delete" => {
-                std::fs::remove_file(&change.target.absolute).map_err(|error| {
-                    fail(
-                        &format!("Failed to delete {}", change.target.resource),
-                        &error_message(&error),
-                        &applied.iter().map(|(_, r, _)| r.clone()).collect::<Vec<_>>(),
-                    )
-                })?;
+                // G-1: `remove_file` keeps the exact std::fs::remove_file
+                // failure shape (NotFound / EISDIR) through the seam.
+                services
+                    .files
+                    .remove_file(&change.target.absolute.to_string_lossy())
+                    .await
+                    .map_err(|error| {
+                        let error = std::io::Error::from(error);
+                        fail(
+                            &format!("Failed to delete {}", change.target.resource),
+                            &error_message(&error),
+                            &applied.iter().map(|(_, r, _)| r.clone()).collect::<Vec<_>>(),
+                        )
+                    })?;
                 applied.push((
                     "delete",
                     change.target.resource.clone(),
@@ -414,25 +424,35 @@ async fn execute_patch(
             "update" if change.move_target.is_some() => {
                 let move_target =
                     change.move_target.clone().unwrap_or_else(|| change.target.clone());
-                std::fs::write(&move_target.absolute, change.content.as_bytes()).map_err(
-                    |error| {
+                // The move leg writes WITHOUT creating parents (a missing
+                // parent stays an error) — `write_file` vs `write`.
+                services
+                    .files
+                    .write_file(&move_target.absolute.to_string_lossy(), change.content.as_bytes())
+                    .await
+                    .map_err(|error| {
+                        let error = std::io::Error::from(error);
                         fail(
                             &format!("Failed to write {}", move_target.resource),
                             &error_message(&error),
                             &applied.iter().map(|(_, r, _)| r.clone()).collect::<Vec<_>>(),
                         )
-                    },
-                )?;
-                std::fs::remove_file(&change.target.absolute).map_err(|error| {
-                    fail(
-                        &format!(
-                            "Wrote {} but failed to remove {}",
-                            move_target.resource, change.target.resource
-                        ),
-                        &error_message(&error),
-                        &applied.iter().map(|(_, r, _)| r.clone()).collect::<Vec<_>>(),
-                    )
-                })?;
+                    })?;
+                services
+                    .files
+                    .remove_file(&change.target.absolute.to_string_lossy())
+                    .await
+                    .map_err(|error| {
+                        let error = std::io::Error::from(error);
+                        fail(
+                            &format!(
+                                "Wrote {} but failed to remove {}",
+                                move_target.resource, change.target.resource
+                            ),
+                            &error_message(&error),
+                            &applied.iter().map(|(_, r, _)| r.clone()).collect::<Vec<_>>(),
+                        )
+                    })?;
                 applied.push((
                     "update",
                     move_target.resource.clone(),
@@ -440,24 +460,20 @@ async fn execute_patch(
                 ));
             }
             kind => {
-                if let Some(parent) = change.target.absolute.parent() {
-                    std::fs::create_dir_all(parent).map_err(|error| {
+                // `Files::write` creates missing parents (the previous
+                // explicit create_dir_all) then writes.
+                services
+                    .files
+                    .write(&change.target.absolute.to_string_lossy(), change.content.as_bytes())
+                    .await
+                    .map_err(|error| {
+                        let error = std::io::Error::from(error);
                         fail(
                             &format!("Failed to write {}", change.target.resource),
                             &error_message(&error),
                             &applied.iter().map(|(_, r, _)| r.clone()).collect::<Vec<_>>(),
                         )
                     })?;
-                }
-                std::fs::write(&change.target.absolute, change.content.as_bytes()).map_err(
-                    |error| {
-                        fail(
-                            &format!("Failed to write {}", change.target.resource),
-                            &error_message(&error),
-                            &applied.iter().map(|(_, r, _)| r.clone()).collect::<Vec<_>>(),
-                        )
-                    },
-                )?;
                 applied.push((
                     kind,
                     change.target.resource.clone(),
@@ -471,9 +487,13 @@ async fn execute_patch(
     let mut formatted: std::collections::HashMap<PathBuf, String> =
         std::collections::HashMap::new();
     for (_, _, absolute) in &applied {
-        let Ok(current) = crate::file_mutation::read_text(absolute) else { continue };
+        let Ok(current) = crate::file_mutation::read_text(services.files.as_ref(), absolute).await
+        else {
+            continue;
+        };
         let text = if services.formatter.file(absolute) {
-            crate::file_mutation::sync_text_bom(absolute, current.bom)
+            crate::file_mutation::sync_text_bom(services.files.as_ref(), absolute, current.bom)
+                .await
                 .map(|content| content.text)
                 .unwrap_or(current.text)
         } else {

@@ -76,7 +76,8 @@ async fn run(
         .await
         .map_err(|error| blanket(&path, error))?;
 
-    let current = crate::file_mutation::read_text(&target.absolute).ok();
+    let current =
+        crate::file_mutation::read_text(services.files.as_ref(), &target.absolute).await.ok();
     let (_, next_text) = bom_split(&content);
     let preview = file_diff(
         &target.resource,
@@ -111,11 +112,13 @@ async fn run(
                 cause: Some(super::FailureCause::Nested(error.to_string())),
             },
         )?;
-    let bom = crate::file_mutation::read_text(&target.absolute)
+    let bom = crate::file_mutation::read_text(services.files.as_ref(), &target.absolute)
+        .await
         .map(|content| content.bom)
         .unwrap_or(false);
     if services.formatter.file(&target.absolute) {
-        let _ = crate::file_mutation::sync_text_bom(&target.absolute, bom);
+        let _ =
+            crate::file_mutation::sync_text_bom(services.files.as_ref(), &target.absolute, bom).await;
     }
     Ok(ToolOutcome {
         content: vec![Content::Text {
