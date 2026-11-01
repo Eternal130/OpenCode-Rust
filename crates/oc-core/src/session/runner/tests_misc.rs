@@ -878,14 +878,16 @@ fn runner_skill_guidance_filters_denied_skills() {
     use oc_schema::skill::Skill;
 
     let skill = |id: &str| Skill {
-        id: oc_schema::id::SkillId::parse(id).unwrap(),
-        name: oc_schema::id::SkillName::parse("Skill").unwrap(),
+        id: oc_schema::id::SkillId::parse(id),
+        name: oc_schema::id::SkillName::parse("Skill"),
         description: Some("does things".into()),
         auto_invoke: None,
-        path: oc_schema::common::AbsolutePath::parse("/tmp/skill".into()).unwrap(),
+        path: oc_schema::common::AbsolutePath::parse("/tmp/skill".to_string()),
         content: String::new(),
     };
-    let skills = Arc::new(vec![skill("allowed"), skill("blocked")]);
+    let all = vec![skill("allowed"), skill("blocked")];
+    let skills: Arc<dyn Fn() -> Vec<oc_schema::skill::Skill> + Send + Sync> =
+        Arc::new(move || all.clone());
 
     // Baseline: empty ruleset evaluates `ask` — both visible.
     let source = skill_guidance_source(skills.clone(), Ruleset::new());
