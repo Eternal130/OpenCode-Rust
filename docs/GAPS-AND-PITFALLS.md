@@ -509,4 +509,112 @@ G-18 ✅ / G-19 ✅(死校验残留) / G-20 ✅ / G-21 ✅ / G-22 ✅ / G-23 ✅
 ## 第六轮判定汇总
 复核 15 项：✅ 收口 3（G-4、G-6、G-8）+ 1 半边（G-33 消费）；⚠️ 部分清偿 3（G-1 缩小、G-24、G-31）；❌/⚠️ 不变 8（G-34、G-41..G-48 各项、G-49）；决策项 2 现状不变（G-28/G-32）。
 
+---
+
+# 第八轮（2026-11-01，独立九域审查 + 双通道逐项核验）
+
+> 来源：`CODE_REVIEW_PARITY_2026-11-01.md`（9 域并行逐行审查，明细 `/tmp/opencode/review/L1..L9-*.md`）。本轮对该报告的 21 项缺口指控做 2 通道源码级核验：**确认 14 项**（下列 G-79..G-92，续编号）、**驳回 4 项**（见文末勘误，勿再立项）、**已追踪 2 项**（browser 工具→G-8 有意决策；语法高亮语言裁剪→G-13/R-01b）、**1 项并入 G-32 备注**（schema TODO 未明确子项）。
+
+## G-79 ❌（🔴 数据完整性）Session.remove 不完整 → 孤儿子会话
+- Rust：`oc-core/src/session/store.rs:557-562` 仅发布 `session.deleted`；`oc-server/handlers/session.rs:505-516` handler 直调 store.remove；projector（`session/projector.rs:148-152`）只删 session_v2 行。`execution.await_idle` 存在（handlers/session.rs:1542 他处使用）但 remove 路径未调用。
+- Ref：`packages/core/src/session.ts:367-377` interrupt→awaitIdle→transport.close→**递归删子会话**→environments.clear→bus.remove。
+- 影响：删除运行中会话不先中断/等待；子会话（parent_id 指向已删父）成孤儿行；environments 不清理。bus map 清理半边已有反应式等价物（`bus/routing.rs:125,168` 对 session.deleted）。
+- 修法提示：remove 前置 interrupt+awaitIdle；递归收集 parent_id 后代一并删除；补 environments 清理。
+
+## G-80 ❌（🔴 指令面泄漏）`<available_skills>` 缺 permission deny 过滤
+- Rust：`session/runner/context.rs:678-704` filter 仅看 `description.is_some() && auto_invoke != Some(false)`，无 `Permission.evaluate("skill", id)`（对比同文件 :1587 `mcp_guidance_source` 显式收 permissions——照抄该模式即可）。
+- Ref：`packages/core/src/skill.ts:33-34`（`available()` 过滤 `effect !== "deny"`）。
+- 影响：被 deny 的技能仍进系统提示，模型调用后才被工具层拒绝，浪费一轮工具调用。
+
+## G-81 ❌ Vercel AI Gateway gatewayProtocol 缺失
+- Ref：`packages/ai/src/protocols/utils/gateway-protocol.ts:29-90`（`providerOptions.gateway` 注入请求体 + finish 事件合并 `provider_metadata.gateway` usage/cost）+ `providers/vercel-ai-gateway.ts`。
+- Rust：grep 全 oc-ai/oc-core 仅见 cache_policy.rs:50 / customization.rs:303 的缓存与 auth 处理；`variant.rs:861 vercel_gateway` 只做 thinking 变体折叠，无 body 注入、无 finish 网关 metadata 合并。
+- 影响：gateway 路由选项（caching/order/models 等）不下发；finish 事件丢失网关侧 usage/cost（计费可观测缺口）。
+
+## G-82 ⚠️ tool.progress 不回写 LlmEventPublisher（死代码机制）
+- Rust：`engine/mod.rs:2273-2288` ProgressFn 直发 bus；`session/runner/publisher.rs:867-881` 的 `progress()`（记录 + 发布）**全仓零生产调用点**；而 `publisher.rs:962-977` failureSnapshot 与 subagent aborted `(sessionID: …)` 后缀都依赖 `tool.progress` 已记录。
+- Ref：`session/runner/publish-llm-event.ts:562-572`（progress 先记录再发布）、:336,352-355。
+- 影响：live `session.tool.failed` 恒缺进度元数据；subagent 中止错误永远不带 `(sessionID: …)` 后缀（仅 stale 清算路径有）。易修：engine 的 ProgressFn 改走（或同时调用）publisher.progress。注意 G-74 只覆盖"发事件"半边，本条是"记录"半边。
+
+## G-83 ⚠️ which-key 面板：11 条绑定为死表
+- Rust：`oc-tui-core/src/keymap/table.rs:805-815` 注册 11 条 which-key 绑定；唯一"消费者"是 `oc-tui/components/command_palette.rs:3187-3197` 显式吞键无操作（注释自认 "registered-but-surfaceless"）。
+- Ref 背景：TUI 自身也无消费者——面板由 `@opentui/keymap` 库 `createDefaultOpenTuiKeymap` 提供（`context/keymap.tsx:13,66`）；Rust 自研 keymap 未复刻该 addon。
+- 影响：ctrl+alt+k 等 11 组键被静默吞掉、无帮助面板。决策项：要么补面板，要么删绑定并在文档声明取舍（与 G-29 同类）。
+
+## G-84 ❌ alibaba-responses 专用适配器缺失
+- Ref：`packages/ai/src/protocols/alibaba-responses.ts`（96 行：`enable_thinking`/`previous_response_id`/`conversation` 注入、named tool_choice→`allowed_tools` 变换、`web_search`/`web_extractor`/`code_interpreter` 托管工具 onDone 还原）。
+- Rust：`provider_catalog/variant.rs:1089` 将 `alibaba/responses` 归并到通用 `openai_responses`；`enable_thinking` 仅 chat 路径（openai_chat.rs:2992）、`allowed_tools` 仅 provider options 直读（open_responses.rs:1114-1120）、`web_extractor` 全仓零命中。
+- 影响：阿里 Model Studio responses 面上 thinking 开关、会话续传、命名工具强制、托管工具输出还原均不可用。（同类存疑：meta-responses / bedrock-mantle responses 也归并到通用路径，见 L5 报告。）
+
+## G-85 ⚠️ read 工具 alternatePath 缺 NFC 归一
+- Rust：`tool/read.rs:790-798` canonical 仅做 NBSP/弯引号替换，缺 `name.normalize("NFC")` 前置。
+- Ref：`tool/plugin/read.ts:139-143`（先 NFC 再替换）。
+- 影响：macOS NFD 分解形式文件名与用户 NFC 输入无法互配 → alternatePath 静默失配报 not found。修法：canonical 前加 unic-normal NFC。
+
+## G-86 ⚠️ opencode.models 工具 own_provider 未接线
+- Rust：`tool/opencode_tools.rs:518` 注册时 `Mutex::new(None)`；:442 执行时读取；全仓无生产回填点（仅 tests 预填）。Ref：`tool/plugin/opencode.ts:134-197` 按 session.model.providerID 排 own-provider-first。
+- 影响："Your own provider comes first" 恒不生效（低危，输出排序）。
+
+## G-87 ⚠️（并入 G-32 备注）schema TODO 未明确子项
+- G-32 已裁决 v1/legacy、durable-event-manifest、pty-ticket 等；**未明确**的三个子项：event-manifest 索引、snapshot store types、`Worktree.adopt` 投影（`oc-schema/src/lib.rs:80-83`、`misc.rs:121-123`）。其中 Worktree.adopt 影响会话/项目归因（worktree.remove 后会话归属），建议单独评估是否升级。
+
+## G-88 ⚠️（安全语义）MCP OAuth RFC8707 resource 拒绝分支弱化
+- Ref：`mcp/oauth.ts:168-171` `checkResourceAllowed` 不通过即 `throw "Protected resource ${resource} does not cover ${identity}"`。
+- Rust：`mcp/oauth.rs:255-281` 仅 URL 推导；全 mcp 目录 grep `checkResource|does not cover` 零命中。
+- 影响：服务器返回 resource 与配置 identity 不一致时不再拒绝——token 可能绑定到身份不匹配的 resource。建议补齐拒绝分支 + 测试。
+
+## G-89 ⚠️ webfetch 超时语义分叉
+- Rust：`tool/webfetch.rs:110-112` 仅 reqwest client timeout；:232-235 超时以 `Nested(error)` 落 cause，message 恒 "Unable to fetch {url}"；convert 阶段不在预算内。
+- Ref：`webfetch.ts:146-148` `Effect.timeoutOrElse` 包整个流程，文案 `"Request timed out"`。
+- 影响：模型可见的超时反馈不同，重试行为可能漂移。修法：外层 timeout 包全流程并输出 ref 文案。
+
+## G-90 ⚠️ patch formatter 阶段静默容错
+- Rust：`tool/patch.rs:490-493` read 失败 `continue`；:497-498 formatter sync 失败仅 `unwrap_or(current.text)`。Ref：`patch.ts:261,265-267` 分别 `fail("Failed to read/sync ${target}")`。
+- 影响：部分失败时模型看到成功但 diff 缺格式化内容。
+
+## G-91 ⚠️ session.http.response hook 的 request 回传为空
+- Rust：`session/runner/model_request.rs:1128-1133` response 事件 `request` 硬编码空（url/method/headers/body）。Ref：`model-request.ts:340` `request: before.request` 完整回传。
+- 影响：审计/重放类插件读不到触发请求。修法：把 before 的 request 快照透传。
+
+## G-92 ⚠️ util 基础设施分裂（glob brace/extglob + MIME 三处漂移 + Windows spawn/npm）
+- glob：`oc-util/src/glob.rs:7-8` 自认 "Braces and extglobs are not supported"（ref minimatch 支持）；:10-11 Glob.scan "deferred"——ignore 配置含 `{foo,bar}` 等模式时语义分叉。
+- MIME：`FSUtil.mimeType` 仅落在 `oc-server/assets.rs:237-239`，另 `tool/read.rs:138`、`oc-tui/composer/attachment.rs:23` 各有私有表——三处漂移风险，应收敛为单一 util。
+- Windows：cross-spawn-spawner（.cmd shim/PATHEXT/shebang）与 npm.ts（npm_execpath 探测）未整体移植——非 Windows 目标裁决可挂靠 G-8/G-17，但插件安装/updater 在 Windows 是已知分歧面。
+
+## 第八轮勘误（经核验驳回，勿再立项）
+
+- ~~迁移 journal id 不一致~~：`migrations.rs:205`=`20260410174513_workspace-name`、`:287`=`20260511173437_session-metadata`，与 ref 文件名逐一相同（`_workspace` 是另一条 20260225215848 迁移，双方同名存在）。初报对照错位。
+- ~~models-dev 默认不刷新~~：`EngineOptions.catalog_fetch=false` 是 hermetic 默认，生产 boot **无条件置 true**（`boot.rs:309`），`OPENCODE_DISABLE_MODELS_FETCH` truthy→off 与 ref `fetch: !truthy(...)` 对齐（boot.rs:329）。
+- ~~event-logger 缺失~~：已移植（`boot.rs:160-190` `event_logger_line`/`attach_event_logger`，:376-382 生产安装，boot.rs:1487-1545 测试）。
+- ~~account 表持久化缺失~~：三表全移植（`migrations.rs:140,162-183` + `schema.rs:472-498` + bootstrap 建表）。
+- ~~MCP stdio BUN_BE_BUN 仅测试断言~~：生产已注入（`mcp/client.rs:1067-1079` `stdio_overlay`，:1158 生产 spawn 路径调用）。
+
+## 第八轮判定汇总
+核验 21 项：确认立项 14（G-79..G-92，其中 🔴 数据/安全级 2：G-79、G-80；安全语义 1：G-88）；驳回 5（含第八轮勘误 5 条）；已追踪 2（G-8、G-13）。优先级建议：G-79 > G-80 > G-82 ≈ G-88 > G-81 > G-84 > G-91 > G-85 > G-89 ≈ G-90 > G-83（决策项）> G-86 > G-87 > G-92。
+
 过时注释清理：已完成（2026-10-31 第六轮同日）——app.rs:8427/store.rs:7089/:14996（G-6 residual，共 3 处 + app.rs:7340）、proxy.rs 模块头/`:318`/`:616`/`:661`（G-8 residual + 失效的 webpki 一致性声明，改为指向 G-26 决策）、project.rs:1103-1105（插件 strategy 已支持，指向 GuestWorktreeStrategy）、environment/stdio.rs 模块头与 `StopChild` doc（SIGTERM 措辞改为与 `start_kill` 实现一致的"immediate SIGKILL + bounded reap wait"）。均为注释级修改，无行为变化；oc-ai 的 fmt 差异为 llm.rs 既有问题，与本次无关。
+
+---
+
+# 第八轮 burndown 收口（2026-11-01，gap-burndown-5）
+
+> G-79..G-92 全部 14 项经 lanes A-G 串行落地并 fast-forward 合并 main（abac5af / 8a53326 / 981180a / 45c7358 / 7cfcd4e / fddac63 / 72a6422）。全程 worktree 隔离（`.worktrees/`，合并后 target 与 worktree 均已回收）、dev-gate 单入口、nextest 未过滤验证、日志落盘 `.test-logs/*-lane[ABCDEFG].log`。各 lane 报告含字面 `Summary:` 行与 `git log -1` 落地证明。
+
+- **G-79 ✅（laneA，abac5af）**：新增 `oc_core::session::remove_tree`（session/mod.rs）——interrupt → 有界 awaitIdle（10s timeout，删除不受 drain 卡死挟持，理由代码内注明）→ 按 parent_id 递归删后代（子先父后）→ session_env.clear → store.remove/session.deleted；DELETE handler 改调 remove_tree。transport.close 无独立调用：drain 中断 unwind 已关传输通道（drain.rs close_transport），代码内注释说明。测试：递归删除、先中断后删（wedged drain 证序）、HTTP wire 父/子/孙 404。
+- **G-80 ✅（laneA，abac5af）**：`skill_guidance_source` 接收 Ruleset，经 `permission::evaluate("skill", id)` deny 过滤（镜像 mcp_guidance_source 模式 / ref skill.ts:33-34）。测试：denied skill 不入 `<available_skills>`。
+- **G-88 ✅（laneB，8a53326）**：MCP OAuth RFC8707 resource 覆盖校验——`check_resource_allowed`（origin 相等 + 请求路径长度 ≥ 配置路径 + 尾斜杠填充前缀比较，`/api` 不覆盖 `/api123`）+ `validate_resource_url`（缺失 resource → 配置 identity；不覆盖 → `Err("Protected resource {resource} does not cover {identity}")`），接入 discover。测试覆盖通过/拒绝两侧全矩阵。
+- **G-81 ✅（laneC，981180a）**：`protocols/utils/gateway_protocol.rs`（GatewayProtocol 包装：三 API prepare、`{...upstream, gateway}` body 注入、跨帧 `merge_json_records` 合并 gateway usage/cost 到 finish 事件含 on_halt）+ `protocols/vercel_gateway.rs`（三条路由工厂 + x-session-affinity）+ facade `ProtocolFamily::VercelGateway` 接线与快照断言。
+- **G-84 ✅（laneC，981180a）**：`protocols/alibaba_responses.rs` 专有协议（enable_thinking / previous_response_id / conversation / named tool_choice→allowed_tools / native.alibaba 三托管工具 onDone 还原含 web_extractor item 恢复）+ `ProtocolFamily::AlibabaResponses` 路由（variant.ts:571 侧映射核对无需求改）。**laneC 顺带发现 meta-responses 同族缺口** → laneE 收口。
+- **G-82 ✅（laneD，45c7358）**：`publisher::ProgressLog` 共享记录表；engine 五处 ProgressFn 点先记录后发布（publish-llm-event.ts:562-572 对位）；failureSnapshot 与 subagent aborted `(sessionID: …)` 后缀消费记录，settle 时清理。测试：tool.failed 携带 progress。
+- **G-85 ✅（laneD，45c7358）**：read canonical() 前置 NFC 归一（unicode-normalization 0.1.26 最小引入）再 NBSP/弯引号替换。测试：NFD 落盘名 + NFC 请求互配。
+- **G-86 ✅（laneD，45c7358）**：`ModelsExecute` 携 SessionStore，执行时按 session.model.providerID 解析 own-provider-first（opencode.ts:134-142），engine 接线 tool_services.db。
+- **G-89 ✅（laneD，45c7358）**：webfetch 全流程（fetch+collect+convert）入 tokio timeout 预算，超时文案 "Request timed out"；reqwest client 超时改 +5s 兜底；非超时失败保留 url 文案。测试：stalled server 与 refused port 两分支。
+- **G-90 ✅（laneD，45c7358）**：patch formatter resync 读失败 → `fail("Failed to read {target}")`、sync 失败 → `fail("Failed to sync {target}")`；已删目标过滤出 resync 集合（patch.ts:256-258，全量跑撞出的回归同轮修复）。测试经 read-failing Files 包装。
+- **G-91 ✅（laneD，45c7358）**：response 事件经 per-interceptor-pair stash 回放 before-request 快照（url/method/headers/body）。测试：request hook 改写 URL 后 response hook 观察到整形后请求。
+- **G-83 ✅（laneF，fddac63，推荐方案=补面板）**：有界 which-key 面板——前缀键（如 `<leader>` ctrl+x）触发底部 overlay 列出后续键+表内标签（排序、12 行封顶，无 timeout/滚动面）；chord 完成/esc/未绑定续键关闭；`which-key.toggle`（ctrl+alt+k）真实派发根列表；其余 10 个 which-key.* 家族键维持 consumed no-op（有界端口不带面板 chrome，注释说明）。PTY 级验证：真实终端按 ctrl+x 断言标签渲染与关闭。
+- **G-87 ✅（laneG，72a6422）**：三子项逐一裁决——**Worktree.adopt 已实现**（`oc_schema::misc::worktree_adopt`：candidate 检查含 workspace 排除与显式 adopted 列表、ref 路径归一（`.`/`..` 折叠 + Windows 盘符大小写）、subpath 投影 + 6 单测）；event-manifest 索引**本已移植**（oc-server/event_manifest.rs + bus registry + drift 守卫，TODO 注明）；snapshot store types**文档化不移植**（ref 6 行 branded-ID 模块无 wire 消费者，实体 store 已在 oc-core/src/snapshot/）。
+- **G-92 ✅（laneG，72a6422，代码+文档双收口）**：三处私有 MIME 表收敛为 `oc_util::mime`（依赖方向核验：oc-util 零新依赖）；read.rs `.xml` 修正为 `application/xml`（原值对 npm mime-types 参照即漂移）；attachment 保留 ref 受限 allowlist 语义不变。glob brace/extglob 与 Windows cross-spawn/npm_execpath 以注释级"已知有界分歧"钉定（G-8/G-17 族）。
+- **meta-responses ✅（laneE，7cfcd4e，laneC 新发现同族项）**：`protocols/meta_responses.rs`（770 行忠实移植：native.meta web_search/image_generation 校验、signed-ID replay 变换（provider 执行的 image_generation 结果按 itemId 回放 raw item handle）、托管工具表、text-end annotations 合入 providerMetadata、completedItems 双键去重）+ `ProtocolFamily::MetaResponses` 路由（variant.rs 映射核对无需改）。
+
+## 第八轮 burndown 判定
+G-79..G-92 全部 ✅（G-83 采用补面板方案；G-87 三子项实现/已移植/文档化各一；G-92 代码收敛+分歧注释）。现存未关闭项维持既有文档化决策：G-28（有界 TSX shim）、G-32（v1/legacy 不移植，G-87 子项已并注）、G-12/G-13/G-16/G-17/G-38/G-39/G-40 ℹ️。
