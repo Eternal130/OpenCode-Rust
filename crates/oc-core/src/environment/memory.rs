@@ -374,6 +374,9 @@ impl MemoryDriver {
             stdio: std::sync::Arc::new(crate::environment::stdio::FailingStdioSpawner(
                 "The memory driver cannot spawn processes",
             )),
+            pty: std::sync::Arc::new(crate::environment::pty::FailingPtySpawner(
+                "The memory driver cannot spawn processes",
+            )),
         }
     }
 

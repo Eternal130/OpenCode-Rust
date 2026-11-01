@@ -7,6 +7,7 @@ pub mod exec_defaults;
 pub mod files;
 pub mod local;
 pub mod memory;
+pub mod pty;
 pub mod stdio;
 pub mod unavailable;
 pub mod workspace;
@@ -20,6 +21,10 @@ pub use files::{
 };
 pub use local::{make_local_driver, make_local_driver_default, HostSpawner, LocalFiles};
 pub use memory::MemoryDriver;
+pub use pty::{
+    FailingPtySpawner, LocalPtySpawner, PtyChild, PtyChildKiller, PtyMaster, PtySpawnError,
+    PtySpawnRequest, PtySpawned, PtySpawner,
+};
 pub use stdio::{
     BoxedReader, BoxedWriter, FailingStdioSpawner, LocalStdioSpawner, PipedProcess, StdioSpawner,
     StdioSpec, StopChild,
@@ -88,5 +93,16 @@ impl Environment {
     ) -> Result<Arc<dyn crate::environment::stdio::StdioSpawner>, String> {
         let driver = self.bind(location).await?;
         Ok(driver.stdio)
+    }
+
+    /// Resolved PTY provisioner for a location — the seam the pty
+    /// session machine (and its server handler) spawns terminals
+    /// through (G-1 `pty` capability on the Driver).
+    pub async fn pty(
+        &self,
+        location: &LocationRef,
+    ) -> Result<Arc<dyn crate::environment::pty::PtySpawner>, String> {
+        let driver = self.bind(location).await?;
+        Ok(driver.pty)
     }
 }
