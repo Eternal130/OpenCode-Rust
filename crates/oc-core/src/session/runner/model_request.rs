@@ -1080,11 +1080,21 @@ fn http_interceptors(
     kind: crate::hooks::SessionRequestKind,
 ) -> oc_ai::route::transport::HttpInterceptors {
     let scope = TransportHookScope { session_id, agent, model, kind };
+    // G-91 — the response event carries the BEFORE-request snapshot
+    // (model-request.ts:340 `request: before.request`): the shaped
+    // request from the request hook is stashed here so the paired
+    // response interceptor can replay it. Intercepted transport runs
+    // on_request → handler → on_response sequentially per request, so
+    // the stash is always the immediately-preceding request.
+    let before_request: Arc<parking_lot::Mutex<Option<crate::hooks::HttpRequest>>> =
+        Arc::new(parking_lot::Mutex::new(None));
     let request_hooks = Arc::clone(&hooks);
     let request_scope = scope.clone();
+    let request_stash = Arc::clone(&before_request);
     let on_request = Arc::new(move |request: oc_ai::route::transport::TransportRequest| {
         let hooks = Arc::clone(&request_hooks);
         let scope = request_scope.clone();
+        let request_stash = Arc::clone(&request_stash);
         Box::pin(async move {
             let event = crate::hooks::SessionHttpRequestEvent {
                 session_id: scope.session_id.clone(),
@@ -1102,6 +1112,13 @@ fn http_interceptors(
                 .dispatch_session_http_request(event)
                 .await
                 .map_err(|error| error.to_string())?;
+            // G-91 — stash the shaped request for the response event.
+            *request_stash.lock() = Some(crate::hooks::HttpRequest {
+                url: shaped.request.url.clone(),
+                method: shaped.request.method.clone(),
+                headers: shaped.request.headers.clone(),
+                body: shaped.request.body.clone(),
+            });
             Ok(oc_ai::route::transport::TransportRequest {
                 url: shaped.request.url,
                 method: shaped.request.method,
@@ -1116,21 +1133,30 @@ fn http_interceptors(
     });
     let response_hooks = Arc::clone(&hooks);
     let response_scope = scope;
+    let response_stash = Arc::clone(&before_request);
     let on_response = Arc::new(move |response: oc_ai::route::transport::HttpResponseSnapshot| {
         let hooks = Arc::clone(&response_hooks);
         let scope = response_scope.clone();
+        let response_stash = Arc::clone(&response_stash);
         Box::pin(async move {
+            // G-91 — `request: before.request` (model-request.ts:340);
+            // an absent stash (a response without a paired request hook)
+            // keeps the empty payload.
+            let request = response_stash
+                .lock()
+                .take()
+                .unwrap_or_else(|| crate::hooks::HttpRequest {
+                    url: String::new(),
+                    method: String::new(),
+                    headers: BTreeMap::new(),
+                    body: Value::Null,
+                });
             let event = crate::hooks::SessionHttpResponseEvent {
                 session_id: scope.session_id.clone(),
                 agent: scope.agent.clone(),
                 model: scope.model.clone(),
                 kind: scope.kind,
-                request: crate::hooks::HttpRequest {
-                    url: String::new(),
-                    method: String::new(),
-                    headers: BTreeMap::new(),
-                    body: Value::Null,
-                },
+                request,
                 response: crate::hooks::HttpResponse {
                     status: response.status,
                     headers: response.headers,
@@ -1679,5 +1705,83 @@ mod aisdk_dispatch_tests {
             .await
             .expect("prepare");
         assert!(*saw_sdk.lock().unwrap(), "the sdk event's handle reached the language event");
+    }
+}
+
+#[cfg(test)]
+mod http_interceptor_tests {
+    // G-91 — the `session.http.response` event carries the BEFORE-request
+    // snapshot (`request: before.request`, model-request.ts:340), i.e. the
+    // shaped request the paired request hook produced.
+    use super::http_interceptors;
+    use crate::hooks::{
+        fn_hook, HookOptions, HookRegistry, SessionHttpRequestEvent, SessionHttpResponseEvent,
+    };
+    use oc_schema::id::{AgentId, SessionId};
+
+    #[tokio::test]
+    async fn response_event_carries_before_request_snapshot() {
+        let registry = HookRegistry::new();
+        let scope = crate::hooks::HookScope::new();
+
+        // The request hook rewrites the URL — the response event must see
+        // the SHAPED request, not the raw outbound one.
+        let registration = futures::executor::block_on(registry.register_session_http_request(
+            fn_hook(|event: &mut SessionHttpRequestEvent| {
+                event.request.url = "https://shaped.example/v1/chat".into();
+                event.request.headers.insert("x-shaped".into(), "yes".into());
+                Ok(())
+            }),
+            HookOptions::default(),
+        ));
+        scope.track(registration);
+
+        let seen: std::sync::Arc<std::sync::Mutex<Option<crate::hooks::HttpRequest>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(None));
+        let capture = std::sync::Arc::clone(&seen);
+        let registration = futures::executor::block_on(registry.register_session_http_response(
+            fn_hook(move |event: &mut SessionHttpResponseEvent| {
+                *capture.lock().unwrap() = Some(event.request.clone());
+                Ok(())
+            }),
+            HookOptions::default(),
+        ));
+        scope.track(registration);
+
+        let intercepts = http_interceptors(
+            std::sync::Arc::new(registry),
+            SessionId::parse("ses_g91").expect("session id"),
+            AgentId::parse("build"),
+            oc_schema::model::Ref {
+                provider_id: oc_schema::id::ProviderId::parse("parityfake"),
+                id: oc_schema::id::ModelId::parse("fake-model"),
+                variant: None,
+            },
+            crate::hooks::SessionRequestKind::Primary,
+        );
+
+        let shaped = (intercepts.on_request)(oc_ai::route::transport::TransportRequest {
+            method: "POST".into(),
+            url: "https://raw.example/v1".into(),
+            headers: vec![("x-raw".into(), "1".into())],
+            body: Default::default(),
+        })
+        .await
+        .expect("request interceptor");
+        assert_eq!(shaped.url, "https://shaped.example/v1/chat");
+
+        let response = (intercepts.on_response)(oc_ai::route::transport::HttpResponseSnapshot {
+            status: 200,
+            headers: std::collections::BTreeMap::new(),
+            body: b"{}".to_vec(),
+        })
+        .await
+        .expect("response interceptor");
+        assert_eq!(response.status, 200);
+
+        let request = seen.lock().unwrap().clone().expect("response hook fired");
+        assert_eq!(request.url, "https://shaped.example/v1/chat");
+        assert_eq!(request.method, "POST");
+        assert_eq!(request.headers.get("x-shaped").map(String::as_str), Some("yes"));
     }
 }
