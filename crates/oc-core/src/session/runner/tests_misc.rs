@@ -868,6 +868,54 @@ fn runner_mcp_guidance_filters_by_permission() {
     assert!(visible_mcp_summaries(&raw, &deny("*")).is_empty());
 }
 
+/// G-80: `skill.available` (ref skill.ts:33-34) filters skills whose
+/// `Permission.evaluate("skill", id)` effect is `deny` — a denied skill
+/// never reaches the `<available_skills>` block.
+#[test]
+fn runner_skill_guidance_filters_denied_skills() {
+    use crate::session::runner::context::skill_guidance_source;
+    use oc_schema::permission::{Effect, Rule, Ruleset};
+    use oc_schema::skill::Skill;
+
+    let skill = |id: &str| Skill {
+        id: oc_schema::id::SkillId::parse(id).unwrap(),
+        name: oc_schema::id::SkillName::parse("Skill").unwrap(),
+        description: Some("does things".into()),
+        auto_invoke: None,
+        path: oc_schema::common::AbsolutePath::parse("/tmp/skill".into()).unwrap(),
+        content: String::new(),
+    };
+    let skills = Arc::new(vec![skill("allowed"), skill("blocked")]);
+
+    // Baseline: empty ruleset evaluates `ask` — both visible.
+    let source = skill_guidance_source(skills.clone(), Ruleset::new());
+    let crate::session::runner::context::ReadOutcome::Value(value) = (source.read)() else {
+        panic!("expected a value");
+    };
+    let ids: Vec<&str> =
+        value.as_array().unwrap().iter().map(|s| s["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["allowed", "blocked"]);
+
+    // `deny skill blocked` removes only the denied entry.
+    let rules = Ruleset::from_iter([
+        Rule { action: "skill".into(), resource: "blocked".into(), effect: Effect::Deny },
+    ]);
+    let source = skill_guidance_source(skills.clone(), rules);
+    let crate::session::runner::context::ReadOutcome::Value(value) = (source.read)() else {
+        panic!("expected a value");
+    };
+    let ids: Vec<&str> =
+        value.as_array().unwrap().iter().map(|s| s["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["allowed"]);
+
+    // Denying every skill = observed absence (the guidance key drops out).
+    let rules = Ruleset::from_iter([
+        Rule { action: "skill".into(), resource: "*".into(), effect: Effect::Deny },
+    ]);
+    let source = skill_guidance_source(skills, rules);
+    assert!(matches!((source.read)(), crate::session::runner::context::ReadOutcome::Removed));
+}
+
 // -- session.retry mutation write-back (D-03: by-reference parity) ---------
 
 /// v2's retry caller (retry.ts:80-87) reads its LOCAL event after the

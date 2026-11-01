@@ -122,9 +122,45 @@ async fn handlers_session_create_get_remove_round_trip() {
     }
 }
 
+/// G-79: DELETE removes the whole descendant tree (ref session.ts:367-377)
+/// — no orphaned children with a dangling parent_id.
 #[tokio::test]
-async fn handlers_session_list_cursor_round_trip() {
+async fn handlers_session_remove_deletes_descendants() {
     let server = boot().await;
+    let client = &server.client;
+
+    let parent = create_session(client, "parent").await;
+    let child = client
+        .session()
+        .create(&SessionCreateBody {
+            title: Some("child".to_owned()),
+            parent_id: Some(parent.id.clone()),
+            ..Default::default()
+        })
+        .await
+        .expect("child create");
+    let grandchild = client
+        .session()
+        .create(&SessionCreateBody {
+            title: Some("grandchild".to_owned()),
+            parent_id: Some(child.id.clone()),
+            ..Default::default()
+        })
+        .await
+        .expect("grandchild create");
+    let survivor = create_session(client, "survivor").await;
+
+    client.session().remove(&parent.id).await.expect("remove parent");
+
+    for gone in [&parent.id, &child.id, &grandchild.id] {
+        let error = client.session().get(gone).await.expect_err("deleted with the tree");
+        assert_api(&error, 404, "SessionNotFoundError");
+    }
+    client.session().get(&survivor.id).await.expect("unrelated session survives");
+}
+
+#[tokio::test]
+async fn handlers_session_list_cursor_round_trip() {    let server = boot().await;
     let client = &server.client;
 
     for index in 0..3 {

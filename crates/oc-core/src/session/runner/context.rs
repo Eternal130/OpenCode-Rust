@@ -673,15 +673,24 @@ fn decode_summaries(value: &serde_json::Value) -> Vec<crate::reference::instruct
 }
 
 /// `core/skill-guidance` (skill/instructions.ts): the available list
-/// (`description` present, autoinvoke enabled), sorted by id; an empty
-/// list is an observed absence.
-fn skill_guidance_source(
+/// (`description` present, autoinvoke enabled, permission `skill` not
+/// denied — ref `skill.available`, skill.ts:33-34), sorted by id; an
+/// empty list is an observed absence.
+pub(crate) fn skill_guidance_source(
     skills: Arc<dyn Fn() -> Vec<oc_schema::skill::Skill> + Send + Sync>,
+    permissions: Ruleset,
 ) -> InstructionSource {
-    let summaries = |skills: &[oc_schema::skill::Skill]| -> Vec<serde_json::Value> {
+    let summaries = |skills: &[oc_schema::skill::Skill], permissions: &Ruleset| -> Vec<serde_json::Value> {
+        let rulesets = std::slice::from_ref(permissions);
         let mut visible: Vec<serde_json::Value> = skills
             .iter()
             .filter(|skill| skill.description.is_some() && skill.auto_invoke != Some(false))
+            // `Permission.evaluate("skill", id).effect !== "deny"` — a
+            // denied skill never reaches the `<available_skills>` block.
+            .filter(|skill| {
+                crate::permission::evaluate("skill", skill.id.as_str(), rulesets).effect
+                    != Effect::Deny
+            })
             .map(|skill| {
                 serde_json::json!({
                     "id": skill.id.as_str(),
@@ -732,7 +741,7 @@ fn skill_guidance_source(
     InstructionSource {
         key: "core/skill-guidance".into(),
         read: Box::new(move || {
-            let visible = summaries(&(skills)());
+            let visible = summaries(&(skills)(), &permissions);
             if visible.is_empty() {
                 ReadOutcome::Removed
             } else {
@@ -1586,7 +1595,7 @@ impl SessionContext {
             codemode_source(Arc::clone(&self.tools)),
             mcp_guidance_source(Arc::clone(&self.deps.mcp), permissions.clone()),
             reference_guidance_source(Arc::clone(&self.deps.references)),
-            skill_guidance_source(Arc::clone(&self.deps.skills)),
+            skill_guidance_source(Arc::clone(&self.deps.skills), permissions.clone()),
             discovery_source(Arc::clone(&self.deps.discovery)),
             date_source(Arc::clone(&self.deps.clock)),
             environment_source(Arc::clone(&self.deps.environment)),
