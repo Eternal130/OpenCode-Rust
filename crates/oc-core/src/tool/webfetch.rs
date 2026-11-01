@@ -4,17 +4,16 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::html_markdown::{convert_html_to_markdown, extract_text_from_html, MAX_BYTES};
+use super::html_markdown::{MAX_BYTES, convert_html_to_markdown, extract_text_from_html};
 use crate::permission::{AssertInput, PermissionError};
 use crate::tool::{
-    permission_cause, BuiltinTool, ToolExecuteWithContext, ToolFailure, ToolOutcome, ToolServices,
+    BuiltinTool, ToolExecuteWithContext, ToolFailure, ToolOutcome, ToolServices, permission_cause,
 };
 
 pub const DEFAULT_TIMEOUT_SECONDS: u64 = 30;
 pub const MAX_TIMEOUT_SECONDS: u64 = 120;
 
-const OPENCODE_USER_AGENT: &str =
-    "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko); compatible; OpenCode-User/1.0; +https://opencode.ai";
+const OPENCODE_USER_AGENT: &str = "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko); compatible; OpenCode-User/1.0; +https://opencode.ai";
 
 pub fn description() -> String {
     "Fetch content from an HTTP or HTTPS URL and return it as text, markdown, or HTML. Markdown is the default.\n\nUse a more targeted tool when one is available. This tool is read-only. Large text results may be replaced with a preview while the complete output is retained in managed storage.".to_string()
@@ -22,9 +21,13 @@ pub fn description() -> String {
 
 fn accept_header(format: &str) -> &'static str {
     match format {
-        "markdown" => "text/markdown;q=1.0, text/x-markdown;q=0.9, text/plain;q=0.8, text/html;q=0.7, */*;q=0.1",
+        "markdown" => {
+            "text/markdown;q=1.0, text/x-markdown;q=0.9, text/plain;q=0.8, text/html;q=0.7, */*;q=0.1"
+        }
         "text" => "text/plain;q=1.0, text/markdown;q=0.9, text/html;q=0.8, */*;q=0.1",
-        _ => "text/html;q=1.0, application/xhtml+xml;q=0.9, text/plain;q=0.8, text/markdown;q=0.7, */*;q=0.1",
+        _ => {
+            "text/html;q=1.0, application/xhtml+xml;q=0.9, text/plain;q=0.8, text/markdown;q=0.7, */*;q=0.1"
+        }
     }
 }
 
@@ -204,6 +207,12 @@ impl ToolExecuteWithContext for WebFetchExecute {
                     )),
                 });
             }
+            // AUD-19② (G-98): schema-style validation, never clamping
+            // (webfetch.ts:29), and BEFORE the permission assert — the
+            // ref's input schema rejects an invalid timeout at decode
+            // time, so the user never sees a permission prompt for a
+            // call that would fail afterwards anyway.
+            let timeout = resolve_timeout(input.timeout).map_err(ToolFailure::message)?;
             services
                 .permission
                 .assert(AssertInput {
@@ -217,8 +226,7 @@ impl ToolExecuteWithContext for WebFetchExecute {
                         // ref webfetch.ts:128 `metadata: input` — the FULL
                         // input record (url, format, timeout), not a
                         // hand-picked subset (G-74).
-                        serde_json::from_value(permission_metadata(&input))
-                            .unwrap_or_default(),
+                        serde_json::from_value(permission_metadata(&input)).unwrap_or_default(),
                     ),
                     source: Some(oc_schema::permission::Source::Tool {
                         message_id: context.message_id.clone(),
@@ -231,39 +239,33 @@ impl ToolExecuteWithContext for WebFetchExecute {
                     cause: Some(permission_cause(&error)),
                 })?;
 
-            // AUD-19②: schema-style validation, never clamping
-            // (webfetch.ts:29).
-            let timeout = resolve_timeout(input.timeout).map_err(ToolFailure::message)?;
             // G-89 — ref webfetch.ts:146-148: `Effect.timeoutOrElse` wraps
             // the WHOLE fetch + collect flow; an elapsed budget fails with
             // "Request timed out" (not the reqwest client timeout's
             // per-request error). Convert runs inside the same budget;
             // non-timeout failures keep the url-specific message.
-            let (content_type, output) = match tokio::time::timeout(
-                Duration::from_secs(timeout),
-                async {
-                    let (body, content_type) =
-                        fetch(&input.url, &input.format, timeout).await.map_err(|error| {
-                            ToolFailure {
-                                message: format!("Unable to fetch {}", input.url),
-                                cause: Some(super::FailureCause::Nested(error)),
-                            }
+            let (content_type, output) =
+                match tokio::time::timeout(Duration::from_secs(timeout), async {
+                    let (body, content_type) = fetch(&input.url, &input.format, timeout)
+                        .await
+                        .map_err(|error| ToolFailure {
+                            message: format!("Unable to fetch {}", input.url),
+                            cause: Some(super::FailureCause::Nested(error)),
                         })?;
                     let content = String::from_utf8_lossy(&body).to_string();
                     let output = convert(&content, &content_type, &input.format);
                     Ok::<_, ToolFailure>((content_type, output))
-                },
-            )
-            .await
-            {
-                Ok(result) => result?,
-                Err(_elapsed) => {
-                    return Err(ToolFailure {
-                        message: "Request timed out".into(),
-                        cause: Some(super::FailureCause::Nested("Request timed out".into())),
-                    })
-                }
-            };
+                })
+                .await
+                {
+                    Ok(result) => result?,
+                    Err(_elapsed) => {
+                        return Err(ToolFailure {
+                            message: "Request timed out".into(),
+                            cause: Some(super::FailureCause::Nested("Request timed out".into())),
+                        });
+                    }
+                };
             Ok(ToolOutcome {
                 content: vec![oc_schema::tool::Content::Text { text: output.clone() }],
                 metadata: Some(
@@ -327,16 +329,15 @@ mod tests {
     /// (ref webfetch.ts:128 `metadata: input`) — timeout included.
     #[test]
     fn tool_webfetch_permission_metadata_carries_full_input() {
-        let explicit = Input { url: "https://example.com".into(), format: "html".into(), timeout: Some(9) };
+        let explicit =
+            Input { url: "https://example.com".into(), format: "html".into(), timeout: Some(9) };
         assert_eq!(
             super::permission_metadata(&explicit),
             serde_json::json!({ "url": "https://example.com", "format": "html", "timeout": 9 })
         );
-        let defaulted = Input { url: "https://example.com".into(), format: "markdown".into(), timeout: None };
-        assert_eq!(
-            super::permission_metadata(&defaulted)["timeout"],
-            serde_json::Value::Null
-        );
+        let defaulted =
+            Input { url: "https://example.com".into(), format: "markdown".into(), timeout: None };
+        assert_eq!(super::permission_metadata(&defaulted)["timeout"], serde_json::Value::Null);
     }
 
     #[test]
@@ -384,6 +385,58 @@ mod tests {
         let mut empty = reqwest::header::HeaderMap::new();
         empty.insert("x-other", reqwest::header::HeaderValue::from_static("1"));
         assert!(!content_length_exceeds(&empty, MAX_BYTES));
+    }
+
+    /// G-98 — invalid timeout is rejected BEFORE the permission assert:
+    /// with webfetch denied, an invalid timeout must surface the schema
+    /// error (never the permission prompt path), while a valid timeout
+    /// still reaches the (denied) assert. In the ref, the input schema
+    /// (webfetch.ts:29) rejects at decode time, before permission.
+    #[tokio::test]
+    async fn tool_webfetch_invalid_timeout_fails_before_permission() {
+        let harness =
+            crate::tool::tests::harness_with(crate::tool::tests::deny_action("webfetch")).await;
+        let hooks = Arc::new(crate::hooks::HookRegistry::new());
+        crate::tool::register_builtin(
+            &harness.tools,
+            &hooks,
+            &harness.services,
+            crate::tool::webfetch::tool(),
+        )
+        .expect("register webfetch");
+
+        for timeout in [0u64, MAX_TIMEOUT_SECONDS + 1] {
+            let failure = crate::tool::tests::call(
+                &harness.tools,
+                "webfetch",
+                serde_json::json!({ "url": "https://example.com", "timeout": timeout }),
+            )
+            .await
+            .expect_err("invalid timeout rejected");
+            let message = failure.message();
+            assert!(
+                message.contains("Invalid arguments") && message.contains("timeout"),
+                "expected schema rejection for timeout={timeout}, got: {message}"
+            );
+            assert!(
+                !message.contains("Unable to fetch"),
+                "permission assert ran before timeout validation: {message}"
+            );
+        }
+
+        // A VALID timeout flows on to the (denied) permission assert.
+        let failure = crate::tool::tests::call(
+            &harness.tools,
+            "webfetch",
+            serde_json::json!({ "url": "https://example.com", "timeout": 5 }),
+        )
+        .await
+        .expect_err("permission denies webfetch");
+        let message = failure.message();
+        assert!(
+            message.contains("webfetch") && !message.contains("Invalid arguments"),
+            "expected the permission denial, got: {message}"
+        );
     }
 
     /// G-89 — the whole-flow budget (fetch + collect + convert,
