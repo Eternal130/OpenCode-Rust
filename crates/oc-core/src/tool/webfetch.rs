@@ -109,7 +109,13 @@ fn content_length_exceeds(headers: &reqwest::header::HeaderMap, maximum: usize) 
 
 async fn fetch(url: &str, format: &str, timeout: u64) -> Result<(Vec<u8>, String), String> {
     let client = oc_http::builder()
-        .timeout(Duration::from_secs(timeout))
+        // G-89 — the reqwest client timeout is a BACKSTOP above the
+        // whole-flow budget (execute wraps fetch+convert in a tokio
+        // timeout below, the port of webfetch.ts:146-148
+        // `Effect.timeoutOrElse`): the budget must fire first so the
+        // elapsed case surfaces as "Request timed out", not the
+        // client's per-request error.
+        .timeout(Duration::from_secs(timeout.saturating_add(5)))
         .build()
         .map_err(|error| error.to_string())?;
     let mut response = client
@@ -228,13 +234,36 @@ impl ToolExecuteWithContext for WebFetchExecute {
             // AUD-19②: schema-style validation, never clamping
             // (webfetch.ts:29).
             let timeout = resolve_timeout(input.timeout).map_err(ToolFailure::message)?;
-            let (body, content_type) =
-                fetch(&input.url, &input.format, timeout).await.map_err(|error| ToolFailure {
-                    message: format!("Unable to fetch {}", input.url),
-                    cause: Some(super::FailureCause::Nested(error)),
-                })?;
-            let content = String::from_utf8_lossy(&body).to_string();
-            let output = convert(&content, &content_type, &input.format);
+            // G-89 — ref webfetch.ts:146-148: `Effect.timeoutOrElse` wraps
+            // the WHOLE fetch + collect flow; an elapsed budget fails with
+            // "Request timed out" (not the reqwest client timeout's
+            // per-request error). Convert runs inside the same budget;
+            // non-timeout failures keep the url-specific message.
+            let (content_type, output) = match tokio::time::timeout(
+                Duration::from_secs(timeout),
+                async {
+                    let (body, content_type) =
+                        fetch(&input.url, &input.format, timeout).await.map_err(|error| {
+                            ToolFailure {
+                                message: format!("Unable to fetch {}", input.url),
+                                cause: Some(super::FailureCause::Nested(error)),
+                            }
+                        })?;
+                    let content = String::from_utf8_lossy(&body).to_string();
+                    let output = convert(&content, &content_type, &input.format);
+                    Ok::<_, ToolFailure>((content_type, output))
+                },
+            )
+            .await
+            {
+                Ok(result) => result?,
+                Err(_elapsed) => {
+                    return Err(ToolFailure {
+                        message: "Request timed out".into(),
+                        cause: Some(super::FailureCause::Nested("Request timed out".into())),
+                    })
+                }
+            };
             Ok(ToolOutcome {
                 content: vec![oc_schema::tool::Content::Text { text: output.clone() }],
                 metadata: Some(
@@ -336,8 +365,7 @@ mod tests {
     }
 
     #[test]
-    fn tool_webfetch_content_length_precheck() {
-        // AUD-19①: a declared Content-Length over the cap rejects without
+    fn tool_webfetch_content_length_precheck() {        // AUD-19①: a declared Content-Length over the cap rejects without
         // downloading (http-body.ts:11-15); under/at the cap, absent or
         // non-numeric headers fall through to the streamed cap.
         let headers = |value: &str| {
@@ -355,5 +383,64 @@ mod tests {
         let mut empty = reqwest::header::HeaderMap::new();
         empty.insert("x-other", reqwest::header::HeaderValue::from_static("1"));
         assert!(!content_length_exceeds(&empty, MAX_BYTES));
+    }
+
+    /// G-89 — the whole-flow budget (fetch + collect + convert,
+    /// webfetch.ts:146-148): an elapsed budget fails with the ref
+    /// message "Request timed out", while a refused connection keeps
+    /// the url-specific "Unable to fetch {url}".
+    #[tokio::test]
+    async fn tool_webfetch_timeout_budget_message() {
+        let harness = crate::tool::tests::harness().await;
+        // webfetch is an engine plugin (not in register_all) — register
+        // the leaf directly.
+        let hooks = Arc::new(crate::hooks::HookRegistry::new());
+        crate::tool::register_builtin(
+            &harness.tools,
+            &hooks,
+            &harness.services,
+            crate::tool::webfetch::tool(),
+        )
+        .expect("register webfetch");
+        // A server that accepts and then stalls (holds the socket open,
+        // never responds) — the budget must elapse first.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            if let Ok((stream, _)) = listener.accept() {
+                std::thread::sleep(std::time::Duration::from_secs(10));
+                drop(stream);
+            }
+        });
+        let stalled = format!("http://127.0.0.1:{port}/slow");
+        let failure = crate::tool::tests::call(
+            &harness.tools,
+            "webfetch",
+            serde_json::json!({ "url": stalled, "timeout": 1 }),
+        )
+        .await
+        .expect_err("budget elapses");
+        assert_eq!(failure.message(), "Request timed out");
+
+        // Non-timeout failures keep the url-specific message.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let refused = format!("http://127.0.0.1:{port}/x");
+        let failure = crate::tool::tests::call(
+            &harness.tools,
+            "webfetch",
+            serde_json::json!({ "url": refused, "timeout": 5 }),
+        )
+        .await
+        .expect_err("connection refused");
+        // Non-timeout failures keep the url-specific ToolFailure: the
+        // nested transport cause (carrying the url) surfaces, not the
+        // timeout message.
+        let message = failure.message();
+        assert!(
+            message.contains(&port.to_string()) && !message.contains("Request timed out"),
+            "unexpected refused message: {message}"
+        );
     }
 }
