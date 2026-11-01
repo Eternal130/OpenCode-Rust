@@ -484,18 +484,35 @@ async fn execute_patch(
     }
 
     // ---- formatter resync ---------------------------------------------------
+    // G-90 — ref patch.ts:258-267: a failed read or formatter sync is an
+    // EXPLICIT failure (`Failed to read ${target}` / `Failed to sync
+    // ${target}`), never a silent skip or a stale-text fallback.
     let mut formatted: std::collections::HashMap<PathBuf, String> =
         std::collections::HashMap::new();
     for (_, _, absolute) in &applied {
-        let Ok(current) = crate::file_mutation::read_text(services.files.as_ref(), absolute).await
-        else {
-            continue;
-        };
+        let current =
+            crate::file_mutation::read_text(services.files.as_ref(), absolute).await.map_err(
+                |error| {
+                    let error = std::io::Error::from(error);
+                    fail(
+                        &format!("Failed to read {}", absolute.display()),
+                        &error_message(&error),
+                        &applied.iter().map(|(_, r, _)| r.clone()).collect::<Vec<_>>(),
+                    )
+                },
+            )?;
         let text = if services.formatter.file(absolute) {
             crate::file_mutation::sync_text_bom(services.files.as_ref(), absolute, current.bom)
                 .await
                 .map(|content| content.text)
-                .unwrap_or(current.text)
+                .map_err(|error| {
+                    let error = std::io::Error::from(error);
+                    fail(
+                        &format!("Failed to sync {}", absolute.display()),
+                        &error_message(&error),
+                        &applied.iter().map(|(_, r, _)| r.clone()).collect::<Vec<_>>(),
+                    )
+                })?
         } else {
             current.text
         };
