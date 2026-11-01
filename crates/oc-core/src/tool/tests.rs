@@ -1435,6 +1435,131 @@ async fn tool_patch_moves_and_cumulative_updates() {
     );
 }
 
+/// G-90 — the patch formatter resync stage fails EXPLICITLY: a failed
+/// read (or formatter sync) surfaces "Failed to read {target}" /
+/// "Failed to sync {target}" (patch.ts:258-267), never a silent skip.
+struct ResyncFailsFiles {
+    armed: std::sync::atomic::AtomicBool,
+    /// Fail a post-arm read only after this many post-arm reads
+    /// succeeded (0 = the first post-arm read fails).
+    fail_after: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl crate::environment::Files for ResyncFailsFiles {
+    async fn read(
+        &self,
+        path: &str,
+        range: Option<crate::environment::Range>,
+    ) -> Result<crate::environment::ReadResult, crate::environment::FilesError> {
+        if self.armed.load(std::sync::atomic::Ordering::SeqCst) {
+            let seen = self.fail_after.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            if seen == 0 {
+                return Err(crate::environment::FilesError::failed(
+                    path,
+                    "resync read unavailable",
+                ));
+            }
+        }
+        crate::environment::LocalFiles.read(path, range).await
+    }
+
+    async fn write(&self, path: &str, bytes: &[u8]) -> Result<(), crate::environment::FilesError> {
+        let done = crate::environment::LocalFiles.write(path, bytes).await?;
+        self.armed.store(true, std::sync::atomic::Ordering::SeqCst);
+        Ok(done)
+    }
+
+    async fn stat(&self, path: &str) -> Result<crate::environment::FileInfo, crate::environment::FilesError> {
+        crate::environment::LocalFiles.stat(path).await
+    }
+
+    async fn list(&self, path: &str) -> Result<Vec<crate::environment::DirEntry>, crate::environment::FilesError> {
+        crate::environment::LocalFiles.list(path).await
+    }
+
+    async fn remove(&self, path: &str) -> Result<(), crate::environment::FilesError> {
+        crate::environment::LocalFiles.remove(path).await
+    }
+
+    async fn r#move(&self, from: &str, to: &str) -> Result<(), crate::environment::FilesError> {
+        crate::environment::LocalFiles.r#move(from, to).await
+    }
+
+    async fn mkdir(&self, path: &str) -> Result<(), crate::environment::FilesError> {
+        crate::environment::LocalFiles.mkdir(path).await
+    }
+}
+
+#[tokio::test]
+async fn tool_patch_resync_read_failure_is_explicit() {
+    let base = harness().await;
+    std::fs::write(base.dir.join("target.txt"), "before\n").expect("write");
+    let services = Arc::new(crate::tool::ToolServices {
+        files: Arc::new(ResyncFailsFiles {
+            armed: std::sync::atomic::AtomicBool::new(false),
+            fail_after: std::sync::atomic::AtomicUsize::new(0),
+        }),
+        ..(*base.services).clone_shape()
+    });
+    let tools = Arc::new(ToolRegistryState::new());
+    let hooks = Arc::new(crate::hooks::HookRegistry::new());
+    crate::tool::register_all(&tools, &hooks, &services).expect("register");
+    let failure = call(
+        &tools,
+        "patch",
+        serde_json::json!({
+            "patchText": "*** Begin Patch\n*** Update File: target.txt\n@@\n-before\n+after\n*** End Patch"
+        }),
+    )
+    .await
+    .expect_err("resync read fails");
+    let message = error_message(&failure);
+    assert!(message.starts_with("Failed to read "), "message: {message}");
+    assert!(message.ends_with(". Completed before failure: target.txt"), "message: {message}");
+}
+
+/// G-90 (formatter-sync leg) — a formatter whose `file()` claims the
+/// target but whose underlying resync read fails surfaces "Failed to
+/// sync {target}", not a silent `current.text` fallback.
+struct ClaimingFormatter;
+impl crate::formatter::Formatter for ClaimingFormatter {
+    fn set(&self, _formatter: crate::formatter::FormatterInfo) {}
+    fn remove(&self, _name: &str) {}
+    fn file(&self, _filepath: &Path) -> bool {
+        true
+    }
+}
+
+#[tokio::test]
+async fn tool_patch_resync_sync_failure_is_explicit() {
+    let base = harness().await;
+    std::fs::write(base.dir.join("target.txt"), "before\n").expect("write");
+    let services = Arc::new(crate::tool::ToolServices {
+        files: Arc::new(ResyncFailsFiles {
+            armed: std::sync::atomic::AtomicBool::new(false),
+            fail_after: std::sync::atomic::AtomicUsize::new(1),
+        }),
+        formatter: Arc::new(ClaimingFormatter),
+        ..(*base.services).clone_shape()
+    });
+    let tools = Arc::new(ToolRegistryState::new());
+    let hooks = Arc::new(crate::hooks::HookRegistry::new());
+    crate::tool::register_all(&tools, &hooks, &services).expect("register");
+    let failure = call(
+        &tools,
+        "patch",
+        serde_json::json!({
+            "patchText": "*** Begin Patch\n*** Update File: target.txt\n@@\n-before\n+after\n*** End Patch"
+        }),
+    )
+    .await
+    .expect_err("resync sync fails");
+    let message = error_message(&failure);
+    assert!(message.starts_with("Failed to sync "), "message: {message}");
+    assert!(message.ends_with(". Completed before failure: target.txt"), "message: {message}");
+}
+
 #[tokio::test]
 async fn tool_patch_reports_partial_failure_with_completed_list() {
     let harness = harness().await;

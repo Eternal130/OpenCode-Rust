@@ -365,7 +365,8 @@ mod tests {
     }
 
     #[test]
-    fn tool_webfetch_content_length_precheck() {        // AUD-19①: a declared Content-Length over the cap rejects without
+    fn tool_webfetch_content_length_precheck() {
+        // AUD-19①: a declared Content-Length over the cap rejects without
         // downloading (http-body.ts:11-15); under/at the cap, absent or
         // non-numeric headers fall through to the streamed cap.
         let headers = |value: &str| {
