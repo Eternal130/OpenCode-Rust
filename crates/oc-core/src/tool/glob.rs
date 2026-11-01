@@ -121,19 +121,24 @@ async fn run(
         return Err(blanket(&pattern, error));
     }
 
-    let metadata = std::fs::metadata(&target.absolute).map_err(|_| {
-        ToolFailure::message(format!(
-            "Search path does not exist: {}",
-            path.clone().unwrap_or_else(|| ".".into())
-        ))
-    })?;
-    if !metadata.is_dir() {
+    // G-1: the follow-kind probe (the ref's `fs.stat` is_dir check) runs
+    // through the Files seam — `type_following` follows a final symlink
+    // like `std::fs::metadata` did.
+    let root = target.absolute.clone();
+    let kind = crate::environment::type_following(services.files.as_ref(), &root.to_string_lossy())
+        .await
+        .map_err(|_| {
+            ToolFailure::message(format!(
+                "Search path does not exist: {}",
+                path.clone().unwrap_or_else(|| ".".into())
+            ))
+        })?;
+    if kind != crate::environment::FileType::Directory {
         return Err(ToolFailure::message(format!(
             "Search path is not a directory: {}",
             path.clone().unwrap_or_else(|| ".".into())
         )));
     }
-    let root = target.absolute.clone();
     let found =
         ripgrep_glob(&root, &pattern, hidden, limit + 1).await.map_err(|error| match error {
             super::grep::RipgrepError::Failed(message)
