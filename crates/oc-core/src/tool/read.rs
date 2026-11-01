@@ -174,20 +174,27 @@ fn clamp_line(line: &str) -> String {
 }
 
 /// Directory listing with the v2 ordering (directories first, then by
-/// path) and paging.
-fn list_page(dir: &Path, offset: u64, limit: u64) -> Result<ReadOutput, ReadError> {
-    let entries = std::fs::read_dir(dir).map_err(|error| match error.kind() {
-        std::io::ErrorKind::NotFound => ReadError::NotFound(dir.to_path_buf()),
-        _ => ReadError::Io(error.to_string()),
+/// path) and paging. G-1: entries come from the Environment `Files`
+/// seam (`list` follows a final symlink on the directory itself while
+/// preserving each entry's own type tag — the same dirent kinds
+/// `read_dir`'s `file_type()` reports).
+async fn list_page(
+    files: &dyn crate::environment::Files,
+    dir: &Path,
+    offset: u64,
+    limit: u64,
+) -> Result<ReadOutput, ReadError> {
+    let entries = files.list(&dir.to_string_lossy()).await.map_err(|error| match error {
+        crate::environment::FilesError::NotFound { .. } => ReadError::NotFound(dir.to_path_buf()),
+        other => ReadError::Io(other.to_string()),
     })?;
     let mut visible: Vec<ListEntry> = Vec::new();
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        let kind = match entry.file_type() {
-            Ok(file_type) if file_type.is_dir() => "directory",
-            Ok(file_type) if file_type.is_symlink() => "symlink",
-            Ok(_) => "file",
-            Err(_) => continue,
+    for entry in entries {
+        let name = entry.name;
+        let kind = match entry.kind {
+            crate::environment::FileType::Directory => "directory",
+            crate::environment::FileType::Symlink => "symlink",
+            _ => "file",
         };
         let path = if kind == "directory" { format!("{name}/") } else { name };
         visible.push(ListEntry { path, kind });
@@ -378,47 +385,60 @@ fn make_text_page(
 
 /// `read` — the filesystem surface (read-filesystem.ts:112-262), ported
 /// onto 256 KiB chunk reads so large files never load whole into memory
-/// unless the requested page requires it.
-pub fn read_file(
+/// unless the requested page requires it. G-1: every operation routes
+/// through the location-bound Environment `Files` seam (`stat` is the
+/// lstat half, `read` follows a final symlink and reports the target's
+/// info); read sizes stay far under the Files contract's 64 MiB cap
+/// (256 KiB chunks, ≤20 MiB media whole-file reads), so the tool's own
+/// caps are always the stricter ones that apply.
+pub async fn read_file(
+    files: std::sync::Arc<dyn crate::environment::Files>,
     path: &Path,
     resource: &str,
     offset: Option<u64>,
     limit: Option<u64>,
 ) -> Result<ReadOutput, ReadError> {
-    let symlink_metadata = std::fs::symlink_metadata(path).map_err(read_error(path))?;
-    let metadata = if symlink_metadata.file_type().is_symlink() {
-        std::fs::metadata(path).map_err(read_error(path))?
-    } else {
-        symlink_metadata
-    };
-    if metadata.is_dir() {
-        let paged_offset = offset.filter(|value| *value > 0).unwrap_or(1);
-        let paged_limit = limit.map_or(MAX_READ_LINES as u64, |v| v.min(MAX_READ_LINES as u64));
-        return list_page(path, paged_offset, paged_limit);
-    }
-
-    use std::io::{Read, Seek, SeekFrom};
-    let mut file = std::fs::File::open(path).map_err(|error| match error.kind() {
-        std::io::ErrorKind::NotFound => ReadError::NotFound(path.to_path_buf()),
-        _ => ReadError::Io(error.to_string()),
-    })?;
-    let read_at = move |start: u64, length: usize| -> Result<Vec<u8>, ReadError> {
-        file.seek(SeekFrom::Start(start)).map_err(|error| ReadError::Io(error.to_string()))?;
-        let mut buffer = vec![0u8; length];
-        let mut filled = 0usize;
-        while filled < length {
-            let n = file
-                .read(&mut buffer[filled..])
-                .map_err(|error| ReadError::Io(error.to_string()))?;
-            if n == 0 {
-                break;
-            }
-            filled += n;
+    let path_str = path.to_string_lossy().into_owned();
+    // The ref lstats first, then follows for the kind. `Files::stat`
+    // describes the entry itself (a final symlink reports `symlink`).
+    files.stat(&path_str).await.map_err(|error| read_error(path)(error.into()))?;
+    // The first 256 KiB chunk doubles as the follow-stat: `Files::read`
+    // follows a final symlink and reports the TARGET's info, and a
+    // directory (direct or symlinked) surfaces as WrongKind(directory)
+    // — exactly the ref's `metadata.isDir()` branch.
+    let first = match files
+        .read(&path_str, Some(crate::environment::Range { offset: 0, length: FIRST_CHUNK as u64 }))
+        .await
+    {
+        Ok(result) => result,
+        Err(crate::environment::FilesError::WrongKind {
+            actual: crate::environment::FileType::Directory,
+            ..
+        }) => {
+            let paged_offset = offset.filter(|value| *value > 0).unwrap_or(1);
+            let paged_limit =
+                limit.map_or(MAX_READ_LINES as u64, |v| v.min(MAX_READ_LINES as u64));
+            return list_page(files.as_ref(), path, paged_offset, paged_limit).await;
         }
-        buffer.truncate(filled);
-        Ok(buffer)
+        Err(error) => return Err(read_error(path)(error.into())),
     };
-    read_file_with(metadata.len(), path, resource, offset, limit, read_at)
+    let size = first.info.size;
+    let read_at = |start: u64, length: usize| {
+        let files = std::sync::Arc::clone(&files);
+        let path_str = path_str.clone();
+        let path = path.to_path_buf();
+        Box::pin(async move {
+            files
+                .read(
+                    &path_str,
+                    Some(crate::environment::Range { offset: start, length: length as u64 }),
+                )
+                .await
+                .map(|result| result.bytes)
+                .map_err(|error| read_error(&path)(error.into()))
+        }) as futures::future::BoxFuture<'static, Result<Vec<u8>, ReadError>>
+    };
+    read_file_with(size, path, resource, offset, limit, read_at).await
 }
 
 fn read_error(path: &Path) -> impl Fn(std::io::Error) -> ReadError + '_ {
@@ -430,20 +450,24 @@ fn read_error(path: &Path) -> impl Fn(std::io::Error) -> ReadError + '_ {
 
 /// The chunk-paged read pipeline (read-filesystem.ts:118-262). `read_at`
 /// is the positioned-chunk seam (tests count calls to bound memory
-/// shape); `size` is the file length.
-pub fn read_file_with(
+/// shape); `size` is the file length. G-1: the seam is asynchronous so
+/// the Files-trait `read(path, range)` backs it.
+pub async fn read_file_with<'a, F>(
     size: u64,
     path: &Path,
     resource: &str,
     offset: Option<u64>,
     limit: Option<u64>,
-    mut read_at: impl FnMut(u64, usize) -> Result<Vec<u8>, ReadError>,
-) -> Result<ReadOutput, ReadError> {
+    mut read_at: F,
+) -> Result<ReadOutput, ReadError>
+where
+    F: FnMut(u64, usize) -> futures::future::BoxFuture<'a, Result<Vec<u8>, ReadError>> + 'a,
+{
     // JS `page.offset || 1` — a zero offset is falsy and reads as 1.
     let paged_offset = offset.filter(|value| *value > 0).unwrap_or(1);
     let paged_limit = limit.map_or(MAX_READ_LINES as u64, |v| v.min(MAX_READ_LINES as u64));
 
-    let first = read_at(0, FIRST_CHUNK)?;
+    let first = read_at(0, FIRST_CHUNK).await?;
 
     let media = detect_mime(&first);
     if let Some(media) = media {
@@ -453,7 +477,7 @@ pub fn read_file_with(
                 maximum_bytes: MAX_MEDIA_INGEST_BYTES,
             });
         }
-        let whole = if first.len() as u64 >= size { first } else { read_at(0, size as usize)? };
+        let whole = if first.len() as u64 >= size { first } else { read_at(0, size as usize).await? };
         return Ok(ReadOutput::File {
             uri: file_url(path),
             name: path.file_name().map(|n| n.to_string_lossy().into_owned()),
@@ -536,7 +560,7 @@ pub fn read_file_with(
             }
         }
 
-        let next_chunk = read_at(total_bytes, FIRST_CHUNK)?;
+        let next_chunk = read_at(total_bytes, FIRST_CHUNK).await?;
         if next_chunk.is_empty() {
             ended = true;
             continue;
@@ -688,7 +712,11 @@ impl super::ToolExecuteWithContext for ReadExecutor {
     }
 }
 
-fn leaf_failure(path: &str, error: ReadError) -> ToolFailure {
+async fn leaf_failure(
+    files: &dyn crate::environment::Files,
+    path: &str,
+    error: ReadError,
+) -> ToolFailure {
     match error {
         ReadError::Binary(_)
         | ReadError::MediaLimit { .. }
@@ -697,7 +725,7 @@ fn leaf_failure(path: &str, error: ReadError) -> ToolFailure {
             message: error.message(),
             cause: Some(super::FailureCause::Nested(error.message())),
         },
-        ReadError::NotFound(absolute) => missing(path, &absolute),
+        ReadError::NotFound(absolute) => missing(files, path, &absolute).await,
         ReadError::Io(message) => ToolFailure {
             message: format!("Unable to read {path}"),
             cause: Some(super::FailureCause::Nested(message)),
@@ -705,20 +733,18 @@ fn leaf_failure(path: &str, error: ReadError) -> ToolFailure {
     }
 }
 
-/// `missing` — sibling suggestions.
-fn missing(input: &str, absolute: &Path) -> ToolFailure {
+/// `missing` — sibling suggestions (entries via the Files `list` seam,
+/// which preserves the raw dirent order the ref's `readdir` yields).
+async fn missing(files: &dyn crate::environment::Files, input: &str, absolute: &Path) -> ToolFailure {
     let base = absolute.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
     let parent = absolute.parent().unwrap_or_else(|| Path::new("/"));
     let mut suggestions: Vec<String> = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(parent) {
+    if let Ok(entries) = files.list(&parent.to_string_lossy()).await {
         // v2 iterates `fs.readDirectory` (raw `readdir` order, read.ts:154 —
-        // no sort); `std::fs::read_dir` yields the same dirent order, so the
+        // no sort); the Files seam yields the same dirent order, so the
         // suggestion order matches the reference byte-for-behavior.
-        let names: Vec<String> = entries
-            .flatten()
-            .map(|entry| entry.file_name().to_string_lossy().into_owned())
-            .collect();
-        for name in names {
+        for entry in entries {
+            let name = entry.name;
             let candidate = name.to_lowercase();
             if candidate.contains(&base) || base.contains(&candidate) {
                 suggestions.push(join_display(input, &name));
@@ -747,8 +773,12 @@ fn join_display(input: &str, entry: &str) -> String {
 }
 
 /// `alternatePath` — recover a uniquely-matching sibling under NFC +
-/// typography canonicalization.
-fn alternate_path(absolute: &Path) -> Option<PathBuf> {
+/// typography canonicalization (candidate scan via the Files `list`
+/// seam's own-kind entries — the same dirent `is_file` filter).
+async fn alternate_path(
+    files: &dyn crate::environment::Files,
+    absolute: &Path,
+) -> Option<PathBuf> {
     let canonical = |name: &str| -> String {
         name.chars()
             .map(|c| match c {
@@ -761,12 +791,12 @@ fn alternate_path(absolute: &Path) -> Option<PathBuf> {
     let base = canonical(&absolute.file_name()?.to_string_lossy());
     let dir = absolute.parent()?;
     let mut matches: Vec<PathBuf> = Vec::new();
-    for entry in std::fs::read_dir(dir).ok()?.flatten() {
-        let kind = entry.file_type().ok()?;
-        if !kind.is_file() {
+    let entries = files.list(&dir.to_string_lossy()).await.ok()?;
+    for entry in entries {
+        if entry.kind != crate::environment::FileType::File {
             continue;
         }
-        let name = entry.file_name().to_string_lossy().into_owned();
+        let name = entry.name;
         if canonical(&name) == base {
             matches.push(dir.join(name));
         }
@@ -801,11 +831,13 @@ async fn run(
             }
         })?;
 
-    let outcome = match read_file(&requested.absolute, &requested.resource, offset, limit) {
+    let files = std::sync::Arc::clone(&services.files);
+    let outcome = match read_file(files.clone(), &requested.absolute, &requested.resource, offset, limit).await
+    {
         Ok(output) => (output, requested, path.clone()),
         Err(ReadError::NotFound(_)) => {
-            let Some(alternate) = alternate_path(&requested.absolute) else {
-                return Err(missing(&path, &requested.absolute));
+            let Some(alternate) = alternate_path(files.as_ref(), &requested.absolute).await else {
+                return Err(missing(files.as_ref(), &path, &requested.absolute).await);
             };
             let sibling = services
                 .access
@@ -819,8 +851,11 @@ async fn run(
                     message: format!("Unable to read {path}"),
                     cause: Some(super::permission_cause(&error)),
                 })?;
-            match read_file(&sibling.absolute, &sibling.resource, offset, limit) {
-                Ok(ReadOutput::ListPage { .. }) => return Err(missing(&path, &requested.absolute)),
+            match read_file(files.clone(), &sibling.absolute, &sibling.resource, offset, limit).await
+            {
+                Ok(ReadOutput::ListPage { .. }) => {
+                    return Err(missing(files.as_ref(), &path, &requested.absolute).await)
+                }
                 Ok(output) => (
                     output,
                     sibling,
@@ -832,11 +867,13 @@ async fn run(
                             .unwrap_or_default(),
                     ),
                 ),
-                Err(ReadError::NotFound(_)) => return Err(missing(&path, &requested.absolute)),
-                Err(error) => return Err(leaf_failure(&path, error)),
+                Err(ReadError::NotFound(_)) => {
+                    return Err(missing(files.as_ref(), &path, &requested.absolute).await)
+                }
+                Err(error) => return Err(leaf_failure(files.as_ref(), &path, error).await),
             }
         }
-        Err(error) => return Err(leaf_failure(&path, error)),
+        Err(error) => return Err(leaf_failure(files.as_ref(), &path, error).await),
     };
     let (output, target, display_path) = outcome;
 
@@ -874,7 +911,7 @@ async fn run(
 
     if let ReadOutput::File { content, mime, base64: true, .. } = &output {
         if !MEDIA_MIMES.contains(&mime.as_str()) {
-            return Err(leaf_failure(&path, ReadError::Binary(target.resource.clone())));
+            return Err(leaf_failure(files.as_ref(), &path, ReadError::Binary(target.resource.clone())).await);
         }
         let summary = if mime == "application/pdf" {
             "PDF read successfully"

@@ -194,6 +194,7 @@ fn tool_services(dir: &std::path::Path) -> Arc<oc_core::tool::ToolServices> {
             dir.to_path_buf(),
             dir.to_path_buf(),
         )),
+        files: Arc::new(oc_core::environment::LocalFiles),
         formatter: Arc::new(oc_core::formatter::NoopFormatter::new()),
         instructions: None,
         db: None,
