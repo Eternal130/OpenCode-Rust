@@ -1200,6 +1200,19 @@ impl Engine {
         });
 
         // Tool services (the six filesystem leaves' dependencies).
+        // G-1 residual — the file tools route their fs operations through
+        // the location-bound Environment Files seam (ref tool leaves run
+        // on `Environment.Service`'s Files per location). Bind failure
+        // (unknown/destroyed workspace placement) falls back to the local
+        // driver like the stdio seam above — behavior stays byte-identical
+        // for local workspaces.
+        let tool_files = match environment.files(location).await {
+            Ok(files) => files,
+            Err(cause) => {
+                eprintln!("opencode: file tools fell back to the local fs driver: {cause}");
+                Arc::new(crate::environment::LocalFiles) as Arc<dyn crate::environment::Files>
+            }
+        };
         let tool_services = Arc::new(ToolServices {
             directory: location.as_path().to_path_buf(),
             project_directory: worktree.clone(),
@@ -1215,6 +1228,7 @@ impl Engine {
                 location.as_path().to_path_buf(),
                 self.home.clone(),
             )),
+            files: tool_files,
             formatter: Arc::new(crate::formatter::BuiltinsFormatter::from_config_documents(
                 location.as_path().to_path_buf(),
                 worktree.clone(),
