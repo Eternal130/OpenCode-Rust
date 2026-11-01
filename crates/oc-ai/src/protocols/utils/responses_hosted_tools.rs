@@ -123,8 +123,9 @@ pub fn image_generation_result(item: &Item) -> Result<ToolResultValue, AiError> 
 }
 
 /// Strict base64 validation (standard alphabet, length % 4 != 1), mirroring
-/// `Encoding.decodeBase64`'s rejection of invalid payloads.
-fn decode_base64(value: &str) -> Option<Vec<u8>> {
+/// `Encoding.decodeBase64`'s rejection of invalid payloads. Public for the
+/// Meta image lane, which sniffs the decoded bytes' media type.
+pub fn decode_base64(value: &str) -> Option<Vec<u8>> {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     if value.len() % 4 == 1 {
         return None;

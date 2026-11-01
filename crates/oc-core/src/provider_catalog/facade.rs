@@ -36,6 +36,9 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use oc_ai::protocols::alibaba_responses::{alibaba_responses_route, AlibabaResponsesRouteSpec};
+use oc_ai::protocols::meta_responses::{
+    meta_auth, meta_responses_route, MetaResponsesRouteSpec,
+};
 use oc_ai::protocols::anthropic_messages::{anthropic_messages_route, anthropic_route};
 use oc_ai::protocols::bedrock::{self as bedrock_lane, BedrockAuthOptions, MantleMessagesConfig};
 use oc_ai::protocols::cohere_chat::{cohere_route_for_package, CohereConfig};
@@ -306,6 +309,11 @@ pub enum ProtocolFamily {
     /// `conversation`, named tool_choice → `allowed_tools`, the
     /// web_search / web_extractor / code_interpreter hosted tools).
     AlibabaResponses,
+    /// Meta Responses (G-84 sibling): the Open Responses baseline with the
+    /// `native.meta` hosted tool vocabulary (web_search /
+    /// image_generation), the signed-ID replay transform for
+    /// provider-executed image results, and terminal-only item recovery.
+    MetaResponses,
     /// Vercel AI Gateway (G-81): Messages / Responses / Chat routes wrapped
     /// by the gateway protocol seam (`providerOptions.gateway` body
     /// injection + gateway usage/cost metadata on finish events).
@@ -332,7 +340,6 @@ pub fn family_of(package: &str) -> Option<ProtocolFamily> {
         | "@opencode/ai/providers/openai/responses"
         | "@opencode/ai/providers/azure"
         | "@opencode/ai/providers/azure/responses"
-        | "@opencode/ai/providers/meta/responses"
         | "@opencode/ai/providers/minimax/responses"
         | "@opencode/ai/providers/moonshot/responses"
         | "@opencode/ai/providers/zai-coding-plan/responses" => ProtocolFamily::OpenAIResponses,
@@ -341,6 +348,12 @@ pub fn family_of(package: &str) -> Option<ProtocolFamily> {
         // responses dialect, NOT the plain OpenAI Responses family
         // (providers/alibaba.ts responsesRoute).
         "@opencode/ai/providers/alibaba/responses" => ProtocolFamily::AlibabaResponses,
+
+        // Meta Responses (G-84 sibling): its own native lane — the Meta
+        // responses dialect with `native.meta` hosted tools and the
+        // signed-ID image replay, NOT the plain OpenAI Responses family
+        // (providers/meta.ts responsesRoute).
+        "@opencode/ai/providers/meta/responses" => ProtocolFamily::MetaResponses,
 
         // xAI (AI-M5): the native `xai-responses` protocol — the Open
         // Responses baseline with the Grok hosted tool vocabulary and the
@@ -819,6 +832,18 @@ fn build_route(
                 base_url,
                 auth: Some(bearer_auth(api_key, env)),
                 transport,
+            })
+            .with(RoutePatch { provider: Some(provider_id.to_string()), ..Default::default() }))
+        }
+        ProtocolFamily::MetaResponses => {
+            // G-84 sibling: the native meta-responses lane at the baked
+            // api.meta.ai/v1 root with the optional META_API_KEY bearer
+            // chain (providers/meta.ts:89-98).
+            Ok(meta_responses_route(MetaResponsesRouteSpec {
+                base_url,
+                auth: Some(meta_auth(api_key)),
+                transport,
+                defaults: RouteDefaults::default(),
             })
             .with(RoutePatch { provider: Some(provider_id.to_string()), ..Default::default() }))
         }
@@ -2167,6 +2192,7 @@ mod tests {
                         | ProtocolFamily::XaiResponses
                         | ProtocolFamily::GoogleInteractions
                         | ProtocolFamily::AlibabaResponses
+                        | ProtocolFamily::MetaResponses
                         | ProtocolFamily::VercelGateway
                 ),
                 "`{package}` maps to a real family"
@@ -2190,6 +2216,14 @@ mod tests {
             family_of("@opencode/ai/providers/alibaba/responses"),
             Some(ProtocolFamily::AlibabaResponses),
             "alibaba responsesRoute uses the AlibabaResponses protocol"
+        );
+        // G-84 sibling: meta/responses is the Meta responses dialect
+        // (native.meta hosted tools + signed-ID image replay), not the
+        // plain OpenAI Responses family.
+        assert_eq!(
+            family_of("@opencode/ai/providers/meta/responses"),
+            Some(ProtocolFamily::MetaResponses),
+            "meta responsesRoute uses the MetaResponses protocol"
         );
         // G-81: the gateway dispatches per model family over the
         // gateway-wrapped Messages/Responses/Chat routes.
