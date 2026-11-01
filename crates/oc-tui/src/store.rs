@@ -3729,9 +3729,9 @@ impl Store {
             plugin_section_hits: std::cell::RefCell::new(PluginSectionHits::default()),
             plugin_click_sink: std::cell::RefCell::new(None),
             sidebar_scroll: std::cell::RefCell::new(SidebarScrollState::default()),
-            wheel_accel: std::cell::RefCell::new(crate::scroll_accel::ScrollAcceleration::from_config(
-                false, None
-            )),
+            wheel_accel: std::cell::RefCell::new(
+                crate::scroll_accel::ScrollAcceleration::from_config(false, None),
+            ),
             wheel_config_key: std::cell::RefCell::new(String::new()),
             permission_pointer_hits: std::cell::RefCell::new(None),
             dialog_button_hits: std::cell::RefCell::new(Vec::new()),

@@ -2302,7 +2302,10 @@ mod tests {
 fn destructive_confirm_row_uses_the_destructive_pair() {
     let store = Store::new(crate::reactive::Runtime::new());
     store.open_dialog(
-        crate::store::DialogKind::WorktreeDeleteConfirm { directory: "/w/dying".to_owned(), files: Vec::new() },
+        crate::store::DialogKind::WorktreeDeleteConfirm {
+            directory: "/w/dying".to_owned(),
+            files: Vec::new(),
+        },
         crate::store::DialogSize::Medium,
     );
     let theme = crate::theme::ThemeState::v2_dark();

@@ -83,7 +83,9 @@ pub(crate) fn realign_mentions(
             .iter()
             .copied()
             .filter(|candidate| {
-                !protected.iter().any(|range| range.start < candidate.end && range.end > range.start)
+                !protected
+                    .iter()
+                    .any(|range| range.start < candidate.end && range.end > range.start)
             })
             .collect();
         for (item, candidate) in assign_mentions(mentions, items, &available) {
