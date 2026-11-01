@@ -77,6 +77,51 @@ pub trait Files: Send + Sync {
     async fn remove(&self, path: &str) -> Result<(), FilesError>;
     async fn r#move(&self, from: &str, to: &str) -> Result<(), FilesError>;
     async fn mkdir(&self, path: &str) -> Result<(), FilesError>;
+
+    /// `remove_file` semantics (vs [`Files::remove`]'s `rm -rf` force
+    /// semantics): a missing path fails [`FilesError::NotFound`], a
+    /// directory fails [`FilesError::WrongKind`], otherwise the entry
+    /// itself is removed. Added for the patch tool's delete/move legs,
+    /// which must keep the exact `std::fs::remove_file` failure shape.
+    async fn remove_file(&self, path: &str) -> Result<(), FilesError> {
+        let info = self.stat(path).await?;
+        if info.kind == FileType::Directory {
+            return Err(FilesError::WrongKind { path: path.to_string(), actual: FileType::Directory });
+        }
+        self.remove(path).await
+    }
+
+    /// `write` without implicit parent creation: a missing parent fails
+    /// [`FilesError::NotFound`] on the parent instead of being created.
+    /// Added for the patch tool's move leg, which writes the destination
+    /// without `mkdir -p` (a missing parent must stay an error).
+    async fn write_file(&self, path: &str, bytes: &[u8]) -> Result<(), FilesError> {
+        if let Some(parent) = std::path::Path::new(path).parent() {
+            self.stat(&parent.to_string_lossy()).await?;
+        }
+        self.write(path, bytes).await
+    }
+}
+
+/// Maps a [`FilesError`] onto the `std::io` error taxonomy so ported
+/// consumers keep their exact `io::ErrorKind`-based message mapping:
+/// `NotFound` → `ErrorKind::NotFound`, `WrongKind(directory)` → raw
+/// `EISDIR` (21, the errno `std::fs::remove_file`/`read` report on a
+/// directory), and `Failed` → `io::Error::other(cause)` whose display is
+/// the original io error string.
+impl From<FilesError> for std::io::Error {
+    fn from(error: FilesError) -> Self {
+        match error {
+            FilesError::NotFound { .. } => std::io::Error::from(std::io::ErrorKind::NotFound),
+            FilesError::WrongKind { actual: FileType::Directory, .. } => {
+                std::io::Error::from_raw_os_error(21)
+            }
+            FilesError::WrongKind { actual, .. } => {
+                std::io::Error::other(format!("wrong kind: {actual:?}"))
+            }
+            FilesError::Failed { cause, .. } => std::io::Error::other(cause),
+        }
+    }
 }
 
 /// Derives a follow-stat kind from the lstat-like [`Files`] contract. A

@@ -17,7 +17,9 @@
 ### G-1 ✅ workspace 沙箱执行层（environment/）已移植
 - 2026-10-30 落地：`crates/oc-core/src/environment/`（files/driver/exec_defaults/local/memory/unavailable/workspace/mod + tests，9 文件）——Files trait（lstat-vs-follow 语义、64MiB 读上限、move into-dir join）、exec-defaults sh 协议（退出码 44/45/46、LC_ALL=C、GNU stat/find/dd，字节级对齐 ref）、WorkspaceService（create/provision/connect/destroy + WorkspaceDriver provider registry，local 默认）。
 - Environment 服务按 location 绑定（workspace_id → connect，否则 local driver）；`oc-server/state.rs` AppState 已接线。
-- 已知有意残留（workspace.rs 模块文档列明）：consumer 迁移（tools/handlers 改走 Files）为后续工作；ref 的共享 provision/连接池/wake wrapper 仅在非 local provider 注册后才有意义。
+- 2026-11-01 consumer 迁移 part 1（lane9a）：read/write/edit/glob/grep/patch 六个文件工具全部改走 location 绑定的 Files seam（`ToolServices.files` + `FileMutation::with_files`，engine 侧与 MCP stdio seam 同款 local 回退）。新增 Files trait 默认方法 `remove_file`（保持 `std::fs::remove_file` 的 NotFound/EISDIR 失败形状，patch delete/move 腿用）与 `write_file`（不隐式建父目录，patch move-write 腿用），以及 `FilesError -> io::Error` 映射（NotFound→NotFound、WrongKind(dir)→EISDIR 21、Failed→原始 io 字符串），本地驱动行为逐字节不变（LocalFiles 即原 std::fs 路径）。read 的分块读上限（256KiB chunk / 20MiB media）恒严于 Files 契约的 64MiB 读上限，实际生效的始终是工具自身上限。
+- 残留（lane 9b pending）：tool/shell.rs cwd 处理、oc-core/pty.rs portable_pty、oc-server/handlers/pty.rs；glob/grep 的 rg 子进程 spawn 仍在 host 侧（仅路径探针已走 seam）。
+- 已知有意残留（workspace.rs 模块文档列明）：ref 的共享 provision/连接池/wake wrapper 仅在非 local provider 注册后才有意义。
 - 坑（仍有效）：表结构存在 ≠ 功能就绪——现在功能本体已建，但消费者尚未切换。
 
 ### G-2 ✅ 插件 guest 桥 3 个 hook 域已桥接
