@@ -270,7 +270,9 @@ async fn execute_patch(
             }
             Hunk::Delete { .. } => {
                 let content =
-                    crate::file_mutation::read_text(&target.absolute).map_err(|error| {
+                    crate::file_mutation::read_text(services.files.as_ref(), &target.absolute)
+                        .await
+                        .map_err(|error| {
                         ToolFailure::message(format!(
                             "patch verification failed: Failed to delete {}: {}",
                             target.resource,
@@ -290,7 +292,8 @@ async fn execute_patch(
                 let previous = updates.get(&target.absolute);
                 let original = match previous {
                     Some(previous) => previous.clone(),
-                    None => crate::file_mutation::read_text(&target.absolute)
+                    None => crate::file_mutation::read_text(services.files.as_ref(), &target.absolute)
+                        .await
                         .map_err(|error| {
                             ToolFailure::message(format!(
                                 "patch verification failed: Failed to read file to update {}: {}",
@@ -471,9 +474,13 @@ async fn execute_patch(
     let mut formatted: std::collections::HashMap<PathBuf, String> =
         std::collections::HashMap::new();
     for (_, _, absolute) in &applied {
-        let Ok(current) = crate::file_mutation::read_text(absolute) else { continue };
+        let Ok(current) = crate::file_mutation::read_text(services.files.as_ref(), absolute).await
+        else {
+            continue;
+        };
         let text = if services.formatter.file(absolute) {
-            crate::file_mutation::sync_text_bom(absolute, current.bom)
+            crate::file_mutation::sync_text_bom(services.files.as_ref(), absolute, current.bom)
+                .await
                 .map(|content| content.text)
                 .unwrap_or(current.text)
         } else {
