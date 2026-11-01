@@ -1,5 +1,7 @@
 # 移植缺口与坑（Gaps & Pitfalls）
 
+> **2026-11-01 第七轮 burndown（gap-burndown-4）**：G-50..G-78 全部 + G-41..G-48 残留 + G-31/G-34/G-24 残留 + G-1 consumer 迁移（read/write/edit/glob/grep/patch/shell/pty 全走 Environment seam）经 lanes 1-9 串行落地并合并 main（merge commits 8f5c7a2..c289c2b：lane1 G-50/51/52/53/54/70；lane2 G-41..G-44；lane3 G-55/57/58/59/60/63/76/77/78；lane4 G-56/48/34/33；lane5 G-64/65+G-24 残留+G-46；lane6 G-66/67/68/69/47；lane7 G-61/62/71/72/73/74/75/45；lane8 G-31；lane9a/9b G-1）。本轮（lane10）核验并钉定 G-49a spinner 40ms 帧数学（帧索引按流逝时间派生，repaint 维持 pump tick——文档化决策），并完成文档终扫。现存未关闭项均为**文档化决策**：G-28 有界 TSX shim、G-32 v1/legacy schema 有意不移植、G-12/G-13/G-16/G-17/G-38/G-39/G-40 ℹ️ 维持不变；少量 deferred minors 见 .superpowers/sdd/ 各 lane report（如 G-68 mini restore 保留 seam、G-24 guest vcs provider info/base 闭包留 guest 侧、G-36 demo 剧本 6/13 bounded、G-9 nested scope 简化）。
+
 > **2026-10-31 第六轮复核**：对文档现存未关闭条目逐项现状验证——G-4/G-6/G-8 已悄然修复收口；G-1 残留缩小（mcp/stdio 已迁）、G-24/G-31 部分清偿；G-34/G-41..G-48 确认仍在。详见文末第六轮。
 
 > **2026-10-31 第五轮全量对比审查**：9 通道全量对读 + 4 通道缺口复核，新立 G-50..G-78（含 5 项🔴：G-50 snapshot 保真、G-51 persistent-pty Origin、G-52 debug config 脱敏、G-53 skill 输出、G-54 run 表单退出码），订正 G-17 断言与勘误 #4 半边，撤销 12 项初报。详见文末第五轮。
@@ -51,7 +53,7 @@
 - `LLM.generateObject` → `crates/oc-ai/src/llm.rs`：强制合成 generate_object 工具 + ToolChoice::named 走既有 route/protocol 管道；ref 一致的错误文案；JSON-Schema 子集校验器（比 ref dynamic 模式更严，无新依赖）；取首个匹配 tool call（ref find 语义）。
 - ℹ️ experimental evaluation lane（evaluation/evaluation-client/system-one + 3 recording 目录）有意不移植：ref 主流程不消费（G-17 同类裁决）。
 
-### G-8 ⚠️→✅（可落地部分已落地；三包维持有意不移植）
+### G-8 ✅（可落地部分已落地；三包维持有意不移植）
 - ✅ WS 代理：`oc-ai/src/route/transport/proxy.rs`——scheme 优先级选代理（wss/https→HTTPS_PROXY/ALL_PROXY 等）、NO_PROXY（* / 点后缀 / 端口钉定，含隐式默认端口 443/80 的 effective-port 匹配）、手写 HTTP CONNECT（15s 预算、8KiB 上限）、隧道流交 client_async_tls_with_config；真桩代理 WS 端到端测试。https/socks 代理 URL 以明确错误拒绝（CONNECT-only 范围）。
 - ✅ `OPENCODE_DISABLE_FFF`（ref truthiness 解析，honored——钉定纯 ripgrep 路径）与 `OPENCODE_SIMULATE`（boot 一行 "not supported in this build" 提示）已成为功能性开关（server_process_env.rs + boot.rs）。
 - ℹ️ 有意不移植：`@opencode/plugin-browser`、`@ff-labs/fff-*`（纯 ripgrep 路径即目标行为）、`@opencode/simulation`、gitlab `discoverWorkflowModels`、Windows `ShellSelect.configured`（本构建非 Windows 目标）。
@@ -153,7 +155,7 @@
 - third_party/agent-client-protocol（crates.io 3.3.0 去 preserve_order 单点改动；ref 用 @agentclientprotocol/sdk 1.6.0——版本代差本身也是对齐风险）。CI（ci.yml/runtime-gates.yml）仅有 OpenAPI 与 vendored .scm drift 检测，无 ACP 上游 diff 检测。
 - 上游发版需手工重打 patch，否则 feature unification 静默翻转全 workspace serde_json Map 顺序。属 G-16 族，单列因有具体 CI 补法。
 
-### G-28 ⚠️ 插件 TSX 渲染为有界 shim（兼容性降级）
+### G-28 ℹ️（文档化决策：插件 TSX 渲染为有界 shim，兼容性降级）
 - rust 有 JSX 面（host.js:1857-1900 @opentui/solid shim 的 createElement/setProp/insert + supervisor.rs:1051-1111 ui.slot.register/router.register），但渲染树跨 IPC 时拍平为 `{title, rows, clickable}` 有界结构（supervisor.rs:964-966）。无任意组件树/markdown code-block renderer 注册面。
 - 行式插件（sidebar 类）可跑；富 TSX 布局插件无法忠实渲染。ℹ️ 属有界化设计而非疏漏，但需作为插件生态 breaking change 显式声明。
 
@@ -168,7 +170,7 @@
 - ~~rust oc-server/handlers/fs.rs:254-330：每请求 spawn_blocking 全量 walk；SCAN_ENTRY_BUDGET=100_000 统一上限~~ lane8 已收口：`is_vcs_root` 改用 project resolver（`services.project.vcs` + canonical 根相等，hg 仓库生效；仓库子目录 location 保持 100k 保守语义，与旧 `.git` 嗅探一致）；`/api/fs/find` 改读进程级 `SearchIndex`（AppState 字段）——按 canonical root 键控、10s 后台刷新（spawn_blocking walk，失败保留上次好索引）、首访同步构建（build-on-first-miss）、并发请求 single-flight；非 VCS 根 100k 预算在**索引构建时**施加。排名/打分语义不变（仅候选来源改为索引）。
 - 残留偏差（文档化）：VCS 判根沿用「检出根才算」的保守语义（ref 的 `location.vcs` 对仓库内任意目录都为真值）；失效策略为 root 键控 + 新鲜度窗口重建（ref 亦无显式 config 失效钩子），未做显式 config-reload 钩子。fix1 加固：single-flight claim 由 Drop guard 持有（取消/panic 不泄漏）+ 首建等待有界（30s）；slot 自淘汰（根目录消失或 5 分钟无访问即驱逐、停刷，rebuild-on-miss 保证安全）；后台刷新每 tick 重读最新请求参数（budget/exclusions 不再冻结于 spawn 时）。另注：常驻 10s 后台刷新任务是本 lane brief 指定项（ref 实为按需 refresh-on-access），额外稳态开销已知。
 
-### G-32 ❌ v1/legacy schema 未移植
+### G-32 ℹ️（文档化决策：v1/legacy schema 有意不移植，纯 v2 面无影响）
 - oc-schema/src/lib.rs:80-82 TODO 仍在：legacy-event、v1 session 事件、models-dev refresh、rpc.ts、pty-ticket、durable-event-manifest。仅影响旧数据互操作/回放，纯 v2 面无影响。
 
 ## 🟢 低
@@ -324,7 +326,7 @@
 - **G-46 ✅（lane5）**：dialog.plugins.error 打开失败插件的 error 详情（ErrorDetails 对话框，esc 回插件列表；无失败行为无操作）。
 - **G-47 ✅（lane6）**：连接成功即复位 backoff attempt（editor.ts:223 open 监听）；空字符串 CLAUDE_CODE_SSE_PORT 现按 ref falsy `||` 落到 OPENCODE_EDITOR_SSE_PORT。
 - **G-48 ✅（lane4）**：reload bridge 在失效 location 前重导 `Limits::from_entries` 并 `Engine::reload_tool_output_limits`（boot.rs ConfigReloadBridge），assemble 改读 `ToolOutput::current_limits` 活值——改 `tool_output.*` 免重启生效。
-- **G-49 ℹ️ 记录性/文档债**：spinner 帧率受 pump tick（50-100ms）约束而非 40ms 定时器（帧数学精确）；session.environment 每 session 单发（ref 效果重触发，PUT 幂等无害）；stdio.rs 模块头宣称 SIGTERM→SIGKILL 升级但实现为即杀（沿袭 rmcp 行为，措辞与 ref 2s 优雅等待不符）；project.rs:1103-1105 注释"插件 strategy 不支持"已过时（add_strategy 就在其下）；proxy.rs:367 注释"webpki 与 0.13 栈一致"在 G-26 后已失效（0.13 现走 platform-verifier；ws 链路留 webpki 为有意）。
+- **G-49 ℹ️ 记录性/文档债（spinner 子项收口为文档化决策，G-49a/lane10）**：spinner 帧进阶 ✅ 经核验/钉定——帧索引按渲染时刻的流逝时间取（`composer_spinner_cell(elapsed_ms)`：`elapsed_ms/40 % frames.len()`，knight.rs），ref 的 40ms 帧数学在任意重绘频率下精确成立（含 100ms pump tick 采样：index 恒 = floor(elapsed/40)），单测 `frame_progression_follows_the_40ms_cadence_math` 钉死； repaint 帧率维持 pump tick（100ms）为**文档化决策**——运行循环无 composer 区域级重绘源，全局 40ms 唤醒会扰动泵（共享 PTY harness 以 >80ms 静默窗切快照、已登记的 vt_temporal 时序测试钉定 100ms 节奏、空转字节量护栏），故按 brief 采用时间派生索引这一最小忠实修复；session.environment 每 session 单发（ref 效果重触发，PUT 幂等无害）；stdio.rs 模块头宣称 SIGTERM→SIGKILL 升级但实现为即杀（沿袭 rmcp 行为，措辞与 ref 2s 优雅等待不符）；project.rs:1103-1105 注释"插件 strategy 不支持"已过时（add_strategy 就在其下）；proxy.rs:367 注释"webpki 与 0.13 栈一致"在 G-26 后已失效（0.13 现走 platform-verifier；ws 链路留 webpki 为有意）。
 
 ## 复审判定汇总
 G-18 ✅ / G-19 ✅(死校验残留) / G-20 ✅ / G-21 ✅ / G-22 ✅ / G-23 ✅ / G-24 ✅(bounded) / G-25 ✅ / G-26 ✅ / G-27 ✅(F1=新 G-45) / G-29 ✅(error 面残留) / G-30 ✅(惰性钉定) / G-31 ✅(lane8：resolver 判根 + 10s 内存索引；子目录/失效策略偏差文档化) / G-33 ✅(热重载半边由 G-48 lane4 收口) / G-34 ✅(lane4) / G-35 ✅ / G-36 ✅ / G-37 ✅ / G-6 ✅ / G-8 ✅(G-41..G-44 已由 lane2 收口) / G-41 ✅ / G-42 ✅ / G-43 ✅ / G-44 ✅ / G-1 ✅(consumer 迁移仍开放)
