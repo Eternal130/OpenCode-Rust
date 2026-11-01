@@ -270,35 +270,37 @@ async fn find(
     };
 
     let root = location.as_path().to_path_buf();
+    // The index is keyed by canonical root (invalidation: a different
+    // canonical root is a different slot).
+    let root = std::fs::canonicalize(&root).unwrap_or(root);
     let exclusions = ScanExclusions::for_root(&root);
     // G-31: VCS-rooted non-home scans are unbounded (ref search.ts:72
     // `location.vcs && !home ? MAX_SAFE_INTEGER : 100_000`); the
-    // walk's budget is resolved per scan root via the project
+    // budget is applied at INDEX BUILD time via the project
     // resolver's vcs info (T1 — covers hg worktrees, sub-directory
     // locations stay budgeted).
     let budget = scan_budget(is_vcs_root(&services.project, &root), &exclusions);
-    // REF builds an index of every (type-filtered) entry and ranks with
-    // fuzzy matching at query time; the port's equivalent is a bounded
-    // full walk (same entry budget as REF's ripgrep cap) + scoring.
-    // The walk is synchronous std::fs recursion (up to 100k entries), so
-    // it must not run on a tokio worker — spawn_blocking moves both the
-    // walk and the scoring off the async runtime.
+    // T2: entries come from the per-root in-memory index (10s refresh,
+    // build-on-first-miss) — no per-request walk.
+    let entries = state
+        .fs_index
+        .entries(root, budget, exclusions, i64::try_from(super::common::now_ms(&state)).unwrap_or(0))
+        .await;
+
+    // REF (filesystem/search.ts): every find path ranks the index
+    // entries — fuzzysort.go in the ripgrep fallback, score-desc then
+    // path-length-asc in the fff layer — and defaults the limit to 50.
+    // Ranking equivalent: subsequence fuzzy score (substring matches
+    // win via the consecutive-run bonus), then shorter paths first.
+    // Scoring runs on spawn_blocking like the index build.
     let query_for_blocking = query.clone();
     let blocking = tokio::task::spawn_blocking(move || {
-        let mut candidates = Vec::new();
-        let mut visited = 0usize;
-        walk(&root, want_files, want_dirs, &exclusions, budget, &mut visited, &mut candidates);
-
-        // REF (filesystem/search.ts): every find path ranks candidates —
-        // fuzzysort.go in the ripgrep fallback, score-desc then
-        // path-length-asc in the fff layer — and defaults the limit to 50.
-        // Ranking equivalent: subsequence fuzzy score (substring matches
-        // win via the consecutive-run bonus), then shorter paths first.
         let effective_limit = limit.unwrap_or(50);
         let lowered = query_for_blocking.to_lowercase();
         let query_chars: Vec<char> = lowered.chars().collect();
-        let mut scored: Vec<_> = candidates
-            .into_iter()
+        let mut scored: Vec<_> = entries
+            .iter()
+            .filter(|(_, is_dir)| (*is_dir && want_dirs) || (!*is_dir && want_files))
             .filter_map(|(path, is_dir)| {
                 let target = path.to_string_lossy().to_lowercase();
                 fuzzy_score(&query_chars, &target)
@@ -308,7 +310,7 @@ async fn find(
         scored
             .sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)).then_with(|| a.2.cmp(&b.2)));
         scored.truncate(effective_limit);
-        scored.into_iter().map(|(_, _, _, path, is_dir)| (path, is_dir)).collect::<Vec<_>>()
+        scored.into_iter().map(|(_, _, _, path, is_dir)| (path.clone(), *is_dir)).collect::<Vec<_>>()
     });
     let scored = blocking.await.map_err(|error| {
         crate::errors::debug_cause("fs:unknown_ref", &error);
@@ -327,12 +329,14 @@ async fn find(
 /// are effectively UNBOUNDED, so every entry of a repo is a fuzzy
 /// candidate regardless of tree size; non-VCS (and home-rooted) scans
 /// keep the 100k ceiling as a hard bound on the synchronous walk.
-/// G-31 (bounded): the budget is per-scan — VCS roots get
-/// `usize::MAX` (ref semantics), everything else keeps
-/// [`SCAN_ENTRY_BUDGET`]. The ref's full in-memory index with the
-/// 10-second background refresh (search.ts `scan`/`refresh`) is OUT
-/// OF SCOPE for this fix — the port still walks per request.
+/// G-31 (T2): the budget is applied at INDEX BUILD time — VCS roots
+/// get `usize::MAX` (ref semantics), everything else keeps
+/// [`SCAN_ENTRY_BUDGET`] (entries beyond the budget dropped from the
+/// index, same truncation as the old per-request walk).
 const SCAN_ENTRY_BUDGET: usize = 100_000;
+
+/// ref search.ts `REFRESH_INTERVAL` ("10 seconds").
+const REFRESH_INTERVAL_MS: i64 = 10_000;
 
 /// `location.vcs` for the scan root (search.ts:72's gate), resolved via
 /// the PROJECT RESOLVER instead of sniffing `.git` (T1): the resolver
@@ -370,7 +374,8 @@ fn scan_budget(vcs_root: bool, exclusions: &ScanExclusions) -> usize {
 /// `exclude: NAME/**`); REF's absolute `paths()` are excluded on every
 /// scan. Table-bearing platforms are darwin/win32 only — linux tables
 /// are empty exactly like REF.
-struct ScanExclusions {
+#[derive(Clone)]
+pub(crate) struct ScanExclusions {
     home_rooted: bool,
     names: Vec<String>,
     paths: Vec<std::path::PathBuf>,
@@ -487,6 +492,209 @@ fn walk(
         } else if want_files {
             out.push((entry.path(), false));
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// G-31 T2 — the in-memory per-root search index (ref search.ts
+// `scan`/`refresh`): entries built by the same walk, refreshed every
+// 10s by a background task; searches hit the index instead of walking
+// per request.
+// ---------------------------------------------------------------------------
+
+type IndexEntries = std::sync::Arc<Vec<(std::path::PathBuf, bool)>>;
+
+struct IndexSlot {
+    /// When this index settled (unix ms); a request older than
+    /// `refresh_ms` past this triggers a rebuild.
+    settled_at: i64,
+    entries: IndexEntries,
+    /// Single-flight claim for in-progress rebuilds (ref's `refreshing`
+    /// Deferred): concurrent stale requests serve the LAST GOOD index
+    /// instead of piling up walks.
+    refreshing: std::sync::atomic::AtomicBool,
+    /// Whether the 10s background refresher was started for this root.
+    refresher_started: std::sync::atomic::AtomicBool,
+}
+
+impl IndexSlot {
+    fn empty() -> Self {
+        IndexSlot {
+            settled_at: i64::MIN,
+            entries: std::sync::Arc::new(Vec::new()),
+            refreshing: std::sync::atomic::AtomicBool::new(false),
+            refresher_started: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+}
+
+/// The process-wide fs search index (rides `AppState`): one slot per
+/// canonical scan root, each refreshed every [`REFRESH_INTERVAL_MS`] by
+/// a background `tokio` task (the walk itself on `spawn_blocking`, so
+/// refreshes never block the async runtime).
+///
+/// Invalidation choice (documented): slots are keyed by canonical root
+/// and rebuilt when a request finds them older than the 10s freshness
+/// window OR missing (build-on-first-miss — the first request after a
+/// location (re)load walks synchronously like ref's un-initialized
+/// first `find` awaits its scan). No separate config-reload hook: a
+/// moved/reloaded location resolves to a different canonical root and
+/// therefore a fresh slot; stale slots for vanished roots are only
+/// kept alive by their background refresher while the state lives
+/// (bounded by the location count).
+pub struct SearchIndex {
+    clock: std::sync::Arc<dyn oc_util::determinism::Clock>,
+    refresh_ms: i64,
+    /// Production (`new`) starts per-root background refreshers; the
+    /// test constructor disables them (tiny test windows would spin).
+    background: bool,
+    slots: dashmap::DashMap<std::path::PathBuf, IndexSlot>,
+    /// Total index builds (test observable: "no walk per request").
+    builds: std::sync::atomic::AtomicU64,
+}
+
+impl SearchIndex {
+    #[must_use]
+    pub fn new(clock: std::sync::Arc<dyn oc_util::determinism::Clock>) -> Self {
+        SearchIndex {
+            clock,
+            refresh_ms: REFRESH_INTERVAL_MS,
+            background: true,
+            slots: dashmap::DashMap::new(),
+            builds: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    /// Test constructor: explicit freshness window, no background
+    /// refreshers (rebuilds happen through the request path).
+    #[must_use]
+    pub fn with_refresh_ms(
+        clock: std::sync::Arc<dyn oc_util::determinism::Clock>,
+        refresh_ms: i64,
+    ) -> Self {
+        SearchIndex { background: false, refresh_ms, ..Self::new(clock) }
+    }
+
+    /// Total walk-driven index builds across all roots.
+    pub fn builds(&self) -> u64 {
+        self.builds.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// The request path (ref `find` → `refresh` → `search`): serve a
+    /// fresh slot's entries; on miss or a stale slot, rebuild
+    /// (build-on-first-miss; ref awaits the first scan) and then serve.
+    /// Concurrent stale requests collapse onto one rebuild; losers
+    /// serve the last good index.
+    pub(crate) async fn entries(
+        self: &std::sync::Arc<Self>,
+        root: std::path::PathBuf,
+        budget: usize,
+        exclusions: ScanExclusions,
+        now_ms: i64,
+    ) -> IndexEntries {
+        if let Some(slot) = self.slots.get(&root) {
+            if now_ms < slot.settled_at + self.refresh_ms {
+                return slot.entries.clone();
+            }
+            if slot.refreshing.load(std::sync::atomic::Ordering::Acquire) {
+                if slot.settled_at != i64::MIN {
+                    // ref serves the last good index while a refresh is
+                    // in flight.
+                    return slot.entries.clone();
+                }
+                // First build in flight: ref's un-initialized find
+                // AWAITS the initial scan — poll until it lands.
+                drop(slot);
+                while let Some(pending) = self.slots.get(&root) {
+                    if !pending.refreshing.load(std::sync::atomic::Ordering::Acquire) {
+                        return pending.entries.clone();
+                    }
+                    drop(pending);
+                    tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+                }
+                return std::sync::Arc::new(Vec::new());
+            }
+        }
+        let claimed = {
+            let mut slot = self.slots.entry(root.clone()).or_insert_with(IndexSlot::empty);
+            !slot.refreshing.swap(true, std::sync::atomic::Ordering::AcqRel)
+        };
+        if claimed {
+            self.rebuild(root.clone(), budget, exclusions.clone()).await;
+            if let Some(slot) = self.slots.get(&root) {
+                slot.refreshing.store(false, std::sync::atomic::Ordering::Release);
+                if self.background
+                    && !slot.refresher_started.swap(true, std::sync::atomic::Ordering::AcqRel)
+                {
+                    drop(slot);
+                    self.spawn_refresher(root.clone(), budget, exclusions);
+                }
+            }
+            return self.slots.get(&root).map(|slot| slot.entries.clone()).unwrap_or_default();
+        }
+        // Lost the single-flight claim: same await/last-good split as
+        // the fast path above.
+        loop {
+            let Some(slot) = self.slots.get(&root) else { break };
+            if !slot.refreshing.load(std::sync::atomic::Ordering::Acquire) {
+                break;
+            }
+            if slot.settled_at != i64::MIN {
+                return slot.entries.clone();
+            }
+            drop(slot);
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        }
+        self.slots.get(&root).map(|slot| slot.entries.clone()).unwrap_or_default()
+    }
+
+    /// One walk + swap (ref `scan`): builds on `spawn_blocking` (the
+    /// std::fs recursion must not run on a tokio worker), replaces the
+    /// slot's entries only on success — a failed refresh keeps the
+    /// last good index (ref keeps the previous map alive mid-scan).
+    async fn rebuild(&self, root: std::path::PathBuf, budget: usize, exclusions: ScanExclusions) {
+        self.builds.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let scan_root = root.clone();
+        let walked = tokio::task::spawn_blocking(move || {
+            // The index carries files AND directories (ref indexes
+            // files plus every parent directory); type filtering
+            // happens at query time.
+            let mut candidates = Vec::new();
+            let mut visited = 0usize;
+            walk(&scan_root, true, true, &exclusions, budget, &mut visited, &mut candidates);
+            candidates
+        })
+        .await;
+        if let Ok(entries) = walked {
+            if let Some(mut slot) = self.slots.get_mut(&root) {
+                slot.entries = std::sync::Arc::new(entries);
+                slot.settled_at = self.clock.unix_ms();
+            }
+        }
+    }
+
+    /// The 10-second background refresher (ref `refresh`'s forked scan
+    /// loop): one task per indexed root, holding only a `Weak` handle
+    /// so it dies with the server state. On refresh error the last
+    /// good index stays (rebuild swaps only on success).
+    fn spawn_refresher(
+        self: &std::sync::Arc<Self>,
+        root: std::path::PathBuf,
+        budget: usize,
+        exclusions: ScanExclusions,
+    ) {
+        let weak = std::sync::Arc::downgrade(self);
+        let period = std::time::Duration::from_millis(u64::try_from(self.refresh_ms).unwrap_or(10_000).max(1));
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(period);
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            tick.tick().await; // consume the immediate first tick
+            loop {
+                tick.tick().await;
+                let Some(index) = weak.upgrade() else { break };
+                index.rebuild(root.clone(), budget, exclusions.clone()).await;
+            }
+        });
     }
 }
 
@@ -743,5 +951,132 @@ mod find_tests {
         let plain = tempfile::tempdir_in("/tmp/opencode").expect("tempdir");
         let none = resolved(plain.path(), None);
         assert!(!is_vcs_root(&none, plain.path()));
+    }
+}
+
+#[cfg(test)]
+mod index_tests {
+    use super::*;
+    use oc_util::determinism::Clock;
+
+    /// Stepped clock so freshness windows are deterministic.
+    struct FakeClock(std::sync::Mutex<i64>);
+    impl Clock for FakeClock {
+        fn now(&self) -> std::time::SystemTime {
+            std::time::UNIX_EPOCH + std::time::Duration::from_millis(*self.0.lock().unwrap() as u64)
+        }
+    }
+
+    fn index(clock: &std::sync::Arc<FakeClock>) -> std::sync::Arc<SearchIndex> {
+        std::sync::Arc::new(SearchIndex::with_refresh_ms(
+            std::sync::Arc::clone(clock) as std::sync::Arc<dyn Clock>,
+            10_000,
+        ))
+    }
+
+    fn scan(_root: &std::path::Path) -> ScanExclusions {
+        ScanExclusions { home_rooted: false, names: vec![], paths: vec![] }
+    }
+
+    fn names(entries: &IndexEntries) -> Vec<String> {
+        entries
+            .iter()
+            .map(|(path, _)| path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn searches_hit_the_index_without_rewalking() {
+        let clock = std::sync::Arc::new(FakeClock(std::sync::Mutex::new(1_000)));
+        let index = index(&clock);
+        let root = tempfile::tempdir_in("/tmp/opencode").expect("tempdir");
+        std::fs::write(root.path().join("readme.md"), "x").expect("write");
+
+        // Build-on-first-miss: exactly ONE walk.
+        let first = index
+            .entries(root.path().to_path_buf(), SCAN_ENTRY_BUDGET, scan(root.path()), 1_000)
+            .await;
+        assert_eq!(index.builds(), 1);
+        assert!(names(&first).contains(&"readme.md".to_owned()));
+
+        // Requests inside the freshness window serve the cached index:
+        // no additional builds however many searches arrive.
+        for now in [1_500, 5_000, 9_999] {
+            let served = index
+                .entries(root.path().to_path_buf(), SCAN_ENTRY_BUDGET, scan(root.path()), now)
+                .await;
+            assert_eq!(index.builds(), 1, "no walk per request at now={now}");
+            assert!(names(&served).contains(&"readme.md".to_owned()));
+        }
+    }
+
+    #[tokio::test]
+    async fn refresh_after_the_window_picks_up_new_files() {
+        let clock = std::sync::Arc::new(FakeClock(std::sync::Mutex::new(1_000)));
+        let index = index(&clock);
+        let root = tempfile::tempdir_in("/tmp/opencode").expect("tempdir");
+        std::fs::write(root.path().join("old.txt"), "x").expect("write");
+        let _ = index
+            .entries(root.path().to_path_buf(), SCAN_ENTRY_BUDGET, scan(root.path()), 1_000)
+            .await;
+
+        // A file added AFTER the build is invisible until the 10s
+        // window lapses (ref's index is only refreshed per interval)…
+        std::fs::write(root.path().join("new.txt"), "x").expect("write");
+        let stale = index
+            .entries(root.path().to_path_buf(), SCAN_ENTRY_BUDGET, scan(root.path()), 5_000)
+            .await;
+        assert!(!names(&stale).contains(&"new.txt".to_owned()), "still the old index");
+
+        // …and the first request past the window rebuilds (this is the
+        // same rebuild the background refresher performs every 10s).
+        let fresh = index
+            .entries(root.path().to_path_buf(), SCAN_ENTRY_BUDGET, scan(root.path()), 11_001)
+            .await;
+        assert_eq!(index.builds(), 2);
+        assert!(names(&fresh).contains(&"new.txt".to_owned()), "refresh picked up new.txt");
+    }
+
+    #[tokio::test]
+    async fn non_vcs_budget_is_applied_at_index_build_time() {
+        let clock = std::sync::Arc::new(FakeClock(std::sync::Mutex::new(0)));
+        let index = index(&clock);
+        let root = tempfile::tempdir_in("/tmp/opencode").expect("tempdir");
+        for i in 0..20 {
+            std::fs::write(root.path().join(format!("f{i:02}.txt")), "x").expect("write");
+        }
+        // scan_budget(false, _) = SCAN_ENTRY_BUDGET stand-in of 5:
+        // entries beyond the budget are dropped from the INDEX itself.
+        let entries =
+            index.entries(root.path().to_path_buf(), 5, scan(root.path()), 0).await;
+        assert!(entries.len() < 20, "budget truncates the index build: got {}", entries.len());
+        // A later query (fresh window) sees the SAME truncated set.
+        let again =
+            index.entries(root.path().to_path_buf(), 5, scan(root.path()), 1_000).await;
+        assert_eq!(entries.len(), again.len());
+    }
+
+    #[tokio::test]
+    async fn concurrent_first_requests_collapse_onto_one_build() {
+        let clock = std::sync::Arc::new(FakeClock(std::sync::Mutex::new(0)));
+        let index = index(&clock);
+        let root = tempfile::tempdir_in("/tmp/opencode").expect("tempdir");
+        std::fs::write(root.path().join("a.txt"), "x").expect("write");
+        let mut joins = Vec::new();
+        for _ in 0..8 {
+            let index = std::sync::Arc::clone(&index);
+            let root = root.path().to_path_buf();
+            let scan = scan(&root);
+            joins.push(tokio::spawn(async move {
+                index.entries(root, SCAN_ENTRY_BUDGET, scan, 0).await
+            }));
+        }
+        for join in joins {
+            let entries = join.await.expect("join");
+            assert!(names(&entries).contains(&"a.txt".to_owned()));
+        }
+        // The single-flight claim bounds builds to one per staleness
+        // window even under a thundering herd of first requests.
+        assert_eq!(index.builds(), 1, "one build, not one per request");
     }
 }
