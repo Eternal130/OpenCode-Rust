@@ -58,6 +58,90 @@ pub const FILE_TREE_MIN_WIDTH: usize = 30;
 pub const FILE_TREE_MAX_WIDTH: usize = 40;
 /// The tree renders only at/above this terminal width.
 pub const FILE_TREE_BREAKPOINT: usize = 90;
+/// G-130 — `VIRTUAL_MIN_LINES` (patch-diff.tsx:24): only added files
+/// this large chunk (smaller ones render fine as one hunk).
+pub const VIRTUAL_MIN_LINES: usize = 3000;
+/// G-130 — `VIRTUAL_CHUNK_LINES` (patch-diff.tsx:25): the added-file
+/// chunk size.
+pub const VIRTUAL_CHUNK_LINES: usize = 128;
+
+/// G-130 — one added-file chunk (`AddedPatchChunk`, util/diff.ts:6-10):
+/// a valid `-0,0` patch of its own + the raw `+`-lines + the row
+/// count.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AddedPatchChunk {
+    pub patch: String,
+    pub lines: Vec<String>,
+    pub rows: usize,
+}
+
+/// G-130 — `splitAddedPatch` (util/diff.ts:18-38): split a new-file
+/// patch into `size`-line chunks, each a valid patch with its own
+/// `@@ -0,0 +start,count @@` header. `None` for anything else —
+/// patches with context or removed lines would need old/new line
+/// numbers recomputed at every cut, so they are not split.
+#[must_use]
+pub fn split_added_patch(patch: &str, size: usize) -> Option<Vec<AddedPatchChunk>> {
+    if size == 0 {
+        return None;
+    }
+    // `/^@@ -0,0 \+1,(\d+) @@[^\n]*\n/m` — the first matching header
+    // line anywhere in the patch (the file header `--- / +++` lines
+    // ride the prefix).
+    let mut offset = 0usize;
+    let mut line_start = 0usize;
+    let mut found: Option<usize> = None;
+    for line in patch.lines() {
+        if let Some(rest) = line.strip_prefix("@@ -0,0 +1,") {
+            if let Some((digits, tail)) = rest.split_once(' ') {
+                if tail.starts_with("@@") {
+                    if let Ok(count) = digits.parse::<usize>() {
+                        found = Some(count);
+                        offset = line_start + line.len() + 1;
+                        break;
+                    }
+                }
+            }
+        }
+        line_start += line.len() + 1;
+        offset = line_start;
+    }
+    let count = found?;
+    let prefix = &patch[..line_start];
+    let body = &patch[offset..];
+    let mut lines: Vec<String> = body.strip_suffix('\n').unwrap_or(body).split('\n').map(str::to_owned).collect();
+    let marker = lines
+        .last()
+        .filter(|last| last.starts_with("\\ No newline at end of file"))
+        .map(|last| last.clone());
+    if marker.is_some() {
+        lines.pop();
+    }
+    if lines.len() != count || lines.iter().any(|line| !line.starts_with('+')) {
+        return None;
+    }
+    let mut chunks = Vec::with_capacity(count.div_ceil(size));
+    for index in 0..count.div_ceil(size) {
+        let start = index * size;
+        let slice = &lines[start..(start + size).min(count)];
+        let tail = match &marker {
+            Some(marker) if start + size >= count => format!("\n{marker}"),
+            _ => String::new(),
+        };
+        chunks.push(AddedPatchChunk {
+            patch: format!(
+                "{prefix}@@ -0,0 +{},{} @@\n{}{tail}",
+                start + 1,
+                slice.len(),
+                slice.join("\n")
+            ),
+            lines: slice.to_vec(),
+            rows: slice.len(),
+        });
+    }
+    Some(chunks)
+}
+
 
 /// A file's diff status (`vcs.diff` entries).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -240,8 +324,44 @@ fn hunk_header_texts(patch: &str) -> Vec<(String, u64, u64)> {
 
 impl DiffFile {
     /// The file's parsed hunks.
+    ///
+    /// G-130 — added-file chunking first (`splitAddedPatch` +
+    /// patch-diff.tsx:41-44): a single-hunk `@@ -0,0 +1,N @@` patch
+    /// over [`VIRTUAL_MIN_LINES`] renders as
+    /// [`VIRTUAL_CHUNK_LINES`]-line chunks, each its own valid
+    /// `-0,0` hunk (huge added files chunk like the ref's virtualized
+    /// PatchDiff; bounded deviation G-130: the Rust viewer renders
+    /// the chunk list directly — no lazy mount window, the ROW set is
+    /// identical).
     #[must_use]
     pub fn hunks(&self) -> Vec<Hunk> {
+        if let Some(chunks) = split_added_patch(&self.patch, VIRTUAL_CHUNK_LINES) {
+            let total: usize = chunks.iter().map(|chunk| chunk.rows).sum();
+            if total > VIRTUAL_MIN_LINES {
+                return chunks
+                    .iter()
+                    .enumerate()
+                    .map(|(index, chunk)| {
+                        let new_start = index as u64 * VIRTUAL_CHUNK_LINES as u64 + 1;
+                        let rows = chunk
+                            .lines
+                            .iter()
+                            .enumerate()
+                            .map(|(row, line)| PatchRow::Added {
+                                new: new_start + row as u64,
+                                text: line.strip_prefix('+').unwrap_or(line).to_owned(),
+                            })
+                            .collect();
+                        Hunk {
+                            header: format!("@@ -0,0 +{},{} @@", new_start, chunk.lines.len()),
+                            old_start: 0,
+                            new_start,
+                            rows,
+                        }
+                    })
+                    .collect();
+            }
+        }
         parse_patch(&self.patch)
     }
 
@@ -1636,5 +1756,83 @@ mod tests {
         let grid = frame.text_grid();
         assert!(grid[5].starts_with("   2 -  const oldFirst"), "golden model: {:?}", grid[5]);
         assert!(grid[10].starts_with("   21 - const oldSecond"), "golden model: {:?}", grid[10]);
+    }
+}
+
+// -- G-130: splitAddedPatch ---------------------------------------------------
+
+#[cfg(test)]
+mod g130_tests {
+    use super::*;
+
+    fn added_patch(lines: usize, marker: bool) -> String {
+        let mut patch = format!("--- /dev/null\n+++ b/big.txt\n@@ -0,0 +1,{lines} @@\n");
+        for index in 0..lines {
+            patch.push_str(&format!("+line {index}\n"));
+        }
+        if marker {
+            // replace the final newline with the no-newline marker
+            patch.truncate(patch.trim_end_matches('\n').len() + 1);
+            patch.push_str("\\ No newline at end of file\n");
+        }
+        patch
+    }
+
+    #[test]
+    fn splits_an_added_file_into_size_line_chunks() {
+        let chunks = split_added_patch(&added_patch(300, false), 128).expect("splittable");
+        assert_eq!(chunks.len(), 3, "ceil(300/128)");
+        assert_eq!(chunks[0].rows, 128);
+        assert_eq!(chunks[2].rows, 44);
+        assert!(chunks[0].patch.starts_with("--- /dev/null\n+++ b/big.txt\n@@ -0,0 +1,128 @@\n+line 0\n"));
+        assert!(chunks[1].patch.contains("@@ -0,0 +129,128 @@"));
+        assert!(chunks[2].patch.contains("@@ -0,0 +257,44 @@"));
+        assert_eq!(chunks.iter().map(|chunk| chunk.rows).sum::<usize>(), 300);
+    }
+
+    #[test]
+    fn the_no_newline_marker_rides_the_last_chunk() {
+        let chunks = split_added_patch(&added_patch(10, true), 4).expect("splittable");
+        assert_eq!(chunks.len(), 3);
+        assert!(!chunks[0].patch.contains("No newline"));
+        assert!(chunks[2].patch.ends_with("\\ No newline at end of file"));
+    }
+
+    #[test]
+    fn context_or_removed_lines_never_split() {
+        let modified = "--- a/f\n+++ b/f\n@@ -1,3 +1,3 @@\n-a\n+b\n c\n";
+        assert_eq!(split_added_patch(modified, 2), None);
+        // count mismatch
+        let broken = "@@ -0,0 +1,5 @@\n+a\n+b\n";
+        assert_eq!(split_added_patch(broken, 2), None);
+        // no new-file header at all
+        assert_eq!(split_added_patch("no patch here", 2), None);
+    }
+
+    #[test]
+    fn oversized_added_files_chunk_through_hunks() {
+        let file = DiffFile {
+            file: "big.txt".to_owned(),
+            additions: 4000,
+            deletions: 0,
+            status: FileStatus::Added,
+            patch: added_patch(4000, false),
+            image: false,
+            image_data: None,
+        };
+        let hunks = file.hunks();
+        assert_eq!(hunks.len(), 32, "ceil(4000/128)");
+        assert_eq!(hunks[0].header, "@@ -0,0 +1,128 @@");
+        assert_eq!(hunks[31].header, "@@ -0,0 +3969,32 @@");
+        match &hunks[31].rows[0] {
+            PatchRow::Added { new, text } => {
+                assert_eq!(*new, 3969);
+                assert_eq!(text, "line 3968");
+            }
+            other => panic!("expected an added row, got {other:?}"),
+        }
+        // below the threshold the single hunk parses normally
+        let small = DiffFile { patch: added_patch(300, false), ..file };
+        assert_eq!(small.hunks().len(), 1);
     }
 }
