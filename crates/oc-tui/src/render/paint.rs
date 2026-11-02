@@ -123,9 +123,7 @@ impl Buffer {
         {
             return None;
         }
-        Some(
-            (y - self.area.y) as usize * self.area.width as usize + (x - self.area.x) as usize,
-        )
+        Some((y - self.area.y) as usize * self.area.width as usize + (x - self.area.x) as usize)
     }
 
     /// Bounds-checked mutable cell access (ratatui `Buffer::cell_mut`:

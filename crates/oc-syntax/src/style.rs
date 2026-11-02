@@ -108,12 +108,7 @@ impl Style {
     /// The empty style.
     #[must_use]
     pub const fn new() -> Self {
-        Self {
-            fg: None,
-            bg: None,
-            add_modifier: Modifier::EMPTY,
-            sub_modifier: Modifier::EMPTY,
-        }
+        Self { fg: None, bg: None, add_modifier: Modifier::EMPTY, sub_modifier: Modifier::EMPTY }
     }
 
     /// Set the foreground (overlay semantics).
