@@ -381,6 +381,15 @@ fn resolve_hue_entry(
     } else {
         let map =
             value.as_object().ok_or_else(|| ThemeError(format!("Hue \"{name}\" was not found")))?;
+        // G-160②: unknown step keys are an error, not silently ignored
+        // (ref resolve.ts:222-225 `throw "Unknown hue step"`).
+        for step_key in map.keys() {
+            if !schema::HUE_STEPS.contains(&step_key.as_str()) {
+                return Err(ThemeError(format!(
+                    "Unknown hue step at \"hue.{name}.{step_key}\""
+                )));
+            }
+        }
         let mut steps = [Rgba::TRANSPARENT; 9];
         for (position, step) in steps.iter_mut().zip(schema::HUE_STEPS) {
             let color = map

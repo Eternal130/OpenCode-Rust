@@ -18,7 +18,6 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use rusqlite::OptionalExtension as _;
-use sha1::{Digest as _, Sha1};
 
 /// `Hash.fast` (util/hash.ts:4-7): SHA-1 hex (40 chars). DB-D1: the
 /// project id format is v2's exact `Hash.fast` output — v2 databases
@@ -26,13 +25,8 @@ use sha1::{Digest as _, Sha1};
 /// row per repo, never a SHA-256 twin row.
 #[must_use]
 pub fn hash_fast(input: &str) -> String {
-    let digest = Sha1::digest(input.as_bytes());
-    let mut out = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        use std::fmt::Write as _;
-        let _ = write!(out, "{byte:02x}");
-    }
-    out
+    // G-162②: unified `Hash.fast` in oc-util.
+    oc_util::hash::sha1_hex(input)
 }
 
 /// `Project.Vcs`.

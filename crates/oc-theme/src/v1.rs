@@ -45,8 +45,10 @@ pub fn resolve_v1(source: &Json, mode: Mode) -> Result<V1Theme, ThemeError> {
             colors.insert(key.clone(), color);
         }
     }
-    let has_selected_list_item_text =
-        theme.get("selectedListItemText").is_some_and(|v| !v.is_null());
+    // G-160③: a present-but-null `selectedListItemText` is a defined value in
+    // ref (v1-migrate.ts:367 `!== undefined`) and resolveColor(null) throws
+    // ("Invalid V1 theme color") — it must not silently fall back.
+    let has_selected_list_item_text = theme.contains_key("selectedListItemText");
     let selected = match theme.get("selectedListItemText") {
         Some(value) => resolve_color(value, &defs, theme, mode_key, &mut Vec::new())?,
         None => None,
@@ -79,7 +81,7 @@ fn resolve_color(
     chain: &mut Vec<String>,
 ) -> Result<Option<Rgba>, ThemeError> {
     match value {
-        Json::Null => Ok(None),
+        Json::Null => Err(ThemeError("Invalid V1 theme color".into())),
         Json::String(s) => {
             if s == "transparent" || s == "none" {
                 return Ok(Some(Rgba::TRANSPARENT));
@@ -108,7 +110,9 @@ fn resolve_color(
             resolved
         }
         Json::Number(n) => Ok(Some(ansi(n.as_f64().unwrap_or_default() as i64))),
-        Json::Object(variant) => match variant.get(mode).filter(|v| !v.is_null()) {
+        // G-160③: a variant with the mode key present but null is defined in
+        // ref (`mode in value` passes, then resolveColor(null) throws).
+        Json::Object(variant) => match variant.get(mode) {
             Some(value) => resolve_color(value, defs, theme, mode, chain),
             None => Err(ThemeError("Invalid V1 theme color".into())),
         },
@@ -187,6 +191,44 @@ mod tests {
     fn circular_refs_error() {
         let source = json!({ "theme": { "background": "text", "text": "background" } });
         assert!(resolve_v1(&source, Mode::Dark).is_err());
+    }
+
+    /// G-160③: null in a v1 theme position is defined-and-invalid in ref
+    /// (v1-migrate.ts resolveColor throws on `!value`).
+    #[test]
+    fn null_values_error() {
+        let base = json!({
+            "theme": { "background": "#101010", "backgroundElement": "#202020", "text": "#ffffff" }
+        });
+        let null_token = {
+            let mut source = base.clone();
+            source["theme"]["error"] = json!(null);
+            source
+        };
+        let err = resolve_v1(&null_token, Mode::Dark).unwrap_err();
+        assert!(err.0.contains("Invalid V1 theme color"), "{err:?}");
+        let null_variant = {
+            let mut source = base.clone();
+            source["theme"]["text"] = json!({ "dark": null, "light": "#000000" });
+            source
+        };
+        assert!(resolve_v1(&null_variant, Mode::Dark).is_err());
+        // present-but-null selectedListItemText is defined → error, not fallback.
+        let null_selected = {
+            let mut source = base.clone();
+            source["theme"]["selectedListItemText"] = json!(null);
+            source
+        };
+        assert!(resolve_v1(&null_selected, Mode::Dark).is_err());
+        // null backgroundMenu is falsy in ref (v1-migrate.ts:372) → fallback.
+        let null_menu = {
+            let mut source = base.clone();
+            source["theme"]["backgroundMenu"] = json!(null);
+            source
+        };
+        let theme = resolve_v1(&null_menu, Mode::Dark).unwrap();
+        assert_eq!(theme.color("backgroundMenu"), theme.color("backgroundElement"));
+        assert!(!theme.has_selected_list_item_text);
     }
 
     #[test]

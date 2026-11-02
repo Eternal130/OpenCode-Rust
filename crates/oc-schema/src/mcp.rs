@@ -91,12 +91,59 @@ pub struct RemoteConfig {
     pub protocol: Option<Protocol>,
 }
 
-/// `oauth` value: config object or `false` to disable.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(untagged)]
+/// `oauth` value: config object or the literal `false` to disable
+/// (ref mcp.ts:57 `Schema.Union([OAuthConfig, Schema.Literal(false)])` —
+/// `true` is a schema error, G-160①).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OAuthValue {
     Config(OAuthConfig),
-    Disabled(bool),
+    Disabled,
+}
+
+impl Serialize for OAuthValue {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            OAuthValue::Config(config) => config.serialize(serializer),
+            OAuthValue::Disabled => serializer.serialize_bool(false),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for OAuthValue {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        if value == serde_json::Value::Bool(false) {
+            return Ok(OAuthValue::Disabled);
+        }
+        if value.is_object() {
+            if let Ok(config) = serde_json::from_value::<OAuthConfig>(value) {
+                return Ok(OAuthValue::Config(config));
+            }
+        }
+        Err(serde::de::Error::custom(
+            "invalid `oauth` value: expected an OAuth config object or the literal `false`",
+        ))
+    }
+}
+
+impl schemars::JsonSchema for OAuthValue {
+    fn schema_name() -> String {
+        "Mcp.OAuthValue".to_string()
+    }
+
+    fn json_schema(gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
+        use schemars::schema::{InstanceType, Schema, SchemaObject, SubschemaValidation};
+        let config: Schema = gen.subschema_for::<OAuthConfig>().into();
+        let literal_false =
+            Schema::Object(SchemaObject { instance_type: Some(InstanceType::Boolean.into()), ..Default::default() });
+        Schema::Object(SchemaObject {
+            subschemas: Some(Box::new(SubschemaValidation {
+                one_of: Some(vec![config, literal_false]),
+                ..Default::default()
+            })),
+            ..Default::default()
+        })
+    }
 }
 
 /// `Mcp.ServerConfig` — tagged by `type`.
@@ -201,6 +248,20 @@ pub struct ResourceContent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// G-160①: the `oauth` union only accepts an object or literal `false`;
+    /// `true` must be a deserialization error (ref `Schema.Literal(false)`).
+    #[test]
+    fn oauth_value_rejects_true() {
+        let err = serde_json::from_value::<OAuthValue>(serde_json::json!(true)).unwrap_err();
+        assert!(err.to_string().contains("literal `false`"), "unexpected error: {err}");
+        let disabled: OAuthValue = serde_json::from_value(serde_json::json!(false)).unwrap();
+        assert_eq!(disabled, OAuthValue::Disabled);
+        assert_eq!(serde_json::to_value(OAuthValue::Disabled).unwrap(), serde_json::json!(false));
+        let config: OAuthValue =
+            serde_json::from_value(serde_json::json!({"client_id": "abc"})).unwrap();
+        assert!(matches!(config, OAuthValue::Config(_)));
+    }
 
     #[test]
     fn server_config_local_wire() {

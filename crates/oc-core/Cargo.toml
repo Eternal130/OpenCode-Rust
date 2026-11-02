@@ -33,7 +33,6 @@ json5 = "0.4"
 git2 = { version = "0.19", default-features = false }
 rand = "0.8"
 sha2 = "0.10"
-sha1 = "0.10"
 # CRED-V3: RS256 self-signed JWT grants for service-account ADC files.
 # ring 0.17 is already in the workspace lock (rustls); depending on it
 # directly adds no new packages and brings the audited RSA signer.

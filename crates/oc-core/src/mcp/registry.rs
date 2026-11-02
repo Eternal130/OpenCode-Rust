@@ -846,7 +846,7 @@ impl McpRegistry {
     #[allow(clippy::unused_self)] // service-level seam (the integration row's method registration is the CLI lane's)
     fn register_integration(&self, name: &str, entry: &mut ServerEntry) {
         let ServerConfig::Remote(remote) = &entry.config else { return };
-        if remote.oauth == Some(oc_schema::mcp::OAuthValue::Disabled(false)) {
+        if remote.oauth == Some(oc_schema::mcp::OAuthValue::Disabled) {
             return;
         }
         let suffix = integration_suffix(name, &remote.url);

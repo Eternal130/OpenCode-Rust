@@ -138,3 +138,21 @@ fn builtin_theme_counts() {
     let document = parse_theme_document(&json, "opencode").unwrap();
     assert_eq!(document.modes(), vec![Mode::Light, Mode::Dark]);
 }
+
+/// G-160②: unknown hue step keys must error, not be silently ignored
+/// (ref tui/resolve.ts:222-225 `throw "Unknown hue step"`).
+#[test]
+fn unknown_hue_step_errors() {
+    let mut hue = serde_json::json!({
+        "blue": {
+            "100": "#dbeafe", "200": "#bfdbfe", "300": "#93c5fd", "400": "#60a5fa",
+            "500": "#3b82f6", "600": "#2563eb", "700": "#1d4ed8", "800": "#1e40af",
+            "900": "#1e3a8a"
+        }
+    });
+    let valid = hue.clone();
+    oc_theme::resolve::resolve_hue(valid.as_object().unwrap()).unwrap();
+    hue["blue"]["50"] = serde_json::json!("#eff6ff");
+    let err = oc_theme::resolve::resolve_hue(hue.as_object().unwrap()).unwrap_err();
+    assert!(err.0.contains("Unknown hue step at \"hue.blue.50\""), "{err:?}");
+}

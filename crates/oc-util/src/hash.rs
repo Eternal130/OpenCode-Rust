@@ -1,19 +1,31 @@
 //! Content hashing (`packages/util/src/hash.ts`).
 
+use sha1::Sha1;
 use sha2::{Digest, Sha256};
+
+/// `Hash.fast` — SHA-1 of the UTF-8 bytes of `input`, lowercase hex
+/// (G-162②: unified util; previously each call site rolled its own sha1).
+#[must_use]
+pub fn sha1_hex(input: impl AsRef<[u8]>) -> String {
+    use sha1::Digest as _;
+    let digest = Sha1::digest(input.as_ref());
+    hex_lower(&digest)
+}
+
+fn hex_lower(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        let _ = write!(out, "{byte:02x}");
+    }
+    out
+}
 
 /// SHA-256 of the UTF-8 bytes of `input`, lowercase hex.
 #[must_use]
 pub fn sha256_hex(input: impl AsRef<[u8]>) -> String {
-    use std::fmt::Write as _;
-    let mut hasher = Sha256::new();
-    hasher.update(input.as_ref());
-    let digest = hasher.finalize();
-    let mut out = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        let _ = write!(out, "{byte:02x}");
-    }
-    out
+    let digest = Sha256::digest(input.as_ref());
+    hex_lower(&digest)
 }
 
 #[cfg(test)]
@@ -26,6 +38,13 @@ mod tests {
             sha256_hex(""),
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         );
+    }
+
+    #[test]
+    fn sha1_known_vectors() {
+        assert_eq!(sha1_hex(""), "da39a3ee5e6b4b0d3255bfef95601890afd80709");
+        assert_eq!(sha1_hex("abc"), "a9993e364706816aba3e25717850c26c9cd0d89d");
+        assert_eq!(sha1_hex("latest"), sha1_hex("latest".as_bytes()));
     }
 
     #[test]

@@ -2522,10 +2522,9 @@ fn config_websearch_selection(
     documents.iter().rev().find_map(|document| {
         let selection = document.info.websearch.as_ref()?;
         match selection {
-            oc_schema::config::websearch::WebSearchSelection::Disabled(false) => {
+            oc_schema::config::websearch::WebSearchSelection::Disabled => {
                 Some(crate::tool::websearch::Selection::Disabled)
             }
-            oc_schema::config::websearch::WebSearchSelection::Disabled(_) => None,
             oc_schema::config::websearch::WebSearchSelection::Info(info) => {
                 Some(match info.provider {
                     oc_schema::config::websearch::WebSearchProvider::Random => {

@@ -540,14 +540,8 @@ fn hex_digit(byte: u8) -> Option<u8> {
 
 /// `Hash.fast` — sha1 hex (the cache slot key under `<cache>/skills/`).
 fn sha1_hex(value: &str) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let digest = ring::digest::digest(&ring::digest::SHA1_FOR_LEGACY_USE_ONLY, value.as_bytes());
-    let mut hex = String::with_capacity(digest.as_ref().len() * 2);
-    for byte in digest.as_ref() {
-        hex.push(HEX[(byte >> 4) as usize] as char);
-        hex.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    hex
+    // G-162②: unified `Hash.fast` in oc-util.
+    oc_util::hash::sha1_hex(value)
 }
 
 // ===========================================================================
