@@ -25,12 +25,35 @@ pub struct Endpoint {
 }
 
 impl Endpoint {
+    /// `Service.headers(endpoint)` (service-probe.ts:72-77): the single
+    /// auth-header seam every fetch goes through. Ref's `Endpoint.auth`
+    /// only ever carries `{ type: "basic", username, password }` (v2 has
+    /// no bearer scheme), so the parity surface is exactly one
+    /// `authorization: Basic base64(user:password)` header (G-154).
+    #[must_use]
+    pub fn service_headers(&self) -> Vec<(&'static str, String)> {
+        match &self.password {
+            Some(password) => {
+                use base64::Engine as _;
+                let encoded = base64::engine::general_purpose::STANDARD
+                    .encode(format!("{}:{password}", self.username()));
+                vec![("authorization", format!("Basic {encoded}"))]
+            }
+            None => Vec::new(),
+        }
+    }
+
+    /// The basic-auth username (`"opencode"`; v2 hardcodes it).
+    fn username(&self) -> &str {
+        "opencode"
+    }
+
     /// `Service.headers(endpoint)` → a configured SDK client.
     #[must_use]
     pub fn client(&self) -> HttpClient {
         let mut client = HttpClient::new(&self.url).expect("valid endpoint url");
         if let Some(password) = &self.password {
-            client = client.with_basic_auth("opencode", Some(password.clone()));
+            client = client.with_basic_auth(self.username(), Some(password.clone()));
         }
         client
     }
@@ -242,6 +265,27 @@ pub async fn resolve_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn service_headers_is_basic_only() {
+        use base64::Engine as _;
+        // G-154: `Service.headers` (service-probe.ts:72-77) — the only
+        // scheme ref's Endpoint.auth carries is basic; no bearer.
+        let unauthed = Endpoint { url: "http://x".to_owned(), password: None };
+        assert!(unauthed.service_headers().is_empty());
+        let authed = Endpoint { url: "http://x".to_owned(), password: Some("pw".to_owned()) };
+        assert_eq!(
+            authed.service_headers(),
+            vec![(
+                "authorization",
+                format!(
+                    "Basic {}",
+                    base64::engine::general_purpose::STANDARD.encode("opencode:pw")
+                )
+            )],
+            "user:password base64, username hardcoded to opencode"
+        );
+    }
 
     #[tokio::test]
     async fn server_and_standalone_conflict() {

@@ -376,16 +376,29 @@ async fn get_session(
 ) -> Result<oc_client::types::SessionInfo, AcpError> {
     let id = decode_session_id(session_id)?;
     let session = app.client.session().get(&id).await.map_err(|error| classify(&error))?;
-    let session_dir = std::fs::canonicalize(&session.location.directory)
-        .unwrap_or_else(|_| std::path::PathBuf::from(&session.location.directory));
-    let requested = std::fs::canonicalize(cwd).unwrap_or_else(|_| std::path::PathBuf::from(cwd));
-    if session_dir != requested {
+    // G-159: ref compares through `FSUtil.resolve`
+    // (fs-util.ts:105-109) — `path.resolve` (lexical absolutize +
+    // `..` collapse) THEN `fs.realPath`, falling back to the lexical
+    // result when the path does not exist. The old double
+    // `std::fs::canonicalize` matched the realPath half but its
+    // fallback kept the raw string, so relative/`..`-laden inputs
+    // diverged; the seam below mirrors ref exactly.
+    if fs_util_resolve(cwd) != fs_util_resolve(&session.location.directory) {
         return Err(AcpError::SessionDirectoryMismatch {
             session_id: session_id.to_owned(),
             cwd: cwd.to_owned(),
         });
     }
     Ok(session)
+}
+
+/// `FSUtil.resolve`: `path.resolve(windowsPath(input))` lexically
+/// (against the process cwd), then realpath with a NotFound fallback
+/// to the lexical result.
+fn fs_util_resolve(input: &str) -> std::path::PathBuf {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let lexical = oc_core::file_access::lexical_resolve(&cwd, std::path::Path::new(input));
+    std::fs::canonicalize(&lexical).unwrap_or(lexical)
 }
 
 /// `ACPDirectories.activate` wrapper (service.ts:151, 203, 218).
@@ -501,5 +514,25 @@ mod tests {
     fn updated_at_is_iso() {
         assert_eq!(iso_timestamp(0.0), "1970-01-01T00:00:00.000Z");
         assert_eq!(iso_timestamp(1_767_225_600.0), "2026-01-01T00:00:00.000Z");
+    }
+
+    /// G-159: `FSUtil.resolve` — lexical absolutize + `..` collapse
+    /// first, realpath with a NotFound fallback to the lexical result.
+    #[test]
+    fn fs_util_resolve_normalizes_lexically() {
+        let cwd = std::env::current_dir().expect("cwd");
+        // `..` segments collapse lexically (path.resolve semantics):
+        // `a/../b` stays under the cwd, unlike a raw canonicalize path.
+        assert_eq!(fs_util_resolve("a/../b"), cwd.join("b"));
+        // A nonexistent path keeps the lexical form (no canonicalize).
+        assert_eq!(
+            fs_util_resolve("/definitely/not/here/../x"),
+            std::path::PathBuf::from("/definitely/not/x")
+        );
+        // An existing path resolves symlinks (realPath) — both sides go
+        // through the same seam, so symlink-entered dirs compare equal.
+        let this = fs_util_resolve("src/./acp/service.rs");
+        let direct = fs_util_resolve(&cwd.join("src/acp/service.rs").display().to_string());
+        assert_eq!(this, direct);
     }
 }
