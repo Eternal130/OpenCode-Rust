@@ -87,7 +87,9 @@ pub struct Atom {
 /// each. [`merged_cells`] subtracts those merges.
 #[must_use]
 pub fn display_width(text: &str) -> usize {
-    text.width().saturating_sub(merged_cells(text))
+    text.width()
+        .saturating_sub(merged_cells(text))
+        .saturating_sub(text_emoji_narrowed_cells(text))
 }
 
 /// Cluster-aware display width of one grapheme cluster — the same
@@ -95,7 +97,106 @@ pub fn display_width(text: &str) -> usize {
 /// value, so the sum of a flattened stream's atom widths equals the
 /// display width of the concatenated text.
 fn atom_width(cluster: &str) -> usize {
-    cluster.width().saturating_sub(merged_cells(cluster))
+    cluster
+        .width()
+        .saturating_sub(merged_cells(cluster))
+        .saturating_sub(usize::from(text_emoji_narrow(cluster)))
+}
+
+// -- G-129: the text-presentation emoji narrowing ---------------------------
+
+/// G-129 — the text-presentation emoji narrowing (ref
+/// `string-width.node.ts:9-26`): a GRAPHENE cluster that measures 2
+/// cells but is a default-text-presentation emoji — not East-Asian
+/// Wide/Fullwidth, no VS16/20E3/ZWJ, base + `Mark*` only — counts 1
+/// (`❤`-style symbols render one cell wide in the ref).
+///
+/// Guard chain, mirroring the ref's condition order:
+/// * the cluster must measure 2 (`width !== 2` returns early);
+/// * `eastAsianWidth(codePoint) === 2` is excluded — proxied by
+///   `width_cjk() == Some(2)`: every EAW Wide/Fullwidth codepoint is
+///   wide in the CJK measure (and so are Emoji_Presentation
+///   codepoints, which the ref's `emojiPresentation` check also
+///   excludes — one proxy covers both ref exclusions);
+/// * the base must be an emoji — the ref regex
+///   `/^\p{Emoji}\p{Mark}*$/u` needs the full Unicode `Emoji`
+///   property; the port uses a bounded static range table
+///   (`TEXT_EMOJI_BASE`) covering the emoji blocks (documented
+///   bounded deviation, G-129);
+/// * trailing chars approximate `\p{Mark}*` as zero-width;
+/// * VS16 (`FE0F`), keycap (`20E3`) and ZWJ anywhere abort.
+///
+/// Empirical note (probed against unicode-width 0.2): the library
+/// assigns 2 only to EAW W/F or Emoji_Presentation codepoints, so the
+/// rule's firing set is empty for plain clusters today — `❤` already
+/// measures 1 like the ref. The guard chain is ported anyway so any
+/// cluster a future width table measures as 2 narrows exactly like
+/// the reference.
+fn text_emoji_narrow(cluster: &str) -> bool {
+    use unicode_width::UnicodeWidthChar;
+    let mut chars = cluster.chars();
+    let Some(base) = chars.next() else { return false };
+    if cluster.width() != 2 {
+        return false;
+    }
+    // EAW Wide/Fullwidth and Emoji_Presentation bases stay 2.
+    if base.width_cjk() == Some(2) {
+        return false;
+    }
+    if !emoji_base(base as u32) {
+        return false;
+    }
+    if cluster.contains('\u{FE0F}')
+        || cluster.contains('\u{20E3}')
+        || cluster.contains('\u{200D}')
+    {
+        return false;
+    }
+    // `\p{Mark}*` — only zero-width trailers may follow the base.
+    chars.all(|ch| matches!(ch.width(), None | Some(0)))
+}
+
+/// G-129 — the bounded `Emoji`-property stand-in (see
+/// [`text_emoji_narrow`]): the emoji base blocks ( Miscellaneous
+/// Symbols, Dingbats, SMP emoji planes, the scattered ASCII/Latin
+/// emoji codepoints).
+static TEXT_EMOJI_BASE: &[(u32, u32)] = &[
+    (0x00A9, 0x00A9),
+    (0x00AE, 0x00AE),
+    (0x203C, 0x203C),
+    (0x2049, 0x2049),
+    (0x2122, 0x2122),
+    (0x2139, 0x2139),
+    (0x2194, 0x21AA),
+    (0x231A, 0x231B),
+    (0x2328, 0x2328),
+    (0x23CF, 0x23FA),
+    (0x24C2, 0x24C2),
+    (0x25AA, 0x25FE),
+    (0x2600, 0x27BF),
+    (0x2934, 0x2935),
+    (0x2B00, 0x2BFF),
+    (0x3030, 0x3030),
+    (0x303D, 0x303D),
+    (0x3297, 0x3299),
+    (0x1F000, 0x1FAFF),
+];
+
+/// G-129 — membership in the bounded emoji table.
+fn emoji_base(code: u32) -> bool {
+    TEXT_EMOJI_BASE.iter().any(|&(lo, hi)| code >= lo && code <= hi)
+}
+
+/// G-129 — the per-cluster narrowing applied over a whole string
+/// (`stringWidth`'s grapheme reduce): one cell back per narrowed
+/// cluster. Cheap pre-gate: only strings touching the emoji blocks
+/// pay the segmentation.
+fn text_emoji_narrowed_cells(text: &str) -> usize {
+    use unicode_segmentation::UnicodeSegmentation;
+    if !text.chars().any(|ch| emoji_base(ch as u32)) {
+        return 0;
+    }
+    text.graphemes(true).map(|cluster| usize::from(text_emoji_narrow(cluster))).sum()
 }
 
 /// Cells the per-char sum overcounts vs grapheme clustering: one per
@@ -756,5 +857,51 @@ mod tests {
             // CJK stays wide.
             assert_eq!(display_width("数据库"), 6);
         }
+    }
+}
+
+// -- G-129: text-presentation emoji narrowing --------------------------------
+
+#[cfg(test)]
+mod g129_tests {
+    use super::*;
+
+    #[test]
+    fn heart_and_text_symbols_measure_one_cell() {
+        // ❤ / ⚠ / ☀ / ✔ — default-text-presentation emoji: 1 in the
+        // ref (string-width.node.ts:9-26) and 1 here.
+        assert_eq!(display_width("❤"), 1);
+        assert_eq!(display_width("⚠"), 1);
+        assert_eq!(display_width("☀"), 1);
+        assert_eq!(display_width("✔"), 1);
+    }
+
+    #[test]
+    fn presentation_and_wide_emoji_stay_two_cells() {
+        assert_eq!(display_width("❤️"), 2, "VS16 forces the wide form");
+        assert_eq!(display_width("✅"), 2, "Emoji_Presentation stays 2");
+        assert_eq!(display_width("⌚"), 2);
+        assert_eq!(display_width("🙋"), 2);
+        assert_eq!(display_width("🇺🇸"), 2, "a flag pair stays 2");
+    }
+
+    #[test]
+    fn cjk_unaffected_by_the_narrowing() {
+        assert_eq!(display_width("宽度"), 4);
+        assert_eq!(display_width("ｆｕｌｌ"), 8);
+    }
+
+    #[test]
+    fn narrow_rule_fires_only_under_its_guards() {
+        // The guard chain itself (unicode-width 0.2 already measures
+        // the text-presentation emoji at 1, so the width==2 gate
+        // leaves them at 1 — the ref's own result — and the remaining
+        // guards pin the exclusions for any 2-wide cluster).
+        assert!(!text_emoji_narrow("❤"), "already 1-wide: the gate keeps it 1");
+        assert!(!text_emoji_narrow("❤️"), "VS16 aborts");
+        assert!(!text_emoji_narrow("1️⃣"), "keycap (20E3) aborts");
+        assert!(!text_emoji_narrow("✅"), "Emoji_Presentation aborts");
+        assert!(!text_emoji_narrow("寛"), "EAW wide aborts");
+        assert!(!text_emoji_narrow("a"), "not an emoji base");
     }
 }
