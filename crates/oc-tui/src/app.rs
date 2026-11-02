@@ -7593,42 +7593,6 @@ fn session_setup_options(mouse: bool) -> opentui_core::terminal::SetupOptions {
 const BOOT_DISCARD_WINDOW: std::time::Duration = std::time::Duration::from_millis(300);
 
 
-/// The live session registry for the crash-restore panic hook (the
-/// hook drives the live Terminal's teardown; a stale entry from an
-/// abandoned boot is swapped out by re-registration).
-static SESSION_TERMINAL: std::sync::Mutex<Option<Arc<std::sync::Mutex<SessionTerminal>>>> =
-    std::sync::Mutex::new(None);
-
-fn register_session_terminal(session: &Arc<std::sync::Mutex<SessionTerminal>>) {
-    if let Ok(mut slot) = SESSION_TERMINAL.lock() {
-        *slot = Some(Arc::clone(session));
-    }
-}
-
-fn unregister_session_terminal() {
-    if let Ok(mut slot) = SESSION_TERMINAL.lock() {
-        *slot = None;
-    }
-}
-
-/// The crash-restore panic path (lane TAIL P3, B3a form): drive the
-/// LIVE session Terminal's own teardown — opentui's epilogue from
-/// live state (raw-mode restore, mode pops under their gates). Runs
-/// ONLY on the terminal-owning thread's panics (see
-/// `terminal_proto::install_crash_restore`); falls back to the static
-/// restore bytes when the session lock is held by the panicking owner
-/// or no session is registered.
-pub(crate) fn panic_teardown_session() {
-    let session = SESSION_TERMINAL.lock().ok().and_then(|slot| slot.clone());
-    if let Some(session) = session {
-        if let Ok(mut terminal) = session.try_lock() {
-            let _ = terminal.teardown();
-            return;
-        }
-    }
-    crate::terminal_proto::emit(crate::terminal_proto::crash_restore_sequence());
-}
-
 /// Rebuild the session terminal after a suspend (same TTY, same
 /// options — `Terminal::new` re-runs raw mode + the setup burst).
 fn rebuild_session_terminal(
@@ -7644,7 +7608,6 @@ fn rebuild_session_terminal(
     if let Ok(mut slot) = session.lock() {
         *slot = terminal;
     }
-    register_session_terminal(session);
     Ok(())
 }
 
@@ -7739,7 +7702,6 @@ pub async fn run_with_size(
         .map_err(|e| e.to_string())?;
         Arc::new(std::sync::Mutex::new(terminal))
     };
-    register_session_terminal(&session_terminal);
     // The crash-restore guards (lane TAIL P3): SIGHUP/SIGTERM keep the
     // write(2)-only path; the PANIC hook runs the live Terminal's own
     // teardown (thread-gated — worker-thread panics are routinely
@@ -8279,6 +8241,11 @@ pub async fn run_with_size(
             );
             let mut pipeline = KeyPipeline::new();
             let mut kitty_pushed = false;
+            // The first check_resize observation (None -> Some) is
+            // baseline adoption, NOT a resize — emitting it would
+            // re-resize ratatui at boot (a [2J + buffer invalidation
+            // crossterm's SIGWINCH-only stream never produced).
+            let mut resize_baseline_seen = false;
             // The boot discard window (the retired theme probe's
             // discipline, SA-F13's double-boot shield): for the first
             // window, non-reply bytes are DROPPED, not dispatched — a
@@ -8377,7 +8344,9 @@ pub async fn run_with_size(
                 } else {
                     None
                 };
-                if let Some((width, height)) = resized {
+                if let Some((width, height)) = resized.filter(|_| {
+                    std::mem::replace(&mut resize_baseline_seen, true)
+                }) {
                     if event_tx.blocking_send(TermEvent::Resize(width, height)).is_err() {
                         return;
                     }
@@ -8895,8 +8864,7 @@ pub async fn run_with_size(
             if let Ok(mut session) = session_terminal.lock() {
                 let _ = session.teardown();
             }
-            unregister_session_terminal();
-            let result = crate::editor::open_editor(&draft, cwd.as_deref(), || {}, || {});
+                let result = crate::editor::open_editor(&draft, cwd.as_deref(), || {}, || {});
             if let Err(error) = rebuild_session_terminal(&session_terminal, applied_mouse) {
                 break Err(error);
             }
@@ -8942,8 +8910,7 @@ pub async fn run_with_size(
             if let Ok(mut session) = session_terminal.lock() {
                 let _ = session.teardown();
             }
-            unregister_session_terminal();
-            crate::suspend::suspend_cycle();
+                crate::suspend::suspend_cycle();
             if let Err(error) = rebuild_session_terminal(&session_terminal, applied_mouse) {
                 break Err(error);
             }
@@ -9846,7 +9813,6 @@ pub async fn run_with_size(
             let _ = out.flush();
             let _ = session.teardown();
         }
-        unregister_session_terminal();
     }
     // #46 — the exit epilogue (v2 app.tsx:446-450: the renderer stops,
     // then `process.stdout.write(epilogue + "\n")`): the wordmark +
