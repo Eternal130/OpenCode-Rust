@@ -91,6 +91,25 @@ impl Modifier {
     pub const fn from_bits(bits: u16) -> Self {
         Self(bits)
     }
+
+    /// Iterate the set known flags, lowest bit first (bitflags `iter`
+    /// order — the canonical `Debug` chain lists modifiers in this
+    /// order).
+    pub fn iter(self) -> impl Iterator<Item = Modifier> {
+        [
+            Modifier::BOLD,
+            Modifier::DIM,
+            Modifier::ITALIC,
+            Modifier::UNDERLINED,
+            Modifier::SLOW_BLINK,
+            Modifier::RAPID_BLINK,
+            Modifier::REVERSED,
+            Modifier::HIDDEN,
+            Modifier::CROSSED_OUT,
+        ]
+        .into_iter()
+        .filter(move |flag| self.contains(*flag))
+    }
 }
 
 impl std::ops::BitOr for Modifier {
@@ -109,7 +128,7 @@ impl std::ops::BitOrAssign for Modifier {
 /// A paint style: optional fg/bg overlaid on the target cell, plus
 /// attribute words to add and remove — ratatui 0.29's `Style` shape
 /// (minus `underline_color`, which nothing in this crate sets).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Style {
     pub fg: Option<Color>,
     pub bg: Option<Color>,
@@ -128,6 +147,49 @@ impl Style {
             add_modifier: Modifier::EMPTY,
             sub_modifier: Modifier::EMPTY,
         }
+    }
+
+    /// The canonical builder-style `Debug` chain (ratatui 0.29's
+    /// `Style: Debug` prints `Style::new().fg(Color::Rgb(..)).bold()`
+    /// — the syntax goldens pin these bytes, so the vocabulary keeps
+    /// the exact format).
+    fn fmt_stylize(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use std::fmt::Write as _;
+        if let Some(color) = self.fg {
+            write!(f, ".fg(Color::{color:?})")?;
+        }
+        if let Some(color) = self.bg {
+            write!(f, ".bg(Color::{color:?})")?;
+        }
+        for modifier in self.add_modifier.iter() {
+            match modifier {
+                Modifier::BOLD => f.write_str(".bold()")?,
+                Modifier::DIM => f.write_str(".dim()")?,
+                Modifier::ITALIC => f.write_str(".italic()")?,
+                Modifier::UNDERLINED => f.write_str(".underlined()")?,
+                Modifier::SLOW_BLINK => f.write_str(".slow_blink()")?,
+                Modifier::RAPID_BLINK => f.write_str(".rapid_blink()")?,
+                Modifier::REVERSED => f.write_str(".reversed()")?,
+                Modifier::HIDDEN => f.write_str(".hidden()")?,
+                Modifier::CROSSED_OUT => f.write_str(".crossed_out()")?,
+                _ => write!(f, ".add_modifier(Modifier::{modifier:?})")?,
+            }
+        }
+        for modifier in self.sub_modifier.iter() {
+            match modifier {
+                Modifier::BOLD => f.write_str(".not_bold()")?,
+                Modifier::DIM => f.write_str(".not_dim()")?,
+                Modifier::ITALIC => f.write_str(".not_italic()")?,
+                Modifier::UNDERLINED => f.write_str(".not_underlined()")?,
+                Modifier::SLOW_BLINK => f.write_str(".not_slow_blink()")?,
+                Modifier::RAPID_BLINK => f.write_str(".not_rapid_blink()")?,
+                Modifier::REVERSED => f.write_str(".not_reversed()")?,
+                Modifier::HIDDEN => f.write_str(".not_hidden()")?,
+                Modifier::CROSSED_OUT => f.write_str(".not_crossed_out()")?,
+                _ => write!(f, ".remove_modifier(Modifier::{modifier:?})")?,
+            }
+        }
+        Ok(())
     }
 
     /// Set the foreground (overlay semantics: `None` leaves the
@@ -157,6 +219,15 @@ impl Style {
     pub const fn remove_modifier(mut self, modifier: Modifier) -> Self {
         self.sub_modifier.0 |= modifier.0;
         self
+    }
+}
+
+impl std::fmt::Debug for Style {
+    /// ratatui 0.29's builder-chain format (`Style::new().fg(..)…`),
+    /// byte-identical — the syntax goldens pin these bytes.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Style::new()")?;
+        self.fmt_stylize(f)
     }
 }
 
