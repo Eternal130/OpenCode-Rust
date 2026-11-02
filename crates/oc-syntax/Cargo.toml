@@ -10,7 +10,6 @@ workspace = true
 
 [dependencies]
 oc-theme = { workspace = true }
-ratatui = "0.29"
 streaming-iterator = "0.1"
 tree-sitter = "0.25"
 tree-sitter-language = "0.1"

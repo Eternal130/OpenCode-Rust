@@ -71,6 +71,7 @@ pub mod spike;
 pub mod stderr_redirect;
 pub mod storage;
 pub mod store;
+pub mod style;
 pub mod suspend;
 pub mod terminal_pane;
 pub mod terminal_proto;

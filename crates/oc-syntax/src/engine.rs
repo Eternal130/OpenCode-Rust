@@ -19,7 +19,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use ratatui::style::Style;
+use crate::style::Style;
 use streaming_iterator::StreamingIterator;
 
 use crate::queries;
