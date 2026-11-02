@@ -48,16 +48,18 @@
 mod engine;
 mod queries;
 mod scopes;
+mod style;
 
 pub use engine::HighlightedBlock;
 pub use scopes::SyntaxStyles;
+pub use style::{Color, Modifier, Style};
 
 /// One styled run of a highlighted line (oc-tui's span shape; the TUI
 /// converts trivially since both fields are public).
 #[derive(Debug, Clone, PartialEq)]
 pub struct StyledSpan {
     pub text: String,
-    pub style: ratatui::style::Style,
+    pub style: Style,
 }
 
 /// Highlight one fenced code block for a filetype.
@@ -363,7 +365,7 @@ mod tests {
             .collect();
         let source = lines.join("\n");
         let styles = v2_dark_syntax_styles();
-        let base = ratatui::style::Style::new();
+        let base = Style::new();
 
         let started = std::time::Instant::now();
         let block = highlight(&source, "rust").expect("rust parses");
@@ -388,7 +390,7 @@ mod tests {
         // same path the TUI drives): comment must differ from base, and
         // the concatenated span text must equal the source line.
         let styles = v2_dark_syntax_styles();
-        let base = ratatui::style::Style::new().fg(ratatui::style::Color::Rgb(1, 2, 3));
+        let base = Style::new().fg(Color::Rgb(1, 2, 3));
 
         let block = highlight("// a comment\nlet x = \"s\";", "rust").expect("rust");
         let comment = block.line_spans(0, base, &styles);

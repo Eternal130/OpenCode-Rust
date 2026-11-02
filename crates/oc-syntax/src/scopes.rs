@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use oc_theme::{Rgba, SyntaxStyleDef};
-use ratatui::style::{Color, Modifier, Style};
+use crate::style::{Color, Modifier, Style};
 
 /// The flattened scope → style map (`convertThemeToStyles` output),
 /// shared cheaply across renders.
