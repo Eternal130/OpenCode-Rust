@@ -28,11 +28,35 @@ pub async fn root(
             return 1;
         }
     }
-    let resolved = match server_connection::resolve(server_connection::Args {
-        server: server.server.clone(),
-        standalone: server.standalone,
-        mismatch: Mismatch::Replace,
-    })
+    // G-152 (ref default.ts:24 + services/update-preflight.tsx): when
+    // the ensured background server gets REPLACED (version/build
+    // mismatch during an update), the terminal prints the takeover
+    // notice before the new service starts. Bounded deviation: a plain
+    // stderr notice instead of ref's opentui split-footer renderer (the
+    // Rust CLI has no opentui runtime); the ref fallback line is used
+    // verbatim off-TTY.
+    let preflight: Option<server_connection::StartCallback> = Some(Box::new(
+        |reason: &str, previous_version: Option<&str>| {
+            if reason == "version-mismatch" || reason == "build-mismatch" {
+                if crate::util::stdin_is_tty() && crate::util::stdout_is_tty() {
+                    let from = previous_version.unwrap_or("unknown");
+                    eprintln!("Keeping your session safe while the new background service starts (replacing {from})...");
+                } else {
+                    eprintln!("Restarting background server (version mismatch)...");
+                }
+            } else {
+                eprintln!("Starting background server...");
+            }
+        },
+    ));
+    let resolved = match server_connection::resolve_with(
+        server_connection::Args {
+            server: server.server.clone(),
+            standalone: server.standalone,
+            mismatch: Mismatch::Replace,
+        },
+        preflight,
+    )
     .await
     {
         Ok(resolved) => resolved,
@@ -148,6 +172,43 @@ pub async fn uninstall(dry_run: bool, keep_config: bool, keep_data: bool, force:
     }
 
     let mut errors = crate::services::updater::execute_removals(&plan);
+    // G-156④ (ref uninstall.ts:113-125): run the package-manager
+    // removal when the installation is an npm-style package — the
+    // manager detected via the ref `method()` probe tail. A failure is
+    // a warning with the manual command (ref `log.warn`), not fatal.
+    // (The ref's win32 RetainedImage retain is skipped: non-win32
+    // target.)
+    let exe_for_removal = exe.clone();
+    if let Some(package) = crate::services::updater::installed_package(&exe_for_removal) {
+        let method = crate::services::updater::detect_method(&exe_for_removal)
+            .map(str::to_owned)
+            .or_else(|| crate::services::updater::detect_package_manager_method(&package).map(str::to_owned));
+        if let Some(method) = method {
+            if let Some(command) = crate::services::updater::removal_command(&method, &package) {
+                println!("Running {}...", command.join(" "));
+                match std::process::Command::new(&command[0])
+                    .args(&command[1..])
+                    .stdin(std::process::Stdio::null())
+                    .output()
+                {
+                    Ok(output) if output.status.success() => println!("Package removed"),
+                    Ok(output) => {
+                        println!("Package manager uninstall failed");
+                        errors.push(format!(
+                            "{}",
+                            String::from_utf8_lossy(&output.stderr).trim_end()
+                        ));
+                        eprintln!("Warning: Run manually: {}", command.join(" "));
+                    }
+                    Err(error) => {
+                        println!("Package manager uninstall failed");
+                        errors.push(error.to_string());
+                        eprintln!("Warning: Run manually: {}", command.join(" "));
+                    }
+                }
+            }
+        }
+    }
     for config in crate::services::updater::shell_configs() {
         let Ok(content) = std::fs::read_to_string(&config) else { continue };
         let cleaned = crate::services::updater::clean_shell_config(&content);

@@ -37,6 +37,8 @@ base64 = "0.22"
 rand = "0.8"
 libc = "0.2"
 dialoguer = { version = "0.11", features = ["fuzzy-select"] }
+# G-150: form-field pattern validation (ref answerForm `new RegExp`).
+regex = "1"
 # `session list` local-timezone timestamps (toLocaleString parity; same
 # approach as the oc-server stats handler, which documents why jiff).
 jiff = "0.2"

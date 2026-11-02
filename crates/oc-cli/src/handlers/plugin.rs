@@ -79,6 +79,18 @@ async fn list(builtin: bool, server: &ServerParams) -> i32 {
         }
         rows.push(("-".to_owned(), version, target));
     }
+    // G-153 (ref list.ts:14 `localPluginDirectories` +
+    // `discoverPluginTargets`): drop-in plugins from the config
+    // directories' `plugins/` children — directories and symlinks to
+    // directories — listed with version "local" (bounded to the global
+    // config dir and the project `.opencode`; the server inventory's
+    // local rows dedupe by path).
+    for target in local_plugin_directory_targets() {
+        if rows.iter().any(|(_, _, row_target)| row_target == &target) {
+            continue;
+        }
+        rows.push(("-".to_owned(), "local".to_owned(), target));
+    }
     if rows.is_empty() {
         println!("No plugins found");
         return 0;
@@ -87,7 +99,10 @@ async fn list(builtin: bool, server: &ServerParams) -> i32 {
     let mut table: Vec<Vec<String>> =
         vec![vec!["ID".to_owned(), "VERSION".to_owned(), "SOURCE".to_owned()]];
     for (id, version, target) in &rows {
-        let version = if version.len() == 40 || version.len() == 64 {
+        // G-153 (ref list.ts:94): only a real 40/64-char hex sha
+        // truncates to 7 chars — a bare length check used to clip any
+        // 40-character version string.
+        let version = if is_commitish(version) {
             version.chars().take(7).collect()
         } else {
             version.clone()
@@ -236,6 +251,43 @@ fn export_paths(entry: &Value) -> Vec<String> {
 /// The cli.json (`Config.Service`) document handle.
 fn cli_config() -> oc_core::cli_config::CliConfig {
     oc_core::cli_config::CliConfig::open(&oc_util::global_roots::resolve())
+}
+
+/// G-153 (ref list.ts:94): `/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i` — a
+/// version is commitish only when it is 40 or 64 LOWERCASE-hex-tolerant
+/// hex characters.
+fn is_commitish(version: &str) -> bool {
+    (version.len() == 40 || version.len() == 64)
+        && version.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+/// G-153 (ref discovery.ts `localPluginDirectories` +
+/// `discoverPluginTargets`): the drop-in plugin directories under the
+/// config directories' `plugins/` children — directories and symlinks
+/// resolving to directories, sorted by name.
+fn local_plugin_directory_targets() -> Vec<String> {
+    let mut directories = vec![oc_util::global_roots::resolve().config];
+    if let Ok(cwd) = std::env::current_dir() {
+        directories.push(cwd.join(".opencode"));
+    }
+    let mut targets: Vec<String> = Vec::new();
+    for directory in directories {
+        let plugins_dir = directory.join("plugins");
+        let Ok(entries) = std::fs::read_dir(&plugins_dir) else { continue };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let is_directory = entry.file_type().is_ok_and(|file_type| {
+                file_type.is_dir()
+                    || (file_type.is_symlink() && std::fs::metadata(&path).is_ok_and(|m| m.is_dir()))
+            });
+            if is_directory {
+                targets.push(path.display().to_string());
+            }
+        }
+    }
+    targets.sort();
+    targets.dedup();
+    targets
 }
 
 /// The TUI-plugin targets configured in cli.json `plugins[]` whose
@@ -733,6 +785,19 @@ async fn update(target: Option<&str>, server: &ServerParams) -> i32 {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// G-153: only real 40/64-char hex shas are commitish.
+    #[test]
+    fn is_commitish_requires_hex_not_just_length() {
+        assert!(is_commitish("a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5"));
+        assert!(is_commitish(&"a1b2c3d4".repeat(8)));
+        assert!(is_commitish("A1B2C3D4E5A1B2C3D4E5A1B2C3D4E5A1B2C3D4E5"));
+        // 40 characters, but not hex — must NOT truncate.
+        assert!(!is_commitish("zz1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5"));
+        assert!(!is_commitish("2.0.24-beta.1+abcdefghijklmnopqrst"));
+        assert!(!is_commitish("abc"));
+    }
     use super::{display_version, format_plugin_rows, PluginRow};
 
     fn row(runtime: &'static str, name: &str, version: Option<&str>, outdated: bool, error: bool) -> PluginRow {

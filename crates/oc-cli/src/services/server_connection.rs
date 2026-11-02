@@ -11,6 +11,7 @@
 
 use oc_client::Client as HttpClient;
 use oc_server::lifecycle::{self, EnsureOptions};
+pub use oc_server::lifecycle::StartCallback;
 
 use crate::services::service_config;
 use crate::services::standalone::{self, StandaloneServer};
@@ -182,6 +183,17 @@ pub async fn shutdown_persistent_pty() {
 
 /// `ServerConnection.resolve()`.
 pub async fn resolve(args: Args) -> Result<Resolved, String> {
+    resolve_with(args, None).await
+}
+
+/// G-152 — `resolve` carrying an `onStart` callback (ref
+/// ServerConnection.resolve's `onStart` → `UpdatePreflight.begin`):
+/// the root TUI launch hooks the version-mismatch replacement notice
+/// here; every other caller keeps `None`.
+pub async fn resolve_with(
+    args: Args,
+    on_start: Option<lifecycle::StartCallback>,
+) -> Result<Resolved, String> {
     if args.server.is_some() && args.standalone {
         return Err("--server and --standalone cannot be combined".to_owned());
     }
@@ -199,7 +211,11 @@ pub async fn resolve(args: Args) -> Result<Resolved, String> {
     }
 
     let endpoint = match args.mismatch {
-        Mismatch::Replace => ensure_with(service_config::options(true)).await?,
+        Mismatch::Replace => {
+            let mut options = service_config::options(true);
+            options.on_start = on_start;
+            ensure_with(options).await?
+        }
         Mismatch::Ignore => {
             let mut options = service_config::options(false);
             options.version = None;
