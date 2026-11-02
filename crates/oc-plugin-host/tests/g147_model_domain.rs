@@ -51,9 +51,7 @@ fn g147_model_domain_register_and_round_trip() {
     let entry = common::copy_fixture(&sandbox, "g147domains.ts");
     let config = oc_plugin_host::PluginHostConfig {
         env: vec![("OC_PLUGIN_TEST_SANDBOX".to_owned(), sandbox.display().to_string())],
-        model_port: Some(std::sync::Arc::new(MockModelPort {
-            reloaded: std::sync::Mutex::new(0),
-        })),
+        model_port: Some(std::sync::Arc::new(MockModelPort { reloaded: std::sync::Mutex::new(0) })),
         ..oc_plugin_host::PluginHostConfig::default()
     };
     let host = oc_plugin_host::PluginHost::detect().start_detached_with(config, &[entry]);
@@ -69,8 +67,10 @@ fn g147_model_domain_register_and_round_trip() {
     let models = read("model-list.json");
     assert!(models.contains("mock-large"), "model.list crossed the port: {models}");
     let narrowed = read("model-list-narrowed.json");
-    assert!(narrowed.contains("mockprov") && !narrowed.contains("otherprov"),
-        "model.list(providerID) narrows: {narrowed}");
+    assert!(
+        narrowed.contains("mockprov") && !narrowed.contains("otherprov"),
+        "model.list(providerID) narrows: {narrowed}"
+    );
     let default = read("model-default.json");
     assert!(default.contains("mock-large"), "model.default crossed the port: {default}");
     assert!(!sandbox.join("model.error").exists(), "no model read failed");
@@ -89,7 +89,8 @@ fn g147_model_domain_register_and_round_trip() {
     // -- registration coverage: the transform materialized natively ------
     let snapshot = host.registrations();
     assert!(
-        snapshot.models.iter().any(|o| o.provider_id == "mockprov" && o.model_id == "mock-mini"
+        snapshot.models.iter().any(|o| o.provider_id == "mockprov"
+            && o.model_id == "mock-mini"
             && o.model.get("name").and_then(Value::as_str) == Some("Mock Mini (patched)")),
         "model.transform registered the override: {:?}",
         snapshot.models
@@ -123,5 +124,9 @@ fn g148_effect_import_fails_with_clear_error() {
         .plugins
         .iter()
         .any(|status| matches!(status.state, oc_plugin_host::PluginState::Failed(_)));
-    assert!(failed, "effect-style import must fail the load (not load inert): {:?}", snapshot.plugins);
+    assert!(
+        failed,
+        "effect-style import must fail the load (not load inert): {:?}",
+        snapshot.plugins
+    );
 }

@@ -102,11 +102,8 @@ async fn list(builtin: bool, server: &ServerParams) -> i32 {
         // G-153 (ref list.ts:94): only a real 40/64-char hex sha
         // truncates to 7 chars — a bare length check used to clip any
         // 40-character version string.
-        let version = if is_commitish(version) {
-            version.chars().take(7).collect()
-        } else {
-            version.clone()
-        };
+        let version =
+            if is_commitish(version) { version.chars().take(7).collect() } else { version.clone() };
         table.push(vec![id.clone(), version, target.clone()]);
     }
     let width0 = table.iter().map(|row| row[0].len()).max().unwrap_or(0);
@@ -278,7 +275,8 @@ fn local_plugin_directory_targets() -> Vec<String> {
             let path = entry.path();
             let is_directory = entry.file_type().is_ok_and(|file_type| {
                 file_type.is_dir()
-                    || (file_type.is_symlink() && std::fs::metadata(&path).is_ok_and(|m| m.is_dir()))
+                    || (file_type.is_symlink()
+                        && std::fs::metadata(&path).is_ok_and(|m| m.is_dir()))
             });
             if is_directory {
                 targets.push(path.display().to_string());
@@ -636,8 +634,7 @@ fn display_version(version: &str) -> String {
 fn format_plugin_rows(rows: &[PluginRow]) -> String {
     let mut out = String::new();
     for runtime in ["Server", "TUI"] {
-        let section: Vec<&PluginRow> =
-            rows.iter().filter(|row| row.runtime == runtime).collect();
+        let section: Vec<&PluginRow> = rows.iter().filter(|row| row.runtime == runtime).collect();
         if section.is_empty() {
             continue;
         }
@@ -653,8 +650,7 @@ fn format_plugin_rows(rows: &[PluginRow]) -> String {
             } else {
                 "current"
             };
-            let version =
-                row.version.as_deref().map(display_version).unwrap_or_default();
+            let version = row.version.as_deref().map(display_version).unwrap_or_default();
             out.push_str(&format!("\n  {name} {version} ({status})", name = row.name));
         }
     }
@@ -759,7 +755,12 @@ async fn update(target: Option<&str>, server: &ServerParams) -> i32 {
         // Blocking install work — off the async runtime.
         let display_target = tui_target.clone();
         match tokio::task::spawn_blocking(move || {
-            oc_plugin_host::update(&tui_target, &root, cache, &oc_plugin_host::InstallOptions::default())
+            oc_plugin_host::update(
+                &tui_target,
+                &root,
+                cache,
+                &oc_plugin_host::InstallOptions::default(),
+            )
         })
         .await
         {
@@ -800,7 +801,13 @@ mod tests {
     }
     use super::{display_version, format_plugin_rows, PluginRow};
 
-    fn row(runtime: &'static str, name: &str, version: Option<&str>, outdated: bool, error: bool) -> PluginRow {
+    fn row(
+        runtime: &'static str,
+        name: &str,
+        version: Option<&str>,
+        outdated: bool,
+        error: bool,
+    ) -> PluginRow {
         PluginRow {
             runtime,
             target: name.to_owned(),

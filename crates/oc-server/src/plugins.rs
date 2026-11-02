@@ -2107,9 +2107,11 @@ impl oc_plugin_host::WebsearchPort for EngineWebsearchPort {
             Value::String(id) if id == "random" => oc_core::tool::websearch::Selection::Random,
             Value::Bool(false) => oc_core::tool::websearch::Selection::Disabled,
             Value::String(id) => oc_core::tool::websearch::Selection::Provider(id.clone()),
-            other => return Err(format!(
+            other => {
+                return Err(format!(
                 "websearch default selection must be a provider id, \"random\", or false: {other}"
-            )),
+            ))
+            }
         };
         services.websearch.select(&parsed).await;
         Ok(())

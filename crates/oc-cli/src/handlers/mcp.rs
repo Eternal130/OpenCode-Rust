@@ -339,7 +339,9 @@ async fn auth_interactive_choice() -> Result<Option<String>, i32> {
     let choices: Vec<&oc_client::types::McpServer> = servers
         .data
         .iter()
-        .filter(|server| server.integration_id.is_some() && resolve_remote_config(&server.name).is_some())
+        .filter(|server| {
+            server.integration_id.is_some() && resolve_remote_config(&server.name).is_some()
+        })
         .collect();
     if choices.is_empty() {
         println!("⚠ No OAuth-capable MCP servers configured");
@@ -476,16 +478,16 @@ async fn auth(name: Option<&str>) -> i32 {
     // newest stored credential's `metadata.client`) so the flow reuses it
     // instead of re-running DCR (ref oauth.ts:346-351).
     let previous_client = match client.credential().list().await {
-        Ok(rows) => rows
-            .into_iter()
-            .filter(|row| &row.integration_id == integration_id)
-            .last()
-            .and_then(|row| match row.value {
-                oc_client::types::CredentialValue::OAuth(value) => {
-                    oc_core::mcp::oauth::metadata_client(value.metadata.as_ref())
-                }
-                oc_client::types::CredentialValue::Key(_) => None,
-            }),
+        Ok(rows) => {
+            rows.into_iter().filter(|row| &row.integration_id == integration_id).last().and_then(
+                |row| match row.value {
+                    oc_client::types::CredentialValue::OAuth(value) => {
+                        oc_core::mcp::oauth::metadata_client(value.metadata.as_ref())
+                    }
+                    oc_client::types::CredentialValue::Key(_) => None,
+                },
+            )
+        }
         Err(_) => None,
     };
     let authorization = match oc_core::mcp::oauth::authorize(oc_core::mcp::oauth::AuthorizeInput {

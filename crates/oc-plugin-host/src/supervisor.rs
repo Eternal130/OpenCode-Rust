@@ -394,7 +394,8 @@ impl Shared {
     ///
     /// `None` = the reply is deferred (the `session.*` async path
     /// spawns the port call; the reply is enqueued when it settles).
-    fn answer_guest(self: &Arc<Self>, id: u64, method: &str, params: &Value) -> Option<String> {        match method {
+    fn answer_guest(self: &Arc<Self>, id: u64, method: &str, params: &Value) -> Option<String> {
+        match method {
             "command.add" | "theme.register" => Some(answer_wave1(self, id, method, params)),
             // -- wave 2: transform-domain materialization (registration
             //    time only — the only synchronous surface).

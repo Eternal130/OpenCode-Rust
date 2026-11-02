@@ -110,10 +110,9 @@ pub fn package_name() -> String {
 #[must_use]
 pub fn installed_package(exe: &Path) -> Option<String> {
     let directory = exe.parent()?.parent()?.to_owned();
-    let manifest: Value = serde_json::from_str(
-        &std::fs::read_to_string(directory.join("package.json")).ok()?,
-    )
-    .ok()?;
+    let manifest: Value =
+        serde_json::from_str(&std::fs::read_to_string(directory.join("package.json")).ok()?)
+            .ok()?;
     let name = manifest.get("name")?.as_str()?.to_owned();
     let valid = name == "@opencode-ai/cli"
         || name == "@opencode/cli"
@@ -168,8 +167,7 @@ pub fn package_manager_command(
     installed: Option<&str>,
 ) -> Result<Vec<String>, PackageCommandError> {
     let target = format!("{package}@{version}");
-    let installed_differs =
-        installed.is_some_and(|installed| installed != package);
+    let installed_differs = installed.is_some_and(|installed| installed != package);
     match method {
         "npm" => {
             // G-156 (ref updater.ts:392-398): for the `cli` artifact
@@ -179,8 +177,7 @@ pub fn package_manager_command(
                 None => true,
                 Some(installed) => !installed.ends_with("/cli-node") || installed != package,
             };
-            let mut argv =
-                vec!["npm".to_owned(), "install".to_owned(), "--global".to_owned()];
+            let mut argv = vec!["npm".to_owned(), "install".to_owned(), "--global".to_owned()];
             if force {
                 argv.push("--force".to_owned());
             }
@@ -215,9 +212,9 @@ pub fn package_manager_command(
         ]),
         "vp" => Ok(vec!["vp".to_owned(), "update".to_owned(), "-g".to_owned(), target]),
         "brew" => Ok(vec!["brew".to_owned(), "upgrade".to_owned(), package.to_owned()]),
-        other => Err(PackageCommandError::Unknown(format!(
-            "Unknown package-manager method: {other}"
-        ))),
+        other => {
+            Err(PackageCommandError::Unknown(format!("Unknown package-manager method: {other}")))
+        }
     }
 }
 
@@ -245,10 +242,21 @@ impl std::error::Error for PackageCommandError {}
 #[must_use]
 pub fn removal_command(method: &str, package: &str) -> Option<Vec<String>> {
     let command = match method {
-        "npm" => vec!["npm".to_owned(), "uninstall".to_owned(), "--global".to_owned(), package.to_owned()],
-        "pnpm" => vec!["pnpm".to_owned(), "remove".to_owned(), "--global".to_owned(), package.to_owned()],
-        "bun" => vec!["bun".to_owned(), "remove".to_owned(), "--global".to_owned(), package.to_owned()],
-        "yarn" => vec!["yarn".to_owned(), "global".to_owned(), "remove".to_owned(), package.to_owned()],
+        "npm" => vec![
+            "npm".to_owned(),
+            "uninstall".to_owned(),
+            "--global".to_owned(),
+            package.to_owned(),
+        ],
+        "pnpm" => {
+            vec!["pnpm".to_owned(), "remove".to_owned(), "--global".to_owned(), package.to_owned()]
+        }
+        "bun" => {
+            vec!["bun".to_owned(), "remove".to_owned(), "--global".to_owned(), package.to_owned()]
+        }
+        "yarn" => {
+            vec!["yarn".to_owned(), "global".to_owned(), "remove".to_owned(), package.to_owned()]
+        }
         "vp" => vec!["vp".to_owned(), "uninstall".to_owned(), "-g".to_owned(), package.to_owned()],
         _ => return None,
     };
@@ -290,10 +298,7 @@ pub fn detect_package_manager_method(package: &str) -> Option<&'static str> {
             // a JSON row naming the package (ref decodeVpPackages).
             let Ok(parsed) = serde_json::from_str::<Value>(&stdout) else { continue };
             let Some(rows) = parsed.as_array() else { continue };
-            if rows
-                .iter()
-                .any(|row| row.get("name").and_then(Value::as_str) == Some(package))
-            {
+            if rows.iter().any(|row| row.get("name").and_then(Value::as_str) == Some(package)) {
                 return Some(method);
             }
         } else if stdout.contains(package) {
@@ -1969,8 +1974,7 @@ mod tests {
         // npm: --force is conditional (G-156, ref updater.ts:392-398):
         // for the cli artifact it stays ON unless the installed
         // package is the same `*-cli-node` variant.
-        let npm =
-            package_manager_command("npm", "@opencode-ai/cli", "2.0.24", None).expect("npm");
+        let npm = package_manager_command("npm", "@opencode-ai/cli", "2.0.24", None).expect("npm");
         assert_eq!(npm, vec!["npm", "install", "--global", "--force", "@opencode-ai/cli@2.0.24"]);
         let npm_same_name =
             package_manager_command("npm", "@opencode-ai/cli", "2.0.24", Some("@opencode-ai/cli"))

@@ -13,7 +13,10 @@ use serde_json::Value;
 /// ref form.ts `answerForm`: build the form answer from the raw
 /// `--answer key=value` inputs. `Ok(None)` = no form (nothing to
 /// answer); `Err` = a validation failure (the caller prints + exits).
-pub fn answer_form(fields: Option<&[Value]>, input: &[String]) -> Result<Option<FormAnswer>, String> {
+pub fn answer_form(
+    fields: Option<&[Value]>,
+    input: &[String],
+) -> Result<Option<FormAnswer>, String> {
     let mut supplied: Vec<(String, String)> = Vec::new();
     for item in input {
         let Some(separator) = item.find('=') else {
@@ -46,7 +49,9 @@ pub fn answer_form(fields: Option<&[Value]>, input: &[String]) -> Result<Option<
             Some((_, provided)) => supplied_answer(field, &key, provided)?,
             // Hidden non-external fields take their default without
             // prompting (ref: `field.hidden ? field.default`).
-            None if field_type(field) != "external" && field.get("hidden").and_then(Value::as_bool).unwrap_or(false) => {
+            None if field_type(field) != "external"
+                && field.get("hidden").and_then(Value::as_bool).unwrap_or(false) =>
+            {
                 json_to_form_value(field.get("default").unwrap_or(&Value::Null))
             }
             None => answer_field(field)?,
@@ -87,7 +92,9 @@ fn active(field: &Value, answer: &FormAnswer) -> bool {
     }
     let Some(conditions) = field.get("when").and_then(Value::as_array) else { return true };
     conditions.iter().all(|condition| {
-        let Some(condition_key) = condition.get("key").and_then(Value::as_str) else { return false };
+        let Some(condition_key) = condition.get("key").and_then(Value::as_str) else {
+            return false;
+        };
         let Some(value) = answer.get(condition_key) else { return false };
         let expected = condition.get("value").cloned().unwrap_or(Value::Null);
         let matches = match value {
@@ -132,10 +139,7 @@ fn json_to_form_value(value: &Value) -> FormValue {
             oc_client::types::FormValueVariant2::Number(number.as_f64().unwrap_or(0.0)),
         ),
         Value::Array(items) => FormValue::Array(
-            items
-                .iter()
-                .map(|item| item.as_str().unwrap_or_default().to_owned())
-                .collect(),
+            items.iter().map(|item| item.as_str().unwrap_or_default().to_owned()).collect(),
         ),
         Value::Null => FormValue::String(String::new()),
         Value::Object(_) => FormValue::String(value.to_string()),
@@ -171,7 +175,11 @@ fn answer_field(field: &Value) -> Result<FormValue, String> {
         "boolean" => {
             if required {
                 let default = field.get("default").and_then(Value::as_bool).unwrap_or(true);
-                let value = Confirm::new().with_prompt(message).default(default).interact().map_err(|e| e.to_string())?;
+                let value = Confirm::new()
+                    .with_prompt(message)
+                    .default(default)
+                    .interact()
+                    .map_err(|e| e.to_string())?;
                 Ok(FormValue::Boolean(value))
             } else {
                 // Yes / No / Skip (ref select with the skip symbol).
@@ -181,7 +189,12 @@ fn answer_field(field: &Value) -> Result<FormValue, String> {
                     Some(false) => 1,
                     None => 2,
                 };
-                match Select::new().with_prompt(message).items(&items).default(default).interact_opt() {
+                match Select::new()
+                    .with_prompt(message)
+                    .items(&items)
+                    .default(default)
+                    .interact_opt()
+                {
                     Ok(Some(0)) => Ok(FormValue::Boolean(true)),
                     Ok(Some(1)) => Ok(FormValue::Boolean(false)),
                     Ok(_) => Ok(FormValue::String(String::new())), // skipped: no value
@@ -191,7 +204,8 @@ fn answer_field(field: &Value) -> Result<FormValue, String> {
         }
         "multiselect" => {
             let options = option_list(field);
-            let mut items: Vec<String> = options.iter().map(|(label, _, _)| label.clone()).collect();
+            let mut items: Vec<String> =
+                options.iter().map(|(label, _, _)| label.clone()).collect();
             let custom = field.get("custom").and_then(Value::as_bool).unwrap_or(false);
             if custom {
                 items.push("Type another value".to_owned());
@@ -199,10 +213,9 @@ fn answer_field(field: &Value) -> Result<FormValue, String> {
             let preset: Vec<bool> = options
                 .iter()
                 .map(|(_, value, _)| {
-                    field
-                        .get("default")
-                        .and_then(Value::as_array)
-                        .is_some_and(|defaults| defaults.iter().any(|d| d.as_str() == Some(value.as_str())))
+                    field.get("default").and_then(Value::as_array).is_some_and(|defaults| {
+                        defaults.iter().any(|d| d.as_str() == Some(value.as_str()))
+                    })
                 })
                 .collect();
             let selection = MultiSelect::new()
@@ -219,9 +232,15 @@ fn answer_field(field: &Value) -> Result<FormValue, String> {
             if selection.iter().any(|index| *index >= options.len()) {
                 let typed = Input::<String>::new()
                     .with_prompt("Enter value")
-                    .validate_with(|input: &String| {
-                        if input.is_empty() { Err("Required") } else { Ok(()) }
-                    })
+                    .validate_with(
+                        |input: &String| {
+                            if input.is_empty() {
+                                Err("Required")
+                            } else {
+                                Ok(())
+                            }
+                        },
+                    )
                     .interact_text()
                     .map_err(|error| error.to_string())?;
                 selected.push(typed);
@@ -241,11 +260,16 @@ fn answer_field(field: &Value) -> Result<FormValue, String> {
             Ok(FormValue::Array(selected))
         }
         // string-with-options: a picker (plus custom/skip).
-        other if other == "string"
-            && field.get("options").and_then(Value::as_array).is_some_and(|options| !options.is_empty()) =>
+        other
+            if other == "string"
+                && field
+                    .get("options")
+                    .and_then(Value::as_array)
+                    .is_some_and(|options| !options.is_empty()) =>
         {
             let options = option_list(field);
-            let mut items: Vec<String> = options.iter().map(|(label, _, _)| label.clone()).collect();
+            let mut items: Vec<String> =
+                options.iter().map(|(label, _, _)| label.clone()).collect();
             let custom = field.get("custom").and_then(Value::as_bool).unwrap_or(false);
             if custom {
                 items.push("Type your own answer".to_owned());
@@ -266,7 +290,9 @@ fn answer_field(field: &Value) -> Result<FormValue, String> {
                 .interact_opt()
                 .map_err(|error| error.to_string())?;
             match picked {
-                Some(index) if index < options.len() => Ok(FormValue::String(options[index].1.clone())),
+                Some(index) if index < options.len() => {
+                    Ok(FormValue::String(options[index].1.clone()))
+                }
                 Some(index) if custom && index == options.len() => {
                     let typed = prompt_text(field)?;
                     Ok(FormValue::String(typed))
@@ -284,9 +310,9 @@ fn answer_field(field: &Value) -> Result<FormValue, String> {
                 Ok(FormValue::String(typed))
             } else {
                 // number/integer: convert like ref `Number(value)`.
-                Ok(FormValue::FormValueVariant2(
-                    oc_client::types::FormValueVariant2::Number(typed.parse::<f64>().map_err(|_| format!("{message}: Expected a number"))?),
-                ))
+                Ok(FormValue::FormValueVariant2(oc_client::types::FormValueVariant2::Number(
+                    typed.parse::<f64>().map_err(|_| format!("{message}: Expected a number"))?,
+                )))
             }
         }
     }
@@ -323,11 +349,8 @@ fn option_list(field: &Value) -> Vec<(String, String, Option<String>)> {
                 .map(|option| {
                     let value =
                         option.get("value").and_then(Value::as_str).unwrap_or_default().to_owned();
-                    let label = option
-                        .get("label")
-                        .and_then(Value::as_str)
-                        .unwrap_or(&value)
-                        .to_owned();
+                    let label =
+                        option.get("label").and_then(Value::as_str).unwrap_or(&value).to_owned();
                     let hint = option.get("description").and_then(Value::as_str).map(str::to_owned);
                     (label, value, hint)
                 })
@@ -343,11 +366,13 @@ fn validate_value(field: &Value, value: &FormValue) -> Option<String> {
     let field_type = field_type(field);
     match value {
         FormValue::String(text) if text.is_empty() => {
-            if required { Some("Required".to_owned()) } else { None }
+            if required {
+                Some("Required".to_owned())
+            } else {
+                None
+            }
         }
-        FormValue::String(text) if field_type == "string" => {
-            validate_text(field, Some(text))
-        }
+        FormValue::String(text) if field_type == "string" => validate_text(field, Some(text)),
         FormValue::Array(values) => {
             if required && values.is_empty() {
                 return Some("Required".to_owned());
@@ -448,19 +473,22 @@ fn validate_text(field: &Value, value: Option<&str>) -> Option<String> {
 
 fn is_email(text: &str) -> bool {
     let Some((local, domain)) = text.split_once('@') else { return false };
-    !local.is_empty() && domain.contains('.') && !domain.starts_with('.') && !domain.ends_with('.')
+    !local.is_empty()
+        && domain.contains('.')
+        && !domain.starts_with('.')
+        && !domain.ends_with('.')
         && !local.contains(char::is_whitespace)
         && !domain.contains(char::is_whitespace)
 }
 
 fn is_date(text: &str) -> bool {
-    let Some((year, month, day)) = text
-        .split_once('-')
-        .and_then(|(y, rest)| rest.split_once('-').map(|(m, d)| (y, m, d)))
+    let Some((year, month, day)) =
+        text.split_once('-').and_then(|(y, rest)| rest.split_once('-').map(|(m, d)| (y, m, d)))
     else {
         return false;
     };
-    let (Ok(year), Ok(month), Ok(day)) = (year.parse::<u32>(), month.parse::<u32>(), day.parse::<u32>())
+    let (Ok(year), Ok(month), Ok(day)) =
+        (year.parse::<u32>(), month.parse::<u32>(), day.parse::<u32>())
     else {
         return false;
     };
@@ -499,11 +527,8 @@ mod tests {
     /// Unknown --answer keys are rejected (ref "Unknown form field").
     #[test]
     fn unknown_field_is_rejected() {
-        let error = answer_form(
-            Some(&[string_field("known", json!({}))]),
-            &["other=x".to_owned()],
-        )
-        .unwrap_err();
+        let error = answer_form(Some(&[string_field("known", json!({}))]), &["other=x".to_owned()])
+            .unwrap_err();
         assert_eq!(error, "Unknown form field: other");
     }
 
@@ -525,11 +550,7 @@ mod tests {
         ];
         let answer = answer_form(
             Some(&fields),
-            &[
-                "name=hello".to_owned(),
-                "enabled=true".to_owned(),
-                "count=3".to_owned(),
-            ],
+            &["name=hello".to_owned(), "enabled=true".to_owned(), "count=3".to_owned()],
         )
         .unwrap()
         .expect("answer");
@@ -556,9 +577,7 @@ mod tests {
             vec![string_field("slug", json!({ "pattern": "^[a-z-]+$", "required": true }))];
         let error = answer_form(Some(&fields), &["slug=Not_Valid".to_owned()]).unwrap_err();
         assert_eq!(error, "slug: Invalid format");
-        assert!(answer_form(Some(&fields), &["slug=ok-value".to_owned()])
-            .unwrap()
-            .is_some());
+        assert!(answer_form(Some(&fields), &["slug=ok-value".to_owned()]).unwrap().is_some());
     }
 
     /// Format checks: uri/email/date.
@@ -600,7 +619,8 @@ mod tests {
     /// External fields cannot be supplied non-interactively.
     #[test]
     fn external_field_rejects_supplied_answer() {
-        let fields = vec![json!({ "key": "ext", "type": "external", "title": "ext", "url": "https://x" })];
+        let fields =
+            vec![json!({ "key": "ext", "type": "external", "title": "ext", "url": "https://x" })];
         assert_eq!(
             answer_form(Some(&fields), &["ext=1".to_owned()]).unwrap_err(),
             "External form field requires interactive confirmation: ext"

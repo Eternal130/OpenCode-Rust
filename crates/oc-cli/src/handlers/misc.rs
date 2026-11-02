@@ -182,7 +182,9 @@ pub async fn uninstall(dry_run: bool, keep_config: bool, keep_data: bool, force:
     if let Some(package) = crate::services::updater::installed_package(&exe_for_removal) {
         let method = crate::services::updater::detect_method(&exe_for_removal)
             .map(str::to_owned)
-            .or_else(|| crate::services::updater::detect_package_manager_method(&package).map(str::to_owned));
+            .or_else(|| {
+                crate::services::updater::detect_package_manager_method(&package).map(str::to_owned)
+            });
         if let Some(method) = method {
             if let Some(command) = crate::services::updater::removal_command(&method, &package) {
                 println!("Running {}...", command.join(" "));
