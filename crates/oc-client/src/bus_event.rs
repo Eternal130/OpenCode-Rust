@@ -619,6 +619,33 @@ impl SharedEvent for BusEventFrame {
     }
 }
 
+/// Converts one `/api/event` [`SseStream`](crate::sse::SseStream) into a
+/// stream of decoded [`BusEventFrame`]s (G-122 seam for the typed RPC
+/// event surface). Envelope-shape drift is loud; a source error is
+/// forwarded once and then the stream ends.
+pub fn sse_frames(
+    sse: crate::sse::SseStream,
+) -> impl futures::Stream<Item = Result<BusEventFrame, ClientError>> {
+    #[derive(Default)]
+    enum State {
+        Live(crate::sse::SseStream),
+        #[default]
+        Done,
+    }
+    futures::stream::unfold(State::Live(sse), |state| async move {
+        let mut stream = match state {
+            State::Live(stream) => stream,
+            State::Done => return None,
+        };
+        match stream.next_json().await {
+            Ok(Some(value)) => Some((BusEventFrame::decode(&value), State::Live(stream))),
+            Ok(None) => None,
+            // Forward the source error once, then end.
+            Err(error) => Some((Err(error), State::Done)),
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use serde::Deserialize;
