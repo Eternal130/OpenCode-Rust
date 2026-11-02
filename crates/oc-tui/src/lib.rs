@@ -48,9 +48,9 @@ pub mod golden_tests;
 pub mod home_golden_tests;
 pub mod image;
 pub mod image_blocks;
-pub mod input_term;
 #[cfg(test)]
 mod image_display_tests;
+pub mod input_term;
 pub mod keymap;
 pub mod layout;
 pub mod message_golden_tests;

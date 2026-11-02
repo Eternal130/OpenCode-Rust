@@ -6,9 +6,9 @@
 //! live in `pty_daily.rs`).
 
 use oc_tui::components::command_palette::{
-    select_props_for, CommandDispatcher as _, StoreDispatcher,
+    CommandDispatcher as _, StoreDispatcher, select_props_for,
 };
-use oc_tui::components::dialog::{handle_dialog_key, DialogKeyOutcome};
+use oc_tui::components::dialog::{DialogKeyOutcome, handle_dialog_key};
 use oc_tui::keymap::{Keymap, ManualClock};
 use oc_tui::reactive::Runtime;
 use oc_tui::store::{DialogKind, DialogSize, Store};
@@ -427,8 +427,8 @@ fn prompt_autosubmit_ready() {
 /// (`onHome={() => route.navigate({type:"home"})}`).
 #[test]
 fn pluginroutemis() {
-    use oc_tui::input_term::{MouseButton, MouseEvent, MouseEventKind};
     use oc_tui::app::App;
+    use oc_tui::input_term::{MouseButton, MouseEvent, MouseEventKind};
 
     let theme = oc_tui::theme::ThemeState::v2_dark();
     let mut app = App::new((80, 24));
@@ -465,7 +465,6 @@ fn pluginroutemis() {
     });
     assert!(matches!(app.store.route(), oc_tui::store::Route::Home));
     assert!(app.store.plugin_route_page().is_none(), "the page closed");
-    
 }
 
 /// TUI-30 — the `SessionLocationMissing` recovery screen
@@ -628,8 +627,8 @@ fn scroll_anchor_restore() {
 #[test]
 fn recents_ctrl_prompt_index() {
     use oc_tui::components::composer::autocomplete::{
-        directory_recent_value, directory_recents_options, AutocompleteState, DirectoryRecents,
-        Mode,
+        AutocompleteState, DirectoryRecents, Mode, directory_recent_value,
+        directory_recents_options,
     };
 
     // `useDirectoryRecents` (directory-recents.ts): touch dedupes +
@@ -669,10 +668,12 @@ fn recents_ctrl_prompt_index() {
     assert!(!options.is_empty(), "the recents feed rows");
     assert!(options.iter().all(|option| option.description.as_deref() == Some("recent")));
     assert!(options.iter().all(|option| option.is_directory));
-    assert!(options.iter().all(|option| option
-        .destructive
-        .as_ref()
-        .is_some_and(|action| action.confirm == "Press ctrl+d to confirm")));
+    assert!(options.iter().all(|option| {
+        option
+            .destructive
+            .as_ref()
+            .is_some_and(|action| action.confirm == "Press ctrl+d to confirm")
+    }));
     let state = state.with_options(options);
 
     // ctrl+d is the two-press delete (autocomplete.tsx:629-638): the
@@ -699,7 +700,7 @@ fn recents_ctrl_prompt_index() {
 #[test]
 fn session_copy() {
     use oc_tui::components::command_palette::{
-        copy_session_transcript, session_transcript, Dispatch, StoreDispatcher,
+        Dispatch, StoreDispatcher, copy_session_transcript, session_transcript,
     };
     use oc_tui::components::message::model::{Message, Part, PartTime};
     use oc_tui::data::Ingest;
@@ -992,7 +993,7 @@ fn app_console_ctrl_copy() {
 /// shell/subagent tool, or a completed turn does not.
 #[test]
 fn backgroundtool() {
-    use oc_tui::components::message::list::{render_transcript, TranscriptOptions};
+    use oc_tui::components::message::list::{TranscriptOptions, render_transcript};
     use oc_tui::components::message::model::{Message, Part, PartTime, ToolState, ToolStatus};
     use oc_tui::theme::ThemeState;
 
@@ -1078,8 +1079,8 @@ fn backgroundtool() {
 /// window pins reset).
 #[test]
 fn queuedpromptdo_jump_to_latest() {
-    use oc_tui::input_term::{MouseButton, MouseEvent, MouseEventKind};
     use oc_tui::app::App;
+    use oc_tui::input_term::{MouseButton, MouseEvent, MouseEventKind};
     use oc_tui::store::DialogKind;
 
     let mut app = App::new((100, 30));
@@ -1160,9 +1161,9 @@ fn queuedpromptdo_jump_to_latest() {
 /// renders at all.
 #[test]
 fn remote_installed() {
-    use oc_tui::input_term::{MouseButton, MouseEvent, MouseEventKind};
     use oc_tui::app::App;
     use oc_tui::components::update::{UpdateNotice, UpdateNoticeKind};
+    use oc_tui::input_term::{MouseButton, MouseEvent, MouseEventKind};
     use oc_tui::store::DialogKind;
 
     let mut app = App::new((100, 30));

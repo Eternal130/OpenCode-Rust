@@ -130,9 +130,8 @@ impl TabsConfig {
         };
         // G-143 — `tabs.indicators` ("status" | "numbers", default
         // "status").
-        let numbers =
-            tabs.and_then(|object| object.get("indicators")).and_then(Value::as_str)
-                == Some("numbers");
+        let numbers = tabs.and_then(|object| object.get("indicators")).and_then(Value::as_str)
+            == Some("numbers");
         Self { enabled, scope, numbers }
     }
 }
