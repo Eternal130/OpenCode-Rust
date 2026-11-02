@@ -53,6 +53,7 @@ use crate::components::footer::permission::{
 use crate::components::footer::{FooterTheme, FooterView};
 use crate::components::session_tabs::AdaptiveLayout;
 use crate::data::{Connection, HttpResync, Ingest};
+use crate::input_term::{KeyPipeline, TermEvent};
 use crate::keymap::{KeyStroke, Keymap, ManualClock, Outcome};
 use crate::render::color_mode::{self, ColorMode};
 use crate::render::Frame;
@@ -464,9 +465,9 @@ impl App {
     // transcript hits) — one screen-sized match, kept whole like the
     // sibling key layers.
     #[allow(clippy::too_many_lines)]
-    pub fn mouse_event(&mut self, mouse: &crossterm::event::MouseEvent) {
+    pub fn mouse_event(&mut self, mouse: &crate::input_term::MouseEvent) {
         use crate::components::session_tabs::StripHit;
-        use crossterm::event::{MouseButton, MouseEventKind};
+        use crate::input_term::{MouseButton, MouseEventKind};
         let width = usize::from(self.size.0);
         let col = usize::from(mouse.column);
         let row = usize::from(mouse.row);
@@ -7556,6 +7557,80 @@ fn apply_boot_route(store: &crate::store::Store, boot: &BootArgs, continue_targe
     // Default: home — the store's initial route. Never a restored tab.
 }
 
+/// The opentui-backed live terminal session type shared between the
+/// run loop (acquire/suspend/teardown) and the input thread (pump).
+pub type SessionTerminal =
+    opentui_core::terminal::Terminal<opentui_core::terminal::UnixTty, std::io::Stdout>;
+
+/// The session's [`opentui_core::terminal::SetupOptions`]: mouse under
+/// the config gate (v2's four-mode set, armed inside the Terminal's
+/// setup burst), bracketed paste + focus reporting always on, kitty
+/// flags 0 (the push is probe-gated post-boot — see `run_with_size`).
+fn session_setup_options(mouse: bool) -> opentui_core::terminal::SetupOptions {
+    opentui_core::terminal::SetupOptions {
+        use_mouse: mouse,
+        mouse_movement: true,
+        kitty_keyboard_flags: 0,
+        bracketed_paste: true,
+        auto_focus: true,
+    }
+}
+
+/// The live session registry for the crash-restore panic hook (the
+/// hook drives the live Terminal's teardown; a stale entry from an
+/// abandoned boot is swapped out by re-registration).
+static SESSION_TERMINAL: std::sync::Mutex<Option<Arc<std::sync::Mutex<SessionTerminal>>>> =
+    std::sync::Mutex::new(None);
+
+fn register_session_terminal(session: &Arc<std::sync::Mutex<SessionTerminal>>) {
+    if let Ok(mut slot) = SESSION_TERMINAL.lock() {
+        *slot = Some(Arc::clone(session));
+    }
+}
+
+fn unregister_session_terminal() {
+    if let Ok(mut slot) = SESSION_TERMINAL.lock() {
+        *slot = None;
+    }
+}
+
+/// The crash-restore panic path (lane TAIL P3, B3a form): drive the
+/// LIVE session Terminal's own teardown — opentui's epilogue from
+/// live state (raw-mode restore, mode pops under their gates). Runs
+/// ONLY on the terminal-owning thread's panics (see
+/// `terminal_proto::install_crash_restore`); falls back to the static
+/// restore bytes when the session lock is held by the panicking owner
+/// or no session is registered.
+pub(crate) fn panic_teardown_session() {
+    let session = SESSION_TERMINAL.lock().ok().and_then(|slot| slot.clone());
+    if let Some(session) = session {
+        if let Ok(mut terminal) = session.try_lock() {
+            let _ = terminal.teardown();
+            return;
+        }
+    }
+    crate::terminal_proto::emit(crate::terminal_proto::crash_restore_sequence());
+}
+
+/// Rebuild the session terminal after a suspend (same TTY, same
+/// options — `Terminal::new` re-runs raw mode + the setup burst).
+fn rebuild_session_terminal(
+    session: &Arc<std::sync::Mutex<SessionTerminal>>,
+    mouse: bool,
+) -> Result<(), String> {
+    let terminal = SessionTerminal::new(
+        opentui_core::terminal::UnixTty::new().map_err(|e| e.to_string())?,
+        std::io::stdout(),
+        &session_setup_options(mouse),
+    )
+    .map_err(|e| e.to_string())?;
+    if let Ok(mut slot) = session.lock() {
+        *slot = terminal;
+    }
+    register_session_terminal(session);
+    Ok(())
+}
+
 /// The live run loop: terminal acquire/release, event drain, render.
 /// Blocks until `app.exit`; returns the terminal to its prior state.
 ///
@@ -7579,14 +7654,16 @@ pub async fn run(client: oc_client::Client, boot: BootArgs) -> Result<(), String
 /// The live mouse flip's writer (v2 app.tsx:593 —
 /// `createEffect(() => renderer.useMouse = config.data.mouse)`):
 /// push or pop the v2 mode set the moment a config reload toggles
-/// `mouse`.
+/// `mouse`. opentui's `SetupOptions` arms the mode set at
+/// `Terminal::new` only, so the live flip stays oc-tui's (the bytes
+/// are lane-owned constants in [`crate::terminal_proto`]).
 fn write_mouse_flip(mouse: bool) {
     use std::io::Write as _;
     let mut out = std::io::stdout();
     if mouse {
-        let _ = crate::mouse_modes::push(&mut out, true);
+        let _ = out.write_all(crate::terminal_proto::MOUSE_ENABLE);
     } else {
-        let _ = crate::mouse_modes::pop(&mut out, true);
+        let _ = out.write_all(crate::terminal_proto::MOUSE_DISABLE);
     }
     let _ = out.flush();
 }
@@ -7614,33 +7691,45 @@ pub async fn run_with_size(
     size: Option<(u16, u16)>,
     boot: BootArgs,
 ) -> Result<(), String> {
-    use crossterm::event::Event as CrosstermEvent;
-    use crossterm::event::KeyEventKind;
-    use crossterm::terminal::{
-        disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
-    };
     use ratatui::backend::CrosstermBackend;
 
-    // Terminal acquire (app.tsx's renderer acquire/release): raw mode +
-    // alternate screen, restored on every exit path. Focus events feed
-    // the attention module (the pending marker consumes on FocusGained).
-    enable_raw_mode().map_err(|e| e.to_string())?;
-    let _ = crossterm::execute!(
-        std::io::stdout(),
-        EnterAlternateScreen,
-        crossterm::event::EnableFocusChange,
-        // Bracketed paste (R-07): pasted text (an image file's path,
-        // typically) arrives as `Event::Paste` instead of raw keys —
-        // the seam `pasteInputText`'s attachment resolution hangs off.
-        crossterm::event::EnableBracketedPaste,
-        // Mouse tracking (beta.8 bug 3/4): v2's renderer enables the
-        // terminal's mouse reporting CONFIG-GATED (the strip's
-        // hover/click and the reasoning rows' disclosure toggle are
-        // mouse-driven, `session-tabs.tsx:1652-1754` +
-        // `group-view.tsx:152-190`). The v2-parity mode set
-        // (`?1000 ?1002 ?1003 ?1006` — no crossterm `?1015`) pushes
-        // right after the config loads below (`crate::mouse_modes`).
-    );
+    // The mouse-capture gate must be known BEFORE the terminal is
+    // acquired (opentui's SetupOptions arms the mode burst at
+    // Terminal::new): the config load is pure file IO, so it moves
+    // ahead of the acquire.
+    let config = crate::config::TuiConfig::load(&oc_util::global_roots::resolve());
+
+    // Terminal acquire (app.tsx's renderer acquire/release), lane B3a:
+    // opentui's `Terminal<UnixTty, Stdout>` owns raw mode, the alt
+    // screen, the mode burst (mouse under the config gate, bracketed
+    // paste, focus reporting), and the teardown epilogue. The kitty
+    // keyboard flags stay 0 here: the push is probe-gated post-boot
+    // (`CSI > 5u` only when the terminal answers `CSI ? u`, lane TAIL
+    // TM-1 — the current value source, opentui has no post-setup
+    // push).
+    //
+    // WRITE-SEAM ORDER (B3b will replace it): ratatui's
+    // CrosstermBackend below keeps its OWN stdout handle as the frame
+    // writer — the opentui Terminal writes only setup/probe/flip
+    // bytes, each `write_all` under the stdout lock; the phases never
+    // interleave mid-sequence.
+    let session_terminal: Arc<std::sync::Mutex<SessionTerminal>> = {
+        let terminal = SessionTerminal::new(
+            opentui_core::terminal::UnixTty::new().map_err(|e| e.to_string())?,
+            std::io::stdout(),
+            &session_setup_options(config.mouse),
+        )
+        .map_err(|e| e.to_string())?;
+        Arc::new(std::sync::Mutex::new(terminal))
+    };
+    register_session_terminal(&session_terminal);
+    // The crash-restore guards (lane TAIL P3): SIGHUP/SIGTERM keep the
+    // write(2)-only path; the PANIC hook runs the live Terminal's own
+    // teardown (thread-gated — worker-thread panics are routinely
+    // caught by the plugin host and must not tear the terminal; the
+    // stock opentui install_panic_hook is unconditional, so the oc-tui
+    // hook drives Terminal::teardown instead — no double registration).
+    crate::terminal_proto::install_crash_restore(config.mouse);
     // The alternate screen owns the display from here: route EVERY
     // stderr write to `<state>/tui.log` until teardown (subsystem
     // errors, plugin-host lines, the bun child's forwarded stderr —
@@ -7674,10 +7763,9 @@ pub async fn run_with_size(
         app.store.set_skip_initial_loading(true);
     }
     // R-07: the terminal's graphics protocol — env probe seeds the
-    // store now; the boot DA1 round-trip below (RB-07, lane R0)
-    // refines it once the input thread's probe window answers.
+    // store now; the capability probe's DA1 answer refines it once the
+    // input thread's Capabilities event reports (lane B3a).
     app.store.set_graphics_protocol(crate::image::detect_protocol());
-    let config = crate::config::TuiConfig::load(&oc_util::global_roots::resolve());
     // SURF-2 (F-1): the config persistence sink — cli.json
     // write-through for the theme name/mode pins and
     // `session.sidebar` (oc-core's comment-preserving updater). The
@@ -7729,29 +7817,16 @@ pub async fn run_with_size(
     }
 
     // The mouse-capture gate (v2 `useMouse: config.mouse`,
-    // app.tsx:241): push EXACTLY v2's four-mode set when on, nothing
-    // when off — `mouse: false` leaves the terminal's native text
-    // selection alone (auditC P1/P9). `applied_mouse` tracks the live
-    // state for the editor suspend/re-enter pair, the reload flip,
-    // and the teardown pop.
+    // app.tsx:241): the Terminal's setup burst already armed EXACTLY
+    // v2's four-mode set when on, nothing when off (auditC P1/P9 —
+    // `mouse: false` leaves the terminal's native text selection
+    // alone). `applied_mouse` tracks the live state for the editor
+    // suspend/re-enter pair, the reload flip, and the teardown pop.
     let mut applied_mouse = config.mouse;
-    {
-        use std::io::Write as _;
-        let mut out = std::io::stdout();
-        let _ = crate::mouse_modes::push(&mut out, applied_mouse);
-        let _ = out.flush();
-    }
-    // Lane TAIL (auditC P3): the crash-restore guards — SIGHUP/SIGTERM
-    // write the restore bytes and die; a panic restores the terminal
-    // before the report. The atomic tracks the live mouse flip.
-    crate::terminal_proto::install_crash_restore(applied_mouse);
-    // Lane TAIL (auditC P6/TM-2): the live theme-flip subscriptions
-    // (`?2027h` color-scheme reports + `?2031h` mode reports) and
-    // (P2/TM-1) the kitty keyboard capability QUERY — the answer
-    // arrives as `Event::KeyboardEnhancementFlags` (crossterm parses
-    // `CSI ? flags u` itself) and the loop pushes `CSI > 5 u`.
-    crate::terminal_proto::emit(crate::terminal_proto::THEME_SUBSCRIPTIONS);
-    crate::terminal_proto::emit(crate::terminal_proto::KITTY_QUERY);
+    // Whether the Terminal's setup burst armed the mouse set (teardown
+    // pops the modes the SETUP armed; a later `mouse: true` flip after
+    // a `mouse: false` setup is oc-tui's to pop).
+    let setup_mouse = applied_mouse;
 
     // R-06 — the attention channels (v2's sounds + OS notifications):
     // the production emitter writes OSC notification sequences to
@@ -8147,24 +8222,18 @@ pub async fn run_with_size(
     let (auto_failure_tx, mut auto_failure_rx) =
         tokio::sync::mpsc::unbounded_channel::<(String, String)>();
 
-    // Input thread: crossterm's blocking read (keys + resize) bridged
-    // into the async loop. The thread FIRST probes the terminal
-    // background (OSC 11 — same-thread input ownership, no keystroke
-    // stealing) and reports the system mode before reading.
+    // Input thread (lane B3a): one 50 ms poll(2) tick on the session
+    // terminal's tty — raw bytes through `Terminal::feed_input` (the
+    // capability probe, the late-OSC theme watch, terminal focus) and
+    // through the oc-tui `KeyPipeline` (keys / mouse / paste, the
+    // adapter layer the lane inventory mandated) — then the resize
+    // watch. Resize rides this loop until B3b (≤50 ms latency).
     //
-    // SA-F13 (re-entrance): the reader must STOP at teardown — a
-    // thread parked in `event::read()` holds crossterm's GLOBAL
-    // reader lock and swallows the first key(s) a SECOND
-    // `run_with_size` boot's reader (or an embedder's own reader)
-    // waits on, killing that boot's exit chord (the SCAN-AB
-    // double-boot finding: leg-2 rendered home but ignored \x03 and
-    // the loop never returned). The loop therefore polls in bounded
-    // windows against a stop flag owned by a Drop guard — the flag
-    // fires on the normal return AND when an outer timeout cancels
-    // the run future — and a stale reader from an abandoned boot is
-    // stopped by the slot swap below before this one spawns.
-    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<CrosstermEvent>(64);
-    let (probe_tx, probe_rx) = std::sync::mpsc::channel::<(Mode, bool, Option<bool>)>();
+    // SA-F13 (re-entrance): the reader must STOP at teardown — a stale
+    // reader from an abandoned boot is stopped by the slot swap below
+    // before this one spawns, and the Drop guard fires on the normal
+    // return AND when an outer timeout cancels the run future.
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<TermEvent>(64);
     let input_stop = {
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
         if let Ok(mut slot) = INPUT_READER_STOP.lock() {
@@ -8177,57 +8246,122 @@ pub async fn run_with_size(
     let _input_guard = StopInputReader(Arc::clone(&input_stop));
     {
         let input_stop = Arc::clone(&input_stop);
+        let session = Arc::clone(&session_terminal);
         std::thread::spawn(move || {
-            // The combined boot probe (lane TAIL): OSC 11 background +
-            // the kitty keyboard capability query + DA1 (RB-07), one
-            // read window.
-            let probe = crate::theme::probe_terminal();
-            let mode = probe
-                .background
-                .map_or(Mode::Dark, |(r, g, b)| crate::theme::mode_for_background(r, g, b));
-            let _ = probe_tx.send((mode, probe.kitty_keyboard, probe.da1_sixel));
+            // The headless CliRenderer: input-lane plumbing only
+            // (probe routing, theme watch, focus bytes); `use_mouse`
+            // is off so its mouse arm just swallows the bytes the
+            // KeyPipeline already reported, and its SGR stream is
+            // never pumped (B3b replaces the frame writer).
+            let mut renderer = opentui_core::renderer::create_cli_renderer(
+                opentui_core::renderer::CliRendererConfig {
+                    use_mouse: false,
+                    ..opentui_core::renderer::CliRendererConfig::default()
+                },
+            );
+            let mut pipeline = KeyPipeline::new();
+            let mut kitty_pushed = false;
+            // The capability probe (replaces theme::probe_terminal +
+            // terminal_proto's ?u/DA1/OSC-11 queries): the burst rides
+            // the Terminal's output, the answers classify through
+            // feed_input into Capabilities/ThemeMode events.
+            if let Ok(mut terminal) = session.lock() {
+                let _ = terminal.probe_capabilities();
+            }
             loop {
                 if input_stop.load(std::sync::atomic::Ordering::Relaxed) {
                     break;
                 }
-                match crossterm::event::poll(std::time::Duration::from_millis(50)) {
-                    Ok(true) => {
-                        let Ok(event) = crossterm::event::read() else { break };
-                        if event_tx.blocking_send(event).is_err() {
-                            break;
+                let bytes = read_session_input(&session, 50);
+                if bytes.is_empty() {
+                    // The no-input feed tick still advances the probe's
+                    // wall-clock deadline.
+                    if let Ok(mut terminal) = session.lock() {
+                        let _ = terminal.feed_input(&mut renderer, &[]);
+                    }
+                } else {
+                    let cli_events = if let Ok(mut terminal) = session.lock() {
+                        terminal.feed_input(&mut renderer, &bytes)
+                    } else {
+                        Vec::new()
+                    };
+                    for event in cli_events {
+                        match event {
+                            opentui_core::renderer::CliRenderEvent::TerminalFocus => {
+                                if event_tx.blocking_send(TermEvent::FocusGained).is_err() {
+                                    return;
+                                }
+                            }
+                            opentui_core::renderer::CliRenderEvent::TerminalBlur => {
+                                if event_tx.blocking_send(TermEvent::FocusLost).is_err() {
+                                    return;
+                                }
+                            }
+                            opentui_core::renderer::CliRenderEvent::ThemeMode { mode } => {
+                                // opentui's reduction → oc-theme's Mode.
+                                let mode = match mode {
+                                    opentui_core::renderer::ThemeMode::Dark => Mode::Dark,
+                                    opentui_core::renderer::ThemeMode::Light => Mode::Light,
+                                };
+                                if event_tx.blocking_send(TermEvent::ThemeMode(mode)).is_err() {
+                                    return;
+                                }
+                            }
+                            opentui_core::renderer::CliRenderEvent::Capabilities(caps) => {
+                                // Lane TAIL (auditC P2/TM-1): the
+                                // terminal answered the kitty keyboard
+                                // query — push the v2 flag set
+                                // (`CSI > 5u`; opentui's SetupOptions
+                                // owns setup only) and flip the parser
+                                // to the kitty encoding.
+                                if caps.kitty_keyboard && !kitty_pushed {
+                                    kitty_pushed = true;
+                                    pipeline.set_kitty(true);
+                                    if let Ok(mut terminal) = session.lock() {
+                                        use std::io::Write as _;
+                                        let _ = terminal
+                                            .output()
+                                            .write_all(crate::terminal_proto::KITTY_PUSH);
+                                        let _ = terminal.output().flush();
+                                    }
+                                }
+                                // RB-07 (lane R0): the DA1 attr-4
+                                // verdict refines the graphics
+                                // protocol decision seeded from env.
+                                if event_tx
+                                    .blocking_send(TermEvent::Sixel(caps.sixel))
+                                    .is_err()
+                                {
+                                    return;
+                                }
+                            }
+                            _ => {}
                         }
                     }
-                    Ok(false) => {}
-                    Err(_) => break,
+                    for event in pipeline.process(&bytes) {
+                        if event_tx.blocking_send(event).is_err() {
+                            return;
+                        }
+                    }
+                }
+                // The resize watch (B3a: check_resize on the 50 ms
+                // tick; ≤50 ms latency, B3b revisits).
+                let resized = if let Ok(mut terminal) = session.lock() {
+                    terminal.check_resize(&mut renderer).ok().flatten()
+                } else {
+                    None
+                };
+                if let Some((width, height)) = resized {
+                    if event_tx
+                        .blocking_send(TermEvent::Resize(width, height))
+                        .is_err()
+                    {
+                        return;
+                    }
                 }
             }
         });
     }
-    if let Ok((mode, kitty_keyboard, da1_sixel)) =
-        probe_rx.recv_timeout(std::time::Duration::from_millis(800))
-    {
-        system_mode = mode;
-        // Refresh the store's system-mode input (the theme lock's
-        // unlock target — SURF-2).
-        app.store.set_theme_mode_inputs(config.theme.mode.clone(), system_mode);
-        // RB-07 (lane R0): the DA1 answer refines the graphics-
-        // protocol decision seeded from env above — attribute 4 in
-        // the `CSI ? attrs c` reply is authoritative for sixel; an
-        // answered DA1 without it rules sixel out; no answer keeps
-        // the env heuristic (see `crate::image::resolve_protocol`).
-        let resolved = crate::image::resolve_protocol(app.store.graphics_protocol(), da1_sixel);
-        if resolved != app.store.graphics_protocol() {
-            app.store.set_graphics_protocol(resolved);
-        }
-        // Lane TAIL (auditC P2/TM-1): the terminal ANSWERED the kitty
-        // keyboard query — push the v2 flag set (disambiguate escape
-        // codes + report alternate keys; the ref pushes `CSI > 5u`).
-        if kitty_keyboard {
-            crate::terminal_proto::emit(crate::terminal_proto::KITTY_PUSH);
-        }
-    }
-    // The probe toggles raw mode itself; the loop owns it from here.
-    let _ = crossterm::terminal::enable_raw_mode();
     app.apply_config(&config, system_mode);
     // Lane TAIL (auditC P7/TM-3): DECSCUSR + OSC 12 — the cursor
     // shape/blink from the `cursor` config doc and the cursor color
@@ -8716,35 +8850,18 @@ pub async fn run_with_size(
             // `[Pasted ~N lines]` replaced by its full content.
             let draft = app.store.prompt_draft(&key).expand_pasted_ranges();
             let cwd = std::env::current_dir().ok();
-            let _ = disable_raw_mode();
-            {
-                use std::io::Write as _;
-                let mut out = std::io::stdout();
-                let _ = crossterm::queue!(out, crossterm::terminal::LeaveAlternateScreen);
-                // Pop the mouse modes ONLY when they went on (the
-                // config gate — a `mouse: false` boot never pushed
-                // them, and popping unpushed modes is wire noise).
-                let _ = crate::mouse_modes::pop(&mut out, applied_mouse);
-                // Lane TAIL (auditC P12): the paste/focus pair hands
-                // off too — `?2004`/`?1004` must NOT stay latched
-                // into `$EDITOR` (bracketed paste would corrupt the
-                // editor's input, focus reports belong to us alone).
-                let _ = out.write_all(crate::terminal_proto::PASTE_FOCUS_OFF);
-                let _ = out.flush();
+            // The $EDITOR hand-off (auditC P12), lane B3a: the session
+            // Terminal's full teardown (leave alt screen, mode pops
+            // under the gates they armed with, cooked mode) — then a
+            // fresh `Terminal::new` on the SAME TTY re-runs raw mode +
+            // the setup burst (mouse under the same config gate).
+            if let Ok(mut session) = session_terminal.lock() {
+                let _ = session.teardown();
             }
+            unregister_session_terminal();
             let result = crate::editor::open_editor(&draft, cwd.as_deref(), || {}, || {});
-            let _ = enable_raw_mode();
-            {
-                use std::io::Write as _;
-                let mut out = std::io::stdout();
-                let _ = crossterm::queue!(out, crossterm::terminal::EnterAlternateScreen);
-                // Re-arm the mouse modes under the SAME config gate
-                // (auditC P1 called out the old unconditional
-                // re-enable after $EDITOR) — and the paste/focus pair
-                // with them (P12's other half).
-                let _ = crate::mouse_modes::push(&mut out, applied_mouse);
-                let _ = out.write_all(crate::terminal_proto::PASTE_FOCUS_ON);
-                let _ = out.flush();
+            if let Err(error) = rebuild_session_terminal(&session_terminal, applied_mouse) {
+                break Err(error);
             }
             let _ = terminal.clear();
             if editor_guard.is_some() {
@@ -8781,16 +8898,17 @@ pub async fn run_with_size(
         if app.store.take_terminal_suspend() {
             let stderr_pause =
                 stderr_guard.take().map(crate::stderr_redirect::StderrRedirect::restore);
-            let _ = disable_raw_mode();
-            {
-                let mut out = std::io::stdout();
-                crate::suspend::teardown(&mut out, applied_mouse);
+            // Lane B3a: `renderer.suspend()`/`resume()` = the session
+            // Terminal's teardown + `Terminal::new` rebuild on the
+            // SAME TTY (mode pops under their gates, cooked mode
+            // around the stop, the setup burst on resume).
+            if let Ok(mut session) = session_terminal.lock() {
+                let _ = session.teardown();
             }
+            unregister_session_terminal();
             crate::suspend::suspend_cycle();
-            let _ = enable_raw_mode();
-            {
-                let mut out = std::io::stdout();
-                crate::suspend::restore(&mut out, applied_mouse);
+            if let Err(error) = rebuild_session_terminal(&session_terminal, applied_mouse) {
+                break Err(error);
             }
             let _ = terminal.clear();
             if stderr_pause.is_some() {
@@ -9570,18 +9688,15 @@ pub async fn run_with_size(
             () = tokio::time::sleep(std::time::Duration::from_millis(wait_ms)) => None,
         };
         match event {
-            Some(CrosstermEvent::Key(key)) => {
-                if key.kind == KeyEventKind::Press {
-                    if let Some(spec) = crossterm_key_to_spec(&key) {
-                        if std::env::var("OC_TUI_DEBUG").ok().as_deref() == Some("1") {
-                            eprintln!("[tui] key: {spec}");
-                        }
-                        app.press(&spec);
-                    }
+            Some(TermEvent::Key(spec)) => {
+                if std::env::var("OC_TUI_DEBUG").ok().as_deref() == Some("1") {
+                    eprintln!("[tui] key: {spec}");
                 }
+                app.press(&spec);
             }
-            // SIGWINCH: relayout at the new size.
-            Some(CrosstermEvent::Resize(width, height)) => {
+            // SIGWINCH stand-in (B3a): the input thread's 50 ms
+            // check_resize tick — relayout at the new size.
+            Some(TermEvent::Resize(width, height)) => {
                 let _ = terminal.resize(ratatui::layout::Rect::new(0, 0, width, height));
                 app.resize((width, height));
                 redraw_at = 0; // force one redraw
@@ -9590,42 +9705,59 @@ pub async fn run_with_size(
             // bell itself fired regardless — the sound channel is
             // "always" in v2's notifications plugin). FocusLost blurs
             // the attention engine (OS notifications become eligible).
-            Some(CrosstermEvent::FocusGained) => {
+            Some(TermEvent::FocusGained) => {
                 app.store.set_focused();
-                // Lane TAIL (auditC P6): the ?997 stand-in — crossterm
-                // cannot deliver `CSI ?997;1n/2n` (its CSI parser
-                // dispatches only `?u`/`?c`), so a terminal theme flip
-                // re-probes OSC 11 on focus (10 s cooldown, only while
-                // `theme.mode == "system"`) and refreshes the palette
-                // live — v2's `refreshPalette()` behavior.
+                // Lane TAIL (auditC P6): the ?997 stand-in — a terminal
+                // theme flip re-queries OSC 10/11 on focus (10 s
+                // cooldown, only while `theme.mode == "system"`); the
+                // answers reduce through opentui's theme watch into the
+                // ThemeMode event below — v2's `refreshPalette()`.
                 if config.theme.mode.as_deref() == Some("system")
                     && theme_probe_at.elapsed() >= std::time::Duration::from_secs(10)
                 {
                     theme_probe_at = std::time::Instant::now();
-                    if let Some((r, g, b)) = crate::theme::query_terminal_background_in_raw() {
-                        let mode = crate::theme::mode_for_background(r, g, b);
-                        if mode != system_mode {
-                            system_mode = mode;
-                            app.store.set_theme_mode_inputs(config.theme.mode.clone(), system_mode);
-                            app.apply_config(&config, system_mode);
-                        }
+                    if let Ok(mut session) = session_terminal.lock() {
+                        use std::io::Write as _;
+                        let _ = session
+                            .output()
+                            .write_all(b"\x1b]10;?\x07\x1b]11;?\x07");
+                        let _ = session.output().flush();
                     }
                 }
             }
-            Some(CrosstermEvent::FocusLost) => app.store.set_blurred(),
+            Some(TermEvent::FocusLost) => app.store.set_blurred(),
+            // The probe/theme-watch reduction reported a system mode
+            // (the boot answer or a live terminal theme flip).
+            Some(TermEvent::ThemeMode(mode)) => {
+                if mode != system_mode {
+                    system_mode = mode;
+                    app.store.set_theme_mode_inputs(config.theme.mode.clone(), system_mode);
+                    app.apply_config(&config, system_mode);
+                    redraw_at = 0; // one repaint on the palette change
+                }
+            }
+            // RB-07 (lane R0): the DA1 attr-4 verdict refines the
+            // graphics-protocol decision seeded from env (the probe's
+            // Capabilities event; see `crate::image::resolve_protocol`).
+            Some(TermEvent::Sixel(sixel)) => {
+                let resolved = crate::image::resolve_protocol(app.store.graphics_protocol(), Some(sixel));
+                if resolved != app.store.graphics_protocol() {
+                    app.store.set_graphics_protocol(resolved);
+                }
+            }
             // Bracketed paste (R-07): resolve attachment file paths →
             // chips, else insert the text (`pasteInputText`).
-            Some(CrosstermEvent::Paste(text)) => app.paste_terminal_text(&text),
+            Some(TermEvent::Paste(text)) => app.paste_terminal_text(&text),
             // Mouse (beta.8 bugs 3/4): the tab strip's hover/select/
             // close/add surface and the transcript's reasoning-row
             // disclosure toggle.
-            Some(CrosstermEvent::Mouse(mouse)) => {
+            Some(TermEvent::Mouse(mouse)) => {
                 if std::env::var("OC_TUI_DEBUG").ok().as_deref() == Some("1") {
                     eprintln!("[tui] mouse: {mouse:?}");
                 }
                 app.mouse_event(&mouse);
             }
-            _ => {}
+            None => {}
         }
         if app.exit_requested {
             break Ok(());
@@ -9643,33 +9775,32 @@ pub async fn run_with_size(
     if let Some(guard) = stderr_guard {
         guard.restore();
     }
-    let _ = disable_raw_mode();
+    // Teardown (lane B3a): the oc-tui remainder FIRST (kitty pop,
+    // graphics delete — opentui's epilogue does not own them), then
+    // the session Terminal's own teardown epilogue (show cursor, mode
+    // pops under their gates — alt screen, paste/focus, mouse when the
+    // setup armed it, DECSCUSR/cursor-color reset tail) + cooked mode.
     {
-        use std::io::Write as _;
-        let mut out = std::io::stdout();
-        let _ = crossterm::queue!(
-            out,
-            LeaveAlternateScreen,
-            crossterm::event::DisableFocusChange,
-            crossterm::event::DisableBracketedPaste,
-            // Clear any lingering graphics placements (R-07): the
-            // alternate screen would discard them anyway, but an explicit
-            // `a=d,d=a` keeps a same-screen exit clean.
-        );
-        // Pop the mouse modes under the same gate they went on with
-        // (v2's teardown pops what the renderer pushed — a
-        // `mouse: false` run pushed nothing).
-        let _ = crate::mouse_modes::pop(&mut out, applied_mouse);
-        // Lane TAIL (auditC P2/P7/P13): pop the kitty keyboard stack
-        // (the ref never does — we should), reset DECSCUSR/OSC 12,
-        // and ACTUALLY emit the graphics delete-all the old comment
-        // promised (`a=d,d=a`, P13).
-        let _ = out.write_all(crate::terminal_proto::KITTY_POP);
-        let _ = out.write_all(crate::terminal_proto::CURSOR_RESET);
-        if app.store.graphics_protocol() != crate::image::GraphicsProtocol::None {
-            let _ = out.write_all(crate::terminal_proto::KITTY_GRAPHICS_DELETE_ALL);
+        let flip_on = applied_mouse && !setup_mouse;
+        if let Ok(mut session) = session_terminal.lock() {
+            use std::io::Write as _;
+            let out = session.output();
+            // A `mouse: true` flip AFTER a `mouse: false` setup armed
+            // modes the Terminal never tracked — pop those ourselves.
+            if flip_on {
+                let _ = out.write_all(crate::terminal_proto::MOUSE_DISABLE);
+            }
+            // Lane TAIL (auditC P2/P13): pop the kitty keyboard stack
+            // (the post-setup push is oc-tui's) and emit the graphics
+            // delete-all (`a=d,d=a`).
+            let _ = out.write_all(crate::terminal_proto::KITTY_POP);
+            if app.store.graphics_protocol() != crate::image::GraphicsProtocol::None {
+                let _ = out.write_all(crate::terminal_proto::KITTY_GRAPHICS_DELETE_ALL);
+            }
+            let _ = out.flush();
+            let _ = session.teardown();
         }
-        let _ = out.flush();
+        unregister_session_terminal();
     }
     // #46 — the exit epilogue (v2 app.tsx:446-450: the renderer stops,
     // then `process.stdout.write(epilogue + "\n")`): the wordmark +
@@ -9702,7 +9833,7 @@ static INPUT_READER_STOP: std::sync::Mutex<Option<Arc<std::sync::atomic::AtomicB
 /// Stops this boot's input reader on drop — the normal teardown AND
 /// an outer cancellation (a test's `tokio::time::timeout` dropping
 /// the run future) both route through here, so no reader ever stays
-/// parked on crossterm's global lock after its loop is gone.
+/// parked on the session terminal's tty after its loop is gone.
 struct StopInputReader(Arc<std::sync::atomic::AtomicBool>);
 
 impl Drop for StopInputReader {
@@ -9710,90 +9841,44 @@ impl Drop for StopInputReader {
         self.0.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 }
-/// crossterm key event → the pump's key spec vocabulary.
-fn crossterm_key_to_spec(key: &crossterm::event::KeyEvent) -> Option<String> {
-    use crossterm::event::{KeyCode, KeyModifiers};
-    if key.modifiers.contains(KeyModifiers::CONTROL) {
-        // Combined chords keep every modifier (lane KM: the
-        // ctrl+alt+ family — `toast.activate`, which-key's panel).
-        let alt = key.modifiers.contains(KeyModifiers::ALT);
-        return match key.code {
-            KeyCode::Char(ch) => Some(if alt {
-                format!("ctrl+alt+{}", ch.to_ascii_lowercase())
-            } else {
-                format!("ctrl+{}", ch.to_ascii_lowercase())
-            }),
-            // G-139 — the CONTROL+non-Char family the keymap table
-            // registers: `session.tab.next` (ctrl+tab) and
-            // `session.tab.previous` (ctrl+shift+tab — BackTab arrives
-            // with SHIFT set; the CONTROL branch wins the modifier
-            // order). No other ctrl+<non-char> binding exists in the
-            // table (checked: arrows/home/end/page family have none).
-            KeyCode::Tab if !alt => Some("ctrl+tab".to_owned()),
-            KeyCode::BackTab if !alt => Some("ctrl+shift+tab".to_owned()),
-            _ => None,
-        };
-    }
-    if key.modifiers.contains(KeyModifiers::ALT) {
-        return match key.code {
-            KeyCode::Char(ch) => Some(format!("alt+{}", ch.to_ascii_lowercase())),
-            KeyCode::Down => Some("alt+down".to_owned()),
-            KeyCode::Up => Some("alt+up".to_owned()),
-            KeyCode::Left => Some("alt+left".to_owned()),
-            KeyCode::Right => Some("alt+right".to_owned()),
-            // TUI-TD02 — `session.messages_last_user` (alt+end) and
-            // `session.first`'s alt+home alias: the CSI-modified
-            // Home/End (`ESC[1;3F` …) must reach the command layer,
-            // not drop.
-            KeyCode::Home => Some("alt+home".to_owned()),
-            KeyCode::End => Some("alt+end".to_owned()),
-            KeyCode::PageUp => Some("alt+pageup".to_owned()),
-            KeyCode::PageDown => Some("alt+pagedown".to_owned()),
-            _ => None,
-        };
-    }
-    if key.modifiers.contains(KeyModifiers::SHIFT) {
-        return match key.code {
-            KeyCode::Char(ch) => Some(ch.to_ascii_uppercase().to_string()),
-            // Tab and crossterm's BackTab (the legacy `ESC [ Z`
-            // sequence; it arrives with the SHIFT modifier set) are
-            // both shift+tab — v2's `agent.cycle` chord.
-            KeyCode::Tab | KeyCode::BackTab => Some("shift+tab".to_owned()),
-            KeyCode::F(f) => Some(format!("shift+f{f}")),
-            // G-66 — the modified-arrow family (`ESC [ 1;2A..D`):
-            // shift+arrows are `input.select.*`'s chords (keymap
-            // table.rs:712-715); they used to drop here, so the
-            // selection keybindings never fired on the live route.
-            KeyCode::Up => Some("shift+up".to_owned()),
-            KeyCode::Down => Some("shift+down".to_owned()),
-            KeyCode::Left => Some("shift+left".to_owned()),
-            KeyCode::Right => Some("shift+right".to_owned()),
-            KeyCode::Home => Some("shift+home".to_owned()),
-            KeyCode::End => Some("shift+end".to_owned()),
-            _ => None,
-        };
-    }
-    match key.code {
-        KeyCode::Char(ch) => Some(ch.to_string()),
-        KeyCode::Enter => Some("return".to_owned()),
-        KeyCode::Esc => Some("escape".to_owned()),
-        KeyCode::Backspace => Some("backspace".to_owned()),
-        KeyCode::Delete => Some("delete".to_owned()),
-        KeyCode::Tab => Some("tab".to_owned()),
-        KeyCode::BackTab => Some("shift+tab".to_owned()),
-        KeyCode::Up => Some("up".to_owned()),
-        KeyCode::Down => Some("down".to_owned()),
-        KeyCode::Left => Some("left".to_owned()),
-        KeyCode::Right => Some("right".to_owned()),
-        KeyCode::Home => Some("home".to_owned()),
-        KeyCode::End => Some("end".to_owned()),
-        KeyCode::PageUp => Some("pageup".to_owned()),
-        KeyCode::PageDown => Some("pagedown".to_owned()),
-        KeyCode::F(f) => Some(format!("f{f}")),
-        _ => None,
-    }
-}
 
+/// One input tick on the session terminal's tty: `poll(2)` up to
+/// `timeout_ms`, then read whatever landed (FIONREAD-bounded). The
+/// session lock is held across the poll (≤50 ms) so the pump and the
+/// run loop's suspend/teardown hands serialize on the same device.
+#[allow(unsafe_code)] // poll/read/ioctl on the tty fd are libc FFI
+fn read_session_input(
+    session: &Arc<std::sync::Mutex<SessionTerminal>>,
+    timeout_ms: i32,
+) -> Vec<u8> {
+    let Ok(mut terminal) = session.lock() else {
+        return Vec::new();
+    };
+    use std::os::fd::AsRawFd as _;
+    use opentui_core::terminal::TtyDevice as _;
+    let fd = terminal.tty().input_fd().as_raw_fd();
+    let mut poll_fd = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
+    // SAFETY: poll(2) with a bounded timeout on the session's tty fd.
+    let ready = unsafe { libc::poll(std::ptr::from_mut(&mut poll_fd), 1, timeout_ms) };
+    if ready <= 0 {
+        return Vec::new();
+    }
+    let mut available: i32 = 0;
+    // SAFETY: FIONREAD on the same fd.
+    unsafe { libc::ioctl(fd, libc::FIONREAD, std::ptr::from_mut(&mut available)) };
+    if available <= 0 {
+        return Vec::new();
+    }
+    let mut buffer = vec![0u8; available as usize];
+    // SAFETY: read(2) of at most FIONREAD bytes.
+    let read = unsafe { libc::read(fd, buffer.as_mut_ptr().cast::<libc::c_void>(), buffer.len()) };
+    if read <= 0 {
+        return Vec::new();
+    }
+    #[allow(clippy::cast_sign_loss)]
+    buffer.truncate(read as usize);
+    buffer
+}
 fn to_ratatui_color(color: crate::render::CellColor) -> ratatui::style::Color {
     match color {
         crate::render::CellColor::Rgb(r, g, b) => ratatui::style::Color::Rgb(r, g, b),
@@ -10611,7 +10696,7 @@ mod tests {
     /// multi-session census cells (`✕` at the hovered tab's edge).
     #[test]
     fn add_release_keeps_hover_on_the_tab_under_the_pointer() {
-        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+        use crate::input_term::{MouseButton, MouseEvent, MouseEventKind};
         let mut app = App::new((100, 30));
         app.store.open_tab("s1", Some("Parity fake says hello.".to_owned()));
         app.store.navigate(crate::store::Route::session("s1".to_owned()));
@@ -10619,7 +10704,7 @@ mod tests {
             kind,
             column: col,
             row: 0,
-            modifiers: crossterm::event::KeyModifiers::NONE,
+            modifiers: crate::input_term::KeyModifiers::NONE,
         };
         // Motion onto the ` + ` glyph (one tab at 100: the solver caps
         // the tab at 32 cols, the plus zone is 32..35 — the glyph
@@ -11139,15 +11224,15 @@ fn slash_builtins_execute_and_unknown_words_submit() {
 /// A crossterm mouse event at (`col`, `row`).
 #[cfg(test)]
 fn mouse(
-    kind: crossterm::event::MouseEventKind,
+    kind: crate::input_term::MouseEventKind,
     col: u16,
     row: u16,
-) -> crossterm::event::MouseEvent {
-    crossterm::event::MouseEvent {
+) -> crate::input_term::MouseEvent {
+    crate::input_term::MouseEvent {
         kind,
         column: col,
         row,
-        modifiers: crossterm::event::KeyModifiers::empty(),
+        modifiers: crate::input_term::KeyModifiers::empty(),
     }
 }
 
@@ -11157,7 +11242,7 @@ fn mouse(
 /// `1786-1792`).
 #[test]
 fn mouse_strip_hover_close_select_and_add() {
-    use crossterm::event::{MouseButton, MouseEventKind};
+    use crate::input_term::{MouseButton, MouseEventKind};
     let mut app = App::new((80, 24));
     app.store.open_tab("s1", Some("Alpha".to_owned()));
     app.store.open_tab("s2", Some("Beta".to_owned()));
@@ -11205,7 +11290,7 @@ fn mouse_strip_hover_close_select_and_add() {
 /// rail to `event.x + 1` clamped (`ui/pane-resize.ts`).
 #[test]
 fn mouse_vertical_rail_tabs_search_and_resize() {
-    use crossterm::event::{MouseButton, MouseEventKind};
+    use crate::input_term::{MouseButton, MouseEventKind};
     let mut app = App::new((120, 30));
     app.store.set_tabs_layout(crate::components::session_tabs_rail::TabsLayout::Vertical);
     app.store.open_tab("s1", Some("Alpha".to_owned()));
@@ -11266,7 +11351,7 @@ fn mouse_vertical_rail_tabs_search_and_resize() {
 /// session-only.
 #[test]
 fn mouse_home_strip_click_selects_the_restored_tab() {
-    use crossterm::event::{MouseButton, MouseEventKind};
+    use crate::input_term::{MouseButton, MouseEventKind};
     let mut app = App::new((80, 24));
     app.store.restore_tabs(vec![
         crate::store::SessionTab { session_id: "r1".into(), title: Some("Restored One".into()) },
@@ -11300,7 +11385,7 @@ fn mouse_home_strip_click_selects_the_restored_tab() {
 #[test]
 fn mouse_release_toggles_the_thought_disclosure() {
     use crate::components::message::model::{Message, Part, PartTime};
-    use crossterm::event::{MouseButton, MouseEventKind};
+    use crate::input_term::{MouseButton, MouseEventKind};
 
     let mut app = App::new((80, 24));
     app.store.set_messages(
@@ -11396,7 +11481,7 @@ fn mouse_release_toggles_the_thought_disclosure() {
 #[test]
 fn thought_toggle_hit_zone_is_tight_to_the_glyphs() {
     use crate::components::message::model::{Message, Part, PartTime};
-    use crossterm::event::{MouseButton, MouseEventKind};
+    use crate::input_term::{MouseButton, MouseEventKind};
 
     let mut app = App::new((80, 24));
     app.store.set_messages(
@@ -11462,7 +11547,7 @@ fn thought_toggle_hit_zone_is_tight_to_the_glyphs() {
 /// (`ui/dialog.tsx:34-63`); a release inside the chrome box stays.
 #[test]
 fn dialog_outside_release_dismisses() {
-    use crossterm::event::{MouseButton, MouseEventKind};
+    use crate::input_term::{MouseButton, MouseEventKind};
 
     let mut app = App::new((80, 24));
     app.store.open_dialog(crate::store::DialogKind::Help, crate::store::DialogSize::Medium);
@@ -11538,7 +11623,7 @@ fn ctrl_c_closes_a_dirty_dialog_in_one_press() {
 #[test]
 fn user_message_release_opens_message_actions() {
     use crate::components::message::model::{Message, Part, PartTime};
-    use crossterm::event::{MouseButton, MouseEventKind};
+    use crate::input_term::{MouseButton, MouseEventKind};
 
     let mut app = App::new((80, 24));
     app.store.set_messages(
@@ -11605,7 +11690,7 @@ fn user_message_release_opens_message_actions() {
 /// with the card (no zombie clicks on a dismissed card).
 #[test]
 fn onboarding_card_pointer_routes_dismiss_and_connect() {
-    use crossterm::event::{MouseButton, MouseEventKind};
+    use crate::input_term::{MouseButton, MouseEventKind};
 
     let mut app = App::new((160, 30));
     app.store.open_tab("s1", Some("Bug hunt".to_owned()));
@@ -11709,7 +11794,7 @@ fn autoaccept_auto_answers_permission_asks_once() {
 #[test]
 fn dialog_select_pointer_moves_and_submits() {
     use crate::components::command_palette::select_props_for;
-    use crossterm::event::{MouseButton, MouseEventKind};
+    use crate::input_term::{MouseButton, MouseEventKind};
 
     let mut app = App::new((80, 24));
     let clipboard = std::rc::Rc::new(crate::clipboard::RecordingClipboardSink::default());
@@ -11773,7 +11858,7 @@ fn dialog_select_pointer_moves_and_submits() {
 /// (`useWorkingDirectoryActions`, prompt/index.tsx:1925-1937).
 #[test]
 fn footer_location_hover_and_click() {
-    use crossterm::event::{MouseButton, MouseEventKind};
+    use crate::input_term::{MouseButton, MouseEventKind};
 
     let mut app = App::new((80, 24));
     let clipboard = std::rc::Rc::new(crate::clipboard::RecordingClipboardSink::default());
@@ -12495,7 +12580,7 @@ mod core_interaction_tests {
     /// pinned).
     #[test]
     fn home_release_fires_no_stale_transcript_or_location_hits() {
-        use crossterm::event::{MouseButton, MouseEventKind};
+        use crate::input_term::{MouseButton, MouseEventKind};
         let mut app = App::new((80, 24));
         staged_reasoning_session(&mut app);
         let stale =
@@ -12559,7 +12644,7 @@ mod core_interaction_tests {
     #[test]
     fn wheel_scrolls_the_transcript_half_a_page_per_notch() {
         use crate::components::message::model::{Message, Part, PartTime};
-        use crossterm::event::MouseEventKind;
+        use crate::input_term::MouseEventKind;
         let mut app = App::new((80, 24));
         app.store.open_tab("s1", Some("Long".to_owned()));
         let mut messages = Vec::new();
@@ -12655,7 +12740,7 @@ mod core_interaction_tests {
             "the palette windows (rows recorded)"
         );
 
-        app.mouse_event(&mouse(crossterm::event::MouseEventKind::ScrollDown, 40, 12));
+        app.mouse_event(&mouse(crate::input_term::MouseEventKind::ScrollDown, 40, 12));
         let after = app
             .store
             .top_dialog()
@@ -12664,8 +12749,8 @@ mod core_interaction_tests {
         assert_eq!(after.0, 0, "the selection did NOT move");
         assert_eq!(after.1, before.1 + 3, "the window moved 3 rows (one notch)");
         // Up returns (clamped at 0, never negative).
-        app.mouse_event(&mouse(crossterm::event::MouseEventKind::ScrollUp, 40, 12));
-        app.mouse_event(&mouse(crossterm::event::MouseEventKind::ScrollUp, 40, 12));
+        app.mouse_event(&mouse(crate::input_term::MouseEventKind::ScrollUp, 40, 12));
+        app.mouse_event(&mouse(crate::input_term::MouseEventKind::ScrollUp, 40, 12));
         let back = app
             .store
             .top_dialog()
@@ -12680,7 +12765,7 @@ mod core_interaction_tests {
     /// them the same event falls through to the transcript.
     #[test]
     fn wheel_over_the_sidebar_columns_scrolls_the_content_slot() {
-        use crossterm::event::MouseEventKind;
+        use crate::input_term::MouseEventKind;
         let mut app = App::new((160, 24));
         app.store.open_tab("s1", Some("S".to_owned()));
         app.store.navigate(Route::session("s1".to_owned()));
@@ -12878,7 +12963,7 @@ mod core_interaction_tests {
     #[test]
     fn permission_allow_once_via_pointer() {
         use crate::components::footer::permission::PermissionOption;
-        use crossterm::event::{MouseButton, MouseEventKind};
+        use crate::input_term::{MouseButton, MouseEventKind};
         let mut app = App::new((80, 24));
         app.store.open_tab("s1", Some("S".to_owned()));
         app.store.navigate(Route::session("s1".to_owned()));
@@ -12930,7 +13015,7 @@ mod core_interaction_tests {
     #[test]
     fn permission_reject_confirm_and_cancel_via_pointer() {
         use crate::components::footer::permission::{PermissionOption, PermissionStage};
-        use crossterm::event::{MouseButton, MouseEventKind};
+        use crate::input_term::{MouseButton, MouseEventKind};
         let mut app = App::new((80, 24));
         app.store.open_tab("s1", Some("S".to_owned()));
         app.store.navigate(Route::session("s1".to_owned()));
@@ -13010,7 +13095,7 @@ mod core_interaction_tests {
     #[test]
     fn exploration_group_header_toggles() {
         use crate::components::message::model::{Message, Part, PartTime, ToolState};
-        use crossterm::event::{MouseButton, MouseEventKind};
+        use crate::input_term::{MouseButton, MouseEventKind};
         let mut app = App::new((80, 24));
         app.store.set_messages(
             "s1",
@@ -13084,7 +13169,7 @@ mod core_interaction_tests {
     /// `+ Thought: {title}` header, expanded the bordered body.
     #[test]
     fn thought_rows_toggle_their_disclosure() {
-        use crossterm::event::{MouseButton, MouseEventKind};
+        use crate::input_term::{MouseButton, MouseEventKind};
         let mut app = App::new((80, 24));
         staged_reasoning_session(&mut app);
         // Expand the reasoning group (its header is the wired toggle).
@@ -13169,7 +13254,7 @@ mod core_interaction_tests {
     #[test]
     fn dialog_header_close_label_releases_closed() {
         use crate::store::DialogKind;
-        use crossterm::event::{MouseButton, MouseEventKind};
+        use crate::input_term::{MouseButton, MouseEventKind};
         let mut app = App::new((80, 24));
         app.store.open_dialog(DialogKind::CommandPalette, crate::store::DialogSize::Medium);
         let _ = app.frame();
@@ -13197,7 +13282,7 @@ mod core_interaction_tests {
     /// `esc/enter` label closes the same way.
     #[test]
     fn help_dialog_ok_button_and_esc_label_close() {
-        use crossterm::event::{MouseButton, MouseEventKind};
+        use crate::input_term::{MouseButton, MouseEventKind};
         let mut app = App::new((80, 24));
         app.store.open_dialog(crate::store::DialogKind::Help, crate::store::DialogSize::Medium);
         let _ = app.frame();
@@ -13270,7 +13355,7 @@ fn history_loading_paints_the_jump_slot_label() {
 /// no select, no drag arm).
 #[test]
 fn mouse_strip_middle_click_closes_on_down() {
-    use crossterm::event::{MouseButton, MouseEventKind};
+    use crate::input_term::{MouseButton, MouseEventKind};
     let mut app = App::new((80, 24));
     app.store.open_tab("s1", Some("Alpha".to_owned()));
     app.store.open_tab("s2", Some("Beta".to_owned()));
@@ -13294,7 +13379,7 @@ fn mouse_strip_middle_click_closes_on_down() {
 /// recently-closed tabs with reopen actions.
 #[test]
 fn mouse_strip_right_click_menu_actions() {
-    use crossterm::event::{MouseButton, MouseEventKind};
+    use crate::input_term::{MouseButton, MouseEventKind};
     let mut app = App::new((80, 24));
     app.store.open_tab("s1", Some("Alpha".to_owned()));
     app.store.open_tab("s2", Some("Beta".to_owned()));
@@ -13375,7 +13460,7 @@ fn mouse_strip_right_click_menu_actions() {
 /// suppressed).
 #[test]
 fn mouse_strip_drag_reorders_on_release() {
-    use crossterm::event::{MouseButton, MouseEventKind};
+    use crate::input_term::{MouseButton, MouseEventKind};
     let mut app = App::new((80, 24));
     app.store.open_tab("s1", Some("Alpha".to_owned()));
     app.store.open_tab("s2", Some("Beta".to_owned()));
@@ -13417,7 +13502,7 @@ fn mouse_strip_drag_reorders_on_release() {
 /// the stationary pointer (rapid multi-close), expiring after 5 s.
 #[test]
 fn mouse_strip_close_hold_freezes_the_layout_for_rapid_closes() {
-    use crossterm::event::{MouseButton, MouseEventKind};
+    use crate::input_term::{MouseButton, MouseEventKind};
     let mut app = App::new((80, 24));
     app.store.open_tab("s1", Some("Alpha".to_owned()));
     app.store.open_tab("s2", Some("Beta".to_owned()));
@@ -13470,7 +13555,7 @@ fn mouse_strip_close_hold_freezes_the_layout_for_rapid_closes() {
 #[test]
 fn subagent_row_navigates_to_the_child_session() {
     use crate::components::message::model::{Message, Part, PartTime, ToolState};
-    use crossterm::event::{MouseButton, MouseEventKind};
+    use crate::input_term::{MouseButton, MouseEventKind};
     let mut app = App::new((80, 24));
     let mut state = ToolState::default();
     state.metadata.insert("sessionID".into(), "child-1".into());
@@ -13533,7 +13618,7 @@ fn subagent_row_navigates_to_the_child_session() {
 /// ROOT's tab).
 #[test]
 fn picker_entry_rows_hover_select_and_click_navigate() {
-    use crossterm::event::{MouseButton, MouseEventKind};
+    use crate::input_term::{MouseButton, MouseEventKind};
     let mut app = App::new((80, 24));
     app.store.open_tab("s1", Some("Parent".to_owned()));
     app.store.navigate(Route::session("s1".to_owned()));
@@ -13594,7 +13679,7 @@ fn picker_entry_rows_hover_select_and_click_navigate() {
 #[allow(clippy::too_many_lines)]
 fn tool_row_arms_follow_the_v2_table() {
     use crate::components::message::model::{Message, Part, PartTime, ToolState, ToolStatus};
-    use crossterm::event::{MouseButton, MouseEventKind};
+    use crate::input_term::{MouseButton, MouseEventKind};
     let mut app = App::new((80, 24));
     // Grouping OFF → the tool rows render as ungrouped part rows.
     app.store.toggle_exploration_grouping();
@@ -13763,7 +13848,7 @@ fn open_url_rejects_non_http_schemes() {
 #[test]
 fn markdown_link_click_opens_the_url() {
     use crate::components::message::model::{Message, Part, PartTime};
-    use crossterm::event::{MouseButton, MouseEventKind};
+    use crate::input_term::{MouseButton, MouseEventKind};
     use std::rc::Rc;
     let mut app = App::new((80, 24));
     app.store.set_messages(
@@ -13825,7 +13910,7 @@ fn markdown_link_click_opens_the_url() {
 /// `mcp.list`), a toast without an action just dismisses.
 #[test]
 fn toast_pointer_surface_pauses_and_activates() {
-    use crossterm::event::{MouseButton, MouseEventKind};
+    use crate::input_term::{MouseButton, MouseEventKind};
     let mut app = App::new((80, 24));
     app.store.open_tab("s1", Some("T".to_owned()));
     app.store.toast_show(
@@ -13927,7 +14012,7 @@ fn mcp_failure_transitions_toast_once() {
 /// cell `plugins.list` — both hit-testable at their painted cells.
 #[test]
 fn home_footer_chips_are_clickable() {
-    use crossterm::event::{MouseButton, MouseEventKind};
+    use crate::input_term::{MouseButton, MouseEventKind};
     let mut app = App::new((80, 24));
     app.store.restore_tabs(vec![crate::store::SessionTab {
         session_id: "r1".to_owned(),

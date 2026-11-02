@@ -36,28 +36,9 @@ extern "C" fn on_continue(_signal: i32) {
     CONTINUED.store(true, Ordering::SeqCst);
 }
 
-/// `renderer.suspend()`'s terminal half: leave the alternate screen,
-/// pop the mouse modes, drop paste/focus reporting — everything the
-/// user's shell must not see latched. Call with raw mode ALREADY
-/// disabled (the caller owns that around the stop).
-pub fn teardown(out: &mut dyn std::io::Write, applied_mouse: bool) {
-    // `\x1b[?1049l` — LeaveAlternateScreen (crossterm's queue! needs
-    // a Sized writer; the escape is fixed either way).
-    let _ = out.write_all(b"\x1b[?1049l");
-    let _ = crate::mouse_modes::pop(out, applied_mouse);
-    let _ = out.write_all(crate::terminal_proto::PASTE_FOCUS_OFF);
-    let _ = out.flush();
-}
-
-/// `renderer.resume()`'s terminal half (after the continue): re-enter
-/// the alternate screen, re-arm the mouse modes under the SAME config
-/// gate, re-enable paste/focus reporting.
-pub fn restore(out: &mut dyn std::io::Write, applied_mouse: bool) {
-    let _ = out.write_all(b"\x1b[?1049h");
-    let _ = crate::mouse_modes::push(out, applied_mouse);
-    let _ = out.write_all(crate::terminal_proto::PASTE_FOCUS_ON);
-    let _ = out.flush();
-}
+/// `renderer.suspend()`'s terminal half is the opentui session
+/// Terminal's teardown (lane B3a) — see [`crate::app`]'s suspend arm;
+/// the byte-writing teardown/restore pair retired with it.
 
 /// The signal discipline (`process.kill(0, "SIGTSTP")` + the
 /// `SIGCONT` resume): stop our OWN process group, return once the
@@ -111,30 +92,6 @@ pub fn suspend_cycle() {}
 mod tests {
     use super::*;
     use std::io::Write as _;
-
-    /// The terminal hand-off emits the exact byte sequences (mirror
-    /// of the `$EDITOR` seam's writer output).
-    #[test]
-    fn teardown_and_restore_round_trip() {
-        let mut down = Vec::new();
-        teardown(&mut down, true);
-        // The `$EDITOR` seam's order: alt-screen off, mouse pops, paste
-        // /focus off.
-        assert_eq!(
-            down,
-            b"\x1b[?1049l\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l\x1b[?2004l\x1b[?1004l"
-        );
-        let mut up = Vec::new();
-        restore(&mut up, true);
-        assert_eq!(
-            up,
-            b"\x1b[?1049h\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h\x1b[?2004h\x1b[?1004h"
-        );
-        // The no-mouse config gate pops/pushes nothing for the modes.
-        let mut bare_down = Vec::new();
-        teardown(&mut bare_down, false);
-        assert_eq!(bare_down, b"\x1b[?1049l\x1b[?2004l\x1b[?1004l");
-    }
 
     /// The signal cycle against an OWN child process (its own process
     /// group — the parent's group is never signaled): the child

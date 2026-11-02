@@ -427,7 +427,7 @@ fn prompt_autosubmit_ready() {
 /// (`onHome={() => route.navigate({type:"home"})}`).
 #[test]
 fn pluginroutemis() {
-    use crossterm::event::{KeyEventKind, MouseButton, MouseEvent, MouseEventKind};
+    use oc_tui::input_term::{MouseButton, MouseEvent, MouseEventKind};
     use oc_tui::app::App;
 
     let theme = oc_tui::theme::ThemeState::v2_dark();
@@ -461,11 +461,11 @@ fn pluginroutemis() {
         kind: MouseEventKind::Up(MouseButton::Left),
         column: u16::try_from(hx + 1).unwrap(),
         row: u16::try_from(hy).unwrap(),
-        modifiers: crossterm::event::KeyModifiers::empty(),
+        modifiers: oc_tui::input_term::KeyModifiers::empty(),
     });
     assert!(matches!(app.store.route(), oc_tui::store::Route::Home));
     assert!(app.store.plugin_route_page().is_none(), "the page closed");
-    let _ = (KeyEventKind::Press,);
+    
 }
 
 /// TUI-30 — the `SessionLocationMissing` recovery screen
@@ -1078,7 +1078,7 @@ fn backgroundtool() {
 /// window pins reset).
 #[test]
 fn queuedpromptdo_jump_to_latest() {
-    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    use oc_tui::input_term::{MouseButton, MouseEvent, MouseEventKind};
     use oc_tui::app::App;
     use oc_tui::store::DialogKind;
 
@@ -1098,7 +1098,7 @@ fn queuedpromptdo_jump_to_latest() {
         kind: MouseEventKind::Up(MouseButton::Left),
         column: u16::try_from(dock_hit.x + 2).unwrap(),
         row: u16::try_from(dock_hit.y).unwrap(),
-        modifiers: crossterm::event::KeyModifiers::empty(),
+        modifiers: oc_tui::input_term::KeyModifiers::empty(),
     });
     assert!(
         matches!(app.store.top_dialog().map(|entry| entry.kind), Some(DialogKind::QueuedPrompts)),
@@ -1144,7 +1144,7 @@ fn queuedpromptdo_jump_to_latest() {
         kind: MouseEventKind::Up(MouseButton::Left),
         column: u16::try_from(jump_hit.x + 2).unwrap(),
         row: u16::try_from(jump_hit.y).unwrap(),
-        modifiers: crossterm::event::KeyModifiers::empty(),
+        modifiers: oc_tui::input_term::KeyModifiers::empty(),
     });
     assert_eq!(
         app2.store.follow_state("s2"),
@@ -1160,7 +1160,7 @@ fn queuedpromptdo_jump_to_latest() {
 /// renders at all.
 #[test]
 fn remote_installed() {
-    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    use oc_tui::input_term::{MouseButton, MouseEvent, MouseEventKind};
     use oc_tui::app::App;
     use oc_tui::components::update::{UpdateNotice, UpdateNoticeKind};
     use oc_tui::store::DialogKind;
@@ -1180,7 +1180,7 @@ fn remote_installed() {
         kind: MouseEventKind::Up(MouseButton::Left),
         column: u16::try_from(x + 1).unwrap(),
         row: u16::try_from(y).unwrap(),
-        modifiers: crossterm::event::KeyModifiers::empty(),
+        modifiers: oc_tui::input_term::KeyModifiers::empty(),
     });
     assert!(
         matches!(app.store.top_dialog().map(|entry| entry.kind), Some(DialogKind::Update)),
@@ -1201,7 +1201,7 @@ fn remote_installed() {
         kind: MouseEventKind::Up(MouseButton::Left),
         column: u16::try_from(x + 1).unwrap(),
         row: u16::try_from(y).unwrap(),
-        modifiers: crossterm::event::KeyModifiers::empty(),
+        modifiers: oc_tui::input_term::KeyModifiers::empty(),
     });
     assert!(app2.exit_requested, "the installed banner's release exits (restart)");
 
@@ -1218,7 +1218,7 @@ fn remote_installed() {
         kind: MouseEventKind::Up(MouseButton::Left),
         column: u16::try_from(x + 1).unwrap(),
         row: u16::try_from(y).unwrap(),
-        modifiers: crossterm::event::KeyModifiers::empty(),
+        modifiers: oc_tui::input_term::KeyModifiers::empty(),
     });
     assert!(app3.store.update_notice().is_none(), "the remote banner's release dismissed it");
 
