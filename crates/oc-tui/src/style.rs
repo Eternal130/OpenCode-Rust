@@ -19,8 +19,9 @@
 /// A terminal color, in the ratatui 0.29 vocabulary this crate uses
 /// (theme tokens resolve to `Rgb`, the terminal-palette paths carry
 /// `Indexed`, and `Reset` is the terminal default).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Color {
+    #[default]
     Reset,
     Indexed(u8),
     Rgb(u8, u8, u8),
@@ -172,12 +173,35 @@ impl From<oc_syntax::style::Style> for Style {
     }
 }
 
+impl From<Style> for oc_syntax::style::Style {
+    /// The oc-tui → oc-syntax direction (the highlight boundary's
+    /// base style).
+    fn from(style: Style) -> Self {
+        Self {
+            fg: style.fg.map(oc_syntax::style::Color::from),
+            bg: style.bg.map(oc_syntax::style::Color::from),
+            add_modifier: oc_syntax::style::Modifier::from_bits(style.add_modifier.bits()),
+            sub_modifier: oc_syntax::style::Modifier::from_bits(style.sub_modifier.bits()),
+        }
+    }
+}
+
 impl From<oc_syntax::style::Color> for Color {
     fn from(color: oc_syntax::style::Color) -> Self {
         match color {
             oc_syntax::style::Color::Reset => Self::Reset,
             oc_syntax::style::Color::Indexed(index) => Self::Indexed(index),
             oc_syntax::style::Color::Rgb(r, g, b) => Self::Rgb(r, g, b),
+        }
+    }
+}
+
+impl From<Color> for oc_syntax::style::Color {
+    fn from(color: Color) -> Self {
+        match color {
+            Color::Reset => Self::Reset,
+            Color::Indexed(index) => Self::Indexed(index),
+            Color::Rgb(r, g, b) => Self::Rgb(r, g, b),
         }
     }
 }

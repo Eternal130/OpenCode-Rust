@@ -32,7 +32,7 @@
 #![allow(clippy::cast_sign_loss)]
 #![allow(clippy::cast_precision_loss)]
 
-use ratatui::style::Style as PaintStyle;
+use crate::style::Style as PaintStyle;
 use taffy::prelude::*;
 use taffy::{AvailableSpace, Dimension, LengthPercentage, NodeId, Rect, Size, Style, TaffyTree};
 
@@ -506,7 +506,7 @@ mod tests {
     use crate::wrap::min_content_width;
 
     const STYLE: PaintStyle = PaintStyle::new();
-    const BOLD: PaintStyle = PaintStyle::new().add_modifier(ratatui::style::Modifier::BOLD);
+    const BOLD: PaintStyle = PaintStyle::new().add_modifier(crate::style::Modifier::BOLD);
 
     fn span(text: &str, style: PaintStyle) -> StyledSpan {
         StyledSpan { text: text.to_owned(), style, link: None }

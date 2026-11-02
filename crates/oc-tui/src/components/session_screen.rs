@@ -34,7 +34,7 @@ use crate::components::tool_rows::{fill_style, DEFAULT_FOREGROUND};
 use crate::layout::{Placed, PlacedLine};
 use crate::render::{paint_placed, paint_placed_with_fills, Fill, Frame};
 use crate::theme::ThemeState;
-use ratatui::style::{Color, Modifier, Style};
+use crate::style::{Color, Modifier, Style};
 
 /// One tabs-bar entry (the assembly's slice of the store's tab list).
 #[derive(Debug, Clone, PartialEq, Eq)]

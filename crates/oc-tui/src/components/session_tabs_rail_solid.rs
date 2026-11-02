@@ -27,8 +27,8 @@ use crate::theme::ThemeStyles;
 
 /// ratatui modifier bits → the oc-tui ECMA-ordered word (1:1 — the
 /// rail carries BOLD only).
-fn attrs_of(style: ratatui::style::Style) -> u16 {
-    use ratatui::style::Modifier;
+fn attrs_of(style: crate::style::Style) -> u16 {
+    use crate::style::Modifier;
     let mut bits = 0u16;
     let modifier = style.add_modifier;
     if modifier.contains(Modifier::BOLD) {
@@ -58,7 +58,7 @@ fn attrs_of(style: ratatui::style::Style) -> u16 {
     bits
 }
 
-fn color_of(color: Option<ratatui::style::Color>) -> CellColor {
+fn color_of(color: Option<crate::style::Color>) -> CellColor {
     color.map_or(CellColor::Default, CellColor::from)
 }
 

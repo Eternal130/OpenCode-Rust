@@ -59,9 +59,9 @@ use crate::theme::ThemeState;
 /// An RGB triple (the port's cell currency).
 type Rgb = (u8, u8, u8);
 
-fn rgb_of(color: ratatui::style::Color) -> Rgb {
+fn rgb_of(color: crate::style::Color) -> Rgb {
     match color {
-        ratatui::style::Color::Rgb(r, g, b) => (r, g, b),
+        crate::style::Color::Rgb(r, g, b) => (r, g, b),
         _ => (128, 128, 128),
     }
 }
@@ -77,8 +77,8 @@ fn hex(rgb: Rgb) -> String {
 /// ratatui modifier bits → opentui's ECMA-ordered attribute word
 /// (bold 1<<0 …) — the picker carries BOLD only; the full table
 /// mirrors `transcript_solid::ecma_attributes`.
-fn ecma_attributes(modifier: ratatui::style::Modifier) -> u32 {
-    use ratatui::style::Modifier;
+fn ecma_attributes(modifier: crate::style::Modifier) -> u32 {
+    use crate::style::Modifier;
     let mut bits = 0u32;
     if modifier.contains(Modifier::BOLD) {
         bits |= 1 << 0;
@@ -260,7 +260,7 @@ fn shape(paint: &PickerPaint, width: usize) -> Vec<PanelItem> {
             body: PanelBody::Fill {
                 width: usize::from(fill.width),
                 height: usize::from(fill.height),
-                color: rgb_of(fill.style.bg.unwrap_or(ratatui::style::Color::Reset)),
+                color: rgb_of(fill.style.bg.unwrap_or(crate::style::Color::Reset)),
             },
         });
     }

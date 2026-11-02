@@ -65,7 +65,7 @@ fn grid(store: &Store, filter: &str, moves: i64) -> Vec<String> {
         &props,
         &state,
         &styles,
-        ratatui::style::Color::Rgb(8, 8, 8),
+        oc_tui::style::Color::Rgb(8, 8, 8),
         80,
         24,
         Some(24),
@@ -116,7 +116,7 @@ fn cursor_sits_on_row_zero_and_current_carries_the_marker() {
         &props,
         &state,
         &styles,
-        ratatui::style::Color::Rgb(8, 8, 8),
+        oc_tui::style::Color::Rgb(8, 8, 8),
         80,
         24,
         Some(24),
@@ -138,7 +138,7 @@ fn motion_moves_the_highlight() {
     let styles =
         oc_tui::components::dialog_select::DialogStyles::from_theme(&ThemeState::v2_dark());
     let want = match styles.selected_bg {
-        ratatui::style::Color::Rgb(r, g, b) => (r, g, b),
+        oc_tui::style::Color::Rgb(r, g, b) => (r, g, b),
         _ => (0, 0, 0),
     };
     let focused_row_text = |moves: i64| -> String {
@@ -151,7 +151,7 @@ fn motion_moves_the_highlight() {
             &props,
             &state,
             &styles,
-            ratatui::style::Color::Rgb(8, 8, 8),
+            oc_tui::style::Color::Rgb(8, 8, 8),
             80,
             24,
             Some(24),

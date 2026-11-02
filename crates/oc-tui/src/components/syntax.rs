@@ -12,7 +12,7 @@
 //! exactly today's behavior (the offline rule).
 
 use crate::layout::StyledSpan;
-use ratatui::style::{Color, Style};
+use crate::style::{Color, Style};
 
 use oc_syntax::{HighlightedBlock, SyntaxStyles};
 
@@ -70,10 +70,10 @@ pub fn line_spans(
 ) -> Vec<StyledSpan> {
     let background = base.bg;
     block
-        .line_spans(line, base, syntax)
+        .line_spans(line, base.into(), syntax)
         .into_iter()
         .map(|span| {
-            let mut style = span.style;
+            let mut style: Style = span.style.into();
             style.bg = background;
             StyledSpan { text: span.text, style, link: None }
         })

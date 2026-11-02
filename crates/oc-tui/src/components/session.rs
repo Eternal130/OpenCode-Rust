@@ -21,7 +21,7 @@ use crate::components::sidebar::{
 };
 use crate::render::{paint_placed_with_fills, Frame};
 use crate::store::{SessionTab, Store};
-use ratatui::style::Style;
+use crate::style::Style;
 
 /// The agent label for the composer's statusline hint: the server
 /// agent list's display name, else the raw id titlecased (the
@@ -804,14 +804,14 @@ pub fn render_session(
                 width: label_width,
                 lines: vec![crate::layout::PlacedLine::plain(
                     label,
-                    ratatui::style::Style::new()
+                    crate::style::Style::new()
                         .fg(styles.text_muted.fg.unwrap_or_default())
                         .bg(styles.background),
                 )],
                 tag: Some("session-loading-history".into()),
             }],
             (u16::try_from(column).unwrap_or(u16::MAX), 1),
-            ratatui::style::Style::new()
+            crate::style::Style::new()
                 .fg(crate::components::tool_rows::DEFAULT_FOREGROUND)
                 .bg(styles.background),
         );
@@ -1253,7 +1253,7 @@ fn paint_queued_dock(
     width: usize,
     styles: &crate::theme::ThemeStyles,
 ) -> Frame {
-    let background = ratatui::style::Style::new()
+    let background = crate::style::Style::new()
         .fg(crate::components::tool_rows::DEFAULT_FOREGROUND)
         .bg(styles.background);
     let mut frame =
@@ -1300,9 +1300,9 @@ fn plural_s(count: usize) -> &'static str {
 
 /// A ratatui color back to its RGBA token (G-35's spinner input —
 /// the agent rail color or the `border.base` fallback).
-fn ratatui_color_to_rgba(color: ratatui::style::Color) -> oc_theme::Rgba {
+fn ratatui_color_to_rgba(color: crate::style::Color) -> oc_theme::Rgba {
     match color {
-        ratatui::style::Color::Rgb(r, g, b) => oc_theme::Rgba::from_ints(r, g, b, 0xff),
+        crate::style::Color::Rgb(r, g, b) => oc_theme::Rgba::from_ints(r, g, b, 0xff),
         _ => oc_theme::Rgba::from_ints(0x80, 0x80, 0x80, 0xff),
     }
 }

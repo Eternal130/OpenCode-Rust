@@ -37,7 +37,7 @@ pub mod fuzzy;
 
 use crate::render::{Cell, CellColor, Frame};
 use crate::wrap::flatten;
-use ratatui::style::{Color, Style};
+use crate::style::{Color, Style};
 
 /// One selectable row (`DialogSelectOption`).
 #[derive(Debug, Clone, PartialEq, Eq)]

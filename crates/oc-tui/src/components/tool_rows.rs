@@ -13,7 +13,7 @@
 //! path, proven byte-identical by the golden instrument in
 //! `golden_tests`.
 
-use ratatui::style::{Color, Style};
+use crate::style::{Color, Style};
 
 use crate::layout::{BoxSpec, LayoutTree, StyledSpan};
 use crate::render::{paint_placed, Frame};
@@ -246,7 +246,7 @@ pub fn layout_tool_rows(
 fn code_body_node(
     tree: &mut LayoutTree,
     code: &ToolRowCode,
-    base: ratatui::style::Style,
+    base: crate::style::Style,
     theme: &ThemeStyles,
 ) -> taffy::NodeId {
     let muted = theme.text_muted;

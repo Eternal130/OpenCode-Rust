@@ -518,7 +518,7 @@ pub(crate) fn chrome_run_units(
             return;
         }
         if glyph_run.is_ascii()
-            || !crate::wrap::flatten(glyph_run, ratatui::style::Style::new())
+            || !crate::wrap::flatten(glyph_run, crate::style::Style::new())
                 .iter()
                 .any(|atom| atom.width > 1)
         {
@@ -613,7 +613,7 @@ pub(crate) fn chrome_cluster_units(
     let mut units = Vec::new();
     let mut x = left;
     for (index, atom) in
-        crate::wrap::flatten(run_text, ratatui::style::Style::new()).into_iter().enumerate()
+        crate::wrap::flatten(run_text, crate::style::Style::new()).into_iter().enumerate()
     {
         units.push(ChromeUnit {
             key: format!("{key_base}@{top}#{index}"),
@@ -648,7 +648,7 @@ fn stamp_spaces(frame: &mut Frame, items: &[ChromeUnit]) {
             let ChromeBody::Text(chunks) = &later.body else { continue };
             let mut x = later.left;
             for chunk in chunks {
-                let style = ratatui::style::Style::new();
+                let style = crate::style::Style::new();
                 for atom in crate::wrap::flatten(&chunk.text, style) {
                     claimed.insert((later.top, x));
                     x += atom.width.max(1);

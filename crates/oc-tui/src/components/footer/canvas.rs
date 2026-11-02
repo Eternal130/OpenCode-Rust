@@ -9,7 +9,7 @@
 
 use crate::render::{Cell, CellColor, Frame};
 use crate::wrap::{display_width, flatten};
-use ratatui::style::Style;
+use crate::style::Style;
 
 /// The dump harness renderer fill: default foreground over the
 /// terminal background (black in the reference capture).

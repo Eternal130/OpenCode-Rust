@@ -126,7 +126,7 @@ pub fn canvas_frame_solid(ops: &[CanvasOp], width: usize, height: usize) -> Fram
                      glyphs: &mut Vec<Vec<Option<(char, CellColor, u32)>>>| {
         let mut x = x;
         for span in spans {
-            for atom in crate::wrap::flatten(&span.text, ratatui::style::Style::new()) {
+            for atom in crate::wrap::flatten(&span.text, crate::style::Style::new()) {
                 if let Some(row) = glyphs.get_mut(y) {
                     if let Some(slot) = row.get_mut(x) {
                         *slot = Some((

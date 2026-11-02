@@ -38,7 +38,7 @@
 #![allow(clippy::cast_precision_loss)]
 
 use parity::tui_frame as pf;
-use ratatui::style::{Modifier, Style};
+use crate::style::{Modifier, Style};
 
 use crate::components::session_tabs::{TabStatus, TabView, ADD_TAB_WIDTH};
 use crate::components::session_tabs_solid::paint_solid_bar;
@@ -386,7 +386,7 @@ fn tool_wrap_rows_styled_path_is_byte_identical_to_plain_leaves() {
 /// boundary, plain tail. The bold attribute must follow the span
 /// across the line break (per-cell styles from segments).
 fn markdown_spans() -> Vec<StyledSpan> {
-    let base = Style::new().fg(ratatui::style::Color::Indexed(252));
+    let base = Style::new().fg(crate::style::Color::Indexed(252));
     let bold = base.add_modifier(Modifier::BOLD);
     vec![
         StyledSpan {
@@ -512,7 +512,7 @@ fn dialog_select_matches_text_grid_and_ansi_at_80() {
     let theme = ThemeState::v2_dark();
     let styles = DialogStyles::from_theme(&theme);
     let base = theme.resolved.tokens.background.base;
-    let surface = ratatui::style::Color::Rgb(base.r, base.g, base.b);
+    let surface = crate::style::Color::Rgb(base.r, base.g, base.b);
     let (props, state) = dialog_select_fixture();
     let view = render_select(&props, &state, &styles, surface, 80, 20, Some(20));
     let frame = frame_from_view(&view, (80, 20), surface, styles.default_fg);
@@ -534,7 +534,7 @@ fn dialog_select_matches_text_grid_and_ansi_at_160() {
     let theme = ThemeState::v2_dark();
     let styles = DialogStyles::from_theme(&theme);
     let base = theme.resolved.tokens.background.base;
-    let surface = ratatui::style::Color::Rgb(base.r, base.g, base.b);
+    let surface = crate::style::Color::Rgb(base.r, base.g, base.b);
     let (props, state) = dialog_select_fixture();
     let view = render_select(&props, &state, &styles, surface, 160, 20, Some(20));
     let frame = frame_from_view(&view, (160, 20), surface, styles.default_fg);

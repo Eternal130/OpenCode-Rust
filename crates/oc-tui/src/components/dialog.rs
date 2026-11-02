@@ -1066,26 +1066,26 @@ fn btw_answer_rows(
                     .iter()
                     .map(|span| {
                         let fg = match span.style.fg {
-                            Some(ratatui::style::Color::Rgb(r, g, b)) => {
+                            Some(crate::style::Color::Rgb(r, g, b)) => {
                                 Some(opentui_core::Rgba::rgb(r, g, b))
                             }
                             _ => None,
                         };
                         let bg = match span.style.bg {
-                            Some(ratatui::style::Color::Rgb(r, g, b)) => {
+                            Some(crate::style::Color::Rgb(r, g, b)) => {
                                 Some(opentui_core::Rgba::rgb(r, g, b))
                             }
                             _ => None,
                         };
                         let mut attributes = 0u32;
                         let modifiers = span.style.add_modifier;
-                        if modifiers.contains(ratatui::style::Modifier::BOLD) {
+                        if modifiers.contains(crate::style::Modifier::BOLD) {
                             attributes |= 1;
                         }
-                        if modifiers.contains(ratatui::style::Modifier::ITALIC) {
+                        if modifiers.contains(crate::style::Modifier::ITALIC) {
                             attributes |= 2;
                         }
-                        if modifiers.contains(ratatui::style::Modifier::UNDERLINED) {
+                        if modifiers.contains(crate::style::Modifier::UNDERLINED) {
                             attributes |= 4;
                         }
                         opentui_core::styled_text::TextChunk {
@@ -1773,7 +1773,7 @@ mod tests {
     use crate::reactive::Runtime;
     use crate::render::CellColor;
     use crate::store::{DialogSize, PairState};
-    use ratatui::style::Color;
+    use crate::style::Color;
 
     fn rgb(color: CellColor) -> (u8, u8, u8) {
         match color {

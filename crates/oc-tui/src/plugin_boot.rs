@@ -1467,9 +1467,9 @@ impl SessionPort for HttpSessionPort {
 }
 /// One theme token as a `#rrggbb` string (the v2 TUI-plugin theme
 /// view the guest's sidebar render consumes).
-fn hex_color(color: ratatui::style::Color) -> String {
+fn hex_color(color: crate::style::Color) -> String {
     match color {
-        ratatui::style::Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
+        crate::style::Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
         _ => "#888888".to_owned(),
     }
 }

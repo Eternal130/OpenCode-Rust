@@ -43,7 +43,7 @@
 //! line-break algorithm is future work (see the wave 7.0 report); this
 //! set reproduces every golden wrap.
 
-use ratatui::style::Style as PaintStyle;
+use crate::style::Style as PaintStyle;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// One styled run of a styled-segment text leaf: the span's text plus
@@ -719,7 +719,7 @@ mod tests {
     /// span's style on both fragments (the opentui text-children seam).
     #[test]
     fn wrap_breaks_mid_span_and_keeps_style_on_both_fragments() {
-        let bold = STYLE.add_modifier(ratatui::style::Modifier::BOLD);
+        let bold = STYLE.add_modifier(crate::style::Modifier::BOLD);
         let atoms = flatten_spans(&[
             span("plain ", STYLE),
             span("**bold run**", bold),
@@ -739,7 +739,7 @@ mod tests {
     /// boundaries irrelevant), max-content the single-line width.
     #[test]
     fn styled_streams_measure_min_and_max_content() {
-        let bold = STYLE.add_modifier(ratatui::style::Modifier::BOLD);
+        let bold = STYLE.add_modifier(crate::style::Modifier::BOLD);
         let atoms =
             flatten_spans(&[span("設定 ", STYLE), span("config", bold), span("の値", STYLE)]);
         assert_eq!(atoms_max_content_width(&atoms), display_width("設定 configの値"));

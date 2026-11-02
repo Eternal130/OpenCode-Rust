@@ -696,7 +696,7 @@ fn vt_temporal_busy_strip_spinner_paints_interactive_token() {
 fn theme_interactive() -> (u8, u8, u8) {
     let styles = oc_tui::theme::ThemeState::v2_dark().styles();
     match styles.interactive {
-        ratatui::style::Color::Rgb(r, g, b) => (r, g, b),
+        oc_tui::style::Color::Rgb(r, g, b) => (r, g, b),
         other => panic!("interactive token must be RGB, got {other:?}"),
     }
 }

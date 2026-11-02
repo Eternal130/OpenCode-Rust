@@ -4730,7 +4730,7 @@ impl Store {
     /// initially undefined — agentColor, so the rail stays
     /// `border.base`) or when no agent is visible.
     #[must_use]
-    pub fn composer_rail_color(&self, session_key: &str) -> Option<ratatui::style::Color> {
+    pub fn composer_rail_color(&self, session_key: &str) -> Option<crate::style::Color> {
         let lists = self.server_lists();
         let rows = lists.agents.rows()?;
         let visible: Vec<&ServerAgent> = rows.iter().filter(|agent| !agent.hidden).collect();
@@ -4749,7 +4749,7 @@ impl Store {
     /// registry's agent id resolved through the visible agent list,
     /// falling back to the first hue (the "build" default).
     #[must_use]
-    pub fn session_agent_rail_color(&self, session_id: &str) -> Option<ratatui::style::Color> {
+    pub fn session_agent_rail_color(&self, session_id: &str) -> Option<crate::style::Color> {
         let agent = self.session_info(session_id).and_then(|info| info.agent)?;
         let lists = self.server_lists();
         let rows = lists.agents.rows()?;

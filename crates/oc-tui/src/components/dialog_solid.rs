@@ -118,9 +118,9 @@ struct DialogColors {
 
 impl DialogColors {
     fn of(styles: &DialogStyles) -> Self {
-        let rgb = |color: ratatui::style::Color| -> Rgb {
+        let rgb = |color: crate::style::Color| -> Rgb {
             match color {
-                ratatui::style::Color::Rgb(r, g, b) => (r, g, b),
+                crate::style::Color::Rgb(r, g, b) => (r, g, b),
                 // The theme tokens always resolve to RGB; the
                 // non-RGB arms are unreachable defensive fallbacks.
                 _ => (128, 128, 128),
@@ -548,8 +548,8 @@ fn title_chunks(inputs: &DialogInputs, paint: &RowPaint, index: usize) -> Styled
         let run_fg = if paint.bold { paint.title_fg } else { fg };
         for atom in crate::wrap::flatten(
             text,
-            ratatui::style::Style::new()
-                .fg(ratatui::style::Color::Rgb(run_fg.0, run_fg.1, run_fg.2)),
+            crate::style::Style::new()
+                .fg(crate::style::Color::Rgb(run_fg.0, run_fg.1, run_fg.2)),
         ) {
             let step = atom.width.max(1);
             if used + step > clip {

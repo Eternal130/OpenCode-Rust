@@ -32,7 +32,7 @@
 
 #![allow(clippy::cast_possible_truncation)]
 
-use ratatui::style::Style;
+use crate::style::Style;
 
 use crate::components::message::markdown::{render_markdown, MarkdownStyles};
 use crate::components::message::model::{
@@ -119,7 +119,7 @@ pub struct TranscriptOptions {
     /// categorical hue (`local.agent.color(session.agent)`,
     /// session/index.tsx:2200; `None` → the walk's first-hue default
     /// for fixtures). Set by `render_session` from the registry.
-    pub user_rail: Option<ratatui::style::Color>,
+    pub user_rail: Option<crate::style::Color>,
     /// SURF-1: the staged revert (`session.revert`) — messages at/after
     /// `message_id` filter out (rows.ts:63-66) and the `RevertMessage`
     /// banner renders after the last row (index.tsx:1413-1418).

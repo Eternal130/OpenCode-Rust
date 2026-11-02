@@ -8,7 +8,7 @@
 
 #![allow(clippy::cast_possible_truncation)]
 
-use ratatui::style::{Color, Style};
+use crate::style::{Color, Style};
 
 use crate::components::message::model::{locale_duration, titlecase, turn_duration, Message};
 use crate::layout::{Placed, PlacedLine, StyledSpan};
@@ -1312,7 +1312,7 @@ mod tests {
         let line = &frame.text_grid()[0];
         assert!(line.starts_with("   - Thought: Failure modes · 1ms"), "{line}");
         let expected = match theme.warning {
-            ratatui::style::Color::Rgb(r, g, b) => crate::render::CellColor::Rgb(r, g, b),
+            crate::style::Color::Rgb(r, g, b) => crate::render::CellColor::Rgb(r, g, b),
             other => panic!("warning token must be RGB, got {other:?}"),
         };
         assert_eq!(frame.cell(0, 3).fg, expected, "expanded header uses the full warning color");
@@ -1338,14 +1338,14 @@ mod tests {
         assert!(grid[0].starts_with("   ┃ Inspecting the parser edges"), "{grid:?}");
         // The gutter's exact token: `theme.decrease(raised.base)`.
         let expected_gutter = match theme.background_prompt {
-            ratatui::style::Color::Rgb(r, g, b) => crate::render::CellColor::Rgb(r, g, b),
+            crate::style::Color::Rgb(r, g, b) => crate::render::CellColor::Rgb(r, g, b),
             other => panic!("gutter token must be RGB, got {other:?}"),
         };
         assert_eq!(frame.cell(0, 3).fg, expected_gutter, "the ┃ uses decrease(raised.base)");
         // …and it is NOT the body's text.muted (the two tokens differ
         // in the v2 default theme — the audit's whole point).
         let body_muted = match theme.text_muted.fg {
-            Some(ratatui::style::Color::Rgb(r, g, b)) => crate::render::CellColor::Rgb(r, g, b),
+            Some(crate::style::Color::Rgb(r, g, b)) => crate::render::CellColor::Rgb(r, g, b),
             other => panic!("muted token must be RGB, got {other:?}"),
         };
         assert_ne!(expected_gutter, body_muted);

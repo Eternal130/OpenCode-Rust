@@ -31,7 +31,7 @@ use crate::components::session_tabs::SESSION_SIDEBAR_WIDTH;
 use crate::layout::{Placed, PlacedLine, StyledSpan};
 use crate::render::Fill;
 use crate::theme::ThemeStyles;
-use ratatui::style::{Modifier, Style};
+use crate::style::{Modifier, Style};
 
 /// `wide()` in `session-frame.tsx`: the pane is `auto`-shown only
 /// above this session-pane width.
@@ -316,14 +316,14 @@ impl SidebarView {
 /// pulls the glyph toward the backdrop (the colorMatrix's masked
 /// translation); the highlight band restores full fg.
 fn shimmer_fg(
-    base: ratatui::style::Color,
-    backdrop: ratatui::style::Color,
+    base: crate::style::Color,
+    backdrop: crate::style::Color,
     column: usize,
     front: f64,
     level: f64,
-) -> ratatui::style::Color {
-    let ratatui::style::Color::Rgb(fr, fg_, fb) = base else { return base };
-    let ratatui::style::Color::Rgb(br, bg_, bb) = backdrop else { return base };
+) -> crate::style::Color {
+    let crate::style::Color::Rgb(fr, fg_, fb) = base else { return base };
+    let crate::style::Color::Rgb(br, bg_, bb) = backdrop else { return base };
     let band = crate::components::tab_pulse::intensity_at(
         column,
         front,
@@ -335,7 +335,7 @@ fn shimmer_fg(
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let mix =
         |c: u8, b: u8| (f64::from(c) + (f64::from(b) - f64::from(c)) * strength).round() as u8;
-    ratatui::style::Color::Rgb(mix(fr, br), mix(fg_, bg_), mix(fb, bb))
+    crate::style::Color::Rgb(mix(fr, br), mix(fg_, bg_), mix(fb, bb))
 }
 
 /// Wrap one paragraph at [`CARD_TEXT_WIDTH`] through the shared wrap
@@ -343,8 +343,8 @@ fn shimmer_fg(
 /// the card's `providers to ` / `including ` lines).
 fn wrap_card_line(
     text: &str,
-    fg: ratatui::style::Color,
-    bg: ratatui::style::Color,
+    fg: crate::style::Color,
+    bg: crate::style::Color,
 ) -> Vec<PlacedLine> {
     let style = Style::new().fg(fg).bg(bg);
     crate::wrap::wrap_atoms(&crate::wrap::flatten(text, style), CARD_TEXT_WIDTH)
@@ -362,11 +362,11 @@ fn card_height(theme: &ThemeStyles) -> usize {
     1 + 1 + 1 + p1 + 1 + p2 + 1 + 1 + 1
 }
 
-fn card_bg(theme: &ThemeStyles) -> ratatui::style::Color {
+fn card_bg(theme: &ThemeStyles) -> crate::style::Color {
     theme.action_hovered // `background.raised.high`
 }
 
-fn card_fg(theme: &ThemeStyles) -> ratatui::style::Color {
+fn card_fg(theme: &ThemeStyles) -> crate::style::Color {
     theme.text_muted.fg.unwrap_or(theme.background)
 }
 
@@ -677,7 +677,7 @@ pub fn render_sidebar_scrolled(
         // y13-y19: header AND rows fg=idx15, bg=idx233, mods=0 — no
         // bold). The native surface mirrors the plugin's renderer
         // output, not the sidebar's base/muted ladder.
-        let plugin_fg = ratatui::style::Color::Rgb(255, 255, 255);
+        let plugin_fg = crate::style::Color::Rgb(255, 255, 255);
         let place_slot = |paint: &mut SidebarPaint, text: &str, y: usize| {
             let Some(row) = slot_row(y) else { return };
             if row >= footer_top {
@@ -1019,7 +1019,7 @@ mod tests {
                 let style = &line.runs[0].style;
                 assert_eq!(
                     style.fg,
-                    Some(ratatui::style::Color::Rgb(255, 255, 255)),
+                    Some(crate::style::Color::Rgb(255, 255, 255)),
                     "plugin cells paint plain white (idx15 emission)"
                 );
                 assert_eq!(
@@ -1028,7 +1028,7 @@ mod tests {
                     "the raised background stays (ref idx233)"
                 );
                 assert!(
-                    !style.add_modifier.contains(ratatui::style::Modifier::BOLD),
+                    !style.add_modifier.contains(crate::style::Modifier::BOLD),
                     "no bold on the ref's plugin cells (mods=0)"
                 );
             }

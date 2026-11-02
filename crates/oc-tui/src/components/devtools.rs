@@ -22,7 +22,7 @@
 
 use crate::store::Store;
 use crate::theme::ThemeStyles;
-use ratatui::style::Color;
+use crate::style::Color;
 
 /// The panel order on the bar (ref devtools-bar.tsx's tabs).
 pub const PANEL_IDS: &[&str] = &["server", "theme", "tools", "ui"];

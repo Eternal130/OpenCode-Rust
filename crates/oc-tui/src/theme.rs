@@ -19,7 +19,7 @@ use oc_theme::resolve::{parse_theme_document, resolve_theme_document, ThemeDocum
 use oc_theme::types::{Mode, ResolvedTheme};
 use oc_theme::v1_migrate::migrate_v1;
 use oc_theme::Rgba;
-use ratatui::style::{Color, Style};
+use crate::style::{Color, Style};
 
 /// A loaded theme document plus the resolved view for the active mode.
 #[derive(Debug, Clone, PartialEq)]
