@@ -217,19 +217,12 @@ pub struct KeyPipeline {
     pending: Vec<u8>,
     mouse: opentui_core::parse_mouse::MouseParser,
     paste: Option<opentui_core::paste::BracketedPasteCollector>,
-    kitty: bool,
 }
 
 impl KeyPipeline {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// The kitty parse flag flips on with the `CSI >5u` push (the
-    /// terminal then encodes chords in kitty form).
-    pub fn set_kitty(&mut self, on: bool) {
-        self.kitty = on;
     }
 
     /// Process one read chunk into app events (in order).
@@ -319,7 +312,10 @@ impl KeyPipeline {
                 unit.iter().map(|b| char::from_u32(u32::from(*b)).unwrap_or('\u{fffd}')).collect()
             }
         };
-        let parsed = parse_keypress(&raw, ParseKeypressOptions { use_kitty_keyboard: self.kitty })?;
+        // The kitty CSI-u grammar is parsed UNCONDITIONALLY (crossterm
+        // 0.28 dispatched `CSI .. u` the same way, pushed flags or
+        // not — the PTY suites send kitty chords verbatim).
+        let parsed = parse_keypress(&raw, ParseKeypressOptions { use_kitty_keyboard: true })?;
         if parsed.event_type != opentui_core::parse_keypress::KeyEventType::Press {
             return None; // the Press-only filter (no release flags pushed)
         }

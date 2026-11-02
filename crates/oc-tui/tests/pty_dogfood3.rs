@@ -139,7 +139,10 @@ fn pty_mouse_modes_default_pushes_v2_set() {
     let _lock = pty_lock();
     let _sandbox = sandbox_env("dogfood3-mouse-on");
     let enable = b"\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h";
-    let disable = b"\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l";
+    // Lane B3a: the opentui teardown epilogue pops the set in the
+    // upstream zig order (`?1003l ?1002l ?1000l ?1006l`,
+    // terminal.zig:946-951) — same net mode set as v2's reverse pop.
+    let disable = b"\x1b[?1003l\x1b[?1002l\x1b[?1000l\x1b[?1006l";
     let fake = FakeLlm::spawn(standard_sessions());
     let harness = LiveHarness::attach(100, 30);
     let mut driver = harness.handle();
@@ -160,7 +163,7 @@ fn pty_mouse_modes_default_pushes_v2_set() {
         );
         assert!(
             raw.windows(disable.len()).any(|window| window == disable),
-            "teardown pops the same set in reverse"
+            "teardown pops the same mode set (upstream zig order)"
         );
         Ok(())
     });

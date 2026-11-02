@@ -91,8 +91,11 @@ fn boot_tui(reply: &'static [u8]) -> (PtyGuard, Boot) {
     let reader_master = guard.master.try_clone().expect("clone master read");
     let writer_master = guard.master.try_clone().expect("clone master write");
 
-    // The terminal emulator: drain the app's output, answer the OSC 11
-    // query as soon as it appears, capture everything for assertions.
+    // The terminal emulator: drain the app's output, answer the
+    // capability probe's OSC 10/11 query pair as soon as each appears
+    // (lane B3a: the theme watch reduces the PAIR — the fg half is
+    // `rgb:0000/0000/0000`, the bg half the test's reply), capture
+    // everything for assertions.
     {
         let output = Arc::clone(&output);
         let replied = Arc::clone(&replied);
@@ -101,12 +104,33 @@ fn boot_tui(reply: &'static [u8]) -> (PtyGuard, Boot) {
             let mut reader = reader_master;
             let mut chunk = [0u8; 4096];
             let mut pending: Vec<u8> = Vec::new();
+            let mut answered_fg = false;
+            let mut answered_kitty = false;
+            let mut answered_da1 = false;
             loop {
                 match reader.read(&mut chunk) {
                     Ok(0) | Err(_) => break, // master closed / teardown EIO
                     Ok(count) => {
                         output.lock().expect("output lock").extend_from_slice(&chunk[..count]);
                         pending.extend_from_slice(&chunk[..count]);
+                        if !answered_fg && pending.windows(6).any(|w| w == b"\x1b]10;?") {
+                            answered_fg = true;
+                            let _ = reply_writer.write_all(b"\x1b]10;rgb:0000/0000/0000\x1b\\");
+                        }
+                        // The kitty keyboard capability query (`CSI ? u`)
+                        // and DA1 (`CSI c`): a real answering terminal
+                        // replies to both, which lets the capability
+                        // probe settle EARLY (instead of the 5 s
+                        // deadline) so the boot applies the theme mode
+                        // in the test's window. No sixel attribute 4.
+                        if !answered_kitty && pending.windows(4).any(|w| w == b"\x1b[?u") {
+                            answered_kitty = true;
+                            let _ = reply_writer.write_all(b"\x1b[?1u");
+                        }
+                        if !answered_da1 && pending.windows(3).any(|w| w == b"\x1b[c") {
+                            answered_da1 = true;
+                            let _ = reply_writer.write_all(b"\x1b[?62;22c");
+                        }
                         if !replied.load(Ordering::SeqCst)
                             && pending.windows(6).any(|w| w == b"\x1b]11;?")
                         {

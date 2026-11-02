@@ -8245,6 +8245,7 @@ pub async fn run_with_size(
     // reader from an abandoned boot is stopped by the slot swap below
     // before this one spawns, and the Drop guard fires on the normal
     // return AND when an outer timeout cancels the run future.
+    let boot_gate = std::time::Instant::now() + std::time::Duration::from_millis(300);
     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<TermEvent>(64);
     let input_stop = {
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -8273,6 +8274,13 @@ pub async fn run_with_size(
             );
             let mut pipeline = KeyPipeline::new();
             let mut kitty_pushed = false;
+            // The boot discard window (the retired theme probe's
+            // discipline, SA-F13's double-boot shield): for the first
+            // 300 ms, non-reply bytes are DROPPED, not dispatched — a
+            // prior boot's unread exit-chord tail must never fire as
+            // this boot's first keys. Replies still classify through
+            // feed_input (the probe is deadline-bounded separately).
+            let boot_discard_until = boot_gate;
             // The capability probe (replaces theme::probe_terminal +
             // terminal_proto's ?u/DA1/OSC-11 queries): the burst rides
             // the Terminal's output, the answers classify through
@@ -8328,7 +8336,6 @@ pub async fn run_with_size(
                                 // to the kitty encoding.
                                 if caps.kitty_keyboard && !kitty_pushed {
                                     kitty_pushed = true;
-                                    pipeline.set_kitty(true);
                                     if let Ok(mut terminal) = session.lock() {
                                         use std::io::Write as _;
                                         let _ = terminal
@@ -8347,9 +8354,11 @@ pub async fn run_with_size(
                             _ => {}
                         }
                     }
-                    for event in pipeline.process(&bytes) {
-                        if event_tx.blocking_send(event).is_err() {
-                            return;
+                    if std::time::Instant::now() >= boot_discard_until {
+                        for event in pipeline.process(&bytes) {
+                            if event_tx.blocking_send(event).is_err() {
+                                return;
+                            }
                         }
                     }
                 }
@@ -8368,6 +8377,13 @@ pub async fn run_with_size(
             }
         });
     }
+    // The boot gate (the retired probe's blocking shape): the first
+    // render waits out the boot discard window, so a driver (or user)
+    // only ever types against a terminal whose input dispatch is LIVE
+    // — and a prior boot's unread exit-chord tail still lands inside
+    // the window (SA-F13's double-boot shield).
+    let gate_remaining = boot_gate.saturating_duration_since(std::time::Instant::now());
+    tokio::time::sleep(gate_remaining).await;
     app.apply_config(&config, system_mode);
     // Lane TAIL (auditC P7/TM-3): DECSCUSR + OSC 12 — the cursor
     // shape/blink from the `cursor` config doc and the cursor color
