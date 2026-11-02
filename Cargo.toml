@@ -61,10 +61,14 @@ oc-uqr = { path = "third_party/oc-uqr" }
 # tab strip renders on opentui-solid; release size +1.17 MiB, measured
 # in docs/migration-m1-tabstrip.md). Local-path [patch] redirection
 # removed 2026-10-24 (GAPS G-11): opentui changes flow via git rev bumps
-# only.
-opentui-core = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "18e2904" }
-opentui-keymap = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "18e2904" }
-opentui-solid = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "18e2904" }
+# only. Rev 4ff646d adds the terminal-backend feature (Phase A of the
+# full-render migration, docs/PLAN-opentui-render-migration.md): TTY
+# seam, mode sequences, capability probe, input/output pumps, resize
+# watch, teardown/scrollback epilogue, OSC 8 — default builds of the
+# port remain headless-pure (113 differential scenarios IDENTICAL).
+opentui-core = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "4ff646d" }
+opentui-keymap = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "4ff646d" }
+opentui-solid = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "4ff646d" }
 
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
