@@ -336,3 +336,136 @@ async fn runner_step_tool_task_observes_a_ring_before_its_first_poll() {
     assert!(matches!(exit, ToolExit::Interrupted), "a pre-poll ring cancels: {exit:?}");
     assert!(!polled.load(Ordering::SeqCst), "the interrupted execution must never be polled");
 }
+
+// -- G-105: a stream that ends abruptly (no finish event, no error
+// event) must still flush its open fragments and settle the step ------
+
+/// A stub provider whose stream closes right after TextStart+Delta —
+/// no step-finish, no provider-error (G-105's reproduction; the ref
+/// guarantees a terminal finish at the protocol layer, so the runner
+/// hoists that guarantee — see step.rs §4).
+struct AbruptCloseLlm {
+    requests: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl crate::session::runner::LlmClient for AbruptCloseLlm {
+    async fn stream(
+        &self,
+        _request: oc_ai::schema::messages::LLMRequest,
+    ) -> Result<crate::session::runner::LlmEventStream, oc_ai::schema::AiError> {
+        use std::sync::atomic::Ordering;
+        self.requests.fetch_add(1, Ordering::SeqCst);
+        Ok(Box::pin(futures::stream::iter(vec![
+            Ok(LLMEvent::StepStart { index: 0.0 }),
+            Ok(LLMEvent::TextStart { id: "t1".into(), provider_metadata: None }),
+            Ok(LLMEvent::TextDelta { id: "t1".into(), text: "partial ".into(), provider_metadata: None }),
+            Ok(LLMEvent::TextDelta { id: "t1".into(), text: "answer".into(), provider_metadata: None }),
+        ])))
+    }
+
+    fn can_compact(
+        &self,
+        _request: &oc_ai::schema::messages::LLMRequest,
+        _mechanism: crate::session::runner::CompactMechanism,
+    ) -> bool {
+        false
+    }
+
+    async fn compact(
+        &self,
+        _request: oc_ai::schema::messages::LLMRequest,
+        _mechanism: crate::session::runner::CompactMechanism,
+    ) -> Result<crate::session::runner::CompactOutcome, oc_ai::schema::AiError> {
+        Err(oc_ai::schema::AiError::unsupported_operation("compact", "AbruptCloseLlm"))
+    }
+}
+
+/// (a) The dangling text part gets its trailing delta, `text.ended`,
+/// and a durable step settlement (`step.failed` — the ref treats a
+/// finish-less stream as an incomplete-stream failure at the protocol
+/// layer, e.g. openai-chat.ts:1225, so the runner mirrors that here).
+#[tokio::test]
+async fn runner_step_abrupt_close_flushes_and_settles() {
+    use crate::hooks::{fn_hook, HookOptions, RetryDecision, SessionRetryEvent};
+
+    let llm = Arc::new(AbruptCloseLlm { requests: std::sync::atomic::AtomicUsize::new(0) });
+    let harness = crate::session::runner::tests_harness::harness_with_client(
+        Arc::clone(&llm) as std::sync::Arc<dyn crate::session::runner::LlmClient>,
+        crate::session::runner::tests_harness::test_resolved_model(),
+    )
+    .await;
+    // Pin the retry decision to NoRetry so the failure settles at once.
+    let _no_retry = harness
+        .hooks
+        .register_session_retry(
+            fn_hook(|event: &mut SessionRetryEvent| {
+                event.decision = RetryDecision::NoRetry;
+                Ok(())
+            }),
+            HookOptions::default(),
+        )
+        .await;
+    harness.create_session().await;
+    harness.admit_prompt("msg_g105", "hi").await;
+    // `session.text.delta` is an EPHEMERAL event — observe it on a live
+    // subscription (buffered; read after the turn settles).
+    let mut deltas = harness.bus.subscribe_types(&["session.text.delta"]);
+    // The turn fails (surfaced) — the missing finish IS the failure; the
+    // assertions below prove the durable settlement that precedes it.
+    let _turn = harness.execution.resume(harness.session_id().as_str()).await;
+    use futures::StreamExt as _;
+    let delta_seen = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        // Drain frames until the trailing batch shows up (the
+        // subscription stays open — stop at the target frame).
+        while let Some(frame) = deltas.next().await {
+            if frame.data["delta"] == "partial answer" {
+                return true;
+            }
+        }
+        false
+    })
+    .await
+    .expect("delta subscription drains");
+
+    let events = harness.durable_events().await;
+    // The trailing delta flushed with the fragment end (ephemeral frame,
+    // published immediately before text.ended by the flush).
+    assert!(delta_seen, "trailing delta flushed on abrupt close");
+    let ended = events
+        .iter()
+        .find(|(type_, _, _)| type_ == "session.text.ended")
+        .expect("text.ended published on abrupt close");
+    assert_eq!(ended.2["text"], serde_json::json!("partial answer"));
+    // The step settles durably instead of dangling forever.
+    assert!(
+        events.iter().any(|(type_, _, _)| type_ == "session.step.failed"),
+        "abrupt close settles as a failed step (ref protocol-layer incomplete-stream)"
+    );
+    assert!(
+        !events.iter().any(|(type_, _, _)| type_ == "session.step.ended"),
+        "a finish-less stream never reports success"
+    );
+    // Exactly one request: no retry loop.
+    assert_eq!(llm.requests.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+/// (b) Normal paths are unchanged: a complete text turn still ends with
+/// `step.ended` (and no failure), one text part, one delta batch.
+#[tokio::test]
+async fn runner_step_normal_text_turn_unchanged_after_g105() {
+    let llm = TestLlm::new();
+    llm.always(text("plain answer"));
+    let harness = harness_with(llm).await;
+    harness.create_session().await;
+    harness.admit_prompt("msg_g105b", "hi").await;
+    harness.execution.resume(harness.session_id().as_str()).await.unwrap();
+
+    let events = harness.durable_events().await;
+    assert!(events.iter().any(|(type_, _, _)| type_ == "session.step.ended"));
+    assert!(!events.iter().any(|(type_, _, _)| type_ == "session.step.failed"));
+    let ended =
+        events.iter().filter(|(type_, _, _)| type_ == "session.text.ended").collect::<Vec<_>>();
+    assert_eq!(ended.len(), 1);
+    assert_eq!(ended[0].2["text"], serde_json::json!("plain answer"));
+}
