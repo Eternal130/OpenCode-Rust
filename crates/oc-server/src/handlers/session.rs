@@ -905,7 +905,7 @@ async fn move_session(
     Path(session_id): Path<String>,
     axum::Json(body): axum::Json<Value>,
 ) -> Result<Response, ApiError> {
-    let (services, row) = session_services(&state, &session_id).await?;
+    let (location, row) = session_location(&state, &session_id).await?;
     let directory = body["directory"].as_str().unwrap_or_default();
     let path = std::path::Path::new(directory);
     if !path.exists() {
@@ -945,38 +945,57 @@ async fn move_session(
     // G-108②: probe source unavailability outside the inbox lock (ref
     // move.ts:104-116): a session that is inactive AND whose source
     // directory is gone is an orphan — it migrates immediately instead of
-    // queueing a move it can never drain. Bounded deviation: the ref also
-    // treats runner-assembly failure as unavailable; here only the
-    // directory-gone case is probed (the runner cannot assemble without
-    // its location anyway).
-    let source_gone =
-        !services.execution.is_active(&session_id) && !std::path::Path::new(&row.directory).is_dir();
-    services
-        .inbox
+    // queueing a move it can never drain. A vanished source directory
+    // also fails the location boot (`services` → 404), so the boot is
+    // optional here: no booted location means no runner can exist, i.e.
+    // the session is inactive by construction. Bounded deviation: the ref
+    // also treats runner-assembly failure as unavailable; here only the
+    // directory-gone case is probed.
+    let source_dir_gone = !std::path::Path::new(&row.directory).is_dir();
+    let booted = match services(&state, &location).await {
+        Ok(services) => Some(services),
+        Err(error) => {
+            if !source_dir_gone {
+                return Err(error);
+            }
+            None
+        }
+    };
+    let source_unavailable = source_dir_gone
+        && booted.as_ref().is_none_or(|services| !services.execution.is_active(&session_id));
+    // The orphan path never touches the (unbootable) source location: the
+    // destination's bus carries the cancellations + Moved (the projector
+    // writes the engine-wide `session_v2` row), and the inbox lock map is
+    // global per session id.
+    let inbox = oc_core::session::inbox::SessionInbox::new(
+        (*state.engine.db).clone(),
+        (*destination_services.graph.bus).clone(),
+    );
+    let bus = &destination_services.graph.bus;
+    let store = oc_core::session::store::SessionStore::new((*state.engine.db).clone());
+    inbox
         .serialized(&session_id, async {
-            let latest = services.store.get(&session_id).await.map_err(|error| {
+            let latest = store.get(&session_id).await.map_err(|error| {
                 crate::errors::debug_cause("session:move_latest", &error);
                 ApiError::unknown_ref()
             })?;
-            let orphan = source_gone
+            let orphan = source_unavailable
                 && latest
                     .as_ref()
                     .is_some_and(|latest| {
                         latest.directory == row.directory && latest.workspace_id == row.workspace_id
                     })
-                && !services.execution.is_active(&session_id);
+                && booted.as_ref().is_none_or(|services| !services.execution.is_active(&session_id));
             if orphan {
                 // Cancel every queued move inside the lock, then publish
                 // Moved directly (ref move.ts:134-147) — the orphan never
                 // drains an inbox, so the queued items must not survive.
-                let move_ids = services.inbox.move_ids(&session_id).await.map_err(|error| {
+                let move_ids = inbox.move_ids(&session_id).await.map_err(|error| {
                     crate::errors::debug_cause("session:move_ids", &error);
                     ApiError::unknown_ref()
                 })?;
                 for inbox_id in &move_ids {
-                    let _ = services
-                        .graph
-                        .bus
+                    let _ = bus
                         .publish(
                             registry::by_type_latest("session.inbox.cancelled")
                                 .expect("durable definition for session.inbox.cancelled"),
@@ -985,27 +1004,31 @@ async fn move_session(
                         )
                         .await;
                 }
-                services
-                    .graph
-                    .bus
-                    .publish(
-                        registry::by_type_latest("session.moved")
-                            .expect("durable definition for session.moved"),
-                        json!({
-                            "sessionID": session_id,
-                            "location": serde_json::to_value(&payload.location).unwrap_or_default(),
-                            "projectID": payload.project_id,
-                            "subpath": payload.subpath,
-                        }),
-                        PublishOptions::default(),
-                    )
-                    .await
-                    .map_err(|error| {
-                        crate::errors::debug_cause("session:move_publish", &error);
-                        ApiError::unknown_ref()
-                    })?;
+                bus.publish(
+                    registry::by_type_latest("session.moved")
+                        .expect("durable definition for session.moved"),
+                    json!({
+                        "sessionID": session_id,
+                        "location": serde_json::to_value(&payload.location).unwrap_or_default(),
+                        "projectID": payload.project_id,
+                        "subpath": payload.subpath,
+                    }),
+                    PublishOptions::default(),
+                )
+                .await
+                .map_err(|error| {
+                    crate::errors::debug_cause("session:move_publish", &error);
+                    ApiError::unknown_ref()
+                })?;
                 return Ok::<(), ApiError>(());
             }
+            let services = booted.as_ref().ok_or_else(|| {
+                crate::errors::debug_cause(
+                    "session:move_source_unavailable",
+                    &"the source location failed to boot",
+                );
+                ApiError::unknown_ref()
+            })?;
             services
                 .inbox
                 .admit(
@@ -1018,8 +1041,10 @@ async fn move_session(
             Ok(())
         })
         .await?;
-    // CD-1: move wakes the queued relocation (ref `move.ts:157`).
-    services.execution.wake(&session_id, oc_core::session::Promotable::Input);
+    if let Some(services) = &booted {
+        // CD-1: move wakes the queued relocation (ref `move.ts:157`).
+        services.execution.wake(&session_id, oc_core::session::Promotable::Input);
+    }
     Ok(no_content())
 }
 
