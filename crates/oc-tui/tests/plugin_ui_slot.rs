@@ -183,7 +183,7 @@ fn slot_renders_and_clicks() {
     // sits under the session title).
     let theme = oc_tui::theme::ThemeState::v2_dark();
     store.open_tab("ses_claims", Some("Claims session".to_owned()));
-    store.navigate(oc_tui::store::Route::Session { session_id: "ses_claims".into() });
+    store.navigate(oc_tui::store::Route::session("ses_claims"));
     let frame = oc_tui::components::session::render_session(
         &store,
         "ses_claims",

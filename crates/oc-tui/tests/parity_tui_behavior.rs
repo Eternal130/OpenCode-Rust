@@ -727,6 +727,8 @@ fn session_copy() {
                 time: PartTime::default(),
                 tokens: Some(0),
                 usage_total: Some(0),
+                cache_read: None,
+                retry: None,
             },
         ],
     }]);
@@ -1011,6 +1013,8 @@ fn backgroundtool() {
         time: PartTime { created: Some(4_000), completed },
         tokens: None,
         usage_total: None,
+        cache_read: None,
+        retry: None,
     };
     let options =
         |clock: u64| TranscriptOptions { clock_ms: clock, ..TranscriptOptions::default() };

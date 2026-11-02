@@ -28,6 +28,8 @@ fn assistant(id: &str, text: &str) -> oc_tui::components::message::model::Messag
         time: PartTime { created: Some(1), completed: Some(2) },
         tokens: None,
         usage_total: None,
+        cache_read: None,
+        retry: None,
     }
 }
 
@@ -74,7 +76,7 @@ fn retention_evicts() {
     // it is OPENED (the message fetch rides navigation), so each root
     // seeds as it is visited.
     for id in ["ses_a", "ses_b", "ses_c", "ses_d", "ses_e"] {
-        store.navigate(Route::Session { session_id: id.to_owned() });
+        store.navigate(Route::session(id.to_owned()));
         store.set_messages(id, vec![assistant(&format!("msg_{id}"), id)]);
     }
     // A never-visited session's cache (a blocker fetch, a family
@@ -84,7 +86,7 @@ fn retention_evicts() {
     // The next navigation runs the retention pass: the window keeps
     // the newest 3 navigated roots + the routed root; ses_a/ses_b
     // (5 and 4 navigations back) fall out.
-    store.navigate(Route::Session { session_id: "ses_e".to_owned() });
+    store.navigate(Route::session("ses_e".to_owned()));
     assert!(
         store.messages("ses_a").is_empty(),
         "the oldest navigated root evicts (retention bounds by_session)"
@@ -101,7 +103,7 @@ fn retention_evicts() {
     store.set_tabs_enabled(true);
     store.set_messages("ses_a", vec![assistant("msg_a2", "a")]);
     store.open_tab("ses_a", None);
-    store.navigate(Route::Session { session_id: "ses_e".to_owned() });
+    store.navigate(Route::session("ses_e".to_owned()));
     assert!(!store.messages("ses_a").is_empty(), "tabbed roots never evict");
 }
 
@@ -217,6 +219,8 @@ mod t3 {
                 time: PartTime { created: Some(1000), completed: Some(2000) },
                 tokens: Some(900),
                 usage_total: None,
+                cache_read: None,
+                retry: None,
             },
         ]
     }

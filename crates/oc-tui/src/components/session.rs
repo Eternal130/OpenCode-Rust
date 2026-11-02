@@ -1165,6 +1165,8 @@ fn live_sidebar_view(store: &Store, session_id: &str, height: usize) -> SidebarV
     let usage = messages[compaction_index..].iter().rev().find_map(|message| match message {
         crate::components::message::model::Message::Assistant {
             usage_total: Some(total),
+            cache_read: None,
+            retry: None,
             model,
             ..
         } if *total > 0 => Some((*total, model.clone())),
@@ -2052,6 +2054,8 @@ mod tests {
                     time: PartTime { created: Some(n as u64), completed: Some(n as u64 + 1) },
                     tokens: None,
                     usage_total: None,
+                    cache_read: None,
+                    retry: None,
                 },
             ]
         };
