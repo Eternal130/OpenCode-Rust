@@ -31,3 +31,4 @@
 pub mod keymap;
 pub mod scroll;
 pub mod text_edit;
+pub mod animation;

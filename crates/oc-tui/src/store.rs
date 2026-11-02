@@ -1459,6 +1459,12 @@ pub struct Store {
     /// TUI-3: the rail's resize-handle highlight (`hovered() ||
     /// resizing()`, pane-resize-handle.tsx:21-27).
     rail_handle_hot: Cell<bool>,
+    /// G-128 — the vertical-rail width spring (session-tabs.tsx:207's
+    /// `motion` spring): the pane-resize smooth transition, sampled
+    /// on the 100 ms pump tick (`advance_clock`) — see
+    /// [`oc_tui_core::animation`].
+    rail_width_spring:
+        std::cell::RefCell<Option<oc_tui_core::animation::Animatable>>,
     /// Attention (bell + pending marker) — see `attention.rs`.
     attention: Cell<AttentionState>,
     /// The attention engine (R-06): OS notifications + sounds behind
@@ -3707,6 +3713,7 @@ impl Store {
             prompt_text_hit: std::cell::RefCell::new(None),
             rail_search_hovered: Cell::new(false),
             rail_handle_hot: Cell::new(false),
+            rail_width_spring: std::cell::RefCell::new(None),
             attention: Cell::new(AttentionState::default()),
             attention_engine: std::cell::RefCell::new(crate::attention::Attention::new()),
             notifications: std::cell::RefCell::new(
@@ -4060,19 +4067,43 @@ impl Store {
     }
 
     /// The persisted vertical-rail width (TUI-3 — the `layout`
-    /// storage doc's `verticalTabsWidth`, seeded at boot).
+    /// storage doc's `verticalTabsWidth`, seeded at boot). G-128: the
+    /// change ANIMATES — the width spring eases to the new target on
+    /// the pump tick (the first set jumps; a boot seed must not
+    /// animate from 0).
     pub fn set_vertical_tabs_width(&self, width: usize) {
         self.vertical_tabs_width.set(width);
+        let now = self.clock.get() as f64;
+        let mut spring = self.rail_width_spring.borrow_mut();
+        match spring.as_mut() {
+            Some(spring) => spring.animate(now, &[("width", width as f64)]),
+            None => {
+                *spring = Some(oc_tui_core::animation::Animatable::new(
+                    &[("width", width as f64)],
+                    oc_tui_core::animation::Transition::Spring(
+                        oc_tui_core::animation::SpringTransition::new(0.2),
+                    ),
+                    now,
+                ));
+            }
+        }
     }
 
     /// The live vertical-rail width (clamped against the CURRENT
     /// terminal width — `clampSessionTabsWidth`, ui/layout.ts:12-17).
+    /// G-128: while the width spring moves, the ANIMATED value
+    /// renders (the pane-resize smooth transition).
     #[must_use]
     pub fn vertical_tabs_width(&self, total: usize) -> usize {
-        crate::components::session_tabs_rail::clamp_session_tabs_width(
-            self.vertical_tabs_width.get(),
-            total,
-        )
+        let target = self.vertical_tabs_width.get();
+        let animated = self
+            .rail_width_spring
+            .borrow()
+            .as_ref()
+            .filter(|spring| spring.moving())
+            .and_then(|spring| spring.value("width"))
+            .map_or(target, |value| value.round().max(0.0) as usize);
+        crate::components::session_tabs_rail::clamp_session_tabs_width(animated, total)
     }
 
     /// `verticalTabsVisible()` (app.tsx:575 + 582): the rail mounts
@@ -5977,9 +6008,20 @@ impl Store {
     /// Advance the clock to `now_ms`. Monotonic: a smaller/equal value
     /// is a no-op (no signal write ⇒ no redraw — render-on-tick only
     /// when the clock actually advances, frozen at 0 in tests).
+    /// G-128 — the animation pump rides the same tick: every live
+    /// spring/tween samples the new clock and a MOVING animatable
+    /// requests a redraw (the ref's 16 ms task pump, at the port's
+    /// 100 ms cadence — G-49a).
     pub fn advance_clock(&self, now_ms: u64) {
         if now_ms > self.clock.get() {
             self.clock.set(now_ms);
+        }
+        let mut moving = false;
+        if let Some(spring) = self.rail_width_spring.borrow_mut().as_mut() {
+            moving |= spring.advance(now_ms as f64);
+        }
+        if moving {
+            self.request_redraw();
         }
     }
 
@@ -15382,4 +15424,34 @@ fn shell_output_viewer_poll_targets_topmost_dialog() {
     assert_eq!(store.active_shell_output_viewer().as_deref(), Some("shl_a"));
     store.pop_dialog();
     assert_eq!(store.active_shell_output_viewer(), None, "closed viewer stops polling");
+}
+
+// -- G-128: the animation pump + the rail width spring ------------------------
+
+#[cfg(test)]
+mod g128_tests {
+    use super::*;
+
+    #[test]
+    fn rail_width_springs_to_the_new_target_on_pump_ticks() {
+        let store = Store::new(crate::reactive::Runtime::new());
+        store.advance_clock(100);
+        store.set_vertical_tabs_width(42);
+        // The seed jumps (no animation from nothing).
+        assert_eq!(store.vertical_tabs_width(200), 42);
+        // A later resize animates: the intermediate width renders
+        // between the old and new targets, then settles exactly.
+        store.advance_clock(200);
+        store.set_vertical_tabs_width(30);
+        store.advance_clock(300);
+        let mid = store.vertical_tabs_width(200);
+        assert!(
+            mid > 30 && mid < 42,
+            "the spring renders an intermediate width, got {mid}"
+        );
+        for tick in 400..3000u64 {
+            store.advance_clock(tick * 100);
+        }
+        assert_eq!(store.vertical_tabs_width(200), 30, "settled on the target");
+    }
 }
