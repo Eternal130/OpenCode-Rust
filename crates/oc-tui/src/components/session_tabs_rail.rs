@@ -244,9 +244,9 @@ pub struct RailInputs<'a> {
     pub indicator: crate::components::session_tabs::IndicatorConfig,
 }
 
-fn rgb(color: ratatui::style::Color) -> (u8, u8, u8) {
+fn rgb(color: crate::style::Color) -> (u8, u8, u8) {
     match color {
-        ratatui::style::Color::Rgb(r, g, b) => (r, g, b),
+        crate::style::Color::Rgb(r, g, b) => (r, g, b),
         _ => (128, 128, 128),
     }
 }
@@ -254,36 +254,36 @@ fn rgb(color: ratatui::style::Color) -> (u8, u8, u8) {
 /// `idleNumber()` — the add slot's `+` and the unselected numbers'
 /// tint (`tint(text.formfield.base, background, 0.55)`,
 /// session-tabs.tsx:565).
-fn idle_number(styles: &ThemeStyles) -> ratatui::style::Color {
+fn idle_number(styles: &ThemeStyles) -> crate::style::Color {
     let bg = rgb(styles.background_raised);
     let fg = rgb(styles.formfield_base);
     let (r, g, b) = tint(fg, bg, 0.55);
-    ratatui::style::Color::Rgb(r, g, b)
+    crate::style::Color::Rgb(r, g, b)
 }
 
 /// `hoverColor()` — the rail controls' seam/lift tint
 /// (`tint(raised.base, raised.high, raised.high.a)`,
 /// session-tabs-rail.tsx:13-15; both opaque in v2-dark).
-fn hover_color(styles: &ThemeStyles) -> ratatui::style::Color {
+fn hover_color(styles: &ThemeStyles) -> crate::style::Color {
     let bg = rgb(styles.background_raised);
     let high = rgb(styles.action_hovered);
     let (r, g, b) = tint(bg, high, 1.0);
-    ratatui::style::Color::Rgb(r, g, b)
+    crate::style::Color::Rgb(r, g, b)
 }
 
 /// [`hover_color`] exposed for the solid tooltip's seam chunks.
 #[must_use]
-pub fn hover_color_public(styles: &ThemeStyles) -> ratatui::style::Color {
+pub fn hover_color_public(styles: &ThemeStyles) -> crate::style::Color {
     hover_color(styles)
 }
 
 /// `sessionTabDetail`'s detail color (`tint(text.muted, bg, 0.35)`,
 /// session-tabs.tsx:820).
-fn detail_color(styles: &ThemeStyles, over: ratatui::style::Color) -> ratatui::style::Color {
+fn detail_color(styles: &ThemeStyles, over: crate::style::Color) -> crate::style::Color {
     let bg = rgb(over);
-    let muted = rgb(styles.text_muted.fg.unwrap_or(ratatui::style::Color::Rgb(128, 128, 128)));
+    let muted = rgb(styles.text_muted.fg.unwrap_or(crate::style::Color::Rgb(128, 128, 128)));
     let (r, g, b) = tint(muted, bg, 0.35);
-    ratatui::style::Color::Rgb(r, g, b)
+    crate::style::Color::Rgb(r, g, b)
 }
 
 /// The rail's paint walk — the ONE solver both renderers consume:
@@ -364,7 +364,7 @@ fn rail_paint_walk(
             y: geometry.search_row() as u16,
             width: width as u16,
             height: 1,
-            style: ratatui::style::Style::new().fg(DEFAULT_FOREGROUND).bg(button_bg),
+            style: crate::style::Style::new().fg(DEFAULT_FOREGROUND).bg(button_bg),
         });
         let center = width.saturating_sub(1) / 2;
         placed.push(Placed {
@@ -373,7 +373,7 @@ fn rail_paint_walk(
             width: 1,
             lines: vec![PlacedLine::plain(
                 SEARCH_GLYPH.to_string().as_str(),
-                ratatui::style::Style::new().fg(styles.action_secondary).bg(
+                crate::style::Style::new().fg(styles.action_secondary).bg(
                     if inputs.search_hovered {
                         styles.action_hovered
                     } else {
@@ -404,7 +404,7 @@ fn rail_paint_walk(
             width,
             lines: vec![PlacedLine::plain(
                 glyph.repeat(width).as_str(),
-                ratatui::style::Style::new().fg(hover_color(styles)).bg(styles.background_raised),
+                crate::style::Style::new().fg(hover_color(styles)).bg(styles.background_raised),
             )],
             tag: Some("rail.seam".to_owned()),
         });
@@ -432,7 +432,7 @@ fn rail_paint_walk(
                 y: row as u16,
                 width: width as u16,
                 height: 1,
-                style: ratatui::style::Style::new().fg(DEFAULT_FOREGROUND).bg(bg),
+                style: crate::style::Style::new().fg(DEFAULT_FOREGROUND).bg(bg),
             });
             // G-143 — the configured indicator (numbers mode shows
             // the ordinal, not the status glyph / idle label).
@@ -449,9 +449,9 @@ fn rail_paint_walk(
             } else {
                 styles.text_muted.fg.unwrap_or(DEFAULT_FOREGROUND)
             };
-            let mut style = ratatui::style::Style::new().fg(fg).bg(bg);
+            let mut style = crate::style::Style::new().fg(fg).bg(bg);
             if selected {
-                style = style.add_modifier(ratatui::style::Modifier::BOLD);
+                style = style.add_modifier(crate::style::Modifier::BOLD);
             }
             placed.push(Placed {
                 x: width.saturating_sub(1) / 2,
@@ -475,7 +475,7 @@ fn rail_paint_walk(
                 y: row as u16,
                 width: width as u16,
                 height: 2,
-                style: ratatui::style::Style::new().fg(DEFAULT_FOREGROUND).bg(bg),
+                style: crate::style::Style::new().fg(DEFAULT_FOREGROUND).bg(bg),
             });
             // The indicator: right-aligned in numberWidth, one pad
             // cell, the title from x = numberWidth + 1.
@@ -486,7 +486,7 @@ fn rail_paint_walk(
                 width: 1,
                 lines: vec![PlacedLine::plain(
                     (index + 1).to_string().as_str(),
-                    ratatui::style::Style::new().fg(number_fg).bg(bg),
+                    crate::style::Style::new().fg(number_fg).bg(bg),
                 )],
                 tag: Some(format!("session-tab:{id}")),
             });
@@ -494,14 +494,14 @@ fn rail_paint_walk(
             let title = view.tab.title.clone().unwrap_or_else(|| "Untitled session".to_owned());
             let title = take_width(&title, title_width);
             let mut style = if selected || hovered {
-                ratatui::style::Style::new().fg(styles.text.fg.unwrap_or(DEFAULT_FOREGROUND)).bg(bg)
+                crate::style::Style::new().fg(styles.text.fg.unwrap_or(DEFAULT_FOREGROUND)).bg(bg)
             } else {
-                ratatui::style::Style::new()
+                crate::style::Style::new()
                     .fg(styles.text_muted.fg.unwrap_or(DEFAULT_FOREGROUND))
                     .bg(bg)
             };
             if selected {
-                style = style.add_modifier(ratatui::style::Modifier::BOLD);
+                style = style.add_modifier(crate::style::Modifier::BOLD);
             }
             placed.push(Placed {
                 x: number_width + 1,
@@ -521,7 +521,7 @@ fn rail_paint_walk(
                         width: crate::wrap::display_width(&text),
                         lines: vec![PlacedLine::plain(
                             text.as_str(),
-                            ratatui::style::Style::new().fg(detail_color(styles, bg)).bg(bg),
+                            crate::style::Style::new().fg(detail_color(styles, bg)).bg(bg),
                         )],
                         tag: None,
                     });
@@ -546,16 +546,16 @@ fn rail_paint_walk(
             y: geometry.add_row as u16,
             width: width as u16,
             height: 1,
-            style: ratatui::style::Style::new().fg(DEFAULT_FOREGROUND).bg(bg),
+            style: crate::style::Style::new().fg(DEFAULT_FOREGROUND).bg(bg),
         });
         let fg = if add_selected || add_hover {
             styles.text.fg.unwrap_or(DEFAULT_FOREGROUND)
         } else {
             idle_number(styles)
         };
-        let mut style = ratatui::style::Style::new().fg(fg).bg(bg);
+        let mut style = crate::style::Style::new().fg(fg).bg(bg);
         if add_selected {
-            style = style.add_modifier(ratatui::style::Modifier::BOLD);
+            style = style.add_modifier(crate::style::Modifier::BOLD);
         }
         placed.push(Placed {
             x: width.saturating_sub(1) / 2,
@@ -577,16 +577,16 @@ fn rail_paint_walk(
             y: geometry.add_row as u16,
             width: width as u16,
             height: 1,
-            style: ratatui::style::Style::new().fg(DEFAULT_FOREGROUND).bg(bg),
+            style: crate::style::Style::new().fg(DEFAULT_FOREGROUND).bg(bg),
         });
         let fg = if add_selected || add_hover {
             styles.text.fg.unwrap_or(DEFAULT_FOREGROUND)
         } else {
             styles.text_muted.fg.unwrap_or(DEFAULT_FOREGROUND)
         };
-        let mut style = ratatui::style::Style::new().fg(fg).bg(bg);
+        let mut style = crate::style::Style::new().fg(fg).bg(bg);
         if add_selected {
-            style = style.add_modifier(ratatui::style::Modifier::BOLD);
+            style = style.add_modifier(crate::style::Modifier::BOLD);
         }
         placed.push(Placed {
             x: 1,
@@ -594,7 +594,7 @@ fn rail_paint_walk(
             width: 1,
             lines: vec![PlacedLine::plain(
                 "+",
-                ratatui::style::Style::new()
+                crate::style::Style::new()
                     .fg(if add_selected || add_hover {
                         styles.text.fg.unwrap_or(DEFAULT_FOREGROUND)
                     } else {
@@ -623,8 +623,8 @@ fn number_color(
     status: TabStatus,
     selected: bool,
     hovered: bool,
-    bg: ratatui::style::Color,
-) -> ratatui::style::Color {
+    bg: crate::style::Color,
+) -> crate::style::Color {
     let _ = status;
     let base = if hovered && !selected {
         styles.text.fg.unwrap_or(DEFAULT_FOREGROUND)
@@ -638,7 +638,7 @@ fn number_color(
     let text = rgb(styles.text.fg.unwrap_or(DEFAULT_FOREGROUND));
     let inner = tint(text, pulse, 0.25);
     let (r, g, b) = tint(rgb(base), inner, 1.0);
-    ratatui::style::Color::Rgb(r, g, b)
+    crate::style::Color::Rgb(r, g, b)
 }
 
 /// The compact indicator's label: the status glyph when busy/
@@ -671,7 +671,7 @@ fn half_row_border_bg(
     styles: &ThemeStyles,
     first: bool,
     inputs: &RailInputs,
-) -> ratatui::style::Color {
+) -> crate::style::Color {
     let _ = (first, inputs);
     styles.background_raised
 }
@@ -681,7 +681,7 @@ fn push_half_row(
     row: usize,
     width: usize,
     glyph: &str,
-    bg: ratatui::style::Color,
+    bg: crate::style::Color,
     styles: &ThemeStyles,
 ) {
     placed.push(Placed {
@@ -690,7 +690,7 @@ fn push_half_row(
         width,
         lines: vec![PlacedLine::plain(
             glyph.repeat(width).as_str(),
-            ratatui::style::Style::new().fg(hover_color(styles)).bg(bg),
+            crate::style::Style::new().fg(hover_color(styles)).bg(bg),
         )],
         tag: None,
     });

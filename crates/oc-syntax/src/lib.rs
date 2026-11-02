@@ -48,7 +48,7 @@
 mod engine;
 mod queries;
 mod scopes;
-mod style;
+pub mod style;
 
 pub use engine::HighlightedBlock;
 pub use scopes::SyntaxStyles;

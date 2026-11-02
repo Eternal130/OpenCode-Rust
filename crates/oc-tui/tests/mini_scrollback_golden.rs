@@ -13,7 +13,7 @@
 use oc_tui::components::footer::theme::FooterTheme;
 use oc_tui::layout::StyledSpan;
 use oc_tui::mini::splash::{exit_splash_styled_rows, SplashColors};
-use ratatui::style::Color;
+use oc_tui::style::Color;
 
 fn goldens() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/parity/goldens/mini-frames")
@@ -36,7 +36,7 @@ fn encode_span(span: &StyledSpan) -> String {
         None => "none".to_owned(),
     };
     let bold =
-        if span.style.add_modifier.contains(ratatui::style::Modifier::BOLD) { "+bold" } else { "" };
+        if span.style.add_modifier.contains(oc_tui::style::Modifier::BOLD) { "+bold" } else { "" };
     format!("{}⟨fg={fg}|bg={bg}{bold}⟩", span.text)
 }
 

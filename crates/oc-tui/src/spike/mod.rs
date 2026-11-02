@@ -41,7 +41,7 @@ pub fn render_tool_wrap_ansi(width: u16, height: u16) -> String {
 
 /// The spike's frame fill style, now derived from the corpus theme.
 #[must_use]
-pub fn base_style() -> ratatui::style::Style {
+pub fn base_style() -> crate::style::Style {
     fill_style(&ThemeState::v2_dark().styles())
 }
 
@@ -139,7 +139,7 @@ mod golden_tests {
         let styles = theme.styles();
         assert_eq!(
             styles.background,
-            ratatui::style::Color::Rgb(
+            crate::style::Color::Rgb(
                 theme.resolved.tokens.background.base.r,
                 theme.resolved.tokens.background.base.g,
                 theme.resolved.tokens.background.base.b

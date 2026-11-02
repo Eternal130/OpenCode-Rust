@@ -21,7 +21,7 @@
 // (index.tsx:2373-2446) — the cell builders are line-for-line ports.
 #![allow(clippy::too_many_lines)]
 
-use ratatui::style::Style;
+use crate::style::Style;
 
 use crate::components::diff_viewer::{parse_patch, PatchRow};
 use crate::components::message::model::{ToolState, ToolStatus};

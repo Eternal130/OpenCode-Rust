@@ -115,7 +115,7 @@ fn clamp_scroll(scroll: usize, content_height: usize, viewport: usize) -> usize 
 }
 
 fn muted_fg(styles: &ThemeStyles) -> CellColor {
-    let color = styles.text_muted.fg.or(styles.text.fg).unwrap_or(ratatui::style::Color::Reset);
+    let color = styles.text_muted.fg.or(styles.text.fg).unwrap_or(crate::style::Color::Reset);
     CellColor::from(color)
 }
 
@@ -246,7 +246,7 @@ fn render_diff_scrolled(
     // (the oversized render placed it at content_height − 3).
     if layout.show_tree && height >= 4 {
         let help_y = height - 3;
-        let fg_base = CellColor::from(styles.text.fg.unwrap_or(ratatui::style::Color::Reset));
+        let fg_base = CellColor::from(styles.text.fg.unwrap_or(crate::style::Color::Reset));
         for (offset, cell_x) in (2..8).enumerate() {
             let source = content.cell(2, cell_x);
             let mut cell = source;

@@ -1,6 +1,7 @@
-//! Paint a layout's placed text runs into a ratatui `Buffer` and convert
-//! it to a [`Frame`] (absorbed from the wave-7.0 spike, generalized from
-//! the single tool-wrap fixture to any paint list).
+//! Paint a layout's placed text runs into the offscreen canvas
+//! ([`Buffer`]) and convert it to a [`Frame`] (absorbed from the
+//! wave-7.0 spike, generalized from the single tool-wrap fixture to
+//! any paint list).
 //!
 //! Wave 0 (gate-9): placed lines carry per-run styles
 //! ([`crate::layout::PlacedLine`]); painting walks each run's clusters
@@ -8,18 +9,146 @@
 //! cell with its run's style — so the canonical ANSI (cells carry
 //! style) is unchanged while styled-segment leaves gain per-cell color.
 //!
+//! Lane B2: the canvas is oc-tui's own [`Buffer`] — the ratatui 0.29
+//! `buffer` semantics (`empty` fills with blank `Reset` cells,
+//! `set_style` merges per cell, `cell_mut` is bounds-checked) copied
+//! verbatim (each method notes its upstream source).
+//!
 //! Paint coordinates are bounded by terminal dimensions (far below
 //! 2^16), so the pedantic usize→u16 cast lints carry no real risk.
 
 #![allow(clippy::cast_possible_truncation)]
 
-use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
-
 use crate::layout::Placed;
 use crate::render::{Cell, CellColor, Frame};
+use crate::style::{Color, Modifier, Style};
 use crate::wrap::flatten;
+
+/// A rectangular area (ratatui 0.29 `layout::Rect` semantics: origin
+/// + size, all `u16`, inclusive-origin / exclusive-end edges).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Rect {
+    pub x: u16,
+    pub y: u16,
+    pub width: u16,
+    pub height: u16,
+}
+
+impl Rect {
+    #[must_use]
+    pub const fn new(x: u16, y: u16, width: u16, height: u16) -> Self {
+        Self { x, y, width, height }
+    }
+
+    /// The intersecting area (ratatui `Rect::intersection`: the
+    /// overlapping rectangle, empty when disjoint).
+    #[must_use]
+    pub fn intersection(self, other: Self) -> Self {
+        let x1 = self.x.max(other.x);
+        let y1 = self.y.max(other.y);
+        let x2 = (self.x + self.width).min(other.x + other.width);
+        let y2 = (self.y + self.height).min(other.y + other.height);
+        Self { x: x1, y: y1, width: x2.saturating_sub(x1), height: y2.saturating_sub(y1) }
+    }
+}
+
+/// One styled cell of the offscreen canvas (ratatui 0.29
+/// `buffer::Cell` semantics: the symbol may hold a multi-char
+/// grapheme, unset parts stay `Reset`, and `set_style` MERGES).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CanvasCell {
+    pub symbol: String,
+    pub fg: Color,
+    pub bg: Color,
+    pub modifier: Modifier,
+}
+
+impl Default for CanvasCell {
+    /// ratatui `Cell::DEFAULT`: a blank `Reset`-colored cell.
+    fn default() -> Self {
+        Self {
+            symbol: " ".to_owned(),
+            fg: Color::Reset,
+            bg: Color::Reset,
+            modifier: Modifier::empty(),
+        }
+    }
+}
+
+impl CanvasCell {
+    /// Set the symbol (ratatui `Cell::set_symbol`: replaces the
+    /// symbol wholesale; multi-char graphemes allowed).
+    pub fn set_symbol(&mut self, symbol: &str) -> &mut Self {
+        self.symbol = symbol.to_owned();
+        self
+    }
+
+    /// Merge a style into the cell (ratatui 0.29 `Cell::set_style`:
+    /// `Some` colors overlay, `None` colors keep the current ones, the
+    /// add word is OR-ed in and the sub word cleared).
+    pub fn set_style(&mut self, style: Style) -> &mut Self {
+        if let Some(color) = style.fg {
+            self.fg = color;
+        }
+        if let Some(color) = style.bg {
+            self.bg = color;
+        }
+        self.modifier.insert(style.add_modifier);
+        self.modifier.remove(style.sub_modifier);
+        self
+    }
+}
+
+/// The offscreen cell grid (ratatui 0.29 `buffer::Buffer` semantics).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Buffer {
+    pub area: Rect,
+    pub content: Vec<CanvasCell>,
+}
+
+impl Buffer {
+    /// A buffer of blank `Reset` cells covering `area` (ratatui
+    /// `Buffer::empty`).
+    #[must_use]
+    pub fn empty(area: Rect) -> Self {
+        let size = area.width as usize * area.height as usize;
+        Self { area, content: vec![CanvasCell::default(); size] }
+    }
+
+    fn index_of(&self, x: u16, y: u16) -> Option<usize> {
+        if x < self.area.x
+            || x >= self.area.x + self.area.width
+            || y < self.area.y
+            || y >= self.area.y + self.area.height
+        {
+            return None;
+        }
+        Some(
+            (y - self.area.y) as usize * self.area.width as usize + (x - self.area.x) as usize,
+        )
+    }
+
+    /// Bounds-checked mutable cell access (ratatui `Buffer::cell_mut`:
+    /// `None` outside the buffer's area).
+    pub fn cell_mut(&mut self, position: (u16, u16)) -> Option<&mut CanvasCell> {
+        let index = self.index_of(position.0, position.1)?;
+        self.content.get_mut(index)
+    }
+
+    /// Apply `style` to every cell of `area` ∩ the buffer's area
+    /// (ratatui `Buffer::set_style`: intersection, then per-cell
+    /// merge).
+    pub fn set_style(&mut self, area: Rect, style: Style) {
+        let area = self.area.intersection(area);
+        for y in area.y..area.y + area.height {
+            for x in area.x..area.x + area.width {
+                if let Some(cell) = self.cell_mut((x, y)) {
+                    cell.set_style(style);
+                }
+            }
+        }
+    }
+}
 
 /// A background fill rectangle: `height` rows of `width` cells stamped
 /// with `style` before any text paints over them (opentui box
@@ -113,7 +242,7 @@ fn paint_run(buffer: &mut Buffer, item: &Placed, width: u16, height: u16) {
     }
 }
 
-/// Convert a ratatui buffer into a [`Frame`].
+/// Convert the offscreen canvas into a [`Frame`].
 #[must_use]
 pub fn to_frame(buffer: &Buffer) -> Frame {
     let width = buffer.area.width as usize;
@@ -121,9 +250,9 @@ pub fn to_frame(buffer: &Buffer) -> Frame {
     let mut cells = vec![vec![Cell::default(); width]; height];
     for y in 0..height {
         for x in 0..width {
-            let cell = &buffer[(x as u16, y as u16)];
+            let cell = &buffer.content[y * width + x];
             cells[y][x] = Cell {
-                ch: cell.symbol().chars().next().unwrap_or(' '),
+                ch: cell.symbol.chars().next().unwrap_or(' '),
                 attrs: modifier_bits(cell.modifier),
                 fg: map_color(cell.fg),
                 bg: map_color(cell.bg),
@@ -137,8 +266,9 @@ fn map_color(color: Color) -> CellColor {
     match color {
         Color::Indexed(index) => CellColor::Indexed(index),
         Color::Rgb(r, g, b) => CellColor::Rgb(r, g, b),
-        // Reset and every non-color variant map to the terminal default.
-        _ => CellColor::Default,
+        // Reset (and every non-color variant) maps to the terminal
+        // default.
+        Color::Reset => CellColor::Default,
     }
 }
 

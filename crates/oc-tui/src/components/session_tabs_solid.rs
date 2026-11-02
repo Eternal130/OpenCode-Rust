@@ -117,9 +117,9 @@ struct StripColors {
 
 impl StripColors {
     fn of(theme: &ThemeStyles) -> Self {
-        fn rgb_of(color: ratatui::style::Color) -> Rgb {
+        fn rgb_of(color: crate::style::Color) -> Rgb {
             match color {
-                ratatui::style::Color::Rgb(r, g, b) => (r, g, b),
+                crate::style::Color::Rgb(r, g, b) => (r, g, b),
                 _ => (128, 128, 128),
             }
         }
@@ -127,8 +127,8 @@ impl StripColors {
             background: rgb_of(theme.background),
             selected: rgb_of(theme.background_prompt),
             hovered: rgb_of(theme.action_hovered),
-            text: rgb_of(theme.text.fg.unwrap_or(ratatui::style::Color::Rgb(255, 255, 255))),
-            muted: rgb_of(theme.text_muted.fg.unwrap_or(ratatui::style::Color::Rgb(128, 128, 128))),
+            text: rgb_of(theme.text.fg.unwrap_or(crate::style::Color::Rgb(255, 255, 255))),
+            muted: rgb_of(theme.text_muted.fg.unwrap_or(crate::style::Color::Rgb(128, 128, 128))),
             interactive: rgb_of(theme.interactive),
             error: rgb_of(theme.error),
             accent: rgb_of(theme.accent),

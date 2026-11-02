@@ -203,9 +203,9 @@ pub fn exit_splash_rows(
 /// shadow to the default background).
 #[derive(Debug, Clone, Copy)]
 pub struct SplashColors {
-    pub left: ratatui::style::Color,
-    pub right: ratatui::style::Color,
-    pub shadow: ratatui::style::Color,
+    pub left: crate::style::Color,
+    pub right: crate::style::Color,
+    pub shadow: crate::style::Color,
 }
 
 impl SplashColors {
@@ -214,9 +214,9 @@ impl SplashColors {
     #[must_use]
     pub fn mono() -> Self {
         Self {
-            left: ratatui::style::Color::Reset,
-            right: ratatui::style::Color::Reset,
-            shadow: ratatui::style::Color::Reset,
+            left: crate::style::Color::Reset,
+            right: crate::style::Color::Reset,
+            shadow: crate::style::Color::Reset,
         }
     }
 
@@ -235,9 +235,9 @@ impl SplashColors {
     }
 }
 
-fn cell_color(color: crate::render::CellColor) -> ratatui::style::Color {
+fn cell_color(color: crate::render::CellColor) -> crate::style::Color {
     use crate::render::CellColor;
-    use ratatui::style::Color;
+    use crate::style::Color;
     match color {
         CellColor::Rgb(r, g, b) => Color::Rgb(r, g, b),
         CellColor::Indexed(index) => Color::Indexed(index),
@@ -267,7 +267,7 @@ pub fn exit_splash_styled_rows(
     colors: &SplashColors,
 ) -> Vec<Vec<crate::layout::StyledSpan>> {
     use crate::layout::StyledSpan;
-    use ratatui::style::{Modifier, Style};
+    use crate::style::{Modifier, Style};
 
     let session = "Session  ";
     let label = "Continue ";
@@ -337,7 +337,7 @@ pub fn exit_splash_styled_rows(
 #[must_use]
 pub fn mark_cells(row: &str, colors: &SplashColors) -> Vec<crate::layout::StyledSpan> {
     use crate::layout::StyledSpan;
-    use ratatui::style::Style;
+    use crate::style::Style;
     row.chars()
         .map(|char| {
             let style = match char {
@@ -367,9 +367,9 @@ mod tests {
         let colors = SplashColors::from_footer_theme(
             &crate::components::footer::FooterTheme::fallback_dark(),
         );
-        assert_eq!(colors.left, ratatui::style::Color::Indexed(8), "muted #808080 → idx 8");
-        assert_eq!(colors.right, ratatui::style::Color::Indexed(255), "text #eeeeee → idx 255");
-        assert_eq!(colors.shadow, ratatui::style::Color::Indexed(233), "shade #141414 → idx 233");
+        assert_eq!(colors.left, crate::style::Color::Indexed(8), "muted #808080 → idx 8");
+        assert_eq!(colors.right, crate::style::Color::Indexed(255), "text #eeeeee → idx 255");
+        assert_eq!(colors.shadow, crate::style::Color::Indexed(233), "shade #141414 → idx 233");
     }
 
     #[test]
@@ -477,21 +477,21 @@ mod tests {
         // `^` → ▀ fg=left bg=shadow (mix); `~` → ▀ fg=shadow
         // (top); text glyphs → fg=left.
         let colors = SplashColors {
-            left: ratatui::style::Color::Indexed(245),
-            right: ratatui::style::Color::Indexed(231),
-            shadow: ratatui::style::Color::Indexed(235),
+            left: crate::style::Color::Indexed(245),
+            right: crate::style::Color::Indexed(231),
+            shadow: crate::style::Color::Indexed(235),
         };
         let cells = mark_cells("█_^~▀", &colors);
         let text: String = cells.iter().map(|span| span.text.as_str()).collect();
         assert_eq!(text, "█ ▀▀▀");
-        assert_eq!(cells[0].style.fg, Some(ratatui::style::Color::Indexed(245)));
+        assert_eq!(cells[0].style.fg, Some(crate::style::Color::Indexed(245)));
         assert_eq!(cells[0].style.bg, None, "text glyphs carry no shadow");
         assert_eq!(cells[1].text, " ", "the `_` cell is a space");
-        assert_eq!(cells[1].style.fg, Some(ratatui::style::Color::Indexed(245)));
-        assert_eq!(cells[1].style.bg, Some(ratatui::style::Color::Indexed(235)));
+        assert_eq!(cells[1].style.fg, Some(crate::style::Color::Indexed(245)));
+        assert_eq!(cells[1].style.bg, Some(crate::style::Color::Indexed(235)));
         assert_eq!(cells[2].text, "▀");
-        assert_eq!(cells[2].style.bg, Some(ratatui::style::Color::Indexed(235)), "^ mixes");
-        assert_eq!(cells[3].style.fg, Some(ratatui::style::Color::Indexed(235)), "~ is shadow-fg");
+        assert_eq!(cells[2].style.bg, Some(crate::style::Color::Indexed(235)), "^ mixes");
+        assert_eq!(cells[3].style.fg, Some(crate::style::Color::Indexed(235)), "~ is shadow-fg");
         assert_eq!(cells[3].style.bg, None, "~ carries no bg");
     }
 
@@ -501,9 +501,9 @@ mod tests {
         // in `left`, `█__█` renders its `_` as full shadow cells,
         // `▀▀▀▀` plain. The title carries `right` + bold.
         let colors = SplashColors {
-            left: ratatui::style::Color::Indexed(245),
-            right: ratatui::style::Color::Indexed(231),
-            shadow: ratatui::style::Color::Indexed(235),
+            left: crate::style::Color::Indexed(245),
+            right: crate::style::Color::Indexed(231),
+            shadow: crate::style::Color::Indexed(235),
         };
         let rows = exit_splash_styled_rows(Some("fix parser"), "ses_123", false, 80, &colors);
         assert_eq!(rows.len(), 4, "blank + three mark rows");
@@ -517,13 +517,13 @@ mod tests {
             .iter()
             .skip(1)
             .take(2)
-            .all(|span| span.style.bg == Some(ratatui::style::Color::Indexed(235))));
+            .all(|span| span.style.bg == Some(crate::style::Color::Indexed(235))));
         // The session row (mark `█▀▀█`): label in left, title in
         // right + bold.
         let session: String = rows[1].iter().map(|span| span.text.as_str()).collect();
         assert!(session.contains("Session  fix parser"), "session row: {session}");
         let title_span = &rows[1].last().expect("title span");
-        assert_eq!(title_span.style.fg, Some(ratatui::style::Color::Indexed(231)));
-        assert!(title_span.style.add_modifier.contains(ratatui::style::Modifier::BOLD));
+        assert_eq!(title_span.style.fg, Some(crate::style::Color::Indexed(231)));
+        assert!(title_span.style.add_modifier.contains(crate::style::Modifier::BOLD));
     }
 }

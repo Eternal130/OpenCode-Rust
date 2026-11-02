@@ -157,7 +157,7 @@ pub fn render_toast_over_blank_solid(
         // span cells directly, exactly the old `canvas.spans` call.
         let more = format!("+{pending} more");
         let mut x = left + content_x;
-        for atom in crate::wrap::flatten(&more, ratatui::style::Style::new()) {
+        for atom in crate::wrap::flatten(&more, crate::style::Style::new()) {
             if let Some(slot) = canvas.frame_mut().cells.get_mut(top + 2).and_then(|l| l.get_mut(x))
             {
                 *slot = crate::render::Cell {

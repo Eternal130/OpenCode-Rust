@@ -8237,8 +8237,8 @@ pub async fn run_with_size(
         use std::io::Write as _;
         let mut out = std::io::stdout();
         let _ = out.write_all(&crate::terminal_proto::decscuru_sequence(config.cursor));
-        if let ratatui::style::Color::Rgb(r, g, b) =
-            app.store.theme().styles().text.fg.unwrap_or(ratatui::style::Color::Rgb(224, 224, 224))
+        if let crate::style::Color::Rgb(r, g, b) =
+            app.store.theme().styles().text.fg.unwrap_or(crate::style::Color::Rgb(224, 224, 224))
         {
             let _ = out.write_all(&crate::terminal_proto::osc12_sequence((r, g, b)));
         }

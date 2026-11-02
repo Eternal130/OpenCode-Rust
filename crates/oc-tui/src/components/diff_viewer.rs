@@ -47,7 +47,7 @@ use crate::layout::{Placed, PlacedLine, StyledSpan};
 use crate::render::{paint_placed_with_fills, Fill, Frame};
 use crate::theme::{DiffStyles, ThemeStyles};
 use oc_syntax::HighlightedBlock;
-use ratatui::style::{Color, Modifier, Style};
+use crate::style::{Color, Modifier, Style};
 
 /// `MIN_SPLIT_WIDTH` — the patch pane needs this many columns before
 /// the split view is offered.

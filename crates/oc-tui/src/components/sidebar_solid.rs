@@ -72,9 +72,9 @@ use crate::theme::ThemeStyles;
 /// An RGB triple (the port's cell currency).
 type Rgb = (u8, u8, u8);
 
-fn rgb_of(color: ratatui::style::Color) -> Rgb {
+fn rgb_of(color: crate::style::Color) -> Rgb {
     match color {
-        ratatui::style::Color::Rgb(r, g, b) => (r, g, b),
+        crate::style::Color::Rgb(r, g, b) => (r, g, b),
         // The pane's theme tokens are all truecolor; the fallback
         // only guards a future non-RGB token.
         _ => (128, 128, 128),
@@ -93,8 +93,8 @@ fn hex(rgb: Rgb) -> String {
 /// (bold 1<<0 …) — the exact inverse of the bits `render::paint::
 /// modifier_bits` writes (the sidebar carries BOLD only; the full
 /// table mirrors `transcript_solid::ecma_attributes`).
-fn ecma_attributes(modifier: ratatui::style::Modifier) -> u32 {
-    use ratatui::style::Modifier;
+fn ecma_attributes(modifier: crate::style::Modifier) -> u32 {
+    use crate::style::Modifier;
     let mut bits = 0u32;
     if modifier.contains(Modifier::BOLD) {
         bits |= 1 << 0;
@@ -300,7 +300,7 @@ fn shape(view: &SidebarView, theme: &ThemeStyles, height: usize, scroll: usize) 
             body: PaneBody::Fill {
                 width: usize::from(fill.width),
                 height: usize::from(fill.height),
-                color: rgb_of(fill.style.bg.unwrap_or(ratatui::style::Color::Reset)),
+                color: rgb_of(fill.style.bg.unwrap_or(crate::style::Color::Reset)),
             },
         });
     }

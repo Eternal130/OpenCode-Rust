@@ -699,7 +699,7 @@ impl FooterPane {
         let region = frame.width.saturating_sub(4);
         let visible = crate::wrap::take_width(&text, region);
         for (index, atom) in
-            crate::wrap::flatten(&visible, ratatui::style::Style::new()).into_iter().enumerate()
+            crate::wrap::flatten(&visible, crate::style::Style::new()).into_iter().enumerate()
         {
             let x = 2 + index;
             if x + atom.width > 2 + region {
@@ -994,7 +994,7 @@ impl Lifecycle {
                         PendingRows::Plain(rows) => {
                             for (index, row) in rows.iter().enumerate() {
                                 let mut x: u16 = 0;
-                                for atom in crate::wrap::flatten(row, ratatui::style::Style::new())
+                                for atom in crate::wrap::flatten(row, crate::style::Style::new())
                                 {
                                     if let Some(cell) =
                                         buffer.cell_mut((origin.0 + x, origin.1 + index as u16))
@@ -1012,7 +1012,7 @@ impl Lifecycle {
                                     if let Some(cell) =
                                         buffer.cell_mut((origin.0 + x, origin.1 + index as u16))
                                     {
-                                        cell.set_symbol(&atom.text).set_style(atom.style);
+                                        cell.set_symbol(&atom.text).set_style(bridge_style(atom.style));
                                     }
                                     x += atom.width.max(1) as u16;
                                 }
@@ -1201,6 +1201,31 @@ pub fn paint_frame(target: &mut BufferOverlay<'_>, frame: &crate::render::Frame)
                     .add_modifier(modifier),
             );
         }
+    }
+}
+
+/// The oc-tui → ratatui style bridge (the mini draw path feeds the
+/// inline-viewport terminal's buffer; B3/B4 territory keeps ratatui).
+fn bridge_style(style: crate::style::Style) -> ratatui::style::Style {
+    use ratatui::style::{Modifier as RModifier, Style as RStyle};
+    let mut out = RStyle::new();
+    if let Some(color) = style.fg {
+        out = out.fg(bridge_color(color));
+    }
+    if let Some(color) = style.bg {
+        out = out.bg(bridge_color(color));
+    }
+    out = out.add_modifier(RModifier::from_bits_truncate(style.add_modifier.bits()));
+    out.remove_modifier(RModifier::from_bits_truncate(style.sub_modifier.bits()))
+}
+
+/// The oc-tui color → ratatui color half of the bridge.
+fn bridge_color(color: crate::style::Color) -> ratatui::style::Color {
+    use ratatui::style::Color as RColor;
+    match color {
+        crate::style::Color::Reset => RColor::Reset,
+        crate::style::Color::Indexed(index) => RColor::Indexed(index),
+        crate::style::Color::Rgb(r, g, b) => RColor::Rgb(r, g, b),
     }
 }
 

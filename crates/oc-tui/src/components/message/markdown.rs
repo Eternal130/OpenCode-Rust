@@ -36,7 +36,7 @@ use opentui_core::renderables::markdown::{
 };
 use opentui_core::styled_text::StyledText;
 use opentui_core::syntax_style::{StyleDefinitionInput, SyntaxStyle};
-use ratatui::style::{Color, Modifier, Style};
+use crate::style::{Color, Modifier, Style};
 
 use crate::layout::StyledSpan;
 use crate::theme::ThemeStyles;
@@ -248,9 +248,13 @@ fn render_spec(
             if let Some(block) = fallback {
                 for (index, line) in content.split('\n').enumerate() {
                     let mut spans: Vec<StyledSpan> = block
-                        .line_spans(index, styles.code_block, &styles.syntax_defs)
+                        .line_spans(index, styles.code_block.into(), &styles.syntax_defs)
                         .into_iter()
-                        .map(|span| StyledSpan { text: span.text, style: span.style, link: None })
+                        .map(|span| StyledSpan {
+                            text: span.text,
+                            style: span.style.into(),
+                            link: None,
+                        })
                         .collect();
                     if spans.is_empty() {
                         spans.push(StyledSpan {
