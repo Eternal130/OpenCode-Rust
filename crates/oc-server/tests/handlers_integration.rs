@@ -22,6 +22,7 @@ struct TestServer {
     client: Client,
     bus: std::sync::Arc<oc_core::bus::Bus>,
     db: std::sync::Arc<oc_core::database::Database>,
+    state: Arc<AppState>,
     _workspace: Option<tempfile::TempDir>,
     _data: tempfile::TempDir,
 }
@@ -70,7 +71,7 @@ async fn boot_at(workspace: &std::path::Path, password: Option<String>) -> TestS
         axum::serve(listener, router).await.expect("server");
     });
     let client = Client::new(&format!("http://{addr}")).expect("client");
-    TestServer { client, bus, db, _workspace: None, _data: data }
+    TestServer { client, bus, db, state, _workspace: None, _data: data }
 }
 
 fn create_body(title: &str) -> SessionCreateBody {
@@ -91,9 +92,122 @@ fn assert_api(error: &ClientError, status: u16, tag: &str) {
     }
 }
 
+impl TestServer {
+    /// Pins the workspace tempdir for the server's lifetime (tests that
+    /// `boot_at` into their own directory).
+    fn workspace_is(&mut self, dir: tempfile::TempDir) {
+        self._workspace = Some(dir);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Session lifecycle
 // ---------------------------------------------------------------------------
+
+/// Seeds one user message row (title generation needs a first user
+/// message; `SessionHistory.firstUserMessage`).
+async fn seed_user_message(db: &oc_core::database::Database, session_id: &str, text: &str) {
+    let session = session_id.to_string();
+    let payload = serde_json::json!({
+        "time": { "created": 1, "streamed": 1, "completed": 1 },
+        "text": text,
+    });
+    db.transaction(move |tx| {
+        tx.conn().execute(
+            "INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) \
+             VALUES ('msg_seed_user', ?1, 'user', (SELECT COALESCE(MAX(seq), 0) + 1 FROM session_message WHERE session_id = ?1), 1, 1, ?2)",
+            (session, payload.to_string()),
+        )?;
+        Ok(())
+    })
+    .await
+    .expect("seed user message");
+}
+
+/// G-109 — `PATCH /api/session/:id` with an EMPTY title regenerates
+/// the title (ref handlers/session.ts:262-271: truthy → rename, falsy
+/// → `SessionTitle.generate()`); it must never rename to the empty
+/// string. The `session.title` hook short-circuits the model request,
+/// proving the regeneration path ran end to end.
+#[tokio::test]
+async fn handlers_session_update_empty_title_regenerates() {
+    // A custom provider config in the workspace so the session's model
+    // resolves through the engine's catalog resolver (title selection
+    // needs a resolvable primary).
+    let workspace = tempfile::tempdir().expect("workspace");
+    std::fs::write(
+        workspace.path().join("opencode.json"),
+        r#"{
+        "$schema": "https://opencode.ai/config.json",
+        "model": "parityfake/fake-model",
+        "providers": {
+            "parityfake": {
+                "package": "@opencode/ai/providers/openai-compatible",
+                "settings": { "baseURL": "http://127.0.0.1:9/v1" },
+                "models": { "fake-model": { "name": "Fake Model" } }
+            }
+        }
+    }"#,
+    )
+    .expect("write config");
+    let mut server = boot_at(workspace.path(), None).await;
+    server.workspace_is(workspace);
+    let client = &server.client;
+    let session_id = create_session(client, "before").await.id;
+
+    // The session's location services — resolved through the session
+    // ROW's directory like the session-location middleware.
+    let store = oc_core::session::store::SessionStore::new((*server.state.engine.db).clone());
+    let row = store.get(&session_id).await.expect("session row").expect("row exists");
+    let location = oc_core::location::LocationRef::new(
+        std::path::PathBuf::from(&row.directory),
+        row.workspace_id.clone(),
+    );
+    let services = server.state.engine.location(location).await.expect("location services");
+    // Keep the registration alive for the whole test (dropping the
+    // returned handle deregisters the hook).
+    let _hook = services
+        .graph
+        .hooks
+        .register_session_title(
+            oc_core::hooks::fn_hook(|event: &mut oc_core::hooks::SessionTitleEvent| {
+                event.result = Some("Regenerated title".into());
+                Ok(())
+            }),
+            oc_core::hooks::HookOptions::default(),
+        )
+        .await;
+    seed_user_message(&server.db, &session_id, "what is up doc").await;
+
+    // Non-empty title still renames directly.
+    client
+        .session()
+        .update(
+            &session_id,
+            &SessionUpdateBody { title: Some("manual".to_owned()), ..Default::default() },
+        )
+        .await
+        .expect("update");
+    let fetched = client.session().get(&session_id).await.expect("get");
+    assert_eq!(fetched.title.as_deref(), Some("manual"));
+
+    // Empty title: regeneration through the title machinery — the
+    // hook-supplied title lands, and the session is never empty-named.
+    client
+        .session()
+        .update(
+            &session_id,
+            &SessionUpdateBody { title: Some(String::new()), ..Default::default() },
+        )
+        .await
+        .expect("update empty");
+    let fetched = client.session().get(&session_id).await.expect("get after empty");
+    assert_eq!(
+        fetched.title.as_deref(),
+        Some("Regenerated title"),
+        "empty title regenerates via SessionTitle.generate (G-109)"
+    );
+}
 
 #[tokio::test]
 async fn handlers_session_create_get_remove_round_trip() {

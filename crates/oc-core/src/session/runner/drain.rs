@@ -151,6 +151,14 @@ impl SessionRunner {
         &self.compaction
     }
 
+    /// G-109 — `SessionTitle.Service.generate` for the server's
+    /// `session.update` route: an explicit EMPTY title regenerates the
+    /// title from conversation history (ref handlers/session.ts:267-270
+    /// — awaited in-handler, not the `onlyIfMissing` fork).
+    pub async fn regenerate_title(&self, session_id: &str) {
+        self.title.generate(session_id).await;
+    }
+
     /// Attaches the `SessionPrompt.prepare` seam (the engine's
     /// production wiring — `session.prompt` hook dispatch + `@skill`
     /// resolution over the location's skill table; guest hooks ride

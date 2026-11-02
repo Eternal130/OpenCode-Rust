@@ -543,15 +543,21 @@ async fn update(
         &body,
     )?;
 
-    // title: non-empty → rename; "" → regenerate (LLM-backed regeneration
-    // lands with the title lane; empty clears, TODO(phase-9)).
+    // title: non-empty → rename; empty → regenerate (G-109 — ref
+    // handlers/session.ts:262-271 checks truthiness: `if (title)`
+    // renames, else `SessionTitle.generate()` re-derives the title
+    // from history and publishes its own `session.renamed`).
     if let Some(title) = body.get("title").and_then(Value::as_str) {
-        publish_session_event(
-            &services,
-            "session.renamed",
-            json!({ "sessionID": session_id, "title": title }),
-        )
-        .await?;
+        if !title.is_empty() {
+            publish_session_event(
+                &services,
+                "session.renamed",
+                json!({ "sessionID": session_id, "title": title }),
+            )
+            .await?;
+        } else {
+            services.runner.regenerate_title(&session_id).await;
+        }
     }
     if body.get("metadata").is_some() {
         publish_session_event(
