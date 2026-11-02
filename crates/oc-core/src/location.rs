@@ -516,6 +516,11 @@ pub struct ToolRegistryState {
     /// Local executors keyed by bare name (Wave C folds these into the full
     /// pipeline; the runner resolves them at tool-call time).
     executors: Mutex<std::collections::BTreeMap<String, ToolExecutorHandle>>,
+    /// G-106② — `editor.namespace(...)` (ref tool.ts:169-176): namespace
+    /// descriptions registered once per namespace; the Code Mode catalog
+    /// renders them on the namespace line and counts their cost against
+    /// the inline budget (ref catalog.ts:64/105/173).
+    namespace_descriptions: Mutex<std::collections::BTreeMap<String, String>>,
 }
 
 impl fmt::Debug for ToolRegistryState {
@@ -541,6 +546,21 @@ impl ToolRegistryState {
     /// Remove one registration.
     pub fn remove(&self, name: &str) {
         self.tools.lock().remove(name);
+    }
+
+    /// `editor.namespace({name, description})` (ref tool.ts:169-176,
+    /// G-106②): registers one namespace description. An unregistered
+    /// namespace stays valid — it simply has no description.
+    pub fn register_namespace_description(&self, name: &str, description: &str) {
+        self.namespace_descriptions
+            .lock()
+            .insert(name.to_string(), description.to_string());
+    }
+
+    /// The registered description for a namespace, if any.
+    #[must_use]
+    pub fn namespace_description(&self, name: &str) -> Option<String> {
+        self.namespace_descriptions.lock().get(name).cloned()
     }
 
     /// One registration.

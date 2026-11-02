@@ -2146,6 +2146,13 @@ fn opencode_plugin(inputs: &Arc<PluginInputs>) -> InternalPlugin {
         let db = inputs.tool_services.db.clone().expect("tool services db");
         let bus = inputs.tool_services.bus.clone().expect("tool services bus");
         let bus_events = Arc::new(crate::project::BusProjectEvents::new(bus.clone()));
+        // `draft.namespace({...})` (ref tool/plugin/opencode.ts:84-88,
+        // G-106②): the one core namespace with a description — it rides
+        // the Code Mode catalog's namespace lines.
+        ports.tools.register_namespace_description(
+            "opencode",
+            "Tools for managing OpenCode itself, such as working with sessions, searching the available models, and reading MCP resources.",
+        );
         tool::register_builtin(
             ports.tools,
             hooks,
