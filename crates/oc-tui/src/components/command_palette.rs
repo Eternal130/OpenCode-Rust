@@ -92,19 +92,19 @@ impl PaletteCommand {
         match self.command {
             "session.redo" => {
                 return match store.route() {
-                    Route::Session { session_id } => store.revert(&session_id).is_some(),
+                    Route::Session { session_id, .. } => store.revert(&session_id).is_some(),
                     Route::Home => false,
                 };
             }
             "session.queued_prompts" => {
                 return match store.route() {
-                    Route::Session { session_id } => !store.queued_prompts(&session_id).is_empty(),
+                    Route::Session { session_id, .. } => !store.queued_prompts(&session_id).is_empty(),
                     Route::Home => false,
                 };
             }
             "prompt.images.view" => {
                 let key = match store.route() {
-                    Route::Session { session_id } => session_id,
+                    Route::Session { session_id, .. } => session_id,
                     Route::Home => return false,
                 };
                 return store.composer(&key).draft.files.iter().any(|file| {
@@ -677,7 +677,7 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
         // per queued prompt, the `N of M` footer, enter steers.
         DialogKind::QueuedPrompts => {
             let session = match store.route() {
-                Route::Session { session_id } => session_id,
+                Route::Session { session_id, .. } => session_id,
                 Route::Home => {
                     return SelectProps::new("Queued prompts", Vec::new());
                 }
@@ -695,6 +695,15 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
                 .collect();
             SelectProps::new("Queued prompts", options)
         }
+        // G-140⑤ — the pending-steer click manager (index.tsx:2228-
+        // 2245): Move to queue / Delete over the steer-delivery row.
+        DialogKind::PendingSteer { .. } => SelectProps::new(
+            "Pending steer",
+            vec![
+                SelectOption::titled("Move to queue".to_owned(), "queue"),
+                SelectOption::titled("Delete".to_owned(), "cancel"),
+            ],
+        ),
         // SURF-1: the tool detail viewer (`DialogExecute` for
         // execute — dialog-execute.tsx; `DialogShellOutput` for
         // background shells — dialog-shell-output.tsx): one row per
@@ -851,7 +860,7 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
                 .with_empty_texts("No sessions available", "No sessions found");
             // The current session row carries the `●` focus mark
             // (`current={currentSessionID()}`, :211).
-            if let crate::store::Route::Session { session_id } = store.route() {
+            if let crate::store::Route::Session { session_id, .. } = store.route() {
                 props = props.with_current(Some(session_id));
             }
             props = props
@@ -1512,7 +1521,7 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
                 options.push(SelectOption::titled(variant.clone(), variant));
             }
             let current = match store.route() {
-                Route::Session { session_id } => store.selection_for(&session_id).model,
+                Route::Session { session_id, .. } => store.selection_for(&session_id).model,
                 Route::Home => store.selection_for(crate::app::HOME_PROMPT_KEY).model,
             }
             .and_then(|model| model.variant)
@@ -1531,11 +1540,11 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
         // env/config entries + the share hint (enter copies).
         DialogKind::Debug => {
             let model = match store.route() {
-                Route::Session { session_id } => store.effective_model(&session_id),
+                Route::Session { session_id, .. } => store.effective_model(&session_id),
                 Route::Home => store.effective_model(crate::app::HOME_PROMPT_KEY),
             };
             let session = match store.route() {
-                Route::Session { session_id } => session_id,
+                Route::Session { session_id, .. } => session_id,
                 Route::Home => "n/a".to_owned(),
             };
             let terminal = std::env::var("TERM").unwrap_or_default();
@@ -2009,7 +2018,7 @@ pub fn agent_list_props(store: &Store, title: &'static str) -> SelectProps {
 /// submit would commit as current).
 fn model_current_value(store: &Store) -> Option<String> {
     let key = match store.route() {
-        Route::Session { session_id } => session_id,
+        Route::Session { session_id, .. } => session_id,
         Route::Home => crate::app::HOME_PROMPT_KEY.to_owned(),
     };
     store.effective_model(&key).map(|model| format!("{}/{}", model.provider_id, model.model_id))
@@ -2019,7 +2028,7 @@ fn model_current_value(store: &Store) -> Option<String> {
 /// the next-created session's draft).
 fn active_selection(store: &Store) -> crate::store::SessionSelection {
     let key = match store.route() {
-        Route::Session { session_id } => session_id,
+        Route::Session { session_id, .. } => session_id,
         Route::Home => crate::app::HOME_PROMPT_KEY.to_owned(),
     };
     store.selection_for(&key)
@@ -2099,7 +2108,7 @@ pub fn execute_server_list_selection(
                 variant: None,
             };
             match store.route() {
-                Route::Session { session_id } => store.select_model(&session_id, &model),
+                Route::Session { session_id, .. } => store.select_model(&session_id, &model),
                 Route::Home => store.stage_model(crate::app::HOME_PROMPT_KEY, model),
             }
             Dispatch::Handled
@@ -2122,7 +2131,7 @@ pub fn execute_server_list_selection(
                 return Dispatch::Handled;
             }
             match store.route() {
-                Route::Session { session_id } => store.select_agent(&session_id, value),
+                Route::Session { session_id, .. } => store.select_agent(&session_id, value),
                 Route::Home => store.stage_agent(crate::app::HOME_PROMPT_KEY, value),
             }
             Dispatch::Handled
@@ -2180,7 +2189,7 @@ pub fn copy_message_to_clipboard(store: &Store) {
         });
     };
     let session_id = match store.route() {
-        Route::Session { session_id } => session_id,
+        Route::Session { session_id, .. } => session_id,
         Route::Home => {
             miss("No assistant messages found");
             return;
@@ -2256,7 +2265,7 @@ pub fn copy_session_transcript(
     session_id: Option<&str>,
 ) -> Result<(), &'static str> {
     let routed = match store.route() {
-        Route::Session { session_id } => Some(session_id),
+        Route::Session { session_id, .. } => Some(session_id),
         Route::Home => None,
     };
     let Some(session_id) = session_id.or(routed.as_deref()) else {
@@ -2364,7 +2373,7 @@ impl CommandDispatcher for StoreDispatcher {
                 Dispatch::Handled
             }
             "session.clear" => {
-                if let Route::Session { session_id } = store.route() {
+                if let Route::Session { session_id, .. } = store.route() {
                     store.close_tab(Some(&session_id));
                 }
                 // Same inheritance as session.new (app.tsx:742-749).
@@ -2377,7 +2386,7 @@ impl CommandDispatcher for StoreDispatcher {
                 Dispatch::Handled
             }
             "session.tab.close" => {
-                if let Route::Session { session_id } = store.route() {
+                if let Route::Session { session_id, .. } = store.route() {
                     store.close_tab(Some(&session_id));
                 }
                 Dispatch::Handled
@@ -2459,7 +2468,7 @@ impl CommandDispatcher for StoreDispatcher {
             }
             "session.rename" => {
                 let session_id = match store.route() {
-                    Route::Session { session_id } => session_id,
+                    Route::Session { session_id, .. } => session_id,
                     Route::Home => return Dispatch::Handled,
                 };
                 // TUI-TD12 — `/rename <title>` (index.tsx:899-911): a
@@ -2568,7 +2577,7 @@ impl CommandDispatcher for StoreDispatcher {
             }
             "prompt.images.view" => {
                 let key = match store.route() {
-                    Route::Session { session_id } => session_id,
+                    Route::Session { session_id, .. } => session_id,
                     Route::Home => crate::app::HOME_PROMPT_KEY.to_owned(),
                 };
                 let composer = store.composer(&key);
@@ -2653,7 +2662,7 @@ impl CommandDispatcher for StoreDispatcher {
             // palette; the same guards as the keybind path).
             "prompt.queue" => {
                 let key = match store.route() {
-                    Route::Session { session_id } => session_id,
+                    Route::Session { session_id, .. } => session_id,
                     Route::Home => crate::app::HOME_PROMPT_KEY.to_owned(),
                 };
                 let draft = store.prompt_draft(&key);
@@ -2662,7 +2671,7 @@ impl CommandDispatcher for StoreDispatcher {
                     let slash = trimmed.starts_with('/');
                     let exit_word = matches!(trimmed.as_str(), "exit" | "quit" | ":q");
                     let running = match store.route() {
-                        Route::Session { session_id } => store.session_running(&session_id),
+                        Route::Session { session_id, .. } => store.session_running(&session_id),
                         Route::Home => false,
                     };
                     if exit_word || slash {
@@ -2681,7 +2690,7 @@ impl CommandDispatcher for StoreDispatcher {
                                 )
                             })
                             .collect::<Vec<String>>();
-                        let Route::Session { session_id } = store.route() else {
+                        let Route::Session { session_id, .. } = store.route() else {
                             return Dispatch::Handled;
                         };
                         store.queue_prompt(&session_id, &draft.text, &files);
@@ -2738,7 +2747,7 @@ impl CommandDispatcher for StoreDispatcher {
             // FIXED fork API (the picker, not the message-context
             // direct path).
             "session.fork" => {
-                let Route::Session { session_id } = store.route() else {
+                let Route::Session { session_id, .. } = store.route() else {
                     return Dispatch::Handled;
                 };
                 store.replace_dialog(
@@ -2773,12 +2782,27 @@ impl CommandDispatcher for StoreDispatcher {
                 store.session_undo_pressed();
                 Dispatch::Handled
             }
+            // G-137 — `session.toggle.thinking` / `session.toggle.
+            // scrollbar` (index.tsx:1021-1049): flip the config key
+            // through the same setting-cycle seam `verbosity.cycle`
+            // uses (`config.update` write-through + the live
+            // consumer), then `dialog.clear()`.
+            "session.toggle.thinking" => {
+                store.setting_cycle("session.thinking", 1);
+                store.clear_dialogs();
+                Dispatch::Handled
+            }
+            "session.toggle.scrollbar" => {
+                store.setting_cycle("session.scrollbar", 1);
+                store.clear_dialogs();
+                Dispatch::Handled
+            }
             "session.redo" => {
                 store.session_redo_pressed();
                 Dispatch::Handled
             }
             "session.export" => {
-                let Route::Session { session_id } = store.route() else {
+                let Route::Session { session_id, .. } = store.route() else {
                     return Dispatch::Handled;
                 };
                 store.replace_dialog(
@@ -2951,7 +2975,7 @@ impl CommandDispatcher for StoreDispatcher {
             // `session.timeline` (dialog-timeline.tsx:17-19): large,
             // session-route only (the message list source).
             "session.timeline" => {
-                let Route::Session { session_id } = store.route() else {
+                let Route::Session { session_id, .. } = store.route() else {
                     return Dispatch::Handled;
                 };
                 store.replace_dialog(
@@ -2978,7 +3002,7 @@ impl CommandDispatcher for StoreDispatcher {
             // composer (`appendPrompt` — text + files appended; v2
             // toasts on a miss).
             "queued_prompt.undo" => {
-                let Route::Session { session_id } = store.route() else {
+                let Route::Session { session_id, .. } = store.route() else {
                     return Dispatch::Handled;
                 };
                 match store.undo_queued_prompt(&session_id) {
@@ -2999,7 +3023,7 @@ impl CommandDispatcher for StoreDispatcher {
             // clipboard + the info toast.
             "session.copy.id" => {
                 let session_id = match store.route() {
-                    Route::Session { session_id } => session_id,
+                    Route::Session { session_id, .. } => session_id,
                     Route::Home => return Dispatch::Handled,
                 };
                 match store.clipboard_write(&session_id) {
@@ -3032,7 +3056,7 @@ impl CommandDispatcher for StoreDispatcher {
             // runs directly, the bare command opens the question
             // prompt (`ctx.ui.dialog.prompt`, btw.tsx:64-65).
             "session.aside" => {
-                let Route::Session { session_id } = store.route() else {
+                let Route::Session { session_id, .. } = store.route() else {
                     store.clear_dialogs();
                     store.toast_show(crate::components::toast::ToastOptions {
                         message: "Open a session first".to_owned(),
@@ -3096,7 +3120,7 @@ impl CommandDispatcher for StoreDispatcher {
             // TUI-4 — the pane/terminal family
             // (session-frame.tsx:173-249 + terminals-tab.tsx:66-79).
             "terminal.toggle" => {
-                if let Route::Session { session_id } = store.route() {
+                if let Route::Session { session_id, .. } = store.route() {
                     store.terminal_toggle(&session_id);
                 }
                 Dispatch::Handled
@@ -3106,7 +3130,7 @@ impl CommandDispatcher for StoreDispatcher {
                 Dispatch::Handled
             }
             "terminal.close" => {
-                if let Route::Session { session_id } = store.route() {
+                if let Route::Session { session_id, .. } = store.route() {
                     store.terminal_close(&session_id);
                 }
                 Dispatch::Handled
@@ -3118,7 +3142,7 @@ impl CommandDispatcher for StoreDispatcher {
             }
             "pane.focus.right" => {
                 // focusRightPane — only while a right pane exists.
-                if let Route::Session { session_id } = store.route() {
+                if let Route::Session { session_id, .. } = store.route() {
                     if store.terminal_pane_mounted(&session_id).is_some() {
                         store.set_terminal_focus_right(true);
                     }
@@ -3309,7 +3333,7 @@ impl CommandDispatcher for StoreDispatcher {
                     return Dispatch::Unknown;
                 };
                 match store.route() {
-                    Route::Session { session_id } => {
+                    Route::Session { session_id, .. } => {
                         store.scroll_command(&session_id, command);
                         Dispatch::Handled
                     }
@@ -3322,13 +3346,13 @@ impl CommandDispatcher for StoreDispatcher {
             // pair) stage the boundary walk; alt+end jumps to the
             // last user message.
             "session.message.next" => {
-                if let Route::Session { session_id } = store.route() {
+                if let Route::Session { session_id, .. } = store.route() {
                     store.navigate_message(&session_id, crate::store::NavDirection::Next, false);
                 }
                 Dispatch::Handled
             }
             "session.message.previous" => {
-                if let Route::Session { session_id } = store.route() {
+                if let Route::Session { session_id, .. } = store.route() {
                     store.navigate_message(
                         &session_id,
                         crate::store::NavDirection::Previous,
@@ -3338,19 +3362,19 @@ impl CommandDispatcher for StoreDispatcher {
                 Dispatch::Handled
             }
             "session.message.user.next" => {
-                if let Route::Session { session_id } = store.route() {
+                if let Route::Session { session_id, .. } = store.route() {
                     store.navigate_message(&session_id, crate::store::NavDirection::Next, true);
                 }
                 Dispatch::Handled
             }
             "session.message.user.previous" => {
-                if let Route::Session { session_id } = store.route() {
+                if let Route::Session { session_id, .. } = store.route() {
                     store.navigate_message(&session_id, crate::store::NavDirection::Previous, true);
                 }
                 Dispatch::Handled
             }
             "session.messages_last_user" => {
-                if let Route::Session { session_id } = store.route() {
+                if let Route::Session { session_id, .. } = store.route() {
                     store.navigate_last_user(&session_id);
                 }
                 Dispatch::Handled
@@ -3359,7 +3383,7 @@ impl CommandDispatcher for StoreDispatcher {
             // child session navigates to the parent (the registry's
             // `parentID` link; a root session no-ops).
             "session.parent" => {
-                if let Route::Session { session_id } = store.route() {
+                if let Route::Session { session_id, .. } = store.route() {
                     store.navigate_parent(&session_id);
                 }
                 Dispatch::Handled
@@ -3368,7 +3392,7 @@ impl CommandDispatcher for StoreDispatcher {
             // (prompt/index.tsx:500-529) — the sink POSTs
             // `session.interrupt { resume: true }`.
             "session.interrupt" => {
-                let Route::Session { session_id } = store.route() else {
+                let Route::Session { session_id, .. } = store.route() else {
                     return Dispatch::Handled;
                 };
                 match store.interrupt_pressed(&session_id, store.clock()) {
@@ -3384,7 +3408,7 @@ impl CommandDispatcher for StoreDispatcher {
                 let direction = if command == "agent.cycle" { 1 } else { -1 };
                 if let Some(agent) = store.agent_cycle(direction) {
                     match store.route() {
-                        Route::Session { session_id } => store.select_agent(&session_id, &agent),
+                        Route::Session { session_id, .. } => store.select_agent(&session_id, &agent),
                         Route::Home => store.stage_agent(crate::app::HOME_PROMPT_KEY, &agent),
                     }
                 }
@@ -3394,7 +3418,7 @@ impl CommandDispatcher for StoreDispatcher {
                 let direction = if command == "model.cycle_recent" { 1 } else { -1 };
                 if let Some(model) = store.model_cycle_recent(direction) {
                     match store.route() {
-                        Route::Session { session_id } => store.select_model(&session_id, &model),
+                        Route::Session { session_id, .. } => store.select_model(&session_id, &model),
                         Route::Home => store.stage_model(crate::app::HOME_PROMPT_KEY, model),
                     }
                 }
@@ -3404,7 +3428,7 @@ impl CommandDispatcher for StoreDispatcher {
                 let direction = if command == "model.cycle_favorite" { 1 } else { -1 };
                 match store.model_cycle_favorite(direction) {
                     Some(model) => match store.route() {
-                        Route::Session { session_id } => store.select_model(&session_id, &model),
+                        Route::Session { session_id, .. } => store.select_model(&session_id, &model),
                         Route::Home => store.stage_model(crate::app::HOME_PROMPT_KEY, model),
                     },
                     // local.tsx:427-431: no favorites configured.
@@ -3424,7 +3448,7 @@ impl CommandDispatcher for StoreDispatcher {
                 // (none → default).
                 match store.variant_cycle() {
                     Some(next) => {
-                        if let Route::Session { session_id } = store.route() {
+                        if let Route::Session { session_id, .. } = store.route() {
                             let mut selection =
                                 store.selection_for(&session_id).model.unwrap_or_default();
                             selection.variant = next;
@@ -3454,7 +3478,7 @@ impl CommandDispatcher for StoreDispatcher {
             // session route index.tsx:627-675 — `enabled: queuedPrompts()
             // .length > 0`, so an empty queue is a no-op).
             "session.queued_prompts" => {
-                let Route::Session { session_id } = store.route() else {
+                let Route::Session { session_id, .. } = store.route() else {
                     return Dispatch::Handled;
                 };
                 if store.queued_prompts(&session_id).is_empty() {
@@ -3483,7 +3507,7 @@ fn static_command(command: &str) -> &'static str {
 /// app.tsx:728-731 — the new tab inherits what was active).
 fn inherit_selection_onto_home(store: &Store) {
     let key = match store.route() {
-        Route::Session { session_id } => session_id,
+        Route::Session { session_id, .. } => session_id,
         Route::Home => return, // home already carries the staged draft
     };
     let selection = store.selection_for(&key);
@@ -3502,7 +3526,7 @@ fn inherit_selection_onto_home(store: &Store) {
 /// location worker's error state, TUI-30) does not inherit.
 fn apply_new_session_location(store: &Store) {
     let current = match store.route() {
-        Route::Session { session_id } => store
+        Route::Session { session_id, .. } => store
             .session_history()
             .iter()
             .find(|session| session.id == session_id)
@@ -4152,7 +4176,7 @@ mod tests {
             forms: Vec::new(),
             permissions: Vec::new(),
         }]);
-        store.navigate(Route::Session { session_id: "s1".into() });
+        store.navigate(Route::session("s1".into()));
         if unavailable {
             store.set_location_error(Some("/work/cur".to_owned()));
         }
@@ -4248,7 +4272,7 @@ mod tests {
         assert_eq!(titles, vec!["History row", "Open tab"], "history rows, newest first");
         // Accepting a history row opens its tab through navigation.
         execute_server_list_selection(&store, "session.list", "s_hist");
-        assert_eq!(store.route(), crate::store::Route::Session { session_id: "s_hist".to_owned() });
+        assert_eq!(store.route(), crate::store::Route::session("s_hist".to_owned()));
         assert!(store.tabs().tabs.iter().any(|tab| tab.session_id == "s_hist"));
     }
 
@@ -4675,7 +4699,7 @@ mod tests {
     fn final_session_store() -> Store {
         let store = Store::new(crate::reactive::Runtime::new());
         store.open_tab("ses_1", Some("Session one".to_owned()));
-        store.navigate(Route::Session { session_id: "ses_1".to_owned() });
+        store.navigate(Route::session("ses_1".to_owned()));
         store.set_messages(
             "ses_1",
             vec![
@@ -5570,7 +5594,7 @@ fn stats_open_dispatch_mounts_page_and_fetches() {
     // stats.close (the page's escape layer) returns to the route.
     assert_eq!(dispatcher.dispatch(&store, "stats.close", None), Dispatch::Handled);
     assert!(!store.stats_page_open());
-    assert!(matches!(store.route(), Route::Session { session_id } if session_id == "s1"));
+    assert!(matches!(store.route(), Route::Session { session_id, .. } if session_id == "s1"));
 }
 
 /// G-46 — `dialog.plugins.error` (plugins.tsx:224-228's "view

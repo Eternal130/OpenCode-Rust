@@ -111,7 +111,7 @@ pub fn apply_plugin_ui(store: &Store, plugin_id: &str, event: &PluginUiEvent) {
             store.set_plugin_sidebar_section(&section);
         }
         PluginUiEvent::NavigateToSession { session_id } => {
-            store.navigate(crate::store::Route::Session { session_id: session_id.clone() });
+            store.navigate(crate::store::Route::session(session_id.clone()));
         }
         PluginUiEvent::NavigateToPluginRoute { name, data } => {
             store.open_plugin_route(plugin_id, name, data.clone());

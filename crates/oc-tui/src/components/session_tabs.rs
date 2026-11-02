@@ -44,12 +44,98 @@ pub const SPINNER_INTERVAL_MS: u64 = 80;
 /// `SPINNER_FRAMES[0]` (frozen frame — animations off).
 pub const SPINNER_FRAME_0: &str = "⠋";
 
+/// G-143 — `TAB_SPINNERS` (session-tabs.tsx:59-64): the four busy
+/// spinner styles. Frame index is time-derived (G-49a's math:
+/// `elapsed / interval % frames.len()`), so any repaint cadence
+/// lands on the ref's frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TabSpinner {
+    #[default]
+    Dots,
+    Arcs,
+    Quadrants,
+    Line,
+}
+
+impl TabSpinner {
+    /// The style's frame glyphs (`frames`).
+    #[must_use]
+    pub fn frames(self) -> &'static [char] {
+        match self {
+            Self::Dots => &SPINNER_FRAMES,
+            Self::Arcs => &['◜', '◝', '◞', '◟'],
+            Self::Quadrants => &['◴', '◷', '◶', '◵'],
+            Self::Line => &['|', '/', '-', '\\'],
+        }
+    }
+
+    /// The style's cadence (`interval`, ms).
+    #[must_use]
+    pub fn interval_ms(self) -> u64 {
+        match self {
+            Self::Dots => SPINNER_INTERVAL_MS,
+            // arcs/quadrants/line all carry `interval: 120`.
+            _ => 120,
+        }
+    }
+}
+
+/// G-143 — `TAB_UNREAD_MARKERS` (session-tabs.tsx:67-72): the four
+/// unread glyphs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TabUnreadMarker {
+    #[default]
+    SmallDot,
+    Dot,
+    Square,
+    LargeSquare,
+}
+
+impl TabUnreadMarker {
+    /// The marker glyph.
+    #[must_use]
+    pub fn glyph(self) -> &'static str {
+        match self {
+            Self::SmallDot => "•",
+            Self::Dot => "●",
+            Self::Square => "▪",
+            Self::LargeSquare => "■",
+        }
+    }
+}
+
+/// G-143 — the indicator configuration (`tabs.indicators` plus the
+/// `spinner`/`unreadMarker` props with their ref defaults,
+/// session-tabs.tsx:513-527): `numbers` replaces the status glyphs
+/// with the tab ordinal (`sessionTabNumberLabel`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct IndicatorConfig {
+    pub spinner: TabSpinner,
+    pub unread_marker: TabUnreadMarker,
+    pub numbers: bool,
+}
+
+/// `sessionTabNumberLabel` (session-tabs-model.ts:10-12): the 1-based
+/// ordinal label.
+#[must_use]
+pub fn session_tab_number_label(index: usize) -> String {
+    (index + 1).to_string()
+}
+
 /// The busy indicator's frame at `now_ms` — the clockwise dot while
 /// the session works (`spinner().frames[…]` under the `<spinner>`
 /// renderable's 80 ms cadence).
 #[must_use]
 pub fn spinner_frame_at(now_ms: u64) -> char {
-    SPINNER_FRAMES[((now_ms / SPINNER_INTERVAL_MS) % SPINNER_FRAMES.len() as u64) as usize]
+    spinner_frame_with(TabSpinner::Dots, now_ms)
+}
+
+/// G-143 — any style's busy frame at `now_ms` (the same time-derived
+/// index math G-49a pinned for dots).
+#[must_use]
+pub fn spinner_frame_with(style: TabSpinner, now_ms: u64) -> char {
+    let frames = style.frames();
+    frames[((now_ms / style.interval_ms()) % frames.len() as u64) as usize]
 }
 /// `NEW_SESSION_TAB_TITLE`.
 pub const NEW_SESSION_TAB_TITLE: &str = "New session";
@@ -109,6 +195,27 @@ impl TabStatus {
             None if self.runs() => SPINNER_FRAME_0,
             None if self.unread.is_some() => UNREAD_MARKER,
             None => "",
+        }
+    }
+
+    /// G-143 — the full `TabIndicator.label` (session-tabs.tsx:173-184)
+    /// over the indicator config: numbers mode returns the ordinal,
+    /// busy rows the configured spinner's frame 0 (the animated path
+    /// advances via [`spinner_frame_with`]), unread rows the
+    /// configured marker.
+    #[must_use]
+    pub fn indicator_label_with(self, config: IndicatorConfig, number: &str) -> String {
+        if config.numbers {
+            return number.to_owned();
+        }
+        match self.attention {
+            Some(Attention::Permission) => "!".to_owned(),
+            Some(Attention::Question) => "?".to_owned(),
+            None if self.runs() => {
+                config.spinner.frames()[0].to_string()
+            }
+            None if self.unread.is_some() => config.unread_marker.glyph().to_owned(),
+            None => String::new(),
         }
     }
 }

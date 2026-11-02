@@ -24,6 +24,142 @@
 use crate::keymap::KeyStroke;
 use crate::render::{Cell, CellColor, Frame};
 
+// -- G-141: the theme palette injection (terminal-pane.tsx:338-385) ---------
+
+/// `rgbToOklch` (theme/tui/color.ts:25-38): the Oklab→OkLCh
+/// conversion; only the hue/chroma terms the palette matching needs.
+fn rgb_to_oklch(red: f64, green: f64, blue: f64) -> (f64, f64, f64) {
+    let srgb_to_linear = |value: f64| -> f64 {
+        if value <= 0.04045 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let linear_red = srgb_to_linear(red);
+    let linear_green = srgb_to_linear(green);
+    let linear_blue = srgb_to_linear(blue);
+    let l_root = (0.412_221_470_8 * linear_red
+        + 0.536_332_536_3 * linear_green
+        + 0.051_445_992_9 * linear_blue)
+        .cbrt();
+    let m_root = (0.211_903_498_2 * linear_red
+        + 0.680_699_545_1 * linear_green
+        + 0.107_396_956_6 * linear_blue)
+        .cbrt();
+    let s_root = (0.088_302_461_9 * linear_red
+        + 0.281_718_837_6 * linear_green
+        + 0.629_978_700_5 * linear_blue)
+        .cbrt();
+    let lightness = 0.210_454_255_3 * l_root + 0.793_617_785 * m_root - 0.004_072_046_8 * s_root;
+    let a = 1.977_998_495_1 * l_root - 2.428_592_205 * m_root + 0.450_593_709_9 * s_root;
+    let b = 0.025_904_037_1 * l_root + 0.782_771_766_2 * m_root - 0.808_675_766 * s_root;
+    let chroma = (a * a + b * b).sqrt();
+    let angle = f64::atan2(b, a).to_degrees();
+    let hue = if angle < 0.0 { angle + 360.0 } else { angle };
+    (lightness, chroma, hue)
+}
+
+/// `hueDistance` (terminal-pane.tsx:381-383): the circular hue gap.
+fn hue_distance(first: f64, second: f64) -> f64 {
+    let difference = (first - second).abs();
+    difference.min(360.0 - difference)
+}
+
+/// `hex` (terminal-pane.tsx:385-389): `#rrggbb`.
+fn hex(color: oc_theme::color::Rgba) -> String {
+    let [red, green, blue, _] = color.to_ints();
+    format!("#{red:02x}{green:02x}{blue:02x}")
+}
+
+/// `terminalHue` (terminal-pane.tsx:370-379): the hue scale whose
+/// 200-step sits nearest the target OkLCh hue (chroma ≥ 0.03, alpha
+/// > 0), else the accent 200 fallback; matches beyond 30° also fall
+/// back.
+fn terminal_hue(theme: &oc_theme::types::ResolvedThemeTokens, target: f64) -> oc_theme::color::Rgba {
+    let mut nearest: Option<(f64, oc_theme::color::Rgba)> = None;
+    for scale in theme.hue.values() {
+        let color = scale.s200;
+        let [red, green, blue, alpha] = color.to_ints();
+        let (_, chroma, hue) =
+            rgb_to_oklch(f64::from(red) / 255.0, f64::from(green) / 255.0, f64::from(blue) / 255.0);
+        if f64::from(alpha) <= 0.0 || chroma < 0.03 {
+            continue;
+        }
+        let distance = hue_distance(hue, target);
+        if nearest.is_none_or(|(best, _)| distance < best) {
+            nearest = Some((distance, color));
+        }
+    }
+    match nearest {
+        Some((distance, color)) if distance <= 30.0 => color,
+        _ => theme.semantic(oc_theme::types::SemanticHue::Accent).s200,
+    }
+}
+
+/// G-141 — `terminalPalette` (terminal-pane.tsx:338-366): the active
+/// theme's 16-color palette + fg/bg as OSC 4/10/11 bytes. The ref
+/// writes these into the pane's terminal so the embedded VT renders
+/// SGR colors through the theme; the port sends them INTO the PTY on
+/// attach (the shell and its programs pick the palette up), a
+/// documented bounded deviation — the port's pane paints cell colors
+/// from the checkpoint grid, so the OSC bytes ride the input stream
+/// instead of the local VT parser.
+#[must_use]
+pub fn terminal_palette(
+    theme: &oc_theme::types::ResolvedThemeTokens,
+    mode: oc_theme::types::Mode,
+    background: oc_theme::color::Rgba,
+) -> Vec<u8> {
+    let dark = mode == oc_theme::types::Mode::Dark;
+    let black = if dark {
+        theme.semantic(oc_theme::types::SemanticHue::Neutral).s800
+    } else {
+        theme.semantic(oc_theme::types::SemanticHue::Neutral).s200
+    };
+    let white = if dark {
+        theme.semantic(oc_theme::types::SemanticHue::Neutral).s200
+    } else {
+        theme.semantic(oc_theme::types::SemanticHue::Neutral).s800
+    };
+    let bright_white = if dark {
+        theme.semantic(oc_theme::types::SemanticHue::Neutral).s100
+    } else {
+        theme.semantic(oc_theme::types::SemanticHue::Neutral).s900
+    };
+    // Pure blue/magenta hues matched against the theme's hue scales.
+    let blue = terminal_hue(theme, rgb_to_oklch(0.0, 0.0, 1.0).2);
+    let magenta = terminal_hue(theme, rgb_to_oklch(1.0, 0.0, 1.0).2);
+    let normal = [
+        theme.text.feedback.error.base,
+        theme.text.feedback.success.base,
+        theme.text.feedback.warning.base,
+        blue,
+        magenta,
+        theme.text.feedback.info.base,
+        white,
+    ];
+    let mut colors: Vec<oc_theme::color::Rgba> = Vec::with_capacity(16);
+    colors.push(black);
+    colors.extend_from_slice(&normal);
+    colors.push(theme.text.muted);
+    // `normal.slice(0, -1).map(decrease)` + brightWhite fills 16.
+    for color in &normal[..normal.len() - 1] {
+        colors.push(theme.decrease(*color, 1.0));
+    }
+    colors.push(bright_white);
+    let mut bytes = Vec::new();
+    for (index, color) in colors.iter().enumerate() {
+        bytes.extend_from_slice(
+            format!("\x1b]4;{index};{}\x1b\\", hex(*color)).as_bytes(),
+        );
+    }
+    bytes.extend_from_slice(format!("\x1b]10;{}\x1b\\", hex(theme.text.base)).as_bytes());
+    bytes.extend_from_slice(format!("\x1b]11;{}\x1b\\", hex(background)).as_bytes());
+    bytes
+}
+
+
 /// The input frame's HAS-INPUT flag value (kind 1 = input; kind 0 =
 /// a pure resize control, §3).
 pub const FRAME_INPUT: u8 = 1;
@@ -465,4 +601,23 @@ mod tests {
         assert_eq!(resize_frame.map(|frame| frame[0]), Some(FRAME_CONTROL), "a new size re-sends");
         assert!(pane.interact().is_none(), "the re-sent control is once per size");
     }
+}
+
+/// G-141 — the live palette snapshot (the loop refreshes it when the
+/// theme name/mode changes; `attach_terminal` injects it on attach).
+/// Bounded deviation: the ref recomputes inside the pane's createEffect
+/// on token changes (terminal-pane.tsx:157-160) — the port's attach
+/// task has no store access, so the loop-stage snapshot carries it.
+pub fn set_theme_palette(bytes: Vec<u8>) {
+    THEME_PALETTE.with_borrow_mut(|slot| *slot = bytes);
+}
+
+/// The staged palette (empty until the first theme resolves).
+#[must_use]
+pub fn theme_palette() -> Vec<u8> {
+    THEME_PALETTE.with_borrow(|slot| slot.clone())
+}
+
+thread_local! {
+    static THEME_PALETTE: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
 }

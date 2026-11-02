@@ -280,7 +280,7 @@ pub fn open_menu_props(store: &Store) -> SelectProps {
     let open_tabs: std::collections::HashSet<String> =
         store.tabs().tabs.iter().map(|tab| tab.session_id.clone()).collect();
     let current_session = match store.route() {
-        crate::store::Route::Session { session_id } => Some(session_id),
+        crate::store::Route::Session { session_id, .. } => Some(session_id),
         crate::store::Route::Home => None,
     };
 

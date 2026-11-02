@@ -75,6 +75,26 @@ pub fn recent_models(
     out
 }
 
+/// `favoriteModels` (`model-preference.ts:62-65`): dedup out, then
+/// front-insert when enabling.
+#[must_use]
+pub fn favorite_models(
+    model: &ModelPreferenceModel,
+    favorite: &[ModelPreferenceModel],
+    enabled: bool,
+) -> Vec<ModelPreferenceModel> {
+    let current: Vec<ModelPreferenceModel> = favorite
+        .iter()
+        .filter(|item| model_preference_key(item) != model_preference_key(model))
+        .cloned()
+        .collect();
+    if enabled {
+        std::iter::once(model.clone()).chain(current).collect()
+    } else {
+        current
+    }
+}
+
 /// `decodeModelPreference` (`model-preference.ts:82-90`): tolerant
 /// decode — malformed fields decode to empty.
 #[must_use]
@@ -186,6 +206,15 @@ impl ModelPreferenceRepository {
     pub fn add_recent(&self, model: &ModelPreferenceModel) {
         let mut document = self.read();
         document.recent = recent_models(model, &document.recent);
+        self.write(&document);
+    }
+
+    /// `setFavorite` (`model-preference.ts:148-150`): replace the
+    /// favorite list through `favoriteModels` (dedup + front-insert
+    /// when enabling) and persist.
+    pub fn set_favorite(&self, model: &ModelPreferenceModel, enabled: bool) {
+        let mut document = self.read();
+        document.favorite = favorite_models(model, &document.favorite, enabled);
         self.write(&document);
     }
 }

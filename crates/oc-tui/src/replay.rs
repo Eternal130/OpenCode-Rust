@@ -143,7 +143,7 @@ pub fn run_script(script: &ReplayScript, size: (u16, u16)) -> Result<(), String>
         if let Some((kind, session)) = &step.expect_route {
             let got = match pump.store.route() {
                 crate::store::Route::Home => "home".to_owned(),
-                crate::store::Route::Session { session_id } => {
+                crate::store::Route::Session { session_id, .. } => {
                     if Some(&session_id) == session.as_ref() || session.is_none() {
                         "session".to_owned()
                     } else {
@@ -342,13 +342,13 @@ mod tests {
         pump.press("ctrl+tab");
         assert_eq!(
             pump.store.route(),
-            crate::store::Route::Session { session_id: "ses_b".to_owned() },
+            crate::store::Route::session("ses_b".to_owned()),
             "ctrl+tab cycles with a draft present"
         );
         pump.press("ctrl+1");
         assert_eq!(
             pump.store.route(),
-            crate::store::Route::Session { session_id: "ses_a".to_owned() },
+            crate::store::Route::session("ses_a".to_owned()),
             "ctrl+1 quick slot with a draft present"
         );
         // D-02: leader continuations DISPATCH while text exists — the
@@ -358,7 +358,7 @@ mod tests {
         pump.press("2");
         assert_eq!(
             pump.store.route(),
-            crate::store::Route::Session { session_id: "ses_b".to_owned() },
+            crate::store::Route::session("ses_b".to_owned()),
             "leader+2 quick slot with a draft present"
         );
         assert_eq!(
@@ -371,7 +371,7 @@ mod tests {
         pump.press("2");
         assert_eq!(
             pump.store.route(),
-            crate::store::Route::Session { session_id: "ses_b".to_owned() },
+            crate::store::Route::session("ses_b".to_owned()),
             "leader+2 quick slot on the empty prompt"
         );
         pump.press("ctrl+x");

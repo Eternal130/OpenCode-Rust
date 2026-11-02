@@ -620,7 +620,7 @@ pub fn assistant_footer_row(
     theme: &ThemeStyles,
     width: usize,
 ) -> RowRender {
-    assistant_footer_row_ext(agent, model, duration_ms, tps, error, false, theme, width)
+    assistant_footer_row_ext(agent, model, duration_ms, tps, error, false, theme, width, None, 0)
 }
 
 /// [`assistant_footer_row`] with the interrupted variant
@@ -639,6 +639,8 @@ pub fn assistant_footer_row_ext(
     interrupted: bool,
     theme: &ThemeStyles,
     width: usize,
+    retry: Option<&crate::components::message::model::AssistantRetry>,
+    now_ms: u64,
 ) -> RowRender {
     let agent_color = theme.agent_color(0);
     let muted = theme.text_muted;
@@ -682,6 +684,26 @@ pub fn assistant_footer_row_ext(
         })
         .collect();
     let footer = RowRender { placed, fills: Vec::new(), height: 1, images: Vec::new() };
+    // G-140① — the retry footer (index.tsx:1875-1881 +
+    // AssistantRetry, :2344-2365): a scheduled retry renders the
+    // countdown row (`⚠ Retrying in Ns · attempt N · {error}` in the
+    // warning color) and SUPPRESSES the error row
+    // (`props.message.error && !interrupted() && !props.message.
+    // retry`).
+    if let Some(retry) = retry {
+        let seconds_left = retry.at.saturating_sub(now_ms) / 1000;
+        let countdown = if seconds_left > 0 {
+            format!("Retrying in {seconds_left}s")
+        } else {
+            "Retry due".to_owned()
+        };
+        let retry_row = retry_footer_row(
+            &format!("⚠ {countdown} · attempt {} · {}", retry.attempt, retry.error),
+            theme,
+            width,
+        );
+        return stack_rows(retry_row, footer.offset_y(1));
+    }
     // The error row renders only for NON-interrupted errors
     // (`props.message.error && !interrupted() && !props.message.retry`,
     // index.tsx:1875-1878).
@@ -693,6 +715,28 @@ pub fn assistant_footer_row_ext(
         }
         _ => footer,
     }
+}
+
+/// G-140① — the `⚠ Retrying in Ns …` row (`AssistantRetry`,
+/// index.tsx:2344-2365): `paddingLeft 3`,
+/// `text.feedback.warning.base` foreground.
+#[must_use]
+pub fn retry_footer_row(label: &str, theme: &ThemeStyles, width: usize) -> RowRender {
+    let style = Style::new().fg(theme.warning).bg(theme.background);
+    let label_width = width.saturating_sub(ROW_PADDING_LEFT);
+    let atoms = crate::wrap::flatten_spans(&[StyledSpan { text: label.to_owned(), style, link: None }]);
+    let placed = wrap_atoms(&atoms, label_width)
+        .into_iter()
+        .enumerate()
+        .map(|(line, atoms)| Placed {
+            x: ROW_PADDING_LEFT,
+            y: line,
+            width: label_width,
+            lines: vec![PlacedLine { runs: crate::wrap::styled_runs(&atoms) }],
+            tag: None,
+        })
+        .collect();
+    RowRender { placed, fills: Vec::new(), height: 1, images: Vec::new() }
 }
 
 /// The `Error: {message}` row (`AssistantFooter`'s error block):
@@ -1520,6 +1564,8 @@ mod tests {
             true,
             &theme,
             76,
+            None,
+            0,
         );
         assert_eq!(row.height, 1, "no error row, no blank");
         let frame = crate::render::paint_placed(
