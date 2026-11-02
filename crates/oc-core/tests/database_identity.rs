@@ -88,15 +88,8 @@ async fn project_id_sha1() {
     let plain = tempdir("d1-plain");
     let markerless = resolver.resolve(plain.path()).await;
     let expected = {
-        use sha1::Digest as _;
         let input = format!("directory:{}", resolve_path(plain.path()).display());
-        let digest = sha1::Sha1::digest(input.as_bytes());
-        let mut out = String::with_capacity(40);
-        for byte in digest {
-            use std::fmt::Write as _;
-            let _ = write!(out, "{byte:02x}");
-        }
-        out
+        oc_util::hash::sha1_hex(input)
     };
     assert_eq!(markerless.id.len(), 40);
     assert_eq!(markerless.id, expected, "markerless identity must be sha1(directory:<abs>)");

@@ -8,7 +8,6 @@ use std::path::PathBuf;
 
 use oc_server::lifecycle::{self, EnsureOptions, StopOptions};
 use serde::{Deserialize, Serialize};
-use sha1::Digest as _;
 
 use crate::util;
 
@@ -48,17 +47,6 @@ pub fn filename(channel: &str) -> String {
     }
 }
 
-/// Lowercase hex of a digest.
-fn hex_lower(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        out.push(HEX[(byte >> 4) as usize] as char);
-        out.push(HEX[(byte & 0xf) as usize] as char);
-    }
-    out
-}
-
 /// `ServiceConfig.defaultPort(channel)` (`Hash.fast` = sha1 hex).
 #[must_use]
 pub fn default_port(channel: &str) -> u16 {
@@ -66,7 +54,7 @@ pub fn default_port(channel: &str) -> u16 {
         "latest" | "dev" | "beta" | "next" => 0xc0de,
         "local" => 0xc0df,
         other => {
-            let digest = hex_lower(&sha1::Sha1::digest(other.as_bytes()));
+            let digest = oc_util::hash::sha1_hex(other);
             let prefix = u64::from_str_radix(&digest[..8], 16).unwrap_or(0);
             u16::try_from(10_000 + (prefix % 50_000)).unwrap_or(0xc0de)
         }
@@ -92,7 +80,7 @@ pub fn legacy_filename(channel: &str) -> Option<String> {
     if channel == "latest" || channel == "local" {
         return None;
     }
-    Some(format!("service-{}.json", hex_lower(&sha1::Sha1::digest(channel.as_bytes()))))
+    Some(format!("service-{}.json", oc_util::hash::sha1_hex(channel)))
 }
 
 /// `ServiceConfig.versionBelongsToChannel`.

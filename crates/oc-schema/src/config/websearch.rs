@@ -47,12 +47,58 @@ impl schemars::JsonSchema for WebSearchProvider {
     }
 }
 
-/// `ConfigWebSearch.Selection` — `false | Info`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(untagged)]
+/// `ConfigWebSearch.Selection` — `false | Info` (ref websearch.ts:16
+/// `Schema.Union([Schema.Literal(false), Info])`; `true` is a schema
+/// error, G-160①).
+#[derive(Debug, Clone, PartialEq)]
 pub enum WebSearchSelection {
-    Disabled(bool),
+    Disabled,
     Info(Info),
+}
+
+impl Serialize for WebSearchSelection {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            WebSearchSelection::Disabled => serializer.serialize_bool(false),
+            WebSearchSelection::Info(info) => info.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for WebSearchSelection {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        if value == serde_json::Value::Bool(false) {
+            return Ok(WebSearchSelection::Disabled);
+        }
+        if value.is_object() {
+            if let Ok(info) = serde_json::from_value::<Info>(value) {
+                return Ok(WebSearchSelection::Info(info));
+            }
+        }
+        Err(serde::de::Error::custom(
+            "invalid `websearch` value: expected a websearch config object or the literal `false`",
+        ))
+    }
+}
+
+impl schemars::JsonSchema for WebSearchSelection {
+    fn schema_name() -> String {
+        "ConfigWebSearch.Selection".to_string()
+    }
+
+    fn json_schema(gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
+        use schemars::schema::{InstanceType, Schema, SchemaObject, SubschemaValidation};
+        let info: Schema = gen.subschema_for::<Info>().into();
+        let literal_false = Schema::Object(SchemaObject {
+            instance_type: Some(InstanceType::Boolean.into()),
+            ..Default::default()
+        });
+        Schema::Object(SchemaObject {
+            subschemas: Some(Box::new(SubschemaValidation { one_of: Some(vec![info, literal_false]), ..Default::default() })),
+            ..Default::default()
+        })
+    }
 }
 
 #[cfg(test)]
@@ -76,6 +122,13 @@ mod tests {
         assert!(matches!(selection, WebSearchSelection::Info(_)));
         let disabled: WebSearchSelection =
             serde_json::from_value(serde_json::json!(false)).unwrap();
-        assert_eq!(disabled, WebSearchSelection::Disabled(false));
+        assert_eq!(disabled, WebSearchSelection::Disabled);
+    }
+
+    /// G-160①: `true` is a schema error (ref union only admits literal `false`).
+    #[test]
+    fn selection_rejects_true() {
+        let err = serde_json::from_value::<WebSearchSelection>(serde_json::json!(true)).unwrap_err();
+        assert!(err.to_string().contains("literal `false`"), "unexpected error: {err}");
     }
 }

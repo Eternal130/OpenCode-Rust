@@ -463,7 +463,7 @@ async fn auth(name: Option<&str>) -> i32 {
         eprintln!("Error: MCP server \"{name}\" is not an OAuth-capable remote server");
         return 1;
     };
-    if config.oauth == Some(oc_schema::mcp::OAuthValue::Disabled(false)) {
+    if config.oauth == Some(oc_schema::mcp::OAuthValue::Disabled) {
         eprintln!("Error: MCP server \"{name}\" is not an OAuth-capable remote server");
         return 1;
     }

@@ -67,24 +67,12 @@ pub fn random_password() -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 
-/// Lowercase hex of a digest (no `format!`-per-byte allocations).
-#[must_use]
-fn hex_lower(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        out.push(HEX[(byte >> 4) as usize] as char);
-        out.push(HEX[(byte & 0xf) as usize] as char);
-    }
-    out
-}
-
 /// `Hash.fast` (util/hash.ts): sha1 hex.
 #[must_use]
 #[allow(dead_code)]
 pub fn hash_fast(input: &str) -> String {
-    use sha1::Digest as _;
-    hex_lower(&sha1::Sha1::digest(input.as_bytes()))
+    // G-162②: unified `Hash.fast` in oc-util (sha1 hex).
+    oc_util::hash::sha1_hex(input)
 }
 
 /// Whether stdout is a TTY (cheaper than pulling a crate: `isatty(1)`).

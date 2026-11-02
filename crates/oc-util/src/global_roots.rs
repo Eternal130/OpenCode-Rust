@@ -152,8 +152,12 @@ impl Roots {
     }
 
     /// Creates every global directory opencode expects to exist, mirroring the
-    /// acquisition step in `packages/util/src/global.ts`.
-    pub fn ensure(&self) -> io::Result<()> {
+    /// acquisition step in `packages/util/src/global.ts` — including the tmp
+    /// realpath canonicalization (ref global.ts:92-93: `fs.realpath(tmp)`
+    /// after mkdir, so macOS `/tmp` → `/private/tmp` comparisons match).
+    /// Returns the roots with the canonicalized `tmp` (G-161②; falls back to
+    /// the unresolved path when canonicalization fails).
+    pub fn ensure(&self) -> io::Result<Roots> {
         for dir in [
             &self.data,
             &self.config,
@@ -166,7 +170,8 @@ impl Roots {
         ] {
             fs::create_dir_all(dir)?;
         }
-        Ok(())
+        let tmp = fs::canonicalize(&self.tmp).unwrap_or_else(|_| self.tmp.clone());
+        Ok(Roots { tmp, ..self.clone() })
     }
 }
 
@@ -394,7 +399,7 @@ mod tests {
         env.set("HOME", home.path().to_str().unwrap());
         env.set("TMPDIR", home.path().join("tmp").to_str().unwrap());
         let roots = resolve();
-        roots.ensure().unwrap();
+        let roots = roots.ensure().unwrap();
         let log = roots.log();
         let repos = roots.repos();
         let snapshot = roots.snapshot();
@@ -404,5 +409,21 @@ mod tests {
         {
             assert!(dir.is_dir(), "{} should exist", dir.display());
         }
+    }
+
+    /// G-161②: `ensure` returns the canonicalized tmp root (ref global.ts
+    /// realpath), so symlinked temp dirs compare equal after acquisition.
+    #[test]
+    fn ensure_canonicalizes_tmp() {
+        let env = Env::lock();
+        let home = tempfile::tempdir().unwrap();
+        env.set("HOME", home.path().to_str().unwrap());
+        let real = tempfile::tempdir().unwrap();
+        let link = home.path().join("tmp-link");
+        std::os::unix::fs::symlink(real.path(), &link).unwrap();
+        env.set("TMPDIR", link.to_str().unwrap());
+        let roots = resolve().ensure().unwrap();
+        assert_eq!(roots.tmp, real.path().join(APP_NAME));
+        drop(env);
     }
 }

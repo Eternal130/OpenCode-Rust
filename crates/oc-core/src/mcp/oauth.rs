@@ -676,7 +676,7 @@ fn oauth_config(config: &RemoteConfig) -> Option<OAuthConfig> {
     match &config.oauth {
         None => Some(OAuthConfig::default()),
         Some(SchemaOAuthValue::Config(config)) => Some(config.clone()),
-        Some(SchemaOAuthValue::Disabled(_)) => None,
+        Some(SchemaOAuthValue::Disabled) => None,
     }
 }
 
