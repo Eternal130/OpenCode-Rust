@@ -21,7 +21,7 @@
 //!
 //! G-11 paste-decode note: `opentui_core::paste` (`decode_paste_bytes` /
 //! `strip_ansi`) is deliberately NOT adopted here — oc-tui receives
-//! already-decoded `crossterm::event::Event::Paste` strings (no raw
+//! already-decoded paste strings off the input pipeline (no raw
 //! paste bytes to decode), and `strip_ansi_sequences` would newly strip
 //! escape bytes from pasted text (behavior change for e.g. pasted
 //! terminal transcripts). Not behavior-neutral ⇒ skipped.

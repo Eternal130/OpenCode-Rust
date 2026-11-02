@@ -38,26 +38,26 @@
 
 use std::io::Write;
 
-/// The kitty keyboard capability query (boot; the answer surfaces as
-/// `Event::KeyboardEnhancementFlags`).
-pub const KITTY_QUERY: &[u8] = b"\x1b[?u";
-/// The push (flags 5 = `DISAMBIGUATE_ESCAPE_CODES` |
-/// `REPORT_ALTERNATE_KEYS` — v2's `CSI > 5u`, auditC §1.1).
+/// The kitty keyboard push (flags 5 = `DISAMBIGUATE_ESCAPE_CODES` |
+/// `REPORT_ALTERNATE_KEYS` — v2's `CSI > 5u`, auditC §1.1). Post-setup
+/// and probe-gated in lane B3a: opentui's `SetupOptions` owns the
+/// setup burst, this push fires only when the capability probe
+/// answers `CSI ? u` (the opentui-uncovered half, see the lane
+/// inventory).
 pub const KITTY_PUSH: &[u8] = b"\x1b[>5u";
 /// The pop (exit — one level).
 pub const KITTY_POP: &[u8] = b"\x1b[<u";
-/// The theme-flip subscriptions: `?2027h` color-scheme reports +
-/// `?2031h` mode reports (v2 boot, auditC P6/TM-2).
-pub const THEME_SUBSCRIPTIONS: &[u8] = b"\x1b[?2027h\x1b[?2031h";
-/// DECSCUSR reset (teardown).
-pub const CURSOR_RESET: &[u8] = b"\x1b[0 q";
 /// The kitty graphics delete-all (teardown — auditC P13's promised
-/// but never-emitted `a=d,d=a`).
+/// but never-emitted `a=d,d=a`; opentui's epilogue does not own the
+/// graphics family).
 pub const KITTY_GRAPHICS_DELETE_ALL: &[u8] = b"\x1b_Ga=d,d=a\x1b\\";
-/// Bracketed paste + focus reporting — the pair the editor suspend
-/// must pop before `$EDITOR` and re-push after (auditC P12).
-pub const PASTE_FOCUS_OFF: &[u8] = b"\x1b[?2004l\x1b[?1004l";
-pub const PASTE_FOCUS_ON: &[u8] = b"\x1b[?2004h\x1b[?1004h";
+/// The live mouse-flip enable set (lane B3a): EXACTLY v2's four-mode
+/// set in v2's order. opentui's `SetupOptions` arms mouse at
+/// `Terminal::new` only — a live config flip stays oc-tui's.
+pub const MOUSE_ENABLE: &[u8] = b"\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h";
+/// The symmetric disable set (a live `mouse: false` flip, and the
+/// teardown pop for a flip-on after a `mouse: false` setup).
+pub const MOUSE_DISABLE: &[u8] = b"\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l";
 
 /// The `cursor.style` doc's shape (config/index.tsx:263-266).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -225,8 +225,16 @@ pub fn install_crash_restore(mouse: bool) {
         // broken frame; the shell must come back regardless), then
         // chain to the previous hook (the stderr guard's report) —
         // but only when THIS thread owns the terminal.
+        //
+        // Lane B3a: the restore is the LIVE session Terminal's own
+        // teardown (opentui's epilogue from live state — raw mode,
+        // mode pops under their gates), NOT the stock opentui
+        // `install_panic_hook` (which fires on every thread's panic,
+        // tearing the terminal out from under caught worker panics)
+        // and not a second static-byte registration: no double
+        // coverage with the signal path below.
         if current_thread_key() == TERMINAL_THREAD.load(std::sync::atomic::Ordering::Relaxed) {
-            emit(crash_restore_sequence());
+            crate::app::panic_teardown_session();
         }
         previous(info);
     }));
@@ -284,9 +292,8 @@ pub fn clipboard_read_osc52() -> Option<Vec<u8>> {
     if !std::io::stdout().is_terminal() || !std::io::stdin().is_terminal() {
         return None;
     }
-    // Raw ON for the window (probe discipline: idempotent when the
-    // loop already holds it; restored below).
-    let _ = crossterm::terminal::enable_raw_mode();
+    // The run loop already holds raw mode when this arm runs (the
+    // opentui session Terminal); the window just polls and reads.
     let answer = (|| {
         {
             let mut stdout = std::io::stdout().lock();
@@ -324,7 +331,6 @@ pub fn clipboard_read_osc52() -> Option<Vec<u8>> {
         }
         parse_osc52_reply(&collected)
     })();
-    let _ = crossterm::terminal::disable_raw_mode();
     answer
 }
 
@@ -379,14 +385,11 @@ mod tests {
     /// Byte-exact sequences (the wire assertions).
     #[test]
     fn protocol_sequences_are_byte_exact() {
-        assert_eq!(KITTY_QUERY, b"\x1b[?u");
         assert_eq!(KITTY_PUSH, b"\x1b[>5u");
         assert_eq!(KITTY_POP, b"\x1b[<u");
-        assert_eq!(THEME_SUBSCRIPTIONS, b"\x1b[?2027h\x1b[?2031h");
-        assert_eq!(CURSOR_RESET, b"\x1b[0 q");
         assert_eq!(KITTY_GRAPHICS_DELETE_ALL, b"\x1b_Ga=d,d=a\x1b\\");
-        assert_eq!(PASTE_FOCUS_OFF, b"\x1b[?2004l\x1b[?1004l");
-        assert_eq!(PASTE_FOCUS_ON, b"\x1b[?2004h\x1b[?1004h");
+        assert_eq!(MOUSE_ENABLE, b"\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h");
+        assert_eq!(MOUSE_DISABLE, b"\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l");
     }
 
     /// DECSCUSR selectors: the style × blink matrix (kitty/XTerm

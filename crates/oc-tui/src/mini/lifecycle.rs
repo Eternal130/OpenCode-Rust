@@ -802,6 +802,11 @@ enum PendingRows {
 #[allow(clippy::struct_excessive_bools)] // the renderer flag set mirrors the reference
 pub struct Lifecycle {
     terminal: Terminal<CrosstermBackend<std::io::Stdout>>,
+    /// Lane B3a — the raw-mode owner (opentui's UnixTty; the split
+    /// footer never enters the alt screen, so a bare termios save is
+    /// all the "session" mini needs).
+    tty: Option<opentui_core::terminal::UnixTty>,
+    termios_save: Option<opentui_core::terminal::TermiosSave>,
     pub pane: FooterPane,
     pending: Vec<PendingRows>,
     /// The last committed transcript row (separator decisions).
@@ -841,7 +846,11 @@ impl Lifecycle {
     /// `runtime.lifecycle.ts:152-205`): raw mode + the inline footer
     /// viewport, entry splash, first footer paint.
     pub fn boot(input: LifecycleInput) -> Result<Self, String> {
-        crossterm::terminal::enable_raw_mode().map_err(|error| error.to_string())?;
+        // Lane B3a: raw mode through opentui's tty device (the
+        // crossterm raw-mode toggle retired with the migration).
+        use opentui_core::terminal::TtyDevice as _;
+        let mut tty = opentui_core::terminal::UnixTty::new().map_err(|error| error.to_string())?;
+        let termios_save = tty.raw_mode().map_err(|error| error.to_string())?;
         // Split-footer mode never enters the alternate screen — the
         // conversation owns the native scrollback; only the footer
         // pane is live-rendered.
@@ -870,6 +879,8 @@ impl Lifecycle {
         pane.mono = input.mono;
         let mut lifecycle = Self {
             terminal,
+            tty: Some(tty),
+            termios_save: Some(termios_save),
             pane,
             pending: Vec::new(),
             last_commit: None,
@@ -1127,7 +1138,13 @@ impl Lifecycle {
         // split-footer mode before final output so pending writes pass
         // through to the real scrollback. `clearOnShutdown: false`
         // (`runtime.lifecycle.ts:172`) — the last footer frame stays.
-        let _ = crossterm::terminal::disable_raw_mode();
+        // Lane B3a: restore cooked mode through the tty device.
+        if let Some(save) = self.termios_save.take() {
+            if let Some(tty) = self.tty.as_mut() {
+                use opentui_core::terminal::TtyDevice as _;
+                let _ = tty.restore(&save);
+            }
+        }
         if !wrote_exit {
             // `host.stdout.write("\n")` (`runtime.lifecycle.ts:339-341`).
             let _ = std::io::stdout().write_all(b"\n");

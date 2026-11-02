@@ -161,8 +161,9 @@ pub struct TuiConfig {
     pub session_sidebar: crate::components::sidebar::SidebarMode,
     /// `mouse` (config/index.tsx:247, default true at :311): the
     /// terminal mouse-capture gate — `false` keeps the terminal's
-    /// native text selection (v2's documented opt-out; see
-    /// `crate::mouse_modes`).
+    /// native text selection (v2's documented opt-out; the gate arms
+    /// the session Terminal's `SetupOptions` at boot, the live flip
+    /// writes `crate::terminal_proto`'s mouse bytes).
     pub mouse: bool,
     /// `session.permissions` (config/index.tsx:176 — CONFIG-T1's read
     /// side): `autoaccept` arms the permission auto-answer at boot

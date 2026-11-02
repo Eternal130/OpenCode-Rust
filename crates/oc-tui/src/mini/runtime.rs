@@ -12,8 +12,9 @@
 //! 4. runs the prompt queue until the footer closes.
 //!
 //! The v2 runtime is an effect graph over abortable promises; the Rust
-//! port drives the same seams from one tick loop (crossterm poll →
-//! footer keys; SSE channel → transport folds; queue → prompt turns),
+//! port drives the same seams from one tick loop (the opentui input
+//! pipeline → footer keys; SSE channel → transport folds; queue →
+//! prompt turns),
 //! mirroring [`crate::app`]'s live loop. Turns are serial: `run`
 //! waits for the active execution to settle (`settle` →
 //! `waitForIdle`, `runtime.ts:929-932`) before the queue drains the
@@ -35,7 +36,7 @@ use super::queue::{PromptQueue, QueueAction, RunPrompt};
 use super::scrollback::{Commit, CommitKind, Phase};
 use super::transport::{self, Fold, TransportState};
 
-/// The prompt-loop poll tick (`app.rs`'s 100 ms crossterm poll).
+/// The prompt-loop poll tick (`app.rs`'s 100 ms tick).
 const TICK: Duration = Duration::from_millis(100);
 
 /// How long a turn may run before the queue drains anyway (the
@@ -254,6 +255,7 @@ pub async fn run(input: MiniInput) -> Result<i32, String> {
 
     let mut runtime = Runtime {
         lifecycle,
+        keys: crate::input_term::KeyPipeline::new(),
         client,
         session_id: session_id.clone(),
         session_title: input.target.session_title.clone(),
@@ -303,6 +305,9 @@ pub async fn run(input: MiniInput) -> Result<i32, String> {
 /// `runtime.ts:115-134`).
 struct Runtime {
     lifecycle: Lifecycle,
+    /// Lane B3a — the footer key pipeline (opentui parse; replaces the
+    /// crossterm poll/read pair).
+    keys: crate::input_term::KeyPipeline,
     client: Client,
     session_id: String,
     session_title: Option<String>,
@@ -332,15 +337,13 @@ struct Runtime {
 }
 
 impl Runtime {
-    /// Poll crossterm and route footer keys (`RunFooter`'s input
-    /// layer).
+    /// Drain the tty's pending bytes and route footer keys
+    /// (`RunFooter`'s input layer; lane B3a — the opentui parse
+    /// pipeline replaces the crossterm poll/read pair).
     async fn pump_keys(&mut self) {
-        while crossterm::event::poll(Duration::from_millis(0)).unwrap_or(false) {
-            let Ok(crossterm::event::Event::Key(key)) = crossterm::event::read() else { continue };
-            if key.kind == crossterm::event::KeyEventKind::Release {
-                continue;
-            }
-            let Some(footer_key) = map_key(&key) else { continue };
+        for event in self.keys.process(&read_footer_input()) {
+            let crate::input_term::TermEvent::Key(spec) = event else { continue };
+            let Some(footer_key) = footer_key_from_spec(&spec) else { continue };
             for effect in self.lifecycle.pane.press(footer_key) {
                 self.apply_effect(effect).await;
             }
@@ -759,26 +762,45 @@ fn replay_message_commits(
     commits
 }
 
-/// Map a crossterm key into the footer vocabulary.
-fn map_key(key: &crossterm::event::KeyEvent) -> Option<FooterKey> {
-    use crossterm::event::{KeyCode, KeyModifiers};
-    if key.modifiers.contains(KeyModifiers::CONTROL) {
-        return match key.code {
-            KeyCode::Char('c') => Some(FooterKey::CtrlC),
-            _ => None,
-        };
+/// Non-blocking read of whatever landed on fd 0 (the crossterm
+/// `poll(0)` + `read` pair's lane B3a replacement).
+#[allow(unsafe_code)] // FIONREAD/read on fd 0 are libc FFI
+fn read_footer_input() -> Vec<u8> {
+    let mut available: i32 = 0;
+    // SAFETY: FIONREAD on stdin.
+    unsafe { libc::ioctl(0, libc::FIONREAD, std::ptr::from_mut(&mut available)) };
+    if available <= 0 {
+        return Vec::new();
     }
-    match key.code {
-        KeyCode::Enter => Some(FooterKey::Enter),
-        KeyCode::Esc => Some(FooterKey::Escape),
-        KeyCode::Backspace => Some(FooterKey::Backspace),
-        KeyCode::Up => Some(FooterKey::Up),
-        KeyCode::Down => Some(FooterKey::Down),
-        KeyCode::Tab => Some(FooterKey::Tab),
-        KeyCode::PageUp => Some(FooterKey::PageUp),
-        KeyCode::PageDown => Some(FooterKey::PageDown),
-        KeyCode::Char(char) => Some(FooterKey::Printable(char)),
-        _ => None,
+    let mut buffer = vec![0u8; available as usize];
+    // SAFETY: read(2) of at most FIONREAD bytes.
+    let read = unsafe { libc::read(0, buffer.as_mut_ptr().cast::<libc::c_void>(), buffer.len()) };
+    if read <= 0 {
+        return Vec::new();
+    }
+    #[allow(clippy::cast_sign_loss)]
+    buffer.truncate(read as usize);
+    buffer
+}
+
+/// Map a key spec (the shared `input_term` vocabulary) into the
+/// footer's keypress vocabulary — the crossterm `map_key` arm-for-arm.
+fn footer_key_from_spec(spec: &str) -> Option<FooterKey> {
+    match spec {
+        "ctrl+c" => Some(FooterKey::CtrlC),
+        "return" => Some(FooterKey::Enter),
+        "escape" => Some(FooterKey::Escape),
+        "backspace" => Some(FooterKey::Backspace),
+        "up" => Some(FooterKey::Up),
+        "down" => Some(FooterKey::Down),
+        "tab" => Some(FooterKey::Tab),
+        "pageup" => Some(FooterKey::PageUp),
+        "pagedown" => Some(FooterKey::PageDown),
+        _ => {
+            let mut chars = spec.chars();
+            let first = chars.next()?;
+            chars.next().is_none().then_some(FooterKey::Printable(first))
+        }
     }
 }
 

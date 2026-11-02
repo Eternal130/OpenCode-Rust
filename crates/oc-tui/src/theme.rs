@@ -479,6 +479,14 @@ pub fn config_directories(config_root: &Path, cwd: &Path) -> Vec<PathBuf> {
 }
 
 // -- system mode (theme/system.ts terminalMode) -------------------------------
+//
+// Lane B3a — the self-managed probe family RETIRED: the boot queries
+// (OSC 11 background, kitty `CSI ? u`, DA1 attr-4 sixel) and the
+// focus-time OSC 11 re-probe now ride opentui's capability probe
+// (`Terminal::probe_capabilities`) and its theme watch, surfacing as
+// `CliRenderEvent::Capabilities` / `ThemeMode` (see `crate::app`'s
+// input thread and `crate::input_term`). The pure helpers stay: the
+// luma classification is shared vocabulary.
 
 /// System dark/light detection from a terminal background color: the
 /// reference's `terminalMode` luma rule. Pure classification lives in
@@ -488,297 +496,10 @@ pub fn mode_for_background(r: u8, g: u8, b: u8) -> Mode {
     oc_theme::mode_for_background(r, g, b)
 }
 
-/// Detect the system mode: query the terminal background (OSC 11) with
-/// a short timeout and classify its luminance. Falls back to dark —
-/// headless pipes (no TTY), timeouts, and unparseable answers all
-/// resolve dark (`waitForThemeMode`'s default).
-#[must_use]
-pub fn detect_system_mode() -> Mode {
-    query_terminal_background().map_or(Mode::Dark, |(r, g, b)| mode_for_background(r, g, b))
-}
-
-/// Query the terminal's default background color via OSC 11
-/// (`\x1b]11;?\x07`) with a **raw, self-contained read** of the tty
-/// (poll + read on fd 0). The probe runs BEFORE crossterm's event
-/// reader starts (the run loop's input thread calls it first), so it
-/// owns stdin exclusively for its short window; every byte that
-/// arrives inside the window is consumed here — the reply never leaks
-/// into the input stream (a responding terminal's `11;rgb:…` must
-/// never surface as typed text).
-///
-/// `None` when stdin/stdout is not a TTY, the write fails, or no
-/// parsable answer arrives within the timeout (headless pipes, dumb
-/// terminals) — the caller's dark fallback.
-#[must_use]
-pub fn query_terminal_background() -> Option<(u8, u8, u8)> {
-    use std::io::{IsTerminal, Write};
-    use std::time::Duration;
-
-    const PROBE_TIMEOUT: Duration = Duration::from_millis(150);
-
-    if !std::io::stdout().is_terminal() || !std::io::stdin().is_terminal() {
-        return None; // headless: dark fallback
-    }
-    if crossterm::terminal::enable_raw_mode().is_err() {
-        return None;
-    }
-    let answer = (|| {
-        {
-            let mut stdout = std::io::stdout().lock();
-            if stdout.write_all(b"\x1b]11;?\x07").is_err() || stdout.flush().is_err() {
-                return None;
-            }
-        }
-        read_osc11_reply(PROBE_TIMEOUT)
-    })();
-    let _ = crossterm::terminal::disable_raw_mode();
-    answer
-}
-
-/// The live-loop variant of [`query_terminal_background`] (lane TAIL,
-/// auditC P6): the caller ALREADY holds raw mode (the run loop), so
-/// this probes WITHOUT toggling it — the `?997` stand-in's read arm.
-#[must_use]
-pub fn query_terminal_background_in_raw() -> Option<(u8, u8, u8)> {
-    use std::io::{IsTerminal, Write};
-    if !std::io::stdout().is_terminal() || !std::io::stdin().is_terminal() {
-        return None;
-    }
-    {
-        let mut stdout = std::io::stdout().lock();
-        if stdout.write_all(b"\x1b]11;?\x07").is_err() || stdout.flush().is_err() {
-            return None;
-        }
-    }
-    read_osc11_reply(std::time::Duration::from_millis(150))
-}
-
-/// The boot probe's findings: the OSC 11 background (the theme-mode
-/// seed), the kitty keyboard advertisement (the `CSI ? u` query's
-/// answer — crossterm 0.28 has no public event for it, so the answer
-/// is parsed in this same boot window; lane TAIL, auditC P2/TM-1),
-/// and the DA1 (Primary Device Attributes) answer's sixel verdict
-/// (RB-07: `CSI c` → `CSI ? {attrs} c`; attribute `4` among the
-/// reply's `;`-separated parameters means sixel graphics — the
-/// VT240-class convention xterm `-ti vt340` and mlterm report as
-/// e.g. `\x1b[?62;4;6;8;15;22c`; terminals without sixel (kitty:
-/// `\x1b[?62;6;9;15;22c`) omit it). `None` = no DA1 answer inside
-/// the window (the env fallback's case).
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct TerminalProbe {
-    /// The terminal background color (`None` on timeout).
-    pub background: Option<(u8, u8, u8)>,
-    /// The terminal answered the kitty keyboard query (`CSI ? flags u`).
-    pub kitty_keyboard: bool,
-    /// The DA1 answer's sixel verdict (`None` = no DA1 answer).
-    pub da1_sixel: Option<bool>,
-}
-
-/// The combined boot probe: write the OSC 11 background query, the
-/// kitty keyboard capability query, AND the DA1 (`CSI c`) query
-/// together, read ONE 300 ms window, parse all three answers (v2
-/// writes its boot queries together; one window keeps the
-/// keystroke-drop exposure to a single interval).
-#[must_use]
-pub fn probe_terminal() -> TerminalProbe {
-    use std::io::{IsTerminal, Write};
-    use std::time::Duration;
-
-    const PROBE_TIMEOUT: Duration = Duration::from_millis(300);
-
-    if !std::io::stdout().is_terminal() || !std::io::stdin().is_terminal() {
-        return TerminalProbe::default(); // headless: dark fallback, no kitty
-    }
-    if crossterm::terminal::enable_raw_mode().is_err() {
-        return TerminalProbe::default();
-    }
-    let answer = (|| {
-        {
-            let mut stdout = std::io::stdout().lock();
-            let queries = b"\x1b]11;?\x07\x1b[?u\x1b[c";
-            if stdout.write_all(queries).is_err() || stdout.flush().is_err() {
-                return TerminalProbe::default();
-            }
-        }
-        collect_probe_answers(PROBE_TIMEOUT)
-    })();
-    let _ = crossterm::terminal::disable_raw_mode();
-    answer
-}
-
-/// Read the probe window until all answers land or the deadline: the
-/// OSC 11 color (`parse_osc_reply`), the kitty advertisement
-/// (`CSI ? flags u` — any digit run before a `u` after `[?`), and the
-/// DA1 sixel verdict (`parse_da1_sixel` — `CSI ? attrs c`).
-#[allow(unsafe_code)] // poll/read on fd 0 are only reachable through libc FFI
-fn collect_probe_answers(timeout: std::time::Duration) -> TerminalProbe {
-    let deadline = std::time::Instant::now() + timeout;
-    let mut buffer: Vec<u8> = Vec::with_capacity(128);
-    let mut probe = TerminalProbe::default();
-    loop {
-        if probe.background.is_some() && probe.kitty_keyboard && probe.da1_sixel.is_some() {
-            return probe;
-        }
-        let now = std::time::Instant::now();
-        if now >= deadline {
-            return probe;
-        }
-        let mut poll_fd = libc::pollfd { fd: libc::STDIN_FILENO, events: libc::POLLIN, revents: 0 };
-        #[allow(clippy::cast_possible_truncation)]
-        let remaining_ms =
-            i32::try_from((deadline - now).as_millis()).unwrap_or(0).min(i32::MAX - 1) + 1;
-        let ready = unsafe { libc::poll(std::ptr::from_mut(&mut poll_fd), 1, remaining_ms) };
-        if ready <= 0 {
-            return probe; // timeout or poll failure: no answer
-        }
-        let mut chunk = [0u8; 128];
-        let read = unsafe {
-            libc::read(libc::STDIN_FILENO, chunk.as_mut_ptr().cast::<libc::c_void>(), chunk.len())
-        };
-        if read <= 0 {
-            return probe;
-        }
-        #[allow(clippy::cast_sign_loss)]
-        buffer.extend_from_slice(&chunk[..read as usize]);
-        if probe.background.is_none() {
-            probe.background = parse_osc_reply(&buffer);
-        }
-        if !probe.kitty_keyboard {
-            probe.kitty_keyboard = parse_kitty_advertisement(&buffer);
-        }
-        if probe.da1_sixel.is_none() {
-            probe.da1_sixel = parse_da1_sixel(&buffer);
-        }
-        // Overlong garbage never matches: give up rather than spin.
-        if buffer.len() > 512 {
-            return probe;
-        }
-    }
-}
-
-/// The kitty keyboard advertisement: a `CSI ? {flags} u` reply (any
-/// flag bits — the run loop pushes its own flag set, not the reply's).
-fn parse_kitty_advertisement(bytes: &[u8]) -> bool {
-    let mut index = 0;
-    while let Some(at) = bytes[index..].iter().position(|b| *b == b'\x1b') {
-        let start = index + at;
-        let rest = &bytes[start..];
-        if rest.len() >= 3 && rest[1] == b'[' && rest[2] == b'?' {
-            let mut cursor = 3;
-            let mut digits = false;
-            while cursor < rest.len() && rest[cursor].is_ascii_digit() {
-                digits = true;
-                cursor += 1;
-            }
-            if digits && cursor < rest.len() && rest[cursor] == b'u' {
-                return true;
-            }
-        }
-        index = start + 1;
-    }
-    false
-}
-
-/// The DA1 (Primary Device Attributes) sixel verdict: find a
-/// `CSI ? {attrs} c` reply (`ESC [ ?` … `c`) and report whether
-/// attribute `4` (sixel graphics, the VT240-class convention) is
-/// among its `;`-separated top-level parameters. Sub-parameters
-/// (`:`-groups, e.g. `4;` in `27;4:32`) only match on the leading
-/// value. `None` when no complete DA1 reply is in the buffer.
-fn parse_da1_sixel(bytes: &[u8]) -> Option<bool> {
-    let mut index = 0;
-    while let Some(at) = bytes[index..].iter().position(|b| *b == b'\x1b') {
-        let start = index + at;
-        let rest = &bytes[start..];
-        if rest.len() >= 3 && rest[1] == b'[' && rest[2] == b'?' {
-            let mut cursor = 3;
-            let mut attrs: Vec<&[u8]> = Vec::new();
-            let mut current = cursor;
-            let mut complete = false;
-            while cursor < rest.len() {
-                match rest[cursor] {
-                    digit if digit.is_ascii_digit() || digit == b':' => cursor += 1,
-                    b';' => {
-                        attrs.push(&rest[current..cursor]);
-                        cursor += 1;
-                        current = cursor;
-                    }
-                    b'c' => {
-                        attrs.push(&rest[current..cursor]);
-                        complete = true;
-                        break;
-                    }
-                    _ => break, // not a DA1 reply after all
-                }
-            }
-            if complete {
-                let sixel = attrs
-                    .iter()
-                    .any(|attr| attr.split(|b| *b == b':').next().is_some_and(|head| head == b"4"));
-                return Some(sixel);
-            }
-        }
-        index = start + 1;
-    }
-    None
-}
-
-/// Read the terminal's OSC 11 answer off fd 0, discarding anything
-/// else that arrives in the window (terminal responses only — user
-/// keystrokes during the 150 ms boot probe are dropped, matching v2's
-/// boot-time theme probe). Returns `None` on timeout or an unparsable
-/// reply.
-#[allow(unsafe_code)] // poll/read on fd 0 are only reachable through libc FFI
-fn read_osc11_reply(timeout: std::time::Duration) -> Option<(u8, u8, u8)> {
-    let deadline = std::time::Instant::now() + timeout;
-    let mut buffer: Vec<u8> = Vec::with_capacity(64);
-    loop {
-        let now = std::time::Instant::now();
-        if now >= deadline {
-            return None;
-        }
-        let mut poll_fd = libc::pollfd { fd: libc::STDIN_FILENO, events: libc::POLLIN, revents: 0 };
-        #[allow(clippy::cast_possible_truncation)]
-        let remaining_ms =
-            i32::try_from((deadline - now).as_millis()).unwrap_or(0).min(i32::MAX - 1) + 1;
-        let ready = unsafe { libc::poll(std::ptr::from_mut(&mut poll_fd), 1, remaining_ms) };
-        if ready <= 0 {
-            return None; // timeout or poll failure: no answer
-        }
-        let mut chunk = [0u8; 64];
-        let read = unsafe {
-            libc::read(libc::STDIN_FILENO, chunk.as_mut_ptr().cast::<libc::c_void>(), chunk.len())
-        };
-        if read <= 0 {
-            return None;
-        }
-        #[allow(clippy::cast_sign_loss)]
-        buffer.extend_from_slice(&chunk[..read as usize]);
-        // A complete answer ends with BEL or ST after an OSC introducer.
-        if let Some(color) = parse_osc_reply(&buffer) {
-            return Some(color);
-        }
-        // Overlong garbage never matches: give up rather than spin.
-        if buffer.len() > 256 {
-            return None;
-        }
-    }
-}
-
-/// Extract an OSC 11 color reply from raw bytes: a `ESC ] 11 ;` prefix
-/// (the query echo in some terminals is tolerated by scanning for the
-/// `11;rgb:` body) terminated by BEL (`\x07`) or ST (`ESC \`).
-fn parse_osc_reply(bytes: &[u8]) -> Option<(u8, u8, u8)> {
-    let text = std::str::from_utf8(bytes).ok()?;
-    let start = text.find("11;rgb:")?;
-    let body = &text[start..];
-    let end = body.find(['\x07', '\x1b']).unwrap_or(body.len());
-    parse_osc_color(&body[..end])
-}
-
 /// Parse an OSC 11 answer (`\x1b]11;rgb:rrrr/gggg/bbbb` + ST/BEL).
 /// 16-bit components scale to 8-bit (`/ 257`); shorter forms pass
-/// through `u8::from_str_radix` directly.
+/// through `u8::from_str_radix` directly. Kept pure (tests + the
+/// vocabulary above); the wire probing is opentui's.
 #[must_use]
 pub fn parse_osc_color(text: &str) -> Option<(u8, u8, u8)> {
     let start = text.find("rgb:")?;
@@ -851,8 +572,6 @@ mod tests {
         assert_eq!(parse_osc_color("\x1b]11;rgb:ffff/ffff/ffff\u{7}"), Some((255, 255, 255)));
         assert_eq!(parse_osc_color("\x1b]11;rgb:00/00/00\u{7}"), Some((0, 0, 0)));
         assert_eq!(parse_osc_color("garbage"), None);
-        // Headless (no TTY) detection falls back to dark.
-        assert_eq!(detect_system_mode(), Mode::Dark);
     }
 
     /// The reported beta.2 regression set, pinned on the user's actual
@@ -866,15 +585,14 @@ mod tests {
         // The raw reply bytes exactly as a responding terminal emits
         // them (and exactly the bytes that used to leak into the
         // composer as typed text).
-        let reply = b"\x1b]11;rgb:1717/1717/1717\x1b\\";
-        let color = parse_osc_reply(reply).expect("the tmux reply parses");
+        let color = parse_osc_color("rgb:1717/1717/1717\x1b\\").expect("the tmux reply parses");
         assert_eq!(color, (0x17, 0x17, 0x17), "0x1717 = 23 decimal");
         assert_eq!(mode_for_background(color.0, color.1, color.2), Mode::Dark);
         // The BEL-terminated form parses identically.
-        assert_eq!(parse_osc_reply(b"\x1b]11;rgb:1717/1717/1717\x07"), Some((0x17, 0x17, 0x17)));
+        assert_eq!(parse_osc_color("rgb:1717/1717/1717\u{7}"), Some((0x17, 0x17, 0x17)));
         // Partial/garbled replies never resolve.
-        assert_eq!(parse_osc_reply(b"\x1b]11;rgb:171"), None);
-        assert_eq!(parse_osc_reply(b"garbage with no rgb at all"), None);
+        assert_eq!(parse_osc_color("rgb:171"), None);
+        assert_eq!(parse_osc_color("garbage with no rgb at all"), None);
 
         // The accent chain under that mode: the v2 default theme
         // resolved in dark mode paints the composer rail in the FIRST
@@ -887,38 +605,6 @@ mod tests {
         // …and the gray border token is a DIFFERENT color (the rail
         // must never fall back to it when an agent is resolved).
         assert_ne!(styles.agent_color(0), styles.border);
-    }
-
-    /// RB-07 (lane R0): the DA1 sixel verdict. Attribute `4` among the
-    /// `CSI ? {attrs} c` reply's `;`-separated parameters = sixel
-    /// (xterm `-ti vt340` / mlterm style); an answered DA1 without it
-    /// = no sixel (kitty's reply); no/other replies = `None`.
-    #[test]
-    fn da1_sixel_verdict_parses() {
-        // xterm vt340-style: level 62 + sixel(4) + others.
-        assert_eq!(parse_da1_sixel(b"\x1b[?62;4;6;8;15;22c"), Some(true));
-        // The task-shape reply: `;4;` anywhere in the attribute list.
-        assert_eq!(parse_da1_sixel(b"\x1b[?62;4;6;8;15;18;21;22c"), Some(true));
-        // Sixel alone (minimal VT240-class reply).
-        assert_eq!(parse_da1_sixel(b"\x1b[?4c"), Some(true));
-        // kitty: answers DA1 but never with the sixel attribute.
-        assert_eq!(parse_da1_sixel(b"\x1b[?62;6;9;15;22c"), Some(false));
-        // The minimal `?6c` form still counts as answered-no-sixel.
-        assert_eq!(parse_da1_sixel(b"\x1b[?6c"), Some(false));
-        // Sub-parameter groups (`:`-separated) match on the leading
-        // value only (DA1 itself has none; the tolerance is safe).
-        assert_eq!(parse_da1_sixel(b"\x1b[?62;4:32c"), Some(true));
-        assert_eq!(parse_da1_sixel(b"\x1b[?62;14:32c"), Some(false));
-        // Mixed streams: the DA1 reply rides alongside other answers.
-        assert_eq!(
-            parse_da1_sixel(b"\x1b]11;rgb:1717/1717/1717\x1b\\\x1b[?1u\x1b[?62;4c"),
-            Some(true)
-        );
-        // Not a DA1 final byte / no reply yet.
-        assert_eq!(parse_da1_sixel(b"\x1b[?62;4"), None);
-        assert_eq!(parse_da1_sixel(b"\x1b[?1;2c\x1b[?1u"), Some(false)); // classic xterm DA1
-        assert_eq!(parse_da1_sixel(b""), None);
-        assert_eq!(parse_da1_sixel(b"garbage"), None);
     }
 
     /// The builtin registry: 34 entries (v2 opencode + 32 v1 + the
