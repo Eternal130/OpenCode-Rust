@@ -884,3 +884,82 @@ fn idle(adapter: &mut dyn Adapter, event: &DurableEvent, outcome: IdleOutcome) -
         outcome,
     })
 }
+
+#[cfg(test)]
+mod g112_tests {
+    #![allow(clippy::needless_update)]
+    use super::*;
+
+    fn draft() -> AssistantDraft {
+        AssistantDraft {
+            id: MessageId("msg_g112".into()),
+            metadata: None,
+            time: AssistantTime { created: 1, streamed: None, completed: None },
+            agent: AgentId("agent".into()),
+            model: oc_schema::model::Ref {
+                id: oc_schema::id::ModelId("m".into()),
+                provider_id: oc_schema::id::ProviderId("p".into()),
+                variant: None,
+            },
+            content: Vec::new(),
+            snapshot: None,
+            finish: None,
+            raw_finish: None,
+            provider_state: None,
+            cost: None,
+            tokens: None,
+            error: None,
+            retry: None,
+        }
+    }
+
+    fn files(value: Option<&[RelativePath]>) -> Option<Vec<RelativePath>> {
+        value.map(|files| files.to_vec())
+    }
+
+    /// G-112: key presence carries the semantics — `files: []` writes an
+    /// empty array, a MISSING key clears to undefined (ref
+    /// message-updater.ts:24-28). The doc's two-snapshot sequence: a
+    /// successful `files: []` snapshot followed by a capture-failure
+    /// terminal event must end with files cleared, never the stale value.
+    #[test]
+    fn g112_files_empty_array_then_missing_key_clears() {
+        let mut draft = draft();
+
+        // (1) Successful terminal snapshot with files: [] — writes the
+        // empty array (an empty array is truthy in JS: the guard passes).
+        project_terminal_snapshot(&mut draft, None, Some(&[]));
+        assert_eq!(draft.snapshot.as_ref().and_then(|snapshot| snapshot.files.clone()), Some(vec![]));
+
+        // Seed a stale non-empty value, then the capture-failure terminal
+        // event arrives WITHOUT a files key (the snapshot end id still
+        // advances) — the field clears.
+        let stale = vec![RelativePath("src/stale.rs".into())];
+        if let Some(snapshot) = draft.snapshot.as_mut() {
+            snapshot.files = Some(stale);
+        }
+        project_terminal_snapshot(
+            &mut draft,
+            Some(oc_schema::id::SnapshotId("snp_failed".into())),
+            None,
+        );
+        assert_eq!(
+            draft.snapshot.as_ref().and_then(|snapshot| snapshot.files.clone()),
+            None,
+            "a missing files key clears the field (files: undefined)"
+        );
+
+        // (2) Non-empty arrays still write through.
+        let listed = vec![RelativePath("src/a.rs".into()), RelativePath("src/b.rs".into())];
+        project_terminal_snapshot(&mut draft, None, Some(&listed));
+        assert_eq!(
+            files(Some(&listed)),
+            draft.snapshot.as_ref().and_then(|snapshot| snapshot.files.clone())
+        );
+
+        // (3) Both absent — the snapshot block is untouched entirely.
+        let before = draft.snapshot.clone();
+        project_terminal_snapshot(&mut draft, None, None);
+        assert_eq!(before, draft.snapshot);
+    }
+}

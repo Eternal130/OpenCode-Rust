@@ -67,6 +67,9 @@ struct StubState {
     /// Drop `registration_endpoint` from the metadata (a CIMD-only
     /// server with no open DCR).
     omit_registration: bool,
+    /// Append this `iss` value to the authorization redirect (G-110②
+    /// tests: a matching issuer passes, a foreign one is rejected).
+    redirect_iss: Option<String>,
 }
 
 struct Stub {
@@ -299,12 +302,18 @@ async fn serve(
             let redirect = query.get("redirect_uri").cloned().unwrap_or_default();
             let state_value = query.get("state").cloned().unwrap_or_default();
             let separator = if redirect.contains('?') { '&' } else { '?' };
+            let iss = state
+                .lock()
+                .redirect_iss
+                .as_ref()
+                .map(|iss| format!("&iss={iss}"))
+                .unwrap_or_default();
             respond(
                 stream,
                 "302 Found",
                 &[(
                     "Location",
-                    &format!("{redirect}{separator}code=stub-authz-code&state={state_value}"),
+                    &format!("{redirect}{separator}code=stub-authz-code&state={state_value}{iss}"),
                 )],
                 "",
             )
@@ -1065,4 +1074,118 @@ async fn oauth_refresh_failure_propagates_to_every_waiter_then_recovers() {
     let recovered = oauth::refresh(&http, &config, &credential).await.expect("recovered refresh");
     assert_eq!(recovered.access_token, "stub-access-2");
     assert_eq!(stub.state.lock().refresh_grants.len(), 2);
+}
+
+// ---------------------------------------------------------------------------
+// G-110 — resource parameter, iss validation, client reuse
+// ---------------------------------------------------------------------------
+
+/// G-110①: RFC 8707 §2 — the authorization URL's `resource` parameter is
+/// the full absolute server URL (fragment stripped), never a bare
+/// host[:port].
+#[tokio::test]
+async fn g110_resource_parameter_is_the_absolute_server_url() {
+    let stub = stub().await;
+    let server_url = format!("{}/mcp", stub.base);
+    let authorization = oauth::authorize(oauth::AuthorizeInput {
+        name: "resstub".to_owned(),
+        config: remote(&server_url),
+        method_id: "mcp_res".to_owned(),
+        http: reqwest::Client::new(),
+        previous_client: None,
+    })
+    .await
+    .expect("the authorize flow builds");
+
+    let url = reqwest::Url::parse(&authorization.url).expect("authorization url");
+    let resource = url.query_pairs().find(|(key, _)| key == "resource").expect("resource param");
+    assert_eq!(resource.1, server_url, "the resource is the absolute URI");
+}
+
+/// G-110④: a client recovered from an earlier login is reused — no DCR
+/// `/register` request (ref oauth.ts:346-351), and the login completes
+/// with that client id.
+#[tokio::test]
+async fn g110_previous_client_is_reused_without_dcr() {
+    let stub = stub().await;
+    let server_url = format!("{}/mcp", stub.base);
+    let authorization = oauth::authorize(oauth::AuthorizeInput {
+        name: "reusestub".to_owned(),
+        config: remote(&server_url),
+        method_id: "mcp_reuse".to_owned(),
+        http: reqwest::Client::new(),
+        previous_client: Some(oauth::StoredClient {
+            client_id: "reused-client".to_owned(),
+            client_secret: None,
+        }),
+    })
+    .await
+    .expect("the authorize flow builds");
+
+    assert!(
+        authorization.url.contains("client_id=reused-client"),
+        "the authorization URL carries the reused client: {}",
+        authorization.url
+    );
+    let credential = login(authorization).await;
+    let CredentialValue::OAuth(value) = &credential else { panic!("oauth credential") };
+    assert_eq!(value.metadata.as_ref().unwrap()["client"]["client_id"], "reused-client");
+    assert_eq!(stub.state.lock().register_hits, 0, "no DCR request was made");
+}
+
+/// G-110②: RFC 9207 — the callback's `iss` must name the authorization
+/// server the flow discovered; a foreign issuer is rejected before the
+/// code is exchanged (the stub's token endpoint would otherwise accept).
+#[tokio::test]
+async fn g110_callback_iss_mismatch_is_rejected() {
+    let stub = stub().await;
+    stub.state.lock().redirect_iss = Some("https://evil.example".to_owned());
+    let server_url = format!("{}/mcp", stub.base);
+    let authorization = oauth::authorize(oauth::AuthorizeInput {
+        name: "issstub".to_owned(),
+        config: remote(&server_url),
+        method_id: "mcp_iss".to_owned(),
+        http: reqwest::Client::new(),
+        previous_client: None,
+    })
+    .await
+    .expect("the authorize flow builds");
+    let oauth::AuthMode::Auto(callback) = authorization.mode else { panic!("auto mode") };
+
+    let browser = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("browser client");
+    let response = browser.get(&authorization.url).send().await.expect("authorize GET");
+    let redirect = response.headers()["location"].to_str().expect("location").to_owned();
+    assert!(redirect.contains("iss=https%3A%2F%2Fevil.example") || redirect.contains("iss=https://evil.example"));
+    let callback = tokio::spawn(callback);
+    let page = reqwest::Client::new().get(&redirect).send().await.expect("callback GET");
+    assert_eq!(page.status(), 400, "a foreign issuer is rejected at the callback");
+    let error = callback.await.expect("callback task").expect_err("the exchange is refused");
+    assert!(error.contains("issuer mismatch"), "{error}");
+    // The stub's token endpoint never saw a grant.
+    assert!(stub.state.lock().code_grants.is_empty());
+}
+
+/// G-110② (control): a MATCHING `iss` (the discovered issuer) passes.
+#[tokio::test]
+async fn g110_callback_matching_iss_is_accepted() {
+    let stub = stub().await;
+    // The stub's metadata advertises `issuer: base` and the redirect
+    // echoes it.
+    stub.state.lock().redirect_iss = Some(stub.base.clone());
+    let server_url = format!("{}/mcp", stub.base);
+    let authorization = oauth::authorize(oauth::AuthorizeInput {
+        name: "issokstub".to_owned(),
+        config: remote(&server_url),
+        method_id: "mcp_issok".to_owned(),
+        http: reqwest::Client::new(),
+        previous_client: None,
+    })
+    .await
+    .expect("the authorize flow builds");
+    let credential = login(authorization).await;
+    let CredentialValue::OAuth(value) = &credential else { panic!("oauth credential") };
+    assert_eq!(value.access, "stub-access-1");
 }
