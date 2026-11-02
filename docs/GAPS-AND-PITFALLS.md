@@ -1,5 +1,7 @@
 # 移植缺口与坑（Gaps & Pitfalls）
 
+> **2026-11-02 第十轮（全量逐行复审）**：9 通道逐行对读 + 6 轮补审 + 4 通道缺口复核，对全部初报缺口逐项双侧源码取证后确认 60 项新立项（G-105..G-164）、驳回 13 项初报（见文末第十轮勘误）、若干 DUP 归并既有条目（G-6/G-17/G-32/G-49a 已追加备注）。总报告 `CODE_REVIEW_PARITY_2026-11-02.md`，明细 `/tmp/opencode/review/`。
+
 > **2026-11-01 第九轮（七域全量复审）**：7 通道对 ref 全功能域（core 会话/工具/AI/server/TUI/CLI/schema-plugin-pty-syntax）逐行对读后，对初报缺口逐项源码复核：确认 12 项新立项（G-93..G-104）、撤销 3 项初报（见文末第九轮勘误）、5 项归类既有条目。详见文末第九轮。
 
 > **2026-11-01 第七轮 burndown（gap-burndown-4）**：G-50..G-78 全部 + G-41..G-48 残留 + G-31/G-34/G-24 残留 + G-1 consumer 迁移（read/write/edit/glob/grep/patch/shell/pty 全走 Environment seam）经 lanes 1-9 串行落地并合并 main（merge commits 8f5c7a2..c289c2b：lane1 G-50/51/52/53/54/70；lane2 G-41..G-44；lane3 G-55/57/58/59/60/63/76/77/78；lane4 G-56/48/34/33；lane5 G-64/65+G-24 残留+G-46；lane6 G-66/67/68/69/47；lane7 G-61/62/71/72/73/74/75/45；lane8 G-31；lane9a/9b G-1）。本轮（lane10）核验并钉定 G-49a spinner 40ms 帧数学（帧索引按流逝时间派生，repaint 维持 pump tick——文档化决策），并完成文档终扫。现存未关闭项均为**文档化决策**：G-28 有界 TSX shim、G-32 v1/legacy schema 有意不移植、G-12/G-13/G-16/G-17/G-38/G-39/G-40 ℹ️ 维持不变；少量 deferred minors 见 .superpowers/sdd/ 各 lane report（如 G-68 mini restore 保留 seam、G-24 guest vcs provider info/base 闭包留 guest 侧、G-36 demo 剧本 6/13 bounded、G-9 nested scope 简化）。
@@ -50,6 +52,7 @@
 - composer 三 tab picker（Subagents/Shell/Terminals）：注册门控、每 tab 提示/空态/wrap 语义、每 tab 键位 enable 层（修复 Shell tab 上 return 误解析为 subagent.select 的真 bug）；body 窗口滚动+选中居中（ref scrollbox 对齐）。
 - `@`-补全新增 Reference::Source 条目（skills→references→agents 顺序、前导空格描述、FileMention uri-dedupe、frecency bump）；`/help` 入口已核验可达（command palette + DialogKind::Help）。
 - 已记录偏差（代码注释）：Shell 输出查看器打开时取一次（ref 每 1s 轮询）；reference 行按击键重挂载；无绑定的 ctrl+d 被吞不落穿；FileMention 以 name 为去重键（无 uri）。
+- 2026-11-02 第十轮勘注：本条"忠实移植"仅覆盖静态注册表面——`@`-file.find 实时模糊搜索（异步半边）未移植（autocomplete.rs:23-24,483-484,819 注释自认），见 G-127；Terminals tab 仅注册 3 键位、行数据层空壳不可达（keymap/table.rs:837-843 注释自认）。
 
 ### G-7 ✅（部分：generateObject 已移植；evaluation lane 有意不移植）
 - `LLM.generateObject` → `crates/oc-ai/src/llm.rs`：强制合成 generate_object 工具 + ToolChoice::named 走既有 route/protocol 管道；ref 一致的错误文案；JSON-Schema 子集校验器（比 ref dynamic 模式更严，无新依赖）；取首个匹配 tool call（ref find 语义）。
@@ -94,7 +97,8 @@
 ### G-17 ℹ️ 有意省略（正确决策，无需补；未变）
 - ref 死代码：`mcp/resolve.ts`、`plugin/inventory.ts`；ref 的 `ignore` 依赖在其源码中也无 import。（勘误：`debug/redact.ts` 并非死代码——ref 调用链完整 `cli/src/index.ts:41 → handlers/debug/config.ts:8,16`，见第五轮 G-52。）
 - Web/GUI/云生态：web/desktop/enterprise/console/app/posts/storybook/identity/containers/function 等整包不移植（codemode/latex/merman/simulation 的**功能本体**已在 oc-core/oc-tui 内实现或按上文明示处理）。
-- rust-extra 超出 ref 表面的部分（`upgrade -m local-file|github`、completion、`--force`、run 的 TTY 权限提示、serve hostname 解析报错、`$PWD` 陈旧值守卫等）均为防御性收紧且有注释。
+- rust-extra 超出 ref 表面的部分（`upgrade -m local-file|github`、completion、`--force`、run 的 TTY 权限提示、serve hostname 解析报错、`$PWD` 陈旧值守卫等）均为防御性收紧且有注释。run 的**非 TTY** 路径与 ref 一致（noninteractive.rs:289 auto-reject）。
+- 2026-11-02 第十轮归并：tui feature-plugins/system/storybook 工作台（~1400 行开发期 fixture）同属本条整包不移植族；workerd 运行时目标与 ServerFetch.make（结构性不可移植，Rust 仅原生 boot_and_serve）收编为本族文档化范围裁剪（登记为 G-163 ℹ️）。
 
 ## 本轮 burndown 之外的已知残留（后续工作）
 - G-1 consumer 迁移：tools/handlers（read/write/edit/shell/glob/grep/patch、mcp/stdio、pty）尚未切换到 Environment Files 服务（服务本体与接线已就绪）。
@@ -174,6 +178,7 @@
 
 ### G-32 ℹ️（文档化决策：v1/legacy schema 有意不移植，纯 v2 面无影响）
 - oc-schema/src/lib.rs:80-82 TODO 仍在：legacy-event、v1 session 事件、models-dev refresh、rpc.ts、pty-ticket、durable-event-manifest。仅影响旧数据互操作/回放，纯 v2 面无影响。
+- 2026-11-02 第十轮复核备注：上述五个 schema 子项经逐项核验**全部在本条明文范围内**（G-87 已裁决过未明确子项，维持 DUP）；另 run 的 v1 事件输出兼容层（ref run/v1.ts：pendingStep/v1InvalidOutput/permissionReject 静默等）同属本裁决范围——消费 v1 事件流的脚本不受支持。
 
 ## 🟢 低
 
@@ -328,7 +333,7 @@
 - **G-46 ✅（lane5）**：dialog.plugins.error 打开失败插件的 error 详情（ErrorDetails 对话框，esc 回插件列表；无失败行为无操作）。
 - **G-47 ✅（lane6）**：连接成功即复位 backoff attempt（editor.ts:223 open 监听）；空字符串 CLAUDE_CODE_SSE_PORT 现按 ref falsy `||` 落到 OPENCODE_EDITOR_SSE_PORT。
 - **G-48 ✅（lane4）**：reload bridge 在失效 location 前重导 `Limits::from_entries` 并 `Engine::reload_tool_output_limits`（boot.rs ConfigReloadBridge），assemble 改读 `ToolOutput::current_limits` 活值——改 `tool_output.*` 免重启生效。
-- **G-49 ℹ️ 记录性/文档债（spinner 子项收口为文档化决策，G-49a/lane10）**：spinner 帧进阶 ✅ 经核验/钉定——帧索引按渲染时刻的流逝时间取（`composer_spinner_cell(elapsed_ms)`：`elapsed_ms/40 % frames.len()`，knight.rs），ref 的 40ms 帧数学在任意重绘频率下精确成立（含 100ms pump tick 采样：index 恒 = floor(elapsed/40)），单测 `frame_progression_follows_the_40ms_cadence_math` 钉死； repaint 帧率维持 pump tick（100ms）为**文档化决策**——运行循环无 composer 区域级重绘源，全局 40ms 唤醒会扰动泵（共享 PTY harness 以 >80ms 静默窗切快照、已登记的 vt_temporal 时序测试钉定 100ms 节奏、空转字节量护栏），故按 brief 采用时间派生索引这一最小忠实修复；session.environment 每 session 单发（ref 效果重触发，PUT 幂等无害）；stdio.rs 模块头宣称 SIGTERM→SIGKILL 升级但实现为即杀（沿袭 rmcp 行为，措辞与 ref 2s 优雅等待不符）；project.rs:1103-1105 注释"插件 strategy 不支持"已过时（add_strategy 就在其下）；proxy.rs:367 注释"webpki 与 0.13 栈一致"在 G-26 后已失效（0.13 现走 platform-verifier；ws 链路留 webpki 为有意）。
+- **G-49 ℹ️ 记录性/文档债（spinner 子项收口为文档化决策，G-49a/lane10）**：spinner 帧进阶 ✅ 经核验/钉定——帧索引按渲染时刻的流逝时间取（`composer_spinner_cell(elapsed_ms)`：`elapsed_ms/40 % frames.len()`，knight.rs），ref 的 40ms 帧数学在任意重绘频率下精确成立（含 100ms pump tick 采样：index 恒 = floor(elapsed/40)），单测 `frame_progression_follows_the_40ms_cadence_math` 钉死； repaint 帧率维持 pump tick（100ms）为**文档化决策**——运行循环无 composer 区域级重绘源，全局 40ms 唤醒会扰动泵（共享 PTY harness 以 >80ms 静默窗切快照、已登记的 vt_temporal 时序测试钉定 100ms 节奏、空转字节量护栏），故按 brief 采用时间派生索引这一最小忠实修复；session.environment 每 session 单发（ref 效果重触发，PUT 幂等无害）；stdio.rs 模块头宣称 SIGTERM→SIGKILL 升级但实现为即杀（沿袭 rmcp 行为，措辞与 ref 2s 优雅等待不符）；project.rs:1103-1105 注释"插件 strategy 不支持"已过时（add_strategy 就在其下）；proxy.rs:367 注释"webpki 与 0.13 栈一致"在 G-26 后已失效（0.13 现走 platform-verifier；ws 链路留 webpki 为有意）。2026-11-02 第十轮备注：G-49a 仅钉定 dots 帧数学；TAB_SPINNERS 其余 3 样式（arcs/quadrants/line）、4 种未读标记与 `tabs.indicators` 设置的消费缺失不在其范围，另立 G-143。
 
 ## 复审判定汇总
 G-18 ✅ / G-19 ✅(死校验残留) / G-20 ✅ / G-21 ✅ / G-22 ✅ / G-23 ✅ / G-24 ✅(bounded) / G-25 ✅ / G-26 ✅ / G-27 ✅(F1=新 G-45) / G-29 ✅(error 面残留) / G-30 ✅(惰性钉定) / G-31 ✅(lane8：resolver 判根 + 10s 内存索引；子目录/失效策略偏差文档化) / G-33 ✅(热重载半边由 G-48 lane4 收口) / G-34 ✅(lane4) / G-35 ✅ / G-36 ✅ / G-37 ✅ / G-6 ✅ / G-8 ✅(G-41..G-44 已由 lane2 收口) / G-41 ✅ / G-42 ✅ / G-43 ✅ / G-44 ✅ / G-1 ✅(consumer 迁移仍开放)
@@ -725,3 +730,278 @@ G-79..G-92 全部 ✅（G-83 采用补面板方案；G-87 三子项实现/已移
 
 ## 第十轮判定
 G-93..G-104 全部 ✅。现存未关闭项维持既有文档化决策：G-28（有界 TSX shim）、G-32（v1/legacy 不移植）、G-12/G-13/G-16/G-17/G-38/G-39/G-40 ℹ️。
+
+---
+
+# 第十轮（2026-11-02，全量逐行复审 + 逐项源码复核）
+
+> 来源：`CODE_REVIEW_PARITY_2026-11-02.md`（9 通道逐行对读 + 6 轮补审 + 4 通道缺口复核：core/server、ai/client、tui、cli/schema/util），明细 `/tmp/opencode/review/verify_*.md`。对全部初报缺口逐项双侧源码取证后：**确认 60 项**（下列 G-105..G-164，续编号；各明细报告草拟编号互相冲突，一律按本节重排）、**驳回 13 项**（见文末第十轮勘误）、**DUP 归并**若干（G-6/G-17/G-32/G-49a/G-7/G-92，已就地追加备注或既有裁决覆盖）。风险分区：🔴 高 4 / 🟡 中 21 / 🟢 低 32 / ℹ️ 登记 3。
+
+## 🔴 高
+
+### G-105 ❌ step 流截断无收尾（fragment flush 缺口）（core）
+- Rust：publisher.flush 仅 StepFinish（publisher.rs:869）与 failAssistant（:1055）触发；流在 TextStart/Delta 后**无 finish 事件也无错误事件**即终止时，unknownFinish 判定（step.rs:462-463）只认"收到未知 reason"，缺 finish 不触发；终局结算门（step.rs:548）要求 finish/failure 至少一项存在 → 开放 text/reasoning part 无 trailing delta、无 text.ended，且整步不发布 step.ended（永久悬空 part）。
+- Ref：publish-llm-event.ts:132 `Effect.ensuring(flush())` 包住整条流消费，任何终止路径都收尾。
+- 复现：桩 provider 发 TextStart+Delta 后直接关流。修法：流消费收尾处无条件 flush + 放宽终局门。
+
+### G-106 ❌ CodeMode 目录指令四处偏差（codemode 组）（core）
+- ① catalog 变更更新恒为整文替换：codemode.rs:868-874（注释自认 Phase 10 refinement）+ 唯一调用点 session/runner/context.rs:508；ref codemode/instructions.ts:32-124 的最小增量（新增/变更行、namespace 库存、no-longer-available 清单、与整文择短）未移植——目录每次变动模型收到全量目录文本。
+- ② namespace.description 整体丢弃：codemode.rs:657,708 恒 None，namespace_line（:754-759）不渲染 ` // desc`，head 预算（:652-662）不计描述成本；ref catalog.ts:64,87,105,131,173 保留。
+- ③ DESCRIPTION_LIMIT 截断按字节切片：codemode.rs:588-589 `&first_line[..117]`——多字节描述跨边界直接 panic（ref catalog.ts:69 JS slice 按 UTF-16 码元，永不 panic）。
+- ④ cost 按字节除 4：codemode.rs:581-583；ref catalog.ts:188 按 UTF-16 码元——非 ASCII 内容成本被高估 1~3 倍，round-robin 提前断供。
+- 复现：注册带中文描述的 Code Mode 工具即触发 ③④；目录任何增删即触发 ①。
+
+### G-109 ❌ `PATCH /api/session/:id` 空标题行为相反（core）
+- Rust：oc-server/session.rs:546-555 对任意字符串（含空串）一律发布 session.renamed（注释自认 TODO(phase-9)），空标题把会话改名为空。
+- Ref：handlers/session.ts:262-271 空标题触发 `SessionTitle.generate()` 用 LLM 重新生成。
+- 复现：`{"title":""}`——TS 重出新标题，rust 得到无名会话且永不恢复。
+
+### G-118 ❌ DigitalOcean 提示缓存整体失效（provider 装配层，双层）（ai）
+- 第一层：digitalocean 经 native.rs:118-120 映射后不在 facade.rs:961-973 `package_has_baked_base` 表 → 走 facade.rs:881-897 generic 分支 → `openai_chat_route`（openai_chat.rs:3220-3231，`OpenAiChatExt::base()` cache_control=false；全文件 `cache_control: true` 仅 venice:3178/openrouter:3273/alibaba:3332 三处）。
+- 第二层：generic 分支 RoutePatch 不改 route id → 恒为 `"openai-chat"`，而 cache_policy.rs:39-55 的 `RESPECTS_INLINE_HINTS` 含 `"digitalocean"`（:54）却不含 `"openai-chat"`——`apply_cache_policy`（cache_policy.rs:300-302）对实际路由 no-op，`"digitalocean"` 是永无路由命中的死条目。
+- Ref：digitalocean.ts:22-31 `cacheControl()` wrap 落 `cache_control` 断点。修法：补 digitalocean 专属 route，或 RoutePatch 改写 id+ext 开启 cache_control 降级。
+
+## 🟡 中
+
+### G-107 ❌ session.move 的 subpath 复用源 row.path（core）
+- Rust：oc-server/session.rs:932-935 `subpath: row.path…`（会话**当前行**的源位置值）。
+- Ref：move.ts:89 按 `path.relative(目的地项目根, 目的地目录)` 计算。
+- 复现：项目 A 子目录 `sub/` 的会话 move 到项目 B 根——写入 subpath=`sub`（源值）而非 `""`。影响 session.moved 投影、会话行 path 与 location-switched 消息。
+
+### G-108 ❌ session.move 双差异：delivery 缺省相反 + 源不可用快速路径缺失（core）
+- ① rust handler（oc-server/session.rs:937-939）与 engine.move_session（engine/mod.rs:1805 硬编码 Queue 且无 delivery 参数）缺省 Queue；ref move.ts:127 `?? "steer"`——默认移动从"中断本轮转向"退化为"排队到本轮结束"。
+- ② ref（move.ts:104-116,123,134-147）对不活跃且源目录消失/runner 装配失败的会话在锁内取消积压 move 项并直接 publish Moved（孤儿会话立即迁移）；rust（engine/mod.rs:1784-1811）恒走 admit→wake→等 drain，源 location 已删的会话 move 永远无法落地。
+
+### G-110 ⚠️ MCP OAuth 授权流四缺口（请求/生命周期侧；G-88 已修的是返回侧校验）（core）
+- ① 授权 URL 的 `resource` 参数只发 `host[:port]`（mcp/oauth.rs:765-774），RFC 8707 §2 要求绝对 URI（ref 侧 TS SDK 发完整绝对 URL）——严格授权服务器拒绝请求或签发资源绑定错误的 token。
+- ② 回调不校验 `iss` 发行方参数（oauth.rs:805-837 仅查 error/state/code；ref oauth.ts:379,495 经 SDK 校验）。
+- ③ token 失效无 invalidateCredentials——死凭证行不删除（ref oauth.ts:290-296 会 remove；rust registry.rs:741,769 只置 needs_auth），陈旧 refresh token 反复走注定失败的刷新。
+- ④ authorize 不复用已存凭证中的已注册 client（oauth.rs:719-732 每次重新 DCR；ref oauth.ts:346-351 复用，issuer 变更才丢弃），支持 DCR 的服务器侧积累孤儿注册。
+
+### G-111 ⚠️ 配对浏览器过期 401 多附 www-authenticate（core）
+- Rust：oc-server/pairing.rs:83-92（:89-91）browser 分支显式 insert WWW_AUTHENTICATE——触发浏览器原生认证弹窗。
+- Ref：handlers/server.ts:39-42 纯文本 401 无挑战头（刻意避免弹窗）。修法：删掉该 header insert（一行）。
+
+### G-112 ⚠️ message-updater snapshot.files 语义分叉（core）
+- Rust：message_updater.rs:858-862 仅 files 非空时写入，缺失/空数组均保留旧值。
+- Ref：message-updater.ts:27 对 `files:[]` 写入空数组、键缺失置 undefined（清除）。
+- 复现：一次 step.ended 快照树相等（files=[]）后再来一次 capture 失败（files 缺失）的终局——TS 终态 files=undefined，rust 残留第一次的列表；session.get 消息形状对外可见。
+
+### G-113 ⚠️ stats 未知时区静默回退 UTC vs TS 400（core）
+- Rust：oc-server/session.rs:2119-2135 valid_timezone 仅形状校验；:2616 date_key `TimeZone::get(..).unwrap_or(UTC)`。
+- Ref：session/stats.ts:403-404 经 Intl.DateTimeFormat 抛 RangeError → 400 "Invalid time zone"。
+- 复现：`?timezone=Invalid/Zone`——TS 400，rust 200 且日期分桶全按 UTC。
+
+### G-114 ⚠️ permission saved-grant 存储吞掉全部 DB 错误（core）
+- Rust：permission/sql.rs:100 `unwrap_or_default()`、:123/:144 `let _ =`——add/remove 静默丢失。
+- Ref：permission/saved.ts:48,77,81 三处 `.pipe(Effect.orDie)`。
+- 复现：permission DB 只读/加锁后点 "always allow"——grant 静默丢失，重启后授权消失且全程无日志。
+
+### G-115 ⚠️ integration 主机三差异（core）
+- ① Info.metadata 恒 None（integration/mod.rs:394,412 两处硬编码）；ref integration.ts:389 投影 entry.ref.metadata（如 `{source:"mcp"}`）——注册侧元数据在 /api/integration 读取面永远丢失。
+- ② command 认证 `.output()` 等进程结束（mod.rs:904-905,920-930），stderr 不增量流入 attempt.message；ref integration.ts:645-670 双流 fork 实时更新——长认证命令期间 UI 零反馈。
+- ③ oauth/command cancel 只删 attempts 表项不中断在途交换（mod.rs:761-770,1005）；ref :794,:823 `Scope.close` 中断——取消后在途 token 交换继续跑完并落库陈旧凭证。
+
+### G-119 ⚠️ deepinfra provider 全线缺口（ai）
+- Rust：models-dev 快照 deepinfra 条目无 `api` 字段 → facade.rs:881-887 generic 分支直接 "needs a baseURL" 报错；全仓无 `ends_with("/openai")` 追加；openai_chat.rs:1808-1900 detect 三表均无 deepinfra；facade `.model(id, None)`（facade.rs:544/1145/1285）不注入 compat。
+- Ref：deepinfra.ts:10 默认 `https://api.deepinfra.com/v1/openai`、:38-44 自定义 baseURL 去尾斜杠+追加 `/openai`、:46-52 compat（max_tokens、`reasoningField:"reasoning_content"`、no-store、promptCacheKey）。
+
+### G-120 ⚠️ togetherai/cerebras（含 deepinfra）无默认 baseURL（ai）
+- Rust：snapshot 两家均无 `api` 字段；facade.rs:879-887 generic 分支零配置直接 Configuration 报错。
+- Ref：togetherai.ts:10 `https://api.together.xyz/v1`、cerebras.ts:10 `https://api.cerebras.ai/v1` 硬编码默认。修法：补 baked 默认或在 facade generic 分支注入。
+
+### G-121 ⚠️ cerebras reasoningField + 三家 promptCacheKey 缺失（ai）
+- Rust：openai_chat.rs:1808-1900 detect 表无 reasoningField/promptCacheKey；compat 注入点 facade.rs:544/1145/1285 全传 None；`openrouter/venice_chat_compatibility()`（openai_chat.rs:3375-3393）仅限 baked 家族；prompt_cache_key 由 compat 门控（:2677-2679，false 则 body 永不带）。
+- Ref：cerebras.ts:41-48 `reasoningField:"reasoning"`+`supportsPromptCacheKey:true`；fireworks.ts:51、digitalocean.ts:52 同。修法：facade 按 provider 注入 LanguageModelCompatibility 或扩 detect 表。
+
+### G-122 ⚠️ oc-client RPC 定义层未移植（ai/client）
+- Rust：oc-client/src/rpc_typed.rs 全文 140 行仅泛型 `call_into`（:30），无 per-definition 类型化方法表、无 `rpc.<id>.<event>` 事件过滤、无 on()；全仓零生产消费。
+- Ref：promise/rpc.ts:53-145 `makeRpc` 从 Rpc.PortableDefinition 动态生成 141 方法表 + eventType 过滤 + on()。短期无消费方可文档化降级，否则按 oc-schema RPC 清单生成。
+
+### G-127 ❌ composer `@` 文件模糊搜索与 `/cd` 实时目录列表未移植（tui）
+- Rust：autocomplete.rs:21-25,483-484,819 三处注释自认 "the async half, not ported"；reference 模式仅剩 skills/references/agents 静态行 + 空查询 recents（:483-491 Reference 分支恒空 Vec）。
+- Ref：autocomplete.tsx:336,361（directoryAutocomplete / `client.api.file.find({query, limit:20, location})`）。G-6 正文不含此面（已追加勘注）。
+
+### G-147 ❌ 插件 ctx.model 域缺失（cli/plugin）
+- Rust：oc-plugin-host/src/host/host.js:723 起 ctx 构造无 `model:` 命名空间（全 host.js 无 model.list/transform hostRequest；:625 hook 白名单里的 `model.request` 非 ctx 域）；registrations.rs 无 model editor 表。
+- Ref：promise/model.ts:25-28（ModelDomain：list/get/default/transform/reload）。与 G-64（provider 域已收口）互补的半边。
+
+### G-148 ⚠️ ctx.plugin.list 缺失 + effect 风格插件 API 无对应（cli/plugin）
+- ① ctx.plugin.list() 未实现（host.js:723 仅 `{id}`；ref promise/plugin.ts:49 Pick<PluginApi,"list">）。
+- ② `@opencode/plugin/effect` 导入面完全无对应（ref effect/ 目录 21 文件）——只 import effect 风格的插件不兼容。与 G-28（TSX 有界 shim）不同面；建议在 G-28 生态 breaking change 声明中并列记录 ②。
+
+### G-149 ⚠️ auth import 把任何 credential.create 失败都当"已存在跳过"（cli）
+- Rust：oc-cli/handlers/auth.rs import 段 `if client.credential().create(&body).await.is_ok()` 单分支——网络/5xx 失败也计入 skip，最终 "skipped N already present" 且 exit 0。
+- Ref：auth/import.ts:11-57 仅 ConflictError 计 skip，其他错误失败。网络故障下导入静默丢失且脚本无法检测。
+
+### G-150 ⚠️ CLI auth `--answer` 表单系统降级为 key=value 解析（cli）
+- Rust：auth.rs:259-271 parse_answers 仅 `key=Value::String`——无交互表单（text/boolean/multiselect/external）、无 when 条件激活、无 unknown/inactive field 与 pattern 校验、布尔/数值字段无法传 JSON 值；logout/switch 无 TTY 选择器（auth.rs:806-846 resolve_account 无 target 即报错）。
+- Ref：commands/handlers/auth/form.ts（answerForm 全表单面）、chooseIntegration/chooseCredential。G-61 修的是集成选择器半边，非 DUP。
+
+### G-151 ⚠️ mcp auth 架构分歧 + 两行为缺口（cli）
+- 架构分歧为有意设计：CLI 进程内 PKCE+loopback（mcp.rs:364-365 注释自述）vs ref 服务端 integration oauth（mcp/auth.ts）。
+- 行为缺口：① 无 name 时无 mcpAuthChoices 交互选择器（TTY 也强制要求 name）；② 已有有效凭据无 re-auth 确认对话（ref 先列 connections 并 remove 旧凭据）。
+
+### G-152 ⚠️ 根命令缺 UpdatePreflight 与 Env.session() 注入（cli）
+- Rust：misc.rs 根 handler（:17-63）无 UpdatePreflight（ref default.ts:24 升级替换期的终端提示接管）、无 Env.session() 服务会话注入；oc-cli 无 packages.prepare / TUI updater subscribe 接线。
+- 10 分钟后台更新循环本身在位（main.rs:71 spawn_background_update_check，通知走 state/update-notice.log）——初报该半边不成立。
+
+### G-156 ⚠️ updater/uninstall 残留（cli）
+- 包名恒 `@opencode-ai/cli`（updater.rs:81 DEFAULT_PACKAGE 常量；ref 从 release metadata.package 解析）；npm 分支无条件 `--force`（:118；ref 条件加）；vp 恒 `update`（:136）无 `install --force` 跨包迁移、pnpm/yarn 跨包迁移报错分支缺失；uninstall 不执行包管理器卸载命令（execute_removals :1104-1110 仅目录/注册/shell；ref uninstall.ts:113-125 执行 removal(method).run + win32 RetainedImage）。
+- 包管理器安装检测缺失为文档化有意裁剪（updater.rs:354-357 注释，G-17 族），但显式 `--method npm` 安装后的自更新/卸载链路因此断裂。G-99 只覆盖 curl 方法语义（已修）。
+
+### G-160 ⚠️ 反序列化/校验松弛三处（schema/theme）
+- ① untagged OAuthValue/Disabled(bool) 接受 `true`（oc-schema/mcp.rs:97-103、config/websearch.rs；ref 仅字面量 `false`）。
+- ② resolveHue 不拒绝未知 step 键（oc-theme/resolve.rs:381-398 静默忽略 vs ref tui/resolve.ts:224 `throw "Unknown hue step"`）。
+- ③ v1 主题 null 值静默跳过（oc-theme/v1.rs:82 `Json::Null => Ok(None)` vs ref 视为已定义抛错）。畸形输入在 Rust 下更宽容，配置错误无诊断。
+
+## 🟢 低
+
+### G-116 ⚠️ PTY 服务三差异（core）
+- ① 输出 cursor/buffer_cursor 按字节计数（pty.rs:176,:188）；ref pty.ts:206 按 UTF-16 码元——多字节输出的会话 cursor 经 WS/跨进程传递与 v2 客户端不可互换（回放跳段或重复）。
+- ② 订阅回调 panic 无隔离（pty.rs:173-183 持锁裸调；锁为 parking_lot 不毒化，但 panic 沿 reader 线程 unwind 致数据流静默中断、会话卡 running）；ref pty.ts:214,300 catch 后移除订阅者继续。
+- ③ win32 的 LC_ALL/LC_CTYPE/LANG=C.UTF-8 注入缺失（pty.rs:459-460 仅 TERM/OPENCODE_TERMINAL；本构建非 win32 目标，低危前瞻项）。
+
+### G-117 ⚠️ 凭证存储两处微偏差（core）
+- activate/update 额外更新 time_updated（integration/credential.rs:239,:285-297；ref credential.ts:124-130,227-228 的 set 不含该列）——外部可见 mtime 漂移。
+- 无 integration_id 的行以 `integration_id=""` 进入 all() 结果（credential.rs:71,:132 `unwrap_or_default()`；ref :69 直接丢弃）。复现：手动插入 NULL integration_id 凭证后 `credential list`——ref 隐藏，rust 返回空串条目。
+
+### G-123 ⚠️ togetherai/digitalocean env 回退链缺失（ai）
+- Rust：snapshot togetherai env 仅 `["TOGETHER_API_KEY"]`、digitalocean 仅 `["DIGITALOCEAN_ACCESS_TOKEN"]`；facade.rs:551-558 bearer_auth 只按 catalog env 顺序构造。
+- Ref：togetherai.ts:37 `[TOGETHER_API_KEY, TOGETHER_AI_API_KEY]`；digitalocean.ts:36 `[DIGITALOCEAN_ACCESS_TOKEN, DIGITALOCEAN_API_KEY, DO_INFERENCE_API_KEY]`。
+
+### G-124 ⚠️ media Generation 缺 events()/await() 观察流（ai/client）
+- Rust：oc-ai/src/media/route.rs:812-905 仅有 token/first_snapshot/status/result/cancel/poll_read；Observation 事件类型在 media/model.rs:65-144 有定义但 oc-core/oc-server 零消费。
+- Ref：generation.ts:111-145 `events()`（schedule 轮询推送 queued/progress/finished，含 deadline 钳制）+ resultEvents。补 events() 或文档声明降级。
+
+### G-125 ⚠️ oc-client SharedEvents 终止错误只投递一次（ai/client）
+- Rust：shared_events.rs:341-344 err_yielded 守卫——只产出一次 Err 后流结束（注释自认刻意偏离，ClientError 非 Clone）；terminal_error()（:330-334）为补偿 API。
+- Ref：shared-events.ts:76,123 完成时 reject 全部 pending、completion.error 后每次 next() 都 reject。跨语言消费者按 TS 语义写的循环会提前退出。建议文档标注契约差或改投递 Arc<ClientError>。
+
+### G-126 ⚠️ SSE 16MiB 上限按字节 vs TS 按字符（ai/client）
+- Rust：sse.rs:12 MAX_SSE_EVENT_BYTES、:39/:200 按字节计数。
+- Ref：client.ts:385-386 按解码后 JS 字符（UTF-16 码元）。含 CJK/emoji 的长事件 Rust 提前报 SseEventTooLarge。按 chars().count() 或文档钉定即可。
+
+### G-128 ⚠️ 通用 spring/tween 动画引擎未移植（tui）
+- Rust：全 crates 无 createAnimatable/advanceSpring；session_tabs.rs:14 注释 "motion springs stay C2"；tool_detail.rs websearch 静态渲染。
+- Ref：ui/animation.ts（advanceSpring）+ retry-provider.tsx:19-20（FADE=80/RESIZE=60）。连带丢失：RetryProvider fade/resize、tab 宽度 spring、pane-resize 平滑过渡、title-shimmer/DIM 回退（session_tabs_solid.rs:773-795 静态渲染，无动画分支）。
+
+### G-129 ⚠️ display_width 缺文本呈现型 emoji 收窄规则（tui）
+- Rust：wrap.rs:89-91 `text.width().saturating_sub(merged_cells(text))`（unicode-width；merged_cells 只处理 Brahmic）。
+- Ref：string-width.node.ts:9-26（width==2 且非 EAW2 且 textEmoji 且无 VS16/20E3/ZWJ → 记 1）。❤ 等字符 Rust 记 2、TS 记 1。
+
+### G-130 ⚠️ splitAddedPatch 未移植（tui）
+- Ref：util/diff.ts:18-38（新增文件大补丁按 size 切块）。Rust 全 src grep `-0,0`/split_added 零命中，diff_viewer.rs 直接解析 hunk。
+
+### G-131 ⚠️ dialog-select alt+↑/↓ 跨 section 跳转未移植（tui）
+- Ref：dialog-select.tsx:367-374,547-562（sectionNavigation）。Rust dialog_select.rs grep alt+up/move_section 零命中。
+
+### G-132 ⚠️ 导出选项交互表单折叠为 4 静态行（tui）
+- Rust：command_palette.rs:1051-1059 四条 SelectOption，描述写死 "thinking off, tool calls on"/"unsanitized"。
+- Ref：dialog-export-options.tsx:11-42（defaultThinking/thinking/tools/sanitize 交互态）——用户无法配置导出内容。
+
+### G-133 ⚠️ openUrl 丢失 scheme 校验；仅 xdg-open（tui）
+- Rust：store.rs:8519-8531 任意 scheme 直接交 xdg-open（无 http/https 校验）；dialog.rs:1697-1706 openPath 同款。
+- Ref：link.tsx:27 → util/open.ts:3-12（npm open 三平台 + openUrl 校验 scheme）。openPath/openUrl 仅 xdg-open 在 Linux 目标可接受（建议文档化）；scheme 校验是真缺口。
+
+### G-134 ⚠️ mini 完成态工具结构化快照未移植（tui）
+- Ref：mini/tool.ts（1358 行：toolView/snapWrite/snapEdit/snapPatch/snapTask/toolScroll、代码块/diff 卡/任务卡/可滚动展开）。Rust mini/ grep 零命中；transport.rs tool_caption 自述 "caption subset"，仅保留行内 caption。
+
+### G-135 ⚠️ model-preference setFavorite 写路径缺失（tui）
+- Rust：mini/model_pref.rs 仅 ModelPreferenceDocument{recent,favorite,variant}（:117,126 favorite 只读保留，无 set_favorite）。`model.dialog.favorite` 键位已注册但收藏永不持久化。Ref：model-preference.ts setFavorite。
+
+### G-136 ⚠️ Route 枚举无通用 prompt 携带字段（tui）
+- Rust：store.rs:47-50 `enum Route { Home, Session { session_id } }`（仅 app.rs:215 arm_startup_prompt 专用通道）。Ref：context/route.tsx:12-19（HomeRoute.prompt/SessionRoute.prompt）——任意导航时预填草稿不可达。
+
+### G-137 ⚠️ `session.toggle.thinking`/`scrollbar` 键位注册但无 dispatcher 臂（tui）
+- Rust：oc-tui src grep `session.toggle.thinking|toggle_scrollbar` 零命中（对照 verbosity.cycle 已在 command_palette.rs:247-252 正确接线）。Ref：index.tsx:1024-1049 写 config.update。按键无任何效果。
+
+### G-138 ⚠️ session.undo 缺 pending 分支（tui）
+- Rust：store.rs:7721-7762 session_undo_pressed 无条件 revert_stage。Ref：index.tsx:985-992（pendingDeliveries.has → mutatePending("cancel")，否则 interrupt→wait→revert.stage）——仍在 inbox 排队的消息被错误走 interrupt+revert.stage 而非 inbox.cancel。
+
+### G-139 ⚠️ crossterm 键翻译 CONTROL 分支只匹配 Char（tui）
+- Rust：app.rs crossterm_key_to_spec:9133+ `match key.code { Char(ch) => …, _ => None }`——ctrl+shift+tab（BackTab+CONTROL）返回 None，`session.tab.previous` 主键位 PTY 路径失效（alt+up 别名可用）。
+
+### G-140 ⚠️ session 路由长尾组（7 合 1）（tui）
+- ① AssistantRetry 重试倒计时 footer 未建模（Message 无 retry 字段）；② TurnTokenUsage 调试表缺失；③ Write/Edit 后 LSP Diagnostics 行缺失；④ 导出转录裁掉工具 Input/输出正文（app.rs:6388 仅 `**Tool: name**` vs ref index.tsx:3503-3533 含 Input JSON+输出全文）；⑤ pending-steer 点击管理（Move to queue/Delete）缺失（app.rs:1120-1126）；⑥ --auto 权限失败不回滚 autoApproved（rust fire-and-forget vs ref index.tsx:266）；⑦ session.redo 无 enabled 门（ref index.tsx:169-175 revert?.messageID 条件）。
+
+### G-141 ⚠️ 嵌入式 PTY 面板主题调色板注入未移植（tui）
+- Rust：terminal_pane.rs grep osc/palette/oklch 零命中。Ref：terminal-pane.tsx:338-385（OSC 4/10/11 + rgbToOklch 色相匹配）——PTY 输出用终端默认配色。
+
+### G-142 ⚠️ cliErrorMessage 友好错误格式化链未移植（tui）
+- Rust：grep cliErrorMessage/"Did you mean" 零命中（app.rs error_to_string 原始 to_string 进 toast）。Ref：util/error.ts:5-26（递归 + "Did you mean: …" 建议、ConfigInvalidError issue 明细）。
+
+### G-143 ⚠️ tabs spinner 仅 dots 样式；indicators 设置不生效（tui）
+- Rust：session_tabs.rs:37,42 仅 dots（注释 "TAB_SPINNERS.dots"）；dialog_config.rs:243 有 tabs.indicators 设置行但 config.rs 不解析、渲染器无 numbers 分支。
+- Ref：TAB_SPINNERS 4 样式（arcs/quadrants/line 缺）+ 4 种未读标记。G-49a 只钉定 dots 帧数学（已追加备注）。
+
+### G-144 ⚠️ autocomplete 触发检测用 char 偏移而非显示宽度偏移（tui）
+- Rust：autocomplete.rs:513-546 trigger_for 基于 `Vec<char>` 索引。Ref：prompt/display.ts:41-61 slashTriggerIndex/mentionTriggerIndex 基于 displaySlice + promptOffsetWidth。语义等价，但宽字符混排时 @ // 触发锚点可能与 ref 差 1+ 列（需实测）。
+
+### G-145 ⚠️ 插件渲染崩溃隔离降级 + activity-summary 未实现（tui）
+- ① 插件渲染失败 eprintln 降级，无 "crashed in slot" 错误 toast（ref ErrorBoundary）。② activity-summary 独立视图仅存注释引用（message/list.rs:64-68），低 verbosity 的工具/思考折叠摘要未实现。（未知键位 log+skip+toast 半边为已文档化有意偏离，不立项。）
+
+### G-146 ⚠️ dialog-config "Color mode" 设置搜索关键词为空串（tui）
+- Rust：dialog_config.rs:91-98 keywords: ""（相邻 colors 条目有 "color scheme, colors"）。Ref：dialog-config.tsx:35 `["dark mode","light mode","system theme"]`——palette 搜 "dark mode" 不命中。（title-shimmer/DIM 半边并入 G-128。）
+
+### G-153 ⚠️ plugin list 不发现本地目录插件；版本截断不校验 hex（cli）
+- Rust：plugin.rs list 段无 localPluginDirectories/localSource；:60 `version.len() == 40 || == 64` 只看长度（任意 40 字符版本串被截 7 位）。Ref：plugin/list.ts:14（本地发现）、:94 正则 `/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i`。
+
+### G-154 ⚠️ api/models 输出差异（cli）
+- Rust：misc.rs models 段 `models.sort()` 字节序；api.rs 仅 Basic auth。Ref：models.ts:18 Service.headers、:23 localeCompare；api.ts:29 同。oc-util 已有 localecmp.rs 却未消费。
+
+### G-155 ⚠️ stats 输出降级（cli）
+- ① 活动日历网格/图例/COLORFGBG 亮暗调色/ANSI 颜色缺失（stats.rs:2 注释自述 REGISTERED simplification；ref stats.ts:165-194,93,100,319-342）；② "best streak" 在 activity 行与 tool 行重复输出两次（:288,:302）；③ 日界 UTC（:123 rem_euclid 86400000、TZ||"UTC"）vs ref 本地午夜 + Intl IANA（stats.ts:40,144-163）——非 UTC 时区天数桶起点可能偏移；④ 数字无千分位。
+
+### G-157 ⚠️ mini 三偏差（cli）
+- ① 不 chdir 到 $PWD（mini.rs:203-211 仅字符串采纳；ref mini.ts:201-209 真 chdir 失败报错）——相对路径语义不同。② reconnect seam 恒 None 永不重连（mini.rs:234；ref handlers/mini.ts:29 接 250ms 重连循环）。③ 新增 30s 总 deadline（mini.rs:126；ref 无限重试直到 abort）。G-68（fragment/image 回放，已修）不含本条。
+
+### G-158 ⚠️ server-connection 无 onStart；standalone 无 Options.command（cli）
+- server_connection.rs grep onStart/Starting background 零命中（ref server-connection.ts 有 "Starting/Restarting background server..." 提示回调）；standalone.rs:116-117 恒 self_command（无自定义命令）、:160 新增 60s ready 超时（ref 无限等待）。
+
+### G-159 ⚠️ ACP getSession 目录匹配用 canonicalize（cli）
+- Rust：acp/service.rs:379-381 双侧 `std::fs::canonicalize`（解析 symlink）。Ref：acp/service.ts:100 `FSUtil.resolve`（词法归一）。经符号链接进入的会话目录匹配语义不同（Rust 更宽松）。建议注释钉定或改词法归一。
+
+### G-162 ⚠️ util 残留两小项（util）
+- ① npm registry 解析仅 4 层级联（npm_config.rs:23-29 env→项目→用户→默认）；ref 走 @npmcli/config 全量（globalconfig/builtin 等）——企业全局 .npmrc/镜像配置行为不同。② Hash.fast(sha1) 无统一 util（hash.rs 仅 sha256_hex，sha1 散落调用点各自引入）。glob brace/extglob/scan 见 G-92 已钉定。
+
+## ℹ️ 登记
+
+### G-161 ℹ️ Global roots 两记录性偏差（util）
+- ① APP_NAME="opencode-rust"（global_roots.rs:29；ref global.ts:31 "opencode"）——有意共存设计（legacy_v2_roots 提供迁移源，已有注释），补文档登记。② `Roots::ensure`（:505-519）不做 tmp realpath 规范化（ref global.ts:92-93 以 canonicalTmp 为比较基准）——macOS /private/tmp 与 /tmp 混用时路径比较可能失配，建议 canonicalize 或注释钉定。
+
+### G-163 ℹ️ workerd 运行时目标与 ServerFetch.make 不移植（server）
+- Rust：grep boot.rs/oc-server 无 workerd/ServerFetch，仅原生 `boot_and_serve`（axum）。Ref：server/src/fetch.ts（web-standard handler 嵌入）、workerd.ts（运行时替换层）。结构性不可移植（无 JS 运行时嵌入目标）；已收编 G-17 族文档化范围裁剪（本条为登记，见 G-17 追加备注）。
+
+### G-164 ℹ️ announce.rs 为位置事件级联的服务端替身（server）
+- Ref 由各 core 服务自持 notify（reload/transform → bus.publish）；Rust 由 oc-server/announce.rs 按装配/请求时机合成（模块头 :1-15 自述；engine/mod.rs:652 F-5 注释佐证；含 project.updated 60s 限速、九个空 *.updated 帧复刻，有 parity 测试）。结构性 seam：新增 location 服务/事件需同步维护 announce 级联清单，漂移风险集中该文件——保持 parity 金样并在此登记。
+
+## 归类与收编（不另立项）
+
+- **experimental AI（evaluation/system-one）** → G-7（附 G-17），第九轮同款裁决。
+- **`POST /api/plugin/install` 客户端方法** → G-17 rust-extra 家族（第五轮已裁决，methods.gen.rs:2201 与服务端路由同源）。
+- **tui feature-plugins/system/storybook 工作台** → G-17（开发期 fixture 同族，已追加备注）。
+- **run 非 TTY 权限行为** → G-17（TTY 提示为有意增强，非 TTY 路径 auto-reject 与 ref 一致）。
+- **run/v1.ts 输出兼容层** → G-32（v1/legacy 族，已追加备注）。
+- **schema 五子项（rpc.ts/legacy-event/durable-event-manifest/models-dev 管道/v1/*）** → G-32 明文范围（G-87 已裁决，已追加备注）。
+- **glob brace/extglob + Glob.scan** → G-92（注释级钉定）。
+- **未知键位 log+skip+toast**（tui #20 半边）→ 已文档化有意偏离（代码注释+测试），非缺口。
+
+## 第十轮勘误（经复核撤销的初报，勿再立项）
+
+1. **Formatter 为 no-op** — formatter.rs 同时含生产 `BuiltinsFormatter`（:384 真实命令执行，:779 impl；接线 engine/mod.rs:1241）与仅测试用 NoopFormatter（:99）；formatter.rs:1-7 模块头"ships a no-op"为陈旧注释（建议顺手清理）。
+2. **git clone/fetch/checkout/resetHard 与 vcs.ts/patch.ts 未移植** — clone/fetch/checkout -B/reset --hard 全在 oc-core/reference/repository_cache.rs:241-290；vcs 全家在 oc-server/handlers/project.rs:968-1818（split_git_patch :1709、countPatch/addPatch :853-880）；第五轮勘误 #5 结论维持。
+3. **MCP reconcile 用 PartialEq 替代深度相等** — ServerConfig（oc-schema/mcp.rs:103-109）全类型化（String/BTreeMap/bool/u16/枚举），derive PartialEq 即结构化深度相等且 BTreeMap 键序恒定，与 isDeepStrictEqual 等价。
+4. **子代理 prompt 绕过 SessionPrompt.prepare** — tool/subagent.rs:368-377 裸 admit，但 drain 消费边界统一兜底：runner/drain.rs:487,524-543 → prompt_prepare.rs:141 对所有 pending user 行跑 hook + @skill（第五轮勘误 #3 同族裁决）。
+5. **isTransientError 丢 cause 链遍历** — oc-util/retry.rs:144 在全仓零生产调用；唯一生产瞬态分类器 MCP 侧自建链完整（mcp/client.rs:273-276 沿 source() 收集、:1375-1377 chain.join 进错误消息）。
+6. **Flock 心跳/可观测性丢失** — flock(2) 崩溃恢复语义严格强于用户态锁目录协议（内核自动释放），heartbeat/stale-breaker 无行为后果；互操作边界已由 oc-tui/storage.rs:44-49 显式文档化。
+7. **服务生命周期整套未移植** — 已移植在 oc-server/src/lifecycle.rs（2599 行）：discover/probe（:86-385）、ensure 三次超时强杀（:936-952）、版本不匹配重建（:980-999）、SIGTERM→SIGKILL 升级（:1115-1160）；初报只扫了 oc-client。
+8. **pty-handoff sidecar 缺失** — 生产侧 lifecycle.rs pty_handoff_prepare/environment/complete/clear（:1235,:1010,:1356,:1365）、消费侧 boot.rs:774-775 读取并清除 OPENCODE_PTY_HANDOFF（:989-1065 测试），四函数一一对应。
+9. **AbortSignal 取消全链路缺失** — Rust drop future 即中止在途请求（reqwest/SSE 语义等价）；SharedEvents 有显式 stop()→task.abort()（shared_events.rs:212-217）；timeout 包调用即得 deadline。
+10. **pty connect 两 endpoint 生成为 execute_json** — 功能由 oc-tui/app.rs:6585 完整承接（connect-token→ticket→WS 升级流）；死封装自带 TODO(pty-ws) 注释钉定（methods.gen.rs:1959-1960,2533-2534）。
+11. **connect_token Envelope 解包丢 location** — 初报配对错位：persistent-pty endpoint 两侧同取 data（TS types.ts:6382 同样只取 data）；pty endpoint 两侧都含 location（types.gen.rs:9898-9905 vs TS types.ts:6280 不解包）。逐 endpoint 全等。
+12. **可执行 Tool 运行时不在 oc-ai** — 跨 crate 归属：oc-core/src/tool/registry.rs 完整承接（模块头 :2-6 自述 port of runtime.ts execute + tool.ts executeTool，:192 注释明言），非缺失。
+13. **serve 缺 PTY handoff / EADDRINUSE 15s 重试** — 均在 oc-server：lifecycle.rs:1334-1377（handoff 继承+decode_inherited_handoff，boot.rs:776 接线）、:1478+（incumbent 100ms×15s 重试环）+ :1505-1512 逐字复刻的 "Managed service port…" 文案；serve.rs 经 boot::boot_and_serve（:143）全链路接线。
+
+## 第十轮判定汇总
+初报 79 项：确认立项 60（G-105..G-164：🔴 4 = G-105/106/109/118；🟡 21 = G-107/108/110-115/119-122/127/147-152/156/160；🟢 32；ℹ️ 3 = G-161/163/164）；驳回 13（见勘误）；DUP 归并 6 处（G-7/G-17×3/G-32×2/G-92 + G-6/G-49a 勘注）。core/ai 侧共同根因（G-118..G-121）：provider 目录装配层是 parity 录制盲区——facade generic 分支 + detect_* 表 + models.dev 快照三处都没有 TS provider 文件里 hardcode 的 baseURL/env 回退/compat 注入，建议为受影响 provider 补 baked 默认与 `*_chat_compatibility()` 表（复用 openai_chat.rs:3375-3393 既有模式）。
