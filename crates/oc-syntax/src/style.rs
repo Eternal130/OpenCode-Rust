@@ -1,9 +1,9 @@
 //! The oc-syntax style vocabulary: [`Color`], [`Modifier`] and
-//! [`Style`] — self-contained (no oc-tui, no ratatui), the token style
+//! [`Style`] — self-contained (no oc-tui, no TUI kit), the token style
 //! shape the highlight engine materializes spans in (lane B2: the
-//! vocabulary leaves ratatui; consumers convert at their boundary).
+//! vocabulary is crate-local; consumers convert at their boundary).
 //!
-//! The shape and the modifier bit layout match ratatui 0.29's `style`
+//! The shape and the modifier bit layout match the upstream TUI kit's `style`
 //! surface byte-for-byte, so boundary conversions are field-for-field
 //! rebuilds with zero semantic drift.
 
@@ -16,7 +16,7 @@ pub enum Color {
     Rgb(u8, u8, u8),
 }
 
-/// Text attribute bits — ratatui 0.29's exact layout (`BOLD = 1<<0` …
+/// Text attribute bits — the upstream TUI kit's exact layout (`BOLD = 1<<0` …
 /// `CROSSED_OUT = 1<<8`), so consumers rebuild their own words 1:1.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Modifier(u16);
@@ -94,7 +94,7 @@ impl std::ops::BitOrAssign for Modifier {
 }
 
 /// A token style: optional fg/bg overlaid on the base, plus an
-/// attribute word to add — ratatui 0.29's `Style` shape (minus the
+/// attribute word to add — the upstream `Style` shape (minus the
 /// fields nothing here exercises).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Style {
