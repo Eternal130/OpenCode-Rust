@@ -2673,3 +2673,192 @@ async fn vertex_service_account_adc_defers_to_env_adc() {
     assert!(host.vertex_binding().await.is_none());
     std::env::remove_var("GOOGLE_APPLICATION_CREDENTIALS");
 }
+
+// -- G-115: metadata projection, incremental stderr, cancellation ----------
+
+/// G-115①: `entry.ref.metadata` projects into Info (ref
+/// integration.ts:389 — e.g. the MCP registry's `{source: "mcp"}`).
+#[tokio::test]
+async fn g115_integration_metadata_projects_into_info() {
+    let host = host().await;
+    host.update_integration("mcp-remote", "My MCP");
+    host.update_method(
+        "mcp-remote",
+        Method::Command {
+            id: "login".into(),
+            label: "Log in".into(),
+            command: vec!["true".into()],
+        },
+        None,
+    );
+    let metadata: std::collections::BTreeMap<String, Value> =
+        [("source".to_owned(), Value::String("mcp".to_owned()))].into_iter().collect();
+    host.set_integration_metadata("mcp-remote", Some(metadata));
+
+    let listed = host.list().await.expect("list");
+    let info = listed.iter().find(|info| info.id == "mcp-remote").expect("listed");
+    assert_eq!(info.metadata.as_ref().and_then(|map| map.get("source")), Some(&json!("mcp")));
+
+    let got = host.get("mcp-remote").await.expect("get").expect("some");
+    assert_eq!(got.metadata.as_ref().and_then(|map| map.get("source")), Some(&json!("mcp")));
+
+    // A rename preserves the metadata (the ref's editor.update only
+    // mutates the fields it touches).
+    host.update_integration("mcp-remote", "Renamed");
+    let got = host.get("mcp-remote").await.expect("get").expect("some");
+    assert_eq!(got.name, "Renamed");
+    assert_eq!(got.metadata.as_ref().and_then(|map| map.get("source")), Some(&json!("mcp")));
+}
+
+/// G-115②: stderr streams INCREMENTALLY into the pending attempt's
+/// message (ref integration.ts:645-670) — a polling status sees chunks
+/// while the command is still running.
+#[tokio::test]
+async fn g115_command_stderr_streams_incrementally() {
+    let host = host().await;
+    host.update_integration("cmd-stream", "Streaming");
+    host.update_method(
+        "cmd-stream",
+        Method::Command {
+            id: "slow".into(),
+            label: "Slow".into(),
+            command: vec![
+                "sh".into(),
+                "-c".into(),
+                "echo part1 >&2; sleep 1; echo part2 >&2; sleep 1; echo final-key".into(),
+            ],
+        },
+        None,
+    );
+    let attempt = host.command_connect("cmd-stream", "slow", None).await.expect("connect");
+
+    // Poll while pending: within the first second the message must
+    // already contain part1 (the old `.output()` implementation only
+    // produced the message at process exit).
+    let mut saw_early_message = false;
+    for _ in 0..20 {
+        if let Ok(CommandAttemptStatus::Pending { message: Some(message), .. }) =
+            host.command_status("cmd-stream", &attempt.attempt_id).await
+        {
+            if message.contains("part1") {
+                saw_early_message = true;
+                break;
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(saw_early_message, "stderr chunk visible while the command still runs");
+
+    // Terminal: the full accumulated stderr rides the failure-less path
+    // (stdout becomes the key).
+    for _ in 0..50 {
+        if matches!(
+            host.command_status("cmd-stream", &attempt.attempt_id).await,
+            Ok(CommandAttemptStatus::Complete { .. })
+        ) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(matches!(
+        host.command_status("cmd-stream", &attempt.attempt_id).await,
+        Ok(CommandAttemptStatus::Complete { .. })
+    ));
+}
+
+/// G-115③: cancelling a pending command attempt aborts it — the entry
+/// disappears and no credential is ever persisted (ref
+/// integration.ts:814-824 `Scope.close`).
+#[tokio::test]
+async fn g115_command_cancel_aborts_in_flight_attempt() {
+    let host = host().await;
+    host.update_integration("cmd-cancel", "Cancellable");
+    host.update_method(
+        "cmd-cancel",
+        Method::Command {
+            id: "sleep".into(),
+            label: "Sleeps".into(),
+            command: vec![
+                "sh".into(),
+                "-c".into(),
+                "sleep 30; echo leaked-key".into(),
+            ],
+        },
+        None,
+    );
+    let attempt = host.command_connect("cmd-cancel", "sleep", None).await.expect("connect");
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    host.command_cancel("cmd-cancel", &attempt.attempt_id).await;
+
+    assert!(matches!(
+        host.command_status("cmd-cancel", &attempt.attempt_id).await,
+        Err(IntegrationError::AttemptNotFound)
+    ));
+    // The killed command never settles a credential.
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(host.connection_active("cmd-cancel").await.expect("active").is_none());
+}
+
+/// G-115③: cancelling a pending oauth attempt aborts the in-flight
+/// exchange (the callback future is dropped — its Drop guard flips) and
+/// never stores a credential (ref integration.ts:785-795).
+#[tokio::test]
+async fn g115_oauth_cancel_aborts_in_flight_exchange() {
+    let host = host().await;
+    let aborted = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = Arc::clone(&aborted);
+    let authorize: super::AuthorizeFn = Arc::new(move |_answer| {
+        let flag = Arc::clone(&flag);
+        Box::pin(async move {
+            struct AbortOnDrop(Arc<std::sync::atomic::AtomicBool>);
+            impl Drop for AbortOnDrop {
+                fn drop(&mut self) {
+                    self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+            let _guard = AbortOnDrop(Arc::clone(&flag));
+            Ok(Authorization {
+                url: "https://example.test/device".into(),
+                instructions: "visit".into(),
+                expires_at: None,
+                mode: AuthMode::Auto(Box::pin(async {
+                    // The exchange "hangs" until the browser answers —
+                    // long enough that the cancel below must abort it.
+                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                    Ok(CredentialValue::OAuth(OAuthValue {
+                        method_id: "hang".into(),
+                        refresh: "r".into(),
+                        access: "stale-access".into(),
+                        expires: 0,
+                        metadata: None,
+                    }))
+                })),
+            })
+        }) as BoxFuture<'static, Result<Authorization, String>>
+    });
+    host.update_integration("oauth-hang", "Hanging");
+    host.update_method(
+        "oauth-hang",
+        Method::OAuth { id: "hang".into(), label: "Hang login".into(), form: None },
+        Some(OAuthImplementation { authorize, refresh: None, label: None }),
+    );
+
+    let attempt =
+        host.oauth_connect("oauth-hang", "hang", &BTreeMap::new(), None).await.expect("connect");
+    assert_eq!(attempt.mode, "auto");
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    host.oauth_cancel("oauth-hang", &attempt.attempt_id).await;
+
+    assert!(matches!(
+        host.oauth_status("oauth-hang", &attempt.attempt_id).await,
+        Err(IntegrationError::AttemptNotFound)
+    ));
+    // The in-flight exchange was aborted (the future dropped), and no
+    // stale credential was stored.
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(
+        aborted.load(std::sync::atomic::Ordering::SeqCst),
+        "the auto-callback future was dropped by the cancel"
+    );
+    assert!(host.connection_active("oauth-hang").await.expect("active").is_none());
+}

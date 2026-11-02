@@ -211,7 +211,8 @@ mod tests {
                 action: "edit".into(),
                 resources: vec!["src/*".into(), "doc/*".into()],
             })
-            .await;
+            .await
+            .unwrap();
         // Conflict-do-nothing: the duplicate (p1, edit, src/*) is kept as-is.
         grants
             .add(&AddSavedGrants {
@@ -219,7 +220,8 @@ mod tests {
                 action: "edit".into(),
                 resources: vec!["src/*".into()],
             })
-            .await;
+            .await
+            .unwrap();
         // Empty resources is a no-op.
         grants
             .add(&AddSavedGrants {
@@ -227,28 +229,30 @@ mod tests {
                 action: "edit".into(),
                 resources: vec![],
             })
-            .await;
+            .await
+            .unwrap();
         grants
             .add(&AddSavedGrants {
                 project_id: p2.clone(),
                 action: "read".into(),
                 resources: vec!["x".into()],
             })
-            .await;
+            .await
+            .unwrap();
 
-        let p1_rows = grants.list(Some(&p1)).await;
+        let p1_rows = grants.list(Some(&p1)).await.unwrap();
         assert_eq!(p1_rows.len(), 2);
         let resources: Vec<&str> = p1_rows.iter().map(|grant| grant.resource.as_str()).collect();
         assert_eq!(resources, vec!["doc/*", "src/*"], "ordered by action, resource");
         assert!(p1_rows.iter().all(|grant| grant.project_id == p1));
-        assert_eq!(grants.list(None).await.len(), 3);
-        assert!(grants.list(Some(&ProjectId("proj_missing".into()))).await.is_empty());
+        assert_eq!(grants.list(None).await.unwrap().len(), 3);
+        assert!(grants.list(Some(&ProjectId("proj_missing".into()))).await.unwrap().is_empty());
 
         let id = p1_rows[0].id.clone();
-        grants.remove(&id).await;
-        assert_eq!(grants.list(Some(&p1)).await.len(), 1);
-        grants.remove(&id).await; // idempotent
-        assert_eq!(grants.list(Some(&p1)).await.len(), 1);
+        grants.remove(&id).await.unwrap();
+        assert_eq!(grants.list(Some(&p1)).await.unwrap().len(), 1);
+        grants.remove(&id).await.unwrap(); // idempotent
+        assert_eq!(grants.list(Some(&p1)).await.unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -262,7 +266,8 @@ mod tests {
                 action: "bash".into(),
                 resources: vec!["rm *".into()],
             })
-            .await;
+            .await
+            .unwrap();
         drop(writer);
         drop(db);
 
@@ -270,7 +275,7 @@ mod tests {
         let db =
             Database::open_file(dir.path().join("opencode.db")).await.expect("reopen database");
         let reopened = store(&db);
-        let grants = reopened.list(Some(&ProjectId("proj_1".into()))).await;
+        let grants = reopened.list(Some(&ProjectId("proj_1".into()))).await.unwrap();
         assert_eq!(grants.len(), 1);
         assert_eq!(grants[0].action, "bash");
         assert_eq!(grants[0].resource, "rm *");
