@@ -15,7 +15,7 @@ impl From<crate::style::Color> for CellColor {
         match color {
             crate::style::Color::Rgb(r, g, b) => Self::Rgb(r, g, b),
             crate::style::Color::Indexed(index) => Self::Indexed(index),
-            _ => Self::Default,
+            crate::style::Color::Reset => Self::Default,
         }
     }
 }

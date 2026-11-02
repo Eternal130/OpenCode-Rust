@@ -149,7 +149,6 @@ impl Style {
     /// — the syntax goldens pin these bytes, so the vocabulary keeps
     /// the exact format).
     fn fmt_stylize(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        use std::fmt::Write as _;
         if let Some(color) = self.fg {
             write!(f, ".fg(Color::{color:?})")?;
         }
