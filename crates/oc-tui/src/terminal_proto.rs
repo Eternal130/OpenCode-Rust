@@ -226,15 +226,16 @@ pub fn install_crash_restore(mouse: bool) {
         // chain to the previous hook (the stderr guard's report) —
         // but only when THIS thread owns the terminal.
         //
-        // Lane B3a: the restore is the LIVE session Terminal's own
-        // teardown (opentui's epilogue from live state — raw mode,
-        // mode pops under their gates), NOT the stock opentui
-        // `install_panic_hook` (which fires on every thread's panic,
-        // tearing the terminal out from under caught worker panics)
-        // and not a second static-byte registration: no double
-        // coverage with the signal path below.
+        // Lane B3a: the stock opentui `install_panic_hook` is
+        // deliberately NOT installed — it fires on EVERY thread's
+        // panic and its registry teardown restores cooked mode
+        // mid-run, tearing the terminal out from under the CAUGHT
+        // worker/render panics the app is designed to survive
+        // (ErrorComponent, the plugin host). This thread-gated static
+        // hook keeps the retired discipline: no double registration,
+        // the SIGHUP/SIGTERM path below stays write(2)-only.
         if current_thread_key() == TERMINAL_THREAD.load(std::sync::atomic::Ordering::Relaxed) {
-            crate::app::panic_teardown_session();
+            emit(crash_restore_sequence());
         }
         previous(info);
     }));

@@ -941,11 +941,15 @@ fn pty_kitty_handshake_and_teardown_bytes() {
 
     let captured = output.lock().expect("output lock").clone();
     let contains = |needle: &[u8]| captured.windows(needle.len()).any(|w| w == needle);
-    // Boot: the subscriptions + the query went out.
+    // Boot: the theme-flip family went out (lane B3a: opentui's
+    // probe burst arms `?2031h` and queries `?2027` via DECRPM — the
+    // retired `?2027h` enable is the probe's gated subset, not a
+    // separate oc-tui emission).
     assert!(
-        contains(b"\x1b[?2027h\x1b[?2031h"),
-        "the theme-flip subscriptions (?2027h + ?2031h) emitted at boot"
+        contains(b"\x1b[?2031h"),
+        "the color-scheme mode report (?2031h) armed at boot"
     );
+    assert!(contains(b"\x1b[?2027$p"), "the ?2027 DECRPM query emitted at boot");
     assert!(contains(b"\x1b[?u"), "the kitty query emitted at boot");
     // The ANSWER gated the push (the advertisement arrived → push).
     assert!(contains(b"\x1b[>5u"), "the kitty push followed the advertisement");
