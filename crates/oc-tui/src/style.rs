@@ -141,12 +141,7 @@ impl Style {
     /// and here: the layout tests build `const` styles).
     #[must_use]
     pub const fn new() -> Self {
-        Self {
-            fg: None,
-            bg: None,
-            add_modifier: Modifier::EMPTY,
-            sub_modifier: Modifier::EMPTY,
-        }
+        Self { fg: None, bg: None, add_modifier: Modifier::EMPTY, sub_modifier: Modifier::EMPTY }
     }
 
     /// The canonical builder-style `Debug` chain (ratatui 0.29's
@@ -301,8 +296,7 @@ mod tests {
     /// (the layout tests build `const` styles).
     #[test]
     fn builder_is_const_and_chains() {
-        const BOLD_BASE: Style =
-            Style::new().fg(Color::Indexed(252)).add_modifier(Modifier::BOLD);
+        const BOLD_BASE: Style = Style::new().fg(Color::Indexed(252)).add_modifier(Modifier::BOLD);
         assert_eq!(BOLD_BASE.fg, Some(Color::Indexed(252)));
         assert!(BOLD_BASE.add_modifier.contains(Modifier::BOLD));
         assert!(Modifier::SLOW_BLINK.intersects(Modifier::SLOW_BLINK | Modifier::RAPID_BLINK));
