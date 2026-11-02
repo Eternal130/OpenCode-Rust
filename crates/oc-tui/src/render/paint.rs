@@ -79,7 +79,7 @@ impl CanvasCell {
     /// Set the symbol (ratatui `Cell::set_symbol`: replaces the
     /// symbol wholesale; multi-char graphemes allowed).
     pub fn set_symbol(&mut self, symbol: &str) -> &mut Self {
-        self.symbol = symbol.to_owned();
+        self.symbol = symbol.into();
         self
     }
 
@@ -246,10 +246,10 @@ pub fn to_frame(buffer: &Buffer) -> Frame {
     let width = buffer.area.width as usize;
     let height = buffer.area.height as usize;
     let mut cells = vec![vec![Cell::default(); width]; height];
-    for y in 0..height {
-        for x in 0..width {
+    for (y, row) in cells.iter_mut().enumerate() {
+        for (x, out) in row.iter_mut().enumerate() {
             let cell = &buffer.content[y * width + x];
-            cells[y][x] = Cell {
+            *out = Cell {
                 ch: cell.symbol.chars().next().unwrap_or(' '),
                 attrs: modifier_bits(cell.modifier),
                 fg: map_color(cell.fg),
