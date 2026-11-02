@@ -844,7 +844,11 @@ fn finish_tool(
     *state = next;
 }
 
-/// `projectTerminalSnapshot` (message-updater.ts:22-29).
+/// `projectTerminalSnapshot` (message-updater.ts:22-29). G-112: the key
+/// presence of `files` carries the semantics — `files: []` writes an
+/// empty array and a MISSING key clears the field to undefined; writing
+/// only on non-empty arrays let a later capture-failure terminal event
+/// after a successful `files: []` snapshot resurrect the stale value.
 fn project_terminal_snapshot(
     draft: &mut AssistantDraft,
     snapshot: Option<oc_schema::id::SnapshotId>,
@@ -855,11 +859,7 @@ fn project_terminal_snapshot(
     }
     let mut next = draft.snapshot.clone().unwrap_or_default();
     next.end = snapshot;
-    if let Some(files) = files {
-        if !files.is_empty() {
-            next.files = Some(files.to_vec());
-        }
-    }
+    next.files = files.map(|files| files.to_vec());
     draft.snapshot = Some(next);
 }
 

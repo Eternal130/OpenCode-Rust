@@ -589,6 +589,8 @@ fn permission_message(error: &PermissionError) -> String {
         PermissionError::Corrected(corrected) => corrected.feedback.clone(),
         PermissionError::Blocked(blocked) => blocked.to_string(),
         PermissionError::SessionNotFound(id) => format!("session not found: {id}"),
+        PermissionError::Store(error) => format!("saved grant store failure: {error}"),
+        PermissionError::RequestNotFound(error) => error.to_string(),
     }
 }
 

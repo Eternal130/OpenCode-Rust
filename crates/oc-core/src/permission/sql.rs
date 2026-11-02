@@ -26,10 +26,10 @@
 //! - evaluation reads rows back as `{action, resource, effect: "allow"}`
 //!   rules (see [`super::saved::rules`]).
 //!
-//! The [`SavedGrantStore`] trait is infallible (v2 surfaces `saved.add`
-//! failures as reply defects, but the sqlite failures that survive the
-//! database lane's boot are process-fatal); this store degrades silently
-//! on database errors — queries return what they can.
+//! The [`SavedGrantStore`] trait is fallible (G-114: the ref pipes every
+//! query through `Effect.orDie` — saved.ts:48,77,81); the permission
+//! engine surfaces store failures as errors instead of silently
+//! degrading.
 //!
 //! Note the foreign key: `project_id REFERENCES project(id)`, so grants
 //! are only ever written for projects already resolved (v2 writes grants
@@ -62,7 +62,7 @@ impl SqliteSavedGrantStore {
 
 #[async_trait]
 impl SavedGrantStore for SqliteSavedGrantStore {
-    async fn list(&self, project_id: Option<&ProjectId>) -> Vec<SavedGrant> {
+    async fn list(&self, project_id: Option<&ProjectId>) -> Result<Vec<SavedGrant>, String> {
         let filter = project_id.map(|id| id.0.clone());
         let rows = self
             .db
@@ -97,12 +97,14 @@ impl SavedGrantStore for SqliteSavedGrantStore {
                 Ok(rows)
             })
             .await;
-        rows.unwrap_or_default()
+        // G-114: ref saved.ts:48 pipes the select through `Effect.orDie` —
+        // a database failure is a visible defect, not an empty list.
+        rows.map_err(|error| error.to_string())
     }
 
-    async fn add(&self, input: &AddSavedGrants) {
+    async fn add(&self, input: &AddSavedGrants) -> Result<(), String> {
         if input.resources.is_empty() {
-            return;
+            return Ok(());
         }
         let now = u64::try_from(self.clock.unix_ms()).unwrap_or(0);
         let now_i64 = i64::try_from(now).unwrap_or(0);
@@ -120,7 +122,7 @@ impl SavedGrantStore for SqliteSavedGrantStore {
                 )
             })
             .collect();
-        let _ = self
+        let inserted = self
             .db
             .transaction(move |tx| {
                 for (id, project_id, action, resource, created, updated) in rows {
@@ -137,17 +139,22 @@ impl SavedGrantStore for SqliteSavedGrantStore {
                 Ok(())
             })
             .await;
+        // G-114: ref saved.ts:77 — insert failures surface (orDie), they are
+        // never swallowed with `let _ =`.
+        inserted.map_err(|error| error.to_string())
     }
 
-    async fn remove(&self, id: &PermissionSavedId) {
+    async fn remove(&self, id: &PermissionSavedId) -> Result<(), String> {
         let id = id.0.clone();
-        let _ = self
+        let result = self
             .db
             .transaction(move |tx| {
                 tx.execute("DELETE FROM permission WHERE id = ?1", rusqlite::params![id])?;
                 Ok(())
             })
             .await;
+        // G-114: ref saved.ts:81 — delete failures surface (orDie).
+        result.map_err(|error| error.to_string())
     }
 }
 

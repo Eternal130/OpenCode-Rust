@@ -35,19 +35,20 @@ pub struct AddSavedGrants {
 /// sqlite table (unique on `(project_id, action, resource)`, insert
 /// conflict-do-nothing) — see [`super::sql`].
 ///
-/// TODO(database-lane): implement the sqlite-backed store once the database
-/// lane lands; wire it here as `SqliteSavedGrantStore`.
+/// G-114: every operation is fallible — the ref pipes each drizzle query
+/// through `Effect.orDie` (saved.ts:48,77,81), so a database failure is a
+/// visible defect, never a silently swallowed write.
 #[async_trait]
 pub trait SavedGrantStore: Send + Sync {
     /// Rows, optionally filtered by project.
-    async fn list(&self, project_id: Option<&ProjectId>) -> Vec<SavedGrant>;
+    async fn list(&self, project_id: Option<&ProjectId>) -> Result<Vec<SavedGrant>, String>;
 
     /// Persist grants; existing `(project_id, action, resource)` rows are
     /// kept (`onConflictDoNothing`). Empty `resources` is a no-op.
-    async fn add(&self, input: &AddSavedGrants);
+    async fn add(&self, input: &AddSavedGrants) -> Result<(), String>;
 
     /// Delete by row id.
-    async fn remove(&self, id: &PermissionSavedId);
+    async fn remove(&self, id: &PermissionSavedId) -> Result<(), String>;
 }
 
 /// Read-back projection: grants become trailing **allow** rules
@@ -79,17 +80,18 @@ impl MemorySavedGrantStore {
 
 #[async_trait]
 impl SavedGrantStore for MemorySavedGrantStore {
-    async fn list(&self, project_id: Option<&ProjectId>) -> Vec<SavedGrant> {
+    async fn list(&self, project_id: Option<&ProjectId>) -> Result<Vec<SavedGrant>, String> {
         let rows = self.rows.lock();
-        rows.values()
+        Ok(rows
+            .values()
             .filter(|grant| project_id.is_none_or(|id| grant.project_id == *id))
             .cloned()
-            .collect()
+            .collect())
     }
 
-    async fn add(&self, input: &AddSavedGrants) {
+    async fn add(&self, input: &AddSavedGrants) -> Result<(), String> {
         if input.resources.is_empty() {
-            return;
+            return Ok(());
         }
         let now = u64::try_from(self.clock.unix_ms()).unwrap_or(0);
         let mut rows = self.rows.lock();
@@ -104,9 +106,11 @@ impl SavedGrantStore for MemorySavedGrantStore {
                 time_updated: now,
             });
         }
+        Ok(())
     }
 
-    async fn remove(&self, id: &PermissionSavedId) {
+    async fn remove(&self, id: &PermissionSavedId) -> Result<(), String> {
         self.rows.lock().retain(|_, grant| grant.id != *id);
+        Ok(())
     }
 }

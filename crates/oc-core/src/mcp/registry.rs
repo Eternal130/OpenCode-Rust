@@ -205,6 +205,14 @@ pub trait CredentialStore: Send + Sync {
         credential_id: &str,
         tokens: &super::oauth::StoredTokens,
     ) -> futures::future::BoxFuture<'static, Result<(), String>>;
+    /// G-110③: drops a dead credential row (the ref's
+    /// `invalidateCredentials`, oauth.ts:290-296 — the provider's
+    /// `invalidate` callback removes the stored sign-in when the token
+    /// is rejected, so a stale refresh token stops retrying forever).
+    fn remove_credential(
+        &self,
+        credential_id: &str,
+    ) -> futures::future::BoxFuture<'static, Result<(), String>>;
 }
 
 /// Database-backed credential store (`credential` rows hold JSON
@@ -367,6 +375,23 @@ impl CredentialStore for DatabaseCredentials {
             }
         })
     }
+
+    fn remove_credential(
+        &self,
+        credential_id: &str,
+    ) -> futures::future::BoxFuture<'static, Result<(), String>> {
+        let db = self.db.clone();
+        let credential_id = credential_id.to_owned();
+        Box::pin(async move {
+            db.transaction(move |tx| {
+                tx.conn()
+                    .execute("DELETE FROM credential WHERE id = ?1", rusqlite::params![credential_id])?;
+                Ok(())
+            })
+            .await
+            .map_err(|error| error.to_string())
+        })
+    }
 }
 
 /// No credentials available (tests, anonymous servers).
@@ -386,6 +411,13 @@ impl CredentialStore for NoCredentials {
         _integration_id: &IntegrationId,
         _credential_id: &str,
         _tokens: &super::oauth::StoredTokens,
+    ) -> futures::future::BoxFuture<'static, Result<(), String>> {
+        Box::pin(async { Err("no credential store".to_owned()) })
+    }
+
+    fn remove_credential(
+        &self,
+        _credential_id: &str,
     ) -> futures::future::BoxFuture<'static, Result<(), String>> {
         Box::pin(async { Err("no credential store".to_owned()) })
     }
@@ -771,6 +803,20 @@ impl McpRegistry {
                     "opencode mcp: credential refresh for \"{}\" failed: {error}",
                     entry.integration_label()
                 );
+                // G-110③: a REJECTED grant invalidates the credential (ref
+                // oauth.ts:290-296 — `credentials.remove(id)`); without the
+                // removal the dead refresh token retries forever.
+                // Discovery/network failures are not invalidations.
+                if super::oauth::is_token_rejected(&error) {
+                    if let Err(remove_error) =
+                        self.inner.credentials.remove_credential(&stored.id).await
+                    {
+                        eprintln!(
+                            "opencode mcp: could not remove the dead credential for \"{}\": {remove_error}",
+                            entry.integration_label()
+                        );
+                    }
+                }
                 None
             }
         }

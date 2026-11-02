@@ -634,6 +634,7 @@ async fn oauth_connect() {
         config: config.clone(),
         method_id: integration.clone(),
         http: reqwest::Client::new(),
+        previous_client: None,
     })
     .await
     .expect("the authorize flow builds");
@@ -781,6 +782,7 @@ async fn cimd_server_skips_dcr_and_uses_the_metadata_document_client_id() {
         config: remote(&server_url),
         method_id: "mcp_cimd".to_owned(),
         http: reqwest::Client::new(),
+        previous_client: None,
     })
     .await
     .expect("the authorize flow builds without a registration endpoint");
@@ -823,6 +825,7 @@ async fn dcr_only_server_still_registers() {
         config: remote(&server_url),
         method_id: "mcp_dcr".to_owned(),
         http: reqwest::Client::new(),
+        previous_client: None,
     })
     .await
     .expect("the authorize flow builds");
@@ -852,6 +855,7 @@ async fn cimd_without_public_client_falls_back_to_dcr() {
         config: remote(&server_url),
         method_id: "mcp_cimd_conf".to_owned(),
         http: reqwest::Client::new(),
+        previous_client: None,
     })
     .await
     .expect("the authorize flow builds");
@@ -883,6 +887,7 @@ async fn cimd_only_server_with_confined_redirect_uri_fails_without_dcr() {
         config: remote(&server_url),
         method_id: "mcp_cimd_fail".to_owned(),
         http: reqwest::Client::new(),
+        previous_client: None,
     })
     .await
     .err()
@@ -923,6 +928,7 @@ async fn configured_redirect_uri_disables_cimd() {
         config,
         method_id: "mcp_cimd_redir".to_owned(),
         http: reqwest::Client::new(),
+        previous_client: None,
     })
     .await;
     // The pinned redirect forces DCR, which this CIMD-only server

@@ -1551,9 +1551,26 @@ impl EngineSessionPort {
                     .map_err(|error| error.to_string())?;
                 let project =
                     oc_schema::id::ProjectId::parse(destination_services.project.id.clone());
+                // G-107: subpath relative to the destination project root
+                // (ref move.ts:89).
+                let subpath = std::path::Path::new(directory)
+                    .strip_prefix(&destination_services.project.directory)
+                    .ok()
+                    .map(|rest| rest.to_string_lossy().replace('\\', "/"))
+                    .filter(|rest| !rest.is_empty())
+                    .map(oc_schema::common::RelativePath);
                 let message_id = format!("msg_plugin_{}", uuid::Uuid::new_v4());
                 self.engine
-                    .move_session(&self.location, &id, &message_id, destination, project, None)
+                    .move_session(
+                        &self.location,
+                        &id,
+                        &message_id,
+                        destination,
+                        project,
+                        subpath,
+                        // G-108①: steer default (ref move.ts:127).
+                        oc_schema::session_inbox::Delivery::Steer,
+                    )
                     .await?;
                 Ok(Value::Null)
             }

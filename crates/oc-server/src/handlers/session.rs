@@ -921,33 +921,103 @@ async fn move_session(
     // Resolve the destination project, then admit the queued move item.
     let destination = LocationRef::new(path.to_path_buf(), None);
     let destination_services = super::session::services(&state, &destination).await?;
-    let project_id = oc_schema::id::ProjectId::parse(destination_services.project.id.clone());
+    let project = &destination_services.project;
+    // G-107: subpath is relative to the DESTINATION project root (ref
+    // move.ts:89 `path.relative(project.directory, directory)`), never the
+    // session's current source subpath (`row.path`).
+    let subpath = path
+        .strip_prefix(&project.directory)
+        .ok()
+        .map(|rest| rest.to_string_lossy().replace('\\', "/"))
+        .filter(|rest| !rest.is_empty());
+    let payload = oc_schema::session_inbox::MovePayload {
+        location: oc_schema::location::Ref {
+            directory: oc_schema::common::AbsolutePath(directory.to_owned()),
+            workspace_id: None,
+        },
+        project_id: oc_schema::id::ProjectId::parse(project.id.clone()),
+        subpath: subpath.map(oc_schema::common::RelativePath),
+    };
+    // G-108①: `input.delivery ?? "steer"` (ref move.ts:127) — absent means
+    // steer, never a hardcoded Queue.
+    let delivery = parse_delivery(&body)?;
     let message_id = state.ids.new_id("msg");
+    // G-108②: probe source unavailability outside the inbox lock (ref
+    // move.ts:104-116): a session that is inactive AND whose source
+    // directory is gone is an orphan — it migrates immediately instead of
+    // queueing a move it can never drain. Bounded deviation: the ref also
+    // treats runner-assembly failure as unavailable; here only the
+    // directory-gone case is probed (the runner cannot assemble without
+    // its location anyway).
+    let source_gone =
+        !services.execution.is_active(&session_id) && !std::path::Path::new(&row.directory).is_dir();
     services
         .inbox
-        .admit(
-            &message_id,
-            &session_id,
-            Item::Move_ {
-                payload: oc_schema::session_inbox::MovePayload {
-                    location: oc_schema::location::Ref {
-                        directory: oc_schema::common::AbsolutePath(directory.to_owned()),
-                        workspace_id: None,
-                    },
-                    project_id,
-                    subpath: row
-                        .path
-                        .as_deref()
-                        .and_then(|value| serde_json::from_value(json!(value)).ok()),
-                },
-                delivery: match body["delivery"].as_str() {
-                    Some("steer") => Delivery::Steer,
-                    _ => Delivery::Queue,
-                },
-            },
-        )
-        .await
-        .map_err(|error| inbox_error(&error, &message_id))?;
+        .serialized(&session_id, async {
+            let latest = services.store.get(&session_id).await.map_err(|error| {
+                crate::errors::debug_cause("session:move_latest", &error);
+                ApiError::unknown_ref()
+            })?;
+            let orphan = source_gone
+                && latest
+                    .as_ref()
+                    .is_some_and(|latest| {
+                        latest.directory == row.directory && latest.workspace_id == row.workspace_id
+                    })
+                && !services.execution.is_active(&session_id);
+            if orphan {
+                // Cancel every queued move inside the lock, then publish
+                // Moved directly (ref move.ts:134-147) — the orphan never
+                // drains an inbox, so the queued items must not survive.
+                let move_ids = services.inbox.move_ids(&session_id).await.map_err(|error| {
+                    crate::errors::debug_cause("session:move_ids", &error);
+                    ApiError::unknown_ref()
+                })?;
+                for inbox_id in &move_ids {
+                    let _ = services
+                        .graph
+                        .bus
+                        .publish(
+                            registry::by_type_latest("session.inbox.cancelled")
+                                .expect("durable definition for session.inbox.cancelled"),
+                            json!({ "sessionID": session_id, "inboxID": inbox_id }),
+                            PublishOptions::default(),
+                        )
+                        .await;
+                }
+                services
+                    .graph
+                    .bus
+                    .publish(
+                        registry::by_type_latest("session.moved")
+                            .expect("durable definition for session.moved"),
+                        json!({
+                            "sessionID": session_id,
+                            "location": serde_json::to_value(&payload.location).unwrap_or_default(),
+                            "projectID": payload.project_id,
+                            "subpath": payload.subpath,
+                        }),
+                        PublishOptions::default(),
+                    )
+                    .await
+                    .map_err(|error| {
+                        crate::errors::debug_cause("session:move_publish", &error);
+                        ApiError::unknown_ref()
+                    })?;
+                return Ok::<(), ApiError>(());
+            }
+            services
+                .inbox
+                .admit(
+                    &message_id,
+                    &session_id,
+                    Item::Move_ { payload, delivery },
+                )
+                .await
+                .map_err(|error| inbox_error(&error, &message_id))?;
+            Ok(())
+        })
+        .await?;
     // CD-1: move wakes the queued relocation (ref `move.ts:157`).
     services.execution.wake(&session_id, oc_core::session::Promotable::Input);
     Ok(no_content())
@@ -2119,25 +2189,15 @@ async fn stats(
     Ok(json_data(data))
 }
 
-/// An IANA-shaped timezone identifier (REF validates via Intl; the port
-/// checks the shape here and `date_key` falls back to UTC for unknown
-/// zones — HTTP-H4 notes).
+/// G-113: the ref validates the timezone by CONSTRUCTING an
+/// `Intl.DateTimeFormat` (handlers/session.ts:109-111), which throws for
+/// unknown zones → 400 "Invalid time zone: X". The port resolves the zone
+/// via jiff, so shape-only checks (which accepted `Invalid/Zone`) are gone.
 fn valid_timezone(timezone: &str) -> bool {
-    if timezone.is_empty() || timezone == "UTC" {
+    if timezone == "UTC" {
         return true;
     }
-    let mut segments = 0;
-    for segment in timezone.split('/') {
-        segments += 1;
-        if segment.is_empty()
-            || !segment
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '+')
-        {
-            return false;
-        }
-    }
-    (2..=3).contains(&segments)
+    jiff::tz::TimeZone::get(timezone).is_ok()
 }
 
 #[derive(Default)]

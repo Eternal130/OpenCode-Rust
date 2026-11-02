@@ -247,9 +247,17 @@ async fn session_reply(
         reply,
         message: body["message"].as_str().map(String::from),
     };
-    services.permission.reply(input).await.map_err(|error| {
-        crate::errors::debug_cause("permission:permission_not_found", &error);
-        ApiError::permission_not_found(&request_id)
+    services.permission.reply(input).await.map_err(|error| match &error {
+        oc_core::permission::PermissionError::RequestNotFound(_) => {
+            crate::errors::debug_cause("permission:permission_not_found", &error);
+            ApiError::permission_not_found(&request_id)
+        }
+        // G-114: a failed saved-grant write surfaces as a server error,
+        // never a silent success.
+        _ => {
+            crate::errors::debug_cause("permission:saved_grant_store", &error);
+            ApiError::unknown_ref()
+        }
     })?;
     Ok(no_content())
 }
