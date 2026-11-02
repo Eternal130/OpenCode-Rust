@@ -608,6 +608,38 @@ impl SelectState {
         self.selected = if last { indices.len() - 1 } else { 0 };
     }
 
+    /// G-131 — `moveSection` (dialog-select.tsx:367-374, wired on the
+    /// `alt+up`/`alt+down` sectionNavigation binds, :547-562): jump to
+    /// the FIRST entry of the previous/next non-empty section, with
+    /// the same `(current + direction + n) % n` wrap over sections.
+    pub fn move_section(&mut self, props: &SelectProps, direction: i64) {
+        let groups = grouped(props, &self.filter);
+        let indices = flat_indices(&groups);
+        if indices.is_empty() {
+            return;
+        }
+        let sections: Vec<&SelectGroup> =
+            groups.iter().filter(|group| !group.indices.is_empty()).collect();
+        if sections.is_empty() {
+            return;
+        }
+        let current_category = indices
+            .get(self.selected.min(indices.len() - 1))
+            .and_then(|&index| props.options.get(index))
+            .and_then(|option| option.category.clone());
+        let current = sections
+            .iter()
+            .position(|group| group.category == current_category)
+            .unwrap_or(0);
+        let next =
+            ((current as i64 + direction).rem_euclid(sections.len() as i64)) as usize;
+        let target = sections[next].indices[0];
+        self.selected = indices
+            .iter()
+            .position(|&index| index == target)
+            .unwrap_or(self.selected);
+    }
+
     /// Clamp the selection into range and edge-reveal it in the scroll
     /// window (`reconcileSelection` + `scrollToSelection`).
     pub fn reveal(&mut self, props: &SelectProps, terminal_height: usize) {
@@ -1716,3 +1748,53 @@ mod tests {
         assert_eq!(painted, stage1.chars().take(58).collect::<String>());
     }
 }
+
+    // -- G-131 ---------------------------------------------------------
+
+    #[test]
+    fn alt_arrows_jump_section_boundaries() {
+        let props = SelectProps::new(
+            "Open",
+            vec![
+                SelectOption::titled("Recent a", "a").categorized("Recent"),
+                SelectOption::titled("Recent b", "b").categorized("Recent"),
+                SelectOption::titled("Project x", "x").categorized("Projects"),
+                SelectOption::titled("Project y", "y").categorized("Projects"),
+                SelectOption::titled("Worktree w", "w").categorized("Worktrees"),
+            ],
+        );
+        let mut state = SelectState { filter: String::new(), selected: 0, scroll: 0 };
+        // alt+down from the first section's head → the next section's
+        // FIRST entry.
+        state.move_section(&props, 1);
+        assert_eq!(state.selected, 2);
+        state.move_section(&props, 1);
+        assert_eq!(state.selected, 4);
+        // wrap: past the last section → the first.
+        state.move_section(&props, 1);
+        assert_eq!(state.selected, 0);
+        // alt+up wraps backwards to the last section's first entry.
+        state.move_section(&props, -1);
+        assert_eq!(state.selected, 4);
+        // from mid-section, alt+down targets the NEXT section's head
+        // (the current section's own head is not a jump target).
+        state.selected = 3;
+        state.move_section(&props, 1);
+        assert_eq!(state.selected, 4);
+        state.move_section(&props, -1);
+        assert_eq!(state.selected, 2);
+    }
+
+    #[test]
+    fn section_jump_on_flat_list_lands_on_the_edges() {
+        let props = SelectProps::new(
+            "Flat",
+            vec![SelectOption::titled("a", "a"), SelectOption::titled("b", "b")],
+        );
+        let mut state = SelectState { filter: String::new(), selected: 1, scroll: 0 };
+        // A single (headerless) section: the wrap lands back on row 0.
+        state.move_section(&props, 1);
+        assert_eq!(state.selected, 0);
+        state.move_section(&props, -1);
+        assert_eq!(state.selected, 0);
+    }

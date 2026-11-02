@@ -728,6 +728,10 @@ pub fn handle_dialog_key(
         "dialog.select.page_down" => state.move_selection(&props, 10),
         "dialog.select.home" => state.move_to_edge(&props, false),
         "dialog.select.end" => state.move_to_edge(&props, true),
+        // G-131 — sectionNavigation's alt+arrows (dialog-select.tsx:
+        // 367-374): jump to the first entry of the prev/next section.
+        "dialog.select.section.prev" => state.move_section(&props, -1),
+        "dialog.select.section.next" => state.move_section(&props, 1),
         "dialog.select.submit" | "dialog.prompt.submit" => {
             if is_select {
                 return match state.submit(&props) {
