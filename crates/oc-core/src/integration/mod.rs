@@ -77,6 +77,10 @@ pub struct OAuthImplementation {
 /// One registry entry.
 struct Entry {
     name: String,
+    /// G-115①: the ref's `entry.ref.metadata` (integration.ts:389 projects
+    /// it into `Integration.Info.metadata` — e.g. `{source: "mcp"}` from
+    /// the MCP registry's registration, mcp/index.ts:200).
+    metadata: Option<BTreeMap<String, Value>>,
     methods: Vec<Method>,
     implementations: BTreeMap<String, OAuthImplementation>,
 }
@@ -90,6 +94,10 @@ struct PendingOAuth {
     authorization: StoredAuthorization,
     completing: bool,
     persisting: bool,
+    /// G-115③: cancellation aborts the in-flight exchange (the ref's
+    /// `Scope.close(attempt.scope)` — integration.ts:794); without it a
+    /// cancelled attempt keeps exchanging and stores stale credentials.
+    cancel: tokio_util::sync::CancellationToken,
 }
 
 /// The authorization halves kept for later completion. Auto callbacks are
@@ -120,6 +128,9 @@ struct PendingCommand {
     message: RwLock<String>,
     time: AttemptTime,
     persisting: RwLock<bool>,
+    /// G-115③: cancellation aborts the in-flight command (the ref's
+    /// `Scope.close(attempt.scope)` — integration.ts:823).
+    cancel: tokio_util::sync::CancellationToken,
 }
 
 struct TerminalCommand {
@@ -253,10 +264,24 @@ impl IntegrationHost {
         let mut entries = self.entries.write();
         let entry = entries.entry(id.to_owned()).or_insert_with(|| Entry {
             name: id.to_owned(),
+            metadata: None,
             methods: Vec::new(),
             implementations: BTreeMap::new(),
         });
         name.clone_into(&mut entry.name);
+    }
+
+    /// G-115①: sets an integration's `ref.metadata` (the ref's
+    /// `editor.update` callback assigns it alongside the name — e.g. the
+    /// MCP registry's `{source: "mcp"}`, mcp/index.ts:200). The metadata
+    /// is projected into `integration.list` / `integration.get`
+    /// (integration.ts:389); a rename through [`Self::update_integration`]
+    /// preserves it. Unknown ids are ignored (the ref's editor.update
+    /// only mutates registered refs).
+    pub fn set_integration_metadata(&self, id: &str, metadata: Option<BTreeMap<String, Value>>) {
+        if let Some(entry) = self.entries.write().get_mut(id) {
+            entry.metadata = metadata;
+        }
     }
 
     /// Whether an integration is registered under `id` — the id set the
@@ -283,6 +308,7 @@ impl IntegrationHost {
         let mut entries = self.entries.write();
         let entry = entries.entry(integration_id.to_owned()).or_insert_with(|| Entry {
             name: integration_id.to_owned(),
+            metadata: None,
             methods: Vec::new(),
             implementations: BTreeMap::new(),
         });
@@ -375,23 +401,27 @@ impl IntegrationHost {
     /// `integration.list` (integration.ts:685-690): all integrations with
     /// connections, sorted by name.
     pub async fn list(&self) -> Result<Vec<IntegrationInfo>, HostError> {
-        let inventory: Vec<(String, String, Vec<Method>)> = self
+        let inventory: Vec<(String, String, Option<BTreeMap<String, Value>>, Vec<Method>)> = self
             .entries
             .read()
             .iter()
-            .map(|(id, entry)| (id.clone(), entry.name.clone(), entry.methods.clone()))
+            .map(|(id, entry)| {
+                (id.clone(), entry.name.clone(), entry.metadata.clone(), entry.methods.clone())
+            })
             .collect();
         let mut grouped: BTreeMap<String, Vec<StoredCredential>> = BTreeMap::new();
         for stored in self.store.all().await? {
             grouped.entry(stored.integration_id.clone()).or_default().push(stored);
         }
         let mut infos = Vec::with_capacity(inventory.len());
-        for (id, name, methods) in inventory {
+        for (id, name, metadata, methods) in inventory {
             let mut connections =
                 grouped.get(&id).map(|rows| Self::credential_connections(rows)).unwrap_or_default();
             connections.extend(Self::env_connections(&methods));
             let connections = self.project_statuses(&id, connections);
-            infos.push(IntegrationInfo { id, name, metadata: None, methods, connections });
+            // G-115①: `entry.ref.metadata` projects into Info (ref
+            // integration.ts:389) — never a hardcoded None.
+            infos.push(IntegrationInfo { id, name, metadata, methods, connections });
         }
         infos.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(infos)
@@ -399,8 +429,11 @@ impl IntegrationHost {
 
     /// `integration.get` (integration.ts:680-684).
     pub async fn get(&self, id: &str) -> Result<Option<IntegrationInfo>, HostError> {
-        let Some((name, methods)) =
-            self.entries.read().get(id).map(|entry| (entry.name.clone(), entry.methods.clone()))
+        let Some((name, metadata, methods)) = self
+            .entries
+            .read()
+            .get(id)
+            .map(|entry| (entry.name.clone(), entry.metadata.clone(), entry.methods.clone()))
         else {
             return Ok(None);
         };
@@ -409,7 +442,8 @@ impl IntegrationHost {
         Ok(Some(IntegrationInfo {
             id: id.to_owned(),
             name,
-            metadata: None,
+            // G-115①: ref integration.ts:389.
+            metadata,
             methods,
             connections: self.project_statuses(id, connections),
         }))
@@ -634,6 +668,7 @@ impl IntegrationHost {
             time,
         };
         let mut auto_callback = None;
+        let cancel = tokio_util::sync::CancellationToken::new();
         let pending = PendingOAuth {
             integration_id: integration_id.to_owned(),
             method_id: method_id.to_owned(),
@@ -648,16 +683,22 @@ impl IntegrationHost {
             },
             completing: mode == "auto",
             persisting: false,
+            cancel: cancel.clone(),
         };
         self.attempts.insert(id.clone(), AttemptEntry::Pending(pending));
         if let Some(callback) = auto_callback {
             // Fork the auto callback; settle persists the credential
-            // (integration.ts:594-600).
+            // (integration.ts:594-600). G-115③: cancellation aborts the
+            // in-flight exchange (dropping the future cancels the token
+            // request) — a cancelled attempt never settles a credential.
             let host = Arc::clone(self);
             let attempt = id.clone();
             let integration = integration_id.to_owned();
             tokio::spawn(async move {
-                let outcome = callback.await.map_err(IntegrationError::Authorization);
+                let outcome = tokio::select! {
+                    _ = cancel.cancelled() => return,
+                    outcome = callback => outcome.map_err(IntegrationError::Authorization),
+                };
                 host.settle(&attempt, &integration, outcome).await;
             });
         }
@@ -732,17 +773,22 @@ impl IntegrationHost {
                 )));
             }
             pending.completing = true;
+            // G-115③: a concurrent cancel aborts this in-flight exchange.
+            let cancel = pending.cancel.clone();
             match &pending.authorization {
                 StoredAuthorization::Code(callback) => {
-                    Some(callback(code.unwrap_or_default().to_owned()))
+                    Some((cancel, callback(code.unwrap_or_default().to_owned())))
                 }
                 StoredAuthorization::Auto => None,
             }
         };
-        let Some(callback) = callback else {
+        let Some((cancel, callback)) = callback else {
             return Ok(());
         };
-        let outcome = callback.await.map_err(IntegrationError::Authorization);
+        let outcome = tokio::select! {
+            _ = cancel.cancelled() => return Ok(()),
+            outcome = callback => outcome.map_err(IntegrationError::Authorization),
+        };
         self.settle(attempt_id, integration_id, outcome).await;
         match self.oauth_status(integration_id, attempt_id).await {
             Ok(AttemptStatus::Failed { message, .. }) => {
@@ -762,6 +808,10 @@ impl IntegrationHost {
         if let Some(entry) = self.attempts.get(attempt_id) {
             if let AttemptEntry::Pending(pending) = entry.value() {
                 if pending.integration_id == integration_id && !pending.persisting {
+                    // G-115③: the ref closes the attempt scope
+                    // (integration.ts:794) — abort the in-flight exchange,
+                    // not just the attempts-table entry.
+                    pending.cancel.cancel();
                     drop(entry);
                     self.attempts.remove(attempt_id);
                 }
@@ -881,6 +931,7 @@ impl IntegrationHost {
         let id = attempt_id();
         let created = now_ms();
         let time = AttemptTime { created, expires: created + ATTEMPT_LIFETIME_MS };
+        let cancel = tokio_util::sync::CancellationToken::new();
         self.command_attempts.insert(
             id.clone(),
             CommandAttemptEntry::Pending(PendingCommand {
@@ -888,24 +939,28 @@ impl IntegrationHost {
                 message: RwLock::new(String::new()),
                 time,
                 persisting: RwLock::new(false),
+                cancel: cancel.clone(),
             }),
         );
         // Spawn the command (ambient env, stdin ignored); stdout trimmed
-        // becomes the key credential (integration.ts:638-671).
+        // becomes the key credential (integration.ts:638-671). G-115②:
+        // stderr streams INCREMENTALLY into the attempt message (ref
+        // integration.ts:645-670 forks both streams and appends every
+        // decoded chunk) — `.output()` waited for process end, so a
+        // polling `command.status` never saw progress.
         let host = Arc::clone(self);
         let attempt = id.clone();
         let integration = integration_id.to_owned();
         let label_owned = label.map(String::from);
         tokio::spawn(async move {
-            let output = tokio::process::Command::new(&command[0])
+            let child = tokio::process::Command::new(&command[0])
                 .args(&command[1..])
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())
-                .output()
-                .await;
-            let output = match output {
-                Ok(output) => output,
+                .spawn();
+            let mut child = match child {
+                Ok(child) => child,
                 Err(error) => {
                     host.settle_command(
                         &attempt,
@@ -916,15 +971,91 @@ impl IntegrationHost {
                     return;
                 }
             };
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+            let mut stdout_pipe =
+                child.stdout.take().expect("stdout piped above");
+            let mut stderr_pipe =
+                child.stderr.take().expect("stderr piped above");
+            // The stderr reader folds every chunk into the pending
+            // attempt's message as it arrives.
+            let message_host = Arc::clone(&host);
+            let message_attempt = attempt.clone();
+            let message_integration = integration.clone();
+            let stderr_task = tokio::spawn(async move {
+                use tokio::io::AsyncReadExt as _;
+                let mut accumulated: Vec<u8> = Vec::new();
+                let mut chunk = [0u8; 1024];
+                loop {
+                    match stderr_pipe.read(&mut chunk).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(read) => {
+                            accumulated.extend_from_slice(&chunk[..read]);
+                            if let Some(entry) = message_host.command_attempts.get(&message_attempt)
+                            {
+                                if let CommandAttemptEntry::Pending(pending) = entry.value() {
+                                    if pending.integration_id == message_integration {
+                                        *pending.message.write() =
+                                            String::from_utf8_lossy(&accumulated).into_owned();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+            // The credential: the full stdout, trimmed (a task so the
+            // wait below never drops a partial read).
+            let stdout_task = tokio::spawn(async move {
+                use tokio::io::AsyncReadExt as _;
+                let mut stdout_buffer = String::new();
+                let _ = stdout_pipe.read_to_string(&mut stdout_buffer).await;
+                stdout_buffer
+            });
+            // G-115③: cancellation kills the child and abandons the
+            // attempt (the ref's `Scope.close` — integration.ts:823); the
+            // removed entry makes any late settle a no-op.
+            let status = tokio::select! {
+                _ = cancel.cancelled() => {
+                    let _ = child.kill().await;
+                    let _ = stderr_task.await;
+                    let _ = stdout_task.await;
+                    return;
+                }
+                status = child.wait() => status,
+            };
+            let _ = stderr_task.await;
+            let stdout_buffer = stdout_task.await.unwrap_or_default();
+            let status = match status {
+                Ok(status) => status,
+                Err(error) => {
+                    host.settle_command(
+                        &attempt,
+                        &integration,
+                        Err(format!("Authentication command failed: {error}")),
+                    )
+                    .await;
+                    return;
+                }
+            };
+            if !status.success() {
+                let stderr = host
+                    .command_attempts
+                    .get(&attempt)
+                    .map(|entry| match entry.value() {
+                        CommandAttemptEntry::Pending(pending) => pending.message.read().clone(),
+                        CommandAttemptEntry::Terminal(terminal) => {
+                            terminal.message.clone().unwrap_or_default()
+                        }
+                    })
+                    .unwrap_or_default()
+                    .trim()
+                    .to_owned();
                 host.settle_command(
                     &attempt,
                     &integration,
                     Err(if stderr.is_empty() {
                         format!(
                             "Authentication command exited {}",
-                            output.status.code().unwrap_or(-1)
+                            status.code().unwrap_or(-1)
                         )
                     } else {
                         stderr
@@ -933,7 +1064,7 @@ impl IntegrationHost {
                 .await;
                 return;
             }
-            let credential = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+            let credential = stdout_buffer.trim().to_owned();
             if credential.is_empty() {
                 host.settle_command(
                     &attempt,
@@ -1006,6 +1137,9 @@ impl IntegrationHost {
         if let Some(entry) = self.command_attempts.get(attempt_id) {
             if let CommandAttemptEntry::Pending(pending) = entry.value() {
                 if pending.integration_id == integration_id && !*pending.persisting.read() {
+                    // G-115③: abort the in-flight command (the ref's
+                    // `Scope.close` — integration.ts:823).
+                    pending.cancel.cancel();
                     drop(entry);
                     self.command_attempts.remove(attempt_id);
                 }
