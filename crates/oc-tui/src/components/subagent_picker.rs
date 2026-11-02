@@ -400,7 +400,7 @@ mod tests {
         let mut picker = store.picker();
         picker.open = true;
         picker.filter_active = false; // the completed run shows
-        store.navigate(crate::store::Route::Session { session_id: "parent".to_owned() });
+        store.navigate(crate::store::Route::session("parent".to_owned()));
         store.set_picker(picker);
         let entries = store.picker_entries("parent");
         assert_eq!(entries.len(), 1);

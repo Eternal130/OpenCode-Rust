@@ -230,7 +230,7 @@ fn composer_frame_budget_body() {
     let theme = theme();
     let store = Store::new(Runtime::new());
     store.open_tab("s1", Some("Composer budget".to_owned()));
-    store.navigate(crate::store::Route::Session { session_id: "s1".to_owned() });
+    store.navigate(crate::store::Route::session("s1".to_owned()));
     // Seed a footer location + metadata so the composer paints its
     // full frame (rail, metadata row, footer hints).
     let mut composer = store.composer("s1");
@@ -308,7 +308,7 @@ fn transcript_frame_budget_body() {
     let theme = theme();
     let store = Store::new(Runtime::new());
     store.open_tab("s1", Some("Transcript budget".to_owned()));
-    store.navigate(crate::store::Route::Session { session_id: "s1".to_owned() });
+    store.navigate(crate::store::Route::session("s1".to_owned()));
     store.set_messages("s1", large_transcript(150));
 
     let render = || render_session(&store, "s1", &theme.styles(), (200, 50));
@@ -392,7 +392,7 @@ fn theme_switch_frame_budget_body() {
             store.set_unread(&format!("s{index}"), Some(Unread::Activity));
         }
     }
-    store.navigate(crate::store::Route::Session { session_id: "s1".to_owned() });
+    store.navigate(crate::store::Route::session("s1".to_owned()));
     store.set_terminal_size((200, 50));
     store.open_dialog(crate::store::DialogKind::ThemeList, crate::store::DialogSize::Medium);
     // Warmup: two full switches mount every surface under both
@@ -442,7 +442,7 @@ fn dialog_frame_budget_body() {
             store.set_unread(&format!("s{index}"), Some(Unread::Activity));
         }
     }
-    store.navigate(crate::store::Route::Session { session_id: "s1".to_owned() });
+    store.navigate(crate::store::Route::session("s1".to_owned()));
     store
         .replace_dialog(crate::store::DialogKind::CommandPalette, crate::store::DialogSize::Medium);
     // Warmup (mount + caches).
@@ -500,7 +500,7 @@ fn sidebar_pane_budget_body() {
     let theme = theme();
     let store = Store::new(Runtime::new());
     store.open_tab("s1", Some("Sidebar budget".to_owned()));
-    store.navigate(crate::store::Route::Session { session_id: "s1".to_owned() });
+    store.navigate(crate::store::Route::session("s1".to_owned()));
 
     let view = || SidebarView {
         title: "Sidebar budget".to_owned(),
@@ -652,7 +652,7 @@ fn picker_panel_budget_body() {
     let theme = theme();
     let store = Store::new(Runtime::new());
     store.open_tab("s1", Some("Picker budget".to_owned()));
-    store.navigate(crate::store::Route::Session { session_id: "s1".to_owned() });
+    store.navigate(crate::store::Route::session("s1".to_owned()));
     let entries: Vec<PickerEntry> = (0..5)
         .map(|index| PickerEntry {
             session_id: format!("ses_{index}"),

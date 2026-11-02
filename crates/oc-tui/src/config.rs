@@ -87,11 +87,15 @@ pub enum TabsScope {
 pub struct TabsConfig {
     pub enabled: bool,
     pub scope: TabsScope,
+    /// G-143 — `tabs.indicators` (config/index.tsx:194-196):
+    /// `"numbers"` always shows the tab ordinal in the indicator
+    /// slot; `"status"` (the default) the status glyphs.
+    pub numbers: bool,
 }
 
 impl Default for TabsConfig {
     fn default() -> Self {
-        Self { enabled: true, scope: TabsScope::default() }
+        Self { enabled: true, scope: TabsScope::default(), numbers: false }
     }
 }
 
@@ -124,7 +128,12 @@ impl TabsConfig {
             Some("global") => TabsScope::Global,
             _ => TabsScope::Cwd,
         };
-        Self { enabled, scope }
+        // G-143 — `tabs.indicators` ("status" | "numbers", default
+        // "status").
+        let numbers =
+            tabs.and_then(|object| object.get("indicators")).and_then(Value::as_str)
+                == Some("numbers");
+        Self { enabled, scope, numbers }
     }
 }
 
@@ -168,6 +177,8 @@ pub struct TuiConfig {
     pub session_verbosity: Option<String>,
     /// `session.tps` (index.tsx:1892): the tok/s footer span.
     pub session_tps: bool,
+    /// G-140② — `debug.turn_tokens` truthy (index.tsx:1596).
+    pub debug_turn_tokens: bool,
     /// `session.markdown === "source"` (index.tsx:231): raw text parts.
     pub session_markdown_source: bool,
     /// `session.grouping !== "none"` (index.tsx:233): exploration
@@ -218,6 +229,7 @@ impl Default for TuiConfig {
             session_thinking: false,
             session_verbosity: None,
             session_tps: false,
+            debug_turn_tokens: false,
             session_markdown_source: false,
             session_grouping: true,
             tabs: TabsConfig::default(),
@@ -317,6 +329,9 @@ impl TuiConfig {
                 Some("global") => TabsScope::Global,
                 _ => TabsScope::Cwd,
             },
+            // G-143 — `tabs.indicators` ("status" | "numbers").
+            numbers: info.tabs.as_ref().and_then(|tabs| tabs.indicators.as_deref())
+                == Some("numbers"),
         };
         let session_sidebar =
             match info.session.as_ref().and_then(|session| session.sidebar.as_deref()) {
@@ -358,6 +373,13 @@ impl TuiConfig {
                 == Some("show"),
             session_verbosity: info.session.as_ref().and_then(|session| session.verbosity.clone()),
             session_tps: info.session.as_ref().and_then(|session| session.tps).unwrap_or(false),
+            // G-140② — `debug.turn_tokens` (any truthy JSON value;
+            // the ref is Boolean(coerced)).
+            debug_turn_tokens: info
+                .debug
+                .as_ref()
+                .and_then(|debug| debug.turn_tokens.clone())
+                .is_some_and(|flag| flag != Value::Bool(false) && !flag.is_null()),
             session_markdown_source: info
                 .session
                 .as_ref()
@@ -473,6 +495,11 @@ impl TuiConfig {
                 .get("session")
                 .and_then(|session| session.get("tps"))
                 .and_then(Value::as_bool)
+                .unwrap_or(false),
+            debug_turn_tokens: value
+                .get("debug")
+                .and_then(|debug| debug.get("turn_tokens"))
+                .map(|flag| flag != &Value::Bool(false) && !flag.is_null())
                 .unwrap_or(false),
             session_markdown_source: value
                 .get("session")

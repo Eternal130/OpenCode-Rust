@@ -71,7 +71,7 @@ use opentui_solid::{
 
 use crate::components::marquee::Marquee;
 use crate::components::session_tabs::{
-    adaptive_session_tab_layout, session_tab_overflow_width, spinner_frame_at, AdaptiveLayout,
+    adaptive_session_tab_layout, session_tab_overflow_width, AdaptiveLayout,
     TabStatus, TabView, ADD_TAB_WIDTH,
 };
 use crate::components::tab_pulse::{
@@ -166,6 +166,9 @@ struct StripInputs {
     /// store status flips; the golden path leaves them empty → static
     /// resting levels).
     tracks: std::collections::HashMap<String, TabPulseTrack>,
+    /// G-143 — the indicator config (`tabs.indicators` + the ref
+    /// `spinner`/`unreadMarker` prop defaults).
+    indicator: crate::components::session_tabs::IndicatorConfig,
 }
 
 impl StripInputs {
@@ -533,12 +536,28 @@ fn indicator_chunks(inputs: &StripInputs, key: &str) -> StyledText {
     // The busy spinner cycles its frames off the store clock
     // (`<spinner frames interval={80}>`, session-tabs.tsx:60,200) — a
     // frozen clock pins frame 0 (`indicator_label`'s static value).
+    // G-143 — the configured indicator rides the same slot: numbers
+    // mode renders the ordinal (`sessionTabNumberLabel(index())`),
+    // else the status glyphs in the configured spinner/marker styles.
+    let number = crate::components::session_tabs::session_tab_number_label(
+        inputs.tabs.iter().position(|tab| tab.tab.session_id == key).unwrap_or(0),
+    );
     let glyph: String = if view.status.runs() {
-        spinner_frame_at(inputs.clock_ms).to_string()
-    } else if view.status.indicator_label().is_empty() {
-        return StyledText::new(Vec::new());
+        if inputs.indicator.numbers {
+            number
+        } else {
+            crate::components::session_tabs::spinner_frame_with(
+                inputs.indicator.spinner,
+                inputs.clock_ms,
+            )
+            .to_string()
+        }
     } else {
-        view.status.indicator_label().into()
+        let label = view.status.indicator_label_with(inputs.indicator, &number);
+        if label.is_empty() {
+            return StyledText::new(Vec::new());
+        }
+        label
     };
     // v2's spinner color (`TabIndicator`'s `<spinner … color={props.color}>`,
     // session-tabs.tsx:200): the caller's color resolves through
@@ -1001,6 +1020,7 @@ impl SolidTabsStrip {
             held: None,
             clock_ms: 0,
             tracks: std::collections::HashMap::new(),
+            indicator: crate::components::session_tabs::IndicatorConfig::default(),
         });
         let mut renderer = SolidRenderer::new(CliRendererConfig {
             width: width as u32,
@@ -1204,6 +1224,7 @@ pub fn paint_solid_bar_held(
         held,
         clock_ms: 0,
         tracks: std::collections::HashMap::new(),
+        indicator: crate::components::session_tabs::IndicatorConfig::default(),
     };
     paint_inputs(inputs)
 }
@@ -1224,6 +1245,7 @@ pub fn paint_solid_bar_clock(
     held: Option<AdaptiveLayout>,
     clock_ms: u64,
     tracks: std::collections::HashMap<String, TabPulseTrack>,
+    indicator: crate::components::session_tabs::IndicatorConfig,
 ) -> Frame {
     let inputs = StripInputs {
         tabs: tabs.to_vec(),
@@ -1237,6 +1259,7 @@ pub fn paint_solid_bar_clock(
         held,
         clock_ms,
         tracks,
+        indicator,
     };
     paint_inputs(inputs)
 }
@@ -1489,6 +1512,7 @@ mod tests {
             None,
             0,
             std::collections::HashMap::new(),
+            crate::components::session_tabs::IndicatorConfig::default(),
         );
         let spinner_cell = frame.cells[0]
             .iter()
@@ -1521,7 +1545,8 @@ mod tests {
                     None,
                     step * 80,
                     std::collections::HashMap::new(),
-                );
+                    crate::components::session_tabs::IndicatorConfig::default(),
+        );
                 frame.cells[0]
                     .iter()
                     .find(|cell| cell.ch != ' ' && cell.ch != 'W')
@@ -1562,7 +1587,8 @@ mod tests {
                 None,
                 clock,
                 tracks.clone(),
-            );
+                crate::components::session_tabs::IndicatorConfig::default(),
+        );
             frame.cell(0, col).bg
         };
         // A mid-tab cell (the solver clamps one tab to 22 cells at
@@ -1669,7 +1695,8 @@ mod tests {
                 None,
                 clock,
                 tracks.clone(),
-            );
+                crate::components::session_tabs::IndicatorConfig::default(),
+        );
             worst = worst.max(t.elapsed());
         }
         assert!(worst.as_millis() < 40, "worst animated frame {worst:?} < 40 ms");

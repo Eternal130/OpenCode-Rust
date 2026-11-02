@@ -717,7 +717,7 @@ fn assistant_snapshot_stats(
 pub fn message_from_info(
     info: &SessionMessageInfo,
 ) -> Option<crate::components::message::model::Message> {
-    use crate::components::message::model::{Message, Part, PartTime};
+    use crate::components::message::model::{AssistantRetry, Message, Part, PartTime};
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     // epoch ms: bounded by real time
     let epoch = |value: Option<f64>| value.map(|ms| ms.round() as u64);
@@ -782,6 +782,24 @@ pub fn message_from_info(
                 finish,
                 tokens,
                 usage_total,
+                // G-140② — the debug turn-usage table's "Cached"
+                // column (`tokens.cache.read`).
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                // epoch-scale counts: bounded by real usage
+                cache_read: assistant
+                    .tokens
+                    .as_ref()
+                    .map(|tokens| tokens.cache.read.max(0.0) as u64),
+                // G-140① — the scheduled retry (`message.retry`,
+                // index.tsx:2344-2365): attempt, the epoch-ms
+                // deadline, and the triggering error message.
+                retry: assistant.retry.as_ref().map(|retry| {
+                    AssistantRetry {
+                        attempt: retry.attempt,
+                        at: (retry.at.max(0.0).round() as u64),
+                        error: retry.error.message.clone(),
+                    }
+                }),
             })
         }
         SessionMessageInfo::Idle(idle) => Some(Message::Idle {

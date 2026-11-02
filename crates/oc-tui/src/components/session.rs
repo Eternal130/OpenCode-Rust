@@ -153,6 +153,7 @@ pub fn paint_live_tabs_bar(
         held,
         store.clock(),
         tracks,
+        store.tabs_indicator_config(),
     )
 }
 
@@ -174,7 +175,7 @@ pub fn paint_live_rail(
         matches!(store.footer().view, crate::components::footer::FooterView::Permission { .. });
     let ordered = store.strip_tabs_ordered();
     let active_id = match store.route() {
-        crate::store::Route::Session { ref session_id } => Some(store.session_root(session_id)),
+        crate::store::Route::Session { ref session_id, .. } => Some(store.session_root(session_id)),
         crate::store::Route::Home => None,
     };
     let views: Vec<TabView> = ordered
@@ -211,6 +212,7 @@ pub fn paint_live_rail(
         home_new_tab: matches!(store.route(), crate::store::Route::Home) && !views.is_empty(),
         handle_hot: store.rail_handle_hot(),
         tooltip,
+        indicator: store.tabs_indicator_config(),
     };
     let geometry = crate::components::session_tabs_rail::RailGeometry::new(views.len(), width);
     crate::components::session_tabs_rail_solid::paint_vertical_rail_solid(
@@ -451,6 +453,8 @@ pub fn render_session(
                 _ => crate::components::message::list::Verbosity::Medium,
             },
             tps_enabled: store.session_tps(),
+            // G-140② — `debug.turn_tokens` gates the usage row.
+            turn_tokens: store.debug_turn_tokens(),
             markdown_source: store.session_markdown_source(),
             // #40: the live child-session statuses (the subagent
             // card's running oracle).
@@ -2283,7 +2287,7 @@ mod tests {
     fn plugin_section_clickable_rows_record_hit_rects_and_route_the_sink() {
         let store = Store::new(Runtime::new());
         store.open_tab("s1", Some("Bug hunt".to_owned()));
-        store.navigate(crate::store::Route::Session { session_id: "s1".to_owned() });
+        store.navigate(crate::store::Route::session("s1".to_owned()));
         store.set_plugin_sidebar_section(&crate::components::sidebar::SidebarSection {
             clickable: vec![false, true],
             plugin_id: "tuislots".into(),
@@ -2321,7 +2325,7 @@ mod tests {
         );
         assert!(matches!(
             store.route(),
-            crate::store::Route::Session { session_id } if session_id == "ses_child"
+            crate::store::Route::Session { session_id, .. } if session_id == "ses_child"
         ));
     }
 
@@ -2390,7 +2394,7 @@ mod tests {
     fn picker_live_replaces_the_prompt_and_roots_the_strip() {
         let store = Store::new(Runtime::new());
         store.open_tab("root", Some("Root flow".to_owned()));
-        store.navigate(crate::store::Route::Session { session_id: "root".to_owned() });
+        store.navigate(crate::store::Route::session("root".to_owned()));
         store.ingest_all([crate::data::Ingest::Event(crate::data::BusEvent::new(
             "session.created",
             serde_json::json!({
@@ -2427,7 +2431,7 @@ mod tests {
         // Navigate into the child: the strip keeps the ROOT's pill.
         store.picker_navigate();
         assert!(
-            matches!(store.route(), crate::store::Route::Session { ref session_id } if session_id == "ses_child")
+            matches!(store.route(), crate::store::Route::Session { ref session_id, .. } if session_id == "ses_child")
         );
         assert!(store.picker_live("ses_child"), "the child always mounts the panel");
         let child_frame = render_session(&store, "ses_child", &theme.styles(), (80, 24));

@@ -193,6 +193,17 @@ impl Part {
     }
 }
 
+/// G-140① — the retry schedule (`SessionMessageAssistantRetry`):
+/// attempt number, the epoch-ms deadline, and the error that
+/// scheduled it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AssistantRetry {
+    pub attempt: i64,
+    /// Epoch milliseconds (`at`).
+    pub at: u64,
+    pub error: String,
+}
+
 /// One session message (`SessionMessageInfo` subset the transcript
 /// renders).
 #[derive(Debug, Clone, PartialEq)]
@@ -230,6 +241,13 @@ pub enum Message {
         /// `contextUsage`, util/session.ts:58-73) — the footer usage
         /// row's numerator.
         usage_total: Option<u64>,
+        /// G-140② — `tokens.cache.read` (the debug turn-usage
+        /// table's "Cached" column, index.tsx:1607-1613).
+        cache_read: Option<u64>,
+        /// G-140① — `message.retry` (the `AssistantRetry` footer,
+        /// index.tsx:2344-2365): a scheduled retry renders the
+        /// countdown row and suppresses the error row.
+        retry: Option<AssistantRetry>,
     },
     /// `session.idle` marker: closes a turn (drives turn duration and
     /// the wave-3 unread semantics).
@@ -906,6 +924,80 @@ pub fn exploration_label(tools: &[&str], completed: bool) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!("{}: {names}", if completed { "Explored" } else { "Exploring" })
+}
+
+/// G-145② — one activity-group item for the low-verbosity summary
+/// (`activity-summary.ts`'s `Item`, reduced to the counting terms).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActivityItem {
+    /// `None` = a reasoning part (a "thought").
+    pub tool: Option<String>,
+    /// `isActive` (:118-122): streaming/running, or an unfinished
+    /// thought while the group is open.
+    pub active: bool,
+    /// Redacted-only reasoning renders nothing — not a visible
+    /// thought (:72-74).
+    pub visible_thought: bool,
+}
+
+/// G-145② — `activitySummary` (activity-summary.ts:60-91): the
+/// low-verbosity collapsed label, e.g. `3 commands, 1 edit, 2
+/// thoughts, 4 reads`. Returns `(label, any_active)`. Bounded
+/// deviation: the ref's code-mode `execute` counts its finished
+/// NESTED calls (metadata.toolCalls) — the port's transcript parts
+/// do not model the nested-call list, so a finished execute counts
+/// as one "tool" (the ref's own fallback when the call list is
+/// empty, :76-77).
+#[must_use]
+pub fn activity_summary(items: &[ActivityItem], instructions: usize, closed: bool) -> (String, bool) {
+    let mut command = 0usize;
+    let mut edit = 0usize;
+    let mut thought = 0usize;
+    let mut read = 0usize;
+    let mut tool = 0usize;
+    let mut any_active = false;
+    for item in items {
+        let active = item.active && !closed;
+        any_active |= active;
+        match item.tool.as_deref().map(canonical_tool_name) {
+            None => {
+                if !active && item.visible_thought {
+                    thought += 1;
+                }
+            }
+            Some("shell") if !active => command += 1,
+            Some("read") if !active => read += 1,
+            Some("edit" | "write" | "patch") if !active => edit += 1,
+            Some(_) if !active => tool += 1,
+            Some(_) => {}
+        }
+    }
+    let mut parts: Vec<String> = Vec::new();
+    let mut push = |name: &str, count: usize| {
+        if count > 0 {
+            parts.push(format!("{count} {name}{}", if count == 1 { "" } else { "s" }));
+        }
+    };
+    push("command", command);
+    push("edit", edit);
+    push("thought", thought);
+    push("read", read);
+    push("tool", tool);
+    push("instruction", instructions);
+    (parts.join(", "), any_active)
+}
+
+/// G-145② — `busyLabel` (activity-summary.ts:48-54): the running
+/// item's status label (`Running command…` / `Preparing edit…`).
+#[must_use]
+pub fn activity_busy_label(tool: &str, streaming: bool) -> String {
+    let name = canonical_tool_name(tool);
+    let noun = match name {
+        "shell" => "command",
+        "execute" => "code",
+        other => other,
+    };
+    format!("{} {noun}…", if streaming { "Preparing" } else { "Running" })
 }
 
 /// The instructions group's summary label (`InstructionsGroup`):

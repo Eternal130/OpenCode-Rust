@@ -44,10 +44,47 @@ use oc_tui_core::scroll::{FollowState, ScrollCommand, ScrollDriver};
 const SEEN_EVENT_WINDOW: usize = 4096;
 
 /// Route (`context/route.tsx`): home or a session view.
+///
+/// G-136 — the session route carries an optional prefill DRAFT
+/// (`SessionRoute.prompt`, route.tsx:16-19): navigating with a prompt
+/// seeds the destination composer once on mount
+/// (`r.set(route.prompt)`, session/index.tsx:379-381). Bounded
+/// deviation: the ref's `PromptInfo` also carries files/agents/skills
+/// — the port models the TEXT (the only field any ref call site sets;
+/// app.tsx:665-683 + dialog-fork.tsx:35-41). `HomeRoute.prompt` has
+/// no ref writer (home.tsx:56-65 only READS it) and stays unmodeled.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Route {
     Home,
-    Session { session_id: String },
+    Session {
+        session_id: String,
+        /// `SessionRoute.prompt` — the prefilled composer draft.
+        prompt: Option<String>,
+    },
+}
+
+impl Route {
+    /// A plain session route (no prefill).
+    #[must_use]
+    pub fn session(session_id: impl Into<String>) -> Self {
+        Self::Session { session_id: session_id.into(), prompt: None }
+    }
+
+    /// A session route carrying a prefill draft (`HomeRoute.prompt`'s
+    /// session sibling, route.tsx:16-19).
+    #[must_use]
+    pub fn session_with_prompt(session_id: impl Into<String>, prompt: impl Into<String>) -> Self {
+        Self::Session { session_id: session_id.into(), prompt: Some(prompt.into()) }
+    }
+
+    /// The carried prompt draft, if any.
+    #[must_use]
+    pub fn prompt(&self) -> Option<&str> {
+        match self {
+            Self::Home => None,
+            Self::Session { prompt, .. } => prompt.as_deref(),
+        }
+    }
 }
 
 /// G-34 — `session.new_location` (`"launch" | "inherit"`,
@@ -243,6 +280,10 @@ pub enum DialogKind {
     /// index.tsx:627-675): enter steers the selected prompt, ctrl+d
     /// deletes it (`queued_prompt.delete`).
     QueuedPrompts,
+    /// G-140⑤ — the pending-steer click manager ("Pending steer"
+    /// `DialogSelect`, index.tsx:2228-2245): Move to queue
+    /// (`mutatePending("queue")`) / Delete (`mutatePending("cancel")`).
+    PendingSteer { session_id: String, message_id: String },
     /// SURF-1: the tool detail viewer — `DialogExecute` for `execute`
     /// (dialog-execute.tsx; `dialog.replace` at index.tsx:3207) and
     /// `DialogShellOutput` for background shells
@@ -775,7 +816,7 @@ impl TabsState {
     pub fn active(&self, route: &Route) -> Option<String> {
         match route {
             Route::Home => None,
-            Route::Session { session_id } => Some(session_id.clone()),
+            Route::Session { session_id, .. } => Some(session_id.clone()),
         }
     }
 }
@@ -1346,6 +1387,10 @@ pub struct Store {
     /// [`crate::components::session_tabs_rail::clamp_session_tabs_
     /// width`]).
     vertical_tabs_width: Signal<usize>,
+    /// G-143 — `tabs.indicators === "numbers"` (the indicator slot's
+    /// mode; the strip renders the tab ordinal instead of status
+    /// glyphs).
+    tabs_numbers: Signal<bool>,
     /// Per-session cost totals (`session.usage.updated` events —
     /// client/solid/data.ts:646-652 writes `info[id].cost`). TUI-13:
     /// [`Store::session_cost`] is the sidebar/footer read (the
@@ -1525,6 +1570,8 @@ pub struct Store {
     /// `session.tps` (index.tsx:1892): the assistant footer's tok/s
     /// span (default off).
     session_tps: Signal<bool>,
+    /// G-140② — `debug.turn_tokens` (the turn-usage summary row).
+    debug_turn_tokens: Signal<bool>,
     /// `session.markdown === "source"` (index.tsx:231): raw text parts
     /// instead of rendered markdown (default rendered).
     session_markdown_source: Signal<bool>,
@@ -3458,6 +3505,9 @@ struct StoreSignals {
     tabs: Signal<TabsState>,
     tabs_enabled: Signal<bool>,
     tabs_layout: Signal<crate::components::session_tabs_rail::TabsLayout>,
+    /// G-143 — `tabs.indicators === "numbers"` (the indicator slot's
+    /// mode).
+    tabs_numbers: Signal<bool>,
     vertical_tabs_width: Signal<usize>,
     session_costs: Signal<HashMap<String, f64>>,
     session_history: Signal<Vec<crate::data::SessionSnapshot>>,
@@ -3506,6 +3556,7 @@ struct StoreSignals {
     session_thinking: Signal<bool>,
     session_verbosity: Signal<String>,
     session_tps: Signal<bool>,
+    debug_turn_tokens: Signal<bool>,
     session_markdown_source: Signal<bool>,
     /// G-34 — `session.new_location` (default launch): where
     /// `session.new`/`session.clear` home lands.
@@ -3624,6 +3675,7 @@ impl Store {
             tabs,
             tabs_enabled,
             tabs_layout,
+            tabs_numbers,
             vertical_tabs_width,
             session_costs,
             session_history,
@@ -3662,6 +3714,7 @@ impl Store {
             session_thinking,
             session_verbosity,
             session_tps,
+            debug_turn_tokens,
             session_markdown_source,
             session_new_location,
             home_location,
@@ -3703,6 +3756,7 @@ impl Store {
             tabs,
             tabs_enabled,
             tabs_layout,
+            tabs_numbers,
             vertical_tabs_width,
             session_costs,
             session_history,
@@ -3755,6 +3809,7 @@ impl Store {
             session_thinking,
             session_verbosity,
             session_tps,
+            debug_turn_tokens,
             session_markdown_source,
             session_new_location,
             home_location,
@@ -3948,6 +4003,7 @@ impl Store {
         let session_thinking = Signal::new(&runtime, false);
         let session_verbosity = Signal::new(&runtime, "medium".to_owned());
         let session_tps = Signal::new(&runtime, false);
+        let debug_turn_tokens = Signal::new(&runtime, false);
         let session_markdown_source = Signal::new(&runtime, false);
         let session_new_location = Signal::new(&runtime, NewSessionLocation::Launch);
         let plugin_hints = Signal::new(&runtime, Vec::<(String, String)>::new());
@@ -3986,6 +4042,7 @@ impl Store {
         // fed by `session.usage.updated`).
         let tabs_layout =
             Signal::new(&runtime, crate::components::session_tabs_rail::TabsLayout::default());
+        let tabs_numbers = Signal::new(&runtime, false);
         let vertical_tabs_width =
             Signal::new(&runtime, crate::components::session_tabs_rail::SESSION_SIDEBAR_WIDTH);
         let session_costs = Signal::new(&runtime, HashMap::<String, f64>::new());
@@ -3995,6 +4052,7 @@ impl Store {
                 tabs,
                 tabs_enabled,
                 tabs_layout,
+                tabs_numbers,
                 vertical_tabs_width,
                 session_costs,
                 session_history,
@@ -4032,6 +4090,7 @@ impl Store {
                 retention_recent,
                 session_thinking,
                 session_verbosity,
+                debug_turn_tokens,
                 session_tps,
                 session_markdown_source,
                 session_new_location,
@@ -4128,6 +4187,32 @@ impl Store {
     /// `config/index.tsx:330`'s `input.tabs?.layout ?? "horizontal"`).
     pub fn set_tabs_layout(&self, layout: crate::components::session_tabs_rail::TabsLayout) {
         self.tabs_layout.set(layout);
+    }
+
+    /// G-143 — `tabs.indicators` ("numbers" mode): the indicator slot
+    /// shows the tab ordinal instead of the status glyphs
+    /// (`sessionTabNumberLabel`, boot/reload + the dialog row).
+    pub fn set_tabs_numbers(&self, numbers: bool) {
+        self.tabs_numbers.set(numbers);
+    }
+
+    /// G-143 — the live `tabs.indicators === "numbers"` state.
+    #[must_use]
+    pub fn tabs_numbers(&self) -> bool {
+        self.tabs_numbers.get()
+    }
+
+    /// G-143 — the indicator config the strip/rail renderers consume
+    /// (`SessionTabs`'s `spinner`/`unreadMarker`/`indicators` props
+    /// with their ref defaults, session-tabs.tsx:513-527 — the port
+    /// surfaces no spinner/unreadMarker config keys; the defaults
+    /// ride until one exists).
+    #[must_use]
+    pub fn tabs_indicator_config(&self) -> crate::components::session_tabs::IndicatorConfig {
+        crate::components::session_tabs::IndicatorConfig {
+            numbers: self.tabs_numbers.get(),
+            ..crate::components::session_tabs::IndicatorConfig::default()
+        }
     }
 
     /// The persisted vertical-rail width (TUI-3 — the `layout`
@@ -4724,7 +4809,7 @@ impl Store {
         }
         match &self.route.get() {
             Route::Home => "OpenCode".to_owned(),
-            Route::Session { session_id } => {
+            Route::Session { session_id, .. } => {
                 let tabs = self.tabs();
                 let title = tabs
                     .tabs
@@ -5405,7 +5490,7 @@ impl Store {
     /// `terminal.select` (`<leader>down`) — the composer's Terminals
     /// tab + the registry refresh (session-frame.tsx:221-233).
     pub fn terminal_open_picker(&self) {
-        if let Route::Session { session_id } = self.route.get() {
+        if let Route::Session { session_id, .. } = self.route.get() {
             let mut picker = self.picker.get();
             picker.open = true;
             // Without the terminals availability the Terminals tab
@@ -5598,7 +5683,7 @@ impl Store {
     /// selected row — a terminal mounts, the add slot creates; either
     /// way the composer closes.
     pub fn picker_terminal_select(&self) {
-        if let Route::Session { session_id } = self.route.get() {
+        if let Route::Session { session_id, .. } = self.route.get() {
             let entries = self.picker_terminals(&session_id);
             let selected = self.picker_selection(&session_id, entries.len());
             let entry = entries.get(selected).cloned();
@@ -5648,7 +5733,7 @@ impl Store {
     /// fetch rides the sink; the dialog renders the loading state
     /// until the view lands.
     pub fn picker_shell_select(&self) {
-        if let Route::Session { session_id } = self.route.get() {
+        if let Route::Session { session_id, .. } = self.route.get() {
             let entries = self.picker_shells(&session_id);
             let selected = self.picker_selection(&session_id, entries.len());
             if let Some(entry) = entries.get(selected) {
@@ -5668,7 +5753,7 @@ impl Store {
     /// client.api.shell.remove`); the `shell.deleted` echo removes the
     /// registry row.
     pub fn picker_shell_kill(&self) {
-        if let Route::Session { session_id } = self.route.get() {
+        if let Route::Session { session_id, .. } = self.route.get() {
             let entries = self.picker_shells(&session_id);
             let selected = self.picker_selection(&session_id, entries.len());
             if let Some(entry) = entries.get(selected) {
@@ -6131,7 +6216,7 @@ impl Store {
                 state.history = model::record_tab_history(&state.history, session_id);
             });
         }
-        self.navigate(Route::Session { session_id: session_id.to_owned() });
+        self.navigate(Route::session(session_id.to_owned()));
     }
 
     /// Restore the persisted tab list on boot (v2's
@@ -6172,7 +6257,7 @@ impl Store {
         // Like the reference: focus the proposed neighbor, else home.
         match next {
             Some(neighbor) if self.tabs.get().tabs.iter().any(|tab| tab.session_id == neighbor) => {
-                self.navigate(Route::Session { session_id: neighbor });
+                self.navigate(Route::session(neighbor));
             }
             _ => self.navigate(Route::Home),
         }
@@ -6190,7 +6275,7 @@ impl Store {
                 state.tabs = restored;
             });
             if let Some(id) = selected.clone() {
-                self.navigate(Route::Session { session_id: id });
+                self.navigate(Route::session(id));
             }
         }
         selected
@@ -6200,7 +6285,7 @@ impl Store {
     /// it is not open — v2's `select()` is a bare
     /// `route.navigate({type:"session"})`, `session-tabs.tsx:393-396`).
     pub fn select_tab(&self, session_id: &str) {
-        self.navigate(Route::Session { session_id: session_id.to_owned() });
+        self.navigate(Route::session(session_id.to_owned()));
     }
 
     /// `session.tab.history.back` (keybind.ts:114 — lane KM): walk the
@@ -6218,7 +6303,7 @@ impl Store {
         let target = tabs.history.entries.get(usize::try_from(index - 1).unwrap_or(0))?.clone();
         let mut history = tabs.history.clone();
         history.index = index - 1;
-        self.navigate(Route::Session { session_id: target.clone() });
+        self.navigate(Route::session(target.clone()));
         self.tabs.update(|state| state.history = history);
         Some(target)
     }
@@ -6234,7 +6319,7 @@ impl Store {
             .and_then(|index| tabs.history.entries.get(index).cloned())?;
         let mut history = tabs.history.clone();
         history.index = next;
-        self.navigate(Route::Session { session_id: target.clone() });
+        self.navigate(Route::session(target.clone()));
         self.tabs.update(|state| state.history = history);
         Some(target)
     }
@@ -7392,7 +7477,7 @@ impl Store {
     pub fn navigate_parent(&self, session_id: &str) -> bool {
         match self.parent_session_id(session_id) {
             Some(parent) => {
-                self.navigate(Route::Session { session_id: parent });
+                self.navigate(Route::session(parent));
                 true
             }
             None => false,
@@ -7855,7 +7940,7 @@ impl Store {
     /// the CURRENT model selection, clear the dialog; failures toast
     /// through the loop fetcher's result event.
     pub fn session_compact_pressed(&self) {
-        let Route::Session { session_id } = self.route() else { return };
+        let Route::Session { session_id, .. } = self.route() else { return };
         let model = self.selection_for(&session_id).model;
         self.session_action_sink.borrow().compact(&session_id, model.as_ref());
         self.clear_dialogs();
@@ -7866,7 +7951,7 @@ impl Store {
     /// to undo"; a hit fires interrupt→wait→revert.stage and seeds
     /// the composer with the message text.
     pub fn session_undo_pressed(&self) {
-        let Route::Session { session_id } = self.route() else { return };
+        let Route::Session { session_id, .. } = self.route() else { return };
         // `messagesBeforeRevert`: with a staged boundary the visible
         // transcript ENDS before `revert.messageID`.
         let boundary = self.revert(&session_id).map(|state| state.message_id);
@@ -7896,6 +7981,27 @@ impl Store {
             });
             return;
         };
+        // G-138 — the pending branch (index.tsx:985-992): a message
+        // still queued in the server inbox (`pendingDeliveries.has`)
+        // cancels through `mutatePending("cancel")` — NO interrupt,
+        // NO revert.stage. A failed cancel aborts (the ref returns
+        // before the composer refill). The refill uses the queued
+        // payload (`projectedPromptInput(queued.payload)`,
+        // index.tsx:662-668) when the item still exists.
+        if let Some(queued) = self.queued_prompt_payload(&session_id, &message_id) {
+            if !self.delete_queued_prompt(&session_id, &message_id) {
+                self.clear_dialogs();
+                return;
+            }
+            let refill = if queued.text.is_empty() { text } else { queued.text };
+            if !refill.is_empty() {
+                let mut composer = self.composer(&session_id);
+                composer.set_text(&refill);
+                self.set_composer(&session_id, &composer);
+            }
+            self.clear_dialogs();
+            return;
+        }
         self.session_action_sink.borrow().revert_stage(&session_id, &message_id);
         if !text.is_empty() {
             let mut composer = self.composer(&session_id);
@@ -7909,14 +8015,22 @@ impl Store {
     /// through the existing revert sink; errors toast (the loop's
     /// result event carries them — the banner path shares the POST).
     pub fn session_redo_pressed(&self) {
-        let Route::Session { session_id } = self.route() else { return };
+        let Route::Session { session_id, .. } = self.route() else { return };
+        // G-140⑦ — the enabled gate (index.tsx:1007's
+        // `enabled: !!session()?.revert?.messageID`): with no staged
+        // revert there is nothing to redo — the command is a no-op
+        // (the palette row renders disabled in the ref).
+        if self.revert(&session_id).map(|state| state.message_id.is_empty()).unwrap_or(true) {
+            self.clear_dialogs();
+            return;
+        }
         self.revert_dismiss(&session_id);
         self.clear_dialogs();
     }
 
     /// `session.background`'s run (index.tsx:1250-1253).
     pub fn session_background_pressed(&self) {
-        let Route::Session { session_id } = self.route() else { return };
+        let Route::Session { session_id, .. } = self.route() else { return };
         self.session_action_sink.borrow().background(&session_id);
         self.clear_dialogs();
     }
@@ -7932,12 +8046,14 @@ impl Store {
     /// "Forked session" toast, dialog-fork.tsx:36-46).
     pub fn session_forked(&self, new_session_id: &str, prompt_text: Option<&str>) {
         self.open_tab(new_session_id, None);
-        self.navigate(Route::Session { session_id: new_session_id.to_owned() });
-        if let Some(text) = prompt_text.filter(|text| !text.is_empty()) {
-            let mut composer = self.composer(new_session_id);
-            composer.set_text(text);
-            self.set_composer(new_session_id, &composer);
-        }
+        // G-136 — dialog-fork.tsx:35-41: the forked route carries the
+        // projected prompt (`route.navigate({ …, prompt })`); the
+        // navigation seeds the composer (session/index.tsx:379-381).
+        let route = match prompt_text.filter(|text| !text.is_empty()) {
+            Some(text) => Route::session_with_prompt(new_session_id, text),
+            None => Route::session(new_session_id),
+        };
+        self.navigate(route);
         self.clear_dialogs();
         self.toast_show(crate::components::toast::ToastOptions {
             message: "Forked session".to_owned(),
@@ -8285,8 +8401,8 @@ impl Store {
     /// route + session, mark loading, kick the fetch, clear dialogs.
     pub fn open_diff_viewer(&self, default_mode: Option<DiffSource>) {
         let (return_route, session_id) = match self.route() {
-            Route::Session { session_id } => {
-                (Route::Session { session_id: session_id.clone() }, Some(session_id))
+            Route::Session { session_id, .. } => {
+                (Route::session(session_id.clone()), Some(session_id))
             }
             Route::Home => (Route::Home, None),
         };
@@ -8645,7 +8761,7 @@ impl Store {
     #[must_use]
     pub fn current_model_variants(&self) -> Vec<String> {
         let selection = match self.route() {
-            Route::Session { session_id } => self.selection_for(&session_id).model,
+            Route::Session { session_id, .. } => self.selection_for(&session_id).model,
             Route::Home => self.selection_for(crate::app::HOME_PROMPT_KEY).model,
         };
         let Some(selection) = selection else { return Vec::new() };
@@ -8669,13 +8785,13 @@ impl Store {
     /// the variant onto the route's selection ("default" clears it).
     pub fn set_current_model_variant(&self, variant: Option<&str>) {
         let key = match self.route() {
-            Route::Session { session_id } => session_id,
+            Route::Session { session_id, .. } => session_id,
             Route::Home => crate::app::HOME_PROMPT_KEY.to_owned(),
         };
         let Some(mut model) = self.selection_for(&key).model else { return };
         model.variant = variant.filter(|value| *value != "default").map(str::to_owned);
         match self.route() {
-            Route::Session { session_id } => self.select_model(&session_id, &model),
+            Route::Session { session_id, .. } => self.select_model(&session_id, &model),
             Route::Home => self.stage_model(&key, model),
         }
     }
@@ -8858,6 +8974,24 @@ impl Store {
         existed
     }
 
+    /// TUI-TD07 — `mutatePending("queue")` (the pending-steer click
+    /// manager's "Move to queue", index.tsx:2206-2208 + 2233-2238):
+    /// the server PATCH (`session.inbox.update {delivery: "queue"}`)
+    /// plus the optimistic local delivery flip; `true` when the item
+    /// existed.
+    pub fn queue_pending_steer(&self, session_id: &str, id: &str) -> bool {
+        let existed = self
+            .pending_inbox
+            .get()
+            .get(session_id)
+            .is_some_and(|items| items.iter().any(|item| item.id == id));
+        if existed {
+            self.inbox_sink.borrow().update(session_id, id, "queue");
+            self.update_inbox_delivery(session_id, id, "queue");
+        }
+        existed
+    }
+
     /// TUI-TD07 — the undo's refill payload: the queued item's
     /// text + files (`projectedPromptInput(queued.payload)`,
     /// index.tsx:662-668) for `appendPrompt`.
@@ -8950,7 +9084,7 @@ impl Store {
         }
         let route = self.route();
         let current = match &route {
-            Route::Session { session_id } => self.selection_for(session_id).model,
+            Route::Session { session_id, .. } => self.selection_for(session_id).model,
             Route::Home => self.selection_for(crate::app::HOME_PROMPT_KEY).model,
         };
         let index = current.as_ref().and_then(|selection| {
@@ -8990,7 +9124,7 @@ impl Store {
         }
         let route = self.route();
         let current = match &route {
-            Route::Session { session_id } => self.selection_for(session_id).model,
+            Route::Session { session_id, .. } => self.selection_for(session_id).model,
             Route::Home => self.selection_for(crate::app::HOME_PROMPT_KEY).model,
         };
         let index = current.as_ref().and_then(|selection| {
@@ -9012,6 +9146,30 @@ impl Store {
         })
     }
 
+    /// `local.model.toggleFavorite` (dialog-model.tsx:160-164 over
+    /// `setFavorite`, model-preference.ts:148-150): flip the model's
+    /// favorite membership (dedup + front-insert on enable) and mark
+    /// the ring dirty (the run loop persists `<state>/model.json`).
+    pub fn model_toggle_favorite(&self, provider_id: &str, model_id: &str) -> bool {
+        let model = model_pref::ModelPreferenceModel {
+            provider_id: provider_id.to_owned(),
+            model_id: model_id.to_owned(),
+        };
+        let enabled = self
+            .model_ring
+            .get()
+            .document
+            .favorite
+            .iter()
+            .all(|item| model_pref::model_preference_key(item) != model_pref::model_preference_key(&model));
+        self.model_ring.update(|ring| {
+            ring.document.favorite =
+                model_pref::favorite_models(&model, &ring.document.favorite, enabled);
+        });
+        self.model_ring_dirty.set(true);
+        enabled
+    }
+
     /// The model-ring persistence flag (the run loop drains it: write
     /// `<state>/model.json` when set).
     pub fn take_model_ring_dirty(&self) -> Option<ModelRing> {
@@ -9029,7 +9187,7 @@ impl Store {
     pub fn variant_cycle(&self) -> Option<Option<String>> {
         let route = self.route();
         let selection = match &route {
-            Route::Session { session_id } => self.selection_for(session_id).model?,
+            Route::Session { session_id, .. } => self.selection_for(session_id).model?,
             Route::Home => self.selection_for(crate::app::HOME_PROMPT_KEY).model?,
         };
         let variants = self
@@ -9070,7 +9228,7 @@ impl Store {
         }
         let route = self.route();
         let current = match &route {
-            Route::Session { session_id } => self.selection_for(session_id).agent,
+            Route::Session { session_id, .. } => self.selection_for(session_id).agent,
             Route::Home => self.selection_for(crate::app::HOME_PROMPT_KEY).agent,
         }
         .or_else(|| agents.first().map(|agent| agent.id.clone()));
@@ -9107,7 +9265,7 @@ impl Store {
         // with the previous session's directory (the phantom-click
         // hazard — the inverse of dogfood2's home-strip bug).
         self.clear_route_pointer_registries();
-        if let Route::Session { session_id } = &route {
+        if let Route::Session { session_id, .. } = &route {
             // v2's session-tabs context roots every routed session
             // (context/session-tabs.tsx:138, 188): navigating into a
             // CHILD session routes the family ROOT for tab purposes —
@@ -9149,7 +9307,7 @@ impl Store {
         // previous`) and the pass evicts every listed root outside
         // tabs ∪ window ∪ current.
         let previous = match &self.route.get() {
-            Route::Session { session_id } => Some(session_id.clone()),
+            Route::Session { session_id, .. } => Some(session_id.clone()),
             Route::Home => None,
         };
         // TUI-TD06 — leaving a session saves its scroll anchor (v2's
@@ -9157,7 +9315,7 @@ impl Store {
         // one with a saved anchor stages the restore (resolved at the
         // session's next render, against fresh positions).
         let entering = match &route {
-            Route::Session { session_id } => Some(session_id.clone()),
+            Route::Session { session_id, .. } => Some(session_id.clone()),
             Route::Home => None,
         };
         if let Some(left) = &previous {
@@ -9171,13 +9329,32 @@ impl Store {
             }
         }
         self.route.set(route);
+        // G-136 — the route's prompt prefill (`SessionRoute.prompt`,
+        // route.tsx:16-19): the destination composer seeds once on
+        // mount (`r.set(route.prompt)`, session/index.tsx:379-381).
+        // The prompt travels with the ROUTE (not the composer), so
+        // any navigation can prefill the draft exactly like the ref.
+        if let Route::Session { session_id, prompt: Some(prompt) } = &self.route.get() {
+            if !prompt.is_empty() {
+                let mut composer = self.composer(session_id);
+                composer.set_text(prompt);
+                self.set_composer(session_id, &composer);
+            }
+        }
         let viewed = entering;
         let navigated = viewed != previous;
         self.enforce_session_retention(viewed.as_deref(), navigated);
     }
 
-    pub fn push_dialog(&self, kind: DialogKind) {
-        let theme_initial = self.theme_dialog_initial(&kind);
+    /// G-136 — `route.navigate({ …, prompt })` (route.tsx:36-38 + the
+    /// reachable writers app.tsx:665-683 / dialog-fork.tsx:35-41):
+    /// navigate carrying the prefill draft; [`Store::navigate`] seeds
+    /// the destination composer from the route.
+    pub fn navigate_with_prompt(&self, session_id: &str, prompt: &str) {
+        self.navigate(Route::session_with_prompt(session_id, prompt));
+    }
+
+    pub fn push_dialog(&self, kind: DialogKind) {        let theme_initial = self.theme_dialog_initial(&kind);
         let entry = DialogEntry {
             kind,
             size: DialogSize::default(),
@@ -9568,7 +9745,7 @@ impl Store {
     /// home draft).
     fn focused_prompt_key(&self) -> String {
         match self.route() {
-            Route::Session { session_id } => session_id,
+            Route::Session { session_id, .. } => session_id,
             Route::Home => crate::app::HOME_PROMPT_KEY.to_owned(),
         }
     }
@@ -10454,7 +10631,7 @@ impl Store {
         if !matches!(self.route.get(), Route::Session { .. }) {
             return;
         }
-        let visible = matches!(self.route.get(), Route::Session { session_id } if self.sidebar_shown(&session_id, usize::from(self.terminal_size.get().0)));
+        let visible = matches!(self.route.get(), Route::Session { session_id, .. } if self.sidebar_shown(&session_id, usize::from(self.terminal_size.get().0)));
         let mode = if visible {
             crate::components::sidebar::SidebarMode::Hide
         } else {
@@ -10601,7 +10778,7 @@ impl Store {
         if !matches!(self.route.get(), Route::Session { .. }) {
             return;
         }
-        let is_child = matches!(self.route.get(), Route::Session { ref session_id } if self.session_is_subagent(session_id));
+        let is_child = matches!(self.route.get(), Route::Session { ref session_id, .. } if self.session_is_subagent(session_id));
         let mut picker = self.picker.get();
         if picker.open || is_child {
             picker.open = false;
@@ -10618,7 +10795,7 @@ impl Store {
     /// clears — v2's session-frame is keyed by sessionID, so the
     /// parent's remount starts with a fresh (closed) composer store.
     pub fn picker_close(&self) {
-        if let Route::Session { session_id } = self.route.get() {
+        if let Route::Session { session_id, .. } = self.route.get() {
             let parent = self
                 .session_index
                 .borrow()
@@ -10626,7 +10803,7 @@ impl Store {
                 .and_then(|info| info.parent_id.clone());
             self.picker.update(|picker| picker.open = false);
             if let Some(parent) = parent {
-                self.navigate(Route::Session { session_id: parent });
+                self.navigate(Route::session(parent));
             }
         } else {
             self.picker.update(|picker| picker.open = false);
@@ -10744,7 +10921,7 @@ impl Store {
     /// move; `down` on an empty list is inert).
     pub fn picker_move(&self, forward: bool) {
         let route = match self.route.get() {
-            Route::Session { session_id } => session_id,
+            Route::Session { session_id, .. } => session_id,
             Route::Home => return,
         };
         let len = self.picker_entries(&route).len();
@@ -10769,7 +10946,7 @@ impl Store {
     /// terminals tab has NO close branch, `up` wraps to the last slot.
     pub fn picker_move_wrap(&self, forward: bool) {
         let route = match self.route.get() {
-            Route::Session { session_id } => session_id,
+            Route::Session { session_id, .. } => session_id,
             Route::Home => return,
         };
         let len = self.picker_entries(&route).len();
@@ -10787,14 +10964,14 @@ impl Store {
     /// ROOT's tab — `navigate` roots the tab bookkeeping).
     pub fn picker_navigate(&self) {
         let route = match self.route.get() {
-            Route::Session { session_id } => session_id,
+            Route::Session { session_id, .. } => session_id,
             Route::Home => return,
         };
         let entries = self.picker_entries(&route);
         let selected = self.picker_selection(&route, entries.len());
         if let Some(entry) = entries.get(selected) {
             let target = entry.session_id.clone();
-            self.navigate(Route::Session { session_id: target });
+            self.navigate(Route::session(target));
         }
     }
 
@@ -10802,7 +10979,7 @@ impl Store {
     /// interrupt POST.
     pub fn picker_interrupt(&self) {
         let route = match self.route.get() {
-            Route::Session { session_id } => session_id,
+            Route::Session { session_id, .. } => session_id,
             Route::Home => return,
         };
         let entries = self.picker_entries(&route);
@@ -10818,7 +10995,7 @@ impl Store {
     /// after teardown. `None` off the session route.
     #[must_use]
     pub fn exit_epilogue(&self) -> Option<String> {
-        let Route::Session { session_id } = self.route.get() else {
+        let Route::Session { session_id, .. } = self.route.get() else {
             return None;
         };
         let index = self.session_index.borrow();
@@ -10997,6 +11174,17 @@ impl Store {
     }
 
     /// The `session.tps` key (the assistant footer's tok/s span).
+    /// G-140② — `debug.turn_tokens` (the turn-usage summary row's
+    /// gate; boot/reload).
+    #[must_use]
+    pub fn debug_turn_tokens(&self) -> bool {
+        self.debug_turn_tokens.get()
+    }
+
+    pub fn set_debug_turn_tokens(&self, enabled: bool) {
+        self.debug_turn_tokens.set(enabled);
+    }
+
     pub fn set_session_tps(&self, enabled: bool) {
         self.session_tps.set(enabled);
         self.request_redraw();
@@ -11443,7 +11631,7 @@ impl Store {
                 // navigation advanced, but new/removed listings can
                 // move roots in or out of the retained set.
                 let current = match &self.route.get() {
-                    Route::Session { session_id } => Some(session_id.clone()),
+                    Route::Session { session_id, .. } => Some(session_id.clone()),
                     Route::Home => None,
                 };
                 self.enforce_session_retention(current.as_deref(), false);
@@ -11545,7 +11733,7 @@ impl Store {
             if live_ids.contains(id.as_str()) {
                 continue;
             }
-            if let Route::Session { session_id } = self.route() {
+            if let Route::Session { session_id, .. } = self.route() {
                 if session_id == id {
                     self.toast_show(ToastOptions {
                         title: None,
@@ -11560,7 +11748,7 @@ impl Store {
             }
             if self.tabs_enabled() {
                 self.close_tab(Some(&id));
-            } else if let Route::Session { session_id } = self.route() {
+            } else if let Route::Session { session_id, .. } = self.route() {
                 if session_id == id {
                     self.navigate(Route::Home);
                 }
@@ -11781,7 +11969,7 @@ impl Store {
             // unread clear, plugin-route/stats teardown all ride it).
             "tui.session.select" => {
                 let Some(id) = event.string("sessionID") else { return };
-                self.navigate(Route::Session { session_id: id });
+                self.navigate(Route::session(id));
             }
             "message.updated" | "message.part.updated" => {
                 // A message arriving in a non-active session marks its
@@ -12186,6 +12374,8 @@ impl Store {
                                 time: PartTime { created, completed: None },
                                 tokens: None,
                                 usage_total: None,
+                                retry: None,
+                                cache_read: None,
                             });
                         }
                     }
@@ -12236,6 +12426,8 @@ impl Store {
                         time,
                         tokens: token_slot,
                         usage_total: usage_slot,
+                        retry: None,
+                        cache_read: None,
                         ..
                     }) = messages.iter_mut().find(|m| m.id() == assistant.as_str())
                     {
@@ -12565,6 +12757,8 @@ fn with_part(
             time: PartTime::default(),
             tokens: None,
             usage_total: None,
+            retry: None,
+            cache_read: None,
         });
         messages.len() - 1
     };
@@ -12708,6 +12902,8 @@ fn with_tool_part(
             time: PartTime::default(),
             tokens: None,
             usage_total: None,
+            retry: None,
+            cache_read: None,
         });
     }
     let Some(Message::Assistant { parts, .. }) =
@@ -12860,6 +13056,8 @@ fn message_from_event(event: &BusEvent) -> Option<Message> {
                 time,
                 tokens: None,
                 usage_total: None,
+                retry: None,
+                cache_read: None,
             })
         }
         // The `→ Skill {name}` row (message type `skill`,
@@ -13002,12 +13200,12 @@ mod tests {
             tabs.tabs.iter().map(|t| t.session_id.clone()).collect::<Vec<_>>(),
             vec!["a", "c"]
         );
-        assert_eq!(store.route(), Route::Session { session_id: "c".to_owned() }, "right neighbor");
+        assert_eq!(store.route(), Route::session("c".to_owned()), "right neighbor");
         assert_eq!(tabs.closed.len(), 1);
         assert_eq!(tabs.closed[0].tab.session_id, "b");
         assert_eq!(tabs.closed[0].index, 1);
         store.close_tab(Some("c"));
-        assert_eq!(store.route(), Route::Session { session_id: "a".to_owned() }, "left fallback");
+        assert_eq!(store.route(), Route::session("a".to_owned()), "left fallback");
         store.close_tab(Some("a"));
         assert_eq!(store.route(), Route::Home);
     }
@@ -13278,7 +13476,7 @@ mod tests {
         // works, the strip stays as-is.
         store.set_tabs_enabled(false);
         store.select_tab("ses_4");
-        assert_eq!(store.route(), Route::Session { session_id: "ses_4".to_owned() });
+        assert_eq!(store.route(), Route::session("ses_4".to_owned()));
         assert_eq!(store.tabs().tabs.len(), 3, "no new tab while disabled");
         // Closing while disabled: the strip is inert (v2's close() is
         // gated on enabled()).
@@ -13481,7 +13679,7 @@ mod tests {
         ))]);
         assert_eq!(
             store.route(),
-            Route::Session { session_id: "ses_sel_1".to_owned() },
+            Route::session("ses_sel_1".to_owned()),
             "the event routes to the session"
         );
         // A payload without a sessionID keeps the current route.
@@ -13491,7 +13689,7 @@ mod tests {
         ))]);
         assert_eq!(
             store.route(),
-            Route::Session { session_id: "ses_sel_1".to_owned() },
+            Route::session("ses_sel_1".to_owned()),
             "malformed payload is a no-op"
         );
     }
@@ -14105,6 +14303,8 @@ mod tests {
                 time: PartTime { created: Some(1), completed: Some(2) },
                 tokens: None,
                 usage_total: None,
+                retry: None,
+                cache_read: None,
             }],
         );
         // The G11-F1 window: a session.text.delta replayed after the
@@ -14302,6 +14502,8 @@ mod tests {
                     time: crate::components::message::model::PartTime::default(),
                     tokens: None,
                     usage_total: None,
+                    retry: None,
+                    cache_read: None,
                 },
             ],
         }]);
@@ -14643,7 +14845,7 @@ mod tests {
         let mut dispatcher = crate::components::command_palette::StoreDispatcher;
         let store = Store::new(Runtime::new());
         store.open_tab("s1", Some("Root flow".to_owned()));
-        store.navigate(Route::Session { session_id: "s1".to_owned() });
+        store.navigate(Route::session("s1".to_owned()));
         store.ingest_all([
             Ingest::Event(BusEvent::new(
                 "session.created",
@@ -14662,7 +14864,7 @@ mod tests {
         store.navigate(Route::Home);
         dispatcher.dispatch(&store, "session.child.first", None);
         assert!(!store.picker().open);
-        store.navigate(Route::Session { session_id: "s1".to_owned() });
+        store.navigate(Route::session("s1".to_owned()));
 
         // Open: the subagents tab, active filter (nothing running).
         dispatcher.dispatch(&store, "session.child.first", None);
@@ -14685,7 +14887,7 @@ mod tests {
         // is the child, and the panel stays live (the parentID mount).
         dispatcher.dispatch(&store, "composer.subagent.select", None);
         assert!(
-            matches!(store.route(), Route::Session { ref session_id } if session_id == "ses_child")
+            matches!(store.route(), Route::Session { ref session_id, .. } if session_id == "ses_child")
         );
         assert_eq!(store.tabs().tabs.len(), 1, "no tab opened for the child");
         assert!(store.picker_live("ses_child"), "the child route keeps the panel");
@@ -14698,7 +14900,7 @@ mod tests {
 
         // close: back to the parent, the explicit open flag folds.
         dispatcher.dispatch(&store, "composer.close", None);
-        assert!(matches!(store.route(), Route::Session { ref session_id } if session_id == "s1"));
+        assert!(matches!(store.route(), Route::Session { ref session_id, .. } if session_id == "s1"));
         assert!(!store.picker().open);
     }
 
@@ -14708,7 +14910,7 @@ mod tests {
     fn picker_move_wraps_and_up_at_top_closes() {
         let store = Store::new(Runtime::new());
         store.open_tab("s1", Some("Root".to_owned()));
-        store.navigate(Route::Session { session_id: "s1".to_owned() });
+        store.navigate(Route::session("s1".to_owned()));
         store.ingest_all([
             Ingest::Event(BusEvent::new(
                 "session.created",
@@ -14752,7 +14954,7 @@ mod tests {
     fn composer_shell_tab_lists_selects_and_kills() {
         let store = Store::new(Runtime::new());
         store.open_tab("s1", Some("Root".to_owned()));
-        store.navigate(Route::Session { session_id: "s1".to_owned() });
+        store.navigate(Route::session("s1".to_owned()));
         store.ingest_all([
             Ingest::Event(BusEvent::new(
                 "shell.created",
@@ -14812,7 +15014,7 @@ mod tests {
     fn composer_terminals_tab_wraps_and_the_add_slot_creates() {
         let store = Store::new(Runtime::new());
         store.open_tab("s1", Some("Root".to_owned()));
-        store.navigate(Route::Session { session_id: "s1".to_owned() });
+        store.navigate(Route::session("s1".to_owned()));
         store.set_terminal_available(true);
         let mut picker = store.picker();
         picker.open = true;
@@ -14854,7 +15056,7 @@ mod tests {
     fn composer_tab_switch_gates_terminals_and_keeps_shell_selection() {
         let store = Store::new(Runtime::new());
         store.open_tab("s1", Some("Root".to_owned()));
-        store.navigate(Route::Session { session_id: "s1".to_owned() });
+        store.navigate(Route::session("s1".to_owned()));
         // Without the capability: two tabs, the cycle skips Terminals.
         assert_eq!(store.picker_registered_tabs(), vec![PickerTab::Subagents, PickerTab::Shell]);
         let mut picker = store.picker();
@@ -14915,7 +15117,7 @@ mod tests {
         let store = Store::new(Runtime::new());
         assert!(store.exit_epilogue().is_none(), "home has no epilogue");
         store.open_tab("s1", Some("Root".to_owned()));
-        store.navigate(Route::Session { session_id: "s1".to_owned() });
+        store.navigate(Route::session("s1".to_owned()));
         store.ingest_all([Ingest::Event(BusEvent::new(
             "session.created",
             serde_json::json!({ "sessionID": "s1", "title": "Parity Subagent Flow" }),
@@ -15390,6 +15592,8 @@ fn navigation_pins_the_boundary_target() {
                 time: PartTime::default(),
                 tokens: None,
                 usage_total: None,
+                retry: None,
+                cache_read: None,
             },
             Message::User {
                 id: "q2".into(),
@@ -15519,10 +15723,10 @@ fn parent_route_resolves_through_the_registry() {
         permissions: Vec::new(),
         forms: Vec::new(),
     }]);
-    store.navigate(Route::Session { session_id: "kid".to_owned() });
+    store.navigate(Route::session("kid".to_owned()));
     assert_eq!(store.parent_session_id("kid").as_deref(), Some("root"));
     assert!(store.navigate_parent("kid"), "the up-route navigated");
-    assert_eq!(store.route(), Route::Session { session_id: "root".to_owned() });
+    assert_eq!(store.route(), Route::session("root".to_owned()));
     assert!(!store.navigate_parent("root"), "a root has no parent");
 }
 

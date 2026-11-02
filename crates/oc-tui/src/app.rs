@@ -119,6 +119,10 @@ pub struct App {
     /// The asks autoaccept already answered (v2's `autoApproved` set,
     /// session/index.tsx:252-254 — one `once` per request id).
     auto_approved: std::collections::HashSet<String>,
+    /// G-140⑥ — the auto-origin reply ids (the rollback eligibility
+    /// set: only `--auto` answers roll `autoApproved` back on POST
+    /// failure, index.tsx:263-267).
+    auto_reply_ids: std::collections::HashSet<String>,
     size: (u16, u16),
     /// The last pointer cell (motion/up events) — the strip's hover
     /// re-evaluation source after a re-layout moves controls under a
@@ -195,6 +199,7 @@ impl App {
             rename_requests: Vec::new(),
             autoaccept: false,
             auto_approved: std::collections::HashSet::new(),
+            auto_reply_ids: std::collections::HashSet::new(),
             size,
             last_pointer: None,
             exit_requested: false,
@@ -348,6 +353,8 @@ impl App {
             self.store.set_session_verbosity(verbosity);
         }
         self.store.set_session_tps(config.session_tps);
+        // G-140② — `debug.turn_tokens` gates the turn-usage row.
+        self.store.set_debug_turn_tokens(config.debug_turn_tokens);
         self.store.set_session_markdown_source(config.session_markdown_source);
         self.store.restore_session_grouping(config.session_grouping);
     }
@@ -912,7 +919,7 @@ impl App {
                         match self.store.picker().tab {
                             crate::store::PickerTab::Subagents => {
                                 let target = hit.session_id.clone();
-                                self.store.navigate(Route::Session { session_id: target });
+                                self.store.navigate(Route::session(target));
                             }
                             crate::store::PickerTab::Terminals => {
                                 self.store.picker_terminal_select();
@@ -1062,7 +1069,7 @@ impl App {
                     return;
                 }
                 let route_session = match self.store.route() {
-                    Route::Session { session_id } => Some(session_id),
+                    Route::Session { session_id, .. } => Some(session_id),
                     Route::Home => None,
                 };
                 for hit in self.store.transcript_hit_rows() {
@@ -1109,13 +1116,32 @@ impl App {
                                 );
                             }
                             crate::store::TranscriptHitAction::MessageActions { message_id } => {
-                                self.store.open_dialog(
-                                    crate::store::DialogKind::MessageActions {
-                                        session_id: hit.session_id.clone(),
-                                        message_id: message_id.clone(),
-                                    },
-                                    crate::store::DialogSize::Medium,
-                                );
+                                // G-140⑤ — a pending-STEER row's click
+                                // opens the steer manager instead of the
+                                // plain message actions (index.tsx:
+                                // 2226-2244: "Move to queue" / "Delete").
+                                if self
+                                    .store
+                                    .pending_delivery(&hit.session_id, &message_id)
+                                    .as_deref()
+                                    == Some("steer")
+                                {
+                                    self.store.open_dialog(
+                                        crate::store::DialogKind::PendingSteer {
+                                            session_id: hit.session_id.clone(),
+                                            message_id: message_id.clone(),
+                                        },
+                                        crate::store::DialogSize::Medium,
+                                    );
+                                } else {
+                                    self.store.open_dialog(
+                                        crate::store::DialogKind::MessageActions {
+                                            session_id: hit.session_id.clone(),
+                                            message_id: message_id.clone(),
+                                        },
+                                        crate::store::DialogSize::Medium,
+                                    );
+                                }
                             }
                             crate::store::TranscriptHitAction::ToggleToolDetail {
                                 message_id,
@@ -1401,7 +1427,7 @@ impl App {
                 if self.permission_live() {
                     return;
                 }
-                if let Route::Session { session_id } = self.store.route() {
+                if let Route::Session { session_id, .. } = self.store.route() {
                     // The sidebar's content slot: wheel over the
                     // pane's columns scrolls the sections (v2's
                     // `sidebar.content` scrollbox).
@@ -1498,7 +1524,7 @@ impl App {
             (items, Some(crate::components::session_tabs::NEW_SESSION_TAB_ID.to_owned()), false)
         } else {
             let active = match self.store.route() {
-                Route::Session { session_id } => Some(session_id),
+                Route::Session { session_id, .. } => Some(session_id),
                 Route::Home => None,
             };
             (items, active, true)
@@ -1857,7 +1883,7 @@ impl App {
     /// `SessionLocationMissing` mount replaced the composer,
     /// index.tsx:1484-1496).
     fn location_missing_live(&self) -> bool {
-        matches!(self.store.route(), crate::store::Route::Session { session_id }
+        matches!(self.store.route(), crate::store::Route::Session { session_id, .. }
             if self.store.session_location_missing(&session_id).is_some())
     }
 
@@ -1865,7 +1891,7 @@ impl App {
     /// explicitly open or the route is a child session (which always
     /// mounts the panel — v2 index.tsx:1451).
     fn picker_live(&self) -> bool {
-        matches!(self.store.route(), crate::store::Route::Session { session_id }
+        matches!(self.store.route(), crate::store::Route::Session { session_id, .. }
             if self.store.picker_live(&session_id))
     }
 
@@ -1939,7 +1965,7 @@ impl App {
     /// (beta.13 bug 2 — v2 subagents-tab.tsx:221-227).
     fn picker_entry_at(&self, col: usize, row: usize) -> Option<crate::store::PickerEntryHit> {
         let hits = self.store.picker_entry_hits();
-        let Route::Session { session_id } = self.store.route() else { return None };
+        let Route::Session { session_id, .. } = self.store.route() else { return None };
         if hits.session_id != session_id || !self.picker_live() {
             return None;
         }
@@ -2099,7 +2125,7 @@ impl App {
             return false;
         }
         match self.store.route() {
-            Route::Session { session_id } => self.store.sidebar_shown(&session_id, width),
+            Route::Session { session_id, .. } => self.store.sidebar_shown(&session_id, width),
             Route::Home => false,
         }
     }
@@ -2130,6 +2156,7 @@ impl App {
         if !self.auto_approved.insert(request.id.clone()) {
             return;
         }
+        self.auto_reply_ids.insert(request.id.clone());
         self.permission_replies.push(crate::components::footer::permission::PermissionReply {
             session_id: request.session_id.clone(),
             request_id: request.id.clone(),
@@ -2307,7 +2334,7 @@ impl App {
                 crate::store::DialogKind::BtwPrompt => {
                     let question = value.trim().to_owned();
                     if !question.is_empty() {
-                        if let crate::store::Route::Session { session_id } = self.store.route() {
+                        if let crate::store::Route::Session { session_id, .. } = self.store.route() {
                             self.store.clear_dialogs();
                             self.store.btw_ask(&session_id, &question);
                         }
@@ -2363,7 +2390,7 @@ impl App {
     /// its own Prompt mount).
     fn prompt_key(&self) -> String {
         match self.store.route() {
-            Route::Session { session_id } => session_id,
+            Route::Session { session_id, .. } => session_id,
             Route::Home => HOME_PROMPT_KEY.to_owned(),
         }
     }
@@ -2407,7 +2434,7 @@ impl App {
         //     into the pty (preventDefault + stopPropagation); leader
         //     chords and pending sequences fall through to the base
         //     layer below (`keymap.isLeader(event) || leader()`).
-        if let Route::Session { session_id } = self.store.route() {
+        if let Route::Session { session_id, .. } = self.store.route() {
             if self.store.terminal_pane_mounted(&session_id).is_some()
                 && self.store.terminal_focus_right()
                 && !self.keymap.is_leader(stroke)
@@ -2480,7 +2507,7 @@ impl App {
         // continuation while `queue_live`; an EMPTY queue leaves the
         // chord on app.exit exactly like the ref's registration order.
         let queue_live = match self.store.route() {
-            Route::Session { session_id } => !self.store.queued_prompts(&session_id).is_empty(),
+            Route::Session { session_id, .. } => !self.store.queued_prompts(&session_id).is_empty(),
             Route::Home => false,
         };
 
@@ -2905,7 +2932,7 @@ impl App {
         let trimmed = draft.text.trim();
         let exit_word = matches!(trimmed, "exit" | "quit" | ":q");
         let slash = trimmed.starts_with('/');
-        let Route::Session { session_id } = self.store.route() else {
+        let Route::Session { session_id, .. } = self.store.route() else {
             // Home has no live turn to queue behind — send instead.
             let _ = self.store.submit_prompt(key);
             return;
@@ -2953,7 +2980,7 @@ impl App {
     /// server PATCH (`session.inbox.update {delivery: "steer"}`), NOT
     /// a local delete + re-POST.
     fn steer_queued_head(&mut self) -> bool {
-        let Route::Session { session_id } = self.store.route() else { return false };
+        let Route::Session { session_id, .. } = self.store.route() else { return false };
         let head = self.store.queued_prompts(&session_id).first().cloned();
         let Some(head) = head else { return false };
         self.store.steer_queued_prompt(&session_id, &head.id)
@@ -3128,7 +3155,7 @@ impl App {
     /// 136-138). The shared `composer.tab.prev/next` + `composer.close`
     /// always resolve (composer/index.tsx:72-82's panel layer).
     fn sync_composer_tab_layers(&mut self, picker: bool) {
-        let picker_tab = if let crate::store::Route::Session { session_id } = self.store.route() {
+        let picker_tab = if let crate::store::Route::Session { session_id, .. } = self.store.route() {
             (picker && self.store.picker_live(&session_id)).then(|| self.store.picker().tab)
         } else {
             None
@@ -3410,7 +3437,7 @@ fn footer_panel_frame(
     // RESOLVED selection (the chain's fallbacks included), or the
     // home route's staged next-session selection.
     let active = match store.route() {
-        crate::store::Route::Session { session_id } => session_id,
+        crate::store::Route::Session { session_id, .. } => session_id,
         crate::store::Route::Home => crate::app::HOME_PROMPT_KEY.to_owned(),
     };
     let session_selection = store.effective_model(&active);
@@ -4468,6 +4495,19 @@ pub fn permission_reply_body(
 /// (`session.permission.reply`); failures log (the local ask already
 /// resolved — the server parks the tool until the reply or timeout).
 pub fn post_permission_reply(client: oc_client::Client, reply: PermissionReply) {
+    post_permission_reply_with_rollback(client, reply, None);
+}
+
+/// G-140⑥ — [`post_permission_reply`] with the `--auto` failure
+/// rollback (index.tsx:263-267: `autoApproved.delete(request.id)` +
+/// `toast.error`): a failed auto-answer reports `(request id, the
+/// friendly error)` on the channel so the ask can be re-armed
+/// instead of staying silently consumed.
+pub fn post_permission_reply_with_rollback(
+    client: oc_client::Client,
+    reply: PermissionReply,
+    failure_tx: Option<tokio::sync::mpsc::UnboundedSender<(String, String)>>,
+) {
     tokio::spawn(async move {
         let body = permission_reply_body(&reply);
         if let Err(error) =
@@ -4477,6 +4517,9 @@ pub fn post_permission_reply(client: oc_client::Client, reply: PermissionReply) 
                 "permission reply {}/{}: {error}",
                 reply.session_id, reply.request_id
             ));
+            if let Some(tx) = failure_tx {
+                let _ = tx.send((reply.request_id.clone(), client_error_message(&error)));
+            }
         }
     });
 }
@@ -4845,8 +4888,117 @@ pub fn wire_skill_attachments(
 }
 
 /// `errorMessage` (util/error.ts): the client error's message text.
+/// G-142 — `cliErrorMessage` (util/error.ts:5-87) over the declared
+/// API envelope: the CliError/account family's message, the
+/// ProviderModelNotFoundError "Did you mean" block, and the config
+/// error family's friendly one-liners + issue details. `None`-worthy
+/// shapes fall back to the raw display (v2's `errorMessage`).
 fn client_error_message(error: &oc_client::ClientError) -> String {
+    let oc_client::ClientError::Api { name, fields, .. } = error else {
+        return error.to_string();
+    };
+    if let Some(formatted) = cli_error_message(name, fields) {
+        return formatted;
+    }
     error.to_string()
+}
+
+/// The pure half of [`client_error_message`] (testable without a
+/// transport): `name`/`fields` mirror the thrown envelope's `_tag` +
+/// spread fields (`configData(input, tag)` — either `name === tag`
+/// with a `data` record, or `_tag === tag`; the client already
+/// flattens both into `fields`).
+pub fn cli_error_message(
+    name: &str,
+    fields: &std::collections::BTreeMap<String, serde_json::Value>,
+) -> Option<String> {
+    let field = |key: &str| -> String {
+        fields.get(key).and_then(serde_json::Value::as_str).unwrap_or_default().to_owned()
+    };
+    match name {
+        "CliError" | "AccountServiceError" | "AccountTransportError" => {
+            Some(field("message"))
+        }
+        "ProviderModelNotFoundError" => {
+            let suggestions: Vec<String> = fields
+                .get("suggestions")
+                .and_then(serde_json::Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .map(str::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default();
+            let mut lines = vec![format!(
+                "Model not found: {}/{}",
+                field("providerID"),
+                field("modelID")
+            )];
+            if !suggestions.is_empty() {
+                lines.push(format!("Did you mean: {}", suggestions.join(", ")));
+            }
+            lines.push("Try: `opencode models` to list available models".to_owned());
+            lines.push("Or check your config (opencode.json) provider/model names".to_owned());
+            Some(lines.join("\n"))
+        }
+        "ProviderInitError" => Some(format!(
+            "Failed to initialize provider \"{}\". Check credentials and configuration.",
+            field("providerID")
+        )),
+        "ConfigJsonError" => {
+            let message = field("message");
+            Some(format!(
+                "Config file at {} is not valid JSON(C){}",
+                field("path"),
+                if message.is_empty() { String::new() } else { format!(": {message}") }
+            ))
+        }
+        "ConfigDirectoryTypoError" => Some(format!(
+            "Directory \"{}\" in {} is not valid. Rename the directory to \"{}\" or remove it. This is a common typo.",
+            field("dir"),
+            field("path"),
+            field("suggestion")
+        )),
+        "ConfigFrontmatterError" => Some(field("message")),
+        "ConfigInvalidError" => {
+            let path = field("path");
+            let message = field("message");
+            let issues: Vec<String> = fields
+                .get("issues")
+                .and_then(serde_json::Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|issue| {
+                            let message = issue.get("message")?.as_str()?;
+                            let path = issue.get("path")?.as_array()?;
+                            let segments: Vec<&str> =
+                                path.iter().filter_map(|value| value.as_str()).collect();
+                            if segments.len() != path.len() {
+                                return None;
+                            }
+                            Some(format!("↳ {message} {}", segments.join(".")))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let mut lines = vec![format!(
+                "Configuration is invalid{}{}",
+                if path.is_empty() || path == "config" {
+                    String::new()
+                } else {
+                    format!(" at {path}")
+                },
+                if message.is_empty() { String::new() } else { format!(": {message}") }
+            )];
+            lines.extend(issues);
+            Some(lines.join("\n"))
+        }
+        "UICancelledError" => Some(String::new()),
+        _ => None,
+    }
 }
 
 /// TUI-15 — the editor context's synthetic POST (index.tsx:1339-1346):
@@ -5617,8 +5769,16 @@ pub fn spawn_loop_fetcher(
                         input_tx,
                         cancel_tx,
                     );
+                    // G-141 — the theme palette injection: the attach
+                    // frame's OSC 4/10/11 bytes (terminal-pane.tsx:
+                    // 338-385), sent into the PTY once the socket is
+                    // live.
+                    let palette = crate::terminal_pane::theme_palette();
                     tokio::spawn(async move {
-                        attach_terminal(client, tx, session_id, pty_id, input_rx, cancel_rx).await;
+                        attach_terminal(
+                            client, tx, session_id, pty_id, input_rx, cancel_rx, palette,
+                        )
+                        .await;
                     });
                 }
                 LoopRequest::TerminalDetach { pty_id } => {
@@ -6556,6 +6716,31 @@ impl crate::store::SessionActionSink for HttpSessionActionSink {
 
 /// The production session-action sink wiring point (see
 /// [`HttpSessionActionSink`]).
+/// G-140④ — `toolDisplayContent(...)`'s flatten (index.tsx:3528-
+/// 3530): each content entry renders its text, else its name/uri;
+/// the body joins them with newlines.
+fn tool_content_body(state: &oc_client::types::SessionMessageAssistantToolState) -> String {
+    let entries = match state {
+        oc_client::types::SessionMessageAssistantToolState::Completed(completed) => {
+            &completed.content
+        }
+        oc_client::types::SessionMessageAssistantToolState::Error(failed) => {
+            failed.content.as_deref().unwrap_or(&[])
+        }
+        _ => &[],
+    };
+    entries
+        .iter()
+        .map(|entry| match entry {
+            oc_client::types::ToolContent::TextContent(text) => text.text.clone(),
+            oc_client::types::ToolContent::FileContent(file) => {
+                file.name.clone().unwrap_or_else(|| file.uri.clone())
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// `formatSessionTranscript` (routes/session/index.tsx:3503-3533):
 /// the markdown transcript — the header block (title/id/created/
 /// updated), then `## User` / `## Shell` / `## Assistant` sections
@@ -6592,7 +6777,51 @@ fn format_session_transcript(
                             reasoning,
                         ) => thinking.then(|| format!("_Thinking:_\n\n{}", reasoning.text)),
                         oc_client::types::SessionMessageAssistantContentItem::Tool(tool) => {
-                            tools.then(|| format!("**Tool: {}**", tool.name))
+                            // G-140④ — `formatSessionTranscript`
+                            // (index.tsx:3524-3531): the tool call
+                            // keeps its Input JSON + the full output
+                            // body, not just the name.
+                            tools.then(|| {
+                                let (input, streaming) = match &tool.state {
+                                    oc_client::types::SessionMessageAssistantToolState::Streaming(
+                                        streaming,
+                                    ) => (streaming.input.clone(), true),
+                                    oc_client::types::SessionMessageAssistantToolState::Running(
+                                        running,
+                                    ) => (
+                                        serde_json::to_string_pretty(&running.input).unwrap_or_default(),
+                                        false,
+                                    ),
+                                    oc_client::types::SessionMessageAssistantToolState::Completed(
+                                        completed,
+                                    ) => (
+                                        serde_json::to_string_pretty(&completed.input)
+                                            .unwrap_or_default(),
+                                        false,
+                                    ),
+                                    oc_client::types::SessionMessageAssistantToolState::Error(
+                                        failed,
+                                    ) => (
+                                        serde_json::to_string_pretty(&failed.input)
+                                            .unwrap_or_default(),
+                                        false,
+                                    ),
+                                };
+                                let output = match &tool.state {
+                                    oc_client::types::SessionMessageAssistantToolState::Error(
+                                        failed,
+                                    ) => failed.error.message.clone(),
+                                    oc_client::types::SessionMessageAssistantToolState::Streaming(
+                                        ..,
+                                    ) => String::new(),
+                                    state => tool_content_body(state),
+                                };
+                                let _ = streaming;
+                                format!(
+                                    "**Tool: {}**\n\n**Input:**\n```json\n{}\n```\n\n{}",
+                                    tool.name, input, output
+                                )
+                            })
                         }
                     })
                     .collect();
@@ -6735,6 +6964,7 @@ async fn attach_terminal(
     pty_id: String,
     mut input_rx: tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>,
     mut cancel_rx: tokio::sync::watch::Receiver<bool>,
+    palette: Vec<u8>,
 ) {
     use futures::{SinkExt as _, StreamExt as _};
     let fail = |message: String| {
@@ -6801,6 +7031,22 @@ async fn attach_terminal(
         }
     };
     let (mut sink, mut stream) = socket.split();
+    // G-141 — the palette injection rides the FIRST input frame
+    // (`applyTerminalTheme` after the restore, terminal-pane.tsx:
+    // 110-116 + 64-66): the embedded shell re-colors its 16-color
+    // palette + fg/bg to the active theme.
+    if !palette.is_empty() {
+        let frame = crate::terminal_pane::interaction_frame(
+            crate::terminal_pane::FRAME_INPUT,
+            size.0,
+            size.1,
+            &palette,
+        );
+        if sink.send(tokio_tungstenite::tungstenite::Message::Binary(frame)).await.is_err() {
+            fail("Terminal disconnected".to_owned());
+            return;
+        }
+    }
     loop {
         tokio::select! {
             _ = cancel_rx.changed() => {
@@ -7286,14 +7532,25 @@ async fn latest_session(client: &oc_client::Client, directory: &str) -> Option<S
 /// Apply the boot route rules to a booted store (pure seam — the PTY
 /// tests and the run loop share it).
 fn apply_boot_route(store: &crate::store::Store, boot: &BootArgs, continue_target: Option<&str>) {
+    // G-136 — `--prompt` rides the ROUTE (app.tsx:665-683:
+    // `route.navigate({ type: "session", …, prompt: startupPrompt })`);
+    // the navigation seeds the composer + `arm_startup_prompt` keeps
+    // the one-shot submit latch.
+    let startup_prompt = boot.prompt.as_deref().filter(|text| !text.is_empty());
     if let Some(session_id) = &boot.session {
         // `--session`: route it (the route effect opens its tab).
-        store.select_tab(session_id);
+        match startup_prompt {
+            Some(prompt) => store.navigate_with_prompt(session_id, prompt),
+            None => store.select_tab(session_id),
+        }
     } else if boot.continue_last {
         // `--continue`: route the resolved latest session; none found
         // stays home (v2: `if (!match) return`).
         if let Some(latest) = continue_target {
-            store.select_tab(latest);
+            match startup_prompt {
+                Some(prompt) => store.navigate_with_prompt(latest, prompt),
+                None => store.select_tab(latest),
+            }
         }
     }
     // Default: home — the store's initial route. Never a restored tab.
@@ -7593,6 +7850,8 @@ pub async fn run_with_size(
     // (v2 app.tsx:364-371). The boot load runs the one-time
     // local→stable migration first (D-06).
     app.store.set_tabs_enabled(config.tabs.enabled);
+    // G-143 — `tabs.indicators` seeds the strip's numbers mode.
+    app.store.set_tabs_numbers(config.tabs.numbers);
     // TUI-3 — `tabs.layout` ("vertical" mounts the rail): the raw
     // section rides the CliConfig service (the same reader the
     // TuiConfig slice delegates to; `config/index.tsx:330`).
@@ -7879,6 +8138,14 @@ pub async fn run_with_size(
     let mut last_frame_images: Vec<crate::image::ImagePlacement> = Vec::new();
     // TUI-18 — the last emitted window title (the OSC 0 change gate).
     let mut last_terminal_title: Option<String> = None;
+    // G-141 — the last theme (name, mode) the embedded-terminal
+    // palette snapshot staged for.
+    let mut last_palette_theme: Option<(String, oc_theme::types::Mode)> = None;
+
+    // G-140⑥ — the --auto permission rollback channel (failed
+    // auto-answers report back for the autoApproved re-arm).
+    let (auto_failure_tx, mut auto_failure_rx) =
+        tokio::sync::mpsc::unbounded_channel::<(String, String)>();
 
     // Input thread: crossterm's blocking read (keys + resize) bridged
     // into the async loop. The thread FIRST probes the terminal
@@ -8084,7 +8351,7 @@ pub async fn run_with_size(
         // poll the wave-3 contract set).
         if let Some(runtime) = &plugin_runtime {
             let active = match app.store.route() {
-                crate::store::Route::Session { session_id } => Some(session_id),
+                crate::store::Route::Session { session_id, .. } => Some(session_id),
                 crate::store::Route::Home => None,
             };
             runtime.set_current_session(active);
@@ -8135,7 +8402,7 @@ pub async fn run_with_size(
         // process environment.
         if let (
             crate::data::ConnectionState::Connected,
-            crate::store::Route::Session { session_id },
+            crate::store::Route::Session { session_id, .. },
         ) = (app.store.connection(), app.store.route())
         {
             if app.store.session_info(&session_id).is_some()
@@ -8194,7 +8461,29 @@ pub async fn run_with_size(
                     reply.request_id, reply.session_id, reply.decision
                 );
             }
-            post_permission_reply(client.clone(), reply);
+            // G-140⑥ — the `--auto` replies carry the rollback
+            // channel (autoApproved re-arm + toast.error on POST
+            // failure, index.tsx:263-267); keyboard replies keep the
+            // plain fire-and-forget.
+            if app.auto_reply_ids.remove(&reply.request_id) {
+                post_permission_reply_with_rollback(
+                    client.clone(),
+                    reply,
+                    Some(auto_failure_tx.clone()),
+                );
+            } else {
+                post_permission_reply(client.clone(), reply);
+            }
+        }
+        // G-140⑥ — the rollback drain: un-consume the failed ask +
+        // surface the error toast (the next `autoanswer_permissions`
+        // pass re-answers it).
+        while let Ok((request_id, message)) = auto_failure_rx.try_recv() {
+            app.auto_approved.remove(&request_id);
+            app.auto_reply_ids.remove(&request_id);
+            let mut toast = crate::components::toast::ToastOptions::info(&message);
+            toast.variant = "error";
+            app.store.toast_show(toast);
         }
         // Form replies/cancels (TD16): the form surface's submissions
         // POST through the generated client — without this the
@@ -9026,6 +9315,21 @@ pub async fn run_with_size(
         if ticked {
             last_tick = std::time::Instant::now();
         }
+        // G-141 — the embedded-terminal palette snapshot: restage the
+        // OSC 4/10/11 bytes whenever the theme (name, mode) changed;
+        // `attach_terminal` injects them on the next attach.
+        {
+            let theme = app.store.theme();
+            let key = (theme.name.clone(), theme.mode);
+            if last_palette_theme.as_ref() != Some(&key) {
+                last_palette_theme = Some(key);
+                crate::terminal_pane::set_theme_palette(crate::terminal_pane::terminal_palette(
+                    &theme.resolved.tokens,
+                    theme.mode,
+                    theme.resolved.tokens.background.raised.base,
+                ));
+            }
+        }
         // The shell output viewer's 1s live refresh (dialog-shell-output
         // .tsx polls `shell.get` + the tail page every 1s while the viewer
         // is open; the 64KiB tail cap rides unchanged inside the fetch).
@@ -9419,6 +9723,14 @@ fn crossterm_key_to_spec(key: &crossterm::event::KeyEvent) -> Option<String> {
             } else {
                 format!("ctrl+{}", ch.to_ascii_lowercase())
             }),
+            // G-139 — the CONTROL+non-Char family the keymap table
+            // registers: `session.tab.next` (ctrl+tab) and
+            // `session.tab.previous` (ctrl+shift+tab — BackTab arrives
+            // with SHIFT set; the CONTROL branch wins the modifier
+            // order). No other ctrl+<non-char> binding exists in the
+            // table (checked: arrows/home/end/page family have none).
+            KeyCode::Tab if !alt => Some("ctrl+tab".to_owned()),
+            KeyCode::BackTab if !alt => Some("ctrl+shift+tab".to_owned()),
             _ => None,
         };
     }
@@ -10173,7 +10485,7 @@ mod tests {
         use crate::store::DialogKind;
         let mut app = App::new((100, 30));
         app.store.open_tab("s1", None);
-        app.store.navigate(Route::Session { session_id: "s1".to_owned() });
+        app.store.navigate(Route::session("s1".to_owned()));
         app.store.replace_dialog(
             DialogKind::SessionRename { session_id: "s1".to_owned() },
             DialogSize::Medium,
@@ -10205,7 +10517,7 @@ mod tests {
         use crate::store::Route;
         let app = App::new((100, 30));
         app.store.open_tab("s1", Some("One".to_owned()));
-        app.store.navigate(Route::Session { session_id: "s1".to_owned() });
+        app.store.navigate(Route::session("s1".to_owned()));
         let session_row = app.frame_text().lines().next().unwrap_or_default().to_owned();
         assert!(session_row.contains("One"), "session route shows the tab: {session_row}");
         assert!(session_row.contains('+'), "session route keeps the add affordance: {session_row}");
@@ -10232,7 +10544,7 @@ mod tests {
         use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
         let mut app = App::new((100, 30));
         app.store.open_tab("s1", Some("Parity fake says hello.".to_owned()));
-        app.store.navigate(crate::store::Route::Session { session_id: "s1".to_owned() });
+        app.store.navigate(crate::store::Route::session("s1".to_owned()));
         let motion = |col: u16, kind: MouseEventKind| MouseEvent {
             kind,
             column: col,
@@ -10540,7 +10852,7 @@ mod tests {
         );
         assert_eq!(
             store.route(),
-            crate::store::Route::Session { session_id: "ses_direct".to_owned() }
+            crate::store::Route::session("ses_direct".to_owned())
         );
         assert!(store.tabs().tabs.iter().any(|tab| tab.session_id == "ses_direct"));
 
@@ -10553,7 +10865,7 @@ mod tests {
         );
         assert_eq!(
             store.route(),
-            crate::store::Route::Session { session_id: "ses_new".to_owned() }
+            crate::store::Route::session("ses_new".to_owned())
         );
 
         // --continue with nothing to resume: stays home (v2 `if
@@ -10779,7 +11091,7 @@ fn mouse_strip_hover_close_select_and_add() {
     let mut app = App::new((80, 24));
     app.store.open_tab("s1", Some("Alpha".to_owned()));
     app.store.open_tab("s2", Some("Beta".to_owned()));
-    app.store.navigate(Route::Session { session_id: "s1".to_owned() });
+    app.store.navigate(Route::session("s1".to_owned()));
 
     // Hover the second tab (x=40 on the 32+32 split): the lift arms.
     app.mouse_event(&mouse(MouseEventKind::Moved, 40, 0));
@@ -10794,14 +11106,14 @@ fn mouse_strip_hover_close_select_and_add() {
         vec!["s1"],
         "the hovered tab's ✕ closed it"
     );
-    assert_eq!(app.store.route(), Route::Session { session_id: "s1".to_owned() });
+    assert_eq!(app.store.route(), Route::session("s1".to_owned()));
 
     // A body click selects: s1 is the only tab; open another and
     // click its body mid-slot.
     app.store.open_tab("s3", Some("Gamma".to_owned()));
     app.mouse_event(&mouse(MouseEventKind::Moved, 40, 0));
     app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 40, 0));
-    assert_eq!(app.store.route(), Route::Session { session_id: "s3".to_owned() });
+    assert_eq!(app.store.route(), Route::session("s3".to_owned()));
 
     // The ` + ` affordance navigates home (v2 `add()` → home route).
     app.mouse_event(&mouse(MouseEventKind::Moved, 65, 0));
@@ -10810,7 +11122,7 @@ fn mouse_strip_hover_close_select_and_add() {
     assert_eq!(app.store.route(), Route::Home);
 
     // Hover off the strip clears the pointer state.
-    app.store.navigate(Route::Session { session_id: "s3".to_owned() });
+    app.store.navigate(Route::session("s3".to_owned()));
     app.mouse_event(&mouse(MouseEventKind::Moved, 40, 5));
     assert_eq!(app.store.tabs().hover, None);
     assert!(!app.store.tabs().add_hovered);
@@ -10828,7 +11140,7 @@ fn mouse_vertical_rail_tabs_search_and_resize() {
     app.store.set_tabs_layout(crate::components::session_tabs_rail::TabsLayout::Vertical);
     app.store.open_tab("s1", Some("Alpha".to_owned()));
     app.store.open_tab("s2", Some("Beta".to_owned()));
-    app.store.navigate(Route::Session { session_id: "s1".to_owned() });
+    app.store.navigate(Route::session("s1".to_owned()));
 
     // The rail owns the left 42 columns; the strip row 0 stays empty.
     let frame = app.frame();
@@ -10845,7 +11157,7 @@ fn mouse_vertical_rail_tabs_search_and_resize() {
     app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 5, 4));
     assert_eq!(
         app.store.route(),
-        Route::Session { session_id: "s2".to_owned() },
+        Route::session("s2".to_owned()),
         "the second rail row's release routed s2"
     );
 
@@ -10896,7 +11208,7 @@ fn mouse_home_strip_click_selects_the_restored_tab() {
     assert_eq!(app.store.tabs().hover.as_deref(), Some("r1"));
     // The body release selects: home → the restored session's route.
     app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 5, 0));
-    assert_eq!(app.store.route(), Route::Session { session_id: "r1".to_owned() });
+    assert_eq!(app.store.route(), Route::session("r1".to_owned()));
     // The ` + ` affordance navigates home from the session — SA-F7's
     // verified ref pairing: v2's `+` release runs `tabs.add()` which
     // is `route.navigate({type:"home", …})` (context/session-tabs.tsx
@@ -10907,7 +11219,7 @@ fn mouse_home_strip_click_selects_the_restored_tab() {
     // ...and the second restored tab's body selects from home (tab 2
     // spans x=32..64 on the 32+32 layout).
     app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 40, 0));
-    assert_eq!(app.store.route(), Route::Session { session_id: "r2".to_owned() });
+    assert_eq!(app.store.route(), Route::session("r2".to_owned()));
 }
 
 /// beta.8 bug 4 — the `+ Thought` disclosure through the pump: a
@@ -11221,7 +11533,7 @@ fn onboarding_card_pointer_routes_dismiss_and_connect() {
 
     let mut app = App::new((160, 30));
     app.store.open_tab("s1", Some("Bug hunt".to_owned()));
-    app.store.navigate(Route::Session { session_id: "s1".to_owned() });
+    app.store.navigate(Route::session("s1".to_owned()));
     let _ = app.frame(); // the render pass records the hit rects
     let hits = app.store.sidebar_onboarding_hits().expect("the card painted");
     // The dismiss rect IS the painted ✕ cell; the connect rect spans
@@ -11249,7 +11561,7 @@ fn onboarding_card_pointer_routes_dismiss_and_connect() {
     // The connect row on a fresh card dispatches `provider.connect`.
     let mut app = App::new((160, 30));
     app.store.open_tab("s2", Some("Second".to_owned()));
-    app.store.navigate(Route::Session { session_id: "s2".to_owned() });
+    app.store.navigate(Route::session("s2".to_owned()));
     let _ = app.frame();
     let hits = app.store.sidebar_onboarding_hits().expect("the card painted again");
     app.mouse_event(&mouse(
@@ -11395,7 +11707,7 @@ fn footer_location_hover_and_click() {
     // never fire on Home); the seam is exercised directly here on
     // the session route it belongs to.
     app.store.open_tab("s1", Some("S".to_owned()));
-    app.store.navigate(Route::Session { session_id: "s1".to_owned() });
+    app.store.navigate(Route::session("s1".to_owned()));
     app.store.set_footer_location_hit(Some(crate::store::FooterLocationHit {
         directory: "/tmp/opencode/project".into(),
         row: 22,
@@ -12287,7 +12599,7 @@ mod core_interaction_tests {
         use crossterm::event::MouseEventKind;
         let mut app = App::new((160, 24));
         app.store.open_tab("s1", Some("S".to_owned()));
-        app.store.navigate(Route::Session { session_id: "s1".to_owned() });
+        app.store.navigate(Route::session("s1".to_owned()));
         // A rendered docked pane records the geometry; force an
         // overflowing content slot (content 40 rows, viewport 10).
         app.store.set_sidebar_scroll_geometry(40, 10, Some((118, 42)));
@@ -12351,7 +12663,7 @@ mod core_interaction_tests {
     fn form_mounts_blocks_keys_and_replies() {
         let mut app = App::new((80, 24));
         app.store.open_tab("s1", Some("S".to_owned()));
-        app.store.navigate(Route::Session { session_id: "s1".to_owned() });
+        app.store.navigate(Route::session("s1".to_owned()));
         stage_form_created(
             &mut app,
             "frm_stage",
@@ -12402,7 +12714,7 @@ mod core_interaction_tests {
     fn form_cancel_and_typed_kinds() {
         let mut app = App::new((80, 24));
         app.store.open_tab("s1", Some("S".to_owned()));
-        app.store.navigate(Route::Session { session_id: "s1".to_owned() });
+        app.store.navigate(Route::session("s1".to_owned()));
         // TD17: the whole typed family parses — the old FieldKind
         // dropped this form on ingest.
         stage_form_created(
@@ -12454,7 +12766,7 @@ mod core_interaction_tests {
         use crate::data::ConnectionState;
         let mut app = App::new((80, 24));
         app.store.open_tab("s1", Some("S".to_owned()));
-        app.store.navigate(Route::Session { session_id: "s1".to_owned() });
+        app.store.navigate(Route::session("s1".to_owned()));
         stage_permission_ask(&mut app, "p_keep", &serde_json::json!([]));
         stage_form_created(
             &mut app,
@@ -12485,7 +12797,7 @@ mod core_interaction_tests {
         use crossterm::event::{MouseButton, MouseEventKind};
         let mut app = App::new((80, 24));
         app.store.open_tab("s1", Some("S".to_owned()));
-        app.store.navigate(Route::Session { session_id: "s1".to_owned() });
+        app.store.navigate(Route::session("s1".to_owned()));
         stage_permission_ask(&mut app, "p1", &serde_json::json!([]));
         assert!(app.permission_live(), "the ask holds the screen");
         let _ = app.frame();
@@ -12537,7 +12849,7 @@ mod core_interaction_tests {
         use crossterm::event::{MouseButton, MouseEventKind};
         let mut app = App::new((80, 24));
         app.store.open_tab("s1", Some("S".to_owned()));
-        app.store.navigate(Route::Session { session_id: "s1".to_owned() });
+        app.store.navigate(Route::session("s1".to_owned()));
         // The child-session registry seed (`session.created` carries
         // `parentID`): the free-text reject stage opens only for
         // children — and the ask's session is "ses".
@@ -12876,7 +13188,7 @@ fn mouse_strip_middle_click_closes_on_down() {
     let mut app = App::new((80, 24));
     app.store.open_tab("s1", Some("Alpha".to_owned()));
     app.store.open_tab("s2", Some("Beta".to_owned()));
-    app.store.navigate(Route::Session { session_id: "s1".to_owned() });
+    app.store.navigate(Route::session("s1".to_owned()));
     // The second tab's body (x=40 on the 32+32 split).
     app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Middle), 40, 0));
     let tabs = app.store.tabs().tabs.clone();
@@ -12900,7 +13212,7 @@ fn mouse_strip_right_click_menu_actions() {
     let mut app = App::new((80, 24));
     app.store.open_tab("s1", Some("Alpha".to_owned()));
     app.store.open_tab("s2", Some("Beta".to_owned()));
-    app.store.navigate(Route::Session { session_id: "s1".to_owned() });
+    app.store.navigate(Route::session("s1".to_owned()));
 
     // Right-press the second tab's body: the menu opens AT the press.
     app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Right), 40, 0));
@@ -12927,7 +13239,7 @@ fn mouse_strip_right_click_menu_actions() {
     assert_eq!(app.store.route(), Route::Home);
 
     // Reopen on s1 and run Rename → the rename dialog.
-    app.store.navigate(Route::Session { session_id: "s1".to_owned() });
+    app.store.navigate(Route::session("s1".to_owned()));
     app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Right), 5, 0));
     app.press("down");
     app.press("enter");
@@ -12950,7 +13262,7 @@ fn mouse_strip_right_click_menu_actions() {
 
     // The strip-scoped press (past the tabs, before the `+`) opens
     // the recently-closed variant; its rows reopen the closed tab.
-    app.store.navigate(Route::Session { session_id: "s2".to_owned() });
+    app.store.navigate(Route::session("s2".to_owned()));
     app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Right), 63, 0));
     match app.store.top_dialog().map(|entry| entry.kind.clone()) {
         Some(crate::store::DialogKind::TabMenu { session_id, .. }) => {
@@ -12982,7 +13294,7 @@ fn mouse_strip_drag_reorders_on_release() {
     app.store.open_tab("s1", Some("Alpha".to_owned()));
     app.store.open_tab("s2", Some("Beta".to_owned()));
     app.store.open_tab("s3", Some("Gamma".to_owned()));
-    app.store.navigate(Route::Session { session_id: "s1".to_owned() });
+    app.store.navigate(Route::session("s1".to_owned()));
 
     // Press s1's body (slot 0), drag over s3's slot (index 2), release.
     app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Left), 5, 0));
@@ -12997,7 +13309,7 @@ fn mouse_strip_drag_reorders_on_release() {
     assert_eq!(order, vec!["s2", "s3", "s1"], "the move persisted on release");
     assert_eq!(
         app.store.route(),
-        Route::Session { session_id: "s1".to_owned() },
+        Route::session("s1".to_owned()),
         "release() selects the SOURCE"
     );
     assert_eq!(app.store.tab_drag_preview(), None, "the preview cleared");
@@ -13005,7 +13317,7 @@ fn mouse_strip_drag_reorders_on_release() {
     // A press + release without a crossing is a plain select.
     app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Left), 5, 0));
     app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 5, 0));
-    assert_eq!(app.store.route(), Route::Session { session_id: "s2".to_owned() });
+    assert_eq!(app.store.route(), Route::session("s2".to_owned()));
     assert_eq!(
         app.store.tabs().tabs.iter().map(|tab| tab.session_id.as_str()).collect::<Vec<_>>(),
         vec!["s2", "s3", "s1"],
@@ -13023,7 +13335,7 @@ fn mouse_strip_close_hold_freezes_the_layout_for_rapid_closes() {
     let mut app = App::new((80, 24));
     app.store.open_tab("s1", Some("Alpha".to_owned()));
     app.store.open_tab("s2", Some("Beta".to_owned()));
-    app.store.navigate(Route::Session { session_id: "s1".to_owned() });
+    app.store.navigate(Route::session("s1".to_owned()));
 
     // Hover s1, ✕ at x=30 (tab 0 = 0..32, the mark at width-2).
     app.mouse_event(&mouse(MouseEventKind::Moved, 30, 0));
@@ -13050,7 +13362,7 @@ fn mouse_strip_close_hold_freezes_the_layout_for_rapid_closes() {
 
     // The hold expires after 5 s (the lazy read drops it).
     app.store.open_tab("s3", Some("Gamma".to_owned()));
-    app.store.navigate(Route::Session { session_id: "s3".to_owned() });
+    app.store.navigate(Route::session("s3".to_owned()));
     app.store.arm_close_hold(crate::store::CloseHold {
         items: vec!["s3".to_owned()],
         ids: vec!["s3".to_owned()],
@@ -13120,7 +13432,7 @@ fn subagent_row_navigates_to_the_child_session() {
     ));
     assert_eq!(
         app.store.route(),
-        Route::Session { session_id: "child-1".to_owned() },
+        Route::session("child-1".to_owned()),
         "the release navigated to the child session"
     );
 }
@@ -13136,7 +13448,7 @@ fn picker_entry_rows_hover_select_and_click_navigate() {
     use crossterm::event::{MouseButton, MouseEventKind};
     let mut app = App::new((80, 24));
     app.store.open_tab("s1", Some("Parent".to_owned()));
-    app.store.navigate(Route::Session { session_id: "s1".to_owned() });
+    app.store.navigate(Route::session("s1".to_owned()));
     app.store.ingest_all([crate::data::Ingest::Event(crate::data::BusEvent::new(
         "session.created",
         serde_json::json!({
@@ -13179,7 +13491,7 @@ fn picker_entry_rows_hover_select_and_click_navigate() {
     ));
     assert_eq!(
         app.store.route(),
-        Route::Session { session_id: "ses_child".to_owned() },
+        Route::session("ses_child".to_owned()),
         "the release navigated to the child session"
     );
     assert_eq!(app.store.tabs().tabs.len(), 1, "no tab opened for the child (the root owns it)");

@@ -239,6 +239,9 @@ pub struct RailInputs<'a> {
     /// The compact hover tooltip's session (`hovered()` — renders at
     /// `left = width`).
     pub tooltip: Option<&'a TabView>,
+    /// G-143 — the indicator config (`tabs.indicators` + the ref's
+    /// spinner/unreadMarker defaults).
+    pub indicator: crate::components::session_tabs::IndicatorConfig,
 }
 
 fn rgb(color: ratatui::style::Color) -> (u8, u8, u8) {
@@ -431,7 +434,16 @@ fn rail_paint_walk(
                 height: 1,
                 style: ratatui::style::Style::new().fg(DEFAULT_FOREGROUND).bg(bg),
             });
-            let label = compact_indicator_label(view);
+            // G-143 — the configured indicator (numbers mode shows
+            // the ordinal, not the status glyph / idle label).
+            let number = crate::components::session_tabs::session_tab_number_label(
+                inputs
+                    .tabs
+                    .iter()
+                    .position(|tab| tab.tab.session_id == view.tab.session_id)
+                    .unwrap_or(0),
+            );
+            let label = compact_indicator_label(view, inputs.indicator, &number);
             let fg = if selected {
                 styles.text.fg.unwrap_or(DEFAULT_FOREGROUND)
             } else {
@@ -632,8 +644,12 @@ fn number_color(
 /// The compact indicator's label: the status glyph when busy/
 /// unread/attention, else the title's first grapheme (`idleLabel`,
 /// session-tabs.tsx:179-184).
-fn compact_indicator_label(view: &TabView) -> String {
-    let label = view.status.indicator_label();
+fn compact_indicator_label(
+    view: &TabView,
+    indicator: crate::components::session_tabs::IndicatorConfig,
+    number: &str,
+) -> String {
+    let label = view.status.indicator_label_with(indicator, number);
     if label.is_empty() {
         view.tab
             .title

@@ -340,7 +340,7 @@ impl TuiPluginRuntime {
         self.materialize_slot_claims(store);
         {
             let route_session = match store.route() {
-                crate::store::Route::Session { session_id } => Some(session_id),
+                crate::store::Route::Session { session_id, .. } => Some(session_id),
                 crate::store::Route::Home => None,
             };
             *self.slot_session.borrow_mut() = Some(route_session);
@@ -383,7 +383,7 @@ impl TuiPluginRuntime {
         // The footer faces' render props (the ref SlotMap inputs):
         // the current route's session id, the composer's shell flag.
         let session = match store.route() {
-            crate::store::Route::Session { session_id } => Some(session_id),
+            crate::store::Route::Session { session_id, .. } => Some(session_id),
             crate::store::Route::Home => None,
         };
         let composer_key =
@@ -471,10 +471,25 @@ impl TuiPluginRuntime {
                         // renders install keymap layers guest-side;
                         // the next registration read picks them up).
                     }
-                    Ok(Err(error)) | Err(error) => crate::keymap::log_skip(&format!(
-                        "plugin slot claim {} {}: {error}",
-                        claim.plugin, claim.key
-                    )),
+                    Ok(Err(error)) | Err(error) => {
+                        crate::keymap::log_skip(&format!(
+                            "plugin slot claim {} {}: {error}",
+                            claim.plugin, claim.key
+                        ));
+                        // G-145① — the ErrorBoundary's toast
+                        // (plugin/render.tsx:29-41): a render that
+                        // fails surfaces as "{id} crashed in {where}"
+                        // instead of only the log seam.
+                        store.toast_show(crate::components::toast::ToastOptions {
+                            title: Some("Plugin".to_owned()),
+                            message: format!(
+                                "{} crashed in {}: {error}",
+                                claim.plugin, path
+                            ),
+                            variant: "error",
+                            ..crate::components::toast::ToastOptions::info("")
+                        });
+                    }
                 }
             }
         }
@@ -644,7 +659,7 @@ impl TuiPluginRuntime {
     pub fn drain_ui_requests(&self, store: &Store) {
         if self.booted.host.enabled() {
             let route_session = match store.route() {
-                crate::store::Route::Session { session_id } => Some(session_id),
+                crate::store::Route::Session { session_id, .. } => Some(session_id),
                 crate::store::Route::Home => None,
             };
             let changed = { *self.pushed_route.borrow() != Some(route_session.clone()) };
@@ -694,7 +709,7 @@ impl TuiPluginRuntime {
         // same bounded pass attach ran).
         {
             let route_session = match store.route() {
-                crate::store::Route::Session { session_id } => Some(session_id),
+                crate::store::Route::Session { session_id, .. } => Some(session_id),
                 crate::store::Route::Home => None,
             };
             let changed = { *self.slot_session.borrow() != Some(route_session.clone()) };

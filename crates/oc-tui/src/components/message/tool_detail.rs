@@ -408,6 +408,91 @@ fn edit_block(state: &ToolState, theme: &ThemeStyles, width: usize) -> RowRender
 /// The write block (`Write` + `BlockTool` + `line_number`,
 /// index.tsx:2954-2988): `# Wrote {path}` + the content rows with a
 /// 3-wide right-aligned gutter.
+/// G-140③ — `parseDiagnostics` (index.tsx:3577-3598): the metadata's
+/// `diagnostics` map keyed by file path; severity 1 only, ≤ 3 rows,
+/// each `{message}` with the range's 1-based start.
+fn parse_diagnostics(state: &ToolState, file_path: &str) -> Vec<(usize, usize, String)> {
+    let Some(diagnostics) = state
+        .metadata_json
+        .as_ref()
+        .and_then(|metadata| metadata.get("diagnostics"))
+        .and_then(serde_json::Value::as_object)
+    else {
+        return Vec::new();
+    };
+    let normalize = |path: &str| path.trim_start_matches("./").to_owned();
+    let target = normalize(file_path);
+    let rows = diagnostics
+        .get(file_path)
+        .or_else(|| {
+            diagnostics
+                .iter()
+                .find(|(key, _)| normalize(key) == target)
+                .map(|(_, value)| value)
+        })
+        .and_then(serde_json::Value::as_array);
+    let Some(rows) = rows else { return Vec::new() };
+    rows.iter()
+        .filter_map(|item| {
+            if item.get("severity").and_then(serde_json::Value::as_i64) != Some(1) {
+                return None;
+            }
+            let start = item.pointer("/range/start")?;
+            let line = start.get("line")?.as_i64()?;
+            let character = start.get("character")?.as_i64()?;
+            let message = item.get("message")?.as_str()?.to_owned();
+            Some((usize::try_from(line).ok()?, usize::try_from(character).ok()?, message))
+        })
+        .take(3)
+        .collect()
+}
+
+/// G-140③ — one `Error [line:col] message` row
+/// (`text.feedback.error.base`, paddingLeft 3).
+fn diagnostic_row(label: &str, theme: &ThemeStyles, width: usize) -> RowRender {
+    let style = Style::new().fg(theme.error).bg(theme.background);
+    let label_width = width.saturating_sub(ROW_PADDING_LEFT);
+    let atoms = crate::wrap::flatten(&label, style);
+    let placed = crate::wrap::wrap_atoms(&atoms, label_width)
+        .into_iter()
+        .enumerate()
+        .map(|(line, atoms)| Placed {
+            x: ROW_PADDING_LEFT,
+            y: line,
+            width: label_width,
+            lines: vec![PlacedLine { runs: crate::wrap::styled_runs(&atoms) }],
+            tag: None,
+        })
+        .collect();
+    RowRender { placed, fills: Vec::new(), height: 1, images: Vec::new() }
+}
+
+/// G-140③ — the write/edit block + its diagnostics rows
+/// (`<Diagnostics …>` under the tool block, index.tsx:2978/3284).
+fn with_diagnostics(
+    block: RowRender,
+    state: &ToolState,
+    theme: &ThemeStyles,
+    width: usize,
+) -> RowRender {
+    let path = state.input.get("path").cloned().unwrap_or_default();
+    let diagnostics = parse_diagnostics(state, &path);
+    if diagnostics.is_empty() {
+        return block;
+    }
+    let error = theme.error;
+    let mut rows = Vec::new();
+    for (line, character, message) in diagnostics {
+        rows.push(diagnostic_row(
+            &format!("Error [{}:{}] {message}", line + 1, character + 1),
+            theme,
+            width,
+        ));
+    }
+    let _ = error;
+    rows.into_iter().fold(block, crate::components::message::rows::stack_rows)
+}
+
 fn write_block(state: &ToolState, theme: &ThemeStyles, width: usize) -> RowRender {
     let muted = theme.text_muted;
     let base = theme.text.fg.unwrap_or(theme.background);
@@ -544,8 +629,12 @@ pub fn tool_detail_row(
     let input = |key: &str| state.input.get(key).cloned().unwrap_or_default();
     match tool {
         "shell" => shell_block(state, expanded, clock_ms, theme, width),
-        "edit" | "patch" => edit_block(state, theme, width),
-        "write" => write_block(state, theme, width),
+        // G-140③ — Write/Edit LSP diagnostics (index.tsx:2978/3284 +
+        // `Diagnostics`, :3469-3482): up to three severity-1 issues
+        // for the tool's path render under the block in the error
+        // color (`Error [line:col] message`, 1-based).
+        "edit" | "patch" => with_diagnostics(edit_block(state, theme, width), state, theme, width),
+        "write" => with_diagnostics(write_block(state, theme, width), state, theme, width),
         "read" => {
             let mut label = format!("Read {}", input("path"));
             if state.input.contains_key("offset") || state.input.contains_key("limit") {

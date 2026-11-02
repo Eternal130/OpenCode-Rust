@@ -527,7 +527,7 @@ mod tests {
     fn move_posts_session_move_on_session_routes_only() {
         let (store, sink) = worktree_store();
         store.open_tab("s1", None);
-        store.navigate(crate::store::Route::Session { session_id: "s1".to_owned() });
+        store.navigate(crate::store::Route::session("s1".to_owned()));
         store.update_dialog(|top| top.select.selected = 1);
         let mut keymap = dialog_keymap();
         press(&store, &mut keymap, "ctrl+m");

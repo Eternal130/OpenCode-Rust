@@ -80,6 +80,10 @@ pub struct TranscriptOptions {
     /// `session.tps` (index.tsx:1892 — `config.data.session.tps &&
     /// tokensPerSecond()`): the assistant footer's `· X.X tok/s` span.
     pub tps_enabled: bool,
+    /// G-140② — `debug.turn_tokens` (index.tsx:1596's
+    /// `Boolean(config.data.debug?.turn_tokens)`): the turn-usage
+    /// summary row gate.
+    pub turn_tokens: bool,
     /// `session.markdown === "source"` (message-parts.tsx:184-190):
     /// assistant text renders as plain wrapped source instead of
     /// rendered markdown.
@@ -136,6 +140,7 @@ impl Default for TranscriptOptions {
             group_exploration: true,
             verbosity: Verbosity::default(),
             tps_enabled: false,
+            turn_tokens: false,
             markdown_source: false,
             clock_ms: 0,
             expanded_groups: Vec::new(),
@@ -265,7 +270,8 @@ pub fn render_transcript(
             *y = row_y + render.height;
             measured.push(MeasuredRow { y: row_y, height: render.height, placed, fills, key });
         };
-    for row in &rows {
+    let mut rows_iter = rows.iter().peekable();
+    while let Some(row) = rows_iter.next() {
         // The disclosure expansion: an expanded reasoning group emits
         // the header unit plus one unit per thought child; an expanded
         // exploration/activity group emits the header plus one detail
@@ -362,6 +368,34 @@ pub fn render_transcript(
         let render = render_row(row, messages, options, theme, &markdown, content_width);
         let key = row_key(row);
         place(render, key, &mut measured, &mut y);
+        // G-140② — the debug turn-usage summary
+        // (`TurnTokenUsage`, index.tsx:1588-1676): after the TURN's
+        // final footer (the next row belongs to a new user turn or
+        // the transcript ends), `debug.turn_tokens` renders the
+        // collapsed `+ Tokens: N steps …` row. Bounded deviation:
+        // the expanded per-step table (click-to-open, the reuse-bust
+        // warning tint, the verbose tool-call list) stays unported —
+        // the summary line carries the gate's surface.
+        if options.turn_tokens {
+            if let Row::Entry(Entry::AssistantFooter { message_id }) = row {
+                let turn_ends_here = rows_iter
+                    .next()
+                    .is_none_or(|next| match next {
+                        Row::Entry(Entry::Message { message_id: next_id }) => messages
+                            .iter()
+                            .find(|m| m.id() == next_id.as_str())
+                            .is_some_and(|message| matches!(message, Message::User { .. })),
+                        _ => false,
+                    });
+                if turn_ends_here {
+                    if let Some(render) =
+                        turn_token_usage_row(message_id, messages, theme, content_width)
+                    {
+                        place(render, format!("turn-usage:{message_id}"), &mut measured, &mut y);
+                    }
+                }
+            }
+        }
     }
     // The queued-compaction dividers (`CompactionQueued`,
     // index.tsx:2070-2081) — one per pending inbox id, spliced at the
@@ -418,6 +452,61 @@ pub fn render_transcript(
         })
     };
     Transcript { rows: measured, content_height: y, inset, images, background_hint }
+}
+
+/// G-140② — the collapsed `TurnTokenUsage` summary line
+/// (index.tsx:1659-1672): `+ Tokens: N steps · latest: A new · B
+/// cached · C total` over the turn's assistant messages (the walk
+/// back to the user boundary). `None` when no step reported tokens.
+#[must_use]
+fn turn_token_usage_row(
+    message_id: &str,
+    messages: &[Message],
+    theme: &ThemeStyles,
+    width: usize,
+) -> Option<RowRender> {
+    let end = messages.iter().position(|message| message.id() == message_id)?;
+    let turn_start = messages[..end]
+        .iter()
+        .rposition(|message| matches!(message, Message::User { .. }))
+        .map_or(0, |index| index + 1);
+    let steps: Vec<&Message> = messages[turn_start..=end]
+        .iter()
+        .filter(|message| {
+            matches!(message, Message::Assistant { usage_total: Some(total), .. } if *total > 0)
+        })
+        .collect();
+    let latest = steps.last().copied()?;
+    let (latest_total, latest_cached) = match latest {
+        Message::Assistant { usage_total, cache_read, .. } => {
+            (usage_total.unwrap_or(0), cache_read.unwrap_or(0))
+        }
+        _ => return None,
+    };
+    let latest_new = latest_total.saturating_sub(latest_cached);
+    let count = steps.len();
+    let label = format!(
+        "+ Tokens: {count} {} · latest: {} new · {} cached · {} total",
+        if count == 1 { "step" } else { "steps" },
+        crate::components::message::rows::locale_number(latest_new),
+        crate::components::message::rows::locale_number(latest_cached),
+        crate::components::message::rows::locale_number(latest_total),
+    );
+    let muted = theme.text_muted;
+    let label_width = width.saturating_sub(crate::components::message::rows::ROW_PADDING_LEFT);
+    let atoms = crate::wrap::flatten(&label, muted);
+    let placed = crate::wrap::wrap_atoms(&atoms, label_width)
+        .into_iter()
+        .enumerate()
+        .map(|(line, atoms)| Placed {
+            x: crate::components::message::rows::ROW_PADDING_LEFT,
+            y: line,
+            width: label_width,
+            lines: vec![PlacedLine { runs: crate::wrap::styled_runs(&atoms) }],
+            tag: None,
+        })
+        .collect();
+    Some(RowRender { placed, fills: Vec::new(), height: 1, images: Vec::new() })
 }
 
 /// TUI-TD05 — the tail-first mount budgets (session/index.tsx:132-135):
@@ -682,7 +771,7 @@ fn render_row(
             }
         }
         Row::Entry(Entry::AssistantFooter { message_id }) => {
-            let Some(Message::Assistant { agent, model, error, tokens, time, .. }) =
+            let Some(Message::Assistant { agent, model, error, tokens, time, retry, .. }) =
                 messages.iter().find(|m| m.id() == message_id.as_str())
             else {
                 return RowRender::default();
@@ -726,6 +815,8 @@ fn render_row(
                 interrupted,
                 theme,
                 width,
+                retry.as_ref(),
+                options.clock_ms,
             )
         }
         Row::Group { kind, children, completed, .. } => {
@@ -815,6 +906,61 @@ fn group_row(
     use crate::components::message::model::GroupKind;
     match kind {
         GroupKind::Exploration | GroupKind::Activity => {
+            // G-145② — low verbosity's ACTIVITY summary
+            // (activity-summary.ts:60-91): the collapsed group counts
+            // finished commands/edits/thoughts/reads instead of the
+            // exploration label's tool-name census.
+            if kind == GroupKind::Activity && options.verbosity == Verbosity::Low {
+                let mut first_running: Option<(String, bool)> = None;
+                let items: Vec<super::model::ActivityItem> = children
+                    .iter()
+                    .flat_map(super::model::Row::part_refs)
+                    .filter_map(|(message_id, part_id)| {
+                        let message = messages.iter().find(|m| m.id() == message_id.as_str())?;
+                        let Message::Assistant { parts, .. } = message else { return None };
+                        Some(match resolve_part(parts, &part_id)? {
+                            Part::Tool { name, state, .. } => {
+                                let running = !matches!(
+                                    state.status,
+                                    crate::components::message::model::ToolStatus::Completed | crate::components::message::model::ToolStatus::Error
+                                );
+                                if running && first_running.is_none() {
+                                    first_running = Some((
+                                        name.clone(),
+                                        state.status == crate::components::message::model::ToolStatus::Streaming,
+                                    ));
+                                }
+                                super::model::ActivityItem {
+                                    tool: Some(name.clone()),
+                                    active: running,
+                                    visible_thought: true,
+                                }
+                            }
+                            Part::Reasoning { text, time } => super::model::ActivityItem {
+                                tool: None,
+                                active: time.completed.is_none() && !completed,
+                                visible_thought: !text.trim().is_empty(),
+                            },
+                            _ => return None,
+                        })
+                    })
+                    .collect();
+                let (mut label, active) = super::model::activity_summary(&items, 0, completed);
+                if label.is_empty() {
+                    if let Some((name, streaming)) = first_running {
+                        label = super::model::activity_busy_label(&name, streaming);
+                    }
+                }
+                let _ = active;
+                if label.is_empty() {
+                    return RowRender::default();
+                }
+                return if completed {
+                    completed_tool_row('→', &label, theme, width)
+                } else {
+                    running_tool_row(&label, options.clock_ms, theme, width)
+                };
+            }
             let tools: Vec<String> = children
                 .iter()
                 .flat_map(super::model::Row::part_refs)
@@ -1131,8 +1277,11 @@ pub fn message_groups_fixture() -> Vec<Message> {
             finish: Some("stop".into()),
             error: None,
             time: PartTime { created: Some(1), completed: Some(2) },
-        tokens: None,
-        usage_total: None,},
+            tokens: None,
+            usage_total: None,
+            retry: None,
+            cache_read: None,
+        },
         Message::User {
             id: "grp-user-1".into(),
             text: "Now summarize the failure modes".into(),
@@ -1156,8 +1305,11 @@ pub fn message_groups_fixture() -> Vec<Message> {
             finish: Some("stop".into()),
             error: None,
             time: PartTime { created: Some(11), completed: Some(14) },
-        tokens: None,
-        usage_total: None,},
+            tokens: None,
+            usage_total: None,
+            retry: None,
+            cache_read: None,
+        },
     ]
 }
 
@@ -1190,6 +1342,8 @@ pub fn vscroll_messages_fixture() -> Vec<Message> {
             time: PartTime { created: Some(index * 10 + 1), completed: Some(index * 10 + 2) },
             tokens: None,
             usage_total: None,
+            retry: None,
+            cache_read: None,
         });
     }
     messages
@@ -1216,6 +1370,8 @@ pub fn vscroll_appended_turn() -> Message {
         time: PartTime { created: Some(101), completed: Some(103) },
         tokens: None,
         usage_total: None,
+        retry: None,
+        cache_read: None,
     }
 }
 
@@ -1457,6 +1613,8 @@ mod surf1_tests {
             time: PartTime::default(),
             tokens: None,
             usage_total: None,
+            retry: None,
+            cache_read: None,
         }];
         let transcript = render_transcript(&messages, &TranscriptOptions::default(), &theme(), 80);
         let text = frame_of(&transcript).text_grid().join("\n");

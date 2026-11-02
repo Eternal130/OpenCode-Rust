@@ -518,27 +518,129 @@ impl AutocompleteState {
 
 // -- trigger detection ---------------------------------------------------------
 
-/// `slashTriggerIndex` / `mentionTriggerIndex`: the nearest trigger
-/// character before the caret with no whitespace between it and the
-/// caret. `/` triggers only at a line head; `@` anywhere.
-fn trigger_for(text: &str, caret: usize) -> Option<(Mode, usize)> {
+/// One grapheme cluster's prompt-offset width (`promptOffsetWidth`'s
+/// per-cluster term, display.ts:8-10): newlines count ONE (textarea
+/// offsets), everything else its display width
+/// ([`crate::wrap::display_width`]).
+fn cluster_offset_width(cluster: &str) -> usize {
+    if cluster == "\n" {
+        1
+    } else {
+        crate::wrap::display_width(cluster)
+    }
+}
+
+/// G-144 — `promptOffsetWidth` (prompt/display.ts:5-11): the
+/// composer's offset coordinate space — DISPLAY columns with
+/// newlines as one position.
+#[must_use]
+pub fn prompt_offset_width(text: &str) -> usize {
+    use unicode_segmentation::UnicodeSegmentation as _;
+    text.graphemes(true).map(cluster_offset_width).sum()
+}
+
+/// G-144 — `displayOffsetIndex` (display.ts:13-25): the first
+/// grapheme whose cumulative width would pass `offset` (the char
+/// index of the display-column slice boundary).
+fn display_char_index(text: &str, offset: usize) -> usize {
+    use unicode_segmentation::UnicodeSegmentation as _;
+    let mut width = 0usize;
+    let mut chars = 0usize;
+    for cluster in text.graphemes(true) {
+        let next = width + cluster_offset_width(cluster);
+        if next > offset {
+            return chars;
+        }
+        width = next;
+        chars += cluster.chars().count();
+    }
+    chars
+}
+
+/// G-144 — `displaySlice` (display.ts:27-31) as a char range.
+fn display_char_range(text: &str, start: usize, end: usize) -> std::ops::Range<usize> {
+    display_char_index(text, start)..display_char_index(text, end)
+}
+
+/// G-144 — `mentionTriggerIndex` (display.ts:41-50): the last `@` in
+/// the display slice before `offset`, valid when the preceding char
+/// is start-or-whitespace and the query carries no whitespace.
+/// Returns the anchor's DISPLAY column.
+#[must_use]
+pub fn mention_trigger_index(text: &str, offset: usize) -> Option<usize> {
     let chars: Vec<char> = text.chars().collect();
-    let end = caret.min(chars.len());
-    let mut index = end;
-    while index > 0 {
-        let ch = chars[index - 1];
-        if ch.is_whitespace() {
+    let range = display_char_range(text, 0, offset);
+    let slice = &chars[range];
+    let index = slice.iter().rposition(|ch| *ch == '@')?;
+    let before = if index == 0 { None } else { Some(slice[index - 1]) };
+    let query: String = slice[index..].iter().collect();
+    let before_ok = before.is_none_or(char::is_whitespace);
+    if before_ok && !query.chars().any(char::is_whitespace) {
+        let prefix: String = slice[..index].iter().collect();
+        Some(prompt_offset_width(&prefix))
+    } else {
+        None
+    }
+}
+
+/// G-144 — `slashTriggerIndex` (display.ts:52-61): scan `/` backwards
+/// through the display slice; skip anchors with a non-whitespace
+/// predecessor; the query must carry no whitespace and no second
+/// `/`. Returns the anchor's DISPLAY column.
+#[must_use]
+pub fn slash_trigger_index(text: &str, offset: usize) -> Option<usize> {
+    let chars: Vec<char> = text.chars().collect();
+    let range = display_char_range(text, 0, offset);
+    let slice = &chars[range];
+    let mut search = slice.len();
+    while let Some(index) = slice[..search].iter().rposition(|ch| *ch == '/') {
+        let before = if index == 0 { None } else { Some(slice[index - 1]) };
+        let query: String = slice[index..].iter().collect();
+        if before.is_some_and(|ch| !ch.is_whitespace()) {
+            // `continue` — retry the next earlier `/`.
+            search = index;
+            continue;
+        }
+        let query_chars: Vec<char> = query.chars().collect();
+        if query_chars.iter().any(|ch| ch.is_whitespace()) || query_chars[1..].contains(&'/') {
             return None;
         }
-        if ch == '@' {
-            return Some((Mode::Reference, index - 1));
-        }
-        if ch == '/' && (index - 1 == 0 || chars[index - 2] == '\n') {
-            return Some((Mode::Command, index - 1));
-        }
-        index -= 1;
+        let prefix: String = slice[..index].iter().collect();
+        return Some(prompt_offset_width(&prefix));
     }
     None
+}
+
+/// `slashTriggerIndex` / `mentionTriggerIndex` over the composer's
+/// char-index caret: the display-column anchors (G-144) mapped back
+/// to char indices for the internal popup seam. The RIGHTMOST anchor
+/// wins (the ref's two probes each scan from the caret backward).
+fn trigger_for(text: &str, caret: usize) -> Option<(Mode, usize)> {
+    let prefix: String = text.chars().take(caret).collect();
+    let offset = prompt_offset_width(&prefix);
+    let candidates = [
+        slash_trigger_index(text, offset).map(|column| (Mode::Command, column)),
+        mention_trigger_index(text, offset).map(|column| (Mode::Reference, column)),
+    ];
+    // Char index of the grapheme starting at `column`.
+    let column_to_char = |column: usize| -> usize {
+        use unicode_segmentation::UnicodeSegmentation as _;
+        let mut width = 0usize;
+        let mut chars = 0usize;
+        for cluster in prefix.graphemes(true) {
+            if width >= column {
+                break;
+            }
+            width += cluster_offset_width(cluster);
+            chars += cluster.chars().count();
+        }
+        chars
+    };
+    candidates
+        .into_iter()
+        .flatten()
+        .max_by_key(|(_, column)| *column)
+        .map(|(mode, column)| (mode, column_to_char(column)))
 }
 
 /// The popup's query: the text after the trigger through the caret.
@@ -1022,12 +1124,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn slash_triggers_only_at_line_head() {
+    fn slash_and_mention_anchors_follow_the_display_ts_rules() {
+        // G-144 — display.ts:41-61 semantics: `/` anchors after ANY
+        // whitespace (not just a line head — the ref's
+        // `before !== undefined && !/\s/.test(before)` skip), `@`
+        // requires a start-or-whitespace predecessor, and either
+        // query closes on whitespace.
         assert_eq!(trigger_for("/re", 3), Some((Mode::Command, 0)));
-        assert_eq!(trigger_for("a /re", 5), None, "mid-line slash is not a trigger");
+        assert_eq!(trigger_for("a /re", 5), Some((Mode::Command, 2)));
+        assert_eq!(trigger_for("a/re", 4), None, "no whitespace before the slash");
         assert_eq!(trigger_for("@fil", 4), Some((Mode::Reference, 0)));
         assert_eq!(trigger_for("hey @fil", 8), Some((Mode::Reference, 4)));
+        assert_eq!(trigger_for("hey@fil", 7), None, "no whitespace before the @");
         assert_eq!(trigger_for("/re na", 6), None, "space closes the token");
+        assert_eq!(trigger_for("/re/na", 6), None, "a second slash closes the token");
+    }
+
+    #[test]
+    fn wide_char_mixed_anchors_match_display_columns() {
+        // G-144 — the anchors are display columns: a wide char before
+        // the trigger shifts the column (not the char count), and the
+        // char-index mapping back lands on the trigger itself.
+        assert_eq!(prompt_offset_width("你a"), 3);
+        assert_eq!(mention_trigger_index("你 @fil", prompt_offset_width("你 @fil")), Some(3));
+        assert_eq!(slash_trigger_index("你 /re", prompt_offset_width("你 /re")), Some(3));
+        assert_eq!(trigger_for("你 @fil", 6), Some((Mode::Reference, 3)));
+        assert_eq!(trigger_for("你 /re", 5), Some((Mode::Command, 3)));
     }
 
     #[test]

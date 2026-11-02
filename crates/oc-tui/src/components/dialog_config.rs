@@ -95,7 +95,8 @@ pub fn settings_table() -> Vec<SettingDef> {
             values: Some(&["system", "dark", "light"]),
             labels: None,
             step: None,
-            keywords: "",
+            // G-146 — dialog-config.tsx:35's search keywords.
+            keywords: "dark mode, light mode, system theme",
         },
         S {
             title: "Animations",
@@ -441,6 +442,8 @@ pub fn current_value(store: &crate::store::Store, setting: &SettingDef) -> Strin
         "session.image_preview" => if store.image_preview() { "true" } else { "false" }.to_owned(),
         "session.tps" => if store.session_tps() { "true" } else { "false" }.to_owned(),
         "tabs.mode" => if store.tabs_enabled() { "on" } else { "off" }.to_owned(),
+        // G-143 — the tabs.indicators row's live value.
+        "tabs.indicators" => if store.tabs_numbers() { "numbers" } else { "status" }.to_owned(),
         other => {
             let snapshot = store.settings_snapshot_value(other);
             if snapshot.is_empty() {
@@ -494,6 +497,8 @@ pub fn change_setting(store: &crate::store::Store, setting: &SettingDef, directi
         // G-07: the devtools bar's live gate (ref app.tsx:457).
         "debug.devtools" => store.set_devtools_enabled(next == "true"),
         "tabs.mode" => store.set_tabs_enabled(next == "on"),
+        // G-143 — the indicators row's live consumer.
+        "tabs.indicators" => store.set_tabs_numbers(next == "numbers"),
         "tabs.layout" => store.set_tabs_layout(if next == "vertical" {
             crate::components::session_tabs_rail::TabsLayout::Vertical
         } else {

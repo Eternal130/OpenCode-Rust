@@ -117,6 +117,7 @@ pub fn handle_dialog_key(
         }
         DialogKind::CommandPalette
         | DialogKind::QueuedPrompts
+        | DialogKind::PendingSteer { .. }
         | DialogKind::Update
         | DialogKind::ThemeList
         | DialogKind::Help
@@ -321,7 +322,7 @@ pub fn handle_dialog_key(
         // (`appendPrompt` over the payload) and closes.
         let selected = entry.select.submit(&props).map(|option| option.value.clone());
         if keymap.stroke_triggers(&stroke, "queued_prompt.undo") {
-            if let (Route::Session { session_id }, Some(id)) = (store.route(), selected.as_deref())
+            if let (Route::Session { session_id, .. }, Some(id)) = (store.route(), selected.as_deref())
             {
                 if let Some(payload) = store.queued_prompt_payload(&session_id, id) {
                     store.delete_queued_prompt(&session_id, id);
@@ -336,7 +337,7 @@ pub fn handle_dialog_key(
             return DialogKeyOutcome::Consumed;
         }
         if keymap.stroke_triggers(&stroke, "queued_prompt.delete") {
-            if let (Route::Session { session_id }, Some(id)) = (store.route(), selected.as_deref())
+            if let (Route::Session { session_id, .. }, Some(id)) = (store.route(), selected.as_deref())
             {
                 store.delete_queued_prompt(&session_id, id);
                 if store.queued_prompts(&session_id).is_empty() {
@@ -393,7 +394,7 @@ pub fn handle_dialog_key(
             return DialogKeyOutcome::Consumed;
         }
         if triggers("dialog.move_session.move", keymap) {
-            if let crate::store::Route::Session { session_id } = store.route() {
+            if let crate::store::Route::Session { session_id, .. } = store.route() {
                 if let Some(directory) = selected {
                     store.move_session_to_worktree(&session_id, &directory);
                 }
@@ -458,6 +459,23 @@ pub fn handle_dialog_key(
     // `session.delete` (dialog-session-list.tsx:255-279): two-press
     // ctrl+d — the first arms the row (the confirm title), the second
     // fires `session.remove`.
+    if let DialogKind::ServerList { command: "model.list", .. } = entry.kind {
+        // G-135 — `model.dialog.favorite` (dialog-model.tsx:155-164,
+        // keybind "ctrl+f"): toggle the HOVERED row's favorite through
+        // the model ring (the `local.model.toggleFavorite` write —
+        // persisted with the next ring drain). Mirrors the ref's
+        // `hidden: !connected()` gate: the unconnected dialog has no
+        // favorite rows, so the stroke falls through untouched.
+        let connected = store.server_lists().connected;
+        if connected && keymap.stroke_triggers(&stroke, "model.dialog.favorite") {
+            if let Some(option) = entry.select.submit(&props) {
+                if let Some((provider_id, model_id)) = option.value.split_once('/') {
+                    store.model_toggle_favorite(provider_id, model_id);
+                }
+            }
+            return DialogKeyOutcome::Consumed;
+        }
+    }
     if let DialogKind::ServerList { command: "session.list", .. } = entry.kind {
         if keymap.stroke_triggers(&stroke, "session.delete") {
             if let Some(option) = entry.select.submit(&props) {
@@ -852,6 +870,7 @@ pub fn render_overlay_with_options(
         DialogKind::Update
         | DialogKind::CommandPalette
         | DialogKind::QueuedPrompts
+        | DialogKind::PendingSteer { .. }
         | DialogKind::ThemeList
         | DialogKind::Worktrees
         | DialogKind::WorktreeDeleteConfirm { .. }
@@ -1195,7 +1214,7 @@ pub fn render_app(store: &Store, theme: &crate::theme::ThemeState, size: (u16, u
     } else {
         match store.route() {
             crate::store::Route::Home => crate::components::home::render_home(store, &styles, size),
-            crate::store::Route::Session { session_id } => {
+            crate::store::Route::Session { session_id, .. } => {
                 crate::components::session::render_session(store, &session_id, &styles, size)
             }
         }
@@ -1405,7 +1424,7 @@ pub fn execute_submission(
                 }
             } else if value == "tab:copy" {
                 if let Some(session_id) = session_id.clone().or_else(|| match store.route() {
-                    crate::store::Route::Session { session_id } => Some(session_id),
+                    crate::store::Route::Session { session_id, .. } => Some(session_id),
                     crate::store::Route::Home => None,
                 }) {
                     if store.clipboard_write(&session_id).is_ok() {
@@ -1488,8 +1507,21 @@ pub fn execute_submission(
         // server-side PATCH (`session.inbox.update
         // {delivery: "steer"}`), NOT a local re-send; the row keeps
         // its place until the turn admits it.
+        // G-140⑤ — the pending-steer click manager's submit
+        // (`updatePendingSteer`, index.tsx:2206-2208).
+        Some(DialogKind::PendingSteer { session_id, message_id }) => {
+            let session_id = session_id.clone();
+            let message_id = message_id.clone();
+            store.clear_dialogs();
+            if value == "queue" {
+                store.queue_pending_steer(&session_id, &message_id);
+            } else if value == "cancel" {
+                store.delete_queued_prompt(&session_id, &message_id);
+            }
+            return crate::components::command_palette::Dispatch::Handled;
+        }
         Some(DialogKind::QueuedPrompts) => {
-            if let Route::Session { session_id } = store.route() {
+            if let Route::Session { session_id, .. } = store.route() {
                 if store.queued_prompts(&session_id).iter().any(|item| item.id == value) {
                     store.steer_queued_prompt(&session_id, value);
                     store.clear_dialogs();
@@ -1671,7 +1703,7 @@ pub fn execute_submission(
             let skill = value.to_owned();
             store.clear_dialogs();
             let key = match store.route() {
-                crate::store::Route::Session { session_id } => session_id,
+                crate::store::Route::Session { session_id, .. } => session_id,
                 crate::store::Route::Home => crate::app::HOME_PROMPT_KEY.to_owned(),
             };
             let mut composer = store.composer(&key);
@@ -1686,7 +1718,7 @@ pub fn execute_submission(
             let index: usize = value.parse().unwrap_or(usize::MAX);
             if let Some(entry) = store.stash_remove(index) {
                 let key = match store.route() {
-                    crate::store::Route::Session { session_id } => session_id,
+                    crate::store::Route::Session { session_id, .. } => session_id,
                     crate::store::Route::Home => crate::app::HOME_PROMPT_KEY.to_owned(),
                 };
                 let mut composer = store.composer(&key);
@@ -2001,7 +2033,7 @@ mod tests {
     fn rename_dialog_seeds_the_current_title() {
         let store = Store::new(Runtime::new());
         store.open_tab("s1", Some("Parity fake says hello.".to_owned()));
-        store.navigate(Route::Session { session_id: "s1".to_owned() });
+        store.navigate(Route::session("s1".to_owned()));
         let mut dispatcher = crate::components::dialog::store_dispatcher();
         dispatcher.dispatch(&store, "session.rename", None);
         let entry = store.top_dialog().expect("dialog opened");
