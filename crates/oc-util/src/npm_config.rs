@@ -222,7 +222,6 @@ mod tests {
         assert_eq!(registry(dir.path()), "https://quoted.example");
         drop(env);
     }
-}
 
     #[test]
     fn globalconfig_after_user() {
@@ -259,3 +258,4 @@ mod tests {
         // no prefix env → global/builtin levels are not derivable → default
         assert_eq!(registry(dir.path()), "https://registry.npmjs.org");
     }
+}
