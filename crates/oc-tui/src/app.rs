@@ -2335,7 +2335,8 @@ impl App {
                 crate::store::DialogKind::BtwPrompt => {
                     let question = value.trim().to_owned();
                     if !question.is_empty() {
-                        if let crate::store::Route::Session { session_id, .. } = self.store.route() {
+                        if let crate::store::Route::Session { session_id, .. } = self.store.route()
+                        {
                             self.store.clear_dialogs();
                             self.store.btw_ask(&session_id, &question);
                         }
@@ -2624,7 +2625,8 @@ impl App {
                     // the store; the composer's popup re-attaches the
                     // rows after every edit/delete (an EMPTY query —
                     // a typed path shows nothing, index.tsx:1962).
-                    if let Some(query) = composer.autocomplete.directory_query().map(str::to_owned) {
+                    if let Some(query) = composer.autocomplete.directory_query().map(str::to_owned)
+                    {
                         let query = query.as_str();
                         let project = self.store.worktree_dialog().project_id;
                         for id in std::mem::take(&mut composer.destructive_requests) {
@@ -2642,11 +2644,7 @@ impl App {
                                 .map(|path| path.display().to_string())
                                 .unwrap_or_default();
                             let home = std::env::var("HOME").unwrap_or_default();
-                            self.store.autocomplete_directory_list(
-                                query,
-                                directory,
-                                home,
-                            );
+                            self.store.autocomplete_directory_list(query, directory, home);
                         }
                     }
                     // RD-05 — the `@` reference rows (autocomplete.
@@ -2702,7 +2700,8 @@ impl App {
     /// agents, filtered by the live query — accepting one records the
     /// structured part (the wire `agents`/`skills`/`files`
     /// attachments).
-    fn attach_reference_options(&self, composer: &mut crate::components::composer::Composer) {        use crate::components::composer::autocomplete;
+    fn attach_reference_options(&self, composer: &mut crate::components::composer::Composer) {
+        use crate::components::composer::autocomplete;
         if composer.autocomplete.visible != Some(autocomplete::Mode::Reference) {
             return;
         }
@@ -2767,8 +2766,7 @@ impl App {
             .as_ref()
             .filter(|(cached, _)| cached.as_str() == query.as_str())
             .map_or(&[] as &[_], |(_, rows)| rows.as_slice());
-        composer.autocomplete.options =
-            autocomplete::merge_file_rows(non_file, file_rows, &query);
+        composer.autocomplete.options = autocomplete::merge_file_rows(non_file, file_rows, &query);
         // G-127 — the async half: fire `fs.find({query: base, limit:
         // 20, location})` (autocomplete.tsx:361 — the line-range
         // suffix is stripped from the query; `location` is the
@@ -2776,9 +2774,7 @@ impl App {
         // process cwd, the launch location). The no-op default sink
         // (unit tests) makes this a no-op.
         let base = autocomplete::file_query_base(&query).to_owned();
-        let directory = std::env::current_dir()
-            .map(|path| path.display().to_string())
-            .ok();
+        let directory = std::env::current_dir().map(|path| path.display().to_string()).ok();
         self.store.autocomplete_file_find(&base, directory);
         composer.autocomplete.filtered_len = composer.autocomplete.options.len();
         if composer.autocomplete.selected >= composer.autocomplete.filtered_len {
@@ -3156,7 +3152,8 @@ impl App {
     /// 136-138). The shared `composer.tab.prev/next` + `composer.close`
     /// always resolve (composer/index.tsx:72-82's panel layer).
     fn sync_composer_tab_layers(&mut self, picker: bool) {
-        let picker_tab = if let crate::store::Route::Session { session_id, .. } = self.store.route() {
+        let picker_tab = if let crate::store::Route::Session { session_id, .. } = self.store.route()
+        {
             (picker && self.store.picker_live(&session_id)).then(|| self.store.picker().tab)
         } else {
             None
@@ -4389,10 +4386,8 @@ impl crate::components::composer::autocomplete::AutocompleteFetchSink
     for HttpAutocompleteFetchSink
 {
     fn file_find(&self, query: &str, directory: Option<String>) {
-        let _ = self.tx.send(LoopRequest::AutocompleteFileFind {
-            query: query.to_owned(),
-            directory,
-        });
+        let _ =
+            self.tx.send(LoopRequest::AutocompleteFileFind { query: query.to_owned(), directory });
     }
     fn directory_list(&self, query: &str, directory: String, home: String) {
         let _ = self.tx.send(LoopRequest::AutocompleteDirectoryList {
@@ -4404,7 +4399,6 @@ impl crate::components::composer::autocomplete::AutocompleteFetchSink
 }
 
 impl crate::store::ShellControlSink for HttpShellControlSink {
-
     /// `shell.get` + the output TAIL (dialog-shell-output.tsx:32-77's
     /// open page: `cursor = max(0, size − 64KiB)`). The run loop's
     /// periodic tick re-issues this every 1s while the viewer is the
@@ -5192,11 +5186,18 @@ pub enum LoopRequest {
     /// G-127 — the composer `@`-reference fuzzy file search
     /// (`client.api.file.find({query, limit: 20, location})`,
     /// autocomplete.tsx:361).
-    AutocompleteFileFind { query: String, directory: Option<String> },
+    AutocompleteFileFind {
+        query: String,
+        directory: Option<String>,
+    },
     /// G-127 — the `/cd` live directory listing
     /// (`directoryAutocomplete` → `file.list`, autocomplete.tsx:336):
     /// the search triple resolves against `directory`.
-    AutocompleteDirectoryList { query: String, directory: String, home: String },
+    AutocompleteDirectoryList {
+        query: String,
+        directory: String,
+        home: String,
+    },
     /// `vcs.get` for one directory (the footer's branch lookup).
     LocationVcs(String),
     /// G-69 — `vcs.branch.list` for the diff base selector.
@@ -5533,18 +5534,19 @@ fn apply_directory_options(
         return;
     };
     let project = store.worktree_dialog().project_id;
-    let mut options: Vec<AutocompleteOption> = if query.is_empty() {
-        store.directory_recents_options(&project)
-    } else {
-        Vec::new()
-    };
+    let mut options: Vec<AutocompleteOption> =
+        if query.is_empty() { store.directory_recents_options(&project) } else { Vec::new() };
     let seen: std::collections::HashSet<String> =
         options.iter().filter_map(|item| item.absolute.clone()).collect();
     if let Some((cached, rows)) = composer.autocomplete.dir_rows.as_ref() {
         if cached.as_str() == query.as_str() {
-            options.extend(rows.iter().filter(|row| {
-                row.absolute.as_ref().is_none_or(|absolute| !seen.contains(absolute))
-            }).cloned());
+            options.extend(
+                rows.iter()
+                    .filter(|row| {
+                        row.absolute.as_ref().is_none_or(|absolute| !seen.contains(absolute))
+                    })
+                    .cloned(),
+            );
         }
     }
     composer.autocomplete.filtered_len = options.len();
@@ -5642,10 +5644,12 @@ pub fn spawn_loop_fetcher(
                             response
                                 .data
                                 .into_iter()
-                                .map(|entry| crate::components::composer::autocomplete::FileFindRow {
-                                    path: entry.path,
-                                    is_directory: entry.type_
-                                        == oc_client::types::FileSystemEntryType::Directory,
+                                .map(|entry| {
+                                    crate::components::composer::autocomplete::FileFindRow {
+                                        path: entry.path,
+                                        is_directory: entry.type_
+                                            == oc_client::types::FileSystemEntryType::Directory,
+                                    }
                                 })
                                 .collect::<Vec<_>>()
                         });
@@ -5688,8 +5692,9 @@ pub fn spawn_loop_fetcher(
                         // The worker precomputes the popup rows (the
                         // list's location is the SEARCH directory —
                         // entries resolve against it).
-                        let result =
-                            rows.map(|rows| ac::directory_live_options(&rows, &search.directory, &search));
+                        let result = rows.map(|rows| {
+                            ac::directory_live_options(&rows, &search.directory, &search)
+                        });
                         let _ = tx.send(LoopFetch::AutocompleteDirectoryList {
                             query,
                             result: result.map_err(|error| error.to_string()),
@@ -6202,7 +6207,14 @@ pub fn spawn_loop_fetcher(
                         let _ = tx.send(LoopFetch::SessionCompactResult { session_id: id, result });
                     });
                 }
-                LoopRequest::SessionExport { session_id, sanitize, format, destination, thinking, tools } => {
+                LoopRequest::SessionExport {
+                    session_id,
+                    sanitize,
+                    format,
+                    destination,
+                    thinking,
+                    tools,
+                } => {
                     let client = client.clone();
                     let tx = tx.clone();
                     tokio::spawn(async move {
@@ -8328,10 +8340,7 @@ pub async fn run_with_size(
                                 // RB-07 (lane R0): the DA1 attr-4
                                 // verdict refines the graphics
                                 // protocol decision seeded from env.
-                                if event_tx
-                                    .blocking_send(TermEvent::Sixel(caps.sixel))
-                                    .is_err()
-                                {
+                                if event_tx.blocking_send(TermEvent::Sixel(caps.sixel)).is_err() {
                                     return;
                                 }
                             }
@@ -8352,10 +8361,7 @@ pub async fn run_with_size(
                     None
                 };
                 if let Some((width, height)) = resized {
-                    if event_tx
-                        .blocking_send(TermEvent::Resize(width, height))
-                        .is_err()
-                    {
+                    if event_tx.blocking_send(TermEvent::Resize(width, height)).is_err() {
                         return;
                     }
                 }
@@ -9068,24 +9074,29 @@ pub async fn run_with_size(
                     let key = app.prompt_key();
                     let mut composer = app.store.composer(&key);
                     let current = composer.autocomplete.visible.and_then(|mode| {
-                        (mode == crate::components::composer::autocomplete::Mode::Reference)
-                            .then(|| {
+                        (mode == crate::components::composer::autocomplete::Mode::Reference).then(
+                            || {
                                 crate::components::composer::autocomplete::query_between(
                                     &composer.draft.text,
                                     composer.autocomplete.trigger_index,
                                     composer.edit.caret(),
                                 )
-                            })
+                            },
+                        )
                     });
                     if current.as_deref() == Some(query.as_str()) {
                         match result {
                             Ok(rows) => {
-                                let options = crate::components::composer::autocomplete::file_find_options(&rows);
-                                composer.autocomplete.file_rows =
-                                    Some((query.clone(), options));
+                                let options =
+                                    crate::components::composer::autocomplete::file_find_options(
+                                        &rows,
+                                    );
+                                composer.autocomplete.file_rows = Some((query.clone(), options));
                             }
                             Err(error) => {
-                                crate::keymap::log_skip(&format!("autocomplete file find: {error}"));
+                                crate::keymap::log_skip(&format!(
+                                    "autocomplete file find: {error}"
+                                ));
                                 // The ref's `failed` flag keeps the
                                 // previous rows (files.latest) — a
                                 // failed refetch does not clear.
@@ -9101,10 +9112,8 @@ pub async fn run_with_size(
                 LoopFetch::AutocompleteDirectoryList { query, result } => {
                     let key = app.prompt_key();
                     let mut composer = app.store.composer(&key);
-                    let current = composer
-                        .autocomplete
-                        .directory_query()
-                        .map(|query| query.to_owned());
+                    let current =
+                        composer.autocomplete.directory_query().map(|query| query.to_owned());
                     if current.as_deref() == Some(query.as_str()) {
                         match result {
                             Ok(rows) => {
@@ -9306,7 +9315,14 @@ pub async fn run_with_size(
                         });
                     }
                 }
-                LoopFetch::SessionExportResult { session_id, format, destination, thinking, tools, result } => {
+                LoopFetch::SessionExportResult {
+                    session_id,
+                    format,
+                    destination,
+                    thinking,
+                    tools,
+                    result,
+                } => {
                     match result {
                         Ok(transfer) => {
                             let content = if format == "json" {
@@ -9718,9 +9734,7 @@ pub async fn run_with_size(
                     theme_probe_at = std::time::Instant::now();
                     if let Ok(mut session) = session_terminal.lock() {
                         use std::io::Write as _;
-                        let _ = session
-                            .output()
-                            .write_all(b"\x1b]10;?\x07\x1b]11;?\x07");
+                        let _ = session.output().write_all(b"\x1b]10;?\x07\x1b]11;?\x07");
                         let _ = session.output().flush();
                     }
                 }
@@ -9740,7 +9754,8 @@ pub async fn run_with_size(
             // graphics-protocol decision seeded from env (the probe's
             // Capabilities event; see `crate::image::resolve_protocol`).
             Some(TermEvent::Sixel(sixel)) => {
-                let resolved = crate::image::resolve_protocol(app.store.graphics_protocol(), Some(sixel));
+                let resolved =
+                    crate::image::resolve_protocol(app.store.graphics_protocol(), Some(sixel));
                 if resolved != app.store.graphics_protocol() {
                     app.store.set_graphics_protocol(resolved);
                 }
@@ -9851,11 +9866,11 @@ fn read_session_input(
     session: &Arc<std::sync::Mutex<SessionTerminal>>,
     timeout_ms: i32,
 ) -> Vec<u8> {
+    use opentui_core::terminal::TtyDevice as _;
+    use std::os::fd::AsRawFd as _;
     let Ok(mut terminal) = session.lock() else {
         return Vec::new();
     };
-    use std::os::fd::AsRawFd as _;
-    use opentui_core::terminal::TtyDevice as _;
     let fd = terminal.tty().input_fd().as_raw_fd();
     let mut poll_fd = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
     // SAFETY: poll(2) with a bounded timeout on the session's tty fd.
@@ -9869,14 +9884,13 @@ fn read_session_input(
     if available <= 0 {
         return Vec::new();
     }
-    let mut buffer = vec![0u8; available as usize];
+    let mut buffer = vec![0u8; usize::try_from(available).unwrap_or(0)];
     // SAFETY: read(2) of at most FIONREAD bytes.
     let read = unsafe { libc::read(fd, buffer.as_mut_ptr().cast::<libc::c_void>(), buffer.len()) };
     if read <= 0 {
         return Vec::new();
     }
-    #[allow(clippy::cast_sign_loss)]
-    buffer.truncate(read as usize);
+    buffer.truncate(usize::try_from(read).unwrap_or(0));
     buffer
 }
 fn to_ratatui_color(color: crate::render::CellColor) -> ratatui::style::Color {
@@ -9926,7 +9940,10 @@ mod tests {
             serde_json::json!([{ "message": "unknown key", "path": ["session", "verbosity"] }]),
         );
         let formatted = cli_error_message("ConfigInvalidError", &invalid).unwrap();
-        assert!(formatted.contains("Configuration is invalid at opencode.json: bad key"), "{formatted}");
+        assert!(
+            formatted.contains("Configuration is invalid at opencode.json: bad key"),
+            "{formatted}"
+        );
         assert!(formatted.contains("↳ unknown key session.verbosity"), "{formatted}");
     }
 
@@ -11005,10 +11022,7 @@ mod tests {
             },
             None,
         );
-        assert_eq!(
-            store.route(),
-            crate::store::Route::session("ses_direct".to_owned())
-        );
+        assert_eq!(store.route(), crate::store::Route::session("ses_direct".to_owned()));
         assert!(store.tabs().tabs.iter().any(|tab| tab.session_id == "ses_direct"));
 
         // --continue: the resolved latest root session.
@@ -11018,10 +11032,7 @@ mod tests {
             &BootArgs { continue_last: true, session: None, ..BootArgs::default() },
             Some("ses_new"),
         );
-        assert_eq!(
-            store.route(),
-            crate::store::Route::session("ses_new".to_owned())
-        );
+        assert_eq!(store.route(), crate::store::Route::session("ses_new".to_owned()));
 
         // --continue with nothing to resume: stays home (v2 `if
         // (!match) return`).
@@ -13253,8 +13264,8 @@ mod core_interaction_tests {
     /// dead. The select family here; the Help family below.
     #[test]
     fn dialog_header_close_label_releases_closed() {
-        use crate::store::DialogKind;
         use crate::input_term::{MouseButton, MouseEventKind};
+        use crate::store::DialogKind;
         let mut app = App::new((80, 24));
         app.store.open_dialog(DialogKind::CommandPalette, crate::store::DialogSize::Medium);
         let _ = app.frame();
@@ -13478,11 +13489,7 @@ fn mouse_strip_drag_reorders_on_release() {
     let order: Vec<String> =
         app.store.tabs().tabs.iter().map(|tab| tab.session_id.clone()).collect();
     assert_eq!(order, vec!["s2", "s3", "s1"], "the move persisted on release");
-    assert_eq!(
-        app.store.route(),
-        Route::session("s1".to_owned()),
-        "release() selects the SOURCE"
-    );
+    assert_eq!(app.store.route(), Route::session("s1".to_owned()), "release() selects the SOURCE");
     assert_eq!(app.store.tab_drag_preview(), None, "the preview cleared");
 
     // A press + release without a crossing is a plain select.
@@ -13837,7 +13844,13 @@ fn open_url_rejects_non_http_schemes() {
         ["https://opencode.ai/docs", "http://example.com", "HTTPS://Example.COM/Upper"],
         "http/https (case-insensitive) reach the opener"
     );
-    for scheme in ["file:///etc/passwd", "javascript:alert(1)", "ssh://host", "data:text/plain,x", "gopher://x"] {
+    for scheme in [
+        "file:///etc/passwd",
+        "javascript:alert(1)",
+        "ssh://host",
+        "data:text/plain,x",
+        "gopher://x",
+    ] {
         app.store.open_url(scheme);
     }
     assert_eq!(opened.borrow().len(), 3, "non-http schemes never reach the opener");

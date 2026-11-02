@@ -14,12 +14,12 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::style::{Color, Style};
 use oc_theme::builtins::BUILTIN_V2_OPENCODE;
 use oc_theme::resolve::{parse_theme_document, resolve_theme_document, ThemeDocument};
 use oc_theme::types::{Mode, ResolvedTheme};
 use oc_theme::v1_migrate::migrate_v1;
 use oc_theme::Rgba;
-use crate::style::{Color, Style};
 
 /// A loaded theme document plus the resolved view for the active mode.
 #[derive(Debug, Clone, PartialEq)]

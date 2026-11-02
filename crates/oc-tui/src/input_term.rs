@@ -123,9 +123,7 @@ pub fn opentui_key_to_spec(key: &ParsedKey) -> Option<String> {
             if alt {
                 return None;
             }
-            return Some(
-                if key.shift { "ctrl+shift+tab" } else { "ctrl+tab" }.to_owned(),
-            );
+            return Some(if key.shift { "ctrl+shift+tab" } else { "ctrl+tab" }.to_owned());
         }
         // Only the Char family carries through the ctrl branch
         // (crossterm's CONTROL arm drops ctrl+<non-char> bindings).
@@ -155,9 +153,7 @@ pub fn opentui_key_to_spec(key: &ParsedKey) -> Option<String> {
             // Tab and the legacy `ESC [ Z` backtab are both shift+tab.
             "tab" => Some("shift+tab".to_owned()),
             _ if is_function_key(name) => Some(format!("shift+{name}")),
-            "up" | "down" | "left" | "right" | "home" | "end" => {
-                Some(format!("shift+{name}"))
-            }
+            "up" | "down" | "left" | "right" | "home" | "end" => Some(format!("shift+{name}")),
             _ => None,
         };
     }
@@ -252,28 +248,20 @@ impl KeyPipeline {
         loop {
             // Active paste: everything flows through the collector.
             if let Some(mut collector) = self.paste.take() {
-                match collector.consume(&self.pending) {
-                    Some((paste, remainder)) => {
-                        events.push(TermEvent::Paste(
-                            opentui_core::paste::decode_paste_bytes(&paste),
-                        ));
-                        self.pending = remainder;
-                    }
-                    None => {
-                        // The collector consumed the chunk; the bytes
-                        // are gone from the wire stream.
-                        self.pending.clear();
-                        self.paste = Some(collector);
-                        return; // wait for the end marker
-                    }
+                if let Some((paste, remainder)) = collector.consume(&self.pending) {
+                    events.push(TermEvent::Paste(opentui_core::paste::decode_paste_bytes(&paste)));
+                    self.pending = remainder;
+                } else {
+                    // The collector consumed the chunk; the bytes
+                    // are gone from the wire stream.
+                    self.pending.clear();
+                    self.paste = Some(collector);
+                    return; // wait for the end marker
                 }
                 continue;
             }
             // Paste start at a unit boundary.
-            if self
-                .pending
-                .starts_with(opentui_core::paste::BRACKETED_PASTE_START)
-            {
+            if self.pending.starts_with(opentui_core::paste::BRACKETED_PASTE_START) {
                 let start_len = opentui_core::paste::BRACKETED_PASTE_START.len();
                 self.pending.drain(..start_len);
                 self.paste = Some(opentui_core::paste::BracketedPasteCollector::new());
@@ -327,17 +315,11 @@ impl KeyPipeline {
         let raw = match std::str::from_utf8(unit) {
             Ok(text) => text.to_owned(),
             // Non-UTF-8 bytes decode latin1 like the renderer's feed.
-            Err(_) => unit
-                .iter()
-                .map(|b| char::from_u32(u32::from(*b)).unwrap_or('\u{fffd}'))
-                .collect(),
+            Err(_) => {
+                unit.iter().map(|b| char::from_u32(u32::from(*b)).unwrap_or('\u{fffd}')).collect()
+            }
         };
-        let parsed = parse_keypress(
-            &raw,
-            ParseKeypressOptions {
-                use_kitty_keyboard: self.kitty,
-            },
-        )?;
+        let parsed = parse_keypress(&raw, ParseKeypressOptions { use_kitty_keyboard: self.kitty })?;
         if parsed.event_type != opentui_core::parse_keypress::KeyEventType::Press {
             return None; // the Press-only filter (no release flags pushed)
         }
@@ -346,19 +328,16 @@ impl KeyPipeline {
 }
 
 /// opentui `RawMouseEvent` → the oc-tui mirror shape.
-fn convert_mouse(
-    raw: &opentui_core::parse_mouse::RawMouseEvent,
-) -> Option<MouseEvent> {
+fn convert_mouse(raw: &opentui_core::parse_mouse::RawMouseEvent) -> Option<MouseEvent> {
     use opentui_core::parse_mouse::{MouseEventType, ScrollDirection};
-    let button =
-        |code: i32| -> Option<MouseButton> {
-            match code {
-                0 => Some(MouseButton::Left),
-                1 => Some(MouseButton::Middle),
-                2 => Some(MouseButton::Right),
-                _ => None,
-            }
-        };
+    let button = |code: i32| -> Option<MouseButton> {
+        match code {
+            0 => Some(MouseButton::Left),
+            1 => Some(MouseButton::Middle),
+            2 => Some(MouseButton::Right),
+            _ => None,
+        }
+    };
     let kind = match raw.event_type {
         MouseEventType::Down => MouseEventKind::Down(button(raw.button)?),
         MouseEventType::Up => MouseEventKind::Up(button(raw.button)?),
@@ -372,7 +351,9 @@ fn convert_mouse(
             None => return None,
         },
         // Synthetic tree-routing kinds never come off the wire parser.
-        MouseEventType::DragEnd | MouseEventType::Drop | MouseEventType::Over
+        MouseEventType::DragEnd
+        | MouseEventType::Drop
+        | MouseEventType::Over
         | MouseEventType::Out => return None,
     };
     let mut modifiers = KeyModifiers::empty();
@@ -483,13 +464,10 @@ mod tests {
 
     fn first_key(bytes: &[u8]) -> Option<String> {
         let mut pipeline = KeyPipeline::new();
-        pipeline
-            .process(bytes)
-            .into_iter()
-            .find_map(|event| match event {
-                TermEvent::Key(spec) => Some(spec),
-                _ => None,
-            })
+        pipeline.process(bytes).into_iter().find_map(|event| match event {
+            TermEvent::Key(spec) => Some(spec),
+            _ => None,
+        })
     }
 
     // -- the crossterm_key_to_spec parity table (PTY key families) --
@@ -552,9 +530,8 @@ mod tests {
     #[test]
     fn mouse_and_focus_and_paste_map() {
         let mut pipeline = KeyPipeline::new();
-        let events = pipeline.process(
-            b"\x1b[<0;10;5M\x1b[<0;10;5m\x1b[<64;3;3M\x1b[<66;3;3M\x1b[I\x1b[O",
-        );
+        let events =
+            pipeline.process(b"\x1b[<0;10;5M\x1b[<0;10;5m\x1b[<64;3;3M\x1b[<66;3;3M\x1b[I\x1b[O");
         let kinds: Vec<&MouseEventKind> = events
             .iter()
             .filter_map(|event| match event {
@@ -571,12 +548,15 @@ mod tests {
                 &MouseEventKind::ScrollLeft,
             ]
         );
-        assert_eq!(pipeline.process(b"\x1b[<0;10;5M")[0], TermEvent::Mouse(MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: 9,
-            row: 4,
-            modifiers: KeyModifiers::empty(),
-        }));
+        assert_eq!(
+            pipeline.process(b"\x1b[<0;10;5M")[0],
+            TermEvent::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: 9,
+                row: 4,
+                modifiers: KeyModifiers::empty(),
+            })
+        );
         // modifiers: 4=shift 8=alt 16=ctrl bits in the SGR button code
         assert!(matches!(
             pipeline.process(b"\x1b[<4;1;1M")[0],
@@ -594,10 +574,7 @@ mod tests {
         let events = paste_pipe.process(b"\x1b[200~hello");
         assert!(events.is_empty(), "paste waits for the end marker");
         let events = paste_pipe.process(b" world\x1b[201~");
-        assert_eq!(
-            events,
-            vec![TermEvent::Paste("hello world".to_owned())]
-        );
+        assert_eq!(events, vec![TermEvent::Paste("hello world".to_owned())]);
     }
 
     /// The lone-ESC flush: an ESC-final chunk resolves immediately, a
@@ -605,10 +582,7 @@ mod tests {
     #[test]
     fn lone_escape_flushes_at_chunk_end() {
         let mut pipeline = KeyPipeline::new();
-        assert_eq!(
-            pipeline.process(b"\x1b"),
-            vec![TermEvent::Key("escape".to_owned())]
-        );
+        assert_eq!(pipeline.process(b"\x1b"), vec![TermEvent::Key("escape".to_owned())]);
         let mut pipeline = KeyPipeline::new();
         assert!(pipeline.process(b"\x1b[").is_empty(), "incomplete CSI holds");
         assert_eq!(pipeline.process(b"A"), vec![TermEvent::Key("up".to_owned())]);

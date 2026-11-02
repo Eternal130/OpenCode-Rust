@@ -691,19 +691,24 @@ fn replay_message_commits(
 
     // The assistant walk (transport.ts:846-881): per-part projections
     // with the showTools()/thinking visibility gates.
-    let has_tools = parts.iter().any(|part| part.get("type").and_then(Value::as_str) == Some("tool"));
+    let has_tools =
+        parts.iter().any(|part| part.get("type").and_then(Value::as_str) == Some("tool"));
     let mut text_ordinal = 0usize;
     let mut reasoning_ordinal = 0usize;
     for part in &parts {
-        let part_id_of = |update_key: &str| {
-            update_key.split('\u{0}').nth(1).unwrap_or_default().to_owned()
-        };
+        let part_id_of =
+            |update_key: &str| update_key.split('\u{0}').nth(1).unwrap_or_default().to_owned();
         match part.get("type").and_then(Value::as_str) {
             Some("text") => {
                 let fragment_text = text(part);
                 let visible = settings.tools || !has_tools;
-                let update =
-                    transport.project_part(&message_id, "text", text_ordinal, fragment_text, visible);
+                let update = transport.project_part(
+                    &message_id,
+                    "text",
+                    text_ordinal,
+                    fragment_text,
+                    visible,
+                );
                 text_ordinal += 1;
                 if visible && fragment_text.len() > update.previous.len() {
                     let suffix = &fragment_text[update.previous.len()..];
@@ -752,7 +757,8 @@ fn replay_message_commits(
             // `renderTool`'s image arm (transport.ts:758): the part's
             // `data:image/*` display content commits.
             Some("tool") => {
-                let part_id = format!("prt_{}", part.get("id").and_then(Value::as_str).unwrap_or_default());
+                let part_id =
+                    format!("prt_{}", part.get("id").and_then(Value::as_str).unwrap_or_default());
                 let state = part.get("state").cloned().unwrap_or(Value::Null);
                 commits.extend(transport.commit_tool_images(&part_id, &state, &message_id));
             }
@@ -859,7 +865,9 @@ mod tests {
             "data": { "sessionID": "s1", "messageID": "msg_a1", "partID": "text:0", "delta": " four" },
         }));
         match tail {
-            super::super::transport::Fold::Commit(commit) => assert_eq!(commit.text, "one two three four"),
+            super::super::transport::Fold::Commit(commit) => {
+                assert_eq!(commit.text, "one two three four")
+            }
             other => panic!("tail folded: {other:?}"),
         }
         let ended = transport.fold(&serde_json::json!({

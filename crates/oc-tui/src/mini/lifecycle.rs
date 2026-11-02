@@ -1005,8 +1005,7 @@ impl Lifecycle {
                         PendingRows::Plain(rows) => {
                             for (index, row) in rows.iter().enumerate() {
                                 let mut x: u16 = 0;
-                                for atom in crate::wrap::flatten(row, crate::style::Style::new())
-                                {
+                                for atom in crate::wrap::flatten(row, crate::style::Style::new()) {
                                     if let Some(cell) =
                                         buffer.cell_mut((origin.0 + x, origin.1 + index as u16))
                                     {
@@ -1023,7 +1022,8 @@ impl Lifecycle {
                                     if let Some(cell) =
                                         buffer.cell_mut((origin.0 + x, origin.1 + index as u16))
                                     {
-                                        cell.set_symbol(&atom.text).set_style(bridge_style(atom.style));
+                                        cell.set_symbol(&atom.text)
+                                            .set_style(bridge_style(atom.style));
                                     }
                                     x += atom.width.max(1) as u16;
                                 }
