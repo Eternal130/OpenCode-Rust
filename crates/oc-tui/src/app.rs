@@ -13306,6 +13306,32 @@ fn tool_row_arms_follow_the_v2_table() {
     );
 }
 
+/// G-133 — `openUrl`'s scheme validation (util/open.ts:3-7): only
+/// http/https URLs reach the opener; other schemes reject before the
+/// spawn (the ref's "Only http and https links" error path — here a
+/// skipped open, the click handler's `.catch(() => {})` disposition).
+#[test]
+fn open_url_rejects_non_http_schemes() {
+    let app = App::new((80, 24));
+    let opened = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+    let recorder = std::rc::Rc::clone(&opened);
+    app.store.set_open_url_sink(Some(std::rc::Rc::new(move |url: String| {
+        recorder.borrow_mut().push(url);
+    })));
+    app.store.open_url("https://opencode.ai/docs");
+    app.store.open_url("http://example.com");
+    app.store.open_url("HTTPS://Example.COM/Upper");
+    assert_eq!(
+        opened.borrow().as_slice(),
+        ["https://opencode.ai/docs", "http://example.com", "HTTPS://Example.COM/Upper"],
+        "http/https (case-insensitive) reach the opener"
+    );
+    for scheme in ["file:///etc/passwd", "javascript:alert(1)", "ssh://host", "data:text/plain,x", "gopher://x"] {
+        app.store.open_url(scheme);
+    }
+    assert_eq!(opened.borrow().len(), 3, "non-http schemes never reach the opener");
+}
+
 /// A markdown link's label run arms and the release opens the URL
 /// (`ui/link.tsx:27` — `openUrl(href).catch(() => {})`).
 #[test]

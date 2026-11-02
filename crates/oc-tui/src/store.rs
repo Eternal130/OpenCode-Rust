@@ -8547,7 +8547,22 @@ impl Store {
     /// the system opener — `xdg-open` detached, the spawn error
     /// swallowed (`openUrl(href).catch(() => {})`). A test seam
     /// records instead of spawning (`set_open_url_sink`).
+    ///
+    /// G-133 — the ref's scheme validation (util/open.ts:3-7: a
+    /// parseable URL whose protocol is `http:`/`https:` only;
+    /// anything else rejects with "Only http and https links can be
+    /// opened in the browser"). Bounded deviation (G-133): the Linux
+    /// opener is xdg-open only (no npm-open cross-platform matrix),
+    /// and the scheme check is the `http(s)://` prefix — the special
+    /// schemes' WHATWG parse forms all carry the authority separator.
     pub fn open_url(&self, url: &str) {
+        let lowered = url.trim().to_ascii_lowercase();
+        if !(lowered.starts_with("http://") || lowered.starts_with("https://")) {
+            crate::keymap::log_skip(&format!(
+                "Only http and https links can be opened in the browser: {url}"
+            ));
+            return;
+        }
         if let Some(sink) = self.open_url_sink.borrow().as_ref() {
             sink(url.to_owned());
             return;

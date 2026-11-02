@@ -1699,7 +1699,10 @@ pub fn execute_submission(
 
 /// `openPath` (`util/open.ts`): hand a path to the system opener —
 /// `xdg-open` on Linux, detached (no wait); the spawn error message
-/// feeds the error toast (`toast.error`).
+/// feeds the error toast (`toast.error`). G-133 bounded deviation:
+/// xdg-open only on Linux (no npm-open cross-platform matrix; the
+/// ref's openPath passes any path through unvalidated — so does
+/// this).
 fn open_path(directory: &str) -> Result<(), String> {
     std::process::Command::new("xdg-open")
         .arg(directory)
