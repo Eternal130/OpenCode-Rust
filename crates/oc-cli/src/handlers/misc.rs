@@ -282,7 +282,9 @@ pub async fn models(server: &ServerParams) -> i32 {
     };
     let mut models: Vec<String> =
         response.data.iter().map(|model| format!("{}/{}", model.provider_id, model.id)).collect();
-    models.sort();
+    // `toSorted((a, b) => a.localeCompare(b))` (models.ts:23) — the
+    // CLDR-root collation, not byte order (G-154; oc-util localecmp).
+    models.sort_by(|a, b| oc_util::localecmp::locale_cmp(a, b));
     if !models.is_empty() {
         for model in models {
             println!("{model}");

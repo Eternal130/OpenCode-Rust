@@ -115,15 +115,21 @@ fn parse_model(value: Option<&str>) -> Result<Option<(String, String, Option<Str
 
 /// `resolveMiniTarget` (`mini.ts:157-180`): resolve the session
 /// target, retrying TRANSPORT failures through the reconnect seam with
-/// a 250 ms cadence until the signal deadline.
-async fn resolve_mini_target(
+/// a 250 ms cadence. Ref retries indefinitely until the abort signal
+/// (`Effect.repeat` + `Schedule.spaced(250)`); there is no total
+/// deadline — the 30 s cap added in the port had no ref counterpart
+/// and aborted slow server starts, so it is removed (G-157).
+async fn resolve_mini_target<F, Fut>(
     client: &oc_client::Client,
     input: &RunInput,
     directory: &str,
-    mut reconnect: impl FnMut() -> Option<oc_client::Client>,
-) -> Result<run::MiniSessionTarget, String> {
+    mut reconnect: F,
+) -> Result<run::MiniSessionTarget, String>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Option<oc_client::Client>>,
+{
     let mut client = client.clone();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
         match run::resolve_mini_session_target(&client, input, directory).await {
             Ok(target) => return Ok(target),
@@ -132,10 +138,7 @@ async fn resolve_mini_target(
                     // Surfaced as a user-facing input error (`mini.ts:64-66`).
                     return Err(message);
                 }
-                let Some(next) = reconnect() else { return Err(message) };
-                if std::time::Instant::now() > deadline {
-                    return Err(message);
-                }
+                let Some(next) = reconnect().await else { return Err(message) };
                 client = next;
                 tokio::time::sleep(std::time::Duration::from_millis(250)).await;
             }
@@ -198,20 +201,22 @@ pub async fn run_mini(input: MiniInput, server: &ServerParams) -> i32 {
     // `:75`).
     let _ = &requested;
 
-    // `localDirectory` (`mini.ts:201-209`): the logical `$PWD` when it
-    // is the current directory (the run command's stale-`$PWD` guard).
-    let directory = match std::env::var("PWD") {
-        Ok(stated)
-            if std::env::current_dir().is_ok_and(|current| {
-                std::fs::canonicalize(&stated).ok() == current.canonicalize().ok()
-            }) =>
-        {
-            stated
+    // `localDirectory` (`mini.ts:201-209`): chdir into `$PWD` (or the
+    // current directory), failing loudly when the chdir is impossible —
+    // a REAL chdir, so relative paths inside the session resolve like
+    // ref's (G-157).
+    let directory = {
+        let root = std::env::var("PWD").unwrap_or_else(|_| {
+            std::env::current_dir().map(|path| path.display().to_string()).unwrap_or_default()
+        });
+        if std::env::set_current_dir(&root).is_err() {
+            return fail(&format!("Failed to change directory to {root}"));
         }
-        _ => std::env::current_dir().map(|path| path.display().to_string()).unwrap_or_default(),
+        std::env::current_dir().map(|path| path.display().to_string()).unwrap_or(root)
     };
 
     let client = resolved.endpoint.client();
+    let managed = resolved.managed;
     let target_input = RunInput {
         server: resolved,
         message: Vec::new(),
@@ -226,12 +231,27 @@ pub async fn run_mini(input: MiniInput, server: &ServerParams) -> i32 {
         thinking: false,
         auto: false,
     };
-    // The reconnect seam (`handlers/mini.ts:29` wires the managed
-    // service's `reconnect()`): the resolved endpoint here is already
-    // ensure/replace-managed, so resolution itself retries without a
-    // second factory (the retry cadence stays in
-    // [`resolve_mini_target`]).
-    let target = match resolve_mini_target(&client, &target_input, &directory, || None).await {
+    // The reconnect seam (`handlers/mini.ts:29`): the managed
+    // service's `reconnect()` — `Service.ensure` with the version
+    // filter dropped (server-connection.ts `managedService`) — which
+    // re-resolves the endpoint and hands back a fresh client. A
+    // non-managed endpoint (`--server` URL / standalone lease) has no
+    // service to reconnect; ref leaves `reconnect` undefined there and
+    // the retry loop exits after the first failure (G-157).
+    let target = {
+        let mut reconnect = || async {
+            if !managed {
+                None
+            } else {
+                server_connection::ensure_managed(false)
+                    .await
+                    .ok()
+                    .map(|endpoint| endpoint.client())
+            }
+        };
+        resolve_mini_target(&client, &target_input, &directory, reconnect).await
+    };
+    let target = match target {
         Ok(target) => target,
         Err(message) => return fail(&message),
     };

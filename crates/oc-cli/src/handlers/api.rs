@@ -106,14 +106,9 @@ fn interpolate(
     }
 }
 
-fn basic_auth_header(password: Option<&str>) -> Option<String> {
-    use base64::Engine as _;
-    let password = password?;
-    Some(format!(
-        "Basic {}",
-        base64::engine::general_purpose::STANDARD.encode(format!("opencode:{password}"))
-    ))
-}
+// `Service.headers(endpoint)` is consumed directly from the endpoint
+// (server_connection::Endpoint::service_headers, G-154) — no local
+// re-implementation.
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub async fn run(
@@ -147,9 +142,13 @@ pub async fn run(
         let mut spec_url = reqwest::Url::parse(&endpoint.url).expect("valid endpoint url");
         spec_url.set_path("/openapi.json");
         let spec_request = oc_http::client().get(spec_url);
-        let spec_request = match basic_auth_header(endpoint.password.as_deref()) {
-            Some(auth) => spec_request.header("authorization", auth),
-            None => spec_request,
+        // `Service.headers(endpoint)` (api.ts:29 → service-probe.ts:72).
+        let spec_request = {
+            let mut request = spec_request;
+            for (name, value) in endpoint.service_headers() {
+                request = request.header(name, value);
+            }
+            request
         };
         let spec = match spec_request.send().await {
             Ok(response) if response.status().is_success() => response,
@@ -206,8 +205,11 @@ pub async fn run(
         reqwest::Method::from_bytes(resolved_request.method.as_bytes()).expect("valid method");
     let http = oc_http::client();
     let mut request = http.request(method, url);
-    if let Some(auth) = basic_auth_header(endpoint.password.as_deref()) {
-        request = request.header("authorization", auth);
+    // `fetch(new URL(...), { headers })` starts from
+    // `new Headers(Service.headers(endpoint))` (api.ts:29) — the auth
+    // header rides along even when -H overrides follow.
+    for (name, value) in endpoint.service_headers() {
+        request = request.header(name, value);
     }
     request = request.headers({
         let mut map = reqwest::header::HeaderMap::new();

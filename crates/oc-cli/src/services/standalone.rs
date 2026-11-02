@@ -103,22 +103,47 @@ impl Drop for StandaloneServer {
     }
 }
 
-/// `Standalone.start()`.
+/// `Standalone.Options` (standalone.ts:20-22): a custom server
+/// command seam. v2 never passes it from `ServerConnection.resolve`
+/// (`Standalone.start()` bare, server-connection.ts:46) — it exists so
+/// embedders/tests can replace the spawned server — mirrored here
+/// (G-158).
+#[derive(Debug, Clone, Default)]
+pub struct Options {
+    pub command: Option<Vec<String>>,
+}
+
+/// `Standalone.start()` — the default (self command) form.
+pub async fn start() -> Result<StandaloneServer, String> {
+    start_with(Options::default()).await
+}
+
+/// `Standalone.start(options)`.
 ///
 /// * Password: random 32 bytes base64url, forced through the child env
 ///   (`OPENCODE_PASSWORD`) so a user-exported value cannot shadow the lease
 ///   credential.
 /// * stderr: inherited when `OPENCODE_PRINT_LOGS=1`, ignored otherwise.
 /// * Ready protocol: first stdout line is `{"url":...}`; later stdout is
-///   drained so the child never sees EPIPE.
-pub async fn start() -> Result<StandaloneServer, String> {
+///   drained so the child never sees EPIPE. The wait is unbounded — ref
+///   `Deferred.await`s the ready line forever and fails only when the
+///   process exits first (`ensuring(Deferred.fail(...))`); the old 60 s
+///   recv timeout had no ref counterpart (G-158).
+pub async fn start_with(options: Options) -> Result<StandaloneServer, String> {
     let password = util::random_password();
-    let mut command = util::self_command();
-    let program = command.remove(0);
+    // `command(password, options)` (standalone.ts:25-29): a custom
+    // `[executable, ...args]` replaces `[...selfCommand(), "serve"]`;
+    // `--stdio --port 0` is always appended.
+    let mut argv: Vec<String> = options.command.unwrap_or_else(|| {
+        let mut command = util::self_command();
+        command.push("serve".to_owned());
+        command
+    });
+    argv.extend(["--stdio".to_owned(), "--port".to_owned(), "0".to_owned()]);
+    let program = argv.remove(0);
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let mut child = Command::new(&program)
-        .args(command)
-        .args(["serve", "--stdio", "--port", "0"])
+        .args(argv)
         .current_dir(cwd)
         .env("OPENCODE_PASSWORD", &password)
         .stdin(Stdio::piped())
@@ -156,11 +181,13 @@ pub async fn start() -> Result<StandaloneServer, String> {
         exited_for_task.store(true, std::sync::atomic::Ordering::Release);
     });
 
-    let ready_line =
-        tokio::task::spawn_blocking(move || line_rx.recv_timeout(Duration::from_secs(60)).ok())
-            .await
-            .map_err(|error| format!("standalone ready reader failed: {error}"))?;
+    let ready_line = tokio::task::spawn_blocking(move || line_rx.recv().ok())
+        .await
+        .map_err(|error| format!("standalone ready reader failed: {error}"))?;
 
+    // `recv` returns Err exactly when the reader thread ended (the
+    // child exited / closed stdout) — the deferred-failure of ref's
+    // `ensuring` clause. No timeout: ref waits indefinitely (G-158).
     let ready_line =
         if exited.load(std::sync::atomic::Ordering::Relaxed) { None } else { ready_line };
     let Some(ready_line) = ready_line else {
@@ -189,5 +216,31 @@ mod tests {
         let ready: Ready =
             serde_json::from_str(r#"{"url":"http://127.0.0.1:4096"}"#).expect("parse");
         assert_eq!(ready.url, "http://127.0.0.1:4096");
+    }
+
+    /// G-158: a custom `Options.command` replaces
+    /// `[...selfCommand(), "serve"]` — the seam spawns whatever
+    /// executable the caller supplies (v2 keeps the seam for
+    /// embedders; `ServerConnection.resolve` still passes the default).
+    #[test]
+    fn custom_command_replaces_self_command() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+        let script = dir.path().join("fake-server.sh");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\nprintf '{\"url\":\"http://127.0.0.1:9\"}\\n'\nsleep 30\n",
+        )
+        .expect("script");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        let server = runtime
+            .block_on(start_with(Options {
+                command: Some(vec![script.display().to_string(), "--custom-arg".to_owned()]),
+            }))
+            .expect("custom server starts");
+        assert_eq!(server.url, "http://127.0.0.1:9");
+        assert!(!server.password.is_empty(), "lease password generated");
+        server.stop();
     }
 }
