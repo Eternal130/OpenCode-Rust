@@ -1815,6 +1815,11 @@ fn detect_max_tokens_field(provider: &str, base_url: Option<&str>) -> MaxTokensF
         ("", "api.moonshot.ai"),
         ("togetherai", ""),
         ("", "api.together."),
+        // G-119: deepinfra.ts:47 `maxTokensField: "max_tokens"` — also the
+        // no-compat fallback path (detect is superseded when the facade
+        // injects `deepinfra_chat_compatibility`).
+        ("deepinfra", ""),
+        ("", "api.deepinfra.com"),
         ("zai", ""),
         ("zai-coding-plan", ""),
         ("zhipuai", ""),
@@ -1848,6 +1853,8 @@ fn detect_supports_store(provider: &str, base_url: Option<&str>) -> bool {
         names.contains(&p.as_str()) || needles.iter().any(|needle| url.contains(needle))
     };
     let non_standard = matches_any(&["nvidia"], &["integrate.api.nvidia.com"])
+        // G-119: deepinfra.ts:48 `supportsStore: false`.
+        || matches_any(&["deepinfra"], &["api.deepinfra.com"])
         || matches_any(&["moonshotai", "moonshotai-cn"], &["api.moonshot."])
         || matches_any(&["togetherai", "together"], &["api.together."])
         || matches_any(
@@ -3347,6 +3354,33 @@ pub fn alibaba_chat_route(transport: SharedTransport, auth: Option<AuthDefinitio
     )
 }
 
+/// DigitalOcean (`providers/digitalocean.ts`): the OpenAI chat protocol
+/// wrapped with the `cacheControl()` breakpoint lowering
+/// (digitalocean.ts:22-31 — `Protocol.make` over `OpenAIChat.fromRequest`
+/// with `cacheControl: cacheControl()`). Two layers matter (G-118):
+/// `cache_control: true` makes the body builder lower inline `CacheHint`s
+/// onto the wire as `cache_control` breakpoints, and the route id
+/// `"digitalocean"` (the ref `Route.make` id) matches cache-policy's
+/// `RESPECTS_INLINE_HINTS` entry so `apply_cache_policy` actually places
+/// the hints instead of no-op'ing on `"openai-chat"`.
+pub fn digitalocean_chat_route(transport: SharedTransport, auth: Option<AuthDefinition>) -> Route {
+    let ext = OpenAiChatExt {
+        id: "digitalocean-chat",
+        cache_control: true,
+        ..OpenAiChatExt::base()
+    };
+    chat_route(
+        "digitalocean",
+        Some("digitalocean"),
+        Some("digitalocean"),
+        Some("https://inference.do-ai.run/v1"),
+        Arc::new(OpenAiChat::new(ext)),
+        Framing::sse_with_done(),
+        auth,
+        transport,
+    )
+}
+
 /// Compatibility preset for models on the native OpenAI Chat route.
 pub fn openai_chat_compatibility() -> LanguageModelCompatibility {
     LanguageModelCompatibility::default()
@@ -3413,6 +3447,54 @@ pub fn alibaba_chat_compatibility() -> LanguageModelCompatibility {
         supports_strict_mode: Some(false),
         reasoning_field: Some("reasoning_content".into()),
         zai_tool_stream: Some(false),
+        ..Default::default()
+    }
+}
+
+/// `deepinfra.ts` model compatibility (deepinfra.ts:46-52; G-119).
+pub fn deepinfra_chat_compatibility() -> LanguageModelCompatibility {
+    LanguageModelCompatibility {
+        max_tokens_field: Some(MaxTokensFieldCompatibility::MaxTokens),
+        reasoning_field: Some("reasoning_content".into()),
+        supports_store: Some(false),
+        supports_prompt_cache_key: Some(true),
+        ..Default::default()
+    }
+}
+
+/// `togetherai.ts` model compatibility (togetherai.ts:44-49).
+pub fn togetherai_chat_compatibility() -> LanguageModelCompatibility {
+    LanguageModelCompatibility {
+        max_tokens_field: Some(MaxTokensFieldCompatibility::MaxTokens),
+        supports_store: Some(false),
+        supports_strict_mode: Some(false),
+        ..Default::default()
+    }
+}
+
+/// `cerebras.ts` model compatibility (cerebras.ts:41-48; G-121).
+pub fn cerebras_chat_compatibility() -> LanguageModelCompatibility {
+    LanguageModelCompatibility {
+        max_tokens_field: Some(MaxTokensFieldCompatibility::MaxTokens),
+        reasoning_field: Some("reasoning".into()),
+        supports_store: Some(false),
+        supports_prompt_cache_key: Some(true),
+        ..Default::default()
+    }
+}
+
+/// `fireworks.ts` model compatibility (fireworks.ts:49-51; G-121).
+pub fn fireworks_chat_compatibility() -> LanguageModelCompatibility {
+    LanguageModelCompatibility {
+        supports_prompt_cache_key: Some(true),
+        ..Default::default()
+    }
+}
+
+/// `digitalocean.ts` model compatibility (digitalocean.ts:44-50; G-121).
+pub fn digitalocean_chat_compatibility() -> LanguageModelCompatibility {
+    LanguageModelCompatibility {
+        supports_prompt_cache_key: Some(true),
         ..Default::default()
     }
 }

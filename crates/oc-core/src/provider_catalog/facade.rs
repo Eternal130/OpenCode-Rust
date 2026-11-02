@@ -47,8 +47,10 @@ use oc_ai::protocols::gemini::{google_route, GoogleConfig};
 use oc_ai::protocols::google_interactions::{google_interactions_route, GoogleInteractionsConfig};
 use oc_ai::protocols::mistral_chat::{mistral_route_for_package, MistralConfig};
 use oc_ai::protocols::openai_chat::{
-    alibaba_chat_route, deepseek_chat_route, groq_chat_route, openai_chat_route,
-    openrouter_chat_route, venice_chat_route, zai_chat_route,
+    alibaba_chat_route, cerebras_chat_compatibility, deepinfra_chat_compatibility,
+    deepseek_chat_route, digitalocean_chat_route, digitalocean_chat_compatibility,
+    fireworks_chat_compatibility, groq_chat_route, openai_chat_route, openrouter_chat_route,
+    togetherai_chat_compatibility, venice_chat_route, zai_chat_route,
 };
 use oc_ai::protocols::openai_compatible::{
     openai_compatible_chat_configured, openai_compatible_responses_route,
@@ -67,7 +69,10 @@ use oc_ai::route::auth::{self, Secret};
 use oc_ai::route::client::{Route, RouteDefaults, RoutePatch};
 use oc_ai::route::endpoint::EndpointPatch;
 use oc_ai::route::{AuthDefinition, SharedTransport};
-use oc_ai::schema::options::{merge_json_records, merge_string_records, HttpOptions};
+use oc_ai::schema::options::{
+    merge_json_records, merge_string_records, HttpOptions, LanguageModelCompatibility,
+    MaxTokensFieldCompatibility,
+};
 use oc_ai::LanguageModel;
 use oc_schema::model::Info as ModelInfo;
 use oc_schema::provider::{Activation, Settings as ProviderSettings};
@@ -541,10 +546,10 @@ pub fn language_model_for_model(
         })
     };
     let route = apply_model_overlays(&route, model);
-    route.model(model.id.as_str(), None).map_err(|error| ProviderError::Configuration {
-        provider: provider_id.to_string(),
-        message: error.to_string(),
-    })
+    // G-119/G-121: the package compatibility presets the TS provider files
+    // inject at `configure().model()`, under the model-level overlay
+    // (opencode.ts:270-271).
+    bind_model_with_compat(&route, model.id.as_str(), &package, model.compatibility.as_ref(), provider_id)
 }
 
 /// Bearer chain: explicit key, then each catalog env var (lazy env reads).
@@ -848,7 +853,20 @@ fn build_route(
             .with(RoutePatch { provider: Some(provider_id.to_string()), ..Default::default() }))
         }
         ProtocolFamily::OpenAIChat => {
-            let auth = bearer_auth(api_key, env);
+            // G-123: the provider env fallback chains hardcoded in the TS
+            // provider files that the models-dev snapshot doesn't carry
+            // (togetherai.ts:37, digitalocean.ts:36) — appended after the
+            // catalog order.
+            let env_chain = package_env_chain(package, env);
+            let auth = bearer_auth(api_key, &env_chain);
+            // G-119: deepinfra normalizes every configured baseURL — trim
+            // trailing slashes, append `/openai` unless already suffixed
+            // (deepinfra.ts:38-44).
+            let base_url = if package == "@opencode/ai/providers/deepinfra" {
+                base_url.map(|url| deepinfra_base_url(&url))
+            } else {
+                base_url
+            };
             let baked = package_has_baked_base(package);
             let route = match package {
                 "@opencode/ai/providers/deepseek" => deepseek_chat_route(transport, Some(auth)),
@@ -860,6 +878,13 @@ fn build_route(
                     zai_chat_route(transport, Some(auth))
                 }
                 "@opencode/ai/providers/alibaba/chat" => alibaba_chat_route(transport, Some(auth)),
+                // G-118: DigitalOcean's own route — the OpenAI chat protocol
+                // with `cache_control` breakpoint lowering and the route id
+                // `"digitalocean"` cache-policy's RESPECTS_INLINE_HINTS
+                // matches (digitalocean.ts:19-35).
+                "@opencode/ai/providers/digitalocean" => {
+                    digitalocean_chat_route(transport, Some(auth))
+                }
                 // builtin-table reconciliation: the chat-model re-export
                 // rides the same factory with the baked api.openai.com
                 // base (providers/openai/chat.ts:1).
@@ -873,13 +898,19 @@ fn build_route(
                 _ => {
                     // generic chat: the provider's own endpoint is required
                     // (falling back to the OpenAI default URL would silently
-                    // send another provider's traffic to api.openai.com)
-                    let base = base_url.clone().ok_or_else(|| ProviderError::Configuration {
-                        provider: provider_id.to_string(),
-                        message: format!(
-                            "package `{package}` needs a baseURL (set provider.{provider_id}.baseURL)"
-                        ),
-                    })?;
+                    // send another provider's traffic to api.openai.com) —
+                    // except the packages with a baked default the snapshot
+                    // doesn't carry (G-119/G-120: deepinfra.ts:10,
+                    // togetherai.ts:10, cerebras.ts:10).
+                    let base = base_url
+                        .clone()
+                        .or_else(|| baked_chat_base(package).map(str::to_string))
+                        .ok_or_else(|| ProviderError::Configuration {
+                            provider: provider_id.to_string(),
+                            message: format!(
+                                "package `{package}` needs a baseURL (set provider.{provider_id}.baseURL)"
+                            ),
+                        })?;
                     openai_chat_route(transport).with(RoutePatch {
                         provider: Some(provider_id.to_string()),
                         auth: Some(auth),
@@ -969,7 +1000,129 @@ fn package_has_baked_base(package: &str) -> bool {
             | "@opencode/ai/providers/zai-coding-plan/chat"
             | "@opencode/ai/providers/alibaba/chat"
             | "@opencode/ai/providers/openai/chat"
+            // G-118/G-119/G-120: the packages whose baked defaults the
+            // models-dev snapshot's missing `api` field dropped.
+            | "@opencode/ai/providers/digitalocean"
+            | "@opencode/ai/providers/deepinfra"
+            | "@opencode/ai/providers/togetherai"
+            | "@opencode/ai/providers/cerebras"
     )
+}
+
+/// Baked chat default base URLs the models-dev snapshot doesn't carry
+/// (G-118/G-119/G-120): digitalocean.ts:11, deepinfra.ts:10,
+/// togetherai.ts:10, cerebras.ts:10. The factory-baked families
+/// (deepseek/groq/…) bake theirs inside their route constructors.
+fn baked_chat_base(package: &str) -> Option<&'static str> {
+    Some(match package {
+        "@opencode/ai/providers/digitalocean" => "https://inference.do-ai.run/v1",
+        "@opencode/ai/providers/deepinfra" => "https://api.deepinfra.com/v1/openai",
+        "@opencode/ai/providers/togetherai" => "https://api.together.xyz/v1",
+        "@opencode/ai/providers/cerebras" => "https://api.cerebras.ai/v1",
+        _ => return None,
+    })
+}
+
+/// deepinfra baseURL normalization (deepinfra.ts:38-44; G-119): trim
+/// trailing slashes, append `/openai` unless the URL already ends with it.
+fn deepinfra_base_url(url: &str) -> String {
+    let root = url.trim_end_matches('/');
+    if root.ends_with("/openai") {
+        root.to_string()
+    } else {
+        format!("{root}/openai")
+    }
+}
+
+/// Provider env fallback chains hardcoded in the TS provider files that the
+/// models-dev snapshot's single-entry env lists don't carry (G-123):
+/// togetherai.ts:37 `["TOGETHER_API_KEY", "TOGETHER_AI_API_KEY"]`,
+/// digitalocean.ts:36 `["DIGITALOCEAN_ACCESS_TOKEN", "DIGITALOCEAN_API_KEY",
+/// "DO_INFERENCE_API_KEY"]`. Appended after the catalog order (a snapshot
+/// that later grows the entries degrades to no duplication).
+fn package_env_chain(package: &str, env: &[String]) -> Vec<String> {
+    let mut chain = env.to_vec();
+    let fallbacks: &[&str] = match package {
+        "@opencode/ai/providers/togetherai" => &["TOGETHER_AI_API_KEY"],
+        "@opencode/ai/providers/digitalocean" => &["DIGITALOCEAN_API_KEY", "DO_INFERENCE_API_KEY"],
+        _ => &[],
+    };
+    for name in fallbacks {
+        if !chain.iter().any(|existing| existing.as_str() == *name) {
+            chain.push((*name).to_string());
+        }
+    }
+    chain
+}
+
+/// Per-package model compatibility the TS provider files inject at
+/// `configure().model({... compatibility })` (G-119/G-121): deepinfra.ts:46-52,
+/// togetherai.ts:44-49, cerebras.ts:41-48, fireworks.ts:49-51,
+/// digitalocean.ts:44-50. The facade-side counterpart of the baked families'
+/// `*_chat_compatibility()` presets.
+fn package_chat_compatibility(package: &str) -> Option<LanguageModelCompatibility> {
+    match package {
+        "@opencode/ai/providers/deepinfra" => Some(deepinfra_chat_compatibility()),
+        "@opencode/ai/providers/togetherai" => Some(togetherai_chat_compatibility()),
+        "@opencode/ai/providers/cerebras" => Some(cerebras_chat_compatibility()),
+        "@opencode/ai/providers/fireworks" => Some(fireworks_chat_compatibility()),
+        "@opencode/ai/providers/digitalocean" => Some(digitalocean_chat_compatibility()),
+        _ => None,
+    }
+}
+
+/// Spread the model-level compatibility overlay over the package base
+/// (opencode.ts:270-271 `{...base, ...config}` — per-field, model wins).
+fn overlay_model_compatibility(
+    mut base: LanguageModelCompatibility,
+    overlay: Option<&oc_schema::model::Compatibility>,
+) -> LanguageModelCompatibility {
+    let Some(overlay) = overlay else { return base };
+    if let Some(field) = &overlay.reasoning_field {
+        base.reasoning_field = Some(field.clone());
+    }
+    if let Some(value) = overlay.require_reasoning {
+        base.require_reasoning = Some(value);
+    }
+    if let Some(value) = overlay.max_tokens_field {
+        base.max_tokens_field = Some(match value {
+            oc_schema::model::MaxTokensField::MaxTokens => {
+                MaxTokensFieldCompatibility::MaxTokens
+            }
+            oc_schema::model::MaxTokensField::MaxCompletionTokens => {
+                MaxTokensFieldCompatibility::MaxCompletionTokens
+            }
+        });
+    }
+    if let Some(value) = overlay.require_finish_reason {
+        base.require_finish_reason = Some(value);
+    }
+    if let Some(value) = overlay.require_assistant_after_tool {
+        base.require_assistant_after_tool = Some(value);
+    }
+    if let Some(value) = overlay.supports_prompt_cache_key {
+        base.supports_prompt_cache_key = Some(value);
+    }
+    base
+}
+
+/// Bind the route model with the package compatibility (G-119/G-121) under
+/// the model-level overlay.
+fn bind_model_with_compat(
+    route: &Route,
+    model_id: &str,
+    package: &str,
+    overlay: Option<&oc_schema::model::Compatibility>,
+    provider_id: &str,
+) -> Result<LanguageModel, ProviderError> {
+    let bound = route.model(model_id, None).map_err(|error| ProviderError::Configuration {
+        provider: provider_id.to_string(),
+        message: error.to_string(),
+    })?;
+    Ok(match package_chat_compatibility(package) {
+        Some(compat) => bound.with_compatibility(overlay_model_compatibility(compat, overlay)),
+        None => bound,
+    })
 }
 
 /// Fold `Model.Info` overlays into the route defaults. `settings.rest`
@@ -1148,6 +1301,26 @@ pub fn custom_language_model(
     })
 }
 
+/// Bind the native-package custom lane's model with the same package
+/// compatibility injection as the catalog lane (G-119/G-121), under the
+/// config model's compatibility overlay.
+#[allow(clippy::missing_errors_doc)]
+fn bind_custom_native_model(
+    route: &Route,
+    wire_id: &str,
+    package: &str,
+    model: &CustomModel,
+    provider_id: &str,
+) -> Result<LanguageModel, ProviderError> {
+    bind_model_with_compat(
+        route,
+        wire_id,
+        package,
+        model.compatibility.as_ref(),
+        provider_id,
+    )
+}
+
 /// The native-package custom binding: route through the catalog family
 /// dispatch with a synthesized route model (the custom lane has no
 /// catalog Info) and the merged overlays. Azure needs the customer's
@@ -1282,10 +1455,7 @@ fn custom_native_language_model(
         },
         ..Default::default()
     });
-    route.model(wire_id, None).map_err(|error| ProviderError::Configuration {
-        provider: custom.id.clone(),
-        message: error.to_string(),
-    })
+    bind_custom_native_model(&route, wire_id, &package, model, &custom.id)
 }
 
 // =============================================================================
@@ -1863,6 +2033,312 @@ mod tests {
             language_model(&context, catalog, "deepseek", &model_id, &ModelConnection::default())
                 .expect("deepseek binds over its baked base URL");
         assert_eq!(model.provider.as_str(), "deepseek");
+    }
+
+    /// G-118: DigitalOcean binds its own chat route — the `cache_control`
+    /// breakpoint lowering is enabled AND `apply_cache_policy` actually
+    /// places hints (route id "digitalocean" hits RESPECTS_INLINE_HINTS;
+    /// on the old generic "openai-chat" route the policy was a no-op and
+    /// the dead snapshot entry never matched).
+    #[test]
+    fn provider_facade_digitalocean_cache_control_end_to_end() {
+        let context = context();
+        let catalog = Catalog::embedded();
+        let provider = catalog.provider("digitalocean").expect("digitalocean in catalog");
+        let model_id = provider.models.first().expect("has models").id.as_str().to_string();
+        let model = language_model(
+            &context,
+            catalog,
+            "digitalocean",
+            &model_id,
+            &ModelConnection { api_key: Some("do-key".into()), ..Default::default() },
+        )
+        .expect("digitalocean binds");
+        assert_eq!(model.route.id, "digitalocean");
+        assert_eq!(
+            model.route.endpoint.base_url.as_deref(),
+            Some("https://inference.do-ai.run/v1"),
+            "the baked/catalog base, no user config needed"
+        );
+        let route = Arc::clone(&model.route);
+        let mut request = oc_ai::schema::LLMRequest::new(model);
+        request.system = vec![oc_ai::schema::SystemPart::new("You are concise.")];
+        request.messages = vec![oc_ai::schema::Message::user("hi")];
+        // auto cache policy → hints on the system boundary
+        let prepared = oc_ai::cache_policy::apply_cache_policy(&request);
+        let body = route.build_body(&prepared).expect("body");
+        let wire = serde_json::to_string(&body).expect("json");
+        assert!(
+            wire.contains("cache_control"),
+            "cache_control breakpoints emitted on the digitalocean route: {wire}"
+        );
+        // G-121: digitalocean.ts:52 supportsPromptCacheKey
+        let mut keyed = request.clone();
+        keyed.prompt_cache_key = Some("session_do".into());
+        let body = route.build_body(&keyed).expect("body");
+        assert_eq!(body.get("prompt_cache_key"), Some(&serde_json::json!("session_do")));
+    }
+
+    /// G-118 second layer regression: the generic openai-chat route keeps
+    /// cache_policy a no-op (OpenAI implicit prefix caching).
+    #[test]
+    fn provider_facade_generic_chat_route_has_no_inline_cache_hints() {
+        let context = context();
+        let catalog = Catalog::embedded();
+        let provider = catalog.provider("togetherai").expect("togetherai in catalog");
+        let model_id = provider.models.first().expect("has models").id.as_str().to_string();
+        let model = language_model(
+            &context,
+            catalog,
+            "togetherai",
+            &model_id,
+            &ModelConnection::default(),
+        )
+        .expect("togetherai binds");
+        assert_eq!(model.route.id, "openai-chat");
+        let route = Arc::clone(&model.route);
+        let mut request = oc_ai::schema::LLMRequest::new(model);
+        request.system = vec![oc_ai::schema::SystemPart::new("You are concise.")];
+        request.messages = vec![oc_ai::schema::Message::user("hi")];
+        let prepared = oc_ai::cache_policy::apply_cache_policy(&request);
+        let body = route.build_body(&prepared).expect("body");
+        let wire = serde_json::to_string(&body).expect("json");
+        assert!(!wire.contains("cache_control"), "generic chat stays hint-free: {wire}");
+    }
+
+    /// G-119/G-120: deepinfra/togetherai/cerebras bind with zero config over
+    /// their baked default base URLs (the snapshot has no `api` field for
+    /// them; the old generic branch errored "needs a baseURL").
+    #[test]
+    fn provider_facade_deepinfra_togetherai_cerebras_baked_defaults() {
+        let context = context();
+        let catalog = Catalog::embedded();
+        for (provider_id, base) in [
+            ("deepinfra", "https://api.deepinfra.com/v1/openai"),
+            ("togetherai", "https://api.together.xyz/v1"),
+            ("cerebras", "https://api.cerebras.ai/v1"),
+        ] {
+            let provider = catalog.provider(provider_id).unwrap_or_else(|| {
+                panic!("{provider_id} in catalog")
+            });
+            let model_id =
+                provider.models.first().expect("has models").id.as_str().to_string();
+            let model = language_model(
+                &context,
+                catalog,
+                provider_id,
+                &model_id,
+                &ModelConnection::default(),
+            )
+            .unwrap_or_else(|error| panic!("{provider_id} binds over its baked base: {error}"));
+            assert_eq!(
+                model.route.endpoint.base_url.as_deref(),
+                Some(base),
+                "{provider_id} baked default"
+            );
+        }
+    }
+
+    /// G-119: deepinfra custom baseURLs get trailing slashes trimmed and
+    /// `/openai` appended unless already suffixed (deepinfra.ts:38-44).
+    #[test]
+    fn provider_facade_deepinfra_base_url_normalization() {
+        let context = context();
+        let catalog = Catalog::embedded();
+        let provider = catalog.provider("deepinfra").expect("deepinfra in catalog");
+        let model_id = provider.models.first().expect("has models").id.as_str().to_string();
+        for (input, expected) in [
+            ("https://proxy.test/v1", "https://proxy.test/v1/openai"),
+            ("https://proxy.test/v1/", "https://proxy.test/v1/openai"),
+            ("https://proxy.test/v1///", "https://proxy.test/v1/openai"),
+            ("https://proxy.test/v1/openai", "https://proxy.test/v1/openai"),
+            ("https://proxy.test/v1/openai/", "https://proxy.test/v1/openai"),
+        ] {
+            let model = language_model(
+                &context,
+                catalog,
+                "deepinfra",
+                &model_id,
+                &ModelConnection {
+                    base_url: Some(input.to_string()),
+                    ..Default::default()
+                },
+            )
+            .expect("deepinfra binds");
+            assert_eq!(
+                model.route.endpoint.base_url.as_deref(),
+                Some(expected),
+                "{input} → {expected}"
+            );
+        }
+    }
+
+    /// G-121: cerebras `reasoningField: "reasoning"` + promptCacheKey reach
+    /// the wire body via the facade-injected compatibility (cerebras.ts:41-48).
+    #[test]
+    fn provider_facade_cerebras_reasoning_field_and_prompt_cache_key() {
+        let context = context();
+        let catalog = Catalog::embedded();
+        let provider = catalog.provider("cerebras").expect("cerebras in catalog");
+        let model_id = provider.models.first().expect("has models").id.as_str().to_string();
+        let model = language_model(
+            &context,
+            catalog,
+            "cerebras",
+            &model_id,
+            &ModelConnection { api_key: Some("cb-key".into()), ..Default::default() },
+        )
+        .expect("cerebras binds");
+        let compatibility = model.compatibility.as_ref().expect("compatibility injected");
+        assert_eq!(compatibility.reasoning_field.as_deref(), Some("reasoning"));
+        assert_eq!(compatibility.supports_prompt_cache_key, Some(true));
+        let route = Arc::clone(&model.route);
+        let mut request = oc_ai::schema::LLMRequest::new(model);
+        request.messages = vec![
+            oc_ai::schema::Message::user("hi"),
+            oc_ai::schema::Message::assistant(vec![oc_ai::schema::ContentPart::Reasoning {
+                text: "thinking it through".into(),
+                encrypted: None,
+                cache: None,
+                metadata: None,
+                provider_metadata: None,
+            }]),
+            oc_ai::schema::Message::user("and?"),
+        ];
+        request.prompt_cache_key = Some("session_cerebras".into());
+        let body = route.build_body(&request).expect("body");
+        let wire = serde_json::to_string(&body).expect("json");
+        assert!(
+            wire.contains("\"reasoning\":\"thinking it through\""),
+            "assistant reasoning mapped to the cerebras `reasoning` field: {wire}"
+        );
+        assert!(
+            !wire.contains("\"reasoning_content\""),
+            "no deepseek-style reasoning field: {wire}"
+        );
+        assert_eq!(body.get("prompt_cache_key"), Some(&serde_json::json!("session_cerebras")));
+        // store is stripped (supportsStore: false)
+        assert!(body.get("store").is_none());
+    }
+
+    /// G-121: fireworks + deepinfra prompt cache keys (fireworks.ts:51,
+    /// deepinfra.ts:51); deepinfra reasoning rides `reasoning_content`.
+    #[test]
+    fn provider_facade_fireworks_deepinfra_prompt_cache_key() {
+        let context = context();
+        let catalog = Catalog::embedded();
+        for (provider_id, reasoning_field) in
+            [("fireworks-ai", "reasoning_content"), ("deepinfra", "reasoning_content")]
+        {
+            // fireworks' package compat sets only promptCacheKey
+            // (fireworks.ts:51); the `reasoning_content` field here comes
+            // from the model's catalog `interleaved` overlay spread over
+            // the package base (opencode.ts:270-271) — deepinfra's from
+            // the package compat itself (deepinfra.ts:49).
+            let provider = catalog.provider(provider_id).unwrap_or_else(|| {
+                panic!("{provider_id} in catalog")
+            });
+            let model_id =
+                provider.models.first().expect("has models").id.as_str().to_string();
+            let model = language_model(
+                &context,
+                catalog,
+                provider_id,
+                &model_id,
+                &ModelConnection::default(),
+            )
+            .unwrap_or_else(|error| panic!("{provider_id} binds: {error}"));
+            let compatibility = model.compatibility.as_ref().expect("compatibility injected");
+            assert_eq!(compatibility.supports_prompt_cache_key, Some(true), "{provider_id}");
+            assert_eq!(compatibility.reasoning_field.as_deref(), Some(reasoning_field), "{provider_id}");
+            let route = Arc::clone(&model.route);
+            let mut request = oc_ai::schema::LLMRequest::new(model);
+            request.messages = vec![oc_ai::schema::Message::user("hi")];
+            request.prompt_cache_key = Some("session_key".into());
+            let body = route.build_body(&request).expect("body");
+            assert_eq!(
+                body.get("prompt_cache_key"),
+                Some(&serde_json::json!("session_key")),
+                "{provider_id} prompt_cache_key in body"
+            );
+        }
+    }
+
+    /// G-123: the env fallback chains the snapshot doesn't carry — a
+    /// togetherai key via TOGETHER_AI_API_KEY (not the catalog's
+    /// TOGETHER_API_KEY) reaches the wire as the bearer.
+    #[test]
+    fn provider_facade_togetherai_env_fallback_chain() {
+        std::env::set_var("TOGETHER_AI_API_KEY", "together-fallback-key");
+        std::env::remove_var("TOGETHER_API_KEY");
+        let context = context();
+        let catalog = Catalog::embedded();
+        let provider = catalog.provider("togetherai").expect("togetherai in catalog");
+        let model_id = provider.models.first().expect("has models").id.as_str().to_string();
+        let model = language_model(
+            &context,
+            catalog,
+            "togetherai",
+            &model_id,
+            &ModelConnection::default(),
+        )
+        .expect("togetherai binds");
+        let route = Arc::clone(&model.route);
+        let mut request = oc_ai::schema::LLMRequest::new(model);
+        request.messages = vec![oc_ai::schema::Message::user("hi")];
+        let prepared = route.prepare_request(&request);
+        let body = route.build_body(&prepared).expect("body");
+        let (transport_request, _) = route.prepare_transport(&prepared, &body).expect("wire");
+        assert_eq!(
+            transport_request.header("authorization"),
+            Some("Bearer together-fallback-key"),
+            "the TOGETHER_AI_API_KEY fallback is consulted"
+        );
+        std::env::remove_var("TOGETHER_AI_API_KEY");
+    }
+
+    /// G-123 unit: the chain composition (catalog order first, hardcoded
+    /// fallbacks appended, no duplicates).
+    #[test]
+    fn provider_facade_env_chain_composition() {
+        assert_eq!(
+            package_env_chain(
+                "@opencode/ai/providers/togetherai",
+                &["TOGETHER_API_KEY".to_string()]
+            ),
+            vec!["TOGETHER_API_KEY".to_string(), "TOGETHER_AI_API_KEY".to_string()]
+        );
+        assert_eq!(
+            package_env_chain(
+                "@opencode/ai/providers/digitalocean",
+                &["DIGITALOCEAN_ACCESS_TOKEN".to_string()]
+            ),
+            vec![
+                "DIGITALOCEAN_ACCESS_TOKEN".to_string(),
+                "DIGITALOCEAN_API_KEY".to_string(),
+                "DO_INFERENCE_API_KEY".to_string()
+            ]
+        );
+        // a snapshot that already carries the full chain stays unchanged
+        assert_eq!(
+            package_env_chain(
+                "@opencode/ai/providers/digitalocean",
+                &[
+                    "DIGITALOCEAN_ACCESS_TOKEN".to_string(),
+                    "DIGITALOCEAN_API_KEY".to_string(),
+                    "DO_INFERENCE_API_KEY".to_string()
+                ]
+            ),
+            vec![
+                "DIGITALOCEAN_ACCESS_TOKEN".to_string(),
+                "DIGITALOCEAN_API_KEY".to_string(),
+                "DO_INFERENCE_API_KEY".to_string()
+            ]
+        );
+        assert_eq!(
+            package_env_chain("@opencode/ai/providers/groq", &["GROQ_API_KEY".to_string()]),
+            vec!["GROQ_API_KEY".to_string()]
+        );
     }
 
     #[test]

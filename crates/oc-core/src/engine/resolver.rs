@@ -481,6 +481,16 @@ impl CatalogModelResolver {
                 });
                 route
                     .model(model.id.as_str(), None)
+                    .map(|downgraded| {
+                        // G-121: keep the package compatibility the facade
+                        // injected (the downgrade only swaps the auth).
+                        match model.compatibility.clone() {
+                            Some(compatibility) => {
+                                downgraded.with_compatibility(compatibility)
+                            }
+                            None => downgraded,
+                        }
+                    })
                     .map_err(|error| ModelError::Resolver(format!("{message}: {error}")))?
             }
             None => model,
