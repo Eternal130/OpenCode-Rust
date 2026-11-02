@@ -5125,6 +5125,9 @@ pub enum LoopRequest {
         sanitize: bool,
         format: String,
         destination: String,
+        /// G-132 — the markdown formatter's toggles.
+        thinking: bool,
+        tools: bool,
     },
     /// `session.remove`.
     SessionRemove {
@@ -5334,6 +5337,8 @@ pub enum LoopFetch {
         session_id: String,
         format: String,
         destination: String,
+        thinking: bool,
+        tools: bool,
         result: Result<oc_client::types::SessionTransferData, String>,
     },
     /// `session.fork` resolved (the new session id; the seed text
@@ -6034,7 +6039,7 @@ pub fn spawn_loop_fetcher(
                         let _ = tx.send(LoopFetch::SessionCompactResult { session_id: id, result });
                     });
                 }
-                LoopRequest::SessionExport { session_id, sanitize, format, destination } => {
+                LoopRequest::SessionExport { session_id, sanitize, format, destination, thinking, tools } => {
                     let client = client.clone();
                     let tx = tx.clone();
                     tokio::spawn(async move {
@@ -6058,6 +6063,8 @@ pub fn spawn_loop_fetcher(
                             session_id,
                             format,
                             destination,
+                            thinking,
+                            tools,
                             result,
                         });
                     });
@@ -6497,12 +6504,22 @@ impl crate::store::SessionActionSink for HttpSessionActionSink {
             model: model.cloned(),
         });
     }
-    fn export(&self, session_id: &str, sanitize: bool, format: &str, destination: &str) {
+    fn export(
+        &self,
+        session_id: &str,
+        sanitize: bool,
+        format: &str,
+        destination: &str,
+        thinking: bool,
+        tools: bool,
+    ) {
         let _ = self.tx.send(LoopRequest::SessionExport {
             session_id: session_id.to_owned(),
             sanitize,
             format: format.to_owned(),
             destination: destination.to_owned(),
+            thinking,
+            tools,
         });
     }
     fn remove(&self, session_id: &str) {
@@ -8880,7 +8897,7 @@ pub async fn run_with_size(
                         });
                     }
                 }
-                LoopFetch::SessionExportResult { session_id, format, destination, result } => {
+                LoopFetch::SessionExportResult { session_id, format, destination, thinking, tools, result } => {
                     match result {
                         Ok(transfer) => {
                             let content = if format == "json" {
@@ -8891,7 +8908,12 @@ pub async fn run_with_size(
                                     })
                                     .unwrap_or_default()
                             } else {
-                                format_session_transcript(&transfer, false, true)
+                                // G-132 — the form's thinking/tools
+                                // toggles drive the formatter
+                                // (formatSessionTranscript(info,
+                                // messages, thinking, tools),
+                                // index.tsx:1225-1227).
+                                format_session_transcript(&transfer, thinking, tools)
                             };
                             if destination == "clipboard" {
                                 if app.store.clipboard_write(&content).is_ok() {

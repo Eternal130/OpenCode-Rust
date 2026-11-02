@@ -1046,19 +1046,54 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
             }
             SelectProps::new("Fork session", options)
         }
-        // The export destinations (DialogExportOptions' format ×
-        // action rows collapsed to four).
-        DialogKind::SessionExport { .. } => SelectProps::new(
-            "Export session",
-            vec![
-                SelectOption::titled("Markdown → clipboard", "markdown:clipboard")
-                    .described("thinking off, tool calls on"),
-                SelectOption::titled("Markdown → file", "markdown:file")
-                    .described("thinking off, tool calls on"),
-                SelectOption::titled("JSON → clipboard", "json:clipboard").described("unsanitized"),
-                SelectOption::titled("JSON → file", "json:file").described("unsanitized"),
-            ],
-        ),
+        // G-132 — `DialogExportOptions` (dialog-export-options.tsx:
+        // 25-31 + 44-52) as the select-form: the format radio, the
+        // format-scoped toggles ([x]/[ ] rows), and the Copy/Export
+        // actions. Toggling/radio submits FLIP the store's
+        // `export_options` state and re-render the dialog; the action
+        // rows submit the export with the chosen values (the old
+        // four static destination rows are gone).
+        DialogKind::SessionExport { .. } => {
+            let options = store.export_options_state();
+            let markdown = options.format.as_str() == "markdown";
+            let mut rows = vec![
+                SelectOption::titled(
+                    format!("{} Markdown", if markdown { "◉" } else { "○" }),
+                    "format:markdown",
+                ),
+                SelectOption::titled(
+                    format!("{} JSON", if markdown { "○" } else { "◉" }),
+                    "format:json",
+                ),
+            ];
+            if markdown {
+                rows.push(
+                    SelectOption::titled(
+                        format!("{} Include thinking", checked(options.thinking)),
+                        "toggle:thinking",
+                    )
+                    .described("markdown only"),
+                );
+                rows.push(
+                    SelectOption::titled(
+                        format!("{} Include tools", checked(options.tools)),
+                        "toggle:tools",
+                    )
+                    .described("markdown only"),
+                );
+            } else {
+                rows.push(
+                    SelectOption::titled(
+                        format!("{} Sanitize sensitive data", checked(options.sanitize)),
+                        "toggle:sanitize",
+                    )
+                    .described("json only"),
+                );
+            }
+            rows.push(SelectOption::titled("Copy to clipboard", "action:copy"));
+            rows.push(SelectOption::titled("Export to file", "action:export"));
+            SelectProps::new("Export session", rows)
+        }
         // `DialogExportResult` (dialog-export-result.tsx:5-27): the
         // written path row; return/esc closes.
         DialogKind::ExportResult { path } => {
@@ -1991,8 +2026,13 @@ fn active_selection(store: &Store) -> crate::store::SessionSelection {
 }
 
 /// A muted status row (loading/error) — the placeholder surface.
-fn status_option(text: &str) -> SelectOption {
-    SelectOption::titled(text, "status").muted_placeholder()
+/// G-132 — the toggle row's checkbox (`[x]`/`[ ]`,
+/// dialog-export-options.tsx:135/159/183).
+fn checked(on: bool) -> &'static str {
+    if on { "[x]" } else { "[ ]" }
+}
+
+fn status_option(text: &str) -> SelectOption {    SelectOption::titled(text, "status").muted_placeholder()
 }
 
 /// `Locale.time` (`util/locale.ts:7-10` — `toLocaleTimeString` at
@@ -4920,19 +4960,44 @@ mod tests {
             Some(&crate::store::SessionActionCall::Background("ses_1".into()))
         );
 
-        // export → the destination dialog → the POST.
+        // export → the options form → toggles flip + the action
+        // submits (G-132).
         dispatcher.dispatch(&store, "session.export", None);
         assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::SessionExport { .. }));
+        // The default form: markdown, thinking ON (index.tsx:1213),
+        // tools ON.
+        let options = store.export_options_state();
+        assert_eq!(options.format.as_str(), "markdown");
+        assert!(options.thinking && options.tools && !options.sanitize);
+        // Flipping thinking + choosing JSON re-renders the form.
+        let submit = crate::components::dialog::execute_submission(
+            &store,
+            &mut dispatcher,
+            "toggle:thinking",
+        );
+        assert_eq!(submit, Dispatch::Handled);
+        assert!(!store.export_options_state().thinking);
         let submit =
-            crate::components::dialog::execute_submission(&store, &mut dispatcher, "markdown:file");
+            crate::components::dialog::execute_submission(&store, &mut dispatcher, "format:json");
+        assert_eq!(submit, Dispatch::Handled);
+        assert_eq!(store.export_options_state().format.as_str(), "json");
+        let submit =
+            crate::components::dialog::execute_submission(&store, &mut dispatcher, "toggle:sanitize");
+        assert_eq!(submit, Dispatch::Handled);
+        assert!(store.export_options_state().sanitize);
+        // The action row exports with the chosen values.
+        let submit =
+            crate::components::dialog::execute_submission(&store, &mut dispatcher, "action:export");
         assert_eq!(submit, Dispatch::Handled);
         assert_eq!(
             actions.calls.borrow().last(),
             Some(&crate::store::SessionActionCall::Export {
                 session_id: "ses_1".into(),
-                sanitize: false,
-                format: "markdown".into(),
-                destination: "file".into()
+                sanitize: true,
+                format: "json".into(),
+                destination: "file".into(),
+                thinking: false,
+                tools: true,
             })
         );
 

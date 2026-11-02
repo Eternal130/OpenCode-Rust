@@ -1638,10 +1638,23 @@ pub fn execute_submission(
             store.session_fork_submit(session_id.as_str(), before.as_deref());
             return crate::components::command_palette::Dispatch::Handled;
         }
-        // The export destinations: "format:destination".
+        // G-132 — the export-options form (dialog-export-options.
+        // tsx:44-52's `activate`): the format radio and the
+        // format-scoped toggles flip the store's export state and
+        // RE-RENDER the dialog; the action rows confirm with the
+        // chosen values (the destination mapping: copy → clipboard,
+        // export → file).
         Some(DialogKind::SessionExport { session_id }) => {
-            if let Some((format, destination)) = value.split_once(':') {
-                store.session_export_submit(session_id.as_str(), format, destination);
+            if let Some(action) = value.strip_prefix("action:") {
+                let format = store.export_options_state().format.as_str().to_owned();
+                let destination = if action == "copy" { "clipboard" } else { "file" };
+                store.session_export_submit(session_id.as_str(), &format, destination);
+            } else if value.starts_with("format:") || value.starts_with("toggle:") {
+                store.export_options_activate(value);
+                store.replace_dialog(
+                    DialogKind::SessionExport { session_id: session_id.clone() },
+                    DialogSize::Medium,
+                );
             } else {
                 store.clear_dialogs();
             }

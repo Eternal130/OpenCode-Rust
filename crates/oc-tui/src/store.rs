@@ -1801,6 +1801,8 @@ pub struct Store {
     /// Lane FINAL: the session-action API seam (compact/export/
     /// remove/background/fork/revert-stage/reload).
     session_action_sink: std::cell::RefCell<Rc<dyn SessionActionSink>>,
+    /// G-132 — the export-options form state.
+    export_options: std::cell::RefCell<ExportOptionsState>,
     /// Pending compaction inbox ids (`pending.list` items of type
     /// `compaction` — the `◇ Compaction queued` divider rows,
     /// rows.ts:72-79). `session.compaction.started` with a matching
@@ -2136,12 +2138,61 @@ impl ProjectSink for RecordingProjectSink {
 /// session command table, routes/session/index.tsx:945-1254 +
 /// app.tsx:1019-1034): dispatch arms run through it; tests record,
 /// production round-trips the loop fetcher.
+/// G-132 — `DialogExportOptions`'s store (dialog-export-options.tsx:
+/// 25-31): the export format radio + the toggles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExportOptionsState {
+    pub format: ExportFormat,
+    pub thinking: bool,
+    pub tools: bool,
+    pub sanitize: bool,
+}
+
+impl Default for ExportOptionsState {
+    fn default() -> Self {
+        // index.tsx:1213 seeds `defaultThinking: true`; tools/sanitize
+        // start true/false (dialog-export-options.tsx:26-29).
+        Self {
+            format: ExportFormat::Markdown,
+            thinking: true,
+            tools: true,
+            sanitize: false,
+        }
+    }
+}
+
+/// G-132 — `ExportFormat` (dialog-export-options.tsx:7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportFormat {
+    Markdown,
+    Json,
+}
+
+impl ExportFormat {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Markdown => "markdown",
+            Self::Json => "json",
+        }
+    }
+}
+
 pub trait SessionActionSink {
     /// `session.compact` (the current model rides the body).
     fn compact(&self, session_id: &str, model: Option<&ModelSelection>);
-    /// `session.export` (sanitize only for the json copy path; the
-    /// format/destination ride along for the result delivery).
-    fn export(&self, session_id: &str, sanitize: bool, format: &str, destination: &str);
+    /// `session.export` (sanitize only for the json path; the
+    /// format/destination/thinking/tools ride along for the result
+    /// delivery — G-132's interactive options).
+    fn export(
+        &self,
+        session_id: &str,
+        sanitize: bool,
+        format: &str,
+        destination: &str,
+        thinking: bool,
+        tools: bool,
+    );
     /// `session.remove` (the sessions dialog's two-press delete).
     fn remove(&self, session_id: &str);
     /// `session.background`.
@@ -2172,6 +2223,8 @@ pub enum SessionActionCall {
         sanitize: bool,
         format: String,
         destination: String,
+        thinking: bool,
+        tools: bool,
     },
     Remove(String),
     Background(String),
@@ -2205,12 +2258,22 @@ impl SessionActionSink for RecordingSessionActionSink {
             model: model.cloned(),
         });
     }
-    fn export(&self, session_id: &str, sanitize: bool, format: &str, destination: &str) {
+    fn export(
+        &self,
+        session_id: &str,
+        sanitize: bool,
+        format: &str,
+        destination: &str,
+        thinking: bool,
+        tools: bool,
+    ) {
         self.calls.borrow_mut().push(SessionActionCall::Export {
             session_id: session_id.to_owned(),
             sanitize,
             format: format.to_owned(),
             destination: destination.to_owned(),
+            thinking,
+            tools,
         });
     }
     fn remove(&self, session_id: &str) {
@@ -3812,6 +3875,7 @@ impl Store {
             revert_sink: std::cell::RefCell::new(Rc::new(RecordingRevertSink::default())),
             integration_sink: std::cell::RefCell::new(Rc::new(NoIntegrationSink)),
             project_sink: std::cell::RefCell::new(Rc::new(NoProjectSink)),
+            export_options: std::cell::RefCell::new(ExportOptionsState::default()),
             session_action_sink: std::cell::RefCell::new(Rc::new(
                 RecordingSessionActionSink::default(),
             )),
@@ -7875,10 +7939,52 @@ impl Store {
     /// `session.export`'s confirm (index.tsx:1217-1238): fire the
     /// export GET; the loop fetcher formats + delivers (clipboard
     /// write + toast, or the tmp file + result dialog).
+    /// G-132 — the interactive options ride through (sanitize only
+    /// asked for on the wire for `json`, index.tsx:1221-1223;
+    /// thinking/tools drive the markdown formatter, :1225-1227).
     pub fn session_export_submit(&self, session_id: &str, format: &str, destination: &str) {
-        let sanitize = format == "json" && destination == "clipboard";
-        self.session_action_sink.borrow().export(session_id, sanitize, format, destination);
+        let options = self.export_options_state();
+        let sanitize = format == "json" && options.sanitize;
+        self.session_action_sink.borrow().export(
+            session_id,
+            sanitize,
+            format,
+            destination,
+            options.thinking,
+            options.tools,
+        );
         self.clear_dialogs();
+    }
+
+    /// G-132 — the export-options form's live state
+    /// (`DialogExportOptions`'s store, dialog-export-options.tsx:
+    /// 25-31): format radio + the thinking/tools (markdown) and
+    /// sanitize (json) toggles. `defaultThinking` seeds `true`
+    /// (index.tsx:1213 passes `true`).
+    pub fn export_options_state(&self) -> ExportOptionsState {
+        self.export_options.borrow().clone()
+    }
+
+    /// G-132 — one form interaction (the dialog's `activate`,
+    /// dialog-export-options.tsx:44-52): the format radio, the three
+    /// toggles.
+    pub fn export_options_activate(&self, control: &str) {
+        let mut state = self.export_options.borrow().clone();
+        match control {
+            "format:markdown" => state.format = ExportFormat::Markdown,
+            "format:json" => state.format = ExportFormat::Json,
+            "toggle:thinking" if state.format == ExportFormat::Markdown => {
+                state.thinking = !state.thinking;
+            }
+            "toggle:tools" if state.format == ExportFormat::Markdown => {
+                state.tools = !state.tools;
+            }
+            "toggle:sanitize" if state.format == ExportFormat::Json => {
+                state.sanitize = !state.sanitize;
+            }
+            _ => {}
+        }
+        *self.export_options.borrow_mut() = state;
     }
 
     /// The export clipboard arm's completion toast (index.tsx:1229).
