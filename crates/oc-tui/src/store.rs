@@ -4131,11 +4131,22 @@ impl Store {
     }
 
     /// The persisted vertical-rail width (TUI-3 — the `layout`
-    /// storage doc's `verticalTabsWidth`, seeded at boot). G-128: the
-    /// change ANIMATES — the width spring eases to the new target on
-    /// the pump tick (the first set jumps; a boot seed must not
-    /// animate from 0).
+    /// storage doc's `verticalTabsWidth`, seeded at boot). Width
+    /// changes JUMP (config seeds and the test paths read the exact
+    /// target immediately).
     pub fn set_vertical_tabs_width(&self, width: usize) {
+        self.vertical_tabs_width.set(width);
+        if let Some(spring) = self.rail_width_spring.borrow_mut().as_mut() {
+            spring.jump(&[("width", width as f64)]);
+        }
+    }
+
+    /// G-128 — the rail-resize SMOOTH transition (the ref's pane
+    /// resize eases to the committed width instead of snapping):
+    /// animate the width spring to `width` on the pump tick. The
+    /// drag itself follows the pointer exactly (jump semantics);
+    /// the release/boundary commits animate.
+    pub fn animate_vertical_tabs_width(&self, width: usize) {
         self.vertical_tabs_width.set(width);
         let now = self.clock.get() as f64;
         let mut spring = self.rail_width_spring.borrow_mut();
@@ -15542,13 +15553,12 @@ mod g128_tests {
     fn rail_width_springs_to_the_new_target_on_pump_ticks() {
         let store = Store::new(crate::reactive::Runtime::new());
         store.advance_clock(100);
-        store.set_vertical_tabs_width(42);
-        // The seed jumps (no animation from nothing).
-        assert_eq!(store.vertical_tabs_width(200), 42);
+        store.animate_vertical_tabs_width(42);
+        assert_eq!(store.vertical_tabs_width(200), 42, "the seed lands");
         // A later resize animates: the intermediate width renders
         // between the old and new targets, then settles exactly.
         store.advance_clock(200);
-        store.set_vertical_tabs_width(30);
+        store.animate_vertical_tabs_width(30);
         store.advance_clock(300);
         let mid = store.vertical_tabs_width(200);
         assert!(

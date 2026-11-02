@@ -2879,7 +2879,9 @@ impl App {
     /// Persist a rail-width commit (`onCommit` — the `layout` doc's
     /// `verticalTabsWidth`, app.tsx:512-517) and apply it live.
     fn commit_rail_width(&mut self, width: usize) {
-        self.store.set_vertical_tabs_width(width);
+        // G-128 — the committed width eases in (the pump-tick width
+        // spring; the drag itself followed the pointer exactly).
+        self.store.animate_vertical_tabs_width(width);
         self.store.set_rail_handle_hot(false);
         self.store.request_redraw();
         if let Ok(storage) = crate::storage::ChannelStorage::open_default_migrated() {
