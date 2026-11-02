@@ -15,6 +15,7 @@ use serde_json::Value;
 use super::fragment::{fragment_ref, FragmentReconciler, FragmentRef, FragmentRestore};
 use super::image;
 use super::scrollback::{Commit, CommitKind, Phase};
+use super::tool_snapshot::{tool_snapshot, ToolSnapshot};
 use crate::components::footer::permission::PermissionRequest;
 use crate::components::footer::{FormField, FormRequest};
 
@@ -301,14 +302,31 @@ impl TransportState {
         let key = part_key(data);
         let caption = self.tools.remove(&key).unwrap_or_else(|| tool_caption(data));
         let failed = event_type == "session.tool.failed";
+        let tool = text_field(data, "tool");
+        // G-134 — the completed structured snapshot (`toolView(name)
+        // .snap`, mini/tool.ts:920-967): Write/Edit/Patch/Task cards
+        // (the caption families keep the caption row).
+        let snapshot = if failed {
+            ToolSnapshot::None
+        } else {
+            tool_snapshot(
+                tool.as_str(),
+                data.get("input").unwrap_or(&Value::Null),
+                data.get("metadata").unwrap_or(&Value::Null),
+                data.get("metadata")
+                    .or_else(|| data.get("output"))
+                    .unwrap_or(&Value::Null),
+            )
+        };
         Fold::Commit(Commit {
             kind: CommitKind::Tool,
             phase: Phase::Final,
             text: caption,
-            tool: Some(text_field(data, "tool")),
+            tool: Some(tool),
             tool_state: Some(if failed { "error" } else { "completed" }),
             message_id: message_id(data),
             part_id: Some(key),
+            snapshot,
             ..Commit::default()
         })
     }
