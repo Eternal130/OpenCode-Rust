@@ -8,8 +8,16 @@ use futures::StreamExt;
 
 use crate::error::ClientError;
 
-/// Hard cap on buffered (undelivered) SSE bytes (v2 `maxSseEventBytes`).
-pub const MAX_SSE_EVENT_BYTES: usize = 16 * 1024 * 1024;
+/// Hard cap on buffered (undelivered) SSE content, counted in UTF-16
+/// code units (G-126: v2 `maxSseEventBytes` compares against the decoded
+/// JS string's `.length`, i.e. UTF-16 code units — NOT bytes, so CJK or
+/// emoji payloads up to 3× larger in bytes pass). The constant name
+/// keeps the ref's `maxSseEventBytes` spelling; the unit is chars.
+pub const MAX_SSE_EVENT_CHARS: usize = 16 * 1024 * 1024;
+
+/// Back-compat alias for the pre-G-126 name (same value; the limit is
+/// counted in UTF-16 code units since G-126).
+pub const MAX_SSE_EVENT_BYTES: usize = MAX_SSE_EVENT_CHARS;
 
 /// One decoded SSE frame. Blocks that carry no `data:` lines (heartbeats such
 /// as `: heartbeat`) never surface.
@@ -36,7 +44,7 @@ impl SseStream {
             inner: Box::pin(response.bytes_stream()),
             buf: Vec::new(),
             done: false,
-            cap: MAX_SSE_EVENT_BYTES,
+            cap: MAX_SSE_EVENT_CHARS,
             double_decode,
             on_activity: None,
         }
@@ -97,7 +105,7 @@ impl SseStream {
                     callback();
                 }
                 self.buf.extend_from_slice(&chunk);
-                if self.buf.len() > self.cap {
+                if exceeds_char_limit(&self.buf, self.cap) {
                     return Err(ClientError::SseEventTooLarge(self.cap));
                 }
                 normalize_crlf(&mut self.buf);
@@ -140,6 +148,25 @@ impl SseStream {
 
 fn find_nl_nl(buf: &[u8]) -> Option<usize> {
     buf.windows(2).position(|w| w == b"\n\n")
+}
+
+/// Whether the buffered content exceeds `cap` UTF-16 code units (G-126:
+/// the ref compares the decoded JS string's `.length` — UTF-16 code
+/// units — against `maxSseEventBytes`). Exact, not approximated: a
+/// UTF-16 code unit is at least one byte, so `buf.len() <= cap` always
+/// passes and the (linear) `encode_utf16().count()` only runs on
+/// buffers already over the cap in bytes — the hot path stays O(1).
+/// Byte-counting proxies such as `chars().count()` would under-count
+/// surrogate pairs (emoji) and are deliberately avoided.
+fn exceeds_char_limit(buf: &[u8], cap: usize) -> bool {
+    if buf.len() <= cap {
+        return false;
+    }
+    // A chunk boundary may split a multi-byte char; lossy decoding
+    // replaces the partial tail with one U+FFFD per invalid sequence,
+    // which counts as one unit and is replaced by the real units on the
+    // next chunk either way.
+    String::from_utf8_lossy(buf).encode_utf16().count() > cap
 }
 
 /// `\r\n` and lone `\r` both normalize to `\n` (safe: multi-byte UTF-8 never
@@ -188,6 +215,63 @@ fn parse_block(block: &[u8]) -> Option<SseFrame> {
 mod tests {
     use super::*;
 
+    /// Drives the real chunk path (the char-limit check only runs on
+    /// chunk arrival), one chunk per call.
+    fn frames_chunked(chunks: Vec<Vec<u8>>, cap: usize) -> Result<Vec<SseFrame>, ClientError> {
+        let mut stream = SseStream {
+            inner: Box::pin(futures::stream::iter(
+                chunks
+                    .into_iter()
+                    .map(|c| Ok::<_, reqwest::Error>(bytes::Bytes::from(c))),
+            )),
+            buf: Vec::new(),
+            done: false,
+            cap,
+            double_decode: false,
+            on_activity: None,
+        };
+        let mut out = Vec::new();
+        while let Some(frame) = futures::executor::block_on(stream.next_frame())? {
+            out.push(frame);
+        }
+        Ok(out)
+    }
+
+    /// G-126: the 16 MiB cap counts UTF-16 code units, not bytes — a CJK
+    /// payload over the cap in bytes but under it in units passes.
+    /// (Units include the `data: ` framing: 6 + payload units.)
+    #[test]
+    fn char_limit_passes_cjk_bytes_over_the_cap() {
+        // "你好".repeat(2) is 12 payload bytes but only 4 payload units;
+        // with the framing the buffer is 20 bytes / 12 units — over a
+        // 12-unit cap in BYTES, exactly at the cap in units.
+        let data = format!("data: {}\n\n", "你好".repeat(2));
+        assert_eq!(data.len(), 20);
+        let parsed = frames_chunked(vec![data.into_bytes()], 12).expect("units at cap pass");
+        assert_eq!(parsed.len(), 1);
+    }
+
+    /// G-126: over the cap in UTF-16 units the same error surface fires.
+    #[test]
+    fn char_limit_rejects_over_unit_cap() {
+        let data = format!("data: {}\n\n", "ab".repeat(4)); // 14 units, 14 bytes
+        let error = frames_chunked(vec![data.into_bytes()], 5).expect_err("units over cap fail");
+        assert!(matches!(error, ClientError::SseEventTooLarge(5)), "{error}");
+    }
+
+    /// Emoji are surrogate pairs (2 UTF-16 units per character) — counted
+    /// exactly, not via a `chars().count()` approximation.
+    #[test]
+    fn char_limit_counts_surrogate_pairs_as_two_units() {
+        // 2 emoji = 4 units (+ 8 framing units = 12) fit a 12-unit cap;
+        // a third (14 units) crosses it.
+        let data = format!("data: {}\n\n", "😀".repeat(2));
+        frames_chunked(vec![data.into_bytes()], 12).expect("12 units fit");
+        let data = format!("data: {}\n\n", "😀".repeat(3));
+        let error = frames_chunked(vec![data.into_bytes()], 12).expect_err("14 units over cap");
+        assert!(matches!(error, ClientError::SseEventTooLarge(12)), "{error}");
+    }
+
     fn frames(input: &[u8]) -> Vec<SseFrame> {
         // Feeding the buffer directly mirrors the state after chunk arrival
         // (which always CRLF-normalizes).
@@ -197,7 +281,7 @@ mod tests {
             inner: Box::pin(futures::stream::empty()),
             buf: normalized,
             done: true,
-            cap: MAX_SSE_EVENT_BYTES,
+            cap: MAX_SSE_EVENT_CHARS,
             double_decode: false,
             on_activity: None,
         };

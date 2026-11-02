@@ -19,11 +19,14 @@
 //! and resyncs). Late subscribers receive only the latest
 //! `server.connected` marker, never a replay of business events.
 //!
-//! Deviation from the TS original: `ClientError` is not `Clone`
-//! (`reqwest::Error`), so the terminal error is yielded once as `Err`
-//! (a field-wise clone proxy) and the stream then ends; the exact error
-//! stays available via [`SharedSubscription::terminal_error`]. The TS
-//! iterator rejects on every `next()` after failure.
+//! Deviation from the TS original (narrowed by G-125): `ClientError` is
+//! not `Clone` (`reqwest::Error`), so the repeatedly-delivered terminal
+//! error is a field-wise clone proxy (transport failures degrade to a
+//! [`ClientError::MalformedResponse`] description); the exact error
+//! stays available via [`SharedSubscription::terminal_error`]. Since
+//! G-125 the *delivery* matches the TS iterator: after a failed
+//! completion, every `next()` rejects (previously the stream ended
+//! after one `Err`, which made TS-semantics loops exit early).
 
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -162,7 +165,6 @@ impl<A: SharedEvent> SharedEvents<A> {
             rx: Some(rx),
             conn_id: None,
             shared: Arc::new(SubShared { terminal: Mutex::new(Terminal::Live) }),
-            err_yielded: false,
         }
     }
 
@@ -319,8 +321,6 @@ pub struct SharedSubscription<A: SharedEvent> {
     rx: Option<mpsc::Receiver<A>>,
     conn_id: Option<u64>,
     shared: Arc<SubShared>,
-    /// Whether the terminal error was already yielded as `Err`.
-    err_yielded: bool,
 }
 
 impl<A: SharedEvent> SharedSubscription<A> {
@@ -338,14 +338,12 @@ impl<A: SharedEvent> SharedSubscription<A> {
         let terminal = self.shared.terminal.lock().expect("terminal lock");
         match &*terminal {
             Terminal::Live | Terminal::Ended => Poll::Ready(None),
-            Terminal::Failed(error) => {
-                if self.err_yielded {
-                    Poll::Ready(None)
-                } else {
-                    self.err_yielded = true;
-                    Poll::Ready(Some(Err(clone_error(error))))
-                }
-            }
+            // G-125: the TS iterator rejects on EVERY next() after a
+            // failed completion (shared-events.ts:76,123) — deliver the
+            // terminal error repeatedly instead of ending the stream.
+            // The clone is a field-wise proxy (`ClientError: !Clone`);
+            // the identity-preserving original stays in terminal_error().
+            Terminal::Failed(error) => Poll::Ready(Some(Err(clone_error(error)))),
         }
     }
 }
@@ -657,7 +655,12 @@ mod tests {
                 Some(Err(ClientError::MalformedResponse(message))) => assert_eq!(message, "boom"),
                 other => panic!("expected the source error, got {other:?}"),
             }
-            assert!(subscription.next().await.is_none());
+            // G-125: the terminal error is delivered on EVERY subsequent
+            // next(), matching the TS iterator (see the test below).
+            assert!(
+                subscription.next().await.is_some_and(|item| item.is_err()),
+                "post-failure next() must reject again"
+            );
         }
         let left = first.terminal_error().expect("terminal error");
         let right = second.terminal_error().expect("terminal error");
@@ -714,6 +717,36 @@ mod tests {
         harness.push(0, event("server.connected", 1));
         assert_eq!(fresh.next().await.unwrap().unwrap(), event("server.connected", 1));
         assert_eq!(harness.attempts.load(Ordering::SeqCst), 2);
+    }
+
+    /// G-125: after a failed completion, the second AND third next()
+    /// also reject (TS shared-events.ts:76,123 — completion rejects all
+    /// pending and every later next()); the stream no longer ends after
+    /// a single Err.
+    #[tokio::test]
+    async fn terminal_error_is_delivered_repeatedly() {
+        let harness = Harness::default();
+        let shared = harness.shared();
+        let mut subscriber = Box::pin(shared.subscribe());
+        poke!(subscriber);
+        harness.at(0).await;
+        harness.fail(0, ClientError::MalformedResponse("boom".into()));
+        for round in 1..=3 {
+            match subscriber.next().await {
+                Some(Err(ClientError::MalformedResponse(message))) => {
+                    assert_eq!(message, "boom", "round {round} carries the error");
+                }
+                other => panic!("round {round}: expected Err, got {other:?}"),
+            }
+        }
+        // Clean (EOF) completion still ENDS the stream — only the failed
+        // completion repeats.
+        let mut clean = Box::pin(shared.subscribe());
+        poke!(clean);
+        harness.at(1).await;
+        harness.close(1);
+        assert!(clean.next().await.is_none());
+        assert!(clean.next().await.is_none());
     }
 
     #[tokio::test]
