@@ -63,7 +63,10 @@ unicode-segmentation = "1"
 # SOUND-CONV: `device-audio` turns on opentui-core's real miniaudio
 # playback device (rev 18e2904) — sound/audio.rs plays through it
 # (Linux); the local vendored miniaudio-sys twin was deleted.
-opentui-core = { workspace = true, features = ["device-audio"] }
+# terminal-backend (rev 4ff646d, Phase A): TTY seam + mode sequences +
+# capability probe + input/output pumps + resize/teardown — the lane B3
+# cutover consumes it; compiling it in early keeps the baseline honest.
+opentui-core = { workspace = true, features = ["device-audio", "terminal-backend"] }
 opentui-solid = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]

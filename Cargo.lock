@@ -2787,10 +2787,11 @@ dependencies = [
 [[package]]
 name = "opentui-core"
 version = "0.1.0"
-source = "git+https://github.com/Eternal130/opentui-rust.git?rev=18e2904#18e2904f929ff830631237f8d075e4214334308b"
+source = "git+https://github.com/Eternal130/opentui-rust.git?rev=4ff646d#4ff646d76ec5dd38ccc0cd5dfd85a356934cd7a5"
 dependencies = [
  "cc",
  "minimp3",
+ "rustix 1.1.5",
  "serde",
  "serde_json",
  "taffy",
@@ -2804,7 +2805,7 @@ dependencies = [
 [[package]]
 name = "opentui-keymap"
 version = "0.1.0"
-source = "git+https://github.com/Eternal130/opentui-rust.git?rev=18e2904#18e2904f929ff830631237f8d075e4214334308b"
+source = "git+https://github.com/Eternal130/opentui-rust.git?rev=4ff646d#4ff646d76ec5dd38ccc0cd5dfd85a356934cd7a5"
 dependencies = [
  "serde",
  "serde_json",
@@ -2813,7 +2814,7 @@ dependencies = [
 [[package]]
 name = "opentui-solid"
 version = "0.1.0"
-source = "git+https://github.com/Eternal130/opentui-rust.git?rev=18e2904#18e2904f929ff830631237f8d075e4214334308b"
+source = "git+https://github.com/Eternal130/opentui-rust.git?rev=4ff646d#4ff646d76ec5dd38ccc0cd5dfd85a356934cd7a5"
 dependencies = [
  "opentui-core",
 ]
@@ -4263,7 +4264,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.5",
  "windows-sys 0.61.2",
