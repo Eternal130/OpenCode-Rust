@@ -1423,6 +1423,10 @@ pub struct Store {
     plugins_checking: Signal<bool>,
     /// G-29: the plugin-manager server API seam.
     plugin_server_sink: std::cell::RefCell<Rc<dyn PluginServerSink>>,
+    /// G-127: the composer autocomplete's async fetch seam
+    /// (`fs.find` for `@` references + `fs.list` for `/cd`).
+    autocomplete_fetch_sink:
+        std::cell::RefCell<Rc<dyn autocomplete::AutocompleteFetchSink>>,
     /// The engine prompt API stub submissions forward to.
     prompt_sink: std::rc::Rc<dyn PromptSink>,
     /// The server selection API (model/agent switch POSTs).
@@ -3662,6 +3666,9 @@ impl Store {
             plugin_server_sink: std::cell::RefCell::new(Rc::new(
                 RecordingPluginServerSink::default(),
             )),
+            autocomplete_fetch_sink: std::cell::RefCell::new(Rc::new(
+                autocomplete::NoopAutocompleteFetchSink,
+            )),
             prompt_sink,
             plugin_commands,
             plugin_dialogs,
@@ -4708,6 +4715,29 @@ impl Store {
     /// Swap the plugin-server sink (production: the oc-client worker).
     pub fn set_plugin_server_sink(&self, sink: Rc<dyn PluginServerSink>) {
         *self.plugin_server_sink.borrow_mut() = sink;
+    }
+
+    /// G-127 — install the autocomplete async-fetch seam (the run
+    /// loop wires the HTTP impl; tests keep the no-op default).
+    pub fn set_autocomplete_fetch_sink(
+        &self,
+        sink: Rc<dyn autocomplete::AutocompleteFetchSink>,
+    ) {
+        *self.autocomplete_fetch_sink.borrow_mut() = sink;
+    }
+
+    /// G-127 — fire the `@`-reference `fs.find` (autocomplete.tsx:
+    /// 361: `{query, limit: 20, location}`).
+    pub fn autocomplete_file_find(&self, query: &str, directory: Option<String>) {
+        self.autocomplete_fetch_sink.borrow().file_find(query, directory);
+    }
+
+    /// G-127 — fire the `/cd` `directoryAutocomplete` list
+    /// (autocomplete.tsx:336).
+    pub fn autocomplete_directory_list(&self, query: &str, directory: String, home: String) {
+        self.autocomplete_fetch_sink
+            .borrow()
+            .directory_list(query, directory, home);
     }
 
     /// The current server plugin rows (the plugins dialog's `server:`

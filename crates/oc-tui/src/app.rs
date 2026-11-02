@@ -2596,20 +2596,29 @@ impl App {
                     // the store; the composer's popup re-attaches the
                     // rows after every edit/delete (an EMPTY query —
                     // a typed path shows nothing, index.tsx:1962).
-                    if let Some(query) = composer.autocomplete.directory_query() {
+                    if let Some(query) = composer.autocomplete.directory_query().map(str::to_owned) {
+                        let query = query.as_str();
                         let project = self.store.worktree_dialog().project_id;
                         for id in std::mem::take(&mut composer.destructive_requests) {
                             self.store.directory_recent_remove(&project, &id);
                         }
-                        let options = if query.is_empty() {
-                            self.store.directory_recents_options(&project)
-                        } else {
-                            Vec::new()
-                        };
-                        composer.autocomplete.options = options;
-                        composer.autocomplete.filtered_len = composer.autocomplete.options.len();
-                        if composer.autocomplete.selected >= composer.autocomplete.filtered_len {
-                            composer.autocomplete.selected = 0;
+                        apply_directory_options(&mut composer, &self.store);
+                        // G-127 — the live half: a TYPED query fires
+                        // `directoryAutocomplete` (autocomplete.tsx:
+                        // 336 — `fs.list` over the search triple;
+                        // recents ride an empty query only,
+                        // index.tsx:1962). The no-op default sink
+                        // (unit tests) keeps this a no-op.
+                        if !query.is_empty() {
+                            let directory = std::env::current_dir()
+                                .map(|path| path.display().to_string())
+                                .unwrap_or_default();
+                            let home = std::env::var("HOME").unwrap_or_default();
+                            self.store.autocomplete_directory_list(
+                                query,
+                                directory,
+                                home,
+                            );
                         }
                     }
                     // RD-05 — the `@` reference rows (autocomplete.
@@ -2665,8 +2674,7 @@ impl App {
     /// agents, filtered by the live query — accepting one records the
     /// structured part (the wire `agents`/`skills`/`files`
     /// attachments).
-    fn attach_reference_options(&self, composer: &mut crate::components::composer::Composer) {
-        use crate::components::composer::autocomplete;
+    fn attach_reference_options(&self, composer: &mut crate::components::composer::Composer) {        use crate::components::composer::autocomplete;
         if composer.autocomplete.visible != Some(autocomplete::Mode::Reference) {
             return;
         }
@@ -2712,7 +2720,7 @@ impl App {
         // RE-03 — the ranked form carries the frecency factor
         // (score × (1 + getFrecency(path)) for path-carrying rows).
         let frecency = composer.autocomplete.frecency.clone();
-        composer.autocomplete.options = autocomplete::filter_references_ranked(
+        let non_file = autocomplete::filter_references_ranked(
             &agents,
             &skills,
             &references,
@@ -2720,6 +2728,30 @@ impl App {
             Some(&frecency),
             autocomplete::now_ms(),
         );
+        // G-127 — the live `fs.find` rows ride BEHIND the static set
+        // (autocomplete.tsx:536-546: `[...fuzziedNonFiles,
+        // ...fileOptions]`); the cached result for THIS query shows
+        // while a refetch is in flight (`files.latest`, :401-405) and
+        // the query guard drops superseded results (createResource).
+        let file_rows = composer
+            .autocomplete
+            .file_rows
+            .as_ref()
+            .filter(|(cached, _)| cached.as_str() == query.as_str())
+            .map_or(&[] as &[_], |(_, rows)| rows.as_slice());
+        composer.autocomplete.options =
+            autocomplete::merge_file_rows(non_file, file_rows, &query);
+        // G-127 — the async half: fire `fs.find({query: base, limit:
+        // 20, location})` (autocomplete.tsx:361 — the line-range
+        // suffix is stripped from the query; `location` is the
+        // current directory — the port's bounded stand-in is the
+        // process cwd, the launch location). The no-op default sink
+        // (unit tests) makes this a no-op.
+        let base = autocomplete::file_query_base(&query).to_owned();
+        let directory = std::env::current_dir()
+            .map(|path| path.display().to_string())
+            .ok();
+        self.store.autocomplete_file_find(&base, directory);
         composer.autocomplete.filtered_len = composer.autocomplete.options.len();
         if composer.autocomplete.selected >= composer.autocomplete.filtered_len {
             composer.autocomplete.selected = 0;
@@ -4316,7 +4348,33 @@ const COMPOSER_TAB_COMMANDS: &[(&str, crate::store::PickerTab)] = &[
     ("composer.terminal.select", crate::store::PickerTab::Terminals),
 ];
 
+/// G-127 — the production autocomplete fetch sink: `fs.find` /
+/// `fs.list` become loop-fetcher requests (fire-and-forget; results
+/// arrive as events guarded by the popup's live query).
+struct HttpAutocompleteFetchSink {
+    tx: tokio::sync::mpsc::UnboundedSender<LoopRequest>,
+}
+
+impl crate::components::composer::autocomplete::AutocompleteFetchSink
+    for HttpAutocompleteFetchSink
+{
+    fn file_find(&self, query: &str, directory: Option<String>) {
+        let _ = self.tx.send(LoopRequest::AutocompleteFileFind {
+            query: query.to_owned(),
+            directory,
+        });
+    }
+    fn directory_list(&self, query: &str, directory: String, home: String) {
+        let _ = self.tx.send(LoopRequest::AutocompleteDirectoryList {
+            query: query.to_owned(),
+            directory,
+            home,
+        });
+    }
+}
+
 impl crate::store::ShellControlSink for HttpShellControlSink {
+
     /// `shell.get` + the output TAIL (dialog-shell-output.tsx:32-77's
     /// open page: `cursor = max(0, size − 64KiB)`). The run loop's
     /// periodic tick re-issues this every 1s while the viewer is the
@@ -4976,6 +5034,14 @@ pub enum LoopRequest {
     },
     /// `session.list` (the dialog-open refetch).
     SessionList,
+    /// G-127 — the composer `@`-reference fuzzy file search
+    /// (`client.api.file.find({query, limit: 20, location})`,
+    /// autocomplete.tsx:361).
+    AutocompleteFileFind { query: String, directory: Option<String> },
+    /// G-127 — the `/cd` live directory listing
+    /// (`directoryAutocomplete` → `file.list`, autocomplete.tsx:336):
+    /// the search triple resolves against `directory`.
+    AutocompleteDirectoryList { query: String, directory: String, home: String },
     /// `vcs.get` for one directory (the footer's branch lookup).
     LocationVcs(String),
     /// G-69 — `vcs.branch.list` for the diff base selector.
@@ -5149,6 +5215,18 @@ pub enum LoopFetch {
         result: Result<(Vec<crate::components::message::model::Message>, Option<String>), String>,
     },
     SessionList(Result<Vec<crate::data::SessionSnapshot>, String>),
+    /// G-127 — the `@`-reference `fs.find` rows (keyed by the query
+    /// they answered — the drain applies them only when the popup's
+    /// query still matches, the ref `createResource` semantics).
+    AutocompleteFileFind {
+        query: String,
+        result: Result<Vec<crate::components::composer::autocomplete::FileFindRow>, String>,
+    },
+    /// G-127 — the `/cd` live directory rows (same query guard).
+    AutocompleteDirectoryList {
+        query: String,
+        result: Result<Vec<crate::components::composer::autocomplete::AutocompleteOption>, String>,
+    },
     /// TUI-5 (lane-tui2): the `project.list` result (the Open menu's
     /// Projects section).
     ProjectList(Result<Vec<crate::components::dialog_open::ProjectRow>, String>),
@@ -5279,6 +5357,43 @@ pub enum LoopFetch {
     LocationReloadResult(Result<(), String>),
 }
 
+/// G-127 — assemble the `/cd` popup options (autocomplete.tsx:
+/// 514-521 + supplementalDirectoryOptions, :510-527): the RECENTS
+/// rows ride an empty query (`directoryOptions(query)`, index.tsx:
+/// 1962-1985 returns [] otherwise), the LIVE `directoryAutocomplete`
+/// rows ride behind them with the recents' absolutes deduped ahead
+/// (`paths` Set, :516-519). The cached rows for THIS query show while
+/// a refetch is in flight (the `files.latest` cache, :401-405).
+fn apply_directory_options(
+    composer: &mut crate::components::composer::Composer,
+    store: &crate::store::Store,
+) {
+    use crate::components::composer::autocomplete::AutocompleteOption;
+    let Some(query) = composer.autocomplete.directory_query().map(str::to_owned) else {
+        return;
+    };
+    let project = store.worktree_dialog().project_id;
+    let mut options: Vec<AutocompleteOption> = if query.is_empty() {
+        store.directory_recents_options(&project)
+    } else {
+        Vec::new()
+    };
+    let seen: std::collections::HashSet<String> =
+        options.iter().filter_map(|item| item.absolute.clone()).collect();
+    if let Some((cached, rows)) = composer.autocomplete.dir_rows.as_ref() {
+        if cached.as_str() == query.as_str() {
+            options.extend(rows.iter().filter(|row| {
+                row.absolute.as_ref().is_none_or(|absolute| !seen.contains(absolute))
+            }).cloned());
+        }
+    }
+    composer.autocomplete.filtered_len = options.len();
+    composer.autocomplete.options = options;
+    if composer.autocomplete.selected >= composer.autocomplete.filtered_len {
+        composer.autocomplete.selected = 0;
+    }
+}
+
 /// The fetch worker: requests spawn per-fetch tasks (no head-of-line
 /// blocking); results arrive on one ordered channel the run loop
 /// drains into [`Store::ingest_all`].
@@ -5346,6 +5461,79 @@ pub fn spawn_loop_fetcher(
                         let fetcher = HttpResync::new(client);
                         let result = crate::data::ResyncSource::fetch_sessions(&fetcher).await;
                         let _ = tx.send(LoopFetch::SessionList(result));
+                    });
+                }
+                // G-127 — `fs.find` (autocomplete.tsx:361): the
+                // SearchIndex-backed fuzzy file rows, `limit: 20`.
+                LoopRequest::AutocompleteFileFind { query, directory } => {
+                    let client = client.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let result = client
+                            .fs()
+                            .find(&oc_client::types::FsFindQuery {
+                                limit: Some("20".to_owned()),
+                                location: Some(oc_client::types::QueryLocation { directory }),
+                                query: query.clone(),
+                                type_: None,
+                            })
+                            .await;
+                        let rows = result.map(|response| {
+                            response
+                                .data
+                                .into_iter()
+                                .map(|entry| crate::components::composer::autocomplete::FileFindRow {
+                                    path: entry.path,
+                                    is_directory: entry.type_
+                                        == oc_client::types::FileSystemEntryType::Directory,
+                                })
+                                .collect::<Vec<_>>()
+                        });
+                        let _ = tx.send(LoopFetch::AutocompleteFileFind {
+                            query,
+                            result: rows.map_err(|error| error.to_string()),
+                        });
+                    });
+                }
+                // G-127 — `fs.list` for `directoryAutocomplete`
+                // (autocomplete.tsx:336 → directory-completion.ts:
+                // 10-28): resolve the search triple, list the target
+                // directory, filter to subdirectories by basename.
+                LoopRequest::AutocompleteDirectoryList { query, directory, home } => {
+                    let client = client.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        use crate::components::composer::autocomplete as ac;
+                        let search = ac::directory_autocomplete_search(&query, &directory, &home);
+                        let result = client
+                            .fs()
+                            .list(&oc_client::types::FsListQuery {
+                                location: Some(oc_client::types::QueryLocation {
+                                    directory: Some(search.directory.clone()),
+                                }),
+                                path: None,
+                            })
+                            .await;
+                        let rows = result.map(|response| {
+                            response
+                                .data
+                                .into_iter()
+                                .map(|entry| ac::FileFindRow {
+                                    path: entry.path,
+                                    is_directory: entry.type_
+                                        == oc_client::types::FileSystemEntryType::Directory,
+                                })
+                                .collect::<Vec<_>>()
+                        });
+                        // The worker precomputes the popup rows (the
+                        // list's location is the SEARCH directory —
+                        // entries resolve against it).
+                        let result =
+                            rows.map(|rows| ac::directory_live_options(&rows, &search.directory, &search));
+                        let _ = tx.send(LoopFetch::AutocompleteDirectoryList {
+                            query,
+                            result: result.map_err(|error| error.to_string()),
+                        });
                     });
                 }
                 // -- TUI-4: the persistent-terminal family -------------
@@ -7537,6 +7725,12 @@ pub async fn run_with_size(
     // ids seed `fetched_transcripts`) + the /sessions dialog's
     // open-time session-list refetch.
     let (loop_fetch_tx, mut loop_fetch_rx) = spawn_loop_fetcher(client.clone());
+    // G-127 — the autocomplete async seam: the HTTP sink forwards to
+    // the loop fetcher (results land through the drain loop's query
+    // guard — createResource's resolved-value semantics).
+    app.store.set_autocomplete_fetch_sink(std::rc::Rc::new(HttpAutocompleteFetchSink {
+        tx: loop_fetch_tx.clone(),
+    }));
     // TUI-TD05 — the older-history loads ride the same ordered
     // channel (`loadMore`'s fetch).
     app.store.set_transcript_sink(std::rc::Rc::new(HttpTranscriptSink::new(loop_fetch_tx.clone())));
@@ -8439,6 +8633,65 @@ pub async fn run_with_size(
                 }
                 LoopFetch::SessionList(Err(error)) => {
                     crate::keymap::log_skip(&format!("session list refresh: {error}"));
+                }
+                // G-127 — the `@`-file `fs.find` rows land on the
+                // FOCUSED composer when its popup still shows the
+                // same query (createResource's resolved-value
+                // semantics: a superseded query's result is dropped).
+                LoopFetch::AutocompleteFileFind { query, result } => {
+                    let key = app.prompt_key();
+                    let mut composer = app.store.composer(&key);
+                    let current = composer.autocomplete.visible.and_then(|mode| {
+                        (mode == crate::components::composer::autocomplete::Mode::Reference)
+                            .then(|| {
+                                crate::components::composer::autocomplete::query_between(
+                                    &composer.draft.text,
+                                    composer.autocomplete.trigger_index,
+                                    composer.edit.caret(),
+                                )
+                            })
+                    });
+                    if current.as_deref() == Some(query.as_str()) {
+                        match result {
+                            Ok(rows) => {
+                                let options = crate::components::composer::autocomplete::file_find_options(&rows);
+                                composer.autocomplete.file_rows =
+                                    Some((query.clone(), options));
+                            }
+                            Err(error) => {
+                                crate::keymap::log_skip(&format!("autocomplete file find: {error}"));
+                                // The ref's `failed` flag keeps the
+                                // previous rows (files.latest) — a
+                                // failed refetch does not clear.
+                            }
+                        }
+                        app.attach_reference_options(&mut composer);
+                        app.store.set_composer(&key, &composer);
+                        app.store.request_redraw();
+                    }
+                }
+                // G-127 — the `/cd` live rows (same query guard; the
+                // recents ride an empty query only).
+                LoopFetch::AutocompleteDirectoryList { query, result } => {
+                    let key = app.prompt_key();
+                    let mut composer = app.store.composer(&key);
+                    let current = composer
+                        .autocomplete
+                        .directory_query()
+                        .map(|query| query.to_owned());
+                    if current.as_deref() == Some(query.as_str()) {
+                        match result {
+                            Ok(rows) => {
+                                composer.autocomplete.dir_rows = Some((query.clone(), rows));
+                            }
+                            Err(error) => crate::keymap::log_skip(&format!(
+                                "autocomplete directory list: {error}"
+                            )),
+                        }
+                        apply_directory_options(&mut composer, &app.store);
+                        app.store.set_composer(&key, &composer);
+                        app.store.request_redraw();
+                    }
                 }
                 // -- TUI-5 (lane-tui2): the Open menu's project rows.
                 LoopFetch::ProjectList(result) => match result {

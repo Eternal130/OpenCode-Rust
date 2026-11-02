@@ -346,6 +346,14 @@ pub struct AutocompleteState {
     /// the popup): ranks the reference rows (score × (1 + frecency))
     /// and records accepts of path-carrying options.
     pub frecency: Frecency,
+    /// G-127 — the last `fs.find` rows keyed by their query (the
+    /// `createResource` `latest` cache, autocomplete.tsx:401-405:
+    /// a refetch KEEPS the previous rows visible while loading; a
+    /// new result REPLACES the cache and re-attaches).
+    pub file_rows: Option<(String, Vec<AutocompleteOption>)>,
+    /// G-127 — the last `directoryAutocomplete` rows keyed by their
+    /// query (the same `latest` cache on the `/cd` path).
+    pub dir_rows: Option<(String, Vec<AutocompleteOption>)>,
 }
 
 impl AutocompleteState {
@@ -1336,3 +1344,313 @@ mod btw_tests {
         assert!(!ARGUMENT_SLASHES.contains(&("stats", "stats.open")), "no argument");
     }
 }
+
+// -- G-127: the async halves (@-file find + /cd live listing) --------------
+
+/// G-127 — one `fs.find` result row (`FileSystemEntry`): the
+/// location-relative `path` + the entry kind (autocomplete.tsx:
+/// 361-385 consumes `result.data`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileFindRow {
+    pub path: String,
+    pub is_directory: bool,
+}
+
+/// G-127 — strip a `path#12-34` line-range suffix
+/// (`parseFileLineRange(...).base`, prompt/parse.ts): the fuzzy-find
+/// query is the path half only.
+#[must_use]
+pub fn file_query_base(query: &str) -> &str {
+    match query.rfind('#') {
+        Some(at) => &query[..at],
+        None => query,
+    }
+}
+
+/// G-127 — the `fs.find` rows as popup options (autocomplete.tsx:
+/// 364-385: `createFilePart(item, path.join(location.directory,
+/// item.path))`): display = the relative path (files arrive from fff
+/// already fuzzy-ranked — NO additional fuzzysort pass, the ref's
+/// comment at :536-538), the directory flag, and the structured
+/// file-part identity so accept records the wire `files` attachment
+/// and bumps frecency on `part.path` (:262).
+#[must_use]
+pub fn file_find_options(rows: &[FileFindRow]) -> Vec<AutocompleteOption> {
+    rows.iter()
+        .map(|row| AutocompleteOption {
+            display: row.path.clone(),
+            description: None,
+            reference: Some(Reference::Source { name: row.path.clone() }),
+            is_directory: row.is_directory,
+            absolute: None,
+            path: Some(row.path.clone()),
+            destructive: None,
+        })
+        .collect()
+}
+
+/// G-127 — merge the live file rows behind the static `@` rows (the
+/// ref's options memo, autocomplete.tsx:536-591:
+/// `[...fuzziedNonFiles, ...fileOptions]`): the file rows ride AFTER
+/// the ranked non-file set, and a non-empty query caps the merged
+/// list at the popup's 10 (`slice(0, 10)`).
+#[must_use]
+pub fn merge_file_rows(
+    non_file: Vec<AutocompleteOption>,
+    file_rows: &[AutocompleteOption],
+    query: &str,
+) -> Vec<AutocompleteOption> {
+    let mut options = non_file;
+    options.extend(file_rows.iter().cloned());
+    if query.trim().is_empty() {
+        options
+    } else {
+        options.truncate(10);
+        options
+    }
+}
+
+/// G-127 — `directoryAutocompleteSearch` (directory-completion.ts:
+/// 67-82): split the typed query into the directory to list, the
+/// display prefix (`~/`, `/`, `../…/`), and the basename filter.
+#[must_use]
+pub fn directory_autocomplete_search(query: &str, directory: &str, home: &str) -> DirectorySearch {
+    if query == "~" {
+        return DirectorySearch { directory: home.to_owned(), prefix: "~/".to_owned(), query: String::new() };
+    }
+    if let Some(rest) = query.strip_prefix("~/") {
+        return directory_search(rest, home, "~/");
+    }
+    // `/^(?:\.\.\/)*\.\.$/` — a bare `..` chain resolves against the
+    // current directory and filters nothing.
+    if !query.is_empty() && query.split('/').all(|part| part == "..") {
+        return DirectorySearch {
+            directory: resolve_dots(directory, query),
+            prefix: format!("{query}/"),
+            query: String::new(),
+        };
+    }
+    if let Some(rest) = query.strip_prefix('/') {
+        let root = directory.split('/').next().unwrap_or("/");
+        return directory_search(rest, &format!("{root}/"), "/");
+    }
+    directory_search(query, directory, "")
+}
+
+fn directory_search(query: &str, root: &str, prefix: &str) -> DirectorySearch {
+    match query.rfind('/') {
+        None => DirectorySearch { directory: root.to_owned(), prefix: prefix.to_owned(), query: query.to_owned() },
+        Some(at) => {
+            let parent = &query[..=at];
+            DirectorySearch {
+                directory: resolve_dots(root, parent),
+                prefix: format!("{prefix}{parent}"),
+                query: query[at + 1..].to_owned(),
+            }
+        }
+    }
+}
+
+/// Lexical `path.resolve` for `..`/`.` components (no filesystem
+/// access — the worker already lists a real directory).
+fn resolve_dots(root: &str, relative: &str) -> String {
+    use std::path::Component;
+    let joined = std::path::Path::new(root).join(relative);
+    let mut normalized = std::path::PathBuf::new();
+    for component in joined.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized.to_string_lossy().into_owned()
+}
+
+/// G-127 — the search triple (directory-completion.ts:62-66).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirectorySearch {
+    pub directory: String,
+    pub prefix: String,
+    pub query: String,
+}
+
+/// G-127 — `directoryAutocompleteMatches` (directory-completion.ts:
+/// 87-91): case-insensitive prefix match; an empty filter hides
+/// dotfiles.
+#[must_use]
+pub fn directory_autocomplete_matches(basename: &str, query: &str) -> bool {
+    let value = basename.trim_start_matches(['\\', '/']);
+    if query.is_empty() && value.starts_with('.') {
+        return false;
+    }
+    value.to_lowercase().starts_with(&query.to_lowercase())
+}
+
+/// G-127 — the `/cd` live rows (directory-completion.ts:10-28):
+/// `fs.list(search.directory)` → the type-`directory` entries →
+/// absolute-resolved → basename-filtered → `{value: prefix +
+/// basename + "/", absolute}` popup options. The exact-prefix row
+/// (`directoryAutocompleteExactValue`, :83-85) rides FIRST.
+#[must_use]
+pub fn directory_live_options(
+    entries: &[FileFindRow],
+    location_directory: &str,
+    search: &DirectorySearch,
+) -> Vec<AutocompleteOption> {
+    let mut options = Vec::new();
+    // The exact row: only when a prefix exists and no basename filter
+    // is typed, the queried directory itself completes first.
+    if !search.prefix.is_empty() && search.query.is_empty() {
+        options.push(AutocompleteOption {
+            display: search.prefix.clone(),
+            description: None,
+            reference: None,
+            is_directory: true,
+            absolute: Some(search.directory.clone()),
+            path: None,
+            destructive: None,
+        });
+    }
+    for entry in entries.iter().filter(|entry| entry.is_directory) {
+        let absolute = resolve_dots(location_directory, &entry.path);
+        let basename = absolute.rsplit('/').next().unwrap_or(&absolute).to_owned();
+        if !directory_autocomplete_matches(&basename, &search.query) {
+            continue;
+        }
+        let value = format!("{}{}/", search.prefix, basename.trim_start_matches(['\\', '/']));
+        options.push(AutocompleteOption {
+            display: value,
+            description: None,
+            reference: None,
+            is_directory: true,
+            absolute: Some(absolute),
+            path: None,
+            destructive: None,
+        });
+    }
+    options
+}
+
+/// G-127 — the async-fetch seam (`client.api.file.find` /
+/// `client.api.file.list`, autocomplete.tsx:336/361): the store
+/// holds the sink; the production run loop wires the HTTP impl to
+/// the loop fetcher, unit tests keep the no-op default.
+pub trait AutocompleteFetchSink {
+    /// `fs.find({query, limit: 20, location})` (autocomplete.tsx:361).
+    fn file_find(&self, query: &str, directory: Option<String>);
+    /// `fs.list` for `directoryAutocomplete` (autocomplete.tsx:336 —
+    /// the search triple's directory + the display prefix/query).
+    fn directory_list(&self, query: &str, directory: String, home: String);
+}
+
+/// The no-op sink (no loop fetcher attached — headless/unit tests).
+pub struct NoopAutocompleteFetchSink;
+impl AutocompleteFetchSink for NoopAutocompleteFetchSink {
+    fn file_find(&self, _query: &str, _directory: Option<String>) {}
+    fn directory_list(&self, _query: &str, _directory: String, _home: String) {}
+}
+
+    // -- G-127 ---------------------------------------------------------
+
+    #[test]
+    fn file_query_base_strips_the_line_range() {
+        assert_eq!(file_query_base("src/lib.rs#12-40"), "src/lib.rs");
+        assert_eq!(file_query_base("src/lib.rs"), "src/lib.rs");
+        assert_eq!(file_query_base(""), "");
+    }
+
+    #[test]
+    fn file_find_options_carry_the_file_part_identity() {
+        let rows = [
+            FileFindRow { path: "src/main.rs".to_owned(), is_directory: false },
+            FileFindRow { path: "docs".to_owned(), is_directory: true },
+        ];
+        let options = file_find_options(&rows);
+        assert_eq!(options.len(), 2);
+        assert_eq!(options[0].display, "src/main.rs");
+        assert!(options[0].is_directory == false);
+        assert_eq!(options[0].path.as_deref(), Some("src/main.rs"));
+        // The structured file-part identity (createFilePart → the
+        // wire `files` attachment + frecency on `part.path`).
+        assert!(matches!(options[0].reference, Some(Reference::Source { ref name }) if name == "src/main.rs"));
+        assert!(options[1].is_directory);
+    }
+
+    #[test]
+    fn merge_file_rows_ride_behind_the_static_set() {
+        let non_file = vec![AutocompleteOption::command("@build", None)];
+        let file = (0..12)
+            .map(|index| AutocompleteOption {
+                display: format!("file{index}.rs"),
+                ..AutocompleteOption::default()
+            })
+            .collect::<Vec<_>>();
+        // Empty query: no slice (the ref returns early, :548-549).
+        let merged = merge_file_rows(non_file.clone(), &file, "");
+        assert_eq!(merged.len(), 13);
+        // A typed query caps the merged list at the popup's 10.
+        let merged = merge_file_rows(non_file, &file, "file");
+        assert_eq!(merged.len(), 10);
+        assert_eq!(merged[0].display, "@build");
+        assert_eq!(merged[1].display, "file0.rs");
+    }
+
+    #[test]
+    fn directory_search_splits_prefix_and_filter() {
+        let search = directory_autocomplete_search("src/ma", "/w/repo", "/h");
+        assert_eq!(search.directory, "/w/repo/src");
+        assert_eq!(search.prefix, "src/");
+        assert_eq!(search.query, "ma");
+        // `~` and `~/…` resolve against home.
+        let search = directory_autocomplete_search("~", "/w/repo", "/h");
+        assert_eq!((search.directory.as_str(), search.prefix.as_str(), search.query.as_str()), ("/h", "~/", ""));
+        let search = directory_autocomplete_search("~/pro", "/w", "/h");
+        assert_eq!((search.directory.as_str(), search.prefix.as_str(), search.query.as_str()), ("/h", "~/", "pro"));
+        // A bare `..` chain resolves against the current directory.
+        let search = directory_autocomplete_search("../..", "/w/repo/sub", "/h");
+        assert_eq!((search.directory.as_str(), search.prefix.as_str(), search.query.as_str()), ("/w", "../../", ""));
+        // Absolute queries resolve from the root.
+        let search = directory_autocomplete_search("/us", "/w/repo", "/h");
+        assert_eq!((search.directory.as_str(), search.prefix.as_str(), search.query.as_str()), ("/", "/", "us"));
+    }
+
+    #[test]
+    fn directory_matches_hide_dotfiles_on_empty_query() {
+        assert!(directory_autocomplete_matches("src", ""));
+        assert!(!directory_autocomplete_matches(".git", ""));
+        assert!(directory_autocomplete_matches(".git", ".g"));
+        assert!(directory_autocomplete_matches("Repo", "rep"));
+    }
+
+    #[test]
+    fn directory_live_options_filter_and_prefix() {
+        let search = DirectorySearch {
+            directory: "/w/repo/src".to_owned(),
+            prefix: "src/".to_owned(),
+            query: "ma".to_owned(),
+        };
+        let entries = [
+            FileFindRow { path: "main.rs".to_owned(), is_directory: false },
+            FileFindRow { path: "markdown".to_owned(), is_directory: true },
+            FileFindRow { path: "math".to_owned(), is_directory: true },
+            FileFindRow { path: "zed".to_owned(), is_directory: true },
+        ];
+        let options = directory_live_options(&entries, "/w/repo/src", &search);
+        let displays: Vec<&str> = options.iter().map(|option| option.display.as_str()).collect();
+        assert_eq!(displays, ["src/markdown/", "src/math/"]);
+        assert_eq!(options[0].absolute.as_deref(), Some("/w/repo/src/markdown"));
+        assert!(options[0].is_directory);
+        // No basename filter + a prefix: the queried directory itself
+        // completes first (directoryAutocompleteExactValue).
+        let search = DirectorySearch {
+            directory: "/w/repo/src".to_owned(),
+            prefix: "src/".to_owned(),
+            query: String::new(),
+        };
+        let options = directory_live_options(&entries, "/w/repo/src", &search);
+        assert_eq!(options[0].display, "src/");
+        assert_eq!(options[0].absolute.as_deref(), Some("/w/repo/src"));
+    }
