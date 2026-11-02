@@ -354,6 +354,24 @@ pub trait ProviderPort: Send + Sync {
     async fn reload(&self) -> Result<(), String>;
 }
 
+/// `ctx.model.list/default/reload` routing target (G-147 — the v2
+/// `ModelDomain`'s port half, ref promise/model.ts:25-28 /
+/// adapter.ts:342-346: the catalog's model rows over the host's model
+/// registry; `transform`'s editor table lands through the
+/// registration-side `model.transform` merge instead).
+#[async_trait]
+pub trait ModelPort: Send + Sync {
+    /// `model.list({providerID?})` — `Model.Info[]` JSON (each row
+    /// carrying its `providerID`), optionally narrowed to one provider.
+    async fn list(&self, provider_id: Option<&str>) -> Result<Value, String>;
+
+    /// `model.default()` — `{providerID, modelID}` JSON or `null`.
+    async fn default_model(&self) -> Result<Value, String>;
+
+    /// `model.reload()` — re-derive the model catalog.
+    async fn reload(&self) -> Result<(), String>;
+}
+
 /// `ctx.reference.list/reload` routing target (G-64 — ref
 /// host.ts:432-443: the `@`-completion reference registry).
 #[async_trait]

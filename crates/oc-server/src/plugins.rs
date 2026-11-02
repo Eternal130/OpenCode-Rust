@@ -100,6 +100,8 @@ pub struct PluginBoot {
     pub vcs_slot: Arc<EngineVcsSlot>,
     /// The provider-port slot (G-64; filled after `Engine::boot`).
     pub provider_slot: Arc<EngineProviderSlot>,
+    /// The model-port slot (G-147; filled after `Engine::boot`).
+    pub model_slot: Arc<EngineModelSlot>,
     /// The reference-port slot (G-64; filled after `Engine::boot`).
     pub reference_slot: Arc<EngineReferenceSlot>,
     /// The terminal-port slot (G-64; filled after `Engine::boot`).
@@ -149,6 +151,7 @@ impl PluginBoot {
             websearch_slot: Arc::new(EngineWebsearchSlot::default()),
             vcs_slot: Arc::new(EngineVcsSlot::default()),
             provider_slot: Arc::new(EngineProviderSlot::default()),
+            model_slot: Arc::new(EngineModelSlot::default()),
             reference_slot: Arc::new(EngineReferenceSlot::default()),
             terminal_slot: Arc::new(EngineTerminalSlot::default()),
             integration_slot: Arc::new(EngineIntegrationSlot::default()),
@@ -339,6 +342,7 @@ pub fn boot(
     let websearch_slot = Arc::new(EngineWebsearchSlot::default());
     let vcs_slot = Arc::new(EngineVcsSlot::default());
     let provider_slot = Arc::new(EngineProviderSlot::default());
+    let model_slot = Arc::new(EngineModelSlot::default());
     let reference_slot = Arc::new(EngineReferenceSlot::default());
     let terminal_slot = Arc::new(EngineTerminalSlot::default());
     let integration_slot = Arc::new(EngineIntegrationSlot::default());
@@ -356,12 +360,12 @@ pub fn boot(
             websearch_slot,
             vcs_slot,
             provider_slot,
+            model_slot,
             reference_slot,
             terminal_slot,
             integration_slot,
         });
     }
-
     // The host-state seed: the native agent table (builtins + config
     // markdown, the same table every location's graph builds) and the
     // config-sourced MCP servers (codemode defaults applied — the
@@ -436,6 +440,9 @@ pub fn boot(
         // integration.* over the boot location's engine services (slots
         // filled after Engine::boot, the same pattern).
         provider_port: Some(Arc::clone(&provider_slot) as Arc<dyn oc_plugin_host::ProviderPort>),
+        // G-147: ctx.model.list/default/reload over the boot location's
+        // engine model catalog (slot filled after Engine::boot).
+        model_port: Some(Arc::clone(&model_slot) as Arc<dyn oc_plugin_host::ModelPort>),
         reference_port: Some(Arc::clone(&reference_slot) as Arc<dyn oc_plugin_host::ReferencePort>),
         terminal_port: Some(Arc::clone(&terminal_slot) as Arc<dyn oc_plugin_host::TerminalPort>),
         integration_port: Some(
@@ -466,6 +473,7 @@ pub fn boot(
         websearch_slot,
         vcs_slot,
         provider_slot,
+        model_slot,
         reference_slot,
         terminal_slot,
         integration_slot,
@@ -2323,6 +2331,97 @@ impl EngineProviderSlot {
             .expect("provider slot poisoned")
             .clone()
             .ok_or_else(|| "provider: the engine is not attached to the plugin host yet".to_owned())
+    }
+}
+
+/// The engine-backed [`oc_plugin_host::ModelPort`] (G-147 —
+/// `ctx.model.list/default/reload` over the boot location's model
+/// catalog: the same `location_model_entries` ordering `/api/model`
+/// serves, and the configured default with the available-first
+/// fallback `/api/model/default` takes).
+pub struct EngineModelPort {
+    pub engine: Arc<Engine>,
+    pub location: LocationRef,
+}
+
+#[async_trait]
+impl oc_plugin_host::ModelPort for EngineModelPort {
+    async fn list(&self, provider_id: Option<&str>) -> Result<Value, String> {
+        let entries =
+            crate::handlers::model::location_model_entries(&self.engine, &self.location).await;
+        let filtered = match provider_id {
+            Some(provider) => entries
+                .into_iter()
+                .filter(|entry| entry.get("providerID").and_then(Value::as_str) == Some(provider))
+                .collect(),
+            None => entries,
+        };
+        Ok(serde_json::to_value(filtered).unwrap_or(Value::Null))
+    }
+
+    async fn default_model(&self) -> Result<Value, String> {
+        let configured = crate::boot::location_default_model(&self.engine, &self.location);
+        if let Some(selection) = configured {
+            return Ok(serde_json::to_value(&selection).unwrap_or(Value::Null));
+        }
+        // `/api/model/default`'s available-first fallback
+        // (`available.find(supportsText)`, model.ts:260-266).
+        let entries =
+            crate::handlers::model::location_model_entries(&self.engine, &self.location).await;
+        Ok(entries
+            .into_iter()
+            .find(|entry| entry.get("id").and_then(Value::as_str).is_some())
+            .map(|entry| {
+                serde_json::json!({
+                    "providerID": entry.get("providerID").cloned().unwrap_or(Value::Null),
+                    "modelID": entry.get("id").cloned().unwrap_or(Value::Null),
+                })
+            })
+            .unwrap_or(Value::Null))
+    }
+
+    async fn reload(&self) -> Result<(), String> {
+        // `model.reload` — the catalog refresh `provider.reload` drives
+        // (the model rows derive from it).
+        self.engine.catalog_service.refresh(true).await.map(|_| ()).map_err(|e| e)
+    }
+}
+
+/// The pre-engine model-port placeholder (the slot pattern).
+#[derive(Default)]
+pub struct EngineModelSlot(std::sync::RwLock<Option<Arc<EngineModelPort>>>);
+
+impl EngineModelSlot {
+    pub fn fill(&self, port: Arc<EngineModelPort>) {
+        let mut slot = self.0.write().expect("model slot poisoned");
+        if slot.is_none() {
+            *slot = Some(port);
+        }
+    }
+}
+
+#[async_trait]
+impl oc_plugin_host::ModelPort for EngineModelSlot {
+    async fn list(&self, provider_id: Option<&str>) -> Result<Value, String> {
+        self.port()?.list(provider_id).await
+    }
+
+    async fn default_model(&self) -> Result<Value, String> {
+        self.port()?.default_model().await
+    }
+
+    async fn reload(&self) -> Result<(), String> {
+        self.port()?.reload().await
+    }
+}
+
+impl EngineModelSlot {
+    fn port(&self) -> Result<Arc<EngineModelPort>, String> {
+        self.0
+            .read()
+            .expect("model slot poisoned")
+            .clone()
+            .ok_or_else(|| "model: the engine is not attached to the plugin host yet".to_owned())
     }
 }
 

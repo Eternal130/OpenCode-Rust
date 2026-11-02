@@ -123,7 +123,7 @@ fn console_model_json(
 /// same stable sort (released = 0, after every dated catalog model).
 /// `Model.default`'s fallback (`available.find(supportsText)`,
 /// model.ts:260-266) scans the SAME ordering.
-async fn location_model_entries(
+pub(crate) async fn location_model_entries(
     engine: &oc_core::engine::Engine,
     location: &oc_core::location::LocationRef,
 ) -> Vec<Value> {

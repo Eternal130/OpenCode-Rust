@@ -103,6 +103,19 @@ pub struct PluginProviderDef {
     pub definition: Value,
 }
 
+/// One model override from a `ctx.model.transform` materialization
+/// (G-147 — ref promise/model.ts:6-23's `ModelEditor.update/remove`
+/// records; the whole derived override table crosses, keyed
+/// provider/model).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PluginModelOverride {
+    pub plugin_id: String,
+    pub provider_id: String,
+    pub model_id: String,
+    /// The model record JSON (the editor's merged `Model.Info`).
+    pub model: Value,
+}
+
 /// One reference source from a `ctx.reference.transform`
 /// materialization (G-64 — `editor.add(name, source)` records).
 #[derive(Debug, Clone, PartialEq)]
@@ -376,6 +389,8 @@ pub struct RegistrationSnapshot {
     pub references: Vec<PluginReferenceDef>,
     /// G-24 residual — plugin vcs provider rows, by id.
     pub vcs_providers: Vec<PluginVcsProvider>,
+    /// G-147 — plugin model overrides, by provider/model.
+    pub models: Vec<PluginModelOverride>,
 }
 
 /// The mutable registration store behind the snapshot (interior to the
@@ -435,6 +450,8 @@ pub struct Registrations {
     pub references: BTreeMap<String, PluginReferenceDef>,
     /// G-24 residual — plugin vcs provider rows by id.
     pub vcs_providers: BTreeMap<String, PluginVcsProvider>,
+    /// G-147 — plugin model overrides by `provider/model` key.
+    pub models: BTreeMap<String, PluginModelOverride>,
 }
 
 impl Registrations {
@@ -463,6 +480,7 @@ impl Registrations {
         self.providers.retain(|_, provider| provider.plugin_id != plugin_id);
         self.references.retain(|_, reference| reference.plugin_id != plugin_id);
         self.vcs_providers.retain(|_, provider| provider.plugin_id != plugin_id);
+        self.models.retain(|_, override_| override_.plugin_id != plugin_id);
         if let Some(default) = self.agent_default.as_ref() {
             if !self.agents.contains_key(default) {
                 self.agent_default = None;
@@ -634,6 +652,54 @@ impl Registrations {
         }
     }
 
+    /// G-147 — merge one `ctx.model.transform` materialization
+    /// (whole-table, by provider/model key; provenance keeps other
+    /// plugins' entries on re-materialization).
+    pub fn merge_models(&mut self, plugin_id: &str, models: &[Value]) {
+        let incoming: Vec<(String, String)> = models
+            .iter()
+            .filter_map(|model| {
+                let provider_id = model.get("providerID").and_then(Value::as_str)?;
+                let model_id = model
+                    .get("id")
+                    .or_else(|| model.get("modelID"))
+                    .and_then(Value::as_str)?;
+                Some((provider_id.to_owned(), model_id.to_owned()))
+            })
+            .collect();
+        self.models.retain(|_, override_| {
+            override_.plugin_id != plugin_id
+                || incoming.iter().any(|(provider, model)| {
+                    *provider == override_.provider_id && *model == override_.model_id
+                })
+        });
+        for (provider_id, model_id) in incoming {
+            let Some(model) = models.iter().find(|model| {
+                model.get("providerID").and_then(Value::as_str) == Some(provider_id.as_str())
+                    && model
+                        .get("id")
+                        .or_else(|| model.get("modelID"))
+                        .and_then(Value::as_str)
+                        == Some(model_id.as_str())
+            }) else {
+                continue;
+            };
+            let provenance = self
+                .models
+                .get(&format!("{provider_id}/{model_id}"))
+                .map_or_else(|| plugin_id.to_owned(), |o| o.plugin_id.clone());
+            self.models.insert(
+                format!("{provider_id}/{model_id}"),
+                PluginModelOverride {
+                    plugin_id: provenance,
+                    provider_id,
+                    model_id,
+                    model: model.clone(),
+                },
+            );
+        }
+    }
+
     /// G-24 residual — merge one `ctx.vcs.transform` materialization
     /// (whole-table, by vcs provider id; the closures stay in the
     /// guest).
@@ -765,6 +831,7 @@ impl Registrations {
             providers: self.providers.values().cloned().collect(),
             references: self.references.values().cloned().collect(),
             vcs_providers: self.vcs_providers.values().cloned().collect(),
+            models: self.models.values().cloned().collect(),
             plugins: self.plugins.values().cloned().collect(),
             default_agent: self.agent_default.clone(),
         }

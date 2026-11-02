@@ -103,15 +103,15 @@ pub use context::{
     install::{default_root as install_root, install, InstallOptions, Installed},
     is_mutating_hook,
     update::{collect_stale, global_cache as update_cache, npm_check, update, UpdateCache},
-    Bridge, HostState, IntegrationPort, NoSessionEngine, NoToolEngine, PermissionPort,
+    Bridge, HostState, IntegrationPort, ModelPort, NoSessionEngine, NoToolEngine, PermissionPort,
     ProviderPort, ReferencePort, SessionPort, TerminalPort, ToolPort, VcsPort, WebsearchPort,
     MUTATING_DISPATCH_TIMEOUT, SESSION_METHODS,
 };
 pub use registrations::{
     PluginAgent, PluginCommand, PluginDialog, PluginGroupRule, PluginHomeAction, PluginHook,
-    PluginKeymapCommand, PluginMcp, PluginProviderDef, PluginReferenceDef, PluginRoute, PluginRpc,
-    PluginSkill, PluginSlotClaim, PluginState, PluginStatus, PluginTheme, PluginTool,
-    PluginVcsProvider, RegistrationSnapshot,
+    PluginKeymapCommand, PluginMcp, PluginModelOverride, PluginProviderDef, PluginReferenceDef,
+    PluginRoute, PluginRpc, PluginSkill, PluginSlotClaim, PluginState, PluginStatus, PluginTheme,
+    PluginTool, PluginVcsProvider, RegistrationSnapshot,
 };
 pub use resolve::{
     discover_directory_ops, parse_ops, resolve, PluginOp, PluginSourceKind, Resolution,
@@ -163,6 +163,9 @@ pub struct PluginHostConfig {
     /// `ctx.provider.list/get/reload` routing target (G-64): the
     /// engine's provider registry. `None` declines every call.
     pub provider_port: Option<Arc<dyn ProviderPort>>,
+    /// `ctx.model.list/default/reload` routing target (G-147): the
+    /// engine's model catalog. `None` declines every call.
+    pub model_port: Option<Arc<dyn ModelPort>>,
     /// `ctx.reference.list/reload` routing target (G-64): the engine's
     /// reference registry. `None` declines every call.
     pub reference_port: Option<Arc<dyn ReferencePort>>,
@@ -195,6 +198,7 @@ impl Default for PluginHostConfig {
             websearch_port: None,
             vcs_port: None,
             provider_port: None,
+            model_port: None,
             reference_port: None,
             terminal_port: None,
             integration_port: None,
@@ -1186,6 +1190,7 @@ fn supervisor_config(
         websearch_port: config.websearch_port.take(),
         vcs_port: config.vcs_port.take(),
         provider_port: config.provider_port.take(),
+        model_port: config.model_port.take(),
         reference_port: config.reference_port.take(),
         terminal_port: config.terminal_port.take(),
         integration_port: config.integration_port.take(),

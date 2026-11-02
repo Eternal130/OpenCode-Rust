@@ -126,6 +126,9 @@ pub struct SupervisorConfig {
     /// The provider registry backend (G-64): `None` declines every
     /// `ctx.provider.list/get/reload` call.
     pub provider_port: Option<Arc<dyn crate::context::ProviderPort>>,
+    /// The model catalog backend (G-147): `None` declines every
+    /// `ctx.model.list/default/reload` call.
+    pub model_port: Option<Arc<dyn crate::context::ModelPort>>,
     /// The reference registry backend (G-64): `None` declines every
     /// `ctx.reference.*` call.
     pub reference_port: Option<Arc<dyn crate::context::ReferencePort>>,
@@ -160,11 +163,44 @@ impl Default for SupervisorConfig {
             websearch_port: None,
             vcs_port: None,
             provider_port: None,
+            model_port: None,
             reference_port: None,
             terminal_port: None,
             integration_port: None,
         }
     }
+}
+
+/// G-148 — the display name for `ctx.plugin.list` rows: the entry's
+/// package name when a package.json sits at/above it, else the entry
+/// file stem (ref PluginInfo carries the full source record; the
+/// bounded projection keeps id/name/version/active).
+fn plugin_display_name(entry: &str) -> String {
+    plugin_package_field(entry, "name").unwrap_or_else(|| {
+        std::path::Path::new(entry)
+            .file_stem()
+            .map_or_else(|| entry.to_owned(), |stem| stem.to_string_lossy().into_owned())
+    })
+}
+
+/// G-148 — the entry's package.json field (name/version) when the
+/// entry sits inside an installed package.
+fn plugin_package_field(entry: &str, field: &str) -> Option<String> {
+    let mut directory = std::path::Path::new(entry).parent()?.to_owned();
+    for _ in 0..8 {
+        let manifest = directory.join("package.json");
+        if manifest.is_file() {
+            if let Ok(text) = std::fs::read_to_string(&manifest) {
+                let parsed: Value = serde_json::from_str(&text).ok()?;
+                return parsed.get(field)?.as_str().map(str::to_owned);
+            }
+            return None;
+        }
+        if !directory.pop() {
+            break;
+        }
+    }
+    None
 }
 
 /// A bridge call failure.
@@ -358,8 +394,7 @@ impl Shared {
     ///
     /// `None` = the reply is deferred (the `session.*` async path
     /// spawns the port call; the reply is enqueued when it settles).
-    fn answer_guest(self: &Arc<Self>, id: u64, method: &str, params: &Value) -> Option<String> {
-        match method {
+    fn answer_guest(self: &Arc<Self>, id: u64, method: &str, params: &Value) -> Option<String> {        match method {
             "command.add" | "theme.register" => Some(answer_wave1(self, id, method, params)),
             // -- wave 2: transform-domain materialization (registration
             //    time only — the only synchronous surface).
@@ -372,7 +407,7 @@ impl Shared {
             //    G-64/G-24 residual: the provider/reference/vcs
             //    transform tables follow the same merge.
             "websearch.transform" | "worktree.transform" | "provider.transform"
-            | "reference.transform" | "vcs.transform" => {
+            | "reference.transform" | "vcs.transform" | "model.transform" => {
                 let mut registrations =
                     self.registrations.write().expect("registrations poisoned");
                 let plugin_id = params.get("pluginId").and_then(Value::as_str).unwrap_or("?");
@@ -392,6 +427,13 @@ impl Shared {
                     "vcs.transform" => registrations.merge_vcs_providers(
                         plugin_id,
                         params.get("providers").and_then(Value::as_array).cloned().unwrap_or_default().as_slice(),
+                    ),
+                    // G-147 — the model editor's whole derived override
+                    // table (base models come from the port; only the
+                    // overrides cross here).
+                    "model.transform" => registrations.merge_models(
+                        plugin_id,
+                        params.get("models").and_then(Value::as_array).cloned().unwrap_or_default().as_slice(),
                     ),
                     _ => registrations.merge_worktree_strategies(
                         plugin_id,
@@ -475,6 +517,32 @@ impl Shared {
             "provider.list" | "provider.get" | "provider.reload" => {
                 self.answer_provider_async(id, method, params);
                 None
+            }
+            // -- G-147: `ctx.model.list/default/reload` over the
+            //    engine's model catalog (async off the reader).
+            "model.list" | "model.default" | "model.reload" => {
+                self.answer_model_async(id, method, params);
+                None
+            }
+            // -- G-148: `ctx.plugin.list` — the loaded plugin table
+            //    (id/name/version/active), answered inline from the
+            //    registration snapshot.
+            "plugin.list" => {
+                let registrations = self.registrations.read().expect("registrations poisoned");
+                let plugins: Vec<Value> = registrations
+                    .plugins
+                    .values()
+                    .map(|status| {
+                        let entry = status.entry.to_string_lossy().into_owned();
+                        serde_json::json!({
+                            "id": status.plugin_id,
+                            "name": plugin_display_name(&entry),
+                            "version": plugin_package_field(&entry, "version").map(Value::String).unwrap_or(Value::Null),
+                            "active": matches!(status.state, crate::registrations::PluginState::Active),
+                        })
+                    })
+                    .collect();
+                Some(protocol::response(id, json!({ "value": plugins })))
             }
             // -- G-64: `ctx.reference.list/reload` over the engine's
             //    reference registry (async off the reader).
@@ -848,6 +916,51 @@ impl Shared {
                 other => {
                     protocol::error_response(id, &format!("unknown provider method {other:?}"))
                 }
+            };
+            let _ = outbound.send(reply);
+        });
+    }
+
+    /// G-147 — the async `ctx.model.*` path: the engine's model
+    /// catalog answers off the reader (deadlock rule 1).
+    fn answer_model_async(self: &Arc<Self>, id: u64, method: &str, params: &Value) {
+        let args = params.get("args").cloned().unwrap_or(Value::Null);
+        let provider_id = args
+            .get("providerID")
+            .or_else(|| args.get("id"))
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let Some(handle) = self.runtime_handle.clone() else {
+            self.reply_inline(id, "plugin host runtime unavailable");
+            return;
+        };
+        let port = match self.config.model_port.clone() {
+            Some(port) => port,
+            None => {
+                self.reply_inline(
+                    id,
+                    &format!("model.{method}: no model catalog attached to the plugin host"),
+                );
+                return;
+            }
+        };
+        let method = method.to_owned();
+        let outbound = self.outbound.read().expect("outbound lock poisoned").clone();
+        handle.spawn(async move {
+            let reply = match method.as_str() {
+                "model.list" => match port.list(provider_id.as_deref()).await {
+                    Ok(value) => protocol::response(id, json!({ "value": value })),
+                    Err(message) => protocol::error_response(id, &message),
+                },
+                "model.default" => match port.default_model().await {
+                    Ok(value) => protocol::response(id, json!({ "value": value })),
+                    Err(message) => protocol::error_response(id, &message),
+                },
+                "model.reload" => match port.reload().await {
+                    Ok(()) => protocol::response(id, Value::Null),
+                    Err(message) => protocol::error_response(id, &message),
+                },
+                other => protocol::error_response(id, &format!("unknown model method {other:?}")),
             };
             let _ = outbound.send(reply);
         });

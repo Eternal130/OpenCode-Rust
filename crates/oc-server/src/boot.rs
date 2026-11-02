@@ -444,6 +444,11 @@ pub async fn boot_and_serve(options: &BootOptions) -> io::Result<ServeHandle> {
     plugin_boot.provider_slot.fill(Arc::new(crate::plugins::EngineProviderPort {
         engine: Arc::clone(&app_state.engine),
     }));
+    // G-147: ctx.model.* over the boot location's model catalog.
+    plugin_boot.model_slot.fill(Arc::new(crate::plugins::EngineModelPort {
+        engine: Arc::clone(&app_state.engine),
+        location: LocationRef::new(config_location.clone(), None),
+    }));
     plugin_boot.reference_slot.fill(Arc::new(crate::plugins::EngineReferencePort {
         engine: Arc::clone(&app_state.engine),
     }));
