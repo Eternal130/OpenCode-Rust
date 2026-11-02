@@ -688,7 +688,12 @@ impl Contender {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
-            .env_remove("RUST_BACKTRACE");
+            .env_remove("RUST_BACKTRACE")
+            // G-152 (ref Env.session(), cli/env.ts:15-22): the service
+            // session env is the filtered process env — the password
+            // variables NEVER cross into the detached daemon.
+            .env_remove("OPENCODE_PASSWORD")
+            .env_remove("OPENCODE_SERVER_PASSWORD");
         for (name, value) in env {
             cmd.env(name, value);
         }

@@ -2,6 +2,7 @@
 
 pub mod api;
 pub mod auth;
+mod auth_form;
 pub mod mcp;
 pub mod misc;
 pub mod plugin;

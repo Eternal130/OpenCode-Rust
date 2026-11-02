@@ -140,7 +140,7 @@ fn resolve_method<'a>(methods: &'a [Value], target: &str) -> Result<&'a Value, S
 /// http(s) URL with the platform browser opener. Plain subprocess spawn —
 /// non-fatal on failure (REF pipes through `Effect.ignore`); the URL itself
 /// is always printed first as the manual fallback.
-fn open_url(url: &str) {
+pub(crate) fn open_url(url: &str) {
     // Only http and https links can be opened in the browser (open.ts).
     let Some((scheme, _rest)) = url.split_once("://") else { return };
     if !matches!(scheme, "http" | "https") {
@@ -163,7 +163,7 @@ fn open_url(url: &str) {
         .spawn();
 }
 
-fn require_interactive(message: &str) -> Result<(), String> {
+pub(crate) fn require_interactive(message: &str) -> Result<(), String> {
     if util::stdin_is_tty() && util::stdout_is_tty() {
         Ok(())
     } else {
@@ -256,19 +256,9 @@ async fn list(server: &ServerParams, format: OutputFormat) -> i32 {
     0
 }
 
-fn parse_answers(answers: &[String]) -> Result<Option<serde_json::Map<String, Value>>, String> {
-    if answers.is_empty() {
-        return Ok(None);
-    }
-    let mut map = serde_json::Map::new();
-    for answer in answers {
-        let Some((key, value)) = answer.split_once('=') else {
-            return Err(format!("Invalid answer, expected name=value: {answer}"));
-        };
-        map.insert(key.to_owned(), Value::String(value.to_owned()));
-    }
-    Ok(Some(map))
-}
+/// G-150 note: answers now carry the wire `FormAnswer` built by
+/// [`crate::handlers::auth_form::answer_form`] (typed values, not
+/// stringified key=value pairs).
 
 #[allow(clippy::too_many_lines)]
 async fn login(
@@ -420,13 +410,18 @@ async fn login(
         }
     };
     let kind = method.get("type").and_then(Value::as_str).unwrap_or_default().to_owned();
+    // G-150: the full form surface (ref answerForm) — schema-driven
+    // validation of --answer values (unknown/inactive field rejection,
+    // JSON values for boolean/numeric fields, `when` conditional
+    // activation) plus interactive prompting for missing answers.
     let answer = if kind == "command" {
         None
     } else {
-        match parse_answers(answers) {
+        let form = method.get("form").and_then(Value::as_array).map(Vec::as_slice);
+        match crate::handlers::auth_form::answer_form(form, answers) {
             Ok(answer) => answer,
             Err(message) => {
-                eprintln!("{message}");
+                eprintln!("Error: {message}");
                 return 1;
             }
         }
@@ -451,29 +446,15 @@ async fn login(
     }
 }
 
-fn form_answer(
-    answer: Option<&serde_json::Map<String, Value>>,
-) -> Option<oc_client::types::FormAnswer> {
-    let map = answer?;
-    Some(
-        map.iter()
-            .map(|(key, value)| {
-                (
-                    key.clone(),
-                    oc_client::types::FormValue::String(
-                        value.as_str().unwrap_or_default().to_owned(),
-                    ),
-                )
-            })
-            .collect(),
-    )
+fn form_answer(answer: Option<&oc_client::types::FormAnswer>) -> Option<oc_client::types::FormAnswer> {
+    answer.cloned()
 }
 
 async fn key_login(
     client: &oc_client::Client,
     integration_id: &str,
     integration_name: &str,
-    answer: Option<&serde_json::Map<String, Value>>,
+    answer: Option<&oc_client::types::FormAnswer>,
 ) -> Result<(), String> {
     require_interactive("This login requires an interactive terminal")?;
     let key = Password::new()
@@ -502,7 +483,7 @@ pub(crate) async fn oauth_login(
     integration_id: &str,
     integration_name: &str,
     method: &Value,
-    answer: Option<&serde_json::Map<String, Value>>,
+    answer: Option<&oc_client::types::FormAnswer>,
     label: Option<String>,
 ) -> Result<(), String> {
     let method_id = method.get("id").and_then(Value::as_str).unwrap_or_default().to_owned();
@@ -786,21 +767,61 @@ async fn resolve_account(
     target: Option<&str>,
     credential: Option<&str>,
 ) -> Result<(oc_client::Client, Value, String), String> {
-    let Some(target) = target else {
-        return Err("Pass an integration ID or name when running without an interactive terminal"
-            .to_owned());
-    };
-    let Some(credential) = credential else {
-        return Err(
-            "Pass a credential ID or label when running without an interactive terminal".to_owned()
-        );
-    };
+    // G-150 (ref chooseIntegration/chooseCredential): both halves get
+    // TTY selectors when the target/credential is omitted — only a
+    // NON-interactive terminal hard-errors.
     let resolved = connect(server, None).await.map_err(|_| String::new())?;
     let client = resolved.endpoint.client();
     let integrations = load_integrations(&client).await?;
-    let integration = resolve_integration(&integrations, target)?;
-    let credential_id = choose_credential(&integration, "use", Some(credential))?;
+    let integration = match target {
+        Some(target) => resolve_integration(&integrations, target)?,
+        None => {
+            require_interactive(
+                "Pass an integration ID or name when running without an interactive terminal",
+            )?;
+            choose_integration(&integrations, "use")?
+        }
+    };
+    if credential.is_none() {
+        require_interactive(
+            "Pass a credential ID or label when running without an interactive terminal",
+        )?;
+    }
+    let credential_id = choose_credential(&integration, "use", credential)?;
     Ok((client, integration, credential_id))
+}
+
+/// G-150 — the TTY integration selector for logout/switch (ref
+/// `chooseIntegration` over the connected integrations; the G-61
+/// `loginChoices` pattern restricted to rows with credentials).
+fn choose_integration(integrations: &[Value], action: &str) -> Result<Value, String> {
+    let choices: Vec<&Value> = integrations
+        .iter()
+        .filter(|integration| {
+            integration
+                .get("connections")
+                .and_then(Value::as_array)
+                .is_some_and(|connections| !connections.is_empty())
+        })
+        .collect();
+    if choices.is_empty() {
+        return Err("No connected integrations found".to_owned());
+    }
+    let labels: Vec<String> = choices
+        .iter()
+        .map(|integration| {
+            integration.get("name").and_then(Value::as_str).unwrap_or_default().to_owned()
+        })
+        .collect();
+    match Select::new()
+        .with_prompt(format!("Select integration to {action}"))
+        .items(&labels)
+        .default(0)
+        .interact_opt()
+    {
+        Ok(Some(index)) => Ok(choices[index].clone()),
+        _ => Err("Cancelled".to_owned()),
+    }
 }
 
 async fn logout(server: &ServerParams, target: Option<&str>, credential: Option<&str>) -> i32 {
@@ -951,8 +972,17 @@ async fn import(server: &ServerParams, file: Option<&str>) -> i32 {
                     && !known_integrations.contains(&integration_id),
             ),
         };
-        if client.credential().create(&body).await.is_ok() {
-            imported += 1;
+        // G-149 (ref auth/import.ts:47-50 `isConflictError`): ONLY a
+        // conflict (HTTP 409) counts as "already present" — any other
+        // failure (network, 5xx, validation) is a HARD error so a
+        // partial import is detectable.
+        match client.credential().create(&body).await {
+            Ok(_) => imported += 1,
+            Err(error) if error.status() == Some(409) => {}
+            Err(error) => {
+                eprintln!("{}", error_message(&error.to_string()));
+                return 1;
+            }
         }
     }
     let skipped = credentials.len().saturating_sub(imported);

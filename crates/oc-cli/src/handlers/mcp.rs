@@ -5,6 +5,7 @@ use serde_json::{json, Value};
 use crate::cli::McpCommands;
 use crate::handlers::connect;
 use crate::util::error_message;
+use crate::util::{stdin_is_tty, stdout_is_tty};
 
 fn location_query() -> oc_client::types::QueryLocation {
     oc_client::types::QueryLocation {
@@ -314,10 +315,85 @@ async fn add(
 }
 
 #[allow(clippy::too_many_lines)]
+/// G-151① — the no-name TTY selector's choice list: the configured
+/// OAuth-capable remote MCP servers (ref `mcpAuthChoices`). `Ok(None)`
+/// = nothing configured (the guidance block printed); `Err` = the
+/// connect/list/selector failed (code already printed).
+async fn auth_interactive_choice() -> Result<Option<String>, i32> {
+    let resolved = match connect(&crate::cli::ServerParams::default(), None).await {
+        Ok(resolved) => resolved,
+        Err(code) => return Err(code),
+    };
+    let client = resolved.endpoint.client();
+    let servers = match client
+        .mcp()
+        .list(&oc_client::types::McpListQuery { location: Some(location_query()) })
+        .await
+    {
+        Ok(response) => response,
+        Err(error) => {
+            eprintln!("{}", error_message(&error.to_string()));
+            return Err(1);
+        }
+    };
+    let choices: Vec<&oc_client::types::McpServer> = servers
+        .data
+        .iter()
+        .filter(|server| server.integration_id.is_some() && resolve_remote_config(&server.name).is_some())
+        .collect();
+    if choices.is_empty() {
+        println!("⚠ No OAuth-capable MCP servers configured");
+        println!(
+            "Remote MCP servers support OAuth by default. Add one with `opencode mcp add` or in opencode.json:\n  \"mcp\": {{\n    \"my-server\": {{\n      \"type\": \"remote\",\n      \"url\": \"https://example.com/mcp\"\n    }}\n  }}"
+        );
+        return Ok(None);
+    }
+    let labels: Vec<String> = choices
+        .iter()
+        .map(|server| match &server.status {
+            oc_client::types::McpServerStatus::NeedsAuth(_) => {
+                format!("{} (needs authentication)", server.name)
+            }
+            _ => server.name.clone(),
+        })
+        .collect();
+    match dialoguer::Select::new()
+        .with_prompt("Select MCP server")
+        .items(&labels)
+        .default(0)
+        .interact_opt()
+    {
+        Ok(Some(index)) => Ok(Some(choices[index].name.clone())),
+        _ => {
+            println!("└  Cancelled");
+            Err(1)
+        }
+    }
+}
+
+#[allow(clippy::too_many_lines)]
 async fn auth(name: Option<&str>) -> i32 {
-    let Some(name) = name else {
-        eprintln!("Error: Pass an MCP server name when running without an interactive terminal");
-        return 1;
+    // G-151①: no name → interactive selector over the configured
+    // OAuth-capable remote MCP servers (ref mcpAuthChoices; non-TTY
+    // still demands a name).
+    let name = match name {
+        Some(name) => name.to_owned(),
+        None => {
+            if let Err(message) = crate::handlers::auth::require_interactive(
+                "Pass an MCP server name when running without an interactive terminal",
+            ) {
+                eprintln!("Error: {message}");
+                return 1;
+            }
+            match auth_interactive_choice().await {
+                Ok(Some(selected)) => selected,
+                Ok(None) => {
+                    println!("└  Done");
+                    return 0;
+                }
+                Err(code) => return code,
+            }
+        }
     };
     println!("◆ Authenticate an MCP server");
     let resolved = match connect(&crate::cli::ServerParams::default(), None).await {
@@ -345,13 +421,43 @@ async fn auth(name: Option<&str>) -> i32 {
         eprintln!("Error: MCP server \"{name}\" is not an OAuth-capable remote server");
         return 1;
     };
-    if matches!(server.status, oc_client::types::McpServerStatus::NeedsAuth(_)) {
+    // G-151②: valid credentials already exist → confirm the re-auth
+    // first (ref: non-TTY keeps going — the re-auth replaces the old
+    // sign-ins after the new credential stores, below).
+    let existing_credentials = client
+        .credential()
+        .list()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|row| &row.integration_id == integration_id)
+        .count();
+    let needs_auth = matches!(server.status, oc_client::types::McpServerStatus::NeedsAuth(_));
+    if needs_auth {
         println!("│ {name} has expired credentials. Re-authenticating...");
+    } else if existing_credentials > 0 {
+        // Bounded deviation (G-151②): ref gates the confirm on BOTH
+        // stdin+stdout TTY; non-TTY re-auth proceeds silently (the
+        // old credentials still go away only after the new one
+        // stores).
+        if stdin_is_tty() && stdout_is_tty() {
+            println!("◇ Select re-authentication");
+            match dialoguer::Confirm::new()
+                .with_prompt(format!("{name} already has valid credentials. Re-authenticate?"))
+                .interact()
+            {
+                Ok(true) => {}
+                _ => {
+                    println!("└  Cancelled");
+                    return 0;
+                }
+            }
+        }
     }
     // PLUG-D30: the server config drives the flow (its URL is the OAuth
     // resource identity). Resolved from the same config files `mcp add`
     // writes — the project candidates first, then the global config.
-    let Some(config) = resolve_remote_config(name) else {
+    let Some(config) = resolve_remote_config(&name) else {
         eprintln!("Error: MCP server \"{name}\" is not an OAuth-capable remote server");
         return 1;
     };
@@ -451,7 +557,7 @@ async fn auth(name: Option<&str>) -> i32 {
     let _ = client
         .mcp()
         .connect(
-            name,
+            &name,
             &oc_client::types::ExperimentalMcpConnectQuery { location: Some(location_query()) },
         )
         .await;

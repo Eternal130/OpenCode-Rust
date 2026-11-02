@@ -34,6 +34,8 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use serde_json::Value;
+
 use crate::services::update_feed::Candidate;
 
 /// The release tag this binary was built from (`v2.0.24.beta.1`), or
@@ -81,12 +83,59 @@ pub const DEFAULT_INSTALLER_URL: &str = "https://opencode.ai/v2/install";
 pub const DEFAULT_PACKAGE: &str = "@opencode-ai/cli";
 
 /// The package name package-manager methods install.
+///
+/// G-156: v2 resolves this from the update service's release
+/// `metadata.package`; the Rust port's release feed (its own GitHub
+/// stream) carries no such field — BOUNDED DEVIATION — so the name
+/// resolves from (1) the env override, (2) the installed package
+/// probed from the executable path (ref `installedPackage`:
+/// `<exe>/../../package.json`), (3) the published npm package.
 #[must_use]
 pub fn package_name() -> String {
-    std::env::var(PACKAGE_ENV)
-        .ok()
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| DEFAULT_PACKAGE.to_owned())
+    if let Some(name) = std::env::var(PACKAGE_ENV).ok().filter(|value| !value.is_empty()) {
+        return name;
+    }
+    if let Some(exe) = std::env::current_exe().ok() {
+        if let Some(installed) = installed_package(&exe) {
+            return installed;
+        }
+    }
+    DEFAULT_PACKAGE.to_owned()
+}
+
+/// G-156 (ref updater.ts:138-148 `installedPackage`): the npm-style
+/// package the running executable belongs to — `<exe>/../../package.json`
+/// whose `name` matches `@opencode(-ai)?/cli(-node)?` and whose bin
+/// entry resolves back to the executable.
+#[must_use]
+pub fn installed_package(exe: &Path) -> Option<String> {
+    let directory = exe.parent()?.parent()?.to_owned();
+    let manifest: Value = serde_json::from_str(
+        &std::fs::read_to_string(directory.join("package.json")).ok()?,
+    )
+    .ok()?;
+    let name = manifest.get("name")?.as_str()?.to_owned();
+    let valid = name == "@opencode-ai/cli"
+        || name == "@opencode/cli"
+        || name == "@opencode-ai/cli-node"
+        || name == "@opencode/cli-node";
+    if !valid {
+        return None;
+    }
+    // The bin entry must point back at the running executable
+    // (source invocations inside bun/node must not match).
+    let exe = exe.canonicalize().unwrap_or_else(|_| exe.to_path_buf());
+    let mut bins = manifest
+        .get("bin")
+        .and_then(Value::as_object)?
+        .values()
+        .filter_map(Value::as_str)
+        .map(|bin| directory.join(bin).canonicalize().unwrap_or_else(|_| directory.join(bin)));
+    if bins.any(|bin| bin == exe) {
+        Some(name)
+    } else {
+        None
+    }
 }
 
 /// The package managers whose upgrade bodies are actually driven
@@ -98,46 +147,160 @@ pub const PACKAGE_MANAGERS: [&str; 5] = ["npm", "pnpm", "bun", "yarn", "vp"];
 /// bun/brew branches). Version must already be `v`-stripped.
 ///
 /// * npm keeps the old package with `--force` (uninstalling can
-///   unlink the replacement command) — v2's dominant branch for the
-///   `cli` artifact when the installed package is not `cli-node`.
-/// * pnpm passes `--allow-build` (the package ships postinstall).
+///   unlink the replacement command) — G-156: conditional exactly like
+///   ref updater.ts:392-398 (`--force` when the artifact is `cli` and
+///   the installed package is not `cli-node`, or when the target
+///   package differs from the installed one; an UNKNOWN installed
+///   package cannot be confirmed `cli-node`, so it forces).
+/// * pnpm passes `--allow-build` (the package ships postinstall);
+///   G-156: a DIFFERENT installed package under pnpm/yarn is a hard
+///   error (ref :389-391 — reinstall to migrate).
 /// * bun gets a private `--cache-dir` (it never prunes old versions
 ///   from its shared cache) and `--trust` for postinstall.
 /// * vp uses `update` when the same package is already installed;
-///   `install --force` is only for cross-package migrations, which
-///   this port cannot detect (no installed-package probe), so the
-///   plain `update` shape is the default.
+///   `install --force` for cross-package migrations (G-156, ref
+///   :405-408).
 #[must_use]
-pub fn package_manager_command(method: &str, package: &str, version: &str) -> Option<Vec<String>> {
+pub fn package_manager_command(
+    method: &str,
+    package: &str,
+    version: &str,
+    installed: Option<&str>,
+) -> Result<Vec<String>, PackageCommandError> {
     let target = format!("{package}@{version}");
-    let command = match method {
-        "npm" => vec![
-            "npm".to_owned(),
-            "install".to_owned(),
-            "--global".to_owned(),
-            "--force".to_owned(),
-            target,
-        ],
-        "pnpm" => vec![
+    let installed_differs =
+        installed.is_some_and(|installed| installed != package);
+    match method {
+        "npm" => {
+            // G-156 (ref updater.ts:392-398): for the `cli` artifact
+            // stream `--force` stays ON unless the installed package is
+            // confirmed to be the SAME `*-cli-node` variant.
+            let force = match installed {
+                None => true,
+                Some(installed) => !installed.ends_with("/cli-node") || installed != package,
+            };
+            let mut argv =
+                vec!["npm".to_owned(), "install".to_owned(), "--global".to_owned()];
+            if force {
+                argv.push("--force".to_owned());
+            }
+            argv.push(target);
+            Ok(argv)
+        }
+        "pnpm" | "yarn" if installed_differs => Err(PackageCommandError::Migration(format!(
+            "Reinstall {target} with {method} to migrate from {}.",
+            installed.unwrap_or_default()
+        ))),
+        "pnpm" => Ok(vec![
             "pnpm".to_owned(),
             "add".to_owned(),
             "--global".to_owned(),
             format!("--allow-build={package}"),
             target,
-        ],
-        "bun" => vec![
+        ]),
+        "bun" => Ok(vec![
             "bun".to_owned(),
             "install".to_owned(),
             "--global".to_owned(),
             "--trust".to_owned(),
             target,
-        ],
-        "yarn" => vec!["yarn".to_owned(), "global".to_owned(), "add".to_owned(), target],
-        "vp" => vec!["vp".to_owned(), "update".to_owned(), "-g".to_owned(), target],
-        "brew" => vec!["brew".to_owned(), "upgrade".to_owned(), package.to_owned()],
+        ]),
+        "yarn" => Ok(vec!["yarn".to_owned(), "global".to_owned(), "add".to_owned(), target]),
+        "vp" if installed_differs => Ok(vec![
+            "vp".to_owned(),
+            "install".to_owned(),
+            "-g".to_owned(),
+            "--force".to_owned(),
+            target,
+        ]),
+        "vp" => Ok(vec!["vp".to_owned(), "update".to_owned(), "-g".to_owned(), target]),
+        "brew" => Ok(vec!["brew".to_owned(), "upgrade".to_owned(), package.to_owned()]),
+        other => Err(PackageCommandError::Unknown(format!(
+            "Unknown package-manager method: {other}"
+        ))),
+    }
+}
+
+/// G-156 — why a package-manager argv could not be built.
+#[derive(Debug, PartialEq)]
+pub enum PackageCommandError {
+    /// Unknown method name.
+    Unknown(String),
+    /// pnpm/yarn cross-package migration (ref fails with this text).
+    Migration(String),
+}
+
+impl std::fmt::Display for PackageCommandError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unknown(message) | Self::Migration(message) => write!(f, "{message}"),
+        }
+    }
+}
+
+impl std::error::Error for PackageCommandError {}
+
+/// G-156④ (ref updater.ts `removal`): the package-manager uninstall
+/// argv per method (curl/brew own their binaries — no command).
+#[must_use]
+pub fn removal_command(method: &str, package: &str) -> Option<Vec<String>> {
+    let command = match method {
+        "npm" => vec!["npm".to_owned(), "uninstall".to_owned(), "--global".to_owned(), package.to_owned()],
+        "pnpm" => vec!["pnpm".to_owned(), "remove".to_owned(), "--global".to_owned(), package.to_owned()],
+        "bun" => vec!["bun".to_owned(), "remove".to_owned(), "--global".to_owned(), package.to_owned()],
+        "yarn" => vec!["yarn".to_owned(), "global".to_owned(), "remove".to_owned(), package.to_owned()],
+        "vp" => vec!["vp".to_owned(), "uninstall".to_owned(), "-g".to_owned(), package.to_owned()],
         _ => return None,
     };
     Some(command)
+}
+
+/// G-156 — which package manager owns `package` (ref `method()`'s
+/// probe tail: npm/pnpm/bun/yarn substring lists + vp's JSON list,
+/// checked in order, first hit wins). Used by the uninstall chain
+/// only — the documented install-detection cut in [`detect_method`]
+/// (G-17 family) stays. Bounded: the probes run synchronously without
+/// a timeout (v2 budgets 10 s; these managers answer promptly when
+/// present, and a missing binary errors immediately).
+#[must_use]
+pub fn detect_package_manager_method(package: &str) -> Option<&'static str> {
+    let checks: [(&'static str, Vec<&str>); 5] = [
+        ("npm", vec!["npm", "list", "-g", "--depth=0", package]),
+        ("pnpm", vec!["pnpm", "list", "-g", "--depth=0", package]),
+        ("bun", vec!["bun", "pm", "ls", "-g"]),
+        ("yarn", vec!["yarn", "global", "list"]),
+        ("vp", vec!["vp", "list", "-g", "--json", package]),
+    ];
+    for (method, argv) in checks {
+        let Ok(output) = std::process::Command::new(argv[0])
+            .args(&argv[1..])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .output()
+        else {
+            continue;
+        };
+        if !output.status.success() {
+            continue;
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if method == "vp" {
+            // vp repeats the filter in its no-match message — require
+            // a JSON row naming the package (ref decodeVpPackages).
+            let Ok(parsed) = serde_json::from_str::<Value>(&stdout) else { continue };
+            let Some(rows) = parsed.as_array() else { continue };
+            if rows
+                .iter()
+                .any(|row| row.get("name").and_then(Value::as_str) == Some(package))
+            {
+                return Some(method);
+            }
+        } else if stdout.contains(package) {
+            return Some(method);
+        }
+    }
+    None
 }
 
 /// Tail-compress install output like v2 `conciseDetail`: strip
@@ -220,9 +383,10 @@ pub async fn run_package_manager_command(command: &[String]) -> Result<(), Upgra
 pub async fn upgrade_via_package_manager(method: &str, version: &str) -> Result<(), UpgradeError> {
     let version = version.trim().trim_start_matches('v');
     let package = package_name();
-    let Some(command) = package_manager_command(method, &package, version) else {
-        return Err(UpgradeError(format!("Unknown package-manager method: {method}")));
-    };
+    let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("opencode"));
+    let installed = installed_package(&exe);
+    let command = package_manager_command(method, &package, version, installed.as_deref())
+        .map_err(|error| UpgradeError(error.to_string()))?;
     println!("Running: {}", command.join(" "));
     run_package_manager_command(&command).await
 }
@@ -1118,6 +1282,51 @@ pub fn execute_removals(plan: &[Removal]) -> Vec<String> {
 mod tests {
     use super::*;
 
+    /// G-156: the installed-package probe from the executable path
+    /// (ref `installedPackage`): the grandparent package.json's name
+    /// must be a cli variant AND its bin entry must resolve back to
+    /// the executable.
+    #[test]
+    fn installed_package_probes_the_executable_path() {
+        let dir = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+        // ref layout: `<package-root>/bin/opencode` + the root
+        // package.json two levels up from the executable.
+        std::fs::create_dir_all(dir.path().join("bin")).expect("bin dir");
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{ "name": "@opencode-ai/cli", "bin": { "opencode": "bin/opencode" } }"#,
+        )
+        .expect("manifest");
+        let exe = dir.path().join("bin").join("opencode");
+        std::fs::write(&exe, "#!/bin/sh\n").expect("exe");
+        let exe = exe.canonicalize().expect("canonical exe");
+        assert_eq!(installed_package(&exe).as_deref(), Some("@opencode-ai/cli"));
+
+        // A non-cli manifest never matches.
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{ "name": "left-pad", "bin": { "pad": "bin/opencode" } }"#,
+        )
+        .expect("manifest");
+        assert_eq!(installed_package(&exe), None);
+    }
+
+    /// G-156④: the removal argv per manager (ref `removal`).
+    #[test]
+    fn removal_commands_match_v2() {
+        assert_eq!(
+            removal_command("npm", "@opencode-ai/cli").unwrap(),
+            vec!["npm", "uninstall", "--global", "@opencode-ai/cli"]
+        );
+        assert_eq!(
+            removal_command("vp", "@opencode-ai/cli").unwrap(),
+            vec!["vp", "uninstall", "-g", "@opencode-ai/cli"]
+        );
+        assert!(removal_command("curl", "@opencode-ai/cli").is_none());
+        assert!(removal_command("brew", "opencode").is_none());
+    }
+    use super::*;
+
     /// G-99: `curl` must route to the official installer script and
     /// `github` to the release download — never share a body.
     #[test]
@@ -1757,30 +1966,66 @@ mod tests {
 
     #[test]
     fn package_manager_commands_match_v2() {
-        let npm = package_manager_command("npm", "@opencode-ai/cli", "2.0.24").expect("npm");
+        // npm: --force is conditional (G-156, ref updater.ts:392-398):
+        // for the cli artifact it stays ON unless the installed
+        // package is the same `*-cli-node` variant.
+        let npm =
+            package_manager_command("npm", "@opencode-ai/cli", "2.0.24", None).expect("npm");
         assert_eq!(npm, vec!["npm", "install", "--global", "--force", "@opencode-ai/cli@2.0.24"]);
+        let npm_same_name =
+            package_manager_command("npm", "@opencode-ai/cli", "2.0.24", Some("@opencode-ai/cli"))
+                .expect("npm");
         assert_eq!(
-            package_manager_command("pnpm", "pkg", "1.2.3").expect("pnpm"),
+            npm_same_name,
+            vec!["npm", "install", "--global", "--force", "@opencode-ai/cli@2.0.24"]
+        );
+        let npm_cli_node = package_manager_command(
+            "npm",
+            "@opencode-ai/cli-node",
+            "2.0.24",
+            Some("@opencode-ai/cli-node"),
+        )
+        .expect("npm");
+        assert_eq!(
+            npm_cli_node,
+            vec!["npm", "install", "--global", "@opencode-ai/cli-node@2.0.24"]
+        );
+        assert_eq!(
+            package_manager_command("pnpm", "pkg", "1.2.3", None).expect("pnpm"),
             vec!["pnpm", "add", "--global", "--allow-build=pkg", "pkg@1.2.3"]
         );
         assert_eq!(
-            package_manager_command("bun", "pkg", "1.2.3").expect("bun"),
+            package_manager_command("bun", "pkg", "1.2.3", None).expect("bun"),
             vec!["bun", "install", "--global", "--trust", "pkg@1.2.3"]
         );
         assert_eq!(
-            package_manager_command("yarn", "pkg", "1.2.3").expect("yarn"),
+            package_manager_command("yarn", "pkg", "1.2.3", None).expect("yarn"),
             vec!["yarn", "global", "add", "pkg@1.2.3"]
         );
         assert_eq!(
-            package_manager_command("vp", "pkg", "1.2.3").expect("vp"),
+            package_manager_command("vp", "pkg", "1.2.3", None).expect("vp"),
             vec!["vp", "update", "-g", "pkg@1.2.3"]
         );
+        // G-156: vp cross-package migration installs with --force.
         assert_eq!(
-            package_manager_command("brew", "opencode", "1.2.3").expect("brew"),
+            package_manager_command("vp", "pkg", "1.2.3", Some("other-pkg")).expect("vp"),
+            vec!["vp", "install", "-g", "--force", "pkg@1.2.3"]
+        );
+        // G-156: pnpm/yarn cross-package migration is a hard error.
+        assert!(matches!(
+            package_manager_command("pnpm", "pkg", "1.2.3", Some("other-pkg")),
+            Err(PackageCommandError::Migration(_))
+        ));
+        assert!(matches!(
+            package_manager_command("yarn", "pkg", "1.2.3", Some("other-pkg")),
+            Err(PackageCommandError::Migration(_))
+        ));
+        assert_eq!(
+            package_manager_command("brew", "opencode", "1.2.3", None).expect("brew"),
             vec!["brew", "upgrade", "opencode"]
         );
-        assert!(package_manager_command("curl", "pkg", "1.2.3").is_none());
-        assert!(package_manager_command("github", "pkg", "1.2.3").is_none());
+        assert!(package_manager_command("curl", "pkg", "1.2.3", None).is_err());
+        assert!(package_manager_command("github", "pkg", "1.2.3", None).is_err());
     }
 
     #[tokio::test]
