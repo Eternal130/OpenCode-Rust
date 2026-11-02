@@ -753,6 +753,10 @@ static DEFAULT_TABLE: &[CommandDef] = defs! {
     "dialog.select.page_down" => "dialog.select.page_down", "pagedown", "Move down one page in dialog", "dialog";
     "dialog.select.home" => "dialog.select.home", "home", "Move to first dialog item", "dialog";
     "dialog.select.end" => "dialog.select.end", "end", "Move to last dialog item", "dialog";
+    // G-131 — `sectionNavigation`'s alt+arrows (dialog-select.tsx:
+    // 547-562: "Previous section"/"Next section").
+    "dialog.select.section.prev" => "dialog.select.section.prev", "alt+up", "Previous section", "dialog";
+    "dialog.select.section.next" => "dialog.select.section.next", "alt+down", "Next section", "dialog";
     "dialog.select.submit" => "dialog.select.submit", "return", "Submit selected dialog item", "dialog";
     "dialog.prompt.submit" => "dialog.prompt.submit", "return", "Submit dialog prompt", "dialog";
     // v2's id is `dialog.worktree.generate` (keybind.ts:267) — the
