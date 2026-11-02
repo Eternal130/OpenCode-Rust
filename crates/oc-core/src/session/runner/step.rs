@@ -353,6 +353,14 @@ pub async fn attempt(deps: &StepDeps, input: AttemptInput) -> Result<Outcome, At
         }
     }
 
+    // G-105 — ref wraps the ENTIRE stream consumption in
+    // `Effect.ensuring(publisher.flush())` (ref step.ts:132): every
+    // termination path (normal end, stream error, interrupt) flushes
+    // open text/reasoning/tool-input fragments before settlement. A
+    // later flush (step-finish, failAssistant) is a no-op once the
+    // chunks have ended.
+    publisher.flush().await?;
+
     // Finalization (uninterruptibleMask; step.ts:136-275).
     // 1. The stream exited; publisher.hasStarted() ⇒ streamed().
     if parked_overflow.is_none() && publisher.has_started() {
@@ -458,11 +466,21 @@ pub async fn attempt(deps: &StepDeps, input: AttemptInput) -> Result<Outcome, At
         publisher.publish(&event).await?;
     }
     // 4. unknownFinish ⇒ InvalidProviderOutput incomplete-stream.
+    // G-105 — a stream that ends CLEANLY with no finish event is the
+    // same defect: ref guarantees a terminal finish at the protocol
+    // layer ("stream ended without finish_reason", e.g. ref
+    // openai-chat.ts:1225, and TestLLM's terminal enforcement,
+    // testing.ts:185), so a clean no-finish stream can never reach the
+    // ref settlement gate. The runner here hoists that guarantee — a
+    // missing finish settles the step as a failed attempt (flush +
+    // failAssistant + publishStepFailure) instead of stranding open
+    // text/reasoning parts with no terminal step event.
     let record = publisher.record();
-    let unknown_finish = if stream_error.is_none()
-        && record.finish.as_ref().map(|s| s.finish) == Some(FinishReason::Unknown)
-    {
-        Some(unknown_finish_error())
+    let unknown_finish = if stream_error.is_none() && !stream_interrupted {
+        match record.finish.as_ref().map(|settlement| settlement.finish) {
+            Some(FinishReason::Unknown) | None => Some(unknown_finish_error()),
+            Some(_) => None,
+        }
     } else {
         None
     };
