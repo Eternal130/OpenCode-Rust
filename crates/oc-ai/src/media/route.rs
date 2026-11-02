@@ -24,7 +24,8 @@ use futures::StreamExt as _;
 
 use crate::media::body::{Body, Form, FormValue, Query, QueryValue};
 use crate::media::model::{
-    is_terminal, Addressed, CollectedResponse, Mode, ResponseContext, Snapshot,
+    is_terminal, Addressed, CollectedResponse, GenerationEvent, Mode, PollOptions, ResponseContext,
+    Snapshot,
 };
 use crate::media::protocol::{
     Frame, Framing, InlineProtocol, MediaSend, QueuedProtocol, SendResponse, StreamProtocol,
@@ -808,6 +809,41 @@ impl MediaSend for RouteMediaSend<'_> {
     }
 }
 
+/// Run `future` within the time left until `deadline`
+/// (`within`, generation.ts:177-196): fails before starting once the
+/// deadline has passed (a fast request could otherwise win the
+/// zero-budget race and schedule another zero-delay poll), and fails
+/// with the same Timeout error if the future exceeds the remainder.
+async fn within_deadline<T, F>(
+    future: F,
+    id: &str,
+    timeout: Duration,
+    deadline: std::time::Instant,
+) -> Result<T, AiError>
+where
+    F: Future<Output = Result<T, AiError>>,
+{
+    let now = std::time::Instant::now();
+    if now >= deadline {
+        return Err(generation_timeout_error(id, timeout));
+    }
+    match tokio::time::timeout(deadline - now, future).await {
+        Ok(result) => result,
+        Err(_) => Err(generation_timeout_error(id, timeout)),
+    }
+}
+
+/// `timeoutError` (generation.ts:201-205): a Timeout reason naming the
+/// generation, its id, and the exceeded budget in ms.
+fn generation_timeout_error(id: &str, timeout: Duration) -> AiError {
+    AiError::new(AiErrorReason::Timeout {
+        fields: crate::schema::errors::ReasonFields::new(format!(
+            "Generation {id} did not finish within {timeout:?}"
+        )),
+        timeout_ms: Some(timeout.as_secs_f64() * 1000.0),
+    })
+}
+
 /// A submitted generation: poll `status`/`result`, or `cancel` it
 /// (port of `Generation` over `generationRoute`, route/media.ts:181-211).
 pub struct Generation<P: QueuedProtocol> {
@@ -830,6 +866,101 @@ impl<P: QueuedProtocol> Generation<P> {
     #[must_use]
     pub fn first_snapshot(&self) -> Option<&Snapshot> {
         self.first_snapshot.as_ref()
+    }
+
+    /// The current observation (`Generation.snapshot`): the latest
+    /// snapshot the generation was built from (G-124).
+    #[must_use]
+    pub fn snapshot(&self) -> &Snapshot {
+        self.first_snapshot.as_ref().expect("start/resume always set a snapshot")
+    }
+
+    /// Whether the current observation is terminal (`Generation.terminal`).
+    #[must_use]
+    pub fn terminal(&self) -> bool {
+        is_terminal(self.snapshot().status)
+    }
+
+    /// One fresh observation (`Generation.refresh`, generation.ts:93):
+    /// status read, returned as a new [`Generation`].
+    pub async fn refresh(&self) -> Result<Generation<P>, AiError> {
+        let snapshot = self.status().await?;
+        Ok(Generation {
+            route: Arc::clone(&self.route),
+            token: self.token.clone(),
+            encoded: self.encoded.clone(),
+            http: self.http.clone(),
+            first_snapshot: Some(snapshot),
+        })
+    }
+
+    /// Status observations as a stream (`Generation.events`,
+    /// generation.ts:130-158; G-124): pushes one event per poll
+    /// (queued/progress) and ends with the first terminal observation
+    /// (`generation-finished`). A generation already in a terminal state
+    /// yields just the finished event. Each poll and each sleep between
+    /// polls is bounded by the time remaining until `poll.timeout`, so a
+    /// hung status request or a long interval fails the stream at the
+    /// deadline (Timeout reason) instead of stalling it.
+    ///
+    /// Exposure: oc-core/oc-server do not consume media generation yet;
+    /// this stream is the seam for their future wiring (documented in
+    /// G-124).
+    pub fn events(
+        &self,
+        options: PollOptions,
+    ) -> Pin<Box<dyn futures::Stream<Item = Result<GenerationEvent, AiError>> + Send + '_>> {
+        let id = self.snapshot().id.clone();
+        Box::pin(async_stream::stream! {
+            if self.terminal() {
+                yield Ok(self.snapshot().event());
+                return;
+            }
+            let deadline = std::time::Instant::now() + options.timeout;
+            loop {
+                let snapshot =
+                    match within_deadline(self.status(), &id, options.timeout, deadline).await {
+                        Ok(snapshot) => snapshot,
+                        Err(error) => {
+                            yield Err(error);
+                            return;
+                        }
+                    };
+                let terminal = is_terminal(snapshot.status);
+                yield Ok(snapshot.event());
+                if terminal {
+                    return;
+                }
+                // Schedule delay clamped to the time left (generation.ts:
+                // 137-141 `modifyDelay(min(duration, deadline - now))`).
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                tokio::time::sleep(options.interval.min(remaining)).await;
+            }
+        })
+    }
+
+    /// Poll until a terminal status, then fetch the result
+    /// (`Generation.await`, generation.ts:102-110; G-124). Named
+    /// `await_result` — `await` is a Rust keyword. Non-completed
+    /// terminal states also go through `result()` so the route surfaces
+    /// the provider's terminal body; everything (each poll, each sleep,
+    /// the result fetch) is bounded by the same deadline and fails with
+    /// a Timeout reason once it passes.
+    pub async fn await_result(&self, options: PollOptions) -> Result<P::Response, AiError> {
+        let id = self.snapshot().id.clone();
+        let deadline = std::time::Instant::now() + options.timeout;
+        if !self.terminal() {
+            loop {
+                let snapshot =
+                    within_deadline(self.status(), &id, options.timeout, deadline).await?;
+                if is_terminal(snapshot.status) {
+                    break;
+                }
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                tokio::time::sleep(options.interval.min(remaining)).await;
+            }
+        }
+        within_deadline(self.result(), &id, options.timeout, deadline).await
     }
 
     /// One status observation. Only status/result reads retry transient
