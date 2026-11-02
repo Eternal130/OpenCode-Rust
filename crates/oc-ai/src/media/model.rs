@@ -81,6 +81,78 @@ pub struct ProgressEvent {
 }
 
 // ---------------------------------------------------------------------------
+// generation.ts — Event / Poll options (G-124 observation streams)
+// ---------------------------------------------------------------------------
+
+/// `generation-finished` (generation.ts:50): the terminal observation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FinishedEvent {
+    pub id: String,
+    pub status: Status,
+}
+
+/// One generation observation event (`Generation.Event`,
+/// generation.ts:50): an [`QueuedEvent`]/[`ProgressEvent`] observation,
+/// or the terminal [`FinishedEvent`] that ends the stream.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "kebab-case", rename_all_fields = "camelCase")]
+pub enum GenerationEvent {
+    #[serde(rename = "generation-queued")]
+    Queued(QueuedEvent),
+    #[serde(rename = "generation-progress")]
+    Progress(ProgressEvent),
+    #[serde(rename = "generation-finished")]
+    Finished(FinishedEvent),
+}
+
+impl Snapshot {
+    /// Maps one observation to its event (`Generation.event`,
+    /// generation.ts:159-163): terminal → finished, queued → queued
+    /// (with position), otherwise progress.
+    #[must_use]
+    pub fn event(&self) -> GenerationEvent {
+        if is_terminal(self.status) {
+            GenerationEvent::Finished(FinishedEvent { id: self.id.clone(), status: self.status })
+        } else if self.status == Status::Queued {
+            GenerationEvent::Queued(QueuedEvent {
+                id: self.id.clone(),
+                position: self.position,
+            })
+        } else {
+            GenerationEvent::Progress(ProgressEvent {
+                id: self.id.clone(),
+                progress: self.progress,
+            })
+        }
+    }
+}
+
+/// Poll knobs (`Poll`, generation.ts:23-27).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PollOptions {
+    /// Spacing between status reads (`Schedule.spaced`, default 5s).
+    pub interval: std::time::Duration,
+    /// Overall deadline for the observation stream / await
+    /// (default 10m).
+    pub timeout: std::time::Duration,
+}
+
+impl Default for PollOptions {
+    fn default() -> Self {
+        Self {
+            interval: DEFAULT_POLL_INTERVAL,
+            timeout: DEFAULT_POLL_TIMEOUT,
+        }
+    }
+}
+
+/// `DEFAULT_POLL_INTERVAL` (generation.ts:31).
+pub const DEFAULT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+/// `DEFAULT_POLL_TIMEOUT` (generation.ts:32).
+pub const DEFAULT_POLL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+
+// ---------------------------------------------------------------------------
 // image.ts
 // ---------------------------------------------------------------------------
 

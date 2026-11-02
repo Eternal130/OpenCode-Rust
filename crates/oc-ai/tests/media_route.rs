@@ -13,6 +13,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures::StreamExt as _;
 use oc_ai::media::body::{Query, QueryValue};
 use oc_ai::media::image::fal::FalImages;
 use oc_ai::media::model::{
@@ -391,4 +392,209 @@ impl AiErrorProvider {
             rate_limit: None,
         })
     }
+}
+
+// ---------------------------------------------------------------------------
+// G-124: Generation observation streams (generation.ts:102-158)
+// ---------------------------------------------------------------------------
+
+use oc_ai::media::model::{FinishedEvent, GenerationEvent, PollOptions};
+use oc_ai::schema::AiErrorReason;
+
+fn fast_poll() -> PollOptions {
+    PollOptions { interval: Duration::from_millis(1), timeout: Duration::from_secs(10) }
+}
+
+/// `events()` pushes one event per poll (queued/progress) and ends with
+/// the first terminal observation.
+#[tokio::test]
+async fn events_streams_observations_until_terminal() {
+    let transport = Arc::new(MockTransport::from_interactions(vec![
+        post("https://api.assemblyai.com/v2/transcript", 200, r#"{"id":"tr1","status":"queued"}"#),
+        get(
+            "https://api.assemblyai.com/v2/transcript/tr1",
+            200,
+            r#"{"id":"tr1","status":"processing"}"#,
+        ),
+        get(
+            "https://api.assemblyai.com/v2/transcript/tr1",
+            200,
+            r#"{"id":"tr1","status":"processing"}"#,
+        ),
+        get(
+            "https://api.assemblyai.com/v2/transcript/tr1",
+            200,
+            r#"{"id":"tr1","status":"completed"}"#,
+        ),
+    ]));
+    let mut spec = MediaRouteSpec::new(shared(&transport));
+    spec.read_retry = test_retry();
+    spec.auth = Some(auth::Definition::bearer(Secret::Value("asm-key".into())));
+    let route = QueuedMediaRoute::new(Arc::new(AssemblyAITranscription), spec);
+
+    let request = TranscriptionRequest {
+        model: "best".into(),
+        audio: oc_ai::schema::media::url(
+            "https://cdn.example.com/a.mp3",
+            Some("audio/mpeg".into()),
+            None,
+        ),
+        ..Default::default()
+    };
+    let generation = route.start(&request).await.expect("start");
+    let mut events = Box::pin(generation.events(fast_poll()));
+    let mut seen = Vec::new();
+    while let Some(item) = events.next().await {
+        seen.push(item.expect("observation"));
+    }
+    assert_eq!(
+        seen,
+        vec![
+            GenerationEvent::Progress(oc_ai::media::model::ProgressEvent {
+                id: "tr1".into(),
+                progress: None,
+            }),
+            GenerationEvent::Progress(oc_ai::media::model::ProgressEvent {
+                id: "tr1".into(),
+                progress: None,
+            }),
+            GenerationEvent::Finished(FinishedEvent { id: "tr1".into(), status: Status::Completed }),
+        ],
+        "two running observations then the terminal finished event"
+    );
+    // 4 wire calls: submit + three status polls (no result fetch).
+    assert_eq!(transport.requests().len(), 4);
+}
+
+/// A generation already in a terminal state yields just the finished
+/// event with no further polls (generation.ts:133).
+#[tokio::test]
+async fn events_on_terminal_generation_yields_once() {
+    let transport = Arc::new(MockTransport::from_interactions(vec![
+        post(
+            "https://api.assemblyai.com/v2/transcript",
+            200,
+            r#"{"id":"tr1","status":"completed"}"#,
+        ),
+    ]));
+    let mut spec = MediaRouteSpec::new(shared(&transport));
+    spec.read_retry = test_retry();
+    spec.auth = Some(auth::Definition::bearer(Secret::Value("asm-key".into())));
+    let route = QueuedMediaRoute::new(Arc::new(AssemblyAITranscription), spec);
+
+    let request = TranscriptionRequest {
+        model: "best".into(),
+        audio: oc_ai::schema::media::url(
+            "https://cdn.example.com/a.mp3",
+            Some("audio/mpeg".into()),
+            None,
+        ),
+        ..Default::default()
+    };
+    let generation = route.start(&request).await.expect("start");
+    assert!(generation.terminal());
+    let mut events = Box::pin(generation.events(fast_poll()));
+    let mut seen = Vec::new();
+    while let Some(item) = events.next().await {
+        seen.push(item.expect("observation"));
+    }
+    assert_eq!(seen, vec![GenerationEvent::Finished(FinishedEvent {
+        id: "tr1".into(),
+        status: Status::Completed,
+    })]);
+    assert_eq!(transport.requests().len(), 1, "no polls for an already-terminal generation");
+}
+
+/// `await_result()` polls to a terminal status then fetches the result
+/// (`Generation.await`).
+#[tokio::test]
+async fn await_result_polls_then_fetches() {
+    let transport = Arc::new(MockTransport::from_interactions(vec![
+        post("https://api.assemblyai.com/v2/transcript", 200, r#"{"id":"tr1","status":"queued"}"#),
+        get(
+            "https://api.assemblyai.com/v2/transcript/tr1",
+            200,
+            r#"{"id":"tr1","status":"processing"}"#,
+        ),
+        get(
+            "https://api.assemblyai.com/v2/transcript/tr1",
+            200,
+            r#"{"id":"tr1","status":"completed","text":"hello"}"#,
+        ),
+        get(
+            "https://api.assemblyai.com/v2/transcript/tr1",
+            200,
+            r#"{"id":"tr1","status":"completed","text":"hello"}"#,
+        ),
+    ]));
+    let mut spec = MediaRouteSpec::new(shared(&transport));
+    spec.read_retry = test_retry();
+    spec.auth = Some(auth::Definition::bearer(Secret::Value("asm-key".into())));
+    let route = QueuedMediaRoute::new(Arc::new(AssemblyAITranscription), spec);
+
+    let request = TranscriptionRequest {
+        model: "best".into(),
+        audio: oc_ai::schema::media::url(
+            "https://cdn.example.com/a.mp3",
+            Some("audio/mpeg".into()),
+            None,
+        ),
+        ..Default::default()
+    };
+    let generation = route.start(&request).await.expect("start");
+    let response = generation.await_result(fast_poll()).await.expect("await");
+    assert_eq!(response.text, "hello");
+    assert_eq!(transport.requests().len(), 4, "submit + two polls + result");
+}
+
+/// Deadline semantics: the timeout fails the stream / await with a
+/// Timeout reason naming the generation (generation.ts:177-205); the
+/// interval sleep is clamped to the remaining budget so the stream
+/// fails AT the deadline instead of stalling past it.
+#[tokio::test]
+async fn events_deadline_fails_with_timeout_reason() {
+    let transport = Arc::new(MockTransport::from_interactions(vec![
+        post("https://api.assemblyai.com/v2/transcript", 200, r#"{"id":"tr1","status":"queued"}"#),
+        get(
+            "https://api.assemblyai.com/v2/transcript/tr1",
+            200,
+            r#"{"id":"tr1","status":"processing"}"#,
+        ),
+    ]));
+    let mut spec = MediaRouteSpec::new(shared(&transport));
+    spec.read_retry = test_retry();
+    spec.auth = Some(auth::Definition::bearer(Secret::Value("asm-key".into())));
+    let route = QueuedMediaRoute::new(Arc::new(AssemblyAITranscription), spec);
+
+    let request = TranscriptionRequest {
+        model: "best".into(),
+        audio: oc_ai::schema::media::url(
+            "https://cdn.example.com/a.mp3",
+            Some("audio/mpeg".into()),
+            None,
+        ),
+        ..Default::default()
+    };
+    let generation = route.start(&request).await.expect("start");
+    // Tiny deadline: the first refresh succeeds (running), then the
+    // clamped sleep lands past the deadline and the next `within` fails.
+    let options = PollOptions { interval: Duration::from_secs(5), timeout: Duration::from_millis(50) };
+    let mut events = Box::pin(generation.events(options));
+    let mut final_error = None;
+    while let Some(item) = events.next().await {
+        match item {
+            Ok(_) => {}
+            Err(error) => {
+                final_error = Some(error);
+                break;
+            }
+        }
+    }
+    let error = final_error.expect("stream must fail at the deadline");
+    assert!(
+        matches!(&error.reason, AiErrorReason::Timeout { timeout_ms: Some(ms), .. } if *ms == 50.0),
+        "expected a Timeout reason with the budget in ms, got {:?}",
+        error.reason
+    );
+    assert!(error.message().contains("tr1"), "message names the generation: {}", error.message());
 }
