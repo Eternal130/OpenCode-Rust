@@ -503,9 +503,12 @@ fn codemode_source(tools: Arc<ToolRegistryState>) -> InstructionSource {
             ))
         }),
         initial: Box::new(|value| Some(crate::tool::codemode::instructions_from_value(value))),
-        changed: Box::new(|_previous, current| {
-            let text = crate::tool::codemode::instructions_from_value(current);
-            Some(crate::tool::codemode::instructions_replacement(&text))
+        changed: Box::new(|previous, current| {
+            // G-106① — ref instructions.ts:32-124: the minimal
+            // incremental delta (new/changed lines, namespace
+            // inventory, no-longer-available list, shorter-vs-whole),
+            // not the whole-text replacement.
+            Some(crate::tool::codemode::instructions_update(previous, current))
         }),
         removed: None,
     }

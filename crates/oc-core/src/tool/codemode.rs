@@ -143,6 +143,11 @@ pub struct CatalogEntry {
     /// catalog.ts:79-90). The sole v2 registration with `pinned: true` is
     /// `opencode.session_move` (opencode.ts:115).
     pub pinned: bool,
+    /// G-106② — the registered description of the entry's namespace
+    /// (`editor.namespace(...)`, ref tool.ts:169-176), when one exists.
+    /// All entries of a namespace share it; the catalog renders it on
+    /// the namespace line (catalog.ts:64/173).
+    pub namespace_description: Option<String>,
 }
 
 /// `qualifiedName` (codemode/tool.ts:296-300) over a registration.
@@ -186,12 +191,15 @@ pub fn code_mode_entries(tools: &ToolRegistryState) -> Vec<CatalogEntry> {
             let pinned = path == "opencode.session_move";
             let signature = signature(&path, &tool.description, &tool.input);
             let search_text = search_text(&path, &tool.description, &tool.input);
+            let namespace_description =
+                tools.namespace_description(path.split('.').next().unwrap_or(&path));
             CatalogEntry {
                 pinned,
                 path,
                 description: tool.description.clone(),
                 signature,
                 search_text,
+                namespace_description,
             }
         })
         .collect()
@@ -579,14 +587,31 @@ pub struct CatalogSummary {
 }
 
 fn cost(text: &str) -> usize {
-    text.len().div_ceil(CHARACTERS_PER_TOKEN)
+    // G-106④ — ref catalog.ts:188 counts UTF-16 code units
+    // (`text.length`) and rounds (`Math.round(units / 4)`). Byte-based
+    // counting overestimated non-ASCII content 1-3x and starved the
+    // round-robin early.
+    (text.encode_utf16().count() + CHARACTERS_PER_TOKEN / 2) / CHARACTERS_PER_TOKEN
+}
+
+/// JS `String.prototype.slice(0, units)` (UTF-16 code units). A cut
+/// inside a surrogate pair yields a replacement character, exactly like
+/// the JS slice does.
+fn utf16_slice(value: &str, units: usize) -> String {
+    if value.encode_utf16().count() <= units {
+        return value.to_string();
+    }
+    String::from_utf16_lossy(&value.encode_utf16().take(units).collect::<Vec<u16>>())
 }
 
 /// The listing suffix: `  - {signature} // {first description line}`.
 fn listing_line(entry: &CatalogEntry) -> String {
     let first_line = entry.description.split('\n').next().unwrap_or_default().trim().to_string();
-    let description = if first_line.len() > DESCRIPTION_LIMIT {
-        format!("{}...", &first_line[..DESCRIPTION_LIMIT - 3])
+    // G-106③ — the limit and the slice are UTF-16 code units (ref
+    // catalog.ts:69 `firstLine.slice(0, DESCRIPTION_LIMIT - 3)`); the
+    // previous byte slice panicked on multibyte boundaries.
+    let description = if first_line.encode_utf16().count() > DESCRIPTION_LIMIT {
+        format!("{}...", utf16_slice(&first_line, DESCRIPTION_LIMIT - 3))
     } else {
         first_line
     };
@@ -610,6 +635,7 @@ pub fn catalog_summary(entries: &[CatalogEntry]) -> CatalogSummary {
     }
     struct Round {
         name: String,
+        description: Option<String>,
         listings: Vec<Listing>,
         ranked: Vec<usize>, // listing indexes, cost-ascending then path
         selected: Vec<usize>,
@@ -618,6 +644,10 @@ pub fn catalog_summary(entries: &[CatalogEntry]) -> CatalogSummary {
     let mut rounds: Vec<Round> = groups
         .into_iter()
         .map(|(name, group)| {
+            // G-106② — the namespace's registered description (ref
+            // catalog.ts:64 `flattened.namespaces.get(name)?.description`).
+            let description =
+                group.iter().find_map(|entry| entry.namespace_description.clone());
             // Listings sorted by path inside the namespace.
             let pinned_paths: std::collections::HashSet<&str> = group
                 .iter()
@@ -643,18 +673,20 @@ pub fn catalog_summary(entries: &[CatalogEntry]) -> CatalogSummary {
             let mut ranked: Vec<usize> =
                 (0..listings.len()).filter(|at| !pinned.contains(at)).collect();
             ranked.sort_by_key(|&at| cost(&listings[at].line));
-            Round { name, listings, ranked, selected, index: 0 }
+            Round { name, description, listings, ranked, selected, index: 0 }
         })
         .collect();
 
     // Budget: namespace lines (with no entries shown) and the pinned
     // listings first, then the round-robin over ranked listings.
+    // G-106② — the namespace line's ` // description` suffix counts
+    // against the budget exactly like ref catalog.ts:97-111.
     let head = rounds
         .iter()
         .map(|round| {
             cost(&namespace_line(&NamespaceSummary {
                 name: round.name.clone(),
-                description: None,
+                description: round.description.clone(),
                 count: round.listings.len(),
                 entries: Vec::new(),
             })) + round.selected.iter().map(|&at| cost(&round.listings[at].line)).sum::<usize>()
@@ -705,7 +737,7 @@ pub fn catalog_summary(entries: &[CatalogEntry]) -> CatalogSummary {
             entries.sort_by(|left, right| left.path.cmp(&right.path));
             NamespaceSummary {
                 name: round.name,
-                description: None,
+                description: round.description,
                 count: round.listings.len(),
                 entries,
             }
@@ -778,14 +810,22 @@ pub fn summary_value(summary: &CatalogSummary) -> Value {
     json!({
         "total": summary.total,
         "shown": summary.shown,
-        "namespaces": summary.namespaces.iter().map(|namespace| json!({
-            "name": namespace.name,
-            "count": namespace.count,
-            "entries": namespace.entries.iter().map(|entry| json!({
-                "path": entry.path,
-                "line": entry.line,
-            })).collect::<Vec<_>>(),
-        })).collect::<Vec<_>>(),
+        "namespaces": summary.namespaces.iter().map(|namespace| {
+            // `description` is an optionalKey (G-106②): present only
+            // when the namespace registered one.
+            let mut value = json!({
+                "name": namespace.name,
+                "count": namespace.count,
+                "entries": namespace.entries.iter().map(|entry| json!({
+                    "path": entry.path,
+                    "line": entry.line,
+                })).collect::<Vec<_>>(),
+            });
+            if let Some(description) = &namespace.description {
+                value["description"] = json!(description);
+            }
+            value
+        }).collect::<Vec<_>>(),
     })
 }
 
@@ -850,6 +890,10 @@ pub fn catalog_instructions(tools: &ToolRegistryState) -> String {
             hasher.update(entry.search_text.as_bytes());
             hasher.update([0u8]);
             hasher.update([u8::from(entry.pinned)]);
+            hasher.update([0u8]);
+            if let Some(description) = &entry.namespace_description {
+                hasher.update(description.as_bytes());
+            }
         }
         format!("{:x}", hasher.finalize())
     };
@@ -865,12 +909,205 @@ pub fn catalog_instructions(tools: &ToolRegistryState) -> String {
     text
 }
 
-/// The instruction state's `changed` render — v2's full-replacement
-/// fallback (`CodeModeInstructions.update` worst case; the minimal
-/// delta forms are a Phase 10 refinement).
+/// The instruction state's `changed` worst case — the whole-text
+/// replacement (instructions.ts:33-35); [`instructions_update`] picks
+/// the minimal delta when the ref's conditions allow it.
 #[must_use]
 pub fn instructions_replacement(current: &str) -> String {
     format!("The Code Mode tool catalog has changed. This catalog supersedes the previous Code Mode tool catalog.\n\n{current}")
+}
+
+/// `Instructions.diffByKey` (ref instructions/index.ts:207-227).
+struct KeyDiff<'a, A> {
+    added: Vec<&'a A>,
+    removed: Vec<&'a A>,
+    changed: Vec<(&'a A, &'a A)>,
+}
+
+fn diff_by_key<'a, A>(
+    previous: &'a [A],
+    current: &'a [A],
+    key: impl Fn(&A) -> String,
+    changed: impl Fn(&A, &A) -> bool,
+) -> KeyDiff<'a, A> {
+    use std::collections::{BTreeMap, BTreeSet};
+    let current_keys: BTreeSet<String> = current.iter().map(&key).collect();
+    let previous_by_key: BTreeMap<String, &A> =
+        previous.iter().map(|value| (key(value), value)).collect();
+    let added = current.iter().filter(|value| !previous_by_key.contains_key(&key(value))).collect();
+    let removed = previous.iter().filter(|value| !current_keys.contains(&key(value))).collect();
+    let changed = current
+        .iter()
+        .filter_map(|value| {
+            let before = previous_by_key.get(&key(value))?;
+            changed(before, value).then_some((*before, value))
+        })
+        .collect();
+    KeyDiff { added, removed, changed }
+}
+
+/// `CodeModeInstructions.update` (ref codemode/instructions.ts:32-124,
+/// G-106①): the minimal incremental catalog update — new/changed
+/// listing lines, namespace inventory deltas for partial catalogs, a
+/// no-longer-available list, and the shorter of delta vs whole-text
+/// replacement. `previous`/`current` are the stored summary values;
+/// a `previous` that is not a parsable catalog (e.g. the disabled
+/// `{"enabled": false}` marker) falls back to whole-text replacement.
+pub fn instructions_update(previous: &Value, current: &Value) -> String {
+    let replacement = instructions_replacement(&instructions_from_value(current));
+    let Some(previous_summary) = summary_from_value(previous) else {
+        return replacement;
+    };
+    let Some(current_summary) = summary_from_value(current) else {
+        return replacement;
+    };
+    catalog_update_text(&previous_summary, &current_summary)
+}
+
+/// The typed half of [`instructions_update`] (instructions.ts:32-124).
+fn catalog_update_text(previous: &CatalogSummary, current: &CatalogSummary) -> String {
+    let replacement = instructions_replacement(&render_instructions(current));
+    if current.total == 0 {
+        return replacement;
+    }
+    let previous_complete = previous.shown == previous.total;
+    let current_complete = current.shown == current.total;
+    if previous_complete != current_complete {
+        return replacement;
+    }
+
+    // A namespace description appearing, disappearing, or changing
+    // regenerates the whole catalog (instructions.ts:41-48).
+    let previous_described: Vec<&NamespaceSummary> =
+        previous.namespaces.iter().filter(|n| n.description.is_some()).collect();
+    let current_described: Vec<&NamespaceSummary> =
+        current.namespaces.iter().filter(|n| n.description.is_some()).collect();
+    let descriptions = diff_by_key(
+        &previous_described,
+        &current_described,
+        |namespace| namespace.name.clone(),
+        |before, after| before.description != after.description,
+    );
+    if !(descriptions.added.is_empty()
+        && descriptions.removed.is_empty()
+        && descriptions.changed.is_empty())
+    {
+        return replacement;
+    }
+
+    let previous_entries: Vec<&Listing> =
+        previous.namespaces.iter().flat_map(|n| n.entries.iter()).collect();
+    let current_entries: Vec<&Listing> =
+        current.namespaces.iter().flat_map(|n| n.entries.iter()).collect();
+    let diff = diff_by_key(
+        &previous_entries,
+        &current_entries,
+        |entry| entry.path.clone(),
+        |before, after| before.line != after.line,
+    );
+    let entries_changed =
+        !(diff.added.is_empty() && diff.removed.is_empty() && diff.changed.is_empty());
+
+    // Length comparisons are UTF-16 code units (JS `.length`).
+    let shorter = |delta: String| -> String {
+        if delta.encode_utf16().count() < replacement.encode_utf16().count() {
+            delta
+        } else {
+            replacement.clone()
+        }
+    };
+
+    if !current_complete {
+        // Partial catalog: namespace inventory deltas only when the
+        // entry set itself did not change (instructions.ts:58-94).
+        if entries_changed {
+            return replacement;
+        }
+        let namespaces = diff_by_key(
+            &previous.namespaces,
+            &current.namespaces,
+            |namespace| namespace.name.clone(),
+            |before, after| before.count != after.count,
+        );
+        let changed = !(namespaces.added.is_empty()
+            && namespaces.removed.is_empty()
+            && namespaces.changed.is_empty());
+        if !changed {
+            return replacement;
+        }
+        let mut parts = vec!["The Code Mode tool catalog has changed.".to_string()];
+        if !namespaces.added.is_empty() {
+            parts.push(format!(
+                "New tool namespaces are available: {}.",
+                namespaces
+                    .added
+                    .iter()
+                    .map(|namespace| format!("`{}` ({} tools)", namespace.name, namespace.count))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        if !namespaces.changed.is_empty() {
+            parts.push(format!(
+                "The following namespace inventories changed; search them again before relying on previous results: {}.",
+                namespaces
+                    .changed
+                    .iter()
+                    .map(|(_, after)| format!("`{}` now has {} tools", after.name, after.count))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        if !namespaces.removed.is_empty() {
+            parts.push(format!(
+                "The following tool namespaces are no longer available and must not be used: {}.",
+                namespaces
+                    .removed
+                    .iter()
+                    .map(|namespace| format!("`{}`", namespace.name))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        return shorter(parts.join("\n\n"));
+    }
+
+    // Complete catalog: entry-level delta (instructions.ts:96-123).
+    if !entries_changed {
+        return replacement;
+    }
+    let mut parts = vec!["The Code Mode tool catalog has changed.".to_string()];
+    if !diff.added.is_empty() {
+        parts.push(
+            [
+                "New tools are available in addition to those previously listed:".to_string(),
+            ]
+            .into_iter()
+            .chain(diff.added.iter().map(|entry| entry.line.clone()))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        );
+    }
+    if !diff.changed.is_empty() {
+        parts.push(
+            ["Changed tool listings supersede the previously listed ones:".to_string()]
+                .into_iter()
+                .chain(diff.changed.iter().map(|(_, after)| after.line.clone()))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+    }
+    if !diff.removed.is_empty() {
+        parts.push(format!(
+            "The following tools are no longer available and must not be called: {}.",
+            diff.removed
+                .iter()
+                .map(|entry| tool_expression(&entry.path))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    shorter(parts.join("\n\n"))
 }
 
 /// The stored value → text (the `initial` render).
@@ -1452,6 +1689,7 @@ mod tests {
             signature: signature(path, description, &input),
             search_text: search_text(path, description, &input),
             pinned: false,
+            namespace_description: None,
         }
     }
 
@@ -1611,6 +1849,122 @@ mod tests {
         assert_eq!(
             instructions_from_value(&value),
             render_instructions(&summary_from_value(&value).unwrap())
+        );
+    }
+
+    // -- G-106 ------------------------------------------------------------
+
+    /// ③ A multibyte (Chinese) description crossing the truncation
+    /// boundary must not panic, and the truncation is by UTF-16 code
+    /// units like the ref's JS slice.
+    #[test]
+    fn g106_multibyte_description_truncation_is_utf16_safe() {
+        // 80 CJK chars = 80 UTF-16 units = 240 bytes; the first line
+        // exceeds DESCRIPTION_LIMIT (120 units) and cuts mid-multibyte.
+        let long: String = "测试".repeat(80);
+        let input = json!({ "type": "object", "properties": {} });
+        let item = entry("ns.tool", &long, input);
+        let line = listing_line(&item);
+        // The suffix is ` // ` + exactly 117 UTF-16 units + `...`.
+        let suffix = line.rsplit_once(" // ").expect("suffix present").1;
+        assert_eq!(suffix.encode_utf16().count(), 117 + 3);
+        assert!(suffix.ends_with("..."));
+        // A description exactly at a multibyte byte-boundary would have
+        // panicked under the old byte slice.
+        let boundary: String = "边界".repeat(59); // 118 UTF-16 units, 354 bytes
+        let item = entry("ns.tool", &boundary, json!({ "type": "object", "properties": {} }));
+        let _ = listing_line(&item);
+    }
+
+    /// ④ Cost counts UTF-16 code units (ref catalog.ts:188), so a CJK
+    /// listing costs the same as the ref formula, not 3x.
+    #[test]
+    fn g106_cost_counts_utf16_units() {
+        let cjk = "配置工具描述"; // 6 chars, 6 UTF-16 units, 18 bytes
+        assert_eq!(cost(cjk), (6 + 2) / 4);
+        // 13 ASCII units round to 3, 14 to 4 — Math.round semantics.
+        assert_eq!(cost("abcdefghijklm"), 3);
+        assert_eq!(cost("abcdefghijklmn"), 4);
+    }
+
+    /// ② A registered namespace description renders on the namespace
+    /// line, rides the stored value, and counts against the budget.
+    #[test]
+    fn g106_namespace_description_renders_and_round_trips() {
+        let mut with_desc = entry("opencode.models", "Search models", json!({ "type": "object", "properties": {} }));
+        with_desc.namespace_description = Some(
+            "Tools for managing OpenCode itself, such as working with sessions, searching the available models, and reading MCP resources.".into(),
+        );
+        let plain = entry("other.tool", "Other", json!({ "type": "object", "properties": {} }));
+        let summary = catalog_summary(&[with_desc, plain]);
+        let opencode = summary
+            .namespaces
+            .iter()
+            .find(|namespace| namespace.name == "opencode")
+            .expect("opencode namespace");
+        assert!(opencode.description.is_some(), "description carried into the summary");
+        let text = render_instructions(&summary);
+        assert!(
+            text.contains("- opencode (1 tool) // Tools for managing OpenCode itself"),
+            "namespace line renders the description: {text}"
+        );
+        assert!(text.contains("- other (1 tool)\n"), "description-less namespace stays bare");
+        // The stored value keeps the description (optionalKey).
+        let value = summary_value(&summary);
+        let reparsed = summary_from_value(&value).expect("round trip");
+        assert_eq!(reparsed, summary);
+    }
+
+    /// ① The catalog update emits the minimal delta, not the whole
+    /// catalog (ref instructions.ts:96-123 — complete catalogs diff by
+    /// entry; partial catalogs diff namespace inventories).
+    #[test]
+    fn g106_catalog_update_emits_minimal_delta() {
+        let base = |extra: &[(&str, &str)]| -> CatalogSummary {
+            let entries: Vec<CatalogEntry> = [("a.one", "First tool"), ("a.two", "Second tool")]
+                .iter()
+                .map(|(path, description)| {
+                    entry(path, description, json!({ "type": "object", "properties": {} }))
+                })
+                .chain(extra.iter().map(|(path, description)| {
+                    entry(path, description, json!({ "type": "object", "properties": {} }))
+                }))
+                .collect();
+            catalog_summary(&entries)
+        };
+        let previous = base(&[]);
+        let current = base(&[("a.three", "Third tool")]);
+        let text = catalog_update_text(&previous, &current);
+        assert!(text.starts_with("The Code Mode tool catalog has changed.\n\nNew tools are available in addition to those previously listed:"), "{text}");
+        assert!(text.contains("tools.a.three(): Promise<void> // Third tool"), "{text}");
+        assert!(!text.contains("# Code Mode"), "no whole-catalog re-render: {text}");
+        // Removed tools land in the no-longer-available list.
+        let back = catalog_update_text(&current, &previous);
+        assert!(
+            back.contains("The following tools are no longer available and must not be called: tools.a.three"),
+            "{back}"
+        );
+        // A changed listing line supersedes the previous one.
+        let changed = base(&[("a.one", "Edited description")]);
+        let text = catalog_update_text(&previous, &changed);
+        assert!(text.contains("Changed tool listings supersede the previously listed ones:"), "{text}");
+        assert!(text.contains("tools.a.one(): Promise<void> // Edited description"), "{text}");
+        // No change at all still falls back to the replacement (ref
+        // returns `replacement` when nothing differs — instructions.ts:96).
+        assert!(catalog_update_text(&previous, &previous).starts_with(
+            "The Code Mode tool catalog has changed. This catalog supersedes"
+        ));
+        // A namespace description change regenerates the whole catalog
+        // (instructions.ts:41-48).
+        let mut with_desc = base(&[]);
+        for namespace in &mut with_desc.namespaces {
+            namespace.description = Some("desc".into());
+        }
+        assert!(
+            catalog_update_text(&previous, &with_desc).starts_with(
+                "The Code Mode tool catalog has changed. This catalog supersedes"
+            ),
+            "description change forces the whole-text replacement"
         );
     }
 
