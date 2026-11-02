@@ -9804,6 +9804,74 @@ fn to_ratatui_color(color: crate::render::CellColor) -> ratatui::style::Color {
 
 #[cfg(test)]
 mod tests {
+    /// G-142 — `cliErrorMessage` (util/error.ts:5-87) over the
+    /// declared envelope fields.
+    #[test]
+    fn cli_error_message_formats_the_friendly_chain() {
+        let mut fields = std::collections::BTreeMap::<String, serde_json::Value>::new();
+        fields.insert("message".to_owned(), serde_json::json!("boom"));
+        assert_eq!(
+            cli_error_message("CliError", &fields).as_deref(),
+            Some("boom"),
+            "CliError keeps its message"
+        );
+        assert_eq!(cli_error_message("UICancelledError", &fields), Some(String::new()));
+        assert_eq!(cli_error_message("SomethingElse", &fields), None);
+
+        let mut model = std::collections::BTreeMap::new();
+        model.insert("providerID".to_owned(), serde_json::json!("anthropic"));
+        model.insert("modelID".to_owned(), serde_json::json!("claude"));
+        model.insert(
+            "suggestions".to_owned(),
+            serde_json::json!(["anthropic/claude-sonnet", "anthropic/claude-haiku"]),
+        );
+        let formatted = cli_error_message("ProviderModelNotFoundError", &model).unwrap();
+        assert!(formatted.contains("Model not found: anthropic/claude"), "{formatted}");
+        assert!(
+            formatted.contains("Did you mean: anthropic/claude-sonnet, anthropic/claude-haiku"),
+            "{formatted}"
+        );
+        assert!(formatted.contains("Try: `opencode models`"), "{formatted}");
+
+        let mut invalid = std::collections::BTreeMap::new();
+        invalid.insert("path".to_owned(), serde_json::json!("opencode.json"));
+        invalid.insert("message".to_owned(), serde_json::json!("bad key"));
+        invalid.insert(
+            "issues".to_owned(),
+            serde_json::json!([{ "message": "unknown key", "path": ["session", "verbosity"] }]),
+        );
+        let formatted = cli_error_message("ConfigInvalidError", &invalid).unwrap();
+        assert!(formatted.contains("Configuration is invalid at opencode.json: bad key"), "{formatted}");
+        assert!(formatted.contains("↳ unknown key session.verbosity"), "{formatted}");
+    }
+
+    /// G-136 — a prompt-carrying route seeds the destination
+    /// composer (session/index.tsx:379-381).
+    #[test]
+    fn navigate_with_prompt_seeds_the_session_composer() {
+        let store = Store::new(crate::reactive::Runtime::new());
+        store.open_tab("s1", None);
+        store.navigate_with_prompt("s1", "prefilled draft");
+        assert_eq!(
+            store.composer("s1").draft.text,
+            "prefilled draft",
+            "the route prompt lands in the composer"
+        );
+    }
+
+    /// G-140⑦ — `session.redo`'s enabled gate: no staged revert, no
+    /// dismiss call.
+    #[test]
+    fn session_redo_is_gated_on_a_staged_revert() {
+        let sink = std::rc::Rc::new(crate::store::RecordingRevertSink::default());
+        let mut store = Store::new(crate::reactive::Runtime::new());
+        store.set_revert_sink(sink.clone());
+        store.open_tab("s1", None);
+        store.navigate(Route::session("s1"));
+        store.session_redo_pressed();
+        assert!(sink.calls.borrow().is_empty(), "no revert staged — nothing to redo");
+    }
+
     use super::*;
     use crate::store::DialogSize;
 
@@ -10404,6 +10472,8 @@ mod tests {
                 time: PartTime::default(),
                 tokens: None,
                 usage_total: None,
+                cache_read: None,
+                retry: None,
             }],
         );
         app.press("ctrl+x");
@@ -11255,6 +11325,8 @@ fn mouse_release_toggles_the_thought_disclosure() {
                 time: PartTime { created: Some(1), completed: Some(2) },
                 tokens: None,
                 usage_total: None,
+                cache_read: None,
+                retry: None,
             },
         ],
     );
@@ -11348,6 +11420,8 @@ fn thought_toggle_hit_zone_is_tight_to_the_glyphs() {
                 error: None,
                 tokens: None,
                 usage_total: None,
+                cache_read: None,
+                retry: None,
                 time: PartTime { created: Some(1), completed: Some(2) },
             },
         ],
@@ -11485,6 +11559,8 @@ fn user_message_release_opens_message_actions() {
                 error: None,
                 tokens: None,
                 usage_total: None,
+                cache_read: None,
+                retry: None,
                 time: PartTime { created: Some(1), completed: Some(2) },
             },
         ],
@@ -11773,6 +11849,8 @@ mod core_interaction_tests {
                     time: PartTime::default(),
                     tokens: None,
                     usage_total: None,
+                    cache_read: None,
+                    retry: None,
                 },
             ],
         );
@@ -11859,6 +11937,8 @@ mod core_interaction_tests {
                 time: PartTime::default(),
                 tokens: None,
                 usage_total: None,
+                cache_read: None,
+                retry: None,
             });
         }
         app.store.set_messages("s1", messages);
@@ -12375,6 +12455,8 @@ mod core_interaction_tests {
                     time: PartTime { created: Some(1), completed: Some(2) },
                     tokens: None,
                     usage_total: None,
+                    cache_read: None,
+                    retry: None,
                 },
             ],
         );
@@ -12501,6 +12583,8 @@ mod core_interaction_tests {
                 time: PartTime::default(),
                 tokens: None,
                 usage_total: None,
+                cache_read: None,
+                retry: None,
             });
         }
         app.store.set_messages("s1", messages);
@@ -12955,6 +13039,8 @@ mod core_interaction_tests {
                     time: PartTime { created: Some(1), completed: Some(3) },
                     tokens: None,
                     usage_total: None,
+                    cache_read: None,
+                    retry: None,
                 },
             ],
         );
@@ -13407,6 +13493,8 @@ fn subagent_row_navigates_to_the_child_session() {
                 time: PartTime { created: Some(1), completed: Some(3) },
                 tokens: None,
                 usage_total: None,
+                cache_read: None,
+                retry: None,
             },
         ],
     );
@@ -13570,6 +13658,8 @@ fn tool_row_arms_follow_the_v2_table() {
                 time: PartTime { created: Some(1), completed: Some(9) },
                 tokens: None,
                 usage_total: None,
+                cache_read: None,
+                retry: None,
             },
         ],
     );
@@ -13693,6 +13783,8 @@ fn markdown_link_click_opens_the_url() {
                 time: PartTime { created: Some(1), completed: Some(2) },
                 tokens: None,
                 usage_total: None,
+                cache_read: None,
+                retry: None,
             },
         ],
     );

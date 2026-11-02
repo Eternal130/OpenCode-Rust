@@ -277,7 +277,7 @@ fn session_not_found_closes_tab() {
 
     assert_eq!(store.tabs().tabs.len(), 1, "the deleted session's tab closed");
     assert_eq!(store.tabs().tabs[0].session_id, "ses_kept");
-    assert_ne!(store.route(), Route::Session { session_id: "ses_gone".into() });
+    assert_ne!(store.route(), Route::session("ses_gone"));
 }
 
 /// The ACTIVE route's deleted session additionally toasts (v2

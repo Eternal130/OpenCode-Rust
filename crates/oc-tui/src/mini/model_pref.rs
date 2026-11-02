@@ -289,4 +289,28 @@ mod tests {
         assert_eq!(document.recent.first(), Some(&target));
         let _ = std::fs::remove_dir_all(dir);
     }
+    /// G-135 — `favoriteModels` (model-preference.ts:62-65): enable
+    /// front-inserts + dedups, disable removes.
+    #[test]
+    fn favorite_models_inserts_front_and_dedups() {
+        let a = model("p", "a");
+        let b = model("p", "b");
+        let favorites = vec![a.clone(), b.clone()];
+        assert_eq!(favorite_models(&b, &favorites, true), vec![b.clone(), a.clone()]);
+        assert_eq!(favorite_models(&a, &favorites, false), vec![b.clone()]);
+    }
+
+    /// G-135 — `setFavorite` (model-preference.ts:148-150): the
+    /// repository persists the favorite list.
+    #[test]
+    fn set_favorite_persists_the_list() {
+        let dir = std::env::temp_dir().join(format!("oc-mini-pref-fav-{}", std::process::id()));
+        let repo = ModelPreferenceRepository::new(dir.join("fav/model.json"));
+        let target = model("anthropic", "claude");
+        repo.set_favorite(&target, true);
+        assert_eq!(repo.read().favorite, vec![target.clone()]);
+        repo.set_favorite(&target, false);
+        assert!(repo.read().favorite.is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

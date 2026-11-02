@@ -82,6 +82,8 @@ fn large_transcript(groups: usize) -> Vec<Message> {
             error: None,
             tokens: None,
             usage_total: None,
+            cache_read: None,
+            retry: None,
         });
     }
     messages

@@ -1148,8 +1148,11 @@ mod tests {
         assert_eq!(prompt_offset_width("你a"), 3);
         assert_eq!(mention_trigger_index("你 @fil", prompt_offset_width("你 @fil")), Some(3));
         assert_eq!(slash_trigger_index("你 /re", prompt_offset_width("你 /re")), Some(3));
-        assert_eq!(trigger_for("你 @fil", 6), Some((Mode::Reference, 3)));
-        assert_eq!(trigger_for("你 /re", 5), Some((Mode::Command, 3)));
+        // The display COLUMN is 3 (the wide glyph shifts it past the
+        // char count); the internal seam maps back to the trigger's
+        // CHAR index (2).
+        assert_eq!(trigger_for("你 @fil", 6), Some((Mode::Reference, 2)));
+        assert_eq!(trigger_for("你 /re", 5), Some((Mode::Command, 2)));
     }
 
     #[test]

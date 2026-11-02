@@ -1042,6 +1042,8 @@ mod tests {
             time: PartTime { created: Some(created), completed: Some(completed) },
             tokens: None,
             usage_total: None,
+            cache_read: None,
+            retry: None,
         }
     }
 
@@ -1153,6 +1155,8 @@ mod tests {
                 time: PartTime { created: Some(1), completed: None },
                 tokens: None,
                 usage_total: None,
+                cache_read: None,
+                retry: None,
             },
         ];
         let rows = reduce_rows(&messages, &std::collections::HashSet::<String>::new());
@@ -1183,6 +1187,8 @@ mod tests {
                 time: PartTime { created: Some(1), completed: Some(5) },
                 tokens: None,
                 usage_total: None,
+                cache_read: None,
+                retry: None,
             },
             Message::Idle { id: "i".into(), created: 6 },
         ];
@@ -1203,6 +1209,8 @@ mod tests {
                 time: PartTime { created: Some(1), completed: Some(5) },
                 tokens: None,
                 usage_total: None,
+                cache_read: None,
+                retry: None,
             },
             Message::Assistant {
                 id: "b".into(),
@@ -1214,6 +1222,8 @@ mod tests {
                 time: PartTime { created: Some(6), completed: Some(9) },
                 tokens: None,
                 usage_total: None,
+                cache_read: None,
+                retry: None,
             },
         ];
         let rows = reduce_rows(&steered, &std::collections::HashSet::<String>::new());
@@ -1240,6 +1250,8 @@ mod tests {
             time: PartTime::default(),
             tokens: None,
             usage_total: None,
+            cache_read: None,
+            retry: None,
         }];
         let rows = reduce_rows(&messages, &std::collections::HashSet::<String>::new());
         assert_eq!(rows.len(), 1);

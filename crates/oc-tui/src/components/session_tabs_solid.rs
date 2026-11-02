@@ -1635,6 +1635,7 @@ mod tests {
                 None,
                 clock,
                 std::collections::HashMap::new(),
+                crate::components::session_tabs::IndicatorConfig::default(),
             )
         };
         let title_at = |clock: u64, hover: Option<&str>| {

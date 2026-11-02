@@ -131,6 +131,8 @@ impl ScriptedServer {
                             time: PartTime { created: Some(frame.t), completed: None },
                             tokens: None,
                             usage_total: None,
+                            cache_read: None,
+                            retry: None,
                         });
                     }
                 }
@@ -226,7 +228,7 @@ impl Harness {
         // root outside tabs/current/recency — the harness models a TUI
         // VIEWING `SESSION` (the production data layer only fetches
         // messages for open sessions), so route it like the app would.
-        store.navigate(Route::Session { session_id: SESSION.to_owned() });
+        store.navigate(Route::session(SESSION));
         let applied = Arc::new(std::sync::Mutex::new(Vec::new()));
         store.set_event_tap(Arc::new(Pair {
             real: RealTap { tap: tap.clone() },

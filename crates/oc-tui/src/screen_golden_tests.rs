@@ -455,6 +455,8 @@ fn session_error_part_matches_text_grid_and_ansi() {
                 time: PartTime { created: Some(1), completed: Some(2) },
                 tokens: None,
                 usage_total: None,
+                cache_read: None,
+                retry: None,
             },
         ],
     );
@@ -533,6 +535,8 @@ fn session_sidebar_live_matches_text_grid_and_ansi() {
                     time: PartTime { created: Some(1), completed: Some(2) },
                     tokens: None,
                     usage_total: None,
+                    cache_read: None,
+                    retry: None,
                 },
             ],
         );
@@ -584,6 +588,8 @@ fn surf1_detail_states_match_the_golden_assembly() {
         time: PartTime::default(),
         tokens: None,
         usage_total: None,
+        cache_read: None,
+        retry: None,
     });
     messages.push(crate::components::message::Message::Compaction {
         id: "surf-comp".into(),

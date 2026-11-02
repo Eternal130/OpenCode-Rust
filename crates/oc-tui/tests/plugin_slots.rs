@@ -306,7 +306,7 @@ fn tui_slots_end_to_end() {
     // at 160 the pane docks at col 118 with the section under the
     // title, the transcript column reflowed to 118.
     store.open_tab("ses_slots", Some("Slots session".to_owned()));
-    store.navigate(oc_tui::store::Route::Session { session_id: "ses_slots".into() });
+    store.navigate(oc_tui::store::Route::session("ses_slots"));
     let frame = oc_tui::components::session::render_session(
         &store,
         "ses_slots",
@@ -442,6 +442,8 @@ fn plugin_group_rule_renders_a_custom_header() {
             time: PartTime { created: Some(1), completed: None },
             tokens: None,
             usage_total: None,
+            cache_read: None,
+            retry: None,
         },
         Message::Idle { id: "idle".into(), created: 9 },
     ];
@@ -484,6 +486,8 @@ fn plugin_group_rule_renders_a_custom_header() {
         time: PartTime { created: Some(1), completed: None },
         tokens: None,
         usage_total: None,
+        cache_read: None,
+        retry: None,
     }];
     let transcript = render_transcript(
         &native,

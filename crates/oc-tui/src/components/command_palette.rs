@@ -4176,7 +4176,7 @@ mod tests {
             forms: Vec::new(),
             permissions: Vec::new(),
         }]);
-        store.navigate(Route::session("s1".into()));
+        store.navigate(Route::session("s1"));
         if unavailable {
             store.set_location_error(Some("/work/cur".to_owned()));
         }
@@ -4585,6 +4585,8 @@ mod tests {
                     time: PartTime::default(),
                     tokens: None,
                     usage_total: None,
+                    cache_read: None,
+                    retry: None,
                 },
             ],
         );
