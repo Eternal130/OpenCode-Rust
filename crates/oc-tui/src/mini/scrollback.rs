@@ -7,6 +7,7 @@
 #![allow(clippy::match_same_arms)] // the phase arms mirror entry.body.ts 1:1
 
 use super::mono::mono_tool_text;
+use crate::mini::tool_snapshot::ToolSnapshot;
 use crate::wrap::wrap_label;
 
 /// A transcript commit (`StreamCommit`, `mini/types.ts` — the text
@@ -38,6 +39,11 @@ pub struct Commit {
     /// every text commit (the mono writer renders the row's `text`
     /// label; the URI is the dedup/display seam).
     pub image: Option<String>,
+    /// G-134 — the COMPLETED tool's structured snapshot
+    /// (`toolView(name).snap`, mini/tool.ts:920-967): Write/Edit/
+    /// Patch/Task render their card (title + body rows) instead of
+    /// the caption row; `None` keeps the caption subset.
+    pub snapshot: crate::mini::tool_snapshot::ToolSnapshot,
 }
 
 /// `StreamCommit["kind"]` (the text subset).
@@ -273,9 +279,21 @@ fn reasoning_rows(raw: &str) -> Vec<String> {
 }
 
 /// Mono tool caption (`entry.body.ts:206-211`): the tool title row run
-/// through `monoToolText`.
+/// through `monoToolText`. G-134 — a COMPLETED structured tool renders
+/// its card instead (the title + body rows, `structuredBody`,
+/// tool.ts:1290-1339; the caption row stays for the caption families
+/// and for failures).
 fn tool_rows(commit: &Commit, raw: &str) -> Vec<String> {
-    let _ = commit;
+    if commit.phase == Phase::Final
+        && commit.tool_state == Some("completed")
+        && commit.snapshot != ToolSnapshot::None
+    {
+        let mut rows = crate::mini::tool_snapshot::snapshot_rows(&commit.snapshot);
+        if rows.is_empty() {
+            rows = split_rows(&mono_tool_text(raw, true));
+        }
+        return rows;
+    }
     split_rows(&mono_tool_text(raw, true))
 }
 
@@ -476,3 +494,51 @@ mod tests {
         assert_eq!(styled.text, "Build · gpt-5 · 3s");
     }
 }
+
+    // -- G-134 ---------------------------------------------------------
+
+    #[test]
+    fn completed_structured_tools_render_the_card() {
+        use crate::mini::tool_snapshot::ToolSnapshot;
+        let commit = Commit {
+            kind: CommitKind::Tool,
+            phase: Phase::Final,
+            tool: Some("write".to_owned()),
+            tool_state: Some("completed"),
+            text: "Write · src/main.rs".to_owned(),
+            snapshot: ToolSnapshot::Code {
+                title: "# Wrote src/main.rs".to_owned(),
+                content: "fn main() {}".to_owned(),
+                file: "src/main.rs".to_owned(),
+            },
+            ..Commit::default()
+        };
+        assert_eq!(
+            entry_body(&commit),
+            ["# Wrote src/main.rs", "fn main() {}"],
+            "the card replaces the caption row"
+        );
+        // Failures + caption families keep the caption row.
+        let failed = Commit {
+            tool_state: Some("error"),
+            snapshot: ToolSnapshot::Code {
+                title: "# Wrote x".to_owned(),
+                content: "x".to_owned(),
+                file: "x".to_owned(),
+            },
+            ..commit.clone()
+        };
+        assert_eq!(entry_body(&failed).len(), 1, "the caption row stays on failure");
+        let caption_only = Commit { snapshot: ToolSnapshot::None, ..commit };
+        assert_eq!(entry_body(&caption_only).len(), 1);
+        // Progress rows never render the card.
+        let progress = Commit {
+            phase: Phase::Progress,
+            snapshot: ToolSnapshot::Task {
+                title: "# General Subagent".to_owned(),
+                rows: vec!["d".to_owned()],
+            },
+            ..caption_only
+        };
+        assert_eq!(entry_body(&progress).len(), 1);
+    }

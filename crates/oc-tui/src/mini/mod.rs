@@ -50,6 +50,7 @@ pub mod scrollback;
 pub mod spinner;
 pub mod splash;
 pub mod theme;
+pub mod tool_snapshot;
 pub mod transport;
 
 /// The docked footer height (`FOOTER_HEIGHT`,
