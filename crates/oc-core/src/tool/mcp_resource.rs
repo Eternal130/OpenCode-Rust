@@ -179,6 +179,10 @@ fn permission_message(error: &crate::permission::PermissionError) -> String {
         crate::permission::PermissionError::SessionNotFound(id) => {
             format!("session not found: {id}")
         }
+        crate::permission::PermissionError::Store(error) => {
+            format!("saved grant store failure: {error}")
+        }
+        crate::permission::PermissionError::RequestNotFound(error) => error.to_string(),
     }
 }
 

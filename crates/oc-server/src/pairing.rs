@@ -81,15 +81,15 @@ pub fn connect_response(state: &AppState, code: &str, headers: &axum::http::Head
 
     let Some(token) = token else {
         if browser {
-            let mut response = Response::builder()
+            // G-111: plain-text 401 with NO WWW-Authenticate challenge
+            // (ref handlers/server.ts:39-42) — a challenge header triggers
+            // the native browser auth popup, which the ref deliberately
+            // avoids.
+            return Response::builder()
                 .status(StatusCode::UNAUTHORIZED)
                 .header(header::CONTENT_TYPE, "text/plain")
                 .body(axum::body::Body::from(EXPIRED_BROWSER_MESSAGE))
                 .unwrap_or_default();
-            response
-                .headers_mut()
-                .insert(header::WWW_AUTHENTICATE, HeaderValue::from_static(auth::WWW_AUTHENTICATE));
-            return response;
         }
         return crate::errors::unauthorized(EXPIRED_API_MESSAGE).into_response();
     };

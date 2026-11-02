@@ -1781,6 +1781,8 @@ impl Engine {
 
     /// `sessions.move`: admit a location-move item; the runner moves the
     /// session at the next safe boundary (the drain's Move handling).
+    /// G-108①: delivery defaults to steer (`input.delivery ?? "steer"`,
+    /// ref move.ts:127) — previously hardcoded Queue.
     pub async fn move_session(
         &self,
         location: &LocationRef,
@@ -1789,6 +1791,7 @@ impl Engine {
         destination: oc_schema::location::Ref,
         project_id: oc_schema::id::ProjectId,
         subpath: Option<oc_schema::common::RelativePath>,
+        delivery: oc_schema::session_inbox::Delivery,
     ) -> Result<(), String> {
         let services = self.location(location.clone()).await.map_err(|error| error.to_string())?;
         services
@@ -1802,7 +1805,7 @@ impl Engine {
                         project_id,
                         subpath,
                     },
-                    delivery: oc_schema::session_inbox::Delivery::Queue,
+                    delivery,
                 },
             )
             .await

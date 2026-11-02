@@ -366,11 +366,28 @@ async fn auth(name: Option<&str>) -> i32 {
     // browser on the same machine lands on it exactly like v2's
     // server-side listener.
     println!("◇ Starting authorization...");
+    // G-110④: recover the client registered by an earlier login (the
+    // newest stored credential's `metadata.client`) so the flow reuses it
+    // instead of re-running DCR (ref oauth.ts:346-351).
+    let previous_client = match client.credential().list().await {
+        Ok(rows) => rows
+            .into_iter()
+            .filter(|row| &row.integration_id == integration_id)
+            .last()
+            .and_then(|row| match row.value {
+                oc_client::types::CredentialValue::OAuth(value) => {
+                    oc_core::mcp::oauth::metadata_client(value.metadata.as_ref())
+                }
+                oc_client::types::CredentialValue::Key(_) => None,
+            }),
+        Err(_) => None,
+    };
     let authorization = match oc_core::mcp::oauth::authorize(oc_core::mcp::oauth::AuthorizeInput {
         name: name.to_owned(),
         config: (*config).clone(),
         method_id: integration_id.clone(),
         http: oc_http::client(),
+        previous_client,
     })
     .await
     {

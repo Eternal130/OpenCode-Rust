@@ -109,7 +109,11 @@ fn metadata_string(metadata: Option<&BTreeMap<String, Value>>, key: &str) -> Opt
     metadata?.get(key).and_then(Value::as_str).map(str::to_owned)
 }
 
-fn metadata_client(metadata: Option<&BTreeMap<String, Value>>) -> Option<StoredClient> {
+/// The registered client stored in a credential's `metadata.client` (the
+/// SDK's `clientInformation`). G-110④: authorize reuses it instead of
+/// re-running dynamic client registration.
+#[must_use]
+pub fn metadata_client(metadata: Option<&BTreeMap<String, Value>>) -> Option<StoredClient> {
     let client = metadata?.get(META_CLIENT)?;
     Some(StoredClient {
         client_id: client.get("client_id").and_then(Value::as_str)?.to_owned(),
@@ -247,6 +251,10 @@ pub struct Discovery {
     /// `token_endpoint_auth_methods_supported` — CIMD additionally
     /// requires the public-client `none` method (oauth.ts:435).
     pub token_endpoint_auth_methods_supported: Option<Vec<String>>,
+    /// G-110②: the authorization server's `issuer` (metadata field, else
+    /// the authorization server URL) — the callback's `iss` parameter is
+    /// validated against it (RFC 9207, ref oauth.ts:379,495 via the SDK).
+    pub issuer: Option<String>,
 }
 
 /// `{origin+path}/.well-known/oauth-protected-resource` — the RFC 9728
@@ -377,6 +385,8 @@ fn parse_metadata(body: &Value) -> Result<Discovery, String> {
             .get("registration_endpoint")
             .and_then(Value::as_str)
             .map(str::to_owned),
+        // G-110②: the metadata's own `issuer` claim when advertised.
+        issuer: body.get("issuer").and_then(Value::as_str).map(str::to_owned),
         scope,
         client_id_metadata_document_supported: body
             .get("client_id_metadata_document_supported")
@@ -430,7 +440,13 @@ async fn discover(
     let metadata_url = authorization_server_metadata_url(&server)
         .ok_or_else(|| format!("invalid authorization server url {server}"))?;
     let body = get_json(http, &metadata_url).await?;
-    parse_metadata(&body)
+    let mut metadata = parse_metadata(&body)?;
+    // G-110②: the AS URL stands in when the metadata omits `issuer` —
+    // this is what the callback's `iss` check compares against.
+    if metadata.issuer.is_none() {
+        metadata.issuer = Some(server);
+    }
+    Ok(metadata)
 }
 
 /// The connect-time discovery: configured first, RFC 9728 second.
@@ -647,6 +663,12 @@ pub struct AuthorizeInput {
     /// The integration method id (stored on the credential).
     pub method_id: String,
     pub http: reqwest::Client,
+    /// G-110④: the client registered by an earlier login (recovered from
+    /// the stored credential's `metadata.client`). When present the flow
+    /// reuses it instead of re-running dynamic client registration (ref
+    /// oauth.ts:346-351; the SDK discards it only when the issuer
+    /// changed).
+    pub previous_client: Option<StoredClient>,
 }
 
 /// The OAuth config of a remote server (`oauth: false` disables).
@@ -724,11 +746,17 @@ pub async fn authorize(input: AuthorizeInput) -> Result<Authorization, String> {
         _ if cimd => {
             Some(StoredClient { client_id: CLIENT_METADATA_URL.to_owned(), client_secret: None })
         }
-        _ => Some(
-            register_client(&input.http, &discovery, &redirect_url, &oauth)
-                .await
-                .map_err(|error| format!("MCP server \"{}\": {error}", input.name))?,
-        ),
+        // G-110④: reuse the client registered by an earlier login (ref
+        // oauth.ts:346-351 — `previous?.type === "oauth"` seeds the store's
+        // clientInformation so the SDK skips registration).
+        _ => match input.previous_client.clone() {
+            Some(previous) => Some(previous),
+            None => Some(
+                register_client(&input.http, &discovery, &redirect_url, &oauth)
+                    .await
+                    .map_err(|error| format!("MCP server \"{}\": {error}", input.name))?,
+            ),
+        },
     };
 
     let state = base64url(&random_bytes(32));
@@ -762,15 +790,11 @@ pub async fn authorize(input: AuthorizeInput) -> Result<Authorization, String> {
         if let Some(scope) = &scope {
             pairs.append_pair("scope", scope);
         }
-        if let Ok(identity) = reqwest::Url::parse(&input.config.url) {
-            if let Some(resource) = identity.host_str() {
-                pairs.append_pair(
-                    "resource",
-                    &identity
-                        .port()
-                        .map_or_else(|| resource.to_owned(), |port| format!("{resource}:{port}")),
-                );
-            }
+        // G-110①: RFC 8707 §2 — the `resource` parameter is an absolute
+        // URI; the TS SDK sends the full server URL (fragment stripped),
+        // never a bare host[:port].
+        if let Some(identity) = identity_url(&input.config.url) {
+            pairs.append_pair("resource", identity.as_str());
         }
     }
 
@@ -779,6 +803,7 @@ pub async fn authorize(input: AuthorizeInput) -> Result<Authorization, String> {
     let server_url = input.config.url.clone();
     let token_endpoint = discovery.token_endpoint.clone();
     let expected_state = state.clone();
+    let expected_issuer = discovery.issuer.clone();
     let expected_path = redirect_path.clone();
     let verifier = verifier.clone();
     let redirect_for_exchange = redirect_url.clone();
@@ -826,6 +851,23 @@ pub async fn authorize(input: AuthorizeInput) -> Result<Authorization, String> {
                     )
                     .await;
                     return Err("OAuth state mismatch".to_owned());
+                }
+                // G-110②: RFC 9207 — when the callback carries `iss`, it
+                // must name the authorization server the flow discovered
+                // (ref oauth.ts:379,495 via the SDK's issuer check); a
+                // mismatching issuer means the code was minted elsewhere.
+                if let Some(iss) = query.get("iss") {
+                    if expected_issuer.as_deref().is_some_and(|issuer| issuer != iss) {
+                        write_html_response(
+                            &mut stream,
+                            400,
+                            &super::oauth_page::error("OAuth issuer mismatch", Some(&name)),
+                        )
+                        .await;
+                        return Err(format!(
+                            "OAuth issuer mismatch: expected {iss:?} to name the authorization server"
+                        ));
+                    }
                 }
                 let Some(code) = query.get("code") else {
                     write_html_response(
@@ -1054,6 +1096,16 @@ pub async fn prepare_token(
     }
     let tokens = refresh(http, config, credential).await?;
     Ok(PreparedToken::Refreshed { access: tokens.access_token.clone(), tokens })
+}
+
+/// G-110③: whether a refresh/prepare failure means the stored sign-in is
+/// DEAD (the token endpoint rejected the grant) — the ref's `invalidate`
+/// callback (oauth.ts:290-296) removes the credential on exactly this
+/// scope, so a stale refresh token stops retrying forever. Discovery and
+/// network failures are NOT invalidations.
+#[must_use]
+pub fn is_token_rejected(error: &str) -> bool {
+    error.starts_with("token endpoint rejected")
 }
 
 // ---------------------------------------------------------------------------

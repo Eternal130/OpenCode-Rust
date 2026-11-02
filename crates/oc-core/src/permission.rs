@@ -164,6 +164,14 @@ pub enum PermissionError {
     /// The session no longer exists (`SessionErrors.NotFoundError`).
     #[error("session not found: {0}")]
     SessionNotFound(SessionId),
+    /// G-114: a saved-grant store (permission table) failure — the ref
+    /// dies on these (saved.ts:48,77,81); the port surfaces the store
+    /// error to the caller instead of swallowing it.
+    #[error("saved grant store failure: {0}")]
+    Store(String),
+    /// `reply` targeted an unknown (already-answered) request id.
+    #[error(transparent)]
+    RequestNotFound(#[from] NotFoundError),
 }
 
 /// `Permission.AssertInput`.
@@ -428,7 +436,9 @@ impl Permission {
         if denied(&input.action, &input.resources, &base) {
             return Ok(Evaluated { effect: Effect::Deny, message: None, rules: base });
         }
-        let grants = inner.saved.list(Some(&inner.project_id)).await;
+        // G-114: saved-grant reads surface store failures instead of
+        // silently evaluating without them (ref saved.ts:48 orDie).
+        let grants = inner.saved.list(Some(&inner.project_id)).await.map_err(PermissionError::Store)?;
         let all = merge(&[base, saved::rules(&grants)]);
         let effects: Vec<Effect> = input
             .resources
@@ -561,9 +571,9 @@ impl Permission {
     ///    deferred, then batch-approve **all** remaining pending requests that
     ///    re-evaluate to allow (publishing `replied always` for each, awaited
     ///    before resolving its deferred).
-    pub async fn reply(&self, input: ReplyInput) -> Result<(), NotFoundError> {
+    pub async fn reply(&self, input: ReplyInput) -> Result<(), PermissionError> {
         let Some(existing) = self.take_pending(&input.request_id) else {
-            return Err(NotFoundError { request_id: input.request_id });
+            return Err(NotFoundError { request_id: input.request_id }.into());
         };
         self.publish_replied(&existing.request.session_id, &existing.request.id, input.reply).await;
 
@@ -590,6 +600,9 @@ impl Permission {
 
         let save = existing.request.save.clone().unwrap_or_default();
         if input.reply == Reply::Always && !save.is_empty() {
+            // G-114: a failed "always" save surfaces as an error (ref
+            // saved.ts:77 orDie) — the approval is not acknowledged with a
+            // silently dropped grant.
             self.inner
                 .saved
                 .add(&AddSavedGrants {
@@ -597,7 +610,8 @@ impl Permission {
                     action: existing.request.action.clone(),
                     resources: save,
                 })
-                .await;
+                .await
+                .map_err(PermissionError::Store)?;
         }
         let _ = existing.tx.send(PendingReply::Approved);
         if input.reply != Reply::Always || existing.request.save.as_ref().is_none_or(Vec::is_empty)
@@ -728,17 +742,17 @@ mod tests {
 
     #[async_trait]
     impl SavedGrantStore for CountingStore {
-        async fn list(&self, project_id: Option<&ProjectId>) -> Vec<SavedGrant> {
+        async fn list(&self, project_id: Option<&ProjectId>) -> Result<Vec<SavedGrant>, String> {
             self.lists.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             self.inner.list(project_id).await
         }
 
-        async fn add(&self, input: &AddSavedGrants) {
-            self.inner.add(input).await;
+        async fn add(&self, input: &AddSavedGrants) -> Result<(), String> {
+            self.inner.add(input).await
         }
 
-        async fn remove(&self, id: &PermissionSavedId) {
-            self.inner.remove(id).await;
+        async fn remove(&self, id: &PermissionSavedId) -> Result<(), String> {
+            self.inner.remove(id).await
         }
     }
 
@@ -809,7 +823,7 @@ mod tests {
         request_id: PermissionId,
         reply: Reply,
         message: Option<String>,
-    ) -> impl std::future::Future<Output = Result<(), NotFoundError>> + '_ {
+    ) -> impl std::future::Future<Output = Result<(), PermissionError>> + '_ {
         perm.reply(ReplyInput { request_id, reply, message })
     }
 
@@ -944,7 +958,8 @@ mod tests {
                 action: "edit".into(),
                 resources: vec!["src/*".into()],
             })
-            .await;
+            .await
+            .unwrap();
         assert_eq!(h.perm.ask(input("edit", &["src/a.rs"])).await.unwrap().effect, Effect::Allow);
 
         // session deny > saved allow (deny short-circuit over base).
@@ -959,7 +974,8 @@ mod tests {
                 action: "edit".into(),
                 resources: vec!["*".into()],
             })
-            .await;
+            .await
+            .unwrap();
         let err = h.perm.assert(input("edit", &["src/secret.rs"])).await.unwrap_err();
         assert!(matches!(err, PermissionError::Blocked(_)));
 
@@ -1324,7 +1340,7 @@ mod tests {
         // Sibling re-evaluated against the persisted grant ⇒ auto-approved.
         second.await.unwrap().unwrap();
 
-        let grants = h.saved.list(Some(&ProjectId("proj_1".into()))).await;
+        let grants = h.saved.list(Some(&ProjectId("proj_1".into()))).await.unwrap();
         assert_eq!(saved::rules(&grants), ruleset(&[("edit", "src/*", Effect::Allow)]));
         // Both the answered request and the batch-approved sibling get replies.
         assert!(h.perm.list().is_empty()); // batch-approve drained the map
@@ -1344,7 +1360,7 @@ mod tests {
 
         reply(&h.perm, first.id, Reply::Always, None).await.unwrap();
 
-        assert!(h.saved.list(Some(&ProjectId("proj_1".into()))).await.is_empty());
+        assert!(h.saved.list(Some(&ProjectId("proj_1".into()))).await.unwrap().is_empty());
         // Sibling untouched: `always` without save has nothing to re-evaluate.
         assert_eq!(h.perm.list().len(), 1);
     }
@@ -1414,7 +1430,8 @@ mod tests {
                 action: "edit".into(),
                 resources: vec!["src/*".into(), "doc/*".into()],
             })
-            .await;
+            .await
+            .unwrap();
         // Conflict-do-nothing: same (project, action, resource) kept as-is.
         store
             .add(&AddSavedGrants {
@@ -1422,7 +1439,8 @@ mod tests {
                 action: "edit".into(),
                 resources: vec!["src/*".into()],
             })
-            .await;
+            .await
+            .unwrap();
         // Empty resources is a no-op.
         store
             .add(&AddSavedGrants {
@@ -1430,26 +1448,28 @@ mod tests {
                 action: "edit".into(),
                 resources: vec![],
             })
-            .await;
+            .await
+            .unwrap();
         store
             .add(&AddSavedGrants {
                 project_id: ProjectId("p2".into()),
                 action: "read".into(),
                 resources: vec!["x".into()],
             })
-            .await;
+            .await
+            .unwrap();
 
-        let p1 = store.list(Some(&ProjectId("p1".into()))).await;
+        let p1 = store.list(Some(&ProjectId("p1".into()))).await.unwrap();
         assert_eq!(p1.len(), 2);
         let mut resources: Vec<&str> = p1.iter().map(|grant| grant.resource.as_str()).collect();
         resources.sort_unstable();
         assert_eq!(resources, vec!["doc/*", "src/*"]);
         assert!(p1.iter().all(|grant| grant.project_id.0 == "p1"));
-        assert_eq!(store.list(None).await.len(), 3);
+        assert_eq!(store.list(None).await.unwrap().len(), 3);
 
         let id = p1[0].id.clone();
-        store.remove(&id).await;
-        assert_eq!(store.list(Some(&ProjectId("p1".into()))).await.len(), 1);
+        store.remove(&id).await.unwrap();
+        assert_eq!(store.list(Some(&ProjectId("p1".into()))).await.unwrap().len(), 1);
     }
 
     #[test]
