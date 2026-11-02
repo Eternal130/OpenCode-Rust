@@ -660,10 +660,8 @@ impl Registrations {
             .iter()
             .filter_map(|model| {
                 let provider_id = model.get("providerID").and_then(Value::as_str)?;
-                let model_id = model
-                    .get("id")
-                    .or_else(|| model.get("modelID"))
-                    .and_then(Value::as_str)?;
+                let model_id =
+                    model.get("id").or_else(|| model.get("modelID")).and_then(Value::as_str)?;
                 Some((provider_id.to_owned(), model_id.to_owned()))
             })
             .collect();
@@ -676,10 +674,7 @@ impl Registrations {
         for (provider_id, model_id) in incoming {
             let Some(model) = models.iter().find(|model| {
                 model.get("providerID").and_then(Value::as_str) == Some(provider_id.as_str())
-                    && model
-                        .get("id")
-                        .or_else(|| model.get("modelID"))
-                        .and_then(Value::as_str)
+                    && model.get("id").or_else(|| model.get("modelID")).and_then(Value::as_str)
                         == Some(model_id.as_str())
             }) else {
                 continue;

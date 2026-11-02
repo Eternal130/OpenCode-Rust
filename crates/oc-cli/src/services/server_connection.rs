@@ -10,8 +10,8 @@
 //! stop path).
 
 use oc_client::Client as HttpClient;
-use oc_server::lifecycle::{self, EnsureOptions};
 pub use oc_server::lifecycle::StartCallback;
+use oc_server::lifecycle::{self, EnsureOptions};
 
 use crate::services::service_config;
 use crate::services::standalone::{self, StandaloneServer};

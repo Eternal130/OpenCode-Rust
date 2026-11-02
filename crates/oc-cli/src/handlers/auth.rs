@@ -269,9 +269,9 @@ async fn login(
 ) -> i32 {
     if target.is_none() {
         // ref auth/login.ts `requireInteractive` — selector only on a TTY.
-        if let Err(message) =
-            require_interactive("Pass an integration ID or name when running without an interactive terminal")
-        {
+        if let Err(message) = require_interactive(
+            "Pass an integration ID or name when running without an interactive terminal",
+        ) {
             eprintln!("Error: {message}");
             return 1;
         }
@@ -446,7 +446,9 @@ async fn login(
     }
 }
 
-fn form_answer(answer: Option<&oc_client::types::FormAnswer>) -> Option<oc_client::types::FormAnswer> {
+fn form_answer(
+    answer: Option<&oc_client::types::FormAnswer>,
+) -> Option<oc_client::types::FormAnswer> {
     answer.cloned()
 }
 
@@ -1060,10 +1062,7 @@ fn login_choices(integrations: &[Value]) -> Vec<LoginChoice> {
                 .get("connections")
                 .and_then(Value::as_array)
                 .is_some_and(|connections| !connections.is_empty());
-            (
-                (rank, priority),
-                LoginChoice { id, label, category, connected },
-            )
+            ((rank, priority), LoginChoice { id, label, category, connected })
         })
         .collect();
     entries.sort_by(|left, right| {
@@ -1150,7 +1149,13 @@ mod tests {
         assert!(!log.exists(), "no opener spawn for non-http links");
     }
 
-    fn integration(id: &str, name: &str, methods: usize, source: Option<&str>, connected: bool) -> serde_json::Value {
+    fn integration(
+        id: &str,
+        name: &str,
+        methods: usize,
+        source: Option<&str>,
+        connected: bool,
+    ) -> serde_json::Value {
         let mut value = json!({
             "id": id,
             "name": name,
