@@ -7588,6 +7588,11 @@ fn session_setup_options(mouse: bool) -> opentui_core::terminal::SetupOptions {
     }
 }
 
+
+/// The boot discard window's length (see the input thread).
+const BOOT_DISCARD_WINDOW: std::time::Duration = std::time::Duration::from_millis(300);
+
+
 /// The live session registry for the crash-restore panic hook (the
 /// hook drives the live Terminal's teardown; a stale entry from an
 /// abandoned boot is swapped out by re-registration).
@@ -8245,7 +8250,7 @@ pub async fn run_with_size(
     // reader from an abandoned boot is stopped by the slot swap below
     // before this one spawns, and the Drop guard fires on the normal
     // return AND when an outer timeout cancels the run future.
-    let boot_gate = std::time::Instant::now() + std::time::Duration::from_millis(300);
+    let boot_gate = std::time::Instant::now() + BOOT_DISCARD_WINDOW;
     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<TermEvent>(64);
     let input_stop = {
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -8276,10 +8281,13 @@ pub async fn run_with_size(
             let mut kitty_pushed = false;
             // The boot discard window (the retired theme probe's
             // discipline, SA-F13's double-boot shield): for the first
-            // 300 ms, non-reply bytes are DROPPED, not dispatched — a
+            // window, non-reply bytes are DROPPED, not dispatched — a
             // prior boot's unread exit-chord tail must never fire as
             // this boot's first keys. Replies still classify through
             // feed_input (the probe is deadline-bounded separately).
+            // 150 ms: comfortably past a prior boot's chord tail
+            // (fixed sleeps), well under a driver's wordmark-gated
+            // first keystroke (the old probe dropped up to 300 ms).
             let boot_discard_until = boot_gate;
             // The capability probe (replaces theme::probe_terminal +
             // terminal_proto's ?u/DA1/OSC-11 queries): the burst rides
@@ -8382,8 +8390,15 @@ pub async fn run_with_size(
     // only ever types against a terminal whose input dispatch is LIVE
     // — and a prior boot's unread exit-chord tail still lands inside
     // the window (SA-F13's double-boot shield).
+    // NOTE std::thread::sleep (a BLOCKING call, like the retired
+    // probe's `recv_timeout`): the boot's spawned fetch tasks freeze
+    // behind it exactly as they did behind the probe wait, so the
+    // first frame paints BEFORE the transcript sync lands (the
+    // session route's composer-hint boot window — pty_session_route
+    // pins it; an async sleep would let the tasks run ahead and
+    // change the first paint).
     let gate_remaining = boot_gate.saturating_duration_since(std::time::Instant::now());
-    tokio::time::sleep(gate_remaining).await;
+    std::thread::sleep(gate_remaining);
     app.apply_config(&config, system_mode);
     // Lane TAIL (auditC P7/TM-3): DECSCUSR + OSC 12 — the cursor
     // shape/blink from the `cursor` config doc and the cursor color
