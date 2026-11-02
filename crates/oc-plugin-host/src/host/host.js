@@ -268,12 +268,18 @@ const domainStores = {
   skills: new Map(), // id -> Skill.Info
   tools: new Map(), // name -> tool definition
   providers: new Map(), // G-64: id -> provider definition
+  // G-147: model editor state — the lazily fetched catalog base, the
+  // override records, the removal marks, and the editor-set default.
+  modelBase: undefined, // undefined = not fetched; null = fetch failed
+  modelOverrides: new Map(), // "providerID/modelID" -> Model.Info
+  modelRemoved: new Set(), // "providerID/modelID"
+  modelDefault: undefined,
   references: new Map(), // G-64: name -> Reference.Source
   vcs: new Map(), // G-24 residual: id -> vcs provider row
 };
 
 /** Registered editors per domain, in registration order. */
-const domainEditors = { agent: [], mcp: [], skill: [], tool: [], command: [], provider: [], reference: [] };
+const domainEditors = { agent: [], mcp: [], skill: [], tool: [], command: [], provider: [], reference: [], model: [] };
 
 function defaultAgent(id) {
   // v2 Agent.Info.default (packages/schema/src/agent.ts).
@@ -407,6 +413,67 @@ const editors = {
       },
     },
   },
+  model: {
+    // G-147 (ref promise/model.ts:6-23 ModelEditor): list/get over
+    // the port-fetched catalog base merged with the override table;
+    // update/remove edit overrides; default get/set; provider.list/
+    // get expose the immutable provider inputs.
+    list: (providerID) =>
+      modelRows()
+        .filter((model) => !providerID || String(model.providerID ?? "") === String(providerID))
+        .map(cloneJson),
+    get: (providerID, modelID) => {
+      const row = modelRows().find(
+        (model) =>
+          String(model.providerID ?? "") === String(providerID) &&
+          String(model.id ?? model.modelID ?? "") === String(modelID),
+      );
+      return row ? cloneJson(row) : undefined;
+    },
+    update: (providerID, modelID, fn) => {
+      const key = `${String(providerID)}/${String(modelID)}`;
+      let current = domainStores.modelOverrides.get(key);
+      if (!current) {
+        const base = (domainStores.modelBase ?? []).find(
+          (model) =>
+            String(model.providerID ?? "") === String(providerID) &&
+            String(model.id ?? model.modelID ?? "") === String(modelID),
+        );
+        current = cloneJson(base ?? { id: String(modelID) });
+        domainStores.modelOverrides.set(key, current);
+      }
+      fn(current);
+      current.providerID = String(providerID);
+      if (current.id === undefined) current.id = String(modelID);
+      domainStores.modelRemoved.delete(key);
+    },
+    remove: (providerID, modelID) => {
+      const key = `${String(providerID)}/${String(modelID)}`;
+      domainStores.modelOverrides.delete(key);
+      domainStores.modelRemoved.add(key);
+    },
+    default: {
+      get: () => cloneJson(domainStores.modelDefault),
+      set: (providerID, modelID) => {
+        domainStores.modelDefault = { providerID: String(providerID), modelID: String(modelID) };
+      },
+    },
+    provider: {
+      // Immutable provider inputs (the base rows' providers).
+      list: () => {
+        const ids = new Map();
+        for (const model of modelRows()) {
+          const id = String(model.providerID ?? "");
+          if (id && !ids.has(id)) ids.set(id, { id, name: model.providerName ?? id });
+        }
+        return Array.from(ids.values());
+      },
+      get: (providerID) =>
+        modelRows().find((model) => String(model.providerID ?? "") === String(providerID))
+          ? { id: String(providerID), name: String(providerID) }
+          : undefined,
+    },
+  },
   reference: {
     // G-64 (adapter.ts:427-452): add(name, source)/remove/list/get.
     list: () =>
@@ -446,6 +513,41 @@ function cloneJson(value) {
   return structuredClone(value);
 }
 
+// G-147: the merged model view — the catalog base (lazily fetched via
+// `model.list`) with the override records applied and the removed
+// entries filtered out.
+function modelRows() {
+  const base = Array.isArray(domainStores.modelBase) ? domainStores.modelBase : [];
+  const overridden = new Set(
+    Array.from(domainStores.modelOverrides.values()).map(
+      (model) => `${String(model.providerID ?? "")}/${String(model.id ?? model.modelID ?? "")}`,
+    ),
+  );
+  const rows = base
+    .filter((model) => !overridden.has(`${String(model.providerID ?? "")}/${String(model.id ?? model.modelID ?? "")}`))
+    .filter((model) => !domainStores.modelRemoved.has(`${String(model.providerID ?? "")}/${String(model.id ?? model.modelID ?? "")}`))
+    .map(cloneJson);
+  for (const model of domainStores.modelOverrides.values()) {
+    if (!domainStores.modelRemoved.has(`${String(model.providerID ?? "")}/${String(model.id ?? model.modelID ?? "")}`)) {
+      rows.push(cloneJson(model));
+    }
+  }
+  return rows;
+}
+
+// G-147: fetch the catalog base once per editor generation (a failed
+// or absent port degrades to override-only editing).
+async function ensureModelBase(pluginId) {
+  if (domainStores.modelBase !== undefined) return;
+  try {
+    const result = await hostRequest("model.list", { pluginId, args: {} });
+    const value = result && typeof result === "object" && "value" in result ? result.value : result;
+    domainStores.modelBase = Array.isArray(value) ? value : [];
+  } catch {
+    domainStores.modelBase = [];
+  }
+}
+
 /** Reset every domain to the seeded base (pre-replay). */
 function resetDomainsToBase() {
   domainStores.agents = new Map(domainBase.agents.filter((a) => a?.id).map((a) => [a.id, cloneJson(a)]));
@@ -458,6 +560,12 @@ function resetDomainsToBase() {
   domainStores.providers = new Map();
   domainStores.references = new Map();
   domainStores.vcs = new Map();
+  // G-147: the model editor's derived state resets with the base
+  // (the next transform re-fetches the catalog).
+  domainStores.modelBase = undefined;
+  domainStores.modelOverrides = new Map();
+  domainStores.modelRemoved = new Set();
+  domainStores.modelDefault = undefined;
   domainStores.websearch = [];
   domainStores.worktree = [];
 }
@@ -529,6 +637,12 @@ async function materializeDomain(kind, pluginId) {
       pluginId,
       references: Array.from(domainStores.references.entries()).map(([name, source]) => ({ name, source })),
     });
+  } else if (kind === "model") {
+    await hostRequest("model.transform", {
+      pluginId,
+      models: Array.from(domainStores.modelOverrides.values()),
+      default: domainStores.modelDefault ?? null,
+    });
   } else if (kind === "vcs") {
     await hostRequest("vcs.transform", {
       pluginId,
@@ -559,11 +673,18 @@ async function rederiveDomain(kind, pluginId) {
     provider: () => {
       domainStores.providers = new Map();
     },
+    model: () => {
+      domainStores.modelBase = undefined;
+      domainStores.modelOverrides = new Map();
+      domainStores.modelRemoved = new Set();
+      domainStores.modelDefault = undefined;
+    },
     reference: () => {
       domainStores.references = new Map();
     },
   };
   (bases[kind] ?? (() => {}))();
+  if (kind === "model") await ensureModelBase(pluginId);
   for (const entry of domainEditors[kind]) {
     entry.cb(editors[kind]);
   }
@@ -720,7 +841,16 @@ function makeCtx(pluginId, options) {
   };
 
   const ctx = {
-    plugin: { id: pluginId },
+    plugin: {
+      id: pluginId,
+      // G-148 (ref promise/plugin.ts:49 `Pick<PluginApi, "list">`):
+      // the loaded plugin table (id/name/version/active projection
+      // of the ref PluginInfo shape).
+      async list() {
+        const result = await hostRequest("plugin.list", { pluginId, args: {} });
+        return result && typeof result === "object" && "value" in result ? result.value : result;
+      },
+    },
     app: { version: domainBase.appVersion },
     directory: domainBase.directory,
     location: { directory: domainBase.directory, project: { id: domainBase.project.id } },
@@ -997,6 +1127,43 @@ function makeCtx(pluginId, options) {
             const at = domainEditors.provider.indexOf(entry);
             if (at >= 0) domainEditors.provider.splice(at, 1);
             await rederiveDomain("provider", pluginId);
+          },
+        };
+      },
+    },
+
+    // -- model (G-147: adapter.ts:342-346 — list/default over the
+    //    host's model catalog; transform's editor table mirrors the
+    //    ref ModelEditor; reload re-derives the catalog + editors) ---
+    model: {
+      async list(input) {
+        const args = typeof input === "string" ? { providerID: input } : input ?? {};
+        const result = await hostRequest("model.list", {
+          pluginId,
+          args: { providerID: typeof args.providerID === "string" ? args.providerID : null },
+        });
+        return result && typeof result === "object" && "value" in result ? result.value : result;
+      },
+      async default() {
+        const result = await hostRequest("model.default", { pluginId, args: {} });
+        return result && typeof result === "object" && "value" in result ? result.value : result;
+      },
+      async reload() {
+        await hostRequest("model.reload", { pluginId, args: {} });
+        domainStores.modelBase = undefined;
+        await rederiveDomain("model", pluginId);
+      },
+      async transform(cb) {
+        await ensureModelBase(pluginId);
+        const entry = { cb };
+        domainEditors.model.push(entry);
+        cb(editors.model);
+        await materializeDomain("model", pluginId);
+        return {
+          async dispose() {
+            const at = domainEditors.model.indexOf(entry);
+            if (at >= 0) domainEditors.model.splice(at, 1);
+            await rederiveDomain("model", pluginId);
           },
         };
       },
@@ -1666,6 +1833,19 @@ function makeCtx(pluginId, options) {
 
 async function handleLoad({ entry, generation, seed, options }) {
   const abs = require("node:path").resolve(entry);
+  // G-148②: detect `@opencode/plugin/effect` imports up front and fail
+  // with a clear error instead of an obscure module-not-found from the
+  // dynamic import. The Effect-style plugin API (ref effect/ directory,
+  // 21 modules) is an ecosystem breaking change of this port — the
+  // same class as G-28's bounded TSX shim — and is NOT ported.
+  const effectImport = await detectEffectImports(abs);
+  if (effectImport) {
+    throw new Error(
+      `${entry}: imports "${effectImport}" — the Effect-style plugin API (@opencode/plugin/effect) ` +
+        `is not available in the Rust plugin host (G-148, an ecosystem breaking change alongside G-28). ` +
+        `Rewrite the plugin against the promise-style Context API ({ id, setup }).`,
+    );
+  }
   // Config-sourced plugin options (the `load` params; `{}` default).
   const loadOptions = options && typeof options === "object" && !Array.isArray(options) ? options : {};
   // v2 source.bun parity: evict CJS cache under the plugin dir, then
@@ -1714,6 +1894,41 @@ async function handleLoad({ entry, generation, seed, options }) {
     record.dispose = typeof maybeDispose === "function" ? maybeDispose : maybeDispose.dispose;
   }
   return { ok: true, pluginId: id, skipped: null };
+}
+
+// G-148②: walk the entry's LOCAL import graph (node_modules specs are
+// checked as strings only) looking for `@opencode/plugin/effect`
+// import specifiers. Bounded scan — cycles and unreadable files stop
+// the walk, mirroring `scanDigests`' traversal.
+async function detectEffectImports(entryFile) {
+  const seen = new Set();
+  async function walk(file) {
+    if (seen.has(file)) return null;
+    seen.add(file);
+    let source;
+    try {
+      source = await Bun.file(file).text();
+    } catch {
+      return null;
+    }
+    let imports = [];
+    try {
+      imports = new Bun.Transpiler({ loader: "tsx" }).scanImports(source);
+    } catch {
+      return null;
+    }
+    for (const spec of imports) {
+      const path = typeof spec === "string" ? spec : spec?.path;
+      if (typeof path === "string" && path.startsWith("@opencode/plugin/effect")) return path;
+      const resolved = resolveLocal(file, path ?? spec);
+      if (resolved) {
+        const hit = await walk(resolved);
+        if (hit) return hit;
+      }
+    }
+    return null;
+  }
+  return walk(entryFile);
 }
 
 async function handleUnload({ pluginId }) {
