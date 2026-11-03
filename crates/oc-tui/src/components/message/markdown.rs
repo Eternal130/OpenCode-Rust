@@ -30,13 +30,15 @@
 //! this lane (the goldens were re-pinned to it — they now pin
 //! upstream 0.5.14's semantics, not the C1 reading).
 
+use crate::style::{Color, Modifier, Style};
+use opentui_core::buffer::OptimizedBuffer;
 use opentui_core::renderables::code::CodeOptions;
 use opentui_core::renderables::markdown::{
     build_markdown_blocks, markdown_code_styled, BlockSpec, ListItemSpec, MarkdownOptions,
 };
+use opentui_core::renderables::text_table::TextTableState;
 use opentui_core::styled_text::StyledText;
 use opentui_core::syntax_style::{StyleDefinitionInput, SyntaxStyle};
-use crate::style::{Color, Modifier, Style};
 
 use crate::layout::StyledSpan;
 use crate::theme::ThemeStyles;
@@ -180,6 +182,16 @@ impl MarkdownStyles {
             // reads those for clickable rects. Bare URLs need the
             // OSC-8 profile — registered limitation.
             hyperlinks_supported: false,
+            // ref v2's TextPart passes `tableOptions{style:"grid",
+            // cellPaddingX:1}` (index.tsx:2059/message-parts.tsx:188)
+            // — grid style is the coalesced default, the X padding is
+            // NOT (upstream default 0), so pin it here for parity.
+            table_options: Some(Box::new(
+                opentui_core::renderables::markdown::MarkdownTableOptions {
+                    cell_padding_x: Some(1),
+                    ..Default::default()
+                },
+            )),
         }
     }
 }
@@ -303,7 +315,84 @@ fn render_spec(
             render_list(items, content_width, styles, lines);
             push_margins(*margin_bottom, lines);
         }
+        // `createTextTableRenderable` (G-177): a real grid table, not
+        // the raw pipe text — [`render_table`].
+        BlockSpec::Table { options, margin_bottom } => {
+            render_table(options, content_width, styles, lines);
+            push_margins(*margin_bottom, lines);
+        }
     }
+}
+
+/// The `TextTableRenderable` (G-177): opentui-core's state machine —
+/// layout at the content width, the paint-time vline caches, then
+/// `renderSelf` into a scratch cell buffer; the captured span lines
+/// convert through the same color/attribute map as [`chunk_span`]
+/// (one capture span = same-fg/bg/attrs cells).
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss, clippy::cast_sign_loss)]
+fn render_table(
+    options: &opentui_core::renderables::text_table::TextTableOptions,
+    content_width: usize,
+    styles: &MarkdownStyles,
+    lines: &mut Vec<MarkdownLine>,
+) {
+    let mut state = TextTableState::from_options(options);
+    state.update_layout(content_width as u32, 0);
+    state.prepare_paint();
+    let (table_width, table_height) =
+        state.measured().core.measure(Some(content_width as f32), None);
+    let mut buffer =
+        OptimizedBuffer::new(table_width.max(1.0) as u32, table_height.max(1.0) as u32);
+    state.paint(&mut buffer, 0, 0);
+    for captured in buffer.get_span_lines() {
+        let spans: Vec<StyledSpan> = captured
+            .spans
+            .iter()
+            .filter(|span| !span.text.is_empty())
+            .map(|span| captured_span_to_styled(span, styles))
+            .collect();
+        lines.push(MarkdownLine(spans));
+    }
+}
+
+/// One captured buffer span → a styled span (the same fallback and
+/// attribute-bit map as [`chunk_span`]; transparent capture sides fall
+/// back to the renderable's base).
+fn captured_span_to_styled(
+    span: &opentui_core::buffer::CapturedSpan,
+    styles: &MarkdownStyles,
+) -> StyledSpan {
+    let fg = (span.fg.alpha() != 0)
+        .then(|| Color::Rgb(span.fg.red(), span.fg.green(), span.fg.blue()))
+        .or(styles.markdown_text.fg);
+    let bg = (span.bg.alpha() != 0)
+        .then(|| Color::Rgb(span.bg.red(), span.bg.green(), span.bg.blue()))
+        .or(styles.background.bg);
+    let mut style = Style::new();
+    if let Some(fg) = fg {
+        style = style.fg(fg);
+    }
+    if let Some(bg) = bg {
+        style = style.bg(bg);
+    }
+    let attributes = u32::from(span.attributes);
+    let mut modifier = Modifier::empty();
+    if attributes & 0x1 != 0 {
+        modifier |= Modifier::BOLD;
+    }
+    if attributes & 0x2 != 0 {
+        modifier |= Modifier::DIM;
+    }
+    if attributes & 0x4 != 0 {
+        modifier |= Modifier::ITALIC;
+    }
+    if attributes & 0x8 != 0 {
+        modifier |= Modifier::UNDERLINED;
+    }
+    if attributes & 0x80 != 0 {
+        modifier |= Modifier::CROSSED_OUT;
+    }
+    StyledSpan { text: span.text.clone(), style: style.add_modifier(modifier), link: None }
 }
 
 /// `createListRenderable` rows: the marker column (padStart(width)
@@ -824,5 +913,42 @@ mod tests {
     fn hr_renders_the_rule_row() {
         let rows = rendered("a\n\n---\n\nb", 40);
         assert_eq!(rows[2], "─".repeat(40));
+    }
+
+    /// G-177: a markdown table renders as a real grid — box-drawing
+    /// border rows/columns around the header and data cells (the
+    /// `TextTableRenderable` at the pipeline's Table block), not the
+    /// raw pipe text.
+    #[test]
+    fn table_renders_as_a_real_grid() {
+        let rows = rendered("| Name | Qty |\n| --- | --- |\n| bolt | 12 |\n| nut | 340 |", 40);
+        // The grid frame: outer corners + the header/data separator
+        // with its cross junction.
+        assert!(rows[0].starts_with('┌') && rows[0].ends_with('┐'), "{:?}", rows[0]);
+        assert!(rows.iter().any(|row| row.contains('┬')), "top junction: {rows:?}");
+        let separator = rows.iter().position(|row| row.contains('┼')).expect("header separator");
+        assert!(
+            rows[separator].starts_with('├') && rows[separator].ends_with('┤'),
+            "{:?}",
+            rows[separator]
+        );
+        assert!(rows.last().is_some_and(|row| row.starts_with('└') && row.ends_with('┘')));
+        // Cells sit inside border columns with one X padding column
+        // (ref's `cellPaddingX:1`); ColumnWidthMode::Full fills each
+        // column to the width budget.
+        assert_eq!(
+            rows,
+            vec![
+                "┌───────────────────┬──────────────────┐",
+                "│ Name              │ Qty              │",
+                "├───────────────────┼──────────────────┤",
+                "│ bolt              │ 12               │",
+                "├───────────────────┼──────────────────┤",
+                "│ nut               │ 340              │",
+                "└───────────────────┴──────────────────┘",
+            ],
+            "the full grid frame, header first, per-row separators"
+        );
+        assert!(!rows.iter().any(|row| row.contains('|')), "no raw pipe glyphs survive");
     }
 }

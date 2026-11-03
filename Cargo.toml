@@ -66,9 +66,12 @@ oc-uqr = { path = "third_party/oc-uqr" }
 # seam, mode sequences, capability probe, input/output pumps, resize
 # watch, teardown/scrollback epilogue, OSC 8 — default builds of the
 # port remain headless-pure (113 differential scenarios IDENTICAL).
-opentui-core = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "4ff646d" }
-opentui-keymap = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "4ff646d" }
-opentui-solid = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "4ff646d" }
+# Rev 8cbd53d adds TextTableRenderable wired into markdown (tables
+# render as a real grid, not raw text; 3 new differential scenarios
+# IDENTICAL) — closes GAPS G-177.
+opentui-core = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "8cbd53d" }
+opentui-keymap = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "8cbd53d" }
+opentui-solid = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "8cbd53d" }
 
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
