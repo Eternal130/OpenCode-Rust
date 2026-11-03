@@ -998,7 +998,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2154,7 +2154,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2669,7 +2669,7 @@ dependencies = [
 [[package]]
 name = "opentui-core"
 version = "0.1.0"
-source = "git+https://github.com/Eternal130/opentui-rust.git?rev=d1ef96d#d1ef96d0fa2c5a5fa265b0b87d7c884bcc48bd69"
+source = "git+https://github.com/Eternal130/opentui-rust.git?rev=d3688d8#d3688d8284c282fcca25476f9bfbb3ceb851e68c"
 dependencies = [
  "cc",
  "minimp3",
@@ -2687,7 +2687,7 @@ dependencies = [
 [[package]]
 name = "opentui-keymap"
 version = "0.1.0"
-source = "git+https://github.com/Eternal130/opentui-rust.git?rev=d1ef96d#d1ef96d0fa2c5a5fa265b0b87d7c884bcc48bd69"
+source = "git+https://github.com/Eternal130/opentui-rust.git?rev=d3688d8#d3688d8284c282fcca25476f9bfbb3ceb851e68c"
 dependencies = [
  "serde",
  "serde_json",
@@ -2696,7 +2696,7 @@ dependencies = [
 [[package]]
 name = "opentui-solid"
 version = "0.1.0"
-source = "git+https://github.com/Eternal130/opentui-rust.git?rev=d1ef96d#d1ef96d0fa2c5a5fa265b0b87d7c884bcc48bd69"
+source = "git+https://github.com/Eternal130/opentui-rust.git?rev=d3688d8#d3688d8284c282fcca25476f9bfbb3ceb851e68c"
 dependencies = [
  "opentui-core",
 ]
@@ -3044,7 +3044,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3415,7 +3415,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3474,7 +3474,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4060,7 +4060,7 @@ dependencies = [
  "getrandom 0.3.4",
  "once_cell",
  "rustix",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
