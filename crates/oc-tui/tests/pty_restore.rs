@@ -955,6 +955,110 @@ fn pty_kitty_handshake_and_teardown_bytes() {
     assert!(contains(b"\x1b[0 q"), "DECSCUSR reset at teardown");
 }
 
+/// D2.1b (e1) — destroy-under-load: the exit chord lands while the
+/// render loop is mid-cadence (the clock keeps the pump drawing a
+/// frame every ~100 ms tick). The flipped teardown rides the LIVE
+/// CliRenderer's `destroy()` (which drives the attached session's
+/// `Terminal::teardown` through the shared-slot handle — the lock
+/// discipline's first real exercise). Must exit cleanly, with the
+/// full teardown epilogue at the tail and no interleaved garbage
+/// after the mode pops (the sync-destroy path's PTY proof).
+#[test]
+fn pty_destroy_under_load_exits_cleanly() {
+    let _sandbox = sandbox_env("tail-destroy-load");
+    let (url, _state, shutdown) = spawn_scripted_server();
+
+    let guard = attach_pty();
+    let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+    let reader_master = guard.master.try_clone().expect("clone read");
+    let writer_master = guard.master.try_clone().expect("clone write");
+    {
+        let output = Arc::clone(&output);
+        let mut reply_writer = guard.master.try_clone().expect("clone reply");
+        std::thread::spawn(move || {
+            let mut reader = reader_master;
+            let mut chunk = [0u8; 4096];
+            let mut osc11_replied = false;
+            loop {
+                match reader.read(&mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(count) => {
+                        let bytes = &chunk[..count];
+                        output.lock().expect("output lock").extend_from_slice(bytes);
+                        if !osc11_replied && bytes.windows(6).any(|w| w == b"\x1b]11;?") {
+                            osc11_replied = true;
+                            let _ = reply_writer.write_all(b"\x1b]11;rgb:1717/1717/1717\x1b\\");
+                        }
+                    }
+                }
+            }
+        });
+    }
+    let boot_output = Arc::clone(&output);
+    let mut exit_writer = writer_master.try_clone().expect("clone exit");
+    std::thread::spawn(move || {
+        // Wait for the frame, then leave the exit chord WHILE the
+        // draw cadence is live (every 100 ms tick paints).
+        let deadline = std::time::Instant::now() + Duration::from_secs(8);
+        while std::time::Instant::now() < deadline {
+            let ready =
+                boot_output.lock().expect("output lock").windows(8).any(|w| w == b"opencode");
+            if ready {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        // Load: redraw-generating keys interleaved with the exit
+        // chord — the destroy lands mid-cadence, not at rest.
+        for _ in 0..4 {
+            let _ = exit_writer.write_all(b"\x1b[A\x1b[B\x1b[C\x1b[D");
+            std::thread::sleep(Duration::from_millis(60));
+        }
+        let _ = exit_writer.write_all(b"\x1b");
+        std::thread::sleep(Duration::from_millis(120));
+        let _ = exit_writer.write_all(b"\x03");
+        std::thread::sleep(Duration::from_millis(120));
+        let _ = exit_writer.write_all(b"\x03");
+    });
+
+    let client = oc_client::Client::new(&url).expect("client");
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("rt");
+    let finished = runtime.block_on(async {
+        tokio::time::timeout(
+            Duration::from_secs(30),
+            oc_tui::app::run_with_size(client, Some((100, 30)), oc_tui::app::BootArgs::default()),
+        )
+        .await
+    });
+    finished.expect("tui finished within timeout").expect("run_with_size ok");
+    shutdown.store(true, Ordering::Relaxed);
+
+    let captured = output.lock().expect("output lock").clone();
+    let contains = |needle: &[u8]| captured.windows(needle.len()).any(|w| w == needle);
+    // The renderer.destroy()-driven teardown epilogue: alt screen
+    // popped, kitty popped, DECSCUSR reset.
+    assert!(contains(b"\x1b[?1049l"), "destroy() left the alt screen");
+    assert!(contains(b"\x1b[<u"), "the kitty pop at destroy");
+    assert!(contains(b"\x1b[0 q"), "DECSCUSR reset at destroy");
+    // Nothing after the epilogue: the tail is mode pops + cooked
+    // restoration, never a stray frame burst past destroy (the
+    // scheduler is stopped — a late request renders nothing).
+    let tail = &captured[captured.len().saturating_sub(400)..];
+    let last_frameish = tail.windows(6).rposition(|w| w == b"\x1b[?2026");
+    let last_teardown = {
+        let a = tail.windows(6).rposition(|w| w == b"\x1b[?1049l");
+        let b = tail.windows(5).rposition(|w| w == b"\x1b[0 q");
+        a.max(b)
+    };
+    if let (Some(frame_at), Some(tear_at)) = (last_frameish, last_teardown) {
+        assert!(
+            frame_at < tear_at,
+            "no ?2026 frame envelope after the teardown tail: {:?}",
+            String::from_utf8_lossy(tail)
+        );
+    }
+}
+
 /// `ErrorComponent` (auditB #9): a render-path crash mid-run is CAUGHT
 /// — the fallback screen paints ("Something went wrong" + the detail),
 /// the crash-restore sequence fired on the pty (this thread owns the
