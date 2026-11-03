@@ -25,6 +25,8 @@ oc-tui 的终端栈原为三层混合：自有组件树/画布 + ratatui（离�
 - **kitty push 字节留 oc-tui**：`>u` push/pop 由 terminal_proto 探针门控后下发，opentui 侧 flags 恒 0（无 post-setup push 面）。
 - **孤立 ESC 适配层 flush**：read chunk 以孤立 ESC 结尾时立即 flush（crossterm `input_available=false` 臂的平价），由 KeyPipeline 持有。
 - **鼠标 feed 前拦截**：鼠标序列在键解析前路由（crossterm 顺序平价）。
+- **mini 运行中 resize 不重排**（Gate B M3）：与退休 ratatui Inline 版平价（同名 dead_code 可证），非回归；Phase C 动 mini 时再接 resize。
+- **resize 检测寄生输入循环 tick**（Gate B M5）：单帧构建耗时长的重帧场景下检测延迟可超 50ms；边缘场景，登记接受。
 
 ## 证据指针
 
