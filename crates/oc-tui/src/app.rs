@@ -7704,11 +7704,13 @@ pub async fn run_with_size(
         Arc::new(std::sync::Mutex::new(terminal))
     };
     // The crash-restore guards (lane TAIL P3): SIGHUP/SIGTERM keep the
-    // write(2)-only path; the PANIC hook runs the live Terminal's own
-    // teardown (thread-gated — worker-thread panics are routinely
+    // write(2)-only path; the PANIC hook emits a static ANSI restore
+    // burst (thread-gated — worker-thread panics are routinely
     // caught by the plugin host and must not tear the terminal; the
     // stock opentui install_panic_hook is unconditional, so the oc-tui
-    // hook drives Terminal::teardown instead — no double registration).
+    // hook stays gated). termios restore is backstopped by Terminal's
+    // Drop during unwind; in error-display mode the terminal is
+    // intentionally NOT torn down. No double registration.
     crate::terminal_proto::install_crash_restore(config.mouse);
     // The alternate screen owns the display from here: route EVERY
     // stderr write to `<state>/tui.log` until teardown (subsystem

@@ -1,7 +1,8 @@
 //! The oc-tui style vocabulary: [`Color`], [`Modifier`] and [`Style`]
 //! — a self-owned copy of the ratatui 0.29 `style` surface this crate
 //! actually consumes (lane B2 of the opentui render migration: the
-//! vocabulary leaves ratatui; only the terminal backends stay).
+//! vocabulary left ratatui, and B3/B4 retired its backend too —
+//! nothing ratatui remains).
 //!
 //! Semantics are byte-for-byte the ratatui ones:
 //!
