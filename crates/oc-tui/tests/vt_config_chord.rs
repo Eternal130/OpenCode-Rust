@@ -8,7 +8,7 @@
 //! process (the canary's leg B) — the input-reader zombie SA-F13
 //! fixed ate the first chord; the config FILE was incidental.
 //!
-//! Both legs share ONE PTY and ONE sandbox (crossterm's global event
+//! Both legs share ONE PTY and ONE sandbox (the process-global input
 //! source registers fd 0's open-file-description once per process —
 //! a per-leg re-attach would test a harness artifact, not the app);
 //! the config FILE is planted BETWEEN the boots so leg A boots

@@ -1882,7 +1882,7 @@ fn run_mini_test<T: Send + 'static>(
     let fake = FakeLlm::spawn(standard_sessions());
     arm(&fake, &sandbox);
     let harness = LiveHarness::attach(cols, rows);
-    // Answer ratatui's inline-viewport cursor probe (`CSI 6n`): the
+    // Answer the terminal cursor probe (`CSI 6n`): the
     // pty has no terminal behind it, so the test replies at the
     // bottom row (the footer viewport docks there).
     {

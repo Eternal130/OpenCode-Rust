@@ -351,9 +351,9 @@ impl MiniPty {
         let binary = env!("CARGO_BIN_EXE_opencode-rust");
         let mut command = Command::new(binary);
         unsafe {
-            // Make the pty the child's controlling terminal: crossterm
-            // reads the cursor-position reply from /dev/tty, so the
-            // slave must BE /dev/tty (setsid + TIOCSCTTY).
+            // Make the pty the child's controlling terminal: the tty
+            // device opens /dev/tty, so the slave must BE /dev/tty
+            // (setsid + TIOCSCTTY).
             command.pre_exec(|| {
                 if libc::setsid() == -1
                     && std::io::Error::last_os_error().raw_os_error() != Some(libc::EPERM)
@@ -410,8 +410,8 @@ impl MiniPty {
                             output.lock().expect("lock").extend_from_slice(&chunk[..count]);
                             pending.extend_from_slice(&chunk[..count]);
                             // A real terminal answers the cursor
-                            // position query (`ESC[6n`, the inline
-                            // viewport's boot probe) — emulate it once.
+                            // position query (`ESC[6n`) — emulate it
+                            // once for any boot-time probe.
                             if !replied && pending.windows(4).any(|w| w == b"\x1b[6n") {
                                 replied = true;
                                 let _ = reply_writer.write_all(b"\x1b[1;1R");

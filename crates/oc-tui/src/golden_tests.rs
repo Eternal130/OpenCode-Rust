@@ -27,7 +27,7 @@
 //! the runner's `TERM`/`COLORTERM` cannot influence them (CI and
 //! local runs are byte-identical by construction). The live TUI's
 //! 256-color degradation (`render::color_mode`, applied only inside
-//! `app::run`'s ratatui draw) is unit-tested separately; the parity
+//! `app::run`'s frame draw) is unit-tested separately; the parity
 //! rig exercises it end-to-end under its pinned
 //! `TERM=xterm-256color`.
 

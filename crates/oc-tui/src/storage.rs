@@ -635,7 +635,7 @@ mod tests {
     /// dismissal writes v2's `getting-started` shape
     /// (`{"dismissed":true}`) and the boot read seeds back — the
     /// restart leg of the PTY dismiss cycle (a second live boot in
-    /// one process can't re-arm crossterm's input source, so the
+    /// one process can't re-arm the process-global input source, so the
     /// file contract is proven here).
     #[test]
     fn getting_started_doc_round_trips() {

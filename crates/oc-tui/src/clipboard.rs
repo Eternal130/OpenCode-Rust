@@ -5,7 +5,7 @@
 //! `create_clipboard({host, terminal})` with a host arm (the pluggable
 //! read backend) and a terminal arm (an **OSC 52** escape sequence,
 //! `ESC ] 52 ; c ; <base64 payload> ESC \`, which reaches the system
-//! clipboard over ssh, written to stdout through crossterm's raw
+//! clipboard over ssh, written to stdout through the raw-mode
 //! writer). [`Osc52Sink`] keeps the [`ClipboardSink`] seam the store's
 //! `messages.copy` path calls: a thin adapter that delegates to the
 //! service's `writeText({ destination: "all-available" })` — the OSC 52

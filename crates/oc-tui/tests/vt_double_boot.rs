@@ -5,13 +5,13 @@
 //! and the future never returned after `?1049l`).
 //!
 //! Root cause (the fix under test): the input reader thread parked in
-//! `crossterm::event::read()` holds crossterm's GLOBAL reader lock and
+//! The input source holds a process-GLOBAL reader lock and
 //! only exits when a key arrives AFTER its receiver dropped — a zombie
 //! from boot 1 eats boot 2's first key(s). The reader now polls in
 //! bounded windows against a stop flag fired by a Drop guard (normal
 //! teardown AND outer cancellation).
 //!
-//! Both boots share ONE PTY (the scan repro's shape — crossterm's
+//! Both boots share ONE PTY (the scan repro's shape — the
 //! global event source registers fd 0's open-file-description ONCE
 //! per process, so a per-leg re-attach would leave leg 2's reader
 //! watching a dead description; a real embedder's second boot keeps

@@ -116,7 +116,7 @@ fn len(boot: &Boot) -> usize {
     boot.output.lock().expect("lock").len()
 }
 
-/// Force ratatui's FULL repaint (a resize invalidates the diff
+/// Force the frame writer's FULL repaint (a resize invalidates the diff
 /// buffer) and return the RECONSTRUCTED, SETTLED screen text — the
 /// assertion surface for state that diff rendering would split
 /// across escape sequences (the blinking caret cell, shifted
@@ -747,7 +747,7 @@ fn pty_shift_tab_and_f2_cycle_the_footer_hints() {
         );
         let _ = writer.write_all(b"\r");
         std::thread::sleep(Duration::from_millis(800));
-        // shift+tab (kitty CSI-u: crossterm maps the legacy BackTab
+        // shift+tab (kitty CSI-u: the legacy decoder maps the BackTab
         // sequence to the ctrl+shift+tab spec — the tab.previous
         // chord — so the CSI-u form carries the shift+tab binding).
         let before = len(&probe());
@@ -775,7 +775,7 @@ fn pty_shift_tab_and_f2_cycle_the_footer_hints() {
         );
         let before = len(&probe());
         let _ = writer.write_all(b"\x1b[12~");
-        // A resize forces ratatui's FULL repaint (diff draws emit only
+        // A resize forces the writer's FULL repaint (diff frames emit only
         // changed cells — a shifted statusline never yields a
         // contiguous `m-beta` run in the byte stream).
         let stepped = strip_ansi(&screen_after_toggle(&writer, &probe(), before, &mut rows));
@@ -865,7 +865,7 @@ fn pty_undo_redo_restores_the_draft() {
             "ctrl+w deleted the word: {deleted:?}"
         );
         // ctrl+- (undo; kitty CSI-u — the legacy 0x1f byte maps to
-        // crossterm's ctrl+7) restores it.
+        // the legacy ctrl+7) restores it.
         let _ = writer.write_all(b"\x1b[45;5u");
         let undone = strip_ansi(&screen_after_toggle(&writer, &probe(), len(&probe()), &mut rows));
         assert!(undone.contains("draft words"), "undo restored the word: {undone:?}");

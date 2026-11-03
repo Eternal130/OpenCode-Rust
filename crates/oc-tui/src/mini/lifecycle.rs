@@ -2,13 +2,29 @@
 //! `packages/tui/src/mini/runtime.lifecycle.ts`.
 //!
 //! Boots the renderer in **split-footer mode**: raw mode, NO alternate
-//! screen — a [`FOOTER_HEIGHT`] inline viewport (ratatui
-//! `Viewport::Inline`) stays glued to the bottom of the terminal while
-//! transcript rows are written into the terminal's native scrollback
-//! above it (`Terminal::insert_before`). Writes the entry splash on
-//! boot, paints the footer from the footer family
+//! screen — a [`FOOTER_HEIGHT`] dock stays glued to the bottom of the
+//! terminal while transcript rows are written into the terminal's
+//! native scrollback above it. Writes the entry splash on boot, paints
+//! the footer from the footer family
 //! ([`crate::components::footer`]), and tears down in the reference's
 //! order on close.
+//!
+//! ## Lane B4 — the thin seam (same writer, same emitter)
+//!
+//! The retired inline-viewport terminal (a ratatui `Terminal` over a
+//! crossterm backend) is gone. The dock renders through oc-tui's own
+//! [`crate::grid_emitter::GridEmitter`] — the same standalone-value
+//! frame writer the main TUI uses — over a full-screen grid whose rows
+//! above the dock read as blank in every frame, so emission never
+//! touches the transcript region. Every byte (scrollback rows and
+//! footer frames) flows through ONE writer (`Stdout`, the same `W`
+//! the main app's session terminal writes through); the mini loop is
+//! single-threaded, so the main app's lock convention holds by
+//! construction — there is no second writer to serialize against.
+//!
+//! `insert_before` (the retired terminal's scrollback write) is
+//! reimplemented below over plain ANSI (erase dock → scroll → write
+//! rows), matching the upstream no-scrolling-regions semantics.
 //!
 //! ## Exit semantics (`runtime.lifecycle.ts:97-111` + `close`,
 //! `:300-343`)
@@ -29,11 +45,6 @@
 use std::io::Write as _;
 use std::time::{Duration, Instant};
 
-use ratatui::backend::CrosstermBackend;
-use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
-use ratatui::Terminal;
-
 use super::scrollback::{format_commit_with, Commit};
 use super::splash::{
     directory_label, entry_splash_layout, entry_splash_rows, exit_splash_rows, EntrySplashInput,
@@ -50,8 +61,8 @@ use crate::components::footer::prompt_idle::render_prompt_idle;
 use crate::components::footer::prompt_idle::PromptIdleState;
 use crate::components::footer::{FooterMachine, FooterView};
 
-/// The footer pane's keypress vocabulary (the crossterm event mapping
-/// the renderer performs on `KeyEvent`).
+/// The footer pane's keypress vocabulary (the key-event mapping the
+/// renderer performs on the parsed key spec).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FooterKey {
     Printable(char),
@@ -798,10 +809,42 @@ enum PendingRows {
     Styled(Vec<Vec<crate::layout::StyledSpan>>),
 }
 
+impl PendingRows {
+    fn len(&self) -> usize {
+        match self {
+            PendingRows::Plain(rows) => rows.len(),
+            PendingRows::Styled(rows) => rows.len(),
+        }
+    }
+
+    /// Row `index` flattened into cluster atoms — plain rows under the
+    /// default style, styled rows through their spans (the same
+    /// [`crate::wrap::flatten`] seam the retired cell-buffer writer
+    /// used).
+    fn atoms(&self, index: usize) -> Vec<crate::wrap::Atom> {
+        match self {
+            PendingRows::Plain(rows) => {
+                crate::wrap::flatten(&rows[index], crate::style::Style::new())
+            }
+            PendingRows::Styled(rows) => crate::wrap::flatten_spans(&rows[index]),
+        }
+    }
+}
+
 /// `Lifecycle`, `runtime.lifecycle.ts:85-92`).
 #[allow(clippy::struct_excessive_bools)] // the renderer flag set mirrors the reference
 pub struct Lifecycle {
-    terminal: Terminal<CrosstermBackend<std::io::Stdout>>,
+    /// Lane B4 — the ONE output writer. The same `Stdout` `W` the
+    /// main app's session terminal emits through; the mini loop owns
+    /// it single-threaded, so the write seam has exactly one writer
+    /// (the main app's lock convention, held by construction).
+    out: std::io::Stdout,
+    /// Lane B4 — the dock's frame emitter (the same standalone-value
+    /// [`crate::grid_emitter::GridEmitter`] the main TUI uses). Sized
+    /// to the FULL screen; the frame fed to it carries only the
+    /// bottom dock rows, so the transcript region above the dock
+    /// reads as blank-vs-blank on the diff and never emits.
+    emitter: crate::grid_emitter::GridEmitter,
     /// Lane B3a — the raw-mode owner (opentui's `UnixTty`; the split
     /// footer never enters the alt screen, so a bare termios save is
     /// all the "session" mini needs).
@@ -816,20 +859,13 @@ pub struct Lifecycle {
     height: usize,
     closed: bool,
     /// The last painted footer signature (the dirty check) + a force
-    /// flag for post-scroll invalidation (`insert_before` scrolls the
-    /// viewport, so the next footer draw must repaint fully).
+    /// flag for post-scroll invalidation (a scrollback write scrolls
+    /// the screen, so the next footer draw must repaint fully).
     last_footer_signature: String,
     force_draw: bool,
-    /// TUI-17 — the inline viewport's current height (`applyHeight`:
-    /// a taller pane rebuilds the dock at the new row count).
-    viewport_rows: u16,
-    /// TUI-17/REGRESS — the dock-rebuild cursor probe failed once
-    /// (`crossterm::cursor::position` timed out: a headless pty that
-    /// answers the BOOT probe but not later ones — CI harnesses).
-    /// Once set, height changes stop rebuilding the inline dock
-    /// (taller panes render clipped into the boot dock, the
-    /// pre-inspector behavior) instead of killing the run loop.
-    dock_probe_failed: bool,
+    /// The dock rows currently on screen (0 after an erase — a
+    /// scrollback write wiped them; the next draw repaints).
+    drawn_footer_rows: usize,
     splash_enabled: bool,
     mono: bool,
     /// CONFIG-T4 `mini.shell_output`: shell-family tools stream their
@@ -843,27 +879,24 @@ pub struct Lifecycle {
 
 impl Lifecycle {
     /// Boot the renderer (`createRuntimeLifecycle`,
-    /// `runtime.lifecycle.ts:152-205`): raw mode + the inline footer
-    /// viewport, entry splash, first footer paint.
+    /// `runtime.lifecycle.ts:152-205`): raw mode + the bottom dock,
+    /// entry splash, first footer paint.
     pub fn boot(input: LifecycleInput) -> Result<Self, String> {
         // Lane B3a: raw mode through opentui's tty device (the
-        // crossterm raw-mode toggle retired with the migration).
+        // retired raw-mode toggle went with the backend migration).
         use opentui_core::terminal::TtyDevice as _;
         let mut tty = opentui_core::terminal::UnixTty::new().map_err(|error| error.to_string())?;
         let termios_save = tty.raw_mode().map_err(|error| error.to_string())?;
+        let (columns, rows) = tty.window_size().map_err(|error| error.to_string())?;
+        let width = usize::from(columns).max(1);
+        let height = usize::from(rows).max(1);
         // Split-footer mode never enters the alternate screen — the
         // conversation owns the native scrollback; only the footer
-        // pane is live-rendered.
-        let terminal = Terminal::with_options(
-            CrosstermBackend::new(std::io::stdout()),
-            ratatui::TerminalOptions {
-                viewport: ratatui::Viewport::Inline(super::FOOTER_HEIGHT as u16),
-            },
-        )
-        .map_err(|error| error.to_string())?;
-        let area = terminal.size().map_err(|error| error.to_string())?;
-        let width = area.width as usize;
-        let height = area.height as usize;
+        // pane is live-rendered. Lane B4: the dock is the emitter's
+        // bottom rows over one `Stdout` writer; the cursor stays
+        // hidden (the composer needs no hardware caret).
+        let mut emitter = crate::grid_emitter::GridEmitter::new(width, height);
+        emitter.cursor.set_position(1, 1, false);
 
         let mut pane = FooterPane::new(crate::components::footer::FooterTheme::fallback_dark());
         if let Some(agent) = input.agent {
@@ -878,7 +911,8 @@ impl Lifecycle {
         pane.work_spinner = input.work_spinner;
         pane.mono = input.mono;
         let mut lifecycle = Self {
-            terminal,
+            out: std::io::stdout(),
+            emitter,
             tty: Some(tty),
             termios_save: Some(termios_save),
             pane,
@@ -889,8 +923,7 @@ impl Lifecycle {
             closed: false,
             last_footer_signature: String::new(),
             force_draw: true,
-            viewport_rows: super::FOOTER_HEIGHT as u16,
-            dock_probe_failed: false,
+            drawn_footer_rows: 0,
             splash_enabled: input.splash,
             mono: input.mono,
             shell_output: input.shell_output,
@@ -898,6 +931,12 @@ impl Lifecycle {
             home: input.home,
             directory: input.directory,
         };
+        // Push the dock to the bottom of the screen: the boot rows
+        // the retired inline viewport appended (`compute_inline_size`'s
+        // newline push — the terminal scrolls until the dock's rows
+        // free up at the bottom, whatever was there entering the
+        // native scrollback).
+        lifecycle.push_dock_to_bottom()?;
         // `queueSplash(entry)` (`runtime.lifecycle.ts:191-203`) with
         // RD-19's startup split (`runtime.lifecycle.ts:187-196`):
         // splash=show AND NOT mono (the ref also requires
@@ -980,121 +1019,217 @@ impl Lifecycle {
         self.queue_rows(rows);
     }
 
-    /// Flush pending scrollback rows above the inline footer, then
-    /// repaint the footer pane (`renderer.writeToScrollback` +
-    /// `requestRender`).
-    /// Flush pending scrollback rows above the inline footer, then
-    /// repaint the footer pane (`renderer.writeToScrollback` +
-    /// `requestRender`). `insert_before` hands the writer the raw
-    /// buffer — mono rows stamp cluster-by-cluster (the same
-    /// [`crate::wrap::flatten`] seam the canvas uses).
+    /// Flush pending scrollback rows above the dock, then repaint the
+    /// footer pane (`renderer.writeToScrollback` + `requestRender`).
+    /// The scrollback write is the retired terminal's `insert_before`
+    /// equivalent — see [`Self::write_scrollback`].
     pub fn flush(&mut self) -> Result<(), String> {
         self.finish_startup();
-        while let Some(rows) = self.pending.first().cloned() {
-            let height = match &rows {
-                PendingRows::Plain(rows) => rows.len(),
-                PendingRows::Styled(rows) => rows.len(),
-            } as u16;
-            self.terminal
-                .insert_before(height, |buffer| {
-                    let origin = {
-                        let area = buffer.area();
-                        (area.x, area.y)
-                    };
-                    match &rows {
-                        PendingRows::Plain(rows) => {
-                            for (index, row) in rows.iter().enumerate() {
-                                let mut x: u16 = 0;
-                                for atom in crate::wrap::flatten(row, crate::style::Style::new()) {
-                                    if let Some(cell) =
-                                        buffer.cell_mut((origin.0 + x, origin.1 + index as u16))
-                                    {
-                                        cell.set_symbol(&atom.text);
-                                    }
-                                    x += atom.width.max(1) as u16;
-                                }
-                            }
-                        }
-                        PendingRows::Styled(rows) => {
-                            for (index, row) in rows.iter().enumerate() {
-                                let mut x: u16 = 0;
-                                for atom in crate::wrap::flatten_spans(row) {
-                                    if let Some(cell) =
-                                        buffer.cell_mut((origin.0 + x, origin.1 + index as u16))
-                                    {
-                                        cell.set_symbol(&atom.text)
-                                            .set_style(bridge_style(atom.style));
-                                    }
-                                    x += atom.width.max(1) as u16;
-                                }
-                            }
-                        }
-                    }
-                })
-                .map_err(|error| error.to_string())?;
-            self.pending.remove(0);
-            self.force_draw = true;
+        if !self.pending.is_empty() {
+            self.write_scrollback()?;
         }
         self.draw_footer()
     }
 
-    /// Paint the footer pane into the inline viewport. The viewport
-    /// occupies the terminal's BOTTOM rows — paint the footer frame at
-    /// the draw area's origin, not at (0, 0).
-    pub fn draw_footer(&mut self) -> Result<(), String> {
-        let pane_height = self.pane.pane_height();
-        // TUI-17/applyHeight: a pane whose height CHANGED rebuilds the
-        // inline dock at the new row count (the blocker bodies + the
-        // subagent inspector grow it; v2's footer resizes its box).
-        // REGRESS (mini permission regression): the Inline
-        // reconstruction probes the cursor position (`ESC[6n`) — an
-        // environment that leaves the probe unanswered (a headless
-        // pty that only emulates the BOOT reply) makes the probe time
-        // out; treating that as fatal killed the run loop the moment
-        // a permission ask grew the dock. Degrade instead: keep the
-        // boot dock (the taller pane renders clipped into it — the
-        // pre-inspector behavior) and stop re-probing this session.
-        let rows = u16::try_from(pane_height).unwrap_or(u16::MAX);
-        if rows != self.viewport_rows {
-            let rebuilt = (!self.dock_probe_failed)
-                .then(|| {
-                    Terminal::with_options(
-                        CrosstermBackend::new(std::io::stdout()),
-                        ratatui::TerminalOptions { viewport: ratatui::Viewport::Inline(rows) },
-                    )
-                    .ok()
-                })
-                .flatten();
-            if let Some(terminal) = rebuilt {
-                self.terminal = terminal;
-                self.force_draw = true;
-                self.last_footer_signature = String::new();
-            } else {
-                // The probe failed (or had failed before): keep the
-                // boot dock — the taller pane renders clipped into it.
-                self.dock_probe_failed = true;
-            }
-            self.viewport_rows = rows;
+    /// The `insert_before` equivalent (`writeToScrollback`,
+    /// `runtime.lifecycle.ts:97-111`): scroll the screen up so the
+    /// pending rows land in the native scrollback region just above
+    /// the dock, then let the next [`Self::draw_footer`] repaint the
+    /// dock at the bottom.
+    ///
+    /// Upstream semantics this mirrors (the retired inline terminal's
+    /// no-scrolling-regions `insert_before`): erase the dock's rows,
+    /// scroll the WHOLE screen up by `height` lines from the bottom
+    /// row (the top visible transcript lines enter the native
+    /// scrollback), draw the batch's rows into the freed region above
+    /// the dock — chunked when a batch exceeds the free region — and
+    /// finally repaint the dock (its cells scrolled up with everything
+    /// else; the pre-scroll erase keeps the scroll from stranding a
+    /// ghost of the dock mid-screen).
+    fn write_scrollback(&mut self) -> Result<(), String> {
+        // The reserved dock region: the pane's CURRENT height — new
+        // rows never land in the bottom rows the dock repaints into.
+        let dock = self.pane.pane_height().clamp(1, self.height.max(1));
+        // Erase the drawn dock first (after the scroll it would sit
+        // mid-screen as a ghost; erasing after would also wipe
+        // freshly written rows).
+        if self.drawn_footer_rows > 0 {
+            let top = self.height.saturating_sub(self.drawn_footer_rows) + 1;
+            let sequence = format!("\x1b[{top};1H\x1b[0J");
+            self.write_raw(sequence.as_bytes())?;
+            self.drawn_footer_rows = 0;
         }
+        while let Some(batch) = self.pending.first().cloned() {
+            let total = batch.len();
+            // The free region above the dock (at least one row — a
+            // degenerate 1-row terminal still makes progress).
+            let per_page = self.height.saturating_sub(dock).max(1);
+            let mut written = 0usize;
+            while written < total {
+                let chunk = (total - written).min(per_page);
+                self.scroll_up(chunk)?;
+                self.write_batch_rows(&batch, written, chunk, dock)?;
+                written += chunk;
+            }
+            self.pending.remove(0);
+            self.force_draw = true;
+        }
+        Ok(())
+    }
+
+    /// Scroll the whole screen up by `lines` rows: park the cursor at
+    /// the bottom-left and emit `lines` newlines (the retired
+    /// terminal's `append_lines` scroll shape — each LF on the last
+    /// row scrolls one line into the native scrollback).
+    fn scroll_up(&mut self, lines: usize) -> Result<(), String> {
+        if lines == 0 {
+            return Ok(());
+        }
+        let bottom = u16::try_from(self.height).unwrap_or(u16::MAX);
+        let mut sequence = format!("\x1b[{bottom};1H");
+        for _ in 0..lines {
+            sequence.push_str("\r\n");
+        }
+        self.write_raw(sequence.as_bytes())
+    }
+
+    /// Write `count` rows of `batch` (starting at `skip`) into the
+    /// freed region: row `i` lands at absolute screen row
+    /// `height - dock - count + 1 + i` (1-based), each row positioned
+    /// by CUP and stamped cluster-by-cluster (the same
+    /// [`crate::wrap::flatten`] seam the canvas uses; the retired
+    /// writer filled a cell buffer — the atom stream is the same
+    /// text).
+    fn write_batch_rows(
+        &mut self,
+        batch: &PendingRows,
+        skip: usize,
+        count: usize,
+        dock: usize,
+    ) -> Result<(), String> {
+        let mut sequence = String::new();
+        for index in 0..count {
+            let row_number = self
+                .height
+                .saturating_sub(dock.saturating_add(count))
+                .saturating_add(1 + index)
+                .max(1);
+            sequence.push_str("\x1b[");
+            sequence.push_str(&row_number.to_string());
+            sequence.push_str(";1H");
+            let mut x = 0usize;
+            let mut last_style: Option<crate::style::Style> = None;
+            for atom in batch.atoms(skip + index) {
+                if x >= self.width {
+                    break;
+                }
+                if last_style != Some(atom.style) {
+                    // A style boundary re-opens SGR from reset (the
+                    // retired writer merged per-cell styles the same
+                    // way — one burst per run).
+                    sequence.push_str("\x1b[0m");
+                    if let Some(color) = atom.style.fg {
+                        crate::grid_emitter::emit_fg(
+                            &mut sequence,
+                            crate::render::CellColor::from(color),
+                        );
+                    }
+                    if let Some(color) = atom.style.bg {
+                        crate::grid_emitter::emit_bg(
+                            &mut sequence,
+                            crate::render::CellColor::from(color),
+                        );
+                    }
+                    crate::grid_emitter::apply_attributes(
+                        &mut sequence,
+                        atom.style.add_modifier.bits(),
+                    );
+                    last_style = Some(atom.style);
+                }
+                sequence.push_str(&atom.text);
+                x += atom.width.max(1);
+            }
+            if last_style.is_some() {
+                sequence.push_str("\x1b[0m");
+            }
+        }
+        self.write_raw(sequence.as_bytes())
+    }
+
+    /// One raw write through the lifecycle's single writer.
+    fn write_raw(&mut self, bytes: &[u8]) -> Result<(), String> {
+        self.out
+            .write_all(bytes)
+            .and_then(|()| self.out.flush())
+            .map_err(|error| error.to_string())
+    }
+
+    /// The boot push: scroll until the dock's rows free up at the
+    /// bottom of the screen (the retired inline viewport's boot-time
+    /// newline append — `compute_inline_size`).
+    fn push_dock_to_bottom(&mut self) -> Result<(), String> {
+        let dock = self.pane.pane_height().clamp(1, self.height);
+        self.scroll_up(dock)
+    }
+
+    /// Paint the footer pane into the screen's bottom rows. The frame
+    /// fed to the emitter is the FULL screen with only the dock's rows
+    /// present — the transcript rows above read as blank-vs-blank on
+    /// the diff and never emit (the retired inline viewport's
+    /// guarantee that the dock's draws never touch the scrollback).
+    /// TUI-17/applyHeight: a pane whose height CHANGED (the blocker
+    /// bodies + the subagent inspector grow it) just paints taller —
+    /// the diff grows the dock upward and blanks the vacated rows.
+    pub fn draw_footer(&mut self) -> Result<(), String> {
+        let pane_height = self.pane.pane_height().clamp(1, self.height);
         let footer_frame = self.pane.render_frame(self.width, pane_height);
         // Skip identical repaints (the renderer's dirty check — a
         // no-change draw only emits cursor noise), unless a
-        // scrollback write invalidated the viewport.
+        // scrollback write invalidated the dock.
         let signature = crate::render::serialize_canonical(&footer_frame);
-        if !self.force_draw && signature == self.last_footer_signature {
+        if !self.force_draw
+            && signature == self.last_footer_signature
+            && self.drawn_footer_rows == pane_height
+        {
             return Ok(());
         }
         self.last_footer_signature = signature;
         self.force_draw = false;
-        self.terminal
-            .draw(|frame| {
-                let area = frame.area();
-                let buffer = frame.buffer_mut();
-                let mut offset = BufferOverlay { buffer, origin: (area.x, area.y) };
-                paint_frame(&mut offset, &footer_frame);
+        // The dock frame pasted at the bottom of a full-screen grid:
+        // rows above the dock are ABSENT (out-of-bounds cells read as
+        // the emitter's blank — never emitted, never erasing the
+        // transcript). A pane taller than the screen clips to the
+        // screen's last rows (the retired viewport's `max_height`
+        // clamp).
+        let skip = footer_frame.cells.len().saturating_sub(self.height);
+        let cells: Vec<Vec<crate::render::Cell>> = footer_frame
+            .cells
+            .iter()
+            .skip(skip)
+            .map(|row| {
+                let mut full = vec![crate::grid_emitter::blank_cell(); self.width];
+                for (x, cell) in row.iter().take(self.width).enumerate() {
+                    full[x] = *cell;
+                }
+                full
             })
-            .map(|_| ())
-            .map_err(|error| error.to_string())
+            .collect();
+        let top = self.height.saturating_sub(cells.len());
+        let clusters = footer_frame.clusters.as_ref().map(|map| {
+            map.iter()
+                .filter(|&((y, x), _)| *y >= skip && *x < self.width)
+                .map(|((y, x), symbol)| ((*y - skip + top, *x), symbol.clone()))
+                .collect::<crate::render::ClusterMap>()
+        });
+        let frame = crate::render::Frame {
+            cells,
+            width: self.width,
+            height: self.height,
+            clusters: clusters.map(Box::new),
+        };
+        self.emitter.emit(&mut self.out, &frame).map_err(|error| error.to_string())?;
+        self.drawn_footer_rows = pane_height;
+        Ok(())
     }
 
     /// `close()` (`runtime.lifecycle.ts:300-343`): exit splash (when
@@ -1152,11 +1287,15 @@ impl Lifecycle {
         let _ = std::io::stdout().flush();
     }
 
-    /// Terminal resize (SIGWINCH): re-render at the new size.
+    /// Terminal resize (SIGWINCH): re-render at the new size. The
+    /// emitter's prev grid drops to blank at the new dimensions (the
+    /// frame writer's resize semantics), so the next draw fully
+    /// repaints the dock at the new width/height.
     pub fn resize(&mut self, width: usize, height: usize) {
-        self.width = width;
-        self.height = height;
-        let _ = self.terminal.resize(Rect::new(0, 0, width as u16, height as u16));
+        self.width = width.max(1);
+        self.height = height.max(1);
+        self.emitter.resize(self.width, self.height);
+        self.force_draw = true;
     }
 
     #[must_use]
@@ -1167,92 +1306,6 @@ impl Lifecycle {
     #[must_use]
     pub fn is_closed(&self) -> bool {
         self.closed
-    }
-}
-
-/// Paint an oc-tui [`crate::render::Frame`] into a ratatui frame
-/// buffer (cell-for-cell: chars, colors, attrs). `BufferOverlay` maps
-/// frame coordinates onto a positioned buffer region — inline
-/// viewports live at the bottom of the terminal, not at (0, 0).
-pub struct BufferOverlay<'a> {
-    buffer: &'a mut Buffer,
-    origin: (u16, u16),
-}
-
-impl BufferOverlay<'_> {
-    fn cell_mut(&mut self, x: u16, y: u16) -> Option<&mut ratatui::buffer::Cell> {
-        self.buffer.cell_mut((self.origin.0 + x, self.origin.1 + y))
-    }
-}
-
-/// Paint `frame` into `target` at the overlay's origin.
-pub fn paint_frame(target: &mut BufferOverlay<'_>, frame: &crate::render::Frame) {
-    use ratatui::style::Modifier;
-    for (y, row) in frame.cells.iter().enumerate() {
-        for (x, cell) in row.iter().enumerate() {
-            let Some(target_cell) = target.cell_mut(x as u16, y as u16) else {
-                continue;
-            };
-            let symbol = if cell.ch == '\0' { " ".to_owned() } else { cell.ch.to_string() };
-            target_cell.set_symbol(&symbol);
-            let mut modifier = Modifier::empty();
-            if cell.attrs & (1 << 0) != 0 {
-                modifier |= Modifier::BOLD;
-            }
-            if cell.attrs & (1 << 1) != 0 {
-                modifier |= Modifier::DIM;
-            }
-            if cell.attrs & (1 << 2) != 0 {
-                modifier |= Modifier::ITALIC;
-            }
-            if cell.attrs & (1 << 3) != 0 {
-                modifier |= Modifier::UNDERLINED;
-            }
-            if cell.attrs & (1 << 5) != 0 {
-                modifier |= Modifier::REVERSED;
-            }
-            target_cell.set_style(
-                ratatui::style::Style::new()
-                    .fg(color_of(cell.fg))
-                    .bg(color_of(cell.bg))
-                    .add_modifier(modifier),
-            );
-        }
-    }
-}
-
-/// The oc-tui → ratatui style bridge (the mini draw path feeds the
-/// inline-viewport terminal's buffer; B3/B4 territory keeps ratatui).
-fn bridge_style(style: crate::style::Style) -> ratatui::style::Style {
-    use ratatui::style::{Modifier as RModifier, Style as RStyle};
-    let mut out = RStyle::new();
-    if let Some(color) = style.fg {
-        out = out.fg(bridge_color(color));
-    }
-    if let Some(color) = style.bg {
-        out = out.bg(bridge_color(color));
-    }
-    out = out.add_modifier(RModifier::from_bits_truncate(style.add_modifier.bits()));
-    out.remove_modifier(RModifier::from_bits_truncate(style.sub_modifier.bits()))
-}
-
-/// The oc-tui color → ratatui color half of the bridge.
-fn bridge_color(color: crate::style::Color) -> ratatui::style::Color {
-    use ratatui::style::Color as RColor;
-    match color {
-        crate::style::Color::Reset => RColor::Reset,
-        crate::style::Color::Indexed(index) => RColor::Indexed(index),
-        crate::style::Color::Rgb(r, g, b) => RColor::Rgb(r, g, b),
-    }
-}
-
-fn color_of(color: crate::render::CellColor) -> ratatui::style::Color {
-    use crate::render::CellColor;
-    use ratatui::style::Color as RColor;
-    match color {
-        CellColor::Default => RColor::Reset,
-        CellColor::Indexed(index) => RColor::Indexed(index),
-        CellColor::Rgb(r, g, b) => RColor::Rgb(r, g, b),
     }
 }
 

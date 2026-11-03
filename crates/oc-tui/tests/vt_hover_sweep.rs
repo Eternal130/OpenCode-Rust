@@ -140,7 +140,7 @@ struct SweepOutcome {
 
 /// Hover one cell, then classify the settled grid against the
 /// baseline (volatile cells skipped). Grid-based, not byte-based: the
-/// run loop re-emits ratatui's hide-cursor sequence every 100 ms tick
+/// run loop re-emits the writer's hide-cursor sequence every 100 ms tick
 /// regardless of hover, so byte deltas are noise; only CELL changes
 /// count as a response.
 fn probe_hover(
@@ -152,7 +152,7 @@ fn probe_hover(
 ) -> Response {
     const SETTLE_MS: u64 = 60;
     harness.sgr_motion(x, y);
-    // The run loop wakes on input immediately (the crossterm reader is
+    // The run loop wakes on input immediately (the input thread is
     // a dedicated thread); a hover that changes anything has painted
     // well inside the settle window.
     std::thread::sleep(Duration::from_millis(SETTLE_MS));

@@ -280,7 +280,7 @@ impl Default for AttentionConfig {
 }
 
 /// v2's `FocusState` — starts `unknown` until the terminal reports a
-/// focus event (crossterm `FocusGained`/`FocusLost`).
+/// focus event (the `FocusGained`/`FocusLost` vocabulary).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum FocusState {
     #[default]
@@ -501,7 +501,7 @@ impl Attention {
         self.config.borrow().clone()
     }
 
-    /// Terminal focus events (crossterm `FocusGained`/`FocusLost`).
+    /// Terminal focus events (the `FocusGained`/`FocusLost` vocabulary).
     pub fn set_focus(&self, focus: FocusState) {
         self.focus.set(focus);
     }

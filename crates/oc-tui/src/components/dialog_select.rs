@@ -1148,7 +1148,7 @@ fn put_shimmer_bounded(
     at
 }
 
-/// One ratatui color as an RGB triple (`Default` → black; the
+/// One style color as an RGB triple (`Default` → black; the
 /// shimmer math needs the concrete channels).
 fn rgb_triplet(color: Color) -> (u8, u8, u8) {
     match color {

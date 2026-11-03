@@ -1,4 +1,4 @@
-//! opencode terminal UI (ratatui + taffy): reactive store, keymap,
+//! opencode terminal UI (opentui + taffy): reactive store, keymap,
 //! theme wiring, layout layer, SSE data layer, and components — the
 //! Phase 7.1 foundation.
 //!

@@ -61,7 +61,7 @@ fn attach_pty() -> PtyGuard {
         .open(&slave_path)
         .expect("open slave (read+write — a read-only slave fd makes fd 1 unwritable)");
     // A real terminal has a size: a 0x0 winsize would collapse
-    // ratatui's autoresize into an empty buffer.
+    // the frame writer's resize handling into an empty grid.
     unsafe {
         let winsize = libc::winsize { ws_row: 30, ws_col: 80, ws_xpixel: 0, ws_ypixel: 0 };
         libc::ioctl(master.as_raw_fd(), libc::TIOCSWINSZ, &winsize);

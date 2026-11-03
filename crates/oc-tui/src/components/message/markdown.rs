@@ -276,7 +276,7 @@ fn render_spec(
             let mut body = Vec::new();
             render_spec(content, content_width.saturating_sub(2), 0, styles, &mut body);
             let border = border_color
-                .and_then(ratatui_color)
+                .and_then(rgba_to_style_color)
                 .map_or(styles.quote_border, |color| styles.quote_border.fg(color));
             for line in body {
                 let mut runs = vec![
@@ -290,7 +290,7 @@ fn render_spec(
         }
         BlockSpec::HorizontalRule { border_color, margin_bottom } => {
             let rule = border_color
-                .and_then(ratatui_color)
+                .and_then(rgba_to_style_color)
                 .map_or(styles.rule, |color| styles.rule.fg(color));
             lines.push(MarkdownLine(vec![StyledSpan {
                 link: None,
@@ -433,11 +433,11 @@ fn clip_spans(spans: &mut Vec<StyledSpan>, width: usize) {
 
 /// One pipeline chunk → a styled span. Unstyled sides fall back to
 /// the renderable's base (`fg`/`bg` props); ECMA attribute bits map
-/// onto ratatui modifiers (bold=1, dim=1<<1, italic=1<<2,
+/// 1:1 (bold=1, dim=1<<1, italic=1<<2,
 /// underline=1<<3, strikethrough=1<<7 — ansi.ts's packed order).
 fn chunk_span(chunk: &opentui_core::styled_text::TextChunk, styles: &MarkdownStyles) -> StyledSpan {
-    let fg = chunk.fg.and_then(ratatui_color).or(styles.markdown_text.fg);
-    let bg = chunk.bg.and_then(ratatui_color).or(styles.background.bg);
+    let fg = chunk.fg.and_then(rgba_to_style_color).or(styles.markdown_text.fg);
+    let bg = chunk.bg.and_then(rgba_to_style_color).or(styles.background.bg);
     let mut style = Style::new();
     if let Some(fg) = fg {
         style = style.fg(fg);
@@ -660,7 +660,7 @@ fn render_mermaid_block(content: &str, styles: &MarkdownStyles) -> Option<Vec<Ma
     Some(rows)
 }
 
-fn ratatui_color(rgba: opentui_core::Rgba) -> Option<Color> {
+fn rgba_to_style_color(rgba: opentui_core::Rgba) -> Option<Color> {
     (rgba.alpha() != 0).then_some(Color::Rgb(rgba.red(), rgba.green(), rgba.blue()))
 }
 

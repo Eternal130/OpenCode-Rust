@@ -34,7 +34,7 @@
 //!   change may touch ONLY the caret cell (its blink), and the
 //!   window's total byte count stays tiny.
 //!   RECORDED FINDING the guard surfaced: the run loop renders every
-//!   100 ms clock tick and ratatui's `Terminal::draw` emits its
+//!   100 ms clock tick and the frame writer emits its
 //!   hide-cursor sequence (`ESC[?25l`) unconditionally per draw — the
 //!   idle stream is never byte-silent (~6 B per tick of escape
 //!   chatter, no cell changes). The guard therefore pins
@@ -142,7 +142,7 @@ fn boot_to_session(harness: &mut HarnessHandle) -> Result<(), String> {
 }
 
 /// Collect `window_ms` worth of snapshots after the screen is
-/// cell-stable (byte-quiet is impossible: ratatui's unconditional
+/// cell-stable (byte-quiet is impossible: the writer's unconditional
 /// hide-cursor emission lands every 100 ms tick — the harness clock
 /// is wall time, bursts are real output).
 fn collect_snapshots(harness: &HarnessHandle, window_ms: u64) -> Vec<Snapshot> {
