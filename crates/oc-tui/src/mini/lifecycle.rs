@@ -802,7 +802,7 @@ enum PendingRows {
 #[allow(clippy::struct_excessive_bools)] // the renderer flag set mirrors the reference
 pub struct Lifecycle {
     terminal: Terminal<CrosstermBackend<std::io::Stdout>>,
-    /// Lane B3a — the raw-mode owner (opentui's UnixTty; the split
+    /// Lane B3a — the raw-mode owner (opentui's `UnixTty`; the split
     /// footer never enters the alt screen, so a bare termios save is
     /// all the "session" mini needs).
     tty: Option<opentui_core::terminal::UnixTty>,

@@ -6,9 +6,9 @@
 //! live in `pty_daily.rs`).
 
 use oc_tui::components::command_palette::{
-    CommandDispatcher as _, StoreDispatcher, select_props_for,
+    select_props_for, CommandDispatcher as _, StoreDispatcher,
 };
-use oc_tui::components::dialog::{DialogKeyOutcome, handle_dialog_key};
+use oc_tui::components::dialog::{handle_dialog_key, DialogKeyOutcome};
 use oc_tui::keymap::{Keymap, ManualClock};
 use oc_tui::reactive::Runtime;
 use oc_tui::store::{DialogKind, DialogSize, Store};
@@ -627,8 +627,8 @@ fn scroll_anchor_restore() {
 #[test]
 fn recents_ctrl_prompt_index() {
     use oc_tui::components::composer::autocomplete::{
-        AutocompleteState, DirectoryRecents, Mode, directory_recent_value,
-        directory_recents_options,
+        directory_recent_value, directory_recents_options, AutocompleteState, DirectoryRecents,
+        Mode,
     };
 
     // `useDirectoryRecents` (directory-recents.ts): touch dedupes +
@@ -700,7 +700,7 @@ fn recents_ctrl_prompt_index() {
 #[test]
 fn session_copy() {
     use oc_tui::components::command_palette::{
-        Dispatch, StoreDispatcher, copy_session_transcript, session_transcript,
+        copy_session_transcript, session_transcript, Dispatch, StoreDispatcher,
     };
     use oc_tui::components::message::model::{Message, Part, PartTime};
     use oc_tui::data::Ingest;
@@ -993,7 +993,7 @@ fn app_console_ctrl_copy() {
 /// shell/subagent tool, or a completed turn does not.
 #[test]
 fn backgroundtool() {
-    use oc_tui::components::message::list::{TranscriptOptions, render_transcript};
+    use oc_tui::components::message::list::{render_transcript, TranscriptOptions};
     use oc_tui::components::message::model::{Message, Part, PartTime, ToolState, ToolStatus};
     use oc_tui::theme::ThemeState;
 

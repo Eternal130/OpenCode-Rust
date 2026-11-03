@@ -4911,26 +4911,17 @@ pub fn cli_error_message(
         fields.get(key).and_then(serde_json::Value::as_str).unwrap_or_default().to_owned()
     };
     match name {
-        "CliError" | "AccountServiceError" | "AccountTransportError" => {
-            Some(field("message"))
-        }
+        "CliError" | "AccountServiceError" | "AccountTransportError" => Some(field("message")),
         "ProviderModelNotFoundError" => {
             let suggestions: Vec<String> = fields
                 .get("suggestions")
                 .and_then(serde_json::Value::as_array)
                 .map(|items| {
-                    items
-                        .iter()
-                        .filter_map(serde_json::Value::as_str)
-                        .map(str::to_owned)
-                        .collect()
+                    items.iter().filter_map(serde_json::Value::as_str).map(str::to_owned).collect()
                 })
                 .unwrap_or_default();
-            let mut lines = vec![format!(
-                "Model not found: {}/{}",
-                field("providerID"),
-                field("modelID")
-            )];
+            let mut lines =
+                vec![format!("Model not found: {}/{}", field("providerID"), field("modelID"))];
             if !suggestions.is_empty() {
                 lines.push(format!("Did you mean: {}", suggestions.join(", ")));
             }
@@ -7588,10 +7579,8 @@ fn session_setup_options(mouse: bool) -> opentui_core::terminal::SetupOptions {
     }
 }
 
-
 /// The boot discard window's length (see the input thread).
 const BOOT_DISCARD_WINDOW: std::time::Duration = std::time::Duration::from_millis(300);
-
 
 /// Rebuild the session terminal after a suspend (same TTY, same
 /// options — `Terminal::new` re-runs raw mode + the setup burst).
@@ -8344,9 +8333,9 @@ pub async fn run_with_size(
                 } else {
                     None
                 };
-                if let Some((width, height)) = resized.filter(|_| {
-                    std::mem::replace(&mut resize_baseline_seen, true)
-                }) {
+                if let Some((width, height)) =
+                    resized.filter(|_| std::mem::replace(&mut resize_baseline_seen, true))
+                {
                     if event_tx.blocking_send(TermEvent::Resize(width, height)).is_err() {
                         return;
                     }
@@ -8864,7 +8853,7 @@ pub async fn run_with_size(
             if let Ok(mut session) = session_terminal.lock() {
                 let _ = session.teardown();
             }
-                let result = crate::editor::open_editor(&draft, cwd.as_deref(), || {}, || {});
+            let result = crate::editor::open_editor(&draft, cwd.as_deref(), || {}, || {});
             if let Err(error) = rebuild_session_terminal(&session_terminal, applied_mouse) {
                 break Err(error);
             }
@@ -8910,7 +8899,7 @@ pub async fn run_with_size(
             if let Ok(mut session) = session_terminal.lock() {
                 let _ = session.teardown();
             }
-                crate::suspend::suspend_cycle();
+            crate::suspend::suspend_cycle();
             if let Err(error) = rebuild_session_terminal(&session_terminal, applied_mouse) {
                 break Err(error);
             }

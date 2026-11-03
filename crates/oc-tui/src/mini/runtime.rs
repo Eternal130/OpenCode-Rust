@@ -778,7 +778,7 @@ fn read_footer_input() -> Vec<u8> {
     if available <= 0 {
         return Vec::new();
     }
-    let mut buffer = vec![0u8; available as usize];
+    let mut buffer = vec![0u8; usize::try_from(available).unwrap_or(0)];
     // SAFETY: read(2) of at most FIONREAD bytes.
     let read = unsafe { libc::read(0, buffer.as_mut_ptr().cast::<libc::c_void>(), buffer.len()) };
     if read <= 0 {

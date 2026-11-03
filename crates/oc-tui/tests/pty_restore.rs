@@ -945,10 +945,7 @@ fn pty_kitty_handshake_and_teardown_bytes() {
     // probe burst arms `?2031h` and queries `?2027` via DECRPM — the
     // retired `?2027h` enable is the probe's gated subset, not a
     // separate oc-tui emission).
-    assert!(
-        contains(b"\x1b[?2031h"),
-        "the color-scheme mode report (?2031h) armed at boot"
-    );
+    assert!(contains(b"\x1b[?2031h"), "the color-scheme mode report (?2031h) armed at boot");
     assert!(contains(b"\x1b[?2027$p"), "the ?2027 DECRPM query emitted at boot");
     assert!(contains(b"\x1b[?u"), "the kitty query emitted at boot");
     // The ANSWER gated the push (the advertisement arrived → push).

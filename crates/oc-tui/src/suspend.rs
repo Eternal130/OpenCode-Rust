@@ -39,7 +39,6 @@ extern "C" fn on_continue(_signal: i32) {
 /// `renderer.suspend()`'s terminal half is the opentui session
 /// Terminal's teardown (lane B3a) — see [`crate::app`]'s suspend arm;
 /// the byte-writing teardown/restore pair retired with it.
-
 /// The signal discipline (`process.kill(0, "SIGTSTP")` + the
 /// `SIGCONT` resume): stop our OWN process group, return once the
 /// job-control continue landed. Only valid on unix.
@@ -91,7 +90,6 @@ pub fn suspend_cycle() {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write as _;
 
     /// The signal cycle against an OWN child process (its own process
     /// group — the parent's group is never signaled): the child
@@ -101,7 +99,6 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn child_suspends_and_resumes() {
-        use std::io::Write as _;
         let markers =
             std::env::var("OC_SUSPEND_MARKERS").map(std::path::PathBuf::from).unwrap_or_else(
                 |_| std::env::temp_dir().join(format!("oc-suspend-{}", std::process::id())),
