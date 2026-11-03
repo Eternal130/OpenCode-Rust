@@ -90,7 +90,7 @@ pub struct MarkdownStyles {
     /// The capture → style resolver (upstream `SyntaxStyle`).
     pub syntax: SyntaxStyle,
     /// The oc-syntax resolver (the R-01 fenced-code fallback line).
-    pub syntax_defs: oc_syntax::SyntaxStyles,
+    pub syntax_defs: crate::components::syntax::SyntaxStyles,
     /// Fingerprint of the syntax map (the styled cache's key salt —
     /// a theme switch invalidates every cached pipeline render).
     syntax_hash: u64,
@@ -256,17 +256,13 @@ fn render_spec(
                     return;
                 }
             }
-            let fallback = filetype.and_then(|ft| oc_syntax::highlight(content, ft));
+            let fallback =
+                filetype.and_then(|ft| crate::components::syntax::highlight(content, ft));
             if let Some(block) = fallback {
                 for (index, line) in content.split('\n').enumerate() {
                     let mut spans: Vec<StyledSpan> = block
-                        .line_spans(index, styles.code_block.into(), &styles.syntax_defs)
+                        .line_spans(index, styles.code_block, &styles.syntax_defs)
                         .into_iter()
-                        .map(|span| StyledSpan {
-                            text: span.text,
-                            style: span.style.into(),
-                            link: None,
-                        })
                         .collect();
                     if spans.is_empty() {
                         spans.push(StyledSpan {

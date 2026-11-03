@@ -178,7 +178,7 @@ pub struct ThemeStyles {
     /// The flattened tree-sitter scope → style map
     /// (`generate_syntax` → `convert_theme_to_styles`), consumed by the
     /// fenced-code highlight path (R-01 spike).
-    pub syntax: oc_syntax::SyntaxStyles,
+    pub syntax: crate::components::syntax::SyntaxStyles,
 }
 
 /// The `theme.diff.*` token palette — the diff viewer's gutter, sign
@@ -240,7 +240,8 @@ impl ThemeStyles {
         // The syntax scope map is built once per resolved theme (the
         // message-build side of the R-01 spike: parsing happens per
         // block, style flattening once per theme).
-        let syntax = oc_syntax::SyntaxStyles::from_rules(&oc_theme::generate_syntax(tokens));
+        let syntax =
+            crate::components::syntax::SyntaxStyles::from_rules(&oc_theme::generate_syntax(tokens));
         Self {
             text: Style::new().fg(fg).bg(bg),
             text_muted: Style::new().fg(rgba(tokens.text.muted)).bg(bg),
