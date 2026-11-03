@@ -173,6 +173,16 @@ impl CursorOutputState {
         self.color = color;
     }
 
+    /// Mark the current position/show state as already emitted (the
+    /// no-op-frame cursor pin writes CUP + ?25h directly; the diff
+    /// caches must agree so the next real frame does not re-send a
+    /// redundant style burst).
+    fn pin(&mut self) {
+        self.last_x = Some(self.x);
+        self.last_y = Some(self.y);
+        self.last_visible = Some(true);
+    }
+
     /// The cursor emission tail (renderer.rs `emit` :165-209 —
     /// renderer.zig:2932-3016), appended after the frame's SGR stream.
     /// `frame_started` mirrors whether any cell bytes were written.
@@ -416,14 +426,28 @@ impl GridEmitter {
 
     /// Emit one frame to the writer: the SGR stream wrapped in the
     /// `?2026` synchronized-update envelope with a trailing flush —
-    /// the exact `pump_output` shape (terminal/pumps.rs :200-228). A
-    /// frame whose stream is EMPTY emits nothing at all (the no-op
-    /// frame; pumps.rs :222-224 "no-op frame — no envelope"). The
-    /// envelope is not capability-gated (upstream never gates it).
+    /// the exact `pump_output` shape (terminal/pumps.rs :200-228).
+    /// The envelope is not capability-gated (upstream never gates it).
+    ///
+    /// One oc-tui policy on top of the upstream stream: while the
+    /// caret is visible, EVERY emitted frame ends with the cursor
+    /// assertion (CUP + `?25h`). Upstream's `CursorOutputState::emit`
+    /// skips the assertion when `frame_started` is false — and a run
+    /// closed by a trailing unchanged cell zeroes `run_length`, so a
+    /// spinner-tick frame can carry cell bytes WITHOUT the cursor
+    /// tail, stranding the hardware cursor on the last cell run. The
+    /// retired writer asserted the cursor position every frame; this
+    /// keeps that observable contract (the pty cursor-row gates) while
+    /// `render_sgr` stays byte-faithful to the oracle (the
+    /// differential gate pins the quirk itself).
     pub fn emit<W: std::io::Write>(&mut self, out: &mut W, frame: &Frame) -> std::io::Result<()> {
-        let sgr = self.render_sgr(frame);
+        let mut sgr = self.render_sgr(frame);
+        if self.cursor.visible && !sgr.ends_with("\x1b[?25h") {
+            sgr.push_str(&format!("\x1b[{};{}H\x1b[?25h", self.cursor.y, self.cursor.x));
+            self.cursor.pin();
+        }
         if sgr.is_empty() {
-            return Ok(());
+            return Ok(()); // no-op invisible frame — no envelope (pumps.rs :222-224)
         }
         out.write_all(SYNC_BEGIN)?;
         out.write_all(sgr.as_bytes())?;

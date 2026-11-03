@@ -553,3 +553,46 @@ fn pseudo_random_sequence() {
     assert_sequence(w, h, &frames, &cursors);
 }
 
+
+/// The upstream `frame_started` quirk, pinned: a run closed by a
+/// trailing unchanged cell zeroes `run_length`, so a frame WITH cell
+/// bytes can carry NO cursor tail (the oracle agrees byte-for-byte —
+/// the port is faithful). `emit` re-asserts the visible cursor on top
+/// (the retired writer's per-frame contract).
+#[test]
+fn steady_visible_cursor_over_changing_cells() {
+    let (w, h) = (5usize, 2usize);
+    let mut oracle = oracle(u32::try_from(w).unwrap(), u32::try_from(h).unwrap());
+    let mut emitter = emitter(w, h);
+    let mut frame = blank_grid(w, h);
+    frame.cells[0][0].ch = 'a';
+    let cursor: CursorInput = Some(((1, 1), (CursorStyle::Block, true, (255, 255, 255))));
+    for step in 0..4u8 {
+        frame.cells[0][0].ch = char::from(b'a' + step);
+        let out = emitter_frame(&mut emitter, &frame, cursor);
+        let reference = oracle_frame(&mut oracle, &frame, cursor);
+        assert_eq!(out, reference, "frame {step} diverged");
+        if step > 0 {
+            // the quirk: cells emitted, no cursor tail (the run closed
+            // on the unchanged cells behind the glyph)
+            assert!(!out.ends_with("\x1b[?25h"), "frame {step}: {out:?}");
+        }
+        // emit() layers the cursor pin over the same sgr
+        let mut emitter2 = GridEmitter::new(w, h);
+        let _ = emitter2.render_sgr(&blank_grid(w, h));
+        let mut sink = Vec::new();
+        for warm in 0..=step {
+            frame.cells[0][0].ch = char::from(b'a' + warm);
+            sink.clear();
+            emitter2.cursor.set_position(1, 1, true);
+            emitter2.emit(&mut sink, &frame).expect("emit");
+        }
+        let text = String::from_utf8(sink).expect("utf8");
+        assert!(text.ends_with("\x1b[?2026l"), "envelope closed: {text:?}");
+        let body = text
+            .strip_prefix("\x1b[?2026h")
+            .and_then(|t| t.strip_suffix("\x1b[?2026l"))
+            .unwrap_or_default();
+        assert!(body.ends_with("\x1b[1;1H\x1b[?25h"), "cursor pin: {body:?}");
+    }
+}
