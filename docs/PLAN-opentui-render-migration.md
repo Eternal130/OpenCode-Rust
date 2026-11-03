@@ -31,9 +31,18 @@ feature-gated `terminal-backend`(仿 device-audio 先例;默认构建保持 head
 
 **Gate B**:oracle 评审 + explorer 结构扫描。✅(B4 收口时通过;证据指针见 ADR-0018)
 
-## Phase C — 增量收敛 backlog(不阻塞依赖移除,按维护价值排队)
+## Phase C — 增量收敛 backlog(前三项已完成 2026-11-03,其余按消费方拉动)
 
-表面逐个上 solid builder(仿 16 个 *_solid.rs 先例)+ opentui-rust tier-2:TextTableRenderable(markdown 表格,连带 G-177)、ImageRenderable(图片面)、TextBuffer selection/truncate/scissor(编辑器保真)、markdown streaming。
+已完成:
+- **C1 TextTableRenderable**(opentui 8cbd53d + oc-tui ebdc364c):markdown 表格真 grid 渲染,**G-177 闭**;3 差分场景 IDENTICAL
+- **C2 TextBuffer truncate/scissor/scroll**(opentui d620365):selection 成为其唯一剩余 subset;3 差分场景 IDENTICAL
+- **C3 image.ts 家族+ImageRenderable**(opentui d1ef96d):契约单测钉(图像非网格可观测);kitty teardown `a=d,d=a` 补口;消费方接入前需 native-render lane(栅格化/发射/cell px 探针,已登记)
+- 消费方终态:oc-tui 钉 d1ef96d(75d5c8a8,双 profile 5116/5116);PORT-MATRIX 记账钩子 tools/recount-matrix.sh(1bb74a0,170/339=50.1%)
+
+剩余 backlog(下次会话,按消费方拉动排序):
+1. 富表面 solid 化(7 项 solid deferred 已有消费面)
+2. TextBuffer selection(待 oc-tui 真实路由)
+3. markdown streaming 增量、image 栅格化(零现役消费方,接入前置清单先写 GAPS)
 
 ## 验证矩阵
 
