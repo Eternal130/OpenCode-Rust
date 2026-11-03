@@ -1,6 +1,6 @@
 [package]
 name = "oc-tui"
-description = "opencode terminal UI (ratatui + taffy): theme wiring, keymap, components"
+description = "opencode terminal UI (opentui + taffy): theme wiring, keymap, components"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -22,14 +22,12 @@ serde_json = { workspace = true }
 tokio = { workspace = true }
 json5 = "0.4"
 async-trait = "0.1"
-ratatui = "0.29"
 # F1 (ref1): the stats activity calendar extracts LOCAL date fields
 # (ref's `Date.getFullYear/getMonth/getDate`) — same tz-database
 # approach as oc-server/oc-cli stats (jiff bundles the tz db).
 jiff = "0.2"
 flate2 = "1.1"
 taffy = { version = "0.9", default-features = false, features = ["std", "flexbox", "taffy_tree"] }
-crossterm = "0.28"
 unicode-width = "0.2"
 uuid = { version = "1", features = ["v4"] }
 # TUI-15 (lane-tui): Zed's editor-context sqlite, READ-ONLY — the same
@@ -52,7 +50,7 @@ tokio-tungstenite = { version = "0.24", default-features = false, features = [
 futures = "0.3"
 # SURF-LATEX-MERMAID: grapheme segmentation for the LaTeX/mermaid text
 # measurement (upstream uses Intl.Segmenter / string-width). Already a
-# lock entry via ratatui — no new packages.
+# lock entry — no new packages.
 unicode-segmentation = "1"
 # Lane M1 (换血 pilot): the opentui trio moves from dev-dependencies
 # to REAL dependencies — session_tabs_solid renders the tab strip on
@@ -82,6 +80,6 @@ oc-plugin-host = { workspace = true }
 rusqlite = { version = "0.32", features = ["bundled"] }
 # Cell-grid stream harness (tests/vt_harness.rs): parses the PTY's raw
 # ANSI byte stream into styled cell grids over time. Pinned to 0.15:
-# vt100 0.16 pulls unicode-width ^0.2.1, which cannot unify with
-# ratatui 0.29's exact "=0.2.0" pin (0.15's unicode-width 0.1 coexists
-# in the lock already, like console's).
+# 0.16 pulls unicode-width ^0.2.1, which would force the lib's own
+# unicode-width floor up (0.15's unicode-width 0.1 coexists in the
+# lock already, like console's).

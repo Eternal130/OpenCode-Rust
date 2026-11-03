@@ -1294,9 +1294,9 @@ fn plural_s(count: usize) -> &'static str {
     if count == 1 { "" } else { "s" }
 }
 
-/// A ratatui color back to its RGBA token (G-35's spinner input —
+/// An oc-tui style color back to its RGBA token (G-35's spinner input —
 /// the agent rail color or the `border.base` fallback).
-fn ratatui_color_to_rgba(color: crate::style::Color) -> oc_theme::Rgba {
+fn style_color_to_rgba(color: crate::style::Color) -> oc_theme::Rgba {
     match color {
         crate::style::Color::Rgb(r, g, b) => oc_theme::Rgba::from_ints(r, g, b, 0xff),
         _ => oc_theme::Rgba::from_ints(0x80, 0x80, 0x80, 0xff),
@@ -1360,8 +1360,8 @@ fn composer_footer_hints(
         spinner: if store.session_running(session_id) && !shell {
             let color = store
                 .composer_rail_color(session_id)
-                .map(ratatui_color_to_rgba)
-                .unwrap_or_else(|| ratatui_color_to_rgba(store.theme().styles().border));
+                .map(style_color_to_rgba)
+                .unwrap_or_else(|| style_color_to_rgba(store.theme().styles().border));
             let options = crate::components::composer::knight::KnightOptions {
                 color,
                 inactive_factor: 0.6,

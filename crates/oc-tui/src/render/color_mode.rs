@@ -38,7 +38,7 @@
 //! `packages/tui/src/mini/theme.ts:95-110`) — that is the `opencode
 //! run` path, not the interactive TUI this module serves.
 //!
-//! Our replication degrades the frame right before the ratatui draw
+//! Our replication degrades the frame right before the frame emission
 //! (`crate::app` run loop): `App::frame()` and every golden stay
 //! truecolor — exactly v2's split (framebuffer RGB, emission
 //! indexed). The golden corpus is therefore TERM-independent by

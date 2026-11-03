@@ -460,7 +460,7 @@ impl App {
     /// `session-tabs.tsx:1786-1792` + `406-416`) — and the reasoning
     /// group's `+ Thought` header toggles its disclosure on release
     /// (`onMouseUp={toggle}`, `group-view.tsx:152-190`). This routes
-    /// crossterm's mouse stream to exactly those surfaces.
+    /// input pipeline's mouse stream to exactly those surfaces.
     // The pointer routing table (modal → footer label → strip →
     // transcript hits) — one screen-sized match, kept whole like the
     // sibling key layers.
@@ -1407,7 +1407,7 @@ impl App {
                 // live `scroll.acceleration`/`scroll.speed` config
                 // selects the model; the default reproduces the
                 // 3-rows-a-notch line scroll. The event's arrival
-                // time feeds the streak (crossterm carries no wheel
+                // time feeds the streak (the input stream carries no wheel
                 // timestamps — `Date.now()` at `tick` in the ref).
                 let now_ms = i64::try_from(self.clock.now_ms_value()).unwrap_or(0);
                 let step = self.store.wheel_step(now_ms) as i32;
@@ -7611,8 +7611,14 @@ pub async fn run(client: oc_client::Client, boot: BootArgs) -> Result<(), String
             "the TUI requires an interactive terminal (stdin/stdout are not TTYs)".to_owned()
         );
     }
-    let size = crossterm::terminal::size()
+    // Lane B4 — the size probe rides the opentui tty device (the
+    // retired crossterm `terminal::size()` call went with the dep).
+    let size = opentui_core::terminal::UnixTty::new()
         .ok()
+        .and_then(|tty| {
+            use opentui_core::terminal::TtyDevice as _;
+            tty.window_size().ok()
+        })
         // SE-F5: an un-winsized PTY reports 0x0 — rendering at a zero
         // area emits boot escapes and ZERO frames (the ref paints a
         // full default-size TUI instead). Fall to the default frame.
@@ -7640,7 +7646,7 @@ fn write_mouse_flip(mouse: bool) {
 /// [`run`] with an explicit terminal size (tests); `None` = the
 /// terminal query. The loop: SSE ingest drain → open-session sync →
 /// clock ticks (spinner/toast) → config-reload check → coalesced
-/// render → crossterm key wait (100 ms poll tick). `app.exit` (and any
+/// render → key wait (100 ms poll tick). `app.exit` (and any
 /// `Ctrl+c` on an empty prompt) breaks the loop.
 /// CONFIG-E3 — `OPENCODE_FAST_BOOT` parsing with the ref's exact JS
 /// semantics (app.tsx:351: `skipInitialLoading: Boolean(process.env.OPENCODE_FAST_BOOT)`):
@@ -8254,7 +8260,7 @@ pub async fn run_with_size(
             // The first check_resize observation (None -> Some) is
             // baseline adoption, NOT a resize — emitting it would
             // re-resize the frame writer at boot (a [2J + buffer
-            // invalidation crossterm's SIGWINCH-only stream never
+            // invalidation the poll-only size watch never
             // produced).
             let mut resize_baseline_seen = false;
             // The boot discard window (the retired theme probe's
@@ -11297,7 +11303,7 @@ fn slash_builtins_execute_and_unknown_words_submit() {
     );
 }
 
-/// A crossterm mouse event at (`col`, `row`).
+/// A mouse event at (`col`, `row`).
 #[cfg(test)]
 fn mouse(
     kind: crate::input_term::MouseEventKind,

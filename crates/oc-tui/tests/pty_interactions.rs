@@ -201,7 +201,8 @@ fn sandbox_env(tag: &str) -> std::path::PathBuf {
 }
 
 /// SGR mouse motion (button 3 = no button) and left release. Wire
-/// coordinates are 1-BASED and crossterm normalizes to 0-based, so
+/// coordinates are 1-BASED and the input pipeline normalizes to
+/// 0-based, so
 /// both axes get the +1 here.
 fn sgr_motion(col: u16, row: u16) -> Vec<u8> {
     format!("\x1b[<35;{};{}M", col + 1, row + 1).into_bytes()

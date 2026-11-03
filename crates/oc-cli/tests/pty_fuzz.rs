@@ -323,8 +323,8 @@ async fn respond_json(socket: &mut TcpStream, body: &str) {
 // -- the VT screen analyzer ---------------------------------------------------
 
 /// A minimal incremental VT100 parser: reconstructs the visible
-/// 24×80 cell grid from the output stream. Handles what a ratatui +
-/// crossterm app emits — CUP (`H`/`f`), cursor moves (`A`/`B`/`C`/`D`),
+/// 24×80 cell grid from the output stream. Handles what an SGR
+/// frame writer emits — CUP (`H`/`f`), cursor moves (`A`/`B`/`C`/`D`),
 /// ED (`J`), EL (`K`), C0 (`\r`, `\n`, `\b`), UTF-8 text with
 /// double-width (CJK) cells; SGR/OSC/mode-set sequences are consumed
 /// and dropped. Partial trailing sequences wait for more bytes.
@@ -602,7 +602,7 @@ impl FuzzPty {
         let binary = env!("CARGO_BIN_EXE_opencode-rust");
         let mut command = Command::new(binary);
         unsafe {
-            // The pty is the child's controlling terminal: crossterm
+            // The pty is the child's controlling terminal: the tty
             // and the OSC 11 probe read the tty, so the slave must BE
             // /dev/tty (setsid + TIOCSCTTY — the `mini_pty.rs` pattern).
             command.pre_exec(|| {

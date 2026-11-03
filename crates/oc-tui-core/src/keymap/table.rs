@@ -606,7 +606,7 @@ static DEFAULT_TABLE: &[CommandDef] = defs! {
     "session_tab_previous" => "session.tab.previous", "ctrl+shift+tab,alt+up", "Switch to previous open tab", "base";
     // The tab-history pair (keybind.ts:114-115 — lane KM): back is
     // unbound by default, forward rides ctrl+i (the historic
-    // back-tab byte; crossterm delivers plain Tab so the chord is
+    // back-tab byte; the legacy decoder delivers plain Tab so the chord is
     // effectively palette/override-reachable, exactly like v2).
     "session_tab_history_back" => "session.tab.history.back", "none", "Go back in session tab history", "base";
     "session_tab_history_forward" => "session.tab.history.forward", "ctrl+i", "Go forward in session tab history", "base";

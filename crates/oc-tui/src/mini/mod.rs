@@ -5,7 +5,7 @@
 //! TUI. Conversation output goes to the terminal's native scrollback
 //! (a mono writer, one entry per block, per
 //! `mini/scrollback.writer.tsx`), while a live footer stays glued to
-//! the bottom of the screen (ratatui's inline viewport, never
+//! the bottom of the screen (an inline dock, never
 //! `EnterAlternateScreen`) hosting the composer, permission asks,
 //! forms and the picker panels.
 //!

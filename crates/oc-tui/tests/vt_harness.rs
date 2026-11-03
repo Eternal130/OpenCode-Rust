@@ -28,7 +28,7 @@
 //! * It is pure Rust (`vte` + `utf8parse`, no build scripts) and
 //!   compiles clean under the pinned 1.99.0 toolchain (verified).
 //! * Pinned to 0.15, NOT 0.16: 0.16 requires `unicode-width ^0.2.1`,
-//!   which cannot resolve against ratatui 0.29's exact `"=0.2.0"`
+//!   which would force the lib's own unicode-width floor up
 //!   pin; 0.15's `unicode-width 0.1` coexists in the lock already
 //!   (same as `console`).
 //! * `src/render/ansi.rs` is our EMITTER-side palette mapping (theme
@@ -1635,7 +1635,7 @@ impl HarnessHandle {
     }
 
     /// SGR 1006 wheel UP at 0-based cell `(x, y)` (button 64) —
-    /// crossterm decodes it as `MouseEventKind::ScrollUp`.
+    /// the reference decoder maps it to a scroll-up wheel event.
     pub fn sgr_scroll_up(&mut self, x: u16, y: u16) {
         self.write(format!("\x1b[<64;{};{}M", x + 1, y + 1).as_bytes());
     }
@@ -1737,7 +1737,7 @@ impl HarnessHandle {
 
     /// Wait until the screen is CELL-stable: two grids `probe_ms`
     /// apart differ in at most `tolerance` cells (the caret blink —
-    /// byte-quiet is impossible: the run loop re-emits ratatui's
+    /// byte-quiet is impossible: the run loop re-emits the writer's
     /// unconditional hide-cursor sequence every 100 ms tick, a
     /// recorded finding of the idle-noise guard).
     #[must_use]

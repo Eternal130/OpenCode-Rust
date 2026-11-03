@@ -5,7 +5,7 @@
 //!
 //! v2 delegates emission to opentui's `<image protocol="auto">`
 //! element; the Rust TUI emits the escape sequences itself after the
-//! cell grid draws (ratatui's backend writer):
+//! cell grid draws (the SGR frame writer):
 //!
 //! * **kitty graphics** — PNG passes through undecoded
 //!   (`f=100`): one `a=T` transmit-and-display command per placement,
@@ -236,7 +236,7 @@ pub fn drawable(protocol: GraphicsProtocol, data: &ImageData) -> bool {
 }
 
 /// Emit one frame's placements to `writer` (the run loop's post-draw
-/// step, after ratatui flushed the cell grid): for each *drawable*
+/// step, after the frame writer flushed the cell grid): for each *drawable*
 /// placement, CUP to its rect then emit the protocol bytes. Returns
 /// the ids it drew (the caller's next-frame deletion set).
 ///

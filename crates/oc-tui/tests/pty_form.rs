@@ -302,7 +302,7 @@ struct Boot {
     output: Arc<Mutex<Vec<u8>>>,
 }
 
-/// Strip ANSI escape sequences (CSI/OSC) — ratatui emits per-cell SGR
+/// Strip ANSI escape sequences (CSI/OSC) — the frame writer emits per-cell SGR
 /// runs, so multi-glyph needles never sit contiguously in the raw
 /// byte stream (e.g. a typed draft paints as `q<SGR>1<SGR>w…`).
 fn strip_ansi(input: &[u8]) -> Vec<u8> {

@@ -40,7 +40,7 @@ fn a2_geometry_width_sweep_10_40_160() {
         })
         .unwrap_or_else(|| vec![(10, 6), (40, 12), (160, 40)]);
     // ONE PTY for the whole sweep (the SA-F13 constraint vt_double_boot
-    // documents): crossterm's process-global event source pins the FIRST
+    // documents): the process-global input source pins the FIRST
     // tty's epoll registration — a per-width re-attach leaves the next
     // boot's reader polling a dead slave (input dead; the registered
     // SE-F2 sweep wedge). The sweep resizes the live PTY to each width

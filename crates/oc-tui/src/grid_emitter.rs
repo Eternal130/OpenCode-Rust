@@ -53,7 +53,7 @@ pub mod text_attributes {
 //    (39/49; an alpha-0 background collapses to 49 in upstream), Indexed
 //    = `38;5;n`/`48;5;n`, Rgb = `38;2;r;g;b`/`48;2;r;g;b`) --------------
 
-fn emit_fg(buf: &mut String, color: CellColor) {
+pub(crate) fn emit_fg(buf: &mut String, color: CellColor) {
     match color {
         CellColor::Default => buf.push_str("\x1b[39m"),
         CellColor::Indexed(index) => buf.push_str(&format!("\x1b[38;5;{index}m")),
@@ -61,7 +61,7 @@ fn emit_fg(buf: &mut String, color: CellColor) {
     }
 }
 
-fn emit_bg(buf: &mut String, color: CellColor) {
+pub(crate) fn emit_bg(buf: &mut String, color: CellColor) {
     match color {
         CellColor::Default => buf.push_str("\x1b[49m"),
         CellColor::Indexed(index) => buf.push_str(&format!("\x1b[48;5;{index}m")),
@@ -72,7 +72,7 @@ fn emit_bg(buf: &mut String, color: CellColor) {
 /// The attribute SGR burst — opentui-core `ansi.rs`
 /// `TextAttributes::apply_attributes` (:76-103): fixed order, one SGR
 /// per set bit.
-fn apply_attributes(buf: &mut String, attrs: u16) {
+pub(crate) fn apply_attributes(buf: &mut String, attrs: u16) {
     if attrs & text_attributes::BOLD != 0 {
         buf.push_str("\x1b[1m");
     }
@@ -248,7 +248,7 @@ impl CursorOutputState {
 /// transparent-black clear argument). A [`CellColor::Default`
 /// background maps to the same alpha-0 transparent black, so the
 /// diff base is byte-identical on both sides.
-fn blank_cell() -> Cell {
+pub(crate) fn blank_cell() -> Cell {
     Cell { ch: ' ', attrs: 0, fg: CellColor::Rgb(255, 255, 255), bg: CellColor::Default }
 }
 
