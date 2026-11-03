@@ -46,7 +46,7 @@
 use crate::layout::{Placed, PlacedLine, StyledSpan};
 use crate::render::{paint_placed_with_fills, Fill, Frame};
 use crate::theme::{DiffStyles, ThemeStyles};
-use oc_syntax::HighlightedBlock;
+use crate::components::syntax::HighlightedBlock;
 use crate::style::{Color, Modifier, Style};
 
 /// `MIN_SPLIT_WIDTH` — the patch pane needs this many columns before
@@ -1316,7 +1316,7 @@ fn paint_diff_row(
     text_fg: Color,
     diff: &DiffStyles,
     highlighted: Option<&HighlightedBlock>,
-    syntax: &oc_syntax::SyntaxStyles,
+    syntax: &crate::components::syntax::SyntaxStyles,
 ) {
     // The gutter: `␣` + number field + sign column + `␣` (text starts
     // 1 + digits + 3 columns in).
@@ -1373,7 +1373,16 @@ fn paint_diff_row(
     match highlighted {
         Some(block) => {
             let base = Style::new().fg(text_fg).bg(colors.text_bg);
-            let runs = crate::components::syntax::line_spans(block, colors.line, base, syntax);
+            // The bg stays pinned to the row's diff background — the
+            // syntax styles may only recolor the foreground here.
+            let runs = block
+                .line_spans(colors.line, base, syntax)
+                .into_iter()
+                .map(|mut span| {
+                    span.style.bg = Some(colors.text_bg);
+                    span
+                })
+                .collect();
             placed.push(Placed {
                 x: text_x,
                 y,

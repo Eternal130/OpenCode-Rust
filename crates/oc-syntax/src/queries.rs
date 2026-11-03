@@ -582,15 +582,19 @@ pub fn lookup(filetype: &str) -> Option<&'static GrammarEntry> {
 
 /// One compiled-query cache slot: (filetype, kind) → query, where kind
 /// distinguishes the highlight and locals queries of one grammar.
+#[cfg(test)]
 type QueryCacheSlot = (&'static str, &'static str, Arc<Query>);
 
 /// The process-wide compiled-query cache (queries are immutable; compile
-/// once per grammar).
+/// once per grammar) — test-harness support (the runtime query compile
+/// lives in opentui's TreeSitterClient).
+#[cfg(test)]
 fn query_cache() -> &'static std::sync::Mutex<Vec<QueryCacheSlot>> {
     static CACHE: OnceLock<std::sync::Mutex<Vec<QueryCacheSlot>>> = OnceLock::new();
     CACHE.get_or_init(|| std::sync::Mutex::new(Vec::new()))
 }
 
+#[cfg(test)]
 fn cached_query(
     filetype: &'static str,
     kind: &'static str,
@@ -607,7 +611,10 @@ fn cached_query(
     query
 }
 
-/// A grammar's compiled highlight query (cached on first use).
+/// A grammar's compiled highlight query (cached on first use) —
+/// test-harness support (the runtime compile lives in opentui's
+/// TreeSitterClient).
+#[cfg(test)]
 pub fn highlight_query(entry: &GrammarEntry) -> Arc<Query> {
     // A panic here means registry drift (grammar/query ABI mismatch) —
     // the query-construction test pins this; a panic at first use of a
@@ -618,7 +625,9 @@ pub fn highlight_query(entry: &GrammarEntry) -> Arc<Query> {
     })
 }
 
-/// A grammar's compiled locals query, when registered (cached on first use).
+/// A grammar's compiled locals query, when registered (cached on
+/// first use) — test-harness support.
+#[cfg(test)]
 pub fn locals_query(entry: &GrammarEntry) -> Option<Arc<Query>> {
     let source = entry.locals_query?;
     Some(cached_query(entry.filetype, "locals", || {
@@ -629,7 +638,8 @@ pub fn locals_query(entry: &GrammarEntry) -> Option<Arc<Query>> {
 
 /// A parser for the entry's grammar (cheap to build; tree-sitter parsing
 /// is single-threaded per parser, so a fresh parser per highlight call
-/// avoids contention between renders).
+/// avoids contention between renders) — test-harness support.
+#[cfg(test)]
 pub fn parser(entry: &GrammarEntry) -> Option<Parser> {
     let mut parser = Parser::new();
     parser.set_language(&tree_sitter::Language::new(entry.language)).ok()?;
