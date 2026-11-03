@@ -226,52 +226,6 @@ impl std::fmt::Debug for Style {
     }
 }
 
-impl From<oc_syntax::style::Style> for Style {
-    /// The oc-syntax boundary conversion (same shape, same bit
-    /// layout — a field-for-field rebuild).
-    fn from(style: oc_syntax::style::Style) -> Self {
-        Self {
-            fg: style.fg.map(Color::from),
-            bg: style.bg.map(Color::from),
-            add_modifier: Modifier::from_bits(style.add_modifier.bits()),
-            sub_modifier: Modifier::from_bits(style.sub_modifier.bits()),
-        }
-    }
-}
-
-impl From<Style> for oc_syntax::style::Style {
-    /// The oc-tui → oc-syntax direction (the highlight boundary's
-    /// base style).
-    fn from(style: Style) -> Self {
-        Self {
-            fg: style.fg.map(oc_syntax::style::Color::from),
-            bg: style.bg.map(oc_syntax::style::Color::from),
-            add_modifier: oc_syntax::style::Modifier::from_bits(style.add_modifier.bits()),
-            sub_modifier: oc_syntax::style::Modifier::from_bits(style.sub_modifier.bits()),
-        }
-    }
-}
-
-impl From<oc_syntax::style::Color> for Color {
-    fn from(color: oc_syntax::style::Color) -> Self {
-        match color {
-            oc_syntax::style::Color::Reset => Self::Reset,
-            oc_syntax::style::Color::Indexed(index) => Self::Indexed(index),
-            oc_syntax::style::Color::Rgb(r, g, b) => Self::Rgb(r, g, b),
-        }
-    }
-}
-
-impl From<Color> for oc_syntax::style::Color {
-    fn from(color: Color) -> Self {
-        match color {
-            Color::Reset => Self::Reset,
-            Color::Indexed(index) => Self::Indexed(index),
-            Color::Rgb(r, g, b) => Self::Rgb(r, g, b),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

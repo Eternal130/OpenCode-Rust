@@ -1,19 +1,22 @@
-//! oc-syntax — the tree-sitter syntax highlighting engine for fenced
-//! code blocks (R-01 spike; the native-grammar counterpart of v2's
-//! wasm-parser pipeline in `packages/tui/src/parsers-config.ts`).
+//! oc-syntax — the **grammar+query vendor** for syntax highlighting
+//! (D1d engine convergence): the registry of per-filetype native
+//! grammars, vendored `.scm` query sources, and the alias convention —
+//! the native-grammar counterpart of v2's wasm-parser catalog in
+//! `packages/tui/src/parsers-config.ts`. The runtime highlight path
+//! lives in opentui-core's `TreeSitterClient` (oc-tui registers this
+//! catalog via `add_default_parsers` and calls `highlight_once`; the
+//! span materialization sits in oc-tui's `components::syntax`).
 //!
-//! ## Shape
+//! ## Shape (the vendor face)
 //!
-//! * [`highlight`] — parse one code block once for a filetype (unknown
-//!   filetypes return `None` instantly: no grammar, no blocking, no
-//!   panics — the caller renders plain lines, exactly today's behavior).
-//! * [`HighlightedBlock::line_spans`] — materialize one pre-parsed line
-//!   as styled spans against the theme's flattened syntax styles
-//!   ([`SyntaxStyles`], built from oc-theme's
-//!   `generate_syntax`/`convert_theme_to_styles` pair). Pure lookup —
-//!   never parses, never touches tree-sitter.
-//! * tree-sitter types never leak: the public surface is spans, styles
-//!   and one opaque block handle.
+//! * [`registry`] / [`lookup`] — every filetype the compiled feature
+//!   set carries: `LanguageFn` + highlights query + locals query +
+//!   aliases, resolved offline (unknown filetypes return `None`
+//!   instantly — no grammar, no blocking, no panics).
+//! * The engine modules (`engine`, `scopes`, `style`) are demoted to
+//!   `#[cfg(test)]` test harnesses — they keep the per-language
+//!   capture-coverage tests' semantics without shipping a second
+//!   runtime highlighting path.
 //!
 //! ## Catalog status (R-01b + G-08)
 //!
@@ -45,32 +48,47 @@
 //! languages render plain (see `queries` module docs).
 //! Binary-size and perf measurements accompany the R-01b report.
 
+/// The engine/test-only modules: kept for the per-language
+/// capture-coverage tests (they parse + query through the same
+/// registry the TreeSitterClient registration feeds from), not
+/// compiled into the vendor face.
+#[cfg(test)]
 mod engine;
 mod queries;
+#[cfg(test)]
 mod scopes;
+#[cfg(test)]
 pub mod style;
 
+#[cfg(test)]
 pub use engine::HighlightedBlock;
+#[cfg(test)]
 pub use scopes::SyntaxStyles;
+#[cfg(test)]
 pub use style::{Color, Modifier, Style};
 
-/// One styled run of a highlighted line (oc-tui's span shape; the TUI
-/// converts trivially since both fields are public).
+pub use queries::{lookup, registry, GrammarEntry};
+
+/// One styled run of a highlighted line (the test harness's span
+/// shape).
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct StyledSpan {
     pub text: String,
     pub style: Style,
 }
 
-/// Highlight one fenced code block for a filetype.
+/// Highlight one fenced code block for a filetype — the test-only
+/// engine harness (the runtime path is oc-tui's
+/// `components::syntax::highlight` over opentui's TreeSitterClient).
 ///
 /// `block` is the block's content **without** trailing newline(s);
 /// `filetype` is the fence info string (`"rust"`, `"rs"`, `"ts"`, … —
 /// aliases and `,extra` fields are normalized by the registry lookup).
 ///
-/// Returns `None` for unknown filetypes (instantly — the offline rule),
-/// for grammars that fail to initialize, and for parses that hit the
-/// per-parser timeout ceiling; callers fall back to plain rendering.
+/// Returns `None` for unknown filetypes (instantly — the offline
+/// rule) and for grammars that fail to initialize.
+#[cfg(test)]
 #[must_use]
 pub fn highlight(block: &str, filetype: &str) -> Option<HighlightedBlock> {
     let lines: Vec<String> = block.lines().map(str::to_owned).collect();
