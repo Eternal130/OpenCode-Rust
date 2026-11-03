@@ -75,9 +75,14 @@ oc-uqr = { path = "third_party/oc-uqr" }
 # ImageRenderable contract (unit-pinned — image bytes are not
 # cell-grid observable), and the kitty-graphics teardown gate
 # (inert without an image session).
-opentui-core = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "d1ef96d" }
-opentui-keymap = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "d1ef96d" }
-opentui-solid = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "d1ef96d" }
+# Rev d3688d8 adds the live CliRenderer (terminal-backend feature,
+# Phase B of docs/PLAN-opentui-render-migration.md): frame scheduling
+# ownership via attach_terminal_session/request_render/run_frame/settle/
+# destroy — consumed by oc-tui lane D2.1b to own the render loop while
+# GridEmitter stays the sole byte emitter (byte-for-byte unchanged).
+opentui-core = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "d3688d8" }
+opentui-keymap = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "d3688d8" }
+opentui-solid = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "d3688d8" }
 
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
