@@ -69,9 +69,15 @@ oc-uqr = { path = "third_party/oc-uqr" }
 # Rev 8cbd53d adds TextTableRenderable wired into markdown (tables
 # render as a real grid, not raw text; 3 new differential scenarios
 # IDENTICAL) — closes GAPS G-177.
-opentui-core = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "8cbd53d" }
-opentui-keymap = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "8cbd53d" }
-opentui-solid = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "8cbd53d" }
+# Rev d1ef96d adds the remaining Phase C parity items: TextBuffer
+# truncate/scissor/scroll semantics (composer/scrollback benefit;
+# 3 more scenarios, suite at 119 IDENTICAL), the image.ts family +
+# ImageRenderable contract (unit-pinned — image bytes are not
+# cell-grid observable), and the kitty-graphics teardown gate
+# (inert without an image session).
+opentui-core = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "d1ef96d" }
+opentui-keymap = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "d1ef96d" }
+opentui-solid = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "d1ef96d" }
 
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
