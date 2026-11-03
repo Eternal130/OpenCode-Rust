@@ -11,3 +11,4 @@ parity 程序的**既有决定**记录（PARITY-LOOP §11.3 建立的清单）�
 | [0005](./0005-hook-copy-semantics.md) | hook 跨界 copy-in/copy-out 语义 | accepted | guest hook 事件 JSON 副本进出子进程边界，等价标准是可观察等价（顺序 + mutation 形状），非内部表示位同一 |
 | [0006](./0006-cassette-only-live-fixtures.md) | AI provider 验证 cassette-only（live 窗口延后） | accepted（2026-10-18 用户裁决） | 无批准窗口前一律 cassette；runtime reachability 显式 deferred；release 前必复审 |
 | [0007](./0007-oauth-8080-skip-closure.md) | HYGIENE-OAUTH-8080-SKIP 结案 | accepted（2026-10-18 用户裁决） | 8080 skip-on-busy 已实证正确且源内已文档化，无需改动，条目关闭 |
+| [0018](./0018-opentui-full-render.md) | oc-tui 渲染面全量切换 opentui-rust | accepted（2026-11-03） | 推翻混合架构裁决：GridEmitter a1 帧发射 + headless 输入泵 + 探针事件回填 + suspend=重建 + mini 薄缝；ratatui/crossterm 出依赖图；窄化与偏差（split-footer 族延后、panic hook、OSC8、resize 轮询、kitty push、孤立 ESC、鼠标拦截）在案 |

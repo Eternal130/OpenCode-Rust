@@ -278,6 +278,8 @@
 | 6 | **幽灵提交**两案：lane 报"已提交"而分支仍在 base | lane 自述无凭据 | 派发模板要求最终报告贴 `git log -1 <branch>` 落地证明；缺证明=未完成 |
 | 7 | **无测试合并**：DERIG 推送未跑测试，main 的 parity 构建断一天 | 合并无门 | 每次 main 合并至少受影响 crate 构建+测试后再推，无例外 |
 | 8 | merge 后必须补 bun 内差分冒烟（纯 cargo 门看不见 JS 侧破坏，O2a×O2b 融合后 driver.ts 语法断裂存活） | 纯 Rust 门对 JS 侧盲 | harness 相关合并加 bun 冒烟 |
+| 9 | **lane 在 main checkout 遗留调试代码 → a3 基线 false green**（2026-11-03 实例：B 系列之前的 lane 把调试残留留在 /opt/opencode-rust 主检出，后续 lane 的基线日志在带毒树上采集，回归被基线吞掉） | lane 误碰 main checkout；基线日志未绑定树 hash，无法对到干净基点 | lane 一律禁碰 main checkout（只写自己 worktree，见 2.1#3）；基线日志必须能对到采集时的 `git rev-parse HEAD` 树 hash（报告贴 hash，无 hash=无效基线）；引用 ADR-0018 所在 B4 lane 的报告格式 |
+| 10 | `composer_tabs_walk`（oc-tui tests/pty_composer_tabs.rs）已知 flake：偶发超时未开 picker | PTY 时序敏感（runner 负载下 boot→按键窗口抖动），非产品回归 | 失败先重跑单测复核；若稳定复现再升级排查；不作为合并门单独阻塞项登记在案 |
 | 9 | **子代理"默认测试通过"假象 + 过滤指令吞失败详情**：首轮 cargo test 用了过滤/未带 --no-fail-fast，失败被折叠成汇总行，失败原因不可见，被迫第二轮重测定位，拖长 lane 周期（2026-10-27 收口 session 多 lane 观察） | 测试报告只看退出码/末行汇总；过滤参数（--lib、name filter）把红测试藏进被滤掉的集合 | lane 验证纪律：① 首轮测试**不加过滤**并带 `--no-fail-fast`，拿到全部结果；② 报告必须**原样引用 `test result:` 行**（含 passed/failed 计数），禁止只写"green/通过"；③ 有失败时**同一轮**立即用 `--exact <name> -- --nocapture` 重跑单个红测试取回失败输出，不得先交报告再返工；④ dev-gate 输出被截断时读保存的完整输出文件而非重跑 |
 | 10 | **测试证据随会话丢失 → 重复测试**：lane 报告只活在子代理会话里，宿主重启/会话回收后 orchestrator 或后续 lane 拿不到原始 test result 行，只能整轮重跑验证（2026-10-27 合并门曾整轮重测 5 crate，数十分钟；且 /tmp/opencode 有被整体清空的前科 2.1#4） | 测试输出没有落盘为持久文件；依赖会话内存或易失 /tmp | **一切测试运行必须 tee 落盘**：`tools/dev-gate.sh 'cargo test …' 2>&1 \| tee .test-logs/<crate>-<yyyymmdd-HHMM>-<lane>.log`（.test-logs/ 进 .gitignore、不随 /tmp 清空；merge gate 同规则）；lane 最终报告**必须给出日志文件路径 + 关键 `test result:` 行**；后续任何"是否已验证"的争议先读日志文件，禁止凭记忆重跑；日志含红项时连同基线证伪证据（基线 commit + 复现输出）一并落同一目录 |
 | 11 | **plain `cargo test --workspace` 产生大面积假红**（2026-10-28 rv-burndown 收口：cargo test 直跑 oc-tui 数十测红——PTY/VT 套件 spawn 真终端+stub server，在无限流/无重试下时序全崩；同一棵树 nextest 4450/4450 绿） | 本仓 canonical 测试 harness 是 nextest（.config/nextest.toml：test-threads=4、全局 retry=1、be1/pty 家族 retry=2 + [profile.pty] test-threads=1 序列化）；plain cargo test 绕过全部降载与重试机制 | 全 workspace 验证一律 `cargo nextest run --workspace --locked --no-fail-fast`；PTY 家族另跑 `--profile pty` 序列化（镜像 ci.yml 两 job）；禁以 plain cargo test 的红作为回归证据，除非单测 --exact 定位复现 |
@@ -982,6 +984,10 @@ G-93..G-104 全部 ✅。现存未关闭项维持既有文档化决策：G-28（
 ### G-164 ℹ️ announce.rs 为位置事件级联的服务端替身（server）
 - Ref 由各 core 服务自持 notify（reload/transform → bus.publish）；Rust 由 oc-server/announce.rs 按装配/请求时机合成（模块头 :1-15 自述；engine/mod.rs:652 F-5 注释佐证；含 project.updated 60s 限速、九个空 *.updated 帧复刻，有 parity 测试）。结构性 seam：新增 location 服务/事件需同步维护 announce 级联清单，漂移风险集中该文件——保持 parity 金样并在此登记。
 - 2026-11-02 第十一轮：登记收口——结构性 seam 维持现状；新增 location 服务/事件时必须同步维护 announce.rs 级联清单并保持既有 parity 金样（约束性登记，无代码项）。
+
+### G-211 ℹ️ split-footer / ExternalOutputCommit 整族延后（tui，mini 走薄缝）
+- opentui renderer.ts:2339+ 的 split-footer（makeRoom/ExternalOutputCommit）家族不移植：主 TUI 全量 alt-screen，无消费面；mini 的 split-footer 交互于 Phase B4 落地为**薄缝**——dock 由 oc-tui 自有 GridEmitter 画在全屏网格底部行（上方恒 blank，diff 不触转录区），`insert_before` 以「擦 dock → 底行滚动 → CUP 写行」等价实现，键入走 KeyPipeline 非阻塞路径。行为由 oc-cli `mini_pty.rs`（4 测试）与 oc-tui mini 系列（含 `pty_daily::mini_subagent_footer`）钉定。
+- 登记：ADR-0018（`docs/adr/0018-opentui-full-render.md`）「窄化与偏差」节；如后续出现 split-footer 消费面（如主 TUI 内嵌分屏），再决最小 makeRoom 移植。
 
 ## 归类与收编（不另立项）
 
