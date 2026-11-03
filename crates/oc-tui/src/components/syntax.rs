@@ -217,12 +217,13 @@ impl HighlightedBlock {
     }
 
     /// Materialize one line as styled spans: `base` for uncaptured
-    /// gaps, the theme-matched capture style overlaid everywhere
-    /// else, and the run's background **pinned to `base`'s** (syntax
-    /// styles may only recolor the foreground; the diff viewer's row
-    /// backgrounds and the transcript's background own bg).
-    /// Adjacent equal styles merge; the concatenated text always
-    /// equals the source line — styling never changes glyphs.
+    /// gaps, the theme-matched capture style overlaid everywhere else
+    /// (the def's fg **and bg** overlay the base, matching the
+    /// pre-convergence engine — the markdown fence path lets the diff
+    /// scopes paint their row backgrounds; the path-shaped consumers
+    /// pin the bg afterwards). Adjacent equal styles merge; the
+    /// concatenated text always equals the source line — styling
+    /// never changes glyphs.
     #[must_use]
     pub fn line_spans(
         &self,
@@ -237,7 +238,6 @@ impl HighlightedBlock {
         if ranges.is_empty() {
             return vec![StyledSpan { text: text.clone(), style: base, link: None }];
         }
-        let background = base.bg;
         let resolved: Vec<Style> =
             self.0.names.iter().map(|name| resolve(syntax, name, base)).collect();
         let chars: Vec<char> = text.chars().collect();
@@ -267,11 +267,6 @@ impl HighlightedBlock {
         }
         if !run.is_empty() {
             spans.push(StyledSpan { text: run, style: current, link: None });
-        }
-        // Syntax styles may only recolor the foreground — the bg
-        // stays the base paint's (row backgrounds own it).
-        for span in &mut spans {
-            span.style.bg = background;
         }
         spans
     }

@@ -1373,7 +1373,16 @@ fn paint_diff_row(
     match highlighted {
         Some(block) => {
             let base = Style::new().fg(text_fg).bg(colors.text_bg);
-            let runs = block.line_spans(colors.line, base, syntax);
+            // The bg stays pinned to the row's diff background — the
+            // syntax styles may only recolor the foreground here.
+            let runs = block
+                .line_spans(colors.line, base, syntax)
+                .into_iter()
+                .map(|mut span| {
+                    span.style.bg = Some(colors.text_bg);
+                    span
+                })
+                .collect();
             placed.push(Placed {
                 x: text_x,
                 y,
