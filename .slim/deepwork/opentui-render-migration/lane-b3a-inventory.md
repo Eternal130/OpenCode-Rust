@@ -43,3 +43,19 @@ double-parse of one stream; the renderer side dispatches to no key/mouse
 listeners, so nothing double-fires). `CliRendererConfig.use_mouse = false`
 so the renderer silently consumes the mouse bytes the adapter already
 handled.
+
+## Addendum (implementation findings, folded back from the PTY gate)
+
+* The kitty CSI-u grammar is parsed **unconditionally** in the adapter
+  (crossterm 0.28 dispatched `CSI .. u` pushed-flags-or-not; the PTY
+  suites send kitty chords like `CSI 45;5u` for undo verbatim).
+* A **boot discard window** (300 ms) + a **blocking boot gate** replace
+  the retired probe's two hidden behaviors: eating a prior boot's
+  unread exit-chord tail (SA-F13's double-boot shield) and freezing the
+  async runtime behind a blocking recv so the first frame precedes the
+  transcript sync (an async sleep let fetch tasks run ahead and changed
+  the first paint — pty_session_route pins that ordering).
+* The first `check_resize` observation (None → Some) is baseline
+  adoption, not a resize — emitting it re-resized ratatui at boot (a
+  [2J + buffer invalidation crossterm's SIGWINCH-only stream never
+  produced; the render-panic PTY proof caught it).
