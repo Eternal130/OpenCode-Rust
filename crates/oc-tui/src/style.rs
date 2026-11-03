@@ -279,7 +279,7 @@ mod tests {
     /// contract: canvas merges and the canonical serializer's ECMA
     /// ordering derive from these values).
     #[test]
-    fn modifier_bits_match_ratatui_layout() {
+    fn modifier_bits_match_ecma_layout() {
         assert_eq!(Modifier::BOLD.bits(), 1 << 0);
         assert_eq!(Modifier::DIM.bits(), 1 << 1);
         assert_eq!(Modifier::ITALIC.bits(), 1 << 2);
