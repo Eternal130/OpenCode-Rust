@@ -30,11 +30,7 @@ use crate::render::{Cell, CellColor, Frame};
 /// conversion; only the hue/chroma terms the palette matching needs.
 fn rgb_to_oklch(red: f64, green: f64, blue: f64) -> (f64, f64, f64) {
     let srgb_to_linear = |value: f64| -> f64 {
-        if value <= 0.04045 {
-            value / 12.92
-        } else {
-            ((value + 0.055) / 1.055).powf(2.4)
-        }
+        if value <= 0.04045 { value / 12.92 } else { ((value + 0.055) / 1.055).powf(2.4) }
     };
     let linear_red = srgb_to_linear(red);
     let linear_green = srgb_to_linear(green);
@@ -76,7 +72,10 @@ fn hex(color: oc_theme::color::Rgba) -> String {
 /// 200-step sits nearest the target OkLCh hue (chroma ≥ 0.03, alpha
 /// > 0), else the accent 200 fallback; matches beyond 30° also fall
 /// back.
-fn terminal_hue(theme: &oc_theme::types::ResolvedThemeTokens, target: f64) -> oc_theme::color::Rgba {
+fn terminal_hue(
+    theme: &oc_theme::types::ResolvedThemeTokens,
+    target: f64,
+) -> oc_theme::color::Rgba {
     let mut nearest: Option<(f64, oc_theme::color::Rgba)> = None;
     for scale in theme.hue.values() {
         let color = scale.s200;
@@ -150,15 +149,12 @@ pub fn terminal_palette(
     colors.push(bright_white);
     let mut bytes = Vec::new();
     for (index, color) in colors.iter().enumerate() {
-        bytes.extend_from_slice(
-            format!("\x1b]4;{index};{}\x1b\\", hex(*color)).as_bytes(),
-        );
+        bytes.extend_from_slice(format!("\x1b]4;{index};{}\x1b\\", hex(*color)).as_bytes());
     }
     bytes.extend_from_slice(format!("\x1b]10;{}\x1b\\", hex(theme.text.base)).as_bytes());
     bytes.extend_from_slice(format!("\x1b]11;{}\x1b\\", hex(background)).as_bytes());
     bytes
 }
-
 
 /// The input frame's HAS-INPUT flag value (kind 1 = input; kind 0 =
 /// a pure resize control, §3).
@@ -477,7 +473,7 @@ pub fn render_terminal_pane(state: &TerminalPaneState, width: u16, height: u16) 
             };
             at += atom.len_utf8().max(1);
         }
-        return Frame { cells, width, height };
+        return Frame { cells, width, height, clusters: None };
     }
     let screen = state.parser.screen();
     // The embedded terminal paints at the box's left pad (1).
@@ -504,7 +500,7 @@ pub fn render_terminal_pane(state: &TerminalPaneState, width: u16, height: u16) 
             *slot = Cell { ch, attrs, fg, bg };
         }
     }
-    Frame { cells, width, height }
+    Frame { cells, width, height, clusters: None }
 }
 
 /// Map the emulator's color onto the paint cell (default/256/RGB).

@@ -123,6 +123,13 @@ pub struct Grid {
     pub rows: usize,
     /// Row-major `[y * cols + x]`.
     pub cells: Vec<VtCell>,
+    /// Row-major FULL cell contents (lane B3b): vt100 keeps zero-width
+    /// joiners and combining marks inside the preceding cell's
+    /// contents, so `VtCell.ch` (the first codepoint) alone cannot
+    /// observe a ZWJ family or an NFD cluster — the text surfaces
+    /// (`row_text` / `content_rect`) read these instead, matching what
+    /// the terminal actually displays.
+    contents: Vec<String>,
 }
 
 impl Grid {
@@ -131,23 +138,48 @@ impl Grid {
         let (rows, cols) = screen.size();
         let (rows, cols) = (usize::from(rows), usize::from(cols));
         let mut cells = Vec::with_capacity(rows * cols);
+        let mut contents = Vec::with_capacity(rows * cols);
         for y in 0..rows {
             for x in 0..cols {
-                cells.push(screen.cell(y as u16, x as u16).map_or(
-                    VtCell { ch: ' ', style: 0 },
-                    |cell| VtCell {
-                        ch: cell.contents().chars().next().unwrap_or(' '),
+                if let Some(cell) = screen.cell(y as u16, x as u16) {
+                    let text = cell.contents();
+                    cells.push(VtCell {
+                        ch: text.chars().next().unwrap_or(' '),
                         style: style_digest(cell),
-                    },
-                ));
+                    });
+                    contents.push(text);
+                } else {
+                    cells.push(VtCell { ch: ' ', style: 0 });
+                    contents.push(String::new());
+                }
             }
         }
-        Self { cols, rows, cells }
+        Self { cols, rows, cells, contents }
+    }
+
+    /// Reassemble a grid from saved parts (the scan-A/B corpus loader:
+    /// cell digests plus the full-contents sidecar).
+    #[must_use]
+    pub fn from_parts(
+        cols: usize,
+        rows: usize,
+        cells: Vec<VtCell>,
+        contents: Vec<String>,
+    ) -> Self {
+        Self { cols, rows, cells, contents }
     }
 
     #[must_use]
     pub fn cell(&self, x: usize, y: usize) -> VtCell {
         self.cells.get(y * self.cols + x).copied().unwrap_or(VtCell { ch: ' ', style: 0 })
+    }
+
+    /// The FULL contents of one cell (zero-width joiners and combining
+    /// marks included; empty for the continuation half of a wide
+    /// glyph).
+    #[must_use]
+    pub fn cell_contents(&self, x: usize, y: usize) -> &str {
+        self.contents.get(y * self.cols + x).map_or("", String::as_str)
     }
 
     /// Cells that changed from `self` (the BEFORE state) to `other`
@@ -176,14 +208,22 @@ impl Grid {
     }
 
     /// The plain text of a `w×h` region at `(x, y)` (for eyeballing
-    /// and locating surfaces; each row right-trimmed).
+    /// and locating surfaces; each row right-trimmed). Reads the FULL
+    /// cell contents — a cell holding an emoji ZWJ sequence or an NFD
+    /// cluster contributes every codepoint, exactly what the terminal
+    /// displays in that cell.
     #[must_use]
     pub fn content_rect(&self, x: usize, y: usize, w: usize, h: usize) -> String {
         let mut lines = Vec::new();
         for row in y..y.saturating_add(h).min(self.rows) {
             let mut text = String::new();
             for col in x..x.saturating_add(w).min(self.cols) {
-                text.push(self.cell(col, row).ch);
+                let contents = self.cell_contents(col, row);
+                if contents.is_empty() {
+                    text.push(' ');
+                } else {
+                    text.push_str(contents);
+                }
             }
             lines.push(text.trim_end().to_owned());
         }

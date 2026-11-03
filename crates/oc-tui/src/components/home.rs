@@ -30,8 +30,8 @@
 //! * the whole footer hides below 44 cols or 12 rows, the logo below
 //!   12 rows (`homeFooterVisibility` / `Logo`).
 
-use crate::components::composer::render::AutocompleteView;
 use crate::components::composer::PromptDraft;
+use crate::components::composer::render::AutocompleteView;
 use crate::render::{CellColor, Frame};
 use crate::theme::ThemeState;
 use crate::wrap::display_width;
@@ -549,7 +549,7 @@ pub fn render_home(store: &Store, theme: &crate::theme::ThemeStyles, size: (u16,
         let mut cells = strip.cells.clone();
         cells.extend(frame.cells.clone());
         cells.truncate(height);
-        frame = Frame { cells, width, height };
+        frame = Frame { cells, width, height, clusters: None };
     }
     if let Some(rail) = rail_width {
         // TUI-3: composite the rail at the left edge, shifting the
@@ -570,7 +570,7 @@ pub fn render_home(store: &Store, theme: &crate::theme::ThemeStyles, size: (u16,
             line.resize(width, crate::render::Cell::default());
             cells.push(line);
         }
-        frame = Frame { cells, width, height };
+        frame = Frame { cells, width, height, clusters: None };
         if let Some((row, tip)) = tooltip {
             let mut pasted = frame.clone();
             for (offset, tip_row) in tip.cells.iter().enumerate() {

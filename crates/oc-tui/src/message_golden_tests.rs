@@ -21,15 +21,15 @@
 #![allow(clippy::cast_possible_truncation)]
 
 use crate::components::message::list::{
-    message_groups_fixture, render_transcript, FollowState, TranscriptOptions,
+    FollowState, TranscriptOptions, message_groups_fixture, render_transcript,
 };
 use crate::components::message::markdown::{
-    markdown_frame_fixture, render_markdown, MarkdownStyles,
+    MarkdownStyles, markdown_frame_fixture, render_markdown,
 };
 use crate::components::message::rows::spinner_frozen_frame;
 use crate::components::tool_rows::fill_style;
 use crate::layout::{Placed, PlacedLine};
-use crate::render::{paint_placed, serialize_canonical, Frame};
+use crate::render::{Frame, paint_placed, serialize_canonical};
 use crate::theme::ThemeState;
 use parity::tui_frame as pf;
 
@@ -318,8 +318,8 @@ fn markdown_diff_fence_golden_render() {
 /// The `group-view-instructions` fixture (`tui-dump/scenarios/
 /// session_ui.tsx` `mountGroupView`): two synthetic instruction loads
 /// (one file each), collapsed — the summary row at paddingTop 2.
-fn instructions_fixture(
-) -> (Vec<crate::components::message::model::Message>, crate::components::message::model::Row) {
+fn instructions_fixture()
+-> (Vec<crate::components::message::model::Message>, crate::components::message::model::Row) {
     use crate::components::message::model::{Entry, GroupKind, Message, Row};
     let messages = vec![
         Message::Synthetic {
@@ -418,7 +418,7 @@ fn composer_bottom_chrome(width: u16, theme: &ThemeState) -> Frame {
         let slot = &mut cells[row];
         slot[inset as usize..inset as usize + line.len()].clone_from_slice(line);
     }
-    Frame { cells, width: usize::from(width), height: 7 }
+    Frame { cells, width: usize::from(width), height: 7, clusters: None }
 }
 
 /// Stitch the production transcript rows with the composer stub into
@@ -432,7 +432,7 @@ fn message_groups_frame(width: u16, height: u16, theme: &ThemeState) -> Frame {
     let chrome = composer_bottom_chrome(width, theme);
     let mut cells = transcript.cells;
     cells.extend(chrome.cells);
-    Frame { cells, width: usize::from(width), height: usize::from(height) }
+    Frame { cells, width: usize::from(width), height: usize::from(height), clusters: None }
 }
 
 #[test]

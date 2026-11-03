@@ -8,8 +8,8 @@
 //! [`crate::wrap::flatten`] seam as the layout layer).
 
 use crate::render::{Cell, CellColor, Frame};
-use crate::wrap::{display_width, flatten};
 use crate::style::Style;
+use crate::wrap::{display_width, flatten};
 
 /// The dump harness renderer fill: default foreground over the
 /// terminal background (black in the reference capture).
@@ -72,7 +72,7 @@ impl Canvas {
     pub fn new(width: usize, height: usize) -> Self {
         let fill = Cell { ch: ' ', attrs: 0, fg: FILL_FG, bg: FILL_BG };
         Self {
-            frame: Frame { cells: vec![vec![fill; width]; height], width, height },
+            frame: Frame { cells: vec![vec![fill; width]; height], width, height, clusters: None },
             ops: Vec::new(),
         }
     }

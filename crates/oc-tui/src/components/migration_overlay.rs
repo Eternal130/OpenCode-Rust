@@ -275,6 +275,7 @@ mod tests {
             ],
             width,
             height,
+            clusters: None,
         }
     }
 

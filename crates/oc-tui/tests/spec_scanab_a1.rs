@@ -263,7 +263,8 @@ fn load_full(tag: &str) -> vt_harness::Grid {
         let c = it.next().unwrap_or(' ');
         cells.push(vt_harness::VtCell { ch: c, style });
     }
-    vt_harness::Grid { cols: COLS, rows: ROWS, cells }
+    let contents = vec![String::new(); cells.len()];
+    vt_harness::Grid::from_parts(COLS, ROWS, cells, contents)
 }
 
 /// Leg A (process 1): resolve the REAL default dark tokens, boot the

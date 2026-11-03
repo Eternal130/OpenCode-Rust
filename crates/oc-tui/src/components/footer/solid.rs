@@ -39,10 +39,10 @@
 
 use std::sync::OnceLock;
 
+use opentui_core::Rgba;
 use opentui_core::renderer::CliRendererConfig;
 use opentui_core::styled_text::{StyledText, TextChunk};
-use opentui_core::Rgba;
-use opentui_solid::{box_, text, Children, Element, PropValue, SolidRenderer};
+use opentui_solid::{Children, Element, PropValue, SolidRenderer, box_, text};
 
 use super::canvas::{Canvas, CanvasOp, FILL_BG};
 use crate::components::session_tabs_solid::frame_from_buffer;
@@ -105,7 +105,7 @@ fn rgba(color: CellColor) -> Option<Rgba> {
 #[allow(clippy::too_many_lines, clippy::type_complexity)] // one bridge, the M5 merge bake inline
 pub fn canvas_frame_solid(ops: &[CanvasOp], width: usize, height: usize) -> Frame {
     if width == 0 || height == 0 {
-        return Frame { cells: vec![vec![]; height], width, height };
+        return Frame { cells: vec![vec![]; height], width, height, clusters: None };
     }
     // Translate every op; an untranslatable color keeps the old path
     // (never triggered by the family's palette).
@@ -353,17 +353,17 @@ pub(crate) fn first_divergence(old: &Frame, solid: &Frame) -> Option<(usize, usi
 
 #[cfg(test)]
 mod tests {
-    use super::super::form::{form_body_canvas, FormBodyState};
-    use super::super::form_authorization::{form_authorization_canvas, FormAuthorizationState};
+    use super::super::form::{FormBodyState, form_body_canvas};
+    use super::super::form_authorization::{FormAuthorizationState, form_authorization_canvas};
     use super::super::panel::{FooterMenuState, PANEL_LIST_ROWS};
     use super::super::panels::{MiniSettings, RunAgent, RunModel, RunProvider};
     use super::super::permission::{
-        create_permission_body_state, permission_body_canvas, reject_field_canvas,
         PermissionBodyState, PermissionOption, PermissionRequest, PermissionStage,
+        create_permission_body_state, permission_body_canvas, reject_field_canvas,
     };
-    use super::super::prompt_idle::{prompt_idle_canvas, PromptIdleState};
+    use super::super::prompt_idle::{PromptIdleState, prompt_idle_canvas};
     use super::super::state::{
-        resolve_mini_settings, FieldKind, FormField, FormOption, FormRequest,
+        FieldKind, FormField, FormOption, FormRequest, resolve_mini_settings,
     };
     use super::super::theme::FooterTheme;
     use super::*;

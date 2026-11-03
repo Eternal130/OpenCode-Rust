@@ -547,11 +547,12 @@ mod tests {
         let (store, sink) = worktree_store();
         let mut keymap = dialog_keymap();
         press(&store, &mut keymap, "ctrl+r");
-        assert!(sink
-            .calls
-            .borrow()
-            .iter()
-            .any(|call| matches!(call, WorktreeCall::Refresh(project) if project == "p1")));
+        assert!(
+            sink.calls
+                .borrow()
+                .iter()
+                .any(|call| matches!(call, WorktreeCall::Refresh(project) if project == "p1"))
+        );
         // Submitting a row closes + navigates home.
         store.update_dialog(|top| top.select.selected = 1);
         let outcome = press(&store, &mut keymap, "return");
@@ -624,6 +625,7 @@ mod golden_tests {
             ],
             width: usize::from(width),
             height: usize::from(height),
+            clusters: None,
         }
     }
 

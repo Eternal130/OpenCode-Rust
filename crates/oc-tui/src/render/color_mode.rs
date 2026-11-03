@@ -341,6 +341,7 @@ mod tests {
             ]],
             width: 2,
             height: 1,
+            clusters: None,
         };
         let mut cache = ColorCache::default();
         degrade_frame(&mut frame, &mut cache);

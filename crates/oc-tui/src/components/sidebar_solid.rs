@@ -50,13 +50,13 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use opentui_core::Rgba;
 use opentui_core::renderer::CliRendererConfig;
 use opentui_core::styled_text::{StyledText, TextChunk};
-use opentui_core::Rgba;
 use opentui_solid::builder::ForItemSource;
 use opentui_solid::element::{ForItem, PropValue};
 use opentui_solid::reactive::Reactive;
-use opentui_solid::{box_, for_list, map, text, Element, Signal, SolidRenderer};
+use opentui_solid::{Element, Signal, SolidRenderer, box_, for_list, map, text};
 
 use crate::components::session_tabs::SESSION_SIDEBAR_WIDTH;
 use crate::components::session_tabs_solid::frame_from_buffer;
@@ -532,7 +532,12 @@ pub fn paint_solid_sidebar_pane(
 ) -> Frame {
     if height == 0 {
         // The old pane painter's degenerate shape.
-        return Frame { cells: vec![Vec::new(); height], width: SESSION_SIDEBAR_WIDTH, height };
+        return Frame {
+            cells: vec![Vec::new(); height],
+            width: SESSION_SIDEBAR_WIDTH,
+            height,
+            clusters: None,
+        };
     }
     let colors = PaneColors::of(theme);
     let items = shape(view, theme, height, scroll);

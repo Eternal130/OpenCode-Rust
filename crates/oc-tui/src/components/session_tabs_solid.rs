@@ -56,29 +56,29 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use opentui_core::Rgba;
 use opentui_core::buffer::{
-    grapheme_id_from_char, is_continuation_char, is_grapheme_char, OptimizedBuffer,
+    OptimizedBuffer, grapheme_id_from_char, is_continuation_char, is_grapheme_char,
 };
 use opentui_core::renderer::CliRendererConfig;
 use opentui_core::styled_text::{StyledText, TextChunk};
-use opentui_core::Rgba;
 use opentui_solid::builder::ForItemSource;
 use opentui_solid::element::{Children, ForItem, PropValue};
 use opentui_solid::reactive::Reactive;
 use opentui_solid::{
-    box_, children_expr, for_list, map, show, text, Element, Signal, SolidRenderer,
+    Element, Signal, SolidRenderer, box_, children_expr, for_list, map, show, text,
 };
 
 use crate::components::marquee::Marquee;
 use crate::components::session_tabs::{
-    adaptive_session_tab_layout, session_tab_overflow_width, AdaptiveLayout,
-    TabStatus, TabView, ADD_TAB_WIDTH,
+    ADD_TAB_WIDTH, AdaptiveLayout, TabStatus, TabView, adaptive_session_tab_layout,
+    session_tab_overflow_width,
 };
 use crate::components::tab_pulse::{
-    blend_tab_pulse_color, glow_text_color, intensity_at, resting_glow_bg, tint, Rgb,
-    TabPulseTrack, GLOW_TAIL, RUN_SWEEP_OPACITY,
+    GLOW_TAIL, RUN_SWEEP_OPACITY, Rgb, TabPulseTrack, blend_tab_pulse_color, glow_text_color,
+    intensity_at, resting_glow_bg, tint,
 };
-use crate::render::{Cell, CellColor, Frame, CONTINUATION};
+use crate::render::{CONTINUATION, Cell, CellColor, ClusterMap, Frame};
 use crate::store::Unread;
 use crate::theme::ThemeStyles;
 use crate::wrap::take_width;
@@ -414,8 +414,8 @@ fn title_chunks(inputs: &StripInputs, paint: &TabPaint, key: &str) -> StyledText
     let foreground =
         if paint.selected || paint.hovered { inputs.colors.text } else { inputs.colors.muted };
     let bold = u32::from(paint.selected); // attributes bit 1 = BOLD
-                                          // `titleFades` — marqueeOverflows(title, availableTitleWidth) &&
-                                          // availableTitleWidth > FADE_WIDTH (session-tabs.tsx:1605-1607).
+    // `titleFades` — marqueeOverflows(title, availableTitleWidth) &&
+    // availableTitleWidth > FADE_WIDTH (session-tabs.tsx:1605-1607).
     let title_fades =
         title.chars().count() > title_width_chars(&title, title_width) && title_width > FADE_WIDTH;
     match paint.glow {
@@ -503,11 +503,7 @@ fn fade_title_color(color: Rgb, background: Rgb, index: usize, length: usize, le
         - i64::try_from(length.saturating_sub(FADE_WIDTH)).unwrap_or(0)
         + 1;
     let opacity = (fade(start) * leading).max(fade(end));
-    if opacity == 0.0 {
-        color
-    } else {
-        tint(color, background, opacity)
-    }
+    if opacity == 0.0 { color } else { tint(color, background, opacity) }
 }
 
 /// The indicator chunks (`TabIndicator.label`): `!`/`?`/spinner/`•`
@@ -887,20 +883,22 @@ fn strip_element(inputs: &Signal<StripInputs>) -> Element {
         {
             let inputs = inputs.clone();
             move || {
-                vec![text()
-                    .dyn_prop(
-                        "content",
-                        dyn_styled(map(inputs.clone(), |i: &StripInputs| {
-                            overflow_chunks(format!("‹{}", i.layout().before), &i.colors)
-                        })),
-                    )
-                    .dyn_prop(
-                        "width",
-                        dyn_num(map(inputs.clone(), |i: &StripInputs| {
-                            session_tab_overflow_width(i.layout().before)
-                        })),
-                    )
-                    .into_element()]
+                vec![
+                    text()
+                        .dyn_prop(
+                            "content",
+                            dyn_styled(map(inputs.clone(), |i: &StripInputs| {
+                                overflow_chunks(format!("‹{}", i.layout().before), &i.colors)
+                            })),
+                        )
+                        .dyn_prop(
+                            "width",
+                            dyn_num(map(inputs.clone(), |i: &StripInputs| {
+                                session_tab_overflow_width(i.layout().before)
+                            })),
+                        )
+                        .into_element(),
+                ]
             }
         },
     );
@@ -912,20 +910,22 @@ fn strip_element(inputs: &Signal<StripInputs>) -> Element {
         {
             let inputs = inputs.clone();
             move || {
-                vec![text()
-                    .dyn_prop(
-                        "content",
-                        dyn_styled(map(inputs.clone(), |i: &StripInputs| {
-                            overflow_chunks(format!(" {}›", i.layout().after), &i.colors)
-                        })),
-                    )
-                    .dyn_prop(
-                        "width",
-                        dyn_num(map(inputs.clone(), |i: &StripInputs| {
-                            session_tab_overflow_width(i.layout().after)
-                        })),
-                    )
-                    .into_element()]
+                vec![
+                    text()
+                        .dyn_prop(
+                            "content",
+                            dyn_styled(map(inputs.clone(), |i: &StripInputs| {
+                                overflow_chunks(format!(" {}›", i.layout().after), &i.colors)
+                            })),
+                        )
+                        .dyn_prop(
+                            "width",
+                            dyn_num(map(inputs.clone(), |i: &StripInputs| {
+                                session_tab_overflow_width(i.layout().after)
+                            })),
+                        )
+                        .into_element(),
+                ]
             }
         },
     );
@@ -958,15 +958,17 @@ fn strip_element(inputs: &Signal<StripInputs>) -> Element {
         {
             let inputs = inputs.clone();
             move || {
-                vec![text()
-                    .width(ADD_TAB_WIDTH)
-                    .dyn_prop(
-                        "content",
-                        dyn_styled(map(inputs.clone(), |i: &StripInputs| {
-                            plus_chunks(i.add_hovered, &i.colors)
-                        })),
-                    )
-                    .into_element()]
+                vec![
+                    text()
+                        .width(ADD_TAB_WIDTH)
+                        .dyn_prop(
+                            "content",
+                            dyn_styled(map(inputs.clone(), |i: &StripInputs| {
+                                plus_chunks(i.add_hovered, &i.colors)
+                            })),
+                        )
+                        .into_element(),
+                ]
             }
         },
     );
@@ -1121,6 +1123,9 @@ fn glow_ranges(inputs: &StripInputs) -> Vec<(usize, usize)> {
 pub(crate) fn frame_from_buffer(buffer: &OptimizedBuffer, glows: &[(usize, usize)]) -> Frame {
     let width = buffer.width as usize;
     let mut cells = Vec::with_capacity(buffer.height as usize);
+    // The cluster sidecar (lane B3b): keep the full multi-codepoint
+    // symbol — the GridEmitter prints it (see chrome_solid).
+    let mut clusters = ClusterMap::new();
     for y in 0..buffer.height {
         let mut row = Vec::with_capacity(width);
         for x in 0..buffer.width {
@@ -1131,11 +1136,11 @@ pub(crate) fn frame_from_buffer(buffer: &OptimizedBuffer, glows: &[(usize, usize
             let ch = if is_continuation_char(cell.char) {
                 CONTINUATION
             } else if is_grapheme_char(cell.char) {
-                buffer
-                    .grapheme_bytes(grapheme_id_from_char(cell.char))
-                    .chars()
-                    .next()
-                    .unwrap_or(' ')
+                let grapheme = buffer.grapheme_bytes(grapheme_id_from_char(cell.char));
+                if grapheme.chars().nth(1).is_some() {
+                    clusters.insert((y as usize, x as usize), grapheme.to_owned());
+                }
+                grapheme.chars().next().unwrap_or(' ')
             } else {
                 char::from_u32(cell.char).unwrap_or(' ')
             };
@@ -1158,7 +1163,8 @@ pub(crate) fn frame_from_buffer(buffer: &OptimizedBuffer, glows: &[(usize, usize
         }
         cells.push(row);
     }
-    Frame { cells, width, height: buffer.height as usize }
+    let clusters = if clusters.is_empty() { None } else { Some(Box::new(clusters)) };
+    Frame { cells, width, height: buffer.height as usize, clusters }
 }
 
 thread_local! {
@@ -1546,7 +1552,7 @@ mod tests {
                     step * 80,
                     std::collections::HashMap::new(),
                     crate::components::session_tabs::IndicatorConfig::default(),
-        );
+                );
                 frame.cells[0]
                     .iter()
                     .find(|cell| cell.ch != ' ' && cell.ch != 'W')
@@ -1588,7 +1594,7 @@ mod tests {
                 clock,
                 tracks.clone(),
                 crate::components::session_tabs::IndicatorConfig::default(),
-        );
+            );
             frame.cell(0, col).bg
         };
         // A mid-tab cell (the solver clamps one tab to 22 cells at
@@ -1697,7 +1703,7 @@ mod tests {
                 clock,
                 tracks.clone(),
                 crate::components::session_tabs::IndicatorConfig::default(),
-        );
+            );
             worst = worst.max(t.elapsed());
         }
         assert!(worst.as_millis() < 40, "worst animated frame {worst:?} < 40 ms");

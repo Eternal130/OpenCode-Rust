@@ -226,7 +226,7 @@ fn a3_wide_char_corpus_renders() {
                 let target: String = needle.chars().filter(|c| *c != ' ').collect();
                 assert!(
                     norm.contains(&target),
-                    "corpus glyph {needle:?} missing from rendered grid"
+                    "corpus glyph {needle:?} missing from rendered grid: {all:?}"
                 );
             }
             Ok(())

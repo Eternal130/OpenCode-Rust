@@ -20,7 +20,7 @@
 #![allow(clippy::cast_possible_truncation)]
 
 use crate::layout::Placed;
-use crate::render::{Cell, CellColor, Frame};
+use crate::render::{Cell, CellColor, ClusterMap, Frame};
 use crate::style::{Color, Modifier, Style};
 use crate::wrap::flatten;
 
@@ -246,9 +246,18 @@ pub fn to_frame(buffer: &Buffer) -> Frame {
     let width = buffer.area.width as usize;
     let height = buffer.area.height as usize;
     let mut cells = vec![vec![Cell::default(); width]; height];
+    // The cluster sidecar: every cell whose paint symbol carries more
+    // than one codepoint (ZWJ families, VS16 flags, NFD combining
+    // marks) keeps its FULL symbol here — `Cell::ch` alone cannot
+    // carry it, and the GridEmitter must print the whole cluster
+    // (the retired ratatui backend wrote whole buffer symbols).
+    let mut clusters = ClusterMap::new();
     for (y, row) in cells.iter_mut().enumerate() {
         for (x, out) in row.iter_mut().enumerate() {
             let cell = &buffer.content[y * width + x];
+            if cell.symbol.chars().nth(1).is_some() {
+                clusters.insert((y, x), cell.symbol.clone());
+            }
             *out = Cell {
                 ch: cell.symbol.chars().next().unwrap_or(' '),
                 attrs: modifier_bits(cell.modifier),
@@ -257,7 +266,8 @@ pub fn to_frame(buffer: &Buffer) -> Frame {
             };
         }
     }
-    Frame { cells, width, height }
+    let clusters = if clusters.is_empty() { None } else { Some(Box::new(clusters)) };
+    Frame { cells, width, height, clusters }
 }
 
 fn map_color(color: Color) -> CellColor {

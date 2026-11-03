@@ -30,7 +30,7 @@
 #![allow(clippy::cast_sign_loss)]
 
 use crate::components::command_palette::{
-    select_props_for_entry, CommandDispatcher, StoreDispatcher,
+    CommandDispatcher, StoreDispatcher, select_props_for_entry,
 };
 use crate::keymap::{Clock, KeyStroke, Keymap, Outcome};
 use crate::render::Frame;
@@ -322,7 +322,8 @@ pub fn handle_dialog_key(
         // (`appendPrompt` over the payload) and closes.
         let selected = entry.select.submit(&props).map(|option| option.value.clone());
         if keymap.stroke_triggers(&stroke, "queued_prompt.undo") {
-            if let (Route::Session { session_id, .. }, Some(id)) = (store.route(), selected.as_deref())
+            if let (Route::Session { session_id, .. }, Some(id)) =
+                (store.route(), selected.as_deref())
             {
                 if let Some(payload) = store.queued_prompt_payload(&session_id, id) {
                     store.delete_queued_prompt(&session_id, id);
@@ -337,7 +338,8 @@ pub fn handle_dialog_key(
             return DialogKeyOutcome::Consumed;
         }
         if keymap.stroke_triggers(&stroke, "queued_prompt.delete") {
-            if let (Route::Session { session_id, .. }, Some(id)) = (store.route(), selected.as_deref())
+            if let (Route::Session { session_id, .. }, Some(id)) =
+                (store.route(), selected.as_deref())
             {
                 store.delete_queued_prompt(&session_id, id);
                 if store.queued_prompts(&session_id).is_empty() {
@@ -1853,6 +1855,7 @@ mod tests {
             cells: vec![vec![cell; usize::from(width)]; usize::from(height)],
             width: usize::from(width),
             height: usize::from(height),
+            clusters: None,
         }
     }
 
@@ -2468,6 +2471,7 @@ mod btw_tests {
             cells: vec![vec![cell; usize::from(width)]; usize::from(height)],
             width: usize::from(width),
             height: usize::from(height),
+            clusters: None,
         }
     }
 }
