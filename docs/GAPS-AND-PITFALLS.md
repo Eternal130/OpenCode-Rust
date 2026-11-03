@@ -83,9 +83,10 @@
 ### G-12 ℹ️ `context_management.edits[].type` 硬编码 `"compact_20260112"`
 - `oc-ai/src/protocols/anthropic_messages.rs:390,1791`。注意：入站侧同时校验并 fail-fast（非该类型直接报错），**不会静默丢弃**；但新增 edit 类型需手改两处。（本轮未动——ref 侧同样单一类型。）
 
-### G-13 ℹ️ oc-syntax 已知降级
+### G-13 ✅ oc-syntax 已知降级（引擎已收敛；injection=ref 同款未启用）
 - markdown 代码围栏无 injection 高亮（`oc-syntax/src/lib.rs:43-45` 明示）；csharp/kotlin/swift 单独 feature、extra 14 语言 `langs-extra` feature（体积上限 67.6 MiB 裁决 R-01b）。
 - 2026-11-04 勘注（lane D1d）：高亮引擎已收敛至 opentui `TreeSitterClient`（oc-syntax 降格为 grammar+query vendor，目录经 `add_default_parsers` 注册，调用点走 `highlight_once`+UTF-16→char 偏移转换；goldens 零 diff）。injection 状态未变：vendor 目录本就不含 injections.scm（markdown 注册项 `injections_query: None`），围栏内层语言仍渲染纯文本——该缺口维持本条 ℹ️ 不变。
+- 2026-11-04 Gate D1 终裁：**G-13 全闭（ℹ️→✅）**——ref 的 `parsers-config.ts:154-158` 把 injections URL 与 injectionMapping 本就注释（ref 同样未启用 injection 高亮；围栏内层语言在 ref 走 markdown code-block renderer 路径，非 tree-sitter injection）。不加 injections.scm（加了反而偏离 ref）。本条剩余子项（语言 feature 门控/体积上限 R-01b）为发布裁决维持不变。
 
 ### G-14 ✅（retention 可配置已落地；审计轨迹差异维持有意）
 - ✅ `experimental.file_retention.cleanup_interval`（毫秒；absent/0 → 每小时默认，0 守卫防 tokio interval panic）+ 调用方 Duration 透传（`cleanup_with` / `cleanup_data_root_with_retention`）；EngineOptions + boot 播种。oc-schema/config/normalize 按既有 knob 模式。
