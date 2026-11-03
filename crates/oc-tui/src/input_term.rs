@@ -286,7 +286,7 @@ impl KeyPipeline {
                 return;
             };
             let unit: Vec<u8> = self.pending.drain(..unit_len).collect();
-            if let Some(event) = self.key_event(&unit) {
+            if let Some(event) = Self::key_event(&unit) {
                 events.push(event);
             }
         }
@@ -298,13 +298,13 @@ impl KeyPipeline {
     fn flush_lone_escape(&mut self, events: &mut Vec<TermEvent>) {
         if !self.pending.is_empty() && self.pending.iter().all(|b| *b == 0x1b) {
             let unit = std::mem::take(&mut self.pending);
-            if let Some(event) = self.key_event(&unit) {
+            if let Some(event) = Self::key_event(&unit) {
                 events.push(event);
             }
         }
     }
 
-    fn key_event(&mut self, unit: &[u8]) -> Option<TermEvent> {
+    fn key_event(unit: &[u8]) -> Option<TermEvent> {
         let raw = match std::str::from_utf8(unit) {
             Ok(text) => text.to_owned(),
             // Non-UTF-8 bytes decode latin1 like the renderer's feed.
@@ -444,18 +444,7 @@ mod tests {
     use super::*;
 
     fn key_spec(bytes: &[u8]) -> Option<String> {
-        let mut pipeline = KeyPipeline::new();
-        let events = pipeline.process(bytes);
-        events
-            .into_iter()
-            .find_map(|event| match event {
-                TermEvent::Key(spec) => Some(spec),
-                _ => None,
-            })
-            .or_else(|| {
-                // multi-unit feeds: collect the first key only
-                None
-            })
+        first_key(bytes)
     }
 
     fn first_key(bytes: &[u8]) -> Option<String> {
