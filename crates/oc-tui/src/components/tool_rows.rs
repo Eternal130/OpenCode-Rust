@@ -259,9 +259,7 @@ fn code_body_node(
             let gutter =
                 StyledSpan { text: format!("{:>3} ", index + 1), style: muted, link: None };
             let code_spans: Vec<StyledSpan> = match &highlighted {
-                Some(block) => {
-                    crate::components::syntax::line_spans(block, index, base, &theme.syntax)
-                }
+                Some(block) => block.line_spans(index, base, &theme.syntax),
                 None => vec![StyledSpan { text: line.to_owned(), style: base, link: None }],
             };
             vec![gutter].into_iter().chain(code_spans).collect()

@@ -7606,6 +7606,10 @@ fn rebuild_session_terminal(
 /// Errors clearly when stdin is not a TTY (the TUI needs a terminal).
 pub async fn run(client: oc_client::Client, boot: BootArgs) -> Result<(), String> {
     use std::io::IsTerminal;
+    // D1d — register the oc-syntax grammar+query catalog into
+    // opentui's global TreeSitterClient (idempotent; the fence/diff/
+    // tool-row highlight seam consumes it from here on).
+    crate::components::syntax::register_parsers();
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         return Err(
             "the TUI requires an interactive terminal (stdin/stdout are not TTYs)".to_owned()
