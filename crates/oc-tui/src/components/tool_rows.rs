@@ -259,7 +259,16 @@ fn code_body_node(
             let gutter =
                 StyledSpan { text: format!("{:>3} ", index + 1), style: muted, link: None };
             let code_spans: Vec<StyledSpan> = match &highlighted {
-                Some(block) => block.line_spans(index, base, &theme.syntax),
+                Some(block) => block
+                    .line_spans(index, base, &theme.syntax)
+                    .into_iter()
+                    .map(|mut span| {
+                        // Syntax styles may only recolor the fg here —
+                        // the transcript background owns bg.
+                        span.style.bg = base.bg;
+                        span
+                    })
+                    .collect(),
                 None => vec![StyledSpan { text: line.to_owned(), style: base, link: None }],
             };
             vec![gutter].into_iter().chain(code_spans).collect()
