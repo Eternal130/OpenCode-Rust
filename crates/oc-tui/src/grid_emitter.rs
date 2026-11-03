@@ -299,6 +299,15 @@ impl GridEmitter {
         (self.width, self.height)
     }
 
+    /// Force the next frame down the full-repaint path: the prev grid
+    /// drops to blank AND the first-frame force flag re-arms (the
+    /// post-editor / post-suspend repaint — the retired writer's
+    /// `clear()` equivalent, every cell incl. blanks rewritten).
+    pub fn invalidate_full(&mut self) {
+        self.prev = blank_frame(self.width, self.height);
+        self.first = true;
+    }
+
     /// Diff-emit one frame's SGR bytes (the frame's own byte stream,
     /// WITHOUT the `?2026` envelope — the test seam). Grid cells
     /// outside the emitter's size read as blank; a frame at a different

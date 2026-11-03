@@ -7660,8 +7660,6 @@ pub async fn run_with_size(
     size: Option<(u16, u16)>,
     boot: BootArgs,
 ) -> Result<(), String> {
-    use ratatui::backend::CrosstermBackend;
-
     // The mouse-capture gate must be known BEFORE the terminal is
     // acquired (opentui's SetupOptions arms the mode burst at
     // Terminal::new): the config load is pure file IO, so it moves
@@ -7677,18 +7675,26 @@ pub async fn run_with_size(
     // TM-1 — the current value source, opentui has no post-setup
     // push).
     //
-    // WRITE-SEAM ORDER (B3b will replace it): ratatui's
-    // CrosstermBackend below keeps its OWN stdout handle as the frame
-    // writer — the opentui Terminal writes only setup/probe/flip
-    // bytes, each `write_all` under the stdout lock; the phases never
+    // WRITE-SEAM (B3b, resolved): the session terminal's output writer
+    // is the ONE frame writer — the GridEmitter writes every frame
+    // under the session lock; the setup/probe/flip bytes each ride the
+    // same writer (or stdout under its lock), so the phases never
     // interleave mid-sequence.
+    let tty_input_fd: Arc<std::sync::atomic::AtomicI32>;
     let session_terminal: Arc<std::sync::Mutex<SessionTerminal>> = {
-        let terminal = SessionTerminal::new(
+        let mut terminal = SessionTerminal::new(
             opentui_core::terminal::UnixTty::new().map_err(|e| e.to_string())?,
             std::io::stdout(),
             &session_setup_options(config.mouse),
         )
         .map_err(|e| e.to_string())?;
+        let fd = {
+            use opentui_core::terminal::TtyDevice as _;
+            use std::os::fd::AsRawFd as _;
+            let terminal = &mut terminal;
+            terminal.tty().input_fd().as_raw_fd()
+        };
+        tty_input_fd = Arc::new(std::sync::atomic::AtomicI32::new(fd));
         Arc::new(std::sync::Mutex::new(terminal))
     };
     // The crash-restore guards (lane TAIL P3): SIGHUP/SIGTERM keep the
@@ -7708,10 +7714,17 @@ pub async fn run_with_size(
     // SSH_*/WT_SESSION — v2 raster semantics; see render::color_mode).
     let color_mode = color_mode::detect_from_env();
     let mut color_cache = color_mode::ColorCache::default();
-    let mut terminal = ratatui::Terminal::new(CrosstermBackend::new(std::io::stdout()))
-        .map_err(|e| e.to_string())?;
+    // Lane B3b — the frame writer is oc-tui's own GridEmitter (a port
+    // of opentui's `emit_frame_sgr`): each frame is diffed against the
+    // emitter's prev grid and written through the session terminal's
+    // output writer in a `?2026` synchronized-update envelope. The
+    // previous writer (the retired canvas backend over its own
+    // stdout handle) is retired — no second frame-writer seam.
     let size = size.unwrap_or((100, 30));
-    let _ = terminal.resize(ratatui::layout::Rect::new(0, 0, size.0, size.1));
+    let mut emitter = crate::grid_emitter::GridEmitter::new(
+        usize::from(size.0),
+        usize::from(size.1),
+    );
 
     // App + config boot.
     let store = Store::new(crate::reactive::Runtime::new());
@@ -8216,6 +8229,7 @@ pub async fn run_with_size(
     {
         let input_stop = Arc::clone(&input_stop);
         let session = Arc::clone(&session_terminal);
+        let tty_input_fd = Arc::clone(&tty_input_fd);
         std::thread::spawn(move || {
             // The headless CliRenderer: input-lane plumbing only
             // (probe routing, theme watch, focus bytes); `use_mouse`
@@ -8230,10 +8244,18 @@ pub async fn run_with_size(
             );
             let mut pipeline = KeyPipeline::new();
             let mut kitty_pushed = false;
+            // W-conflict guard's baseline (B3b): the headless
+            // renderer's SGR stream is never pumped, but its FIRST
+            // internal render (the first check_resize's resize→render,
+            // `frame_id == 0`) appends one forced-full blank frame.
+            // Everything after that baseline must be silence — the
+            // GridEmitter is the session output's one frame writer.
+            let mut sgr_baseline: Option<usize> = None;
             // The first check_resize observation (None -> Some) is
             // baseline adoption, NOT a resize — emitting it would
-            // re-resize ratatui at boot (a [2J + buffer invalidation
-            // crossterm's SIGWINCH-only stream never produced).
+            // re-resize the frame writer at boot (a [2J + buffer
+            // invalidation crossterm's SIGWINCH-only stream never
+            // produced).
             let mut resize_baseline_seen = false;
             // The boot discard window (the retired theme probe's
             // discipline, SA-F13's double-boot shield): for the first
@@ -8256,7 +8278,10 @@ pub async fn run_with_size(
                 if input_stop.load(std::sync::atomic::Ordering::Relaxed) {
                     break;
                 }
-                let bytes = read_session_input(&session, 50);
+                let bytes = read_session_input(
+                    tty_input_fd.load(std::sync::atomic::Ordering::Acquire),
+                    50,
+                );
                 if bytes.is_empty() {
                     // The no-input feed tick still advances the probe's
                     // wall-clock deadline.
@@ -8333,6 +8358,25 @@ pub async fn run_with_size(
                 } else {
                     None
                 };
+                // W-conflict guard (B3b): beyond the first internal
+                // render's blank-frame baseline, the headless
+                // renderer's SGR stream must NEVER grow — the only
+                // tolerated appends are the internal renders a real
+                // size change drives (`check_resize` → `resize` →
+                // `render`, whose bytes are never pumped; the
+                // GridEmitter is the session output's one frame
+                // writer).
+                let sgr_len = renderer.sgr_stream().len();
+                match (sgr_baseline, resized.is_some()) {
+                    (_, true) | (None, _) => sgr_baseline = Some(sgr_len),
+                    (Some(baseline), false) => {
+                        debug_assert!(
+                            sgr_len == baseline,
+                            "input-lane renderer emitted new frame bytes: {:?}",
+                            &renderer.sgr_stream()[baseline..]
+                        );
+                    }
+                }
                 if let Some((width, height)) =
                     resized.filter(|_| std::mem::replace(&mut resize_baseline_seen, true))
                 {
@@ -8366,12 +8410,33 @@ pub async fn run_with_size(
         use std::io::Write as _;
         let mut out = std::io::stdout();
         let _ = out.write_all(&crate::terminal_proto::decscuru_sequence(config.cursor));
+        let mut cursor_rgb = (224, 224, 224);
         if let crate::style::Color::Rgb(r, g, b) =
             app.store.theme().styles().text.fg.unwrap_or(crate::style::Color::Rgb(224, 224, 224))
         {
+            cursor_rgb = (r, g, b);
             let _ = out.write_all(&crate::terminal_proto::osc12_sequence((r, g, b)));
         }
         let _ = out.flush();
+        // The same shape/blink/color seeds the GridEmitter's cursor
+        // diff cache (the frame tail's DECSCUSR/OSC 12/CUP emissions
+        // mirror upstream `CursorOutputState::emit`; the values never
+        // change after boot, so the tail only re-sends them on the
+        // first visible frame).
+        emitter.cursor.set_style(
+            match config.cursor.style {
+                crate::terminal_proto::CursorShape::Underline => {
+                    crate::grid_emitter::CursorStyle::Underline
+                }
+                crate::terminal_proto::CursorShape::Line => crate::grid_emitter::CursorStyle::Line,
+                crate::terminal_proto::CursorShape::Block
+                | crate::terminal_proto::CursorShape::Default => {
+                    crate::grid_emitter::CursorStyle::Block
+                }
+            },
+            config.cursor.blinking,
+            cursor_rgb,
+        );
     }
 
     // The production plugin boot (wave-12) — lane E2: NOT awaited
@@ -8857,7 +8922,13 @@ pub async fn run_with_size(
             if let Err(error) = rebuild_session_terminal(&session_terminal, applied_mouse) {
                 break Err(error);
             }
-            let _ = terminal.clear();
+            cache_tty_input_fd(&session_terminal, &tty_input_fd);
+            // The post-editor repaint (the retired writer's `clear`):
+            // re-entering the alt screen left a blank display — force
+            // the emitter into a full-repaint frame (prev grid dropped,
+            // the first-frame force flag re-armed).
+            emitter.invalidate_full();
+            redraw_at = 0;
             if editor_guard.is_some() {
                 stderr_guard = crate::stderr_redirect::install(&crate::stderr_redirect::log_path());
             }
@@ -8903,7 +8974,11 @@ pub async fn run_with_size(
             if let Err(error) = rebuild_session_terminal(&session_terminal, applied_mouse) {
                 break Err(error);
             }
-            let _ = terminal.clear();
+            cache_tty_input_fd(&session_terminal, &tty_input_fd);
+            // The post-suspend repaint (the retired writer's `clear`):
+            // same shape as the editor hand-off above.
+            emitter.invalidate_full();
+            redraw_at = 0;
             if stderr_pause.is_some() {
                 stderr_guard = crate::stderr_redirect::install(&crate::stderr_redirect::log_path());
             }
@@ -9543,22 +9618,26 @@ pub async fn run_with_size(
         if generation != redraw_at || app.store.clock() > 0 {
             redraw_at = generation;
             // Live-size reconciliation (found by the parity rig's
-            // resize corpus): ratatui's `autoresize` inside `draw()`
-            // snaps the internal buffer to the PTY's CURRENT size the
-            // moment the kernel delivers SIGWINCH — potentially one
-            // tick BEFORE crossterm's Resize event reaches this loop
-            // and updates `app.size`. Drawing a frame built at the
-            // stale size then indexed a 100-col row into a 60-col
-            // buffer (`index outside of buffer … index is (60, 0)` —
-            // resize@60x20, our side panicked mid-script). v2 renders
-            // at the live terminal dimensions; mirror that by adopting
-            // the backend's size before building the frame.
-            if let Ok(area) = terminal.size() {
-                // SE-F5: never re-adopt a degenerate 0x0 winsize (an
-                // un-winsized PTY keeps reporting it; the frame stays
-                // at the default size like the ref).
-                if area.width > 0 && area.height > 0 && (area.width, area.height) != app.size {
-                    app.resize((area.width, area.height));
+            // resize corpus): the kernel may deliver the SIGWINCH
+            // winsize one tick BEFORE the input thread's 50 ms
+            // check_resize tick reports the Resize event and updates
+            // `app.size`. v2 renders at the live terminal dimensions;
+            // mirror that by polling the session TTY's winsize before
+            // building the frame (the previous writer's `autoresize`
+            // did the same inside its draw).
+            if let Ok(mut session) = session_terminal.lock() {
+                use opentui_core::terminal::TtyDevice as _;
+                if let Ok((width, height)) = session.tty().window_size() {
+                    // SE-F5: never re-adopt a degenerate 0x0 winsize (an
+                    // un-winsized PTY keeps reporting it; the frame stays
+                    // at the default size like the ref).
+                    if width > 0 && height > 0 && (width, height) != app.size {
+                        app.resize((width, height));
+                        // The prev grid is invalid at the new size —
+                        // the emitter repaints in full (upstream
+                        // `resize`: fresh blank buffers).
+                        emitter.resize(usize::from(width), usize::from(height));
+                    }
                 }
             }
             // ErrorComponent (auditB #9): a render-path panic is
@@ -9599,52 +9678,44 @@ pub async fn run_with_size(
             if color_mode == ColorMode::Indexed256 {
                 color_mode::degrade_frame(&mut frame, &mut color_cache);
             }
-            let draw = terminal.draw(|surface| {
-                // Resize race guard: the frame may have been built at
-                // the PREVIOUS size in the same tick the terminal
-                // buffer auto-resized (lane/chrome — the 60-col rig
-                // resize caught a 100-wide frame against a 60-wide
-                // buffer). Cells outside the surface are skipped for
-                // one frame.
-                let area = surface.area();
-                let buffer = surface.buffer_mut();
-                for (y, row) in frame.cells.iter().enumerate() {
-                    for (x, cell) in row.iter().enumerate() {
-                        let Ok(x) = u16::try_from(x) else { continue };
-                        let Ok(y) = u16::try_from(y) else { continue };
-                        // Bounds-safe write: the frame is built at the
-                        // reconciled size (above), but never panic if a
-                        // resize slips between frame build and draw.
-                        let Some(slot) = buffer.cell_mut((x, y)) else { continue };
-                        slot.set_char(cell.ch);
-                        slot.set_fg(to_ratatui_color(cell.fg));
-                        slot.set_bg(to_ratatui_color(cell.bg));
-                        if cell.attrs & 1 != 0 {
-                            slot.set_style(
-                                ratatui::style::Style::new()
-                                    .add_modifier(ratatui::style::Modifier::BOLD),
-                            );
-                        }
-                    }
-                }
-                // NEW-S1a (lane/chrome): the live caret is the TERMINAL
-                // cursor — v2's textarea positions the hardware cursor
-                // (never a painted block; the parity corpus never caught
-                // a painted caret cell on the ref). The route render
-                // stashed the cell; a dialog over the composer hides it
-                // (v2 blurs the prompt while any dialog is open).
-                // A blocker (permission ask / form) owns the footer —
-                // the composer is not the focused surface, so its
-                // caret must not blink through the mounted body.
+            // NEW-S1a (lane/chrome): the live caret is the TERMINAL
+            // cursor — v2's textarea positions the hardware cursor
+            // (never a painted block; the parity corpus never caught
+            // a painted caret cell on the ref). The route render
+            // stashed the cell; a dialog over the composer hides it
+            // (v2 blurs the prompt while any dialog is open).
+            // A blocker (permission ask / form) owns the footer —
+            // the composer is not the focused surface, so its
+            // caret must not blink through the mounted body. The
+            // position/show-hide rides the GridEmitter's cursor tail
+            // (upstream `CursorOutputState::emit` timing: CUP + ?25h
+            // inside the frame, ?25l on a no-op frame's hide).
+            {
+                let (width, height) = app.size;
+                let mut caret = None;
                 if app.store.top_dialog().is_none() && !app.permission_live() && !app.form_live() {
                     if let Some((x, y)) = app.store.caret_cell() {
-                        if x < area.width && y < area.height {
-                            surface.set_cursor_position(ratatui::layout::Position { x, y });
+                        if x < width && y < height {
+                            caret = Some((x, y));
                         }
                     }
                 }
-            });
-            if draw.is_err() {
+                match caret {
+                    Some((x, y)) => emitter
+                        .cursor
+                        .set_position(u32::from(x) + 1, u32::from(y) + 1, true),
+                    None => emitter.cursor.set_position(1, 1, false),
+                }
+            }
+            // Lane B3b — the frame emission: diff against the
+            // emitter's prev grid, wrapped in the ?2026 envelope on
+            // the session terminal's output writer (a no-op frame
+            // writes nothing).
+            let emission = match session_terminal.lock() {
+                Ok(mut session) => emitter.emit(session.output(), &frame),
+                Err(_) => Err(std::io::Error::other("session terminal lock poisoned")),
+            };
+            if emission.is_err() {
                 break Err("terminal draw failed".to_owned());
             }
             // TUI-18 — the window title (`renderer.setTerminalTitle`
@@ -9698,10 +9769,12 @@ pub async fn run_with_size(
                 app.press(&spec);
             }
             // SIGWINCH stand-in (B3a): the input thread's 50 ms
-            // check_resize tick — relayout at the new size.
+            // check_resize tick — relayout at the new size; the
+            // emitter's prev grid invalidates (B3b: full repaint at
+            // the new size, upstream's fresh-blank-buffers resize).
             Some(TermEvent::Resize(width, height)) => {
-                let _ = terminal.resize(ratatui::layout::Rect::new(0, 0, width, height));
                 app.resize((width, height));
+                emitter.resize(usize::from(width), usize::from(height));
                 redraw_at = 0; // force one redraw
             }
             // Focus: the attention marker consumes on FocusGained (the
@@ -9843,21 +9916,33 @@ impl Drop for StopInputReader {
     }
 }
 
-/// One input tick on the session terminal's tty: `poll(2)` up to
-/// `timeout_ms`, then read whatever landed (FIONREAD-bounded). The
-/// session lock is held across the poll (≤50 ms) so the pump and the
-/// run loop's suspend/teardown hands serialize on the same device.
-#[allow(unsafe_code)] // poll/read/ioctl on the tty fd are libc FFI
-fn read_session_input(
+/// The session tty's input fd, cached for the input thread's unlocked
+/// poll/read (see [`read_session_input`]); refreshed by the run loop
+/// when the session terminal is rebuilt (the editor/suspend paths —
+/// `Terminal::new` re-opens the tty).
+fn cache_tty_input_fd(
     session: &Arc<std::sync::Mutex<SessionTerminal>>,
-    timeout_ms: i32,
-) -> Vec<u8> {
+    cache: &Arc<std::sync::atomic::AtomicI32>,
+) {
     use opentui_core::terminal::TtyDevice as _;
     use std::os::fd::AsRawFd as _;
-    let Ok(mut terminal) = session.lock() else {
-        return Vec::new();
-    };
-    let fd = terminal.tty().input_fd().as_raw_fd();
+    if let Ok(mut terminal) = session.lock() {
+        cache.store(
+            terminal.tty().input_fd().as_raw_fd(),
+            std::sync::atomic::Ordering::Release,
+        );
+    }
+}
+
+/// The session tty's input fd, cached at boot so the input thread can
+/// `poll(2)`/`read(2)` WITHOUT holding the session lock (B3b: the
+/// frame emitter writes through the session terminal every ~100 ms —
+/// a poll parked on the lock stalls the render loop a full 50 ms tick
+/// per pass; the fd is refreshed on session rebuilds via
+/// [`cache_tty_input_fd`], and the reads below are the only reader
+/// (SA-F13's one-reader gate)).
+#[allow(unsafe_code)] // poll/read/ioctl on the tty fd are libc FFI
+fn read_session_input(fd: std::os::fd::RawFd, timeout_ms: i32) -> Vec<u8> {
     let mut poll_fd = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
     // SAFETY: poll(2) with a bounded timeout on the session's tty fd.
     let ready = unsafe { libc::poll(std::ptr::from_mut(&mut poll_fd), 1, timeout_ms) };
@@ -9879,13 +9964,7 @@ fn read_session_input(
     buffer.truncate(usize::try_from(read).unwrap_or(0));
     buffer
 }
-fn to_ratatui_color(color: crate::render::CellColor) -> ratatui::style::Color {
-    match color {
-        crate::render::CellColor::Rgb(r, g, b) => ratatui::style::Color::Rgb(r, g, b),
-        crate::render::CellColor::Indexed(index) => ratatui::style::Color::Indexed(index),
-        crate::render::CellColor::Default => ratatui::style::Color::Reset,
-    }
-}
+
 
 #[cfg(test)]
 mod tests {
