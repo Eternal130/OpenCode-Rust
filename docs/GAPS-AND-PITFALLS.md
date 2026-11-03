@@ -85,6 +85,7 @@
 
 ### G-13 ℹ️ oc-syntax 已知降级
 - markdown 代码围栏无 injection 高亮（`oc-syntax/src/lib.rs:43-45` 明示）；csharp/kotlin/swift 单独 feature、extra 14 语言 `langs-extra` feature（体积上限 67.6 MiB 裁决 R-01b）。
+- 2026-11-04 勘注（lane D1d）：高亮引擎已收敛至 opentui `TreeSitterClient`（oc-syntax 降格为 grammar+query vendor，目录经 `add_default_parsers` 注册，调用点走 `highlight_once`+UTF-16→char 偏移转换；goldens 零 diff）。injection 状态未变：vendor 目录本就不含 injections.scm（markdown 注册项 `injections_query: None`），围栏内层语言仍渲染纯文本——该缺口维持本条 ℹ️ 不变。
 
 ### G-14 ✅（retention 可配置已落地；审计轨迹差异维持有意）
 - ✅ `experimental.file_retention.cleanup_interval`（毫秒；absent/0 → 每小时默认，0 守卫防 tokio interval panic）+ 调用方 Duration 透传（`cleanup_with` / `cleanup_data_root_with_retention`）；EngineOptions + boot 播种。oc-schema/config/normalize 按既有 knob 模式。
