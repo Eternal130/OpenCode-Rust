@@ -5166,7 +5166,7 @@ mod tests {
             bg: crate::render::CellColor::Rgb(10, 10, 10),
         };
         let mut frame =
-            crate::render::Frame { cells: vec![vec![cell; 80]; 24], width: 80, height: 24 };
+            crate::render::Frame { cells: vec![vec![cell; 80]; 24], width: 80, height: 24, clusters: None };
         crate::components::dialog::render_overlay_with(
             &mut frame,
             &store.top_dialog().expect("open"),

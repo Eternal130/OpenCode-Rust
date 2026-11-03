@@ -521,6 +521,7 @@ fn blank(width: u16, height: u16) -> oc_tui::render::Frame {
         cells: vec![vec![cell; usize::from(width)]; usize::from(height)],
         width: usize::from(width),
         height: usize::from(height),
+        clusters: None,
     }
 }
 

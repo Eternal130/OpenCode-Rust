@@ -18,8 +18,7 @@
 //! The emitter keeps its own prev grid, so it is reusable as a plain
 //! value (the B4 mini surface takes it over as-is).
 
-use crate::render::{Cell, CellColor, Frame, CONTINUATION};
-use std::io::Write as _;
+use crate::render::{CONTINUATION, Cell, CellColor, ClusterMap, Frame};
 
 // -- SGR constants (opentui-core ansi.rs :152 `RESET`; the color trees
 //    below mirror `ansi::emit_color`, the `emitColor` decision tree at
@@ -254,11 +253,7 @@ fn blank_cell() -> Cell {
 }
 
 fn blank_frame(width: usize, height: usize) -> Frame {
-    Frame {
-        cells: vec![vec![blank_cell(); width]; height],
-        width,
-        height,
-    }
+    Frame { cells: vec![vec![blank_cell(); width]; height], width, height, clusters: None }
 }
 
 /// The SGR frame emitter — a port of opentui-core's
@@ -271,6 +266,10 @@ pub struct GridEmitter {
     width: usize,
     height: usize,
     prev: Frame,
+    /// The prev frame's cluster sidecar (the diff base's full
+    /// multi-codepoint symbols — two clusters sharing a first char
+    /// must still compare unequal).
+    prev_clusters: ClusterMap,
     /// The `frame_id == 0` analog (renderer.rs :2253): the first
     /// emission takes the forced full-repaint path.
     first: bool,
@@ -284,6 +283,7 @@ impl GridEmitter {
             width,
             height,
             prev: blank_frame(width, height),
+            prev_clusters: ClusterMap::new(),
             first: true,
             cursor: CursorOutputState::default(),
         }
@@ -301,6 +301,7 @@ impl GridEmitter {
         self.width = width;
         self.height = height;
         self.prev = blank_frame(width, height);
+        self.prev_clusters.clear();
     }
 
     /// The current grid size.
@@ -315,6 +316,7 @@ impl GridEmitter {
     /// `clear()` equivalent, every cell incl. blanks rewritten).
     pub fn invalidate_full(&mut self) {
         self.prev = blank_frame(self.width, self.height);
+        self.prev_clusters.clear();
         self.first = true;
     }
 
@@ -340,6 +342,9 @@ impl GridEmitter {
         let mut current_attrs: Option<u16> = None;
         let mut run_start: i64 = -1;
         let mut run_length: u32 = 0;
+        // Cluster cells deferred from the cell pass (see the print
+        // arm): `(y, x, cell)` — emitted after the loop.
+        let mut pending_clusters: Vec<(usize, usize, Cell)> = Vec::new();
         // (No hyperlink branch: the oc-tui cell vocabulary carries no
         // link ids, so the OSC 8 arm collapses to upstream's `0` path —
         // no bytes; renderer.rs :2292-2316.)
@@ -350,7 +355,8 @@ impl GridEmitter {
                 let next_row = frame.cells.get(y);
                 let mut equal = true;
                 for x in 0..width {
-                    let cur = prev_row.and_then(|row| row.get(x)).copied().unwrap_or_else(blank_cell);
+                    let cur =
+                        prev_row.and_then(|row| row.get(x)).copied().unwrap_or_else(blank_cell);
                     let next =
                         next_row.and_then(|row| row.get(x)).copied().unwrap_or_else(blank_cell);
                     if cur != next {
@@ -358,18 +364,40 @@ impl GridEmitter {
                         break;
                     }
                 }
+                // The cluster sidecar joins the diff base: rows whose
+                // cells are char-equal but carry different clusters
+                // (e.g. two ZWJ families sharing a first emoji) are
+                // NOT equal.
+                if equal && !clusters_row_equal(&self.prev_clusters, frame, y) {
+                    equal = false;
+                }
                 if equal {
                     continue;
                 }
             }
             for x in 0..width {
-                let cur =
-                    self.prev.cells.get(y).and_then(|row| row.get(x)).copied().unwrap_or_else(blank_cell);
-                let next =
-                    frame.cells.get(y).and_then(|row| row.get(x)).copied().unwrap_or_else(blank_cell);
+                let cur = self
+                    .prev
+                    .cells
+                    .get(y)
+                    .and_then(|row| row.get(x))
+                    .copied()
+                    .unwrap_or_else(blank_cell);
+                let next = frame
+                    .cells
+                    .get(y)
+                    .and_then(|row| row.get(x))
+                    .copied()
+                    .unwrap_or_else(blank_cell);
                 // unchanged cell: close any open run (renderer.rs
-                // :2272-2282)
-                if !force && cur == next {
+                // :2272-2282) — same cell AND same cluster symbol.
+                let cluster_equal = match (self.prev_clusters.get(&(y, x)), frame.cluster_at(y, x))
+                {
+                    (None, None) => true,
+                    (Some(a), Some(b)) => a == b,
+                    (Some(_), None) | (None, Some(_)) => false,
+                };
+                if !force && cur == next && cluster_equal {
                     if run_length > 0 {
                         out.push_str(RESET);
                         run_start = -1;
@@ -401,9 +429,14 @@ impl GridEmitter {
                 // wide-cluster continuation cell emits NO bytes; the
                 // cursor advances implicitly past it (the wide glyph
                 // printed before it already advanced the terminal two
-                // columns).
+                // columns). A cell carrying a cluster sidecar entry is
+                // DEFERRED to the cluster pass after the cell loop
+                // (see below) — `Cell::ch` alone would truncate the
+                // multi-codepoint symbol.
                 if next.ch == CONTINUATION {
                     // no bytes; cursor advances implicitly
+                } else if frame.cluster_at(y, x).is_some() {
+                    pending_clusters.push((y, x, next));
                 } else {
                     out.push(next.ch);
                 }
@@ -414,13 +447,20 @@ impl GridEmitter {
         if run_length > 0 {
             out.push_str(RESET);
         }
+        emit_clusters(&mut out, frame, &pending_clusters);
         // (No frame-tail link close: no link ids in this vocabulary —
         // renderer.rs :2358-2364's `link_tail` is always false, so
-        // `frame_started` is exactly `run_length > 0`.)
-        let frame_started = run_length > 0;
+        // `frame_started` is exactly `run_length > 0`. The cluster
+        // drift guard can zero a run that DID write bytes — the
+        // cursor tail then mirrors the upstream quirk, and emit()'s
+        // per-frame cursor assertion is the oc-tui policy that
+        // restores the observable contract. The cluster pass also
+        // writes bytes without a run — it counts.)
+        let frame_started = run_length > 0 || !pending_clusters.is_empty();
         // the cursor emission tail — renderer.rs :2365-2372
         self.cursor.emit(&mut out, frame_started);
         self.prev = clone_sized(frame, width, height);
+        self.prev_clusters = cluster_sized(frame, width, height);
         out
     }
 
@@ -429,22 +469,34 @@ impl GridEmitter {
     /// the exact `pump_output` shape (terminal/pumps.rs :200-228).
     /// The envelope is not capability-gated (upstream never gates it).
     ///
-    /// One oc-tui policy on top of the upstream stream: while the
-    /// caret is visible, EVERY emitted frame ends with the cursor
-    /// assertion (CUP + `?25h`). Upstream's `CursorOutputState::emit`
-    /// skips the assertion when `frame_started` is false — and a run
-    /// closed by a trailing unchanged cell zeroes `run_length`, so a
-    /// spinner-tick frame can carry cell bytes WITHOUT the cursor
-    /// tail, stranding the hardware cursor on the last cell run. The
-    /// retired writer asserted the cursor position every frame; this
-    /// keeps that observable contract (the pty cursor-row gates) while
+    /// Two oc-tui policies on top of the upstream stream, both
+    /// keeping the retired writer's observable contract (the pty
+    /// cursor gates and the E1 flush-cadence detectors):
+    ///
+    /// * while the caret is visible, EVERY emitted frame ends with
+    ///   the cursor assertion (CUP + `?25h`). Upstream's
+    ///   `CursorOutputState::emit` skips the assertion when
+    ///   `frame_started` is false — and a run closed by a trailing
+    ///   unchanged cell zeroes `run_length`, so a spinner-tick frame
+    ///   can carry cell bytes WITHOUT the cursor tail, stranding the
+    ///   hardware cursor on the last cell run.
+    /// * symmetrically, while the caret is hidden (a dialog owns the
+    ///   screen), every frame carries `?25l`. The retired ratatui
+    ///   writer asserted hide-cursor on EVERY draw — the E1
+    ///   dialog-open-idle cell reads the resulting per-tick output
+    ///   cadence as the app's liveness proof.
+    ///
     /// `render_sgr` stays byte-faithful to the oracle (the
-    /// differential gate pins the quirk itself).
+    /// differential gates pin both quirks themselves).
     pub fn emit<W: std::io::Write>(&mut self, out: &mut W, frame: &Frame) -> std::io::Result<()> {
         let mut sgr = self.render_sgr(frame);
-        if self.cursor.visible && !sgr.ends_with("\x1b[?25h") {
-            sgr.push_str(&format!("\x1b[{};{}H\x1b[?25h", self.cursor.y, self.cursor.x));
-            self.cursor.pin();
+        if self.cursor.visible {
+            if !sgr.ends_with("\x1b[?25h") {
+                sgr.push_str(&format!("\x1b[{};{}H\x1b[?25h", self.cursor.y, self.cursor.x));
+                self.cursor.pin();
+            }
+        } else if !sgr.ends_with("\x1b[?25l") {
+            sgr.push_str("\x1b[?25l");
         }
         if sgr.is_empty() {
             return Ok(()); // no-op invisible frame — no envelope (pumps.rs :222-224)
@@ -456,6 +508,54 @@ impl GridEmitter {
     }
 }
 
+/// Row-level cluster equality for the row-equality fast path: the
+/// prev sidecar holds no entry in row `y` AND the frame's row-`y`
+/// entries all match it.
+fn clusters_row_equal(prev: &ClusterMap, frame: &Frame, y: usize) -> bool {
+    if let Some(map) = frame.clusters.as_ref() {
+        for (key, symbol) in map.range((y, 0)..(y + 1, 0)) {
+            if prev.get(key).map(String::as_str) != Some(symbol.as_str()) {
+                return false;
+            }
+        }
+    }
+    prev.range((y, 0)..(y + 1, 0)).next().is_none()
+}
+
+/// The cluster pass (an oc-tui policy over the upstream stream):
+/// every deferred multi-codepoint symbol is printed AFTER the cell
+/// pass, each with its own CUP + SGR burst + RESET. A cluster's
+/// terminal width may exceed the columns the frame reserved for it (a
+/// ZWJ family renders as ONE 2-column glyph on real terminals but
+/// advances per-codepoint under simpler width models) — printing it
+/// mid-run lets that drift displace the rest of the run, and printing
+/// it first lets later cells CUP back over it. Last-writer-wins on
+/// the overflow span keeps every non-cluster cell at its frame
+/// position on a real terminal (the cluster lands exactly on its
+/// slot), and keeps the cluster itself visible under the vt100 model.
+fn emit_clusters(out: &mut String, frame: &Frame, pending: &[(usize, usize, Cell)]) {
+    for &(y, x, cell) in pending {
+        if let Some(symbol) = frame.cluster_at(y, x) {
+            move_to(out, x, y);
+            emit_fg(out, cell.fg);
+            emit_bg(out, cell.bg);
+            apply_attributes(out, cell.attrs);
+            out.push_str(symbol);
+            out.push_str(RESET);
+        }
+    }
+}
+
+/// Copy a frame's cluster sidecar cropped to the emitter's grid size.
+fn cluster_sized(frame: &Frame, width: usize, height: usize) -> ClusterMap {
+    frame.clusters.as_ref().map_or_else(ClusterMap::new, |m| {
+        m.iter()
+            .filter(|&((y, x), _)| *y < height && *x < width)
+            .map(|(k, v)| (*k, v.clone()))
+            .collect()
+    })
+}
+
 /// Copy a frame padded/cropped to the emitter's grid size (rows and
 /// columns outside the frame read as blank cells, matching
 /// [`Frame::cell`]'s out-of-bounds default with the blank vocabulary).
@@ -465,11 +565,9 @@ fn clone_sized(frame: &Frame, width: usize, height: usize) -> Frame {
         let row = frame.cells.get(y);
         let mut new_row = Vec::with_capacity(width);
         for x in 0..width {
-            new_row.push(
-                row.and_then(|r| r.get(x)).copied().unwrap_or_else(blank_cell),
-            );
+            new_row.push(row.and_then(|r| r.get(x)).copied().unwrap_or_else(blank_cell));
         }
         cells.push(new_row);
     }
-    Frame { cells, width, height }
+    Frame { cells, width, height, clusters: None }
 }

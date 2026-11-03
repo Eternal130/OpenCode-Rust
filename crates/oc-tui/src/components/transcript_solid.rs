@@ -87,12 +87,12 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use opentui_core::styled_text::{StyledText, TextChunk};
 use opentui_core::Rgba;
+use opentui_core::styled_text::{StyledText, TextChunk};
 use opentui_solid::builder::ForItemSource;
 use opentui_solid::element::{ForItem, PropValue};
 use opentui_solid::reactive::Reactive;
-use opentui_solid::{box_, for_list, map, text, Element, Signal, SolidRenderer};
+use opentui_solid::{Element, Signal, SolidRenderer, box_, for_list, map, text};
 
 use crate::components::message::list::Transcript;
 use crate::components::session_tabs_solid::frame_from_buffer;
@@ -506,7 +506,7 @@ pub fn paint_transcript_region(
     let (width, height) = (usize::from(size.0), usize::from(size.1));
     if width == 0 || height == 0 {
         // The old region painter's degenerate shape.
-        return Frame { cells: vec![Vec::new(); height], width, height };
+        return Frame { cells: vec![Vec::new(); height], width, height, clusters: None };
     }
     let items = shape(transcript, scroll_offset, width, height);
     let bg = rgb_of(theme.background);
@@ -546,7 +546,7 @@ pub fn paint_transcript_region(
 mod tests {
     use super::*;
     use crate::components::message::list::{
-        message_groups_fixture, render_transcript, vscroll_messages_fixture, TranscriptOptions,
+        TranscriptOptions, message_groups_fixture, render_transcript, vscroll_messages_fixture,
     };
     use crate::components::message::model::{Message, Part};
     use crate::theme::ThemeState;

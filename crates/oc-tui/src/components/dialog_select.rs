@@ -36,8 +36,8 @@
 pub mod fuzzy;
 
 use crate::render::{Cell, CellColor, Frame};
-use crate::wrap::flatten;
 use crate::style::{Color, Style};
+use crate::wrap::flatten;
 
 /// One selectable row (`DialogSelectOption`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -627,17 +627,11 @@ impl SelectState {
             .get(self.selected.min(indices.len() - 1))
             .and_then(|&index| props.options.get(index))
             .and_then(|option| option.category.clone());
-        let current = sections
-            .iter()
-            .position(|group| group.category == current_category)
-            .unwrap_or(0);
-        let next =
-            ((current as i64 + direction).rem_euclid(sections.len() as i64)) as usize;
+        let current =
+            sections.iter().position(|group| group.category == current_category).unwrap_or(0);
+        let next = ((current as i64 + direction).rem_euclid(sections.len() as i64)) as usize;
         let target = sections[next].indices[0];
-        self.selected = indices
-            .iter()
-            .position(|&index| index == target)
-            .unwrap_or(self.selected);
+        self.selected = indices.iter().position(|&index| index == target).unwrap_or(self.selected);
     }
 
     /// Clamp the selection into range and edge-reveal it in the scroll
@@ -1179,7 +1173,7 @@ pub fn frame_from_view(
             cells[y][x] = *cell_data;
         }
     }
-    Frame { cells, width, height }
+    Frame { cells, width, height, clusters: None }
 }
 
 #[cfg(test)]
@@ -1601,9 +1595,9 @@ mod tests {
             let row = &view.rows[4];
             let footer_end = width - 4;
             let footer_start = footer_end - 8; // display width of "ctrl+x n"
-                                               // The footer renders COMPLETE (flexShrink 0 — the title
-                                               // yields, never the footer; the ref's own test
-                                               // dialog-select.test.tsx:291-308).
+            // The footer renders COMPLETE (flexShrink 0 — the title
+            // yields, never the footer; the ref's own test
+            // dialog-select.test.tsx:291-308).
             let footer: String = (footer_start..footer_end).map(|col| row[col].ch).collect();
             assert_eq!(footer, "ctrl+x n", "complete footer at width {width}");
             // The gap column before the footer never shows a title
@@ -1749,52 +1743,52 @@ mod tests {
     }
 }
 
-    // -- G-131 ---------------------------------------------------------
+// -- G-131 ---------------------------------------------------------
 
-    #[test]
-    fn alt_arrows_jump_section_boundaries() {
-        let props = SelectProps::new(
-            "Open",
-            vec![
-                SelectOption::titled("Recent a", "a").categorized("Recent"),
-                SelectOption::titled("Recent b", "b").categorized("Recent"),
-                SelectOption::titled("Project x", "x").categorized("Projects"),
-                SelectOption::titled("Project y", "y").categorized("Projects"),
-                SelectOption::titled("Worktree w", "w").categorized("Worktrees"),
-            ],
-        );
-        let mut state = SelectState { filter: String::new(), selected: 0, scroll: 0 };
-        // alt+down from the first section's head → the next section's
-        // FIRST entry.
-        state.move_section(&props, 1);
-        assert_eq!(state.selected, 2);
-        state.move_section(&props, 1);
-        assert_eq!(state.selected, 4);
-        // wrap: past the last section → the first.
-        state.move_section(&props, 1);
-        assert_eq!(state.selected, 0);
-        // alt+up wraps backwards to the last section's first entry.
-        state.move_section(&props, -1);
-        assert_eq!(state.selected, 4);
-        // from mid-section, alt+down targets the NEXT section's head
-        // (the current section's own head is not a jump target).
-        state.selected = 3;
-        state.move_section(&props, 1);
-        assert_eq!(state.selected, 4);
-        state.move_section(&props, -1);
-        assert_eq!(state.selected, 2);
-    }
+#[test]
+fn alt_arrows_jump_section_boundaries() {
+    let props = SelectProps::new(
+        "Open",
+        vec![
+            SelectOption::titled("Recent a", "a").categorized("Recent"),
+            SelectOption::titled("Recent b", "b").categorized("Recent"),
+            SelectOption::titled("Project x", "x").categorized("Projects"),
+            SelectOption::titled("Project y", "y").categorized("Projects"),
+            SelectOption::titled("Worktree w", "w").categorized("Worktrees"),
+        ],
+    );
+    let mut state = SelectState { filter: String::new(), selected: 0, scroll: 0 };
+    // alt+down from the first section's head → the next section's
+    // FIRST entry.
+    state.move_section(&props, 1);
+    assert_eq!(state.selected, 2);
+    state.move_section(&props, 1);
+    assert_eq!(state.selected, 4);
+    // wrap: past the last section → the first.
+    state.move_section(&props, 1);
+    assert_eq!(state.selected, 0);
+    // alt+up wraps backwards to the last section's first entry.
+    state.move_section(&props, -1);
+    assert_eq!(state.selected, 4);
+    // from mid-section, alt+down targets the NEXT section's head
+    // (the current section's own head is not a jump target).
+    state.selected = 3;
+    state.move_section(&props, 1);
+    assert_eq!(state.selected, 4);
+    state.move_section(&props, -1);
+    assert_eq!(state.selected, 2);
+}
 
-    #[test]
-    fn section_jump_on_flat_list_lands_on_the_edges() {
-        let props = SelectProps::new(
-            "Flat",
-            vec![SelectOption::titled("a", "a"), SelectOption::titled("b", "b")],
-        );
-        let mut state = SelectState { filter: String::new(), selected: 1, scroll: 0 };
-        // A single (headerless) section: the wrap lands back on row 0.
-        state.move_section(&props, 1);
-        assert_eq!(state.selected, 0);
-        state.move_section(&props, -1);
-        assert_eq!(state.selected, 0);
-    }
+#[test]
+fn section_jump_on_flat_list_lands_on_the_edges() {
+    let props = SelectProps::new(
+        "Flat",
+        vec![SelectOption::titled("a", "a"), SelectOption::titled("b", "b")],
+    );
+    let mut state = SelectState { filter: String::new(), selected: 1, scroll: 0 };
+    // A single (headerless) section: the wrap lands back on row 0.
+    state.move_section(&props, 1);
+    assert_eq!(state.selected, 0);
+    state.move_section(&props, -1);
+    assert_eq!(state.selected, 0);
+}

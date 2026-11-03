@@ -170,7 +170,7 @@ pub fn error_component_frame(size: (u16, u16), message: &str) -> Frame {
     let detail = crate::wrap::take_width(message, width.saturating_sub(4).max(8));
     put(3, &detail);
     put(height.saturating_sub(2), "Press escape to exit.");
-    Frame { cells, width, height }
+    Frame { cells, width, height, clusters: None }
 }
 
 #[cfg(test)]

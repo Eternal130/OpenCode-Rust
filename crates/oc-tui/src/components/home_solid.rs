@@ -42,16 +42,16 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use opentui_core::Rgba;
 use opentui_core::renderer::CliRendererConfig;
 use opentui_core::styled_text::{StyledText, TextChunk};
-use opentui_core::Rgba;
 use opentui_solid::element::PropValue;
 use opentui_solid::reactive::Reactive;
-use opentui_solid::{box_, map, text, Element, Signal, SolidRenderer};
+use opentui_solid::{Element, Signal, SolidRenderer, box_, map, text};
 
 use crate::components::composer::render::{FooterHints, PromptView};
 use crate::components::composer_solid::render_prompt_frame_dispatch;
-use crate::components::home::{plan_home, HomeView, LOGO_LEFT, LOGO_RIGHT};
+use crate::components::home::{HomeView, LOGO_LEFT, LOGO_RIGHT, plan_home};
 use crate::components::session_tabs_solid::frame_from_buffer;
 use crate::render::Frame;
 use crate::theme::ThemeState;
@@ -468,7 +468,11 @@ pub fn paint_solid_home_view(view: &HomeView, theme: &ThemeState, size: (u16, u1
     let (width, height) = (usize::from(size.0), usize::from(size.1));
     if width == 0 || height == 0 {
         // The old painter's degenerate shape.
-        return (Frame { cells: vec![Vec::new(); height], width, height }, None, None);
+        return (
+            Frame { cells: vec![Vec::new(); height], width, height, clusters: None },
+            None,
+            None,
+        );
     }
     let plan = plan_home(view, width, height);
     let colors = LogoColors::of(theme);
@@ -623,8 +627,8 @@ pub fn paint_solid_home_view(view: &HomeView, theme: &ThemeState, size: (u16, u1
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::composer::render::AutocompleteView;
     use crate::components::composer::PromptDraft;
+    use crate::components::composer::render::AutocompleteView;
     use crate::components::home::LOGO_WIDTH;
     use crate::wrap::display_width;
 

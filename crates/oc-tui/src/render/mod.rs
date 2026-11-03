@@ -10,5 +10,5 @@ pub mod mermaid;
 pub mod paint;
 
 pub use ansi::serialize_canonical;
-pub use frame::{Cell, CellColor, Frame, CONTINUATION};
-pub use paint::{paint_placed, paint_placed_with_fills, to_frame, Fill};
+pub use frame::{CONTINUATION, Cell, CellColor, ClusterMap, Frame};
+pub use paint::{Fill, paint_placed, paint_placed_with_fills, to_frame};

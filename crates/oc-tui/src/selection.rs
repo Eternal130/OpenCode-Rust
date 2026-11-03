@@ -187,7 +187,7 @@ mod tests {
             line.resize(width, crate::render::Cell::default());
             cells.push(line);
         }
-        Frame { width, height: rows.len(), cells }
+        Frame { width, height: rows.len(), cells, clusters: None }
     }
 
     #[test]

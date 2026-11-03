@@ -37,14 +37,14 @@
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_precision_loss)]
 
-use parity::tui_frame as pf;
 use crate::style::{Modifier, Style};
+use parity::tui_frame as pf;
 
-use crate::components::session_tabs::{TabStatus, TabView, ADD_TAB_WIDTH};
+use crate::components::session_tabs::{ADD_TAB_WIDTH, TabStatus, TabView};
 use crate::components::session_tabs_solid::paint_solid_bar;
 use crate::components::tool_rows::render_tool_wrap;
 use crate::layout::{BoxSpec, LayoutTree, StyledSpan};
-use crate::render::{paint_placed, serialize_canonical, Frame};
+use crate::render::{Frame, paint_placed, serialize_canonical};
 use crate::store::{SessionTab, Unread};
 use crate::theme::ThemeState;
 use taffy::AvailableSpace;
@@ -135,7 +135,12 @@ fn paint_solid_bar_sized(
     for (x, cell) in strip.cells[0].iter().enumerate() {
         cells[0][x] = *cell;
     }
-    crate::render::Frame { cells, width: usize::from(width), height: usize::from(height) }
+    crate::render::Frame {
+        cells,
+        width: usize::from(width),
+        height: usize::from(height),
+        clusters: None,
+    }
 }
 
 /// Adapter so tests can talk about one rendered thing.
@@ -325,7 +330,7 @@ fn layout_tool_wrap_plain_leaves(
     fixture: &[crate::components::tool_rows::ToolRowFixture],
     theme: &crate::theme::ThemeStyles,
 ) -> Vec<crate::layout::Placed> {
-    use crate::components::tool_rows::{row_style, BOX_WIDTH, ICON_WIDTH};
+    use crate::components::tool_rows::{BOX_WIDTH, ICON_WIDTH, row_style};
     let mut tree = LayoutTree::new();
     let wrappers: Vec<_> = fixture
         .iter()
@@ -479,11 +484,11 @@ fn markdown_bold_spans_wrap_boundaries_at_80_and_40() {
 
 // -- 7.2 wave 1 Lane A: dialog goldens ---------------------------------------
 
-use crate::components::command_palette::{palette_options, PaletteCommand};
+use crate::components::command_palette::{PaletteCommand, palette_options};
 use crate::components::dialog::render_overlay_with;
 use crate::components::dialog_select::{
-    frame_from_view, render_select, DialogStyles, SelectAction, SelectOption, SelectProps,
-    SelectState,
+    DialogStyles, SelectAction, SelectOption, SelectProps, SelectState, frame_from_view,
+    render_select,
 };
 use crate::store::{DialogEntry, DialogKind, DialogSize};
 
@@ -595,6 +600,7 @@ fn command_palette_frame(width: u16, height: u16) -> Frame {
         ],
         width: usize::from(width),
         height: usize::from(height),
+        clusters: None,
     };
     render_overlay_with(&mut base, &entry, &props, None, &theme, (width, height));
     base

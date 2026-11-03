@@ -13,13 +13,13 @@
 
 use crate::components::composer::autocomplete;
 use crate::components::composer::render::{AutocompleteView, FooterHints, PromptView};
-use crate::components::message::list::{render_transcript, TranscriptOptions};
+use crate::components::message::list::{TranscriptOptions, render_transcript};
 use crate::components::message::model::ToolStatus;
 use crate::components::session_tabs::{Attention, TabStatus, TabView};
 use crate::components::sidebar::{
-    SidebarContextWidget, SidebarMcpWidget, SidebarSections, SidebarView, SIDEBAR_AUTO_BREAKPOINT,
+    SIDEBAR_AUTO_BREAKPOINT, SidebarContextWidget, SidebarMcpWidget, SidebarSections, SidebarView,
 };
-use crate::render::{paint_placed_with_fills, Frame};
+use crate::render::{Frame, paint_placed_with_fills};
 use crate::store::{SessionTab, Store};
 use crate::style::Style;
 
@@ -1291,11 +1291,7 @@ fn paint_queued_dock(
 /// v2's count pluralization (`${count} subagent${count === 1 ? "" : "s"}`,
 /// footer.tsx:24-32).
 fn plural_s(count: usize) -> &'static str {
-    if count == 1 {
-        ""
-    } else {
-        "s"
-    }
+    if count == 1 { "" } else { "s" }
 }
 
 /// A ratatui color back to its RGBA token (G-35's spinner input —
@@ -1687,11 +1683,7 @@ fn composer_usage(store: &Store, session_id: &str) -> String {
     let cost = store.session_cost(session_id);
     if cost > 0.0 {
         let money = crate::components::sidebar::format_usd(cost);
-        if context.is_empty() {
-            money
-        } else {
-            format!("{context} · {money}")
-        }
+        if context.is_empty() { money } else { format!("{context} · {money}") }
     } else {
         context
     }
@@ -1713,12 +1705,9 @@ fn model_display_names(store: &Store) -> Vec<(String, String)> {
 }
 
 /// Paste `region`'s cells at (`x`, `y`); anything left keeps the fill.
+/// Clusters ride along (`Frame::paste_region`, lane B3b).
 fn paste(target: &mut Frame, region: &Frame, x: usize, y: usize) {
-    for (row, cells) in region.cells.iter().enumerate() {
-        let Some(slot) = target.cells.get_mut(y + row) else { break };
-        let count = cells.len().min(slot.len().saturating_sub(x));
-        slot[x..x + count].clone_from_slice(&cells[..count]);
-    }
+    target.paste_region(region, x, y);
 }
 
 #[cfg(test)]

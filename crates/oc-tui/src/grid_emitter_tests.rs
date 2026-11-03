@@ -28,10 +28,10 @@
 //! full repaint, and a pseudo-random sequence with cursor dynamics.
 
 use crate::grid_emitter::{CursorStyle, GridEmitter};
-use crate::render::{Cell, CellColor, Frame, CONTINUATION};
+use crate::render::{CONTINUATION, Cell, CellColor, Frame};
 use opentui_core::buffer::CHAR_FLAG_CONTINUATION;
 use opentui_core::color::Rgba;
-use opentui_core::renderer::{create_cli_renderer, CliRenderer, CliRendererConfig};
+use opentui_core::renderer::{CliRenderer, CliRendererConfig, create_cli_renderer};
 
 // -- the oc cell ↔ opentui packed representation (same source both ways)
 
@@ -59,11 +59,8 @@ fn bg_rgba(color: CellColor) -> Rgba {
 /// >= 1, `current` = the blank painted buffer — cell-for-cell the
 /// emitter's blank prev grid).
 fn oracle(width: u32, height: u32) -> CliRenderer {
-    let mut renderer = create_cli_renderer(CliRendererConfig {
-        width,
-        height,
-        ..CliRendererConfig::default()
-    });
+    let mut renderer =
+        create_cli_renderer(CliRendererConfig { width, height, ..CliRendererConfig::default() });
     // Absorb the forced full blank frame into sgr_history (discarded —
     // the harness compares per-frame bench outputs only); this bumps
     // frame_id and swaps the blank painted buffer into current.
@@ -83,13 +80,19 @@ fn blank_grid(width: usize, height: usize) -> Frame {
     Frame {
         cells: vec![
             vec![
-                Cell { ch: ' ', attrs: 0, fg: CellColor::Rgb(255, 255, 255), bg: CellColor::Default };
+                Cell {
+                    ch: ' ',
+                    attrs: 0,
+                    fg: CellColor::Rgb(255, 255, 255),
+                    bg: CellColor::Default
+                };
                 width
             ];
             height
         ],
         width,
         height,
+        clusters: None,
     }
 }
 
@@ -131,9 +134,7 @@ fn oracle_frame(
             CursorStyle::Line => opentui_core::renderables::textarea::CursorStyle::Line,
             CursorStyle::Underline => opentui_core::renderables::textarea::CursorStyle::Underline,
         };
-        renderer
-            .cursor_state
-            .set_style(style, blinking, Rgba::rgb(color.0, color.1, color.2));
+        renderer.cursor_state.set_style(style, blinking, Rgba::rgb(color.0, color.1, color.2));
         renderer.cursor_state.set_position(x, y, true);
     } else {
         renderer.cursor_state.set_position(1, 1, false);
@@ -161,7 +162,12 @@ fn emitter_frame(
 
 /// The differential driver: a same-sized sequence on both sides, every
 /// frame asserted byte-equal (with the frame index on failure).
-fn assert_sequence(width: usize, height: usize, frames: &[Frame], cursors: &[Option<((u32, u32), (CursorStyle, bool, (u8, u8, u8)))>]) {
+fn assert_sequence(
+    width: usize,
+    height: usize,
+    frames: &[Frame],
+    cursors: &[Option<((u32, u32), (CursorStyle, bool, (u8, u8, u8)))>],
+) {
     let mut oracle = oracle(u32::try_from(width).unwrap(), u32::try_from(height).unwrap());
     let mut emitter = emitter(width, height);
     let default_cursor = None;
@@ -170,8 +176,7 @@ fn assert_sequence(width: usize, height: usize, frames: &[Frame], cursors: &[Opt
         let expected = oracle_frame(&mut oracle, frame, *cursor);
         let actual = emitter_frame(&mut emitter, frame, *cursor);
         assert_eq!(
-            actual,
-            expected,
+            actual, expected,
             "frame {index} diverged\n  oc:      {actual:?}\n  opentui: {expected:?}"
         );
     }
@@ -189,9 +194,11 @@ fn grid(width: usize, height: usize, rows: &[&str]) -> Frame {
                 .map(|ch| Cell { ch, attrs: 0, fg: CellColor::Default, bg: CellColor::Default })
                 .collect::<Vec<_>>()
         })
-        .chain(std::iter::repeat(vec![Cell::default(); width]).take(height.saturating_sub(rows.len())))
+        .chain(
+            std::iter::repeat(vec![Cell::default(); width]).take(height.saturating_sub(rows.len())),
+        )
         .collect();
-    Frame { cells, width, height }
+    Frame { cells, width, height, clusters: None }
 }
 
 fn styled_grid(width: usize, height: usize, rows: &[Vec<Cell>]) -> Frame {
@@ -199,7 +206,7 @@ fn styled_grid(width: usize, height: usize, rows: &[Vec<Cell>]) -> Frame {
     while cells.len() < height {
         cells.push(vec![Cell::default(); width]);
     }
-    Frame { cells, width, height }
+    Frame { cells, width, height, clusters: None }
 }
 
 // -- scenarios -------------------------------------------------------------
@@ -416,7 +423,12 @@ fn all_change_frame() {
     let mut f1 = blank_grid(w, h);
     for row in &mut f1.cells {
         for cell in row.iter_mut() {
-            *cell = Cell { ch: 'z', attrs: 1 | 1 << 3, fg: CellColor::Indexed(99), bg: CellColor::Rgb(9, 9, 9) };
+            *cell = Cell {
+                ch: 'z',
+                attrs: 1 | 1 << 3,
+                fg: CellColor::Indexed(99),
+                bg: CellColor::Rgb(9, 9, 9),
+            };
         }
     }
     assert_sequence(w, h, &[f0.clone(), f1, f0.clone(), f0.clone()], &[]);
@@ -508,7 +520,8 @@ fn pseudo_random_sequence() {
                         let ch = if pick < 8 {
                             CONTINUATION
                         } else {
-                            chars[usize::try_from(next() % u64::try_from(chars.len()).unwrap()).unwrap()]
+                            chars[usize::try_from(next() % u64::try_from(chars.len()).unwrap())
+                                .unwrap()]
                         };
                         let color = match next() % 3 {
                             0 => CellColor::Default,
@@ -529,7 +542,7 @@ fn pseudo_random_sequence() {
                     .collect()
             })
             .collect();
-        frames.push(Frame { cells, width: w, height: h });
+        frames.push(Frame { cells, width: w, height: h, clusters: None });
     }
     let mut cursors: Vec<CursorInput> = Vec::new();
     for i in 0..40 {
@@ -552,7 +565,6 @@ fn pseudo_random_sequence() {
     }
     assert_sequence(w, h, &frames, &cursors);
 }
-
 
 /// The upstream `frame_started` quirk, pinned: a run closed by a
 /// trailing unchanged cell zeroes `run_length`, so a frame WITH cell
@@ -595,4 +607,112 @@ fn steady_visible_cursor_over_changing_cells() {
             .unwrap_or_default();
         assert!(body.ends_with("\x1b[1;1H\x1b[?25h"), "cursor pin: {body:?}");
     }
+}
+
+// -- the cluster sidecar (lane B3b follow-up) ----------------------------
+//
+// `Cell::ch` carries only a cluster's first codepoint; the Frame's
+// `clusters` sidecar carries the full multi-codepoint symbol. These
+// tests pin the emitter's three observable behaviors: full-symbol
+// printing, cluster-aware diffing, and the per-frame hidden-cursor
+// assertion (the retired writer's observable contract).
+
+fn cluster_frame(symbol: &str) -> Frame {
+    let base = grid(4, 1, &["    "]);
+    let mut frame = base;
+    frame.cells[0][0].ch = symbol.chars().next().expect("nonempty");
+    frame.cells[0][1].ch = CONTINUATION;
+    let mut clusters = std::collections::BTreeMap::new();
+    clusters.insert((0, 0), symbol.to_owned());
+    frame.clusters = Some(Box::new(clusters));
+    frame
+}
+
+#[test]
+fn cluster_sidecar_prints_the_full_symbol() {
+    let mut emitter = GridEmitter::new(4, 1);
+    let out = emitter.render_sgr(&cluster_frame("👨‍👩‍👧‍👦"));
+    assert!(
+        out.contains("👨\u{200d}👩\u{200d}👧\u{200d}👦"),
+        "the full ZWJ family must be printed: {out:?}"
+    );
+}
+
+#[test]
+fn cluster_sidecar_diffs_on_cluster_change_alone() {
+    let mut emitter = emitter(4, 1);
+    let _ = emitter.render_sgr(&cluster_frame("👨‍👩‍👧‍👦"));
+    // same first char + same cells, a DIFFERENT cluster: must repaint
+    let repainted = emitter.render_sgr(&cluster_frame("👨‍👩‍👧"));
+    assert!(repainted.contains("👨\u{200d}👩\u{200d}👧"), "cluster change repaints: {repainted:?}");
+    assert!(!repainted.contains("👦"), "the old cluster tail is gone: {repainted:?}");
+    // identical cluster: cell-level no-op (cursor hidden ⇒ empty sgr)
+    emitter.cursor.set_position(1, 1, false);
+    let noop = emitter.render_sgr(&cluster_frame("👨‍👩‍👧"));
+    assert!(noop.is_empty(), "identical cluster frame is a no-op: {noop:?}");
+}
+
+#[test]
+fn emit_asserts_hidden_cursor_every_frame() {
+    let mut emitter = emitter(4, 1);
+    emitter.cursor.set_position(1, 1, false);
+    let mut sink = Vec::new();
+    // a fully no-op frame with a hidden caret still carries ?25l (the
+    // retired ratatui writer asserted hide on every draw)
+    emitter.emit(&mut sink, &blank_grid(4, 1)).expect("emit");
+    let text = String::from_utf8(sink.clone()).expect("utf8");
+    assert_eq!(text, "\x1b[?2026h\x1b[?25l\x1b[?2026l", "per-frame hide assertion: {text:?}");
+    // and the frame after it too (the E1 dialog-open-idle cadence)
+    sink.clear();
+    emitter.emit(&mut sink, &blank_grid(4, 1)).expect("emit");
+    let text = String::from_utf8(sink).expect("utf8");
+    assert_eq!(text, "\x1b[?2026h\x1b[?25l\x1b[?2026l", "the assertion repeats: {text:?}");
+}
+
+#[test]
+fn cluster_roundtrip_through_vt100() {
+    // frame: "family <family> flag" on row 0, family = 2 reserved cells
+    let mut frame = grid(30, 1, &["                              "]);
+    for (i, ch) in "family ".chars().enumerate() {
+        frame.cells[0][i] = Cell { ch, attrs: 0, fg: CellColor::Default, bg: CellColor::Default };
+    }
+    let family = "👨‍👩‍👧‍👦";
+    frame.cells[0][7].ch = '👨';
+    frame.cells[0][8].ch = CONTINUATION;
+    let mut clusters = std::collections::BTreeMap::new();
+    clusters.insert((0, 7), family.to_owned());
+    frame.clusters = Some(Box::new(clusters));
+    // "flag" BEYOND the family's overflow span (its 2 frame columns
+    // plus the 6-column per-codepoint overflow a non-joining width
+    // model produces): cells inside the span are last-writer-loses
+    // under such a model, cells outside must survive.
+    for (i, ch) in "flag".chars().enumerate() {
+        frame.cells[0][22 + i] =
+            Cell { ch, attrs: 0, fg: CellColor::Default, bg: CellColor::Default };
+    }
+    let mut emitter = GridEmitter::new(30, 1);
+    let mut sink = Vec::new();
+    emitter.emit(&mut sink, &frame).expect("emit");
+    let mut parser = vt100::Parser::new(1, 30, 0);
+    parser.process(&sink);
+    let screen = parser.screen();
+    let mut text = String::new();
+    for x in 0..30 {
+        let c = screen
+            .cell(0, u16::try_from(x).unwrap_or(u16::MAX))
+            .map(vt100::Cell::contents)
+            .unwrap_or_default();
+        if c.is_empty() {
+            text.push(' ');
+        } else {
+            text.push_str(&c);
+        }
+    }
+    eprintln!("vt row: {text:?}");
+    // (space-stripped containment — the wide-glyph continuation cells
+    // read as spaces, exactly the a3 corpus assertion's semantics)
+    let norm: String = text.chars().filter(|c| *c != ' ').collect();
+    let target: String = family.chars().filter(|c| *c != ' ').collect();
+    assert!(norm.contains(&target), "family must round-trip: {text:?}");
+    assert!(text.contains("flag"), "flag must survive: {text:?}");
 }

@@ -24,17 +24,17 @@
 
 #![allow(clippy::cast_possible_truncation)]
 
-use crate::components::message::list::{render_transcript, FollowState, TranscriptOptions};
+use crate::components::message::list::{FollowState, TranscriptOptions, render_transcript};
 use crate::components::message::model::Message;
 use crate::components::session_tabs::{
-    adaptive_session_tab_layout, ADD_TAB_WIDTH, SESSION_SIDEBAR_WIDTH,
+    ADD_TAB_WIDTH, SESSION_SIDEBAR_WIDTH, adaptive_session_tab_layout,
 };
-use crate::components::sidebar::{render_sidebar, sidebar_visible, SidebarMode, SidebarView};
-use crate::components::tool_rows::{fill_style, DEFAULT_FOREGROUND};
+use crate::components::sidebar::{SidebarMode, SidebarView, render_sidebar, sidebar_visible};
+use crate::components::tool_rows::{DEFAULT_FOREGROUND, fill_style};
 use crate::layout::{Placed, PlacedLine};
-use crate::render::{paint_placed, paint_placed_with_fills, Fill, Frame};
-use crate::theme::ThemeState;
+use crate::render::{Fill, Frame, paint_placed, paint_placed_with_fills};
 use crate::style::{Color, Modifier, Style};
+use crate::theme::ThemeState;
 
 /// One tabs-bar entry (the assembly's slice of the store's tab list).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -340,12 +340,10 @@ pub fn paint_tabs_bar(
 }
 
 /// Paste `region`'s cells at (`x`, `y`) — regions never overlap in the
-/// assembly; anything left keeps the base fill.
+/// assembly; anything left keeps the base fill. Clusters ride along
+/// (`Frame::paste_region`, lane B3b).
 fn paste(target: &mut Frame, region: &Frame, x: u16, y: u16) {
-    for (row, cells) in region.cells.iter().enumerate() {
-        let Some(slot) = target.cells.get_mut(y as usize + row) else { break };
-        slot[x as usize..x as usize + cells.len()].clone_from_slice(cells);
-    }
+    target.paste_region(region, usize::from(x), usize::from(y));
 }
 
 /// Paint the complete session route.

@@ -18,7 +18,7 @@
 //!   deferred (see docs/surf2.log).
 
 use crate::components::diff_viewer::{
-    diff_layout, render_diff_viewer_with_hits, DiffFile, DiffView, DiffViewerOptions, PatchRow,
+    DiffFile, DiffView, DiffViewerOptions, PatchRow, diff_layout, render_diff_viewer_with_hits,
 };
 use crate::render::{Cell, CellColor, Frame};
 use crate::store::{DiffPhase, DiffSource, DiffViewerLive, Store};
@@ -120,7 +120,7 @@ fn muted_fg(styles: &ThemeStyles) -> CellColor {
 }
 
 fn plain_frame(width: usize, height: usize) -> Frame {
-    Frame { cells: vec![vec![Cell::default(); width]; height], width, height }
+    Frame { cells: vec![vec![Cell::default(); width]; height], width, height, clusters: None }
 }
 
 /// TUI-10: the inline diff images' screen hit rects — `(x, y, width,
@@ -369,7 +369,7 @@ pub fn diff_jump_file(live: &mut DiffViewerLive, forward: bool, viewport: usize)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::diff_viewer::{diff_viewer_fixture, DiffViewerState};
+    use crate::components::diff_viewer::{DiffViewerState, diff_viewer_fixture};
     use crate::theme::ThemeState;
 
     fn theme() -> ThemeStyles {

@@ -30,18 +30,18 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use opentui_core::Rgba;
 use opentui_core::buffer::{
-    grapheme_id_from_char, is_continuation_char, is_grapheme_char, OptimizedBuffer,
+    OptimizedBuffer, grapheme_id_from_char, is_continuation_char, is_grapheme_char,
 };
 use opentui_core::renderer::CliRendererConfig;
 use opentui_core::styled_text::{StyledText, TextChunk};
-use opentui_core::Rgba;
 use opentui_solid::builder::ForItemSource;
 use opentui_solid::element::{ForItem, PropValue};
 use opentui_solid::reactive::Reactive;
-use opentui_solid::{box_, for_list, map, text, Element, Signal, SolidRenderer};
+use opentui_solid::{Element, Signal, SolidRenderer, box_, for_list, map, text};
 
-use crate::render::{Cell, CellColor, Frame, CONTINUATION};
+use crate::render::{CONTINUATION, Cell, CellColor, ClusterMap, Frame};
 
 // ---------------------------------------------------------------------------
 // the unit model (the old painters' vocabulary, one shape)
@@ -398,6 +398,12 @@ fn frame_color(color: Rgba) -> CellColor {
 fn chrome_frame_from_buffer(buffer: &OptimizedBuffer) -> Frame {
     let width = buffer.width as usize;
     let mut cells = Vec::with_capacity(buffer.height as usize);
+    // The cluster sidecar (lane B3b): a grapheme cell whose
+    // `grapheme_bytes` carries more than one codepoint (ZWJ families,
+    // VS16 flags, NFD marks) keeps the FULL symbol here — `Cell::ch`
+    // holds only the first char and the GridEmitter prints the whole
+    // cluster (the retired ratatui backend's behavior).
+    let mut clusters = ClusterMap::new();
     for y in 0..buffer.height {
         let mut row = Vec::with_capacity(width);
         for x in 0..buffer.width {
@@ -408,11 +414,11 @@ fn chrome_frame_from_buffer(buffer: &OptimizedBuffer) -> Frame {
             let ch = if is_continuation_char(cell.char) {
                 CONTINUATION
             } else if is_grapheme_char(cell.char) {
-                buffer
-                    .grapheme_bytes(grapheme_id_from_char(cell.char))
-                    .chars()
-                    .next()
-                    .unwrap_or(' ')
+                let grapheme = buffer.grapheme_bytes(grapheme_id_from_char(cell.char));
+                if grapheme.chars().nth(1).is_some() {
+                    clusters.insert((y as usize, x as usize), grapheme.to_owned());
+                }
+                grapheme.chars().next().unwrap_or(' ')
             } else {
                 char::from_u32(cell.char).unwrap_or(' ')
             };
@@ -445,7 +451,8 @@ fn chrome_frame_from_buffer(buffer: &OptimizedBuffer) -> Frame {
         }
         cells.push(row);
     }
-    Frame { cells, width, height: buffer.height as usize }
+    let clusters = if clusters.is_empty() { None } else { Some(Box::new(clusters)) };
+    Frame { cells, width, height: buffer.height as usize, clusters }
 }
 
 // ---------------------------------------------------------------------------
