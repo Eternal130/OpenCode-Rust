@@ -7805,20 +7805,27 @@ pub async fn run_with_size(
     // assembly: `use_mouse: false` (mouse modes are armed by the
     // SessionTerminal's setup burst, not the renderer), kitty flags
     // off (the push is probe-gated post-boot), default 30/60 fps.
-    let mut render_renderer = {
-        let mut renderer = opentui_core::renderer::create_cli_renderer(
-            opentui_core::renderer::CliRendererConfig {
-                width: u32::from(size.0),
-                height: u32::from(size.1),
-                use_mouse: false,
-                ..opentui_core::renderer::CliRendererConfig::default()
-            },
-        );
-        renderer.attach_terminal_session(Box::new(RendererSessionHandle {
-            session: Arc::clone(&session_terminal),
-        }));
-        renderer
-    };
+    // D2.2 chrome (mechanical commit): the LIVE CliRenderer now lives
+    // inside the shared-tree hub — ONE SolidRenderer whose `.renderer`
+    // is the scheduler below (ruling #1 plan (a)). Zero surfaces mount
+    // here; the hub only establishes the shared root + family
+    // skeleton, so this commit is behavior-neutral by construction:
+    // same config, same session attach, same scheduler (`SolidRenderer
+    // ::new` builds its CliRenderer through the same
+    // `create_cli_renderer` seam).
+    let render_renderer = crate::components::chrome_solid::install_live_hub(
+        opentui_core::renderer::CliRendererConfig {
+            width: u32::from(size.0),
+            height: u32::from(size.1),
+            use_mouse: false,
+            ..opentui_core::renderer::CliRendererConfig::default()
+        },
+        |renderer| {
+            renderer.attach_terminal_session(Box::new(RendererSessionHandle {
+                session: Arc::clone(&session_terminal),
+            }));
+        },
+    );
 
     // App + config boot.
     let store = Store::new(crate::reactive::Runtime::new());
@@ -9722,9 +9729,9 @@ pub async fn run_with_size(
         // inline, so the ~100 ms pump tick — not targetFps — remains
         // the frame pacer.
         if dirty {
-            render_renderer.request_render();
+            render_renderer.borrow_mut().request_render();
         }
-        let painted = render_renderer.settle(1);
+        let painted = render_renderer.borrow_mut().settle(1);
         if dirty && painted > 0 {
             redraw_at = generation;
             // Live-size reconciliation (found by the parity rig's
@@ -9749,7 +9756,7 @@ pub async fn run_with_size(
                         emitter.resize(usize::from(width), usize::from(height));
                         // D2.1b — the scheduling renderer's tree size
                         // follows (its SGR stream stays unpumped).
-                        render_renderer.resize(u32::from(width), u32::from(height));
+                        render_renderer.borrow_mut().resize(u32::from(width), u32::from(height));
                     }
                 }
             }
@@ -9888,7 +9895,7 @@ pub async fn run_with_size(
             Some(TermEvent::Resize(width, height)) => {
                 app.resize((width, height));
                 emitter.resize(usize::from(width), usize::from(height));
-                render_renderer.resize(u32::from(width), u32::from(height));
+                render_renderer.borrow_mut().resize(u32::from(width), u32::from(height));
                 redraw_at = 0; // force one redraw
             }
             // Focus: the attention marker consumes on FocusGained (the
@@ -9996,7 +10003,7 @@ pub async fn run_with_size(
         // cooked mode. Called OUTSIDE the session lock above (the
         // renderer's session handle takes the same lock). Same bytes,
         // same order — only the call site moved.
-        let _ = render_renderer.destroy();
+        let _ = render_renderer.borrow_mut().destroy();
     }
     // #46 — the exit epilogue (v2 app.tsx:446-450: the renderer stops,
     // then `process.stdout.write(epilogue + "\n")`): the wordmark +
