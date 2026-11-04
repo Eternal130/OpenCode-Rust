@@ -451,7 +451,7 @@ pub fn render_session(
             collapsed_thoughts: store.collapsed_thought_keys(session_id),
             image_strip: crate::components::message::rows::ImageStripOptions {
                 enabled: store.image_preview(),
-                protocol: store.graphics_protocol(),
+                capabilities: store.graphics_capabilities(),
                 terminal_rows: size.1,
             },
             // #13: the footer row's model display names (the server
@@ -780,10 +780,9 @@ pub fn render_session(
             let clamped_rows = image
                 .rows
                 .min(u16::try_from(transcript_height.saturating_sub(top)).unwrap_or(image.rows));
-            Some(crate::image::ImagePlacement {
+            Some(crate::image_view::ImagePlacement {
                 x: image.x + u16::try_from(shift).unwrap_or(0),
                 y: u16::try_from(content_top + top).unwrap_or(u16::MAX),
-                id: image.id,
                 data: image.data.clone(),
                 cols: image.cols,
                 rows: clamped_rows,
