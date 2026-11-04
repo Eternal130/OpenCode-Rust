@@ -39,6 +39,14 @@ use super::transport::{self, Fold, TransportState};
 /// The prompt-loop poll tick (`app.rs`'s 100 ms tick).
 const TICK: Duration = Duration::from_millis(100);
 
+/// G-181④ — the reconnect cadence (`wait(250, signal)`,
+/// `stream-v2.transport.ts:1543`).
+const RECONNECT_DELAY: Duration = Duration::from_millis(250);
+
+/// G-181④ — the internal reconnect-hydrate marker event type (never
+/// an SSE event type; the loop's private vocabulary).
+const RECONNECT_MARKER: &str = "__mini_reconnected";
+
 /// How long a turn may run before the queue drains anyway (the
 /// reference keeps no explicit cap; the guard only stops pathological
 /// stalls).
@@ -173,10 +181,15 @@ pub struct MiniInput {
 /// runtime, closes the shell with `showExit = shown && sessionID` —
 /// the exit splash only prints once a turn actually rendered.
 pub async fn run(input: MiniInput) -> Result<i32, String> {
-    // The model-variant preference repository rides along for parity
-    // with `createMiniHost` (`mini-host.ts:18-30`); variant switching
-    // itself arrives with the model picker panel.
-    let _preferences = ModelPreferenceRepository::new(input.state_dir.join("model.json"));
+    // G-181① — the model-variant preference repository is REALLY
+    // bound now (`createMiniHost`'s `preferences`,
+    // `mini-host.ts:18-30`): the resolved target's `provider/model`
+    // label resolves its persisted variant override and lands in the
+    // recent list, exactly the seams `model-preference.ts` exposes to
+    // mini's footer (the model picker panel itself arrives with the
+    // picker family).
+    let preferences = ModelPreferenceRepository::new(input.state_dir.join("model.json"));
+    let boot_model = bind_model_preference(&preferences, input.target.model_label.as_deref());
     // CONFIG-T4 — `resolveMiniSettings(tuiConfig)` (runtime.ts:197-199
     // via runtime.boot.ts:76-98): the cli.json `mini` section drives
     // the display (splash/mono into the lifecycle boot, the fold gates
@@ -188,7 +201,10 @@ pub async fn run(input: MiniInput) -> Result<i32, String> {
         home: input.home.clone(),
         directory: input.target.directory.clone(),
         agent: input.target.agent.clone(),
-        model_label: input.target.model_label.clone(),
+        // G-181①: the variant-resolved label the preference seam
+        // produced (the ref's `formatModelLabel(input.model,
+        // input.variant)`, `runtime.lifecycle.ts:214`).
+        model_label: boot_model.clone(),
         splash: settings.splash,
         mono: settings.mono,
         footer: settings.footer,
@@ -224,16 +240,37 @@ pub async fn run(input: MiniInput) -> Result<i32, String> {
 
     // The stream transport (`ensureStream`, `runtime.ts:776-831`):
     // subscribe `/api/event` once; folds flow back over a channel and
-    // the loop resubscribes on disconnect (the SSE retry). The queue
-    // never runs before the subscription is live (v2 prewarms the
-    // transport after firstPaint, `runtime.ts:1055-1069`).
+    // the loop resubscribes on disconnect. G-181④ — the ref's
+    // reconnect semantics (`stream-v2.transport.ts:1528-1543`): the
+    // 250 ms cadence (`wait(250)`), and every RE-connect emits the
+    // hydrate marker so the loop replays the session's transcript
+    // through the same reconciler the live stream folds through
+    // (`hydrate(attempt, { render: true, reconnect: true })`,
+    // transport.ts:952-991 — missed deltas backfill, committed parts
+    // never double-print). The queue never runs before the
+    // subscription is live (v2 prewarms the transport after
+    // firstPaint, `runtime.ts:1055-1069`).
     let (event_tx, event_rx) = tokio::sync::mpsc::channel::<Value>(256);
     let (stream_ready_tx, stream_ready_rx) = tokio::sync::oneshot::channel::<()>();
     let subscribe_client = client.clone();
     let stream_task = tokio::spawn(async move {
         let mut ready = Some(stream_ready_tx);
+        let mut subscriptions = 0usize;
         loop {
             if let Ok(mut stream) = subscribe_client.event().subscribe().await {
+                subscriptions += 1;
+                if subscriptions > 1 {
+                    // The reconnect hydrate marker (a fresh connection
+                    // after a drop — the SSE event vocabulary never
+                    // carries this type).
+                    if event_tx
+                        .send(serde_json::json!({ "type": RECONNECT_MARKER }))
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
                 // Signal readiness on the FIRST live subscription (a
                 // dead server falls through to the reconnect cadence;
                 // the composer still runs after the wait below).
@@ -246,7 +283,10 @@ pub async fn run(input: MiniInput) -> Result<i32, String> {
                     }
                 }
             }
-            tokio::time::sleep(Duration::from_millis(500)).await;
+            // `wait(250, signal)` — the ref's reconnect cadence
+            // (stream-v2.transport.ts:1543; the old blind 500 ms
+            // retry is the G-181④ gap).
+            tokio::time::sleep(RECONNECT_DELAY).await;
         }
     });
     // Prewarm gate: wait for the subscription (or the timeout — an
@@ -260,7 +300,7 @@ pub async fn run(input: MiniInput) -> Result<i32, String> {
         session_id: session_id.clone(),
         session_title: input.target.session_title.clone(),
         transport,
-        queue: PromptQueue::new(false),
+        queue: PromptQueue::new(true),
         history: PromptHistory::new(),
         pending: Vec::new(),
         events: event_rx,
@@ -271,8 +311,12 @@ pub async fn run(input: MiniInput) -> Result<i32, String> {
         turn_idle: false,
         settings,
         turn_agent: input.target.agent.clone(),
-        turn_model: input.target.model_label.clone(),
+        turn_model: boot_model,
         subagents: super::transport::SubagentTracker::new(&session_id),
+        preferences,
+        directory: input.target.directory.clone(),
+        replay_limit: input.replay_limit,
+        needs_hydrate: false,
     };
 
     // The initial input submits first (`runPromptQueue`'s
@@ -290,7 +334,28 @@ pub async fn run(input: MiniInput) -> Result<i32, String> {
     while !runtime.lifecycle.is_closed() {
         runtime.pump_keys().await;
         runtime.pump_events();
+        // G-181④ — a reconnect marker replays the session transcript
+        // through the SAME reconciler the live folds consume (the
+        // ref's `hydrate(attempt, { render: true, reconnect: true })`).
+        while runtime.needs_hydrate {
+            runtime.needs_hydrate = false;
+            replay_history(
+                &mut runtime.lifecycle,
+                &runtime.client,
+                &runtime.session_id.clone(),
+                runtime.replay_limit,
+                &mut runtime.transport,
+                &runtime.settings,
+            )
+            .await;
+        }
         runtime.drain_queue().await;
+        // G-181③ — the resize watch (ADR-0018's ≤50 ms TIOCGWINSZ
+        // seam): a changed size re-renders through the engine at the
+        // new geometry (the registered no-reflow deviation is closed).
+        if runtime.lifecycle.poll_resize() {
+            runtime.lifecycle.flush()?;
+        }
         // CONFIG-T4 — `busy()` (`footer.view.tsx:980`): a running turn
         // anchors the footer's work-spinner cell.
         runtime.lifecycle.pane.set_busy(runtime.transport.is_running());
@@ -334,6 +399,15 @@ struct Runtime {
     /// stream-v2.subagent.ts): every event folds through it beside
     /// the parent transport.
     subagents: super::transport::SubagentTracker,
+    /// G-181① — the bound preference repository
+    /// (`<state>/model.json`, the host `preferences` seam).
+    preferences: ModelPreferenceRepository,
+    /// The session's directory (the `/new` factory's location).
+    directory: String,
+    replay_limit: Option<usize>,
+    /// G-181④ — a reconnect marker arrived (the hydrate replay is
+    /// due on the next loop step).
+    needs_hydrate: bool,
 }
 
 impl Runtime {
@@ -433,6 +507,13 @@ impl Runtime {
     /// Drain arrived SSE events through the transport folds.
     fn pump_events(&mut self) {
         while let Ok(event) = self.events.try_recv() {
+            // G-181④ — the reconnect marker (never an SSE type): arm
+            // the hydrate replay; the ref reconnect path rehydrates
+            // BEFORE live events resume folding.
+            if event.get("type").and_then(Value::as_str) == Some(RECONNECT_MARKER) {
+                self.needs_hydrate = true;
+                continue;
+            }
             // TUI-17 — the tracker folds EVERY event (child sessions
             // and the parent's subagent tool calls included); a
             // changed tab/detail refreshes the pane's snapshot.
@@ -492,10 +573,43 @@ impl Runtime {
             }
             QueueAction::NewSession { unavailable: _ } => {
                 self.pending.remove(0);
-                // The session factory stays with the caller's
-                // `createSession` seam (`runtime.ts:933-1018`) — mini's
-                // Rust port keeps the boot session.
-                self.lifecycle.append(Commit::system("new sessions unavailable"));
+                // G-181② — the session factory is wired
+                // (`onNewSession: createSession`, `runtime.ts:933-1018`
+                // → `runtime.queue.ts:98-107`): `/new` creates the
+                // session server-side at the same location/agent and
+                // swaps the runtime's targets (a fresh transport +
+                // subagent tracker + history; the system row lands).
+                // Demo mode keeps the offline note.
+                if self.demo {
+                    self.lifecycle.append(Commit::system("new sessions unavailable"));
+                } else {
+                    match create_session(&self.client, &self.directory, self.lifecycle.pane.agent.as_deref())
+                        .await
+                    {
+                        Ok(new_id) => {
+                            self.session_id = new_id.clone();
+                            self.session_title = None;
+                            self.transport = TransportState::new(&new_id);
+                            self.subagents =
+                                super::transport::SubagentTracker::new(&new_id);
+                            self.queue = PromptQueue::new(true);
+                            self.history = PromptHistory::new();
+                            self.pending.clear();
+                            self.shown = false;
+                            self.turn_idle = false;
+                            self.lifecycle.pane.subagent_children = Vec::new();
+                            // `footer.append({ kind: "system", text:
+                            // `new session ${sessionID}` })`.
+                            self.lifecycle
+                                .append(Commit::system(&format!("new session {new_id}")));
+                        }
+                        Err(error) => {
+                            // The ref's failure arm: the phase hint +
+                            // an error commit (`runtime.ts:1011-1018`).
+                            self.lifecycle.append(Commit::error(&error));
+                        }
+                    }
+                }
             }
             QueueAction::Compact => {
                 self.pending.remove(0);
@@ -590,6 +704,11 @@ impl Runtime {
             observed_running = running;
             let _ = self.lifecycle.flush();
             tokio::time::sleep(TICK).await;
+        }
+        // G-181③ — the settle loop owns the footer through a turn;
+        // the resize watch runs here too.
+        if self.lifecycle.poll_resize() {
+            let _ = self.lifecycle.flush();
         }
         // CONFIG-T4 — `turn.duration` → `writeTurnSummary`
         // (footer.ts:455-470): the agent/model/duration summary row
@@ -810,9 +929,106 @@ fn footer_key_from_spec(spec: &str) -> Option<FooterKey> {
     }
 }
 
+/// G-181① — the boot model binding (`resolveVariant` +
+/// `addRecent`, `model-preference.ts:150-172`, consumed as
+/// `formatModelLabel(input.model, input.variant)` at
+/// `runtime.lifecycle.ts:214`): parse the resolved target's
+/// `provider/model` label, resolve the persisted variant override
+/// (the footer's model/variant switch reads the same document), and
+/// record the model in the recent list. A label without a `/` or an
+/// empty document keeps the label as-is.
+#[must_use]
+pub fn bind_model_preference(
+    preferences: &ModelPreferenceRepository,
+    model_label: Option<&str>,
+) -> Option<String> {
+    let label = model_label?;
+    let Some((provider, model)) = label.split_once('/') else {
+        return Some(label.to_owned());
+    };
+    if provider.is_empty() || model.is_empty() {
+        return Some(label.to_owned());
+    }
+    let target = super::model_pref::ModelPreferenceModel {
+        provider_id: provider.to_owned(),
+        model_id: model.to_owned(),
+    };
+    preferences.add_recent(&target);
+    // `formatModelLabel`'s variant suffix (`variant.shared.ts:21-29`).
+    match preferences.resolve_variant(&target) {
+        Some(variant) => Some(format!("{label} · {variant}")),
+        None => Some(label.to_owned()),
+    }
+}
+
+/// G-181② — the `/new` session factory (`createSession`,
+/// `runtime.ts:933-1018`): create the session server-side at the
+/// same location/agent (`session.create`), returning its id.
+async fn create_session(
+    client: &Client,
+    directory: &str,
+    agent: Option<&str>,
+) -> Result<String, String> {
+    let session = client
+        .session()
+        .create(&oc_client::types::SessionCreateBody {
+            agent: agent.map(str::to_owned),
+            location: Some(oc_client::types::LocationPublicRef {
+                directory: directory.to_owned(),
+            }),
+            ..Default::default()
+        })
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(session.id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// G-181① — the boot model binding: a persisted variant override
+    /// reaches the label (`resolveVariant`), the model lands in the
+    /// recent list (`addRecent`), and a label-less / slash-less /
+    /// override-less boot keeps the label unchanged.
+    #[test]
+    fn model_preference_binds_at_boot() {
+        let dir = std::env::temp_dir().join(format!("oc-mini-boot-{}-{}", std::process::id(), std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().subsec_nanos()));
+        let preferences = ModelPreferenceRepository::new(dir.join("model.json"));
+        let target = super::super::model_pref::ModelPreferenceModel {
+            provider_id: "anthropic".into(),
+            model_id: "claude".into(),
+        };
+        preferences.save_variant(&target, Some("think"));
+        assert_eq!(
+            bind_model_preference(&preferences, Some("anthropic/claude")).as_deref(),
+            Some("anthropic/claude · think"),
+            "the persisted variant override resolves into the label"
+        );
+        // addRecent recorded the resolved model.
+        assert_eq!(preferences.read().recent.first(), Some(&target));
+        // No override → the bare label; odd labels pass through.
+        preferences.save_variant(&target, None);
+        assert_eq!(
+            bind_model_preference(&preferences, Some("anthropic/claude")).as_deref(),
+            Some("anthropic/claude")
+        );
+        assert_eq!(bind_model_preference(&preferences, Some("label-only")).as_deref(), Some("label-only"));
+        assert_eq!(bind_model_preference(&preferences, Some("/")).as_deref(), Some("/"));
+        assert_eq!(bind_model_preference(&preferences, None), None);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// G-181④ — the reconnect vocabulary: the marker is private (no
+    /// SSE event carries it) and the cadence is the ref's 250 ms.
+    #[test]
+    fn reconnect_marker_and_cadence() {
+        assert_eq!(RECONNECT_MARKER, "__mini_reconnected");
+        assert_eq!(RECONNECT_DELAY, Duration::from_millis(250));
+        let marker = serde_json::json!({ "type": RECONNECT_MARKER });
+        assert!(marker.get("type").and_then(Value::as_str) == Some(RECONNECT_MARKER));
+    }
 
     /// G-68 (fix #1) — the replay's production wiring: projections
     /// land in the SAME reconciler the live stream folds through.
