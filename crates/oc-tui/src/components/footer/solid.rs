@@ -1,35 +1,39 @@
-//! Lane R2 step 2: the footer family's painters on opentui-solid —
-//! the M5 flat-units shape generalized to the WHOLE family.
+//! The footer family on the shared tree (D2.2 footer lane — the
+//! chrome/composer/transcript paradigm, ruling attempt 2 plan (e)).
 //!
-//! The footer painters were already op-shaped (they paint through
+//! The footer painters are op-shaped (they paint through
 //! [`Canvas`]'s `fill_bg`/`spans`/`spans_right` vocabulary), so the
-//! bridge is ONE shared substrate instead of one tree per surface:
-//! the Canvas now RECORDS its op stream beside painting, and
-//! [`canvas_frame_solid`] replays the ops as absolutely-positioned
-//! opentui elements — one 1-row fill BOX per `fill_bg`, one
-//! `wrapMode none` + `flexShrink 0` text per `spans` line, in PAINT
-//! ORDER (the raster z-orders siblings last-wins, exactly the
-//! Canvas's overwrite semantics). The tree paints through a real
-//! [`SolidRenderer`] (taffy + raster) into an `OptimizedBuffer`;
-//! `frame_from_buffer` (the M1 cell-copy bridge) produces the oc-tui
-//! [`Frame`] the compositor already consumes.
+//! bridge is ONE shared substrate: the recorded op stream is shaped
+//! into pre-placed paint units (ONE 1-row fill BOX per `fill_bg`,
+//! one `wrapMode none` + `flexShrink 0` text per `spans` line, in
+//! PAINT ORDER — the raster z-orders siblings last-wins, exactly the
+//! Canvas's overwrite semantics) and mounted as the `surface-footer`
+//! family wrapper's content subtree. Pixels reach the emitted
+//! oc-tui [`Frame`] through the ONE full-buffer compositor seam
+//! (`composite_chrome_tree` inside `render_app`); the old one-shot
+//! scratch renderer (`canvas_frame_solid` + its private
+//! `SolidRenderer` + `frame_from_buffer` copy) is retired.
 //!
 //! * **Transparent regions** (`clear_bg` — the composer textarea's
-//!   canonical bg `49`) cannot be expressed in the buffer: they are
-//!   applied as a bridge-level fixup (space cells inside the recorded
-//!   rect read bg `Default`), the same class as M1's glow ranges.
+//!   canonical bg `49`) cannot be expressed in the tree: they ride
+//!   as a [`ChromeStamp::Transparent`] seam stamp (blank cells inside
+//!   the rect reset their bg to Default — exactly the retired
+//!   bridge's post-copy fixup).
 //! * **Non-RGB colors** (indexed/default paints) fall back to the
-//!   hand-rolled path for the whole frame — the footer palette is
-//!   all-RGB (`FooterTheme::from_resolved`), so the fallback is
-//!   defensive only.
-//! * **Flag**: `OC_FOOTER_OPENTUI` — default ON since 6b61aca (the
-//!   R2 parity proof); `=0` forces the hand-rolled path during the
-//!   one-release probation window (read once per process at first
-//!   paint — the M1 protocol).
+//!   hand-rolled op replay for the whole body — the footer palette
+//!   is all-RGB (`FooterTheme::from_resolved`), so the fallback is
+//!   defensive only (it rides the seam's `mount_frame_overlay` slot,
+//!   the same z the wrapper occupies).
+//! * The MAIN footer row (the prompt composer's hint row) is the
+//!   composer family's wrapper (the composer lane, M3) — this lane
+//!   owns the family's BLOCKER bodies (permission/form) and the
+//!   picker PANEL bodies that the old `App::frame` pasted over the
+//!   composed frame.
 //!
-//! Parity: every `*_canvas` builder in the family has a cell-for-cell
-//! unit gate in this module's tests (`solid_footer_*_equals_the_old_
-//! renderer`) over the golden fixtures' scenario matrices.
+//! Parity: every `*_canvas` builder in the family keeps a
+//! cell-for-cell unit gate in this module's tests
+//! (`solid_footer_*_equals_the_old_renderer`) over the golden
+//! fixtures' scenario matrices, through the headless twin seam.
 
 // Terminal dimensions/colors are bounded usize→f32 casts (taffy
 // points), the same allowance the other solid surfaces carry.
@@ -37,44 +41,25 @@
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::cast_sign_loss)]
 
-use std::sync::OnceLock;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use opentui_core::Rgba;
-use opentui_core::renderer::CliRendererConfig;
 use opentui_core::styled_text::{StyledText, TextChunk};
-use opentui_solid::{Children, Element, PropValue, SolidRenderer, box_, text};
+use opentui_solid::builder::ForItemSource;
+use opentui_solid::element::ForItem;
+use opentui_solid::element::PropValue;
+use opentui_solid::reactive::Reactive;
+use opentui_solid::{Element, Signal, box_, for_list, map, text};
 
 use super::canvas::{Canvas, CanvasOp, FILL_BG};
-use crate::components::session_tabs_solid::frame_from_buffer;
+use crate::components::chrome_solid::{
+    ChromeStamp, composite_chrome_tree, family_wrapper_live, mount_family_wrapper, reset_hub,
+};
 use crate::render::{CellColor, Frame};
 
-/// `OC_FOOTER_OPENTUI` — read once per process (the M1 protocol: a
-/// running session never switches renderers). Default ON since
-/// commit 6b61aca (the R2 parity proof); `=0` forces the hand-rolled
-/// path during the one-release probation window.
-fn solid_enabled() -> bool {
-    static FLAG: OnceLock<bool> = OnceLock::new();
-    *FLAG.get_or_init(|| {
-        std::env::var("OC_FOOTER_OPENTUI").map_or(true, |value| value.trim() != "0")
-    })
-}
-
-/// The family's dispatch seam: every `render_*` fn in the footer
-/// family finishes through here. Default (solid ON) replays the
-/// recorded op stream through the opentui-solid tree; `OC_FOOTER_OPENTUI=0`
-/// keeps the hand-rolled Canvas path byte-for-byte (probation rollback).
-#[must_use]
-pub fn finish(canvas: Canvas) -> Frame {
-    if !solid_enabled() {
-        return canvas.into_frame();
-    }
-    let (width, height) = canvas.dims();
-    let ops = canvas.ops().to_vec();
-    canvas_frame_solid(&ops, width, height)
-}
-
 // ---------------------------------------------------------------------------
-// the op → element replay
+// colors + chunk helpers
 // ---------------------------------------------------------------------------
 
 /// The dump-harness fill as an opentui color.
@@ -92,25 +77,43 @@ fn hex(color: Rgba) -> String {
 fn rgba(color: CellColor) -> Option<Rgba> {
     match color {
         CellColor::Rgb(r, g, b) => Some(Rgba::rgb(r, g, b)),
-        // Indexed/default paints keep the hand-rolled path (the
+        // Indexed/default paints keep the hand-rolled replay (the
         // footer palette is all-RGB; this is defensive).
         CellColor::Indexed(_) | CellColor::Default => None,
     }
 }
 
-/// Replay the Canvas op stream through a one-shot opentui-solid
-/// render (the M6 farewell mount shape) and copy the cells into an
-/// oc-tui [`Frame`].
-#[must_use]
-#[allow(clippy::too_many_lines, clippy::type_complexity)] // one bridge, the M5 merge bake inline
-pub fn canvas_frame_solid(ops: &[CanvasOp], width: usize, height: usize) -> Frame {
-    if width == 0 || height == 0 {
-        return Frame { cells: vec![vec![]; height], width, height, clusters: None };
-    }
-    // Translate every op; an untranslatable color keeps the old path
-    // (never triggered by the family's palette).
-    let mut fills: Vec<(usize, usize, usize, Option<Rgba>)> = Vec::new();
-    let mut texts: Vec<(usize, usize, StyledText)> = Vec::new();
+// ---------------------------------------------------------------------------
+// inputs (the op stream → paint units)
+// ---------------------------------------------------------------------------
+
+/// One placed paint unit — a pre-split styled LINE (text) or a
+/// 1-row background FILL — at body-local absolute coordinates, in
+/// paint order (the raster z-orders siblings last-wins = the
+/// Canvas's overwrite semantics).
+#[derive(Debug, Clone)]
+struct FooterUnit {
+    /// `f{op}` fill / `t{op}` text / `r{op}.{run}` restore — stable
+    /// across frames for the same op index (the For reconciles on
+    /// it; a body change patches content under the same keys).
+    key: String,
+    left: usize,
+    top: usize,
+    body: UnitBody,
+}
+
+#[derive(Debug, Clone)]
+enum UnitBody {
+    Text(StyledText),
+    Fill { width: usize, color: Rgba },
+}
+
+/// Shape the Canvas op stream into the wrapper's paint units plus
+/// the seam stamps (transparent `clear_bg` rects — the retired
+/// bridge's post-copy fixup, kept as stamps so the tree stays
+/// declarative). `None` = an untranslatable color keeps the
+/// hand-rolled replay (never triggered by the family's palette).
+fn shape_ops(ops: &[CanvasOp]) -> Option<(Vec<FooterUnit>, Vec<ChromeStamp>)> {
     // The MERGE shadow (the M5 sidebar rule): the old `fill_bg` only
     // overwrites the CELL BACKGROUND — glyphs an earlier span painted
     // under the rect survive with their fg/attrs. The raster's box
@@ -118,24 +121,23 @@ pub fn canvas_frame_solid(ops: &[CanvasOp], width: usize, height: usize) -> Fram
     // a text element AFTER the fill (same DOM order trick as M2's
     // footer-overwrites-title). The shadow tracks the glyph cells in
     // paint order (a later span REPLACES an earlier glyph).
-    let mut glyphs: Vec<Vec<Option<(char, CellColor, u32)>>> = vec![vec![None; width]; height];
-    let mut restores: Vec<Vec<(usize, StyledText)>> = Vec::new();
+    let mut glyphs: std::collections::HashMap<(usize, usize), (char, CellColor, u32)> =
+        std::collections::HashMap::new();
     let note_span = |x: usize,
                      y: usize,
                      spans: &[super::canvas::Span],
-                     glyphs: &mut Vec<Vec<Option<(char, CellColor, u32)>>>| {
+                     glyphs: &mut std::collections::HashMap<(usize, usize), (char, CellColor, u32)>| {
         let mut x = x;
         for span in spans {
             for atom in crate::wrap::flatten(&span.text, crate::style::Style::new()) {
-                if let Some(row) = glyphs.get_mut(y) {
-                    if let Some(slot) = row.get_mut(x) {
-                        *slot = Some((
-                            atom.text.chars().next().unwrap_or(' '),
-                            span.fg,
-                            u32::from(span.bold),
-                        ));
-                    }
-                }
+                glyphs.insert(
+                    (x, y),
+                    (
+                        atom.text.chars().next().unwrap_or(' '),
+                        span.fg,
+                        u32::from(span.bold),
+                    ),
+                );
                 x += atom.width.max(1);
             }
         }
@@ -143,17 +145,19 @@ pub fn canvas_frame_solid(ops: &[CanvasOp], width: usize, height: usize) -> Fram
     let restore_chunks = |x0: usize,
                           y: usize,
                           w: usize,
-                          glyphs: &Vec<Vec<Option<(char, CellColor, u32)>>>,
+                          glyphs: &std::collections::HashMap<
+        (usize, usize),
+        (char, CellColor, u32),
+    >,
                           bg: CellColor|
      -> Vec<(usize, StyledText)> {
         // Contiguous runs of surviving glyphs, each one text element
         // (explicit chunk bg = the fill's bg).
         let Some(rgba_bg) = rgba(bg) else { return Vec::new() };
         let mut runs: Vec<(usize, StyledText)> = Vec::new();
-        let Some(row) = glyphs.get(y) else { return runs };
         let mut index = x0;
-        while index < x0 + w && index < row.len() {
-            let Some((_ch, fg, attrs)) = row[index] else {
+        while index < x0 + w {
+            let Some(&(_ch, fg, attrs)) = glyphs.get(&(index, y)) else {
                 index += 1;
                 continue;
             };
@@ -161,12 +165,12 @@ pub fn canvas_frame_solid(ops: &[CanvasOp], width: usize, height: usize) -> Fram
             let mut chars = String::new();
             let run_fg = fg;
             let run_attrs = attrs;
-            while index < x0 + w && index < row.len() {
-                match row[index] {
-                    Some((next_ch, next_fg, next_attrs))
+            while index < x0 + w {
+                match glyphs.get(&(index, y)) {
+                    Some(&(_, next_fg, next_attrs))
                         if next_fg == run_fg && next_attrs == run_attrs =>
                     {
-                        chars.push(next_ch);
+                        chars.push(glyphs[&(index, y)].0);
                         index += 1;
                     }
                     Some(_) | None => break,
@@ -187,23 +191,48 @@ pub fn canvas_frame_solid(ops: &[CanvasOp], width: usize, height: usize) -> Fram
         }
         runs
     };
-    for op in ops {
+    let mut units: Vec<FooterUnit> = Vec::with_capacity(ops.len());
+    let mut stamps: Vec<ChromeStamp> = Vec::new();
+    for (index, op) in ops.iter().enumerate() {
         match op {
             CanvasOp::Fill { y, x, width: w, bg } => {
                 if *bg == CellColor::Default {
-                    // A transparent region: paint nothing in the
-                    // tree, fix the cells up after the copy.
-                    fills.push((*x, *y, *w, None));
+                    // A transparent region: the tree paints nothing;
+                    // the seam stamp resets blank cells' bg to Default
+                    // (the retired bridge's fixup, verbatim).
+                    stamps.push(ChromeStamp::Transparent {
+                        left: *x,
+                        top: *y,
+                        width: *w,
+                    });
                 } else {
-                    fills.push((*x, *y, *w, rgba(*bg)));
+                    let Some(color) = rgba(*bg) else { return None };
+                    units.push(FooterUnit {
+                        key: format!("f{index}"),
+                        left: *x,
+                        top: *y,
+                        body: UnitBody::Fill { width: *w, color },
+                    });
                 }
-                restores.push(restore_chunks(*x, *y, *w, &glyphs, *bg));
+                // The surviving glyphs ride OVER the fill (the old
+                // `fill_bg`'s bg-only merge).
+                for (run, (start, content)) in restore_chunks(*x, *y, *w, &glyphs, *bg)
+                    .into_iter()
+                    .enumerate()
+                {
+                    units.push(FooterUnit {
+                        key: format!("r{index}.{run}"),
+                        left: start,
+                        top: *y,
+                        body: UnitBody::Text(content),
+                    });
+                }
             }
             CanvasOp::Spans { y, x, spans } => {
                 let mut chunks: Vec<TextChunk> = Vec::new();
                 for span in spans {
                     let (Some(fg), Some(bg)) = (rgba(span.fg), rgba(span.bg)) else {
-                        return fallback_frame(ops, width, height);
+                        return None;
                     };
                     chunks.push(TextChunk {
                         text: span.text.clone(),
@@ -216,105 +245,21 @@ pub fn canvas_frame_solid(ops: &[CanvasOp], width: usize, height: usize) -> Fram
                     });
                 }
                 note_span(*x, *y, spans, &mut glyphs);
-                texts.push((*x, *y, StyledText::new(chunks)));
+                units.push(FooterUnit {
+                    key: format!("t{index}"),
+                    left: *x,
+                    top: *y,
+                    body: UnitBody::Text(StyledText::new(chunks)),
+                });
             }
         }
     }
-    // The element stream: fills and texts INTERLEAVED in paint order
-    // (the raster's sibling z-order = DOM order = the Canvas's
-    // overwrite semantics).
-    let mut children: Vec<Element> = Vec::with_capacity(ops.len());
-    let mut fill_iter = fills.iter();
-    let mut text_iter = texts.iter();
-    let mut restore_iter = restores.iter();
-    for op in ops {
-        match op {
-            CanvasOp::Fill { .. } => {
-                let Some(&(x, y, w, bg)) = fill_iter.next() else { continue };
-                let mut builder = box_()
-                    .position("absolute")
-                    .left(x as f32)
-                    .top(y as f32)
-                    .width(w as f32)
-                    .height(1.0)
-                    .border(false);
-                if let Some(bg) = bg {
-                    builder = builder.background_color(hex(bg));
-                }
-                children.push(builder.into_element());
-                // The surviving glyphs ride OVER the fill (the old
-                // `fill_bg`'s bg-only merge).
-                if let Some(restores) = restore_iter.next() {
-                    for &(start, ref content) in restores {
-                        children.push(
-                            text()
-                                .position("absolute")
-                                .left(start as f32)
-                                .top(y as f32)
-                                .wrap_mode("none")
-                                .flex_shrink(0.0)
-                                .content(PropValue::Styled(content.clone()))
-                                .into_element(),
-                        );
-                    }
-                }
-            }
-            CanvasOp::Spans { .. } => {
-                let Some(&(x, y, ref content)) = text_iter.next() else { continue };
-                children.push(
-                    text()
-                        .position("absolute")
-                        .left(x as f32)
-                        .top(y as f32)
-                        .wrap_mode("none")
-                        .flex_shrink(0.0)
-                        .content(PropValue::Styled(content.clone()))
-                        .into_element(),
-                );
-            }
-        }
-    }
-    let root = box_()
-        .position("absolute")
-        .left(0.0)
-        .top(0.0)
-        .width(width as f32)
-        .height(height as f32)
-        .border(false)
-        .background_color(hex(fill_bg()))
-        .children(Children::Static(children))
-        .into_element();
-    let renderer = SolidRenderer::new(CliRendererConfig {
-        width: width as u32,
-        height: height as u32,
-        background_color: fill_bg(),
-        ..CliRendererConfig::default()
-    });
-    let mut renderer = renderer;
-    renderer.render_root(root);
-    renderer.flush();
-    let mut frame = frame_from_buffer(&renderer.renderer.current_render_buffer, &[]);
-    // Transparent-region fixup: space cells the tree never painted a
-    // chunk over keep the root's fill bg — the old `clear_bg` leaves
-    // them at canonical bg `49`.
-    for &(x, y, w, none) in &fills {
-        if none.is_some() {
-            continue;
-        }
-        if let Some(row) = frame.cells.get_mut(y) {
-            for cell in row.iter_mut().skip(x).take(w) {
-                if cell.ch == ' ' && cell.attrs == 0 {
-                    cell.bg = CellColor::Default;
-                }
-            }
-        }
-    }
-    frame
+    Some((units, stamps))
 }
 
 /// The defensive fallback: an untranslatable op keeps the
 /// hand-rolled bytes (replayed through a private Canvas — the op
-/// stream IS the painter's semantics).
+/// stream IS the painter's semantics; no renderer involved).
 fn fallback_frame(ops: &[CanvasOp], width: usize, height: usize) -> Frame {
     let mut canvas = Canvas::new(width, height);
     for op in ops {
@@ -324,6 +269,268 @@ fn fallback_frame(ops: &[CanvasOp], width: usize, height: usize) -> Frame {
         }
     }
     canvas.into_frame()
+}
+
+// ---------------------------------------------------------------------------
+// the element tree
+// ---------------------------------------------------------------------------
+
+/// `dyn_(src, to PropValue::Num)` — a usize-valued dynamic prop.
+fn dyn_num<S>(source: S) -> Rc<dyn opentui_solid::DynPropSource>
+where
+    S: Reactive<usize> + 'static,
+{
+    opentui_solid::dyn_(source, |value: &usize| PropValue::Num(*value as f32))
+}
+
+/// `dyn_(src, to PropValue::Color)` — an Rgb-valued dynamic prop.
+fn dyn_color<S>(source: S) -> Rc<dyn opentui_solid::DynPropSource>
+where
+    S: Reactive<Rgba> + 'static,
+{
+    opentui_solid::dyn_(source, |value: &Rgba| PropValue::Color(hex(*value)))
+}
+
+/// `dyn_(src, to PropValue::Styled)` — styled-chunk content.
+fn dyn_styled<S>(source: S) -> Rc<dyn opentui_solid::DynPropSource>
+where
+    S: Reactive<StyledText> + 'static,
+{
+    opentui_solid::dyn_(source, |value: &StyledText| PropValue::Styled(value.clone()))
+}
+
+/// One `For` item element: a text unit (absolute, natural width,
+/// pre-wrapped content — `wrapMode none` + `flexShrink 0` so nothing
+/// re-wraps or shrinks) or a fill rect (absolute box, explicit
+/// points), in paint order. The unit's KIND is baked into its key
+/// (`f`/`t`/`r` prefix) — stable per identity, so the element type
+/// is chosen once at mount.
+fn unit_element(inputs: &Signal<Vec<FooterUnit>>, key: &str) -> Element {
+    let key = key.to_owned();
+    let is_fill = inputs
+        .get()
+        .iter()
+        .any(|unit| unit.key == key && matches!(unit.body, UnitBody::Fill { .. }));
+    let left_of = {
+        let key = key.clone();
+        move |units: &Vec<FooterUnit>| {
+            units.iter().find(|unit| unit.key == key).map_or(0, |unit| unit.left)
+        }
+    };
+    let top_of = {
+        let key = key.clone();
+        move |units: &Vec<FooterUnit>| {
+            units.iter().find(|unit| unit.key == key).map_or(0, |unit| unit.top)
+        }
+    };
+    if is_fill {
+        box_()
+            .position("absolute")
+            .dyn_prop("left", dyn_num(map(inputs.clone(), left_of)))
+            .dyn_prop("top", dyn_num(map(inputs.clone(), top_of)))
+            .dyn_prop(
+                "width",
+                dyn_num(map(inputs.clone(), {
+                    let key = key.clone();
+                    move |units: &Vec<FooterUnit>| {
+                        units.iter().find(|unit| unit.key == key).map_or(0, |unit| match &unit.body
+                        {
+                            UnitBody::Fill { width, .. } => *width,
+                            UnitBody::Text(_) => 0,
+                        })
+                    }
+                })),
+            )
+            .dyn_prop(
+                "backgroundColor",
+                dyn_color(map(inputs.clone(), {
+                    let key = key.clone();
+                    move |units: &Vec<FooterUnit>| {
+                        units.iter().find(|unit| unit.key == key).map_or(fill_bg(), |unit| {
+                            match &unit.body {
+                                UnitBody::Fill { color, .. } => *color,
+                                UnitBody::Text(_) => fill_bg(),
+                            }
+                        })
+                    }
+                })),
+            )
+            .into_element()
+    } else {
+        text()
+            .position("absolute")
+            .wrap_mode("none")
+            .flex_shrink(0.0)
+            .dyn_prop("left", dyn_num(map(inputs.clone(), left_of)))
+            .dyn_prop("top", dyn_num(map(inputs.clone(), top_of)))
+            .dyn_prop(
+                "content",
+                dyn_styled(map(inputs.clone(), {
+                    let key = key.clone();
+                    move |units: &Vec<FooterUnit>| {
+                        units.iter().find(|unit| unit.key == key).map_or_else(
+                            || StyledText::new(Vec::new()),
+                            |unit| match &unit.body {
+                                UnitBody::Text(chunks) => chunks.clone(),
+                                UnitBody::Fill { .. } => StyledText::new(Vec::new()),
+                            },
+                        )
+                    }
+                })),
+            )
+            .into_element()
+    }
+}
+
+/// The footer body's content subtree: a positioned root carrying
+/// the canvas's terminal fill (the dump-harness base — every cell
+/// inside the wrapper's rect is covered ink, never a hole), one
+/// flat keyed `For` of the body's absolute units. Geometry bakes at
+/// build time (the mount key); every content slot is a dyn prop
+/// over the inputs signal.
+fn footer_element(inputs: &Signal<Vec<FooterUnit>>, width: usize, height: usize) -> Element {
+    let source = ForItemSource {
+        source: map(inputs.clone(), |units: &Vec<FooterUnit>| {
+            units
+                .iter()
+                .map(|unit| ForItem {
+                    key: unit.key.clone(),
+                    value: PropValue::Str(unit.key.clone()),
+                })
+                .collect::<Vec<ForItem>>()
+        }),
+    };
+    let item_inputs = inputs.clone();
+    let units = for_list(Rc::new(source), move |item: &ForItem, _index: usize| {
+        unit_element(&item_inputs, &item.key)
+    });
+    box_()
+        .width(width as f32)
+        .height(height as f32)
+        .position("relative")
+        .background_color(hex(fill_bg()))
+        .children_dyn(Rc::new(units))
+        .into_element()
+}
+
+// ---------------------------------------------------------------------------
+// the shared-tree mount (D2.2 footer lane — the chrome/composer/
+// transcript paradigm)
+// ---------------------------------------------------------------------------
+
+/// The footer family's seat under the shared tree's root (the
+/// skeleton table's index 3, after the composer): the bodies the
+/// old `App::frame` pasted AFTER `render_app` (over the composed
+/// chrome/transcript/composer pixels), so the wrapper sits above
+/// all three. Registered deviation (bytes arbitrate): the dialog
+/// layer and the family-6 overlays (console/which-key/toast) paste
+/// AFTER the composite seam and so now paint OVER the footer bodies
+/// (today's paste order had the bodies last); no golden or PTY
+/// corpus observes the inverted cells, and the dialogs lane (family
+/// 5) seats above this wrapper by the same construction.
+const FOOTER_SKELETON_INDEX: usize = 3;
+
+/// The mounted footer body's reactive state, kept across frames so
+/// content changes (a moving selection, typed reject text) patch
+/// content dyn-props in place (the M2 rule); a geometry-key change
+/// (width × mount height — the resize ladder) rebuilds the
+/// wrapper's content subtree.
+struct FooterEntry {
+    signal: Signal<Vec<FooterUnit>>,
+    key: (usize, usize),
+}
+
+thread_local! {
+    /// The footer family's content state (one mount per
+    /// thread-process — the wrapper itself lives in the shared-tree
+    /// hub, `chrome_solid::mount_family_wrapper`).
+    static FOOTER_TREE: RefCell<Option<FooterEntry>> = const { RefCell::new(None) };
+}
+
+/// Sync the footer family's live body into the shared tree (the
+/// family's ONLY live mount entry — no Frame comes back; pixels
+/// reach the emitted frame through `composite_chrome_tree`, the
+/// single compositor seam inside `render_app`). The wrapper rect is
+/// the OLD paste site (`(0, size.1 - mount_height)`, the imperative
+/// source; resize patches via `set_prop`); the content subtree
+/// rebuilds only when the geometry key (width × mount height)
+/// changes. NOT calling this for a frame unmounts the wrapper at
+/// the seam (the old paste branches' else arms).
+pub(crate) fn mount_footer_ops(
+    ops: &[CanvasOp],
+    width: usize,
+    height: usize,
+    left: usize,
+    top: usize,
+) {
+    let Some((units, stamps)) = shape_ops(ops) else {
+        // Defensive only (the palette is all-RGB): the hand-rolled
+        // replay rides the seam's frame-overlay slot — the same z
+        // the wrapper occupies.
+        crate::components::chrome_solid::mount_frame_overlay(
+            "footer-fallback",
+            left,
+            top,
+            fallback_frame(ops, width, height),
+        );
+        return;
+    };
+    let inputs = units;
+    let key = (width, height);
+    // Rebuild iff the geometry key changed OR the wrapper left the
+    // tree (a hub reset between harness frames, a seam prune).
+    let rebuild = !family_wrapper_live("footer")
+        || FOOTER_TREE.with_borrow(|slot| !matches!(slot, Some(entry) if entry.key == key));
+    let (content, content_key) = if rebuild {
+        let signal = Signal::new(inputs.clone());
+        let element = footer_element(&signal, width, height);
+        FOOTER_TREE.with_borrow_mut(|slot| {
+            *slot = Some(FooterEntry { signal, key });
+        });
+        (Some(element), Some(format!("footer-content@{width}x{height}")))
+    } else {
+        FOOTER_TREE.with_borrow(|slot| {
+            slot.as_ref().expect("checked above").signal.set(inputs);
+        });
+        (None, None)
+    };
+    mount_family_wrapper(
+        "footer",
+        FOOTER_SKELETON_INDEX,
+        left,
+        top,
+        width,
+        height,
+        content_key,
+        content,
+        &stamps,
+    );
+}
+
+/// The family's dispatch seam: every `render_*` fn in the footer
+/// family finishes through here — the HEADLESS twin (the golden/
+/// unit/mini harness shape): mount ONE body into a fresh hub and
+/// read it back as a standalone Frame (composite over a blank frame
+/// of its own rect) — same raster, same cell semantics, by
+/// construction.
+#[must_use]
+pub fn finish(canvas: Canvas) -> Frame {
+    let (width, height) = canvas.dims();
+    ops_frame(canvas.ops(), width, height)
+}
+
+/// [`finish`]'s op-level entry (the parity gates' and the frame
+/// budget's instrument).
+#[must_use]
+pub(crate) fn ops_frame(ops: &[CanvasOp], width: usize, height: usize) -> Frame {
+    if width == 0 || height == 0 {
+        return Frame { cells: vec![vec![]; height], width, height, clusters: None };
+    }
+    reset_hub();
+    mount_footer_ops(ops, width, height, 0, 0);
+    let mut frame = crate::components::chrome_solid::blank_frame(width, height);
+    composite_chrome_tree(&mut frame);
+    frame
 }
 
 #[cfg(test)]
@@ -348,7 +555,8 @@ pub(crate) fn first_divergence(old: &Frame, solid: &Frame) -> Option<(usize, usi
 
 // ---------------------------------------------------------------------------
 // the parity gates — cell for cell against the hand-rolled painters,
-// over the golden fixtures' scenario matrices (lane R2 step 2)
+// over the golden fixtures' scenario matrices (lane R2 step 2), now
+// through the shared-tree twin seam
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
@@ -372,7 +580,7 @@ mod tests {
     fn assert_parity(id: &str, canvas: Canvas) {
         let (width, height) = canvas.dims();
         let old = canvas.clone().into_frame();
-        let solid = canvas_frame_solid(canvas.ops(), width, height);
+        let solid = ops_frame(canvas.ops(), width, height);
         assert_eq!(
             (old.width, old.height),
             (solid.width, solid.height),
@@ -650,5 +858,102 @@ mod tests {
                 );
             }
         }
+    }
+
+    // -- the D2.2 seam gates (the chrome/composer/transcript set) ----
+
+    fn permission_canvas() -> Canvas {
+        let theme = FooterTheme::fallback_dark();
+        let request = permission("edit");
+        let state = create_permission_body_state(&request);
+        permission_body_canvas(&request, &state, 80, 16, &theme)
+    }
+
+    /// D2.2's mixed-window hole rule, pinned at the footer family's
+    /// own seam boundary: pixels OUTSIDE the wrapper's rect survive
+    /// the composite (the not-yet-migrated hand painters), pixels
+    /// INSIDE are the tree's (the terminal-fill root covers,
+    /// exactly the old paste).
+    #[test]
+    fn seam_covers_the_rect_and_keeps_outside_hand_pixels() {
+        let canvas = permission_canvas();
+        reset_hub();
+        mount_footer_ops(canvas.ops(), 80, 16, 10, 4);
+        let mut frame = crate::components::chrome_solid::blank_frame(100, 24);
+        // Hand-paint a glyph EVERYWHERE (the stand-in for every
+        // unmigrated Frame painter; '#' appears in no fixture glyph).
+        for row in &mut frame.cells {
+            for cell in row.iter_mut() {
+                cell.ch = '#';
+            }
+        }
+        composite_chrome_tree(&mut frame);
+        for y in 4..20usize {
+            for x in 10..90usize {
+                assert_ne!(frame.cell(y, x).ch, '#', "hand pixel survived inside at ({y},{x})");
+            }
+        }
+        for y in 0..24usize {
+            for x in 0..100usize {
+                let inside = (4..20).contains(&y) && (10..90).contains(&x);
+                if !inside {
+                    assert_eq!(frame.cell(y, x).ch, '#', "hand pixel lost outside at ({y},{x})");
+                }
+            }
+        }
+        reset_hub();
+    }
+
+    /// The scheduler-fairness gate for the footer family (the hub's
+    /// generic guard): N syncs in one frame batch → exactly ONE
+    /// flush at the seam.
+    #[test]
+    fn footer_syncs_flush_once_at_the_seam() {
+        reset_hub();
+        let canvas = permission_canvas();
+        for _ in 0..3 {
+            mount_footer_ops(canvas.ops(), 80, 16, 0, 8);
+        }
+        let hub = crate::components::chrome_solid::hub_for(80, 24);
+        assert!(
+            hub.borrow_mut().flush_if_pending(),
+            "a pending sync batch flushes exactly once"
+        );
+        assert!(
+            !hub.borrow_mut().flush_if_pending(),
+            "a second flush with no intervening sync is a no-op (no double raster)"
+        );
+        reset_hub();
+    }
+
+    /// The footer is a geometry-reactive family: a resize (the width
+    /// ladder / the mount-height clamp against `size.1`) rebuilds
+    /// the content subtree on the geometry key, and the wrapper's
+    /// rect follows via `set_prop` — pinned by painting successive
+    /// geometries through the live mount (no hub reset between).
+    #[test]
+    fn resize_follows_the_geometry_key() {
+        reset_hub();
+        let theme = FooterTheme::fallback_dark();
+        let request = permission("read");
+        let state = create_permission_body_state(&request);
+        for (width, height, top) in [(80usize, 16usize, 8usize), (40, 16, 8), (120, 12, 12)] {
+            let canvas = permission_body_canvas(&request, &state, width, height, &theme);
+            mount_footer_ops(canvas.ops(), width, height, 0, top);
+            let mut frame = crate::components::chrome_solid::blank_frame(width, 24);
+            composite_chrome_tree(&mut frame);
+            // The wrapper covers its rect: some mount row carries the
+            // body's ink, and the rows OUTSIDE the rect stay blank
+            // (the hole rule — the base survives untouched).
+            let inside_ink = (top..top + height)
+                .any(|y| (0..width).any(|x| frame.cell(y, x).ch != ' '));
+            assert!(inside_ink, "the body painted at {width}x{height}");
+            for y in (0..top).chain(top + height..24) {
+                for x in 0..width {
+                    assert_eq!(frame.cell(y, x).ch, ' ', "ink outside the rect at ({y},{x})");
+                }
+            }
+        }
+        reset_hub();
     }
 }
