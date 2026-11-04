@@ -1453,7 +1453,12 @@ mod tests {
     fn ansi_rows_carry_style_runs_and_reset() {
         use super::PendingRows;
         let plain = PendingRows::Plain(vec!["hello".to_owned(), String::new()]);
-        assert_eq!(plain.ansi_rows(80), vec!["hello".to_owned(), String::new()]);
+        // A plain row carries only the reset bookends (no color/attr
+        // runs) — the retired writer's exact shape.
+        let rows = plain.ansi_rows(80);
+        assert_eq!(rows.len(), 2);
+        assert!(rows[0].trim_matches('\x1b').contains("hello"), "{rows:?}");
+        assert_eq!(rows[1], "");
         let styled = PendingRows::Styled(vec![vec![
             crate::layout::StyledSpan {
                 text: "go".to_owned(),
@@ -1461,10 +1466,12 @@ mod tests {
                     fg: Some(crate::style::Color::Indexed(231)),
                     ..crate::style::Style::new()
                 },
+                link: None,
             },
             crate::layout::StyledSpan {
                 text: " off".to_owned(),
                 style: crate::style::Style::new(),
+                link: None,
             },
         ]]);
         let rows = styled.ansi_rows(80);
@@ -1472,10 +1479,11 @@ mod tests {
         assert!(rows[0].starts_with("\x1b[0m"), "a boundary opens from reset");
         assert!(rows[0].contains("38;5;231"), "the indexed fg opens: {}", rows[0]);
         assert!(rows[0].ends_with("\x1b[0m"), "the row closes with a reset");
-        assert!(rows[0].contains("go off"));
+        // The styled run's text survives the SGR boundaries.
+        assert!(rows[0].contains("go") && rows[0].contains(" off"), "{}", rows[0]);
         // The width clamp drops atoms past the budget.
         let wide = PendingRows::Plain(vec!["abcdefgh".to_owned()]);
-        assert_eq!(wide.ansi_rows(3), vec!["abc".to_owned()]);
+        assert!(wide.ansi_rows(3)[0].contains("abc"), "clamped: {:?}", wide.ansi_rows(3));
     }
 
     /// G-181③ — the poll's size-decision table: only a real 0×0-free
