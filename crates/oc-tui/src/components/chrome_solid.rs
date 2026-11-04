@@ -379,6 +379,122 @@ thread_local! {
 }
 
 // ---------------------------------------------------------------------------
+// the shared tree hub (D2.2 first family — the chrome paradigm)
+// ---------------------------------------------------------------------------
+
+/// ONE `SolidRenderer` per thread-process (ruling #1, plan (a)): in
+/// the live app its `.renderer` IS the D2.1 scheduling `CliRenderer`
+/// (the pump's request_render/settle/resize/destroy all go through
+/// it — constructed here, attached to the session in `app::run`);
+/// headless frame builds (unit tests, goldens) lazily install their
+/// own. Zero surfaces mount in the mechanical commit — the
+/// per-surface `MOUNTS` path above stays untouched (zero diff); the
+/// chrome family's wrappers mount under the `surface-chrome` family
+/// container in the migration commit.
+///
+/// Family skeleton under the root (ruling #2 — z order IS child
+/// order, fixed indices, aligned to `App::frame`/paste_frame's z
+/// stack; later lanes mount their family wrapper at their index):
+///
+/// ```text
+/// root
+/// └─[0] surface-chrome   (this lane: devtools/stats/location-missing/
+/// │                       plugin pages/rail+tooltip/app-state overlays)
+/// └─[1] surface-composer  (D2.2 composer lane)
+/// └─[2] surface-transcript(D2.2 transcript lane)
+/// └─[3] surface-footer    (D2.2 footer lane)
+/// └─[4] surface-dialogs   (D2.2 dialogs lane)
+/// └─[5] surface-overlays  (toast/console/which-key — the paste_frame
+///                          overlay family, its own lane)
+/// ```
+///
+/// No `z` prop is introduced (ruling #2: an upstream API change would
+/// be a fresh divergence).
+pub(crate) struct ChromeTree {
+    solid: SolidRenderer,
+    /// The double-flush guard (ruling flag): at most ONE shared-tree
+    /// render per sync batch — a flush with no intervening sync is a
+    /// no-op, so the shared renderer can never double-rasterize a
+    /// frame (the "golden zero-diff but PTY timing divergence"
+    /// failure mode).
+    dirty: bool,
+}
+
+impl ChromeTree {
+    fn new(config: CliRendererConfig) -> Self {
+        Self { solid: SolidRenderer::new(config), dirty: false }
+    }
+
+    /// The pump's draw gate (D2.1b): the live CliRenderer's scheduler.
+    pub(crate) fn request_render(&mut self) {
+        self.solid.renderer.request_render();
+    }
+
+    /// `settle(1)` paints exactly one frame per invalidation batch.
+    pub(crate) fn settle(&mut self, max_frames: u64) -> u64 {
+        self.solid.renderer.settle(max_frames)
+    }
+
+    pub(crate) fn resize(&mut self, width: u32, height: u32) {
+        self.solid.resize(width, height);
+    }
+
+    pub(crate) fn destroy(&mut self) {
+        self.solid.renderer.destroy();
+    }
+
+    /// Flush the shared reconciler iff a chrome sync left patches
+    /// pending — the once-per-batch boundary (ruling flag: the shared
+    /// flush rides after the D2.1 settle/request_render seam). Returns
+    /// whether a render happened.
+    pub(crate) fn flush_if_pending(&mut self) -> bool {
+        if !self.dirty {
+            return false;
+        }
+        self.dirty = false;
+        self.solid.flush();
+        true
+    }
+}
+
+thread_local! {
+    /// The per-thread shared-tree hub. The live app installs it at
+    /// boot (`install_live_hub`); headless frame builds fall back to
+    /// `hub_for`'s lazy mount sized to the frame being composed.
+    static HUB: RefCell<Option<Rc<RefCell<ChromeTree>>>> = const { RefCell::new(None) };
+}
+
+/// Install the LIVE hub in `app::run`: the returned handle's renderer
+/// is the D2.1 scheduling CliRenderer (config + session attach happen
+/// here, exactly where the bare renderer was built before).
+pub(crate) fn install_live_hub(
+    config: CliRendererConfig,
+    attach: impl FnOnce(&mut opentui_core::renderer::CliRenderer),
+) -> Rc<RefCell<ChromeTree>> {
+    let mut tree = ChromeTree::new(config);
+    attach(&mut tree.solid.renderer);
+    let handle = Rc::new(RefCell::new(tree));
+    HUB.with_borrow_mut(|slot| *slot = Some(Rc::clone(&handle)));
+    handle
+}
+
+/// The thread's hub, lazily sized for a headless frame build (grows
+/// by resize when a later surface needs a larger canvas — never
+/// shrinks within a build).
+pub(crate) fn hub_for(width: u32, height: u32) -> Rc<RefCell<ChromeTree>> {
+    let existing = HUB.with_borrow(|slot| slot.clone());
+    existing.unwrap_or_else(|| {
+        let handle = Rc::new(RefCell::new(ChromeTree::new(CliRendererConfig {
+            width: width.max(1),
+            height: height.max(1),
+            ..CliRendererConfig::default()
+        })));
+        HUB.with_borrow_mut(|slot| *slot = Some(Rc::clone(&handle)));
+        handle
+    })
+}
+
+// ---------------------------------------------------------------------------
 // the cell copy (raster → in-house Frame)
 // ---------------------------------------------------------------------------
 
@@ -714,6 +830,41 @@ pub(crate) fn chrome_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_hub_flushes_at_most_once_per_sync_batch() {
+        // The double-flush guard (ruling flag): the shared SolidRenderer
+        // renders exactly once per sync batch — a second flush with no
+        // intervening sync is a no-op, so no frame can double-rasterize.
+        let hub = hub_for(8, 2);
+        assert!(!hub.borrow_mut().flush_if_pending(), "nothing synced — no flush");
+        // Mark a sync pending (the chrome mounts do this on inputs.set);
+        // the first flush renders, the second without a new sync must not.
+        {
+            let mut tree = hub.borrow_mut();
+            tree.dirty = true;
+        }
+        assert!(hub.borrow_mut().flush_if_pending(), "pending sync — exactly one render");
+        assert!(
+            !hub.borrow_mut().flush_if_pending(),
+            "double flush is a no-op (the guard)"
+        );
+    }
+
+    #[test]
+    fn live_hub_install_reuses_the_scheduling_renderer() {
+        // Plan (a): the hub's `.renderer` IS the D2.1 live CliRenderer —
+        // install_live_hub hands the pump a handle whose scheduler is the
+        // one the session attached to (the attach seam runs inside).
+        let attached = std::cell::Cell::new(false);
+        let handle = install_live_hub(CliRendererConfig::default(), |_renderer| {
+            attached.set(true);
+        });
+        assert!(attached.get(), "the session attach ran against the hub renderer");
+        // The hub is the thread's shared hub (hub_for returns the same one).
+        let same = hub_for(4, 2);
+        assert!(Rc::ptr_eq(&handle, &same), "one hub per thread-process");
+    }
 
     #[test]
     fn overlapping_units_paint_in_list_order() {
