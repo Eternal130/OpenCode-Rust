@@ -1212,7 +1212,41 @@ pub fn render_app(store: &Store, theme: &crate::theme::ThemeState, size: (u16, u
                 crate::components::stats_page_solid::StatsPhaseView::Loaded(&poster_storage)
             }
         };
-        crate::components::stats_page_solid::render_stats_page_solid(view, &styles, size)
+        // D2.2: the stats page rides the shared chrome tree — the
+        // route base is the blank screen (today's page frame WAS the
+        // base; the tree's opaque page background covers it at the
+        // composite seam below).
+        crate::components::stats_page_solid::mount_stats_page_solid(view, &styles, size);
+        crate::components::chrome_solid::blank_frame(
+            usize::from(size.0).max(1),
+            usize::from(size.1).max(1),
+        )
+    } else if store.plugin_route_page().is_some() {
+        // D2.2: the plugin route page rides the shared chrome tree —
+        // the route REPLACES the visible screen (today's full-screen
+        // paste over the route base; the blank base + the tree's ink
+        // are the same bytes). Moved here from App::frame (its chrome
+        // supply branch is deleted).
+        let page = store.plugin_route_page().expect("checked above");
+        if page.missing {
+            crate::components::plugin_page_solid::mount_plugin_route_missing_solid(
+                &page.plugin_id,
+                &page.name,
+                &styles,
+                size,
+            );
+        } else {
+            crate::components::plugin_page_solid::mount_plugin_page_solid(
+                &page.title,
+                &page.rows,
+                &styles,
+                size,
+            );
+        }
+        crate::components::chrome_solid::blank_frame(
+            usize::from(size.0).max(1),
+            usize::from(size.1).max(1),
+        )
     } else {
         match store.route() {
             crate::store::Route::Home => crate::components::home::render_home(store, &styles, size),
@@ -1223,12 +1257,24 @@ pub fn render_app(store: &Store, theme: &crate::theme::ThemeState, size: (u16, u
     };
     // G-07 — the devtools bar paints the bottom row BEFORE overlays
     // (dialogs render above it, ref's z-order); zero-op disabled.
-    crate::components::devtools_solid::paint_devtools_bar_solid(
-        &mut frame,
+    // D2.2: the bar rides the shared chrome tree (mounted, not
+    // pasted).
+    crate::components::devtools_solid::mount_devtools_bar_solid(store, &styles, (size.0, size.1));
+    // D2.2: the tree-riding state overlays (the StartupLoading pill,
+    // the migration widget) mount BEFORE the composite seam — the
+    // chrome family's single z slot sits under the dialog layer (the
+    // ruling attempt-2 trade; registered deviation).
+    crate::components::overlays::mount_state_overlays(
         store,
         &styles,
-        (size.0, size.1),
+        usize::from(size.0),
+        usize::from(size.1),
     );
+    // The chrome family's SINGLE compositor seam (ruling attempt 2,
+    // plan (e)): one full-buffer walk of the shared tree over the
+    // frame — holes skip (unmigrated regions keep the hand-painted
+    // pixels), GridEmitter stays the sole byte emitter.
+    crate::components::chrome_solid::composite_chrome_tree(&mut frame);
     render_overlay(&mut frame, store, theme, size);
     frame
 }

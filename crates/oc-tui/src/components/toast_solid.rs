@@ -10,7 +10,7 @@
 //! cell-for-cell against [`super::toast::render_toast_over_blank`].
 
 use super::chrome_solid::{
-    chrome_cluster_units, chrome_frame, ChromeBody, ChromeChunk, ChromeUnit,
+    chrome_cluster_units, ChromeBody, ChromeChunk, ChromeUnit, overlay_frame,
 };
 use super::footer::canvas::{Canvas, FILL_FG};
 use super::footer::theme::{feedback_color, FooterTheme};
@@ -124,7 +124,7 @@ pub fn render_toast_over_blank_solid(
     // message overwrites the rail cell).
     let mount_width = panel_width.max(content_x + message_width).max(content_x + title_width);
     let panel =
-        chrome_frame("toast_panel", mount_width.max(1), rows.max(1), CellColor::Default, &units);
+        overlay_frame("toast_panel", mount_width.max(1), rows.max(1), CellColor::Default, &units);
 
     // Paste into the Canvas frame (the black prefill outside the
     // panel is the golden's own backdrop).

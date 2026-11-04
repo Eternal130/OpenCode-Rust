@@ -6,7 +6,7 @@
 //! with the resource's two interim states (`Gathering your stats…`,
 //! the error fallback).
 
-use super::chrome_solid::{chrome_frame, chrome_run_units};
+use super::chrome_solid::{chrome_mount, chrome_run_units, ChromeUnit};
 use super::stats_page::{Line, Poster, Run, RunStyle};
 use crate::render::CellColor;
 use crate::theme::ThemeStyles;
@@ -84,12 +84,7 @@ fn paint_line(
 /// The full page: the loading line, the error fallback, or the
 /// painted poster. `loaded` receives the poster model when the
 /// resource resolved.
-#[must_use]
-pub fn render_stats_page_solid(
-    phase: StatsPhaseView<'_>,
-    styles: &ThemeStyles,
-    size: (u16, u16),
-) -> crate::render::Frame {
+pub fn mount_stats_page_solid(phase: StatsPhaseView<'_>, styles: &ThemeStyles, size: (u16, u16)) {
     let (width, height) = (usize::from(size.0), usize::from(size.1));
     let bg = page_bg(styles);
     match phase {
@@ -106,7 +101,7 @@ pub fn render_stats_page_solid(
                 bg,
                 0,
             );
-            chrome_frame("stats_page", width.max(1), height.max(1), bg, &units)
+            mount_stats("stats_page", width, height, bg, &units)
         }
         StatsPhaseView::Failed => {
             let line = "Could not load stats. Reopen /stats to try again.";
@@ -114,21 +109,42 @@ pub fn render_stats_page_solid(
             let y = height / 2;
             let units =
                 chrome_run_units("stats.error", x, y, line, CellColor::from(styles.error), bg, 0);
-            chrome_frame("stats_page", width.max(1), height.max(1), bg, &units)
+            mount_stats("stats_page", width, height, bg, &units)
         }
-        StatsPhaseView::Loaded(poster) => render_poster_solid(poster, styles, size),
+        StatsPhaseView::Loaded(poster) => mount_poster_solid(poster, styles, size),
     }
+}
+
+/// The unit-test twin: the page's standalone Frame (the retired
+/// per-surface copy's test form).
+#[cfg(test)]
+#[must_use]
+pub(crate) fn stats_page_solid_frame(
+    phase: StatsPhaseView<'_>,
+    styles: &ThemeStyles,
+    size: (u16, u16),
+) -> crate::render::Frame {
+    super::chrome_solid::reset_hub();
+    mount_stats_page_solid(phase, styles, size);
+    let mut frame = super::chrome_solid::blank_frame(
+        usize::from(size.0).max(1),
+        usize::from(size.1).max(1),
+    );
+    super::chrome_solid::composite_chrome_tree(&mut frame);
+    frame
+}
+
+/// The shared mount tail: the page/poster wrapper covers the screen
+/// edge-to-edge with the page background (opaque — no holes).
+fn mount_stats(surface: &'static str, width: usize, height: usize, bg: CellColor, items: &[ChromeUnit]) {
+    chrome_mount(surface, 0, 0, width.max(1), height.max(1), bg, items, &[]);
 }
 
 /// The painted poster: rows stacked with the model's own gap rows,
 /// the block centered in the terminal (the scrollbox's centered
 /// content; paddingTop/Bottom 1).
 #[must_use]
-pub fn render_poster_solid(
-    poster: &Poster,
-    styles: &ThemeStyles,
-    size: (u16, u16),
-) -> crate::render::Frame {
+pub fn mount_poster_solid(poster: &Poster, styles: &ThemeStyles, size: (u16, u16)) {
     let (width, height) = (usize::from(size.0), usize::from(size.1));
     let bg = page_bg(styles);
     let content = poster.lines.len();
@@ -138,7 +154,7 @@ pub fn render_poster_solid(
     for (offset, line) in poster.lines.iter().enumerate() {
         paint_line(&mut units, line, x0, y0 + offset, poster.width, styles);
     }
-    chrome_frame("stats_poster", width.max(1), height.max(1), bg, &units)
+    mount_stats("stats_poster", width, height, bg, &units)
 }
 
 /// The page's three render states (the resource's shape,
@@ -199,7 +215,7 @@ mod tests {
         let stats = fixture();
         let poster = super::super::stats_page::stats_poster(&stats, (120, 40), "UTC");
         let frame =
-            render_stats_page_solid(StatsPhaseView::Loaded(&poster), &theme.styles(), (120, 40));
+            stats_page_solid_frame(StatsPhaseView::Loaded(&poster), &theme.styles(), (120, 40));
         let grid = frame.text_grid();
         let all = grid.join("\n");
         assert!(all.contains("opencode / stats"), "the header title");
@@ -217,9 +233,9 @@ mod tests {
     #[test]
     fn page_paints_loading_and_error_states() {
         let theme = ThemeState::v2_dark();
-        let loading = render_stats_page_solid(StatsPhaseView::Loading, &theme.styles(), (80, 24));
+        let loading = stats_page_solid_frame(StatsPhaseView::Loading, &theme.styles(), (80, 24));
         assert!(loading.text_grid().join("\n").contains("Gathering your stats…"));
-        let failed = render_stats_page_solid(StatsPhaseView::Failed, &theme.styles(), (80, 24));
+        let failed = stats_page_solid_frame(StatsPhaseView::Failed, &theme.styles(), (80, 24));
         assert!(failed
             .text_grid()
             .join("\n")

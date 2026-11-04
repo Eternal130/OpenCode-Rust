@@ -117,7 +117,7 @@ pub fn progress_count(progress: &MigrationProgress) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::overlays_solid::overlay_migration_solid;
+    
     use crate::reactive::Runtime;
     use crate::render::{Cell, CellColor, Frame};
     use crate::store::Store;
@@ -295,7 +295,14 @@ mod tests {
         store.set_migration_progress(Some(progress.clone()));
         let mut frame = frame_with(60, 12);
         if let Some(progress) = store.migration_progress() {
-            overlay_migration_solid(&mut frame, &styles, &progress, store.clock());
+            crate::components::overlays_solid::mount_migration_solid(
+                &styles,
+                &progress,
+                store.clock(),
+                frame.width,
+                frame.height,
+            );
+            crate::components::chrome_solid::composite_chrome_tree(&mut frame);
         }
         let row = frame.text_grid()[2].clone();
         assert!(row.contains("Migrating sessions 2/5"), "content row: {row}");
@@ -311,7 +318,14 @@ mod tests {
         store.set_migration_progress(None);
         let mut frame = frame_with(60, 12);
         if let Some(progress) = store.migration_progress() {
-            overlay_migration_solid(&mut frame, &styles, &progress, store.clock());
+            crate::components::overlays_solid::mount_migration_solid(
+                &styles,
+                &progress,
+                store.clock(),
+                frame.width,
+                frame.height,
+            );
+            crate::components::chrome_solid::composite_chrome_tree(&mut frame);
         }
         assert!(!frame.text_grid().join("\n").contains("Migrating sessions"));
     }

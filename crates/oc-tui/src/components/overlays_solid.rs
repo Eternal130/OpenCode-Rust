@@ -16,7 +16,9 @@
 //! Parity gates pin the composited frames cell-for-cell against the
 //! old painters ([`super::overlays`] + [`super::migration_overlay`]).
 
-use super::chrome_solid::{chrome_frame, chrome_run_units, ChromeBody, ChromeChunk, ChromeUnit};
+use super::chrome_solid::{
+    chrome_mount, chrome_run_units, overlay_frame, ChromeBody, ChromeChunk, ChromeUnit,
+};
 use super::migration_overlay::{progress_count, MigrationProgress};
 use crate::render::{CellColor, Frame};
 use crate::theme::ThemeStyles;
@@ -67,7 +69,7 @@ fn reconnecting_box(box_width: usize, styles: &ThemeStyles, elapsed_ms: u64) -> 
         raised,
         0,
     ));
-    chrome_frame("reconnecting_box", box_width.max(1), 4, CellColor::Default, &units)
+    overlay_frame("reconnecting_box", box_width.max(1), 4, CellColor::Default, &units)
 }
 
 /// The reconnecting overlay: the scrim blend (bridge math) + the
@@ -121,23 +123,24 @@ fn blend_to_black(color: CellColor, alpha: f64) -> CellColor {
     }
 }
 
-/// The `StartupLoading` pill at `bottom=1` — the new-path twin of
-/// [`super::overlays::overlay_startup_loading`].
-pub fn overlay_startup_loading_solid(
-    frame: &mut Frame,
+/// The `StartupLoading` pill at `bottom=1` — mounted into the shared
+/// chrome tree (D2.2): ONE opaque chunk row, so the tree fully covers
+/// the pill's rect (the old painter's row write).
+pub fn mount_startup_loading_solid(
     styles: &ThemeStyles,
     text: &str,
     elapsed_ms: u64,
+    width: usize,
+    height: usize,
 ) {
-    let width = frame.width;
-    if width < 4 || frame.height < 2 {
+    if width < 4 || height < 2 {
         return;
     }
     let spinner = spinner_frame(elapsed_ms);
     let label = format!("{spinner} {text}");
     let pill_width = label.chars().count() + 2;
     let left = width.saturating_sub(pill_width) / 2;
-    let row = frame.height - 2;
+    let row = height - 2;
     let raised = CellColor::from(styles.background_raised);
     let fg_muted = styles.text_muted.fg.map_or(CellColor::Default, CellColor::from);
     // One chunk: pads + label, the same muted-on-raised pair on
@@ -149,24 +152,19 @@ pub fn overlay_startup_loading_solid(
         top: 0,
         body: ChromeBody::Text(vec![ChromeChunk::new(pill, fg_muted, raised, 0)]),
     }];
-    let pill_frame = chrome_frame("startup_pill", pill_width.max(1), 1, CellColor::Default, &units);
-    for col in 0..pill_width.min(width.saturating_sub(left)) {
-        if let Some(slot) = frame.cells.get_mut(row).and_then(|line| line.get_mut(left + col)) {
-            *slot = pill_frame.cell(0, col);
-        }
-    }
+    chrome_mount("startup_pill", left, row, pill_width.min(width.saturating_sub(left)), 1, CellColor::Default, &units, &[]);
 }
 
-/// The migration widget — the new-path twin of
-/// [`super::migration_overlay::overlay_migration`].
-pub fn overlay_migration_solid(
-    frame: &mut Frame,
+/// The migration widget — mounted into the shared chrome tree (D2.2):
+/// three opaque raised rows fully cover the box's rect.
+pub fn mount_migration_solid(
     styles: &ThemeStyles,
     progress: &MigrationProgress,
     elapsed_ms: u64,
+    width: usize,
+    height: usize,
 ) {
-    let width = frame.width;
-    if width < 6 || frame.height < 4 {
+    if width < 6 || height < 4 {
         return;
     }
     let spinner = spinner_frame(elapsed_ms);
@@ -194,14 +192,14 @@ pub fn overlay_migration_solid(
     units.extend(chrome_run_units("mig.rail", 0, 1, "▎", info, raised, 0));
     units.extend(chrome_run_units("mig.rail", 0, 2, "▎", info, raised, 0));
     units.extend(chrome_run_units("mig.row", 3, 1, &content, info, raised, 0));
-    let mount = chrome_frame("migration_box", box_width.max(1), 3, CellColor::Default, &units);
-    for row in 0..3.min(frame.height.saturating_sub(1)) {
-        for col in 0..box_width.min(width.saturating_sub(left)) {
-            if let Some(slot) =
-                frame.cells.get_mut(1 + row).and_then(|line| line.get_mut(left + col))
-            {
-                *slot = mount.cell(row, col);
-            }
-        }
-    }
+    chrome_mount(
+        "migration_box",
+        left,
+        1,
+        box_width.min(width.saturating_sub(left)),
+        3.min(height.saturating_sub(1)),
+        CellColor::Default,
+        &units,
+        &[],
+    );
 }

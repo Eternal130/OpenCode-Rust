@@ -320,25 +320,6 @@ pub fn paint_rail_handle_hot(
     }
 }
 
-/// The compact hover tooltip (session-tabs.tsx:1240-1280): at
-/// `left = width`, `min(54, total − width)` wide, 4 rows — seam,
-/// title, detail, seam. It rides OUTSIDE the rail frame (over the
-/// content column) — handed back to the compositor.
-#[must_use]
-pub fn paint_rail_tooltip(
-    inputs: &RailInputs,
-    geometry: &RailGeometry,
-    styles: &ThemeStyles,
-) -> Option<(usize, Frame)> {
-    let (true, Some(view)) = (geometry.compact, inputs.tooltip) else {
-        return None;
-    };
-    let index =
-        inputs.tabs.iter().position(|tab| tab.tab.session_id == view.tab.session_id).unwrap_or(0);
-    let row = geometry.item_row(index).saturating_sub(1);
-    Some((row, crate::components::session_tabs_rail_solid::paint_tooltip_solid(view, styles)))
-}
-
 /// The walk body (the painter's own geometry decisions, verbatim) —
 /// fills + placed lines, NO frame assembly (the renderers own that).
 #[allow(clippy::too_many_lines)] // one arm per rail mode, mirroring the tsx body
@@ -700,7 +681,7 @@ fn push_half_row(
 mod tests {
     use super::*;
     use crate::components::session_tabs::TabStatus;
-    use crate::components::session_tabs_rail_solid::paint_vertical_rail_solid;
+    use crate::components::session_tabs_rail_solid::vertical_rail_solid_frames;
     use crate::store::{SessionTab, Unread};
 
     fn view(id: &str, title: &str) -> TabView {
@@ -774,7 +755,7 @@ mod tests {
         let tabs = [view("a", "Alpha")];
         let inputs = RailInputs { tabs: &tabs, active: Some("a"), ..RailInputs::default() };
         let geometry = RailGeometry::new(1, 42);
-        let (frame, tooltip) = paint_vertical_rail_solid(&inputs, &geometry, 12, &styles());
+        let (frame, tooltip) = vertical_rail_solid_frames(&inputs, &geometry, 12, &styles());
         let grid = frame.text_grid();
         assert!(grid[0].trim().is_empty(), "the pad row is blank");
         assert!(
@@ -804,7 +785,7 @@ mod tests {
         let tabs = [view("a", "Alpha")];
         let inputs = RailInputs { tabs: &tabs, active: Some("a"), ..RailInputs::default() };
         let geometry = RailGeometry::new(1, 6);
-        let (frame, tooltip) = paint_vertical_rail_solid(&inputs, &geometry, 10, &styles());
+        let (frame, tooltip) = vertical_rail_solid_frames(&inputs, &geometry, 10, &styles());
         let grid = frame.text_grid();
         assert!(grid[1].contains('⌕'), "the search button: {:?}", grid[1]);
         assert_eq!(grid[2], "▄▄▄▄▄▄", "the highlighted seam row");
@@ -813,7 +794,7 @@ mod tests {
         assert!(tooltip.is_none(), "no tooltip without a hover");
         // Unhighlighted seam: spaces.
         let inputs = RailInputs { tabs: &tabs, ..RailInputs::default() };
-        let (frame, _) = paint_vertical_rail_solid(&inputs, &geometry, 10, &styles());
+        let (frame, _) = vertical_rail_solid_frames(&inputs, &geometry, 10, &styles());
         assert_eq!(frame.text_grid()[2], "      ", "no highlight below the seam");
     }
 }

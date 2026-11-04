@@ -17,11 +17,28 @@ use crate::theme::ThemeStyles;
 /// Paint both overlays over the frame (the run loop's frame tail):
 /// `StartupLoading` (`zIndex` 5000) under `Reconnecting` (`zIndex` 10000),
 /// both above the dialog layer.
-pub fn overlay_app_state(frame: &mut Frame, store: &Store, styles: &ThemeStyles) {
+/// D2.2: the tree-riding state overlays (the StartupLoading pill +
+/// the migration widget) mount at render_app's tail, BEFORE the
+/// chrome composite seam — their pixels land under the dialog layer
+/// (the ruling's single-z-slot trade; today they painted at the very
+/// frame tail, above the family-6 overlays — registered deviation,
+/// co-visibility is rare/transient).
+pub fn mount_state_overlays(store: &Store, styles: &ThemeStyles, width: usize, height: usize) {
     let now = store.clock();
     if let Some(text) = store.startup_loading_text(now) {
-        super::overlays_solid::overlay_startup_loading_solid(frame, styles, text, now);
+        super::overlays_solid::mount_startup_loading_solid(styles, text, now, width, height);
     }
+    if let Some(progress) = store.migration_progress() {
+        super::overlays_solid::mount_migration_solid(styles, &progress, now, width, height);
+    }
+}
+
+/// The Frame-riding state overlay: the reconnecting scrim is a Frame
+/// BLEND (dims the live pixels under it) — it stays a Frame painter
+/// until the overlays lane mounts it as the tree's top child (ruling:
+/// no exception, its lane).
+pub fn overlay_app_state(frame: &mut Frame, store: &Store, styles: &ThemeStyles) {
+    let now = store.clock();
     if store.reconnecting_overlay_visible(now) {
         super::overlays_solid::overlay_reconnecting_solid(
             frame,
@@ -29,19 +46,12 @@ pub fn overlay_app_state(frame: &mut Frame, store: &Store, styles: &ThemeStyles)
             now.saturating_sub(store.connection_since()),
         );
     }
-    // G-06 — the migration widget shares the 10_000 z-layer and paints
-    // after (above) everything while the poll reports `running`.
-    if let Some(progress) = store.migration_progress() {
-        super::overlays_solid::overlay_migration_solid(frame, styles, &progress, now);
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::overlays_solid::{
-        overlay_reconnecting_solid, overlay_startup_loading_solid,
-    };
+    use crate::components::overlays_solid::overlay_reconnecting_solid;
     use crate::reactive::Runtime;
     use crate::render::{Cell, CellColor};
     use crate::store::Store;
@@ -164,7 +174,8 @@ mod tests {
         let styles = crate::theme::ThemeState::v2_dark().styles();
         let mut frame = frame_with(40, 10);
         store.set_connection(crate::data::ConnectionState::Connected);
-        overlay_app_state(&mut frame, &store, &styles);
+        crate::components::overlays::mount_state_overlays(&store, &styles, 40, 10);
+        crate::components::chrome_solid::composite_chrome_tree(&mut frame);
         let row = String::from(frame.text_grid()[8].trim());
         assert!(row.is_empty(), "pill row must stay clean: {row}");
 
@@ -198,7 +209,14 @@ mod tests {
     fn startup_pill_geometry() {
         let styles = crate::theme::ThemeState::v2_dark().styles();
         let mut frame = frame_with(40, 10);
-        overlay_startup_loading_solid(&mut frame, &styles, "Loading plugins…", 0);
+        crate::components::overlays_solid::mount_startup_loading_solid(
+            &styles,
+            "Loading plugins…",
+            0,
+            40,
+            10,
+        );
+        crate::components::chrome_solid::composite_chrome_tree(&mut frame);
         let row = frame.text_grid()[8].clone();
         assert!(row.contains("Loading plugins…"), "pill row: {row}");
         assert!(frame.text_grid()[9].trim().is_empty(), "bottom=1 leaves the last row");
