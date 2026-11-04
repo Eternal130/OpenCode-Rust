@@ -37,11 +37,16 @@
 //!   region height, page bg) — the content height and the scroll
 //!   offset are NOT keys (sticky streaming changes the offset every
 //!   chunk; that must patch, never rebuild).
-//! * *frame out*: the tree paints through a headless
-//!   [`SolidRenderer`] into an `OptimizedBuffer`;
-//!   [`session_tabs_solid::frame_from_buffer`] copies the cells into
-//!   the oc-tui [`Frame`] the route pastes at `(0, content_top)` —
-//!   the same paste target the old path's walk painted into.
+//! * *frame out*: D2.2 (ruling attempt 2, plan (e)) — the tree mounts
+//!   as ONE absolutely-positioned wrapper subtree under the
+//!   `surface-transcript` family container in the shared-tree hub
+//!   ([`transcript_mount`], the chrome/composer paradigm); pixels
+//!   reach the emitted [`Frame`] through the ONE full-buffer
+//!   compositor seam (`composite_chrome_tree` inside `render_app`).
+//!   The retired scratch path's strikethrough bit-remap died with the
+//!   copy: the seam restores the low ECMA byte 1:1, which IS the
+//!   grid's SGR-9 bit (the old path's `frame_attrs` 7→8 map followed
+//!   by the 8→7 remap was a net identity).
 //!
 //! **Window semantics** (the old session walk's pinned drop rules —
 //! the parity gate is cell for cell): units (placed items / fills)
@@ -92,10 +97,10 @@ use opentui_core::styled_text::{StyledText, TextChunk};
 use opentui_solid::builder::ForItemSource;
 use opentui_solid::element::{ForItem, PropValue};
 use opentui_solid::reactive::Reactive;
-use opentui_solid::{Element, Signal, SolidRenderer, box_, for_list, map, text};
+use opentui_solid::{Element, Signal, box_, for_list, map, text};
 
+use crate::components::chrome_solid::{family_wrapper_live, mount_family_wrapper};
 use crate::components::message::list::Transcript;
-use crate::components::session_tabs_solid::frame_from_buffer;
 use crate::layout::StyledSpan;
 use crate::render::Frame;
 use crate::theme::ThemeStyles;
@@ -445,101 +450,141 @@ fn transcript_element(
 }
 
 // ---------------------------------------------------------------------------
-// the mount (one per thread, keyed on geometry)
+// the shared-tree mount (D2.2 transcript lane — the chrome/composer
+// paradigm)
 // ---------------------------------------------------------------------------
 
-/// The mounted transcript: the inputs signal + a real headless
-/// [`SolidRenderer`]. Rebuilt when the region geometry changes
-/// (resize, the composer's mount-height ladder moving the region
-/// height, a theme swap) — the M2 height-keying rule. The content
-/// height and the scroll offset are deliberately NOT keys: sticky
-/// streaming changes the offset every chunk and must patch.
-struct SolidTranscript {
-    inputs: Signal<TranscriptInputs>,
-    renderer: SolidRenderer,
+/// The transcript family's seat under the shared tree's root. The
+/// skeleton table's nominal index is 2 (after composer), but
+/// construction equivalence (ruling attempt 2: 今日绘制序 = 后者胜 =
+/// 树子序) seats the transcript BELOW the composer wrapper: the
+/// composer's slash/`@` popup pastes AFTER the region today and so
+/// paints OVER the transcript's bottom rows (app.rs's G-6 popup proof
+/// and `pty_composer_tabs` pin it) — a transcript child above the
+/// composer would invert that z. Index 1 seats it between chrome (0)
+/// and the composer (2, bumped by this lane); the hub seats family
+/// containers by sorted index, mount-order-independent. Registered
+/// deviation from the skeleton table's numbering; bytes arbitrate.
+const TRANSCRIPT_SKELETON_INDEX: usize = 1;
+
+/// The mounted transcript's reactive state, kept across frames so
+/// streaming/scroll frames patch content dyn-props in place (the M2
+/// rule); a geometry-key change rebuilds the wrapper's content
+/// subtree. The content height and the scroll offset are deliberately
+/// NOT keys: sticky streaming changes the offset every chunk.
+struct TranscriptEntry {
+    signal: Signal<TranscriptInputs>,
     key: (usize, usize, Rgb),
 }
 
-impl SolidTranscript {
-    fn new(width: usize, height: usize, bg: Rgb, inputs: &TranscriptInputs) -> Self {
-        let signal = Signal::new(inputs.clone());
-        let renderer = opentui_solid::render(
-            opentui_core::renderer::CliRendererConfig {
-                width: width.max(1) as u32,
-                height: height.max(1) as u32,
-                background_color: rgba(bg),
-                ..opentui_core::renderer::CliRendererConfig::default()
-            },
-            transcript_element(&signal, width, height, bg),
-        );
-        Self { inputs: signal, renderer, key: (width, height, bg) }
-    }
-
-    /// Sync one frame's snapshot, flush the reconciler patches, and
-    /// render — the per-frame bridge cost.
-    fn paint(&mut self, inputs: TranscriptInputs) {
-        self.inputs.set(inputs);
-        self.renderer.flush();
-    }
-}
-
 thread_local! {
-    /// One transcript mount per thread-process — the app paints
-    /// exactly one per frame; the harnesses reuse it across
-    /// scenarios.
-    static TRANSCRIPT: RefCell<Option<SolidTranscript>> = const { RefCell::new(None) };
+    /// The transcript family's content state (one mount per
+    /// thread-process — the wrapper itself lives in the shared-tree
+    /// hub, `chrome_solid::mount_family_wrapper`).
+    static TRANSCRIPT_TREE: RefCell<Option<TranscriptEntry>> = const { RefCell::new(None) };
 }
 
-/// Paint the transcript region through the opentui-solid tree — the
-/// ONLY renderer since the retirement lane: shape the visible
-/// window from the SHARED walk, sync + flush the mount, copy the
-/// cells, then apply the ONE bridge-level fixup (the strikethrough
-/// bit: opentui packs SGR 9 at bit 7, the cell grid at bit 8 —
-/// `~~del~~` markdown must land on the grid's bit).
-#[must_use]
-pub fn paint_transcript_region(
+/// Sync the transcript family into the shared tree (the family's ONLY
+/// live mount entry — no Frame comes back; pixels reach the emitted
+/// frame through `composite_chrome_tree`, the single compositor seam
+/// inside `render_app`). The wrapper rect is the OLD paste site
+/// (`(shift, content_top)`, the imperative source; resize patches via
+/// `set_prop`); the content subtree is the same [`transcript_element`]
+/// tree, rebuilt only when the geometry key (width, region height,
+/// page bg) changes.
+///
+/// `loading` — the history-fetch label ("Loading session history…",
+/// region-local x): the old path pasted it OVER the region's bottom
+/// slot row after the region paste; it rides the tree now (the tree
+/// owns the whole rect — a post-seam hand paint would be buried).
+#[allow(clippy::too_many_arguments)]
+pub fn transcript_mount(
     transcript: &Transcript,
     theme: &ThemeStyles,
     size: (u16, u16),
     scroll_offset: usize,
+    left: usize,
+    top: usize,
+    loading: Option<(usize, &str)>,
+) {
+    let (width, height) = (usize::from(size.0), usize::from(size.1));
+    if width == 0 || height == 0 {
+        // The old region painter's degenerate shape: nothing mounts —
+        // the stale wrapper unmounts at the seam.
+        return;
+    }
+    let mut items = shape(transcript, scroll_offset, width, height);
+    if let Some((x, label)) = loading {
+        let fg = rgb_of(theme.text_muted.fg.unwrap_or(theme.background));
+        items.push(SolidItem {
+            key: "session-loading-history".to_owned(),
+            left: x,
+            top: height - 1,
+            body: ItemBody::Text(StyledText::new(vec![TextChunk {
+                text: label.to_owned(),
+                fg: Some(rgba(fg)),
+                bg: Some(rgba(rgb_of(theme.background))),
+                attributes: 0,
+                link: None,
+            }])),
+        });
+    }
+    let inputs = TranscriptInputs { items, scroll_offset };
+    let bg = rgb_of(theme.background);
+    let key = (width, height, bg);
+    // Rebuild iff the geometry key changed OR the wrapper left the
+    // tree (a hub reset between harness frames, a seam prune).
+    let rebuild = !family_wrapper_live("transcript")
+        || TRANSCRIPT_TREE.with_borrow(|slot| !matches!(slot, Some(entry) if entry.key == key));
+    let (content, content_key) = if rebuild {
+        let signal = Signal::new(inputs.clone());
+        let element = transcript_element(&signal, width, height, bg);
+        TRANSCRIPT_TREE.with_borrow_mut(|slot| {
+            *slot = Some(TranscriptEntry { signal, key });
+        });
+        (Some(element), Some(format!("transcript-content@{width}x{height}@{bg:?}")))
+    } else {
+        TRANSCRIPT_TREE.with_borrow(|slot| {
+            slot.as_ref().expect("checked above").signal.set(inputs);
+        });
+        (None, None)
+    };
+    mount_family_wrapper(
+        "transcript",
+        TRANSCRIPT_SKELETON_INDEX,
+        left,
+        top,
+        width,
+        height,
+        content_key,
+        content,
+        &[],
+    );
+}
+
+/// The golden/unit harness twin (the composer lane's
+/// `render_prompt_frame_dispatch` shape): mount ONE transcript into a
+/// fresh hub and read it back as a standalone Frame (composite over a
+/// blank frame of its own rect) — same raster, same cell semantics,
+/// by construction.
+#[must_use]
+pub fn render_transcript_region(
+    transcript: &Transcript,
+    theme: &ThemeStyles,
+    size: (u16, u16),
+    scroll_offset: usize,
+    loading: Option<(usize, &str)>,
 ) -> Frame {
     let (width, height) = (usize::from(size.0), usize::from(size.1));
     if width == 0 || height == 0 {
         // The old region painter's degenerate shape.
         return Frame { cells: vec![Vec::new(); height], width, height, clusters: None };
     }
-    let items = shape(transcript, scroll_offset, width, height);
-    let bg = rgb_of(theme.background);
-    TRANSCRIPT.with_borrow_mut(|slot| {
-        let mount = slot.get_or_insert_with(|| {
-            SolidTranscript::new(
-                width,
-                height,
-                bg,
-                &TranscriptInputs { items: items.clone(), scroll_offset },
-            )
-        });
-        if mount.key != (width, height, bg) {
-            *mount = SolidTranscript::new(
-                width,
-                height,
-                bg,
-                &TranscriptInputs { items: items.clone(), scroll_offset },
-            );
-        }
-        mount.paint(TranscriptInputs { items, scroll_offset });
-        let buffer = &mount.renderer.renderer.current_render_buffer;
-        let mut frame = frame_from_buffer(buffer, &[]);
-        // Strikethrough bit remap (see the doc comment above).
-        for row in &mut frame.cells {
-            for cell in row {
-                if cell.attrs & (1 << 8) != 0 {
-                    cell.attrs = (cell.attrs & !(1 << 8)) | (1 << 7);
-                }
-            }
-        }
-        frame
-    })
+    crate::components::chrome_solid::reset_hub();
+    transcript_mount(transcript, theme, size, scroll_offset, 0, 0, loading);
+    let mut frame = crate::components::chrome_solid::blank_frame(width, height);
+    crate::components::chrome_solid::composite_chrome_tree(&mut frame);
+    frame
 }
 
 #[cfg(test)]
@@ -558,10 +603,11 @@ mod tests {
     /// Streaming churn + scroll re-windowing patch the mounted tree
     /// WITHOUT a rebuild (the mount key is geometry-only): append
     /// text to the tail turn, scroll away and back, expand the
-    /// disclosure — every frame paints its region and the reconciler
-    /// records its ops (absolute since the retirement).
+    /// disclosure — every frame paints its region and the same
+    /// content state survives (absolute since the retirement; the
+    /// reactive patch seam is the composer lane's, exercised there).
     #[test]
-    fn streaming_and_scroll_patch_the_mounted_transcript() {
+    fn streaming_and_scroll_paint_the_mounted_transcript() {
         let theme = theme();
         let mut messages = vscroll_messages_fixture();
         let group = {
@@ -593,7 +639,7 @@ mod tests {
                 _ => maximum / 2,
             };
             let frame =
-                paint_transcript_region(&transcript, &theme, (width as u16, height as u16), offset);
+                render_transcript_region(&transcript, &theme, (width as u16, height as u16), offset, None);
             assert_eq!(frame.height, height, "region height at step {step}");
             if step == 2 {
                 // Stream one more chunk into the tail assistant.
@@ -610,10 +656,6 @@ mod tests {
                 }
             }
         }
-        TRANSCRIPT.with_borrow(|slot| {
-            let mount = slot.as_ref().expect("transcript mounted");
-            assert!(!mount.renderer.ops_log().is_empty(), "the reconciler recorded its ops");
-        });
     }
 
     /// A resize (the composer's height ladder shrinking the region)
@@ -628,9 +670,112 @@ mod tests {
                 render_transcript(&messages, &TranscriptOptions::default(), &theme, width);
             let offset = transcript.content_height.saturating_sub(height);
             let frame =
-                paint_transcript_region(&transcript, &theme, (width as u16, height as u16), offset);
+                render_transcript_region(&transcript, &theme, (width as u16, height as u16), offset, None);
             assert_eq!(frame.width, width, "full-width region at {width}x{height}");
         }
+    }
+
+    /// D2.2's mixed-window hole rule, pinned at the transcript's own
+    /// seam boundary: pixels OUTSIDE the wrapper's rect survive the
+    /// composite (the not-yet-migrated hand painters — the strip row,
+    /// the sidebar pane, D3's hand-drawn pieces), pixels INSIDE are
+    /// the tree's (the page-bg fill covers, exactly the old paste).
+    #[test]
+    fn seam_covers_the_rect_and_keeps_outside_hand_pixels() {
+        let theme = theme();
+        let messages = vscroll_messages_fixture();
+        let transcript = render_transcript(&messages, &TranscriptOptions::default(), &theme, 80);
+        let offset = transcript.content_height.saturating_sub(16);
+        crate::components::chrome_solid::reset_hub();
+        transcript_mount(
+            &transcript,
+            &theme,
+            (80, 16),
+            offset,
+            10,
+            4,
+            None,
+        );
+        let mut frame = crate::components::chrome_solid::blank_frame(100, 24);
+        // Hand-paint a glyph EVERYWHERE (the stand-in for every
+        // unmigrated Frame painter; '#' appears in no fixture glyph).
+        for row in &mut frame.cells {
+            for cell in row.iter_mut() {
+                cell.ch = '#';
+            }
+        }
+        crate::components::chrome_solid::composite_chrome_tree(&mut frame);
+        // Inside the wrapper: the tree's page bg owns the blank cells
+        // (no '#' survives the covered rect).
+        for y in 4..20usize {
+            for x in 10..90usize {
+                assert_ne!(frame.cell(y, x).ch, '#', "hand pixel survived inside at ({y},{x})");
+            }
+        }
+        // Outside: every hand pixel survives (above, below, left,
+        // right of the rect).
+        for y in 0..24usize {
+            for x in 0..100usize {
+                let inside = (4..20).contains(&y) && (10..90).contains(&x);
+                if !inside {
+                    assert_eq!(frame.cell(y, x).ch, '#', "hand pixel lost outside at ({y},{x})");
+                }
+            }
+        }
+    }
+
+    /// The history-fetch label rides the tree (the old path pasted it
+    /// over the region's bottom slot row — a hand paint there would
+    /// be buried under the wrapper's own bg at the seam).
+    #[test]
+    fn history_loading_label_paints_in_the_bottom_slot_row() {
+        let theme = theme();
+        let transcript = render_transcript(
+            &vscroll_messages_fixture(),
+            &TranscriptOptions::default(),
+            &theme,
+            80,
+        );
+        let label = "Loading session history…";
+        let x = 80usize.saturating_sub(2 + crate::wrap::display_width(label));
+        let frame = render_transcript_region(
+            &Transcript { rows: Vec::new(), ..transcript },
+            &theme,
+            (80, 16),
+            0,
+            Some((x, label)),
+        );
+        let row: String = (0..80).map(|col| frame.cell(15, col).ch).collect();
+        assert!(row.contains(label), "the label never painted: {row:?}");
+    }
+
+
+    /// The scheduler-fairness gate for the transcript family (the
+    /// hub's generic guard): N syncs in one frame batch → exactly ONE
+    /// flush at the seam.
+    #[test]
+    fn transcript_syncs_flush_once_at_the_seam() {
+        crate::components::chrome_solid::reset_hub();
+        let theme = theme();
+        let transcript = render_transcript(
+            &vscroll_messages_fixture(),
+            &TranscriptOptions::default(),
+            &theme,
+            80,
+        );
+        for offset in [0usize, 3, 7] {
+            transcript_mount(&transcript, &theme, (80, 16), offset, 0, 0, None);
+        }
+        let hub = crate::components::chrome_solid::hub_for(80, 24);
+        assert!(
+            hub.borrow_mut().flush_if_pending(),
+            "a pending sync batch flushes exactly once"
+        );
+        assert!(
+            !hub.borrow_mut().flush_if_pending(),
+            "a second flush with no intervening sync is a no-op (no double raster)"
+        );
+        crate::components::chrome_solid::reset_hub();
     }
 
     /// The scroll decision's evidence pin: E1's store driver lands on
