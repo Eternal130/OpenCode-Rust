@@ -59,7 +59,7 @@ pub struct RowRender {
     /// for graphics overlays (the transcript's user-message image
     /// strip). The cell grid stays authoritative for the placeholder
     /// boxes; these ride alongside for the post-draw escape emission.
-    pub images: Vec<crate::image::ImagePlacement>,
+    pub images: Vec<crate::image_view::ImagePlacement>,
 }
 
 fn text_at(x: usize, y: usize, text: impl Into<String>, style: Style) -> Placed {
@@ -330,16 +330,17 @@ impl RowRender {
     }
 }
 
-/// How the transcript's image strip renders (R-07): the resolved
-/// graphics protocol and whether `session.image_preview` enabled the
-/// strip at all (v2 hides it unless the config turns it on,
-/// config/index.tsx:164 + session/index.tsx:2459).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// How the transcript's image strip renders (R-07): the probed
+/// terminal capability snapshot and whether `session.image_preview`
+/// enabled the strip at all (v2 hides it unless the config turns it
+/// on, config/index.tsx:164 + session/index.tsx:2459).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ImageStripOptions {
     /// `session.image_preview` (default off — v2's falsy check).
     pub enabled: bool,
-    /// The terminal's graphics protocol.
-    pub protocol: crate::image::GraphicsProtocol,
+    /// The terminal's capability snapshot (opentui probe); `None`
+    /// before the probe lands → `protocol="auto"` resolves to blocks.
+    pub capabilities: Option<opentui_core::renderer::TerminalCapabilities>,
     /// The terminal's row count (thumb height = `clamp(h/4, 4, 8)`).
     pub terminal_rows: u16,
 }
@@ -390,11 +391,10 @@ pub fn image_strip_row(
     let mut x = 2usize; // paddingLeft 2
     for (index, image) in images.iter().enumerate().take(visible) {
         let bytes = decode_png_payload(image);
-        let data = crate::image::ImageData::Png(bytes);
-        if crate::image::drawable(options.protocol, &data) {
-            row.images.push(crate::image::ImagePlacement {
-                id: crate::image::image_id(&data),
-                data,
+        let protocol = crate::image_view::resolve_protocol(options.capabilities.as_ref());
+        if crate::image_view::drawable(protocol, &bytes) {
+            row.images.push(crate::image_view::ImagePlacement {
+                data: bytes,
                 x: u16::try_from(x).unwrap_or(u16::MAX),
                 y: 1,
                 cols: thumb_width as u16,
@@ -403,7 +403,7 @@ pub fn image_strip_row(
             // The placeholder box (border + centered label) — the cells
             // under the graphic and the no-protocol fallback.
             paint_placeholder_box(&mut row, x, 1, thumb_width, height, &label_of(index), theme);
-        } else if let Some(cells) = blocks_thumbnail(&data, thumb_width, height) {
+        } else if let Some(cells) = blocks_thumbnail(&bytes, thumb_width, height) {
             // v2's fallback IS the block renderer (`resolveImage­
             // RenderProtocol` → "blocks" for terminals without a
             // graphics protocol — and for sixel without pixel
@@ -474,17 +474,13 @@ fn paint_placeholder_box(
 /// fit inside `max_cols × max_rows` (`None` when the payload does
 /// not decode — the "No preview" fallback's condition).
 fn blocks_thumbnail(
-    data: &crate::image::ImageData,
+    bytes: &[u8],
     max_cols: usize,
     max_rows: usize,
-) -> Option<Vec<Vec<crate::image_blocks::BlockCell>>> {
-    let crate::image::ImageData::Png(bytes) = data else {
-        return None;
-    };
-    let image = crate::image_blocks::decode_png(bytes)?;
-    let (cols, rows) =
-        crate::image_blocks::fit_cells(image.width, image.height, max_cols, max_rows);
-    Some(crate::image_blocks::blocks_cells(&image, cols, rows))
+) -> Option<Vec<Vec<crate::image_view::BlockCell>>> {
+    let image = crate::image_codec::decode_png(bytes)?;
+    let (cols, rows) = crate::image_view::fit_cells(image.width, image.height, max_cols, max_rows);
+    Some(crate::image_view::blocks_cells(&image, cols, rows))
 }
 
 /// Paint a blocks thumbnail centered in its thumb rect: one
@@ -496,7 +492,7 @@ fn paint_blocks(
     y: usize,
     width: usize,
     height: usize,
-    cells: &[Vec<crate::image_blocks::BlockCell>],
+    cells: &[Vec<crate::image_view::BlockCell>],
 ) {
     let block_rows = cells.len();
     if block_rows == 0 {
@@ -1584,32 +1580,39 @@ mod tests {
     // -- R-07: the user-message image strip ---------------------------------
 
     use crate::components::message::model::UserFile;
-    use crate::image::{GraphicsProtocol, ImageData};
+
+    const TINY_PNG: &[u8] = include_bytes!("../../../tests/fixtures/r07-tiny-4x2.png");
 
     fn png_file(data: &str) -> UserFile {
         UserFile { mime: "image/png".into(), data: data.into(), name: Some("shot.png".into()) }
     }
 
-    fn strip_options(protocol: GraphicsProtocol) -> ImageStripOptions {
-        ImageStripOptions { enabled: true, protocol, terminal_rows: 24 }
+    fn caps(kitty: bool) -> opentui_core::renderer::TerminalCapabilities {
+        opentui_core::renderer::TerminalCapabilities {
+            kitty_graphics: kitty,
+            ..opentui_core::renderer::TerminalCapabilities::default()
+        }
+    }
+
+    fn strip_options(kitty: bool) -> ImageStripOptions {
+        ImageStripOptions { enabled: true, capabilities: Some(caps(kitty)), terminal_rows: 24 }
+    }
+
+    fn blocks_options() -> ImageStripOptions {
+        ImageStripOptions { enabled: true, capabilities: None, terminal_rows: 24 }
     }
 
     #[test]
     fn image_strip_sizes_thumbs_per_v2() {
         // thumb height = clamp(h/4, 4..8); width = height * 2.
-        assert_eq!(strip_options(GraphicsProtocol::None).thumb_height(), 6);
+        assert_eq!(strip_options(true).thumb_height(), 6);
         assert_eq!(
-            ImageStripOptions { enabled: true, protocol: GraphicsProtocol::None, terminal_rows: 8 }
-                .thumb_height(),
+            ImageStripOptions { enabled: true, capabilities: None, terminal_rows: 8 }.thumb_height(),
             4
         );
         assert_eq!(
-            ImageStripOptions {
-                enabled: true,
-                protocol: GraphicsProtocol::None,
-                terminal_rows: 200
-            }
-            .thumb_height(),
+            ImageStripOptions { enabled: true, capabilities: None, terminal_rows: 200 }
+                .thumb_height(),
             8
         );
     }
@@ -1631,7 +1634,7 @@ mod tests {
         let imageless = image_strip_row(
             &[],
             &|index: usize| format!("[Image {}]", index + 1),
-            &strip_options(GraphicsProtocol::Kitty),
+            &strip_options(true),
             &theme,
             60,
         );
@@ -1641,11 +1644,11 @@ mod tests {
     #[test]
     fn image_strip_kitty_collects_placements_and_placeholder_cells() {
         let theme = theme();
-        let payload = crate::clipboard::base64_encode::encode(b"\x89PNG-tiny");
+        let payload = crate::clipboard::base64_encode::encode(TINY_PNG);
         let row = image_strip_row(
             &[png_file(&payload)],
             &|index: usize| format!("[Image {}]", index + 1),
-            &strip_options(GraphicsProtocol::Kitty),
+            &strip_options(true),
             &theme,
             60,
         );
@@ -1654,8 +1657,7 @@ mod tests {
         assert_eq!(row.images.len(), 1);
         let image = &row.images[0];
         assert_eq!((image.x, image.y, image.cols, image.rows), (2, 1, 12, 6));
-        assert_eq!(image.data, ImageData::Png(b"\x89PNG-tiny".to_vec()));
-        assert_eq!(image.id, crate::image::image_id(&image.data));
+        assert_eq!(image.data, TINY_PNG.to_vec());
         // The placeholder box still paints under the graphic (the
         // bordered thumb with its centered label).
         let frame = crate::render::paint_placed(
@@ -1679,7 +1681,7 @@ mod tests {
         let row = image_strip_row(
             &[png_file(&payload), png_file(&payload), png_file("AAAA"), png_file("BBBB")],
             &|index: usize| format!("[Image {}]", index + 1),
-            &strip_options(GraphicsProtocol::None),
+            &blocks_options(),
             &theme,
             60,
         );
@@ -1701,14 +1703,14 @@ mod tests {
     fn user_message_row_stacks_the_strip_above_the_text() {
         let theme = theme();
         let agent = theme.agent_color(0);
-        let payload = crate::clipboard::base64_encode::encode(b"\x89PNG-tiny");
+        let payload = crate::clipboard::base64_encode::encode(TINY_PNG);
         let row = user_message_row(
             "describe this",
             &[png_file(&payload)],
             agent,
             &theme,
             38,
-            &strip_options(GraphicsProtocol::Kitty),
+            &strip_options(true),
         );
         // strip (1 + 6 + 1) + the message box's own 1 + text + 1.
         assert_eq!(row.height, 11);

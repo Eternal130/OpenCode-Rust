@@ -180,7 +180,7 @@ pub struct Transcript {
     pub inset: usize,
     /// The transcript's image placements at absolute (transcript)
     /// coordinates (R-07) — the graphics-protocol overlay set.
-    pub images: Vec<crate::image::ImagePlacement>,
+    pub images: Vec<crate::image_view::ImagePlacement>,
     /// TUI-TD09 — the `BackgroundToolHint` presence
     /// (index.tsx:130-171): a running shell/subagent tool past the
     /// 3 s delay on the tail's open assistant turn — the hint row
@@ -245,7 +245,7 @@ pub fn render_transcript(
     );
     let markdown = MarkdownStyles::from_theme(theme);
     let mut measured: Vec<MeasuredRow> = Vec::new();
-    let mut images: Vec<crate::image::ImagePlacement> = Vec::new();
+    let mut images: Vec<crate::image_view::ImagePlacement> = Vec::new();
     let mut y = 0usize;
     let mut place =
         |render: RowRender, key: String, measured: &mut Vec<MeasuredRow>, y: &mut usize| {

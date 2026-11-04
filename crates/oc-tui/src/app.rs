@@ -7884,10 +7884,8 @@ pub async fn run_with_size(
     if fast_boot_from_env(std::env::var("OPENCODE_FAST_BOOT").ok().as_deref()) {
         app.store.set_skip_initial_loading(true);
     }
-    // R-07: the terminal's graphics protocol — env probe seeds the
-    // store now; the capability probe's DA1 answer refines it once the
-    // input thread's Capabilities event reports (lane B3a).
-    app.store.set_graphics_protocol(crate::image::detect_protocol());
+    // R-07/D3-4b: image protocol selection rides opentui's capability
+    // probe ("auto" + TerminalCapabilities); no env seed remains.
     // SURF-2 (F-1): the config persistence sink — cli.json
     // write-through for the theme name/mode pins and
     // `session.sidebar` (oc-core's comment-preserving updater). The
@@ -8330,9 +8328,10 @@ pub async fn run_with_size(
     // Lane TAIL: the theme re-probe cooldown (the ?997 stand-in).
     let mut theme_probe_at = std::time::Instant::now();
     let mut redraw_at = 0u64;
-    // The previous frame's image placements (R-07) — the emission
-    // delta (vanished ids delete; changed rects retransmit).
-    let mut last_frame_images: Vec<crate::image::ImagePlacement> = Vec::new();
+    // R-07/D3-4b — the frame-tail image emitter (opentui
+    // ImageFrameEmitter): placements feed drawImage, the emitter owns
+    // the kitty transmit/place/delete delta.
+    let mut image_frame = crate::image_view::ImageFrame::new();
     // TUI-18 — the last emitted window title (the OSC 0 change gate).
     let mut last_terminal_title: Option<String> = None;
     // G-141 — the last theme (name, mode) the embedded-terminal
@@ -8413,7 +8412,13 @@ pub async fn run_with_size(
             // the Terminal's output, the answers classify through
             // feed_input into Capabilities/ThemeMode events.
             if let Ok(mut terminal) = session.lock() {
+                use std::io::Write as _;
                 let _ = terminal.probe_capabilities();
+                // The cell-pixel resolution probe (upstream's post-startup
+                // `CSI 14t`): opentui's probe parser captures the reply into
+                // `TerminalCapabilities.pixel_resolution`, the sixel gate.
+                let _ = opentui_core::write_pixel_resolution_query(terminal.output());
+                let _ = terminal.output().flush();
             }
             loop {
                 if input_stop.load(std::sync::atomic::Ordering::Relaxed) {
@@ -8474,10 +8479,14 @@ pub async fn run_with_size(
                                         let _ = terminal.output().flush();
                                     }
                                 }
-                                // RB-07 (lane R0): the DA1 attr-4
-                                // verdict refines the graphics
-                                // protocol decision seeded from env.
-                                if event_tx.blocking_send(TermEvent::Sixel(caps.sixel)).is_err() {
+                                // R-07/D3-4b: the full snapshot carries
+                                // kitty graphics, sixel and the cell-px
+                                // resolution ("auto" resolves in the
+                                // image bridge).
+                                if event_tx
+                                    .blocking_send(TermEvent::Capabilities(Box::new(caps)))
+                                    .is_err()
+                                {
                                     return;
                                 }
                             }
@@ -9891,24 +9900,22 @@ pub async fn run_with_size(
                 ));
                 last_terminal_title = Some(terminal_title);
             }
-            // R-07: the frame's image overlays — emit AFTER the cell
-            // grid flushed (the placements sit over their placeholder
-            // rects); ids that left the frame delete first.
+            // R-07/D3-4b: the frame's image overlays — opentui's
+            // ImageFrameEmitter draws the placements into a buffer and
+            // emits transmit/place/delete AFTER the cell grid flushed.
             let frame_images = app.store.frame_images();
-            if frame_images != last_frame_images {
-                let vanished: Vec<u32> = last_frame_images
-                    .iter()
-                    .filter(|old| !frame_images.iter().any(|new| new.id == old.id))
-                    .map(|old| old.id)
-                    .collect();
-                let mut out = std::io::stdout().lock();
-                let _ = crate::image::emit_image_deletes(&mut out, &vanished);
-                let _ = crate::image::emit_frame_images(
-                    &mut out,
-                    app.store.graphics_protocol(),
+            let capabilities = app.store.graphics_capabilities();
+            let (width, height) = app.size;
+            if let Ok(mut session) = session_terminal.lock() {
+                use std::io::Write as _;
+                let _ = image_frame.render(
+                    session.output(),
                     &frame_images,
+                    capabilities.as_ref(),
+                    width,
+                    height,
                 );
-                last_frame_images = frame_images;
+                let _ = session.output().flush();
             }
         }
         // Input / tick wait — while the marquee scrolls, the wake
@@ -9973,15 +9980,13 @@ pub async fn run_with_size(
                     redraw_at = 0; // one repaint on the palette change
                 }
             }
-            // RB-07 (lane R0): the DA1 attr-4 verdict refines the
-            // graphics-protocol decision seeded from env (the probe's
-            // Capabilities event; see `crate::image::resolve_protocol`).
-            Some(TermEvent::Sixel(sixel)) => {
-                let resolved =
-                    crate::image::resolve_protocol(app.store.graphics_protocol(), Some(sixel));
-                if resolved != app.store.graphics_protocol() {
-                    app.store.set_graphics_protocol(resolved);
-                }
+            // R-07/D3-4b: the opentui capability snapshot (kitty
+            // graphics + DA1 sixel + cell-px resolution) drives
+            // `protocol="auto"`; a new snapshot repaints so the image
+            // strip switches protocol immediately.
+            Some(TermEvent::Capabilities(capabilities)) => {
+                app.store.set_graphics_capabilities(Some(*capabilities));
+                redraw_at = 0;
             }
             // Bracketed paste (R-07): resolve attachment file paths →
             // chips, else insert the text (`pasteInputText`).
@@ -10032,7 +10037,11 @@ pub async fn run_with_size(
             // (the post-setup push is oc-tui's) and emit the graphics
             // delete-all (`a=d,d=a`).
             let _ = out.write_all(crate::terminal_proto::KITTY_POP);
-            if app.store.graphics_protocol() != crate::image::GraphicsProtocol::None {
+            let graphics = app.store.graphics_capabilities();
+            if graphics
+                .as_ref()
+                .is_some_and(|caps| caps.kitty_graphics || caps.sixel)
+            {
                 let _ = out.write_all(crate::terminal_proto::KITTY_GRAPHICS_DELETE_ALL);
             }
             let _ = out.flush();

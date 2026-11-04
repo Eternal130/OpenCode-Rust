@@ -1022,7 +1022,7 @@ pub fn render_diff_viewer_with_hits(
                 && file.image_data.is_some();
             if previewable {
                 let bytes = file.image_data.clone().unwrap_or_default();
-                let decoded = crate::image_blocks::decode_png(&bytes);
+                let decoded = crate::image_codec::decode_png(&bytes);
                 let image_rows = (options.viewport_height / 4).clamp(3, 8);
                 placed.push(Placed {
                     x: patch_x + 1,
@@ -1037,13 +1037,13 @@ pub fn render_diff_viewer_with_hits(
                 y += 2; // label + its gap 1
                 if let Some(image) = decoded.as_ref() {
                     let inner_w = patch_w.saturating_sub(2).max(1);
-                    let (cols, rows) = crate::image_blocks::fit_cells(
+                    let (cols, rows) = crate::image_view::fit_cells(
                         image.width,
                         image.height,
                         inner_w,
                         image_rows,
                     );
-                    let cells = crate::image_blocks::blocks_cells(image, cols, rows);
+                    let cells = crate::image_view::blocks_cells(image, cols, rows);
                     let offset_x = patch_x + 1 + inner_w.saturating_sub(cols) / 2;
                     for (line_index, line) in cells.iter().enumerate() {
                         let runs = line
