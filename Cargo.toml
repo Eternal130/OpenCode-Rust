@@ -87,9 +87,15 @@ oc-uqr = { path = "third_party/oc-uqr" }
 # upstream-API contract tests + PTY grid parity against the vt100
 # oracle. Consumed by oc-tui lane D3-3b: terminal_pane's local vt100
 # VT face retires; the attach/stream machine stays with the consumer.
-opentui-core = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "54dbb4d" }
-opentui-keymap = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "54dbb4d" }
-opentui-solid = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "54dbb4d" }
+# Rev 71f07e1 adds the native image family (lane D3-4a): drawImage/
+# ImageFrameEmitter in opentui-core with kitty/sixel/blocks encoders,
+# protocol="auto" driven by TerminalCapabilities (kitty-graphics probe
+# plus cell-pixel resolution), occlusion flattening and image_deletes.
+# Consumed by oc-tui lane D3-4b: the local image/ family (protocol
+# detection, kitty/sixel emitters, halfblock raster) retires.
+opentui-core = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "71f07e1" }
+opentui-keymap = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "71f07e1" }
+opentui-solid = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "71f07e1" }
 
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }

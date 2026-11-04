@@ -97,8 +97,10 @@ pub enum TermEvent {
     Resize(u16, u16),
     /// The probe's theme reduction reported a system mode.
     ThemeMode(Mode),
-    /// A capability snapshot landed (`true` = DA1 attr 4 / sixel).
-    Sixel(bool),
+    /// A full capability snapshot landed (kitty graphics, DA1 sixel,
+    /// cell-pixel resolution, multiplexer) — the `protocol="auto"`
+    /// input since lane D3-4b.
+    Capabilities(Box<opentui_core::renderer::TerminalCapabilities>),
 }
 
 // ---------------------------------------------------------------------------

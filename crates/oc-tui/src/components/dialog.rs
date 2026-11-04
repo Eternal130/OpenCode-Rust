@@ -1209,7 +1209,6 @@ fn paint_preview_image(
         return;
     };
     let Some(bytes) = crate::clipboard::base64_decode(&payload.data) else { return };
-    let data = crate::image::ImageData::Png(bytes);
     // The image area's geometry (the tree's `area` box): under the
     // chrome pad (1) + the header row (1) + the root gap (1), the
     // full inner width, `max(3, height - 8)` rows.
@@ -1217,11 +1216,11 @@ fn paint_preview_image(
     let area_y = box_y + 3;
     let area_w = box_width.saturating_sub(4);
     let area_h = usize::from(terminal.1).saturating_sub(8).max(3);
-    let protocol = store.graphics_protocol();
-    if crate::image::drawable(protocol, &data) {
-        let placement = crate::image::ImagePlacement {
-            id: crate::image::image_id(&data),
-            data,
+    let capabilities = store.graphics_capabilities();
+    let protocol = crate::image_view::resolve_protocol(capabilities.as_ref());
+    if crate::image_view::drawable(protocol, &bytes) {
+        let placement = crate::image_view::ImagePlacement {
+            data: bytes,
             x: u16::try_from(area_x).unwrap_or(u16::MAX),
             y: u16::try_from(area_y).unwrap_or(u16::MAX),
             cols: u16::try_from(area_w).unwrap_or(u16::MAX),
@@ -1232,10 +1231,9 @@ fn paint_preview_image(
         store.set_frame_images(images);
         return;
     }
-    let crate::image::ImageData::Png(bytes) = &data else { return };
-    let Some(image) = crate::image_blocks::decode_png(bytes) else { return };
-    let (cols, rows) = crate::image_blocks::fit_cells(image.width, image.height, area_w, area_h);
-    let cells = crate::image_blocks::blocks_cells(&image, cols, rows);
+    let Some(image) = crate::image_codec::decode_png(&bytes) else { return };
+    let (cols, rows) = crate::image_view::fit_cells(image.width, image.height, area_w, area_h);
+    let cells = crate::image_view::blocks_cells(&image, cols, rows);
     let offset_x = area_x + area_w.saturating_sub(cols) / 2;
     let offset_y = area_y + area_h.saturating_sub(rows) / 2;
     for (line_index, line) in cells.iter().enumerate() {
