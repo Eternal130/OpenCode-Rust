@@ -80,9 +80,16 @@ oc-uqr = { path = "third_party/oc-uqr" }
 # ownership via attach_terminal_session/request_render/run_frame/settle/
 # destroy — consumed by oc-tui lane D2.1b to own the render loop while
 # GridEmitter stays the sole byte emitter (byte-for-byte unchanged).
-opentui-core = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "d3688d8" }
-opentui-keymap = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "d3688d8" }
-opentui-solid = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "d3688d8" }
+# Rev 54dbb4d adds EmbeddedTerminalRenderable/EmbeddedTerminalState
+# (lane D3-3a): the vte-backed VT engine folded from oc-tui's
+# terminal_pane.rs (grid, scrollback, selection, key/paste encoders,
+# mouse forwarding, OSC 4/104/10/11 palette injection) with its
+# upstream-API contract tests + PTY grid parity against the vt100
+# oracle. Consumed by oc-tui lane D3-3b: terminal_pane's local vt100
+# VT face retires; the attach/stream machine stays with the consumer.
+opentui-core = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "54dbb4d" }
+opentui-keymap = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "54dbb4d" }
+opentui-solid = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "54dbb4d" }
 
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
