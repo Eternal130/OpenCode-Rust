@@ -792,52 +792,36 @@ pub fn render_session(
         .collect::<Vec<_>>();
     store.set_frame_images(frame_images);
     // The transcript region: rows `[scroll_offset, scroll_offset +
-    // transcript_height)` of the column, pasted under the strip.
-    // Lane M4 (retired): the region renders through the opentui-solid
-    // tree — the only renderer since the retirement lane deleted the
-    // hand-rolled region walk (the hit rows, metrics and image
-    // placements stay painter-agnostic, computed above).
+    // transcript_height)` of the column. D2.2 (ruling attempt 2): the
+    // region mounts as the `surface-transcript` family wrapper in the
+    // shared tree at the OLD paste site `(shift, content_top)` — no
+    // Frame comes back; the pixels land at render_app's composite
+    // seam (the hit rows, metrics and image placements stay
+    // painter-agnostic, computed above).
     let region_size = (
         u16::try_from(column).unwrap_or(u16::MAX),
         u16::try_from(transcript_height).unwrap_or(u16::MAX),
     );
-    let region = crate::components::transcript_solid::paint_transcript_region(
-        &transcript,
-        styles,
-        region_size,
-        scroll_offset,
-    );
-    let mut frame = paint_placed_with_fills(&[], &[], size, fill);
-    paste(&mut frame, &region, shift, content_top);
     // SURF-1: the jump slot's loading state ("Loading session
     // history…", index.tsx:1425-1427) — right-aligned over the slot
     // row while the transcript fetch is in flight and no rows landed
     // yet (v2's `firstJump()` hold suppresses the jump indicator).
-    if store.history_loading(session_id) && transcript.rows.is_empty() {
-        let slot_y = content_top + transcript_height.saturating_sub(1);
+    // Rides the tree: the wrapper owns the whole rect now, so the old
+    // over-the-region paste would be buried at the seam.
+    let loading = (store.history_loading(session_id) && transcript.rows.is_empty()).then(|| {
         let label = "Loading session history…";
-        let label_width = crate::wrap::display_width(label);
-        let x = column.saturating_sub(inset + label_width);
-        let loading = crate::render::paint_placed(
-            &[crate::layout::Placed {
-                x,
-                y: 0,
-                width: label_width,
-                lines: vec![crate::layout::PlacedLine::plain(
-                    label,
-                    crate::style::Style::new()
-                        .fg(styles.text_muted.fg.unwrap_or_default())
-                        .bg(styles.background),
-                )],
-                tag: Some("session-loading-history".into()),
-            }],
-            (u16::try_from(column).unwrap_or(u16::MAX), 1),
-            crate::style::Style::new()
-                .fg(crate::components::tool_rows::DEFAULT_FOREGROUND)
-                .bg(styles.background),
-        );
-        paste(&mut frame, &loading, shift, slot_y);
-    }
+        (column.saturating_sub(inset + crate::wrap::display_width(label)), label)
+    });
+    crate::components::transcript_solid::transcript_mount(
+        &transcript,
+        styles,
+        region_size,
+        scroll_offset,
+        shift,
+        content_top,
+        loading,
+    );
+    let mut frame = paint_placed_with_fills(&[], &[], size, fill);
     if let Some(strip) = strip {
         paste(&mut frame, &strip, 0, 0);
     }
@@ -954,7 +938,17 @@ pub fn render_session(
             // cell's background toward black at 70/255 in place —
             // glyphs (the composer's echo) survive underneath.
             apply_scrim(&mut frame, 0, content_top, width, pane_height);
-            paste(&mut frame, &pane, origin_x, content_top);
+            // D2.2: the floating pane pasted OVER the transcript rect
+            // after the region paste (today's z: pane > composer >
+            // transcript) — it registers as a seam frame overlay so
+            // the tree pixels cannot bury it (the pane's own solid
+            // tree stays scratch until the sidebar lane).
+            crate::components::chrome_solid::mount_frame_overlay(
+                "sidebar-pane",
+                origin_x,
+                content_top,
+                pane,
+            );
         }
     } else {
         store.set_sidebar_onboarding_hits(None);

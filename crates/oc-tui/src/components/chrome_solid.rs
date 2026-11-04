@@ -410,14 +410,18 @@ thread_local! {
 /// root
 /// └─[0] surface-chrome   (this lane: devtools/stats/location-missing/
 /// │                       plugin pages/rail+tooltip/app-state overlays)
-/// └─[1] surface-composer  (D2.2 composer lane — mounted: the prompt
+/// └─[1] surface-transcript(D2.2 transcript lane — seated BELOW the
+/// │                       composer: its slash/`@` popup pasted after
+/// │                       the region today, so the composer must stay
+/// │                       the later child; see transcript_solid)
+/// └─[2] surface-composer  (D2.2 composer lane — mounted: the prompt
 /// │                       box + popup + footer row wrapper)
-/// └─[2] surface-transcript(D2.2 transcript lane)
 /// └─[3] surface-footer    (D2.2 footer lane)
 /// └─[4] surface-dialogs   (D2.2 dialogs lane)
 /// └─[5] surface-overlays  (toast/console/which-key — the paste_frame
 ///                          overlay family, its own lane)
 /// ```
+///
 ///
 /// No `z` prop is introduced (ruling #2: an upstream API change would
 /// be a fresh divergence).
@@ -552,9 +556,12 @@ pub(crate) struct ChromeTree {
     /// The non-chrome family wrappers (composer first), child order
     /// under their own containers = z order.
     wrappers: Vec<FamilyWrapper>,
-    /// The family containers' mount keys (`surface-composer`, …) by
-    /// skeleton index order.
-    family_containers: Vec<(&'static str, String)>,
+    /// The family containers' mount keys (`surface-composer`, …) with
+    /// their skeleton indices — the containers keep the root's children
+    /// sorted by index, so the seating is mount-order-independent
+    /// (child order = z order must not depend on which family synced
+    /// first in a frame).
+    family_containers: Vec<(&'static str, usize, String)>,
     /// The `surface-chrome` family container's mount key (skeleton
     /// index 0 under the root).
     family_key: Option<String>,
@@ -750,7 +757,7 @@ impl ChromeTree {
                 self.solid.set_prop(&key, "width", PropValue::Num(w as f32));
                 self.solid.set_prop(&key, "height", PropValue::Num(h as f32));
             }
-            for (_, key) in &self.family_containers.clone() {
+            for (_, _, key) in &self.family_containers.clone() {
                 self.solid.set_prop(key, "width", PropValue::Num(w as f32));
                 self.solid.set_prop(key, "height", PropValue::Num(h as f32));
             }
@@ -784,8 +791,13 @@ impl ChromeTree {
             (top.saturating_add(height)).max(1) as u32,
         );
         // The family container (its skeleton index under the root).
-        let container = match self.family_containers.iter().position(|(f, _)| *f == family) {
-            Some(index) => self.family_containers[index].1.clone(),
+        // The insert position is the count of already-mounted
+        // containers with a SMALLER index (the chrome container at
+        // index 0 counts when mounted) — the root's children stay
+        // sorted by skeleton index regardless of which family synced
+        // first, so z (child order) never depends on mount order.
+        let container = match self.family_containers.iter().position(|(f, _, _)| *f == family) {
+            Some(index) => self.family_containers[index].2.clone(),
             None => {
                 let element = box_()
                     .key(format!("surface-{family}"))
@@ -795,8 +807,14 @@ impl ChromeTree {
                     .width(f64::from(self.width) as f32)
                     .height(f64::from(self.height) as f32)
                     .into_element();
-                let key = self.solid.mount(SolidRenderer::ROOT, skeleton_index, element);
-                self.family_containers.push((family, key.clone()));
+                let seat = self
+                    .family_containers
+                    .iter()
+                    .filter(|(_, index, _)| *index < skeleton_index)
+                    .count()
+                    + usize::from(self.family_key.is_some() && skeleton_index > 0);
+                let key = self.solid.mount(SolidRenderer::ROOT, seat, element);
+                self.family_containers.push((family, skeleton_index, key.clone()));
                 key
             }
         };
@@ -1095,11 +1113,60 @@ pub(crate) fn family_wrapper_live(family: &str) -> bool {
     hub.is_some_and(|hub| hub.borrow().wrappers.iter().any(|w| w.family == family))
 }
 
+// ---------------------------------------------------------------------------
+// frame overlays (the paste_frame class, seated at the seam)
+// ---------------------------------------------------------------------------
+
+/// One hand-built [`Frame`] pasted at the composite seam — the ruling's
+/// paste_frame overlay class (family 6), seated ABOVE every tree pixel
+/// and BELOW the dialog layer's own post-seam paste. D2.2 transcript
+/// lane: the overlay-mode sidebar pane pasted OVER the transcript
+/// rect after the region paste (today's z: pane > composer mount >
+/// transcript) — once the transcript rides the tree, a pre-seam hand
+/// paste would be buried under the wrapper's page bg, so the pane
+/// registers here instead (the sidebar family's own lane moves it
+/// into the tree later).
+struct FrameOverlay {
+    name: &'static str,
+    left: usize,
+    top: usize,
+    frame: Frame,
+    /// Set by this frame's mount; cleared at the seam — an overlay
+    /// nobody synced unmounts.
+    fresh: bool,
+}
+
+thread_local! {
+    /// The seam's frame overlays, in mount order (= paste order).
+    static FRAME_OVERLAYS: RefCell<Vec<FrameOverlay>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Register (or re-seat) one frame overlay for THIS frame's seam. The
+/// caller keeps building the Frame exactly as the old painter did.
+pub(crate) fn mount_frame_overlay(
+    name: &'static str,
+    left: usize,
+    top: usize,
+    frame: Frame,
+) {
+    FRAME_OVERLAYS.with_borrow_mut(|overlays| {
+        if let Some(existing) = overlays.iter_mut().find(|overlay| overlay.name == name) {
+            existing.left = left;
+            existing.top = top;
+            existing.frame = frame;
+            existing.fresh = true;
+        } else {
+            overlays.push(FrameOverlay { name, left, top, frame, fresh: true });
+        }
+    });
+}
+
 /// The chrome family's single compositor seam: prune unsynced
 /// surfaces, flush the shared tree (at most once per sync batch — the
-/// double-flush guard), then walk the shared buffer over the frame.
-/// GridEmitter stays the sole byte emitter; this seam only writes the
-/// in-house Frame cells.
+/// double-flush guard), then walk the shared buffer over the frame,
+/// then paste the frame overlays (above every tree pixel, below the
+/// dialog layer's post-seam paste). GridEmitter stays the sole byte
+/// emitter; this seam only writes the in-house Frame cells.
 pub(crate) fn composite_chrome_tree(frame: &mut Frame) {
     let hub = HUB.with_borrow(|slot| slot.clone());
     let Some(hub) = hub else { return; };
@@ -1107,14 +1174,29 @@ pub(crate) fn composite_chrome_tree(frame: &mut Frame) {
     tree.prune_stale();
     tree.flush_if_pending();
     tree.composite_into(frame);
+    drop(tree);
+    FRAME_OVERLAYS.with_borrow_mut(|overlays| {
+        let mut index = 0;
+        while index < overlays.len() {
+            if overlays[index].fresh {
+                let overlay = &overlays[index];
+                frame.paste_region(&overlay.frame, overlay.left, overlay.top);
+                overlays[index].fresh = false;
+                index += 1;
+            } else {
+                overlays.remove(index);
+            }
+        }
+    });
 }
 
 /// The headless test seam (ruling attempt 2: the hub reset is
 /// MANDATORY, not optional): drop the thread's hub so the next mount
 /// starts from a fresh tree — `cargo test` runs a binary's tests in
-/// one process and mounts are stateful.
+/// one process and mounts are stateful. The frame overlays go with it.
 pub(crate) fn reset_hub() {
     HUB.with_borrow_mut(|slot| *slot = None);
+    FRAME_OVERLAYS.with_borrow_mut(|overlays| overlays.clear());
 }
 
 /// A blank frame of the given size (Default cells) — the rect a
