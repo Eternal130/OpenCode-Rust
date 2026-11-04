@@ -1785,13 +1785,24 @@ pub struct Store {
     /// TUI-29 — the renderer console's open flag
     /// (`renderer.console.toggle()`, app.tsx:1110-1118).
     console_open: Cell<bool>,
-    /// G-83 — the which-key panel's live view (`Some` while the
-    /// overlay shows: a pending chord prefix, or the root listing
+    /// The which-key panel's live view (`Some` while the panel
+    /// shows: a pending chord prefix, or the pinned root listing
     /// `which-key.toggle` opened).
     which_key: RefCell<Option<crate::components::which_key::WhichKeyView>>,
-    /// G-83 — `which-key.toggle`'s root listing flag (the panel
-    /// shows the top-level bindings while set).
-    which_key_root: Cell<bool>,
+    /// `which-key.toggle`'s pinned flag (the panel shows the root
+    /// listing while set — which-key.tsx:520-532).
+    which_key_pinned: Cell<bool>,
+    /// `which-key.layout.toggle`'s dock/overlay mode (:533-541).
+    which_key_layout: Cell<crate::components::which_key::WhichKeyLayout>,
+    /// `which-key.pending.toggle`'s auto-preview flag (:542-552).
+    which_key_pending_preview: Cell<bool>,
+    /// The listing scroll offset (which-key.tsx:205).
+    which_key_offset: Cell<usize>,
+    /// The selected group tab (which-key.tsx:206).
+    which_key_group: RefCell<Option<String>>,
+    /// The pending display the sync last saw (the offset reset effect,
+    /// which-key.tsx:373-376).
+    which_key_pending_seen: RefCell<Option<String>>,
     /// TUI-29 — the console's captured diagnostics ring (the tail
     /// renders in the overlay).
     console_ring: std::cell::RefCell<std::collections::VecDeque<String>>,
@@ -3943,7 +3954,12 @@ impl Store {
             rename_outbox: std::cell::RefCell::new(Vec::new()),
             console_open: Cell::new(false),
             which_key: RefCell::new(None),
-            which_key_root: Cell::new(false),
+            which_key_pinned: Cell::new(false),
+            which_key_layout: Cell::new(crate::components::which_key::WhichKeyLayout::Overlay),
+            which_key_pending_preview: Cell::new(true),
+            which_key_offset: Cell::new(0),
+            which_key_group: RefCell::new(None),
+            which_key_pending_seen: RefCell::new(None),
             console_ring: std::cell::RefCell::new(std::collections::VecDeque::new()),
             caret_cell: Cell::new(None),
             connection_since: Cell::new(0),
@@ -4410,14 +4426,14 @@ impl Store {
         self.console_open.get()
     }
 
-    /// G-83 — the which-key panel's live view (`None` while closed).
+    /// The which-key panel's live view (`None` while closed).
     #[must_use]
     pub fn which_key(&self) -> Option<crate::components::which_key::WhichKeyView> {
         self.which_key.borrow().clone()
     }
 
-    /// G-83 — replace the which-key view (the app syncs it after
-    /// every stroke); redraws only on an actual change.
+    /// Replace the which-key view (the app syncs it after every
+    /// stroke); redraws only on an actual change.
     pub fn set_which_key(&self, view: Option<crate::components::which_key::WhichKeyView>) {
         let changed = *self.which_key.borrow() != view;
         if changed {
@@ -4426,17 +4442,66 @@ impl Store {
         }
     }
 
-    /// G-83 — `which-key.toggle`: flip the root listing flag (the
-    /// app materializes the entries on the next sync).
+    /// `which-key.toggle`: flip the pinned flag (which-key.tsx:520-532;
+    /// the app materializes the entries on the next sync).
     pub fn which_key_toggle(&self) {
-        self.which_key_root.set(!self.which_key_root.get());
+        self.which_key_pinned.set(!self.which_key_pinned.get());
         self.request_redraw();
     }
 
-    /// G-83 — whether the root listing is on.
+    /// Whether the panel is pinned open.
     #[must_use]
-    pub fn which_key_root_open(&self) -> bool {
-        self.which_key_root.get()
+    pub fn which_key_pinned(&self) -> bool {
+        self.which_key_pinned.get()
+    }
+
+    /// `which-key.layout.toggle` (which-key.tsx:533-541).
+    pub fn which_key_toggle_layout(&self) {
+        self.which_key_layout.set(self.which_key_layout.get().next());
+        self.request_redraw();
+    }
+
+    #[must_use]
+    pub fn which_key_layout(&self) -> crate::components::which_key::WhichKeyLayout {
+        self.which_key_layout.get()
+    }
+
+    /// `which-key.pending.toggle` (which-key.tsx:542-552).
+    pub fn which_key_toggle_pending_preview(&self) {
+        self.which_key_pending_preview.set(!self.which_key_pending_preview.get());
+        self.request_redraw();
+    }
+
+    #[must_use]
+    pub fn which_key_pending_preview(&self) -> bool {
+        self.which_key_pending_preview.get()
+    }
+
+    #[must_use]
+    pub fn which_key_offset(&self) -> usize {
+        self.which_key_offset.get()
+    }
+
+    pub fn set_which_key_offset(&self, offset: usize) {
+        self.which_key_offset.set(offset);
+    }
+
+    #[must_use]
+    pub fn which_key_group(&self) -> Option<String> {
+        self.which_key_group.borrow().clone()
+    }
+
+    pub fn set_which_key_group(&self, group: Option<String>) {
+        *self.which_key_group.borrow_mut() = group;
+    }
+
+    #[must_use]
+    pub fn which_key_pending_seen(&self) -> Option<String> {
+        self.which_key_pending_seen.borrow().clone()
+    }
+
+    pub fn set_which_key_pending_seen(&self, display: Option<String>) {
+        *self.which_key_pending_seen.borrow_mut() = display;
     }
 
     /// Capture one diagnostic line into the console's ring (the
