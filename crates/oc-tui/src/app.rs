@@ -7565,6 +7565,55 @@ fn apply_boot_route(store: &crate::store::Store, boot: &BootArgs, continue_targe
 pub type SessionTerminal =
     opentui_core::terminal::Terminal<opentui_core::terminal::UnixTty, std::io::Stdout>;
 
+/// D2.1b — the live CliRenderer's terminal-session handle. The
+/// renderer owns OUTPUT scheduling through this handle (title /
+/// mouse-toggle writes, teardown on `destroy`); it always locks the
+/// shared slot, so the editor/suspend terminal rebuilds swap in under
+/// it without any stale-session capture. `pump_output` is forwarded
+/// for API completeness but never driven in this lane — the
+/// renderer's SGR stream stays unpumped (GridEmitter is the one
+/// frame writer).
+struct RendererSessionHandle {
+    session: Arc<std::sync::Mutex<SessionTerminal>>,
+}
+
+impl opentui_core::renderer::RendererTerminalSession for RendererSessionHandle {
+    fn write_bytes(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        use std::io::Write as _;
+        if let Ok(mut session) = self.session.lock() {
+            let out = session.output();
+            out.write_all(bytes)?;
+            out.flush()?;
+            Ok(())
+        } else {
+            Err(std::io::Error::other("session terminal lock poisoned"))
+        }
+    }
+
+    fn pump_output(&mut self, renderer: &mut opentui_core::renderer::CliRenderer) -> std::io::Result<()> {
+        if let Ok(mut session) = self.session.lock() {
+            opentui_core::terminal::Terminal::pump_output(&mut session, renderer)
+        } else {
+            Err(std::io::Error::other("session terminal lock poisoned"))
+        }
+    }
+
+    fn teardown(&mut self) -> std::io::Result<()> {
+        if let Ok(mut session) = self.session.lock() {
+            session.teardown()
+        } else {
+            Err(std::io::Error::other("session terminal lock poisoned"))
+        }
+    }
+
+    fn is_torn_down(&self) -> bool {
+        self.session
+            .lock()
+            .map(|session| session.is_torn_down())
+            .unwrap_or(true)
+    }
+}
+
 /// The session's [`opentui_core::terminal::SetupOptions`]: mouse under
 /// the config gate (v2's four-mode set, armed inside the Terminal's
 /// setup burst), bracketed paste + focus reporting always on, kitty
@@ -7576,6 +7625,11 @@ fn session_setup_options(mouse: bool) -> opentui_core::terminal::SetupOptions {
         kitty_keyboard_flags: 0,
         bracketed_paste: true,
         auto_focus: true,
+        // d3688d8 grew the struct (the Phase B split-footer base):
+        // oc-tui lives in the alternate screen, no surface
+        // reservation — the exact pre-bump behavior, now stated.
+        use_alt_screen: true,
+        reserve_surface_height: 0,
     }
 }
 
@@ -7737,6 +7791,34 @@ pub async fn run_with_size(
         usize::from(size.0),
         usize::from(size.1),
     );
+
+    // D2.1b — the LIVE CliRenderer owns frame scheduling. It carries
+    // no renderables in this lane (the surface tree migrates in
+    // D2.2); its scheduler is the pump loop's draw gate: an
+    // invalidation (generation change / live clock) rides
+    // `request_render`, `settle(1)` paints exactly one frame per
+    // pump-iteration batch — the pre-flip "one draw per loop
+    // iteration" burst boundary, unchanged. The renderer's own SGR
+    // stream is never pumped: GridEmitter stays the session output's
+    // ONE frame writer (byte-for-byte unchanged is constructive —
+    // same Frame, same emitter). Config mirrors the probe-era
+    // assembly: `use_mouse: false` (mouse modes are armed by the
+    // SessionTerminal's setup burst, not the renderer), kitty flags
+    // off (the push is probe-gated post-boot), default 30/60 fps.
+    let mut render_renderer = {
+        let mut renderer = opentui_core::renderer::create_cli_renderer(
+            opentui_core::renderer::CliRendererConfig {
+                width: u32::from(size.0),
+                height: u32::from(size.1),
+                use_mouse: false,
+                ..opentui_core::renderer::CliRendererConfig::default()
+            },
+        );
+        renderer.attach_terminal_session(Box::new(RendererSessionHandle {
+            session: Arc::clone(&session_terminal),
+        }));
+        renderer
+    };
 
     // App + config boot.
     let store = Store::new(crate::reactive::Runtime::new());
@@ -9627,7 +9709,23 @@ pub async fn run_with_size(
         // Render (coalesced; the clock tick keeps spinners/toasts live).
         app.store.runtime.run_effects();
         let generation = app.store.redraw_generation();
-        if generation != redraw_at || app.store.clock() > 0 {
+        let dirty = generation != redraw_at || app.store.clock() > 0;
+        // D2.1b — the invalidation rides the LIVE CliRenderer's
+        // scheduler (one request per pump iteration; `settle`'s
+        // contract is exactly one frame per invalidation batch), so
+        // the frame build + GridEmitter emission below executes under
+        // the renderer's frame scheduling. The burst boundary is the
+        // pre-flip one by construction: the same dirty predicate gates
+        // the draw (renderer-internally armed frames — e.g. the
+        // resize-driven request — drain through settle but never draw
+        // on their own), and the virtual-clock settle is driven
+        // inline, so the ~100 ms pump tick — not targetFps — remains
+        // the frame pacer.
+        if dirty {
+            render_renderer.request_render();
+        }
+        let painted = render_renderer.settle(1);
+        if dirty && painted > 0 {
             redraw_at = generation;
             // Live-size reconciliation (found by the parity rig's
             // resize corpus): the kernel may deliver the SIGWINCH
@@ -9649,6 +9747,9 @@ pub async fn run_with_size(
                         // the emitter repaints in full (upstream
                         // `resize`: fresh blank buffers).
                         emitter.resize(usize::from(width), usize::from(height));
+                        // D2.1b — the scheduling renderer's tree size
+                        // follows (its SGR stream stays unpumped).
+                        render_renderer.resize(u32::from(width), u32::from(height));
                     }
                 }
             }
@@ -9787,6 +9888,7 @@ pub async fn run_with_size(
             Some(TermEvent::Resize(width, height)) => {
                 app.resize((width, height));
                 emitter.resize(usize::from(width), usize::from(height));
+                render_renderer.resize(u32::from(width), u32::from(height));
                 redraw_at = 0; // force one redraw
             }
             // Focus: the attention marker consumes on FocusGained (the
@@ -9885,8 +9987,16 @@ pub async fn run_with_size(
                 let _ = out.write_all(crate::terminal_proto::KITTY_GRAPHICS_DELETE_ALL);
             }
             let _ = out.flush();
-            let _ = session.teardown();
         }
+        // D2.1b — the session Terminal's teardown epilogue now rides
+        // `renderer.destroy()`: the LIVE CliRenderer's destroy path
+        // drives the attached session's teardown (show cursor, mode
+        // pops under their gates — alt screen, paste/focus, mouse when
+        // the setup armed it, DECSCUSR/cursor-color reset tail) +
+        // cooked mode. Called OUTSIDE the session lock above (the
+        // renderer's session handle takes the same lock). Same bytes,
+        // same order — only the call site moved.
+        let _ = render_renderer.destroy();
     }
     // #46 — the exit epilogue (v2 app.tsx:446-450: the renderer stops,
     // then `process.stdout.write(epilogue + "\n")`): the wordmark +
@@ -14227,5 +14337,98 @@ mod which_key_tests {
         assert!(frame.contains("which-key"), "the root title rides the border: {frame}");
         app.press("escape");
         assert!(app.store.which_key().is_none(), "escape dismisses the root listing");
+    }
+}
+
+/// D2.1b — the render-loop ownership flip's scheduler-equivalence
+/// proofs: the LIVE CliRenderer's `request_render`/`settle` gate must
+/// reproduce the pre-flip draw predicate's burst boundary exactly
+/// (one draw per dirty pump iteration; nothing extra, nothing
+/// merged away).
+#[cfg(test)]
+mod render_scheduler_equiv_tests {
+    use opentui_core::renderer::{create_cli_renderer, CliRendererConfig};
+
+    fn renderer() -> opentui_core::renderer::CliRenderer {
+        create_cli_renderer(CliRendererConfig {
+            width: 80,
+            height: 24,
+            use_mouse: false,
+            ..CliRendererConfig::default()
+        })
+    }
+
+    /// The settle contract is exactly one frame per invalidation
+    /// batch (N requestRender calls between settles → 1 frame) —
+    /// under the pump's one-request-per-iteration discipline the
+    /// post-flip gate draws EXACTLY when the pre-flip dirty
+    /// predicate drew.
+    #[test]
+    fn flip_gate_matches_pre_flip_dirty_predicate() {
+        let mut r = renderer();
+        // (generation, clock) per pump iteration — the pre-flip
+        // predicate: `generation != redraw_at || clock > 0`.
+        let wakeups: &[(u64, u64)] = &[
+            (1, 0),  // boot frame (generation moved, clock not yet)
+            (1, 0),  // idle pre-tick pass — NO draw pre-flip
+            (1, 1),  // first clock tick — draws from here on
+            (1, 1),  // steady clock — draws every iteration
+            (2, 1),  // a redraw generation bump
+            (2, 1),  // steady
+            (0, 1),  // forced redraw (redraw_at reset — resize)
+        ];
+        let mut redraw_at = 0u64;
+        for &(generation, clock) in wakeups {
+            let dirty = generation != redraw_at || clock > 0;
+            // -- pre-flip: draw iff dirty --------------------------------
+            let pre_flip_drew = dirty;
+            // -- post-flip: the renderer's scheduler owns the frame ----
+            if dirty {
+                r.request_render();
+            }
+            let painted = r.settle(1);
+            let post_flip_drew = dirty && painted > 0;
+            assert_eq!(
+                pre_flip_drew, post_flip_drew,
+                "iteration (gen={generation}, clock={clock}): the flip must not move the burst boundary"
+            );
+            if post_flip_drew {
+                redraw_at = generation;
+            } else {
+                assert!(!dirty, "a dirty iteration must always paint exactly one frame");
+            }
+        }
+    }
+
+    /// A renderer-internally armed frame (the resize-driven
+    /// request_render inside `CliRenderer::resize`) drains through
+    /// settle but must never draw on its own — the oc-tui dirty
+    /// predicate stays authoritative.
+    #[test]
+    fn internally_armed_frames_do_not_draw() {
+        let mut r = renderer();
+        r.resize(100, 30); // arms an internal render
+        let painted = r.settle(1);
+        // The scheduler may paint its own frame — the flip's gate
+        // multiplies it by the (false) dirty predicate, so the draw
+        // count contribution is zero either way.
+        let _ = painted;
+        assert!(!r.is_render_pending(), "settle drains the arm");
+        // An idle pass paints nothing: no request, no frame.
+        assert_eq!(r.settle(1), 0, "no request → no frame");
+    }
+
+    /// The upstream coalescing contract holds at the pump's
+    /// granularity: one request per settle paints one frame, and
+    /// repeated requests WITHIN one iteration coalesce to one —
+    /// never zero (starvation) and never a burst of two.
+    #[test]
+    fn settle_paints_exactly_one_frame_per_iteration_batch() {
+        let mut r = renderer();
+        for _ in 0..8 {
+            r.request_render();
+            r.request_render(); // a second invalidation in the same batch
+            assert_eq!(r.settle(1), 1, "N requests between settles → exactly 1 frame");
+        }
     }
 }
