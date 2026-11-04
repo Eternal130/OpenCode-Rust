@@ -9,22 +9,41 @@
 //! ([`crate::components::footer`]), and tears down in the reference's
 //! order on close.
 //!
-//! ## Lane B4 — the thin seam (same writer, same emitter)
+//! ## Lane D2.3 — the true split-footer engine
 //!
-//! The retired inline-viewport terminal (a ratatui `Terminal` over a
-//! crossterm backend) is gone. The dock renders through oc-tui's own
-//! [`crate::grid_emitter::GridEmitter`] — the same standalone-value
-//! frame writer the main TUI uses — over a full-screen grid whose rows
-//! above the dock read as blank in every frame, so emission never
-//! touches the transcript region. Every byte (scrollback rows and
-//! footer frames) flows through ONE writer (`Stdout`, the same `W`
-//! the main app's session terminal writes through); the mini loop is
-//! single-threaded, so the main app's lock convention holds by
-//! construction — there is no second writer to serialize against.
+//! The retired lane-B4 thin seam (a hand-drawn dock + a CUP/scroll
+//! `insert_before` simulation) is gone. The lifecycle now consumes the
+//! opentui D1b split-footer family exactly the way the reference
+//! boots it (`runtime.lifecycle.ts:152-205`):
 //!
-//! `insert_before` (the retired terminal's scrollback write) is
-//! reimplemented below over plain ANSI (erase dock → scroll → write
-//! rows), matching the upstream no-scrolling-regions semantics.
+//! * the terminal session is an opentui [`Terminal`] in the non-alt
+//!   arm — `use_alt_screen: false` + `reserve_surface_height:
+//!   FOOTER_HEIGHT` (the `makeRoomForRendererOutput` boot push, so
+//!   the shell's prior output scrolls up and the dock's rows free up
+//!   at the bottom);
+//! * the renderer is a real [`CliRenderer`] with `screen_mode:
+//!   SplitFooter`, `footer_height: FOOTER_HEIGHT`,
+//!   `external_output_mode: CaptureStdout` (the ref's
+//!   `createCliRenderer` config, `runtime.lifecycle.ts:157-174`) —
+//!   the capture gate every scrollback write/flush checks;
+//! * transcript rows flow through `writeToScrollback` → the
+//!   `EXTERNAL_OUTPUT` commit FIFO → `flushPendingSplitCommits`,
+//!   whose newline-ownership bytes (the tail-column arithmetic,
+//!   `renderer.ts:2497-2566`) write through the attached session's
+//!   output — the engine's scrollback path, not a hand-rolled
+//!   CUP-write;
+//! * the dock still paints through oc-tui's
+//!   [`crate::grid_emitter::GridEmitter`] — the same D2.1b ruling as
+//!   the main TUI (the renderer's own SGR stream is never pumped;
+//!   GridEmitter is the one frame writer). The footer pane is an
+//!   oc-tui component family that renders a `render::Frame`, so the
+//!   paint seam is the grid, not opentui renderables.
+//!
+//! ADR-0018 §5's registered deviations flip with this: the
+//! no-scrolling-regions `insert_before` semantics are replaced by the
+//! engine's newline-ownership stream, and resize now re-renders (the
+//! registered "mini resize does not reflow" (M3) deviation is
+//! closed — see [`Lifecycle::poll_resize`]).
 //!
 //! ## Exit semantics (`runtime.lifecycle.ts:97-111` + `close`,
 //! `:300-343`)
@@ -34,8 +53,7 @@
 //! 2. footer `close()` → `destroy()`;
 //! 3. `shutdown(renderer)`: leave split-footer mode, destroy;
 //! 4. when no exit splash was written: `stdout.write("\n")`
-//!    (`runtime.lifecycle.ts:339-341`).
-//!
+//!    (`runtime.lifecycle.ts:339-341`).//!
 //! The footer's key handling lives in [`FooterPane`] so the state
 //! machine is unit-testable without a terminal.
 
@@ -44,6 +62,12 @@
 
 use std::io::Write as _;
 use std::time::{Duration, Instant};
+
+use opentui_core::renderer::{
+    create_cli_renderer, CliRenderer, CliRendererConfig, ExternalOutputMode,
+    RendererTerminalSession, ScreenMode,
+};
+use opentui_core::scrollback::ScrollbackSnapshot;
 
 use super::scrollback::{format_commit_with, Commit};
 use super::splash::{
@@ -829,27 +853,138 @@ impl PendingRows {
             PendingRows::Styled(rows) => crate::wrap::flatten_spans(&rows[index]),
         }
     }
+
+    /// The whole batch as styled ANSI rows (D2.3 — the payload the
+    /// split-footer engine's commit FIFO carries: one String per row,
+    /// plain rows as text, styled rows as SGR-run text using the same
+    /// serialization the retired CUP writer stamped).
+    fn ansi_rows(&self, width: usize) -> Vec<String> {
+        (0..self.len()).map(|index| serialize_atoms_row(&self.atoms(index), width)).collect()
+    }
+}
+
+/// One row's cluster atoms → styled ANSI text: a style boundary
+/// re-opens SGR from reset (one burst per run), the row closes with
+/// a final reset (the retired cell-buffer writer's merge shape).
+fn serialize_atoms_row(atoms: &[crate::wrap::Atom], width: usize) -> String {
+    let mut sequence = String::new();
+    let mut x = 0usize;
+    let mut last_style: Option<crate::style::Style> = None;
+    for atom in atoms {
+        if x >= width {
+            break;
+        }
+        if last_style != Some(atom.style) {
+            sequence.push_str("\x1b[0m");
+            if let Some(color) = atom.style.fg {
+                crate::grid_emitter::emit_fg(
+                    &mut sequence,
+                    crate::render::CellColor::from(color),
+                );
+            }
+            if let Some(color) = atom.style.bg {
+                crate::grid_emitter::emit_bg(
+                    &mut sequence,
+                    crate::render::CellColor::from(color),
+                );
+            }
+            crate::grid_emitter::apply_attributes(&mut sequence, atom.style.add_modifier.bits());
+            last_style = Some(atom.style);
+        }
+        sequence.push_str(&atom.text);
+        x += atom.width.max(1);
+    }
+    if last_style.is_some() {
+        sequence.push_str("\x1b[0m");
+    }
+    sequence
+}
+
+/// The mini terminal session — opentui's `Terminal` over the real
+/// tty + stdout (the main app's [`crate::app::SessionTerminal`]
+/// shape).
+pub type MiniTerminal = opentui_core::terminal::Terminal<
+    opentui_core::terminal::UnixTty,
+    std::io::Stdout,
+>;
+
+/// D2.3 — the renderer's terminal-session handle (the same adapter
+/// the main app installs, `app.rs`'s `RendererSessionHandle`): the
+/// split-commit flush and teardown reach the terminal through the
+/// shared slot. The mini loop is single-threaded and the only writer,
+/// so the lock is uncontended by construction.
+struct MiniSessionHandle {
+    session: std::sync::Arc<std::sync::Mutex<MiniTerminal>>,
+}
+
+impl RendererTerminalSession for MiniSessionHandle {
+    fn write_bytes(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        use std::io::Write as _;
+        if let Ok(mut session) = self.session.lock() {
+            let out = session.output();
+            out.write_all(bytes)?;
+            out.flush()?;
+            Ok(())
+        } else {
+            Err(std::io::Error::other("mini session terminal lock poisoned"))
+        }
+    }
+
+    fn pump_output(
+        &mut self,
+        renderer: &mut opentui_core::renderer::CliRenderer,
+    ) -> std::io::Result<()> {
+        // D2.1b ruling: the renderer's own SGR stream is never pumped
+        // (GridEmitter is the one frame writer) — the seam is carried
+        // for API completeness.
+        if let Ok(mut session) = self.session.lock() {
+            opentui_core::terminal::Terminal::pump_output(&mut session, renderer)
+        } else {
+            Err(std::io::Error::other("mini session terminal lock poisoned"))
+        }
+    }
+
+    fn teardown(&mut self) -> std::io::Result<()> {
+        if let Ok(mut session) = self.session.lock() {
+            session.teardown()
+        } else {
+            Err(std::io::Error::other("mini session terminal lock poisoned"))
+        }
+    }
+
+    fn is_torn_down(&self) -> bool {
+        self.session
+            .lock()
+            .map(|session| session.is_torn_down())
+            .unwrap_or(true)
+    }
 }
 
 /// `Lifecycle`, `runtime.lifecycle.ts:85-92`).
 #[allow(clippy::struct_excessive_bools)] // the renderer flag set mirrors the reference
 pub struct Lifecycle {
-    /// Lane B4 — the ONE output writer. The same `Stdout` `W` the
-    /// main app's session terminal emits through; the mini loop owns
-    /// it single-threaded, so the write seam has exactly one writer
-    /// (the main app's lock convention, held by construction).
-    out: std::io::Stdout,
-    /// Lane B4 — the dock's frame emitter (the same standalone-value
-    /// [`crate::grid_emitter::GridEmitter`] the main TUI uses). Sized
-    /// to the FULL screen; the frame fed to it carries only the
+    /// The dock's frame emitter (the D2.1b ruling — the same
+    /// standalone-value [`crate::grid_emitter::GridEmitter`] the main
+    /// TUI uses; the CliRenderer's own SGR stream stays unpumped).
+    /// Sized to the FULL screen; the frame fed to it carries only the
     /// bottom dock rows, so the transcript region above the dock
     /// reads as blank-vs-blank on the diff and never emits.
     emitter: crate::grid_emitter::GridEmitter,
-    /// Lane B3a — the raw-mode owner (opentui's `UnixTty`; the split
-    /// footer never enters the alt screen, so a bare termios save is
-    /// all the "session" mini needs).
-    tty: Option<opentui_core::terminal::UnixTty>,
-    termios_save: Option<opentui_core::terminal::TermiosSave>,
+    /// The dock paint's writer (one `Stdout`; single-threaded mini
+    /// keeps the write seam uncontended).
+    out: std::io::Stdout,
+    /// D2.3 — the opentui terminal session: raw mode + the reserved
+    /// footer surface (the non-alt `makeRoomForRendererOutput` boot
+    /// push). Transcript bytes from the split-commit flush and the
+    /// teardown epilogue write through it.
+    session: std::sync::Arc<std::sync::Mutex<MiniTerminal>>,
+    /// D2.3 — the split-footer renderer (`createCliRenderer` with
+    /// `screenMode: "split-footer"`, `footerHeight: FOOTER_HEIGHT`,
+    /// `externalOutputMode: "capture-stdout"`,
+    /// `runtime.lifecycle.ts:157-174`). Owns the scrollback commit
+    /// FIFO (the `EXTERNAL_OUTPUT` family) the transcript rows flow
+    /// through.
+    renderer: CliRenderer,
     pub pane: FooterPane,
     pending: Vec<PendingRows>,
     /// The last committed transcript row (separator decisions).
@@ -879,22 +1014,64 @@ pub struct Lifecycle {
 
 impl Lifecycle {
     /// Boot the renderer (`createRuntimeLifecycle`,
-    /// `runtime.lifecycle.ts:152-205`): raw mode + the bottom dock,
-    /// entry splash, first footer paint.
+    /// `runtime.lifecycle.ts:152-205`): the split-footer terminal
+    /// session + renderer, entry splash, first footer paint.
     pub fn boot(input: LifecycleInput) -> Result<Self, String> {
-        // Lane B3a: raw mode through opentui's tty device (the
-        // retired raw-mode toggle went with the backend migration).
-        use opentui_core::terminal::TtyDevice as _;
-        let mut tty = opentui_core::terminal::UnixTty::new().map_err(|error| error.to_string())?;
-        let termios_save = tty.raw_mode().map_err(|error| error.to_string())?;
-        let (columns, rows) = tty.window_size().map_err(|error| error.to_string())?;
-        let width = usize::from(columns).max(1);
-        let height = usize::from(rows).max(1);
+        // D2.3 — the split-footer session base: raw mode + the
+        // reserved main-screen surface (`makeRoomForRendererOutput`,
+        // `renderer.zig:566-569`) — the boot push that scrolls the
+        // shell's prior output up and frees the dock's rows at the
+        // bottom. Mouse/kitty/paste/focus stay off (the ref's
+        // `useMouse: false`, `autoFocus: false`, mono-independent —
+        // mini keys ride the KeyPipeline fd read, `exitOnCtrlC` is
+        // the footer's two-press chord, not the renderer's).
+        let session = {
+            let tty = opentui_core::terminal::UnixTty::new().map_err(|e| e.to_string())?;
+            let setup = opentui_core::terminal::SetupOptions {
+                use_mouse: false,
+                mouse_movement: false,
+                kitty_keyboard_flags: 0,
+                bracketed_paste: false,
+                auto_focus: false,
+                use_alt_screen: false,
+                reserve_surface_height: u32::try_from(FOOTER_HEIGHT).unwrap_or(4),
+            };
+            let terminal =
+                MiniTerminal::new(tty, std::io::stdout(), &setup).map_err(|e| e.to_string())?;
+            std::sync::Arc::new(std::sync::Mutex::new(terminal))
+        };
+        let (width, height) = {
+            use opentui_core::terminal::TtyDevice as _;
+            let Ok(mut session) = session.lock() else {
+                return Err("mini session terminal lock poisoned".to_owned());
+            };
+            let (columns, rows) =
+                session.tty().window_size().map_err(|e| e.to_string())?;
+            (usize::from(columns).max(1), usize::from(rows).max(1))
+        };
         // Split-footer mode never enters the alternate screen — the
         // conversation owns the native scrollback; only the footer
-        // pane is live-rendered. Lane B4: the dock is the emitter's
-        // bottom rows over one `Stdout` writer; the cursor stays
-        // hidden (the composer needs no hardware caret).
+        // pane is live-rendered. D2.3: the real CliRenderer in the
+        // ref's configuration (`runtime.lifecycle.ts:157-174`) — the
+        // capture gate arms at construction (`resolveModes`).
+        let mut renderer = create_cli_renderer(CliRendererConfig {
+            width: u32::try_from(width).unwrap_or(u32::MAX),
+            height: u32::try_from(height).unwrap_or(u32::MAX),
+            use_mouse: false,
+            auto_focus: false,
+            exit_on_ctrl_c: false,
+            clear_on_shutdown: false,
+            screen_mode: ScreenMode::SplitFooter,
+            footer_height: Some(u32::try_from(FOOTER_HEIGHT).unwrap_or(4)),
+            external_output_mode: Some(ExternalOutputMode::CaptureStdout),
+            ..CliRendererConfig::default()
+        });
+        renderer.attach_terminal_session(Box::new(MiniSessionHandle {
+            session: std::sync::Arc::clone(&session),
+        }));
+        debug_assert!(renderer.is_split_footer_capture_active(), "capture arms at boot");
+        // The dock paint emitter (D2.1b): full-screen grid, cursor
+        // hidden — the composer needs no hardware caret.
         let mut emitter = crate::grid_emitter::GridEmitter::new(width, height);
         emitter.cursor.set_position(1, 1, false);
 
@@ -913,8 +1090,8 @@ impl Lifecycle {
         let mut lifecycle = Self {
             out: std::io::stdout(),
             emitter,
-            tty: Some(tty),
-            termios_save: Some(termios_save),
+            session,
+            renderer,
             pane,
             pending: Vec::new(),
             last_commit: None,
@@ -931,12 +1108,10 @@ impl Lifecycle {
             home: input.home,
             directory: input.directory,
         };
-        // Push the dock to the bottom of the screen: the boot rows
-        // the retired inline viewport appended (`compute_inline_size`'s
-        // newline push — the terminal scrolls until the dock's rows
-        // free up at the bottom, whatever was there entering the
-        // native scrollback).
-        lifecycle.push_dock_to_bottom()?;
+        // D2.3 — the boot push is the Terminal's reserved-surface arm
+        // (`makeRoomForRendererOutput` ran inside `Terminal::new`,
+        // scrolling the shell's prior output until the dock's rows
+        // free at the bottom); no separate newline push remains.
         // `queueSplash(entry)` (`runtime.lifecycle.ts:191-203`) with
         // RD-19's startup split (`runtime.lifecycle.ts:187-196`):
         // splash=show AND NOT mono (the ref also requires
@@ -1020,9 +1195,9 @@ impl Lifecycle {
     }
 
     /// Flush pending scrollback rows above the dock, then repaint the
-    /// footer pane (`renderer.writeToScrollback` + `requestRender`).
-    /// The scrollback write is the retired terminal's `insert_before`
-    /// equivalent — see [`Self::write_scrollback`].
+    /// footer pane (`renderer.writeToScrollback` + the frame's
+    /// `flushPendingSplitCommits` + `requestRender`) — see
+    /// [`Self::write_scrollback`].
     pub fn flush(&mut self) -> Result<(), String> {
         self.finish_startup();
         if !self.pending.is_empty() {
@@ -1031,129 +1206,59 @@ impl Lifecycle {
         self.draw_footer()
     }
 
-    /// The `insert_before` equivalent (`writeToScrollback`,
-    /// `runtime.lifecycle.ts:97-111`): scroll the screen up so the
-    /// pending rows land in the native scrollback region just above
-    /// the dock, then let the next [`Self::draw_footer`] repaint the
-    /// dock at the bottom.
+    /// The scrollback write (D2.3 — `writeToScrollback` +
+    /// `flushPendingSplitCommits`, `renderer.ts:2363-2440` +
+    /// `:2729-2826`): each pending batch becomes ONE
+    /// `EXTERNAL_OUTPUT` commit in the renderer's FIFO (styled rows
+    /// serialized per the retired writer's SGR-run shape), then the
+    /// flush drains the queue — the engine's newline-ownership bytes
+    /// (tail-column arithmetic, `renderer.ts:2497-2566`) write
+    /// through the attached session's output, scrolling the screen
+    /// until the rows land in the native scrollback above the dock.
     ///
-    /// Upstream semantics this mirrors (the retired inline terminal's
-    /// no-scrolling-regions `insert_before`): erase the dock's rows,
-    /// scroll the WHOLE screen up by `height` lines from the bottom
-    /// row (the top visible transcript lines enter the native
-    /// scrollback), draw the batch's rows into the freed region above
-    /// the dock — chunked when a batch exceeds the free region — and
-    /// finally repaint the dock (its cells scrolled up with everything
-    /// else; the pre-scroll erase keeps the scroll from stranding a
-    /// ghost of the dock mid-screen).
+    /// The dock's rows erase FIRST (the engine's stream scrolls the
+    /// whole screen — a painted dock would scroll up as a ghost into
+    /// the scrollback); the following [`Self::draw_footer`] repaints
+    /// the dock at the bottom. `startOnNewLine`/`trailingNewline` own
+    /// the newline intent (every mini commit starts and ends on a
+    /// fresh row, so the tail column resets per commit).
     fn write_scrollback(&mut self) -> Result<(), String> {
-        // The reserved dock region: the pane's CURRENT height — new
-        // rows never land in the bottom rows the dock repaints into.
-        let dock = self.pane.pane_height().clamp(1, self.height.max(1));
-        // Erase the drawn dock first (after the scroll it would sit
-        // mid-screen as a ghost; erasing after would also wipe
-        // freshly written rows).
+        // Erase the drawn dock first: the engine's transcript bytes
+        // scroll the whole screen, so a painted dock would strand a
+        // ghost mid-screen (in the native scrollback after the scroll).
         if self.drawn_footer_rows > 0 {
             let top = self.height.saturating_sub(self.drawn_footer_rows) + 1;
             let sequence = format!("\x1b[{top};1H\x1b[0J");
             self.write_raw(sequence.as_bytes())?;
             self.drawn_footer_rows = 0;
         }
+        let row_columns = u32::try_from(self.width.max(1)).unwrap_or(u32::MAX);
         while let Some(batch) = self.pending.first().cloned() {
-            let total = batch.len();
-            // The free region above the dock (at least one row — a
-            // degenerate 1-row terminal still makes progress).
-            let per_page = self.height.saturating_sub(dock).max(1);
-            let mut written = 0usize;
-            while written < total {
-                let chunk = (total - written).min(per_page);
-                self.scroll_up(chunk)?;
-                self.write_batch_rows(&batch, written, chunk, dock)?;
-                written += chunk;
+            let lines = batch.ansi_rows(self.width.max(1));
+            if !lines.is_empty() {
+                self.renderer
+                    .write_to_scrollback(Box::new(move |_ctx| ScrollbackSnapshot {
+                        lines,
+                        row_columns: Some(row_columns),
+                        start_on_new_line: Some(true),
+                        trailing_newline: Some(true),
+                    }))
+                    .map_err(|error| match error {
+                        opentui_core::renderer::ScrollbackWriteError::CaptureNotActive => {
+                            "writeToScrollback: the split-footer capture is not active".to_owned()
+                        }
+                        opentui_core::renderer::ScrollbackWriteError::EmptySnapshot => {
+                            "writeToScrollback: the writer returned no rows".to_owned()
+                        }
+                    })?;
             }
             self.pending.remove(0);
-            self.force_draw = true;
         }
+        // The flush adjudication (drainAll): the FIFO's commits batch
+        // into one transcript byte stream through the live session.
+        let _ = self.renderer.flush_pending_split_commits(true, true);
+        self.force_draw = true;
         Ok(())
-    }
-
-    /// Scroll the whole screen up by `lines` rows: park the cursor at
-    /// the bottom-left and emit `lines` newlines (the retired
-    /// terminal's `append_lines` scroll shape — each LF on the last
-    /// row scrolls one line into the native scrollback).
-    fn scroll_up(&mut self, lines: usize) -> Result<(), String> {
-        if lines == 0 {
-            return Ok(());
-        }
-        let bottom = u16::try_from(self.height).unwrap_or(u16::MAX);
-        let mut sequence = format!("\x1b[{bottom};1H");
-        for _ in 0..lines {
-            sequence.push_str("\r\n");
-        }
-        self.write_raw(sequence.as_bytes())
-    }
-
-    /// Write `count` rows of `batch` (starting at `skip`) into the
-    /// freed region: row `i` lands at absolute screen row
-    /// `height - dock - count + 1 + i` (1-based), each row positioned
-    /// by CUP and stamped cluster-by-cluster (the same
-    /// [`crate::wrap::flatten`] seam the canvas uses; the retired
-    /// writer filled a cell buffer — the atom stream is the same
-    /// text).
-    fn write_batch_rows(
-        &mut self,
-        batch: &PendingRows,
-        skip: usize,
-        count: usize,
-        dock: usize,
-    ) -> Result<(), String> {
-        let mut sequence = String::new();
-        for index in 0..count {
-            let row_number = self
-                .height
-                .saturating_sub(dock.saturating_add(count))
-                .saturating_add(1 + index)
-                .max(1);
-            sequence.push_str("\x1b[");
-            sequence.push_str(&row_number.to_string());
-            sequence.push_str(";1H");
-            let mut x = 0usize;
-            let mut last_style: Option<crate::style::Style> = None;
-            for atom in batch.atoms(skip + index) {
-                if x >= self.width {
-                    break;
-                }
-                if last_style != Some(atom.style) {
-                    // A style boundary re-opens SGR from reset (the
-                    // retired writer merged per-cell styles the same
-                    // way — one burst per run).
-                    sequence.push_str("\x1b[0m");
-                    if let Some(color) = atom.style.fg {
-                        crate::grid_emitter::emit_fg(
-                            &mut sequence,
-                            crate::render::CellColor::from(color),
-                        );
-                    }
-                    if let Some(color) = atom.style.bg {
-                        crate::grid_emitter::emit_bg(
-                            &mut sequence,
-                            crate::render::CellColor::from(color),
-                        );
-                    }
-                    crate::grid_emitter::apply_attributes(
-                        &mut sequence,
-                        atom.style.add_modifier.bits(),
-                    );
-                    last_style = Some(atom.style);
-                }
-                sequence.push_str(&atom.text);
-                x += atom.width.max(1);
-            }
-            if last_style.is_some() {
-                sequence.push_str("\x1b[0m");
-            }
-        }
-        self.write_raw(sequence.as_bytes())
     }
 
     /// One raw write through the lifecycle's single writer.
@@ -1162,14 +1267,6 @@ impl Lifecycle {
             .write_all(bytes)
             .and_then(|()| self.out.flush())
             .map_err(|error| error.to_string())
-    }
-
-    /// The boot push: scroll until the dock's rows free up at the
-    /// bottom of the screen (the retired inline viewport's boot-time
-    /// newline append — `compute_inline_size`).
-    fn push_dock_to_bottom(&mut self) -> Result<(), String> {
-        let dock = self.pane.pane_height().clamp(1, self.height);
-        self.scroll_up(dock)
     }
 
     /// Paint the footer pane into the screen's bottom rows. The frame
@@ -1269,17 +1366,18 @@ impl Lifecycle {
             wrote_exit = true;
         }
         let _ = self.flush();
-        // shutdown(renderer) (`runtime.lifecycle.ts:97-111`): leave
-        // split-footer mode before final output so pending writes pass
-        // through to the real scrollback. `clearOnShutdown: false`
-        // (`runtime.lifecycle.ts:172`) — the last footer frame stays.
-        // Lane B3a: restore cooked mode through the tty device.
-        if let Some(save) = self.termios_save.take() {
-            if let Some(tty) = self.tty.as_mut() {
-                use opentui_core::terminal::TtyDevice as _;
-                let _ = tty.restore(&save);
-            }
-        }
+        // `shutdown(renderer)` (`runtime.lifecycle.ts:97-111`): switch
+        // external output back to passthrough BEFORE leaving
+        // split-footer mode, so pending stdout doesn't get captured
+        // into the now-dead scrollback pipeline; `destroy()` then
+        // tears the attached terminal session down (the port's
+        // `screenMode → main-screen` transition rides the same
+        // capture-off + destroy pair — there is no public mode
+        // setter, bounded divergence). `clearOnShutdown: false`
+        // (`runtime.lifecycle.ts:172`) — the last footer frame stays
+        // (the config is carried on the renderer).
+        self.renderer.set_split_footer_capture(false);
+        self.renderer.destroy();
         if !wrote_exit {
             // `host.stdout.write("\n")` (`runtime.lifecycle.ts:339-341`).
             let _ = std::io::stdout().write_all(b"\n");
@@ -1287,15 +1385,35 @@ impl Lifecycle {
         let _ = std::io::stdout().flush();
     }
 
-    /// Terminal resize (SIGWINCH): re-render at the new size. The
-    /// emitter's prev grid drops to blank at the new dimensions (the
-    /// frame writer's resize semantics), so the next draw fully
-    /// repaints the dock at the new width/height.
+    /// Terminal resize (SIGWINCH / TIOCGWINSZ): re-render at the new
+    /// size. D2.3 — the registered "mini resize does not reflow"
+    /// deviation (ADR-0018, Gate B M3) is CLOSED: the engine's
+    /// geometry tracks the new size (`renderer.resize`), the emitter's
+    /// prev grid drops to blank at the new dimensions (the frame
+    /// writer's resize semantics), so the next draw fully repaints
+    /// the dock at the new width/height.
     pub fn resize(&mut self, width: usize, height: usize) {
         self.width = width.max(1);
         self.height = height.max(1);
         self.emitter.resize(self.width, self.height);
+        self.renderer
+            .resize(u32::try_from(self.width).unwrap_or(u32::MAX), u32::try_from(self.height).unwrap_or(u32::MAX));
         self.force_draw = true;
+    }
+
+    /// Poll the terminal size (TIOCGWINSZ on fd 0, the ADR-0018
+    /// ≤50 ms watch's seam) and apply [`Self::resize`] when it
+    /// changed. Returns whether a re-render is due.
+    pub fn poll_resize(&mut self) -> bool {
+        match observe_window_size() {
+            Some((columns, rows)) if usize::from(columns).max(1) != self.width
+                || usize::from(rows).max(1) != self.height =>
+            {
+                self.resize(usize::from(columns), usize::from(rows));
+                true
+            }
+            _ => false,
+        }
     }
 
     #[must_use]
@@ -1309,10 +1427,68 @@ impl Lifecycle {
     }
 }
 
+/// G-181③ — the TIOCGWINSZ observation (fd 0, the same device the
+/// KeyPipeline reads): `None` when the ioctl fails or reports a
+/// degenerate 0×0 (the resize poll ignores it).
+#[allow(unsafe_code)] // TIOCGWINSZ on stdin is libc FFI
+fn observe_window_size() -> Option<(u16, u16)> {
+    let mut winsize = libc::winsize { ws_row: 0, ws_col: 0, ws_xpixel: 0, ws_ypixel: 0 };
+    // SAFETY: TIOCGWINSZ on stdin.
+    if unsafe { libc::ioctl(0, libc::TIOCGWINSZ, std::ptr::from_mut(&mut winsize)) } != 0 {
+        return None;
+    }
+    (winsize.ws_col > 0 && winsize.ws_row > 0).then_some((winsize.ws_col, winsize.ws_row))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::components::footer::FooterTheme;
+
+    /// D2.3 — the styled-row serialization the split-footer commit
+    /// payload carries: one SGR run per style boundary, a trailing
+    /// reset, plain rows stay plain text, and the width clamps the
+    /// atom walk.
+    #[test]
+    fn ansi_rows_carry_style_runs_and_reset() {
+        use super::PendingRows;
+        let plain = PendingRows::Plain(vec!["hello".to_owned(), String::new()]);
+        assert_eq!(plain.ansi_rows(80), vec!["hello".to_owned(), String::new()]);
+        let styled = PendingRows::Styled(vec![vec![
+            crate::layout::StyledSpan {
+                text: "go".to_owned(),
+                style: crate::style::Style {
+                    fg: Some(crate::style::Color::Indexed(231)),
+                    ..crate::style::Style::new()
+                },
+            },
+            crate::layout::StyledSpan {
+                text: " off".to_owned(),
+                style: crate::style::Style::new(),
+            },
+        ]]);
+        let rows = styled.ansi_rows(80);
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].starts_with("\x1b[0m"), "a boundary opens from reset");
+        assert!(rows[0].contains("38;5;231"), "the indexed fg opens: {}", rows[0]);
+        assert!(rows[0].ends_with("\x1b[0m"), "the row closes with a reset");
+        assert!(rows[0].contains("go off"));
+        // The width clamp drops atoms past the budget.
+        let wide = PendingRows::Plain(vec!["abcdefgh".to_owned()]);
+        assert_eq!(wide.ansi_rows(3), vec!["abc".to_owned()]);
+    }
+
+    /// G-181③ — the poll's size-decision table: only a real 0×0-free
+    /// observation that DIFFERS from the current size re-renders.
+    #[test]
+    fn poll_resize_decision_table() {
+        use super::observe_window_size;
+        // Under `cargo test` stdin may or may not be a tty; the
+        // degenerate/denied cases must simply report None or a
+        // consistent size, never panic.
+        let observed = observe_window_size();
+        assert!(observed.is_none_or(|(columns, rows)| columns > 0 && rows > 0));
+    }
 
     fn pane() -> FooterPane {
         FooterPane::new(FooterTheme::fallback_dark())
