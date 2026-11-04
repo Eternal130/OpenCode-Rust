@@ -818,7 +818,7 @@ fn frame_budget_footer_family_old_vs_solid() {
         create_permission_body_state, permission_body_canvas, PermissionBodyState,
         PermissionOption, PermissionStage,
     };
-    use crate::components::footer::solid::canvas_frame_solid;
+    use crate::components::footer::solid::ops_frame;
     use crate::components::footer::theme::FooterTheme;
     use crate::components::footer::PermissionRequest;
 
@@ -855,7 +855,7 @@ fn frame_budget_footer_family_old_vs_solid() {
             } else {
                 let canvas = permission_body_canvas(&request, state, 200, 16, &theme);
                 let (width, height) = canvas.dims();
-                canvas_frame_solid(canvas.ops().to_vec().as_slice(), width, height)
+                ops_frame(canvas.ops(), width, height)
             };
             let elapsed = start.elapsed();
             worst_micros = worst_micros.max(elapsed.as_micros());

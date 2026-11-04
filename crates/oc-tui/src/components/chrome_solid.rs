@@ -460,6 +460,12 @@ pub(crate) enum ChromeStamp {
     /// A single-cell fg⇄bg swap (the composer family's G-66 selection
     /// highlight — the ref's DEFAULT selection styling).
     Swap { left: usize, top: usize },
+    /// A transparent canvas region (the footer family's `clear_bg` —
+    /// canonical bg `49`): BLANK cells (space, no attrs) inside the
+    /// one-row rect reset their background to Default, glyph cells
+    /// keep their ink — verbatim the retired footer bridge's
+    /// post-copy fixup.
+    Transparent { left: usize, top: usize, width: usize },
 }
 
 /// Apply one stamp at (`base_left`, `base_top`) — the surface/wrapper
@@ -492,6 +498,15 @@ fn apply_stamp(frame: &mut Frame, base_left: usize, base_top: usize, stamp: &Chr
                 .and_then(|line| line.get_mut(base_left + left))
             {
                 std::mem::swap(&mut cell.fg, &mut cell.bg);
+            }
+        }
+        ChromeStamp::Transparent { left, top, width } => {
+            if let Some(row) = frame.cells.get_mut(base_top + top) {
+                for cell in row.iter_mut().skip(base_left + left).take(width) {
+                    if cell.ch == ' ' && cell.attrs == 0 {
+                        cell.bg = CellColor::Default;
+                    }
+                }
             }
         }
     }
