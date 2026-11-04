@@ -2669,7 +2669,7 @@ dependencies = [
 [[package]]
 name = "opentui-core"
 version = "0.1.0"
-source = "git+https://github.com/Eternal130/opentui-rust.git?rev=d3688d8#d3688d8284c282fcca25476f9bfbb3ceb851e68c"
+source = "git+https://github.com/Eternal130/opentui-rust.git?rev=54dbb4d#54dbb4d93e2b8856522642a2aec03691a5c4b8a4"
 dependencies = [
  "cc",
  "minimp3",
@@ -2687,7 +2687,7 @@ dependencies = [
 [[package]]
 name = "opentui-keymap"
 version = "0.1.0"
-source = "git+https://github.com/Eternal130/opentui-rust.git?rev=d3688d8#d3688d8284c282fcca25476f9bfbb3ceb851e68c"
+source = "git+https://github.com/Eternal130/opentui-rust.git?rev=54dbb4d#54dbb4d93e2b8856522642a2aec03691a5c4b8a4"
 dependencies = [
  "serde",
  "serde_json",
@@ -2696,7 +2696,7 @@ dependencies = [
 [[package]]
 name = "opentui-solid"
 version = "0.1.0"
-source = "git+https://github.com/Eternal130/opentui-rust.git?rev=d3688d8#d3688d8284c282fcca25476f9bfbb3ceb851e68c"
+source = "git+https://github.com/Eternal130/opentui-rust.git?rev=54dbb4d#54dbb4d93e2b8856522642a2aec03691a5c4b8a4"
 dependencies = [
  "opentui-core",
 ]
