@@ -1508,15 +1508,12 @@ impl Lifecycle {
     /// ≤50 ms watch's seam) and apply [`Self::resize`] when it
     /// changed. Returns whether a re-render is due.
     pub fn poll_resize(&mut self) -> bool {
-        match observe_window_size() {
-            Some((columns, rows)) if usize::from(columns).max(1) != self.width
-                || usize::from(rows).max(1) != self.height =>
-            {
-                self.resize(usize::from(columns), usize::from(rows));
-                true
-            }
-            _ => false,
-        }
+        let Some((width, height)) = resize_target((self.width, self.height), observe_window_size())
+        else {
+            return false;
+        };
+        self.resize(width, height);
+        true
     }
 
     #[must_use]
@@ -1528,6 +1525,19 @@ impl Lifecycle {
     pub fn is_closed(&self) -> bool {
         self.closed
     }
+}
+
+/// G-181③ — the resize decision: a real, non-degenerate observation
+/// that DIFFERS from the current geometry re-renders; a missing ioctl
+/// (`None`), a 0×0 report, or an unchanged size does not. Extracted so
+/// the decision table is testable without a tty.
+fn resize_target(current: (usize, usize), observed: Option<(u16, u16)>) -> Option<(usize, usize)> {
+    let (columns, rows) = observed?;
+    if columns == 0 || rows == 0 {
+        return None;
+    }
+    let target = (usize::from(columns), usize::from(rows));
+    (target != current).then_some(target)
 }
 
 /// G-181③ — the TIOCGWINSZ observation (fd 0, the same device the
@@ -1595,10 +1605,18 @@ mod tests {
     /// observation that DIFFERS from the current size re-renders.
     #[test]
     fn poll_resize_decision_table() {
-        use super::observe_window_size;
+        use super::{observe_window_size, resize_target};
+        assert_eq!(resize_target((80, 24), None), None, "denied ioctl: no re-render");
+        assert_eq!(resize_target((80, 24), Some((0, 24))), None, "0 columns: ignored");
+        assert_eq!(resize_target((80, 24), Some((80, 0))), None, "0 rows: ignored");
+        assert_eq!(resize_target((80, 24), Some((80, 24))), None, "unchanged: no re-render");
+        assert_eq!(
+            resize_target((80, 24), Some((100, 30))),
+            Some((100, 30)),
+            "a changed size re-renders at the new geometry"
+        );
         // Under `cargo test` stdin may or may not be a tty; the
-        // degenerate/denied cases must simply report None or a
-        // consistent size, never panic.
+        // observation itself must never panic and never report 0×0.
         let observed = observe_window_size();
         assert!(observed.is_none_or(|(columns, rows)| columns > 0 && rows > 0));
     }

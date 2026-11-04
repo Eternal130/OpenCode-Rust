@@ -2514,3 +2514,41 @@ fn mini_split_footer_transcript_scroll_keeps_dock() {
         },
     );
 }
+
+/// G-181② — `/new` runs the session factory: the composer's slash
+/// command creates the session server-side (`session.create` at the
+/// same location/agent) and the runtime swaps its targets, landing
+/// the `new session <id>` system row in the transcript. The swapped
+/// runtime still accepts prompts afterwards.
+#[test]
+fn mini_new_session_factory() {
+    run_mini_test(
+        "g181-new",
+        80,
+        40,
+        |_fake, _sandbox| {},
+        move |h| {
+            wait_text(h, "oc mini", Duration::from_secs(8))?;
+            h.write(b"/new\r");
+            wait_grid(
+                h,
+                |g| {
+                    (0..g.rows)
+                        .any(|row| g.row_text(row).contains("new session ses_alpha"))
+                },
+                Duration::from_secs(10),
+            )
+            .map_err(|error| format!("the /new factory never landed its system row: {error}"))?;
+            // The swapped runtime still takes prompts (the fresh
+            // transport + queue) — the user echo row lands.
+            h.write(b"still here\r");
+            wait_grid(
+                h,
+                |g| (0..g.rows).any(|row| g.row_text(row).contains("still here")),
+                Duration::from_secs(10),
+            )
+            .map_err(|error| format!("the new session did not accept a prompt: {error}"))?;
+            Ok(())
+        },
+    );
+}
