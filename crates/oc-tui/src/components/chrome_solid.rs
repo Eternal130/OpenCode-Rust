@@ -410,7 +410,8 @@ thread_local! {
 /// root
 /// └─[0] surface-chrome   (this lane: devtools/stats/location-missing/
 /// │                       plugin pages/rail+tooltip/app-state overlays)
-/// └─[1] surface-composer  (D2.2 composer lane)
+/// └─[1] surface-composer  (D2.2 composer lane — mounted: the prompt
+/// │                       box + popup + footer row wrapper)
 /// └─[2] surface-transcript(D2.2 transcript lane)
 /// └─[3] surface-footer    (D2.2 footer lane)
 /// └─[4] surface-dialogs   (D2.2 dialogs lane)
@@ -448,6 +449,48 @@ pub(crate) enum ChromeStamp {
     /// A bg-colored region keeping each cell's ch/fg/attrs (the rail
     /// handle-hot column: `paint_rail_handle_hot`'s row walk).
     Bg { left: usize, top: usize, width: usize, height: usize, color: CellColor },
+    /// A single-cell bg/fg recolor keeping the glyph (the composer
+    /// family's golden software-caret block — the retired bridge's
+    /// cell recolor, applied at the wrapper's origin).
+    Caret { left: usize, top: usize, fg: CellColor, bg: CellColor },
+    /// A single-cell fg⇄bg swap (the composer family's G-66 selection
+    /// highlight — the ref's DEFAULT selection styling).
+    Swap { left: usize, top: usize },
+}
+
+/// Apply one stamp at (`base_left`, `base_top`) — the surface/wrapper
+/// origin the stamp's rect is relative to.
+fn apply_stamp(frame: &mut Frame, base_left: usize, base_top: usize, stamp: &ChromeStamp) {
+    match *stamp {
+        ChromeStamp::Bg { left, top, width, height, color } => {
+            for row in base_top + top..base_top + top + height {
+                for col in base_left + left..base_left + left + width {
+                    if let Some(cell) = frame.cells.get_mut(row).and_then(|line| line.get_mut(col)) {
+                        cell.bg = color;
+                    }
+                }
+            }
+        }
+        ChromeStamp::Caret { left, top, fg, bg } => {
+            if let Some(cell) = frame
+                .cells
+                .get_mut(base_top + top)
+                .and_then(|line| line.get_mut(base_left + left))
+            {
+                cell.fg = fg;
+                cell.bg = bg;
+            }
+        }
+        ChromeStamp::Swap { left, top } => {
+            if let Some(cell) = frame
+                .cells
+                .get_mut(base_top + top)
+                .and_then(|line| line.get_mut(base_left + left))
+            {
+                std::mem::swap(&mut cell.fg, &mut cell.bg);
+            }
+        }
+    }
 }
 
 /// The chrome family's fixed draw order — today's paint order frozen
@@ -469,6 +512,32 @@ const SURFACE_ORDER: &[&str] = &[
     "migration_box",
 ];
 
+/// One NON-chrome family's mounted wrapper (D2.2 family-ization, the
+/// composer lane first): ONE absolutely-positioned wrapper subtree per
+/// family under its own `surface-{family}` container at the skeleton
+/// index — the rect is the family mount's imperative source (patches
+/// via `set_prop`, never a remount), the content element is the
+/// family's OWN tree (its lane rebuilds it when its geometry key
+/// changes; the wrapper survives). Stamps run at the composite seam,
+/// offset by the wrapper's origin.
+struct FamilyWrapper {
+    family: &'static str,
+    /// The wrapper box's mount key.
+    key: String,
+    /// The mounted content subtree's key (`None` while content is
+    /// between rebuilds — always `Some` in practice).
+    content_key: Option<String>,
+    left: usize,
+    top: usize,
+    width: usize,
+    height: usize,
+    stamps: Vec<ChromeStamp>,
+    /// Set by this frame's sync; cleared at the composite seam — a
+    /// family nobody synced this frame unmounts (the old painters'
+    /// visibility branches).
+    fresh: bool,
+}
+
 pub(crate) struct ChromeTree {
     solid: SolidRenderer,
     /// The double-flush guard (ruling flag): at most ONE shared-tree
@@ -480,6 +549,12 @@ pub(crate) struct ChromeTree {
     /// The mounted chrome-family surfaces, always in SURFACE_ORDER
     /// (child order = z order).
     surfaces: Vec<ChromeSurface>,
+    /// The non-chrome family wrappers (composer first), child order
+    /// under their own containers = z order.
+    wrappers: Vec<FamilyWrapper>,
+    /// The family containers' mount keys (`surface-composer`, …) by
+    /// skeleton index order.
+    family_containers: Vec<(&'static str, String)>,
     /// The `surface-chrome` family container's mount key (skeleton
     /// index 0 under the root).
     family_key: Option<String>,
@@ -495,6 +570,8 @@ impl ChromeTree {
             solid: SolidRenderer::new(config),
             dirty: false,
             surfaces: Vec::new(),
+            wrappers: Vec::new(),
+            family_containers: Vec::new(),
             family_key: None,
             width,
             height,
@@ -641,6 +718,145 @@ impl ChromeTree {
                 self.dirty = true;
             }
         }
+        // The family wrappers share the rule (a family its lane did
+        // not sync this frame unmounts, content first).
+        let mut index = 0;
+        while index < self.wrappers.len() {
+            if self.wrappers[index].fresh {
+                self.wrappers[index].fresh = false;
+                index += 1;
+            } else {
+                let stale = self.wrappers.remove(index);
+                if let Some(content) = stale.content_key {
+                    let _ = self.solid.unmount(&content);
+                }
+                let _ = self.solid.unmount(&stale.key);
+                self.dirty = true;
+            }
+        }
+    }
+
+    /// Grow the shared canvas to fit (`need_w`, `need_h`) and re-prop
+    /// every mounted family container (the canvas only grows — screen
+    /// shrink rides the pump's resize).
+    fn grow_canvas(&mut self, need_w: u32, need_h: u32) {
+        if need_w > self.width || need_h > self.height {
+            let w = self.width.max(need_w);
+            let h = self.height.max(need_h);
+            self.solid.resize(w, h);
+            self.width = w;
+            self.height = h;
+            if let Some(key) = self.family_key.clone() {
+                self.solid.set_prop(&key, "width", PropValue::Num(w as f32));
+                self.solid.set_prop(&key, "height", PropValue::Num(h as f32));
+            }
+            for (_, key) in &self.family_containers.clone() {
+                self.solid.set_prop(key, "width", PropValue::Num(w as f32));
+                self.solid.set_prop(key, "height", PropValue::Num(h as f32));
+            }
+        }
+    }
+
+    /// Sync (or first-mount) one NON-chrome family's wrapper — the
+    /// composer lane's seam, chrome-isomorphic: the wrapper box keyed
+    /// by the family name under the `surface-{family}` container at
+    /// the skeleton index (child order = z), absolutely positioned at
+    /// the imperative rect; rect changes patch via `set_prop` (never
+    /// a remount — ruling #1). `content`/`content_key` rebuild the
+    /// wrapper's single content subtree when the family's geometry
+    /// key changed (`None` content = keep the mounted child).
+    fn sync_family_wrapper(
+        &mut self,
+        family: &'static str,
+        skeleton_index: usize,
+        left: usize,
+        top: usize,
+        width: usize,
+        height: usize,
+        content_key: Option<String>,
+        content: Option<Element>,
+        stamps: &[ChromeStamp],
+    ) {
+        let width = width.max(1);
+        let height = height.max(1);
+        self.grow_canvas(
+            (left.saturating_add(width)).max(1) as u32,
+            (top.saturating_add(height)).max(1) as u32,
+        );
+        // The family container (its skeleton index under the root).
+        let container = match self.family_containers.iter().position(|(f, _)| *f == family) {
+            Some(index) => self.family_containers[index].1.clone(),
+            None => {
+                let element = box_()
+                    .key(format!("surface-{family}"))
+                    .position("absolute")
+                    .left(0.0)
+                    .top(0.0)
+                    .width(f64::from(self.width) as f32)
+                    .height(f64::from(self.height) as f32)
+                    .into_element();
+                let key = self.solid.mount(SolidRenderer::ROOT, skeleton_index, element);
+                self.family_containers.push((family, key.clone()));
+                key
+            }
+        };
+        if let Some(index) = self.wrappers.iter().position(|w| w.family == family) {
+            let existing = &mut self.wrappers[index];
+            if existing.left != left {
+                self.solid.set_prop(&existing.key, "left", PropValue::Num(left as f32));
+            }
+            if existing.top != top {
+                self.solid.set_prop(&existing.key, "top", PropValue::Num(top as f32));
+            }
+            if existing.width != width {
+                self.solid.set_prop(&existing.key, "width", PropValue::Num(width as f32));
+            }
+            if existing.height != height {
+                self.solid.set_prop(&existing.key, "height", PropValue::Num(height as f32));
+            }
+            if content.is_some() && existing.content_key.as_deref() != content_key.as_deref() {
+                if let Some(old) = existing.content_key.take() {
+                    let _ = self.solid.unmount(&old);
+                }
+                if let (Some(_), Some(element)) = (&content_key, content) {
+                    let parent = existing.key.clone();
+                    let mounted = self.solid.mount(&parent, 0, element);
+                    existing.content_key = Some(mounted);
+                }
+            }
+            existing.left = left;
+            existing.top = top;
+            existing.width = width;
+            existing.height = height;
+            existing.stamps = stamps.to_vec();
+            existing.fresh = true;
+        } else {
+            let element = box_()
+                .key(format!("{family}-wrapper"))
+                .position("absolute")
+                .left(left as f32)
+                .top(top as f32)
+                .width(width as f32)
+                .height(height as f32)
+                .into_element();
+            let key = self.solid.mount(&container, 0, element);
+            let content_key = content.zip(content_key).map(|(element, _)| {
+                let mounted = self.solid.mount(&key, 0, element);
+                mounted
+            });
+            self.wrappers.push(FamilyWrapper {
+                family,
+                key,
+                content_key,
+                left,
+                top,
+                width,
+                height,
+                stamps: stamps.to_vec(),
+                fresh: true,
+            });
+        }
+        self.dirty = true;
     }
 
     /// The single compositor seam (ruling attempt 2, plan (e)): one
@@ -711,16 +927,14 @@ impl ChromeTree {
         for surface in &self.surfaces {
             stamp_units_at(frame, surface.left, surface.top, &surface.items);
             for stamp in &surface.stamps {
-                let ChromeStamp::Bg { left, top, width, height, color } = *stamp;
-                for row in surface.top + top..surface.top + top + height {
-                    for col in surface.left + left..surface.left + left + width {
-                        if let Some(cell) =
-                            frame.cells.get_mut(row).and_then(|line| line.get_mut(col))
-                        {
-                            cell.bg = color;
-                        }
-                    }
-                }
+                apply_stamp(frame, surface.left, surface.top, stamp);
+            }
+        }
+        // The family wrappers' stamps (the composer lane first — the
+        // retired bridge's caret/selection recolors), same rule.
+        for wrapper in &self.wrappers {
+            for stamp in &wrapper.stamps {
+                apply_stamp(frame, wrapper.left, wrapper.top, stamp);
             }
         }
     }
@@ -843,6 +1057,42 @@ pub(crate) fn chrome_mount(
         (top.saturating_add(height)).max(1) as u32,
     );
     hub.borrow_mut().mount_surface(surface, left, top, width, height, background, items, stamps);
+}
+
+/// Sync one NON-chrome family's wrapper into the shared tree (the
+/// composer lane's ONLY mount entry — chrome-isomorphic): the rect is
+/// the family mount's imperative source (the old paste site), the
+/// content element is the family's own tree. No Frame comes back;
+/// pixels reach the emitted frame through [`composite_chrome_tree`],
+/// the single compositor seam inside `render_app`.
+pub(crate) fn mount_family_wrapper(
+    family: &'static str,
+    skeleton_index: usize,
+    left: usize,
+    top: usize,
+    width: usize,
+    height: usize,
+    content_key: Option<String>,
+    content: Option<Element>,
+    stamps: &[ChromeStamp],
+) {
+    let width = width.max(1);
+    let height = height.max(1);
+    let hub = hub_for(
+        (left.saturating_add(width)).max(1) as u32,
+        (top.saturating_add(height)).max(1) as u32,
+    );
+    hub.borrow_mut().sync_family_wrapper(
+        family, skeleton_index, left, top, width, height, content_key, content, stamps,
+    );
+}
+
+/// Is the family's wrapper currently mounted in the thread hub? A
+/// lane's own content state must rebuild when this is false (the hub
+/// was reset, or the wrapper was pruned at a seam).
+pub(crate) fn family_wrapper_live(family: &str) -> bool {
+    let hub = HUB.with_borrow(|slot| slot.clone());
+    hub.is_some_and(|hub| hub.borrow().wrappers.iter().any(|w| w.family == family))
 }
 
 /// The chrome family's single compositor seam: prune unsynced

@@ -354,12 +354,13 @@ pub fn render_home_view(
     view: &HomeView,
     theme: &ThemeState,
     size: (u16, u16),
+    origin: (usize, usize),
 ) -> crate::components::home_solid::PaintedHome {
     // Lane M5 (retired): the home route renders through its
     // opentui-solid tree — the only renderer since the retirement
     // lane deleted the hand-rolled painter (both consumed the ONE
     // `plan_home` geometry, which stays).
-    crate::components::home_solid::paint_solid_home_view(view, theme, size)
+    crate::components::home_solid::paint_solid_home_view(view, theme, size, origin)
 }
 
 /// Paste `region` into `target` at `(x, y)` (the shared paste the
@@ -515,7 +516,8 @@ pub fn render_home(store: &Store, theme: &crate::theme::ThemeStyles, size: (u16,
         size.0.saturating_sub(u16::try_from(rail_shift).unwrap_or(0)),
         if strip_shows { size.1 - 1 } else { size.1 },
     );
-    let (mut frame, caret_screen, banner_hit) = render_home_view(&view, &state, sub_size);
+    let (mut frame, caret_screen, banner_hit) =
+        render_home_view(&view, &state, sub_size, (rail_shift, usize::from(strip_shows)));
     // TUI-TD27 — the banner's hit rect lands in the store (the
     // pointer seam reads it on release).
     store.set_home_update_hit(banner_hit);
@@ -603,6 +605,19 @@ mod tests {
     use super::*;
     use crate::reactive::Runtime;
 
+    /// The headless twin of render_app's seam (D2.2: the composer
+    /// wrapper mounts during render_home; direct test callers read
+    /// the pixels back through the ONE compositor seam).
+    pub(crate) fn home_frame(
+        store: &Store,
+        theme: &crate::theme::ThemeStyles,
+        size: (u16, u16),
+    ) -> Frame {
+        let mut frame = render_home(store, theme, size);
+        crate::components::chrome_solid::composite_chrome_tree(&mut frame);
+        frame
+    }
+
     /// G-04: `home.footer(.status)` slot rows land in the home
     /// screen's footer hint list (the row-based footer face).
     #[test]
@@ -617,7 +632,7 @@ mod tests {
                 clickable: vec![],
             },
         );
-        let frame = render_home(&store, &crate::theme::ThemeState::v2_dark().styles(), (100, 30));
+        let frame = home_frame(&store, &crate::theme::ThemeState::v2_dark().styles(), (100, 30));
         let grid = frame.text_grid().concat();
         assert!(grid.contains("hf row"), "the home footer row paints");
     }
@@ -654,7 +669,7 @@ mod tests {
             composer.placeholder_index = pick;
             store.set_composer(crate::app::HOME_PROMPT_KEY, &composer);
             let theme = crate::theme::ThemeState::v2_dark();
-            let frame = render_home(&store, &theme.styles(), (80, 30));
+            let frame = home_frame(&store, &theme.styles(), (80, 30));
             let grid = frame.text_grid().join("\n");
             assert!(grid.contains(entry), "pick {pick}: {grid}");
         }
@@ -669,7 +684,7 @@ mod tests {
         composer.draft.text = "hi".into();
         store.set_composer(crate::app::HOME_PROMPT_KEY, &composer);
         let theme = crate::theme::ThemeState::v2_dark();
-        let frame = render_home(&store, &theme.styles(), (80, 30));
+        let frame = home_frame(&store, &theme.styles(), (80, 30));
         let (x, y) = store.caret_cell().expect("caret cell recorded");
         let cell = frame.cell(usize::from(y), usize::from(x));
         assert_eq!(cell.ch, 'h', "the caret blinks over the char it precedes");
@@ -683,7 +698,7 @@ mod tests {
     fn home_renders_the_logo_and_hint() {
         let store = Store::new(Runtime::new());
         let theme = crate::theme::ThemeState::v2_dark();
-        let frame = render_home(&store, &theme.styles(), (40, 12));
+        let frame = home_frame(&store, &theme.styles(), (40, 12));
         let grid = frame.text_grid().join("\n");
         assert!(grid.contains("Ask anything"), "{grid}");
     }
@@ -698,7 +713,7 @@ mod tests {
     fn home_sixty_by_twenty_centers_the_wordmark_at_row_five() {
         let store = Store::new(Runtime::new());
         let theme = crate::theme::ThemeState::v2_dark();
-        let frame = render_home(&store, &theme.styles(), (60, 20));
+        let frame = home_frame(&store, &theme.styles(), (60, 20));
         let rows = frame.text_grid();
         // The logo's top shadow cell (▄) opens the 4-row block.
         let logo_row = rows.iter().position(|row| row.contains('▄')).expect("logo rendered");
@@ -711,7 +726,7 @@ mod tests {
         );
         // At 80x24 the version shows and the footer is 3 rows (the
         // golden shape — the collapse must be width-gated).
-        let frame = render_home(&store, &theme.styles(), (80, 24));
+        let frame = home_frame(&store, &theme.styles(), (80, 24));
         let rows = frame.text_grid();
         let logo_row = rows.iter().position(|row| row.contains('▄')).expect("logo rendered");
         assert_eq!(logo_row, 6, "80x24 stays at row 6");
@@ -731,7 +746,7 @@ mod tests {
         composer.draft.text = "hello".into();
         store.set_composer(crate::app::HOME_PROMPT_KEY, &composer);
         let theme = crate::theme::ThemeState::v2_dark();
-        let frame = render_home(&store, &theme.styles(), (80, 30));
+        let frame = home_frame(&store, &theme.styles(), (80, 30));
         let grid = frame.text_grid().join("\n");
         assert!(grid.contains("hello"), "the draft typed into the home prompt: {grid}");
     }
@@ -754,7 +769,7 @@ mod tests {
             },
         ]);
         let theme = crate::theme::ThemeState::v2_dark();
-        let frame = render_home(&store, &theme.styles(), (80, 30));
+        let frame = home_frame(&store, &theme.styles(), (80, 30));
         let footer = &frame.text_grid()[28];
         assert!(
             footer.trim_start().starts_with("/preset · /tidy"),
@@ -764,7 +779,7 @@ mod tests {
 
         // Empty actions: the footer row keeps the golden shape.
         let bare = Store::new(Runtime::new());
-        let frame = render_home(&bare, &theme.styles(), (80, 30));
+        let frame = home_frame(&bare, &theme.styles(), (80, 30));
         assert!(!frame.text_grid()[28].contains("/preset"));
     }
 
@@ -776,13 +791,13 @@ mod tests {
     fn home_mounts_the_tab_strip_while_tabs_are_open() {
         let theme = crate::theme::ThemeState::v2_dark();
         let bare = Store::new(Runtime::new());
-        let bare_frame = render_home(&bare, &theme.styles(), (80, 30));
+        let bare_frame = home_frame(&bare, &theme.styles(), (80, 30));
         assert!(!bare_frame.text_grid()[0].contains('+'), "no strip without tabs");
 
         let store = Store::new(Runtime::new());
         store.open_tab("s1", Some("Alpha".to_owned()));
         store.navigate(crate::store::Route::Home);
-        let frame = render_home(&store, &theme.styles(), (80, 30));
+        let frame = home_frame(&store, &theme.styles(), (80, 30));
         let strip = &frame.text_grid()[0];
         assert!(strip.contains("Alpha"), "the open tab's title leads home: {strip}");
         assert!(strip.contains(" + "), "the add affordance: {strip}");
@@ -794,7 +809,7 @@ mod tests {
 
         // tabs.enabled = false hides it again.
         store.set_tabs_enabled(false);
-        let frame = render_home(&store, &theme.styles(), (80, 30));
+        let frame = home_frame(&store, &theme.styles(), (80, 30));
         assert!(!frame.text_grid()[0].contains("Alpha"), "the strip follows the config gate");
     }
 
@@ -811,7 +826,7 @@ mod tests {
 
         // Without tabs the golden home shape: caret on the input row.
         let bare = Store::new(Runtime::new());
-        let bare_frame = render_home(&bare, &theme.styles(), (80, 24));
+        let bare_frame = home_frame(&bare, &theme.styles(), (80, 24));
         let bare_grid = bare_frame.text_grid();
         let bare_input = bare_grid
             .iter()
@@ -825,7 +840,7 @@ mod tests {
         let store = Store::new(Runtime::new());
         store.open_tab("s1", Some("Alpha".to_owned()));
         store.navigate(crate::store::Route::Home);
-        let frame = render_home(&store, &theme.styles(), (80, 24));
+        let frame = home_frame(&store, &theme.styles(), (80, 24));
         let grid = frame.text_grid();
         assert!(grid[0].contains("Alpha"), "the strip leads home");
         let input = grid
@@ -852,6 +867,7 @@ mod tests {
 #[cfg(test)]
 mod surf2_home_tests {
     use super::*;
+    use super::tests::home_frame;
     use crate::reactive::Runtime;
     use crate::store::{McpServerRow, Store};
 
@@ -868,7 +884,7 @@ mod surf2_home_tests {
             McpServerRow { name: "a".into(), status: "connected", error: None },
             McpServerRow { name: "b".into(), status: "connected", error: None },
         ]);
-        let frame = render_home(&healthy, &styles, (80, 30));
+        let frame = home_frame(&healthy, &styles, (80, 30));
         let footer = frame.text_grid()[28].trim_start().to_owned();
         assert!(footer.starts_with("⊙ 2 MCP /mcps"), "the success cell: {footer:?}");
         let dot = frame.cell(28, 2).fg;
@@ -879,7 +895,7 @@ mod surf2_home_tests {
             McpServerRow { name: "a".into(), status: "connected", error: None },
             McpServerRow { name: "b".into(), status: "failed", error: Some("boom".into()) },
         ]);
-        let frame = render_home(&failing, &styles, (80, 30));
+        let frame = home_frame(&failing, &styles, (80, 30));
         let footer = frame.text_grid()[28].trim_start().to_owned();
         assert!(footer.starts_with("⊙ 1 MCP failed /mcps"), "the error cell: {footer:?}");
         let dot = frame.cell(28, 2).fg;
@@ -888,7 +904,7 @@ mod surf2_home_tests {
         // No servers: the cell hides (the footer row keeps the bare
         // golden shape).
         let bare = Store::new(Runtime::new());
-        let frame = render_home(&bare, &styles, (80, 30));
+        let frame = home_frame(&bare, &styles, (80, 30));
         assert!(!frame.text_grid()[28].contains("MCP"), "no cell without servers");
     }
 }

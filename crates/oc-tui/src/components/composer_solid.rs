@@ -30,13 +30,14 @@
 //!   last row, caret moves, hover) patch content dyn-props in place;
 //!   height-changing frames (a wrap lands a new row, the popup
 //!   opens) rebuild the small tree (the M2 content-height rule).
-//! * *frame out*: the tree paints through a real headless
-//!   [`SolidRenderer`] (taffy + raster) into an `OptimizedBuffer`;
-//!   [`frame_from_buffer`] copies the cells into the oc-tui
-//!   [`Frame`] the route compositor already pastes. No glow-range
-//!   fixups (the composer's fills are all fg-white — opentui's own
-//!   fill signature); the ONE bridge-level fixup is the software
-//!   caret block (below).
+//! * *frame out*: D2.2 — the tree mounts under the shared-tree hub's
+//!   `surface-composer` family wrapper ([`composer_mount`], the
+//!   chrome paradigm); pixels reach the emitted [`Frame`] through the
+//!   ONE full-buffer compositor seam (`composite_chrome_tree` inside
+//!   `render_app`). No glow-range fixups (the composer's fills are
+//!   all fg-white — opentui's own fill signature); the ONE
+//!   bridge-level fixup is the software caret block (below), a
+//!   composite-seam stamp.
 //!
 //! **The caret (NEW-S1a).** v2's live caret is the TERMINAL cursor:
 //! the route computes the caret's screen cell
@@ -71,25 +72,28 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use opentui_core::Rgba;
-use opentui_core::renderer::CliRendererConfig;
 use opentui_core::styled_text::{StyledText, TextChunk};
 use opentui_solid::builder::ForItemSource;
 use opentui_solid::element::{Children, ForItem, PropValue};
 use opentui_solid::reactive::Reactive;
-use opentui_solid::{Element, Signal, SolidRenderer, box_, for_list, map, text};
+use opentui_solid::{Element, Signal, box_, for_list, map, text};
 
+use crate::components::chrome_solid::{
+    ChromeStamp, family_wrapper_live, mount_family_wrapper,
+};
 use crate::components::composer::autocomplete::popup_height;
 use crate::components::composer::render::{
     PromptView, caret_cell, footer_plan, layout_draft_lines, palette, truncate_width,
 };
-use crate::components::session_tabs_solid::frame_from_buffer;
 use crate::render::{CellColor, Frame};
 use crate::theme::ThemeState;
 use crate::wrap::display_width;
 
-/// The composer frame's ONLY renderer: every live mount (the session
-/// route's `composer_mount_frame`, the home route, the session-screen
-/// harness, the golden harnesses) paints through here.
+/// The composer frame's ONLY renderer (D2.2: the composer family
+/// rides the shared tree — every live mount [session route, home
+/// route] syncs [`composer_mount`]; the headless harnesses [goldens,
+/// the session-screen twin] read the same mount back through
+/// [`render_prompt_frame_dispatch`]).
 #[must_use]
 pub fn render_prompt_frame_dispatch(
     view: &PromptView,
@@ -97,7 +101,20 @@ pub fn render_prompt_frame_dispatch(
     height: usize,
     theme: &ThemeState,
 ) -> Frame {
-    paint_solid_prompt_frame(view, width, height, theme)
+    if width == 0 || height == 0 {
+        // The old renderer's degenerate shape: empty rows, page fill
+        // is a no-op.
+        return Frame { cells: vec![Vec::new(); height], width, height, clusters: None };
+    }
+    // The golden/unit harness twin (chrome's `mounted_surface_frame`
+    // shape): mount ONE composer into a fresh hub and read it back as
+    // a standalone Frame — same raster, same cell semantics, by
+    // construction.
+    crate::components::chrome_solid::reset_hub();
+    composer_mount(view, width, height, theme, 0, 0);
+    let mut frame = crate::components::chrome_solid::blank_frame(width, height);
+    crate::components::chrome_solid::composite_chrome_tree(&mut frame);
+    frame
 }
 
 // ---------------------------------------------------------------------------
@@ -863,126 +880,120 @@ fn composer_element(inputs: &Signal<ComposerInputs>, geo: &ComposerInputs) -> El
 }
 
 // ---------------------------------------------------------------------------
-// the mount (one per thread, keyed on geometry)
+// the shared-tree mount (D2.2 composer lane — the chrome paradigm)
 // ---------------------------------------------------------------------------
 
-/// The mounted composer: the inputs signal + a real headless
-/// [`SolidRenderer`]. Rebuilt whenever the mount key changes (width,
-/// top, popup height, content height, frame height, colors) — the
-/// M2 height-keying rule; height-stable frames patch in place.
-struct SolidComposer {
-    inputs: Signal<ComposerInputs>,
-    renderer: SolidRenderer,
+/// The composer family's skeleton index under the shared tree's root
+/// (`surface-composer`, ruling #2's family order: chrome → composer).
+const COMPOSER_SKELETON_INDEX: usize = 1;
+
+/// The mounted composer's reactive state, kept across frames so
+/// height-stable frames patch content dyn-props in place (the M2
+/// rule); a MountKey change rebuilds the wrapper's content subtree.
+struct ComposerEntry {
+    signal: Signal<ComposerInputs>,
     key: MountKey,
 }
 
-impl SolidComposer {
-    fn new(inputs: &ComposerInputs) -> Self {
-        let signal = Signal::new(inputs.clone());
-        let renderer = opentui_solid::render(
-            CliRendererConfig {
-                width: inputs.width.max(1) as u32,
-                height: inputs.frame_height.max(1) as u32,
-                background_color: {
-                    let base = inputs.colors.base;
-                    Rgba::rgb(base.0, base.1, base.2)
-                },
-                ..CliRendererConfig::default()
-            },
-            composer_element(&signal, inputs),
-        );
-        Self { inputs: signal, renderer, key: mount_key(inputs) }
-    }
-
-    /// Sync one frame's snapshot, flush the reconciler patches, and
-    /// render — the per-frame bridge cost.
-    fn paint(&mut self, inputs: ComposerInputs) {
-        self.inputs.set(inputs);
-        self.renderer.flush();
-    }
-}
-
 thread_local! {
-    /// One composer mount per thread-process — the app paints exactly
-    /// one per frame; the harnesses reuse it across scenarios.
-    static COMPOSER: RefCell<Option<SolidComposer>> = const { RefCell::new(None) };
+    /// The composer family's content state (one mount per
+    /// thread-process — the wrapper itself lives in the shared-tree
+    /// hub, `chrome_solid::mount_family_wrapper`).
+    static COMPOSER_TREE: RefCell<Option<ComposerEntry>> = const { RefCell::new(None) };
 }
 
-/// Paint the composer mount through the opentui-solid path — the
-/// new-path twin of [`render_prompt_frame`]: shape the inputs (the
-/// old renderer's own walk), sync + flush the mount, copy the cells,
-/// then apply the ONE bridge-level recolor (the golden software
-/// caret block — the live caret is the terminal cursor, NEW-S1a,
-/// which this path keeps emitting through the untouched
-/// `prompt_caret_screen_cell` → `Store::set_caret_cell` seam).
-#[must_use]
-pub fn paint_solid_prompt_frame(
+fn cell_rgb(rgb: Rgb) -> CellColor {
+    CellColor::Rgb(rgb.0, rgb.1, rgb.2)
+}
+
+/// The bridge-level frame passes (the retired per-surface copy's
+/// recolors, now composite-seam stamps offset by the wrapper's
+/// origin): the GOLDEN-only software caret block (bg `text.base`, fg
+/// prompt-bg over the cell, the glyph untouched — NEW-S1a) and the
+/// G-66 selection swap (each offset maps through the same
+/// [`caret_cell`] wrap walk the caret block uses).
+fn bridge_stamps(view: &PromptView, inputs: &ComposerInputs, width: usize) -> Vec<ChromeStamp> {
+    let mut stamps = Vec::new();
+    let pad = inputs.pad;
+    let inner = width.saturating_sub(1 + pad * 2).max(1);
+    if let Some(offset) = view.caret {
+        let (row, col) = caret_cell(view.draft, inner, offset);
+        if row < inputs.textarea_rows {
+            stamps.push(ChromeStamp::Caret {
+                left: 1 + pad + col,
+                top: inputs.top + 1 + row,
+                fg: cell_rgb(inputs.colors.prompt_bg),
+                bg: cell_rgb(inputs.colors.text_base),
+            });
+        }
+    }
+    if let Some(range) = view.selection.clone().filter(|range| !range.is_empty()) {
+        for offset in range {
+            let (row, col) = caret_cell(view.draft, inner, offset);
+            if row < inputs.textarea_rows {
+                stamps.push(ChromeStamp::Swap {
+                    left: 1 + pad + col,
+                    top: inputs.top + 1 + row,
+                });
+            }
+        }
+    }
+    stamps
+}
+
+/// Sync the composer family into the shared tree (the family's ONLY
+/// live mount entry — no Frame comes back; pixels reach the emitted
+/// frame through `composite_chrome_tree`, the single compositor seam
+/// inside `render_app`). The wrapper rect is the OLD paste site (the
+/// imperative source); the content subtree is the same
+/// [`composer_element`] tree the retired scratch renderer rasterized,
+/// rebuilt only when the mount key (geometry) changes — rect changes
+/// patch via `set_prop`.
+pub fn composer_mount(
     view: &PromptView,
     width: usize,
     height: usize,
     theme: &ThemeState,
-) -> Frame {
+    left: usize,
+    top: usize,
+) {
     if width == 0 || height == 0 {
-        // The old renderer's degenerate shape: empty rows, page fill
-        // is a no-op.
-        return Frame { cells: vec![Vec::new(); height], width, height, clusters: None };
+        // The degenerate shape: nothing mounts — the stale wrapper
+        // unmounts at the seam (the old paste's no-op).
+        return;
     }
     let inputs = shape(view, width, height, theme);
-    let caret = view.caret;
-    let pad = inputs.pad;
-    let textarea_rows = inputs.textarea_rows;
-    let colors = inputs.colors;
-    let top = inputs.top;
-    COMPOSER.with_borrow_mut(|slot| {
-        let mount = slot.get_or_insert_with(|| SolidComposer::new(&inputs));
-        if mount.key != mount_key(&inputs) {
-            *mount = SolidComposer::new(&inputs);
-        }
-        mount.paint(inputs);
-        let buffer = &mount.renderer.renderer.current_render_buffer;
-        let mut frame = frame_from_buffer(buffer, &[]);
-        // The software caret block (golden harness only — the live
-        // routes pass `caret: None` and position the TERMINAL cursor
-        // instead): bg = `text.base`, fg = prompt-bg over the cell,
-        // the glyph itself untouched (render.rs:649-661, verbatim).
-        if let Some(offset) = caret {
-            let inner = width.saturating_sub(1 + pad * 2).max(1);
-            let (row, col) = caret_cell(view.draft, inner, offset);
-            if row < textarea_rows {
-                let (x, y) = (1 + pad + col, top + 1 + row);
-                if let Some(cell) = frame.cells.get_mut(y).and_then(|line| line.get_mut(x)) {
-                    cell.bg =
-                        CellColor::Rgb(colors.text_base.0, colors.text_base.1, colors.text_base.2);
-                    cell.fg =
-                        CellColor::Rgb(colors.prompt_bg.0, colors.prompt_bg.1, colors.prompt_bg.2);
-                }
-            }
-        }
-        // G-66 — the selection highlight (bridge-level, the caret
-        // block's twin): the ref's DEFAULT selection styling, the
-        // fg/bg swap (EditBufferRenderable's no-selectionBg branch —
-        // the prompt mount passes no selection colors, so opentui
-        // inverts: the opaque prompt-bg line bg becomes the fg, the
-        // text fg becomes the bg). Each char offset maps through the
-        // SAME wrap walk [`caret_cell`] the caret block uses, so the
-        // painted cells land exactly where the text renders; wrap-
-        // consumed spaces and chips' wide seconds fall where the
-        // layout puts them (the walk yields each cluster's origin
-        // cell, wide glyphs recolor per advance).
-        if let Some(range) = view.selection.clone().filter(|range| !range.is_empty()) {
-            let inner = width.saturating_sub(1 + pad * 2).max(1);
-            for offset in range {
-                let (row, col) = caret_cell(view.draft, inner, offset);
-                if row < textarea_rows {
-                    let (x, y) = (1 + pad + col, top + 1 + row);
-                    if let Some(cell) = frame.cells.get_mut(y).and_then(|line| line.get_mut(x)) {
-                        std::mem::swap(&mut cell.fg, &mut cell.bg);
-                    }
-                }
-            }
-        }
-        frame
-    })
+    let stamps = bridge_stamps(view, &inputs, width);
+    let key = mount_key(&inputs);
+    // Rebuild iff the geometry key changed OR the wrapper left the
+    // tree (a hub reset between harness frames, a seam prune) — the
+    // content state is worthless without its mounted element.
+    let rebuild = !family_wrapper_live("composer")
+        || COMPOSER_TREE.with_borrow(|slot| !matches!(slot, Some(entry) if entry.key == key));
+    let (content, content_key) = if rebuild {
+        let signal = Signal::new(inputs.clone());
+        let element = composer_element(&signal, &inputs);
+        COMPOSER_TREE.with_borrow_mut(|slot| {
+            *slot = Some(ComposerEntry { signal, key });
+        });
+        (Some(element), Some(format!("composer-content@{key:?}")))
+    } else {
+        COMPOSER_TREE.with_borrow(|slot| {
+            slot.as_ref().expect("checked above").signal.set(inputs.clone());
+        });
+        (None, None)
+    };
+    mount_family_wrapper(
+        "composer",
+        COMPOSER_SKELETON_INDEX,
+        left,
+        top,
+        width,
+        height,
+        content_key,
+        content,
+        &stamps,
+    );
 }
 
 #[cfg(test)]
@@ -1016,8 +1027,8 @@ mod tests {
             caret: None,
             selection,
         };
-        let plain = paint_solid_prompt_frame(&view(None), 80, 8, &theme);
-        let selected = paint_solid_prompt_frame(&view(Some(0..5)), 80, 8, &theme);
+        let plain = render_prompt_frame_dispatch(&view(None), 80, 8, &theme);
+        let selected = render_prompt_frame_dispatch(&view(Some(0..5)), 80, 8, &theme);
         // text_x = 1 + pad(2) = 3, text_y = 1: "hello" occupies
         // (1, 3..8) — all five cells invert, the rest is untouched.
         for col in 3..8usize {
@@ -1032,14 +1043,16 @@ mod tests {
             assert_eq!(selected.cell(1, col), plain.cell(1, col), "col {col} untouched");
         }
         // An empty range paints nothing (the golden contract).
-        let empty = paint_solid_prompt_frame(&view(Some(2..2)), 80, 8, &theme);
+        let empty = render_prompt_frame_dispatch(&view(Some(2..2)), 80, 8, &theme);
         assert_eq!(empty, plain, "an empty selection is a no-op");
     }
 
     /// The reactive path patches in place: typing churn on the last
     /// row re-renders WITHOUT a rebuild (same mount — content-height
-    /// frames only rebuild when a wrap lands a new row). The
-    /// retirement-era residue of the old parity gate, now absolute.
+    /// frames only rebuild when a wrap lands a new row). Same inputs
+    /// paint the same frame, absolutely (the retired per-surface
+    /// renderer's ops log died with it; the mount-key rule below
+    /// covers the rebuild leg).
     #[test]
     fn typing_churn_patches_the_mounted_composer() {
         let theme = ThemeState::v2_dark();
@@ -1057,7 +1070,7 @@ mod tests {
                 caret: None,
                 selection: None,
             };
-            paint_solid_prompt_frame(&view, 80, 8, &theme)
+            render_prompt_frame_dispatch(&view, 80, 8, &theme)
         };
         let mut seen: Vec<(&str, Frame)> = Vec::new();
         for text in ["a", "ab", "abc", "ab"] {
@@ -1068,10 +1081,6 @@ mod tests {
             }
             seen.push((text, new));
         }
-        COMPOSER.with_borrow(|slot| {
-            let mount = slot.as_ref().expect("composer mounted");
-            assert!(!mount.renderer.ops_log().is_empty(), "the reconciler recorded its ops");
-        });
     }
 
     /// A resize (or a wrap landing a new row) rebuilds cleanly — the
@@ -1095,7 +1104,7 @@ mod tests {
         let mut first: Option<Frame> = None;
         for width in [80usize, 40, 120, 80] {
             let height = crate::components::composer::render::mount_height(&owned, width, 24);
-            let frame = paint_solid_prompt_frame(&view, width, height, &theme);
+            let frame = render_prompt_frame_dispatch(&view, width, height, &theme);
             assert_eq!(frame.width, width, "full-width frame at width {width}");
             if width == 80 {
                 match &first {
@@ -1104,5 +1113,43 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The scheduler-fairness gate for the composer family (the hub's
+    /// generic guard, exercised through the composer's own mount):
+    /// N syncs in one frame batch → exactly ONE flush at the seam.
+    #[test]
+    fn composer_syncs_flush_once_at_the_seam() {
+        crate::components::chrome_solid::reset_hub();
+        let theme = ThemeState::v2_dark();
+        let build = |text: &str| {
+            let owned = draft(text);
+            let view = PromptView {
+                draft: &owned,
+                placeholder: String::new(),
+                autocomplete: None,
+                footer: FooterHints::default(),
+                metadata: MetadataLine::default(),
+                terminal_width: 80,
+                top: 0,
+                rail: None,
+                caret: None,
+                selection: None,
+            };
+            composer_mount(&view, 80, 8, &theme, 2, 16)
+        };
+        build("a");
+        build("ab");
+        build("abc");
+        let hub = crate::components::chrome_solid::hub_for(80, 24);
+        assert!(
+            hub.borrow_mut().flush_if_pending(),
+            "a pending sync batch flushes exactly once"
+        );
+        assert!(
+            !hub.borrow_mut().flush_if_pending(),
+            "a second flush with no intervening sync is a no-op (no double raster)"
+        );
+        crate::components::chrome_solid::reset_hub();
     }
 }

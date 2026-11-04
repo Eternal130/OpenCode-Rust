@@ -266,7 +266,11 @@ mod tests {
         let theme = theme();
         let size = (80_u16, 24_u16);
         let bare = render_app(&store, &theme, size);
-        let route = crate::components::home::render_home(&store, &theme.styles(), size);
+        // D2.2: the composer rides the shared tree — the direct route
+        // render reads its pixels back through the same seam
+        // render_app runs.
+        let mut route = crate::components::home::render_home(&store, &theme.styles(), size);
+        crate::components::chrome_solid::composite_chrome_tree(&mut route);
         assert_eq!(bare, route, "disabled: zero delta on the frame");
 
         store.set_devtools_enabled(true);
