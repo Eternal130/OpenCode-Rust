@@ -26,7 +26,7 @@ mod tests {
     #[test]
     fn page_paints_title_and_rows() {
         let theme = ThemeState::v2_dark();
-        let frame = crate::components::plugin_page_solid::render_plugin_page_solid(
+        let frame = crate::components::plugin_page_solid::plugin_page_solid_frame(
             "stats",
             &["Usage statistics".to_owned(), "sessions: 12".to_owned()],
             &theme.styles(),

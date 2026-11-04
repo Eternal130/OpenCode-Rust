@@ -3241,33 +3241,11 @@ impl App {
         self.rehover_strip_from_last_pointer();
         let theme = self.store.theme();
         let mut frame = render_app(&self.store, &theme, self.size);
-        // PLUG-TUI-SLOT: the open plugin route page paints OVER the
-        // app (the ref's plugin routes replace the visible screen —
-        // `router.navigate({type:"plugin"})`, api.tsx:211-224; the
-        // native page renders the materialized `{title, rows}`).
-        // TUI-TD28: a page whose route never registered (the host's
-        // bounded render replied miss) renders the fallback screen
-        // instead — the warning line + the go-home button
-        // (component/plugin-route-missing.tsx:3-21; the click handler
-        // derives the same button geometry from the size).
-        if let Some(page) = self.store.plugin_route_page() {
-            let overlay = if page.missing {
-                crate::components::plugin_page_solid::render_plugin_route_missing_solid(
-                    &page.plugin_id,
-                    &page.name,
-                    &theme.styles(),
-                    self.size,
-                )
-            } else {
-                crate::components::plugin_page_solid::render_plugin_page_solid(
-                    &page.title,
-                    &page.rows,
-                    &theme.styles(),
-                    self.size,
-                )
-            };
-            paste_frame(&mut frame, &overlay, 0);
-        }
+        // PLUG-TUI-SLOT / D2.2: the open plugin route page now rides
+        // the shared chrome tree — it mounts inside render_app (the
+        // route-replacement arm) and its pixels land at the composite
+        // seam there. This branch's chrome supply (the full-screen
+        // paste) is DELETED (ruling attempt 2's per-family gate).
         // TUI-29 — the renderer console (`renderer.console`'s strip at
         // the top of the screen, over the app).
         if self.store.console_open() {
@@ -14405,6 +14383,45 @@ mod render_scheduler_equiv_tests {
                 assert!(!dirty, "a dirty iteration must always paint exactly one frame");
             }
         }
+    }
+
+    /// D2.2 chrome (ruling attempt 2 risk): with the chrome family
+    /// MIGRATED onto the shared tree, the Frame build must still run
+    /// on the beat — no starvation and no double rasterization: one
+    /// `App::frame()` (which mounts + composites the tree internally)
+    /// leaves the shared hub with NOTHING pending (the flush-once
+    /// guard drained the batch inside the frame build), and the
+    /// scheduler contract above is untouched by the tree's presence.
+    #[test]
+    fn migrated_chrome_frame_build_stays_on_the_beat() {
+        use crate::app::App;
+        use crate::components::chrome_solid::{hub_for, reset_hub};
+
+        reset_hub();
+        let mut app = App::new((80, 24));
+        // A chrome-family surface route: the stats page mounts through
+        // render_app's stats arm; its pixels composite in the same
+        // frame build.
+        app.store.open_stats_page(0);
+        let frame = app.frame();
+        let text = frame.text_grid().join("\n");
+        assert!(text.contains("Gathering your stats…"), "the chrome family painted: {text}");
+        // The shared hub: nothing pending after the build (the flush
+        // rode the frame build exactly once — the double-flush guard).
+        let hub = hub_for(80, 24);
+        assert!(
+            !hub.borrow_mut().flush_if_pending(),
+            "the frame build drained the sync batch — no second flush"
+        );
+        // The scheduler: the build armed NO renderer-internal frames
+        // (settle paints zero — the next draw waits for the pump's own
+        // request_render, the pre-flip burst boundary).
+        assert_eq!(hub.borrow_mut().settle(1), 0, "no self-armed frames left by the build");
+        // Frame-to-frame: a second build re-syncs + composites once
+        // more with identical bytes (idempotence — no drift).
+        let again = app.frame();
+        assert_eq!(frame.text_grid(), again.text_grid(), "stable chrome bytes frame-to-frame");
+        reset_hub();
     }
 
     /// A renderer-internally armed frame (the resize-driven
