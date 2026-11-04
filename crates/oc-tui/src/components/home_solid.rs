@@ -50,7 +50,6 @@ use opentui_solid::reactive::Reactive;
 use opentui_solid::{Element, Signal, SolidRenderer, box_, map, text};
 
 use crate::components::composer::render::{FooterHints, PromptView};
-use crate::components::composer_solid::render_prompt_frame_dispatch;
 use crate::components::home::{HomeView, LOGO_LEFT, LOGO_RIGHT, plan_home};
 use crate::components::session_tabs_solid::frame_from_buffer;
 use crate::render::Frame;
@@ -464,7 +463,12 @@ pub type PaintedHome = (Frame, Option<(usize, usize)>, Option<(usize, usize, usi
 /// the terminal-cursor cell from the same walk.
 #[must_use]
 #[allow(clippy::too_many_lines)] // the banner row is the lane-TAIL addition
-pub fn paint_solid_home_view(view: &HomeView, theme: &ThemeState, size: (u16, u16)) -> PaintedHome {
+pub fn paint_solid_home_view(
+    view: &HomeView,
+    theme: &ThemeState,
+    size: (u16, u16),
+    origin: (usize, usize),
+) -> PaintedHome {
     let (width, height) = (usize::from(size.0), usize::from(size.1));
     if width == 0 || height == 0 {
         // The old painter's degenerate shape.
@@ -533,13 +537,18 @@ pub fn paint_solid_home_view(view: &HomeView, theme: &ThemeState, size: (u16, u1
         caret: None,
         selection: view.selection.clone(),
     };
-    let prompt_frame = render_prompt_frame_dispatch(
+    // D2.2: the home prompt rides the shared tree (the composer
+    // family wrapper at the OLD paste site — `plan.paste`, the
+    // imperative rect); the pixels land at render_app's composite
+    // seam, byte-identical to the retired paste.
+    crate::components::composer_solid::composer_mount(
         &prompt_view,
         plan.prompt_width,
         plan.mount + plan.popup_rows,
         theme,
+        origin.0 + plan.paste.0,
+        origin.1 + plan.paste.1,
     );
-    crate::components::home::paste(&mut frame, &prompt_frame, plan.paste.0, plan.paste.1);
     // The update-notification banner (auditB #10, home.tsx:125-175):
     // one centered row in the gap above the prompt mount — the
     // `/update`·`/exit` prefix in `action.primary.selected`, the body
@@ -719,8 +728,8 @@ mod tests {
     #[test]
     fn banner_fade_in_pins_at_t0() {
         let theme = ThemeState::v2_dark();
-        let (frame_a, _, _) = paint_solid_home_view(&banner_view(0, 0), &theme, (80, 24));
-        let (frame_b, _, _) = paint_solid_home_view(&banner_view(0, 0), &theme, (80, 24));
+        let (frame_a, _, _) = paint_solid_home_view(&banner_view(0, 0), &theme, (80, 24), (0, 0));
+        let (frame_b, _, _) = paint_solid_home_view(&banner_view(0, 0), &theme, (80, 24), (0, 0));
         assert_eq!(frame_a.cells, frame_b.cells, "a pinned clock is deterministic");
         let backdrop = theme.resolved.tokens.background.base;
         let cells = banner_cells(&frame_a);
@@ -745,7 +754,7 @@ mod tests {
         let backdrop = crate::render::CellColor::Rgb(backdrop.r, backdrop.g, backdrop.b);
         // t=100: coast(0.5)·(total+16) − 8 — the prefix (columns
         // 0..7) is fully faded IN, the body's tail still hidden.
-        let (mid, _, _) = paint_solid_home_view(&banner_view(100, 0), &theme, (80, 24));
+        let (mid, _, _) = paint_solid_home_view(&banner_view(100, 0), &theme, (80, 24), (0, 0));
         let cells = banner_cells(&mid);
         let glyphs: Vec<(usize, &crate::render::Cell)> =
             cells.iter().enumerate().filter(|(_, cell)| cell.ch != ' ').collect();
@@ -753,11 +762,11 @@ mod tests {
         assert_ne!(glyphs[0].1.fg, backdrop, "the leading glyph faded in");
         assert_eq!(glyphs[glyphs.len() - 1].1.fg, backdrop, "the trailing glyph hides");
         // t≥200: byte-identical to the settled (plain) paint.
-        let (settled, _, _) = paint_solid_home_view(&banner_view(200, 0), &theme, (80, 24));
-        let (later, _, _) = paint_solid_home_view(&banner_view(60_000, 0), &theme, (80, 24));
+        let (settled, _, _) = paint_solid_home_view(&banner_view(200, 0), &theme, (80, 24), (0, 0));
+        let (later, _, _) = paint_solid_home_view(&banner_view(60_000, 0), &theme, (80, 24), (0, 0));
         assert_eq!(settled.cells, later.cells, "past the duration the fade is inert");
         let plain_view = banner_view(u64::MAX, 0);
-        let (plain, _, _) = paint_solid_home_view(&plain_view, &theme, (80, 24));
+        let (plain, _, _) = paint_solid_home_view(&plain_view, &theme, (80, 24), (0, 0));
         assert_eq!(settled.cells, plain.cells, "the settled fade equals the static paint");
         let settled_cells = banner_cells(&settled);
         assert!(
@@ -774,8 +783,8 @@ mod tests {
         let theme = ThemeState::v2_dark();
         let mut view = banner_view(0, 0);
         view.update_since_ms = None;
-        let (frame, _, _) = paint_solid_home_view(&view, &theme, (80, 24));
-        let (settled, _, _) = paint_solid_home_view(&banner_view(60_000, 0), &theme, (80, 24));
+        let (frame, _, _) = paint_solid_home_view(&view, &theme, (80, 24), (0, 0));
+        let (settled, _, _) = paint_solid_home_view(&banner_view(60_000, 0), &theme, (80, 24), (0, 0));
         assert_eq!(frame.cells, settled.cells);
     }
 
@@ -788,7 +797,7 @@ mod tests {
         for version in ["1.0.0", "1.0.0-dev.1+m5", "1.0.0"] {
             let scenario = Scenario { version: version.into(), ..Scenario::new("churn") };
             let view = owned_view(&scenario, "Ask".into());
-            let (frame, _, _) = paint_solid_home_view(&view, &theme, (80, 24));
+            let (frame, _, _) = paint_solid_home_view(&view, &theme, (80, 24), (0, 0));
             if let Some((_, prior)) = seen.iter().find(|(v, _)| v == version) {
                 assert_eq!(&frame, prior, "same inputs paint the same home: {version:?}");
             }
@@ -810,7 +819,7 @@ mod tests {
         let view = owned_view(&scenario, "Ask anything… \"Fix broken tests\"".into());
         let mut first: Option<crate::render::Frame> = None;
         for size in [(80u16, 24u16), (60, 20), (120, 30), (80, 24)] {
-            let (frame, _, _) = paint_solid_home_view(&view, &theme, size);
+            let (frame, _, _) = paint_solid_home_view(&view, &theme, size, (0, 0));
             assert_eq!(frame.height, usize::from(size.1), "full-height home at {size:?}");
             if size == (80, 24) {
                 match &first {
