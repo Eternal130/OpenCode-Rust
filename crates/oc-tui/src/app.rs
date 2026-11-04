@@ -11103,8 +11103,11 @@ mod tests {
         // The popup PAINTS over the session composer (G-6: the
         // reference mode joined the Command mode's popup mount).
         let theme = crate::theme::ThemeState::v2_dark();
-        let frame =
+        // D2.2: the composer rides the shared tree — read the pixels
+        // back through the composite seam (render_app's twin).
+        let mut frame =
             crate::components::session::render_session(&app.store, "s1", &theme.styles(), (80, 24));
+        crate::components::chrome_solid::composite_chrome_tree(&mut frame);
         let grid = frame.text_grid();
         let painted: Vec<String> = grid.iter().filter(|row| row.contains("@")).cloned().collect();
         assert!(

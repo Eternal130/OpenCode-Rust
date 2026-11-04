@@ -392,7 +392,15 @@ pub fn render_session(
             None,
         )
     } else {
-        composer_mount_frame(store, session_id, &theme, column - inset, content_width, height)
+        composer_mount_frame(
+            store,
+            session_id,
+            &theme,
+            column - inset,
+            content_width,
+            height,
+            mount_x + shift,
+        )
     };
     store.set_picker_entry_hits(picker_hits);
     // NEW-S1a: position the terminal cursor at the caret cell while
@@ -1426,6 +1434,7 @@ fn composer_mount_frame(
     width: usize,
     terminal_width: usize,
     height: usize,
+    paste_x: usize,
 ) -> (Frame, usize, usize, Option<(usize, usize)>, Option<crate::store::PromptTextHit>) {
     let composer = store.composer(session_id);
     // The popup over the composer: the live slash palette + the `@`
@@ -1530,12 +1539,20 @@ fn composer_mount_frame(
             }
         });
     store.set_footer_live_hit(live_hit);
-    let frame = crate::components::composer_solid::render_prompt_frame_dispatch(
+    // D2.2: the composer rides the shared tree (the `surface-composer`
+    // family wrapper at the OLD paste site — the imperative rect; no
+    // Frame comes back, the pixels land at render_app's composite
+    // seam). The returned region is empty: the paste below is a no-op
+    // kept for the picker/location-missing arms' shape.
+    crate::components::composer_solid::composer_mount(
         &view,
         width,
         prompt_height,
         theme,
+        paste_x,
+        height - prompt_height,
     );
+    let frame = Frame { cells: Vec::new(), width: 0, height: 0, clusters: None };
     // NEW-S1a: the caret's screen cell — the mount pastes at
     // (inset, height - prompt_height); the helper's y already includes
     // the composer's `top` inside the mount frame.
@@ -1728,6 +1745,21 @@ mod tests {
     use super::*;
     use crate::reactive::Runtime;
 
+    /// The headless twin of render_app's seam: render_session mounts
+    /// the shared-tree families (D2.2: the composer wrapper); direct
+    /// test callers read the pixels back through the ONE compositor
+    /// seam, exactly what render_app does at the end of a frame.
+    fn session_frame(
+        store: &Store,
+        session_id: &str,
+        styles: &crate::theme::ThemeStyles,
+        size: (u16, u16),
+    ) -> Frame {
+        let mut frame = render_session(store, session_id, styles, size);
+        crate::components::chrome_solid::composite_chrome_tree(&mut frame);
+        frame
+    }
+
     /// Lane/chrome #13: the streamed-turn event sequence must render
     /// the assistant footer row under the reply, with the tok/s
     /// suffix (` · Nms · X.X tok/s`; values per-run, format pinned).
@@ -1770,7 +1802,7 @@ mod tests {
         step_ended.created = Some(259);
         store.ingest_all([Ingest::Event(step_ended)]);
         let theme = crate::theme::ThemeState::v2_dark();
-        let frame = render_session(&store, "s1", &theme.styles(), (80, 24));
+        let frame = session_frame(&store, "s1", &theme.styles(), (80, 24));
         let grid = frame.text_grid().join("\n");
         assert!(grid.contains("Parity fake says hello."), "{grid}");
         assert!(grid.contains("Build"), "assistant footer row: {grid}");
@@ -1831,7 +1863,7 @@ mod tests {
         step_ended.created = Some(121);
         store.ingest_all([Ingest::Event(step_ended)]);
         let theme = crate::theme::ThemeState::v2_dark();
-        let frame = render_session(&store, "s1", &theme.styles(), (80, 24));
+        let frame = session_frame(&store, "s1", &theme.styles(), (80, 24));
         let grid = frame.text_grid().join("\n");
         assert!(
             grid.contains("Thought · 8ms"),
@@ -1844,7 +1876,7 @@ mod tests {
         let store = Store::new(Runtime::new());
         store.open_tab("s1", Some("Bug hunt".to_owned()));
         let theme = crate::theme::ThemeState::v2_dark();
-        let frame = render_session(&store, "s1", &theme.styles(), (40, 12));
+        let frame = session_frame(&store, "s1", &theme.styles(), (40, 12));
         let grid = frame.text_grid().join("");
         assert!(grid.contains("Bug hunt"), "title present: {grid}");
         // The docked composer's chrome: left rail + bottom transition
@@ -1878,7 +1910,7 @@ mod tests {
         store.open_tab("s2", Some("Beta second".to_owned()));
         store.set_unread("s2", Some(crate::store::Unread::Activity));
         let theme = crate::theme::ThemeState::v2_dark();
-        let frame = render_session(&store, "s1", &theme.styles(), (80, 24));
+        let frame = session_frame(&store, "s1", &theme.styles(), (80, 24));
         let grid = frame.text_grid();
         let strip = &grid[0];
         assert!(
@@ -1919,7 +1951,7 @@ mod tests {
         ))]);
         store.open_tab("s1", None);
         let theme = crate::theme::ThemeState::v2_dark();
-        let frame = render_session(&store, "s1", &theme.styles(), (80, 24));
+        let frame = session_frame(&store, "s1", &theme.styles(), (80, 24));
         let strip = &frame.text_grid()[0];
         assert!(
             strip.starts_with("   Parity fake says hello."),
@@ -1937,13 +1969,13 @@ mod tests {
         let store = Store::new(Runtime::new());
         store.open_tab("s1", None);
         let theme = crate::theme::ThemeState::v2_dark();
-        let strip = render_session(&store, "s1", &theme.styles(), (80, 24)).text_grid()[0].clone();
+        let strip = session_frame(&store, "s1", &theme.styles(), (80, 24)).text_grid()[0].clone();
         assert!(strip.contains("Untitled session"), "placeholder until titled: {strip}");
         store.ingest_all([Ingest::Event(crate::data::BusEvent::new(
             "session.renamed",
             serde_json::json!({ "sessionID": "s1", "title": "Fix the flux capacitor" }),
         ))]);
-        let strip = render_session(&store, "s1", &theme.styles(), (80, 24)).text_grid()[0].clone();
+        let strip = session_frame(&store, "s1", &theme.styles(), (80, 24)).text_grid()[0].clone();
         assert!(strip.contains("Fix the flux capacitor"), "renamed refresh: {strip}");
         assert!(!strip.contains("Untitled session"), "placeholder gone: {strip}");
     }
@@ -1961,7 +1993,7 @@ mod tests {
         let theme = crate::theme::ThemeState::v2_dark();
         for width in [40usize, 80, 120] {
             let frame =
-                render_session(&store, "s1", &theme.styles(), (u16::try_from(width).unwrap(), 24));
+                session_frame(&store, "s1", &theme.styles(), (u16::try_from(width).unwrap(), 24));
             let grid = frame.text_grid();
             let strip = &grid[0];
             assert_eq!(strip.chars().count(), width, "strip spans the width: {strip}");
@@ -1985,7 +2017,7 @@ mod tests {
         store.open_tab("s1", Some("Alpha notes".to_owned()));
         store.set_tabs_enabled(false);
         let theme = crate::theme::ThemeState::v2_dark();
-        let frame = render_session(&store, "s1", &theme.styles(), (80, 24));
+        let frame = session_frame(&store, "s1", &theme.styles(), (80, 24));
         let grid = frame.text_grid();
         assert!(!grid[0].contains(" + "), "no add affordance: {}", grid[0]);
         assert!(
@@ -2010,7 +2042,7 @@ mod tests {
         );
         store.select_agent("s1", "build");
         let theme = crate::theme::ThemeState::v2_dark();
-        let frame = render_session(&store, "s1", &theme.styles(), (80, 24));
+        let frame = session_frame(&store, "s1", &theme.styles(), (80, 24));
         let joined = frame.text_grid().join("");
         assert!(joined.contains("Build · fake-model-a"), "the hint row: {joined}");
     }
@@ -2073,11 +2105,11 @@ mod tests {
         let theme = crate::theme::ThemeState::v2_dark().styles();
         let size = (80, 24);
         store.runtime.run_effects();
-        let first = render_session(&store, "s_long", &theme, size);
+        let first = session_frame(&store, "s_long", &theme, size);
         // Visit the other session, then come back — byte-identical.
-        let _ = render_session(&store, "s_short", &theme, size);
+        let _ = session_frame(&store, "s_short", &theme, size);
         store.runtime.run_effects();
-        let back = render_session(&store, "s_long", &theme, size);
+        let back = session_frame(&store, "s_long", &theme, size);
         assert_eq!(
             first.text_grid(),
             back.text_grid(),
@@ -2095,7 +2127,7 @@ mod tests {
             grown
         });
         store.runtime.run_effects();
-        let after = render_session(&store, "s_long", &theme, size);
+        let after = session_frame(&store, "s_long", &theme, size);
         assert!(
             after.text_grid().iter().any(|row| row.contains("answer number 99")),
             "the appended background turn renders (the F19 store-side contract)"
@@ -2119,7 +2151,7 @@ mod tests {
         let store = Store::new(Runtime::new());
         store.open_tab("s1", Some("Bug hunt".to_owned()));
         let theme = crate::theme::ThemeState::v2_dark();
-        let frame = render_session(&store, "s1", &theme.styles(), (160, 30));
+        let frame = session_frame(&store, "s1", &theme.styles(), (160, 30));
         let grid = frame.text_grid();
         // The pane starts at column 118, row 1 (under the strip): the
         // title 2 cols in on its row-1 (paddingTop 1 + paddingLeft 2).
@@ -2155,7 +2187,7 @@ mod tests {
         let store = Store::new(Runtime::new());
         store.open_tab("s1", Some("Bug hunt".to_owned()));
         let theme = crate::theme::ThemeState::v2_dark();
-        let frame = render_session(&store, "s1", &theme.styles(), (80, 24));
+        let frame = session_frame(&store, "s1", &theme.styles(), (80, 24));
         let grid = frame.text_grid();
         assert!(
             !grid.iter().any(|row| row.contains("Getting started")),
@@ -2255,7 +2287,7 @@ mod tests {
         store.toggle_sidebar();
         assert!(store.sidebar_shown("s1", 80));
         let theme = crate::theme::ThemeState::v2_dark();
-        let frame = render_session(&store, "s1", &theme.styles(), (80, 24));
+        let frame = session_frame(&store, "s1", &theme.styles(), (80, 24));
         let grid = frame.text_grid();
         let title: String = grid[2].chars().skip(40).collect();
         assert!(title.contains("Bug hunt"), "the pane floats at the right edge: {title}");
@@ -2277,7 +2309,7 @@ mod tests {
             rows: vec!["preset: zhipuai".into(), "sessions: 7".into()],
         });
         let theme = crate::theme::ThemeState::v2_dark();
-        let frame = render_session(&store, "s1", &theme.styles(), (160, 30));
+        let frame = session_frame(&store, "s1", &theme.styles(), (160, 30));
         let grid = frame.text_grid();
         let pane: Vec<String> = grid.iter().map(|row| row.chars().skip(118).collect()).collect();
         assert!(pane[3].starts_with("  Fixture"), "the section title: {:?}", pane[3]);
@@ -2308,7 +2340,7 @@ mod tests {
             },
         )));
         let theme = crate::theme::ThemeState::v2_dark();
-        let _ = render_session(&store, "s1", &theme.styles(), (160, 30));
+        let _ = session_frame(&store, "s1", &theme.styles(), (160, 30));
         let hits = store.plugin_section_hits();
         assert_eq!(hits.session_id, "s1");
         assert_eq!(hits.rows.len(), 1, "only the onMouseUp row armed");
@@ -2345,7 +2377,7 @@ mod tests {
             serde_json::json!({ "sessionID": "sub", "parentID": "parent" }),
         ))]);
         let theme = crate::theme::ThemeState::v2_dark();
-        let frame = render_session(&store, "sub", &theme.styles(), (160, 30));
+        let frame = session_frame(&store, "sub", &theme.styles(), (160, 30));
         assert!(
             !frame.text_grid().iter().any(|row| row.contains("Getting started")),
             "no pane for subagent sessions"
@@ -2361,14 +2393,14 @@ mod tests {
         let store = Store::new(Runtime::new());
         store.open_tab("s1", Some("Bug hunt".to_owned()));
         let theme = crate::theme::ThemeState::v2_dark();
-        let before = render_session(&store, "s1", &theme.styles(), (160, 30));
+        let before = session_frame(&store, "s1", &theme.styles(), (160, 30));
         assert!(
             before.text_grid().iter().any(|row| row.contains("Getting started")),
             "the card shows while disconnected"
         );
         assert!(store.sidebar_onboarding_hits().is_some(), "the targets recorded");
         store.set_integration_connected(true);
-        let after = render_session(&store, "s1", &theme.styles(), (160, 30));
+        let after = session_frame(&store, "s1", &theme.styles(), (160, 30));
         assert!(
             !after.text_grid().iter().any(|row| row.contains("Getting started")),
             "a connected provider gates the card off"
@@ -2384,7 +2416,7 @@ mod tests {
         store.open_tab("s1", Some("Bug hunt".to_owned()));
         store.restore_sidebar_onboarding(true);
         let theme = crate::theme::ThemeState::v2_dark();
-        let frame = render_session(&store, "s1", &theme.styles(), (160, 30));
+        let frame = session_frame(&store, "s1", &theme.styles(), (160, 30));
         assert!(
             !frame.text_grid().iter().any(|row| row.contains("Getting started")),
             "the persisted dismissal keeps the card hidden"
@@ -2420,7 +2452,7 @@ mod tests {
         // tsx:129-131's `terminals` gate — session-frame.tsx:294).
         store.set_terminal_available(true);
         let theme = crate::theme::ThemeState::v2_dark();
-        let frame = render_session(&store, "root", &theme.styles(), (80, 24));
+        let frame = session_frame(&store, "root", &theme.styles(), (80, 24));
         let grid = frame.text_grid();
         assert!(
             grid.iter().any(|row| row.contains("Subagents  Shell  Terminals")),
@@ -2440,7 +2472,7 @@ mod tests {
             matches!(store.route(), crate::store::Route::Session { ref session_id, .. } if session_id == "ses_child")
         );
         assert!(store.picker_live("ses_child"), "the child always mounts the panel");
-        let child_frame = render_session(&store, "ses_child", &theme.styles(), (80, 24));
+        let child_frame = session_frame(&store, "ses_child", &theme.styles(), (80, 24));
         let strip = child_frame.text_grid()[0].clone();
         assert!(strip.contains("Root flow"), "the root's pill stays active: {strip}");
         assert!(!strip.contains("Check the fixture"), "no tab for the child: {strip}");
