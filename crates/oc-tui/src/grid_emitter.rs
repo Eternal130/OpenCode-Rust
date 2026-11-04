@@ -320,6 +320,29 @@ impl GridEmitter {
         self.first = true;
     }
 
+    /// Blank ONLY the prev grid's rows in `y_start..y_end` (0-based,
+    /// end exclusive): the next diff fully repaints that row band and
+    /// leaves the rest of the diff untouched. D2.3's mini seam — a
+    /// scrollback write scrolls the screen, so the dock band's prev
+    /// no longer matches the screen; the transcript rows above must
+    /// NOT be force-rewritten (they hold live transcript text the
+    /// emitter never owns).
+    pub fn invalidate_rows(&mut self, y_start: usize, y_end: usize) {
+        for row in self
+            .prev
+            .cells
+            .iter_mut()
+            .enumerate()
+            .take(y_end.min(self.height))
+            .skip(y_start)
+        {
+            for cell in row.1.iter_mut() {
+                *cell = blank_cell();
+            }
+        }
+        self.prev_clusters.retain(|(y, _x), _| *y < y_start || *y >= y_end);
+    }
+
     /// Diff-emit one frame's SGR bytes (the frame's own byte stream,
     /// WITHOUT the `?2026` envelope — the test seam). Grid cells
     /// outside the emitter's size read as blank; a frame at a different
