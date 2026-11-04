@@ -5828,16 +5828,11 @@ pub fn spawn_loop_fetcher(
                         input_tx,
                         cancel_tx,
                     );
-                    // G-141 — the theme palette injection: the attach
-                    // frame's OSC 4/10/11 bytes (terminal-pane.tsx:
-                    // 338-385), sent into the PTY once the socket is
-                    // live.
-                    let palette = crate::terminal_pane::theme_palette();
+                    // G-141 — the theme palette is injected into the
+                    // pane's opentui engine (store side), not sent
+                    // through the PTY (terminal-pane.tsx:338-385).
                     tokio::spawn(async move {
-                        attach_terminal(
-                            client, tx, session_id, pty_id, input_rx, cancel_rx, palette,
-                        )
-                        .await;
+                        attach_terminal(client, tx, session_id, pty_id, input_rx, cancel_rx).await;
                     });
                 }
                 LoopRequest::TerminalDetach { pty_id } => {
@@ -7030,7 +7025,6 @@ async fn attach_terminal(
     pty_id: String,
     mut input_rx: tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>,
     mut cancel_rx: tokio::sync::watch::Receiver<bool>,
-    palette: Vec<u8>,
 ) {
     use futures::{SinkExt as _, StreamExt as _};
     let fail = |message: String| {
@@ -7097,22 +7091,6 @@ async fn attach_terminal(
         }
     };
     let (mut sink, mut stream) = socket.split();
-    // G-141 — the palette injection rides the FIRST input frame
-    // (`applyTerminalTheme` after the restore, terminal-pane.tsx:
-    // 110-116 + 64-66): the embedded shell re-colors its 16-color
-    // palette + fg/bg to the active theme.
-    if !palette.is_empty() {
-        let frame = crate::terminal_pane::interaction_frame(
-            crate::terminal_pane::FRAME_INPUT,
-            size.0,
-            size.1,
-            &palette,
-        );
-        if sink.send(tokio_tungstenite::tungstenite::Message::Binary(frame)).await.is_err() {
-            fail("Terminal disconnected".to_owned());
-            return;
-        }
-    }
     loop {
         tokio::select! {
             _ = cancel_rx.changed() => {
@@ -9682,11 +9660,13 @@ pub async fn run_with_size(
             let key = (theme.name.clone(), theme.mode);
             if last_palette_theme.as_ref() != Some(&key) {
                 last_palette_theme = Some(key);
-                crate::terminal_pane::set_theme_palette(crate::terminal_pane::terminal_palette(
+                let palette = crate::terminal_pane::terminal_theme_palette(
                     &theme.resolved.tokens,
                     theme.mode,
                     theme.resolved.tokens.background.raised.base,
-                ));
+                );
+                crate::terminal_pane::set_theme_palette(palette.clone());
+                app.store.terminal_pane_apply_theme(&palette);
             }
         }
         // The shell output viewer's 1s live refresh (dialog-shell-output
