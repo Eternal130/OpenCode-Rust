@@ -3215,6 +3215,72 @@ impl App {
         self.input_mode = input;
     }
 
+    /// Sync the footer family's live body into the shared tree (the
+    /// D2.2 footer lane's ONLY live mount call — the old App::frame
+    /// paste branches, one per body kind, collapsed into ONE family
+    /// wrapper under `surface-footer`). The mount rect is the old
+    /// paste site (`(0, size.1 - mount_height)`, full width); the
+    /// mount-height constants are the imperative geometry source.
+    /// A frame with no live body mounts nothing — the seam prunes
+    /// the stale wrapper (the old else arms).
+    fn sync_footer_family(&self, footer_theme: &FooterTheme) {
+        use crate::components::footer::solid::mount_footer_ops;
+
+        let footer = self.store.footer();
+        let width = usize::from(self.size.0);
+        let screen_height = usize::from(self.size.1);
+        let canvas = if let FooterView::Permission { request } = footer.view.clone() {
+            let state = self
+                .permission_states
+                .get(&request.id)
+                .cloned()
+                .unwrap_or_else(|| create_permission_body_state(&request));
+            let mount_height = PERMISSION_MOUNT_HEIGHT.min(screen_height);
+            Some((
+                crate::components::footer::permission::permission_body_canvas(
+                    &request,
+                    &state,
+                    width,
+                    mount_height,
+                    footer_theme,
+                ),
+                mount_height,
+            ))
+        } else if let FooterView::Form { request } = footer.view.clone() {
+            let fresh = FormBodyState::new(&request);
+            let state = form_sync(self.form_states.get(&request.id).unwrap_or(&fresh), &request);
+            let mount_height = FORM_MOUNT_HEIGHT.min(screen_height);
+            Some((
+                crate::components::footer::form::form_body_canvas(
+                    &request,
+                    &state,
+                    width,
+                    mount_height,
+                    footer_theme,
+                ),
+                mount_height,
+            ))
+        } else if matches!(footer.view, FooterView::Prompt) && footer.route.is_panel() {
+            // A footer picker panel over the composer from LIVE store
+            // data (the mini footer family's docked pickers).
+            let mount_height = FOOTER_PANEL_MOUNT_HEIGHT.min(screen_height);
+            footer_panel_canvas(&self.store, footer.route, width, mount_height, footer_theme)
+                .map(|canvas| (canvas, mount_height))
+        } else {
+            None
+        };
+        if let Some((canvas, mount_height)) = canvas {
+            let (canvas_width, canvas_height) = canvas.dims();
+            mount_footer_ops(
+                canvas.ops(),
+                canvas_width,
+                canvas_height,
+                0,
+                screen_height - mount_height,
+            );
+        }
+    }
+
     /// The current frame (route + blockers + dialog overlay).
     #[must_use]
     #[allow(clippy::too_many_lines)] // the app frame: every overlay seam in one paint pass
@@ -3240,6 +3306,16 @@ impl App {
         // path can self-heal the hover exactly like the render tree.
         self.rehover_strip_from_last_pointer();
         let theme = self.store.theme();
+        // D2.2 (footer lane): the footer family's BLOCKER bodies
+        // (permission/form) and picker PANEL bodies ride the shared
+        // tree — mounted BEFORE render_app so the composite seam
+        // inside it seats them under `surface-footer` (skeleton
+        // index 3). The old paste branches after render_app are
+        // DELETED (ruling attempt 2's per-family gate); a frame no
+        // body syncs leaves the wrapper stale and the seam unmounts
+        // it (the old else arms).
+        let footer_theme = FooterTheme::from_resolved(&theme.resolved.tokens);
+        self.sync_footer_family(&footer_theme);
         let mut frame = render_app(&self.store, &theme, self.size);
         // PLUG-TUI-SLOT / D2.2: the open plugin route page now rides
         // the shared chrome tree — it mounts inside render_app (the
@@ -3268,7 +3344,6 @@ impl App {
             let y = usize::from(self.size.1).saturating_sub(overlay.height);
             paste_frame(&mut frame, &overlay, y);
         }
-        let footer_theme = FooterTheme::from_resolved(&theme.resolved.tokens);
         if let FooterView::Permission { request } = self.store.footer().view.clone() {
             let state = self
                 .permission_states
@@ -3277,20 +3352,12 @@ impl App {
                 .unwrap_or_else(|| create_permission_body_state(&request));
             let mount_height = PERMISSION_MOUNT_HEIGHT.min(usize::from(self.size.1));
             let width = usize::from(self.size.0);
-            let body = crate::components::footer::permission::render_permission_body(
-                &request,
-                &state,
-                width,
-                mount_height,
-                &footer_theme,
-            );
-            let y = usize::from(self.size.1) - mount_height;
-            paste_frame(&mut frame, &body, y);
             // The pointer surface (auditA #4): the same layout math
             // the controls row paints with, translated by the mount
             // origin — the body mounts full-width (x is already
             // absolute), the controls row sits at screen row
-            // `size.1 − 2`.
+            // `size.1 − 2`. Pixels ride the tree (sync_footer_family
+            // above); this branch only feeds the pointer routing.
             let mut hits = crate::components::footer::permission::permission_pointer_hits(
                 &request,
                 &state,
@@ -3300,47 +3367,15 @@ impl App {
             hits.row = usize::from(self.size.1).saturating_sub(2);
             self.store.set_permission_pointer_hits(Some(hits));
         } else {
-            // No live body — no pointer targets (the else branch also
-            // owns the picker mount below; the ask's rects must not
-            // outlive the view).
+            // No live body — no pointer targets (the ask's rects must
+            // not outlive the view).
             self.store.set_permission_pointer_hits(None);
         }
         // TD16: the form blocker mounts the same way — `FormPrompt`
         // replaces the composer slot in v2's session-route Switch
-        // (index.tsx:1470-1477), so the body pastes over the footer
-        // region and the keys live in `stroke_in_form`.
-        if let FooterView::Form { request } = self.store.footer().view.clone() {
-            let fresh = FormBodyState::new(&request);
-            let state = form_sync(self.form_states.get(&request.id).unwrap_or(&fresh), &request);
-            let mount_height = FORM_MOUNT_HEIGHT.min(usize::from(self.size.1));
-            let width = usize::from(self.size.0);
-            let body = crate::components::footer::form::render_form_body(
-                &request,
-                &state,
-                width,
-                mount_height,
-                &footer_theme,
-            );
-            let y = usize::from(self.size.1) - mount_height;
-            paste_frame(&mut frame, &body, y);
-        } else {
-            // A footer picker panel mounts over the composer from LIVE
-            // store data (the mini footer family's docked pickers).
-            let footer = self.store.footer();
-            if matches!(footer.view, FooterView::Prompt) && footer.route.is_panel() {
-                let mount_height = FOOTER_PANEL_MOUNT_HEIGHT.min(usize::from(self.size.1));
-                if let Some(panel) = footer_panel_frame(
-                    &self.store,
-                    footer.route,
-                    usize::from(self.size.0),
-                    mount_height,
-                    &footer_theme,
-                ) {
-                    let y = usize::from(self.size.1) - mount_height;
-                    paste_frame(&mut frame, &panel, y);
-                }
-            }
-        }
+        // (index.tsx:1470-1477); the body rides the tree
+        // (`sync_footer_family` above) and the keys live in
+        // `stroke_in_form`.
         // The toast layer (`ui/toast.tsx`): the queue's current toast
         // composites over whatever rendered underneath — rails keep the
         // underlying cell background (overlay_toast_over_frame).
@@ -3399,13 +3434,26 @@ fn paste_frame(target: &mut Frame, region: &Frame, y: usize) {
 /// * **variant**: "Default" + the active model's variants;
 /// * **command/settings**: the static entry lists (the golden
 ///   fixtures' data source).
-fn footer_panel_frame(
+/// The live footer panel's CANVAS for one picker route — the mini
+/// footer family's docked pickers (`footer.command.tsx`) fed from
+/// the store's server lists (model/agent/variant) and settings
+/// state (D2.2: the old Frame-returning dispatch fed the App::frame
+/// paste; the canvas now feeds the `surface-footer` mount):
+///
+/// * **model**: provider-grouped `model.list` rows, the active
+///   session's selection as `current`, "Models loading" /
+///   "No results found" empty states (`footer-model-select`);
+/// * **agent**: non-hidden non-subagent `agent.list` rows;
+/// * **variant**: "Default" + the active model's variants;
+/// * **command/settings**: the static entry lists (the golden
+///   fixtures' data source).
+fn footer_panel_canvas(
     store: &Store,
     route: crate::components::footer::PromptRoute,
     width: usize,
     height: usize,
     theme: &FooterTheme,
-) -> Option<Frame> {
+) -> Option<crate::components::footer::canvas::Canvas> {
     use crate::components::footer::panels as footer_panels;
     use crate::components::footer::PromptRoute;
 
@@ -3421,7 +3469,7 @@ fn footer_panel_frame(
 
     match route {
         PromptRoute::Composer | PromptRoute::Subagent => None,
-        PromptRoute::Model => Some(model_panel_frame(
+        PromptRoute::Model => Some(model_panel_canvas(
             &store.server_lists(),
             session_selection
                 .as_ref()
@@ -3448,7 +3496,7 @@ fn footer_panel_frame(
                 })
                 .unwrap_or_default();
             let current = session_agent;
-            Some(footer_panels::render_agent_select(
+            Some(footer_panels::agent_select_canvas(
                 &agents,
                 current.as_deref(),
                 width,
@@ -3475,7 +3523,7 @@ fn footer_panel_frame(
                 })
                 .unwrap_or_default();
             let current = session_selection.as_ref().and_then(|m| m.variant.clone());
-            Some(footer_panels::render_variant_select(
+            Some(footer_panels::variant_select_canvas(
                 &variants,
                 current.as_deref(),
                 width,
@@ -3483,8 +3531,8 @@ fn footer_panel_frame(
                 theme,
             ))
         }
-        PromptRoute::Command => Some(footer_panels::render_command_menu(width, height, theme)),
-        PromptRoute::Settings => Some(footer_panels::render_settings(
+        PromptRoute::Command => Some(footer_panels::command_menu_canvas(width, height, theme)),
+        PromptRoute::Settings => Some(footer_panels::settings_canvas(
             &footer_panels::resolve_mini_settings(),
             width,
             height,
@@ -3498,18 +3546,18 @@ fn footer_panel_frame(
 /// provider row), the current selection revealed; loading/failed
 /// render the shell with its loading label ("Models loading" — the
 /// mini footer's empty state).
-fn model_panel_frame(
+fn model_panel_canvas(
     lists: &crate::store::ServerLists,
     current: Option<(&str, &str)>,
     width: usize,
     height: usize,
     theme: &FooterTheme,
-) -> Frame {
+) -> crate::components::footer::canvas::Canvas {
     use crate::components::footer::panels as footer_panels;
     let Some(models) = lists.models.rows() else {
         // Loading / failed — the empty-list mount still renders the
         // shell with its loading label.
-        return footer_panels::render_model_select(&[], None, width, height, theme);
+        return footer_panels::model_select_canvas(&[], None, width, height, theme);
     };
     let mut providers: Vec<crate::store::ServerProvider> = lists.providers.clone();
     providers.sort_by(|a, b| a.name.cmp(&b.name));
@@ -3537,7 +3585,7 @@ fn model_panel_frame(
             models: by_provider.remove(&provider.id).unwrap_or_default(),
         })
         .collect();
-    footer_panels::render_model_select(&run_providers, current, width, height, theme)
+    footer_panels::model_select_canvas(&run_providers, current, width, height, theme)
 }
 
 /// Map a stroke onto the composer's key vocabulary (printable unmodified
