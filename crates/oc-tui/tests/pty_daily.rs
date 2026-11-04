@@ -2433,3 +2433,84 @@ fn f15_stage1_ellipsis_renders_in_the_open_menu_at_120() {
         },
     );
 }
+
+/// The dock band's row count (the reserved footer surface).
+const FOOTER_ROWS: usize = 4;
+
+/// D2.3 — the true split-footer engine's transcript semantics: a
+/// reply longer than the viewport scrolls the transcript region
+/// while the dock stays glued to the bottom rows — exactly ONE dock
+/// rail row on screen (the engine's newline-ownership stream scrolls
+/// blanks past the erased dock; a clobbered or ghosted dock would
+/// paint the rail glyph twice) and the composer's statusline keeps
+/// its bottom anchor.
+#[test]
+fn mini_split_footer_transcript_scroll_keeps_dock() {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(1_000_000, |since| since.as_millis() as u64);
+    let lines: Vec<String> = (0..60).map(|index| format!("scroll row {index:03}")).collect();
+    let long_reply = lines.join("\\n");
+    let script = vec![
+        vt_harness::ScriptEvent {
+            delay_ms: 60,
+            body: format!(
+                r#"{{"id":"evt_long_t","created":{now_ms},"type":"session.text.delta","data":{{"sessionID":"ses_alpha","messageID":"m_long","partID":"p_long","delta":"{long_reply}"}}}}"#
+            ),
+        },
+        vt_harness::ScriptEvent {
+            delay_ms: 80,
+            body: format!(
+                r#"{{"id":"evt_long_te","created":{now_ms},"type":"session.text.ended","data":{{"sessionID":"ses_alpha","messageID":"m_long","partID":"p_long"}}}}"#
+            ),
+        },
+        vt_harness::ScriptEvent {
+            delay_ms: 100,
+            body: format!(
+                r#"{{"id":"evt_long_x","created":{now_ms},"type":"session.execution.succeeded","data":{{"sessionID":"ses_alpha"}}}}"#
+            ),
+        },
+    ];
+    run_mini_test(
+        "d23-split-scroll",
+        80,
+        40,
+        |fake, _sandbox| fake.arm_script(script),
+        move |h| {
+            wait_text(h, "oc mini", Duration::from_secs(8))?;
+            h.write(b"give me a long reply\r");
+            // The reply's TAIL rows prove the transcript scrolled
+            // past the viewport height (60 rows over a 40-row screen).
+            wait_grid(
+                h,
+                |g| (0..g.rows).any(|row| g.row_text(row).contains("scroll row 059")),
+                Duration::from_secs(10),
+            )
+            .map_err(|error| format!("the long reply never scrolled through: {error}"))?;
+            let grid = h.grid_now();
+            // Exactly ONE dock rail row: the dock is never clobbered
+            // by the scroll and never ghosts mid-screen.
+            let rails = (0..grid.rows)
+                .filter(|&row| grid.row_text(row).starts_with('┃'))
+                .count();
+            assert_eq!(rails, 1, "one dock rail row (no clobber, no ghost)");
+            // The statusline keeps its bottom anchor inside the
+            // dock band (the reserved footer rows).
+            assert!(
+                (grid.rows - FOOTER_ROWS..grid.rows).any(|row| {
+                    grid.row_text(row).contains("ctrl+p menu")
+                }),
+                "the composer statusline stays in the dock band"
+            );
+            // The transcript rows above the dock carry the reply's
+            // tail (the newest rows sit just above the dock).
+            assert!(
+                (grid.rows - 8..grid.rows - 4).any(|row| {
+                    grid.row_text(row).contains("scroll row 05")
+                }),
+                "the transcript tail sits just above the dock"
+            );
+            Ok(())
+        },
+    );
+}

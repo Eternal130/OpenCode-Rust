@@ -857,9 +857,19 @@ impl PendingRows {
     /// The whole batch as styled ANSI rows (D2.3 — the payload the
     /// split-footer engine's commit FIFO carries: one String per row,
     /// plain rows as text, styled rows as SGR-run text using the same
-    /// serialization the retired CUP writer stamped).
+    /// serialization the retired CUP writer stamped). Each row ends
+    /// with a CR: the session is in raw mode (OPOST off), so the
+    /// engine's LF row separator needs the CR half to return the
+    /// cursor — the retired writer's `\r\n` pairs, split across the
+    /// row payload and the engine's newline intent.
     fn ansi_rows(&self, width: usize) -> Vec<String> {
-        (0..self.len()).map(|index| serialize_atoms_row(&self.atoms(index), width)).collect()
+        (0..self.len())
+            .map(|index| {
+                let mut row = serialize_atoms_row(&self.atoms(index), width);
+                row.push('\r');
+                row
+            })
+            .collect()
     }
 }
 
@@ -993,6 +1003,17 @@ pub struct Lifecycle {
     #[allow(dead_code)] // kept for resize parity with the reference
     height: usize,
     closed: bool,
+    /// D2.3 — the transcript band's cursor row (1-based, inside the
+    /// scroll region). The engine's stream writes from WHEREVER the
+    /// cursor sits, and the dock paint parks it mid-dock — so every
+    /// scrollback flush re-CUPs here first and the row advances with
+    /// the written lines (clamped at the region bottom; commits
+    /// always end on a fresh row, so the column is always 1).
+    transcript_row: usize,
+    /// The live region bottom (1-based); `0` = unset. Tracks
+    /// `height - max(FOOTER_HEIGHT, pane height)` — the pane's
+    /// blocker bodies grow the dock upward, shrinking the band.
+    region_bottom: usize,
     /// The last painted footer signature (the dirty check) + a force
     /// flag for post-scroll invalidation (a scrollback write scrolls
     /// the screen, so the next footer draw must repaint fully).
@@ -1101,6 +1122,8 @@ impl Lifecycle {
             last_footer_signature: String::new(),
             force_draw: true,
             drawn_footer_rows: 0,
+            transcript_row: 1,
+            region_bottom: 0,
             splash_enabled: input.splash,
             mono: input.mono,
             shell_output: input.shell_output,
@@ -1143,6 +1166,9 @@ impl Lifecycle {
                 });
             }
         }
+        // D2.3 — the transcript scroll region (the split-footer
+        // geometry: transcript band scrolls, dock band stays).
+        lifecycle.reconcile_scrollback_region()?;
         lifecycle.flush()?;
         Ok(lifecycle)
     }
@@ -1199,11 +1225,47 @@ impl Lifecycle {
     /// `flushPendingSplitCommits` + `requestRender`) — see
     /// [`Self::write_scrollback`].
     pub fn flush(&mut self) -> Result<(), String> {
+        self.reconcile_scrollback_region()?;
         self.finish_startup();
         if !self.pending.is_empty() {
-            self.write_scrollback()?;
+            if self.closed || !self.renderer.is_split_footer_capture_active() {
+                // Post-close rows (SSE folds that landed while the
+                // exit chord ran) drain through the passthrough arm —
+                // the engine's capture gate is down after `shutdown`.
+                self.write_scrollback_passthrough()?;
+            } else {
+                self.write_scrollback()?;
+            }
         }
         self.draw_footer()
+    }
+
+    /// The post-close drain (`externalOutputMode: "passthrough"`,
+    /// `runtime.lifecycle.ts:97-111`'s shutdown order): late rows
+    /// write directly through the same newline-ownership shape (a
+    /// newline per row, trailing blanks trimmed) — the engine's FIFO
+    /// no longer accepts commits once the capture is disarmed.
+    fn write_scrollback_passthrough(&mut self) -> Result<(), String> {
+        let mut bytes = String::new();
+        let mut lines_written = 0usize;
+        self.park_transcript_cursor()?;
+        while let Some(batch) = self.pending.first().cloned() {
+            for line in batch.ansi_rows(self.width.max(1)) {
+                // Each row ends with its CR; the LF separator rides
+                // here (the raw-mode `\r\n` pair).
+                bytes.push_str(line.trim_end_matches(' '));
+                bytes.push('\n');
+                lines_written += 1;
+            }
+            self.pending.remove(0);
+        }
+        if !bytes.is_empty() {
+            self.write_raw(bytes.as_bytes())?;
+            let bottom = self.region_bottom.max(1);
+            self.transcript_row = (self.transcript_row + lines_written).min(bottom);
+            self.force_draw = true;
+        }
+        Ok(())
     }
 
     /// The scrollback write (D2.3 — `writeToScrollback` +
@@ -1223,19 +1285,12 @@ impl Lifecycle {
     /// the newline intent (every mini commit starts and ends on a
     /// fresh row, so the tail column resets per commit).
     fn write_scrollback(&mut self) -> Result<(), String> {
-        // Erase the drawn dock first: the engine's transcript bytes
-        // scroll the whole screen, so a painted dock would strand a
-        // ghost mid-screen (in the native scrollback after the scroll).
-        if self.drawn_footer_rows > 0 {
-            let top = self.height.saturating_sub(self.drawn_footer_rows) + 1;
-            let sequence = format!("\x1b[{top};1H\x1b[0J");
-            self.write_raw(sequence.as_bytes())?;
-            self.drawn_footer_rows = 0;
-        }
         let row_columns = u32::try_from(self.width.max(1)).unwrap_or(u32::MAX);
+        let mut lines_written = 0usize;
         while let Some(batch) = self.pending.first().cloned() {
             let lines = batch.ansi_rows(self.width.max(1));
             if !lines.is_empty() {
+                lines_written += lines.len();
                 self.renderer
                     .write_to_scrollback(Box::new(move |_ctx| ScrollbackSnapshot {
                         lines,
@@ -1254,10 +1309,46 @@ impl Lifecycle {
             }
             self.pending.remove(0);
         }
-        // The flush adjudication (drainAll): the FIFO's commits batch
-        // into one transcript byte stream through the live session.
+        // Park the cursor at the transcript position (the dock paint
+        // left it mid-dock; the engine's stream writes from the
+        // cursor), flush, then advance the tracked row (clamped at
+        // the region bottom — the trailing newline scrolls in place
+        // there).
+        self.park_transcript_cursor()?;
         let _ = self.renderer.flush_pending_split_commits(true, true);
+        let bottom = self.region_bottom.max(1);
+        self.transcript_row = (self.transcript_row + lines_written).min(bottom);
         self.force_draw = true;
+        Ok(())
+    }
+
+    /// CUP to the transcript band's tracked row (column 1 — every
+    /// commit ends on a fresh row).
+    fn park_transcript_cursor(&mut self) -> Result<(), String> {
+        let row = self.transcript_row.clamp(1, self.height.max(1));
+        self.write_raw(format!("\x1b[{row};1H").as_bytes())
+    }
+
+    /// The transcript scroll region (`syncSplitScrollback`'s DECSTBM
+    /// arm, `renderer.ts:2921-2972`): rows `1..=region_bottom` scroll
+    /// with the engine's newline stream while the reserved footer band
+    /// below stays put — the true split-footer geometry. The band
+    /// reserves `max(FOOTER_HEIGHT, pane height)` rows: the blocker
+    /// bodies (permission/form/subagent) grow the dock upward, so the
+    /// region re-arms whenever the pane's height changes. DECSTBM
+    /// homes the cursor (the next park re-positions anyway).
+    fn reconcile_scrollback_region(&mut self) -> Result<(), String> {
+        let pane = self.pane.pane_height().clamp(1, self.height);
+        let bottom = self
+            .height
+            .saturating_sub(pane.max(FOOTER_HEIGHT))
+            .max(1);
+        if bottom != self.region_bottom {
+            self.region_bottom = bottom;
+            self.transcript_row = self.transcript_row.min(bottom);
+            self.write_raw(format!("\x1b[1;{bottom}r").as_bytes())?;
+            self.force_draw = true;
+        }
         Ok(())
     }
 
@@ -1292,10 +1383,12 @@ impl Lifecycle {
         }
         self.last_footer_signature = signature;
         self.force_draw = false;
-        // The dock frame pasted at the bottom of a full-screen grid:
-        // rows above the dock are ABSENT (out-of-bounds cells read as
-        // the emitter's blank — never emitted, never erasing the
-        // transcript). A pane taller than the screen clips to the
+        // The dock frame pasted at the BOTTOM of a full-screen grid:
+        // blank rows pad above the dock (D2.3 — the dock anchors the
+        // screen's last rows, the reserved split-footer surface; the
+        // padding rows read blank-vs-blank on the diff after the
+        // first frame, so emission never touches the transcript
+        // region above). A pane taller than the screen clips to the
         // screen's last rows (the retired viewport's `max_height`
         // clamp).
         let skip = footer_frame.cells.len().saturating_sub(self.height);
@@ -1312,6 +1405,9 @@ impl Lifecycle {
             })
             .collect();
         let top = self.height.saturating_sub(cells.len());
+        let mut padded = vec![vec![crate::grid_emitter::blank_cell(); self.width]; top];
+        padded.extend(cells);
+        let cells = padded;
         let clusters = footer_frame.clusters.as_ref().map(|map| {
             map.iter()
                 .filter(|&((y, x), _)| *y >= skip && *x < self.width)
@@ -1373,9 +1469,13 @@ impl Lifecycle {
         // tears the attached terminal session down (the port's
         // `screenMode → main-screen` transition rides the same
         // capture-off + destroy pair — there is no public mode
-        // setter, bounded divergence). `clearOnShutdown: false`
-        // (`runtime.lifecycle.ts:172`) — the last footer frame stays
-        // (the config is carried on the renderer).
+        // setter, bounded divergence). The transcript scroll region
+        // resets first (`resetScrollRegion`, renderer.ts:2968) so the
+        // host shell scrolls normally after exit;
+        // `clearOnShutdown: false` (`runtime.lifecycle.ts:172`) — the
+        // last footer frame stays (the config is carried on the
+        // renderer).
+        let _ = self.write_raw(b"\x1b[r");
         self.renderer.set_split_footer_capture(false);
         self.renderer.destroy();
         if !wrote_exit {
@@ -1398,6 +1498,9 @@ impl Lifecycle {
         self.emitter.resize(self.width, self.height);
         self.renderer
             .resize(u32::try_from(self.width).unwrap_or(u32::MAX), u32::try_from(self.height).unwrap_or(u32::MAX));
+        // The transcript band re-arms at the new height (the flush's
+        // region reconcile; the dock repaint follows).
+        self.region_bottom = 0;
         self.force_draw = true;
     }
 
@@ -1454,11 +1557,13 @@ mod tests {
         use super::PendingRows;
         let plain = PendingRows::Plain(vec!["hello".to_owned(), String::new()]);
         // A plain row carries only the reset bookends (no color/attr
-        // runs) — the retired writer's exact shape.
+        // runs) plus the trailing CR — the retired writer's exact
+        // shape split across the row payload and the engine's LF.
         let rows = plain.ansi_rows(80);
         assert_eq!(rows.len(), 2);
         assert!(rows[0].trim_matches('\x1b').contains("hello"), "{rows:?}");
-        assert_eq!(rows[1], "");
+        assert!(rows[0].ends_with('\r'), "the CR half of the row pair: {rows:?}");
+        assert_eq!(rows[1], "\r");
         let styled = PendingRows::Styled(vec![vec![
             crate::layout::StyledSpan {
                 text: "go".to_owned(),
@@ -1478,7 +1583,7 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert!(rows[0].starts_with("\x1b[0m"), "a boundary opens from reset");
         assert!(rows[0].contains("38;5;231"), "the indexed fg opens: {}", rows[0]);
-        assert!(rows[0].ends_with("\x1b[0m"), "the row closes with a reset");
+        assert!(rows[0].ends_with("\x1b[0m\r"), "reset then the CR half: {}", rows[0]);
         // The styled run's text survives the SGR boundaries.
         assert!(rows[0].contains("go") && rows[0].contains(" off"), "{}", rows[0]);
         // The width clamp drops atoms past the budget.
