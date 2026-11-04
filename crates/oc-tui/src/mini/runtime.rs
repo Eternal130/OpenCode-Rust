@@ -47,6 +47,12 @@ const RECONNECT_DELAY: Duration = Duration::from_millis(250);
 /// an SSE event type; the loop's private vocabulary).
 const RECONNECT_MARKER: &str = "__mini_reconnected";
 
+/// G-181④ — recognizer for the private reconnect marker (the event
+/// pump arms the hydrate replay instead of folding it).
+fn is_reconnect_marker(event: &Value) -> bool {
+    event.get("type").and_then(Value::as_str) == Some(RECONNECT_MARKER)
+}
+
 /// How long a turn may run before the queue drains anyway (the
 /// reference keeps no explicit cap; the guard only stops pathological
 /// stalls).
@@ -510,7 +516,7 @@ impl Runtime {
             // G-181④ — the reconnect marker (never an SSE type): arm
             // the hydrate replay; the ref reconnect path rehydrates
             // BEFORE live events resume folding.
-            if event.get("type").and_then(Value::as_str) == Some(RECONNECT_MARKER) {
+            if is_reconnect_marker(&event) {
                 self.needs_hydrate = true;
                 continue;
             }
@@ -1028,6 +1034,14 @@ mod tests {
         assert_eq!(RECONNECT_DELAY, Duration::from_millis(250));
         let marker = serde_json::json!({ "type": RECONNECT_MARKER });
         assert!(marker.get("type").and_then(Value::as_str) == Some(RECONNECT_MARKER));
+        assert!(is_reconnect_marker(&marker));
+        // A live SSE event type never matches the private marker.
+        assert!(!is_reconnect_marker(&serde_json::json!({
+            "type": "session.text.delta",
+            "data": { "delta": "x" }
+        })));
+        assert!(!is_reconnect_marker(&serde_json::json!({ "type": 7 })));
+        assert!(!is_reconnect_marker(&serde_json::json!({})));
     }
 
     /// G-68 (fix #1) — the replay's production wiring: projections
