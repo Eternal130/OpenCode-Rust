@@ -6,17 +6,29 @@
 //! parity gate pins the solid frame cell-for-cell against the old
 //! painter ([`super::location_missing::render_location_missing`]).
 
-use super::chrome_solid::{chrome_frame, chrome_run_units, ChromeUnit};
+use super::chrome_solid::{chrome_mount, chrome_run_units, ChromeUnit};
 use crate::render::CellColor;
 use crate::theme::ThemeStyles;
 
-/// The new-path twin of [`super::location_missing::render_location_missing`].
-#[must_use]
-pub fn render_location_missing_solid(
+/// Mount the session-location recovery screen into the shared chrome
+/// tree (D2.2) at its composer-slot rect — absolute text units over a
+/// transparent background (the old paste's blank cells are the
+/// caller's blank mount frame; the tree paints only the ink).
+pub fn mount_location_missing_solid(
     directory: &str,
     styles: &ThemeStyles,
     width: usize,
-) -> crate::render::Frame {
+    left: usize,
+    top: usize,
+) {
+    let width = width.max(4);
+    let rows = super::location_missing::LOCATION_MISSING_ROWS;
+    let units = location_missing_units(directory, styles, width);
+    chrome_mount("location_missing", left, top, width, rows, CellColor::Default, &units, &[]);
+}
+
+/// The unit walk (the old painter's own geometry, verbatim).
+fn location_missing_units(directory: &str, styles: &ThemeStyles, width: usize) -> Vec<ChromeUnit> {
     let width = width.max(4);
     let rows = super::location_missing::LOCATION_MISSING_ROWS;
     let text = styles.text.fg.map_or(CellColor::Default, CellColor::from);
@@ -95,5 +107,27 @@ pub fn render_location_missing_solid(
             reverse,
         ));
     }
-    chrome_frame("location_missing", width, rows, CellColor::Default, &units)
+    units
+}
+
+/// The parity twin: the screen's standalone Frame (the retired
+/// per-surface copy's test form — pins the solid tree against the old
+/// painter cell-for-cell).
+#[cfg(test)]
+#[must_use]
+pub fn location_missing_solid_frame(
+    directory: &str,
+    styles: &ThemeStyles,
+    width: usize,
+) -> crate::render::Frame {
+    let width = width.max(4);
+    let rows = super::location_missing::LOCATION_MISSING_ROWS;
+    let units = location_missing_units(directory, styles, width);
+    super::chrome_solid::mounted_surface_frame(
+        "location_missing",
+        width,
+        rows,
+        CellColor::Default,
+        &units,
+    )
 }

@@ -16,13 +16,13 @@
 //! does exactly that (lane M4's finding), so a wide title's cells are
 //! byte-identical through both paths.
 
-use super::chrome_solid::{chrome_frame, ChromeBody, ChromeChunk, ChromeUnit};
-use super::session_tabs_rail::{
-    paint_rail_handle_hot, rail_paint_list, RailGeometry, RailInputs, TOOLTIP_MAX_WIDTH,
-};
+use super::chrome_solid::{chrome_mount, ChromeBody, ChromeChunk, ChromeStamp, ChromeUnit};
+use super::session_tabs_rail::{rail_paint_list, RailGeometry, RailInputs, TOOLTIP_MAX_WIDTH};
 use crate::layout::Placed;
 use crate::render::Fill;
-use crate::render::{CellColor, Frame};
+use crate::render::CellColor;
+#[cfg(test)]
+use crate::render::Frame;
 use crate::theme::ThemeStyles;
 
 /// ratatui modifier bits → the oc-tui ECMA-ordered word (1:1 — the
@@ -142,43 +142,86 @@ fn shape(
     units
 }
 
-/// The solid rail — the new-path twin of
-/// [`super::session_tabs_rail::paint_vertical_rail`].
-#[must_use]
-pub fn paint_vertical_rail_solid(
+/// Mount the solid rail into the shared chrome tree (D2.2) at the
+/// content column's left edge (`left`, full height): the rail's own
+/// opaque `Fill` covers its rect; the handle-hot column rides a bg
+/// stamp (the old `paint_rail_handle_hot` row walk, keeping ch/fg).
+/// The compact hover tooltip mounts beside it at `left + width`.
+/// Returns the tooltip row (None when not hovered).
+pub fn mount_vertical_rail_solid(
     inputs: &RailInputs,
     geometry: &RailGeometry,
     height: usize,
     styles: &ThemeStyles,
-) -> (Frame, Option<(usize, Frame)>) {
+    left: usize,
+) -> Option<usize> {
     let (placed, fills) = rail_paint_list(inputs, geometry, styles);
     let units = shape(&placed, &fills, geometry.width, height, styles);
-    let mut frame =
-        chrome_frame("tab_rail", geometry.width.max(1), height.max(1), CellColor::Default, &units);
-    paint_rail_handle_hot(&mut frame, inputs, geometry, styles);
-    // The compact hover tooltip (the solid twin of the shared
-    // `paint_rail_tooltip`'s row math).
-    let tooltip = if let (true, Some(view)) = (geometry.compact, inputs.tooltip) {
+    let stamps = if inputs.handle_hot && geometry.width >= 1 {
+        vec![ChromeStamp::Bg {
+            left: geometry.width - 1,
+            top: 0,
+            width: 1,
+            height,
+            color: CellColor::from(styles.action_hovered),
+        }]
+    } else {
+        Vec::new()
+    };
+    chrome_mount(
+        "tab_rail",
+        left,
+        0,
+        geometry.width.max(1),
+        height.max(1),
+        CellColor::Default,
+        &units,
+        &stamps,
+    );
+    if let (true, Some(view)) = (geometry.compact, inputs.tooltip) {
         let index = inputs
             .tabs
             .iter()
             .position(|tab| tab.tab.session_id == view.tab.session_id)
             .unwrap_or(0);
         let row = geometry.item_row(index).saturating_sub(1);
-        Some((row, paint_tooltip_solid(view, styles)))
+        mount_tooltip_solid(view, styles, left + geometry.width, row);
+        Some(row)
     } else {
         None
-    };
-    (frame, tooltip)
+    }
 }
 
-/// The solid tooltip — the new-path twin of the walk's
-/// `paint_tooltip` (4 rows: seam, title, detail, seam).
-#[must_use]
-pub fn paint_tooltip_solid(
+/// The rail + tooltip standalone Frames — the golden/budget twins
+/// (the retired per-surface copy's test form).
+#[cfg(test)]
+pub fn vertical_rail_solid_frames(
+    inputs: &RailInputs,
+    geometry: &RailGeometry,
+    height: usize,
+    styles: &ThemeStyles,
+) -> (Frame, Option<(usize, Frame)>) {
+    super::chrome_solid::reset_hub();
+    let tooltip_row = mount_vertical_rail_solid(inputs, geometry, height, styles, 0);
+    let mut rail = super::chrome_solid::blank_frame(geometry.width.max(1), height.max(1));
+    super::chrome_solid::composite_chrome_tree(&mut rail);
+    let tooltip = tooltip_row.map(|row| {
+        let mut frame = super::chrome_solid::blank_frame(TOOLTIP_MAX_WIDTH, 4);
+        super::chrome_solid::composite_chrome_tree(&mut frame);
+        (row, frame)
+    });
+    (rail, tooltip)
+}
+
+/// Mount the solid tooltip into the shared chrome tree (4 rows: seam,
+/// title, detail, seam) at (`left`, `row`) — its opaque `Fill` covers
+/// the rect.
+pub fn mount_tooltip_solid(
     view: &crate::components::session_tabs::TabView,
     styles: &ThemeStyles,
-) -> Frame {
+    left: usize,
+    top: usize,
+) {
     let width = TOOLTIP_MAX_WIDTH;
     let raised = CellColor::from(styles.background_raised);
     // The tooltip's own walk: the two seam half-rows + the
@@ -229,5 +272,5 @@ pub fn paint_tooltip_solid(
         top: 3,
         body: ChromeBody::Text(vec![ChromeChunk::new("▀".repeat(width), hover, raised, 0)]),
     });
-    chrome_frame("tab_rail_tooltip", width, 4, CellColor::Default, &units)
+    chrome_mount("tab_rail_tooltip", left, top, width, 4, CellColor::Default, &units, &[]);
 }

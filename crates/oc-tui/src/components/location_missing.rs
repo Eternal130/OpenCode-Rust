@@ -50,7 +50,7 @@ fn truncate_middle(value: &str, budget: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::location_missing_solid::render_location_missing_solid;
+    use crate::components::location_missing_solid::location_missing_solid_frame;
     use crate::theme::ThemeState;
 
     /// The body copy + the truncation (`truncateMiddle(…, 72)`).
@@ -69,7 +69,7 @@ mod tests {
     #[test]
     fn mount_paints_the_question() {
         let theme = ThemeState::v2_dark();
-        let frame = render_location_missing_solid("/gone/dir", &theme.styles(), 60);
+        let frame = location_missing_solid_frame("/gone/dir", &theme.styles(), 60);
         let text = frame.text_grid().join("\n");
         assert!(text.contains("Session location unavailable"));
         assert!(text.contains("/gone/dir"));

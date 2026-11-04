@@ -40,7 +40,7 @@ pub struct WhichKeyView {
 /// `key  label` row per continuation).
 #[must_use]
 pub fn render_which_key_solid(view: &WhichKeyView, styles: &ThemeStyles, width: u16) -> Frame {
-    use super::chrome_solid::{chrome_frame, chrome_run_units};
+    use super::chrome_solid::{chrome_run_units, overlay_frame};
     let width = usize::from(width).max(8);
     let rows = view.entries.len().clamp(1, WHICH_KEY_MAX_ENTRIES) + 2;
     let text = styles.text.fg.map_or(CellColor::Default, CellColor::from);
@@ -111,7 +111,7 @@ pub fn render_which_key_solid(view: &WhichKeyView, styles: &ThemeStyles, width: 
             ));
         }
     }
-    chrome_frame("which_key_panel", width, rows, CellColor::Default, &units)
+    overlay_frame("which_key_panel", width, rows, CellColor::Default, &units)
 }
 
 #[cfg(test)]
