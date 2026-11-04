@@ -878,7 +878,7 @@ fn frame_budget_overlay_chrome_solid() {
     use crate::components::session_tabs::TabView;
     use crate::components::session_tabs_rail::RailGeometry;
     use crate::components::session_tabs_rail::RailInputs;
-    use crate::components::session_tabs_rail_solid::paint_vertical_rail_solid;
+    use crate::components::session_tabs_rail_solid::vertical_rail_solid_frames;
     use crate::store::{SessionTab, Unread};
 
     let theme = theme();
@@ -918,7 +918,7 @@ fn frame_budget_overlay_chrome_solid() {
             hover: Some(&hover_tab),
             ..RailInputs::default()
         };
-        let _ = paint_vertical_rail_solid(&inputs, &geometry, HEIGHT, &styles);
+        let _ = vertical_rail_solid_frames(&inputs, &geometry, HEIGHT, &styles);
         let _ = crate::components::toast_solid::render_toast_over_blank_solid(
             &toast,
             0,
@@ -947,7 +947,7 @@ fn frame_budget_overlay_chrome_solid() {
             handle_hot: frame % 2 == 0,
             ..RailInputs::default()
         };
-        let (rail, tooltip) = paint_vertical_rail_solid(&inputs, &geometry, HEIGHT, &styles);
+        let (rail, tooltip) = vertical_rail_solid_frames(&inputs, &geometry, HEIGHT, &styles);
         let mut composited = rail;
         let _ = crate::components::toast_solid::render_toast_over_blank_solid(
             &toast,
@@ -962,18 +962,21 @@ fn frame_budget_overlay_chrome_solid() {
             &styles,
             WIDTH as u16,
         );
-        crate::components::overlays_solid::overlay_migration_solid(
-            &mut composited,
+        crate::components::overlays_solid::mount_migration_solid(
             &styles,
             &progress,
             u64::try_from(frame * 80).unwrap_or(0),
+            WIDTH,
+            HEIGHT,
         );
-        crate::components::overlays_solid::overlay_startup_loading_solid(
-            &mut composited,
+        crate::components::overlays_solid::mount_startup_loading_solid(
             &styles,
             "Loading plugins…",
             u64::try_from(frame * 80).unwrap_or(0),
+            WIDTH,
+            HEIGHT,
         );
+        crate::components::chrome_solid::composite_chrome_tree(&mut composited);
         let elapsed = start.elapsed().as_millis();
         worst = worst.max(elapsed);
         total += elapsed;

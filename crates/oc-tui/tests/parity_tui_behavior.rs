@@ -441,12 +441,11 @@ fn pluginroutemis() {
     assert!(page.missing, "the miss latches the fallback state");
 
     // The fallback frame: the warning line + the go-home button.
-    let frame = oc_tui::components::plugin_page_solid::render_plugin_route_missing_solid(
-        "omo",
-        "stats",
-        &theme.styles(),
-        (80, 24),
-    );
+    // D2.2: the page rides the shared chrome tree — the live app
+    // frame carries it (render_app's route-replacement arm + the
+    // composite seam).
+    let _ = &theme;
+    let frame = app.frame();
     let text = frame.text_grid().join("\n");
     assert!(text.contains("Unknown plugin route: omo/stats"), "the warning line");
     assert!(text.contains("go home"), "the button");
@@ -507,8 +506,10 @@ fn sessionlocatio_location() {
     );
 
     // The question surface replaces the prompt mount.
-    let frame =
-        oc_tui::components::session::render_session(&app.store, "s1", &theme.styles(), (100, 30));
+    // D2.2: the question rides the shared chrome tree — read it
+    // through render_app (render_session mounts; the composite seam
+    // lives in render_app).
+    let frame = oc_tui::components::dialog::render_app(&app.store, &theme, (100, 30));
     let text = frame.text_grid().join("\n");
     assert!(text.contains("Session location unavailable"), "the question title");
     assert!(text.contains("/gone/dir"), "the failed directory");
@@ -529,8 +530,10 @@ fn sessionlocatio_location() {
 
     // A resolved location clears the mount (the composer returns).
     app.store.set_location_error(None);
-    let frame =
-        oc_tui::components::session::render_session(&app.store, "s1", &theme.styles(), (100, 30));
+    // D2.2: the question rides the shared chrome tree — read it
+    // through render_app (render_session mounts; the composite seam
+    // lives in render_app).
+    let frame = oc_tui::components::dialog::render_app(&app.store, &theme, (100, 30));
     let text = frame.text_grid().join("\n");
     assert!(!text.contains("Session location unavailable"));
 }

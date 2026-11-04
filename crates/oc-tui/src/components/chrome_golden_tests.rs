@@ -26,7 +26,7 @@
 
 use crate::components::console_solid::render_console_overlay_solid;
 use crate::components::plugin_page_solid::{
-    render_plugin_page_solid, render_plugin_route_missing_solid,
+    plugin_page_solid_frame, plugin_route_missing_solid_frame,
 };
 use crate::reactive::Runtime;
 use crate::render::serialize_canonical;
@@ -147,7 +147,7 @@ fn chrome_plugin_page_matches_the_golden() {
         "a fourth row the 10-row page must clip".to_owned(),
     ];
     for width in [26_u16, 40, 80, 120] {
-        let frame = render_plugin_page_solid(title, &rows, &styles(), (width, 10));
+        let frame = plugin_page_solid_frame(title, &rows, &styles(), (width, 10));
         assert_golden("chrome-plugin-page", usize::from(width), &frame);
     }
 }
@@ -157,7 +157,7 @@ fn chrome_plugin_page_matches_the_golden() {
 #[test]
 fn chrome_plugin_route_missing_matches_the_golden() {
     for width in [40_u16, 80] {
-        let frame = render_plugin_route_missing_solid("omo", "stats", &styles(), (width, 24));
+        let frame = plugin_route_missing_solid_frame("omo", "stats", &styles(), (width, 24));
         assert_golden("chrome-plugin-route-missing", usize::from(width), &frame);
     }
 }

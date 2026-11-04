@@ -556,8 +556,11 @@ pub fn render_home(store: &Store, theme: &crate::theme::ThemeStyles, size: (u16,
         // home content right (the sub-frame rendered at
         // `width − rail` above).
         let (width, height) = (usize::from(size.0), usize::from(size.1));
-        let (pane, tooltip) =
-            crate::components::session::paint_live_rail(store, rail, height, &state.styles());
+        // D2.2: the rail + tooltip live in the shared chrome tree —
+        // the stitch keeps its exact shape with a blank rail pane
+        // (the tree's opaque Fill covers it at render_app's seam).
+        crate::components::session::mount_live_rail(store, rail, height, &state.styles());
+        let pane = crate::components::chrome_solid::blank_frame(rail, height);
         let mut cells = Vec::with_capacity(height);
         for row in 0..height {
             let mut line = pane.cells.get(row).cloned().unwrap_or_default();
@@ -571,21 +574,6 @@ pub fn render_home(store: &Store, theme: &crate::theme::ThemeStyles, size: (u16,
             cells.push(line);
         }
         frame = Frame { cells, width, height, clusters: None };
-        if let Some((row, tip)) = tooltip {
-            let mut pasted = frame.clone();
-            for (offset, tip_row) in tip.cells.iter().enumerate() {
-                let at = row + offset;
-                if at >= height {
-                    break;
-                }
-                for (index, cell) in tip_row.iter().enumerate() {
-                    if rail + index < width {
-                        pasted.cells[at][rail + index] = *cell;
-                    }
-                }
-            }
-            frame = pasted;
-        }
     }
     store.set_caret_cell(caret_screen.map(|(x, y)| {
         let y = y + usize::from(strip_shows);

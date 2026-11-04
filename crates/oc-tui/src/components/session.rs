@@ -163,13 +163,16 @@ pub fn paint_live_tabs_bar(
 /// active tab keyed on the routed session's family ROOT, the home
 /// route's promoted `+ New session` add slot, and the pointer states
 /// (hover / add hover / the compact search + handle highlights).
-#[must_use]
-pub fn paint_live_rail(
+/// D2.2: the rail + its tooltip mount into the shared chrome tree at
+/// the content column's left edge; returns the tooltip row (None when
+/// not hovered). No Frame comes back — the pixels land at render_app's
+/// composite seam.
+pub fn mount_live_rail(
     store: &Store,
     width: usize,
     height: usize,
     styles: &crate::theme::ThemeStyles,
-) -> (Frame, Option<(usize, Frame)>) {
+) -> Option<usize> {
     let tabs = store.tabs();
     let permission_live =
         matches!(store.footer().view, crate::components::footer::FooterView::Permission { .. });
@@ -215,8 +218,8 @@ pub fn paint_live_rail(
         indicator: store.tabs_indicator_config(),
     };
     let geometry = crate::components::session_tabs_rail::RailGeometry::new(views.len(), width);
-    crate::components::session_tabs_rail_solid::paint_vertical_rail_solid(
-        &inputs, &geometry, height, styles,
+    crate::components::session_tabs_rail_solid::mount_vertical_rail_solid(
+        &inputs, &geometry, height, styles, 0,
     )
 }
 
@@ -366,11 +369,21 @@ pub fn render_session(
         // above `<Prompt>`): the failed directory's recovery screen
         // owns the composer's dock region.
         (
-            crate::components::location_missing_solid::render_location_missing_solid(
-                &directory,
-                &theme.styles(),
-                column - inset,
-            ),
+            {
+                // D2.2: the question rides the shared chrome tree at
+                // the composer-slot rect (the paste anchor below);
+                // the mount frame is the blank rect (the old paste's
+                // unpainted cells — the tree paints only the ink).
+                let rows = crate::components::location_missing::LOCATION_MISSING_ROWS;
+                crate::components::location_missing_solid::mount_location_missing_solid(
+                    &directory,
+                    &theme.styles(),
+                    column - inset,
+                    mount_x + shift,
+                    height.saturating_sub(rows),
+                );
+                crate::components::chrome_solid::blank_frame(column - inset, rows)
+            },
             // The question IS the mount: `prompt_height` docks it at
             // `height − rows` like the composer (the paste anchor).
             crate::components::location_missing::LOCATION_MISSING_ROWS,
@@ -830,11 +843,11 @@ pub fn render_session(
     // left edge (`<Show when={verticalTabsVisible()}>` seats it at
     // the row's head, app.tsx:1347-1349) — full height, width cols.
     if let Some(rail) = rail_width {
-        let (pane, tooltip) = paint_live_rail(store, rail, height, styles);
-        paste(&mut frame, &pane, 0, 0);
-        if let Some((row, tip)) = tooltip {
-            paste(&mut frame, &tip, rail, row);
-        }
+        // D2.2: the rail + tooltip live in the shared chrome tree —
+        // the paste keeps the base rect (the old pane paste's blank
+        // under an opaque Fill; the tree covers it at the seam).
+        mount_live_rail(store, rail, height, styles);
+        paste(&mut frame, &crate::components::chrome_solid::blank_frame(rail, height), 0, 0);
     }
     // The sidebar pane mounts under the strip across the frame's full
     // remaining height (session-frame.tsx:325-331 — `flexShrink 0`,
