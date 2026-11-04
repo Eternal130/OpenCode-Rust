@@ -1134,7 +1134,10 @@ pub(crate) fn family_wrapper_live(family: &str) -> bool {
 
 /// One hand-built [`Frame`] pasted at the composite seam — the ruling's
 /// paste_frame overlay class (family 6), seated ABOVE every tree pixel
-/// and BELOW the dialog layer's own post-seam paste. D2.2 transcript
+/// and BELOW the dialog layer's post-seam frame paints (the scrim
+/// bands + the preview image cells — D2.2 dialogs lane: the dialog
+/// BOX itself rides the tree at skeleton index 4; only its
+/// frame-reading paints stay post-seam). D2.2 transcript
 /// lane: the overlay-mode sidebar pane pasted OVER the transcript
 /// rect after the region paste (today's z: pane > composer mount >
 /// transcript) — once the transcript rides the tree, a pre-seam hand
@@ -1178,10 +1181,12 @@ pub(crate) fn mount_frame_overlay(
 
 /// The chrome family's single compositor seam: prune unsynced
 /// surfaces, flush the shared tree (at most once per sync batch — the
-/// double-flush guard), then walk the shared buffer over the frame,
-/// then paste the frame overlays (above every tree pixel, below the
-/// dialog layer's post-seam paste). GridEmitter stays the sole byte
-/// emitter; this seam only writes the in-house Frame cells.
+/// double-flush guard), then walk the shared buffer over the frame
+/// (the dialog box included — the dialogs family's wrapper seats
+/// above footer by child order), then paste the frame overlays (above
+/// every tree pixel, below the dialog layer's post-seam frame paints
+/// — the scrim bands + preview image cells). GridEmitter stays the
+/// sole byte emitter; this seam only writes the in-house Frame cells.
 pub(crate) fn composite_chrome_tree(frame: &mut Frame) {
     let hub = HUB.with_borrow(|slot| slot.clone());
     let Some(hub) = hub else { return; };
