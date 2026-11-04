@@ -884,8 +884,12 @@ fn composer_element(inputs: &Signal<ComposerInputs>, geo: &ComposerInputs) -> El
 // ---------------------------------------------------------------------------
 
 /// The composer family's skeleton index under the shared tree's root
-/// (`surface-composer`, ruling #2's family order: chrome → composer).
-const COMPOSER_SKELETON_INDEX: usize = 1;
+/// (`surface-composer`): 2, ABOVE the transcript (1) — the composer's
+/// slash/`@` popup pasted AFTER the transcript region in the old
+/// frame stack and so paints over its bottom rows (ruling attempt 2's
+/// construction equivalence: 今日绘制序 = 后者胜 = 树子序; the
+/// transcript lane re-seated the families to pin it).
+const COMPOSER_SKELETON_INDEX: usize = 2;
 
 /// The mounted composer's reactive state, kept across frames so
 /// height-stable frames patch content dyn-props in place (the M2
