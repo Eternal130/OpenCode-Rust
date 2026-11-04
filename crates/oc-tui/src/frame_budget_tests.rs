@@ -933,7 +933,7 @@ fn frame_budget_overlay_chrome_solid() {
             ..RailInputs::default()
         };
         let _ = vertical_rail_solid_frames(&inputs, &geometry, HEIGHT, &styles);
-        let _ = crate::components::toast_solid::render_toast_over_blank_solid(
+        let _ = crate::components::toast_solid::toast_over_blank_frame(
             &toast,
             0,
             WIDTH,
@@ -941,7 +941,7 @@ fn frame_budget_overlay_chrome_solid() {
             &footer,
             &theme.resolved.tokens,
         );
-        let _ = crate::components::console_solid::render_console_overlay_solid(
+        let _ = crate::components::console_solid::console_overlay_frame(
             &console_lines,
             &styles,
             WIDTH as u16,
@@ -963,7 +963,7 @@ fn frame_budget_overlay_chrome_solid() {
         };
         let (rail, tooltip) = vertical_rail_solid_frames(&inputs, &geometry, HEIGHT, &styles);
         let mut composited = rail;
-        let _ = crate::components::toast_solid::render_toast_over_blank_solid(
+        let _ = crate::components::toast_solid::toast_over_blank_frame(
             &toast,
             frame as usize % 4,
             WIDTH,
@@ -971,7 +971,7 @@ fn frame_budget_overlay_chrome_solid() {
             &footer,
             &theme.resolved.tokens,
         );
-        let _ = crate::components::console_solid::render_console_overlay_solid(
+        let _ = crate::components::console_solid::console_overlay_frame(
             &console_lines,
             &styles,
             WIDTH as u16,

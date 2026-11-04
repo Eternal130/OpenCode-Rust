@@ -12,8 +12,8 @@
 //! full-buffer compositor seam ([`composite_chrome_tree`]; bg
 //! alpha==0 cells are holes and skip, so the hand-painted frame
 //! survives underneath). The family-6 OVERLAY surfaces (console /
-//! which-key / toast / the reconnecting box) keep per-surface scratch
-//! mounts + the cell copy ([`overlay_frame`]) until their own lane.
+//! which-key / toast / the reconnecting box) ride the shared tree as
+//! family wrappers (D2.2 overlays lane — the scratch bridge is gone).
 //!
 //! Per-surface rollback is the point of the tail: a surface whose
 //! bytes diverge keeps its hand-rolled painter and records why (the
@@ -26,13 +26,11 @@
 #![allow(clippy::cast_sign_loss)]
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+
 use std::rc::Rc;
 
 use opentui_core::Rgba;
-use opentui_core::buffer::{
-    OptimizedBuffer, grapheme_id_from_char, is_continuation_char, is_grapheme_char,
-};
+use opentui_core::buffer::{grapheme_id_from_char, is_continuation_char, is_grapheme_char};
 use opentui_core::renderer::CliRendererConfig;
 use opentui_core::styled_text::{StyledText, TextChunk};
 use opentui_solid::builder::ForItemSource;
@@ -101,8 +99,8 @@ pub(crate) struct ChromeUnit {
 
 /// One frame's surface snapshot — the ONLY input the tree reads.
 #[derive(Clone)]
-struct ChromeInputs {
-    items: Vec<ChromeUnit>,
+pub(crate) struct ChromeInputs {
+    pub(crate) items: Vec<ChromeUnit>,
 }
 
 // ---------------------------------------------------------------------------
@@ -319,7 +317,11 @@ fn unit_element(inputs: &Signal<ChromeInputs>, key: &str) -> Element {
     }
 }
 
-fn surface_element(inputs: &Signal<ChromeInputs>, width: usize, height: usize) -> Element {
+pub(crate) fn surface_element(
+    inputs: &Signal<ChromeInputs>,
+    width: usize,
+    height: usize,
+) -> Element {
     let source = ForItemSource {
         source: map(inputs.clone(), |inputs: &ChromeInputs| {
             inputs
@@ -345,48 +347,12 @@ fn surface_element(inputs: &Signal<ChromeInputs>, width: usize, height: usize) -
 }
 
 // ---------------------------------------------------------------------------
-// the family-6 overlay bridge (D2.2): per-surface scratch mounts for the
-// paste_frame overlay family ONLY — the console strip, the which-key
-// panel, the toast panel and the reconnecting box stay Frame painters
-// until the overlays lane mounts them into the shared tree (ruling #3:
-// they are paste_frame overlays, a separate family). The chrome family's
-// own scratch path died with its migration (grep-zero:
-// ChromeMount/MOUNTS/chrome_frame/chrome_frame_from_buffer are gone).
+// (D2.2 overlays lane) the family-6 scratch bridge is DEAD: the console
+// strip, the which-key panel, the toast panel and the reconnecting
+// scrim/box ride the shared tree as family wrappers under
+// `surface-{family}` containers at skeleton indices 5+ (grep-zero:
+// OverlayMount/OVERLAY_MOUNTS/overlay_frame are gone with this lane).
 // ---------------------------------------------------------------------------
-
-struct OverlayMount {
-    inputs: Signal<ChromeInputs>,
-    renderer: SolidRenderer,
-    key: (usize, usize, CellColor),
-}
-
-impl OverlayMount {
-    fn new(width: usize, height: usize, background: CellColor, items: &[ChromeUnit]) -> Self {
-        let signal = Signal::new(ChromeInputs { items: items.to_vec() });
-        let renderer = opentui_solid::render(
-            CliRendererConfig {
-                width: u32::try_from(width.max(1)).unwrap_or(u32::MAX),
-                height: u32::try_from(height.max(1)).unwrap_or(u32::MAX),
-                background_color: background_rgba(background),
-                ..CliRendererConfig::default()
-            },
-            surface_element(&signal, width, height),
-        );
-        Self { inputs: signal, renderer, key: (width, height, background) }
-    }
-
-    fn paint(&mut self, items: Vec<ChromeUnit>) {
-        self.inputs.set(ChromeInputs { items });
-        self.renderer.flush();
-    }
-}
-
-thread_local! {
-    /// One scratch mount per overlay surface per thread-process — the
-    /// app paints each overlay surface at most once per frame.
-    static OVERLAY_MOUNTS: RefCell<HashMap<&'static str, OverlayMount>> =
-        RefCell::new(HashMap::new());
-}
 
 // ---------------------------------------------------------------------------
 // the shared tree hub (D2.2 first family — the chrome paradigm)
@@ -418,10 +384,27 @@ thread_local! {
 /// │                       box + popup + footer row wrapper)
 /// └─[3] surface-footer    (D2.2 footer lane)
 /// └─[4] surface-dialogs   (D2.2 dialogs lane)
-/// └─[5] surface-overlays  (toast/console/which-key — the paste_frame
-///                          overlay family, its own lane)
+/// └─[5] surface-console    (D2.2 overlays lane — the renderer console
+/// │                       strip, BLANK-underlaid: the old paste wrote
+/// │                       default cells over its whole rect)
+/// └─[6] surface-which-key  (D2.2 overlays lane — blank-underlaid)
+/// └─[7] surface-toast      (D2.2 overlays lane — the panel interior;
+/// │                       the two edge rails stay a post-seam paint,
+/// │                       they keep the UNDERLYING cell background)
+/// └─[8] surface-startup-pill (D2.2 overlays lane — moved up from the
+/// │                       chrome family: today's frame-tail z, above
+/// │                       every dialog pixel; ref zIndex 5000)
+/// └─[9] surface-migration (D2.2 overlays lane — same move, above the
+/// │                       pill exactly like the old frame tail)
+/// └─[10] surface-reconnecting (D2.2 overlays lane — the scrim+box,
+///                         the LAST tree child; the scrim dims through
+///                         a seam stamp (ref zIndex 10000): the port's
+///                         buffer blends alpha fills over a BLACK
+///                         backdrop, so an in-buffer alpha box would
+///                         paint hand-painted hole cells opaque black
+///                         — the stamp reproduces the old painter's
+///                         bg-dim bytes for tree pixels AND holes)
 /// ```
-///
 ///
 /// No `z` prop is introduced (ruling #2: an upstream API change would
 /// be a fresh divergence).
@@ -466,6 +449,24 @@ pub(crate) enum ChromeStamp {
     /// keep their ink — verbatim the retired footer bridge's
     /// post-copy fixup.
     Transparent { left: usize, top: usize, width: usize },
+    /// A scrim dim over the rect (the overlays lane's reconnecting
+    /// backdrop, ref `reconnecting.tsx:9-17`): every RGB background
+    /// dims toward black at `alpha/255`, non-RGB backgrounds and all
+    /// glyphs survive untouched — verbatim the old frame painter's
+    /// `blend_to_black` walk. `keep` excludes a sub-rect (the raised
+    /// box the old painter pasted OVER the dim — same bytes, the
+    /// stamp just never touches them).
+    DimBg {
+        left: usize,
+        top: usize,
+        width: usize,
+        height: usize,
+        alpha: u8,
+        keep_left: usize,
+        keep_top: usize,
+        keep_width: usize,
+        keep_height: usize,
+    },
 }
 
 /// Apply one stamp at (`base_left`, `base_top`) — the surface/wrapper
@@ -505,6 +506,40 @@ fn apply_stamp(frame: &mut Frame, base_left: usize, base_top: usize, stamp: &Chr
                 for cell in row.iter_mut().skip(base_left + left).take(width) {
                     if cell.ch == ' ' && cell.attrs == 0 {
                         cell.bg = CellColor::Default;
+                    }
+                }
+            }
+        }
+        ChromeStamp::DimBg {
+            left,
+            top,
+            width,
+            height,
+            alpha,
+            keep_left,
+            keep_top,
+            keep_width,
+            keep_height,
+        } => {
+            let dim = |value: u8| -> u8 {
+                let factor = 1.0 - f64::from(alpha) / 255.0;
+                (f64::from(value) * factor).round() as u8
+            };
+            for row in base_top + top..base_top + top + height {
+                for col in base_left + left..base_left + left + width {
+                    let in_keep = row >= base_top + keep_top
+                        && row < base_top + keep_top + keep_height
+                        && col >= base_left + keep_left
+                        && col < base_left + keep_left + keep_width;
+                    if in_keep {
+                        continue;
+                    }
+                    if let Some(cell) =
+                        frame.cells.get_mut(row).and_then(|line| line.get_mut(col))
+                    {
+                        if let CellColor::Rgb(r, g, b) = cell.bg {
+                            cell.bg = CellColor::Rgb(dim(r), dim(g), dim(b));
+                        }
                     }
                 }
             }
@@ -551,6 +586,18 @@ struct FamilyWrapper {
     width: usize,
     height: usize,
     stamps: Vec<ChromeStamp>,
+    /// The family's shaped units (the overlays lane's
+    /// `chrome_run_units` vocabulary): carried ONLY for the seam's
+    /// [`ChromeBody::Spaces`] stamp pass (the raster mounts those as
+    /// zero-size placeholders — the post-walk pass owns their cells,
+    /// exactly the retired scratch bridge's `stamp_units_at`).
+    items: Vec<ChromeUnit>,
+    /// Blank-underlay (the overlays lane's console/which-key boxes):
+    /// the seam writes `Cell::default` over the wrapper's rect
+    /// BEFORE the buffer walk, so the box's transparent interior
+    /// reads as the old paste's default-cell overwrite (holes skip,
+    /// the blank survives — same bytes).
+    blank: bool,
     /// Set by this frame's sync; cleared at the composite seam — a
     /// family nobody synced this frame unmounts (the old painters'
     /// visibility branches).
@@ -787,6 +834,7 @@ impl ChromeTree {
     /// a remount — ruling #1). `content`/`content_key` rebuild the
     /// wrapper's single content subtree when the family's geometry
     /// key changed (`None` content = keep the mounted child).
+    #[allow(clippy::too_many_arguments)] // the family wrapper sync seam (rect/content/stamps/items/blank)
     fn sync_family_wrapper(
         &mut self,
         family: &'static str,
@@ -798,6 +846,8 @@ impl ChromeTree {
         content_key: Option<String>,
         content: Option<Element>,
         stamps: &[ChromeStamp],
+        items: &[ChromeUnit],
+        blank: bool,
     ) {
         let width = width.max(1);
         let height = height.max(1);
@@ -862,6 +912,8 @@ impl ChromeTree {
             existing.width = width;
             existing.height = height;
             existing.stamps = stamps.to_vec();
+            existing.items = items.to_vec();
+            existing.blank = blank;
             existing.fresh = true;
         } else {
             let element = box_()
@@ -886,6 +938,8 @@ impl ChromeTree {
                 width,
                 height,
                 stamps: stamps.to_vec(),
+                items: items.to_vec(),
+                blank,
                 fresh: true,
             });
         }
@@ -901,6 +955,24 @@ impl ChromeTree {
     /// white→Default restoration). The per-surface stamp passes run
     /// after the walk, in family order.
     fn composite_into(&mut self, frame: &mut Frame) {
+        // The blank-underlay pre-pass (the overlays lane's
+        // console/which-key boxes): the old paste overwrote the
+        // rect's every cell, transparent interior included — the
+        // walk's hole rule would keep the hand-painted pixels, so
+        // the seam blanks the rect first and the walk's ink lands
+        // over the blank (holes inside the rect stay blank).
+        for wrapper in &self.wrappers {
+            if !wrapper.blank {
+                continue;
+            }
+            for row in wrapper.top..wrapper.top + wrapper.height {
+                if let Some(line) = frame.cells.get_mut(row) {
+                    for cell in line.iter_mut().skip(wrapper.left).take(wrapper.width) {
+                        *cell = Cell::default();
+                    }
+                }
+            }
+        }
         let buffer = &self.solid.renderer.current_render_buffer;
         let rows = (buffer.height as usize).min(frame.height);
         let cols = (buffer.width as usize).min(frame.width);
@@ -964,8 +1036,12 @@ impl ChromeTree {
             }
         }
         // The family wrappers' stamps (the composer lane first — the
-        // retired bridge's caret/selection recolors), same rule.
+        // retired bridge's caret/selection recolors), same rule. The
+        // overlays lane's wrappers also carry their shaped units for
+        // the Spaces stamp pass (the retired scratch bridge's
+        // `stamp_units_at`, seated at the wrapper origin).
         for wrapper in &self.wrappers {
+            stamp_units_at(frame, wrapper.left, wrapper.top, &wrapper.items);
             for stamp in &wrapper.stamps {
                 apply_stamp(frame, wrapper.left, wrapper.top, stamp);
             }
@@ -1097,7 +1173,11 @@ pub(crate) fn chrome_mount(
 /// the family mount's imperative source (the old paste site), the
 /// content element is the family's own tree. No Frame comes back;
 /// pixels reach the emitted frame through [`composite_chrome_tree`],
-/// the single compositor seam inside `render_app`.
+/// the single compositor seam inside `render_app`. `items` feed the
+/// seam's Spaces stamp pass at the wrapper origin; `blank` underlays
+/// the rect with default cells before the walk (the overlays lane's
+/// paste-equivalent boxes).
+#[allow(clippy::too_many_arguments)] // the family mount seam (rect/content/stamps/items/blank)
 pub(crate) fn mount_family_wrapper(
     family: &'static str,
     skeleton_index: usize,
@@ -1108,6 +1188,8 @@ pub(crate) fn mount_family_wrapper(
     content_key: Option<String>,
     content: Option<Element>,
     stamps: &[ChromeStamp],
+    items: &[ChromeUnit],
+    blank: bool,
 ) {
     let width = width.max(1);
     let height = height.max(1);
@@ -1116,7 +1198,8 @@ pub(crate) fn mount_family_wrapper(
         (top.saturating_add(height)).max(1) as u32,
     );
     hub.borrow_mut().sync_family_wrapper(
-        family, skeleton_index, left, top, width, height, content_key, content, stamps,
+        family, skeleton_index, left, top, width, height, content_key, content, stamps, items,
+        blank,
     );
 }
 
@@ -1259,71 +1342,6 @@ fn frame_color(color: Rgba) -> CellColor {
     } else {
         CellColor::Rgb(color.red(), color.green(), color.blue())
     }
-}
-
-/// The buffer → [`Frame`] copy for the family-6 overlay bridge:
-/// grapheme decoding as `frame_from_buffer`, attributes restored 1:1
-/// on the low ECMA byte (the overlay painters' attrs ARE the ECMA
-/// word that `render::ansi` serializes — no strikethrough remap,
-/// unlike the transcript grid's bit-8 packing).
-fn overlay_frame_from_buffer(buffer: &OptimizedBuffer) -> Frame {
-    let width = buffer.width as usize;
-    let mut cells = Vec::with_capacity(buffer.height as usize);
-    // The cluster sidecar (lane B3b): a grapheme cell whose
-    // `grapheme_bytes` carries more than one codepoint (ZWJ families,
-    // VS16 flags, NFD marks) keeps the FULL symbol here — `Cell::ch`
-    // holds only the first char and the GridEmitter prints the whole
-    // cluster (the retired ratatui backend's behavior).
-    let mut clusters = ClusterMap::new();
-    for y in 0..buffer.height {
-        let mut row = Vec::with_capacity(width);
-        for x in 0..buffer.width {
-            let Some(cell) = buffer.get(x, y) else {
-                row.push(Cell::default());
-                continue;
-            };
-            let ch = if is_continuation_char(cell.char) {
-                CONTINUATION
-            } else if is_grapheme_char(cell.char) {
-                let grapheme = buffer.grapheme_bytes(grapheme_id_from_char(cell.char));
-                if grapheme.chars().nth(1).is_some() {
-                    clusters.insert((y as usize, x as usize), grapheme.to_owned());
-                }
-                grapheme.chars().next().unwrap_or(' ')
-            } else {
-                char::from_u32(cell.char).unwrap_or(' ')
-            };
-            // F3 guard: the copy masks to the low ECMA byte — bits
-            // 8-31 carry the raster's hyperlink id pool, and a chrome
-            // unit never sets a link, so any high bits here would
-            // mean a future unit type broke the bridge's vocabulary.
-            debug_assert!(
-                cell.attributes >> 8 == 0,
-                "chrome bridge: buffer attributes {:#x} carry bits past the ECMA byte",
-                cell.attributes
-            );
-            let attrs = (cell.attributes & 0xFF) as u16;
-            // The raster's default-foreground snapshot is WHITE: an
-            // untouched cell (transparent background, no attributes,
-            // a space) reads fg=white, where the old painters' plain
-            // pages carry the terminal default — the M1 fill
-            // signature's dual. Restore Default on exactly that
-            // signature; every painted glyph carries its own fg.
-            let fg = if ch == ' '
-                && attrs == 0
-                && cell.fg == Rgba::rgb(255, 255, 255)
-                && cell.bg.alpha() == 0
-            {
-                CellColor::Default
-            } else {
-                frame_color(cell.fg)
-            };
-            row.push(Cell { ch, attrs, fg, bg: frame_color(cell.bg) });
-        }
-        cells.push(row);
-    }
-    let clusters = if clusters.is_empty() { None } else { Some(Box::new(clusters)) };
-    Frame { cells, width, height: buffer.height as usize, clusters }
 }
 
 // ---------------------------------------------------------------------------
@@ -1557,33 +1575,6 @@ fn stamp_units_at(frame: &mut Frame, base_left: usize, base_top: usize, items: &
 /// painter used), sync + flush the surface's scratch mount, copy the
 /// cells.
 ///
-/// `background` is the mount's raster background (`Default` keeps
-/// untouched cells at the in-house default, the plain-page
-/// surfaces' vocabulary; a color fills the whole buffer).
-pub(crate) fn overlay_frame(
-    surface: &'static str,
-    width: usize,
-    height: usize,
-    background: CellColor,
-    items: &[ChromeUnit],
-) -> Frame {
-    OVERLAY_MOUNTS.with_borrow_mut(|mounts| {
-        let key = (width, height, background);
-        let mount = mounts
-            .entry(surface)
-            .or_insert_with(|| OverlayMount::new(width, height, background, items));
-        if mount.key == key {
-            mount.paint(items.to_vec());
-        } else {
-            *mount = OverlayMount::new(width, height, background, items);
-        }
-        let buffer = &mount.renderer.renderer.current_render_buffer;
-        let mut frame = overlay_frame_from_buffer(buffer);
-        stamp_units_at(&mut frame, 0, 0, items);
-        frame
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1782,7 +1773,7 @@ mod tests {
                 )]),
             },
         ];
-        let frame = overlay_frame("order_probe", 4, 1, CellColor::Default, &units);
+        let frame = mounted_surface_frame("order_probe", 4, 1, CellColor::Default, &units);
         let cell = frame.cell(0, 1);
         assert_eq!(
             (cell.ch, cell.fg),

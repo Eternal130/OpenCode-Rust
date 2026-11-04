@@ -559,6 +559,8 @@ pub fn transcript_mount(
         content_key,
         content,
         &[],
+        &[],
+        false,
     );
 }
 

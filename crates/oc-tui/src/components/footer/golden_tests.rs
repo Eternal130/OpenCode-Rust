@@ -349,7 +349,7 @@ fn toast_over_session_matches_the_full_frame() {
         crate::components::session_screen::ComposerSlot::Sibling(&composer),
     );
     let footer = FooterTheme::from_resolved(&theme_state.resolved.tokens);
-    super::super::toast::overlay_toast_over_frame(
+    crate::components::toast_solid::composite_toast_over_frame(
         &mut frame,
         &toast,
         0,
@@ -365,7 +365,7 @@ fn toast_over_session_matches_the_full_frame() {
 fn toast_paints_onto_an_existing_canvas() {
     let theme = FooterTheme::fallback_dark();
     let tokens = crate::theme::ThemeState::v2_dark().resolved.tokens;
-    let frame = crate::components::toast_solid::render_toast_over_blank_solid(
+    let frame = crate::components::toast_solid::toast_over_blank_frame(
         &ToastOptions::info("short"),
         0,
         40,

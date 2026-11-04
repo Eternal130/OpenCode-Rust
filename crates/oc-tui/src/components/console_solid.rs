@@ -1,17 +1,27 @@
-//! Lane R1 — the renderer console overlay on the shared
-//! opentui-solid chrome bridge ([`crate::components::chrome_solid`]):
-//! the bordered `console` box with the ring's tail lines as absolute
-//! text units over a default (transparent) background. The parity
-//! gate pins the solid frame cell-for-cell against the old painter
-//! ([`super::console::render_console_overlay`]).
+//! The renderer console overlay on the shared tree
+//! ([`crate::components::chrome_solid`], D2.2 overlays lane): the
+//! bordered `console` box with the ring's tail lines as absolute
+//! text units over a default (transparent) background — mounted as
+//! the `surface-console` family wrapper (skeleton index 5,
+//! BLANK-underlaid: the old `paste_frame` overwrote the whole rect
+//! with default cells, transparent interior included, so the seam
+//! blanks the rect before the walk instead of letting the
+//! hand-painted pixels show through the holes).
+//!
+//! The parity gate pins the composited frame cell-for-cell against
+//! the old painter ([`super::console::render_console_overlay`]).
 
-use super::chrome_solid::{chrome_run_units, overlay_frame};
+use super::chrome_solid::{
+    blank_frame, chrome_run_units, composite_chrome_tree, reset_hub, ChromeUnit,
+};
+use super::overlays_solid::{mount_overlay_surface, OVERLAYS_CONSOLE};
 use crate::render::{CellColor, Frame};
 use crate::theme::ThemeStyles;
 
-/// The new-path twin of [`super::console::render_console_overlay`].
+/// The console box's shaping (surface-local): the same walk the old
+/// painter ran, now feeding the tree mount.
 #[must_use]
-pub fn render_console_overlay_solid(lines: &[String], styles: &ThemeStyles, width: u16) -> Frame {
+pub fn console_units(lines: &[String], styles: &ThemeStyles, width: u16) -> (usize, usize, Vec<ChromeUnit>) {
     let width = usize::from(width).max(6);
     let height = super::console::CONSOLE_ROWS.min(lines.len() + 2);
     let rows = height.max(2);
@@ -77,5 +87,28 @@ pub fn render_console_overlay_solid(lines: &[String], styles: &ThemeStyles, widt
             0,
         ));
     }
-    overlay_frame("console_overlay", width, rows, CellColor::Default, &units)
+    (width, rows, units)
+}
+
+/// Mount the console strip into the shared tree (the live path —
+/// called from `render_app` before the compositor seam; the wrapper
+/// is BLANK-underlaid, the old paste's default-cell overwrite).
+pub fn mount_console_overlay(lines: &[String], styles: &ThemeStyles, width: u16) {
+    let (w, rows, units) = console_units(lines, styles, width);
+    mount_overlay_surface("console", OVERLAYS_CONSOLE, 0, 0, w, rows, &units, true, &[]);
+}
+
+/// The headless twin (the golden/unit harness shape): mount ONE
+/// console strip into a fresh hub and read it back as a standalone
+/// Frame (composite over a blank frame of its own rect) — the bytes
+/// the old `render_console_overlay_solid` scratch copy returned, by
+/// construction (blank underlay = the old paste's rect overwrite).
+#[must_use]
+pub fn console_overlay_frame(lines: &[String], styles: &ThemeStyles, width: u16) -> Frame {
+    let (w, rows, units) = console_units(lines, styles, width);
+    reset_hub();
+    mount_overlay_surface("console", OVERLAYS_CONSOLE, 0, 0, w, rows, &units, true, &[]);
+    let mut frame = blank_frame(w, rows);
+    composite_chrome_tree(&mut frame);
+    frame
 }
