@@ -3322,28 +3322,11 @@ impl App {
         // route-replacement arm) and its pixels land at the composite
         // seam there. This branch's chrome supply (the full-screen
         // paste) is DELETED (ruling attempt 2's per-family gate).
-        // TUI-29 — the renderer console (`renderer.console`'s strip at
-        // the top of the screen, over the app).
-        if self.store.console_open() {
-            let overlay = crate::components::console_solid::render_console_overlay_solid(
-                &self.store.console_lines(),
-                &theme.styles(),
-                self.size.0,
-            );
-            paste_frame(&mut frame, &overlay, 0);
-        }
-        // G-83 — the which-key panel: a compact bottom overlay while
-        // a chord prefix is pending (or the root listing is on),
-        // above every route surface.
-        if let Some(view) = self.store.which_key() {
-            let overlay = crate::components::which_key::render_which_key_solid(
-                &view,
-                &theme.styles(),
-                self.size.0,
-            );
-            let y = usize::from(self.size.1).saturating_sub(overlay.height);
-            paste_frame(&mut frame, &overlay, y);
-        }
+        // D2.2 overlays lane: the renderer console strip, the
+        // which-key panel, the toast panel and the reconnecting
+        // scrim/box ride the shared tree inside render_app (skeleton
+        // indices 5..10) — the old paste branches here are DELETED
+        // (grep-zero: paste_frame is gone with them).
         if let FooterView::Permission { request } = self.store.footer().view.clone() {
             let state = self
                 .permission_states
@@ -3376,24 +3359,6 @@ impl App {
         // (index.tsx:1470-1477); the body rides the tree
         // (`sync_footer_family` above) and the keys live in
         // `stroke_in_form`.
-        // The toast layer (`ui/toast.tsx`): the queue's current toast
-        // composites over whatever rendered underneath — rails keep the
-        // underlying cell background (overlay_toast_over_frame).
-        if let Some(toast) = self.store.toasts().current().cloned() {
-            let pending = self.store.toasts().pending();
-            crate::components::toast::overlay_toast_over_frame(
-                &mut frame,
-                &toast,
-                pending,
-                &footer_theme,
-                &theme.resolved.tokens,
-            );
-        }
-        // The app-shell state overlays (SURF-2, auditB #2): the
-        // StartupLoading pill (zIndex 5000) and the Reconnecting
-        // scrim (zIndex 10000) paint above every other layer
-        // (app.tsx:1390-1393).
-        crate::components::overlays::overlay_app_state(&mut frame, &self.store, &theme.styles());
         frame
     }
 
@@ -3411,15 +3376,6 @@ impl App {
         } else {
             "prompt"
         }
-    }
-}
-
-/// Paste `region`'s rows at absolute y (right-clamped to the frame).
-fn paste_frame(target: &mut Frame, region: &Frame, y: usize) {
-    for (row, cells) in region.cells.iter().enumerate() {
-        let Some(slot) = target.cells.get_mut(y + row) else { break };
-        let count = cells.len().min(slot.len());
-        slot[..count].clone_from_slice(&cells[..count]);
     }
 }
 

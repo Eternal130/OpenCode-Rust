@@ -997,6 +997,8 @@ pub fn composer_mount(
         content_key,
         content,
         &stamps,
+        &[],
+        false,
     );
 }
 

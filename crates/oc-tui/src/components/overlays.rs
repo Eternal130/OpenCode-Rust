@@ -4,25 +4,30 @@
 //!   scrim `RGBA(0,0,0,150)` with a centered 48-wide raised box —
 //!   "Connection lost…" + "Reconnecting to the server automatically."
 //!   Shows 1 s after a RETRY transition, 5 s after the initial one
-//!   (app.tsx:1294-1315).
+//!   (app.tsx:1294-1315). D2.2 overlays lane: the scrim dims through
+//!   a seam stamp + the box rides the tree as the family's LAST
+//!   child (ref zIndex 10000).
 //! * **`StartupLoading`** (`component/startup-loading.tsx`): the
 //!   bottom-centered pill — "Loading plugins…" 500 ms after boot goes
 //!   un-ready, "Finishing startup…" once ready with a 3 s hold, at
 //!   `bottom=1` full-width centered, raised background, padding 1.
+//!   D2.2 overlays lane: a family wrapper at skeleton index 8
+//!   (today's frame-tail z, above every dialog pixel; ref zIndex
+//!   5000).
+//! * **The paste_frame overlays** (renderer console / which-key /
+//!   toast): the overlays family's first three seats — mounted here
+//!   from the live store, before `render_app`'s compositor seam.
 
+use crate::components::footer::theme::FooterTheme;
 use crate::render::Frame;
 use crate::store::Store;
 use crate::theme::ThemeStyles;
 
-/// Paint both overlays over the frame (the run loop's frame tail):
-/// `StartupLoading` (`zIndex` 5000) under `Reconnecting` (`zIndex` 10000),
-/// both above the dialog layer.
-/// D2.2: the tree-riding state overlays (the StartupLoading pill +
-/// the migration widget) mount at render_app's tail, BEFORE the
-/// chrome composite seam — their pixels land under the dialog layer
-/// (the ruling's single-z-slot trade; today they painted at the very
-/// frame tail, above the family-6 overlays — registered deviation,
-/// co-visibility is rare/transient).
+/// Mount the tree-riding state overlays (the pill + the migration
+/// widget) — called from `render_app` BEFORE the chrome composite
+/// seam. D2.2 overlays lane: both seat in the overlays family
+/// (skeleton indices 8/9, above every dialog pixel — today's
+/// frame-tail z, the ref's zIndex 5000-over-3000).
 pub fn mount_state_overlays(store: &Store, styles: &ThemeStyles, width: usize, height: usize) {
     let now = store.clock();
     if let Some(text) = store.startup_loading_text(now) {
@@ -33,25 +38,91 @@ pub fn mount_state_overlays(store: &Store, styles: &ThemeStyles, width: usize, h
     }
 }
 
-/// The Frame-riding state overlay: the reconnecting scrim is a Frame
-/// BLEND (dims the live pixels under it) — it stays a Frame painter
-/// until the overlays lane mounts it as the tree's top child (ruling:
-/// no exception, its lane).
-pub fn overlay_app_state(frame: &mut Frame, store: &Store, styles: &ThemeStyles) {
+/// Mount the overlays family's live surfaces (console / which-key /
+/// toast / reconnecting) — `render_app` calls this AFTER the dialog
+/// family's mount and BEFORE the compositor seam, so the family's
+/// wrappers seat in the same walk/flush batch (skeleton indices 5+,
+/// above the dialogs family's 4 — today's paste order frozen:
+/// console < which-key < permission@3 < toast < pill < migration <
+/// scrim). NOT mounting a surface this frame unmounts its wrapper at
+/// the seam (the old painters' visibility branches).
+pub fn mount_overlays_family(store: &Store, styles: &ThemeStyles, width: usize, height: usize) {
+    // TUI-29 — the renderer console (`renderer.console`'s strip at
+    // the top of the screen, over the app).
+    if store.console_open() {
+        super::console_solid::mount_console_overlay(
+            &store.console_lines(),
+            styles,
+            u16::try_from(width).unwrap_or(u16::MAX),
+        );
+    }
+    // G-83 — the which-key panel: a compact bottom overlay while a
+    // chord prefix is pending (or the root listing is on), above
+    // every route surface.
+    if let Some(view) = store.which_key() {
+        super::which_key::mount_which_key(&view, styles, u16::try_from(width).unwrap_or(u16::MAX), height);
+    }
+    // The toast layer (`ui/toast.tsx`): the queue's current toast
+    // composites over whatever rendered underneath — the interior
+    // rides the tree; the rails are the post-seam paint below (they
+    // keep the underlying cell background).
+    if let Some(toast) = store.toasts().current().cloned() {
+        let pending = store.toasts().pending();
+        let footer_theme = FooterTheme::from_resolved(&store.theme().resolved.tokens);
+        super::toast_solid::mount_toast_tree(
+            &toast,
+            pending,
+            width,
+            &footer_theme,
+            &store.theme().resolved.tokens,
+        );
+    }
+    // The reconnecting scrim + box (the family's last child).
     let now = store.clock();
     if store.reconnecting_overlay_visible(now) {
-        super::overlays_solid::overlay_reconnecting_solid(
-            frame,
+        super::overlays_solid::mount_reconnecting_solid(
             styles,
             now.saturating_sub(store.connection_since()),
+            width,
+            height,
         );
+    }
+}
+
+/// The overlays family's POST-SEAM paints (the dialogs lane's
+/// two-phase paradigm: frame-reading strokes that must land over the
+/// composited pixels): the toast's two rail columns (they keep the
+/// UNDERLYING cell background — impossible for a tree cell) and the
+/// reconnecting box's narrow-frame copy tail (ch/fg only over the
+/// dimmed base). `render_app` calls this AFTER the dialog layer's
+/// own post-seam paint, exactly the old `App::frame` tail order.
+pub fn paint_overlays_post_seam(
+    frame: &mut Frame,
+    store: &Store,
+    styles: &ThemeStyles,
+    width: usize,
+) {
+    if let Some(toast) = store.toasts().current().cloned() {
+        let pending = store.toasts().pending();
+        let footer_theme = FooterTheme::from_resolved(&store.theme().resolved.tokens);
+        super::toast_solid::paint_toast_rails(
+            frame,
+            &toast,
+            pending,
+            &footer_theme,
+            &store.theme().resolved.tokens,
+            None,
+        );
+    }
+    let now = store.clock();
+    if store.reconnecting_overlay_visible(now) {
+        super::overlays_solid::paint_reconnecting_tail(frame, styles, width);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::overlays_solid::overlay_reconnecting_solid;
     use crate::reactive::Runtime;
     use crate::render::{Cell, CellColor};
     use crate::store::Store;
@@ -74,7 +145,7 @@ mod tests {
     fn reconnecting_scrim_and_box() {
         let styles = crate::theme::ThemeState::v2_dark().styles();
         let mut frame = frame_with(60, 12);
-        overlay_reconnecting_solid(&mut frame, &styles, 0);
+        super::super::overlays_solid::reconnecting_over_frame(&mut frame, &styles, 0);
         // The corner dims (200 * (1 - 150/255)) ≈ 82.
         assert_eq!(frame.cell(0, 0).bg, CellColor::Rgb(82, 82, 82));
         let text = frame.text_grid().join("\n");
@@ -168,7 +239,7 @@ mod tests {
             "the ready hold is equally irrelevant — nothing was ever shown"
         );
 
-        // The painter side: `overlay_app_state` leaves the pill row
+        // The painter side: `mount_state_overlays` leaves the pill row
         // empty (the clock advances past 500 ms so an armed pill would
         // show if the skip were ignored).
         let styles = crate::theme::ThemeState::v2_dark().styles();
@@ -220,5 +291,69 @@ mod tests {
         let row = frame.text_grid()[8].clone();
         assert!(row.contains("Loading plugins…"), "pill row: {row}");
         assert!(frame.text_grid()[9].trim().is_empty(), "bottom=1 leaves the last row");
+    }
+
+    /// D2.2 overlays lane — the family's seating order is today's
+    /// paste order: console (5) < which-key (6) < toast (7). The
+    /// toast's opaque interior covers the console's blanked rows
+    /// where they overlap (the toast mounts LAST), and the console's
+    /// blank underlay erases the base outside the toast panel.
+    #[test]
+    fn overlays_family_order_is_the_old_paste_order() {
+        let styles = crate::theme::ThemeState::v2_dark().styles();
+        let store = Store::new(Runtime::new());
+        store.set_connection(crate::data::ConnectionState::Connected);
+        // The console strip (rows 0..12, blank-underlaid).
+        crate::components::console_solid::mount_console_overlay(
+            &[
+                "console fixture line".to_owned(),
+                "second line".to_owned(),
+            ],
+            &styles,
+            80,
+        );
+        // The which-key panel (bottom rows).
+        let view = crate::components::which_key::WhichKeyView {
+            prefix: None,
+            entries: vec![crate::components::which_key::WhichKeyEntry {
+                key: "n".to_owned(),
+                label: "New session".to_owned(),
+            }],
+        };
+        crate::components::which_key::mount_which_key(&view, &styles, 80, 24);
+        // The toast (top-right rows 1..5, mounted last).
+        let toast = crate::components::toast::ToastOptions::info("Order fixture");
+        let footer = crate::components::footer::theme::FooterTheme::from_resolved(
+            &crate::theme::ThemeState::v2_dark().resolved.tokens,
+        );
+        let tokens = crate::theme::ThemeState::v2_dark().resolved.tokens;
+        crate::components::toast_solid::mount_toast_tree(&toast, 0, 80, &footer, &tokens);
+
+        let mut frame = frame_with(80, 24);
+        crate::components::chrome_solid::composite_chrome_tree(&mut frame);
+        // The post-seam half (render_app's tail): the rails.
+        crate::components::toast_solid::paint_toast_rails(
+            &mut frame,
+            &toast,
+            0,
+            &footer,
+            &tokens,
+            None,
+        );
+        let grid = frame.text_grid();
+        // The console title rides the top border (row 0, the family's
+        // lowest seat).
+        assert!(grid[0].contains(" console "), "console title: {:?}", grid[0]);
+        // The which-key panel seals the bottom.
+        assert!(grid[23].starts_with('└'), "which-key bottom border: {:?}", grid[23]);
+        // The toast (mounted LAST — the family's highest seat below
+        // the state overlays) lands over the console's blanked rows:
+        // the message at the panel's second row, the rails at both
+        // panel rows keeping the console blank's DEFAULT background
+        // (nothing hand-painted under them).
+        assert!(grid[2].contains("Order fixture"), "toast message: {:?}", grid[2]);
+        let rail_row: String = grid[1].chars().skip(59).take(1).collect();
+        assert!(rail_row.starts_with('┃'), "toast rail over the console blank: {rail_row:?}");
+        assert!(grid[2].contains('┃'), "toast second rail row: {:?}", grid[2]);
     }
 }

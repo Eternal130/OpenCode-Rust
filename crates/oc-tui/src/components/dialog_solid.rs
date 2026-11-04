@@ -2116,6 +2116,8 @@ pub fn mount_dialog_tree(
         content_key,
         content,
         &[],
+        &[],
+        false,
     );
 
     let rect =

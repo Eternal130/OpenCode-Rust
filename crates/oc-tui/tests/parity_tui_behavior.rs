@@ -965,7 +965,7 @@ fn app_console_ctrl_copy() {
     app.store.console_log("[tui] agent list failed: 502");
     app.store.console_log("[tui] config reloaded");
     let theme = oc_tui::theme::ThemeState::v2_dark();
-    let overlay = oc_tui::components::console_solid::render_console_overlay_solid(
+    let overlay = oc_tui::components::console_solid::console_overlay_frame(
         &app.store.console_lines(),
         &theme.styles(),
         80,
