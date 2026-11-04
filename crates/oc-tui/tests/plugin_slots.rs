@@ -307,7 +307,7 @@ fn tui_slots_end_to_end() {
     // title, the transcript column reflowed to 118.
     store.open_tab("ses_slots", Some("Slots session".to_owned()));
     store.navigate(oc_tui::store::Route::session("ses_slots"));
-    let frame = oc_tui::components::session::render_session(
+    let frame = oc_tui::components::session::render_session_composed(
         &store,
         "ses_slots",
         &theme.styles(),

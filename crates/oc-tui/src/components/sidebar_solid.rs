@@ -27,13 +27,22 @@
 //! and the wipe/pulse envelopes would land in a core renderable when
 //! a later lane carries rename-pending state into the store.
 //!
-//! **The scrim overlay stays at the bridge.** The ≤120-col manual
+//! **The scrim overlay rides the tree (D3.2).** The ≤120-col manual
 //! open floats the pane over an rgba(0,0,0,70) backdrop
-//! (session-frame.tsx:385-397). The raster alpha-composites over its
-//! OWN buffer, not the route content — so the scrim is applied by
-//! the route compositor (`session.rs::scrim_frame`) painter-
-//! agnostically, the same M2 backdrop rule. The alpha-blend seam
-//! stays registered there.
+//! (session-frame.tsx:385-397): the ref's scrim is a full-frame box
+//! with `alignItems="flex-end"` CONTAINING the sidebar, so this lane
+//! mounts the same shape — the `surface-sidebar` wrapper takes the
+//! scrim rect (full frame below the strip) with the pane as its
+//! right-aligned child, and a [`ChromeStamp::DimBg`] pass dims every
+//! covered RGB background at 70/255 exactly like the retired
+//! `apply_scrim` walk (glyphs survive; the pane's own rect is the
+//! stamp's keep-rect — the old paste-over-dim net bytes).
+//!
+//! **The scratch renderer is retired (D3.2).** The pane used to own
+//! a private `SolidRenderer` + `frame_from_buffer` copy; it now
+//! mounts into the shared-tree hub like every other family
+//! (`chrome_solid::mount_family_wrapper`), so its pixels reach the
+//! emitted frame through the ONE composite seam.
 //!
 //! **Selection flag (retired).** The lane-M5 dual-path flag
 //! (`OC_SIDEBAR_OPENTUI`) is gone: this module's opentui-solid tree
@@ -51,15 +60,16 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use opentui_core::Rgba;
-use opentui_core::renderer::CliRendererConfig;
 use opentui_core::styled_text::{StyledText, TextChunk};
 use opentui_solid::builder::ForItemSource;
-use opentui_solid::element::{ForItem, PropValue};
+use opentui_solid::element::{Children, ForItem, PropValue};
 use opentui_solid::reactive::Reactive;
-use opentui_solid::{Element, Signal, SolidRenderer, box_, for_list, map, text};
+use opentui_solid::{Element, Signal, box_, for_list, map, text};
 
+use crate::components::chrome_solid::{
+    ChromeStamp, family_wrapper_live, mount_family_wrapper,
+};
 use crate::components::session_tabs::SESSION_SIDEBAR_WIDTH;
-use crate::components::session_tabs_solid::frame_from_buffer;
 use crate::components::sidebar::SidebarView;
 use crate::layout::{Placed, PlacedLine};
 use crate::render::Frame;
@@ -449,8 +459,10 @@ fn item_element(inputs: &Signal<PaneInputs>, key: &str) -> Element {
 /// The pane mount: a positioned root carrying the raised background,
 /// one flat keyed `For` of the pane's absolute units. Geometry bakes
 /// at build time (the mount key); every content slot is a dyn prop
-/// over the inputs signal.
-fn pane_element(inputs: &Signal<PaneInputs>, height: usize, raised: Rgb) -> Element {
+/// over the inputs signal. `left` is the root's offset inside its
+/// parent (0 docked; the scrim container's right-aligned seat in the
+/// manual-open overlay).
+fn pane_element(inputs: &Signal<PaneInputs>, height: usize, raised: Rgb, left: usize) -> Element {
     let source = ForItemSource {
         source: map(inputs.clone(), |inputs: &PaneInputs| {
             inputs
@@ -470,59 +482,145 @@ fn pane_element(inputs: &Signal<PaneInputs>, height: usize, raised: Rgb) -> Elem
     box_()
         .width(SESSION_SIDEBAR_WIDTH as f32)
         .height(height as f32)
-        .position("relative")
+        .position("absolute")
+        .left(left as f32)
+        .top(0.0)
         .background_color(hex(raised))
         .children_dyn(Rc::new(units))
         .into_element()
 }
 
 // ---------------------------------------------------------------------------
-// the mount (one per thread, keyed on geometry)
+// the shared-tree mount (D3.2 sidebar lane — the D2.2 family paradigm)
 // ---------------------------------------------------------------------------
 
-/// The mounted pane: the inputs signal + a real headless
-/// [`SolidRenderer`]. Rebuilt when the pane's geometry changes (a
-/// resize moving the frame height, the strip toggling, a theme swap)
-/// — the M2 height-keying rule.
-struct SolidSidebar {
-    inputs: Signal<PaneInputs>,
-    renderer: SolidRenderer,
-    key: (usize, PaneColors),
-}
+/// The sidebar family's skeleton index under the shared tree's root
+/// (`surface-sidebar`): 3, ABOVE the composer (2 — the old frame
+/// pasted the pane after the prompt mount) and BELOW the footer (4)
+/// and dialogs (5) — those pasted after `render_app` / after the
+/// composite seam today, so they covered the pane. This lane bumps
+/// footer/dialogs/overlays by one to open the seat; the relative
+/// paint order is unchanged (bytes arbitrate).
+pub(crate) const SIDEBAR_SKELETON_INDEX: usize = 3;
 
-impl SolidSidebar {
-    fn new(height: usize, colors: PaneColors, inputs: &PaneInputs) -> Self {
-        let signal = Signal::new(inputs.clone());
-        let renderer = opentui_solid::render(
-            CliRendererConfig {
-                width: u32::from(u16::try_from(SESSION_SIDEBAR_WIDTH.max(1)).unwrap_or(u16::MAX)),
-                height: height.max(1) as u32,
-                background_color: rgba(colors.raised),
-                ..CliRendererConfig::default()
-            },
-            pane_element(&signal, height, colors.raised),
-        );
-        Self { inputs: signal, renderer, key: (height, colors) }
-    }
-
-    /// Sync one frame's snapshot, flush the reconciler patches, and
-    /// render — the per-frame bridge cost.
-    fn paint(&mut self, inputs: PaneInputs) {
-        self.inputs.set(inputs);
-        self.renderer.flush();
-    }
+/// The mounted pane's reactive state, kept across frames so content
+/// churn patches dyn-props in place (the M2 rule); a geometry-key
+/// change (pane height, theme colors, seat, scrim mode) rebuilds the
+/// wrapper's content subtree.
+struct SidebarEntry {
+    signal: Signal<PaneInputs>,
+    key: (usize, PaneColors, usize, Option<usize>),
 }
 
 thread_local! {
-    /// One sidebar mount per thread-process — the app paints exactly
-    /// one pane per frame; the harnesses reuse it across scenarios.
-    static SIDEBAR: RefCell<Option<SolidSidebar>> = const { RefCell::new(None) };
+    /// The sidebar family's content state (one mount per
+    /// thread-process — the wrapper itself lives in the shared-tree
+    /// hub, `chrome_solid::mount_family_wrapper`).
+    static SIDEBAR_TREE: RefCell<Option<SidebarEntry>> = const { RefCell::new(None) };
 }
 
-/// Paint the pane through the opentui-solid path — the new-path twin
-/// of the old `render_sidebar` + `paint_placed_with_fills` pair,
-/// fused: shape the units from the SHARED walk, sync + flush the
-/// mount, copy the cells.
+/// The wrapper's content: the pane alone when docked, or — the ref's
+/// manual-open shape (`alignItems="flex-end"` parent,
+/// session-frame.tsx:385-397) — a full-scrim box carrying the pane at
+/// its right-aligned seat. `scrim_width` is `Some` only in overlay
+/// mode; the pane's `left` is then wrapper-relative.
+fn sidebar_content(
+    inputs: &Signal<PaneInputs>,
+    height: usize,
+    raised: Rgb,
+    left: usize,
+    scrim_width: Option<usize>,
+) -> Element {
+    match scrim_width {
+        Some(width) => box_()
+            .width(width as f32)
+            .height(height as f32)
+            .children(Children::Static(vec![pane_element(inputs, height, raised, left)]))
+            .into_element(),
+        None => pane_element(inputs, height, raised, 0),
+    }
+}
+
+/// Sync the sidebar family into the shared tree (the family's ONLY
+/// live mount entry — no Frame comes back; pixels reach the emitted
+/// frame through `composite_chrome_tree`, the single compositor seam
+/// inside `render_app`). `left`/`top` are the OLD pane paste site (the
+/// imperative source); `scrim_width` is `Some(frame_width)` for the
+/// ≤120 manual-open overlay, whose wrapper takes the full scrim rect
+/// and carries a `70/255` DimBg stamp (the pane rect is its keep-rect
+/// — the old dim-then-paste net bytes).
+#[allow(clippy::too_many_arguments)] // the family mount seam (rect/pane/scrim)
+pub fn sidebar_mount(
+    view: &SidebarView,
+    theme: &ThemeStyles,
+    height: usize,
+    scroll: usize,
+    left: usize,
+    top: usize,
+    scrim_width: Option<usize>,
+) {
+    if height == 0 {
+        // The old pane painter's degenerate shape: nothing mounts —
+        // the stale wrapper unmounts at the seam.
+        return;
+    }
+    let colors = PaneColors::of(theme);
+    let items = shape(view, theme, height, scroll);
+    let key = (height, colors, left, scrim_width);
+    // Rebuild iff the geometry key changed OR the wrapper left the
+    // tree (a hub reset between harness frames, a seam prune).
+    let rebuild = !family_wrapper_live("sidebar")
+        || SIDEBAR_TREE.with_borrow(|slot| !matches!(slot, Some(entry) if entry.key == key));
+    let (content, content_key) = if rebuild {
+        let signal = Signal::new(PaneInputs { items: items.clone() });
+        let element = sidebar_content(&signal, height, colors.raised, left, scrim_width);
+        SIDEBAR_TREE.with_borrow_mut(|slot| {
+            *slot = Some(SidebarEntry { signal, key });
+        });
+        (Some(element), Some(format!("sidebar-content@{height}x{left}x{scrim_width:?}@{colors:?}")))
+    } else {
+        SIDEBAR_TREE.with_borrow(|slot| {
+            slot.as_ref().expect("checked above").signal.set(PaneInputs { items });
+        });
+        (None, None)
+    };
+    let (wrapper_left, wrapper_width) = match scrim_width {
+        Some(width) => (0, width),
+        None => (left, SESSION_SIDEBAR_WIDTH),
+    };
+    let stamps: Vec<ChromeStamp> = scrim_width
+        .map(|width| ChromeStamp::DimBg {
+            left: 0,
+            top: 0,
+            width,
+            height,
+            alpha: 70,
+            keep_left: left,
+            keep_top: 0,
+            keep_width: SESSION_SIDEBAR_WIDTH,
+            keep_height: height,
+        })
+        .into_iter()
+        .collect();
+    mount_family_wrapper(
+        "sidebar",
+        SIDEBAR_SKELETON_INDEX,
+        wrapper_left,
+        top,
+        wrapper_width,
+        height,
+        content_key,
+        content,
+        &stamps,
+        &[],
+        false,
+    );
+}
+
+/// The golden/unit harness twin (the transcript/footer shape): mount
+/// ONE docked pane into a fresh hub and read it back as a standalone
+/// Frame (composite over a blank frame of its own rect) — same raster,
+/// same cell semantics, by construction.
 #[must_use]
 pub fn paint_solid_sidebar_pane(
     view: &SidebarView,
@@ -539,26 +637,19 @@ pub fn paint_solid_sidebar_pane(
             clusters: None,
         };
     }
-    let colors = PaneColors::of(theme);
-    let items = shape(view, theme, height, scroll);
-    SIDEBAR.with_borrow_mut(|slot| {
-        let mount = slot.get_or_insert_with(|| {
-            SolidSidebar::new(height, colors, &PaneInputs { items: items.clone() })
-        });
-        if mount.key != (height, colors) {
-            *mount = SolidSidebar::new(height, colors, &PaneInputs { items: items.clone() });
-        }
-        mount.paint(PaneInputs { items });
-        let buffer = &mount.renderer.renderer.current_render_buffer;
-        frame_from_buffer(buffer, &[])
-    })
+    crate::components::chrome_solid::reset_hub();
+    sidebar_mount(view, theme, height, scroll, 0, 0, None);
+    let mut frame =
+        crate::components::chrome_solid::blank_frame(SESSION_SIDEBAR_WIDTH, height);
+    crate::components::chrome_solid::composite_chrome_tree(&mut frame);
+    frame
 }
 
-/// The pane frame's renderer seam: the flag selects the opentui-solid
-/// path (this module) or the hand-rolled [`render_sidebar`] +
-/// `paint_placed_with_fills` fallback. Both produce the same 42-wide
-/// pane frame the route compositor pastes (docked at the right edge,
-/// or floating over the scrim in the ≤120 manual-open overlay).
+/// The pane frame's renderer seam (headless twin): the pane renders
+/// through its opentui-solid tree — the only renderer since the
+/// retirement lane deleted the hand-rolled placed-runs fallback.
+/// `scroll` is the content slot's wheel offset (auditA #1) — the
+/// render re-slices the sections; the title/footer chrome stays put.
 #[must_use]
 pub fn sidebar_pane_frame(
     view: &SidebarView,
@@ -566,11 +657,6 @@ pub fn sidebar_pane_frame(
     height: usize,
     scroll: usize,
 ) -> Frame {
-    // Lane M5 (retired): the pane renders through its opentui-solid
-    // tree — the only renderer since the retirement lane deleted the
-    // hand-rolled placed-runs fallback. `scroll` is the content
-    // slot's wheel offset (auditA #1) — the render re-slices the
-    // sections; the title/footer chrome stays put.
     paint_solid_sidebar_pane(view, theme, height, scroll)
 }
 
@@ -578,6 +664,7 @@ pub fn sidebar_pane_frame(
 mod tests {
     use super::*;
     use crate::components::sidebar::{SidebarMode, SidebarSection};
+    use crate::render::{Cell, CellColor};
     use crate::theme::ThemeState;
 
     /// The reactive path patches in place: a title change + a plugin
@@ -605,10 +692,7 @@ mod tests {
         let with_plugin = paint_solid_sidebar_pane(&view, &theme, 30, 0);
         let grid = with_plugin.text_grid().join("\n");
         assert!(grid.contains("Preset"), "the plugin section paints: {grid}");
-        SIDEBAR.with_borrow(|slot| {
-            let mount = slot.as_ref().expect("pane mounted");
-            assert!(!mount.renderer.ops_log().is_empty(), "the reconciler recorded its ops");
-        });
+        assert!(family_wrapper_live("sidebar"), "the pane rides the shared-tree wrapper");
     }
 
     /// A resize rebuilds cleanly — the mount-key rule (the pane's
@@ -629,6 +713,101 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// D3.2 construction equivalence, docked: the wrapper's pane rect
+    /// carries exactly the retired pane frame's cells, and nothing
+    /// outside the 42-wide rect is written (the old right-edge paste).
+    #[test]
+    fn docked_pane_rect_equals_the_pane_frame() {
+        let theme = ThemeState::v2_dark().styles();
+        let view = SidebarView::fixture("Docked", "/w:main");
+        let pane = paint_solid_sidebar_pane(&view, &theme, 24, 0);
+        crate::components::chrome_solid::reset_hub();
+        let mut frame = crate::components::chrome_solid::blank_frame(100, 30);
+        sidebar_mount(&view, &theme, 24, 0, 50, 5, None);
+        crate::components::chrome_solid::composite_chrome_tree(&mut frame);
+        for y in 0..24 {
+            for x in 0..SESSION_SIDEBAR_WIDTH {
+                assert_eq!(
+                    frame.cells[5 + y][50 + x],
+                    pane.cells[y][x],
+                    "pane cell ({x},{y})"
+                );
+            }
+        }
+        for (y, row) in frame.cells.iter().enumerate() {
+            for (x, cell) in row.iter().enumerate() {
+                let inside = (5..29).contains(&y) && (50..92).contains(&x);
+                assert!(
+                    inside || *cell == Cell::default(),
+                    "docked mount wrote outside its rect at ({x},{y}): {cell:?}"
+                );
+            }
+        }
+    }
+
+    /// D3.2 scrim byte equivalence, overlay: every covered cell outside
+    /// the pane dims at `70/255` exactly like the retired
+    /// `session.rs::apply_scrim` walk (RGB bg blend, glyph/fg survive),
+    /// the pane rect keeps the retired pane frame's bytes, and cells
+    /// outside the scrim rect are untouched.
+    #[test]
+    fn overlay_scrim_matches_the_retired_blend_and_keeps_the_pane() {
+        let theme = ThemeState::v2_dark().styles();
+        let view = SidebarView::fixture("Overlay", "/w:main");
+        let (width, frame_height, top, height, left) = (60usize, 24usize, 2usize, 20usize, 18usize);
+        let pane = paint_solid_sidebar_pane(&view, &theme, height, 0);
+
+        // A base frame with a deterministic RGB checkerboard (the
+        // "route content" the old scrim dimmed in place).
+        let mut frame = crate::components::chrome_solid::blank_frame(width, frame_height);
+        for (y, row) in frame.cells.iter_mut().enumerate() {
+            for (x, cell) in row.iter_mut().enumerate() {
+                cell.ch = '.';
+                cell.fg = CellColor::Rgb(200, 30, 40);
+                cell.bg = CellColor::Rgb(
+                    u8::try_from((x * 7) % 256).unwrap(),
+                    u8::try_from((y * 11) % 256).unwrap(),
+                    u8::try_from((x * 13 + y * 3) % 256).unwrap(),
+                );
+            }
+        }
+        let before = frame.clone();
+
+        crate::components::chrome_solid::reset_hub();
+        sidebar_mount(&view, &theme, height, 0, left, top, Some(width));
+        crate::components::chrome_solid::composite_chrome_tree(&mut frame);
+
+        // The retired apply_scrim formula, verbatim.
+        let dim = |channel: u8| -> u8 {
+            let alpha = 70.0 / 255.0;
+            (f64::from(channel) * (1.0 - alpha)).round() as u8
+        };
+        for row in top..top + height {
+            for col in 0..width {
+                if (left..left + SESSION_SIDEBAR_WIDTH).contains(&col) {
+                    let expected = pane.cells[row - top][col - left];
+                    assert_eq!(frame.cells[row][col], expected, "pane byte ({col},{row})");
+                    continue;
+                }
+                let original = before.cells[row][col];
+                let CellColor::Rgb(r, g, b) = original.bg else { unreachable!() };
+                assert_eq!(
+                    frame.cells[row][col],
+                    Cell {
+                        ch: '.',
+                        attrs: 0,
+                        fg: original.fg,
+                        bg: CellColor::Rgb(dim(r), dim(g), dim(b)),
+                    },
+                    "scrim byte ({col},{row})"
+                );
+            }
+        }
+        // Outside the scrim rect the base is untouched.
+        assert_eq!(frame.cells[0][0], before.cells[0][0]);
+        assert_eq!(frame.cells[frame_height - 1][width - 1], before.cells[frame_height - 1][width - 1]);
     }
 
     /// The visibility rule stays the old module's (auto > 120, hide
