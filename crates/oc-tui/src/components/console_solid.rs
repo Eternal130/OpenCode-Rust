@@ -2,7 +2,7 @@
 //! ([`crate::components::chrome_solid`], D2.2 overlays lane): the
 //! bordered `console` box with the ring's tail lines as absolute
 //! text units over a default (transparent) background — mounted as
-//! the `surface-console` family wrapper (skeleton index 5,
+//! the `surface-console` family wrapper (skeleton index 6,
 //! BLANK-underlaid: the old `paste_frame` overwrote the whole rect
 //! with default cells, transparent interior included, so the seam
 //! blanks the rect before the walk instead of letting the

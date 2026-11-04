@@ -36,7 +36,7 @@
 //!   `backgroundColor`/`content` in place without remounting rows.
 //! * *frame out* (D2.2 dialogs lane): the tree rides the SHARED tree
 //!   hub — `mount_dialog_tree` seats the family's chrome element
-//!   under the `surface-dialogs` wrapper (skeleton index 4, above
+//!   under the `surface-dialogs` wrapper (skeleton index 5, above
 //!   footer) through `chrome_solid::mount_family_wrapper`; pixels
 //!   reach the frame through the single compositor seam inside
 //!   `render_app` (`composite_chrome_tree`), never a per-family
@@ -2000,14 +2000,14 @@ thread_local! {
 }
 
 /// The dialog family's seat under the shared tree's root (the
-/// skeleton table's index 4, above footer): today's overlay pasted
-/// AFTER `render_app`'s composite seam, so the wrapper sits above
-/// every mounted family by construction. Registered deviation (the
-/// footer lane's note, honored here): the family-6 overlays
+/// skeleton table's index 5, above sidebar/footer): today's overlay
+/// pasted AFTER `render_app`'s composite seam, so the wrapper sits
+/// above every mounted family by construction. Registered deviation
+/// (the footer lane's note, honored here): the family-6 overlays
 /// (console/which-key/toast/reconnecting) still paste after the seam
 /// and so paint OVER the dialog — today's paste order had the same
 /// inversion; the overlays lane (D2.3) reseats them above.
-const DIALOG_SKELETON_INDEX: usize = 4;
+const DIALOG_SKELETON_INDEX: usize = 5;
 
 // ---------------------------------------------------------------------------
 // the overlay mount (the tree seat; the retired paste's twin data)
@@ -2821,7 +2821,7 @@ mod d22_tests {
         }
     }
 
-    /// The seam seats the wrapper at skeleton index 4 and a frame
+    /// The seam seats the wrapper at skeleton index 5 and a frame
     /// with no dialog prunes it (the old paste branch's else arm).
     #[test]
     fn dialog_wrapper_unmounts_when_no_dialog_mounts() {
