@@ -11,7 +11,7 @@
 //!   bottom-centered pill — "Loading plugins…" 500 ms after boot goes
 //!   un-ready, "Finishing startup…" once ready with a 3 s hold, at
 //!   `bottom=1` full-width centered, raised background, padding 1.
-//!   D2.2 overlays lane: a family wrapper at skeleton index 8
+//!   D2.2 overlays lane: a family wrapper at skeleton index 9
 //!   (today's frame-tail z, above every dialog pixel; ref zIndex
 //!   5000).
 //! * **The paste_frame overlays** (renderer console / which-key /
@@ -26,7 +26,7 @@ use crate::theme::ThemeStyles;
 /// Mount the tree-riding state overlays (the pill + the migration
 /// widget) — called from `render_app` BEFORE the chrome composite
 /// seam. D2.2 overlays lane: both seat in the overlays family
-/// (skeleton indices 8/9, above every dialog pixel — today's
+/// (skeleton indices 9/10, above every dialog pixel — today's
 /// frame-tail z, the ref's zIndex 5000-over-3000).
 pub fn mount_state_overlays(store: &Store, styles: &ThemeStyles, width: usize, height: usize) {
     let now = store.clock();
@@ -41,7 +41,7 @@ pub fn mount_state_overlays(store: &Store, styles: &ThemeStyles, width: usize, h
 /// Mount the overlays family's live surfaces (console / which-key /
 /// toast / reconnecting) — `render_app` calls this AFTER the dialog
 /// family's mount and BEFORE the compositor seam, so the family's
-/// wrappers seat in the same walk/flush batch (skeleton indices 5+,
+/// wrappers seat in the same walk/flush batch (skeleton indices 6+,
 /// above the dialogs family's 4 — today's paste order frozen:
 /// console < which-key < permission@3 < toast < pill < migration <
 /// scrim). NOT mounting a surface this frame unmounts its wrapper at

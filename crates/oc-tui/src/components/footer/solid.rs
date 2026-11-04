@@ -19,11 +19,11 @@
 //!   as a [`ChromeStamp::Transparent`] seam stamp (blank cells inside
 //!   the rect reset their bg to Default — exactly the retired
 //!   bridge's post-copy fixup).
-//! * **Non-RGB colors** (indexed/default paints) fall back to the
-//!   hand-rolled op replay for the whole body — the footer palette
-//!   is all-RGB (`FooterTheme::from_resolved`), so the fallback is
-//!   defensive only (it rides the seam's `mount_frame_overlay` slot,
-//!   the same z the wrapper occupies).
+//! * **Non-RGB colors** (indexed/default paints) are unreachable for
+//!   this family — the footer palette is all-RGB
+//!   (`FooterTheme::from_resolved`); an untranslatable op mounts
+//!   nothing (D3.2 retired the defensive hand-rolled replay with the
+//!   seam's frame-overlay slot).
 //! * The MAIN footer row (the prompt composer's hint row) is the
 //!   composer family's wrapper (the composer lane, M3) — this lane
 //!   owns the family's BLOCKER bodies (permission/form) and the
@@ -257,19 +257,8 @@ fn shape_ops(ops: &[CanvasOp]) -> Option<(Vec<FooterUnit>, Vec<ChromeStamp>)> {
     Some((units, stamps))
 }
 
-/// The defensive fallback: an untranslatable op keeps the
-/// hand-rolled bytes (replayed through a private Canvas — the op
-/// stream IS the painter's semantics; no renderer involved).
-fn fallback_frame(ops: &[CanvasOp], width: usize, height: usize) -> Frame {
-    let mut canvas = Canvas::new(width, height);
-    for op in ops {
-        match op {
-            CanvasOp::Fill { y, x, width: w, bg } => canvas.fill_bg(*y, *x, *w, *bg),
-            CanvasOp::Spans { y, x, spans } => canvas.spans(*y, *x, spans),
-        }
-    }
-    canvas.into_frame()
-}
+/// The defensive fallback was retired with the seam's frame-overlay
+/// slot (D3.2): the op stream never carries a non-RGB color.
 
 // ---------------------------------------------------------------------------
 // the element tree
@@ -419,16 +408,16 @@ fn footer_element(inputs: &Signal<Vec<FooterUnit>>, width: usize, height: usize)
 // ---------------------------------------------------------------------------
 
 /// The footer family's seat under the shared tree's root (the
-/// skeleton table's index 3, after the composer): the bodies the
+/// skeleton table's index 4, after the sidebar): the bodies the
 /// old `App::frame` pasted AFTER `render_app` (over the composed
-/// chrome/transcript/composer pixels), so the wrapper sits above
-/// all three. Registered deviation (bytes arbitrate): the family-6
+/// chrome/transcript/composer/sidebar pixels), so the wrapper sits above
+/// all four. Registered deviation (bytes arbitrate): the family-6
 /// overlays (console/which-key/toast) paste AFTER the composite seam
 /// and so paint OVER the footer bodies (today's paste order had the
 /// bodies last); no golden or PTY corpus observes the inverted cells,
 /// and the dialogs lane (family 5) now seats its wrapper above this
 /// one by the same construction.
-const FOOTER_SKELETON_INDEX: usize = 3;
+const FOOTER_SKELETON_INDEX: usize = 4;
 
 /// The mounted footer body's reactive state, kept across frames so
 /// content changes (a moving selection, typed reject text) patch
@@ -464,15 +453,10 @@ pub(crate) fn mount_footer_ops(
     top: usize,
 ) {
     let Some((units, stamps)) = shape_ops(ops) else {
-        // Defensive only (the palette is all-RGB): the hand-rolled
-        // replay rides the seam's frame-overlay slot — the same z
-        // the wrapper occupies.
-        crate::components::chrome_solid::mount_frame_overlay(
-            "footer-fallback",
-            left,
-            top,
-            fallback_frame(ops, width, height),
-        );
+        // The footer palette is all-RGB (`FooterTheme::from_resolved`),
+        // so an untranslatable op is unreachable; nothing mounts (the
+        // seam prunes the stale wrapper). D3.2 retired the defensive
+        // hand-rolled replay with the seam's frame-overlay slot.
         return;
     };
     let inputs = units;

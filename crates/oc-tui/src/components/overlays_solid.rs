@@ -12,7 +12,7 @@
 //!   raised BOX rides the tree as the family's LAST child (above the
 //!   pill/migration, exactly the old frame-tail z).
 //! * **`StartupLoading`** — the bottom-centered pill as ONE opaque
-//!   chunk row, a family wrapper at skeleton index 8 (moved up from
+//!   chunk row, a family wrapper at skeleton index 9 (moved up from
 //!   the chrome family: today's frame-tail z, ref zIndex 5000).
 //! * **The migration widget** — index 9, above the pill exactly like
 //!   the old frame tail.
@@ -36,14 +36,14 @@ use crate::render::{CellColor, Frame};
 use crate::theme::ThemeStyles;
 
 /// The overlays family's skeleton indices (D2.2, above the dialogs
-/// family's 4 — today's paste order frozen: console < which-key <
-/// (permission, in-tree at 3) < toast < pill < migration < scrim).
-pub(crate) const OVERLAYS_CONSOLE: usize = 5;
-pub(crate) const OVERLAYS_WHICH_KEY: usize = 6;
-pub(crate) const OVERLAYS_TOAST: usize = 7;
-pub(crate) const OVERLAYS_STARTUP_PILL: usize = 8;
-pub(crate) const OVERLAYS_MIGRATION: usize = 9;
-pub(crate) const OVERLAYS_RECONNECTING: usize = 10;
+/// family's 5 — today's paste order frozen: console < which-key <
+/// sidebar (in-tree at 3) < footer (4) < toast < pill < migration < scrim).
+pub(crate) const OVERLAYS_CONSOLE: usize = 6;
+pub(crate) const OVERLAYS_WHICH_KEY: usize = 7;
+pub(crate) const OVERLAYS_TOAST: usize = 8;
+pub(crate) const OVERLAYS_STARTUP_PILL: usize = 9;
+pub(crate) const OVERLAYS_MIGRATION: usize = 10;
+pub(crate) const OVERLAYS_RECONNECTING: usize = 11;
 
 struct OverlaySurface {
     signal: Signal<ChromeInputs>,
@@ -242,7 +242,7 @@ pub fn reconnecting_over_frame(
 }
 
 /// The `StartupLoading` pill at `bottom=1` — a family wrapper at
-/// skeleton index 8: ONE opaque chunk row, so the tree fully covers
+/// skeleton index 9: ONE opaque chunk row, so the tree fully covers
 /// the pill's rect (the old painter's row write).
 pub fn mount_startup_loading_solid(
     styles: &ThemeStyles,
@@ -288,7 +288,7 @@ pub fn mount_startup_loading_solid(
     );
 }
 
-/// The migration widget — a family wrapper at skeleton index 9:
+/// The migration widget — a family wrapper at skeleton index 10:
 /// three opaque raised rows fully cover the box's rect.
 pub fn mount_migration_solid(
     styles: &ThemeStyles,

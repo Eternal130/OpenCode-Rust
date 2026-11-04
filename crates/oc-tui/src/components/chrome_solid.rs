@@ -350,7 +350,7 @@ pub(crate) fn surface_element(
 // (D2.2 overlays lane) the family-6 scratch bridge is DEAD: the console
 // strip, the which-key panel, the toast panel and the reconnecting
 // scrim/box ride the shared tree as family wrappers under
-// `surface-{family}` containers at skeleton indices 5+ (grep-zero:
+// `surface-{family}` containers at skeleton indices 6+ (grep-zero:
 // OverlayMount/OVERLAY_MOUNTS/overlay_frame are gone with this lane).
 // ---------------------------------------------------------------------------
 
@@ -382,21 +382,24 @@ pub(crate) fn surface_element(
 /// │                       the later child; see transcript_solid)
 /// └─[2] surface-composer  (D2.2 composer lane — mounted: the prompt
 /// │                       box + popup + footer row wrapper)
-/// └─[3] surface-footer    (D2.2 footer lane)
-/// └─[4] surface-dialogs   (D2.2 dialogs lane)
-/// └─[5] surface-console    (D2.2 overlays lane — the renderer console
+/// └─[3] surface-sidebar   (D3.2 sidebar lane — the docked pane rect,
+/// │                       or the manual-open scrim box carrying the
+/// │                       pane right-aligned + its 70/255 DimBg stamp)
+/// └─[4] surface-footer    (D2.2 footer lane)
+/// └─[5] surface-dialogs   (D2.2 dialogs lane)
+/// └─[6] surface-console    (D2.2 overlays lane — the renderer console
 /// │                       strip, BLANK-underlaid: the old paste wrote
 /// │                       default cells over its whole rect)
-/// └─[6] surface-which-key  (D2.2 overlays lane — blank-underlaid)
-/// └─[7] surface-toast      (D2.2 overlays lane — the panel interior;
+/// └─[7] surface-which-key  (D2.2 overlays lane — blank-underlaid)
+/// └─[8] surface-toast      (D2.2 overlays lane — the panel interior;
 /// │                       the two edge rails stay a post-seam paint,
 /// │                       they keep the UNDERLYING cell background)
-/// └─[8] surface-startup-pill (D2.2 overlays lane — moved up from the
+/// └─[9] surface-startup-pill (D2.2 overlays lane — moved up from the
 /// │                       chrome family: today's frame-tail z, above
 /// │                       every dialog pixel; ref zIndex 5000)
-/// └─[9] surface-migration (D2.2 overlays lane — same move, above the
+/// └─[10] surface-migration (D2.2 overlays lane — same move, above the
 /// │                       pill exactly like the old frame tail)
-/// └─[10] surface-reconnecting (D2.2 overlays lane — the scrim+box,
+/// └─[11] surface-reconnecting (D2.2 overlays lane — the scrim+box,
 ///                         the LAST tree child; the scrim dims through
 ///                         a seam stamp (ref zIndex 10000): the port's
 ///                         buffer blends alpha fills over a BLACK
@@ -1212,64 +1215,15 @@ pub(crate) fn family_wrapper_live(family: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// frame overlays (the paste_frame class, seated at the seam)
+// the composite seam
 // ---------------------------------------------------------------------------
-
-/// One hand-built [`Frame`] pasted at the composite seam — the ruling's
-/// paste_frame overlay class (family 6), seated ABOVE every tree pixel
-/// and BELOW the dialog layer's post-seam frame paints (the scrim
-/// bands + the preview image cells — D2.2 dialogs lane: the dialog
-/// BOX itself rides the tree at skeleton index 4; only its
-/// frame-reading paints stay post-seam). D2.2 transcript
-/// lane: the overlay-mode sidebar pane pasted OVER the transcript
-/// rect after the region paste (today's z: pane > composer mount >
-/// transcript) — once the transcript rides the tree, a pre-seam hand
-/// paste would be buried under the wrapper's page bg, so the pane
-/// registers here instead (the sidebar family's own lane moves it
-/// into the tree later).
-struct FrameOverlay {
-    name: &'static str,
-    left: usize,
-    top: usize,
-    frame: Frame,
-    /// Set by this frame's mount; cleared at the seam — an overlay
-    /// nobody synced unmounts.
-    fresh: bool,
-}
-
-thread_local! {
-    /// The seam's frame overlays, in mount order (= paste order).
-    static FRAME_OVERLAYS: RefCell<Vec<FrameOverlay>> = const { RefCell::new(Vec::new()) };
-}
-
-/// Register (or re-seat) one frame overlay for THIS frame's seam. The
-/// caller keeps building the Frame exactly as the old painter did.
-pub(crate) fn mount_frame_overlay(
-    name: &'static str,
-    left: usize,
-    top: usize,
-    frame: Frame,
-) {
-    FRAME_OVERLAYS.with_borrow_mut(|overlays| {
-        if let Some(existing) = overlays.iter_mut().find(|overlay| overlay.name == name) {
-            existing.left = left;
-            existing.top = top;
-            existing.frame = frame;
-            existing.fresh = true;
-        } else {
-            overlays.push(FrameOverlay { name, left, top, frame, fresh: true });
-        }
-    });
-}
 
 /// The chrome family's single compositor seam: prune unsynced
 /// surfaces, flush the shared tree (at most once per sync batch — the
 /// double-flush guard), then walk the shared buffer over the frame
 /// (the dialog box included — the dialogs family's wrapper seats
-/// above footer by child order), then paste the frame overlays (above
-/// every tree pixel, below the dialog layer's post-seam frame paints
-/// — the scrim bands + preview image cells). GridEmitter stays the
-/// sole byte emitter; this seam only writes the in-house Frame cells.
+/// above footer by child order). GridEmitter stays the sole byte
+/// emitter; this seam only writes the in-house Frame cells.
 pub(crate) fn composite_chrome_tree(frame: &mut Frame) {
     let hub = HUB.with_borrow(|slot| slot.clone());
     let Some(hub) = hub else { return; };
@@ -1277,29 +1231,14 @@ pub(crate) fn composite_chrome_tree(frame: &mut Frame) {
     tree.prune_stale();
     tree.flush_if_pending();
     tree.composite_into(frame);
-    drop(tree);
-    FRAME_OVERLAYS.with_borrow_mut(|overlays| {
-        let mut index = 0;
-        while index < overlays.len() {
-            if overlays[index].fresh {
-                let overlay = &overlays[index];
-                frame.paste_region(&overlay.frame, overlay.left, overlay.top);
-                overlays[index].fresh = false;
-                index += 1;
-            } else {
-                overlays.remove(index);
-            }
-        }
-    });
 }
 
 /// The headless test seam (ruling attempt 2: the hub reset is
 /// MANDATORY, not optional): drop the thread's hub so the next mount
 /// starts from a fresh tree — `cargo test` runs a binary's tests in
-/// one process and mounts are stateful. The frame overlays go with it.
+/// one process and mounts are stateful.
 pub(crate) fn reset_hub() {
     HUB.with_borrow_mut(|slot| *slot = None);
-    FRAME_OVERLAYS.with_borrow_mut(|overlays| overlays.clear());
 }
 
 /// A blank frame of the given size (Default cells) — the rect a

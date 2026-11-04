@@ -1,7 +1,7 @@
 //! The dialog framework (`ui/dialog.tsx`): the portal-style overlay
 //! (backdrop + centered chrome box) seated on top of every mounted
 //! family (D2.2 dialogs lane: the box rides the shared tree under
-//! `surface-dialogs` at skeleton index 4; the backdrop scrim is a
+//! `surface-dialogs` at skeleton index 5; the backdrop scrim is a
 //! post-seam band walk around the box), the modal key layer (escape
 //! and ctrl+c both close — ctrl+c clears
 //! any filter/input text as part of the close, `ui/dialog.tsx:115-156`
@@ -1366,7 +1366,7 @@ pub fn render_app(store: &Store, theme: &crate::theme::ThemeState, size: (u16, u
     // D2.2 overlays lane: the family's live surfaces (console /
     // which-key / toast / pill / migration / reconnecting) mount
     // AFTER the dialog family's own mount and BEFORE the seam —
-    // skeleton indices 5..10, above the dialogs family's 4 (today's
+    // skeleton indices 6..11, above the dialogs family's 5 (today's
     // paste order frozen; the pill/migration moved up from the
     // chrome family to their frame-tail z).
     crate::components::overlays::mount_state_overlays(

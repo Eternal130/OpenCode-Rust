@@ -184,7 +184,7 @@ fn slot_renders_and_clicks() {
     let theme = oc_tui::theme::ThemeState::v2_dark();
     store.open_tab("ses_claims", Some("Claims session".to_owned()));
     store.navigate(oc_tui::store::Route::session("ses_claims"));
-    let frame = oc_tui::components::session::render_session(
+    let frame = oc_tui::components::session::render_session_composed(
         &store,
         "ses_claims",
         &theme.styles(),
