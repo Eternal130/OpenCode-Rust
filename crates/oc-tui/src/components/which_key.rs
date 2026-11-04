@@ -10,6 +10,10 @@
 //! no timeout config, no layout/scroll surface — the content is the
 //! table's continuation bindings, sorted by key.
 
+use super::chrome_solid::{
+    blank_frame, chrome_run_units, composite_chrome_tree, reset_hub, ChromeUnit,
+};
+use super::overlays_solid::{mount_overlay_surface, OVERLAYS_WHICH_KEY};
 use crate::render::{CellColor, Frame};
 use crate::theme::ThemeStyles;
 
@@ -38,9 +42,17 @@ pub struct WhichKeyView {
 /// Render the panel: a bordered box in the console-overlay style
 /// (chrome borders, the prefix/title riding the top border, one
 /// `key  label` row per continuation).
+/// The panel's shaping (surface-local): the same walk the old
+/// painter ran, now feeding the tree mount (D2.2 overlays lane — the
+/// `surface-which-key` family wrapper at skeleton index 6,
+/// BLANK-underlaid: the old `paste_frame` overwrote the rect's every
+/// cell, transparent interior included).
 #[must_use]
-pub fn render_which_key_solid(view: &WhichKeyView, styles: &ThemeStyles, width: u16) -> Frame {
-    use super::chrome_solid::{chrome_run_units, overlay_frame};
+pub fn which_key_units(
+    view: &WhichKeyView,
+    styles: &ThemeStyles,
+    width: u16,
+) -> (usize, usize, Vec<ChromeUnit>) {
     let width = usize::from(width).max(8);
     let rows = view.entries.len().clamp(1, WHICH_KEY_MAX_ENTRIES) + 2;
     let text = styles.text.fg.map_or(CellColor::Default, CellColor::from);
@@ -111,7 +123,29 @@ pub fn render_which_key_solid(view: &WhichKeyView, styles: &ThemeStyles, width: 
             ));
         }
     }
-    overlay_frame("which_key_panel", width, rows, CellColor::Default, &units)
+    (width, rows, units)
+}
+
+/// Mount the which-key panel into the shared tree (the live path —
+/// called from `render_app` before the compositor seam; the wrapper
+/// seats at the screen bottom, the old paste's y).
+pub fn mount_which_key(view: &WhichKeyView, styles: &ThemeStyles, width: u16, height: usize) {
+    let (w, rows, units) = which_key_units(view, styles, width);
+    let y = height.saturating_sub(rows);
+    mount_overlay_surface("which-key", OVERLAYS_WHICH_KEY, 0, y, w, rows, &units, true, &[]);
+}
+
+/// The headless twin (the golden/unit harness shape): mount ONE
+/// panel into a fresh hub and read it back as a standalone Frame —
+/// the bytes the old scratch copy returned, by construction.
+#[must_use]
+pub fn which_key_frame(view: &WhichKeyView, styles: &ThemeStyles, width: u16) -> Frame {
+    let (w, rows, units) = which_key_units(view, styles, width);
+    reset_hub();
+    mount_overlay_surface("which-key", OVERLAYS_WHICH_KEY, 0, 0, w, rows, &units, true, &[]);
+    let mut frame = blank_frame(w, rows);
+    composite_chrome_tree(&mut frame);
+    frame
 }
 
 #[cfg(test)]
@@ -129,7 +163,7 @@ mod tests {
                 WhichKeyEntry { key: "w".into(), label: "Close current tab".into() },
             ],
         };
-        let frame = render_which_key_solid(&view, &styles, 40);
+        let frame = which_key_frame(&view, &styles, 40);
         let grid = frame.text_grid();
         assert!(grid[0].contains("<leader>"), "the prefix rides the top border");
         assert!(grid[1].contains("n") && grid[1].contains("Create a new session"));

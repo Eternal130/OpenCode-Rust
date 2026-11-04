@@ -504,6 +504,8 @@ pub(crate) fn mount_footer_ops(
         content_key,
         content,
         &stamps,
+        &[],
+        false,
     );
 }
 

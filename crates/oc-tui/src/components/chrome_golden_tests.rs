@@ -24,7 +24,7 @@
 #![cfg(test)]
 #![allow(clippy::cast_possible_truncation)]
 
-use crate::components::console_solid::render_console_overlay_solid;
+use crate::components::console_solid::console_overlay_frame;
 use crate::components::plugin_page_solid::{
     plugin_page_solid_frame, plugin_route_missing_solid_frame,
 };
@@ -128,7 +128,7 @@ fn styles() -> crate::theme::ThemeStyles {
 fn chrome_console_overlay_matches_the_golden() {
     let lines = console_lines();
     for width in [20_u16, 40, 60, 80, 120, 200] {
-        let frame = render_console_overlay_solid(&lines, &styles(), width);
+        let frame = console_overlay_frame(&lines, &styles(), width);
         assert_golden("chrome-console-overlay", usize::from(width), &frame);
     }
 }
