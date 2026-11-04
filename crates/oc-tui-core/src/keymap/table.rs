@@ -807,11 +807,14 @@ static DEFAULT_TABLE: &[CommandDef] = defs! {
     // layer while an actionable toast is live (the dispatcher no-ops
     // otherwise). Registered in the coverage test's PORT_ADDITIONS.
     "toast_activate" => "toast.activate", "ctrl+alt+t", "Activate the current toast action", "base", palette Prompt;
-    // The which-key family (keybind.ts:290-300 — lane KM): v2's tui
-    // src ships the table entries without a component consumer (the
-    // panel arrives via the keymap addon); the port registers the
-    // same 12 ids + defaults so overrides resolve and the strokes
-    // consume while the panel surface stays absent.
+    // The which-key family (keybind.ts:290-300 — lane KM): the ref
+    // panel is a LOCAL TUI feature plugin
+    // (`feature-plugins/system/which-key.tsx`, last shipped at
+    // 4a93972a78 — deleted with the v1 plugin runtime at
+    // 06290907a9 while these bindings stayed); it is not an
+    // `@opentui/keymap` addon. The port registers the same 11 ids +
+    // defaults so overrides resolve and the full panel dispatches
+    // them (oc-tui `components/which_key.rs`).
     "which_key_toggle" => "which-key.toggle", "ctrl+alt+k", "Toggle which-key panel", "base";
     "which_key_layout_toggle" => "which-key.layout.toggle", "ctrl+alt+shift+k", "Switch which-key layout", "base";
     "which_key_pending_toggle" => "which-key.pending.toggle", "ctrl+alt+shift+p", "Toggle which-key pending preview", "base";

@@ -1260,15 +1260,32 @@ fn paint_preview_image(
 #[must_use]
 pub fn render_app(store: &Store, theme: &crate::theme::ThemeState, size: (u16, u16)) -> Frame {
     let styles = theme.styles();
-    let mut frame = if store.diff_viewer_open() {
+    let width = usize::from(size.0);
+    let height = usize::from(size.1);
+    // The docked which-key panel shrinks the route (the reference's
+    // `app.bottom` slot sits below the flexGrow route). The overlay
+    // layout takes no space (position absolute, which-key.tsx:381-397).
+    let which_key = store.which_key();
+    let dock_rows = which_key
+        .as_ref()
+        .filter(|view| view.layout == crate::components::which_key::WhichKeyLayout::Dock)
+        .map_or(0, |_| crate::components::which_key::panel_height(height));
+    let devtools = store.devtools_state();
+    let devtools_rows = usize::from(dock_rows > 0 && devtools.enabled && devtools.visible);
+    let content_height = height.saturating_sub(dock_rows + devtools_rows).max(1);
+    let route_size = (
+        u16::try_from(width).unwrap_or(u16::MAX),
+        u16::try_from(content_height).unwrap_or(u16::MAX),
+    );
+    let route_frame = if store.diff_viewer_open() {
         // The `diff` plugin route (SURF-2, diff-viewer.tsx:193): the
         // viewer mounts FULLSCREEN over the app shell — body states,
         // scrolled patch column, tree pane.
         crate::components::diff_viewer_mount::render_diff_mount(
             store,
             &styles,
-            usize::from(size.0),
-            usize::from(size.1),
+            route_size.0.into(),
+            route_size.1.into(),
         )
     } else if store.stats_page_open() {
         // RE-14 — the `stats` plugin route (stats.tsx:156-178): the
@@ -1289,7 +1306,7 @@ pub fn render_app(store: &Store, theme: &crate::theme::ThemeState, size: (u16, u
                 // resource value). The calendar buckets by the LOCAL
                 // day (the fetch already sends local_timezone_name).
                 let timezone = crate::components::stats_page::local_timezone_name();
-                poster_storage = crate::components::stats_page::stats_poster(info, size, &timezone);
+                poster_storage = crate::components::stats_page::stats_poster(info, route_size, &timezone);
                 crate::components::stats_page_solid::StatsPhaseView::Loaded(&poster_storage)
             }
         };
@@ -1297,10 +1314,10 @@ pub fn render_app(store: &Store, theme: &crate::theme::ThemeState, size: (u16, u
         // route base is the blank screen (today's page frame WAS the
         // base; the tree's opaque page background covers it at the
         // composite seam below).
-        crate::components::stats_page_solid::mount_stats_page_solid(view, &styles, size);
+        crate::components::stats_page_solid::mount_stats_page_solid(view, &styles, route_size);
         crate::components::chrome_solid::blank_frame(
-            usize::from(size.0).max(1),
-            usize::from(size.1).max(1),
+            usize::from(route_size.0).max(1),
+            usize::from(route_size.1).max(1),
         )
     } else if store.plugin_route_page().is_some() {
         // D2.2: the plugin route page rides the shared chrome tree —
@@ -1314,28 +1331,32 @@ pub fn render_app(store: &Store, theme: &crate::theme::ThemeState, size: (u16, u
                 &page.plugin_id,
                 &page.name,
                 &styles,
-                size,
+                route_size,
             );
         } else {
             crate::components::plugin_page_solid::mount_plugin_page_solid(
                 &page.title,
                 &page.rows,
                 &styles,
-                size,
+                route_size,
             );
         }
         crate::components::chrome_solid::blank_frame(
-            usize::from(size.0).max(1),
-            usize::from(size.1).max(1),
+            usize::from(route_size.0).max(1),
+            usize::from(route_size.1).max(1),
         )
     } else {
         match store.route() {
-            crate::store::Route::Home => crate::components::home::render_home(store, &styles, size),
+            crate::store::Route::Home => crate::components::home::render_home(store, &styles, route_size),
             crate::store::Route::Session { session_id, .. } => {
-                crate::components::session::render_session(store, &session_id, &styles, size)
+                crate::components::session::render_session(store, &session_id, &styles, route_size)
             }
         }
     };
+    // The route shrinks only for a DOCKED panel (overlay keeps the
+    // full canvas); reassemble the full-size frame around it.
+    let mut frame = crate::components::chrome_solid::blank_frame(width.max(1), height.max(1));
+    frame.paste_region(&route_frame, 0, 0);
     // G-07 — the devtools bar paints the bottom row BEFORE overlays
     // (dialogs render above it, ref's z-order); zero-op disabled.
     // D2.2: the bar rides the shared chrome tree (mounted, not
@@ -1357,8 +1378,9 @@ pub fn render_app(store: &Store, theme: &crate::theme::ThemeState, size: (u16, u
     crate::components::overlays::mount_overlays_family(
         store,
         &styles,
-        usize::from(size.0),
-        usize::from(size.1),
+        width,
+        height,
+        (dock_rows > 0).then_some(content_height),
     );
     crate::components::chrome_solid::composite_chrome_tree(&mut frame);
     if let Some(layer) = dialog_layer {

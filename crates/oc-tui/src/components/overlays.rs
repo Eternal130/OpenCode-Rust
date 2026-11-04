@@ -46,7 +46,13 @@ pub fn mount_state_overlays(store: &Store, styles: &ThemeStyles, width: usize, h
 /// console < which-key < permission@3 < toast < pill < migration <
 /// scrim). NOT mounting a surface this frame unmounts its wrapper at
 /// the seam (the old painters' visibility branches).
-pub fn mount_overlays_family(store: &Store, styles: &ThemeStyles, width: usize, height: usize) {
+pub fn mount_overlays_family(
+    store: &Store,
+    styles: &ThemeStyles,
+    width: usize,
+    height: usize,
+    which_key_dock_top: Option<usize>,
+) {
     // TUI-29 — the renderer console (`renderer.console`'s strip at
     // the top of the screen, over the app).
     if store.console_open() {
@@ -56,11 +62,11 @@ pub fn mount_overlays_family(store: &Store, styles: &ThemeStyles, width: usize, 
             u16::try_from(width).unwrap_or(u16::MAX),
         );
     }
-    // G-83 — the which-key panel: a compact bottom overlay while a
-    // chord prefix is pending (or the root listing is on), above
+    // The which-key panel: overlay seats at the screen bottom, dock
+    // at the route's reduced height (`which_key_dock_top`), above
     // every route surface.
     if let Some(view) = store.which_key() {
-        super::which_key::mount_which_key(&view, styles, u16::try_from(width).unwrap_or(u16::MAX), height);
+        super::which_key::mount_which_key(&view, styles, width, height, which_key_dock_top);
     }
     // The toast layer (`ui/toast.tsx`): the queue's current toast
     // composites over whatever rendered underneath — the interior
@@ -318,9 +324,18 @@ mod tests {
             entries: vec![crate::components::which_key::WhichKeyEntry {
                 key: "n".to_owned(),
                 label: "New session".to_owned(),
+                group: "Session".to_owned(),
+                continues: false,
             }],
+            layout: crate::components::which_key::WhichKeyLayout::Overlay,
+            pending_preview: true,
+            pinned: true,
+            offset: 0,
+            active_group: None,
+            toggle_hint: "ctrl+alt+k".to_owned(),
+            layout_hint: "ctrl+alt+shift+k".to_owned(),
         };
-        crate::components::which_key::mount_which_key(&view, &styles, 80, 24);
+        crate::components::which_key::mount_which_key(&view, &styles, 80, 24, None);
         // The toast (top-right rows 1..5, mounted last).
         let toast = crate::components::toast::ToastOptions::info("Order fixture");
         let footer = crate::components::footer::theme::FooterTheme::from_resolved(
@@ -344,8 +359,9 @@ mod tests {
         // The console title rides the top border (row 0, the family's
         // lowest seat).
         assert!(grid[0].contains(" console "), "console title: {:?}", grid[0]);
-        // The which-key panel seals the bottom.
-        assert!(grid[23].starts_with('└'), "which-key bottom border: {:?}", grid[23]);
+        // The which-key panel seals the bottom (the full port paints
+        // a raised background fill, not a border).
+        assert!(grid[23].contains("toggle ctrl+alt+k"), "which-key footer: {:?}", grid[23]);
         // The toast (mounted LAST — the family's highest seat below
         // the state overlays) lands over the console's blanked rows:
         // the message at the panel's second row, the rails at both
