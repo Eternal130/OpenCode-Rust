@@ -422,12 +422,12 @@ fn footer_element(inputs: &Signal<Vec<FooterUnit>>, width: usize, height: usize)
 /// skeleton table's index 3, after the composer): the bodies the
 /// old `App::frame` pasted AFTER `render_app` (over the composed
 /// chrome/transcript/composer pixels), so the wrapper sits above
-/// all three. Registered deviation (bytes arbitrate): the dialog
-/// layer and the family-6 overlays (console/which-key/toast) paste
-/// AFTER the composite seam and so now paint OVER the footer bodies
-/// (today's paste order had the bodies last); no golden or PTY
-/// corpus observes the inverted cells, and the dialogs lane (family
-/// 5) seats above this wrapper by the same construction.
+/// all three. Registered deviation (bytes arbitrate): the family-6
+/// overlays (console/which-key/toast) paste AFTER the composite seam
+/// and so paint OVER the footer bodies (today's paste order had the
+/// bodies last); no golden or PTY corpus observes the inverted cells,
+/// and the dialogs lane (family 5) now seats its wrapper above this
+/// one by the same construction.
 const FOOTER_SKELETON_INDEX: usize = 3;
 
 /// The mounted footer body's reactive state, kept across frames so
