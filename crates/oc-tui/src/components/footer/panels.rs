@@ -77,7 +77,7 @@ fn panel_frame_canvas(
 }
 
 /// The five pickers' dispatch: the panel frame through the family's
-/// solid seam (flag OFF keeps the hand-rolled bytes).
+/// headless twin seam (reset_hub + mount + composite — D2.2).
 fn panel_frame_finish(canvas: Canvas) -> Frame {
     super::solid::finish(canvas)
 }
