@@ -1,7 +1,7 @@
 //! The toast surface on the shared tree (D2.2 overlays lane): the
 //! bordered panel (variant-colored `┃` rails over the raised-high
 //! interior, the title row + dismiss `x`, the message, `+N more`)
-//! mounted as the `surface-toast` family wrapper at skeleton index 7
+//! mounted as the `surface-toast` family wrapper at skeleton index 8
 //! — the panel INTERIOR rides the tree; the two `┃` rails stay a
 //! POST-SEAM frame paint (they keep the UNDERLYING cell background —
 //! a tree cell cannot: the walk writes opaque backgrounds, and a

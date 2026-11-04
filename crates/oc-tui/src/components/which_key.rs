@@ -29,7 +29,7 @@
 //!   "Show keyboard shortcuts with …" hint (:176-188).
 //!
 //! Shaping stays on the D2.2 shared tree: the panel is the
-//! `surface-which-key` family wrapper (skeleton index 6) with a full
+//! `surface-which-key` family wrapper (skeleton index 7) with a full
 //! panel-background fill; the old `paste_frame` overwrote every cell
 //! of the rect (transparent interior included), so the mount stays
 //! BLANK-underlaid.

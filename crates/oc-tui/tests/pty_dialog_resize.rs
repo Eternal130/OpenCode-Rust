@@ -38,7 +38,7 @@ fn pty_dialog_palette_rect_follows_terminal_resize() {
             }
             // OPEN: ctrl+p mounts the command palette (a centered
             // dialog — the `surface-dialogs` wrapper at skeleton
-            // index 4).
+            // index 5).
             driver.write(b"\x10");
             if !wait_palette(&mut driver, 120) {
                 return Err("the palette never painted at 120 cols".into());

@@ -857,12 +857,6 @@ pub fn render_session(
         // consume the same `render_sidebar` geometry. The content
         // slot's wheel offset (auditA #1) rides the same walk.
         let scroll = store.sidebar_scroll().offset;
-        let pane = crate::components::sidebar_solid::sidebar_pane_frame(
-            &view,
-            styles,
-            pane_height,
-            scroll,
-        );
         let origin_x = if sidebar_docked {
             column + shift
         } else {
@@ -927,29 +921,23 @@ pub fn render_session(
             session_id: session_id.to_owned(),
             rows,
         });
-        if sidebar_docked {
-            paste(&mut frame, &pane, column + shift, content_top);
-        } else if sidebar_overlay {
-            // The translucent scrim (session-frame.tsx:385-397): v2
-            // composites `rgba(0,0,0,70)` OVER the route content, so
-            // typing under the overlay keeps its echo (the registered
-            // "no echo under the scrim" seam, ROADMAP 2026-10-12).
-            // The text grid has no alpha channel: blend each covered
-            // cell's background toward black at 70/255 in place —
-            // glyphs (the composer's echo) survive underneath.
-            apply_scrim(&mut frame, 0, content_top, width, pane_height);
-            // D2.2: the floating pane pasted OVER the transcript rect
-            // after the region paste (today's z: pane > composer >
-            // transcript) — it registers as a seam frame overlay so
-            // the tree pixels cannot bury it (the pane's own solid
-            // tree stays scratch until the sidebar lane).
-            crate::components::chrome_solid::mount_frame_overlay(
-                "sidebar-pane",
-                origin_x,
-                content_top,
-                pane,
-            );
-        }
+        // D3.2: the pane rides the shared tree as the `surface-sidebar`
+        // family wrapper at the OLD paste site (docked: the right-edge
+        // pane rect; overlay: the full scrim rect with the pane as its
+        // right-aligned child and a `70/255` DimBg stamp, the ref's
+        // scrim-box shape — session-frame.tsx:385-397). No Frame comes
+        // back; the pixels land at render_app's composite seam. The
+        // pane's own opaque root covers its rect, so the old
+        // dim-then-paste net bytes hold (the stamp's keep-rect).
+        crate::components::sidebar_solid::sidebar_mount(
+            &view,
+            styles,
+            pane_height,
+            scroll,
+            origin_x,
+            content_top,
+            sidebar_overlay.then_some(width),
+        );
     } else {
         store.set_sidebar_onboarding_hits(None);
         store.set_sidebar_mcp_hits(crate::store::SidebarMcpHits::default());
@@ -974,6 +962,22 @@ pub fn render_session(
     frame
 }
 
+/// The headless seamed twin: [`render_session`] mounts every family
+/// into the shared tree, so a direct caller must run the ONE composite
+/// seam `render_app` runs before reading pixels. Integration harnesses
+/// use this instead of reaching into the crate-private compositor.
+#[must_use]
+pub fn render_session_composed(
+    store: &Store,
+    session_id: &str,
+    styles: &crate::theme::ThemeStyles,
+    size: (u16, u16),
+) -> Frame {
+    let mut frame = render_session(store, session_id, styles, size);
+    crate::components::chrome_solid::composite_chrome_tree(&mut frame);
+    frame
+}
+
 /// `clampSessionPaneWidth` (ui/layout.ts:22-26): the pane keeps the
 /// equal split when both minima cannot fit; `max(min(24, half),
 /// min(width, max(half, total − 44)))`.
@@ -982,10 +986,6 @@ fn clamp_session_pane_width(width: usize, total: usize) -> usize {
     width.min(half.max(total.saturating_sub(44))).max(24.min(half))
 }
 
-/// The manual-open scrim (session-frame.tsx:385-397): the whole frame
-/// area under the strip dims under the floating sidebar — v2 blends/// rgba(0,0,0,70) over the content; the text grid has no alpha, so
-/// the scrim paints opaque black (the dominant visual: a dark
-/// backdrop with the pane floating right).
 /// The row's markdown LINK runs (lane KM, auditA #9): every placed
 /// run carrying a `link` URL arms one tight rect — the run's own
 /// glyph extent on its line (`ui/link.tsx`'s `<text>` leaf; the
@@ -1114,27 +1114,6 @@ fn tool_cell_hit(
         x,
         width: end - x,
     })
-}
-
-/// The manual-open scrim's alpha blend (session-frame.tsx:385-397):
-/// every covered cell's background blends toward black at
-/// `70/255` — `rgba(0,0,0,70)` composited over the route content
-/// (glyphs keep their fg; only the veil's bg dimming applies, the
-/// opentui respectAlpha semantics for a bg-only overlay box).
-fn apply_scrim(frame: &mut Frame, x: usize, y: usize, width: usize, height: usize) {
-    const SCRIM_ALPHA: f64 = 70.0 / 255.0;
-    // The blend factors a bounded 0..=255 channel by a 0..1 alpha.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let dim = |channel: u8| (f64::from(channel) * (1.0 - SCRIM_ALPHA)).round() as u8;
-    for row in y..y.saturating_add(height).min(frame.height) {
-        for col in x..x.saturating_add(width).min(frame.width) {
-            if let Some(cell) = frame.cells.get_mut(row).and_then(|cells| cells.get_mut(col)) {
-                if let crate::render::CellColor::Rgb(r, g, b) = cell.bg {
-                    cell.bg = crate::render::CellColor::Rgb(dim(r), dim(g), dim(b));
-                }
-            }
-        }
-    }
 }
 
 /// The live sidebar's content (`routes/session/sidebar.tsx`): the

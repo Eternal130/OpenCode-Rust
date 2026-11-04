@@ -5,7 +5,7 @@
 //! imperative paste geometry).
 //!
 //! The console is a full-width strip at row 0 (the family's lowest
-//! seat, skeleton index 5): the bordered box with the " console "
+//! seat, skeleton index 6): the bordered box with the " console "
 //! title riding the top border. The test boots the real app loop at
 //! 120×30, opens the console through the command palette
 //! (`app.console`), then SIGWINCH-resizes the PTY to 60×20 and
