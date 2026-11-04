@@ -20,7 +20,7 @@
 - **硬门**：goldens 零 diff 且 **PARITY_UPDATE 在 D2 全程不得触发**（需重钉=stop-and-escalate）；`mini_pty.rs` 4 测试 + mini-frames 金样全绿
 
 ### Phase D3 — 表面与功能族收敛（消费方拉动）
-which-key 面板全量（opentui-keymap addon 侧，layout/scroll/group/pending + 11 键位接通）→ terminal_pane→EmbeddedTerminalRenderable（**折叠 oc-tui 468 行 VT 引擎**，mechanism≠upstream/PTY 网格平价钉定，登记 ADR-0019）→ image 族迁入 opentui-rust（kitty/sixel/blocks protocol="auto"，oc-tui image/* 为种子）+ oc-tui 消费 ImageRenderable → diff_viewer solid 化（2308 行最大）→ tool_rows/marquee/masked_text/update/tab_pulse → 超集终扫（现有证据≈零）
+which-key 面板全量（ref 本地 feature plugin 侧，layout/scroll/group/pending + 11 键位接通）→ terminal_pane→EmbeddedTerminalRenderable（**折叠 oc-tui 468 行 VT 引擎**，mechanism≠upstream/PTY 网格平价钉定，登记 ADR-0019）→ image 族迁入 opentui-rust（kitty/sixel/blocks protocol="auto"，oc-tui image/* 为种子）+ oc-tui 消费 ImageRenderable → diff_viewer solid 化（2308 行最大）→ tool_rows/marquee/masked_text/update/tab_pulse → 超集终扫（现有证据≈零）
 
 ### Phase D4 — 收官
 ADR-0019 + G-211/G-13 勘注、矩阵 recount、全量门（双 profile+goldens+PTY）、磁盘清理、tombstone。

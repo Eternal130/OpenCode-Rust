@@ -551,10 +551,10 @@ G-18 ✅ / G-19 ✅(死校验残留) / G-20 ✅ / G-21 ✅ / G-22 ✅ / G-23 ✅
 - Ref：`session/runner/publish-llm-event.ts:562-572`（progress 先记录再发布）、:336,352-355。
 - 影响：live `session.tool.failed` 恒缺进度元数据；subagent 中止错误永远不带 `(sessionID: …)` 后缀（仅 stale 清算路径有）。易修：engine 的 ProgressFn 改走（或同时调用）publisher.progress。注意 G-74 只覆盖"发事件"半边，本条是"记录"半边。
 
-## G-83 ⚠️ which-key 面板：11 条绑定为死表
-- Rust：`oc-tui-core/src/keymap/table.rs:805-815` 注册 11 条 which-key 绑定；唯一"消费者"是 `oc-tui/components/command_palette.rs:3187-3197` 显式吞键无操作（注释自认 "registered-but-surfaceless"）。
-- Ref 背景：TUI 自身也无消费者——面板由 `@opentui/keymap` 库 `createDefaultOpenTuiKeymap` 提供（`context/keymap.tsx:13,66`）；Rust 自研 keymap 未复刻该 addon。
-- 影响：ctrl+alt+k 等 11 组键被静默吞掉、无帮助面板。决策项：要么补面板，要么删绑定并在文档声明取舍（与 G-29 同类）。
+## G-83 ✅ which-key 面板：11 条绑定全部接通（lane D3.1 全量化）
+- 取证：面板**不是** `@opentui/keymap` addon。ref 的面板是 TUI 本地 feature plugin `packages/tui/src/feature-plugins/system/which-key.tsx`（607 行，最后随 v1 plugin runtime 存在于 4a93972a78；06290907a9 删除文件但 `config/keybind.ts:290-300` 绑定保留）；`@opentui/keymap` 只导出 `ActiveKey` 数据面。
+- Rust：`oc-tui/components/which_key.rs` 全量移植——dock/overlay 布局、pending 预览、分组 tabs + prev/next、scroll/page/home/end、pending 模式全组展平、footer 提示；`oc-tui-core/src/keymap/table.rs:810-825` 的 11 条绑定全部真实派发（`command_palette.rs` 的 8 条面板命令不再 no-op）。
+- 验证：字段级 `app::which_key_tests` + 组件单测 + `tests/pty_which_key.rs`（真实 kitty CSI-u：ctrl+alt+k 固定根列表、ctrl+alt+shift+k 切 dock/overlay、ctrl+alt+right 切组、ctrl+x pending/escape）。
 
 ## G-84 ❌ alibaba-responses 专用适配器缺失
 - Ref：`packages/ai/src/protocols/alibaba-responses.ts`（96 行：`enable_thinking`/`previous_response_id`/`conversation` 注入、named tool_choice→`allowed_tools` 变换、`web_search`/`web_extractor`/`code_interpreter` 托管工具 onDone 还原）。
@@ -626,13 +626,13 @@ G-18 ✅ / G-19 ✅(死校验残留) / G-20 ✅ / G-21 ✅ / G-22 ✅ / G-23 ✅
 - **G-89 ✅（laneD，45c7358）**：webfetch 全流程（fetch+collect+convert）入 tokio timeout 预算，超时文案 "Request timed out"；reqwest client 超时改 +5s 兜底；非超时失败保留 url 文案。测试：stalled server 与 refused port 两分支。
 - **G-90 ✅（laneD，45c7358）**：patch formatter resync 读失败 → `fail("Failed to read {target}")`、sync 失败 → `fail("Failed to sync {target}")`；已删目标过滤出 resync 集合（patch.ts:256-258，全量跑撞出的回归同轮修复）。测试经 read-failing Files 包装。
 - **G-91 ✅（laneD，45c7358）**：response 事件经 per-interceptor-pair stash 回放 before-request 快照（url/method/headers/body）。测试：request hook 改写 URL 后 response hook 观察到整形后请求。
-- **G-83 ✅（laneF，fddac63，推荐方案=补面板）**：有界 which-key 面板——前缀键（如 `<leader>` ctrl+x）触发底部 overlay 列出后续键+表内标签（排序、12 行封顶，无 timeout/滚动面）；chord 完成/esc/未绑定续键关闭；`which-key.toggle`（ctrl+alt+k）真实派发根列表；其余 10 个 which-key.* 家族键维持 consumed no-op（有界端口不带面板 chrome，注释说明）。PTY 级验证：真实终端按 ctrl+x 断言标签渲染与关闭。
+- **G-83 ✅（laneF fddac63 有界面 → lane D3.1 全量化）**：取证裁定 ref 面板为 TUI 本地 feature plugin（非 keymap addon）；`oc-tui/components/which_key.rs` 按 607 行 ref 全量移植 layout/pending/group/scroll/page/home/end + 多列/分组/footer，11 条 `which-key.*` 绑定真实派发；PTY 用 kitty CSI-u 键序验证 layout 切换与 group 导航。
 - **G-87 ✅（laneG，72a6422）**：三子项逐一裁决——**Worktree.adopt 已实现**（`oc_schema::misc::worktree_adopt`：candidate 检查含 workspace 排除与显式 adopted 列表、ref 路径归一（`.`/`..` 折叠 + Windows 盘符大小写）、subpath 投影 + 6 单测）；event-manifest 索引**本已移植**（oc-server/event_manifest.rs + bus registry + drift 守卫，TODO 注明）；snapshot store types**文档化不移植**（ref 6 行 branded-ID 模块无 wire 消费者，实体 store 已在 oc-core/src/snapshot/）。
 - **G-92 ✅（laneG，72a6422，代码+文档双收口）**：三处私有 MIME 表收敛为 `oc_util::mime`（依赖方向核验：oc-util 零新依赖）；read.rs `.xml` 修正为 `application/xml`（原值对 npm mime-types 参照即漂移）；attachment 保留 ref 受限 allowlist 语义不变。glob brace/extglob 与 Windows cross-spawn/npm_execpath 以注释级"已知有界分歧"钉定（G-8/G-17 族）。
 - **meta-responses ✅（laneE，7cfcd4e，laneC 新发现同族项）**：`protocols/meta_responses.rs`（770 行忠实移植：native.meta web_search/image_generation 校验、signed-ID replay 变换（provider 执行的 image_generation 结果按 itemId 回放 raw item handle）、托管工具表、text-end annotations 合入 providerMetadata、completedItems 双键去重）+ `ProtocolFamily::MetaResponses` 路由（variant.rs 映射核对无需改）。
 
 ## 第八轮 burndown 判定
-G-79..G-92 全部 ✅（G-83 采用补面板方案；G-87 三子项实现/已移植/文档化各一；G-92 代码收敛+分歧注释）。现存未关闭项维持既有文档化决策：G-28（有界 TSX shim）、G-32（v1/legacy 不移植，G-87 子项已并注）、G-12/G-13/G-16/G-17/G-38/G-39/G-40 ℹ️。
+G-79..G-92 全部 ✅（G-83 面板全量；G-87 三子项实现/已移植/文档化各一；G-92 代码收敛+分歧注释）。现存未关闭项维持既有文档化决策：G-28（有界 TSX shim）、G-32（v1/legacy 不移植，G-87 子项已并注）、G-12/G-13/G-16/G-17/G-38/G-39/G-40 ℹ️。
 
 ---
 

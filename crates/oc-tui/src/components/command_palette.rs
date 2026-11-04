@@ -3284,36 +3284,73 @@ impl CommandDispatcher for StoreDispatcher {
             }
             // The registered-but-surfaceless families (v2 parity: the
             // keymap consumes the stroke; no component answers):
-            // which-key panel (the keymap addon's surface), scrap/
-            // debug panel, service restart, verbosity
-            // model, the integrations dialog actions.
+            // scrap/debug panel, service restart, verbosity model,
+            // the integrations dialog actions.
             "app.debug"
             | "app.scrap"
             | "service.restart"
             | "dialog.integration.rename"
             | "dialog.integration.delete" => Dispatch::Handled,
-            // G-83 — the which-key panel now EXISTS (the bounded
-            // port of the keymap addon's surface): `which-key.toggle`
-            // opens/dismisses the root listing (the app's sync
-            // materializes the entries from `active_keys`). The
-            // remaining family members (layout/pending preview/
-            // group/scroll/page/home/end) drive panel chrome the
-            // bounded port does not carry — they stay consumed
-            // no-ops so the strokes never leak into the composer.
+            // The full which-key family (which-key.tsx:520-593): the
+            // three toggles always dispatch; the eight panel
+            // commands act only while the panel is visible (the
+            // reference's priority-1000 layer is `enabled: visible()`
+            // and binds group commands only outside pending mode).
             "which-key.toggle" => {
                 store.which_key_toggle();
                 Dispatch::Handled
             }
-            "which-key.layout.toggle"
-            | "which-key.pending.toggle"
-            | "which-key.group.previous"
-            | "which-key.group.next"
-            | "which-key.scroll.up"
+            "which-key.layout.toggle" => {
+                store.which_key_toggle_layout();
+                Dispatch::Handled
+            }
+            "which-key.pending.toggle" => {
+                store.which_key_toggle_pending_preview();
+                Dispatch::Handled
+            }
+            "which-key.group.previous" | "which-key.group.next" => {
+                if let Some(view) = store.which_key() {
+                    if !view.pending_mode() {
+                        let groups = view.groups();
+                        if !groups.is_empty() {
+                            let current = view.current_group(&groups).unwrap_or(0);
+                            let delta = if command == "which-key.group.previous" {
+                                groups.len() - 1
+                            } else {
+                                1
+                            };
+                            let next = (current + delta) % groups.len();
+                            store.set_which_key_group(Some(groups[next].label.clone()));
+                            store.set_which_key_offset(0);
+                        }
+                    }
+                }
+                Dispatch::Handled
+            }
+            "which-key.scroll.up"
             | "which-key.scroll.down"
             | "which-key.page.up"
             | "which-key.page.down"
             | "which-key.home"
-            | "which-key.end" => Dispatch::Handled,
+            | "which-key.end" => {
+                if let Some(view) = store.which_key() {
+                    let (width, height) = store.terminal_size();
+                    let (width, height) = (usize::from(width), usize::from(height));
+                    let geometry = view.geometry(width, height);
+                    let offset = view.offset;
+                    let target = match command {
+                        "which-key.scroll.up" => offset.saturating_sub(geometry.columns),
+                        "which-key.scroll.down" => offset.saturating_add(geometry.columns),
+                        "which-key.page.up" => offset.saturating_sub(geometry.page_size),
+                        "which-key.page.down" => offset.saturating_add(geometry.page_size),
+                        "which-key.home" => 0,
+                        "which-key.end" => geometry.max_offset,
+                        _ => offset,
+                    };
+                    store.set_which_key_offset(view.clamp_offset(target, width, height));
+                }
+                Dispatch::Handled
+            }
             "app.exit" => {
                 store.clear_dialogs();
                 // The app shell exits the run loop (wave 3); the replay
