@@ -1618,13 +1618,14 @@ pub struct Store {
     /// gate — off unless the config turns it on (v2's falsy default,
     /// config/index.tsx:164 + session/index.tsx:2459).
     image_preview: Cell<bool>,
-    /// The terminal's graphics protocol (R-07): detected once at boot
-    /// from the environment (see `crate::image`).
-    graphics_protocol: Cell<crate::image::GraphicsProtocol>,
+    /// The terminal capability snapshot (R-07/D3-4b): the opentui probe
+    /// owns detection (kitty graphics + DA1 sixel + cell-px resolution);
+    /// `protocol="auto"` resolves against it in `image_view`.
+    graphics_capabilities: std::cell::RefCell<Option<opentui_core::renderer::TerminalCapabilities>>,
     /// The last frame's image placements (R-07): `render_session`
     /// writes them; the run loop emits them after the cell grid draw
     /// and takes them for delta tracking.
-    frame_images: std::cell::RefCell<Vec<crate::image::ImagePlacement>>,
+    frame_images: std::cell::RefCell<Vec<crate::image_view::ImagePlacement>>,
     /// Disclosure state per session (v2 `groupExpanded` /
     /// `setGroupExpanded` on the session-tabs context,
     /// `session-tabs.tsx:387-391`): the set of EXPANDED group row
@@ -3856,7 +3857,7 @@ impl Store {
             redraw_requests,
             _redraw_effect: redraw_effect,
             image_preview: Cell::new(false),
-            graphics_protocol: Cell::new(crate::image::GraphicsProtocol::None),
+            graphics_capabilities: std::cell::RefCell::new(None),
             frame_images: std::cell::RefCell::new(Vec::new()),
             expanded_groups: std::cell::RefCell::new(HashMap::new()),
             collapsed_thoughts: std::cell::RefCell::new(HashMap::new()),
@@ -4629,26 +4630,29 @@ impl Store {
         self.image_preview.get()
     }
 
-    /// The terminal's graphics protocol (R-07): detected once at boot
-    /// (the run loop owns the env probe; tests inject).
-    pub fn set_graphics_protocol(&self, protocol: crate::image::GraphicsProtocol) {
-        self.graphics_protocol.set(protocol);
+    /// The terminal capability snapshot (R-07/D3-4b): the run loop's
+    /// capability event writes it; tests inject `None`/fixtures.
+    pub fn set_graphics_capabilities(
+        &self,
+        capabilities: Option<opentui_core::renderer::TerminalCapabilities>,
+    ) {
+        *self.graphics_capabilities.borrow_mut() = capabilities;
     }
 
     #[must_use]
-    pub fn graphics_protocol(&self) -> crate::image::GraphicsProtocol {
-        self.graphics_protocol.get()
+    pub fn graphics_capabilities(&self) -> Option<opentui_core::renderer::TerminalCapabilities> {
+        self.graphics_capabilities.borrow().clone()
     }
 
     /// The last frame's image placements (R-07): `render_session`
     /// writes the transcript's overlay set; the run loop reads it
     /// after drawing the cell grid (and replaces it next frame).
-    pub fn set_frame_images(&self, images: Vec<crate::image::ImagePlacement>) {
+    pub fn set_frame_images(&self, images: Vec<crate::image_view::ImagePlacement>) {
         *self.frame_images.borrow_mut() = images;
     }
 
     #[must_use]
-    pub fn frame_images(&self) -> Vec<crate::image::ImagePlacement> {
+    pub fn frame_images(&self) -> Vec<crate::image_view::ImagePlacement> {
         self.frame_images.borrow().clone()
     }
 

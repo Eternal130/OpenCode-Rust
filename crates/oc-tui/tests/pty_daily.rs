@@ -886,6 +886,62 @@ fn image_preview() {
     );
 }
 
+/// D3-4b: `<leader>i` over a kitty-graphics-capable terminal — the
+/// capability probe's kitty reply flips `protocol="auto"` to kitty and
+/// the dialog preview emits opentui's transmit (`a=t,f=100`) +
+/// placement (`a=p`) APCs. The no-capability twin above stays on the
+/// blocks cell raster (the existing `image_preview` test).
+#[test]
+fn image_preview_kitty_emits_transmit_and_placement() {
+    run_daily_test(
+        "lane-d3-4b-image-kitty",
+        120,
+        30,
+        |_fake, sandbox| {
+            let png: &[u8] = include_bytes!("fixtures/r07-tiny-4x2.png");
+            std::fs::write(sandbox.join("tiny.png"), png).expect("seed the png");
+        },
+        |h| {
+            // The terminal's capability answers: kitty graphics (`_G`
+            // query reply), kitty keyboard + DA1, and the cell-pixel
+            // resolution (`CSI 4;height;width t`).
+            h.write(b"\x1b_Gi=31337;OK\x1b\\\x1b[?0u\x1b[?62;22c\x1b[4;480;800t");
+            boot_to_session(h, b"Alpha")?;
+            let sandbox = std::env::var("OPENCODE_TEST_HOME").expect("the sandbox env");
+            let pasted = format!("{sandbox}/tiny.png");
+            h.write(b"\x1b[200~");
+            h.write(pasted.as_bytes());
+            h.write(b"\x1b[201~");
+            wait_grid(
+                h,
+                |g| (0..g.rows).any(|row| g.row_text(row).contains("[Image 1]")),
+                Duration::from_secs(8),
+            )?;
+            let from = h.raw_len();
+            h.write(b"\x18i");
+            wait_grid(
+                h,
+                |g| (0..g.rows).any(|row| g.row_text(row).contains("Image 1 of 1")),
+                Duration::from_secs(8),
+            )?;
+            // The kitty transmit + placement bytes after the preview
+            // render (opentui ImageFrameEmitter).
+            assert!(
+                h.wait_for_after(b"\x1b_Ga=t,f=100", from, Duration::from_secs(8)),
+                "kitty transmit APC: {:?}",
+                String::from_utf8_lossy(&h.raw_mirror()[from.min(h.raw_len())..])
+            );
+            assert!(
+                h.wait_for_after(b"\x1b_Ga=p,", from, Duration::from_secs(8)),
+                "kitty placement APC: {:?}",
+                String::from_utf8_lossy(&h.raw_mirror()[from.min(h.raw_len())..])
+            );
+            h.write(b"\x1b");
+            Ok(())
+        },
+    );
+}
+
 // ---------------------------------------------------------------------------
 // lane-tui2 (wave 7): TUI-5 / TUI-6 / TUI-7 — the open-menu and
 // session-list dialog proofs on the real app loop.

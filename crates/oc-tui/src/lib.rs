@@ -49,10 +49,10 @@ mod grid_emitter_tests;
 pub mod grid_emitter;
 pub mod golden_tests;
 pub mod home_golden_tests;
-pub mod image;
-pub mod image_blocks;
+pub mod image_codec;
 #[cfg(test)]
 mod image_display_tests;
+pub mod image_view;
 pub mod input_term;
 pub mod keymap;
 pub mod layout;
