@@ -5,17 +5,22 @@
 //!   (`[type u8][cols u16be][rows u16be][payload]`, input protocol 1
 //!   — `handlers/persistent_pty.rs` §3; the ref's `interactionFrame`,
 //!   terminal-pane.tsx:395-403);
-//! * [`encode_stroke`] — one keyboard stroke as terminal input bytes
-//!   (the embedded terminal's `handleKeyPress` arm the ref delegates
-//!   to opentui; the port encodes the same xterm sequences);
 //! * [`TerminalPaneState`] — the stream machine: the snapshot
 //!   checkpoint fast-forward, the WS output queue held until the VT
 //!   grid matches the canonical size, the resize checkpoints
 //!   (`ESC c` + base64 checkpoint, terminal-pane.tsx:109-118), the
-//!   pending-input backlog until `replay_complete`, and the failure
-//!   surface (`Terminal connection failed` / `disconnected`);
-//! * [`render_terminal_pane`] — the VT grid as a paint [`Frame`]
-//!   (cell chars + colors + bold/underline/reverse attributes).
+//!   pending-input backlog until `replay_complete`, the failure
+//!   surface (`Terminal connection failed` / `disconnected`), and the
+//!   key encoder (delegated to opentui's ghostty port);
+//! * [`render_terminal_pane`] — the VT grid as a paint [`Frame`].
+//!
+//! Lane D3-3b: the VT face (grid, scrollback, selection, key/paste
+//! encoders, OSC 4/10/11 palette injection) now lives in opentui's
+//! [`EmbeddedTerminalState`]/[`Engine`] (lane D3-3a); oc-tui keeps
+//! only the attach/stream machine and the paint conversion. The
+//! theme-palette computation stays here (it consumes `oc-theme`
+//! tokens) but its bytes are applied through the opentui engine API,
+//! not fed back into the PTY.
 //!
 //! The pane mounts in the session frame's right pane
 //! (`components/session.rs` — v2's `rightPane() === "terminal"`),
@@ -23,6 +28,13 @@
 
 use crate::keymap::KeyStroke;
 use crate::render::{Cell, CellColor, Frame};
+use opentui_core::buffer::OptimizedBuffer;
+use opentui_core::embedded_terminal::Engine;
+use opentui_core::events::KeyEvent;
+use opentui_core::parse_keypress::{KeyEventType, KeySource, ParsedKey};
+use opentui_core::renderables::embedded_terminal::{
+    EmbeddedTerminalOptions, EmbeddedTerminalState,
+};
 
 // -- G-141: the theme palette injection (terminal-pane.tsx:338-385) ---------
 
@@ -62,12 +74,6 @@ fn hue_distance(first: f64, second: f64) -> f64 {
     difference.min(360.0 - difference)
 }
 
-/// `hex` (terminal-pane.tsx:385-389): `#rrggbb`.
-fn hex(color: oc_theme::color::Rgba) -> String {
-    let [red, green, blue, _] = color.to_ints();
-    format!("#{red:02x}{green:02x}{blue:02x}")
-}
-
 /// `terminalHue` (terminal-pane.tsx:370-379): the hue scale whose
 /// 200-step sits nearest the target OkLCh hue (chroma ≥ 0.03, alpha
 /// > 0), else the accent 200 fallback; matches beyond 30° also fall
@@ -96,20 +102,47 @@ fn terminal_hue(
     }
 }
 
-/// G-141 — `terminalPalette` (terminal-pane.tsx:338-366): the active
-/// theme's 16-color palette + fg/bg as OSC 4/10/11 bytes. The ref
-/// writes these into the pane's terminal so the embedded VT renders
-/// SGR colors through the theme; the port sends them INTO the PTY on
-/// attach (the shell and its programs pick the palette up), a
-/// documented bounded deviation — the port's pane paints cell colors
-/// from the checkpoint grid, so the OSC bytes ride the input stream
-/// instead of the local VT parser.
+/// G-141 — the active theme's 16-color palette + fg/bg, the structured
+/// form of the ref's `terminalPalette` (terminal-pane.tsx:338-366).
+///
+/// Lane D3-3b: the old byte builder (`terminal_palette()`) retired —
+/// the values now go through opentui's engine API
+/// ([`Engine::set_palette_color`] + the OSC 10/11 receive path) so the
+/// pane's own VT grid resolves SGR colors through the theme, exactly
+/// like the ref's embedded terminal. The PTY no longer receives these
+/// bytes (the shell's own palette stays its own).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TerminalThemePalette {
+    /// 16 ANSI slots in index order.
+    palette: Vec<(u8, u8, u8)>,
+    foreground: (u8, u8, u8),
+    background: (u8, u8, u8),
+}
+
+impl TerminalThemePalette {
+    /// Apply to one opentui engine: OSC 4 via `set_palette_color`,
+    /// OSC 10/11 through the engine's `write` parser (the D3-3a fold).
+    fn apply(&self, engine: &mut Engine) {
+        for (index, color) in self.palette.iter().enumerate() {
+            if let Ok(index) = u8::try_from(index) {
+                engine.set_palette_color(index, *color);
+            }
+        }
+        let (r, g, b) = self.foreground;
+        engine.write(format!("\x1b]10;#{r:02x}{g:02x}{b:02x}\x1b\\").as_bytes());
+        let (r, g, b) = self.background;
+        engine.write(format!("\x1b]11;#{r:02x}{g:02x}{b:02x}\x1b\\").as_bytes());
+    }
+}
+
+/// `terminalPalette` (terminal-pane.tsx:338-366): the active theme's
+/// 16-color palette + fg/bg as structured RGB.
 #[must_use]
-pub fn terminal_palette(
+pub fn terminal_theme_palette(
     theme: &oc_theme::types::ResolvedThemeTokens,
     mode: oc_theme::types::Mode,
     background: oc_theme::color::Rgba,
-) -> Vec<u8> {
+) -> TerminalThemePalette {
     let dark = mode == oc_theme::types::Mode::Dark;
     let black = if dark {
         theme.semantic(oc_theme::types::SemanticHue::Neutral).s800
@@ -147,13 +180,15 @@ pub fn terminal_palette(
         colors.push(theme.decrease(*color, 1.0));
     }
     colors.push(bright_white);
-    let mut bytes = Vec::new();
-    for (index, color) in colors.iter().enumerate() {
-        bytes.extend_from_slice(format!("\x1b]4;{index};{}\x1b\\", hex(*color)).as_bytes());
+    let rgb = |color: oc_theme::color::Rgba| {
+        let [red, green, blue, _] = color.to_ints();
+        (red, green, blue)
+    };
+    TerminalThemePalette {
+        palette: colors.into_iter().map(rgb).collect(),
+        foreground: rgb(theme.text.base),
+        background: rgb(background),
     }
-    bytes.extend_from_slice(format!("\x1b]10;{}\x1b\\", hex(theme.text.base)).as_bytes());
-    bytes.extend_from_slice(format!("\x1b]11;{}\x1b\\", hex(background)).as_bytes());
-    bytes
 }
 
 /// The input frame's HAS-INPUT flag value (kind 1 = input; kind 0 =
@@ -174,88 +209,69 @@ pub fn interaction_frame(kind: u8, cols: u16, rows: u16, data: &[u8]) -> Vec<u8>
     frame
 }
 
-/// One stroke as terminal input bytes (`None` = not representable —
-/// the caller drops the stroke). The xterm sequences a VT expects:
-/// printable text as UTF-8, `return`/`enter` as CR, backspace 0x7f,
-/// the arrows/home/end/page/delete family as SS3/CSI, F1-F4 as SS3,
-/// ctrl+letter as the 0x01-0x1a control range, alt as the ESC prefix.
-#[must_use]
-pub fn encode_stroke(stroke: &KeyStroke) -> Option<Vec<u8>> {
-    use std::io::Write as _;
-
-    let key = stroke.key.as_str();
-    // Ctrl+letter (and ctrl+@ .. ctrl+_) map onto the C0 range; the
-    // terminal side reads them raw.
-    if stroke.ctrl && !stroke.alt {
-        let byte = match key {
-            "@" | " " => 0x00,
-            "[" => 0x1b,
-            "\\" => 0x1c,
-            "]" => 0x1d,
-            "^" => 0x1e,
-            "_" => 0x1f,
-            letter if letter.len() == 1 => {
-                let lower = letter.to_ascii_lowercase();
-                let ch = lower.chars().next()?;
-                if ch.is_ascii_lowercase() {
-                    u8::try_from(ch as u32 - 'a' as u32 + 1).ok()?
-                } else if ch.is_ascii_digit() {
-                    // The historical digit controls (ctrl+2 = NUL …).
-                    match ch {
-                        '2' => 0x00,
-                        '3'..='8' => u8::try_from(ch as u32 - '0' as u32 + 0x1c - 2).ok()?,
-                        _ => return None,
-                    }
-                } else {
-                    return None;
+/// The legacy C0 arm (`encode_stroke` TUI-4): ctrl+letter and the
+/// punctuation/digit controls. Kept as the pre-D3-3b byte contract;
+/// opentui's kitty CSI-u path differs for `ctrl+[` and `ctrl+digit`,
+/// so those strokes stay on the explicit C0 map.
+fn legacy_ctrl_byte(key: &str) -> Option<u8> {
+    match key {
+        "@" | " " => Some(0x00),
+        "[" => Some(0x1b),
+        "\\" => Some(0x1c),
+        "]" => Some(0x1d),
+        "^" => Some(0x1e),
+        "_" => Some(0x1f),
+        letter if letter.len() == 1 => {
+            let lower = letter.to_ascii_lowercase();
+            let ch = lower.chars().next()?;
+            if ch.is_ascii_lowercase() {
+                u8::try_from(ch as u32 - 'a' as u32 + 1).ok()
+            } else if ch.is_ascii_digit() {
+                // The historical digit controls (ctrl+2 = NUL …).
+                match ch {
+                    '2' => Some(0x00),
+                    '3'..='8' => u8::try_from(ch as u32 - '0' as u32 + 0x1c - 2).ok(),
+                    _ => None,
                 }
+            } else {
+                None
             }
-            _ => return None,
-        };
-        return Some(vec![byte]);
-    }
-    let base: Vec<u8> = match key {
-        "return" | "enter" => b"\r".to_vec(),
-        "escape" => b"\x1b".to_vec(),
-        "tab" => b"\t".to_vec(),
-        "backspace" => b"\x7f".to_vec(),
-        "delete" => b"\x1b[3~".to_vec(),
-        "up" => b"\x1b[A".to_vec(),
-        "down" => b"\x1b[B".to_vec(),
-        "right" => b"\x1b[C".to_vec(),
-        "left" => b"\x1b[D".to_vec(),
-        "home" => b"\x1b[H".to_vec(),
-        "end" => b"\x1b[F".to_vec(),
-        "pageup" => b"\x1b[5~".to_vec(),
-        "pagedown" => b"\x1b[6~".to_vec(),
-        "insert" => b"\x1b[2~".to_vec(),
-        "f1" => b"\x1bOP".to_vec(),
-        "f2" => b"\x1bOQ".to_vec(),
-        "f3" => b"\x1bOR".to_vec(),
-        "f4" => b"\x1bOS".to_vec(),
-        "f5" => b"\x1b[15~".to_vec(),
-        "f6" => b"\x1b[17~".to_vec(),
-        "f7" => b"\x1b[18~".to_vec(),
-        "f8" => b"\x1b[19~".to_vec(),
-        "f9" => b"\x1b[20~".to_vec(),
-        "f10" => b"\x1b[21~".to_vec(),
-        "f11" => b"\x1b[23~".to_vec(),
-        "f12" => b"\x1b[24~".to_vec(),
-        // A single grapheme types as-is (shift folded into the char
-        // by the terminal input layer already).
-        single if single.chars().count() == 1 => {
-            let mut bytes = Vec::new();
-            write!(bytes, "{}", single.chars().next()?).ok()?;
-            bytes
         }
-        _ => return None,
-    };
-    if stroke.alt {
-        let mut prefixed = vec![0x1b];
-        prefixed.extend_from_slice(&base);
-        return Some(prefixed);
+        _ => None,
     }
-    Some(base)
+}
+
+/// The physical-key code for F1-F12 (`physicalKey` needs the CamelCase
+/// name; a bare `f5` name maps to `Unidentified`).
+fn function_key_code(key: &str) -> Option<String> {
+    let number: u8 = key.strip_prefix('f')?.parse().ok()?;
+    (1..=12).contains(&number).then(|| format!("F{number}"))
+}
+
+/// One [`KeyStroke`] as an opentui [`KeyEvent`] (the renderer's input
+/// shape; `sequence` carries printable text, named keys leave it
+/// empty so `textualKey` stays blank).
+fn key_event(stroke: &KeyStroke) -> KeyEvent {
+    let single = stroke.key.chars().count() == 1;
+    KeyEvent::new(ParsedKey {
+        name: stroke.key.clone(),
+        ctrl: stroke.ctrl,
+        meta: false,
+        shift: stroke.shift,
+        option: false,
+        sequence: if single { stroke.key.clone() } else { String::new() },
+        number: false,
+        raw: String::new(),
+        event_type: KeyEventType::Press,
+        source: KeySource::Raw,
+        code: function_key_code(&stroke.key),
+        super_key: None,
+        hyper: None,
+        caps_lock: None,
+        num_lock: None,
+        base_code: None,
+        repeated: None,
+    })
 }
 
 /// One queued stream item (the ref's `StreamItem` union).
@@ -266,9 +282,10 @@ enum StreamItem {
     Ready,
 }
 
-/// The pane's live state: the VT grid plus the attach stream machine.
+/// The pane's live state: the opentui VT engine plus the attach stream
+/// machine.
 pub struct TerminalPaneState {
-    parser: vt100::Parser,
+    terminal: EmbeddedTerminalState,
     /// The server's canonical size (set by `attached.info.size` and
     /// each `resized` frame; the grid only applies output while it
     /// MATCHES, terminal-pane.tsx:94).
@@ -294,10 +311,10 @@ impl TerminalPaneState {
     /// terminal-pane.tsx:175-182).
     #[must_use]
     pub fn from_snapshot(size: (u16, u16), checkpoint: &[u8]) -> Self {
-        let mut parser = vt100::Parser::new(size.1.max(1), size.0.max(1), 0);
-        parser.process(checkpoint);
+        let mut terminal = Self::fresh_terminal(size);
+        terminal.write(checkpoint);
         Self {
-            parser,
+            terminal,
             canonical: size,
             stream: Vec::new(),
             restored: false,
@@ -308,6 +325,51 @@ impl TerminalPaneState {
             sent_size: None,
             failure: None,
         }
+    }
+
+    /// A new engine at `size` with the staged theme palette applied.
+    fn fresh_terminal(size: (u16, u16)) -> EmbeddedTerminalState {
+        let mut terminal = EmbeddedTerminalState::new(&EmbeddedTerminalOptions {
+            cols: Some(size.0.max(1)),
+            rows: Some(size.1.max(1)),
+            max_scrollback: Some(0),
+            ..EmbeddedTerminalOptions::default()
+        });
+        if let Some(palette) = theme_palette() {
+            palette.apply(&mut terminal.engine);
+        }
+        terminal
+    }
+
+    /// Apply the active theme's palette to the pane's engine (the
+    /// store fans a theme change out to every mounted pane).
+    pub fn apply_theme(&mut self, palette: &TerminalThemePalette) {
+        palette.apply(&mut self.terminal.engine);
+    }
+
+    /// One stroke as terminal input bytes (`None` = not representable —
+    /// the caller drops the stroke). Delegates to opentui's ghostty
+    /// encoder (`Engine::encode_key`); the legacy C0 and alt-prefix
+    /// arms preserve the pre-D3-3b byte contract.
+    #[must_use]
+    pub fn encode_stroke(&self, stroke: &KeyStroke) -> Option<Vec<u8>> {
+        if stroke.ctrl && !stroke.alt {
+            return legacy_ctrl_byte(&stroke.key).map(|byte| vec![byte]);
+        }
+        if stroke.alt {
+            // The ghostty encoder's legacyAltPrefix is off in the port;
+            // the pane's contract prefixes ESC (and ignores ctrl).
+            let plain = KeyStroke {
+                alt: false,
+                ctrl: false,
+                ..stroke.clone()
+            };
+            let mut bytes = self.encode_stroke(&plain)?;
+            bytes.insert(0, 0x1b);
+            return Some(bytes);
+        }
+        let bytes = self.terminal.encode_key(&key_event(stroke));
+        (!bytes.is_empty()).then_some(bytes)
     }
 
     /// The failure surface text (the ref's two connection strings).
@@ -341,7 +403,7 @@ impl TerminalPaneState {
     /// controller and the size changed (`interact()`).
     pub fn resize_pane(&mut self, cols: u16, rows: u16) -> Option<Vec<u8>> {
         self.pane_size = (cols, rows);
-        self.parser.set_size(rows, cols);
+        self.terminal.engine.resize(cols.max(1), rows.max(1));
         self.interact()
     }
 
@@ -428,15 +490,21 @@ impl TerminalPaneState {
             match item {
                 StreamItem::Output(data) => {
                     self.stream.remove(0);
-                    self.parser.process(&data);
+                    self.terminal.write(&data);
                 }
                 StreamItem::Resize { cols, rows, checkpoint } => {
                     self.stream.remove(0);
                     self.canonical = (cols, rows);
-                    self.parser.set_size(rows, cols);
-                    if let Some(checkpoint) = checkpoint {
-                        self.parser.process(b"\x1bc");
-                        self.parser.process(&checkpoint);
+                    match checkpoint {
+                        // `ESC c` (RIS) resets the screen; opentui's
+                        // engine leaves RIS to the consumer, so a
+                        // checkpoint resize starts from a fresh engine.
+                        Some(checkpoint) => {
+                            let mut terminal = Self::fresh_terminal((cols, rows));
+                            terminal.write(&checkpoint);
+                            self.terminal = terminal;
+                        }
+                        None => self.terminal.engine.resize(cols.max(1), rows.max(1)),
                     }
                 }
                 StreamItem::Ready => {
@@ -450,6 +518,23 @@ impl TerminalPaneState {
             }
         }
     }
+}
+
+/// Map one opentui buffer color onto the paint cell.
+fn rgba_color(color: opentui_core::color::Rgba) -> CellColor {
+    if color.alpha() == 0 {
+        CellColor::Default
+    } else {
+        CellColor::Rgb(color.red(), color.green(), color.blue())
+    }
+}
+
+/// The composed cell's ECMA-48 attribute bits. INVERSE is consumed by
+/// the engine's compositor (it swaps fg/bg), so it is cleared here to
+/// avoid a second SGR-7 swap at emission.
+fn paint_attrs(attributes: u32) -> u16 {
+    let bits = (attributes & 0xFF) as u16;
+    bits & !crate::grid_emitter::text_attributes::INVERSE
 }
 
 /// The VT grid as a paint frame (the pane's whole box).
@@ -475,45 +560,23 @@ pub fn render_terminal_pane(state: &TerminalPaneState, width: u16, height: u16) 
         }
         return Frame { cells, width, height, clusters: None };
     }
-    let screen = state.parser.screen();
     // The embedded terminal paints at the box's left pad (1).
+    let mut buffer = OptimizedBuffer::new(width as u32, height as u32);
+    state.terminal.paint(&mut buffer, 0, 0);
     for (row, cells_row) in cells.iter_mut().enumerate().take(height) {
         for (col, slot) in cells_row.iter_mut().enumerate().take(width.saturating_sub(1)) {
-            let Some(cell) =
-                screen.cell(u16::try_from(row).unwrap_or(0), u16::try_from(col).unwrap_or(0))
-            else {
+            let Some(cell) = buffer.get(col as u32, row as u32) else {
                 continue;
             };
-            let ch = cell.contents().chars().next().unwrap_or(' ');
-            let fg = vt_color(cell.fgcolor(), false);
-            let bg = vt_color(cell.bgcolor(), true);
-            let mut attrs = 0u16;
-            if cell.bold() {
-                attrs |= 1;
-            }
-            if cell.underline() {
-                attrs |= 2;
-            }
-            if cell.inverse() {
-                attrs |= 4;
-            }
-            *slot = Cell { ch, attrs, fg, bg };
+            *slot = Cell {
+                ch: char::from_u32(cell.char).unwrap_or(' '),
+                attrs: paint_attrs(cell.attributes),
+                fg: rgba_color(cell.fg),
+                bg: rgba_color(cell.bg),
+            };
         }
     }
     Frame { cells, width, height, clusters: None }
-}
-
-/// Map the emulator's color onto the paint cell (default/256/RGB).
-fn vt_color(color: vt100::Color, background: bool) -> CellColor {
-    // SGR 10 default foreground/background distinction is not tracked
-    // by the emulator; the paint side treats both as the terminal
-    // default.
-    let _ = background;
-    match color {
-        vt100::Color::Default => CellColor::Default,
-        vt100::Color::Idx(index) => CellColor::Indexed(index),
-        vt100::Color::Rgb(r, g, b) => CellColor::Rgb(r, g, b),
-    }
 }
 
 #[cfg(test)]
@@ -534,21 +597,23 @@ mod tests {
         );
     }
 
-    /// The stroke encoder's xterm sequences.
+    /// The stroke encoder's xterm sequences (opentui engine delegation
+    /// with the legacy C0/alt arms).
     #[test]
     fn strokes_encode_to_terminal_bytes() {
-        assert_eq!(encode_stroke(&stroke("a")).as_deref(), Some(b"a".as_slice()));
-        assert_eq!(encode_stroke(&stroke("return")).as_deref(), Some(b"\r".as_slice()));
-        assert_eq!(encode_stroke(&stroke("backspace")).as_deref(), Some(b"\x7f".as_slice()));
-        assert_eq!(encode_stroke(&stroke("up")).as_deref(), Some(b"\x1b[A".as_slice()));
-        assert_eq!(encode_stroke(&stroke("f5")).as_deref(), Some(b"\x1b[15~".as_slice()));
+        let pane = TerminalPaneState::from_snapshot((80, 24), b"");
+        assert_eq!(pane.encode_stroke(&stroke("a")).as_deref(), Some(b"a".as_slice()));
+        assert_eq!(pane.encode_stroke(&stroke("return")).as_deref(), Some(b"\r".as_slice()));
+        assert_eq!(pane.encode_stroke(&stroke("backspace")).as_deref(), Some(b"\x7f".as_slice()));
+        assert_eq!(pane.encode_stroke(&stroke("up")).as_deref(), Some(b"\x1b[A".as_slice()));
+        assert_eq!(pane.encode_stroke(&stroke("f5")).as_deref(), Some(b"\x1b[15~".as_slice()));
         let mut ctrl_c = stroke("c");
         ctrl_c.ctrl = true;
-        assert_eq!(encode_stroke(&ctrl_c).as_deref(), Some(&[0x03][..]));
+        assert_eq!(pane.encode_stroke(&ctrl_c).as_deref(), Some(&[0x03][..]));
         let mut alt_a = stroke("a");
         alt_a.alt = true;
-        assert_eq!(encode_stroke(&alt_a).as_deref(), Some(b"\x1ba".as_slice()));
-        assert!(encode_stroke(&stroke("f13")).is_none());
+        assert_eq!(pane.encode_stroke(&alt_a).as_deref(), Some(b"\x1ba".as_slice()));
+        assert!(pane.encode_stroke(&stroke("f13")).is_none());
     }
 
     /// The stream machine: snapshot fast-forward, the ordered output
@@ -597,23 +662,48 @@ mod tests {
         assert_eq!(resize_frame.map(|frame| frame[0]), Some(FRAME_CONTROL), "a new size re-sends");
         assert!(pane.interact().is_none(), "the re-sent control is once per size");
     }
+
+    /// Theme injection rides the opentui engine: OSC 4 sets the ANSI
+    /// slot the grid resolves, OSC 10/11 set the pane's defaults, and
+    /// the composed frame carries the theme colors.
+    #[test]
+    fn theme_palette_injects_through_the_engine() {
+        let palette = TerminalThemePalette {
+            palette: vec![(1, 2, 3); 16],
+            foreground: (4, 5, 6),
+            background: (7, 8, 9),
+        };
+        let mut pane = TerminalPaneState::from_snapshot((20, 4), b"");
+        pane.apply_theme(&palette);
+        assert_eq!(pane.terminal.engine.palette_color(1), (1, 2, 3));
+        // SGR 31 (red) resolves through the injected palette slot 1.
+        pane.push_output(b"\x1b[31mR");
+        let frame = render_terminal_pane(&pane, 20, 4);
+        assert_eq!(frame.cell(0, 0).ch, 'R');
+        assert_eq!(frame.cell(0, 0).fg, CellColor::Rgb(1, 2, 3));
+        // OSC 11 painted the default background of a blank cell.
+        assert_eq!(frame.cell(2, 10).bg, CellColor::Rgb(7, 8, 9));
+        assert_eq!(frame.cell(2, 10).fg, CellColor::Rgb(4, 5, 6));
+    }
 }
 
 /// G-141 — the live palette snapshot (the loop refreshes it when the
-/// theme name/mode changes; `attach_terminal` injects it on attach).
+/// theme name/mode changes; new panes apply it on construction and the
+/// store fans it out to mounted panes).
 /// Bounded deviation: the ref recomputes inside the pane's createEffect
 /// on token changes (terminal-pane.tsx:157-160) — the port's attach
 /// task has no store access, so the loop-stage snapshot carries it.
-pub fn set_theme_palette(bytes: Vec<u8>) {
-    THEME_PALETTE.with_borrow_mut(|slot| *slot = bytes);
+pub fn set_theme_palette(palette: TerminalThemePalette) {
+    THEME_PALETTE.with_borrow_mut(|slot| *slot = Some(palette));
 }
 
 /// The staged palette (empty until the first theme resolves).
 #[must_use]
-pub fn theme_palette() -> Vec<u8> {
-    THEME_PALETTE.with_borrow(|slot| slot.clone())
+pub fn theme_palette() -> Option<TerminalThemePalette> {
+    THEME_PALETTE.with_borrow(Clone::clone)
 }
 
 thread_local! {
-    static THEME_PALETTE: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
+    static THEME_PALETTE: std::cell::RefCell<Option<TerminalThemePalette>> =
+        const { std::cell::RefCell::new(None) };
 }

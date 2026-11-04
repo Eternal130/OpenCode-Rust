@@ -5694,6 +5694,24 @@ impl Store {
         self.terminal_bump();
     }
 
+    /// Apply the active theme's palette to every mounted pane's opentui
+    /// engine (G-141; the attach no longer feeds OSC bytes into the
+    /// PTY).
+    pub fn terminal_pane_apply_theme(
+        &self,
+        palette: &crate::terminal_pane::TerminalThemePalette,
+    ) {
+        let mut panes = self.terminal_panes.borrow_mut();
+        if panes.is_empty() {
+            return;
+        }
+        for state in panes.values_mut() {
+            state.apply_theme(palette);
+        }
+        drop(panes);
+        self.terminal_bump();
+    }
+
     /// Drop a detached pane's state.
     pub fn terminal_pane_drop(&self, pty_id: &str) {
         self.terminal_panes.borrow_mut().remove(pty_id);
@@ -5708,11 +5726,13 @@ impl Store {
         if !self.terminal_focus_right.get() {
             return false;
         }
-        let Some(bytes) = crate::terminal_pane::encode_stroke(stroke) else { return false };
         let frames = {
             let mut panes = self.terminal_panes.borrow_mut();
             match panes.get_mut(&pty) {
-                Some(state) => state.push_input(&bytes),
+                Some(state) => match state.encode_stroke(stroke) {
+                    Some(bytes) => state.push_input(&bytes),
+                    None => Vec::new(),
+                },
                 None => Vec::new(),
             }
         };
