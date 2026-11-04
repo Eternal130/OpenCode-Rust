@@ -1673,10 +1673,10 @@ impl App {
         self.press("enter");
     }
 
-    /// One keypress (the replay/PTY entry). G-83: the which-key
-    /// panel syncs after EVERY stroke — including the early-return
-    /// intercepts (console copy, selection, mode exits) that clear
-    /// the pending sequence — so the overlay can never go stale.
+    /// One keypress (the replay/PTY entry). The which-key panel syncs
+    /// after EVERY stroke — including the early-return intercepts
+    /// (console copy, selection, mode exits) that clear the pending
+    /// sequence — so the panel can never go stale.
     pub fn press(&mut self, spec: &str) {
         self.press_inner(spec);
         self.sync_which_key();
@@ -1689,12 +1689,13 @@ impl App {
             self.exit_requested = true;
             return;
         }
-        // G-83 — the which-key root listing: escape closes the panel
-        // (the addon's dismiss; a pending-prefix panel closes through
-        // the keymap's own escape-clears sequence instead).
-        if self.store.which_key_root_open() && matches!(spec, "escape" | "esc") {
-            self.store.which_key_toggle();
-            self.keymap.clear_pending();
+        // The which-key family rides its own priority-1000 layer
+        // (which-key.tsx:312-357): while a chord is pending those
+        // strokes must navigate the panel instead of extending (and
+        // dropping) the chord. Resolve through the effective bindings
+        // so user overrides keep working.
+        if let Some(command) = self.which_key_command(spec) {
+            let _ = self.dispatcher.dispatch(&self.store, command, None);
             return;
         }
         // TUI-29 — the console's `copy-selection` binding
@@ -1827,57 +1828,136 @@ impl App {
         self.store.runtime.run_effects();
     }
 
-    /// G-83 — the which-key panel's sync: after every stroke, the
-    /// panel mirrors the keymap's pending sequence — a live prefix
-    /// shows its continuations (`active_keys`, the engine's
-    /// `getActiveKeys` surface), a completed/cancelled/dropped
-    /// sequence closes it, and `which-key.toggle`'s root listing
-    /// (no pending chord) lists the top-level bindings instead.
+    /// The which-key command a stroke resolves to (the eleven-id
+    /// family, user overrides included). The panel layer outranks the
+    /// pending-sequence extender, so these strokes never drop a chord.
+    fn which_key_command(&self, spec: &str) -> Option<&'static str> {
+        const COMMANDS: [&str; 11] = [
+            "which-key.toggle",
+            "which-key.layout.toggle",
+            "which-key.pending.toggle",
+            "which-key.group.previous",
+            "which-key.group.next",
+            "which-key.scroll.up",
+            "which-key.scroll.down",
+            "which-key.page.up",
+            "which-key.page.down",
+            "which-key.home",
+            "which-key.end",
+        ];
+        let stroke = KeyStroke::parse(spec)?;
+        COMMANDS.iter().copied().find(|command| self.stroke_matches_command(&stroke, command))
+    }
+
+    /// The which-key panel's sync (which-key.tsx:205-386): after every
+    /// stroke, the panel mirrors the keymap's pending sequence and the
+    /// store's layout/pinned/preview state. A live chord fills
+    /// `pendingMode` (all groups flattened); a pinned panel lists the
+    /// root bindings (`active_keys` — the engine's `getActiveKeys`);
+    /// hidden means neither. The offset resets on a pending-sequence
+    /// change and is clamped against the current geometry.
     fn sync_which_key(&mut self) {
-        use crate::components::which_key::WhichKeyView;
-        if let Some(prefix) = self.keymap.pending_display() {
-            let entries = self.which_key_entries();
-            self.store.set_which_key(Some(WhichKeyView { prefix: Some(prefix), entries }));
-        } else if self.store.which_key_root_open() {
-            let entries = self.which_key_entries();
-            self.store.set_which_key(Some(WhichKeyView { prefix: None, entries }));
-        } else {
-            self.store.set_which_key(None);
+        use crate::components::which_key::{WhichKeyLayout, WhichKeyView};
+        let pending = self.keymap.pending_display();
+        // The pending-sequence effect (which-key.tsx:373-379): any
+        // change drops the scroll offset; hiding also clears it.
+        if self.store.which_key_pending_seen() != pending {
+            self.store.set_which_key_pending_seen(pending.clone());
+            self.store.set_which_key_offset(0);
         }
+        let layout = self.store.which_key_layout();
+        let preview = self.store.which_key_pending_preview();
+        let pinned = self.store.which_key_pinned();
+        let visible =
+            pinned || (layout == WhichKeyLayout::Overlay && preview && pending.is_some());
+        if !visible {
+            self.store.set_which_key_offset(0);
+            self.store.set_which_key(None);
+            return;
+        }
+        let entries = self.which_key_entries();
+        let toggle_hint = self.keymap.bindings_for("which-key.toggle").into_iter().next();
+        let layout_hint =
+            self.keymap.bindings_for("which-key.layout.toggle").into_iter().next();
+        let mut view = WhichKeyView {
+            prefix: pending,
+            entries,
+            layout,
+            pending_preview: preview,
+            pinned,
+            offset: self.store.which_key_offset(),
+            active_group: self.store.which_key_group(),
+            toggle_hint: toggle_hint.unwrap_or_else(|| "which-key.toggle".to_owned()),
+            layout_hint: layout_hint
+                .unwrap_or_else(|| "which-key.layout.toggle".to_owned()),
+        };
+        // The active-group correction (which-key.tsx:359-371): a tab
+        // that vanished falls back to the first group and resets the
+        // offset; pending mode owns no tab.
+        if !view.pending_mode() {
+            let groups = view.groups();
+            let current = view
+                .active_group
+                .clone()
+                .filter(|label| groups.iter().any(|group| &group.label == label))
+                .or_else(|| groups.first().map(|group| group.label.clone()));
+            if self.store.which_key_group() != current {
+                self.store.set_which_key_group(current.clone());
+                self.store.set_which_key_offset(0);
+                view.active_group = current;
+                view.offset = 0;
+            }
+        }
+        let (width, height) = self.store.terminal_size();
+        let clamped =
+            view.clamp_offset(view.offset, usize::from(width), usize::from(height));
+        if clamped != view.offset {
+            self.store.set_which_key_offset(clamped);
+            view.offset = clamped;
+        }
+        self.store.set_which_key(Some(view));
     }
 
     /// The panel's rows from the keymap's reachable next keys: the
-    /// key's display + the table's label for the completion's
-    /// command (sorted by key, capped at the bounded row limit).
+    /// key display, the command's table label/group, and whether the
+    /// key continues a chord (which-key.tsx:104-146).
     fn which_key_entries(&mut self) -> Vec<crate::components::which_key::WhichKeyEntry> {
-        use crate::components::which_key::{WhichKeyEntry, WHICH_KEY_MAX_ENTRIES};
-        let mut entries: Vec<_> = self
-            .keymap
+        use crate::components::which_key::WhichKeyEntry;
+        self.keymap
             .active_keys()
             .into_iter()
             .map(|key| {
-                let label = key
-                    .command
-                    .as_deref()
-                    .and_then(|command| self.keymap.command_def(command))
-                    .map_or_else(
-                        || {
-                            // A pure prefix (no unambiguous command)
-                            // keeps the continuation marker.
-                            if key.continues {
-                                "…".to_owned()
-                            } else {
-                                "-".to_owned()
-                            }
-                        },
-                        |def| def.description.to_owned(),
-                    );
-                WhichKeyEntry { key: key.display, label }
+                let def = key.command.as_deref().and_then(|command| self.keymap.command_def(command));
+                let owned = key.command.as_deref().and_then(|command| {
+                    self.keymap
+                        .owned_commands()
+                        .iter()
+                        .find(|entry| entry.command == command)
+                });
+                let label = if let Some(def) = def {
+                    def.description.to_owned()
+                } else if let Some(owned) = owned {
+                    owned.description.clone()
+                } else if key.continues {
+                    format!("+{}", key.display)
+                } else {
+                    "Unknown".to_owned()
+                };
+                let group = if key.continues {
+                    "System".to_owned()
+                } else if let Some(def) = def {
+                    def.group.map_or_else(
+                        || "Unknown".to_owned(),
+                        |group| group.as_str().to_owned(),
+                    )
+                } else if owned.is_some() {
+                    "Plugin".to_owned()
+                } else {
+                    "Unknown".to_owned()
+                };
+                WhichKeyEntry { key: key.display, label, group, continues: key.continues }
             })
-            .collect();
-        entries.sort_by(|a, b| a.key.cmp(&b.key));
-        entries.truncate(WHICH_KEY_MAX_ENTRIES);
-        entries
+            .collect()
     }
 
     /// TUI-30 — the routed session's location failed to resolve (the
@@ -14256,79 +14336,191 @@ fn home_footer_chips_are_clickable() {
     );
 }
 
-/// G-83 — the which-key panel's field-level proofs (the live-PTY
-/// twin lives in tests/pty_lane_g83.rs).
+/// The which-key panel's field-level proofs (the live-PTY twin lives
+/// in tests/pty_which_key.rs). Every surface of the full port is
+/// exercised: pending mode, pinned root, layout, preview, group
+/// navigation and the six scroll commands.
 #[cfg(test)]
 mod which_key_tests {
     use super::App;
+    use crate::components::which_key::WhichKeyLayout;
 
-    /// A prefix stroke opens the panel listing the chord's
-    /// continuations with the table's labels, sorted by key.
-    #[test]
-    fn leader_prefix_opens_which_key_panel() {
+    fn session_app() -> App {
         let mut app = App::new((80, 24));
         app.store.open_tab("s1", Some("S".to_owned()));
+        app
+    }
+
+    /// A pending chord opens the panel in pending mode with every
+    /// reachable key (no row cap) and its table label/group.
+    #[test]
+    fn leader_prefix_opens_the_full_pending_listing() {
+        let mut app = session_app();
         assert!(app.store.which_key().is_none(), "closed at rest");
         app.press("ctrl+x");
         let view = app.store.which_key().expect("the panel opens on the leader");
-        assert_eq!(view.prefix.as_deref(), Some("<leader>"), "{view:?}");
-        let keys: Vec<&str> = view.entries.iter().map(|e| e.key.as_str()).collect();
-        // The bounded surface caps the sorted listing (digits sort
-        // first); the in-cap rows carry the table's own labels.
-        assert!(keys.contains(&"a"), "the <leader>a continuation lists: {keys:?}");
-        let a = view.entries.iter().find(|e| e.key == "a").expect("a entry");
-        assert_eq!(a.label, "List agents", "the table's label rides the row");
-        assert_eq!(view.entries.len(), crate::components::which_key::WHICH_KEY_MAX_ENTRIES);
-        assert!(
-            view.entries.windows(2).all(|w| w[0].key <= w[1].key),
-            "the rows are sorted by key: {:?}",
-            view.entries
-        );
-        // The frame actually paints the panel (bottom overlay).
+        assert!(view.pending_mode(), "{view:?}");
+        assert_eq!(view.prefix.as_deref(), Some("<leader>"));
+        assert!(view.entries.len() > 12, "the old 12-row cap is gone: {}", view.entries.len());
+        let a = view.entries.iter().find(|entry| entry.key == "a").expect("a entry");
+        assert_eq!(a.label, "List agents");
+        assert_eq!(a.group, "Agent");
+        assert!(view.groups().iter().any(|group| group.label == "System"));
         let frame = app.frame_text();
-        assert!(frame.contains("<leader>"), "the prefix rides the border: {frame}");
+        assert!(frame.contains("Agent"), "the group headers paint: {frame}");
         assert!(frame.contains("List agents"), "{frame}");
     }
 
-    /// Chord completion, escape and an unbound continuation each
-    /// dismiss the panel.
+    /// Chord completion, escape and an unbound continuation each drop
+    /// the pending sequence and close the preview.
     #[test]
-    fn which_key_panel_dismisses_on_completion_escape_and_unbound() {
-        // Completion: <leader>n opens the session list dialog and the
-        // panel closes with the pending sequence.
-        let mut app = App::new((80, 24));
-        app.store.open_tab("s1", Some("S".to_owned()));
+    fn pending_panel_closes_on_completion_escape_and_unbound() {
+        let mut app = session_app();
         app.press("ctrl+x");
         assert!(app.store.which_key().is_some());
         app.press("n");
-        assert!(app.store.which_key().is_none(), "completion closes the panel");
-        // Escape: the keymap's escape-clears cancels the chord.
+        assert!(app.store.which_key().is_none(), "completion closes the preview");
         app.press("ctrl+x");
         assert!(app.store.which_key().is_some());
         app.press("escape");
-        assert!(app.store.which_key().is_none(), "escape closes the panel");
-        // An unbound continuation drops the pending sequence (and the
-        // panel with it).
+        assert!(app.store.which_key().is_none(), "escape clears the pending chord");
         app.press("ctrl+x");
         assert!(app.store.which_key().is_some());
         app.press("z");
-        assert!(app.store.which_key().is_none(), "an unbound key closes the panel");
+        assert!(app.store.which_key().is_none(), "an unbound key drops the chord");
     }
 
-    /// `which-key.toggle` (ctrl+alt+k) opens the ROOT listing; escape
-    /// dismisses it.
+    /// `which-key.toggle` pins the root listing; a second toggle
+    /// closes it. Escape does NOT dismiss the pinned panel (the
+    /// reference panel binds no escape command).
     #[test]
-    fn which_key_toggle_opens_root_listing() {
-        let mut app = App::new((80, 24));
-        app.store.open_tab("s1", Some("S".to_owned()));
+    fn toggle_pins_the_root_listing_until_toggled_off() {
+        let mut app = session_app();
         app.press("ctrl+alt+k");
         let view = app.store.which_key().expect("the root listing opens");
-        assert!(view.prefix.is_none(), "no chord pending at the root: {view:?}");
+        assert!(view.pinned);
+        assert!(!view.pending_mode());
+        assert!(view.prefix.is_none());
         assert!(!view.entries.is_empty(), "the root lists top-level keys");
-        let frame = app.frame_text();
-        assert!(frame.contains("which-key"), "the root title rides the border: {frame}");
+        assert!(view.groups().len() > 1, "the root spans categories: {:?}", view.groups());
         app.press("escape");
-        assert!(app.store.which_key().is_none(), "escape dismisses the root listing");
+        assert!(app.store.which_key().is_some(), "escape leaves the pinned panel");
+        app.press("ctrl+alt+k");
+        assert!(app.store.which_key().is_none(), "the toggle closes it");
+    }
+
+    /// `which-key.layout.toggle` flips dock <-> overlay regardless of
+    /// visibility; a docked panel shrinks the route.
+    #[test]
+    fn layout_toggle_switches_dock_and_overlay() {
+        let mut app = session_app();
+        app.press("ctrl+alt+k");
+        assert_eq!(app.store.which_key_layout(), WhichKeyLayout::Overlay);
+        app.press("ctrl+alt+shift+k");
+        assert_eq!(app.store.which_key_layout(), WhichKeyLayout::Dock);
+        assert_eq!(app.store.which_key().expect("still pinned").layout, WhichKeyLayout::Dock);
+        let frame = app.frame_text();
+        assert!(frame.contains("overlay ctrl+alt+shift+k"), "the footer names the next layout: {frame}");
+        app.press("ctrl+alt+shift+k");
+        assert_eq!(app.store.which_key_layout(), WhichKeyLayout::Overlay);
+    }
+
+    /// `which-key.pending.toggle` gates the overlay auto-preview; dock
+    /// mode never auto-shows (which-key.tsx:212-216).
+    #[test]
+    fn pending_preview_toggle_gates_the_overlay_and_dock_ignores_it() {
+        let mut app = session_app();
+        app.press("ctrl+alt+shift+p");
+        app.press("ctrl+x");
+        assert!(app.store.which_key().is_none(), "preview off: the chord shows no panel");
+        app.press("escape");
+        app.press("ctrl+alt+shift+p");
+        app.press("ctrl+x");
+        assert!(app.store.which_key().is_some(), "preview on: the chord shows the panel");
+        app.press("escape");
+        app.store.which_key_toggle_layout(); // dock
+        app.press("ctrl+x");
+        assert!(app.store.which_key().is_none(), "dock never auto-previews");
+        // Pinned dock still shows; a pending chord flips it into
+        // pending mode.
+        app.press("ctrl+alt+k");
+        assert!(app.store.which_key().is_some());
+        app.press("ctrl+x");
+        assert!(app.store.which_key().expect("pinned").pending_mode());
+    }
+
+    /// `which-key.group.previous/next` cycles the tab (wrapping) and
+    /// resets the offset; pending mode has no tabs (no-op).
+    #[test]
+    fn group_navigation_cycles_the_tabs() {
+        let mut app = session_app();
+        app.press("ctrl+alt+k");
+        let first = app.store.which_key().expect("root").active_group.expect("a selected tab");
+        app.press("ctrl+alt+right");
+        let second = app.store.which_key().expect("root").active_group.expect("a tab");
+        assert_ne!(first, second, "group.next moves the tab");
+        app.press("ctrl+alt+]");
+        let third = app.store.which_key().expect("root").active_group.expect("a tab");
+        assert_ne!(second, third, "the alternative binding moves too");
+        app.press("ctrl+alt+left");
+        assert_eq!(app.store.which_key().expect("root").active_group.as_deref(), Some(second.as_str()));
+        app.press("ctrl+alt+[");
+        assert_eq!(app.store.which_key().expect("root").active_group.as_deref(), Some(first.as_str()));
+        // Pending mode: the group commands are not bound.
+        app.press("ctrl+x");
+        let before = app.store.which_key().expect("pending").active_group.clone();
+        app.press("ctrl+alt+right");
+        assert_eq!(app.store.which_key().expect("pending").active_group, before);
+    }
+
+    /// The six scroll commands move the offset: column step, full
+    /// page, home and end (which-key.tsx:565-593).
+    #[test]
+    fn scroll_page_home_and_end_move_the_offset() {
+        let mut app = session_app();
+        app.press("ctrl+x");
+        let first = app.store.which_key().expect("pending");
+        let geometry = first.geometry(80, 24);
+        assert!(geometry.max_offset > geometry.page_size, "the pending listing pages: {geometry:?}");
+        app.press("ctrl+alt+down");
+        let after_down = app.store.which_key().expect("pending").offset;
+        assert_eq!(after_down, geometry.columns, "one column per scroll step");
+        app.press("ctrl+alt+up");
+        assert_eq!(app.store.which_key().expect("pending").offset, 0);
+        app.press("ctrl+alt+pagedown");
+        assert_eq!(app.store.which_key().expect("pending").offset, geometry.page_size);
+        app.press("ctrl+alt+pageup");
+        assert_eq!(app.store.which_key().expect("pending").offset, 0);
+        app.press("ctrl+alt+end");
+        assert_eq!(app.store.which_key().expect("pending").offset, geometry.max_offset);
+        app.press("ctrl+alt+home");
+        assert_eq!(app.store.which_key().expect("pending").offset, 0);
+        // The named-key aliases share the same commands.
+        app.press("ctrl+alt+n");
+        assert_eq!(app.store.which_key().expect("pending").offset, geometry.columns);
+        app.press("ctrl+alt+p");
+        assert_eq!(app.store.which_key().expect("pending").offset, 0);
+    }
+
+    /// None of the eight panel commands act while the panel is hidden
+    /// (the reference layer is `enabled: visible()`).
+    #[test]
+    fn panel_commands_are_inert_while_hidden() {
+        let mut app = session_app();
+        for spec in [
+            "ctrl+alt+left",
+            "ctrl+alt+right",
+            "ctrl+alt+up",
+            "ctrl+alt+down",
+            "ctrl+alt+pageup",
+            "ctrl+alt+pagedown",
+            "ctrl+alt+home",
+            "ctrl+alt+end",
+        ] {
+            app.press(spec);
+            assert!(app.store.which_key().is_none(), "{spec} must not open the panel");
+            assert_eq!(app.store.which_key_offset(), 0, "{spec} must not scroll");
+        }
     }
 }
 

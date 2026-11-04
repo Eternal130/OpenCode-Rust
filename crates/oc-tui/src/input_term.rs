@@ -125,14 +125,27 @@ pub fn opentui_key_to_spec(key: &ParsedKey) -> Option<String> {
             }
             return Some(if key.shift { "ctrl+shift+tab" } else { "ctrl+tab" }.to_owned());
         }
-        // Only the Char family carries through the ctrl branch
-        // (crossterm's CONTROL arm drops ctrl+<non-char> bindings).
-        let ch = key_char(name)?;
-        return Some(if alt {
-            format!("ctrl+alt+{}", ch.to_ascii_lowercase())
-        } else {
-            format!("ctrl+{}", ch.to_ascii_lowercase())
-        });
+        // The Char family carries through the ctrl branch; the
+        // ctrl+alt family ALSO carries the named keys the which-key
+        // panel binds (ctrl+alt+arrows / page / home / end — the
+        // ref's `config/keybind.ts` table). Plain ctrl+<non-char>
+        // still drops (crossterm parity).
+        if let Some(ch) = key_char(name) {
+            if alt {
+                let shift = if key.shift { "shift+" } else { "" };
+                return Some(format!("ctrl+alt+{shift}{}", ch.to_ascii_lowercase()));
+            }
+            return Some(format!("ctrl+{}", ch.to_ascii_lowercase()));
+        }
+        if alt
+            && matches!(
+                name,
+                "up" | "down" | "left" | "right" | "home" | "end" | "pageup" | "pagedown"
+            )
+        {
+            return Some(format!("ctrl+alt+{name}"));
+        }
+        return None;
     }
     if key.meta {
         return match key_char(name) {
@@ -505,6 +518,12 @@ mod tests {
         assert_eq!(key_spec(b"\x1bA"), Some("alt+a".to_owned()));
         // ctrl+alt
         assert_eq!(key_spec(b"\x1b\x01"), Some("ctrl+alt+a".to_owned()));
+        // ctrl+alt+shift letters (kitty CSI-u; modifiers 8 = shift+alt+ctrl)
+        assert_eq!(key_spec(b"\x1b[107;8u"), Some("ctrl+alt+shift+k".to_owned()));
+        // ctrl+alt named keys (the which-key navigation family)
+        assert_eq!(key_spec(b"\x1b[1;7D"), Some("ctrl+alt+left".to_owned()));
+        assert_eq!(key_spec(b"\x1b[5;7~"), Some("ctrl+alt+pageup".to_owned()));
+        assert_eq!(key_spec(b"\x1b[1;7H"), Some("ctrl+alt+home".to_owned()));
         // CSI R forms are cursor-position reports in crossterm
         // (swallowed, never a key) - parity is dropping them.
         assert_eq!(key_spec(b"\x1b[1;2R"), None);
