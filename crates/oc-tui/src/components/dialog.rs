@@ -1,6 +1,9 @@
 //! The dialog framework (`ui/dialog.tsx`): the portal-style overlay
-//! (backdrop + centered chrome box) painted on top of route content,
-//! the modal key layer (escape and ctrl+c both close — ctrl+c clears
+//! (backdrop + centered chrome box) seated on top of every mounted
+//! family (D2.2 dialogs lane: the box rides the shared tree under
+//! `surface-dialogs` at skeleton index 4; the backdrop scrim is a
+//! post-seam band walk around the box), the modal key layer (escape
+//! and ctrl+c both close — ctrl+c clears
 //! any filter/input text as part of the close, `ui/dialog.tsx:115-156`
 //! — printable keys feed the focused filter), and the per-kind content
 //! assembly (selects via [`crate::components::dialog_select`], the
@@ -795,20 +798,49 @@ pub fn handle_dialog_key(
 }
 
 /// Composite the top dialog over a rendered route frame (the portal
-/// overlay): backdrop, chrome box, content.
+/// overlay) — the HEADLESS twin (the golden/unit harness shape): a
+/// fresh hub, the dialog family's mount, the compositor seam, the
+/// scrim bands. The live path mounts inside `render_app`
+/// (`mount_dialog_layer` before the seam, `DialogLayerPaint::paint`
+/// after it) — same raster, same cell semantics, by construction.
 pub fn render_overlay(
     base: &mut Frame,
     store: &Store,
     theme: &crate::theme::ThemeState,
     terminal: (u16, u16),
 ) {
-    let Some(entry) = store.top_dialog() else {
-        store.set_dialog_frame_rect(None);
-        return;
+    crate::components::chrome_solid::reset_hub();
+    if let Some(layer) = mount_dialog_layer(store, theme, terminal) {
+        crate::components::chrome_solid::composite_chrome_tree(base);
+        layer.paint(base, store, theme, terminal);
+    }
+}
+
+/// The live dialog layer's mount phase (render_app calls this BEFORE
+/// the compositor seam so the `surface-dialogs` wrapper — skeleton
+/// index 4, above footer — seats in the same walk/flush batch). Does
+/// everything the old end-of-frame `render_overlay` did EXCEPT paint:
+/// the guards, the props/sidecar assembly, the mouse surface, the
+/// tree mount. Returns `None` (after clearing the store surfaces)
+/// when no dialog holds focus.
+#[allow(clippy::too_many_lines)] // the option-row kind table lives here
+pub fn mount_dialog_layer(
+    store: &Store,
+    theme: &crate::theme::ThemeState,
+    terminal: (u16, u16),
+) -> Option<DialogLayerPaint> {
+    let entry = match store.top_dialog() {
+        Some(entry) => entry,
+        // No dialog: no dismissal surface (the ask's rects must not
+        // outlive the view).
+        None => {
+            store.set_dialog_frame_rect(None);
+            return None;
+        }
     };
     if store.focus() != Focus::Dialog {
         store.set_dialog_frame_rect(None);
-        return;
+        return None;
     }
     let props = select_props_for_entry(&entry, store);
     let plugin = match &entry.kind {
@@ -826,49 +858,32 @@ pub fn render_overlay(
         btw_rows: btw_answer_rows(store, &entry.kind, terminal),
         btw_scroll: store.btw_scroll(),
     };
-    let (rect, option_rows, button_hits) = render_overlay_with_options(
-        base,
-        &entry,
-        &props,
-        plugin.as_ref(),
-        theme,
-        terminal,
-        &sidecar,
-    );
-    // TUI-10: paint the preview image's cells over the copied chrome
-    // (the tree reserves the area; the pixels are the bridge's job —
-    // blocks glyphs now, a graphics placement for kitty/sixel).
-    if matches!(entry.kind, DialogKind::ImagePreview) {
-        paint_preview_image(base, store, &entry, rect, theme, terminal);
-    }
-    // The backdrop's dismissal surface: mouseups outside this rect
-    // close the dialog (`ui/dialog.tsx:34-63`).
-    store.set_dialog_frame_rect(Some(rect));
-    store.set_dialog_option_rows(option_rows);
-    // The chrome buttons (auditA #6): the header close label + the
-    // Help `ok` pill ride the same frame.
-    store.set_dialog_button_hits(button_hits);
-}
-
-/// The overlay render's mouse surface bundle: the chrome rect, the
-/// option-row map (flat index → absolute screen row) and the chrome
-/// button hits (auditA #6).
-pub type OverlayMouseSurface =
-    ((usize, usize, usize, usize), Vec<Option<usize>>, Vec<crate::store::DialogButtonHit>);
-
-/// [`render_overlay_with`] plus the option-row map (the mouse surface).
-pub fn render_overlay_with_options(
-    base: &mut Frame,
-    entry: &DialogEntry,
-    props: &crate::components::dialog_select::SelectProps,
-    plugin: Option<&crate::store::PluginDialogContent>,
-    theme: &crate::theme::ThemeState,
-    terminal: (u16, u16),
-    sidecar: &crate::components::dialog_solid::DialogSidecar,
-) -> OverlayMouseSurface {
     // Select dialogs record their option rows (absolute screen rows,
     // flat-index order); static content records none.
-    let option_rows = if match &entry.kind {
+    let option_rows = if option_dialog_records_rows(&entry.kind, plugin.as_ref()) {
+        crate::components::dialog_select::option_dialog_rows(
+            &props,
+            &entry.select,
+            usize::from(terminal.1),
+        )
+    } else {
+        Vec::new()
+    };
+    let seat = crate::components::dialog_solid::mount_dialog_tree(
+        &entry, &props, plugin.as_ref(), theme, terminal, &sidecar,
+    );
+    let (_box_x, box_y, _, _) = seat.rect;
+    let option_rows =
+        option_rows.into_iter().map(|row| row.map(|content_row| box_y + 1 + content_row)).collect();
+    Some(DialogLayerPaint { entry, seat, option_rows })
+}
+
+/// Does this dialog kind record option rows (the mouse surface)?
+fn option_dialog_records_rows(
+    kind: &DialogKind,
+    plugin: Option<&crate::store::PluginDialogContent>,
+) -> bool {
+    match kind {
         DialogKind::Update
         | DialogKind::CommandPalette
         | DialogKind::QueuedPrompts
@@ -930,7 +945,71 @@ pub fn render_overlay_with_options(
         | DialogKind::BtwPrompt
         | DialogKind::BtwAnswer { .. }
         | DialogKind::Pair => false,
-    } {
+    }
+}
+
+/// The live dialog layer's paint phase: everything that must land on
+/// the frame AFTER the compositor seam — the backdrop scrim bands
+/// (they dim the composited family pixels below the box, exactly the
+/// old whole-frame dim minus the box the old paste then overwrote),
+/// the preview image's cells (the image bridge paints over the tree's
+/// reserved area), and the store's mouse surfaces.
+pub struct DialogLayerPaint {
+    entry: DialogEntry,
+    seat: crate::components::dialog_solid::DialogSeat,
+    option_rows: Vec<Option<usize>>,
+}
+
+impl DialogLayerPaint {
+    /// Paint this layer's frame-side pixels + store surfaces. `theme`
+    /// and `terminal` re-ride the mount call's values.
+    pub fn paint(
+        self,
+        base: &mut Frame,
+        store: &Store,
+        theme: &crate::theme::ThemeState,
+        terminal: (u16, u16),
+    ) {
+        let rect = self.seat.rect;
+        self.seat.scrim_around(base);
+        // TUI-10: paint the preview image's cells over the tree's
+        // reserved chrome area (blocks glyphs now, a graphics
+        // placement for kitty/sixel).
+        if matches!(self.entry.kind, DialogKind::ImagePreview) {
+            paint_preview_image(base, store, &self.entry, rect, theme, terminal);
+        }
+        // The backdrop's dismissal surface: mouseups outside this rect
+        // close the dialog (`ui/dialog.tsx:34-63`).
+        store.set_dialog_frame_rect(Some(rect));
+        store.set_dialog_option_rows(self.option_rows);
+        // The chrome buttons (auditA #6): the header close label + the
+        // Help `ok` pill ride the same frame.
+        store.set_dialog_button_hits(self.seat.button_hits);
+    }
+}
+
+/// The overlay render's mouse surface bundle: the chrome rect, the
+/// option-row map (flat index → absolute screen row) and the chrome
+/// button hits (auditA #6).
+pub type OverlayMouseSurface =
+    ((usize, usize, usize, usize), Vec<Option<usize>>, Vec<crate::store::DialogButtonHit>);
+
+/// [`render_overlay_with`] plus the option-row map (the mouse surface).
+/// The HEADLESS twin (the golden fixtures' shape): a fresh hub, the
+/// dialog family's mount, the compositor seam over `base`, the scrim
+/// bands — the bytes the old paste produced, by construction.
+pub fn render_overlay_with_options(
+    base: &mut Frame,
+    entry: &DialogEntry,
+    props: &crate::components::dialog_select::SelectProps,
+    plugin: Option<&crate::store::PluginDialogContent>,
+    theme: &crate::theme::ThemeState,
+    terminal: (u16, u16),
+    sidecar: &crate::components::dialog_solid::DialogSidecar,
+) -> OverlayMouseSurface {
+    // Select dialogs record their option rows (absolute screen rows,
+    // flat-index order); static content records none.
+    let option_rows = if option_dialog_records_rows(&entry.kind, plugin) {
         crate::components::dialog_select::option_dialog_rows(
             props,
             &entry.select,
@@ -939,13 +1018,18 @@ pub fn render_overlay_with_options(
     } else {
         Vec::new()
     };
-    let (rect, button_hits) = crate::components::dialog_solid::render_overlay_solid(
-        base, entry, props, plugin, theme, terminal, sidecar,
+    // D2.2 (dialog lane): the dialog rides the shared tree — mount,
+    // composite the seam over the base frame, then the scrim bands.
+    crate::components::chrome_solid::reset_hub();
+    let seat = crate::components::dialog_solid::mount_dialog_tree(
+        entry, props, plugin, theme, terminal, sidecar,
     );
-    let (_box_x, box_y, _, _) = rect;
+    crate::components::chrome_solid::composite_chrome_tree(base);
+    seat.scrim_around(base);
+    let (_box_x, box_y, _, _) = seat.rect;
     let option_rows =
         option_rows.into_iter().map(|row| row.map(|content_row| box_y + 1 + content_row)).collect();
-    (rect, option_rows, button_hits)
+    (seat.rect, option_rows, seat.button_hits)
 }
 
 /// The overlay compositor with explicit content props (the golden
@@ -963,13 +1047,10 @@ pub fn render_overlay_with(
     terminal: (u16, u16),
 ) -> (usize, usize, usize, usize) {
     let sidecar = crate::components::dialog_solid::DialogSidecar::default();
-    // Lane M2 (retired): the dialog family renders through its
-    // opentui-solid tree — the only renderer since the retirement
-    // lane deleted the hand-rolled walk.
-    crate::components::dialog_solid::render_overlay_solid(
-        base, entry, props, plugin, theme, terminal, &sidecar,
-    )
-    .0
+    // D2.2 (dialog lane): the dialog rides the shared tree — this is
+    // the headless twin (a fresh hub, the mount, the compositor seam
+    // over `base`, the scrim bands).
+    render_overlay_with_options(base, entry, props, plugin, theme, terminal, &sidecar).0
 }
 
 /// Backdrop composite: `out = src·α + dst·(1-α)` with `src = black`,
@@ -1274,8 +1355,18 @@ pub fn render_app(store: &Store, theme: &crate::theme::ThemeState, size: (u16, u
     // plan (e)): one full-buffer walk of the shared tree over the
     // frame — holes skip (unmigrated regions keep the hand-painted
     // pixels), GridEmitter stays the sole byte emitter.
+    // D2.2 (dialog lane): the dialog family rides the shared tree —
+    // mounted BEFORE the seam (skeleton index 4, above footer) so it
+    // seats in the same walk/flush batch; the backdrop scrim bands +
+    // the preview image cells + the mouse surfaces paint AFTER the
+    // seam (the scrim dims the composited family pixels around the
+    // box — the old whole-frame dim minus the box the paste then
+    // overwrote, byte-identical).
+    let dialog_layer = mount_dialog_layer(store, theme, size);
     crate::components::chrome_solid::composite_chrome_tree(&mut frame);
-    render_overlay(&mut frame, store, theme, size);
+    if let Some(layer) = dialog_layer {
+        layer.paint(&mut frame, store, theme, size);
+    }
     frame
 }
 

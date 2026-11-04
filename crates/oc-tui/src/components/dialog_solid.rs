@@ -34,21 +34,26 @@
 //!   (background, marker, title chunks, footer) are dynamic props
 //!   over per-key mapped views, so a selection move patches
 //!   `backgroundColor`/`content` in place without remounting rows.
-//! * *frame out*: the tree paints through a real
-//!   [`opentui_core::renderer::CliRenderer`] (taffy + raster) into an
-//!   `OptimizedBuffer` sized exactly `(box_width, 1 + content_rows)`
-//!   — the height PRE-COMPUTED by the same walk that sizes the old
-//!   path's row vector; the M1 cell-copy bridge (`frame_from_buffer`)
-//!   converts it to oc-tui cells composited onto the route frame at
-//!   the chrome box's rect. The mount is keyed on (family, width,
-//!   colors, height): height-changing frames (a filter shrinking the
-//!   window) rebuild, the hot frames (selection moves, scroll) patch.
-//! * *backdrop* (NEW-S2a): the scrim stays a bridge-side compositing
-//!   step, NOT a tree node — the opentui raster alpha-composites over
-//!   its OWN buffer, which does not contain the route content, so
-//!   v2's observable semantics (bg always dimmed; fg dimmed only on
-//!   glyph cells) is applied per cell over the base frame by the same
-//!   `blend_backdrop` the old path uses.
+//! * *frame out* (D2.2 dialogs lane): the tree rides the SHARED tree
+//!   hub — `mount_dialog_tree` seats the family's chrome element
+//!   under the `surface-dialogs` wrapper (skeleton index 4, above
+//!   footer) through `chrome_solid::mount_family_wrapper`; pixels
+//!   reach the frame through the single compositor seam inside
+//!   `render_app` (`composite_chrome_tree`), never a per-family
+//!   buffer copy. The mount is keyed on (family, width, colors,
+//!   height): height-changing frames (a filter shrinking the window)
+//!   rebuild the content subtree, the hot frames (selection moves,
+//!   scroll) patch in place; rect changes (resize) patch via
+//!   `set_prop`. The retired one-shot scratch renderer (a private
+//!   `SolidRenderer` + the `frame_from_buffer` cell copy) is gone.
+//! * *backdrop* (NEW-S2a, D2.2 reshaped): the scrim stays a
+//!   frame-side compositing step, NOT a tree node — the opentui
+//!   raster alpha-composites over its OWN buffer, which cannot see
+//!   the route frame beneath (and the seam's hole rule would erase
+//!   the glyphs underneath). `DialogSeat::scrim_around` dims every
+//!   composited frame cell OUTSIDE the box rect with the same
+//!   `blend_backdrop` the old path used (the box's own cells were
+//!   dimmed-then-overwritten — skipping them is byte-identical).
 //!
 //! **Divergence class (documented, matrix-bounded — option rows
 //! CLOSED by lane F15).** The old renderer once painted long text
@@ -77,7 +82,7 @@ use opentui_core::Rgba;
 use opentui_solid::builder::ForItemSource;
 use opentui_solid::element::{Children, DynChildren, ForItem, PropValue};
 use opentui_solid::reactive::Reactive;
-use opentui_solid::{box_, for_list, map, show, text, Element, Signal, SolidRenderer};
+use opentui_solid::{box_, for_list, map, show, text, Element, Signal};
 
 use crate::components::dialog_select::{
     content_rows, flat_indices, grouped, title_clip_end, truncated_title, viewport_height,
@@ -1973,15 +1978,14 @@ fn chrome_element(
         .into_element()
 }
 
-/// The mounted dialog: the inputs signal + a real headless
-/// [`SolidRenderer`]. Rebuilt whenever the mount key changes —
-/// family, box width, theme colors, or CONTENT HEIGHT (the buffer is
-/// sized `(box_width, 1 + content)`; a filter that shrinks the window
-/// re-keys the mount, while the hot frames — selection moves, scroll
-/// — keep a stable height and patch in place).
-struct SolidDialog {
+/// The mounted dialog tree's reactive state, kept across frames so
+/// content changes (a moving selection, typed filter, scroll) patch
+/// the content dyn-props in place (the M2 rule); a mount-key change
+/// (family, box width, colors, content height) rebuilds the wrapper's
+/// content subtree. The wrapper itself lives in the shared-tree hub
+/// (`chrome_solid::mount_family_wrapper`, D2.2 dialog lane).
+struct DialogTree {
     inputs: Signal<DialogInputs>,
-    renderer: SolidRenderer,
     key: (usize, usize, DialogColors, usize),
 }
 
@@ -1989,54 +1993,44 @@ fn mount_key(inputs: &DialogInputs) -> (usize, usize, DialogColors, usize) {
     (inputs.family as usize, inputs.box_width, inputs.colors, 1 + content_height(inputs))
 }
 
-impl SolidDialog {
-    fn new(inputs: &DialogInputs) -> Self {
-        let signal = Signal::new(inputs.clone());
-        let height = (1 + content_height(inputs)).max(1);
-        let renderer = opentui_solid::render(
-            opentui_core::renderer::CliRendererConfig {
-                width: inputs.box_width.max(1) as u32,
-                height: height as u32,
-                background_color: rgba(inputs.colors.surface),
-                ..opentui_core::renderer::CliRendererConfig::default()
-            },
-            chrome_element(&signal, inputs.family, inputs.box_width.max(1), height),
-        );
-        Self { inputs: signal, renderer, key: mount_key(inputs) }
-    }
-
-    /// Sync one frame's snapshot, flush the reconciler patches, and
-    /// render — the per-frame bridge cost.
-    fn paint(&mut self, inputs: DialogInputs) {
-        self.inputs.set(inputs);
-        self.renderer.flush();
-    }
-}
-
 thread_local! {
-    /// One dialog mount per thread-process — the app paints exactly
+    /// One dialog tree per thread-process — the app mounts exactly
     /// one overlay per frame; the harnesses reuse it across boots.
-    static DIALOG: RefCell<Option<SolidDialog>> = const { RefCell::new(None) };
+    static DIALOG: RefCell<Option<DialogTree>> = const { RefCell::new(None) };
 }
 
+/// The dialog family's seat under the shared tree's root (the
+/// skeleton table's index 4, above footer): today's overlay pasted
+/// AFTER `render_app`'s composite seam, so the wrapper sits above
+/// every mounted family by construction. Registered deviation (the
+/// footer lane's note, honored here): the family-6 overlays
+/// (console/which-key/toast/reconnecting) still paste after the seam
+/// and so paint OVER the dialog — today's paste order had the same
+/// inversion; the overlays lane (D2.3) reseats them above.
+const DIALOG_SKELETON_INDEX: usize = 4;
+
 // ---------------------------------------------------------------------------
-// the overlay compositor (the new-path twin of render_overlay_with)
+// the overlay mount (the tree seat; the retired paste's twin data)
 // ---------------------------------------------------------------------------
 
-/// Paint the top dialog's overlay through the opentui-solid path:
-/// backdrop (NEW-S2a), chrome geometry, the tree's buffer, cell copy
-/// — the twin of `crate::components::dialog::render_overlay_with`.
-/// Returns the chrome box's absolute rect (the outside-click
-/// dismissal surface).
-pub fn render_overlay_solid(
-    base: &mut Frame,
+/// Mount the top dialog's tree into the shared tree's `surface-dialogs`
+/// wrapper — the D2.2 dialog lane's ONLY live mount entry. No Frame
+/// comes back; pixels reach the emitted frame through
+/// [`crate::components::chrome_solid::composite_chrome_tree`], the
+/// single compositor seam inside `render_app`. The wrapper rect is the
+/// old paste site (`(box_x, box_y)` — the imperative geometry source;
+/// resize patches via `set_prop`); the content subtree rebuilds only
+/// when the mount key changes. The backdrop is NOT applied here — the
+/// scrim must dim the composited frame pixels (all families below),
+/// so it rides [`DialogSeat::scrim_around`] after the seam.
+pub fn mount_dialog_tree(
     entry: &DialogEntry,
     props: &SelectProps,
     plugin: Option<&PluginDialogContent>,
     theme: &ThemeState,
     terminal: (u16, u16),
     sidecar: &DialogSidecar,
-) -> ((usize, usize, usize, usize), Vec<crate::store::DialogButtonHit>) {
+) -> DialogSeat {
     let styles = DialogStyles::from_theme(theme);
     let colors = DialogColors::of(&styles);
     let width = usize::from(terminal.0);
@@ -2067,10 +2061,6 @@ pub fn render_overlay_solid(
         let top = (*y + 1).min(height.saturating_sub(menu_height));
         (menu_width, left, top, false)
     } else {
-        // Backdrop: alpha-composite black@150 over every covered
-        // cell — the raster's observable semantics, applied at the
-        // bridge (the solid renderer cannot see the route frame
-        // beneath).
         let box_width = entry.size.width().min(width.saturating_sub(2));
         let box_x = (width - box_width) / 2;
         // TUI-10: the image preview is CENTERED (`dialog.
@@ -2095,42 +2085,79 @@ pub fn render_overlay_solid(
         };
         (box_width, box_x, box_y, true)
     };
-    if dim_backdrop {
-        for row in &mut base.cells {
-            for cell in row {
-                crate::components::dialog::blend_backdrop(cell);
-            }
-        }
-    }
 
     let inputs = build_inputs(entry, props, plugin, colors, box_width, width, height, sidecar);
     let box_height = 1 + content_height(&inputs);
+    let key = mount_key(&inputs);
 
-    DIALOG.with_borrow_mut(|slot| {
-        let mount = slot.get_or_insert_with(|| SolidDialog::new(&inputs));
-        if mount.key != mount_key(&inputs) {
-            *mount = SolidDialog::new(&inputs);
-        }
-        mount.paint(inputs.clone());
-        let buffer = &mount.renderer.renderer.current_render_buffer;
-        let frame = crate::components::session_tabs_solid::frame_from_buffer(buffer, &[]);
-        for (row, cells) in frame.cells.iter().enumerate() {
-            let y = box_y + row;
-            if y >= height {
-                break;
-            }
-            for (x, cell) in cells.iter().enumerate().take(box_width) {
-                if let Some(target) = base.cells.get_mut(y).and_then(|line| line.get_mut(box_x + x))
-                {
-                    *target = *cell;
-                }
-            }
-        }
-    });
+    // Rebuild iff the mount key changed OR the wrapper left the tree
+    // (a hub reset between harness frames, a seam prune).
+    let rebuild = !crate::components::chrome_solid::family_wrapper_live("dialogs")
+        || DIALOG.with_borrow(|slot| !matches!(slot, Some(tree) if tree.key == key));
+    let (content, content_key) = if rebuild {
+        let signal = Signal::new(inputs.clone());
+        let element =
+            chrome_element(&signal, inputs.family, inputs.box_width.max(1), box_height.max(1));
+        DIALOG.with_borrow_mut(|slot| *slot = Some(DialogTree { inputs: signal, key }));
+        (Some(element), Some(format!("dialog-content@{key:?}")))
+    } else {
+        DIALOG.with_borrow(|slot| {
+            slot.as_ref().expect("checked above").inputs.set(inputs.clone());
+        });
+        (None, None)
+    };
+    crate::components::chrome_solid::mount_family_wrapper(
+        "dialogs",
+        DIALOG_SKELETON_INDEX,
+        box_x,
+        box_y,
+        box_width,
+        box_height,
+        content_key,
+        content,
+        &[],
+    );
 
     let rect =
         (box_x, box_y, box_width.min(width - box_x), box_height.min(height.saturating_sub(box_y)));
-    (rect, dialog_chrome_button_hits(entry, &inputs, rect))
+    DialogSeat { rect, dim_backdrop, button_hits: dialog_chrome_button_hits(entry, &inputs, rect) }
+}
+
+/// The mounted dialog's frame-side paint instructions: the chrome
+/// rect (the outside-click dismissal surface), whether the backdrop
+/// scrim must dim the composited frame around it (the old paste
+/// dimmed the whole frame then overwrote the box — skipping the
+/// box's own cells is byte-identical, the box paint is opaque), and
+/// the chrome's pointer targets.
+pub struct DialogSeat {
+    /// The chrome box's absolute, screen-clamped rect.
+    pub rect: (usize, usize, usize, usize),
+    /// Whether this dialog dims the backdrop (`TabMenu` does not).
+    pub dim_backdrop: bool,
+    /// The chrome buttons (auditA #6): the header close label + the
+    /// Help `ok` pill.
+    pub button_hits: Vec<crate::store::DialogButtonHit>,
+}
+
+impl DialogSeat {
+    /// The backdrop scrim as a band walk around the chrome rect:
+    /// `blend_backdrop` every frame cell OUTSIDE the rect (the
+    /// composited box pixels are opaque — dimming then overwriting
+    /// them was the old paste's no-op half).
+    pub fn scrim_around(&self, base: &mut Frame) {
+        if !self.dim_backdrop {
+            return;
+        }
+        let (box_x, box_y, box_width, box_height) = self.rect;
+        for (y, row) in base.cells.iter_mut().enumerate() {
+            let inside_row = y >= box_y && y < box_y + box_height;
+            for (x, cell) in row.iter_mut().enumerate() {
+                if !(inside_row && x >= box_x && x < box_x + box_width) {
+                    crate::components::dialog::blend_backdrop(cell);
+                }
+            }
+        }
+    }
 }
 
 /// The dialog chrome's pointer targets (auditA #6 — lane/if item 5):
@@ -2774,5 +2801,56 @@ fn cconfirm(label: &str) -> String {
         "confirm".to_owned()
     } else {
         label.to_owned()
+    }
+}
+
+#[cfg(test)]
+mod d22_tests {
+    use super::*;
+    use crate::store::{DialogEntry, DialogKind, DialogSize};
+
+    fn select_entry() -> DialogEntry {
+        DialogEntry {
+            kind: DialogKind::CommandPalette,
+            size: DialogSize::Medium,
+            select: crate::components::dialog_select::SelectState::default(),
+            value: String::new(),
+            theme_initial: None,
+        }
+    }
+
+    /// The seam seats the wrapper at skeleton index 4 and a frame
+    /// with no dialog prunes it (the old paste branch's else arm).
+    #[test]
+    fn dialog_wrapper_unmounts_when_no_dialog_mounts() {
+        crate::components::chrome_solid::reset_hub();
+        let theme = crate::theme::ThemeState::v2_dark();
+        let props = crate::components::dialog_select::SelectProps::new(
+            "Commands",
+            vec![crate::components::dialog_select::SelectOption {
+                title: "Switch theme".to_owned(),
+                value: "theme".to_owned(),
+                description: None,
+                category: None,
+                search_text: None,
+                search_footer: None,
+                footer: None,
+                title_width: None,
+                truncate_title: crate::components::dialog_select::TitleTruncate::default(),
+                shimmer: None,
+            }],
+        );
+        let sidecar = DialogSidecar::default();
+        let seat = mount_dialog_tree(&select_entry(), &props, None, &theme, (80, 24), &sidecar);
+        let mut frame = crate::components::chrome_solid::blank_frame(80, 24);
+        crate::components::chrome_solid::composite_chrome_tree(&mut frame);
+        assert!(frame.text_grid().join("\n").contains("Commands"));
+        seat.scrim_around(&mut frame);
+        // The next seam with NO dialog sync prunes the wrapper: the
+        // box pixels are gone from the composited frame.
+        let mut fresh = crate::components::chrome_solid::blank_frame(80, 24);
+        crate::components::chrome_solid::composite_chrome_tree(&mut fresh);
+        assert!(!fresh.text_grid().join("\n").contains("Commands"));
+        crate::components::chrome_solid::reset_hub();
     }
 }
