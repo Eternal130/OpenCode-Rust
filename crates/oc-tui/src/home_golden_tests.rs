@@ -76,7 +76,10 @@ fn assert_matches(id: &str, width: usize, frame: &Frame) {
 fn home_matches_text_grid_and_ansi_at_80() {
     let theme = ThemeState::v2_dark();
     let draft = PromptDraft::default();
-    let (frame, _, _) = render_home_view(&view(&draft), &theme, (80, 30));
+    let (mut frame, _, _) = render_home_view(&view(&draft), &theme, (80, 30), (0, 0));
+    // D2.2: the composer rides the shared tree — read the pixels back
+    // through the composite seam (render_app's twin).
+    crate::components::chrome_solid::composite_chrome_tree(&mut frame);
     assert_matches("home", 80, &frame);
 }
 
@@ -84,6 +87,7 @@ fn home_matches_text_grid_and_ansi_at_80() {
 fn home_matches_text_grid_and_ansi_at_160() {
     let theme = ThemeState::v2_dark();
     let draft = PromptDraft::default();
-    let (frame, _, _) = render_home_view(&view(&draft), &theme, (160, 30));
+    let (mut frame, _, _) = render_home_view(&view(&draft), &theme, (160, 30), (0, 0));
+    crate::components::chrome_solid::composite_chrome_tree(&mut frame);
     assert_matches("home", 160, &frame);
 }

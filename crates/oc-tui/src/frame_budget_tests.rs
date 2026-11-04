@@ -16,6 +16,17 @@ use crate::components::session_screen::{
 };
 use crate::theme::ThemeState;
 
+/// D2.2: `render_session` mounts the shared-tree families (the
+/// composer wrapper) — the headless twin of `render_app`'s composite
+/// seam, so the budgeted build includes the full frame cost (the
+/// retired per-surface renderer's mount + raster + copy class).
+fn session_seamed(store: &crate::store::Store, theme: &ThemeState) -> crate::render::Frame {
+    let mut frame =
+        crate::components::session::render_session(store, "s1", &theme.styles(), (200, 50));
+    crate::components::chrome_solid::composite_chrome_tree(&mut frame);
+    frame
+}
+
 /// The release budget is the product guard (asserted in release builds
 /// and in CI's release-profile run of this test). Debug builds only
 /// REPORT the number — they are 10-50× slower and would make the guard
@@ -167,7 +178,6 @@ fn frame_budget_session_with_tabs_strip() {
 }
 
 fn strip_frame_budget_body() {
-    use crate::components::session::render_session;
     use crate::reactive::Runtime;
     use crate::store::{Store, Unread};
 
@@ -183,7 +193,7 @@ fn strip_frame_budget_body() {
     for frame in 0..3 {
         let hover = if frame % 2 == 0 { Some("s4") } else { None };
         store.set_tab_hover(hover, false);
-        let _ = render_session(&store, "s1", &theme.styles(), (200, 50));
+        let _ = session_seamed(&store, &theme);
     }
     let mut worst = 0u128;
     let mut worst_micros = 0u128;
@@ -195,7 +205,7 @@ fn strip_frame_budget_body() {
         let hover = if frame % 2 == 0 { Some("s4") } else { Some("s7") };
         store.set_tab_hover(hover, false);
         let start = std::time::Instant::now();
-        let painted = render_session(&store, "s1", &theme.styles(), (200, 50));
+        let painted = session_seamed(&store, &theme);
         let elapsed = start.elapsed();
         worst = worst.max(elapsed.as_millis());
         worst_micros = worst_micros.max(elapsed.as_micros());
@@ -225,7 +235,6 @@ fn frame_budget_composer_frame() {
 #[allow(clippy::items_after_statements)] // a local metric helper below the warmup
 fn composer_frame_budget_body() {
     use crate::components::composer::ComposerKey;
-    use crate::components::session::render_session;
     use crate::reactive::Runtime;
     use crate::store::Store;
 
@@ -239,7 +248,10 @@ fn composer_frame_budget_body() {
     composer.handle_key(&ComposerKey::Char('h'));
     store.set_composer("s1", &composer);
 
-    let render = || render_session(&store, "s1", &theme.styles(), (200, 50));
+    // D2.2: the composer rides the shared tree — the measured build
+    // includes the seam (mount + flush + walk), the old per-surface
+    // renderer's cost class.
+    let render = || session_seamed(&store, &theme);
 
     // Warmup (mount + caches).
     for _ in 0..3 {
@@ -304,7 +316,6 @@ fn frame_budget_transcript() {
 
 #[allow(clippy::items_after_statements)] // a local metric helper below the warmup
 fn transcript_frame_budget_body() {
-    use crate::components::session::render_session;
     use crate::reactive::Runtime;
     use crate::store::Store;
     let theme = theme();
@@ -313,7 +324,10 @@ fn transcript_frame_budget_body() {
     store.navigate(crate::store::Route::session("s1".to_owned()));
     store.set_messages("s1", large_transcript(150));
 
-    let render = || render_session(&store, "s1", &theme.styles(), (200, 50));
+    // D2.2: the composer rides the shared tree — the measured build
+    // includes the seam (mount + flush + walk), the old per-surface
+    // renderer's cost class.
+    let render = || session_seamed(&store, &theme);
 
     // Warmup (mount + caches).
     for _ in 0..3 {
