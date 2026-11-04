@@ -1341,32 +1341,38 @@ pub fn render_app(store: &Store, theme: &crate::theme::ThemeState, size: (u16, u
     // D2.2: the bar rides the shared chrome tree (mounted, not
     // pasted).
     crate::components::devtools_solid::mount_devtools_bar_solid(store, &styles, (size.0, size.1));
-    // D2.2: the tree-riding state overlays (the StartupLoading pill,
-    // the migration widget) mount BEFORE the composite seam — the
-    // chrome family's single z slot sits under the dialog layer (the
-    // ruling attempt-2 trade; registered deviation).
+    let dialog_layer = mount_dialog_layer(store, theme, size);
+    // D2.2 overlays lane: the family's live surfaces (console /
+    // which-key / toast / pill / migration / reconnecting) mount
+    // AFTER the dialog family's own mount and BEFORE the seam —
+    // skeleton indices 5..10, above the dialogs family's 4 (today's
+    // paste order frozen; the pill/migration moved up from the
+    // chrome family to their frame-tail z).
     crate::components::overlays::mount_state_overlays(
         store,
         &styles,
         usize::from(size.0),
         usize::from(size.1),
     );
-    // The chrome family's SINGLE compositor seam (ruling attempt 2,
-    // plan (e)): one full-buffer walk of the shared tree over the
-    // frame — holes skip (unmigrated regions keep the hand-painted
-    // pixels), GridEmitter stays the sole byte emitter.
-    // D2.2 (dialog lane): the dialog family rides the shared tree —
-    // mounted BEFORE the seam (skeleton index 4, above footer) so it
-    // seats in the same walk/flush batch; the backdrop scrim bands +
-    // the preview image cells + the mouse surfaces paint AFTER the
-    // seam (the scrim dims the composited family pixels around the
-    // box — the old whole-frame dim minus the box the paste then
-    // overwrote, byte-identical).
-    let dialog_layer = mount_dialog_layer(store, theme, size);
+    crate::components::overlays::mount_overlays_family(
+        store,
+        &styles,
+        usize::from(size.0),
+        usize::from(size.1),
+    );
     crate::components::chrome_solid::composite_chrome_tree(&mut frame);
     if let Some(layer) = dialog_layer {
         layer.paint(&mut frame, store, theme, size);
     }
+    // The overlays family's post-seam paints (the toast rails keep
+    // the underlying — bands-dimmed — background; the reconnecting
+    // narrow-frame copy tail), exactly the old App::frame tail.
+    crate::components::overlays::paint_overlays_post_seam(
+        &mut frame,
+        store,
+        &styles,
+        usize::from(size.0),
+    );
     frame
 }
 
