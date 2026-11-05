@@ -13,7 +13,11 @@ ADR-0018（2026-11-03）在 ratatui/crossterm 移除时裁定：帧发射=oc-tui
 1. **渲染循环所有权归活 CliRenderer**（D2.1b，3615e28a）：泵的 draw 门经 `request_render`+`settle(1)` 调度；GridEmitter 暂为唯一字节发射器（阴影路径，字节逐不变由构造保证）。
 2. **单一共享树 + 全缓冲合成缝**（D2.2，Gate D0/D2 间 oracle attempt-2 裁决）：chrome/transcript/composer/footer/dialogs/overlays 六族以绝对定位 wrapper 子树上树（子序=z）；`paste_frame` 函数与全部分支已删除（全仓代码引用 0）；入 Frame 的唯一缝=一次全缓冲合成（洞跳过/缝上卸载/Caret/Swap/Transparent/DimBg stamps）。
 3. **mini 走真 split-footer 引擎**（D2.3，ae91ecb8）：`CliRenderer{SplitFooter, footer_height=4, CaptureStdout}`；`write_to_scrollback`→`flush_pending_split_commits`；DECSTBM 转录区；dock 底部锚定；insert_before 模拟已删。G-181 四缺口闭。
-4. **GridEmitter 退役不变量**：Frame 零消费者时退役（手绘面 diff_viewer/tool_rows/marquee/masked_text/update/tab_pulse 与 sidebar-pane 缝消费者仍在写 Frame——D3 逐面树内化后于 D4 退役并终裁本 ADR）。
+4. **GridEmitter 退役不变量**：Frame 零消费者时退役。D3-5 后 diff_viewer 族已入树；**D3-6 已清账手绘尾族**（证据见 `.slim/deepwork/tui-full-convergence/topic-d36-lane.md`）：
+   - `marquee`/`masked_text`/`tab_pulse` 是纯计算库（零 Frame 写入），消费方均为已入树的 solid 面；`marquee` 已并入其唯一消费家族（tabs，`session_tabs_solid/marquee.rs`），另两者因多族共享保留为顶层原语。
+   - `update` 是面模型：home banner 与 DialogUpdate 分别由 `home_solid`/dialog 族在树内绘制；唯一 Frame 生产者为 render-crash 兜底 `error_component_frame`（**合理保留**，非树面）。
+   - `tool_rows` 兼两职：`DEFAULT_FOREGROUND`/`fill_style` 是活面共享词汇；其 fixture/golden 帧绘制器无生产调用点，已文档声明为 fixture-only。
+   - 因此 D4 的 Frame 消费者 = 主 TUI 的单一合成缝/路由装配、mini split-footer 路径、`render/{frame,paint}` + `grid_emitter`，以及各 golden harness 双生（`mounted_surface_frame` 等）与 crash 兜底；逐项清单见 D3-6 报告。
 5. **footer 内容 API 开题**：mini dock 内容现仍经 GridEmitter 单一帧写口绘制——opentui 仅暴露 `footer_height` 几何预留、无 footer renderable API。D4 以 ref 证据裁决（ref 的 footer 内容若骑 opentui renderable 树，则此为契约级移植缺口，按家法补引用移植；不预置投机移植）。
 
 ## 偏差账（逐项携带；D2.3 已关两项）
@@ -28,3 +32,4 @@ ADR-0018（2026-11-03）在 ratatui/crossterm 移除时裁定：帧发射=oc-tui
 - 差分/门禁：`.test-logs/oc-tui-*-laneD22*/D23*`（双 profile 全绿、goldens 零 diff、PARITY_UPDATE 全程未触发）
 - 架构裁决：`.slim/deepwork/tui-full-convergence/topic-d22-arch-oracle.md`（attempt 2 权威）、`topic-gateD2-oracle.md`
 - 六族/mini 台账：`topic-d22-lanes.md`、`topic-d23-lane.md`
+- D3-6 尾族裁决 + Frame 消费者终局清单：`topic-d36-lane.md`
