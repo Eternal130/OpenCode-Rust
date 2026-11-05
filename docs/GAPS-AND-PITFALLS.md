@@ -555,6 +555,7 @@ G-18 ✅ / G-19 ✅(死校验残留) / G-20 ✅ / G-21 ✅ / G-22 ✅ / G-23 ✅
 - 取证：面板**不是** `@opentui/keymap` addon。ref 的面板是 TUI 本地 feature plugin `packages/tui/src/feature-plugins/system/which-key.tsx`（607 行，最后随 v1 plugin runtime 存在于 4a93972a78；06290907a9 删除文件但 `config/keybind.ts:290-300` 绑定保留）；`@opentui/keymap` 只导出 `ActiveKey` 数据面。
 - Rust：`oc-tui/components/which_key.rs` 全量移植——dock/overlay 布局、pending 预览、分组 tabs + prev/next、scroll/page/home/end、pending 模式全组展平、footer 提示；`oc-tui-core/src/keymap/table.rs:810-825` 的 11 条绑定全部真实派发（`command_palette.rs` 的 8 条面板命令不再 no-op）。
 - 验证：字段级 `app::which_key_tests` + 组件单测 + `tests/pty_which_key.rs`（真实 kitty CSI-u：ctrl+alt+k 固定根列表、ctrl+alt+shift+k 切 dock/overlay、ctrl+alt+right 切组、ctrl+x pending/escape）。
+- **勘注（D3-7b，超集移除令）**：面板按用户超集移除令整体删除（`components/which_key.rs`、store 状态面、app sync/优先拦截、palette dispatch 臂、`pty_which_key.rs`）；`keybind.ts:290-300` 的 11 条 `which-key.*` 注册行**保留**＝ref 同款死绑定态（注册、无消费者）；D3-1 的全量移植撤销。
 
 ## G-84 ❌ alibaba-responses 专用适配器缺失
 - Ref：`packages/ai/src/protocols/alibaba-responses.ts`（96 行：`enable_thinking`/`previous_response_id`/`conversation` 注入、named tool_choice→`allowed_tools` 变换、`web_search`/`web_extractor`/`code_interpreter` 托管工具 onDone 还原）。

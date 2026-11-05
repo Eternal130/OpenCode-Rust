@@ -122,6 +122,9 @@ impl TabsConfig {
                 )
             })
             .unwrap_or_else(|| "auto".to_owned());
+        // HERDR_ENV is ref parity (opencode-ref config/index.tsx:327:
+        // `tabsMode === "auto" && HERDR_ENV !== "1"` gates tabs off
+        // inside the herder harness) — kept, D3-7b A7 verdict.
         let herdr = std::env::var("HERDR_ENV").is_ok_and(|value| value == "1");
         let enabled = mode == "on" || (mode == "auto" && !herdr);
         let scope = match tabs.and_then(|object| object.get("scope")).and_then(Value::as_str) {

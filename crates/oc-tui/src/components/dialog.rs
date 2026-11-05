@@ -1260,17 +1260,9 @@ pub fn render_app(store: &Store, theme: &crate::theme::ThemeState, size: (u16, u
     let styles = theme.styles();
     let width = usize::from(size.0);
     let height = usize::from(size.1);
-    // The docked which-key panel shrinks the route (the reference's
-    // `app.bottom` slot sits below the flexGrow route). The overlay
-    // layout takes no space (position absolute, which-key.tsx:381-397).
-    let which_key = store.which_key();
-    let dock_rows = which_key
-        .as_ref()
-        .filter(|view| view.layout == crate::components::which_key::WhichKeyLayout::Dock)
-        .map_or(0, |_| crate::components::which_key::panel_height(height));
     let devtools = store.devtools_state();
-    let devtools_rows = usize::from(dock_rows > 0 && devtools.enabled && devtools.visible);
-    let content_height = height.saturating_sub(dock_rows + devtools_rows).max(1);
+    let devtools_rows = usize::from(devtools.enabled && devtools.visible);
+    let content_height = height.saturating_sub(devtools_rows).max(1);
     let route_size = (
         u16::try_from(width).unwrap_or(u16::MAX),
         u16::try_from(content_height).unwrap_or(u16::MAX),
@@ -1373,13 +1365,7 @@ pub fn render_app(store: &Store, theme: &crate::theme::ThemeState, size: (u16, u
         usize::from(size.0),
         usize::from(size.1),
     );
-    crate::components::overlays::mount_overlays_family(
-        store,
-        &styles,
-        width,
-        height,
-        (dock_rows > 0).then_some(content_height),
-    );
+    crate::components::overlays::mount_overlays_family(store, &styles, width, height);
     crate::components::chrome_solid::composite_chrome_tree(&mut frame);
     if let Some(layer) = dialog_layer {
         layer.paint(&mut frame, store, theme, size);
