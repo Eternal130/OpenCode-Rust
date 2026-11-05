@@ -7425,7 +7425,7 @@ pub type SessionTerminal =
 /// shared slot, so the editor/suspend terminal rebuilds swap in under
 /// it without any stale-session capture. `pump_output` is forwarded
 /// for API completeness but never driven in this lane — the
-/// renderer's SGR stream stays unpumped (GridEmitter is the one
+/// renderer's SGR stream stays unpumped (the opentui emitter is the one
 /// frame writer).
 struct RendererSessionHandle {
     session: Arc<std::sync::Mutex<SessionTerminal>>,
@@ -7657,7 +7657,7 @@ pub async fn run_with_size(
     // `request_render`, `settle(1)` paints exactly one frame per
     // pump-iteration batch — the pre-flip "one draw per loop
     // iteration" burst boundary, unchanged. The renderer's own SGR
-    // stream is never pumped: GridEmitter stays the session output's
+    // stream is never pumped: the opentui emitter stays the session output's
     // ONE frame writer (byte-for-byte unchanged is constructive —
     // same Frame, same emitter). Config mirrors the probe-era
     // assembly: `use_mouse: false` (mouse modes are armed by the
@@ -8207,7 +8207,7 @@ pub async fn run_with_size(
             // internal render (the first check_resize's resize→render,
             // `frame_id == 0`) appends one forced-full blank frame.
             // Everything after that baseline must be silence — the
-            // GridEmitter is the session output's one frame writer.
+            // The opentui emitter is the session output's one frame writer.
             let mut sgr_baseline: Option<usize> = None;
             // The first check_resize observation (None -> Some) is
             // baseline adoption, NOT a resize — emitting it would
@@ -8332,7 +8332,7 @@ pub async fn run_with_size(
                 // tolerated appends are the internal renders a real
                 // size change drives (`check_resize` → `resize` →
                 // `render`, whose bytes are never pumped; the
-                // GridEmitter is the session output's one frame
+                // The opentui emitter is the session output's one frame
                 // writer).
                 let sgr_len = renderer.sgr_stream().len();
                 match (sgr_baseline, resized.is_some()) {
@@ -9591,7 +9591,7 @@ pub async fn run_with_size(
         // D2.1b — the invalidation rides the LIVE CliRenderer's
         // scheduler (one request per pump iteration; `settle`'s
         // contract is exactly one frame per invalidation batch), so
-        // the frame build + GridEmitter emission below executes under
+        // the frame build + emission below executes under
         // the renderer's frame scheduling. The burst boundary is the
         // pre-flip one by construction: the same dirty predicate gates
         // the draw (renderer-internally armed frames — e.g. the
@@ -9678,7 +9678,7 @@ pub async fn run_with_size(
             // A blocker (permission ask / form) owns the footer —
             // the composer is not the focused surface, so its
             // caret must not blink through the mounted body. The
-            // position/show-hide rides the GridEmitter's cursor tail
+            // position/show-hide rides the emitter cursor's tail
             // (upstream `CursorOutputState::emit` timing: CUP + ?25h
             // inside the frame, ?25l on a no-op frame's hide).
             {

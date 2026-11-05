@@ -4,8 +4,8 @@
 //! onto opentui-core's terminal module (`Terminal<UnixTty, Stdout>` owns
 //! raw mode / alt screen / the setup+teardown bursts; the capability
 //! probe rides `probe_capabilities` + `CliRenderEvent`). The RENDER
-//! path went through the same migration in B3b: the GridEmitter
-//! (grid_emitter.rs) is the frame writer.
+//! path went through the same migration in B3b and D4.2: the
+//! opentui emitter (render/opentui_emit.rs) is the frame writer.
 //!
 //! # Input routing (see the lane inventory, commit 1)
 //!

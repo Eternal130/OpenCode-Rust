@@ -15,13 +15,15 @@
 //! `CursorOutputState`, and `bench_emit_frame_sgr` (the doc-hidden
 //! public seam over the internal writer) diffs current vs next and
 //! emits. The buffers then swap exactly like `render()`'s tail — the
-//! harness's proven technique (grid_emitter_tests.rs, lane B3b, green
-//! since B3b on the same mapping).
+//! harness's proven technique (the B3b grid-emitter differential
+//! gate, green since lane B3b on the same mapping; the harness now
+//! lives on as the pinned digests of opentui_emit_diff_tests).
 //!
-//! Byte parity with the retired [`crate::grid_emitter::GridEmitter`]
-//! is pinned by the differential harness (`opentui_emit_diff_tests`)
-//! on the golden replay corpus: the same frame sequences through both
-//! emitters must emit identical bytes INCLUDING the `?2026`
+//! Byte parity with the retired GridEmitter (deleted this lane) is
+//! pinned by the differential proof and the frozen digests of
+//! `opentui_emit_diff_tests` on the golden replay corpus: the same
+//! frame sequences through both
+//! emitters emitted identical bytes INCLUDING the `?2026`
 //! synchronized-update envelope and the oc-tui cursor policies (the
 //! per-frame visible-cursor assertion and the per-frame hide
 //! assertion), which this emitter layers on top of the upstream
@@ -57,7 +59,7 @@ fn transparent_black() -> Rgba {
 }
 
 /// A [`CellColor`] fg as an opentui color — the same-source mapping
-/// of the B3b differential gate (grid_emitter_tests `fg_rgba`):
+/// of the B3b grid-emitter differential gate (`fg_rgba`):
 /// Default → the default intent (`39`), Indexed → the indexed intent
 /// (`38;5;n`), Rgb → literal (`38;2;r;g;b`).
 fn fg_rgba(color: CellColor) -> Rgba {

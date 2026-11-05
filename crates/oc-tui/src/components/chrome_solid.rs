@@ -1264,7 +1264,7 @@ pub(crate) fn family_wrapper_live(family: &str) -> bool {
 /// surfaces, flush the shared tree (at most once per sync batch — the
 /// double-flush guard), then walk the shared buffer over the frame
 /// (the dialog box included — the dialogs family's wrapper seats
-/// above footer by child order). GridEmitter stays the sole byte
+/// above footer by child order). The opentui emitter stays the sole byte
 /// emitter; this seam only writes the in-house Frame cells.
 pub(crate) fn composite_chrome_tree(frame: &mut Frame) {
     let hub = HUB.with_borrow(|slot| slot.clone());

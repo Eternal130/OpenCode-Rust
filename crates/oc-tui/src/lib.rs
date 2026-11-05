@@ -45,8 +45,6 @@ pub mod farewell_solid;
 #[cfg(test)]
 mod frame_budget_tests;
 #[cfg(test)]
-mod grid_emitter_tests;
-pub mod grid_emitter;
 mod opentui_emit_diff_tests;
 pub mod golden_tests;
 pub mod home_golden_tests;
