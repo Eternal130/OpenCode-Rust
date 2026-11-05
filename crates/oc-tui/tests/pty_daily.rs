@@ -2571,6 +2571,77 @@ fn mini_split_footer_transcript_scroll_keeps_dock() {
     );
 }
 
+/// D4.1c — the footer domain rides the renderer's ROOT tree: the
+/// dock's frame bytes leave through the terminal pump exit wrapped in
+/// the `?2026` synchronized-update envelope (the retired GridEmitter
+/// dock channel wrote bare SGR), the footer content still paints in
+/// the bottom band, and a transcript write never flushes the band
+/// (no full-screen clear, no alternate screen).
+#[test]
+fn mini_split_footer_frame_rides_the_renderer_pump() {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(1_000_000, |since| since.as_millis() as u64);
+    let script = vec![
+        vt_harness::ScriptEvent {
+            delay_ms: 60,
+            body: format!(
+                r#"{{"id":"evt_pump_t","created":{now_ms},"type":"session.text.delta","data":{{"sessionID":"ses_alpha","messageID":"m_pump","partID":"p_pump","delta":"pump reply row"}}}}"#
+            ),
+        },
+        vt_harness::ScriptEvent {
+            delay_ms: 80,
+            body: format!(
+                r#"{{"id":"evt_pump_te","created":{now_ms},"type":"session.text.ended","data":{{"sessionID":"ses_alpha","messageID":"m_pump","partID":"p_pump"}}}}"#
+            ),
+        },
+        vt_harness::ScriptEvent {
+            delay_ms: 100,
+            body: format!(
+                r#"{{"id":"evt_pump_x","created":{now_ms},"type":"session.execution.succeeded","data":{{"sessionID":"ses_alpha"}}}}"#
+            ),
+        },
+    ];
+    run_mini_test(
+        "d41c-footer-pump",
+        80,
+        40,
+        |fake, _sandbox| fake.arm_script(script),
+        move |h| {
+            wait_text(h, "oc mini", Duration::from_secs(8))?;
+            // Submit a prompt: the scripted turn streams the reply.
+            h.write(b"give me a pump reply\r");
+            // The dock frame rode the renderer pump: the synchronized-
+            // update envelope opens before any footer band emission.
+            assert!(
+                h.wait_for(b"\x1b[?2026h", Duration::from_secs(5)),
+                "the footer frame left through the ?2026 pump exit"
+            );
+            // The band content painted through the tree: the dock rail
+            // + the composer statusline sit in the bottom rows.
+            let grid = wait_grid(
+                h,
+                |g| (g.rows - FOOTER_ROWS..g.rows)
+                    .any(|row| g.row_text(row).contains("ctrl+p menu")),
+                Duration::from_secs(5),
+            )?;
+            assert_eq!(
+                (0..grid.rows).filter(|&row| grid.row_text(row).starts_with('┃')).count(),
+                1,
+                "one dock rail row through the root-tree band"
+            );
+            // The transcript write landed and never flushed the band
+            // (no alternate screen, no full-screen clear).
+            wait_text(h, "pump reply row", Duration::from_secs(10))?;
+            assert!(
+                !h.raw_mirror().windows(4).any(|w| w == b"\x1b[?1049h"),
+                "mini never enters the alternate screen"
+            );
+            Ok(())
+        },
+    );
+}
+
 /// G-181② — `/new` runs the session factory: the composer's slash
 /// command creates the session server-side (`session.create` at the
 /// same location/agent) and the runtime swaps its targets, landing
