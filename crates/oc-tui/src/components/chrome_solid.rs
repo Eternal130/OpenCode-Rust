@@ -1283,6 +1283,22 @@ pub(crate) fn reset_hub() {
     HUB.with_borrow_mut(|slot| *slot = None);
 }
 
+/// Lane TB: read-side access to the thread's SETTLED shared tree —
+/// the tree capturer (`tree_capture`) and the dual-engine gate walk
+/// the real production renderable tree through this. `None` when no
+/// hub is installed.
+pub(crate) fn with_hub_tree<R>(f: impl FnOnce(&ChromeTree) -> R) -> Option<R> {
+    HUB.with_borrow(|slot| slot.clone()).map(|hub| f(&hub.borrow()))
+}
+
+impl ChromeTree {
+    /// The shared tree's root renderable (post-settle — the layout
+    /// fields are final after the composite seam's flush).
+    pub(crate) fn solid_renderer_root(&self) -> &opentui_core::renderable::Renderable {
+        &self.solid.renderer.root.inner
+    }
+}
+
 /// A blank frame of the given size (Default cells) — the rect a
 /// migrated surface's old full-screen/mount paste used to blank.
 pub(crate) fn blank_frame(width: usize, height: usize) -> Frame {

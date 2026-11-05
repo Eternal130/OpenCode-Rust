@@ -2508,6 +2508,7 @@ dependencies = [
  "oc-uqr",
  "oc-util",
  "opentui-core",
+ "opentui-diff",
  "opentui-keymap",
  "opentui-solid",
  "parity",
@@ -2669,7 +2670,7 @@ dependencies = [
 [[package]]
 name = "opentui-core"
 version = "0.1.0"
-source = "git+https://github.com/Eternal130/opentui-rust.git?rev=e52adf6#e52adf64a4ceb1cde6ed8e43768a0b06f3005f5a"
+source = "git+https://github.com/Eternal130/opentui-rust.git?rev=3936cc6#3936cc6879f77794df08d71fa71637b624f331ab"
 dependencies = [
  "cc",
  "minimp3",
@@ -2685,9 +2686,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "opentui-diff"
+version = "0.1.0"
+source = "git+https://github.com/Eternal130/opentui-rust.git?rev=3936cc6#3936cc6879f77794df08d71fa71637b624f331ab"
+dependencies = [
+ "anyhow",
+ "opentui-core",
+ "opentui-solid",
+ "serde",
+ "serde_json",
+ "unicode-segmentation",
+ "vt100",
+]
+
+[[package]]
 name = "opentui-keymap"
 version = "0.1.0"
-source = "git+https://github.com/Eternal130/opentui-rust.git?rev=e52adf6#e52adf64a4ceb1cde6ed8e43768a0b06f3005f5a"
+source = "git+https://github.com/Eternal130/opentui-rust.git?rev=3936cc6#3936cc6879f77794df08d71fa71637b624f331ab"
 dependencies = [
  "serde",
  "serde_json",
@@ -2696,7 +2711,7 @@ dependencies = [
 [[package]]
 name = "opentui-solid"
 version = "0.1.0"
-source = "git+https://github.com/Eternal130/opentui-rust.git?rev=e52adf6#e52adf64a4ceb1cde6ed8e43768a0b06f3005f5a"
+source = "git+https://github.com/Eternal130/opentui-rust.git?rev=3936cc6#3936cc6879f77794df08d71fa71637b624f331ab"
 dependencies = [
  "opentui-core",
 ]

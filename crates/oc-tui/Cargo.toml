@@ -72,6 +72,12 @@ libc = "0.2"
 [dev-dependencies]
 opentui-keymap = { workspace = true }
 parity = { path = "../../tools/parity" }
+# Lane TB (dual-engine tree gate): the standing test rebuilds the
+# captured tree scenarios through opentui's own tree desugarer +
+# scenario replayer and compares against the frozen TS-oracle frames
+# (tools/parity/tree-scenarios/oracle/). Same rev as the lib deps —
+# the desugarer must not drift from the harness that froze them.
+opentui-diff = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "3936cc6" }
 tokio = { workspace = true }
 oc-plugin-host = { workspace = true }
 # TUI-15: the pty proof's Zed sqlite fixture writer (same version +
