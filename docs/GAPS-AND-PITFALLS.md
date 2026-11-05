@@ -1261,3 +1261,8 @@ G-93..G-104 全部 ✅。现存未关闭项维持既有文档化决策：G-28（
 8. **session.diff SSE 泄露** — 降级：无发布点，实际暴露面与 ref 一致（见归类节）。
 9. **codemode "ref fetch 30s 超时封装未移植"** — 撤销该出处：ref codemode 无 fetch 面（grep 零命中）；rust 裸 Bun fetch 属暴露面超 ref（→G-180②）。
 10. **oc-client 404 declared 缺 ~30** — 修正为 ~49（按名称对齐后实测；另 ~41 处多声明为命名迁移重合）。
+
+### G-212 ℹ️ TUI storybook/测试环境变量面不移植（Gate D3 裁决 4，G-17 族）
+- OPENCODE_STORY / OPENCODE_ROUTE（ref app.tsx:337-349 storybook/路由注入）、OPENCODE_DRIVE（app.tsx:253）、OPENCODE_NODE_ASSETS_DIR、TMUX/STY 终端探测——均为 ref 测试/storybook 管道非用户可见面；移植=新增超集测试基建，倒置收敛目标。登记于 tui-full-convergence D3-7 终扫（docs/adr/0019 C 类）。
+
+> **2026-11-05 tui-full-convergence 收官注**：G-211（split-footer 整族，含渲染侧六缺口）已全量移植并消费（ADR-0019 终稿）；G-83 面板按超集令移除（键位=ref 死绑定态）；G-13 已闭；G-177 已闭（Phase C）；G-130 分块沿用（D3-5 消费）。GridEmitter 退役+Frame 内部货币登记见 ADR-0019。
