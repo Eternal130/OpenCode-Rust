@@ -3,7 +3,7 @@
 #
 # THE ORACLE SIDE OF THE DUAL-ENGINE TREE GATE. Sends every committed
 # scenario under tools/parity/tree-scenarios/ through opentui-rust's
-# own differential harness (tools/diff @ the pinned rev 3936cc6, the
+# own differential harness (tools/diff @ the pinned rev 2fbe00e, the
 # same rev the workspace locks): the REAL @opentui 0.5.14 (npm
 # tarballs under the harness sandbox) driven by bun through
 # js/driver.ts, then the port replay + cell-for-cell compare. The
@@ -41,9 +41,9 @@ ORACLE_DIR="${SCEN_DIR}/oracle"
 
 # Locate the pinned opentui-rust checkout (the git dep's tools/diff
 # harness — same rev the workspace Cargo.lock pins).
-CHECKOUT="$(ls -d "${HOME}"/.cargo/git/checkouts/opentui-rust-*/3936cc6 2>/dev/null | head -1)"
+CHECKOUT="$(ls -d "${HOME}"/.cargo/git/checkouts/opentui-rust-*/2fbe00e 2>/dev/null | head -1)"
 if [[ -z "${CHECKOUT}" ]]; then
-  echo "opentui-rust @3936cc6 checkout not found under ~/.cargo/git/checkouts — build the workspace once first" >&2
+  echo "opentui-rust @2fbe00e checkout not found under ~/.cargo/git/checkouts — build the workspace once first" >&2
   exit 3
 fi
 DIFF_DIR="${CHECKOUT}/tools/diff"
