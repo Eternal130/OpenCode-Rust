@@ -32,12 +32,18 @@
 //!   `renderer.ts:2497-2566`) write through the attached session's
 //!   output — the engine's scrollback path, not a hand-rolled
 //!   CUP-write;
-//! * the dock still paints through oc-tui's
-//!   [`crate::grid_emitter::GridEmitter`] — the same D2.1b ruling as
-//!   the main TUI (the renderer's own SGR stream is never pumped;
-//!   GridEmitter is the one frame writer). The footer pane is an
-//!   oc-tui component family that renders a `render::Frame`, so the
-//!   paint seam is the grid, not opentui renderables.
+//! * the dock rides the renderer's ROOT tree (lane D4.1c — the
+//!   ref's `render(() => createComponent(RunFooterView, …),
+//!   renderer)`, `footer.ts:326`): the pane's composed footer frame
+//!   mounts through [`super::footer_tree`] as one signal-driven row
+//!   list, the engine's band layout + `renderOffset` emission
+//!   addresses the dock's rows (opentui rev `e52adf6`,
+//!   `calculate_render_geometry` + `set_footer_height`), and the
+//!   frame bytes leave through the terminal pump exit — the
+//!   `?2026`-wrapped SGR stream (`Terminal::pump_output`). The lane-B
+//!   "GridEmitter is the one frame writer" ruling retires here: mini
+//!   emits NO grid-diffed bytes of its own, every frame byte flows
+//!   through the renderer pump (the D2.1b "never pump" seam is dead).
 //!
 //! ADR-0018 §5's registered deviations flip with this: the
 //! no-scrolling-regions `insert_before` semantics are replaced by the
@@ -64,11 +70,12 @@ use std::io::Write as _;
 use std::time::{Duration, Instant};
 
 use opentui_core::renderer::{
-    create_cli_renderer, CliRenderer, CliRendererConfig, ExternalOutputMode,
+    create_cli_renderer, CliRendererConfig, ExternalOutputMode,
     RendererTerminalSession, ScreenMode,
 };
 use opentui_core::scrollback::ScrollbackSnapshot;
 
+use super::footer_tree::FooterTree;
 use super::scrollback::{format_commit_with, Commit};
 use super::splash::{
     directory_label, entry_splash_layout, entry_splash_rows, exit_splash_rows, EntrySplashInput,
@@ -944,9 +951,10 @@ impl RendererTerminalSession for MiniSessionHandle {
         &mut self,
         renderer: &mut opentui_core::renderer::CliRenderer,
     ) -> std::io::Result<()> {
-        // D2.1b ruling: the renderer's own SGR stream is never pumped
-        // (GridEmitter is the one frame writer) — the seam is carried
-        // for API completeness.
+        // D4.1c — the retired "never pump" ruling: the mini footer's
+        // frame bytes flow through the renderer pump exit (the
+        // `?2026`-wrapped SGR stream). The lifecycle pumps directly on
+        // the locked session; this seam stays the API-complete twin.
         if let Ok(mut session) = self.session.lock() {
             opentui_core::terminal::Terminal::pump_output(&mut session, renderer)
         } else {
@@ -973,28 +981,25 @@ impl RendererTerminalSession for MiniSessionHandle {
 /// `Lifecycle`, `runtime.lifecycle.ts:85-92`).
 #[allow(clippy::struct_excessive_bools)] // the renderer flag set mirrors the reference
 pub struct Lifecycle {
-    /// The dock's frame emitter (the D2.1b ruling — the same
-    /// standalone-value [`crate::grid_emitter::GridEmitter`] the main
-    /// TUI uses; the CliRenderer's own SGR stream stays unpumped).
-    /// Sized to the FULL screen; the frame fed to it carries only the
-    /// bottom dock rows, so the transcript region above the dock
-    /// reads as blank-vs-blank on the diff and never emits.
-    emitter: crate::grid_emitter::GridEmitter,
-    /// The dock paint's writer (one `Stdout`; single-threaded mini
-    /// keeps the write seam uncontended).
+    /// D4.1c — the mini footer's root-tree mount state (the rows +
+    /// geometry signals behind the mounted [`FooterTree`] element).
+    footer: FooterTree,
+    /// D4.1c — the split-footer renderer, owned by the solid mount
+    /// (the ref's `render(() => …, renderer)` root mount,
+    /// `footer.ts:326`): the footer content rides the renderer's
+    /// ROOT tree; every frame byte leaves through the pump exit (the
+    /// `?2026`-wrapped SGR stream), never a grid-diffed writer.
+    solid: opentui_solid::SolidRenderer,
+    /// The region/park control-write channel (one `Stdout`;
+    /// single-threaded mini keeps the write seam uncontended).
     out: std::io::Stdout,
     /// D2.3 — the opentui terminal session: raw mode + the reserved
     /// footer surface (the non-alt `makeRoomForRendererOutput` boot
     /// push). Transcript bytes from the split-commit flush and the
     /// teardown epilogue write through it.
+    /// D2.3 — the split-footer renderer's terminal session ... (the
+    /// renderer itself lives inside `solid`, see above).
     session: std::sync::Arc<std::sync::Mutex<MiniTerminal>>,
-    /// D2.3 — the split-footer renderer (`createCliRenderer` with
-    /// `screenMode: "split-footer"`, `footerHeight: FOOTER_HEIGHT`,
-    /// `externalOutputMode: "capture-stdout"`,
-    /// `runtime.lifecycle.ts:157-174`). Owns the scrollback commit
-    /// FIFO (the `EXTERNAL_OUTPUT` family) the transcript rows flow
-    /// through.
-    renderer: CliRenderer,
     pub pane: FooterPane,
     pending: Vec<PendingRows>,
     /// The last committed transcript row (separator decisions).
@@ -1091,10 +1096,15 @@ impl Lifecycle {
             session: std::sync::Arc::clone(&session),
         }));
         debug_assert!(renderer.is_split_footer_capture_active(), "capture arms at boot");
-        // The dock paint emitter (D2.1b): full-screen grid, cursor
-        // hidden — the composer needs no hardware caret.
-        let mut emitter = crate::grid_emitter::GridEmitter::new(width, height);
-        emitter.cursor.set_position(1, 1, false);
+        // D4.1c — the footer's root-tree mount (`render(() => …,
+        // renderer)`, footer.ts:326): the solid mount owns the
+        // renderer, the dock content rides its root tree, and the
+        // frame bytes leave through the pump exit below. The engine's
+        // band geometry (renderWidth × effectiveFooterHeight +
+        // renderOffset) came with the split config.
+        let initial_height = FOOTER_HEIGHT.min(height).max(1);
+        let (footer, element) = FooterTree::new(width, initial_height);
+        let solid = opentui_solid::render_into(renderer, element);
 
         let mut pane = FooterPane::new(crate::components::footer::FooterTheme::fallback_dark());
         if let Some(agent) = input.agent {
@@ -1110,9 +1120,9 @@ impl Lifecycle {
         pane.mono = input.mono;
         let mut lifecycle = Self {
             out: std::io::stdout(),
-            emitter,
+            footer,
+            solid,
             session,
-            renderer,
             pane,
             pending: Vec::new(),
             last_commit: None,
@@ -1228,7 +1238,7 @@ impl Lifecycle {
         self.reconcile_scrollback_region()?;
         self.finish_startup();
         if !self.pending.is_empty() {
-            if self.closed || !self.renderer.is_split_footer_capture_active() {
+            if self.closed || !self.solid.renderer.is_split_footer_capture_active() {
                 // Post-close rows (SSE folds that landed while the
                 // exit chord ran) drain through the passthrough arm —
                 // the engine's capture gate is down after `shutdown`.
@@ -1291,7 +1301,8 @@ impl Lifecycle {
             let lines = batch.ansi_rows(self.width.max(1));
             if !lines.is_empty() {
                 lines_written += lines.len();
-                self.renderer
+                self.solid
+                    .renderer
                     .write_to_scrollback(Box::new(move |_ctx| ScrollbackSnapshot {
                         lines,
                         row_columns: Some(row_columns),
@@ -1315,7 +1326,7 @@ impl Lifecycle {
         // the region bottom — the trailing newline scrolls in place
         // there).
         self.park_transcript_cursor()?;
-        let _ = self.renderer.flush_pending_split_commits(true, true);
+        let _ = self.solid.renderer.flush_pending_split_commits(true, true);
         let bottom = self.region_bottom.max(1);
         self.transcript_row = (self.transcript_row + lines_written).min(bottom);
         self.force_draw = true;
@@ -1360,14 +1371,16 @@ impl Lifecycle {
             .map_err(|error| error.to_string())
     }
 
-    /// Paint the footer pane into the screen's bottom rows. The frame
-    /// fed to the emitter is the FULL screen with only the dock's rows
-    /// present — the transcript rows above read as blank-vs-blank on
-    /// the diff and never emit (the retired inline viewport's
-    /// guarantee that the dock's draws never touch the scrollback).
-    /// TUI-17/applyHeight: a pane whose height CHANGED (the blocker
-    /// bodies + the subagent inspector grow it) just paints taller —
-    /// the diff grows the dock upward and blanks the vacated rows.
+    /// Paint the footer pane into the screen's bottom rows — D4.1c:
+    /// the pane's composed frame rides the renderer's ROOT tree
+    /// (the rows + geometry signals), the engine's band layout +
+    /// `renderOffset` emission addresses the dock's rows, and the
+    /// frame bytes leave through the terminal pump exit wrapped in
+    /// the `?2026` synchronized-update envelope. TUI-17/applyHeight:
+    /// a pane whose height CHANGED (the blocker bodies + the
+    /// subagent inspector grow it) re-geometries the band through
+    /// `set_footer_height` (renderer.ts:1768-1772) — the dock grows
+    /// upward, the buffers rebuild, and the frame repaints fully.
     pub fn draw_footer(&mut self) -> Result<(), String> {
         let pane_height = self.pane.pane_height().clamp(1, self.height);
         let footer_frame = self.pane.render_frame(self.width, pane_height);
@@ -1382,45 +1395,47 @@ impl Lifecycle {
             return Ok(());
         }
         self.last_footer_signature = signature;
+        let forced = self.force_draw;
         self.force_draw = false;
-        // The dock frame pasted at the BOTTOM of a full-screen grid:
-        // blank rows pad above the dock (D2.3 — the dock anchors the
-        // screen's last rows, the reserved split-footer surface; the
-        // padding rows read blank-vs-blank on the diff after the
-        // first frame, so emission never touches the transcript
-        // region above). A pane taller than the screen clips to the
-        // screen's last rows (the retired viewport's `max_height`
-        // clamp).
-        let skip = footer_frame.cells.len().saturating_sub(self.height);
-        let cells: Vec<Vec<crate::render::Cell>> = footer_frame
-            .cells
-            .iter()
-            .skip(skip)
-            .map(|row| {
-                let mut full = vec![crate::grid_emitter::blank_cell(); self.width];
-                for (x, cell) in row.iter().take(self.width).enumerate() {
-                    full[x] = *cell;
-                }
-                full
-            })
-            .collect();
-        let top = self.height.saturating_sub(cells.len());
-        let mut padded = vec![vec![crate::grid_emitter::blank_cell(); self.width]; top];
-        padded.extend(cells);
-        let cells = padded;
-        let clusters = footer_frame.clusters.as_ref().map(|map| {
-            map.iter()
-                .filter(|&((y, x), _)| *y >= skip && *x < self.width)
-                .map(|((y, x), symbol)| ((*y - skip + top, *x), symbol.clone()))
-                .collect::<crate::render::ClusterMap>()
-        });
-        let frame = crate::render::Frame {
-            cells,
-            width: self.width,
-            height: self.height,
-            clusters: clusters.map(Box::new),
-        };
-        self.emitter.emit(&mut self.out, &frame).map_err(|error| error.to_string())?;
+        // The band re-geometry (`set footerHeight`, renderer.ts
+        // :1768-1772 → applyScreenMode): a changed pane height moves
+        // renderOffset and rebuilds the buffers — the next frame is a
+        // full repaint by construction. The pane clamps to the
+        // terminal height (a taller pane clips to the band, the
+        // retired viewport's `max_height` clamp).
+        let band_height = pane_height.min(self.height).max(1);
+        let height_changed = u32::try_from(band_height)
+            .ok()
+            .map_or(true, |height| height != self.solid.renderer.footer_height());
+        if height_changed {
+            self.solid
+                .renderer
+                .set_footer_height(u32::try_from(band_height).unwrap_or(4))
+                .map_err(|error| error.to_string())?;
+        }
+        if forced && !height_changed {
+            // A scrollback write scrolled the screen under an intact
+            // band geometry: drop the diff base so the next render
+            // repaints every band row (the retired force flag's
+            // full-paint semantics; set_footer_height already rebuilt
+            // the buffers on a height change).
+            let (width, height) =
+                (self.solid.renderer.width(), self.solid.renderer.height());
+            self.solid.renderer.current_render_buffer =
+                opentui_core::buffer::OptimizedBuffer::new(width, height);
+        }
+        // The tree update patches content in place (signal dyn-props;
+        // no remount), and the flush renders one frame into the
+        // renderer's buffers + SGR stream.
+        self.footer.update(self.width, band_height, &footer_frame);
+        self.solid.flush();
+        // The pump exit: the frame's SGR bytes drain through the
+        // terminal session wrapped in `?2026` (the D2.1b "never pump"
+        // ruling retired — the renderer stream IS the dock's writer).
+        if let Ok(mut session) = self.session.lock() {
+            opentui_core::terminal::Terminal::pump_output(&mut session, &mut self.solid.renderer)
+                .map_err(|error| error.to_string())?;
+        }
         self.drawn_footer_rows = pane_height;
         Ok(())
     }
@@ -1476,8 +1491,12 @@ impl Lifecycle {
         // last footer frame stays (the config is carried on the
         // renderer).
         let _ = self.write_raw(b"\x1b[r");
-        self.renderer.set_split_footer_capture(false);
-        self.renderer.destroy();
+        // The footer mount's dispose half (`footer.destroy()` → the
+        // solid root unmount, index.ts:12-46's runDispose) — no bytes
+        // leave (the pump never runs again after this).
+        self.solid.dispose_root();
+        self.solid.renderer.set_split_footer_capture(false);
+        self.solid.renderer.destroy();
         if !wrote_exit {
             // `host.stdout.write("\n")` (`runtime.lifecycle.ts:339-341`).
             let _ = std::io::stdout().write_all(b"\n");
@@ -1488,15 +1507,18 @@ impl Lifecycle {
     /// Terminal resize (SIGWINCH / TIOCGWINSZ): re-render at the new
     /// size. D2.3 — the registered "mini resize does not reflow"
     /// deviation (ADR-0018, Gate B M3) is CLOSED: the engine's
-    /// geometry tracks the new size (`renderer.resize`), the emitter's
-    /// prev grid drops to blank at the new dimensions (the frame
-    /// writer's resize semantics), so the next draw fully repaints
-    /// the dock at the new width/height.
+    /// geometry tracks the new size (`renderer.resize` re-derives the
+    /// band extents + renderOffset and rebuilds the buffers), so the
+    /// next draw fully repaints the dock at the new width/height.
     pub fn resize(&mut self, width: usize, height: usize) {
         self.width = width.max(1);
         self.height = height.max(1);
-        self.emitter.resize(self.width, self.height);
-        self.renderer
+        // The solid mount's resize routes core resize + the
+        // dimensions signal; the engine re-derives the band geometry
+        // (renderOffset/renderHeight) from the new terminal size, so
+        // the next draw fully repaints the dock at the new
+        // width/height.
+        self.solid
             .resize(u32::try_from(self.width).unwrap_or(u32::MAX), u32::try_from(self.height).unwrap_or(u32::MAX));
         // The transcript band re-arms at the new height (the flush's
         // region reconcile; the dock repaint follows).

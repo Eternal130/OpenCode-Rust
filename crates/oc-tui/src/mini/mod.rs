@@ -38,6 +38,7 @@
 
 pub mod demo;
 pub mod footer_subagent;
+pub mod footer_tree;
 pub mod fragment;
 pub mod image;
 pub mod lifecycle;
