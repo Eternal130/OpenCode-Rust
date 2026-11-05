@@ -2609,6 +2609,8 @@ fn mini_split_footer_frame_rides_the_renderer_pump() {
         |fake, _sandbox| fake.arm_script(script),
         move |h| {
             wait_text(h, "oc mini", Duration::from_secs(8))?;
+            // Submit a prompt: the scripted turn streams the reply.
+            h.write(b"give me a pump reply\r");
             // The dock frame rode the renderer pump: the synchronized-
             // update envelope opens before any footer band emission.
             assert!(
