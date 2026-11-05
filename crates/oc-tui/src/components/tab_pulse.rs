@@ -2,6 +2,16 @@
 //! `component/tab-pulse.tsx:33-80` + `session-tabs.tsx:124-125` +
 //! `theme/color.ts` (gate-9 finding 1 — the Tier-A obligation).
 //!
+//! **Ownership (lane D3-6).** Shared deterministic math library —
+//! **not** dead code. The math was absorbed by the solid surfaces,
+//! not duplicated into them: live consumers are the tabs strip
+//! ([`crate::components::session_tabs_solid`]), the vertical rail
+//! ([`crate::components::session_tabs_rail_solid`]), the sidebar
+//! glow ([`crate::components::sidebar_solid`]) and the store's
+//! [`TabPulseTrack`] descendants ([`crate::store`]). It writes no
+//! [`crate::render::Frame`]; multi-family use forbids absorbing it
+//! into one consumer, so it remains a top-level compute library.
+//!
 //! The unread glow is **pure position math, no clock**: a resting
 //! (sustain-level) glow paints each cell of a pulse strip as
 //!
