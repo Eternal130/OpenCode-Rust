@@ -81,6 +81,7 @@ pub mod sidebar;
 /// stays the fallback — see the module doc + the M5 section of
 /// `docs/migration-m1-tabstrip.md`).
 pub mod sidebar_solid;
+pub mod terminal_pane_solid;
 /// RE-14 — the `/stats` usage poster's model (stats-data.ts +
 /// activity-calendar.ts + StatsPoster's layout).
 pub mod stats_page;
