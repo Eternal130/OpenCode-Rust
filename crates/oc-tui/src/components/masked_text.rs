@@ -1,6 +1,15 @@
 //! `component/masked-text.ts` → the masked rendering primitive, and
 //! its two ref subclasses `shimmer-text.tsx` and `fade-in-text.tsx`.
 //!
+//! **Ownership (lane D3-6).** Shared pure-compute primitive: it
+//! writes no [`crate::render::Frame`] and owns no paint state. Two
+//! live tree surfaces consume it — the home update banner's
+//! `FadeInText` ([`crate::components::home_solid`]) and the dialog
+//! shimmer ([`crate::components::dialog_select`]) — so it stays a
+//! top-level library rather than being absorbed into either family
+//! (the multi-consumer ruling). D0b's "hand-drawn" label predates
+//! the solid migration; there is no painter here to mount.
+//!
 //! The ref's `MaskedTextRenderable.renderMasked` shades the text's
 //! FOREGROUND toward a fixed target color (the colorMatrix's masked
 //! translation) per cell: a `shade` closure resolves one `strength`

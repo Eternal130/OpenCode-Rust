@@ -2,6 +2,17 @@
 //! `context/update-notification.tsx` + `routes/home.tsx:125-175` +
 //! `component/dialog-update.tsx`), lane TAIL.
 //!
+//! **Ownership (lane D3-6).** Surface model, already on the shared
+//! tree: the home banner's z slot is painted by
+//! [`crate::components::home_solid`] (it consumes [`UpdateNotice`]
+//! and [`crate::components::masked_text`]) and `DialogUpdate` by the
+//! dialog family ([`crate::components::dialog`] /
+//! [`crate::components::command_palette`]), so nothing here mounts.
+//! The one [`Frame`] producer is [`error_component_frame`] — the
+//! render-crash fallback, deliberately NOT a tree surface (a broken
+//! renderer must still paint its last screen). It is a reasoned
+//! retention for D4, not a GridEmitter blocker.
+//!
 //! **Sources** (v2's layered `UpdateSource`): the SSE
 //! `installation.update-available`/`installation.updated` events (the
 //! server-hosting process's updater, `autoupdate.rs`'s

@@ -46,7 +46,6 @@ pub mod home;
 pub mod home_solid;
 pub mod location_missing;
 pub mod location_missing_solid;
-pub mod marquee;
 pub mod masked_text;
 pub mod message;
 pub mod migration_overlay;
