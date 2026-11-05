@@ -77,7 +77,7 @@ parity = { path = "../../tools/parity" }
 # scenario replayer and compares against the frozen TS-oracle frames
 # (tools/parity/tree-scenarios/oracle/). Same rev as the lib deps —
 # the desugarer must not drift from the harness that froze them.
-opentui-diff = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "3936cc6" }
+opentui-diff = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "2fbe00e" }
 tokio = { workspace = true }
 oc-plugin-host = { workspace = true }
 # TUI-15: the pty proof's Zed sqlite fixture writer (same version +
