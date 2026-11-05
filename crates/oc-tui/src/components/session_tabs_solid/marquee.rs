@@ -2,6 +2,16 @@
 //! session-tabs.tsx:279-369) — lane TAIL item 1c: a long tab title
 //! auto-scrolls while hovered.
 //!
+//! **Ownership (lane D3-6).** Pure compute for the tab strip: this
+//! module writes no [`crate::render::Frame`] and holds no paint
+//! state beyond the deterministic [`Marquee`] clock. It lives inside
+//! the family whose surface it serves ([`super`], the tabs strip
+//! tree); the strip's cells are painted by the shared opentui tree,
+//! not here. D0b listed it as a "hand-drawn" tail file — that label
+//! predates the solid migration: evidence (grep) shows a single live
+//! consumer, so D3-6 absorbed it into the tabs family instead of
+//! keeping a top-level component module.
+//!
 //! v2 drives the scroll with timers (`MARQUEE_DELAY` 600 ms, then +1
 //! cell per `MARQUEE_INTERVAL` 80 ms, one full cycle then reset). The
 //! port derives the offset deterministically from the injected store

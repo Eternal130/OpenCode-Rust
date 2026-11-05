@@ -69,7 +69,6 @@ use opentui_solid::{
     Element, Signal, SolidRenderer, box_, children_expr, for_list, map, show, text,
 };
 
-use crate::components::marquee::Marquee;
 use crate::components::session_tabs::{
     ADD_TAB_WIDTH, AdaptiveLayout, TabStatus, TabView, adaptive_session_tab_layout,
     session_tab_overflow_width,
@@ -82,6 +81,12 @@ use crate::render::{CONTINUATION, Cell, CellColor, ClusterMap, Frame};
 use crate::store::Unread;
 use crate::theme::ThemeStyles;
 use crate::wrap::take_width;
+
+use self::marquee::Marquee;
+
+// Lane D3-6: the hover marquee's deterministic math lives in this
+// family (its only consumer); the strip tree paints the cells.
+mod marquee;
 
 // ---------------------------------------------------------------------------
 // inputs (the store → view bridge)
@@ -404,10 +409,10 @@ fn title_chunks(inputs: &StripInputs, paint: &TabPaint, key: &str) -> StyledText
     // still frame (`marqueeTextParts(title, width, offset)`); the
     // leading fade rides the first FADE_WIDTH cells.
     let scrolling =
-        paint.hovered && crate::components::marquee::marquee_overflows(&title, title_width);
+        paint.hovered && self::marquee::marquee_overflows(&title, title_width);
     let (offset, leading) = marquee_offset(key, &title, title_width, scrolling, inputs.clock_ms);
     let title_text = if scrolling && offset > 0 {
-        crate::components::marquee::marquee_text(&title, title_width, offset)
+        self::marquee::marquee_text(&title, title_width, offset)
     } else {
         take_width(&title, title_width)
     };

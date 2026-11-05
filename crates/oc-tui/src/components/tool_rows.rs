@@ -12,6 +12,23 @@
 //! each) — the trivially-equivalent migration onto the styled-segment
 //! path, proven byte-identical by the golden instrument in
 //! `golden_tests`.
+//!
+//! **Ownership (lane D3-6).** Two roles in one module, split by
+//! evidence:
+//!
+//! * **Production vocabulary** — [`DEFAULT_FOREGROUND`] and
+//!   [`fill_style`] are the renderer default the live session/message
+//!   surfaces paint with (grep: 46/36 call sites incl. `session`,
+//!   `message`, `sidebar`, `diff_viewer_solid`). These stay.
+//! * **Fixture/golden surface** — [`ToolRowFixture`], the three
+//!   `*_fixture` builders, [`layout_tool_wrap`] and the
+//!   [`render_tool_wrap`] / [`render_tool_wrap_error_expanded`] /
+//!   [`render_tool_wrap_code`] frame painters have **no production
+//!   call site** (grep: only `spike`'s absorption shim and
+//!   `golden_tests`). The live transcript's tool rows are the message
+//!   tree ([`crate::components::message`]); these reproduce the
+//!   `inline-tool-wrap-snapshot` corpus. Declared fixture-only here
+//!   (the goldens keep consuming them); no live frame is involved.
 
 use crate::style::{Color, Style};
 
