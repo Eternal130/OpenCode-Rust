@@ -38,10 +38,14 @@
 //!   bodies all land in the same three store methods). When a later
 //!   lane migrates the PTY mouse stream onto the renderer's hit
 //!   grid, this is the seam to revisit.
-//! * *frame out*: the strip paints through a real
-//!   [`opentui_core::renderer::CliRenderer`] (taffy layout + cell
-//!   raster) into a 1-row `OptimizedBuffer`; the buffer cells are
-//!   copied into the oc-tui [`Frame`] the route compositor expects.
+//! * *frame out* (D4.1a): the strip rides the SHARED tree hub — a
+//!   `tabs-strip` family wrapper (a base family, skeleton index 0)
+//!   through `chrome_solid::mount_family_wrapper`; pixels reach the
+//!   emitted frame through the single compositor seam inside
+//!   `render_app` (`composite_chrome_tree`), never a per-family
+//!   buffer copy. The retired private `SolidRenderer` + the
+//!   `frame_from_buffer` cell copy are gone (the glow ranges' fg
+//!   restoration rides as a seam stamp).
 //!   The glow gradient (the ref's `TabPulse` resting state) renders
 //!   as per-cell 1-wide boxes — the same `resting_glow_bg` math the
 //!   old path bakes into `Fill`s — so text over it keeps its
@@ -57,18 +61,15 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use opentui_core::Rgba;
-use opentui_core::buffer::{
-    OptimizedBuffer, grapheme_id_from_char, is_continuation_char, is_grapheme_char,
-};
-use opentui_core::renderer::CliRendererConfig;
 use opentui_core::styled_text::{StyledText, TextChunk};
 use opentui_solid::builder::ForItemSource;
 use opentui_solid::element::{Children, ForItem, PropValue};
 use opentui_solid::reactive::Reactive;
-use opentui_solid::{
-    Element, Signal, SolidRenderer, box_, children_expr, for_list, map, show, text,
-};
+use opentui_solid::{Element, Signal, box_, children_expr, for_list, map, show, text};
 
+use crate::components::chrome_solid::{
+    ChromeStamp, family_wrapper_live, mount_family_wrapper,
+};
 use crate::components::session_tabs::{
     ADD_TAB_WIDTH, AdaptiveLayout, TabStatus, TabView, adaptive_session_tab_layout,
     session_tab_overflow_width,
@@ -77,7 +78,7 @@ use crate::components::tab_pulse::{
     GLOW_TAIL, RUN_SWEEP_OPACITY, Rgb, TabPulseTrack, blend_tab_pulse_color, glow_text_color,
     intensity_at, resting_glow_bg, tint,
 };
-use crate::render::{CONTINUATION, Cell, CellColor, ClusterMap, Frame};
+use crate::render::{CellColor, Frame};
 use crate::store::Unread;
 use crate::theme::ThemeStyles;
 use crate::wrap::take_width;
@@ -1001,55 +1002,123 @@ fn strip_element(inputs: &Signal<StripInputs>) -> Element {
 // the mounted strip (one per process/thread, resized/re-themed in place)
 // ---------------------------------------------------------------------------
 
-/// The mounted strip: the inputs signal + a real headless
-/// [`SolidRenderer`] (taffy layout + cell raster + hit grid). Built
-/// once per (width, theme) generation — a terminal resize or theme
-/// swap rebuilds the renderer (rare; the reconciler keeps per-tab
-/// identity across ordinary input changes).
-struct SolidTabsStrip {
-    inputs: Signal<StripInputs>,
-    renderer: SolidRenderer,
-    width: usize,
-    colors: StripColors,
+/// The mounted strip's wrapper content (D4.1a): the strip tree over
+/// its own opaque base — the retired scratch renderer's clear color
+/// (bg = the theme background) becomes the content root's fill, so
+/// every cell of the 1-row rect reaches the seam as written ink
+/// (never a hole).
+fn strip_content(inputs: &Signal<StripInputs>, width: usize, background: Rgb) -> Element {
+    box_()
+        .width(width.max(1) as f32)
+        .height(1.0)
+        .position("relative")
+        .background_color(format!("#{:02x}{:02x}{:02x}", background.0, background.1, background.2))
+        .children(Children::Static(vec![strip_element(inputs)]))
+        .into_element()
 }
 
-impl SolidTabsStrip {
-    fn new(width: usize, colors: StripColors) -> Self {
-        let inputs = Signal::new(StripInputs {
-            tabs: Vec::new(),
-            active: None,
-            show_plus: false,
-            hover: None,
-            close_hover: None,
-            add_hovered: false,
-            width,
-            colors,
-            held: None,
-            clock_ms: 0,
-            tracks: std::collections::HashMap::new(),
-            indicator: crate::components::session_tabs::IndicatorConfig::default(),
-        });
-        let mut renderer = SolidRenderer::new(CliRendererConfig {
-            width: width as u32,
-            height: 1,
-            background_color: rgba(colors.background),
-            ..CliRendererConfig::default()
-        });
-        renderer.render_root(strip_element(&inputs));
-        Self { inputs, renderer, width, colors }
-    }
+// ---------------------------------------------------------------------------
+// the shared-tree mount (D4.1a — the D2.2 family paradigm; the
+// private SolidRenderer + the frame_from_buffer cell copy are retired)
+// ---------------------------------------------------------------------------
 
-    /// Sync one frame's store snapshot, flush the reconciler patches,
-    /// and render — the per-frame bridge cost. A width/theme change
-    /// rebuilds the whole mount (rare, and the reconciler has no
-    /// in-place renderer resize seam for background colors).
-    fn paint(&mut self, inputs: StripInputs) {
-        if self.width != inputs.width || self.colors != inputs.colors {
-            *self = Self::new(inputs.width, inputs.colors);
-        }
-        self.inputs.set(inputs);
-        self.renderer.flush();
-    }
+/// The strip family's skeleton index: a BASE family (0) — the strip
+/// pasted FIRST over the route base frame, so it seats below the
+/// chrome container exactly like the diff route's `surface-diff`.
+pub(crate) const STRIP_SKELETON_INDEX: usize = 0;
+
+/// The mounted strip's reactive state, kept across frames so content
+/// churn patches dyn-props in place; a geometry-key change (width,
+/// theme colors) rebuilds the wrapper's content subtree.
+struct StripEntry {
+    signal: Signal<StripInputs>,
+    key: (usize, StripColors),
+}
+
+thread_local! {
+    /// The strip family's content state (one mount per
+    /// thread-process — the wrapper itself lives in the shared-tree
+    /// hub, `chrome_solid::mount_family_wrapper`).
+    static STRIP_TREE: RefCell<Option<StripEntry>> = const { RefCell::new(None) };
+}
+
+/// Sync the strip family into the shared tree (the strip's ONLY live
+/// mount entry — no Frame comes back; pixels reach the emitted frame
+/// through `composite_chrome_tree`, the single compositor seam inside
+/// `render_app`). `left`/`top` are the OLD paste site (the
+/// imperative source). The glow ranges ride as [`ChromeStamp::
+/// FgDefault`] stamps — the retired copy's fg-Reset restoration.
+fn strip_mount(inputs: StripInputs, left: usize, top: usize) {
+    let width = inputs.width;
+    let key = (width, inputs.colors);
+    let stamps: Vec<ChromeStamp> = glow_ranges(&inputs)
+        .into_iter()
+        .map(|(start, len)| ChromeStamp::FgDefault { left: start, top: 0, width: len })
+        .collect();
+    // Rebuild iff the geometry key changed OR the wrapper left the
+    // tree (a hub reset between harness frames, a seam prune).
+    let rebuild = !family_wrapper_live("tabs-strip")
+        || STRIP_TREE.with_borrow(|slot| !matches!(slot, Some(entry) if entry.key == key));
+    let (content, content_key) = if rebuild {
+        let signal = Signal::new(inputs.clone());
+        let element = strip_content(&signal, width, inputs.colors.background);
+        STRIP_TREE.with_borrow_mut(|slot| *slot = Some(StripEntry { signal, key }));
+        (Some(element), Some(format!("tabs-strip-content@{width}x{:?}", key.1)))
+    } else {
+        STRIP_TREE.with_borrow_mut(|slot| {
+            slot.as_ref().expect("checked above").signal.set(inputs);
+        });
+        (None, None)
+    };
+    mount_family_wrapper(
+        "tabs-strip",
+        STRIP_SKELETON_INDEX,
+        left,
+        top,
+        width,
+        1,
+        content_key,
+        content,
+        &stamps,
+        &[],
+        false,
+    );
+}
+
+/// [`paint_solid_bar_clock`]'s mount twin — the LIVE-path entry (the
+/// strip's pixels land at the composite seam; no Frame comes back).
+#[allow(clippy::too_many_arguments, clippy::implicit_hasher)]
+pub fn mount_solid_bar_clock(
+    tabs: &[TabView],
+    active: Option<&str>,
+    show_plus: bool,
+    width: usize,
+    theme: &ThemeStyles,
+    hover: Option<&str>,
+    close_hover: Option<&str>,
+    add_hovered: bool,
+    held: Option<AdaptiveLayout>,
+    clock_ms: u64,
+    tracks: std::collections::HashMap<String, TabPulseTrack>,
+    indicator: crate::components::session_tabs::IndicatorConfig,
+    left: usize,
+    top: usize,
+) {
+    let inputs = StripInputs {
+        tabs: tabs.to_vec(),
+        active: active.map(str::to_owned),
+        show_plus,
+        hover: hover.map(str::to_owned),
+        close_hover: close_hover.map(str::to_owned),
+        add_hovered,
+        width,
+        colors: StripColors::of(theme),
+        held,
+        clock_ms,
+        tracks,
+        indicator,
+    };
+    strip_mount(inputs, left, top);
 }
 
 /// opentui attribute bits → the frame's ECMA-48 bits (1=bold ..
@@ -1117,66 +1186,10 @@ fn glow_ranges(inputs: &StripInputs) -> Vec<(usize, usize)> {
     ranges
 }
 
-/// The painted 1-row buffer → the oc-tui [`Frame`] (the route
-/// compositor's currency). Opaque fills in opentui write
-/// fg=white/bg=color space cells — byte-identical to the old path's
-/// base-fill + `Fill` layer, so the copy is direct; the one divergence
-/// is the glow fills' `fg(Color::Reset)` semantics, restored via
-/// [`glow_ranges`] (space cells inside a glow range read fg Default).
-/// Shared with the later solid surfaces (lane M2's dialogs pass an
-/// empty glow set).
-pub(crate) fn frame_from_buffer(buffer: &OptimizedBuffer, glows: &[(usize, usize)]) -> Frame {
-    let width = buffer.width as usize;
-    let mut cells = Vec::with_capacity(buffer.height as usize);
-    // The cluster sidecar (lane B3b): keep the full multi-codepoint
-    // symbol — the GridEmitter prints it (see chrome_solid).
-    let mut clusters = ClusterMap::new();
-    for y in 0..buffer.height {
-        let mut row = Vec::with_capacity(width);
-        for x in 0..buffer.width {
-            let Some(cell) = buffer.get(x, y) else {
-                row.push(Cell::default());
-                continue;
-            };
-            let ch = if is_continuation_char(cell.char) {
-                CONTINUATION
-            } else if is_grapheme_char(cell.char) {
-                let grapheme = buffer.grapheme_bytes(grapheme_id_from_char(cell.char));
-                if grapheme.chars().nth(1).is_some() {
-                    clusters.insert((y as usize, x as usize), grapheme.to_owned());
-                }
-                grapheme.chars().next().unwrap_or(' ')
-            } else {
-                char::from_u32(cell.char).unwrap_or(' ')
-            };
-            let attrs = frame_attrs(cell.attributes);
-            let fg = if ch == ' '
-                && attrs == 0
-                && cell.fg == Rgba::rgb(255, 255, 255)
-                && glows.iter().any(|(start, len)| x >= *start as u32 && x < (*start + *len) as u32)
-            {
-                // A pulse fill cell no glyph covers: the old path's
-                // Fill carries fg Reset — the terminal default. The
-                // fill's signature is opentui's hard-written white; a
-                // glyph-painted space (a title's own spaces carry the
-                // per-character glow tint) keeps its fg.
-                CellColor::Default
-            } else {
-                frame_color(cell.fg)
-            };
-            row.push(Cell { ch, attrs, fg, bg: frame_color(cell.bg) });
-        }
-        cells.push(row);
-    }
-    let clusters = if clusters.is_empty() { None } else { Some(Box::new(clusters)) };
-    Frame { cells, width, height: buffer.height as usize, clusters }
-}
-
-thread_local! {
-    /// One strip per thread-process — the app mounts exactly one; the
-    /// PTY/golden harnesses reuse it across boots in the same process.
-    static STRIP: RefCell<Option<SolidTabsStrip>> = const { RefCell::new(None) };
-}
+/// The retired `frame_from_buffer` cell copy (D4.1a): the strip's
+/// pixels reach the emitted frame through the shared tree's ONE
+/// composite seam now — same raster, same cell semantics (the glow
+/// ranges' fg-Reset restoration rides as `ChromeStamp::FgDefault`).
 
 /// Paint the strip through the opentui-solid path — the new-path
 /// twin of the old `render_bar` + `paint_placed_with_fills` pair,
@@ -1241,7 +1254,7 @@ pub fn paint_solid_bar_held(
 }
 
 /// [`paint_solid_bar`] with the animation clock — the live-path entry
-/// (`paint_live_tabs_bar` passes the store clock; the animated phases
+/// (`mount_live_tabs_bar` passes the store clock; the animated phases
 /// — spinner, sweep, marquee — derive from it deterministically).
 #[allow(clippy::too_many_arguments, clippy::implicit_hasher)]
 pub fn paint_solid_bar_clock(
@@ -1275,15 +1288,18 @@ pub fn paint_solid_bar_clock(
     paint_inputs(inputs)
 }
 
-/// The shared paint: advance the envelopes by the clock delta, sync,
-/// flush, render, copy.
+/// The shared paint (D4.1a): the golden/unit harness twin — mount
+/// the strip into a fresh hub and read it back as a standalone Frame
+/// (composite over a blank frame of its own rect): same raster, same
+/// cell semantics, by construction. The live path is
+/// [`mount_solid_bar_clock`] (no Frame).
 fn paint_inputs(inputs: StripInputs) -> Frame {
-    let glows = glow_ranges(&inputs);
-    STRIP.with_borrow_mut(|slot| {
-        let strip = slot.get_or_insert_with(|| SolidTabsStrip::new(inputs.width, inputs.colors));
-        strip.paint(inputs);
-        frame_from_buffer(&strip.renderer.renderer.current_render_buffer, &glows)
-    })
+    let width = inputs.width;
+    crate::components::chrome_solid::reset_hub();
+    strip_mount(inputs, 0, 0);
+    let mut frame = crate::components::chrome_solid::blank_frame(width, 1);
+    crate::components::chrome_solid::composite_chrome_tree(&mut frame);
+    frame
 }
 
 #[cfg(test)]
@@ -1329,10 +1345,13 @@ mod tests {
         // The ✕: one cell in from the hovered tab's right edge (62).
         assert_eq!(hovered.cell(0, 62).ch, '✕', "hover reveals the close mark");
         assert_eq!(resting.cell(0, 62).ch, ' ', "no close mark at rest");
-        STRIP.with_borrow(|slot| {
-            let strip = slot.as_ref().expect("strip mounted");
-            assert!(!strip.renderer.ops_log().is_empty(), "the reconciler recorded its mount ops");
-        });
+        // D4.1a: the mount lives in the shared-tree hub — the wrapper
+        // stays mounted after the twin's composite (the reconciler
+        // patched the hover in place, no rebuild).
+        assert!(
+            crate::components::chrome_solid::family_wrapper_live("tabs-strip"),
+            "the strip wrapper stays mounted"
+        );
     }
 
     /// opentui attribute bits map onto the frame's ECMA bits (the

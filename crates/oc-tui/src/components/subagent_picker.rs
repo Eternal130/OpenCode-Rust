@@ -409,7 +409,7 @@ mod tests {
         let selected = store.picker_selection("parent", entries.len());
         assert_eq!(selected, 0);
         let theme = ThemeState::v2_dark();
-        let frame = crate::components::picker_solid::picker_panel_frame_dispatch(
+        let frame = crate::components::picker_solid::picker_panel_frame(
             &store.picker(),
             &entries,
             selected,
@@ -442,7 +442,7 @@ mod tests {
         let entries = store.picker_entries("parent");
         assert!(entries.is_empty(), "nothing running under the active filter");
         let theme = ThemeState::v2_dark();
-        let frame = crate::components::picker_solid::picker_panel_frame_dispatch(
+        let frame = crate::components::picker_solid::picker_panel_frame(
             &store.picker(),
             &entries,
             0,
@@ -480,7 +480,7 @@ mod tests {
         store.set_picker(picker);
         let entries = store.picker_entries("s1");
         assert_eq!(entries.len(), 1);
-        let frame = crate::components::picker_solid::picker_panel_frame_dispatch(
+        let frame = crate::components::picker_solid::picker_panel_frame(
             &store.picker(),
             &entries,
             0,

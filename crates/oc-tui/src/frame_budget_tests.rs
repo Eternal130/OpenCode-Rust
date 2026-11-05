@@ -661,7 +661,7 @@ fn frame_budget_picker_panel() {
 }
 
 fn picker_panel_budget_body() {
-    use crate::components::picker_solid::picker_panel_frame_dispatch;
+    use crate::components::picker_solid::picker_panel_frame;
     use crate::reactive::Runtime;
     use crate::store::{PickerEntry, PickerState, PickerTab, Store};
 
@@ -690,7 +690,7 @@ fn picker_panel_budget_body() {
     };
     let _ = &store;
     let render = |state: &PickerState| {
-        let frame = picker_panel_frame_dispatch(
+        let frame = picker_panel_frame(
             state,
             &entries,
             state.selected,
