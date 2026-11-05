@@ -894,18 +894,18 @@ fn serialize_atoms_row(atoms: &[crate::wrap::Atom], width: usize) -> String {
         if last_style != Some(atom.style) {
             sequence.push_str("\x1b[0m");
             if let Some(color) = atom.style.fg {
-                crate::grid_emitter::emit_fg(
+                crate::render::ansi::emit_fg(
                     &mut sequence,
                     crate::render::CellColor::from(color),
                 );
             }
             if let Some(color) = atom.style.bg {
-                crate::grid_emitter::emit_bg(
+                crate::render::ansi::emit_bg(
                     &mut sequence,
                     crate::render::CellColor::from(color),
                 );
             }
-            crate::grid_emitter::apply_attributes(&mut sequence, atom.style.add_modifier.bits());
+            crate::render::ansi::apply_attributes(&mut sequence, atom.style.add_modifier.bits());
             last_style = Some(atom.style);
         }
         sequence.push_str(&atom.text);

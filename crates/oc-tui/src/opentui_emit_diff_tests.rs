@@ -341,3 +341,48 @@ fn corpus_digest_is_stable() {
     eprintln!("d42 corpus digest: {digest:016x}");
     assert_ne!(digest, 0);
 }
+
+/// The cluster pixel contract (the retired emitter's
+/// `cluster_roundtrip_through_vt100`, pinned on the NEW emitter): a
+/// multi-codepoint cluster prints its FULL symbol and the cells
+/// beyond the span's overflow survive — the deferred cluster pass is
+/// the pixel-preserving policy on top of the opentui stream.
+#[test]
+fn cluster_frames_keep_pixels_through_vt100() {
+    let mut frame = grid(30, 1, &["                              "]);
+    for (i, ch) in "family ".chars().enumerate() {
+        frame.cells[0][i] = Cell { ch, attrs: 0, fg: CellColor::Default, bg: CellColor::Default };
+    }
+    let family = "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{200d}\u{1f466}";
+    frame.cells[0][7].ch = family.chars().next().expect("nonempty");
+    frame.cells[0][8].ch = CONTINUATION;
+    let mut clusters = std::collections::BTreeMap::new();
+    clusters.insert((0, 7), family.to_owned());
+    frame.clusters = Some(Box::new(clusters));
+    for (i, ch) in "flag".chars().enumerate() {
+        frame.cells[0][22 + i] =
+            Cell { ch, attrs: 0, fg: CellColor::Default, bg: CellColor::Default };
+    }
+    let mut emitter = OpentuiEmitter::new(30, 1);
+    let mut sink = Vec::new();
+    emitter.emit(&mut sink, &frame).expect("emit");
+    let mut parser = vt100::Parser::new(1, 30, 0);
+    parser.process(&sink);
+    let screen = parser.screen();
+    let mut text = String::new();
+    for x in 0..30 {
+        let c = screen
+            .cell(0, u16::try_from(x).unwrap_or(u16::MAX))
+            .map(vt100::Cell::contents)
+            .unwrap_or_default();
+        if c.is_empty() {
+            text.push(' ');
+        } else {
+            text.push_str(&c);
+        }
+    }
+    let norm: String = text.chars().filter(|c| *c != ' ').collect();
+    let target: String = family.chars().filter(|c| *c != ' ').collect();
+    assert!(norm.contains(&target), "family must round-trip: {text:?}");
+    assert!(text.contains("flag"), "flag must survive: {text:?}");
+}
