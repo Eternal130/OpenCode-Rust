@@ -528,7 +528,6 @@ static DEFAULT_TABLE: &[CommandDef] = defs! {
     "service_restart" => "service.restart", "none", "Restart service", "base";
     "location_reload" => "location.reload", "none", "Reload configuration", "base";
     "app_console" => "app.console", "none", "Toggle console", "base";
-    "app_heap_snapshot" => "app.heap_snapshot", "none", "Write heap snapshot", "base";
     "app_toggle_animations" => "app.toggle.animations", "none", "Toggle animations", "base";
     "app_toggle_file_context" => "app.toggle.file_context", "none", "Toggle file context", "base";
     "app_toggle_diffwrap" => "app.toggle.diffwrap", "none", "Toggle diff wrapping", "base";
@@ -801,20 +800,16 @@ static DEFAULT_TABLE: &[CommandDef] = defs! {
     // no-op).
     "plugins_list" => "plugins.list", "none", "Open plugin manager dialog", "base", palette System;
     "plugins_install" => "plugins.install", "none", "Install plugin", "base";
-    // PORT ADDITION (lane KM, auditA #10): v2's toast activation is
-    // pointer-only (ui/toast.tsx:57-59); the port additionally binds a
-    // keyboard chord so the action label is reachable from the input
-    // layer while an actionable toast is live (the dispatcher no-ops
-    // otherwise). Registered in the coverage test's PORT_ADDITIONS.
-    "toast_activate" => "toast.activate", "ctrl+alt+t", "Activate the current toast action", "base", palette Prompt;
     // The which-key family (keybind.ts:290-300 — lane KM): the ref
     // panel is a LOCAL TUI feature plugin
     // (`feature-plugins/system/which-key.tsx`, last shipped at
     // 4a93972a78 — deleted with the v1 plugin runtime at
     // 06290907a9 while these bindings stayed); it is not an
-    // `@opentui/keymap` addon. The port registers the same 11 ids +
-    // defaults so overrides resolve and the full panel dispatches
-    // them (oc-tui `components/which_key.rs`).
+    // `@opentui/keymap` addon. DEAD-BINDING STATE (D3-7b): the
+    // registrations are kept 1:1 with the ref's keybind.ts:290-300
+    // (same ids + defaults so user overrides resolve) but NOTHING
+    // dispatches them — the port's panel superset was removed; this
+    // mirrors the ref exactly (registered, no consumer).
     "which_key_toggle" => "which-key.toggle", "ctrl+alt+k", "Toggle which-key panel", "base";
     "which_key_layout_toggle" => "which-key.layout.toggle", "ctrl+alt+shift+k", "Switch which-key layout", "base";
     "which_key_pending_toggle" => "which-key.pending.toggle", "ctrl+alt+shift+p", "Toggle which-key pending preview", "base";
