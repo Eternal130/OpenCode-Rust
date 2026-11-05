@@ -7593,8 +7593,9 @@ pub async fn run_with_size(
     // TM-1 — the current value source, opentui has no post-setup
     // push).
     //
-    // WRITE-SEAM (B3b, resolved): the session terminal's output writer
-    // is the ONE frame writer — the GridEmitter writes every frame
+    // WRITE-SEAM (B3b, resolved; D4.2 flip): the session terminal's
+    // output writer is the ONE frame writer — the opentui emitter
+    // writes every frame
     // under the session lock; the setup/probe/flip bytes each ride the
     // same writer (or stdout under its lock), so the phases never
     // interleave mid-sequence.
@@ -7634,14 +7635,17 @@ pub async fn run_with_size(
     // SSH_*/WT_SESSION — v2 raster semantics; see render::color_mode).
     let color_mode = color_mode::detect_from_env();
     let mut color_cache = color_mode::ColorCache::default();
-    // Lane B3b — the frame writer is oc-tui's own GridEmitter (a port
-    // of opentui's `emit_frame_sgr`): each frame is diffed against the
-    // emitter's prev grid and written through the session terminal's
-    // output writer in a `?2026` synchronized-update envelope. The
-    // previous writer (the retired canvas backend over its own
-    // stdout handle) is retired — no second frame-writer seam.
+    // Lane D4.2 — the frame writer is opentui's own SGR emitter (the
+    // `emit_frame_sgr` path, checkout e52adf6): each frame's composed
+    // pixels are poked into a dedicated CliRenderer's buffers and the
+    // bytes leave through the opentui writer wrapped in a `?2026`
+    // synchronized-update envelope (the mini footer's proven pump
+    // shape, D4.1c). The GridEmitter (oc-tui's port of the same
+    // writer) is retired after the D4.2 differential gate proved the
+    // two byte-identical on the golden corpus — no second
+    // frame-writer seam remains.
     let size = size.unwrap_or((100, 30));
-    let mut emitter = crate::grid_emitter::GridEmitter::new(
+    let mut emitter = crate::render::opentui_emit::OpentuiEmitter::new(
         usize::from(size.0),
         usize::from(size.1),
     );
@@ -8382,24 +8386,26 @@ pub async fn run_with_size(
             let _ = out.write_all(&crate::terminal_proto::osc12_sequence((r, g, b)));
         }
         let _ = out.flush();
-        // The same shape/blink/color seeds the GridEmitter's cursor
+        // The same shape/blink/color seeds the emitter cursor's
         // diff cache (the frame tail's DECSCUSR/OSC 12/CUP emissions
         // mirror upstream `CursorOutputState::emit`; the values never
         // change after boot, so the tail only re-sends them on the
         // first visible frame).
-        emitter.cursor.set_style(
+        emitter.cursor().set_style(
             match config.cursor.style {
                 crate::terminal_proto::CursorShape::Underline => {
-                    crate::grid_emitter::CursorStyle::Underline
+                    opentui_core::renderables::textarea::CursorStyle::Underline
                 }
-                crate::terminal_proto::CursorShape::Line => crate::grid_emitter::CursorStyle::Line,
+                crate::terminal_proto::CursorShape::Line => {
+                    opentui_core::renderables::textarea::CursorStyle::Line
+                }
                 crate::terminal_proto::CursorShape::Block
                 | crate::terminal_proto::CursorShape::Default => {
-                    crate::grid_emitter::CursorStyle::Block
+                    opentui_core::renderables::textarea::CursorStyle::Block
                 }
             },
             config.cursor.blinking,
-            cursor_rgb,
+            opentui_core::Rgba::rgb(cursor_rgb.0, cursor_rgb.1, cursor_rgb.2),
         );
     }
 
@@ -9687,9 +9693,9 @@ pub async fn run_with_size(
                 }
                 match caret {
                     Some((x, y)) => emitter
-                        .cursor
+                        .cursor()
                         .set_position(u32::from(x) + 1, u32::from(y) + 1, true),
-                    None => emitter.cursor.set_position(1, 1, false),
+                    None => emitter.cursor().set_position(1, 1, false),
                 }
             }
             // Lane B3b — the frame emission: diff against the
