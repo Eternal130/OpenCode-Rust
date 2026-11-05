@@ -93,9 +93,18 @@ oc-uqr = { path = "third_party/oc-uqr" }
 # plus cell-pixel resolution), occlusion flattening and image_deletes.
 # Consumed by oc-tui lane D3-4b: the local image/ family (protocol
 # detection, kitty/sixel emitters, halfblock raster) retires.
-opentui-core = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "71f07e1" }
-opentui-keymap = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "71f07e1" }
-opentui-solid = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "71f07e1" }
+# Rev e52adf6 (lane D4.1c-pre) adds the split-footer footer-domain
+# render path: calculate_render_geometry (footer-band layout +
+# renderOffset emission), the footer frame's ?2026 pump drain,
+# set_footer_height (runtime dock re-geometry), and solid
+# render_into/dispose_root/with_renderer (mount a solid component
+# onto the renderer's root tree). Consumed by oc-tui lane D4.1c:
+# mini footer content rides the renderer root tree; the dock's
+# Canvas→into_frame→GridEmitter path and the "never pump" ruling
+# retire (mini frame bytes flow through the renderer pump exit).
+opentui-core = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "e52adf6" }
+opentui-keymap = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "e52adf6" }
+opentui-solid = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "e52adf6" }
 
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
