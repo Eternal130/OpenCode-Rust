@@ -374,6 +374,14 @@ pub(crate) fn surface_element(
 ///
 /// ```text
 /// root
+/// └─[0] surface-tabs-strip (D4.1a strip lane — a BASE family at
+/// │                       skeleton index 0: the 1-row strip pasted
+/// │                       first over the route base, seated below
+/// │                       the chrome container like surface-diff)
+/// └─[0] surface-home     (D4.1a home lane — same base seat: the
+/// │                       home route's chrome WAS the route base
+/// │                       frame; routes are exclusive so the tie
+/// │                       with the strip never co-mounts)
 /// └─[0] surface-chrome   (this lane: devtools/stats/location-missing/
 /// │                       plugin pages/rail+tooltip/app-state overlays)
 /// └─[1] surface-transcript(D2.2 transcript lane — seated BELOW the
@@ -452,6 +460,13 @@ pub(crate) enum ChromeStamp {
     /// keep their ink — verbatim the retired footer bridge's
     /// post-copy fixup.
     Transparent { left: usize, top: usize, width: usize },
+    /// The glow fills' `fg(Color::Reset)` restoration (the tabs-strip
+    /// lane D4.1a): opentui's opaque fills hard-write fg=white, and
+    /// the retired `frame_from_buffer` copy reset the fg on the glow
+    /// ranges' non-glyph cells (a painted glyph always carries its
+    /// own fg — the two never collide). Space cells (no attrs, the
+    /// white fill signature) inside the one-row rect read fg Default.
+    FgDefault { left: usize, top: usize, width: usize },
     /// A scrim dim over the rect (the overlays lane's reconnecting
     /// backdrop, ref `reconnecting.tsx:9-17`): every RGB background
     /// dims toward black at `alpha/255`, non-RGB backgrounds and all
@@ -513,6 +528,18 @@ fn apply_stamp(frame: &mut Frame, base_left: usize, base_top: usize, stamp: &Chr
                 }
             }
         }
+        ChromeStamp::FgDefault { left, top, width } => {
+            if let Some(row) = frame.cells.get_mut(base_top + top) {
+                for cell in row.iter_mut().skip(base_left + left).take(width) {
+                    if cell.ch == ' '
+                        && cell.attrs == 0
+                        && matches!(cell.fg, CellColor::Rgb(255, 255, 255))
+                    {
+                        cell.fg = CellColor::Default;
+                    }
+                }
+            }
+        }
         ChromeStamp::DimBg {
             left,
             top,
@@ -557,6 +584,10 @@ fn apply_stamp(frame: &mut Frame, base_left: usize, base_top: usize, stamp: &Chr
 /// toast/reconnecting) still paste AFTER the composite seam and so stay
 /// above the family, exactly today's z for them.
 const SURFACE_ORDER: &[&str] = &[
+    // The queued-prompt dock rides the chrome family (lane D4.1a):
+    // its old paste ran BEFORE the prompt mount, so it seats below
+    // every other chrome surface (bytes arbitrate — no overlap today).
+    "queued_dock",
     "stats_page",
     "stats_poster",
     "tab_rail",
