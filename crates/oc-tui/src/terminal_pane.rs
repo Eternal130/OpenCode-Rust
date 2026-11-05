@@ -536,7 +536,7 @@ fn rgba_color(color: opentui_core::color::Rgba) -> CellColor {
 /// avoid a second SGR-7 swap at emission.
 fn paint_attrs(attributes: u32) -> u16 {
     let bits = (attributes & 0xFF) as u16;
-    bits & !crate::grid_emitter::text_attributes::INVERSE
+    bits & !crate::render::ansi::text_attributes::INVERSE
 }
 
 /// One composed paint cell (the retired Frame conversion's unit —

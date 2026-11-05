@@ -75,3 +75,75 @@ fn color_params(color: CellColor, base: u8) -> Vec<String> {
         }
     }
 }
+
+// -- SGR emission helpers (lane B3b, relocated by D4.2) --------------------
+//
+// These were the GridEmitter's serialization helpers; the mini
+// scrollback transcript (mini/lifecycle.rs serialize_atoms_row) and
+// the terminal pane's attr mask still consume them, so they survive
+// the GridEmitter's retirement HERE (D4.1c deviation 1's standing
+// exception — the committed mini transcript bytes depend on them).
+// Byte shapes are opentui-core ansi.rs's (emitColor /
+// TextAttributes.apply_attributes), unchanged.
+
+/// ECMA-48 attribute bits — the exact packing of opentui-core
+/// `ansi.rs` `text_attributes` (bit 0 = param 1 … bit 7 = param 9).
+pub mod text_attributes {
+    pub const BOLD: u16 = 1 << 0;
+    pub const DIM: u16 = 1 << 1;
+    pub const ITALIC: u16 = 1 << 2;
+    pub const UNDERLINE: u16 = 1 << 3;
+    pub const BLINK: u16 = 1 << 4;
+    pub const INVERSE: u16 = 1 << 5;
+    pub const HIDDEN: u16 = 1 << 6;
+    pub const STRIKETHROUGH: u16 = 1 << 7;
+}
+
+/// SGR foreground — opentui-core `ansi.rs` `emit_color` (:114-144)
+/// specialized to the oc-tui color vocabulary.
+pub fn emit_fg(buf: &mut String, color: CellColor) {
+    match color {
+        CellColor::Default => buf.push_str("\x1b[39m"),
+        CellColor::Indexed(index) => buf.push_str(&format!("\x1b[38;5;{index}m")),
+        CellColor::Rgb(r, g, b) => buf.push_str(&format!("\x1b[38;2;{r};{g};{b}m")),
+    }
+}
+
+/// SGR background — as [`emit_fg`], on the 4x plane.
+pub fn emit_bg(buf: &mut String, color: CellColor) {
+    match color {
+        CellColor::Default => buf.push_str("\x1b[49m"),
+        CellColor::Indexed(index) => buf.push_str(&format!("\x1b[48;5;{index}m")),
+        CellColor::Rgb(r, g, b) => buf.push_str(&format!("\x1b[48;2;{r};{g};{b}m")),
+    }
+}
+
+/// The attribute SGR burst — opentui-core `ansi.rs`
+/// `TextAttributes::apply_attributes` (:76-103): fixed order, one SGR
+/// per set bit.
+pub fn apply_attributes(buf: &mut String, attrs: u16) {
+    if attrs & text_attributes::BOLD != 0 {
+        buf.push_str("\x1b[1m");
+    }
+    if attrs & text_attributes::DIM != 0 {
+        buf.push_str("\x1b[2m");
+    }
+    if attrs & text_attributes::ITALIC != 0 {
+        buf.push_str("\x1b[3m");
+    }
+    if attrs & text_attributes::UNDERLINE != 0 {
+        buf.push_str("\x1b[4m");
+    }
+    if attrs & text_attributes::BLINK != 0 {
+        buf.push_str("\x1b[5m");
+    }
+    if attrs & text_attributes::INVERSE != 0 {
+        buf.push_str("\x1b[7m");
+    }
+    if attrs & text_attributes::HIDDEN != 0 {
+        buf.push_str("\x1b[8m");
+    }
+    if attrs & text_attributes::STRIKETHROUGH != 0 {
+        buf.push_str("\x1b[9m");
+    }
+}

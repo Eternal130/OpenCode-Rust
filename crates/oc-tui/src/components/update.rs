@@ -13,6 +13,14 @@
 //! renderer must still paint its last screen). It is a reasoned
 //! retention for D4, not a GridEmitter blocker.
 //!
+//! **K-class licensed exception (lane D4.2, ADR-0019)**:
+//! [`error_component_frame`] is the ONE licensed `Frame` producer
+//! after the emission flip — the render-crash fallback (update.rs
+//! → app.rs's `error_mode` arms) paints a bare grid because a
+//! broken render path must not depend on the tree/composite seam it
+//! crashed in. It keeps the `Frame` shape on purpose; see ADR-0019
+//! for the final registry entry.
+//!
 //! **Sources** (v2's layered `UpdateSource`): the SSE
 //! `installation.update-available`/`installation.updated` events (the
 //! server-hosting process's updater, `autoupdate.rs`'s

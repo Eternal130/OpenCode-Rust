@@ -1908,15 +1908,18 @@ impl App {
         hits.rows.into_iter().find(|hit| hit.rect.contains(col, row))
     }
 
-    /// A permission ask is the live footer view.
-    fn permission_live(&self) -> bool {
+    /// A permission ask is the live footer view. (pub(crate): the
+    /// D4.2 emission differential harness mirrors the pump's caret
+    /// policy, which gates on this.)
+    pub(crate) fn permission_live(&self) -> bool {
         matches!(self.store.footer().view, FooterView::Permission { .. })
     }
 
     /// A form is the live footer view (TD16: forms are BLOCKING
     /// surfaces — `forms().length > 0` mounts `FormPrompt` in v2's
-    /// session-route Switch, index.tsx:1470-1477).
-    fn form_live(&self) -> bool {
+    /// session-route Switch, index.tsx:1470-1477). (pub(crate): the
+    /// D4.2 harness, as above.)
+    pub(crate) fn form_live(&self) -> bool {
         matches!(self.store.footer().view, FooterView::Form { .. })
     }
 
@@ -7422,7 +7425,7 @@ pub type SessionTerminal =
 /// shared slot, so the editor/suspend terminal rebuilds swap in under
 /// it without any stale-session capture. `pump_output` is forwarded
 /// for API completeness but never driven in this lane — the
-/// renderer's SGR stream stays unpumped (GridEmitter is the one
+/// renderer's SGR stream stays unpumped (the opentui emitter is the one
 /// frame writer).
 struct RendererSessionHandle {
     session: Arc<std::sync::Mutex<SessionTerminal>>,
@@ -7590,8 +7593,9 @@ pub async fn run_with_size(
     // TM-1 — the current value source, opentui has no post-setup
     // push).
     //
-    // WRITE-SEAM (B3b, resolved): the session terminal's output writer
-    // is the ONE frame writer — the GridEmitter writes every frame
+    // WRITE-SEAM (B3b, resolved; D4.2 flip): the session terminal's
+    // output writer is the ONE frame writer — the opentui emitter
+    // writes every frame
     // under the session lock; the setup/probe/flip bytes each ride the
     // same writer (or stdout under its lock), so the phases never
     // interleave mid-sequence.
@@ -7631,14 +7635,17 @@ pub async fn run_with_size(
     // SSH_*/WT_SESSION — v2 raster semantics; see render::color_mode).
     let color_mode = color_mode::detect_from_env();
     let mut color_cache = color_mode::ColorCache::default();
-    // Lane B3b — the frame writer is oc-tui's own GridEmitter (a port
-    // of opentui's `emit_frame_sgr`): each frame is diffed against the
-    // emitter's prev grid and written through the session terminal's
-    // output writer in a `?2026` synchronized-update envelope. The
-    // previous writer (the retired canvas backend over its own
-    // stdout handle) is retired — no second frame-writer seam.
+    // Lane D4.2 — the frame writer is opentui's own SGR emitter (the
+    // `emit_frame_sgr` path, checkout e52adf6): each frame's composed
+    // pixels are poked into a dedicated CliRenderer's buffers and the
+    // bytes leave through the opentui writer wrapped in a `?2026`
+    // synchronized-update envelope (the mini footer's proven pump
+    // shape, D4.1c). The GridEmitter (oc-tui's port of the same
+    // writer) is retired after the D4.2 differential gate proved the
+    // two byte-identical on the golden corpus — no second
+    // frame-writer seam remains.
     let size = size.unwrap_or((100, 30));
-    let mut emitter = crate::grid_emitter::GridEmitter::new(
+    let mut emitter = crate::render::opentui_emit::OpentuiEmitter::new(
         usize::from(size.0),
         usize::from(size.1),
     );
@@ -7650,7 +7657,7 @@ pub async fn run_with_size(
     // `request_render`, `settle(1)` paints exactly one frame per
     // pump-iteration batch — the pre-flip "one draw per loop
     // iteration" burst boundary, unchanged. The renderer's own SGR
-    // stream is never pumped: GridEmitter stays the session output's
+    // stream is never pumped: the opentui emitter stays the session output's
     // ONE frame writer (byte-for-byte unchanged is constructive —
     // same Frame, same emitter). Config mirrors the probe-era
     // assembly: `use_mouse: false` (mouse modes are armed by the
@@ -8200,7 +8207,7 @@ pub async fn run_with_size(
             // internal render (the first check_resize's resize→render,
             // `frame_id == 0`) appends one forced-full blank frame.
             // Everything after that baseline must be silence — the
-            // GridEmitter is the session output's one frame writer.
+            // The opentui emitter is the session output's one frame writer.
             let mut sgr_baseline: Option<usize> = None;
             // The first check_resize observation (None -> Some) is
             // baseline adoption, NOT a resize — emitting it would
@@ -8325,7 +8332,7 @@ pub async fn run_with_size(
                 // tolerated appends are the internal renders a real
                 // size change drives (`check_resize` → `resize` →
                 // `render`, whose bytes are never pumped; the
-                // GridEmitter is the session output's one frame
+                // The opentui emitter is the session output's one frame
                 // writer).
                 let sgr_len = renderer.sgr_stream().len();
                 match (sgr_baseline, resized.is_some()) {
@@ -8379,24 +8386,26 @@ pub async fn run_with_size(
             let _ = out.write_all(&crate::terminal_proto::osc12_sequence((r, g, b)));
         }
         let _ = out.flush();
-        // The same shape/blink/color seeds the GridEmitter's cursor
+        // The same shape/blink/color seeds the emitter cursor's
         // diff cache (the frame tail's DECSCUSR/OSC 12/CUP emissions
         // mirror upstream `CursorOutputState::emit`; the values never
         // change after boot, so the tail only re-sends them on the
         // first visible frame).
-        emitter.cursor.set_style(
+        emitter.cursor().set_style(
             match config.cursor.style {
                 crate::terminal_proto::CursorShape::Underline => {
-                    crate::grid_emitter::CursorStyle::Underline
+                    opentui_core::renderables::textarea::CursorStyle::Underline
                 }
-                crate::terminal_proto::CursorShape::Line => crate::grid_emitter::CursorStyle::Line,
+                crate::terminal_proto::CursorShape::Line => {
+                    opentui_core::renderables::textarea::CursorStyle::Line
+                }
                 crate::terminal_proto::CursorShape::Block
                 | crate::terminal_proto::CursorShape::Default => {
-                    crate::grid_emitter::CursorStyle::Block
+                    opentui_core::renderables::textarea::CursorStyle::Block
                 }
             },
             config.cursor.blinking,
-            cursor_rgb,
+            opentui_core::Rgba::rgb(cursor_rgb.0, cursor_rgb.1, cursor_rgb.2),
         );
     }
 
@@ -9582,7 +9591,7 @@ pub async fn run_with_size(
         // D2.1b — the invalidation rides the LIVE CliRenderer's
         // scheduler (one request per pump iteration; `settle`'s
         // contract is exactly one frame per invalidation batch), so
-        // the frame build + GridEmitter emission below executes under
+        // the frame build + emission below executes under
         // the renderer's frame scheduling. The burst boundary is the
         // pre-flip one by construction: the same dirty predicate gates
         // the draw (renderer-internally armed frames — e.g. the
@@ -9669,7 +9678,7 @@ pub async fn run_with_size(
             // A blocker (permission ask / form) owns the footer —
             // the composer is not the focused surface, so its
             // caret must not blink through the mounted body. The
-            // position/show-hide rides the GridEmitter's cursor tail
+            // position/show-hide rides the emitter cursor's tail
             // (upstream `CursorOutputState::emit` timing: CUP + ?25h
             // inside the frame, ?25l on a no-op frame's hide).
             {
@@ -9684,9 +9693,9 @@ pub async fn run_with_size(
                 }
                 match caret {
                     Some((x, y)) => emitter
-                        .cursor
+                        .cursor()
                         .set_position(u32::from(x) + 1, u32::from(y) + 1, true),
-                    None => emitter.cursor.set_position(1, 1, false),
+                    None => emitter.cursor().set_position(1, 1, false),
                 }
             }
             // Lane B3b — the frame emission: diff against the
