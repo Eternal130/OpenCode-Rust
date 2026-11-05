@@ -1908,15 +1908,18 @@ impl App {
         hits.rows.into_iter().find(|hit| hit.rect.contains(col, row))
     }
 
-    /// A permission ask is the live footer view.
-    fn permission_live(&self) -> bool {
+    /// A permission ask is the live footer view. (pub(crate): the
+    /// D4.2 emission differential harness mirrors the pump's caret
+    /// policy, which gates on this.)
+    pub(crate) fn permission_live(&self) -> bool {
         matches!(self.store.footer().view, FooterView::Permission { .. })
     }
 
     /// A form is the live footer view (TD16: forms are BLOCKING
     /// surfaces — `forms().length > 0` mounts `FormPrompt` in v2's
-    /// session-route Switch, index.tsx:1470-1477).
-    fn form_live(&self) -> bool {
+    /// session-route Switch, index.tsx:1470-1477). (pub(crate): the
+    /// D4.2 harness, as above.)
+    pub(crate) fn form_live(&self) -> bool {
         matches!(self.store.footer().view, FooterView::Form { .. })
     }
 

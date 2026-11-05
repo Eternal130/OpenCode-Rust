@@ -7,6 +7,7 @@ pub mod color_mode;
 pub mod frame;
 pub mod latex;
 pub mod mermaid;
+pub mod opentui_emit;
 pub mod paint;
 
 pub use ansi::serialize_canonical;
