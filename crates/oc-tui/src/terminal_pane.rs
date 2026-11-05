@@ -12,7 +12,9 @@
 //!   pending-input backlog until `replay_complete`, the failure
 //!   surface (`Terminal connection failed` / `disconnected`), and the
 //!   key encoder (delegated to opentui's ghostty port);
-//! * [`render_terminal_pane`] — the VT grid as a paint [`Frame`].
+//! * [`render_terminal_pane`] — the VT grid as a paint [`Frame`]
+//!   (lane D4.1b: the HEADLESS twin — the live pane mounts its
+//!   pixels into the shared tree, `components/terminal_pane_solid`).
 //!
 //! Lane D3-3b: the VT face (grid, scrollback, selection, key/paste
 //! encoders, OSC 4/10/11 palette injection) now lives in opentui's
@@ -537,12 +539,33 @@ fn paint_attrs(attributes: u32) -> u16 {
     bits & !crate::grid_emitter::text_attributes::INVERSE
 }
 
-/// The VT grid as a paint frame (the pane's whole box).
+/// One composed paint cell (the retired Frame conversion's unit —
+/// lane D4.1b: the walk feeds BOTH the shared-tree mount's row
+/// shaping and the headless twin's Frame, so the two agree by
+/// construction).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PaneCell {
+    pub ch: char,
+    pub attrs: u16,
+    pub fg: CellColor,
+    pub bg: CellColor,
+}
+
+/// The VT grid as paint cells (the pane's whole box) — the engine's
+/// composed `OptimizedBuffer` walked cell-by-cell with the paint
+/// semantics (`rgba_color`/`paint_attrs`, the box's trailing blank
+/// column). Lane D4.1b: no Frame materializes here anymore — the
+/// shared-tree mount shapes these into rows
+/// (`terminal_pane_solid::terminal_pane_mount`) and the headless
+/// twin folds them back into a standalone Frame.
 #[must_use]
-pub fn render_terminal_pane(state: &TerminalPaneState, width: u16, height: u16) -> Frame {
-    let (width, height) = (usize::from(width), usize::from(height));
-    let blank = || Cell { ch: ' ', attrs: 0, fg: CellColor::Default, bg: CellColor::Default };
-    let mut cells: Vec<Vec<Cell>> = vec![vec![blank(); width]; height];
+pub(crate) fn pane_cells(
+    state: &TerminalPaneState,
+    width: usize,
+    height: usize,
+) -> Vec<Vec<PaneCell>> {
+    let blank = || PaneCell { ch: ' ', attrs: 0, fg: CellColor::Default, bg: CellColor::Default };
+    let mut cells: Vec<Vec<PaneCell>> = vec![vec![blank(); width]; height];
     if let Some(failure) = state.failure() {
         let row = &mut cells[0];
         let mut at = 1usize;
@@ -550,7 +573,7 @@ pub fn render_terminal_pane(state: &TerminalPaneState, width: u16, height: u16) 
             if at >= width.saturating_sub(1) {
                 break;
             }
-            row[at] = Cell {
+            row[at] = PaneCell {
                 ch: atom,
                 attrs: 0,
                 fg: CellColor::Rgb(251, 146, 146),
@@ -558,7 +581,7 @@ pub fn render_terminal_pane(state: &TerminalPaneState, width: u16, height: u16) 
             };
             at += atom.len_utf8().max(1);
         }
-        return Frame { cells, width, height, clusters: None };
+        return cells;
     }
     // The embedded terminal paints at the box's left pad (1).
     let mut buffer = OptimizedBuffer::new(width as u32, height as u32);
@@ -568,7 +591,7 @@ pub fn render_terminal_pane(state: &TerminalPaneState, width: u16, height: u16) 
             let Some(cell) = buffer.get(col as u32, row as u32) else {
                 continue;
             };
-            *slot = Cell {
+            *slot = PaneCell {
                 ch: char::from_u32(cell.char).unwrap_or(' '),
                 attrs: paint_attrs(cell.attributes),
                 fg: rgba_color(cell.fg),
@@ -576,6 +599,24 @@ pub fn render_terminal_pane(state: &TerminalPaneState, width: u16, height: u16) 
             };
         }
     }
+    cells
+}
+
+/// The VT grid as a paint frame — lane D4.1b's HEADLESS TWIN: the
+/// standalone-Frame readback of [`pane_cells`] for the unit
+/// harnesses (the live pane rides the shared tree; no Frame comes
+/// back to `render_session`).
+#[must_use]
+pub fn render_terminal_pane(state: &TerminalPaneState, width: u16, height: u16) -> Frame {
+    let (width, height) = (usize::from(width), usize::from(height));
+    let cells: Vec<Vec<Cell>> = pane_cells(state, width, height)
+        .into_iter()
+        .map(|row| {
+            row.into_iter()
+                .map(|cell| Cell { ch: cell.ch, attrs: cell.attrs, fg: cell.fg, bg: cell.bg })
+                .collect()
+        })
+        .collect();
     Frame { cells, width, height, clusters: None }
 }
 

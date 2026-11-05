@@ -971,15 +971,17 @@ pub fn render_session(
     // TUI-4 — the embedded terminal pane (session-frame.tsx:319-344):
     // the right pane renders the live VT grid at the clamped layout
     // width (default the equal split), full height under the strip.
+    // Lane D4.1b — no Frame paste anymore: the store syncs the pane's
+    // pixels into the shared tree (`surface-terminal` family wrapper
+    // at the OLD paste site, base layer); they land at render_app's
+    // composite seam.
     if let (Some(_pty), Some(terminal_width)) = (&terminal_pane, terminal_width) {
         let pane_height = height - content_top;
         let pane_size = (
             u16::try_from(terminal_width).unwrap_or(u16::MAX),
             u16::try_from(pane_height).unwrap_or(u16::MAX),
         );
-        if let Some(pane) = store.terminal_pane_frame(session_id, pane_size) {
-            paste(&mut frame, &pane, column + shift, content_top);
-        }
+        store.terminal_pane_sync(session_id, pane_size, column + shift, content_top);
     }
     frame
 }

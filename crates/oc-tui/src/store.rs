@@ -5495,12 +5495,14 @@ impl Store {
     /// terminal-pane.tsx:289). A selection without a live state
     /// re-requests the attach (the self-healing mount).
     #[must_use]
-    pub fn terminal_pane_frame(
+    pub fn terminal_pane_sync(
         &self,
         session_id: &str,
         size: (u16, u16),
-    ) -> Option<crate::render::Frame> {
-        let pty = self.terminal_pane_mounted(session_id)?;
+        left: usize,
+        top: usize,
+    ) {
+        let Some(pty) = self.terminal_pane_mounted(session_id) else { return };
         let mut panes = self.terminal_panes.borrow_mut();
         if !panes.contains_key(&pty) {
             drop(panes);
@@ -5508,15 +5510,23 @@ impl Store {
             if requested {
                 self.terminal_sink.borrow().select(session_id, Some(&pty));
             }
-            return None;
+            return;
         }
-        let state = panes.get_mut(&pty)?;
+        let Some(state) = panes.get_mut(&pty) else { return };
         let content_cols = size.0.saturating_sub(2).max(1);
         if let Some(frame) = state.resize_pane(content_cols, size.1) {
             self.terminal_sink.borrow().send_frame(&pty, &frame);
         }
-        let frame = crate::terminal_pane::render_terminal_pane(state, size.0, size.1);
-        Some(frame)
+        // Lane D4.1b — the pane's pixels ride the shared tree (the
+        // `surface-terminal` family wrapper at the old paste site); no
+        // Frame comes back to `render_session`.
+        crate::components::terminal_pane_solid::terminal_pane_mount(
+            state,
+            usize::from(size.0),
+            usize::from(size.1),
+            left,
+            top,
+        );
     }
 
     /// The snapshot's fast-forward (`connect()`'s first hop,
