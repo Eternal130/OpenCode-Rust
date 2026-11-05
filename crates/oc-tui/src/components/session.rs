@@ -57,7 +57,9 @@ pub fn composer_statusline(store: &Store, session_id: &str) -> (String, String) 
 /// of `component/session-tabs.tsx` — active pill, unread `•` on
 /// inactive tabs, permission `!` on the active tab, the ` + `
 /// affordance). `active` marks the active tab (None on the home
-/// route — no pill).
+/// route — no pill). D4.1a: the strip rides the shared chrome tree
+/// at the old paste site `(left, top)` — no Frame comes back; the
+/// pixels land at render_app's composite seam.
 ///
 /// On the HOME route the strip appends the `New session` pseudo-tab
 /// and SELECTS it (`items = [...ordered, NEW_SESSION_TAB]` +
@@ -65,13 +67,14 @@ pub fn composer_statusline(store: &Store, session_id: &str) -> (String, String) 
 /// hiding the idle ` + ` affordance (`showPlus`, :1344) — the census
 /// "new-tab padding" family: after an add-release the strip reads
 /// `+ New session` (bold, `✕` on hover) instead of a bare ` + `.
-#[must_use]
-pub fn paint_live_tabs_bar(
+pub fn mount_live_tabs_bar(
     store: &Store,
     active: Option<&str>,
     width: usize,
     styles: &crate::theme::ThemeStyles,
-) -> Frame {
+    left: usize,
+    top: usize,
+) {
     let tabs = store.tabs();
     let permission_live =
         matches!(store.footer().view, crate::components::footer::FooterView::Permission { .. });
@@ -141,7 +144,7 @@ pub fn paint_live_tabs_bar(
     let held = store
         .close_hold()
         .and_then(|hold| crate::components::session_tabs::held_session_tab_layout(&hold, &owned));
-    crate::components::session_tabs_solid::paint_solid_bar_clock(
+    crate::components::session_tabs_solid::mount_solid_bar_clock(
         &views,
         active,
         show_plus,
@@ -154,6 +157,8 @@ pub fn paint_live_tabs_bar(
         store.clock(),
         tracks,
         store.tabs_indicator_config(),
+        left,
+        top,
     )
 }
 
@@ -268,8 +273,11 @@ pub fn render_session(
     // pill active, #45).
     let show_strip = store.tabs_enabled() && rail_width.is_none();
     let strip_active = show_strip.then(|| store.session_root(session_id));
-    let strip =
-        show_strip.then(|| paint_live_tabs_bar(store, strip_active.as_deref(), width, styles));
+    if show_strip {
+        // D4.1a: the strip rides the shared tree at the old (0,0)
+        // paste site — the pixels land at render_app's composite seam.
+        mount_live_tabs_bar(store, strip_active.as_deref(), width, styles, 0, 0);
+    }
 
     // The session sidebar (session-frame.tsx:106-117): v2's right
     // pane — `auto` shows it above 120 cols, the manual toggle forces
@@ -326,13 +334,24 @@ pub fn render_session(
         let entries = store.picker_entries(session_id);
         let selected = store.picker_selection(session_id, entries.len());
         let column_u16 = u16::try_from(column).unwrap_or(u16::MAX);
-        let panel = crate::components::picker_solid::picker_panel_frame_dispatch(
+        // D4.1a: the panel rides the shared tree at the composer's
+        // seat (the old `(mount_x + shift, height − mount)` paste
+        // site); the mount frame is the blank rect the panel covered
+        // (PANEL_ROWS — the 12th pad row keeps the base fill, exactly
+        // the old paste's extent).
+        crate::components::picker_solid::picker_panel_mount(
             &store.picker(),
             &entries,
             selected,
             &theme,
             column_u16,
             &store.picker_registered_tabs(),
+            mount_x + shift,
+            height.saturating_sub(crate::components::subagent_picker::PICKER_MOUNT_ROWS),
+        );
+        let panel = crate::components::chrome_solid::blank_frame(
+            column,
+            crate::components::subagent_picker::PANEL_ROWS,
         );
         let top = height.saturating_sub(crate::components::subagent_picker::PICKER_MOUNT_ROWS);
         let visible = entries.len().min(crate::components::subagent_picker::BODY_ROWS);
@@ -821,13 +840,17 @@ pub fn render_session(
         loading,
     );
     let mut frame = paint_placed_with_fills(&[], &[], size, fill);
-    if let Some(strip) = strip {
-        paste(&mut frame, &strip, 0, 0);
-    }
-    if let Some(dock) =
-        (!queued.is_empty()).then(|| paint_queued_dock(&queued, column - inset, styles))
-    {
-        paste(&mut frame, &dock, inset + shift, height - prompt_height - dock_height);
+    // D4.1a: the strip + the queued dock ride the shared tree (the
+    // old (0,0)/(inset+shift, …) paste sites) — their pixels land at
+    // render_app's composite seam.
+    if !queued.is_empty() {
+        mount_queued_dock(
+            &queued,
+            column - inset,
+            styles,
+            inset + shift,
+            height - prompt_height - dock_height,
+        );
     }
     paste(&mut frame, &mount, mount_x + shift, height - prompt_height);
     // TUI-3: the vertical rail composites over the content column's
@@ -1241,44 +1264,62 @@ fn session_cost_row(store: &Store, session_id: &str) -> Option<String> {
 /// routes/session/index.tsx:2312-2342): a left border bar, the count
 /// in `text.base`, ` · ` then the next prompt's text (newlines
 /// flattened) muted, truncated to the width.
-fn paint_queued_dock(
+/// The dock's shaped units (D4.1a): one row — the theme background
+/// fill (the surface's own background) plus the four styled segments
+/// (`┃`, the count, ` · `, the next prompt's text, newlines
+/// flattened, truncated to the width) as chrome runs. The SAME walk
+/// the retired hand-painted frame performed.
+fn queued_dock_units(
     queued: &[crate::store::QueuedPrompt],
     width: usize,
     styles: &crate::theme::ThemeStyles,
-) -> Frame {
-    let background = crate::style::Style::new()
-        .fg(crate::components::tool_rows::DEFAULT_FOREGROUND)
-        .bg(styles.background);
-    let mut frame =
-        crate::render::paint_placed(&[], (u16::try_from(width).unwrap_or(u16::MAX), 1), background);
+) -> (crate::render::CellColor, Vec<crate::components::chrome_solid::ChromeUnit>) {
+    let background = crate::render::CellColor::from(styles.background);
     let count = format!("{} queued", queued.len());
     let next = queued.first().map(|prompt| prompt.text.replace('\n', " ")).unwrap_or_default();
     let base = styles.base.fg.unwrap_or(crate::components::tool_rows::DEFAULT_FOREGROUND);
     let muted = styles.text_muted.fg.unwrap_or(crate::components::tool_rows::DEFAULT_FOREGROUND);
+    let mut units = Vec::new();
     let mut x = 0usize;
-    for (text, color) in
+    for (index, (text, color)) in
         [("┃", styles.border), (count.as_str(), base), (" · ", muted), (next.as_str(), muted)]
+            .into_iter()
+            .enumerate()
     {
         if x >= width {
             break;
         }
         let budget = width - x;
         let segment = crate::wrap::take_width(text, budget);
-        let mut at = x;
-        for (col, ch) in segment.chars().enumerate() {
-            let column = x + col;
-            if column >= width {
-                break;
-            }
-            if let Some(slot) = frame.cells.first_mut().and_then(|row| row.get_mut(column)) {
-                slot.ch = ch;
-                slot.fg = crate::render::CellColor::from(color);
-            }
-            at = column + 1;
-        }
-        x = at;
+        units.extend(crate::components::chrome_solid::chrome_run_units(
+            &format!("queued_dock#{index}"),
+            x,
+            0,
+            &segment,
+            crate::render::CellColor::from(color),
+            background,
+            0,
+        ));
+        // The retired painter advanced one CELL per CHAR (its `put`
+        // loop) — replicated verbatim (display width would diverge on
+        // wide glyphs, out of the golden corpus either way).
+        x += segment.chars().count();
     }
-    frame
+    (background, units)
+}
+
+/// The queued-prompt dock's ONLY mount entry (D4.1a): a chrome-family
+/// surface at the old paste site — no Frame comes back; the pixels
+/// land at render_app's composite seam.
+fn mount_queued_dock(
+    queued: &[crate::store::QueuedPrompt],
+    width: usize,
+    styles: &crate::theme::ThemeStyles,
+    left: usize,
+    top: usize,
+) {
+    let (background, items) = queued_dock_units(queued, width, styles);
+    crate::components::chrome_solid::chrome_mount("queued_dock", left, top, width, 1, background, &items, &[]);
 }
 
 /// v2's count pluralization (`${count} subagent${count === 1 ? "" : "s"}`,

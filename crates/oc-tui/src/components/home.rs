@@ -360,7 +360,14 @@ pub fn render_home_view(
     // opentui-solid tree — the only renderer since the retirement
     // lane deleted the hand-rolled painter (both consumed the ONE
     // `plan_home` geometry, which stays).
-    crate::components::home_solid::paint_solid_home_view(view, theme, size, origin)
+    // D4.1a: the home chrome + banner + composer mount into the
+    // shared tree (no Frame materialized); the returned frame is the
+    // route's blank base rect — the pixels land at the composite
+    // seam (the golden twin `paint_solid_home_view` composes one).
+    let (width, height) = (usize::from(size.0), usize::from(size.1));
+    let (caret_screen, banner_hit) =
+        crate::components::home_solid::mount_solid_home_view(view, theme, size, origin);
+    (crate::components::chrome_solid::blank_frame(width, height), caret_screen, banner_hit)
 }
 
 /// Paste `region` into `target` at `(x, y)` (the shared paste the
@@ -516,7 +523,12 @@ pub fn render_home(store: &Store, theme: &crate::theme::ThemeStyles, size: (u16,
         size.0.saturating_sub(u16::try_from(rail_shift).unwrap_or(0)),
         if strip_shows { size.1 - 1 } else { size.1 },
     );
-    let (mut frame, caret_screen, banner_hit) =
+    // D4.1a: the home chrome mounts into the shared tree at the
+    // origin-shifted sub-rect — the retired cell-stitching (the
+    // strip-row prepend + the rail-pane splice) is gone; the strip
+    // and the rail mount as their own tree surfaces and the base
+    // frame stays blank (the trees cover every cell at the seam).
+    let (_base, caret_screen, banner_hit) =
         render_home_view(&view, &state, sub_size, (rail_shift, usize::from(strip_shows)));
     // TUI-TD27 — the banner's hit rect lands in the store (the
     // pointer seam reads it on release).
@@ -543,40 +555,29 @@ pub fn render_home(store: &Store, theme: &crate::theme::ThemeStyles, size: (u16,
         None
     });
     if strip_shows {
-        let (width, height) = (usize::from(size.0), usize::from(size.1));
-        let strip =
-            crate::components::session::paint_live_tabs_bar(store, None, width, &state.styles());
-        // Prepend the strip's row (height 1); the sub-frame already
-        // fits height-1 beneath it — nothing truncates.
-        let mut cells = strip.cells.clone();
-        cells.extend(frame.cells.clone());
-        cells.truncate(height);
-        frame = Frame { cells, width, height, clusters: None };
+        // D4.1a: the strip rides the shared tree at the old prepend
+        // site (row 0) — no Frame comes back; the pixels land at
+        // render_app's composite seam.
+        crate::components::session::mount_live_tabs_bar(
+            store,
+            None,
+            usize::from(size.0),
+            &state.styles(),
+            0,
+            0,
+        );
     }
+    let (width, height) = (usize::from(size.0), usize::from(size.1));
     if let Some(rail) = rail_width {
-        // TUI-3: composite the rail at the left edge, shifting the
-        // home content right (the sub-frame rendered at
-        // `width − rail` above).
-        let (width, height) = (usize::from(size.0), usize::from(size.1));
-        // D2.2: the rail + tooltip live in the shared chrome tree —
-        // the stitch keeps its exact shape with a blank rail pane
-        // (the tree's opaque Fill covers it at render_app's seam).
+        // TUI-3: the rail composites at the left edge; the content
+        // sub-frame mounted at `width − rail` above. D2.2/D4.1a: the
+        // rail + tooltip live in the shared chrome tree and cover
+        // the pane rect at render_app's seam.
         crate::components::session::mount_live_rail(store, rail, height, &state.styles());
-        let pane = crate::components::chrome_solid::blank_frame(rail, height);
-        let mut cells = Vec::with_capacity(height);
-        for row in 0..height {
-            let mut line = pane.cells.get(row).cloned().unwrap_or_default();
-            if line.len() < rail {
-                line.resize(rail, crate::render::Cell::default());
-            }
-            if let Some(content) = frame.cells.get(row) {
-                line.extend_from_slice(&content[..content.len().min(width.saturating_sub(rail))]);
-            }
-            line.resize(width, crate::render::Cell::default());
-            cells.push(line);
-        }
-        frame = Frame { cells, width, height, clusters: None };
     }
+    // The blank base rect: every cell is covered by a tree surface
+    // (the home chrome, the strip row, the rail pane) at the seam.
+    let frame = crate::components::chrome_solid::blank_frame(width, height);
     store.set_caret_cell(caret_screen.map(|(x, y)| {
         let y = y + usize::from(strip_shows);
         (u16::try_from(x + rail_shift).unwrap_or(0), u16::try_from(y).unwrap_or(0))
@@ -585,6 +586,21 @@ pub fn render_home(store: &Store, theme: &crate::theme::ThemeStyles, size: (u16,
 }
 
 use crate::store::Store;
+
+/// The headless seamed twin: [`render_home`] mounts every family into
+/// the shared tree, so a direct caller must run the ONE composite
+/// seam `render_app` runs before reading pixels (the session route's
+/// `render_session_composed` shape).
+#[must_use]
+pub fn render_home_composed(
+    store: &Store,
+    theme: &crate::theme::ThemeStyles,
+    size: (u16, u16),
+) -> Frame {
+    let mut frame = render_home(store, theme, size);
+    crate::components::chrome_solid::composite_chrome_tree(&mut frame);
+    frame
+}
 
 /// Dispatch one plugin quick action's command through the palette
 /// dispatcher (plugin commands route through the
