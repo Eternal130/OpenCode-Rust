@@ -9,10 +9,10 @@
 //! * **tool-row affordances** — a failed tool row's release reveals
 //!   its error text (the errorExpanded branch) and hides it again.
 //! * **toast action + home chips** — an MCP server entering a failed
-//!   state toasts with the `Open MCP servers` action; the
-//!   `toast.activate` chord (ctrl+alt+t) dispatches `mcp.list` (the
-//!   MCP dialog opens); the home footer's `1 MCP failed` cell is a
-//!   real release target.
+//!   state toasts with the `Open MCP servers` action (activation is
+//!   pointer-only, ui/toast.tsx:57-59 — the port's ctrl+alt+t chord
+//!   superset was removed, D3-7b); the home footer's `1 MCP failed`
+//!   cell is a real release target.
 
 #![allow(unsafe_code)] // pty(7) is only reachable through libc FFI
 #![allow(clippy::too_many_lines)] // the PTY drivers are one linear scenario each
@@ -266,9 +266,9 @@ fn pty_km_failed_tool_error_reveal() {
 
 /// The toast action + the home MCP chip (auditA #10): arming the MCP
 /// fetch (one connected + one failed server) toasts the failure with
-/// the `Open MCP servers` action; ctrl+alt+t activates it (the MCP
-/// dialog opens); after the dismiss, the home footer's `1 MCP
-/// failed` cell opens the same dialog on release.
+/// the `Open MCP servers` action (activation is pointer-only — the
+/// ctrl+alt+t chord superset was removed, D3-7b); the home footer's
+/// `1 MCP failed` cell opens the MCP dialog on release.
 #[test]
 fn pty_km_toast_action_and_home_chip() {
     let _lock = pty_lock();
@@ -281,18 +281,11 @@ fn pty_km_toast_action_and_home_chip() {
         if !driver.wait_for(WORDMARK, Duration::from_secs(20)) {
             return Err("the home wordmark never rendered".to_owned());
         }
-        // The failed server toasts (app.tsx:522-545).
+        // The failed server toasts (app.tsx:522-545). The toast rides
+        // above the footer; give it a beat before the chip check.
         wait_row(&driver, "MCP server failed: broken", Duration::from_secs(8))
             .ok_or_else(|| "the MCP failure toast never rendered".to_owned())?;
-        // The keyboard activation chord: the action dispatches
-        // mcp.list — the servers dialog opens.
-        driver.write(b"\x1b[116;7u");
-        wait_row(&driver, "MCP servers", Duration::from_secs(3))
-            .ok_or_else(|| "the toast action never opened the MCP dialog".to_owned())?;
         driver.write(b"\x1b");
-        if !wait_row_gone(&driver, "MCP servers", Duration::from_secs(2)) {
-            return Err("escape never closed the MCP dialog".to_owned());
-        }
         // The home footer's failure cell: `1 MCP failed` + `/mcps`.
         let chip_row = wait_row(&driver, "1 MCP failed", Duration::from_secs(3))
             .ok_or_else(|| "the home MCP chip never rendered".to_owned())?;

@@ -197,11 +197,11 @@ pub fn bar_text(store: &Store, styles: &ThemeStyles, size: (u16, u16)) -> String
             }
         }
         _ => {
-            // "ui": screen size, the redraw tick as the fps-ish
-            // counter, and the dump hint.
+            // "ui": screen size and the redraw tick as the fps-ish
+            // counter (the dump chord hint was removed with the
+            // keyboard path, D3-7b).
             parts.push(format!("size={}x{}", size.0, size.1));
             parts.push(format!("redraws={}", store.redraw_generation()));
-            parts.push("dump=ctrl+x j".to_owned());
         }
     }
     parts.join(" ")

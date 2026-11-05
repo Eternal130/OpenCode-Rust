@@ -14,9 +14,9 @@
 //!   D2.2 overlays lane: a family wrapper at skeleton index 9
 //!   (today's frame-tail z, above every dialog pixel; ref zIndex
 //!   5000).
-//! * **The paste_frame overlays** (renderer console / which-key /
-//!   toast): the overlays family's first three seats — mounted here
-//!   from the live store, before `render_app`'s compositor seam.
+//! * **The paste_frame overlays** (renderer console / toast): the
+//! overlays family's first seats — mounted here
+//! from the live store, before `render_app`'s compositor seam.
 
 use crate::components::footer::theme::FooterTheme;
 use crate::render::Frame;
@@ -38,12 +38,12 @@ pub fn mount_state_overlays(store: &Store, styles: &ThemeStyles, width: usize, h
     }
 }
 
-/// Mount the overlays family's live surfaces (console / which-key /
-/// toast / reconnecting) — `render_app` calls this AFTER the dialog
+/// Mount the overlays family's live surfaces (console / toast /
+/// reconnecting) — `render_app` calls this AFTER the dialog
 /// family's mount and BEFORE the compositor seam, so the family's
 /// wrappers seat in the same walk/flush batch (skeleton indices 6+,
 /// above the dialogs family's 4 — today's paste order frozen:
-/// console < which-key < permission@3 < toast < pill < migration <
+/// console < permission@3 < toast < pill < migration <
 /// scrim). NOT mounting a surface this frame unmounts its wrapper at
 /// the seam (the old painters' visibility branches).
 pub fn mount_overlays_family(
@@ -51,7 +51,6 @@ pub fn mount_overlays_family(
     styles: &ThemeStyles,
     width: usize,
     height: usize,
-    which_key_dock_top: Option<usize>,
 ) {
     // TUI-29 — the renderer console (`renderer.console`'s strip at
     // the top of the screen, over the app).
@@ -61,12 +60,6 @@ pub fn mount_overlays_family(
             styles,
             u16::try_from(width).unwrap_or(u16::MAX),
         );
-    }
-    // The which-key panel: overlay seats at the screen bottom, dock
-    // at the route's reduced height (`which_key_dock_top`), above
-    // every route surface.
-    if let Some(view) = store.which_key() {
-        super::which_key::mount_which_key(&view, styles, width, height, which_key_dock_top);
     }
     // The toast layer (`ui/toast.tsx`): the queue's current toast
     // composites over whatever rendered underneath — the interior
@@ -300,7 +293,7 @@ mod tests {
     }
 
     /// D2.2 overlays lane — the family's seating order is today's
-    /// paste order: console (5) < which-key (6) < toast (7). The
+    /// paste order: console (5) < toast (7). The
     /// toast's opaque interior covers the console's blanked rows
     /// where they overlap (the toast mounts LAST), and the console's
     /// blank underlay erases the base outside the toast panel.
@@ -318,24 +311,6 @@ mod tests {
             &styles,
             80,
         );
-        // The which-key panel (bottom rows).
-        let view = crate::components::which_key::WhichKeyView {
-            prefix: None,
-            entries: vec![crate::components::which_key::WhichKeyEntry {
-                key: "n".to_owned(),
-                label: "New session".to_owned(),
-                group: "Session".to_owned(),
-                continues: false,
-            }],
-            layout: crate::components::which_key::WhichKeyLayout::Overlay,
-            pending_preview: true,
-            pinned: true,
-            offset: 0,
-            active_group: None,
-            toggle_hint: "ctrl+alt+k".to_owned(),
-            layout_hint: "ctrl+alt+shift+k".to_owned(),
-        };
-        crate::components::which_key::mount_which_key(&view, &styles, 80, 24, None);
         // The toast (top-right rows 1..5, mounted last).
         let toast = crate::components::toast::ToastOptions::info("Order fixture");
         let footer = crate::components::footer::theme::FooterTheme::from_resolved(
@@ -359,9 +334,6 @@ mod tests {
         // The console title rides the top border (row 0, the family's
         // lowest seat).
         assert!(grid[0].contains(" console "), "console title: {:?}", grid[0]);
-        // The which-key panel seals the bottom (the full port paints
-        // a raised background fill, not a border).
-        assert!(grid[23].contains("toggle ctrl+alt+k"), "which-key footer: {:?}", grid[23]);
         // The toast (mounted LAST — the family's highest seat below
         // the state overlays) lands over the console's blanked rows:
         // the message at the panel's second row, the rails at both

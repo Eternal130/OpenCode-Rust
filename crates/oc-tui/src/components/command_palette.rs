@@ -299,12 +299,6 @@ pub static PALETTE_COMMANDS: &[PaletteCommand] = &[
         group: "Prompt",
         bindings: &[],
     },
-    PaletteCommand {
-        command: "toast.activate",
-        title: "Activate the current toast action",
-        group: "Prompt",
-        bindings: &["ctrl+alt+t"],
-    },
     // TUI-9: the stash family (prompt/index.tsx:874-920 — v2's
     // palette rows, category Prompt).
     PaletteCommand {
@@ -384,38 +378,6 @@ pub static PALETTE_COMMANDS: &[PaletteCommand] = &[
         title: "Open settings",
         group: "System",
         bindings: &[],
-    },
-    // TUI-TD22 (PORT ADDITION — the toast.activate precedent): the
-    // palette row for DialogExperiments. v2's entry is the DevToolsBar
-    // item (devtools-bar.tsx:429-437); the port has no devtools bar
-    // (06 #20 KNOWN — separate ledger row), so the palette carries the
-    // reachable surface.
-    PaletteCommand {
-        command: "opencode.experiments",
-        title: "Experiments",
-        group: "System",
-        bindings: &[],
-    },
-    // G-07 — the devtools bar's palette rows (ref devtools-bar.tsx):
-    // the bar itself is `debug.devtools`-gated; the rows toggle/show
-    // live (the settings row persists the gate).
-    PaletteCommand {
-        command: "devtools.toggle",
-        title: "Toggle devtools bar",
-        group: "System",
-        bindings: &["ctrl+x d"],
-    },
-    PaletteCommand {
-        command: "devtools.panel",
-        title: "Switch devtools panel",
-        group: "System",
-        bindings: &["ctrl+x ]"],
-    },
-    PaletteCommand {
-        command: "devtools.dump",
-        title: "Dump devtools state",
-        group: "System",
-        bindings: &["ctrl+x j"],
     },
     PaletteCommand {
         command: "opencode.status",
@@ -2603,49 +2565,6 @@ impl CommandDispatcher for StoreDispatcher {
                 store.open_image_preview(images, 0);
                 Dispatch::Handled
             }
-            // -- TUI-TD22 (PORT ADDITION, the toast.activate
-            // precedent): the palette row opening DialogExperiments —
-            // v2's entry is the DevToolsBar item (06 #20 KNOWN, a
-            // separate ledger row); the dialog itself is the faithful
-            // port (v2.0.24's empty table → "No experiments
-            // available").
-            "opencode.experiments" => {
-                store.clear_dialogs();
-                // G-07: ref's DevToolsBar item opens the experiments
-                // dialog — with the bar enabled the row also reveals
-                // it (the bar's own entry point, devtools-bar.tsx:429).
-                if store.devtools_enabled() {
-                    store.set_devtools_bar_visible(true);
-                }
-                store.replace_dialog(DialogKind::Experiments, DialogSize::Medium);
-                Dispatch::Handled
-            }
-            // G-07 — the devtools bar's palette rows.
-            "devtools.toggle" => {
-                if store.devtools_enabled() {
-                    store.toggle_devtools_bar();
-                } else {
-                    store.set_devtools_enabled(true);
-                    store.set_devtools_bar_visible(true);
-                }
-                store.request_redraw();
-                Dispatch::Handled
-            }
-            "devtools.panel" => {
-                store.devtools_cycle_panel(1);
-                store.request_redraw();
-                Dispatch::Handled
-            }
-            "devtools.dump" => {
-                if let Some(path) = store.devtools_dump_state((0, 0)) {
-                    store.toast_show(crate::components::toast::ToastOptions {
-                        title: Some("Devtools state dumped".to_owned()),
-                        message: path.display().to_string(),
-                        ..crate::components::toast::ToastOptions::info("")
-                    });
-                }
-                Dispatch::Handled
-            }
             "messages.copy" => {
                 copy_message_to_clipboard(store);
                 Dispatch::Handled
@@ -3105,18 +3024,6 @@ impl CommandDispatcher for StoreDispatcher {
                 store.request_redraw();
                 Dispatch::Handled
             }
-            // `toast.activate` (PORT ADDITION, lane KM — auditA #10):
-            // v2's toast action is pointer-only (ui/toast.tsx:57-59);
-            // the port additionally reaches it from the input layer —
-            // dismiss + dispatch the action's command (the MCP
-            // failure/needs-auth toasts carry `mcp.list`).
-            "toast.activate" => {
-                let action = store.toast_activate();
-                match action {
-                    Some(command) => self.dispatch(store, &command, None),
-                    None => Dispatch::Handled,
-                }
-            }
             // TUI-4 — the pane/terminal family
             // (session-frame.tsx:173-249 + terminals-tab.tsx:66-79).
             "terminal.toggle" => {
@@ -3291,66 +3198,23 @@ impl CommandDispatcher for StoreDispatcher {
             | "service.restart"
             | "dialog.integration.rename"
             | "dialog.integration.delete" => Dispatch::Handled,
-            // The full which-key family (which-key.tsx:520-593): the
-            // three toggles always dispatch; the eight panel
-            // commands act only while the panel is visible (the
-            // reference's priority-1000 layer is `enabled: visible()`
-            // and binds group commands only outside pending mode).
-            "which-key.toggle" => {
-                store.which_key_toggle();
-                Dispatch::Handled
-            }
-            "which-key.layout.toggle" => {
-                store.which_key_toggle_layout();
-                Dispatch::Handled
-            }
-            "which-key.pending.toggle" => {
-                store.which_key_toggle_pending_preview();
-                Dispatch::Handled
-            }
-            "which-key.group.previous" | "which-key.group.next" => {
-                if let Some(view) = store.which_key() {
-                    if !view.pending_mode() {
-                        let groups = view.groups();
-                        if !groups.is_empty() {
-                            let current = view.current_group(&groups).unwrap_or(0);
-                            let delta = if command == "which-key.group.previous" {
-                                groups.len() - 1
-                            } else {
-                                1
-                            };
-                            let next = (current + delta) % groups.len();
-                            store.set_which_key_group(Some(groups[next].label.clone()));
-                            store.set_which_key_offset(0);
-                        }
-                    }
-                }
-                Dispatch::Handled
-            }
-            "which-key.scroll.up"
+            // The which-key family (keybind.ts:290-300): ref ships
+            // these eleven registrations as DEAD bindings (the panel
+            // plugin was deleted at 06290907a9; nothing consumes
+            // them) — the port keeps the same registered-but-
+            // surfaceless state (D3-7b: the panel superset was
+            // removed). The keymap consumes the stroke; no-op.
+            "which-key.toggle"
+            | "which-key.layout.toggle"
+            | "which-key.pending.toggle"
+            | "which-key.group.previous"
+            | "which-key.group.next"
+            | "which-key.scroll.up"
             | "which-key.scroll.down"
             | "which-key.page.up"
             | "which-key.page.down"
             | "which-key.home"
-            | "which-key.end" => {
-                if let Some(view) = store.which_key() {
-                    let (width, height) = store.terminal_size();
-                    let (width, height) = (usize::from(width), usize::from(height));
-                    let geometry = view.geometry(width, height);
-                    let offset = view.offset;
-                    let target = match command {
-                        "which-key.scroll.up" => offset.saturating_sub(geometry.columns),
-                        "which-key.scroll.down" => offset.saturating_add(geometry.columns),
-                        "which-key.page.up" => offset.saturating_sub(geometry.page_size),
-                        "which-key.page.down" => offset.saturating_add(geometry.page_size),
-                        "which-key.home" => 0,
-                        "which-key.end" => geometry.max_offset,
-                        _ => offset,
-                    };
-                    store.set_which_key_offset(view.clamp_offset(target, width, height));
-                }
-                Dispatch::Handled
-            }
+            | "which-key.end" => Dispatch::Handled,
             "app.exit" => {
                 store.clear_dialogs();
                 // The app shell exits the run loop (wave 3); the replay

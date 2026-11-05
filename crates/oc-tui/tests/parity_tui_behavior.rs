@@ -289,9 +289,10 @@ fn dialog_experiments() {
     let store = Store::new(Runtime::new());
     let mut dispatcher = StoreDispatcher;
 
-    // The palette row opens the dialog (the PORT ADDITION entry —
-    // v2's DevToolsBar item is 06 #20's surface).
-    let _ = dispatcher.dispatch(&store, "opencode.experiments", None);
+    // The dialog opens through the store API directly — the palette
+    // row superset was removed (D3-7b); ref's entry is the
+    // DevToolsBar item (06 #20's surface).
+    store.replace_dialog(DialogKind::Experiments, DialogSize::Medium);
     let top = store.top_dialog().expect("the dialog opened");
     assert!(matches!(top.kind, DialogKind::Experiments));
     let props = select_props_for(&top.kind, &store);
