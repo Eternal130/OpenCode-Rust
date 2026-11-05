@@ -998,7 +998,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2508,6 +2508,7 @@ dependencies = [
  "oc-uqr",
  "oc-util",
  "opentui-core",
+ "opentui-diff",
  "opentui-keymap",
  "opentui-solid",
  "parity",
@@ -2682,6 +2683,20 @@ dependencies = [
  "unicode-segmentation",
  "unicode-width 0.2.0",
  "vte",
+]
+
+[[package]]
+name = "opentui-diff"
+version = "0.1.0"
+source = "git+https://github.com/Eternal130/opentui-rust.git?rev=3936cc6#3936cc6879f77794df08d71fa71637b624f331ab"
+dependencies = [
+ "anyhow",
+ "opentui-core",
+ "opentui-solid",
+ "serde",
+ "serde_json",
+ "unicode-segmentation",
+ "vt100",
 ]
 
 [[package]]
@@ -3044,7 +3059,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3415,7 +3430,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3474,7 +3489,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4060,7 +4075,7 @@ dependencies = [
  "getrandom 0.3.4",
  "once_cell",
  "rustix",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

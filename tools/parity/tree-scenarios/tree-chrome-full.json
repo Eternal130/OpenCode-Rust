@@ -1,0 +1,772 @@
+{
+  "$schema": "opentui-diff tree scenario v1",
+  "_meta": {
+    "captured_by": "oc-tui tree_capture (chrome_solid hub walk)",
+    "skipped_kinds": {
+      "text": 16
+    },
+    "source": "chrome all on — tabs rail (2 sessions) + transcript + toast + devtools bar"
+  },
+  "height": 30,
+  "name": "tree-chrome-full",
+  "tree": [
+    {
+      "id": "surface-tabs-strip",
+      "kind": "box",
+      "rect": {
+        "h": 29,
+        "w": 100,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": "tabs-strip-wrapper",
+      "kind": "box",
+      "rect": {
+        "h": 1,
+        "w": 100,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": "box-1",
+      "kind": "box",
+      "rect": {
+        "h": 1,
+        "w": 100,
+        "x": 0,
+        "y": 0
+      },
+      "style": {
+        "bg": "#0a0a0a"
+      }
+    },
+    {
+      "id": "box-2",
+      "kind": "box",
+      "rect": {
+        "h": 1,
+        "w": 100,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": "box-3",
+      "kind": "box",
+      "rect": {
+        "h": 1,
+        "w": 1,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": "box-4",
+      "kind": "box",
+      "rect": {
+        "h": 1,
+        "w": 32,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": "s1",
+      "kind": "box",
+      "rect": {
+        "h": 1,
+        "w": 32,
+        "x": 0,
+        "y": 0
+      },
+      "style": {
+        "bg": "#1e1e1e"
+      }
+    },
+    {
+      "id": "box-5",
+      "kind": "box",
+      "rect": {
+        "h": 1,
+        "w": 100,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": "box-6",
+      "kind": "box",
+      "rect": {
+        "h": 1,
+        "w": 32,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": "box-7",
+      "kind": "box",
+      "rect": {
+        "h": 1,
+        "w": 3,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "content": [
+        {
+          "attributes": 1,
+          "fg": "#eeeeee",
+          "text": "Fix the login bug"
+        }
+      ],
+      "id": "text-2",
+      "kind": "text",
+      "options": {
+        "wrapMode": "none"
+      },
+      "rect": {
+        "h": 1,
+        "w": 29,
+        "x": 3,
+        "y": 0
+      }
+    },
+    {
+      "id": "box-8",
+      "kind": "box",
+      "rect": {
+        "h": 1,
+        "w": 1,
+        "x": 32,
+        "y": 0
+      }
+    },
+    {
+      "id": "box-9",
+      "kind": "box",
+      "rect": {
+        "h": 1,
+        "w": 3,
+        "x": 32,
+        "y": 0
+      }
+    },
+    {
+      "content": [
+        {
+          "bg": "#0a0a0a",
+          "fg": "#808080",
+          "text": " + "
+        }
+      ],
+      "id": "text-4",
+      "kind": "text",
+      "rect": {
+        "h": 1,
+        "w": 3,
+        "x": 32,
+        "y": 0
+      }
+    },
+    {
+      "id": "surface-chrome",
+      "kind": "box",
+      "rect": {
+        "h": 30,
+        "w": 100,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": "devtools_bar",
+      "kind": "box",
+      "rect": {
+        "h": 1,
+        "w": 100,
+        "x": 0,
+        "y": 29
+      }
+    },
+    {
+      "content": [
+        {
+          "bg": "#141414",
+          "fg": "#808080",
+          "text": "devtools[server] sse=connected models=0 providers=0                                                 "
+        }
+      ],
+      "id": "devtools_bar_0",
+      "kind": "text",
+      "options": {
+        "wrapMode": "none"
+      },
+      "rect": {
+        "h": 1,
+        "w": 100,
+        "x": 0,
+        "y": 29
+      }
+    },
+    {
+      "id": "surface-transcript",
+      "kind": "box",
+      "rect": {
+        "h": 29,
+        "w": 100,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": "transcript-wrapper",
+      "kind": "box",
+      "rect": {
+        "h": 21,
+        "w": 100,
+        "x": 0,
+        "y": 1
+      }
+    },
+    {
+      "id": "box-19",
+      "kind": "box",
+      "rect": {
+        "h": 21,
+        "w": 100,
+        "x": 0,
+        "y": 1
+      },
+      "style": {
+        "bg": "#0a0a0a"
+      }
+    },
+    {
+      "id": "message_u1_f0",
+      "kind": "box",
+      "rect": {
+        "h": 3,
+        "w": 96,
+        "x": 2,
+        "y": 2
+      },
+      "style": {
+        "bg": "#141414"
+      }
+    },
+    {
+      "content": [
+        {
+          "bg": "#141414",
+          "fg": "#5c9cf5",
+          "text": "┃"
+        }
+      ],
+      "id": "message_u1_t0_0",
+      "kind": "text",
+      "options": {
+        "wrapMode": "none"
+      },
+      "rect": {
+        "h": 1,
+        "w": 1,
+        "x": 2,
+        "y": 2
+      }
+    },
+    {
+      "content": [
+        {
+          "bg": "#141414",
+          "fg": "#5c9cf5",
+          "text": "┃"
+        }
+      ],
+      "id": "message_u1_t1_0",
+      "kind": "text",
+      "options": {
+        "wrapMode": "none"
+      },
+      "rect": {
+        "h": 1,
+        "w": 1,
+        "x": 2,
+        "y": 3
+      }
+    },
+    {
+      "content": [
+        {
+          "bg": "#141414",
+          "fg": "#5c9cf5",
+          "text": "┃"
+        }
+      ],
+      "id": "message_u1_t2_0",
+      "kind": "text",
+      "options": {
+        "wrapMode": "none"
+      },
+      "rect": {
+        "h": 1,
+        "w": 1,
+        "x": 2,
+        "y": 4
+      }
+    },
+    {
+      "content": [
+        {
+          "bg": "#141414",
+          "fg": "#eeeeee",
+          "text": "fix the login bug — 修复登录页的宽字符换行"
+        }
+      ],
+      "id": "message_u1_t3_0",
+      "kind": "text",
+      "options": {
+        "wrapMode": "none"
+      },
+      "rect": {
+        "h": 1,
+        "w": 42,
+        "x": 5,
+        "y": 3
+      }
+    },
+    {
+      "content": [
+        {
+          "bg": "#0a0a0a",
+          "fg": "#97682c",
+          "text": "+"
+        }
+      ],
+      "id": "group_Reasoning_a1_reasoning_0_t0_0",
+      "kind": "text",
+      "options": {
+        "wrapMode": "none"
+      },
+      "rect": {
+        "h": 1,
+        "w": 1,
+        "x": 5,
+        "y": 6
+      }
+    },
+    {
+      "content": [
+        {
+          "bg": "#0a0a0a",
+          "fg": "#97682c",
+          "text": "Thought"
+        }
+      ],
+      "id": "group_Reasoning_a1_reasoning_0_t1_0",
+      "kind": "text",
+      "options": {
+        "wrapMode": "none"
+      },
+      "rect": {
+        "h": 1,
+        "w": 7,
+        "x": 7,
+        "y": 6
+      }
+    },
+    {
+      "content": [
+        {
+          "bg": "#0a0a0a",
+          "fg": "#eeeeee",
+          "text": "done — the wrap now slices on cluster bounds"
+        }
+      ],
+      "id": "part_a1_text_0_t0_0",
+      "kind": "text",
+      "options": {
+        "wrapMode": "none"
+      },
+      "rect": {
+        "h": 1,
+        "w": 44,
+        "x": 5,
+        "y": 8
+      }
+    },
+    {
+      "content": [
+        {
+          "bg": "#0a0a0a",
+          "fg": "#5c9cf5",
+          "text": "Build"
+        },
+        {
+          "bg": "#0a0a0a",
+          "fg": "#808080",
+          "text": " · p/m"
+        }
+      ],
+      "id": "footer_a1_t0_0",
+      "kind": "text",
+      "options": {
+        "wrapMode": "none"
+      },
+      "rect": {
+        "h": 1,
+        "w": 11,
+        "x": 5,
+        "y": 10
+      }
+    },
+    {
+      "id": "surface-composer",
+      "kind": "box",
+      "rect": {
+        "h": 29,
+        "w": 100,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": "composer-wrapper",
+      "kind": "box",
+      "rect": {
+        "h": 6,
+        "w": 98,
+        "x": 2,
+        "y": 23
+      }
+    },
+    {
+      "id": "box-10",
+      "kind": "box",
+      "rect": {
+        "h": 6,
+        "w": 98,
+        "x": 2,
+        "y": 23
+      },
+      "style": {
+        "bg": "#0a0a0a"
+      }
+    },
+    {
+      "id": "box-11",
+      "kind": "box",
+      "rect": {
+        "h": 4,
+        "w": 98,
+        "x": 2,
+        "y": 23
+      }
+    },
+    {
+      "id": "box-12",
+      "kind": "box",
+      "rect": {
+        "h": 4,
+        "w": 1,
+        "x": 2,
+        "y": 23
+      }
+    },
+    {
+      "content": [
+        {
+          "fg": "#484848",
+          "text": "┃"
+        }
+      ],
+      "id": "text-5",
+      "kind": "text",
+      "rect": {
+        "h": 1,
+        "w": 1,
+        "x": 2,
+        "y": 23
+      }
+    },
+    {
+      "content": [
+        {
+          "fg": "#484848",
+          "text": "┃"
+        }
+      ],
+      "id": "text-6",
+      "kind": "text",
+      "rect": {
+        "h": 1,
+        "w": 1,
+        "x": 2,
+        "y": 24
+      }
+    },
+    {
+      "content": [
+        {
+          "fg": "#484848",
+          "text": "┃"
+        }
+      ],
+      "id": "text-7",
+      "kind": "text",
+      "rect": {
+        "h": 1,
+        "w": 1,
+        "x": 2,
+        "y": 25
+      }
+    },
+    {
+      "content": [
+        {
+          "fg": "#484848",
+          "text": "┃"
+        }
+      ],
+      "id": "text-8",
+      "kind": "text",
+      "rect": {
+        "h": 1,
+        "w": 1,
+        "x": 2,
+        "y": 26
+      }
+    },
+    {
+      "id": "box-13",
+      "kind": "box",
+      "rect": {
+        "h": 4,
+        "w": 97,
+        "x": 3,
+        "y": 23
+      },
+      "style": {
+        "bg": "#1e1e1e"
+      }
+    },
+    {
+      "id": "box-14",
+      "kind": "box",
+      "rect": {
+        "h": 1,
+        "w": 97,
+        "x": 3,
+        "y": 23
+      }
+    },
+    {
+      "id": "box-15",
+      "kind": "box",
+      "rect": {
+        "h": 2,
+        "w": 97,
+        "x": 3,
+        "y": 24
+      }
+    },
+    {
+      "id": "box-16",
+      "kind": "box",
+      "rect": {
+        "h": 1,
+        "w": 97,
+        "x": 3,
+        "y": 26
+      }
+    },
+    {
+      "content": [
+        {
+          "fg": "#484848",
+          "text": "Build"
+        }
+      ],
+      "id": "text-9",
+      "kind": "text",
+      "options": {
+        "wrapMode": "none"
+      },
+      "rect": {
+        "h": 1,
+        "w": 5,
+        "x": 5,
+        "y": 26
+      }
+    },
+    {
+      "id": "box-17",
+      "kind": "box",
+      "rect": {
+        "h": 1,
+        "w": 98,
+        "x": 2,
+        "y": 27
+      }
+    },
+    {
+      "content": [
+        {
+          "fg": "#484848",
+          "text": "╹"
+        }
+      ],
+      "id": "text-16",
+      "kind": "text",
+      "rect": {
+        "h": 1,
+        "w": 1,
+        "x": 2,
+        "y": 27
+      }
+    },
+    {
+      "content": [
+        {
+          "fg": "#1e1e1e",
+          "text": "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀"
+        }
+      ],
+      "id": "text-17",
+      "kind": "text",
+      "options": {
+        "wrapMode": "none"
+      },
+      "rect": {
+        "h": 1,
+        "w": 97,
+        "x": 3,
+        "y": 27
+      }
+    },
+    {
+      "id": "box-18",
+      "kind": "box",
+      "rect": {
+        "h": 1,
+        "w": 98,
+        "x": 2,
+        "y": 28
+      }
+    },
+    {
+      "content": [
+        {
+          "fg": "#eeeeee",
+          "text": "shift+tab "
+        },
+        {
+          "fg": "#808080",
+          "text": "agents"
+        }
+      ],
+      "id": "text-21",
+      "kind": "text",
+      "options": {
+        "wrapMode": "none"
+      },
+      "rect": {
+        "h": 1,
+        "w": 16,
+        "x": 67,
+        "y": 28
+      }
+    },
+    {
+      "content": [
+        {
+          "fg": "#eeeeee",
+          "text": "ctrl+p "
+        },
+        {
+          "fg": "#808080",
+          "text": "commands"
+        }
+      ],
+      "id": "text-22",
+      "kind": "text",
+      "options": {
+        "wrapMode": "none"
+      },
+      "rect": {
+        "h": 1,
+        "w": 15,
+        "x": 85,
+        "y": 28
+      }
+    },
+    {
+      "id": "surface-toast",
+      "kind": "box",
+      "rect": {
+        "h": 30,
+        "w": 100,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": "toast-wrapper",
+      "kind": "box",
+      "rect": {
+        "h": 2,
+        "w": 31,
+        "x": 67,
+        "y": 1
+      }
+    },
+    {
+      "id": "box-20",
+      "kind": "box",
+      "rect": {
+        "h": 2,
+        "w": 31,
+        "x": 67,
+        "y": 1
+      }
+    },
+    {
+      "id": "toast_fill",
+      "kind": "box",
+      "rect": {
+        "h": 2,
+        "w": 29,
+        "x": 68,
+        "y": 1
+      },
+      "style": {
+        "bg": "#1e1e1e"
+      }
+    },
+    {
+      "content": [
+        {
+          "bg": "#1e1e1e",
+          "fg": "#eeeeee",
+          "text": "Copied session transcript"
+        }
+      ],
+      "id": "toast_msg_1",
+      "kind": "text",
+      "options": {
+        "wrapMode": "none"
+      },
+      "rect": {
+        "h": 1,
+        "w": 25,
+        "x": 70,
+        "y": 2
+      }
+    }
+  ],
+  "width": 100
+}

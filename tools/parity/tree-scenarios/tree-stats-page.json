@@ -1,0 +1,116 @@
+{
+  "$schema": "opentui-diff tree scenario v1",
+  "_meta": {
+    "captured_by": "oc-tui tree_capture (chrome_solid hub walk)",
+    "skipped_kinds": {},
+    "source": "the stats plugin route — the scrollbox-centered poster"
+  },
+  "height": 30,
+  "name": "tree-stats-page",
+  "tree": [
+    {
+      "id": "surface-chrome",
+      "kind": "box",
+      "rect": {
+        "h": 30,
+        "w": 100,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": "stats_page",
+      "kind": "box",
+      "rect": {
+        "h": 30,
+        "w": 100,
+        "x": 0,
+        "y": 0
+      },
+      "style": {
+        "bg": "#0a0a0a"
+      }
+    },
+    {
+      "content": [
+        {
+          "bg": "#0a0a0a",
+          "fg": "#808080",
+          "text": "Gathering"
+        }
+      ],
+      "id": "stats_loading_15_0",
+      "kind": "text",
+      "options": {
+        "wrapMode": "none"
+      },
+      "rect": {
+        "h": 1,
+        "w": 9,
+        "x": 39,
+        "y": 15
+      }
+    },
+    {
+      "id": "stats_loading_15_s9",
+      "kind": "box",
+      "rect": {
+        "h": 1,
+        "w": 1,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "content": [
+        {
+          "bg": "#0a0a0a",
+          "fg": "#808080",
+          "text": "your"
+        }
+      ],
+      "id": "stats_loading_15_10",
+      "kind": "text",
+      "options": {
+        "wrapMode": "none"
+      },
+      "rect": {
+        "h": 1,
+        "w": 4,
+        "x": 49,
+        "y": 15
+      }
+    },
+    {
+      "id": "stats_loading_15_s14",
+      "kind": "box",
+      "rect": {
+        "h": 1,
+        "w": 1,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "content": [
+        {
+          "bg": "#0a0a0a",
+          "fg": "#808080",
+          "text": "stats…"
+        }
+      ],
+      "id": "stats_loading_15_15",
+      "kind": "text",
+      "options": {
+        "wrapMode": "none"
+      },
+      "rect": {
+        "h": 1,
+        "w": 6,
+        "x": 54,
+        "y": 15
+      }
+    }
+  ],
+  "width": 100
+}

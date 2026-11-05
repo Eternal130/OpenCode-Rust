@@ -91,6 +91,7 @@ pub mod subagent_picker;
 pub mod syntax;
 pub mod tab_pulse;
 pub mod toast;
+pub mod tree_capture;
 pub mod toast_solid;
 pub mod tool_rows;
 /// Lane M4: the transcript (message list) on opentui-solid — the
