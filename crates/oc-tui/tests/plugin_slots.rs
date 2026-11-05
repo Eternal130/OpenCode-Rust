@@ -263,7 +263,9 @@ fn tui_slots_end_to_end() {
 
     // The home quick action renders on the footer row.
     let theme = oc_tui::theme::ThemeState::v2_dark();
-    let home = oc_tui::components::home::render_home(&store, &theme.styles(), (80, 30));
+    // D4.1a: the home chrome rides the shared tree — read the pixels
+    // through the composed twin.
+    let home = oc_tui::components::home::render_home_composed(&store, &theme.styles(), (80, 30));
     assert!(home.text_grid()[28].contains("/slots"), "quick action label on the home footer");
 
     // -- event → plugin → UI requests → store ------------------------------

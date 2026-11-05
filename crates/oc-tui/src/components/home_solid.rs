@@ -43,15 +43,13 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use opentui_core::Rgba;
-use opentui_core::renderer::CliRendererConfig;
 use opentui_core::styled_text::{StyledText, TextChunk};
 use opentui_solid::element::PropValue;
 use opentui_solid::reactive::Reactive;
-use opentui_solid::{Element, Signal, SolidRenderer, box_, map, text};
+use opentui_solid::{Element, Signal, box_, map, text};
 
 use crate::components::composer::render::{FooterHints, PromptView};
 use crate::components::home::{HomeView, LOGO_LEFT, LOGO_RIGHT, plan_home};
-use crate::components::session_tabs_solid::frame_from_buffer;
 use crate::render::Frame;
 use crate::theme::ThemeState;
 use oc_theme::Rgba as ThemeRgba;
@@ -290,53 +288,75 @@ fn home_element(
 }
 
 // ---------------------------------------------------------------------------
-// the mount (one per thread, keyed on geometry)
+// the shared-tree mount (D4.1a — the D2.2 family paradigm; the
+// private SolidRenderer + the frame_from_buffer cell copy are retired)
 // ---------------------------------------------------------------------------
 
-/// The mounted home chrome: the inputs signal + a real headless
-/// [`SolidRenderer`]. Rebuilt when the geometry changes (resize, the
-/// popup opening, a theme swap) — the M2 height-keying rule via the
-/// plan's mount-relevant fields.
-struct SolidHome {
-    inputs: Signal<HomeInputs>,
-    renderer: SolidRenderer,
+/// The home family's skeleton index: a BASE family (0) — the home
+/// chrome WAS the route's base frame, so it seats below the chrome
+/// container (and below the composer wrapper, index 2, which pastes
+/// over the home chrome today). Routes are exclusive, so the tie
+/// with the strip's base seat never co-mounts.
+pub(crate) const HOME_SKELETON_INDEX: usize = 0;
+
+/// The mounted home chrome's reactive state, kept across frames so
+/// content churn patches dyn-props in place; a geometry-key change
+/// (resize, the popup opening, a theme swap) rebuilds the wrapper's
+/// content subtree — the M2 height-keying rule via the plan's
+/// mount-relevant fields.
+struct HomeEntry {
+    signal: Signal<HomeInputs>,
     key: (usize, usize, Rgb, crate::components::home::HomePlan),
 }
 
-impl SolidHome {
-    fn new(
-        plan: &crate::components::home::HomePlan,
-        colors: &LogoColors,
-        width: usize,
-        height: usize,
-        inputs: &HomeInputs,
-    ) -> Self {
-        let signal = Signal::new(inputs.clone());
-        let renderer = opentui_solid::render(
-            CliRendererConfig {
-                width: width.max(1) as u32,
-                height: height.max(1) as u32,
-                background_color: rgba(colors.base),
-                ..CliRendererConfig::default()
-            },
-            home_element(&signal, plan, colors, width, height),
-        );
-        Self { inputs: signal, renderer, key: (width, height, colors.base, plan.clone()) }
-    }
-
-    /// Sync one frame's snapshot, flush the reconciler patches, and
-    /// render — the per-frame bridge cost.
-    fn paint(&mut self, inputs: HomeInputs) {
-        self.inputs.set(inputs);
-        self.renderer.flush();
-    }
-}
-
 thread_local! {
-    /// One home mount per thread-process — the app paints exactly one
-    /// home frame per redraw; the harnesses reuse it across boots.
-    static HOME: RefCell<Option<SolidHome>> = const { RefCell::new(None) };
+    /// The home family's content state (one mount per
+    /// thread-process — the wrapper itself lives in the shared-tree
+    /// hub, `chrome_solid::mount_family_wrapper`).
+    static HOME_TREE: RefCell<Option<HomeEntry>> = const { RefCell::new(None) };
 }
+
+/// Sync the home chrome family into the shared tree at the old
+/// (origin-shifted) rect — no Frame comes back; pixels reach the
+/// emitted frame through the composite seam.
+fn home_mount(
+    inputs: &HomeInputs,
+    plan: &crate::components::home::HomePlan,
+    colors: &LogoColors,
+    width: usize,
+    height: usize,
+    left: usize,
+    top: usize,
+) {
+    let key = (width, height, colors.base, plan.clone());
+    let rebuild = !crate::components::chrome_solid::family_wrapper_live("home")
+        || HOME_TREE.with_borrow(|slot| !matches!(slot, Some(entry) if entry.key == key));
+    let (content, content_key) = if rebuild {
+        let signal = Signal::new(inputs.clone());
+        let element = home_element(&signal, plan, colors, width, height);
+        HOME_TREE.with_borrow_mut(|slot| *slot = Some(HomeEntry { signal, key }));
+        (Some(element), Some(format!("home-content@{width}x{height}")))
+    } else {
+        HOME_TREE.with_borrow_mut(|slot| {
+            slot.as_ref().expect("checked above").signal.set(inputs.clone());
+        });
+        (None, None)
+    };
+    crate::components::chrome_solid::mount_family_wrapper(
+        "home",
+        HOME_SKELETON_INDEX,
+        left,
+        top,
+        width,
+        height,
+        content_key,
+        content,
+        &[],
+        &[],
+        false,
+    );
+}
+
 
 fn styled_label(label: &str, fg: Rgb) -> StyledText {
     if label.is_empty() {
@@ -456,27 +476,22 @@ fn footer_left_label(
 /// banner rect `(x, row, width)`.
 pub type PaintedHome = (Frame, Option<(usize, usize)>, Option<(usize, usize, usize)>);
 
-/// Paint the home route through the opentui-solid path — the
-/// new-path twin of [`crate::components::home::render_home_view`]'s
-/// old painter: resolve the SHARED plan, render the chrome mount,
-/// paste the composer dispatch frame at the plan's origin, and derive
-/// the terminal-cursor cell from the same walk.
-#[must_use]
+/// Mount the home route's chrome into the shared tree — the LIVE-path
+/// entry (D4.1a: no Frame comes back; pixels land at render_app's
+/// composite seam). Returns the terminal-cursor cell and TUI-TD27's
+/// update-banner rect (frame-relative, the same walks the old painter
+/// ran). The degenerate 0×N shape mounts nothing.
 #[allow(clippy::too_many_lines)] // the banner row is the lane-TAIL addition
-pub fn paint_solid_home_view(
+pub fn mount_solid_home_view(
     view: &HomeView,
     theme: &ThemeState,
     size: (u16, u16),
     origin: (usize, usize),
-) -> PaintedHome {
+) -> (Option<(usize, usize)>, Option<(usize, usize, usize)>) {
     let (width, height) = (usize::from(size.0), usize::from(size.1));
     if width == 0 || height == 0 {
-        // The old painter's degenerate shape.
-        return (
-            Frame { cells: vec![Vec::new(); height], width, height, clusters: None },
-            None,
-            None,
-        );
+        // The old painter's degenerate shape: nothing mounts.
+        return (None, None);
     }
     let plan = plan_home(view, width, height);
     let colors = LogoColors::of(theme);
@@ -489,16 +504,9 @@ pub fn paint_solid_home_view(
         },
         actions: footer_left_label(&plan, theme, muted),
     };
-    let mut frame = HOME.with_borrow_mut(|slot| {
-        let key = (width, height, colors.base, plan.clone());
-        let mount =
-            slot.get_or_insert_with(|| SolidHome::new(&plan, &colors, width, height, &inputs));
-        if mount.key != key {
-            *mount = SolidHome::new(&plan, &colors, width, height, &inputs);
-        }
-        mount.paint(inputs);
-        frame_from_buffer(&mount.renderer.renderer.current_render_buffer, &[])
-    });
+    // D4.1a: the chrome rides the shared tree at the origin-shifted
+    // rect (the buffer the retired copy materialized never exists).
+    home_mount(&inputs, &plan, &colors, width, height, origin.0, origin.1);
 
     // The prompt mount: the composer's own frame (its painter is the
     // M3 flag chain's), pasted at the plan's origin — the popup rows
@@ -587,34 +595,66 @@ pub fn paint_solid_home_view(
             let (r, g, b) = crate::components::masked_text::mask_fg((r, g, b), backdrop, strength);
             crate::render::CellColor::Rgb(r, g, b)
         };
+        // D4.1a: the banner rides the shared tree as a chrome-family
+        // surface (one Text unit per glyph — the fade masks PER CELL):
+        // the old hand-paint over the home buffer's fill, byte for
+        // byte (the surface's background IS the backdrop color; the
+        // unwritten gap column reads the fill, exactly the buffer's
+        // cleared cells).
+        let background =
+            crate::render::CellColor::Rgb(backdrop.0, backdrop.1, backdrop.2);
+        let mut items = Vec::new();
         let mut x = x0;
+        let mut push = |items: &mut Vec<crate::components::chrome_solid::ChromeUnit>,
+                        column: usize,
+                        x: usize,
+                        ch: char,
+                        color: crate::render::CellColor| {
+            if ch == ' ' {
+                return; // the fill's own cell
+            }
+            items.push(crate::components::chrome_solid::ChromeUnit {
+                key: format!("home_banner@{row}#{column}"),
+                left: x,
+                top: 0,
+                body: crate::components::chrome_solid::ChromeBody::Text(vec![
+                    crate::components::chrome_solid::ChromeChunk::new(
+                        ch.to_string(),
+                        masked_fg(column, color),
+                        background,
+                        0,
+                    ),
+                ]),
+            });
+        };
         if !*remote {
             for (column, ch) in prefix.chars().enumerate() {
-                if let Some(cell) = frame
-                    .cells
-                    .get_mut(row)
-                    .and_then(|r| x.checked_sub(0).and_then(|_| r.get_mut(x)))
-                {
-                    cell.ch = ch;
-                    cell.fg = masked_fg(column, selected);
-                }
+                push(&mut items, column, x, ch, selected);
                 x += 1;
             }
             x += 1; // the gap
         }
         let body_offset = if *remote { 0 } else { prefix_width };
         for (column, ch) in body.chars().enumerate() {
-            if let Some(cell) = frame.cells.get_mut(row).and_then(|r| r.get_mut(x)) {
-                cell.ch = ch;
-                cell.fg = masked_fg(body_offset + column, muted_color);
-            }
+            push(&mut items, body_offset + column, x, ch, muted_color);
             x += 1;
         }
-        (total > 0 && row < height).then_some((x0, row, total))
+        if total > 0 && row < height {
+            crate::components::chrome_solid::chrome_mount(
+                "home_banner",
+                origin.0 + x0,
+                origin.1 + row,
+                total.max(1),
+                1,
+                background,
+                &items,
+                &[],
+            );
+            Some((x0, row, total))
+        } else {
+            None
+        }
     });
-    // TUI-TD27 — the banner's rect rides out to the store (the
-    // release seam: remote dismisses, installed exits, available
-    // opens the update dialog, home.tsx:138-146).
     // NEW-S1a: the caret's screen cell — the paste origin plus the
     // frame-relative cell (the same walk the old painter runs).
     let caret_screen = view
@@ -630,6 +670,33 @@ pub fn paint_solid_home_view(
         })
         .map(|(x, row)| (plan.paste.0 + x, plan.paste.1 + row))
         .filter(|(_, row_y)| *row_y < height);
+    (caret_screen, banner_hit)
+}
+
+/// The golden/unit harness twin (the retired painter's new channel):
+/// mount ONE home chrome into a fresh hub and read it back as a
+/// standalone Frame (composite over a blank frame of its own rect) —
+/// same raster, same cell semantics, by construction.
+#[must_use]
+pub fn paint_solid_home_view(
+    view: &HomeView,
+    theme: &ThemeState,
+    size: (u16, u16),
+    origin: (usize, usize),
+) -> PaintedHome {
+    let (width, height) = (usize::from(size.0), usize::from(size.1));
+    if width == 0 || height == 0 {
+        let (caret_screen, banner_hit) = mount_solid_home_view(view, theme, size, origin);
+        return (
+            Frame { cells: vec![Vec::new(); height], width, height, clusters: None },
+            caret_screen,
+            banner_hit,
+        );
+    }
+    crate::components::chrome_solid::reset_hub();
+    let (caret_screen, banner_hit) = mount_solid_home_view(view, theme, size, origin);
+    let mut frame = crate::components::chrome_solid::blank_frame(width, height);
+    crate::components::chrome_solid::composite_chrome_tree(&mut frame);
     (frame, caret_screen, banner_hit)
 }
 
@@ -803,10 +870,12 @@ mod tests {
             }
             seen.push((version.to_owned(), frame));
         }
-        HOME.with_borrow(|slot| {
-            let mount = slot.as_ref().expect("home mounted");
-            assert!(!mount.renderer.ops_log().is_empty(), "the reconciler recorded its ops");
-        });
+        // D4.1a: the mount lives in the shared-tree hub — the
+        // wrapper stays mounted after the twin's composite.
+        assert!(
+            crate::components::chrome_solid::family_wrapper_live("home"),
+            "the home wrapper stays mounted"
+        );
     }
 
     /// A resize rebuilds cleanly — the mount-key rule (the plan's

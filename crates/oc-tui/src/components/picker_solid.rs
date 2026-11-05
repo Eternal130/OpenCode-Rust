@@ -35,15 +35,14 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use opentui_core::renderer::CliRendererConfig;
-use opentui_core::styled_text::{StyledText, TextChunk};
 use opentui_core::Rgba;
+use opentui_core::styled_text::{StyledText, TextChunk};
 use opentui_solid::builder::ForItemSource;
 use opentui_solid::element::{ForItem, PropValue};
 use opentui_solid::reactive::Reactive;
-use opentui_solid::{box_, for_list, map, text, Element, Signal, SolidRenderer};
+use opentui_solid::{box_, for_list, map, text, Element, Signal};
 
-use crate::components::session_tabs_solid::frame_from_buffer;
+use crate::components::chrome_solid::{family_wrapper_live, mount_family_wrapper};
 use crate::components::subagent_picker::{
     picker_panel_paint, PickerColors, PickerPaint, PANEL_ROWS,
 };
@@ -437,41 +436,30 @@ fn panel_element(inputs: &Signal<PanelInputs>, width: usize, raised: Rgb) -> Ele
 }
 
 // ---------------------------------------------------------------------------
-// the mount (one per thread, keyed on geometry)
+// the shared-tree mount (D4.1a — the D2.2 family paradigm; the
+// private SolidRenderer + the frame_from_buffer cell copy are retired)
 // ---------------------------------------------------------------------------
 
-/// The mounted panel: the inputs signal + a real headless
-/// [`SolidRenderer`]. Rebuilt when the panel's geometry changes (a
-/// resize moving the column width, the sidebar dock reflowing it, a
-/// theme swap) — the M2 height-keying rule.
-struct SolidPicker {
-    inputs: Signal<PanelInputs>,
-    renderer: SolidRenderer,
+/// The picker family's skeleton index: the COMPOSER's seat (2) — the
+/// panel REPLACES the prompt mount (`open={composer.open ||
+/// parentID}`), so it seats above the transcript exactly like the
+/// composer wrapper it stands in for (the two never co-mount).
+pub(crate) const PICKER_SKELETON_INDEX: usize = 2;
+
+/// The mounted panel's reactive state, kept across frames so content
+/// churn patches dyn-props in place; a geometry-key change (the
+/// colors_key arm: width + every baked color) rebuilds the wrapper's
+/// content subtree.
+struct PickerEntry2 {
+    signal: Signal<PanelInputs>,
     key: (usize, Rgb, Rgb, Rgb, Rgb, Rgb, Rgb, Rgb),
 }
 
-impl SolidPicker {
-    fn new(width: usize, colors: &PickerColors, inputs: &PanelInputs) -> Self {
-        let signal = Signal::new(inputs.clone());
-        let key = colors_key(colors, width);
-        let renderer = opentui_solid::render(
-            CliRendererConfig {
-                width: u32::from(u16::try_from(width.max(1)).unwrap_or(u16::MAX)),
-                height: u32::try_from(PANEL_ROWS).unwrap_or(11),
-                background_color: rgba(rgb_of(colors.raised)),
-                ..CliRendererConfig::default()
-            },
-            panel_element(&signal, width, rgb_of(colors.raised)),
-        );
-        Self { inputs: signal, renderer, key }
-    }
-
-    /// Sync one frame's snapshot, flush the reconciler patches, and
-    /// render — the per-frame bridge cost.
-    fn paint(&mut self, inputs: PanelInputs) {
-        self.inputs.set(inputs);
-        self.renderer.flush();
-    }
+thread_local! {
+    /// The picker family's content state (one mount per
+    /// thread-process — the wrapper itself lives in the shared-tree
+    /// hub, `chrome_solid::mount_family_wrapper`).
+    static PICKER_TREE: RefCell<Option<PickerEntry2>> = const { RefCell::new(None) };
 }
 
 /// The mount key's color arm — every color the tree bakes at build
@@ -493,46 +481,63 @@ fn colors_key(colors: &PickerColors, width: usize) -> (usize, Rgb, Rgb, Rgb, Rgb
     )
 }
 
-thread_local! {
-    /// One panel mount per thread-process — the app paints exactly
-    /// one picker per frame; the harnesses reuse it across scenarios.
-    static PICKER: RefCell<Option<SolidPicker>> = const { RefCell::new(None) };
-}
-
-/// Paint the panel through the opentui-solid path — the new-path twin
-/// of the hand-rolled [`picker_panel_frame`], fused: shape the units
-/// from the SHARED walk, sync + flush the mount, copy the cells.
-fn paint_solid_picker_panel(
+/// Sync the picker family into the shared tree (the panel's ONLY live
+/// mount entry — no Frame comes back; pixels reach the emitted frame
+/// through `composite_chrome_tree`, the single compositor seam inside
+/// `render_app`). `left`/`top` are the OLD paste site (the prompt
+/// mount's rect). `tabs` is the registered tab list (the Terminals
+/// tab registers only when the session terminals are available).
+pub fn picker_panel_mount(
     state: &PickerState,
     entries: &[PickerEntry],
     selected: usize,
     theme: &ThemeState,
     width: u16,
     tabs: &[PickerTab],
-) -> Frame {
+    left: usize,
+    top: usize,
+) {
     let paint = picker_panel_paint(state, entries, selected, theme, width, tabs);
     let colors = PickerColors::resolve(theme);
     let width = usize::from(width);
     let items = shape(&paint, width);
-    PICKER.with_borrow_mut(|slot| {
-        let mount = slot.get_or_insert_with(|| {
-            SolidPicker::new(width, &colors, &PanelInputs { items: items.clone() })
+    let key = colors_key(&colors, width);
+    // Rebuild iff the geometry key changed OR the wrapper left the
+    // tree (a hub reset between harness frames, a seam prune).
+    let rebuild = !family_wrapper_live("picker")
+        || PICKER_TREE.with_borrow(|slot| !matches!(slot, Some(entry) if entry.key == key));
+    let (content, content_key) = if rebuild {
+        let signal = Signal::new(PanelInputs { items: items.clone() });
+        let element = panel_element(&signal, width, rgb_of(colors.raised));
+        PICKER_TREE.with_borrow_mut(|slot| *slot = Some(PickerEntry2 { signal, key }));
+        (Some(element), Some(format!("picker-content@{width}x{:?}", key)))
+    } else {
+        PICKER_TREE.with_borrow_mut(|slot| {
+            slot.as_ref().expect("checked above").signal.set(PanelInputs { items });
         });
-        if mount.key != colors_key(&colors, width) {
-            *mount = SolidPicker::new(width, &colors, &PanelInputs { items: items.clone() });
-        }
-        mount.paint(PanelInputs { items });
-        let buffer = &mount.renderer.renderer.current_render_buffer;
-        frame_from_buffer(buffer, &[])
-    })
+        (None, None)
+    };
+    mount_family_wrapper(
+        "picker",
+        PICKER_SKELETON_INDEX,
+        left,
+        top,
+        width,
+        PANEL_ROWS,
+        content_key,
+        content,
+        &[],
+        &[],
+        false,
+    );
 }
 
-/// The panel frame's ONLY renderer (lane M6, retired): the
-/// width × [`PANEL_ROWS`] frame the session route pastes in place of
-/// the prompt mount. `tabs` is the registered tab list (the Terminals
-/// tab registers only when the session terminals are available).
+/// The golden/unit harness twin (the retired dispatch's new channel):
+/// mount ONE panel into a fresh hub and read it back as a standalone
+/// Frame (composite over a blank frame of its own rect) — same
+/// raster, same cell semantics, by construction.
 #[must_use]
-pub fn picker_panel_frame_dispatch(
+pub fn picker_panel_frame(
     state: &PickerState,
     entries: &[PickerEntry],
     selected: usize,
@@ -540,7 +545,11 @@ pub fn picker_panel_frame_dispatch(
     width: u16,
     tabs: &[PickerTab],
 ) -> Frame {
-    paint_solid_picker_panel(state, entries, selected, theme, width, tabs)
+    crate::components::chrome_solid::reset_hub();
+    picker_panel_mount(state, entries, selected, theme, width, tabs, 0, 0);
+    let mut frame = crate::components::chrome_solid::blank_frame(usize::from(width), PANEL_ROWS);
+    crate::components::chrome_solid::composite_chrome_tree(&mut frame);
+    frame
 }
 
 #[cfg(test)]
@@ -589,7 +598,7 @@ mod tests {
         let mut previous_mount = None;
         for selected in 0..4 {
             state.selected = selected;
-            let solid = paint_solid_picker_panel(
+            let solid = picker_panel_frame(
                 &state,
                 &list,
                 selected,
@@ -602,8 +611,13 @@ mod tests {
                 crate::components::subagent_picker::PANEL_ROWS,
                 "rows at selection {selected}"
             );
-            let mount_count = usize::from(PICKER.with_borrow(Option::is_some));
-            previous_mount = Some(mount_count);
+            // D4.1a: the mount lives in the shared-tree hub — the
+            // wrapper stays mounted across the twin's frames (the
+            // selection move patched in place, no rebuild).
+            let mounted = usize::from(
+                crate::components::chrome_solid::family_wrapper_live("picker"),
+            );
+            previous_mount = Some(mounted);
         }
         assert_eq!(previous_mount, Some(1), "the mount survived the churn");
     }

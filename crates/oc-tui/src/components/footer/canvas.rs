@@ -46,8 +46,9 @@ impl Span {
 
 /// One recorded painting operation — the painter-agnostic op stream
 /// the opentui-solid bridge (lane R2 step 2) replays as absolute
-/// elements. Recording is write-beside: the Canvas's own painting is
-/// byte-identical to before.
+/// elements. D4.1a: the op stream IS the canvas (no write-beside
+/// cell buffer); `into_frame` replays the ops when the mini footer
+/// (D4.1c pending) needs cells.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CanvasOp {
     /// `fill_bg`/`clear_bg` — a 1-row background segment (`bg ==
@@ -58,11 +59,51 @@ pub enum CanvasOp {
     Spans { y: usize, x: usize, spans: Vec<Span> },
 }
 
-/// A footer frame under construction.
+/// A footer frame under construction (D4.1a: an OP STREAM, not a
+/// double-painted buffer — the cells materialize only behind
+/// [`Canvas::into_frame`], the mini footer's channel until lane
+/// D4.1c; the footer family's live path consumes [`Canvas::ops`]
+/// alone).
 #[derive(Clone)]
 pub struct Canvas {
-    frame: Frame,
+    width: usize,
+    height: usize,
     ops: Vec<CanvasOp>,
+}
+
+/// Replay the op stream over a pre-filled frame — the exact writes
+/// the retired write-beside painting performed, in record order.
+fn paint_ops(frame: &mut Frame, ops: &[CanvasOp]) {
+    for op in ops {
+        match op {
+            CanvasOp::Fill { y, x, width, bg } => {
+                if let Some(line) = frame.cells.get_mut(*y) {
+                    for cell in line.iter_mut().skip(*x).take(*width) {
+                        cell.bg = *bg;
+                    }
+                }
+            }
+            CanvasOp::Spans { y, x, spans } => {
+                let mut x = *x;
+                for span in spans {
+                    let attrs = u16::from(span.bold);
+                    for atom in flatten(&span.text, Style::new()) {
+                        if let Some(line) = frame.cells.get_mut(*y) {
+                            if let Some(cell) = line.get_mut(x) {
+                                *cell = Cell {
+                                    ch: atom.text.chars().next().unwrap_or(' '),
+                                    attrs,
+                                    fg: span.fg,
+                                    bg: span.bg,
+                                };
+                            }
+                        }
+                        x += atom.width.max(1);
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl Canvas {
@@ -70,17 +111,13 @@ impl Canvas {
     /// (default fg white over black).
     #[must_use]
     pub fn new(width: usize, height: usize) -> Self {
-        let fill = Cell { ch: ' ', attrs: 0, fg: FILL_FG, bg: FILL_BG };
-        Self {
-            frame: Frame { cells: vec![vec![fill; width]; height], width, height, clusters: None },
-            ops: Vec::new(),
-        }
+        Self { width, height, ops: Vec::new() }
     }
 
     /// The canvas dimensions.
     #[must_use]
     pub fn dims(&self) -> (usize, usize) {
-        (self.frame.width, self.frame.height)
+        (self.width, self.height)
     }
 
     /// The recorded op stream (the solid bridge's input).
@@ -89,17 +126,10 @@ impl Canvas {
         &self.ops
     }
 
-    pub fn frame_mut(&mut self) -> &mut Frame {
-        &mut self.frame
-    }
-
     /// Paint a row segment's background (surface / pane / focused),
     /// keeping the fill foreground.
     pub fn fill_bg(&mut self, y: usize, x: usize, width: usize, bg: CellColor) {
         self.ops.push(CanvasOp::Fill { y, x, width, bg });
-        for cell in self.row_cells(y, x, width) {
-            cell.bg = bg;
-        }
     }
 
     /// Paint a transparent region: canonical background `49` (the
@@ -112,21 +142,6 @@ impl Canvas {
     /// cluster width (leading cell carries the cluster's first char).
     pub fn spans(&mut self, y: usize, x: usize, spans: &[Span]) {
         self.ops.push(CanvasOp::Spans { y, x, spans: spans.to_vec() });
-        let mut x = x;
-        for span in spans {
-            let attrs = u16::from(span.bold);
-            for atom in flatten(&span.text, Style::new()) {
-                if let Some(cell) = self.cell_at(y, x) {
-                    *cell = Cell {
-                        ch: atom.text.chars().next().unwrap_or(' '),
-                        attrs,
-                        fg: span.fg,
-                        bg: span.bg,
-                    };
-                }
-                x += atom.width.max(1);
-            }
-        }
     }
 
     /// Right-align `spans` so the last cell lands at `right_x`.
@@ -137,22 +152,21 @@ impl Canvas {
         start
     }
 
-    fn cell_at(&mut self, y: usize, x: usize) -> Option<&mut Cell> {
-        self.frame.cells.get_mut(y).and_then(|line| line.get_mut(x))
-    }
-
-    #[allow(clippy::cast_possible_truncation)]
-    fn row_cells(&mut self, y: usize, x: usize, width: usize) -> impl Iterator<Item = &mut Cell> {
-        self.frame
-            .cells
-            .get_mut(y)
-            .into_iter()
-            .flat_map(move |line| line.iter_mut().skip(x).take(width))
-    }
-
+    /// Materialize the canvas's cells (D4.1c pending: the MINI
+    /// footer's channel; the footer family rides the shared tree via
+    /// `ops`). The pre-filled terminal style + the op replay —
+    /// byte-identical to the retired write-beside painting.
     #[must_use]
     pub fn into_frame(self) -> Frame {
-        self.frame
+        let fill = Cell { ch: ' ', attrs: 0, fg: FILL_FG, bg: FILL_BG };
+        let mut frame = Frame {
+            cells: vec![vec![fill; self.width]; self.height],
+            width: self.width,
+            height: self.height,
+            clusters: None,
+        };
+        paint_ops(&mut frame, &self.ops);
+        frame
     }
 }
 
