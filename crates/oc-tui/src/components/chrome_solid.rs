@@ -668,6 +668,12 @@ impl ChromeTree {
         self.solid.renderer.destroy();
     }
 
+    /// The base-family (skeleton index 0) container count — the seat
+    /// the chrome container takes so it stays above the diff route.
+    fn family_container_base_count(&self) -> usize {
+        self.family_containers.iter().filter(|(_, index, _)| *index == 0).count()
+    }
+
     /// Sync (or first-mount) one chrome-family surface: the wrapper
     /// box keyed by the surface name, absolutely positioned at the
     /// imperative rect; rect/background changes patch via `set_prop`
@@ -709,7 +715,12 @@ impl ChromeTree {
                 .width(f64::from(self.width) as f32)
                 .height(f64::from(self.height) as f32)
                 .into_element();
-            let key = self.solid.mount(SolidRenderer::ROOT, 0, element);
+            // Seat the chrome container ABOVE any base family (the
+            // diff route's `surface-diff` at skeleton index 0): the
+            // root's children are z-ordered, and the base route must
+            // stay under every overlay family.
+            let seat = self.family_container_base_count();
+            let key = self.solid.mount(SolidRenderer::ROOT, seat, element);
             self.family_key = Some(key);
         }
         if let Some(index) = self.surfaces.iter().position(|s| s.name == surface) {

@@ -36,8 +36,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use oc_theme::SyntaxStyleDef;
 use opentui_core::tree_sitter::{
-    add_default_parsers, get_tree_sitter_client, FiletypeParserOptions, LanguageProvider,
-    SimpleHighlight, Utf16Map,
+    add_default_parsers, destroy_tree_sitter_client, get_tree_sitter_client, FiletypeParserOptions,
+    LanguageProvider, SimpleHighlight, Utf16Map,
 };
 
 use crate::layout::StyledSpan;
@@ -74,6 +74,15 @@ fn ensure_registered() {
                 injection_mapping: None,
             })
             .collect();
+        // The client may have been initialized already by an opentui
+        // consumer that bypassed this seam (the CodeRenderable path
+        // calls `get_tree_sitter_client` directly). `add_default_parsers`
+        // only fills the override list read at INITIALIZE time, so a
+        // pre-initialized client would keep the built-in defaults
+        // (zig) and every other filetype would highlight to `None`.
+        // Reset once at this seam, then register: the next highlight
+        // re-initializes with the oc-syntax catalog.
+        destroy_tree_sitter_client();
         add_default_parsers(parsers);
     });
 }
