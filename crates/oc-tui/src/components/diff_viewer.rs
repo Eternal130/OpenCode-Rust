@@ -14,15 +14,19 @@
 //! * Split: old pane `[x, x+w/2)`, new pane the rest, both gutters
 //!   identical to the unified column.
 //!
-//! ## Gutter (golden bytes)
+//! ## Rendering (lane D3.5 — shared tree)
 //!
-//! One row is a space, the line number (left-aligned, natural width —
-//! the field sized to the file's widest number), the sign
-//! (` -`/` +` right after the number) and the text at
-//! `pane + 1 + digits + 3`. Removed/added gutters paint
-//! `diff.lineNumber.background.*`, their text `diff.background.*`;
-//! the signs paint `diff.highlight.*`. A hunk header hides while its
-//! hunk starts at line 1 (the golden's first `@@` never shows).
+//! The route renders through the shared-tree family
+//! ([`crate::components::diff_viewer_solid`]): toolbar, tree pane,
+//! card headers and the patch body are mounted nodes, and every hunk
+//! is one opentui `DiffRenderable` with its built-in
+//! `LineNumberRenderable` gutter. The `syncGutters` pass (the ref's
+//! patch-diff.tsx:60-89) widens each per-hunk gutter to the file-wide
+//! number field, which is what keeps the golden bytes identical.
+//! [`render_diff_viewer`] is the headless twin of that mount.
+//!
+//! A hunk header hides while its hunk starts at line 1 (the golden's
+//! first `@@` never shows).
 //!
 //! ## Keys
 //!
@@ -31,23 +35,19 @@
 //! split/unified, `enter/space` toggle, `tab` focus, `]/[` hunks,
 //! `?` help, `escape/q` close.
 //!
-//! ## Syntax (R-01b)
+//! ## Syntax (R-01b / D1d)
 //!
-//! The text column highlights through oc-syntax (the file's extension
-//! → filetype, one parse per file via the engine's content-keyed
-//! cache; rows map to highlighted lines). The gutter and the diff row
-//! backgrounds paint exactly as before — highlight spans recolor the
-//! foreground only, their background pinned to the row's diff bg.
-//! Unknown extensions render the original plain rows.
+//! The patch body highlights through opentui's `CodeRenderable` with
+//! the file's `filetype` ([`crate::components::syntax::filetype_for_path`])
+//! and the theme-derived `SyntaxStyle`; unknown extensions render the
+//! plain rows.
 
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::too_many_lines)]
 
-use crate::layout::{Placed, PlacedLine, StyledSpan};
-use crate::render::{paint_placed_with_fills, Fill, Frame};
-use crate::theme::{DiffStyles, ThemeStyles};
-use crate::components::syntax::HighlightedBlock;
-use crate::style::{Color, Modifier, Style};
+use crate::render::Frame;
+use crate::theme::ThemeStyles;
+use crate::style::Color;
 
 /// `MIN_SPLIT_WIDTH` — the patch pane needs this many columns before
 /// the split view is offered.
@@ -564,7 +564,7 @@ pub fn diff_command_for_key(key: &str) -> Option<&'static str> {
 /// `tint(color, background, t)` — `color` pulled toward `background`
 /// by factor `t` (the file tree's rail/marker colors:
 /// `tint(muted, raised, 0.45)` / `0.7`).
-fn tint(color: Color, background: Color, t: f32) -> Color {
+pub(crate) fn tint(color: Color, background: Color, t: f32) -> Color {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let mix =
         |a: u8, b: u8| -> u8 { (f32::from(a) + (f32::from(b) - f32::from(a)) * t).round() as u8 };
@@ -612,112 +612,8 @@ pub fn diff_viewer_fixture() -> Vec<DiffFile> {
 
 // -- rendering ----------------------------------------------------------------
 
-/// One hunk row's paint colors (gutter background, sign, text
-/// background, number, text) plus the row's line index into the file's
-/// highlighted source (R-01b: the text column highlights through
-/// oc-syntax by file extension).
-#[derive(Debug, Clone)]
-struct RowColors {
-    gutter_bg: Color,
-    sign_fg: Option<Color>,
-    sign: &'static str,
-    text_bg: Color,
-    number: u64,
-    text: String,
-    /// This row's line index into the file-wide joined row text (the
-    /// `oc_syntax::HighlightedBlock` line it renders as).
-    line: usize,
-}
-
-/// One hunk row pair for the split view (either side may be absent —
-/// unpaired deletions/additions render with a blank counterpart).
-struct SplitPair {
-    left: Option<RowColors>,
-    right: Option<RowColors>,
-}
-
-/// Emit the buffered del/add run as aligned row pairs (either side
-/// may run out first — the remainder renders with a blank counterpart).
-fn flush_split_pairs(
-    pairs: &mut Vec<SplitPair>,
-    dels: &mut Vec<RowColors>,
-    adds: &mut Vec<RowColors>,
-) {
-    for index in 0..dels.len().max(adds.len()) {
-        pairs.push(SplitPair { left: dels.get(index).cloned(), right: adds.get(index).cloned() });
-    }
-    dels.clear();
-    adds.clear();
-}
-
-/// A hunk row's text (the payload shared by every row shape).
-fn row_text(row: &PatchRow) -> &str {
-    match row {
-        PatchRow::Context { text, .. }
-        | PatchRow::Deleted { text, .. }
-        | PatchRow::Added { text, .. } => text,
-    }
-}
-
-/// Pair hunk rows for the split panes: contexts go to both sides,
-/// deletion runs zip with the following addition run. `base_line` is
-/// the hunk's first row's line index into the file's highlighted
-/// source; each source row consumes one line (a context pair paints
-/// the same line on both sides).
-fn split_pairs(rows: &[PatchRow], diff: &DiffStyles, base_line: usize) -> Vec<SplitPair> {
-    fn row_colors(row: &PatchRow, diff: &DiffStyles, deleted: bool, line: usize) -> RowColors {
-        match row {
-            PatchRow::Context { old, new, text } => RowColors {
-                gutter_bg: diff.background_context,
-                sign_fg: None,
-                sign: "   ",
-                text_bg: diff.background_context,
-                number: if deleted { *old } else { *new },
-                text: text.clone(),
-                line,
-            },
-            PatchRow::Deleted { old, text } => RowColors {
-                gutter_bg: diff.line_number_removed,
-                sign_fg: Some(diff.highlight_removed),
-                sign: " -",
-                text_bg: diff.background_removed,
-                number: *old,
-                text: text.clone(),
-                line,
-            },
-            PatchRow::Added { new, text } => RowColors {
-                gutter_bg: diff.line_number_added,
-                sign_fg: Some(diff.highlight_added),
-                sign: " +",
-                text_bg: diff.background_added,
-                number: *new,
-                text: text.clone(),
-                line,
-            },
-        }
-    }
-    let mut pairs = Vec::new();
-    let mut pending_dels: Vec<RowColors> = Vec::new();
-    let mut pending_adds: Vec<RowColors> = Vec::new();
-    for (offset, row) in rows.iter().enumerate() {
-        let line = base_line + offset;
-        match row {
-            PatchRow::Context { .. } => {
-                flush_split_pairs(&mut pairs, &mut pending_dels, &mut pending_adds);
-                pairs.push(SplitPair {
-                    left: Some(row_colors(row, diff, true, line)),
-                    right: Some(row_colors(row, diff, false, line)),
-                });
-            }
-            PatchRow::Deleted { .. } => pending_dels.push(row_colors(row, diff, true, line)),
-            PatchRow::Added { .. } => pending_adds.push(row_colors(row, diff, false, line)),
-        }
-    }
-    flush_split_pairs(&mut pairs, &mut pending_dels, &mut pending_adds);
-    pairs
-}
-
-/// Render the diff viewer fullscreen.
+/// Render the diff viewer fullscreen (the headless twin of the
+/// shared-tree family mount — `diff_viewer_solid::twin_loaded`).
 #[must_use]
 pub fn render_diff_viewer(
     files: &[DiffFile],
@@ -734,7 +630,6 @@ pub fn render_diff_viewer(
 /// hit rects (TUI-10 — a release inside one opens the preview; the
 /// mount maps them through the scroll into screen cells).
 #[must_use]
-#[allow(clippy::too_many_arguments)] // the painter's full geometry
 pub fn render_diff_viewer_with_hits(
     files: &[DiffFile],
     state: &DiffViewerState,
@@ -744,667 +639,13 @@ pub fn render_diff_viewer_with_hits(
     height: usize,
     mut image_hits: Option<&mut Vec<crate::components::diff_viewer_mount::DiffImageHit>>,
 ) -> Frame {
-    let styles = theme;
-    let diff = styles.diff;
-    let layout = diff_layout(width, state.tree_enabled, files.len());
-    let view = state.view(&layout);
-    let mut placed: Vec<Placed> = Vec::new();
-    let mut fill_rects: Vec<Fill> = Vec::new();
-    let base = crate::components::tool_rows::fill_style(styles);
-    let fg_base = styles.text.fg.unwrap_or(crate::components::tool_rows::DEFAULT_FOREGROUND);
-    let fg_muted = styles.text_muted.fg.unwrap_or(fg_base);
-
-    // The source toolbar: row 1 inside the tree pane when it shows,
-    // else row 0 over the base background (plus the absolute `?`).
-    let toolbar_width = if layout.show_tree { layout.tree_width } else { width };
-    let toolbar_row = usize::from(layout.show_tree);
-    let toolbar_bg = if layout.show_tree { styles.background_raised } else { styles.background };
-    placed.push(Placed {
-        x: 2,
-        y: toolbar_row,
-        width: crate::wrap::display_width(options.source_label),
-        lines: vec![PlacedLine::plain(
-            options.source_label,
-            Style::new().fg(styles.action_secondary).bg(toolbar_bg).add_modifier(Modifier::BOLD),
-        )],
-        tag: Some("diff-source-switch".into()),
-    });
-    let detail = format!(" · {}", options.source_detail);
-    placed.push(Placed {
-        x: 2 + crate::wrap::display_width(options.source_label),
-        y: toolbar_row,
-        width: crate::wrap::display_width(&detail),
-        lines: vec![PlacedLine::plain(detail, Style::new().fg(fg_muted).bg(toolbar_bg))],
-        tag: None,
-    });
-    let reviewed = files.iter().filter(|file| state.reviewed.contains(&file.file)).count();
-    let count = format!("{reviewed}/{}", files.len());
-    placed.push(Placed {
-        x: toolbar_width - 2 - count.chars().count(),
-        y: toolbar_row,
-        width: count.chars().count(),
-        lines: vec![PlacedLine::plain(count, Style::new().fg(fg_muted).bg(toolbar_bg))],
-        tag: Some("diff-review-count".into()),
-    });
-    if !layout.show_tree {
-        // The help shortcut's absolute square (top-right).
-        placed.push(Placed {
-            x: width - 1,
-            y: 0,
-            width: 1,
-            lines: vec![PlacedLine::plain("?", Style::new().fg(fg_base).bg(styles.background))],
-            tag: Some("diff-help".into()),
-        });
+    let (frame, hits) = crate::components::diff_viewer_solid::twin_loaded(
+        files, state, options, theme, width, height,
+    );
+    if let Some(out) = image_hits.as_deref_mut() {
+        out.extend(hits);
     }
-
-    // The tree pane: raised background, one blank under the toolbar,
-    // rows from y=3, help footer pinned to the bottom.
-    if layout.show_tree {
-        fill_rects.push(Fill {
-            x: 0,
-            y: 0,
-            width: layout.tree_width as u16,
-            height: height as u16,
-            style: Style::new()
-                .fg(crate::components::tool_rows::DEFAULT_FOREGROUND)
-                .bg(styles.background_raised),
-        });
-        let faint = tint(fg_muted, styles.background_raised, 0.45);
-        let rail = tint(fg_muted, styles.background_raised, 0.7);
-        for (offset, row) in build_file_tree(files).into_iter().enumerate() {
-            let y = 3 + offset;
-            let indent = "│ ".repeat(row.depth);
-            let marker = if row.file_index.is_some() { "≡ " } else { "▾ " };
-            let prefix = format!("{indent}{marker}");
-            placed.push(Placed {
-                x: 2,
-                y,
-                width: crate::wrap::display_width(&prefix),
-                lines: vec![PlacedLine {
-                    runs: (if indent.is_empty() {
-                        vec![]
-                    } else {
-                        vec![StyledSpan {
-                            link: None,
-                            text: indent,
-                            style: Style::new().fg(rail).bg(styles.background_raised),
-                        }]
-                    })
-                    .into_iter()
-                    .chain([StyledSpan {
-                        link: None,
-                        text: marker.to_owned(),
-                        style: Style::new().fg(faint).bg(styles.background_raised),
-                    }])
-                    .collect(),
-                }],
-                tag: row.file_index.map(|index| format!("diff-file-row-{index}")),
-            });
-            let name_style = if row.file_index.is_some() {
-                Style::new().fg(fg_base).bg(styles.background_raised)
-            } else {
-                Style::new().fg(fg_muted).bg(styles.background_raised)
-            };
-            placed.push(Placed {
-                x: 2 + 2 * row.depth + 2,
-                y,
-                width: crate::wrap::display_width(&row.name),
-                lines: vec![PlacedLine::plain(row.name.clone(), name_style)],
-                tag: None,
-            });
-            if let Some(index) = row.file_index {
-                let status_style = match files[index].status {
-                    FileStatus::Added => {
-                        Style::new().fg(diff.text_added).bg(styles.background_raised)
-                    }
-                    FileStatus::Deleted => {
-                        Style::new().fg(diff.text_removed).bg(styles.background_raised)
-                    }
-                    FileStatus::Modified => Style::new().fg(fg_muted).bg(styles.background_raised),
-                };
-                placed.push(Placed {
-                    x: layout.tree_width - 3,
-                    y,
-                    width: 1,
-                    lines: vec![PlacedLine::plain(
-                        files[index].status.letter().to_string(),
-                        status_style,
-                    )],
-                    tag: None,
-                });
-            }
-        }
-        // The help footer: padding 1, `? help`, padding 1.
-        // The footer sits one row above the pane's closing pad
-        // (`? help` at height − 3 in the golden).
-        let help_y = height.saturating_sub(3);
-        placed.push(Placed {
-            x: 2,
-            y: help_y,
-            width: 1,
-            lines: vec![PlacedLine::plain(
-                "?",
-                Style::new().fg(fg_base).bg(styles.background_raised),
-            )],
-            tag: Some("diff-help".into()),
-        });
-        placed.push(Placed {
-            x: 3,
-            y: help_y,
-            width: 5,
-            lines: vec![PlacedLine::plain(
-                " help",
-                Style::new().fg(fg_muted).bg(styles.background_raised),
-            )],
-            tag: None,
-        });
-    }
-
-    // The patch column: fixed top edge, then the file cards.
-    let patch_x = if layout.show_tree { layout.tree_width + 2 } else { 2 };
-    let patch_w = layout.patch_pane_width;
-    let edge_y = usize::from(!layout.show_tree);
-    fill_rects.push(Fill {
-        x: patch_x as u16,
-        y: edge_y as u16,
-        width: patch_w as u16,
-        height: 1,
-        style: Style::new()
-            .fg(crate::components::tool_rows::DEFAULT_FOREGROUND)
-            .bg(diff.background_context),
-    });
-    let mut y = edge_y + 1;
-    for (index, file) in files.iter().enumerate() {
-        if index > 0 {
-            y += 1; // the ▄ separator row between cards (single-file golden)
-        }
-        // File header: `␣` + dir muted + basename, counts right-aligned.
-        let (dir, basename) = match file.file.rsplit_once('/') {
-            Some((dir, name)) => (format!("{dir}/"), name.to_owned()),
-            None => (String::new(), file.file.clone()),
-        };
-        fill_rects.push(Fill {
-            x: patch_x as u16,
-            y: y as u16,
-            width: patch_w as u16,
-            height: 2,
-            style: Style::new()
-                .fg(crate::components::tool_rows::DEFAULT_FOREGROUND)
-                .bg(diff.background_context),
-        });
-        placed.push(Placed {
-            x: patch_x + 1,
-            y,
-            width: crate::wrap::display_width(&dir),
-            lines: vec![PlacedLine::plain(
-                dir.clone(),
-                Style::new().fg(fg_muted).bg(diff.background_context),
-            )],
-            tag: None,
-        });
-        placed.push(Placed {
-            x: patch_x + 1 + crate::wrap::display_width(&dir),
-            y,
-            width: crate::wrap::display_width(&basename),
-            lines: vec![PlacedLine::plain(
-                basename,
-                Style::new().fg(fg_base).bg(diff.background_context),
-            )],
-            tag: Some(format!("diff-file-header-{index}")),
-        });
-        // The counts: "+N" (added), one frame-default space, "-N"
-        // (removed — the minus belongs to the count, the gap to the
-        // fill). Image files carry the `Image` label instead
-        // (diff-viewer.tsx:990-997, `countsWidth` = 6).
-        if file.image {
-            placed.push(Placed {
-                x: patch_x + patch_w - 1 - 5,
-                y,
-                width: 5,
-                lines: vec![PlacedLine::plain(
-                    "Image".to_owned(),
-                    Style::new().fg(fg_muted).bg(diff.background_context),
-                )],
-                tag: None,
-            });
-        } else {
-            let added = format!("+{}", file.additions);
-            let removed = format!("-{}", file.deletions);
-            let counts_w = added.chars().count() + 1 + removed.chars().count();
-            placed.push(Placed {
-                x: patch_x + patch_w - 1 - counts_w,
-                y,
-                width: counts_w,
-                lines: vec![PlacedLine {
-                    runs: vec![
-                        StyledSpan {
-                            link: None,
-                            text: added,
-                            style: Style::new().fg(diff.text_added).bg(diff.background_context),
-                        },
-                        StyledSpan {
-                            link: None,
-                            text: " ".to_owned(),
-                            style: Style::new()
-                                .fg(crate::components::tool_rows::DEFAULT_FOREGROUND)
-                                .bg(diff.background_context),
-                        },
-                        StyledSpan {
-                            link: None,
-                            text: removed,
-                            style: Style::new().fg(diff.text_removed).bg(diff.background_context),
-                        },
-                    ],
-                }],
-                tag: None,
-            });
-        }
-        y += 2; // header row + its paddingBottom
-
-        // The hunks. R-01b: the file's rows highlight through oc-syntax
-        // (file extension → filetype, one parse per file, content-keyed
-        // engine cache); every hunk row is one line of the joined row
-        // text, so `file_line` maps rows to highlighted lines. Unknown
-        // extensions (`.txt`, …) leave `highlighted` None — today's
-        // plain rows, byte-exact.
-        let hunks = file.hunks();
-        if hunks.is_empty() {
-            // TUI-10: a previewable image renders the inline
-            // DiffViewerImage (diff-viewer-image.tsx:24-80): the
-            // "Working tree preview" label, the blocks-quantized
-            // image (`max(3, min(8, h/4))` rows), the decoded `WxH`
-            // size row. Only non-committed modes with working-tree
-            // bytes (deleted files keep the fallback copy).
-            let label_y = y;
-            let previewable = file.image
-                && options.source_label != "Committed"
-                && file.status != FileStatus::Deleted
-                && file.image_data.is_some();
-            if previewable {
-                let bytes = file.image_data.clone().unwrap_or_default();
-                let decoded = crate::image_codec::decode_png(&bytes);
-                let image_rows = (options.viewport_height / 4).clamp(3, 8);
-                placed.push(Placed {
-                    x: patch_x + 1,
-                    y,
-                    width: 20,
-                    lines: vec![PlacedLine::plain(
-                        "Working tree preview".to_owned(),
-                        Style::new().fg(fg_muted).bg(diff.background_context),
-                    )],
-                    tag: None,
-                });
-                y += 2; // label + its gap 1
-                if let Some(image) = decoded.as_ref() {
-                    let inner_w = patch_w.saturating_sub(2).max(1);
-                    let (cols, rows) = crate::image_view::fit_cells(
-                        image.width,
-                        image.height,
-                        inner_w,
-                        image_rows,
-                    );
-                    let cells = crate::image_view::blocks_cells(image, cols, rows);
-                    let offset_x = patch_x + 1 + inner_w.saturating_sub(cols) / 2;
-                    for (line_index, line) in cells.iter().enumerate() {
-                        let runs = line
-                            .iter()
-                            .map(|cell| StyledSpan {
-                                link: None,
-                                text: cell.glyph.to_string(),
-                                style: Style::new()
-                                    .fg(Color::Rgb(cell.fg[0], cell.fg[1], cell.fg[2]))
-                                    .bg(Color::Rgb(cell.bg[0], cell.bg[1], cell.bg[2])),
-                            })
-                            .collect();
-                        placed.push(Placed {
-                            x: offset_x,
-                            y: y + line_index,
-                            width: cols,
-                            lines: vec![PlacedLine { runs }],
-                            tag: None,
-                        });
-                    }
-                    let size = format!("{}x{}", image.width, image.height);
-                    placed.push(Placed {
-                        x: patch_x + 1,
-                        y: y + image_rows,
-                        width: crate::wrap::display_width(&size),
-                        lines: vec![PlacedLine::plain(
-                            size,
-                            Style::new().fg(fg_muted).bg(diff.background_context),
-                        )],
-                        tag: None,
-                    });
-                    if let Some(hits) = image_hits.as_deref_mut() {
-                        // The click payload: the file's bytes as the
-                        // ref's octet-stream data URI (the mention
-                        // carries the path).
-                        let mime = image_mime(&file.file);
-                        let encoded = crate::clipboard::base64_encode::encode(&bytes);
-                        let uri = format!("data:{mime};base64,{encoded}");
-                        hits.push((
-                            patch_x + 1,
-                            label_y,
-                            patch_w.saturating_sub(2),
-                            image_rows + 3,
-                            uri,
-                        ));
-                    }
-                    y += image_rows + 2;
-                } else {
-                    // `image.error` → "Could not load image".
-                    placed.push(Placed {
-                        x: patch_x + 1,
-                        y,
-                        width: 21,
-                        lines: vec![PlacedLine::plain(
-                            "Could not load image".to_owned(),
-                            Style::new().fg(styles.error).bg(diff.background_context),
-                        )],
-                        tag: None,
-                    });
-                    y += 2;
-                }
-                continue;
-            }
-            // The no-patch fallback row (diff-viewer.tsx:1012-1024):
-            // image files carry their mode-specific copy, anything
-            // else the generic notice.
-            let text = if file.image {
-                if options.source_label == "Committed" {
-                    "Committed image preview unavailable. The working-tree image is not shown."
-                } else if file.status == FileStatus::Deleted {
-                    "Deleted image. The previous revision is not available for preview."
-                } else {
-                    "No patch available for this file."
-                }
-            } else {
-                "No patch available for this file."
-            };
-            placed.push(Placed {
-                x: patch_x + 1,
-                y,
-                width: crate::wrap::display_width(text),
-                lines: vec![PlacedLine::plain(
-                    text.to_owned(),
-                    Style::new().fg(fg_muted).bg(diff.background_context),
-                )],
-                tag: None,
-            });
-            y += 1;
-            continue;
-        }
-        let row_texts: Vec<&str> =
-            hunks.iter().flat_map(|hunk| hunk.rows.iter().map(row_text)).collect();
-        let source = row_texts.join("\n");
-        let highlighted = crate::components::syntax::highlight_for_path(&source, &file.file);
-        let mut file_line = 0usize;
-        let digits = file.number_digits();
-        for hunk in &hunks {
-            if hunk.old_start != 1 {
-                let header = format!(" {}", hunk.header);
-                fill_rects.push(Fill {
-                    x: patch_x as u16,
-                    y: y as u16,
-                    width: patch_w as u16,
-                    height: 1,
-                    style: Style::new()
-                        .fg(crate::components::tool_rows::DEFAULT_FOREGROUND)
-                        .bg(diff.background_context),
-                });
-                placed.push(Placed {
-                    x: patch_x,
-                    y,
-                    width: crate::wrap::display_width(&header),
-                    lines: vec![PlacedLine::plain(
-                        header,
-                        Style::new().fg(diff.hunk_header).bg(diff.background_context),
-                    )],
-                    tag: None,
-                });
-                y += 1;
-            }
-            match view {
-                DiffView::Unified => {
-                    for row in &hunk.rows {
-                        let colors = unified_colors(row, &diff, file_line);
-                        paint_diff_row(
-                            &mut placed,
-                            &mut fill_rects,
-                            patch_x,
-                            patch_w,
-                            digits,
-                            y,
-                            &colors,
-                            fg_base,
-                            &diff,
-                            highlighted.as_ref(),
-                            &styles.syntax,
-                        );
-                        file_line += 1;
-                        y += 1;
-                    }
-                }
-                DiffView::Split => {
-                    let pane = patch_w / 2;
-                    for pair in split_pairs(&hunk.rows, &diff, file_line) {
-                        match pair.left {
-                            Some(left) => paint_diff_row(
-                                &mut placed,
-                                &mut fill_rects,
-                                patch_x,
-                                pane,
-                                digits,
-                                y,
-                                &left,
-                                fg_base,
-                                &diff,
-                                highlighted.as_ref(),
-                                &styles.syntax,
-                            ),
-                            None => fill_rects.push(Fill {
-                                x: patch_x as u16,
-                                y: y as u16,
-                                width: pane as u16,
-                                height: 1,
-                                style: Style::new()
-                                    .fg(crate::components::tool_rows::DEFAULT_FOREGROUND)
-                                    .bg(diff.background_context),
-                            }),
-                        }
-                        match pair.right {
-                            Some(right) => paint_diff_row(
-                                &mut placed,
-                                &mut fill_rects,
-                                patch_x + pane,
-                                patch_w - pane,
-                                digits,
-                                y,
-                                &right,
-                                fg_base,
-                                &diff,
-                                highlighted.as_ref(),
-                                &styles.syntax,
-                            ),
-                            None => fill_rects.push(Fill {
-                                x: (patch_x + pane) as u16,
-                                y: y as u16,
-                                width: (patch_w - pane) as u16,
-                                height: 1,
-                                style: Style::new()
-                                    .fg(crate::components::tool_rows::DEFAULT_FOREGROUND)
-                                    .bg(diff.background_context),
-                            }),
-                        }
-                        y += 1;
-                    }
-                    file_line += hunk.rows.len();
-                }
-            }
-        }
-    }
-
-    paint_placed_with_fills(&placed, &fill_rects, (width as u16, height as u16), base)
-}
-
-/// The inline diff image's MIME (isDiffImageFile's extension set).
-fn image_mime(path: &str) -> &'static str {
-    let ends_with = |suffix: &str| {
-        path.len() >= suffix.len() && path[path.len() - suffix.len()..].eq_ignore_ascii_case(suffix)
-    };
-    if ends_with(".png") {
-        "image/png"
-    } else if ends_with(".jpg") || ends_with(".jpeg") {
-        "image/jpeg"
-    } else if ends_with(".webp") {
-        "image/webp"
-    } else {
-        "image/gif"
-    }
-}
-
-fn unified_colors(row: &PatchRow, diff: &DiffStyles, line: usize) -> RowColors {
-    match row {
-        PatchRow::Context { old, new, text } => RowColors {
-            gutter_bg: diff.background_context,
-            sign_fg: None,
-            sign: "   ",
-            text_bg: diff.background_context,
-            number: (*old).max(*new),
-            text: text.clone(),
-            line,
-        },
-        PatchRow::Deleted { old, text } => RowColors {
-            gutter_bg: diff.line_number_removed,
-            sign_fg: Some(diff.highlight_removed),
-            sign: " -",
-            text_bg: diff.background_removed,
-            number: *old,
-            text: text.clone(),
-            line,
-        },
-        PatchRow::Added { new, text } => RowColors {
-            gutter_bg: diff.line_number_added,
-            sign_fg: Some(diff.highlight_added),
-            sign: " +",
-            text_bg: diff.background_added,
-            number: *new,
-            text: text.clone(),
-            line,
-        },
-    }
-}
-
-/// Paint one gutter+text row into the pane `[x, x + pane_w)`:
-/// `␣` + line number (left-aligned, natural width) + sign (`␣−`/`␣+`
-/// immediately after the number) + padding — text starts at
-/// `x + 1 + digits + 3`.
-///
-/// R-01b: with a highlighted block the text column renders the row's
-/// oc-syntax spans (theme fg, bg pinned to the row's diff background —
-/// the gutter and diff-bg painting are untouched by highlighting);
-/// without one it is exactly the original plain single-run row.
-#[allow(clippy::too_many_arguments)] // an internal painter over precomputed inputs
-fn paint_diff_row(
-    placed: &mut Vec<Placed>,
-    fills: &mut Vec<Fill>,
-    x: usize,
-    pane_w: usize,
-    digits: usize,
-    y: usize,
-    colors: &RowColors,
-    text_fg: Color,
-    diff: &DiffStyles,
-    highlighted: Option<&HighlightedBlock>,
-    syntax: &crate::components::syntax::SyntaxStyles,
-) {
-    // The gutter: `␣` + number field + sign column + `␣` (text starts
-    // 1 + digits + 3 columns in).
-    let gutter_w = 1 + digits + 3;
-    // The gutter's spaces carry the frame-default fg (255) — the
-    // number and sign runs paint their own colors.
-    fills.push(Fill {
-        x: x as u16,
-        y: y as u16,
-        width: gutter_w as u16,
-        height: 1,
-        style: Style::new()
-            .fg(crate::components::tool_rows::DEFAULT_FOREGROUND)
-            .bg(colors.gutter_bg),
-    });
-    let number = colors.number.to_string();
-    let number_width = number.chars().count();
-    placed.push(Placed {
-        x: x + 1,
-        y,
-        width: number_width,
-        lines: vec![PlacedLine::plain(
-            number,
-            Style::new().fg(diff.line_number).bg(colors.gutter_bg),
-        )],
-        tag: None,
-    });
-    if let Some(sign_fg) = colors.sign_fg {
-        placed.push(Placed {
-            x: x + 1 + number_width,
-            y,
-            width: 2,
-            lines: vec![PlacedLine::plain(
-                colors.sign,
-                Style::new().fg(sign_fg).bg(colors.gutter_bg),
-            )],
-            tag: None,
-        });
-    }
-    // The text: from the gutter's end to the pane's right edge, in the
-    // row's own background.
-    let text_x = x + gutter_w;
-    let text_w = pane_w.saturating_sub(gutter_w);
-    fills.push(Fill {
-        x: text_x as u16,
-        y: y as u16,
-        width: text_w as u16,
-        height: 1,
-        style: Style::new().fg(crate::components::tool_rows::DEFAULT_FOREGROUND).bg(colors.text_bg),
-    });
-    if colors.text.is_empty() {
-        return;
-    }
-    match highlighted {
-        Some(block) => {
-            let base = Style::new().fg(text_fg).bg(colors.text_bg);
-            // The bg stays pinned to the row's diff background — the
-            // syntax styles may only recolor the foreground here.
-            let runs = block
-                .line_spans(colors.line, base, syntax)
-                .into_iter()
-                .map(|mut span| {
-                    span.style.bg = Some(colors.text_bg);
-                    span
-                })
-                .collect();
-            placed.push(Placed {
-                x: text_x,
-                y,
-                width: text_w,
-                lines: vec![PlacedLine {
-                    runs: crate::components::syntax::clip_spans(runs, text_w),
-                }],
-                tag: None,
-            });
-        }
-        // The original plain row (unknown extensions): unchanged bytes.
-        None => placed.push(Placed {
-            x: text_x,
-            y,
-            width: crate::wrap::display_width(&colors.text).min(text_w),
-            lines: vec![PlacedLine::plain(
-                colors.text.clone(),
-                Style::new().fg(text_fg).bg(colors.text_bg),
-            )],
-            tag: None,
-        }),
-    }
+    frame
 }
 
 #[cfg(test)]
@@ -1516,23 +757,6 @@ mod tests {
                 TreeRow { depth: 1, name: "file.txt".into(), file_index: Some(0) },
             ]
         );
-    }
-
-    /// Split pairing zips the del/add runs onto one row.
-    #[test]
-    fn split_pairs_zip_dels_and_adds() {
-        let diff = theme().diff;
-        let rows = diff_viewer_fixture()[0].hunks().remove(0).rows;
-        let pairs = split_pairs(&rows, &diff, 0);
-        assert_eq!(pairs.len(), 3);
-        assert!(pairs[0].left.is_some() && pairs[0].right.is_some(), "context both sides");
-        assert!(matches!(&pairs[1].left, Some(c) if c.sign == " -"));
-        assert!(matches!(&pairs[1].right, Some(c) if c.sign == " +"));
-        // Line indices: one per source row, contexts shared by both
-        // sides, the del/add pair on rows 1 and 2 of the joined text.
-        assert_eq!(pairs[0].left.as_ref().map(|c| c.line), Some(0));
-        assert_eq!(pairs[1].left.as_ref().map(|c| c.line), Some(1));
-        assert_eq!(pairs[1].right.as_ref().map(|c| c.line), Some(2));
     }
 
     /// R-01b: a rust file's text column renders oc-syntax spans — the
@@ -1687,11 +911,14 @@ mod tests {
         assert_eq!(parse_patch(broken), [] as [Hunk; 0]);
     }
 
-    /// R3 byte-parity spike (FRAMEWORK-CONVERGENCE.md, line-number section):
-    /// opentui-core's `LineNumberRenderable` gutter vs the viewer's
-    /// pinned inline gutter (`paint_diff_row`). Verdict recorded:
-    /// **permanent local keep** — the gutter WIDTH models coincide
-    /// (digits + 4 columns) but the internal alignment does not:
+    /// R3 byte-parity spike (FRAMEWORK-CONVERGENCE.md, line-number
+    /// section), kept as the raw-gutter model pin: opentui-core's
+    /// `LineNumberRenderable` gutter is right-aligned/fixed-sign on
+    /// its own — the shared-tree lane D3.5 restores the golden model
+    /// through the `syncGutters` pad (the `-1` sign's trailing spaces
+    /// widen the gutter exactly as the ref does). The raw gutter
+    /// models coincide in WIDTH (digits + 4 columns) but not
+    /// internally:
     ///
     /// * the viewer paints the number LEFT-aligned at `x+1` with the
     ///   sign `" -"`/`" +"` immediately after the natural-width
@@ -1704,11 +931,12 @@ mod tests {
     ///   a FIXED column.
     ///
     /// Every row whose number is narrower than the file's widest
-    /// number diverges — the dominant case (visible in the primary
-    /// golden fixture itself) — so adoption is neither byte-identical
-    /// nor a provably-limited re-pin.
+    /// number diverges without the pad — the dominant case — so the
+    /// `syncGutters` port (patch-diff.tsx:60-89) is what reconciles
+    /// the per-hunk `DiffRenderable` gutters with the file-wide field
+    /// (see [`crate::components::diff_viewer_solid`]).
     #[test]
-    fn r3_line_number_gutter_diverges_from_opentui() {
+    fn r3_opentui_gutter_aligns_through_the_sync_pad() {
         use opentui_core::buffer::OptimizedBuffer;
         use opentui_core::color::parse_color;
         use opentui_core::renderables::line_number::{
