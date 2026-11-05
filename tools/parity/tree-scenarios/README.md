@@ -17,9 +17,9 @@ v1 contract in opentui-rust `tools/diff/README.md` "Tree scenarios").
   standing nextest gate (`oc-tui::tree_scenarios::
   dual_engine_matches_frozen_oracle`) replays each scenario through
   opentui's own tree rebuilder and compares cell-for-cell — no bun
-  needed. `tree-diff-viewer` is a PINNED port mismatch (see the
-  test's `PINNED_PORT_MISMATCHES` — an opentui-core nested-diff row-bg
-  divergence the first freeze surfaced).
+  needed. All 7 scenarios match the frozen oracle IDENTICALLY (the
+  Lane TB `tree-diff-viewer` port mismatch was healed by the
+  opentui-core bump to 2fbe00e — oracle re-frozen, pin dropped).
 
 ## Adding a scenario
 

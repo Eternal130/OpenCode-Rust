@@ -323,21 +323,16 @@ fn fnv1a_hex(bytes: &[u8]) -> String {
     format!("{h:016x}")
 }
 
-/// A PORT-side divergence the very first freeze surfaced (Lane TB
-/// finding, pinned — NOT a false green): opentui-core@3936cc6 stamps
-/// the nested Diff's LineNumber content-background rows at
-/// LAYOUT-RELATIVE coords where upstream stamps ABSOLUTE — so a diff
-/// mounted below the canvas top paints its row backgrounds 3 rows too
-/// high. oc-tui's own mount dodges it (`build_diff_element` clears
-/// `line_colors_content` and paints the rows itself — see the comment
-/// there), but the tree contract remounts the DiffRenderable fresh,
-/// and the divergence shows. The pin asserts the EXACT signature
-/// (128 mismatched cells / 186 field diffs, first diff the (30,0) bg)
-/// so an opentui rev bump that fixes it fails this test LOUDLY —
-/// re-freeze and drop the pin then (stop-and-escalate).
+/// PORT-side divergences surfaced by the tree gate and pinned while a
+/// fix lands upstream (see git history for the Lane TB finding that
+/// used this: opentui-core's nested-Diff row backgrounds, healed by
+/// the bump to 2fbe00e — oracle re-frozen, pin dropped). Keep the
+/// mechanism: a new mismatch is pinned here with its EXACT signature
+/// (mismatched cells / field diffs / first-diff cell) so an opentui
+/// rev bump that changes it fails LOUDLY — re-freeze and drop the pin
+/// then (stop-and-escalate).
 const PINNED_PORT_MISMATCHES: &[(&str, usize, usize, usize, usize, &str)] = &[
     // name, mismatched_cells, field diffs, first-diff x, y, field
-    ("tree-diff-viewer", 128, 186, 30, 0, "bg"),
 ];
 
 /// 3 — the dual-engine standing gate: the committed scenario replays
