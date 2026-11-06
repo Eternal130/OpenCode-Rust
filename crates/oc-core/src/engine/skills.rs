@@ -332,6 +332,17 @@ impl ConfigSkillTable {
                 }
             }
         }
+        // G-199 (ref config/plugin/compatibility.ts:39-56): the
+        // compatibility roots — `~/.claude` / `~/.agents` plus discovered
+        // `.claude` / `.agents` directories — also contribute their
+        // `/skills` subdirectories. REF joins them AFTER the config
+        // sources (the compatibility plugin's `ctx.skill.transform`
+        // `editor.add` overwrites config skills on an id collision, and
+        // later compat roots overwrite earlier ones — claude first, then
+        // agents, matching `[...roots.claude, ...roots.agents]`).
+        for root in loaded.sources.claude.iter().chain(loaded.sources.agents.iter()) {
+            add(root.join("skills"), &mut sources, &mut seen);
+        }
         let mut by_id: BTreeMap<String, Skill> = BTreeMap::new();
         // Built-ins first (the v2 SkillPlugin pre-plugin position), then
         // config skills inserted unconditionally: collisions overwrite —
