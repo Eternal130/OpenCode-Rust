@@ -63,6 +63,10 @@ pub struct SelectOption {
     /// spinner.tsx:45): the shimmer's elapsed clock (ms). `None`
     /// paints the plain static title.
     pub shimmer: Option<u64>,
+    /// G-189 — `DialogSelectOption.details` (dialog-select.tsx:75):
+    /// muted rows under the title, one per string, middle-truncated
+    /// to `max(1, min(76, width - 12))` (:816-824).
+    pub details: Vec<String>,
 }
 
 /// `DialogSelectOption.truncateTitle` (dialog-select.tsx:78-79,:
@@ -164,7 +168,15 @@ impl SelectOption {
             title_width: None,
             truncate_title: TitleTruncate::default(),
             shimmer: None,
+            details: Vec::new(),
         }
+    }
+
+    /// G-189 — `details` rows under the title (:75, :816-824).
+    #[must_use]
+    pub fn with_details(mut self, details: Vec<String>) -> Self {
+        self.details = details;
+        self
     }
 
     #[must_use]
@@ -282,6 +294,11 @@ pub struct SelectProps {
     /// paints `action.destructive.focused` instead of primary
     /// (dialog-worktrees' confirm + drop-confirm selects).
     pub destructive: bool,
+    /// G-189 — `DialogSelectProps.locked` (dialog-select.tsx:34): the
+    /// selection is FROZEN — `move`/`moveSection`/home/end (and the
+    /// footer-action focus cycle, [`SelectState::move_action`]) no-op
+    /// (:362,368,422,435).
+    pub locked: bool,
 }
 
 impl SelectProps {
@@ -300,6 +317,7 @@ impl SelectProps {
             no_match_text: None,
             destructive: false,
             hints: Vec::new(),
+            locked: false,
         }
     }
 
@@ -373,6 +391,10 @@ pub struct SelectState {
     pub filter: String,
     pub selected: usize,
     pub scroll: usize,
+    /// G-189 — the focused footer action (`focusedAction`,
+    /// dialog-select.tsx:434-444): `None` = the option list owns the
+    /// focus; Tab/shift+tab cycle through the actions and back.
+    pub focused_action: Option<usize>,
 }
 
 /// `reconcileSelection`: clamp into `[0, count)`.
@@ -482,15 +504,18 @@ pub fn flat_indices(groups: &[SelectGroup]) -> Vec<usize> {
 }
 
 /// Content-row count: 1 per option plus 1 per header (2 for every
-/// header after the first — `rows()`; details rows are wave-2).
+/// header after the first — `rows()`) plus 1 per `details` row
+/// (G-189, dialog-select.tsx:237: `1 + (option.details?.length ?? 0)`).
 #[must_use]
-pub fn content_rows(groups: &[SelectGroup]) -> usize {
+pub fn content_rows(groups: &[SelectGroup], options: &[SelectOption]) -> usize {
     let mut rows = 0usize;
     for (i, group) in groups.iter().enumerate() {
         if group.category.is_some() {
             rows += if i == 0 { 1 } else { 2 };
         }
-        rows += group.indices.len();
+        for &index in &group.indices {
+            rows += 1 + options.get(index).map(|option| option.details.len()).unwrap_or(0);
+        }
     }
     rows
 }
@@ -520,11 +545,11 @@ pub fn option_dialog_rows(
 ) -> Vec<Option<usize>> {
     let groups = grouped(props, &state.filter);
     let indices = flat_indices(&groups);
-    let rows_total = content_rows(&groups);
+    let rows_total = content_rows(&groups, &props.options);
     let viewport = viewport_height(rows_total, terminal_height);
     (0..indices.len())
         .map(|flat| {
-            let content_row = row_of_index(&groups, flat);
+            let content_row = row_of_index(&groups, &props.options, flat);
             if content_row >= state.scroll && content_row < state.scroll + viewport {
                 Some(4 + (content_row - state.scroll))
             } else {
@@ -534,9 +559,10 @@ pub fn option_dialog_rows(
         .collect()
 }
 
-/// The content row of the flat `selected` index (headers included).
+/// The content row of the flat `selected` index (headers included;
+/// G-189 — each option occupies `1 + details.len()` rows).
 #[must_use]
-pub fn row_of_index(groups: &[SelectGroup], flat_index: usize) -> usize {
+pub fn row_of_index(groups: &[SelectGroup], options: &[SelectOption], flat_index: usize) -> usize {
     let mut row = 0usize;
     let mut remaining = flat_index;
     for (i, group) in groups.iter().enumerate() {
@@ -544,9 +570,14 @@ pub fn row_of_index(groups: &[SelectGroup], flat_index: usize) -> usize {
             row += if i == 0 { 1 } else { 2 };
         }
         if remaining < group.indices.len() {
-            return row + remaining;
+            for &index in &group.indices[..remaining] {
+                row += 1 + options.get(index).map(|option| option.details.len()).unwrap_or(0);
+            }
+            return row;
         }
-        row += group.indices.len();
+        for &index in &group.indices {
+            row += 1 + options.get(index).map(|option| option.details.len()).unwrap_or(0);
+        }
         remaining -= group.indices.len();
     }
     row
@@ -588,8 +619,12 @@ impl SelectState {
     }
 
     /// Move the selection (wrap policy) and edge-reveal it
-    /// (`move` + `scrollToSelection`).
+    /// (`move` + `scrollToSelection`). G-189 — `locked` freezes the
+    /// move (`if (props.locked) return`, dialog-select.tsx:362).
     pub fn move_selection(&mut self, props: &SelectProps, delta: i64) {
+        if props.locked {
+            return;
+        }
         let groups = grouped(props, &self.filter);
         let indices = flat_indices(&groups);
         if indices.is_empty() {
@@ -598,8 +633,12 @@ impl SelectState {
         self.selected = move_selection(self.selected, indices.len(), delta);
     }
 
-    /// Jump to the first/last item (`home`/`end`).
+    /// Jump to the first/last item (`home`/`end`). G-189 — `locked`
+    /// freezes the jump (:488,497).
     pub fn move_to_edge(&mut self, props: &SelectProps, last: bool) {
+        if props.locked {
+            return;
+        }
         let groups = grouped(props, &self.filter);
         let indices = flat_indices(&groups);
         if indices.is_empty() {
@@ -613,6 +652,9 @@ impl SelectState {
     /// the FIRST entry of the previous/next non-empty section, with
     /// the same `(current + direction + n) % n` wrap over sections.
     pub fn move_section(&mut self, props: &SelectProps, direction: i64) {
+        if props.locked {
+            return;
+        }
         let groups = grouped(props, &self.filter);
         let indices = flat_indices(&groups);
         if indices.is_empty() {
@@ -645,10 +687,10 @@ impl SelectState {
             return;
         }
         self.selected = reconcile_selection(self.selected, indices.len());
-        let rows = content_rows(&groups);
+        let rows = content_rows(&groups, &props.options);
         let viewport = viewport_height(rows, terminal_height);
         self.scroll = self.scroll.min(rows.saturating_sub(viewport));
-        let row = row_of_index(&groups, self.selected);
+        let row = row_of_index(&groups, &props.options, self.selected);
         if row < self.scroll {
             self.scroll = row;
         }
@@ -671,7 +713,7 @@ impl SelectState {
         delta: i32,
     ) -> bool {
         let groups = grouped(props, &self.filter);
-        let rows = content_rows(&groups);
+        let rows = content_rows(&groups, &props.options);
         let viewport = viewport_height(rows, terminal_height);
         let max = rows.saturating_sub(viewport);
         let current = i64::try_from(self.scroll).unwrap_or(i64::MAX);
@@ -695,12 +737,12 @@ impl SelectState {
         if indices.is_empty() || self.selected >= indices.len() {
             return;
         }
-        let rows = content_rows(&groups);
+        let rows = content_rows(&groups, &props.options);
         let viewport = viewport_height(rows, terminal_height);
         if viewport == 0 {
             return;
         }
-        let row = row_of_index(&groups, self.selected);
+        let row = row_of_index(&groups, &props.options, self.selected);
         let center_offset = viewport / 2;
         // scrollBy clamps through the scrollbar math; i64 to allow the
         // un-clamped negative side before saturating at 0.
@@ -714,6 +756,32 @@ impl SelectState {
     pub fn selected_option<'a>(&self, props: &'a SelectProps) -> Option<&'a SelectOption> {
         let groups = grouped(props, &self.filter);
         flat_indices(&groups).get(self.selected).map(|index| &props.options[*index])
+    }
+
+    /// G-189 — `moveAction` (dialog-select.tsx:434-444, the tab /
+    /// shift+tab footer-action cycle): `None` focus enters at the
+    /// first (forward) or last (backward) action; stepping past
+    /// either end returns the focus to the option list (`undefined`).
+    /// `locked` freezes the cycle (:435).
+    pub fn move_action(&mut self, props: &SelectProps, direction: i64) {
+        if props.locked {
+            return;
+        }
+        let total = props.actions.len();
+        if total == 0 {
+            return;
+        }
+        self.focused_action = match self.focused_action {
+            None => Some(if direction >= 0 { 0 } else { total - 1 }),
+            Some(index) => {
+                let next = i64::try_from(index).unwrap_or(0) + direction;
+                if next < 0 || usize::try_from(next).unwrap_or(usize::MAX) >= total {
+                    None
+                } else {
+                    Some(usize::try_from(next).unwrap_or(0))
+                }
+            }
+        };
     }
 
     /// Submit: the selected option (`submit()`).
@@ -856,7 +924,7 @@ pub fn render_select(
     let default = styles.default_fg;
     let groups = grouped(props, &state.filter);
     let indices = flat_indices(&groups);
-    let rows_total = content_rows(&groups);
+    let rows_total = content_rows(&groups, &props.options);
     let viewport = viewport_height(rows_total, terminal_height);
     let filtering = !state.filter.is_empty();
     let flatten_mode = props.flat && filtering;
@@ -901,6 +969,25 @@ pub fn render_select(
                     width,
                 );
                 window.push(option_row.cells);
+            }
+            // G-189 — the `details` rows (dialog-select.tsx:816-824):
+            // one muted line per detail under the title,
+            // middle-truncated to `max(1, min(76, width - 12))`.
+            for detail in &props.options[index].details {
+                let row = content_row;
+                content_row += 1;
+                if visible(row) {
+                    let budget = 1.max(76.min(width.saturating_sub(12)));
+                    let mut detail_row = Row::blank(width, default, surface_bg);
+                    detail_row.text(
+                        4,
+                        &crate::components::composer::render::truncate_middle(detail, budget),
+                        styles.muted,
+                        surface_bg,
+                        0,
+                    );
+                    window.push(detail_row.cells);
+                }
             }
             flat_seen += 1;
         }
@@ -967,9 +1054,16 @@ pub fn render_select(
     if !props.actions.is_empty() {
         let mut footer = Row::blank(width, default, surface_bg);
         let mut at = 4usize;
-        for action in &props.actions {
-            at = footer.text(at, &action.title, styles.text, surface_bg, 0);
-            at = footer.text(at, &format!(" {}", action.label), styles.muted, surface_bg, 0);
+        for (action_i, action) in props.actions.iter().enumerate() {
+            // G-189 — the focused action paints in the focused pair
+            // (`actionFocused()`, dialog-select.tsx:600-621).
+            let (title_fg, label_fg) = if state.focused_action == Some(action_i) {
+                (styles.selected_fg, styles.selected_fg)
+            } else {
+                (styles.text, styles.muted)
+            };
+            at = footer.text(at, &action.title, title_fg, surface_bg, 0);
+            at = footer.text(at, &format!(" {}", action.label), label_fg, surface_bg, 0);
             at += 2; // gap
         }
         rows.push(footer.cells);
@@ -1181,6 +1275,113 @@ mod tests {
     use super::*;
     use crate::theme::ThemeState;
 
+    /// G-189 — `details` rows (dialog-select.tsx:75, :816-824, :237):
+    /// each detail adds one content row, the row model accounts for
+    /// them, and the render paints the muted (middle-truncated) lines
+    /// under the title.
+    #[test]
+    fn details_rows_count_and_paint() {
+        let options = vec![
+            SelectOption::titled("Plain", "plain"),
+            SelectOption::titled("Detailed", "detailed")
+                .with_details(vec!["first detail line".to_owned(), "second".to_owned()]),
+        ];
+        let props = SelectProps::new("Items", options);
+        let groups = grouped(&props, "");
+        assert_eq!(content_rows(&groups, &props.options), 4, "2 options + 2 detail rows");
+        assert_eq!(row_of_index(&groups, &props.options, 1), 1, "the second option's title row");
+
+        // The painted view carries the detail text (muted, col 4).
+        let styles = styles();
+        let state = SelectState::default();
+        let view = render_select(&props, &state, &styles, Color::default(), 80, 24, None);
+        let flat: Vec<String> = view
+            .rows
+            .iter()
+            .map(|row| row.iter().map(|cell| cell.ch).collect::<String>())
+            .collect();
+        assert!(flat.iter().any(|row| row.contains("first detail line")), "{flat:?}");
+        assert!(flat.iter().any(|row| row.contains("second")), "{flat:?}");
+        // A long detail middle-truncates to the ref's budget
+        // (`max(1, min(76, width - 12))` — 68 at width 80).
+        let long = "x".repeat(200);
+        let long_props = SelectProps::new(
+            "Items",
+            vec![SelectOption::titled("L", "l").with_details(vec![long.clone()])],
+        );
+        let view = render_select(&long_props, &state, &styles, Color::default(), 80, 24, None);
+        let rendered: String = view
+            .rows
+            .iter()
+            .map(|row| row.iter().map(|cell| cell.ch).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains('…'), "the 200-char detail truncated");
+        assert!(!rendered.contains(&long), "never the raw detail");
+    }
+
+    /// G-189 — `locked` (dialog-select.tsx:34): the selection freezes
+    /// (`move`/`moveSection`/home/end guards, :362,368,422,435).
+    #[test]
+    fn locked_freezes_selection_moves() {
+        let options: Vec<SelectOption> = (0..4)
+            .map(|index| SelectOption::titled(format!("Item {index}"), format!("item-{index}")))
+            .collect();
+        let mut props = SelectProps::new("Items", options);
+        props.locked = true;
+        let mut state = SelectState::default();
+        state.move_selection(&props, -1);
+        assert_eq!(state.selected, 0, "locked: prev no-ops");
+        state.move_selection(&props, 1);
+        assert_eq!(state.selected, 0, "locked: next no-ops");
+        state.move_to_edge(&props, true);
+        assert_eq!(state.selected, 0, "locked: end no-ops");
+        state.move_section(&props, 1);
+        assert_eq!(state.selected, 0, "locked: section no-ops");
+        // Unlocked: the moves work again.
+        props.locked = false;
+        state.move_selection(&props, 1);
+        assert_eq!(state.selected, 1);
+    }
+
+    /// G-189 — `moveAction` (dialog-select.tsx:434-444): tab cycles
+    /// None → 0 → … → last → None; shift+tab enters at the last;
+    /// locked freezes; no actions is a no-op.
+    #[test]
+    fn move_action_cycles_footer_focus() {
+        let options = vec![SelectOption::titled("Only", "only")];
+        let actions = vec![
+            SelectAction::new("a", "A", "a"),
+            SelectAction::new("b", "B", "b"),
+            SelectAction::new("c", "C", "c"),
+        ];
+        let mut props = SelectProps::new("Items", options).with_actions(actions);
+        let mut state = SelectState::default();
+
+        // Forward: None → 0 → 1 → 2 → None (past the end).
+        for expected in [Some(0), Some(1), Some(2), None] {
+            state.move_action(&props, 1);
+            assert_eq!(state.focused_action, expected);
+        }
+        // Backward from None: the LAST action; stepping back cycles to None.
+        state.move_action(&props, -1);
+        assert_eq!(state.focused_action, Some(2));
+        state.move_action(&props, -1);
+        assert_eq!(state.focused_action, Some(1));
+
+        // Locked: the cycle freezes (:435).
+        props.locked = true;
+        state.focused_action = None;
+        state.move_action(&props, 1);
+        assert_eq!(state.focused_action, None, "locked: no focus entry");
+
+        // Zero actions: never focuses.
+        let empty = SelectProps::new("Items", vec![SelectOption::titled("Only", "only")]);
+        let mut bare = SelectState::default();
+        bare.move_action(&empty, 1);
+        assert_eq!(bare.focused_action, None);
+    }
+
     fn styles() -> DialogStyles {
         DialogStyles::from_theme(&ThemeState::v2_dark())
     }
@@ -1326,7 +1527,7 @@ mod tests {
         let groups = grouped(&props, "");
         assert_eq!(groups.len(), 2, "grouped by category while unfiltered");
         assert_eq!(groups[0].category.as_deref(), Some("Session"));
-        assert_eq!(content_rows(&groups), 5, "header + option, blank + header + option");
+        assert_eq!(content_rows(&groups, &props.options), 5, "header + option, blank + header + option");
 
         let groups = grouped(&props, "switch");
         assert_eq!(groups.len(), 1, "flat while filtering");
@@ -1365,7 +1566,7 @@ mod tests {
             .collect();
         let props = SelectProps::new("Items", options);
         let groups = grouped(&props, "");
-        assert_eq!(content_rows(&groups), 30);
+        assert_eq!(content_rows(&groups, &props.options), 30);
         // Viewport at terminal height 20: min(30, floor(20/2) - 6) = 4
         // rows (dialog-select.tsx:241 — the ref carries NO min floor;
         // at 12 rows the window is 0: chrome only).
@@ -1658,8 +1859,11 @@ mod tests {
         let short_props = SelectProps::new("Items", short_options);
         let long_groups = grouped(&long_props, "");
         let short_groups = grouped(&short_props, "");
-        assert_eq!(content_rows(&long_groups), content_rows(&short_groups));
-        assert_eq!(viewport_height(content_rows(&long_groups), 20), 4);
+        assert_eq!(
+            content_rows(&long_groups, &long_props.options),
+            content_rows(&short_groups, &short_props.options)
+        );
+        assert_eq!(viewport_height(content_rows(&long_groups, &long_props.options), 20), 4);
 
         // Hit ranges: exactly one dialog row per option, consecutive
         // (the 4-row window at h=20 per dialog-select.tsx:241 — the
@@ -1757,7 +1961,7 @@ fn alt_arrows_jump_section_boundaries() {
             SelectOption::titled("Worktree w", "w").categorized("Worktrees"),
         ],
     );
-    let mut state = SelectState { filter: String::new(), selected: 0, scroll: 0 };
+    let mut state = SelectState { filter: String::new(), selected: 0, scroll: 0, focused_action: None };
     // alt+down from the first section's head → the next section's
     // FIRST entry.
     state.move_section(&props, 1);
@@ -1785,7 +1989,7 @@ fn section_jump_on_flat_list_lands_on_the_edges() {
         "Flat",
         vec![SelectOption::titled("a", "a"), SelectOption::titled("b", "b")],
     );
-    let mut state = SelectState { filter: String::new(), selected: 1, scroll: 0 };
+    let mut state = SelectState { filter: String::new(), selected: 1, scroll: 0, focused_action: None };
     // A single (headerless) section: the wrap lands back on row 0.
     state.move_section(&props, 1);
     assert_eq!(state.selected, 0);

@@ -740,6 +740,24 @@ pub fn handle_dialog_key(
     }
 
     // -- the dialog keymap layer (dialog.select.*) ---------------------------
+    // G-189 — `moveAction`'s tab / shift+tab (dialog-select.tsx:
+    // 515-527: the modal layer's `dialog.action.next`/`prev` binds):
+    // the footer-action focus cycle. Handled before the command
+    // lookup (the raw strokes, like the other dialog-scoped binds).
+    if is_select {
+        if stroke.key == "tab" && !stroke.ctrl && !stroke.alt && !stroke.shift {
+            let mut state = entry.select.clone();
+            state.move_action(&props, 1);
+            store.update_dialog(|top| top.select = state);
+            return DialogKeyOutcome::Consumed;
+        }
+        if stroke.key == "tab" && stroke.shift && !stroke.ctrl && !stroke.alt {
+            let mut state = entry.select.clone();
+            state.move_action(&props, -1);
+            store.update_dialog(|top| top.select = state);
+            return DialogKeyOutcome::Consumed;
+        }
+    }
     let Outcome::Command { command, .. } = keymap.lookup(stroke, clock) else {
         return DialogKeyOutcome::Unhandled;
     };
