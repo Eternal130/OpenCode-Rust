@@ -229,7 +229,7 @@ fn daily(fixture: &Fixture) -> (RepositoryCache, Arc<MemoryRefreshStore>) {
 }
 
 fn ensure(reference: &super::repository::RemoteReference) -> EnsureInput {
-    EnsureInput { reference: reference.clone(), branch: None, refresh: Refresh::Daily }
+    EnsureInput { reference: reference.clone(), branch: None, refresh: Refresh::Daily, depth: None }
 }
 
 // ---------------------------------------------------------------------------
@@ -334,6 +334,7 @@ fn cache_keeps_branch_freshness_independent() {
         reference: fixture.reference.clone(),
         branch: Some("feature".to_owned()),
         refresh: Refresh::Daily,
+        depth: None,
     };
     let feature = cache.ensure(&feature_input).unwrap();
     assert_eq!(read(&feature.local_path.join("README.md")), "feature\n");
@@ -366,6 +367,7 @@ fn cache_replaces_stale_directory_before_cloning() {
             reference: fixture.reference.clone(),
             branch: None,
             refresh: Refresh::IfMissing,
+            depth: None,
         })
         .unwrap();
     assert_eq!(result.status, "cloned");
@@ -382,6 +384,7 @@ fn cache_rejects_invalid_branches() {
             reference: fixture.reference.clone(),
             branch: Some("../escape".to_owned()),
             refresh: Refresh::Daily,
+            depth: None,
         })
         .unwrap_err();
     assert!(matches!(error, CacheError::InvalidBranch { .. }), "{error:?}");
@@ -777,4 +780,48 @@ async fn reference_mutation_publishes_reference_updated() {
 
     let seen = seen.lock().unwrap().clone();
     assert_eq!(seen, vec!["reference.updated".to_string(), "reference.updated".to_string()]);
+}
+
+/// G-198 — capture one git invocation's stdout for the shallow-clone
+/// assertions.
+fn git_output(path: &Path, args: &[&str]) -> String {
+    let output = Command::new("git").arg("-C").arg(path).args(args).output().unwrap();
+    assert!(output.status.success(), "git {args:?} failed");
+    String::from_utf8_lossy(&output.stdout).trim().to_owned()
+}
+
+/// G-198 — ref git.ts:246-258: cache clones are shallow with
+/// `--depth (depth ?? 100)`; the depth input is the override seam.
+#[test]
+fn g198_cache_clones_shallow_with_default_depth_100() {
+    // 120 commits on origin: the default depth 100 must cap the clone.
+    let fixture = with_remote();
+    for i in 0..119 {
+        commit(&fixture.source, &format!("bulk {i}\n"), "bulk");
+    }
+    let (cache, _) = daily(&fixture);
+    let result = cache
+        .ensure(&EnsureInput {
+            reference: fixture.reference.clone(),
+            branch: None,
+            refresh: Refresh::IfMissing,
+            depth: None,
+        })
+        .unwrap();
+    assert_eq!(result.status, "cloned");
+    assert_eq!(git_output(&result.local_path, &["rev-parse", "--is-shallow-repository"]), "true");
+    assert_eq!(git_output(&result.local_path, &["rev-list", "--count", "HEAD"]), "100");
+
+    // The override seam: depth 1 caps the visible history.
+    let fixture2 = with_remote();
+    let (cache1, _) = daily(&fixture2);
+    let one = cache1
+        .ensure(&EnsureInput {
+            reference: fixture2.reference.clone(),
+            branch: None,
+            refresh: Refresh::IfMissing,
+            depth: Some(1),
+        })
+        .unwrap();
+    assert_eq!(git_output(&one.local_path, &["rev-list", "--count", "HEAD"]), "1");
 }

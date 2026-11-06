@@ -238,6 +238,7 @@ impl ReferenceService {
                 reference,
                 branch: source.branch.clone(),
                 refresh: Refresh::Daily,
+                depth: None,
             });
             if let Err(error) = result {
                 eprintln!("[reference] failed to materialize {}: {error}", info.name);

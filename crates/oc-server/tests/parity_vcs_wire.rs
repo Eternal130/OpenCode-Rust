@@ -1010,3 +1010,35 @@ async fn hg_vcs_wire() {
         "branch diff lists tracked change: {files:?}"
     );
 }
+
+/// G-198 — numstat "-" (binary) maps to ref's `{binary: true,
+/// additions: 0, deletions: 0, patch: ""}` (git.ts:560-573): a binary
+/// change gets an EMPTY patch body, never "Binary files differ".
+#[tokio::test]
+async fn g198_diff_binary_file_yields_empty_patch() {
+    let workspace = tempfile::tempdir().expect("workspace").keep();
+    seed_repo(&workspace);
+    std::fs::write(workspace.join("blob.bin"), b"\x00\x01\x02seed\x00").expect("seed binary");
+    git(&workspace, &["add", "."]);
+    git(&workspace, &["commit", "-m", "binary"]);
+
+    let server = boot(workspace.clone()).await;
+    let query = location_query(&workspace);
+
+    // No changes → clean.
+    let (status, body) = raw_get(server.addr, &format!("/api/vcs/diff?{query}&mode=working")).await;
+    assert_eq!(status, 200, "clean: {body}");
+    assert_eq!(body["data"].as_array().expect("array").len(), 0);
+
+    // Mutate the binary blob.
+    std::fs::write(workspace.join("blob.bin"), b"\x00\xff\xfechother\x00").expect("mutate binary");
+    let (status, body) = raw_get(server.addr, &format!("/api/vcs/diff?{query}&mode=working")).await;
+    assert_eq!(status, 200, "binary diff: {body}");
+    let files = body["data"].as_array().expect("FileDiff[] array").clone();
+    assert_eq!(files.len(), 1, "{files:?}");
+    let entry = &files[0];
+    assert_eq!(entry["file"], "blob.bin");
+    assert_eq!(entry["additions"], 0, "numstat \"-\" → 0 additions: {entry}");
+    assert_eq!(entry["deletions"], 0, "numstat \"-\" → 0 deletions: {entry}");
+    assert_eq!(entry["patch"], "", "binary patch body is empty: {entry}");
+}

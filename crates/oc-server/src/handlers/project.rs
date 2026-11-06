@@ -1447,8 +1447,11 @@ async fn vcs_diff(
     items.sort_by(|a, b| a.file.cmp(&b.file));
     items.dedup_by(|a, b| a.file == b.file);
 
-    // Per-file stats (numstat; untracked via --no-index).
-    let mut stats: std::collections::HashMap<String, (i64, i64)> = match &reference {
+    // Per-file stats (numstat; untracked via --no-index). G-198: the
+    // third slot marks numstat "-" (binary) — ref maps it to
+    // `{binary: true, additions: 0, deletions: 0, patch: ""}`
+    // (git.ts:560-573).
+    let mut stats: std::collections::HashMap<String, (i64, i64, bool)> = match &reference {
         Some(reference) => git_numstat(scope, reference, target),
         None => std::collections::HashMap::new(),
     };
@@ -1500,8 +1503,11 @@ async fn vcs_diff(
     let mut total = 0usize;
     let mut capped = false;
     for item in &items {
-        let stat = stats.get(&item.file).copied().unwrap_or((0, 0));
-        let patch = if capped {
+        let stat = stats.get(&item.file).copied().unwrap_or((0, 0, false));
+        let patch = if stat.2 {
+            // Binary file: empty patch body (never "Binary files differ").
+            String::new()
+        } else if capped {
             empty_patch(&item.file)
         } else {
             match batch.get(&item.file) {
@@ -1601,7 +1607,7 @@ fn git_numstat(
     scope: &std::path::Path,
     reference: &str,
     target: Option<&str>,
-) -> std::collections::HashMap<String, (i64, i64)> {
+) -> std::collections::HashMap<String, (i64, i64, bool)> {
     let mut args = vec![
         "diff".to_owned(),
         "--no-ext-diff".to_owned(),
@@ -1626,18 +1632,19 @@ fn git_numstat(
         if file.is_empty() {
             continue;
         }
+        let binary = additions == "-" || deletions == "-";
         let parse = |value: &str| match value {
             "-" => 0,
             other => other.parse::<i64>().unwrap_or(0),
         };
-        map.insert(file.to_owned(), (parse(additions), parse(deletions)));
+        map.insert(file.to_owned(), (parse(additions), parse(deletions), binary));
     }
     map
 }
 
 /// `diff --no-index --numstat /dev/null <file>` for untracked additions
 /// (git.ts:442-458).
-fn git_stat_untracked(scope: &std::path::Path, file: &str) -> Option<(i64, i64)> {
+fn git_stat_untracked(scope: &std::path::Path, file: &str) -> Option<(i64, i64, bool)> {
     let output = std::process::Command::new("git")
         .args(["diff", "--no-index", "--numstat", "--", "/dev/null", file])
         .current_dir(scope)
@@ -1648,11 +1655,12 @@ fn git_stat_untracked(scope: &std::path::Path, file: &str) -> Option<(i64, i64)>
     let mut parts = text.split('\t');
     let addition = parts.next()?;
     let deletion = parts.next()?;
+    let binary = addition == "-" || deletion == "-";
     let parse = |value: &str| match value {
         "-" => 0,
         other => other.parse::<i64>().unwrap_or(0),
     };
-    Some((parse(addition), parse(deletion)))
+    Some((parse(addition), parse(deletion), binary))
 }
 
 /// Per-file native patch (git.ts:386-404 / 406-421 / 423-440).
