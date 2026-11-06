@@ -82,9 +82,7 @@ pub fn copilot_model_info(entry: &CopilotModelEntry, previous: Option<&schema_mo
             .iter()
             .map(|variant| schema_model::Variant {
                 id: oc_schema::id::ModelVariantId::parse(variant.id.clone()),
-                settings: serde_json::from_value(variant.settings.clone())
-                    .map(Some)
-                    .unwrap_or(None),
+                settings: serde_json::from_value(variant.settings.clone()).ok(),
                 headers: None,
                 body: None,
             })
