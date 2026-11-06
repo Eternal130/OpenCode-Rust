@@ -180,6 +180,66 @@ fn metadata_files(metadata: Option<&serde_json::Value>) -> Vec<(String, String)>
         .unwrap_or_default()
 }
 
+/// G-182 — one `parseApplyPatchFiles` entry (session/index.tsx:3535-
+/// 3559): `type` (or the `status` mapping added/deleted/modified →
+/// add/delete/update), the path, the patch and the line counts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApplyPatchFile {
+    /// `add` / `delete` / anything else (update).
+    pub type_: String,
+    pub relative_path: String,
+    pub patch: String,
+    pub additions: i64,
+    pub deletions: i64,
+}
+
+/// G-182 — `parseApplyPatchFiles(metadata.files)` (index.tsx:3535):
+/// every entry needs a type (or mappable status), a path, a patch
+/// and BOTH counts — anything less drops (the ref's `flatMap`
+/// return-[] guard).
+#[must_use]
+pub fn parse_apply_patch_files(metadata: Option<&serde_json::Value>) -> Vec<ApplyPatchFile> {
+    let Some(files) = metadata
+        .as_ref()
+        .and_then(|value| value.get("files"))
+        .and_then(serde_json::Value::as_array)
+    else {
+        return Vec::new();
+    };
+    files
+        .iter()
+        .filter_map(|file| {
+            let number =
+                |key: &str| file.get(key).and_then(serde_json::Value::as_i64).unwrap_or(0);
+            let type_ = file
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+                .or_else(|| {
+                    match file.get("status").and_then(serde_json::Value::as_str)? {
+                        "added" => Some("add".to_owned()),
+                        "deleted" => Some("delete".to_owned()),
+                        "modified" => Some("update".to_owned()),
+                        _ => None,
+                    }
+                })?;
+            let relative_path = file
+                .get("file")
+                .or_else(|| file.get("relativePath"))
+                .and_then(serde_json::Value::as_str)?
+                .to_owned();
+            let patch = file.get("patch").and_then(serde_json::Value::as_str)?.to_owned();
+            Some(ApplyPatchFile {
+                type_,
+                relative_path,
+                patch,
+                additions: number("additions"),
+                deletions: number("deletions"),
+            })
+        })
+        .collect()
+}
+
 /// The shell block (`ShellDisplay` + `BlockTool`, index.tsx:2790-2952):
 /// `┃` rail over raised, `$ {command}` in `text.base` (spinner +
 /// colored while running), the output preview muted below.
@@ -272,6 +332,148 @@ fn shell_block(
     RowRender { placed, fills, height, images: Vec::new() }
 }
 
+/// G-182 — the per-file patch rows shared by the edit card and the
+/// apply-patch cards: the hunk headers + gutter-numbered `+`/`−`
+/// rows (the edit block's body, `PatchDiff`).
+fn patch_hunk_rows(
+    hunks: &[crate::components::diff_viewer::Hunk],
+    theme: &ThemeStyles,
+    raised: crate::style::Color,
+    base: crate::style::Color,
+) -> Vec<Vec<Placed>> {
+    let digits = hunks
+        .iter()
+        .flat_map(|hunk| hunk.rows.iter())
+        .map(|row| match row {
+            PatchRow::Context { old, .. } | PatchRow::Deleted { old, .. } => *old,
+            PatchRow::Added { new, .. } => *new,
+        })
+        .max()
+        .unwrap_or(0)
+        .to_string()
+        .len()
+        .max(1);
+    let mut rows: Vec<Vec<Placed>> = Vec::new();
+    for hunk in hunks {
+        rows.push(vec![text_at(
+            0,
+            0,
+            hunk.header.clone(),
+            Style::new().fg(theme.diff.hunk_header).bg(raised),
+        )]);
+        for row in &hunk.rows {
+            match row {
+                PatchRow::Context { old, new, text } => {
+                    rows.push(vec![
+                        text_at(
+                            0,
+                            0,
+                            format!("{old:>digits$}"),
+                            Style::new().fg(theme.diff.line_number).bg(theme.diff.background_context),
+                        ),
+                        text_at(
+                            digits,
+                            0,
+                            format!(" {new:>digits$}"),
+                            Style::new().fg(theme.diff.line_number).bg(theme.diff.background_context),
+                        ),
+                        text_at(
+                            digits * 2 + 1,
+                            0,
+                            format!(" {text}"),
+                            Style::new().fg(base).bg(theme.diff.background_context),
+                        ),
+                    ]);
+                }
+                PatchRow::Deleted { old, text } => {
+                    rows.push(vec![
+                        text_at(
+                            0,
+                            0,
+                            format!("{old:>digits$}"),
+                            Style::new().fg(theme.diff.line_number).bg(theme.diff.background_removed),
+                        ),
+                        text_at(
+                            digits * 2 + 1,
+                            0,
+                            format!("-{text}"),
+                            Style::new().fg(base).bg(theme.diff.background_removed),
+                        ),
+                    ]);
+                }
+                PatchRow::Added { new, text } => {
+                    rows.push(vec![
+                        text_at(
+                            digits,
+                            0,
+                            format!(" {new:>digits$}"),
+                            Style::new().fg(theme.diff.line_number).bg(theme.diff.background_added),
+                        ),
+                        text_at(
+                            digits * 2 + 1,
+                            0,
+                            format!("+{text}"),
+                            Style::new().fg(base).bg(theme.diff.background_added),
+                        ),
+                    ]);
+                }
+            }
+        }
+    }
+    rows
+}
+
+/// G-182 — the `patch` tool's detail: ONE `BlockTool` CARD PER FILE
+/// (`ApplyPatch`, index.tsx:3333-3378 — `<For each={files()}>`): the
+/// per-file status header (`# Created` / `# Deleted` / `← Patched`)
+/// + path; deletions render the `-N lines` count instead of a diff;
+/// everything else renders the file's hunks.
+fn apply_patch_block(state: &ToolState, theme: &ThemeStyles, width: usize) -> RowRender {
+    let files = parse_apply_patch_files(state.metadata_json.as_ref());
+    let mut card = None::<RowRender>;
+    for file in &files {
+        let rows = match file.type_.as_str() {
+            "delete" => vec![vec![text_at(
+                0,
+                0,
+                format!(
+                    "-{} line{}",
+                    file.deletions,
+                    if file.deletions != 1 { "s" } else { "" }
+                ),
+                Style::new().fg(theme.diff.text_removed).bg(theme.background),
+            )]],
+            _ => patch_hunk_rows(
+                &parse_patch(&file.patch),
+                theme,
+                theme.background_raised,
+                theme.text.fg.unwrap_or(theme.background),
+            ),
+        };
+        let label = match file.type_.as_str() {
+            "add" => "# Created",
+            "delete" => "# Deleted",
+            _ => "← Patched",
+        };
+        let mut rows = rows;
+        rows.insert(
+            0,
+            vec![text_at(
+                0,
+                0,
+                format!("{label} {}", file.relative_path),
+                theme.text_muted,
+            )],
+        );
+        let card_render = block_from_rows(&rows, theme, width);
+        card = Some(match card {
+            Some(stack) => crate::components::message::rows::stack_rows(stack, card_render),
+            None => card_render,
+        });
+    }
+    card.unwrap_or_else(|| RowRender::default())
+}
+
 /// The edit block (`Edit` + `BlockTool` + `PatchDiff`,
 /// index.tsx:3240-3330): `← Edit {path}` header + the unified patch
 /// rows (gutter numbers, `+`/`−` signs, row backgrounds).
@@ -316,92 +518,9 @@ fn edit_block(state: &ToolState, theme: &ThemeStyles, width: usize) -> RowRender
         };
     };
     let hunks = parse_patch(&patch);
-    let digits = hunks
-        .iter()
-        .flat_map(|hunk| hunk.rows.iter())
-        .map(|row| match row {
-            PatchRow::Context { old, .. } | PatchRow::Deleted { old, .. } => *old,
-            PatchRow::Added { new, .. } => *new,
-        })
-        .max()
-        .unwrap_or(0)
-        .to_string()
-        .len()
-        .max(1);
     let mut rows: Vec<Vec<Placed>> =
         vec![vec![text_at(0, 0, format!("← Edit {file_path}"), muted)]];
-    for hunk in &hunks {
-        rows.push(vec![text_at(
-            0,
-            0,
-            hunk.header.clone(),
-            Style::new().fg(theme.diff.hunk_header).bg(raised),
-        )]);
-        for row in &hunk.rows {
-            match row {
-                PatchRow::Context { old, new, text } => {
-                    rows.push(vec![
-                        text_at(
-                            0,
-                            0,
-                            format!("{old:>digits$}"),
-                            Style::new()
-                                .fg(theme.diff.line_number)
-                                .bg(theme.diff.background_context),
-                        ),
-                        text_at(
-                            digits,
-                            0,
-                            format!(" {new:>digits$}"),
-                            Style::new()
-                                .fg(theme.diff.line_number)
-                                .bg(theme.diff.background_context),
-                        ),
-                        text_at(
-                            digits * 2 + 1,
-                            0,
-                            format!(" {text}"),
-                            Style::new().fg(base).bg(theme.diff.background_context),
-                        ),
-                    ]);
-                }
-                PatchRow::Deleted { old, text } => {
-                    rows.push(vec![
-                        text_at(
-                            0,
-                            0,
-                            format!("{old:>digits$}"),
-                            Style::new()
-                                .fg(theme.diff.line_number)
-                                .bg(theme.diff.background_removed),
-                        ),
-                        text_at(
-                            digits * 2 + 1,
-                            0,
-                            format!("-{text}"),
-                            Style::new().fg(base).bg(theme.diff.background_removed),
-                        ),
-                    ]);
-                }
-                PatchRow::Added { new, text } => {
-                    rows.push(vec![
-                        text_at(
-                            digits,
-                            0,
-                            format!(" {new:>digits$}"),
-                            Style::new().fg(theme.diff.line_number).bg(theme.diff.background_added),
-                        ),
-                        text_at(
-                            digits * 2 + 1,
-                            0,
-                            format!("+{text}"),
-                            Style::new().fg(base).bg(theme.diff.background_added),
-                        ),
-                    ]);
-                }
-            }
-        }
-    }
+    rows.extend(patch_hunk_rows(&hunks, theme, raised, base));
     block_from_rows(&rows, theme, width)
 }
 
@@ -614,6 +733,93 @@ pub fn shell_message_row(
     render
 }
 
+/// G-183 — `parseQuestions` (index.tsx:3562-3568): the `question`
+/// strings of `input.questions`.
+fn parse_questions(input_json: Option<&serde_json::Value>) -> Vec<String> {
+    let Some(items) = input_json
+        .and_then(|value| value.get("questions"))
+        .and_then(serde_json::Value::as_array)
+    else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| {
+            item.get("question").and_then(serde_json::Value::as_str).map(str::to_owned)
+        })
+        .collect()
+}
+
+/// G-183 — `parseQuestionAnswers` (index.tsx:3570-3574): the
+/// metadata's `answers` — an array per question (non-array entries
+/// coerce to `[]`); `None` when the array is absent (pending).
+fn parse_question_answers(metadata: Option<&serde_json::Value>) -> Option<Vec<Vec<String>>> {
+    metadata
+        .as_ref()
+        .and_then(|value| value.get("answers"))
+        .and_then(serde_json::Value::as_array)
+        .map(|answers| {
+            answers
+                .iter()
+                .map(|answer| {
+                    answer
+                        .as_array()
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(|item| item.as_str().map(str::to_owned))
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                })
+                .collect()
+        })
+}
+
+/// G-183 — the `question` tool (`Question`, index.tsx:3421-3458):
+/// answered → a `# Questions` BlockTool of Q/A pairs (question muted,
+/// answer base, `(no answer)` fallback); pending → the
+/// `Asking questions…` InlineTool / `Asked N question(s)`.
+fn question_block(state: &ToolState, clock_ms: u64, theme: &ThemeStyles, width: usize) -> RowRender {
+    let muted = theme.text_muted;
+    let base = theme.text.fg.unwrap_or(theme.background);
+    let questions = parse_questions(state.input_json.as_ref());
+    let answers = parse_question_answers(state.metadata_json.as_ref());
+    let count = questions.len();
+    match answers {
+        Some(answers) => {
+            let mut rows: Vec<Vec<Placed>> =
+                vec![vec![text_at(0, 0, "# Questions", muted)]];
+            for (index, question) in questions.iter().enumerate() {
+                let answer = answers.get(index).map(|answer| {
+                    if answer.is_empty() {
+                        "(no answer)".to_owned()
+                    } else {
+                        answer.join(", ")
+                    }
+                });
+                rows.push(vec![text_at(0, 0, question.clone(), muted)]);
+                rows.push(vec![text_at(
+                    0,
+                    0,
+                    answer.unwrap_or_else(|| "(no answer)".to_owned()),
+                    Style::new().fg(base).bg(theme.background),
+                )]);
+            }
+            block_from_rows(&rows, theme, width)
+        }
+        None => {
+            let label =
+                format!("Asked {count} question{}", if count != 1 { "s" } else { "" });
+            if matches!(state.status, ToolStatus::Running | ToolStatus::Streaming) {
+                running_tool_row("Asking questions…", clock_ms, theme, width)
+            } else {
+                completed_tool_row('→', &label, theme, width)
+            }
+        }
+    }
+}
+
 /// One tool detail cell. `expanded` is the INLINE disclosure
 /// (`ShellDisplay`'s toggle / `GenericTool`'s expand).
 #[allow(clippy::too_many_lines)]
@@ -629,11 +835,15 @@ pub fn tool_detail_row(
     let input = |key: &str| state.input.get(key).cloned().unwrap_or_default();
     match tool {
         "shell" => shell_block(state, expanded, clock_ms, theme, width),
+        // G-182 — the `patch` tool renders ONE CARD PER FILE
+        // (`ApplyPatch`, index.tsx:3333-3378); `edit` keeps the ref's
+        // single first-file card (`Edit`, :3254 — `files[0]`).
+        "patch" => apply_patch_block(state, theme, width),
         // G-140③ — Write/Edit LSP diagnostics (index.tsx:2978/3284 +
         // `Diagnostics`, :3469-3482): up to three severity-1 issues
         // for the tool's path render under the block in the error
         // color (`Error [line:col] message`, 1-based).
-        "edit" | "patch" => with_diagnostics(edit_block(state, theme, width), state, theme, width),
+        "edit" => with_diagnostics(edit_block(state, theme, width), state, theme, width),
         "write" => with_diagnostics(write_block(state, theme, width), state, theme, width),
         "read" => {
             let mut label = format!("Read {}", input("path"));
@@ -833,6 +1043,7 @@ pub fn tool_detail_row(
                 images: Vec::new(),
             }
         }
+        "question" => question_block(state, clock_ms, theme, width),
         // The generic tool (`GenericTool`, index.tsx:2532-2584): the
         // tool label + `[k=v, …]`; a failed tool renders the error
         // row below.
@@ -933,6 +1144,8 @@ mod tests {
             metadata_json,
             output: output.map(str::to_owned),
             error: None,
+            images: Vec::new(),
+            input_json: None,
         }
     }
 

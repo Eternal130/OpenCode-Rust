@@ -512,6 +512,10 @@ pub fn render_session(
             revert: store.revert(session_id),
             pending_compactions: store.pending_compactions(session_id),
             redo_key: "R".to_owned(),
+            // G-184 — the inline shell arms' live output map.
+            shell_live: store.inline_shell_live_map(),
+            // G-188 — the permission-blocked part ids.
+            pending_permissions: store.pending_permission_part_ids(session_id),
         },
         styles,
         column,

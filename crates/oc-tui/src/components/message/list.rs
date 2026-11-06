@@ -131,6 +131,18 @@ pub struct TranscriptOptions {
     /// SURF-1: the redo shortcut label for the banner's footer
     /// (`Keymap.useShortcut("session.redo")`, index.tsx:2153).
     pub redo_key: String,
+    /// G-184 — the INLINE shell arms' live output, keyed by the
+    /// running tool part's `metadata.shellID`
+    /// (`[earlier output omitted]\n{tail}` at the 1MiB display cap —
+    /// the cursor-incremental `shell.output` poll,
+    /// session/index.tsx:2826-2889).
+    pub shell_live: std::collections::HashMap<String, String>,
+    /// G-188 — the permission-BLOCKED part ids
+    /// (`pendingPermissions()`, rows.ts:102-107: permission requests
+    /// whose `source.type === "tool"`). Blocked tools partition OUT of
+    /// the collapsed groups and sink to the bottom
+    /// (`partitionPending`, grouping/session.ts:163-176).
+    pub pending_permissions: std::collections::HashSet<String>,
 }
 
 impl Default for TranscriptOptions {
@@ -154,6 +166,8 @@ impl Default for TranscriptOptions {
             revert: None,
             pending_compactions: Vec::new(),
             redo_key: "R".to_owned(),
+            shell_live: std::collections::HashMap::new(),
+            pending_permissions: std::collections::HashSet::new(),
         }
     }
 }
@@ -236,13 +250,16 @@ pub fn render_transcript(
         _ => (messages.to_vec(), 0),
     };
     let messages = bounded.as_slice();
-    let rows: Vec<Row> = reduce_rows_with_rules(
+    let mut rows: Vec<Row> = reduce_rows_with_rules(
         messages,
         &std::collections::HashSet::<String>::new(),
         &options.group_rules,
         options.group_exploration,
         options.verbosity == Verbosity::Low,
     );
+    // G-188 — `partitionPending` (rows.ts:71 + grouping/session.ts:
+    // 163-176): permission-blocked tools leave the collapsed groups.
+    crate::components::message::model::partition_pending(&mut rows, &options.pending_permissions);
     let markdown = MarkdownStyles::from_theme(theme);
     let mut measured: Vec<MeasuredRow> = Vec::new();
     let mut images: Vec<crate::image_view::ImagePlacement> = Vec::new();
@@ -271,6 +288,27 @@ pub fn render_transcript(
             measured.push(MeasuredRow { y: row_y, height: render.height, placed, fills, key });
         };
     let mut rows_iter = rows.iter().peekable();
+    // G-188 — `PendingEntries` (group-view.tsx:293-312): the group's
+    // permission-blocked tools render BELOW the header, even while
+    // collapsed ("Permission-blocked tools stay visible below the
+    // root group").
+    let pending_cells_of = |row: &Row| -> Vec<(RowRender, String)> {
+        let Row::Group { pending, .. } = row else { return Vec::new() };
+        pending
+            .clone()
+            .into_iter()
+            .filter_map(|(message_id, part_id)| {
+                let message = messages.iter().find(|m| m.id() == message_id.as_str())?;
+                let Message::Assistant { parts, .. } = message else { return None };
+                let Part::Tool { name, state, .. } = resolve_part(parts, &part_id)? else {
+                    return None;
+                };
+                let cell =
+                    tool_cell(&message_id, &part_id, name, state, options, theme, content_width);
+                Some((cell, format!("pending:{message_id}:{part_id}")))
+            })
+            .collect()
+    };
     while let Some(row) = rows_iter.next() {
         // The disclosure expansion: an expanded reasoning group emits
         // the header unit plus one unit per thought child; an expanded
@@ -352,15 +390,20 @@ pub fn render_transcript(
                         continue;
                     };
                     let expanded_key = format!("{message_id}:{part_id}");
-                    let cell = crate::components::message::tool_detail::tool_detail_row(
-                        canonical_tool_name(name),
+                    let _ = expanded_key;
+                    let cell = tool_cell(
+                        &message_id,
+                        &part_id,
+                        name,
                         state,
-                        options.expanded_tools.contains(&expanded_key),
-                        options.clock_ms,
+                        options,
                         theme,
                         content_width,
                     );
                     place(cell, format!("tool:{message_id}:{part_id}"), &mut measured, &mut y);
+                }
+                for (cell, key) in pending_cells_of(row) {
+                    place(cell, key, &mut measured, &mut y);
                 }
                 continue;
             }
@@ -368,6 +411,10 @@ pub fn render_transcript(
         let render = render_row(row, messages, options, theme, &markdown, content_width);
         let key = row_key(row);
         place(render, key, &mut measured, &mut y);
+        // G-188 — the blocked tools render below the collapsed group.
+        for (cell, key) in pending_cells_of(row) {
+            place(cell, key, &mut measured, &mut y);
+        }
         // G-140② — the debug turn-usage summary
         // (`TurnTokenUsage`, index.tsx:1588-1676): after the TURN's
         // final footer (the next row belongs to a new user turn or
@@ -566,6 +613,65 @@ pub fn apply_mount_window(transcript: &mut Transcript, window: MountWindow) {
     transcript.rows.truncate(end - hidden);
 }
 
+/// G-184/G-187 — one tool part's detail cell with the live-shell and
+/// image seams applied:
+/// * a RUNNING shell tool with `metadata.shellID` renders the inline
+///   poll's live output (the 1s cursor-incremental `shell.output`
+///   fetch — the inline arm of `ShellDisplay`,
+///   session/index.tsx:2826-2889) instead of the static `state.output`;
+/// * the part's inline `data:image/*` content blocks feed the image
+///   strip under the tool block (`ToolImages`, index.tsx:2450-2456).
+fn tool_cell(
+    message_id: &str,
+    part_id: &str,
+    name: &str,
+    state: &crate::components::message::model::ToolState,
+    options: &TranscriptOptions,
+    theme: &ThemeStyles,
+    width: usize,
+) -> RowRender {
+    use crate::components::message::model::ToolStatus;
+    let mut state = state.clone();
+    let shell_id = state.metadata.get("shellID").cloned().unwrap_or_default();
+    if !shell_id.is_empty() && !(state.status == ToolStatus::Completed && state.output.is_some())
+    {
+        if let Some(live) = options.shell_live.get(&shell_id) {
+            state.output = Some(live.clone());
+        }
+    }
+    let expanded_key = format!("{message_id}:{part_id}");
+    let head = crate::components::message::tool_detail::tool_detail_row(
+        canonical_tool_name(name),
+        &state,
+        options.expanded_tools.contains(&expanded_key),
+        options.clock_ms,
+        theme,
+        width,
+    );
+    if state.images.is_empty() {
+        return head;
+    }
+    let strip = crate::components::message::rows::image_strip_row(
+        &state.images,
+        &|index: usize| {
+            state
+                .images
+                .iter()
+                .filter(|file| file.is_image())
+                .nth(index)
+                .and_then(|file| file.name.clone())
+                .unwrap_or_else(|| format!("[Image {}]", index + 1))
+        },
+        &options.image_strip,
+        theme,
+        width.saturating_sub(3),
+    );
+    if strip.height == 0 {
+        return head;
+    }
+    crate::components::message::rows::stack_rows(head, strip)
+}
+
 /// Render one reduced row.
 // The per-kind match grew with the SURF-1 detail arms.
 #[allow(clippy::too_many_lines)]
@@ -757,15 +863,7 @@ fn render_row(
                 // card, the generic row (exploration tools reach this
                 // through their group header when grouped).
                 Part::Tool { name, state, .. } => {
-                    let expanded_key = format!("{message_id}:{part_id}");
-                    crate::components::message::tool_detail::tool_detail_row(
-                        canonical_tool_name(name),
-                        state,
-                        options.expanded_tools.contains(&expanded_key),
-                        options.clock_ms,
-                        theme,
-                        width,
-                    )
+                    tool_cell(message_id, part_id, name, state, options, theme, width)
                 }
                 Part::Reasoning { .. } => RowRender::default(),
             }
@@ -1606,6 +1704,8 @@ mod surf1_tests {
                     metadata_json: None,
                     output: Some("hi".to_owned()),
                     error: None,
+                    images: Vec::new(),
+                    input_json: None,
                 },
             }],
             finish: Some("stop".into()),

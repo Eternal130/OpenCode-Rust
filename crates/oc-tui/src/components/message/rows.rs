@@ -1191,8 +1191,12 @@ pub fn stack_rows(upper: RowRender, mut lower: RowRender) -> RowRender {
     for fill in &mut lower.fills {
         fill.y += height as u16;
     }
+    for image in &mut lower.images {
+        image.y += height as u16;
+    }
     combined.placed.extend(lower.placed);
     combined.fills.extend(lower.fills);
+    combined.images.extend(lower.images);
     combined.height += lower.height;
     combined
 }
