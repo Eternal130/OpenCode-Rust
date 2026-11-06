@@ -2158,19 +2158,13 @@ async fn export(
             crate::errors::debug_cause("session:unknown_ref", &error);
             ApiError::unknown_ref()
         })?;
-    let mut info = session_row_to_info(&row);
-    let mut message_values: Vec<Value> = messages.iter().map(message_row_to_info).collect();
-    if sanitize {
-        if let Value::Object(map) = &mut info {
-            map.remove("metadata");
-        }
-        for message in &mut message_values {
-            if let Value::Object(map) = message {
-                map.remove("metadata");
-            }
-        }
-    }
-    Ok(json_data(json!({ "info": info, "messages": message_values })))
+    let info = session_row_to_info(&row);
+    let message_values: Vec<Value> = messages.iter().map(message_row_to_info).collect();
+    // G-170: the export routes through the oc-core transfer service —
+    // the settled filter + ref sanitize semantics (transfer.ts:60-64,
+    // 165-330) — keeping the wire `{info, messages}` shape stable.
+    let data = oc_core::session::transfer::export_data(info, message_values, sanitize);
+    Ok(json_data(data))
 }
 
 async fn stats(
