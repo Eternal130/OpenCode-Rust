@@ -564,6 +564,91 @@ pub fn release_target() -> String {
     format!("{}-{arch}", std::env::consts::OS)
 }
 
+// ---------------------------------------------------------------------------
+// G-208: the `cli-upgrade` flock
+// ---------------------------------------------------------------------------
+
+/// The upgrade lock's key (ref updater.ts:131,399 —
+/// `flock.acquire("cli-upgrade", …)`): one upgrade at a time across
+/// every OpenCode process on the machine.
+pub const CLI_UPGRADE_LOCK: &str = "cli-upgrade";
+
+/// The ref waits up to 15 minutes for the lock ("longer than the
+/// slowest install — curl runs two 5-minute commands"); the port
+/// treats 15 minutes as the lock's TTL instead: a held-and-fresh lock
+/// makes the second upgrade skip cleanly, a lock older than the TTL is
+/// stale (its holder is gone or wedged) and is taken over.
+pub const CLI_UPGRADE_TTL: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+
+/// The outcome of trying to enter the upgrade critical section.
+#[derive(Debug)]
+pub enum UpgradeLock {
+    /// The lock was taken; the guard holds it for the upgrade body.
+    Acquired(oc_util::flock::FileLock),
+    /// Another upgrade holds a FRESH lock — skip/exit cleanly.
+    Held,
+}
+
+/// Lock-file age (mtime), `None` when it cannot be stated.
+fn lock_age(path: &std::path::Path) -> Option<std::time::Duration> {
+    let modified = std::fs::metadata(path).ok()?.modified().ok()?;
+    std::time::SystemTime::now().duration_since(modified).ok()
+}
+
+/// G-208 — acquire the `cli-upgrade` lock at an explicit path (the
+/// testable core of [`acquire_cli_upgrade_lock`]).
+///
+/// Semantics (repo flock convention, ref effect-flock staleness):
+/// non-blocking `flock(2)` acquire; a held lock whose file is younger
+/// than [`CLI_UPGRADE_TTL`] is fresh → [`UpgradeLock::Held`]; a lock
+/// file older than the TTL is stale — its inode is unlinked and a new
+/// lock file is created (the old holder's advisory lock rides the
+/// orphaned inode; it no longer gates upgrades).
+pub fn acquire_cli_upgrade_lock_at(path: &std::path::Path) -> Result<UpgradeLock, String> {
+    match oc_util::flock::FileLock::try_exclusive(path) {
+        Ok(Some(lock)) => Ok(UpgradeLock::Acquired(lock)),
+        Ok(None) => {
+            // Held. Fresh → refuse; stale (mtime older than the TTL,
+            // or unreadable mtime treated conservatively as fresh
+            // only when the file is brand-new) → take over.
+            let Some(age) = lock_age(path) else {
+                return Ok(UpgradeLock::Held);
+            };
+            if age < CLI_UPGRADE_TTL {
+                return Ok(UpgradeLock::Held);
+            }
+            // Stale takeover: unlink the lock file (the wedged holder
+            // keeps its advisory lock on the orphan inode) and lock a
+            // fresh one.
+            std::fs::remove_file(path).map_err(|error| {
+                format!("could not remove the stale cli-upgrade lock at {}: {error}", path.display())
+            })?;
+            match oc_util::flock::FileLock::try_exclusive(path) {
+                Ok(Some(lock)) => Ok(UpgradeLock::Acquired(lock)),
+                // Lost the takeover race to another process: it holds
+                // a fresh lock now.
+                Ok(None) => Ok(UpgradeLock::Held),
+                Err(error) => Err(format!(
+                    "could not acquire the cli-upgrade lock at {}: {error}",
+                    path.display()
+                )),
+            }
+        }
+        Err(error) => {
+            Err(format!("could not acquire the cli-upgrade lock at {}: {error}", path.display()))
+        }
+    }
+}
+
+/// [`acquire_cli_upgrade_lock_at`] at the machine-wide lock root
+/// (`<state>/locks/cli-upgrade.lock`, ref `flock` under
+/// `global.state/locks`).
+pub fn acquire_cli_upgrade_lock(
+    roots: &oc_util::global_roots::Roots,
+) -> Result<UpgradeLock, String> {
+    acquire_cli_upgrade_lock_at(&roots.locks().join(format!("{CLI_UPGRADE_LOCK}.lock")))
+}
+
 /// One upgrade request, fully resolved.
 #[derive(Debug, Clone)]
 pub struct UpgradeRequest {
@@ -585,6 +670,22 @@ pub struct UpgradeRequest {
 ///   action — the exception to the silent-failure contract the
 ///   background checker follows).
 pub async fn upgrade(request: UpgradeRequest) -> i32 {
+    // G-208: one upgrade at a time machine-wide (ref updater.ts:399
+    // `flock.acquire("cli-upgrade", …)`). A held-and-fresh lock skips
+    // cleanly; the guard rides the whole upgrade body (release on
+    // drop, including error paths).
+    let roots = oc_util::global_roots::resolve();
+    let _upgrade_lock = match acquire_cli_upgrade_lock(&roots) {
+        Ok(UpgradeLock::Acquired(lock)) => Some(lock),
+        Ok(UpgradeLock::Held) => {
+            println!("OpenCode upgrade skipped: another upgrade is already in progress.");
+            return 0;
+        }
+        Err(error) => {
+            eprintln!("Error: {error}");
+            return 1;
+        }
+    };
     let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("opencode"));
     let Some(target) = request.target.as_deref().map(str::trim).filter(|t| !t.is_empty()) else {
         return upgrade_to_latest(&request.method, &exe).await;
@@ -1286,6 +1387,71 @@ pub fn execute_removals(plan: &[Removal]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// G-208: a second acquire while the lock is held-and-fresh
+    /// refuses; releasing hands it back; a lock file older than the
+    /// 15-minute TTL is taken over (unlinked + relocked).
+    #[test]
+    fn cli_upgrade_lock_held_fresh_refuses_and_stale_is_taken_over() {
+        let dir = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+        let path = dir.path().join("cli-upgrade.lock");
+
+        // Free → acquired.
+        let first = match acquire_cli_upgrade_lock_at(&path).expect("first acquire") {
+            UpgradeLock::Acquired(lock) => lock,
+            UpgradeLock::Held => panic!("a free lock must be acquired"),
+        };
+
+        // Held and FRESH → the second concurrent acquire refuses.
+        match acquire_cli_upgrade_lock_at(&path).expect("second acquire") {
+            UpgradeLock::Held => {}
+            UpgradeLock::Acquired(_) => panic!("a held-and-fresh lock must refuse"),
+        }
+
+        // Release → acquirable again.
+        drop(first);
+        let second = match acquire_cli_upgrade_lock_at(&path).expect("re-acquire") {
+            UpgradeLock::Acquired(lock) => lock,
+            UpgradeLock::Held => panic!("a released lock must be acquirable"),
+        };
+
+        // STALE takeover: backdate the lock file past the TTL while it
+        // is still held — the holder is gone/wedged, the next acquire
+        // unlinks and relocks.
+        set_mtime_past(&second.path(), CLI_UPGRADE_TTL + std::time::Duration::from_secs(60));
+        drop(second);
+        // Re-hold a fresh lock, then age it past the TTL (held + stale).
+        let held = match acquire_cli_upgrade_lock_at(&path).expect("acquire") {
+            UpgradeLock::Acquired(lock) => lock,
+            UpgradeLock::Held => panic!("lock was released"),
+        };
+        set_mtime_past(&held.path(), CLI_UPGRADE_TTL + std::time::Duration::from_secs(1));
+        match acquire_cli_upgrade_lock_at(&path).expect("stale acquire") {
+            UpgradeLock::Acquired(_) => {}
+            UpgradeLock::Held => panic!("a stale lock must be taken over"),
+        }
+    }
+
+    /// Sets a file's mtime `age` in the past (unix `utimensat`).
+    fn set_mtime_past(path: &std::path::Path, age: std::time::Duration) {
+        unsafe {
+            let seconds = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .saturating_sub(age);
+            let atime = libc::timespec { tv_sec: seconds.as_secs() as i64, tv_nsec: 0 };
+            let mtime = atime;
+            let times = [atime, mtime];
+            let cpath = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())
+                .expect("path bytes");
+            assert_eq!(
+                libc::utimensat(libc::AT_FDCWD, cpath.as_ptr(), times.as_ptr(), 0),
+                0,
+                "utimensat on {}",
+                path.display()
+            );
+        }
+    }
 
     /// G-156: the installed-package probe from the executable path
     /// (ref `installedPackage`): the grandparent package.json's name
@@ -2125,6 +2291,7 @@ mod tests {
 
     #[tokio::test]
     async fn upgrade_entrypoint_returns_zero_on_success_and_one_on_failure() {
+        let _roots = sandbox_roots();
         let dir = tempfile::tempdir().expect("dir");
         let log_ok = dir.path().join("ok.log");
         fake_manager(dir.path(), "yarn", &log_ok, 0, "");
