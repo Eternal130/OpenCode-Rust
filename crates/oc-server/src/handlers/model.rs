@@ -664,7 +664,7 @@ mod tests {
             oc_core::provider_catalog::facade::ModelConnection {
                 base_url: Some(format!("http://127.0.0.1:{port}/v1")),
                 api_key: None,
-                headers: Default::default(),
+                ..Default::default()
             },
         );
         engine.local.refresh(&connections).await;

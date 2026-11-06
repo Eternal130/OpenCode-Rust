@@ -1740,6 +1740,7 @@ mod local_discovery_tests {
             ModelConnection {
                 base_url: Some(format!("http://127.0.0.1:{port}/v1")),
                 api_key: None,
+                resource_name: None,
                 headers: BTreeMap::new(),
             },
         );
@@ -1818,6 +1819,7 @@ mod local_discovery_tests {
             ModelConnection {
                 base_url: Some(format!("http://127.0.0.1:{port}/api/v1")),
                 api_key: None,
+                resource_name: None,
                 headers: BTreeMap::new(),
             },
         );

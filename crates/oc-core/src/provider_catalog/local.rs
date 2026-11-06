@@ -601,6 +601,7 @@ mod tests {
             ModelConnection {
                 base_url: Some(format!("http://127.0.0.1:{port}{path}")),
                 api_key: key.map(str::to_owned),
+                resource_name: None,
                 headers: BTreeMap::new(),
             },
         );
@@ -750,6 +751,7 @@ mod tests {
             ModelConnection {
                 base_url: Some(format!("http://127.0.0.1:{}/api/v1", mock.port)),
                 api_key: None,
+                resource_name: None,
                 headers: BTreeMap::new(),
             },
         );
@@ -792,6 +794,7 @@ mod tests {
             ModelConnection {
                 base_url: Some(format!("http://127.0.0.1:{}/v1", mock.port)),
                 api_key: None,
+                resource_name: None,
                 headers: BTreeMap::new(),
             },
         );
@@ -817,6 +820,7 @@ mod tests {
             ModelConnection {
                 base_url: Some(format!("http://127.0.0.1:{gone}/v1")),
                 api_key: None,
+                resource_name: None,
                 headers: BTreeMap::new(),
             },
         );
