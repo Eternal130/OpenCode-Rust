@@ -107,6 +107,8 @@ pub enum FooterKey {
     PageUp,
     PageDown,
     CtrlC,
+    /// G-181① — `variant.cycle`'s ctrl+t (config/keybind.ts:174).
+    CtrlT,
 }
 
 /// The side effects a keypress produced — the runtime seams
@@ -126,6 +128,10 @@ pub enum FooterEffect {
     InterruptChild(String),
     HistoryUp,
     HistoryDown,
+    /// G-181① — the model-variant cycle (`variant.cycle`, the
+    /// composer keymap layer's ctrl+t entry, footer.view.tsx:569-575
+    /// → `onCycleVariant`, runtime.ts:293-310).
+    CycleVariant,
 }
 
 /// The footer state machine + per-view key handling (the pure half of
@@ -296,6 +302,7 @@ impl FooterPane {
             FooterKey::Up => "up".to_owned(),
             FooterKey::Down => "down".to_owned(),
             FooterKey::CtrlC => "ctrl+c".to_owned(),
+            FooterKey::CtrlT => "ctrl+t".to_owned(),
             FooterKey::Tab => "tab".to_owned(),
             FooterKey::PageUp => "pageup".to_owned(),
             FooterKey::PageDown => "pagedown".to_owned(),
@@ -391,6 +398,7 @@ impl FooterPane {
                 }
             }
             FooterKey::CtrlC => {}
+            FooterKey::CtrlT => {}
             FooterKey::Tab | FooterKey::PageUp | FooterKey::PageDown => {}
         }
         // Only keep the per-request state while the blocker is live.
@@ -464,6 +472,10 @@ impl FooterPane {
                 }
             }
             FooterKey::Tab | FooterKey::PageUp | FooterKey::PageDown => {}
+            // G-181① — `variant.cycle` on the composer route
+            // (footer.view.tsx:569-575: enabled when
+            // `route().type === "composer"`): fires `onCycleVariant`.
+            FooterKey::CtrlT => effects.push(FooterEffect::CycleVariant),
             FooterKey::Up => effects.push(FooterEffect::HistoryUp),
             FooterKey::Down => {
                 // TUI-17 — `session.child.first` over tracked
@@ -540,6 +552,9 @@ impl FooterPane {
                     effects.push(FooterEffect::InterruptChild(selected));
                 }
             }
+            // G-181① — `variant.cycle`'s layer is composer-route-only;
+            // the inspector consumes the key without effect.
+            FooterKey::CtrlT => {}
             FooterKey::Printable(_) => {}
         }
         effects
@@ -1755,8 +1770,7 @@ mod tests {
     }
 
     #[test]
-    fn two_press_exit_and_draft_clear() {
-        let mut footer = pane();
+    fn two_press_exit_and_draft_clear() {        let mut footer = pane();
         let _ = footer.press(FooterKey::Printable('h'));
         let effects = footer.press(FooterKey::CtrlC);
         assert!(effects.is_empty(), "no effect on a draft clear");
@@ -1770,6 +1784,17 @@ mod tests {
         let _ = again.press(FooterKey::CtrlC);
         let _ = again.press(FooterKey::Printable('x'));
         assert_eq!(again.armed_hint(), None);
+    }
+
+    /// G-181① — `variant.cycle` (footer.view.tsx:569-575): ctrl+t on
+    /// the composer route fires the CycleVariant effect (the
+    /// `onCycleVariant` seam, runtime.ts:293-310).
+    #[test]
+    fn ctrl_t_cycles_the_model_variant() {
+        let mut footer = pane();
+        assert_eq!(footer.press(FooterKey::CtrlT), vec![FooterEffect::CycleVariant]);
+        // The draft is untouched.
+        assert_eq!(footer.draft, "");
     }
 
     #[test]

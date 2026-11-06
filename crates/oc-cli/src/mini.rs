@@ -260,6 +260,23 @@ pub async fn run_mini(input: MiniInput, server: &ServerParams) -> i32 {
     let _preferences = host_preferences(&roots.state);
     let frontend = mini::runtime::MiniInput {
         client: client.clone(),
+        // G-181④ — the reconnect client factory (`server.reconnect`,
+        // handlers/mini.ts:29 → mini.ts:144-153): the managed
+        // service's `reconnect()` re-resolves the endpoint and hands
+        // back a fresh client; a non-managed endpoint has none (the
+        // pump keeps retrying the same client).
+        reconnect: managed
+            .then(|| {
+                std::sync::Arc::new(|| {
+                    Box::pin(async {
+                        server_connection::ensure_managed(false)
+                            .await
+                            .ok()
+                            .map(|endpoint| endpoint.client())
+                    }) as futures::future::BoxFuture<'static, Option<oc_client::Client>>
+                })
+                    as mini::runtime::ReconnectFactory
+            }),
         target: mini::runtime::ResolvedSession {
             session_id: target.session_id,
             session_title: target.session_title,

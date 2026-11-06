@@ -43,14 +43,78 @@ const TICK: Duration = Duration::from_millis(100);
 /// `stream-v2.transport.ts:1543`).
 const RECONNECT_DELAY: Duration = Duration::from_millis(250);
 
-/// G-181④ — the internal reconnect-hydrate marker event type (never
-/// an SSE event type; the loop's private vocabulary).
-const RECONNECT_MARKER: &str = "__mini_reconnected";
+/// G-181④ — the reconnect client factory (`Reconnect`,
+/// runtime.ts:50 — `(signal) => Promise<Client>`): re-resolves the
+/// endpoint and hands back a fresh client for the next subscription
+/// attempt (`sdk = next; input.onClient?.(next)`,
+/// stream-v2.transport.ts:1533-1539). `None` when the endpoint is
+/// non-managed (ref leaves `reconnect` undefined there).
+pub type ReconnectFactory = std::sync::Arc<
+    dyn Fn() -> futures::future::BoxFuture<'static, Option<oc_client::Client>>
+        + Send
+        + Sync,
+>;
 
-/// G-181④ — recognizer for the private reconnect marker (the event
-/// pump arms the hydrate replay instead of folding it).
-fn is_reconnect_marker(event: &Value) -> bool {
-    event.get("type").and_then(Value::as_str) == Some(RECONNECT_MARKER)
+/// G-181④ — the stream pump's private message vocabulary: a live SSE
+/// event, or the internal reconnect notice (never an SSE event type —
+/// the loop's own vocabulary).
+#[derive(Debug)]
+enum StreamMessage {
+    Event(Value),
+    /// A fresh subscription after a drop — carries the (possibly
+    /// swapped) client instance for the runtime to adopt.
+    Reconnected(Client),
+}
+
+/// G-181④ — the stream pump (the `connect` loop,
+/// `stream-v2.transport.ts:1450-1545`): subscribe `/api/event`; on a
+/// drop, resolve a FRESH client through the reconnect factory (the
+/// ref swaps `sdk` before the retry), wait the 250 ms cadence, and
+/// resubscribe — every RE-connect announces itself so the loop
+/// replays the session's transcript through the same reconciler the
+/// live stream folds through.
+async fn stream_pump(
+    mut client: Client,
+    reconnect: Option<ReconnectFactory>,
+    event_tx: tokio::sync::mpsc::Sender<StreamMessage>,
+    ready: Option<tokio::sync::oneshot::Sender<()>>,
+) {
+    let mut ready = ready;
+    let mut subscriptions = 0usize;
+    loop {
+        if let Ok(mut stream) = client.event().subscribe().await {
+            subscriptions += 1;
+            if subscriptions > 1 {
+                // The reconnect notice (a fresh connection after a
+                // drop — the SSE event vocabulary never carries this).
+                if event_tx.send(StreamMessage::Reconnected(client.clone())).await.is_err() {
+                    return;
+                }
+            }
+            // Signal readiness on the FIRST live subscription (a dead
+            // server falls through to the reconnect cadence; the
+            // composer still runs after the wait below).
+            if let Some(sender) = ready.take() {
+                let _ = sender.send(());
+            }
+            while let Ok(Some(event)) = stream.next_json().await {
+                if event_tx.send(StreamMessage::Event(event)).await.is_err() {
+                    return;
+                }
+            }
+        }
+        // The ref resolves the fresh client BEFORE the retry wait
+        // (stream-v2.transport.ts:1530-1542: `sdk = next` then
+        // `wait(250, signal)`).
+        if let Some(factory) = &reconnect {
+            if let Some(next) = factory().await {
+                client = next;
+            }
+        }
+        // `wait(250, signal)` — the ref's reconnect cadence
+        // (stream-v2.transport.ts:1543).
+        tokio::time::sleep(RECONNECT_DELAY).await;
+    }
 }
 
 /// How long a turn may run before the queue drains anyway (the
@@ -174,11 +238,16 @@ pub struct MiniInput {
     pub version: String,
     pub home: String,
     pub state_dir: std::path::PathBuf,
-    /// The mini display settings (`resolveMiniSettings` over the
+    /// The resolved mini display settings (`resolveMiniSettings` over the
     /// cli.json `mini` section — CONFIG-T4). `None` resolves from the
     /// global config here, like v2's `resolveRunTuiConfig` default
     /// path (the CLI host may pre-resolve for tests).
     pub settings: Option<MiniSettings>,
+    /// G-181④ — the reconnect client factory (`input.reconnect`,
+    /// mini.ts:144-153 → stream-v2.transport.ts:1530-1542): resolves
+    /// a FRESH client for the next subscription attempt when the
+    /// stream drops. `None` = non-managed endpoint (no swap).
+    pub reconnect: Option<ReconnectFactory>,
 }
 
 /// The runtime loop. Returns the process exit status.
@@ -196,6 +265,26 @@ pub async fn run(input: MiniInput) -> Result<i32, String> {
     // picker family).
     let preferences = ModelPreferenceRepository::new(input.state_dir.join("model.json"));
     let boot_model = bind_model_preference(&preferences, input.target.model_label.as_deref());
+    // G-181① — the variant-cycle state (`state.model ?? state.defaultModel`
+    // + `state.variants`, runtime.ts:119-121/142-147): the boot target's
+    // model and its catalog variants (best-effort — an unreachable
+    // catalog means "no variants available", exactly the ref's empty-
+    // `variantsFor` arm).
+    let boot_target = input
+        .target
+        .model_label
+        .as_deref()
+        .and_then(parse_model_label);
+    let active_variant = boot_target
+        .as_ref()
+        .and_then(|target| preferences.resolve_variant(target));
+    let variants = if input.demo {
+        Vec::new()
+    } else {
+        fetch_model_variants(&input.client, boot_target.as_ref(), &input.target.directory)
+            .await
+            .unwrap_or_default()
+    };
     // CONFIG-T4 — `resolveMiniSettings(tuiConfig)` (runtime.ts:197-199
     // via runtime.boot.ts:76-98): the cli.json `mini` section drives
     // the display (splash/mono into the lifecycle boot, the fold gates
@@ -256,45 +345,14 @@ pub async fn run(input: MiniInput) -> Result<i32, String> {
     // never double-print). The queue never runs before the
     // subscription is live (v2 prewarms the transport after
     // firstPaint, `runtime.ts:1055-1069`).
-    let (event_tx, event_rx) = tokio::sync::mpsc::channel::<Value>(256);
+    let (event_tx, event_rx) = tokio::sync::mpsc::channel::<StreamMessage>(256);
     let (stream_ready_tx, stream_ready_rx) = tokio::sync::oneshot::channel::<()>();
-    let subscribe_client = client.clone();
-    let stream_task = tokio::spawn(async move {
-        let mut ready = Some(stream_ready_tx);
-        let mut subscriptions = 0usize;
-        loop {
-            if let Ok(mut stream) = subscribe_client.event().subscribe().await {
-                subscriptions += 1;
-                if subscriptions > 1 {
-                    // The reconnect hydrate marker (a fresh connection
-                    // after a drop — the SSE event vocabulary never
-                    // carries this type).
-                    if event_tx
-                        .send(serde_json::json!({ "type": RECONNECT_MARKER }))
-                        .await
-                        .is_err()
-                    {
-                        return;
-                    }
-                }
-                // Signal readiness on the FIRST live subscription (a
-                // dead server falls through to the reconnect cadence;
-                // the composer still runs after the wait below).
-                if let Some(sender) = ready.take() {
-                    let _ = sender.send(());
-                }
-                while let Ok(Some(event)) = stream.next_json().await {
-                    if event_tx.send(event).await.is_err() {
-                        return;
-                    }
-                }
-            }
-            // `wait(250, signal)` — the ref's reconnect cadence
-            // (stream-v2.transport.ts:1543; the old blind 500 ms
-            // retry is the G-181④ gap).
-            tokio::time::sleep(RECONNECT_DELAY).await;
-        }
-    });
+    let stream_task = tokio::spawn(stream_pump(
+        client.clone(),
+        input.reconnect.clone(),
+        event_tx,
+        Some(stream_ready_tx),
+    ));
     // Prewarm gate: wait for the subscription (or the timeout — an
     // unreachable server must not wedge the composer).
     let _ = tokio::time::timeout(Duration::from_secs(5), stream_ready_rx).await;
@@ -323,6 +381,9 @@ pub async fn run(input: MiniInput) -> Result<i32, String> {
         directory: input.target.directory.clone(),
         replay_limit: input.replay_limit,
         needs_hydrate: false,
+        boot_target,
+        variants,
+        active_variant,
     };
 
     // The initial input submits first (`runPromptQueue`'s
@@ -386,7 +447,7 @@ struct Runtime {
     queue: PromptQueue,
     history: PromptHistory,
     pending: Vec<RunPrompt>,
-    events: tokio::sync::mpsc::Receiver<Value>,
+    events: tokio::sync::mpsc::Receiver<StreamMessage>,
     demo: bool,
     demo_counter: usize,
     shown: bool,
@@ -411,9 +472,19 @@ struct Runtime {
     /// The session's directory (the `/new` factory's location).
     directory: String,
     replay_limit: Option<usize>,
-    /// G-181④ — a reconnect marker arrived (the hydrate replay is
+    /// G-181④ — a reconnect notice arrived (the hydrate replay is
     /// due on the next loop step).
     needs_hydrate: bool,
+    /// G-181① — the resolved target's model (`state.model ??
+    /// state.defaultModel`, runtime.ts:294) the variant cycle edits.
+    boot_target: Option<super::model_pref::ModelPreferenceModel>,
+    /// G-181① — `state.variants` (variant ids for the boot model,
+    /// `variantsFor(providers, model)`, runtime.ts:142-147 — fetched
+    /// best-effort from the model catalog at boot).
+    variants: Vec<String>,
+    /// G-181① — `state.activeVariant`, resolved from the persisted
+    /// preference at boot (`resolveVariant`, runtime.ts:204-207).
+    active_variant: Option<String>,
 }
 
 impl Runtime {
@@ -507,19 +578,48 @@ impl Runtime {
                     self.lifecycle.pane.draft = text;
                 }
             }
+            // G-181① — `onCycleVariant` (runtime.ts:293-310): cycle
+            // the active variant, persist it through the preference
+            // repository (`saveVariant`), and surface the status.
+            FooterEffect::CycleVariant => {
+                match cycle_variant_decision(
+                    self.boot_target.as_ref(),
+                    self.active_variant.as_deref(),
+                    &self.variants,
+                ) {
+                    CycleVariantDecision::NoVariants => {
+                        self.lifecycle.append(Commit::system("no variants available"));
+                    }
+                    CycleVariantDecision::Cycle { next, status, label } => {
+                        self.active_variant = next.clone();
+                        if let Some(target) = &self.boot_target {
+                            self.preferences.save_variant(target, next.as_deref());
+                        }
+                        self.turn_model = label;
+                        self.lifecycle.append(Commit::system(&status));
+                    }
+                }
+            }
         }
     }
 
     /// Drain arrived SSE events through the transport folds.
     fn pump_events(&mut self) {
-        while let Ok(event) = self.events.try_recv() {
-            // G-181④ — the reconnect marker (never an SSE type): arm
-            // the hydrate replay; the ref reconnect path rehydrates
-            // BEFORE live events resume folding.
-            if is_reconnect_marker(&event) {
-                self.needs_hydrate = true;
-                continue;
-            }
+        while let Ok(message) = self.events.try_recv() {
+            let event = match message {
+                // G-181④ — the reconnect notice: adopt the fresh
+                // client instance (the ref's `sdk = next;
+                // input.onClient?.(next)`, stream-v2.transport.ts:
+                // 1533-1539) and arm the hydrate replay; the ref
+                // reconnect path rehydrates BEFORE live events resume
+                // folding.
+                StreamMessage::Reconnected(client) => {
+                    self.client = client;
+                    self.needs_hydrate = true;
+                    continue;
+                }
+                StreamMessage::Event(event) => event,
+            };
             // TUI-17 — the tracker folds EVERY event (child sessions
             // and the parent's subagent tool calls included); a
             // changed tab/detail refreshes the pane's snapshot.
@@ -919,6 +1019,7 @@ fn read_footer_input() -> Vec<u8> {
 fn footer_key_from_spec(spec: &str) -> Option<FooterKey> {
     match spec {
         "ctrl+c" => Some(FooterKey::CtrlC),
+        "ctrl+t" => Some(FooterKey::CtrlT),
         "return" => Some(FooterKey::Enter),
         "escape" => Some(FooterKey::Escape),
         "backspace" => Some(FooterKey::Backspace),
@@ -933,6 +1034,81 @@ fn footer_key_from_spec(spec: &str) -> Option<FooterKey> {
             chars.next().is_none().then_some(FooterKey::Printable(first))
         }
     }
+}
+
+/// G-181① — parse a `provider/model` label into the preference
+/// model (`parseModel`'s target shape; empty halves stay unparsed).
+#[must_use]
+fn parse_model_label(label: &str) -> Option<super::model_pref::ModelPreferenceModel> {
+    let (provider, model) = label.split_once('/')?;
+    (!provider.is_empty() && !model.is_empty()).then(|| super::model_pref::ModelPreferenceModel {
+        provider_id: provider.to_owned(),
+        model_id: model.to_owned(),
+    })
+}
+
+/// G-181① — `variantsFor(providers, model)` (runtime.ts:142-147):
+/// the boot model's variant ids from the server's model catalog
+/// (`model.list` at the session location — the ref fills
+/// `state.providers` through `refreshCatalog`, runtime.ts:621).
+/// Best-effort: an unreachable catalog yields an error the caller
+/// drops to "no variants available".
+async fn fetch_model_variants(
+    client: &Client,
+    target: Option<&super::model_pref::ModelPreferenceModel>,
+    directory: &str,
+) -> Option<Vec<String>> {
+    let target = target?;
+    let query = oc_client::types::ModelListQuery {
+        location: Some(oc_client::types::QueryLocation {
+            directory: Some(directory.to_owned()),
+        }),
+    };
+    let page = client.model().list(&query).await.ok()?;
+    Some(
+        page.data
+            .iter()
+            .find(|model| model.provider_id == target.provider_id && model.model_id == target.model_id)?
+            .variants
+            .iter()
+            .map(|variant| variant.id.clone())
+            .collect(),
+    )
+}
+
+/// G-181① — the `onCycleVariant` decision (`runtime.ts:293-310`):
+/// no model or no variants → the "no variants available" notice;
+/// otherwise the cycled variant, its status line, and the
+/// `formatModelLabel(model, variant)` label the footer shows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CycleVariantDecision {
+    NoVariants,
+    Cycle { next: Option<String>, status: String, label: Option<String> },
+}
+
+fn cycle_variant_decision(
+    target: Option<&super::model_pref::ModelPreferenceModel>,
+    active: Option<&str>,
+    variants: &[String],
+) -> CycleVariantDecision {
+    let Some(target) = target else {
+        return CycleVariantDecision::NoVariants;
+    };
+    if variants.is_empty() {
+        return CycleVariantDecision::NoVariants;
+    }
+    let next = super::model_pref::cycle_model_variant(active, variants);
+    let status = match &next {
+        Some(variant) => format!("variant {variant}"),
+        None => "variant default".to_owned(),
+    };
+    let base = format!("{}/{}", target.provider_id, target.model_id);
+    // `formatModelLabel`'s variant suffix (`variant.shared.ts:21-29`).
+    let label = match &next {
+        Some(variant) => Some(format!("{base} · {variant}")),
+        None => Some(base),
+    };
+    CycleVariantDecision::Cycle { next, status, label }
 }
 
 /// G-181① — the boot model binding (`resolveVariant` +
@@ -1026,22 +1202,189 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    /// G-181④ — the reconnect vocabulary: the marker is private (no
-    /// SSE event carries it) and the cadence is the ref's 250 ms.
+    /// G-181④ — the reconnect vocabulary: the cadence is the ref's
+    /// 250 ms and the notice is the pump's private message type (no
+    /// SSE event carries it).
     #[test]
-    fn reconnect_marker_and_cadence() {
-        assert_eq!(RECONNECT_MARKER, "__mini_reconnected");
+    fn reconnect_cadence_is_250ms() {
         assert_eq!(RECONNECT_DELAY, Duration::from_millis(250));
-        let marker = serde_json::json!({ "type": RECONNECT_MARKER });
-        assert!(marker.get("type").and_then(Value::as_str) == Some(RECONNECT_MARKER));
-        assert!(is_reconnect_marker(&marker));
-        // A live SSE event type never matches the private marker.
-        assert!(!is_reconnect_marker(&serde_json::json!({
-            "type": "session.text.delta",
-            "data": { "delta": "x" }
-        })));
-        assert!(!is_reconnect_marker(&serde_json::json!({ "type": 7 })));
-        assert!(!is_reconnect_marker(&serde_json::json!({})));
+        // A live SSE event value is never mistaken for the private
+        // notice — the vocabulary is typed, not a magic `type` string.
+        let live = serde_json::json!({ "type": "session.text.delta", "data": { "delta": "x" } });
+        assert!(matches!(StreamMessage::Event(live), StreamMessage::Event(_)));
+    }
+
+    /// G-181① — the variant-cycle decision (`onCycleVariant`,
+    /// runtime.ts:293-310): cycles, persists through the preference
+    /// repository (`saveVariant`), and a fresh boot reflects the
+    /// saved override (`bindModelPreference`).
+    #[test]
+    fn variant_cycle_persists_and_boot_reflects_it() {
+        let dir = std::env::temp_dir().join(format!(
+            "oc-mini-cycle-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .subsec_nanos()
+        ));
+        let preferences = ModelPreferenceRepository::new(dir.join("model.json"));
+        let target = super::super::model_pref::ModelPreferenceModel {
+            provider_id: "anthropic".into(),
+            model_id: "claude".into(),
+        };
+        let variants: Vec<String> = vec!["default".into(), "fast".into(), "think".into()];
+
+        // No model → notice; model without variants → notice.
+        assert_eq!(
+            cycle_variant_decision(None, None, &variants),
+            CycleVariantDecision::NoVariants
+        );
+        assert_eq!(
+            cycle_variant_decision(Some(&target), None, &[]),
+            CycleVariantDecision::NoVariants
+        );
+
+        // The cycle: none → fast (persisted), fast → think (persisted),
+        // think → default.
+        let mut active: Option<String> = None;
+        for expected in ["fast", "think"] {
+            match cycle_variant_decision(Some(&target), active.as_deref(), &variants) {
+                CycleVariantDecision::Cycle { next, status, label } => {
+                    assert_eq!(next.as_deref(), Some(expected));
+                    assert_eq!(status, format!("variant {expected}"));
+                    assert_eq!(
+                        label.as_deref(),
+                        Some(format!("anthropic/claude · {expected}").as_str()),
+                        "formatModelLabel suffix"
+                    );
+                    preferences.save_variant(&target, next.as_deref());
+                    active = next;
+                }
+                other => panic!("expected a cycle, got {other:?}"),
+            }
+        }
+        match cycle_variant_decision(Some(&target), active.as_deref(), &variants) {
+            CycleVariantDecision::Cycle { next, status, label } => {
+                assert_eq!(next, None, "last named variant cycles back to default");
+                assert_eq!(status, "variant default");
+                assert_eq!(label.as_deref(), Some("anthropic/claude"));
+                preferences.save_variant(&target, None);
+            }
+            other => panic!("expected the default arm, got {other:?}"),
+        }
+
+        // A fresh boot reflects the persisted override.
+        assert_eq!(
+            bind_model_preference(&preferences, Some("anthropic/claude")).as_deref(),
+            Some("anthropic/claude"),
+            "the default (cleared) override boot keeps the bare label"
+        );
+        preferences.save_variant(&target, Some("think"));
+        assert_eq!(
+            bind_model_preference(&preferences, Some("anthropic/claude")).as_deref(),
+            Some("anthropic/claude · think"),
+            "the saved override reaches the boot label"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// G-181① — the label parser: `provider/model` parses, empty
+    /// halves and bare labels do not.
+    #[test]
+    fn model_labels_parse() {
+        assert_eq!(
+            parse_model_label("anthropic/claude").map(|model| model.model_id),
+            Some("claude".into())
+        );
+        assert_eq!(parse_model_label("label-only"), None);
+        assert_eq!(parse_model_label("/"), None);
+        assert_eq!(parse_model_label("a/"), None);
+        assert_eq!(parse_model_label("/b"), None);
+    }
+
+    /// G-181④ — the stream pump swaps the client on reconnect: the
+    /// stub server serves one SSE frame then EOFs every connection;
+    /// the reconnect factory hands back a client pointed at a SECOND
+    /// stub. The pump must announce `Reconnected` carrying the fresh
+    /// client's base URL (the ref's `sdk = next`,
+    /// stream-v2.transport.ts:1533-1539) and keep folding live events
+    /// from the NEW server.
+    #[tokio::test]
+    async fn reconnect_swaps_the_client_instance() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        async fn spawn_sse_server() -> (String, tokio::task::JoinHandle<()>, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+            let addr = listener.local_addr().expect("addr");
+            let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let counter = std::sync::Arc::clone(&hits);
+            let task = tokio::spawn(async move {
+                loop {
+                    let (mut socket, _) = listener.accept().await.expect("accept");
+                    counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let (mut reader, _) = socket.split();
+                    let mut request = vec![0u8; 4096];
+                    let _ = reader.read(&mut request).await;
+                    // One live event, then EOF — forces the reconnect.
+                    let body = "id: e1\nevent: message.updated\ndata: {\"sessionID\":\"s1\"}\n\n";
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n{body}"
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                }
+            });
+            (format!("http://{addr}"), task, hits)
+        }
+
+        let (first_url, _first_task, first_hits) = spawn_sse_server().await;
+        let (second_url, _second_task, second_hits) = spawn_sse_server().await;
+        let factory_url = second_url.clone();
+        let reconnect: ReconnectFactory = std::sync::Arc::new(move || {
+            let url = factory_url.clone();
+            Box::pin(async move { Some(Client::new(&url).expect("client")) })
+        });
+
+        let client = Client::new(&first_url).expect("client");
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<StreamMessage>(16);
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<()>();
+        let pump = tokio::spawn(stream_pump(client, Some(reconnect), tx, Some(ready_tx)));
+        ready_rx.await.expect("first subscription signals ready");
+
+        // The first live event, then the reconnect notice carrying the
+        // SECOND server's base URL, then the new server's live event.
+        let mut saw_reconnect_with_fresh_client = false;
+        let mut saw_event_from_second_server = false;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline
+            && !(saw_reconnect_with_fresh_client && saw_event_from_second_server)
+        {
+            let message = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+                .await
+                .expect("message within timeout")
+                .expect("pump alive");
+            match message {
+                StreamMessage::Reconnected(fresh) => {
+                    assert_eq!(
+                        fresh.base_url(),
+                        second_url,
+                        "the swapped client points at the reconnect factory's endpoint"
+                    );
+                    saw_reconnect_with_fresh_client = true;
+                }
+                StreamMessage::Event(_) => {
+                    if saw_reconnect_with_fresh_client {
+                        saw_event_from_second_server = true;
+                    }
+                }
+            }
+        }
+        pump.abort();
+        assert!(
+            second_hits.load(std::sync::atomic::Ordering::SeqCst) > 0,
+            "the second server actually received the resubscribe"
+        );
+        assert!(first_hits.load(std::sync::atomic::Ordering::SeqCst) >= 1);
     }
 
     /// G-68 (fix #1) — the replay's production wiring: projections

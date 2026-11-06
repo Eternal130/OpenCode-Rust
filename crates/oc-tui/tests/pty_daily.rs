@@ -1993,6 +1993,7 @@ fn run_mini_test<T: Send + 'static>(
         home: sandbox.display().to_string(),
         state_dir: sandbox.join(".local/state"),
         settings: None,
+        reconnect: None,
     };
     let finished = runtime.block_on(async {
         tokio::time::timeout(Duration::from_secs(90), oc_tui::mini::runtime::run(input)).await
