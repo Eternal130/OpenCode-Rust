@@ -187,6 +187,12 @@ impl LocationActivity {
         self.last_touch.len()
     }
 
+    /// Tracked locations (snapshot).
+    #[must_use]
+    pub fn locations(&self) -> Vec<LocationRef> {
+        self.last_touch.iter().map(|entry| entry.key().clone()).collect()
+    }
+
     /// Whether nothing is tracked.
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -379,16 +385,7 @@ pub fn attach_activity_bus_touch(
     }))
 }
 
-/// Spawn the activity TTL sweeper task. Each pass:
-///
-/// 1. read `now` from the injectable clock,
-/// 2. for every location idle longer than the TTL: interrupt active
-///    executions (reason `"inactivity"`, awaiting settlement) then
-///    invalidate the location (shutdown sequence),
-/// 3. drop its activity entry.
-///
-/// A `ttl` of zero disables expiry (nothing is ever older than `now`).
-///
+/// Spawn the activity TTL sweeper task; each pass runs [`sweep_once`].
 /// The handle is abort-able; the task holds no other resources.
 pub fn spawn_activity_sweeper(
     config: SweeperConfig,
@@ -396,17 +393,53 @@ pub fn spawn_activity_sweeper(
     activity: Arc<LocationActivity>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let ttl_ms = i64::try_from(config.ttl.as_millis()).unwrap_or(i64::MAX);
         loop {
             tokio::time::sleep(config.sweep_interval).await;
-            let now = map.globals().clock.unix_ms();
-            for location in activity.expired(now, ttl_ms) {
-                map.globals().interruptor.interrupt(&location, INACTIVITY_REASON).await;
-                map.invalidate(&location).await;
-                activity.remove(&location);
-            }
+            sweep_once(config.ttl, &map, &activity).await;
         }
     })
+}
+
+/// One sweep pass — REF location-activity.ts sweep, verbatim semantics:
+///
+/// 1. re-TOUCH every location that lives in the cache but is not tracked
+///    yet (cached positions never expire from idleness — an untracked
+///    cached graph gets a fresh TTL window instead of an instant sweep);
+/// 2. drop tracking for locations no longer in the cache;
+/// 3. for every entry idle longer than the TTL: interrupt its active
+///    executions (reason `"inactivity"`, awaiting settlement), then
+///    RE-CHECK occupancy — if a new owner appeared during cleanup the
+///    entry is re-touched and KEPT (no invalidate); only a truly dead
+///    expired position is invalidated (shutdown sequence) and removed.
+///
+/// A `ttl` of zero disables expiry (nothing is ever older than `now`).
+pub async fn sweep_once(ttl: Duration, map: &Arc<LocationServiceMap>, activity: &Arc<LocationActivity>) {
+    // (a) Cached-but-untracked locations get re-armed, never swept.
+    for location in map.locations() {
+        if activity.last_touch(&location).is_none() {
+            activity.touch(&location);
+        }
+    }
+    // (b) Tracking for evicted locations goes away with the graph.
+    for location in activity.locations() {
+        if map.get(&location).is_none() {
+            activity.remove(&location);
+        }
+    }
+    let ttl_ms = i64::try_from(ttl.as_millis()).unwrap_or(i64::MAX);
+    let now = map.globals().clock.unix_ms();
+    for location in activity.expired(now, ttl_ms) {
+        map.globals().interruptor.interrupt(&location, INACTIVITY_REASON).await;
+        // New work admitted during cleanup may now own the cached graph —
+        // re-check occupancy BEFORE invalidating.
+        if map.get(&location).is_some() && map.globals().interruptor.active_owners(&location).await
+        {
+            activity.touch(&location);
+            continue;
+        }
+        map.invalidate(&location).await;
+        activity.remove(&location);
+    }
 }
 
 // =============================================================================
@@ -489,13 +522,23 @@ mod tests {
         }
     }
 
-    struct RecordingInterruptor(Mutex<Vec<(String, String)>>);
+    struct RecordingInterruptor(
+        Mutex<Vec<(String, String)>>,
+        /// Occupancy reported by the post-interrupt re-check (tests flip
+        /// it inside `interrupt` to simulate a mid-sweep takeover).
+        Arc<Mutex<bool>>,
+    );
 
     #[async_trait]
     impl SessionInterruptor for RecordingInterruptor {
         #[allow(clippy::unused_async, reason = "test fake")]
         async fn interrupt(&self, location: &LocationRef, reason: &str) {
             self.0.lock().push((location.to_string(), reason.to_string()));
+        }
+
+        #[allow(clippy::unused_async, reason = "test fake")]
+        async fn active_owners(&self, _location: &LocationRef) -> bool {
+            *self.1.lock()
         }
     }
 
@@ -518,7 +561,10 @@ mod tests {
     async fn harness(clock: &Arc<MutableClock>) -> Harness {
         let permissions = Arc::new(RecordingPermission(Mutex::new(Vec::new())));
         let forms = Arc::new(RecordingForms(Mutex::new(Vec::new())));
-        let interruptor = Arc::new(RecordingInterruptor(Mutex::new(Vec::new())));
+        let interruptor = Arc::new(RecordingInterruptor(
+            Mutex::new(Vec::new()),
+            Arc::new(Mutex::new(false)),
+        ));
         let db = Arc::new(Database::open_in_memory().await.expect("database"));
         let bus = Arc::new(Bus::new(
             (*db).clone(),
@@ -815,5 +861,93 @@ mod tests {
         assert_eq!(graph.files.directory(), location.as_path());
         assert!(graph.instructions.slots().is_empty());
         assert_eq!(graph.hooks.total_hooks(), 0);
+    }
+
+    // -- G-196: ref sweep semantics (location-activity.ts) -------------------
+
+    /// A cached-but-untracked position is re-TOUCHed, never swept: cached
+    /// positions never expire from idleness (ref re-arms `refs` not in
+    /// `entries` before computing the expired set).
+    #[tokio::test]
+    async fn sweep_once_re_touches_cached_untracked_positions() {
+        let clock = MutableClock::at(10_000);
+        let harness = harness(&clock).await;
+        let location = loc_under(harness.dir.path(), "cached");
+        let _ = harness.map.get_or_build(location.clone()).await.expect("boot");
+        let activity = Arc::clone(&harness.map.globals().activity);
+
+        sweep_once(Duration::from_millis(1), &harness.map, &activity).await;
+
+        assert!(harness.map.get(&location).is_some(), "cached position survives the sweep");
+        assert!(
+            activity.last_touch(&location).is_some(),
+            "cached position is re-armed (touched), not expired"
+        );
+        assert!(
+            harness.interruptor.0.lock().is_empty(),
+            "no interrupt for an idle-but-cached position"
+        );
+    }
+
+    /// A position taken over mid-sweep (a new owner appears between the
+    /// interrupt and the re-check) is re-touched and KEPT — no
+    /// invalidate, no shutdown publish.
+    #[tokio::test]
+    async fn sweep_once_keeps_position_taken_over_mid_sweep() {
+        let clock = MutableClock::at(10_000);
+        let harness = harness(&clock).await;
+        let mut live = harness.bus.subscribe();
+        let location = loc_under(harness.dir.path(), "taken");
+        let _ = harness.map.get_or_build(location.clone()).await.expect("boot");
+        let activity = Arc::clone(&harness.map.globals().activity);
+        activity.touch_at(&location, 0);
+        // A new owner admits work during cleanup: the post-interrupt
+        // re-check sees it.
+        *harness.interruptor.1.lock() = true;
+
+        sweep_once(Duration::from_millis(100), &harness.map, &activity).await;
+
+        assert!(harness.map.get(&location).is_some(), "taken-over position is kept");
+        assert_eq!(
+            activity.last_touch(&location),
+            Some(10_000),
+            "the kept position's activity is re-armed"
+        );
+        assert_eq!(
+            *harness.interruptor.0.lock(),
+            vec![(location.directory.to_string_lossy().into_owned(), "inactivity".to_string())],
+            "the owner was still interrupted before the re-check"
+        );
+        assert!(
+            drain(&mut live).await.is_empty(),
+            "no location.shutdown for a taken-over position"
+        );
+    }
+
+    /// A truly dead expired position (no owners after the interrupt) is
+    /// evicted: invalidated (shutdown sequence) and dropped from tracking.
+    #[tokio::test]
+    async fn sweep_once_evicts_truly_dead_expired_positions() {
+        let clock = MutableClock::at(10_000);
+        let harness = harness(&clock).await;
+        let mut live = harness.bus.subscribe();
+        let location = loc_under(harness.dir.path(), "dead");
+        let _ = harness.map.get_or_build(location.clone()).await.expect("boot");
+        let activity = Arc::clone(&harness.map.globals().activity);
+        activity.touch_at(&location, 0);
+
+        sweep_once(Duration::from_millis(100), &harness.map, &activity).await;
+
+        assert!(harness.map.get(&location).is_none(), "dead position is invalidated");
+        assert!(activity.last_touch(&location).is_none(), "activity entry removed");
+        assert_eq!(
+            *harness.interruptor.0.lock(),
+            vec![(location.directory.to_string_lossy().into_owned(), "inactivity".to_string())],
+            "the expired owner was interrupted with reason inactivity"
+        );
+        assert!(
+            drain(&mut live).await.contains(&LOCATION_SHUTDOWN_EVENT.to_string()),
+            "location.shutdown published for the dead position"
+        );
     }
 }
