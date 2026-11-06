@@ -1352,8 +1352,9 @@ pub struct RunOutcome {
     pub tool_calls: Vec<CallRecord>,
     /// Diagnostics that accompany a successful result (v2 `warnings`).
     pub warnings: Vec<Value>,
-    /// Captured output lines (v2 `logs`; the guest has no console
-    /// capture, so native runtimes are the producers).
+    /// Captured console output lines (v2 `logs`; the guest swaps
+    /// `console.*` into a per-program capture, ref stdlib/console.ts —
+    /// G-180①).
     pub logs: Vec<String>,
     /// Set when any output budget truncated the result.
     pub truncated: bool,
@@ -1391,10 +1392,13 @@ pub trait CodeModeRuntime: Send + Sync {
 }
 
 /// `formatResult` (codemode/tool.ts:310-322): strings verbatim, other
-/// values pretty JSON, `undefined` literal; errors carry their message.
+/// values pretty JSON, `undefined` literal; errors carry their message
+/// (plus suggestions not already in the message). Successful results
+/// append `Warnings:` / `Logs:` sections when present (G-180①: the
+/// guest now captures console output into `logs`).
 #[must_use]
 pub fn format_result(outcome: &RunOutcome) -> String {
-    match &outcome.error {
+    let output = match &outcome.error {
         Some(message) => message.trim().to_string(),
         None => match &outcome.value {
             None => "undefined".to_string(),
@@ -1403,7 +1407,34 @@ pub fn format_result(outcome: &RunOutcome) -> String {
                 serde_json::to_string_pretty(other).unwrap_or_else(|_| other.to_string())
             }
         },
-    }
+    };
+    // `- [kind] message` per warning (tool.ts:316-318); warnings ride
+    // only a successful result.
+    let warnings = if outcome.error.is_none() && !outcome.warnings.is_empty() {
+        Some(format!(
+            "Warnings:\n{}",
+            outcome
+                .warnings
+                .iter()
+                .map(|warning| {
+                    let kind = warning.get("kind").and_then(Value::as_str).unwrap_or("");
+                    let message = warning.get("message").and_then(Value::as_str).unwrap_or("");
+                    format!("- [{kind}] {message}")
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        ))
+    } else {
+        None
+    };
+    let logs = (!outcome.logs.is_empty())
+        .then(|| format!("Logs:\n{}", outcome.logs.join("\n")));
+    [Some(output), warnings, logs]
+        .into_iter()
+        .flatten()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 /// The `execute` leaf: builds the catalog from the registry at call
@@ -2653,5 +2684,41 @@ mod limits_tests {
             "{\"a\" [result truncated: 7 bytes exceeds the 4-byte output limit; return a smaller value]"
         );
         assert_eq!(result.metadata.expect("metadata").get("truncated"), Some(&json!(true)));
+    }
+
+    /// G-180① — `formatResult` (tool.ts:310-322): a successful result
+    /// appends `Warnings:`/`Logs:` sections when present, joined with a
+    /// blank line; sections drop when empty.
+    #[test]
+    fn format_result_appends_warning_and_log_sections() {
+        let base = RunOutcome { value: Some(json!("done")), ..RunOutcome::default() };
+        assert_eq!(format_result(&base), "done");
+
+        let with_logs = RunOutcome {
+            value: Some(json!("done")),
+            logs: vec!["hello 42".to_string(), "[warn] careful".to_string()],
+            ..RunOutcome::default()
+        };
+        assert_eq!(format_result(&with_logs), "done\n\nLogs:\nhello 42\n[warn] careful");
+
+        let with_both = RunOutcome {
+            value: Some(json!(1)),
+            warnings: vec![json!({ "kind": "Truncated", "message": "cut short" })],
+            logs: vec!["one".to_string()],
+            ..RunOutcome::default()
+        };
+        assert_eq!(
+            format_result(&with_both),
+            "1\n\nWarnings:\n- [Truncated] cut short\n\nLogs:\none"
+        );
+
+        // Warnings ride only a successful result (Failure has none).
+        let failed = RunOutcome {
+            error: Some("boom".to_string()),
+            warnings: vec![json!({ "kind": "Truncated", "message": "cut" })],
+            logs: vec!["before".to_string()],
+            ..RunOutcome::default()
+        };
+        assert_eq!(format_result(&failed), "boom\n\nLogs:\nbefore");
     }
 }
