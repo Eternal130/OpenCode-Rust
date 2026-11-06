@@ -230,11 +230,11 @@
 
 ---
 
-# 附：踩坑记录与现行制度（自 a26e145 重写前版本恢复，2026-10-30）
+# 附：开发规范与现行制度（原「踩坑记录」，2026-11-06 起易名；自 a26e145 重写前版本恢复，2026-10-30）
 
 > a26e145 将本文件从 520 行登记册重写为 G-1..G-17 摘要时移除了原 §2/§3（踩坑记录与制度速查）及 §1/§4-8 历史发现表（RB/RC/RD/RV/RW/AUD/RE/RF 系列，绝大多数已闭环，历史全文见 `git show db21631:docs/GAPS-AND-PITFALLS.md`）。以下两节为**现行有效的事故规则**，原样恢复。
 
-## 踩坑记录（事故 → 根因 → 现行规则）
+## 开发规范（事故 → 根因 → 现行规则）
 
 ### 2.1 资源与调度
 
@@ -297,6 +297,33 @@
 - 仓库根曾经堆积垃圾文件（`None`、`refprobe.pid`）——2026-10-23 清除；收尾自查 `git status` 为模板必查项。
 - **子代理显式覆盖 git 提交身份**（2026-11-06 全量清理）：历史出现 `Fixer`/`lane`/`OpenCode Agent`/`lane-tby` 等自造身份与 `eternal130@localhost` 等邮箱变体 ~30 处——而身份配置四层齐全（/etc/gitconfig 系统级=root 全局=~/.gitconfig=仓库级，均为 `Eternal130 <Eternal130@outlook.com>`），唯一来源是子代理显式传 `--author`、`-c user.name/user.email`、`GIT_AUTHOR_*/GIT_COMMITTER_*`。修复=两仓 filter-branch 全量改写（树哈希逐字节不变）+ force push + opentui rev 重钉（2fbe00e→56a9eda）+ 文档 hash 全量重映射（`docs/COMMIT-IDENTITY-REMAP-20261106.md`）。规则：**子代理 git 提交一律仓库既有身份；派发模板必含禁令（禁 `--author`、`-c user.*`、`GIT_AUTHOR_*`/`GIT_COMMITTER_*`）**。
 
+## 测试分层制度（2026-11-06 定版）
+
+按改动范围选层，先轻后重；门命令**逐字内联**到 lane 提示词，禁「模板同前 lane」式引用。
+
+| 场景 | 命令 | 实测耗时 |
+|---|---|---|
+| 日常迭代（改 oc-tui 单点） | `tools/dev-gate.sh 'cargo nextest run -p oc-tui --locked <过滤词>'` | 秒~分钟 |
+| 渲染面变更·常设门（bun-free，7 生产态树 vs 冻结 oracle 逐格比对） | `tools/dev-gate.sh 'cargo nextest run -p oc-tui --locked dual_engine_matches_frozen_oracle'` | 0.1s |
+| 渲染面变更·opentui 差分全套（127 场景，含 TS oracle 逐场景刷新） | `cd /opt/opentui-rust && tools/diff/run-all.sh`（**直接跑，不包 dev-gate**） | ~36s |
+| 合并门/收口 | `tools/dev-gate.sh 'cargo nextest run -p oc-tui -p oc-cli -p parity --locked --no-fail-fast'` | ~7min |
+| 动了 PTY/交互族 | 在合并门之上加 `--profile pty`（test-threads=1 序列化） | ~28min |
+| 动 core/其他 crate | `tools/dev-gate.sh 'cargo nextest run --workspace --locked --no-fail-fast'` | 视范围 |
+
+树场景工具（新增生产态/重钉流程）：
+1. 加 `StateSpec`（`crates/oc-tui/tests/tree_scenarios.rs`）
+2. `tools/parity/tree-scenario-capture.sh` 捕获
+3. `TREE_ORACLE_FREEZE=1 tools/parity/tree-oracle-freeze.sh` 冻结入库（oracle 帧 **never cached, never port output**）
+4. **oracle 帧与冻结版不符=重钉事件，stop-and-escalate，不得擅自重冻结**
+
+测试纪律红线（详见 §2.4#11–14）：
+- 一切测试 tee 到 `.test-logs/<crate>-<时间>-<lane>.log`；门命令全量 tee，禁内嵌 tail/head/grep 截 Summary；显示用 grep 在 tee 之后单独执行
+- `run-all.sh`、`tools/parity/*.sh` 直接跑不包 dev-gate（锁套锁）；一次一个门禁双发；卡住先 `fuser /tmp/opencode/dev-gate.lock` 查孤儿锁
+- worktree 动工前 `find . -user root -exec chown eternal130:eternal130 {} +`；root 编辑过的文件立即 chown
+- 禁 plain `cargo test`（绕过 nextest 限流/重试=大面积假红，§2.4#11）
+- 白名单 flake 重试即过勿误判回归：`composer_tabs_walk` / `location_ttl_sweeper` / `mini_subagent_footer` / `scenario_permission_saved` / `e1_cells_paste_8k` / `e1_canary` / `catalog_refresh_propagates`
+- 终报与磁盘对账：`ls -t .test-logs/` 定位真实文件 + `grep -c FAIL` 核数，不信转述（§2.4#14）
+
 ---
 
 ## 现行制度速查（防复发汇总）
@@ -317,6 +344,7 @@
 | 验证 | 交互面必须 PTY/field 级；组合模型必须源码级对比；金帧=回归套件 | 方法论登记（ROADMAP §4） |
 | 门命令形状 | 门命令全量 tee 禁内嵌 tail/head/grep；脚本（run-all.sh、parity/*.sh）直接跑不包 dev-gate；一次一个门禁双发；终报与磁盘日志对账（ls -t 定位真实文件+grep -c FAIL 核数） | 本册 2.4#12–14（2026-11-06） |
 | git 提交身份 | 子代理一律仓库既有身份（Eternal130）；禁 --author、-c user.name/user.email、GIT_AUTHOR_*/GIT_COMMITTER_*；派发模板必含禁令 | 本册 2.5（2026-11-06） |
+| 测试分层 | 按改动范围选层：常设门 0.1s→差分全套 36s→合并门 ~7min→pty ~28min；命令逐字内联禁引用；树场景重钉=stop-and-escalate | 测试分层制度（2026-11-06） |
 
 ---
 
