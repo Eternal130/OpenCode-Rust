@@ -246,6 +246,10 @@ pub struct CodeModeRun {
     /// `Result.truncated`) — the leaf skips re-bounding a pre-bounded
     /// value.
     pub truncated: bool,
+    /// Captured console output lines (v2 `Result.logs`, G-180①): the
+    /// guest swaps `console.*` into a logs capture for the duration of
+    /// each program (ref stdlib/console.ts).
+    pub logs: Vec<String>,
 }
 
 /// Execution budgets for one `codemode.evaluate` (v2 `ExecutionLimits`,
@@ -787,6 +791,11 @@ impl PluginHost {
             .filter(|text| !text.is_empty());
         let value = result.get("value").cloned();
         let truncated = result.get("truncated").and_then(Value::as_bool).unwrap_or(false);
+        let logs = result
+            .get("logs")
+            .and_then(Value::as_array)
+            .map(|logs| logs.iter().filter_map(|line| line.as_str().map(str::to_string)).collect())
+            .unwrap_or_default();
         let tool_calls = result
             .get("calls")
             .and_then(Value::as_array)
@@ -803,7 +812,7 @@ impl PluginHost {
                     .collect()
             })
             .unwrap_or_default();
-        CodeModeRun { value, error, tool_calls, truncated }
+        CodeModeRun { value, error, tool_calls, truncated, logs }
     }
 }
 

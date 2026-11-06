@@ -70,6 +70,7 @@ impl CodeModeRuntime for HostCodeModeRuntime {
                     })
                     .collect(),
                 truncated: run.truncated,
+                logs: run.logs,
                 ..RunOutcome::default()
             },
             // The hard timeout (or a dead guest) is the program's error.
@@ -580,6 +581,133 @@ fn session_port_answers_alongside_the_tool_engine() {
         1,
         "the prompt landed in the recording port"
     );
+    host.shutdown();
+}
+
+/// G-180① — console output is captured into the execution's `logs`
+/// (ref stdlib/console.ts:21 `ctx.logs.push(...)`; the result's
+/// optional `logs` key, codemode.ts:98/108). Prefixes per ref
+/// formatConsoleMessage; values render like `console.log` shows them.
+#[test]
+fn codemode_console_output_captured_into_result_logs() {
+    let sandbox = common::sandbox("codemode-console");
+    let entry = common::copy_fixture(&sandbox, "helloworld.ts");
+    let host = common::host_with(&[entry], &sandbox);
+    if !host.enabled() {
+        eprintln!("bun unavailable; skipping");
+        return;
+    }
+    assert!(host.wait_ready(Duration::from_secs(15)));
+
+    let run = host
+        .codemode_evaluate(
+            r#"
+            console.log("hello", 42);
+            console.info("plain line");
+            console.warn("careful");
+            console.error("broken");
+            console.debug("trace");
+            return "done";
+            "#,
+            &[],
+            Duration::from_secs(5),
+        )
+        .expect("program completes");
+    assert_eq!(run.value, Some(json!("done")));
+    assert_eq!(
+        run.logs,
+        vec![
+            "hello 42".to_string(),
+            "plain line".to_string(),
+            "[warn] careful".to_string(),
+            "[error] broken".to_string(),
+            "[debug] trace".to_string(),
+        ]
+    );
+
+    // A failing program carries its captured logs too (Failure.logs).
+    let run = host
+        .codemode_evaluate(
+            r#"
+            console.log("before the throw");
+            throw new Error("boom");
+            "#,
+            &[],
+            Duration::from_secs(5),
+        )
+        .expect("the rejection is a result, not a transport error");
+    assert_eq!(run.error.as_deref(), Some("boom"));
+    assert_eq!(run.logs, vec!["before the throw".to_string()]);
+
+    // No console output → the `logs` key is absent (optionalKey).
+    let run = host
+        .codemode_evaluate("return 1;", &[], Duration::from_secs(5))
+        .expect("program completes");
+    assert!(run.logs.is_empty());
+
+    host.shutdown();
+}
+
+/// G-180② — the sandbox's fetch is the ref `web` extension wrapper
+/// (packages/core/src/codemode/web.ts): a 30s-timeout-bounded call
+/// returning the sanitized response (url/status/ok/headers get/has/
+/// entries + text/json/bytes) — NOT the raw Bun Response (no
+/// `arrayBuffer`/`body`/etc., and no uncapped egress).
+#[test]
+fn codemode_fetch_is_the_ref_web_wrapper() {
+    let sandbox = common::sandbox("codemode-fetch");
+    let entry = common::copy_fixture(&sandbox, "helloworld.ts");
+    let host = common::host_with(&[entry], &sandbox);
+    if !host.enabled() {
+        eprintln!("bun unavailable; skipping");
+        return;
+    }
+    assert!(host.wait_ready(Duration::from_secs(15)));
+
+    // A one-shot local HTTP origin (loopback only — no external net).
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("loopback listener");
+    let port = listener.local_addr().expect("addr").port();
+    std::thread::spawn(move || {
+        if let Ok((stream, _)) = listener.accept() {
+            use std::io::{Read, Write};
+            let mut stream = stream;
+            let mut buffer = [0u8; 1024];
+            let _ = stream.read(&mut buffer); // consume the request line/headers
+            let _ = stream.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nX-Probe: 1\r\nContent-Length: 2\r\nConnection: close\r\n\r\nhi",
+            );
+        }
+    });
+
+    let code = format!(
+        r#"
+        const response = await fetch("http://127.0.0.1:{port}/hello");
+        return {{
+            status: response.status,
+            ok: response.ok,
+            body: await response.text(),
+            header: response.headers.get("X-Probe"),
+            missing: response.headers.get("nope"),
+            rawArrayBuffer: typeof response.arrayBuffer,
+            rawBody: typeof response.body,
+        }};
+        "#
+    );
+    let run =
+        host.codemode_evaluate(&code, &[], Duration::from_secs(10)).expect("fetch completes");
+    assert_eq!(
+        run.value,
+        Some(json!({
+            "status": 200,
+            "ok": true,
+            "body": "hi",
+            "header": "1",
+            "missing": null,
+            "rawArrayBuffer": "undefined",
+            "rawBody": "undefined",
+        }))
+    );
+
     host.shutdown();
 }
 

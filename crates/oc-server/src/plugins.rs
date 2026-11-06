@@ -850,6 +850,7 @@ impl CodeModeRuntime for HostCodeModeRuntime {
                     })
                     .collect(),
                 truncated: run.truncated,
+                logs: run.logs,
                 ..RunOutcome::default()
             },
             // The hard timeout (or a dead guest) is the program's error.

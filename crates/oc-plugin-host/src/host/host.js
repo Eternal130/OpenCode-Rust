@@ -2301,6 +2301,127 @@ function makeSearch(entries) {
   };
 }
 
+// G-180① — ref codemode console capture (stdlib/console.ts:9-37):
+// during a Code Mode execution every console method appends one
+// formatted line to the execution's `logs` (exposed in the result's
+// optional `logs`, codemode.ts:98/108). Prefixes per ref
+// formatConsoleMessage: "[warn] ", "[error] ", "[debug] "; values
+// render like `console.log` shows them (strings verbatim, others via
+// an inspect close to the ref's Obj.inspect).
+const CONSOLE_METHODS = ["log", "info", "debug", "warn", "error", "dir", "table"];
+const MAX_CONSOLE_DEPTH = 32;
+
+function formatConsoleValue(value, seen, depth) {
+  if (value === undefined) return "undefined";
+  if (typeof value === "string") return value;
+  if (value === null) return "null";
+  if (typeof value === "function") {
+    return `[Function: ${value.name || "anonymous"}]`;
+  }
+  if (typeof value === "symbol" || typeof value === "bigint") return String(value);
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (depth > MAX_CONSOLE_DEPTH) return "...";
+  if (seen.has(value)) return "[Circular]";
+  seen.add(value);
+  try {
+    if (Array.isArray(value)) {
+      return `[${value.map((item) => formatConsoleValue(item, seen, depth + 1)).join(", ")}]`;
+    }
+    if (value instanceof Error) return value.stack ?? String(value);
+    if (value instanceof Date) return value.toISOString();
+    const entries = Object.entries(value).map(
+      ([key, item]) => `${/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key) ? key : JSON.stringify(key)}: ${formatConsoleValue(item, seen, depth + 1)}`,
+    );
+    const tag = value.constructor && value.constructor.name !== "Object" ? `${value.constructor.name} ` : "";
+    return `${tag}{ ${entries.join(", ")} }`;
+  } finally {
+    seen.delete(value);
+  }
+}
+
+// formatConsoleMessage (ref stdlib/console.ts:32-37): `dir`/`table`
+// have their own arms; the rest prefix + join formatted args.
+function formatConsoleMessage(name, args) {
+  if (name === "dir") return args.length === 0 ? "undefined" : formatConsoleValue(args[0], new Set(), 0);
+  if (name === "table") return formatConsoleTable(args[0], args[1]);
+  const prefix = name === "warn" ? "[warn] " : name === "error" ? "[error] " : name === "debug" ? "[debug] " : "";
+  return `${prefix}${args.map((arg) => formatConsoleValue(arg, new Set(), 0)).join(" ")}`;
+}
+
+// formatConsoleTable (ref stdlib/console.ts:63-98): tab-joined rows
+// with an `(index)` header over array items / object entries.
+function formatConsoleTable(data, columnsArgument) {
+  if (data === undefined) return "undefined";
+  const columns = Array.isArray(columnsArgument) ? columnsArgument.map(String) : undefined;
+  let rows;
+  if (Array.isArray(data)) {
+    rows = data.map((item, index) => ({ index: String(index), values: consoleTableValues(item, columns) }));
+  } else if (data !== null && typeof data === "object") {
+    rows = Object.entries(data).map(([index, item]) => ({ index, values: consoleTableValues(item, columns) }));
+  } else {
+    rows = [{ index: "0", values: { Value: data } }];
+  }
+  const keys = columns ?? Array.from(new Set(rows.flatMap((row) => Object.keys(row.values))));
+  const header = ["(index)", ...keys].join("\t");
+  return [
+    header,
+    ...rows.map((row) => [row.index, ...keys.map((key) => formatConsoleTableCell(row.values[key]))].join("\t")),
+  ].join("\n");
+}
+
+function consoleTableValues(value, columns) {
+  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+    if (columns !== undefined) return Object.fromEntries(columns.map((column) => [column, value[column]]));
+    return { ...value };
+  }
+  return { Value: value };
+}
+
+function formatConsoleTableCell(value) {
+  if (value === undefined) return "";
+  if (typeof value === "string") return value;
+  return formatConsoleValue(value, new Set(), 0);
+}
+
+// G-180② — ref web extension fetch (packages/core/src/codemode/web.ts):
+// the sandbox's ONLY fetch surface is this wrapper — a 30s
+// AbortSignal.timeout and a sanitized response (url/status/ok/
+// headers get|has|entries, text/json/bytes). The raw Bun fetch (no
+// timeout, raw Response) must not leak into Code Mode programs.
+const CODEMODE_FETCH_TIMEOUT_MS = 30_000;
+
+function codemodeFetch(input, init = {}) {
+  return globalThis.__rawFetch(input, {
+    method: init.method,
+    headers: init.headers,
+    body: init.body,
+    signal: AbortSignal.timeout(CODEMODE_FETCH_TIMEOUT_MS),
+  }).then(async (response) => {
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    const headers = Object.fromEntries(response.headers);
+    const text = () => new TextDecoder().decode(bytes);
+    return {
+      url: response.url,
+      status: response.status,
+      statusText: response.statusText,
+      ok: response.ok,
+      redirected: response.redirected,
+      headers: {
+        get: (name) => headers[name.toLowerCase()] ?? null,
+        has: (name) => name.toLowerCase() in headers,
+        entries: () => Object.entries(headers),
+      },
+      text: async () => text(),
+      json: async () => JSON.parse(text()),
+      bytes: async () => bytes,
+    };
+  });
+}
+
+// G-180①/G-180② — overlapping evaluations nest: live captures stack;
+// a finishing frame restores only when it is the last live one.
+const codemodeCaptureStack = [];
+
 async function handleCodemodeEvaluate({ code, tools, token, limits }) {
   // resolveExecutionLimits (codemode.ts:133-137, called at make()):
   // throws the ref's RangeError text for invalid budgets — before any
@@ -2310,6 +2431,25 @@ async function handleCodemodeEvaluate({ code, tools, token, limits }) {
     return { ok: false, error: "Code Mode execution requires a `code` string" };
   }
   const calls = [];
+  const logs = [];
+  // Swap console → logs capture and fetch → the ref web wrapper for
+  // the duration of the program; restored when it settles.
+  const savedConsole = {};
+  for (const name of CONSOLE_METHODS) {
+    savedConsole[name] = console[name];
+    console[name] = (...args) => {
+      logs.push(formatConsoleMessage(name, args));
+    };
+  }
+  const savedFetch = globalThis.fetch;
+  globalThis.__rawFetch = savedFetch.__codemodeWrapper === true ? savedFetch.__raw : savedFetch;
+  globalThis.fetch = codemodeFetch;
+  // Overlapping evaluations nest: the wrapper keeps the raw fetch and
+  // restores chain correctly through the stack below.
+  codemodeFetch.__codemodeWrapper = true;
+  codemodeFetch.__raw = globalThis.__rawFetch;
+  const frame = { savedConsole, savedFetch };
+  codemodeCaptureStack.push(frame);
   const catalog = Array.isArray(tools) ? tools : [];
   const evaluationToken = typeof token === "number" && Number.isFinite(token) ? token : 0;
   const toolsTree = buildToolsTree(catalog, calls, evaluationToken, resolved.maxToolCalls);
@@ -2338,7 +2478,9 @@ async function handleCodemodeEvaluate({ code, tools, token, limits }) {
   try {
     value = await program;
   } catch (error) {
-    return { ok: false, error: errText(error), calls };
+    return withCodemodeLogs({ ok: false, error: errText(error), calls }, logs);
+  } finally {
+    restoreCodemodeConsole(frame);
   }
   // The boundary walk's depth guard (data.ts:53) FIRST — a cyclic value
   // (a.self = a) would otherwise infinite-loop the structural walk
@@ -2347,12 +2489,15 @@ async function handleCodemodeEvaluate({ code, tools, token, limits }) {
   // (interpreter/limits.ts:15-21) on the result crossing guest→host.
   if (value !== undefined) {
     if (valueDepthExceeded(value)) {
-      return { ok: false, error: `Value exceeds the maximum depth of ${MAX_VALUE_DEPTH}.`, calls };
+      return withCodemodeLogs(
+        { ok: false, error: `Value exceeds the maximum depth of ${MAX_VALUE_DEPTH}.`, calls },
+        logs,
+      );
     }
     try {
       checkValueLimits(value);
     } catch (error) {
-      return { ok: false, error: errText(error), calls };
+      return withCodemodeLogs({ ok: false, error: errText(error), calls }, logs);
     }
   }
   // `undefined` (no explicit return) is OMITTED so the host formats
@@ -2361,8 +2506,9 @@ async function handleCodemodeEvaluate({ code, tools, token, limits }) {
   if (value !== undefined) {
     // maxOutputBytes bounds the value HERE (the interpreter boundary;
     // the leaf bounds warnings/logs and skips a pre-bounded value).
-    // Warnings/logs do not exist in the port (no console capture) —
-    // those budgets live in the oc-core leaf's bound_output.
+    // G-180①: console output is captured into the result's `logs` on
+    // this side; the logs byte budget lives in the oc-core leaf's
+    // bound_output.
     if (resolved.maxOutputBytes !== undefined) {
       const serialized = JSON.stringify(value);
       if (serialized !== undefined) {
@@ -2375,7 +2521,29 @@ async function handleCodemodeEvaluate({ code, tools, token, limits }) {
     }
     result.value = value;
   }
+  return withCodemodeLogs(result, logs);
+}
+
+// The optional `logs` key (codemode.ts:98/108): present only when the
+// program captured console output.
+function withCodemodeLogs(result, logs) {
+  if (logs.length > 0) result.logs = logs;
   return result;
+}
+
+// Restore the NDJSON-rerouted console and the raw Bun fetch after a
+// Code Mode program settles (the sandbox swaps live only for the run).
+// Overlapping evaluations: a finishing frame drops itself and restores
+// the globals only when no other capture is still live.
+function restoreCodemodeConsole(frame) {
+  const index = codemodeCaptureStack.indexOf(frame);
+  if (index !== -1) codemodeCaptureStack.splice(index, 1);
+  if (codemodeCaptureStack.length > 0) return;
+  for (const [name, method] of Object.entries(frame.savedConsole)) {
+    console[name] = method;
+  }
+  globalThis.fetch = frame.savedFetch;
+  delete globalThis.__rawFetch;
 }
 
 async function handleHookDispatch({ pluginId, domain, name, event }) {
