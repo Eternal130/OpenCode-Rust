@@ -104,6 +104,11 @@ pub struct CatalogModelResolver {
     /// static catalog record for resolution (dynamic entries, aliases,
     /// and enterprise endpoints become bindable).
     copilot: Option<Arc<crate::provider_catalog::copilot_sync::CopilotSync>>,
+    /// G-209 — the live Modal `/models` sync: when present and
+    /// refreshed, its derived modal snapshot replaces the static
+    /// catalog record for resolution (dynamic Modal inventory with
+    /// price/limit/variant templates per modal/models.ts).
+    modal: Option<Arc<crate::provider_catalog::modal_sync::ModalSync>>,
 }
 
 impl CatalogModelResolver {
@@ -126,6 +131,7 @@ impl CatalogModelResolver {
             console: None,
             local: None,
             copilot: None,
+            modal: None,
         }
     }
 
@@ -180,6 +186,18 @@ impl CatalogModelResolver {
         copilot: Arc<crate::provider_catalog::copilot_sync::CopilotSync>,
     ) -> Self {
         self.copilot = Some(copilot);
+        self
+    }
+
+    /// Attaches the live Modal `/models` sync (G-209): when its state
+    /// is present, modal resolution binds against the derived dynamic
+    /// snapshot instead of the static catalog record.
+    #[must_use]
+    pub fn with_modal_sync(
+        mut self,
+        modal: Arc<crate::provider_catalog::modal_sync::ModalSync>,
+    ) -> Self {
+        self.modal = Some(modal);
         self
     }
 
@@ -463,11 +481,23 @@ impl CatalogModelResolver {
         } else {
             None
         };
+        // G-209 — the live Modal `/models` sync: the derived dynamic
+        // snapshot replaces the static modal record for resolution
+        // (the ref provider transform, modal.ts:55-66).
+        let modal_state = if provider_id == crate::provider_catalog::modal_sync::MODAL_PROVIDER_ID
+        {
+            self.modal.as_ref().and_then(|sync| sync.state())
+        } else {
+            None
+        };
         let snapshot: &crate::provider_catalog::Snapshot = match &copilot_state {
             Some(state) => &state.merged,
-            None => catalog
-                .provider(&provider_id)
-                .ok_or_else(|| ModelError::Unavailable(provider_id.clone(), reference.id.0.clone()))?,
+            None => match &modal_state {
+                Some(state) => &state.merged,
+                None => catalog
+                    .provider(&provider_id)
+                    .ok_or_else(|| ModelError::Unavailable(provider_id.clone(), reference.id.0.clone()))?,
+            },
         };
         let base_info = snapshot
             .models

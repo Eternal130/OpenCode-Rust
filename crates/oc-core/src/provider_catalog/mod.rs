@@ -18,6 +18,7 @@ pub mod catalog;
 pub mod copilot_sync;
 pub mod facade;
 pub mod local;
+pub mod modal_sync;
 pub mod native;
 pub mod overlay;
 pub mod plugin_headers;

@@ -693,8 +693,7 @@ fn codemode_fetch_is_the_ref_web_wrapper() {
         }};
         "#
     );
-    let run =
-        host.codemode_evaluate(&code, &[], Duration::from_secs(10)).expect("fetch completes");
+    let run = host.codemode_evaluate(&code, &[], Duration::from_secs(10)).expect("fetch completes");
     assert_eq!(
         run.value,
         Some(json!({

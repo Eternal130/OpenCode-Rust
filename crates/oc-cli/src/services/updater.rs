@@ -621,7 +621,10 @@ pub fn acquire_cli_upgrade_lock_at(path: &std::path::Path) -> Result<UpgradeLock
             // keeps its advisory lock on the orphan inode) and lock a
             // fresh one.
             std::fs::remove_file(path).map_err(|error| {
-                format!("could not remove the stale cli-upgrade lock at {}: {error}", path.display())
+                format!(
+                    "could not remove the stale cli-upgrade lock at {}: {error}",
+                    path.display()
+                )
             })?;
             match oc_util::flock::FileLock::try_exclusive(path) {
                 Ok(Some(lock)) => Ok(UpgradeLock::Acquired(lock)),
@@ -1442,8 +1445,8 @@ mod tests {
             let atime = libc::timespec { tv_sec: seconds.as_secs() as i64, tv_nsec: 0 };
             let mtime = atime;
             let times = [atime, mtime];
-            let cpath = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())
-                .expect("path bytes");
+            let cpath =
+                std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).expect("path bytes");
             assert_eq!(
                 libc::utimensat(libc::AT_FDCWD, cpath.as_ptr(), times.as_ptr(), 0),
                 0,
