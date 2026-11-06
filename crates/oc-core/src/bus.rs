@@ -623,9 +623,9 @@ impl Bus {
         data: serde_json::Value,
         options: PublishOptions,
     ) -> std::result::Result<Event, BusError> {
-        if !data.is_object() {
-            return Err(invalid(&definition.type_, "Expected object event data"));
-        }
+        // REF `publishEvent` (bus.ts:450-484) does no payload-shape
+        // validation: a durable event without a string aggregate field
+        // fails below; an ephemeral payload of any shape publishes.
         let event = Event {
             id: options.id.clone().unwrap_or_else(|| self.inner.next_id()),
             created: self.inner.now_ms(),
@@ -677,15 +677,15 @@ impl Bus {
         if events.is_empty() {
             return Err(invalid("", "publishAll requires at least one event"));
         }
-        let created = self.inner.now_ms();
         let mut prepared = Vec::with_capacity(events.len());
         for input in events {
             let meta = input.definition.durable.clone().ok_or_else(|| {
                 invalid(&input.definition.type_, "publishAll requires durable events")
             })?;
-            if !input.data.is_object() {
-                return Err(invalid(&input.definition.type_, "Expected object event data"));
-            }
+            // REF `publishAll` (bus.ts:531-560) samples the clock PER
+            // EVENT, not once per batch — mixed-implementation replays
+            // must see the same per-event stamping.
+            let created = self.inner.now_ms();
             let aggregate_id = aggregate_field(&input.data, &meta.aggregate).ok_or_else(|| {
                 invalid(
                     &input.definition.type_,
