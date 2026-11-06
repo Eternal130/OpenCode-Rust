@@ -333,12 +333,14 @@ pub fn is_settled(message: &Value) -> bool {
 /// filter runs on BOTH the sanitize and non-sanitize paths); `sanitize`
 /// scrubs it per `sanitize`/`sanitizeMessage` (transfer.ts:180-330).
 #[must_use]
-pub fn export_data(info: Value, messages: Vec<Value>, sanitize: bool) -> Value {
-    let messages: Vec<Value> = messages.into_iter().filter(|message| is_settled(message)).collect();
+pub fn export_data(info: &Value, messages: &[Value], sanitize: bool) -> Value {
+    let settled: Vec<Value> =
+        messages.iter().filter(|message| is_settled(message)).cloned().collect();
     if !sanitize {
-        return serde_json::json!({ "info": info, "messages": messages });
+        return serde_json::json!({ "info": info, "messages": settled });
     }
-    serde_json::json!({ "info": sanitize_info(&info), "messages": messages.iter().map(sanitize_message).collect::<Vec<_>>() })
+    let sanitized_messages: Vec<Value> = settled.iter().map(sanitize_message).collect();
+    serde_json::json!({ "info": sanitize_info(info), "messages": sanitized_messages })
 }
 
 /// `redact` (transfer.ts:172-174): empty (whitespace-only) values pass
@@ -523,50 +525,48 @@ fn sanitize_message(message: &Value) -> Value {
 fn sanitize_assistant_part(id: &str, part: &mut Value) {
     let Some(map) = part.as_object_mut() else { return };
     let type_ = map.get("type").and_then(Value::as_str).unwrap_or_default().to_string();
-    match type_.as_str() {
-        kind @ ("text" | "reasoning") => {
-            let state_kind = if kind == "text" { "text-state" } else { "reasoning-state" };
-            redact_key(map, "text", kind, id);
-            match map.get("state") {
-                Some(state) if !state.is_null() => {
-                    map.insert(
-                        "state".to_owned(),
-                        serde_json::json!({ "redacted": format!("{state_kind}:{id}") }),
-                    );
-                }
-                _ => {
-                    map.remove("state");
-                }
+    if type_ == "text" || type_ == "reasoning" {
+        let kind = type_.as_str();
+        let state_kind = if kind == "text" { "text-state" } else { "reasoning-state" };
+        redact_key(map, "text", kind, id);
+        match map.get("state") {
+            Some(state) if !state.is_null() => {
+                map.insert(
+                    "state".to_owned(),
+                    serde_json::json!({ "redacted": format!("{state_kind}:{id}") }),
+                );
             }
+            _ => {
+                map.remove("state");
+            }
+        }
+        return;
+    }
+    // Tool parts: provider states collapse, the tool state scrubs.
+    match map.get("providerState") {
+        Some(value) if !value.is_null() => {
+            map.insert(
+                "providerState".to_owned(),
+                serde_json::json!({ "redacted": format!("tool-provider-state:{id}") }),
+            );
         }
         _ => {
-            // Tool parts: provider states collapse, the tool state scrubs.
-            match map.get("providerState") {
-                Some(value) if !value.is_null() => {
-                    map.insert(
-                        "providerState".to_owned(),
-                        serde_json::json!({ "redacted": format!("tool-provider-state:{id}") }),
-                    );
-                }
-                _ => {
-                    map.remove("providerState");
-                }
-            }
-            match map.get("providerResultState") {
-                Some(value) if !value.is_null() => {
-                    map.insert(
-                        "providerResultState".to_owned(),
-                        serde_json::json!({ "redacted": format!("tool-provider-result-state:{id}") }),
-                    );
-                }
-                _ => {
-                    map.remove("providerResultState");
-                }
-            }
-            if let Some(state) = map.get_mut("state") {
-                *state = sanitize_tool_state(id, state);
-            }
+            map.remove("providerState");
         }
+    }
+    match map.get("providerResultState") {
+        Some(value) if !value.is_null() => {
+            map.insert(
+                "providerResultState".to_owned(),
+                serde_json::json!({ "redacted": format!("tool-provider-result-state:{id}") }),
+            );
+        }
+        _ => {
+            map.remove("providerResultState");
+        }
+    }
+    if let Some(state) = map.get_mut("state") {
+        *state = sanitize_tool_state(id, state);
     }
 }
 
