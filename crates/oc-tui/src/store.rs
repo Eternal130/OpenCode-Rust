@@ -4704,7 +4704,8 @@ impl Store {
         self.prompt.update(|state| {
             state.drafts.remove(session_id);
             state.autocomplete.remove(session_id);
-            state.history = state.history.clone().push(&draft.text);
+            // G-185 — the full draft (text + chips) records.
+            state.history = state.history.clone().push(&draft);
         });
         let prompt = SubmittedPrompt {
             text: draft.text,
@@ -7193,6 +7194,15 @@ impl Store {
     /// autocomplete state inherits.
     pub fn set_frecency_template(&self, frecency: autocomplete::Frecency) {
         *self.frecency_template.borrow_mut() = frecency;
+    }
+
+    /// G-185 — the prompt history boot load (`history.tsx:91-100`,
+    /// the PromptHistory provider's onMount): the parsed
+    /// `<state>/prompt-history.jsonl` entries populate the composer's
+    /// history ring (with the file attached as the append sink).
+    pub fn load_prompt_history(&self, state_root: &std::path::Path) {
+        let history = crate::components::composer::PromptHistory::open(state_root);
+        self.prompt.update(|state| state.history = history);
     }
 
     /// Stage the restore for a session re-entered with a saved anchor

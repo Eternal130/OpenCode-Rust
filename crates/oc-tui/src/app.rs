@@ -2875,8 +2875,8 @@ impl App {
                 .collect::<Vec<String>>();
             self.store.queue_prompt(&session_id, &text, &files);
             let mut composer = self.store.composer(key);
-            if let Some(prompt) = composer.take_submit() {
-                composer.history = composer.history.clone().push(&prompt.text);
+            // G-185 — take_submit records the full history entry itself.
+            if composer.take_submit().is_some() {
                 self.store.set_composer(key, &composer);
             }
             return;
@@ -7780,6 +7780,10 @@ pub async fn run_with_size(
     app.store.set_frecency_template(crate::components::composer::autocomplete::Frecency::open(
         &oc_util::global_roots::resolve().state,
     ));
+    // G-185 — the PromptHistory provider's onMount (prompt/history.
+    // tsx:91-100): `<state>/prompt-history.jsonl` feeds the composer
+    // history ring (the boot heal already self-healed the file).
+    app.store.load_prompt_history(&oc_util::global_roots::resolve().state);
     // CONFIG-E3 — `skipInitialLoading` (ref app.tsx:351
     // `skipInitialLoading: Boolean(process.env.OPENCODE_FAST_BOOT)`):
     // suppresses the `StartupLoading` boot pill (app.tsx:1389-1391
@@ -11461,8 +11465,8 @@ fn slash_builtins_execute_and_unknown_words_submit() {
     app.press("escape");
     app.press("enter");
     assert_eq!(
-        app.store.composer("s1").history.entries.last(),
-        Some(&"/zzz".to_owned()),
+        app.store.composer("s1").history.entries.last().map(|entry| entry.text.clone()),
+        Some("/zzz".to_owned()),
         "after dismissal the unknown word submits as text"
     );
 }

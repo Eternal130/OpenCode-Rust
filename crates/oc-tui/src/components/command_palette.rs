@@ -2614,8 +2614,8 @@ impl CommandDispatcher for StoreDispatcher {
                         };
                         store.queue_prompt(&session_id, &draft.text, &files);
                         let mut composer = store.composer(&key);
-                        if let Some(prompt) = composer.take_submit() {
-                            composer.history = composer.history.clone().push(&prompt.text);
+                        // G-185 — take_submit records the full entry itself.
+                        if composer.take_submit().is_some() {
                             store.set_composer(&key, &composer);
                         }
                     } else {
