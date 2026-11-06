@@ -135,6 +135,189 @@ pub fn emit(bytes: &[u8]) {
 }
 
 // ---------------------------------------------------------------------------
+// terminal palette probe (theme/system.ts + terminal-palette.ts)
+// ---------------------------------------------------------------------------
+
+/// The OSC 4/10/11 palette query burst (`TerminalPalette.queryPalette` /
+/// `querySpecialColors`, terminal-palette.ts): the 16 ANSI slots plus
+/// the default foreground/background. `system.ts generateSystem`
+/// consumes exactly these values.
+#[must_use]
+pub fn palette_query_sequence() -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for index in 0..16 {
+        bytes.extend_from_slice(format!("\x1b]4;{index};?\x07").as_bytes());
+    }
+    bytes.extend_from_slice(b"\x1b]10;?\x07\x1b]11;?\x07");
+    bytes
+}
+
+/// Parse an OSC 4/10/11 answer stream into [`crate::theme::TerminalColors`]
+/// (`TerminalPalette.detect`'s reduction): OSC 4 sets ANSI slots 0-15,
+/// OSC 10 the default foreground, OSC 11 the default background. Both
+/// `rgb:rrrr/gggg/bbbb` and `#rrggbb` bodies are accepted (the ref
+/// regexes accept either). Returned hex is lowercase `#rrggbb`.
+#[must_use]
+pub fn parse_palette_reply(bytes: &[u8]) -> crate::theme::TerminalColors {
+    let mut colors = crate::theme::TerminalColors { palette: vec![None; 16], ..Default::default() };
+    let mut cursor = 0usize;
+    while let Some(offset) = bytes[cursor..].windows(2).position(|w| w == b"\x1b]") {
+        let start = cursor + offset + 2;
+        let Some(end_offset) = osc_terminator(&bytes[start..]) else { break };
+        let end = start + end_offset;
+        let body = &bytes[start..end];
+        if let Some((code, rest)) = split_once(body, b';') {
+            match code {
+                b"4" => {
+                    if let Some((index, value)) = split_once(rest, b';') {
+                        let index = std::str::from_utf8(index)
+                            .ok()
+                            .and_then(|text| text.parse::<usize>().ok());
+                        if let (Some(index), Some(hex)) = (index, osc_color_hex(value)) {
+                            if index < colors.palette.len() {
+                                colors.palette[index] = Some(hex);
+                            }
+                        }
+                    }
+                }
+                b"10" => {
+                    if let Some(hex) = osc_color_hex(rest) {
+                        colors.default_foreground = Some(hex);
+                    }
+                }
+                b"11" => {
+                    if let Some(hex) = osc_color_hex(rest) {
+                        colors.default_background = Some(hex);
+                    }
+                }
+                _ => {}
+            }
+        }
+        cursor = end + 1;
+    }
+    colors
+}
+
+/// The OSC body's end (BEL or ST, excluding the terminator itself).
+fn osc_terminator(bytes: &[u8]) -> Option<usize> {
+    let mut index = 0usize;
+    while index < bytes.len() {
+        if bytes[index] == 0x07 {
+            return Some(index);
+        }
+        if bytes[index] == 0x1b && bytes.get(index + 1) == Some(&b'\\') {
+            return Some(index);
+        }
+        index += 1;
+    }
+    None
+}
+
+/// A byte-slice `split_once` for the OSC `code;payload` pair.
+fn split_once(bytes: &[u8], needle: u8) -> Option<(&[u8], &[u8])> {
+    let index = bytes.iter().position(|byte| *byte == needle)?;
+    Some((&bytes[..index], &bytes[index + 1..]))
+}
+
+/// Normalize one OSC color body to lowercase `#rrggbb`.
+fn osc_color_hex(value: &[u8]) -> Option<String> {
+    let text = std::str::from_utf8(value).ok()?;
+    if let Some(hex) = text.strip_prefix('#') {
+        if hex.len() == 6 && hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Some(format!("#{}", hex.to_ascii_lowercase()));
+        }
+        return None;
+    }
+    let (red, green, blue) = crate::theme::parse_osc_color(text)?;
+    Some(format!("#{red:02x}{green:02x}{blue:02x}"))
+}
+
+/// The boot palette probe's bounded window. The old OSC 11 boot probe
+/// (and the clipboard OSC 52 arm) uses a 150 ms read window; real
+/// terminals answer the whole burst in one read, so this reuses the
+/// same discipline rather than blocking boot on a silent terminal.
+const PALETTE_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(150);
+
+/// Query the terminal palette (`TerminalPalette.detect`): write the
+/// OSC 4/10/11 burst and read the replies inside one bounded window.
+/// The caller must own stdin (boot, before the input thread starts).
+/// `None` for headless pipes / no reply / a palette missing the
+/// background- or foreground-source slot (`usablePalette` in the ref:
+/// `defaultBackground ?? palette[0]` AND `defaultForeground ??
+/// palette[7]`); the documented fallback then keeps the v2 `opencode`
+/// document for the `system` slot.
+#[must_use]
+pub fn query_terminal_palette() -> Option<crate::theme::TerminalColors> {
+    use std::io::{IsTerminal, Read as _, Write as _};
+    if !std::io::stdout().is_terminal() || !std::io::stdin().is_terminal() {
+        return None; // headless: fallback
+    }
+    {
+        let mut stdout = std::io::stdout().lock();
+        if stdout.write_all(&palette_query_sequence()).is_err() || stdout.flush().is_err() {
+            return None;
+        }
+    }
+    let colors = read_palette_replies(PALETTE_PROBE_TIMEOUT);
+    palette_is_usable(&colors).then_some(colors)
+}
+
+/// `usablePalette` (context/theme.tsx:381-385): a background and a
+/// foreground source must both exist.
+#[must_use]
+pub fn palette_is_usable(colors: &crate::theme::TerminalColors) -> bool {
+    let has_background =
+        colors.default_background.is_some() || colors.palette.first().is_some_and(Option::is_some);
+    let has_foreground =
+        colors.default_foreground.is_some() || colors.palette.get(7).is_some_and(Option::is_some);
+    has_background && has_foreground
+}
+
+/// Read OSC answers until the deadline. Every byte in the window is
+/// consumed here (the answers must never leak into the key stream);
+/// anything non-OSC is dropped, exactly like the retired boot probe.
+#[allow(unsafe_code)] // poll/read on fd 0 are only reachable through libc FFI
+fn read_palette_replies(timeout: std::time::Duration) -> crate::theme::TerminalColors {
+    use std::io::Read as _;
+    let deadline = std::time::Instant::now() + timeout;
+    let mut buffer = [0u8; 4096];
+    let mut collected: Vec<u8> = Vec::new();
+    loop {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        let mut fds = libc::pollfd { fd: 0, events: libc::POLLIN, revents: 0 };
+        let timeout_ms =
+            i32::try_from(remaining.as_millis().min(i32::MAX as u128)).unwrap_or(i32::MAX);
+        // SAFETY: poll(2) on fd 0 with a computed timeout — the boot
+        // probe's bounded wait.
+        let ready = unsafe { libc::poll(std::ptr::from_mut(&mut fds), 1, timeout_ms) };
+        if ready <= 0 {
+            break;
+        }
+        let read = std::io::stdin().lock().read(&mut buffer);
+        let Ok(count) = read else { break };
+        if count == 0 {
+            break;
+        }
+        collected.extend_from_slice(&buffer[..count]);
+        let colors = parse_palette_reply(&collected);
+        if palette_is_usable(&colors)
+            && colors.palette.iter().all(Option::is_some)
+            && colors.default_foreground.is_some()
+            && colors.default_background.is_some()
+        {
+            return colors;
+        }
+        if collected.len() > 64 * 1024 {
+            break; // overlong garbage never matches
+        }
+    }
+    parse_palette_reply(&collected)
+}
+
+// ---------------------------------------------------------------------------
 // panic / signal-safe restore (P3)
 // ---------------------------------------------------------------------------
 
@@ -445,6 +628,58 @@ mod tests {
         assert_eq!(parse_osc52_reply(b"\x1b]52;c;?\x07"), None);
         // Not an OSC 52 line at all.
         assert_eq!(parse_osc52_reply(b"\x1b[?997;1n"), None);
+    }
+
+    /// G-210 — the palette query burst asks OSC 4 for all 16 ANSI slots
+    /// plus OSC 10/11 for the default foreground/background.
+    #[test]
+    fn palette_query_sequence_asks_osc4_and_special_colors() {
+        let queries = String::from_utf8(palette_query_sequence()).expect("ascii");
+        for index in 0..16 {
+            assert!(
+                queries.contains(&format!("\x1b]4;{index};?\x07")),
+                "OSC 4 slot {index} queried"
+            );
+        }
+        assert!(queries.contains("\x1b]10;?\x07"), "OSC 10 foreground");
+        assert!(queries.contains("\x1b]11;?\x07"), "OSC 11 background");
+    }
+
+    /// G-210 — the reply reducer: OSC 4 slots, OSC 10/11 fg/bg, both
+    /// `rgb:` and `#rrggbb` bodies, BEL and ST terminators.
+    #[test]
+    fn palette_reply_reduces_osc4_and_special_colors() {
+        let replies = b"\x1b]4;0;rgb:1010/1010/1010\x07\
+            \x1b]4;1;#CC0000\x1b\\\
+            \x1b]4;7;rgb:eeee/eeee/eeee\x1b\\\
+            \x1b]10;#EEEEEE\x07\
+            \x1b]11;rgb:0a0a/0a0a/0a0a\x07";
+        let colors = parse_palette_reply(replies);
+        assert_eq!(colors.palette.len(), 16);
+        assert_eq!(colors.palette[0].as_deref(), Some("#101010"));
+        assert_eq!(colors.palette[1].as_deref(), Some("#cc0000"));
+        assert_eq!(colors.palette[7].as_deref(), Some("#eeeeee"));
+        assert_eq!(colors.palette[15], None);
+        assert_eq!(colors.default_foreground.as_deref(), Some("#eeeeee"));
+        assert_eq!(colors.default_background.as_deref(), Some("#0a0a0a"));
+        assert!(palette_is_usable(&colors));
+    }
+
+    /// G-210 — `usablePalette`: both a background source (OSC 11 or
+    /// palette 0) and a foreground source (OSC 10 or palette 7).
+    #[test]
+    fn palette_usability_requires_background_and_foreground_sources() {
+        let mut colors =
+            crate::theme::TerminalColors { palette: vec![None; 16], ..Default::default() };
+        assert!(!palette_is_usable(&colors));
+        colors.default_background = Some("#101010".to_owned());
+        assert!(!palette_is_usable(&colors), "foreground still missing");
+        colors.palette[7] = Some("#eeeeee".to_owned());
+        assert!(palette_is_usable(&colors), "bg + palette[7] fg usable");
+        colors.default_foreground = Some("#dddddd".to_owned());
+        colors.default_background = None;
+        colors.palette[0] = Some("#0a0a0a".to_owned());
+        assert!(palette_is_usable(&colors), "palette[0] bg + OSC 10 fg usable");
     }
 
     /// The image magic sniff.
