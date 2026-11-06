@@ -34,10 +34,10 @@ feature-gated `terminal-backend`(仿 device-audio 先例;默认构建保持 head
 ## Phase C — 增量收敛 backlog(前三项已完成 2026-11-03,其余按消费方拉动)
 
 已完成:
-- **C1 TextTableRenderable**(opentui 93814b4 + oc-tui ebdc364c):markdown 表格真 grid 渲染,**G-177 闭**;3 差分场景 IDENTICAL
+- **C1 TextTableRenderable**(opentui 93814b4 + oc-tui 60d95faf):markdown 表格真 grid 渲染,**G-177 闭**;3 差分场景 IDENTICAL
 - **C2 TextBuffer truncate/scissor/scroll**(opentui 1e209a0):selection 成为其唯一剩余 subset;3 差分场景 IDENTICAL
 - **C3 image.ts 家族+ImageRenderable**(opentui b89cbd6):契约单测钉(图像非网格可观测);kitty teardown `a=d,d=a` 补口;消费方接入前需 native-render lane(栅格化/发射/cell px 探针,已登记)
-- 消费方终态:oc-tui 钉 b89cbd6(75d5c8a8,双 profile 5116/5116);PORT-MATRIX 记账钩子 tools/recount-matrix.sh(e502161,170/339=50.1%)
+- 消费方终态:oc-tui 钉 b89cbd6(4a84ed80,双 profile 5116/5116);PORT-MATRIX 记账钩子 tools/recount-matrix.sh(e502161,170/339=50.1%)
 
 剩余 backlog(下次会话,按消费方拉动排序):
 1. 富表面 solid 化(7 项 solid deferred 已有消费面)
