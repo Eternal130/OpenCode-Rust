@@ -2163,7 +2163,7 @@ async fn export(
     // G-170: the export routes through the oc-core transfer service —
     // the settled filter + ref sanitize semantics (transfer.ts:60-64,
     // 165-330) — keeping the wire `{info, messages}` shape stable.
-    let data = oc_core::session::transfer::export_data(info, message_values, sanitize);
+    let data = oc_core::session::transfer::export_data(&info, &message_values, sanitize);
     Ok(json_data(data))
 }
 

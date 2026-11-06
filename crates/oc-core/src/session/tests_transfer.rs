@@ -233,7 +233,7 @@ fn transfer_export_filters_settled_messages_on_both_paths() {
         json!({ "id": "msg_c2", "type": "compaction", "status": "completed" }),
     ];
     for sanitize in [false, true] {
-        let data = crate::session::transfer::export_data(export_info(), messages.clone(), sanitize);
+        let data = crate::session::transfer::export_data(&export_info(), &messages, sanitize);
         let ids: Vec<&str> = data["messages"]
             .as_array()
             .unwrap()
@@ -247,7 +247,7 @@ fn transfer_export_filters_settled_messages_on_both_paths() {
 #[test]
 fn transfer_export_sanitize_redacts_info_fields() {
     let data =
-        crate::session::transfer::export_data(export_info(), Vec::new(), true);
+        crate::session::transfer::export_data(&export_info(), &[], true);
     let info = &data["info"];
     assert_eq!(info["title"], json!("[redacted:session-title:ses_exp1]"));
     assert_eq!(info["metadata"], json!({ "redacted": "session-metadata:ses_exp1" }));
@@ -263,6 +263,7 @@ fn transfer_export_sanitize_redacts_info_fields() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn transfer_export_sanitize_redacts_each_message_type() {
     let messages = vec![
         json!({
@@ -319,7 +320,7 @@ fn transfer_export_sanitize_redacts_each_message_type() {
         }),
     ];
     let data =
-        crate::session::transfer::export_data(export_info(), messages, true);
+        crate::session::transfer::export_data(&export_info(), &messages, true);
     let messages = data["messages"].as_array().unwrap();
     let by_id = |id: &str| {
         messages
@@ -402,7 +403,7 @@ fn transfer_export_sanitize_keeps_empty_values_verbatim() {
         "metadata": {},
         "location": { "directory": "  " },
     });
-    let data = crate::session::transfer::export_data(info, Vec::new(), true);
+    let data = crate::session::transfer::export_data(&info, &[], true);
     let info = &data["info"];
     assert_eq!(info["title"], json!("  "));
     assert_eq!(info["metadata"], json!({}));
@@ -416,7 +417,7 @@ fn transfer_export_non_sanitize_path_is_unchanged() {
         "id": "msg_plain", "type": "user", "text": "plain", "metadata": { "k": "v" }
     })];
     let data =
-        crate::session::transfer::export_data(info.clone(), messages.clone(), false);
+        crate::session::transfer::export_data(&info, &messages, false);
     assert_eq!(data["info"], info);
     assert_eq!(data["messages"], json!(messages));
 }
