@@ -163,6 +163,11 @@ pub trait SessionInterruptor: Send + Sync {
     /// Interrupt running session steps for `location`; resolves once the
     /// executions settled.
     async fn interrupt(&self, location: &LocationRef, reason: &str);
+    /// Whether any ACTIVE execution remains at `location` — the sweeper's
+    /// post-interrupt re-check (ref location-activity.ts re-reads
+    /// `execution.active` after interrupting the owners: new work
+    /// admitted during cleanup may now own the cached graph).
+    async fn active_owners(&self, location: &LocationRef) -> bool;
 }
 
 // =============================================================================

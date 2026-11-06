@@ -2082,6 +2082,14 @@ impl SessionInterruptor for EngineInterruptor {
             }
         }
     }
+
+    async fn active_owners(&self, location: &LocationRef) -> bool {
+        // The sweeper's post-interrupt re-check: after the owners settled,
+        // only NEWLY admitted work keeps the location occupied.
+        self.services
+            .get(location)
+            .is_some_and(|services| !services.execution.active().is_empty())
+    }
 }
 
 struct EngineConfigCache {
