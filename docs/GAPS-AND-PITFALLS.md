@@ -232,70 +232,72 @@
 
 # 附：开发规范与现行制度（原「踩坑记录」，2026-11-06 起易名；自 a26e145 重写前版本恢复，2026-10-30）
 
-> a26e145 将本文件从 520 行登记册重写为 G-1..G-17 摘要时移除了原 §2/§3（踩坑记录与制度速查）及 §1/§4-8 历史发现表（RB/RC/RD/RV/RW/AUD/RE/RF 系列，绝大多数已闭环，历史全文见 `git show db21631:docs/GAPS-AND-PITFALLS.md`）。以下两节为**现行有效的事故规则**，原样恢复。
+> a26e145 将本文件从 520 行登记册重写为 G-1..G-17 摘要时移除了原 §2/§3（踩坑记录与制度速查）及 §1/§4-8 历史发现表（RB/RC/RD/RV/RW/AUD/RE/RF 系列，绝大多数已闭环，历史全文见 `git show db21631:docs/GAPS-AND-PITFALLS.md`）。以下内容为**现行有效的开发规范**——2026-11-06 起由「踩坑记录」倒转为规范主体：规则先行（祈使句、自含全部参数），事故与根因压缩为「依据」列；原事故档案全文见 `git show d41b1c2c:docs/GAPS-AND-PITFALLS.md`。
 
-## 开发规范（事故 → 根因 → 现行规则）
+## 开发规范（# · 规范 · 依据）
 
 ### 2.1 资源与调度
 
-| # | 事故 | 根因 | 现行规则 |
-|---|---|---|---|
-| 1 | **多子 agent 同时编译 → CPU 饱和 → 共享主机的 newapi 在线服务卡死** | 本机与在线服务（newapi、49374）共享 16 核/22G；并行 lane 各自 cargo build 叠加无上限 | 一切本地构建/测试经 `tools/dev-gate.sh` 单入口：强制 eternal130 身份 + systemd transient scope（CPUQuota=400% 四核硬顶、MemoryMax=10G、TasksMax=512）、1 分钟 load≥6 拒启动；lane 提示词必须声明走 dev-gate |
-| 2 | root 直跑 cargo，三次属主污染 | root 产物属主混入用户目录 | dev-gate 强制降权身份；CI 例外（不占本机） |
-| 3 | 共享同一检出目录的两个 lane 互相删文件 | 写所有权无隔离 | lane 写隔离=每 lane 独立 git worktree（`.worktrees/`）+ 串行合并回 main；只碰自己 scope 的文件；收尾前重查 `git status` |
-| 4 | /tmp/opencode 被整体清空，5 条 lane 未提交工作全失 | API 配额耗尽杀 lane 后，外部清场连证据目录一起清 | lane worktree 移入仓库内 `.worktrees/`；里程碑 WIP 提交强制（小步提交、事后 squash）；/tmp 顶层只用 PID 唯一名 |
-| 5 | SCAN-EF 扫描腿（并行编译 + 探针连发 release 二进制）严重拖慢同机生产的 v2 服务，被用户击杀 | 验证负载无节制 | 生产尊重制度：**单 lane 串行**；扫描腿小批量带暂停；重型腿（E2 TTI/soak/电池）需用户明示或错峰；派发前看生产健康信号 |
-| 6 | `target/debug` 无界增长至 **476G**（debuginfo 主导 + 增量编译无指纹 GC），磁盘 99% 满 | cargo 增量缓存只增不减、多 profile 叠加 | 2026-10-23 清理 486G（保留 release 3.2G）；建议日常 `CARGO_INCREMENTAL=0` 或周期 `cargo clean`；无 worktree 残留（已核） |
-| 8 | **incremental=false 已生效但磁盘仍持续上涨**（2026-10-27 复盘：主 target/debug 153G + 5 个 lane worktree 各自全量 target ≈51G；incremental 目录实为 4KB，非根因） | ① worktree 天然隔离 → 每 lane 独立编译全依赖图，`incremental=false` 管不到；② cargo 从不 GC target 内陈旧产物（历史 lane 残留/多版本 deps）；③ lane 完成后 target 无人回收 | 三策：① **lane 合并后立即删该 worktree 的 target**（保留分支与 worktree 本体亦可先只删 target；删前过清理门=fuser 无打开文件+30 分钟 mtime 规则）；② worktree 构建可改用 `CARGO_TARGET_DIR` 指向主 target 复用依赖产物（注意指纹翻转抖动与 cargo 文件锁串行化，需 dev-gate 协调）；③ 主 target/debug 定期（≥两周或 >100G）`cargo clean -p` 粗清或整清 |
-| 7 | API 配额窗口耗尽（92%）在半夜杀 lane | 配额无监控 | 定时唤醒 + 断点复活模式（WIP 落盘后 lane 死亡也可 revive） |
+| # | 规范 | 依据（事故→根因） |
+|---|---|---|
+| 1 | 一切本地构建/测试必须经 `tools/dev-gate.sh` 单入口：强制 eternal130 身份 + systemd transient scope（CPUQuota=400%、MemoryMax=10G、TasksMax=512），1 分钟 load≥6 拒启动；lane 提示词必须写明走 dev-gate | 多子 agent 同时编译→CPU 饱和→共享主机（16 核/22G，同跑 newapi 在线服务）卡死 |
+| 2 | 禁止 root 直跑 cargo/测试（dev-gate 强制降权）；唯一例外 CI（不占本机） | root 直跑三次属主污染：root 产物属主混入用户目录 |
+| 3 | lane 写隔离：每 lane 独立 git worktree（仓库内 `.worktrees/`）+ 串行合并回 main；只碰自己 scope 的文件；收尾前重查 `git status` | 共享同一检出目录的两个 lane 互相删文件（写所有权无隔离） |
+| 4 | lane worktree 一律放仓库内 `.worktrees/`（未提交工作禁放 /tmp）；里程碑强制 WIP 小步提交（事后 squash）；/tmp 顶层只用 PID 唯一名 | /tmp/opencode 被整体清空，5 条 lane 未提交工作全失（配额杀 lane 后外部清场连证据目录一起清） |
+| 5 | 生产尊重制度：**单 lane 串行**；扫描腿小批量带暂停；重型腿（E2 TTI/soak/电池）需用户明示或错峰；派发前检查生产健康信号 | SCAN-EF（并行编译+探针连发 release 二进制）拖慢同机生产 v2 服务，被用户击杀 |
+| 6 | 磁盘治理：仓库级 `.cargo/config.toml` incremental=false（2026-10-25 起强制）+ 周期 `cargo clean`/`cargo clean -p` 粗清（主 target/debug ≥两周或 >100G 时） | target/debug 无界增长至 **476G**、磁盘 99% 满（debuginfo 主导 + 增量编译无指纹 GC），2026-10-23 清 486G |
+| 7 | worktree 磁盘三策：① lane 合并后**立即删该 worktree 的 target**（删前过清理门：fuser 无打开文件 + mtime≥30 分钟）；② worktree 构建可 `CARGO_TARGET_DIR` 指向主 target 复用依赖产物（注意指纹翻转抖动与 cargo 文件锁串行化，需 dev-gate 协调）；③ 主 target 定期清（同 #6） | incremental=false 生效后磁盘仍涨：主 target/debug 153G + 5 个 worktree 各自全量 target ≈51G——worktree 天然隔离=每 lane 全量编译，cargo 从不 GC 陈旧产物（2026-10-27 复盘） |
+| 8 | 配额敏感任务：定时唤醒 + 断点复活模式（WIP 落盘后 lane 死亡也可 revive） | API 配额窗口（92%）半夜杀 lane，配额无监控 |
 
 ### 2.2 进程与终端安全
 
-| # | 事故 | 根因 | 现行规则 |
-|---|---|---|---|
-| 1 | **测试盲杀信号误杀系统服务**（生产事故） | 测试按 PID 名/号发信号，撞上复用 PID 的系统进程 | safe_signal 结构性修复：pidfd 系统调用 + boot_id/进程 starttime 世代 sidecar + 外来记录 cmdline 精确校验；全仓禁裸 PID 发信号；组杀=活 leader 钉住+/proc 扫描+逐成员校验；测试只用自有子进程句柄（process_safety guard 常设） |
-| 2 | **扫描腿裸启 TUI 二进制锁死用户终端**：raw mode + alt screen 缓住真终端，两个 TUI 同写一屏→持续乱码、ctrl+c 被吃、被迫重启生产 v2 | E2 进程拉起腿未套 PTY harness，直接 `cargo run` 冒屏 | TUI 二进制任何 lane 只准在 vt/PTY harness 内或 stdout/stderr 重定向 + no-tty 模式启动；tmux/终端矩阵探针只碰自建会话；OSC/转义探针只写自有 PTY |
-| 3 | **测试进程泄露**：孤儿 rig/电池进程、stale ref-bun 进程（GATE3 一轮杀 12 个）、lane 死后后台矩阵孤儿化（rig 二进制消失、配对进程残留） | 后台长跑无归拢、teardown 不完整 | 长验证一律前台分块（≤45 分钟/块）；rig teardown 卫生项常设；GATE 轮清扫；清理门=mtime<30 分钟视为在用（两次误踩活动目录后立规） |
-| 4 | rig 使用陈旧二进制产物，两次被差分器抓获 | lane 换代码未重建 rig 缓存 | lane 收尾强制重建检查（已知陷阱清单） |
-| 5 | **孤儿 `sleep 300` 占住 dev-gate 全局锁 10+ 分钟**（2026-10-25，lane 收尾 watchdog 脱离父进程后持 flock 睡眠，全部构建排队静默堵死；宿主后台 shell 任务亦被清理丢失） | lane 派生的 sleep/watchdog 未在收尾时回收；flock 无超时 | lane 收尾自查自派生后台进程（派发模板新增必查项）；构建排队异常时先 `fuser /tmp/opencode/dev-gate.lock` 查持锁者；重试循环勿依赖宿主后台 shell 存活 |
+| # | 规范 | 依据（事故→根因） |
+|---|---|---|
+| 1 | 全仓禁裸 PID 发信号；一律 safe_signal（pidfd 系统调用 + boot_id/进程 starttime 世代 sidecar + 外来记录 cmdline 精确校验）；组杀=活 leader 钉住 + /proc 扫描 + 逐成员校验；测试只用自有子进程句柄（`tools/guards/process_safety.py` 常设） | 测试按 PID 名/号盲杀信号，撞上复用 PID 的系统进程（生产事故） |
+| 2 | TUI 二进制任何 lane 只准在 vt/PTY harness 内、或 stdout/stderr 重定向 + no-tty 模式启动；tmux/终端矩阵探针只碰自建会话；OSC/转义探针只写自有 PTY | 扫描腿裸启 TUI（raw mode + alt screen 缓住真终端，两 TUI 同写一屏）锁死用户终端，ctrl+c 被吃，被迫重启生产 v2 |
+| 3 | 长验证一律前台分块（≤45 分钟/块）；rig teardown 卫生项常设；GATE 轮清扫；清理门 mtime<30 分钟视为在用（勿清活动目录） | 测试进程泄露多案：孤儿 rig/电池进程、stale ref-bun（GATE3 一轮杀 12 个）、lane 死后后台矩阵孤儿化；清理门曾两次误踩活动目录 |
+| 4 | lane 收尾强制重建 rig（换代码必须重建 rig 缓存，已知陷阱清单项） | rig 使用陈旧二进制产物，两次被差分器抓获 |
+| 5 | lane 收尾自查自派生后台进程（watchdog/sleep 等，派发模板必查项）；构建排队/卡住先 `fuser /tmp/opencode/dev-gate.lock` 查持锁者再归因；重试循环勿依赖宿主后台 shell 存活 | 孤儿 `sleep 300` 占 dev-gate 全局锁 10+ 分钟，全部构建静默堵死（2026-10-25，watchdog 脱离父进程持 flock 睡眠；宿主后台 shell 任务亦被清理丢失） |
 
 ### 2.3 宿主 / 会话生命周期
 
-| # | 事故 | 根因 | 现行规则 |
-|---|---|---|---|
-| 1 | **60 分钟 location-TTL 收割器多次静默杀后台 lane**（含 9E 后台矩阵中断） | 宿主对后台会话的位置 TTL 驱逐 | 长任务=前台分块 ≤45 分钟 + 追加式日志 + 每 6 轮 WIP 提交（断点可续）；**单次工具调用硬上限 45 分钟**（一次 80 分钟单调用险触 TTL） |
-| 2 | 完成后的会话收到排队消息 → 幽灵重启（M6 幸无实害） | 排队投递无终态检查 | 禁止向已完成会话投递；干预一律 kill + 新 lane |
-| 3 | H-1：复活子代理的第二份报告永远到不了父级（completed→completed 不是迁移） | 宿主缺陷，非本仓可修 | 子代理**禁止跑后台任务**（全部前台块）；父级 watcher 允许；完整分析见 docs/host-issues.md；候选上报上游 |
-| 4 | 小时级后台睡眠被宿主收割（40 分钟级偶成） | 宿主对长睡眠的回收 | 级联短看守（50 分钟自续完成通知）+ 用户消息兜底 |
+| # | 规范 | 依据（事故→根因） |
+|---|---|---|
+| 1 | 长任务=前台分块 ≤45 分钟 + 追加式日志 + 每 6 轮 WIP 提交（断点可续）；**单次工具调用硬上限 45 分钟** | 60 分钟 location-TTL 收割器多次静默杀后台 lane（含 9E 后台矩阵中断；一次 80 分钟单调用险触 TTL） |
+| 2 | 禁止向已完成会话投递排队消息；干预一律 kill + 新 lane | 完成后会话收排队消息→幽灵重启（M6 幸无实害；排队投递无终态检查） |
+| 3 | 子代理**禁止跑后台任务**（全部前台块）；父级 watcher 允许；完整分析见 docs/host-issues.md | H-1 宿主缺陷：复活子代理的第二份报告永远到不了父级（completed→completed 不是迁移） |
+| 4 | 小时级后台睡眠改级联短看守（50 分钟自续完成通知）+ 用户消息兜底 | 长睡眠被宿主收割（40 分钟级偶成） |
 
 ### 2.4 验证方法论
 
-| # | 事故 | 根因 | 现行规则 |
-|---|---|---|---|
-| 1 | **陈旧 oracle 缓存掩盖真回归**：bun 全局缓存以 @opentui/core **0.6.1** 顶替钉版 0.5.14，病灶窗口内全部基准标错；"从未真绿"的提交穿门而过（双病灶之一） | oracle 缓存无版本/新鲜度证明 | oracle 三可证：版本硬断言（fail unless 0.5.14）+ 采集指纹（driver+scenario FNV-1a 双语镜像）+ always-refresh 终门；main.rs 自愈陈旧缓存、连续漂移硬错 |
-| 2 | **"实现了 ≠ 链路接通"**（两案：F16 leader>e 审计标 done 实战失效；sidebar 遮罩有渲染无关闭键层，模糊键全进不可见输入） | 审计只证实现存在，未证链路端到端 | 交互面修复必须带 PTY/field 级验证；审计状态只是起点提示 |
-| 3 | **双端差分 rig 五轮门只抓 fmt/goldens/flake，漏掉全部真实用户可见 bug**（omo-slim 侧栏、子代理切换、marquee、spinner 色、thought gutter 五案）→ 用户裁定退役 | 参照平价看不见用户插件内容；语料 vanilla-stub；时序节奏与色 token 绑定从未步进验证 | 差分测试 2026-10-17 退役；扫描循环接棒（后按裁定于 FIXW2 终止）；golden 降级为回归套件；常设仪器补：真实插件沙箱 + 时序 + token 覆盖 |
-| 4 | 金帧字节自洽放过"屏幕组合模型"错误（错 tab 模型、错 boot 路由都活到 beta.7 实战） | 金帧证明渲染保真，不证明组合/路由模型 | 交互模型类（路由/tabs/列表拉取）必须做参照源码级对比（file:line），不许 golden 自证 |
-| 5 | **合并静默回滚他 lane 成果**（C lane 自动合并回滚 B 的 availability 折叠、删测试；E2 被回退数个版本无人察觉，M0–M5 带伤建设） | 三/四方自动合并吃掉语义；rig 上差异被误读为"其他 lane 在飞" | 合并裁决必须列表级核对每个合并 lane 的删除清单；证据优先方整文件恢复；每 lane 合并后跑受影响 crate 测试 |
-| 6 | **幽灵提交**两案：lane 报"已提交"而分支仍在 base | lane 自述无凭据 | 派发模板要求最终报告贴 `git log -1 <branch>` 落地证明；缺证明=未完成 |
-| 7 | **无测试合并**：DERIG 推送未跑测试，main 的 parity 构建断一天 | 合并无门 | 每次 main 合并至少受影响 crate 构建+测试后再推，无例外 |
-| 8 | merge 后必须补 bun 内差分冒烟（纯 cargo 门看不见 JS 侧破坏，O2a×O2b 融合后 driver.ts 语法断裂存活） | 纯 Rust 门对 JS 侧盲 | harness 相关合并加 bun 冒烟 |
-| 9 | **lane 在 main checkout 遗留调试代码 → a3 基线 false green**（2026-11-03 实例：B 系列之前的 lane 把调试残留留在 /opt/opencode-rust 主检出，后续 lane 的基线日志在带毒树上采集，回归被基线吞掉） | lane 误碰 main checkout；基线日志未绑定树 hash，无法对到干净基点 | lane 一律禁碰 main checkout（只写自己 worktree，见 2.1#3）；基线日志必须能对到采集时的 `git rev-parse HEAD` 树 hash（报告贴 hash，无 hash=无效基线）；引用 ADR-0018 所在 B4 lane 的报告格式 |
-| 10 | `composer_tabs_walk`（oc-tui tests/pty_composer_tabs.rs）已知 flake：偶发超时未开 picker | PTY 时序敏感（runner 负载下 boot→按键窗口抖动），非产品回归 | 失败先重跑单测复核；若稳定复现再升级排查；不作为合并门单独阻塞项登记在案 |
-| 9 | **子代理"默认测试通过"假象 + 过滤指令吞失败详情**：首轮 cargo test 用了过滤/未带 --no-fail-fast，失败被折叠成汇总行，失败原因不可见，被迫第二轮重测定位，拖长 lane 周期（2026-10-27 收口 session 多 lane 观察） | 测试报告只看退出码/末行汇总；过滤参数（--lib、name filter）把红测试藏进被滤掉的集合 | lane 验证纪律：① 首轮测试**不加过滤**并带 `--no-fail-fast`，拿到全部结果；② 报告必须**原样引用 `test result:` 行**（含 passed/failed 计数），禁止只写"green/通过"；③ 有失败时**同一轮**立即用 `--exact <name> -- --nocapture` 重跑单个红测试取回失败输出，不得先交报告再返工；④ dev-gate 输出被截断时读保存的完整输出文件而非重跑 |
-| 10 | **测试证据随会话丢失 → 重复测试**：lane 报告只活在子代理会话里，宿主重启/会话回收后 orchestrator 或后续 lane 拿不到原始 test result 行，只能整轮重跑验证（2026-10-27 合并门曾整轮重测 5 crate，数十分钟；且 /tmp/opencode 有被整体清空的前科 2.1#4） | 测试输出没有落盘为持久文件；依赖会话内存或易失 /tmp | **一切测试运行必须 tee 落盘**：`tools/dev-gate.sh 'cargo test …' 2>&1 \| tee .test-logs/<crate>-<yyyymmdd-HHMM>-<lane>.log`（.test-logs/ 进 .gitignore、不随 /tmp 清空；merge gate 同规则）；lane 最终报告**必须给出日志文件路径 + 关键 `test result:` 行**；后续任何"是否已验证"的争议先读日志文件，禁止凭记忆重跑；日志含红项时连同基线证伪证据（基线 commit + 复现输出）一并落同一目录 |
-| 11 | **plain `cargo test --workspace` 产生大面积假红**（2026-10-28 rv-burndown 收口：cargo test 直跑 oc-tui 数十测红——PTY/VT 套件 spawn 真终端+stub server，在无限流/无重试下时序全崩；同一棵树 nextest 4450/4450 绿） | 本仓 canonical 测试 harness 是 nextest（.config/nextest.toml：test-threads=4、全局 retry=1、be1/pty 家族 retry=2 + [profile.pty] test-threads=1 序列化）；plain cargo test 绕过全部降载与重试机制 | 全 workspace 验证一律 `cargo nextest run --workspace --locked --no-fail-fast`；PTY 家族另跑 `--profile pty` 序列化（镜像 ci.yml 两 job）；禁以 plain cargo test 的红作为回归证据，除非单测 --exact 定位复现 |
-| 12 | **门命令形状两坑**（2026-11-05/06 双引擎工具期，各两次实证）：① `dev-gate.sh 'cargo nextest … \| tail -2'` 内嵌 tail 把 Summary 行截掉——合并门"绿"却无判定行证据，被迫整门重跑补证；② 子代理把 `tools/diff/run-all.sh` 包进 dev-gate（提示词里本是两条独立命令被擅自合并）——dev-gate 持全局锁后内部脚本再碰构建/锁，自锁风险+「测试一直没开始」假象 | 门命令的管道截断破坏 2.4#10 的证据落盘完整性；dev-gate 只设计为包 cargo/nextest 单命令，嵌套脚本=锁套锁 | **门命令=全量 tee，禁止内嵌 tail/head/grep 截断**；显示用 grep 只在 tee 之后单独执行；`tools/diff/run-all.sh`、`tools/parity/*.sh` 等脚本**直接跑不包 dev-gate**（lane 提示词逐字给两条命令并声明"一次一个门禁双发"） |
-| 13 | **测试「一直没开始」三连环**（2026-11-06 lane TBX 实例）：root 用 sed/编辑器改文件→文件属主变 root→降权 cargo/脚本 EACCES 静默失败；死会话双发两道门→target 构建互踩失败残根（日志作废）；`tools/diff/out/oracle/` 被 root 直跑污染→bun 逐场景 EACCES 全红但形似"卡住" | 属主污染链（2.1#2 的 sed/编辑器变体+输出目录变体）；双发违反"一次一个门"；输出目录属主无人核查 | worktree 动工前 `find . -user root -exec chown eternal130:eternal130 {} +`（含 target/out/oracle）；root 的文件编辑后立即 chown；一次一个门禁双发；门排队/卡住先查 `fuser /tmp/opencode/dev-gate.lock` 与 `ps` 残留（含 PPID1 孤儿）再归因 |
-| 14 | **lane 终报与门日志不对账**（多实例）：漏报第二个失败（声称"唯一失败"而日志有 2 个 FAIL）；日志时间戳/文件名误报 ≥4 次（报告写 0250 实际 0228 等）——合并方按错误路径找证据失败，险误判 | 终报靠会话记忆转述日志，非从磁盘读；时间戳拼接自 $(date) 预估值漂移 | orchestrator/lane 收尾**必须从磁盘核实**：`ls -t .test-logs/` 找真实文件名+`grep -cE 'FAIL' ` 核对失败计数与终报一致；报告只允许引用 `ls` 出的真实路径；**同树双引擎常设门**（`dual_engine_matches_frozen_oracle`，秒级、bun-free）与 opentui 差分全套（含 oracle 刷新 ~36s）作为渲染面变更的快速对账层 |
+| # | 规范 | 依据（事故→根因） |
+|---|---|---|
+| 1 | oracle 三可证：版本硬断言（fail unless @opentui/core 0.5.14）+ 采集指纹（driver+scenario FNV-1a 双语镜像）+ always-refresh 终门；main.rs 自愈陈旧缓存、连续漂移硬错 | 陈旧 oracle 缓存以 0.6.1 顶替钉版 0.5.14，病灶窗口基准全标错，"从未真绿"的提交穿门（双病灶之一） |
+| 2 | 交互面修复必须带 PTY/field 级验证；审计状态只是起点提示，不证链路端到端 | "实现了≠链路接通"两案：F16 leader>e 审计标 done 实战失效；sidebar 遮罩有渲染无关闭键层，模糊键全进不可见输入 |
+| 3 | 差分测试已退役（2026-10-17 用户裁定，扫描循环同止）；golden 降级为回归套件；常设仪器必须补：真实插件沙箱 + 时序 + token 覆盖 | 双端差分 rig 五轮门只抓 fmt/goldens/flake，漏掉全部真实用户可见 bug 五案（侧栏/子代理切换/marquee/spinner 色/thought gutter） |
+| 4 | 金帧只证明渲染保真，不证明组合/路由模型；交互模型类（路由/tabs/列表拉取）必须做参照源码级对比（file:line），不许 golden 自证 | 金帧字节自洽放过"屏幕组合模型"错误（错 tab 模型、错 boot 路由活到 beta.7 实战） |
+| 5 | 合并裁决必须列表级核对每个合并 lane 的删除清单；证据优先方整文件恢复；每 lane 合并后跑受影响 crate 测试 | 三/四方自动合并吃掉语义，静默回滚他 lane 成果（B 的 availability 折叠被回滚、E2 被回退数版无人察觉，M0–M5 带伤建设） |
+| 6 | lane 终报必须贴 `git log -1 <branch>` 落地证明；缺证明=未完成 | 幽灵提交两案：lane 报"已提交"而分支仍在 base（自述无凭据） |
+| 7 | 每次 main 合并至少受影响 crate 构建+测试后再推，无例外 | DERIG 无测试推送，main 的 parity 构建断一天 |
+| 8 | harness 相关合并加 bun 内差分冒烟 | 纯 cargo 门对 JS 侧盲：O2a×O2b 融合后 driver.ts 语法断裂存活 |
+| 9 | lane 一律禁碰 main checkout（只写自己 worktree，见 2.1#3）；基线日志必须能对到采集时的 `git rev-parse HEAD` 树 hash（报告贴 hash，无 hash=无效基线）；报告格式沿用 ADR-0018 所在 B4 lane 的格式 | lane 在 main checkout 遗留调试代码→a3 基线 false green（2026-11-03：B 系列之前 lane 的调试残留留在主检出，后续 lane 基线日志在带毒树上采集，回归被基线吞掉；基线未绑定树 hash 无法对到干净基点） |
+| 10 | 已知 flake（`composer_tabs_walk` 等，白名单见测试分层制度）失败先重跑单测复核；稳定复现才升级排查；不作为合并门单独阻塞项 | PTY 时序敏感（runner 负载下 boot→按键窗口抖动），非产品回归 |
+| 11 | 首轮测试**不加过滤**并带 `--no-fail-fast` 拿全量结果；报告**原样引用 `test result:` 行**（禁只写 green/通过）；红测试**同轮**用 `--exact <name> -- --nocapture` 取回失败输出，不得先交报告再返工；dev-gate 输出被截断时读保存的完整输出文件 | 过滤参数（--lib、name filter）把红测试藏进被滤集合，失败原因不可见，被迫二轮重测定位（2026-10-27 多 lane 观察） |
+| 12 | **一切测试运行必须 tee 落盘**：`tools/dev-gate.sh '…' 2>&1 \| tee .test-logs/<crate>-<yyyymmdd-HHMM>-<lane>.log`（.test-logs/ 进 .gitignore、不随 /tmp 清空；merge gate 同规则）；终报必须给日志路径 + 关键 `test result:` 行；任何"是否已验证"争议先读日志文件，禁止凭记忆重跑；红项连同基线证伪证据（基线 commit + 复现输出）落同一目录 | 测试证据随会话/宿主重启丢失，合并门曾整轮重测 5 crate 数十分钟（2026-10-27；/tmp 有被整体清空前科，见 2.1#4） |
+| 13 | 全 workspace 验证一律 `cargo nextest run --workspace --locked --no-fail-fast`；PTY 家族另跑 `--profile pty` 序列化（镜像 ci.yml 两 job）；禁以 plain `cargo test` 的红作回归证据（单测 --exact 定位复现除外） | plain cargo test 直跑 oc-tui 大面积假红——PTY/VT 套件无限流/无重试时序全崩，同树 nextest 4450/4450 绿（2026-10-28；canonical harness=nextest，.config/nextest.toml test-threads=4、全局 retry=1、be1/pty 家族 retry=2） |
+| 14 | 门命令=**全量 tee，禁内嵌 tail/head/grep 截断**；显示用 grep 只在 tee 之后单独执行；`tools/diff/run-all.sh`、`tools/parity/*.sh` 等脚本**直接跑不包 dev-gate**（lane 提示词逐字给两条独立命令）；一次一个门禁双发 | 内嵌 tail 截掉 Summary 行，合并门"绿"却无判定行证据被迫整门重跑（两次）；子代理擅自把 run-all.sh 包进 dev-gate=锁套锁+「测试一直没开始」假象（2026-11-05/06 各两次实证） |
+| 15 | worktree 动工前 `find . -user root -exec chown eternal130:eternal130 {} +`（含 target/out/oracle）；root 的文件编辑后立即 chown；门排队/卡住先查 `fuser /tmp/opencode/dev-gate.lock` 与 `ps` 残留（含 PPID1 孤儿）再归因 | 「测试一直没开始」三连环（2026-11-06 lane TBX）：root sed/编辑器污染属主→降权 EACCES 静默失败；死会话双发门→构建互踩残根；`tools/diff/out/oracle/` 被 root 污染→bun 逐场景 EACCES 全红形似卡住 |
+| 16 | 收尾**必须从磁盘核实**：`ls -t .test-logs/` 定位真实文件名 + `grep -cE 'FAIL'` 核对失败计数与终报一致；报告只允许引用 `ls` 出的真实路径；渲染面变更用同树双引擎常设门（`dual_engine_matches_frozen_oracle`，秒级 bun-free）+ opentui 差分全套（~36s 含 oracle 刷新）快速对账 | 终报漏报第二个失败（声称"唯一失败"实为 2 个 FAIL）；日志时间戳/文件名误报 ≥4 次（报告写 0250 实际 0228），合并方按错路径找证据险误判 |
 
 ### 2.5 工程卫生
 
-- 发布门 scoreboard：beta.13 起每修必配独立子代理门扫描，循环至全绿才发（GATE1–GATE5）。
-- lane 派发模板强制项：English commits、分块调用（≤45 分钟）、worktree 隔离、写明 dev-gate。
-- DNS 探针文件（/tmp/opencode/dns-probe.*）不是构建产物，勿清。
-- 仓库根曾经堆积垃圾文件（`None`、`refprobe.pid`）——2026-10-23 清除；收尾自查 `git status` 为模板必查项。
-- **子代理显式覆盖 git 提交身份**（2026-11-06 全量清理）：历史出现 `Fixer`/`lane`/`OpenCode Agent`/`lane-tby` 等自造身份与 `eternal130@localhost` 等邮箱变体 ~30 处——而身份配置四层齐全（/etc/gitconfig 系统级=root 全局=~/.gitconfig=仓库级，均为 `Eternal130 <Eternal130@outlook.com>`），唯一来源是子代理显式传 `--author`、`-c user.name/user.email`、`GIT_AUTHOR_*/GIT_COMMITTER_*`。修复=两仓 filter-branch 全量改写（树哈希逐字节不变）+ force push + opentui rev 重钉（2fbe00e→56a9eda）+ 文档 hash 全量重映射（`docs/COMMIT-IDENTITY-REMAP-20261106.md`）。规则：**子代理 git 提交一律仓库既有身份；派发模板必含禁令（禁 `--author`、`-c user.*`、`GIT_AUTHOR_*`/`GIT_COMMITTER_*`）**。
+| # | 规范 | 依据 |
+|---|---|---|
+| 1 | 发布门 scoreboard：每修必配独立子代理门扫描，循环至全绿才发（GATE1–GATE5） | beta.13 起制度 |
+| 2 | lane 派发模板强制项：English commits、分块调用（≤45 分钟）、worktree 隔离、写明 dev-gate、git 身份禁令（#5）；**完整命令逐字内联，禁「模板同前 lane」式引用** | 历史 lane 提示词曾两次被用户抓出缺陷（tee 分离/模板引用） |
+| 3 | DNS 探针文件（/tmp/opencode/dns-probe.*）不是构建产物，清理门勿清 | 误清风险登记 |
+| 4 | 收尾自查 `git status` 为模板必查项 | 仓库根曾堆积垃圾文件（`None`、`refprobe.pid`，2026-10-23 清除） |
+| 5 | 子代理 git 提交一律仓库既有身份（四层 gitconfig——/etc/gitconfig 系统级、root 全局、~/.gitconfig、仓库级——均已配 `Eternal130 <Eternal130@outlook.com>`）；派发模板必含禁令：**禁 `--author`、`-c user.name/user.email`、`GIT_AUTHOR_*/GIT_COMMITTER_*`** | 子代理显式覆盖造出 `Fixer`/`lane`/`OpenCode Agent`/`lane-tby` 等自造身份+`eternal130@localhost` 等邮箱变体 ~30 处（2026-11-06）；修复=两仓 filter-branch 全量改写（树哈希逐字节不变）+ force push + opentui rev 重钉（2fbe00e→56a9eda）+ hash 重映射（docs/COMMIT-IDENTITY-REMAP-20261106.md） |
 
 ## 测试分层制度（2026-11-06 定版）
 
@@ -316,13 +318,13 @@
 3. `TREE_ORACLE_FREEZE=1 tools/parity/tree-oracle-freeze.sh` 冻结入库（oracle 帧 **never cached, never port output**）
 4. **oracle 帧与冻结版不符=重钉事件，stop-and-escalate，不得擅自重冻结**
 
-测试纪律红线（详见 §2.4#11–14）：
+测试纪律红线（详见 §2.4#13–16）：
 - 一切测试 tee 到 `.test-logs/<crate>-<时间>-<lane>.log`；门命令全量 tee，禁内嵌 tail/head/grep 截 Summary；显示用 grep 在 tee 之后单独执行
 - `run-all.sh`、`tools/parity/*.sh` 直接跑不包 dev-gate（锁套锁）；一次一个门禁双发；卡住先 `fuser /tmp/opencode/dev-gate.lock` 查孤儿锁
 - worktree 动工前 `find . -user root -exec chown eternal130:eternal130 {} +`；root 编辑过的文件立即 chown
-- 禁 plain `cargo test`（绕过 nextest 限流/重试=大面积假红，§2.4#11）
+- 禁 plain `cargo test`（绕过 nextest 限流/重试=大面积假红，§2.4#13）
 - 白名单 flake 重试即过勿误判回归：`composer_tabs_walk` / `location_ttl_sweeper` / `mini_subagent_footer` / `scenario_permission_saved` / `e1_cells_paste_8k` / `e1_canary` / `catalog_refresh_propagates`
-- 终报与磁盘对账：`ls -t .test-logs/` 定位真实文件 + `grep -c FAIL` 核数，不信转述（§2.4#14）
+- 终报与磁盘对账：`ls -t .test-logs/` 定位真实文件 + `grep -c FAIL` 核数，不信转述（§2.4#16）
 
 ---
 
@@ -335,14 +337,14 @@
 | 终端 | TUI 只在 PTY/vt harness 内启动；探针只碰自有会话 | 终端隔离规则（2026-10-18） |
 | 信号 | 全仓 safe_signal；禁裸 PID；测试用自有子进程句柄 | `tools/guards/process_safety.py` |
 | 生命周期 | 前台分块 ≤45 分钟；WIP 提交；禁投已完成会话；子代理禁后台 | lane 派发模板 |
-| 验证报告 | 首轮测试不过滤+--no-fail-fast；报告原样引用 test result 行；红测试同轮 --exact --nocapture 取回原因 | 本册 2.4#9（2026-10-27） |
-| 测试证据落盘 | 一切测试 tee 到 .test-logs/<crate>-<时间>-<lane>.log（git-ignored）；报告给路径；争议先读日志禁止凭记忆重跑 | 本册 2.4#10（2026-10-27） |
+| 验证报告 | 首轮测试不过滤+--no-fail-fast；报告原样引用 test result 行；红测试同轮 --exact --nocapture 取回原因 | 本册 2.4#11（2026-10-27） |
+| 测试证据落盘 | 一切测试 tee 到 .test-logs/<crate>-<时间>-<lane>.log（git-ignored）；报告给路径；争议先读日志禁止凭记忆重跑 | 本册 2.4#12（2026-10-27） |
 | 写隔离 | 每 lane 独立 worktree；串行合并；删除清单核对 | 写隔离制度（2026-10-11） |
 | 合并 | 受影响 crate 构建+测试后推送；落地证明（git log -1） | 合并门（2026-10-18） |
 | oracle | 版本断言+指纹+always-refresh | `tools/diff`（opentui-rust） |
 | 磁盘 | 增量抑制（仓库级 .cargo/config.toml incremental=false，2026-10-25 起强制）/周期 clean；清理门 mtime≥30 分钟视为在用 | 本册 2.1#6 |
 | 验证 | 交互面必须 PTY/field 级；组合模型必须源码级对比；金帧=回归套件 | 方法论登记（ROADMAP §4） |
-| 门命令形状 | 门命令全量 tee 禁内嵌 tail/head/grep；脚本（run-all.sh、parity/*.sh）直接跑不包 dev-gate；一次一个门禁双发；终报与磁盘日志对账（ls -t 定位真实文件+grep -c FAIL 核数） | 本册 2.4#12–14（2026-11-06） |
+| 门命令形状 | 门命令全量 tee 禁内嵌 tail/head/grep；脚本（run-all.sh、parity/*.sh）直接跑不包 dev-gate；一次一个门禁双发；终报与磁盘日志对账（ls -t 定位真实文件+grep -c FAIL 核数） | 本册 2.4#14–16（2026-11-06） |
 | git 提交身份 | 子代理一律仓库既有身份（Eternal130）；禁 --author、-c user.name/user.email、GIT_AUTHOR_*/GIT_COMMITTER_*；派发模板必含禁令 | 本册 2.5（2026-11-06） |
 | 测试分层 | 按改动范围选层：常设门 0.1s→差分全套 36s→合并门 ~7min→pty ~28min；命令逐字内联禁引用；树场景重钉=stop-and-escalate | 测试分层制度（2026-11-06） |
 
