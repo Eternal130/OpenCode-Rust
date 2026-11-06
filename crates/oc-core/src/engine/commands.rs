@@ -18,6 +18,44 @@ use parking_lot::RwLock;
 use crate::config::command_md;
 use crate::config::Loaded;
 
+/// `plugin/command/initialize.txt`, verbatim (G-193.5, ref
+/// plugin/command.ts:8/31-41 — `${path}` substituted at registration).
+pub const COMMAND_INITIALIZE_TEMPLATE: &str = include_str!("command/initialize.txt");
+
+/// `plugin/command/review.txt`, verbatim.
+pub const COMMAND_REVIEW_TEMPLATE: &str = include_str!("command/review.txt");
+
+/// Seeds the builtin slash commands (ref `opencode.command` plugin,
+/// command.ts:28-54): `init` (guided AGENTS.md setup) and `review`
+/// (change review), template bodies verbatim with `${path}` bound to
+/// the project directory. `editor.add` semantics — a config command of
+/// the same name is REPLACED (the plugin transform runs after config
+/// load in v2).
+pub fn seed_builtin_commands(table: &CommandTable, project_directory: &std::path::Path) {
+    let directory = project_directory.display().to_string();
+    for (name, description, template) in [
+        ("init", "guided AGENTS.md setup", COMMAND_INITIALIZE_TEMPLATE),
+        (
+            "review",
+            "review changes [commit|branch|pr], defaults to uncommitted",
+            COMMAND_REVIEW_TEMPLATE,
+        ),
+    ] {
+        table.insert(CommandRegistration {
+            name: name.to_string(),
+            description: Some(description.to_string()),
+            source: CommandSource::Config(oc_schema::config::Command {
+                template: template.replace("${path}", &directory),
+                description: None,
+                agent: None,
+                model: None,
+                subagent: None,
+                subtask: None,
+            }),
+        });
+    }
+}
+
 /// Where a registered command came from (drives execution dispatch).
 #[derive(Debug, Clone, PartialEq)]
 pub enum CommandSource {
@@ -153,5 +191,52 @@ mod tests {
             Some(Some("Say hello again".to_string()))
         );
         assert_eq!(table.list().len(), 2);
+    }
+
+    /// G-193.5: the builtin `init`/`review` commands register with the
+    /// ref template bodies (`${path}` bound to the project directory)
+    /// and replace same-name config commands.
+    #[test]
+    fn builtin_commands_register_with_ref_templates() {
+        let table = CommandTable::empty();
+        seed_builtin_commands(&table, std::path::Path::new("/work/repo"));
+
+        let init = table.get("init").expect("init registered");
+        assert_eq!(init.description.as_deref(), Some("guided AGENTS.md setup"));
+        let CommandSource::Config(command) = &init.source else {
+            panic!("init is template-driven");
+        };
+        assert!(command.template.starts_with("Create or update `AGENTS.md` for this repository."));
+        assert!(command.template.contains("If `AGENTS.md` already exists at `/work/repo`, improve it"));
+        assert!(command.template.contains("$ARGUMENTS"));
+
+        let review = table.get("review").expect("review registered");
+        assert_eq!(
+            review.description.as_deref(),
+            Some("review changes [commit|branch|pr], defaults to uncommitted")
+        );
+        let CommandSource::Config(command) = &review.source else {
+            panic!("review is template-driven");
+        };
+        assert!(command
+            .template
+            .starts_with("You are a code reviewer. Your job is to review code changes and provide actionable feedback."));
+        assert!(command.template.contains("1. **No arguments (default)**: Review all uncommitted changes"));
+        assert!(command.template.contains("AVOID flattery, do not give any comments that are not helpful to the reader."));
+
+        // Same-name config command replaced (v2 plugin `editor.add`).
+        table.insert(CommandRegistration {
+            name: "init".to_string(),
+            description: None,
+            source: CommandSource::Config(oc_schema::config::Command {
+                template: "user override".to_string(),
+                ..Default::default()
+            }),
+        });
+        seed_builtin_commands(&table, std::path::Path::new("/work/repo"));
+        let CommandSource::Config(command) = &table.get("init").unwrap().source else {
+            panic!()
+        };
+        assert!(command.template.starts_with("Create or update `AGENTS.md`"));
     }
 }

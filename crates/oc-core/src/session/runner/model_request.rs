@@ -20,7 +20,7 @@ use crate::database::schema::SessionRow;
 use crate::hooks::HookRegistry;
 use crate::location::{ToolRegistryState, ToolRunFailure, ToolRunResult};
 use crate::session::runner::context::{provenance, provenance_matches, Loaded};
-use crate::session::runner::{to_llm_message, ModelError, ResolvedModel};
+use crate::session::runner::{identity, optimize, plan, to_llm_message, ModelError, ResolvedModel};
 
 /// Inline-image budget triggers (model-request.ts:43-46).
 const IMAGE_BYTES_TRIGGER: f64 = 25.0 * 1024.0 * 1024.0;
@@ -157,18 +157,46 @@ pub fn base_transcript(
     messages: &[MessageInfo],
 ) -> Transcript {
     let provider_metadata_key = model.provider_metadata_key().to_string();
-    let system_text = agent.system.clone().unwrap_or_else(|| {
-        crate::session::runner::system_prompt::make(&crate::session::runner::context::tool_names(
-            tools,
-        ))
-    });
-    let system: Vec<SystemPart> = [system_text, initial.to_string()]
+    // G-193.4 (plugin/optimize.ts): the first matching provider family
+    // template rewrites the DEFAULT system prompt (never a custom agent
+    // system — optimize.ts:81 skips those).
+    let system_text = match agent.system.clone() {
+        Some(system) => system,
+        None => optimize::apply(
+            &crate::session::runner::system_prompt::make(&crate::session::runner::context::tool_names(
+                tools,
+            )),
+            model.info.as_deref(),
+            &crate::session::runner::context::tool_names(tools),
+        ),
+    };
+    let mut system: Vec<SystemPart> = [system_text, initial.to_string()]
         .into_iter()
         .filter(|part| !part.is_empty())
         .map(SystemPart::new)
         .collect();
+    // G-193.2 (plugin/identity.ts:27): the "# Your Model" section
+    // splices at system index 1, between the base prompt and the
+    // initial instructions.
+    let identity = identity::identity_for(model.info.as_deref(), &model.reference);
+    let at = system.len().min(1);
+    system.insert(at, SystemPart::new(identity));
     let lowered =
         to_llm_message::to_llm_messages(messages, &model.reference, &provider_metadata_key);
+    let mut lowered = lowered;
+    // G-193.1 (plugin/plan.ts:58-74): the per-request Plan-mode reminder
+    // reconciliation over the lowered messages. (The ref also persists a
+    // synthetic user message; this port injects at request assembly
+    // only.)
+    {
+        let directory = plan::plan_directory(&oc_util::global_roots::resolve().home);
+        let enter = plan::enter_reminder(&directory);
+        let is_plan = agent.id.as_str() == "plan";
+        if let Some(text) = plan::reminder_for(is_plan, plan::last_reminder(&lowered, &enter), &enter)
+        {
+            plan::inject(&mut lowered, &text);
+        }
+    }
     Transcript { provider_metadata_key, system, messages: lowered }
 }
 
@@ -1051,6 +1079,7 @@ pub(crate) fn routed_provenance(
     let routed = ResolvedModel {
         model: request.model.clone(),
         reference: model.reference.clone(),
+        info: model.info.clone(),
         capabilities: model.capabilities.clone(),
         cost: model.cost.clone(),
         limit: model.limit,
@@ -1369,6 +1398,7 @@ mod hook_dispatch_tests {
                 variant: Some(oc_schema::id::ModelVariantId::parse("default")),
             },
             model,
+            info: None,
             capabilities: oc_schema::model::Capabilities::default(),
             cost: Vec::new(),
             limit: oc_schema::model::ModelLimit { context: 200_000, input: None, output: 32_000 },
@@ -1467,6 +1497,7 @@ mod route_guard_tests {
                 variant: Some(oc_schema::id::ModelVariantId::parse("default")),
             },
             model,
+            info: None,
             capabilities: oc_schema::model::Capabilities::default(),
             cost: Vec::new(),
             limit: oc_schema::model::ModelLimit { context: 200_000, input: None, output: 32_000 },
@@ -1602,6 +1633,7 @@ mod aisdk_dispatch_tests {
                 variant: Some(oc_schema::id::ModelVariantId::parse("default")),
             },
             model,
+            info: None,
             capabilities: oc_schema::model::Capabilities::default(),
             cost: Vec::new(),
             limit: oc_schema::model::ModelLimit { context: 200_000, input: None, output: 32_000 },
@@ -1803,5 +1835,127 @@ mod http_interceptor_tests {
         assert_eq!(request.url, "https://shaped.example/v1/chat");
         assert_eq!(request.method, "POST");
         assert_eq!(request.headers.get("x-shaped").map(String::as_str), Some("yes"));
+    }
+}
+
+#[cfg(test)]
+mod g193_prompt_surface_tests {
+    // G-193.2/G-193.4/G-193.1: the base_transcript prompt surfaces —
+    // identity splice at system[1], the optimize family template on the
+    // default (non-custom) system prompt, and the Plan-mode reminder
+    // reconciliation over the lowered messages.
+    use super::base_transcript;
+    use crate::session::runner::{plan, ResolvedModel};
+    use oc_ai::schema::messages::{ContentPart, Message, MessageRole};
+    use oc_schema::session_message::Info as MessageInfo;
+
+    fn resolved_with_info(id: &str, name: &str) -> ResolvedModel {
+        let mut resolved = crate::session::runner::tests_harness::test_resolved_model();
+        let mut info = oc_schema::model::Info::default_for(
+            oc_schema::id::ProviderId::parse("parityfake"),
+            oc_schema::id::ModelId::parse(id),
+        );
+        info.name = name.to_string();
+        resolved.info = Some(std::sync::Arc::new(info));
+        resolved
+    }
+
+    fn user_message(text: &str) -> MessageInfo {
+        MessageInfo::User {
+            id: oc_schema::id::MessageId::new(),
+            metadata: None,
+            time: oc_schema::session_message::Time { created: 0 },
+            text: text.to_string(),
+            files: None,
+            agents: None,
+            skills: None,
+        }
+    }
+
+    fn text_of(message: &Message) -> String {
+        match message.content.first() {
+            Some(ContentPart::Text { text, .. }) => text.clone(),
+            _ => String::new(),
+        }
+    }
+
+    #[test]
+    fn identity_section_lands_between_base_prompt_and_initial() {
+        let agent = oc_schema::agent::Info::default_for(oc_schema::id::AgentId::parse("build"));
+        let model = resolved_with_info("fake-model", "Fake Model");
+        let transcript = base_transcript(&agent, &model, &[], "INITIAL INSTRUCTIONS", &[]);
+        assert!(transcript.system[0].text.starts_with("You are an AI agent running in OpenCode"));
+        assert_eq!(
+            transcript.system[1].text,
+            "# Your Model\n- Name: Fake Model\n- Provider ID: parityfake\n- Model ID: fake-model"
+        );
+        assert_eq!(transcript.system[2].text, "INITIAL INSTRUCTIONS");
+    }
+
+    #[test]
+    fn optimize_family_template_replaces_the_default_prompt() {
+        // gpt-family id: the gpt.txt template replaces the default
+        // system text; identity still splices at index 1.
+        let agent = oc_schema::agent::Info::default_for(oc_schema::id::AgentId::parse("build"));
+        let model = resolved_with_info("gpt-5.1", "GPT-5.1");
+        let transcript = base_transcript(&agent, &model, &[], "", &[]);
+        assert!(transcript.system[0].text.contains("## Final Answer"));
+        assert!(transcript.system[1].text.starts_with("# Your Model"));
+        // claude-family id: append mode keeps the base text.
+        let model = resolved_with_info("claude-sonnet-4", "Claude");
+        let transcript = base_transcript(&agent, &model, &[], "", &[]);
+        assert!(transcript.system[0].text.starts_with("You are an AI agent running in OpenCode"));
+        assert_eq!(
+            transcript.system[0].text.trim_end(),
+            format!(
+                "{}\n\n{}",
+                crate::session::runner::system_prompt::make(&[]).trim_end(),
+                super::optimize::PROMPT_ANTHROPIC.trim_end()
+            )
+        );
+        // a custom agent system prompt bypasses the family template.
+        let mut custom = oc_schema::agent::Info::default_for(oc_schema::id::AgentId::parse("build"));
+        custom.system = Some("CUSTOM PROMPT".to_string());
+        let transcript = base_transcript(&custom, &model, &[], "", &[]);
+        assert_eq!(transcript.system[0].text, "CUSTOM PROMPT");
+    }
+
+    #[test]
+    fn plan_agent_gets_enter_reminder_others_get_leave() {
+        let build = oc_schema::agent::Info::default_for(oc_schema::id::AgentId::parse("build"));
+        let model = resolved_with_info("fake-model", "Fake");
+        let directory = plan::plan_directory(&oc_util::global_roots::resolve().home);
+        let enter = plan::enter_reminder(&directory);
+
+        // plan agent, no reminder yet → enter reminder before the last
+        // user message
+        let mut plan_agent =
+            oc_schema::agent::Info::default_for(oc_schema::id::AgentId::parse("plan"));
+        plan_agent.mode = oc_schema::agent::Mode::Primary;
+        let transcript =
+            base_transcript(&plan_agent, &model, &[], "", &[user_message("plan this")]);
+        assert_eq!(transcript.messages.len(), 2);
+        assert_eq!(transcript.messages[0].role, MessageRole::User);
+        assert_eq!(text_of(&transcript.messages[0]), enter);
+
+        // plan agent already reminded → no double injection
+        let transcript = base_transcript(
+            &plan_agent,
+            &model,
+            &[],
+            "",
+            &[user_message(&enter), user_message("more")],
+        );
+        assert_eq!(transcript.messages.len(), 2, "no extra reminder: {:?}", transcript
+            .messages
+            .iter()
+            .map(|m| text_of(m))
+            .collect::<Vec<_>>());
+
+        // non-plan agent carrying the enter reminder → leave reminder
+        let transcript =
+            base_transcript(&build, &model, &[], "", &[user_message(&enter), user_message("go")]);
+        assert_eq!(transcript.messages.len(), 3);
+        assert_eq!(text_of(&transcript.messages[1]), plan::LEAVE_REMINDER);
     }
 }

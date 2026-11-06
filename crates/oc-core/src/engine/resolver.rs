@@ -694,12 +694,16 @@ fn resolved_from(
         reference.variant = Some(oc_schema::id::ModelVariantId::parse("default"));
     }
     let compaction = info.settings.as_ref().and_then(|settings| settings.compaction);
+    let capabilities = info.capabilities.clone();
+    let cost = info.cost.clone();
+    let limit = info.limit;
     ResolvedModel {
         reference,
         model,
-        capabilities: info.capabilities.clone(),
-        cost: info.cost.clone(),
-        limit: info.limit,
+        info: Some(std::sync::Arc::new(info)),
+        capabilities,
+        cost,
+        limit,
         compaction,
         transport: None,
     }

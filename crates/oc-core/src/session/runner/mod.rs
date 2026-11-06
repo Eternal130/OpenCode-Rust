@@ -65,8 +65,11 @@
 pub mod compaction;
 pub mod context;
 pub mod drain;
+pub mod identity;
 pub mod max_steps;
 pub mod model_request;
+pub mod optimize;
+pub mod plan;
 pub mod prompt_prepare;
 pub mod publisher;
 pub mod retry;
@@ -405,6 +408,9 @@ pub struct ResolvedModel {
     pub model: oc_ai::LanguageModel,
     /// `Model.Ref` recorded on assistant messages.
     pub reference: model::Ref,
+    /// The catalog `Model.Info` snapshot (identity/optimize prompt
+    /// surfaces, G-193.2/G-193.4); `None` for non-catalog (test) models.
+    pub info: Option<std::sync::Arc<oc_schema::model::Info>>,
     pub capabilities: model::Capabilities,
     pub cost: Vec<model::Cost>,
     pub limit: model::ModelLimit,

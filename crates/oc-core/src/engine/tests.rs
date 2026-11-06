@@ -1552,7 +1552,7 @@ async fn engine_e2e_global_agents_md_backcompat_reads_the_suffixed_dir() {
 #[test]
 fn engine_seeds_explore_and_summary_agents() {
     let registry = Arc::new(crate::location::AgentRegistry::new());
-    super::seed_builtin_agents(&registry);
+    super::seed_builtin_agents(&registry, &std::path::Path::new("/home/test"));
 
     let explore = registry.get(&oc_schema::id::AgentId::parse("explore")).expect("explore seeded");
     let summary = registry.get(&oc_schema::id::AgentId::parse("summary")).expect("summary seeded");
@@ -1581,7 +1581,7 @@ fn engine_seeds_explore_and_summary_agents() {
 #[test]
 fn engine_explore_permissions_gate_mutating_tools() {
     let registry = Arc::new(crate::location::AgentRegistry::new());
-    super::seed_builtin_agents(&registry);
+    super::seed_builtin_agents(&registry, &std::path::Path::new("/home/test"));
     let explore = registry.get(&oc_schema::id::AgentId::parse("explore")).expect("explore");
     use oc_schema::permission::Effect;
     let rulesets = [explore.permissions.clone()];
@@ -1604,6 +1604,43 @@ fn engine_explore_permissions_gate_mutating_tools() {
     assert_effect("edit", "src/main.rs", Effect::Deny);
     assert_effect("bash", "rm -rf /tmp/x", Effect::Deny);
     assert_effect("subagent", "general", Effect::Deny);
+    assert_effect("external_directory", "/etc", Effect::Ask);
+}
+
+/// G-193.1 (ref plugin/plan.ts:33-43): the plan agent seeds as a
+/// visible primary with the verbatim description, questions allowed,
+/// edits denied everywhere EXCEPT `~/.opencode/plan/*` (also the only
+/// external directory allowed).
+#[test]
+fn engine_seeds_plan_agent() {
+    let registry = Arc::new(crate::location::AgentRegistry::new());
+    super::seed_builtin_agents(&registry, std::path::Path::new("/home/test"));
+    let plan = registry.get(&oc_schema::id::AgentId::parse("plan")).expect("plan seeded");
+    assert!(matches!(plan.mode, oc_schema::agent::Mode::Primary));
+    assert!(!plan.hidden);
+    assert_eq!(
+        plan.description.as_deref(),
+        Some("Read-only agent for exploring the codebase and planning work before implementation.")
+    );
+    use oc_schema::permission::Effect;
+    let rulesets = [plan.permissions.clone()];
+    let assert_effect = |action: &str, resource: &str, expected: Effect| {
+        assert_eq!(
+            crate::permission::evaluate(action, resource, &rulesets).effect,
+            expected,
+            "{action} {resource}"
+        );
+    };
+    assert_effect("question", "*", Effect::Allow);
+    assert_effect("edit", "src/main.rs", Effect::Deny);
+    assert_effect("edit", "/home/test/.opencode/plan/outline.md", Effect::Allow);
+    assert_effect(
+        "external_directory",
+        "/home/test/.opencode/plan/outline.md",
+        Effect::Allow,
+    );
+    // the base default survives: external directories outside the plan
+    // directory still ask
     assert_effect("external_directory", "/etc", Effect::Ask);
 }
 
