@@ -19,7 +19,7 @@ use crate::Client;
 /// rather than the ref's `Transport`/AbortError — reqwest cannot fabricate
 /// the transport error), `headers` are merged last, `on_activity` fires per
 /// SSE chunk including keepalive comments that yield no frame.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct RequestOptions {
     /// Cancellation token; when cancelled (including before send) the
     /// in-flight request is dropped and [`ClientError::Cancelled`] returns.
@@ -28,6 +28,16 @@ pub struct RequestOptions {
     pub headers: Vec<(reqwest::header::HeaderName, reqwest::header::HeaderValue)>,
     /// Invoked for every received streaming chunk (SSE).
     pub on_activity: Option<Arc<dyn Fn() + Send + Sync>>,
+}
+
+impl std::fmt::Debug for RequestOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RequestOptions")
+            .field("signal", &self.signal.is_some())
+            .field("headers", &self.headers)
+            .field("on_activity", &self.on_activity.is_some())
+            .finish()
+    }
 }
 
 impl RequestOptions {

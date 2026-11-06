@@ -5346,7 +5346,7 @@ pub mod session {
         /// POST /api/session/{sessionID}/move — operationId `session.move`
         /// Declared errors: `400` unknown, `401` UnauthorizedErrorEncoded, `404` SessionNotFoundErrorEncoded
         /// Per-request options (signal/headers/on-activity): see `_with_options`.
-        pub async fn move__with_options(
+        pub async fn move_with_options(
             &self,
             session_id: &str,
             body: &crate::types::SessionMoveBody,
@@ -5370,13 +5370,13 @@ pub mod session {
                 .await
         }
 
-        /// Same as [`Self::move__with_options`] with default options.
+        /// Same as [`Self::move_with_options`] with default options.
         pub async fn move_(
             &self,
             session_id: &str,
             body: &crate::types::SessionMoveBody,
         ) -> Result<(), crate::ClientError> {
-            self.move__with_options(session_id, body, &crate::transport::RequestOptions::default())
+            self.move_with_options(session_id, body, &crate::transport::RequestOptions::default())
                 .await
         }
 
