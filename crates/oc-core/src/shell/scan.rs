@@ -1843,7 +1843,12 @@ fn scan_bash(state: &mut BashState, start: usize, depth: usize) -> Result<BashLi
             else {
                 break;
             };
-            index = newline + 1;
+            // G-169: stop ON the newline so the next iteration routes it
+            // through the separator branch (ref scan.ts:584-588 uses
+            // `index = newline - 1` + trailing loop increment), which ends
+            // the current command (and consumes a pending heredoc) instead
+            // of merging the post-comment line into the commented command.
+            index = newline;
             continue;
         }
         if "<>&|;\n".contains(char) {
@@ -2806,7 +2811,13 @@ fn scan_bash_unit(
     } else {
         None
     };
-    if end.is_none() && char == '$' && "_0123456789@*#?$!-".contains(next_alnum(chars, index)) {
+    // G-202: charset per ref scan.ts:1126 `/[A-Za-z_0-9@*#?$!-]/` — letters
+    // included so `$FOO` scans as a variable name, not a literal `$`.
+    if end.is_none()
+        && char == '$'
+        && (next_alnum(chars, index).is_ascii_alphabetic()
+            || "_0123456789@*#?$!-".contains(next_alnum(chars, index)))
+    {
         if let Some(text) = text.as_deref_mut() {
             text.word.push('$');
         }

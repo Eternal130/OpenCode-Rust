@@ -198,7 +198,16 @@ fn char_boundary(text: &str, char_index: usize) -> usize {
     text.char_indices().nth(char_index).map_or(text.len(), |(index, _)| index)
 }
 
+/// Test hook for [`separator_after`] (char-index boundary).
+#[cfg(test)]
+pub(crate) fn separator_after_for_test(resource: &str, boundary: usize) -> String {
+    separator_after(resource, boundary)
+}
+
 /// ``/^\s+(?:`(?:\r\n|\r|\n)\s*)?/`` at `boundary` — a blank separator, or " ".
+/// G-190: the regex also swallows an optional PowerShell backtick-continuation
+/// (backtick + newline + following blanks) after the separator blanks
+/// (ref parse.ts:278-279).
 fn separator_after(resource: &str, boundary: usize) -> String {
     let byte = char_boundary(resource, boundary);
     let tail = &resource[byte..];
@@ -212,6 +221,29 @@ fn separator_after(resource: &str, boundary: usize) -> String {
     }
     if consumed.is_empty() {
         return " ".into();
+    }
+    // Optional `` `\n\s* `` continuation group.
+    let rest = &tail[consumed.len()..];
+    let mut continuation = 0usize;
+    if rest.starts_with('`') {
+        let newline_len = if rest[1..].starts_with("\r\n") {
+            2
+        } else if rest[1..].starts_with('\r') || rest[1..].starts_with('\n') {
+            1
+        } else {
+            0
+        };
+        if newline_len > 0 {
+            continuation += 1 + newline_len;
+            for c in rest[continuation..].chars() {
+                if c.is_whitespace() {
+                    continuation += c.len_utf8();
+                } else {
+                    break;
+                }
+            }
+            consumed.push_str(&rest[..continuation]);
+        }
     }
     consumed
 }

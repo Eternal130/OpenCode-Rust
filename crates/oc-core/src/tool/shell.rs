@@ -570,12 +570,20 @@ fn tool_result(output: &ShellToolOutput) -> ToolOutcome {
         .into_iter()
         .map(|text| oc_schema::tool::Content::Text { text })
         .collect();
+    // G-204: metadata mirrors shell.ts:83-93 — status plus the shared
+    // `ShellResult.metadata` helper (signal/timeout included) plus shellID.
     let mut metadata = serde_json::json!({ "status": output.status });
-    if output.truncated {
-        metadata["truncated"] = serde_json::json!(true);
-    }
-    if let Some(exit) = output.exit {
-        metadata["exit"] = serde_json::json!(exit);
+    let shared = crate::shell::result::metadata(&crate::shell::result::Output {
+        output: output.output.clone(),
+        truncated: output.truncated,
+        exit: output.exit,
+        signal: output.signal.clone(),
+        timeout: output.timeout,
+    });
+    if let serde_json::Value::Object(map) = shared {
+        for (key, value) in map {
+            metadata[key] = value;
+        }
     }
     if let Some(shell_id) = &output.shell_id {
         metadata["shellID"] = serde_json::json!(shell_id);
@@ -669,6 +677,41 @@ pub async fn user_command(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// G-204: tool_result metadata routes through `ShellResult.metadata` —
+    /// signal/timeout present when set, plus status/shellID (shell.ts:83-93).
+    #[test]
+    fn tool_shell_tool_result_metadata_carries_signal_and_timeout() {
+        let killed = ShellToolOutput {
+            output: String::new(),
+            exit: None,
+            signal: Some("SIGKILL".into()),
+            shell_id: Some("sh_1".into()),
+            truncated: true,
+            timeout: Some(true),
+            status: Some("completed".into()),
+        };
+        let outcome = tool_result(&killed);
+        let metadata = outcome.metadata.expect("metadata");
+        assert_eq!(metadata.get("signal"), Some(&serde_json::json!("SIGKILL")));
+        assert_eq!(metadata.get("timeout"), Some(&serde_json::json!(true)));
+        assert_eq!(metadata.get("truncated"), Some(&serde_json::json!(true)));
+        assert_eq!(metadata.get("status"), Some(&serde_json::json!("completed")));
+        assert_eq!(metadata.get("shellID"), Some(&serde_json::json!("sh_1")));
+
+        let plain = ShellToolOutput {
+            output: String::new(),
+            exit: Some(0.0),
+            signal: None,
+            shell_id: None,
+            truncated: false,
+            timeout: None,
+            status: Some("completed".into()),
+        };
+        let metadata = tool_result(&plain).metadata.expect("metadata");
+        assert!(metadata.get("signal").is_none(), "signal omitted when unset");
+        assert!(metadata.get("timeout").is_none(), "timeout omitted when unset");
+    }
 
     #[test]
     fn tool_shell_result_messages_compose_output_and_notice() {

@@ -18,7 +18,9 @@ use crate::session::runner::model_request::{
     bound_images, output_limit, unsupported_parts, useragent, AppMetadata, InputTokens, RequestKind,
 };
 use crate::session::runner::system_prompt::{make, render, SYSTEM_TEMPLATE};
-use crate::session::runner::{content_filter_error, to_session_error, SessionUsage};
+use crate::session::runner::{
+    content_filter_error, to_session_error, to_session_error_cause, SessionErrorCause, SessionUsage,
+};
 
 // ------------------------------------------------- session-system-prompt
 
@@ -369,6 +371,56 @@ fn runner_content_filter_error_joins_category_and_explanation() {
     let error = content_filter_error("Provider blocked the response", &details);
     assert_eq!(error.error_type, "provider.content-filter");
     assert_eq!(error.message, "Provider blocked the response (cyber): too hot");
+}
+
+/// G-205: nested `Tool.Error` causes recursively unwrap to the inner
+/// classification (to-session-error.ts:64-71).
+#[test]
+fn runner_to_session_error_cause_unwraps_nested_ai_error() {
+    // Tool error wrapping an AIError.Authentication → provider.auth, inner message.
+    let nested = SessionErrorCause::Ai(AiError::authentication("bad key"));
+    let cause = SessionErrorCause::tool("Unable to execute command: curl", Some(nested));
+    let error = to_session_error_cause(&cause);
+    assert_eq!(error.error_type, "provider.auth");
+    assert_eq!(error.message, "bad key");
+
+    // Deeper nesting still reaches the leaf AIError classification.
+    let deep = SessionErrorCause::tool(
+        "outer blanket",
+        Some(SessionErrorCause::tool("inner blanket", Some(SessionErrorCause::Ai(
+            AiError::invalid_request("bad param"),
+        )))),
+    );
+    let error = to_session_error_cause(&deep);
+    assert_eq!(error.error_type, "provider.invalid-request");
+    assert_eq!(error.message, "bad param");
+}
+
+/// G-205: empty-message fallback — a nested cause that unwraps to an empty
+/// message must not erase the tool's curated failure message.
+#[test]
+fn runner_to_session_error_cause_empty_nested_message_falls_back_to_tool_message() {
+    let empty = SessionErrorCause::Ai(AiError::authentication(""));
+    let cause = SessionErrorCause::tool("Unable to edit file", Some(empty));
+    let error = to_session_error_cause(&cause);
+    assert_eq!(error.error_type, "tool.execution");
+    assert_eq!(error.message, "Unable to edit file");
+
+    // No nested error at all → tool.execution with the leaf message.
+    let plain = to_session_error_cause(&SessionErrorCause::tool("boom", None));
+    assert_eq!(plain.error_type, "tool.execution");
+    assert_eq!(plain.message, "boom");
+}
+
+/// G-205: `Integration.AuthorizationError` maps to `provider.auth`.
+#[test]
+fn runner_to_session_error_cause_authorization_maps_to_provider_auth() {
+    let error = to_session_error_cause(&SessionErrorCause::Authorization(
+        "OAuth refresh failed".into(),
+    ));
+    assert_eq!(error.error_type, "provider.auth");
+    assert_eq!(error.message, "OAuth refresh failed");
+    assert!(error.status.is_none() && error.response.is_none());
 }
 
 // ------------------------------------------------- SessionUsage
