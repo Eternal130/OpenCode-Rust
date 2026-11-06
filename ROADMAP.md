@@ -3,6 +3,7 @@
 > Started 2026-10-11. Scope ruling (user directive): **everything in v2.0.24 must be migrated except the desktop app (packages/desktop, Tauri shell), including the Web UI (packages/app)**.
 > Spec source is fixed: opencode v2.0.24 (commit e7a34f09bf, /opt/opencode-ref read-only).
 > This document is the single gap ledger: every item has an ID, origin, status, and target batch; items are checked off on completion with acceptance evidence.
+> 2026-11-06 清理注记：本文件引用的一次性交付/审查报告（MIGRATION.md、FINDINGS.md、PORT_*.md、CODE_REVIEW_PARITY_*.md、docs/superpowers/plans/*、.superpowers/sdd/* 台账）已清理出树，全文经 git 历史可溯（清理提交的父提交）。
 
 ## Scope interpretation (recorded to prevent ambiguity)
 

@@ -52,7 +52,7 @@ Performance (measured on Linux, vs upstream v2 on Bun): `--version` 3 ms vs 744 
 | `tools/parity` | Parity harness: golden frames, scenarios, replays, acceptance batteries |
 | `tools/openapi-gen` | OpenAPI contract generator |
 
-Design docs: [MIGRATION.md](./MIGRATION.md) (plan & decision log), [PORT_REPORT.md](./PORT_REPORT.md) (delivery report & honest residual list), [docs/GAPS-AND-PITFALLS.md](./docs/GAPS-AND-PITFALLS.md) (open gaps & operational incident register).
+Design docs: [docs/GAPS-AND-PITFALLS.md](./docs/GAPS-AND-PITFALLS.md) (gap ledger & development standards), [ROADMAP.md](./ROADMAP.md) (campaign log), [docs/adr/](./docs/adr/) (architecture decisions).
 
 ## Build
 
@@ -118,4 +118,4 @@ Installed binaries can update themselves: `opencode-rust upgrade` checks the [re
 
 应用本体是纯 Rust 单二进制（约 44 MB，空闲内存约 80 MB）；Bun 仅在配置了插件或 MCP 服务器时作为子进程拉起（有旗舰插件满载时约 210 MB，无插件则完全不启动）。
 
-协议：MIT（与上游一致）。详见上方英文部分与 [PORT_REPORT.md](./PORT_REPORT.md)。
+协议：MIT（与上游一致）。详见上方英文部分。

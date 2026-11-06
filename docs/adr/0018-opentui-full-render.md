@@ -3,7 +3,7 @@
 > **2026-11-05 勘注**：本 ADR 决策 1（GridEmitter a1 路线）与决策 5（mini 薄缝）已被 **ADR-0019**（docs/adr/0019-render-pipeline-convergence.md，in progress）推翻——D2 落地后帧调度归活 CliRenderer、六族上共享树、mini 走真 split-footer 引擎（§5 所述薄缝/insert_before 模拟已从代码删除）。本 ADR 其余登记偏差由 ADR-0019 偏差账全文携带。本文其余内容为历史裁决记录，保留原样。
 
 - 状态：accepted（2026-11-03，Phase B4 收口；决策 1/5 已被 ADR-0019 取代）
-- 取代：FRAMEWORK-CONVERGENCE.md 的「混合架构 = 目标形态」裁决（已归档；本 ADR 为其正式推翻记录，见 `docs/PLAN-opentui-render-migration.md`）
+- 取代：FRAMEWORK-CONVERGENCE.md 的「混合架构 = 目标形态」裁决（已归档；本 ADR 为其正式推翻记录，原始推翻过程见 `docs/PLAN-opentui-render-migration.md`——该计划已完成并于 2026-11-06 清理出树，git 历史可溯）
 - 范围：crates/oc-tui（+ oc-cli 的 mini 前端）；opentui-rust 侧为 feature `terminal-backend`（rev 3606fda）
 
 ## 背景
