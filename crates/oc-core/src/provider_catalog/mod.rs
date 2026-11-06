@@ -15,6 +15,7 @@
 //!   [`refresh::CatalogSource`]/[`refresh::CatalogKv`] traits.
 
 pub mod catalog;
+pub mod copilot_sync;
 pub mod facade;
 pub mod local;
 pub mod native;

@@ -360,6 +360,9 @@ pub struct Engine {
     /// The integration/auth host (BE-3): auth-method registry, credential
     /// connections, OAuth/command attempt lifecycle, token refresh.
     pub integration: Arc<crate::integration::IntegrationHost>,
+    /// G-167 — the live copilot `/models` sync: the merged dynamic
+    /// github-copilot snapshot behind resolution + the free-title hook.
+    pub copilot_sync: Arc<crate::provider_catalog::copilot_sync::CopilotSync>,
     clock: Arc<dyn Clock>,
     ids: Arc<dyn IdGen>,
     rng: Arc<dyn RngSource>,
@@ -529,6 +532,33 @@ impl Engine {
             &catalog,
             &crate::session::runner::model_request::useragent(&options.app),
         );
+        // G-167 — the live copilot `/models` sync (the ref plugin's
+        // `load()` + provider transform): shared by the resolver (the
+        // merged dynamic model surface) and the free-title hook. The
+        // boot refresh runs against the credential binding; without one
+        // (tests, plain boots) it is a no-op and the static catalog
+        // serves github-copilot.
+        let copilot_sync = Arc::new(crate::provider_catalog::copilot_sync::CopilotSync::new(
+            Arc::clone(&facade_transport),
+        ));
+        {
+            let copilot_sync = Arc::clone(&copilot_sync);
+            let catalog = Arc::clone(&catalog);
+            let bindings = Arc::clone(integration.credential_bindings());
+            let useragent = crate::session::runner::model_request::useragent(&options.app);
+            tokio::spawn(async move {
+                let Some(binding) = bindings.get("github-copilot") else { return };
+                let base_url = binding
+                    .base_url
+                    .clone()
+                    .unwrap_or_else(|| {
+                        crate::provider_catalog::copilot_sync::COPILOT_BASE_URL_FALLBACK.to_string()
+                    });
+                copilot_sync
+                    .refresh(&catalog, base_url, binding.api_key, useragent)
+                    .await;
+            });
+        }
         // CRED-A1: keep the TYPED resolver handle when we own it — the
         // `models-dev.refreshed` subscription swaps its catalog cell so
         // refreshes propagate to resolution without a re-boot (v2
@@ -553,7 +583,8 @@ impl Engine {
                     )
                     .with_credentials(Arc::clone(&integration.credential_bindings()))
                     .with_console(Arc::clone(&integration.console_providers()))
-                    .with_local(Arc::clone(&local)),
+                    .with_local(Arc::clone(&local))
+                    .with_copilot_sync(Arc::clone(&copilot_sync)),
                 );
                 catalog_resolver = Some(Arc::clone(&typed));
                 typed
@@ -673,6 +704,7 @@ impl Engine {
             catalog,
             catalog_service,
             integration,
+            copilot_sync,
             clock: options.clock.clone(),
             ids: options.ids.clone(),
             rng: options.rng.clone(),
@@ -986,7 +1018,8 @@ impl Engine {
                     )
                     .with_credentials(Arc::clone(&self.integration.credential_bindings()))
                     .with_console(Arc::clone(&self.integration.console_providers()))
-                    .with_local(Arc::clone(&self.local)),
+                    .with_local(Arc::clone(&self.local))
+                    .with_copilot_sync(Arc::clone(&self.copilot_sync)),
                     Arc::clone(&self.resolver),
                 ))
             };
@@ -1008,6 +1041,28 @@ impl Engine {
         let agents = Arc::new(crate::location::AgentRegistry::new());
         let tools = Arc::new(crate::location::ToolRegistryState::new());
         let hooks = Arc::new(crate::hooks::HookRegistry::new());
+        // G-167 — the copilot free-title hook (the ref plugin's
+        // `session.title` registration, github-copilot.ts:402-432):
+        // copilot sessions name themselves through the free gpt-4o-mini
+        // utility channel; any failure falls through to the billable
+        // title path inside the handler.
+        {
+            let hook = crate::provider_catalog::copilot_sync::CopilotUtilityTitleHook::new(
+                Arc::clone(&self.copilot_sync),
+                Arc::clone(&self.facade_transport),
+                crate::session::runner::model_request::useragent(&self.app),
+            );
+            let registration = hooks
+                .register_session_title(
+                    Arc::new(hook),
+                    crate::hooks::HookOptions {
+                        provider_id: Some("github-copilot".to_string()),
+                        ..Default::default()
+                    },
+                )
+                .await;
+            hooks.keep(registration);
+        }
 
         // The websearch service (v2 `WebSearch.Service` +
         // `ConfigWebSearchPlugin`): providers eligible through the v2 env

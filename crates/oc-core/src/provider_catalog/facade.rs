@@ -324,6 +324,12 @@ pub enum ProtocolFamily {
     GoogleInteractions,
     /// GitHub Copilot: openai-compatible chat + the Copilot header policy.
     CopilotChat,
+    /// GitHub Copilot — the Anthropic escape lane (G-167): models
+    /// advertising `/v1/messages` rewrite their package to anthropic
+    /// (models.ts:164), so the standard anthropic-messages machinery
+    /// serves Claude-on-Copilot at `{copilot}/v1/messages` with the
+    /// copilot bearer token.
+    CopilotMessages,
     /// Alibaba Responses (G-84): the Open Responses baseline with the Model
     /// Studio dialect (`enable_thinking` / `previous_response_id` /
     /// `conversation`, named tool_choice → `allowed_tools`, the
@@ -501,11 +507,15 @@ pub fn language_model_for_model(
     let package = package_name(stored);
     // Copilot: the catalog entry is plain openai-compatible, but the bound
     // credential transport (BE-3b CredentialBindings) + the Copilot header
-    // policy make it its own family (github-copilot.ts:434-505).
-    let family = if provider_id == "github-copilot"
-        && package == "@opencode/ai/providers/openai-compatible"
-    {
-        ProtocolFamily::CopilotChat
+    // policy make it its own family (github-copilot.ts:434-505). G-167:
+    // a model whose package was rewritten to anthropic by the dynamic
+    // `/models` sync (models.ts:164 — `/v1/messages` support) takes the
+    // Anthropic Messages escape lane instead.
+    let family = if provider_id == "github-copilot" {
+        match package.as_str() {
+            "@opencode/ai/providers/anthropic" => ProtocolFamily::CopilotMessages,
+            _ => ProtocolFamily::CopilotChat,
+        }
     } else {
         family_of(&package).ok_or_else(|| ProviderError::UnsupportedProtocol {
             provider: provider_id.to_string(),
@@ -795,6 +805,36 @@ fn build_route(
                 },
             )
             .with(RoutePatch { provider: Some(provider_id.to_string()), ..Default::default() }))
+        }
+        ProtocolFamily::CopilotMessages => {
+            // G-167 — the Anthropic escape lane: the standard
+            // anthropic-messages protocol on the copilot `/v1` root
+            // ({copilot}/v1/messages, ref models.ts:163-166), bearer
+            // auth over the copilot token (the ref `http.request` hook
+            // rewrites the anthropic `x-api-key` into the copilot
+            // bearer header, github-copilot.ts:344-357 + applyHeaders
+            // `anthropic: true`).
+            let base = base_url
+                .clone()
+                .unwrap_or_else(|| crate::provider_catalog::copilot_sync::COPILOT_BASE_URL_FALLBACK.to_string());
+            let token = api_key.or_else(|| {
+                env.iter()
+                    .find(|name| name.as_str() == "GITHUB_TOKEN")
+                    .map(|name| Secret::Env(name.clone()))
+            });
+            Ok(anthropic_messages_route(transport)
+                .with(RoutePatch {
+                    id: Some("copilot-messages".to_string()),
+                    provider: Some(provider_id.to_string()),
+                    provider_metadata_key: Some("copilot".to_string()),
+                    auth: Some(auth::optional(token).bearer()),
+                    endpoint: Some(EndpointPatch {
+                        base_url: Some(format!("{base}/v1")),
+                        path: None,
+                        query: None,
+                    }),
+                    ..Default::default()
+                }))
         }
         ProtocolFamily::CopilotChat => Ok(copilot_chat_route(
             transport,
