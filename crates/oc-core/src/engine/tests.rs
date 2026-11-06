@@ -1779,3 +1779,90 @@ async fn tool_output_limits_hot_reapply_on_config_reload() {
 
     engine.shutdown().await;
 }
+
+// ===========================================================================
+// G-199: compatibility skill roots (config/plugin/compatibility.ts:39-56)
+// ===========================================================================
+
+#[test]
+fn engine_skills_table_scans_compat_claude_skills_roots() {
+    let dir = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+    let home = dir.path().join("home");
+    // A fake `~/.claude/skills` root with one skill.
+    std::fs::create_dir_all(home.join(".claude").join("skills").join("claude-only"))
+        .expect("compat skill dir");
+    std::fs::write(
+        home.join(".claude").join("skills").join("claude-only").join("SKILL.md"),
+        "---\nname: Claude Only\ndescription: Discovered via the compat root\n---\nClaude compat guidance",
+    )
+    .expect("skill file");
+    let loaded = crate::config::Loader::new(
+        dir.path().to_path_buf(),
+        crate::config::GlobalDirs { config: dir.path().join("cfg"), home: home.clone() },
+    )
+    .load();
+    assert!(
+        loaded.sources.claude.iter().any(|root| *root == home.join(".claude")),
+        "the fake ~/.claude root is a compatibility root (got {:?})",
+        loaded.sources.claude
+    );
+
+    let table = crate::engine::skills::ConfigSkillTable::discover(
+        &loaded,
+        dir.path(),
+        &home,
+        &BTreeMap::new(),
+    );
+    let skill = crate::tool::skill::SkillTable::get(&table, "claude-only")
+        .expect("a skill under ~/.claude/skills is discovered");
+    assert_eq!(skill.name.0, "Claude Only");
+    assert_eq!(skill.description.as_deref(), Some("Discovered via the compat root"));
+    assert!(skill.content.contains("Claude compat guidance"));
+}
+
+/// REF precedence: the compat root's skills join AFTER the config sources,
+/// so an id collision resolves to the compat entry (the compatibility
+/// plugin's `editor.add` overwrite).
+#[test]
+fn engine_skills_compat_root_overrides_config_skill_on_collision() {
+    let dir = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(dir.path().join("config-skills").join("shared")).expect("config dir");
+    std::fs::write(
+        dir.path().join("config-skills").join("shared").join("SKILL.md"),
+        "---\nname: Config Shared\n---\nconfig version",
+    )
+    .expect("config skill");
+    std::fs::create_dir_all(home.join(".agents").join("skills").join("shared")).expect("compat");
+    std::fs::write(
+        home.join(".agents").join("skills").join("shared").join("SKILL.md"),
+        "---\nname: Compat Shared\n---\ncompat version",
+    )
+    .expect("compat skill");
+    let loaded = crate::config::Loader::new(
+        dir.path().to_path_buf(),
+        crate::config::GlobalDirs { config: dir.path().join("cfg"), home: home.clone() },
+    )
+    .load();
+    let mut with_document = loaded.clone();
+    with_document.entries.push(oc_schema::config::Entry::Document(Box::new(
+        oc_schema::config::Document {
+            info: serde_json::from_value(serde_json::from_value::<serde_json::Value>(
+                serde_json::json!({ "skills": ["./config-skills"] }),
+            )
+            .expect("json"))
+            .expect("info"),
+            path: None,
+        },
+    )));
+
+    let table = crate::engine::skills::ConfigSkillTable::discover(
+        &with_document,
+        dir.path(),
+        &home,
+        &BTreeMap::new(),
+    );
+    let shared = crate::tool::skill::SkillTable::get(&table, "shared").expect("shared skill");
+    assert_eq!(shared.name.0, "Compat Shared");
+    assert!(shared.content.contains("compat version"), "the compat root wins the collision");
+}
