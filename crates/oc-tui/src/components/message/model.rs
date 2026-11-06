@@ -1381,6 +1381,71 @@ mod tests {
         assert_eq!(titlecase("plan b"), "Plan B");
     }
 
+    /// G-188 — `partitionPending` (grouping/session.ts:163-176): the
+    /// blocked tool's ref leaves the group's summary census
+    /// (`groupRefs`) and the exploration children sink to the bottom.
+    #[test]
+    fn partition_pending_moves_blocked_tools_out_of_the_group() {
+        let messages = vec![
+            user("u", "?", 0),
+            Message::Assistant {
+                id: "a".into(),
+                agent: "build".into(),
+                model: "m".into(),
+                parts: vec![
+                    Part::Tool {
+                        id: "t-read".into(),
+                        name: "read".into(),
+                        time: PartTime { created: Some(1), completed: Some(1) },
+                        state: ToolState::default(),
+                    },
+                    Part::Tool {
+                        id: "t-blocked".into(),
+                        name: "read".into(),
+                        time: PartTime { created: Some(2), completed: None },
+                        state: ToolState::default(),
+                    },
+                    Part::Tool {
+                        id: "t-grep".into(),
+                        name: "grep".into(),
+                        time: PartTime { created: Some(3), completed: Some(3) },
+                        state: ToolState::default(),
+                    },
+                ],
+                finish: None,
+                error: None,
+                time: PartTime::default(),
+                tokens: None,
+                usage_total: None,
+                cache_read: None,
+                retry: None,
+            },
+        ];
+        let mut rows = reduce_rows(&messages, &std::collections::HashSet::<String>::new());
+        let pending: std::collections::HashSet<String> = ["t-blocked".to_owned()].into_iter().collect();
+        partition_pending(&mut rows, &pending);
+        let Row::Group { children, pending: blocked, .. } = &rows[1] else {
+            panic!("expected exploration group, got {:?}", rows[1]);
+        };
+        // groupRefs excludes the blocked ref…
+        let refs = rows[1].part_refs();
+        assert_eq!(refs.len(), 2, "the census drops the blocked tool: {refs:?}");
+        // …but the group carries it as pending…
+        assert_eq!(blocked.len(), 1);
+        assert_eq!(blocked[0], ("a".to_owned(), "t-blocked".to_owned()));
+        // …and the blocked child sank to the bottom.
+        let child_ids: Vec<String> = children
+            .iter()
+            .filter_map(|child| match child {
+                Row::Entry(Entry::Part { part_id, .. }) => Some(part_id.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(child_ids, vec!["t-read".to_owned(), "t-grep".to_owned(), "t-blocked".to_owned()]);
+        // Including-pending walk still reaches every ref.
+        assert_eq!(rows[1].part_refs_including_pending().len(), 3);
+    }
+
     #[test]
     fn canonical_tool_names_strip_prefixes() {
         assert_eq!(canonical_tool_name("fs_read"), "read");

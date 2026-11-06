@@ -351,6 +351,7 @@ fn instructions_fixture()
             .collect(),
         size: messages.len(),
         completed: true,
+        pending: Vec::new(),
     };
     (messages, row)
 }

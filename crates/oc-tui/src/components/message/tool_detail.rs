@@ -1266,4 +1266,91 @@ mod tests {
         assert!(grid[1].trim_start().starts_with("↳ Loaded src/lib.rs"), "{}", grid[1]);
         assert!(grid[2].trim_start().starts_with("↳ Loaded src/util.rs"), "{}", grid[2]);
     }
+
+    /// G-182 — a multi-file patch renders ONE CARD PER FILE
+    /// (`<For each={files()}>`, index.tsx:3333-3378).
+    #[test]
+    fn patch_block_renders_one_card_per_file() {
+        let state = state_with(
+            ToolStatus::Completed,
+            &[],
+            None,
+            Some(serde_json::json!({
+                "files": [
+                    {
+                        "type": "update", "relativePath": "src/a.rs",
+                        "patch": "@@ -1,2 +1,2 @@\n ctx\n-old\n+new",
+                        "additions": 1, "deletions": 1
+                    },
+                    {
+                        "type": "add", "relativePath": "src/b.rs",
+                        "patch": "@@ -0,0 +1,1 @@\n+fresh",
+                        "additions": 1, "deletions": 0
+                    },
+                    {
+                        "type": "delete", "relativePath": "src/c.rs",
+                        "patch": "@@ -1,1 +0,0 @@\n-gone",
+                        "additions": 0, "deletions": 3
+                    }
+                ]
+            })),
+        );
+        let row = tool_detail_row("patch", &state, false, 0, &theme(), 60);
+        let text = frame_of(&row).text_grid().join("\n");
+        // Per-file status + path headers (one per card).
+        assert!(text.contains("← Patched src/a.rs"), "{text}");
+        assert!(text.contains("# Created src/b.rs"), "{text}");
+        assert!(text.contains("# Deleted src/c.rs"), "{text}");
+        // Each card keeps its own hunks/counts.
+        assert!(text.contains("+new"), "card 1 hunks: {text}");
+        assert!(text.contains("+fresh"), "card 2 hunks: {text}");
+        assert!(text.contains("-3 lines"), "the delete count row: {text}");
+        // Three separate BlockTool cards stack (one raised fill each).
+        assert_eq!(row.fills.len(), 3, "three cards");
+    }
+
+    /// G-183 — the answered question tool renders the `# Questions`
+    /// Q/A block; pending renders the asking row.
+    #[test]
+    fn question_tool_renders_answered_block_and_pending_row() {
+        let answered = state_with(
+            ToolStatus::Completed,
+            &[],
+            None,
+            Some(serde_json::json!({"answers": [["Yes"], [], ["a", "b"]]})),
+        );
+        let answered = ToolState {
+            input_json: Some(serde_json::json!({
+                "questions": [
+                    {"question": "Run tests?"},
+                    {"question": "Verbose?"},
+                    {"question": "Which scope?"}
+                ]
+            })),
+            ..answered
+        };
+        let row = tool_detail_row("question", &answered, false, 0, &theme(), 60);
+        let grid = frame_of(&row).text_grid();
+        assert!(grid[1].contains("# Questions"), "{}", grid[1]);
+        assert!(grid[2].contains("Run tests?"), "{}", grid[2]);
+        assert!(grid[3].contains("Yes"), "{}", grid[3]);
+        assert!(grid[5].contains("(no answer)"), "the empty-answer fallback: {}", grid[5]);
+        assert!(grid[7].contains("a, b"), "answers join with ', ': {}", grid[7]);
+
+        let pending = state_with(
+            ToolStatus::Running,
+            &[],
+            None,
+            None,
+        );
+        let pending = ToolState {
+            input_json: Some(serde_json::json!({
+                "questions": [{"question": "Run tests?"}]
+            })),
+            ..pending
+        };
+        let row = tool_detail_row("question", &pending, false, 0, &theme(), 60);
+        let grid = frame_of(&row).text_grid();
+        assert!(grid[0].contains("Asking questions…"), "{}", grid[0]);
+    }
 }

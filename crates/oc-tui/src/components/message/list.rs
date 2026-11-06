@@ -919,7 +919,10 @@ fn render_row(
         }
         Row::Group { kind, children, completed, .. } => {
             let expanded = group_default_expanded(kind, row, options);
-            group_row(kind.clone(), children, *completed, expanded, messages, options, theme, width)
+            // G-188 — the census walks `groupRefs` (the group's
+            // part refs EXCLUDING the permission-pending ones).
+            let refs = row.part_refs();
+            group_row(kind.clone(), children, &refs, *completed, expanded, messages, options, theme, width)
         }
     }
 }
@@ -994,6 +997,7 @@ fn source_text_part_row(text: &str, width: usize) -> RowRender {
 fn group_row(
     kind: crate::components::message::model::GroupKind,
     children: &[Row],
+    refs: &[(String, String)],
     completed: bool,
     expanded: bool,
     messages: &[Message],
@@ -1010,9 +1014,8 @@ fn group_row(
             // exploration label's tool-name census.
             if kind == GroupKind::Activity && options.verbosity == Verbosity::Low {
                 let mut first_running: Option<(String, bool)> = None;
-                let items: Vec<super::model::ActivityItem> = children
+                let items: Vec<super::model::ActivityItem> = refs
                     .iter()
-                    .flat_map(super::model::Row::part_refs)
                     .filter_map(|(message_id, part_id)| {
                         let message = messages.iter().find(|m| m.id() == message_id.as_str())?;
                         let Message::Assistant { parts, .. } = message else { return None };
@@ -1059,9 +1062,8 @@ fn group_row(
                     running_tool_row(&label, options.clock_ms, theme, width)
                 };
             }
-            let tools: Vec<String> = children
+            let tools: Vec<String> = refs
                 .iter()
-                .flat_map(super::model::Row::part_refs)
                 .filter_map(|(message_id, part_id)| {
                     let message = messages.iter().find(|m| m.id() == message_id.as_str())?;
                     let Message::Assistant { parts, .. } = message else { return None };
@@ -1720,5 +1722,138 @@ mod surf1_tests {
         let text = frame_of(&transcript).text_grid().join("\n");
         assert!(text.contains("$ echo hi"), "the shell cell: {text}");
         assert!(text.contains("hi"), "the output preview: {text}");
+    }
+
+    fn assistant_with(parts: Vec<Part>) -> Message {
+        Message::Assistant {
+            id: "a1".into(),
+            agent: "build".into(),
+            model: "fixture/fixture".into(),
+            parts,
+            finish: Some("stop".into()),
+            error: None,
+            time: crate::components::message::model::PartTime::default(),
+            tokens: None,
+            usage_total: None,
+            cache_read: None,
+            retry: None,
+        }
+    }
+
+    /// G-187 — a tool part with inline image content renders the
+    /// image strip row under the tool block (`ToolImages`).
+    #[test]
+    fn tool_part_with_images_renders_the_strip() {
+        let theme = theme();
+        use crate::components::message::model::{ToolState, ToolStatus, UserFile};
+        let state = ToolState {
+            status: ToolStatus::Completed,
+            input: [("path".to_owned(), "shot.png".to_owned())].into_iter().collect(),
+            images: vec![
+                UserFile { mime: "image/png".into(), data: "AAAA".into(), name: None },
+                UserFile { mime: "image/png".into(), data: "BBBB".into(), name: None },
+            ],
+            ..ToolState::default()
+        };
+        let messages = vec![
+            Message::User { id: "u1".into(), text: "go".into(), created: 0, files: Vec::new() },
+            assistant_with(vec![Part::Tool {
+                id: "t1".into(),
+                name: "read".into(),
+                time: crate::components::message::model::PartTime::default(),
+                state,
+            }]),
+        ];
+        let mut options = TranscriptOptions::default();
+        options.group_exploration = false;
+        options.image_strip.enabled = true;
+        options.image_strip.terminal_rows = 24;
+        let transcript = render_transcript(&messages, &options, &theme, 80);
+        let frame = transcript.paint(FollowState::Sticky, &theme, (80, 30), None);
+        let text = frame.text_grid().join("\n");
+        assert!(text.contains("Read shot.png"), "the tool row: {text}");
+        assert!(text.contains("[Image 1]"), "the strip placeholder: {text}");
+        assert!(text.contains("[Image 2]"), "every image: {text}");
+        // The strip row measures below the tool row (undecodable
+        // payloads → the bordered placeholder box, height = thumb+2).
+        let tool_row = transcript.rows.iter().find(|row| row.key == "part:a1:t1").unwrap();
+        assert!(tool_row.height > 4, "the strip stacked under the tool row");
+    }
+
+    /// G-184 — a RUNNING shell tool with `metadata.shellID` renders
+    /// the live inline poll's output (not the static `state.output`).
+    #[test]
+    fn inline_shell_renders_the_live_stream_output() {
+        let theme = theme();
+        use crate::components::message::model::{ToolState, ToolStatus};
+        let state = ToolState {
+            status: ToolStatus::Running,
+            input: [("command".to_owned(), "npm test".to_owned())].into_iter().collect(),
+            metadata: [("shellID".to_owned(), "sh_live".to_owned())].into_iter().collect(),
+            output: Some("stale snapshot".to_owned()),
+            ..ToolState::default()
+        };
+        let messages = vec![
+            Message::User { id: "u1".into(), text: "go".into(), created: 0, files: Vec::new() },
+            assistant_with(vec![Part::Tool {
+                id: "t1".into(),
+                name: "bash".into(),
+                time: crate::components::message::model::PartTime::default(),
+                state,
+            }]),
+        ];
+        let mut options = TranscriptOptions::default();
+        options
+            .shell_live
+            .insert("sh_live".to_owned(), "[earlier output omitted]\nlive tail".to_owned());
+        let transcript = render_transcript(&messages, &options, &theme, 80);
+        let frame = transcript.paint(FollowState::Sticky, &theme, (80, 30), None);
+        let text = frame.text_grid().join("\n");
+        assert!(text.contains("pm test"), "the command (the spinner glyph overwrites its lead): {text}");
+        assert!(text.contains("[earlier output omitted]"), "the 1MiB cap marker: {text}");
+        assert!(text.contains("live tail"), "the live text: {text}");
+        assert!(!text.contains("stale snapshot"), "the static output replaced");
+    }
+
+    /// G-188 — grouped completed tools + one permission-waiting tool:
+    /// the waiting tool renders OUTSIDE the (collapsed) group, below
+    /// its header, and the group census excludes it.
+    #[test]
+    fn permission_blocked_tool_renders_outside_the_group() {
+        let theme = theme();
+        use crate::components::message::model::{ToolState, ToolStatus};
+        let tool = |id: &str, status: ToolStatus| Part::Tool {
+            id: id.into(),
+            name: "read".into(),
+            time: crate::components::message::model::PartTime::default(),
+            state: ToolState { status, ..ToolState::default() },
+        };
+        let messages = vec![
+            Message::User { id: "u1".into(), text: "go".into(), created: 0, files: Vec::new() },
+            assistant_with(vec![
+                tool("t-done-1", ToolStatus::Completed),
+                tool("t-waiting", ToolStatus::Running),
+                tool("t-done-2", ToolStatus::Completed),
+            ]),
+        ];
+        let mut options = TranscriptOptions::default();
+        options.pending_permissions.insert("t-waiting".to_owned());
+        let transcript = render_transcript(&messages, &options, &theme, 80);
+        let frame = transcript.paint(FollowState::Sticky, &theme, (80, 30), None);
+        let text = frame.text_grid().join("\n");
+        // The collapsed census counts the two completed reads only.
+        assert!(text.contains("Explored: 2 reads"), "the census excludes the blocked tool: {text}");
+        // The blocked tool's own cell renders below the header.
+        let pending_row = transcript
+            .rows
+            .iter()
+            .find(|row| row.key == "pending:a1:t-waiting")
+            .expect("the blocked tool renders its own row below the group");
+        let header_row = transcript
+            .rows
+            .iter()
+            .find(|row| row.key.starts_with("group:"))
+            .expect("the exploration group header");
+        assert!(pending_row.y > header_row.y, "below the group header");
     }
 }
