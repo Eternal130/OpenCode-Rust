@@ -491,6 +491,38 @@ pub struct TerminalColors {
     pub palette: Vec<Option<String>>,
 }
 
+/// The palette-provider seam (`context/theme.tsx refreshPalette`'s
+/// `renderer.getPalette()`): production queries the terminal once at
+/// boot ([`CachedPaletteProvider`]); tests inject a stub. `None` =
+/// palette unavailable → the documented fallback keeps the builtin
+/// `opencode` document in the `system` slot.
+pub trait PaletteProvider {
+    fn query(&self) -> Option<TerminalColors>;
+}
+
+/// The production provider: the boot palette snapshot. The OSC 4/10/11
+/// probe runs before the input thread owns stdin
+/// ([`crate::terminal_proto::query_terminal_palette`]) and every
+/// regime reuses the snapshot (a transient timeout must not remap an
+/// immutable resolved theme — the ref caches it the same way).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CachedPaletteProvider {
+    colors: Option<TerminalColors>,
+}
+
+impl CachedPaletteProvider {
+    #[must_use]
+    pub fn new(colors: Option<TerminalColors>) -> Self {
+        Self { colors }
+    }
+}
+
+impl PaletteProvider for CachedPaletteProvider {
+    fn query(&self) -> Option<TerminalColors> {
+        self.colors.clone()
+    }
+}
+
 /// `tint` (theme/color.ts): lerp `overlay` over `base` by `alpha` on
 /// the 0-1 float channels, rounding like the ref.
 fn tint(base: Rgba, overlay: Rgba, alpha: f64) -> Rgba {
@@ -673,6 +705,26 @@ impl ThemeRegistry {
         });
         true
     }
+}
+
+/// The resolution/boot seam (`context/theme.tsx refreshPalette` +
+/// `applyPalette`): when the selected slot is `system`, query the
+/// palette and install `generateSystem(colors, mode)` into the
+/// registry BEFORE the name resolves. A non-`system` slot never probes
+/// (the ref's `if (theme !== "system") return`), and an unavailable
+/// palette returns `false`, leaving the documented builtin fallback in
+/// the `system` slot.
+pub fn install_system_theme(
+    registry: &mut ThemeRegistry,
+    name: &str,
+    mode: Mode,
+    provider: &dyn PaletteProvider,
+) -> bool {
+    if name != "system" {
+        return false;
+    }
+    let Some(colors) = provider.query() else { return false };
+    registry.set_system_theme(&colors, mode)
 }
 
 // -- system mode (theme/system.ts terminalMode) -------------------------------
@@ -1015,6 +1067,44 @@ mod generate_system_tests {
             resolve_theme_document(fallback.document(), Some(Mode::Dark)).unwrap().tokens.syntax.keyword,
             Rgba::from_hex("#b16286").unwrap()
         );
+    }
+
+    /// G-210 — the resolution seam: slot `system` probes the injected
+    /// provider and installs its generated document (origin System).
+    #[test]
+    fn install_system_theme_derives_the_slot_through_the_provider() {
+        struct Stub {
+            colors: Option<TerminalColors>,
+            calls: std::cell::Cell<usize>,
+        }
+        impl PaletteProvider for Stub {
+            fn query(&self) -> Option<TerminalColors> {
+                self.calls.set(self.calls.get() + 1);
+                self.colors.clone()
+            }
+        }
+
+        let provider = Stub { colors: Some(sample_colors()), calls: std::cell::Cell::new(0) };
+        let mut registry = ThemeRegistry::builtins();
+        assert!(install_system_theme(&mut registry, "system", Mode::Dark, &provider));
+        assert_eq!(provider.calls.get(), 1, "the system slot probes exactly once");
+        let entry = registry.get("system").expect("system slot");
+        assert_eq!(entry.origin, ThemeOrigin::System, "origin changes to System");
+        let theme = resolve_theme_document(&entry.document, Some(Mode::Dark)).expect("resolves");
+        assert_eq!(theme.tokens.syntax.keyword.hex(), "#b16286");
+
+        // A non-`system` name never probes (the ref's early return).
+        let mut other = ThemeRegistry::builtins();
+        assert!(!install_system_theme(&mut other, "opencode", Mode::Dark, &provider));
+        assert_eq!(provider.calls.get(), 1, "non-system slots skip the probe");
+        assert_eq!(other.get("system").expect("slot").origin, ThemeOrigin::Builtin);
+
+        // An unavailable palette leaves the documented builtin fallback.
+        let missing = Stub { colors: None, calls: std::cell::Cell::new(0) };
+        let mut bare = ThemeRegistry::builtins();
+        assert!(!install_system_theme(&mut bare, "system", Mode::Dark, &missing));
+        assert_eq!(missing.calls.get(), 1, "the probe ran but returned nothing");
+        assert_eq!(bare.get("system").expect("slot").origin, ThemeOrigin::Builtin);
     }
 }
 

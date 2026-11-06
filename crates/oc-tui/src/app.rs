@@ -157,6 +157,10 @@ pub struct App {
     /// The plugin-registered theme documents — re-applied after every
     /// config reload's registry rebuild.
     plugin_themes: Vec<(String, String)>,
+    /// G-210 — the terminal-palette source for the `system` theme slot
+    /// (`context/theme.tsx refreshPalette`). `None` (headless tests /
+    /// no boot probe) keeps the documented builtin fallback.
+    palette_provider: Option<std::rc::Rc<dyn crate::theme::PaletteProvider>>,
     /// TUI-TD15 — the armed `--prompt` startup prompt (v2 app.tsx:626's
     /// `startupPrompt`): seeded at boot, submitted once the model
     /// halves are ready (home.tsx:69-80 / index.tsx:597-604's gate).
@@ -208,6 +212,7 @@ impl App {
             applied_keybinds: Vec::new(),
             plugin_owned: Vec::new(),
             plugin_themes: Vec::new(),
+            palette_provider: None,
             startup_prompt: None,
             startup_prompt_sent: false,
         }
@@ -276,6 +281,15 @@ impl App {
         self.apply_plugin_themes();
     }
 
+    /// Install the terminal-palette source for the `system` theme slot
+    /// (production: the boot OSC 4/10/11 snapshot; tests: a stub).
+    pub fn set_palette_provider(
+        &mut self,
+        provider: std::rc::Rc<dyn crate::theme::PaletteProvider>,
+    ) {
+        self.palette_provider = Some(provider);
+    }
+
     /// Rebuild the live registry's plugin-theme segment.
     fn apply_plugin_themes(&self) {
         if self.plugin_themes.is_empty() {
@@ -297,16 +311,6 @@ impl App {
         // Attention (R-06): the resolved sounds/notifications config
         // reaches the engine on boot AND every reload.
         self.store.set_attention_config(config.attention.clone());
-        // Registry: builtins + discovered customs (discovery ran in the
-        // caller — the config only carries overrides here).
-        let mut registry = ThemeRegistry::builtins();
-        crate::theme::register_custom_themes(
-            &mut registry,
-            &crate::theme::discover_custom_themes(&Self::config_directories()),
-        );
-        self.store.set_registry(registry);
-        // Plugin themes ride every registry rebuild (config reload).
-        self.apply_plugin_themes();
         // Theme name + mode. v2's default follows the terminal: the
         // mode is `lock ?? renderer.themeMode ?? props.mode` — only an
         // explicit dark/light pin overrides the probe
@@ -317,6 +321,24 @@ impl App {
             _ => mode_hint,
         };
         let name = config.theme.name.clone().unwrap_or_else(|| "opencode".to_owned());
+        // Registry: builtins + discovered customs (discovery ran in the
+        // caller — the config only carries overrides here).
+        let mut registry = ThemeRegistry::builtins();
+        crate::theme::register_custom_themes(
+            &mut registry,
+            &crate::theme::discover_custom_themes(&Self::config_directories()),
+        );
+        // G-210 — the `system` slot derives from the terminal palette
+        // (context/theme.tsx `refreshPalette`: only the active `system`
+        // name probes; `setSystemTheme(generateSystem(colors, mode))`).
+        // No palette keeps `builtins()`' documented `opencode`
+        // fallback. The provider is the boot snapshot (tests inject).
+        if let Some(provider) = &self.palette_provider {
+            crate::theme::install_system_theme(&mut registry, &name, mode, provider.as_ref());
+        }
+        self.store.set_registry(registry);
+        // Plugin themes ride every registry rebuild (config reload).
+        self.apply_plugin_themes();
         let registry = self.store.registry();
         let resolved = registry.resolve(&name, mode);
         // ThemeErrorToast (auditB #9 — v2's theme-load errors surface
@@ -7662,6 +7684,17 @@ pub async fn run_with_size(
         tty_input_fd = Arc::new(std::sync::atomic::AtomicI32::new(fd));
         Arc::new(std::sync::Mutex::new(terminal))
     };
+    // G-210 — probe the terminal palette ONCE, before the input thread
+    // takes fd 0, and only when the configured theme is the `system`
+    // slot (context/theme.tsx's system-name effect). The ref's
+    // OSC 4/10/11 detector; the bounded 150 ms window is the retired
+    // OSC 11 boot probe's pattern, so a silent/headless terminal keeps
+    // the documented `opencode` fallback instead of stalling boot.
+    let boot_palette = if config.theme.name.as_deref() == Some("system") {
+        crate::terminal_proto::query_terminal_palette()
+    } else {
+        None
+    };
     // The crash-restore guards (lane TAIL P3): SIGHUP/SIGTERM keep the
     // write(2)-only path; the PANIC hook emits a static ANSI restore
     // burst (thread-gated — worker-thread panics are routinely
@@ -7734,6 +7767,12 @@ pub async fn run_with_size(
     // App + config boot.
     let store = Store::new(crate::reactive::Runtime::new());
     let mut app = App::with_store(store, size);
+    // G-210 — the `system` slot's palette source: the boot snapshot.
+    // `apply_config` installs `generate_system(colors, mode)` into the
+    // registry before resolving the name.
+    app.set_palette_provider(std::rc::Rc::new(crate::theme::CachedPaletteProvider::new(
+        boot_palette,
+    )));
     // RE-03 — the `@file` frecency provider (prompt/frecency.tsx:
     // onMount load of `<state>/frecency.jsonl` + the append/compact
     // sink on update): every session composer's autocomplete state
@@ -10609,6 +10648,75 @@ mod tests {
         let mut app = App::new((100, 30));
         app.apply_config(&config, Mode::Dark);
         assert_eq!(app.store.theme().mode, Mode::Dark, "dark terminal → dark mode");
+    }
+
+    /// G-210 — the production resolution seam: with the `system` theme
+    /// selected, `apply_config` probes the injected palette provider,
+    /// calls `set_system_theme`, and the registry's `system` slot takes
+    /// the generated document (origin changes Builtin → System).
+    #[test]
+    fn system_slot_derives_from_the_terminal_palette_provider() {
+        struct Stub(crate::theme::TerminalColors);
+        impl crate::theme::PaletteProvider for Stub {
+            fn query(&self) -> Option<crate::theme::TerminalColors> {
+                Some(self.0.clone())
+            }
+        }
+
+        let palette = crate::theme::TerminalColors {
+            default_background: Some("#282828".into()),
+            default_foreground: Some("#ebdbb2".into()),
+            palette: vec![
+                Some("#282828".into()),
+                Some("#cc241d".into()),
+                Some("#98971a".into()),
+                Some("#d79921".into()),
+                Some("#458588".into()),
+                Some("#b16286".into()),
+                None,
+                Some("#ebdbb2".into()),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ],
+        };
+        let mut app = App::new((100, 30));
+        app.set_palette_provider(std::rc::Rc::new(Stub(palette)));
+        let config =
+            crate::config::TuiConfig::parse(r#"{ "theme": { "name": "system" } }"#, None);
+        app.apply_config(&config, Mode::Dark);
+        assert_eq!(app.store.theme().name, "system");
+        let registry = app.store.registry();
+        let entry = registry.get("system").expect("system slot");
+        assert_eq!(entry.origin, crate::theme::ThemeOrigin::System, "generated slot installed");
+        let resolved = oc_theme::resolve::resolve_theme_document(&entry.document, Some(Mode::Dark))
+            .expect("resolves");
+        assert_eq!(resolved.tokens.syntax.keyword.hex(), "#b16286");
+    }
+
+    /// G-210 — palette unavailable (headless/timeout): the `system` slot
+    /// keeps the documented builtin `opencode` fallback.
+    #[test]
+    fn system_slot_without_a_palette_keeps_the_builtin_fallback() {
+        let mut app = App::new((100, 30));
+        let config =
+            crate::config::TuiConfig::parse(r#"{ "theme": { "name": "system" } }"#, None);
+        app.apply_config(&config, Mode::Dark);
+        let registry = app.store.registry();
+        let entry = registry.get("system").expect("system slot");
+        assert_eq!(entry.origin, crate::theme::ThemeOrigin::Builtin, "fallback slot untouched");
+        let resolved = oc_theme::resolve::resolve_theme_document(&entry.document, Some(Mode::Dark))
+            .expect("fallback resolves");
+        assert_eq!(
+            resolved.tokens.background.base,
+            ThemeState::v2_dark().resolved.tokens.background.base,
+            "fallback is the v2 opencode document"
+        );
     }
 
     // -- Phase 8 lane B: live pickers / editor / copy / persistence ---
