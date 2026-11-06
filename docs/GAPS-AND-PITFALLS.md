@@ -2,6 +2,8 @@
 
 > 2026-11-06 清理注记：下列各轮审查引用的一次性总报告（CODE_REVIEW_PARITY_*.md、PORT_AUDIT/PORT_COMPARISON*.md、COMPREHENSIVE_PORT_AUDIT.md 等）已清理出树，全文经 git 历史可溯（清理提交的父提交）；现行开发规范见文末「开发规范」节。
 
+> **2026-11-06 第十三轮（未收敛缺口复核，tui-full-convergence 收官后）**：对第十二轮未收敛的 45 项（G-165..G-210 全部 ❌/⚠️/🟢；G-177 已闭、G-211/212 为 ℹ️ 登记项不在范围）8 通道双侧源码逐项复核（rust@edfc770f vs ref）：**41 项维持 STILL_OPEN、4 项 PARTIAL（G-172/G-175/G-181/G-194，勘注已就地追加）、0 项整条关闭**——tui 侧 opentui-rust 收敛改造对第十二轮 TUI 缺口的实际清偿面很小（仅 G-181 的 ②/new 与 ③resize 两子项）。关键新事实：G-197 ref 已漂移至 139 方法/118 个 404 声明（rust 仍 75/142，缺口更宽）；G-170 连 isSettled 导出过滤也缺（弱于登记）；G-187 opentui 原生图片管线在位（session.rs:790-808）但 tool_detail 全臂仍喂 `images: Vec::new()`；G-200 的 `POST /session/{id}/view` 生成方法已存在（methods.gen.rs:3998-4011）零调用；G-165 custom 车道已加缺 baseURL 硬报错守卫（facade.rs:1362-1370，catalog 车道仍静默兜底 api.openai.com）；G-204 的 `shell/result.rs:75-87 metadata()` 已含 signal/timeout 但 tool_result 未调用。ref 锚点漂移勘正：tui index.tsx→routes/session/、ai models.ts→core/src/github-copilot/、websearch.ts→tool/plugin/、compatibility.ts→config/plugin/。明细 `/tmp/opencode/review/VERIFY_R13_2026-11-06.md`。
+
 > **2026-11-03 第十二轮（全量对比审查）**：22 通道逐文件全文对读（TS ~21 万行 / Rust ~40 万行生产代码）+ 3 通道缺口核验，对 50 项缺口声称逐项双侧源码取证：**新立项 46 项（G-165..G-210，含 🔴×6：Azure 未接线/Mcp.Protocol wire bug/Copilot anthropic 车道/第三方 anthropic 根 URL/shell 注释换行权限逃逸/transfer 脱敏弱）**、撤销 4 项初报 + 6 项子句修正（见文末第十二轮勘误）、5 项归类既有条目。总报告 `CODE_REVIEW_PARITY_2026-11-03.md`，域报告与核验记录 `/tmp/opencode/review/`。
 
 > **2026-11-02 第十一轮 burndown 收口（gap-burndown-7）**：第十轮立项的 G-105..G-164 全部 60 项经 lanes 1-9 落地并合并 main（lane1 043408d / lane2 3269839 / lane3 822d72d / lane4 88b25b5 / lane5 a28e380 / lane6 e516182 / lane7 e3395dc / lane8 3480df9 / lane9 本轮合并），逐条状态改标 ✅（G-163/G-164 维持 ℹ️ 登记项，G-161② 已修）。各 lane 有界偏离清单见文末第十一轮。
@@ -1107,6 +1109,7 @@ G-93..G-104 全部 ✅。现存未关闭项维持既有文档化决策：G-28（
 ### G-172 ⚠️ MiniMax chat / Meta messages 专用协议未移植（ai）
 - ref minimax.ts:58-75,91：`thinking` 选项 + `reasoning_split` 默认 true（防 `<think>` 内嵌）+ compat{store/strict:false}；rust minimax/chat → 泛化 OpenAIChat（facade.rs:383），oc-ai 无 minimax overlay。
 - ref meta.ts:113-118 + meta-messages.ts:44-45：MetaMessages（web_search 降级、拒 searchContextSize、thinking adaptive 默认）+ requireSignature:false；rust meta/messages → 泛化 AnthropicMessages（facade.rs:334）。
+- 2026-11-06 第十三轮勘注：meta-messages 的 **body wrap 已落地**（customization.rs:199-271 `meta_wrap`：web_search 重映射 + searchContextSize 拒绝；注册 :345、主链路调用 anthropic_messages.rs:1655/1810）——该半边收口。仍缺：minimax/chat 专用协议（thinking/reasoning_split/compat）与 meta 路由默认 thinking（adaptive/display omitted）；requireSignature 半边归 G-174。另注 ref minimax 的 messagesRoute 本就是纯 AnthropicMessages（minimax.ts:81），rust 侧 messages 泛化无差距。
 
 ### G-173 ⚠️ ToolSchemaProjection 未中央化（ai）
 - ref route/client.ts:565 在 prepareRequest 对**所有**路由统一应用 objectRoot + 按模型名清洗；rust `project_tools` 仅 gemini.rs:1380 / mistral_chat.rs:525 / cohere_chat.rs:146 调用，anthropic_messages.rs:574、openai_chat.rs:1982、openai_responses.rs:648、bedrock/converse.rs:252 裸用 `input_schema` → 无 object 根的 schema 与 kimi 清洗在主链路缺失。修法：在 Route::prepare_request 统一调 sanitizer::resolve(model)::project_tools。
@@ -1118,6 +1121,7 @@ G-93..G-104 全部 ✅。现存未关闭项维持既有文档化决策：G-28（
 ### G-175 ⚠️ chat 族 compat preset 注入不全（12+ 家）（ai）
 - facade.rs:1063-1072 仅注入 deepinfra/togetherai/cerebras/fireworks/digitalocean 五家（=G-119/G-121 修复成果）；专用工厂（facade.rs:871-887）与 chat_route 工厂（openai_chat.rs:3198-3223）均不带 compat，deepseek/groq 等 preset 函数仅 `#[cfg(test)]` 引用（openai_chat.rs:3626-3633）。
 - ref 注入 compat 的 chat 族：deepseek.ts:47 / groq.ts:92-98 / openrouter.ts:199 / venice.ts:43 / zai.ts:51 / zai-coding-plan.ts:68 / alibaba.ts:97 / minimax.ts:119 / moonshot.ts:111 / cohere.ts:43-48 / openai.ts:108 / azure.ts:132 / meta.ts:136 —— 全部未注入。G-118..G-121 根因扩展。
+- 2026-11-06 第十三轮勘注：oc-ai 已新增 deepseek/groq/openrouter/venice/zai/alibaba 六家 preset 函数（openai_chat.rs:3390-3452，字段与 ref 对齐）但**仍仅测试消费**（tests/body_parity.rs:263-268 + openai_chat.rs:3626-3637 family_compatibility 测试助手），route 工厂与 facade 注入表均不烘焙 → 生产仍仅五家；minimax/moonshot（含 sanitizer:"moonshot"）/cohere/openai/azure/meta 六家连 preset 都没有。
 
 ### G-176 ⚠️ flowchart 汇流排分组键=edge_index（3/4 臂失效）（tui）
 - routing.rs:899-905 `source_key()/target_key()` 恒返回 `self.edge_index` → 每组单元素 → `len()<2` 恒跳过；失效臂：horizontal_fan_in(:809)/vertical_fan_out(:841)/vertical_fan_in(:873)。**horizontal_fan_out(:738) 按真实节点 id 分组功能正常**（同文件两种写法并存）。
@@ -1139,9 +1143,10 @@ G-93..G-104 全部 ✅。现存未关闭项维持既有文档化决策：G-28（
 - ① console 捕获缺失：host.js:168-171 将 console 重路由为 NDJSON log 通知，不进执行结果 Logs（:2364-2365 自认）；ref stdlib/console.ts:9,21 捕获入 ctx.logs → 结果里 console 输出对模型不可见。
 - ② guest fetch 暴露超 ref 面：ref codemode **无任何 fetch 面**（grep 零命中）；rust guest 为裸 Bun fetch 无超时/大小上限 —— 网络出口是 ref 沙箱不存在的能力面。
 
-### G-181 ❌ mini 四缺口：model 偏好死绑定 / /new 不可用 / SIGWINCH / 断线恢复（tui/mini）
+### G-181 ⚠️（第十三轮降级：②③已修、①④残留）mini 四缺口：model 偏好死绑定 / /new 不可用 / SIGWINCH / 断线恢复（tui/mini）
 - ① runtime.rs:178 `let _preferences = ModelPreferenceRepository::new(...)` 下划线死绑定，全文件仅此一处（G-135 修的是 set_favorite 写路径，死绑定仍在）→ mini 内无法切换模型/变体。
 - ② /new 恒 "new sessions unavailable"（runtime.rs:490-496）；③ Lifecycle::resize 存在（lifecycle.rs:1139）但 mini 全目录零调用、无 SIGWINCH（主 TUI app.rs:9583 才有）→ resize 后 wrap 宽度错；④ :232-250 断线 500ms 盲重连同 client，无 reconnect client 替换、无 hydrate 重放（transport.rs:590-591 自认 "the live port boots once and never reconnects"）→ 断线窗口事件丢失。
+- 2026-11-06 第十三轮勘注（commits 5cc50385/f1f132f9 属实，②③收口）：②/new 已可用——runtime.rs:580-618 非 demo 走服务端 `create_session`（:973）并换 session_id/transport/subagents/queue/history + "new session {id}"（仅 demo 保留 unavailable）；③resize 已接——lifecycle.rs:1513/1532/1569（resize/poll_resize/observe_window_size，TIOCGWINSZ 轮询等价 SIGWINCH，ADR-0018），runtime.rs:362-364,716 调用；④250ms 重连 + hydrate 重放大半落地（runtime.rs:44,262-297,346-357：每轮新 subscribe、RECONNECT_MARKER、needs_hydrate→replay_history）但 client 实例从不替换（ref stream-v2.transport.ts:1533-1539 换 sdk）、transport.rs:590-591 旧注释已过时宜改；①读侧已接（runtime.rs:197-198 bind_model_preference→boot_model）但**写侧/切换面仍缺**（save_variant 零生产调用，mini 命令面仅 /exit /new /compact，ref runtime.ts:295-308 cycleVariant+saveVariant 无对应）。
 
 ### G-182 ❌ 消息内多文件 patch 只渲染第一个文件（tui）
 - tool_detail.rs:283 `files.first()`；ref index.tsx:3333-3378 `<For each={files()}>` 每文件一张卡 → ApplyPatch 多文件变更只显示 1 个。
@@ -1185,6 +1190,7 @@ G-93..G-104 全部 ✅。现存未关闭项维持既有文档化决策：G-28（
 
 ### G-194 ⚠️ compaction `due()` 边界：checkpoint 无 measured 时继续估算（core）
 - ref compaction.ts:242-251 `measured < findLastIndex(isCheckpoint)`——checkpoint 存在而 measured=-1 时 `-1 < idx` → return false（未到期）；rust runner/compaction.rs:916-941 `if let (Some,Some)` 才比较，measured=None 时继续 `estimate >= ceiling` → 刚完成 native 压缩、尚无新回复的会话可能重复触发压缩。
+- 2026-11-06 第十三轮勘注：代码形状分叉属实（:930-937 双 Some 才比较），但 :918-927 的 Completed-last 守卫（ref :244-246 同款）已挡住上述主后果——剩余误触发窗口仅「压缩完成后再发一条且 estimate 仍≥ceiling」的一拍，后果较登记收窄。
 
 ### G-195 ⚠️ native compaction 两偏差：webSocket:false + finish=error 不重试（core）
 - rust compaction.rs:638-671 prepare 硬编码 `web_socket:false`（:660）；ref compaction.ts:335 native 传 `"session"`（:569-590）→ rust native 压缩不走 session WS 缝（model_request.rs:914 仅 true 才生成 WebSocketSeams）。
