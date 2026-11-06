@@ -4224,12 +4224,22 @@ pub struct HttpSelectionSink {
 /// per-watermark `acknowledged` guard).
 pub struct HttpSessionViewSink {
     client: oc_client::Client,
+    /// G-197 — per-sink cancellation: aborts the `session.view` retry
+    /// loop in-flight and prevents further attempts (v2 passes an
+    /// `AbortSignal` through `RequestOptions` for the same purpose).
+    signal: tokio_util::sync::CancellationToken,
 }
 
 impl HttpSessionViewSink {
     #[must_use]
     pub fn new(client: oc_client::Client) -> Self {
-        Self { client }
+        Self { client, signal: tokio_util::sync::CancellationToken::new() }
+    }
+
+    /// The sink's cancellation signal (cancel to stop retrying view acks).
+    #[must_use]
+    pub fn signal(&self) -> &tokio_util::sync::CancellationToken {
+        &self.signal
     }
 }
 
@@ -4245,17 +4255,28 @@ fn view_retry_delay(attempt: u32) -> std::time::Duration {
 impl crate::store::SessionViewSink for HttpSessionViewSink {
     fn view(&self, session_id: &str, idle: f64) {
         let client = self.client.clone();
+        let signal = self.signal.clone();
         let session_id = session_id.to_owned();
         tokio::spawn(async move {
             let mut attempt = 0u32;
             loop {
-                if client
+                // G-197: per-request options — the pre-cancelled token
+                // short-circuits before any IO.
+                let options =
+                    oc_client::RequestOptions::new().with_signal(signal.clone());
+                match client
                     .session()
-                    .view(&session_id, &oc_client::types::SessionViewBody { idle })
+                    .view_with_options(
+                        &session_id,
+                        &oc_client::types::SessionViewBody { idle },
+                        &options,
+                    )
                     .await
-                    .is_ok()
                 {
-                    return;
+                    Ok(()) => return,
+                    // Cancelled sink: stop retrying (the ack is moot).
+                    Err(oc_client::ClientError::Cancelled) => return,
+                    Err(_) => {}
                 }
                 let delay = view_retry_delay(attempt);
                 attempt += 1;
