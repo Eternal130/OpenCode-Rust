@@ -5161,6 +5161,14 @@ pub enum LoopRequest {
     ShellView {
         shell_id: String,
     },
+    /// G-184 — the INLINE shell arm's incremental `shell.output`
+    /// fetch (cursor + the 1MiB display limit,
+    /// session/index.tsx:2836-2843): one page of a running tool
+    /// part's shell, landed via `LoopFetch::ShellInline`.
+    ShellInline {
+        shell_id: String,
+        cursor: u64,
+    },
     /// `session.background`.
     SessionBackground {
         session_id: String,
@@ -5241,6 +5249,13 @@ pub enum LoopFetch {
         result: Result<(Vec<crate::components::message::model::Message>, Option<String>), String>,
     },
     SessionList(Result<Vec<crate::data::SessionSnapshot>, String>),
+    /// G-184 — the inline shell arm's incremental `shell.output` page
+    /// (the fetch result of `LoopRequest::ShellInline`).
+    ShellInline {
+        shell_id: String,
+        output: String,
+        cursor: u64,
+    },
     /// G-127 — the `@`-reference `fs.find` rows (keyed by the query
     /// they answered — the drain applies them only when the popup's
     /// query still matches, the ref `createResource` semantics).
@@ -6188,6 +6203,37 @@ pub fn spawn_loop_fetcher(
                             },
                         };
                         let _ = tx.send(LoopFetch::ShellView(view));
+                    });
+                }
+                // G-184 — the INLINE shell arm's cursor fetch
+                // (`loadBackgroundOutput`, session/index.tsx:2836-2843):
+                // one `shell.output` page from the stream's cursor,
+                // capped at the 1MiB display limit.
+                LoopRequest::ShellInline { shell_id, cursor } => {
+                    let client = client.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let Ok(page) = client
+                            .shell()
+                            .output(
+                                &shell_id,
+                                &oc_client::types::ShellOutputQuery {
+                                    cursor: Some(cursor.to_string()),
+                                    limit: Some(
+                                        crate::store::SHELL_DISPLAY_LIMIT.to_string(),
+                                    ),
+                                    location: None,
+                                },
+                            )
+                            .await
+                        else {
+                            return;
+                        };
+                        let _ = tx.send(LoopFetch::ShellInline {
+                            shell_id,
+                            output: page.data.output,
+                            cursor: u64::try_from(page.data.cursor.max(0)).unwrap_or(0),
+                        });
                     });
                 }
                 LoopRequest::SessionBackground { session_id } => {
@@ -9173,6 +9219,12 @@ pub async fn run_with_size(
                 LoopFetch::ShellView(view) => {
                     app.store.set_shell_view(Some(view));
                 }
+                // G-184 — the inline shell arm's incremental page
+                // lands (the 1s poll's cursor fetch).
+                LoopFetch::ShellInline { shell_id, output, cursor } => {
+                    let delta = strip_ansi_like(&output);
+                    app.store.inline_shell_ingest(&shell_id, &delta, cursor);
+                }
                 LoopFetch::TerminalListed { session_id, result } => match result {
                     Ok(terminals) => app.store.set_terminals(&session_id, terminals),
                     Err(error) => {
@@ -9507,6 +9559,13 @@ pub async fn run_with_size(
             shell_view_polled_at = std::time::Instant::now();
             if let Some(shell_id) = app.store.active_shell_output_viewer() {
                 let _ = loop_fetch_tx.send(LoopRequest::ShellView { shell_id });
+            }
+            // G-184 — the INLINE shell arms poll on the same 1s
+            // cadence (`setInterval(() => loadBackgroundOutput(), 1_000)`
+            // — session/index.tsx:2867): every running shell tool
+            // part's stream advances from its cursor.
+            for (shell_id, cursor) in app.store.inline_shell_targets() {
+                let _ = loop_fetch_tx.send(LoopRequest::ShellInline { shell_id, cursor });
             }
         }
         // Config reload: keybinds + theme re-merge through the store.

@@ -116,9 +116,17 @@ pub struct ToolState {
     /// util/tool-display.ts:59-62) — the shell output / read output
     /// the detail cells preview.
     pub output: Option<String>,
+    /// G-187 — `inlineToolImages` (session/index.tsx:2518-2523): the
+    /// inline `data:image/*` file blocks of `state.content`, fed
+    /// through the same `SessionImages` strip the user-message
+    /// attachments use (under the tool block).
+    pub images: Vec<UserFile>,
     /// `state.error.message` on `failed` — the error row + the
     /// `DialogExecute` error variant.
     pub error: Option<String>,
+    /// G-183 — `state.input` verbatim: the question arm's
+    /// `input.questions` array (the stringified map flattens arrays).
+    pub input_json: Option<serde_json::Value>,
 }
 
 /// The tool part status (`state.status`).
@@ -483,11 +491,19 @@ pub enum Row {
         /// Descendant leaf count (`size`).
         size: usize,
         completed: bool,
+        /// G-188 — `row.pending` (`partitionPending`,
+        /// grouping/session.ts:163-176): the permission-BLOCKED part
+        /// refs under the group. The collapsed summary excludes them
+        /// (`groupRefs`), and the group renders them below the header
+        /// even while collapsed (`PendingEntries`, group-view.tsx:293-312).
+        pending: Vec<PartRef>,
     },
 }
 
 impl Row {
-    /// `groupRefs`: the part references under a row (groups recurse).
+    /// `groupRefs`: the part references under a row (groups recurse),
+    /// EXCLUDING the group's permission-pending refs for the
+    /// exploration/activity kinds (`groupRefs(row)` — session.ts:154-166).
     #[must_use]
     pub fn part_refs(&self) -> Vec<PartRef> {
         match self {
@@ -495,7 +511,31 @@ impl Row {
                 vec![(message_id.clone(), part_id.clone())]
             }
             Self::Entry(_) => Vec::new(),
-            Self::Group { children, .. } => children.iter().flat_map(Self::part_refs).collect(),
+            Self::Group { kind, children, pending, .. } => {
+                if matches!(kind, GroupKind::Exploration | GroupKind::Activity) {
+                    children.iter().flat_map(Self::part_refs).collect::<Vec<_>>()
+                        .into_iter()
+                        .filter(|r#ref| !pending.contains(r#ref))
+                        .collect()
+                } else {
+                    children.iter().flat_map(Self::part_refs).collect()
+                }
+            }
+        }
+    }
+
+    /// `groupRefs(row, true)`: every descendant part ref, pending
+    /// included.
+    #[must_use]
+    pub fn part_refs_including_pending(&self) -> Vec<PartRef> {
+        match self {
+            Self::Entry(Entry::Part { message_id, part_id }) => {
+                vec![(message_id.clone(), part_id.clone())]
+            }
+            Self::Entry(_) => Vec::new(),
+            Self::Group { children, .. } => {
+                children.iter().flat_map(Self::part_refs_including_pending).collect()
+            }
         }
     }
 
@@ -742,6 +782,7 @@ fn project_entries(projections: Vec<Projection>) -> Vec<Row> {
                     children: to_rows(node.children),
                     size: node.size,
                     completed: false,
+                    pending: Vec::new(),
                 },
             })
             .collect()
@@ -791,9 +832,55 @@ fn project_entries(projections: Vec<Projection>) -> Vec<Row> {
             children: to_rows(node.children),
             size: node.size,
             completed: next_closes || reasoning_all_done,
+            pending: Vec::new(),
         });
     }
     rows
+}
+
+/// G-188 — `partitionPending` (grouping/session.ts:163-176): tools
+/// AWAITING AUTHORIZATION display separately OUTSIDE the collapsed
+/// group and sink to the bottom. Exploration groups reorder their
+/// DIRECT blocked part children to the end (the stable partition
+/// order when permissions are admitted/dismissed); both exploration
+/// and activity groups carry the blocked refs as `pending` — the
+/// collapsed summary's `groupRefs` excludes them and the header
+/// renders them below (`PendingEntries`).
+pub fn partition_pending(rows: &mut [Row], pending: &std::collections::HashSet<String>) {
+    if pending.is_empty() {
+        return;
+    }
+    for row in rows.iter_mut() {
+        let Row::Group { kind, children, pending: blocked, .. } = row else { continue };
+        if !matches!(kind, GroupKind::Exploration | GroupKind::Activity) {
+            continue;
+        }
+        if matches!(&*kind, GroupKind::Exploration) {
+            // The production exploration rule creates direct part
+            // children — keep the blocked ones stable at the end.
+            let blocked_children: Vec<Row> = children
+                .iter()
+                .filter(|child| {
+                    matches!(child, Row::Entry(Entry::Part { part_id, .. }) if pending.contains(part_id))
+                })
+                .cloned()
+                .collect();
+            if !blocked_children.is_empty() {
+                children.retain(|child| {
+                    !matches!(child, Row::Entry(Entry::Part { part_id, .. }) if pending.contains(part_id))
+                });
+                children.extend(blocked_children);
+            }
+        }
+        // Activity groups render blocked tools outside the summary
+        // without reordering.
+        let blocked_refs = children
+            .iter()
+            .flat_map(Row::part_refs_including_pending)
+            .filter(|(_, part_id)| pending.contains(part_id))
+            .collect();
+        *blocked = blocked_refs;
+    }
 }
 
 /// `reasoningSummary` (`context/thinking.ts`): a leading `**Title**`

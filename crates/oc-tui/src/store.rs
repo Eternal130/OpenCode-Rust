@@ -1748,6 +1748,10 @@ pub struct Store {
     /// The `DialogShellOutput` viewer's content (`shell.get` +
     /// `shell.output` tail), `None` while the fetch is in flight.
     shell_view: Signal<Option<ShellOutputView>>,
+    /// G-184 — the INLINE shell arms' live streams, keyed by the
+    /// tool part's `metadata.shellID` (the cursor-incremental
+    /// `shell.output` poll — session/index.tsx:2826-2889).
+    inline_shells: std::cell::RefCell<std::collections::HashMap<String, InlineShellStream>>,
     /// The model-ring persistence flag (the run loop drains it).
     model_ring_dirty: Cell<bool>,
     /// #4: the footer's `{directory}:{branch}` location label — the
@@ -3449,6 +3453,52 @@ pub struct ShellOutputView {
     pub error: Option<String>,
 }
 
+/// G-184 — one INLINE shell arm's live stream (`ShellDisplay`'s
+/// cursor-incremental `shell.output` poll, session/index.tsx:2826-
+/// 2889): the cursor advanced so far, the accumulated (ANSI-stripped)
+/// display text capped at [`SHELL_DISPLAY_LIMIT`], and whether the
+/// cap dropped earlier output (the `[earlier output omitted]` marker).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct InlineShellStream {
+    pub cursor: u64,
+    pub output: String,
+    pub truncated: bool,
+}
+
+/// `SHELL_DISPLAY_LIMIT` (session/index.tsx:2778): 1 MiB.
+pub const SHELL_DISPLAY_LIMIT: usize = 1024 * 1024;
+
+impl InlineShellStream {
+    /// The incremental fetch's apply (`loadBackgroundOutput`,
+    /// :2839-2851): append the new page at the cursor; past the 1MiB
+    /// display limit keep the TAIL and raise the omitted marker.
+    pub fn ingest(&mut self, delta: &str, cursor: u64) {
+        if !delta.is_empty() {
+            self.output.push_str(delta);
+            // JS slices by UTF-16 units; the port keeps the last
+            // LIMIT chars (never splits a UTF-8 scalar).
+            let total = self.output.chars().count();
+            if total > SHELL_DISPLAY_LIMIT {
+                let skip = total - SHELL_DISPLAY_LIMIT;
+                self.output = self.output.chars().skip(skip).collect();
+                self.truncated = true;
+            }
+        }
+        self.cursor = self.cursor.max(cursor);
+    }
+
+    /// The display text (`output()` memo, :2885-2888): the marker
+    /// line prefixes the tail when earlier output dropped.
+    #[must_use]
+    pub fn display(&self) -> String {
+        if self.truncated {
+            format!("[earlier output omitted]\n{}", self.output)
+        } else {
+            self.output.clone()
+        }
+    }
+}
+
 /// What one escape did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InterruptStep {
@@ -3920,6 +3970,7 @@ impl Store {
             interrupt_sink: std::cell::RefCell::new(Rc::new(RecordingInterruptSink::default())),
             shell_sink: std::cell::RefCell::new(Rc::new(RecordingShellControl::default())),
             shell_view,
+            inline_shells: std::cell::RefCell::new(std::collections::HashMap::new()),
             model_ring_dirty: Cell::new(false),
             revert_sink: std::cell::RefCell::new(Rc::new(RecordingRevertSink::default())),
             integration_sink: std::cell::RefCell::new(Rc::new(NoIntegrationSink)),
@@ -7502,6 +7553,83 @@ impl Store {
     /// Replace the shell output viewer's content.
     pub fn set_shell_view(&self, view: Option<ShellOutputView>) {
         self.shell_view.set(view);
+    }
+
+    /// G-184 — apply one incremental `shell.output` page to the
+    /// INLINE stream of `shell_id` (the loop fetch's landing).
+    pub fn inline_shell_ingest(&self, shell_id: &str, delta: &str, cursor: u64) {
+        let mut streams = self.inline_shells.borrow_mut();
+        streams.entry(shell_id.to_owned()).or_default().ingest(delta, cursor);
+    }
+
+    /// G-184 — the inline stream's display text for a shell id
+    /// (marker included).
+    #[must_use]
+    pub fn inline_shell_display(&self, shell_id: &str) -> Option<String> {
+        self.inline_shells
+            .borrow()
+            .get(shell_id)
+            .map(InlineShellStream::display)
+    }
+
+    /// G-184 — the run loop's 1s poll targets: every RUNNING shell
+    /// tool part's `(shellID, cursor)` (the inline arm of
+    /// `ShellDisplay`'s effect — poll while the shell is active).
+    #[must_use]
+    pub fn inline_shell_targets(&self) -> Vec<(String, u64)> {
+        use crate::components::message::model::{Message, Part, ToolStatus};
+        let mut targets = Vec::new();
+        let state = self.message_state();
+        for messages in state.by_session.values() {
+            for message in messages {
+                let Message::Assistant { parts, .. } = message else { continue };
+                for part in parts {
+                    let Part::Tool { name, state, .. } = part else { continue };
+                    if crate::components::message::model::canonical_tool_name(name) != "shell" {
+                        continue;
+                    }
+                    let running = state.status == ToolStatus::Running
+                        || state.status == ToolStatus::Streaming
+                        || (state.status == ToolStatus::Completed
+                            && state.metadata.get("status").map(String::as_str) == Some("running"));
+                    if !running {
+                        continue;
+                    }
+                    if let Some(shell_id) = state.metadata.get("shellID").filter(|id| !id.is_empty())
+                    {
+                        let cursor =
+                            self.inline_shells.borrow().get(shell_id).map_or(0, |s| s.cursor);
+                        targets.push((shell_id.clone(), cursor));
+                    }
+                }
+            }
+        }
+        targets
+    }
+
+    /// G-184 — the render options' live-output map (`shellID` →
+    /// display text), one entry per stream already fetched.
+    #[must_use]
+    pub fn inline_shell_live_map(&self) -> std::collections::HashMap<String, String> {
+        self.inline_shells
+            .borrow()
+            .iter()
+            .map(|(shell_id, stream)| (shell_id.clone(), stream.display()))
+            .collect()
+    }
+
+    /// G-188 — the permission-BLOCKED tool part ids of one session
+    /// (`pendingPermissions()`, rows.ts:102-107): the permission
+    /// requests whose `source.type === "tool"`.
+    #[must_use]
+    pub fn pending_permission_part_ids(&self, session_id: &str) -> std::collections::HashSet<String> {
+        self.footer
+            .get()
+            .permissions
+            .iter()
+            .filter(|request| request.session_id == session_id)
+            .filter_map(|request| request.source.as_ref().map(|source| source.id.clone()))
+            .collect()
     }
 
     /// The shell id of the TOPMOST `DialogShellOutput` viewer, when one
@@ -12237,6 +12365,8 @@ impl Store {
                                 metadata_json: None,
                                 output: None,
                                 error: None,
+                                images: Vec::new(),
+                                input_json: input.clone().filter(|value| !value.is_null()),
                             };
                             if time.created.is_none() {
                                 time.created = created;
@@ -12295,6 +12425,9 @@ impl Store {
                             .join("\n")
                     })
                     .filter(|text| !text.is_empty());
+                // G-187 — the inline `data:image/*` file blocks feed
+                // the tool block's image strip.
+                let images = crate::data::tool_images_from_json_content(event.data.get("content"));
                 let error = (event.type_ == "session.tool.failed")
                     .then(|| {
                         event
@@ -12320,6 +12453,7 @@ impl Store {
                                         metadata.clone().filter(|value| !value.is_null());
                                 }
                                 state.output.clone_from(&output);
+                                state.images = images;
                                 state.error.clone_from(&error);
                                 time.completed = time.completed.or(completed);
                             }
@@ -13004,6 +13138,13 @@ fn message_from_event(event: &BusEvent) -> Option<Message> {
                                     .join("\n")
                             })
                             .filter(|text| !text.is_empty());
+                        state.input_json = part
+                            .pointer("/state/input")
+                            .cloned()
+                            .filter(|value| !value.is_null());
+                        state.images = crate::data::tool_images_from_json_content(
+                            part.pointer("/state/content"),
+                        );
                         state.error = part
                             .pointer("/state/error/message")
                             .and_then(Value::as_str)

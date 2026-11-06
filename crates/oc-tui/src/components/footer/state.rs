@@ -210,6 +210,20 @@ pub struct PermissionRequest {
     pub metadata: serde_json::Value,
     #[serde(default)]
     pub input: serde_json::Value,
+    /// G-188 — `source` (`Permission.Source`): a tool permission
+    /// names the awaiting tool PART (`{type: "tool", id, messageID}`);
+    /// the transcript's `pendingPermissions()` reads it
+    /// (rows.ts:102-107).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<PermissionToolSource>,
+}
+
+/// G-188 — the tool arm of `Permission.Source`: the blocked part id.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PermissionToolSource {
+    pub id: String,
+    #[serde(default, rename = "messageID")]
+    pub message_id: String,
 }
 
 /// `PermissionReply`.

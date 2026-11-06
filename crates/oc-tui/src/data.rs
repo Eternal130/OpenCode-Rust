@@ -578,6 +578,8 @@ pub fn tool_state_from_json(
         metadata_json: metadata.filter(|value| !value.is_null()).cloned(),
         output: None,
         error: None,
+        images: Vec::new(),
+        input_json: input.filter(|value| !value.is_null()).cloned(),
     }
 }
 
@@ -598,6 +600,66 @@ fn tool_output_from_content(content: &[oc_client::types::ToolContent]) -> Option
         .collect::<Vec<_>>()
         .join("\n");
     (!text.is_empty()).then_some(text)
+}
+
+/// G-187 — `inlineToolImages` (session/index.tsx:2518-2523): the
+/// inline image file blocks of a tool's `content` — `type: "file"`,
+/// mime `image/*`, uri starting `data:image/` — as the strip's
+/// `UserFile` set (mime + the base64 payload off the data URI).
+#[must_use]
+pub fn tool_images_from_content(
+    content: &[oc_client::types::ToolContent],
+) -> Vec<crate::components::message::model::UserFile> {
+    content
+        .iter()
+        .filter_map(|item| match item {
+            oc_client::types::ToolContent::FileContent(file) => {
+                image_user_file(&file.mime, &file.uri, file.name.clone())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// One content file block → the strip's `UserFile` (`data:` URIs
+/// only; the payload is the base64 half after `;base64,`).
+#[must_use]
+pub fn image_user_file(
+    mime: &str,
+    uri: &str,
+    name: Option<String>,
+) -> Option<crate::components::message::model::UserFile> {
+    if !mime.starts_with("image/") || !uri.starts_with("data:image/") {
+        return None;
+    }
+    let data = uri.split_once(";base64,").map(|(_, data)| data)?;
+    Some(crate::components::message::model::UserFile {
+        mime: mime.to_owned(),
+        data: data.to_owned(),
+        name,
+    })
+}
+
+/// The raw-JSON content-array arm of [`tool_images_from_content`]
+/// (SSE `session.tool.success` payloads + `message.updated` parts).
+#[must_use]
+pub fn tool_images_from_json_content(
+    content: Option<&serde_json::Value>,
+) -> Vec<crate::components::message::model::UserFile> {
+    let Some(blocks) = content.and_then(serde_json::Value::as_array) else {
+        return Vec::new();
+    };
+    blocks
+        .iter()
+        .filter(|block| block.get("type").and_then(serde_json::Value::as_str) == Some("file"))
+        .filter_map(|block| {
+            image_user_file(
+                block.get("mime")?.as_str()?,
+                block.get("uri")?.as_str()?,
+                block.get("name").and_then(serde_json::Value::as_str).map(str::to_owned),
+            )
+        })
+        .collect()
 }
 
 /// Build a [`ToolState`] from the typed wire union (message.list
@@ -639,6 +701,8 @@ pub fn tool_state_from_wire(
                 metadata_json: Some(serde_json::to_value(&running.metadata).unwrap_or_default()),
                 output: None,
                 error: None,
+                images: Vec::new(),
+                input_json: Some(serde_json::to_value(&running.input).unwrap_or_default()),
             }
         }
         Wire::Completed(completed) => {
@@ -653,6 +717,8 @@ pub fn tool_state_from_wire(
                     .map(|map| serde_json::to_value(map).unwrap_or_default()),
                 output: tool_output_from_content(&completed.content),
                 error: None,
+                images: tool_images_from_content(&completed.content),
+                input_json: Some(serde_json::to_value(&completed.input).unwrap_or_default()),
             }
         }
         Wire::Error(error) => {
@@ -667,6 +733,12 @@ pub fn tool_state_from_wire(
                     .map(|map| serde_json::to_value(map).unwrap_or_default()),
                 output: error.content.as_deref().and_then(tool_output_from_content),
                 error: Some(error.error.message.clone()),
+                images: error
+                    .content
+                    .as_deref()
+                    .map(tool_images_from_content)
+                    .unwrap_or_default(),
+                input_json: Some(serde_json::to_value(&error.input).unwrap_or_default()),
             }
         }
     }

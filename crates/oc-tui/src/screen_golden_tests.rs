@@ -581,6 +581,8 @@ fn surf1_detail_states_match_the_golden_assembly() {
                 metadata_json: None,
                 output: Some("hi\nsecond line".to_owned()),
                 error: None,
+                images: Vec::new(),
+                input_json: None,
             },
         }],
         finish: None,
