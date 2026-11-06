@@ -95,6 +95,7 @@ fn connection(base_url: Option<&str>) -> BTreeMap<String, ModelConnection> {
         ModelConnection {
             base_url: base_url.map(str::to_string),
             api_key: Some("test-key".into()),
+            resource_name: None,
             headers: BTreeMap::new(),
         },
     )])
@@ -132,6 +133,7 @@ async fn nvidia_gets_billing_origin_default() {
         ModelConnection {
             base_url: None,
             api_key: Some("nv-key".into()),
+            resource_name: None,
             headers: BTreeMap::new(),
         },
     );
@@ -153,6 +155,7 @@ async fn llmgateway_requires_registered_integration() {
         ModelConnection {
             base_url: None,
             api_key: Some("lgw-key".into()),
+            resource_name: None,
             headers: BTreeMap::new(),
         },
     );
@@ -182,6 +185,7 @@ async fn cerebras_package_gets_third_party_integration_header() {
             // no baseURL gate, any base exercises the package match.
             base_url: Some("https://api.cerebras.ai/v1".into()),
             api_key: Some("csk-key".into()),
+            resource_name: None,
             headers: BTreeMap::new(),
         },
     );
@@ -202,6 +206,7 @@ async fn unmatched_providers_get_no_plugin_headers() {
         ModelConnection {
             base_url: None,
             api_key: Some("gsk-key".into()),
+            resource_name: None,
             headers: BTreeMap::new(),
         },
     );
