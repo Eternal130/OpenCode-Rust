@@ -102,9 +102,9 @@ oc-uqr = { path = "third_party/oc-uqr" }
 # mini footer content rides the renderer root tree; the dock's
 # Canvas→into_frame→GridEmitter path and the "never pump" ruling
 # retire (mini frame bytes flow through the renderer pump exit).
-opentui-core = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "2fbe00e" }
-opentui-keymap = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "2fbe00e" }
-opentui-solid = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "2fbe00e" }
+opentui-core = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "56a9eda" }
+opentui-keymap = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "56a9eda" }
+opentui-solid = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "56a9eda" }
 
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
