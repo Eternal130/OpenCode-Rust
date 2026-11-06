@@ -588,7 +588,10 @@ pub async fn compact(client: &Client, session_id: &str) -> Result<(), String> {
 // and tracks one footer tab + detail transcript per child, reduced
 // through the SAME per-session fold the parent uses. The session-list
 // and active-map hydration sources (2/3) belong to reconnect
-// hydration — the live port boots once and never reconnects.
+// hydration — G-181④: the runtime's stream pump now reconnects (250
+// ms cadence, fresh client swap) and replays the hydrate on every
+// reconnection; the session-list hydration source rides the same
+// replay seam as the transcript.
 
 /// `FooterSubagentTab["status"]` (mini/types.ts:302-310).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
