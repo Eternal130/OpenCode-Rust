@@ -27,7 +27,7 @@ feature-gated `terminal-backend`(仿 device-audio 先例;默认构建保持 head
 - **B1 rev bump**:opentui 三 crate bump 至 Phase A 新 commit,开 terminal-backend feature;全 workspace nextest 基线绿。
 - **B2 类型词汇替换(纯机械,先行降面)**:`ratatui::style::{Color,Style,Modifier}` → opentui 对应物(color::Rgba/TextAttributes/StyledText/SyntaxStyle);render/paint.rs 的 ratatui Buffer → 自有 render::frame::Frame 画布;oc-syntax 3 文件同步。goldens 钉零行为变化。
 - **B3 主 TUI I/O 切换**:app.rs 拆 CrosstermBackend/Terminal/draw 桥 → 后端泵+输出泵;enable_raw_mode/execute! → 后端 setup/teardown;crossterm 事件线程 → 后端输入泵+CliRenderEvent(tokio mpsc 桥保留);theme 探针→Capabilities;color_mode.rs env 探测保留;mouse_modes/terminal_proto 替换为后端等价。PTY 测试(vt_harness,vt100 网格比对)为准绳。
-- **B4 mini+清理 ✅(2026-11-03,lane/b4-deps-adr)**:mini 按 Gate A 裁决落地**薄缝**(同一 GridEmitter/同一 W 输出口,insert_before 等价实现);ratatui/crossterm 依赖删除(cargo tree 零命中);ADR-0018 落地;G-211 + 开发规范 2.4#11/#12 登记;workspace 双 profile 全绿。
+- **B4 mini+清理 ✅(2026-11-03,lane/b4-deps-adr)**:mini 按 Gate A 裁决落地**薄缝**(同一 GridEmitter/同一 W 输出口,insert_before 等价实现);ratatui/crossterm 依赖删除(cargo tree 零命中);ADR-0018 落地;G-211 + 开发规范 2.2 登记;workspace 双 profile 全绿。
 
 **Gate B**:oracle 评审 + explorer 结构扫描。✅(B4 收口时通过;证据指针见 ADR-0018)
 
