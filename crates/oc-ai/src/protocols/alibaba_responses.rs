@@ -13,7 +13,7 @@ use std::sync::Arc;
 use serde_json::{json, Map, Value};
 
 use crate::protocols::open_responses::{
-    self, decode_event, normalize, ProviderAdapter, ParserState,
+    self, decode_event, normalize, ParserState, ProviderAdapter,
 };
 use crate::protocols::utils::responses_hosted_tools::{self, Definition, Item};
 use crate::route::auth::Definition as AuthDefinition;
@@ -66,9 +66,10 @@ impl ProviderAdapter for AlibabaResponsesAdapter {
         };
         Some(match alibaba {
             Value::Object(tool)
-                if tool.get("type").and_then(Value::as_str).is_some_and(
-                    |kind| NATIVE_TOOL_TYPES.contains(&kind),
-                ) =>
+                if tool
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .is_some_and(|kind| NATIVE_TOOL_TYPES.contains(&kind)) =>
             {
                 Ok(alibaba.clone())
             }
@@ -138,10 +139,7 @@ fn alibaba_options(request: &LLMRequest) -> AlibabaOptions {
             .get("previousResponseId")
             .and_then(Value::as_str)
             .map(str::to_string),
-        conversation: options
-            .get("conversation")
-            .and_then(Value::as_str)
-            .map(str::to_string),
+        conversation: options.get("conversation").and_then(Value::as_str).map(str::to_string),
     }
 }
 
@@ -149,10 +147,8 @@ fn alibaba_options(request: &LLMRequest) -> AlibabaOptions {
 /// `{type: "allowed_tools", mode: "required", tools: [choice]}` wrapping the
 /// named `{type: "function", name}` choice (alibaba-responses.ts:58-62).
 fn wrap_named_tool_choice(choice: Value) -> Value {
-    let is_named = choice
-        .get("type")
-        .and_then(Value::as_str)
-        .is_some_and(|kind| kind == "function");
+    let is_named =
+        choice.get("type").and_then(Value::as_str).is_some_and(|kind| kind == "function");
     if is_named {
         json!({ "type": "allowed_tools", "mode": "required", "tools": [choice] })
     } else {
@@ -266,8 +262,7 @@ impl Protocol for AlibabaResponsesProtocol {
         state: ProtocolState,
         frame: &str,
     ) -> Result<(ProtocolState, Vec<LLMEvent>), AiError> {
-        let mut state =
-            *state.downcast::<ParserState>().expect("Alibaba Responses parser state");
+        let mut state = *state.downcast::<ParserState>().expect("Alibaba Responses parser state");
         let (events, _) = self.step_frame(&mut state, frame)?;
         Ok((Box::new(state), events))
     }
@@ -372,18 +367,9 @@ mod tests {
     #[test]
     fn native_alibaba_tools_lower_and_validate() {
         let adapter = AlibabaResponsesAdapter;
-        let native = BTreeMap::from([(
-            "alibaba".to_string(),
-            json!({ "type": "web_search" }),
-        )]);
-        assert_eq!(
-            adapter.native_tool(&native),
-            Some(Ok(json!({ "type": "web_search" })))
-        );
-        let bad = BTreeMap::from([(
-            "alibaba".to_string(),
-            json!({ "type": "computer_use" }),
-        )]);
+        let native = BTreeMap::from([("alibaba".to_string(), json!({ "type": "web_search" }))]);
+        assert_eq!(adapter.native_tool(&native), Some(Ok(json!({ "type": "web_search" }))));
+        let bad = BTreeMap::from([("alibaba".to_string(), json!({ "type": "computer_use" }))]);
         assert!(adapter.native_tool(&bad).unwrap().is_err());
     }
 
@@ -400,7 +386,9 @@ mod tests {
         assert!(adapter
             .restore_hosted_tool_item(&json!({ "type": "web_search_call", "id": "ws_1" }))
             .is_none());
-        assert!(adapter.restore_hosted_tool_item(&json!({ "type": "web_extractor_call" })).is_none());
+        assert!(adapter
+            .restore_hosted_tool_item(&json!({ "type": "web_extractor_call" }))
+            .is_none());
 
         let protocol = AlibabaResponsesProtocol;
         let mut state = ParserState::new(&request(), &AlibabaResponsesAdapter);
@@ -484,9 +472,6 @@ mod tests {
         let prepared = route.prepare_request(&request());
         let body = route.build_body(&prepared).unwrap();
         let (wire, _) = route.prepare_transport(&prepared, &body).unwrap();
-        assert_eq!(
-            wire.url,
-            "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/responses"
-        );
+        assert_eq!(wire.url, "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/responses");
     }
 }

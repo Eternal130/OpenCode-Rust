@@ -971,10 +971,8 @@ impl IntegrationHost {
                     return;
                 }
             };
-            let mut stdout_pipe =
-                child.stdout.take().expect("stdout piped above");
-            let mut stderr_pipe =
-                child.stderr.take().expect("stderr piped above");
+            let mut stdout_pipe = child.stdout.take().expect("stdout piped above");
+            let mut stderr_pipe = child.stderr.take().expect("stderr piped above");
             // The stderr reader folds every chunk into the pending
             // attempt's message as it arrives.
             let message_host = Arc::clone(&host);
@@ -1053,10 +1051,7 @@ impl IntegrationHost {
                     &attempt,
                     &integration,
                     Err(if stderr.is_empty() {
-                        format!(
-                            "Authentication command exited {}",
-                            status.code().unwrap_or(-1)
-                        )
+                        format!("Authentication command exited {}", status.code().unwrap_or(-1))
                     } else {
                         stderr
                     }),

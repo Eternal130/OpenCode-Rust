@@ -1158,7 +1158,10 @@ async fn g110_callback_iss_mismatch_is_rejected() {
         .expect("browser client");
     let response = browser.get(&authorization.url).send().await.expect("authorize GET");
     let redirect = response.headers()["location"].to_str().expect("location").to_owned();
-    assert!(redirect.contains("iss=https%3A%2F%2Fevil.example") || redirect.contains("iss=https://evil.example"));
+    assert!(
+        redirect.contains("iss=https%3A%2F%2Fevil.example")
+            || redirect.contains("iss=https://evil.example")
+    );
     let callback = tokio::spawn(callback);
     let page = reqwest::Client::new().get(&redirect).send().await.expect("callback GET");
     assert_eq!(page.status(), 400, "a foreign issuer is rejected at the callback");

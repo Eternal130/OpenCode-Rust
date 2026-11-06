@@ -1049,7 +1049,11 @@ mod builtins_tests {
             let generation = npm_cache.path().join(format!("{package}@latest/1700000000000"));
             let cache_bin = generation.join("node_modules/.bin");
             std::fs::create_dir_all(&cache_bin).expect("cache bin dir");
-            fake_bin(&cache_bin, package.trim_start_matches('@').rsplit('/').next().unwrap_or(package), "exit 0");
+            fake_bin(
+                &cache_bin,
+                package.trim_start_matches('@').rsplit('/').next().unwrap_or(package),
+                "exit 0",
+            );
         }
         std::fs::write(project.path().join(".clang-format"), "").expect("write");
         std::fs::write(project.path().join(".ocamlformat"), "").expect("write");

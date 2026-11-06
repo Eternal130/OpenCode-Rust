@@ -552,9 +552,7 @@ impl ToolRegistryState {
     /// G-106②): registers one namespace description. An unregistered
     /// namespace stays valid — it simply has no description.
     pub fn register_namespace_description(&self, name: &str, description: &str) {
-        self.namespace_descriptions
-            .lock()
-            .insert(name.to_string(), description.to_string());
+        self.namespace_descriptions.lock().insert(name.to_string(), description.to_string());
     }
 
     /// The registered description for a namespace, if any.

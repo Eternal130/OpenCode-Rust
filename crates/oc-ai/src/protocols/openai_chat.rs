@@ -3406,11 +3406,8 @@ pub fn alibaba_chat_route(transport: SharedTransport, auth: Option<AuthDefinitio
 /// `RESPECTS_INLINE_HINTS` entry so `apply_cache_policy` actually places
 /// the hints instead of no-op'ing on `"openai-chat"`.
 pub fn digitalocean_chat_route(transport: SharedTransport, auth: Option<AuthDefinition>) -> Route {
-    let ext = OpenAiChatExt {
-        id: "digitalocean-chat",
-        cache_control: true,
-        ..OpenAiChatExt::base()
-    };
+    let ext =
+        OpenAiChatExt { id: "digitalocean-chat", cache_control: true, ..OpenAiChatExt::base() };
     chat_route(
         "digitalocean",
         Some("digitalocean"),
@@ -3493,10 +3490,7 @@ pub fn groq_chat_compatibility() -> LanguageModelCompatibility {
 
 /// `openrouter.ts:199` model compatibility.
 pub fn openrouter_chat_compatibility() -> LanguageModelCompatibility {
-    LanguageModelCompatibility {
-        supports_prompt_cache_key: Some(true),
-        ..Default::default()
-    }
+    LanguageModelCompatibility { supports_prompt_cache_key: Some(true), ..Default::default() }
 }
 
 /// `venice-chat.ts` `compatibility`.
@@ -3567,18 +3561,12 @@ pub fn cerebras_chat_compatibility() -> LanguageModelCompatibility {
 
 /// `fireworks.ts` model compatibility (fireworks.ts:49-51; G-121).
 pub fn fireworks_chat_compatibility() -> LanguageModelCompatibility {
-    LanguageModelCompatibility {
-        supports_prompt_cache_key: Some(true),
-        ..Default::default()
-    }
+    LanguageModelCompatibility { supports_prompt_cache_key: Some(true), ..Default::default() }
 }
 
 /// `digitalocean.ts` model compatibility (digitalocean.ts:44-50; G-121).
 pub fn digitalocean_chat_compatibility() -> LanguageModelCompatibility {
-    LanguageModelCompatibility {
-        supports_prompt_cache_key: Some(true),
-        ..Default::default()
-    }
+    LanguageModelCompatibility { supports_prompt_cache_key: Some(true), ..Default::default() }
 }
 
 /// `minimax.ts:119` chat model compatibility.
@@ -5016,6 +5004,60 @@ mod tests {
         json_eq!(body["parallel_tool_calls"], json!(true));
         json_eq!(body["service_tier"], json!("on_demand"));
         json_eq!(body["user"], json!("recorded-test"));
+    }
+
+    /// G-172: the minimax chat dialect (minimax.ts:54-94) — `reasoning_split`
+    /// defaults to true (MiniMax otherwise embeds `<think>` tags in ordinary
+    /// assistant text) and the validated `thinking` option passes through.
+    #[test]
+    fn openai_chat_minimax_chat_route_thinking_and_reasoning_split() {
+        let failing: SharedTransport =
+            Arc::new(crate::route::transport::FailingTransport { message: "no transport" });
+        let route = minimax_chat_route(failing, None);
+        let model = route.model("MiniMax-M2.1", None).unwrap();
+        let mut request = LLMRequest::new(model);
+        request.messages = vec![Message::user("hi")];
+        let body = compiled_body(&route, &request);
+        json_eq!(body["reasoning_split"], json!(true));
+        assert!(body.get("thinking").is_none(), "no thinking option → omitted");
+
+        // explicit thinking honored, explicit reasoningSplit honored
+        let model = route.model("MiniMax-M2.1", None).unwrap();
+        let mut request = LLMRequest::new(model);
+        request.messages = vec![Message::user("hi")];
+        request.provider_options = Some(
+            serde_json::from_value(
+                json!({ "thinking": { "type": "disabled" }, "reasoningSplit": false }),
+            )
+            .unwrap(),
+        );
+        let body = compiled_body(&route, &request);
+        json_eq!(body["thinking"], json!({ "type": "disabled" }));
+        json_eq!(body["reasoning_split"], json!(false));
+    }
+
+    /// G-175: the moonshot chat dialect (moonshot.ts:78-88) — the validated
+    /// `thinking` option (`{type, keep?}`) passes through.
+    #[test]
+    fn openai_chat_moonshot_chat_route_thinking_passthrough() {
+        let failing: SharedTransport =
+            Arc::new(crate::route::transport::FailingTransport { message: "no transport" });
+        let route = moonshot_chat_route(failing, None);
+        let model = route.model("kimi-k2.7-code", None).unwrap();
+        let mut request = LLMRequest::new(model);
+        request.messages = vec![Message::user("hi")];
+        let body = compiled_body(&route, &request);
+        assert!(body.get("thinking").is_none(), "no thinking option → omitted");
+
+        let model = route.model("kimi-k2.7-code", None).unwrap();
+        let mut request = LLMRequest::new(model);
+        request.messages = vec![Message::user("hi")];
+        request.provider_options = Some(
+            serde_json::from_value(json!({ "thinking": { "type": "enabled", "keep": "all" } }))
+                .unwrap(),
+        );
+        let body = compiled_body(&route, &request);
+        json_eq!(body["thinking"], json!({ "type": "enabled", "keep": "all" }));
     }
 
     #[test]

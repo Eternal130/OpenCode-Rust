@@ -1178,8 +1178,8 @@ async fn connect_local(
             // (the ref waits EXIT_WAIT on the exit code) and append the
             // tail to the failure text.
             let tail = stderr_tail.as_ref().map(|tail| async {
-                let deadline = tokio::time::Instant::now()
-                    + tokio::time::Duration::from_millis(300);
+                let deadline =
+                    tokio::time::Instant::now() + tokio::time::Duration::from_millis(300);
                 loop {
                     let snapshot = tail.snapshot();
                     if !snapshot.is_empty() || deadline < tokio::time::Instant::now() {
@@ -1191,7 +1191,11 @@ async fn connect_local(
             let tail = match tail {
                 Some(tail) => {
                     let snapshot = tail.await;
-                    if snapshot.is_empty() { None } else { Some(snapshot) }
+                    if snapshot.is_empty() {
+                        None
+                    } else {
+                        Some(snapshot)
+                    }
                 }
                 None => None,
             };

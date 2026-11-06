@@ -86,7 +86,10 @@ pub trait Files: Send + Sync {
     async fn remove_file(&self, path: &str) -> Result<(), FilesError> {
         let info = self.stat(path).await?;
         if info.kind == FileType::Directory {
-            return Err(FilesError::WrongKind { path: path.to_string(), actual: FileType::Directory });
+            return Err(FilesError::WrongKind {
+                path: path.to_string(),
+                actual: FileType::Directory,
+            });
         }
         self.remove(path).await
     }

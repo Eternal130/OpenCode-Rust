@@ -36,44 +36,41 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use oc_ai::protocols::alibaba_responses::{alibaba_responses_route, AlibabaResponsesRouteSpec};
-use oc_ai::protocols::azure::{azure_chat_route, azure_responses_route, AzureConfig};
-use oc_ai::protocols::meta_responses::{
-    meta_auth, meta_responses_route, MetaResponsesRouteSpec,
-};
 use oc_ai::protocols::anthropic_messages::{
     alibaba_messages_compatibility, anthropic_messages_route, anthropic_route,
     meta_messages_compatibility, moonshot_messages_compatibility,
     zai_coding_plan_messages_compatibility,
 };
+use oc_ai::protocols::azure::{azure_chat_route, azure_responses_route, AzureConfig};
 use oc_ai::protocols::bedrock::{self as bedrock_lane, BedrockAuthOptions, MantleMessagesConfig};
 use oc_ai::protocols::cohere_chat::{cohere_route_for_package, CohereConfig};
 use oc_ai::protocols::copilot::{copilot_chat_route, CopilotConfig};
 use oc_ai::protocols::gemini::{google_route, GoogleConfig};
 use oc_ai::protocols::google_interactions::{google_interactions_route, GoogleInteractionsConfig};
+use oc_ai::protocols::meta_responses::{meta_auth, meta_responses_route, MetaResponsesRouteSpec};
 use oc_ai::protocols::mistral_chat::{mistral_route_for_package, MistralConfig};
 use oc_ai::protocols::openai_chat::{
     alibaba_chat_compatibility, alibaba_chat_route, cerebras_chat_compatibility,
-    cohere_chat_compatibility,
-    deepinfra_chat_compatibility, deepseek_chat_compatibility, deepseek_chat_route,
-    digitalocean_chat_route, digitalocean_chat_compatibility, fireworks_chat_compatibility,
-    groq_chat_compatibility, groq_chat_route, meta_chat_compatibility, minimax_chat_route,
-    minimax_chat_compatibility, moonshot_chat_compatibility, moonshot_chat_route,
-    openai_chat_route, openrouter_chat_route, openrouter_chat_compatibility,
-    togetherai_chat_compatibility, venice_chat_route, venice_chat_compatibility, zai_chat_route,
-    zai_chat_compatibility,
+    cohere_chat_compatibility, deepinfra_chat_compatibility, deepseek_chat_compatibility,
+    deepseek_chat_route, digitalocean_chat_compatibility, digitalocean_chat_route,
+    fireworks_chat_compatibility, groq_chat_compatibility, groq_chat_route,
+    meta_chat_compatibility, minimax_chat_compatibility, minimax_chat_route,
+    moonshot_chat_compatibility, moonshot_chat_route, openai_chat_route,
+    openrouter_chat_compatibility, openrouter_chat_route, togetherai_chat_compatibility,
+    venice_chat_compatibility, venice_chat_route, zai_chat_compatibility, zai_chat_route,
 };
 use oc_ai::protocols::openai_compatible::{
     openai_compatible_chat_configured, openai_compatible_responses_route,
 };
 use oc_ai::protocols::openai_responses::{openai_responses_route, OpenAIResponsesRouteSpec};
+use oc_ai::protocols::vercel_gateway::{
+    route_for_model as vercel_gateway_route_for_model, VercelGatewayRouteSpec,
+};
 use oc_ai::protocols::vertex::{
     vertex_chat_route, vertex_responses_route, vertex_route_for_model, VertexConfig,
     VertexEndpointConfig,
 };
 use oc_ai::protocols::vertex_messages::{vertex_messages_route, VertexMessagesConfig};
-use oc_ai::protocols::vercel_gateway::{
-    route_for_model as vercel_gateway_route_for_model, VercelGatewayRouteSpec,
-};
 use oc_ai::protocols::xai_responses::{xai_auth, xai_responses_route, XaiResponsesRouteSpec};
 use oc_ai::route::auth::{self, Secret};
 use oc_ai::route::client::{Route, RouteDefaults, RoutePatch};
@@ -541,10 +538,7 @@ pub fn language_model_for_model(
     // (openai-options.ts `withOpenAIOptions`), under the model overlays.
     let route = match gpt5_default_options(model.id.as_str(), &package) {
         Some(options) => route.with(RoutePatch {
-            defaults: RouteDefaults {
-                provider_options: Some(options),
-                ..Default::default()
-            },
+            defaults: RouteDefaults { provider_options: Some(options), ..Default::default() },
             ..Default::default()
         }),
         None => route,
@@ -579,7 +573,13 @@ pub fn language_model_for_model(
     // G-119/G-121: the package compatibility presets the TS provider files
     // inject at `configure().model()`, under the model-level overlay
     // (opencode.ts:270-271).
-    bind_model_with_compat(&route, model.id.as_str(), &package, model.compatibility.as_ref(), provider_id)
+    bind_model_with_compat(
+        &route,
+        model.id.as_str(),
+        &package,
+        model.compatibility.as_ref(),
+        provider_id,
+    )
 }
 
 /// Bearer chain: explicit key, then each catalog env var (lazy env reads).
@@ -833,10 +833,8 @@ fn build_route(
                         "thinking".to_string(),
                         serde_json::json!({ "type": "adaptive", "display": "omitted" }),
                     );
-                    patch.defaults = RouteDefaults {
-                        provider_options: Some(options),
-                        ..Default::default()
-                    };
+                    patch.defaults =
+                        RouteDefaults { provider_options: Some(options), ..Default::default() };
                 }
                 let route = anthropic_messages_route(transport).with(patch);
                 Ok(with_base_url(route, base_url))
@@ -846,7 +844,14 @@ fn build_route(
             // G-165: the azure packages bind the native azure lane
             // (api-key header, resourceName deployment URL, api-version).
             if package.starts_with("@opencode/ai/providers/azure") {
-                return azure_catalog_route(transport, provider_id, base_url, connection, model, false);
+                return azure_catalog_route(
+                    transport,
+                    provider_id,
+                    base_url,
+                    connection,
+                    model,
+                    false,
+                );
             }
             Ok(openai_responses_route(OpenAIResponsesRouteSpec {
                 base_url,
@@ -855,7 +860,7 @@ fn build_route(
                 defaults: RouteDefaults::default(),
             })
             .with(RoutePatch { provider: Some(provider_id.to_string()), ..Default::default() }))
-        },
+        }
         ProtocolFamily::Gemini => Ok(google_route(
             transport,
             GoogleConfig {
@@ -919,7 +924,14 @@ fn build_route(
         ProtocolFamily::OpenAIChat => {
             // G-165: the azure chat package binds the native azure lane.
             if package.starts_with("@opencode/ai/providers/azure") {
-                return azure_catalog_route(transport, provider_id, base_url, connection, model, true);
+                return azure_catalog_route(
+                    transport,
+                    provider_id,
+                    base_url,
+                    connection,
+                    model,
+                    true,
+                );
             }
             // G-123: the provider env fallback chains hardcoded in the TS
             // provider files that the models-dev snapshot doesn't carry
@@ -949,9 +961,7 @@ fn build_route(
                 // G-172: the minimax chat dialect — OpenAI chat body plus the
                 // `thinking` passthrough and `reasoning_split` default true
                 // (minimax.ts:54-94).
-                "@opencode/ai/providers/minimax/chat" => {
-                    minimax_chat_route(transport, Some(auth))
-                }
+                "@opencode/ai/providers/minimax/chat" => minimax_chat_route(transport, Some(auth)),
                 // G-175: the moonshot chat dialect — OpenAI chat body plus the
                 // `thinking` passthrough (moonshot.ts:63-89).
                 "@opencode/ai/providers/moonshot/chat" => {
@@ -1074,12 +1084,8 @@ fn azure_catalog_route(
     }
     let azure_auth =
         auth::Definition::remove("authorization").and_then(credential.header("api-key"));
-    let config = AzureConfig {
-        resource_name,
-        base_url,
-        auth: Some(azure_auth),
-        ..Default::default()
-    };
+    let config =
+        AzureConfig { resource_name, base_url, auth: Some(azure_auth), ..Default::default() };
     let route = if chat {
         azure_chat_route(&config, transport, model.id.as_str())
     } else {
@@ -1123,15 +1129,11 @@ fn anthropic_messages_base_url(
             Some("https://api.moonshot.cn/v1") => {
                 Some("https://api.moonshot.cn/anthropic/v1".to_string())
             }
-            _ => rewrite(
-                "https://api.moonshot.ai/v1",
-                "https://api.moonshot.ai/anthropic/v1",
-            ),
+            _ => rewrite("https://api.moonshot.ai/v1", "https://api.moonshot.ai/anthropic/v1"),
         }),
-        "@opencode/ai/providers/zai-coding-plan/messages" => Ok(rewrite(
-            "https://api.z.ai/api/coding/paas/v4",
-            "https://api.z.ai/api/anthropic/v1",
-        )),
+        "@opencode/ai/providers/zai-coding-plan/messages" => {
+            Ok(rewrite("https://api.z.ai/api/coding/paas/v4", "https://api.z.ai/api/anthropic/v1"))
+        }
         "@opencode/ai/providers/alibaba/messages" => match base_url {
             // alibaba.ts:85-92: without baseURL the resource host is
             // region-derived; unconfigured is a ProviderConfigurationError.
@@ -1141,14 +1143,16 @@ fn anthropic_messages_base_url(
             }),
             // `https://{host}/compatible-mode/v1` → `https://{host}/apps/anthropic/v1`
             // for every dashscope host (intl/cn/region variants).
-            Some(url) => Ok(Some(if let Some(host) = url
-                .strip_suffix("/compatible-mode/v1")
-                .and_then(|prefix| prefix.strip_prefix("https://"))
-            {
-                format!("https://{host}/apps/anthropic/v1")
-            } else {
-                url
-            })),
+            Some(url) => Ok(Some(
+                if let Some(host) = url
+                    .strip_suffix("/compatible-mode/v1")
+                    .and_then(|prefix| prefix.strip_prefix("https://"))
+                {
+                    format!("https://{host}/apps/anthropic/v1")
+                } else {
+                    url
+                },
+            )),
         },
         _ => Ok(base_url),
     }
@@ -1287,10 +1291,7 @@ fn package_env_chain(package: &str, env: &[String]) -> Vec<String> {
 /// presets (G-174): alibaba.ts:104, meta.ts:141, zai-coding-plan.ts:72,
 /// moonshot.ts:114-117. The baked families' `*_chat_compatibility()`
 /// presets live in oc-ai.
-fn package_chat_compatibility(
-    package: &str,
-    model_id: &str,
-) -> Option<LanguageModelCompatibility> {
+fn package_chat_compatibility(package: &str, model_id: &str) -> Option<LanguageModelCompatibility> {
     match package {
         "@opencode/ai/providers/deepinfra" => Some(deepinfra_chat_compatibility()),
         "@opencode/ai/providers/togetherai" => Some(togetherai_chat_compatibility()),
@@ -1368,9 +1369,7 @@ fn overlay_model_compatibility(
     }
     if let Some(value) = overlay.max_tokens_field {
         base.max_tokens_field = Some(match value {
-            oc_schema::model::MaxTokensField::MaxTokens => {
-                MaxTokensFieldCompatibility::MaxTokens
-            }
+            oc_schema::model::MaxTokensField::MaxTokens => MaxTokensFieldCompatibility::MaxTokens,
             oc_schema::model::MaxTokensField::MaxCompletionTokens => {
                 MaxTokensFieldCompatibility::MaxCompletionTokens
             }
@@ -1598,13 +1597,7 @@ fn bind_custom_native_model(
     model: &CustomModel,
     provider_id: &str,
 ) -> Result<LanguageModel, ProviderError> {
-    bind_model_with_compat(
-        route,
-        wire_id,
-        package,
-        model.compatibility.as_ref(),
-        provider_id,
-    )
+    bind_model_with_compat(route, wire_id, package, model.compatibility.as_ref(), provider_id)
 }
 
 /// The native-package custom binding: route through the catalog family
@@ -2380,14 +2373,9 @@ mod tests {
         let catalog = Catalog::embedded();
         let provider = catalog.provider("togetherai").expect("togetherai in catalog");
         let model_id = provider.models.first().expect("has models").id.as_str().to_string();
-        let model = language_model(
-            &context,
-            catalog,
-            "togetherai",
-            &model_id,
-            &ModelConnection::default(),
-        )
-        .expect("togetherai binds");
+        let model =
+            language_model(&context, catalog, "togetherai", &model_id, &ModelConnection::default())
+                .expect("togetherai binds");
         assert_eq!(model.route.id, "openai-chat");
         let route = Arc::clone(&model.route);
         let mut request = oc_ai::schema::LLMRequest::new(model);
@@ -2411,11 +2399,9 @@ mod tests {
             ("togetherai", "https://api.together.xyz/v1"),
             ("cerebras", "https://api.cerebras.ai/v1"),
         ] {
-            let provider = catalog.provider(provider_id).unwrap_or_else(|| {
-                panic!("{provider_id} in catalog")
-            });
-            let model_id =
-                provider.models.first().expect("has models").id.as_str().to_string();
+            let provider =
+                catalog.provider(provider_id).unwrap_or_else(|| panic!("{provider_id} in catalog"));
+            let model_id = provider.models.first().expect("has models").id.as_str().to_string();
             let model = language_model(
                 &context,
                 catalog,
@@ -2452,10 +2438,7 @@ mod tests {
                 catalog,
                 "deepinfra",
                 &model_id,
-                &ModelConnection {
-                    base_url: Some(input.to_string()),
-                    ..Default::default()
-                },
+                &ModelConnection { base_url: Some(input.to_string()), ..Default::default() },
             )
             .expect("deepinfra binds");
             assert_eq!(
@@ -2528,11 +2511,9 @@ mod tests {
             // from the model's catalog `interleaved` overlay spread over
             // the package base (opencode.ts:270-271) — deepinfra's from
             // the package compat itself (deepinfra.ts:49).
-            let provider = catalog.provider(provider_id).unwrap_or_else(|| {
-                panic!("{provider_id} in catalog")
-            });
-            let model_id =
-                provider.models.first().expect("has models").id.as_str().to_string();
+            let provider =
+                catalog.provider(provider_id).unwrap_or_else(|| panic!("{provider_id} in catalog"));
+            let model_id = provider.models.first().expect("has models").id.as_str().to_string();
             let model = language_model(
                 &context,
                 catalog,
@@ -2543,7 +2524,11 @@ mod tests {
             .unwrap_or_else(|error| panic!("{provider_id} binds: {error}"));
             let compatibility = model.compatibility.as_ref().expect("compatibility injected");
             assert_eq!(compatibility.supports_prompt_cache_key, Some(true), "{provider_id}");
-            assert_eq!(compatibility.reasoning_field.as_deref(), Some(reasoning_field), "{provider_id}");
+            assert_eq!(
+                compatibility.reasoning_field.as_deref(),
+                Some(reasoning_field),
+                "{provider_id}"
+            );
             let route = Arc::clone(&model.route);
             let mut request = oc_ai::schema::LLMRequest::new(model);
             request.messages = vec![oc_ai::schema::Message::user("hi")];
@@ -2568,14 +2553,9 @@ mod tests {
         let catalog = Catalog::embedded();
         let provider = catalog.provider("togetherai").expect("togetherai in catalog");
         let model_id = provider.models.first().expect("has models").id.as_str().to_string();
-        let model = language_model(
-            &context,
-            catalog,
-            "togetherai",
-            &model_id,
-            &ModelConnection::default(),
-        )
-        .expect("togetherai binds");
+        let model =
+            language_model(&context, catalog, "togetherai", &model_id, &ModelConnection::default())
+                .expect("togetherai binds");
         let route = Arc::clone(&model.route);
         let mut request = oc_ai::schema::LLMRequest::new(model);
         request.messages = vec![oc_ai::schema::Message::user("hi")];
@@ -3138,13 +3118,12 @@ mod tests {
     /// Find the first catalog model id under `provider_id` whose resolved
     /// package equals `package`.
     fn model_with_package(catalog: &Catalog, provider_id: &str, package: &str) -> String {
-        let snapshot = catalog.provider(provider_id).unwrap_or_else(|| panic!("{provider_id} in catalog"));
+        let snapshot =
+            catalog.provider(provider_id).unwrap_or_else(|| panic!("{provider_id} in catalog"));
         snapshot
             .models
             .iter()
-            .find(|model| {
-                model.package.as_deref().unwrap_or(&snapshot.info.package) == package
-            })
+            .find(|model| model.package.as_deref().unwrap_or(&snapshot.info.package) == package)
             .unwrap_or_else(|| panic!("a `{package}` model exists under {provider_id}"))
             .id
             .as_str()
@@ -3189,15 +3168,13 @@ mod tests {
         std::env::remove_var("AZURE_OPENAI_API_KEY");
         let context = context();
         let catalog = Catalog::embedded();
-        let model_id = model_with_package(
-            catalog,
-            "azure",
-            "@opencode/ai/providers/azure/responses",
-        );
+        let model_id =
+            model_with_package(catalog, "azure", "@opencode/ai/providers/azure/responses");
 
         // fail-fast: neither resourceName nor baseURL
-        let error = language_model(&context, catalog, "azure", &model_id, &ModelConnection::default())
-            .expect_err("unconfigured azure fails fast");
+        let error =
+            language_model(&context, catalog, "azure", &model_id, &ModelConnection::default())
+                .expect_err("unconfigured azure fails fast");
         assert!(matches!(error, ProviderError::Configuration { .. }), "{error}");
         assert!(error.to_string().contains("resourceName"), "{error}");
 
@@ -3295,7 +3272,9 @@ mod tests {
         assert_eq!(body.get("prompt_cache_key"), Some(&serde_json::json!("session_az")));
         let (transport_request, _) = route.prepare_transport(&prepared, &body).expect("wire");
         assert!(
-            transport_request.url.starts_with("https://chat-res.openai.azure.com/openai/v1/chat/completions"),
+            transport_request
+                .url
+                .starts_with("https://chat-res.openai.azure.com/openai/v1/chat/completions"),
             "{}",
             transport_request.url
         );
@@ -3384,10 +3363,7 @@ mod tests {
             language_model(&context, catalog, "minimax", &model_id, &ModelConnection::default())
                 .expect("minimax binds");
         let route = Arc::clone(&model.route);
-        assert_eq!(
-            route.endpoint.base_url.as_deref(),
-            Some("https://api.minimax.io/anthropic/v1")
-        );
+        assert_eq!(route.endpoint.base_url.as_deref(), Some("https://api.minimax.io/anthropic/v1"));
     }
 
     /// G-171: gpt-5 family default options (reasoningEffort medium +
@@ -3457,10 +3433,7 @@ mod tests {
             .expect("openai chat compat preset");
         assert_eq!(compat.supports_prompt_cache_key, Some(true));
         let route = openai_chat_route(Arc::new(FailingTransport { message: "facade unit test" }))
-            .with(RoutePatch {
-                auth: Some(bearer_auth(None, &[])),
-                ..Default::default()
-            });
+            .with(RoutePatch { auth: Some(bearer_auth(None, &[])), ..Default::default() });
         let bound = route.model("gpt-5.2-chat-latest", None).expect("model binds");
         let bound = bound.with_compatibility(compat);
         let mut request = oc_ai::schema::LLMRequest::new(bound);
@@ -3481,18 +3454,286 @@ mod tests {
         let catalog = Catalog::embedded();
         let vercel = catalog.provider("vercel").expect("vercel in catalog");
         let model_id = vercel.models.first().expect("vercel has models").id.as_str().to_string();
-        let model = language_model(
-            &context,
-            catalog,
-            "vercel",
-            &model_id,
-            &ModelConnection::default(),
-        )
-        .expect("vercel binds with the OIDC fallback");
+        let model =
+            language_model(&context, catalog, "vercel", &model_id, &ModelConnection::default())
+                .expect("vercel binds with the OIDC fallback");
         let route = Arc::clone(&model.route);
         let (transport_request, _) = wire(&route, model);
         assert_eq!(transport_request.header("authorization"), Some("Bearer oidc-token-1"));
         std::env::remove_var("VERCEL_OIDC_TOKEN");
     }
 
+    /// G-175: the full ref compatibility objects (the 13-provider preset
+    /// injection table) bind on the catalog lane — each asserted against the
+    /// ref-exact preset function / field set.
+    #[test]
+    fn provider_facade_chat_compatibility_presets_bind() {
+        let context = context();
+        let catalog = Catalog::embedded();
+        let cases: &[(&str, &str, &str, LanguageModelCompatibility)] = &[
+            (
+                "deepseek",
+                "@opencode/ai/providers/deepseek",
+                "deepseek-chat",
+                oc_ai::protocols::openai_chat::deepseek_chat_compatibility(),
+            ),
+            (
+                "groq",
+                "@opencode/ai/providers/groq",
+                "llama-3.3-70b-versatile",
+                oc_ai::protocols::openai_chat::groq_chat_compatibility(),
+            ),
+            (
+                "openrouter",
+                "@opencode/ai/providers/openrouter",
+                "anthropic/claude-sonnet-4.6",
+                // openrouter.ts:199 — promptCacheKey ONLY (no reasoning field)
+                LanguageModelCompatibility {
+                    supports_prompt_cache_key: Some(true),
+                    ..Default::default()
+                },
+            ),
+            (
+                "venice",
+                "@opencode/ai/providers/venice",
+                "venice-1",
+                oc_ai::protocols::openai_chat::venice_chat_compatibility(),
+            ),
+            (
+                "zai",
+                "@opencode/ai/providers/zai/chat",
+                "glm-4.6",
+                oc_ai::protocols::openai_chat::zai_chat_compatibility(),
+            ),
+            (
+                "alibaba",
+                "@opencode/ai/providers/alibaba/chat",
+                "qwen3-max",
+                oc_ai::protocols::openai_chat::alibaba_chat_compatibility(),
+            ),
+            (
+                "minimax",
+                "@opencode/ai/providers/minimax/chat",
+                "MiniMax-M2.1",
+                // minimax.ts:119
+                LanguageModelCompatibility {
+                    supports_store: Some(false),
+                    supports_strict_mode: Some(false),
+                    ..Default::default()
+                },
+            ),
+            (
+                "moonshotai",
+                "@opencode/ai/providers/moonshot/chat",
+                "kimi-k2.7",
+                // moonshot.ts:104-111
+                LanguageModelCompatibility {
+                    max_tokens_field: Some(MaxTokensFieldCompatibility::MaxTokens),
+                    supports_store: Some(false),
+                    supports_strict_mode: Some(false),
+                    supports_prompt_cache_key: Some(true),
+                    sanitizer: Some(oc_ai::schema::SanitizerCompatibility::Moonshot),
+                    reasoning_field: Some("reasoning_content".into()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "cohere",
+                "@opencode/ai/providers/cohere/chat",
+                "command-a",
+                // cohere.ts:43-48
+                LanguageModelCompatibility {
+                    max_tokens_field: Some(MaxTokensFieldCompatibility::MaxTokens),
+                    supports_store: Some(false),
+                    supports_usage_in_streaming: Some(true),
+                    reasoning_field: Some("reasoning_content".into()),
+                    supports_strict_mode: Some(false),
+                    ..Default::default()
+                },
+            ),
+            (
+                "meta",
+                "@opencode/ai/providers/meta/chat",
+                "meta-muse-1",
+                // meta.ts:134-136
+                LanguageModelCompatibility {
+                    max_tokens_field: Some(MaxTokensFieldCompatibility::MaxCompletionTokens),
+                    supports_store: Some(false),
+                    supports_prompt_cache_key: Some(true),
+                    ..Default::default()
+                },
+            ),
+        ];
+        for (provider_id, package, model_id, expected) in cases {
+            let snapshot =
+                catalog.provider(provider_id).unwrap_or_else(|| panic!("{provider_id} in catalog"));
+            let mut info = snapshot.models.first().expect("has models").clone();
+            info.package = Some(package.to_string());
+            info.compatibility = None;
+            info.id = oc_schema::ModelId::parse((*model_id).to_string());
+            let model = language_model_for_model(
+                &context,
+                snapshot,
+                &info,
+                &ModelConnection { api_key: Some("sk-test".into()), ..Default::default() },
+            )
+            .unwrap_or_else(|error| panic!("{provider_id} chat binds: {error}"));
+            assert_eq!(
+                model.compatibility.as_ref(),
+                Some(expected),
+                "{provider_id}: ref-exact compat preset"
+            );
+        }
+    }
+
+    /// G-174: explicit `requireSignature: false` binds on the third-party
+    /// Anthropic Messages lanes (alibaba.ts:104, meta.ts:141,
+    /// zai-coding-plan.ts:72, moonshot.ts:114-117), and the model-level
+    /// overlay forwards through the merge.
+    #[test]
+    fn provider_facade_messages_require_signature_presets() {
+        let context = context();
+        let catalog = Catalog::embedded();
+        let cases = [
+            ("alibaba", "@opencode/ai/providers/alibaba/messages"),
+            ("meta", "@opencode/ai/providers/meta/messages"),
+            ("zai-coding-plan", "@opencode/ai/providers/zai-coding-plan/messages"),
+            ("moonshotai", "@opencode/ai/providers/moonshot/messages"),
+        ];
+        for (provider_id, package) in cases {
+            let snapshot =
+                catalog.provider(provider_id).unwrap_or_else(|| panic!("{provider_id} in catalog"));
+            let mut info = snapshot.models.first().expect("has models").clone();
+            info.package = Some(package.to_string());
+            info.compatibility = None;
+            info.id = oc_schema::ModelId::parse(format!("{provider_id}-m"));
+            let model = language_model_for_model(
+                &context,
+                snapshot,
+                &info,
+                &ModelConnection { api_key: Some("sk-test".into()), ..Default::default() },
+            )
+            .unwrap_or_else(|error| panic!("{provider_id} messages binds: {error}"));
+            let compatibility = model.compatibility.as_ref().expect("compat preset binds");
+            assert_eq!(
+                compatibility.require_signature,
+                Some(false),
+                "{provider_id}: requireSignature false"
+            );
+            if provider_id == "moonshotai" {
+                assert_eq!(
+                    compatibility.sanitizer,
+                    Some(oc_ai::schema::SanitizerCompatibility::Moonshot),
+                    "moonshot messages keeps the moonshot sanitizer"
+                );
+            }
+        }
+
+        // overlay forwarding: a model-level requireSignature overlay wins
+        let snapshot = catalog.provider("groq").unwrap();
+        let mut info = snapshot.models.first().unwrap().clone();
+        info.package = Some("@opencode/ai/providers/groq".into());
+        info.compatibility = Some(oc_schema::model::Compatibility {
+            require_signature: Some(false),
+            ..Default::default()
+        });
+        let model = language_model_for_model(
+            &context,
+            snapshot,
+            &info,
+            &ModelConnection { api_key: Some("sk-test".into()), ..Default::default() },
+        )
+        .expect("groq binds");
+        assert_eq!(
+            model.compatibility.as_ref().expect("compat").require_signature,
+            Some(false),
+            "model-level requireSignature forwards over the package preset"
+        );
+    }
+
+    /// G-174: the Vercel AI Gateway messages lane requires thinking
+    /// signatures ONLY for `anthropic/`-prefixed models
+    /// (vercel-ai-gateway.ts:264); the muse chat lane replays reasoning.
+    #[test]
+    fn provider_facade_vercel_gateway_require_signature_rule() {
+        let context = context();
+        let catalog = Catalog::embedded();
+        let snapshot = catalog.provider("vercel").expect("vercel in catalog");
+        let bind = |model_id: &str| {
+            let mut info = snapshot.models.first().unwrap().clone();
+            info.package = Some("@opencode/ai/providers/vercel-ai-gateway".into());
+            info.id = oc_schema::ModelId::parse((*model_id).to_string());
+            language_model_for_model(
+                &context,
+                snapshot,
+                &info,
+                &ModelConnection { api_key: Some("sk-test".into()), ..Default::default() },
+            )
+            .unwrap_or_else(|error| panic!("vercel {model_id} binds: {error}"))
+        };
+        assert_eq!(
+            bind("anthropic/claude-5").compatibility.as_ref().unwrap().require_signature,
+            Some(true),
+            "anthropic/-prefixed models keep the signature requirement"
+        );
+        assert_eq!(
+            bind("alibaba/qwen3.8-max").compatibility.as_ref().unwrap().require_signature,
+            Some(false),
+            "recorded gateway translations return empty signatures"
+        );
+        assert_eq!(
+            bind("meta/muse-1").compatibility.as_ref().unwrap().reasoning_field.as_deref(),
+            Some("reasoning"),
+            "the muse chat lane replays reasoning"
+        );
+        assert!(
+            bind("openai/gpt-5.2").compatibility.is_none(),
+            "the responses lane carries no compat preset"
+        );
+    }
+
+    /// G-172: the meta messages lane defaults thinking to adaptive with the
+    /// display omitted (meta.ts:113-118 route defaults).
+    #[test]
+    fn provider_facade_meta_messages_thinking_default() {
+        let context = context();
+        let catalog = Catalog::embedded();
+        let snapshot = catalog.provider("meta").expect("meta in catalog");
+        let mut info = snapshot.models.first().unwrap().clone();
+        info.package = Some("@opencode/ai/providers/meta/messages".into());
+        info.id = oc_schema::ModelId::parse("meta-muse-1");
+        let model = language_model_for_model(
+            &context,
+            snapshot,
+            &info,
+            &ModelConnection { api_key: Some("sk-test".into()), ..Default::default() },
+        )
+        .expect("meta messages binds");
+        let route = Arc::clone(&model.route);
+        let (_, body) = wire(&route, model);
+        assert_eq!(body["thinking"]["type"], serde_json::json!("adaptive"));
+        assert_eq!(body["thinking"]["display"], serde_json::json!("omitted"));
+    }
+
+    /// G-172: the minimax chat lane carries `reasoning_split: true` by
+    /// default through the facade binding (minimax.ts:70).
+    #[test]
+    fn provider_facade_minimax_chat_reasoning_split_default() {
+        let context = context();
+        let catalog = Catalog::embedded();
+        let snapshot = catalog.provider("minimax").expect("minimax in catalog");
+        let mut info = snapshot.models.first().unwrap().clone();
+        info.package = Some("@opencode/ai/providers/minimax/chat".into());
+        info.id = oc_schema::ModelId::parse("MiniMax-M2.1");
+        let model = language_model_for_model(
+            &context,
+            snapshot,
+            &info,
+            &ModelConnection { api_key: Some("sk-test".into()), ..Default::default() },
+        )
+        .expect("minimax chat binds");
+        let route = Arc::clone(&model.route);
+        let (_, body) = wire(&route, model);
+        assert_eq!(body["reasoning_split"], serde_json::json!(true));
+    }
 }

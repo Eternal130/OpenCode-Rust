@@ -2778,11 +2778,7 @@ async fn g115_command_cancel_aborts_in_flight_attempt() {
         Method::Command {
             id: "sleep".into(),
             label: "Sleeps".into(),
-            command: vec![
-                "sh".into(),
-                "-c".into(),
-                "sleep 30; echo leaked-key".into(),
-            ],
+            command: vec!["sh".into(), "-c".into(), "sleep 30; echo leaked-key".into()],
         },
         None,
     );

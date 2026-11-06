@@ -646,8 +646,7 @@ pub fn catalog_summary(entries: &[CatalogEntry]) -> CatalogSummary {
         .map(|(name, group)| {
             // G-106② — the namespace's registered description (ref
             // catalog.ts:64 `flattened.namespaces.get(name)?.description`).
-            let description =
-                group.iter().find_map(|entry| entry.namespace_description.clone());
+            let description = group.iter().find_map(|entry| entry.namespace_description.clone());
             // Listings sorted by path inside the namespace.
             let pinned_paths: std::collections::HashSet<&str> = group
                 .iter()
@@ -1079,13 +1078,11 @@ fn catalog_update_text(previous: &CatalogSummary, current: &CatalogSummary) -> S
     let mut parts = vec!["The Code Mode tool catalog has changed.".to_string()];
     if !diff.added.is_empty() {
         parts.push(
-            [
-                "New tools are available in addition to those previously listed:".to_string(),
-            ]
-            .into_iter()
-            .chain(diff.added.iter().map(|entry| entry.line.clone()))
-            .collect::<Vec<_>>()
-            .join("\n"),
+            ["New tools are available in addition to those previously listed:".to_string()]
+                .into_iter()
+                .chain(diff.added.iter().map(|entry| entry.line.clone()))
+                .collect::<Vec<_>>()
+                .join("\n"),
         );
     }
     if !diff.changed.is_empty() {
@@ -1613,7 +1610,8 @@ impl super::ToolExecuteWithContext for CodeModeLeaf {
             // codemode/tool.ts:88 — `context.progress({toolCalls})` with
             // the (settled) call list.
             if let Some(progress) = &self.progress {
-                let tool_calls = metadata.get("toolCalls").cloned().unwrap_or(Value::Array(Vec::new()));
+                let tool_calls =
+                    metadata.get("toolCalls").cloned().unwrap_or(Value::Array(Vec::new()));
                 progress(context, serde_json::json!({ "toolCalls": tool_calls }));
             }
             Ok(super::ToolOutcome {
@@ -1891,7 +1889,11 @@ mod tests {
     /// line, rides the stored value, and counts against the budget.
     #[test]
     fn g106_namespace_description_renders_and_round_trips() {
-        let mut with_desc = entry("opencode.models", "Search models", json!({ "type": "object", "properties": {} }));
+        let mut with_desc = entry(
+            "opencode.models",
+            "Search models",
+            json!({ "type": "object", "properties": {} }),
+        );
         with_desc.namespace_description = Some(
             "Tools for managing OpenCode itself, such as working with sessions, searching the available models, and reading MCP resources.".into(),
         );
@@ -1941,19 +1943,23 @@ mod tests {
         // Removed tools land in the no-longer-available list.
         let back = catalog_update_text(&current, &previous);
         assert!(
-            back.contains("The following tools are no longer available and must not be called: tools.a.three"),
+            back.contains(
+                "The following tools are no longer available and must not be called: tools.a.three"
+            ),
             "{back}"
         );
         // A changed listing line supersedes the previous one.
         let changed = base(&[("a.one", "Edited description")]);
         let text = catalog_update_text(&previous, &changed);
-        assert!(text.contains("Changed tool listings supersede the previously listed ones:"), "{text}");
+        assert!(
+            text.contains("Changed tool listings supersede the previously listed ones:"),
+            "{text}"
+        );
         assert!(text.contains("tools.a.one(): Promise<void> // Edited description"), "{text}");
         // No change at all still falls back to the replacement (ref
         // returns `replacement` when nothing differs — instructions.ts:96).
-        assert!(catalog_update_text(&previous, &previous).starts_with(
-            "The Code Mode tool catalog has changed. This catalog supersedes"
-        ));
+        assert!(catalog_update_text(&previous, &previous)
+            .starts_with("The Code Mode tool catalog has changed. This catalog supersedes"));
         // A namespace description change regenerates the whole catalog
         // (instructions.ts:41-48).
         let mut with_desc = base(&[]);
@@ -1961,9 +1967,8 @@ mod tests {
             namespace.description = Some("desc".into());
         }
         assert!(
-            catalog_update_text(&previous, &with_desc).starts_with(
-                "The Code Mode tool catalog has changed. This catalog supersedes"
-            ),
+            catalog_update_text(&previous, &with_desc)
+                .starts_with("The Code Mode tool catalog has changed. This catalog supersedes"),
             "description change forces the whole-text replacement"
         );
     }
@@ -2535,14 +2540,12 @@ mod limits_tests {
             })),
         )
         .await;
-        let result = call(&state, EXECUTE_NAME, json!({ "code": "two" }))
-            .await
-            .expect("program runs");
+        let result =
+            call(&state, EXECUTE_NAME, json!({ "code": "two" })).await.expect("program runs");
         assert!(result.metadata.is_some());
         let seen = seen.lock().expect("progress sink");
         assert_eq!(seen.len(), 1, "one progress emission");
-        let calls =
-            seen[0].get("toolCalls").and_then(Value::as_array).expect("toolCalls payload");
+        let calls = seen[0].get("toolCalls").and_then(Value::as_array).expect("toolCalls payload");
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0]["tool"], "greet");
         assert_eq!(calls[0]["status"], "completed");

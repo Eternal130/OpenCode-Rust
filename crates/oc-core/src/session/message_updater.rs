@@ -929,7 +929,10 @@ mod g112_tests {
         // (1) Successful terminal snapshot with files: [] — writes the
         // empty array (an empty array is truthy in JS: the guard passes).
         project_terminal_snapshot(&mut draft, None, Some(&[]));
-        assert_eq!(draft.snapshot.as_ref().and_then(|snapshot| snapshot.files.clone()), Some(vec![]));
+        assert_eq!(
+            draft.snapshot.as_ref().and_then(|snapshot| snapshot.files.clone()),
+            Some(vec![])
+        );
 
         // Seed a stale non-empty value, then the capture-failure terminal
         // event arrives WITHOUT a files key (the snapshot end id still

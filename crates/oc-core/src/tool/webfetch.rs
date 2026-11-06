@@ -4,10 +4,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::html_markdown::{MAX_BYTES, convert_html_to_markdown, extract_text_from_html};
+use super::html_markdown::{convert_html_to_markdown, extract_text_from_html, MAX_BYTES};
 use crate::permission::{AssertInput, PermissionError};
 use crate::tool::{
-    BuiltinTool, ToolExecuteWithContext, ToolFailure, ToolOutcome, ToolServices, permission_cause,
+    permission_cause, BuiltinTool, ToolExecuteWithContext, ToolFailure, ToolOutcome, ToolServices,
 };
 
 pub const DEFAULT_TIMEOUT_SECONDS: u64 = 30;

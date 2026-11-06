@@ -537,22 +537,21 @@ mod tests {
         let mut metadata = ProviderMetadata::new();
         metadata.insert(key, [("itemId".to_string(), json!("ig_1"))].into_iter().collect());
         request.messages.push(Message::assistant(vec![ContentPart::ToolResult {
-                id: "ig_1".to_string(),
-                name: "image_generation".to_string(),
-                namespace: None,
-                result: ToolResultValue::Content {
-                    value: ToolContentItems(vec![json!({
-                        "type": "file",
-                        "uri": "data:image/png;base64,AQID",
-                        "mime": "image/png",
-                    })]),
-                },
-                provider_executed: Some(true),
-                cache: None,
-                metadata: None,
-                provider_metadata: Some(metadata),
+            id: "ig_1".to_string(),
+            name: "image_generation".to_string(),
+            namespace: None,
+            result: ToolResultValue::Content {
+                value: ToolContentItems(vec![json!({
+                    "type": "file",
+                    "uri": "data:image/png;base64,AQID",
+                    "mime": "image/png",
+                })]),
             },
-        ]));
+            provider_executed: Some(true),
+            cache: None,
+            metadata: None,
+            provider_metadata: Some(metadata),
+        }]));
         let body = from_request(&request).unwrap();
         let input = body["input"].as_array().unwrap();
         let replayed = input

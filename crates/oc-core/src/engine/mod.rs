@@ -2313,12 +2313,11 @@ fn tool_progress_channel(
                 serde_json::Value::Object(fields) => {
                     fields.iter().map(|(key, value)| (key.clone(), value.clone())).collect()
                 }
-                other => {
-                    vec![("value".to_string(), other.clone())].into_iter().collect()
-                }
+                other => vec![("value".to_string(), other.clone())].into_iter().collect(),
             };
             let mut locked = log.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            locked.insert((context.session_id.as_str().to_string(), context.call_id.clone()), record);
+            locked
+                .insert((context.session_id.as_str().to_string(), context.call_id.clone()), record);
         }
         let data = serde_json::json!({
             "sessionID": context.session_id.as_str(),
@@ -2372,7 +2371,10 @@ fn subagent_plugin(inputs: &Arc<PluginInputs>) -> InternalPlugin {
             // was not clickable). G-82: also recorded into the location's
             // progress log so failure snapshots / abort suffixes observe
             // it.
-            progress: Some(tool_progress_channel(progress_bus.clone(), inputs.progress_log.clone())),
+            progress: Some(tool_progress_channel(
+                progress_bus.clone(),
+                inputs.progress_log.clone(),
+            )),
             interrupt: None,
         };
         crate::tool::subagent::register(

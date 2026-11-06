@@ -197,6 +197,14 @@ fn zai_wrap(wrap: &mut AnthropicBodyWrap<'_>) -> Result<(), AiError> {
 /// flatten-tool natives carrying `native.meta` web-search config are re-mapped
 /// to Anthropic's `{ type: "web_search", name: "web_search", user_location }`.
 fn meta_wrap(wrap: &mut AnthropicBodyWrap<'_>) -> Result<(), AiError> {
+    // The generic Anthropic Messages protocol handles Meta's `thinking`
+    // option unchanged (meta-messages.ts delegates the body build); re-attach
+    // the raw option the seam stripped (G-172: the route-default adaptive
+    // thinking with the display omitted).
+    if let Some(raw) = wrap.raw_thinking {
+        let raw = raw.clone();
+        wrap.set_thinking(Some(raw));
+    }
     let Some(tools) = wrap.body.get_mut("tools").and_then(Value::as_array_mut) else {
         return Ok(());
     };

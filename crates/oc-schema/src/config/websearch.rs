@@ -95,7 +95,10 @@ impl schemars::JsonSchema for WebSearchSelection {
             ..Default::default()
         });
         Schema::Object(SchemaObject {
-            subschemas: Some(Box::new(SubschemaValidation { one_of: Some(vec![info, literal_false]), ..Default::default() })),
+            subschemas: Some(Box::new(SubschemaValidation {
+                one_of: Some(vec![info, literal_false]),
+                ..Default::default()
+            })),
             ..Default::default()
         })
     }
@@ -128,7 +131,8 @@ mod tests {
     /// G-160①: `true` is a schema error (ref union only admits literal `false`).
     #[test]
     fn selection_rejects_true() {
-        let err = serde_json::from_value::<WebSearchSelection>(serde_json::json!(true)).unwrap_err();
+        let err =
+            serde_json::from_value::<WebSearchSelection>(serde_json::json!(true)).unwrap_err();
         assert!(err.to_string().contains("literal `false`"), "unexpected error: {err}");
     }
 }

@@ -118,11 +118,8 @@ pub async fn read_text(
     files: &dyn crate::environment::Files,
     absolute: &Path,
 ) -> std::io::Result<TextContent> {
-    let bytes = files
-        .read(&absolute.to_string_lossy(), None)
-        .await
-        .map_err(std::io::Error::from)?
-        .bytes;
+    let bytes =
+        files.read(&absolute.to_string_lossy(), None).await.map_err(std::io::Error::from)?.bytes;
     decode_text(&bytes)
 }
 
@@ -142,11 +139,8 @@ pub async fn sync_text_bom(
 ) -> std::io::Result<TextContent> {
     let current = read_text(files, absolute).await?;
     let canonical = bom_join(&current.text, bom);
-    let stored = files
-        .read(&absolute.to_string_lossy(), None)
-        .await
-        .map_err(std::io::Error::from)?
-        .bytes;
+    let stored =
+        files.read(&absolute.to_string_lossy(), None).await.map_err(std::io::Error::from)?.bytes;
     if canonical.as_bytes() != stored.as_slice() {
         files
             .write(&absolute.to_string_lossy(), canonical.as_bytes())

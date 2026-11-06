@@ -216,8 +216,10 @@ impl Route {
         // port of `prepareRequest`'s `ToolSchemaProjection.tools(dedupe(...), model)`
         // (route/client.ts:562-567; G-173). Protocols receive pre-projected
         // schemas and must not project again.
-        let tools =
-            crate::protocols::sanitizer::project_tools(dedupe_tools(original.tools.clone()), &original.model);
+        let tools = crate::protocols::sanitizer::project_tools(
+            dedupe_tools(original.tools.clone()),
+            &original.model,
+        );
         let updated = original.update(LLMRequestPatch { tools: Some(tools), ..Default::default() });
         let resolved = apply_cache_policy(&apply_effort_updates(self, &updated));
         match &self.headers {

@@ -247,8 +247,7 @@ fn finish_reason_json(reason: FinishReason) -> serde_json::Value {
 /// into its failure snapshots and the subagent abort suffix — the
 /// observable half of ref `publish-llm-event.ts:562-572`
 /// (`tool.progress = update` before the publish).
-pub type ProgressLog =
-    std::sync::Arc<std::sync::Mutex<BTreeMap<(String, String), Record>>>;
+pub type ProgressLog = std::sync::Arc<std::sync::Mutex<BTreeMap<(String, String), Record>>>;
 
 /// The publisher. Construct one per attempt; the step loop owns it.
 pub struct LlmEventPublisher {

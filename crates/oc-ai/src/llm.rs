@@ -136,7 +136,11 @@ fn validate_json_schema(value: &Value, schema: &Value, path: &str) -> Result<(),
 }
 
 fn at(path: &str) -> &str {
-    if path.is_empty() { "value" } else { path }
+    if path.is_empty() {
+        "value"
+    } else {
+        path
+    }
 }
 
 /// Convenience re-export used by tests assembling finish events.

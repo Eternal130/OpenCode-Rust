@@ -458,7 +458,10 @@ async fn events_streams_observations_until_terminal() {
                 id: "tr1".into(),
                 progress: None,
             }),
-            GenerationEvent::Finished(FinishedEvent { id: "tr1".into(), status: Status::Completed }),
+            GenerationEvent::Finished(FinishedEvent {
+                id: "tr1".into(),
+                status: Status::Completed
+            }),
         ],
         "two running observations then the terminal finished event"
     );
@@ -470,13 +473,11 @@ async fn events_streams_observations_until_terminal() {
 /// event with no further polls (generation.ts:133).
 #[tokio::test]
 async fn events_on_terminal_generation_yields_once() {
-    let transport = Arc::new(MockTransport::from_interactions(vec![
-        post(
-            "https://api.assemblyai.com/v2/transcript",
-            200,
-            r#"{"id":"tr1","status":"completed"}"#,
-        ),
-    ]));
+    let transport = Arc::new(MockTransport::from_interactions(vec![post(
+        "https://api.assemblyai.com/v2/transcript",
+        200,
+        r#"{"id":"tr1","status":"completed"}"#,
+    )]));
     let mut spec = MediaRouteSpec::new(shared(&transport));
     spec.read_retry = test_retry();
     spec.auth = Some(auth::Definition::bearer(Secret::Value("asm-key".into())));
@@ -498,10 +499,13 @@ async fn events_on_terminal_generation_yields_once() {
     while let Some(item) = events.next().await {
         seen.push(item.expect("observation"));
     }
-    assert_eq!(seen, vec![GenerationEvent::Finished(FinishedEvent {
-        id: "tr1".into(),
-        status: Status::Completed,
-    })]);
+    assert_eq!(
+        seen,
+        vec![GenerationEvent::Finished(FinishedEvent {
+            id: "tr1".into(),
+            status: Status::Completed,
+        })]
+    );
     assert_eq!(transport.requests().len(), 1, "no polls for an already-terminal generation");
 }
 
@@ -578,7 +582,8 @@ async fn events_deadline_fails_with_timeout_reason() {
     let generation = route.start(&request).await.expect("start");
     // Tiny deadline: the first refresh succeeds (running), then the
     // clamped sleep lands past the deadline and the next `within` fails.
-    let options = PollOptions { interval: Duration::from_secs(5), timeout: Duration::from_millis(50) };
+    let options =
+        PollOptions { interval: Duration::from_secs(5), timeout: Duration::from_millis(50) };
     let mut events = Box::pin(generation.events(options));
     let mut final_error = None;
     while let Some(item) = events.next().await {
