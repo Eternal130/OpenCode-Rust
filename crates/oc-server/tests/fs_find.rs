@@ -201,3 +201,49 @@ async fn find_serves_from_the_shared_index_no_walk_per_request() {
         "requests inside the freshness window must not rewalk"
     );
 }
+
+/// G-203 — REF exclusion parity with ripgrep.ts:193-218 (`rg --files`
+/// with no `--hidden`): dot entries are never indexed, so hidden files
+/// and hidden subtrees cannot surface as find results.
+#[tokio::test]
+async fn g203_find_excludes_hidden_entries_like_ripgrep() {
+    let server = boot().await;
+    let workspace = server.workspace.path().to_path_buf();
+    std::fs::write(workspace.join("needle.txt"), "x").expect("visible");
+    std::fs::write(workspace.join(".needle.txt"), "x").expect("hidden file");
+    std::fs::create_dir_all(workspace.join(".hidden")).expect("hidden dir");
+    std::fs::write(workspace.join(".hidden").join("needle.txt"), "x").expect("hidden hit");
+
+    let found = paths(&find_raw(&server, "needle").await);
+    assert_eq!(found.len(), 1, "only the visible hit: {found:?}");
+    assert!(found[0].ends_with("needle.txt") && !found[0].contains(".hidden"));
+}
+
+/// G-203 — ripgrep honors .gitignore by default: gitignored entries
+/// are excluded from the index exactly like ref's rg stream.
+#[tokio::test]
+async fn g203_find_excludes_gitignored_entries_like_ripgrep() {
+    let server = boot().await;
+    let workspace = server.workspace.path().to_path_buf();
+    // A repo at the scan root (discover finds it; the ignore oracle
+    // applies).
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&workspace)
+            .output()
+            .expect("git");
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    };
+    git(&["init", "--initial-branch=main"]);
+    std::fs::write(workspace.join(".gitignore"), "ignored/\n*.log\n").expect("gitignore");
+    std::fs::create_dir_all(workspace.join("ignored")).expect("ignored dir");
+    std::fs::write(workspace.join("ignored").join("needle.txt"), "x").expect("ignored hit");
+    std::fs::write(workspace.join("needle.log"), "x").expect("ignored glob hit");
+    std::fs::write(workspace.join("needle.txt"), "x").expect("tracked-style hit");
+
+    let found = paths(&find_raw(&server, "needle").await);
+    let names: Vec<String> =
+        found.iter().map(|p| p.rsplit('/').next().unwrap().to_owned()).collect();
+    assert_eq!(names, vec!["needle.txt".to_owned()], "gitignored entries excluded: {found:?}");
+}

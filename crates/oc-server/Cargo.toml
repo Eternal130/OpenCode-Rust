@@ -30,6 +30,11 @@ oc-schema = { workspace = true }
 oc-util = { workspace = true }
 oc-client = { workspace = true }
 oc-plugin-host = { workspace = true }
+# G-203 — the fs find index honors the scan root's gitignore rules
+# (ripgrep's default when ref's filesystem/search.ts shells out to
+# `rg --files`); git2's ignore oracle is the same seam oc-core's
+# snapshot store uses.
+git2 = { version = "0.19", default-features = false }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
