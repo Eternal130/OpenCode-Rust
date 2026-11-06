@@ -235,6 +235,13 @@ impl SessionCompaction {
         self.spent.lock().keys().cloned().collect()
     }
 
+    /// G-195 test seam: the shared request service (asserts the native
+    /// path passes the session WebSocket flag).
+    #[cfg(test)]
+    pub(crate) fn test_requests(&self) -> &Arc<SessionModelRequest> {
+        &self.requests
+    }
+
     /// `compact` (compaction.ts:205-240, 660-673). Manual compactions
     /// settle through their `/compact` inbox item, which the runner owns.
     pub async fn compact(&self, trigger: Trigger) -> CompactStatus {
@@ -354,7 +361,7 @@ impl SessionCompaction {
         let headings: Vec<&str> =
             SUMMARY_TEMPLATE.lines().filter(|line| line.starts_with("##")).collect();
         let filled = |text: &str| text.lines().any(|line| headings.contains(&line.trim()));
-        let prepared = self.prepare(context, &split.0, budget).await?;
+        let prepared = self.prepare(context, &split.0, budget, false).await?;
 
         // Hooks saw the request without the summary prompt, so it is
         // appended here. A reply that ignores the template gets one
@@ -427,7 +434,7 @@ impl SessionCompaction {
                 response: None,
             }))
         };
-        let prepared = self.prepare(context, &context.messages, budget).await?;
+        let prepared = self.prepare(context, &context.messages, budget, true).await?;
 
         // History is selected before request hooks, so a hook that reroutes
         // the request cannot be honored here.
@@ -634,12 +641,15 @@ impl SessionCompaction {
     // -----------------------------------------------------------------------
 
     /// `prepare` (compaction.ts:575-592): the conversation as the runner
-    /// would send it, after request hooks.
+    /// would send it, after request hooks. The native path passes the
+    /// session WebSocket seam (ref `prepare(..., "session")`,
+    /// compaction.ts:335+569-590); the summarize path passes nothing.
     async fn prepare(
         &self,
         context: &Loaded,
         messages: &[MessageInfo],
         budget: i64,
+        web_socket: bool,
     ) -> Result<Prepared, DeliverError> {
         let base = base_transcript(
             &context.agent,
@@ -657,7 +667,7 @@ impl SessionCompaction {
                 system: base.system,
                 messages: base.messages,
                 tool_choice: None,
-                web_socket: false,
+                web_socket,
                 input_tokens: Some(InputTokens { measured: budget as f64, estimated: 0.0 }),
             })
             .await
@@ -843,12 +853,17 @@ async fn stream_summary(
                     ));
                 }
                 FinishReason::Error => {
-                    return Err(DeliverError::Failure(SessionError {
-                        error_type: "provider.unknown".into(),
-                        message: "Compaction generation failed".into(),
-                        status: None,
-                        response: None,
-                    }));
+                    // REF (compaction.ts:545-547): an error finish maps to
+                    // `AIError(UnknownProviderError)` — a PROVIDER error,
+                    // so the deliver loop's shrink/retry policy applies
+                    // instead of a terminal failure.
+                    return Err(DeliverError::Provider(AiError::new(
+                        oc_ai::schema::AiErrorReason::UnknownProvider {
+                            fields: oc_ai::schema::ReasonFields::new(
+                                "Compaction generation failed",
+                            ),
+                        },
+                    )));
                 }
                 FinishReason::Length => {
                     return Err(DeliverError::Failure(SessionError {
@@ -926,14 +941,17 @@ pub fn due(context: &Loaded, ceiling: f64) -> bool {
         }
     }
     // An encrypted native window estimates as nothing, so wait for a
-    // response to measure it.
+    // response to measure it. REF (compaction.ts:242-251):
+    // `measured < findLastIndex(isCheckpoint)` with findLastIndex's -1
+    // when absent — so a checkpoint present without a measured reply
+    // after it (measured = -1 < checkpoint >= 0) is NOT due. This closes
+    // the one-beat window where a completed compaction plus one more
+    // message still estimates over the ceiling and would re-trigger.
     let measured =
         messages.iter().rposition(|message| has_measured_prompt(message, &context.model.reference));
     let checkpoint = messages.iter().rposition(is_checkpoint);
-    if let (Some(measured), Some(checkpoint)) = (measured, checkpoint) {
-        if measured < checkpoint {
-            return false;
-        }
+    if measured.map_or(-1, |index| index as isize) < checkpoint.map_or(-1, |index| index as isize) {
+        return false;
     }
     (estimate_context(context) as f64) >= ceiling
 }

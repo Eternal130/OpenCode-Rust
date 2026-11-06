@@ -486,6 +486,66 @@ async fn bus_publish_all_duplicate_ids_rejected() {
     assert_eq!(event_rows(&bus, "ses_1").await, Vec::new());
 }
 
+/// A clock advancing one millisecond per read — publishAll must sample
+/// `created` per event (G-207, ref bus.ts:531-560 stamps each event).
+struct AdvancingClock(std::sync::atomic::AtomicU64);
+
+impl Clock for AdvancingClock {
+    fn now(&self) -> std::time::SystemTime {
+        let ms = self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        std::time::UNIX_EPOCH + Duration::from_millis(ms)
+    }
+}
+
+#[tokio::test]
+async fn bus_publish_all_stamps_each_event_separately() {
+    let dir = tempfile::Builder::new()
+        .prefix("oc-core-bus-")
+        .tempdir_in("/tmp/opencode")
+        .expect("temp dir under /tmp/opencode");
+    let db = crate::database::Database::open_file(dir.path().join("opencode.db"))
+        .await
+        .expect("open database");
+    let bus = Bus::new(
+        db,
+        BusOptions {
+            clock: Arc::new(AdvancingClock(std::sync::atomic::AtomicU64::new(1_000))),
+            ids: fake_ids(),
+            persist: true,
+            log_read_page_size: 512,
+        },
+    );
+
+    let events = bus
+        .publish_all(vec![
+            PublishInput::new(created_def().clone(), created_data("ses_ts", "/repo")),
+            PublishInput::new(renamed_def().clone(), renamed_data("ses_ts", "batch")),
+            PublishInput::new(deleted_def().clone(), serde_json::json!({ "sessionID": "ses_ts" })),
+        ])
+        .await
+        .expect("publish_all");
+
+    let created: Vec<u64> = events.iter().map(|event| event.created).collect();
+    assert!(
+        created.windows(2).all(|pair| pair[0] < pair[1]),
+        "per-event clock samples must be distinct and monotonic, got {created:?}"
+    );
+}
+
+#[tokio::test]
+async fn bus_ephemeral_non_object_payload_publishes() {
+    // G-207: ref `publishEvent` (bus.ts:450-484) has no payload-shape
+    // validation — an ephemeral event whose data is not an object is a
+    // legal publish.
+    let (bus, _dir) = test_bus(false).await;
+    let event = bus
+        .publish(usage_def(), serde_json::json!("plain-string"), PublishOptions::default())
+        .await
+        .expect("non-object ephemeral payload publishes");
+    assert_eq!(event.data, serde_json::json!("plain-string"));
+    assert!(event.durable.is_none());
+}
+
 // ---------------------------------------------------------------------------
 // Projectors (atomicity)
 // ---------------------------------------------------------------------------

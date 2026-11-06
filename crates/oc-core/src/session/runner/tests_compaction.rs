@@ -896,3 +896,235 @@ async fn runner_compaction_native_auto_keeps_auto_started_and_ended() {
     assert_eq!(ended.2["reason"], serde_json::json!("auto"));
     assert!(ended.2.get("providerContext").is_some());
 }
+
+// -- G-194: due() one-beat window (ref compaction.ts:242-251 —
+// `measured < findLastIndex(isCheckpoint)` with findLastIndex's -1) --------
+
+/// A completed compaction message; `provider_context: Some(_)` makes it a
+/// checkpoint (native encrypted window).
+fn completed_compaction(checkpoint: bool) -> oc_schema::session_message::Info {
+    use oc_schema::session_support::{ProviderContext, Provenance};
+    oc_schema::session_message::Info::Compaction(Compaction::Completed {
+        id: mid("msg_c_due"),
+        metadata: None,
+        time: oc_schema::session_message::Time { created: 1 },
+        reason: CompactionReason::Auto,
+        model: None,
+        provider_state: None,
+        summary: "## Objective\n- done".into(),
+        recent: String::new(),
+        provider_context: checkpoint.then(|| ProviderContext {
+            version: (),
+            provenance: Provenance {
+                provider_id: oc_schema::id::ProviderId::parse("parityfake"),
+                provider: "parityfake".into(),
+                model_id: "fake-model".into(),
+                route: "r".into(),
+                protocol: "proto".into(),
+                endpoint: "e".into(),
+            },
+            messages: serde_json::to_value(vec![oc_ai::schema::messages::Message::user("kept")])
+                .unwrap(),
+        }),
+        cost: None,
+        tokens: None,
+    })
+}
+
+/// An assistant reply carrying measured prompt tokens for the context's
+/// model (`hasMeasuredPrompt` trusts it).
+fn measured_assistant() -> oc_schema::session_message::Info {
+    let mut message = assistant("measured reply");
+    if let oc_schema::session_message::Info::Assistant { tokens, .. } = &mut message {
+        *tokens = Some(oc_schema::common::TokenUsage {
+            input: oc_schema::common::Num(100.0),
+            output: oc_schema::common::Num(1.0),
+            reasoning: oc_schema::common::Num(0.0),
+            cache: oc_schema::common::TokenUsageCache {
+                read: oc_schema::common::Num(0.0),
+                write: oc_schema::common::Num(0.0),
+            },
+        });
+    }
+    message
+}
+
+/// The one-beat window: a compaction completed, one more message arrived,
+/// the estimate still sits over the ceiling. With a checkpoint (native
+/// encrypted window) and no measured reply after it, REF is NOT due —
+/// the runner must first rebuild the request from the checkpoint and
+/// measure the reply.
+#[tokio::test]
+async fn runner_compaction_due_waits_for_measured_reply_after_checkpoint() {
+    use crate::session::runner::compaction::due;
+    let llm = TestLlm::new();
+    llm.always(oc_ai::testing::text("unused"));
+    let harness = harness_with(llm).await;
+    let session = harness.create_session().await;
+    let context = |messages: Vec<oc_schema::session_message::Info>| {
+        crate::session::runner::context::Loaded {
+            session: session.clone(),
+            agent_id: oc_schema::id::AgentId::parse("build"),
+            agent: super::tests_harness::agent_info("build", None),
+            model: super::tests_harness::test_resolved_model(),
+            initial: String::new(),
+            messages,
+            tools: Vec::new(),
+        }
+    };
+
+    // Checkpoint present, no measured reply after it → NOT due, even with
+    // the ceiling pinned at one token (estimate far over it).
+    assert!(!due(
+        &context(vec![user("hello there"), completed_compaction(true), user("one more beat")]),
+        1.0
+    ));
+    // Same shape WITHOUT the encrypted window (plain summary compaction,
+    // not a checkpoint) → due again: measured = checkpoint = -1.
+    assert!(due(
+        &context(vec![user("hello there"), completed_compaction(false), user("one more beat")]),
+        1.0
+    ));
+    // A measured reply after the checkpoint re-arms the trigger.
+    assert!(due(
+        &context(vec![
+            user("hello there"),
+            completed_compaction(true),
+            measured_assistant(),
+            user("one more beat"),
+        ]),
+        1.0
+    ));
+}
+
+// -- G-195: native compaction deviations (compaction.ts:335+569-590,
+// :545-547) ---------------------------------------------------------------
+
+/// The native path prepares its request through the session WebSocket
+/// seam (ref `prepare(..., "session")`); the summarize path passes none.
+#[tokio::test]
+async fn runner_compaction_native_prepares_through_the_session_ws_seam() {
+    let harness = native_harness().await;
+    harness.create_session().await;
+    harness.admit_prompt("msg_ws_native", "hello there").await;
+    harness.execution.resume(harness.session_id().as_str()).await.unwrap();
+    harness
+        .inbox
+        .admit(
+            "msg_ws_native_compact",
+            harness.session_id().as_str(),
+            Item::Compaction {
+                payload: oc_schema::session_inbox::CompactionPayload {},
+                delivery: Delivery::Steer,
+            },
+        )
+        .await
+        .unwrap();
+    harness.execution.resume(harness.session_id().as_str()).await.unwrap();
+
+    assert!(
+        harness.compaction.test_requests().test_last_web_socket(),
+        "native compaction must pass web_socket = session seam (ref compaction.ts:335)"
+    );
+}
+
+/// The summarize path prepares its request WITHOUT the session WebSocket
+/// seam (ref `prepare` leaves `webSocket` undefined).
+#[tokio::test]
+async fn runner_compaction_summarize_prepares_without_the_session_ws_seam() {
+    let llm = TestLlm::new();
+    llm.always(oc_ai::testing::text("## Objective\n- model summary"));
+    let harness = harness_with(llm).await;
+    harness.create_session().await;
+    harness.admit_prompt("msg_ws_summary", "hello there").await;
+    harness.execution.resume(harness.session_id().as_str()).await.unwrap();
+    harness
+        .inbox
+        .admit(
+            "msg_ws_summary_compact",
+            harness.session_id().as_str(),
+            Item::Compaction {
+                payload: oc_schema::session_inbox::CompactionPayload {},
+                delivery: Delivery::Steer,
+            },
+        )
+        .await
+        .unwrap();
+    harness.execution.resume(harness.session_id().as_str()).await.unwrap();
+
+    assert!(
+        !harness.compaction.test_requests().test_last_web_socket(),
+        "summarize compaction must not use the session WebSocket seam"
+    );
+}
+
+/// REF compaction.ts:545-547: an `error` finish during compaction maps to
+/// `AIError(UnknownProviderError)` — retryable — so the deliver loop
+/// resends under the session retry policy instead of failing once.
+#[tokio::test]
+async fn runner_compaction_error_finish_is_retryable_and_recovers() {
+    use crate::hooks::{fn_hook, HookOptions, RetryDecision, SessionRetryEvent};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let llm = TestLlm::new();
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::clone(&attempts);
+    llm.serve(move |request: &oc_ai::schema::messages::LLMRequest| {
+        if is_summary_request(request) {
+            if seen.fetch_add(1, Ordering::SeqCst) == 0 {
+                // Ends with an `error` finish reason.
+                oc_ai::testing::complete(
+                    oc_ai::schema::events::FinishReason::Error,
+                    vec![oc_ai::schema::events::LLMEvent::TextDelta {
+                        id: "t1".into(),
+                        text: "broken".to_string(),
+                        provider_metadata: None,
+                    }],
+                )
+            } else {
+                oc_ai::testing::text("## Objective\n- recovered summary")
+            }
+        } else {
+            oc_ai::testing::text("ok")
+        }
+    });
+    let harness = harness_with(llm.clone()).await;
+    // Zero-delay retries keep the test deterministic.
+    let _keep = harness
+        .hooks
+        .register_session_retry(
+            fn_hook(|event: &mut SessionRetryEvent| {
+                event.decision = RetryDecision::Retry { delay_ms: 0 };
+                Ok(())
+            }),
+            HookOptions::default(),
+        )
+        .await;
+    harness.create_session().await;
+    harness.admit_prompt("msg_errfin_1", "hello there").await;
+    harness.execution.resume(harness.session_id().as_str()).await.unwrap();
+    harness
+        .inbox
+        .admit(
+            "msg_errfin_2",
+            harness.session_id().as_str(),
+            Item::Compaction {
+                payload: oc_schema::session_inbox::CompactionPayload {},
+                delivery: Delivery::Steer,
+            },
+        )
+        .await
+        .unwrap();
+    harness.execution.resume(harness.session_id().as_str()).await.unwrap();
+
+    let events = harness.durable_events().await;
+    let ended = events
+        .iter()
+        .find(|(type_, _, _)| type_ == "session.compaction.ended")
+        .expect("compaction recovered via retry");
+    assert_eq!(ended.2["text"], serde_json::json!("## Objective\n- recovered summary"));
+    let summary_requests =
+        llm.requests().iter().filter(|request| is_summary_request(request)).count();
+    assert_eq!(summary_requests, 2, "the error finish was retried, not terminal");
+}

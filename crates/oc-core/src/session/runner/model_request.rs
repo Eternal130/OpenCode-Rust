@@ -462,6 +462,11 @@ pub struct SessionModelRequest {
     /// that pin raw media payloads); the engine always attaches the
     /// config-resolved limits.
     image_limits: Option<crate::image::Limits>,
+    /// G-195 test seam: the `web_socket` flag of the LAST prepared
+    /// request (native compaction passes the session seam, ref
+    /// compaction.ts:335+569-590).
+    #[cfg(test)]
+    last_web_socket: std::sync::atomic::AtomicBool,
 }
 
 fn tool_definition(registration: &crate::location::ToolRegistration) -> ToolDefinition {
@@ -476,7 +481,21 @@ fn tool_definition(registration: &crate::location::ToolRegistration) -> ToolDefi
 
 impl SessionModelRequest {
     pub fn new(hooks: Arc<HookRegistry>, tools: Arc<ToolRegistryState>, app: AppMetadata) -> Self {
-        Self { hooks, tools, app, image_limits: None }
+        Self {
+            hooks,
+            tools,
+            app,
+            image_limits: None,
+            #[cfg(test)]
+            last_web_socket: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    /// G-195 test seam: whether the last prepared request carried the
+    /// session WebSocket flag.
+    #[cfg(test)]
+    pub fn test_last_web_socket(&self) -> bool {
+        self.last_web_socket.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Attaches the model-input image limits (RV-G3): inline image parts
@@ -575,6 +594,8 @@ impl SessionModelRequest {
         // RV-G3: prompt-side image limits run before the session hooks see
         // the messages (prompt.ts normalizes attachments at read time).
         let input = RequestInput { messages: self.normalize_messages(input.messages), ..input };
+        #[cfg(test)]
+        self.last_web_socket.store(input.web_socket, std::sync::atomic::Ordering::SeqCst);
         let session = &input.session;
         let model = &input.model;
         let tools = input.tools.unwrap_or_default();
