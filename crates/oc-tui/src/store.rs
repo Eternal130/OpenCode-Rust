@@ -1073,6 +1073,36 @@ pub trait SelectionSink {
     fn switch_agent(&self, session_id: &str, agent: &str);
 }
 
+/// G-200① — the `session.viewed` ack seam (session-tabs.tsx:209-242):
+/// when a FOCUSED route enters a session the tab strip marks unread,
+/// the POST `session.view { idle }` acknowledges the watermark
+/// server-side (viewed state is server-global — other clients rely on
+/// this client reporting what its user has seen). Production retries
+/// with exponential backoff; tests record.
+pub trait SessionViewSink {
+    fn view(&self, session_id: &str, idle: f64);
+}
+
+/// The no-op default (no server attached).
+#[derive(Debug, Default)]
+pub struct NoSessionView;
+
+impl SessionViewSink for NoSessionView {
+    fn view(&self, _session_id: &str, _idle: f64) {}
+}
+
+/// The recording sink (tests assert against its log).
+#[derive(Debug, Default)]
+pub struct RecordingSessionViewSink {
+    pub calls: std::cell::RefCell<Vec<(String, f64)>>,
+}
+
+impl SessionViewSink for RecordingSessionViewSink {
+    fn view(&self, session_id: &str, idle: f64) {
+        self.calls.borrow_mut().push((session_id.to_owned(), idle));
+    }
+}
+
 /// The default recording sink (tests assert against its log).
 #[derive(Debug, Default)]
 pub struct RecordingSelectionSink {
@@ -1476,6 +1506,8 @@ pub struct Store {
     prompt_sink: std::rc::Rc<dyn PromptSink>,
     /// The server selection API (model/agent switch POSTs).
     selection_sink: Rc<dyn SelectionSink>,
+    /// G-200① — the `session.viewed` ack (POST session.view).
+    session_view_sink: Rc<dyn SessionViewSink>,
     /// The clipboard sink (`messages.copy` writes OSC 52 through it).
     clipboard_sink: Rc<dyn ClipboardSink>,
     /// The clipboard READ source (`prompt.paste`/ctrl+v — G-03; the
@@ -3872,6 +3904,7 @@ impl Store {
             session_list_sink: std::cell::RefCell::new(Rc::new(NoSessionListRefresh)),
             config_model: std::cell::RefCell::new(None),
             selection_sink: Rc::new(RecordingSelectionSink::default()),
+            session_view_sink: Rc::new(NoSessionView),
             clipboard_sink: Rc::new(crate::clipboard::RecordingClipboardSink::default()),
             clipboard_source: Rc::new(crate::clipboard::CoreClipboardSource::new()),
             editor_requested: Cell::new(false),
@@ -5291,6 +5324,11 @@ impl Store {
     /// Swap the server selection sink.
     pub fn set_selection_sink(&mut self, sink: Rc<dyn SelectionSink>) {
         self.selection_sink = sink;
+    }
+
+    /// G-200① — install the `session.viewed` ack sink.
+    pub fn set_session_view_sink(&mut self, sink: Rc<dyn SessionViewSink>) {
+        self.session_view_sink = sink;
     }
 
     /// The selection state (per-session model/agent drafts).
@@ -9426,11 +9464,27 @@ impl Store {
             // CHILD session routes the family ROOT for tab purposes —
             // no new tab opens, the root's pill stays active (#45).
             let root = self.session_root(session_id);
+            // G-200① — the viewed ack fires when the route ENTERS an
+            // unread session with a known idle watermark
+            // (session-tabs.tsx:209-242: `focused() && isUnread &&
+            // idle !== undefined`); the watermark records BEFORE the
+            // POST (event-driven re-runs never re-post).
+            let was_unread = self.tabs.get().unread.contains_key(&root);
+            let viewed_idle = self
+                .session_history()
+                .iter()
+                .find(|snapshot| snapshot.id == root)
+                .and_then(|snapshot| snapshot.time_idle);
             self.tabs.update(|state| {
                 state.history = model::record_tab_history(&state.history, &root);
                 // Viewing clears unread.
                 state.unread.remove(&root);
             });
+            if was_unread {
+                if let Some(idle) = viewed_idle {
+                    self.session_view_sink.view(&root, idle);
+                }
+            }
             // The route effect (`session-tabs.tsx:180-203`): routing to
             // a session ADDS its tab when it is not open — this is the
             // only way a session enters the strip (a home submission,
@@ -13335,6 +13389,42 @@ mod tests {
     use super::*;
     use crate::components::command_palette::CommandDispatcher as _;
     use crate::data::SessionSnapshot;
+
+    /// G-200① — the `session.viewed` ack (session-tabs.tsx:209-242):
+    /// routing into an UNREAD session with a known idle watermark
+    /// fires the sink ONCE with that watermark; a re-entry after the
+    /// strip cleared the unread marker never re-posts.
+    #[test]
+    fn viewed_ack_fires_once_per_watermark() {
+        let mut store = Store::new(Runtime::new());
+        let sink = std::rc::Rc::new(RecordingSessionViewSink::default());
+        store.set_session_view_sink(std::rc::Rc::clone(&sink) as std::rc::Rc<dyn SessionViewSink>);
+        store.ingest_all([Ingest::Resync {
+            sessions: vec![SessionSnapshot {
+                id: "s1".to_owned(),
+                time_idle: Some(1234.5),
+                ..Default::default()
+            }],
+            unread: vec!["s1".to_owned()],
+            messages: Vec::new(),
+            cursors: Vec::new(),
+            permissions: Vec::new(),
+            forms: Vec::new(),
+        }]);
+        store.navigate(Route::session("s1"));
+        assert_eq!(
+            *sink.calls.borrow(),
+            vec![("s1".to_owned(), 1234.5)],
+            "the unread watermark acks exactly once"
+        );
+        // Re-entry: the strip already cleared the unread marker.
+        store.navigate(Route::Home);
+        store.navigate(Route::session("s1"));
+        assert_eq!(sink.calls.borrow().len(), 1, "no re-post without a fresh watermark");
+        // A session whose idle is unknown never posts.
+        let calls = sink.calls.borrow().clone();
+        let _ = calls;
+    }
 
     fn tab(id: &str, title: Option<&str>) -> SessionTab {
         SessionTab { session_id: id.to_owned(), title: title.map(str::to_owned) }
