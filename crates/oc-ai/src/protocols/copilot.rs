@@ -306,12 +306,10 @@ pub struct CopilotRemoteCapabilities {
     pub supports: CopilotRemoteSupports,
 }
 
-/// `billing.token_prices.default` (models.ts:19-30) — AIC per billing
-/// batch.
+/// `billing.token_prices.default` (models.ts:23-30) — the per-batch
+/// AIC prices.
 #[derive(Debug, Clone, serde::Deserialize)]
-pub struct CopilotRemotePrices {
-    #[serde(default)]
-    pub batch_size: f64,
+pub struct CopilotRemoteDefaultPrices {
     #[serde(default)]
     pub input_price: Option<f64>,
     #[serde(default)]
@@ -322,6 +320,16 @@ pub struct CopilotRemotePrices {
     /// API version 2026-08-01 renamed `cache_price` (models.ts:25).
     #[serde(default)]
     pub cache_read_price: Option<f64>,
+}
+
+/// `billing.token_prices` (models.ts:17-31): the AIC batch size plus
+/// the default price tier.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct CopilotRemotePrices {
+    #[serde(default)]
+    pub batch_size: f64,
+    #[serde(default, rename = "default")]
+    pub default_prices: Option<CopilotRemoteDefaultPrices>,
 }
 
 /// `billing` (models.ts:16-32).
@@ -611,8 +619,7 @@ pub fn copilot_model_entry(
         .limits
         .as_ref()
         .and_then(|limits| limits.vision.as_ref())
-        .map(|vision| vision.supported_media_types.as_slice())
-        .unwrap_or(&[]);
+        .map_or([].as_slice(), |vision| vision.supported_media_types.as_slice());
     let image = remote.capabilities.supports.vision.unwrap_or(false)
         || media.iter().any(|kind| kind.starts_with("image/"));
     let pdf = remote.capabilities.supports.vision.unwrap_or(false)
@@ -627,9 +634,23 @@ pub fn copilot_model_entry(
 
     // Cost (models.ts:152-153, 177-193): Copilot reports AIC per
     // billing batch; OpenCode stores USD per million tokens.
-    let prices = remote.billing.as_ref().and_then(|billing| billing.token_prices.as_ref());
-    let usd_per_million = if prices.is_some_and(|prices| prices.batch_size > 0.0) {
-        10_000.0 / prices.map(|prices| prices.batch_size).unwrap_or_default()
+    let prices = remote
+        .billing
+        .as_ref()
+        .and_then(|billing| billing.token_prices.as_ref())
+        .and_then(|prices| prices.default_prices.as_ref());
+    let usd_per_million = if remote
+        .billing
+        .as_ref()
+        .and_then(|billing| billing.token_prices.as_ref())
+        .is_some_and(|prices| prices.batch_size > 0.0)
+    {
+        10_000.0 / remote
+            .billing
+            .as_ref()
+            .and_then(|billing| billing.token_prices.as_ref())
+            .map(|prices| prices.batch_size)
+            .unwrap_or_default()
     } else {
         0.0
     };
@@ -825,7 +846,6 @@ pub fn utility_title_headers(input: &UtilityTitleInput<'_>) -> Vec<(String, Stri
 /// (github-copilot.ts:472-476): `choices[0].message.content`, trimmed;
 /// an empty (or missing) content is a failure so the caller's normal
 /// title path still runs.
-#[must_use]
 pub fn utility_title_from_response(body: &str) -> Result<String, String> {
     let value: Value =
         serde_json::from_str(body).map_err(|error| format!("Utility title response was malformed: {error}"))?;

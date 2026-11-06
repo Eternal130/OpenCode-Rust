@@ -1057,7 +1057,6 @@ impl Engine {
                     Arc::new(hook),
                     crate::hooks::HookOptions {
                         provider_id: Some("github-copilot".to_string()),
-                        ..Default::default()
                     },
                 )
                 .await;
