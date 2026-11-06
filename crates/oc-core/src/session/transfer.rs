@@ -309,3 +309,324 @@ fn settled_messages(data: &Value) -> Vec<StagedMessage> {
     }
     staged
 }
+
+// =============================================================================
+// Export (SessionTransfer.export, transfer.ts:60-64 + 165-330)
+// =============================================================================
+
+/// `isSettled` (transfer.ts:165-169) over a wire message value.
+#[must_use]
+pub fn is_settled(message: &Value) -> bool {
+    let type_ = message.get("type").and_then(Value::as_str).unwrap_or_default();
+    match type_ {
+        "assistant" => message
+            .get("time")
+            .and_then(|time| time.get("completed"))
+            .is_some_and(|value| !value.is_null()),
+        "shell" | "compaction" => message.get("status").and_then(Value::as_str) != Some("running"),
+        _ => true,
+    }
+}
+
+/// `SessionTransfer.export` (transfer.ts:60-64): the wire `Data` pair —
+/// `info` plus the SETTLED messages in ascending order (the settled
+/// filter runs on BOTH the sanitize and non-sanitize paths); `sanitize`
+/// scrubs it per `sanitize`/`sanitizeMessage` (transfer.ts:180-330).
+#[must_use]
+pub fn export_data(info: Value, messages: Vec<Value>, sanitize: bool) -> Value {
+    let messages: Vec<Value> = messages.into_iter().filter(|message| is_settled(message)).collect();
+    if !sanitize {
+        return serde_json::json!({ "info": info, "messages": messages });
+    }
+    serde_json::json!({ "info": sanitize_info(&info), "messages": messages.iter().map(sanitize_message).collect::<Vec<_>>() })
+}
+
+/// `redact` (transfer.ts:172-174): empty (whitespace-only) values pass
+/// through untouched, everything else becomes the placeholder.
+fn redact(kind: &str, id: &str, value: &str) -> String {
+    if value.trim().is_empty() {
+        value.to_string()
+    } else {
+        format!("[redacted:{kind}:{id}]")
+    }
+}
+
+/// `redact` over a wire value: strings redact, other shapes pass through
+/// (REF only ever calls `redact` on strings).
+fn redact_value(kind: &str, id: &str, value: &Value) -> Value {
+    match value.as_str() {
+        Some(text) => Value::String(redact(kind, id, text)),
+        None => value.clone(),
+    }
+}
+
+/// `metadata` (transfer.ts:176-179): a non-empty object collapses to
+/// `{ redacted: "<kind>:<id>" }`; an empty object (or absent value)
+/// passes through.
+fn metadata_value(kind: &str, id: &str, value: &Value) -> Value {
+    if value.as_object().is_some_and(|object| !object.is_empty()) {
+        serde_json::json!({ "redacted": format!("{kind}:{id}") })
+    } else {
+        value.clone()
+    }
+}
+
+/// Replace `key` with its redacted form when present (`redact(kind, id, …)`).
+fn redact_key(map: &mut serde_json::Map<String, Value>, key: &str, kind: &str, id: &str) {
+    if let Some(value) = map.get(key) {
+        let redacted = redact_value(kind, id, value);
+        map.insert(key.to_owned(), redacted);
+    }
+}
+
+/// `sanitize` (transfer.ts:180-200): session title/metadata/directory and
+/// the revert file list.
+fn sanitize_info(info: &Value) -> Value {
+    let id = info.get("id").and_then(Value::as_str).unwrap_or_default().to_string();
+    let mut out = info.clone();
+    let Some(map) = out.as_object_mut() else { return out };
+    redact_key(map, "title", "session-title", &id);
+    if let Some(metadata) = map.get("metadata") {
+        let sanitized = metadata_value("session-metadata", &id, metadata);
+        map.insert("metadata".to_owned(), sanitized);
+    }
+    // `directory: AbsolutePath.make("/" + redact(...))` — the placeholder
+    // becomes a synthetic absolute path.
+    if let Some(directory) = map
+        .get_mut("location")
+        .and_then(Value::as_object_mut)
+        .and_then(|location| location.get("directory"))
+        .and_then(Value::as_str)
+        .map(|directory| redact("session-directory", &id, directory))
+    {
+        if let Some(location) = map.get_mut("location").and_then(Value::as_object_mut) {
+            location.insert("directory".to_owned(), Value::String(format!("/{directory}")));
+        }
+    }
+    if let Some(files) = map.get_mut("revert").and_then(Value::as_object_mut).and_then(|revert| {
+        revert.get_mut("files").and_then(Value::as_array_mut)
+    }) {
+        for (index, file) in files.iter_mut().enumerate() {
+            let Some(file) = file.as_object_mut() else { continue };
+            let index = index.to_string();
+            redact_key(file, "file", "revert-file", &index);
+            redact_key(file, "patch", "revert-patch", &index);
+        }
+    }
+    out
+}
+
+/// `sanitizeMessage` (transfer.ts:202-294) + `sanitizeToolState` /
+/// `sanitizeToolContent` (:296-331).
+fn sanitize_message(message: &Value) -> Value {
+    let id = message.get("id").and_then(Value::as_str).unwrap_or_default().to_string();
+    let mut out = message.clone();
+    let Some(map) = out.as_object_mut() else { return out };
+    // The common metadata scrub (every type).
+    if let Some(metadata) = map.get("metadata") {
+        let sanitized = metadata_value("message-metadata", &id, metadata);
+        map.insert("metadata".to_owned(), sanitized);
+    }
+    match map.get("type").and_then(Value::as_str).unwrap_or_default() {
+        "user" => {
+            redact_key(map, "text", "text", &id);
+            if let Some(files) = map.get_mut("files").and_then(Value::as_array_mut) {
+                for (index, file) in files.iter_mut().enumerate() {
+                    let Some(file) = file.as_object_mut() else { continue };
+                    let index = index.to_string();
+                    file.insert("data".to_owned(), Value::String(String::new()));
+                    file.insert("source".to_owned(), serde_json::json!({ "type": "inline" }));
+                    redact_key(file, "name", "file-name", &index);
+                    redact_key(file, "description", "file-description", &index);
+                    if let Some(mention) = file.get_mut("mention").and_then(Value::as_object_mut) {
+                        redact_key(mention, "text", "file-mention", &index);
+                    }
+                }
+            }
+            for (key, name_kind, mention_kind) in
+                [("agents", "agent-name", "agent-mention"), ("skills", "skill-name", "skill-mention")]
+            {
+                if let Some(items) = map.get_mut(key).and_then(Value::as_array_mut) {
+                    for (index, item) in items.iter_mut().enumerate() {
+                        let Some(item) = item.as_object_mut() else { continue };
+                        let index = index.to_string();
+                        redact_key(item, "name", name_kind, &index);
+                        if key == "skills" {
+                            redact_key(item, "text", "skill", &index);
+                        }
+                        if let Some(mention) = item.get_mut("mention").and_then(Value::as_object_mut)
+                        {
+                            redact_key(mention, "text", mention_kind, &index);
+                        }
+                    }
+                }
+            }
+        }
+        "synthetic" => {
+            redact_key(map, "text", "synthetic", &id);
+            redact_key(map, "description", "synthetic-description", &id);
+        }
+        "system" => {
+            redact_key(map, "text", "system", &id);
+        }
+        "skill" => {
+            redact_key(map, "text", "skill", &id);
+        }
+        "shell" => {
+            redact_key(map, "command", "shell-command", &id);
+            match map.get_mut("output") {
+                Some(output @ Value::Object(_)) => {
+                    if let Some(output_map) = output.as_object_mut() {
+                        redact_key(output_map, "output", "shell-output", &id);
+                    }
+                }
+                _ => {
+                    // `output: message.output ? … : undefined` — falsy
+                    // outputs drop the key.
+                    map.remove("output");
+                }
+            }
+        }
+        "assistant" => {
+            if let Some(content) = map.get_mut("content").and_then(Value::as_array_mut) {
+                for part in content.iter_mut() {
+                    sanitize_assistant_part(&id, part);
+                }
+            }
+        }
+        "compaction" => {
+            // A failed compaction keeps everything but its metadata.
+            if map.get("status").and_then(Value::as_str) == Some("failed") {
+                return out;
+            }
+            redact_key(map, "summary", "compaction-summary", &id);
+            redact_key(map, "recent", "compaction-recent", &id);
+            if map.get("status").and_then(Value::as_str) == Some("completed") {
+                match map.get("providerState") {
+                    Some(provider_state) => {
+                        let sanitized =
+                            metadata_value("compaction-provider-state", &id, provider_state);
+                        map.insert("providerState".to_owned(), sanitized);
+                    }
+                    None => {
+                        map.remove("providerState");
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    out
+}
+
+/// One assistant content part (transfer.ts:264-287).
+fn sanitize_assistant_part(id: &str, part: &mut Value) {
+    let Some(map) = part.as_object_mut() else { return };
+    let type_ = map.get("type").and_then(Value::as_str).unwrap_or_default().to_string();
+    match type_.as_str() {
+        kind @ ("text" | "reasoning") => {
+            let state_kind = if kind == "text" { "text-state" } else { "reasoning-state" };
+            redact_key(map, "text", kind, id);
+            match map.get("state") {
+                Some(state) if !state.is_null() => {
+                    map.insert(
+                        "state".to_owned(),
+                        serde_json::json!({ "redacted": format!("{state_kind}:{id}") }),
+                    );
+                }
+                _ => {
+                    map.remove("state");
+                }
+            }
+        }
+        _ => {
+            // Tool parts: provider states collapse, the tool state scrubs.
+            match map.get("providerState") {
+                Some(value) if !value.is_null() => {
+                    map.insert(
+                        "providerState".to_owned(),
+                        serde_json::json!({ "redacted": format!("tool-provider-state:{id}") }),
+                    );
+                }
+                _ => {
+                    map.remove("providerState");
+                }
+            }
+            match map.get("providerResultState") {
+                Some(value) if !value.is_null() => {
+                    map.insert(
+                        "providerResultState".to_owned(),
+                        serde_json::json!({ "redacted": format!("tool-provider-result-state:{id}") }),
+                    );
+                }
+                _ => {
+                    map.remove("providerResultState");
+                }
+            }
+            if let Some(state) = map.get_mut("state") {
+                *state = sanitize_tool_state(id, state);
+            }
+        }
+    }
+}
+
+/// `sanitizeToolState` (transfer.ts:296-326).
+fn sanitize_tool_state(id: &str, state: &Value) -> Value {
+    let mut out = state.clone();
+    let Some(map) = out.as_object_mut() else { return out };
+    let tool_input = || serde_json::json!({ "redacted": format!("tool-input:{id}") });
+    let status = map.get("status").and_then(Value::as_str).unwrap_or_default().to_string();
+    match status.as_str() {
+        "streaming" => {
+            redact_key(map, "input", "tool-input", id);
+        }
+        "running" => {
+            map.insert("input".to_owned(), tool_input());
+            map.insert(
+                "metadata".to_owned(),
+                serde_json::json!({ "redacted": format!("tool-metadata:{id}") }),
+            );
+        }
+        status => {
+            map.insert("input".to_owned(), tool_input());
+            match map.get("metadata") {
+                Some(value) if !value.is_null() => {
+                    map.insert(
+                        "metadata".to_owned(),
+                        serde_json::json!({ "redacted": format!("tool-metadata:{id}") }),
+                    );
+                }
+                _ => {
+                    map.remove("metadata");
+                }
+            }
+            match map.get_mut("content") {
+                Some(content @ Value::Array(_)) => {
+                    if let Some(items) = content.as_array_mut() {
+                        for item in items.iter_mut() {
+                            sanitize_tool_content(id, item);
+                        }
+                    }
+                }
+                // REF maps `state.content` unconditionally on completed;
+                // the else branch keeps `content` only when present.
+                _ if status == "completed" => {}
+                _ => {
+                    map.remove("content");
+                }
+            }
+        }
+    }
+    out
+}
+
+/// `sanitizeToolContent` (transfer.ts:328-336).
+fn sanitize_tool_content(id: &str, content: &mut Value) {
+    let Some(map) = content.as_object_mut() else { return };
+    if map.get("type").and_then(Value::as_str) == Some("text") {
+        redact_key(map, "text", "tool-output", id);
+        return;
+    }
+    redact_key(map, "uri", "tool-file-uri", id);
+    redact_key(map, "name", "tool-file-name", id);
+}
