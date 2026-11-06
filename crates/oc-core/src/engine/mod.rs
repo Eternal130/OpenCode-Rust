@@ -363,6 +363,9 @@ pub struct Engine {
     /// G-167 — the live copilot `/models` sync: the merged dynamic
     /// github-copilot snapshot behind resolution + the free-title hook.
     pub copilot_sync: Arc<crate::provider_catalog::copilot_sync::CopilotSync>,
+    /// G-209 — the live Modal `/models` sync: the derived dynamic
+    /// modal snapshot behind resolution.
+    pub modal_sync: Arc<crate::provider_catalog::modal_sync::ModalSync>,
     clock: Arc<dyn Clock>,
     ids: Arc<dyn IdGen>,
     rng: Arc<dyn RngSource>,
@@ -568,8 +571,49 @@ impl Engine {
                     .await;
             });
         }
-        // CRED-A1: keep the TYPED resolver handle when we own it — the
-        // `models-dev.refreshed` subscription swaps its catalog cell so
+        // G-209 — the live Modal `/models` sync (the ref plugin's
+        // `load()` + provider transform): spawned ONLY when a Modal
+        // API key exists (credential binding or MODAL_PROXY_TOKEN);
+        // no key → inert, the static modal catalog serves unchanged.
+        let modal_sync = Arc::new(crate::provider_catalog::modal_sync::ModalSync::new(
+            Arc::clone(&facade_transport),
+        ));
+        if let Some(api_key) = integration
+            .credential_bindings()
+            .get(crate::provider_catalog::modal_sync::MODAL_PROVIDER_ID)
+            .map(|binding| binding.api_key)
+            .or_else(|| {
+                std::env::var(crate::provider_catalog::modal_sync::MODAL_PROXY_TOKEN_ENV)
+                    .ok()
+                    .filter(|value| !value.is_empty())
+            })
+        {
+            // modal.ts:32 — the base URL comes from the provider's
+            // settings (the catalog record's `api` default unless the
+            // config overlay replaced it).
+            let base_url = catalog
+                .provider(crate::provider_catalog::modal_sync::MODAL_PROVIDER_ID)
+                .and_then(|snapshot| snapshot.info.settings.as_ref())
+                .and_then(|settings| settings.rest.get("baseURL"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string);
+            match base_url {
+                Some(base_url) => {
+                    let modal_sync = Arc::clone(&modal_sync);
+                    let catalog = Arc::clone(&catalog);
+                    tokio::spawn(async move {
+                        // Stay out of boot's critical section (same
+                        // deferral discipline as the copilot sync).
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        modal_sync.refresh(&catalog, base_url, api_key).await;
+                    });
+                }
+                None => modal_sync.clear(),
+            }
+        } else {
+            modal_sync.clear();
+        }
+        // CRED-A1: keep the TYPED resolver handle when we own it — the        // `models-dev.refreshed` subscription swaps its catalog cell so
         // refreshes propagate to resolution without a re-boot (v2
         // re-reads `ModelsDev.get()` on every Refreshed event and
         // reloads integrations + providers, models-dev.ts:61-66).
@@ -593,7 +637,8 @@ impl Engine {
                     .with_credentials(Arc::clone(&integration.credential_bindings()))
                     .with_console(Arc::clone(&integration.console_providers()))
                     .with_local(Arc::clone(&local))
-                    .with_copilot_sync(Arc::clone(&copilot_sync)),
+                    .with_copilot_sync(Arc::clone(&copilot_sync))
+                    .with_modal_sync(Arc::clone(&modal_sync)),
                 );
                 catalog_resolver = Some(Arc::clone(&typed));
                 typed
@@ -714,6 +759,7 @@ impl Engine {
             catalog_service,
             integration,
             copilot_sync,
+            modal_sync,
             clock: options.clock.clone(),
             ids: options.ids.clone(),
             rng: options.rng.clone(),
@@ -1028,7 +1074,8 @@ impl Engine {
                     .with_credentials(Arc::clone(&self.integration.credential_bindings()))
                     .with_console(Arc::clone(&self.integration.console_providers()))
                     .with_local(Arc::clone(&self.local))
-                    .with_copilot_sync(Arc::clone(&self.copilot_sync)),
+                    .with_copilot_sync(Arc::clone(&self.copilot_sync))
+                    .with_modal_sync(Arc::clone(&self.modal_sync)),
                     Arc::clone(&self.resolver),
                 ))
             };
