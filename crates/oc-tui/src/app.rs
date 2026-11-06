@@ -3570,6 +3570,11 @@ pub enum ServerListEvent {
     Agents(Result<Vec<crate::store::ServerAgent>, String>),
     /// `useConnected()` — any integration has connections.
     Connected(bool),
+    /// G-186: the `command.list` rows (`location.command.list` —
+    /// merged into the prompt autocomplete's slash candidates,
+    /// autocomplete.tsx:486-494). Empty/unreachable leaves the static
+    /// builtin table as-is.
+    Commands(Vec<(String, Option<String>)>),
     /// SURF-1: the `mcp.list` rows
     /// (`location.mcp.server.list` — the sidebar MCP section +
     /// `DialogStatus` source).
@@ -4033,6 +4038,23 @@ pub fn spawn_server_lists(
             .ok()
             .and_then(|entries| configured_model_from_entries(&entries));
         let _ = tx.send(ServerListEvent::Config(config)).await;
+        // G-186 — the server slash-command list (`command.list`):
+        // plugin/custom commands appear as `/name` candidates.
+        // Best-effort — an unreachable server simply never emits the
+        // event (the static table stands alone).
+        let commands = client
+            .command()
+            .list(&oc_client::types::CommandListQuery { location: None })
+            .await
+            .map(|response| {
+                response
+                    .data
+                    .into_iter()
+                    .map(|command| (command.name, command.description))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let _ = tx.send(ServerListEvent::Commands(commands)).await;
         let models = client
             .model()
             .list(&oc_client::types::ModelListQuery { location: None })
@@ -8822,6 +8844,10 @@ pub async fn run_with_size(
                 }
                 ServerListEvent::Connected(connected) => {
                     app.store.set_integration_connected(connected);
+                }
+                ServerListEvent::Commands(commands) => {
+                    // G-186 — the merged slash candidates.
+                    app.store.set_server_slash_commands(commands);
                 }
                 ServerListEvent::Mcp(rows) => {
                     app.store.set_mcp_servers(rows);

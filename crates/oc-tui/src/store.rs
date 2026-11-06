@@ -1783,6 +1783,11 @@ pub struct Store {
     /// autocomplete state (attached where its frecency carries no
     /// sink yet).
     frecency_template: std::cell::RefCell<autocomplete::Frecency>,
+    /// G-186 — the server-provided slash commands (`command.list`,
+    /// autocomplete.tsx:486-494): merged into every session
+    /// composer's registry (empty until the boot fetch lands — the
+    /// static table stands alone when the server is unreachable).
+    server_slash_commands: std::cell::RefCell<Vec<(String, Option<String>)>>,
     /// TUI-TD12 — the staged `session.update {title}` requests (the
     /// run loop drains them into POSTs; `""` is the title-GENERATE
     /// arm, index.tsx:902-911).
@@ -3985,6 +3990,7 @@ impl Store {
             pending_scroll_restore: std::cell::RefCell::new(std::collections::HashSet::new()),
             directory_recents: std::cell::RefCell::new(autocomplete::DirectoryRecents::default()),
             frecency_template: std::cell::RefCell::new(autocomplete::Frecency::default()),
+            server_slash_commands: std::cell::RefCell::new(Vec::new()),
             rename_outbox: std::cell::RefCell::new(Vec::new()),
             console_open: Cell::new(false),
             console_ring: std::cell::RefCell::new(std::collections::VecDeque::new()),
@@ -4622,6 +4628,14 @@ impl Store {
             let template = self.frecency_template.borrow();
             if template.file.is_some() && autocomplete.frecency.file.is_none() {
                 autocomplete.frecency = template.clone();
+            }
+        }
+        // G-186 — the server-provided slash commands merge into the
+        // registry (the static table is the fallback subset).
+        {
+            let server = self.server_slash_commands.borrow();
+            if !server.is_empty() {
+                autocomplete.registry.merge_server(&server);
             }
         }
         let edit = state.edits.get(session_id).cloned().unwrap_or_else(Composer::fresh_edit);
@@ -7194,6 +7208,13 @@ impl Store {
     /// autocomplete state inherits.
     pub fn set_frecency_template(&self, frecency: autocomplete::Frecency) {
         *self.frecency_template.borrow_mut() = frecency;
+    }
+
+    /// G-186 — the server slash-command fetch landed
+    /// (`location.command.list`): merge target for every session
+    /// composer's autocomplete registry.
+    pub fn set_server_slash_commands(&self, commands: Vec<(String, Option<String>)>) {
+        *self.server_slash_commands.borrow_mut() = commands;
     }
 
     /// G-185 — the prompt history boot load (`history.tsx:91-100`,

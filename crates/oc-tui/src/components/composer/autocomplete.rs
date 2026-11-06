@@ -279,6 +279,30 @@ impl SlashRegistry {
         Self { entries }
     }
 
+    /// G-186 — merge the server-provided commands
+    /// (`data.location.command.list(location)`, autocomplete.tsx:
+    /// 486-494): every server command appears as a `/{name}` row;
+    /// names already covered by the static builtin table are SKIPPED
+    /// (the mini footer's `hidden` dedupe, footer.prompt.tsx:542-544
+    /// — the builtin entry wins), and the merged table stays sorted
+    /// by display. The static entries remain when the server is
+    /// unreachable (the merge is a no-op over an empty list).
+    pub fn merge_server(&mut self, server: &[(String, Option<String>)]) {
+        let known: std::collections::BTreeSet<String> =
+            self.entries.iter().map(|entry| entry.display.clone()).collect();
+        for (name, description) in server {
+            let display = format!("/{name}");
+            if known.contains(&display) {
+                continue;
+            }
+            self.entries.push(SlashEntry {
+                display,
+                description: description.clone().unwrap_or_default(),
+            });
+        }
+        self.entries.sort_by(|a, b| a.display.cmp(&b.display));
+    }
+
     /// The slash registry's `onSelect` (`autocomplete.tsx:481`):
     /// `slash.arguments ? insertSlash(name) : command.run` — every
     /// built-in WITHOUT arguments RUNS on select; only
@@ -1122,6 +1146,48 @@ pub fn popup_height(count: usize, anchor_y: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// G-186 — the server command list merges into the candidates
+    /// (`location.command.list`, autocomplete.tsx:486-494): a custom
+    /// `/deploy` row appears beside the builtins, a name already in
+    /// the static table is NOT duplicated (the builtin wins), and an
+    /// EMPTY server list (unreachable server) leaves the builtins
+    /// alone.
+    #[test]
+    fn server_commands_merge_into_the_slash_candidates() {
+        let mut registry = SlashRegistry::v2();
+        let builtin_len = registry.entries.len();
+        registry.merge_server(&[
+            ("deploy".to_owned(), Some("Run the deploy playbook".to_owned())),
+            ("new".to_owned(), Some("shadowed by the builtin".to_owned())),
+            ("zz-custom".to_owned(), None),
+        ]);
+        assert_eq!(registry.entries.len(), builtin_len + 2, "only the unknown names append");
+        let displays: Vec<&str> =
+            registry.entries.iter().map(|entry| entry.display.as_str()).collect();
+        assert!(displays.contains(&"/deploy"), "the custom command appears");
+        assert!(displays.contains(&"/zz-custom"), "a description-less command appears too");
+        assert_eq!(displays.iter().filter(|name| **name == "/new").count(), 1, "the builtin wins");
+        let deploy = registry.entries.iter().find(|entry| entry.display == "/deploy").unwrap();
+        assert_eq!(deploy.description, "Run the deploy playbook");
+        // Sorted by display.
+        assert!(registry.entries.windows(2).all(|pair| pair[0].display <= pair[1].display));
+        // The custom entry is INSERTED on accept, never run as a dot
+        // command (no builtin mapping).
+        assert_eq!(SlashRegistry::command_for("/deploy"), None);
+        // filter_commands surfaces it under a query.
+        let options = filter_commands(&registry, "deploy");
+        assert!(
+            options.iter().any(|option| option.display.trim() == "/deploy"),
+            "the custom command is a candidate: {options:?}"
+        );
+
+        // Unreachable server: the merge over nothing changes nothing.
+        let mut fallback = SlashRegistry::v2();
+        let before = fallback.clone();
+        fallback.merge_server(&[]);
+        assert_eq!(fallback, before, "builtins only when the server is unreachable");
+    }
 
     #[test]
     fn slash_and_mention_anchors_follow_the_display_ts_rules() {
