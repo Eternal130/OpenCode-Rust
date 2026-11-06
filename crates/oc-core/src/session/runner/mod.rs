@@ -541,6 +541,66 @@ pub fn to_session_error(error: &AiError) -> SessionError {
     }
 }
 
+/// Cause taxonomy for the runner-side `toSessionError` dispatch beyond the
+/// direct `AIError` arm (to-session-error.ts:60-71,74): nested tool errors
+/// and integration authorization failures.
+#[derive(Debug, Clone)]
+pub enum SessionErrorCause {
+    /// Direct `AIError` — the [`to_session_error`] table.
+    Ai(AiError),
+    /// `ToolFailure` / `Tool.Error`: the curated `message` plus an optional
+    /// nested error. With no nested error (or a nested error that unwraps
+    /// to an empty message) the tool's curated message surfaces as
+    /// `tool.execution`; otherwise the nested classification wins.
+    Tool { message: String, error: Option<Box<SessionErrorCause>> },
+    /// `Integration.AuthorizationError` → `provider.auth`
+    /// (integration/types.rs `IntegrationError::Authorization`).
+    Authorization(String),
+}
+
+impl SessionErrorCause {
+    /// Builds the tool-error variant (nested error optional).
+    #[must_use]
+    pub fn tool(message: impl Into<String>, error: Option<SessionErrorCause>) -> Self {
+        SessionErrorCause::Tool { message: message.into(), error: error.map(Box::new) }
+    }
+}
+
+/// `toSessionError(cause)` for the runner dispatch (to-session-error.ts).
+/// The distributed per-site mappings (step.rs / drain.rs / context.rs) keep
+/// their own arms; this covers the nested-unwrap and authorization paths.
+#[must_use]
+pub fn to_session_error_cause(cause: &SessionErrorCause) -> SessionError {
+    match cause {
+        SessionErrorCause::Ai(error) => to_session_error(error),
+        SessionErrorCause::Tool { message, error: None } => SessionError {
+            error_type: "tool.execution".into(),
+            message: message.clone(),
+            status: None,
+            response: None,
+        },
+        SessionErrorCause::Tool { message, error: Some(nested) } => {
+            let unwrapped = to_session_error_cause(nested);
+            if unwrapped.message.is_empty() {
+                SessionError {
+                    error_type: "tool.execution".into(),
+                    message: message.clone(),
+                    status: unwrapped.status,
+                    response: unwrapped.response,
+                }
+            } else {
+                unwrapped
+            }
+        }
+        SessionErrorCause::Authorization(message) => SessionError {
+            error_type: "provider.auth".into(),
+            message: message.clone(),
+            status: None,
+            response: None,
+        },
+    }
+}
+
 /// `contentFilterError` (to-session-error.ts:102-108).
 #[must_use]
 pub fn content_filter_error(summary: &str, reason: &FinishReasonDetails) -> SessionError {

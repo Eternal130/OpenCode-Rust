@@ -791,9 +791,10 @@ impl SessionModelRequest {
             ..Default::default()
         });
         request.prompt_cache_key = Some(
+            // G-206: ref model-request.ts:278 accepts lowercase hex only.
             if affinity.starts_with("ses_")
                 && affinity.len() == 68
-                && affinity[4..].chars().all(|c| c.is_ascii_hexdigit())
+                && affinity[4..].chars().all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
             {
                 affinity[4..].to_string()
             } else {

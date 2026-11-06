@@ -294,3 +294,51 @@ async fn runner_affinity_headers_stick_then_rekey_to_parent() {
     assert_eq!(headers.get("x-parent-session-id").map(String::as_str), Some("ses_runner_parent"));
     assert_eq!(requests[1].prompt_cache_key.as_deref(), Some("ses_runner_parent"));
 }
+
+/// G-206: the cache-key branch is lowercase-hex only (ref model-request.ts:278
+/// `/^ses_[0-9a-f]{64}$/`); an uppercase 64-hex affinity passes through raw.
+#[tokio::test]
+async fn runner_affinity_uppercase_hex_cache_key_passes_through_raw() {
+    let llm = TestLlm::new();
+    llm.always(oc_ai::testing::text("ok"));
+    let harness = harness_with(llm.clone()).await;
+    harness.create_session().await;
+
+    let uppercase = format!("ses_{}", "A".repeat(64));
+    let lower_hex = "0123456789abcdef".repeat(4);
+    assert_eq!(lower_hex.len(), 64);
+    let lowercase = format!("ses_{lower_hex}");
+
+    for parent in [uppercase.clone(), lowercase] {
+        let parent = parent.clone();
+        harness
+            .db
+            .transaction({
+                let session_id = harness.session_id().to_string();
+                move |tx| {
+                    let mut row = crate::database::schema::SessionRow::get(tx, session_id)?
+                        .expect("session row");
+                    row.parent_id = Some(parent.clone());
+                    crate::database::schema::SessionRow::update(tx, &row)?;
+                    Ok(())
+                }
+            })
+            .await
+            .expect("parent link");
+        harness.admit_prompt("msg_g206", "hi").await;
+        harness.execution.resume(harness.session_id().as_str()).await.expect("execution exit");
+    }
+
+    let requests = llm.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[0].prompt_cache_key.as_deref(),
+        Some(uppercase.as_str()),
+        "uppercase hex must NOT match the cache-key strip branch"
+    );
+    assert_eq!(
+        requests[1].prompt_cache_key.as_deref(),
+        Some(lower_hex.as_str()),
+        "lowercase hex strips the ses_ prefix"
+    );
+}

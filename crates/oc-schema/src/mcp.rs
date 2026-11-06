@@ -24,6 +24,7 @@ pub struct TimeoutConfig {
 
 /// `Mcp.Protocol` negotiation modes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
 pub enum Protocol {
     /// Initialize handshake, revisions up to 2025-11-25 (default).
     Legacy,
@@ -282,6 +283,24 @@ mod tests {
         assert_eq!(
             serde_json::to_value(Status::Connected).unwrap(),
             serde_json::json!({"status": "connected"})
+        );
+    }
+
+    /// G-166: wire literals are lowercase (`legacy`/`auto`, mcp.ts:20);
+    /// the dated variant keeps its explicit `2026-07-28` rename.
+    #[test]
+    fn protocol_wire_lowercase() {
+        assert_eq!(serde_json::to_value(Protocol::Legacy).unwrap(), serde_json::json!("legacy"));
+        assert_eq!(serde_json::to_value(Protocol::Auto).unwrap(), serde_json::json!("auto"));
+        assert_eq!(serde_json::to_value(Protocol::Dated).unwrap(), serde_json::json!("2026-07-28"));
+        for lit in ["auto", "legacy", "2026-07-28"] {
+            let parsed: Protocol = serde_json::from_value(serde_json::json!(lit))
+                .unwrap_or_else(|e| panic!("{lit} must round-trip: {e}"));
+            assert_eq!(serde_json::to_value(&parsed).unwrap(), serde_json::json!(lit));
+        }
+        assert!(
+            serde_json::from_value::<Protocol>(serde_json::json!("Auto")).is_err(),
+            "uppercase `Auto` must be rejected on the wire"
         );
     }
 

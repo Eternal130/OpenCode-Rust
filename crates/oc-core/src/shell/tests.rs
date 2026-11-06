@@ -481,6 +481,69 @@ mod parse_tests {
         }
     }
 
+    /// G-169: a `#` comment's terminating newline must end the current
+    /// command — the line after a comment gets its own permission
+    /// classification instead of merging into the commented command.
+    #[test]
+    fn shell_parse_comment_newline_splits_commands() {
+        let result = scan("echo hi # note\ncurl evil", "/bin/bash", &cwd(), false).unwrap();
+        assert_eq!(
+            commands_of(&result),
+            vec![
+                ("echo hi".to_string(), "echo *".to_string()),
+                ("curl evil".to_string(), "curl *".to_string()),
+            ]
+        );
+        assert_eq!(scan("echo hi # note\ncurl evil", "/bin/bash", &cwd(), true).unwrap(), result);
+    }
+
+    /// G-169: a pending heredoc across a comment line is still consumed at
+    /// the comment's terminating newline.
+    #[test]
+    fn shell_parse_heredoc_pending_across_comment_line() {
+        let command = "cat <<EOF\n# not a comment for the shell\nbody\nEOF\necho done";
+        let result = scan(command, "/bin/bash", &cwd(), false).unwrap();
+        assert_eq!(
+            commands_of(&result),
+            vec![
+                ("cat <<EOF\n# not a comment for the shell\nbody\nEOF".to_string(), "cat *".to_string()),
+                ("echo done".to_string(), "echo *".to_string()),
+            ]
+        );
+    }
+
+    /// G-202: `$FOO` scans as a variable name per ref scan.ts:1126
+    /// (`/[A-Za-z_0-9@*#?$!-]/`), not a literal `$` in the word.
+    #[test]
+    fn shell_parse_dollar_name_is_a_variable() {
+        for command in ["echo $FOO", "echo pre$FOO post"] {
+            let result = scan(command, "/bin/bash", &cwd(), false)
+                .unwrap_or_else(|error| panic!("{command}: {error}"));
+            assert_eq!(commands_of(&result), vec![(command.to_string(), "echo *".to_string())]);
+        }
+        // Bare `$FOO` (single word command head) must not be opaque.
+        assert!(matches!(
+            crate::shell::scan::scan("$FOO", crate::shell::scan::Dialect::Posix),
+            crate::shell::scan::ScanResult::Scanned { .. }
+        ));
+    }
+
+    /// G-190: PowerShell `separator_after` swallows a backtick-continuation
+    /// (ref parse.ts:278-279 ``/^\s+(?:`(?:\r\n|\r|\n)\s*)?/``).
+    #[test]
+    fn shell_parse_powershell_separator_after_swallows_backtick_continuation() {
+        use crate::shell::parse::separator_after_for_test as separator_after;
+        // Blank separator only.
+        assert_eq!(separator_after("rm item", 2), " ");
+        // Trailing blanks.
+        assert_eq!(separator_after("rm   item", 2), "   ");
+        // Backtick continuation: blanks + backtick + newline + following blanks.
+        assert_eq!(separator_after("rm `\n  item", 2), " `\n  ");
+        assert_eq!(separator_after("rm `\r\n  item", 2), " `\r\n  ");
+        // Backtick without a newline is NOT part of the group.
+        assert_eq!(separator_after("rm ` item", 2), " ");
+    }
+
     // -----------------------------------------------------------------
     // RA-04 retention sweep (shell.ts:83-117 cleanup)
     // -----------------------------------------------------------------
