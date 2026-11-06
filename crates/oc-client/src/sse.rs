@@ -220,9 +220,7 @@ mod tests {
     fn frames_chunked(chunks: Vec<Vec<u8>>, cap: usize) -> Result<Vec<SseFrame>, ClientError> {
         let mut stream = SseStream {
             inner: Box::pin(futures::stream::iter(
-                chunks
-                    .into_iter()
-                    .map(|c| Ok::<_, reqwest::Error>(bytes::Bytes::from(c))),
+                chunks.into_iter().map(|c| Ok::<_, reqwest::Error>(bytes::Bytes::from(c))),
             )),
             buf: Vec::new(),
             done: false,

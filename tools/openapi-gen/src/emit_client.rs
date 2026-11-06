@@ -215,6 +215,12 @@ fn emit_method(out: &mut String, info: &OpInfo) {
     let op = &info.op;
     let types = &info.types;
     let path_args = path_args(op);
+    // `move` escapes to `move_`; avoid the double underscore `move__with_options`.
+    let opts_name = if info.method.ends_with('_') {
+        format!("{}with_options", info.method)
+    } else {
+        format!("{}_with_options", info.method)
+    };
 
     let mut sig = String::new();
     for (ident, _wire) in &path_args {
@@ -288,8 +294,8 @@ fn emit_method(out: &mut String, info: &OpInfo) {
     let self_arg = if sig.is_empty() { "        &self\n" } else { "        &self,\n" };
     let self_arg_opts = "        &self,\n";
     out.push_str(&format!(
-        "    pub async fn {}_with_options(\n{}{}        options: &crate::transport::RequestOptions,\n    ) -> Result<{}, crate::ClientError> {{\n",
-        info.method, self_arg_opts, sig, ret
+        "    pub async fn {}(\n{}{}        options: &crate::transport::RequestOptions,\n    ) -> Result<{}, crate::ClientError> {{\n",
+        opts_name, self_arg_opts, sig, ret
     ));
 
     if let Some(q) = &types.query_struct {
@@ -347,13 +353,14 @@ fn emit_method(out: &mut String, info: &OpInfo) {
         BodyOut::Json(_) => args.push("body".to_owned()),
     }
     out.push_str(&format!(
-        "    /// Same as [`Self::{}_with_options`] with default options.\n    pub async fn {}(\n{}{}    ) -> Result<{}, crate::ClientError> {{\n        self.{}_with_options(\n{}            &crate::transport::RequestOptions::default(),\n        )\n        .await\n    }}\n\n",
-        info.method,
+        "    /// Same as [`Self::{}{}] with default options.\n    pub async fn {}(\n{}{}    ) -> Result<{}, crate::ClientError> {{\n        self.{}(\n{}            &crate::transport::RequestOptions::default(),\n        )\n        .await\n    }}\n\n",
+        opts_name,
+        "`",
         info.method,
         self_arg,
         sig,
         ret,
-        info.method,
+        opts_name,
         args.iter().map(|a| format!("            {a},\n")).collect::<Vec<_>>().join(""),
     ));
 }

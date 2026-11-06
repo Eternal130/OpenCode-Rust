@@ -366,6 +366,7 @@ fn clone_error(error: &ClientError) -> ClientError {
         ClientError::MalformedResponse(m) => ClientError::MalformedResponse(m.clone()),
         ClientError::SseEventTooLarge(n) => ClientError::SseEventTooLarge(*n),
         ClientError::Transport(e) => ClientError::MalformedResponse(format!("transport: {e}")),
+        ClientError::Cancelled => ClientError::Cancelled,
         ClientError::InvalidBaseUrl(u) => ClientError::InvalidBaseUrl(u.clone()),
         ClientError::Encoding(e) => ClientError::Encoding(e.clone()),
         ClientError::SubscriberCapacity(n) => ClientError::SubscriberCapacity(*n),
