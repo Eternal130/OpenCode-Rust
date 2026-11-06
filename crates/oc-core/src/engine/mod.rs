@@ -1264,6 +1264,10 @@ impl Engine {
         // `{command,commands}/**/*.md` discovery; plugin registrations
         // apply below through the location plugin seam.
         let commands = Arc::new(commands::CommandTable::discover(&loaded));
+        // G-193.5 (ref plugin/command.ts): the builtin `init`/`review`
+        // commands, added AFTER config discovery (plugin `editor.add`
+        // replaces same-name config commands).
+        commands::seed_builtin_commands(&commands, location.as_path());
 
         // The bundle's background-task shutdown: `invalidate` rings it
         // (and the sender's drop fires it on an assemble error path), so
@@ -2700,7 +2704,7 @@ fn agent_plugin(inputs: &Arc<PluginInputs>) -> InternalPlugin {
     let documents = inputs.config_documents.clone();
     let home = inputs.home.clone();
     InternalPlugin::new("opencode.agent", move |_hooks, ports| {
-        seed_builtin_agents(ports.agents);
+        seed_builtin_agents(ports.agents, &home);
         let mut editor = RegistryAgentEditor::new(Arc::clone(ports.agents));
         crate::config::agent_md::transform(&documents, &home, &mut editor);
         if let Some(default) = editor.default.clone() {
@@ -2806,9 +2810,9 @@ const PROMPT_EXPLORE: &str = "You are a file search specialist. You excel at tho
 const PROMPT_SUMMARY: &str = "Summarize what was done in this conversation. Write like a pull request description.\n\nRules:\n- 2-3 sentences max\n- Describe the changes made, not the process\n- Do not mention running tests, builds, or other validation steps\n- Do not explain what the user asked for\n- Write in first person (I added..., I fixed...)\n- Never ask questions or add new questions\n- If the conversation ends with an unanswered question to the user, preserve that exact question\n- If the conversation ends with an imperative statement or request to the user (e.g. \"Now please run the command and paste the console output\"), always include that exact request in the summary";
 
 /// Seeds the v2 builtin agents (`opencode.agent` plugin): build
-/// (default), general + explore (subagents), compaction, title, summary
-/// (hidden primaries).
-fn seed_builtin_agents(agents: &Arc<crate::location::AgentRegistry>) {
+/// (default), general + explore (subagents), plan, compaction, title,
+/// summary (hidden primaries).
+fn seed_builtin_agents(agents: &Arc<crate::location::AgentRegistry>, home: &std::path::Path) {
     // The default agent starts from `Agent.Info.default` (v2's schema
     // defaults: allow everything, ask for external_directory outside the
     // sandbox globs, ask for env files) — the permission goldens pin
@@ -2854,6 +2858,35 @@ fn seed_builtin_agents(agents: &Arc<crate::location::AgentRegistry>) {
     explore.permissions.push(rule("external_directory", "*", oc_schema::permission::Effect::Ask));
     agents.set(explore);
 
+    // ref plugin/plan.ts:33-43 — the read-only Plan agent: question
+    // allowed, edits denied everywhere EXCEPT the plan directory
+    // (`~/.opencode/plan`), which is also the only external directory
+    // allowed. The reminder halves (enter/leave text + per-request
+    // reconciliation) live in `session::runner::plan`.
+    let plan_directory = crate::session::runner::plan::plan_directory(home);
+    // The transform updates an agent whose base is `Agent.Info.default`
+    // (allow-all + the external-directory/env-file asks); the pushed
+    // rules layer on top: question allowed, edits denied everywhere
+    // except the plan directory.
+    let mut plan = oc_schema::agent::Info::default_for(oc_schema::id::AgentId::parse("plan"));
+    plan.name = oc_schema::id::AgentName::parse("Plan");
+    plan.description =
+        Some("Read-only agent for exploring the codebase and planning work before implementation.".into());
+    plan.mode = oc_schema::agent::Mode::Primary;
+    plan.permissions.push(rule("question", "*", oc_schema::permission::Effect::Allow));
+    plan.permissions.push(rule("edit", "*", oc_schema::permission::Effect::Deny));
+    plan.permissions.push(rule(
+        "edit",
+        &format!("{}/*", plan_directory.display()),
+        oc_schema::permission::Effect::Allow,
+    ));
+    plan.permissions.push(rule(
+        "external_directory",
+        &format!("{}/*", plan_directory.display()),
+        oc_schema::permission::Effect::Allow,
+    ));
+    agents.set(plan);
+
     agents.set(agent_info("compaction", "Compaction", oc_schema::agent::Mode::Primary, true));
     let mut title = agent_info("title", "Title", oc_schema::agent::Mode::Primary, true);
     title.system = Some(PROMPT_TITLE.to_string());
@@ -2878,7 +2911,7 @@ pub fn native_agent_seed(
     home: &std::path::Path,
 ) -> Vec<serde_json::Value> {
     let registry = Arc::new(crate::location::AgentRegistry::new());
-    seed_builtin_agents(&registry);
+    seed_builtin_agents(&registry, home);
     let mut editor = RegistryAgentEditor::new(Arc::clone(&registry));
     crate::config::agent_md::transform(documents, home, &mut editor);
     if let Some(default) = editor.default.clone() {

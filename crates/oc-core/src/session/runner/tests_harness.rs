@@ -122,6 +122,7 @@ pub(crate) fn resolved_from(model: LanguageModel, variant: Option<&str>) -> Reso
             variant: variant.map(oc_schema::id::ModelVariantId::parse),
         },
         model,
+        info: None,
         capabilities: oc_schema::model::Capabilities::default(),
         cost: Vec::new(),
         limit: oc_schema::model::ModelLimit { context: 200_000, input: None, output: 32_000 },

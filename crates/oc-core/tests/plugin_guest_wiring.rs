@@ -24,6 +24,7 @@ use serde_json::{json, Value};
 /// preparation reads are all empty defaults).
 fn resolved_model(route: &Arc<oc_ai::route::Route>) -> ResolvedModel {
     ResolvedModel {
+        info: None,
         model: route.model("hooked-model", None).expect("model"),
         reference: oc_schema::model::Ref {
             provider_id: oc_schema::id::ProviderId::parse("echo-provider"),
@@ -310,6 +311,7 @@ async fn ws_seams_offered_for_hooked_durable_sessions() {
 fn plain_model() -> ResolvedModel {
     let route = oc_ai::test_support::echo_route_named("ws-hooks");
     ResolvedModel {
+        info: None,
         model: route.model("hooked-model", None).expect("model"),
         reference: oc_schema::model::Ref {
             provider_id: oc_schema::id::ProviderId::parse("test"),

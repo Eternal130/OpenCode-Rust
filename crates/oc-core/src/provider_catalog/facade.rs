@@ -546,12 +546,21 @@ pub fn language_model_for_model(
     )?;
     // G-171: the gpt-5 family defaults ride the route provider options
     // (openai-options.ts `withOpenAIOptions`), under the model overlays.
-    let route = match gpt5_default_options(model.id.as_str(), &package) {
-        Some(options) => route.with(RoutePatch {
-            defaults: RouteDefaults { provider_options: Some(options), ..Default::default() },
+    // G-193.3: the VerbosityPlugin textVerbosity "low" default merges
+    // into the same options map (ref sets `event.options.textVerbosity`,
+    // which `withOpenAIOptions` forwards identically).
+    let mut default_options = gpt5_default_options(model.id.as_str(), &package).unwrap_or_default();
+    if verbosity_default(model.model_id.as_str(), &package) {
+        default_options
+            .insert("textVerbosity".to_string(), Value::String("low".to_string()));
+    }
+    let route = if default_options.is_empty() {
+        route
+    } else {
+        route.with(RoutePatch {
+            defaults: RouteDefaults { provider_options: Some(default_options), ..Default::default() },
             ..Default::default()
-        }),
-        None => route,
+        })
     };
     // Provider header plugins (AUD-10②): the ref cerebras/kilo/nvidia/
     // llmgateway plugins spread their static sets over `provider.headers`
@@ -1227,6 +1236,57 @@ fn gpt5_default_options(model_id: &str, package: &str) -> Option<serde_json::Map
         .into_iter()
         .collect(),
     )
+}
+
+/// G-193.3 (plugin/verbosity.ts:52-58): `openAIModelID` — the OpenAI
+/// model id carried by the package (direct openai/azure lanes use the
+/// catalog `modelID`; the bedrock mantle lane strips `openai.`; the
+/// gateway lanes strip `openai/`). `None` = the package never speaks
+/// OpenAI model ids.
+fn openai_model_id(model_id: &str, package: &str) -> Option<String> {
+    let id = model_id.to_lowercase();
+    match package {
+        "@opencode/ai/providers/openai"
+        | "@opencode/ai/providers/openai/responses"
+        | "@opencode/ai/providers/azure"
+        | "@opencode/ai/providers/azure/responses" => Some(id),
+        "@opencode/ai/providers/amazon-bedrock/mantle/responses" => {
+            id.strip_prefix("openai.").map(str::to_string)
+        }
+        "@opencode/ai/providers/cloudflare-ai-gateway"
+        | "@opencode/ai/providers/vercel-ai-gateway"
+        | "@ai-sdk/gateway" => id.strip_prefix("openai/").map(str::to_string),
+        _ => None,
+    }
+}
+
+/// G-193.3 (plugin/verbosity.ts:45-50): `supportsVerbosity` — gpt-6
+/// always, chat/image variants never, and the settled gpt-5 minor
+/// versions + base/mini/nano shapes (unset minors stay out until their
+/// support is known).
+fn supports_verbosity(id: &str) -> bool {
+    if id.contains("gpt-6") {
+        return true;
+    }
+    if id.contains("-chat") || id.contains("-image") {
+        return false;
+    }
+    static MINORS: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"(?:^|[/.])gpt-5\.[1-6](?:[.:-]|$)").unwrap()
+    });
+    static BASE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"(?:^|[/.])gpt-5(?:-(?:mini|nano)(?:[.:-]|$)|$)").unwrap()
+    });
+    MINORS.is_match(id) || BASE.is_match(id)
+}
+
+/// G-193.3 (plugin/verbosity.ts:22-43): the VerbosityPlugin default —
+/// `textVerbosity: "low"` when the request carries none, the model (and
+/// its selected variant) set none, and the model supports it. The
+/// model/variant overlays ride `apply_model_overlays` AFTER these route
+/// defaults, so an explicit user/model setting still wins per key.
+fn verbosity_default(model_id: &str, package: &str) -> bool {
+    openai_model_id(model_id, package).is_some_and(|id| supports_verbosity(&id))
 }
 
 /// The Vertex lanes' baseURL precedence (v2 folds the model's catalog
@@ -3464,9 +3524,66 @@ mod tests {
         }
     }
 
-    /// G-171: the OpenAI chat lane carries supportsPromptCacheKey
+    /// G-193.3: the VerbosityPlugin predicate (verbosity.ts:45-58) —
+    /// textVerbosity "low" for the settled GPT shapes on the direct
+    /// openai/azure lanes (plus the bedrock/gateway id-stripping), and
+    /// nothing for chat/image variants, unset minors, or other vendors.
+    #[test]
+    fn provider_facade_verbosity_default_matches_ref_predicate() {
+        let responses = "@opencode/ai/providers/openai/responses";
+        assert!(verbosity_default("gpt-5.1", responses));
+        assert!(verbosity_default("GPT-5.3-CODEX", responses), "case-insensitive");
+        assert!(verbosity_default("gpt-5", responses), "base shape");
+        assert!(verbosity_default("gpt-5-nano-latest", responses));
+        assert!(verbosity_default("gpt-6", responses));
+        assert!(verbosity_default("gpt-6-mini", "@opencode/ai/providers/azure"));
+        // chat/image variants never
+        assert!(!verbosity_default("gpt-5-chat-latest", responses));
+        assert!(!verbosity_default("gpt-5.1-image", responses));
+        // unset gpt-5 minors stay out until support is known
+        assert!(!verbosity_default("gpt-5.7", responses));
+        assert!(!verbosity_default("gpt-5-max", responses), "unset suffix shape");
+        // non-openai packages never see the default
+        assert!(!verbosity_default("gpt-5.1", "@opencode/ai/providers/groq"));
+        // bedrock mantle strips `openai.`
+        assert!(verbosity_default(
+            "openai.gpt-5.1",
+            "@opencode/ai/providers/amazon-bedrock/mantle/responses"
+        ));
+        assert!(!verbosity_default(
+            "gpt-5.1",
+            "@opencode/ai/providers/amazon-bedrock/mantle/responses"
+        ), "no openai. prefix");
+        // gateways strip `openai/`
+        assert!(verbosity_default("openai/gpt-5.1", "@opencode/ai/providers/vercel-ai-gateway"));
+        assert!(!verbosity_default("gpt-5.1", "@ai-sdk/gateway"), "no openai/ prefix");
+    }
+
+    /// G-193.3: the bound route carries `textVerbosity: "low"` in its
+    /// provider-options defaults for a supporting model.
+    #[test]
+    fn provider_facade_verbosity_rides_route_defaults() {
+        let context = context();
+        let catalog = Catalog::embedded();
+        let model = language_model(
+            &context,
+            catalog,
+            "openai",
+            "gpt-5.3-codex",
+            &ModelConnection { api_key: Some("oai-key".into()), ..Default::default() },
+        )
+        .expect("gpt-5.3-codex binds");
+        let defaults = &model.route.defaults;
+        let options = defaults
+            .provider_options
+            .as_ref()
+            .expect("route provider options");
+        assert_eq!(options.get("textVerbosity"), Some(&serde_json::json!("low")));
+        assert_eq!(options.get("reasoningEffort"), Some(&serde_json::json!("medium")));
+    }
     /// (openai.ts:108) — the chat body emits `prompt_cache_key` when the
     /// request carries a cache key.
+    /// G-171: the OpenAI chat lane carries supportsPromptCacheKey
     #[test]
     fn provider_facade_openai_chat_prompt_cache_key_compat() {
         let compat = package_chat_compatibility("@opencode/ai/providers/openai/chat", "gpt-5.2")

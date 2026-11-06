@@ -997,6 +997,7 @@ async fn compaction_too_large_resend() {
         }));
     let model = route.model("fake-model", Some("parityfake".into())).expect("route model");
     let resolved = ResolvedModel {
+        info: None,
         reference: oc_schema::model::Ref {
             provider_id: oc_schema::id::ProviderId::parse("parityfake"),
             id: oc_schema::id::ModelId::parse("fake-model"),
