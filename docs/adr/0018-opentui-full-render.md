@@ -4,7 +4,7 @@
 
 - 状态：accepted（2026-11-03，Phase B4 收口；决策 1/5 已被 ADR-0019 取代）
 - 取代：FRAMEWORK-CONVERGENCE.md 的「混合架构 = 目标形态」裁决（已归档；本 ADR 为其正式推翻记录，见 `docs/PLAN-opentui-render-migration.md`）
-- 范围：crates/oc-tui（+ oc-cli 的 mini 前端）；opentui-rust 侧为 feature `terminal-backend`（rev 4ff646d）
+- 范围：crates/oc-tui（+ oc-cli 的 mini 前端）；opentui-rust 侧为 feature `terminal-backend`（rev 3606fda）
 
 ## 背景
 

@@ -1125,8 +1125,8 @@ G-93..G-104 全部 ✅。现存未关闭项维持既有文档化决策：G-28（
 - ref merman routing.ts:426,468,488,509 按 `edge.from`/`edge.to` 分组。修法：三臂改用 diagram.edges[i].from/to。
 
 ### G-177 ✅ TUI Markdown 表格降级为 raw 文本（tui）——已闭环
-- 闭环方式：opentui-core rev bump 4ff646d→8cbd53d 移植 `TextTableRenderable`（opentui-rust 上游 markdown.rs 表格 token→chunk-grid→`BlockSpec::Table{TextTableOptions}`，3 个新差分场景 IDENTICAL）+ oc-tui 渲染臂补 `BlockSpec::Table` 接线（markdown.rs `render_spec` Table 臂：`TextTableState::from_options` → `update_layout` → `prepare_paint` → `paint` 进 scratch `OptimizedBuffer` → `get_span_lines` 转 styled span 行）。
-- 证据指针：crates/oc-tui/src/components/message/markdown.rs `BlockSpec::Table` 臂 + `captured_span_to_styled` + 测试 `table_renders_as_a_real_grid`（钉住 `┌─┬─┐`/`├─┼─┤`/`└─┴─┘` 边框、表头首行、逐行分隔、ref 的 cellPaddingX=1 与 raw pipe 不残留）；workspace Cargo.toml opentui 三 crate rev=8cbd53d。
+- 闭环方式：opentui-core rev bump 3606fda→93814b4 移植 `TextTableRenderable`（opentui-rust 上游 markdown.rs 表格 token→chunk-grid→`BlockSpec::Table{TextTableOptions}`，3 个新差分场景 IDENTICAL）+ oc-tui 渲染臂补 `BlockSpec::Table` 接线（markdown.rs `render_spec` Table 臂：`TextTableState::from_options` → `update_layout` → `prepare_paint` → `paint` 进 scratch `OptimizedBuffer` → `get_span_lines` 转 styled span 行）。
+- 证据指针：crates/oc-tui/src/components/message/markdown.rs `BlockSpec::Table` 臂 + `captured_span_to_styled` + 测试 `table_renders_as_a_real_grid`（钉住 `┌─┬─┐`/`├─┼─┤`/`└─┴─┘` 边框、表头首行、逐行分隔、ref 的 cellPaddingX=1 与 raw pipe 不残留）；workspace Cargo.toml opentui 三 crate rev=93814b4。
 
 ### G-178 ❌ mermaid 开放边 `A --- B` 仍渲染箭头（tui）
 - drawing.rs:262-273 `draw_routed_edge` 无条件画箭头（无 arrowhead 检查）；:480-482 虽对 `!edge.arrowhead` 补画线尾，但 style.rs:169-171 `merge_flowchart_cell` 的 `is_arrow_head(existing) → return existing` 使先画的箭头胜出、线尾被丢。ref drawing.ts:187-195 在 drawRoutedEdge 内先判 `edge.arrowhead !== false`。修法：draw_routed_edge 增加 arrowhead 参数。
