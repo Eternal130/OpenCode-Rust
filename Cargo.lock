@@ -2400,6 +2400,7 @@ dependencies = [
  "bytes",
  "dashmap",
  "futures",
+ "git2",
  "hmac",
  "jiff",
  "libc",

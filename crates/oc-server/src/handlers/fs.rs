@@ -465,6 +465,7 @@ fn walk(
     budget: usize,
     visited: &mut usize,
     out: &mut Vec<(std::path::PathBuf, bool)>,
+    ignore: Option<&git2::Repository>,
 ) {
     if *visited >= budget {
         return;
@@ -477,21 +478,50 @@ fn walk(
         if *visited >= budget {
             return;
         }
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        // G-203 — REF exclusion parity (ripgrep.ts:193-218): ref's find
+        // runs `rg --files` with NO `--hidden`, so dot entries are never
+        // traversed or indexed. (ref's extra `--glob=!**/.git/**` is
+        // belt-and-braces on top of the hidden filter.)
+        if name.starts_with('.') {
+            continue;
+        }
         let Ok(kind) = entry.file_type() else { continue };
+        // G-203 — ripgrep honors .gitignore by default: gitignored
+        // entries are excluded from the index exactly like ref's rg
+        // stream (via git2's ignore oracle over the discovered repo of
+        // the scan root; a bare .gitignore outside any repo — rg also
+        // honors those — stays the one documented divergence).
+        if let Some(repo) = ignore {
+            let entry_path = entry.path();
+            if repo.is_path_ignored(repo_relative(repo, &entry_path)).unwrap_or(false) {
+                continue;
+            }
+        }
         if kind.is_dir() {
             // REF: ripgrep `exclude` globs keep protected trees out of the
             // index entirely (directory entries derive from the parents of
             // INCLUDED files) — excluded dirs are never candidates.
-            if exclusions.is_excluded_dir(&entry.file_name().to_string_lossy(), &entry.path()) {
+            if exclusions.is_excluded_dir(&name, &entry.path()) {
                 continue;
             }
             if want_dirs {
                 out.push((entry.path(), true));
             }
-            walk(&entry.path(), want_files, want_dirs, exclusions, budget, visited, out);
+            walk(&entry.path(), want_files, want_dirs, exclusions, budget, visited, out, ignore);
         } else if want_files {
             out.push((entry.path(), false));
         }
+    }
+}
+
+/// G-203 — the ignore-oracle path: libgit2 wants it relative to the
+/// repository's working directory when the entry lives under it.
+fn repo_relative<'a>(repo: &git2::Repository, path: &'a std::path::Path) -> &'a std::path::Path {
+    match repo.workdir() {
+        Some(workdir) => path.strip_prefix(workdir).unwrap_or(path),
+        None => path,
     }
 }
 
@@ -500,6 +530,21 @@ fn walk(
 // `scan`/`refresh`): entries built by the same walk, refreshed every
 // 10s by a background task; searches hit the index instead of walking
 // per request.
+//
+// G-203 IMPLEMENTATION DIVERGENCE (documented, deliberate): REF's find
+// builds its index by streaming `rg --files` (ripgrep.ts:52-61,193-218
+// — glob chain `--glob=!${exclude}` + `--glob=!**/.git/**`, onEntry
+// streaming into the fuzzysort-prepared map). The Rust port keeps the
+// NATIVE walk-based index instead of porting the rg binary machinery:
+// the observable contract (exclusion semantics — hidden entries,
+// .gitignore, home protected names/paths, the heavy-tree skips — plus
+// the 100k/MAX_SAFE_INTEGER budgets and the refresh cadence) is
+// matched and pinned by tests (`g203_find_excludes_*`,
+// `find_excludes_protected_and_heavy_trees`, `walk_*`,
+// `vcs_root_scan_budget_is_unbounded`). One known residual divergence:
+// a bare `.gitignore`/`.ignore` OUTSIDE any git repository (rg honors
+// those too) is not consulted — git2's oracle only exists inside a
+// discovered repo.
 // ---------------------------------------------------------------------------
 
 type IndexEntries = std::sync::Arc<Vec<(std::path::PathBuf, bool)>>;
@@ -733,10 +778,13 @@ impl SearchIndex {
         let walked = tokio::task::spawn_blocking(move || {
             // The index carries files AND directories (ref indexes
             // files plus every parent directory); type filtering
-            // happens at query time.
+            // happens at query time. G-203: the ignore oracle comes
+            // from the scan root's discovered repo (rg's default
+            // .gitignore handling).
+            let ignore = git2::Repository::discover(&scan_root).ok();
             let mut candidates = Vec::new();
             let mut visited = 0usize;
-            walk(&scan_root, true, true, &exclusions, budget, &mut visited, &mut candidates);
+            walk(&scan_root, true, true, &exclusions, budget, &mut visited, &mut candidates, ignore.as_ref());
             candidates
         })
         .await;
@@ -919,7 +967,7 @@ mod find_tests {
         scan.names = vec!["notes".to_owned()];
         let mut out = Vec::new();
         let mut visited = 0usize;
-        walk(path, true, true, &scan, SCAN_ENTRY_BUDGET, &mut visited, &mut out);
+        walk(path, true, true, &scan, SCAN_ENTRY_BUDGET, &mut visited, &mut out, None);
         let names: Vec<String> = out
             .iter()
             .map(|(p, _)| p.file_name().unwrap().to_string_lossy().into_owned())
@@ -949,7 +997,7 @@ mod find_tests {
         let scan = ScanExclusions { home_rooted: false, names: vec![], paths: vec![] };
         let mut out = Vec::new();
         let mut visited = 0usize;
-        walk(path, true, false, &scan, SCAN_ENTRY_BUDGET, &mut visited, &mut out);
+        walk(path, true, false, &scan, SCAN_ENTRY_BUDGET, &mut visited, &mut out, None);
         assert!(out.is_empty(), "no files requested → no candidates: {out:?}");
         // root listing (300 dirs) + each dir's (empty) listing: the walk
         // must have visited every directory entry but produced nothing.
@@ -961,7 +1009,7 @@ mod find_tests {
         // returns immediately without pushing candidates.
         let mut near: usize = SCAN_ENTRY_BUDGET;
         let mut out2 = Vec::new();
-        walk(path, true, true, &scan, SCAN_ENTRY_BUDGET, &mut near, &mut out2);
+        walk(path, true, true, &scan, SCAN_ENTRY_BUDGET, &mut near, &mut out2, None);
         assert!(out2.is_empty(), "budget exhausted → walk is a no-op: {out2:?}");
         assert_eq!(near, SCAN_ENTRY_BUDGET);
     }
@@ -989,14 +1037,14 @@ mod find_tests {
         // Bounded walk with a 10-entry stand-in budget stops early.
         let mut out = Vec::new();
         let mut visited = 0usize;
-        walk(path, true, false, &scan, 10, &mut visited, &mut out);
+        walk(path, true, false, &scan, 10, &mut visited, &mut out, None);
         assert_eq!(visited, 10, "the plain budget truncates at 10 entries");
         assert!(out.len() < 40, "truncated: {}/40 files", out.len());
 
         // The SAME tree under the VCS-root budget collects every file.
         let mut out = Vec::new();
         let mut visited = 0usize;
-        walk(path, true, false, &scan, budget(true), &mut visited, &mut out);
+        walk(path, true, false, &scan, budget(true), &mut visited, &mut out, None);
         assert_eq!(out.len(), 40, "VCS-root budget must not truncate: got {}", out.len());
         // .git stays excluded from candidates even unbounded.
         assert!(!out.iter().any(|(p, _)| p.to_string_lossy().contains(".git")));
