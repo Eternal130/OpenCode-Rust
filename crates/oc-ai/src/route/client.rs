@@ -211,8 +211,13 @@ impl Route {
     #[must_use]
     pub fn prepare_request(&self, request: &LLMRequest) -> LLMRequest {
         let original = self.resolve_request_options(request);
-        // Deduplicate per sibling level; a tool and a namespace may share a name.
-        let tools = dedupe_tools(original.tools.clone());
+        // Deduplicate per sibling level, then project every tool schema
+        // (object root + the model's sanitizer) exactly once, centrally —
+        // port of `prepareRequest`'s `ToolSchemaProjection.tools(dedupe(...), model)`
+        // (route/client.ts:562-567; G-173). Protocols receive pre-projected
+        // schemas and must not project again.
+        let tools =
+            crate::protocols::sanitizer::project_tools(dedupe_tools(original.tools.clone()), &original.model);
         let updated = original.update(LLMRequestPatch { tools: Some(tools), ..Default::default() });
         let resolved = apply_cache_policy(&apply_effort_updates(self, &updated));
         match &self.headers {

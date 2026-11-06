@@ -40,7 +40,11 @@ use oc_ai::protocols::azure::{azure_chat_route, azure_responses_route, AzureConf
 use oc_ai::protocols::meta_responses::{
     meta_auth, meta_responses_route, MetaResponsesRouteSpec,
 };
-use oc_ai::protocols::anthropic_messages::{anthropic_messages_route, anthropic_route};
+use oc_ai::protocols::anthropic_messages::{
+    alibaba_messages_compatibility, anthropic_messages_route, anthropic_route,
+    meta_messages_compatibility, moonshot_messages_compatibility,
+    zai_coding_plan_messages_compatibility,
+};
 use oc_ai::protocols::bedrock::{self as bedrock_lane, BedrockAuthOptions, MantleMessagesConfig};
 use oc_ai::protocols::cohere_chat::{cohere_route_for_package, CohereConfig};
 use oc_ai::protocols::copilot::{copilot_chat_route, CopilotConfig};
@@ -48,10 +52,15 @@ use oc_ai::protocols::gemini::{google_route, GoogleConfig};
 use oc_ai::protocols::google_interactions::{google_interactions_route, GoogleInteractionsConfig};
 use oc_ai::protocols::mistral_chat::{mistral_route_for_package, MistralConfig};
 use oc_ai::protocols::openai_chat::{
-    alibaba_chat_route, cerebras_chat_compatibility, deepinfra_chat_compatibility,
-    deepseek_chat_route, digitalocean_chat_route, digitalocean_chat_compatibility,
-    fireworks_chat_compatibility, groq_chat_route, openai_chat_route, openrouter_chat_route,
-    togetherai_chat_compatibility, venice_chat_route, zai_chat_route,
+    alibaba_chat_compatibility, alibaba_chat_route, cerebras_chat_compatibility,
+    cohere_chat_compatibility,
+    deepinfra_chat_compatibility, deepseek_chat_compatibility, deepseek_chat_route,
+    digitalocean_chat_route, digitalocean_chat_compatibility, fireworks_chat_compatibility,
+    groq_chat_compatibility, groq_chat_route, meta_chat_compatibility, minimax_chat_route,
+    minimax_chat_compatibility, moonshot_chat_compatibility, moonshot_chat_route,
+    openai_chat_route, openrouter_chat_route, openrouter_chat_compatibility,
+    togetherai_chat_compatibility, venice_chat_route, venice_chat_compatibility, zai_chat_route,
+    zai_chat_compatibility,
 };
 use oc_ai::protocols::openai_compatible::{
     openai_compatible_chat_configured, openai_compatible_responses_route,
@@ -810,11 +819,26 @@ fn build_route(
                 // alibaba.ts:102) — the catalog `api` is the CHAT root and
                 // must not be reused for `/messages`.
                 let base_url = anthropic_messages_base_url(package, base_url, provider_id)?;
-                let route = anthropic_messages_route(transport).with(RoutePatch {
+                let mut patch = RoutePatch {
                     provider: Some(provider_id.to_string()),
                     auth: Some(bearer_auth(api_key, env)),
                     ..Default::default()
-                });
+                };
+                // G-172: the meta messages lane defaults thinking to adaptive
+                // with the reasoning display omitted (meta.ts:113-118 +
+                // meta-messages.ts route defaults); user options merge over.
+                if package == "@opencode/ai/providers/meta/messages" {
+                    let mut options = oc_ai::schema::ProviderOptions::new();
+                    options.insert(
+                        "thinking".to_string(),
+                        serde_json::json!({ "type": "adaptive", "display": "omitted" }),
+                    );
+                    patch.defaults = RouteDefaults {
+                        provider_options: Some(options),
+                        ..Default::default()
+                    };
+                }
+                let route = anthropic_messages_route(transport).with(patch);
                 Ok(with_base_url(route, base_url))
             }
         }
@@ -922,6 +946,17 @@ fn build_route(
                     zai_chat_route(transport, Some(auth))
                 }
                 "@opencode/ai/providers/alibaba/chat" => alibaba_chat_route(transport, Some(auth)),
+                // G-172: the minimax chat dialect — OpenAI chat body plus the
+                // `thinking` passthrough and `reasoning_split` default true
+                // (minimax.ts:54-94).
+                "@opencode/ai/providers/minimax/chat" => {
+                    minimax_chat_route(transport, Some(auth))
+                }
+                // G-175: the moonshot chat dialect — OpenAI chat body plus the
+                // `thinking` passthrough (moonshot.ts:63-89).
+                "@opencode/ai/providers/moonshot/chat" => {
+                    moonshot_chat_route(transport, Some(auth))
+                }
                 // G-118: DigitalOcean's own route — the OpenAI chat protocol
                 // with `cache_control` breakpoint lowering and the route id
                 // `"digitalocean"` cache-policy's RESPECTS_INLINE_HINTS
@@ -1183,6 +1218,8 @@ fn package_has_baked_base(package: &str) -> bool {
             | "@opencode/ai/providers/zai-coding-plan/chat"
             | "@opencode/ai/providers/alibaba/chat"
             | "@opencode/ai/providers/openai/chat"
+            | "@opencode/ai/providers/minimax/chat"
+            | "@opencode/ai/providers/moonshot/chat"
             // G-118/G-119/G-120: the packages whose baked defaults the
             // models-dev snapshot's missing `api` field dropped.
             | "@opencode/ai/providers/digitalocean"
@@ -1239,25 +1276,78 @@ fn package_env_chain(package: &str, env: &[String]) -> Vec<String> {
 }
 
 /// Per-package model compatibility the TS provider files inject at
-/// `configure().model({... compatibility })` (G-119/G-121): deepinfra.ts:46-52,
-/// togetherai.ts:44-49, cerebras.ts:41-48, fireworks.ts:49-51,
-/// digitalocean.ts:44-50. The facade-side counterpart of the baked families'
-/// `*_chat_compatibility()` presets.
-fn package_chat_compatibility(package: &str) -> Option<LanguageModelCompatibility> {
+/// `configure().model()/messages()/{... compatibility })` (G-119/G-121,
+/// G-175): deepinfra.ts:46-52, togetherai.ts:44-49, cerebras.ts:41-48,
+/// fireworks.ts:49-51, digitalocean.ts:44-50, deepseek.ts:47,
+/// groq.ts:92-98, openrouter.ts:199, venice.ts:43 (venice-chat.ts:350),
+/// zai.ts:51 (zai-chat.ts:65) + zai-coding-plan.ts:68,
+/// alibaba.ts:97 (alibaba-chat.ts:44), minimax.ts:119, moonshot.ts:104-117,
+/// cohere.ts:43-48, openai.ts:108, azure.ts:132, meta.ts:134-141.
+/// The messages-family entries carry the explicit `requireSignature: false`
+/// presets (G-174): alibaba.ts:104, meta.ts:141, zai-coding-plan.ts:72,
+/// moonshot.ts:114-117. The baked families' `*_chat_compatibility()`
+/// presets live in oc-ai.
+fn package_chat_compatibility(
+    package: &str,
+    model_id: &str,
+) -> Option<LanguageModelCompatibility> {
     match package {
         "@opencode/ai/providers/deepinfra" => Some(deepinfra_chat_compatibility()),
         "@opencode/ai/providers/togetherai" => Some(togetherai_chat_compatibility()),
         "@opencode/ai/providers/cerebras" => Some(cerebras_chat_compatibility()),
         "@opencode/ai/providers/fireworks" => Some(fireworks_chat_compatibility()),
         "@opencode/ai/providers/digitalocean" => Some(digitalocean_chat_compatibility()),
+        "@opencode/ai/providers/deepseek" => Some(deepseek_chat_compatibility()),
+        "@opencode/ai/providers/groq" => Some(groq_chat_compatibility()),
+        "@opencode/ai/providers/openrouter" => Some(openrouter_chat_compatibility()),
+        "@opencode/ai/providers/venice" => Some(venice_chat_compatibility()),
+        "@opencode/ai/providers/zai/chat" | "@opencode/ai/providers/zai-coding-plan/chat" => {
+            Some(zai_chat_compatibility())
+        }
+        "@opencode/ai/providers/alibaba/chat" => Some(alibaba_chat_compatibility()),
+        "@opencode/ai/providers/minimax/chat" => Some(minimax_chat_compatibility()),
+        "@opencode/ai/providers/moonshot/chat" => Some(moonshot_chat_compatibility()),
+        "@opencode/ai/providers/cohere/chat" => Some(cohere_chat_compatibility()),
+        "@opencode/ai/providers/meta/chat" => Some(meta_chat_compatibility()),
         // G-171: the OpenAI chat lane carries `supportsPromptCacheKey`
-        // (openai.ts:108); the azure chat lane once G-165 wires it
-        // (azure.ts:132).
+        // (openai.ts:108); the azure chat lane (azure.ts:132) likewise.
         "@opencode/ai/providers/openai/chat" | "@opencode/ai/providers/azure/chat" => {
             Some(LanguageModelCompatibility {
                 supports_prompt_cache_key: Some(true),
                 ..Default::default()
             })
+        }
+        // G-174: explicit requireSignature:false on the third-party
+        // Anthropic Messages lanes.
+        "@opencode/ai/providers/alibaba/messages" => Some(alibaba_messages_compatibility()),
+        "@opencode/ai/providers/meta/messages" => Some(meta_messages_compatibility()),
+        "@opencode/ai/providers/zai-coding-plan/messages" => {
+            Some(zai_coding_plan_messages_compatibility())
+        }
+        "@opencode/ai/providers/moonshot/messages" => Some(moonshot_messages_compatibility()),
+        // moonshot responses keeps the moonshot sanitizer (moonshot.ts:116-117).
+        "@opencode/ai/providers/moonshot/responses" => Some(LanguageModelCompatibility {
+            sanitizer: Some(oc_ai::schema::SanitizerCompatibility::Moonshot),
+            ..Default::default()
+        }),
+        // Vercel AI Gateway (vercel-ai-gateway.ts:259-268): the chat lane
+        // replays reasoning through `reasoning`; the messages lane requires
+        // thinking signatures ONLY for anthropic/-prefixed models.
+        "@opencode/ai/providers/vercel-ai-gateway" | "@ai-sdk/gateway" => {
+            if model_id.starts_with("meta/muse-") {
+                Some(LanguageModelCompatibility {
+                    reasoning_field: Some("reasoning".into()),
+                    ..Default::default()
+                })
+            } else if model_id.starts_with("openai/gpt-") || model_id.starts_with("spacexai/grok-")
+            {
+                None
+            } else {
+                Some(LanguageModelCompatibility {
+                    require_signature: Some(model_id.starts_with("anthropic/")),
+                    ..Default::default()
+                })
+            }
         }
         _ => None,
     }
@@ -1295,6 +1385,10 @@ fn overlay_model_compatibility(
     if let Some(value) = overlay.supports_prompt_cache_key {
         base.supports_prompt_cache_key = Some(value);
     }
+    // G-174: `requireSignature` forwards through the overlay merge.
+    if let Some(value) = overlay.require_signature {
+        base.require_signature = Some(value);
+    }
     base
 }
 
@@ -1311,7 +1405,7 @@ fn bind_model_with_compat(
         provider: provider_id.to_string(),
         message: error.to_string(),
     })?;
-    Ok(match package_chat_compatibility(package) {
+    Ok(match package_chat_compatibility(package, model_id) {
         Some(compat) => bound.with_compatibility(overlay_model_compatibility(compat, overlay)),
         None => bound,
     })
@@ -3359,7 +3453,7 @@ mod tests {
     /// request carries a cache key.
     #[test]
     fn provider_facade_openai_chat_prompt_cache_key_compat() {
-        let compat = package_chat_compatibility("@opencode/ai/providers/openai/chat")
+        let compat = package_chat_compatibility("@opencode/ai/providers/openai/chat", "gpt-5.2")
             .expect("openai chat compat preset");
         assert_eq!(compat.supports_prompt_cache_key, Some(true));
         let route = openai_chat_route(Arc::new(FailingTransport { message: "facade unit test" }))

@@ -83,6 +83,10 @@ pub struct Compatibility {
     pub require_assistant_after_tool: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supports_prompt_cache_key: Option<bool>,
+    /// Skip the thinking-signature replay requirement on the Anthropic
+    /// Messages family (`requireSignature`, e.g. alibaba.ts:104).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub require_signature: Option<bool>,
 }
 
 /// `Model.MaxTokensField`.

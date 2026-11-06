@@ -31,12 +31,12 @@ use crate::schema::{
     ToolDefinition, ToolResultValue, Usage,
 };
 
-use super::sanitizer;
 
 const ADAPTER: &str = "gemini";
 /// Google documents this sentinel for replaying Gemini 3 function calls
 /// after their original signature was lost.
 const SKIP_THOUGHT_SIGNATURE_VALIDATOR: &str = "skip_thought_signature_validator";
+
 /// Gemini 2.5 rejects a budget under the model's minimum: 512 on Flash-Lite,
 /// the highest, and 128 on Pro.
 const MIN_THINKING_BUDGET: f64 = 512.0;
@@ -1372,13 +1372,10 @@ fn rename_namespaced(part: &ContentPart, namespace: &str) -> ContentPart {
 }
 
 /// Build the Gemini body from a common request (port of `fromRequest`).
-/// Tool schemas are projected through the resolved sanitizer here — TS runs
-/// `ToolSchemaProjection.tools` in `prepareRequest` before any protocol
-/// builds its body; the Rust route exposes the plumbing and the protocol
-/// applies it, which lowers to identical bodies.
+/// Tool schemas are already projected centrally in
+/// `Route::prepare_request` (G-173, mirroring route/client.ts:565).
 fn body_from(request: &LLMRequest) -> Result<Value, AiError> {
-    let projected = sanitizer::project_tools(request.tools.clone(), &request.model);
-    let flattened = shared::flatten_tools(&projected);
+    let flattened = shared::flatten_tools(&request.tools);
     let has_tools = !flattened.is_empty();
     let generation = request.generation.clone().unwrap_or_default();
     let options = decode_options(request.provider_options.as_ref().unwrap_or(&Map::new()));

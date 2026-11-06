@@ -2813,6 +2813,48 @@ fn groq_body_overlay(request: &LLMRequest, body: &mut Map<String, Value>) {
     }
 }
 
+/// MiniMax (port of `providers/minimax.ts:62-72`, G-172): pass the validated
+/// `thinking` option through and always carry `reasoning_split` — defaulting
+/// to true so `<think>` content never leaks into ordinary assistant text.
+fn minimax_body_overlay(request: &LLMRequest, body: &mut Map<String, Value>) {
+    // ChatOptions validates `thinking: Struct({ type: String })` — the
+    // passthrough keeps only the `type` key like the ref schema does.
+    if let Some(thinking_type) = provider_options(request)
+        .and_then(|options| option_object(options, "thinking"))
+        .and_then(|thinking| thinking.get("type").cloned())
+        .and_then(|kind| kind.as_str().map(str::to_string))
+    {
+        body.insert("thinking".into(), json!({ "type": thinking_type }));
+    }
+    let reasoning_split = provider_options(request)
+        .and_then(|options| option_bool(options, "reasoningSplit"))
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    body.insert("reasoning_split".into(), json!(reasoning_split));
+}
+
+/// Moonshot (port of `providers/moonshot.ts:78-88`): pass the validated
+/// `thinking` option (`{type, keep?}`) through.
+fn moonshot_body_overlay(request: &LLMRequest, body: &mut Map<String, Value>) {
+    let Some(thinking) =
+        provider_options(request).and_then(|options| option_object(options, "thinking"))
+    else {
+        return;
+    };
+    let mut out = Map::new();
+    if let Some(kind) = thinking.get("type").and_then(Value::as_str) {
+        out.insert("type".into(), json!(kind));
+    }
+    if let Some(keep) = thinking.get("keep") {
+        if !keep.is_null() {
+            out.insert("keep".into(), keep.clone());
+        }
+    }
+    if !out.is_empty() {
+        body.insert("thinking".into(), Value::Object(out));
+    }
+}
+
 /// OpenRouter (port of `providers/openrouter.ts`): replay reasoning through
 /// the `reasoning` field only when structured details exist, and merge the
 /// routing/usage provider options.
@@ -3381,6 +3423,48 @@ pub fn digitalocean_chat_route(transport: SharedTransport, auth: Option<AuthDefi
     )
 }
 
+/// MiniMax (`providers/minimax.ts:54-94`, G-172): the OpenAI chat body plus
+/// the `thinking` option passthrough and `reasoning_split` — MiniMax
+/// otherwise embeds `<think>` tags in ordinary assistant text, so the split
+/// defaults to true.
+pub fn minimax_chat_route(transport: SharedTransport, auth: Option<AuthDefinition>) -> Route {
+    let ext = OpenAiChatExt {
+        id: "minimax-chat",
+        body: Some(minimax_body_overlay),
+        ..OpenAiChatExt::base()
+    };
+    chat_route(
+        "minimax-chat",
+        Some("minimax"),
+        Some("minimax"),
+        Some("https://api.minimax.io/v1"),
+        Arc::new(OpenAiChat::new(ext)),
+        Framing::sse_with_done(),
+        auth,
+        transport,
+    )
+}
+
+/// Moonshot (`providers/moonshot.ts:63-89`): the OpenAI chat body plus the
+/// validated `thinking` option passthrough (`{type, keep?}`).
+pub fn moonshot_chat_route(transport: SharedTransport, auth: Option<AuthDefinition>) -> Route {
+    let ext = OpenAiChatExt {
+        id: "moonshot-chat",
+        body: Some(moonshot_body_overlay),
+        ..OpenAiChatExt::base()
+    };
+    chat_route(
+        "moonshot-chat",
+        Some("moonshotai"),
+        Some("moonshot"),
+        Some("https://api.moonshot.ai/v1"),
+        Arc::new(OpenAiChat::new(ext)),
+        Framing::sse_with_done(),
+        auth,
+        transport,
+    )
+}
+
 /// Compatibility preset for models on the native OpenAI Chat route.
 pub fn openai_chat_compatibility() -> LanguageModelCompatibility {
     LanguageModelCompatibility::default()
@@ -3407,12 +3491,10 @@ pub fn groq_chat_compatibility() -> LanguageModelCompatibility {
     }
 }
 
-/// `openrouter.ts` model compatibility (plus the reasoning-reasoning tests'
-/// `reasoningField: "reasoning"` overlay applied at model level).
+/// `openrouter.ts:199` model compatibility.
 pub fn openrouter_chat_compatibility() -> LanguageModelCompatibility {
     LanguageModelCompatibility {
         supports_prompt_cache_key: Some(true),
-        reasoning_field: Some("reasoning".into()),
         ..Default::default()
     }
 }
@@ -3494,6 +3576,51 @@ pub fn fireworks_chat_compatibility() -> LanguageModelCompatibility {
 /// `digitalocean.ts` model compatibility (digitalocean.ts:44-50; G-121).
 pub fn digitalocean_chat_compatibility() -> LanguageModelCompatibility {
     LanguageModelCompatibility {
+        supports_prompt_cache_key: Some(true),
+        ..Default::default()
+    }
+}
+
+/// `minimax.ts:119` chat model compatibility.
+pub fn minimax_chat_compatibility() -> LanguageModelCompatibility {
+    LanguageModelCompatibility {
+        supports_store: Some(false),
+        supports_strict_mode: Some(false),
+        ..Default::default()
+    }
+}
+
+/// `moonshot.ts:104-111` chat model compatibility.
+pub fn moonshot_chat_compatibility() -> LanguageModelCompatibility {
+    LanguageModelCompatibility {
+        max_tokens_field: Some(MaxTokensFieldCompatibility::MaxTokens),
+        supports_store: Some(false),
+        supports_strict_mode: Some(false),
+        supports_prompt_cache_key: Some(true),
+        sanitizer: Some(crate::schema::SanitizerCompatibility::Moonshot),
+        reasoning_field: Some("reasoning_content".into()),
+        ..Default::default()
+    }
+}
+
+/// `cohere.ts:43-48` chat-lane model compatibility (the OpenAI
+/// compatibility endpoint, not the native Cohere v2 route).
+pub fn cohere_chat_compatibility() -> LanguageModelCompatibility {
+    LanguageModelCompatibility {
+        max_tokens_field: Some(MaxTokensFieldCompatibility::MaxTokens),
+        supports_store: Some(false),
+        supports_usage_in_streaming: Some(true),
+        reasoning_field: Some("reasoning_content".into()),
+        supports_strict_mode: Some(false),
+        ..Default::default()
+    }
+}
+
+/// `meta.ts:134-136` chat model compatibility.
+pub fn meta_chat_compatibility() -> LanguageModelCompatibility {
+    LanguageModelCompatibility {
+        max_tokens_field: Some(MaxTokensFieldCompatibility::MaxCompletionTokens),
+        supports_store: Some(false),
         supports_prompt_cache_key: Some(true),
         ..Default::default()
     }
