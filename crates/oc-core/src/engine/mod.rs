@@ -534,20 +534,29 @@ impl Engine {
         );
         // G-167 — the live copilot `/models` sync (the ref plugin's
         // `load()` + provider transform): shared by the resolver (the
-        // merged dynamic model surface) and the free-title hook. The
-        // boot refresh runs against the credential binding; without one
-        // (tests, plain boots) it is a no-op and the static catalog
-        // serves github-copilot.
+        // merged dynamic model surface) and the free-title hook.
+        //
+        // The boot-time refresh spawns ONLY when a stored github-copilot
+        // credential binding exists, and its first action is a yield:
+        // an unconditional mid-boot spawn gave the runtime an extra
+        // scheduling point that let the boot-spawned models-dev refresh
+        // loop's `models-dev.refreshed` publish race ahead of boot's
+        // tail under parallel load (the workspace-merge gate
+        // regression). Plain boots and tests (no stored binding) spawn
+        // nothing at all and the static catalog serves github-copilot.
         let copilot_sync = Arc::new(crate::provider_catalog::copilot_sync::CopilotSync::new(
             Arc::clone(&facade_transport),
         ));
-        {
+        if let Some(binding) = integration.credential_bindings().get("github-copilot") {
             let copilot_sync = Arc::clone(&copilot_sync);
             let catalog = Arc::clone(&catalog);
-            let bindings = Arc::clone(integration.credential_bindings());
             let useragent = crate::session::runner::model_request::useragent(&options.app);
             tokio::spawn(async move {
-                let Some(binding) = bindings.get("github-copilot") else { return };
+                // Stay out of boot's critical section: the ref forks its
+                // load at plugin init, but a short deferral only shifts
+                // the sync — it never blocks boot or competes with the
+                // models-dev loop's first tick.
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                 let base_url = binding
                     .base_url
                     .clone()
