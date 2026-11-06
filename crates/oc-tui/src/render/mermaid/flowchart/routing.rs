@@ -516,7 +516,7 @@ pub fn route_flowchart_edges(
         }
         let records = horizontal_forward_records(diagram, &horizontal_edges, bounds, direction);
         route_horizontal_fan_out(diagram, &records, bounds, direction, &mut handled, &mut routes);
-        route_horizontal_fan_in(&records, direction, &mut handled, &mut routes);
+        route_horizontal_fan_in(diagram, &records, direction, &mut handled, &mut routes);
     }
 
     route_horizontal_subgraph_exit_fan_in(
@@ -548,8 +548,8 @@ pub fn route_flowchart_edges(
             continue;
         }
         let records = vertical_forward_records(diagram, &vertical_edges, bounds, direction);
-        route_vertical_fan_out(&records, direction, &mut handled, &mut routes);
-        route_vertical_fan_in(&records, direction, &mut handled, &mut routes);
+        route_vertical_fan_out(diagram, &records, direction, &mut handled, &mut routes);
+        route_vertical_fan_in(diagram, &records, direction, &mut handled, &mut routes);
     }
 
     for edge_index in &routed_edges {
@@ -799,6 +799,7 @@ fn route_horizontal_fan_out(
 }
 
 fn route_horizontal_fan_in(
+    diagram: &FlowchartDiagram,
     records: &[EdgeRecord],
     direction: FlowchartDirection,
     handled: &mut HashSet<usize>,
@@ -806,7 +807,7 @@ fn route_horizontal_fan_in(
 ) {
     let mut groups: HashMap<String, Vec<EdgeRecord>> = HashMap::new();
     for record in records.iter().filter(|record| !handled.contains(&record.edge_index)) {
-        groups.entry(format!("{}", record.target_key())).or_default().push(*record);
+        groups.entry(diagram.edges[record.edge_index].to.clone()).or_default().push(*record);
     }
     for target_records in groups.into_values() {
         if target_records.len() < 2 {
@@ -831,6 +832,7 @@ fn route_horizontal_fan_in(
 }
 
 fn route_vertical_fan_out(
+    diagram: &FlowchartDiagram,
     records: &[EdgeRecord],
     direction: FlowchartDirection,
     handled: &mut HashSet<usize>,
@@ -838,7 +840,7 @@ fn route_vertical_fan_out(
 ) {
     let mut groups: HashMap<String, Vec<EdgeRecord>> = HashMap::new();
     for record in records {
-        groups.entry(format!("{}", record.source_key())).or_default().push(*record);
+        groups.entry(diagram.edges[record.edge_index].from.clone()).or_default().push(*record);
     }
     for source_records in groups.into_values() {
         if source_records.len() < 2 {
@@ -863,6 +865,7 @@ fn route_vertical_fan_out(
 }
 
 fn route_vertical_fan_in(
+    diagram: &FlowchartDiagram,
     records: &[EdgeRecord],
     direction: FlowchartDirection,
     handled: &mut HashSet<usize>,
@@ -870,7 +873,7 @@ fn route_vertical_fan_in(
 ) {
     let mut groups: HashMap<String, Vec<EdgeRecord>> = HashMap::new();
     for record in records.iter().filter(|record| !handled.contains(&record.edge_index)) {
-        groups.entry(format!("{}", record.target_key())).or_default().push(*record);
+        groups.entry(diagram.edges[record.edge_index].to.clone()).or_default().push(*record);
     }
     for unaligned in groups.into_values() {
         let target_records = align_clustered_vertical_sources(&unaligned);
@@ -892,16 +895,6 @@ fn route_vertical_fan_in(
             ));
             handled.insert(record.edge_index);
         }
-    }
-}
-
-impl EdgeRecord {
-    fn source_key(&self) -> usize {
-        self.edge_index
-    }
-
-    fn target_key(&self) -> usize {
-        self.edge_index
     }
 }
 
@@ -2110,4 +2103,166 @@ pub fn flowchart_source_connector(
         Side::Bottom => "┬",
     };
     (x, y, char)
+}
+
+// -- G-176 unit pins: fan bus grouping keys on edge from/to -------------------
+
+#[cfg(test)]
+mod fan_bus_grouping_tests {
+    use super::*;
+
+    fn diagram_with(edges: &[(&str, &str)]) -> FlowchartDiagram {
+        FlowchartDiagram {
+            direction: FlowchartDirection::Td,
+            nodes: Vec::new(),
+            edges: edges
+                .iter()
+                .map(|(from, to)| FlowchartEdge {
+                    from: (*from).to_string(),
+                    to: (*to).to_string(),
+                    ..Default::default()
+                })
+                .collect(),
+            subgraphs: Vec::new(),
+        }
+    }
+
+    fn record(edge_index: usize, source_port: Point, target_port: Point) -> EdgeRecord {
+        EdgeRecord { edge_index, source_port, target_port }
+    }
+
+    fn handled_bus(
+        routes: &[EdgeRoute],
+        handled: &HashSet<usize>,
+        first: usize,
+        second: usize,
+        axis: Axis,
+    ) -> bool {
+        if !handled.contains(&first) || !handled.contains(&second) {
+            return false;
+        }
+        let route = routes
+            .iter()
+            .find(|route| route.edge_index == first)
+            .expect("first route present");
+        let other = routes
+            .iter()
+            .find(|route| route.edge_index == second)
+            .expect("second route present");
+        let lanes = |points: &[Point]| -> HashSet<i64> {
+            points[1..points.len().saturating_sub(1)]
+                .iter()
+                .map(|point| match axis {
+                    Axis::X => point.x,
+                    Axis::Y => point.y,
+                })
+                .collect()
+        };
+        let shared = lanes(&route.points);
+        !shared.is_disjoint(&lanes(&other.points))
+    }
+
+    #[test]
+    fn vertical_fan_out_groups_by_source_node() {
+        // A --> B and A --> C share the source "A": one bus.
+        let diagram = diagram_with(&[("A", "B"), ("A", "C")]);
+        let records = [
+            record(0, Point { x: 0, y: 0 }, Point { x: -5, y: 10 }),
+            record(1, Point { x: 0, y: 0 }, Point { x: 5, y: 10 }),
+        ];
+        let mut handled = HashSet::new();
+        let mut routes = Vec::new();
+        route_vertical_fan_out(
+            &diagram,
+            &records,
+            FlowchartDirection::Td,
+            &mut handled,
+            &mut routes,
+        );
+        assert!(
+            handled_bus(&routes, &handled, 0, 1, Axis::Y),
+            "same-source edges must merge into a bus: routes={routes:?}"
+        );
+
+        // Different sources: no bus.
+        let diagram = diagram_with(&[("A", "B"), ("X", "C")]);
+        let mut handled = HashSet::new();
+        let mut routes = Vec::new();
+        route_vertical_fan_out(
+            &diagram,
+            &records,
+            FlowchartDirection::Td,
+            &mut handled,
+            &mut routes,
+        );
+        assert!(routes.is_empty() && handled.is_empty(), "different sources must not bus");
+    }
+
+    #[test]
+    fn vertical_fan_in_groups_by_target_node() {
+        let diagram = diagram_with(&[("B", "A"), ("C", "A")]);
+        let records = [
+            record(0, Point { x: -5, y: 0 }, Point { x: 0, y: 10 }),
+            record(1, Point { x: 5, y: 0 }, Point { x: 0, y: 10 }),
+        ];
+        let mut handled = HashSet::new();
+        let mut routes = Vec::new();
+        route_vertical_fan_in(
+            &diagram,
+            &records,
+            FlowchartDirection::Td,
+            &mut handled,
+            &mut routes,
+        );
+        assert!(
+            handled_bus(&routes, &handled, 0, 1, Axis::Y),
+            "same-target edges must merge into a bus: routes={routes:?}"
+        );
+
+        let diagram = diagram_with(&[("B", "A"), ("C", "Z")]);
+        let mut handled = HashSet::new();
+        let mut routes = Vec::new();
+        route_vertical_fan_in(
+            &diagram,
+            &records,
+            FlowchartDirection::Td,
+            &mut handled,
+            &mut routes,
+        );
+        assert!(routes.is_empty() && handled.is_empty(), "different targets must not bus");
+    }
+
+    #[test]
+    fn horizontal_fan_in_groups_by_target_node() {
+        let diagram = diagram_with(&[("B", "A"), ("C", "A")]);
+        let records = [
+            record(0, Point { x: 0, y: -5 }, Point { x: 10, y: 0 }),
+            record(1, Point { x: 0, y: 5 }, Point { x: 10, y: 0 }),
+        ];
+        let mut handled = HashSet::new();
+        let mut routes = Vec::new();
+        route_horizontal_fan_in(
+            &diagram,
+            &records,
+            FlowchartDirection::Lr,
+            &mut handled,
+            &mut routes,
+        );
+        assert!(
+            handled_bus(&routes, &handled, 0, 1, Axis::X),
+            "same-target edges must merge into a bus: routes={routes:?}"
+        );
+
+        let diagram = diagram_with(&[("B", "A"), ("C", "Z")]);
+        let mut handled = HashSet::new();
+        let mut routes = Vec::new();
+        route_horizontal_fan_in(
+            &diagram,
+            &records,
+            FlowchartDirection::Lr,
+            &mut handled,
+            &mut routes,
+        );
+        assert!(routes.is_empty() && handled.is_empty(), "different targets must not bus");
+    }
 }
