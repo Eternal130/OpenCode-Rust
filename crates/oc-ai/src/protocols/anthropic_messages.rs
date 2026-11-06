@@ -1049,6 +1049,43 @@ fn lower_tool_result_content(part: &ContentPart) -> Result<Value, AiError> {
     }
 }
 
+/// Messages-family compatibility presets the ref provider files inject at
+/// `configure().messages({... compatibility })` (G-174): explicit
+/// `requireSignature: false` — alibaba.ts:104, meta.ts:141,
+/// zai-coding-plan.ts:72, moonshot.ts:114-117 (moonshot also carries the
+/// `moonshot` tool-schema sanitizer).
+pub fn alibaba_messages_compatibility() -> crate::schema::LanguageModelCompatibility {
+    crate::schema::LanguageModelCompatibility {
+        require_signature: Some(false),
+        ..Default::default()
+    }
+}
+
+/// `meta.ts:139-141` messages compatibility.
+pub fn meta_messages_compatibility() -> crate::schema::LanguageModelCompatibility {
+    crate::schema::LanguageModelCompatibility {
+        require_signature: Some(false),
+        ..Default::default()
+    }
+}
+
+/// `zai-coding-plan.ts:68-72` messages compatibility.
+pub fn zai_coding_plan_messages_compatibility() -> crate::schema::LanguageModelCompatibility {
+    crate::schema::LanguageModelCompatibility {
+        require_signature: Some(false),
+        ..Default::default()
+    }
+}
+
+/// `moonshot.ts:113-117` messages compatibility.
+pub fn moonshot_messages_compatibility() -> crate::schema::LanguageModelCompatibility {
+    crate::schema::LanguageModelCompatibility {
+        require_signature: Some(false),
+        sanitizer: Some(crate::schema::SanitizerCompatibility::Moonshot),
+        ..Default::default()
+    }
+}
+
 /// `Kimi`/`Moonshot` and `Xiaomi` `MiMo` tolerate empty thinking signatures.
 fn require_thinking_signature(request: &LLMRequest) -> bool {
     if let Some(value) =

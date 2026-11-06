@@ -521,9 +521,8 @@ fn body_from(request: &LLMRequest) -> Result<Value, AiError> {
             Some(json!({ "type": "function", "function": { "name": name } }))
         }
     };
-    let projected =
-        crate::protocols::sanitizer::project_tools(request.tools.clone(), &request.model);
-    let flattened = shared::flatten_tools(&projected);
+    // Tool schemas arrive pre-projected from Route::prepare_request (G-173).
+    let flattened = shared::flatten_tools(&request.tools);
     let messages = {
         let mut lowered = request.clone();
         lowered.messages = flatten_namespaced_messages(&request.messages);

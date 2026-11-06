@@ -142,9 +142,8 @@ fn content_id(index: f64) -> String {
 
 fn body_from(request: &LLMRequest) -> Result<Value, AiError> {
     let options = decode_options(request.provider_options.as_ref().unwrap_or(&Map::new()))?;
-    let projected =
-        crate::protocols::sanitizer::project_tools(request.tools.clone(), &request.model);
-    let flattened = crate::protocols::shared::flatten_tools(&projected);
+    // Tool schemas arrive pre-projected from Route::prepare_request (G-173).
+    let flattened = crate::protocols::shared::flatten_tools(&request.tools);
     let mut messages: Vec<Value> = Vec::new();
     if !request.system.is_empty() {
         let content = if request.system.len() == 1 {
