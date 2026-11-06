@@ -38,7 +38,7 @@ use super::registry::{
 /// What the scripted server answers. Catalogs are shared so tests can
 /// mutate them live and push `tools/list_changed`.
 #[derive(Default, Clone)]
-struct Script {
+pub(crate) struct Script {
     tools: Arc<parking_lot::Mutex<Vec<serde_json::Value>>>,
     resources: Arc<parking_lot::Mutex<Vec<serde_json::Value>>>,
     templates: Arc<parking_lot::Mutex<Vec<serde_json::Value>>>,
@@ -70,7 +70,7 @@ struct Script {
 }
 
 impl Script {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
@@ -402,7 +402,7 @@ fn respond(
     }
 }
 
-fn local_config() -> ServerConfig {
+pub(crate) fn local_config() -> ServerConfig {
     ServerConfig::Local(Box::new(LocalConfig {
         command: vec!["mock".to_string()],
         cwd: None,
@@ -457,7 +457,7 @@ async fn connect_mock_with(
 }
 
 /// A connector scripted per-call: each invocation connects a fresh mock.
-fn scripted_connector(next: impl FnMut() -> Script + Send + Sync + 'static) -> Connector {
+pub(crate) fn scripted_connector(next: impl FnMut() -> Script + Send + Sync + 'static) -> Connector {
     let next = Arc::new(parking_lot::Mutex::new(next));
     Arc::new(move |input: ConnectInput<'_>| {
         let script = (next.lock())();

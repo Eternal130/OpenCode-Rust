@@ -18,7 +18,7 @@ pub mod oauth;
 pub mod oauth_page;
 pub mod registry;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 pub use client::{
     CallToolContent, CallToolResult, ConnectError, ConnectFailure, ConnectInput, NeedsAuthError,
