@@ -37,6 +37,7 @@ impl crate::methods::event::EventApi<'_> {
                     body: Body::None,
                     success: 200,
                     declared: &[400, 401],
+                    options: &crate::transport::RequestOptions::default(),
                 },
                 true,
             )

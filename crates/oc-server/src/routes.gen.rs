@@ -81,7 +81,7 @@ pub static ROUTES: &[Route] = &[
         request_schema: "",
         response_schema: "AgentListResponse",
         success_status: 200,
-        error_statuses: &[400, 401],
+        error_statuses: &[400, 401, 404],
     },
     Route {
         method: Method::Get,
@@ -115,7 +115,7 @@ pub static ROUTES: &[Route] = &[
         request_schema: "",
         response_schema: "CommandListResponse",
         success_status: 200,
-        error_statuses: &[400, 401],
+        error_statuses: &[400, 401, 404],
     },
     Route {
         method: Method::Get,
@@ -132,7 +132,7 @@ pub static ROUTES: &[Route] = &[
         request_schema: "",
         response_schema: "Vec<ConfigEntry>",
         success_status: 200,
-        error_statuses: &[400, 401],
+        error_statuses: &[400, 401, 404],
     },
     Route {
         method: Method::Get,
@@ -145,7 +145,7 @@ pub static ROUTES: &[Route] = &[
         request_schema: "",
         response_schema: "Vec<ConfigShellOption>",
         success_status: 200,
-        error_statuses: &[400, 401],
+        error_statuses: &[400, 401, 404],
     },
     Route {
         method: Method::Get,
@@ -266,7 +266,7 @@ pub static ROUTES: &[Route] = &[
         request_schema: "ConfigPatch (`Config.Patch`)",
         response_schema: "()",
         success_status: 204,
-        error_statuses: &[400, 401],
+        error_statuses: &[400, 401, 404],
     },
     Route {
         method: Method::Post,
@@ -282,7 +282,7 @@ pub static ROUTES: &[Route] = &[
         request_schema: "bytes (application/octet-stream)",
         response_schema: "ExperimentalFsWriteResponse",
         success_status: 200,
-        error_statuses: &[400, 401],
+        error_statuses: &[400, 401, 404],
     },
     Route {
         method: Method::Post,
@@ -295,7 +295,7 @@ pub static ROUTES: &[Route] = &[
         request_schema: "ExperimentalGenerateTextBody",
         response_schema: "GenerateTextResponse",
         success_status: 200,
-        error_statuses: &[400, 401, 503],
+        error_statuses: &[400, 401, 404, 503],
     },
     Route {
         method: Method::Post,
@@ -312,7 +312,7 @@ pub static ROUTES: &[Route] = &[
         request_schema: "ExperimentalIntegrationWellknownAddBody",
         response_schema: "()",
         success_status: 204,
-        error_statuses: &[400, 401],
+        error_statuses: &[400, 401, 404],
     },
     Route {
         method: Method::Delete,
@@ -346,7 +346,7 @@ pub static ROUTES: &[Route] = &[
         request_schema: "ExperimentalMcpAddBody",
         response_schema: "()",
         success_status: 204,
-        error_statuses: &[400, 401],
+        error_statuses: &[400, 401, 404],
     },
     Route {
         method: Method::Post,
@@ -708,7 +708,7 @@ pub static ROUTES: &[Route] = &[
         request_schema: "",
         response_schema: "FormListResponse",
         success_status: 200,
-        error_statuses: &[400, 401],
+        error_statuses: &[400, 401, 404],
     },
     Route {
         method: Method::Get,
@@ -726,7 +726,7 @@ pub static ROUTES: &[Route] = &[
         request_schema: "",
         response_schema: "FsFindResponse",
         success_status: 200,
-        error_statuses: &[400, 401],
+        error_statuses: &[400, 401, 404],
     },
     Route {
         method: Method::Get,
@@ -742,7 +742,7 @@ pub static ROUTES: &[Route] = &[
         request_schema: "",
         response_schema: "FsListResponse",
         success_status: 200,
-        error_statuses: &[400, 401],
+        error_statuses: &[400, 401, 404],
     },
     Route {
         method: Method::Get,
@@ -789,7 +789,7 @@ pub static ROUTES: &[Route] = &[
         request_schema: "",
         response_schema: "IntegrationListResponse",
         success_status: 200,
-        error_statuses: &[400, 401],
+        error_statuses: &[400, 401, 404],
     },
     Route {
         method: Method::Get,
@@ -843,7 +843,7 @@ pub static ROUTES: &[Route] = &[
         request_schema: "",
         response_schema: "()",
         success_status: 204,
-        error_statuses: &[400, 401],
+        error_statuses: &[400, 401, 404],
     },
     Route {
         method: Method::Get,
@@ -897,7 +897,7 @@ pub static ROUTES: &[Route] = &[
         request_schema: "IntegrationOauthConnectBody",
         response_schema: "IntegrationOauthConnectResponse",
         success_status: 200,
-        error_statuses: &[400, 401],
+        error_statuses: &[400, 401, 404],
     },
     Route {
         method: Method::Delete,
@@ -917,7 +917,7 @@ pub static ROUTES: &[Route] = &[
         request_schema: "",
         response_schema: "()",
         success_status: 204,
-        error_statuses: &[400, 401],
+        error_statuses: &[400, 401, 404],
     },
     Route {
         method: Method::Get,
@@ -974,7 +974,7 @@ pub static ROUTES: &[Route] = &[
         request_schema: "",
         response_schema: "LocationPublicInfo",
         success_status: 200,
-        error_statuses: &[400, 401],
+        error_statuses: &[400, 401, 404],
     },
     Route {
         method: Method::Post,
@@ -1004,7 +1004,7 @@ pub static ROUTES: &[Route] = &[
         request_schema: "",
         response_schema: "McpListResponse",
         success_status: 200,
-        error_statuses: &[400, 401],
+        error_statuses: &[400, 401, 404],
     },
     Route {
         method: Method::Get,
@@ -1021,7 +1021,7 @@ pub static ROUTES: &[Route] = &[
         request_schema: "",
         response_schema: "McpResourceCatalogResponse",
         success_status: 200,
-        error_statuses: &[400, 401],
+        error_statuses: &[400, 401, 404],
     },
     Route {
         method: Method::Get,
@@ -1038,7 +1038,7 @@ pub static ROUTES: &[Route] = &[
         request_schema: "",
         response_schema: "ModelListResponse",
         success_status: 200,
-        error_statuses: &[400, 401, 503],
+        error_statuses: &[400, 401, 404, 503],
     },
     Route {
         method: Method::Get,
@@ -1055,7 +1055,7 @@ pub static ROUTES: &[Route] = &[
         request_schema: "",
         response_schema: "ModelDefaultResponse",
         success_status: 200,
-        error_statuses: &[400, 401, 503],
+        error_statuses: &[400, 401, 404, 503],
     },
     Route {
         method: Method::Post,
@@ -1085,7 +1085,7 @@ pub static ROUTES: &[Route] = &[
         request_schema: "",
         response_schema: "PermissionRequestListResponse",
         success_status: 200,
-        error_statuses: &[400, 401],
+        error_statuses: &[400, 401, 404],
     },
     Route {
         method: Method::Get,
@@ -1102,7 +1102,7 @@ pub static ROUTES: &[Route] = &[
         request_schema: "",
         response_schema: "Vec<PermissionSavedInfo> [unwrapped {data}]",
         success_status: 200,
-        error_statuses: &[400, 401],
+        error_statuses: &[400, 401, 404],
     },
     Route {
         method: Method::Delete,
@@ -1115,7 +1115,7 @@ pub static ROUTES: &[Route] = &[
         request_schema: "",
         response_schema: "()",
         success_status: 204,
-        error_statuses: &[400, 401],
+        error_statuses: &[400, 401, 404],
     },
     Route {
         method: Method::Get,
@@ -1132,7 +1132,7 @@ pub static ROUTES: &[Route] = &[
         request_schema: "",
         response_schema: "PluginListResponse",
         success_status: 200,
-        error_statuses: &[400, 401],
+        error_statuses: &[400, 401, 404],
     },
     Route {
         method: Method::Post,
@@ -1149,7 +1149,7 @@ pub static ROUTES: &[Route] = &[
         request_schema: "PluginCheckBody",
         response_schema: "PluginCheckResponse",
         success_status: 200,
-        error_statuses: &[400, 401],
+        error_statuses: &[400, 401, 404],
     },
     Route {
         method: Method::Post,
@@ -1183,7 +1183,7 @@ pub static ROUTES: &[Route] = &[
         request_schema: "PluginUpdateBody",
         response_schema: "()",
         success_status: 204,
-        error_statuses: &[400, 401, 503],
+        error_statuses: &[400, 401, 404, 503],
     },
     Route {
         method: Method::Get,
@@ -1196,7 +1196,7 @@ pub static ROUTES: &[Route] = &[
         request_schema: "",
         response_schema: "Vec<Project>",
         success_status: 200,
-        error_statuses: &[400, 401],
+        error_statuses: &[400, 401, 404],
     },
     Route {
         method: Method::Patch,
@@ -1226,7 +1226,7 @@ pub static ROUTES: &[Route] = &[
         request_schema: "",
         response_schema: "ProviderListResponse",
         success_status: 200,
-        error_statuses: &[400, 401, 503],
+        error_statuses: &[400, 401, 404, 503],
     },
     Route {
         method: Method::Get,
@@ -1260,7 +1260,7 @@ pub static ROUTES: &[Route] = &[
         request_schema: "",
         response_schema: "PtyListResponse",
         success_status: 200,
-        error_statuses: &[400, 401],
+        error_statuses: &[400, 401, 404],
     },
     Route {
         method: Method::Post,
@@ -1277,7 +1277,7 @@ pub static ROUTES: &[Route] = &[
         request_schema: "PtyCreateBody",
         response_schema: "PtyCreateResponse",
         success_status: 200,
-        error_statuses: &[400, 401],
+        error_statuses: &[400, 401, 404],
     },
     Route {
         method: Method::Delete,
@@ -1383,7 +1383,7 @@ pub static ROUTES: &[Route] = &[
         request_schema: "",
         response_schema: "ReferenceListResponse",
         success_status: 200,
-        error_statuses: &[400, 401],
+        error_statuses: &[400, 401, 404],
     },
     Route {
         method: Method::Post,
@@ -1403,7 +1403,7 @@ pub static ROUTES: &[Route] = &[
         request_schema: "RpcInput (`Rpc.Input`)",
         response_schema: "RpcOutput",
         success_status: 200,
-        error_statuses: &[400, 401, 500],
+        error_statuses: &[400, 401, 404, 500],
     },
     Route {
         method: Method::Get,
@@ -1989,7 +1989,7 @@ pub static ROUTES: &[Route] = &[
         request_schema: "",
         response_schema: "ShellListResponse",
         success_status: 200,
-        error_statuses: &[400, 401],
+        error_statuses: &[400, 401, 404],
     },
     Route {
         method: Method::Post,
@@ -2006,7 +2006,7 @@ pub static ROUTES: &[Route] = &[
         request_schema: "ShellCreateBody",
         response_schema: "ShellCreateResponse",
         success_status: 200,
-        error_statuses: &[400, 401],
+        error_statuses: &[400, 401, 404],
     },
     Route {
         method: Method::Delete,
@@ -2023,7 +2023,7 @@ pub static ROUTES: &[Route] = &[
         request_schema: "",
         response_schema: "()",
         success_status: 204,
-        error_statuses: &[400, 401],
+        error_statuses: &[400, 401, 404],
     },
     Route {
         method: Method::Get,
@@ -2074,7 +2074,7 @@ pub static ROUTES: &[Route] = &[
         request_schema: "",
         response_schema: "SkillListResponse",
         success_status: 200,
-        error_statuses: &[400, 401],
+        error_statuses: &[400, 401, 404],
     },
     Route {
         method: Method::Get,
@@ -2091,7 +2091,7 @@ pub static ROUTES: &[Route] = &[
         request_schema: "",
         response_schema: "VcsGetResponse",
         success_status: 200,
-        error_statuses: &[400, 401],
+        error_statuses: &[400, 401, 404],
     },
     Route {
         method: Method::Get,
@@ -2108,7 +2108,7 @@ pub static ROUTES: &[Route] = &[
         request_schema: "",
         response_schema: "VcsBaseResponse",
         success_status: 200,
-        error_statuses: &[400, 401, 503],
+        error_statuses: &[400, 401, 404, 503],
     },
     Route {
         method: Method::Get,
@@ -2125,7 +2125,7 @@ pub static ROUTES: &[Route] = &[
         request_schema: "",
         response_schema: "VcsBranchListResponse",
         success_status: 200,
-        error_statuses: &[400, 401],
+        error_statuses: &[400, 401, 404],
     },
     Route {
         method: Method::Get,
@@ -2143,7 +2143,7 @@ pub static ROUTES: &[Route] = &[
         request_schema: "",
         response_schema: "VcsDiffResponse",
         success_status: 200,
-        error_statuses: &[400, 401, 503],
+        error_statuses: &[400, 401, 404, 503],
     },
     Route {
         method: Method::Post,
@@ -2159,7 +2159,7 @@ pub static ROUTES: &[Route] = &[
         request_schema: "",
         response_schema: "()",
         success_status: 204,
-        error_statuses: &[400, 401, 409, 501, 503],
+        error_statuses: &[400, 401, 404, 409, 501, 503],
     },
     Route {
         method: Method::Get,
@@ -2176,7 +2176,7 @@ pub static ROUTES: &[Route] = &[
         request_schema: "",
         response_schema: "VcsStatusResponse",
         success_status: 200,
-        error_statuses: &[400, 401],
+        error_statuses: &[400, 401, 404],
     },
     Route {
         method: Method::Post,
@@ -2193,7 +2193,7 @@ pub static ROUTES: &[Route] = &[
         request_schema: "WebsearchQueryBody",
         response_schema: "WebsearchQueryResponse",
         success_status: 200,
-        error_statuses: &[400, 401, 503],
+        error_statuses: &[400, 401, 404, 503],
     },
     Route {
         method: Method::Get,
@@ -2210,7 +2210,7 @@ pub static ROUTES: &[Route] = &[
         request_schema: "",
         response_schema: "WebsearchProvidersResponse",
         success_status: 200,
-        error_statuses: &[400, 401, 503],
+        error_statuses: &[400, 401, 404, 503],
     },
     Route {
         method: Method::Delete,

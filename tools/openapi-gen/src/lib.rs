@@ -56,11 +56,93 @@ pub fn spec_path() -> String {
     concat!(env!("CARGO_MANIFEST_DIR"), "/openapi.json").to_owned()
 }
 
+/// Declared errors contributed by HttpApi middleware that the OpenAPI
+/// export strips (effect's `OpenApi.large` drops middleware `error`
+/// unions, while the v2 promise client generator keeps them — see
+/// `packages/protocol/src/client.ts`: every group wired with
+/// `locationMiddleware` declares `LocationNotFoundError` 404 on ALL of
+/// its endpoints). This table restores that surface: keyed by spec
+/// operationId, applied after spec parsing so both `routes.gen.rs`
+/// (`error_statuses`) and `methods.gen.rs` (`declared`) mirror the
+/// reference generated client (`promiseOmitEndpoints` aside, the ref
+/// client declares 404 on 118 of 139 methods; the spec alone only
+/// covers 75 — G-197).
+static MIDDLEWARE_DECLARED_ERRORS: &[(&str, &str, u16)] = &[
+    ("agent.list", "LocationNotFoundError", 404),
+    ("command.list", "LocationNotFoundError", 404),
+    ("config.get", "LocationNotFoundError", 404),
+    ("config.shells", "LocationNotFoundError", 404),
+    ("experimental.config.update", "LocationNotFoundError", 404),
+    ("experimental.fs.write", "LocationNotFoundError", 404),
+    ("experimental.generate.text", "LocationNotFoundError", 404),
+    ("experimental.integration.wellknown.add", "LocationNotFoundError", 404),
+    ("experimental.mcp.add", "LocationNotFoundError", 404),
+    ("form.list", "LocationNotFoundError", 404),
+    ("fs.find", "LocationNotFoundError", 404),
+    ("fs.list", "LocationNotFoundError", 404),
+    ("integration.command.cancel", "LocationNotFoundError", 404),
+    ("integration.list", "LocationNotFoundError", 404),
+    ("integration.oauth.cancel", "LocationNotFoundError", 404),
+    ("integration.oauth.connect", "LocationNotFoundError", 404),
+    ("location.get", "LocationNotFoundError", 404),
+    ("mcp.list", "LocationNotFoundError", 404),
+    ("mcp.resource.catalog", "LocationNotFoundError", 404),
+    ("model.default", "LocationNotFoundError", 404),
+    ("model.list", "LocationNotFoundError", 404),
+    ("permission.request.list", "LocationNotFoundError", 404),
+    ("permission.saved.list", "LocationNotFoundError", 404),
+    ("permission.saved.remove", "LocationNotFoundError", 404),
+    ("plugin.check", "LocationNotFoundError", 404),
+    ("plugin.list", "LocationNotFoundError", 404),
+    ("plugin.update", "LocationNotFoundError", 404),
+    ("project.list", "LocationNotFoundError", 404),
+    ("provider.list", "LocationNotFoundError", 404),
+    ("pty.create", "LocationNotFoundError", 404),
+    ("pty.list", "LocationNotFoundError", 404),
+    ("reference.list", "LocationNotFoundError", 404),
+    ("rpc.call", "LocationNotFoundError", 404),
+    ("shell.create", "LocationNotFoundError", 404),
+    ("shell.list", "LocationNotFoundError", 404),
+    ("shell.remove", "LocationNotFoundError", 404),
+    ("skill.list", "LocationNotFoundError", 404),
+    ("vcs.base", "LocationNotFoundError", 404),
+    ("vcs.branch.list", "LocationNotFoundError", 404),
+    ("vcs.diff", "LocationNotFoundError", 404),
+    ("vcs.get", "LocationNotFoundError", 404),
+    ("vcs.init", "LocationNotFoundError", 404),
+    ("vcs.status", "LocationNotFoundError", 404),
+    ("websearch.providers", "LocationNotFoundError", 404),
+    ("websearch.query", "LocationNotFoundError", 404),
+];
+
+/// Applies [`MIDDLEWARE_DECLARED_ERRORS`] to parsed operations (status-
+/// sorted insert; idempotent if the spec already declares the status).
+fn apply_middleware_errors(operations: &mut [model::Operation]) {
+    for (id, tag, status) in MIDDLEWARE_DECLARED_ERRORS {
+        let Some(op) = operations.iter_mut().find(|op| op.operation_id == *id) else {
+            panic!("MIDDLEWARE_DECLARED_ERRORS references unknown operationId {id:?}");
+        };
+        if op.errors.iter().any(|e| e.status == *status) {
+            continue;
+        }
+        let entry = model::Response {
+            status: *status,
+            content_type: model::ContentType::Json,
+            schema: None,
+            ref_name: Some((*tag).to_owned()),
+            data_json_string: false,
+        };
+        let index = op.errors.partition_point(|e| e.status < *status);
+        op.errors.insert(index, entry);
+    }
+}
+
 pub fn generate_from_spec(spec_json: &str) -> Generated {
     let spec: Value =
         serde_json::from_str(spec_json).expect("pinned openapi.json must be valid JSON");
     let sha = oc_util::hash::sha256_hex(spec_json);
-    let operations = model::parse_operations(&spec);
+    let mut operations = model::parse_operations(&spec);
+    apply_middleware_errors(&mut operations);
     assert!(
         operations.len() == 142,
         "expected 142 operations from the pinned spec, found {} — \
