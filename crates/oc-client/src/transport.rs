@@ -2,11 +2,65 @@
 //! body decoding. Mirrors the v2 generated client's `prepare`/`execute`/
 //! `request`/`sse` helpers.
 
+use std::sync::Arc;
+
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
 use crate::error::ClientError;
 use crate::Client;
+
+/// Per-request options (v2 `RequestOptions`): cancellation signal, extra
+/// headers applied after the client's defaults (so they override), and an
+/// `onActivity` hook invoked for every chunk a streaming response receives.
+///
+/// Mirrors `packages/client/src/promise/generated/client.ts`:
+/// `signal` races the request (abort surfaces as [`ClientError::Cancelled`]
+/// rather than the ref's `Transport`/AbortError — reqwest cannot fabricate
+/// the transport error), `headers` are merged last, `on_activity` fires per
+/// SSE chunk including keepalive comments that yield no frame.
+#[derive(Debug, Clone, Default)]
+pub struct RequestOptions {
+    /// Cancellation token; when cancelled (including before send) the
+    /// in-flight request is dropped and [`ClientError::Cancelled`] returns.
+    pub signal: Option<tokio_util::sync::CancellationToken>,
+    /// Per-request headers, applied after client defaults (override).
+    pub headers: Vec<(reqwest::header::HeaderName, reqwest::header::HeaderValue)>,
+    /// Invoked for every received streaming chunk (SSE).
+    pub on_activity: Option<Arc<dyn Fn() + Send + Sync>>,
+}
+
+impl RequestOptions {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Sets the cancellation signal (v2 `signal: AbortSignal`).
+    #[must_use]
+    pub fn with_signal(mut self, token: tokio_util::sync::CancellationToken) -> Self {
+        self.signal = Some(token);
+        self
+    }
+
+    /// Adds a per-request header (v2 `headers`), overriding client defaults.
+    pub fn with_header(mut self, name: &str, value: &str) -> Result<Self, ClientError> {
+        let name = reqwest::header::HeaderName::try_from(name)
+            .map_err(|_| ClientError::Encoding(format!("invalid request header name {name:?}")))?;
+        let value = reqwest::header::HeaderValue::try_from(value).map_err(|_| {
+            ClientError::Encoding(format!("invalid request header value {value:?}"))
+        })?;
+        self.headers.push((name, value));
+        Ok(self)
+    }
+
+    /// Sets the streaming-activity hook (v2 `onActivity`).
+    #[must_use]
+    pub fn with_on_activity(mut self, callback: impl Fn() + Send + Sync + 'static) -> Self {
+        self.on_activity = Some(Arc::new(callback));
+        self
+    }
+}
 
 /// The `{ data: T }` envelope for operations whose response is unwrapped
 /// client-side (v2 client parity).
@@ -34,6 +88,8 @@ pub struct Call<'a> {
     pub body: Body<'a>,
     pub success: u16,
     pub declared: &'static [u16],
+    /// Per-request options (v2 `RequestOptions`) — signal/headers/on-activity.
+    pub options: &'a RequestOptions,
 }
 
 /// `encodeURIComponent`-compatible segment encoding.
@@ -128,6 +184,11 @@ impl Client {
         for (name, value) in &self.default_headers {
             request = request.header(name, value.clone());
         }
+        // Per-request headers go last: they override client defaults (v2
+        // merges `requestOptions.headers` after `options.headers`).
+        for (name, value) in &call.options.headers {
+            request = request.header(name, value.clone());
+        }
         match &call.body {
             Body::None => {}
             Body::Json(value) => {
@@ -145,7 +206,17 @@ impl Client {
 
     async fn send(&self, call: &Call<'_>) -> Result<reqwest::Response, ClientError> {
         let request = self.build_request(call)?;
-        request.send().await.map_err(ClientError::from)
+        let future = request.send();
+        match &call.options.signal {
+            // Dropping the in-flight future cancels the request. `biased`
+            // checks the token first so a pre-cancelled signal never sends.
+            Some(token) => tokio::select! {
+                biased;
+                _ = token.cancelled() => Err(ClientError::Cancelled),
+                response = future => response.map_err(ClientError::from),
+            },
+            None => future.await.map_err(ClientError::from),
+        }
     }
 
     async fn classify(
@@ -255,6 +326,11 @@ impl Client {
                 .to_owned();
             return Err(ClientError::UnsupportedContentType(content_type));
         }
-        Ok(crate::sse::SseStream::new(response, double_decode))
+        let mut stream = crate::sse::SseStream::new(response, double_decode);
+        if let Some(callback) = &call.options.on_activity {
+            let callback = Arc::clone(callback);
+            stream = stream.with_on_activity(move || callback());
+        }
+        Ok(stream)
     }
 }

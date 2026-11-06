@@ -31,6 +31,7 @@ pub mod methods;
 pub use error::ClientError;
 pub use methods::*;
 pub use sse::{SseFrame, SseStream, MAX_SSE_EVENT_BYTES};
+pub use transport::RequestOptions;
 
 use base64::Engine as _;
 

@@ -278,12 +278,18 @@ fn emit_method(out: &mut String, info: &OpInfo) {
     }
 
     out.push_str(&format!("    /// {}\n", notes.join("\n    /// ")));
-    // rustfmt drops the trailing comma for zero-arg signatures; match it so
-    // regeneration is as close to formatted output as practical.
-    let self_arg = if sig.is_empty() { "        &self\n" } else { "        &self,\n" };
     out.push_str(&format!(
-        "    pub async fn {}(\n{}{}    ) -> Result<{}, crate::ClientError> {{\n",
-        info.method, self_arg, sig, ret
+        "    /// Per-request options (signal/headers/on-activity): see `_with_options`.\n"
+    ));
+    // rustfmt drops the trailing comma for zero-arg signatures; the
+    // `options` tail always follows `&self`, so it always carries a comma
+    // on the `_with_options` signature, while the wrapper (last param may
+    // be `&self`) matches rustfmt's trailing-comma elision.
+    let self_arg = if sig.is_empty() { "        &self\n" } else { "        &self,\n" };
+    let self_arg_opts = "        &self,\n";
+    out.push_str(&format!(
+        "    pub async fn {}_with_options(\n{}{}        options: &crate::transport::RequestOptions,\n    ) -> Result<{}, crate::ClientError> {{\n",
+        info.method, self_arg_opts, sig, ret
     ));
 
     if let Some(q) = &types.query_struct {
@@ -309,7 +315,7 @@ fn emit_method(out: &mut String, info: &OpInfo) {
         None => String::new(),
     };
     out.push_str(&format!(
-        "        self.client.{}(\n            &crate::transport::Call {{\n                method: {},\n                path: \"{}\",\n                path_params: &[{}],\n                query: &pairs,\n                headers: &hdrs,\n                body: {},\n                success: {},\n                declared: &[{}],\n            }}{}\n        )\n        .await\n",
+        "        self.client.{}(\n            &crate::transport::Call {{\n                method: {},\n                path: \"{}\",\n                path_params: &[{}],\n                query: &pairs,\n                headers: &hdrs,\n                body: {},\n                success: {},\n                declared: &[{}],\n                options,\n            }}{}\n        )\n        .await\n",
         if unwrap {
             format!("execute_json::<crate::transport::Envelope<{ret}>>")
         } else {
@@ -327,4 +333,27 @@ fn emit_method(out: &mut String, info: &OpInfo) {
         out.push_str("        .map(|env| env.data)\n");
     }
     out.push_str("    }\n\n");
+
+    // Zero-option wrapper: identical signature minus the trailing
+    // `RequestOptions` tail, delegating with defaults so existing call
+    // sites compile unchanged (v2 promise client: `requestOptions?`).
+    let mut args: Vec<String> = path_args.iter().map(|(ident, _)| ident.clone()).collect();
+    if types.query_struct.is_some() {
+        args.push("query".to_owned());
+    }
+    match &types.body {
+        BodyOut::None => {}
+        BodyOut::Binary => args.push("payload".to_owned()),
+        BodyOut::Json(_) => args.push("body".to_owned()),
+    }
+    out.push_str(&format!(
+        "    /// Same as [`Self::{}_with_options`] with default options.\n    pub async fn {}(\n{}{}    ) -> Result<{}, crate::ClientError> {{\n        self.{}_with_options(\n{}            &crate::transport::RequestOptions::default(),\n        )\n        .await\n    }}\n\n",
+        info.method,
+        info.method,
+        self_arg,
+        sig,
+        ret,
+        info.method,
+        args.iter().map(|a| format!("            {a},\n")).collect::<Vec<_>>().join(""),
+    ));
 }
