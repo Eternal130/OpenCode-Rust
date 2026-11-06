@@ -99,6 +99,11 @@ pub struct CatalogModelResolver {
     /// before injecting the discovered ones, so a running server's
     /// inventory is authoritative for its provider id.
     local: Option<Arc<crate::provider_catalog::local::LocalDiscovery>>,
+    /// G-167 — the live copilot `/models` sync: when present and
+    /// refreshed, its merged github-copilot snapshot replaces the
+    /// static catalog record for resolution (dynamic entries, aliases,
+    /// and enterprise endpoints become bindable).
+    copilot: Option<Arc<crate::provider_catalog::copilot_sync::CopilotSync>>,
 }
 
 impl CatalogModelResolver {
@@ -120,6 +125,7 @@ impl CatalogModelResolver {
             credentials: None,
             console: None,
             local: None,
+            copilot: None,
         }
     }
 
@@ -162,6 +168,18 @@ impl CatalogModelResolver {
         local: Arc<crate::provider_catalog::local::LocalDiscovery>,
     ) -> Self {
         self.local = Some(local);
+        self
+    }
+
+    /// Attaches the live copilot `/models` sync (G-167): when its state
+    /// is present, github-copilot resolution binds against the merged
+    /// dynamic snapshot instead of the static catalog record.
+    #[must_use]
+    pub fn with_copilot_sync(
+        mut self,
+        copilot: Arc<crate::provider_catalog::copilot_sync::CopilotSync>,
+    ) -> Self {
+        self.copilot = Some(copilot);
         self
     }
 
@@ -436,9 +454,21 @@ impl CatalogModelResolver {
             connection.api_key = Some("public".to_owned());
         }
         let catalog = self.catalog();
-        let snapshot = catalog
-            .provider(&provider_id)
-            .ok_or_else(|| ModelError::Unavailable(provider_id.clone(), reference.id.0.clone()))?;
+        // G-167 — the live copilot `/models` sync: the merged dynamic
+        // snapshot replaces the static github-copilot record for
+        // resolution (the ref provider transform,
+        // github-copilot.ts:216-234).
+        let copilot_state = if provider_id == "github-copilot" {
+            self.copilot.as_ref().and_then(|sync| sync.state())
+        } else {
+            None
+        };
+        let snapshot: &crate::provider_catalog::Snapshot = match &copilot_state {
+            Some(state) => &state.merged,
+            None => catalog
+                .provider(&provider_id)
+                .ok_or_else(|| ModelError::Unavailable(provider_id.clone(), reference.id.0.clone()))?,
+        };
         let base_info = snapshot
             .models
             .iter()
@@ -450,6 +480,14 @@ impl CatalogModelResolver {
         // model-resolver.ts:137-161) so `#high/#thinking` overlays reach
         // the route defaults exactly like the model's own overlays.
         let mut info = with_variant(base_info, reference.variant.as_ref().map(|id| id.0.as_str()))?;
+        // G-167 — hide `gpt-5-chat-latest` for copilot even without a
+        // sync (github-copilot.ts:259-268): the chat-only alias conflicts
+        // with the GPT-5 Responses route.
+        if provider_id == "github-copilot"
+            && info.id.as_str() == crate::provider_catalog::copilot_sync::HIDDEN_COPILOT_MODEL
+        {
+            info.enabled = false;
+        }
         // CRED-D6: the credential-driven ChatGPT provider reshape — the
         // codex/token-sharing logins re-list the `openai` provider (the
         // fallback model set, cost=[], the codex limits, summary

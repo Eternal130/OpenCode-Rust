@@ -95,6 +95,19 @@ impl Catalog {
         self.providers.iter().map(|snapshot| snapshot.models.len()).sum()
     }
 
+    /// Builder seam: replace one provider's snapshot wholesale (the
+    /// copilot dynamic-model merge, G-167 — the resolver folds the live
+    /// `/models` listing over the static catalog).
+    #[must_use]
+    pub fn with_provider_snapshot(mut self, provider_id: &str, snapshot: Snapshot) -> Self {
+        if let Some(entry) =
+            self.providers.iter_mut().find(|entry| entry.info.id.0 == provider_id)
+        {
+            *entry = snapshot;
+        }
+        self
+    }
+
     /// Look up one provider.
     #[must_use]
     pub fn provider(&self, provider_id: &str) -> Option<&Snapshot> {
