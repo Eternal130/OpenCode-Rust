@@ -916,7 +916,7 @@ pub(crate) fn footer_plan(view: &PromptView, width: usize) -> FooterPlan {
 /// `Locale.truncateMiddle` (util/locale.ts:82-88): clip the MIDDLE —
 /// the head and tail share the budget, `…` at the split (odd budgets
 /// favor the head: `ceil(budget/2) + floor(budget/2) - 1` visible).
-fn truncate_middle(value: &str, budget: usize) -> String {
+pub(crate) fn truncate_middle(value: &str, budget: usize) -> String {
     if budget == 0 {
         return String::new();
     }

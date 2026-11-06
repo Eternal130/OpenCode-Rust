@@ -359,7 +359,7 @@ fn visible_window(
 ) -> (Vec<WindowRow>, Vec<usize>) {
     let groups = grouped(props, &state.filter);
     let indices = flat_indices(&groups);
-    let viewport = viewport_height(content_rows(&groups), terminal_height);
+    let viewport = viewport_height(content_rows(&groups, &props.options), terminal_height);
     let visible = |row: usize| row >= state.scroll && row < state.scroll + viewport;
     let mut window: Vec<WindowRow> = Vec::new();
     let mut content_row = 0usize;
@@ -2840,6 +2840,7 @@ mod d22_tests {
                 title_width: None,
                 truncate_title: crate::components::dialog_select::TitleTruncate::default(),
                 shimmer: None,
+                details: Vec::new(),
             }],
         );
         let sidecar = DialogSidecar::default();
