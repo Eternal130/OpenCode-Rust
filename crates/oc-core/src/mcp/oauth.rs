@@ -1330,27 +1330,35 @@ mod tests {
     fn resource_covering_the_identity_is_allowed() {
         // Exact match (query differences stay bound to the identity).
         assert_eq!(
-            validate_resource_url("https://example.com/mcp", Some("https://example.com/mcp")).as_deref(),
+            validate_resource_url("https://example.com/mcp", Some("https://example.com/mcp"))
+                .as_deref(),
             Ok("https://example.com/mcp")
         );
         // The server may echo back query parameters — same identity.
         assert_eq!(
-            validate_resource_url("https://example.com/mcp", Some("https://example.com/mcp?x=1")).as_deref(),
+            validate_resource_url("https://example.com/mcp", Some("https://example.com/mcp?x=1"))
+                .as_deref(),
             Ok("https://example.com/mcp")
         );
         // A shorter configured path covers a deeper identity (subpath).
         assert_eq!(
-            validate_resource_url("https://example.com/api/mcp", Some("https://example.com/api")).as_deref(),
+            validate_resource_url("https://example.com/api/mcp", Some("https://example.com/api"))
+                .as_deref(),
             Ok("https://example.com/api")
         );
         // Trailing-slash equivalence the allowed direction: /foo covers /foo/.
         assert_eq!(
-            validate_resource_url("https://example.com/foo/", Some("https://example.com/foo")).as_deref(),
+            validate_resource_url("https://example.com/foo/", Some("https://example.com/foo"))
+                .as_deref(),
             Ok("https://example.com/foo")
         );
         // Explicit port matches itself.
         assert_eq!(
-            validate_resource_url("https://example.com:8443/mcp", Some("https://example.com:8443/mcp")).as_deref(),
+            validate_resource_url(
+                "https://example.com:8443/mcp",
+                Some("https://example.com:8443/mcp")
+            )
+            .as_deref(),
             Ok("https://example.com:8443/mcp")
         );
         // No server-returned resource → the configured identity.
@@ -1370,7 +1378,8 @@ mod tests {
         // Different scheme.
         assert_eq!(
             validate_resource_url("https://example.com/mcp", Some("http://example.com/mcp")),
-            Err("Protected resource http://example.com/mcp does not cover https://example.com/mcp".to_owned())
+            Err("Protected resource http://example.com/mcp does not cover https://example.com/mcp"
+                .to_owned())
         );
         // Different port.
         assert_eq!(
@@ -1380,7 +1389,10 @@ mod tests {
         // The configured path must be a prefix of the identity path.
         assert_eq!(
             validate_resource_url("https://example.com/mcp", Some("https://example.com/api")),
-            Err("Protected resource https://example.com/api does not cover https://example.com/mcp".to_owned())
+            Err(
+                "Protected resource https://example.com/api does not cover https://example.com/mcp"
+                    .to_owned()
+            )
         );
         // Prefix compare is segment-aware: /api does not cover /api123.
         assert_eq!(

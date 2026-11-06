@@ -76,7 +76,7 @@ pub fn registration_error(tool: &BuiltinTool) -> Option<String> {
 // G-100: the JSON-Schema validator moved to `oc_ai::json_schema` (the
 // shared engine `generateObject` output validation also uses);
 // re-exported here so the tool decode pipeline keeps its API.
-pub use oc_ai::json_schema::{Issue, validate_input};
+pub use oc_ai::json_schema::{validate_input, Issue};
 
 /// `formatInputIssues` — the exact decode-failure message.
 #[must_use]
@@ -504,9 +504,9 @@ mod tests {
         assert_eq!(issues[0].message, "must match exactly one schema in oneOf");
         // Matches neither.
         let issues = validate_input(&schema, &json!({ "c": true }));
-        assert!(
-            issues.iter().any(|issue| issue.message == "must match exactly one schema in oneOf")
-        );
+        assert!(issues
+            .iter()
+            .any(|issue| issue.message == "must match exactly one schema in oneOf"));
     }
 
     #[test]

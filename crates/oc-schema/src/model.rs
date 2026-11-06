@@ -301,4 +301,14 @@ mod tests {
         assert_eq!(info.status, Status::Active);
         assert_eq!(info.limit.context, 200_000);
     }
+
+    /// G-174: `requireSignature` round-trips camelCase on Model.Compatibility.
+    #[test]
+    fn compatibility_require_signature_round_trips() {
+        let compatibility: Compatibility =
+            serde_json::from_str("{\"requireSignature\": false}").expect("deserializes");
+        assert_eq!(compatibility.require_signature, Some(false));
+        let encoded = serde_json::to_value(&compatibility).expect("serializes");
+        assert_eq!(encoded, serde_json::json!({"requireSignature": false}));
+    }
 }

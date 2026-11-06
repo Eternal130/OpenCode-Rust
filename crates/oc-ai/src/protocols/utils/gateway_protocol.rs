@@ -77,10 +77,7 @@ fn decode_options(request: &LLMRequest) -> Result<GatewayOptions, AiError> {
             .and_then(Value::as_str)
             .map(str::to_string),
         thinking,
-        cache_ttl: options
-            .get("cacheTTL")
-            .and_then(Value::as_str)
-            .map(str::to_string),
+        cache_ttl: options.get("cacheTTL").and_then(Value::as_str).map(str::to_string),
         cache_anchor_items: options
             .get("cacheAnchorItems")
             .filter(|value| value.is_number())
@@ -131,9 +128,7 @@ fn prepare(
                 let mut thinking = Map::new();
                 thinking.insert(
                     "type".to_string(),
-                    Value::String(
-                        if enabled { "adaptive" } else { "disabled" }.to_string(),
-                    ),
+                    Value::String(if enabled { "adaptive" } else { "disabled" }.to_string()),
                 );
                 Value::Object(thinking)
             });
@@ -218,7 +213,11 @@ pub struct GatewayProtocol {
 impl GatewayProtocol {
     /// Wrap `inner` for one gateway route id and API surface.
     #[must_use]
-    pub fn new(id: impl Into<String>, inner: std::sync::Arc<dyn Protocol>, api: GatewayApi) -> Self {
+    pub fn new(
+        id: impl Into<String>,
+        inner: std::sync::Arc<dyn Protocol>,
+        api: GatewayApi,
+    ) -> Self {
         Self { id: id.into(), inner, api }
     }
 }
@@ -278,10 +277,7 @@ impl Protocol for GatewayProtocol {
         let merged = merge_json_records(&records);
         let (inner, events) = self.inner.step(state.inner, frame)?;
         let events = attach_gateway_metadata(events, merged.as_ref());
-        Ok((
-            Box::new(GatewayState { inner, gateway: merged }),
-            events,
-        ))
+        Ok((Box::new(GatewayState { inner, gateway: merged }), events))
     }
 
     fn terminal(&self, frame: &str) -> bool {
@@ -379,9 +375,7 @@ mod tests {
             Arc::new(crate::protocols::anthropic_messages::AnthropicMessages),
             GatewayApi::Messages,
         );
-        let body = protocol
-            .body_from(&request(json!({ "reasoningEffort": "low" })))
-            .unwrap();
+        let body = protocol.body_from(&request(json!({ "reasoningEffort": "low" }))).unwrap();
         // the inner Anthropic Messages body lowers effort + thinking
         assert_eq!(body["thinking"]["type"], json!("adaptive"));
         let body = protocol.body_from(&request(json!({ "reasoningEffort": "none" }))).unwrap();
@@ -432,10 +426,7 @@ mod tests {
             .as_ref()
             .and_then(|metadata| metadata.get(GATEWAY_KEY))
             .expect("gateway metadata");
-        assert_eq!(
-            gateway.get("cost").and_then(|cost| cost.get("total")),
-            Some(&json!(0.001))
-        );
+        assert_eq!(gateway.get("cost").and_then(|cost| cost.get("total")), Some(&json!(0.001)));
         // the frame record wins per key over the delta record
         assert_eq!(
             gateway.get("usage").and_then(|usage| usage.get("input_tokens")),

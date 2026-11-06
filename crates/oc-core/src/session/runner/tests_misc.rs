@@ -387,9 +387,10 @@ fn runner_to_session_error_cause_unwraps_nested_ai_error() {
     // Deeper nesting still reaches the leaf AIError classification.
     let deep = SessionErrorCause::tool(
         "outer blanket",
-        Some(SessionErrorCause::tool("inner blanket", Some(SessionErrorCause::Ai(
-            AiError::invalid_request("bad param"),
-        )))),
+        Some(SessionErrorCause::tool(
+            "inner blanket",
+            Some(SessionErrorCause::Ai(AiError::invalid_request("bad param"))),
+        )),
     );
     let error = to_session_error_cause(&deep);
     assert_eq!(error.error_type, "provider.invalid-request");
@@ -415,9 +416,8 @@ fn runner_to_session_error_cause_empty_nested_message_falls_back_to_tool_message
 /// G-205: `Integration.AuthorizationError` maps to `provider.auth`.
 #[test]
 fn runner_to_session_error_cause_authorization_maps_to_provider_auth() {
-    let error = to_session_error_cause(&SessionErrorCause::Authorization(
-        "OAuth refresh failed".into(),
-    ));
+    let error =
+        to_session_error_cause(&SessionErrorCause::Authorization("OAuth refresh failed".into()));
     assert_eq!(error.error_type, "provider.auth");
     assert_eq!(error.message, "OAuth refresh failed");
     assert!(error.status.is_none() && error.response.is_none());
@@ -951,9 +951,11 @@ fn runner_skill_guidance_filters_denied_skills() {
     assert_eq!(ids, ["allowed", "blocked"]);
 
     // `deny skill blocked` removes only the denied entry.
-    let rules = Ruleset::from_iter([
-        Rule { action: "skill".into(), resource: "blocked".into(), effect: Effect::Deny },
-    ]);
+    let rules = Ruleset::from_iter([Rule {
+        action: "skill".into(),
+        resource: "blocked".into(),
+        effect: Effect::Deny,
+    }]);
     let source = skill_guidance_source(skills.clone(), rules);
     let crate::session::runner::context::ReadOutcome::Value(value) = (source.read)() else {
         panic!("expected a value");
@@ -963,9 +965,11 @@ fn runner_skill_guidance_filters_denied_skills() {
     assert_eq!(ids, ["allowed"]);
 
     // Denying every skill = observed absence (the guidance key drops out).
-    let rules = Ruleset::from_iter([
-        Rule { action: "skill".into(), resource: "*".into(), effect: Effect::Deny },
-    ]);
+    let rules = Ruleset::from_iter([Rule {
+        action: "skill".into(),
+        resource: "*".into(),
+        effect: Effect::Deny,
+    }]);
     let source = skill_guidance_source(skills, rules);
     assert!(matches!((source.read)(), crate::session::runner::context::ReadOutcome::Removed));
 }

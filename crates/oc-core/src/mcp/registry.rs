@@ -384,8 +384,10 @@ impl CredentialStore for DatabaseCredentials {
         let credential_id = credential_id.to_owned();
         Box::pin(async move {
             db.transaction(move |tx| {
-                tx.conn()
-                    .execute("DELETE FROM credential WHERE id = ?1", rusqlite::params![credential_id])?;
+                tx.conn().execute(
+                    "DELETE FROM credential WHERE id = ?1",
+                    rusqlite::params![credential_id],
+                )?;
                 Ok(())
             })
             .await

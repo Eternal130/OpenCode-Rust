@@ -122,9 +122,7 @@ where
                     // appended bytes — roll the buffer back (tokio's
                     // read_to_end asserts this).
                     buf.set_filled(filled_before);
-                    return Err(std::io::Error::other(
-                        "MCP stdio frame exceeded 16 MiB",
-                    ));
+                    return Err(std::io::Error::other("MCP stdio frame exceeded 16 MiB"));
                 }
             }
             result
@@ -281,14 +279,14 @@ mod tests {
     async fn frame_cap_reader_fails_oversized_lines() {
         use tokio::io::AsyncReadExt as _;
 
-        let mut reader = FrameCapReader::with_cap(std::io::Cursor::new(b"ok\nalso ok\n".to_vec()), 8);
+        let mut reader =
+            FrameCapReader::with_cap(std::io::Cursor::new(b"ok\nalso ok\n".to_vec()), 8);
         let mut out = Vec::new();
         let read = reader.read_to_end(&mut out).await;
         assert!(read.is_ok(), "small frames pass");
         assert_eq!(out, b"ok\nalso ok\n");
 
-        let mut reader =
-            FrameCapReader::with_cap(std::io::Cursor::new(vec![b'a'; 9]), 8);
+        let mut reader = FrameCapReader::with_cap(std::io::Cursor::new(vec![b'a'; 9]), 8);
         let mut out = Vec::new();
         let error = reader.read_to_end(&mut out).await.expect_err("oversized frame fails");
         assert_eq!(error.to_string(), "MCP stdio frame exceeded 16 MiB");
@@ -324,6 +322,10 @@ mod tests {
         // U+FFFD storm from a split code point at the head.
         assert!(snapshot.chars().filter(|char| *char == '\u{FFFD}').count() <= 1);
         // The newest bytes are retained (trailing emoji run present).
-        assert!(snapshot.ends_with("💥"), "{}…", snapshot.chars().rev().take(6).collect::<String>());
+        assert!(
+            snapshot.ends_with("💥"),
+            "{}…",
+            snapshot.chars().rev().take(6).collect::<String>()
+        );
     }
 }

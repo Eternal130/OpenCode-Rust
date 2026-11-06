@@ -612,11 +612,12 @@ mod tests {
     async fn tool_opencode_models_own_provider_resolves_from_session() {
         let db = crate::database::Database::open_in_memory().await.expect("db");
         {
-            let project = crate::database::schema::ProjectRow::new("proj_g86", "/tmp/opencode", None)
-                .expect("project");
+            let project =
+                crate::database::schema::ProjectRow::new("proj_g86", "/tmp/opencode", None)
+                    .expect("project");
             db.transaction(move |tx| crate::database::schema::ProjectRow::insert(tx, &project))
-            .await
-            .expect("project insert");
+                .await
+                .expect("project insert");
         }
         let mut row = crate::database::schema::SessionRow::new(
             "ses_g86",
@@ -650,8 +651,11 @@ mod tests {
 
     #[test]
     fn tool_opencode_models_sorts_own_provider_first_with_family_dedup() {
-        let execute =
-            ModelsExecute { catalog: catalog(), own_provider: parking_lot::Mutex::new(None), store: None };
+        let execute = ModelsExecute {
+            catalog: catalog(),
+            own_provider: parking_lot::Mutex::new(None),
+            store: None,
+        };
         let output = execute.list(&ModelsQuery::default(), Some("mine"));
         assert_eq!(output.total, 2, "family dedup drops Mine Old");
         assert_eq!(output.providers.len(), 2, "mine first, then other");
@@ -669,8 +673,11 @@ mod tests {
 
     #[test]
     fn tool_opencode_models_pages() {
-        let execute =
-            ModelsExecute { catalog: catalog(), own_provider: parking_lot::Mutex::new(None), store: None };
+        let execute = ModelsExecute {
+            catalog: catalog(),
+            own_provider: parking_lot::Mutex::new(None),
+            store: None,
+        };
         let page = execute.list(
             &ModelsQuery { limit: Some(1), offset: Some(0), all: Some(true), ..Default::default() },
             Some("other"),
@@ -688,8 +695,11 @@ mod tests {
 
     #[test]
     fn tool_opencode_models_filters_by_query_and_provider() {
-        let execute =
-            ModelsExecute { catalog: catalog(), own_provider: parking_lot::Mutex::new(None), store: None };
+        let execute = ModelsExecute {
+            catalog: catalog(),
+            own_provider: parking_lot::Mutex::new(None),
+            store: None,
+        };
         let output =
             execute.list(&ModelsQuery { query: Some("solo".into()), ..Default::default() }, None);
         assert_eq!(output.total, 1);
@@ -722,7 +732,11 @@ mod tests {
             }"#,
         )
         .expect("catalog parses");
-        let execute = ModelsExecute { catalog: mixed, own_provider: parking_lot::Mutex::new(None), store: None };
+        let execute = ModelsExecute {
+            catalog: mixed,
+            own_provider: parking_lot::Mutex::new(None),
+            store: None,
+        };
         let output = execute.list(&ModelsQuery::default(), None);
         let order: Vec<&str> = output.providers.iter().map(|page| page.id.as_str()).collect();
         assert_eq!(order, vec!["anthropic", "Z.ai"], "localeCompare, not byte order");

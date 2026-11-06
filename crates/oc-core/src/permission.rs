@@ -438,7 +438,8 @@ impl Permission {
         }
         // G-114: saved-grant reads surface store failures instead of
         // silently evaluating without them (ref saved.ts:48 orDie).
-        let grants = inner.saved.list(Some(&inner.project_id)).await.map_err(PermissionError::Store)?;
+        let grants =
+            inner.saved.list(Some(&inner.project_id)).await.map_err(PermissionError::Store)?;
         let all = merge(&[base, saved::rules(&grants)]);
         let effects: Vec<Effect> = input
             .resources
@@ -1514,106 +1515,103 @@ mod tests {
             .all(|rule| { rule.action == "external_directory" && rule.effect == Effect::Allow }));
     }
 
-// -- G-114: store failures surface (ref saved.ts orDie) ----------------------
+    // -- G-114: store failures surface (ref saved.ts orDie) ----------------------
 
-/// A store whose every operation fails (the database is down).
-struct FailingStore;
+    /// A store whose every operation fails (the database is down).
+    struct FailingStore;
 
-#[async_trait]
-impl SavedGrantStore for FailingStore {
-    async fn list(&self, _project_id: Option<&ProjectId>) -> Result<Vec<SavedGrant>, String> {
-        Err("database is down".to_owned())
+    #[async_trait]
+    impl SavedGrantStore for FailingStore {
+        async fn list(&self, _project_id: Option<&ProjectId>) -> Result<Vec<SavedGrant>, String> {
+            Err("database is down".to_owned())
+        }
+
+        async fn add(&self, _input: &AddSavedGrants) -> Result<(), String> {
+            Err("database is down".to_owned())
+        }
+
+        async fn remove(&self, _id: &PermissionSavedId) -> Result<(), String> {
+            Err("database is down".to_owned())
+        }
     }
 
-    async fn add(&self, _input: &AddSavedGrants) -> Result<(), String> {
-        Err("database is down".to_owned())
+    /// Reads work, writes fail (a read-only / broken database file).
+    struct AddFailingStore(MemorySavedGrantStore);
+
+    #[async_trait]
+    impl SavedGrantStore for AddFailingStore {
+        async fn list(&self, project_id: Option<&ProjectId>) -> Result<Vec<SavedGrant>, String> {
+            self.0.list(project_id).await
+        }
+
+        async fn add(&self, _input: &AddSavedGrants) -> Result<(), String> {
+            Err("database is down".to_owned())
+        }
+
+        async fn remove(&self, _id: &PermissionSavedId) -> Result<(), String> {
+            Err("database is down".to_owned())
+        }
     }
 
-    async fn remove(&self, _id: &PermissionSavedId) -> Result<(), String> {
-        Err("database is down".to_owned())
+    #[tokio::test]
+    async fn g114_store_failures_surface_not_swallowed() {
+        let ids: Arc<dyn IdGen> = Arc::new(SequentialIdGen::new());
+        let clock: Arc<dyn Clock> = Arc::new(FixedClock::epoch());
+        let (tx, _rx) = tokio::sync::broadcast::channel::<PermissionEvent>(64);
+        let events = BroadcastEventSink { tx };
+        let resolver: Arc<dyn RuleResolver> = Arc::new(FixedResolver {
+            entries: [(sid("ses_1").0, (None, Some(ruleset(&[("edit", "src/*", Effect::Ask)]))))]
+                .into_iter()
+                .collect(),
+        });
+        let perm = Permission::new(
+            ids,
+            clock,
+            Arc::new(events),
+            Arc::new(FailingStore),
+            Arc::clone(&resolver),
+            ProjectId("proj_1".to_string()),
+            None,
+        );
+
+        // evaluate (list path): the store failure is returned, not an empty
+        // grant list silently evaluated as "no saved allows".
+        let error = perm.assert(input("edit", &["src/a.rs"])).await.unwrap_err();
+        assert!(
+            matches!(error, PermissionError::Store(ref message) if message == "database is down")
+        );
+
+        // reply-always (add path): the failed save surfaces — the approval is
+        // not acknowledged with a dropped grant. Reads work (a pending ask
+        // exists); only the write fails.
+        let writable = Arc::new(AddFailingStore(MemorySavedGrantStore::new(
+            Arc::new(SequentialIdGen::new()),
+            Arc::new(FixedClock::epoch()),
+        )));
+        let ids: Arc<dyn IdGen> = Arc::new(SequentialIdGen::new());
+        let clock: Arc<dyn Clock> = Arc::new(FixedClock::epoch());
+        let (tx, mut rx) = tokio::sync::broadcast::channel::<PermissionEvent>(64);
+        let events = BroadcastEventSink { tx };
+        let perm = Permission::new(
+            ids,
+            clock,
+            Arc::new(events),
+            writable,
+            resolver,
+            ProjectId("proj_1".to_string()),
+            None,
+        );
+        let mut ask_input = input("edit", &["src/a.rs"]);
+        ask_input.save = Some(vec!["src/*".to_owned()]);
+        let first = perm.ask(ask_input).await.unwrap();
+        assert_eq!(first.effect, Effect::Ask);
+        let error = perm
+            .reply(ReplyInput { request_id: first.id.clone(), reply: Reply::Always, message: None })
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, PermissionError::Store(ref message) if message == "database is down")
+        );
+        let _ = &mut rx;
     }
-}
-
-/// Reads work, writes fail (a read-only / broken database file).
-struct AddFailingStore(MemorySavedGrantStore);
-
-#[async_trait]
-impl SavedGrantStore for AddFailingStore {
-    async fn list(&self, project_id: Option<&ProjectId>) -> Result<Vec<SavedGrant>, String> {
-        self.0.list(project_id).await
-    }
-
-    async fn add(&self, _input: &AddSavedGrants) -> Result<(), String> {
-        Err("database is down".to_owned())
-    }
-
-    async fn remove(&self, _id: &PermissionSavedId) -> Result<(), String> {
-        Err("database is down".to_owned())
-    }
-}
-
-#[tokio::test]
-async fn g114_store_failures_surface_not_swallowed() {
-    let ids: Arc<dyn IdGen> = Arc::new(SequentialIdGen::new());
-    let clock: Arc<dyn Clock> = Arc::new(FixedClock::epoch());
-    let (tx, _rx) = tokio::sync::broadcast::channel::<PermissionEvent>(64);
-    let events = BroadcastEventSink { tx };
-    let resolver: Arc<dyn RuleResolver> = Arc::new(FixedResolver {
-        entries: [(
-            sid("ses_1").0,
-            (None, Some(ruleset(&[("edit", "src/*", Effect::Ask)]))),
-        )]
-        .into_iter()
-        .collect(),
-    });
-    let perm = Permission::new(
-        ids,
-        clock,
-        Arc::new(events),
-        Arc::new(FailingStore),
-        Arc::clone(&resolver),
-        ProjectId("proj_1".to_string()),
-        None,
-    );
-
-    // evaluate (list path): the store failure is returned, not an empty
-    // grant list silently evaluated as "no saved allows".
-    let error = perm.assert(input("edit", &["src/a.rs"])).await.unwrap_err();
-    assert!(matches!(error, PermissionError::Store(ref message) if message == "database is down"));
-
-    // reply-always (add path): the failed save surfaces — the approval is
-    // not acknowledged with a dropped grant. Reads work (a pending ask
-    // exists); only the write fails.
-    let writable = Arc::new(AddFailingStore(MemorySavedGrantStore::new(
-        Arc::new(SequentialIdGen::new()),
-        Arc::new(FixedClock::epoch()),
-    )));
-    let ids: Arc<dyn IdGen> = Arc::new(SequentialIdGen::new());
-    let clock: Arc<dyn Clock> = Arc::new(FixedClock::epoch());
-    let (tx, mut rx) = tokio::sync::broadcast::channel::<PermissionEvent>(64);
-    let events = BroadcastEventSink { tx };
-    let perm = Permission::new(
-        ids,
-        clock,
-        Arc::new(events),
-        writable,
-        resolver,
-        ProjectId("proj_1".to_string()),
-        None,
-    );
-    let mut ask_input = input("edit", &["src/a.rs"]);
-    ask_input.save = Some(vec!["src/*".to_owned()]);
-    let first = perm.ask(ask_input).await.unwrap();
-    assert_eq!(first.effect, Effect::Ask);
-    let error = perm
-        .reply(ReplyInput {
-            request_id: first.id.clone(),
-            reply: Reply::Always,
-            message: None,
-        })
-        .await
-        .unwrap_err();
-    assert!(matches!(error, PermissionError::Store(ref message) if message == "database is down"));
-    let _ = &mut rx;
-}
 }

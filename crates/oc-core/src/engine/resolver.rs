@@ -485,9 +485,7 @@ impl CatalogModelResolver {
                         // G-121: keep the package compatibility the facade
                         // injected (the downgrade only swaps the auth).
                         match model.compatibility.clone() {
-                            Some(compatibility) => {
-                                downgraded.with_compatibility(compatibility)
-                            }
+                            Some(compatibility) => downgraded.with_compatibility(compatibility),
                             None => downgraded,
                         }
                     })

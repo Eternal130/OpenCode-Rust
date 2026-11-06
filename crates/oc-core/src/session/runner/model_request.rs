@@ -1143,10 +1143,8 @@ fn http_interceptors(
             // G-91 — `request: before.request` (model-request.ts:340);
             // an absent stash (a response without a paired request hook)
             // keeps the empty payload.
-            let request = response_stash
-                .lock()
-                .take()
-                .unwrap_or_else(|| crate::hooks::HttpRequest {
+            let request =
+                response_stash.lock().take().unwrap_or_else(|| crate::hooks::HttpRequest {
                     url: String::new(),
                     method: String::new(),
                     headers: BTreeMap::new(),

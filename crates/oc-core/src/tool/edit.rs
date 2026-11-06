@@ -284,33 +284,32 @@ async fn execute_edit(
     context: &Context,
     target: &crate::file_access::Target,
 ) -> Result<ToolOutcome, ToolFailure> {
-    let original = match crate::file_mutation::read_text(services.files.as_ref(), &target.absolute)
-        .await
-    {
-        Ok(content) => content,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            // Distinguish directory (WrongKind) from missing.
-            let is_dir = is_directory(services, &target.absolute).await;
-            if is_dir {
-                return Err(ToolFailure::message(format!(
-                    "Path is a directory, not a file: {path}"
-                )));
+    let original =
+        match crate::file_mutation::read_text(services.files.as_ref(), &target.absolute).await {
+            Ok(content) => content,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                // Distinguish directory (WrongKind) from missing.
+                let is_dir = is_directory(services, &target.absolute).await;
+                if is_dir {
+                    return Err(ToolFailure::message(format!(
+                        "Path is a directory, not a file: {path}"
+                    )));
+                }
+                return Err(ToolFailure::message(format!("File not found: {path}")));
             }
-            return Err(ToolFailure::message(format!("File not found: {path}")));
-        }
-        Err(error) => {
-            let is_dir = is_directory(services, &target.absolute).await;
-            if is_dir {
-                return Err(ToolFailure::message(format!(
-                    "Path is a directory, not a file: {path}"
-                )));
+            Err(error) => {
+                let is_dir = is_directory(services, &target.absolute).await;
+                if is_dir {
+                    return Err(ToolFailure::message(format!(
+                        "Path is a directory, not a file: {path}"
+                    )));
+                }
+                return Err(ToolFailure {
+                    message: format!("Unable to edit {path}"),
+                    cause: Some(FailureCause::Nested(error.to_string())),
+                });
             }
-            return Err(ToolFailure {
-                message: format!("Unable to edit {path}"),
-                cause: Some(FailureCause::Nested(error.to_string())),
-            });
-        }
-    };
+        };
 
     let source = original.text;
     let ending = if source.contains(CRLF) { CRLF } else { "\n" };

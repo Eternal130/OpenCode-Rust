@@ -54,7 +54,11 @@ fn type_name(value: &serde_json::Value) -> &'static str {
 }
 
 fn join_path(path: &str, key: &str) -> String {
-    if path.is_empty() { key.to_string() } else { format!("{path}.{key}") }
+    if path.is_empty() {
+        key.to_string()
+    } else {
+        format!("{path}.{key}")
+    }
 }
 
 fn custom_message(schema: &serde_json::Value) -> Option<&str> {

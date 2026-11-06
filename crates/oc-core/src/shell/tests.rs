@@ -506,7 +506,10 @@ mod parse_tests {
         assert_eq!(
             commands_of(&result),
             vec![
-                ("cat <<EOF\n# not a comment for the shell\nbody\nEOF".to_string(), "cat *".to_string()),
+                (
+                    "cat <<EOF\n# not a comment for the shell\nbody\nEOF".to_string(),
+                    "cat *".to_string()
+                ),
                 ("echo done".to_string(), "echo *".to_string()),
             ]
         );

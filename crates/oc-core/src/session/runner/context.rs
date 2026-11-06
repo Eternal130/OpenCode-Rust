@@ -683,37 +683,38 @@ pub(crate) fn skill_guidance_source(
     skills: Arc<dyn Fn() -> Vec<oc_schema::skill::Skill> + Send + Sync>,
     permissions: Ruleset,
 ) -> InstructionSource {
-    let summaries = |skills: &[oc_schema::skill::Skill], permissions: &Ruleset| -> Vec<serde_json::Value> {
-        let rulesets = std::slice::from_ref(permissions);
-        let mut visible: Vec<serde_json::Value> = skills
-            .iter()
-            .filter(|skill| skill.description.is_some() && skill.auto_invoke != Some(false))
-            // `Permission.evaluate("skill", id).effect !== "deny"` — a
-            // denied skill never reaches the `<available_skills>` block.
-            .filter(|skill| {
-                crate::permission::evaluate("skill", skill.id.as_str(), rulesets).effect
-                    != Effect::Deny
-            })
-            .map(|skill| {
-                serde_json::json!({
-                    "id": skill.id.as_str(),
-                    "name": skill.name.0.clone(),
-                    "description": skill.description.clone().unwrap_or_default(),
+    let summaries =
+        |skills: &[oc_schema::skill::Skill], permissions: &Ruleset| -> Vec<serde_json::Value> {
+            let rulesets = std::slice::from_ref(permissions);
+            let mut visible: Vec<serde_json::Value> = skills
+                .iter()
+                .filter(|skill| skill.description.is_some() && skill.auto_invoke != Some(false))
+                // `Permission.evaluate("skill", id).effect !== "deny"` — a
+                // denied skill never reaches the `<available_skills>` block.
+                .filter(|skill| {
+                    crate::permission::evaluate("skill", skill.id.as_str(), rulesets).effect
+                        != Effect::Deny
                 })
-            })
-            .collect();
-        // v2 sorts with `id.localeCompare` (ICU tertiary: case-insensitive
-        // primary, lowercase before uppercase on ties). Approximation: ASCII
-        // case-fold then lowercase-first tie-break — identical to ICU for
-        // the ASCII corpus of skill ids; non-ASCII falls back to code
-        // points (documented divergence).
-        visible.sort_by(|a, b| {
-            let (x, y) =
-                (a["id"].as_str().unwrap_or_default(), b["id"].as_str().unwrap_or_default());
-            x.to_lowercase().cmp(&y.to_lowercase()).then_with(|| y.cmp(x))
-        });
-        visible
-    };
+                .map(|skill| {
+                    serde_json::json!({
+                        "id": skill.id.as_str(),
+                        "name": skill.name.0.clone(),
+                        "description": skill.description.clone().unwrap_or_default(),
+                    })
+                })
+                .collect();
+            // v2 sorts with `id.localeCompare` (ICU tertiary: case-insensitive
+            // primary, lowercase before uppercase on ties). Approximation: ASCII
+            // case-fold then lowercase-first tie-break — identical to ICU for
+            // the ASCII corpus of skill ids; non-ASCII falls back to code
+            // points (documented divergence).
+            visible.sort_by(|a, b| {
+                let (x, y) =
+                    (a["id"].as_str().unwrap_or_default(), b["id"].as_str().unwrap_or_default());
+                x.to_lowercase().cmp(&y.to_lowercase()).then_with(|| y.cmp(x))
+            });
+            visible
+        };
     let render = |skills: &[serde_json::Value]| -> String {
         let mut lines = vec![
             "Skills provide specialized instructions and workflows for specific tasks.".to_string(),

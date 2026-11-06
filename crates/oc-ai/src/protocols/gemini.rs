@@ -31,7 +31,6 @@ use crate::schema::{
     ToolDefinition, ToolResultValue, Usage,
 };
 
-
 const ADAPTER: &str = "gemini";
 /// Google documents this sentinel for replaying Gemini 3 function calls
 /// after their original signature was lost.

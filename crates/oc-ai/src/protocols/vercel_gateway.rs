@@ -214,16 +214,14 @@ mod tests {
         assert_eq!(wire.url, "https://gateway.test/v1/responses");
 
         let messages = messages_route(&spec());
-        let (wire, _) = messages
-            .prepare_transport(&messages.prepare_request(&request()), &json!({}))
-            .unwrap();
+        let (wire, _) =
+            messages.prepare_transport(&messages.prepare_request(&request()), &json!({})).unwrap();
         assert_eq!(wire.url, "https://gateway.test/v1/messages");
         assert_eq!(wire.header("anthropic-version"), Some("2023-06-01"));
 
         let chat = chat_route(&spec());
-        let (wire, _) = chat
-            .prepare_transport(&chat.prepare_request(&request()), &json!({}))
-            .unwrap();
+        let (wire, _) =
+            chat.prepare_transport(&chat.prepare_request(&request()), &json!({})).unwrap();
         assert_eq!(wire.url, "https://gateway.test/v1/chat/completions");
     }
 

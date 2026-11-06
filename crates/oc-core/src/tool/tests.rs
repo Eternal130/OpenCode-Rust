@@ -1859,7 +1859,7 @@ fn rg_deps(
 
 #[tokio::test]
 async fn rg_resolve_order_env_path_cache_download() {
-    use crate::tool::ripgrep_runner::{RgSource, resolve_with};
+    use crate::tool::ripgrep_runner::{resolve_with, RgSource};
     let tmp = tempfile::tempdir_in("/tmp/opencode").unwrap();
     let global_bin = tmp.path().join("bin");
     std::fs::create_dir_all(&global_bin).unwrap();
@@ -1909,7 +1909,7 @@ async fn rg_resolve_order_env_path_cache_download() {
 #[tokio::test]
 async fn rg_resolve_downloads_extracts_and_caches() {
     use crate::tool::ripgrep_runner::{
-        RG_VERSION, RgError, RgSource, platform_config, resolve_with,
+        platform_config, resolve_with, RgError, RgSource, RG_VERSION,
     };
     let Some(config) = platform_config() else {
         return; // platform without a managed artifact
@@ -2009,9 +2009,9 @@ fn rg_platform_map_matches_ref_rows() {
     // Filename/URL shapes (binary.ts:120-121).
     let config = platform_config_for("x86_64", "linux").unwrap();
     assert_eq!(config.filename(), format!("ripgrep-15.1.0-{}.tar.gz", config.platform));
-    assert!(
-        config.url().starts_with("https://github.com/BurntSushi/ripgrep/releases/download/15.1.0/")
-    );
+    assert!(config
+        .url()
+        .starts_with("https://github.com/BurntSushi/ripgrep/releases/download/15.1.0/"));
 }
 
 #[tokio::test]
@@ -2115,7 +2115,7 @@ async fn read_large_file_chunked_memory_shape() {
 
 #[tokio::test]
 async fn read_prefetched_first_chunk_is_not_reread() {
-    use crate::tool::read::{ReadError, read_file_with};
+    use crate::tool::read::{read_file_with, ReadError};
     use futures::future::BoxFuture;
     // read_file's dir-detection/size probe already fetched chunk 0; the
     // pipeline must consume it instead of re-reading (one round trip per
@@ -2147,7 +2147,7 @@ async fn read_prefetched_first_chunk_is_not_reread() {
 
 #[tokio::test]
 async fn read_binary_detection_covers_only_the_consumed_page() {
-    use crate::tool::read::{ReadError, ReadOutput, read_file_with};
+    use crate::tool::read::{read_file_with, ReadError, ReadOutput};
     use futures::future::BoxFuture;
     // 70 KiB text file (single first chunk) with a NUL deep inside —
     // ref read-filesystem.ts:151-209: the binary flag is computed over

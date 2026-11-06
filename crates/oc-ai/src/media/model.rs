@@ -115,10 +115,7 @@ impl Snapshot {
         if is_terminal(self.status) {
             GenerationEvent::Finished(FinishedEvent { id: self.id.clone(), status: self.status })
         } else if self.status == Status::Queued {
-            GenerationEvent::Queued(QueuedEvent {
-                id: self.id.clone(),
-                position: self.position,
-            })
+            GenerationEvent::Queued(QueuedEvent { id: self.id.clone(), position: self.position })
         } else {
             GenerationEvent::Progress(ProgressEvent {
                 id: self.id.clone(),
@@ -140,10 +137,7 @@ pub struct PollOptions {
 
 impl Default for PollOptions {
     fn default() -> Self {
-        Self {
-            interval: DEFAULT_POLL_INTERVAL,
-            timeout: DEFAULT_POLL_TIMEOUT,
-        }
+        Self { interval: DEFAULT_POLL_INTERVAL, timeout: DEFAULT_POLL_TIMEOUT }
     }
 }
 

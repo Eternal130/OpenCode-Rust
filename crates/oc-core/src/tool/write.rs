@@ -117,8 +117,8 @@ async fn run(
         .map(|content| content.bom)
         .unwrap_or(false);
     if services.formatter.file(&target.absolute) {
-        let _ =
-            crate::file_mutation::sync_text_bom(services.files.as_ref(), &target.absolute, bom).await;
+        let _ = crate::file_mutation::sync_text_bom(services.files.as_ref(), &target.absolute, bom)
+            .await;
     }
     Ok(ToolOutcome {
         content: vec![Content::Text {

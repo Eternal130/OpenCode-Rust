@@ -359,8 +359,16 @@ impl crate::session::runner::LlmClient for AbruptCloseLlm {
         Ok(Box::pin(futures::stream::iter(vec![
             Ok(LLMEvent::StepStart { index: 0.0 }),
             Ok(LLMEvent::TextStart { id: "t1".into(), provider_metadata: None }),
-            Ok(LLMEvent::TextDelta { id: "t1".into(), text: "partial ".into(), provider_metadata: None }),
-            Ok(LLMEvent::TextDelta { id: "t1".into(), text: "answer".into(), provider_metadata: None }),
+            Ok(LLMEvent::TextDelta {
+                id: "t1".into(),
+                text: "partial ".into(),
+                provider_metadata: None,
+            }),
+            Ok(LLMEvent::TextDelta {
+                id: "t1".into(),
+                text: "answer".into(),
+                provider_metadata: None,
+            }),
         ])))
     }
 

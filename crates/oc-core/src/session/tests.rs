@@ -3456,14 +3456,12 @@ async fn session_remove_tree_deletes_descendants_recursively() {
     let env = SessionEnv::new();
 
     seed_session_raw(&stack.db, "ses_rm_root").await;
-    seed_session_with(&stack.db, "ses_rm_child", &[("parent_id", "ses_rm_root".to_string())])
-        .await;
+    seed_session_with(&stack.db, "ses_rm_child", &[("parent_id", "ses_rm_root".to_string())]).await;
     seed_session_with(&stack.db, "ses_rm_grand", &[("parent_id", "ses_rm_child".to_string())])
         .await;
     // An unrelated branch that must survive.
     seed_session_raw(&stack.db, "ses_rm_other").await;
-    seed_session_with(&stack.db, "ses_rm_keep", &[("parent_id", "ses_rm_other".to_string())])
-        .await;
+    seed_session_with(&stack.db, "ses_rm_keep", &[("parent_id", "ses_rm_other".to_string())]).await;
 
     env.set(
         "ses_rm_root",

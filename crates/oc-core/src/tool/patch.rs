@@ -273,12 +273,12 @@ async fn execute_patch(
                     crate::file_mutation::read_text(services.files.as_ref(), &target.absolute)
                         .await
                         .map_err(|error| {
-                        ToolFailure::message(format!(
-                            "patch verification failed: Failed to delete {}: {}",
-                            target.resource,
-                            error_message(&error)
-                        ))
-                    })?;
+                            ToolFailure::message(format!(
+                                "patch verification failed: Failed to delete {}: {}",
+                                target.resource,
+                                error_message(&error)
+                            ))
+                        })?;
                 prepared.push(Prepared {
                     kind: "delete",
                     target,
@@ -292,18 +292,20 @@ async fn execute_patch(
                 let previous = updates.get(&target.absolute);
                 let original = match previous {
                     Some(previous) => previous.clone(),
-                    None => crate::file_mutation::read_text(services.files.as_ref(), &target.absolute)
-                        .await
-                        .map_err(|error| {
-                            ToolFailure::message(format!(
+                    None => {
+                        crate::file_mutation::read_text(services.files.as_ref(), &target.absolute)
+                            .await
+                            .map_err(|error| {
+                                ToolFailure::message(format!(
                                 "patch verification failed: Failed to read file to update {}: {}",
                                 target.absolute.display(),
                                 error_message(&error)
                             ))
-                        })
-                        .map(|content| {
-                            crate::file_mutation::bom_join(&content.text, content.bom)
-                        })?,
+                            })
+                            .map(|content| {
+                                crate::file_mutation::bom_join(&content.text, content.bom)
+                            })?
+                    }
                 };
                 let before = crate::file_mutation::bom_split(&original).1.to_string();
                 let target_absolute = target.absolute.clone();
@@ -495,17 +497,16 @@ async fn execute_patch(
         if *kind == "delete" {
             continue;
         }
-        let current =
-            crate::file_mutation::read_text(services.files.as_ref(), absolute).await.map_err(
-                |error| {
-                    let error = std::io::Error::from(error);
-                    fail(
-                        &format!("Failed to read {}", absolute.display()),
-                        &error_message(&error),
-                        &applied.iter().map(|(_, r, _)| r.clone()).collect::<Vec<_>>(),
-                    )
-                },
-            )?;
+        let current = crate::file_mutation::read_text(services.files.as_ref(), absolute)
+            .await
+            .map_err(|error| {
+                let error = std::io::Error::from(error);
+                fail(
+                    &format!("Failed to read {}", absolute.display()),
+                    &error_message(&error),
+                    &applied.iter().map(|(_, r, _)| r.clone()).collect::<Vec<_>>(),
+                )
+            })?;
         let text = if services.formatter.file(absolute) {
             crate::file_mutation::sync_text_bom(services.files.as_ref(), absolute, current.bom)
                 .await
