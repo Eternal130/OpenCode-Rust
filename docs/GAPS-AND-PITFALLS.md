@@ -2,7 +2,7 @@
 
 > **2026-11-03 第十二轮（全量对比审查）**：22 通道逐文件全文对读（TS ~21 万行 / Rust ~40 万行生产代码）+ 3 通道缺口核验，对 50 项缺口声称逐项双侧源码取证：**新立项 46 项（G-165..G-210，含 🔴×6：Azure 未接线/Mcp.Protocol wire bug/Copilot anthropic 车道/第三方 anthropic 根 URL/shell 注释换行权限逃逸/transfer 脱敏弱）**、撤销 4 项初报 + 6 项子句修正（见文末第十二轮勘误）、5 项归类既有条目。总报告 `CODE_REVIEW_PARITY_2026-11-03.md`，域报告与核验记录 `/tmp/opencode/review/`。
 
-> **2026-11-02 第十一轮 burndown 收口（gap-burndown-7）**：第十轮立项的 G-105..G-164 全部 60 项经 lanes 1-9 落地并合并 main（lane1 ce86cd7 / lane2 a3485a4 / lane3 ed23543 / lane4 b0a026f / lane5 56e8d36 / lane6 e8c3b7f / lane7 18363aa / lane8 34837c8 / lane9 本轮合并），逐条状态改标 ✅（G-163/G-164 维持 ℹ️ 登记项，G-161② 已修）。各 lane 有界偏离清单见文末第十一轮。
+> **2026-11-02 第十一轮 burndown 收口（gap-burndown-7）**：第十轮立项的 G-105..G-164 全部 60 项经 lanes 1-9 落地并合并 main（lane1 043408d / lane2 3269839 / lane3 822d72d / lane4 88b25b5 / lane5 a28e380 / lane6 e516182 / lane7 e3395dc / lane8 3480df9 / lane9 本轮合并），逐条状态改标 ✅（G-163/G-164 维持 ℹ️ 登记项，G-161② 已修）。各 lane 有界偏离清单见文末第十一轮。
 
 > **2026-11-02 第十轮（全量逐行复审）**：9 通道逐行对读 + 6 轮补审 + 4 通道缺口复核，对全部初报缺口逐项双侧源码取证后确认 60 项新立项（G-105..G-164）、驳回 13 项初报（见文末第十轮勘误）、若干 DUP 归并既有条目（G-6/G-17/G-32/G-49a 已追加备注）。总报告 `CODE_REVIEW_PARITY_2026-11-02.md`，明细 `/tmp/opencode/review/`。
 
@@ -722,7 +722,7 @@ G-79..G-92 全部 ✅（G-83 面板全量；G-87 三子项实现/已移植/文�
 
 # 第十轮 burndown 收口（2026-11-02，gap-burndown-6）
 
-> G-93..G-104 全部 12 项经 lanes 1-4 串行落地并 fast-forward 合并 main（55032d4 / 4e5a55c / 56d5584 / 8d2aef7）。全程 worktree 隔离（`.worktrees/`，合并后已回收）、dev-gate 单入口、nextest 未过滤验证、日志落盘 `.test-logs/*-lane[1-4].log`。各 lane 报告含字面 `Summary:` 行与 `git log -1` 落地证明。
+> G-93..G-104 全部 12 项经 lanes 1-4 串行落地并 fast-forward 合并 main（55032d4 / 3ee4453 / d02a439 / c63e134）。全程 worktree 隔离（`.worktrees/`，合并后已回收）、dev-gate 单入口、nextest 未过滤验证、日志落盘 `.test-logs/*-lane[1-4].log`。各 lane 报告含字面 `Summary:` 行与 `git log -1` 落地证明。
 
 - **G-93 ✅（lane1）**：`oc-tui/src/components/composer/mention_realign.rs` 全量移植 ref mention.ts realign DP（group-by-text、longest-first、保护区间、memoized 最小代价最大匹配）；`Composer::set_text_realigned` 保留幸存 @file/@agent/@skill 附件；$EDITOR 返回分支改调之。偏差文档化：char-offset DP（非 display-width）、无文本 mention 丢弃。
 - **G-94 ✅（lane2）**：permission create handler 透传 payload agent/metadata/source（AssertInput 字段本已有，handler 此前硬编码 None）。注：Permission.Request 双侧均无 agent 字段，agent 流入 AssertInput（wire 断言 metadata/source）。
@@ -1026,14 +1026,14 @@ G-93..G-104 全部 ✅。现存未关闭项维持既有文档化决策：G-28（
 
 第十轮立项的 G-105..G-164 全部 60 项经 lanes 1-9 串行落地并合并 main（worktree 隔离、dev-gate、nextest `--workspace --locked --no-fail-fast` 证据、合并门复跑；日志在 `.test-logs/*-lane9*` / 各 lane 报告）。逐 lane 提交：
 
-- lane1 `ce86cd7`：G-105/106/109（+ G-106 组内 CodeMode 目录指令收口）。
-- lane2 `a3485a4`：G-118..G-123。
-- lane3 `ed23543`：G-107..G-115。
-- lane4 `b0a026f`：G-147..G-156。
-- lane5 `56e8d36`：G-127..G-134。
-- lane6 `e8c3b7f`：G-135..G-146。
-- lane7 `18363aa`：G-122/124/125/126。
-- lane8 `34837c8`：G-154/155/157/158/159。
+- lane1 `043408d`：G-105/106/109（+ G-106 组内 CodeMode 目录指令收口）。
+- lane2 `3269839`：G-118..G-123。
+- lane3 `822d72d`：G-107..G-115。
+- lane4 `88b25b5`：G-147..G-156。
+- lane5 `a28e380`：G-127..G-134。
+- lane6 `e516182`：G-135..G-146。
+- lane7 `e3395dc`：G-122/124/125/126。
+- lane8 `3480df9`：G-154/155/157/158/159。
 - lane9（本轮）：G-160/162 代码修复 + G-161/163/164 登记（合并 main，见文末 git log）。
 
 状态：G-105..G-164 逐条改标 ✅（代码落地或登记收口）；G-163/G-164 维持 ℹ️（结构性登记），G-161 ② 已修 ① 文档化。第十轮判定汇总中的 🟡/🔴 分级至此全部清偿。
