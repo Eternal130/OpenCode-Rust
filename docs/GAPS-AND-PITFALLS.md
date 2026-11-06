@@ -285,6 +285,9 @@
 | 9 | **子代理"默认测试通过"假象 + 过滤指令吞失败详情**：首轮 cargo test 用了过滤/未带 --no-fail-fast，失败被折叠成汇总行，失败原因不可见，被迫第二轮重测定位，拖长 lane 周期（2026-10-27 收口 session 多 lane 观察） | 测试报告只看退出码/末行汇总；过滤参数（--lib、name filter）把红测试藏进被滤掉的集合 | lane 验证纪律：① 首轮测试**不加过滤**并带 `--no-fail-fast`，拿到全部结果；② 报告必须**原样引用 `test result:` 行**（含 passed/failed 计数），禁止只写"green/通过"；③ 有失败时**同一轮**立即用 `--exact <name> -- --nocapture` 重跑单个红测试取回失败输出，不得先交报告再返工；④ dev-gate 输出被截断时读保存的完整输出文件而非重跑 |
 | 10 | **测试证据随会话丢失 → 重复测试**：lane 报告只活在子代理会话里，宿主重启/会话回收后 orchestrator 或后续 lane 拿不到原始 test result 行，只能整轮重跑验证（2026-10-27 合并门曾整轮重测 5 crate，数十分钟；且 /tmp/opencode 有被整体清空的前科 2.1#4） | 测试输出没有落盘为持久文件；依赖会话内存或易失 /tmp | **一切测试运行必须 tee 落盘**：`tools/dev-gate.sh 'cargo test …' 2>&1 \| tee .test-logs/<crate>-<yyyymmdd-HHMM>-<lane>.log`（.test-logs/ 进 .gitignore、不随 /tmp 清空；merge gate 同规则）；lane 最终报告**必须给出日志文件路径 + 关键 `test result:` 行**；后续任何"是否已验证"的争议先读日志文件，禁止凭记忆重跑；日志含红项时连同基线证伪证据（基线 commit + 复现输出）一并落同一目录 |
 | 11 | **plain `cargo test --workspace` 产生大面积假红**（2026-10-28 rv-burndown 收口：cargo test 直跑 oc-tui 数十测红——PTY/VT 套件 spawn 真终端+stub server，在无限流/无重试下时序全崩；同一棵树 nextest 4450/4450 绿） | 本仓 canonical 测试 harness 是 nextest（.config/nextest.toml：test-threads=4、全局 retry=1、be1/pty 家族 retry=2 + [profile.pty] test-threads=1 序列化）；plain cargo test 绕过全部降载与重试机制 | 全 workspace 验证一律 `cargo nextest run --workspace --locked --no-fail-fast`；PTY 家族另跑 `--profile pty` 序列化（镜像 ci.yml 两 job）；禁以 plain cargo test 的红作为回归证据，除非单测 --exact 定位复现 |
+| 12 | **门命令形状两坑**（2026-11-05/06 双引擎工具期，各两次实证）：① `dev-gate.sh 'cargo nextest … \| tail -2'` 内嵌 tail 把 Summary 行截掉——合并门"绿"却无判定行证据，被迫整门重跑补证；② 子代理把 `tools/diff/run-all.sh` 包进 dev-gate（提示词里本是两条独立命令被擅自合并）——dev-gate 持全局锁后内部脚本再碰构建/锁，自锁风险+「测试一直没开始」假象 | 门命令的管道截断破坏 2.4#10 的证据落盘完整性；dev-gate 只设计为包 cargo/nextest 单命令，嵌套脚本=锁套锁 | **门命令=全量 tee，禁止内嵌 tail/head/grep 截断**；显示用 grep 只在 tee 之后单独执行；`tools/diff/run-all.sh`、`tools/parity/*.sh` 等脚本**直接跑不包 dev-gate**（lane 提示词逐字给两条命令并声明"一次一个门禁双发"） |
+| 13 | **测试「一直没开始」三连环**（2026-11-06 lane TBX 实例）：root 用 sed/编辑器改文件→文件属主变 root→降权 cargo/脚本 EACCES 静默失败；死会话双发两道门→target 构建互踩失败残根（日志作废）；`tools/diff/out/oracle/` 被 root 直跑污染→bun 逐场景 EACCES 全红但形似"卡住" | 属主污染链（2.1#2 的 sed/编辑器变体+输出目录变体）；双发违反"一次一个门"；输出目录属主无人核查 | worktree 动工前 `find . -user root -exec chown eternal130:eternal130 {} +`（含 target/out/oracle）；root 的文件编辑后立即 chown；一次一个门禁双发；门排队/卡住先查 `fuser /tmp/opencode/dev-gate.lock` 与 `ps` 残留（含 PPID1 孤儿）再归因 |
+| 14 | **lane 终报与门日志不对账**（多实例）：漏报第二个失败（声称"唯一失败"而日志有 2 个 FAIL）；日志时间戳/文件名误报 ≥4 次（报告写 0250 实际 0228 等）——合并方按错误路径找证据失败，险误判 | 终报靠会话记忆转述日志，非从磁盘读；时间戳拼接自 $(date) 预估值漂移 | orchestrator/lane 收尾**必须从磁盘核实**：`ls -t .test-logs/` 找真实文件名+`grep -cE 'FAIL' ` 核对失败计数与终报一致；报告只允许引用 `ls` 出的真实路径；**同树双引擎常设门**（`dual_engine_matches_frozen_oracle`，秒级、bun-free）与 opentui 差分全套（含 oracle 刷新 ~36s）作为渲染面变更的快速对账层 |
 
 ### 2.5 工程卫生
 
@@ -292,6 +295,7 @@
 - lane 派发模板强制项：English commits、分块调用（≤45 分钟）、worktree 隔离、写明 dev-gate。
 - DNS 探针文件（/tmp/opencode/dns-probe.*）不是构建产物，勿清。
 - 仓库根曾经堆积垃圾文件（`None`、`refprobe.pid`）——2026-10-23 清除；收尾自查 `git status` 为模板必查项。
+- **子代理显式覆盖 git 提交身份**（2026-11-06 全量清理）：历史出现 `Fixer`/`lane`/`OpenCode Agent`/`lane-tby` 等自造身份与 `eternal130@localhost` 等邮箱变体 ~30 处——而身份配置四层齐全（/etc/gitconfig 系统级=root 全局=~/.gitconfig=仓库级，均为 `Eternal130 <Eternal130@outlook.com>`），唯一来源是子代理显式传 `--author`、`-c user.name/user.email`、`GIT_AUTHOR_*/GIT_COMMITTER_*`。修复=两仓 filter-branch 全量改写（树哈希逐字节不变）+ force push + opentui rev 重钉（2fbe00e→56a9eda）+ 文档 hash 全量重映射（`docs/COMMIT-IDENTITY-REMAP-20261106.md`）。规则：**子代理 git 提交一律仓库既有身份；派发模板必含禁令（禁 `--author`、`-c user.*`、`GIT_AUTHOR_*`/`GIT_COMMITTER_*`）**。
 
 ---
 
@@ -311,6 +315,8 @@
 | oracle | 版本断言+指纹+always-refresh | `tools/diff`（opentui-rust） |
 | 磁盘 | 增量抑制（仓库级 .cargo/config.toml incremental=false，2026-10-25 起强制）/周期 clean；清理门 mtime≥30 分钟视为在用 | 本册 2.1#6 |
 | 验证 | 交互面必须 PTY/field 级；组合模型必须源码级对比；金帧=回归套件 | 方法论登记（ROADMAP §4） |
+| 门命令形状 | 门命令全量 tee 禁内嵌 tail/head/grep；脚本（run-all.sh、parity/*.sh）直接跑不包 dev-gate；一次一个门禁双发；终报与磁盘日志对账（ls -t 定位真实文件+grep -c FAIL 核数） | 本册 2.4#12–14（2026-11-06） |
+| git 提交身份 | 子代理一律仓库既有身份（Eternal130）；禁 --author、-c user.name/user.email、GIT_AUTHOR_*/GIT_COMMITTER_*；派发模板必含禁令 | 本册 2.5（2026-11-06） |
 
 ---
 
