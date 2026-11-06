@@ -479,6 +479,202 @@ pub fn config_directories(config_root: &Path, cwd: &Path) -> Vec<PathBuf> {
     oc_theme::config_directories(config_root, cwd)
 }
 
+// -- system theme generation (theme/system.ts generateSystem) -----------------
+
+/// The terminal palette pieces `generateSystem` consumes
+/// (`TerminalColors` from `@opentui/core`): the OSC-queried defaults
+/// plus the 16-color ANSI palette as hex strings.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TerminalColors {
+    pub default_background: Option<String>,
+    pub default_foreground: Option<String>,
+    pub palette: Vec<Option<String>>,
+}
+
+/// `tint` (theme/color.ts): lerp `overlay` over `base` by `alpha` on
+/// the 0-1 float channels, rounding like the ref.
+fn tint(base: Rgba, overlay: Rgba, alpha: f64) -> Rgba {
+    let [br, bg_, bb, _] = base.floats();
+    let [or_, og, ob, _] = overlay.floats();
+    let channel =
+        |b: f64, o: f64| ((b + (o - b) * alpha) * 255.0).round().clamp(0.0, 255.0) as u8;
+    Rgba::from_ints(channel(br, or_), channel(bg_, og), channel(bb, ob), 255)
+}
+
+/// `generateGrayScale` (system.ts): 12 grays stepping 40% of the way
+/// from the background toward its extreme, with flat ramps for
+/// near-black/near-white backgrounds.
+fn generate_gray_scale(bg: Rgba, is_dark: bool) -> Vec<Rgba> {
+    let [bgr, bgg, bgb, _] = bg.to_ints();
+    let bg_r = f64::from(bgr);
+    let bg_g = f64::from(bgg);
+    let bg_b = f64::from(bgb);
+    let luminance = 0.299 * bg_r + 0.587 * bg_g + 0.114 * bg_b;
+    let mut grays = vec![Rgba::TRANSPARENT; 13]; // index 0 unused, ref keys 1..=12
+    for i in 1..=12usize {
+        let factor = i as f64 / 12.0;
+        let gray;
+        if is_dark && luminance < 10.0 {
+            gray = (factor * 0.4 * 255.0).floor();
+            grays[i] = Rgba::from_ints(gray as u8, gray as u8, gray as u8, 255);
+            continue;
+        }
+        if !is_dark && luminance > 245.0 {
+            gray = (255.0 - factor * 0.4 * 255.0).floor();
+            grays[i] = Rgba::from_ints(gray as u8, gray as u8, gray as u8, 255);
+            continue;
+        }
+        let next = if is_dark {
+            luminance + (255.0 - luminance) * factor * 0.4
+        } else {
+            luminance * (1.0 - factor * 0.4)
+        };
+        let ratio = if luminance == 0.0 { 0.0 } else { next / luminance };
+        let channel = |value: f64| {
+            ((value * ratio).min(255.0).max(0.0)).floor() as u8
+        };
+        grays[i] = Rgba::from_ints(channel(bg_r), channel(bg_g), channel(bg_b), 255);
+    }
+    grays
+}
+
+/// `generateMutedTextColor` (system.ts).
+fn generate_muted_text_color(bg: Rgba, is_dark: bool) -> Rgba {
+    let [r, g, b, _] = bg.to_ints();
+    let luminance = 0.299 * f64::from(r) + 0.587 * f64::from(g) + 0.114 * f64::from(b);
+    let gray = if is_dark {
+        if luminance < 10.0 { 180.0 } else { (160.0 + luminance * 0.3).floor().min(200.0) }
+    } else if luminance > 245.0 {
+        75.0
+    } else {
+        (100.0 - (255.0 - luminance) * 0.2).floor().max(60.0)
+    } as u8;
+    Rgba::from_ints(gray, gray, gray, 255)
+}
+
+/// `generateSystem` (theme/system.ts): derive a v1-shaped theme from
+/// the terminal palette — background/foreground fall back to palette
+/// slots 0/7, missing palette entries fall back to the ANSI table
+/// (`ansiToRgba`), and the migrated document is produced through the
+/// same `migrateV1` pipeline every v1 theme takes
+/// (`theme/index.ts parseTheme`).
+#[must_use]
+pub fn generate_system(colors: &TerminalColors, mode: Mode) -> Option<ThemeDocument> {
+    let bg_hex = colors.default_background.clone().or_else(|| colors.palette.first().cloned().flatten())?;
+    let fg_hex = colors
+        .default_foreground
+        .clone()
+        .or_else(|| colors.palette.get(7).cloned().flatten())?;
+    let bg = Rgba::from_hex(&bg_hex)?;
+    let fg = Rgba::from_hex(&fg_hex)?;
+    let is_dark = mode == Mode::Dark;
+
+    // `col(index)`: palette entry when present, else the ANSI table.
+    let col = |index: usize| -> Rgba {
+        colors
+            .palette
+            .get(index)
+            .and_then(|value| value.as_deref())
+            .and_then(Rgba::from_hex)
+            .unwrap_or_else(|| oc_theme::v1::ansi(index as i64))
+    };
+
+    let grays = generate_gray_scale(bg, is_dark);
+    let text_muted = generate_muted_text_color(bg, is_dark);
+    let red = col(1);
+    let green = col(2);
+    let yellow = col(3);
+    let blue = col(4);
+    let magenta = col(5);
+    let cyan = col(6);
+    let red_bright = col(9);
+    let green_bright = col(10);
+
+    let diff_alpha = if is_dark { 0.22 } else { 0.14 };
+    let diff_added_bg = tint(bg, green, diff_alpha);
+    let diff_removed_bg = tint(bg, red, diff_alpha);
+    let diff_context_bg = grays[2];
+    let diff_added_line_number_bg = tint(diff_context_bg, green, diff_alpha);
+    let diff_removed_line_number_bg = tint(diff_context_bg, red, diff_alpha);
+
+    let hex = |color: Rgba| serde_json::json!(color.hex());
+    let mut theme = serde_json::Map::new();
+    theme.insert("primary".into(), hex(cyan));
+    theme.insert("secondary".into(), hex(magenta));
+    theme.insert("accent".into(), hex(cyan));
+    theme.insert("error".into(), hex(red));
+    theme.insert("warning".into(), hex(yellow));
+    theme.insert("success".into(), hex(green));
+    theme.insert("info".into(), hex(cyan));
+    theme.insert("text".into(), hex(fg));
+    theme.insert("textMuted".into(), hex(text_muted));
+    theme.insert("selectedListItemText".into(), hex(bg));
+    // The ref keeps the terminal background: alpha 0.
+    theme.insert("background".into(), serde_json::json!("transparent"));
+    theme.insert("backgroundPanel".into(), hex(grays[2]));
+    theme.insert("backgroundElement".into(), hex(grays[3]));
+    theme.insert("backgroundMenu".into(), hex(grays[3]));
+    theme.insert("borderSubtle".into(), hex(grays[6]));
+    theme.insert("border".into(), hex(grays[7]));
+    theme.insert("borderActive".into(), hex(grays[8]));
+    theme.insert("diffAdded".into(), hex(green));
+    theme.insert("diffRemoved".into(), hex(red));
+    theme.insert("diffContext".into(), hex(grays[7]));
+    theme.insert("diffHunkHeader".into(), hex(grays[7]));
+    theme.insert("diffHighlightAdded".into(), hex(green_bright));
+    theme.insert("diffHighlightRemoved".into(), hex(red_bright));
+    theme.insert("diffAddedBg".into(), hex(diff_added_bg));
+    theme.insert("diffRemovedBg".into(), hex(diff_removed_bg));
+    theme.insert("diffContextBg".into(), hex(diff_context_bg));
+    theme.insert("diffLineNumber".into(), hex(text_muted));
+    theme.insert("diffAddedLineNumberBg".into(), hex(diff_added_line_number_bg));
+    theme.insert("diffRemovedLineNumberBg".into(), hex(diff_removed_line_number_bg));
+    theme.insert("markdownText".into(), hex(fg));
+    theme.insert("markdownHeading".into(), hex(fg));
+    theme.insert("markdownLink".into(), hex(blue));
+    theme.insert("markdownLinkText".into(), hex(cyan));
+    theme.insert("markdownCode".into(), hex(green));
+    theme.insert("markdownBlockQuote".into(), hex(yellow));
+    theme.insert("markdownEmph".into(), hex(yellow));
+    theme.insert("markdownStrong".into(), hex(fg));
+    theme.insert("markdownHorizontalRule".into(), hex(grays[7]));
+    theme.insert("markdownListItem".into(), hex(blue));
+    theme.insert("markdownListEnumeration".into(), hex(cyan));
+    theme.insert("markdownImage".into(), hex(blue));
+    theme.insert("markdownImageText".into(), hex(cyan));
+    theme.insert("markdownCodeBlock".into(), hex(fg));
+    theme.insert("syntaxComment".into(), hex(text_muted));
+    theme.insert("syntaxKeyword".into(), hex(magenta));
+    theme.insert("syntaxFunction".into(), hex(blue));
+    theme.insert("syntaxVariable".into(), hex(fg));
+    theme.insert("syntaxString".into(), hex(green));
+    theme.insert("syntaxNumber".into(), hex(yellow));
+    theme.insert("syntaxType".into(), hex(cyan));
+    theme.insert("syntaxOperator".into(), hex(cyan));
+    theme.insert("syntaxPunctuation".into(), hex(fg));
+
+    let document = serde_json::json!({
+        "$schema": "https://opencode.ai/theme.json",
+        "theme": theme,
+    });
+    migrate_v1(&document).ok()
+}
+
+impl ThemeRegistry {
+    /// `setSystemTheme(generateSystem(colors, mode))`: replace the
+    /// `system` slot with the palette-derived theme (a failed
+    /// derivation keeps the previous slot).
+    pub fn set_system_theme(&mut self, colors: &TerminalColors, mode: Mode) -> bool {
+        let Some(document) = generate_system(colors, mode) else { return false };
+        self.insert(RegistryTheme {
+            name: "system".to_string(),
+            document,
+            origin: ThemeOrigin::System,
+        });
+        true
+    }
+}
+
 // -- system mode (theme/system.ts terminalMode) -------------------------------
 //
 // Lane B3a — the self-managed probe family RETIRED: the boot queries
@@ -726,3 +922,99 @@ fn nord_resolves_the_new_token_family() {
     // The jump row's info token already existed (SURF-1); it stays.
     assert_ne!(a.info, b.info);
 }
+
+// -- G-210: generateSystem (palette -> system theme derivation) ----------------
+
+#[cfg(test)]
+mod generate_system_tests {
+    use super::*;
+
+    fn sample_colors() -> TerminalColors {
+        let mut palette = vec![None; 16];
+        palette[0] = Some("#282828".into());
+        palette[1] = Some("#cc241d".into());
+        palette[2] = Some("#98971a".into());
+        palette[3] = Some("#d79921".into());
+        palette[4] = Some("#458588".into());
+        palette[5] = Some("#b16286".into());
+        palette[6] = Some("#689d6a".into());
+        palette[7] = Some("#ebdbb2".into());
+        palette[9] = Some("#fb4934".into());
+        palette[10] = Some("#b8bb26".into());
+        TerminalColors {
+            default_background: Some("#282828".into()),
+            default_foreground: Some("#ebdbb2".into()),
+            palette,
+        }
+    }
+
+    fn resolved(colors: &TerminalColors, mode: Mode) -> oc_theme::types::ResolvedTheme {
+        let document = generate_system(colors, mode).expect("derives");
+        resolve_theme_document(&document, Some(mode)).expect("resolves")
+    }
+
+    #[test]
+    fn derives_the_ref_equivalent_token_values() {
+        let theme = resolved(&sample_colors(), Mode::Dark);
+        let hex = |color: Rgba| color.hex();
+        // ANSI-slot semantics: primary/accent/info = palette cyan, ...
+        assert_eq!(hex(theme.tokens.syntax.keyword), "#b16286"); // magenta (slot 5)
+        assert_eq!(hex(theme.tokens.syntax.number), "#d79921"); // yellow (slot 3)
+        assert_eq!(hex(theme.tokens.markdown.link), "#458588"); // blue (slot 4)
+        assert_eq!(hex(theme.tokens.markdown.emphasis), "#d79921");
+        assert_eq!(hex(theme.tokens.markdown.text), "#ebdbb2"); // foreground
+        // Gray scale stepping 40% from the #282828 background.
+        assert_eq!(hex(theme.tokens.border.base), "#5a5a5a"); // grays[7]
+        assert_eq!(hex(theme.tokens.background.raised.base), "#363636"); // grays[2] panel
+        assert_eq!(theme.tokens.background.base.a, 0); // ref keeps the terminal bg
+        // Muted text: floor(160 + 40 * 0.3) = 172.
+        assert_eq!(hex(theme.tokens.text.muted), "#acacac");
+        // Diff tinting at the dark 0.22 alpha.
+        assert_eq!(hex(theme.tokens.diff.background.added), "#414025");
+        assert_eq!(hex(theme.tokens.diff.background.removed), "#4c2726");
+        assert_eq!(hex(theme.tokens.diff.background.context), "#363636");
+        assert_eq!(
+            hex(theme.tokens.diff.line_number.background.added),
+            "#4c4b30"
+        );
+        assert_eq!(hex(theme.tokens.diff.highlight.added), "#b8bb26"); // greenBright
+    }
+
+    #[test]
+    fn missing_palette_entries_fall_back_to_the_ansi_table() {
+        let mut colors = sample_colors();
+        // Only the background/foreground survive; everything else drops
+        // to `ansiToRgba(index)`.
+        colors.palette = vec![Some("#282828".into()), None, None, None, None, None, None,
+            Some("#ebdbb2".into())];
+        let theme = resolved(&colors, Mode::Dark);
+        let hex = |color: Rgba| color.hex();
+        assert_eq!(hex(theme.tokens.syntax.keyword), "#800080"); // ansi(5)
+        assert_eq!(hex(theme.tokens.diff.text.removed), "#800000"); // ansi(1)
+        assert_eq!(hex(theme.tokens.syntax.string), "#008000"); // ansi(2)
+    }
+
+    #[test]
+    fn a_missing_background_is_underivable() {
+        let colors = TerminalColors::default();
+        assert!(generate_system(&colors, Mode::Dark).is_none());
+    }
+
+    #[test]
+    fn registry_system_slot_takes_the_generated_theme() {
+        let mut registry = ThemeRegistry::builtins();
+        assert!(registry.set_system_theme(&sample_colors(), Mode::Dark));
+        let state = registry.resolve("system", Mode::Dark).expect("system resolves");
+        let theme = resolve_theme_document(state.document(), Some(Mode::Dark)).expect("resolves");
+        assert_eq!(theme.tokens.syntax.keyword.hex(), "#b16286");
+        // Without palette information the slot keeps its fallback.
+        let mut bare = ThemeRegistry::builtins();
+        assert!(!bare.set_system_theme(&TerminalColors::default(), Mode::Dark));
+        let fallback = bare.resolve("system", Mode::Dark).expect("fallback resolves");
+        assert_ne!(
+            resolve_theme_document(fallback.document(), Some(Mode::Dark)).unwrap().tokens.syntax.keyword,
+            Rgba::from_hex("#b16286").unwrap()
+        );
+    }
+}
+
