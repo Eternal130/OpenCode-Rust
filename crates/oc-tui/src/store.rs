@@ -15884,6 +15884,155 @@ fn shell_output_viewer_poll_targets_topmost_dialog() {
     assert_eq!(store.active_shell_output_viewer(), None, "closed viewer stops polling");
 }
 
+/// G-184 — the INLINE shell stream's cursor incrementality and the
+/// 1MiB display limit/omission marker (`loadBackgroundOutput`,
+/// session/index.tsx:2836-2889).
+#[test]
+fn inline_shell_stream_is_cursor_incremental_with_the_1mib_marker() {
+    let mut stream = InlineShellStream::default();
+    // Incremental pages append at the cursor, monotonically.
+    stream.ingest("hello ", 6);
+    stream.ingest("world", 11);
+    assert_eq!(stream.cursor, 11);
+    assert_eq!(stream.output, "hello world");
+    assert!(!stream.truncated);
+    assert_eq!(stream.display(), "hello world");
+    // A stale page (cursor below) never rewinds.
+    stream.ingest("", 4);
+    assert_eq!(stream.cursor, 11);
+
+    // Past the 1MiB display limit the TAIL stays, the marker appears.
+    let big = "x".repeat(SHELL_DISPLAY_LIMIT);
+    stream.ingest(&big, 1_000_000);
+    assert!(stream.truncated);
+    assert_eq!(stream.output.chars().count(), SHELL_DISPLAY_LIMIT);
+    assert_eq!(
+        stream.display(),
+        format!("[earlier output omitted]\n{}", "x".repeat(SHELL_DISPLAY_LIMIT))
+    );
+
+    // The store seam: ingest/display by shell id.
+    let store = Store::new(Runtime::new());
+    store.inline_shell_ingest("sh_1", "page one ", 9);
+    store.inline_shell_ingest("sh_1", "page two", 18);
+    assert_eq!(
+        store.inline_shell_display("sh_1").as_deref(),
+        Some("page one page two"),
+        "the pages concatenated at the cursor"
+    );
+    assert_eq!(store.inline_shell_display("sh_missing"), None);
+    // The live map carries the display text for the render options.
+    assert_eq!(
+        store.inline_shell_live_map().get("sh_1").map(String::as_str),
+        Some("page one page two")
+    );
+}
+
+/// G-184 — the 1s poll target set: a RUNNING shell tool part with
+/// `metadata.shellID` polls from its stream's cursor; settled parts
+/// (and parts without a shell id) never do.
+#[test]
+fn inline_shell_targets_cover_only_running_shell_parts() {
+    use crate::components::message::model::{
+        Message, Part, PartTime, ToolState, ToolStatus,
+    };
+    let store = Store::new(Runtime::new());
+    let tool = |id: &str, name: &str, status: ToolStatus, shell: Option<&str>| Part::Tool {
+        id: id.into(),
+        name: name.into(),
+        time: PartTime::default(),
+        state: ToolState {
+            status,
+            metadata: shell
+                .map(|shell| [("shellID".to_owned(), shell.to_owned())].into_iter().collect())
+                .unwrap_or_default(),
+            ..ToolState::default()
+        },
+    };
+    store.set_messages(
+        "s1",
+        vec![Message::Assistant {
+            id: "a1".into(),
+            agent: "build".into(),
+            model: "m".into(),
+            parts: vec![
+                tool("t-run", "bash", ToolStatus::Running, Some("sh_run")),
+                tool("t-bg", "bash", ToolStatus::Completed, Some("sh_bg")),
+                tool("t-done", "bash", ToolStatus::Completed, Some("sh_done")),
+                tool("t-noid", "bash", ToolStatus::Running, None),
+                tool("t-grep", "grep", ToolStatus::Running, Some("sh_grep")),
+            ],
+            finish: None,
+            error: None,
+            time: PartTime::default(),
+            tokens: None,
+            usage_total: None,
+            cache_read: None,
+            retry: None,
+        }],
+    );
+    // The completed part with metadata.status running is the
+    // background arm (backgroundRunning) — poll it too.
+    store.update_messages("s1", |messages| {
+        if let Some(Message::Assistant { parts, .. }) = messages.iter_mut().next() {
+            if let Some(Part::Tool { state, .. }) =
+                parts.iter_mut().find(|part| matches!(part, Part::Tool { id, .. } if id == "t-bg"))
+            {
+                state.metadata.insert("status".to_owned(), "running".to_owned());
+            }
+        }
+    });
+    // Settle the completed part with output — it must not poll.
+    let mut targets = store.inline_shell_targets();
+    targets.sort();
+    let mut expected = vec![("sh_run".to_owned(), 0), ("sh_bg".to_owned(), 0)];
+    expected.sort();
+    assert_eq!(targets, expected, "only running shell parts with a shellID poll");
+    // The cursor advances with the stream.
+    store.inline_shell_ingest("sh_run", "chunk", 5);
+    let mut targets = store.inline_shell_targets();
+    targets.sort();
+    assert_eq!(targets, vec![("sh_bg".to_owned(), 0), ("sh_run".to_owned(), 5)]);
+}
+
+/// G-188 — `pendingPermissions()` (rows.ts:102-107): the session's
+/// permission requests with a TOOL source name the blocked part ids.
+#[test]
+fn pending_permission_part_ids_read_the_tool_source() {
+    use crate::components::footer::state::{PermissionRequest, PermissionToolSource};
+    let store = Store::new(Runtime::new());
+    store.footer.update(|footer| {
+        footer.permission_asked(PermissionRequest {
+            id: "p1".into(),
+            session_id: "s1".into(),
+            action: "bash".into(),
+            source: Some(PermissionToolSource {
+                id: "tsk_1".into(),
+                message_id: "msg_1".into(),
+            }),
+            ..PermissionRequest::default()
+        });
+        footer.permission_asked(PermissionRequest {
+            id: "p2".into(),
+            session_id: "s1".into(),
+            action: "read".into(),
+            ..PermissionRequest::default()
+        });
+        footer.permission_asked(PermissionRequest {
+            id: "p3".into(),
+            session_id: "s2".into(),
+            action: "bash".into(),
+            source: Some(PermissionToolSource { id: "tsk_2".into(), message_id: String::new() }),
+            ..PermissionRequest::default()
+        });
+    });
+    let pending = store.pending_permission_part_ids("s1");
+    assert_eq!(pending, ["tsk_1".to_owned()].into_iter().collect());
+    // A replied permission drops out.
+    store.permission_replied("p1");
+    assert!(store.pending_permission_part_ids("s1").is_empty());
+}
+
 // -- G-128: the animation pump + the rail width spring ------------------------
 
 #[cfg(test)]
