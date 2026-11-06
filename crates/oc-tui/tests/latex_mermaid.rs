@@ -78,7 +78,10 @@ fn renders_mermaid_state_code_block_as_ascii_diagram() {
     assert!(text.contains("submit"), "transition label missing: {text}");
     assert!(text.contains('●'), "start marker missing: {text}");
     assert!(text.contains('◎'), "end marker missing: {text}");
-    assert!(text.contains('▶'), "arrowhead missing: {text}");
+    // G-179: the seam now passes the render width through
+    // (`Math.min(configured, ctx.width)`), so this LR diagram folds
+    // vertical inside a 40-column context and the arrows point down.
+    assert!(text.contains('▼'), "arrowhead missing: {text}");
     // The raw source must NOT render.
     assert!(!text.contains("stateDiagram-v2"), "raw source leaked: {text}");
 }
@@ -150,3 +153,5 @@ fn broken_mermaid_syntax_falls_back_to_the_plain_code_block() {
         "fallback code block missing: {rows:?}"
     );
 }
+
+

@@ -110,13 +110,88 @@ pub fn render_mermaid_block(
     palette: &OpenCodeDiagramPalette,
     options: &MermaidRenderOptions,
 ) -> Option<RenderedDiagram> {
+    let mut empty = MermaidLastGoodCache::default();
+    render_mermaid_block_with_recovery(content, palette, options, None, &mut empty)
+}
+
+/// `createMermaidCodeBlockRenderer`'s `lastGood` map: the last
+/// successfully prepared diagram per fence key, reused while a
+/// streaming update is mid-syntax-error (`markdown.ts`).
+#[derive(Debug, Default)]
+pub struct MermaidLastGoodCache {
+    last_good: std::collections::HashMap<String, RenderedDiagram>,
+}
+
+impl MermaidLastGoodCache {
+    /// Drop a fence's entry (ref deletes the claim when the owner
+    /// renderable is destroyed — a fence that no longer parses as the
+    /// same diagram releases its slot).
+    pub fn remove(&mut self, key: &str) {
+        self.last_good.remove(key);
+    }
+}
+
+fn diagram_has_height(diagram: &RenderedDiagram) -> bool {
+    diagram.rows.iter().any(|row| !row.is_empty())
+}
+
+/// The markdown seam's full renderer closure (`markdown.ts
+/// createMermaidCodeBlockRenderer`): happy path caches into `lastGood`;
+/// on a syntax error a same-kind previous good diagram is replayed,
+/// otherwise a truncated-source retry runs when the source is a
+/// partial stream (error line > 2 with only blank lines after it).
+/// `None` = fall back to the default code render (upstream's
+/// `return undefined`).
+pub fn render_mermaid_block_with_recovery(
+    content: &str,
+    palette: &OpenCodeDiagramPalette,
+    options: &MermaidRenderOptions,
+    key: Option<&str>,
+    last_good: &mut MermaidLastGoodCache,
+) -> Option<RenderedDiagram> {
     let kind = detect_mermaid_diagram(content)?;
     let configured_max = options.layout_max_width.map(|width| 1.max(width)).unwrap_or(120);
     let layout_max_width = match options.context_width {
         Some(context_width) => configured_max.min(1.max(context_width)),
         None => configured_max,
     };
-    prepare_diagram(kind, content, palette, options, layout_max_width).ok()
+    match prepare_diagram(kind, content, palette, options, layout_max_width) {
+        Ok(prepared) => {
+            if let Some(key) = key {
+                last_good.last_good.insert(key.to_string(), prepared.clone());
+            }
+            Some(prepared)
+        }
+        Err(MermaidError::Syntax(error)) => {
+            let previous = key.and_then(|key| last_good.last_good.get(key)).cloned();
+            if let Some(previous) = previous {
+                if previous.kind == kind {
+                    return Some(previous);
+                }
+            }
+
+            let lines: Vec<&str> = content.split('\n').collect();
+            if error.line_number <= 2
+                || lines.get(error.line_number..).is_some_and(|tail| {
+                    tail.iter().any(|line| !line.trim().is_empty())
+                })
+            {
+                return None;
+            }
+
+            let truncated = lines[..error.line_number - 1].join("\n");
+            match prepare_diagram(kind, &truncated, palette, options, layout_max_width) {
+                Ok(prepared) if diagram_has_height(&prepared) => {
+                    if let Some(key) = key {
+                        last_good.last_good.insert(key.to_string(), prepared.clone());
+                    }
+                    Some(prepared)
+                }
+                _ => None,
+            }
+        }
+        Err(MermaidError::Unsupported) => None,
+    }
 }
 
 fn prepare_diagram(
@@ -252,17 +327,18 @@ fn styled_rows_trim_bottom<S: Copy + PartialEq>(
 /// `MermaidSyntaxError` + `DiagramCanvasSizeError` and returns `undefined`).
 enum MermaidError {
     Unsupported,
-}
-
-impl From<MermaidSyntaxError> for MermaidError {
-    fn from(_: MermaidSyntaxError) -> Self {
-        Self::Unsupported
-    }
+    Syntax(MermaidSyntaxError),
 }
 
 impl From<CanvasSizeError> for MermaidError {
     fn from(_: CanvasSizeError) -> Self {
         Self::Unsupported
+    }
+}
+
+impl From<MermaidSyntaxError> for MermaidError {
+    fn from(error: MermaidSyntaxError) -> Self {
+        Self::Syntax(error)
     }
 }
 
