@@ -648,8 +648,79 @@ pub fn settle(output: SubagentOutput) -> ToolRunResult {
     }
 }
 
-/// Installs the tool into a tool registry (the `editor.add` line).
-pub fn register(registry: &ToolRegistryState, tool: Arc<SubagentTool>) {
-    registry.register(SubagentTool::registration());
-    registry.register_executor(NAME, tool);
+/// The pipeline leaf adapter (G-191): the raw executor keeps its
+/// behavior, but the pipeline wrapper (before/after hooks, decodeInput,
+/// normalizeContent) now runs around it — ref registers subagent via
+/// `editor.add` (subagent.ts:102), i.e. the unified tool pipeline.
+#[async_trait::async_trait]
+impl super::ToolExecuteWithContext for SubagentTool {
+    fn execute<'a>(
+        &'a self,
+        _services: &'a super::ToolServices,
+        input: &'a serde_json::Value,
+        context: &'a ToolCallContext,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<super::ToolOutcome, super::ToolFailure>,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            ToolExecute::execute_with_context(self, input, context)
+                .await
+                .map(|result| super::ToolOutcome {
+                    content: result.content,
+                    metadata: result.metadata,
+                    output: result.output,
+                })
+                .map_err(run_failure_to_failure)
+        })
+    }
+}
+
+/// `ToolRunFailure` → the leaf `ToolFailure` taxonomy (keeps the
+/// pipeline's decline/permission classification intact).
+pub fn run_failure_to_failure(failure: ToolRunFailure) -> super::ToolFailure {
+    match failure {
+        ToolRunFailure::Error { message, .. } => {
+            super::ToolFailure { message, cause: None }
+        }
+        ToolRunFailure::PermissionRejected { message, .. } => super::ToolFailure {
+            cause: Some(super::FailureCause::Permission { message: message.clone() }),
+            message,
+        },
+        ToolRunFailure::Declined { message } => super::ToolFailure {
+            cause: Some(super::FailureCause::Declined { message: message.clone() }),
+            message,
+        },
+    }
+}
+
+/// The `BuiltinTool` shape (G-191): the same registration fields
+/// [`SubagentTool::registration`] carries, for the pipeline register.
+#[must_use]
+pub fn builtin(tool: Arc<SubagentTool>) -> super::BuiltinTool {
+    super::BuiltinTool {
+        name: NAME,
+        description: DESCRIPTION.to_string(),
+        input: input_schema(),
+        permission: Some(NAME),
+        codemode: false,
+        namespace: None,
+        execute: tool,
+    }
+}
+
+/// Installs the tool into a tool registry through the standard
+/// pipeline (G-191 — ref subagent.ts:102 `editor.add`, i.e.
+/// `tool.ts:150` executeTool with hooks/decode/normalizeContent).
+pub fn register(
+    registry: &ToolRegistryState,
+    hooks: &std::sync::Arc<crate::hooks::HookRegistry>,
+    services: &std::sync::Arc<super::ToolServices>,
+    tool: Arc<SubagentTool>,
+) -> Result<(), String> {
+    super::register_builtin(registry, hooks, services, builtin(tool))
 }

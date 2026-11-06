@@ -879,3 +879,89 @@ async fn subagent_tool_no_text_fallback() {
 }
 
 // probe appended temporarily into tests_subagent.rs
+
+/// G-191 — the subagent tool registers through the unified pipeline
+/// (ref subagent.ts:102 `editor.add` → tool.ts:150 executeTool):
+/// `tool.execute.before`/`after` fire around the leaf and decodeInput
+/// rejects a bad shape with the ref message before the leaf runs.
+#[tokio::test]
+async fn g191_subagent_tool_runs_through_the_pipeline() {
+    let sub = harness().await;
+    install_harness_setup(&sub);
+    let reg = crate::tool::tests::harness().await;
+    let hooks = std::sync::Arc::new(crate::hooks::HookRegistry::new());
+    crate::tool::subagent::register(
+        &reg.tools,
+        &hooks,
+        &reg.services,
+        std::sync::Arc::new(sub.tool),
+    )
+    .expect("register subagent");
+
+    let seen = std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let before_seen = std::sync::Arc::clone(&seen);
+    let scope = crate::hooks::HookScope::new();
+    scope.track(
+        hooks
+            .register_tool_execute_before(
+                crate::hooks::fn_hook(
+                    move |event: &mut crate::hooks::ToolExecuteBeforeEvent| {
+                        before_seen.lock().push(format!("before:{}", event.tool));
+                        Ok(())
+                    },
+                ),
+                crate::hooks::HookOptions::default(),
+            )
+            .await,
+    );
+    let after_seen = std::sync::Arc::clone(&seen);
+    scope.track(
+        hooks
+            .register_tool_execute_after(
+                crate::hooks::fn_hook(
+                    move |event: &mut crate::hooks::ToolExecuteAfterEvent| {
+                        let phase = match event.outcome {
+                            crate::hooks::ToolOutcome::Completed { .. } => "after",
+                            crate::hooks::ToolOutcome::Error { .. } => "after-error",
+                        };
+                        after_seen.lock().push(format!("{phase}:{}", event.tool));
+                        Ok(())
+                    },
+                ),
+                crate::hooks::HookOptions::default(),
+            )
+            .await,
+    );
+
+    // decodeInput: an unknown agent id (not a string enum member... it is
+    // a string) — instead break the shape: agent must be a string.
+    let failure = crate::tool::tests::call(
+        &reg.tools,
+        "subagent",
+        json!({ "agent": 123, "description": "d", "prompt": "p" }),
+    )
+    .await
+    .expect_err("decode rejects");
+    assert!(
+        failure.message().contains("Invalid arguments"),
+        "decode message: {}",
+        failure.message()
+    );
+
+    // Error leg through the leaf (parent session unknown): both hooks
+    // observe the call.
+    let failure = crate::tool::tests::call(
+        &reg.tools,
+        "subagent",
+        json!({ "agent": "reviewer", "description": "d", "prompt": "p" }),
+    )
+    .await
+    .expect_err("parent session missing");
+    assert!(failure.message().contains("Parent session not found"), "got: {}", failure.message());
+
+    let observed = seen.lock().clone();
+    assert_eq!(
+        observed,
+        vec!["before:subagent".to_string(), "before:subagent".to_string(), "after-error:subagent".to_string()]
+    );
+}

@@ -2267,13 +2267,17 @@ fn opencode_plugin(inputs: &Arc<PluginInputs>) -> InternalPlugin {
 
 fn mcp_resource_plugin(inputs: &Arc<PluginInputs>) -> InternalPlugin {
     let inputs = Arc::clone(inputs);
-    InternalPlugin::new("opencode.tool.mcp-resource", move |_hooks, ports| {
+    InternalPlugin::new("opencode.tool.mcp-resource", move |hooks, ports| {
+        // G-191: the mcp-resource tools register through the standard
+        // pipeline (hooks + decodeInput + normalizeContent), matching
+        // ref's `editor.add` registration (mcp-resource.ts:17,49).
         crate::tool::mcp_resource::register(
             ports.tools,
+            hooks,
+            &inputs.tool_services,
             inputs.mcp.clone(),
             inputs.permission.clone(),
-        );
-        Ok(())
+        )
     })
 }
 
@@ -2448,10 +2452,15 @@ fn subagent_plugin(inputs: &Arc<PluginInputs>) -> InternalPlugin {
             )),
             interrupt: None,
         };
+        // G-191: the subagent tool registers through the standard
+        // pipeline (hooks + decodeInput + normalizeContent), matching
+        // ref's `editor.add` registration (subagent.ts:102).
         crate::tool::subagent::register(
             ports.tools,
+            hooks,
+            &inputs.tool_services,
             Arc::new(crate::tool::subagent::SubagentTool::new(deps)),
-        );
+        )?;
         // The `Available subagents` description hook (subagent.ts:282-306):
         // the selected agent's context lists the subagent-eligible,
         // non-hidden, not-denied agents (sorted by id) under the
