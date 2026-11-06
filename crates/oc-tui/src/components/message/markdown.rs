@@ -204,8 +204,13 @@ pub fn render_markdown(source: &str, width: usize, styles: &MarkdownStyles) -> V
     source.clone_into(&mut options.content);
     let blocks = build_markdown_blocks(&options, &styles.syntax);
     let mut lines = Vec::new();
+    // Fence ordinals are stable across streaming updates of the same
+    // document (blocks parse identically while a trailing fence grows),
+    // so they key the mermaid seam's `lastGood` map (ref keys on the
+    // renderable id).
+    let mut fence_counter = 0usize;
     for spec in &blocks {
-        render_spec(spec, width, 0, styles, &mut lines);
+        render_spec(spec, width, 0, styles, &mut lines, &mut fence_counter);
     }
     lines
 }
@@ -217,6 +222,7 @@ fn render_spec(
     indent: usize,
     styles: &MarkdownStyles,
     lines: &mut Vec<MarkdownLine>,
+    fence_counter: &mut usize,
 ) {
     let content_width = width.saturating_sub(indent).max(1);
     match spec {
@@ -242,6 +248,8 @@ fn render_spec(
             // parse (upstream returns the defaultRender()).
             let content = &options.content;
             let filetype = options.filetype.as_deref();
+            let fence_key = format!("fence:{}", *fence_counter);
+            *fence_counter += 1;
             if matches!(filetype, Some("latex" | "math")) {
                 if let Some(rows) = render_latex_block(content, styles) {
                     lines.extend(rows);
@@ -250,11 +258,16 @@ fn render_spec(
                 }
             }
             if matches!(filetype, Some("mermaid")) {
-                if let Some(rows) = render_mermaid_block(content, styles) {
+                if let Some(rows) = render_mermaid_block(content, styles, content_width, &fence_key)
+                {
                     lines.extend(rows);
                     push_margins(*margin_bottom, lines);
                     return;
                 }
+            } else {
+                // A fence that is no longer a mermaid diagram releases
+                // its lastGood claim (ref deletes on destroy).
+                mermaid_last_good_with(|last_good| last_good.remove(&fence_key));
             }
             let fallback =
                 filetype.and_then(|ft| crate::components::syntax::highlight(content, ft));
@@ -282,7 +295,7 @@ fn render_spec(
         }
         BlockSpec::Blockquote { content, border_color, margin_bottom } => {
             let mut body = Vec::new();
-            render_spec(content, content_width.saturating_sub(2), 0, styles, &mut body);
+            render_spec(content, content_width.saturating_sub(2), 0, styles, &mut body, fence_counter);
             let border = border_color
                 .and_then(rgba_to_style_color)
                 .map_or(styles.quote_border, |color| styles.quote_border.fg(color));
@@ -308,7 +321,7 @@ fn render_spec(
             push_margins(*margin_bottom, lines);
         }
         BlockSpec::List { items, margin_bottom } => {
-            render_list(items, content_width, styles, lines);
+            render_list(items, content_width, styles, lines, fence_counter);
             push_margins(*margin_bottom, lines);
         }
         // `createTextTableRenderable` (G-177): a real grid table, not
@@ -399,6 +412,7 @@ fn render_list(
     width: usize,
     styles: &MarkdownStyles,
     lines: &mut Vec<MarkdownLine>,
+    fence_counter: &mut usize,
 ) {
     for item in items {
         let marker = chunk_span(&item.marker_chunk, styles);
@@ -408,7 +422,7 @@ fn render_list(
             if index > 0 && item.child_margins_top.get(index).is_some_and(|m| *m > 0) {
                 body.push(MarkdownLine(Vec::new()));
             }
-            render_spec(child, width.saturating_sub(marker_width), 0, styles, &mut body);
+            render_spec(child, width.saturating_sub(marker_width), 0, styles, &mut body, fence_counter);
         }
         for (row, line) in body.into_iter().enumerate() {
             let mut runs = Vec::new();
@@ -689,6 +703,20 @@ fn is_bold_math_glyph(char: &str) -> bool {
         || matches!(first, '\u{2260}' | '\u{2261}' | '\u{2264}' | '\u{2265}' | '\u{2248}')
 }
 
+/// The seam's per-thread `lastGood` map (ref keeps it on the renderer
+/// closure; the stateless render pipeline keeps it per thread).
+/// The seam's per-thread `lastGood` map (ref keeps it on the renderer
+/// closure; the stateless render pipeline keeps it per thread).
+fn mermaid_last_good_with<R>(
+    f: impl FnOnce(&mut crate::render::mermaid::MermaidLastGoodCache) -> R,
+) -> R {
+    thread_local! {
+        static LAST_GOOD: std::cell::RefCell<crate::render::mermaid::MermaidLastGoodCache> =
+            std::cell::RefCell::new(crate::render::mermaid::MermaidLastGoodCache::default());
+    }
+    LAST_GOOD.with_borrow_mut(f)
+}
+
 /// SURF-LATEX-MERMAID: the `mermaid` code-block renderer
 /// (`packages/merman/src/markdown.ts`, `createMermaidCodeBlockRenderer`).
 ///
@@ -699,7 +727,12 @@ fn is_bold_math_glyph(char: &str) -> bool {
 /// `ThemeStyles` exposes (the categorical accent steps approximate to
 /// `theme.accent` — the resolved categorical table is not exposed by
 /// `ThemeStyles`).
-fn render_mermaid_block(content: &str, styles: &MarkdownStyles) -> Option<Vec<MarkdownLine>> {
+fn render_mermaid_block(
+    content: &str,
+    styles: &MarkdownStyles,
+    content_width: usize,
+    fence_key: &str,
+) -> Option<Vec<MarkdownLine>> {
     let to_rgba = |color: Color| match color {
         Color::Rgb(r, g, b) => crate::render::mermaid::core::color::Rgba::from_ints(r, g, b, 255),
         _ => crate::render::mermaid::core::color::Rgba::from_ints(0, 0, 0, 255),
@@ -717,8 +750,19 @@ fn render_mermaid_block(content: &str, styles: &MarkdownStyles) -> Option<Vec<Ma
             accent_clear: accent,
         },
     );
-    let options = crate::render::mermaid::MermaidRenderOptions::default();
-    let diagram = crate::render::mermaid::render_mermaid_block(content, &palette, &options)?;
+    let options = crate::render::mermaid::MermaidRenderOptions {
+        context_width: Some(content_width as i64),
+        ..Default::default()
+    };
+    let diagram = mermaid_last_good_with(|last_good| {
+        crate::render::mermaid::render_mermaid_block_with_recovery(
+            content,
+            &palette,
+            &options,
+            Some(fence_key),
+            last_good,
+        )
+    })?;
 
     // marginTop: 1 (the v2 renderable's top margin).
     let mut rows = vec![MarkdownLine(Vec::new())];

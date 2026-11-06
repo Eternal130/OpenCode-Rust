@@ -566,3 +566,110 @@ fn merged_edge_cell_keeps_ref_arrowhead_precedence() {
     let incoming_arrow = Cell::build("▶", edge(), None);
     assert_eq!(merge_flowchart_cell(&existing_line, &incoming_arrow).text(), "▶");
 }
+
+// -- G-179: seam width wiring + streaming truncation recovery -----------------
+
+fn test_palette() -> super::palette::OpenCodeDiagramPalette {
+    let rgba = super::core::color::Rgba::from_ints;
+    super::palette::create_open_code_diagram_palette(&super::palette::OpenCodeDiagramPaletteInput {
+        text: rgba(220, 220, 220, 255),
+        subdued: rgba(140, 140, 140, 255),
+        info: rgba(100, 200, 255, 255),
+        success: rgba(120, 255, 140, 255),
+        warning: rgba(255, 200, 100, 255),
+        background: rgba(20, 20, 20, 255),
+        accent_soft: rgba(150, 150, 255, 255),
+        accent_clear: rgba(150, 150, 255, 255),
+    })
+}
+
+#[test]
+fn context_width_bounds_the_rendered_diagram() {
+    let palette = test_palette();
+    let source = "flowchart LR\n  Alpha[Long Start Node] --> Beta[Middle Node]\n  Beta --> Gamma[Long Tail Node]";
+    let wide = super::render_mermaid_block(
+        source,
+        &palette,
+        &super::MermaidRenderOptions { context_width: None, ..Default::default() },
+    )
+    .expect("unclamped render parses");
+    let clamped = super::render_mermaid_block(
+        source,
+        &palette,
+        &super::MermaidRenderOptions {
+            context_width: Some(30),
+            ..Default::default()
+        },
+    )
+    .expect("clamped render parses");
+    assert!(
+        clamped.rows.iter().any(|row| row.iter().map(|span| span.text.chars().count()).sum::<usize>() > 0),
+        "clamped render must produce rows"
+    );
+    let clamped_width =
+        clamped.rows.iter().map(|row| row.iter().map(|span| span.text.chars().count()).sum::<usize>()).max().unwrap_or(0);
+    let wide_width =
+        wide.rows.iter().map(|row| row.iter().map(|span| span.text.chars().count()).sum::<usize>()).max().unwrap_or(0);
+    assert!(clamped_width <= 30, "context width must bound the render: {clamped_width}");
+    assert!(wide_width > 30 || clamped_width < wide_width, "clamping should actually change the layout: wide={wide_width} clamped={clamped_width}");
+}
+
+#[test]
+fn truncated_partial_source_renders_instead_of_falling_back() {
+    let palette = test_palette();
+    let mut cache = super::MermaidLastGoodCache::default();
+    // A streaming-partial source: the trailing line is mid-statement and
+    // nothing follows it (error line > 2, blank remainder).
+    let partial = "flowchart TD\n  A --> B\n  B --";
+    let rendered = super::render_mermaid_block_with_recovery(
+        partial,
+        &palette,
+        &super::MermaidRenderOptions::default(),
+        Some("fence:0"),
+        &mut cache,
+    );
+    let Some(diagram) = rendered else {
+        panic!("truncated retry must render the parseable prefix");
+    };
+    let text = diagram.rows.iter().map(|row| row.iter().map(|span| span.text.as_str()).collect::<String>()).collect::<Vec<_>>().join("\n");
+    assert!(text.contains('A') && text.contains('B'), "prefix nodes must render: {text}");
+}
+
+#[test]
+fn last_good_diagram_is_replayed_during_a_broken_stream_update() {
+    let palette = test_palette();
+    let mut cache = super::MermaidLastGoodCache::default();
+    let good = super::render_mermaid_block_with_recovery(
+        "flowchart TD\n  A --> B",
+        &palette,
+        &super::MermaidRenderOptions::default(),
+        Some("fence:0"),
+        &mut cache,
+    )
+    .expect("good source renders");
+    // Mid-rewrite garbage: same kind, syntax error with a non-blank tail
+    // (retry refused) — the lastGood diagram must be replayed.
+    let broken = super::render_mermaid_block_with_recovery(
+        "flowchart TD\n  A --!-> ~~~garbage~~~",
+        &palette,
+        &super::MermaidRenderOptions::default(),
+        Some("fence:0"),
+        &mut cache,
+    )
+    .expect("lastGood must replay");
+    assert_eq!(good, broken);
+}
+
+#[test]
+fn unparseable_source_without_a_good_prefix_still_falls_back() {
+    let palette = test_palette();
+    let mut cache = super::MermaidLastGoodCache::default();
+    let rendered = super::render_mermaid_block_with_recovery(
+        "flowchart TD\n  A --!-> ??? broken tail that keeps going",
+        &palette,
+        &super::MermaidRenderOptions::default(),
+        Some("fence:9"),
+        &mut cache,
+    );
+    assert!(rendered.is_none(), "unparseable source must fall back to the code block");
+}
