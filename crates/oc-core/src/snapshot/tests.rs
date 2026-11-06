@@ -646,3 +646,69 @@ mod g30_config {
         assert!(diffs[0].patch.contains("über-file.txt"));
     }
 }
+
+/// G-198 — binary blobs (ref git.ts:560-573 numstat "-"): the diff
+/// carries `{additions: 0, deletions: 0, patch: ""}`, never a garbage
+/// text diff of lossy-decoded bytes.
+#[tokio::test]
+async fn g198_snapshot_diff_binary_file_yields_empty_patch_and_zero_counts() {
+    let (tmp, worktree, _) = temp_project();
+    std::fs::write(worktree.join("blob.bin"), b"\x00\x01\x02binary\x00payload").expect("write");
+    let service = store(tmp.path(), &worktree, ".");
+    let first = service.capture().await.expect("capture 1");
+    std::fs::write(worktree.join("blob.bin"), b"\x00\xff\xfedifferent\x00payload").expect("edit");
+    let second = service.capture().await.expect("capture 2");
+
+    let diffs = service.diff(&first, &second, None, None).await.expect("diff");
+    assert_eq!(diffs.len(), 1, "{diffs:?}");
+    let diff = &diffs[0];
+    assert_eq!(diff.file, "blob.bin");
+    assert_eq!(diff.patch, "");
+    assert_eq!(diff.additions, 0);
+    assert_eq!(diff.deletions, 0);
+}
+
+/// G-198 — `MAX_TOTAL_PATCH_BYTES` (vcs/patch.ts:11, ref git.ts:522-573):
+/// files past the cumulative 10MiB patch budget get the empty patch
+/// HEADER (real counts kept — numstat is independent of the cap).
+#[tokio::test]
+async fn g198_snapshot_diff_truncates_past_the_10mib_patch_budget() {
+    let (tmp, worktree, _) = temp_project();
+    let service = store(tmp.path(), &worktree, ".");
+
+    // 6 files just under the 2MiB untracked cap; a wholesale rewrite of
+    // each makes ~1.9MiB of patch per file — 6 together blow the 10MiB
+    // cumulative budget.
+    let block_a = "a\n".repeat(300_000);
+    let block_b = "b\n".repeat(300_000);
+    for index in 0..6 {
+        std::fs::write(worktree.join(format!("f{index}.txt")), &block_a).expect("write");
+    }
+    let first = service.capture().await.expect("capture 1");
+    for index in 0..6 {
+        std::fs::write(worktree.join(format!("f{index}.txt")), &block_b).expect("rewrite");
+    }
+    let second = service.capture().await.expect("capture 2");
+
+    let diffs = service.diff(&first, &second, None, None).await.expect("diff");
+    assert_eq!(diffs.len(), 6);
+    let total_included: usize =
+        diffs.iter().take(5).map(|diff| diff.patch.len()).sum::<usize>().max(1);
+    assert!(total_included <= crate::snapshot::MAX_TOTAL_PATCH_BYTES);
+    // The first five carry real patches…
+    for diff in &diffs[..5] {
+        assert!(diff.patch.len() > 1_500_000, "{}: {}", diff.file, diff.patch.len());
+        assert!(diff.additions > 0);
+    }
+    // …the sixth is past the budget: header-only patch, real counts.
+    let last = diffs.last().unwrap();
+    assert_eq!(
+        last.patch,
+        format!(
+            "Index: {}\n===================================================================\n--- {}\n+++ {}\n",
+            last.file, last.file, last.file
+        ),
+        "capped file gets the emptyPatch header"
+    );
+    assert!(last.additions > 0, "numstat counts survive the patch cap");
+}

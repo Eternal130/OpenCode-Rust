@@ -19,6 +19,10 @@ use super::repository::{
 /// `refreshInterval` — one day (repository-cache.ts:23).
 pub const REFRESH_INTERVAL_MS: i64 = 86_400_000;
 
+/// G-198 — the default shallow-clone depth (ref git.ts:250
+/// `String(input.depth ?? 100)`).
+pub const DEFAULT_CLONE_DEPTH: u32 = 100;
+
 /// `EnsureInput.refresh` — `daily` throttles existing checkouts, `true`
 /// forces a refresh, `false` only materializes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,6 +40,9 @@ pub struct EnsureInput {
     pub reference: RemoteReference,
     pub branch: Option<String>,
     pub refresh: Refresh,
+    /// `clone({depth})` (ref git.ts:246-258): shallow-clone depth,
+    /// defaulting to 100 exactly like the ref's `input.depth ?? 100`.
+    pub depth: Option<u32>,
 }
 
 /// `RepositoryCache.Result`.
@@ -239,11 +246,19 @@ impl RepositoryCache {
             self.store.set_attempted_at(&key, now);
 
             if status == "cloned" {
-                let mut args = vec!["clone".to_owned(), input.reference.remote.clone()];
+                // G-198 — ref git.ts:246-258: clones are shallow with
+                // `--depth (depth ?? 100)`.
+                let mut args = vec![
+                    "clone".to_owned(),
+                    "--depth".to_owned(),
+                    input.depth.unwrap_or(DEFAULT_CLONE_DEPTH).to_string(),
+                ];
                 if let Some(branch) = &input.branch {
                     args.push("--branch".to_owned());
                     args.push(branch.clone());
                 }
+                args.push("--".to_owned());
+                args.push(input.reference.remote.clone());
                 args.push(local_path.to_string_lossy().into_owned());
                 git(None, &args).map_err(|error| CacheError::CloneFailed {
                     repository: repository.clone(),

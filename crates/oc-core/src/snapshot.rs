@@ -80,6 +80,10 @@ use oc_schema::session_support::FileDiff;
 /// Untracked-file cap (`maximumUntrackedFileBytes`).
 pub const MAX_UNTRACKED_FILE_BYTES: u64 = 2 * 1024 * 1024;
 
+/// G-198 — `MAX_TOTAL_PATCH_BYTES` (vcs/patch.ts:11): the cumulative
+/// 10MiB patch budget for tree diffs (ref git.ts:522-573).
+pub const MAX_TOTAL_PATCH_BYTES: usize = 10_000_000;
+
 // ---------------------------------------------------------------------------
 // Hash.fast (SHA-1)
 // ---------------------------------------------------------------------------
@@ -436,6 +440,12 @@ impl GitSnapshotStore {
             paths.map(|paths| paths.iter().map(|p| p.0.clone()).collect());
         let changed = self.tree_diff_paths(&repo, from.as_str(), to.as_str())?;
         let mut diffs: Vec<FileDiff> = Vec::new();
+        // G-198 — `MAX_TOTAL_PATCH_BYTES` (vcs/patch.ts:11): the
+        // cumulative patch budget; files past the cap get an empty
+        // patch header (ref git.ts:522-573 treeDiff — the capped git
+        // diff output leaves their chunk missing → emptyPatch).
+        let mut total: usize = 0;
+        let mut capped = false;
         for path in changed {
             if let Some(selected) = &selected {
                 if !selected.contains(&path) {
@@ -449,6 +459,21 @@ impl GitSnapshotStore {
                 (Some(_), None) => oc_schema::session_support::FileDiffStatus::Deleted,
                 _ => oc_schema::session_support::FileDiffStatus::Modified,
             };
+            // G-198 — binary detection (ref's numstat "-"): a binary
+            // blob on either side yields `{additions: 0, deletions: 0,
+            // patch: ""}` (git.ts:560-573), never a garbage text diff.
+            let binary = blob_is_binary(&repo, &from_tree, &path)
+                || blob_is_binary(&repo, &to_tree, &path);
+            if binary {
+                diffs.push(FileDiff {
+                    file: path,
+                    patch: String::new(),
+                    additions: 0,
+                    deletions: 0,
+                    status,
+                });
+                continue;
+            }
             let diff = super::tool::file_diff::file_diff_ctx(
                 &path,
                 before.as_deref().unwrap_or(""),
@@ -456,6 +481,24 @@ impl GitSnapshotStore {
                 status,
                 context as usize,
             );
+            let diff = if capped {
+                // Past the budget: real counts (numstat side), empty
+                // patch header — ref `patches.get(file) ?? emptyPatch`.
+                FileDiff {
+                    patch: super::tool::file_diff::two_files_patch_ctx(&path, "", "", 0),
+                    ..diff
+                }
+            } else if total + diff.patch.len() > MAX_TOTAL_PATCH_BYTES {
+                capped = true;
+                FileDiff {
+                    patch: super::tool::file_diff::two_files_patch_ctx(&path, "", "", 0),
+                    ..diff
+                }
+            } else {
+                total += diff.patch.len();
+                capped = total >= MAX_TOTAL_PATCH_BYTES;
+                diff
+            };
             diffs.push(FileDiff { file: path, ..diff });
         }
         Ok(diffs)
@@ -585,6 +628,15 @@ fn blob_content(repo: &git2::Repository, tree: &git2::Tree<'_>, path: &str) -> O
     let entry = tree.get_path(Path::new(path)).ok()?;
     let blob = repo.find_blob(entry.id()).ok()?;
     Some(String::from_utf8_lossy(blob.content()).into_owned())
+}
+
+/// G-198 — whether the tree's blob at `path` is binary (git2's
+/// NUL-sniff, the same signal as `git diff --numstat` printing `-`).
+fn blob_is_binary(repo: &git2::Repository, tree: &git2::Tree<'_>, path: &str) -> bool {
+    tree.get_path(Path::new(path))
+        .ok()
+        .and_then(|entry| repo.find_blob(entry.id()).ok())
+        .is_some_and(|blob| blob.is_binary())
 }
 
 fn build_tree(
