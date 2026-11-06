@@ -365,7 +365,14 @@ async fn select_provider(
             .ask(crate::forms::NewForm {
                 session_id: session_id.to_string(),
                 title: "Web Search".into(),
-                metadata: None,
+                // G-192 — ref websearch.ts:78: the selection form carries
+                // `{kind: "websearch.provider"}`.
+                metadata: Some(
+                    serde_json::from_value(serde_json::json!({
+                        "kind": "websearch.provider",
+                    }))
+                    .unwrap_or_default(),
+                ),
                 fields: vec![oc_schema::form::Field::String {
                     key: "choice".into(),
                     title: None,
@@ -434,7 +441,15 @@ async fn select_provider(
                                 .ask(crate::forms::NewForm {
                                     session_id: session_id.to_string(),
                                     title: "Choose a web search provider".into(),
-                                    metadata: None,
+                                    // G-192 — ref websearch.ts:111: the
+                                    // choose-provider form carries the
+                                    // same kind metadata.
+                                    metadata: Some(
+                                        serde_json::from_value(serde_json::json!({
+                                            "kind": "websearch.provider",
+                                        }))
+                                        .unwrap_or_default(),
+                                    ),
                                     fields: vec![oc_schema::form::Field::String {
                                         key: "provider".into(),
                                         title: None,
@@ -651,6 +666,47 @@ fn iso8601(millis: u64) -> String {
 }
 
 /// The websearch builtin registration.
+/// G-192 — the websearch disable filter (ref websearch.ts:181-192):
+/// a `WebSearch.Disabled` selection deletes the `websearch` entry from
+/// the event's tool map on every context/compaction/generate hook (a
+/// disabled selection must reach the model's request tool list).
+pub struct DisableHook {
+    pub search: Arc<WebSearch>,
+}
+
+impl DisableHook {
+    async fn remove_if_disabled(
+        &self,
+        tools: &mut std::collections::BTreeMap<String, crate::hooks::ToolDescriptor>,
+    ) {
+        if matches!(self.search.default_provider().await, Err(WebSearchError::Disabled)) {
+            tools.remove("websearch");
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::hooks::HookHandler<crate::hooks::SessionContextEvent> for DisableHook {
+    async fn call(
+        &self,
+        event: &mut crate::hooks::SessionContextEvent,
+    ) -> Result<(), crate::hooks::HookError> {
+        self.remove_if_disabled(&mut event.tools).await;
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::hooks::HookHandler<crate::hooks::SessionCompactionEvent> for DisableHook {
+    async fn call(
+        &self,
+        event: &mut crate::hooks::SessionCompactionEvent,
+    ) -> Result<(), crate::hooks::HookError> {
+        self.remove_if_disabled(&mut event.context.tools).await;
+        Ok(())
+    }
+}
+
 pub fn tool(execute: Arc<WebSearchExecute>) -> BuiltinTool {
     BuiltinTool {
         name: "websearch",
@@ -885,4 +941,158 @@ mod tests {
         assert_eq!(message(Some(500)), "Web search request failed (HTTP 500)");
         assert_eq!(message(None), "Unable to search the web for q");
     }
+/// G-192 — both provider forms carry `{kind: "websearch.provider"}`
+/// (ref websearch.ts:78,111).
+#[tokio::test]
+async fn g192_selection_forms_carry_websearch_provider_kind() {
+    let search = Arc::new(service().await);
+    let forms = Forms::new(
+        Arc::new(oc_util::determinism::SequentialIdGen::new()),
+        Arc::new(oc_util::determinism::FixedClock::epoch()),
+    );
+    let asker_forms = forms.clone();
+    let asker_search = Arc::clone(&search);
+    let asker_lock = Arc::new(tokio::sync::Mutex::new(()));
+    let joined = tokio::spawn(async move {
+        select_provider(&asker_search, &asker_forms, &asker_lock, "ses_1").await
+    });
+
+    // First form: the allow/choose/disable selection.
+    let first = await_form(&forms).await;
+    assert_eq!(first.title, "Web Search");
+    assert_eq!(
+        first.metadata.as_ref().map(|record| serde_json::to_value(record).unwrap()),
+        Some(serde_json::json!({ "kind": "websearch.provider" })),
+        "selection form metadata: {:?}",
+        first.metadata
+    );
+    forms
+        .reply(
+            &first.id,
+            std::iter::once((
+                "choice".to_string(),
+                oc_schema::form::FormValue::String("choose".into()),
+            ))
+            .collect(),
+        )
+        .await
+        .expect("reply choose");
+
+    // Second form: the provider picker — same kind metadata.
+    let second = await_form(&forms).await;
+    assert_eq!(second.title, "Choose a web search provider");
+    assert_eq!(
+        second.metadata.as_ref().map(|record| serde_json::to_value(record).unwrap()),
+        Some(serde_json::json!({ "kind": "websearch.provider" })),
+        "choose form metadata: {:?}",
+        second.metadata
+    );
+    forms
+        .reply(
+            &second.id,
+            std::iter::once((
+                "provider".to_string(),
+                oc_schema::form::FormValue::String("exa".into()),
+            ))
+            .collect(),
+        )
+        .await
+        .expect("reply provider");
+
+    let provider = joined.await.expect("join").expect("provider chosen");
+    assert_eq!(provider.as_deref(), Some("exa"));
+}
+
+async fn await_form(forms: &Forms) -> oc_schema::form::Info {
+    for _ in 0..400 {
+        let pending = forms.list(Some("ses_1"));
+        if let Some(info) = pending.into_iter().last() {
+            return info;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    panic!("form never became pending");
+}
+
+/// G-192 — the disable filter hook (websearch.ts:181-192): a disabled
+/// selection removes the `websearch` tool from the context tool list;
+/// an enabled/unset selection keeps it.
+#[tokio::test]
+async fn g192_disabled_selection_removes_websearch_from_the_tool_list() {
+    use crate::hooks::{
+        HookHandler, HookOptions, HookRegistry, SessionContextEvent, ToolDescriptor,
+    };
+    use oc_schema::id::{AgentId, SessionId};
+    use oc_schema::model::Ref as ModelRef;
+
+    let search = Arc::new(service().await);
+    let hook = DisableHook { search: Arc::clone(&search) };
+
+    let mut event = SessionContextEvent {
+        session_id: SessionId::parse("ses_1").expect("session"),
+        agent: AgentId::parse("build"),
+        model: ModelRef {
+            id: oc_schema::id::ModelId::parse("m"),
+            provider_id: oc_schema::id::ProviderId::parse("test"),
+            variant: None,
+        },
+        system: vec![],
+        messages: vec![],
+        options: Default::default(),
+        tools: std::iter::once((
+            "websearch".to_string(),
+            ToolDescriptor { description: String::new(), input: serde_json::Value::Null },
+        ))
+        .collect(),
+    };
+    // Unset selection: the tool stays.
+    hook.call(&mut event).await.expect("hook");
+    assert!(event.tools.contains_key("websearch"));
+
+    // Disabled selection: the tool is removed (websearch.ts:189
+    // `delete event.tools[name]`).
+    search.select(&Selection::Disabled).await;
+    hook.call(&mut event).await.expect("hook");
+    assert!(!event.tools.contains_key("websearch"), "disabled removes the tool");
+
+    // The compaction surface shares the filter.
+    let mut compaction = crate::hooks::SessionCompactionEvent { context: event, result: None };
+    HookHandler::<crate::hooks::SessionCompactionEvent>::call(&hook, &mut compaction)
+        .await
+        .expect("compaction hook");
+    assert!(!compaction.context.tools.contains_key("websearch"));
+
+    // Registered through a real registry the hook shapes the dispatched
+    // event (the engine's context/compaction/generate registrations).
+    let registry = HookRegistry::new();
+    let scope = crate::hooks::HookScope::new();
+    scope.track(
+        registry
+            .register_session_context(
+                Arc::new(DisableHook { search: Arc::clone(&search) }),
+                HookOptions::default(),
+            )
+            .await,
+    );
+    let mut dispatched = crate::hooks::SessionContextEvent {
+        session_id: SessionId::parse("ses_1").expect("session"),
+        agent: AgentId::parse("build"),
+        model: ModelRef {
+            id: oc_schema::id::ModelId::parse("m"),
+            provider_id: oc_schema::id::ProviderId::parse("test"),
+            variant: None,
+        },
+        system: vec![],
+        messages: vec![],
+        options: Default::default(),
+        tools: std::iter::once((
+            "websearch".to_string(),
+            ToolDescriptor { description: String::new(), input: serde_json::Value::Null },
+        ))
+        .collect(),
+    };
+    let shaped = registry.dispatch_session_context(dispatched).await.expect("dispatch");
+    assert!(!shaped.tools.contains_key("websearch"));
+}
+
 }

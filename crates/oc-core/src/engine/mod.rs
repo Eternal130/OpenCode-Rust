@@ -2542,7 +2542,33 @@ fn websearch_plugin(inputs: &Arc<PluginInputs>) -> InternalPlugin {
                 websearch::WebSearchExecute::new(search, inputs.forms.clone())
                     .with_progress(progress),
             )),
-        )
+        )?;
+        // G-192 — ref websearch.ts:184-192: when websearch is disabled
+        // (config `websearch: false` or the selection form's "Disable"
+        // answer), the `websearch` tool is REMOVED from the tool list on
+        // every context/compaction/generate hook — the disable choice
+        // must reach the model's request tool list.
+        let disable = Arc::new(websearch::DisableHook { search: Arc::clone(&inputs.websearch) });
+        let disable_compaction =
+            Arc::new(websearch::DisableHook { search: Arc::clone(&inputs.websearch) });
+        let disable_generate =
+            Arc::new(websearch::DisableHook { search: Arc::clone(&inputs.websearch) });
+        // Registrations live for the location lifetime (dropped with the
+        // graph) — the same pattern the subagent description hook uses.
+        std::mem::forget(futures::executor::block_on(hooks.register_session_context(
+            disable,
+            crate::hooks::HookOptions::default(),
+        )));
+        std::mem::forget(futures::executor::block_on(
+            hooks.register_session_generate(disable_generate, crate::hooks::HookOptions::default()),
+        ));
+        std::mem::forget(futures::executor::block_on(
+            hooks.register_session_compaction(
+                disable_compaction,
+                crate::hooks::HookOptions::default(),
+            ),
+        ));
+        Ok(())
     })
 }
 
