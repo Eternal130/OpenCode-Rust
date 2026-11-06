@@ -1433,7 +1433,26 @@ async fn handlers_catalog_surfaces_decode() {
     let skills = client.skill().list(&SkillListQuery::default()).await.expect("skill list");
     let _ = skills;
     let commands = client.command().list(&CommandListQuery::default()).await.expect("command list");
-    assert!(commands.data.is_empty(), "plugin-registered commands: documented empty");
+    // G-193.5 (ref plugin/command.ts:28-54): the builtin `init`/`review`
+    // commands list with their ref descriptions (v2 `Command.Info`
+    // carries name+description only — the template bodies stay in the
+    // registry).
+    let names: Vec<(String, Option<String>)> = commands
+        .data
+        .iter()
+        .map(|command| (command.name.clone(), command.description.clone()))
+        .collect();
+    assert_eq!(
+        names,
+        vec![
+            ("init".to_string(), Some("guided AGENTS.md setup".to_string())),
+            (
+                "review".to_string(),
+                Some("review changes [commit|branch|pr], defaults to uncommitted".to_string())
+            ),
+        ],
+        "builtin init/review commands surface on the catalog"
+    );
 
     let _config = client.config().get(&ConfigGetQuery::default()).await.expect("config get");
     let shells = client.config().shells().await.expect("shells");
