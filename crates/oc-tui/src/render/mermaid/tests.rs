@@ -428,3 +428,141 @@ fn rejects_unsupported_bidirectional_messages_and_bad_lines() {
     assert!(parse_mermaid_sequence_diagram("sequenceDiagram\n  else lonely").is_err());
     assert!(parse_mermaid_sequence_diagram("sequenceDiagram\n  loop forever\n  A->>B: x").is_err());
 }
+
+// -- G-176: fan bus grouping keys (edge from/to, not edge_index) --------------
+
+fn route_for(
+    layout: &crate::render::mermaid::flowchart::layout::FlowchartLayout,
+    edge_index: usize,
+) -> &crate::render::mermaid::flowchart::types::EdgeRoute {
+    layout
+        .routes
+        .iter()
+        .find(|route| route.edge_index == edge_index)
+        .unwrap_or_else(|| panic!("no route for edge {edge_index}"))
+}
+
+#[test]
+fn horizontal_fan_out_edges_share_a_bus_lane() {
+    let diagram = parse_mermaid_flowchart_diagram("flowchart LR\n  A --> B\n  A --> C")
+        .expect("parses");
+    let layout = crate::render::mermaid::flowchart::layout::layout_flowchart_diagram(
+        &diagram,
+        &FlowchartRenderOptions::default(),
+    );
+    let lanes = |index: usize| -> std::collections::HashSet<i64> {
+        route_for(&layout, index)
+            .points
+            .iter()
+            .map(|point| point.x)
+            .collect::<std::collections::HashSet<_>>()
+    };
+    assert!(
+        !lanes(0).is_disjoint(&lanes(1)),
+        "fan-out routes must share a bus x lane: {:?} vs {:?}",
+        layout.routes[0].points,
+        layout.routes[1].points
+    );
+}
+
+#[test]
+fn horizontal_fan_in_edges_share_a_bus_lane() {
+    let diagram = parse_mermaid_flowchart_diagram("flowchart LR\n  B --> A\n  C --> A")
+        .expect("parses");
+    let layout = crate::render::mermaid::flowchart::layout::layout_flowchart_diagram(
+        &diagram,
+        &FlowchartRenderOptions::default(),
+    );
+    let lanes = |index: usize| -> std::collections::HashSet<i64> {
+        let points = &route_for(&layout, index).points;
+        points[1..points.len().saturating_sub(1)]
+            .iter()
+            .map(|point| point.x)
+            .collect::<std::collections::HashSet<_>>()
+    };
+    assert!(
+        !lanes(0).is_disjoint(&lanes(1)),
+        "fan-in routes must share a bus x lane: {:?} vs {:?}",
+        layout.routes[0].points,
+        layout.routes[1].points
+    );
+}
+
+#[test]
+fn vertical_fan_out_edges_share_a_bus_lane() {
+    let diagram = parse_mermaid_flowchart_diagram("flowchart TD\n  A --> B\n  A --> C")
+        .expect("parses");
+    let layout = crate::render::mermaid::flowchart::layout::layout_flowchart_diagram(
+        &diagram,
+        &FlowchartRenderOptions::default(),
+    );
+    let lanes = |index: usize| -> std::collections::HashSet<i64> {
+        route_for(&layout, index)
+            .points
+            .iter()
+            .map(|point| point.y)
+            .collect::<std::collections::HashSet<_>>()
+    };
+    assert!(
+        !lanes(0).is_disjoint(&lanes(1)),
+        "fan-out routes must share a bus y lane: {:?} vs {:?}",
+        layout.routes[0].points,
+        layout.routes[1].points
+    );
+}
+
+#[test]
+fn vertical_fan_in_edges_share_a_bus_lane() {
+    let diagram = parse_mermaid_flowchart_diagram("flowchart TD\n  B --> A\n  C --> A")
+        .expect("parses");
+    let layout = crate::render::mermaid::flowchart::layout::layout_flowchart_diagram(
+        &diagram,
+        &FlowchartRenderOptions::default(),
+    );
+    let lanes = |index: usize| -> std::collections::HashSet<i64> {
+        let points = &route_for(&layout, index).points;
+        points[1..points.len().saturating_sub(1)]
+            .iter()
+            .map(|point| point.y)
+            .collect::<std::collections::HashSet<_>>()
+    };
+    assert!(
+        !lanes(0).is_disjoint(&lanes(1)),
+        "fan-in routes must share a bus y lane: {:?} vs {:?}",
+        layout.routes[0].points,
+        layout.routes[1].points
+    );
+}
+
+// -- G-178: open edges (---) render a line end, not an arrowhead -------------
+
+#[test]
+fn open_edge_renders_a_line_end_without_an_arrowhead() {
+    let text = draw_flowchart("flowchart LR\n  A --- B");
+    for arrow in ['▶', '◀', '▲', '▼'] {
+        assert!(!text.contains(arrow), "open edge must not draw {arrow}:\n{text}");
+    }
+    // The edge still terminates on the target border with a line glyph.
+    assert!(text.contains('─'), "open edge should draw a horizontal line:\n{text}");
+}
+
+#[test]
+fn arrow_edge_still_renders_an_arrowhead() {
+    let text = draw_flowchart("flowchart LR\n  A --> B");
+    assert!(text.contains('▶'), "arrow edge must keep its arrowhead:\n{text}");
+}
+
+#[test]
+fn merged_edge_cell_keeps_ref_arrowhead_precedence() {
+    use crate::render::mermaid::core::canvas::Cell;
+    use crate::render::mermaid::flowchart::style::{merge_flowchart_cell, FlowchartStyle};
+    let edge = || Some(FlowchartStyle::Edge);
+    // An already-drawn arrowhead survives an incoming line glyph.
+    let existing_arrow = Cell::build("▶", edge(), None);
+    let incoming_line = Cell::build("─", edge(), None);
+    assert_eq!(merge_flowchart_cell(&existing_arrow, &incoming_line).text(), "▶");
+    // An incoming arrowhead replaces an already-drawn line glyph.
+    let existing_line = Cell::build("─", edge(), None);
+    let incoming_arrow = Cell::build("▶", edge(), None);
+    assert_eq!(merge_flowchart_cell(&existing_line, &incoming_arrow).text(), "▶");
+}

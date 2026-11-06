@@ -242,7 +242,12 @@ fn draw_edge_label(
     }
 }
 
-fn draw_routed_edge(grid: &mut DiagramCanvas<FlowchartStyle>, route: &EdgeRoute, thick: bool) {
+fn draw_routed_edge(
+    grid: &mut DiagramCanvas<FlowchartStyle>,
+    route: &EdgeRoute,
+    thick: bool,
+    arrowhead: bool,
+) {
     let points = &route.points;
     if points.len() < 2 {
         return;
@@ -261,37 +266,30 @@ fn draw_routed_edge(grid: &mut DiagramCanvas<FlowchartStyle>, route: &EdgeRoute,
     );
     let end = points[points.len() - 1];
     let arrow_from = points[points.len() - 2];
-    grid.set_cell(
-        end.x,
-        end.y,
-        diagram_arrow_head_between(
-            arrow_from,
-            end,
-            crate::render::mermaid::core::drawing::ArrowHeadStyle::Filled,
-        ),
-        style,
-    );
-}
-
-#[allow(dead_code)]
-fn draw_routed_edge_tail(grid: &mut DiagramCanvas<FlowchartStyle>, route: &EdgeRoute) {
-    let points = &route.points;
-    if points.len() >= 2 {
-        let end = points[points.len() - 1];
-        if let Some(end_direction) = flowchart_direction_between(points[points.len() - 2], end) {
-            let mut directions = std::collections::HashSet::new();
-            directions.insert(end_direction);
-            grid.set_cell(
-                end.x,
-                end.y,
-                diagram_line_glyph(
-                    &directions,
-                    crate::render::mermaid::core::drawing::CornerStyle::Square,
-                    crate::render::mermaid::core::drawing::LineStyle::Single,
-                ),
-                Some(FlowchartStyle::Edge),
-            );
-        }
+    if arrowhead {
+        grid.set_cell(
+            end.x,
+            end.y,
+            diagram_arrow_head_between(
+                arrow_from,
+                end,
+                crate::render::mermaid::core::drawing::ArrowHeadStyle::Filled,
+            ),
+            style,
+        );
+    } else if let Some(end_direction) = flowchart_direction_between(arrow_from, end) {
+        let mut directions = std::collections::HashSet::new();
+        directions.insert(end_direction);
+        grid.set_cell(
+            end.x,
+            end.y,
+            diagram_line_glyph(
+                &directions,
+                crate::render::mermaid::core::drawing::CornerStyle::Square,
+                crate::render::mermaid::core::drawing::LineStyle::Single,
+            ),
+            style,
+        );
     }
 }
 
@@ -476,10 +474,8 @@ pub fn draw_flowchart_diagram_grid(
             &mut grid,
             route,
             edge.style == Some(crate::render::mermaid::flowchart::types::EdgeStyle::Thick),
+            edge.arrowhead,
         );
-        if !edge.arrowhead {
-            draw_routed_edge_tail(&mut grid, route);
-        }
         if !edge.label.is_empty() {
             draw_edge_label(&mut grid, route, &edge.label, FlowchartStyle::Label);
         }
