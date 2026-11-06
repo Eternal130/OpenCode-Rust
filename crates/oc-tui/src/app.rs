@@ -4216,6 +4216,55 @@ pub struct HttpSelectionSink {
     client: oc_client::Client,
 }
 
+/// G-200① — the production `session.viewed` ack sink
+/// (session-tabs.tsx:209-242): the POST retries with the ref's
+/// exponential backoff — `min(250ms · 2^attempt, 5s)`
+/// (`VIEW_RETRY_DELAY`/`VIEW_RETRY_MAX_DELAY`, :53-54) — until it
+/// lands (each new watermark is a fresh task, like the ref's
+/// per-watermark `acknowledged` guard).
+pub struct HttpSessionViewSink {
+    client: oc_client::Client,
+}
+
+impl HttpSessionViewSink {
+    #[must_use]
+    pub fn new(client: oc_client::Client) -> Self {
+        Self { client }
+    }
+}
+
+/// G-200① — the retry schedule (`min(250ms · 2^attempt, 5s)`,
+/// `VIEW_RETRY_DELAY`/`VIEW_RETRY_MAX_DELAY`, session-tabs.tsx:53-54).
+#[must_use]
+fn view_retry_delay(attempt: u32) -> std::time::Duration {
+    const RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
+    const RETRY_MAX: std::time::Duration = std::time::Duration::from_millis(5000);
+    RETRY_DELAY.saturating_mul(1u32 << attempt.min(5)).min(RETRY_MAX)
+}
+
+impl crate::store::SessionViewSink for HttpSessionViewSink {
+    fn view(&self, session_id: &str, idle: f64) {
+        let client = self.client.clone();
+        let session_id = session_id.to_owned();
+        tokio::spawn(async move {
+            let mut attempt = 0u32;
+            loop {
+                if client
+                    .session()
+                    .view(&session_id, &oc_client::types::SessionViewBody { idle })
+                    .await
+                    .is_ok()
+                {
+                    return;
+                }
+                let delay = view_retry_delay(attempt);
+                attempt += 1;
+                tokio::time::sleep(delay).await;
+            }
+        });
+    }
+}
+
 impl HttpSelectionSink {
     #[must_use]
     pub fn new(client: oc_client::Client) -> Self {
@@ -7933,6 +7982,9 @@ pub async fn run_with_size(
     app.store
         .set_clipboard_sink(std::rc::Rc::new(crate::clipboard::Osc52Sink::new(std::io::stdout())));
     app.store.set_selection_sink(std::rc::Rc::new(HttpSelectionSink::new(client.clone())));
+    // G-200① — the session.viewed ack (POST session.view with the
+    // ref's exponential backoff).
+    app.store.set_session_view_sink(std::rc::Rc::new(HttpSessionViewSink::new(client.clone())));
 
     // Server-backed picker lists (model/provider/agent).
     let (mut list_rx, lists_task) = spawn_server_lists(client.clone());
@@ -10222,10 +10274,83 @@ mod tests {
     /// diff-viewer.tsx:117-128): two base-needing fetches share ONE
     /// `vcs.base` request; a CHOSEN base short-circuits it entirely
     /// (never even the cache); invalidation forces a re-fetch.
+    /// G-200① — the `session.viewed` POST retries with the ref's
+    /// exponential backoff (session-tabs.tsx:209-242 +
+    /// VIEW_RETRY_DELAY/MAX :53-54): the stub answers 500 twice then
+    /// 204; the three arrivals span at least 250 ms + 500 ms of
+    /// scheduled wait and the body carries the idle watermark.
+    #[tokio::test]
+    async fn viewed_post_fires_with_backoff_on_failure() {
+        use std::sync::{Arc, Mutex};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let arrivals: Arc<Mutex<Vec<(std::time::Instant, String)>>> = Arc::new(Mutex::new(Vec::new()));
+        let log = Arc::clone(&arrivals);
+        let server = tokio::spawn(async move {
+            let mut served = 0u32;
+            loop {
+                let (mut socket, _) = listener.accept().await.expect("accept");
+                served += 1;
+                let served = served;
+                let log = Arc::clone(&log);
+                let (mut reader, mut writer) = socket.split();
+                let mut request = vec![0u8; 8192];
+                let _ = reader.read(&mut request).await;
+                let head = String::from_utf8_lossy(&request);
+                let body = head
+                    .split("\r\n\r\n")
+                    .nth(1)
+                    .unwrap_or_default()
+                    .to_owned();
+                if head.split_whitespace().nth(1).unwrap_or_default().contains("/view") {
+                    log.lock().expect("log").push((std::time::Instant::now(), body));
+                    // Failures first (500), success on the third try.
+                    let status = if served < 3 { "500 Internal Server Error" } else { "204 No Content" };
+                    let response = format!("HTTP/1.1 {status}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
+                    let _ = writer.write_all(response.as_bytes()).await;
+                } else {
+                    let _ = writer.write_all(b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\n\r\n").await;
+                }
+            }
+        });
+
+        let sink = HttpSessionViewSink::new(
+            oc_client::Client::new(&format!("http://{addr}")).expect("client"),
+        );
+        crate::store::SessionViewSink::view(&sink, "s1", 1234.5);
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        while std::time::Instant::now() < deadline {
+            if arrivals.lock().expect("log").len() >= 3 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        let recorded = arrivals.lock().expect("log").clone();
+        server.abort();
+        assert_eq!(recorded.len(), 3, "exactly the two failures + the success: {recorded:?}");
+        assert!(
+            recorded.iter().all(|(_, body)| body.contains("\"idle\":1234.5")),
+            "the watermark rides every body: {recorded:?}"
+        );
+        // The backoff schedule: >=250 ms after the first failure,
+        // >=500 ms after the second (some scheduling slack allowed).
+        let gap1 = recorded[1].0 - recorded[0].0;
+        let gap2 = recorded[2].0 - recorded[1].0;
+        assert!(gap1 >= std::time::Duration::from_millis(230), "gap1 {gap1:?}");
+        assert!(gap2 >= std::time::Duration::from_millis(480), "gap2 {gap2:?}");
+        // Exponential, capped at 5 s (the schedule fn).
+        assert_eq!(view_retry_delay(0), std::time::Duration::from_millis(250));
+        assert_eq!(view_retry_delay(1), std::time::Duration::from_millis(500));
+        assert_eq!(view_retry_delay(2), std::time::Duration::from_millis(1000));
+        assert_eq!(view_retry_delay(10), std::time::Duration::from_millis(5000));
+    }
+
     #[tokio::test]
     #[allow(clippy::too_many_lines)] // the scripted HTTP listener
-    async fn diff_base_is_lazy_cached_and_the_selection_short_circuits() {
-        use std::sync::{Arc, Mutex};
+    async fn diff_base_is_lazy_cached_and_the_selection_short_circuits() {        use std::sync::{Arc, Mutex};
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
