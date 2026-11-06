@@ -58,9 +58,11 @@ fn route_client_parity_142() {
     assert_eq!(routes.len(), 142, "route table must cover 142 ops");
     assert_eq!(client.len(), 142, "client must expose 142 op ids");
     assert_eq!(routes, client, "every emitted route must have a matching client method");
-    // And each id is backed by exactly one generated async method.
+    // And each id is backed by exactly one generated async method pair
+    // (G-197): the `x_with_options` full method plus the zero-option `x`
+    // wrapper delegating with defaults.
     let method_count = generated.methods_rs.matches("pub async fn ").count();
-    assert_eq!(method_count, 142, "one async fn per operation");
+    assert_eq!(method_count, 284, "two async fns per operation (options + wrapper)");
     // Route table rows agree.
     let route_rows = generated.routes_rs.matches("Route {").count() - 1; // minus the struct def
     assert_eq!(route_rows, 142);
