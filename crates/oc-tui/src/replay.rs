@@ -448,7 +448,7 @@ mod tests {
         assert_eq!(pump.store.prompt_draft("s1").text, "hi");
         pump.press("enter");
         assert!(pump.store.prompt_draft("s1").is_empty(), "submitted");
-        assert_eq!(pump.store.composer("s1").history.entries, vec!["hi".to_owned()]);
+        assert_eq!(pump.store.composer("s1").history.entries.iter().map(|entry| entry.text.clone()).collect::<Vec<_>>(), vec!["hi".to_owned()]);
         pump.press("up");
         assert_eq!(pump.store.prompt_draft("s1").text, "hi", "history restored");
         pump.press("down");

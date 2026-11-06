@@ -2075,7 +2075,7 @@ mod tests {
         let submitted = store.submit_prompt("s1").expect("submitted");
         assert_eq!(submitted.text, "hello");
         assert!(store.prompt_draft("s1").is_empty(), "draft cleared");
-        assert_eq!(store.composer("s1").history.entries, vec!["hello".to_owned()]);
+        assert_eq!(store.composer("s1").history.entries.iter().map(|entry| entry.text.clone()).collect::<Vec<_>>(), vec!["hello".to_owned()]);
     }
 
     /// F7 — cross-session render purity: switching to another tab's

@@ -225,38 +225,235 @@ pub struct SubmittedPrompt {
     pub editor_context: Option<String>,
 }
 
-/// `src/prompt/history.ts` semantics (the golden-relevant subset): a
-/// bounded ring with a cursor and a staging slot for the draft being
-/// edited.
+/// G-185 — one stored history entry (`PromptInfo`,
+/// `packages/tui/src/prompt/history.tsx:22-28`): the text plus the
+/// attachment parts needed to restore the chips (files/pasted) when
+/// the entry is recalled.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct PromptHistory {
-    pub entries: Vec<String>,
-    /// Cursor position: `None` = at the live draft (bottom).
-    pub cursor: Option<usize>,
-    pub staging: Option<String>,
+pub struct HistoryEntry {
+    pub text: String,
+    pub files: Vec<FileMention>,
+    pub agents: Vec<AgentMention>,
+    pub skills: Vec<SkillMention>,
+    pub pasted: Vec<PastedPart>,
 }
 
-pub const PROMPT_HISTORY_LIMIT: usize = 100;
+impl HistoryEntry {
+    /// Snapshot the live draft (`structuredClone(unwrap(item))`,
+    /// history.tsx:115).
+    #[must_use]
+    pub fn from_draft(draft: &PromptDraft) -> Self {
+        Self {
+            text: draft.text.clone(),
+            files: draft.files.clone(),
+            agents: draft.agents.clone(),
+            skills: draft.skills.clone(),
+            pasted: draft.pasted.clone(),
+        }
+    }
+
+    /// The `prompt-history.jsonl` line shape (`parsePromptInfo`,
+    /// history.tsx:83-89: an entry needs a string `text` and an array
+    /// `pasted`; the chip parts ride along).
+    #[must_use]
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "text": self.text,
+            "files": self.files.iter().map(|file| serde_json::json!({
+                "name": file.name, "start": file.start, "end": file.end,
+                "mention": file.mention,
+            })).collect::<Vec<_>>(),
+            "agents": self.agents.iter().map(|agent| serde_json::json!({
+                "name": agent.name, "start": agent.start, "end": agent.end,
+            })).collect::<Vec<_>>(),
+            "skills": self.skills.iter().map(|skill| serde_json::json!({
+                "id": skill.id, "name": skill.name, "start": skill.start, "end": skill.end,
+            })).collect::<Vec<_>>(),
+            "pasted": self.pasted.iter().map(|part| serde_json::json!({
+                "text": part.text, "start": part.start, "end": part.end,
+            })).collect::<Vec<_>>(),
+        })
+    }
+
+    /// Tolerant decode (`parsePromptInfo` + the DeepMutable pick):
+    /// unknown shapes degrade to the text-only entry; a non-string
+    /// `text` or non-array `pasted` rejects the line entirely.
+    #[must_use]
+    pub fn from_json(value: &serde_json::Value) -> Option<Self> {
+        if !value.get("text").is_some_and(serde_json::Value::is_string)
+            || !value.get("pasted").is_some_and(serde_json::Value::is_array)
+        {
+            return None;
+        }
+        let range = |item: &serde_json::Value| {
+            Some((
+                item.get("start")?.as_u64()? as usize,
+                item.get("end")?.as_u64()? as usize,
+            ))
+        };
+        let files = value
+            .get("files")
+            .and_then(serde_json::Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| {
+                        let name = item.get("name")?.as_str()?.to_owned();
+                        let (start, end) = range(item)?;
+                        Some(FileMention {
+                            name,
+                            start,
+                            end,
+                            payload: None,
+                            mention: item.get("mention").and_then(serde_json::Value::as_str).map(
+                                |label| label.to_owned(),
+                            ),
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let agents = value
+            .get("agents")
+            .and_then(serde_json::Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| {
+                        let name = item.get("name")?.as_str()?.to_owned();
+                        let (start, end) = range(item)?;
+                        Some(AgentMention { name, start, end })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let skills = value
+            .get("skills")
+            .and_then(serde_json::Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| {
+                        let id = item.get("id")?.as_str()?.to_owned();
+                        let name = item.get("name")?.as_str()?.to_owned();
+                        let (start, end) = range(item)?;
+                        Some(SkillMention { id, name, start, end })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let pasted = value
+            .get("pasted")
+            .and_then(serde_json::Value::as_array)?
+            .iter()
+            .filter_map(|item| {
+                let text = item.get("text")?.as_str()?.to_owned();
+                let (start, end) = range(item)?;
+                Some(PastedPart { text, start, end })
+            })
+            .collect::<Vec<_>>();
+        Some(Self {
+            text: value.get("text").and_then(serde_json::Value::as_str)?.to_owned(),
+            files,
+            agents,
+            skills,
+            pasted,
+        })
+    }
+}
+
+/// `src/prompt/history.ts` semantics: a bounded ring with a cursor
+/// and a staging slot for the draft being edited. G-185 — the entries
+/// carry the full `PromptInfo` (text + chips) and the cap is the
+/// ref's [`MAX_HISTORY_ENTRIES`][crate::storage::MAX_HISTORY_ENTRIES]
+/// (50, history.tsx:60), not 100.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PromptHistory {
+    pub entries: Vec<HistoryEntry>,
+    /// Cursor position: `None` = at the live draft (bottom).
+    pub cursor: Option<usize>,
+    pub staging: Option<HistoryEntry>,
+    /// G-185 — the jsonl sink (`<state>/prompt-history.jsonl`):
+    /// pushes append one line; a trim rewrites the retained tail
+    /// (history.tsx:118-131).
+    pub file: Option<std::path::PathBuf>,
+}
+
+pub const PROMPT_HISTORY_LIMIT: usize = crate::storage::MAX_HISTORY_ENTRIES;
 
 impl PromptHistory {
-    /// Record a submitted prompt (dedup vs the latest; bounded).
+    /// The provider's onMount load (`history.tsx:91-100`): parse
+    /// `<state>/prompt-history.jsonl` (the boot heal already
+    /// self-healed + capped it) and attach the file as the sink.
     #[must_use]
-    pub fn push(mut self, text: &str) -> Self {
-        if self.entries.last().is_none_or(|last| last != text) {
-            self.entries.push(text.to_owned());
+    pub fn open(state_root: &std::path::Path) -> Self {
+        let file = state_root.join(crate::storage::FILE_PROMPT_HISTORY);
+        let text = std::fs::read_to_string(&file).unwrap_or_default();
+        let entries = crate::storage::parse_prompt_history(&text)
+            .iter()
+            .filter_map(HistoryEntry::from_json)
+            .collect();
+        Self { entries, cursor: None, staging: None, file: Some(file) }
+    }
+
+    /// Record a submitted draft (dedup vs the latest; bounded at the
+    /// ref's 50; an entirely empty entry never records —
+    /// `prependHistory`'s `!text && !hasAttachments` bail, entry.ts:
+    /// 38-40).
+    #[must_use]
+    pub fn push(mut self, draft: &PromptDraft) -> Self {
+        let entry = HistoryEntry::from_draft(draft);
+        if entry.text.is_empty()
+            && entry.files.is_empty()
+            && entry.agents.is_empty()
+            && entry.skills.is_empty()
+            && entry.pasted.is_empty()
+        {
+            return self;
         }
+        if self.entries.last().is_none_or(|last| *last != entry) {
+            self.entries.push(entry.clone());
+        }
+        let mut trimmed = false;
         if self.entries.len() > PROMPT_HISTORY_LIMIT {
             let excess = self.entries.len() - PROMPT_HISTORY_LIMIT;
             self.entries.drain(0..excess);
+            trimmed = true;
         }
         self.cursor = None;
         self.staging = None;
+        // The jsonl sink (history.tsx:118-131): append one line, or
+        // rewrite the retained tail when the cap trimmed.
+        if let Some(file) = self.file.clone() {
+            if trimmed {
+                let body = self
+                    .entries
+                    .iter()
+                    .map(|entry| serde_json::to_string(&entry.to_json()).unwrap_or_default())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if !body.is_empty() {
+                    let _ = std::fs::write(&file, format!("{body}\n"));
+                }
+            } else {
+                let Ok(line) = serde_json::to_string(&entry.to_json()) else { return self };
+                let _ = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&file)
+                    .and_then(|mut handle| {
+                        use std::io::Write as _;
+                        handle.write_all(format!("{line}\n").as_bytes())
+                    });
+            }
+        }
         self
     }
 
-    /// Previous (older) entry; the first call stashes the live draft.
+    /// Previous (older) entry; the first call stashes the live draft
+    /// (chips included) for the round-trip restore.
     #[must_use]
-    pub fn previous(self, draft: &str) -> (Self, Option<String>) {
+    pub fn previous(mut self, draft: &PromptDraft) -> (Self, Option<HistoryEntry>) {
         if self.entries.is_empty() {
             return (self, None);
         }
@@ -266,29 +463,29 @@ impl PromptHistory {
             Some(0) => return (self, None),
             Some(index) => index - 1,
         };
-        let mut state = self;
-        if state.staging.is_none() {
-            state.staging = Some(draft.to_owned());
+        if self.staging.is_none() {
+            self.staging = Some(HistoryEntry::from_draft(draft));
         }
-        state.cursor = Some(index);
-        (state.clone(), state.entries.get(index).cloned())
+        self.cursor = Some(index);
+        let entry = self.entries[index].clone();
+        (self, Some(entry))
     }
 
     /// Next (newer) entry; past the end restores the stashed draft.
     #[must_use]
-    pub fn next(self, draft: &str) -> (Self, String) {
+    pub fn next(mut self, draft: &PromptDraft) -> (Self, Option<HistoryEntry>) {
         let Some(index) = self.cursor else {
-            return (self, draft.to_owned());
+            return (self.clone(), Some(HistoryEntry::from_draft(draft)));
         };
-        let mut state = self;
-        if index + 1 >= state.entries.len() {
-            state.cursor = None;
-            let restored = state.staging.clone().unwrap_or_default();
-            state.staging = None;
-            return (state, restored);
+        if index + 1 >= self.entries.len() {
+            self.cursor = None;
+            let restored = self.staging.clone().unwrap_or_default();
+            self.staging = None;
+            return (self, Some(restored));
         }
-        state.cursor = Some(index + 1);
-        (state.clone(), state.entries[index + 1].clone())
+        self.cursor = Some(index + 1);
+        let entry = self.entries[index + 1].clone();
+        (self, Some(entry))
     }
 }
 
@@ -863,7 +1060,7 @@ impl Composer {
     /// part) is appended to the input history so ↑ recalls it.
     pub fn clear(&mut self) {
         if Self::clear_retains_draft(&self.draft) {
-            self.history = self.history.clone().push(&self.draft.text);
+            self.history = self.history.clone().push(&self.draft);
         }
         self.draft = PromptDraft::default();
         self.edit.set_text("");
@@ -1094,13 +1291,14 @@ impl Composer {
         KeyOutcome::Edited
     }
 
-    /// `prompt.history.previous` — swap the draft for the older entry.
+    /// `prompt.history.previous` — swap the draft for the older entry
+    /// (G-185: the full `PromptInfo` — text + files/pasted chips —
+    /// restores, not just the text).
     pub fn history_previous(&mut self) -> KeyOutcome {
-        let (history, entry) = self.history.clone().previous(&self.draft.text);
+        let (history, entry) = self.history.clone().previous(&self.draft);
         if let Some(entry) = entry {
             self.history = history;
-            self.draft.text = entry;
-            self.set_caret(self.char_len());
+            self.restore_history_entry(&entry);
             return KeyOutcome::Edited;
         }
         KeyOutcome::Ignored
@@ -1108,11 +1306,38 @@ impl Composer {
 
     /// `prompt.history.next`.
     pub fn history_next(&mut self) -> KeyOutcome {
-        let (history, entry) = self.history.clone().next(&self.draft.text);
+        let (history, entry) = self.history.clone().next(&self.draft);
         self.history = history;
-        self.draft.text = entry;
-        self.set_caret(self.char_len());
+        if let Some(entry) = entry {
+            self.restore_history_entry(&entry);
+        }
         KeyOutcome::Edited
+    }
+
+    /// Apply a recalled history entry to the draft (v2's
+    /// `promptRef.set(promptInfo)` — the whole input, chips and all;
+    /// the edit state resets like [`Composer::set_text`]).
+    fn restore_history_entry(&mut self, entry: &HistoryEntry) {
+        self.draft = PromptDraft {
+            text: entry.text.clone(),
+            files: entry.files.clone(),
+            agents: entry.agents.clone(),
+            skills: entry.skills.clone(),
+            pasted: entry.pasted.clone(),
+        };
+        self.edit = Self::fresh_edit();
+        if self.edit.text() != self.draft.text {
+            self.edit.mirror_text(&self.draft.text);
+        }
+        self.set_caret(self.char_len());
+        self.files_undo.clear();
+        self.files_redo.clear();
+        self.pasted_undo.clear();
+        self.pasted_redo.clear();
+        self.agents_undo.clear();
+        self.agents_redo.clear();
+        self.skills_undo.clear();
+        self.skills_redo.clear();
     }
 
     /// `input.submit` — returns the prompt (the store records history
@@ -1122,6 +1347,9 @@ impl Composer {
         if self.draft.is_empty() {
             return None;
         }
+        // G-185 — the entry records the FULL prompt (`PromptInfo`:
+        // text + chips, history.tsx:114-118) BEFORE the drain.
+        self.history = self.history.clone().push(&self.draft);
         let prompt = SubmittedPrompt {
             // RD-06 — submit restores the full pasted text into the
             // prompt body (`expandTrackedPastedText`, prompt/index.
@@ -1235,10 +1463,8 @@ impl Composer {
                 KeyOutcome::Edited
             }
             ComposerKey::Enter => match self.take_submit() {
-                Some(prompt) => {
-                    self.history = self.history.clone().push(&prompt.text);
-                    KeyOutcome::Submitted(prompt)
-                }
+                // G-185 — take_submit records the full entry itself.
+                Some(prompt) => KeyOutcome::Submitted(prompt),
                 None => KeyOutcome::Ignored,
             },
             ComposerKey::ShiftEnter
@@ -1350,8 +1576,8 @@ impl Composer {
                 Some(KeyOutcome::Edited)
             }
             ComposerKey::Enter => match self.take_submit() {
+                // G-185 — take_submit records the full entry itself.
                 Some(prompt) => {
-                    self.history = self.history.clone().push(&prompt.text);
                     self.mode = ComposerMode::Normal;
                     Some(KeyOutcome::ShellCommand(prompt.text))
                 }
@@ -1612,7 +1838,7 @@ mod tests {
         state.handle_key(&ComposerKey::ShiftEnter);
         assert_eq!(state.draft.text, "ab\nc\n");
         state.handle_key(&ComposerKey::Enter);
-        assert!(matches!(state.history.entries.last(), Some(text) if text == "ab\nc\n"));
+        assert!(matches!(state.history.entries.last(), Some(entry) if entry.text == "ab\nc\n"));
         assert!(state.draft.text.is_empty(), "draft text cleared");
         // Empty submit is a no-op.
         assert_eq!(state.handle_key(&ComposerKey::Enter), KeyOutcome::Ignored);
@@ -1621,8 +1847,8 @@ mod tests {
     #[test]
     fn up_down_at_boundaries_reach_history() {
         let mut state = Composer::default();
-        state.history = state.history.clone().push("older");
-        state.history = state.history.clone().push("oldest");
+        state.history = state.history.clone().push(&PromptDraft { text: "older".into(), ..PromptDraft::default() });
+        state.history = state.history.clone().push(&PromptDraft { text: "oldest".into(), ..PromptDraft::default() });
         state.set(PromptDraft { text: "draft".into(), ..PromptDraft::default() });
         // Up on the first line → history.previous.
         state.handle_key(&ComposerKey::Up);
@@ -1883,6 +2109,133 @@ mod tests {
         let outcome = state.handle_key(&ComposerKey::Up);
         assert!(matches!(outcome, KeyOutcome::Edited));
         assert_eq!(state.draft.text, "this draft is definitely long enough to keep");
+    }
+
+    /// G-185 — a history entry round-trips its attachments: a submit
+    /// with a file chip + a folded paste records text AND parts, and
+    /// ↑ restores the chips beside the text (the ref's PromptInfo,
+    /// history.tsx:22-28/114-118).
+    #[test]
+    fn history_round_trips_attachments_and_restores_chips() {
+        let mut state = composer("look ");
+        state.draft.files.push(FileMention {
+            name: "shot.png".into(),
+            start: 5,
+            end: 14,
+            payload: None,
+            mention: Some("[Image 1]".into()),
+        });
+        state.draft.text.push_str("[Image 1] ");
+        state.draft.pasted.push(PastedPart {
+            text: "line one\nline two\nline three".into(),
+            start: 15,
+            end: 33,
+        });
+        state.draft.text.push_str("[Pasted ~3 lines]");
+        let outcome = state.handle_key(&ComposerKey::Enter);
+        assert!(matches!(outcome, KeyOutcome::Submitted(_)));
+        assert_eq!(state.history.entries.len(), 1, "one recorded entry");
+        let entry = state.history.entries.last().expect("entry").clone();
+        assert_eq!(entry.text, "look [Image 1] [Pasted ~3 lines]");
+        assert_eq!(entry.files.len(), 1, "the file chip rides the entry");
+        assert_eq!(entry.pasted.len(), 1, "the pasted chip rides the entry");
+
+        // ↑ restores the WHOLE draft — text + both chips.
+        state.handle_key(&ComposerKey::Up);
+        assert_eq!(state.draft.text, "look [Image 1] [Pasted ~3 lines]");
+        assert_eq!(state.draft.files.len(), 1);
+        assert_eq!(state.draft.files[0].name, "shot.png");
+        assert_eq!(state.draft.pasted.len(), 1);
+        assert_eq!(state.draft.pasted[0].text, "line one\nline two\nline three");
+        // ↓ past the end restores the live (empty) draft.
+        state.handle_key(&ComposerKey::Down);
+        assert!(state.draft.is_empty());
+
+        // The jsonl line round-trips through the tolerant decode
+        // (parsePromptInfo + the chip re-parse).
+        let decoded = HistoryEntry::from_json(&entry.to_json()).expect("decodes");
+        assert_eq!(decoded, entry.clone());
+        // A line without `pasted`/`text` rejects (storage.rs's
+        // valid_prompt_info gate agrees).
+        assert!(HistoryEntry::from_json(&serde_json::json!({ "text": "x" })).is_none());
+        assert!(HistoryEntry::from_json(&serde_json::json!({ "pasted": [] })).is_none());
+    }
+
+    /// G-185 — the ref's cap is 50 (`MAX_HISTORY_ENTRIES`,
+    /// history.tsx:60): the ring trims at 50 and pushes append one
+    /// jsonl line each.
+    #[test]
+    fn history_caps_at_fifty_and_appends_jsonl() {
+        let dir = std::env::temp_dir().join(format!(
+            "oc-history-cap-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .subsec_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let mut history = PromptHistory::open(&dir);
+        assert!(history.entries.is_empty());
+        for index in 0..60 {
+            let mut draft = PromptDraft::default();
+            draft.text = format!("prompt {index}");
+            history = history.push(&draft);
+        }
+        assert_eq!(history.entries.len(), PROMPT_HISTORY_LIMIT);
+        assert_eq!(PROMPT_HISTORY_LIMIT, 50, "the ref's MAX_HISTORY_ENTRIES");
+        assert_eq!(history.entries.first().map(|entry| entry.text.as_str()), Some("prompt 10"));
+        assert_eq!(history.entries.last().map(|entry| entry.text.as_str()), Some("prompt 59"));
+        // The sink appended every line; the trim rewrote the tail.
+        let text = std::fs::read_to_string(dir.join(crate::storage::FILE_PROMPT_HISTORY))
+            .expect("jsonl written");
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 50, "the file holds exactly the retained entries");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// G-185 — the boot wiring: `PromptHistory::open` parses the
+    /// persisted jsonl (chips restored), so the composer's ↑ recalls
+    /// an attachment-bearing entry from a previous run.
+    #[test]
+    fn boot_open_feeds_parsed_entries_into_the_ring() {
+        let dir = std::env::temp_dir().join(format!(
+            "oc-history-boot-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .subsec_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let entry = HistoryEntry {
+            text: "prior run".into(),
+            files: vec![FileMention {
+                name: "a.png".into(),
+                start: 10,
+                end: 16,
+                payload: None,
+                mention: None,
+            }],
+            pasted: vec![PastedPart { text: "p\np\np".into(), start: 0, end: 3 }],
+            ..HistoryEntry::default()
+        };
+        let line = serde_json::to_string(&entry.to_json()).expect("line");
+        std::fs::write(dir.join(crate::storage::FILE_PROMPT_HISTORY), format!("{line}\n"))
+            .expect("write");
+
+        let history = PromptHistory::open(&dir);
+        assert_eq!(history.entries.len(), 1);
+        assert_eq!(history.entries[0], entry, "the chips survive the boot parse");
+
+        // The recalled entry restores the chips into the composer.
+        let mut state = composer("");
+        state.history = history;
+        state.handle_key(&ComposerKey::Up);
+        assert_eq!(state.draft.text, "prior run");
+        assert_eq!(state.draft.files.len(), 1);
+        assert_eq!(state.draft.pasted.len(), 1);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// RD-16 — a short bare draft clears WITHOUT a history append.
