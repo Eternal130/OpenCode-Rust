@@ -407,6 +407,19 @@ async fn attach_session(
                     .to_string(),
                 ));
             }
+            // G-229① — the title/foreground events forward the same way
+            // (daemon.ts:116-117 field names; `process` keeps its
+            // explicit null).
+            StreamEvent::TitleChanged { title } => {
+                let _ = outbox.send(
+                    Message::Text(json!({ "type": "title_changed", "title": title }).to_string()),
+                );
+            }
+            StreamEvent::ForegroundProcessChanged { process } => {
+                let _ = outbox.send(Message::Text(
+                    json!({ "type": "foreground_process_changed", "process": process }).to_string(),
+                ));
+            }
         })
     };
     let on_end: Box<dyn FnOnce() + Send + Sync> = {

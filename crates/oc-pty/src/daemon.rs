@@ -918,6 +918,13 @@ fn subscribe(
                 StreamEvent::ControllerChanged { attachment_id, generation } => {
                     wire::WireResponse::ControllerChanged { attachment_id, generation }.to_frame()
                 }
+                // G-229① — the new daemon.ts:97-98 stream frames.
+                StreamEvent::TitleChanged { title } => {
+                    wire::WireResponse::TitleChanged { title }.to_frame()
+                }
+                StreamEvent::ForegroundProcessChanged { process } => {
+                    wire::WireResponse::ForegroundProcessChanged { process }.to_frame()
+                }
             };
             if let Ok(bytes) = frame {
                 let _ = event_writer.send(WriterCommand::Bytes(bytes));
