@@ -8,6 +8,12 @@
 //! - The store is a bare git object database; `capture` walks the scope,
 //!   honors the SOURCE repository's ignore rules (tracked files always
 //!   included), skips untracked files over 2 MiB, and writes a tree.
+//!   G-219: the store's odb registers the SOURCE repository's objects as
+//!   an alternate (`objects/info/alternates`, ref git.ts:345-382) and
+//!   `capture` maintains a stat-cache sidecar — stat-identical files
+//!   reuse their oid without re-reading (steady state is O(changed)
+//!   reads like `git add --all`; the port's stand-in for the ref's git
+//!   index copy).
 //! - `files(from,to)` lists changed project-relative paths; `diff` renders
 //!   per-file unified diffs; `restore` writes blobs back and deletes paths
 //!   absent from their tree.
@@ -158,6 +164,125 @@ fn operation_error(operation: &'static str, message: impl Into<String>) -> Snaps
     SnapshotError::Operation { operation, message: message.into() }
 }
 
+/// G-219② test seam: counts actual file reads (fs::read + read_link)
+/// performed by `capture_blocking` — tests assert steady-state captures
+/// do ZERO reads and one touched file costs exactly one.
+#[cfg(test)]
+pub(crate) static CAPTURE_FILE_READS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// G-219① — the SOURCE repository's objects directory (the common dir's
+/// `objects`, so linked worktrees share the main store's objects).
+fn source_objects_directory(source: &git2::Repository) -> Option<std::path::PathBuf> {
+    let path = source.path().to_path_buf();
+    let text = path.to_string_lossy();
+    let common = match text.rfind("/worktrees/") {
+        Some(index) => std::path::PathBuf::from(&text[..=index]),
+        None => path,
+    };
+    let objects = common.join("objects");
+    objects.is_dir().then_some(objects)
+}
+
+/// G-219② — the stat-cache sidecar (the port's stand-in for the ref's
+/// source-index copy, git.ts:364-374): path → (oid, size, mtime, mode).
+/// A matching stat (size + mtime + mode, blob still present) reuses the
+/// oid without reading the file — `git add --all` stat-identical
+/// semantics (snapshot.ts:425-436).
+#[derive(Debug, Clone, Copy)]
+struct StatEntry {
+    oid: git2::Oid,
+    size: u64,
+    mtime_secs: u64,
+    mtime_nanos: u32,
+    mode: i32,
+}
+
+impl Default for StatEntry {
+    fn default() -> Self {
+        Self { oid: git2::Oid::zero(), size: 0, mtime_secs: 0, mtime_nanos: 0, mode: 0 }
+    }
+}
+
+impl StatEntry {
+    fn of(oid: git2::Oid, meta: &std::fs::Metadata, mode: i32) -> Self {
+        let (mtime_secs, mtime_nanos) = meta
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|duration| (duration.as_secs(), duration.subsec_nanos()))
+            .unwrap_or((0, 0));
+        Self { oid, size: meta.len(), mtime_secs, mtime_nanos, mode }
+    }
+
+    fn matches(&self, meta: &std::fs::Metadata, mode: i32) -> bool {
+        if self.mode != mode || self.size != meta.len() {
+            return false;
+        }
+        let Ok(modified) = meta.modified() else { return false };
+        let Ok(duration) = modified.duration_since(std::time::UNIX_EPOCH) else { return false };
+        self.mtime_secs == duration.as_secs() && self.mtime_nanos == duration.subsec_nanos()
+    }
+}
+
+/// The cache map persisted at `<store>/opencode-stat-cache` — a
+/// line-oriented format (`<oid> <size> <secs> <nanos> <mode> <path>`);
+/// unknown lines are skipped so a corrupt sidecar degrades to a full
+/// (uncached) capture, never a wrong tree.
+#[derive(Debug, Default)]
+struct StatCache {
+    entries: std::collections::BTreeMap<String, StatEntry>,
+}
+
+impl StatCache {
+    fn parse(text: &str) -> Self {
+        let mut entries = std::collections::BTreeMap::new();
+        for line in text.lines() {
+            let mut parts = line.splitn(6, ' ');
+            let (Some(oid), Some(size), Some(secs), Some(nanos), Some(mode), Some(path)) = (
+                parts.next(),
+                parts.next(),
+                parts.next(),
+                parts.next(),
+                parts.next(),
+                parts.next(),
+            ) else {
+                continue;
+            };
+            let (Ok(oid), Ok(size), Ok(secs), Ok(nanos), Ok(mode)) = (
+                git2::Oid::from_str(oid),
+                size.parse::<u64>(),
+                secs.parse::<u64>(),
+                nanos.parse::<u32>(),
+                mode.parse::<i32>(),
+            ) else {
+                continue;
+            };
+            if path.contains(char::from(0)) || path.is_empty() {
+                continue;
+            }
+            entries.insert(
+                path.to_owned(),
+                StatEntry { oid, size, mtime_secs: secs, mtime_nanos: nanos, mode },
+            );
+        }
+        Self { entries }
+    }
+
+    fn render(&self) -> String {
+        let mut out = String::new();
+        for (path, entry) in &self.entries {
+            use std::fmt::Write as _;
+            let _ = writeln!(
+                out,
+                "{} {} {} {} {} {}",
+                entry.oid, entry.size, entry.mtime_secs, entry.mtime_nanos, entry.mode, path
+            );
+        }
+        out
+    }
+}
+
 /// Pins the snapshot store's git configuration (G-30): the ref ships an
 /// `opencode.gitconfig` include (`[core] autocrlf = false`, git.ts:23-33)
 /// and forces `-c core.quotepath=false` for patch diffs (git.ts:535), so
@@ -234,6 +359,7 @@ impl GitSnapshotStore {
     fn open_repo(&self) -> Result<git2::Repository, git2::Error> {
         if let Ok(repo) = git2::Repository::open_bare(&self.git_directory) {
             apply_snapshot_config(&repo)?;
+            self.apply_alternates(&repo);
             return Ok(repo);
         }
         // First use: initialize the bare store (SE-F3's deferred init).
@@ -246,7 +372,43 @@ impl GitSnapshotStore {
         );
         let repo = git2::Repository::open_bare(&self.git_directory)?;
         apply_snapshot_config(&repo)?;
+        self.apply_alternates(&repo);
         Ok(repo)
+    }
+
+    /// G-219① — alternates: the store's odb reaches the SOURCE
+    /// repository's objects (ref git.ts:345-382 writes
+    /// `objects/info/alternates` when seeding a repo from a source; the
+    /// snapshot store is the same seed relationship, snapshot.ts:95-105).
+    /// The file is written for ref layout parity AND registered
+    /// functionally (`Odb::add_disk_alternate`) so reachability holds
+    /// even where libgit2 does not auto-load the file — a blob present
+    /// only in the source odb must read through the snapshot odb, and a
+    /// restore of a seeded snapshot must not re-copy those blobs.
+    /// G-30 cross-reference: the store's config isolation
+    /// (`apply_snapshot_config`) is the same seed-time hygiene.
+    ///
+    /// Bounded deviation (G-30/G-219 family): the ref ALSO copies the
+    /// source git index so `git add --all` can stat-skip; this port
+    /// maintains its own stat-cache sidecar instead (see
+    /// [`stat_cache_path`]) — alternates here are for layout parity and
+    /// cross-store blob reachability, not for skipping the first
+    /// capture's reads.
+    fn apply_alternates(&self, repo: &git2::Repository) {
+        let Some(source) = self.source_repo() else { return };
+        let Some(objects) = source_objects_directory(&source) else { return };
+        let line = objects.to_string_lossy().into_owned();
+        let info = self.git_directory.join("objects").join("info");
+        if std::fs::create_dir_all(&info).is_ok() {
+            let alternates = info.join("alternates");
+            let current = std::fs::read_to_string(&alternates).unwrap_or_default();
+            if current.trim() != line {
+                let _ = std::fs::write(&alternates, format!("{line}\n"));
+            }
+        }
+        if let Ok(odb) = repo.odb() {
+            let _ = odb.add_disk_alternate(&line);
+        }
     }
 
     /// The SOURCE repository (ignore-rule oracle): `git.repo.discover`.
@@ -294,6 +456,13 @@ impl GitSnapshotStore {
         };
         // Entries under the scope, relative to the worktree.
         let mut files: BTreeMap<String, (git2::Oid, i32)> = BTreeMap::new();
+        // G-219② — the stat-cache sidecar stands in for the ref's git
+        // index copy (git.ts:364-374): a file whose stat matches the
+        // cached entry reuses its oid, skipping the read + blob write —
+        // steady-state capture is O(changed) reads like `git add --all`
+        // (snapshot.ts:425-436).
+        let mut cache = self.load_stat_cache();
+        let mut next_cache = StatCache::default();
         let mut stack: Vec<PathBuf> = vec![scope_path.clone()];
         while let Some(dir) = stack.pop() {
             let entries = std::fs::read_dir(&dir)
@@ -327,9 +496,35 @@ impl GitSnapshotStore {
                         }
                     }
                 }
+                // The stat comes from the DIRENT (lstat semantics): for
+                // symlinks size/mtime describe the LINK, matching the
+                // blob content the cache keys on.
+                let Ok(meta) = std::fs::symlink_metadata(&absolute) else { continue };
+                let mode = if file_type.is_symlink() {
+                    0o120000
+                } else {
+                    use std::os::unix::fs::PermissionsExt as _;
+                    if meta.permissions().mode() & 0o111 != 0 {
+                        0o100755
+                    } else {
+                        0o100644
+                    }
+                };
+                // G-219② — stat-identical file: reuse the cached oid
+                // (blob existence re-checked so a pruned store cannot
+                // fabricate a tree), skip the read entirely.
+                if let Some(entry) = cache.entries.get(&relative) {
+                    if entry.matches(&meta, mode) && repo.find_blob(entry.oid).is_ok() {
+                        files.insert(relative.clone(), (entry.oid, mode));
+                        next_cache.entries.insert(relative, *entry);
+                        continue;
+                    }
+                }
                 // G-50: symlink entries snapshot the LINK TARGET string as
                 // the blob content (mode 120000) — `git checkout <tree>`
                 // semantics; a plain `fs::read` would follow the link.
+                #[cfg(test)]
+                CAPTURE_FILE_READS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let bytes: Vec<u8> = if file_type.is_symlink() {
                     match std::fs::read_link(&absolute) {
                         Ok(target) => target.to_string_lossy().into_owned().into_bytes(),
@@ -342,28 +537,36 @@ impl GitSnapshotStore {
                     }
                 };
                 let Ok(blob) = repo.blob(&bytes) else { continue };
-                let mode = if file_type.is_symlink() {
-                    0o120000
-                } else {
-                    let executable = entry
-                        .metadata()
-                        .ok()
-                        .map(|meta| {
-                            use std::os::unix::fs::PermissionsExt as _;
-                            meta.permissions().mode() & 0o111 != 0
-                        })
-                        .unwrap_or(false);
-                    if executable {
-                        0o100755
-                    } else {
-                        0o100644
-                    }
-                };
+                let entry = StatEntry::of(blob, &meta, mode);
+                next_cache.entries.insert(relative.clone(), entry);
                 files.insert(relative, (blob, mode));
             }
         }
+        // Persist the fresh cache (entries for vanished paths dropped by
+        // construction — only walked paths are re-inserted).
+        self.save_stat_cache(&next_cache);
         let tree = build_tree(&repo, &files, "")?;
         Ok(SnapshotId::parse(tree.to_string()))
+    }
+
+    /// G-219② — the sidecar path inside the store's git directory.
+    fn stat_cache_path(&self) -> PathBuf {
+        self.git_directory.join("opencode-stat-cache")
+    }
+
+    fn load_stat_cache(&self) -> StatCache {
+        let Ok(text) = std::fs::read_to_string(self.stat_cache_path()) else {
+            return StatCache::default();
+        };
+        StatCache::parse(&text)
+    }
+
+    fn save_stat_cache(&self, cache: &StatCache) {
+        let target = self.stat_cache_path();
+        let temporary = self.git_directory.join("opencode-stat-cache.tmp");
+        if std::fs::write(&temporary, cache.render()).is_ok() {
+            let _ = std::fs::rename(&temporary, &target);
+        }
     }
 
     fn tree_diff_paths(
