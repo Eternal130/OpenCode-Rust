@@ -436,6 +436,29 @@ pub static PALETTE_COMMANDS: &[PaletteCommand] = &[
         group: "System",
         bindings: &[],
     },
+    // G-227 — the config-toggle trio (app.tsx:1148-1191). v2
+    // registers them `palette: undefined`; the port surfaces them so
+    // the flips are discoverable and their CURRENT value is visible
+    // (`palette_title` renders the ref's dynamic "Disable/Enable …"
+    // labels off the live settings snapshot).
+    PaletteCommand {
+        command: "app.toggle.animations",
+        title: "Toggle animations",
+        group: "System",
+        bindings: &[],
+    },
+    PaletteCommand {
+        command: "app.toggle.file_context",
+        title: "Toggle file context",
+        group: "System",
+        bindings: &[],
+    },
+    PaletteCommand {
+        command: "app.toggle.diffwrap",
+        title: "Toggle diff wrapping",
+        group: "System",
+        bindings: &[],
+    },
 ];
 
 /// Look up one registry entry.
@@ -445,9 +468,11 @@ pub fn palette_command(command: &str) -> Option<&'static PaletteCommand> {
 }
 
 /// A row's run-time title (v2's dynamic `title` thunks over the live
-/// state). The one dynamic case in the registry:
+/// state). The dynamic cases in the registry:
 /// `session.verbosity.cycle` renders `Verbosity: ${Locale.titlecase(
-/// verbosity())}` (index.tsx:1064-1067).
+/// verbosity())}` (index.tsx:1064-1067); G-227's config toggles
+/// render the app table's "Disable/Enable …" labels off the live
+/// settings value (app.tsx:1149/1163/1177).
 #[must_use]
 pub fn palette_title(entry: &PaletteCommand, store: &Store) -> String {
     if entry.command == "session.verbosity.cycle" {
@@ -458,6 +483,44 @@ pub fn palette_title(entry: &PaletteCommand, store: &Store) -> String {
             None => String::new(),
         };
         return format!("Verbosity: {titlecased}");
+    }
+    // G-227 — the toggle labels read the CURRENT value through the
+    // settings-table seam (`current_value`: the live snapshot, else
+    // the row's default). Note the animations default divergence:
+    // the app table reads `config.data.animations ?? true` while the
+    // settings row pins `false` (dialog-config.tsx:38-45) — the port
+    // follows the settings row, one seam for both surfaces.
+    let enabled = |path: &str, on: &str| {
+        crate::components::dialog_config::settings_table()
+            .into_iter()
+            .find(|setting| setting.path == path)
+            .is_some_and(|setting| {
+                crate::components::dialog_config::current_value(store, &setting) == on
+            })
+    };
+    match entry.command {
+        "app.toggle.animations" => {
+            return if enabled("animations", "true") {
+                "Disable animations".to_owned()
+            } else {
+                "Enable animations".to_owned()
+            };
+        }
+        "app.toggle.file_context" => {
+            return if enabled("prompt.editor", "true") {
+                "Disable file context".to_owned()
+            } else {
+                "Enable file context".to_owned()
+            };
+        }
+        "app.toggle.diffwrap" => {
+            return if enabled("diffs.wrap", "word") {
+                "Disable diff wrapping".to_owned()
+            } else {
+                "Enable diff wrapping".to_owned()
+            };
+        }
+        _ => {}
     }
     entry.title.to_owned()
 }
@@ -3137,6 +3200,30 @@ impl CommandDispatcher for StoreDispatcher {
                 store.clear_dialogs();
                 Dispatch::Handled
             }
+            // G-227 — `app.toggle.animations` / `app.toggle.
+            // file_context` / `app.toggle.diffwrap` (app.tsx:
+            // 1148-1191): each run is one `config.update` flipping
+            // its key — `animations` false↔true, `prompt.editor`
+            // false↔true (the app table's "file context" name), and
+            // `diffs.wrap` "word"↔"none". The port flips through the
+            // settings table's cycle seam (the same write-through
+            // `verbosity.cycle` uses: snapshot + config sink), then
+            // `dialog.clear()`.
+            "app.toggle.animations" => {
+                store.setting_cycle("animations", 1);
+                store.clear_dialogs();
+                Dispatch::Handled
+            }
+            "app.toggle.file_context" => {
+                store.setting_cycle("prompt.editor", 1);
+                store.clear_dialogs();
+                Dispatch::Handled
+            }
+            "app.toggle.diffwrap" => {
+                store.setting_cycle("diffs.wrap", 1);
+                store.clear_dialogs();
+                Dispatch::Handled
+            }
             // G-29 — the plugin manager's install flow (`plugins.
             // install`, keybind "Install plugin" — keybind.ts:288):
             // the package-spec prompt; the submit fires
@@ -5027,6 +5114,95 @@ mod tests {
         assert!(store.prompt_paste_compact(), "re-enabled → paste \"compact\"");
         assert_eq!(store.settings_snapshot_value("prompt.paste"), "compact");
         assert_eq!(sink.0.borrow().as_slice(), ["full".to_owned(), "compact".to_owned()]);
+    }
+
+    /// G-227 — `app.toggle.animations` / `app.toggle.file_context` /
+    /// `app.toggle.diffwrap` (app.tsx:1148-1191): each dispatch flips
+    /// its config key through the settings-table cycle (snapshot +
+    /// config-sink write-through) and clears the dialog stack.
+    #[test]
+    fn config_toggle_commands_flip_and_persist() {
+        use crate::store::ConfigSink;
+        #[derive(Default)]
+        struct RecordingSink(std::cell::RefCell<Vec<(String, String)>>);
+        impl ConfigSink for RecordingSink {
+            fn update_theme_name(&self, _: &str) {}
+            fn update_theme_mode(&self, _: &str) {}
+            fn update_session_sidebar(&self, _: bool) {}
+            fn update_session_grouping(&self, _: bool) {}
+            fn update_setting(&self, path: &str, value: &str) {
+                self.0.borrow_mut().push((path.to_owned(), value.to_owned()));
+            }
+        }
+        let store = Store::new(Runtime::new());
+        let sink = std::rc::Rc::new(RecordingSink::default());
+        store.set_config_sink(sink.clone());
+        let mut dispatcher = StoreDispatcher;
+        store.replace_dialog(crate::store::DialogKind::Settings, crate::store::DialogSize::Large);
+
+        // animations: false → true (the row's default is "false").
+        assert_eq!(
+            dispatcher.dispatch(&store, "app.toggle.animations", None),
+            Dispatch::Handled
+        );
+        assert_eq!(store.settings_snapshot_value("animations"), "true");
+        assert!(store.top_dialog().is_none(), "dialog.clear() ran");
+
+        // file_context: prompt.editor true → false (default "true").
+        assert_eq!(
+            dispatcher.dispatch(&store, "app.toggle.file_context", None),
+            Dispatch::Handled
+        );
+        assert_eq!(store.settings_snapshot_value("prompt.editor"), "false");
+
+        // diffwrap: diffs.wrap word → none → word (the two-value cycle).
+        assert_eq!(dispatcher.dispatch(&store, "app.toggle.diffwrap", None), Dispatch::Handled);
+        assert_eq!(store.settings_snapshot_value("diffs.wrap"), "none");
+        assert_eq!(dispatcher.dispatch(&store, "app.toggle.diffwrap", None), Dispatch::Handled);
+        assert_eq!(store.settings_snapshot_value("diffs.wrap"), "word");
+
+        // Every flip wrote through the config sink in order.
+        assert_eq!(
+            sink.0.borrow().as_slice(),
+            [
+                ("animations".to_owned(), "true".to_owned()),
+                ("prompt.editor".to_owned(), "false".to_owned()),
+                ("diffs.wrap".to_owned(), "none".to_owned()),
+                ("diffs.wrap".to_owned(), "word".to_owned()),
+            ]
+        );
+    }
+
+    /// G-227 — the three toggles' palette titles reflect the CURRENT
+    /// value (the ref's dynamic "Disable/Enable …" thunks,
+    /// app.tsx:1149/1163/1177): the row default renders one label,
+    /// the flipped state the other.
+    #[test]
+    fn palette_toggle_titles_reflect_the_current_value() {
+        let store = Store::new(Runtime::new());
+        let title = |command: &str| {
+            let entry = palette_command(command).expect("the registry entry");
+            palette_title(&entry, &store)
+        };
+        // Row defaults: animations false, prompt.editor true,
+        // diffs.wrap word.
+        assert_eq!(title("app.toggle.animations"), "Enable animations");
+        assert_eq!(title("app.toggle.file_context"), "Disable file context");
+        assert_eq!(title("app.toggle.diffwrap"), "Disable diff wrapping");
+        // Each dispatch flips the label.
+        let mut dispatcher = StoreDispatcher;
+        let _ = dispatcher.dispatch(&store, "app.toggle.animations", None);
+        let _ = dispatcher.dispatch(&store, "app.toggle.file_context", None);
+        let _ = dispatcher.dispatch(&store, "app.toggle.diffwrap", None);
+        assert_eq!(title("app.toggle.animations"), "Disable animations");
+        assert_eq!(title("app.toggle.file_context"), "Enable file context");
+        assert_eq!(title("app.toggle.diffwrap"), "Enable diff wrapping");
+        // The palette rows carry the dynamic title (the rendered
+        // surface reads `palette_options_slice` → `palette_title`).
+        let props = palette_props(&store);
+        let titles: Vec<&str> = props.options.iter().map(|option| option.title.as_str()).collect();
+        assert!(titles.contains(&"Disable animations"), "the live label renders: {titles:?}");
+        assert!(titles.contains(&"Enable diff wrapping"), "the live label renders: {titles:?}");
     }
 
     /// SA-F6: the Plugins dialog renders the ref's live shape — the

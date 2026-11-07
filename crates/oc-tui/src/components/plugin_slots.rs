@@ -45,7 +45,8 @@ pub const MOUNTED_SLOT_PATHS: [&str; 8] = [
 //
 // * `session.panel` — the interactive PanelInput API (focus()/
 //   close(), context.ts:168-178) has no native surface; no shipping
-//   plugin claims it (documented exemption, G-04).
+//   plugin claims it (the registered exemption, G-239 in
+//   docs/GAPS-AND-PITFALLS.md).
 // * `session.composer.top` — rows above the composer input need a
 //   new PromptView layout surface (not a trivial addition beside
 //   the footer faces); skipped in this pass.
