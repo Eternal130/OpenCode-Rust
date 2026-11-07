@@ -6,6 +6,7 @@ use serde_json::Value;
 
 use crate::cli::{AuthCommands, OutputFormat, ServerParams};
 use crate::handlers::connect;
+use crate::services::server_connection;
 use crate::util;
 use crate::util::error_message;
 
@@ -772,7 +773,17 @@ async fn resolve_account(
     // G-150 (ref chooseIntegration/chooseCredential): both halves get
     // TTY selectors when the target/credential is omitted — only a
     // NON-interactive terminal hard-errors.
-    let resolved = connect(server, None).await.map_err(|_| String::new())?;
+    // G-228: resolve directly (not handlers::connect, which prints and
+    // exits) so the REAL connect error propagates — logout/switch print
+    // it via their eprintln path instead of an empty line (ref
+    // handlePromptErrors).
+    let resolved = server_connection::resolve(server_connection::Args {
+        server: server.server.clone(),
+        standalone: server.standalone,
+        mismatch: server_connection::Mismatch::Ignore,
+    })
+    .await
+    .map_err(|message| error_message(&message))?;
     let client = resolved.endpoint.client();
     let integrations = load_integrations(&client).await?;
     let integration = match target {
@@ -1079,7 +1090,8 @@ fn login_choices(integrations: &[Value]) -> Vec<LoginChoice> {
 
 #[cfg(test)]
 mod tests {
-    use super::{connect_methods, login_choices, open_url, require_interactive, util};
+    use super::{connect_methods, login_choices, open_url, require_interactive, resolve_account, util};
+    use crate::cli::ServerParams;
     use serde_json::json;
     use std::path::PathBuf;
 
@@ -1234,5 +1246,21 @@ mod tests {
             "Pass an integration ID or name when running without an interactive terminal",
         );
         assert_eq!(gated.is_ok(), tty);
+    }
+
+    /// G-228 — logout/switch connect failures must surface a REAL
+    /// message, never the empty string the old
+    /// `map_err(|_| String::new())` swallow produced.
+    #[tokio::test]
+    async fn resolve_account_connect_failure_is_non_empty() {
+        let server = ServerParams {
+            standalone: false,
+            // Port 1 on loopback: refused immediately, no server.
+            server: Some("http://127.0.0.1:1".to_owned()),
+        };
+        let error = resolve_account(&server, Some("github"), Some("cred"))
+            .await
+            .expect_err("unreachable server must fail resolve");
+        assert!(!error.trim().is_empty(), "error message must be non-empty, got {error:?}");
     }
 }

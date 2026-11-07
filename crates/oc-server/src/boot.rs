@@ -198,6 +198,19 @@ pub fn attach_event_logger(bus: &oc_core::bus::Bus) -> oc_core::bus::ListenGuard
 // budget and splitting it would only hide the boot ordering.
 #[allow(clippy::too_many_lines)]
 pub async fn boot_and_serve(options: &BootOptions) -> io::Result<ServeHandle> {
+    boot_and_serve_with_listener(options, None).await
+}
+
+/// G-217 — `boot_and_serve` with a PRE-BOUND listener. The CLI service
+/// mode binds through `lifecycle::bind_or_incumbent` (EADDRINUSE →
+/// 15 s incumbent-probe/bind retry, v2 `server-process.ts:148-171`) and
+/// passes the listener here so an old daemon exiting hands the port to
+/// the new one instead of failing the boot. `None` keeps the one-shot
+/// `lifecycle::serve` bind used by the binary and embedders.
+pub async fn boot_and_serve_with_listener(
+    options: &BootOptions,
+    listener: Option<tokio::net::TcpListener>,
+) -> io::Result<ServeHandle> {
     // RUNTIME-SWEEP-RACE — the recovery sweep's world boundary, captured
     // at process entry (strictly before this boot can serve a request or
     // claim anything): claims recorded at or after this instant belong to
@@ -570,7 +583,10 @@ pub async fn boot_and_serve(options: &BootOptions) -> io::Result<ServeHandle> {
             }) as futures::future::BoxFuture<'static, ()>
         }) as lifecycle::OnListen
     });
-    lifecycle::serve(&options.serve, state, router, on_listen).await
+    match listener {
+        Some(listener) => lifecycle::serve_listener(listener, state, router, on_listen).await,
+        None => lifecycle::serve(&options.serve, state, router, on_listen).await,
+    }
 }
 
 /// Whether the RF-01 local-provider discovery loop runs (see the spawn
