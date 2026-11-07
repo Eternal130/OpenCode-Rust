@@ -377,6 +377,11 @@ pub const REFERENCE_UPDATED: &str = "reference.updated";
 /// notify — published after every plugin inventory change (the ref's
 /// plugin.ts:121/175), including the RF-02 update path's reload.
 pub const PLUGIN_UPDATED: &str = "plugin.updated";
+/// `sdk.plugin.updated` `{}` (plugin/sdk.ts:9 `SdkPlugins.Updated`): the
+/// SDK plugin registration notify — one of the plugin supervisor's reload
+/// triggers (plugin/supervisor.ts:213). No publisher in the port yet; the
+/// supervisor subscribes it so the leg is wired exactly like the ref.
+pub const SDK_PLUGIN_UPDATED: &str = "sdk.plugin.updated";
 
 static NON_SESSION: LazyLock<Vec<EventDefinition>> = LazyLock::new(|| {
     vec![
@@ -434,6 +439,10 @@ static NON_SESSION: LazyLock<Vec<EventDefinition>> = LazyLock::new(|| {
         // bus definition so the update path can publish it
         // (append-only — positional accessors unaffected).
         EventDefinition::ephemeral(PLUGIN_UPDATED),
+        // G-222: the SDK plugin registration notify (plugin/sdk.ts:9) —
+        // a supervisor reload trigger (supervisor.ts:213). Append-only
+        // (positional accessors unaffected).
+        EventDefinition::ephemeral(SDK_PLUGIN_UPDATED),
     ]
 });
 
