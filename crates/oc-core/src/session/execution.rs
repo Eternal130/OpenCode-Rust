@@ -894,11 +894,39 @@ impl ExecutionHooks {
         result
     }
 
-    /// The synthetic failed-turn error part: `session.step.started` +
-    /// `session.step.failed` over a fresh assistant message id (the exact
-    /// v2 event/part shape — the message updater projects an assistant
-    /// row carrying `error` + `finish: "error"`, and the SSE feed carries
-    /// both frames to clients).
+    /// G-226 — the synthetic failed-turn error part (a REGISTERED
+    /// bounded deviation from ref): `session.step.started` +
+    /// `session.step.failed` over an assistant message id, so the
+    /// message updater projects an assistant row carrying `error` +
+    /// `finish: "error"` (message-updater.ts:273-287:
+    /// `draft.error = event.data.error; draft.finish ??= "error"`).
+    ///
+    /// **Ref behavior (the deviation)**: ref's terminal failure
+    /// publishes ONLY `SessionEvent.Execution.Failed`
+    /// (execution.ts:140-146) and the updater maps it to `idle("failed")`
+    /// (message-updater.ts:145) — NO assistant row is created. The port
+    /// keeps this synthetic row as a deliberate enhancement: transcript
+    /// and `/api/session/:id/message` surface the turn's error inline
+    /// (the live beta.3.1 defect this fixed had the error ONLY in the
+    /// SSE payload). Wire/storage consequence: Rust transcripts contain
+    /// one synthetic assistant error row per failed turn that ref does
+    /// not have — export/transcript interop sees an extra row.
+    ///
+    /// **Dedup contract (G-226)**: the turn key is the session's LAST
+    /// USER message. Every failure of the SAME turn (execution
+    /// re-entry, restart resume of a suspended claim, inbox
+    /// redelivery) shares that key and must NOT append another row:
+    /// when the current turn already owns an assistant error row, its
+    /// id is REUSED — the updater's `session.step.started` /
+    /// `session.step.failed` projection with an existing
+    /// `assistantMessageID` updates the row in place (refreshed
+    /// agent/model, reset then re-set error, new payload). Distinct
+    /// turns (a new user message) mint distinct rows. A turn that
+    /// progressed past its error (a newer non-error assistant row)
+    /// mints a fresh row so the error projection never moves backward
+    /// in the transcript. Unbounded accumulation of one row per
+    /// failure is therefore impossible: repeated pure failures of one
+    /// turn collapse to exactly ONE row.
     async fn publish_failed_turn_error(
         &self,
         session_id: &str,
@@ -908,8 +936,14 @@ impl ExecutionHooks {
     ) -> Result<(), RunError> {
         let session_id = oc_schema::id::SessionId::parse(session_id.to_string())
             .unwrap_or_else(|err| oc_schema::id::SessionId(err.value));
-        let assistant_message_id = oc_schema::id::MessageId::parse(self.ids.new_id("msg"))
-            .unwrap_or_else(|err| oc_schema::id::MessageId(err.value));
+        let assistant_message_id = match self.reusable_failed_turn_row(&session_id).await {
+            // Same turn's existing error row — update it in place.
+            Some(existing) => existing,
+            // First failure of this turn (or the turn progressed past
+            // its last error) — a fresh row.
+            None => oc_schema::id::MessageId::parse(self.ids.new_id("msg"))
+                .unwrap_or_else(|err| oc_schema::id::MessageId(err.value)),
+        };
         let started = oc_schema::session_event::StepStarted {
             session_id: session_id.clone(),
             assistant_message_id: assistant_message_id.clone(),
@@ -940,6 +974,67 @@ impl ExecutionHooks {
             serde_json::to_value(&failed).unwrap_or_default(),
         )
         .await
+    }
+
+    /// G-226 — the reusable error row for the CURRENT turn, if any: the
+    /// NEWEST assistant row after the session's last user message when
+    /// it already carries `finish: "error"` (either this path's earlier
+    /// synthetic row or the runner's own surfaced `session.step.failed`
+    /// projection — both are the turn's single error row, and the drain
+    /// has ended by the time this runs, so no live draft is adopted).
+    /// Store-derived (not in-memory): restart resume in another process
+    /// dedupes against the persisted transcript too.
+    async fn reusable_failed_turn_row(
+        &self,
+        session_id: &oc_schema::id::SessionId,
+    ) -> Option<oc_schema::id::MessageId> {
+        let rows = self
+            .store
+            .messages(crate::session::store::MessagesInput {
+                session_id: session_id.to_string(),
+                limit: None,
+                order: Some(crate::session::store::ListOrder::Asc),
+                type_: None,
+                cursor: None,
+            })
+            .await
+            .ok()?;
+        // Durable order (Asc): the turn's rows are everything after the
+        // LAST user message. Walk newest → oldest; the first assistant
+        // row seen is the turn's newest.
+        for row in rows.iter().rev() {
+            // The message type lives in the `type_` column — the row's
+            // data JSON carries everything but `type`/`id`
+            // (`insert_message`, projector.rs:635-636).
+            let Ok(data) = serde_json::from_str::<serde_json::Value>(&row.data) else {
+                continue;
+            };
+            match row.type_.as_str() {
+                "user" => {
+                    // Turn boundary reached: the turn's newest assistant
+                    // row (if any) was collected before this point.
+                    return None;
+                }
+                "assistant" => {
+                    let finish_error = data.get("finish").is_some_and(|finish| {
+                        serde_json::from_value::<oc_schema::common::FinishReason>(finish.clone())
+                            .map(|reason| reason == oc_schema::common::FinishReason::Error)
+                            .unwrap_or(false)
+                    });
+                    if finish_error {
+                        return oc_schema::id::MessageId::parse(row.id.clone()).ok();
+                    }
+                    // A non-error assistant row is the turn's newest —
+                    // the turn progressed past any earlier error; a new
+                    // failure mints a fresh row (never moves the error
+                    // projection backward).
+                    return None;
+                }
+                _ => {}
+            }
+        }
+        // No user message at all (orphan execution): nothing to key on.
+        None
     }
 
     async fn publish_step_event(

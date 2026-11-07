@@ -3541,3 +3541,182 @@ async fn session_remove_tree_interrupts_running_execution_before_delete() {
     assert!(store.get("ses_rm_running").await.unwrap().is_none());
     assert!(!execution.is_active("ses_rm_running"));
 }
+
+// ===========================================================================
+// G-226 — synthetic failed-turn row: bounded enhancement + turn dedup
+// ===========================================================================
+
+/// A drain that fails PRE-STEP (surfaced: false) every run, with a
+/// per-run message so the payload update is observable.
+fn failing_drain(counter: Arc<AtomicUsize>) -> DrainFn {
+    Arc::new(move |_, _, _, _, _| {
+        let counter = Arc::clone(&counter);
+        Box::pin(async move {
+            let n = counter.fetch_add(1, Ordering::SeqCst) + 1;
+            Err(RunError::Failed {
+                error: oc_schema::common::SessionError {
+                    error_type: "provider.transport".into(),
+                    message: format!("failure {n}"),
+                    status: None,
+                    response: None,
+                },
+                surfaced: false,
+            })
+        })
+    })
+}
+
+/// Seeds one user message row (the turn key). `seq` must interleave
+/// with the projection's rows — message rows carry their EVENT's log
+/// seq (`insert_message`, projector.rs:641), so a hand-seeded row picks
+/// a position the event log will not collide with (0 for a leading
+/// user row; the next log position for a mid-transcript one).
+async fn seed_user_message(db: &Database, session_id: &str, id: &str, seq: i64) {
+    let (session, id) = (session_id.to_string(), id.to_string());
+    db.transaction(move |tx| {
+        SessionMessageRow::insert(
+            tx,
+            &SessionMessageRow {
+                id,
+                session_id: session,
+                type_: "user".to_string(),
+                seq,
+                time_created: 0,
+                time_updated: 0,
+                data: serde_json::json!({
+                    "text": "please fail",
+                    "time": { "created": 0 },
+                })
+                .to_string(),
+            },
+        )?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+}
+
+/// The session's assistant error rows: (id, error message) in durable
+/// order.
+async fn assistant_error_rows(
+    store: &SessionStore,
+    session_id: &str,
+) -> Vec<(String, Option<String>)> {
+    store
+        .messages(MessagesInput {
+            session_id: session_id.to_string(),
+            order: Some(ListOrder::Asc),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|row| row.type_ == "assistant")
+        .filter_map(|row| {
+            let data: serde_json::Value = serde_json::from_str(&row.data).ok()?;
+            let finish = data.get("finish")?.as_str()?;
+            if finish != "error" {
+                return None;
+            }
+            let message = data
+                .get("error")
+                .and_then(|error| error.get("message"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string);
+            Some((row.id, message))
+        })
+        .collect()
+}
+
+/// The event log's next sequence position (for mid-transcript seeds).
+async fn next_event_seq(db: &Database) -> i64 {
+    db.transaction(move |tx| {
+        Ok(tx.conn().query_row(
+            "SELECT COALESCE(MAX(seq), 0) + 1 FROM event",
+            [],
+            |row| row.get::<_, i64>(0),
+        )?)
+    })
+    .await
+    .unwrap()
+}
+
+/// Durable `session.execution.failed` count for the session.
+async fn execution_failed_count(db: &Database, session_id: &str) -> i64 {
+    let session = session_id.to_string();
+    db.transaction(move |tx| {
+        Ok(tx
+            .conn()
+            .query_row(
+                // The durable log stores VERSIONED type names
+                // (`session.execution.failed.1`).
+                "SELECT COUNT(*) FROM event WHERE type LIKE 'session.execution.failed.%' \
+                 AND data LIKE ?1",
+                rusqlite::params![format!("%{session}%")],
+                |row| row.get(0),
+            )
+            .unwrap_or(0))
+    })
+    .await
+    .unwrap()
+}
+
+/// G-226: the same turn failing repeatedly (execution re-entry on the
+/// SAME last user message) accumulates exactly ONE synthetic assistant
+/// error row — reused id, updated `step.failed` payload — while
+/// `session.execution.failed` still fires for EVERY failure.
+#[tokio::test]
+async fn g226_same_turn_failed_twice_appends_one_synthetic_row() {
+    let counter = Arc::new(AtomicUsize::new(0));
+    let (db, _bus, execution) = execution_stack(failing_drain(Arc::clone(&counter)), None).await;
+    seed_session_raw(&db, "ses_g226_same").await;
+    seed_user_message(&db, "ses_g226_same", "msg_g226_user", 0).await;
+
+    let store = SessionStore::new(db.clone());
+    let exit = execution.resume("ses_g226_same").await;
+    assert!(exit.is_err(), "the drain fails: {exit:?}");
+    let rows = assistant_error_rows(&store, "ses_g226_same").await;
+    assert_eq!(rows.len(), 1, "first failure appends one synthetic row");
+    assert_eq!(rows[0].1.as_deref(), Some("failure 1"));
+    let first_id = rows[0].0.clone();
+
+    execution.resume("ses_g226_same").await;
+    let rows = assistant_error_rows(&store, "ses_g226_same").await;
+    assert_eq!(rows.len(), 1, "second failure of the SAME turn adds no row: {rows:?}");
+    assert_eq!(rows[0].0, first_id, "the existing row's message id is reused");
+    assert_eq!(rows[0].1.as_deref(), Some("failure 2"), "payload updated");
+    assert_eq!(
+        execution_failed_count(&db, "ses_g226_same").await,
+        2,
+        "execution.failed published on every failure"
+    );
+}
+
+/// G-226: distinct turns (a NEW user message between failures) keep
+/// DISTINCT synthetic rows.
+#[tokio::test]
+async fn g226_distinct_failing_turns_get_distinct_rows() {
+    let counter = Arc::new(AtomicUsize::new(0));
+    let (db, _bus, execution) = execution_stack(failing_drain(Arc::clone(&counter)), None).await;
+    seed_session_raw(&db, "ses_g226_two").await;
+    seed_user_message(&db, "ses_g226_two", "msg_g226_user1", 0).await;
+
+    let store = SessionStore::new(db.clone());
+    execution.resume("ses_g226_two").await;
+    let first = assistant_error_rows(&store, "ses_g226_two").await;
+    assert_eq!(first.len(), 1);
+
+    // A new prompt = a new turn (seeded at the log's next position —
+    // after the first failure's rows, before the next failure's).
+    let next = next_event_seq(&db).await;
+    seed_user_message(&db, "ses_g226_two", "msg_g226_user2", next).await;
+    execution.resume("ses_g226_two").await;
+    let second = assistant_error_rows(&store, "ses_g226_two").await;
+    assert_eq!(second.len(), 2, "distinct turns keep distinct rows");
+    assert_ne!(first[0].0, second[1].0);
+    assert_eq!(
+        execution_failed_count(&db, "ses_g226_two").await,
+        2,
+        "execution.failed published on every failure"
+    );
+}
