@@ -374,10 +374,16 @@ fn respond(
                 );
             }
             if script.expire_once.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                // G-223: the restarted single-session server's JSON-RPC
+                // rejection (ref client.ts:234-239) — the expiry signal a
+                // mock transport CAN produce (the typed 404 variant only
+                // comes from the real streamable transport). The caller
+                // must mark the connection session-attached for the
+                // classifier to accept it.
                 return Some(JsonRpcMessage::error(
                     rmcp::ErrorData::new(
                         rmcp::model::ErrorCode::INTERNAL_ERROR,
-                        "HTTP status client error (404 Not Found)",
+                        "Bad Request: Server not initialized",
                         None,
                     ),
                     Some(id),
@@ -650,9 +656,11 @@ async fn mcp_client_classifies_session_expiry_once() {
         elicitation: None,
         stdio: None,
     };
-    // Remote classification requires remote=true.
+    // Remote classification requires remote=true AND (G-223) an attached
+    // session — the mock simulates a sessionful remote server.
     let connection =
         client::connect_with_transport(&input, transport, true).await.expect("connect");
+    connection.mark_session_attached();
     let first = connection.call_tool("ping", None, None).await;
     let Err(error) = first else { panic!("expected expiry") };
     assert!(
@@ -1530,6 +1538,8 @@ async fn mcp_registry_recovers_and_replays_after_session_expiry() {
         let bearer = input.bearer.clone();
         let elicitation = input.elicitation.clone();
         Box::pin(async move {
+            // G-223: the mock simulates a sessionful remote server —
+            // expiry classification requires the session-attached gate.
             client::connect_with_transport(
                 &ConnectInput {
                     server: &server,
@@ -1543,6 +1553,10 @@ async fn mcp_registry_recovers_and_replays_after_session_expiry() {
                 true,
             )
             .await
+            .map(|connection| {
+                connection.mark_session_attached();
+                connection
+            })
         })
     });
     let registry = registry_with(&bus, connector, servers);
@@ -2248,5 +2262,104 @@ mod stdio_environment_seam {
             .collect();
         let expected = client::stdio_environment(std::env::vars(), "opencode", Some(&config_env));
         assert_eq!(printed, expected, "local seam merge is byte-for-byte the old env");
+    }
+}
+
+// ===========================================================================
+// G-223 — typed expiry/unauthorized classification (ref client.ts:230-243:
+// status from the typed HTTP error; expiry gated on a session id being
+// attached to the transport).
+// ===========================================================================
+
+mod g223_classification {
+    use super::*;
+
+    /// `DynamicTransportError` is `#[non_exhaustive]` (not constructible
+    /// outside rmcp); the classifier also reaches the typed transport
+    /// error by walking `source()` of any wrapper, which is exactly the
+    /// production chain (`ServiceError::TransportSend` → boxed
+    /// `StreamableHttpError`).
+    #[derive(Debug, thiserror::Error)]
+    #[error("Transport send error")]
+    struct Wrap(#[source] rmcp::transport::streamable_http_client::StreamableHttpError<reqwest13::Error>);
+
+    /// The restarted single-session server's JSON-RPC rejection (reaches
+    /// the classifier as `ServiceError::McpError`, no typed HTTP status).
+    #[derive(Debug, thiserror::Error)]
+    #[error("Mcp error: Bad Request: Server not initialized")]
+    struct RestartedServer;
+
+    /// A sessionful 404: rmcp's own `SessionExpired` variant — produced
+    /// only when the POST carried the negotiated session id.
+    #[test]
+    fn g223_404_with_session_is_expired() {
+        let error = Wrap(rmcp::transport::streamable_http_client::StreamableHttpError::SessionExpired,
+        );
+        assert!(client::session_expired(&error, true));
+        // The typed variant carries the session gate by construction — it
+        // classifies even without the observing flag.
+        assert!(client::session_expired(&error, false));
+    }
+
+    /// A STATELESS 404 (no session id attached): rmcp surfaces it as
+    /// `UnexpectedServerResponse("HTTP 404 …")` — a plain error, NOT an
+    /// expiry (the old string matcher classified any "404" text as
+    /// expired).
+    #[test]
+    fn g223_404_without_session_is_not_expired() {
+        let error = Wrap(rmcp::transport::streamable_http_client::StreamableHttpError::UnexpectedServerResponse(
+                std::borrow::Cow::Borrowed("HTTP 404 Not Found: no such resource"),
+            ),
+        );
+        assert!(!client::session_expired(&error, false));
+        assert!(!client::unauthorized(&error));
+    }
+
+    /// 401s: the typed auth challenge, a challenge-less rendering, and a
+    /// reqwest status error all classify unauthorized.
+    #[test]
+    fn g223_unauthorized_typed_variants() {
+        let challenge = Wrap(rmcp::transport::streamable_http_client::StreamableHttpError::AuthRequired(
+                rmcp::transport::streamable_http_client::AuthRequiredError::new(
+                    "Bearer realm=\"mcp\"".to_string(),
+                ),
+            ),
+        );
+        assert!(client::unauthorized(&challenge));
+        assert!(!client::session_expired(&challenge, true));
+
+        let bare = Wrap(rmcp::transport::streamable_http_client::StreamableHttpError::UnexpectedServerResponse(
+                std::borrow::Cow::Borrowed("HTTP 401 Unauthorized: token revoked"),
+            ),
+        );
+        assert!(client::unauthorized(&bare));
+
+        let forbidden = Wrap(rmcp::transport::streamable_http_client::StreamableHttpError::InsufficientScope(
+                rmcp::transport::streamable_http_client::InsufficientScopeError::new(
+                    "Bearer scope=\"admin\"".to_string(),
+                    Some("admin".to_string()),
+                ),
+            ),
+        );
+        assert!(client::unauthorized(&forbidden));
+    }
+
+    /// Non-HTTP failures (timeouts, io) match nothing.
+    #[test]
+    fn g223_non_http_errors_do_not_match() {
+        let timeout = rmcp::ServiceError::Timeout { timeout: Duration::from_secs(5) };
+        assert!(!client::session_expired(&timeout, true));
+        assert!(!client::unauthorized(&timeout));
+    }
+
+    /// The restarted single-session server's protocol error
+    /// ("Bad Request: Server not initialized") classifies as expiry ONLY
+    /// when a session was attached (ref gates the 400 branch the same
+    /// way).
+    #[test]
+    fn g223_restarted_server_message_is_gated_on_session() {
+        let error = RestartedServer;
+        assert!(client::session_expired(&error, true));
+        assert!(!client::session_expired(&error, false));
     }
 }
