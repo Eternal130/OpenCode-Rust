@@ -2981,6 +2981,129 @@ async fn g225_row_without_integration_id_is_skipped() {
 }
 
 // ===========================================================================
+// G-117 — activate/update never write `time_updated`: the ref's drizzle
+// `.set({...})` updates only the listed columns (credential.ts:124-130 for
+// activate, :227-228 for update), so the column keeps its insert-time
+// value across activation switches and label/value edits.
+// ===========================================================================
+
+/// (active, time_created, time_updated) for one credential row.
+async fn row_times(db: &Arc<crate::database::Database>, id: &str) -> (i64, i64, i64) {
+    let id = id.to_owned();
+    let db = db.clone();
+    db.transaction(move |tx| {
+        tx.conn()
+            .query_row(
+                "SELECT active, time_created, time_updated FROM credential WHERE id = ?1",
+                [&id],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .map_err(crate::database::DbError::Sqlite)
+    })
+    .await
+    .expect("row read")
+}
+
+/// Pins `time_updated` to a sentinel so a later stability assert cannot
+/// pass by clock coincidence (create and mutate within the same ms).
+async fn pin_time_updated(db: &Arc<crate::database::Database>, id: &str, value: i64) {
+    let id = id.to_owned();
+    let db = db.clone();
+    db.transaction(move |tx| {
+        tx.conn()
+            .execute("UPDATE credential SET time_updated = ?2 WHERE id = ?1", (&id, value))
+            .map_err(crate::database::DbError::Sqlite)?;
+        Ok(())
+    })
+    .await
+    .expect("pin time_updated");
+}
+
+#[tokio::test]
+async fn g117_activate_and_update_never_touch_time_updated() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let db = Arc::new(
+        crate::database::Database::open_file(dir.path().join("g117.db")).await.expect("db"),
+    );
+    let bus = Arc::new(crate::bus::Bus::new(
+        (*db).clone(),
+        crate::bus::BusOptions { persist: false, ..BusOptions::deterministic() },
+    ));
+    let store = credential::CredentialStore::new(db.clone(), bus);
+    let key = |text: &str| {
+        CredentialValue::Key(KeyValue { key: text.into(), metadata: None, configuration: None })
+    };
+
+    // Insert DOES set time_updated (== time_created, the insert-time value).
+    store
+        .create(credential::CreateInput {
+            id: Some("cred_a"),
+            integration_id: "github",
+            label: None,
+            value: &key("k-a"),
+            activate: None,
+        })
+        .await
+        .expect("create a");
+    store
+        .create(credential::CreateInput {
+            id: Some("cred_b"),
+            integration_id: "github",
+            label: None,
+            value: &key("k-b"),
+            activate: Some(false),
+        })
+        .await
+        .expect("create b");
+    for (id, expect_active) in [("cred_a", 1), ("cred_b", 0)] {
+        let (active, created, updated) = row_times(&db, id).await;
+        assert_eq!(active, expect_active, "{id}: selection at insert");
+        assert!(created > 0 && updated == created, "{id}: insert sets time_updated = time_created");
+    }
+
+    // Pin sentinels BEFORE mutating (see pin_time_updated).
+    pin_time_updated(&db, "cred_a", 111_111).await;
+    pin_time_updated(&db, "cred_b", 222_222).await;
+
+    // activate flips the selection WITHOUT touching time_updated on either
+    // row — the sibling deactivation is the same column-limited
+    // `.set({ active: false })` (credential.ts:182-187).
+    store.activate("cred_b").await.expect("activate b");
+    let (a_active, _, a_updated) = row_times(&db, "cred_a").await;
+    let (b_active, _, b_updated) = row_times(&db, "cred_b").await;
+    assert_eq!((a_active, a_updated), (0, 111_111), "deactivated row keeps its mtime");
+    assert_eq!((b_active, b_updated), (1, 222_222), "activated row keeps its mtime");
+
+    // Label-only update: label lands, mtime stays.
+    store.update("cred_b", Some("renamed"), None).await.expect("label update");
+    let stored = store.get("cred_b").await.expect("get").expect("row");
+    assert_eq!(stored.label, "renamed");
+    assert_eq!(row_times(&db, "cred_b").await.2, 222_222, "label update keeps mtime");
+
+    // Value-only update (the OAuth refresh path, integration/mod.rs): the
+    // rotated value lands, mtime stays.
+    store.update("cred_b", None, Some(&key("k-b-rotated"))).await.expect("value update");
+    assert_eq!(store.get("cred_b").await.expect("get").expect("row").value, key("k-b-rotated"));
+    assert_eq!(row_times(&db, "cred_b").await.2, 222_222, "value update keeps mtime");
+
+    // Label + value together: same.
+    store
+        .update("cred_b", Some("renamed-again"), Some(&key("k-b-3")))
+        .await
+        .expect("label+value update");
+    let stored = store.get("cred_b").await.expect("get").expect("row");
+    assert_eq!(stored.label, "renamed-again");
+    assert_eq!(stored.value, key("k-b-3"));
+    assert_eq!(row_times(&db, "cred_b").await.2, 222_222, "label+value update keeps mtime");
+}
+
+// ===========================================================================
 // G-234 — ① device/token form posts carry Accept + User-Agent; ② the
 // loopback callback serves the shared branded oauth page (success AND
 // error variants).
