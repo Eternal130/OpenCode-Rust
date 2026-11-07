@@ -198,8 +198,11 @@ impl CredentialStore {
                     (&integration,),
                 )?;
                 tx.execute(
-                    "UPDATE credential SET active = 1, time_updated = ?2 WHERE id = ?1",
-                    (&id, crate::database::migrations::now_ms()),
+                    // G-117 — ref activate's `.set({ active: true })` writes
+                    // ONLY active (credential.ts:187): `time_updated` keeps
+                    // its insert-time value.
+                    "UPDATE credential SET active = 1 WHERE id = ?1",
+                    [&id],
                 )?;
                 Ok(Some(integration))
             })
@@ -241,24 +244,21 @@ impl CredentialStore {
                     return Ok(Some(false));
                 }
                 let label_changed = label.as_deref().is_some_and(|next| next != previous);
+                // G-117 — ref update's `.set({ label, value })` writes only
+                // the listed columns (credential.ts:227-228): `time_updated`
+                // is never bumped here; it keeps its insert-time value.
                 match (&label, &value) {
                     (Some(label), Some(value)) => {
                         tx.execute(
-                            "UPDATE credential SET label = ?2, value = ?3, time_updated = ?4 WHERE id = ?1",
-                            (&id, label, value, crate::database::migrations::now_ms()),
+                            "UPDATE credential SET label = ?2, value = ?3 WHERE id = ?1",
+                            (&id, label, value),
                         )?;
                     }
                     (Some(label), None) => {
-                        tx.execute(
-                            "UPDATE credential SET label = ?2, time_updated = ?3 WHERE id = ?1",
-                            (&id, label, crate::database::migrations::now_ms()),
-                        )?;
+                        tx.execute("UPDATE credential SET label = ?2 WHERE id = ?1", (&id, label))?;
                     }
                     (None, Some(value)) => {
-                        tx.execute(
-                            "UPDATE credential SET value = ?2, time_updated = ?3 WHERE id = ?1",
-                            (&id, value, crate::database::migrations::now_ms()),
-                        )?;
+                        tx.execute("UPDATE credential SET value = ?2 WHERE id = ?1", (&id, value))?;
                     }
                     (None, None) => {}
                 }
