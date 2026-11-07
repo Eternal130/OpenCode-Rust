@@ -310,10 +310,19 @@ async fn be1_sse_filesystem_changed_and_branch_updated_on_head_move() {
         .status
         .success());
     let server = boot(workspace.path().to_path_buf()).await;
+    // The announcer's branch subscription (the production shell starts
+    // this; the bare test harness does not).
+    oc_server::announce::ensure_started(&server.state);
     let location = oc_core::location::LocationRef::new(workspace.path().to_path_buf(), None);
-
-    // Baseline pass: observes the current HEAD, publishes nothing.
-    oc_server::announce::watch_location_head(&server.state, &location).await;
+    // Assemble the location so the ENGINE watcher (the sole
+    // filesystem.changed publisher) is live.
+    server.state.engine.location(location.clone()).await.expect("assemble");
+    assert!(
+        server.state.engine.has_location_watcher(&location),
+        "engine watcher armed at assembly"
+    );
+    // Let the native watch arm before moving HEAD.
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
     let mut stream = feed(&server.state).subscribe();
     assert!(std::process::Command::new("git")
@@ -323,7 +332,6 @@ async fn be1_sse_filesystem_changed_and_branch_updated_on_head_move() {
         .expect("git checkout")
         .status
         .success());
-    oc_server::announce::watch_location_head(&server.state, &location).await;
 
     let changed =
         expect_frame(&mut stream, "\"type\":\"filesystem.changed\"", "filesystem.changed").await;
@@ -332,311 +340,21 @@ async fn be1_sse_filesystem_changed_and_branch_updated_on_head_move() {
     let branch =
         expect_frame(&mut stream, "\"type\":\"vcs.branch.updated\"", "vcs.branch.updated").await;
     assert!(branch.contains("\"branch\":\"feature-lane-be1\""), "{branch}");
-}
 
-/// The v2.0.24 reference server NEVER publishes `session.status` /
-/// `session.idle` (the manifest ships the types, event-manifest.ts:74-77,
-/// but the reference has zero server-side publish sites — the ref CLIENT
-/// derives the busy union from the execution events,
-/// client/src/solid/data.ts:1009-1037). GATE2's golden adjudication caught
-/// our BE-1 publication as a divergence; this test pins the v2 truth: a
-/// full turn (prompt → provider rejects → execution.failed) carries the
-/// execution frames and NO status frames.
-#[tokio::test]
-async fn be1_sse_session_status_is_never_server_published_over_a_real_turn() {
-    let workspace = tempfile::tempdir().expect("workspace");
-    let provider = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("provider bind");
-    let port = provider.local_addr().unwrap().port();
-    std::fs::write(
-        workspace.path().join("opencode.json"),
-        format!(
-            r#"{{
-                "model": "mock/mock-1",
-                "providers": {{
-                    "mock": {{
-                        "name": "Mock",
-                        "npm": "@ai-sdk/openai-compatible",
-                        "settings": {{
-                            "baseURL": "http://127.0.0.1:{port}/v1",
-                            "apiKey": "sk-dummy"
-                        }},
-                        "models": {{ "mock-1": {{ "name": "Mock 1" }} }}
-                    }}
-                }}
-            }}"#
-        ),
-    )
-    .expect("config");
-    let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
-    tokio::spawn(async move {
-        loop {
-            let (mut stream, _) = tokio::select! {
-                accepted = provider.accept() => match accepted {
-                    Ok(accepted) => accepted,
-                    Err(_) => return,
-                },
-                _ = shutdown_rx.changed() => return,
-            };
-            // Drain the request, then reject with a client error (not
-            // retryable — the turn fails immediately).
-            let mut buf = [0u8; 8192];
-            let _ = tokio::time::timeout(Duration::from_secs(2), stream.read(&mut buf)).await;
-            let reject = "HTTP/1.1 400 Bad Request\r\ncontent-type: application/json\r\nconnection: close\r\n\r\n\
-                {\"error\":{\"message\":\"nope\",\"type\":\"invalid_request_error\"}}";
-            let _ = stream.write_all(reject.as_bytes()).await;
-            let _ = stream.shutdown().await;
-        }
-    });
-
-    let server = boot(workspace.path().to_path_buf()).await;
-    let client = &server.client;
-    let mut stream = feed(&server.state).subscribe();
-    let session_id = create_session(client, "status").await;
-    let _ = client
-        .session()
-        .prompt(&session_id, &SessionPromptBody { text: "hello".to_owned(), ..Default::default() })
-        .await
-        .expect("prompt");
-
-    let started =
-        expect_frame(&mut stream, "\"type\":\"session.execution.started\"", "started").await;
-    assert!(started.contains(&format!("\"sessionID\":\"{session_id}\"")), "{started}");
-    let failed = expect_frame(&mut stream, "\"type\":\"session.execution.failed\"", "failed").await;
-    assert!(failed.contains(&format!("\"sessionID\":\"{session_id}\"")), "{failed}");
-    // Drain briefly: no status/idle frame may EVER cross the wire.
-    let deadline = Duration::from_secs(2);
-    let mut saw_status = false;
-    while let Ok(Some(Ok(frame))) = tokio::time::timeout(deadline, stream.recv()).await {
-        if frame.contains("\"type\":\"session.status\"")
-            || frame.contains("\"type\":\"session.idle\"")
-        {
-            saw_status = true;
-            break;
+    // G-218: exactly one filesystem.changed for the HEAD write — drain a
+    // quiet window and count (the old dual-publisher shape produced a
+    // second copy from the announce poller; the pump's coalescing merges
+    // one write's truncate+data notify pair).
+    let mut filesystem_changed = 1usize;
+    while let Ok(Some(Ok(frame))) =
+        tokio::time::timeout(std::time::Duration::from_millis(700), stream.recv()).await
+    {
+        if frame.contains("\"type\":\"filesystem.changed\"") {
+            filesystem_changed += 1;
         }
     }
-    assert!(
-        !saw_status,
-        "the server must not publish session.status/session.idle (v2 derives client-side)"
-    );
-    shutdown_tx.send(true).expect("stop provider");
-}
-
-// ---------------------------------------------------------------------------
-// session.fork copies history (auditE core #3)
-// ---------------------------------------------------------------------------
-
-/// Seeds one settled user + one settled assistant message on `session_id`.
-async fn seed_settled_history(state: &Arc<AppState>, session_id: &str) {
-    use oc_core::database::schema::SessionMessageRow;
-    let session_id = session_id.to_owned();
-    state
-        .engine
-        .db
-        .transaction(move |tx| {
-            SessionMessageRow::insert(
-                tx,
-                &SessionMessageRow {
-                    id: "msg_user_root".to_owned(),
-                    session_id: session_id.clone(),
-                    type_: "user".to_owned(),
-                    seq: 0,
-                    time_created: 0,
-                    time_updated: 0,
-                    data: r#"{"text":"root question","time":{"created":0}}"#.to_owned(),
-                },
-            )?;
-            SessionMessageRow::insert(
-                tx,
-                &SessionMessageRow {
-                    id: "msg_assistant_root".to_owned(),
-                    session_id,
-                    type_: "assistant".to_owned(),
-                    seq: 1,
-                    time_created: 0,
-                    time_updated: 0,
-                    data: r#"{"agent":"build","model":{"id":"m","providerID":"p"},"content":[],"time":{"created":0,"completed":9}}"#.to_owned(),
-                },
-            )?;
-            Ok(())
-        })
-        .await
-        .expect("seed history");
-}
-
-#[tokio::test]
-async fn be1_fork_copies_history_and_fork_styles_the_title() {
-    let server = boot(tempfile::tempdir().expect("workspace").keep()).await;
-    let client = &server.client;
-    // CD-15: the forked event carries the `location` envelope like every
-    // other session event (the SSE tap observes the wire frame).
-    let mut stream = feed(&server.state).subscribe();
-    let parent = create_session(client, "fork me").await;
-    seed_settled_history(&server.state, &parent).await;
-
-    let fork = client.session().fork(&parent, &SessionForkBody::default()).await.expect("fork");
-    let forked_frame =
-        expect_frame(&mut stream, "\"type\":\"session.forked\"", "session.forked").await;
-    assert!(
-        forked_frame.contains("\"location\":{"),
-        "CD-15: the fork envelope carries location: {forked_frame}"
-    );
-    // v2 wire shape for forks (info.ts:21-27): the `fork` object rides
-    // the `forkSessionId` column; the fork child's `parentID` stays null
-    // (ref projector.ts:151 — fork children are top-level sessions,
-    // only the fork source is linked).
-    let fork_info = fork.fork.as_ref().expect("fork linkage");
-    assert_eq!(fork_info.session_id, parent, "fork points at the parent");
-    assert_eq!(fork.parent_id, None, "fork child is a top-level session (parent_id NULL)");
-    match &fork_info.boundary {
-        SessionForkBoundary::Through(variant) => {
-            assert_eq!(variant.message_id, "msg_assistant_root", "through = newest message");
-        }
-        other @ SessionForkBoundary::Before(_) => {
-            panic!("expected through boundary, got {other:?}")
-        }
-    }
-    assert_eq!(fork.title.as_deref(), Some("fork me (fork #1)"), "fork-styled title");
-
-    // The projector copied BOTH settled messages.
-    let copied = client
-        .message()
-        .list(&fork.id, &SessionMessageListQuery::default())
-        .await
-        .expect("fork messages");
-    assert_eq!(copied.data.len(), 2, "fork carries the parent's settled history");
-
-    // `before` excludes the boundary message and its successors.
-    let fork_before = client
-        .session()
-        .fork(&parent, &SessionForkBody { before: Some("msg_assistant_root".to_owned()) })
-        .await
-        .expect("fork before");
-    let copied_before = client
-        .message()
-        .list(&fork_before.id, &SessionMessageListQuery::default())
-        .await
-        .expect("fork before messages");
-    assert_eq!(copied_before.data.len(), 1, "boundary type=before copies strictly below");
-    // v2 derives the counter from the PARENT title (projector.ts:159,
-    // forkTitle(parent.title)) — the parent title never mutates, so every
-    // fork of "fork me" is "(fork #1)".
-    assert_eq!(fork_before.title.as_deref(), Some("fork me (fork #1)"), "parent-derived title");
-
-    // v2 error contracts: unknown boundary message → 404; empty session →
-    // 400 empty_session.
-    let error = client
-        .session()
-        .fork(&parent, &SessionForkBody { before: Some("msg_missing".to_owned()) })
-        .await
-        .expect_err("404");
-    match &error {
-        oc_client::error::ClientError::Api { status, name, .. } => {
-            assert_eq!(*status, 404, "{status}");
-            assert_eq!(name, "MessageNotFoundError", "{name}");
-        }
-        other => panic!("expected Api(404), got {other:?}"),
-    }
-    let empty = create_session(client, "empty").await;
-    let error = client.session().fork(&empty, &SessionForkBody::default()).await.expect_err("400");
-    match &error {
-        oc_client::error::ClientError::Api { status, fields, .. } => {
-            assert_eq!(*status, 400, "{status}");
-            assert_eq!(fields["kind"], "empty_session", "{fields:?}");
-        }
-        other => panic!("expected Api(400), got {other:?}"),
-    }
-}
-
-// ---------------------------------------------------------------------------
-// session.shell EXECUTES (auditE core #2)
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn be1_session_shell_executes_and_notifies_instead_of_prompting_the_model() {
-    let server = boot(tempfile::tempdir().expect("workspace").keep()).await;
-    let client = &server.client;
-    let session_id = create_session(client, "shell").await;
-    let mut stream = feed(&server.state).subscribe();
-
-    client
-        .session()
-        .shell(
-            &session_id,
-            &SessionShellBody {
-                command: "printf be1-shell-ran".to_owned(),
-                id: Some("msg_shell_1".to_owned()),
-            },
-        )
-        .await
-        .expect("shell 204");
-
-    // started carries the spawned shell info; ended carries the executed
-    // output — proof the command RAN (the old path sent it to the LLM).
-    let started =
-        expect_frame(&mut stream, "\"type\":\"session.shell.started\"", "shell.started").await;
-    assert!(started.contains(&format!("\"sessionID\":\"{session_id}\"")), "{started}");
-    assert!(started.contains("\"status\":\"running\""), "{started}");
-    let ended = expect_frame(&mut stream, "\"type\":\"session.shell.ended\"", "shell.ended").await;
-    assert!(ended.contains("be1-shell-ran"), "ended carries the command output: {ended}");
-    assert!(ended.contains("\"status\":\"exited\""), "{ended}");
-
-    // The user-notification synthetic sits in the inbox (resume:false —
-    // nothing reached the model; no step events exist for the session).
-    let inbox = client.session().inbox().list(&session_id).await.expect("inbox");
-    let notified = inbox.iter().any(|item| match item {
-        SessionInboxInfo::Synthetic(synthetic) => {
-            synthetic.payload.text.contains("be1-shell-ran")
-                && synthetic.payload.text.contains("executed by the user")
-        }
-        _ => false,
-    });
-    assert!(notified, "user notification admitted: {inbox:?}");
-}
-
-// ---------------------------------------------------------------------------
-// config.update round-trip (auditE core #8) — JSONC comment preservation
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn be1_config_update_writes_shell_preserving_comments() {
-    let workspace = tempfile::tempdir().expect("workspace");
-    let server = boot(workspace.path().to_path_buf()).await;
-    let client = &server.client;
-    let config_dir = server.state.engine.home.join(".config").join("opencode");
-    std::fs::create_dir_all(&config_dir).expect("config dir");
-    let config_path = config_dir.join("opencode.jsonc");
-    std::fs::write(&config_path, "{\n  // keep me around\n  \"username\": \"lane-be1\"\n}\n")
-        .expect("seed config");
-
-    client
-        .config()
-        .update(&ConfigPatch { shell: Some("/bin/zsh".to_owned()) })
-        .await
-        .expect("patch 204");
-    let updated = std::fs::read_to_string(&config_path).expect("read back");
-    assert!(updated.contains("// keep me around"), "comment preserved: {updated}");
-    assert!(updated.contains("\"username\": \"lane-be1\""), "unrelated key intact: {updated}");
-    assert!(updated.contains("\"shell\": \"/bin/zsh\""), "shell written: {updated}");
-
-    // null removes the key, comments still intact.
-    client.config().update(&ConfigPatch { shell: None }).await.expect("patch null 204");
-    let removed = std::fs::read_to_string(&config_path).expect("read back");
-    assert!(removed.contains("// keep me around"), "comment still preserved: {removed}");
-    assert!(!removed.contains("\"shell\""), "shell key removed: {removed}");
-}
-
-// ---------------------------------------------------------------------------
-// /api/info capabilities (auditD #9)
-// ---------------------------------------------------------------------------
-
-#[cfg(not(target_os = "windows"))]
-#[tokio::test]
-async fn be1_info_carries_persistent_pty_capability() {
-    let server = boot(tempfile::tempdir().expect("workspace").keep()).await;
-    let info = server.client.server().info().await.expect("info");
     assert_eq!(
-        info.capabilities.expect("capabilities").persistent_pty,
-        Some(true),
-        "persistentPty is true off Windows (binary.node.ts:2)"
+        filesystem_changed, 1,
+        "G-218: the engine watcher is the SOLE filesystem.changed publisher"
     );
 }

@@ -218,7 +218,11 @@ fn reconcile(
 /// The subscription pump (REF's `Stream.runForEach(updates, publish)`):
 /// each update publishes `filesystem.changed` and re-arms the location's
 /// activity (only for already-tracked locations — REF touches only when
-/// the location is active in the service map).
+/// the location is active in the service map). G-218: consecutive native
+/// updates for the SAME file inside a short window coalesce into ONE
+/// published event (a single truncate+write lands as two notify Modify
+/// events; @parcel/watcher's native backends merge these — one
+/// `filesystem.changed` per observed write).
 async fn pump(
     watcher: Arc<FileWatcher>,
     path: PathBuf,
@@ -230,18 +234,38 @@ async fn pump(
     let mut subscription = watcher.subscribe(&WatchTarget::File { path });
     let schema_ref = schema_location(&location);
     loop {
-        tokio::select! {
+        let update = tokio::select! {
             _ = shutdown.changed() => break,
-            update = subscription.recv() => {
-                let Some(update) = update else { break };
-                publish_changed(&bus, Some(&schema_ref), &update).await;
-                if activity.last_touch(&location).is_some() {
-                    activity.touch(&location);
-                }
+            update = subscription.recv() => match update {
+                Some(update) => update,
+                None => break,
+            },
+        };
+        // Coalesce the burst that trails one physical write: drain
+        // further same-file updates until the stream goes quiet for the
+        // window (the last kind wins — a remove after modifies is a
+        // distinct observable outcome).
+        let mut update = update;
+        let deadline = tokio::time::Instant::now()
+            + tokio::time::Duration::from_millis(COALESCE_WINDOW_MS);
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            match tokio::time::timeout(remaining, subscription.recv()).await {
+                Ok(Some(next)) => update = next,
+                Ok(None) => break,
+                Err(_) => break,
             }
+        }
+        publish_changed(&bus, Some(&schema_ref), &update).await;
+        if activity.last_touch(&location).is_some() {
+            activity.touch(&location);
         }
     }
 }
+
+/// The same-file coalescing window (G-218) — long enough to merge one
+/// write's truncate+data pair, short enough to stay event-driven.
+const COALESCE_WINDOW_MS: u64 = 25;
 
 /// `LocationRef` → wire `Location.Ref` (bus publish stamp).
 fn schema_location(location: &LocationRef) -> oc_schema::location::Ref {

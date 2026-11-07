@@ -186,6 +186,10 @@ impl EventFeed {
     /// process ends. The tap drains the (unbounded) bus stream eagerly, so a
     /// slow HTTP consumer only ever backpressures its own bounded queue.
     pub fn spawn_tap(self: &Arc<Self>, bus: &Arc<Bus>) {
+        // Subscribe on the CALLING task before spawning: registering the
+        // subscription inside the spawned task defers it until first
+        // poll, so an event published between spawn and first schedule
+        // was silently missed (observed as G-218's flaky SSE frames).
         let mut subscription = bus.subscribe();
         let feed = Arc::clone(self);
         tokio::spawn(async move {

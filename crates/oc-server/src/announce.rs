@@ -17,10 +17,15 @@
 //!   location down (`location.shutdown`) and rebuilds it, re-publishing
 //!   the service frames.
 //!
-//! The Rust engine assembles the same services but does not (yet) publish
-//! the notify frames itself — the owning oc-core services get their own
-//! notify wiring in a later phase, so this module is the server-side
-//! stand-in for the observable part of that contract.
+//! The Rust engine now holds the notify side itself: the per-location
+//! watcher (`oc_core::filesystem::location_watcher`) publishes
+//! `filesystem.changed` for the VCS HEAD/branch file (G-218: exactly ONE
+//! publisher). This module owns the *response* side: it SUBSCRIBES to
+//! `filesystem.changed`, and — like the ref's `vcs.ts:158-165`
+//! subscription — refreshes the branch fingerprint for HEAD writes and
+//! publishes `vcs.branch.updated` when it moved (event-driven; the old
+//! 250 ms HEAD mtime poll is gone). The config-change half below is
+//! unchanged (the G-164 parity-golden obligations stand).
 //!
 //! ## Mechanism
 //!
@@ -124,7 +129,8 @@ pub(crate) fn inline_published_types() -> Vec<&'static str> {
         "config.updated",
         "project.updated",
         "skill.updated",
-        oc_core::bus::registry::FILESYSTEM_CHANGED,
+        // G-218: filesystem.changed now has exactly ONE publisher (the
+        // engine location watcher); announce subscribes instead.
         oc_core::bus::registry::VCS_BRANCH_UPDATED,
         oc_core::bus::registry::INSTALLATION_UPDATED,
         oc_core::bus::registry::INSTALLATION_UPDATE_AVAILABLE,
@@ -163,8 +169,6 @@ pub struct Announcer {
 struct HeadWatch {
     /// The resolved `<gitdir>/HEAD` file (None: no git metadata found).
     head: Option<std::path::PathBuf>,
-    /// Last observed `(mtime_ns, len)` of the HEAD file.
-    fingerprint: (u64, u64),
     /// Last observed branch name (None until first read).
     branch: Option<String>,
 }
@@ -447,15 +451,22 @@ pub async fn run(state: Arc<AppState>, mut shutdown: watch::Receiver<bool>) {
         };
         for live in watched {
             let key = key_of(&live);
+            // G-218 — seed the HEAD baseline for every LIVE location on
+            // first observation (the ref seeds Vcs.info at location boot,
+            // vcs.ts:118-152; the first filesystem.changed event then
+            // diffs against the pre-change branch instead of
+            // initializing to the post-change one). Runs before the
+            // announced/tracked gate so engine-assembled locations are
+            // covered even before their first request.
+            if !state.announce.head_watch.contains_key(&key) {
+                seed_location_head(&state, &live);
+            }
             if !state.announce.announced.contains_key(&key)
                 && !state.announce.tracked.contains_key(&key)
             {
                 continue;
             }
             let fingerprint = config_fingerprint(&state.engine, &live);
-            // The location watcher (HEAD file) runs on every pass — it is
-            // independent of the config baseline.
-            watch_location_head(&state, &live).await;
             let baseline = state.announce.baselines.get(&key).map_or(0u64, |v| *v);
             if !state.announce.baselines.contains_key(&key) || baseline == fingerprint {
                 continue;
@@ -507,18 +518,6 @@ fn discover_head_file(directory: &std::path::Path) -> Option<std::path::PathBuf>
     None
 }
 
-/// The change fingerprint of a HEAD file (`(mtime_ns, len)`).
-fn head_fingerprint(path: &std::path::Path) -> (u64, u64) {
-    std::fs::metadata(path).map_or((0, 0), |meta| {
-        let mtime = meta
-            .modified()
-            .ok()
-            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-            .map_or(0, |duration| u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX));
-        (mtime, meta.len())
-    })
-}
-
 /// Parses the branch a HEAD file points at (`ref: refs/heads/<name>` →
 /// `<name>`; anything else (detached) → `None`).
 fn head_branch(path: &std::path::Path) -> Option<String> {
@@ -526,62 +525,30 @@ fn head_branch(path: &std::path::Path) -> Option<String> {
     text.lines().next()?.strip_prefix("ref: refs/heads/").map(str::to_string)
 }
 
-/// One location-watcher pass: on a HEAD-file change publish
-/// `filesystem.changed` (`{file, event:"change"}` — the sole v2 publisher,
-/// `location-watcher.ts:28-32` maps create/update/delete onto add/change/
-/// unlink), then refresh the branch and publish `vcs.branch.updated`
-/// `{branch}` when it moved (vcs.ts:118-152). Public for the poller and
-/// the lane tests.
-pub async fn watch_location_head(state: &Arc<AppState>, location: &LocationRef) {
+/// G-218 — the branch refresh driven by `filesystem.changed` events
+/// (ref vcs.ts:118-152 `refresh` behind the :158-165 subscription): on a
+/// HEAD write observed through the engine's location watcher, re-read the
+/// branch and publish `vcs.branch.updated` `{branch}` when it moved.
+/// `filesystem.changed` itself has exactly ONE publisher now (the engine
+/// watcher); this function never emits it. Public for the subscription
+/// task and the lane tests.
+pub async fn refresh_location_branch(state: &Arc<AppState>, location: &LocationRef) {
     let key = key_of(location);
     let head = discover_head_file(&location.directory);
-    let current = head.as_ref().map(|path| head_fingerprint(path));
     let entry = state.announce.head_watch.entry(key).or_insert_with(|| HeadWatch {
         head: head.clone(),
-        fingerprint: current.unwrap_or((0, 0)),
         branch: head.as_deref().and_then(head_branch),
     });
     let mut entry = entry;
-    // Target moved (repo discovered/removed, worktree relinked): re-arm.
+    // Target moved (repo discovered/removed, worktree relinked): re-arm
+    // the baseline without announcing (nothing moved).
     if entry.head != head {
-        let branch = head.as_deref().and_then(head_branch);
+        entry.branch = head.as_deref().and_then(head_branch);
         entry.head = head;
-        entry.fingerprint = current.unwrap_or((0, 0));
-        entry.branch = branch;
         return;
     }
     let Some(head_path) = entry.head.clone() else { return };
-    let Some(fingerprint) = current else { return };
-    if fingerprint == entry.fingerprint {
-        return;
-    }
-    entry.fingerprint = fingerprint;
-    // filesystem.changed (location-routed, exactly like v2's watcher).
-    if let Some(definition) =
-        oc_core::bus::registry::by_type(oc_core::bus::registry::FILESYSTEM_CHANGED)
-    {
-        let options = oc_core::bus::PublishOptions {
-            location: Some(envelope(location)),
-            ..oc_core::bus::PublishOptions::default()
-        };
-        let _ = state
-            .engine
-            .bus
-            .publish(
-                definition,
-                serde_json::to_value(oc_schema::filesystem::Changed {
-                    file: head_path.to_string_lossy().into_owned(),
-                    event: oc_schema::filesystem::Change::Change,
-                })
-                .unwrap_or_default(),
-                options,
-            )
-            .await;
-    }
-    // Vcs.refresh: re-announce only when the branch actually moved
-    // (vcs.ts:143-152 — "Legacy listeners can publish nested updates
-    // before streams and SSE receive this event" is a single-publisher
-    // concern; the poller cannot be overtaken mid-tick).
+    // Re-announce only when the branch actually moved (vcs.ts:143-152).
     let branch = head_branch(&head_path);
     if branch != entry.branch {
         entry.branch.clone_from(&branch);
@@ -601,6 +568,85 @@ pub async fn watch_location_head(state: &Arc<AppState>, location: &LocationRef) 
     }
 }
 
+/// G-218 — seeds the HEAD baseline for a location WITHOUT publishing
+/// (the ref's `Vcs.info` initializes with the location's boot-time
+/// branch, vcs.ts:118-152; the first event diffs against it).
+fn seed_location_head(state: &Arc<AppState>, location: &LocationRef) {
+    let key = key_of(location);
+    state
+        .announce
+        .head_watch
+        .entry(key)
+        .or_insert_with(|| HeadWatch {
+            head: discover_head_file(&location.directory),
+            branch: discover_head_file(&location.directory).as_deref().and_then(head_branch),
+        });
+}
+
+/// G-218 — the `vcs.branch.updated` subscription (ref vcs.ts:158-165):
+/// `bus.subscribe(FileSystem.Event.Changed)` filtered to branch metadata
+/// (`basename(file) === "HEAD"` for git), each match refreshing the
+/// owning location's branch. Runs until the announcer's shutdown latch.
+async fn run_branch_subscription(state: Arc<AppState>, mut shutdown: watch::Receiver<bool>) {
+    use futures::StreamExt as _;
+    let mut events = state.engine.bus.subscribe_types(&[oc_core::bus::registry::FILESYSTEM_CHANGED]);
+    loop {
+        let event = tokio::select! {
+            event = events.next() => match event {
+                Some(event) => event,
+                None => break,
+            },
+            _ = shutdown.changed() => break,
+        };
+        // vcs.ts:160-162 — the git branch-metadata predicate.
+        let Some(file) = event.data.get("file").and_then(Value::as_str) else { continue };
+        if std::path::Path::new(file).file_name().and_then(|name| name.to_str()) != Some("HEAD") {
+            continue;
+        }
+
+        let owned: Vec<LocationRef> = if let Some(scope) = &event.location {
+            vec![LocationRef::new(
+                scope.directory.clone().0,
+                scope.workspace_id.clone().map(|id| id.0),
+            )]
+        } else {
+            // Unscoped event: refresh every watched location whose HEAD
+            // file matches (small set).
+            state
+                .announce
+                .head_watch
+                .iter()
+                .filter(|entry| {
+                    entry
+                        .value()
+                        .head
+                        .as_deref()
+                        .is_some_and(|head| head == std::path::Path::new(file))
+                })
+                .filter_map(|entry| location_by_key(&state, entry.key()))
+                .collect()
+        };
+        for location in owned {
+            refresh_location_branch(&state, &location).await;
+        }
+    }
+}
+
+/// Resolves a head_watch key back to a live location (best effort).
+fn location_by_key(state: &Arc<AppState>, key: &str) -> Option<LocationRef> {
+    for location in state.engine.live_locations() {
+        if key_of(&location) == key {
+            return Some(location);
+        }
+    }
+    for entry in state.announce.tracked.iter() {
+        if key_of(&entry.value()) == key {
+            return Some(entry.value().clone());
+        }
+    }
+    None
+}
+
 /// Spawns the poller once per `AppState` (idempotent).
 pub fn ensure_started(state: &Arc<AppState>) {
     if state.announce.started.swap(true, std::sync::atomic::Ordering::AcqRel) {
@@ -609,8 +655,15 @@ pub fn ensure_started(state: &Arc<AppState>) {
     let (tx, rx) = watch::channel(false);
     *state.announce.shutdown.lock() = Some(tx);
     let poller_state = Arc::clone(state);
+    let branch_state = Arc::clone(state);
+    let branch_shutdown = rx.clone();
     tokio::spawn(async move {
         run(poller_state, rx).await;
+    });
+    // G-218: the branch subscription (event-driven, replaces the HEAD
+    // mtime poll half of the old poller).
+    tokio::spawn(async move {
+        run_branch_subscription(branch_state, branch_shutdown).await;
     });
 }
 
