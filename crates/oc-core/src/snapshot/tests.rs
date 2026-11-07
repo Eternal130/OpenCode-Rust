@@ -712,3 +712,153 @@ async fn g198_snapshot_diff_truncates_past_the_10mib_patch_budget() {
     );
     assert!(last.additions > 0, "numstat counts survive the patch cap");
 }
+
+// ===========================================================================
+// G-219 — alternates (source-odb reachability) + stat-cache incremental
+// capture
+// ===========================================================================
+
+mod g219 {
+    use super::*;
+
+    fn reset_reads() -> u64 {
+        crate::snapshot::CAPTURE_FILE_READS.swap(0, std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn reads() -> u64 {
+        crate::snapshot::CAPTURE_FILE_READS.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// ① A blob present ONLY in the source repo's odb reads through the
+    /// snapshot store's odb (the alternates registration), and the
+    /// layout file exists with the source objects dir.
+    #[test]
+    fn g219_alternates_reach_source_only_blob() {
+        let (tmp, worktree, _) = temp_project();
+        std::fs::write(worktree.join("a.txt"), "a\n").expect("write");
+        let service = store(tmp.path(), &worktree, ".");
+        // Force store creation + alternates registration.
+        service.capture_blocking().expect("capture");
+
+        let source = git2::Repository::open(&worktree).expect("source");
+        let source_only = source.blob(b"lives only in the source odb").expect("source blob");
+
+        // The store odb finds the blob (via the alternate).
+        let repo = service.open_repo().expect("open store repo");
+        let odb = repo.odb().expect("odb");
+        let found = odb.read(source_only).expect("source-only blob reachable");
+        assert_eq!(found.data(), b"lives only in the source odb");
+
+        // Layout parity: objects/info/alternates names the source objects
+        // dir (ref git.ts:345-382 seed layout).
+        let alternates = std::fs::read_to_string(
+            service.git_directory().join("objects").join("info").join("alternates"),
+        )
+        .expect("alternates file");
+        assert!(
+            alternates.trim().ends_with("/objects"),
+            "alternates points at the source objects dir: {alternates}"
+        );
+    }
+
+    /// ② Steady state: a second capture of an unchanged tree does ZERO
+    /// file reads and yields the same tree id.
+    #[test]
+    fn g219_second_capture_does_zero_reads() {
+        let (tmp, worktree, _) = temp_project();
+        std::fs::write(worktree.join("a.txt"), "a\n").expect("write");
+        std::fs::create_dir_all(worktree.join("nested")).expect("dir");
+        std::fs::write(worktree.join("nested/b.txt"), "b\n").expect("write");
+        let service = store(tmp.path(), &worktree, ".");
+
+        reset_reads();
+        let first = service.capture_blocking().expect("capture 1");
+        assert!(reads() >= 2, "first capture reads every file: {}", reads());
+
+        reset_reads();
+        let second = service.capture_blocking().expect("capture 2");
+        assert_eq!(reads(), 0, "unchanged tree: zero reads (stat-cache hits)");
+        assert_eq!(first, second, "identical tree");
+        // The sidecar exists and covers both files.
+        let cache = std::fs::read_to_string(service.git_directory().join("opencode-stat-cache"))
+            .expect("sidecar");
+        assert!(cache.contains("a.txt") && cache.contains("nested/b.txt"), "{cache}");
+    }
+
+    /// ② One touched file costs exactly one read; the tree changes.
+    #[test]
+    fn g219_touched_file_costs_exactly_one_read() {
+        let (tmp, worktree, _) = temp_project();
+        std::fs::write(worktree.join("a.txt"), "a\n").expect("write");
+        std::fs::write(worktree.join("b.txt"), "b\n").expect("write");
+        let service = store(tmp.path(), &worktree, ".");
+        let first = service.capture_blocking().expect("capture 1");
+
+        std::fs::write(worktree.join("a.txt"), "changed\n").expect("touch a");
+        reset_reads();
+        let second = service.capture_blocking().expect("capture 2");
+        assert_eq!(reads(), 1, "only the touched file is read: {}", reads());
+        assert_ne!(first, second);
+
+        // And back to steady state.
+        reset_reads();
+        let third = service.capture_blocking().expect("capture 3");
+        assert_eq!(reads(), 0);
+        assert_eq!(second, third);
+    }
+
+    /// ② Cache invalidation: a same-content file with a bumped mtime is
+    /// re-read (stat mismatch ⇒ no reuse); vanished paths leave the
+    /// sidecar.
+    #[test]
+    fn g219_mtime_bump_invalidates_and_vanished_paths_drop() {
+        let (tmp, worktree, _) = temp_project();
+        std::fs::write(worktree.join("a.txt"), "a\n").expect("write");
+        std::fs::write(worktree.join("gone.txt"), "gone\n").expect("write");
+        let service = store(tmp.path(), &worktree, ".");
+        service.capture_blocking().expect("capture 1");
+
+        // Bump a.txt's mtime WITHOUT changing content.
+        bump_mtime(&worktree.join("a.txt"));
+        std::fs::remove_file(worktree.join("gone.txt")).expect("remove");
+        reset_reads();
+        service.capture_blocking().expect("capture 2");
+        assert_eq!(reads(), 1, "the mtime-bumped file re-reads: {}", reads());
+
+        let cache = std::fs::read_to_string(service.git_directory().join("opencode-stat-cache"))
+            .expect("sidecar");
+        assert!(cache.contains("a.txt"));
+        assert!(!cache.contains("gone.txt"), "vanished path dropped: {cache}");
+    }
+
+    /// A corrupt sidecar degrades to a full capture (never a wrong tree).
+    #[test]
+    fn g219_corrupt_sidecar_degrades_to_full_capture() {
+        let (tmp, worktree, _) = temp_project();
+        std::fs::write(worktree.join("a.txt"), "a\n").expect("write");
+        let service = store(tmp.path(), &worktree, ".");
+        let first = service.capture_blocking().expect("capture 1");
+        std::fs::write(service.git_directory().join("opencode-stat-cache"), "garbage\n").unwrap();
+        reset_reads();
+        let second = service.capture_blocking().expect("capture 2");
+        assert_eq!(reads(), 1, "full re-read after corruption");
+        assert_eq!(first, second, "identical tree despite the corrupt sidecar");
+    }
+
+    /// Bumps mtime +3600s with libc::utimensat (no content change; the
+    /// filetime crate is not a dependency).
+    fn bump_mtime(path: &Path) {
+        use std::os::unix::ffi::OsStrExt as _;
+        let previous = std::fs::metadata(path).and_then(|meta| meta.modified()).expect("meta");
+        let bumped = previous + std::time::Duration::from_secs(3600);
+        let seconds =
+            bumped.duration_since(std::time::UNIX_EPOCH).expect("forward").as_secs() as i64;
+        let timespec = libc::timespec { tv_sec: seconds, tv_nsec: 0 };
+        let times = [timespec, timespec];
+        let cpath = std::ffi::CString::new(path.as_os_str().as_bytes()).expect("path");
+        // SAFETY: utimensat with a valid path pointer and a two-timespec
+        // array (atime, mtime).
+        let result = unsafe { libc::utimensat(libc::AT_FDCWD, cpath.as_ptr(), times.as_ptr(), 0) };
+        assert_eq!(result, 0, "utimensat");
+    }
+}
