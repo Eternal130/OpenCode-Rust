@@ -863,7 +863,24 @@ async fn write(
 ) -> Result<Response, ApiError> {
     let location = resolve_location_for_fs(&state, &uri, &headers)?;
     let _services = services(&state, &location).await?;
-    let relative = query_field(&uri, "path").unwrap_or_default();
+    // G-220 — ref WriteQuery `path: Schema.String` is REQUIRED: a
+    // missing path is the generated query validation's ParseError 400
+    // (`Missing key\n  at ["path"]`), never an empty relative path that
+    // resolves to the location root and dies as a 500. The raw
+    // octet-stream body skips validate_at_handler, so the query seam is
+    // invoked directly (same schema_rejection mapping).
+    if let Err(message) = crate::request_validation::validate_query(
+        "experimental.fs.write",
+        uri.query().unwrap_or(""),
+    ) {
+        return Err(crate::errors::schema_rejection(&message, "Query"));
+    }
+    let Some(relative) = query_field(&uri, "path") else {
+        return Err(crate::errors::invalid_request_kind(
+            "Expected path to be a string, received undefined",
+            "ParseError",
+        ));
+    };
     let absolute = location.as_path().join(&relative);
     if let Some(parent) = absolute.parent() {
         tokio::fs::create_dir_all(parent).await.map_err(|error| {

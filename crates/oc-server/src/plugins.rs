@@ -1674,9 +1674,38 @@ impl EngineSessionPort {
                 .await
                 .map(|_| Value::Null)
             }
-            oc_core::engine::commands::CommandSource::Config(command) => {
+            oc_core::engine::commands::CommandSource::Mcp { server, prompt, arguments } => {
+                // G-215 — the plugin port mirrors the HTTP handler's MCP
+                // prompt execution (ref CommandPlugin execute).
+                let parsed = oc_core::config::command_md::parse_arguments(text);
+                let mut args = std::collections::BTreeMap::new();
+                for (index, argument) in arguments.iter().enumerate() {
+                    args.insert(argument.clone(), parsed.get(index).cloned().unwrap_or_default());
+                }
+                let result = services
+                    .mcp
+                    .prompt(&server, &prompt, Some(args))
+                    .await
+                    .map_err(|error| error.to_string())?
+                    .ok_or_else(|| format!("MCP prompt not found: {server}:{prompt}"))?;
                 let expanded =
-                    oc_core::config::command_md::evaluate_template(&command.template, text);
+                    crate::handlers::session::mcp_prompt_message_text(&result);
+                let id = oc_schema::id::SessionId(session_id.to_owned());
+                let message_id = format!("msg_plugin_{}", uuid::Uuid::new_v4());
+                self.engine.prompt(&self.location, &id, &message_id, &expanded).await?;
+                Ok(Value::Null)
+            }
+            oc_core::engine::commands::CommandSource::Config(command) => {
+                // G-214: `` !`cmd` `` shell blocks interpolate AFTER
+                // $N/$ARGUMENTS (cwd = location directory,
+                // config-priority shell).
+                let expanded = oc_core::config::command_md::evaluate_template_shell(
+                    &command.template,
+                    text,
+                    &self.location.as_path().to_path_buf(),
+                    services.commands.config_shell().as_deref(),
+                )
+                .await?;
                 let id = oc_schema::id::SessionId(session_id.to_owned());
                 let message_id = format!("msg_plugin_{}", uuid::Uuid::new_v4());
                 self.engine.prompt(&self.location, &id, &message_id, &expanded).await?;

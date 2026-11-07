@@ -112,6 +112,9 @@ pub struct Prompt {
     pub name: String,
     pub description: Option<String>,
     pub server: String,
+    /// The prompt's declared argument NAMES, declaration order (G-215:
+    /// `server:prompt` commands wire positional input into these).
+    pub arguments: Vec<String>,
 }
 
 /// `Mcp.ServerInstructions`.
@@ -1041,6 +1044,12 @@ impl McpRegistry {
                     name: prompt.name.clone(),
                     description: prompt.description.as_ref().map(ToString::to_string),
                     server: name.to_string(),
+                    arguments: prompt
+                        .arguments
+                        .iter()
+                        .flatten()
+                        .map(|argument| argument.name.to_string())
+                        .collect(),
                 })
                 .collect(),
         );
