@@ -54,6 +54,65 @@ pub fn error(detail: &str, provider: Provider<'_>) -> String {
     })
 }
 
+/// `OauthCallbackPage.bootstrap` (page.ts:51-74, G-234②): the pending
+/// card for implicit-grant flows — the embedded script reads the URL
+/// fragment, POSTs the parsed callback to the same-origin `token_path`,
+/// then transitions the card in place to the success or error state
+/// (the ref's `bootstrapScript`, page.ts:114-137).
+#[must_use]
+pub fn bootstrap(token_path: &str, provider: Provider<'_>) -> String {
+    render_document(RenderDocument {
+        title: "Finishing sign-in",
+        body: render_card(RenderCard {
+            status: "pending",
+            headline: "Finishing sign-in",
+            message: match provider {
+                Some(provider) => {
+                    format!("Completing your {} authorization.", escape_html(provider))
+                }
+                None => "Completing authorization.".to_owned(),
+            },
+            detail: None,
+            footnote: "You can close this window once sign-in finishes.",
+        }),
+        script: Some(&bootstrap_script(token_path, provider)),
+    })
+}
+
+/// `bootstrapScript` (page.ts:114-137).
+fn bootstrap_script(token_path: &str, provider: Provider<'_>) -> String {
+    let provider_literal = script_string(provider.unwrap_or_default());
+    let token_path_literal = script_string(token_path);
+    format!(
+        r#"var PROVIDER={provider_literal};
+var TOKEN_URL=new URL({token_path_literal},window.location.origin).href;
+(function(){{
+  var card=document.getElementById("oc-card"),headline=document.getElementById("oc-headline"),message=document.getElementById("oc-message"),detail=document.getElementById("oc-detail"),footnote=document.getElementById("oc-footnote");
+  function fail(text){{card.dataset.status="error";headline.textContent="Authorization failed";message.textContent=PROVIDER?("OpenCode couldn't finish connecting to "+PROVIDER+"."):"OpenCode couldn't complete authorization.";if(text){{detail.textContent=text;detail.hidden=false}}footnote.textContent="Close this window and try again from OpenCode."}}
+  function ok(){{card.dataset.status="success";headline.textContent="Authorization successful";message.textContent=PROVIDER?("OpenCode is now connected to "+PROVIDER+"."):"OpenCode is now authorized.";detail.hidden=true;footnote.textContent="You can close this window.";setTimeout(function(){{try{{window.close()}}catch(e){{}}}},2500)}}
+  try{{
+    var hash=new URLSearchParams((window.location.hash||"").slice(1));
+    var search=new URLSearchParams(window.location.search||"");
+    var err=hash.get("error")||search.get("error");
+    var errDescription=hash.get("error_description")||search.get("error_description");
+    var body=err?{{error:err,error_description:errDescription||""}}:{{access_token:hash.get("access_token")||"",expires_in:hash.get("expires_in")||"0",state:hash.get("state")||""}};
+    fetch(TOKEN_URL,{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify(body)}}).then(function(res){{
+      if(!res.ok)return res.text().catch(function(){{return""}}).then(function(t){{throw new Error(t||("callback failed ("+res.status+")"))}});
+      if(err){{fail(errDescription||err);return}}
+      ok();
+    }}).catch(function(e){{fail(String(e&&e.message?e.message:e))}});
+  }}catch(e){{fail(String(e&&e.message?e.message:e))}}
+}})()"#
+    )
+}
+
+/// `scriptString` (page.ts:139-141).
+fn script_string(value: &str) -> String {
+    serde_json::to_string(value)
+        .unwrap_or_else(|_| format!("{value:?}"))
+        .replace('<', "\\u003c")
+}
+
 struct RenderCard<'a> {
     status: &'a str,
     headline: &'a str,
@@ -293,5 +352,34 @@ mod tests {
     fn oauth_page_no_provider_strings() {
         assert!(success(None).contains("OpenCode is now authorized."));
         assert!(error("x", None).contains("OpenCode couldn't complete authorization."));
+    }
+}
+
+#[cfg(test)]
+mod g234_tests {
+    use super::*;
+
+    /// G-234② — the bootstrap page is the branded pending card with the
+    /// relay script (page.ts:51-74,114-137).
+    #[test]
+    fn g234_bootstrap_page_shape() {
+        let page = bootstrap("/token", Some("xAI"));
+        assert!(page.contains("<title>Finishing sign-in · OpenCode</title>"));
+        assert!(page.contains("Completing your xAI authorization."));
+        assert!(page.contains("data-status=\"pending\""));
+        assert!(page.contains("var TOKEN_URL=new URL(\"/token\",window.location.origin).href;"));
+        assert!(page.contains("var PROVIDER=\"xAI\";"));
+        // The in-place success/error transitions.
+        assert!(page.contains("Authorization successful"));
+        assert!(page.contains("Authorization failed"));
+        // `scriptString` escapes `<` inside script literals.
+        assert_eq!(script_string("a<b"), "\"a\\u003cb\"");
+    }
+
+    #[test]
+    fn g234_bootstrap_no_provider() {
+        let page = bootstrap("/callback/token", None);
+        assert!(page.contains("Completing authorization."));
+        assert!(page.contains("var PROVIDER=\"\";"));
     }
 }

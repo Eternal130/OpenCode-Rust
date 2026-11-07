@@ -216,6 +216,10 @@ async fn opencode_refresh(value: OAuthValue) -> Result<CredentialValue, String> 
     let http = oc_http::client();
     let response = http
         .post(format!("{server}/auth/device/token"))
+        // G-234① — the ref headers() set (Accept + User-Agent) on the
+        // refresh post too.
+        .header("Accept", "application/json")
+        .header("User-Agent", flows::app_user_agent())
         .form(&[
             ("grant_type", "refresh_token"),
             ("refresh_token", value.refresh.as_str()),
@@ -734,7 +738,7 @@ pub async fn poe_authorize_at(
         port: 0,
         host: "127.0.0.1".into(),
         callback_path: "/callback",
-        page: CallbackPage::Html(flows::success_page("Poe")),
+        page: CallbackPage::Branded { provider: "Poe".to_owned() },
     })
     .await
     .map_err(|error| format!("failed to bind loopback listener: {error}"))?;
