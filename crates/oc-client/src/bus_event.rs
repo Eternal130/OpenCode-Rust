@@ -79,6 +79,7 @@ pub const KNOWN_EVENT_TYPES: &[&str] = &[
     "pty.exited",
     "pty.updated",
     "reference.updated",
+    "sdk.plugin.updated",
     "server.connected",
     "session.agent.selected",
     "session.compacted",
@@ -162,6 +163,7 @@ pub const KNOWN_EVENT_TYPES: &[&str] = &[
 /// unknown-but-well-formed types flowing (forward compatibility).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EventKind {
+    SdkPluginUpdated,
     ServerConnected,
     GlobalDisposed,
     SessionStatus,
@@ -344,6 +346,7 @@ impl EventKind {
             "pty.exited" => Self::PtyExited,
             "pty.updated" => Self::PtyUpdated,
             "reference.updated" => Self::ReferenceUpdated,
+            "sdk.plugin.updated" => Self::SdkPluginUpdated,
             "server.connected" => Self::ServerConnected,
             "session.agent.selected" => Self::SessionAgentSelected,
             "session.compacted" => Self::SessionCompacted,
@@ -470,6 +473,7 @@ impl EventKind {
             Self::PtyExited => "pty.exited",
             Self::PtyUpdated => "pty.updated",
             Self::ReferenceUpdated => "reference.updated",
+            Self::SdkPluginUpdated => "sdk.plugin.updated",
             Self::ServerConnected => "server.connected",
             Self::SessionAgentSelected => "session.agent.selected",
             Self::SessionCompacted => "session.compacted",

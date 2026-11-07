@@ -56,8 +56,9 @@ use oc_core::plugin_apply::{
 use oc_core::tool::codemode::{CallRecord, CodeModeRuntime, RunOutcome, ToolCallFn};
 use oc_plugin_host::registrations::PluginState;
 use oc_plugin_host::{
-    Bridge, CodeModeToolSpec, HostState, PluginHost, PluginHostConfig, Resolution, ResolvedPlugin,
-    SessionPort, StoragePort, StorageScanQuery, ToolPort,
+    Bridge, CodeModeToolSpec, HostState, PluginHost, PluginHostConfig, PluginSourceKind,
+    Resolution, ResolvedPlugin, SessionPort, StoragePort, StorageScanQuery, ToolPort,
+    PLUGIN_SOURCE_DIRECTORIES,
 };
 use oc_schema::mcp::ServerConfig;
 use oc_schema::misc::{PluginFeatures, PluginInfo, PluginSource, PluginState as WireState};
@@ -108,6 +109,15 @@ pub struct PluginBoot {
     pub terminal_slot: Arc<EngineTerminalSlot>,
     /// The integration-port slot (G-64; filled after `Engine::boot`).
     pub integration_slot: Arc<EngineIntegrationSlot>,
+    /// G-222 — serializes the reload passes: the ConfigReloadBridge's
+    /// config leg and the [`PluginSupervisor`]'s fs/timer/sdk legs share
+    /// it (the ref merges all four trigger sources into ONE supervisor
+    /// queue, supervisor.ts:196-237; the lock is the port's equivalent).
+    pub reload_lock: Arc<tokio::sync::Mutex<()>>,
+    /// G-222 — the reload supervisor handle, filled by the boot module
+    /// once the engine bus exists; tests read it for pass-count
+    /// observability.
+    supervisor: parking_lot::RwLock<Option<Arc<PluginSupervisor>>>,
 }
 
 /// One `/api/rpc` call's failure (PLUG-D14): the v2 error channel —
@@ -155,7 +165,21 @@ impl PluginBoot {
             reference_slot: Arc::new(EngineReferenceSlot::default()),
             terminal_slot: Arc::new(EngineTerminalSlot::default()),
             integration_slot: Arc::new(EngineIntegrationSlot::default()),
+            reload_lock: Arc::new(tokio::sync::Mutex::new(())),
+            supervisor: parking_lot::RwLock::new(None),
         }
+    }
+
+    /// G-222 — the reload supervisor handle (set by the boot module
+    /// after `Engine::boot`; `None` until then or for a flat boot).
+    #[must_use]
+    pub fn supervisor(&self) -> Option<Arc<PluginSupervisor>> {
+        self.supervisor.read().clone()
+    }
+
+    /// G-222 — fills the supervisor slot (boot-module seam).
+    pub fn set_supervisor(&self, supervisor: Arc<PluginSupervisor>) {
+        *self.supervisor.write() = Some(supervisor);
     }
 
     /// `/api/rpc/{rpcID}/{method}` dispatch (PLUG-D14): route the call
@@ -364,6 +388,8 @@ pub fn boot(
             reference_slot,
             terminal_slot,
             integration_slot,
+            reload_lock: Arc::new(tokio::sync::Mutex::new(())),
+            supervisor: parking_lot::RwLock::new(None),
         });
     }
     // The host-state seed: the native agent table (builtins + config
@@ -477,6 +503,8 @@ pub fn boot(
         reference_slot,
         terminal_slot,
         integration_slot,
+        reload_lock: Arc::new(tokio::sync::Mutex::new(())),
+        supervisor: parking_lot::RwLock::new(None),
     })
 }
 
@@ -573,6 +601,274 @@ pub fn refresh_after_config_change(boot: &PluginBoot, loaded: &Loaded) {
     if clean {
         *boot.resolution.lock() = resolved;
     }
+}
+
+// ============================================================================
+// G-222 — the plugin reload supervisor (plugin/supervisor.ts:196-237)
+// ============================================================================
+//
+// The ref reloads plugins from FOUR trigger sources merged into a
+// sliding(1) queue with a 100 ms debounce:
+//
+//   * `sources.changes()` — the plugin-source fs watch (each resolved
+//     operation's target, config/plugin/source.ts:60-68) plus config
+//     changes filtered to plugin-source paths;
+//   * `modules.changes()` — the loaded guest modules' own file changes;
+//   * the 24 h periodic reload (supervisor.ts:211);
+//   * `bus.subscribe([Event.Updated, SdkPlugins.Updated])`
+//     (supervisor.ts:213).
+//
+// The port's mapping (declared seam): the `Event.Updated`
+// (`config.updated`) leg is served by `ConfigReloadBridge` (boot.rs),
+// which runs the identical pass immediately on every real config
+// change — this supervisor owns the three legs the port lacked: the
+// plugin-source fs watch, the 24 h timer, and `sdk.plugin.updated`
+// (sdk.ts:9). All passes serialize through `PluginBoot::reload_lock`
+// so the bridge's leg and the supervisor's legs never interleave (the
+// ref needs no lock — its single queue IS the serialization point).
+
+/// The ref's debounce window (supervisor.ts:236:
+/// `Stream.debounce("100 millis")` on the merged trigger queue).
+const SUPERVISOR_DEBOUNCE_MS: u64 = 100;
+/// The ref's periodic reload (supervisor.ts:211:
+/// `Stream.fromEffectRepeat(Effect.sleep("24 hours"))`).
+const SUPERVISOR_PERIOD: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// One serialized reload pass — the full [`refresh_after_config_change`]
+/// pipeline (drop-in rescan → add/remove diff → digest reload) under the
+/// boot's reload lock, off the async workers. Works WITHOUT any config
+/// entry change: editing a plugin file changes no config entry, but the
+/// rescan + digest scan still observe it (the G-222 gap — the ref's
+/// "plugins changed" is separate from "config changed").
+pub async fn run_reload_pass(boot: &Arc<PluginBoot>, watched: &Arc<oc_core::config::WatchedConfig>) {
+    let lock = Arc::clone(&boot.reload_lock);
+    let boot_pass = Arc::clone(boot);
+    let loaded = watched.loaded();
+    let _ = tokio::task::spawn_blocking(move || {
+        let _guard = lock.blocking_lock();
+        refresh_after_config_change(&boot_pass, &loaded);
+    })
+    .await;
+}
+
+/// G-222 — the plugin reload supervisor: watches the plugin sources,
+/// merges the triggers with ref debounce semantics, and runs
+/// [`run_reload_pass`] on every accepted trigger.
+pub struct PluginSupervisor {
+    boot: Arc<PluginBoot>,
+    watched: Arc<oc_core::config::WatchedConfig>,
+    /// The sliding(1) trigger queue: `send_modify` collapses a burst to
+    /// its latest value (supervisor.ts:201 `Queue.sliding<number>(1)` —
+    /// the queue "retains the latest observed request").
+    trigger: tokio::sync::watch::Sender<u64>,
+    shutdown: tokio::sync::watch::Sender<bool>,
+    watcher: Arc<oc_core::filesystem::watcher::FileWatcher>,
+    /// One pump task per live watch (abort = unsubscribe: the owned
+    /// Subscription drops and detaches from the shared native watch).
+    pumps: parking_lot::Mutex<std::collections::HashMap<String, tokio::task::JoinHandle<()>>>,
+    passes: AtomicU64,
+}
+
+impl PluginSupervisor {
+    /// Starts the supervisor legs: the debounced pass loop, the 24 h
+    /// timer (supervisor.ts:211), the `sdk.plugin.updated` bus
+    /// subscription (supervisor.ts:213), and the plugin-source watches
+    /// (source.ts:60-68).
+    #[must_use]
+    pub fn spawn(
+        boot: Arc<PluginBoot>,
+        watched: Arc<oc_core::config::WatchedConfig>,
+        bus: oc_core::bus::Bus,
+    ) -> Arc<Self> {
+        let (trigger_tx, trigger_rx) = tokio::sync::watch::channel(0u64);
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let supervisor = Arc::new(Self {
+            boot,
+            watched,
+            trigger: trigger_tx,
+            shutdown: shutdown_tx,
+            watcher: oc_core::filesystem::watcher::FileWatcher::new(),
+            pumps: parking_lot::Mutex::new(std::collections::HashMap::new()),
+            passes: AtomicU64::new(0),
+        });
+        // The merged-queue consumer (the debounce + apply loop).
+        let debounce = Arc::clone(&supervisor);
+        let debounce_shutdown = shutdown_rx.clone();
+        tokio::spawn(async move {
+            debounce.run(trigger_rx, debounce_shutdown).await;
+        });
+        // supervisor.ts:211 — the 24h periodic reload.
+        let timer = Arc::clone(&supervisor);
+        let mut timer_shutdown = shutdown_rx.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = timer_shutdown.changed() => break,
+                    _ = tokio::time::sleep(SUPERVISOR_PERIOD) => timer.notify(),
+                }
+            }
+        });
+        // supervisor.ts:213 — the SdkPlugins.Updated bus leg (the
+        // Event.Updated half of that subscription is ConfigReloadBridge's,
+        // which runs the same pass synchronously — see boot.rs).
+        let bus_leg = Arc::clone(&supervisor);
+        let mut bus_shutdown = shutdown_rx;
+        let mut events = bus.subscribe_types(&[oc_core::bus::registry::SDK_PLUGIN_UPDATED]);
+        tokio::spawn(async move {
+            use futures::StreamExt as _;
+            loop {
+                tokio::select! {
+                    _ = bus_shutdown.changed() => break,
+                    event = events.next() => match event {
+                        Some(_) => bus_leg.notify(),
+                        None => break,
+                    },
+                }
+            }
+        });
+        // source.ts:60-68 — the plugin-source watches.
+        supervisor.reconcile_watches();
+        supervisor
+    }
+
+    /// Completed reload passes — the burst-coalescing observable (tests).
+    #[must_use]
+    pub fn passes(&self) -> u64 {
+        self.passes.load(Ordering::SeqCst)
+    }
+
+    /// Offers one trigger onto the sliding(1) queue.
+    fn notify(&self) {
+        self.trigger.send_modify(|count| *count += 1);
+    }
+
+    /// supervisor.ts:234-237 — the debounced consumer: ONE pass per
+    /// quiet window however many triggers the burst produced (the
+    /// window extends while more land), then re-arm the watches (the
+    /// pass may have added/removed plugin targets).
+    async fn run(
+        self: Arc<Self>,
+        mut triggers: tokio::sync::watch::Receiver<u64>,
+        mut shutdown: tokio::sync::watch::Receiver<bool>,
+    ) {
+        loop {
+            tokio::select! {
+                _ = shutdown.changed() => break,
+                changed = triggers.changed() => {
+                    if changed.is_err() {
+                        break;
+                    }
+                }
+            }
+            // Debounce: extend the window while more triggers land.
+            loop {
+                tokio::time::sleep(Duration::from_millis(SUPERVISOR_DEBOUNCE_MS)).await;
+                if !triggers.has_changed().unwrap_or(false) {
+                    break;
+                }
+                let _ = triggers.borrow_and_update();
+            }
+            run_reload_pass(&self.boot, &self.watched).await;
+            self.passes.fetch_add(1, Ordering::SeqCst);
+            self.reconcile_watches();
+        }
+    }
+
+    /// Reconciles the fs watches against the current sources (the ref's
+    /// `watchConfiguredSources` re-run, source.ts:78-80).
+    fn reconcile_watches(&self) {
+        let targets = supervisor_targets(&self.boot, &self.watched.loaded());
+        let keys: std::collections::HashSet<String> =
+            targets.iter().map(|(key, _)| key.clone()).collect();
+        let mut pumps = self.pumps.lock();
+        pumps.retain(|key, handle| {
+            if keys.contains(key) {
+                true
+            } else {
+                handle.abort();
+                false
+            }
+        });
+        for (key, target) in targets {
+            if pumps.contains_key(&key) {
+                continue;
+            }
+            let mut subscription = self.watcher.subscribe(&target);
+            let trigger = self.trigger.clone();
+            let mut shutdown = self.shutdown.subscribe();
+            let handle = tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        _ = shutdown.changed() => break,
+                        update = subscription.recv() => match update {
+                            Some(_) => trigger.send_modify(|count| *count += 1),
+                            None => break,
+                        },
+                    }
+                }
+            });
+            pumps.insert(key, handle);
+        }
+    }
+}
+
+/// The watch set (source.ts:60-68 — "each resolved operation's target"):
+/// (key, target) pairs for
+///
+/// 1. every config directory source's `plugin`/`plugins` drop-in
+///    directories ([`PLUGIN_SOURCE_DIRECTORIES`] — what
+///    `discover_directory_ops` scans; watching them makes add/delete
+///    of drop-in files observable), and
+/// 2. every resolved LOCAL plugin's entry file that does not already
+///    live under one of those directories (document `plugins[]` file
+///    targets).
+///
+/// Package installs are not watched: their generations swap through the
+/// RF-02 update path (`reload_after_update`), never in place.
+fn supervisor_targets(
+    boot: &PluginBoot,
+    loaded: &Loaded,
+) -> Vec<(String, oc_core::config::watch::WatchTarget)> {
+    use oc_core::config::watch::WatchTarget;
+
+    let mut directories: Vec<std::path::PathBuf> = Vec::new();
+    for entry in &loaded.entries {
+        if let oc_schema::config::Entry::Directory(directory) = entry {
+            let root = std::path::PathBuf::from(&directory.path);
+            for name in PLUGIN_SOURCE_DIRECTORIES {
+                let dir = root.join(name);
+                if dir.is_dir() {
+                    directories.push(dir);
+                }
+            }
+        }
+    }
+    let mut targets: Vec<(String, WatchTarget)> = directories
+        .into_iter()
+        .map(|dir| {
+            (
+                format!("directory:{}", dir.display()),
+                WatchTarget::Directory { path: dir, ignore: vec!["node_modules".to_owned()] },
+            )
+        })
+        .collect();
+    for plugin in &boot.resolution.lock().plugins {
+        let under_watched_dir = targets.iter().any(|(_, target)| match target {
+            WatchTarget::Directory { path, .. } => plugin.entry.starts_with(path),
+            WatchTarget::File { .. } | WatchTarget::Entries { .. } => false,
+        });
+        if !matches!(plugin.source, PluginSourceKind::Local { .. })
+            || !plugin.entry.is_file()
+            || under_watched_dir
+        {
+            continue;
+        }
+        let key = format!("file:{}", plugin.entry.display());
+        if targets.iter().all(|(existing, _)| *existing != key) {
+            targets.push((key, WatchTarget::File { path: plugin.entry.clone() }));
+        }
+    }
+    targets
 }
 
 /// RF-02 — the post-update reload (`plugin/update`'s "notify active

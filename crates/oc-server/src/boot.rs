@@ -139,12 +139,12 @@ impl oc_core::config::watch::ConfigUpdated for ConfigReloadBridge {
                 engine.invalidate(&live).await;
             }
             if let Some((watched, plugins)) = hooks {
-                // Blocking digest-scan reload — off the async workers.
-                let loaded = watched.loaded();
-                let _ = tokio::task::spawn_blocking(move || {
-                    crate::plugins::refresh_after_config_change(&plugins, &loaded);
-                })
-                .await;
+                // G-222 — one serialized reload pass: the reload lock
+                // orders this config leg against the plugin
+                // supervisor's fs/timer/sdk legs (the ref merges all
+                // four trigger sources into ONE queue,
+                // supervisor.ts:196-237).
+                crate::plugins::run_reload_pass(&plugins, &watched).await;
             }
         });
     }
@@ -519,6 +519,21 @@ pub async fn boot_and_serve_with_listener(
     }
     if let (Some(boot), watched) = (&app_state.plugins, &watched_config) {
         *config_reload.hooks.lock().unwrap() = Some((Arc::clone(watched), Arc::clone(boot)));
+        // G-222 — the plugin reload supervisor (supervisor.ts:196-237):
+        // the plugin-source fs watch (source.ts:60-68), the 24h
+        // periodic timer (:211), and the `sdk.plugin.updated` bus leg
+        // (:213 — the `config.updated` half stays with the bridge
+        // above, which runs the identical pass), merged with a 100ms
+        // debounce (:236). Only for a ready host: a flat/disabled boot
+        // has nothing to reload.
+        if boot.ready {
+            let supervisor = crate::plugins::PluginSupervisor::spawn(
+                Arc::clone(boot),
+                Arc::clone(watched),
+                (*app_state.engine.bus).clone(),
+            );
+            boot.set_supervisor(supervisor);
+        }
     }
     app_state.watched_config = Some(watched_config);
     let state = Arc::new(app_state);
