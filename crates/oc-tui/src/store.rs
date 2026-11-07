@@ -1397,6 +1397,32 @@ pub trait EventTap: Send + Sync {
     fn publish(&self, event: &BusEvent);
 }
 
+/// G-236 — one observed `session.moved` fact (`moveOpenSession`'s
+/// inputs, dialog-open.tsx:487-498): the event's location directory,
+/// the project id (kept when the event omits it), and the envelope
+/// `created` (epoch ms) that advances `time.updated`.
+#[derive(Debug, Clone, PartialEq)]
+struct SessionMove {
+    directory: Option<String>,
+    project_id: Option<String>,
+    created_ms: Option<f64>,
+}
+
+/// Apply one move over a history row in place (`moveOpenSession`:
+/// location replaces, projectID replaces when present, time.updated
+/// = max(updated, created)).
+fn apply_session_move(row: &mut crate::data::SessionSnapshot, moved: &SessionMove) {
+    if let Some(directory) = &moved.directory {
+        row.directory = Some(directory.clone());
+    }
+    if let Some(project_id) = &moved.project_id {
+        row.project_id = Some(project_id.clone());
+    }
+    if let Some(created) = moved.created_ms {
+        row.time_updated = Some(row.time_updated.map_or(created, |updated| updated.max(created)));
+    }
+}
+
 pub struct Store {
     /// Reactive runtime owning the graph (pump via `run_effects`).
     pub runtime: Runtime,
@@ -1632,6 +1658,11 @@ pub struct Store {
     /// the App, the ref's `keymap.dispatch`); the pump drains this
     /// queue right after the ingest drain and dispatches each entry.
     bus_commands: std::cell::RefCell<Vec<String>>,
+    /// G-236 — `session.moved` facts observed since the last resync
+    /// (dialog-open.tsx:60-80's `changed` map: the move re-applies
+    /// over a snapshot fetched before the event landed, then the map
+    /// clears with the resync).
+    session_moves: std::cell::RefCell<std::collections::HashMap<String, SessionMove>>,
     /// The session-list refresh seam (F13 — the /sessions dialog's
     /// open-time refetch).
     session_list_sink: std::cell::RefCell<Rc<dyn SessionListSink>>,
@@ -3901,6 +3932,12 @@ impl Store {
             event_tap: std::cell::RefCell::new(None),
             plugin_sink: std::cell::RefCell::new(Rc::new(NoPluginCommands)),
             bus_commands: std::cell::RefCell::new(Vec::new()),
+            // G-236 — the pending `session.moved` overlays: moves
+            // observed since the last resync, re-applied over the
+            // next resync's (possibly older) snapshot rows — the
+            // ref's changed-map merge (dialog-open.tsx:60-80), then
+            // cleared (one map per fetch).
+            session_moves: std::cell::RefCell::new(std::collections::HashMap::new()),
             session_list_sink: std::cell::RefCell::new(Rc::new(NoSessionListRefresh)),
             config_model: std::cell::RefCell::new(None),
             selection_sink: Rc::new(RecordingSelectionSink::default()),
@@ -11766,7 +11803,7 @@ impl Store {
                     tap.publish(&event);
                 }
             }
-            Ingest::Resync { sessions, unread, messages, cursors, permissions, forms } => {
+            Ingest::Resync { sessions: mut sessions, unread, messages, cursors, permissions, forms } => {
                 // A resync only happens after a successful subscribe —
                 // the stream is attached, the client is connected
                 // (SURF-2: servers that never emit the `server.
@@ -11791,7 +11828,22 @@ impl Store {
                 // The full snapshot becomes the session HISTORY (the
                 // session-list dialog's source, like v2's
                 // `data.session.list()`).
-                self.session_history.set(sessions.clone());
+                //
+                // G-236 — the pending `session.moved` overlays
+                // re-apply over the incoming rows (a snapshot fetched
+                // before a move landed would otherwise regress the
+                // dialog's directory/footer), then the map clears —
+                // one changed-map lifetime per fetch
+                // (dialog-open.tsx:60-80).
+                {
+                    let moves = std::mem::take(&mut *self.session_moves.borrow_mut());
+                    for row in &mut sessions {
+                        if let Some(moved) = moves.get(&row.id) {
+                            apply_session_move(row, moved);
+                        }
+                    }
+                    self.session_history.set(sessions.clone());
+                }
                 // The session registry (#44/#46): the snapshot seeds
                 // titles AND parent links like v2's
                 // `session.sync(sessionID, { children: true })` cache
@@ -12082,6 +12134,34 @@ impl Store {
                 if self.tabs.get().tabs.iter().any(|tab| tab.session_id == id) {
                     self.close_tab(Some(&id));
                 }
+            }
+            // G-236 — `session.moved` (app.tsx:1276-1280 +
+            // moveOpenSession, dialog-open.tsx:487-498): the open
+            // dialog's rows update IN PLACE — the event's location
+            // replaces the row's directory, `projectID` replaces
+            // when present, and `time.updated` advances to
+            // max(updated, envelope created). The dialog renders
+            // reactively off `session_history`, so an OPEN DialogOpen
+            // refreshes without any refetch; the move is recorded so
+            // an in-flight resync's older snapshot rows re-apply it
+            // (the ref's changed-map merge, dialog-open.tsx:60-80).
+            "session.moved" => {
+                let Some(id) = event.string("sessionID") else { return };
+                let moved = SessionMove {
+                    directory: event
+                        .data
+                        .pointer("/location/directory")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned),
+                    project_id: event.string("projectID"),
+                    created_ms: event.created.map(|ms| ms as f64), // epoch ms → f64, exact in range
+                };
+                self.session_moves.borrow_mut().insert(id.clone(), moved.clone());
+                self.session_history.update(|history| {
+                    if let Some(row) = history.iter_mut().find(|row| row.id == id) {
+                        apply_session_move(row, &moved);
+                    }
+                });
             }
             // `session.usage.updated` (client/solid/data.ts:646-652,
             // TUI-13): the per-session cost total rides the public
@@ -13700,6 +13780,124 @@ mod tests {
         assert_eq!(history.len(), 2);
         assert_eq!(history[1].id, "not-open");
         assert_eq!(history[1].title.as_deref(), Some("History only"));
+    }
+
+    /// G-236 — `session.moved` while the Open dialog holds the
+    /// loaded data: the history row updates IN PLACE (moveOpenSession,
+    /// dialog-open.tsx:487-498 — location + projectID replace,
+    /// time.updated = max(updated, created)), the open dialog's rows
+    /// reflect it, and NO session-list refetch fires (the ref only
+    /// refetches at mount; in-open updates ride the event).
+    #[test]
+    fn session_moved_updates_open_dialog_rows_in_place() {
+        let store = Store::new(Runtime::new());
+        let sink = std::rc::Rc::new(RecordingSessionListSink::default());
+        store.set_session_list_sink(std::rc::Rc::clone(&sink) as std::rc::Rc<dyn SessionListSink>);
+        store.ingest_all([Ingest::Resync {
+            sessions: vec![SessionSnapshot {
+                id: "s1".to_owned(),
+                title: Some("Movable".to_owned()),
+                directory: Some("/srv/oldroot".to_owned()),
+                project_id: Some("p1".to_owned()),
+                time_updated: Some(1000.0),
+                ..Default::default()
+            }],
+            unread: Vec::new(),
+            messages: Vec::new(),
+            cursors: Vec::new(),
+            permissions: Vec::new(),
+            forms: Vec::new(),
+        }]);
+        // The Open menu is mounted over the loaded rows.
+        store.replace_dialog(DialogKind::Open, DialogSize::Large);
+        let before = crate::components::dialog_open::open_menu_props(&store);
+        assert!(before.options.iter().any(|option| option.value == "ses:s1"));
+        assert!(before
+            .options
+            .iter()
+            .any(|option| option.footer.as_deref().is_some_and(|footer| footer.contains("oldroot"))),
+            "the pre-move footer shows the old directory: {:?}",
+            before.options.iter().map(|option| &option.footer).collect::<Vec<_>>()
+        );
+
+        // The move lands while the dialog is open (envelope created
+        // in epoch ms, like the wire's DurableEnvelope).
+        let mut event = BusEvent::new(
+            "session.moved",
+            serde_json::json!({
+                "sessionID": "s1",
+                "location": { "directory": "/srv/newroot" },
+                "projectID": "p2",
+            }),
+        );
+        event.created = Some(9_000_000);
+        store.ingest_all([Ingest::Event(event)]);
+
+        let row =
+            store.session_history().into_iter().find(|row| row.id == "s1").expect("the row lives");
+        assert_eq!(row.directory.as_deref(), Some("/srv/newroot"), "location replaces");
+        assert_eq!(row.project_id.as_deref(), Some("p2"), "projectID replaces");
+        assert_eq!(row.time_updated, Some(9_000_000.0), "time.updated = max(updated, created)");
+        // The OPEN dialog's rows reflect the move without a reopen —
+        // and without a session-list refetch (no storm).
+        let after = crate::components::dialog_open::open_menu_props(&store);
+        assert!(after.options.iter().any(|option| option.value == "ses:s1"
+            && option.footer.as_deref().is_some_and(|footer| footer.contains("newroot"))));
+        assert_eq!(sink.calls.get(), 0, "no session.list refetch on the move");
+        // An unknown id is a contained no-op.
+        let mut ghost = BusEvent::new(
+            "session.moved",
+            serde_json::json!({ "sessionID": "ghost", "location": { "directory": "/x" } }),
+        );
+        ghost.created = Some(1);
+        store.ingest_all([Ingest::Event(ghost)]);
+        assert_eq!(store.session_history().len(), 1);
+    }
+
+    /// G-236 — a move observed while a resync fetch was in flight
+    /// re-applies over the (older) snapshot rows — the ref's
+    /// changed-map merge (dialog-open.tsx:60-80) — and the overlay
+    /// lives exactly ONE resync: a later snapshot wins again.
+    #[test]
+    fn session_moved_merge_survives_one_stale_resync() {
+        let store = Store::new(Runtime::new());
+        let resync = |directory: &str| Ingest::Resync {
+            sessions: vec![SessionSnapshot {
+                id: "s1".to_owned(),
+                directory: Some(directory.to_owned()),
+                project_id: Some("p1".to_owned()),
+                time_updated: Some(1000.0),
+                ..Default::default()
+            }],
+            unread: Vec::new(),
+            messages: Vec::new(),
+            cursors: Vec::new(),
+            permissions: Vec::new(),
+            forms: Vec::new(),
+        };
+        store.ingest_all([resync("/srv/oldroot")]);
+        let mut event = BusEvent::new(
+            "session.moved",
+            serde_json::json!({
+                "sessionID": "s1",
+                "location": { "directory": "/srv/newroot" },
+                "projectID": "p2",
+            }),
+        );
+        event.created = Some(5_000);
+        store.ingest_all([Ingest::Event(event)]);
+        // The fetch STARTED before the move — its rows are stale.
+        store.ingest_all([resync("/srv/oldroot")]);
+        let row = store.session_history()[0].clone();
+        assert_eq!(row.directory.as_deref(), Some("/srv/newroot"), "the overlay re-applied");
+        assert_eq!(row.project_id.as_deref(), Some("p2"));
+        assert_eq!(row.time_updated, Some(5000.0));
+        // The changed map cleared with that resync — the NEXT
+        // snapshot (fetched after the move; the server's list is
+        // authoritative) wins.
+        store.ingest_all([resync("/srv/oldroot")]);
+        let row = store.session_history()[0].clone();
+        assert_eq!(row.directory.as_deref(), Some("/srv/oldroot"), "one map lifetime per fetch");
     }
 
     /// The open-tabs model: the strip only ever holds OPEN tabs.
