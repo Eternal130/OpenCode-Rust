@@ -25,6 +25,30 @@ pub struct Options {
     pub cors: Vec<String>,
 }
 
+/// The stdout announcement each mode prints once listening (v2
+/// `server-process.ts:174-175`): stdio's ready line is the entire
+/// contract; the FOREGROUND default prints the generated password when
+/// none came from the environment. G-213 — SERVICE mode never prints
+/// the password: it is persisted into ServiceConfig, and daemon stdout
+/// lands in journald/desktop logs.
+fn startup_announcement(
+    mode: &Mode,
+    environment_password: Option<&str>,
+    password: &str,
+    url: &str,
+) -> Vec<String> {
+    if let Mode::Stdio = mode {
+        let quoted = serde_json::to_string(url).expect("url serializes");
+        return vec![format!("{{\"url\":{quoted}}}")];
+    }
+    let mut lines = vec![format!("server listening on {url}")];
+    if environment_password.is_none() && matches!(mode, Mode::Default) {
+        lines.push(format!("server password {password}"));
+    }
+    lines
+}
+
+#[allow(dead_code)] // parity reference for v2 serviceURL (server-process.ts:185)
 fn service_url(hostname: &std::net::IpAddr, port: u16) -> String {
     match hostname {
         std::net::IpAddr::V6(address) => format!("http://[{address}]:{port}"),
@@ -93,24 +117,31 @@ pub async fn run(options: Options) -> i32 {
         .or(config.port)
         .or_else(|| service.then(|| service_config::rust_default_port(&util::channel())));
 
-    // Incumbent check: an exact-URL compatible daemon means idempotent
-    // start. B4-H3: "compatible" includes the BUILD marker — a fresh
-    // spawn stands down only for a daemon of its own build, never for a
+    // Incumbent check + G-217 bind retry: `bind_or_incumbent` (v2
+    // `server-process.ts:91-171`) binds immediately; on EADDRINUSE it
+    // polls the incumbent every 100 ms up to 15 s, retrying the bind
+    // between probes — an old daemon exiting hands the port to this
+    // one, a compatible incumbent makes this an idempotent start.
+    // B4-H3: "compatible" includes the BUILD marker — a fresh spawn
+    // stands down only for a daemon of its own build, never for a
     // stale same-version incumbent (that would wedge the replacement).
+    let mut prebound = None;
     if service && port.is_some() {
-        let url = service_url(&hostname, port.unwrap_or(0));
         let registration_file = service_config::registration_file();
-        if lifecycle::incumbent(
+        match lifecycle::bind_or_incumbent(
+            &ServeOptions { hostname, port },
             Some(std::path::Path::new(&registration_file)),
-            &url,
             None,
             Some(lifecycle::BUILD_STAMP),
-            Duration::from_secs(2),
         )
         .await
-        .is_some()
         {
-            return 0;
+            Ok(lifecycle::BindOutcome::Bound(listener)) => prebound = Some(listener),
+            Ok(lifecycle::BindOutcome::IncumbentServing(_)) => return 0,
+            Err(error) => {
+                eprintln!("Error: {error}");
+                return 1;
+            }
         }
     }
 
@@ -136,7 +167,7 @@ pub async fn run(options: Options) -> i32 {
         options.cors.clone()
     };
     util::VERSION.clone_into(&mut boot_options.version);
-    let handle = match boot::boot_and_serve(&boot_options).await {
+    let handle = match boot::boot_and_serve_with_listener(&boot_options, prebound).await {
         Ok(handle) => handle,
         Err(error) => {
             eprintln!("Error: {error}");
@@ -208,14 +239,10 @@ pub async fn run(options: Options) -> i32 {
         None
     };
 
-    if let Mode::Stdio = options.mode {
-        // The ready line is the entire stdout contract of lease mode.
-        println!("{{\"url\":{}}}", serde_json::to_string(&handle.url()).expect("url quotes"));
-    } else {
-        println!("server listening on {}", handle.url());
-        if environment_password.is_none() {
-            println!("server password {password}");
-        }
+    for line in
+        startup_announcement(&options.mode, environment_password.as_deref(), &password, &handle.url())
+    {
+        println!("{line}");
     }
 
     let mut sigterm = match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
@@ -237,4 +264,37 @@ pub async fn run(options: Options) -> i32 {
         cleanup.run().await;
     }
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn announcement_foreground_prints_generated_password() {
+        let lines = startup_announcement(&Mode::Default, None, "pw-secret", "http://127.0.0.1:1");
+        assert_eq!(lines[0], "server listening on http://127.0.0.1:1");
+        assert!(lines.contains(&"server password pw-secret".to_owned()));
+    }
+
+    #[test]
+    fn announcement_foreground_hides_environment_password() {
+        let lines = startup_announcement(&Mode::Default, Some("from-env"), "pw-secret", "http://x");
+        assert!(!lines.iter().any(|line| line.contains("pw-secret")));
+    }
+
+    /// G-213 — service-mode daemon stdout lands in journald/desktop logs;
+    /// the password lives in ServiceConfig and must never be printed.
+    #[test]
+    fn announcement_service_mode_never_prints_password() {
+        let lines = startup_announcement(&Mode::Service, None, "pw-secret", "http://x");
+        assert_eq!(lines.len(), 1, "service mode prints only the listening line");
+        assert_eq!(lines[0], "server listening on http://x");
+    }
+
+    #[test]
+    fn announcement_stdio_ready_line_is_the_whole_contract() {
+        let lines = startup_announcement(&Mode::Stdio, None, "pw-secret", "http://127.0.0.1:9");
+        assert_eq!(lines, vec!["{\"url\":\"http://127.0.0.1:9\"}".to_owned()]);
+    }
 }
