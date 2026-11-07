@@ -315,4 +315,60 @@ mod tests {
         };
         assert!(command.template.starts_with("Create or update `AGENTS.md`"));
     }
+
+    /// G-215 — `server:prompt` naming (`mcpCommandName`: sanitize both
+    /// segments, `[^a-zA-Z0-9_-]` → `_`).
+    #[test]
+    fn mcp_command_names_sanitize_both_segments() {
+        assert_eq!(mcp_command_name("github", "review-pr"), "github:review-pr");
+        assert_eq!(mcp_command_name("my server!", "a/b c"), "my_server_:a_b_c");
+        assert_eq!(sanitize_command_segment("a b/c.d"), "a_b_c_d");
+    }
+
+    /// G-215 — prompts register as commands with description and
+    /// argument wiring; a re-sync REPLACES the MCP slice wholesale
+    /// (ref `command.reload()` on PromptsChanged) without touching
+    /// config/plugin registrations.
+    #[test]
+    fn mcp_prompt_commands_sync_and_reload() {
+        use crate::mcp::registry::Prompt;
+        let table = CommandTable::empty();
+        table.insert(CommandRegistration {
+            name: "keep".to_string(),
+            description: None,
+            source: CommandSource::Config(oc_schema::config::Command::default()),
+        });
+        sync_mcp_prompt_commands(
+            &table,
+            &[Prompt {
+                server: "fixture".to_string(),
+                name: "code review".to_string(),
+                description: Some("Review code".to_string()),
+                arguments: vec!["focus".to_string()],
+            }],
+        );
+        let command = table.get("fixture:code_review").expect("registered");
+        assert_eq!(command.description.as_deref(), Some("Review code"));
+        let CommandSource::Mcp { server, prompt, arguments } = &command.source else {
+            panic!("mcp source");
+        };
+        assert_eq!(server, "fixture");
+        assert_eq!(prompt, "code review");
+        assert_eq!(arguments, &["focus".to_string()]);
+
+        // Reload: the stale prompt goes, the new one arrives, `keep`
+        // survives.
+        sync_mcp_prompt_commands(
+            &table,
+            &[Prompt {
+                server: "fixture".to_string(),
+                name: "deploy".to_string(),
+                description: None,
+                arguments: Vec::new(),
+            }],
+        );
+        assert!(table.get("fixture:code_review").is_none(), "stale prompt removed");
+        assert!(table.get("fixture:deploy").is_some(), "new prompt registered");
+        assert!(table.get("keep").is_some(), "non-MCP registrations untouched");
+    }
 }
