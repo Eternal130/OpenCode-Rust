@@ -156,6 +156,11 @@ pub fn register(
     let pipeline = PipelineExecutor {
         name: effective_name(tool.namespace, tool.name),
         schema: tool.input,
+        // G-230 — no builtin declares an output schema yet (see the
+        // `output_schema` field doc): the mcp.ts:48 accept-all fallback
+        // applies until the ref plugin-tool Output declarations are
+        // ported.
+        output_schema: None,
         leaf: tool.execute,
         services: Arc::clone(services),
         hooks: Arc::clone(hooks),
@@ -175,9 +180,25 @@ pub(crate) fn pipeline_executor(
     services: &Arc<ToolServices>,
     hooks: &Arc<crate::hooks::HookRegistry>,
 ) -> Arc<dyn ToolExecute> {
+    pipeline_executor_with_output(name, schema, None, leaf, services, hooks)
+}
+
+/// G-230 — the pipeline executor with a DECLARED output schema: the
+/// returned output is validated against it (runtime.ts:110-132
+/// `encodeOutput`); see [`PipelineExecutor::output_schema`] for the
+/// undeclared fallback scope.
+pub(crate) fn pipeline_executor_with_output(
+    name: &str,
+    schema: serde_json::Value,
+    output_schema: Option<serde_json::Value>,
+    leaf: Arc<dyn super::ToolExecuteWithContext>,
+    services: &Arc<ToolServices>,
+    hooks: &Arc<crate::hooks::HookRegistry>,
+) -> Arc<dyn ToolExecute> {
     Arc::new(PipelineExecutor {
         name: name.to_string(),
         schema,
+        output_schema,
         leaf,
         services: Arc::clone(services),
         hooks: Arc::clone(hooks),
@@ -193,6 +214,22 @@ fn is_declined(failure: &super::ToolFailure) -> bool {
 struct PipelineExecutor {
     name: String,
     schema: serde_json::Value,
+    /// G-230 — the tool's DECLARED output schema (v2 `output`,
+    /// runtime.ts:110 `encodeOutput`). `None` scopes the port exactly
+    /// like the ref's MCP surface: `output: tool.outputSchema ?? {}`
+    /// (mcp.ts:48) — the effective schema is accept-all `{}`, the
+    /// output passes through unvalidated, and runtime.ts:46's die
+    /// (`"Tool result declared output without an output schema"`)
+    /// never fires for these tools. Every builtin today is in that
+    /// state: ref's plugin-tool family DECLARES its Output schemas
+    /// (tool/plugin/edit.ts:127, glob.ts:61, …) but the Rust port has
+    /// not ported those declarations — the compat survey found 14
+    /// builtin tools returning `output` with no declaration, so the
+    /// die rule would break all of them (the fallback is the honest
+    /// scope until the declarations land; MCP tools declare their
+    /// server's `outputSchema` on their own executor path,
+    /// mcp/registry.rs).
+    output_schema: Option<serde_json::Value>,
     leaf: Arc<dyn super::ToolExecuteWithContext>,
     services: Arc<ToolServices>,
     hooks: Arc<crate::hooks::HookRegistry>,
@@ -290,6 +327,52 @@ impl PipelineExecutor {
                     other => other,
                 });
             }
+        };
+        // G-230 — `encodeOutput` (tool/runtime.ts:45-56, :110-132),
+        // applied to the LEAF's output before `tool.execute.after`
+        // (the after event carries the validated output, tool.ts:142;
+        // a hook rewriting it afterwards is the trusted plugin
+        // surface, exactly like ref — no re-validation).
+        //
+        // * DECLARED + present → validate; issues fail the call with
+        //   ref's message shape (runtime.ts:116's issue-joining
+        //   wording from the standard-schema branch, :119).
+        // * DECLARED + missing → `Tool did not return its declared
+        //   output` (runtime.ts:53).
+        // * UNDECLARED → the mcp.ts:48 `?? {}` accept-all fallback
+        //   (see `output_schema`): pass through unvalidated;
+        //   runtime.ts:46's die branch is scoped out for this port's
+        //   builtin surface.
+        let outcome = match (&self.output_schema, outcome) {
+            (Some(output_schema), mut outcome) => {
+                let Some(output) = outcome.output.take() else {
+                    return Err(ToolRunFailure::Error {
+                        message: "Tool did not return its declared output".to_owned(),
+                        metadata: None,
+                    });
+                };
+                let issues = validate_input(output_schema, &output);
+                if !issues.is_empty() {
+                    let details = issues
+                        .iter()
+                        .map(|issue| issue.message.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    return Err(ToolRunFailure::Error {
+                        message: format!(
+                            "Tool returned an invalid value for its output schema: {details}"
+                        ),
+                        metadata: None,
+                    });
+                }
+                outcome.output = Some(output);
+                outcome
+            }
+            // UNDECLARED → the mcp.ts:48 `?? {}` accept-all fallback
+            // (see `output_schema`): pass through unvalidated;
+            // runtime.ts:46's die branch is scoped out for this port's
+            // builtin surface.
+            (None, outcome) => outcome,
         };
         // tool.execute.after (result mutation). The event carries the
         // declared output when present (tool.ts:142-146:
@@ -625,5 +708,165 @@ mod tests {
         let issues = validate_input(&open, &json!({ "flag": "yes" }));
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].path, "flag");
+    }
+
+    // -----------------------------------------------------------------------
+    // G-230 — encodeOutput (tool/runtime.ts:45-56, :110-132)
+    // -----------------------------------------------------------------------
+
+    use super::super::ToolOutcome;
+
+    /// A leaf returning a fixed outcome (the fake tool under test).
+    struct FixedLeaf {
+        outcome: super::super::ToolOutcome,
+    }
+
+    impl super::super::ToolExecuteWithContext for FixedLeaf {
+        fn execute<'a>(
+            &'a self,
+            _services: &'a super::super::ToolServices,
+            _input: &'a serde_json::Value,
+            _context: &'a super::super::ToolCallContext,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<
+                            super::super::ToolOutcome,
+                            super::super::ToolFailure,
+                        >,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            let outcome = self.outcome.clone();
+            Box::pin(std::future::ready(Ok(outcome)))
+        }
+    }
+
+    #[tokio::test]
+    async fn g230_declared_schema_rejects_invalid_output() {
+        let schema = json!({
+            "type": "object",
+            "properties": { "count": { "type": "integer" } },
+            "required": ["count"],
+            "additionalProperties": false,
+        });
+        let harness = crate::tool::tests::harness().await;
+        let hooks = Arc::new(crate::hooks::HookRegistry::new());
+        let executor = pipeline_executor_with_output(
+            "g230.bad",
+            json!({}),
+            Some(schema),
+            Arc::new(FixedLeaf {
+                outcome: ToolOutcome {
+                    output: Some(json!({ "count": "many" })),
+                    ..Default::default()
+                },
+            }),
+            &harness.services,
+            &hooks,
+        );
+        let failure = executor.execute(&json!({})).await.unwrap_err();
+        let ToolRunFailure::Error { message, .. } = &failure else {
+            panic!("invalid output must be a plain error: {failure:?}");
+        };
+        assert!(
+            message.starts_with("Tool returned an invalid value for its output schema: "),
+            "ref wording (runtime.ts:116): {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn g230_declared_schema_accepts_valid_output() {
+        let schema = json!({
+            "type": "object",
+            "properties": { "count": { "type": "integer" } },
+            "required": ["count"],
+            "additionalProperties": false,
+        });
+        let harness = crate::tool::tests::harness().await;
+        let hooks = Arc::new(crate::hooks::HookRegistry::new());
+        let executor = pipeline_executor_with_output(
+            "g230.good",
+            json!({}),
+            Some(schema),
+            Arc::new(FixedLeaf {
+                outcome: ToolOutcome {
+                    output: Some(json!({ "count": 3 })),
+                    ..Default::default()
+                },
+            }),
+            &harness.services,
+            &hooks,
+        );
+        let result = executor.execute(&json!({})).await.expect("valid output passes");
+        assert_eq!(result.output, Some(json!({ "count": 3 })));
+    }
+
+    /// runtime.ts:53 — declared schema but the tool returned no output.
+    #[tokio::test]
+    async fn g230_declared_schema_missing_output_fails() {
+        let harness = crate::tool::tests::harness().await;
+        let hooks = Arc::new(crate::hooks::HookRegistry::new());
+        let executor = pipeline_executor_with_output(
+            "g230.missing",
+            json!({}),
+            Some(json!({ "type": "object" })),
+            Arc::new(FixedLeaf { outcome: ToolOutcome::default() }),
+            &harness.services,
+            &hooks,
+        );
+        let failure = executor.execute(&json!({})).await.unwrap_err();
+        let ToolRunFailure::Error { message, .. } = &failure else {
+            panic!("missing output must be a plain error: {failure:?}");
+        };
+        assert_eq!(message, "Tool did not return its declared output");
+    }
+
+    /// The UNDECLARED scope (established in `output_schema`'s doc): the
+    /// mcp.ts:48 `?? {}` accept-all fallback — runtime.ts:46's die
+    /// branch does NOT fire for the port's builtin surface (no builtin
+    /// declares an output schema today; the compat survey found 14
+    /// returning output). The output passes through unvalidated.
+    #[tokio::test]
+    async fn g230_undeclared_output_passes_through_fallback() {
+        let harness = crate::tool::tests::harness().await;
+        let hooks = Arc::new(crate::hooks::HookRegistry::new());
+        let executor = pipeline_executor(
+            "g230.fallback",
+            json!({}),
+            Arc::new(FixedLeaf {
+                outcome: ToolOutcome {
+                    output: Some(json!({ "count": "many" })),
+                    ..Default::default()
+                },
+            }),
+            &harness.services,
+            &hooks,
+        );
+        let result = executor.execute(&json!({})).await.expect("fallback accepts");
+        assert_eq!(result.output, Some(json!({ "count": "many" })));
+    }
+
+    /// The builtin regression: an output-returning builtin (glob —
+    /// undeclared, the fallback scope) still executes end to end.
+    #[tokio::test]
+    async fn g230_builtin_returning_output_still_executes() {
+        let harness = crate::tool::tests::harness().await;
+        // Stage a file THROUGH the tools (relative paths resolve in the
+        // harness's private directory).
+        crate::tool::tests::call(
+            &harness.tools,
+            "write",
+            json!({ "path": "src/lib.rs", "content": "fn main() {}" }),
+        )
+        .await
+        .expect("write executes");
+        let result =
+            crate::tool::tests::call(&harness.tools, "glob", json!({ "pattern": "**/*.rs" }))
+                .await
+                .expect("glob executes");
+        let output = result.output.expect("glob returns output (undeclared → fallback)");
+        assert!(output.to_string().contains("lib.rs"), "glob output: {output}");
     }
 }
