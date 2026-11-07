@@ -825,3 +825,114 @@ fn g198_cache_clones_shallow_with_default_depth_100() {
         .unwrap();
     assert_eq!(git_output(&one.local_path, &["rev-list", "--count", "HEAD"]), "1");
 }
+
+// ===========================================================================
+// G-231 — ref fetch semantics: `--all --prune` + forced branch refspec
+// (git.ts:269-287)
+// ===========================================================================
+
+/// (a) `--all`: a SECOND remote's branch refreshes on the cached repo's
+/// update (the old plain `fetch origin` never touched it).
+#[test]
+fn g231_fetch_all_refreshes_second_remote() {
+    let fixture = with_remote();
+    let (cache, _) = daily(&fixture);
+    let input = ensure(&fixture.reference);
+    let initial = cache.ensure(&input).unwrap();
+
+    // A second remote with its own branch.
+    let second_origin = fixture.root.join("second.git");
+    let second_source = fixture.root.join("second-source");
+    std::fs::create_dir_all(&second_source).unwrap();
+    git(&fixture.root, &["init", "--bare", second_origin.to_str().unwrap()]);
+    git(&second_source, &["init"]);
+    git(&second_source, &["config", "user.email", "test@example.com"]);
+    git(&second_source, &["config", "user.name", "Test"]);
+    std::fs::write(second_source.join("SECOND.md"), "v1\n").unwrap();
+    git(&second_source, &["add", "."]);
+    git(&second_source, &["commit", "-m", "second initial"]);
+    git(&second_source, &["branch", "-M", "main"]);
+    git(&second_source, &["remote", "add", "origin", &origin_url(&second_origin)]);
+    git(&second_source, &["push", "-u", "origin", "main"]);
+    git(&initial.local_path, &["remote", "add", "second", &origin_url(&second_origin)]);
+
+    // The second remote advances AFTER the clone (no second remote was
+    // known at clone time).
+    std::fs::write(second_source.join("SECOND.md"), "v2\n").unwrap();
+    git(&second_source, &["add", "."]);
+    git(&second_source, &["commit", "-m", "second advance"]);
+    git(&second_source, &["push", "origin", "main"]);
+
+    let refreshed = cache
+        .ensure(&EnsureInput { refresh: Refresh::Forced, ..ensure(&fixture.reference) })
+        .unwrap();
+    assert_eq!(refreshed.status, "refreshed");
+    let tracked = git_output(&refreshed.local_path, &["rev-parse", "refs/remotes/second/main"]);
+    let upstream = git_output(&second_source, &["rev-parse", "refs/heads/main"]);
+    assert_eq!(tracked, upstream, "second remote refreshed via --all");
+}
+
+/// (b) `--prune`: a deleted upstream branch leaves remote-tracking.
+#[test]
+fn g231_fetch_prune_drops_deleted_upstream_branch() {
+    let fixture = with_remote();
+    git(&fixture.source, &["push", "origin", "main:refs/heads/feature"]);
+    let (cache, _) = daily(&fixture);
+    let input = ensure(&fixture.reference);
+    let initial = cache.ensure(&input).unwrap();
+    // A shallow clone tracks only the default branch (`--depth` implies
+    // single-branch); widen to the standard glob refspec and populate
+    // the tracking ref so there is something to prune.
+    git(&initial.local_path, &["remote", "set-branches", "origin", "*"]);
+    git(&initial.local_path, &["fetch", "origin"]);
+    assert!(
+        git_output(&initial.local_path, &["rev-parse", "--verify", "refs/remotes/origin/feature"])
+            .len()
+            == 40,
+        "tracking ref present after fetch"
+    );
+
+    // Upstream deletes the branch; the refresh prunes the tracking ref.
+    git(&fixture.source, &["push", "origin", "--delete", "feature"]);
+    let refreshed = cache
+        .ensure(&EnsureInput { refresh: Refresh::Forced, ..ensure(&fixture.reference) })
+        .unwrap();
+    assert_eq!(refreshed.status, "refreshed");
+    let pruned = Command::new("git")
+        .arg("-C")
+        .arg(&refreshed.local_path)
+        .args(["rev-parse", "--verify", "refs/remotes/origin/feature"])
+        .output()
+        .expect("git");
+    assert!(!pruned.status.success(), "pruned tracking ref");
+}
+
+/// (c) The forced refspec: a non-fast-forward upstream rewrite lands in
+/// refs/remotes/origin/<branch>.
+#[test]
+fn g231_forced_refspec_lands_non_fast_forward_update() {
+    let fixture = with_remote();
+    let (cache, _) = daily(&fixture);
+    let branch_input = EnsureInput {
+        reference: fixture.reference.clone(),
+        branch: Some("main".to_owned()),
+        refresh: Refresh::Forced,
+        depth: None,
+    };
+    let initial = cache.ensure(&branch_input).unwrap();
+    assert_eq!(read(&initial.local_path.join("README.md")), "one\n");
+
+    // Rewrite history upstream (amend + force push): non-fast-forward
+    // for the cached tracking ref.
+    std::fs::write(fixture.source.join("README.md"), "rewritten\n").unwrap();
+    git(&fixture.source, &["add", "."]);
+    git(&fixture.source, &["commit", "--amend", "-m", "rewritten"]);
+    git(&fixture.source, &["push", "--force", "origin", "main"]);
+
+    let refreshed = cache.ensure(&branch_input).unwrap();
+    assert_eq!(refreshed.status, "refreshed");
+    let tracked = git_output(&refreshed.local_path, &["rev-parse", "refs/remotes/origin/main"]);
+    let upstream = git_output(&fixture.source, &["rev-parse", "refs/heads/main"]);
+    assert_eq!(tracked, upstream, "forced refspec updated the tracking ref");
+    assert_eq!(read(&refreshed.local_path.join("README.md")), "rewritten\n");
+}
