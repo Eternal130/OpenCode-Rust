@@ -1685,12 +1685,28 @@ async fn pty_d3_i12_bus_events_and_i13_unattached_exit_across_the_boundary() {
     assert_eq!(event.data["sessionID"], session().as_str());
     assert_eq!(event.data["terminal"]["id"], kept.id.0);
 
-    // I13: an UNATTACHED short-lived child (ZERO subscribers) — the
-    // daemon's exit pump still publishes `removed` across the boundary.
+    // I13 (G-229② semantics): a short-lived child's exit publishes
+    // `removed` across the boundary when a subscriber (attachment) makes
+    // it visible — removeVisibleExit (ref index.ts:329-338).
     let short = frontend
         .create(&session(), create_input("i13", "sleep 1", Path::new("/tmp")))
         .await
         .expect("create short");
+    let attachment = frontend
+        .attach(
+            &short.id,
+            AttachInput {
+                cursor: 0,
+                attachment_id: "i13-observer",
+                role: Role::Observer,
+                takeover: false,
+                on_event: Box::new(|_| {}),
+                on_end: Box::new(|| {}),
+            },
+        )
+        .await
+        .expect("attach observer");
+    attachment.activate();
     let deadline = Instant::now() + Duration::from_secs(10);
     let removed = loop {
         assert!(Instant::now() < deadline, "unattached-exit removed never arrived");
@@ -1705,7 +1721,34 @@ async fn pty_d3_i12_bus_events_and_i13_unattached_exit_across_the_boundary() {
             break true;
         }
     };
-    assert!(removed, "the zero-subscriber exit pump fired persistent-pty.removed");
+    assert!(removed, "the ATTACHED exit pump fired persistent-pty.removed (G-229②)");
+
+    // G-229② — an UNATTACHED exit keeps its entry: no removed for it.
+    let unattached = frontend
+        .create(&session(), create_input("i13b", "sleep 1", Path::new("/tmp")))
+        .await
+        .expect("create unattached");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let row = frontend.get(&unattached.id).await.expect("get unattached");
+        if row.status == oc_core::pty::Status::Exited {
+            break;
+        }
+        assert!(Instant::now() < deadline, "unattached child never exited");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    // Drain any pending bus events: none may be `removed` for the id.
+    while let Ok(Some(event)) =
+        tokio::time::timeout(Duration::from_millis(200), subscription.next()).await
+    {
+        assert!(
+            !(event.type_ == "persistent-pty.removed" && event.data["ptyID"] == unattached.id.0),
+            "unattached exit must NOT publish removed: {:?}",
+            event.data
+        );
+    }
+    frontend.remove(&unattached.id).await.expect("cleanup unattached");
 
     // Explicit remove publishes removed as well (the v2 surface).
     frontend.remove(&kept.id).await.expect("remove");
