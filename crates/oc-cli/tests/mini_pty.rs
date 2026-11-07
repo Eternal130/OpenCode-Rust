@@ -41,6 +41,13 @@ struct Stub {
 enum PromptMode {
     PlainReply,
     PermissionAsk,
+    /// G-221 — the five display blocks live (inbox queued prompts,
+    /// skill, shell, compaction, tool.input.ended) after a prompt.
+    G221Live,
+    /// G-221 — the replay/hydrate path: the message list serves
+    /// skill/shell/compaction messages and the inbox list one queued
+    /// row.
+    G221Replay,
 }
 
 async fn start_stub(mode: PromptMode) -> Stub {
@@ -155,7 +162,39 @@ async fn serve_connection(
         return;
     }
     if method == "GET" && path_only == format!("/api/session/{SESSION_ID}/message") {
+        // G-221 — the replay fixtures (skill/shell/compaction
+        // messages, newest first — the client fetches desc and the
+        // runtime reverses).
+        if *mode.lock().expect("lock") == PromptMode::G221Replay {
+            let body = serde_json::json!({ "cursor": {}, "data": [
+                { "id": "msg_rc", "type": "compaction", "status": "completed", "reason": "auto",
+                  "summary": "Replay compaction summary.", "recent": "recent text",
+                  "time": { "created": 9 } },
+                { "id": "msg_rs", "type": "shell", "shellID": "shl_r1", "command": "echo replayed",
+                  "status": "exited", "exit": 0,
+                  "output": { "output": "replayed shell\n", "cursor": 15, "size": 15, "truncated": false },
+                  "time": { "created": 8, "completed": 9 } },
+                { "id": "msg_rsk", "type": "skill", "skill": "skl_review", "name": "review",
+                  "text": "skill body", "time": { "created": 7 } },
+            ] });
+            respond_json(socket, &body.to_string()).await;
+            return;
+        }
         respond_json(socket, r#"{"cursor":{},"data":[]}"#).await;
+        return;
+    }
+    if method == "GET" && path_only == format!("/api/session/{SESSION_ID}/inbox") {
+        // G-221 — the hydrate's inbox seed (`session.inbox.list`).
+        if *mode.lock().expect("lock") == PromptMode::G221Replay {
+            let body = serde_json::json!({ "data": [
+                { "id": "msg_rq1", "sessionID": SESSION_ID, "type": "user",
+                  "payload": { "text": "queued while away" }, "delivery": "queue",
+                  "time": { "created": 1 } },
+            ] });
+            respond_json(socket, &body.to_string()).await;
+            return;
+        }
+        respond_json(socket, r#"{"data":[]}"#).await;
         return;
     }
     if method == "POST" && path_only == format!("/api/session/{SESSION_ID}/prompt") {
@@ -170,6 +209,13 @@ async fn serve_connection(
         );
         respond_json(socket, &body).await;
         let mode = *mode.lock().expect("lock");
+        if mode == PromptMode::G221Live {
+            // The G-221 script paces its phases so the LIVE dock
+            // repaints between them (a burst would collapse the
+            // transient footer states before any flush).
+            emit_g221_script(&sub_tx).await;
+            return;
+        }
         emit_turn_script(&sub_tx, mode, None);
         return;
     }
@@ -236,6 +282,68 @@ async fn respond_json(socket: &mut tokio::net::TcpStream, body: &str) {
     let _ = socket.write_all(response.as_bytes()).await;
 }
 
+/// The G-221 paced event script: one turn carrying the five display
+/// blocks, with inter-phase pauses so the footer repaints between the
+/// transient states (the queued count, the running shell).
+async fn emit_g221_script(tx: &tokio::sync::broadcast::Sender<String>) {
+    let event = |kind: &str, data: serde_json::Value| {
+        let _ = tx.send(
+            serde_json::json!({ "type": kind, "data": data, "created": 1, "id": "evt_stub" })
+                .to_string(),
+        );
+    };
+    let session = serde_json::json!({ "sessionID": SESSION_ID });
+    let pace = Duration::from_millis(700);
+    // Phase 1 — two rows queue: the dock paints "2 pending".
+    event("session.execution.started", session.clone());
+    event("session.inbox.enqueued", serde_json::json!({
+        "sessionID": SESSION_ID, "inboxID": "msg_g21",
+        "item": { "type": "user", "payload": { "text": "queued one" }, "delivery": "queue" },
+    }));
+    event("session.inbox.enqueued", serde_json::json!({
+        "sessionID": SESSION_ID, "inboxID": "msg_g22",
+        "item": { "type": "user", "payload": { "text": "queued two" }, "delivery": "queue" },
+    }));
+    tokio::time::sleep(pace).await;
+    // Phase 2 — one cancels, one delivers; a skill activates.
+    event("session.inbox.cancelled", serde_json::json!({ "sessionID": SESSION_ID, "inboxID": "msg_g21" }));
+    event("session.inbox.delivered", serde_json::json!({ "sessionID": SESSION_ID, "inboxID": "msg_g22" }));
+    event("session.skill.activated", serde_json::json!({
+        "sessionID": SESSION_ID, "id": "skl_deploy", "name": "deploy", "text": "…",
+    }));
+    tokio::time::sleep(pace).await;
+    // Phase 3 — a direct shell runs and exits 0.
+    event("session.shell.started", serde_json::json!({
+        "sessionID": SESSION_ID, "shell": { "id": "shl_g1", "command": "echo g221 hello", "status": "running" },
+    }));
+    tokio::time::sleep(pace).await;
+    event("session.shell.ended", serde_json::json!({
+        "sessionID": SESSION_ID,
+        "shell": { "id": "shl_g1", "command": "echo g221 hello", "status": "exited", "exit": 0 },
+        "output": { "output": "g221 shell output\n", "cursor": 18, "size": 18, "truncated": false },
+    }));
+    // Phase 4 — a server-driven compaction runs to completion.
+    event("session.compaction.started", serde_json::json!({
+        "sessionID": SESSION_ID, "reason": "auto", "recent": "recent", "inputID": "msg_gcmp",
+    }));
+    event("session.compaction.delta", serde_json::json!({ "sessionID": SESSION_ID, "text": "Distilled " }));
+    event("session.compaction.ended", serde_json::json!({
+        "sessionID": SESSION_ID, "reason": "auto", "text": "Distilled context.", "recent": "recent",
+    }));
+    tokio::time::sleep(pace).await;
+    // Phase 5 — a streaming tool input settles at its final text
+    // (the REAL wire shape: id/name, no partID).
+    event("session.tool.input.started", serde_json::json!({
+        "sessionID": SESSION_ID, "assistantMessageID": "msg_stub_1", "id": "call_g1", "name": "bash",
+    }));
+    event("session.tool.input.ended", serde_json::json!({
+        "sessionID": SESSION_ID, "assistantMessageID": "msg_stub_1", "id": "call_g1",
+        "text": "{\"command\":\"oc fmt --check\"}",
+    }));
+    tokio::time::sleep(pace).await;
+    event("session.execution.succeeded", session);
+}
+
 /// The scripted event sequence a prompt triggers (SSE shapes the
 /// transport folds).
 fn emit_turn_script(
@@ -273,7 +381,7 @@ fn emit_turn_script(
                                      "resources": ["bash(echo hi)"] }),
             );
         }
-        PromptMode::PlainReply => {
+        PromptMode::PlainReply | PromptMode::G221Replay => {
             event(
                 "session.text.started",
                 serde_json::json!({ "sessionID": SESSION_ID, "messageID": "msg_stub_1", "partID": "prt_text" }),
@@ -288,6 +396,8 @@ fn emit_turn_script(
             );
             event("session.execution.succeeded", session);
         }
+        // The G-221 live script returned above.
+        PromptMode::G221Live => {}
     }
 }
 
@@ -306,6 +416,17 @@ impl MiniPty {
     }
 
     fn spawn_with_cli(port: u16, extra: &[&str], cli_json: &str) -> Self {
+        Self::spawn_full(port, extra, cli_json, false)
+    }
+
+    /// G-221 — a spawn WITH the session replay enabled (no
+    /// `--no-replay`): the boot hydrate walks the message list and
+    /// the inbox list.
+    fn spawn_replay(port: u16, extra: &[&str], cli_json: &str) -> Self {
+        Self::spawn_full(port, extra, cli_json, true)
+    }
+
+    fn spawn_full(port: u16, extra: &[&str], cli_json: &str, replay: bool) -> Self {
         let master = unsafe {
             let fd = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
             assert!(fd >= 0, "posix_openpt");
@@ -371,8 +492,11 @@ impl MiniPty {
             .arg("--server")
             .arg(format!("http://127.0.0.1:{port}"))
             .arg("--session")
-            .arg(SESSION_ID)
-            .arg("--no-replay")
+            .arg(SESSION_ID);
+        if !replay {
+            command.arg("--no-replay");
+        }
+        command
             .args(extra)
             .current_dir(sandbox.join("work"))
             .env("OPENCODE_TEST_HOME", &sandbox)
@@ -615,4 +739,149 @@ async fn mini_pty_demo_slash_commands() {
     mini.wait_for("Demo · completed", Duration::from_secs(20));
     mini.exit_sequence();
     mini.finish();
+}
+
+// -- G-221: the five display blocks -------------------------------------
+
+/// G-221 blocks 1-5 LIVE (stream-v2.transport.ts): a turn carries a
+/// server-inbox queue (the footer's `N pending` + the delivered user
+/// echo), a skill activation row, the direct-shell rows (`$ command`
+/// + the merged output), a server-driven compaction (the divider +
+/// the streamed summary), and a streaming tool input that settles at
+/// its final caption.
+#[tokio::test(flavor = "multi_thread")]
+async fn mini_pty_g221_inbox_skill_shell_compaction_tool_input() {
+    let stub = start_stub(PromptMode::G221Live).await;
+    // `mini.shell_output: "show"` — the streaming tool-input caption
+    // rows (phase progress, canonical name "shell") stay hidden under
+    // the knob's default (CONFIG-T4, tool.ts:1302).
+    let mut mini = MiniPty::spawn_with_cli(
+        stub.port,
+        &[],
+        r#"{ "mini": { "tools": "show", "mono": true, "shell_output": "show" } }"#,
+    );
+
+    assert!(mini.wait_for("oc mini", Duration::from_secs(30)), "boot");
+    mini.type_text("run the blocks\r");
+
+    // Block 1 — the footer's queued-prompts view: two rows queue (the
+    // count reaches 2), one cancels, one delivers (the user echo).
+    assert!(
+        mini.wait_for("2 pending", Duration::from_secs(30)),
+        "the footer's queued count: {}",
+        mini.output()
+    );
+    assert!(
+        mini.wait_for("> queued two", Duration::from_secs(30)),
+        "the delivered row's user echo: {}",
+        mini.output()
+    );
+    assert!(
+        !mini.output().contains("> queued one"),
+        "the cancelled row never echoes: {}",
+        mini.output()
+    );
+    // Block 3 — the skill row (`→ Skill "name"`,
+    // stream-v2.transport.ts:399-408).
+    assert!(
+        mini.wait_for("→ Skill \"deploy\"", Duration::from_secs(30)),
+        "the skill activation row: {}",
+        mini.output()
+    );
+    // Block 2 — the direct-shell rows: `$ command` + the merged
+    // output (tool.ts:1282-1294).
+    assert!(
+        mini.wait_for("$ echo g221 hello", Duration::from_secs(30)),
+        "the shell start row: {}",
+        mini.output()
+    );
+    assert!(
+        mini.wait_for("g221 shell output", Duration::from_secs(30)),
+        "the shell output row: {}",
+        mini.output()
+    );
+    // Block 4 — the server-driven compaction: the divider header + the
+    // streamed summary (transport.ts:416-448, 1086-1124). The mono
+    // writer is append-only: the delta row and the ended suffix land
+    // as separate scrollback rows.
+    assert!(
+        mini.wait_for("─── Compaction ───", Duration::from_secs(30)),
+        "the compaction divider: {}",
+        mini.output()
+    );
+    assert!(
+        mini.wait_for("Distilled", Duration::from_secs(30)),
+        "the compaction delta row: {}",
+        mini.output()
+    );
+    assert!(
+        mini.wait_for("context.", Duration::from_secs(30)),
+        "the compaction ended suffix row: {}",
+        mini.output()
+    );
+    // Block 5 — the streaming tool input settles at its final caption
+    // (`session.tool.input.ended`, transport.ts:1260-1272).
+    assert!(
+        mini.wait_for("Bash · oc fmt --check", Duration::from_secs(30)),
+        "the finalized tool-input caption: {}",
+        mini.output()
+    );
+
+    mini.exit_sequence();
+    mini.wait_for("opencode mini -s ses_min_stub", Duration::from_secs(20));
+    let code = mini.finish();
+    assert_eq!(code, 0);
+}
+
+/// G-221 replay/hydrate: the boot walk renders the skill, shell, and
+/// compaction messages from the session's message list
+/// (`renderMessage`, transport.ts:769-841) and the inbox list seeds
+/// the footer's pending view (`hydrate`, transport.ts:971-977).
+#[tokio::test(flavor = "multi_thread")]
+async fn mini_pty_g221_replay_hydrates_blocks_and_pending() {
+    let stub = start_stub(PromptMode::G221Replay).await;
+    let mut mini = MiniPty::spawn_replay(stub.port, &[], r#"{ "mini": { "tools": "show", "mono": true } }"#);
+
+    assert!(
+        mini.wait_for("→ Skill \"review\"", Duration::from_secs(30)),
+        "the replayed skill row: {}",
+        mini.output()
+    );
+    assert!(
+        mini.wait_for("$ echo replayed", Duration::from_secs(30)),
+        "the replayed shell start row: {}",
+        mini.output()
+    );
+    assert!(
+        mini.wait_for("replayed shell", Duration::from_secs(30)),
+        "the replayed shell output: {}",
+        mini.output()
+    );
+    assert!(
+        mini.wait_for("─── Compaction ───", Duration::from_secs(30)),
+        "the replayed compaction divider: {}",
+        mini.output()
+    );
+    assert!(
+        mini.wait_for("Replay compaction summary.", Duration::from_secs(30)),
+        "the replayed compaction summary: {}",
+        mini.output()
+    );
+    assert!(
+        mini.wait_for("1 pending", Duration::from_secs(30)),
+        "the hydrate's inbox seed reaches the footer: {}",
+        mini.output()
+    );
+
+    // The session stays usable: a prompt turn still completes.
+    mini.type_text("hello after replay\r");
+    assert!(
+        mini.wait_for("Stub says hello.", Duration::from_secs(30)),
+        "the post-replay turn: {}",
+        mini.output()
+    );
+    mini.exit_sequence();
+    mini.wait_for("opencode mini -s ses_min_stub", Duration::from_secs(20));
+    let code = mini.finish();
+    assert_eq!(code, 0);
 }

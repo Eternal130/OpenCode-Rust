@@ -182,6 +182,10 @@ pub struct FooterPane {
     subagent_selected: Option<String>,
     /// The detail scroll (rows from the bottom, sticky-bottom).
     subagent_scroll: usize,
+    /// G-221 — the server inbox's pending-prompt count (the
+    /// `queued.prompts` view — the statusline's `N pending` group,
+    /// `footer.view.tsx:246`).
+    pub queued_pending: usize,
 }
 
 /// RD-19 — the launch row's state (`footer.view.tsx:709-725`): the
@@ -227,6 +231,7 @@ impl FooterPane {
             subagent_children: Vec::new(),
             subagent_selected: None,
             subagent_scroll: 0,
+            queued_pending: 0,
         }
     }
 
@@ -695,6 +700,22 @@ impl FooterPane {
                     .iter()
                     .filter(|child| child.status == super::transport::SubagentStatus::Running)
                     .count();
+                // G-221 — the statusline details (footer.view.tsx:
+                // 243-248): `N pending` (the `queued.prompts` view)
+                // BEFORE the `N subagents` group, one ` · `-joined
+                // status string.
+                let mut status_detail = String::new();
+                if self.queued_pending > 0 {
+                    status_detail = format!("{} pending", self.queued_pending);
+                }
+                if running > 0 {
+                    let subagents = format!("{running} subagent{}", if running == 1 { "" } else { "s" });
+                    status_detail = if status_detail.is_empty() {
+                        subagents
+                    } else {
+                        format!("{status_detail} · {subagents}")
+                    };
+                }
                 let idle = PromptIdleState {
                     agent: self.agent.clone().unwrap_or_else(|| "Build".to_owned()),
                     model_label: self
@@ -702,13 +723,7 @@ impl FooterPane {
                         .clone()
                         .unwrap_or_else(|| "Default model".to_owned()),
                     command_shortcut: "ctrl+p".to_owned(),
-                    // TUI-17 — the statusline's `N subagent(s)`
-                    // detail (footer.view.tsx:247).
-                    status_detail: if running > 0 {
-                        format!("{running} subagent{}", if running == 1 { "" } else { "s" })
-                    } else {
-                        String::new()
-                    },
+                    status_detail,
                 };
                 // CONFIG-T4 — the busy statusline (`footer.view.tsx:210`
                 // + `:978-988`): while a turn runs, the status text
@@ -1822,5 +1837,40 @@ mod tests {
         let grid = frame.text_grid();
         assert!(grid[0].starts_with("┃ hi"), "draft in composer row: {:?}", grid[0]);
         assert!(grid[1].starts_with("Build · gpt-5"), "statusline below");
+    }
+
+    /// G-221 — the statusline's `N pending` group (`queued.prompts`,
+    /// footer.view.tsx:246) before the subagents group (:247): the
+    /// counts join into one ` · `-separated status detail.
+    #[test]
+    fn queued_pending_renders_in_the_statusline_before_subagents() {
+        let mut footer = pane();
+        footer.agent = Some("Build".into());
+        footer.model_label = Some("gpt-5".into());
+        footer.queued_pending = 2;
+        let frame = footer.render_frame(60, super::super::FOOTER_HEIGHT);
+        let grid = frame.text_grid();
+        assert!(grid[1].contains("2 pending"), "the queued count: {:?}", grid[1]);
+        assert!(!grid[1].contains("subagent"), "no children tracked: {:?}", grid[1]);
+        // A running child appends its group AFTER the pending count.
+        footer.subagent_children = vec![super::super::transport::SubagentChild {
+            session_id: "ses_child".into(),
+            label: "Subagent".into(),
+            title: String::new(),
+            description: String::new(),
+            status: super::super::transport::SubagentStatus::Running,
+            commits: Vec::new(),
+        }];
+        let frame = footer.render_frame(60, super::super::FOOTER_HEIGHT);
+        let grid = frame.text_grid();
+        assert!(
+            grid[1].contains("2 pending · 1 subagent"),
+            "pending before subagents: {:?}",
+            grid[1]
+        );
+        // An empty queue leaves only the subagent group.
+        footer.queued_pending = 0;
+        let grid = footer.render_frame(60, super::super::FOOTER_HEIGHT).text_grid();
+        assert!(grid[1].contains("1 subagent") && !grid[1].contains("pending"), "{:?}", grid[1]);
     }
 }
