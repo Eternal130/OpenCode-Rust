@@ -8,6 +8,8 @@
 
 > **2026-11-07 第十五轮（15 通道全功能逐项对比审查 + 4 通道缺口复核）**：对 ref v2.0.24 全功能面（TS ~24.7 万行核心链路 vs Rust ~55 万行，core 会话/工具/AI/TUI/配置/总线/DB/shell-PTY/MCP-插件/权限凭证/文件系统/CLI/server/client-schema-theme-util/杂项）逐文件对读后，对 38 项 ❌ 指控与 17 项重点 🟡 做 4 通道双侧现行源码复核并与本册 G-1..G-212 去重：**新立项 G-213..G-240（28 项：🔴×1/🟡×15/🟢×9/ℹ️×3）；G-116 ✅ 状态回退重开（三子项经代码取证均未落地）；两条旧勘误订正（repository-cache「完整移植」与 EADDRINUSE「全链路接线」断言均与代码不符）；6 项初报撤销；4 项归类既有**。总体画像：核心链路一致率 ~83%（✅1182/🟡196/❌38/➕77）。总报告 `PORT_REVIEW_v2.0.24.md`，域报告与复核记录 `/tmp/opencode/port-review/`。
 
+> **2026-11-08 第十六轮 burndown 收口（gap-burndown-9）**：第十五轮立项的 G-213..G-240 全部可行动项（含 G-226 裁决落地）+ G-116 回退重开三子项 + lane12 抽查重开的 G-117 残半边，经 lanes 1-13 串行落地并 fast-forward 合并 main，逐条 ✅；PTY 族 lane（5/9/10）另过 `--profile pty` 序列化门。e1 canary 经盘上二分+零语义受控实验定性为**逐构建翻转噪声**（勘注见 2.2#4）。无上游阻挡项（无需 opentui-rust 未移植功能的搁置项）。明细见文末「第十六轮 burndown 收口」节。
+
 > **2026-11-03 第十二轮（全量对比审查）**：22 通道逐文件全文对读（TS ~21 万行 / Rust ~40 万行生产代码）+ 3 通道缺口核验，对 50 项缺口声称逐项双侧源码取证：**新立项 46 项（G-165..G-210，含 🔴×6：Azure 未接线/Mcp.Protocol wire bug/Copilot anthropic 车道/第三方 anthropic 根 URL/shell 注释换行权限逃逸/transfer 脱敏弱）**、撤销 4 项初报 + 6 项子句修正（见文末第十二轮勘误）、5 项归类既有条目。总报告 `CODE_REVIEW_PARITY_2026-11-03.md`，域报告与核验记录 `/tmp/opencode/review/`。
 
 > **2026-11-02 第十一轮 burndown 收口（gap-burndown-7）**：第十轮立项的 G-105..G-164 全部 60 项经 lanes 1-9 落地并合并 main（lane1 043408d / lane2 3269839 / lane3 822d72d / lane4 88b25b5 / lane5 a28e380 / lane6 e516182 / lane7 e3395dc / lane8 3480df9 / lane9 本轮合并），逐条状态改标 ✅（G-163/G-164 维持 ℹ️ 登记项，G-161② 已修）。各 lane 有界偏离清单见文末第十一轮。
@@ -259,7 +261,7 @@
 1. canonical harness=**nextest**（.config/nextest.toml：test-threads=4、全局 retry=1、be1/pty 家族 retry=2）：全 workspace 用 `cargo nextest run --workspace --locked --no-fail-fast`；PTY 家族另跑 `--profile pty`；**禁 plain `cargo test`** 的红作回归证据（`--exact` 单测复现除外）。
 2. 首轮**不过滤** + `--no-fail-fast` 拿全量结果；报告**原样引用 `test result:` 行**（禁只写 green/通过）；红测试**同轮** `--exact <name> -- --nocapture` 取回输出。
 3. 终报**从磁盘核实**：`ls -t .test-logs/` 定位真实文件 + `grep -cE 'FAIL'` 核对失败计数；只引 `ls` 出的路径；终报贴 `git log -1 <branch>` 落地证明，缺证明=未完成。
-4. flake 白名单（重试即过、勿误判回归、不作合并门单独阻塞）：`composer_tabs_walk` / `location_ttl_sweeper` / `mini_subagent_footer` / `scenario_permission_saved` / `e1_cells_paste_8k` / `e1_canary` / `catalog_refresh_propagates`。`e1_cells_paste_8k` 勘注（2026-11-07）：并发满套件常双败、序列化过、跨构建非单调（盘上二分证据见第十四轮）——放行依据=落盘的序列化单跑通过。
+4. flake 白名单（重试即过、勿误判回归、不作合并门单独阻塞）：`composer_tabs_walk` / `location_ttl_sweeper` / `mini_subagent_footer` / `scenario_permission_saved` / `e1_cells_paste_8k` / `e1_canary` / `catalog_refresh_propagates`。`e1_cells_paste_8k` 勘注（2026-11-07）：并发满套件常双败、序列化过、跨构建非单调（盘上二分证据见第十四轮）——放行依据=落盘的序列化单跑通过。勘注（2026-11-08 第十六轮受控复现）：**该 canary 逐构建翻转与代码语义无关**——a7d0caa4 原构建序列化 PASS×2（含 load 8.9 下）、同树+仅 2 行零语义注释重编即翻红；d1bb497a 全部内容回退组合（±project.rs/±repository_cache.rs）均红；失败形状恒为 typing-idle 单格恰 1 burst（bursts=1≠0），系二进制布局偏移使一次性唤醒落入 2.5s 采样窗。**序列化单跑通过不再是普适可得状态**，放行依据=白名单+受控证据链（日志 `.test-logs/e1-bisect-*`，判别实验见第十六轮节）。
 5. 基线日志必须绑定采集时 `git rev-parse HEAD` 树 hash（无 hash=无效基线）；测试争议先读落盘日志，禁凭记忆重跑。
 6. oracle 三可证：版本硬断言 + 采集指纹（FNV-1a 双语镜像）+ always-refresh；金帧只证渲染保真，组合/路由模型必须参照源码级对比（file:line），不许 golden 自证。
 7. **测试分层**（按改动范围选层，先轻后重；门命令**逐字内联** lane 提示词，禁「模板同前 lane」引用）：
@@ -875,10 +877,12 @@ G-93..G-104 全部 ✅。现存未关闭项维持既有文档化决策：G-28（
 - ② 订阅回调 panic 无隔离（pty.rs:173-183 持锁裸调；锁为 parking_lot 不毒化，但 panic 沿 reader 线程 unwind 致数据流静默中断、会话卡 running）；ref pty.ts:214,300 catch 后移除订阅者继续。
 - ③ win32 的 LC_ALL/LC_CTYPE/LANG=C.UTF-8 注入缺失（pty.rs:459-460 仅 TERM/OPENCODE_TERMINAL；本构建非 win32 目标，低危前瞻项）。
 - **2026-11-07 第十五轮勘注（状态回退 ❌）**：第十一轮对 G-105..G-164 的逐条 ✅ 标记对本条失真——现行代码三子项均未落地（① pty.rs:176 仍按字节计数；② pty.rs:173-189 `on_data` 持锁裸调、全 crate 无 catch_unwind；③ pty.rs:466-467 仍仅注入 TERM/OPENCODE_TERMINAL），第十一轮 lane 清单与 git log 均查无本条修复提交。回退为 ❌ 重开（①③ 低危/前瞻；② 生产回调仅 channel send，实际风险有限）。win32 gitbash 发现（rust 仅 oc-server/server_process_env.rs:23 透传 `OPENCODE_GIT_BASH_PATH`，ref 消费链在 shell/select.ts）并入 ③ 同族登记。详见文末第十五轮。
+- **2026-11-08 第十六轮收口 ✅**：三子项经 gb9-lane5 落地（①cursor/buffer_cursor 改 UTF-16 码元计数；②订阅回调 catch_unwind 隔离+违规者摘除（on_data/replay/on_end 全臂）；③win32 LC_ALL/LC_CTYPE/LANG=C.UTF-8 注入 + shell::select gitbash 发现（OPENCODE_GIT_BASH_PATH），均 cfg(windows) 门控、纯逻辑函数未门控测试）。PTY 族 `--profile pty` 序列化门 5328/5329（唯一失败=白名单 canary）。
 
 ### G-117 ✅ 凭证存储两处微偏差（core）
 - activate/update 额外更新 time_updated（integration/credential.rs:239,:285-297；ref credential.ts:124-130,227-228 的 set 不含该列）——外部可见 mtime 漂移。
 - 无 integration_id 的行以 `integration_id=""` 进入 all() 结果（credential.rs:71,:132 `unwrap_or_default()`；ref :69 直接丢弃）。复现：手动插入 NULL integration_id 凭证后 `credential list`——ref 隐藏，rust 返回空串条目。
+- **2026-11-08 第十六轮勘注（lane12 抽查→lane13 收口）**：time_updated 半边此前未落地（与 G-116 同型误闭，lane 清单/git log 查无修复提交）——现 oc-core CredentialStore（`2362d051`）与 oc-server HTTP 重复 SQL（`04e4ce93`，保留本地 SQL 避免改 wire）两路均已修：activate/update 仅写 active/label/value，插入仍播种 time_updated。NULL integration_id 过滤半边实际由 G-225 收口顺带落地（credential.rs:364-376 `stored_credentials` 过滤，归因订正）。
 
 ### G-123 ✅ togetherai/digitalocean env 回退链缺失（ai）
 - Rust：snapshot togetherai env 仅 `["TOGETHER_API_KEY"]`、digitalocean 仅 `["DIGITALOCEAN_ACCESS_TOKEN"]`；facade.rs:551-558 bearer_auth 只按 catalog env 顺序构造。
@@ -993,6 +997,7 @@ G-93..G-104 全部 ✅。现存未关闭项维持既有文档化决策：G-28（
 ### G-164 ℹ️ announce.rs 为位置事件级联的服务端替身（server）
 - Ref 由各 core 服务自持 notify（reload/transform → bus.publish）；Rust 由 oc-server/announce.rs 按装配/请求时机合成（模块头 :1-15 自述；engine/mod.rs:652 F-5 注释佐证；含 project.updated 60s 限速、九个空 *.updated 帧复刻，有 parity 测试）。结构性 seam：新增 location 服务/事件需同步维护 announce 级联清单，漂移风险集中该文件——保持 parity 金样并在此登记。
 - 2026-11-02 第十一轮：登记收口——结构性 seam 维持现状；新增 location 服务/事件时必须同步维护 announce.rs 级联清单并保持既有 parity 金样（约束性登记，无代码项）。
+- 2026-11-08 勘注（G-218 落地后前提订正）：announce 不再是 `filesystem.changed` 的发布者（engine watcher 显式盯 `<gitdir>/HEAD` 唯一发布；announce 改订阅该事件按 HEAD-basename 谓词发布 `vcs.branch.updated`，弃 250ms 轮询）。模块头描述已随代码更新；「announce 替代 core 自持 notify」的原前提就此失效，其余 announce 级联清单义务与 parity 金样不变（gb9 lane7 `4877e6dd`）。
 
 ### G-211 ℹ️ split-footer / ExternalOutputCommit 整族延后（tui，mini 走薄缝）
 - opentui renderer.ts:2339+ 的 split-footer（makeRoom/ExternalOutputCommit）家族不移植：主 TUI 全量 alt-screen，无消费面；mini 的 split-footer 交互于 Phase B4 落地为**薄缝**——dock 由 oc-tui 自有 GridEmitter 画在全屏网格底部行（上方恒 blank，diff 不触转录区），`insert_before` 以「擦 dock → 底行滚动 → CUP 写行」等价实现，键入走 KeyPipeline 非阻塞路径。行为由 oc-cli `mini_pty.rs`（4 测试）与 oc-tui mini 系列（含 `pty_daily::mini_subagent_footer`）钉定。
@@ -1321,50 +1326,50 @@ G-165..G-210 全部 ✅（G-177 前轮已闭；G-211/212 维持 ℹ️ 登记）
 
 ## 🔴 高
 
-### G-213 ❌（🔴 安全）`serve --service` 模式密码打到 stdout（cli）
+### G-213 ✅（🔴 安全）`serve --service` 模式密码打到 stdout（cli）
 - rust `oc-cli/src/handlers/serve.rs:214-218`：非 stdio 的 default 与 service **两种模式**只要 `environment_password.is_none()` 即 `println!("server password {password}")`；service 模式密码已持久化 service config（:178-180）却仍打 stdout——daemon stdout 被 journal/Desktop 捕获即落日志。
 - ref `cli/src/services/server-process.ts:62,175`：仅 foreground（default）打印；service 模式密码只进 ServiceConfig（:136）。
 - 修法：打印条件加 `!service`，对齐 ref。
 
 ## 🟡 中
 
-### G-214 ❌ 命令模板 `` !`cmd` `` shell 插值缺失（core）
+### G-214 ✅ 命令模板 `` !`cmd` `` shell 插值缺失（core）
 - rust `config/command_md.rs:242-287` `evaluate_template` 仅 `$N`/`$ARGUMENTS`/append-input；注释（:236-240）自称 "server-side execution surface 另行应用 shell blocks"，但两个执行点 `oc-server/handlers/session.rs:1190`、`plugins.rs:1677-1683` 均直接消费其结果，全仓无后置插值——注释为虚假承诺。
 - ref `config/plugin/command.ts:214-239,250`：shellRegex `/!`([^`]+)`/g`，经 ShellSelect+AppProcess 以 cwd=location 执行、合并 stdout/stderr、失败报 `Shell interpolation failed`。
 - 影响：模板中的 `` !`cmd` `` 字面文本进入 prompt。修法：两个 Config 执行点补 shell-interpolation 腿，或并入 evaluate_template 并传 shell select seam。
 
-### G-215 ❌ MCP prompts 未注册为 `server:prompt` 斜杠命令（core）
+### G-215 ✅ MCP prompts 未注册为 `server:prompt` 斜杠命令（core）
 - rust `mcp/registry.rs:1304-1316` `prompts()` 与 `:838/:1047` 的 `mcp.prompts.changed` **全仓零消费**；`engine/commands.rs` 三源（markdown/document/plugin）无 MCP prompt 注册；G-186 的 TUI slash 合并走服务端 command.list 同样不含。
 - ref `plugin/command.ts:17-27,55-81`：`mcpCommandName`=sanitize(server)+":"+sanitize(prompt)，PromptsChanged 订阅驱动 reload，`mcp.prompt` 结果拼 prompt 文本。
 - 影响：MCP prompts 在 rust 完全不可作为斜杠命令触达。
 
-### G-216 ❌ skill 目录扫描三偏差（core）
+### G-216 ✅ skill 目录扫描三偏差（core）
 - ① `**/SKILL.md` 深度：rust `engine/skills.rs:413-420` 只查一层子目录（注释自认 minimal）；ref `fs.scan("{*.md,**/SKILL.md}")` 任意深度——`skill/a/b/SKILL.md` 静默丢失。
 - ② 大小写：rust `skills.rs:406` `eq_ignore_ascii_case("md")` 接受 `.MD`；ref glob 在 Linux 区分大小写（rust 多收文件）。
 - ③ 错型 name：rust `skills.rs:432,452` 非字符串 name 回退为 id 仍注册；ref `skill-file.ts:42-43` decode 失败 → Skipped。
 - 修法：walkdir 全深度匹配 SKILL.md、后缀精确比较、错型 name 跳过。（G-53/G-80 为别的 skill 面。）
 
-### G-217 ❌ EADDRINUSE 竞争重试环为死代码（cli/server）
+### G-217 ✅ EADDRINUSE 竞争重试环为死代码（cli/server）
 - rust `lifecycle.rs:1487-1522` `bind_or_incumbent` 确有 100ms×15s 重试环+逐字文案，但**生产零调用**（全仓 grep 仅测试引用）；生产链 `serve.rs:103-127` 仅启动前一次性 incumbent 预检 → `boot.rs:573` → `lifecycle::serve:1571` `bind(options)?` 一次绑定冲突即 Err。
 - ref `cli/src/server-process.ts:144-171`：launch 失败且 EADDRINUSE 时进入 15s 重试环（逐 probe 重试 bind，老 daemon 退出即可接管）。
 - 修法：`serve()` 改调 `bind_or_incumbent`（或 boot 层换入口）。〔本条即第十轮勘误 #13 的失真订正，见上文。〕
 
-### G-218 ⚠️ 双 location-watcher 并存、HEAD 变更双份事件（core/server；G-164 前提过时）
+### G-218 ✅ 双 location-watcher 并存、HEAD 变更双份事件（core/server；G-164 前提过时）
 - rust 两套都活着：① `oc-core/filesystem/location_watcher.rs`（notify 订阅）+ `engine/mod.rs:1725-1737` 装配 spawn（`file_watcher` 默认 true），发 `filesystem.changed`；② `oc-server/announce.rs:107` 250ms poller 独立对 HEAD 做 mtime 指纹（:511），既发 `filesystem.changed`（:559 自认）又发 `vcs.branch.updated`（:532）。
 - ref 单套：notify watcher 发 `filesystem.changed`；`vcs.ts:158-165` **订阅** HEAD changed → refresh → `vcs.branch.updated`。
 - 影响：HEAD 变更同文件双份 `filesystem.changed`（客户端双刷新）；branch 更新仅轮询路径（≥250ms 延迟，ref 事件驱动）。G-164 登记的"announce 替代 core 自持 notify"前提在 watcher 落地后已失效。修法：announce 的 head-watch 改订阅 engine watcher 的 filesystem.changed，去掉重复发布。
 
-### G-219 ⚠️ snapshot 对象库不共享：无 alternates/无增量 capture（core；并注 G-30）
+### G-219 ✅ snapshot 对象库不共享：无 alternates/无增量 capture（core；并注 G-30）
 - rust `snapshot.rs:277-365` capture_blocking 每次全量遍历工作树并 `fs::read` 每文件再写独立 odb（模块头 :8-12 自述 bare odb；git2 odb 仅同内容去重，I/O 恒 O(worktree)）。
 - ref `git.ts:345-382` repo.create 带 seed 时写 `objects/info/alternates` 指向源库 + 拷贝 index；`snapshot.ts:95-105` 消费链 → capture 走 `git add --all`（:425-436）——已跟踪未变文件不重读不重写。
 - 影响：大仓每次 capture 全量读盘+全量哈希，性能显著劣化；存储重复 blob。修法：libgit2 odb alternates 或源库 OID 直引 + stat/mtime 索引缓存。〔与 G-30 同文件同族，作为其追加注记立项。〕
 
-### G-220 ❌ `POST /api/fs/write` 缺 path → 500（server）
+### G-220 ✅ `POST /api/fs/write` 缺 path → 500（server）
 - rust `oc-server/handlers/fs.rs:869` `query_field("path").unwrap_or_default()` → relative="" → absolute=location 根 → 写目录失败 → :874 `unknown_ref()`（500）。
 - ref `protocol/src/groups/fs.ts` WriteQuery `path: Schema.String` 必填 → schema ParseError 400。
 - 修法：缺 path 直接 `invalid_request`（400，文案按 ref ParseError 格式）。
 
-### G-221 ⚠️ mini stream-v2 五块展示行为缺失（tui/mini）
+### G-221 ✅ mini stream-v2 五块展示行为缺失（tui/mini）
 主链路（text/reasoning/tool/step/permission/form/subagent/reconnect/G-134 快照/G-68 fragment）确在；对照 ref `packages/tui/src/mini/stream-v2.transport.ts`，rust `oc-tui/src/mini/transport.rs` fold 缺失：
 1. 服务端 inbox pending prompts（ref :196-208,620+ → footer `queued.prompts`，消费 enqueued/delivery.changed/cancelled；rust 仅 `"session.inbox.delivered" => Ignored`（transport.rs:166）——跨客户端排队提示不显示）；
 2. 内联 shell 流式展示（ref :339-374,807-816,1133-1158 shellCommit/shellTerminal/截断标记/exit code 错误行；rust mini 全目录 grep "shell" 零命中；主 TUI 的 G-184 是另一面）；
@@ -1373,77 +1378,80 @@ G-165..G-210 全部 ✅（G-177 前轮已闭；G-211/212 维持 ℹ️ 登记）
 5. `session.tool.input.ended`（ref 终结流式工具输入行；rust 只 fold started/delta）。
 （①②④ 用户体验影响最大。）
 
-### G-222 ❌ 插件热重载触发桥断裂：直接编辑插件文件不重载（plugin）
+### G-222 ✅ 插件热重载触发桥断裂：直接编辑插件文件不重载（plugin）
 - rust 能力在（`reload_now` digest-scan，oc-plugin-host lib.rs:603；增删路径 plugins.rs:483-560），但唯一触发桥是 config 变更：`boot.rs:92-145` ConfigReloadBridge 经 `do_reload`（config.rs:676-687）——**配置 entries deep-equal 则返回 false 不触发**。直接编辑 `.opencode/plugin/*.ts` 虽触发 watch reload，但配置未变 → `on_config_updated` 不发 → 插件不重载；24h 定时与 bus 路也无。测试仅 hot_reload.rs 手动调 `reload_now`。
 - ref `plugin/supervisor.ts:196-237`：sources.changes()（插件目录 fs watch）/modules.changes()/24h 定时/bus 事件四路汇流 + 100ms debounce。
 - 修法：reload 谓词并入插件 digest 变化，或为插件源单独挂 notify 触发 `request_reload` 短路 deep-equal。
 
-### G-223 ⚠️ MCP 过期/401 判定靠错误文本匹配且无 sessionId 门（core）
+### G-223 ✅ MCP 过期/401 判定靠错误文本匹配且无 sessionId 门（core）
 - rust `mcp/client.rs:273-334`：`error_chain` 字符串 + 解析 `"(HTTP status NNN)"` 文本；`session_expired`（:329）与 `unauthorized`（:320）无 sessionId 在场门——**任何 remote 404 都判过期重连**；reqwest/rmcp 改错误文案即碎。测试 mcp_oauth.rs:347 未钉分类器文案。
 - ref `mcp/client.ts:55-58,230-243,383`：`SdkHttpError.status` 类型判定；过期判定**要求 `session.transport?.sessionId !== undefined`**（无 session id 连接的 404 不误判）；UnauthorizedError instanceof。
 - 修法：向下转型取 `StatusCode`（reqwest `Error::status()`）+ 补 sessionId 门 + 分类器单测。
 
-### G-224 ⚠️ websearch 三残留（core）
+### G-224 ✅ websearch 三残留（core）
 - ① 429 冷却不读 `Retry-After`：rust `tool/websearch.rs:21` `COOLDOWN_MS=60_000` 固定（:275 应用）；ref `websearch.ts:204,215-222` 解析秒数/HTTP 日期（非法回退 60s）。修法：ProviderError 携带响应 headers + 移植 cooldownMillis。
 - ② preferred 亲和表不清理：rust `websearch.rs:56,241/245` 只 insert（:183 仅清 cooldowns），无 session.deleted/moved 订阅 → 无界增长；ref `:92-97` 订阅删除 + finalizer clear。
 - ③ tavily 缺 `User-Agent` 头：rust `websearch_providers.rs:283` 仅 X-Client-Name；ref `tavily.ts:53-54` 另发 App.useragent。一行修复。
 
-### G-225 ❌ 凭证值解码失败静默降级为空 key（core）
+### G-225 ✅ 凭证值解码失败静默降级为空 key（core）
 - rust `integration/credential.rs:371-379` `decode_value` 失败 → 回退 `KeyValue{key:""}`，被 :68/:99/:129 三个读路径采用——损坏凭据静默变"无 key"继续发请求。
 - ref `credential.ts:67` `decode(row.value)` 抛错 → 读路径失败，不产出假凭据。（G-114 修的是 permission saved-grant，不同处。）
 - 修法：decode 失败跳过该行并 log error（至少不得降级为可用的空 key）。
 
-### G-226 ⚠️ 失败回合合成 assistant error part（bounded 偏离，需裁决登记）
+### G-226 ✅ 失败回合合成 assistant error part（bounded 偏离，需裁决登记）
 - rust `session/execution.rs:850-891`：Terminal::Failed 且 `!surfaced`（pre-step 失败）时 `publish_failed_turn_error`（:902-942）在**新 assistant message id** 上合成 `session.step.started`+`session.step.failed` → message updater 落 assistant 行，随后才发 `session.execution.failed`。注释（:866-883）自陈有意模仿"v2 投影"。
 - ref `session/execution.ts:134-143` 终态失败**只** publish Execution.Failed；`message-updater.ts:144` 仅置 idle，**不**合成 assistant 行。
 - 影响：rust 持久化一条 ref 不存在的 assistant 消息行——transcript/message.get/导出与 ref 不可互换；重复失败累积合成行。（G-79/G-105/G-194 均不覆盖。）
 - 裁决建议：登记为有意增强（bounded）并注明 wire/存储差异 + 合成行去重；或按严格对齐改为仅发 execution.failed。二者择一，现状（既非 ref 行为又无登记）不可留。
+- **2026-11-08 第十六轮裁决落地（方案 A）**：合成行保留为登记的有界增强（publish_failed_turn_error 注释块注明 ref 行为（execution.ts:140-146 仅发 Execution.Failed、message-updater.ts:145 仅置 idle）与 wire/存储差异）；去重按「最后一条 user 消息」turn 键——同 turn 重复失败复用既有 error 行就地更新（store 派生，跨进程重启亦去重），execution.failed 不被抑制（gb9 lane8 `fa4730d6`）。
 
-### G-227 ❌ `app.toggle.animations/diffwrap/file_context` 三命令无 Dispatch 臂（tui）
+### G-227 ✅ `app.toggle.animations/diffwrap/file_context` 三命令无 Dispatch 臂（tui）
 - rust：keymap 表已注册三键位（`oc-tui-core/keymap/table.rs:531-533`，`none` 绑定）、dialog_config.rs:104/264/324 有设置行；但 dispatcher 仅 `app.toggle.paste_summary` 臂（command_palette.rs:3131-3135）——用户绑定键位后无效果。
 - ref `app.tsx:1148-1191` + `config/keybind.ts:53-55`：三命令 run 均 `config.update` 翻转。
 - 修法：照 G-137 模式补三臂 + palette 条目（标题随当前值翻转）。（G-137 修的是 thinking/scrollbar，同型不同项。）
 
-### G-228 ❌ CLI auth logout/switch 连接失败打印空错误（cli）
+### G-228 ✅ CLI auth logout/switch 连接失败打印空错误（cli）
 - rust `oc-cli/handlers/auth.rs:775` `connect(server,None).await.map_err(|_| String::new())?`（仅此一处吞错；同文件 :192/:280/:872/:946 均保留真实错误）；logout（:832-837）/switch（:852-858）`eprintln!("{message}")` → 空行 + exit 1。
 - ref `ui/prompt.ts:23-42` handlePromptErrors 打印真实错误；logout.ts:17/switch.ts:17 接线。
 - 修法：`.map_err(|e| error_message(&e.to_string()))` 复用 :842 打印路径。
 
 ## 🟢 低
 
-### G-229 ⚠️ 持久 PTY 两差异：title/fg 事件链缺失 + 退出无条件 removed（core/oc-pty）
+### G-229 ✅ 持久 PTY 两差异：title/fg 事件链缺失 + 退出无条件 removed（core/oc-pty）
 - ① `wire.rs:375-447` WireResponse 无 TitleChanged/ForegroundProcessChanged 变体；`persistent_pty.rs:873` `foreground_process: None` 恒空（无 /proc 探测、无 OSC title 捕获）；ref wire 定义（daemon.ts:97-98,116-117）+ 外部 opencode-pty 二进制生产事件。影响 v2 协议保真（第三方客户端订阅收不到）；rust TUI 标签恒退化为 title（store.rs:994-997 退链同构但数据源恒 None）。
 - ② `persistent_pty.rs:927-936` exit-pump 子进程退出**无条件**发布 `persistent-pty.removed`（零订阅者/从未 attach 也发；:2201-2205 测试钉定为 §3.1 自declare 语义）；ref `index.ts:311-324` `removeVisibleExit` 仅对已 attach 可见终端触发，未 attach 的保留 exited 条目。修法：仅在有/曾有活跃 attachment 时发 removed，其余 mark_exited（需同步改钉定测试）。
 
-### G-230 ⚠️ 工具输出 schema 编码校验（encodeOutput）缺失（core）
+### G-230 ✅ 工具输出 schema 编码校验（encodeOutput）缺失（core）
 - ref `tool/runtime.ts:45-54,109-132`：对声明 output schema 的工具校验输出 + 两个边界（未声明却返回 output → die；声明却缺 output → error）。
 - rust `tool/registry.rs:297-300` output 原样透传零校验。缓解：生产面 MCP outputSchema 仅 wire 转发（mcp/registry.rs:1535）、插件工具无 output 字段，触发面极窄。低优先补齐或文档化。（归一化半边已撤销，见勘误 #2。）
+- **2026-11-08 第十六轮落地（范围裁定）**：声明 schema → 共享 G-100 校验器校验（ref 文案）；声明+缺 output → 错误。「未声明却返回 output → die」按 mcp.ts:48 `?? {}` 接受一切的范围裁定落地——rust 14 个内建工具返回 output 而无声明（ref 侧全部声明 Output），字面 die 会全断；die 分支登记为范围外，待内建声明补齐后启用（gb9 lane8 `2103cf92`）。
 
-### G-231 ❌ repository-cache fetch 缺 `--all --prune`/`+refspec`（core）
+### G-231 ✅ repository-cache fetch 缺 `--all --prune`/`+refspec`（core）
 - rust `reference/repository_cache.rs:272-281` 仅 `git fetch origin`（+指定 branch 时再 fetch，无 `+`、不更新 remote-tracking、无 prune）。
 - ref `git.ts:269-284`：`fetch --all --prune` + `+refs/heads/x:refs/remotes/origin/x`。
 - 影响：多 remote 的 reference 项目刷新不到；上游删分支后残留；非快进更新被拒。修法：换 `--all --prune` + `+` refspec。〔即第五轮勘误 #5 的订正，见上文。〕
 
-### G-232 ⚠️ canonical 主 worktree 用 commondir 父目录推断（core）
+### G-232 ✅ canonical 主 worktree 用 commondir 父目录推断（core）
 - rust `project.rs:1296-1301` `common_directory().parent()`；ref `project.ts:350-356` `git worktree list` 取 main 项。标准布局等价；偏差场景：bare 仓库配 main worktree/非标准 gitdir 布局（bare 在 rust 侧 `repo.workdir()?` 直接 None，偏差面收窄）。G-77（directory/canonical 字段拆分）不覆盖。修法：`git worktree list --porcelain` 取 main。
 
-### G-233 ❌ session.move 三条 400 文案缺 `: <dir>` 后缀（server）
+### G-233 ✅ session.move 三条 400 文案缺 `: <dir>` 后缀（server）
 - rust `handlers/session.rs:911-918`：三条错误文案均无目录后缀；另 :909 缺 directory 也走同文案（ref 是 schema 400 ParseError）。
 - ref `server/src/handlers/session.ts:295-301`：`` `Directory does not exist: ${error.directory}` `` 等三条带后缀。（G-107/G-108 只覆盖 subpath/delivery/orphan 快速路径。）
 
-### G-234 ⚠️ OAuth/Copilot wire 两小项（core）
+### G-234 ✅ OAuth/Copilot wire 两小项（core）
 - ① Copilot device/token/refresh 用 form 编码且无 Accept/User-Agent 头（`flows.rs:375-388 post_form_json`、providers.rs:407-409/:218-222）；ref `github-copilot.ts:66-69,376-385` JSON body + headers()（Accept/Content-Type/UA）。GitHub 两种编码均接受、功能风险低；建议补 `Accept: application/json` + UA。
 - ② 非 MCP 集成的 loopback 回调页未复用品牌页：`mcp/oauth_page.rs`（297 行忠实移植 success/error）只接给 MCP OAuth（mcp/oauth.rs:836-841）；`integration/flows.rs:204/225` 仍用自写极简 HTML 且无 error 页；ref `oauth/page.ts` 供所有 loopback 用。修法：flows.rs 改调共享 oauth_page 并补 error 分支。
 
-### G-235 ⚠️ 自写 PNG 解码器不支持 Adam7/子字节位深（tui）
+### G-235 ✅ 自写 PNG 解码器不支持 Adam7/子字节位深（tui）
 - rust `image_codec.rs:6-10,100,126-128`：interlace 或 bit_depth<8 → None，调用方保 "No preview" 占位（dialog.rs:1252、message/rows.rs:481、diff_viewer_solid.rs:607；测试 :359-368 钉定拒绝）。
 - ref 经 opentui 原生管线全支持。注意 rust Kitty 车道走 `NativeImage::decode`（image_view.rs:77）不受影响，仅 sixel/blocks 车道降级。登记为文档化有界分歧（G-40 族）或补 Adam7 七 pass 解包（约百行）。
+- **2026-11-08 第十六轮落地（选择实现而非登记）**：Adam7 七遍解交织 + 1/2/4 位深（MSB 位拆包、灰度复制缩放到 8 位、pass 内独立反滤波 bpp=ceil(bits/8)、pass 维度按 PNG §8.2 ceil 公式）已实现；非交错 8/16 位路径字节级不变；拒绝钉定测试翻转为接受钉定；sixel/blocks 车道恢复预览（gb9 lane11 `2182cfd9`）。
 
-### G-236 ⚠️ DialogOpen 打开期间 session.moved 无增量更新（tui）
+### G-236 ✅ DialogOpen 打开期间 session.moved 无增量更新（tui）
 - rust：oc-tui 全仓 grep `session.moved` 零命中；dialog_open.rs 打开时一次性拉取。
 - ref `app.tsx:1276-1280`（moveOpenSession 原地更新）+ `dialog-open.tsx:60-80,487-498`（后台 refetch 以 changed map 合并）。影响：对话框开着时 worktree 移动后分组/子路径陈旧，重开自愈。极小。
 
-### G-237 ⚠️ 通用 DialogPrompt / `ctx.ui.prompt` 缺失（tui/plugin）
+### G-237 ✅ 通用 DialogPrompt / `ctx.ui.prompt` 缺失（tui/plugin）
 - rust `oc-plugin-host/ui.rs`（244 行）无 prompt（host.js:1629-1638 仅 ui.alert/ui.confirm）；DialogKind 无通用 Prompt 变体（dialog.rs:82-87 的 prompt 族均为专用）。
 - ref `ui/dialog-prompt.tsx` + `plugin/api.tsx:367-386` ctx.ui.prompt（:391 另有 select）。属 G-64/G-24 插件 API 面族残留子项，未单独登记。
 
@@ -1455,10 +1463,12 @@ G-165..G-210 全部 ✅（G-177 前轮已闭；G-211/212 维持 ℹ️ 登记）
 ### G-239 ℹ️ 插件 panel/PanelHost 双形态豁免正式登记（tui/plugin；G-28 族）
 - ref `packages/plugin/src/tui/context.ts:165-177,501-507`（ctx.ui.panel.open/close/current + toggleFullscreen）+ `tui/src/context/panel.tsx:12-39`（width>80 双形态）+ panel-host.tsx。
 - rust `oc-plugin-host/ui.rs` 无 panel API；`oc-tui/components/plugin_slots.rs:43-51` 注释明言 session.panel "deliberately UNMOUNTED documented exemption"（注引 "G-04"，非本册条目）。本条将该豁免裁决正式入册（G-28 生态 breaking 声明并列）；若后续需要再补 panel 形态。
+- 2026-11-08 勘注：plugin_slots.rs 豁免注引已订正（G-04→G-239，gb9 lane10）。
 
 ### G-240 ℹ️ opencode-pty 二进制免 sha256 钉扎（oc-core；RW-T2 已自declare）
 - ref `persistent-pty/binary.bun.ts:17-85`：嵌入式资产安装全程 sha256 校验+缓存复验、uid 属主校验、符号链接拒绝（lstat）、0700、原子 rename。
 - rust `persistent_pty/transport.rs:132-195`：仅存在性+常规文件+可执行位（:170-176 注释明示 RW-T2 有意取舍）；且 rust 不捆绑/安装二进制（无 install 路径），可比面仅剩 override 校验。登记为文档化取舍；最小加固：给 `OPENCODE_PTY_BIN` override 加属主/符号链接拒绝。
+- 2026-11-08 勘注：override 最小加固已落地——lstat 拒符号链接 + same-uid 属主校验（binary.bun.ts:71-75 语义，gb9 lane5 `18cfced2`）；sha256 钉扎维持登记范围外（rust 无捆绑安装路径）。
 
 ## 状态回退与登记册订正（本轮）
 
@@ -1466,6 +1476,7 @@ G-165..G-210 全部 ✅（G-177 前轮已闭；G-211/212 维持 ℹ️ 登记）
 - **第五轮勘误 #5 订正**：repository-cache「完整移植无行为缺失」断言推翻（fetch 缺 `--all --prune`/`+refspec`，→G-231）。
 - **第十轮勘误 #13 订正**：EADDRINUSE「全链路接线」断言推翻（重试环生产零调用，→G-217）；handoff 半边属实维持。
 - **登记册健康提示**：G-116 的误闭提示第十一轮 burndown 的闭合核验存在盲区（lane 清单与 git log 均查无修复提交），建议专项复核第十一轮 lane1-9 清单中相邻小项（G-117 等）的落地证据。
+- **2026-11-08 健康提示执行结果（第十六轮 lane12）**：抽 15 项（G-107/112/113/117/129/131/133/138/142/146/149/154/157/159/160）逐项现行源码核验——14 项 CONFIRMED（含测试证据）、G-117 PARTIAL（time_updated 半边未落地→lane13 双路收口；NULL 过滤半边系 G-225 顺带落地，归因已订正）。第十一轮其余 ✅ 项未见同型误闭信号。
 
 ## 归类与收编（不另立项）
 
@@ -1486,3 +1497,49 @@ G-165..G-210 全部 ✅（G-177 前轮已闭；G-211/212 维持 ℹ️ 登记）
 ## 第十五轮判定汇总
 
 初报 38 ❌ + 17 项重点 🟡：**确认立项 28**（🔴×1：G-213；🟡×15：G-214..G-228；🟢×9：G-229..G-237；ℹ️×3：G-238..G-240）+ G-116 回退重开；**归类既有 4**（G-38/G-17/G-20③/G-192 + watch 现状确认）；**撤销 6**（见勘误）；**订正旧勘误 2**（第五轮 #5、第十轮 #13）。优先级建议：G-213 > G-214 ≈ G-215 ≈ G-217 ≈ G-220 > G-222 ≈ G-223 > 其余 🟡 > 🟢 族；G-226/G-239/G-240 需文档化裁决先行。
+
+---
+
+# 第十六轮 burndown 收口（2026-11-07~08，gap-burndown-9）
+
+> 第十五轮立项的 G-213..G-240 全部可行动项（G-226 按「需要裁决先行」项以方案 A 落地）+ G-116 回退重开三子项 + lane12 抽查重开的 G-117 残半边，经 lanes 1-13 串行落地并 fast-forward 合并 main。每 lane 独立 worktree（`.worktrees/gb9-laneN`，合并后即时回收，分支已清）、dev-gate 单入口、nextest 未过滤证据、每 lane workspace 合并门复跑；PTY 族 lane（5/9/10）另跑 `--profile pty` 序列化门。一切门命令全量 tee 落盘 `.test-logs/*-gb9lane*`。**无上游阻挡项**（无 opentui-rust 未移植功能依赖；G-235 Adam7 为自研解码器内实现，未走登记分支）。
+
+## 逐 lane 落地清单
+
+- **lane1 `fea81a7b`（cli/server 快修）**：G-213（service 模式密码不再打 stdout——startup_announcement 纯函数化，仅 foreground 且无环境密码时打印）、G-217（EADDRINUSE 重试环接线：service 预检改走 bind_or_incumbent，端口空闲零延迟、老 daemon 15s 内退出即接管；boot 增 serve_listener 缝）、G-228（logout/switch connect 失败打印真实错误）。
+- **lane2 `39900c99`（server wire + 命令/skills）**：G-220（fs/write 缺 path → 生成校验器 ParseError 400 `Missing key\n at ["path"]`）、G-233（session.move 三文案加 `: <dir>` 后缀；缺 directory → payload ParseError 400）、G-214（`` !`cmd` `` shell 插值：evaluate_template_shell 于 $N/$ARGUMENTS 之后执行、cwd=location、stdout+stderr 合并、失败文案对齐 ref；两个消费点均接）、G-215（MCP prompts 注册为 `server:prompt` 斜杠命令：双段 sanitize、`mcp.prompts.changed` bus 订阅驱动重同步、执行臂拼 mcp.prompt 提示文本；live bun fixture 验证 changed→reload 链）、G-216（skill 扫描：任意深度 `**/SKILL.md`（walkdir 不跟符号链接）、后缀精确匹配 `md`、错型 name 跳过（ref Skipped））。
+- **lane4 `29994f5b`（integration/mcp/websearch）**：G-223（类型化错误分类：SessionObservingClient 记录 sessionId 协商，错误链下钻 rmcp StreamableHttpError 变体判定——无 session 的 404 不再误判过期；restart-400 分支保留 session 在场门）、G-224（①Retry-After 秒数/HTTP-date 冷却（无效回退 60s，ref cooldownMillis 逐字节）；②session.deleted/moved 亲和表驱逐 + Drop 清理；③tavily User-Agent）、G-225（凭证解码失败 fail-the-read（ref die 语义）+stderr 日志；无 integration_id 行跳过）、G-234（①copilot form 帖补 Accept+UA（编码保持 form，勘注裁决）；②loopback 回调页改共享 oauth_page（success/error/bootstrap 三态，ref OauthCallbackPage.bootstrap 对齐））。
+- **lane5 `a7d0caa4`（pty 族，+pty 门）**：G-116①②③（cursor/buffer_cursor 改 UTF-16 码元；订阅回调 catch_unwind 隔离+摘除（on_data/replay/on_end 全臂）；win32 LC_* 注入 + shell::select gitbash 发现（cfg(windows) 门控，纯逻辑函数未门控测试））、G-229①（TitleChanged=OSC 0/2 增量扫描器（BEL/ST、分块容忍、4KiB 界、仅变更后首发）；ForegroundProcessChanged=TIOCGPGRP+/proc 探测 500ms 节拍（seam 选择注释钉定）；wire 变体字段名对齐 daemon.ts；oc-pty/oc-server 转发臂机械补齐）、G-229②（exit-pump 改 removeVisibleExit：仅曾 attach 终端发 removed，其余 mark_exited 保留条目；钉定测试按 gap 授权更新）、G-240（OPENCODE_PTY_BIN lstat 拒符号链接 + same-uid 校验）。
+- **lane6 `c713459f`（vcs/snapshot）**：G-231（`fetch --all --prune` + `+refs/heads/b:refs/remotes/origin/b` 强制 refspec）、G-232（canonical 经 `git worktree list --porcelain` main 条目（spawn 失败回退 commondir-parent）；bare main 场景对齐）、G-219（①objects/info/alternates 指向源库 + Odb::add_disk_alternate 功能注册（跨库 blob 可达性测试钉定）；②stat-cache 边车（oid/size/mtime/mode）——二次 capture 零读盘、改动文件恰好一次读、损坏边车降级全量。有界偏离：不拷贝源 git index，边车代替）。
+- **lane7 `63eb045e`（watcher/插件热重载）**：G-218（唯一 `filesystem.changed` 发布者=engine watcher 显式盯 `<gitdir>/HEAD`（ref location-watcher.ts:19-101 文件目标同款 + 25ms 同文件合并）；announce 弃自有轮询/发布，改订阅按 HEAD-basename 谓词发布 `vcs.branch.updated`（事件驱动）；live 位置种子防首事件丢失；be1 测试断言恰好 1 条 filesystem.changed + branch.updated 到达）、G-222（插件 reload supervisor：插件文件/目录 fs watch + 24h 定时 + `sdk.plugin.updated` bus 三路触发（config 腿留在 bridge），100ms 滑窗防抖、reload_lock 串行化；config 深相等不再短路插件重载；bus/oc-client 增 SDK_PLUGIN_UPDATED（RE-06 波及已过））。
+- **lane8 `2103cf92`（execution/registry）**：G-226（方案 A：合成行保留为登记有界增强 + 按「最后一条 user 消息」turn 键去重（store 派生、跨进程重启亦去重）、execution.failed 不抑制）、G-230（encodeOutput 声明 schema 校验 + 缺 output 边界（ref 文案）；未声明+output 按 mcp.ts:48 `?? {}` 范围裁定（14 内建工具兼容面调查为据，die 分支登记范围外））。
+- **lane9 `001b393d`（mini stream-v2，+pty 门）**：G-221 五块（①inbox 排队提示 footer `N pending`（enqueued/delivery.changed/cancelled + hydrate `session.inbox.list` 种子）；②内联 shell 流式（`$ command`/输出行/`[output truncated]`/退出码错误行 + replay）；③skill 激活行；④服务端 compaction（`─── Compaction ───` 分隔 + Summary/Error + replay 重挂）；⑤`session.tool.input.ended` 终结流式输入行（键名回退对齐真 wire）；Fold::Commits 多行变体；PTY 级测试两枚钉定 live+replay）。
+- **lane10 `d40228b3`（tui 对话框/插件 UI，+pty 门）**：G-227（三 toggle 臂 + 随值翻转 palette 标题；palette 条目为 ref 超集（ref palette:undefined）有界偏离已注）、G-236（session.moved 进 store fold：打开中的 DialogOpen 行内更新（moveOpenSession 语义 + 一代 resync 的 changed-map 合并）；无事件零 refetch）、G-237（DialogKind::Prompt 端到端：title/description/placeholder/value、esc→null；host.js ctx.ui.prompt + supervisor 白名单 + guest promise 解析（wire `ok:true`→null 解包，alert/confirm 一并受益）；bun guest 测试）、G-239（豁免注引 G-04→G-239）。
+- **lane11 `2182cfd9`（PNG 解码器）**：G-235（Adam7 七遍解交织 + 1/2/4 位深（MSB 位拆包、灰度复制缩放、pass 内独立反滤波 bpp=ceil(bits/8)、pass 维度 PNG §8.2 ceil 公式、IHDR interlace>1 拒绝）；非交错 8/16 位经同一单 pass 数学保持字节级不变；拒绝钉定测试翻转为接受钉定 + 9×9 五滤波器全遍轮转冒烟）。
+- **lane13 `04e4ce93`（G-117 残半边，lane12 抽查发现）**：oc-core CredentialStore（`2362d051`）与 oc-server HTTP 重复 SQL（`04e4ce93`）双路修复——activate/update 不再写 time_updated（ref credential.ts drizzle `.set` 列限定语义）；插入仍播种；HTTP 路径保留本地 SQL（路由 CredentialStore 会改 create/list wire）。
+- **lane12（只读核验通道，无代码）**：第十五轮健康提示的专项抽查——第十一轮 ✅ 项抽 15 项逐项现行源码核验：14 项 CONFIRMED（含测试证据）、G-117 PARTIAL（→lane13 收口；NULL 过滤半边归因订正为 G-225 顺带落地）。
+
+## canary 判别实验（e1_cells_paste_8k；并入 2.2#4 勘注）
+
+- 触发：lane8 合并门该测试连败且冷静箱序列化双败，与 lane5 时点（17:05/21:44 冷静箱序列化 PASS）矛盾——按第十四轮盘上二分方法取证，期间 lane6/7/8 一度疑似真回归，**两 lane 合并被推迟至判明**。
+- 二分链（全部落盘 `.test-logs/e1-bisect-*`）：a7d0caa4 PASS（21:44）→ c713459f FAIL → d1bb497a FAIL → d1bb497a+project.rs 回退 FAIL → d1bb497a+repository_cache.rs 回退 FAIL → main FAIL → a7d0caa4 对照复测 PASS（22:22，load 8.9 下仍过）。
+- 受控实验（定谳）：a7d0caa4 + 仅向 oc-core/src/lib.rs 追加 2 行注释（零语义改动）重编 → **FAIL**。两个单文件回退组合均败已排除内容因果，受控实验证明判别因素是「oc-core 是否被改动重建」本身。
+- 失败形状（日志可复验）：typing-idle 单格恰 1 burst（bursts=1≠0，25 flush、median-gap 120ms、cadence=true），其余六格全 0——二进制布局偏移使某个一次性唤醒落入 2.5s 采样窗的阈值噪声。
+- 结论：第十四轮「非单调阈值型 canary 而非代码回归信号」的受控复现；**序列化单跑通过不再是普适可得状态**，放行依据=白名单+本证据链。lane6/7/8 无行为回归，合并放行。
+
+## 有界偏离（第十六轮新增）
+
+- **G-214**：shell 插值经 shell::select 解析（与 shell 工具同缝）；stdout/stderr 连接（交错不可观测）。
+- **G-219**：stat-cache 边车代替源 git index 拷贝；alternates 为布局 parity + 跨库可达性注册（不省首次 capture 读盘）。
+- **G-221**：五块渲染遵循 mini 既有静态行卡/行模型惯例（G-134/G-68 同款）。
+- **G-226**：合成失败行保留（登记的有界增强 + 去重，见条目勘注）。
+- **G-227**：palette 条目为 ref 超集（ref palette:undefined）；animations 读设置行默认而非 ref 的 `?? true`。
+- **G-230**：「未声明却返回 output → die」范围裁定为 `?? {}` 接受一切（die 分支登记范围外，待内建 Output 声明补齐后启用）。
+- **G-116③**：win32 注入/发现 cfg(windows) 门控，本目标不可编译验证（纯逻辑函数例外，未门控测试）。
+- **G-232**：spawn 失败回退 commondir-parent（注释钉定）。
+- **G-234①**：保持 form 编码仅补头（gap 勘注裁决）。
+- **G-237**：host.js 对话 promise 的 wire `ok:true`→null 解包（alert/confirm 一并受益，超集）。
+
+## 第十六轮判定
+
+G-213..G-237 全部 ✅（G-226/G-230 含上述范围裁定）；G-116 ✅（回退重开后三子项收口）；G-117 ✅（残半边双路收口 + 归因勘注）；G-238/G-239 维持 ℹ️ 登记（G-239 注引已订正）；G-240 维持 ℹ️（override 加固已落地，sha 钉扎维持登记范围外）。现存未关闭项均为既有文档化决策族：G-12/G-16/G-17/G-28/G-32/G-38/G-39/G-40/G-49/G-161①/G-163/G-164/G-200②/G-211/G-212/G-238/G-239/G-240。**无上游阻挡项。**
