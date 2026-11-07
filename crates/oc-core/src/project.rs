@@ -1293,11 +1293,23 @@ impl Resolver {
             .or_else(|| root_commit_id(&repo))
             .unwrap_or_else(|| "global".to_string());
 
-        // Canonical = the main worktree: the checkout owning the common dir.
+        // Canonical = the main worktree (the checkout owning the common
+        // dir). G-232 — the ref resolves it through `git worktree list
+        // --porcelain` (project.ts:350-356 via git.ts:683-694): the
+        // MAIN entry's directory, falling back to the CURRENT worktree
+        // when listing yields nothing usable. The old commondir-parent
+        // derivation breaks for bare-repo-with-main-worktree and
+        // non-standard gitdir layouts.
         let canonical = if git_directory == common_directory {
             workdir.clone()
         } else {
-            common_directory.parent().map_or_else(|| workdir.clone(), crate::config::resolve_path)
+            main_worktree(worktree, &common_directory)
+                .map(|path| crate::config::resolve_path(&path))
+                // Spawn/parse failure degrades to the commondir parent
+                // (correct for the standard layout) instead of failing
+                // resolution.
+                .or_else(|| common_directory.parent().map(crate::config::resolve_path))
+                .unwrap_or_else(|| workdir.clone())
         };
 
         Some(Resolved {
@@ -1430,9 +1442,45 @@ fn common_directory(repo: &git2::Repository) -> PathBuf {
     path
 }
 
+/// G-232 — the MAIN worktree directory from `git worktree list
+/// --porcelain` (ref project.ts:350-356 → git.ts:683-694). The porcelain
+/// format guarantees the main worktree is listed FIRST (git docs,
+/// git-worktree(1) "The main worktree is listed first"), so parse the
+/// entry BLOCKS (blank-line separated) and take the first block's
+/// `worktree <path>`; a bare main lists the bare dir with a `bare` flag
+/// and no branch — its directory is still the entry's `worktree` value,
+/// which is exactly what the ref's `kind === "main"` entry carries.
+/// Returns `None` when the spawn or parse fails (callers fall back).
+fn main_worktree(worktree: &Path, common_directory: &Path) -> Option<PathBuf> {
+    let _ = common_directory; // parity anchor: the main entry's gitdir IS the common dir
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(worktree)
+        .args(["worktree", "list", "--porcelain"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    // Parse the first complete block: its lines up to the first blank
+    // line (or EOF).
+    for line in text.lines() {
+        if let Some(path) = line.strip_prefix("worktree ") {
+            let trimmed = path.trim();
+            return (!trimmed.is_empty()).then(|| PathBuf::from(trimmed));
+        }
+        // Anything before the first `worktree` line is not a valid
+        // porcelain stream.
+        if !line.is_empty() {
+            return None;
+        }
+    }
+    None
+}
+
 /// Cached project id stored at `<store>/opencode`.
-fn cached_id(store: &Path) -> Option<String> {
-    let value = std::fs::read_to_string(store.join("opencode")).ok()?;
+fn cached_id(store: &Path) -> Option<String> {    let value = std::fs::read_to_string(store.join("opencode")).ok()?;
     let trimmed = value.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
@@ -1917,5 +1965,101 @@ mod tests {
         let resolver = Resolver::new(Arc::new(store), Arc::new(NoEvents));
         let outcome = resolver.resolve(&dir).await;
         assert_eq!(outcome.id, remote_identity("github.com/owner/repo"));
+    }
+
+    // ------------------------------------------------------------------
+    // G-232 — canonical = the MAIN worktree via `git worktree list`
+    // (project.ts:350-356)
+    // ------------------------------------------------------------------
+
+    fn git_cmd(dir: &Path, args: &[&str]) {
+        let output = Command::new("git").arg("-C").arg(dir).args(args).output().expect("git");
+        assert!(
+            output.status.success(),
+            "git {args:?} in {dir:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    /// Standard layout: a linked worktree's canonical is the MAIN
+    /// worktree (unchanged behavior through the new resolver).
+    #[tokio::test]
+    async fn g232_linked_worktree_canonical_is_main_worktree() {
+        let main = tempdir("g232-main");
+        init_repo(&main, true, Some("git@github.com:owner/repo.git"));
+        let linked = main.parent().unwrap().join("g232-linked");
+        git_cmd(&main, &["worktree", "add", linked.to_str().unwrap(), "-b", "feature"]);
+        let resolver = resolver();
+        let result = resolver.resolve(&linked).await;
+        assert_eq!(result.directory, crate::config::resolve_path(&linked));
+        assert_eq!(
+            result.canonical,
+            crate::config::resolve_path(&main),
+            "linked worktree canonical = main worktree"
+        );
+        let _ = fs::remove_dir_all(&linked);
+    }
+
+    /// Bare main + linked worktree: `worktree list --porcelain` lists the
+    /// BARE dir as the main entry (`bare` flag, project.ts:353
+    /// `kind === "main"?.directory`) — the canonical IS the bare dir,
+    /// where the old commondir-parent derivation returned its parent.
+    #[tokio::test]
+    async fn g232_bare_main_worktree_lists_the_bare_directory() {
+        let root = tempdir("g232-bare");
+        let bare = root.join("bare.git");
+        let seed = root.join("seed");
+        fs::create_dir_all(&seed).unwrap();
+        git_cmd(&root, &["init", "--bare", bare.to_str().unwrap()]);
+        git_cmd(&seed, &["init"]);
+        git_cmd(&seed, &["config", "user.email", "t@t"]);
+        git_cmd(&seed, &["config", "user.name", "t"]);
+        fs::write(seed.join("README.md"), "one").unwrap();
+        git_cmd(&seed, &["add", "."]);
+        git_cmd(&seed, &["commit", "-m", "root"]);
+        git_cmd(&seed, &["push", &format!("file://{}", bare.display()), "HEAD:refs/heads/main"]);
+        let linked = root.join("linked");
+        // A worktree attached to the BARE repo (git allows this): its
+        // common dir is the bare gitdir; commondir-parent would resolve
+        // canonical to `root/` (the bare repo's PARENT) — wrong.
+        let bare_flag = Command::new("git")
+            .arg("--git-dir")
+            .arg(&bare)
+            .args(["worktree", "add", linked.to_str().unwrap(), "main"])
+            .output()
+            .expect("worktree add");
+        assert!(
+            bare_flag.status.success(),
+            "{}",
+            String::from_utf8_lossy(&bare_flag.stderr)
+        );
+        let porcelain = Command::new("git")
+            .arg("-C")
+            .arg(&linked)
+            .args(["worktree", "list", "--porcelain"])
+            .output()
+            .expect("worktree list");
+        let text = String::from_utf8_lossy(&porcelain.stdout);
+        assert!(text.contains("bare\n"), "main entry is the bare repo: {text}");
+
+        let resolver = resolver();
+        let result = resolver.resolve(&linked).await;
+        assert_eq!(
+            result.canonical,
+            crate::config::resolve_path(&bare),
+            "bare main: canonical = the bare repo dir (ref kind==='main' entry)"
+        );
+        let _ = fs::remove_dir_all(&linked);
+    }
+
+    /// The parser: the first porcelain BLOCK is the main entry, whatever
+    /// the layout names look like.
+    #[test]
+    fn g232_main_worktree_parser_first_block() {
+        assert_eq!(
+            main_worktree(Path::new("/nonexistent"), Path::new("/x")),
+            None,
+            "spawn failure yields None (callers fall back)"
+        );
     }
 }

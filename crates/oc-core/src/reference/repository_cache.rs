@@ -271,11 +271,19 @@ impl RepositoryCache {
                     repository: repository.clone(),
                     message: "Repository is unavailable".to_owned(),
                 })?;
-                git_at(&existing, &["fetch", "origin"]).map_err(|error| {
+                // G-231 — ref fetch semantics (git.ts:269-276
+                // `fetchRemotes`): `fetch --all --prune`, so EVERY
+                // configured remote refreshes and deleted upstream
+                // branches disappear from remote-tracking refs.
+                git_at(&existing, &["fetch", "--all", "--prune"]).map_err(|error| {
                     CacheError::FetchFailed { repository: repository.clone(), message: error }
                 })?;
+                // git.ts:278-287 `fetchBranch`: the FORCED refspec
+                // `+refs/heads/<b>:refs/remotes/origin/<b>` (a
+                // non-fast-forward upstream update still lands).
                 if let Some(branch) = &input.branch {
-                    git_at(&existing, &["fetch", "origin", branch]).map_err(|error| {
+                    let spec = format!("+refs/heads/{branch}:refs/remotes/origin/{branch}");
+                    git_at(&existing, &["fetch", "origin", &spec]).map_err(|error| {
                         CacheError::FetchFailed { repository: repository.clone(), message: error }
                     })?;
                 }
