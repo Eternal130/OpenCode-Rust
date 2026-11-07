@@ -436,6 +436,15 @@ pub enum WireResponse {
         attachment_id: Option<String>,
         generation: u64,
     },
+    /// G-229① (daemon.ts:97): the OSC window title changed.
+    TitleChanged {
+        title: String,
+    },
+    /// G-229① (daemon.ts:98): the foreground process changed (`null` =
+    /// none). Serialized with an explicit `null` (ref `NullOr`).
+    ForegroundProcessChanged {
+        process: Option<String>,
+    },
     /// §3.2: end of a chunked replay transfer.
     ReplayComplete {
         end_offset: u64,

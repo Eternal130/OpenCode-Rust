@@ -405,6 +405,11 @@ pub enum StreamEvent {
     /// be invalidated. `attachment_id` is `None` when the controller
     /// was cleared without a replacement.
     ControllerChanged { attachment_id: Option<String>, generation: u64 },
+    /// G-229① (daemon.ts:116): the OSC title changed (OSC 0/2).
+    TitleChanged { title: String },
+    /// G-229① (daemon.ts:117): the foreground process changed (`None` =
+    /// none/unknown — back to the shell).
+    ForegroundProcessChanged { process: Option<String> },
 }
 
 /// `PersistentPty.UnavailableError`.
@@ -442,6 +447,11 @@ struct Live {
     controller: Option<String>,
     subscribers: HashMap<u64, Subscriber>,
     ended: HashMap<u64, Subscriber>,
+    /// G-229① — the incremental OSC title scanner over the output
+    /// stream; `osc_title` is the last title it observed (events fire on
+    /// change only, after the FIRST observation).
+    osc: OscTitleScanner,
+    osc_title: Option<String>,
 }
 
 struct Subscriber {
@@ -886,6 +896,8 @@ impl PersistentPty {
             controller: None,
             subscribers: HashMap::new(),
             ended: HashMap::new(),
+            osc: OscTitleScanner::new(),
+            osc_title: None,
         };
         self.inner.terminals.lock().insert(id.clone(), live);
 
@@ -917,6 +929,51 @@ impl PersistentPty {
             let _ = exit_tx.send((Vec::new(), Some(code)));
         });
 
+        // G-229① — the foreground-process probe (ref: the external
+        // opencode-pty binary produces foreground_process_changed; this
+        // service owns the pty, so it probes directly). A low-frequency
+        // timer is the least invasive seam: on_output cadence would miss
+        // changes while the foreground child is silent, and the probe is
+        // two cheap syscalls (TIOCGPGRP + /proc read). cfg(unix);
+        // win32 posture: TODO alongside the port's other win32 gaps.
+        #[cfg(unix)]
+        {
+            let inner = Arc::clone(&self.inner);
+            let id_for_probe = id.clone();
+            tokio::spawn(async move {
+                let mut ticker = tokio::time::interval(std::time::Duration::from_millis(500));
+                loop {
+                    ticker.tick().await;
+                    let (master_fd, current) = {
+                        let mut terminals = inner.terminals.lock();
+                        let Some(live) = terminals.get_mut(&id_for_probe) else { break };
+                        if live.info.status != crate::pty::Status::Running {
+                            break;
+                        }
+                        (live.master.as_ref().and_then(|m| m.as_raw_fd()), live.info.foreground_process.clone())
+                    };
+                    let Some(master_fd) = master_fd else { continue };
+                    let process = foreground_process_of_pty(master_fd);
+                    if process != current {
+                        let event = StreamEvent::ForegroundProcessChanged { process: process.clone() };
+                        let mut terminals = inner.terminals.lock();
+                        let Some(live) = terminals.get_mut(&id_for_probe) else { break };
+                        if live.info.status != crate::pty::Status::Running {
+                            break;
+                        }
+                        live.info.foreground_process = process;
+                        for subscriber in live.subscribers.values_mut() {
+                            if subscriber.active {
+                                (subscriber.on_event)(event.clone());
+                            } else {
+                                subscriber.pending.push(event.clone());
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
         let inner = Arc::clone(&self.inner);
         let service = self.clone();
         let id_for_exit = id.clone();
@@ -926,17 +983,23 @@ impl PersistentPty {
                 match exit {
                     None => inner.on_output(&id_for_exit, &chunk),
                     Some(code) => {
-                        inner.mark_exited(&id_for_exit, code);
-                        service
-                            .publish(
-                                "persistent-pty.removed",
-                                serde_json::to_value(oc_schema::persistent_pty::Removed {
-                                    session_id: session_for_exit.clone(),
-                                    pty_id: id_for_exit.0.clone(),
-                                })
-                                .unwrap_or_default(),
-                            )
-                            .await;
+                        // G-229② — removeVisibleExit (index.ts:311-324,
+                        // :329-338): only a terminal with an attachment
+                        // at exit is removed; an unattached exit keeps
+                        // its exited entry (mark_exited already ran).
+                        let visible = inner.mark_exited(&id_for_exit, code);
+                        if visible {
+                            service
+                                .publish(
+                                    "persistent-pty.removed",
+                                    serde_json::to_value(oc_schema::persistent_pty::Removed {
+                                        session_id: session_for_exit.clone(),
+                                        pty_id: id_for_exit.0.clone(),
+                                    })
+                                    .unwrap_or_default(),
+                                )
+                                .await;
+                        }
                         break;
                     }
                 }
@@ -1435,6 +1498,11 @@ impl Inner {
                     controller: None,
                     subscribers: HashMap::new(),
                     ended: HashMap::new(),
+                    // G-229① — a restored terminal has no observed OSC
+                    // title yet (the scanner starts fresh; the snapshot's
+                    // title stays until the child speaks).
+                    osc: OscTitleScanner::new(),
+                    osc_title: None,
                 },
             );
         }
@@ -1472,6 +1540,24 @@ impl Inner {
                 } else {
                     live.buffer.drain(..extra);
                     live.buffer_cursor += extra;
+                }
+            }
+        }
+        // G-229① — OSC title changes ride the same output pass: the
+        // scanner is incremental (split-chunk tolerant); only a CHANGED
+        // title publishes, and never before the first observation (the
+        // daemon's title_changed semantics, daemon.ts:97/116).
+        if let Some(title) = live.osc.feed(chunk) {
+            if live.osc_title.as_deref() != Some(title.as_str()) {
+                live.osc_title = Some(title.clone());
+                live.info.title = title.clone();
+                let title_event = StreamEvent::TitleChanged { title };
+                for subscriber in live.subscribers.values_mut() {
+                    if subscriber.active {
+                        (subscriber.on_event)(title_event.clone());
+                    } else {
+                        subscriber.pending.push(title_event.clone());
+                    }
                 }
             }
         }
@@ -1534,12 +1620,18 @@ impl Inner {
         }
     }
 
-    fn mark_exited(&self, id: &PtyId, exit_code: Option<i32>) {
+    /// G-229② — returns whether the terminal was VISIBLE at exit
+    /// (any attachment still present: ref index.ts:329-338 drives
+    /// `removeVisibleExit` from a subscriber's `exited` event, so only
+    /// terminals with a live attachment get removed; unattached ones
+    /// keep their exited entry).
+    fn mark_exited(&self, id: &PtyId, exit_code: Option<i32>) -> bool {
         let mut terminals = self.terminals.lock();
-        let Some(live) = terminals.get_mut(id) else { return };
+        let Some(live) = terminals.get_mut(id) else { return false };
         if live.info.status == crate::pty::Status::Exited {
-            return;
+            return false;
         }
+        let visible = !live.subscribers.is_empty() || !live.ended.is_empty();
         live.info.status = crate::pty::Status::Exited;
         live.info.exit_code = exit_code;
         live.writer = None;
@@ -1561,6 +1653,7 @@ impl Inner {
             }
         }
         live.ended = ended;
+        visible
     }
 
     fn terminate(&self, id: &PtyId) {
@@ -1767,6 +1860,161 @@ struct LiveShadow {
     info: Info,
     rows: Vec<String>,
     cursor: (usize, usize),
+}
+
+// ---------------------------------------------------------------------------
+// G-229① — foreground-process probing (unix) + the OSC title scanner
+// ---------------------------------------------------------------------------
+
+/// The foreground process of a pty, as a display string (`None` when no
+/// foreground group / unresolvable — back to the shell). The string is
+/// the process name from `/proc/<pid>/comm` (the terminal-tab
+/// convention the ref's `foregroundProcess ?? title` fallback expects;
+/// the ref's external binary shapes the same single-string field,
+/// schema `foreground_process: NullOr(String)`).
+#[cfg(unix)]
+fn foreground_process_of_pty(master_fd: std::os::unix::io::RawFd) -> Option<String> {
+    let mut pgid: libc::pid_t = 0;
+    // SAFETY: TIOCGPGRP writes a pid_t through a valid pointer.
+    let result = unsafe { libc::ioctl(master_fd, libc::TIOCGPGRP, &mut pgid) };
+    if result != 0 || pgid <= 0 {
+        return None;
+    }
+    process_name(pgid).or_else(|| foreground_scan_by_pgid(pgid))
+}
+
+/// `/proc/<pid>/comm` (the pgid leader is usually pid == pgid).
+#[cfg(unix)]
+fn process_name(pid: libc::pid_t) -> Option<String> {
+    let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
+    let comm = comm.trim();
+    if comm.is_empty() {
+        None
+    } else {
+        Some(comm.to_string())
+    }
+}
+
+/// Fallback: scan `/proc/*/stat` for a matching pgrp (field 5). The comm
+/// inside stat is parenthesized and may itself contain spaces, so parse
+/// from the LAST ')' onward.
+#[cfg(unix)]
+fn foreground_scan_by_pgid(pgid: libc::pid_t) -> Option<String> {
+    let entries = std::fs::read_dir("/proc").ok()?;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(pid) = name.to_str().and_then(|text| text.parse::<libc::pid_t>().ok()) else {
+            continue;
+        };
+        let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else { continue };
+        let Some(rest) = stat.rsplit_once(')').map(|(_, rest)| rest) else { continue };
+        // rest starts with " <state> <ppid> <pgrp> ..." — fields 3,4,5
+        // after the comm; pgrp is the third token of `rest`.
+        let pgrp = rest.split_whitespace().nth(2).and_then(|value| value.parse::<libc::pid_t>().ok());
+        if pgrp == Some(pgid) {
+            // comm sits between the first '(' and the last ')'.
+            let comm = stat.split('(').nth(1).map(|tail| tail.rsplit(')').next().unwrap_or(tail));
+            if let Some(comm) = comm.filter(|comm| !comm.is_empty()) {
+                return Some(comm.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// G-229① — the incremental OSC title scanner: recognizes OSC 0 and 2
+/// (`ESC ] Ps ; Pt BEL` and `ESC ] Ps ; Pt ESC \`), tolerant to
+/// sequences split across chunks; non-title OSC sequences and
+/// non-UTF-8 payloads are ignored. Bounded: an unterminated sequence
+/// beyond 4 KiB is dropped (no title grows that large).
+#[derive(Debug, Default)]
+pub(crate) struct OscTitleScanner {
+    /// Bytes of an in-flight OSC sequence (starting at its ESC).
+    partial: Vec<u8>,
+}
+
+impl OscTitleScanner {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Feeds one output chunk; returns the LAST completed title (the
+    /// caller publishes on change).
+    pub(crate) fn feed(&mut self, chunk: &[u8]) -> Option<String> {
+        const PARTIAL_LIMIT: usize = 4096;
+        let mut work = std::mem::take(&mut self.partial);
+        work.extend_from_slice(chunk);
+        let mut last_title: Option<String> = None;
+        let bytes = std::mem::take(&mut work);
+        let mut rest: &[u8] = &bytes;
+        loop {
+            let Some(start) = rest.iter().position(|byte| *byte == 0x1b) else {
+                rest = &[];
+                break;
+            };
+            let after_esc = &rest[start + 1..];
+            if after_esc.first() != Some(&b']') {
+                // Some other escape: skip ESC + one byte (CSI/ESC-family
+                // introducers are at least two bytes) and keep scanning.
+                rest = if after_esc.is_empty() { &[] } else { &after_esc[1..] };
+                continue;
+            }
+            // OSC: find BEL or ST (ESC \).
+            let mut index = 0usize;
+            let mut end: Option<usize> = None;
+            let mut end_len = 0usize;
+            while index < after_esc[1..].len() {
+                match after_esc[1 + index] {
+                    0x07 => {
+                        end = Some(index);
+                        end_len = 1;
+                        break;
+                    }
+                    0x1b => {
+                        if after_esc[1 + index + 1..].first() == Some(&b'\\') {
+                            end = Some(index);
+                            end_len = 2;
+                            break;
+                        }
+                        // A bare ESC inside OSC aborts it.
+                        break;
+                    }
+                    _ => index += 1,
+                }
+            }
+            let Some(end) = end else {
+                // Unterminated: keep from this ESC, bounded.
+                let tail = &rest[start..];
+                if tail.len() <= PARTIAL_LIMIT {
+                    self.partial = tail.to_vec();
+                }
+                rest = &[];
+                break;
+            };
+            let payload = &after_esc[1..1 + end];
+            if let Some(title) = parse_title_osc(payload) {
+                last_title = Some(title);
+            }
+            rest = &after_esc[1 + end + end_len..];
+        }
+        drop(work);
+        last_title
+    }
+}
+
+/// `Ps ; Pt` with Ps ∈ {0, 2} → the title (UTF-8 only).
+fn parse_title_osc(payload: &[u8]) -> Option<String> {
+    let separator = payload.iter().position(|byte| *byte == b';')?;
+    let (code, title) = (&payload[..separator], &payload[separator + 1..]);
+    if code != b"0" && code != b"2" {
+        return None;
+    }
+    let title = std::str::from_utf8(title).ok()?;
+    if title.is_empty() {
+        None
+    } else {
+        Some(title.to_string())
+    }
 }
 
 #[cfg(test)]
@@ -2198,8 +2446,10 @@ mod tests {
         assert!(removed, "sink saw persistent-pty.removed for the removed terminal");
     }
 
-    /// The exit-pump `removed` fires with ZERO subscribers (§3.1 —
-    /// every child is reaped by the machine's wait threads).
+    /// G-229② — removeVisibleExit (ref index.ts:311-324, driven from a
+    /// subscriber's `exited` at :329-338): an exit with ZERO attachments
+    /// keeps the exited entry (mark_exited only); an ATTACHED terminal's
+    /// exit publishes `persistent-pty.removed`.
     #[tokio::test]
     async fn hosted_event_sink_fires_exit_removed_without_subscribers() {
         let events = Arc::new(Mutex::new(Vec::new()));
@@ -2223,17 +2473,74 @@ mod tests {
             )
             .await
             .expect("create");
-        // No attach: zero subscribers. The wait thread reaps the child;
-        // the exit pump publishes `removed`.
+        // No attach: zero subscribers. The child exits and the entry
+        // settles EXITED but STAYS listed — no `removed` (G-229②).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let exited = service
+                .get(&info.id)
+                .expect("entry retained")
+                .status
+                == crate::pty::Status::Exited;
+            if exited {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "child never exited");
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        let premature_removal = events.lock().iter().any(|(type_, data)| {
+            type_ == "persistent-pty.removed" && data["ptyID"] == info.id.0
+        });
+        assert!(!premature_removal, "unattached exit must NOT publish removed");
+        assert!(
+            service.list(Some(&session)).expect("list").iter().any(|row| row.id == info.id),
+            "unattached exited terminal stays listed"
+        );
+        service.remove(&info.id).await.expect("cleanup");
+
+        // The visible half: an attached terminal's exit publishes
+        // `removed`.
+        let visible = service
+            .create(
+                &session,
+                CreateInput {
+                    command: Some("/bin/sh".to_string()),
+                    args: vec!["-c".to_string(), "true".to_string()],
+                    cwd: Some("/tmp".to_string()),
+                    title: String::new(),
+                    env: std::collections::BTreeMap::new(),
+                    size: Some((80, 5)),
+                },
+            )
+            .await
+            .expect("create visible");
+        let attachment = service
+            .attach(
+                &visible.id,
+                AttachInput {
+                    role: Role::Observer,
+                    cursor: 0,
+                    attachment_id: "g229-visible",
+                    takeover: false,
+                    on_event: Box::new(|_| {}),
+                    on_end: Box::new(|| {}),
+                },
+            )
+            .expect("attach");
+        attachment.activate();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         let fired = loop {
             let hit = events.lock().iter().any(|(type_, data)| {
-                type_ == "persistent-pty.removed" && data["ptyID"] == info.id.0
+                type_ == "persistent-pty.removed" && data["ptyID"] == visible.id.0
             });
             if hit {
                 break true;
             }
-            assert!(std::time::Instant::now() < deadline, "exit-pump removed never fired");
+            assert!(
+                std::time::Instant::now() < deadline,
+                "attached terminal exit must publish removed"
+            );
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         };
         assert!(fired);
@@ -2665,6 +2972,8 @@ mod tests {
             },
             buffer: vec![b'a'; OUTPUT_LIMIT - 2],
             buffer_cursor: 0,
+            osc: OscTitleScanner::new(),
+            osc_title: None,
             writer: None,
             master: None,
             killer: None,
@@ -2688,5 +2997,177 @@ mod tests {
         assert!(text.ends_with('b'));
         assert!(live.buffer.len() < OUTPUT_LIMIT);
         assert_eq!(live.buffer_cursor, OUTPUT_LIMIT); // excess + the split codepoint byte
+    }
+
+    // ------------------------------------------------------------------
+    // G-229① — OSC title scanner (unit) + live title/foreground events
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn g229_osc_title_scanner_bel_and_st_terminators() {
+        let mut scanner = OscTitleScanner::new();
+        assert_eq!(scanner.feed(b"\x1b]0;Hello\x07rest"), Some("Hello".into()));
+        assert_eq!(scanner.feed(b"\x1b]2;World\x1b\\x"), Some("World".into()));
+    }
+
+    #[test]
+    fn g229_osc_title_scanner_tolerates_split_chunks() {
+        let mut scanner = OscTitleScanner::new();
+        assert_eq!(scanner.feed(b"\x1b]0;Spl"), None, "no terminator yet");
+        assert_eq!(scanner.feed(b"it Title\x07"), Some("Split Title".into()));
+        // ST split across the ESC and the backslash.
+        let mut scanner = OscTitleScanner::new();
+        assert_eq!(scanner.feed(b"\x1b]2;Half\x1b"), None);
+        assert_eq!(scanner.feed(b"\\tail"), Some("Half".into()));
+    }
+
+    #[test]
+    fn g229_osc_title_scanner_ignores_non_title_and_invalid() {
+        let mut scanner = OscTitleScanner::new();
+        // OSC 52 (clipboard) and OSC 1 (icon) are not titles.
+        assert_eq!(scanner.feed(b"\x1b]52;c;base64\x07"), None);
+        assert_eq!(scanner.feed(b"\x1b]1;icon\x07"), None);
+        // Non-UTF-8 payloads are ignored, not fatal.
+        assert_eq!(scanner.feed(b"\x1b]0;\xff\xfe\x07"), None);
+        // The next valid title still lands.
+        assert_eq!(scanner.feed(b"\x1b]0;After\x07"), Some("After".into()));
+        // Empty titles are dropped (no noise events).
+        assert_eq!(scanner.feed(b"\x1b]0;\x07"), None);
+    }
+
+    #[test]
+    fn g229_osc_title_scanner_multiple_titles_last_wins() {
+        let mut scanner = OscTitleScanner::new();
+        assert_eq!(
+            scanner.feed(b"\x1b]0;One\x07junk\x1b]2;Two\x07"),
+            Some("Two".into())
+        );
+    }
+
+    /// G-229① — a child emitting an OSC 0/2 title publishes
+    /// TitleChanged and updates the terminal's title (own child process
+    /// only).
+    #[tokio::test]
+    async fn g229_title_changed_publishes_from_own_child() {
+        let service = PersistentPty::hosted(Arc::new(|_, _| {}));
+        let session = SessionId::parse("ses_g229_title").expect("session");
+        let info = service
+            .create(
+                &session,
+                CreateInput {
+                    command: Some("/bin/sh".to_string()),
+                    args: vec![
+                        "-c".to_string(),
+                        "printf '\\033]0;G229 Title\\007waiting'; sleep 3".to_string(),
+                    ],
+                    cwd: Some("/tmp".to_string()),
+                    title: "Terminal".to_string(),
+                    env: std::collections::BTreeMap::new(),
+                    size: Some((80, 5)),
+                },
+            )
+            .await
+            .expect("create");
+
+        let events: Arc<Mutex<Vec<StreamEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&events);
+        let attachment = service
+            .attach(
+                &info.id,
+                AttachInput {
+                    role: Role::Observer,
+                    cursor: 0,
+                    attachment_id: "g229-title",
+                    takeover: false,
+                    on_event: Box::new(move |event| sink.lock().push(event)),
+                    on_end: Box::new(|| {}),
+                },
+            )
+            .expect("attach");
+        attachment.activate();
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if events
+                .lock()
+                .iter()
+                .any(|event| matches!(event, StreamEvent::TitleChanged { title } if title == "G229 Title"))
+            {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "title event never arrived");
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        // The terminal's title reflects the OSC observation (list/read
+        // consumers see it without a live attachment).
+        assert_eq!(service.get(&info.id).expect("get").title, "G229 Title");
+        service.remove(&info.id).await.expect("cleanup");
+    }
+
+    /// G-229① — the foreground-process probe resolves the pty's
+    /// foreground group through /proc (own child only: `sh -c` execs
+    /// `sleep`, so the fg process becomes "sleep").
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn g229_foreground_process_changed_publishes_from_own_child() {
+        let service = PersistentPty::hosted(Arc::new(|_, _| {}));
+        let session = SessionId::parse("ses_g229_fg").expect("session");
+        let info = service
+            .create(
+                &session,
+                CreateInput {
+                    command: Some("/bin/sh".to_string()),
+                    // `exec` replaces the shell in-place (same pid,
+                    // same process group) — the classic foreground
+                    // takeover (vim/ssh/exec'd programs).
+                    args: vec!["-c".to_string(), "exec sleep 8".to_string()],
+                    cwd: Some("/tmp".to_string()),
+                    title: String::new(),
+                    env: std::collections::BTreeMap::new(),
+                    size: Some((80, 5)),
+                },
+            )
+            .await
+            .expect("create");
+
+        let events: Arc<Mutex<Vec<StreamEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&events);
+        let attachment = service
+            .attach(
+                &info.id,
+                AttachInput {
+                    role: Role::Observer,
+                    cursor: 0,
+                    attachment_id: "g229-fg",
+                    takeover: false,
+                    on_event: Box::new(move |event| sink.lock().push(event)),
+                    on_end: Box::new(|| {}),
+                },
+            )
+            .expect("attach");
+        attachment.activate();
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if events.lock().iter().any(|event| {
+                matches!(event, StreamEvent::ForegroundProcessChanged { process: Some(name) } if name == "sleep")
+            }) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "foreground event never arrived; events so far: {:?}",
+                events.lock().iter().map(|event| match event {
+                    StreamEvent::ForegroundProcessChanged { process } => format!("fg:{process:?}"),
+                    other => format!("{other:?}"),
+                }).collect::<Vec<_>>()
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert_eq!(
+            service.get(&info.id).expect("get").foreground_process.as_deref(),
+            Some("sleep")
+        );
+        service.remove(&info.id).await.expect("cleanup");
     }
 }
