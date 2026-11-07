@@ -279,8 +279,12 @@ fn error_chain(error: &(dyn std::error::Error + '_)) -> Vec<String> {
     chain
 }
 
-/// HTTP statuses found anywhere in the error chain (reqwest renders them as
-/// `"HTTP status client error (429 Too Many Requests)"`).
+/// HTTP statuses found anywhere in the error chain. NOTE (G-223): the
+/// `(HTTP status NNN)` text is REQWEST's own `Display` for status errors
+/// (and rmcp's `HTTP {status}: {body}` for `UnexpectedServerResponse`),
+/// not remote server wording — behavior-affecting classification
+/// (`session_expired`/`unauthorized`) uses the typed downcasts below;
+/// this remains only for the transient-retry heuristic.
 fn http_statuses(chain: &[String]) -> Vec<u16> {
     let mut out = Vec::new();
     for text in chain {
@@ -301,6 +305,214 @@ fn http_statuses(chain: &[String]) -> Vec<u16> {
     out
 }
 
+// ---------------------------------------------------------------------------
+// G-223 — typed error classification
+// ---------------------------------------------------------------------------
+
+/// A remote-transport client that records whether the transport ever
+/// attached a negotiated `Mcp-Session-Id` (G-223): rmcp 3.7 keeps the
+/// session id inside its transport worker with no accessor, so the
+/// client we hand the transport observes it at the `StreamableHttpClient`
+/// seam (every worker POST/GET carries `session_id: Option<Arc<str>>`).
+/// This is the port of the ref's `session.transport?.sessionId !==
+/// undefined` gate (client.ts:230-233).
+#[derive(Clone)]
+struct SessionObservingClient {
+    inner: reqwest13::Client,
+    /// Set once any request carried a session id (a sessionful server).
+    session_attached: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl SessionObservingClient {
+    fn record(&self, session_id: Option<&std::sync::Arc<str>>) {
+        if session_id.is_some() {
+            self.session_attached.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+}
+
+impl rmcp::transport::streamable_http_client::StreamableHttpClient for SessionObservingClient {
+    type Error = reqwest13::Error;
+
+    async fn post_message(
+        &self,
+        uri: std::sync::Arc<str>,
+        message: rmcp::model::ClientJsonRpcMessage,
+        session_id: Option<std::sync::Arc<str>>,
+        auth_header: Option<String>,
+        custom_headers: std::collections::HashMap<reqwest13::header::HeaderName, reqwest13::header::HeaderValue>,
+    ) -> Result<
+        rmcp::transport::streamable_http_client::StreamableHttpPostResponse,
+        rmcp::transport::streamable_http_client::StreamableHttpError<Self::Error>,
+    > {
+        self.record(session_id.as_ref());
+        self.inner.post_message(uri, message, session_id, auth_header, custom_headers).await
+    }
+
+    async fn post_message_with_max_sse_event_size(
+        &self,
+        uri: std::sync::Arc<str>,
+        message: rmcp::model::ClientJsonRpcMessage,
+        session_id: Option<std::sync::Arc<str>>,
+        auth_header: Option<String>,
+        custom_headers: std::collections::HashMap<reqwest13::header::HeaderName, reqwest13::header::HeaderValue>,
+        max_sse_event_size: usize,
+    ) -> Result<
+        rmcp::transport::streamable_http_client::StreamableHttpPostResponse,
+        rmcp::transport::streamable_http_client::StreamableHttpError<Self::Error>,
+    > {
+        self.record(session_id.as_ref());
+        self.inner
+            .post_message_with_max_sse_event_size(
+                uri,
+                message,
+                session_id,
+                auth_header,
+                custom_headers,
+                max_sse_event_size,
+            )
+            .await
+    }
+
+    async fn delete_session(
+        &self,
+        uri: std::sync::Arc<str>,
+        session_id: std::sync::Arc<str>,
+        auth_header: Option<String>,
+        custom_headers: std::collections::HashMap<reqwest13::header::HeaderName, reqwest13::header::HeaderValue>,
+    ) -> Result<(), rmcp::transport::streamable_http_client::StreamableHttpError<Self::Error>> {
+        self.inner.delete_session(uri, session_id, auth_header, custom_headers).await
+    }
+
+    async fn get_stream(
+        &self,
+        uri: std::sync::Arc<str>,
+        session_id: Option<std::sync::Arc<str>>,
+        last_event_id: Option<String>,
+        auth_header: Option<String>,
+        custom_headers: std::collections::HashMap<reqwest13::header::HeaderName, reqwest13::header::HeaderValue>,
+    ) -> Result<
+        futures::stream::BoxStream<
+            'static,
+            Result<sse_stream::Sse, rmcp::transport::streamable_http_client::SseError>,
+        >,
+        rmcp::transport::streamable_http_client::StreamableHttpError<Self::Error>,
+    > {
+        self.record(session_id.as_ref());
+        self.inner.get_stream(uri, session_id, last_event_id, auth_header, custom_headers).await
+    }
+
+    async fn get_stream_with_max_sse_event_size(
+        &self,
+        uri: std::sync::Arc<str>,
+        session_id: Option<std::sync::Arc<str>>,
+        last_event_id: Option<String>,
+        auth_header: Option<String>,
+        custom_headers: std::collections::HashMap<reqwest13::header::HeaderName, reqwest13::header::HeaderValue>,
+        max_sse_event_size: usize,
+    ) -> Result<
+        futures::stream::BoxStream<
+            'static,
+            Result<sse_stream::Sse, rmcp::transport::streamable_http_client::SseError>,
+        >,
+        rmcp::transport::streamable_http_client::StreamableHttpError<Self::Error>,
+    > {
+        self.record(session_id.as_ref());
+        self.inner
+            .get_stream_with_max_sse_event_size(
+                uri,
+                session_id,
+                last_event_id,
+                auth_header,
+                custom_headers,
+                max_sse_event_size,
+            )
+            .await
+    }
+}
+
+/// G-223 — the typed HTTP error rmcp's streamable transport produces,
+/// reached by walking the `#[source]` chain: `ServiceError::TransportSend`
+/// boxes the transport's `StreamableHttpError<reqwest::Error>` behind
+/// `DynamicTransportError::error` (also a `#[source]`), so the concrete
+/// type survives for `downcast_ref`.
+pub(super) fn transport_http_error<'a>(
+    error: &'a (dyn std::error::Error + 'static),
+) -> Option<&'a rmcp::transport::streamable_http_client::StreamableHttpError<reqwest13::Error>> {
+    let mut node: Option<&(dyn std::error::Error + '_)> = Some(error);
+    while let Some(current) = node {
+        if let Some(typed) = current.downcast_ref::<rmcp::ServiceError>() {
+            if let rmcp::ServiceError::TransportSend(dynamic) = typed {
+                if let Some(inner) =
+                    dynamic.error.downcast_ref::<rmcp::transport::streamable_http_client::StreamableHttpError<reqwest13::Error>>()
+                {
+                    return Some(inner);
+                }
+            }
+        }
+        if let Some(direct) = current
+            .downcast_ref::<rmcp::transport::streamable_http_client::StreamableHttpError<reqwest13::Error>>()
+        {
+            return Some(direct);
+        }
+        node = current.source();
+    }
+    None
+}
+
+/// Whether any error in the chain is a 401/403 authentication rejection
+/// (G-223: typed — the streamable transport's `AuthRequired` /
+/// `InsufficientScope` variants, a reqwest status error, or rmcp's own
+/// `HTTP {status}: {body}` rendering of a challenge-less 401/403; no
+/// remote-server wording is matched).
+pub(super) fn unauthorized(error: &(dyn std::error::Error + 'static)) -> bool {
+    let Some(http) = transport_http_error(error) else { return false };
+    match http {
+        rmcp::transport::streamable_http_client::StreamableHttpError::AuthRequired(_)
+        | rmcp::transport::streamable_http_client::StreamableHttpError::InsufficientScope(_) => {
+            true
+        }
+        rmcp::transport::streamable_http_client::StreamableHttpError::Client(inner) => inner
+            .status()
+            .is_some_and(|status| status.as_u16() == 401 || status.as_u16() == 403),
+        rmcp::transport::streamable_http_client::StreamableHttpError::UnexpectedServerResponse(
+            text,
+        ) => text.starts_with("HTTP 401") || text.starts_with("HTTP 403"),
+        _ => false,
+    }
+}
+
+/// Whether the chain shows a session expiry (G-223, ref client.ts:230-243):
+///
+/// * the TYPED `StreamableHttpError::SessionExpired` — rmcp only emits it
+///   when the POST actually carried the negotiated `Mcp-Session-Id`
+///   header (its `session_was_attached` gate) or a control raced a
+///   replaced session, so this carries the ref's
+///   `session.transport?.sessionId !== undefined` gate by construction; a
+///   plain 404 from a stateless server arrives as
+///   `UnexpectedServerResponse("HTTP 404 …")` and does NOT match;
+/// * the restarted single-session server's 400 (ref client.ts:234-239):
+///   the JSON-RPC error text `Bad Request: Server not initialized` — a
+///   server protocol message, not HTTP wording — still gated on a
+///   session having been attached, mirroring the ref.
+pub(super) fn session_expired(
+    error: &(dyn std::error::Error + 'static),
+    session_attached: bool,
+) -> bool {
+    if transport_http_error(error).is_some_and(|http| {
+        matches!(
+            http,
+            rmcp::transport::streamable_http_client::StreamableHttpError::SessionExpired
+        )
+    }) {
+        return true;
+    }
+    session_attached
+        && error_chain(error)
+            .iter()
+            .any(|text| text.contains("Bad Request: Server not initialized"))
+}
+
 /// `isTransient` (client.ts:55-58): 408/429/5xx≠501 recover on retry; 501
 /// means the server will never support the request; network failures carry
 /// an OS error code.
@@ -314,23 +526,6 @@ fn is_transient(chain: &[String]) -> bool {
     let text = chain.join(": ");
     (text.contains("error trying to connect") || text.contains("connection closed"))
         && text.contains("os error")
-}
-
-/// Whether any error in the chain is a 401/403 authentication rejection.
-fn unauthorized(chain: &[String]) -> bool {
-    http_statuses(chain).iter().any(|status| *status == 401 || *status == 403)
-        || chain
-            .iter()
-            .any(|text| text.contains("401 Unauthorized") || text.contains("403 Forbidden"))
-}
-
-/// Whether the chain shows a 404, or the 400 "Bad Request: Server not
-/// initialized" a freshly restarted single-session server emits.
-fn session_expired(chain: &[String]) -> bool {
-    http_statuses(chain).contains(&404)
-        || chain.iter().any(|text| {
-            text.contains("400 Bad Request") && text.contains("Bad Request: Server not initialized")
-        })
 }
 
 type BoxedRequest<T> = Pin<Box<dyn Future<Output = Result<T, RequestError>> + Send>>;
@@ -506,6 +701,10 @@ pub struct Connection {
     remote: bool,
     /// Set once an expiry was observed so the registry reconnects once.
     expiry_flag: Arc<std::sync::atomic::AtomicBool>,
+    /// G-223 — whether the transport ever attached a negotiated
+    /// `Mcp-Session-Id` (observed at the client seam; stdio/local
+    /// connections stay false).
+    session_attached: Arc<std::sync::atomic::AtomicBool>,
     /// The elicitation handler (drives MRTR `input_required` rounds).
     elicitation: Option<Arc<super::elicitation::ClientElicitation>>,
 }
@@ -537,18 +736,38 @@ impl Connection {
         self.expiry_flag.load(std::sync::atomic::Ordering::SeqCst)
     }
 
+    /// G-223 test seam: mark this (mock-transport) connection as carrying
+    /// a negotiated session id. The real observing client only runs on
+    /// the streamable HTTP transport; scripted/mock transports route
+    /// through [`connect_with_transport`] and default to NOT attached.
+    pub(crate) fn mark_session_attached(&self) {
+        self.session_attached.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// G-223 — whether the transport ever attached a session id (the
+    /// ref's `session.transport?.sessionId !== undefined` gate).
+    #[must_use]
+    pub fn session_attached(&self) -> bool {
+        self.session_attached.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     /// Maps one rmcp failure to [`RequestError`], classifying session
     /// expiry (once) and authentication rejections.
     fn classify(&self, error: &rmcp::ServiceError) -> RequestError {
         let chain = error_chain(error);
-        if self.remote && !self.expiry_reported() && session_expired(&chain) {
+        // G-223: typed classification — a 404 only counts as expiry when
+        // the transport carried a session id (see `session_expired`).
+        if self.remote
+            && !self.expiry_reported()
+            && session_expired(error, self.session_attached())
+        {
             self.expiry_flag.store(true, std::sync::atomic::Ordering::SeqCst);
             return RequestError {
                 server: self.server_name().to_string(),
                 message: format!("{SESSION_EXPIRED_MESSAGE}{}", self.server_name()),
             };
         }
-        if unauthorized(&chain) {
+        if unauthorized(error) {
             return RequestError {
                 server: self.server_name().to_string(),
                 message: format!("{} (unauthorized)", chain.join(": ")),
@@ -1051,7 +1270,10 @@ where
     T: rmcp::transport::IntoTransport<RoleClient, E, A>,
     E: std::error::Error + Send + Sync + 'static,
 {
-    start(input, transport, remote).await
+    // A caller-provided transport never routes through the observing
+    // client, so no session attachment is observed (G-223 default: off).
+    let session_attached = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    start(input, transport, remote, session_attached).await
 }
 
 /// Environment overlay a stdio MCP server declares (the caller side of
@@ -1169,7 +1391,14 @@ async fn connect_local(
     let stdout = StopOnDropReader { inner: Box::new(stdout), stop: Some(stop) };
     // rmcp's async-rw transport over (read, write) — the same plumbing
     // TokioChildProcess wrapped internally.
-    match start(input, (stdout, stdin), false).await {
+    match start(
+        input,
+        (stdout, stdin),
+        false,
+        Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    )
+    .await
+    {
         Ok(connection) => Ok(connection),
         Err(failure) => {
             // G-72 crash diagnostics (ref mcp/stdio.ts:165-180): the
@@ -1283,15 +1512,25 @@ async fn connect_remote(
     let open = |url: reqwest::Url| {
         let client = client.clone();
         async move {
-            let transport = StreamableHttpClientTransport::<reqwest13::Client>::with_client(
-                client,
-                // rmcp 0.5 had no transparent 404 session recovery — the
-                // registry's expiry handling owns reconnect+replay, so the
-                // 3.7 default (`true`) must stay off.
-                StreamableHttpClientTransportConfig::with_uri(url.to_string())
-                    .reinit_on_expired_session(false),
-            );
-            start(input, transport, true).await
+            // G-223: the observing client records whether the transport
+            // ever attached a negotiated `Mcp-Session-Id` (the ref's
+            // expiry gate); delegation keeps rmcp's reqwest behavior
+            // (SSE size caps included) byte-for-byte.
+            let observing = SessionObservingClient {
+                inner: client,
+                session_attached: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            };
+            let session_attached = Arc::clone(&observing.session_attached);
+            let transport =
+                StreamableHttpClientTransport::<SessionObservingClient>::with_client(
+                    observing,
+                    // rmcp 0.5 had no transparent 404 session recovery — the
+                    // registry's expiry handling owns reconnect+replay, so the
+                    // 3.7 default (`true`) must stay off.
+                    StreamableHttpClientTransportConfig::with_uri(url.to_string())
+                        .reinit_on_expired_session(false),
+                );
+            start(input, transport, true, session_attached).await
         }
     };
     let mut attempt = open(url.clone());
@@ -1373,12 +1612,13 @@ async fn preflight_challenge(client: &reqwest::Client, url: &reqwest::Url) -> Op
     tokio::time::timeout(Duration::from_secs(10), attempt).await.ok().flatten()
 }
 
-fn connect_failure(server: &str, error: &dyn std::error::Error) -> ConnectFailure {
-    let chain = error_chain(error);
-    if unauthorized(&chain) {
+fn connect_failure(server: &str, error: &(dyn std::error::Error + 'static)) -> ConnectFailure {
+    // G-223: typed 401/403 detection (see `unauthorized`).
+    if unauthorized(error) {
+        let chain = error_chain(error);
         return NeedsAuthError { server: server.to_string(), message: chain.join(": ") }.into();
     }
-    ConnectError { server: server.to_string(), message: chain.join(": ") }.into()
+    ConnectError { server: server.to_string(), message: error_chain(error).join(": ") }.into()
 }
 
 /// The `UnsupportedProtocolVersionError` mapping (client.ts:376-380): a
@@ -1424,6 +1664,7 @@ async fn start<T, E, A>(
     input: &ConnectInput<'_>,
     transport: T,
     remote: bool,
+    session_attached: Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<Connection, ConnectFailure>
 where
     T: rmcp::transport::IntoTransport<RoleClient, E, A>,
@@ -1496,6 +1737,7 @@ where
         execution_timeout: execution_timeout(input.config),
         remote,
         expiry_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        session_attached,
         elicitation: input.elicitation.clone(),
     })
 }

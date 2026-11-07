@@ -2320,6 +2320,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "sha2",
+ "sse-stream",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
