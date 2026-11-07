@@ -139,6 +139,12 @@ async fn probe_cancel(port: u16) {
 pub enum CallbackPage {
     /// Static HTML answering the redirect (closes itself).
     Html(String),
+    /// G-234② — a BRANDED success/error pair rendered by the shared
+    /// oauth page module (`OauthCallbackPage.success`/`.error`,
+    /// oauth/page.ts:21-49): an OAuth error redirect (or a missing
+    /// code) answers 400 with the error card instead of the success
+    /// page.
+    Branded { provider: String },
     /// The bootstrap page: javascript reads `location.hash`/`location.search`
     /// and POSTs it as JSON to `token_path` (implicit flow — digitalocean.ts:66-69).
     Bootstrap { token_path: String, provider: String },
@@ -197,11 +203,17 @@ fn parse_query(query: &str) -> BTreeMap<String, String> {
         .collect()
 }
 
-/// The bootstrap page (a compact port of v2's `OauthCallbackPage.bootstrap`):
-/// grabs the implicit-flow token out of the URL fragment/query and POSTs it
-/// back to `token_path`.
+/// The bootstrap page — G-234②: the SHARED branded page module
+/// (`oauth/page.ts` `OauthCallbackPage.bootstrap`, not a hand-rolled
+/// page): the pending card whose script relays the URL fragment to
+/// `token_path` and transitions in place.
 #[must_use]
 pub fn bootstrap_page(token_path: &str, provider: &str) -> String {
+    crate::mcp::oauth_page::bootstrap(token_path, Some(provider))
+}
+
+#[allow(dead_code)] // parity reference superseded by the shared page module
+fn bootstrap_page_handrolled(token_path: &str, provider: &str) -> String {
     format!(
         r#"<!doctype html><html><head><title>{provider}</title><style>body{{font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}}main{{text-align:center}}</style></head><body><main><p>Completing {provider} authorization…</p><script>
 (function() {{
@@ -220,9 +232,15 @@ pub fn bootstrap_page(token_path: &str, provider: &str) -> String {
     )
 }
 
-/// The success page (closes itself).
+/// The success page — G-234②: the SHARED branded page module
+/// (`OauthCallbackPage.success`).
 #[must_use]
 pub fn success_page(provider: &str) -> String {
+    crate::mcp::oauth_page::success(Some(provider))
+}
+
+#[allow(dead_code)] // parity reference superseded by the shared page module
+fn success_page_handrolled(provider: &str) -> String {
     format!(
         r"<!doctype html><html><head><title>{provider}</title></head><body><p>Connected to {provider}. You can close this window.</p><script>window.close()</script></body></html>"
     )
@@ -302,14 +320,25 @@ async fn serve_callback_connection(
     let query_params = parse_query(query);
     let token_path = match page {
         CallbackPage::Bootstrap { token_path, .. } => Some(token_path.as_str()),
-        CallbackPage::Html(_) => None,
+        CallbackPage::Html(_) | CallbackPage::Branded { .. } => None,
     };
     if method == "GET" && path == callback_path {
+        // G-234② — an OAuth failure redirect renders the branded ERROR
+        // card (400) instead of the success page; the parameters still
+        // resolve so the flow fails its validation exactly like before
+        // (ref poe.ts:57-64 `callbackError` → `OauthCallbackPage.error`).
+        if let CallbackPage::Branded { provider } = page {
+            if let Some(detail) = callback_error_detail(&query_params) {
+                let html = crate::mcp::oauth_page::error(&detail, Some(provider));
+                write_simple_response(stream, "400 Bad Request", "text/html", html.as_bytes())
+                    .await;
+                return Some(query_params);
+            }
+        }
         let html = match page {
             CallbackPage::Html(html) => html.clone(),
-            CallbackPage::Bootstrap { token_path, provider } => {
-                bootstrap_page(token_path, provider)
-            }
+            CallbackPage::Branded { provider } => crate::mcp::oauth_page::success(Some(&provider)),
+            CallbackPage::Bootstrap { token_path, provider } => bootstrap_page(token_path, provider),
         };
         write_simple_response(stream, "200 OK", "text/html", html.as_bytes()).await;
         if let Some(_token_path) = token_path {
@@ -334,6 +363,21 @@ async fn serve_callback_connection(
     }
     write_simple_response(stream, "404 Not Found", "text/plain", b"Not found").await;
     None
+}
+
+/// The OAuth error detail on a failed redirect (ref `callbackError`
+/// shape, poe.ts:117-126): the provider's `error_description`/`error`
+/// query params; `None` when the redirect carries no error.
+fn callback_error_detail(params: &BTreeMap<String, String>) -> Option<String> {
+    if !params.contains_key("error") {
+        return None;
+    }
+    Some(
+        params
+            .get("error_description")
+            .or_else(|| params.get("error"))
+            .map_or_else(|| "Authorization denied".to_owned(), Clone::clone),
+    )
 }
 
 fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -377,8 +421,14 @@ async fn post_form_json(
     endpoint: &str,
     fields: &[(&str, &str)],
 ) -> Result<(reqwest::StatusCode, Value), String> {
+    // G-234① — the device/token/refresh form posts carry the ref's
+    // `headers()` set (github-copilot.ts:376-385: Accept +
+    // User-Agent); body encoding stays form-urlencoded (GitHub accepts
+    // both, and re-recording the flows is out of scope).
     let response = http
         .post(endpoint)
+        .header("Accept", "application/json")
+        .header("User-Agent", app_user_agent())
         .form(fields)
         .send()
         .await
@@ -386,6 +436,15 @@ async fn post_form_json(
     let status = response.status();
     let body = response.json::<Value>().await.unwrap_or(Value::Null);
     Ok((status, body))
+}
+
+/// G-234① — `App.useragent(app)` (app.ts:24-26). The static provider
+/// flows carry no host app handle, so the detected app identity stands
+/// in (the same shape the engine stamps everywhere else).
+pub fn app_user_agent() -> String {
+    crate::session::runner::model_request::useragent(
+        &crate::session::runner::model_request::AppMetadata::detected(),
+    )
 }
 
 /// Requests a device code (`POST endpoint` with `fields`).

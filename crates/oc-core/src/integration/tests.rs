@@ -563,7 +563,10 @@ impl MockOAuth {
                     .take_while(|line| !line.is_empty())
                     .filter(|line| {
                         let lowered = line.to_ascii_lowercase();
-                        lowered.starts_with("authorization:") || lowered.starts_with("x-org-id:")
+                        lowered.starts_with("authorization:")
+                            || lowered.starts_with("x-org-id:")
+                            || lowered.starts_with("accept:")
+                            || lowered.starts_with("user-agent:")
                     })
                     .map(std::borrow::ToOwned::to_owned)
                     .collect::<Vec<_>>()
@@ -872,7 +875,9 @@ async fn loopback_listener_serves_callback_and_resolves_params() {
         .expect("get");
     assert_eq!(response.status(), 200);
     let text = response.text().await.expect("body");
-    assert!(text.contains("Connected to Test"), "{text}");
+    // G-234②: success_page delegates to the shared branded module.
+    assert!(text.contains("OpenCode is now connected to Test."), "{text}");
+    assert!(text.contains("Authorization successful"), "{text}");
     let params = tokio::time::timeout(std::time::Duration::from_secs(5), waiter)
         .await
         .expect("timeout")
@@ -2973,4 +2978,120 @@ async fn g225_row_without_integration_id_is_skipped() {
     assert_eq!(all.len(), 1, "orphan row skipped: {all:?}");
     assert_eq!(all[0].id, "cred_kept");
     assert!(matches!(store.get("cred_orphan").await, Ok(None)), "orphan get is None");
+}
+
+// ===========================================================================
+// G-234 — ① device/token form posts carry Accept + User-Agent; ② the
+// loopback callback serves the shared branded oauth page (success AND
+// error variants).
+// ===========================================================================
+
+/// ① — the outbound device-code POST carries `Accept: application/json`
+/// and the app User-Agent (ref headers(), github-copilot.ts:376-385).
+#[tokio::test]
+async fn g234_device_post_carries_accept_and_user_agent() {
+    let mock = MockOAuth::start(vec![(
+        "/login/device/code",
+        vec![json!({
+            "device_code": "dc", "user_code": "UC", "verification_uri": "https://x/verify"
+        })],
+    )])
+    .await;
+    let http = oc_http::client();
+    let _ = super::flows::request_device_code(
+        &http,
+        &format!("{}/login/device/code", mock.base),
+        vec![("client_id", "cid".to_owned())],
+    )
+    .await
+    .expect("device code");
+    let requests = mock.requests();
+    assert!(!requests.is_empty(), "request recorded");
+    let recorded = requests.join("\n");
+    let lowered = recorded.to_ascii_lowercase();
+    assert!(lowered.contains("accept: application/json"), "Accept header: {recorded}");
+    assert!(lowered.contains("user-agent: opencode/"), "app User-Agent: {recorded}");
+}
+
+/// ② — the branded loopback callback: success (200) and OAuth-error
+/// (400) both answer the shared page module's HTML.
+#[tokio::test]
+async fn g234_loopback_serves_branded_success_and_error_pages() {
+    async fn get(url: &str) -> (String, String) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut stream = tokio::net::TcpStream::connect(url).await.expect("connect");
+        stream.write_all(b"GET /callback HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").await.expect("write");
+        let mut body = Vec::new();
+        stream.read_to_end(&mut body).await.expect("read");
+        let text = String::from_utf8_lossy(&body).into_owned();
+        let status = text.split_whitespace().nth(1).unwrap_or_default().to_string();
+        (status, text)
+    }
+
+    // Success redirect: the branded success card, 200.
+    let listener = super::flows::listen_loopback(super::flows::LoopbackOptions {
+        page: super::flows::CallbackPage::Branded { provider: "Poe".to_owned() },
+        ..Default::default()
+    })
+    .await
+    .expect("listener");
+    let (status, text) = get(&format!("127.0.0.1:{}", listener.port)).await;
+    assert_eq!(status, "200");
+    assert!(text.contains("Authorization successful"), "branded success: {text}");
+    assert!(text.contains("OpenCode is now connected to Poe."), "provider subtitle: {text}");
+    assert!(text.contains("oc-card"), "branded document markers");
+
+    // Error redirect: the branded error card, 400, with the detail.
+    let listener = super::flows::listen_loopback(super::flows::LoopbackOptions {
+        page: super::flows::CallbackPage::Branded { provider: "Poe".to_owned() },
+        ..Default::default()
+    })
+    .await
+    .expect("listener 2");
+    let mut stream = tokio::net::TcpStream::connect(format!("127.0.0.1:{}", listener.port))
+        .await
+        .expect("connect 2");
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    stream
+        .write_all(b"GET /callback?error=access_denied&error_description=nope HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+        .await
+        .expect("write 2");
+    let mut body = Vec::new();
+    stream.read_to_end(&mut body).await.expect("read 2");
+    let text = String::from_utf8_lossy(&body).into_owned();
+    assert!(text.starts_with("HTTP/1.1 400"), "error status: {text}");
+    assert!(text.contains("Authorization failed"), "branded error: {text}");
+    assert!(text.contains("nope"), "error detail surfaced: {text}");
+    // And the flow still observes the failure params.
+    let params = listener.wait().await.expect("hit");
+    assert_eq!(params.get("error").map(String::as_str), Some("access_denied"));
+}
+
+/// ② — the implicit-flow loopback serves the shared bootstrap page.
+#[tokio::test]
+async fn g234_loopback_bootstrap_is_the_shared_page() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = super::flows::listen_loopback(super::flows::LoopbackOptions {
+        page: super::flows::CallbackPage::Bootstrap {
+            token_path: "/callback/token".to_owned(),
+            provider: "xAI".to_owned(),
+        },
+        ..Default::default()
+    })
+    .await
+    .expect("listener");
+    let mut stream = tokio::net::TcpStream::connect(format!("127.0.0.1:{}", listener.port))
+        .await
+        .expect("connect");
+    stream
+        .write_all(b"GET /callback HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+        .await
+        .expect("write");
+    let mut body = Vec::new();
+    stream.read_to_end(&mut body).await.expect("read");
+    let text = String::from_utf8_lossy(&body).into_owned();
+    assert!(text.starts_with("HTTP/1.1 200"), "status: {text}");
+    assert!(text.contains("Finishing sign-in"), "branded pending card: {text}");
+    assert!(text.contains("Completing your xAI authorization."));
+    assert!(text.contains("var TOKEN_URL=new URL(\"/callback/token\",window.location.origin).href;"));
 }
