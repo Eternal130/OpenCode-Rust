@@ -199,6 +199,136 @@ async fn be1_sse_credential_remove_non_active_does_not_switch() {
     let _ = active;
 }
 
+/// (active, time_created, time_updated) for one credential row, read
+/// straight off the engine db (the be1 SQL-probe pattern).
+async fn credential_times(server: &TestServer, id: &str) -> (i64, i64, i64) {
+    let id = id.to_owned();
+    server
+        .state
+        .engine
+        .db
+        .transaction(move |tx| {
+            Ok(tx
+                .conn()
+                .query_row(
+                    "SELECT active, time_created, time_updated FROM credential WHERE id = ?1",
+                    [&id],
+                    |row| {
+                        Ok((
+                            row.get::<_, i64>(0)?,
+                            row.get::<_, i64>(1)?,
+                            row.get::<_, i64>(2)?,
+                        ))
+                    },
+                )
+                .expect("credential row"))
+        })
+        .await
+        .expect("times lookup")
+}
+
+/// Pins `time_updated` to a sentinel so a later stability assert cannot
+/// pass by clock coincidence (create and mutate within the same ms).
+async fn pin_credential_time_updated(server: &TestServer, id: &str, value: i64) {
+    let id = id.to_owned();
+    server
+        .state
+        .engine
+        .db
+        .transaction(move |tx| {
+            tx.conn()
+                .execute("UPDATE credential SET time_updated = ?2 WHERE id = ?1", (&id, value))
+                .expect("pin time_updated");
+            Ok(())
+        })
+        .await
+        .expect("pin tx");
+}
+
+/// G-117 (HTTP half) — PATCH update and POST activate never write
+/// `time_updated`: the ref's HTTP handlers route through
+/// Credential.Service whose drizzle `.set({...})` writes only the listed
+/// columns (credential.ts:124-130/:187/:227-228), so the column keeps
+/// its insert-time value while label edits and selection flips land.
+#[tokio::test]
+async fn be1_credential_update_activate_keep_time_updated_stable() {
+    let server = boot(tempfile::tempdir().expect("workspace").keep()).await;
+    let client = &server.client;
+    let key = |text: &str| {
+        CredentialValue::Key(CredentialKey { key: text.to_owned(), ..CredentialKey::default() })
+    };
+
+    let first = client
+        .credential()
+        .create(&CredentialCreateInput {
+            id: None,
+            integration_id: "github".to_owned(),
+            label: Some("first".to_owned()),
+            activate: Some(true),
+            value: key("sk-1"),
+        })
+        .await
+        .expect("first create");
+    let second = client
+        .credential()
+        .create(&CredentialCreateInput {
+            id: None,
+            integration_id: "github".to_owned(),
+            label: Some("second".to_owned()),
+            activate: Some(false),
+            value: key("sk-2"),
+        })
+        .await
+        .expect("second create");
+
+    // Insert seeds time_updated == time_created (initial value preserved).
+    for (id, expect_active) in [(&first.id, 1i64), (&second.id, 0)] {
+        let (active, created, updated) = credential_times(&server, id).await;
+        assert_eq!(active, expect_active, "{id}: selection at insert");
+        assert!(created > 0 && updated == created, "{id}: insert sets time_updated = time_created");
+    }
+
+    // Pin sentinels BEFORE the mutations (see pin_credential_time_updated).
+    pin_credential_time_updated(&server, &first.id, 111_111).await;
+    pin_credential_time_updated(&server, &second.id, 222_222).await;
+
+    // PATCH label: the label lands in the list output, everything else
+    // (ids, integration, selection) is unchanged, mtime stays pinned.
+    client
+        .credential()
+        .update(&second.id, &CredentialUpdateBody { label: "renamed".to_owned() })
+        .await
+        .expect("label update");
+    let listed = client.credential().list().await.expect("list after update");
+    let second_listed =
+        listed.iter().find(|entry| entry.id == second.id).expect("second listed");
+    assert_eq!(second_listed.label, "renamed", "label edit lands");
+    assert_eq!(second_listed.integration_id, "github", "integration unchanged");
+    assert!(!second_listed.active, "selection unchanged by a label edit");
+    assert!(
+        listed.iter().find(|entry| entry.id == first.id).is_some_and(|entry| entry.active),
+        "first stays the selected row"
+    );
+    assert_eq!(credential_times(&server, &second.id).await.2, 222_222, "label update keeps mtime");
+
+    // POST activate: selection flips, both rows keep their mtimes (the
+    // deactivated sibling's write is the same column-limited set).
+    client.credential().activate(&second.id).await.expect("activate");
+    let listed = client.credential().list().await.expect("list after activate");
+    assert!(
+        listed.iter().find(|entry| entry.id == second.id).is_some_and(|entry| entry.active),
+        "second is now the selected row"
+    );
+    assert!(
+        !listed.iter().find(|entry| entry.id == first.id).is_some_and(|entry| entry.active),
+        "first is deselected"
+    );
+    let (first_active, _, first_updated) = credential_times(&server, &first.id).await;
+    let (second_active, _, second_updated) = credential_times(&server, &second.id).await;
+    assert_eq!((first_active, first_updated), (0, 111_111), "deactivated row keeps its mtime");
+    assert_eq!((second_active, second_updated), (1, 222_222), "activated row keeps its mtime");
+}
+
 /// worktree.updated publishes on a row-owning create (worktree.ts:228).
 #[tokio::test]
 async fn be1_sse_worktree_updated_on_create() {

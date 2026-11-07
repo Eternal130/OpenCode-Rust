@@ -205,8 +205,11 @@ async fn update(
                 .ok();
             let changed = previous.as_deref().is_some_and(|old| old != label);
             tx.execute(
-                "UPDATE credential SET label = ?2, time_updated = ?3 WHERE id = ?1",
-                (credential_id, label, oc_core::database::migrations::now_ms()),
+                // G-117 — ref update's `.set({ label })` writes only the
+                // label column (credential.ts:227-228): `time_updated`
+                // keeps its insert-time value.
+                "UPDATE credential SET label = ?2 WHERE id = ?1",
+                (credential_id, label),
             )?;
             Ok(changed)
         })
@@ -254,8 +257,11 @@ async fn activate(
                 (integration.clone(),),
             )?;
             tx.execute(
-                "UPDATE credential SET active = 1, time_updated = ?2 WHERE id = ?1",
-                (credential_id.clone(), oc_core::database::migrations::now_ms()),
+                // G-117 — ref activate's `.set({ active: true })` writes
+                // only the active column (credential.ts:187):
+                // `time_updated` keeps its insert-time value.
+                "UPDATE credential SET active = 1 WHERE id = ?1",
+                (&credential_id,),
             )?;
             Ok(Some((integration, credential_id)))
         })
