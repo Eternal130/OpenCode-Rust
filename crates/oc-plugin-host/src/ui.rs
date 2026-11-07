@@ -195,6 +195,19 @@ pub enum UiRequest {
         confirm_label: Option<String>,
         cancel_label: Option<String>,
     },
+    /// G-237: `ctx.ui.prompt({title, description?, placeholder?,
+    /// value?})` (api.tsx:367-386) — the generic text-input prompt;
+    /// resolves the typed string on submit, null on any unresolved
+    /// close (`settle` over the same deferred-reply seam as
+    /// alert/confirm).
+    Prompt {
+        request_id: u64,
+        plugin_id: String,
+        title: String,
+        description: Option<String>,
+        placeholder: Option<String>,
+        value: Option<String>,
+    },
 }
 
 impl UiRequest {
@@ -208,7 +221,8 @@ impl UiRequest {
             | UiRequest::DialogOpen { plugin_id, .. }
             | UiRequest::NavigateToPluginRoute { plugin_id, .. }
             | UiRequest::Alert { plugin_id, .. }
-            | UiRequest::Confirm { plugin_id, .. } => plugin_id,
+            | UiRequest::Confirm { plugin_id, .. }
+            | UiRequest::Prompt { plugin_id, .. } => plugin_id,
             UiRequest::NavigateToSession { .. } => "",
         }
     }

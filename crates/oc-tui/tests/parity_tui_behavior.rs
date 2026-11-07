@@ -280,6 +280,108 @@ fn ui_dialog_alert_confirm() {
     assert_eq!(outcome, DialogKeyOutcome::CommandSubmitted("stash.delete".into()));
 }
 
+/// G-237: the generic prompt (`ui/dialog-prompt.tsx` via
+/// `ctx.ui.prompt`, api.tsx:367-386) — the rendered chrome (title,
+/// description above the input, placeholder, the seeded
+/// `initialValue`, the `enter submit` footer), typing appends, return
+/// resolves the UNTRIMMED textarea text exactly once, escape settles
+/// null, and a `submit_command` rides the outcome.
+#[test]
+fn ui_dialog_prompt() {
+    let store = Store::new(Runtime::new());
+
+    // The rendered tree: title + `esc` chrome, the description row
+    // ABOVE the input, the seeded value, the footer.
+    store.open_prompt(
+        "Name the preset",
+        "One-line description",
+        "preset name",
+        "default-x",
+        Some(31),
+        None,
+    );
+    let text = frame_text(&store);
+    for expected in
+        ["Name the preset", "One-line description", "default-x", "enter", "submit", "esc"]
+    {
+        assert!(text.contains(expected), "the prompt renders {expected:?}:\n{text}");
+    }
+
+    // Typing appends to the seeded initialValue (the input pipeline).
+    let outcome = dialog_layer(&store, "q");
+    assert_eq!(outcome, DialogKeyOutcome::Consumed);
+    assert_eq!(
+        store.top_dialog().expect("still open").value, "default-xq",
+        "the char appended after the seeded text"
+    );
+
+    // Return resolves the UNTRIMMED text exactly once (settle-once:
+    // the close hook must not double-resolve), then clears.
+    let outcome = dialog_layer(&store, "return");
+    assert_eq!(outcome, DialogKeyOutcome::Consumed);
+    assert!(store.top_dialog().is_none(), "api.clear() ran on submit");
+    assert_eq!(
+        store.take_ui_dialog_resolutions(),
+        vec![(31, serde_json::Value::String("default-xq".to_owned()))],
+        "submit resolves the typed value once"
+    );
+
+    // The placeholder: an empty value shows the explicit placeholder;
+    // an absent one falls back to the ref's "Enter text".
+    store.open_prompt("Plain", "", "type here", "", Some(32), None);
+    let text = frame_text(&store);
+    assert!(text.contains("type here"), "the explicit placeholder:\n{text}");
+    assert!(!text.contains("Enter text"), "no default while explicit:\n{text}");
+    store.open_prompt("Plain", "", "", "", Some(33), None);
+    // (The 32-prompt was REPLACED by the open above — dialog.replace
+    // settles the replaced prompt unresolved; drain it here so the
+    // later asserts stay exact.)
+    assert_eq!(
+        store.take_ui_dialog_resolutions(),
+        vec![(32, serde_json::Value::Null)],
+        "dialog.replace settles the replaced prompt unresolved"
+    );
+    let text = frame_text(&store);
+    assert!(text.contains("Enter text"), "the ref's default placeholder:\n{text}");
+
+    // Escape settles null (onClose → done(undefined)).
+    let outcome = dialog_layer(&store, "escape");
+    assert_eq!(outcome, DialogKeyOutcome::Closed);
+    assert!(store.top_dialog().is_none());
+    assert_eq!(store.take_ui_dialog_resolutions(), vec![(33, serde_json::Value::Null)]);
+
+    // A submit command rides the outcome after the close (the same
+    // contract as alert/confirm).
+    store.open_prompt("Go", "", "", "", None, Some("preset.apply".into()));
+    let outcome = dialog_layer(&store, "return");
+    assert_eq!(outcome, DialogKeyOutcome::CommandSubmitted("preset.apply".into()));
+    assert!(store.take_ui_dialog_resolutions().is_empty(), "no request id → no resolution");
+
+    // The plugin glue: a drained `ctx.ui.prompt` UiRequest opens the
+    // dialog through the pump's event shape.
+    oc_tui::plugin_ui::apply_plugin_ui(
+        &store,
+        "omos",
+        &oc_tui::plugin_ui::PluginUiEvent::Prompt {
+            request_id: 77,
+            title: "Plugin ask".to_owned(),
+            description: Some("from the guest".to_owned()),
+            placeholder: Some("anything".to_owned()),
+            value: Some("seed".to_owned()),
+        },
+    );
+    match store.top_dialog().expect("the plugin prompt opened").kind {
+        DialogKind::Prompt { title, placeholder, request_id, .. } => {
+            assert_eq!(title, "Plugin ask");
+            assert_eq!(placeholder, "anything");
+            assert_eq!(request_id, Some(77));
+        }
+        other => panic!("unexpected dialog {other:?}"),
+    }
+    let text = frame_text(&store);
+    assert!(text.contains("from the guest"), "the guest description:\n{text}");
+}
+
 /// TUI-TD22: `DialogExperiments` — v2.0.24's EMPTY table renders "No
 /// experiments available"; the toggle writes `experimental.<id>`
 /// through the config sink (proven with an injected row, the port's

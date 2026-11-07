@@ -68,6 +68,16 @@ pub enum PluginUiEvent {
         confirm_label: Option<String>,
         cancel_label: Option<String>,
     },
+    /// G-237: `ctx.ui.prompt({title, description?, placeholder?,
+    /// value?})` — the generic text-input prompt; resolves the typed
+    /// string on submit, null on dismiss.
+    Prompt {
+        request_id: u64,
+        title: String,
+        description: Option<String>,
+        placeholder: Option<String>,
+        value: Option<String>,
+    },
 }
 
 impl PluginUiEvent {
@@ -151,6 +161,19 @@ pub fn apply_plugin_ui(store: &Store, plugin_id: &str, event: &PluginUiEvent) {
                 cancel_label.as_deref().unwrap_or("cancel"),
                 Some(*request_id),
                 None,
+                None,
+            );
+        }
+        // G-237: the generic prompt opens natively; the typed value /
+        // null settles the guest's promise through the same
+        // `request_id` queue.
+        PluginUiEvent::Prompt { request_id, title, description, placeholder, value } => {
+            store.open_prompt(
+                title,
+                description.as_deref().unwrap_or(""),
+                placeholder.as_deref().unwrap_or(""),
+                value.as_deref().unwrap_or(""),
+                Some(*request_id),
                 None,
             );
         }

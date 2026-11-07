@@ -88,6 +88,7 @@ pub fn handle_dialog_key(
                 | DialogKind::IntegrationCode { .. }
                 | DialogKind::BtwPrompt
                 | DialogKind::PluginInstall
+                | DialogKind::Prompt { .. }
         )
     };
     let is_select = match &entry.kind {
@@ -105,6 +106,7 @@ pub fn handle_dialog_key(
         | DialogKind::IntegrationCode { .. }
         | DialogKind::BtwPrompt
         | DialogKind::PluginInstall
+        | DialogKind::Prompt { .. }
         | DialogKind::BtwAnswer { .. }
         | DialogKind::ImagePreview
         | DialogKind::ErrorDetails { .. }
@@ -171,6 +173,7 @@ pub fn handle_dialog_key(
                     | DialogKind::IntegrationCode { .. }
                     | DialogKind::BtwPrompt
                     | DialogKind::PluginInstall
+                    | DialogKind::Prompt { .. }
             );
 
     // -- modal layer (dialog.tsx) -------------------------------------------
@@ -503,6 +506,33 @@ pub fn handle_dialog_key(
         }
     }
 
+    // -- G-237: DialogPrompt's submit (`dialog.prompt.submit`,
+    // dialog-prompt.tsx:44-49/59-63 + api.tsx:377-380): return
+    // resolves with the textarea's plainText (UNtrimmed), settle
+    // once (clear the id BEFORE the close so the close hook never
+    // double-resolves), then `api.clear()`. ----------------------
+    if let DialogKind::Prompt { request_id, submit_command, .. } = &entry.kind {
+        if stroke.key == "return" && !stroke.ctrl && !stroke.alt {
+            if let Some(id) = request_id {
+                store.enqueue_ui_dialog_resolution(
+                    *id,
+                    serde_json::Value::String(entry.value.clone()),
+                );
+                store.update_dialog(|top| {
+                    if let DialogKind::Prompt { request_id, .. } = &mut top.kind {
+                        *request_id = None;
+                    }
+                });
+            }
+            let command = submit_command.clone();
+            store.clear_dialogs();
+            return match command {
+                Some(command) => DialogKeyOutcome::CommandSubmitted(command),
+                None => DialogKeyOutcome::Consumed,
+            };
+        }
+        return DialogKeyOutcome::Consumed;
+    }
     // -- TUI-25: DialogAlert's return ("Confirm alert",
     // dialog-alert.tsx:18-27): onConfirm then dialog.clear. ------
     if let DialogKind::Alert { request_id, confirm_command, .. } = &entry.kind {
@@ -953,6 +983,8 @@ fn option_dialog_records_rows(
         | DialogKind::IntegrationCode { .. }
         // G-29: the plugin install prompt input.
         | DialogKind::PluginInstall
+        // G-237: the generic prompt input.
+        | DialogKind::Prompt { .. }
         // TUI-10/24/25: the custom-key families carry no option rows.
         | DialogKind::ImagePreview
         | DialogKind::ErrorDetails { .. }

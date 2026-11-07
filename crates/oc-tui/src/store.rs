@@ -430,6 +430,21 @@ pub enum DialogKind {
         confirm_command: Option<String>,
         cancel_command: Option<String>,
     },
+    /// G-237: `ui/dialog-prompt.tsx` — the generic text-input prompt
+    /// (`ctx.ui.prompt`, api.tsx:367-386): bold title + `esc` chrome,
+    /// the optional description rows ABOVE the 1-row input, the
+    /// placeholder while empty, `dialog.prompt.submit` (return)
+    /// resolves the guest's promise with the textarea's plainText,
+    /// any close settles it null. `value` seeds the input as the
+    /// dialog entry's `value` (the ref's `initialValue` +
+    /// `gotoLineEnd`).
+    Prompt {
+        title: String,
+        description: String,
+        placeholder: String,
+        request_id: Option<u64>,
+        submit_command: Option<String>,
+    },
     /// TUI-TD22: `DialogExperiments` (`component/dialog-experiments.
     /// tsx`): the experiment select over the (v2.0.24-empty) table;
     /// ←/→/enter toggle `config.experimental.<id>`.
@@ -10303,6 +10318,41 @@ impl Store {
         self.request_redraw();
     }
 
+    /// G-237: open the generic prompt (`ui/dialog-prompt.tsx` — the
+    /// plugin surface's `ctx.ui.prompt`, api.tsx:367-386). `value`
+    /// seeds the input (`initialValue`), an empty `placeholder`
+    /// falls back to the ref's "Enter text"; `request_id` rides the
+    /// `ctx.ui.prompt` promise (submit → the typed string, any close
+    /// → null); `submit_command` runs through the palette dispatcher
+    /// after a native submit.
+    pub fn open_prompt(
+        &self,
+        title: &str,
+        description: &str,
+        placeholder: &str,
+        value: &str,
+        request_id: Option<u64>,
+        submit_command: Option<String>,
+    ) {
+        self.replace_dialog(
+            DialogKind::Prompt {
+                title: title.to_owned(),
+                description: description.to_owned(),
+                placeholder: if placeholder.is_empty() { "Enter text" } else { placeholder }
+                    .to_owned(),
+                request_id,
+                submit_command,
+            },
+            DialogSize::Medium,
+        );
+        // The textarea mounts with `initialValue` + `gotoLineEnd` —
+        // the cursor sits after the seeded text.
+        if !value.is_empty() {
+            self.update_dialog(|top| top.value = value.to_owned());
+        }
+        self.request_redraw();
+    }
+
     /// The confirm dialog's focused pill (`active`).
     #[must_use]
     pub fn confirm_active_is_confirm(&self) -> bool {
@@ -10329,9 +10379,9 @@ impl Store {
     /// alert too since `onConfirm`/`onClose` are the same `done`).
     fn resolve_closing_ui_dialog(&self, kind: &DialogKind, result: serde_json::Value) {
         let request_id = match kind {
-            DialogKind::Alert { request_id, .. } | DialogKind::Confirm { request_id, .. } => {
-                *request_id
-            }
+            DialogKind::Alert { request_id, .. }
+            | DialogKind::Confirm { request_id, .. }
+            | DialogKind::Prompt { request_id, .. } => { *request_id }
             _ => None,
         };
         if let Some(id) = request_id {

@@ -149,6 +149,22 @@ function errText(error) {
   return String(error);
 }
 
+// The deferred ctx.ui dialog promises settle `null` on an unresolved
+// close (api.tsx:318-325's `settle`); the wire renders a null result
+// as {"ok": true} (protocol.rs) — unwrap it back so the guest surface
+// keeps the ref's Promise<… | null> shape.
+function dialogResult(reply) {
+  if (
+    reply !== null &&
+    typeof reply === "object" &&
+    reply.ok === true &&
+    Object.keys(reply).length === 1
+  ) {
+    return null;
+  }
+  return reply;
+}
+
 // The async halves of the pipe-death detection: Bun surfaces some
 // EPIPE/EOF conditions as stream events rather than synchronous write
 // throws. Every one of them is the same fact — the supervisor is gone.
@@ -1630,7 +1646,7 @@ function makeCtx(pluginId, options) {
           pluginId,
           title: String(opts.title ?? ""),
           message: String(opts.message ?? ""),
-        })
+        }).then(dialogResult)
       },
       confirm(options) {
         const opts = options ?? {};
@@ -1643,7 +1659,21 @@ function makeCtx(pluginId, options) {
             confirm: typeof label.confirm === "string" ? label.confirm : null,
             cancel: typeof label.cancel === "string" ? label.cancel : null,
           },
-        })
+        }).then(dialogResult)
+      },
+      // G-237 (v2 api.tsx:367-386): the generic text-input prompt —
+      // resolves the typed string on submit, null on dismiss; the
+      // optional fields cross as null (the TUI applies the ref's
+      // placeholder default "Enter text").
+      prompt(options) {
+        const opts = options ?? {};
+        return hostRequest("ui.prompt", {
+          pluginId,
+          title: String(opts.title ?? ""),
+          description: typeof opts.description === "string" ? opts.description : null,
+          placeholder: typeof opts.placeholder === "string" ? opts.placeholder : null,
+          value: typeof opts.value === "string" ? opts.value : null,
+        }).then(dialogResult)
       },
       sidebar: {
         async setSection(section) {

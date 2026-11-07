@@ -218,6 +218,11 @@ enum Family {
     /// prompt tree titled "Install plugin" over the package-spec
     /// input.
     PluginInstallPrompt,
+    /// G-237: `ui/dialog-prompt.tsx` — the generic prompt tree
+    /// (`ctx.ui.prompt`, api.tsx:367-386): bold title + `esc`
+    /// chrome, the description rows ABOVE the 1-row input, the
+    /// placeholder while empty, the `enter submit` footer.
+    GenericPrompt,
     /// RE-13: `/btw`'s `Answer` dialog (btw.tsx:88-172): the `/btw`
     /// header + question, the markdown answer window, the `c copy /
     /// j/k ↑/↓ scroll` footer.
@@ -415,6 +420,9 @@ fn content_height(inputs: &DialogInputs) -> usize {
         Family::BtwPrompt => 6,
         // G-29: the plugin install prompt — the same prompt tree.
         Family::PluginInstallPrompt => 6,
+        // G-237 (dialog-prompt.tsx:98-145): title, gap, description
+        // rows, gap, input, gap, footer, the footer's pad.
+        Family::GenericPrompt => inputs.hint_lines.len() + 7,
         // title, gap, input, gap, hints, gap, footer, pad.
         Family::ConnectPrompt => inputs.hint_lines.len() + 8,
         // title, gap, wrapped lines, hint paddingBottom, root gap,
@@ -1127,6 +1135,92 @@ fn prompt_builder_titled(
         title_row.into_element(),
         input.margin_top(1.0).into_element(),
         prompt_footer_element(inputs, worktree).margin_top(1.0).into_element(),
+    ]))
+}
+
+/// G-237: the generic prompt tree (`ui/dialog-prompt.tsx:98-145`):
+/// the prompt-family root (paddingLeft/right 2, gap 1) — the bold
+/// DYNAMIC title + `esc` chrome, the description rows ABOVE the
+/// 1-row input (`props.description?.()` seats before the textarea),
+/// the placeholder while empty (default "Enter text"), the
+/// `enter submit` footer (dialog-prompt.tsx:131-140). The cursor
+/// paints `text.base` (the rename input's tone).
+fn generic_prompt_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilder {
+    let title_row = box_().flex_direction("row").justify_content("space-between").children(
+        Children::Static(vec![
+            text()
+                .dyn_prop(
+                    "content",
+                    dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                        styled(vec![chunk(i.title.clone(), i.colors.text, None, 1)])
+                    })),
+                )
+                .into_element(),
+            text()
+                .dyn_prop(
+                    "content",
+                    dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                        styled(vec![chunk("esc".to_owned(), i.colors.muted, None, 0)])
+                    })),
+                )
+                .into_element(),
+        ]),
+    );
+    // The description block (the ref's `props.description?.()`
+    // element) — a For over the hint rows, muted.
+    let lines = ForItemSource {
+        source: map(inputs.clone(), |i: &DialogInputs| {
+            i.hint_lines
+                .iter()
+                .enumerate()
+                .map(|(n, line)| ForItem {
+                    key: format!("P{n}"),
+                    value: PropValue::Str(line.clone()),
+                })
+                .collect::<Vec<ForItem>>()
+        }),
+    };
+    let line_inputs = inputs.clone();
+    let description = for_list(std::rc::Rc::new(lines), move |item: &ForItem, _index: usize| {
+        let line = match &item.value {
+            PropValue::Str(line) => line.clone(),
+            _ => String::new(),
+        };
+        let inputs = line_inputs.clone();
+        text()
+            .dyn_prop(
+                "content",
+                dyn_styled(map(inputs, move |i: &DialogInputs| {
+                    styled(vec![chunk(line.clone(), i.colors.muted, None, 0)])
+                })),
+            )
+            .into_element()
+    });
+    let description_box = box_().children_dyn(std::rc::Rc::new(description));
+    // The input row: placeholder muted / typed value in
+    // text.formfield.base with the block cursor.
+    let input = text().wrap_mode("none").dyn_prop(
+        "content",
+        dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+            let width = i.box_width.saturating_sub(4);
+            if i.prompt_value.is_empty() {
+                styled(vec![chunk(i.placeholder.clone(), i.colors.muted, None, 0)])
+            } else {
+                let typed = take_width(&i.prompt_value, width);
+                let end = display_width(&typed);
+                let mut chunks = vec![chunk(typed, i.colors.formfield_base_fg, None, 0)];
+                if end < width {
+                    chunks.push(chunk(" ".to_owned(), i.colors.surface, Some(i.colors.text), 0));
+                }
+                styled(chunks)
+            }
+        })),
+    );
+    box_().padding_left(2.0).padding_right(2.0).children(Children::Static(vec![
+        title_row.into_element(),
+        description_box.margin_top(1.0).into_element(),
+        input.margin_top(1.0).into_element(),
+        prompt_footer_element(inputs, false).margin_top(1.0).into_element(),
     ]))
 }
 
@@ -1962,6 +2056,7 @@ fn chrome_element(
             "npm package or git specifier",
             false,
         ),
+        Family::GenericPrompt => generic_prompt_builder(&family_inputs),
         Family::BtwAnswer => btw_answer_builder(&family_inputs),
     };
     box_()
@@ -2202,6 +2297,7 @@ fn dialog_chrome_button_hits(
         | Family::Pair
         | Family::BtwPrompt
         | Family::PluginInstallPrompt
+        | Family::GenericPrompt
         | Family::BtwAnswer => ("esc", 2),
         Family::Help => ("esc/enter", 2),
     };
@@ -2253,6 +2349,9 @@ fn build_inputs(
         DialogKind::BtwPrompt => Family::BtwPrompt,
         // G-29: the plugin install prompt.
         DialogKind::PluginInstall => Family::PluginInstallPrompt,
+        // G-237: the generic prompt (`ctx.ui.prompt`) — title,
+        // description and placeholder ride the kind.
+        DialogKind::Prompt { .. } => Family::GenericPrompt,
         DialogKind::BtwAnswer { .. } => Family::BtwAnswer,
         // Lane FINAL: the connect-flow prompts (KeyMethod's API-key
         // input / OAuthCode's code entry) — the prompt tree with a
@@ -2349,6 +2448,51 @@ fn build_inputs(
             btw_window: Vec::new(),
             btw_styled: Vec::new(),
         },
+        // G-237: the generic prompt — title/placeholder/description
+        // from the kind, the typed value from the entry (the
+        // description is one muted row above the input).
+        Family::GenericPrompt => {
+            let DialogKind::Prompt { title, description, placeholder, .. } = &entry.kind else {
+                unreachable!("the GenericPrompt family guard")
+            };
+            DialogInputs {
+                family,
+                box_width,
+                colors,
+                title: title.clone(),
+                placeholder: placeholder.clone(),
+                filter: String::new(),
+                options: Vec::new(),
+                flat: Vec::new(),
+                selected: 0,
+                current: None,
+                flatten: false,
+                destructive: false,
+                window: Vec::new(),
+                actions: Vec::new(),
+                prompt_value: entry.value.clone(),
+                hint_lines: if description.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![description.clone()]
+                },
+                plugin_title: String::new(),
+                plugin_rows: Vec::new(),
+                message: String::new(),
+                confirm_labels: (String::new(), String::new(), true),
+                error_source: String::new(),
+                error_window: Vec::new(),
+                diagnostic: String::new(),
+                preview_title: String::new(),
+                preview_footer: (String::new(), String::new(), String::new()),
+                preview_rows: 0,
+                pair_rows: Vec::new(),
+                pair_split: false,
+                pair_qr: Vec::new(),
+                btw_window: Vec::new(),
+                btw_styled: Vec::new(),
+            }
+        }
         // RE-13: the /btw question prompt — the prompt tree's value
         // arm (title "/btw" + placeholder "Ask anything" are the
         // builder's, btw.tsx:65).
