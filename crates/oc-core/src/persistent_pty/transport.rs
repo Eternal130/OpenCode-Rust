@@ -167,30 +167,72 @@ fn is_executable_file(path: &Path) -> bool {
         && std::fs::metadata(path).is_ok_and(|meta| meta.permissions().mode() & 0o111 != 0)
 }
 
-/// RW-T2: basic validation for the explicit `OPENCODE_PTY_BIN` override.
-///
-/// Scope note: ref `binary.bun.ts` applies sha256/owner/lstat checks to its
-/// *pinned* bun binary — a hash pin over something the distribution itself
-/// shipped. For an explicit user-supplied env override the right scope is
-/// existence + regular file + executable bit with a clear error message; we
-/// deliberately do not hash-pin a path the user explicitly pointed at.
+/// RW-T2 + G-240: validation for the explicit `OPENCODE_PTY_BIN`
+/// override. The ref's `validate()` (binary.bun.ts:69-77) lstats and
+/// rejects symlinks (`!info.isFile() || info.isSymbolicLink()`,
+/// binary.bun.ts:71) and enforces OWNERSHIP — `info.uid !== uid` with
+/// `uid = process.getuid()` (binary.bun.ts:73-75): the owner must be
+/// the CURRENT uid exactly, with no root allowance. A hash pin stays
+/// out of scope for a user-supplied override (RW-T2's note — the ref
+/// pins its own shipped artifact, not an env path), but the lstat +
+/// uid rules apply verbatim.
 pub(crate) fn validate_external_binary(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt as _;
     use std::os::unix::fs::PermissionsExt as _;
-    let meta = std::fs::metadata(path).map_err(|_| {
+    // lstat, not stat: a symlink must be judged AS a symlink (following
+    // it would validate the target instead).
+    let meta = std::fs::symlink_metadata(path).map_err(|_| {
         format!(
             "OPENCODE_PTY_BIN path does not exist: {} — fix or unset the override to fall \
              back to exe-sibling/PATH resolution",
             path.display()
         )
     })?;
-    if !meta.is_file() {
-        return Err(format!("OPENCODE_PTY_BIN is not a regular file: {}", path.display()));
-    }
+    let uid = nix_uid();
+    binary_safety_decision(
+        meta.file_type().is_symlink(),
+        meta.is_file(),
+        u32::try_from(meta.uid()).unwrap_or(u32::MAX),
+        uid,
+    )
+    .map_err(|reason| format!("Unsafe OPENCODE_PTY_BIN executable ({reason}): {}", path.display()))?;
     if meta.permissions().mode() & 0o111 == 0 {
         return Err(format!(
             "OPENCODE_PTY_BIN is not executable (missing +x bit): {}",
             path.display()
         ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn nix_uid() -> u32 {
+    // process.getuid() — the REAL uid, matching binary.bun.ts:72.
+    u32::try_from(unsafe { libc::getuid() }).unwrap_or(u32::MAX)
+}
+
+#[cfg(not(unix))]
+fn nix_uid() -> u32 {
+    u32::MAX
+}
+
+/// G-240 — the pure lstat/ownership decision table (binary.bun.ts:71-75):
+/// symlink → unsafe; not a regular file → unsafe; owner ≠ current uid →
+/// another user's file.
+pub(crate) fn binary_safety_decision(
+    is_symlink: bool,
+    is_file: bool,
+    owner_uid: u32,
+    current_uid: u32,
+) -> Result<(), &'static str> {
+    if is_symlink {
+        return Err("symbolic link");
+    }
+    if !is_file {
+        return Err("not a regular file");
+    }
+    if owner_uid != current_uid {
+        return Err("owned by another user");
     }
     Ok(())
 }
@@ -1979,5 +2021,85 @@ mod tests {
             None => std::env::remove_var("OPENCODE_PTY_BIN"),
         }
         std::env::set_var("PATH", saved_path);
+    }
+}
+
+#[cfg(test)]
+mod g240_tests {
+    use super::*;
+
+    /// G-240 — the ref decision table (binary.bun.ts:71-75): symlinks
+    /// and foreign-owned files are unsafe; same-uid regular files pass.
+    #[test]
+    fn g240_binary_safety_decision_table() {
+        assert_eq!(binary_safety_decision(true, false, 1000, 1000), Err("symbolic link"));
+        // A symlink TO a regular file is still a symlink under lstat.
+        assert_eq!(binary_safety_decision(true, true, 1000, 1000), Err("symbolic link"));
+        assert_eq!(binary_safety_decision(false, false, 1000, 1000), Err("not a regular file"));
+        assert_eq!(binary_safety_decision(false, true, 1000, 1001), Err("owned by another user"));
+        // No root allowance: even uid 0 is rejected for another user's
+        // file (ref compares against getuid() only).
+        assert_eq!(binary_safety_decision(false, true, 1000, 0), Err("owned by another user"));
+        assert_eq!(binary_safety_decision(false, true, 1000, 1000), Ok(()));
+    }
+
+    /// G-240 — a symlink override is rejected (lstat, not the target).
+    #[test]
+    fn g240_symlink_override_rejected() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let real = dir.path().join("oc-pty-real");
+        std::fs::write(&real, "#!/bin/sh\n").expect("write");
+        make_executable(&real);
+        let link = dir.path().join("oc-pty-link");
+        std::os::unix::fs::symlink(&real, &link).expect("symlink");
+        let error = validate_external_binary(&link).expect_err("symlink rejected");
+        assert!(error.contains("symbolic link"), "{error}");
+        // And the resolution falls back to None instead of the bad path.
+        assert_eq!(resolve_binary_path(Some(link.to_str().unwrap()), None, ""), None);
+    }
+
+    /// G-240 — a foreign-owned override is rejected (needs root to stage
+    /// the fixture; skipped otherwise).
+    #[test]
+    fn g240_foreign_owner_override_rejected() {
+        use std::os::unix::fs::MetadataExt as _;
+        if !nix_is_root() {
+            eprintln!("not root; skipping the chown fixture");
+            return;
+        }
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("oc-pty-foreign");
+        std::fs::write(&file, "#!/bin/sh\n").expect("write");
+        make_executable(&file);
+        std::os::unix::fs::chown(&file, Some(1), Some(1)).expect("chown");
+        let meta = std::fs::symlink_metadata(&file).expect("meta");
+        assert_ne!(u32::try_from(meta.uid()).unwrap_or(0), nix_uid());
+        let error = validate_external_binary(&file).expect_err("foreign owner rejected");
+        assert!(error.contains("owned by another user"), "{error}");
+    }
+
+    /// G-240 — the accepted path: same-uid regular executable.
+    #[test]
+    fn g240_accepted_override_resolves() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("oc-pty-good");
+        std::fs::write(&file, "#!/bin/sh\n").expect("write");
+        make_executable(&file);
+        validate_external_binary(&file).expect("valid override");
+        assert_eq!(
+            resolve_binary_path(Some(file.to_str().unwrap()), None, ""),
+            Some(file.clone())
+        );
+    }
+
+    fn make_executable(path: &Path) {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mut permissions = std::fs::metadata(path).expect("meta").permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(path, permissions).expect("chmod");
+    }
+
+    fn nix_is_root() -> bool {
+        nix_uid() == 0
     }
 }
