@@ -1542,3 +1542,208 @@ async fn rollout_wire_probes() {
         assert_eq!(response.json()["_tag"], "SessionNotFoundError", "{label}: {text}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// G-220 — POST /api/experimental/fs/write without `path` is a 400
+// ParseError (ref WriteQuery path: Schema.String required), not a 500.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn g220_fs_write_missing_path_is_400_parse_error() {
+    let server = boot().await;
+    // Missing path: the generated query validation message, kind Query.
+    let response = support::request(
+        server.addr,
+        "POST",
+        "/api/experimental/fs/write",
+        &[("content-type", "application/octet-stream")],
+        b"hello",
+    )
+    .await
+    .expect("raw");
+    assert_eq!(response.status, 400, "missing path must 400: {}", response.text());
+    let envelope = response.json();
+    assert_eq!(envelope["message"], "Missing key\n  at [\"path\"]");
+    assert_eq!(envelope["kind"], "Query");
+    // A valid path still writes (200) — the happy path is unchanged.
+    let response = support::request(
+        server.addr,
+        "POST",
+        "/api/experimental/fs/write?path=g220_probe.txt",
+        &[("content-type", "application/octet-stream")],
+        b"hello",
+    )
+    .await
+    .expect("raw");
+    assert_eq!(response.status, 200, "valid path still writes: {}", response.text());
+}
+
+// ---------------------------------------------------------------------------
+// G-233 — session.move directory error messages carry the `: <dir>`
+// suffix (session.ts:295-301); a missing directory is a payload
+// ParseError 400.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn g233_move_directory_error_messages() {
+    let server = boot().await;
+    let session = create_session(&server.client, "g233 move").await;
+
+    // Missing directory: schema 400 (Payload ParseError).
+    let response = support::request(
+        server.addr,
+        "POST",
+        &format!("/api/session/{session}/move"),
+        &[("content-type", "application/json")],
+        b"{}",
+    )
+    .await
+    .expect("raw");
+    assert_eq!(response.status, 400, "missing directory must 400: {}", response.text());
+    let envelope = response.json();
+    assert_eq!(envelope["message"], "Missing key\n  at [\"directory\"]");
+    assert_eq!(envelope["kind"], "Payload");
+
+    // Nonexistent directory: the ref message with the `: <dir>` suffix.
+    let response = support::request(
+        server.addr,
+        "POST",
+        &format!("/api/session/{session}/move"),
+        &[("content-type", "application/json")],
+        br#"{"directory": "/definitely/not/here-g233"}"#,
+    )
+    .await
+    .expect("raw");
+    assert_eq!(response.status, 400, "nonexistent directory: {}", response.text());
+    let envelope = response.json();
+    assert_eq!(
+        envelope["message"],
+        "Directory does not exist: /definitely/not/here-g233"
+    );
+
+    // A FILE target: "Not a directory: <dir>".
+    let file_target = server.workspace.join("g233_file.txt");
+    std::fs::write(&file_target, "x").expect("file target");
+    let response = support::request(
+        server.addr,
+        "POST",
+        &format!("/api/session/{session}/move"),
+        &[("content-type", "application/json")],
+        format!(r#"{{"directory": {}}}"#, serde_json::to_string(&file_target.display().to_string()).unwrap()).as_bytes(),
+    )
+    .await
+    .expect("raw");
+    assert_eq!(response.status, 400, "file target: {}", response.text());
+    let envelope = response.json();
+    assert_eq!(
+        envelope["message"],
+        format!("Not a directory: {}", file_target.display())
+    );
+}
+
+// ---------------------------------------------------------------------------
+// G-215 — MCP prompts are reachable as `server:prompt` commands; a
+// prompts list_changed reloads the command slice; executing the command
+// prompts the session with the returned message text.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // boots a live stdio MCP fixture + polls the listing
+async fn g215_mcp_prompts_as_commands() {
+    if !bun_available() {
+        eprintln!("bun unavailable; skipping the live MCP fixture");
+        return;
+    }
+    let server = boot().await;
+    let fixture = server.workspace.join("mcp_probe_server.js");
+    std::fs::copy(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mcp_probe_server.js"),
+        &fixture,
+    )
+    .expect("fixture copy");
+    std::fs::write(
+        server.workspace.join("opencode.json"),
+        serde_json::json!({
+            "mcp": {
+                "servers": {
+                    "fixture": {
+                        "type": "local",
+                        "command": [which_bun().expect("bun"), fixture.display().to_string()],
+                    }
+                }
+            }
+        })
+        .to_string(),
+    )
+    .expect("project config");
+    let location = {
+        let mut encoded = String::new();
+        for character in server.workspace.to_string_lossy().chars() {
+            match character {
+                'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' | '/' => {
+                    encoded.push(character);
+                }
+                other => {
+                    let code = other as u32;
+                    let _ = write!(encoded, "%{code:02X}");
+                }
+            }
+        }
+        format!("location%5Bdirectory%5D={encoded}")
+    };
+
+    // Initial registration + the list_changed reload both land in the
+    // command listing (the second prompt only arrives through the
+    // prompts.changed → re-sync chain).
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let body = loop {
+        assert!(std::time::Instant::now() < deadline, "fixture prompt commands did not appear");
+        let response = server.raw(&format!("/api/command?{location}")).await;
+        assert_eq!(response.status, 200, "command list: {}", response.text());
+        let body = response.json();
+        let names: Vec<&str> = body["data"]
+            .as_array()
+            .map(|rows| rows.iter().filter_map(|row| row["name"].as_str()).collect())
+            .unwrap_or_default();
+        if names.contains(&"fixture:code_review") && names.contains(&"fixture:deploy") {
+            break body;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    };
+    let listing = body["data"].as_array().expect("data");
+    let greet = listing
+        .iter()
+        .find(|row| row["name"] == "fixture:code_review")
+        .expect("prompt command registered");
+    assert_eq!(greet["description"], "Review the code");
+
+    // Execution: positional input wires into the prompt's declared
+    // arguments (`who`), and the returned message text becomes the
+    // session prompt.
+    let session = create_session(&server.client, "g215 mcp command").await;
+    let response = support::request(
+        server.addr,
+        "POST",
+        &format!("/api/session/{session}/command"),
+        &[("content-type", "application/json")],
+        br#"{"name": "fixture:code_review", "text": "world"}"#,
+    )
+    .await
+    .expect("raw");
+    assert_eq!(response.status, 204, "mcp command executes: {}", response.text());
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let response = server.raw(&format!("/api/session/{session}/message")).await;
+        assert_eq!(response.status, 200, "messages: {}", response.text());
+        if response.text().contains("hello world") {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "prompted text did not appear; messages: {}",
+            response.text()
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+}
