@@ -672,6 +672,9 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
         | DialogKind::WorktreeName
         | DialogKind::BtwPrompt
         | DialogKind::PluginInstall
+        // G-237: the generic prompt renders its own tree (the kind
+        // carries title/placeholder/description).
+        | DialogKind::Prompt { .. }
         | DialogKind::BtwAnswer { .. } => SelectProps::new("", Vec::new()),
         DialogKind::Plugin { id } => {
             // The delegation payload: plugin-supplied options at open

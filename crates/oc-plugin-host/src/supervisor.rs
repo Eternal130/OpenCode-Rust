@@ -595,11 +595,11 @@ impl Shared {
             "ui.toast.show" | "ui.sidebar.section" | "ui.footer.hint" | "ui.dialog.open" => {
                 Some(answer_ui_runtime(self, id, method, params))
             }
-            // -- TUI-25: `ctx.ui.alert` / `ctx.ui.confirm` — the
-            // reply is DEFERRED until the embedder resolves the
-            // dialog (the guest's promise settles on it); the request
-            // id rides the queue.
-            "ui.alert" | "ui.confirm" => answer_ui_dialog(self, id, method, params),
+            // -- TUI-25: `ctx.ui.alert` / `ctx.ui.confirm` / (G-237)
+            //    `ctx.ui.prompt` — the reply is DEFERRED until the
+            //    embedder resolves the dialog (the guest's promise
+            //    settles on it); the request id rides the queue.
+            "ui.alert" | "ui.confirm" | "ui.prompt" => answer_ui_dialog(self, id, method, params),
             // -- the v2 TUI-plugin slot surface (beta.13 bug 1): the
             //    flagship's sidebar_content registration + its
             //    rerender asks. Both spawn the bounded materialize
@@ -1474,6 +1474,17 @@ fn answer_ui_dialog(shared: &Shared, id: u64, method: &str, params: &Value) -> O
             message,
             confirm_label: label_at("confirm"),
             cancel_label: label_at("cancel"),
+        },
+        // G-237: `ctx.ui.prompt` (api.tsx:367-386) — the optional
+        // description/placeholder/value fields cross as null when
+        // absent (the TUI applies the ref's defaults).
+        "ui.prompt" => UiRequest::Prompt {
+            request_id: id,
+            plugin_id,
+            title,
+            description: params.get("description").and_then(Value::as_str).map(str::to_owned),
+            placeholder: params.get("placeholder").and_then(Value::as_str).map(str::to_owned),
+            value: params.get("value").and_then(Value::as_str).map(str::to_owned),
         },
         other => {
             return Some(protocol::error_response(id, &format!("unknown ui method {other:?}")));

@@ -117,6 +117,16 @@ fn to_ui_event(request: &UiRequest) -> PluginUiEvent {
                 cancel_label: cancel_label.clone(),
             }
         }
+        // G-237: the deferred prompt request's conversion.
+        UiRequest::Prompt { request_id, title, description, placeholder, value, .. } => {
+            PluginUiEvent::Prompt {
+                request_id: *request_id,
+                title: title.clone(),
+                description: description.clone(),
+                placeholder: placeholder.clone(),
+                value: value.clone(),
+            }
+        }
         UiRequest::NavigateToPluginRoute { name, data, .. } => {
             PluginUiEvent::NavigateToPluginRoute { name: name.clone(), data: data.clone() }
         }
