@@ -212,14 +212,19 @@ impl MiniSettings {
     /// The transport-fold gate (stream-v2.transport.ts:870,1219 —
     /// `input.thinking`; :682 `showTools()`): whether one folded
     /// scrollback commit renders. Reasoning commits need
-    /// `thinking=show`; tool commits need `tools=show`; everything
-    /// else always flows.
+    /// `thinking=show`; tool commits need `tools=show` (the DIRECT-
+    /// shell rows always flow — the ref's shell writes are not
+    /// `showTools()`-gated, transport.ts:1125-1164); the skill rows
+    /// follow the tools gate at the write site (transport.ts:612,
+    /// :1083 — the `tool: "skill"` marker); everything else always
+    /// flows.
     #[must_use]
     pub fn commit_visible(&self, commit: &super::scrollback::Commit) -> bool {
         use super::scrollback::CommitKind;
         match commit.kind {
             CommitKind::Reasoning => self.thinking,
-            CommitKind::Tool => self.tools,
+            CommitKind::Tool => commit.shell.is_some() || self.tools,
+            CommitKind::System if commit.tool.as_deref() == Some("skill") => self.tools,
             _ => true,
         }
     }
@@ -357,6 +362,9 @@ pub async fn run(input: MiniInput) -> Result<i32, String> {
     // unreachable server must not wedge the composer).
     let _ = tokio::time::timeout(Duration::from_secs(5), stream_ready_rx).await;
 
+    // G-221 — the replay's inbox seed already synced the pane; the
+    // dirty-check anchor starts there (`syncPending`).
+    let queued_synced = transport.pending_prompts().len();
     let mut runtime = Runtime {
         lifecycle,
         keys: crate::input_term::KeyPipeline::new(),
@@ -381,6 +389,7 @@ pub async fn run(input: MiniInput) -> Result<i32, String> {
         directory: input.target.directory.clone(),
         replay_limit: input.replay_limit,
         needs_hydrate: false,
+        queued_synced,
         boot_target,
         variants,
         active_variant,
@@ -475,6 +484,9 @@ struct Runtime {
     /// G-181④ — a reconnect notice arrived (the hydrate replay is
     /// due on the next loop step).
     needs_hydrate: bool,
+    /// G-221 — the last footer-synced pending-prompt count
+    /// (`syncPending`'s dirty check, transport.ts:582-590).
+    queued_synced: usize,
     /// G-181① — the resolved target's model (`state.model ??
     /// state.defaultModel`, runtime.ts:294) the variant cycle edits.
     boot_target: Option<super::model_pref::ModelPreferenceModel>,
@@ -648,7 +660,29 @@ impl Runtime {
                     self.shown = true;
                     self.lifecycle.append(commit);
                 }
+                // G-221 — a multi-row event renders row-for-row
+                // through the same gates (`write(commits)`,
+                // stream-v2.transport.ts).
+                Fold::Commits(commits) => {
+                    for commit in commits {
+                        if !self.settings.commit_visible(&commit) {
+                            continue;
+                        }
+                        self.shown = true;
+                        self.lifecycle.append(commit);
+                    }
+                }
                 Fold::Idle => {}
+            }
+            // G-221 — `syncPending` (transport.ts:582-590): the
+            // footer's `queued.prompts` view follows the transport's
+            // pending list after every event (the dirty-check push —
+            // the statusline's `N pending` group, footer.view.tsx:
+            // 246).
+            let queued = self.transport.pending_prompts().len();
+            if queued != self.queued_synced {
+                self.queued_synced = queued;
+                self.lifecycle.pane.queued_pending = queued;
             }
             if self.transport.is_terminated() {
                 self.turn_idle = true;
@@ -704,6 +738,10 @@ impl Runtime {
                             self.shown = false;
                             self.turn_idle = false;
                             self.lifecycle.pane.subagent_children = Vec::new();
+                            // G-221 — the fresh session's inbox view
+                            // starts empty (the transport was reset).
+                            self.queued_synced = 0;
+                            self.lifecycle.pane.queued_pending = 0;
                             // `footer.append({ kind: "system", text:
                             // `new session ${sessionID}` })`.
                             self.lifecycle
@@ -866,6 +904,18 @@ async fn replay_history(
             lifecycle.append(commit);
         }
     }
+    // G-221 — the hydrate's inbox seed (`client.session.inbox.list`,
+    // transport.ts:955-977): the pending list lands in the transport
+    // (a later `delivered` knows the row's text) and the footer's
+    // `queued.prompts` view syncs (`syncPending`).
+    if let Ok(items) = client.session().inbox().list(session_id).await {
+        let values = items
+            .iter()
+            .filter_map(|item| serde_json::to_value(item).ok())
+            .collect::<Vec<_>>();
+        transport.seed_pending(&values);
+        lifecycle.pane.queued_pending = transport.pending_prompts().len();
+    }
 }
 
 /// `renderMessage` (transport.ts:802-899): one projected message →
@@ -886,6 +936,9 @@ fn replay_message_commits(
     fn text(part: &Value) -> &str {
         part.get("text").and_then(Value::as_str).unwrap_or_default()
     }
+    fn text_field_of(value: &Value, key: &str) -> String {
+        value.get(key).and_then(Value::as_str).unwrap_or_default().to_owned()
+    }
     let mut commits = Vec::new();
     let parts = value.get("parts").and_then(Value::as_array).cloned().unwrap_or_default();
     let kind = value.get("type").and_then(Value::as_str).unwrap_or_default();
@@ -898,20 +951,56 @@ fn replay_message_commits(
         .unwrap_or_else(|| format!("replay:{fallback_index}"));
 
     if kind == "user" || role == "user" {
-        // `renderUser` (transport.ts:600-616): the text row, then the
-        // image files' commits.
+        // `renderUser` (transport.ts:600-618): the skill rows, the
+        // text row (once per message — the `visible` guard), then the
+        // image files' commits. G-221 — the skill rows ride the
+        // queued-prompt seam (`skillCommits`, transport.ts:612).
         let joined = parts
             .iter()
             .filter(|part| part.get("type").and_then(Value::as_str) == Some("text"))
             .map(|part| text(part).to_owned())
             .collect::<Vec<_>>()
             .join("\n");
-        if !joined.trim().is_empty() {
-            commits.push(Commit::user(&joined));
-        }
+        let skills = value
+            .get("skills")
+            .and_then(Value::as_array)
+            .map(|skills| {
+                skills
+                    .iter()
+                    .map(|skill| super::transport::QueuedSkill {
+                        id: text_field_of(skill, "id"),
+                        name: text_field_of(skill, "name"),
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let prompt = super::transport::QueuedPrompt {
+            message_id: message_id.clone(),
+            text: joined,
+            delivery: String::new(),
+            skills,
+        };
+        commits.extend(transport.render_user_rows(&prompt));
         let files = value.get("files").and_then(Value::as_array).cloned().unwrap_or_default();
         commits.extend(transport.commit_user_images(&message_id, &files));
         return commits;
+    }
+
+    // G-221 — the non-assistant transcript arms (`renderMessage`,
+    // transport.ts:769-841): skill / shell / compaction messages.
+    if matches!(kind, "skill" | "shell" | "compaction") {
+        match kind {
+            "skill" => {
+                commits.extend(transport.replay_skill_message(&message_id, &text_field_of(value, "name")));
+            }
+            "shell" => {
+                commits.extend(transport.replay_shell_message(value));
+            }
+            _ => {
+                commits.extend(transport.replay_compaction_message(value));
+            }
+        }
+        return commits.into_iter().filter(|commit| settings.commit_visible(commit)).collect();
     }
 
     // The assistant walk (transport.ts:846-881): per-part projections

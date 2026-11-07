@@ -44,6 +44,12 @@ pub struct Commit {
     /// Patch/Task render their card (title + body rows) instead of
     /// the caption row; `None` keeps the caption subset.
     pub snapshot: crate::mini::tool_snapshot::ToolSnapshot,
+    /// G-221 — `StreamCommit["shell"]` (`{ command }` on direct-shell
+    /// commits, stream-v2.transport.ts:339-352): the `commit.shell`
+    /// render branch keys on it (`$ command` on start, the merged
+    /// output on progress — `toolEntryBody`'s first branch,
+    /// tool.ts:1282-1294). `None` on every other commit.
+    pub shell: Option<String>,
 }
 
 /// `StreamCommit["kind"]` (the text subset).
@@ -211,9 +217,29 @@ pub fn entry_body(commit: &Commit) -> Vec<String> {
 /// final row always render — v2 gates only the live output body).
 #[must_use]
 pub fn entry_body_with(commit: &Commit, shell_output: bool) -> Vec<String> {
+    let raw = commit.text.replace("\r\n", "\n").replace('\r', "\n");
+    // G-221 — `toolEntryBody`'s `commit.shell` branch (tool.ts:1282-
+    // 1294): the DIRECT-shell rows — `$ command` on start, the merged
+    // output body on progress, the error text on the error final. The
+    // branch sits ABOVE the `mini.shell_output` check in the ref (the
+    // knob gates only TOOL-CALL shell rows), so direct-shell output
+    // always renders.
+    if let Some(command) = commit.shell.as_deref() {
+        if commit.phase == Phase::Start {
+            return vec![format!("$ {command}")];
+        }
+        if commit.phase == Phase::Progress {
+            return shell_output_rows(command, &raw);
+        }
+        if commit.tool_state == Some("error") {
+            return split_rows(&raw);
+        }
+        return Vec::new();
+    }
     if !shell_output
         && commit.kind == CommitKind::Tool
         && commit.phase == Phase::Progress
+        && commit.shell.is_none()
         && commit.tool.as_deref().is_some_and(|tool| canonical_tool_name(tool) == "shell")
     {
         return Vec::new();
@@ -221,7 +247,6 @@ pub fn entry_body_with(commit: &Commit, shell_output: bool) -> Vec<String> {
     if commit.summary {
         return Vec::new();
     }
-    let raw = commit.text.replace("\r\n", "\n").replace('\r', "\n");
     let rows: Vec<String> = if commit.compaction {
         vec![raw.trim().to_owned()]
     } else {
@@ -299,6 +324,23 @@ fn tool_rows(commit: &Commit, raw: &str) -> Vec<String> {
 
 fn split_rows(raw: &str) -> Vec<String> {
     raw.split('\n').map(str::to_owned).collect()
+}
+
+/// `shellOutput` (mini/tool.ts:1264-1275): the merged output body —
+/// leading/trailing newlines trimmed; a known command starts the body
+/// on a fresh row (`\n` + body, i.e. a leading blank row); an empty
+/// body renders nothing.
+fn shell_output_rows(command: &str, raw: &str) -> Vec<String> {
+    let body = raw.trim_matches('\n');
+    if body.is_empty() {
+        return Vec::new();
+    }
+    if command.is_empty() {
+        return split_rows(body);
+    }
+    let mut rows = vec![String::new()];
+    rows.extend(split_rows(body));
+    rows
 }
 
 /// `format_commit`: the full scrollback rows for one commit — the
@@ -494,6 +536,59 @@ mod tests {
         assert_eq!(styled.text, "Build · gpt-5 · 3s");
     }
 }
+
+    /// G-221 — the direct-shell rows (`toolEntryBody`'s
+    /// `commit.shell` branch, tool.ts:1282-1294): start renders
+    /// `$ command`, progress renders the merged output (leading blank
+    /// row when the command is known, trimmed edges, empty →
+    /// nothing), the error final renders the error text — and the
+    /// `mini.shell_output` knob NEVER gates these (the ref's knob
+    /// branch sits below the `commit.shell` one), while a TOOL-CALL
+    /// shell progress row still hides.
+    #[test]
+    fn direct_shell_rows_render_the_command_and_output() {
+        let shell = |text: &str, phase: Phase, state: Option<&'static str>| Commit {
+            kind: CommitKind::Tool,
+            tool: Some("shell".to_owned()),
+            shell: Some("echo hi".to_owned()),
+            part_id: Some("shell:shl_1".to_owned()),
+            text: text.to_owned(),
+            phase,
+            tool_state: state,
+            ..Commit::default()
+        };
+        assert_eq!(entry_body(&shell("running shell", Phase::Start, Some("running"))), vec!["$ echo hi"]);
+        assert_eq!(
+            entry_body(&shell("hi\n", Phase::Progress, Some("completed"))),
+            vec![String::new(), "hi".to_owned()],
+            "the output starts below the command row"
+        );
+        assert_eq!(entry_body(&shell("\n\nhi\n\n", Phase::Progress, None)), vec![String::new(), "hi".to_owned()]);
+        assert_eq!(
+            entry_body(&shell("", Phase::Progress, None)),
+            Vec::<String>::new(),
+            "an empty body renders nothing"
+        );
+        assert_eq!(
+            entry_body(&shell("Shell exited with code 3", Phase::Final, Some("error"))),
+            vec!["Shell exited with code 3"]
+        );
+        // The knob: direct-shell output always renders; the
+        // TOOL-CALL (bash) progress row still hides.
+        assert_eq!(
+            entry_body_with(&shell("hi\n", Phase::Progress, None), false),
+            vec![String::new(), "hi".to_owned()]
+        );
+        let bash = Commit {
+            kind: CommitKind::Tool,
+            tool: Some("bash".to_owned()),
+            phase: Phase::Progress,
+            text: "raw output".to_owned(),
+            ..Commit::default()
+        };
+        assert!(entry_body_with(&bash, false).is_empty());
+        assert_eq!(entry_body_with(&bash, true), vec!["raw output"]);
+    }
 
     // -- G-134 ---------------------------------------------------------
 
