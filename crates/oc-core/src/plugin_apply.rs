@@ -422,12 +422,14 @@ impl crate::tool::websearch_providers::SearchProvider for GuestWebSearchProvider
             .map_err(|message| crate::tool::websearch_providers::ProviderError {
                 status: None,
                 message,
+                retry_after: None,
             })?;
         let results = reply.get("results").cloned().unwrap_or(serde_json::Value::Null);
         serde_json::from_value::<Vec<oc_schema::misc::WebSearchResult>>(results).map_err(|error| {
             crate::tool::websearch_providers::ProviderError {
                 status: None,
                 message: format!("guest websearch provider {}: {error}", self.id),
+                retry_after: None,
             }
         })
     }
