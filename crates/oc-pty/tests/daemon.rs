@@ -788,7 +788,8 @@ async fn terminal_ops_round_trip_with_v1_checkpoint() {
 }
 
 // ---------------------------------------------------------------------------
-// §3.1: bus_event owner frames (incl. zero-subscriber exit)
+// §3.1: bus_event owner frames (G-229②: zero-subscriber exits KEEP the
+// entry — removeVisibleExit — while explicit terminate publishes removed)
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -809,16 +810,15 @@ async fn bus_events_flow_to_the_owner_including_zero_subscriber_exit() {
         WireResponse::Owned
     ));
 
-    // Zero subscribers: create a short-lived child; the machine's exit
-    // pump fires the owner `bus_event{persistent-pty.removed}` (I13).
+    // G-229② (ref index.ts:311-324 removeVisibleExit): a ZERO-subscriber
+    // child exits and KEEPS its exited entry — `added` arrives, `removed`
+    // must NOT (the entry settles Exited in the terminals listing).
     let mut one_shot = Client::connect(&registration).await.expect("one-shot conn");
     let id = terminal_number(&one_shot.request(create_request("true", "ses_bus")).await);
-    drop(one_shot);
 
     let mut saw_added = false;
-    let mut saw_removed = false;
     let deadline = Instant::now() + Duration::from_secs(15);
-    while !(saw_added && saw_removed) {
+    while !saw_added {
         assert!(Instant::now() < deadline, "bus events did not arrive");
         match owner.next_stream_frame().await {
             StreamFrame::Owner(wire::OwnerFrame::BusEvent { event, data }) => {
@@ -829,9 +829,9 @@ async fn bus_events_flow_to_the_owner_including_zero_subscriber_exit() {
                         assert_eq!(data["terminal"]["id"], format!("pty_persistent_{id}"));
                     }
                     "persistent-pty.removed" => {
-                        saw_removed = true;
-                        assert_eq!(data["sessionID"], "ses_bus");
-                        assert_eq!(data["ptyID"], format!("pty_persistent_{id}"));
+                        panic!(
+                            "unattached exit must NOT publish removed (G-229②): {data}"
+                        );
                     }
                     other => panic!("unexpected bus event: {other}"),
                 }
@@ -839,7 +839,24 @@ async fn bus_events_flow_to_the_owner_including_zero_subscriber_exit() {
             other => panic!("expected bus_event frame, got {other:?}"),
         }
     }
-    assert!(saw_added && saw_removed, "zero-subscriber exit fired the removed event");
+    // The entry settles Exited and stays listed (no removal).
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let terminals = one_shot.request(WireRequest::List).await;
+        let WireResponse::Terminals { terminals } = terminals else {
+            panic!("terminals response");
+        };
+        let row = terminals.iter().find(|row| row.id == id).expect("exited entry retained");
+        if matches!(row.lifecycle, wire::WireLifecycle::Exited { .. }) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "child never settled exited");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    // Grace: no removed for the unattached id after the settle.
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    // (Any removed frame arriving now would fail the panic arm above on
+    // the next stream read; the terminate half below drains the stream.)
 
     // Explicit terminate also publishes removed to the owner.
     let mut worker = Client::connect(&registration).await.expect("worker conn");
@@ -863,6 +880,7 @@ async fn bus_events_flow_to_the_owner_including_zero_subscriber_exit() {
 
     shutdown(&mut owner, daemon).await;
     let _ = worker.stream.shutdown().await;
+    let _ = one_shot.stream.shutdown().await;
 }
 
 // ---------------------------------------------------------------------------
