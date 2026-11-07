@@ -80,6 +80,23 @@ fn is_executable_file(path: &Path) -> bool {
         .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
 }
 
+/// G-116③ — the pure Git-Bash decision (ref select.ts:125-132): the
+/// explicit override wins; otherwise derive from the resolved git
+/// executable's path (`<git>/../../bin/bash.exe`, stat-size checked by
+/// the caller on win32).
+#[must_use]
+#[cfg_attr(all(not(windows), not(test)), allow(dead_code))] // win32 discovery path
+pub(crate) fn gitbash_from(explicit: Option<&str>, git_executable: Option<&str>) -> Option<String> {
+    if let Some(explicit) = explicit {
+        return Some(explicit.to_string());
+    }
+    let git = git_executable?;
+    // The ref joins literally (`git/../../bin/bash.exe`) and lets the
+    // stat resolve the `..` segments (select.ts:130).
+    let bash = Path::new(git).join("..").join("..").join("bin").join("bash.exe");
+    Some(bash.to_string_lossy().into_owned())
+}
+
 fn stat_file(file: &str) -> Option<std::fs::Metadata> {
     std::fs::metadata(file).ok().filter(std::fs::Metadata::is_file)
 }
@@ -121,6 +138,16 @@ fn select(file: Option<&str>, compatible_only: bool) -> Option<String> {
     if let Some(file) = file {
         if !compatible_only || compatible(file) {
             if let Some(shell) = executable(file) {
+                // G-116③ (ref select.ts `full()`, :63-72): on win32 a
+                // resolved bash prefers the Git-for-Windows bash
+                // (`gitbash()` honors OPENCODE_GIT_BASH_PATH).
+                // ref: win32-only, unverifiable on this target.
+                #[cfg(windows)]
+                if name(&shell) == "bash" {
+                    if let Some(bash) = gitbash() {
+                        return Some(bash);
+                    }
+                }
                 return Some(shell);
             }
         }
@@ -133,6 +160,28 @@ fn select(file: Option<&str>, compatible_only: bool) -> Option<String> {
     {
         None
     }
+}
+
+/// G-116③ (ref select.ts:125-132 `gitbash`): the configured Git Bash
+/// (OPENCODE_GIT_BASH_PATH — the boot wires it from the server's
+/// `windows.gitbash`), else `<git>/../../bin/bash.exe` when git is on
+/// PATH and that bash exists. ref: win32-only, unverifiable on this
+/// target.
+#[cfg(windows)]
+fn gitbash() -> Option<String> {
+    let explicit = std::env::var("OPENCODE_GIT_BASH_PATH").ok().filter(|value| !value.is_empty());
+    if let Some(explicit) = explicit {
+        return Some(explicit);
+    }
+    let git = find_executable("git")?;
+    let bash = gitbash_from(None, Some(&git))?;
+    // ref select.ts:131 `if (stat(file)?.size) return file`.
+    gitbash_stat(&bash).map(|_| bash)
+}
+
+#[cfg(windows)]
+fn gitbash_stat(file: &str) -> Option<u64> {
+    std::fs::metadata(file).ok().map(|meta| meta.len()).filter(|size| *size > 0)
 }
 
 #[cfg(windows)]
@@ -309,5 +358,24 @@ mod tests {
             args("pwsh", "Write-Output hi"),
             vec!["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "Write-Output hi"]
         );
+    }
+}
+
+#[cfg(test)]
+mod g116_tests {
+    use super::gitbash_from;
+
+    /// G-116③ — the Git-Bash derivation decision table (ref
+    /// select.ts:125-132): explicit override wins; otherwise
+    /// `<git>/../../bin/bash.exe`; no git → None.
+    #[test]
+    fn g116_gitbash_derivation() {
+        assert_eq!(gitbash_from(Some("C:/tools/bash.exe"), None), Some("C:/tools/bash.exe".into()));
+        assert_eq!(
+            gitbash_from(None, Some("C:/Program Files/Git/cmd/git.exe")),
+            Some("C:/Program Files/Git/cmd/git.exe/../../bin/bash.exe".into())
+        );
+        assert_eq!(gitbash_from(None, Some("git")), Some("git/../../bin/bash.exe".into()));
+        assert_eq!(gitbash_from(None, None), None);
     }
 }

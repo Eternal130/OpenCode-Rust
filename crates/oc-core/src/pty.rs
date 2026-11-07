@@ -129,16 +129,46 @@ struct Subscriber {
 }
 
 impl Subscriber {
-    fn deliver_pending(&mut self) {
+    /// (G-116②) Invokes one data callback; `true` = the callback
+    /// panicked (caller removes the subscriber, ref pty.ts:206-212).
+    fn call_on_data(&mut self, chunk: &str) -> bool {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (self.on_data)(chunk))).is_err()
+    }
+
+    /// (G-116②) Invokes the end callback; panics are swallowed + logged
+    /// (the subscriber is on its way out either way).
+    fn call_on_end(&mut self, exit_code: Option<i32>) {
+        let on_end = std::mem::replace(&mut self.on_end, noop_end());
+        if let Err(panic) =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| on_end(exit_code)))
+        {
+            eprintln!("[pty] subscriber end callback panicked ({})", panic_description(&*panic));
+        }
+    }
+
+    /// (G-116②) Returns whether any callback panicked — the caller
+    /// removes the offender (ref activate try/catch, pty.ts:299-301).
+    fn deliver_pending(&mut self) -> bool {
         self.active = true;
         let pending = std::mem::take(&mut self.pending);
+        let mut panicked = false;
         for chunk in pending {
-            (self.on_data)(&chunk);
+            panicked |= self.call_on_data(&chunk);
+            if panicked {
+                break;
+            }
         }
-        if let Some(exit_code) = self.end.take() {
-            let on_end = std::mem::replace(&mut self.on_end, noop_end());
-            on_end(exit_code);
+        if !panicked {
+            if let Some(exit_code) = self.end.take() {
+                panicked = self.call_on_end_raw(exit_code);
+            }
         }
+        panicked
+    }
+
+    fn call_on_end_raw(&mut self, exit_code: Option<i32>) -> bool {
+        let on_end = std::mem::replace(&mut self.on_end, noop_end());
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| on_end(exit_code))).is_err()
     }
 }
 
@@ -161,6 +191,29 @@ enum ChildEvent {
     Exit(Option<i32>),
 }
 
+/// G-116① — UTF-16 code units of a string (JS `string.length`).
+fn utf16_units(text: &str) -> usize {
+    text.chars().map(char::len_utf16).sum()
+}
+
+/// G-116③ — the win32 UTF-8 locale overrides (pty.ts:178-180). Pure so
+/// the table is testable on every target; the injection itself is
+/// `#[cfg(windows)]` at the spawn site.
+pub(crate) fn win32_utf8_locale_overrides() -> [(&'static str, &'static str); 3] {
+    [("LC_ALL", "C.UTF-8"), ("LC_CTYPE", "C.UTF-8"), ("LANG", "C.UTF-8")]
+}
+
+/// G-116② — a compact panic payload description for the seam log.
+fn panic_description(panic: &(dyn std::any::Any + Send)) -> &str {
+    if let Some(text) = panic.downcast_ref::<&str>() {
+        text
+    } else if let Some(text) = panic.downcast_ref::<String>() {
+        text
+    } else {
+        "unknown panic"
+    }
+}
+
 struct Inner {
     sessions: Mutex<HashMap<PtyId, Session>>,
     exit_order: Mutex<Vec<PtyId>>,
@@ -173,19 +226,43 @@ impl Inner {
     fn on_data(&self, id: &PtyId, chunk: &str) {
         let mut sessions = self.sessions.lock();
         let Some(session) = sessions.get_mut(id) else { return };
-        session.cursor += chunk.len();
-        for subscriber in session.subscribers.values_mut() {
-            if subscriber.active {
-                (subscriber.on_data)(chunk);
-            } else {
+        // G-116① — the ref counts JS string length = UTF-16 code units
+        // (pty.ts:206 `session.cursor += chunk.length`); byte counts
+        // drift on CJK/emoji output.
+        session.cursor += utf16_units(chunk);
+        // G-116② — one panicking subscriber must not unwind the reader
+        // thread (the stream would silently die); catch, drop the
+        // offender, keep serving the rest (pty.ts:206-212 try/catch +
+        // `subscribers.delete(token)`).
+        let mut panicked = Vec::new();
+        for (token, subscriber) in session.subscribers.iter_mut() {
+            if !subscriber.active {
                 subscriber.pending.push(chunk.to_string());
+                continue;
             }
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                (subscriber.on_data)(chunk);
+            }));
+            if let Err(panic) = result {
+                eprintln!(
+                    "[pty] subscriber {token} panicked on data ({}); removing",
+                    panic_description(&*panic)
+                );
+                panicked.push(*token);
+            }
+        }
+        for token in panicked {
+            session.subscribers.remove(&token);
         }
         session.buffer.push_str(chunk);
         if session.buffer.len() > BUFFER_LIMIT {
-            let excess = session.buffer.len() - BUFFER_LIMIT;
-            session.buffer.drain(..excess);
-            session.buffer_cursor += excess;
+            let excess_bytes = session.buffer.len() - BUFFER_LIMIT;
+            // The buffer cursor moves by the UTF-16 length of the bytes
+            // drained (same unit as `cursor`).
+            let excess_units: usize =
+                session.buffer.as_str()[..excess_bytes].chars().map(char::len_utf16).sum();
+            session.buffer.drain(..excess_bytes);
+            session.buffer_cursor += excess_units;
         }
     }
 
@@ -204,8 +281,9 @@ impl Inner {
         let mut ended = std::mem::take(&mut session.ended);
         for (token, mut subscriber) in session.subscribers.drain() {
             if subscriber.active {
-                let on_end = std::mem::replace(&mut subscriber.on_end, noop_end());
-                on_end(exit_code);
+                // G-116② — a panicking end callback must not unwind the
+                // exit pump.
+                subscriber.call_on_end(exit_code);
             } else {
                 subscriber.end = Some(exit_code);
                 ended.insert(token, subscriber);
@@ -227,14 +305,12 @@ impl Inner {
         let exit_code = session.info.exit_code;
         for (_, mut subscriber) in session.subscribers.drain() {
             if subscriber.active {
-                let on_end = std::mem::replace(&mut subscriber.on_end, noop_end());
-                on_end(exit_code);
+                subscriber.call_on_end(exit_code); // G-116②
             }
         }
         for (_, mut subscriber) in session.ended.drain() {
             if subscriber.active {
-                let on_end = std::mem::replace(&mut subscriber.on_end, noop_end());
-                on_end(exit_code);
+                subscriber.call_on_end(exit_code); // G-116②
             } else {
                 subscriber.end = Some(exit_code);
                 subscriber.deliver_pending();
@@ -259,14 +335,18 @@ impl Inner {
         let mut sessions = self.sessions.lock();
         let Some(session) = sessions.get_mut(id) else { return };
         if let Some(subscriber) = session.subscribers.get_mut(&token) {
-            if !subscriber.active && !subscriber.detached {
-                subscriber.deliver_pending();
+            if !subscriber.active && !subscriber.detached && subscriber.deliver_pending() {
+                // G-116② — panicking replay removes the offender (ref
+                // activate try/catch, pty.ts:299-301).
+                eprintln!("[pty] subscriber {token} panicked during replay; removing");
+                session.subscribers.remove(&token);
             }
             return;
         }
         if let Some(subscriber) = session.ended.get_mut(&token) {
-            if !subscriber.active && !subscriber.detached {
-                subscriber.deliver_pending();
+            if !subscriber.active && !subscriber.detached && subscriber.deliver_pending() {
+                eprintln!("[pty] subscriber {token} panicked during replay; removing");
+                session.ended.remove(&token);
             }
         }
     }
@@ -458,6 +538,14 @@ impl PtyService {
         }
         env.insert("TERM".to_string(), "xterm-256color".to_string());
         env.insert("OPENCODE_TERMINAL".to_string(), "1".to_string());
+        // G-116③ (ref pty.ts:177-181): win32 children get a UTF-8
+        // locale — the pty converter decodes UTF-8 regardless of the
+        // console codepage. ref: win32-only, unverifiable on this
+        // target.
+        #[cfg(windows)]
+        for (key, value) in win32_utf8_locale_overrides() {
+            env.insert(key.to_string(), value.to_string());
+        }
 
         let (cols, rows) = input.size.unwrap_or((80, 24));
         // G-1 — spawn through the Environment `pty` seam (the local
@@ -919,5 +1007,116 @@ mod tests {
             .expect("pty.deleted");
         assert_eq!(deleted.type_, "pty.deleted");
         assert_eq!(deleted.data, serde_json::json!({ "id": info.id.0 }));
+    }
+
+    // ------------------------------------------------------------------
+    // G-116 — UTF-16 cursors + subscriber panic isolation
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn pty_utf16_unit_math() {
+        // ASCII: 1 unit per char; BMP CJK: 1 unit; emoji: 2 units
+        // (surrogate pair).
+        assert_eq!(utf16_units("abc"), 3);
+        assert_eq!(utf16_units("中文"), 2);
+        assert_eq!(utf16_units("🎉"), 2);
+        assert_eq!(utf16_units("中🎉文"), 4);
+        assert_eq!("中🎉文".len(), 10, "sanity: byte count differs");
+    }
+
+    #[test]
+    fn pty_win32_utf8_locale_overrides_table() {
+        assert_eq!(
+            win32_utf8_locale_overrides(),
+            [("LC_ALL", "C.UTF-8"), ("LC_CTYPE", "C.UTF-8"), ("LANG", "C.UTF-8")]
+        );
+    }
+
+    /// G-116① — the cursor advances by UTF-16 code units, not bytes
+    /// (ref `session.cursor += chunk.length`).
+    #[tokio::test]
+    async fn pty_cursor_counts_utf16_units() {
+        let service = PtyService::new(bus().await);
+        let info = service
+            .create(&CreateInput {
+                command: Some("/bin/sh".to_string()),
+                args: Some(vec![
+                    "-c".to_string(),
+                    "printf '中🎉文 tail'; sleep 2".to_string(),
+                ]),
+                cwd: Some("/tmp".to_string()),
+                ..CreateInput::default()
+            })
+            .expect("create");
+        // Wait for the output to land.
+        let replay = loop {
+            let attach = service
+                .attach(&info.id, None, Box::new(|_| {}), Box::new(|_| {}))
+                .expect("attach");
+            if attach.replay.contains("tail") {
+                break attach;
+            }
+            assert!(service.get(&info.id).expect("get").status == Status::Running, "child died");
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        };
+        assert_eq!(replay.cursor, utf16_units(&replay.replay), "replay={:?}", replay.replay);
+        assert!(replay.cursor < replay.replay.chars().count() + 2);
+        service.remove(&info.id).await.expect("cleanup");
+    }
+
+    /// G-116② — a panicking subscriber is removed; the stream (and the
+    /// other subscribers) keep working.
+    #[tokio::test]
+    async fn pty_panicking_subscriber_is_isolated() {
+        let service = PtyService::new(bus().await);
+        let info = service
+            .create(&CreateInput {
+                command: Some("/bin/cat".to_string()),
+                cwd: Some("/tmp".to_string()),
+                ..CreateInput::default()
+            })
+            .expect("create");
+        // Silence the expected panic backtrace in the test output.
+        let previous_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let collector: Arc<parking_lot::Mutex<String>> = Arc::default();
+        let sink = Arc::clone(&collector);
+        let healthy = service
+            .attach(
+                &info.id,
+                None,
+                Box::new(move |chunk| sink.lock().push_str(chunk)),
+                Box::new(|_| {}),
+            )
+            .expect("healthy attach");
+        healthy.activate();
+        let panicking = service
+            .attach(
+                &info.id,
+                None,
+                Box::new(|_chunk| panic!("subscriber boom")),
+                Box::new(|_| {}),
+            )
+            .expect("panicking attach");
+        panicking.activate();
+
+        service.write(&info.id, "first\n").expect("write 1");
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !collector.lock().contains("first") {
+            assert!(std::time::Instant::now() < deadline, "healthy subscriber starved");
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        // The stream must survive the offender: a second write still
+        // reaches the healthy subscriber (a naked unwind in the reader
+        // loop would have silently killed the session).
+        service.write(&info.id, "second\n").expect("write 2");
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !collector.lock().contains("second") {
+            assert!(std::time::Instant::now() < deadline, "stream died after subscriber panic");
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        std::panic::set_hook(previous_hook);
+        healthy.detach();
+        service.remove(&info.id).await.expect("cleanup");
     }
 }
