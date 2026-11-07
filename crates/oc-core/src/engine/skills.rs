@@ -403,22 +403,29 @@ fn scan_directory(directory: &Path) -> Vec<Skill> {
         if !path.is_file() {
             continue;
         }
-        let is_md = path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("md"));
+        // G-216② — the ref glob `*.md` is CASE-SENSITIVE on Linux:
+        // `FOO.MD` is not a match. Exact extension equality, not
+        // `eq_ignore_ascii_case`.
+        let is_md = path.extension() == Some(std::ffi::OsStr::new("md"));
         if is_md {
             files.push(path);
         }
     }
-    // `**/SKILL.md` — one level of subdirectories keeps the minimal scan
-    // honest for the `<dir>/<skill>/SKILL.md` layout without a full walk.
-    if let Ok(subdirectories) = std::fs::read_dir(directory) {
-        for sub in subdirectories.flatten() {
-            let skill_md = sub.path().join("SKILL.md");
-            if skill_md.is_file() {
-                files.push(skill_md);
-            }
+    // G-216① — `**/SKILL.md` reaches ANY depth (a one-level scan misses
+    // `<dir>/<skill>/nested/SKILL.md`); the walk does not follow
+    // symlinks, matching the ref's fs.scan default. A top-level
+    // SKILL.md matches BOTH globs — the sort+dedup below keeps one.
+    for entry in walkdir::WalkDir::new(directory)
+        .min_depth(1)
+        .into_iter()
+        .flatten()
+    {
+        if entry.file_type().is_file() && entry.file_name() == std::ffi::OsStr::new("SKILL.md") {
+            files.push(entry.into_path());
         }
     }
     files.sort();
+    files.dedup();
     files.into_iter().filter_map(|file| parse_skill_file(directory, &file)).collect()
 }
 
@@ -429,7 +436,14 @@ fn parse_skill_file(directory: &Path, filepath: &Path) -> Option<Skill> {
     let markdown = crate::config::markdown::parse_option(&content)?;
     let fields: BTreeMap<&str, &Json> =
         markdown.data.as_object()?.iter().map(|(key, value)| (key.as_str(), value)).collect();
-    let name_field = fields.get("name").and_then(|value| value.as_str().map(str::to_string));
+    // G-216③ — ref Frontmatter `name: Schema.String`: a PRESENT but
+    // non-string name fails the decode and the whole file is Skipped
+    // (skill-file.ts ParseResult "Skipped"/"frontmatter"); only an
+    // ABSENT name falls back to the id.
+    let name_field = match fields.get("name") {
+        None => None,
+        Some(value) => Some(value.as_str()?.to_string()),
+    };
     let description =
         fields.get("description").and_then(|value| value.as_str().map(str::to_string));
     let disable_model_invocation =

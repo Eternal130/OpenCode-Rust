@@ -1268,6 +1268,9 @@ impl Engine {
         // commands, added AFTER config discovery (plugin `editor.add`
         // replaces same-name config commands).
         commands::seed_builtin_commands(&commands, location.as_path());
+        // G-214 — the location's config `shell` key for `` !`cmd` ``
+        // template interpolation (same selection as the shell tool).
+        commands.set_config_shell(config_shell_of(&config_documents));
 
         // The bundle's background-task shutdown: `invalidate` rings it
         // (and the sender's drop fires it on an assemble error path), so
@@ -1275,6 +1278,33 @@ impl Engine {
         // bundle instead of leaking past it.
         let (bundle_shutdown, mut cache_shutdown) = tokio::sync::watch::channel(false);
         let mut reconcile_shutdown = cache_shutdown.clone();
+
+        // G-215 (ref CommandPlugin): every connected MCP prompt is a
+        // `server:prompt` command; `mcp.prompts.changed` reloads the
+        // slice (the subscription re-syncs from THIS location's
+        // registry — the bus event itself may be any-location).
+        commands::sync_mcp_prompt_commands(&commands, &mcp.prompts());
+        {
+            use futures::StreamExt as _;
+            let mut prompts_changed =
+                (*self.bus).subscribe_types(&[crate::bus::registry::MCP_PROMPTS_CHANGED]);
+            let commands = Arc::clone(&commands);
+            let mcp = mcp.clone();
+            let mut stopped = cache_shutdown.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        event = prompts_changed.next() => {
+                            if event.is_none() {
+                                break;
+                            }
+                            commands::sync_mcp_prompt_commands(&commands, &mcp.prompts());
+                        }
+                        _ = stopped.wait_for(|flag| *flag) => break,
+                    }
+                }
+            });
+        }
 
         // The MCP summary cache feeding the context guidance source: the
         // raw per-server instructions × tool snapshots (name + codemode

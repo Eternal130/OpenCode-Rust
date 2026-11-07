@@ -64,6 +64,16 @@ pub enum CommandSource {
     /// A plugin registration (guest `command.add`; dispatched through
     /// the plugin host's `command.execute`).
     Plugin,
+    /// G-215 — an MCP prompt registered as a `server:prompt` command
+    /// (ref CommandPlugin: executing it calls `mcp.prompt` with the
+    /// positional arguments parsed from the input text, then prompts
+    /// the session with the returned message text).
+    Mcp {
+        server: String,
+        prompt: String,
+        /// The prompt's declared argument names (positional wiring).
+        arguments: Vec<String>,
+    },
 }
 
 /// One registered command (v2 `Command.Definition` folded with its
@@ -79,13 +89,28 @@ pub struct CommandRegistration {
 #[derive(Debug, Default)]
 pub struct CommandTable {
     registrations: RwLock<Vec<CommandRegistration>>,
+    /// The location's config `shell` key (G-214: `` !`cmd` `` template
+    /// interpolation resolves the config-priority shell at execution).
+    config_shell: RwLock<Option<String>>,
 }
 
 impl CommandTable {
     /// No commands.
     #[must_use]
     pub fn empty() -> Self {
-        Self { registrations: RwLock::new(Vec::new()) }
+        Self { registrations: RwLock::new(Vec::new()), config_shell: RwLock::new(None) }
+    }
+
+    /// G-214 — the location's config `shell` selection (the tool seam's
+    /// `config_shell_of`), consumed by template execution.
+    pub fn set_config_shell(&self, shell: Option<String>) {
+        *self.config_shell.write() = shell;
+    }
+
+    /// The location's config `shell` key, if any.
+    #[must_use]
+    pub fn config_shell(&self) -> Option<String> {
+        self.config_shell.read().clone()
     }
 
     /// Discovers config + markdown commands from a loaded config
@@ -132,6 +157,57 @@ impl CommandTable {
     #[must_use]
     pub fn get(&self, name: &str) -> Option<CommandRegistration> {
         self.registrations.read().iter().find(|item| item.name == name).cloned()
+    }
+
+    /// Removes every MCP-prompt registration (G-215 refresh: the
+    /// prompts set is replaced wholesale on `mcp.prompts.changed`).
+    pub fn clear_mcp_commands(&self) {
+        self.registrations.write().retain(|item| !matches!(item.source, CommandSource::Mcp { .. }));
+    }
+}
+
+/// G-215 — `mcpCommandName` (ref plugin/command.ts:104-106):
+/// `sanitize(server) + ":" + sanitize(prompt)`.
+#[must_use]
+pub fn mcp_command_name(server: &str, prompt: &str) -> String {
+    format!("{}:{}", sanitize_command_segment(server), sanitize_command_segment(prompt))
+}
+
+/// `sanitize` (command.ts:108-110): every character outside
+/// `[a-zA-Z0-9_-]` becomes `_`.
+#[must_use]
+pub fn sanitize_command_segment(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || character == '_' || character == '-' {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+/// G-215 — register the connected MCP prompts as `server:prompt`
+/// commands (ref CommandPlugin's `for (const prompt of loaded.prompts)`
+/// `editor.add` loop). The refresh semantics: replace the whole MCP
+/// slice (`command.reload()` on `mcp.prompts.changed`).
+pub fn sync_mcp_prompt_commands(
+    table: &CommandTable,
+    prompts: &[crate::mcp::registry::Prompt],
+) {
+    table.clear_mcp_commands();
+    for prompt in prompts {
+        table.insert(CommandRegistration {
+            name: mcp_command_name(&prompt.server, &prompt.name),
+            description: prompt.description.clone(),
+            source: CommandSource::Mcp {
+                server: prompt.server.clone(),
+                prompt: prompt.name.clone(),
+                arguments: prompt.arguments.clone(),
+            },
+        });
     }
 }
 

@@ -166,7 +166,7 @@ fn path_contains(parent: &Path, child: &Path) -> bool {
 // ---------------------------------------------------------------------------
 
 /// Ref `argsRegex`: `[Image N]`, quoted, or bare tokens.
-fn parse_arguments(input: &str) -> Vec<String> {
+pub fn parse_arguments(input: &str) -> Vec<String> {
     let mut args = Vec::new();
     let mut rest = input.trim();
     while !rest.is_empty() {
@@ -235,9 +235,9 @@ fn placeholders(template: &str) -> Vec<usize> {
 
 /// Substitutes `$1..$N` (the last placeholder present absorbs the
 /// remaining args) then `$ARGUMENTS`; a template with NO placeholders and
-/// no `$ARGUMENTS` appends the raw input (ref `evaluateTemplate` minus
-/// the `` !`cmd` `` shell blocks — the server-side execution surface
-/// applies those separately through the shell select).
+/// no `$ARGUMENTS` appends the raw input (the sync half of ref
+/// `evaluateTemplate` — the `` !`cmd` `` shell blocks run afterwards via
+/// [`evaluate_template_shell`]).
 #[must_use]
 pub fn evaluate_template(template: &str, input: &str) -> String {
     let args = parse_arguments(input);
@@ -284,6 +284,92 @@ pub fn evaluate_template(template: &str, input: &str) -> String {
     } else {
         with_arguments.trim().to_string()
     }
+}
+
+/// G-214 — the full ref `evaluateTemplate` chain: `$N`/`$ARGUMENTS`
+/// expansion, THEN `` !`cmd` `` shell interpolation (command.ts:206-252:
+/// the shellRegex pass runs over the post-expansion `text`).
+pub async fn evaluate_template_shell(
+    template: &str,
+    input: &str,
+    cwd: &Path,
+    config_shell: Option<&str>,
+) -> Result<String, String> {
+    let expanded = evaluate_template(template, input);
+    interpolate_shell_blocks(&expanded, cwd, config_shell).await
+}
+
+/// G-214 — `` !`source` `` shell interpolation (command.ts:214-239):
+/// each backtick block runs through the config-priority shell
+/// (`shell.resolve({ priority: "config" })` →
+/// `crate::shell::select::resolve(config_shell, true)`, the same seam
+/// the shell tool uses) with cwd = the location directory and
+/// stdout+stderr combined (ref `{ combineOutput: true }`); the output
+/// replaces the block VERBATIM (the ref does not trim it). Spawn
+/// failure or non-zero exit is the ref error
+/// `Shell interpolation failed for <JSON.stringify(source)>: <cause>`.
+/// The ref runs the blocks with concurrency 2; sequential execution
+/// preserves the replacement order with the same observable result.
+pub async fn interpolate_shell_blocks(
+    text: &str,
+    cwd: &Path,
+    config_shell: Option<&str>,
+) -> Result<String, String> {
+    let mut result = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find("!`") {
+        let after = &rest[start + 2..];
+        let Some(end) = after.find('`') else { break };
+        result.push_str(&rest[..start]);
+        let source = &after[..end];
+        let output = run_shell_block(source, cwd, config_shell).await?;
+        result.push_str(&output);
+        rest = &after[end + 1..];
+    }
+    result.push_str(rest);
+    Ok(result)
+}
+
+/// One `` !`source` `` block through the shell select (ref
+/// `services.processes.run(..., { combineOutput: true })`).
+async fn run_shell_block(
+    source: &str,
+    cwd: &Path,
+    config_shell: Option<&str>,
+) -> Result<String, String> {
+    let fail = |message: String| {
+        format!(
+            "Shell interpolation failed for {}: {message}",
+            serde_json::to_string(source).unwrap_or_else(|_| format!("{source:?}"))
+        )
+    };
+    let shell = crate::shell::select::resolve(config_shell, true);
+    let mut command = tokio::process::Command::new(&shell);
+    command
+        .args(crate::shell::select::args(&shell, source))
+        .current_dir(cwd)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let mut child = command
+        .spawn()
+        .map_err(|error| fail(error.to_string()))?;
+    let output = child
+        .wait_with_output()
+        .await
+        .map_err(|error| fail(error.to_string()))?;
+    if !output.status.success() {
+        return Err(fail(format!(
+            "Process exited with non-zero status: {}",
+            output.status.code().unwrap_or(-1)
+        )));
+    }
+    // Combined output: stdout then stderr (the ref's combine stream
+    // interleaves by arrival; the merge order is unobservable to the
+    // replacement).
+    let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
+    combined.push_str(&String::from_utf8_lossy(&output.stderr));
+    Ok(combined)
 }
 
 #[cfg(test)]
@@ -404,5 +490,59 @@ mod tests {
         assert_eq!(evaluate_template("Fix $1", "\"a b\" c"), "Fix a b c");
         assert_eq!(evaluate_template("See $1", "[Image 2] hi"), "See [Image 2] hi");
         assert_eq!(evaluate_template("See $2", "[Image 2] hi"), "See hi");
+    }
+
+    // ------------------------------------------------------------------
+    // G-214 — `` !`cmd` `` shell interpolation (command.ts:214-239)
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn shell_block_interpolates_combined_output_in_cwd() {
+        let dir = tempdir("shell-block");
+        let text = "Branch: !`basename $PWD` end";
+        let result = interpolate_shell_blocks(text, &dir, None).await.expect("interpolate");
+        // cwd is the location directory: basename($PWD) is the tempdir's
+        // own name (printf output + merged stderr both land in the
+        // replacement, verbatim).
+        assert!(
+            result.starts_with("Branch: ") && result.ends_with(" end"),
+            "substitution shape: {result:?}"
+        );
+        let middle = result.trim_start_matches("Branch: ").trim_end_matches(" end");
+        // The ref does NOT trim block output — `basename` writes a
+        // trailing newline that stays in the replacement.
+        assert_eq!(middle.trim(), dir.file_name().unwrap().to_string_lossy(), "cwd + output: {result:?}");
+    }
+
+    #[tokio::test]
+    async fn shell_block_merges_stderr_into_the_replacement() {
+        let text = "!`sh -c 'printf out; printf err 1>&2'`";
+        let result = interpolate_shell_blocks(text, std::path::Path::new("/tmp"), None)
+            .await
+            .expect("interpolate");
+        assert!(result.contains("out") && result.contains("err"), "merged output: {result:?}");
+    }
+
+    #[tokio::test]
+    async fn shell_block_failure_message_is_the_ref_error() {
+        let error = interpolate_shell_blocks("!`exit 3`", std::path::Path::new("/tmp"), None)
+            .await
+            .expect_err("non-zero exit fails");
+        assert!(
+            error.starts_with("Shell interpolation failed for \"exit 3\":"),
+            "ref failure wording (JSON.stringify source): {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn evaluate_template_shell_runs_after_placeholder_expansion() {
+        // Ref order: $ARGUMENTS first, THEN the shell pass over the
+        // expanded text (the block sees the substituted argument).
+        let dir = tempdir("shell-order");
+        std::fs::write(dir.join("note.txt"), "hi").expect("file");
+        let template = "cat !`cat $ARGUMENTS`";
+        let result =
+            evaluate_template_shell(template, "note.txt", &dir, None).await.expect("expand");
+        assert_eq!(result, "cat hi");
     }
 }

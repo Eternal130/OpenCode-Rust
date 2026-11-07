@@ -903,19 +903,34 @@ async fn compact(
 async fn move_session(
     State(state): State<SharedState>,
     Path(session_id): Path<String>,
-    axum::Json(body): axum::Json<Value>,
+    uri: Uri,
+    body: axum::body::Bytes,
 ) -> Result<Response, ApiError> {
     let (location, row) = session_location(&state, &session_id).await?;
+    // G-233 — ref SessionMoveInput `directory` is a required string:
+    // the generated payload validation 400s a missing directory
+    // (ParseError), instead of an empty path reporting
+    // `Directory does not exist: `.
+    let body = crate::request_validation::validate_at_handler(
+        "session.move",
+        &axum::http::Method::POST,
+        &uri,
+        &body,
+    )?;
+    // G-233 — the ref error messages carry the offending directory
+    // (session.ts:295-301 `... : ${error.directory}`).
     let directory = body["directory"].as_str().unwrap_or_default();
     let path = std::path::Path::new(directory);
+    // G-233 — the ref error messages carry the offending directory
+    // (session.ts:295-301 `... : ${error.directory}`).
     if !path.exists() {
-        return Err(ApiError::invalid_request("Directory does not exist"));
+        return Err(ApiError::invalid_request(format!("Directory does not exist: {directory}")));
     }
     if !path.is_dir() {
-        return Err(ApiError::invalid_request("Not a directory"));
+        return Err(ApiError::invalid_request(format!("Not a directory: {directory}")));
     }
     if path.read_dir().is_err() {
-        return Err(ApiError::invalid_request("Directory is unavailable"));
+        return Err(ApiError::invalid_request(format!("Directory is unavailable: {directory}")));
     }
 
     // Resolve the destination project, then admit the queued move item.
@@ -1183,11 +1198,63 @@ async fn command(
                 .map_err(|error| ApiError::command_execution(name, error))?;
             Ok(no_content())
         }
+        oc_core::engine::commands::CommandSource::Mcp { server, prompt, arguments } => {
+            // G-215 — ref CommandPlugin execute (command.ts:59-81):
+            // parseArguments of the input text, positional wiring into
+            // the prompt's DECLARED arguments, `mcp.prompt`, then prompt
+            // the session with the returned messages' text (joined,
+            // trimmed). A missing result is the ref error.
+            let parsed = oc_core::config::command_md::parse_arguments(&text);
+            let mut args = std::collections::BTreeMap::new();
+            for (index, argument) in arguments.iter().enumerate() {
+                args.insert(
+                    argument.clone(),
+                    parsed.get(index).cloned().unwrap_or_default(),
+                );
+            }
+            let result = services
+                .mcp
+                .prompt(&server, &prompt, Some(args))
+                .await
+                .map_err(|error| ApiError::command_execution(name, error.to_string()))?;
+            let Some(result) = result else {
+                return Err(ApiError::command_execution(
+                    name,
+                    format!("MCP prompt not found: {server}:{prompt}"),
+                ));
+            };
+            let expanded = mcp_prompt_message_text(&result);
+            let message_id = state.ids.new_id("msg");
+            let payload = oc_schema::session_inbox::UserPayload {
+                text: expanded,
+                files,
+                agents: typed_value(&body, "agents"),
+                skills: typed_value(&body, "skills"),
+                metadata: record_value(&body, "metadata"),
+            };
+            services
+                .inbox
+                .admit(&message_id, &session_id, Item::User { payload, delivery })
+                .await
+                .map_err(|error| inbox_error(&error, &message_id))?;
+            services.execution.wake(&session_id, oc_core::session::Promotable::Input);
+            Ok(no_content())
+        }
         oc_core::engine::commands::CommandSource::Config(command) => {
             // Template semantics (ref ConfigCommandPlugin.execute):
             // placeholders, then agent/model selection, then the
-            // subagent-vs-prompt fork.
-            let expanded = oc_core::config::command_md::evaluate_template(&command.template, &text);
+            // subagent-vs-prompt fork. G-214: `` !`cmd` `` shell blocks
+            // interpolate AFTER $N/$ARGUMENTS (cwd = location directory,
+            // config-priority shell).
+            let directory = services.graph.location.as_path().to_path_buf();
+            let expanded = oc_core::config::command_md::evaluate_template_shell(
+                &command.template,
+                &text,
+                &directory,
+                services.commands.config_shell().as_deref(),
+            )
+            .await
+            .map_err(|message| ApiError::command_execution(name, message))?;
             let agent = command.agent.clone();
             let subagent = command.subagent.or(command.subtask).unwrap_or(false)
                 || agent.as_deref().is_some_and(|id| {
@@ -1322,6 +1389,36 @@ async fn command(
 // ---------------------------------------------------------------------------
 // GET /:id/context, /:id/diff, /:id/generate
 // ---------------------------------------------------------------------------
+
+/// G-215 — ref `promptMessageText` (plugin/command.ts:112-119): string
+/// content verbatim; `{type: "text", text}` objects' text; anything else
+/// "" (arrays included — the ref extracts single text parts only).
+pub(crate) fn mcp_prompt_message_text(result: &serde_json::Value) -> String {
+    let Some(messages) = result.get("messages").and_then(serde_json::Value::as_array) else {
+        return String::new();
+    };
+    messages
+        .iter()
+        .map(|message| match message.get("content") {
+            Some(serde_json::Value::String(text)) => text.clone(),
+            Some(content) => {
+                if content.get("type").and_then(serde_json::Value::as_str) == Some("text") {
+                    content
+                        .get("text")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned()
+                } else {
+                    String::new()
+                }
+            }
+            None => String::new(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_owned()
+}
 
 async fn context(
     State(state): State<SharedState>,

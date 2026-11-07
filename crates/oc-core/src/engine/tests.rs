@@ -659,6 +659,72 @@ fn engine_skills_table_discovers_config_skill_paths() {
     assert_eq!(quick.name.0, "Quick");
 }
 
+/// G-216①②③ — the skill directory scan parity: `**/SKILL.md` reaches
+/// ANY depth, `*.md` is case-sensitive (no `.MD`), and a non-string
+/// frontmatter `name` skips the file (ref Skipped) while siblings load.
+#[test]
+fn engine_skills_scan_g216_depth_case_and_name() {
+    let dir = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+    let skills = dir.path().join("skills");
+    // ① nested two levels deep: `<dir>/deep/nested/SKILL.md`.
+    std::fs::create_dir_all(skills.join("deep").join("nested")).expect("deep dir");
+    std::fs::write(
+        skills.join("deep").join("nested").join("SKILL.md"),
+        "---\nname: Deep\ndescription: Nested any-depth\n---\n# Deep",
+    )
+    .expect("nested SKILL.md");
+    // ② uppercase extension: not a `*.md` glob match on Linux.
+    std::fs::write(skills.join("SHOUTY.MD"), "---\nname: Shouty\n---\nnope").expect("upper md");
+    // ③ non-string name → the file is Skipped; the sibling still loads.
+    std::fs::create_dir_all(skills.join("numbered")).expect("numbered dir");
+    std::fs::write(skills.join("numbered").join("SKILL.md"), "---\nname: 42\n---\nskipped")
+        .expect("non-string name");
+    std::fs::create_dir_all(skills.join("keeper")).expect("keeper dir");
+    std::fs::write(
+        skills.join("keeper").join("SKILL.md"),
+        "---\nname: Keeper\ndescription: fine\n---\n# Keeper",
+    )
+    .expect("valid sibling");
+
+    let loaded = crate::config::Loader::new(
+        dir.path().to_path_buf(),
+        crate::config::GlobalDirs { config: dir.path().join("cfg"), home: dir.path().join("home") },
+    )
+    .load();
+    let mut with_document = loaded.clone();
+    with_document.entries.push(oc_schema::config::Entry::Document(Box::new(
+        oc_schema::config::Document {
+            info: serde_json::from_value(serde_json::json!({ "skills": ["./skills"] }))
+                .expect("info"),
+            path: None,
+        },
+    )));
+    let table = crate::engine::skills::ConfigSkillTable::discover(
+        &with_document,
+        dir.path(),
+        &dir.path().join("home"),
+        &BTreeMap::new(),
+    );
+    // ① the nested skill is discovered under its nearest directory id.
+    let deep = crate::tool::skill::SkillTable::get(&table, "nested")
+        .expect("any-depth **/SKILL.md discovery");
+    assert_eq!(deep.name.0, "Deep");
+    // ② `.MD` is not a match.
+    assert!(
+        crate::tool::skill::SkillTable::get(&table, "SHOUTY").is_none(),
+        ".MD must not register (case-sensitive glob)"
+    );
+    // ③ non-string name skipped, sibling loads.
+    assert!(
+        crate::tool::skill::SkillTable::get(&table, "numbered").is_none(),
+        "non-string name must skip the file (ref Skipped)"
+    );
+    assert!(
+        crate::tool::skill::SkillTable::get(&table, "keeper").is_some(),
+        "siblings of a skipped skill still load"
+    );
+}
+
 // ===========================================================================
 // Built-in skills plugin (gate-6 F3) — plugin/skill.ts port
 // ===========================================================================
