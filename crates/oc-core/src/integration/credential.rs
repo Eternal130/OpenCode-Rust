@@ -59,26 +59,13 @@ impl CredentialStore {
                  ORDER BY active ASC, time_created ASC, id ASC",
             )?;
             let rows = statement
-                .query_map([], |row| {
-                    let id: String = row.get(0)?;
-                    let integration_id: Option<String> = row.get(1)?;
-                    let label: String = row.get(2)?;
-                    let value_text: Option<String> = row.get(3)?;
-                    let active: Option<bool> = row.get(4)?;
-                    let value = decode_value(value_text.as_deref());
-                    Ok(StoredCredential {
-                        id,
-                        integration_id: integration_id.unwrap_or_default(),
-                        label,
-                        value,
-                        active: active.unwrap_or(false),
-                    })
-                })?
+                .query_map([], raw_credential_row)?
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(rows)
         })
         .await
         .map_err(|error| StoreError::Database(error.to_string()))
+        .and_then(stored_credentials)
     }
 
     /// Stored credentials belonging to one integration (credential.ts:92-100).
@@ -91,25 +78,13 @@ impl CredentialStore {
                  WHERE integration_id = ?1 ORDER BY active ASC, time_created ASC, id ASC",
             )?;
             let rows = statement
-                .query_map([&integration_id], |row| {
-                    let id: String = row.get(0)?;
-                    let label: String = row.get(2)?;
-                    let value_text: Option<String> = row.get(3)?;
-                    let active: Option<bool> = row.get(4)?;
-                    let value = decode_value(value_text.as_deref());
-                    Ok(StoredCredential {
-                        id,
-                        integration_id: integration_id.clone(),
-                        label,
-                        value,
-                        active: active.unwrap_or(false),
-                    })
-                })?
+                .query_map([&integration_id], raw_credential_row)?
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(rows)
         })
         .await
         .map_err(|error| StoreError::Database(error.to_string()))
+        .and_then(stored_credentials)
     }
 
     /// One credential by id (credential.ts:101-104).
@@ -120,30 +95,17 @@ impl CredentialStore {
             let row = tx.conn().query_row(
                 "SELECT id, integration_id, label, value, active FROM credential WHERE id = ?1",
                 [&id],
-                |row| {
-                    let id: String = row.get(0)?;
-                    let integration_id: Option<String> = row.get(1)?;
-                    let label: String = row.get(2)?;
-                    let value_text: Option<String> = row.get(3)?;
-                    let active: Option<bool> = row.get(4)?;
-                    let value = decode_value(value_text.as_deref());
-                    Ok(StoredCredential {
-                        id,
-                        integration_id: integration_id.unwrap_or_default(),
-                        label,
-                        value,
-                        active: active.unwrap_or(false),
-                    })
-                },
+                raw_credential_row,
             );
             match row {
-                Ok(stored) => Ok(Some(stored)),
+                Ok(raw) => Ok(Some(raw)),
                 Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
                 Err(error) => Err(error.into()),
             }
         })
         .await
         .map_err(|error| StoreError::Database(error.to_string()))
+        .and_then(|row| stored_credentials(row.into_iter().collect()).map(|mut rows| rows.pop()))
     }
 
     /// Creates a credential; the new row becomes the integration's
@@ -368,14 +330,56 @@ impl CredentialStore {
     }
 }
 
-fn decode_value(value_text: Option<&str>) -> CredentialValue {
-    value_text.and_then(|text| serde_json::from_str::<CredentialValue>(text).ok()).unwrap_or(
-        CredentialValue::Key(super::types::KeyValue {
-            key: String::new(),
-            metadata: None,
-            configuration: None,
-        }),
-    )
+/// G-225 — `decode(row.value)` (credential.ts:63,67): the ref decodes
+/// with `Schema.decodeUnknownSync(Value)`, which THROWS on a corrupt
+/// value; `stored()` has no error channel (credential.ts:66-72), so
+/// `all`/`list`/`get` FAIL the whole read — a corrupted credential is
+/// never silently degraded into a fake empty-key value. Mirrored here:
+/// the read errors with [`StoreError::Decode`] (plus a stderr line —
+/// oc-core's logging seam, cf. the MCP stdio fallback in mcp/client.rs).
+fn decode_value(value_text: Option<&str>, id: &str) -> Result<CredentialValue, StoreError> {
+    value_text
+        .and_then(|text| serde_json::from_str::<CredentialValue>(text).ok())
+        .ok_or_else(|| {
+            eprintln!("[credential] row {id}: value does not decode; failing the read");
+            StoreError::Decode(format!("credential {id}"))
+        })
+}
+
+/// One raw `credential` table row (id, integration_id, label, value,
+/// active) — decoding happens outside the rusqlite closure so a decode
+/// failure can carry [`StoreError::Decode`] (G-225).
+type RawCredentialRow = (String, Option<String>, String, Option<String>, Option<bool>);
+
+fn raw_credential_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawCredentialRow> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+    ))
+}
+
+/// `storedRows` (credential.ts:66-78): a row WITHOUT integration_id is
+/// skipped; a value that does not decode FAILS the read (never a fake
+/// empty-key credential — G-225).
+fn stored_credentials(
+    rows: Vec<RawCredentialRow>,
+) -> Result<Vec<StoredCredential>, StoreError> {
+    rows.into_iter()
+        .filter(|(_, integration_id, _, _, _)| integration_id.is_some())
+        .map(|(id, integration_id, label, value_text, active)| {
+            let value = decode_value(value_text.as_deref(), &id)?;
+            Ok(StoredCredential {
+                id,
+                integration_id: integration_id.unwrap_or_default(),
+                label,
+                value,
+                active: active.unwrap_or(false),
+            })
+        })
+        .collect()
 }
 
 /// Input for [`CredentialStore::create`].

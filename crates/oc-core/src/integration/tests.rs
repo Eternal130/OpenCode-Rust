@@ -2858,3 +2858,119 @@ async fn g115_oauth_cancel_aborts_in_flight_exchange() {
     );
     assert!(host.connection_active("oauth-hang").await.expect("active").is_none());
 }
+
+// ===========================================================================
+// G-225 — credential value decode failures never degrade to an empty key
+// (ref credential.ts:63/66-78: `decode(row.value)` throws; a corrupt row
+// fails the read; rows without integration_id are skipped).
+// ===========================================================================
+
+#[tokio::test]
+async fn g225_corrupt_credential_value_fails_the_read_not_silently_empties() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let db = Arc::new(
+        crate::database::Database::open_file(dir.path().join("g225a.db")).await.expect("db"),
+    );
+    let bus = Arc::new(crate::bus::Bus::new(
+        (*db).clone(),
+        crate::bus::BusOptions { persist: false, ..BusOptions::deterministic() },
+    ));
+    let store = credential::CredentialStore::new(db.clone(), bus);
+    // A healthy credential loads.
+    store
+        .create(credential::CreateInput {
+            id: None,
+            integration_id: "github",
+            label: None,
+            value: &CredentialValue::Key(KeyValue { key: "k-1".into(), metadata: None, configuration: None }),
+            activate: None,
+        })
+        .await
+        .expect("healthy create");
+    // A corrupted row lands in the table (db-level corruption).
+    {
+        let db = db.clone();
+        db.transaction(move |tx| {
+            tx.conn()
+                .execute(
+                    "INSERT INTO credential (id, integration_id, label, value, active, time_created, time_updated) \
+                     VALUES ('cred_bad', 'github', 'corrupt', '{not json', 0, 0, 0)",
+                    [],
+                )
+                .map_err(crate::database::DbError::Sqlite)?;
+            Ok(())
+        })
+        .await
+        .expect("corrupt row");
+    }
+
+    // all/list/get FAIL with the Decode error — the ref's decode throws
+    // (credential.ts:67) and no fake empty-key credential is produced.
+    assert!(matches!(store.all().await, Err(credential::StoreError::Decode(_))), "all fails");
+    assert!(
+        matches!(store.list("github").await, Err(credential::StoreError::Decode(_))),
+        "list fails"
+    );
+    assert!(
+        matches!(store.get("cred_bad").await, Err(credential::StoreError::Decode(_))),
+        "get of the corrupt row fails"
+    );
+    // An integration whose rows are all healthy still reads fine.
+    store
+        .create(credential::CreateInput {
+            id: None,
+            integration_id: "linear",
+            label: None,
+            value: &CredentialValue::Key(KeyValue { key: "k-2".into(), metadata: None, configuration: None }),
+            activate: None,
+        })
+        .await
+        .expect("healthy create 2");
+    let listed = store.list("linear").await.expect("healthy integration reads");
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].value, CredentialValue::Key(KeyValue { key: "k-2".into(), metadata: None, configuration: None }));
+}
+
+#[tokio::test]
+async fn g225_row_without_integration_id_is_skipped() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let db = Arc::new(
+        crate::database::Database::open_file(dir.path().join("g225b.db")).await.expect("db"),
+    );
+    let bus = Arc::new(crate::bus::Bus::new(
+        (*db).clone(),
+        crate::bus::BusOptions { persist: false, ..BusOptions::deterministic() },
+    ));
+    let store = credential::CredentialStore::new(db.clone(), bus);
+    store
+        .create(credential::CreateInput {
+            id: Some("cred_kept"),
+            integration_id: "github",
+            label: None,
+            value: &CredentialValue::Key(KeyValue { key: "k".into(), metadata: None, configuration: None }),
+            activate: None,
+        })
+        .await
+        .expect("healthy create");
+    {
+        let db = db.clone();
+        db.transaction(move |tx| {
+            tx.conn()
+                .execute(
+                    "INSERT INTO credential (id, integration_id, label, value, active, time_created, time_updated) \
+                     VALUES ('cred_orphan', NULL, 'orphan', '\"key\"', 0, 0, 0)",
+                    [],
+                )
+                .map_err(crate::database::DbError::Sqlite)?;
+            Ok(())
+        })
+        .await
+        .expect("orphan row");
+    }
+    // stored(row) returns undefined for a row without integration_id
+    // (credential.ts:66-67) — flatMap drops it.
+    let all = store.all().await.expect("all");
+    assert_eq!(all.len(), 1, "orphan row skipped: {all:?}");
+    assert_eq!(all[0].id, "cred_kept");
+    assert!(matches!(store.get("cred_orphan").await, Ok(None)), "orphan get is None");
+}
