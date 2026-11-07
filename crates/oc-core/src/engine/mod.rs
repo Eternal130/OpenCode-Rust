@@ -1126,7 +1126,11 @@ impl Engine {
         let websearch = Arc::new(
             crate::tool::websearch::WebSearch::new(
                 (*self.db).clone(),
-                crate::tool::websearch_providers::providers_from_env(),
+                // G-224③: the engine's app identity stamps the tavily
+                // User-Agent (ref `App.useragent(ctx.app)`).
+                crate::tool::websearch_providers::providers_from_env_with_useragent(Some(
+                    &crate::session::runner::model_request::useragent(&self.app),
+                )),
             )
             .with_config_selection(config_websearch_selection(&config_documents)),
         );
@@ -1278,6 +1282,10 @@ impl Engine {
         // bundle instead of leaking past it.
         let (bundle_shutdown, mut cache_shutdown) = tokio::sync::watch::channel(false);
         let mut reconcile_shutdown = cache_shutdown.clone();
+
+        // G-224② (ref websearch.ts:93-100): session.deleted/moved evict
+        // the websearch preferred-affinity cells (bounded map).
+        websearch.subscribe_affinity_evictions(&self.bus, cache_shutdown.clone());
 
         // G-215 (ref CommandPlugin): every connected MCP prompt is a
         // `server:prompt` command; `mcp.prompts.changed` reloads the

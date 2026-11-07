@@ -18,12 +18,33 @@ use oc_schema::misc::WebSearchResult;
 pub struct ProviderError {
     pub status: Option<u16>,
     pub message: String,
+    /// G-224① — the raw `Retry-After` response header (seconds or
+    /// HTTP-date), consumed by the cooldown rotation
+    /// (`websearch.ts:204` reads `cause.response.headers["retry-after"]`).
+    pub retry_after: Option<String>,
 }
 
 impl ProviderError {
     fn request(status: Option<u16>, message: impl Into<String>) -> Self {
-        Self { status, message: message.into() }
+        Self { status, message: message.into(), retry_after: None }
     }
+
+    /// A non-success response carrying its `Retry-After` header.
+    fn request_with_retry_after(
+        status: Option<u16>,
+        message: impl Into<String>,
+        retry_after: Option<String>,
+    ) -> Self {
+        Self { status, message: message.into(), retry_after }
+    }
+}
+
+/// The raw `Retry-After` header off a response, when present.
+fn retry_after_header(headers: &reqwest::header::HeaderMap) -> Option<String> {
+    headers
+        .get("retry-after")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string)
 }
 
 /// `WebSearchMcp.MAX_RESPONSE_BYTES`.
@@ -71,9 +92,11 @@ async fn mcp_call(
         request.send().await.map_err(|error| ProviderError::request(None, error.to_string()))?;
     let status = response.status();
     if !status.is_success() {
-        return Err(ProviderError::request(
+        let retry_after = retry_after_header(response.headers());
+        return Err(ProviderError::request_with_retry_after(
             Some(status.as_u16()),
             format!("{tool} request failed (HTTP {status})"),
+            retry_after,
         ));
     }
     let mut body = Vec::new();
@@ -254,13 +277,28 @@ pub struct TavilyProvider {
     pub key: Credential,
     /// Overridable for tests; defaults to [`TAVILY_ENDPOINT`].
     pub endpoint: String,
+    /// G-224③ — the app user-agent (ref tavily.ts:53-54 sends
+    /// `App.useragent(ctx.app)` alongside `X-Client-Name`).
+    pub user_agent: String,
 }
 
 pub const TAVILY_ENDPOINT: &str = "https://api.tavily.com/search";
 
 impl TavilyProvider {
     pub fn new(key: Credential) -> Self {
-        Self { key, endpoint: TAVILY_ENDPOINT.to_string() }
+        Self {
+            key,
+            endpoint: TAVILY_ENDPOINT.to_string(),
+            user_agent: crate::session::runner::model_request::useragent(
+                &crate::session::runner::model_request::AppMetadata::detected(),
+            ),
+        }
+    }
+
+    /// G-224③ — stamp the engine's app identity (`App.useragent`).
+    pub fn with_user_agent(mut self, user_agent: impl Into<String>) -> Self {
+        self.user_agent = user_agent.into();
+        self
     }
 }
 
@@ -280,6 +318,7 @@ impl SearchProvider for TavilyProvider {
         let mut request = client
             .post(&self.endpoint)
             .header("Accept", "application/json")
+            .header("User-Agent", &self.user_agent)
             .header("X-Client-Name", "opencode2")
             .json(&serde_json::json!({
                 "query": query,
@@ -297,9 +336,11 @@ impl SearchProvider for TavilyProvider {
             .map_err(|error| ProviderError::request(None, error.to_string()))?;
         let status = response.status();
         if !status.is_success() {
-            return Err(ProviderError::request(
+            let retry_after = retry_after_header(response.headers());
+            return Err(ProviderError::request_with_retry_after(
                 Some(status.as_u16()),
                 "Tavily web search request failed".to_string(),
+                retry_after,
             ));
         }
         let body: serde_json::Value = response
@@ -546,6 +587,15 @@ pub fn env_key_name(id: &str) -> Option<&'static str> {
 pub fn providers_with_keys(
     key_for: impl Fn(&str) -> Option<String>,
 ) -> Vec<std::sync::Arc<dyn SearchProvider>> {
+    providers_with_keys_and_useragent(key_for, None)
+}
+
+/// G-224③ — [`providers_with_keys`] with the engine's app user-agent
+/// stamped on the tavily provider (`App.useragent(ctx.app)`).
+pub fn providers_with_keys_and_useragent(
+    key_for: impl Fn(&str) -> Option<String>,
+    user_agent: Option<String>,
+) -> Vec<std::sync::Arc<dyn SearchProvider>> {
     let mut providers = Vec::new();
     for id in ["exa", "firecrawl", "parallel", "tavily", "tinyfish"] {
         let Some(key) = key_for(id) else { continue };
@@ -553,7 +603,13 @@ pub fn providers_with_keys(
             "exa" => std::sync::Arc::new(ExaProvider::new(Some(key))),
             "firecrawl" => std::sync::Arc::new(FirecrawlProvider::new(Some(key))),
             "parallel" => std::sync::Arc::new(ParallelProvider::new(Some(key))),
-            "tavily" => std::sync::Arc::new(TavilyProvider::new(Some(key))),
+            "tavily" => {
+                let mut tavily = TavilyProvider::new(Some(key));
+                if let Some(user_agent) = &user_agent {
+                    tavily = tavily.with_user_agent(user_agent.clone());
+                }
+                std::sync::Arc::new(tavily)
+            }
             _ => std::sync::Arc::new(TinyFishProvider::new(Some(key))),
         };
         providers.push(provider);
@@ -563,11 +619,21 @@ pub fn providers_with_keys(
 
 /// The wired default: env-key resolution (v2 env connection methods).
 pub fn providers_from_env() -> Vec<std::sync::Arc<dyn SearchProvider>> {
-    providers_with_keys(|id| {
-        env_key_name(id)
-            .and_then(|name| std::env::var(name).ok())
-            .filter(|key| !key.trim().is_empty())
-    })
+    providers_from_env_with_useragent(None)
+}
+
+/// [`providers_from_env`] with the engine's app user-agent (G-224③).
+pub fn providers_from_env_with_useragent(
+    user_agent: Option<&str>,
+) -> Vec<std::sync::Arc<dyn SearchProvider>> {
+    providers_with_keys_and_useragent(
+        |id| {
+            env_key_name(id)
+                .and_then(|name| std::env::var(name).ok())
+                .filter(|key| !key.trim().is_empty())
+        },
+        user_agent.map(str::to_string),
+    )
 }
 
 #[cfg(test)]
@@ -640,12 +706,24 @@ mod tests {
     /// request (request line + headers + body). `sse` wraps the body in a
     /// `data:` line like real streamable-HTTP MCP responses.
     async fn fake_mcp(status: &str, body: String, sse: bool) -> FakeMcpServer {
+        fake_mcp_with_headers(status, body, sse, "").await
+    }
+
+    /// G-224 — the fake server with extra response headers (e.g.
+    /// `Retry-After`).
+    async fn fake_mcp_with_headers(
+        status: &str,
+        body: String,
+        sse: bool,
+        extra_headers: &str,
+    ) -> FakeMcpServer {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.expect("bind");
         let port = listener.local_addr().expect("addr").port();
         let state = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let recorded = std::sync::Arc::clone(&state);
         let status = status.to_string();
+        let extra_headers = extra_headers.to_string();
         let handle = tokio::spawn(async move {
             while let Ok((mut stream, _)) = listener.accept().await {
                 let mut buffer = vec![0u8; 65_536];
@@ -655,7 +733,7 @@ mod tests {
                 let payload =
                     if sse { format!("event: message\ndata: {body}\n\n") } else { body.clone() };
                 let response = format!(
-                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n{extra_headers}Content-Length: {}\r\nConnection: close\r\n\r\n{payload}",
                     payload.len()
                 );
                 let _ = stream.write_all(response.as_bytes()).await;
@@ -666,6 +744,37 @@ mod tests {
 
     fn last_request(server: &FakeMcpServer) -> String {
         server.state.lock().unwrap().last().expect("recorded request").clone()
+    }
+
+
+    /// G-224③ — the tavily request carries the app user-agent
+    /// (`App.useragent`, ref tavily.ts:53-54) alongside X-Client-Name.
+    #[tokio::test]
+    async fn g224_tavily_sends_app_user_agent() {
+        let body = r#"{"results":[]}"#.to_string();
+        let server = fake_mcp("200 OK", body, false).await;
+        let mut provider = TavilyProvider::new(None);
+        provider.endpoint = server.base.clone();
+        let _ = provider.execute("q").await.unwrap();
+        let request = last_request(&server);
+        assert!(
+            request.to_ascii_lowercase().contains("user-agent: opencode/"),
+            "app UA on the wire: {request}"
+        );
+        assert!(request.contains("x-client-name: opencode2") || request.contains("X-Client-Name: opencode2"));
+    }
+
+    /// G-224① — a 429's `Retry-After` header survives into the
+    /// ProviderError (the cooldown's input).
+    #[tokio::test]
+    async fn g224_provider_error_carries_retry_after() {
+        let body = "{}".to_string();
+        let server = fake_mcp_with_headers("429 Too Many Requests", body, false, "Retry-After: 12\r\n").await;
+        let mut provider = TavilyProvider::new(None);
+        provider.endpoint = server.base.clone();
+        let error = provider.execute("q").await.unwrap_err();
+        assert_eq!(error.status, Some(429));
+        assert_eq!(error.retry_after.as_deref(), Some("12"));
     }
 
     #[tokio::test]

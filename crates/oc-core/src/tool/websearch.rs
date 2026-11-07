@@ -174,6 +174,42 @@ impl WebSearch {
         let _ = self.db.kv_set(PROVIDER_KEY, &value).await;
     }
 
+    /// G-224② — drop one session's preferred-affinity cell
+    /// (`preferred.delete(event.data.sessionID)`, websearch.ts:92-97).
+    pub fn evict_affinity(&self, session_id: &str) {
+        self.preferred.lock().remove(session_id);
+    }
+
+    /// G-224② — the eviction subscription (websearch.ts:93-100):
+    /// `session.deleted` and `session.moved` drop that session's
+    /// affinity entry so the map cannot grow unboundedly. The task stops
+    /// with the location bundle's shutdown watch (the ref's subscription
+    /// is fork-scoped to the location node; the finalizer parity is the
+    /// [`Drop`] clear below).
+    pub fn subscribe_affinity_evictions(
+        self: &Arc<Self>,
+        bus: &crate::bus::Bus,
+        mut stop: tokio::sync::watch::Receiver<bool>,
+    ) {
+        use futures::StreamExt as _;
+        let mut subscription = bus.subscribe_types(&["session.deleted", "session.moved"]);
+        let weak = Arc::downgrade(self);
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    event = subscription.next() => {
+                        let Some(event) = event else { break };
+                        let Some(websearch) = weak.upgrade() else { break };
+                        if let Some(session) = event.data.get("sessionID").and_then(serde_json::Value::as_str) {
+                            websearch.evict_affinity(session);
+                        }
+                    }
+                    _ = stop.wait_for(|flag| *flag) => break,
+                }
+            }
+        });
+    }
+
     fn random_provider(
         &self,
         now: u64,
@@ -272,7 +308,11 @@ impl WebSearch {
                         if !matches!(choice, Some(Selection::Random)) || error.status != Some(429) {
                             return Err(websearch_error);
                         }
-                        let until = now_ms() + COOLDOWN_MS;
+                        // G-224① — the cooldown honors `Retry-After`
+                        // (websearch.ts:204,215-221): seconds or
+                        // HTTP-date; invalid/absent falls back to 60s.
+                        let now = now_ms();
+                        let until = now + cooldown_ms(error.retry_after.as_deref(), now);
                         self.cooldowns
                             .lock()
                             .insert(provider.id().to_string(), (until, websearch_error.clone()));
@@ -296,6 +336,77 @@ fn now_ms() -> u64 {
             .unwrap_or(0),
     )
     .unwrap_or(0)
+}
+
+/// G-224② — the ref's `Effect.addFinalizer(() => preferred.clear())`
+/// (websearch.ts:93): the map dies with the service.
+impl Drop for WebSearch {
+    fn drop(&mut self) {
+        self.preferred.lock().clear();
+    }
+}
+
+/// `cooldownMillis` (websearch.ts:215-221): absent/blank → 60s; an
+/// integer number of seconds (negative → the 60s fallback, mirroring
+/// the ref's `seconds >= 0` guard); an HTTP-date → `max(0, date - now)`;
+/// anything unparsable → 60s.
+fn cooldown_ms(value: Option<&str>, now: u64) -> u64 {
+    let Some(value) = value.map(str::trim).filter(|text| !text.is_empty()) else {
+        return COOLDOWN_MS;
+    };
+    // `Number(value)`: a plain numeric value (integer or float seconds).
+    if let Ok(seconds) = value.parse::<f64>() {
+        return if seconds >= 0.0 { (seconds * 1000.0) as u64 } else { COOLDOWN_MS };
+    }
+    if let Some(date) = http_date_ms(value) {
+        return date.saturating_sub(now);
+    }
+    COOLDOWN_MS
+}
+
+/// RFC 7231 IMF-fixdate (`Sun, 06 Nov 1994 08:49:37 GMT`) — the only
+/// `Retry-After` date form (HTTP-dates are GMT-only) — to unix
+/// milliseconds.
+fn http_date_ms(value: &str) -> Option<u64> {
+    let mut parts = value.split_whitespace();
+    let day_name = parts.next()?; // "Sun,"
+    if !day_name.ends_with(',') {
+        return None;
+    }
+    let day: i64 = parts.next()?.parse().ok()?;
+    let month = match parts.next()? {
+        "Jan" => 1,
+        "Feb" => 2,
+        "Mar" => 3,
+        "Apr" => 4,
+        "May" => 5,
+        "Jun" => 6,
+        "Jul" => 7,
+        "Aug" => 8,
+        "Sep" => 9,
+        "Oct" => 10,
+        "Nov" => 11,
+        "Dec" => 12,
+        _ => return None,
+    };
+    let year: i64 = parts.next()?.parse().ok()?;
+    let time = parts.next()?;
+    if parts.next()? != "GMT" {
+        return None;
+    }
+    let mut clock = time.split(':');
+    let hour: i64 = clock.next()?.parse().ok()?;
+    let minute: i64 = clock.next()?.parse().ok()?;
+    let second: i64 = clock.next()?.parse().ok()?;
+    // Days-from-civil (Howard Hinnant's algorithm), no calendar dep.
+    let years = if month <= 2 { year - 1 } else { year };
+    let era = if years >= 0 { years } else { years - 399 } / 400;
+    let year_of_era = years - era * 400;
+    let day_of_year = (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    let days = era * 146_097 + day_of_era - 719_468;
+    let milliseconds = ((days * 24 + hour) * 60 + minute) * 60 + second;
+    u64::try_from(milliseconds.saturating_mul(1000)).ok()
 }
 
 pub fn description() -> String {
@@ -1095,4 +1206,136 @@ async fn g192_disabled_selection_removes_websearch_from_the_tool_list() {
     assert!(!shaped.tools.contains_key("websearch"));
 }
 
+    // ------------------------------------------------------------------
+    // G-224 — cooldown Retry-After + preferred-affinity eviction
+    // ------------------------------------------------------------------
+
+    /// `cooldownMillis` (websearch.ts:215-221) with a fixed now.
+    #[test]
+    fn g224_cooldown_honors_retry_after() {
+        // Absent / blank → the 60s fallback.
+        assert_eq!(cooldown_ms(None, 1_000), 60_000);
+        assert_eq!(cooldown_ms(Some("   "), 1_000), 60_000);
+        // Integer seconds.
+        assert_eq!(cooldown_ms(Some("30"), 1_000), 30_000);
+        assert_eq!(cooldown_ms(Some("0"), 1_000), 0);
+        // Negative seconds → the fallback (ref `seconds >= 0` guard).
+        assert_eq!(cooldown_ms(Some("-5"), 1_000), 60_000);
+        // Unparsable → the fallback.
+        assert_eq!(cooldown_ms(Some("soon"), 1_000), 60_000);
+        // HTTP-date: the delta to now (clamped at 0 when in the past).
+        assert_eq!(
+            cooldown_ms(Some("Sun, 06 Nov 1994 08:49:37 GMT"), 784_111_100_000),
+            784_111_777_000 - 784_111_100_000
+        );
+        assert_eq!(
+            cooldown_ms(Some("Sun, 06 Nov 1994 08:49:37 GMT"), 1_000_000_000_000),
+            0,
+            "past date clamps to 0"
+        );
+    }
+
+    /// The HTTP-date parser is the IMF-fixdate shape.
+    #[test]
+    fn g224_http_date_parser() {
+        assert_eq!(http_date_ms("Sun, 06 Nov 1994 08:49:37 GMT"), Some(784_111_777_000));
+        assert_eq!(http_date_ms("06 Nov 1994 08:49:37 GMT"), None, "missing day name");
+        assert_eq!(http_date_ms("Sun, 06 Nov 1994 08:49:37 PST"), None, "non-GMT");
+    }
+
+    struct RateLimitedProvider {
+        retry_after: Option<&'static str>,
+    }
+
+    #[async_trait::async_trait]
+    impl SearchProvider for RateLimitedProvider {
+        fn id(&self) -> &str {
+            "exa"
+        }
+        fn name(&self) -> &str {
+            "Exa"
+        }
+        async fn execute(&self, _query: &str) -> Result<Vec<WebSearchResult>, ProviderError> {
+            Err(ProviderError {
+                status: Some(429),
+                message: "rate limited".into(),
+                retry_after: self.retry_after.map(str::to_string),
+            })
+        }
+    }
+
+    /// A 429 with `Retry-After` rotates and surfaces the cooldown error.
+    #[tokio::test]
+    async fn g224_cooldown_uses_retry_after_rotation() {
+        let db = crate::database::Database::open_in_memory().await.unwrap();
+        let search = WebSearch::new(
+            db,
+            vec![Arc::new(RateLimitedProvider { retry_after: Some("30") })],
+        );
+        search.select(&Selection::Random).await;
+        let error = search.query("q", None, None).await.unwrap_err();
+        assert!(matches!(error, WebSearchError::Request { status: Some(429), .. }));
+        // Immediately again: still cooling — no provider is available
+        // (the header-vs-60s timing distinction is pinned by cooldown_ms
+        // above).
+        let again = search.query("q", None, None).await.unwrap_err();
+        assert!(matches!(
+            again,
+            WebSearchError::ProviderRequired | WebSearchError::Request { status: Some(429), .. }
+        ));
+    }
+
+    /// G-224② — session.deleted/session.moved evict the preferred cell.
+    #[tokio::test]
+    async fn g224_affinity_evicted_on_session_events() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db = Arc::new(
+            crate::database::Database::open_file(dir.path().join("g224.db")).await.unwrap(),
+        );
+        let bus = Arc::new(crate::bus::Bus::new(
+            (*db).clone(),
+            crate::bus::BusOptions { persist: false, ..crate::bus::BusOptions::deterministic() },
+        ));
+        let search = Arc::new(WebSearch::new(
+            (*db).clone(),
+            vec![Arc::new(FixedProvider { id: "exa", name: "Exa" })],
+        ));
+        let (_stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+        search.subscribe_affinity_evictions(&bus, stop_rx);
+
+        async fn publish(bus: &crate::bus::Bus, kind: &str) {
+            let definition = crate::bus::registry::by_type_latest(kind)
+                .unwrap_or_else(|| panic!("no definition for {kind}"));
+            bus.publish(
+                definition,
+                serde_json::json!({ "sessionID": "ses_g224" }),
+                crate::bus::PublishOptions::default(),
+            )
+            .await
+            .expect("publish");
+        }
+
+        async fn await_eviction(search: &Arc<WebSearch>, what: &str) {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while search.preferred.lock().contains_key("ses_g224") {
+                assert!(std::time::Instant::now() < deadline, "{what} never evicted");
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        }
+
+        // Seed an affinity cell by querying with a session id.
+        search.select(&Selection::Random).await;
+        let _ = search.query("q", Some("ses_g224"), None).await;
+        assert!(search.preferred.lock().contains_key("ses_g224"), "affinity cell seeded");
+
+        // session.deleted drops it.
+        publish(&bus, "session.deleted").await;
+        await_eviction(&search, "session.deleted").await;
+
+        // Re-seed; session.moved drops it too.
+        let _ = search.query("q", Some("ses_g224"), None).await;
+        assert!(search.preferred.lock().contains_key("ses_g224"), "affinity cell re-seeded");
+        publish(&bus, "session.moved").await;
+        await_eviction(&search, "session.moved").await;
+    }
 }
