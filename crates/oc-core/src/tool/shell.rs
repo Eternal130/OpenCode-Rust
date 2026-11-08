@@ -441,6 +441,15 @@ impl ToolExecuteWithContext for ShellExecute {
                             crate::jobs::Status::Cancelled => "cancelled",
                             crate::jobs::Status::Running => return,
                         };
+                        // G-267① — ref shell.ts:164: the completed
+                        // notification carries the FULL output
+                        // (`output = info.status === "completed" ?
+                        // await settled : undefined`), so
+                        // `ShellResult.notification` merges
+                        // exit/truncated/timeout/signal into the metadata
+                        // (shell/result.rs:101-107); error/cancelled pass
+                        // `None` exactly like the ref's `undefined`.
+                        let output = completed_notification_output(state, job_info.output.as_deref());
                         let text = match (&job_info.output, state) {
                             (Some(payload), "completed") => decode_messages(payload),
                             (Some(payload), _) => payload.clone(),
@@ -456,7 +465,7 @@ impl ToolExecuteWithContext for ShellExecute {
                                 command: &command,
                                 state,
                                 text: &text,
-                                output: None,
+                                output: output.as_ref(),
                             });
                         synthetic.publish(
                             &session_id,
@@ -529,6 +538,25 @@ fn decode_messages(payload: &str) -> String {
     serde_json::from_str::<ShellToolOutput>(payload)
         .map(|output| result_messages(&output).join("\n\n"))
         .unwrap_or_else(|_| payload.to_string())
+}
+
+/// G-267① — the notification's output argument (shell.ts:164): the
+/// settled run output for `completed` jobs (decoded from the job's
+/// serialized [`ShellToolOutput`] — the `settled` deferred's value),
+/// `None` for error/cancelled (the ref's `undefined`).
+fn completed_notification_output(state: &str, payload: Option<&str>) -> Option<shell_result::Output> {
+    if state != "completed" {
+        return None;
+    }
+    payload
+        .and_then(|payload| serde_json::from_str::<ShellToolOutput>(payload).ok())
+        .map(|decoded| shell_result::Output {
+            output: decoded.output,
+            truncated: decoded.truncated,
+            exit: decoded.exit,
+            signal: decoded.signal,
+            timeout: decoded.timeout,
+        })
 }
 
 /// The `Effect.onInterrupt` translation: future-drop (the runner's
@@ -677,6 +705,65 @@ pub async fn user_command(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// G-267① — the background completion notification carries the
+    /// FULL output (shell.ts:164 `settled` for completed jobs): the
+    /// metadata merges exit/truncated/timeout/signal
+    /// (shell/result.rs:101-107); error/cancelled pass `None` (the
+    /// ref's `undefined`), so their metadata stays source/state only.
+    #[test]
+    fn tool_shell_notification_output_decodes_completed_payload_only() {
+        let payload = serde_json::to_string(&ShellToolOutput {
+            output: "done body".into(),
+            exit: Some(3.0),
+            signal: None,
+            shell_id: Some("sh_9".into()),
+            truncated: true,
+            timeout: Some(false),
+            status: Some("completed".into()),
+        })
+        .expect("payload");
+
+        let output =
+            completed_notification_output("completed", Some(&payload)).expect("full output");
+        assert_eq!(output.output, "done body");
+        assert_eq!(output.exit, Some(3.0));
+        assert!(output.truncated);
+        assert_eq!(output.timeout, Some(false));
+
+        let notification = shell_result::notification(shell_result::NotificationInput {
+            shell_id: "sh_9",
+            job_id: Some("job_1"),
+            command: "make test",
+            state: "completed",
+            text: "done body\n\nExited with code 3",
+            output: Some(&output),
+        });
+        let metadata = &notification.metadata;
+        assert_eq!(metadata.get("source"), Some(&serde_json::json!("shell")));
+        assert_eq!(metadata.get("state"), Some(&serde_json::json!("completed")));
+        assert_eq!(metadata.get("exit"), Some(&serde_json::json!(3.0)));
+        assert_eq!(metadata.get("truncated"), Some(&serde_json::json!(true)));
+
+        // Non-completed states never carry output metadata.
+        assert!(completed_notification_output("error", Some(&payload)).is_none());
+        assert!(completed_notification_output("cancelled", Some(&payload)).is_none());
+        let cancelled = shell_result::notification(shell_result::NotificationInput {
+            shell_id: "sh_9",
+            job_id: Some("job_1"),
+            command: "make test",
+            state: "cancelled",
+            text: "Cancelled",
+            output: None,
+        });
+        assert!(cancelled.metadata.get("exit").is_none());
+        assert!(cancelled.metadata.get("truncated").is_none());
+
+        // A completed job with an unparsable payload degrades to no
+        // output metadata (no panic).
+        assert!(completed_notification_output("completed", Some("not json")).is_none());
+        assert!(completed_notification_output("completed", None).is_none());
+    }
 
     /// G-204: tool_result metadata routes through `ShellResult.metadata` —
     /// signal/timeout present when set, plus status/shellID (shell.ts:83-93).

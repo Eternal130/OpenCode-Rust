@@ -93,6 +93,7 @@ pub mod instructions;
 pub mod resolver;
 pub mod skills;
 pub mod skills_url;
+pub mod warming;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
@@ -131,7 +132,7 @@ use crate::session::runner::drain::SessionRunner;
 use crate::session::runner::model_request::{AppMetadata, SessionModelRequest};
 use crate::session::runner::prompt_prepare::PromptPrepare;
 use crate::session::runner::title::SessionTitle;
-use crate::session::runner::{LlmClient, ModelResolver, ResolvedModel, RouteLlmClient};
+use crate::session::runner::{LlmClient, ModelResolver, ResolvedModel, RouteLlmClient, SessionGenerate};
 use crate::session::store::{CreateInput, ListInput, MessagesInput, SessionStore};
 use crate::session::subagent_job::SubagentJob;
 use crate::shell::Shell;
@@ -1282,6 +1283,8 @@ impl Engine {
         // bundle instead of leaking past it.
         let (bundle_shutdown, mut cache_shutdown) = tokio::sync::watch::channel(false);
         let mut reconcile_shutdown = cache_shutdown.clone();
+        // G-257 — the warming loops' stop signal (same bundle watch).
+        let warming_shutdown = cache_shutdown.clone();
 
         // G-224② (ref websearch.ts:93-100): session.deleted/moved evict
         // the websearch preferred-affinity cells (bounded map).
@@ -1676,6 +1679,26 @@ impl Engine {
             })?,
         );
         let location_dir = location.as_path().to_path_buf();
+        // G-257 — the warming keep-alive runtime (ref plugin/warming.ts):
+        // opt-in via the config `warming` key; the one-shot generate
+        // seam shares the location's context/requests/llm stack. The
+        // account hooks ride the same session.context/generate/
+        // compaction dispatches every model request makes.
+        let warming_runtime = warming::warming_settings(&config_documents).map(|settings| {
+            let generate = Arc::new(SessionGenerate::new(
+                (*self.db).clone(),
+                Arc::clone(&context),
+                Arc::clone(&requests),
+                Arc::clone(&self.llm),
+            ));
+            Arc::new(warming::WarmingRuntime::new(
+                settings,
+                generate,
+                store.clone(),
+                Arc::clone(&self.clock),
+                warming_shutdown,
+            ))
+        });
         let runner = Arc::new(
             SessionRunner::new(
                 (*self.db).clone(),
@@ -1719,6 +1742,44 @@ impl Engine {
             runner.drain_fn(),
             (Arc::clone(&self.ids), Arc::clone(&self.clock)),
         );
+
+        // G-257 — the warming account hooks (ref warming.ts:103-105):
+        // context + generate + compaction, the three request surfaces.
+        // Registered for the location lifetime (dropped with the hook
+        // registry when the bundle dies; the loops additionally watch
+        // the bundle shutdown).
+        if let Some(runtime) = &warming_runtime {
+            let account: std::sync::Arc<
+                dyn crate::hooks::HookHandler<crate::hooks::SessionContextEvent>,
+            > = Arc::new(warming::WarmingAccountHook(Arc::clone(runtime)));
+            let compaction_hook: std::sync::Arc<
+                dyn crate::hooks::HookHandler<crate::hooks::SessionCompactionEvent>,
+            > = Arc::new(warming::WarmingCompactionHook(Arc::clone(runtime)));
+            std::mem::forget(
+                inputs
+                    .hooks
+                    .register_session_context(
+                        Arc::clone(&account),
+                        crate::hooks::HookOptions::default(),
+                    )
+                    .await,
+            );
+            std::mem::forget(
+                inputs
+                    .hooks
+                    .register_session_generate(account, crate::hooks::HookOptions::default())
+                    .await,
+            );
+            std::mem::forget(
+                inputs
+                    .hooks
+                    .register_session_compaction(
+                        compaction_hook,
+                        crate::hooks::HookOptions::default(),
+                    )
+                    .await,
+            );
+        }
 
         // MCP server reconcile (async connections) + tool bridge attach.
         // The reconcile observes the same bundle shutdown: an invalidate
@@ -2356,7 +2417,14 @@ fn opencode_plugin(inputs: &Arc<PluginInputs>) -> InternalPlugin {
                     inputs.tool_services.db.clone().expect("tool services db"),
                 ),
             ),
-        )
+        )?;
+        // G-266③ — ref tool/plugin/opencode.ts:71-81: the worktree
+        // guidance SystemPart is pushed on EVERY context/generate/
+        // compaction event, so Code Mode sessions keep the
+        // session_move migration hint. `WORKTREE_GUIDANCE` was a dead
+        // constant before this wiring.
+        opencode_tools::register_worktree_guidance(hooks);
+        Ok(())
     })
 }
 
@@ -2748,8 +2816,12 @@ fn agent_plugin(inputs: &Arc<PluginInputs>) -> InternalPlugin {
     let documents = inputs.config_documents.clone();
     let home = inputs.home.clone();
     InternalPlugin::new("opencode.agent", move |_hooks, ports| {
-        seed_builtin_agents(ports.agents, &home);
-        let mut editor = RegistryAgentEditor::new(Arc::clone(ports.agents));
+        // G-265 — the ref's `Global.Service` roots (env-derived, the
+        // same source BootOptions uses) feed the four global
+        // external_directory allows.
+        let roots = oc_util::global_roots::resolve();
+        seed_builtin_agents(ports.agents, &home, &roots);
+        let mut editor = RegistryAgentEditor::new(Arc::clone(ports.agents), roots);
         crate::config::agent_md::transform(&documents, &home, &mut editor);
         if let Some(default) = editor.default.clone() {
             ports.agents.set_default(Some(oc_schema::id::AgentId::parse(default)));
@@ -2856,7 +2928,22 @@ const PROMPT_SUMMARY: &str = "Summarize what was done in this conversation. Writ
 /// Seeds the v2 builtin agents (`opencode.agent` plugin): build
 /// (default), general + explore (subagents), plan, compaction, title,
 /// summary (hidden primaries).
-fn seed_builtin_agents(agents: &Arc<crate::location::AgentRegistry>, home: &std::path::Path) {
+///
+/// G-265 — ref agent.ts:59-83: EVERY agent registered through the
+/// editor's `update` seeds `[...Info.default(id).permissions,
+/// ...permissions]` — the four global `external_directory` allows
+/// (shell output, tool output, tmp, config; under findLast they beat
+/// the baseline ask). The globals sit right after the schema baseline
+/// and BEFORE the per-agent mutator rules — except `explore`, whose
+/// mutator filters the seeded allows and re-appends them at the TAIL
+/// via `Permission.merge` (plugin/agent.ts:99-126), where they must
+/// land to take effect under the trailing `external_directory * ask`.
+fn seed_builtin_agents(
+    agents: &Arc<crate::location::AgentRegistry>,
+    home: &std::path::Path,
+    roots: &oc_util::global_roots::Roots,
+) {
+    let globals = crate::file_access::default_agent_external_allows(roots);
     // The default agent starts from `Agent.Info.default` (v2's schema
     // defaults: allow everything, ask for external_directory outside the
     // sandbox globs, ask for env files) — the permission goldens pin
@@ -2865,6 +2952,7 @@ fn seed_builtin_agents(agents: &Arc<crate::location::AgentRegistry>, home: &std:
     build.name = oc_schema::id::AgentName::parse("Build");
     build.description =
         Some("The default agent. Executes tools based on configured permissions.".into());
+    build.permissions.extend(globals.iter().cloned());
     build.permissions.push(rule("question", "*", oc_schema::permission::Effect::Allow));
     agents.set(build);
 
@@ -2873,6 +2961,7 @@ fn seed_builtin_agents(agents: &Arc<crate::location::AgentRegistry>, home: &std:
         "General-purpose agent for researching complex questions and executing multi-step tasks. Use this agent to execute multiple units of work in parallel."
             .into(),
     );
+    general.permissions.extend(globals.iter().cloned());
     general.permissions.push(rule("question", "*", oc_schema::permission::Effect::Deny));
     general.permissions.push(rule("subagent", "*", oc_schema::permission::Effect::Deny));
     agents.set(general);
@@ -2881,7 +2970,10 @@ fn seed_builtin_agents(agents: &Arc<crate::location::AgentRegistry>, home: &std:
     // then allow the search/read tools, ask for env files (the
     // `*.env.example` escape hatch), deny subagents; external
     // directories ask (fresh native registry — no config allows to
-    // preserve).
+    // preserve). G-265: the four global allows re-append AFTER the ask
+    // (the mutator's `Permission.merge(..., [...externalDirectories])`
+    // tail, plugin/agent.ts:123), so shell/tool-output/tmp/config
+    // reads stay ask-free.
     let mut explore = agent_info("explore", "Explore", oc_schema::agent::Mode::Subagent, false);
     explore.description = Some(
         "Fast agent specialized for exploring codebases. Use this when you need to quickly find files by patterns (eg. \"src/components/**/*.tsx\"), search code for keywords (eg. \"API endpoints\"), or answer questions about the codebase (eg. \"how do API endpoints work?\"). When calling this agent, specify the desired thoroughness level: \"quick\" for basic searches, \"medium\" for moderate exploration, or \"very thorough\" for comprehensive analysis across multiple locations and naming conventions."
@@ -2900,6 +2992,7 @@ fn seed_builtin_agents(agents: &Arc<crate::location::AgentRegistry>, home: &std:
     explore.permissions.push(rule("read", "*.env.example", oc_schema::permission::Effect::Allow));
     explore.permissions.push(rule("subagent", "*", oc_schema::permission::Effect::Deny));
     explore.permissions.push(rule("external_directory", "*", oc_schema::permission::Effect::Ask));
+    explore.permissions.extend(globals.iter().cloned());
     agents.set(explore);
 
     // ref plugin/plan.ts:33-43 — the read-only Plan agent: question
@@ -2917,6 +3010,7 @@ fn seed_builtin_agents(agents: &Arc<crate::location::AgentRegistry>, home: &std:
     plan.description =
         Some("Read-only agent for exploring the codebase and planning work before implementation.".into());
     plan.mode = oc_schema::agent::Mode::Primary;
+    plan.permissions.extend(globals.iter().cloned());
     plan.permissions.push(rule("question", "*", oc_schema::permission::Effect::Allow));
     plan.permissions.push(rule("edit", "*", oc_schema::permission::Effect::Deny));
     plan.permissions.push(rule(
@@ -2931,15 +3025,22 @@ fn seed_builtin_agents(agents: &Arc<crate::location::AgentRegistry>, home: &std:
     ));
     agents.set(plan);
 
-    agents.set(agent_info("compaction", "Compaction", oc_schema::agent::Mode::Primary, true));
+    let mut compaction = agent_info("compaction", "Compaction", oc_schema::agent::Mode::Primary, true);
+    compaction.permissions.extend(globals.iter().cloned());
+    agents.set(compaction);
+    // title/summary: the globals seed BEFORE the mutator's deny-all
+    // (the ref update-seed order), so the trailing `* * deny` still
+    // wins — these agents never read shell output.
     let mut title = agent_info("title", "Title", oc_schema::agent::Mode::Primary, true);
     title.system = Some(PROMPT_TITLE.to_string());
+    title.permissions.extend(globals.iter().cloned());
     title.permissions.push(rule("*", "*", oc_schema::permission::Effect::Deny));
     agents.set(title);
 
     // ref plugin/agent.ts:142-148 — the hidden summary agent (deny-all).
     let mut summary = agent_info("summary", "Summary", oc_schema::agent::Mode::Primary, true);
     summary.system = Some(PROMPT_SUMMARY.to_string());
+    summary.permissions.extend(globals.iter().cloned());
     summary.permissions.push(rule("*", "*", oc_schema::permission::Effect::Deny));
     agents.set(summary);
 }
@@ -2954,9 +3055,12 @@ pub fn native_agent_seed(
     documents: &[oc_schema::config::Document],
     home: &std::path::Path,
 ) -> Vec<serde_json::Value> {
+    // G-265 — the same env-derived roots the live registry seeds with
+    // (the plugin host's guests snapshot the identical table).
+    let roots = oc_util::global_roots::resolve();
     let registry = Arc::new(crate::location::AgentRegistry::new());
-    seed_builtin_agents(&registry, home);
-    let mut editor = RegistryAgentEditor::new(Arc::clone(&registry));
+    seed_builtin_agents(&registry, home, &roots);
+    let mut editor = RegistryAgentEditor::new(Arc::clone(&registry), roots);
     crate::config::agent_md::transform(documents, home, &mut editor);
     if let Some(default) = editor.default.clone() {
         registry.set_default(Some(oc_schema::id::AgentId::parse(default)));
@@ -3002,12 +3106,24 @@ fn rule(
 struct RegistryAgentEditor<'a> {
     agents: Arc<crate::location::AgentRegistry>,
     default: Option<String>,
+    /// G-265 — the four global `external_directory` allows appended to
+    /// every NEWLY registered agent (ref agent.ts:80: `update` seeds
+    /// `[...defaults.permissions, ...permissions]`).
+    globals: oc_schema::permission::Ruleset,
     _marker: std::marker::PhantomData<&'a ()>,
 }
 
 impl<'a> RegistryAgentEditor<'a> {
-    fn new(agents: Arc<crate::location::AgentRegistry>) -> Self {
-        Self { agents, default: None, _marker: std::marker::PhantomData }
+    fn new(
+        agents: Arc<crate::location::AgentRegistry>,
+        roots: oc_util::global_roots::Roots,
+    ) -> Self {
+        Self {
+            agents,
+            default: None,
+            globals: crate::file_access::default_agent_external_allows(&roots),
+            _marker: std::marker::PhantomData,
+        }
     }
 }
 
@@ -3026,6 +3142,12 @@ impl crate::config::agent_md::AgentEditor for RegistryAgentEditor<'_> {
             return true;
         }
         let mut info = agent_info(id, id, oc_schema::agent::Mode::Primary, false);
+        // G-265 — ref config/plugin/agent.ts:103-104 seeds a new agent
+        // with `[...defaults, ...globalAllows]` BEFORE the config's own
+        // permission pushes, so the global allows precede both the
+        // document-level and the agent-level rules (findLast keeps them
+        // effective unless a later rule deliberately overrides).
+        info.permissions.extend(self.globals.iter().cloned());
         info.permissions.extend(base_permissions.iter().cloned());
         self.agents.set(info);
         false

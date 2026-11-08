@@ -395,17 +395,24 @@ async fn execute_edit(
             cause: Some(FailureCause::Nested(error.to_string())),
         })?;
     let bom = original.bom || replacement_bom;
+    // G-267② — ref edit.ts:205-207: the formatter resync / read-back
+    // `yield*` failure FAILS the whole call (`Unable to edit ${path}`,
+    // edit.ts:219-223) — `unwrap_or_default()` made a failed read-back
+    // report success with a whole-file-deletion diff. Same shape as the
+    // G-90 patch fix.
     let formatted = if services.formatter.file(&target.absolute) {
         crate::file_mutation::sync_text_bom(services.files.as_ref(), &target.absolute, bom)
             .await
             .map(|content| content.text)
-            .unwrap_or_default()
     } else {
         crate::file_mutation::read_text(services.files.as_ref(), &target.absolute)
             .await
             .map(|content| content.text)
-            .unwrap_or_default()
-    };
+    }
+    .map_err(|error| ToolFailure {
+        message: format!("Unable to edit {path}"),
+        cause: Some(FailureCause::Nested(error.to_string())),
+    })?;
     let files = vec![file_diff(&target.resource, &source, &formatted, FileDiffStatus::Modified)];
     Ok(ToolOutcome {
         content: vec![Content::Text {

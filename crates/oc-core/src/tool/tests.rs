@@ -97,6 +97,15 @@ pub(super) async fn harness_for_codemode() -> Harness {
 }
 
 pub(super) async fn harness_with(rules: oc_schema::permission::Ruleset) -> Harness {
+    harness_with_files(rules, Arc::new(crate::environment::LocalFiles)).await
+}
+
+/// G-267② — a harness variant with an injectable `Files` seam (the
+/// read-back failure tests).
+pub(super) async fn harness_with_files(
+    rules: oc_schema::permission::Ruleset,
+    files: Arc<dyn crate::environment::Files>,
+) -> Harness {
     let dir = tempfile::tempdir_in("/tmp/opencode").expect("tempdir");
     let outside = tempfile::tempdir_in("/tmp/opencode").expect("outside tempdir");
     let home = dir.path().join("home");
@@ -131,7 +140,7 @@ pub(super) async fn harness_with(rules: oc_schema::permission::Ruleset) -> Harne
         access,
         permission: permission.clone(),
         mutation,
-        files: Arc::new(crate::environment::LocalFiles),
+        files,
         formatter: Arc::new(NoopFormatter::new()),
         instructions: None,
         db: None,
@@ -271,6 +280,38 @@ async fn tool_decode_issues_format_is_exact() {
 // ---------------------------------------------------------------------------
 // Edit (tool-edit.test.ts)
 // ---------------------------------------------------------------------------
+
+/// G-267② — ref edit.ts:205-209: a failed post-write read-back FAILS
+/// the whole call (`Unable to edit ${path}`, edit.ts:219-223) — the
+/// previous `unwrap_or_default()` reported success with a
+/// whole-file-deletion diff. Same shape as the G-90 patch fix.
+#[tokio::test]
+async fn tool_edit_readback_failure_fails_the_call() {
+    let files = Arc::new(ResyncFailsFiles {
+        armed: std::sync::atomic::AtomicBool::new(false),
+        fail_after: std::sync::atomic::AtomicUsize::new(0),
+    });
+    let harness = harness_with_files(allow_all(), files).await;
+    std::fs::write(harness.dir.join("flaky.txt"), "before\nrest\n").expect("write");
+    let failure = call(
+        &harness.tools,
+        "edit",
+        serde_json::json!({ "path": "flaky.txt", "oldString": "before", "newString": "after" }),
+    )
+    .await
+    .expect_err("read-back failure must fail the edit");
+    assert!(
+        error_message(&failure).starts_with("Unable to edit flaky.txt"),
+        "failure message: {}",
+        error_message(&failure)
+    );
+    // The write itself landed (the mutation succeeded before the
+    // read-back); the point is the explicit failure, not a rollback.
+    assert_eq!(
+        std::fs::read_to_string(harness.dir.join("flaky.txt")).unwrap(),
+        "after\nrest\n"
+    );
+}
 
 #[tokio::test]
 async fn tool_edit_replaces_relative_exact_text_once() {
@@ -2061,6 +2102,41 @@ fn line_fill(count: usize, width: usize) -> Vec<u8> {
         bytes.push(b'\n');
     }
     bytes
+}
+
+/// G-266② — ref read-filesystem.ts:177 `Math.min(page.limit ||
+/// MAX_READ_LINES, MAX_READ_LINES)`: a zero limit is falsy and reads
+/// as the 2000-line default, exactly like an omitted limit (a `Some(0)`
+/// previously produced an empty page + a bogus truncated paging hint).
+#[tokio::test]
+async fn read_zero_limit_is_falsy_and_reads_the_default_page() {
+    use crate::tool::read::read_file_with;
+    use futures::future::BoxFuture;
+    let body = line_fill(3000, 20);
+    let size = body.len() as u64;
+    let path = PathBuf::from("/tmp/opencode/fake-zero-limit.txt");
+    let mut calls = 0;
+    let outcome =
+        read_file_with(size, &path, "zero.txt", None, Some(0), None, |start, len| {
+            calls += 1;
+            let start = start as usize;
+            let end = (start + len).min(body.len());
+            let chunk = body[start..end].to_vec();
+            Box::pin(async move { Ok(chunk) })
+                as BoxFuture<'_, Result<Vec<u8>, crate::tool::read::ReadError>>
+        })
+        .await
+        .unwrap();
+    match &outcome {
+        crate::tool::read::ReadOutput::TextPage { content, offset, next, truncated, .. } => {
+            assert_eq!(*offset, 1, "no offset reads as 1");
+            assert_eq!(content.lines().count(), 2000, "zero limit pages the default 2000 lines");
+            assert_eq!(*next, Some(2001), "paging hint points past the default page");
+            assert!(*truncated, "3000-line file is truncated at 2000");
+        }
+        other => panic!("expected text page, got {other:?}"),
+    }
+    assert_eq!(calls, 1, "single first-chunk read");
 }
 
 #[tokio::test]

@@ -46,6 +46,12 @@ pub enum WebSearchError {
 pub struct WebSearch {
     providers: Vec<Arc<dyn SearchProvider>>,
     db: crate::database::Database,
+    /// G-266① — the random index picker for `randomProvider`
+    /// (`available[Math.floor(Math.random() * available.length)]`,
+    /// websearch.ts:143): true randomness in production; tests inject a
+    /// fixed-seed picker to assert the distribution is not
+    /// first-provider-sticky.
+    picker: Box<dyn Fn(usize) -> usize + Send + Sync>,
     /// The config-seeded default selection (v2's in-memory
     /// `data.selection`, set by `ConfigWebSearchPlugin` via
     /// `editor.default.set` — config/plugin/websearch.ts). Takes
@@ -66,6 +72,7 @@ impl WebSearch {
         Self {
             providers,
             db,
+            picker: Box::new(|len| rand::Rng::gen_range(&mut rand::thread_rng(), 0..len)),
             config_selection: None,
             cooldowns: Mutex::new(HashMap::new()),
             preferred: Mutex::new(HashMap::new()),
@@ -94,6 +101,15 @@ impl WebSearch {
     #[must_use]
     pub fn with_config_selection(mut self, selection: Option<Selection>) -> Self {
         self.config_selection = selection;
+        self
+    }
+
+    /// G-266① — replace the random index picker (tests inject a
+    /// fixed-seed generator; production keeps the default
+    /// `gen_range(0..len)`).
+    #[must_use]
+    pub fn with_picker(mut self, picker: Box<dyn Fn(usize) -> usize + Send + Sync>) -> Self {
+        self.picker = picker;
         self
     }
 
@@ -235,7 +251,12 @@ impl WebSearch {
             .cloned()
             .collect();
         drop(cooldowns);
-        let provider = available.first().cloned();
+        // G-266① — ref websearch.ts:143 picks a uniformly random
+        // provider (`Math.floor(Math.random() * available.length)`);
+        // `available.first()` made the affinity rotation sticky on the
+        // catalog's first provider until it 429s.
+        let provider =
+            if available.is_empty() { None } else { Some(available[(self.picker)(available.len())].clone()) };
         if let Some(provider) = &provider {
             *affinity = Some(provider.id().to_string());
         }
@@ -881,6 +902,36 @@ mod tests {
     #[test]
     fn tool_websearch_progress_payload_is_provider_id() {
         assert_eq!(provider_progress_payload("exa"), serde_json::json!({ "provider": "exa" }));
+    }
+
+    /// G-266① — ref websearch.ts:143: the rotation pick is uniformly
+    /// random over the available providers, NOT `available.first()`
+    /// (the old sticky behavior starved every provider but the first
+    /// until it 429s). Fixed-seed LCG picker proves the distribution
+    /// reaches the second provider.
+    #[tokio::test]
+    async fn tool_websearch_random_provider_picks_uniformly_not_first() {
+        let seed = Mutex::new(0x2545F4914F6CDD1Du64);
+        let search = service().await.with_picker(Box::new(move |len| {
+            let mut state = seed.lock();
+            *state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            ((*state >> 33) as usize) % len
+        }));
+        let mut picked_exa = 0;
+        let mut picked_tavily = 0;
+        for _ in 0..128 {
+            let mut affinity: Option<String> = None;
+            let provider = search.random_provider(0, &mut affinity, None).expect("provider");
+            match provider.id() {
+                "exa" => picked_exa += 1,
+                "tavily" => picked_tavily += 1,
+                other => panic!("unexpected provider {other}"),
+            }
+        }
+        assert!(picked_tavily > 0, "the rotation must reach the second provider ({picked_exa}/{picked_tavily})");
+        assert!(picked_exa > 0, "the rotation must also pick the first provider ({picked_exa}/{picked_tavily})");
     }
 
     #[tokio::test]
