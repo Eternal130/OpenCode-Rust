@@ -109,6 +109,17 @@ pub struct CatalogModelResolver {
     /// catalog record for resolution (dynamic Modal inventory with
     /// price/limit/variant templates per modal/models.ts).
     modal: Option<Arc<crate::provider_catalog::modal_sync::ModalSync>>,
+    /// G-259 — the azure deployment discovery sync: when present and
+    /// refreshed, its narrowed azure snapshot replaces the static
+    /// catalog record for resolution (only the models actually
+    /// deployed, each keyed by its deployment name,
+    /// plugin/provider/azure.ts:382-411).
+    azure: Option<Arc<crate::provider_catalog::azure_sync::AzureSync>>,
+    /// G-259 — the DigitalOcean routers sync: when present and
+    /// refreshed, its merged digitalocean snapshot replaces the static
+    /// catalog record for resolution (`router:*` entries injected over
+    /// the catalog, plugin/provider/digitalocean.ts:158-170).
+    digitalocean: Option<Arc<crate::provider_catalog::digitalocean_sync::DigitalOceanSync>>,
 }
 
 impl CatalogModelResolver {
@@ -132,6 +143,8 @@ impl CatalogModelResolver {
             local: None,
             copilot: None,
             modal: None,
+            azure: None,
+            digitalocean: None,
         }
     }
 
@@ -198,6 +211,30 @@ impl CatalogModelResolver {
         modal: Arc<crate::provider_catalog::modal_sync::ModalSync>,
     ) -> Self {
         self.modal = Some(modal);
+        self
+    }
+
+    /// Attaches the azure deployment discovery sync (G-259): when its
+    /// state is present, azure resolution binds against the narrowed
+    /// deployment snapshot instead of the static catalog record.
+    #[must_use]
+    pub fn with_azure_sync(
+        mut self,
+        azure: Arc<crate::provider_catalog::azure_sync::AzureSync>,
+    ) -> Self {
+        self.azure = Some(azure);
+        self
+    }
+
+    /// Attaches the DigitalOcean routers sync (G-259): when its state
+    /// is present, digitalocean resolution binds against the merged
+    /// router snapshot instead of the static catalog record.
+    #[must_use]
+    pub fn with_digitalocean_sync(
+        mut self,
+        digitalocean: Arc<crate::provider_catalog::digitalocean_sync::DigitalOceanSync>,
+    ) -> Self {
+        self.digitalocean = Some(digitalocean);
         self
     }
 
@@ -517,14 +554,37 @@ impl CatalogModelResolver {
         } else {
             None
         };
-        let snapshot: &crate::provider_catalog::Snapshot = match &copilot_state {
-            Some(state) => &state.merged,
-            None => match &modal_state {
-                Some(state) => &state.merged,
-                None => catalog.provider(&provider_id).ok_or_else(|| {
-                    ModelError::Unavailable(provider_id.clone(), reference.id.0.clone())
-                })?,
-            },
+        // G-259 — the azure deployment discovery sync: the narrowed
+        // snapshot replaces the static azure record for resolution
+        // (the ref model transform, azure.ts:400-411).
+        let azure_state = if provider_id == crate::provider_catalog::azure_sync::AZURE_PROVIDER_ID
+        {
+            self.azure.as_ref().and_then(|sync| sync.state())
+        } else {
+            None
+        };
+        // G-259 — the DigitalOcean routers sync: the merged snapshot
+        // replaces the static digitalocean record for resolution (the
+        // ref provider transform, digitalocean.ts:158-170).
+        let digitalocean_state =
+            if provider_id == crate::provider_catalog::digitalocean_sync::DIGITALOCEAN_PROVIDER_ID
+            {
+                self.digitalocean.as_ref().and_then(|sync| sync.state())
+            } else {
+                None
+            };
+        let snapshot: &crate::provider_catalog::Snapshot = if let Some(state) = &copilot_state {
+            &state.merged
+        } else if let Some(state) = &modal_state {
+            &state.merged
+        } else if let Some(state) = &azure_state {
+            &state.merged
+        } else if let Some(state) = &digitalocean_state {
+            &state.merged
+        } else {
+            catalog.provider(&provider_id).ok_or_else(|| {
+                ModelError::Unavailable(provider_id.clone(), reference.id.0.clone())
+            })?
         };
         let base_info = snapshot
             .models

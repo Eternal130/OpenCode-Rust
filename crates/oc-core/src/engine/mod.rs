@@ -369,6 +369,12 @@ pub struct Engine {
     /// G-209 — the live Modal `/models` sync: the derived dynamic
     /// modal snapshot behind resolution.
     pub modal_sync: Arc<crate::provider_catalog::modal_sync::ModalSync>,
+    /// G-259 — the azure deployment discovery sync: the narrowed
+    /// azure snapshot behind resolution (only deployed models).
+    pub azure_sync: Arc<crate::provider_catalog::azure_sync::AzureSync>,
+    /// G-259 — the DigitalOcean routers sync: the merged `router:*`
+    /// snapshot behind resolution.
+    pub digitalocean_sync: Arc<crate::provider_catalog::digitalocean_sync::DigitalOceanSync>,
     clock: Arc<dyn Clock>,
     ids: Arc<dyn IdGen>,
     rng: Arc<dyn RngSource>,
@@ -611,6 +617,94 @@ impl Engine {
         } else {
             modal_sync.clear();
         }
+        // G-259 — the azure deployment discovery sync (the ref plugin's
+        // `discover` + model transform, azure.ts:289-411): spawned ONLY
+        // when a drivable azure credential resolves (stored key /
+        // azure-cli OAuth / env key connection) AND no custom baseURL
+        // is configured (a gateway endpoint may expose other
+        // deployments than the resource does, so it keeps the catalog,
+        // azure.ts:293-297); no credential → inert, the static catalog
+        // serves unchanged.
+        let azure_sync = Arc::new(crate::provider_catalog::azure_sync::AzureSync::new(
+            Arc::clone(&facade_transport),
+        ));
+        let azure_custom_base = options
+            .connections
+            .get(crate::provider_catalog::azure_sync::AZURE_PROVIDER_ID)
+            .and_then(|connection| connection.base_url.clone())
+            .or_else(|| {
+                options.custom_providers.iter().find(|custom| {
+                    custom.id == crate::provider_catalog::azure_sync::AZURE_PROVIDER_ID
+                        && !custom.base_url.is_empty()
+                })
+                .map(|custom| custom.base_url.clone())
+            });
+        if azure_custom_base.is_none() {
+            let azure_sync = Arc::clone(&azure_sync);
+            let catalog = Arc::clone(&catalog);
+            let integration = Arc::clone(&integration);
+            let useragent = crate::session::runner::model_request::useragent(&options.app);
+            tokio::spawn(async move {
+                // Stay out of boot's critical section (same deferral
+                // discipline as the copilot/modal syncs).
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                if let Some(input) =
+                    crate::provider_catalog::azure_sync::resolve_azure_discovery_input(&integration)
+                        .await
+                {
+                    azure_sync
+                        .refresh(
+                            &catalog,
+                            &crate::provider_catalog::azure_sync::AzureEndpoints::default(),
+                            input.resource,
+                            input.auth,
+                            &useragent,
+                        )
+                        .await;
+                }
+            });
+        }
+        // G-259 — the DigitalOcean routers sync (the ref plugin's
+        // `load` + provider transform + its 5-minute repeat,
+        // digitalocean.ts:171-178): spawned ONLY when a browser-OAuth
+        // credential is active; a missing/non-OAuth credential keeps
+        // the sync inert.
+        let digitalocean_sync =
+            Arc::new(crate::provider_catalog::digitalocean_sync::DigitalOceanSync::new(
+                Arc::clone(&facade_transport),
+            ));
+        {
+            let digitalocean_sync = Arc::clone(&digitalocean_sync);
+            let catalog = Arc::clone(&catalog);
+            let integration = Arc::clone(&integration);
+            let useragent = crate::session::runner::model_request::useragent(&options.app);
+            tokio::spawn(async move {
+                // Stay out of boot's critical section, then repeat on
+                // the ref's 5-minute schedule.
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                loop {
+                    match crate::provider_catalog::digitalocean_sync::resolve_digitalocean_credential(
+                        &integration,
+                    )
+                    .await
+                    {
+                        Some((access, expires)) => {
+                            digitalocean_sync
+                                .refresh(
+                                    &catalog,
+                                    crate::provider_catalog::digitalocean_sync::DIGITALOCEAN_ROUTERS_ENDPOINT,
+                                    access,
+                                    expires,
+                                    &useragent,
+                                )
+                                .await;
+                        }
+                        None => digitalocean_sync.clear(),
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+                }
+            });
+        }
         // CRED-A1: keep the TYPED resolver handle when we own it — the        // `models-dev.refreshed` subscription swaps its catalog cell so
         // refreshes propagate to resolution without a re-boot (v2
         // re-reads `ModelsDev.get()` on every Refreshed event and
@@ -636,7 +730,9 @@ impl Engine {
                     .with_console(Arc::clone(&integration.console_providers()))
                     .with_local(Arc::clone(&local))
                     .with_copilot_sync(Arc::clone(&copilot_sync))
-                    .with_modal_sync(Arc::clone(&modal_sync)),
+                    .with_modal_sync(Arc::clone(&modal_sync))
+                    .with_azure_sync(Arc::clone(&azure_sync))
+                    .with_digitalocean_sync(Arc::clone(&digitalocean_sync)),
                 );
                 catalog_resolver = Some(Arc::clone(&typed));
                 typed
@@ -758,6 +854,8 @@ impl Engine {
             integration,
             copilot_sync,
             modal_sync,
+            azure_sync,
+            digitalocean_sync,
             clock: options.clock.clone(),
             ids: options.ids.clone(),
             rng: options.rng.clone(),
@@ -1097,7 +1195,9 @@ impl Engine {
                     .with_console(Arc::clone(&self.integration.console_providers()))
                     .with_local(Arc::clone(&self.local))
                     .with_copilot_sync(Arc::clone(&self.copilot_sync))
-                    .with_modal_sync(Arc::clone(&self.modal_sync)),
+                    .with_modal_sync(Arc::clone(&self.modal_sync))
+                    .with_azure_sync(Arc::clone(&self.azure_sync))
+                    .with_digitalocean_sync(Arc::clone(&self.digitalocean_sync)),
                     Arc::clone(&self.resolver),
                 ))
             };
