@@ -161,6 +161,11 @@ async fn be1_sse_credential_remove_non_active_does_not_switch() {
         })
         .await
         .expect("dormant create");
+    // G-268 — the FIRST credential of an integration is FORCE-activated
+    // (`activate !== false || !current`, credential.ts:121): its create
+    // emits `credential.updated` AND `credential.switched`. Drain both.
+    expect_frame(&mut stream, "\"type\":\"credential.updated\"", "dormant create updated").await;
+    expect_frame(&mut stream, "\"type\":\"credential.switched\"", "dormant forced switched").await;
     let active = client
         .credential()
         .create(&CredentialCreateInput {
@@ -176,7 +181,8 @@ async fn be1_sse_credential_remove_non_active_does_not_switch() {
         .await
         .expect("active create");
     // Drain the create-time events.
-    let _ = expect_frame(&mut stream, "\"type\":\"credential.switched\"", "create switched").await;
+    expect_frame(&mut stream, "\"type\":\"credential.updated\"", "active create updated").await;
+    expect_frame(&mut stream, "\"type\":\"credential.switched\"", "active create switched").await;
 
     // Removing the dormant row: updated only, no switched.
     client.credential().remove(&dormant.id).await.expect("remove dormant");
